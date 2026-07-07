@@ -33,5 +33,14 @@ public:
   //   The recordInit body (FUN_80051B70) inlines the same three lines at its tail; this method is
   //   the shared source-of-truth. All 4 direct callsites pass classArg=12.
   void installSceneRecord(uint32_t rec, uint32_t classArg, uint32_t itemArg);
+
+private:
+  // Guest-ABI bodies (plain fn-pointer shape for the verify gate).
+  static uint32_t recordAllocBody(Core* c);      // FUN_8007AAE8
+  static uint32_t recordInitBody(Core* c);       // FUN_80051B70
+  static uint32_t renderUpdateBody(Core* c);     // FUN_800517F8
+  static uint32_t setGeomBody(Core* c);          // FUN_80077B38
+  static uint32_t setXformBlkBody(Core* c);      // FUN_8006CBD0
+  static uint32_t posComposeBody(Core* c);       // FUN_8004BD64
 };
 #endif

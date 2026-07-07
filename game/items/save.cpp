@@ -72,6 +72,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "save.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,14 +92,17 @@ constexpr int      SAVE_NUM_STATES  = 6;            // load-select/run, save-con
 // Register file indices (raw MIPS abi slots, matching the rest of the engine overrides).
 enum { R_A0 = 4, R_S0 = 16, R_S1 = 17, R_S2 = 18, R_SP = 29, R_RA = 31 };
 
+}  // namespace
+
 // ------------------------------------------------------------------------------------------------
-// save_slot_handler(c, slot_substate) — resolve and run ONE save-menu page handler for the given
+// SaveMenu::runHandler(task) — resolve and run ONE save-menu page handler for the given
 // substate (0..5), faithfully reproducing the dispatcher's prologue so the handler can unwind the
 // frame and tail-return through it. The page handlers themselves (cursor/page logic + libmcrd file I/O)
 // stay PSX via rec_dispatch. Returns nothing; the handler sets v0/the task fields just as the PSX body
 // would. Out-of-range substate (>=6) is the dispatcher's no-op return path.
 // ------------------------------------------------------------------------------------------------
-void save_run_handler(Core* c, uint32_t task) {
+void SaveMenu::runHandler(uint32_t task) {
+  Core* c = core;
   // ---- prologue (FUN_80036DFC 0x80036dfc..0x80036e1c) ----
   uint32_t sp = c->r[R_SP] - 0x30u;            // addiu sp,-0x30
   c->mem_w32(sp + 0x24, c->r[R_S1]);           // sw s1, 0x24(sp)
@@ -127,11 +131,9 @@ void save_run_handler(Core* c, uint32_t task) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// save_dispatch(c) — native entry replacing FUN_80036DFC. a0 = the save-menu task struct.
+// SaveMenu::dispatchBody(c) — native entry replacing FUN_80036DFC. a0 = the save-menu task struct.
 // ------------------------------------------------------------------------------------------------
-void save_dispatch_native(Core* c) {
-  save_run_handler(c, c->r[R_A0]);
+void SaveMenu::dispatchBody(Core* c) {
+  c->saveMenu.runHandler(c->r[R_A0]);
 }
-
-}  // namespace
 

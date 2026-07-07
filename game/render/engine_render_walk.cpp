@@ -9,7 +9,7 @@
 // dispatcher), and the native backdrop draws the sky/parallax tilemap as RQ_BACKGROUND behind the world.
 //
 // Split out of engine_submit.cpp (the geometry-SUBMIT subsystem) so the scene renderer is its own PC-game
-// file. Shared helpers (PktSpanSession, obj_world_ord/cur_render_node, native_gt3gt4) live in render_internal.h.
+// file. Shared helpers (PktSpanSession, obj_world_ord/cur_render_node) live in render_internal.h.
 #include "core.h"
 #include "render.h"
 #include "game.h"
@@ -29,7 +29,7 @@ int  rec_addr_has_entry(Core*, uint32_t);   // overlay_router.cpp — is fn a re
 #define SCR          0x1F800000u             // PSX scratchpad base (the engine's GTE-compose temp area)
 
 // The per-object render path is FULLY native (no PSX fallback): submit_perobj_flush composes the float
-// world transform and calls native_gt3gt4 directly. The old gen_func_8003F698 per-mode dispatcher (which
+// world transform and calls Render::gt3gt4 directly. The old gen_func_8003F698 per-mode dispatcher (which
 // ran interpreted per-scene submitter variants for non-generic modes) is no longer consulted — every
 // per-object geomblk is submitted as generic GT3/GT4 through the native, world-coord projection.
 
@@ -54,7 +54,7 @@ void Render::perObjFlush() {
       if ((c->mem_r8(node + 0xD) & 0xF) == 4)
         otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
       c->game->fps60.fps_cur_key = cmd;                 // fps60: tag this actor's world quads for reprojection
-      native_gt3gt4(c, geomblk, otbase);                // fully-native generic GT3/GT4 submit (no PSX fallback)
+      c->mRender->gt3gt4(geomblk, otbase);              // fully-native generic GT3/GT4 submit (no PSX fallback)
       c->game->fps60.fps_cur_key = 0;
       c->mRender->projClearActive();
     }
@@ -158,7 +158,7 @@ void Render::sceneNative() { Core* c = mCore;
   // behaviours on the following running frames (sm[0x4e]>=1), so each object's render-command geomblk
   // (cmd+0x40) still holds an unrelocated area-data pointer (0x8018Axxx). The real game does not draw the
   // field during this init (the area transition holds the screen faded black); drawing it here feeds garbage
-  // prim counts into native_gt3gt4 and overflows the render queue (later-275). Skip the field scene for that
+  // prim counts into Render::gt3gt4 and overflows the render queue (later-275). Skip the field scene for that
   // frame; the backdrop above still draws. Read from task0's GAME state machine (persistent guest RAM, so it
   // is robust to the GAME loop's coroutine scheduling — a per-frame "did the field render run" latch is not,
   // because the field update and this display pass need not fall in the same native_step_frame).
@@ -281,7 +281,7 @@ void Render::bgRender() {
 // 0x8003CCA4 -> 0x8003CDD8 -> per-area dispatch 0x8003F698 -> the resident-area GT3/GT4 submitter (e.g. A00's
 // 0x80146478). During the SOP intro NARRATION that submitter's CODE overlay is NOT resident (only the area
 // DATA is), so the super-call recomp-MISSed and aborted the shipping game (later-273). The native walk
-// avoids this: type-0 -> submit_perobj_flush -> native_gt3gt4 directly (no 0x8003F698 / no overlay dispatch).
+// avoids this: type-0 -> submit_perobj_flush -> Render::gt3gt4 directly (no 0x8003F698 / no overlay dispatch).
 // The only thing forcing the fallback was the NARRATION scene's type-16 node. Own it (and its structural
 // siblings 17-19 + the render-nothing cases) so the field/cutscene render stays PC-native:
 //   - skip cases (types 9-14,21-31): jump-table target 0x8003C2AC = the loop-continue no-op (render nothing).
@@ -361,7 +361,7 @@ void Render::renderWalk() {
         else {
           // default case: the node's own render fn (node+24) — e.g. a collectable's billboard-quad drawer,
           // or the field TERRAIN renderer (0x8002AB5C). Terrain is owned PC-native (Render::terrain → the
-          // float terrain_render_pc, real per-pixel depth, NO GTE/packet) — route it there; everything else
+          // float NativeScenePass::terrainRender, real per-pixel depth, NO GTE/packet) — route it there; everything else
           // stays PSX content (rec_dispatch), with its span tagged by the object's PC-native world depth.
           uint32_t fn = c->mem_r32(n + 24);
           // DIAG probes (cfg_dbg): noterr skips the native terrain pass, nobg skips the native BG node —

@@ -189,7 +189,6 @@ set(PORT_SRC
   game/ui/engine_font.cpp
   game/scene/engine_level.cpp
   game/render/fps60.cpp
-  game/object/engine_tomba2.cpp
   game/object/behavior_dispatch.cpp
   game/render/engine_submit.cpp
   game/render/node_xform.cpp

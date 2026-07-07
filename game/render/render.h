@@ -20,6 +20,7 @@
 #include "engine_project.h"     // EObjXform (per-Core active per-object xform lives on Render below)
 #include "render_native.h"      // class NativeScenePass — the decoupled native render subsystem
 #include "margin_render.hpp"    // class MarginRenderer — widescreen margin collect-and-flush
+#include "lighting.h"           // class Lighting — per-area light registry (sun / lava+torch)
 class Core;
 
 class Render {
@@ -48,6 +49,10 @@ public:
   int               mWalkTagPos = 0;
   NativeScenePass   mNativeScene;      // decoupled native render pass (collect + drawObject)
   MarginRenderer    margin;            // widescreen margin re-include (collect in cull, flush post-walk)
+  Lighting          lighting;          // per-area light registry (selected once per frame by shadeSelect)
+  // Light config selected for this frame by shadeSelect(); the hot per-face shading routine reads the
+  // cached pointer instead of re-reading guest RAM. Falls back to the SUN default when unset.
+  const LightConfig* mShadeCfg = nullptr;
 
   // ---- object-render projection ops (impl in engine_project.cpp) ----------
   // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)
@@ -74,7 +79,7 @@ public:
   void frameX();
 
   // perObjFlush: per-object native GT3/GT4 flush — composes the float camera×object transform from
-  // the object's real world coords and submits every geomblk cmd on node+0xC0 through native_gt3gt4.
+  // the object's real world coords and submits every geomblk cmd on node+0xC0 through gt3gt4.
   // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).
   void perObjFlush();
 
@@ -112,6 +117,18 @@ public:
   // PC-native float terrain render. Taxi-parameter c->r[4] = node. Was ov_terrain.
   void terrain();
 
+  // shadeSelect: pick this area's light config once per world frame (cheap guest-RAM fingerprint via
+  // Lighting::areaKeyFrom); caches the result in mShadeCfg for the per-face shading routine.
+  void shadeSelect();
+
+  // gt3gt4 (gen_func_800803DC's first body): the generic GT3/GT4 renderer — split the geomblk's packed
+  // prim counts (low16 tri, high16 quad) and run the two native submitters in sequence.
+  void gt3gt4(uint32_t geomblk, uint32_t otbase);
+
+  // prepObjectMatrix: shared terrain scene-data prep (the faithful gameplay half of guest 0x8002AB5C):
+  // depth-cue regs + the two sway gameplay bytes, then the object rotation matrix at scratch SCR.
+  void prepObjectMatrix(uint32_t node);
+
   // rwalkB588 (guest 0x8003B588): the field WATER render pass — later-231 "Pass A". Owns the water
   // node 0x800E7E80's byte-state bookkeeping natively, runs the PSX per-object transform SETUP leaf
   // (rec_dispatch), then routes the render to the native submit_perobj_render for real-depth world-
@@ -131,4 +148,9 @@ public:
   // groundnative diag branch and in the field object walk in engine_render_walk). Was
   // ov_field_entity_render (taxi-parameter c->r[4]).
   void fieldEntityRender(uint32_t es);
+
+private:
+  // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
+  static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0
+  static void submitPolyGt4Native(Core* c);   // gen_func_80080114
 };

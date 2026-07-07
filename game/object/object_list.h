@@ -14,7 +14,7 @@
 //   +0x24), walked in order; per node clears the per-frame render flag @+1, then dispatches the
 //   handler @+0x1c(node) with the node in a0. The `next` pointer is read BEFORE the handler runs
 //   (a handler may unlink/free its own node) and held in a host local. After both walks, calls
-//   `margin_render_flush` (widescreen margin re-inclusion pass, later-133).
+//   `MarginRenderer::flush` (widescreen margin re-inclusion pass, later-133).
 //
 // == walkAux (guest FUN_80069B28) ==
 //   A separate list head at 0x800F2738 (method ptr @+0x1c, next @+0x24). Unlike walkAll, does NOT

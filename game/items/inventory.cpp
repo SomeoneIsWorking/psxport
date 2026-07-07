@@ -68,7 +68,7 @@ int Inventory::count(int item) const {
 int Inventory::has(int item) const { return count(item) > 0; }
 
 // PC-native reimplementation of FUN_8004D338 (inventory_add). Writes are byte-identical to the recomp body.
-static void inventory_add_native(Core* c, uint32_t type, uint32_t amount) {
+void Inventory::addNative(Core* c, uint32_t type, uint32_t amount) {
   // (1) recently-acquired ring (types 23..28)
   if ((type - 23u) < 6u) {
     uint32_t len = c->mem_r8(INV_RING_LEN);
@@ -103,8 +103,8 @@ static void inventory_add_native(Core* c, uint32_t type, uint32_t amount) {
 }
 
 // ---- the FUN_8004D338 override + invverify gate ----------------------------------------------------
-static void inv_add_body(Core* c) {
-  inventory_add_native(c, c->r[4], c->r[5]);
+void Inventory::addBody(Core* c) {
+  addNative(c, c->r[4], c->r[5]);
 }
 
 // REENTRANCY GUARD: when a gate's rec_super_call interprets a WRAPPER body (give_and_flag = 0x8004D4C4),
@@ -116,7 +116,7 @@ static void inv_add_body(Core* c) {
 // Full RAM+scratchpad A/B vs rec_super_call. The pure-leaf core touches no guest stack; the wrappers
 // dispatch the PSX event sink (0x8004ED0C->0x8004FA38), whose own below-sp frame differs harmlessly across
 // the twice-run passes, so the wrapper gate excludes the top-of-RAM stack window [sp-0x800, sp).
-static void inv_ab_gate(Core* c, uint32_t addr, void (*native)(Core*), int exclude_stack, const char* nm) {
+void Inventory::abGate(Core* c, uint32_t addr, void (*native)(Core*), int exclude_stack, const char* nm) {
   uint8_t* ram0 = c->game->verify.ram0();
   uint8_t* ramN = c->game->verify.ramN();
   uint8_t spad0[0x400], spadN[0x400];
@@ -145,30 +145,30 @@ static void inv_ab_gate(Core* c, uint32_t addr, void (*native)(Core*), int exclu
 
 
 void Inventory::addEntry(Core* c) {       // FUN_8004D338
-  if (c->game->verify.on("invverify") && !c->inventory.inGate) { inv_ab_gate(c, 0x8004D338u, inv_add_body, 0, "invverify"); return; }
-  inv_add_body(c);
+  if (c->game->verify.on("invverify") && !c->inventory.inGate) { abGate(c, 0x8004D338u, &Inventory::addBody, 0, "invverify"); return; }
+  addBody(c);
 }
 
 // FUN_8004D4C4  give_and_flag(type, amount): native add, then dispatch the PSX flag/event emit (0x8004ED0C
 // has a jal to the event sink 0x8004FA38 -> stays content/dispatched). We own the call sequencing.
-static void inv_give_and_flag_body(Core* c) {
+void Inventory::giveAndFlagBody(Core* c) {
   uint32_t type = c->r[4], amount = c->r[5];
-  inventory_add_native(c, type, amount);
+  addNative(c, type, amount);
   c->r[4] = type; c->r[5] = 2;                 // set_item_flag(type, 2)
   rec_dispatch(c, 0x8004ED0Cu);
 }
 void Inventory::giveAndFlagEntry(Core* c) {    // FUN_8004D4C4
-  if (c->game->verify.on("invverify") && !c->inventory.inGate) { inv_ab_gate(c, 0x8004D4C4u, inv_give_and_flag_body, 1, "invverify"); return; }
-  inv_give_and_flag_body(c);
+  if (c->game->verify.on("invverify") && !c->inventory.inGate) { abGate(c, 0x8004D4C4u, &Inventory::giveAndFlagBody, 1, "invverify"); return; }
+  giveAndFlagBody(c);
 }
 
 // FUN_8004D4F4  give_only(type, amount): native add only.
-static void inv_give_body(Core* c) {
-  inventory_add_native(c, c->r[4], c->r[5]);
+void Inventory::giveBody(Core* c) {
+  addNative(c, c->r[4], c->r[5]);
 }
 void Inventory::giveEntry(Core* c) {           // FUN_8004D4F4
-  if (c->game->verify.on("invverify") && !c->inventory.inGate) { inv_ab_gate(c, 0x8004D4F4u, inv_give_body, 1, "invverify"); return; }
-  inv_give_body(c);
+  if (c->game->verify.on("invverify") && !c->inventory.inGate) { abGate(c, 0x8004D4F4u, &Inventory::giveBody, 1, "invverify"); return; }
+  giveBody(c);
 }
 
 // (registration of the class is by value in Core; no init function needed.)

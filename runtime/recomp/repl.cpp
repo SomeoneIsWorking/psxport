@@ -23,7 +23,6 @@
 // Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
 //   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
-void cam_teleport(Core* c, int x, int y, int z); void cam_teleport_off(Core* c);   // engine_camera.cpp — REPL `tp` (per-Core)
 static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
   if (!strcmp(n,"start"))    return 0x0008; if (!strcmp(n,"select")) return 0x0001;
   if (!strcmp(n,"x")||!strcmp(n,"cross"))  return 0x4000;
@@ -145,8 +144,8 @@ long Repl::read(Core* c, uint32_t f) {
       fprintf(stderr, "[ents] (%d nodes; %d native-owned, %d still-PSX)\n", total, owned, total - owned);
     }
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
-      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { cam_teleport(c, x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
-      else { cam_teleport_off(c); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
+      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { c->engine.camTeleport(x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
+      else { c->engine.camTeleportOff(); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
     else if (!strcmp(cmd, "invtest")) {   // diagnostic: exercise the inventory subsystem with a test vector
       // invtest [type] [amt] — fire FUN_8004D338/D4C4/D4F4(type,amt) through the override path (with the
       // `invverify` gate enabled this runs the full RAM+scratchpad A/B vs the recomp body). With no args,

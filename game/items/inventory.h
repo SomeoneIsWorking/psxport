@@ -37,4 +37,13 @@ public:
   static void addEntry(Core* c);          // FUN_8004D338
   static void giveEntry(Core* c);         // FUN_8004D4F4
   static void giveAndFlagEntry(Core* c);  // FUN_8004D4C4
+
+private:
+  // Guest-ABI bodies + the shared add core (plain fn-pointer shape for the A/B gate).
+  static void addNative(Core* c, uint32_t type, uint32_t amount);   // FUN_8004D338 core
+  static void addBody(Core* c);                                     // FUN_8004D338
+  static void giveAndFlagBody(Core* c);                             // FUN_8004D4C4
+  static void giveBody(Core* c);                                    // FUN_8004D4F4
+  static void abGate(Core* c, uint32_t addr, void (*native)(Core*), int exclude_stack,
+                     const char* nm);
 };

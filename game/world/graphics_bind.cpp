@@ -28,7 +28,7 @@ struct SceneObject {
 // tracks remaining slots. RE'd from disas 0x8007AAE8:
 //   if ((s16)cnt <= 0) return 0;                      // pool empty
 //   record = *cursor; cursor += 4; cnt--; return record;
-static uint32_t record_alloc(Core* c) {
+uint32_t GraphicsBind::recordAllocBody(Core* c) {
   int16_t cnt = c->mem_r16s(0x800ED098u);
   if (cnt <= 0) return 0;
   uint32_t cursor = c->mem_r32(0x800E7E74u);
@@ -48,7 +48,7 @@ static uint32_t record_alloc(Core* c) {
 //   rec[+6]=-1; rec[+0]=rec[+2]=rec[+4]=rec[+8]=rec[+0xa]=rec[+0xc]=0; rec[+0x38]=rec[+0x3a]=rec[+0x3c]=0x1000;
 //   base = *(0x800ECF58 + a1*4);  rec[+0x40] = base + *(base + a2*4 + 4);
 //   return 0;
-static uint32_t obj_record_init(Core* c) {
+uint32_t GraphicsBind::recordInitBody(Core* c) {
   uint32_t obj = c->r[4], a1 = c->r[5], a2 = c->r[6];
   if (c->mem_r16s(0x800ED098u) <= 0) { c->mem_w8(obj + 4, 3); return 1; }
   c->mem_w8(obj + 8, 1);
@@ -57,7 +57,7 @@ static uint32_t obj_record_init(Core* c) {
   c->mem_w16(obj + 0xbc, 0x1000);
   c->mem_w16(obj + 0xba, 0x1000);
   c->mem_w16(obj + 0xb8, 0x1000);
-  uint32_t rec = record_alloc(c);                // native (was rec_dispatch(0x8007AAE8u); record_alloc defined above)
+  uint32_t rec = recordAllocBody(c);                // native (was rec_dispatch(0x8007AAE8u); recordAllocBody defined above)
   c->mem_w32(obj + 0xc0, rec);
   c->mem_w16(rec + 6, 0xffff);                   // -1
   c->mem_w16(rec + 0, 0);  c->mem_w16(rec + 2, 0);  c->mem_w16(rec + 4, 0);
@@ -76,10 +76,10 @@ void GraphicsBind::recordAlloc() { Core* c = core;
     fprintf(stderr, "[recalloc] core=%p ra=%p cnt_before=%d stage=%08X\n",
             (void*)c, ra, (int)c->mem_r16s(0x800ED098u), c->mem_r32(0x801fe00c));
   }
-  c->game->verify.run(record_alloc, 0x8007AAE8u, "recallocverify", c->game->verify.on("recallocverify"));
+  c->game->verify.run(&GraphicsBind::recordAllocBody, 0x8007AAE8u, "recallocverify", c->game->verify.on("recallocverify"));
 }
 void GraphicsBind::recordInit() { Core* c = core;
-  c->game->verify.run(obj_record_init, 0x80051B70u, "recinitverify", c->game->verify.on("recinitverify"));
+  c->game->verify.run(&GraphicsBind::recordInitBody, 0x80051B70u, "recinitverify", c->game->verify.on("recinitverify"));
 }
 
 // FUN_80051B04 — two-level scene-data-table pointer resolve. Pure address arithmetic, no branches.
@@ -100,7 +100,7 @@ void GraphicsBind::installSceneRecord(uint32_t rec, uint32_t classArg, uint32_t 
 //   obj[+0xac] = (s32)(s16)obj[+0x2e]; obj[+0xb0] = (s32)(s16)obj[+0x32]; obj[+0xb4] = (s32)(s16)obj[+0x36];
 //   FUN_80051300(obj);                                          // downstream render setup (kept content)
 // The two callees stay PSX via rec_dispatch; we own the control flow + the position snapshot.
-static uint32_t obj_render_update(Core* c) {
+uint32_t GraphicsBind::renderUpdateBody(Core* c) {
   uint32_t obj = c->r[4];
   c->math.rotmat(obj + 0x54, obj + 0x98);
   c->mem_w32(obj + 0xac, (uint32_t)c->mem_r16s(obj + 0x2e));
@@ -111,12 +111,12 @@ static uint32_t obj_render_update(Core* c) {
   return c->r[2];
 }
 void GraphicsBind::renderUpdate() { Core* c = core;
-  c->game->verify.run(obj_render_update, 0x800517F8u, "rendupdverify", c->game->verify.on("rendupdverify"));
+  c->game->verify.run(&GraphicsBind::renderUpdateBody, 0x800517F8u, "rendupdverify", c->game->verify.on("rendupdverify"));
 }
 
 // FUN_80077B38 — set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0x80077B38 (leaf):
 //   ent = *(a1 + a2*4);  obj[+0x38] = ent;  obj[+0x0e] = (u16)ent[+2] & 0x3fff;  return that value.
-static uint32_t obj_set_geom(Core* c) {
+uint32_t GraphicsBind::setGeomBody(Core* c) {
   uint32_t obj = c->r[4], tbl = c->r[5], idx = c->r[6];
   uint32_t ent = c->mem_r32(tbl + idx * 4u);
   uint32_t cnt = (uint32_t)(c->mem_r16(ent + 2) & 0x3fffu);
@@ -125,14 +125,14 @@ static uint32_t obj_set_geom(Core* c) {
   return cnt;   // incidental v0 the recomp leaves (callers treat this void)
 }
 void GraphicsBind::setGeom() { Core* c = core;
-  c->game->verify.run(obj_set_geom, 0x80077B38u, "setgeomverify", c->game->verify.on("setgeomverify"));
+  c->game->verify.run(&GraphicsBind::setGeomBody, 0x80077B38u, "setgeomverify", c->game->verify.on("setgeomverify"));
 }
 
 // FUN_8006CBD0 — copy a 6-halfword TRANSFORM BLOCK from a1 into the scratchpad camera/transform block
 // (0x1F8000D2/D6/DA) + the object's rotation fields (obj+0x3a/0x3e/0x42). RE'd from disas 0x8006CBD0 (leaf):
 //   *0x1F8000D2 = a1[0]; *0x1F8000D6 = a1[1]; *0x1F8000DA = a1[2];
 //   obj[+0x3a] = a1[3]; obj[+0x3e] = a1[4]; obj[+0x42] = a1[5];
-static uint32_t obj_set_xformblk(Core* c) {
+uint32_t GraphicsBind::setXformBlkBody(Core* c) {
   uint32_t obj = c->r[4], src = c->r[5];
   c->mem_w16(0x1F8000D2u, c->mem_r16(src + 0));
   c->mem_w16(0x1F8000D6u, c->mem_r16(src + 2));
@@ -144,7 +144,7 @@ static uint32_t obj_set_xformblk(Core* c) {
   return last;   // incidental v0
 }
 void GraphicsBind::setXformBlk() { Core* c = core;
-  c->game->verify.run(obj_set_xformblk, 0x8006CBD0u, "setxblkverify", c->game->verify.on("setxblkverify"));
+  c->game->verify.run(&GraphicsBind::setXformBlkBody, 0x8006CBD0u, "setxblkverify", c->game->verify.on("setxblkverify"));
 }
 
 // FUN_8004BD64 — per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x8004BD64
@@ -156,7 +156,7 @@ void GraphicsBind::setXformBlk() { Core* c = core;
 //   if ((obj[+0x28] & 0x7f) != 0) FUN_800517F8(obj);                     // refresh render-state (owned)
 // v0 the recomp incidentally leaves = the last full (un-truncated) computed value (or 0x800517F8's return
 // if the tail ran); we mirror it so the A/B v0 compare holds.
-static uint32_t obj_pos_compose(Core* c) {
+uint32_t GraphicsBind::posComposeBody(Core* c) {
   uint32_t obj = c->r[4], mode = c->r[5] & 0xffu, srcA = c->r[6], srcB = c->r[7];
   uint32_t t0 = c->mem_r32(c->r[29] + 0x10);
   uint32_t last = c->r[2];   // default (other mode): v0 unchanged
@@ -185,5 +185,5 @@ static uint32_t obj_pos_compose(Core* c) {
   return last;
 }
 void GraphicsBind::posCompose() { Core* c = core;
-  c->game->verify.run(obj_pos_compose, 0x8004BD64u, "poscomposeverify", c->game->verify.on("poscomposeverify"));
+  c->game->verify.run(&GraphicsBind::posComposeBody, 0x8004BD64u, "poscomposeverify", c->game->verify.on("poscomposeverify"));
 }

@@ -49,6 +49,7 @@ Core::Core() {
   math.core       = this;
   mtx.core        = this;
   inventory.core  = this;
+  saveMenu.core   = this;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.
   mRender = new Render();
   mRender->mCore = this;

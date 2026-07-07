@@ -22,6 +22,7 @@
 #include "math/engine_math.h"                 // Core owns a Math instance (GTE matrix cluster)
 #include "math/mtx.h"                         // Core owns a Mtx instance (libgte matrix leaves)
 #include "items/inventory.h"                  // Core owns an Inventory instance
+#include "items/save.h"                       // Core owns a SaveMenu instance
 
 #ifdef __cplusplus
 
@@ -47,6 +48,7 @@ public:
   Math       math;
   Mtx        mtx;
   Inventory  inventory;
+  SaveMenu   saveMenu;
   Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state

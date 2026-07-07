@@ -38,4 +38,8 @@ public:
 
   // dispatch: one call = one sweep of the 40-slot table (was ov_disp_26c88 / FUN_80026C88).
   void dispatch();
+
+private:
+  // FUN_80027254 — the leaf-particle slot handler (the only handler the table holds today).
+  void handler27254(uint32_t obj);
 };

@@ -24,11 +24,6 @@
 #include "core.h"
 #include <stdint.h>
 
-// Debug-teleport hook (REPL `tp X Y Z`): moves Tomba's MASTER position so the whole follow pipeline
-// tracks it naturally. Free-function REPL glue, backed by per-Core state on CutsceneCamera below.
-void cam_teleport(struct Core* c, int x, int y, int z);
-void cam_teleport_off(struct Core* c);
-
 class CutsceneCamera {
 public:
   // Note: pending-teleport state (mCamTpPending / mCamTpX/Y/Z) lives on `Engine` instead — CutsceneCamera

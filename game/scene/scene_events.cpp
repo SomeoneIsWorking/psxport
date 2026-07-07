@@ -41,7 +41,7 @@ uint32_t SceneEvents::classSize(uint8_t argKey, bool nibbleLo) {
 //     0 if the per-slot flag was already set (recomp's `addu v0, zero, zero` on the branch epilogue)
 //     1 if fresh arm (recomp's `addiu v0, zero, 1` seq at the tail — the +1 constant that also bumps
 //                     the ring write head).
-static uint32_t scene_events_arm_body(Core* c) {
+uint32_t SceneEvents::armBody(Core* c) {
   const uint32_t eventId = c->r[4] & 0xFFu;
 
   // (a) Global events gate — 0 disables the whole system.
@@ -79,7 +79,7 @@ static uint32_t scene_events_arm_body(Core* c) {
 int32_t SceneEvents::arm(uint8_t eventId) {
   Core* c = this->core;
   c->r[4] = eventId;
-  c->game->verify.run(scene_events_arm_body, 0x80040B48u, "sceneeventsarmverify",
+  c->game->verify.run(&SceneEvents::armBody, 0x80040B48u, "sceneeventsarmverify",
                       c->game->verify.on("sceneeventsarmverify"));
   return (int32_t)c->r[2];
 }

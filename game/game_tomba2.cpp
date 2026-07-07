@@ -60,46 +60,7 @@ void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, els
 #define SEQ_TICK_WRAPPER 0x800909C0u  // FUN_800909c0: per-vblank libsnd tick (user cb + SsSeqCalled)
 #define SEQ_FUNC_PTR     0x800AC42Cu  // DAT_800ac42c: SsSeqCalled pointer (0 until SsStart inits)
 
-// gpu_perf.cpp — per-frame CPU phase profiler (REPL `debug perf`), default off. PH_LOGIC=0/AUDIO=1/PRESENT=2.
-extern "C" void perf_phase_begin(int), perf_phase_end(int);
-
-// ---- NATIVE field BGM director ------------------------------------------------------------------
-// The libsnd sequencer is SILENT in the port (every voice keyon binds VAB id = -1; later-218), so the
-// field plays no music despite libsnd ticking. We drive the PC-native synth (engine/audio/) from the
-// LIVE area bundle (guest 0x80182000: 10 SEPs + the field VAB @+0x26b4) instead. This director runs
-// once per logic frame: while the GAME stage (the field, 0x8010637C) is active AND the area bundle is
-// present, start the area BGM natively (once, on entry) and keep it playing; stop it when leaving the
-// field. The played sequence defaults to the field theme; override with PSXPORT_FIELD_SONG=<0..9> for
-// auditioning (the USER confirms the right one by ear). This is a real PC-game feature replacing a
-// broken subsystem, not an A/B behavior gate.
-// MusicList is a Game member — reach as `c->game->music_list.method()`.
-
-#define GAME_STAGE_ADDR 0x801062ECu   // current-stage cell (c->mem_r32) — 0x8010637C while in the field
-#define AREA_BUNDLE     0x182000u     // guest 0x80182000 -> RAM offset
-
-#include "native_gate.h"
-
-static void field_bgm_director(Core* c) {
-  if (!c->game->native_gates.get("music")) return;   // gated off -> recomp libsnd is the (oracle) music path
-  // Are we in the field (GAME stage running)? The stage cell holds the active stage's task-0 entry.
-  uint32_t stage = c->mem_r32(0x801fe00c);
-  int in_field = (stage == 0x8010637Cu);
-  int& started = c->game->field_bgm_started;
-  if (!in_field) {
-    if (started) { c->game->music_list.stop(); started = 0; }
-    return;
-  }
-  if (started) {
-    // Restart if the song fully drained (one-shot tail) so the field stays scored.
-    if (c->game->music_list.nowPlaying() < 0) started = 0; else return;
-  }
-  // Validate the bundle is loaded before starting (area data may not be in yet right after a load).
-  const uint8_t* b = c->ram + AREA_BUNDLE;
-  if (memcmp(b + 0x30, "pQES", 4) || memcmp(b + 0x26b4, "pBAV", 4)) return;
-  int song = 8;                                   // default field theme (longest area seq)
-  if (const char* s = cfg_str("PSXPORT_FIELD_SONG")) { int v = atoi(s); if (v >= 0 && v < 10) song = v; }
-  if (c->game->music_list.playArea(b, 0x50000, song) == 0) started = 1;
-}
+#include "gpu_perf.h"   // per-frame CPU phase profiler (REPL `debug perf`), default off
 
 // Per-frame engine tick. Called DIRECTLY (a plain C call) from native_step_frame (native_boot.cpp) —
 // this is the PC-driven game loop's frame body. It runs the still-PSX per-frame update leaf, then OWNS
@@ -267,6 +228,6 @@ void games_tomba2_init(void) {
   // the beh_*_register siblings) were left as empty stubs "in case." Every stub had a zero- or single-
   // dead-line body — dead scaffolding — and got deleted. Direct-call wiring is the shape now.
   fps60_init();
-  void engine_tomba2_init(void);
-  engine_tomba2_init();                            // native engine layer (Phase 1: object-list walk)
+  if (cfg_dbg("engine"))
+    fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }

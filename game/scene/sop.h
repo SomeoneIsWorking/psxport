@@ -37,11 +37,17 @@ public:
   //   list-2 walk each field frame). Computes a per-frame 2D CAMERA-FRUSTUM TRIANGLE in scene-grid
   //   space (cam pos ± halfFOV yaw offsets, view distance 0x5780=22400, half-FOV 0x1C7=455/4096,
   //   pitch-tilted, scaled by 1/0x280=640) and hands it to the native scanline gatherer (guest
-  //   FUN_8010A3AC — also owned; see the `scene_grid_gather` static helper in sop.cpp) which
+  //   FUN_8010A3AC — also owned; Sop::sceneGridGather below) which
   //   scanline-rasters it into SCENE_STATE.count / SCENE_STATE.list at table+6/+0x10.
   //   `table` = 0x800F2418 (SCENE_STATE). Header copy at +8/+10 comes from *(u16*)(table+0xC).
   //   Also writes two engine globals 0x800A3F90=0x5780 (view dist) and 0x800A3F94=0x1C7 (halfFOV).
   //   Faithful to the recomp: yaw sign/masking (12-bit wrap), signed >>12 fixed-point, signed div
   //   by 0x280.
   void scenePrepass(uint32_t table);
+
+private:
+  // sceneGridGather (guest FUN_8010A3AC): scanline-raster the frustum triangle into the scene grid,
+  // appending cell ids to table+0x10 / count at table+6. Called only by scenePrepass.
+  void sceneGridGather(uint32_t table, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+                       int32_t x2, int32_t y2);
 };

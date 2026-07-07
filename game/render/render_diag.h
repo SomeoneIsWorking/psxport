@@ -7,7 +7,7 @@
 //   currentNode()      = the entity NODE the walk is currently rendering (opened via beginObject(node),
 //                        closed via endObject()). 0 outside an object scope — terrain/static/background
 //                        prims emit with no per-object identity and are correctly unlabeled.
-//   currentGeomblk()   = the GEOMBLK CMD RECORD currently being submitted by native_gt3gt4 (or the per-
+//   currentGeomblk()   = the GEOMBLK CMD RECORD currently being submitted by Render::gt3gt4 (or the per-
 //                        entity cmd tag when the entity list is submitted directly). Used by the
 //                        sil_bbox_log diag to attribute a rasterized poly back to its source record.
 //
@@ -25,7 +25,7 @@ public:
   void endObject()                { mNode = 0; }
   uint32_t currentNode() const    { return mNode; }
 
-  // Geomblk-cmd scope. Set at the top of native_gt3gt4 (with the geomblk chunk it is submitting) and by
+  // Geomblk-cmd scope. Set at the top of Render::gt3gt4 (with the geomblk chunk it is submitting) and by
   // the per-entity list walk (with each entity's cmd record). Downstream diag reads it via currentGeomblk().
   void setGeomblk(uint32_t cmd)   { mGeomblk = cmd; }
   uint32_t currentGeomblk() const { return mGeomblk; }

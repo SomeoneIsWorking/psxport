@@ -21,7 +21,7 @@
 #include "cfg.h"
 #include "sop.h"
 #include <stdio.h>
-#include <algorithm>   // std::swap / std::min / std::max used by scene_grid_gather
+#include <algorithm>   // std::swap / std::min / std::max used by sceneGridGather
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
@@ -208,7 +208,7 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
   c->r[4]=a0; c->r[5]=a1; c->r[6]=a2; rec_dispatch(c, fn);
 }
 
-// scene_grid_gather — native port of guest FUN_8010A3AC (Ghidra decomp scratch/decomp/
+// sceneGridGather — native port of guest FUN_8010A3AC (Ghidra decomp scratch/decomp/
 // sop_a0e0_a3ac.c). Scanline TRIANGLE-RASTER over a 2D grid: given the 3 (X, Y) corners of a
 // frustum-triangle in grid-cell coords, walk every cell the triangle covers and append its u16
 // entry from the grid backing store into SCENE_STATE's u16 list (table+0x10, count byte @+6).
@@ -224,12 +224,11 @@ static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2) {
 // output list. Signed integer division matches the MIPS `div` semantics for the ranges the
 // recomp actually feeds it (the trap paths at div-by-zero / -0x80000000/-1 are unreachable
 // with the values scenePrepass produces).
-namespace {
-
-void scene_grid_gather(Core* c, uint32_t table,
-                       int32_t x0, int32_t y0,
-                       int32_t x1, int32_t y1,
-                       int32_t x2, int32_t y2) {
+void Sop::sceneGridGather(uint32_t table,
+                          int32_t x0, int32_t y0,
+                          int32_t x1, int32_t y1,
+                          int32_t x2, int32_t y2) {
+  Core* c = core;
   // Skip degenerate (all-3-Ys-equal) triangle — matches the recomp's early-exit guard.
   if (y1 == y0 && y1 == y2) return;
 
@@ -307,18 +306,16 @@ void scene_grid_gather(Core* c, uint32_t table,
   }
 }
 
-}  // namespace
-
 // SOP scene cam-frustum prepass — native ownership of FUN_8010A0E0 (Ghidra decomp
 // scratch/decomp/sop_a0e0_a3ac.c). Called every field frame from fieldUpdate BEFORE the list-2
 // walk. Computes 3 view-space rays (forward, forward-halfFOV, forward+halfFOV) at fixed view
 // distance 0x5780, pitch-tilts them into the ground plane, scales to grid cells (÷0x280), then
-// hands the triangle to scene_grid_gather (native port of FUN_8010A3AC, above) which scanline-
+// hands the triangle to sceneGridGather (native port of FUN_8010A3AC, above) which scanline-
 // rasters it into SCENE_STATE.count / SCENE_STATE.list at table+6/+0x10.
 //
 // Two engine globals are set every call: 0x800A3F90=0x5780 (view distance), 0x800A3F94=0x1C7
 // (half-FOV in 12-bit angle units, ≈40°). The header at (table+8, table+0xA) is copied from
-// *(u16[2]*)(table+0xC) — the grid width/height limits used by scene_grid_gather's clamps.
+// *(u16[2]*)(table+0xC) — the grid width/height limits used by sceneGridGather's clamps.
 void Sop::scenePrepass(uint32_t table) { Core* c = core;
   // Header + engine globals (identical bytes, same order as the recomp).
   const uint32_t hdrPtr = c->mem_r32(table + 0xCu);
@@ -373,7 +370,7 @@ void Sop::scenePrepass(uint32_t table) { Core* c = core;
   c->mem_w8(table + 6u, 0);
 
   // Rasterize the frustum triangle into the scene grid — appends cell ids to table+0x10 / +6.
-  scene_grid_gather(c, table, X0d, Z0d, X1d, Z1d, X2d, Z2d);
+  sceneGridGather(table, X0d, Z0d, X1d, Z1d, X2d, Z2d);
 }
 
 // SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp scratch/decomp/sop/801092b4.c).

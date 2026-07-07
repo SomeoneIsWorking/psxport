@@ -54,17 +54,6 @@ bool CutsceneCamera::followAxis(uint32_t accAddr, uint32_t tgt32Addr, uint16_t t
   return false;
 }
 
-// ── teleport hook (REPL) ─────────────────────────────────────────────────────────────────────────
-// State lives on THIS core's Engine (mCamTpPending / mCamTpX/Y/Z). CutsceneCamera is instantiated
-// fresh per-call, so its own members can't persist across the set/consume boundary; the state has
-// to live somewhere with matching lifetime — Engine is per-Core and outlives every CutsceneCamera
-// instance. SBS's two cores each get separate pending flags.
-void cam_teleport(Core* c, int x, int y, int z) {
-  auto& e = c->engine;
-  e.mCamTpX = x; e.mCamTpY = y; e.mCamTpZ = z; e.mCamTpPending = true;
-}
-void cam_teleport_off(Core* c) { c->engine.mCamTpPending = false; }
-
 // ── follow accumulators ──────────────────────────────────────────────────────────────────────────
 bool CutsceneCamera::trackXZ(uint32_t target) {   // FUN_8006D960
   if (c->engine.mCamTpPending) {                        // one-shot debug teleport of Tomba's master pos

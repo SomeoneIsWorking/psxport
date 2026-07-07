@@ -34,6 +34,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "behaviors.h"
 #include "scene/engine.h"
 void rec_dispatch(Core*, uint32_t);
 #include "player/actor_tomba.h"                // c->engine.actorTomba.interactWalk (FUN_80022760)
@@ -86,7 +87,7 @@ inline void aux_list_walk(Core* c) {
 
 }  // namespace
 
-void area_seaside_perframe(Core* c) {
+void Behaviors::areaSeasidePerframe(Core* c) {
   gLeaf(c, LEAF_G_PRE_2288C);                              // always run the pre-tick on G
 
   const uint8_t mode = c->mem_r8(G);

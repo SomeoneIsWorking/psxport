@@ -112,6 +112,10 @@ struct Fps60 {
   void bbFrameReset() { s_nBBCur = 0; }
   void recordBillboardSpan(uint32_t lo, uint32_t hi, uint32_t ident);
   int  billboardForNode(uint32_t node, uint32_t* identOut, uint32_t crOut[11]) const;
+  // world-prim / billboard capture hooks (former free fns fps60_stamp_world* / fps60_stamp_billboard)
+  void stampWorldCr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]);
+  void stampWorld(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
+  void stampBillboard(Core* c, uint32_t node);
 };
 
 #endif // FPS60_INTERNAL_H

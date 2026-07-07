@@ -65,7 +65,7 @@ static const uint32_t LIST_TAIL[3] = { 0x800F23A8u, 0x800F239Cu, 0x800F23A0u };
 // disasms); only the free-list they pop from differs. When the target active list is EMPTY, the recomp
 // initializes BOTH end pointers (a head-insert also writes *tail, a tail-insert also writes *head); we match
 // that (caught by spawnvarverify: empty-list inserts that the seaside-only spawnverify never exercised).
-static void spawn_link_stamp(Core* c, uint32_t node, uint32_t ref, uint32_t type, uint32_t mode, uint32_t list) {
+void Spawn::spawnLinkStamp(Core* c, uint32_t node, uint32_t ref, uint32_t type, uint32_t mode, uint32_t list) {
   // Resolve the selected active list's head/tail vars (MIPS: a3==1 -> list1, a3==2 -> list2, else list0).
   uint32_t head, tail;
   if (list == 1)      { head = LIST_HEAD[1]; tail = LIST_TAIL[1]; }
@@ -122,7 +122,7 @@ static void spawn_link_stamp(Core* c, uint32_t node, uint32_t ref, uint32_t type
   c->mem_w8(node + 12, (uint8_t)type);
 }
 
-static uint32_t entity_spawn(Core* c) {
+uint32_t Spawn::entitySpawnBody(Core* c) {
   const uint32_t ref  = c->r[4];          // a0
   const uint32_t type = c->r[5] & 0xffu;  // a1 (stored as u8 -> node[12])
   const uint32_t mode = c->r[6];          // a2 (insertion mode)
@@ -135,28 +135,27 @@ static uint32_t entity_spawn(Core* c) {
   c->mem_w8(FREE_CNT, (uint8_t)(cnt - 1));
   c->mem_w32(FREE_HEAD, c->mem_r32(node + 36));   // free head = node->next
 
-  spawn_link_stamp(c, node, ref, type, mode, list);
+  spawnLinkStamp(c, node, ref, type, mode, list);
   return node;
 }
 
 // FUN_80079DDC — the POOL-2 spawn primitive (spawn variant class 1). Same link/stamp as FUN_80079C3C but
 // pops a DIFFERENT free-list (head 0x800E80A0, count 0x800E7E7D), has NO pool-low guard, and when its pool
-// is EMPTY it DELEGATES to variant 2 (FUN_80079F90) — POOL_VAR2, owned natively via pool_spawn (byte-perfect
-// per spawn_variant_native, proven by the spawn_dispatch A/B wire in af27fd8).
-static uint32_t pool_spawn(Core* c, const PoolDesc& p);
+// is EMPTY it DELEGATES to variant 2 (FUN_80079F90) — POOL_VAR2, owned natively via poolSpawn (byte-perfect
+// per spawnVariantNative, proven by the spawn_dispatch A/B wire in af27fd8).
 static const uint32_t POOL2_HEAD = 0x800E80A0u, POOL2_CNT = 0x800E7E7Du;
-static uint32_t spawn_pool2(Core* c) {
+uint32_t Spawn::spawnPool2Body(Core* c) {
   const uint32_t ref = c->r[4], type = c->r[5] & 0xffu, mode = c->r[6], list = c->r[7];
   uint32_t node = c->mem_r32(POOL2_HEAD);
   if (node == 0) {                                  // pool empty -> delegate to POOL_VAR2 (FUN_80079F90) natively
     c->r[4] = ref; c->r[5] = type;                  // a2/a3 already hold mode/list, untouched
     static const PoolDesc P = { 0x800F2398u, 0x800ED8CCu };   // POOL_VAR2 (FUN_80079F90) — see defn below
-    return pool_spawn(c, P);
+    return poolSpawn(c, P);
   }
   uint32_t cnt = c->mem_r8(POOL2_CNT);
   c->mem_w8(POOL2_CNT, (uint8_t)(cnt - 1));
   c->mem_w32(POOL2_HEAD, c->mem_r32(node + 36));    // free head = node->next
-  spawn_link_stamp(c, node, ref, type, mode, list);
+  spawnLinkStamp(c, node, ref, type, mode, list);
   return node;
 }
 
@@ -175,15 +174,14 @@ static uint32_t spawn_pool2(Core* c) {
 static const uint32_t SPAWN_VAR[5] = { 0x80079C3Cu, 0x80079DDCu, 0x80079F90u, 0x8007A12Cu, 0x8007A2C8u };
 // Run the per-class spawn VARIANT NATIVELY (the 5 bodies are all owned in this TU) reading ref/type/mode/
 // list from r4..r7 and returning the node ptr. Replaces the former rec_dispatch(SPAWN_VAR[cls]) into the
-// PSX body — keeps the placement→spawn path fully native (PC calls PC). Defined after pool_spawn/POOL_VAR.
-static uint32_t spawn_variant_native(Core* c, uint32_t cls);
+// PSX body — keeps the placement→spawn path fully native (PC calls PC). Defined after poolSpawn/POOL_VAR.
 uint32_t Spawn::dispatch(uint32_t cls_in, uint32_t type_in, uint32_t list) {
   Core* c = this->core;
   uint32_t cls = cls_in & 0xffu;
   if (cls >= 5) { c->r[2] = 0; return 0; }
   uint32_t type = type_in & 0xffu;
   c->r[4] = 0; c->r[5] = type; c->r[6] = 3; c->r[7] = list;   // handler sets ref=0, type&0xff, mode=3, a3=list
-  uint32_t node = spawn_variant_native(c, cls);               // run the per-type spawn variant (native)
+  uint32_t node = spawnVariantNative(c, cls);               // run the per-type spawn variant (native)
   c->r[2] = node;
   return node;
 }
@@ -194,31 +192,31 @@ void rec_dispatch(Core*, uint32_t);
 // pool-2 primitive's pop+link+stamp EXCEPT (a) a different free-list head + count byte, and (b) when its
 // pool is EMPTY it returns 0 (jr ra; v0=zero at the 0x8007a124/0x8007a2c0/0x8007a45c tails) — NO delegation
 // (unlike pool-2, which delegates to 0x80079F90). The link/stamp (list head/tail by a3, insert by a2, stamp
-// node+10/+0/+12) is the shared spawn_link_stamp. No pool-low guard (only 0x80079C3C has the cnt<3 guard).
+// node+10/+0/+12) is the shared spawnLinkStamp. No pool-low guard (only 0x80079C3C has the cnt<3 guard).
 static const PoolDesc POOL_VAR2 = { 0x800F2398u, 0x800ED8CCu };   // FUN_80079F90 (class 2)
 static const PoolDesc POOL_VAR3 = { 0x800ED8D4u, 0x800ED8C5u };   // FUN_8007A12C (class 3)
 static const PoolDesc POOL_VAR4 = { 0x800ED8D0u, 0x800ED8C4u };   // FUN_8007A2C8 (class 4)
 
-static uint32_t pool_spawn(Core* c, const PoolDesc& p) {
+uint32_t Spawn::poolSpawn(Core* c, const PoolDesc& p) {
   const uint32_t ref = c->r[4], type = c->r[5] & 0xffu, mode = c->r[6], list = c->r[7];
   uint32_t node = c->mem_r32(p.free_head);
   if (node == 0) return 0;                          // pool empty -> v0 = 0 (no delegation)
   uint32_t cnt = c->mem_r8(p.cnt);
   c->mem_w8(p.cnt, (uint8_t)(cnt - 1));
   c->mem_w32(p.free_head, c->mem_r32(node + 36));   // free head = node->next
-  spawn_link_stamp(c, node, ref, type, mode, list);
+  spawnLinkStamp(c, node, ref, type, mode, list);
   return node;
 }
 
 // Native per-class spawn-variant dispatch (forward-declared above spawn_dispatch). All 5 variant bodies are
 // owned in this TU; they read ref/type/mode/list from r4..r7. cls is pre-validated (<5) by the callers.
-static uint32_t spawn_variant_native(Core* c, uint32_t cls) {
+uint32_t Spawn::spawnVariantNative(Core* c, uint32_t cls) {
   switch (cls) {
-    case 0:  return entity_spawn(c);            // FUN_80079C3C (pool-208, with pool-low guard)
-    case 1:  return spawn_pool2(c);             // FUN_80079DDC (pool-2, delegates to var2 when empty)
-    case 2:  return pool_spawn(c, POOL_VAR2);   // FUN_80079F90
-    case 3:  return pool_spawn(c, POOL_VAR3);   // FUN_8007A12C
-    default: return pool_spawn(c, POOL_VAR4);   // FUN_8007A2C8 (cls==4)
+    case 0:  return entitySpawnBody(c);            // FUN_80079C3C (pool-208, with pool-low guard)
+    case 1:  return spawnPool2Body(c);             // FUN_80079DDC (pool-2, delegates to var2 when empty)
+    case 2:  return poolSpawn(c, POOL_VAR2);   // FUN_80079F90
+    case 3:  return poolSpawn(c, POOL_VAR3);   // FUN_8007A12C
+    default: return poolSpawn(c, POOL_VAR4);   // FUN_8007A2C8 (cls==4)
   }
 }
 
@@ -230,7 +228,7 @@ static uint32_t spawn_variant_native(Core* c, uint32_t cls) {
 //   if (a1) { node[+0x2c]=a1[+2]; node[+0x2e]=a1[+6]; node[+0x30]=a1[+0xa]; }
 //   node[+0x32] = (u16)a2;  FUN_80028E10(node, a0);  return node;
 // The owned spawn dispatcher does the alloc; the per-object init FUN_80028E10 stays content (rec_dispatch).
-static uint32_t spawn_and_init(Core* c) {
+uint32_t Spawn::spawnAndInitBody(Core* c) {
   uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
   if (c->mem_r8(0x800E7E7Cu) < 7) return 0;
   uint32_t node = c->engine.spawn.dispatch(/*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980 — native
@@ -346,7 +344,7 @@ void Spawn::despawn(uint32_t node) {
 uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // FUN_8003116C
   Core* c = this->core;
   c->r[4] = a0; c->r[5] = posSrc; c->r[6] = a2;
-  c->game->verify.run(spawn_and_init, 0x8003116Cu, "spawninitverify",
+  c->game->verify.run(&Spawn::spawnAndInitBody, 0x8003116Cu, "spawninitverify",
                       c->game->verify.on("spawninitverify"));
   return c->r[2];
 }
@@ -387,7 +385,7 @@ uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // F
 //
 // Return: node ptr on success, 0 on freelist exhaustion (caller stashes in Actor::sceneHandle).
 // A/B'd via `sceneentityverify` (full main-RAM + scratchpad diff vs rec_super_call(0x8007E110u)).
-static uint32_t scene_entity_native(Core* c) {
+uint32_t Spawn::sceneEntityBody(Core* c) {
   const uint32_t sceneId = c->r[4] & 0xFFFFu;
   const uint32_t subtype = c->r[5] & 0xFFu;
   // ---- FUN_8007A5A8: alloc class-3 tail-insert into list 1 ------------------------------------
@@ -423,7 +421,7 @@ uint32_t Spawn::sceneEntity(uint16_t sceneId, uint8_t subtype) {
   Core* c = this->core;
   c->r[4] = sceneId;
   c->r[5] = subtype;
-  c->game->verify.run(scene_entity_native, 0x8007E110u, "sceneentityverify",
+  c->game->verify.run(&Spawn::sceneEntityBody, 0x8007E110u, "sceneentityverify",
                       c->game->verify.on("sceneentityverify"));
   return c->r[2];
 }

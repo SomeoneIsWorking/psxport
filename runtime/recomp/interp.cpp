@@ -498,7 +498,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     }
     // PSXPORT_DEBUG=bgmreq: trace the game's BGM trigger sound_play_bgm 0x80074BF8 (a0=idx; low7=song,
     // bit7 set => loop). Reveals which song the GAME LOGIC actually requests per area/dialogue — the
-    // signal the native field_bgm_director currently ignores (it hardcodes song 8).
+    // signal the native MusicCoord::fieldBgmDirector currently ignores (it hardcodes song 8).
     if (pc == 0x80074BF8u || pc == 0x80074E48u) {
       static int br = -2; if (br == -2) br = cfg_dbg("bgmreq") ? 1 : 0;
       if (br) { if (pc == 0x80074E48u) fprintf(stderr, "[bgmreq] sound_stop_bgm() ra=%08X\n", c->r[31]);

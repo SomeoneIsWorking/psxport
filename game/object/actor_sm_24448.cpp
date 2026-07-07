@@ -71,6 +71,7 @@
 // data). A 0-diff over many frames is the content-interface gate. See docs/port-progress.md.
 
 #include "core.h"
+#include "actor.h"
 #include "cfg.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -93,11 +94,13 @@ constexpr uint32_t SC_W84    = 0x1F800084u;     // scratch word cleared on the H
 
 enum { R_A0 = 4, R_A1 = 5, R_A2 = 6, R_A3 = 7, R_V0 = 2 };
 
+}  // namespace
+
 // ------------------------------------------------------------------------------------------------
-// sm_24448(c) — the PC-native body. a0 = obj. Returns its result tag in v0 (0 on miss, 1 on hit),
-// exactly as the PSX body's epilogue does.
+// Actor::sm24448(c) — the PC-native body. a0 = obj. Returns its result tag in v0 (0 on miss, 1 on
+// hit), exactly as the PSX body's epilogue does.
 // ------------------------------------------------------------------------------------------------
-void sm_24448(Core* c) {
+void Actor::sm24448(Core* c) {
   const uint32_t obj = c->r[R_A0];
 
   // --- entry: pick maxiter from +0x17E, read velocity, clear floor-type-out ---
@@ -151,6 +154,4 @@ void sm_24448(Core* c) {
   c->mem_w32(SC_W84, 0);                                     // sw zero, 0x1F800084
   c->r[R_V0] = 1;                                            // return 1 on the HIT path
 }
-
-}  // namespace
 

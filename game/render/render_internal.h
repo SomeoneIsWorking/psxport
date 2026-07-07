@@ -13,7 +13,6 @@
 // --- per-object depth helpers (the engine owns object depth from the object's real world placement) ---
 void  gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 float proj_obj_center_ord(void);
-void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
 // class ProjParams (game/render/proj_params.h) — per-Core; brings in camview_valid/proj_camview_world_ord etc.
 #include "proj_params.h"
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
@@ -22,6 +21,7 @@ void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t id
 // dispatch in the native render walk; PER-INSTANCE identity for every prim an object emits, incl.
 // billboards rasterized later at the OT walk).
 #include "render.h"    // Render (needed for cur_render_node below)
+#include "game.h"      // c->game->fps60 (billboard-span recorder)
 
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
@@ -44,17 +44,15 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
 
 // fps60: record the billboard entry mirroring a just-published gpu_obj_depth_add(span, node-depth).
 static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t node) {
-  if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) fps60_record_billboard_span(c, lo, hi, node);
+  if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) c->game->fps60.recordBillboardSpan(lo, hi, node);
 }
 
 // PktSpan (per-Core packet-pool store-address-span tracker) + PktSpanSession (RAII object scope) live
 // in pkt_span.h — reached as c->mRender->pktSpan. PktSpanSession is defined there; its ctor/close
 // implementation is in pkt_span.cpp.
 
-// --- cross-subsystem entry points ---
-// Fully-native generic GT3/GT4 submit (engine_submit.cpp). The per-object flush in the walk calls it directly.
-void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase);
-// Scene-table (0x800F2418) world-coord render is now Render::fieldEntityRender in render.h.
+// Fully-native generic GT3/GT4 submit is Render::gt3gt4 (engine_submit.cpp); the per-object flush in
+// the walk calls it directly. Scene-table (0x800F2418) world-coord render is Render::fieldEntityRender.
 
 // DIAG (debug channel "silbbox", scratch/handoff.md 2026-07-01 "dark outline" investigation): log the
 // screen bbox of any drawn quad overlapping the known repro window (coastal-ridge dark silhouette line,

@@ -1,5 +1,6 @@
 // PC-native per-area lighting registry — see lighting.h for the design.
 #include "lighting.h"
+#include "core.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -44,7 +45,7 @@ static const LightConfig CFG_MINE = {
   }
 };
 
-const LightConfig* lighting_default(void) { return &CFG_SUN; }
+const LightConfig* Lighting::defaultConfig() const { return &CFG_SUN; }
 
 // ------------------------------------------------------------------------------------------------------
 // Area keying. The current area loads to a fixed overlay region (area_base = 0x80182000). Its first words
@@ -55,12 +56,12 @@ const LightConfig* lighting_default(void) { return &CFG_SUN; }
 // ------------------------------------------------------------------------------------------------------
 #define AREA_BASE 0x80182000u
 
-unsigned lighting_area_key_from(unsigned (*read_u32)(void* ctx, unsigned addr), void* ctx) {
-  if (!read_u32) return 0;
+unsigned Lighting::areaKeyFrom(Core* c) {
+  if (!c) return 0;
   // Fold 8 words of the per-area offset header into a 32-bit FNV-1a-ish key.
   unsigned h = 2166136261u;
   for (int i = 0; i < 8; i++) {
-    unsigned w = read_u32(ctx, AREA_BASE + (unsigned)(i * 4));
+    unsigned w = c->mem_r32(AREA_BASE + (unsigned)(i * 4));
     h ^= w; h *= 16777619u;
   }
   return h;
@@ -71,7 +72,7 @@ unsigned lighting_area_key_from(unsigned (*read_u32)(void* ctx, unsigned addr), 
 // mapping it to a config preset. The Fisherman-Village/seaside field uses the SUN, which is also the
 // DEFAULT, so it is correct even before its key is registered. Mine/cave keys map to CFG_MINE.
 // ------------------------------------------------------------------------------------------------------
-typedef struct { unsigned key; const LightConfig* cfg; const char* name; } AreaEntry;
+struct AreaEntry { unsigned key; const LightConfig* cfg; const char* name; };
 static const AreaEntry s_registry[] = {
   // Fisherman-Village / seaside field (key observed via `debug lighting` on the live port). It maps to the
   // SUN, which is ALSO the default — registering it documents the intent + is the template for new areas.
@@ -81,7 +82,7 @@ static const AreaEntry s_registry[] = {
 };
 static const int s_registry_n = (int)(sizeof(s_registry) / sizeof(s_registry[0]));
 
-const LightConfig* lighting_select(unsigned area_key) {
+const LightConfig* Lighting::select(unsigned area_key) {
   for (int i = 0; i < s_registry_n; i++)
     if (s_registry[i].key == area_key) {
       if (cfg_dbg("lighting"))
@@ -90,10 +91,9 @@ const LightConfig* lighting_select(unsigned area_key) {
     }
   // Diagnostic: log the unrecognised key ONCE per distinct key so you can register a new area's lighting.
   if (cfg_dbg("lighting")) {
-    static unsigned s_last = 0xFFFFFFFFu;
-    if (area_key != s_last) {
+    if (area_key != mLastUnknownKey) {
       fprintf(stderr, "[lighting] area key=%08x -> DEFAULT (sun); register it in s_registry for per-area light\n", area_key);
-      s_last = area_key;
+      mLastUnknownKey = area_key;
     }
   }
   return &CFG_SUN;

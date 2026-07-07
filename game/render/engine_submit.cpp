@@ -24,9 +24,9 @@
 #include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "mods.h"   // g_mods — live PC-native lighting params (engine-native shading, not a deferred pass)
-#include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in engine_shade_select
-#include "render_queue.h" // RQ_BACKGROUND + rq_push_2d_quad — native backdrop tilemap path
-#include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord, native_gt3gt4)
+#include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in Render::shadeSelect
+#include "render_queue.h" // RQ_BACKGROUND + RenderQueue::push2dQuad — native backdrop tilemap path
+#include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord)
 #include "engine_math.h"     // Math:: — GTE-transform cluster (matMul/applyMatlv/rotX/Y/Z/rotmat, static)
 #include "mtx.h"              // class Mtx — libgte helpers (identity, diagonal, ...)
 #include "trig.h"             // class Trig — libgte rsin/rcos
@@ -101,13 +101,10 @@ float proj_obj_center_ord(void);
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
 // The entity node the native render walk is currently rendering (set around each per-object dispatch,
 // below). The PER-INSTANCE identity for every prim an object emits — including a 2D billboard whose quad
-// rasterizes later at the OT walk. Used both for the objid overlay (gpu_native rq_emit_or_queue) and as the
+// rasterizes later at the OT walk. Used both for the objid overlay (RenderQueue::emitOrQueue) and as the
 // billboard span identity (so collectables/flames are identified individually, not merged under a shared id).
 // g_dbg_render_node retired — per-Core Render::mDbgRenderNode (see render.h)
 // cur_render_node + obj_world_ord (PC-native per-object depth) now live in render_internal.h (shared).
-// fps60: record a 3D-positioned 2D quad's reproject inputs, keyed by the object's packet-pool SPAN (the OT
-// walk later matches each billboard item's source node against this span, identical to obj_depth_lookup).
-void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
 #define PKT_POOL_PTR  0x800BF544u
 
 // PC-native per-vertex depth (Phase 2): because we OWN the projection, we know each vertex's real
@@ -120,14 +117,10 @@ void  fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t id
 // byte-packed GT4 emitter (submit_poly_gt4_bp), whose upstream compose is the still-PSX field code.
 #include "engine_project.h"
 void  proj_native_xform(int vx, int vy, int vz, ProjVtx* out);
-void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
-                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
-                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
-                          const float (*sv)[3]);
 int  gpu_gpu_shadows_active(void);
 // Fill `vv` with the prim's 4 view-space verts (x=ir1=vx, y=ir2=vy, z=pz) — the shadow VBO input — and
 // return a pointer to it (NULL when this prim doesn't cast: semi, or shadows off). The shadow geometry is
-// then carried ON the queued RqItem (gpu_draw_world_quad's sv arg) so it is rebuilt per present pass from
+// then carried ON the queued RqItem (RenderQueue::drawWorldQuad's sv arg) so it is rebuilt per present pass from
 // the queue, NOT pushed here into a side stream — that is what removes the keep_shadow strobe hack.
 static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, float vv[4][3]))[3] {
   if (semi || !gpu_gpu_shadows_active()) return nullptr;          // only opaque world casts shadows
@@ -138,16 +131,14 @@ static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, flo
 // fps60: after a GTE-composed world quad is pushed to the render queue, capture its model verts + the
 // composed transform (CR0-7) + the current actor key so the 60fps tier can reproject it at the A/B
 // midpoint (engine/fps60.cpp). No-op unless g_mods.fps60. mv[k] = per-vertex model coords (4th = v2 for tris).
-// (fps60_record_billboard_span is declared above, near gpu_obj_depth_add; fps60 gate is g_mods.fps60.)
-void  fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
-void  fps60_stamp_world_cr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]);
+// (fps60 gate is g_mods.fps60; the capture hooks are Fps60 methods on c->game->fps60.)
 
 // fps60: 3D-POSITIONED 2D QUAD (billboard) capture. The collectable/flame/decal billboards are guest GP0
 // quads/sprites the per-object renderers emit; they reach the render queue LATER, at the deferred OT walk
 // (gpu_native.cpp, off the engine-submit path), where they inherit the object's WORLD-POSITION depth via
 // obj_depth_lookup — so they carry fps_world=0 and the 60fps tier snapped them to camera-B (they juddered
 // while Tomba moved smoothly). We tag them at QUEUE TIME from the OT walk now: we record an fps60 BILLBOARD
-// entry (fps60_record_billboard_span, above) at the SAME instant we publish the object's depth span — keyed
+// entry (Fps60::recordBillboardSpan) at the SAME instant we publish the object's depth span — keyed
 // by that SPAN [lo,hi) (the OT walk matches each billboard item's source node against it, identical to
 // obj_depth_lookup) + the object's stable cross-frame identity (`ident`, the node/cmd ptr) + the live
 // composed camera×object transform. The OT walk (gpu_native.cpp) then stamps each billboard item directly
@@ -161,8 +152,8 @@ static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
     mv[k][0] = (int16_t)p[s].mx; mv[k][1] = (int16_t)p[s].my; mv[k][2] = (int16_t)p[s].mz; }
   // World-coord native path: capture the composed transform from the active float xform; GTE path (the
   // resident byte-packed emitter) falls back to reading the live control registers.
-  if (c->mRender->projActive()) { uint32_t cr[11]; c->mRender->projActiveCr(cr); fps60_stamp_world_cr(c, mv, nv, c->game->fps60.fps_cur_key, cr); }
-  else                  fps60_stamp_world(c, mv, nv, c->game->fps60.fps_cur_key);
+  if (c->mRender->projActive()) { uint32_t cr[11]; c->mRender->projActiveCr(cr); c->game->fps60.stampWorldCr(c, mv, nv, c->game->fps60.fps_cur_key, cr); }
+  else                  c->game->fps60.stampWorld(c, mv, nv, c->game->fps60.fps_cur_key);
 }
 
 // ENGINE-NATIVE directional lighting (user directive 2026-06-21: lighting must be engine-native, NOT a
@@ -174,18 +165,16 @@ static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
 // Light dir is the to-light vector in view space (g_mods.light_dir), same convention as the retired pass.
 // PER-AREA lighting (engine/lighting.cpp): the directional light is now COLOURED and AREA-SELECTED (open
 // areas get a warm SUN, mines get a dim cave ambient), plus optional POINT lights (lava up-glow / torches)
-// attenuated by the face's view-space position. Config picked once per frame in engine_shade_select() (the
+// attenuated by the face's view-space position. Config picked once per frame in Render::shadeSelect() (the
 // renderer caches it so this hot per-face routine doesn't re-read guest RAM). lit is now per-CHANNEL: each
 // vertex colour is modulated by (ambient_col*ambient + dir_col*diffuse*N·L + Σ point_col*att*N·L).
-static const LightConfig* s_shade_cfg = 0;   // selected per frame; falls back to the SUN default if unset
-void engine_shade_select(Core* c) {          // called once per world frame before the submitters run
-  unsigned key = lighting_area_key_from(
-      [](void* ctx, unsigned a) -> unsigned { return ((Core*)ctx)->mem_r32(a); }, c);
-  s_shade_cfg = lighting_select(key);
+void Render::shadeSelect() {                 // called once per world frame before the submitters run
+  mShadeCfg = lighting.select(lighting.areaKeyFrom(mCore));
 }
-static inline void engine_shade_face(const ProjVtx* p, int nv, uint8_t r[4], uint8_t g[4], uint8_t b[4]) {
+static inline void engine_shade_face(Core* c, const ProjVtx* p, int nv, uint8_t r[4], uint8_t g[4], uint8_t b[4]) {
   if (!g_mods.light) return;
-  const LightConfig* cfg = s_shade_cfg ? s_shade_cfg : lighting_default();
+  Render* rr = c->mRender;
+  const LightConfig* cfg = rr->mShadeCfg ? rr->mShadeCfg : rr->lighting.defaultConfig();
   float e1x = p[1].vx - p[0].vx, e1y = p[1].vy - p[0].vy, e1z = p[1].vz - p[0].vz;
   float e2x = p[2].vx - p[0].vx, e2y = p[2].vy - p[0].vy, e2z = p[2].vz - p[0].vz;
   float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
@@ -226,7 +215,7 @@ static inline void engine_shade_face(const ProjVtx* p, int nv, uint8_t r[4], uin
 // PC-NATIVE POLY_GT3 submit — project the 3 model verts through the engine's composed transform in FLOAT
 // (proj_native_xform, no gte_op) and tee a degenerate quad (v2 repeated) to the VK rasterizer with real
 // per-pixel depth. No GP0 packet, no OT, no guest write.
-static void submit_poly_gt3_native(Core* c) {
+void Render::submitPolyGt3Native(Core* c) {
   if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt3_native %ld\n", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   proj_set_H((uint16_t)gte_read_ctrl(26));
@@ -257,10 +246,10 @@ static void submit_poly_gt3_native(Core* c) {
     px[3] = px[2]; py[3] = py[2]; depth[3] = depth[2];        // 4th vert = v2 (degenerate -> a triangle)
     u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
     int semi = (code & 0x02000000) ? 1 : 0;
-    if (!semi) engine_shade_face(p, 3, r, g, b);             // engine-native lighting (opaque only)
+    if (!semi) engine_shade_face(c, p, 3, r, g, b);             // engine-native lighting (opaque only)
     { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
-      gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
+      c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
     fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;
@@ -270,11 +259,11 @@ static void submit_poly_gt3_native(Core* c) {
 // Record = 44 bytes: {+0 rgb0(rgb1=<<4), +4 rgb2(rgb3=<<4), +8 uv0|clut, +12 uv1|tpage,
 //   +16 uv2(lo)|uv3(hi), +20 VXY0, +24 VZ0(lo)|VZ1(hi), +28 VXY1, +32 VXY2, +36 VZ2(lo)|VZ3(hi), +40 VXY3}.
 // Project the 4 model verts through the engine's composed transform in FLOAT (proj_native_xform, no
-// gte_op) and tee the quad straight to the VK rasterizer (gpu_draw_world_quad) with real per-pixel depth.
+// gte_op) and tee the quad straight to the VK rasterizer (RenderQueue::drawWorldQuad) with real per-pixel depth.
 // NO GP0 packet, NO OT, NO guest write — the renderer a PC game has. Cull rules (backface/frustum) are
 // reproduced on the native projection so we drop the same prims the engine would. Returns the advanced
 // record pointer (the engine reads it back).
-static void submit_poly_gt4_native(Core* c) {
+void Render::submitPolyGt4Native(Core* c) {
   if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt4_native %ld\n", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   proj_set_H((uint16_t)gte_read_ctrl(26));
@@ -311,10 +300,10 @@ static void submit_poly_gt4_native(Core* c) {
       r[k] = rgb[k] & 0xFF; g[k] = (rgb[k] >> 8) & 0xFF; b[k] = (rgb[k] >> 16) & 0xFF;
     }
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
-    if (!semi) engine_shade_face(p, 4, r, g, b);             // engine-native lighting (opaque only)
+    if (!semi) engine_shade_face(c, p, 4, r, g, b);             // engine-native lighting (opaque only)
     { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
-      gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
+      c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
     fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;                                              // return: record pointer advanced past the array
@@ -345,7 +334,7 @@ static void submit_poly_gt4_native(Core* c) {
 // The MVMVA matrix math stays a platform primitive (gte_op → the Beetle GTE), exactly as the recomp
 // body called it, so the composed CR0-7 are bit-identical. The scratchpad temps (0x1F8000xx) are the
 // SAME the recomp body uses — pure CPU scratch, not render packet/VRAM. The dispatch routes the common
-// world path natively (native_dispatch → native_gt3gt4 → the native submit_poly_gt3/gt4 above);
+// world path natively (native_dispatch → Render::gt3gt4 → the native submitPolyGt3/Gt4Native above);
 // the per-scene OVERLAY submitter variants (mode-table entries other than the GT3/GT4 path) are NOT yet
 // owned, so for those modes the original per-mode renderer is invoked (rec_dispatch) — the documented
 // next RE target (engine_re "OPEN — full field depth coverage").
@@ -362,13 +351,14 @@ void rec_dispatch(Core*, uint32_t);         // interpret/run a guest fn (unowned
 // (low16 tri, high16 quad), point past the 16-byte header to the record array, and run the two native
 // submitters in sequence (tri-submit returns the advanced record pointer = the quad array base).
 // g_dbg_cur_geomblk retired — per-Core Render::mDbgCurGeomblk
-void native_gt3gt4(Core* c, uint32_t geomblk, uint32_t otbase) {   // decl in render_internal.h (used by render_walk.cpp)
-  c->mRender->diag.setGeomblk(geomblk);
+void Render::gt3gt4(uint32_t geomblk, uint32_t otbase) {   // used by render_walk.cpp
+  Core* c = mCore;
+  diag.setGeomblk(geomblk);
   uint32_t counts = c->mem_r32(geomblk + 0);
   c->r[4] = geomblk + 16; c->r[5] = otbase; c->r[6] = counts & 0xFFFFu;
-  submit_poly_gt3_native(c);
+  submitPolyGt3Native(c);
   c->r[4] = c->r[2];      c->r[5] = otbase; c->r[6] = counts >> 16;
-  submit_poly_gt4_native(c);
+  submitPolyGt4Native(c);
 }
 
 // FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overlay entity render 0x80109fe0
@@ -409,9 +399,9 @@ void Render::fieldEntityRender(uint32_t es) {
     uint32_t cmd = base + (uint32_t)c->mem_r16(p) * 4;
     uint32_t s0  = c->mem_r32(cmd);
     c->game->fps60.fps_cur_key = cmd;                                  // fps60: per-entity reproject key
-    c->mRender->diag.setGeomblk(cmd);   // sil_bbox_log diag: tag this entity's cmd record (native_gt3gt4 is NOT the caller here)
-    c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submit_poly_gt3_native(c);
-    c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submit_poly_gt4_native(c);
+    c->mRender->diag.setGeomblk(cmd);   // sil_bbox_log diag: tag this entity's cmd record (Render::gt3gt4 is NOT the caller here)
+    c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submitPolyGt3Native(c);
+    c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submitPolyGt4Native(c);
     c->game->fps60.fps_cur_key = 0;
   }
   c->mRender->projClearActive();
@@ -440,11 +430,12 @@ void Render::fieldEntityRender(uint32_t es) {
 #define MVMVA_TERRAIN_GEOMBLK 0x8009FAE8u
 // Shared terrain scene-data prep (the faithful gameplay half): write the depth-cue regs + the two sway
 // gameplay bytes, then build the object rotation matrix at scratch SCR (euler 0x80085480 + secondary
-// sway 0x80084520). Used by the PC-native terrain_render_pc (engine/native_terrain.cpp); the verified
+// sway 0x80084520). Used by the PC-native NativeScenePass::terrainRender (native_terrain.cpp); the verified
 // sway-byte writes (later-157, A/B RAM-0-diff) have a single source of truth. Leaves the object matrix at SCR; camera matrix is at
 // SCR+0xF8 (set earlier). The matrix-build leaves stay platform primitives (rec_dispatch), as the
 // recomp body calls them.
-void terrain_prep_object_matrix(Core* c, uint32_t node) {
+void Render::prepObjectMatrix(uint32_t node) {
+  Core* c = mCore;
   // depth-cue: FarColor=0, IR0 factor staged for the submitter
   gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
   uint32_t ir0 = (uint32_t)((128 - c->mem_r16s(node + 78)) << 5);
@@ -478,22 +469,21 @@ void terrain_prep_object_matrix(Core* c, uint32_t node) {
   c->r[29] = saved_sp;                                    // pop the frame
 }
 
-void terrain_render_pc(Core* c);             // engine/native_terrain.cpp — PC-native float terrain render
 void Render::terrain() {
   Core* c = mCore;
   if (cfg_dbg("terrgte")) fprintf(stderr, "[Render::terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Pick this area's light config ONCE per world frame (terrain renders first); the per-face shader reads
   // the cached pointer. Cheap guest-RAM fingerprint read; unknown area -> village SUN default.
-  if (g_mods.light) engine_shade_select(c);
+  if (g_mods.light) shadeSelect();
   // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
   // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
   if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }
   // RENDER PC-NATIVE (USER DIRECTIVE: behave like a PC game, do NOT simulate PSX). The terrain is rendered
-  // by terrain_render_pc — float transform + real per-pixel depth, drawn straight to the rasterizer, NO GTE
+  // by NativeScenePass::terrainRender — float transform + real per-pixel depth, drawn straight to the rasterizer, NO GTE
   // compose / NO gte_op / NO byte-packed PSX packet. (The old GTE-compose + 0x80027768-submit transcription
-  // oracle was removed — no gating.) terrain_prep_object_matrix does the gameplay sway writes + object-matrix
+  // oracle was removed — no gating.) prepObjectMatrix does the gameplay sway writes + object-matrix
   // scene data; the render method is PC-native float.
-  terrain_render_pc(c);
+  mNativeScene.terrainRender();
 }
 
 // PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-object render dispatch

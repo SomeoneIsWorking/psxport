@@ -16,6 +16,7 @@
 #define GAME_WORLD_SPAWN_H
 #include <cstdint>
 struct Core;
+struct PoolDesc;
 
 class Spawn {
 public:
@@ -56,6 +57,17 @@ public:
   //   but every callsite here (and the recomp wrapper itself) passes param_3=0, so the second
   //   bump is dormant — replicate the wrapper's single unconditional bump.
   void dropScoreGem(uint32_t sourceNode, int32_t value);
+
+private:
+  // Guest-ABI bodies + shared pool helpers (static: plain fn-pointer shape for the verify gate).
+  static void spawnLinkStamp(Core* c, uint32_t node, uint32_t ref, uint32_t type, uint32_t mode,
+                             uint32_t list);
+  static uint32_t entitySpawnBody(Core* c);                 // FUN_80079C3C
+  static uint32_t spawnPool2Body(Core* c);                  // FUN_80079DDC
+  static uint32_t poolSpawn(Core* c, const PoolDesc& p);    // FUN_80079F90 / 8007A12C / 8007A2C8 shared
+  static uint32_t spawnVariantNative(Core* c, uint32_t cls);
+  static uint32_t spawnAndInitBody(Core* c);                // FUN_8003116C
+  static uint32_t sceneEntityBody(Core* c);                 // FUN_8007E110
 };
 
 #endif

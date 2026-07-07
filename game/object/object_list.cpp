@@ -62,7 +62,7 @@ void ObjectList::walkList2() {
   Core* c = core;
   long nodes = 0;
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
-  // NB: no margin_render_flush here — that belongs to walkAll (walkList2 is a distinct call site
+  // NB: no MarginRenderer::flush here — that belongs to walkAll (walkList2 is a distinct call site
   // from Sop::fieldUpdate, not a replacement of the whole entity walk).
 
   if (mDbg < 0) mDbg = cfg_dbg("engine") ? 1 : 0;

@@ -37,4 +37,8 @@ public:
   //   nibble when true; indexes table B @0x800A3B38 (stride 4) and returns the u32 there. Kept
   //   public so other subsystems that consult the same size class can share this path.
   uint32_t classSize(uint8_t argKey, bool nibbleLo);
+
+private:
+  // Guest-ABI arm body (plain fn-pointer shape for the verify gate).
+  static uint32_t armBody(Core* c);   // FUN_80040B48
 };

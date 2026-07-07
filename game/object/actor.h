@@ -234,6 +234,12 @@ public:
   void    setBoxZ(uint16_t v)         { c->mem_w16(obj + 0x84, v); }
   void    setBoxW(uint16_t v)         { c->mem_w16(obj + 0x86, v); }
 
+  // ── Static guest-ABI handlers ────────────────────────────────────────────────────────────────────
+  // sm24448 (FUN_80024448, game/object/actor_sm_24448.cpp): one actor "move-and-collide" SM step —
+  //   derive the probe args from the object's velocity fields, run the shared grid move-collide
+  //   probe, apply the result to floor-type / angle / state. a0 = obj; result tag in v0.
+  static void sm24448(Core* c);
+
 private:
   Core*    c;
   uint32_t obj;

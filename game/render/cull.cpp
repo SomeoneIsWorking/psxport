@@ -278,7 +278,7 @@ void Cull::objectCull() { Core* c = core;
   //   terrain tiles the camera is heading toward (and off-screen-but-near static world) are kept well
   //   before they pop in. RISK (pool overflow): the active-object pool free count lives @0x800E7E7C
   //   (three active lists, ~stride 0xD0 nodes, ~52 nodes total). The margin re-include itself only
-  //   re-RENDERS type-0x03 static world geometry (margin_collect, no +1 poke), so it does NOT consume
+  //   re-RENDERS type-0x03 static world geometry (MarginRenderer::collect, no +1 poke), so it does NOT consume
   //   pool nodes; but the cull_decide far multiplier above DOES affect what stays KEPT/active, so the
   //   real overflow guard is to keep CULL_FAR_MULT bounded (×4 leaves margin) — do not crank it so far
   //   that the whole level stays active at once. Named/tunable, not a magic literal; PSXPORT_CULL_FAR
@@ -324,7 +324,7 @@ void Cull::objectCull() { Core* c = core;
         // instead of poking +1. Poking +1 runs the handler's VISIBLE branch -> gameplay perturbation
         // (5638 B). Collecting + flushing the node's persistent command list touches only render scratch
         // -> margin renders, gameplay 0-diff. A/B: PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include.
-        // NOTE (scope of the wider cone above): margin_collect() only re-renders type-0x03 world-geometry
+        // NOTE (scope of the wider cone above): MarginRenderer::collect() only re-renders type-0x03 world-geometry
         // (terrain/water/static scenery) — the dominant edge/corner pop-in. Dynamic entities are NOT
         // poked visible here (that would perturb their gameplay state), so widening the cone safely
         // un-pops the static world without disturbing enemy/item/NPC logic.

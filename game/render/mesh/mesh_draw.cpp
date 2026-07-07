@@ -3,7 +3,7 @@
 // Parses the GEOMBLK model format (the SAME layout tools/export_model.py parses and native_terrain.cpp
 // renders), transforms each prim's model-space verts by the object's FLOAT model->view matrix, projects
 // with the camera, and draws each prim as a textured quad/tri with REAL per-pixel depth via
-// gpu_draw_world_quad. This is the decoupled native render: no GTE compose, no gte_op, no GP0 packet, no
+// RenderQueue::drawWorldQuad. This is the decoupled native render: no GTE compose, no gte_op, no GP0 packet, no
 // OT — the engine owns the transform, projection, and depth.
 //
 // GEOMBLK (from export_model.py docstring / engine_submit GT3/GT4 RE):
@@ -18,7 +18,7 @@
 // Per-vertex RGB: this first cut uses a flat white (255) modulate so the decoded VRAM TEXTURE shows
 // through unmodified (export_model.py confirmed the textures decode correctly). The geomblk also carries
 // per-prim RGB (rgb0/rgb1/rgb2) but the per-vertex mapping differs GT3/GT4; a faithful vertex-colour pass
-// is a follow-up. Texture resolution is by the prim's PSX tpage/clut, handed to gpu_draw_world_quad which
+// is a follow-up. Texture resolution is by the prim's PSX tpage/clut, handed to RenderQueue::drawWorldQuad which
 // samples the VRAM image natively (no GP0). A native RGBA texture CACHE is the next asset-subsystem step;
 // sampling VRAM by tpage/clut here is the documented first pass.
 #include "core.h"
@@ -30,11 +30,8 @@
 #include <stdint.h>
 #include <math.h>
 
-// engine float world-quad draw (real depth) — runtime/recomp/gpu_native.cpp.
-void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
-                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
-                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
-                          const float (*sv)[3]);
+// engine float world-quad draw (real depth) — RenderQueue::drawWorldQuad (game.h brings render_queue.h).
+#include "game.h"
 
 static inline int16_t s16(uint32_t v) { return (int16_t)(v & 0xFFFF); }
 
@@ -87,7 +84,7 @@ int NativeScenePass::drawObject(const SceneObject* o, const SceneCamera* cam) {
     float dp[4] = { p0.depth, p1.depth, p2.depth, p2.depth };
     int   u[4]  = { (int)(uv0 & 0xFF), (int)(uv1 & 0xFF), (int)(uv2 & 0xFF), (int)(uv2 & 0xFF) };
     int   v[4]  = { (int)((uv0>>8) & 0xFF), (int)((uv1>>8) & 0xFF), (int)((uv2>>8) & 0xFF), (int)((uv2>>8) & 0xFF) };
-    gpu_draw_world_quad(c, px, py, dp, u, v, r, g, b, tp, clut, 0, nullptr);
+    c->game->rq.drawWorldQuad(c, px, py, dp, u, v, r, g, b, tp, clut, 0, nullptr);
     drawn++;
   }
 
@@ -110,7 +107,7 @@ int NativeScenePass::drawObject(const SceneObject* o, const SceneCamera* cam) {
     float dp[4] = { p0.depth, p1.depth, p2.depth, p3.depth };
     int   u[4]  = { (int)(uv0 & 0xFF), (int)(uv1 & 0xFF), (int)(uv23 & 0xFF), (int)((uv23>>16) & 0xFF) };
     int   v[4]  = { (int)((uv0>>8) & 0xFF), (int)((uv1>>8) & 0xFF), (int)((uv23>>8) & 0xFF), (int)((uv23>>24) & 0xFF) };
-    gpu_draw_world_quad(c, px, py, dp, u, v, r, g, b, tp, clut, 0, nullptr);
+    c->game->rq.drawWorldQuad(c, px, py, dp, u, v, r, g, b, tp, clut, 0, nullptr);
     drawn++;
   }
   return drawn;

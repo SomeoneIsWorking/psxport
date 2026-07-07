@@ -8,7 +8,7 @@
 // oracle has been REMOVED (no gating). Here we instead read the same SCENE DATA the engine already computed
 // (camera rotation+translation, the per-object rotation matrix, the object position, the terrain model
 // geometry) and render it with FLOAT matrices + real per-pixel depth, straight to the VK rasterizer
-// (gpu_draw_world_quad). No GTE compose, no gte_op for render, no GP0 packet, no guest write beyond the
+// (RenderQueue::drawWorldQuad). No GTE compose, no gte_op for render, no GP0 packet, no guest write beyond the
 // faithful gameplay prep. ov_terrain (engine_submit.cpp) routes here unconditionally — the ONE behavior.
 #include "core.h"
 #include "game.h"
@@ -20,16 +20,11 @@
 #include <math.h>
 
 // Shared faithful gameplay prep (sway bytes + object rotation matrix @ SCR) — engine_submit.cpp.
-void  terrain_prep_object_matrix(Core* c, uint32_t node);
 // class ProjParams (per-Core) — depth-normalize + set-plane-H + camview publish. Header brings in the
 // free-function bridges (proj_pz_to_ord / proj_set_H / camview_publish) used below.
 #include "proj_params.h"
 // sv = the quad's 4 VIEW-SPACE verts (x,y,z) for the shadow map (NULL = no cast); carried on the queued
 // item so it rebuilds per present pass (render_queue.h sh_cast) — no separate shadow stream / keep_shadow.
-void  gpu_draw_world_quad(Core* c, const float* px, const float* py, const float* depth,
-                          const int* u, const int* v, const uint8_t* r, const uint8_t* g,
-                          const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
-                          const float (*sv)[3]);
 int   gpu_gpu_shadows_active(void);
 
 #define SCR              0x1F800000u          // PSX scratchpad base (engine's GTE-compose temp area)
@@ -38,12 +33,13 @@ int   gpu_gpu_shadows_active(void);
 static inline float r16f(Core* c, uint32_t a) { return (float)c->mem_r16s(a); }
 
 // gen_func_8002AB5C, rebuilt PC-native. a0(=r4) = the terrain render-list node.
-void terrain_render_pc(Core* c) {
+void NativeScenePass::terrainRender() {
+  Core* c = mCore;
   uint32_t node = c->r[4];
   // Faithful gameplay half: write the sway bytes + build the object rotation matrix at SCR (interpreted
   // leaves 0x80085480/0x80084520). This is scene data (the terrain's orientation); native-izing RotMatrix
   // is a later step. After this the object matrix is at SCR, the camera matrix at SCR+0xF8 (set earlier).
-  terrain_prep_object_matrix(c, node);
+  c->mRender->prepObjectMatrix(node);
 
   // ---- read scene data as FLOAT ----------------------------------------------------------------------
   // object rotation matrix @ SCR: element[row][col] = (int16)mem_r16(SCR + col*2 + row*6), /4096.
@@ -158,7 +154,7 @@ void terrain_render_pc(Core* c) {
       cast = sv;
     }
     sil_bbox_log_verts("terrain", px, py, depth, 4, node, rec, r, g, b);
-    gpu_draw_world_quad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, cast);
+    c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, cast);
     drawn++;
     if (ctl <= 0) break;                                   // control sign marks the last record
   }

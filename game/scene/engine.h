@@ -53,6 +53,9 @@ public:
   // shared meant an `@a tp X Y Z` teleported BOTH SBS cores (deglobalize 2026-07-03).
   bool     mCamTpPending = false;
   int32_t  mCamTpX = 0, mCamTpY = 0, mCamTpZ = 0;
+  // Arm / disarm the one-shot teleport (REPL `tp X Y Z` / `tp`). Consumed by CutsceneCamera::trackXZ.
+  void camTeleport(int x, int y, int z) { mCamTpX = x; mCamTpY = y; mCamTpZ = z; mCamTpPending = true; }
+  void camTeleportOff() { mCamTpPending = false; }
 
   // Slip #3 fix (docs/findings/sbs.md): submode1 case 0 must yield ONCE mid-body to match the recomp
   // coro cadence — recomp's FUN_80044BD4 (spawn-and-yield) yields between FUN_8005245C and the fall

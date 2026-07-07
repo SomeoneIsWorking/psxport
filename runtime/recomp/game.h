@@ -234,7 +234,7 @@ public:
   // just makes A run the same substrate as B (trivial byte-match).
   bool pc_skip = true;
 
-  // Field BGM director latch (game_tomba2.cpp field_bgm_director): a MusicList field song was
+  // Field BGM director latch (MusicCoord::fieldBgmDirector): a MusicList field song was
   // started and is still considered live (was a function-local static — wrong under two Games).
   int field_bgm_started = 0;
 

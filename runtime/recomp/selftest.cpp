@@ -152,7 +152,7 @@ static int run_startgame(const char* path) {
 // player does NOT skip: reach the GAME stage (mash Start/Cross at the title = "New Game"), then release all
 // input and let the opening narration play and auto-transition into the first field area. This is the path
 // that crashed at the SOP->A00 transition: ov_scene_native renders A00 entity objects before their models
-// are attached (cmd+0x40 still holds an unrelocated area-data pointer 0x8018Axxx), so native_gt3gt4 reads a
+// are attached (cmd+0x40 still holds an unrelocated area-data pointer 0x8018Axxx), so Render::gt3gt4 reads a
 // garbage prim count and overflows the render queue ([rq] FATAL, an abort). The assertions: (1) the run
 // SURVIVES well past the transition (an abort kills this process = fail); (2) the GAME loop KEEPS RUNNING
 // across it (its per-iteration counter *(0x1F800198) advances) — so we test the field actually progresses,

@@ -59,8 +59,7 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 // loop's driver scaffolding (REPL, auto-navigation/input, pause/step, diagnostics, dbg_server) stays in
 // the loop and runs ONCE around this call. No input is injected here — drive pads before calling it.
 // gpu_perf.cpp — per-frame CPU phase / frame-time profiler (REPL `debug perf`), default off.
-extern "C" void perf_frame_begin(void), perf_mark_pre(void), perf_frame_end(void),
-                perf_phase_begin(int), perf_phase_end(int);
+#include "gpu_perf.h"
 
 // ---- DUAL-VIEW guest-state snapshots (native | PSX side-by-side render of ONE game state) -------------
 // Save/restore of full guest state (main RAM + scratchpad + GTE regs) lives in dualview_snapshot.cpp

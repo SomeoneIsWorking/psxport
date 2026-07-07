@@ -16,7 +16,10 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "music_coord.h"
+#include "native_gate.h"   // fieldBgmDirector's `music` gate
 #include <stdio.h>
+#include <string.h>        // memcmp (fieldBgmDirector bundle validation)
+#include <stdlib.h>        // atoi (PSXPORT_FIELD_SONG)
 
 // cd_override.cpp: enable/disable CD->SPU mixing (libsnd SpuSetCommonAttr via FUN_8001cf00(1)).
 // Stays defined there (still called locally by voice_play); tick() below also needs it for
@@ -152,4 +155,29 @@ void MusicCoord::tick() {
     cd_to_spu_mix(c, 1);
     musicFadeIn();                                    // resumed music fades in from 0 (no voice now)
   }
+}
+
+// NATIVE field BGM director — see music_coord.h. Currently unwired from the frame loop (the
+// recompiled libsnd path is the music path); kept as the native-synth driver for the area bundle.
+void MusicCoord::fieldBgmDirector() {
+  Core* c = core;
+  if (!c->game->native_gates.get("music")) return;   // gated off -> recomp libsnd is the (oracle) music path
+  // Are we in the field (GAME stage running)? The stage cell holds the active stage's task-0 entry.
+  uint32_t stage = c->mem_r32(0x801fe00c);
+  int in_field = (stage == 0x8010637Cu);
+  int& started = c->game->field_bgm_started;
+  if (!in_field) {
+    if (started) { c->game->music_list.stop(); started = 0; }
+    return;
+  }
+  if (started) {
+    // Restart if the song fully drained (one-shot tail) so the field stays scored.
+    if (c->game->music_list.nowPlaying() < 0) started = 0; else return;
+  }
+  // Validate the bundle is loaded before starting (area data may not be in yet right after a load).
+  const uint8_t* b = c->ram + 0x182000u;             // guest 0x80182000 (area bundle)
+  if (memcmp(b + 0x30, "pQES", 4) || memcmp(b + 0x26b4, "pBAV", 4)) return;
+  int song = 8;                                   // default field theme (longest area seq)
+  if (const char* s = cfg_str("PSXPORT_FIELD_SONG")) { int v = atoi(s); if (v >= 0 && v < 10) song = v; }
+  if (c->game->music_list.playArea(b, 0x50000, song) == 0) started = 1;
 }

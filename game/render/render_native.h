@@ -27,6 +27,10 @@ public:
   // Returns the number of prims drawn. (impl: mesh/mesh_draw.cpp)
   int drawObject(const SceneObject* o, const SceneCamera* cam);
 
+  // The PC-native float terrain render pass (guest 0x8002AB5C's render half). Taxi-parameter
+  // mCore->r[4] = the terrain render-list node. (impl: native_terrain.cpp)
+  void terrainRender();
+
 private:
   // Large per-frame draw list (768 SceneObjects) — kept on the class instance so it isn't a file-scope
   // static (per [[deglobalize_game_and_runtime_oop]]) and isn't on the stack. One buffer per Core; SBS's

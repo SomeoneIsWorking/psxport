@@ -1447,7 +1447,7 @@ void Engine::sceneStateStep() {
 // entry. NO bounds check in the guest — the render-mode byte is bounded by the writer sites, not
 // here. No a0 setup (the guest jalr inherits whatever a0 the caller had; ov_field_frame doesn't
 // touch a0 before the call, so handlers that read a0 are dead code in this path — none observed).
-void area_seaside_perframe(Core* c);              // FUN_80113C5C — native (game/ai/area_seaside_perframe.cpp)
+#include "ai/behaviors.h"                         // Behaviors::areaSeasidePerframe (FUN_80113C5C)
 
 void Engine::modePerFrameDispatch() {
   Core* c = core;
@@ -1456,7 +1456,7 @@ void Engine::modePerFrameDispatch() {
   uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
   if (!target) return;
   // Area-0 (seaside) per-frame update is native — this is Tomba's seaside per-frame tick.
-  if (target == 0x80113C5Cu) { area_seaside_perframe(c); return; }
+  if (target == 0x80113C5Cu) { Behaviors::areaSeasidePerframe(c); return; }
   rec_dispatch(c, target);
 }
 

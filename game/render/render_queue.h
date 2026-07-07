@@ -6,7 +6,7 @@
 // thus decided by the engine — NOT by walking the guest ordering table.
 //
 // M1 (this stage): the natively-owned WORLD geometry (terrain + GT3/GT4 + byte-packed GT4, all via
-// gpu_draw_world_quad) routes through here as RQ_WORLD. Guest 2D (background/HUD) + un-owned submit
+// RenderQueue::drawWorldQuad) routes through here as RQ_WORLD. Guest 2D (background/HUD) + un-owned submit
 // variants still draw via the OT walk for now (M3 brings them in as RQ_BACKGROUND/RQ_HUD and retires the
 // OT read entirely). Gated by PSXPORT_RQ until the full M1 is coherent; default keeps inline behavior.
 #ifndef RENDER_QUEUE_H
@@ -40,7 +40,7 @@ struct RqItem {
   // has_xyf is set the rasterizer uses these instead of the rounded xs/ys, so world geometry keeps its
   // sub-pixel position and stops snapping pixel-to-pixel (PS1 wobble) — vertex smoothing, issue #15.
   float    xsf[4], ysf[4];
-  uint8_t  has_xyf;        // 1 = xsf/ysf are valid sub-pixel positions (world prims via gpu_draw_world_quad)
+  uint8_t  has_xyf;        // 1 = xsf/ysf are valid sub-pixel positions (world prims via drawWorldQuad)
   int      us[4], vs[4];   // texel coords
   uint8_t  rs[4], gs[4], bs[4];
   float    depth[4];       // normalized per-vertex D32 depth (proj_pz_to_ord)
@@ -50,7 +50,7 @@ struct RqItem {
   int      tp_blend;                                  // semi blend mode
 
   // ---- fps60 reprojection capture (host-only; never guest RAM, does not affect a lockstep diff) ----
-  // Captured at native GTE projection (fps60_stamp_world) so the interpolated-60fps tier can recompose +
+  // Captured at native GTE projection (Fps60::stampWorld) so the interpolated-60fps tier can recompose +
   // reproject this prim's verts at the A/B midpoint WITHOUT re-running any guest/interpreted render code
   // (the actor-transform layer the user mandated — engine/fps60.cpp). Only the GTE-composed world path
   // (proj_native_xform) fills these; terrain/2D/HUD leave fps_world=0 and snap.
@@ -61,8 +61,8 @@ struct RqItem {
   // (gpu_native.cpp) as RQ_WORLD/RQ_OM_DEPTH items with NO sub-pixel float XY (has_xyf==0), inheriting the
   // object's PC-native world-position view-Z via obj_depth_lookup. They are tagged AT QUEUE TIME, in the OT
   // walk: engine_submit.cpp recorded each object's packet-pool SPAN + identity + composed transform
-  // (fps60_record_billboard_span), and the OT walk — which knows the source OT-node — calls
-  // fps60_stamp_billboard, which looks the node up in that span registry (fps60_billboard_for_node) and sets
+  // (Fps60::recordBillboardSpan), and the OT walk — which knows the source OT-node — calls
+  // Fps60::stampBillboard, which looks the node up in that span registry (Fps60::billboardForNode) and sets
   // fps_world=1, fps_anchor=1, fps_key = the object identity, fps_cr = the composed camera×object transform,
   // fps_mv[0] = the object origin (= the WORLD-POSITION anchor; CR5-7 is its view-space pos). build_lerp then
   // reprojects the ANCHOR at the A/B-midpoint camera and TRANSLATES the whole 2D quad by (anchor_mid -
@@ -79,7 +79,7 @@ struct RqItem {
 
   // ---- dynamic-shadow capture (host-only) ----------------------------------------------------------
   // Opaque world prims cast into the shadow map. The shadow GEOMETRY is part of THE FRAME (the queue),
-  // not a side-channel: it is carried here and re-pushed to the shadow VBO by gpu_emit_rq_item every time
+  // not a side-channel: it is carried here and re-pushed to the shadow VBO by emitItem every time
   // this item is emitted. Because the queue is emitted on BOTH 60fps present passes, the shadow map is
   // rebuilt identically on each — no keep_shadow side-channel, no strobe. View space = (x=vx, y=vy, z=pz),
   // the metric view space the deferred/light pass reconstructs; never interpolated (B positions on both
@@ -117,12 +117,43 @@ struct RenderQueue {
                   const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                   int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
                   int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1);
+
+  // emitItem: emit one resolved item to the VK rasterizer. Used by both the inline path and the
+  // queue flush so emission logic lives in one place.
+  void emitItem(Core* core, const RqItem* it);
+
+  // emitOrQueue: build an RqItem from already-resolved quad/tri data + material snapshot, then either
+  // queue it (`capture`, engine owns the order, flushed at the draw kick) or emit it now. The ONE place
+  // the submit paths (world quad, guest poly, guest sprite) funnel through.
+  void emitOrQueue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
+                   const int* xs, const int* ys, const float* xsf, const float* ysf,
+                   const int* us, const int* vs,
+                   const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                   const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
+                   int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
+                   int tp_blend, const float (*sv)[3] = nullptr);
+
+  // drawWorldQuad: PC-native world-quad draw — a quad already projected to FLOAT screen coords + real
+  // per-vertex depth, teed as two triangles to the VK rasterizer through the queue. No GP0 packet, no
+  // OT, no guest write.
+  void drawWorldQuad(Core* core, const float* px, const float* py, const float* depth,
+                     const int* u, const int* v, const unsigned char* r, const unsigned char* g,
+                     const unsigned char* b, uint16_t tp, uint16_t clut, int semi,
+                     const float (*sv)[3]);
+
+private:
+  // Debug OBJECT-ID overlay (REPL `debug objid`) — pure host HUD quads appended at flush time.
+  static bool objidSolid(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
+                         unsigned char r, unsigned char g, unsigned char b);
+  static void objidChar(Core* core, const RqItem* ref, char ch, int x, int y, int s,
+                        unsigned char r, unsigned char g, unsigned char b);
+  static void objidStr(Core* core, const RqItem* ref, int x, int y, int s, const char* str,
+                       unsigned char r, unsigned char g, unsigned char b);
+  static void objidBox(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
+                       unsigned char r, unsigned char g, unsigned char b, int t);
+  void objidOverlay(Core* core);
 };
 
 int  rq_active(void);                  // PSXPORT_RQ — route owned world geometry through the queue
-
-// Emit one resolved item to the VK rasterizer (defined in gpu_native.cpp, where the gpu_gpu_* draw
-// entries live). Used by both the inline path and the queue flush so emission logic lives in one place.
-void gpu_emit_rq_item(Core* core, const RqItem* it);
 
 #endif

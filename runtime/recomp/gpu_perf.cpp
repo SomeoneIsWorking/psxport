@@ -68,7 +68,7 @@ inline int perf_on() {
 
 } // namespace
 
-extern "C" {
+#include "gpu_perf.h"
 
 // Top of native_step_frame: start the frame clock.
 void perf_frame_begin(void) {
@@ -124,5 +124,3 @@ void perf_frame_end(void) {
 
   g_acc = Acc{};
 }
-
-} // extern "C"

@@ -19,7 +19,6 @@ static inline int objid_quads_on(void)   { return g_mods.debug_quads   || g_mods
 static inline int objid_objects_on(void) { return g_mods.debug_objects || g_mods.debug_ids || cfg_dbg("objid"); }
 static inline int objid_on(void) { return objid_quads_on() || objid_objects_on(); }
 
-void fps60_bb_frame_reset(void);   // clear the per-frame billboard-identity registry (engine/fps60.cpp)
 int  gpu_gpu_enabled(void);        // gpu_gpu.cpp — Core*-less device-singleton query (declared at use)
 
 // ---- Debug OBJECT-ID overlay (REPL `debug objid`) -------------------------------------------------
@@ -69,8 +68,8 @@ static int font_idx(char ch) {
 // Push one solid (untextured, mode-3) HUD quad [x0,y0]-[x1,y1] of colour (r,g,b). Clip/texpage state is
 // copied from a real reference prim so the quad is never clipped away by a stale draw-area. Returns false
 // on queue overflow.
-static bool objid_solid(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
-                        unsigned char r, unsigned char g, unsigned char b) {
+bool RenderQueue::objidSolid(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
+                             unsigned char r, unsigned char g, unsigned char b) {
   RqItem* it = core->game->rq.push();
   if (!it) return false;
   uint32_t seq = it->seq;                      // push() stamped the submission seq — preserve it
@@ -86,33 +85,33 @@ static bool objid_solid(Core* core, const RqItem* ref, int x0, int y0, int x1, i
 }
 
 // Draw one 5x7 glyph at (x,y), pixel scale s, colour (r,g,b).
-static void objid_char(Core* core, const RqItem* ref, char ch, int x, int y, int s,
-                       unsigned char r, unsigned char g, unsigned char b) {
+void RenderQueue::objidChar(Core* core, const RqItem* ref, char ch, int x, int y, int s,
+                            unsigned char r, unsigned char g, unsigned char b) {
   const unsigned char* gph = FONT5x7[font_idx(ch)];
   for (int row = 0; row < 7; row++)
     for (int col = 0; col < 5; col++)
       if (gph[row] & (1 << (4 - col))) {
         int px = x + col * s, py = y + row * s;
-        objid_solid(core, ref, px, py, px + s, py + s, r, g, b);
+        objidSolid(core, ref, px, py, px + s, py + s, r, g, b);
       }
 }
 // Draw a string at (x,y) scale s with a dark backing box; glyphs in (r,g,b). Advance 6*s px per char.
-static void objid_str(Core* core, const RqItem* ref, int x, int y, int s, const char* str,
-                      unsigned char r, unsigned char g, unsigned char b) {
+void RenderQueue::objidStr(Core* core, const RqItem* ref, int x, int y, int s, const char* str,
+                           unsigned char r, unsigned char g, unsigned char b) {
   int n = 0; for (const char* p = str; *p; p++) n++;
   if (!n) return;
-  objid_solid(core, ref, x - s, y - s, x + n * 6 * s, y + 7 * s + s, 0, 0, 0);   // dark backing box
+  objidSolid(core, ref, x - s, y - s, x + n * 6 * s, y + 7 * s + s, 0, 0, 0);   // dark backing box
   int cx = x;
-  for (const char* p = str; *p; p++) { objid_char(core, ref, *p, cx, y, s, r, g, b); cx += 6 * s; }
+  for (const char* p = str; *p; p++) { objidChar(core, ref, *p, cx, y, s, r, g, b); cx += 6 * s; }
 }
 
 // Draw a 1px-scaled hollow rectangle outline (4 thin solid quads) in colour (r,g,b).
-static void objid_box(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
-                      unsigned char r, unsigned char g, unsigned char b, int t) {
-  objid_solid(core, ref, x0, y0, x1, y0 + t, r, g, b);   // top
-  objid_solid(core, ref, x0, y1 - t, x1, y1, r, g, b);   // bottom
-  objid_solid(core, ref, x0, y0, x0 + t, y1, r, g, b);   // left
-  objid_solid(core, ref, x1 - t, y0, x1, y1, r, g, b);   // right
+void RenderQueue::objidBox(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,
+                           unsigned char r, unsigned char g, unsigned char b, int t) {
+  objidSolid(core, ref, x0, y0, x1, y0 + t, r, g, b);   // top
+  objidSolid(core, ref, x0, y1 - t, x1, y1, r, g, b);   // bottom
+  objidSolid(core, ref, x0, y0, x0 + t, y1, r, g, b);   // left
+  objidSolid(core, ref, x1 - t, y0, x1, y1, r, g, b);   // right
 }
 
 // Box + label every live GAME OBJECT, identified by ENUMERATING the render-node list (head 0x800F2624,
@@ -124,7 +123,8 @@ static void objid_box(Core* core, const RqItem* ref, int x0, int y0, int x1, int
 // billboard) if any prim it emitted this frame is an fps_anchor billboard; else a 3D-MESH object. The two
 // classes have independent toggles (debug_quads / debug_objects) so the user can highlight ONLY quads.
 // Pure host overlay (reads guest RAM, writes only the queue).
-static void objid_overlay(RenderQueue* q, Core* core) {
+void RenderQueue::objidOverlay(Core* core) {
+  RenderQueue* q = this;
   // class ProjParams free-function bridges (proj_camview_world_screen, camview_publish) — see proj_params.h.
   // Capture the STABLE scene camera from the scratchpad NOW (at flush = frame end): 0x1F8000F8 holds the
   // camera rotation (CR-packed, /4096) and 0x1F80010C the translation (int32 view units). The per-object
@@ -177,12 +177,12 @@ static void objid_overlay(RenderQueue* q, Core* core) {
       if (dolog && quad) fprintf(stderr, "[objid-q] node=%08X rtype=0x%02X scr=(%d,%d) world=(%d,%d,%d) +0xC=%02X +0xD=%02X\n",
                                  n, rtype, (int)(sx+0.5f),(int)(sy+0.5f), wx,wy,wz, core->mem_r8(n+0xC), core->mem_r8(n+0xD));
       unsigned char br = quad ? 255 : 0, bg = 255, bb = quad ? 0 : 255;   // quads yellow, 3D objects cyan
-      objid_box(core, ref, cx - 6, cy - 6, cx + 6, cy + 6, br, bg, bb, 1);
+      objidBox(core, ref, cx - 6, cy - 6, cx + 6, cy + 6, br, bg, bb, 1);
       char l1[16], l2[40];
       snprintf(l1, sizeof l1, "#%04X", (unsigned)(n & 0xFFFF));      // per-instance id (node handle)
       snprintf(l2, sizeof l2, "%d,%d,%d", wx, wy, wz);               // WORLD coordinates
-      objid_str(core, ref, cx + 9, cy - 7, 1, l1, br, bg, bb);
-      objid_str(core, ref, cx + 9, cy + 6, 1, l2, br, bg, bb);
+      objidStr(core, ref, cx + 9, cy - 7, 1, l1, br, bg, bb);
+      objidStr(core, ref, cx + 9, cy + 6, 1, l2, br, bg, bb);
     }
   }
   if (dolog) fprintf(stderr, "[objid] === %d live; %d quads + %d 3D boxed ===\n", nlive, nquad, nobj);
@@ -222,7 +222,7 @@ RqItem* RenderQueue::push() {
 void RenderQueue::mark_consumed() { if (n) consumed = 1; }
 
 void RenderQueue::flush(Core* core) {
-  if (n && objid_on()) objid_overlay(this, core);   // debug: label each object with its engine ID
+  if (n && objid_on()) objidOverlay(core);   // debug: label each object with its engine ID
   // Engine-decided order: layer low->high, submission order within a layer. stable_sort keeps the
   // within-layer submission order exactly (matters for semi-transparent blending). The D32 depth buffer
   // does fine-grained occlusion inside RQ_WORLD regardless of this order.
@@ -251,14 +251,14 @@ void RenderQueue::flush(Core* core) {
       fprintf(stderr, "[rqhist] n=%d  bg(op/semi)=%d/%d  WORLD=%d/%d  ovl=%d/%d  hud=%d/%d\n",
               n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
   }
-  for (int i = 0; i < n; i++) gpu_emit_rq_item(core, &items[i]);
+  for (int i = 0; i < n; i++) emitItem(core, &items[i]);
   mark_consumed();
 }
 
 // ---- Native render-queue EMISSION (moved from gpu_native.cpp, 2026-07 restructure): the engine's OWN
 // render-queue API (RqItem-based world/2D quad submission with real per-vertex depth + order_mode + shadow-
-// cast tagging), as distinct from gpu_native.cpp's PSX GP0-packet interpreter/rasterizer. gpu_draw_world_quad
-// / rq_push_2d_quad are the entry points game/render (engine_submit.cpp, native_terrain.cpp, mesh_draw.cpp)
+// cast tagging), as distinct from gpu_native.cpp's PSX GP0-packet interpreter/rasterizer. drawWorldQuad
+// / push2dQuad are the entry points game/render (engine_submit.cpp, native_terrain.cpp, mesh_draw.cpp)
 // call to submit engine-owned geometry.
 
 // PC-NATIVE world-quad draw (the render-PC-native path — NOT a PSX-packet transcription). Takes a quad
@@ -272,7 +272,7 @@ void RenderQueue::flush(Core* core) {
 // uses the live GpuState counter so the order value reflects actual emit sequence (the 2D-fallback/
 // faithful-depth band); real per-vertex depth (set_vd) drives true occlusion for world prims.
 int gpu_gpu_enabled(void);   // gpu_gpu.cpp — Core*-less device-singleton query (declared at use; see gpu_gpu.h)
-void gpu_emit_rq_item(Core* core, const RqItem* it) {
+void RenderQueue::emitItem(Core* core, const RqItem* it) {
   if (!gpu_gpu_enabled()) return;
   GpuState& s = core->game->gpu;
   // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
@@ -308,7 +308,7 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
   const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
   const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
   const float* depth = it->depth; int mode = it->mode, raw = it->raw, nv = it->nv ? it->nv : 4;
-  // PSXPORT_PRIMAT="x,y" (DISPLAY coords): also log WORLD/queue prims (gpu_draw_world_quad etc.) that cover
+  // PSXPORT_PRIMAT="x,y" (DISPLAY coords): also log WORLD/queue prims (drawWorldQuad etc.) that cover
   // that pixel — primat in gp0_exec is blind to these (they bypass the OT walk). Shows the real-depth
   // occluders. (diag, 2026-06-24)
   { static int qx=-2, qy=-1, qf0=0; if (qx==-2){ qx=-1; const char* pa=cfg_str("PSXPORT_PRIMAT"); if(pa) sscanf(pa,"%d,%d,%d",&qx,&qy,&qf0); }
@@ -370,23 +370,23 @@ void gpu_emit_rq_item(Core* core, const RqItem* it) {
 // under PSXPORT_RQ); otherwise it draws inline immediately (default — identical to pre-queue behavior).
 // Not static: gpu_native.cpp's guest GP0/OT-walk poly and sprite submit paths (gp0_exec) also funnel their
 // queued items through this same one place via their own local extern forward declaration.
-void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
-                             const int* xs, const int* ys, const float* xsf, const float* ysf,
-                             const int* us, const int* vs,
-                             const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                             const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
-                             int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                             int tp_blend, const float (*sv)[3] = nullptr) {
+void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
+                              const int* xs, const int* ys, const float* xsf, const float* ysf,
+                              const int* us, const int* vs,
+                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
+                              const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
+                              int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
+                              int tp_blend, const float (*sv)[3]) {
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
-  it.fps_world = 0;   // fps60 capture: cleared here, set only by fps60_stamp_world on GTE-composed world prims
+  it.fps_world = 0;   // fps60 capture: cleared here, set only by Fps60::stampWorld on GTE-composed world prims
   // objid overlay: stamp the entity node the native render walk is currently rendering (engine_submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
   it.dbg_node = (layer == RQ_WORLD) ? core->mRender->diag.currentNode() : 0;
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
-  // item so gpu_emit_rq_item re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
+  // item so emitItem re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;
   if (sv) for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
             it.sh_vx[k] = sv[s][0]; it.sh_vy[k] = sv[s][1]; it.sh_vz[k] = sv[s][2]; }
@@ -399,18 +399,18 @@ void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv
   it.mode = mode; it.tp_x = tp_x; it.tp_y = tp_y; it.clut_x = clut_x; it.clut_y = clut_y;
   it.tw_mx = tw_mx; it.tw_my = tw_my; it.tw_ox = tw_ox; it.tw_oy = tw_oy;
   it.da_x0 = da_x0; it.da_y0 = da_y0; it.da_x1 = da_x1; it.da_y1 = da_y1; it.tp_blend = tp_blend;
-  if (capture) { RqItem* slot = core->game->rq.push(); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
-  else         gpu_emit_rq_item(core, &it);
+  if (capture) { RqItem* slot = push(); if (slot) { uint32_t sq = slot->seq; *slot = it; slot->seq = sq; } }
+  else         emitItem(core, &it);
 }
 
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
-// When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
+// When non-NULL and opaque, the queued item carries them and emitItem re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
 // g_dbg_world_quads retired 2026-07-03 — Render::stats.dbgWorldQuads (RenderStats).
-void gpu_draw_world_quad(Core* core, const float* px, const float* py, const float* depth,
-                         const int* u, const int* v, const uint8_t* r, const uint8_t* g,
-                         const uint8_t* b, uint16_t tp, uint16_t clut, int semi,
-                         const float (*sv)[3]) {
+void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, const float* depth,
+                                const int* u, const int* v, const unsigned char* r, const unsigned char* g,
+                                const unsigned char* b, uint16_t tp, uint16_t clut, int semi,
+                                const float (*sv)[3]) {
   if (!gpu_gpu_enabled()) return;
   core->mRender->stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
   if (cfg_dbg("silbbox")) { static int once=0; if (!once++) fprintf(stderr, "[silbbox] s_off=(%d,%d)\n", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
@@ -432,13 +432,13 @@ void gpu_draw_world_quad(Core* core, const float* px, const float* py, const flo
   // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path.
   // Only opaque prims cast a shadow (semi water etc. must not occlude the light); drop the cast if semi.
   const float (*cast)[3] = (sv && !semi) ? sv : nullptr;
-  rq_emit_or_queue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
+  emitOrQueue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
                    xs, ys, xsf, ysf, us, vs, rs, gs, bs, depth, s.s_tp_mode,
                    s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
                    s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend, cast);
 }
 
-// 2D quad enqueue (HUD / overlay / background) — funnels through rq_emit_or_queue so a 2D drawable is a
+// 2D quad enqueue (HUD / overlay / background) — funnels through emitOrQueue so a 2D drawable is a
 // queued RqItem (part of THE FRAME), not a direct gpu_gpu_draw_tritri that lands on only one 60fps pass.
 void RenderQueue::push2dQuad(int layer, int order_2d_fg,
                              const int* xs, const int* ys, const int* us, const int* vs,
@@ -448,7 +448,7 @@ void RenderQueue::push2dQuad(int layer, int order_2d_fg,
   if (!gpu_gpu_enabled()) return;
   Core* core = &game->core;
   int om = order_2d_fg ? RQ_OM_2D_FG : RQ_OM_2D_BG;
-  rq_emit_or_queue(core, 1, layer, om, 4, 0, raw,
+  emitOrQueue(core, 1, layer, om, 4, 0, raw,
                    xs, ys, nullptr, nullptr, us, vs, rs, gs, bs, nullptr, mode,
                    tp_x, tp_y, clut_x, clut_y, tw_mx, tw_my, tw_ox, tw_oy,
                    da_x0, da_y0, da_x1, da_y1, 0, nullptr);

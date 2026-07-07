@@ -38,7 +38,10 @@ constexpr uint32_t LEAF_POOL_RETURN  = 0x8007B2ACu;   // FUN_8007B2AC — pool f
 
 inline uint32_t prng(Core* c) { return c->rng.next(); }
 
-void handler_27254(Core* c, uint32_t obj) {
+}  // namespace
+
+void ObjectTable::handler27254(uint32_t obj) {
+  Core* c = core;
   const uint8_t st = c->mem_r8(obj + 4u);
 
   if (st == 1) {
@@ -132,8 +135,6 @@ void handler_27254(Core* c, uint32_t obj) {
   // st == 2 or any other: no-op (recomp: `bVar1 != 2 && bVar1 == 3` false-branch).
 }
 
-}  // namespace
-
 void ObjectTable::dispatch() {
   Core* c = core;
 
@@ -144,7 +145,7 @@ void ObjectTable::dispatch() {
       uint32_t idx = c->mem_r8(obj + 1);
       uint32_t fn  = c->mem_r32(HANDLER_TABLE + (idx << 2));
       c->r[4] = obj;
-      if (fn == H_27254) { handler_27254(c, obj); continue; }         // native — the only real entry
+      if (fn == H_27254) { handler27254(obj); continue; }             // native — the only real entry
       rec_dispatch(c, fn);   // any other handler (defensive; the table only holds H_27254 today)
     }
   };

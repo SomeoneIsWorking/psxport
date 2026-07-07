@@ -200,7 +200,7 @@ void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv,
 // The interpolated in-between is built by REPROJECTING each captured world prim under the A/B MIDPOINT of
 // its source actor's transform — NOT by matching screen prims (the retired fingerprint matcher exploded on
 // real meshes) and NOT by re-running any guest/interpreted render code (unsafe: the field's per-mode
-// renderers mutate guest packet RAM). At native projection (fps60_stamp_world) every GTE-composed world
+// renderers mutate guest packet RAM). At native projection (Fps60::stampWorld) every GTE-composed world
 // quad records its MODEL verts, its composed transform CR0-7, and its actor key (the per-object render
 // command). The composed transform already bakes in the camera, so lerping it per actor reproduces BOTH
 // camera pan (a static actor's transform differs frame-to-frame only by the camera) AND object motion in
@@ -209,11 +209,11 @@ void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv,
 // flag). Terrain (separate float projection) + 2D/HUD carry fps_world=0 and snap (documented follow-up).
 
 // Capture hook: stamp the just-pushed world RqItem with this prim's reprojection inputs. Called by the GTE
-// submitters (engine_submit.cpp) right after gpu_draw_world_quad. No-op unless fps60 is on.
+// submitters (engine_submit.cpp) right after RenderQueue::drawWorldQuad. No-op unless fps60 is on.
 // Capture with an EXPLICIT composed transform `cr` (cr[0..7] = CR0-7, cr[8..10] = OFX/OFY/H). The native
 // world-coord render path supplies this from its float xform (Render::projActiveCr); the GTE
-// path supplies it from the live control registers (fps60_stamp_world below).
-void fps60_stamp_world_cr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]) {
+// path supplies it from the live control registers (Fps60::stampWorld below).
+void Fps60::stampWorldCr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]) {
   RenderQueue& q = c->game->rq;
   if (q.consumed || q.n == 0) return;                 // the world quad wasn't actually queued
   RqItem* it = &q.items[q.n - 1];
@@ -225,11 +225,11 @@ void fps60_stamp_world_cr(Core* c, const int16_t mv[4][3], int nv, uint32_t key,
   it->fps_offx = (int16_t)c->game->gpu.s_off_x;       // draw offset baked into xs/ys (reproject reproduces)
   it->fps_offy = (int16_t)c->game->gpu.s_off_y;
 }
-void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
+void Fps60::stampWorld(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
   uint32_t cr[11];
   for (int i = 0; i < 8; i++) cr[i] = GTE_ReadCR(i);          // composed camera×object transform CR0-7 (GTE path)
   cr[8] = GTE_ReadCR(24); cr[9] = GTE_ReadCR(25); cr[10] = GTE_ReadCR(26); // OFX/OFY/H
-  fps60_stamp_world_cr(c, mv, nv, key, cr);
+  stampWorldCr(c, mv, nv, key, cr);
 }
 
 // ---- 3D-POSITIONED 2D QUAD (billboard) registry — keyed by OBJECT IDENTITY (node-span) ----------------
@@ -250,8 +250,7 @@ void fps60_stamp_world(Core* c, const int16_t mv[4][3], int nv, uint32_t key) {
 // RqItems (which now carry it), exactly like the mesh path — so the s_bbPrev registry is no longer needed
 // to hold prev transforms; the registry is purely the CURRENT-frame node→transform map for queue-time tagging.
 // Billboard registry (was file-scope s_bbCur / s_nBBCur here) moved onto Fps60 members in
-// fps60_internal.h — per-Core so SBS's two cores keep separate frame billboard maps. The free-function
-// bridges below (fps60_record_billboard_span / fps60_bb_frame_reset) forward to Fps60 methods.
+// fps60_internal.h — per-Core so SBS's two cores keep separate frame billboard maps.
 static inline int bb_active(void) { return g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid"); }
 
 // Called from engine_submit.cpp right after gpu_obj_depth_add(lo, hi, ord). Capture this object's billboard
@@ -281,17 +280,6 @@ int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, uint32_t crOut[11
   return 0;
 }
 
-// ---- Free-function bridges (kept for existing callers with a `Core* c` in scope) ------------------
-void fps60_record_billboard_span(Core* c, uint32_t lo, uint32_t hi, uint32_t ident) {
-  c->game->fps60.recordBillboardSpan(lo, hi, ident);
-}
-void fps60_bb_frame_reset(void) {
-  // Called from RenderQueue::push flush — no Core in scope. To keep the reset per-Core, this bridge is
-  // superseded by the class method Fps60::bbFrameReset; the queue calls the method directly. This free
-  // function stays as a temporary shim for any caller that hasn't been updated (grep confirms none as of
-  // 2026-07-03), and is a no-op if there's no way to reach the right instance without Core*.
-}
-
 // Stamp the JUST-PUSHED billboard RqItem as an anchor-reproject billboard. Called from the OT walk
 // (gpu_native.cpp) right after a 2D billboard prim (a world-band, obj_depth-hit quad) is queued, with the
 // prim's source OT-node address. If that node falls in a recorded billboard span this frame, we set the same
@@ -301,7 +289,7 @@ void fps60_bb_frame_reset(void) {
 // midpoint and translates the whole 2D quad — so the billboard pans/moves smoothly instead of snapping to
 // camera-B. The prev-frame transform is found by fps_key out of the prev RqItems (which now carry it).
 // No-op unless fps60 is on / no span matches. node = OT-node address (the gp0 walk's s_cur_node).
-void fps60_stamp_billboard(Core* c, uint32_t node) {
+void Fps60::stampBillboard(Core* c, uint32_t node) {
   if (!bb_active()) return;
   RenderQueue& q = c->game->rq;
   if (q.consumed || q.n == 0) return;
@@ -312,7 +300,7 @@ void fps60_stamp_billboard(Core* c, uint32_t node) {
   if (!c->game->fps60.billboardForNode(node, &ident, cr)) return;
   it->fps_world = 1; it->fps_anchor = 1; it->fps_key = ident;
   // objid overlay: a 2D billboard (apple/gem/flame) rasterizes at the DEFERRED OT walk, after the render
-  // walk's g_dbg_render_node scope ended — so rq_emit_or_queue stamped dbg_node=0. Recover it here from the
+  // walk's g_dbg_render_node scope ended — so RenderQueue::emitOrQueue stamped dbg_node=0. Recover it here from the
   // span-matched entity node so the overlay boxes billboards too (the node is `ident`, KSEG).
   if (ident >= 0x80000000u && ident < 0x80200000u) it->dbg_node = ident;
   for (int k = 0; k < 11; k++) it->fps_cr[k] = cr[k];
@@ -341,7 +329,7 @@ void Fps60::rq_capture(const RqItem* items, int n) {
 // Reproject one captured world prim under crM (its actor's A/B-midpoint composed transform) into `out`.
 // Returns the worst per-vertex L1 screen displacement from the prim's real (frame-B) position — the caller
 // snaps instead when this exceeds the gate (teleport/cut/bad match → no smear). Reproduces the exact
-// round+offset gpu_draw_world_quad applied, so a crM == fps_cr (t=1.0) reprojection is bit-faithful.
+// round+offset RenderQueue::drawWorldQuad applied, so a crM == fps_cr (t=1.0) reprojection is bit-faithful.
 static int fps60_reproject(const RqItem* C, const uint32_t crM[8], RqItem* out) {
   float px[4], py[4], pz[4];
   proj_native_xform_cr(crM, C->fps_mv, C->nv, px, py, pz);
@@ -513,7 +501,7 @@ void Fps60::fps60_present_vk(Core* core) {
   int nl = (s_have_prev && s_nCur > 0) ? build_lerp() : 0;
   if (nl > 0) {                                           // PASS 1 — the interpolated in-between
     pass_stats("interp", s_fence, s_rqLerp, nl);
-    for (int i = 0; i < nl; i++) gpu_emit_rq_item(core, &s_rqLerp[i]);
+    for (int i = 0; i < nl; i++) core->game->rq.emitItem(core, &s_rqLerp[i]);
     gpu_fps60_present_pass(core);                         // show it + reset the VK batch (no s_frame++)
     // PSXPORT_FPS60_INTERPSHOT=path — one-shot: dump the INTERPOLATED in-between's s_tex (it persists until
     // the real pass overwrites it) so the 60fps in-between (mover at midpoint, shadow/SSAO/2D from the real
@@ -530,7 +518,7 @@ void Fps60::fps60_present_vk(Core* core) {
     gpu_pace_subframe(core, 2);
   }
   pass_stats("real  ", s_fence, s_rqCur, s_nCur);
-  for (int i = 0; i < s_nCur; i++) gpu_emit_rq_item(core, &s_rqCur[i]);   // PASS 2 — the real frame
+  for (int i = 0; i < s_nCur; i++) core->game->rq.emitItem(core, &s_rqCur[i]);   // PASS 2 — the real frame
   gpu_present_ex(core, 1);                                // present + per-logic-frame bookkeeping
   gpu_pace_subframe(core, nl > 0 ? 2 : 1);
   if (!s_rqPrev) s_rqPrev = new RqItem[FPS60_RQ_MAX];     // current -> previous for next frame

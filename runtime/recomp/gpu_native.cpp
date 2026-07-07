@@ -600,19 +600,11 @@ void GpuState::set_texpage(uint16_t tp) {
 void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
 
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
-// When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
+// When non-NULL and opaque, the queued item carries them and RenderQueue::emitItem re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
 
-// rq_emit_or_queue now lives in game/render/render_queue.cpp (2026-07 restructure, alongside
-// gpu_emit_rq_item/gpu_draw_world_quad/rq_push_2d_quad); this file's guest GP0/OT-walk poly + sprite
-// submit paths (below) still funnel their queued items through that one same place.
-void rq_emit_or_queue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
-                       const int* xs, const int* ys, const float* xsf, const float* ysf,
-                       const int* us, const int* vs,
-                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
-                       const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
-                       int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                       int tp_blend, const float (*sv)[3] = nullptr);
+// RenderQueue::emitOrQueue (game/render/render_queue.cpp) is the one place this file's guest
+// GP0/OT-walk poly + sprite submit paths (below) funnel their queued items through.
 
 // Begin a primitive for provenance tracking: bump the global id and record this prim's details
 // (frame/node/op/clut/texpage/color/first-vertex) so put_px_b can stamp each pixel it writes.
@@ -885,12 +877,12 @@ void GpuState::gp0_exec(Core* core) {
         // owns the field's 3D geometry; the guest OT supplies only the leftover 2D SPRITES.)
         if (s_ot_2d_only) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
         else {
-        rq_emit_or_queue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
+        core->game->rq.emitOrQueue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         // fps60: a 2D billboard prim (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
         // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
-        if (billboard) { void fps60_stamp_billboard(Core*, uint32_t); fps60_stamp_billboard(core, s_cur_node); }
+        if (billboard) core->game->fps60.stampBillboard(core, s_cur_node);
         }
       } else {
       gpu_gpu_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
@@ -1060,12 +1052,12 @@ void GpuState::gp0_exec(Core* core) {
         // 2D-overlay-only field pass: drop the 3D-world / backdrop prims (owned natively); keep 2D HUD.
         if (s_ot_2d_only && layer != RQ_HUD) { /* world/bg owned by ov_scene_native — skip */ }
         else {
-        rq_emit_or_queue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
+        core->game->rq.emitOrQueue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         // fps60: a 2D billboard sprite (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
         // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
-        if (objz) { void fps60_stamp_billboard(Core*, uint32_t); fps60_stamp_billboard(core, s_cur_node); }
+        if (objz) core->game->fps60.stampBillboard(core, s_cur_node);
         }
       } else {
       gpu_gpu_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
@@ -1500,7 +1492,7 @@ void GpuState::gpu_clear_display(Core* core) { gpu_blank_display(); gpu_present(
 void GpuState::gpu_fps60_present_pass(Core* core) {
   present_window();                          // blit_src(s_vram) -> gpu_gpu_present renders the batch + shows
   // Plain per-present reset: this pass emitted the WHOLE queue (color prims AND the shadow tris carried on
-  // each opaque world item, via gpu_emit_rq_item) and presented through the full pipeline (panel_render ->
+  // each opaque world item, via RenderQueue::emitItem) and presented through the full pipeline (panel_render ->
   // shadow_pass + ssao_pass). frame_end resets BOTH the draw batch and the shadow stream; the REAL pass
   // that follows re-emits the same queue, rebuilding an identical shadow map. No keep_shadow side-channel —
   // both 60fps presents are the same full pipeline by construction, so the shadow/HUD/2D are correct on both.
