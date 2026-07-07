@@ -28,4 +28,9 @@ public:
   // tick: one call = one full sweep of the 8-slot array. Was `ov_arr8_dispatch_26368` /
   // rec_dispatch(0x80026368).
   void tick();
+
+  // tickFaithful(): byte-exact mirror of gen_func_80026368 -- reproduces the guest stack frame
+  // (sp -= 32; spill s0/s1/s2/ra at sp+16/20/24/28) and the per-slot jal-site r31 (0x800263C0)
+  // that the plain tick() loop does not. Used under pc_faithful (SBS core A / mPcSkip=false).
+  void tickFaithful();
 };

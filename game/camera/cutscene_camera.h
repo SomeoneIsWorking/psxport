@@ -56,6 +56,11 @@ public:
   //   (contiguous top-down ownership); still-unowned resident leaves + all field overlays run via the
   //   substrate. Reached indirectly (camera object behaviour pointer) — wire when the object walk is native.
   void update();
+  // pc_faithful mirror of gen_func_8006EC44: reproduces the gen's OWN guest-stack frame (r29-=24,
+  // r16@sp+16 / r31@sp+20 spill-restore) and sets c->r[31] to the exact jal-site constant before every
+  // callee (native sibling call or rec_dispatch to a still-substrate leaf/overlay), so downstream
+  // still-substrate leaves see the same c->r[29]/c->r[16] core B does. See cutscene_camera.cpp.
+  void updateFaithful();
   void init();   // 0x8006EA7C — first-frame field reset + render-mode-keyed mode selector.
   void initPlace();               // FUN_8006E918 — init: place camera X/Z base (S+0x02/S+0x0a) from heading.
   void initSeedGrp(uint32_t src); // FUN_8006CBA8 — init: seed cam[0x3a/0x3e/0x42] from a source group.
@@ -131,6 +136,11 @@ private:
   void sub(uint32_t fn, uint32_t a1) { c->r[4] = cam_; c->r[5] = a1; rec_dispatch(c, fn); }
   // update()'s MODE-byte (cam[0x64]&0x3F) dispatch — split out to keep update() readable.
   void dispatchMode(uint8_t mode);
+  // pc_faithful mirror of dispatchMode(), driven by updateFaithful(): same 18-entry mode table (cases
+  // 7/14 and 11/12 share a body, matching the gen's shared jump-table targets), but sets c->r[31] to the
+  // gen's jal-site constant before every callee. Runs under updateFaithful()'s already-descended frame
+  // (c->r[16] == CAM_OBJ, c->r[29] already -=24) — never called on its own.
+  void dispatchModeFaithful(uint8_t mode);
   // Shared look-at tail (rotBuild's modes): place a look point around the scene centre at (theta,radius),
   // fold yaw+distance into the pitch accumulators.
   void lookatTail(int32_t theta, int32_t radius);

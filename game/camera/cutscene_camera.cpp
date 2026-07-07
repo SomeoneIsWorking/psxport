@@ -811,6 +811,7 @@ void CutsceneCamera::initSeedGrp(uint32_t src) {   // FUN_8006CBA8 (writes the F
 }
 
 void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera driver; cam obj @0x800E8008)
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8006EC44u, updateFaithful()); return; }   // faithful: gen mirror
   uint8_t outer = camR8(0);                     // cam[0] = outer state
   if (outer == 0) { camW8(0, 1); init(); return; }   // first frame: init (no post-mode tail)
   if (outer != 1) return;                       // idle
@@ -821,6 +822,105 @@ void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera dri
   camW8(0x66, 0);
   if (mode < 18) dispatchMode(mode);
   shakeTail();                                  // post-mode tail (always, after any mode)
+}
+
+// pc_faithful mirror of gen_func_8006EC44 (generated/shard_1.c:13176-13351). Guest frame: r29-=24,
+// s0(r16)@sp+16 spilled with the CALLER's live value (Engine::fieldFrameFaithful leaves r16=0x1F800000
+// there before calling), ra(r31)@sp+20 spilled with the caller's jal-site (0x80108B90u), s0 reassigned to
+// CAM_OBJ (hardcoded in the gen, independent of any cam_ this instance was constructed with) for the body,
+// both restored and the frame deallocated on every exit path (including the two early-return/idle paths,
+// which skip shakeTail exactly like the gen's direct goto to the restore tail). Every callee (native
+// sibling method OR still-substrate rec_dispatch leaf) gets r31 set to the exact gen jal-site constant
+// first, matching the reference-mirror style (Engine::fieldFrameFaithful / Sop::fieldModeFaithful). Native
+// siblings (init/mainFollow/rotBuild/trackFollow/snapFollow*/pitchFollow/simpleFollow/shakeTail) are called
+// DIRECTLY as C++ (they touch neither r29 nor r16) — not via rec_dispatch, since no EngineOverrides entry
+// exists for their guest addresses (rec_dispatch would fall through to the substrate gen bodies instead).
+void CutsceneCamera::updateFaithful() {   // FUN_8006EC44
+  uint8_t outer = camR8(0);
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);          // spill caller's live s0
+  c->r[16] = CAM_OBJ;                     // s0 = CAM_OBJ (0x800E8008, hardcoded in the gen)
+  c->mem_w32(sp + 20, c->r[31]);          // spill caller's live ra (jal-site set by the caller)
+
+  if (outer == 0) {
+    c->mem_w8(c->r[16] + 0, 1);
+    c->r[31] = 0x8006EC84u;
+    init();
+    goto epilogue;
+  }
+  if (outer != 1) goto epilogue;
+  {
+    uint8_t ss = c->mem_r8(c->r[16] + 1);
+    if (ss == 0) {
+      c->mem_w8(c->r[16] + 1, 1);
+      c->mem_w8(c->r[16] + 2, 0);
+      c->mem_w8(c->r[16] + 3, 0);
+    } else if (ss != 1) {
+      goto epilogue;
+    }
+    uint8_t mode = (uint8_t)(c->mem_r8(c->r[16] + 100) & 63u);
+    c->mem_w8(c->r[16] + 102, 0);
+    if (mode < 18) dispatchModeFaithful(mode);
+    c->r[31] = 0x8006EF28u;
+    shakeTail();
+  }
+epilogue:
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] = sp + 24;
+}
+
+void CutsceneCamera::dispatchModeFaithful(uint8_t mode) {
+  switch (mode) {
+    case 0: {
+      uint8_t rm = c->mem_r8(0x800BF870u);
+      if (rm == 7)  { c->r[31] = 0x8006ED48u; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM7_M0);  return; }
+      if (rm == 20) { c->r[31] = 0x8006ED58u; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM20_M0); return; }
+      if (rm == 2)  { c->r[31] = 0x8006ED38u; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM2_M0);  return; }
+      if (!(c->mem_r8(c->r[16] + 100) & 0x80)) {
+        c->r[31] = 0x8006ED7Cu; mainFollow();
+        c->r[31] = 0x8006ED84u; rotBuild();
+      }
+      rm = c->mem_r8(0x800BF870u);
+      uint32_t fn = c->mem_r32(RENDER_FP_TABLE + (uint32_t)rm * 4);
+      c->r[31] = 0x8006EDACu; c->r[4] = c->r[16];
+      rec_dispatch(c, fn);
+      return;
+    }
+    case 1: {
+      uint8_t rm = c->mem_r8(0x800BF870u);
+      if (rm == 7)  { c->r[31] = 0x8006EDFCu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM7_M1);  return; }
+      if (rm == 20) { c->r[31] = 0x8006EE1Cu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM20_M1); return; }
+      if (rm == 2)  { c->r[31] = 0x8006EE0Cu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM2_M1);  return; }
+      c->r[31] = 0x8006EE2Cu; trackFollow(c->r[16] + 56);
+      return;
+    }
+    case 2:  c->r[31] = 0x8006EE40u; snapFollowA(c->r[16] + 56); return;
+    case 3:  c->r[31] = 0x8006EE54u; pitchFollow(c->r[16] + 56); return;
+    case 4:  c->r[31] = 0x8006EE68u; snapFollowB(c->r[16] + 56); return;
+    case 5:  c->r[31] = 0x8006EE80u; snapFollow(G + 0x2c); return;
+    case 6:
+      c->mem_w8(c->r[16] + 100, 0);
+      c->mem_w32(c->r[16] + 12, c->mem_r32(G + 0x30));
+      return;
+    case 7:
+    case 14: c->r[31] = 0x8006EEF8u; snapFollow(c->r[16] + 56); return;
+    case 8:  c->r[31] = 0x8006EEA8u; simpleFollow(c->r[16] + 56); return;
+    case 9:  c->r[31] = 0x8006EEB8u; c->r[4] = c->r[16]; rec_dispatch(c, OV_MODE9);   return;
+    case 10: c->r[31] = 0x8006EEC8u; c->r[4] = c->r[16]; rec_dispatch(c, OV_A00_CAM); return;
+    case 11:
+    case 12:
+      c->mem_w8(c->r[16] + 100, 0);
+      c->mem_w8(c->r[16] + 2, 0);
+      c->mem_w8(c->r[16] + 3, 0);
+      return;
+    case 13: c->mem_w8(c->r[16] + 100, 6); return;
+    case 15: c->r[31] = 0x8006EF10u; simpleFollow(G + 0x2c); return;
+    case 16: return;   // tail only (falls through to shakeTail in updateFaithful, same as the gen's L_8006EF20 fallthrough)
+    case 17: c->r[31] = 0x8006EF20u; c->r[4] = c->r[16]; rec_dispatch(c, OV_MODE17); return;
+    default: return;   // unreachable: mode<18 and the 18-entry table's values are all enumerated above
+  }
 }
 
 void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + render-mode-keyed mode selector)

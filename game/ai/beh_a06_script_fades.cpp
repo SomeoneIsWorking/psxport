@@ -151,17 +151,33 @@ void beh_a06_fade_flash_ramp_80139728(Core* c) {
 // Allocates via FUN_80072DDC(param, 3, 3, 0x3F); if allocation succeeded, sets the new obj's
 // handler (obj+0x1C = &FUN_8012E194), obj[+0x03]=2, obj[+0x28] |= 0x80. If the global gate G_BF8D5
 // says "not yet" (!= -1), also calls FUN_8004D604(0x31, 1) — a follow-up hook.
+// GUEST FRAME (gen ov_a06_gen_8013AEF0, mirror-verify 0x80108B0C finding): sp-24, ra@+16 — pushed
+// BEFORE either rec_dispatch call and popped at the tail. Both callees (0x80072DDC, then
+// transitively 0x8007A980; 0x8004D604) are real guest leaves that push their OWN frames relative
+// to c->r[29] and save the incoming r31, so this fn's frame + the jal-site RA constants must be
+// live or their frame-saves land at the wrong (unpushed) address / wrong RA value — exactly the
+// 0x801FE8xx byte mismatches the strict mirror gate caught.
 void beh_a06_spawn_follow_obj_8013AEF0(Core* c) {
   const uint32_t param1 = c->r[4];
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);
+  c->r[31] = 0x8013AF08u;
   callObj4(c, param1, 3u, 3u, 0x3Fu, 0x80072DDCu);
   const uint32_t newObj = c->r[2];
-  if (newObj == 0) { setV0(c, 0u); return; }
+  if (newObj == 0) {
+    c->r[31] = c->mem_r32(sp + 16); c->r[29] += 24;
+    setV0(c, 0u); return;
+  }
   c->mem_w32(newObj + 0x1Cu, 0x8012E194u);
   c->mem_w8 (newObj + 0x03u, 2u);
   c->mem_w8 (newObj + 0x28u, (uint8_t)(c->mem_r8(newObj + 0x28u) | 0x80u));
   if ((int8_t)c->mem_r8(G_BF8D5) != -1) {
+    c->r[31] = 0x8013AF4Cu;
     callObj2(c, 0x31u, 1u, 0x8004D604u);
   }
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
   setV0(c, 1u);
 }
 

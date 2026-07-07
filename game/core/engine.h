@@ -148,6 +148,13 @@ public:
   // the substrate render's guest writes ARE faithful state and must not be rewound.
   void fieldFrameFaithful();
   void fieldFrameX();
+  // fieldFrameXFaithful: pc_faithful mirror of ov_game_gen_80108BE4 — the mid-transition per-frame
+  // twin of fieldFrameFaithful (guest 0x80108B0C). Same guest frame (sp-24, r16@+16, ra@+20,
+  // r16=0x1F800000 live) + jal-site ras on every child; drops sceneStateStep/areaModeDispatch (not
+  // in this variant) and dispatches the render orchestrator via mRender->frameX() (0x8003FA44)
+  // instead of mRender->frame() (0x8003F9A8). No dualviewSnapshot here either — render-underneath
+  // guest writes ARE faithful state.
+  void fieldFrameXFaithful();
 
   // fieldTransition + its 4 workers: the sm[0x4a]==5 sub-scene / door / area FADE transition
   // machine (guest FUN_80108A60 + FUN_80107xxx workers). fieldTransition dispatches on sm[0x4c]
@@ -159,6 +166,17 @@ public:
   void transitionD3c();
   void transitionE20();
   void transitionF3c();
+  // *Faithful: pc_faithful mirrors of ov_game_gen_80108A60 + the 4 ov_game_gen_80107xxx workers —
+  // guest frame + jal-site ra discipline per worker, and (the one real behavior fix) the state-0
+  // loader call in every worker now routes through rec_dispatch(c, 0x80044BD4u) — the literal guest
+  // scheduler primitive, wired via EngineOverrides to PcScheduler::spawnAndWait — instead of the
+  // native_area_load_bd4() sync bypass the pc_skip bodies use. THESE MIRRORS CAN YIELD (spawnAndWait
+  // parks the fiber), so the fork below calls them directly rather than through MV_CHECK.
+  void fieldTransitionFaithful();
+  void transitionMainFaithful();
+  void transitionD3cFaithful();
+  void transitionE20Faithful();
+  void transitionF3cFaithful();
 
   // fieldRun / fieldRunX: the sm[0x4c]==2 field RUNNING sub-machine on sm[0x4e] (guest
   // FUN_80106B98) and its mid-transition twin (0x801070B4, sm[0x4c]==3). Formerly
@@ -169,12 +187,27 @@ public:
   // sites (core B proves them); ov_game_func_80108B0C runs the native Engine::fieldFrame owner.
   void fieldRunFaithful();
   void fieldRunX();
+  // fieldRunXFaithful: pc_faithful mirror of ov_game_gen_801070B4 (mid-transition running
+  // sub-machine, sm[0x4c]==3, sm[0x4e] states 0/1/2/other). Guest frame (sp-24, ra@+16) + jal-site
+  // ras at every dispatch/native-call boundary, matching the reference shape of
+  // Engine::fieldRunFaithful / Engine::submode1Faithful.
+  void fieldRunXFaithful();
 
   // submitPage810c: the sm[task+0x6b]==1 page-1 (pause-menu dim) fade branch of the master submit
   // dispatcher at guest 0x8010810C. Owns just the dim-fade shape (subtractive #808080 held on
   // page-1) + a substrate dispatch to the still-unowned menu draw at 0x801084F8; other pages
   // fall through to substrate 0x8010810C. Was ov_game_submit_810c in engine.cpp.
   void submitPage810c();
+  // submitPage810cFaithful: pc_faithful mirror of ov_game_gen_8010810C's page-1 branch. Guest frame
+  // (sp-32, ra@+24, r17@+20, r16@+16 -- gen's shared prologue spills these on EVERY dispatch-table
+  // branch, so they're spilled here too even though r17/r16 are unused on this branch) + jal-site ras
+  // (0x801082B0 fade leaf, 0x801082B8 menu draw) + the L_801084CC/L_801084D0 common epilogue tail
+  // (mem_w8 0x1F800232=0; mem_w8 0x800BF81E &= 2) that every branch falls through to and the pc_skip
+  // shortcut was missing entirely. The fade leaf dispatches to substrate 0x8007E9C8 (byte-exact
+  // packet-pool/scratchpad/OT writes -- same pattern as Sop::fieldModeFaithful) instead of the
+  // host-state-only ScreenFade::set() the pc_skip=true path uses. Other pages delegate whole to
+  // substrate (own frame + dispatch table).
+  void submitPage810cFaithful();
 
   // (fadeSequencer moved to ScreenFade::sequence — see game/render/screen_fade.h;
   // callers reach it as `c->screenFade.sequence(node)`.)
@@ -234,17 +267,36 @@ public:
   //   "no-op default" stub 0x8001CB98, the other 12 jal one specific overlay leaf then return).
   //   Replaces `d0(c, 0x8001cac0u)` in the field-frame body.
   void areaModeDispatch();
+  // areaModeDispatchFaithful: pc_faithful mirror of gen_func_8001CAC0 + the 10 resident jump-table
+  //   stubs (0x8001CB00..0x8001CB90) + the shared epilogue gen_func_8001CB98. Guest frame (sp-24,
+  //   ra@+16) established unconditionally; for a valid area-mode index, r31 is set to that index's
+  //   own stub jal-site constant (stub_addr+8) before dispatching the overlay handler — NOT the
+  //   field-frame caller's ra — then the shared epilogue (0x8001CB98) restores ra/sp. pc_skip keeps
+  //   the flattened direct-dispatch shortcut.
+  void areaModeDispatchFaithful();
 
   // sceneEventFifo: the field EVENT/COMMAND-QUEUE state machine at guest 0x80025588 (struct
   //   @0x800ed058). 3-state top switch on base[2]: state 0 arms + falls through to state 1
   //   (active body drains a small FIFO); state >=2 no-op. Was `d0(c, 0x80025588)`.
   void sceneEventFifo();
+  // sceneEventFifoFaithful: pc_faithful mirror of gen_func_80025588 — guest frame (sp-32,
+  //   r16=B@+16, r17@+20, ra@+24) + jal-site ra set immediately before every dispatch
+  //   (0x800255E0/0x80025610/0x80025630/0x8002569C/0x80025728/0x80025730). sceneEventFifo()
+  //   below sets no ra at all, so its 5 non-leaf callees (which each spill their incoming r31
+  //   onto their own guest stack frame) spill the WRONG byte under pc_faithful. Same control
+  //   flow/store shape as sceneEventFifo(), just with the missing frame/ra discipline restored.
+  void sceneEventFifoFaithful();
 
   // sceneRenderListBuilder: 2-phase scene/render-list builder driver at guest 0x8004FE84 (struct
   //   @0x800bf548). Phase 0 arms it (snapshot list ptr 0x800ecf64 into base+0x2b0..0x2b8, advance
   //   phase to 1); phase 1 dispatches a sub-state handler (base[1] 0..3 -> distinct overlays);
   //   flag @0x800bf822 bit 0 latched from (base[1]!=0 || base[0x0a]!=0). Was `d0(c, 0x8004fe84)`.
   void sceneRenderListBuilder();
+  // sceneRenderListBuilderFaithful: byte-exact mirror of gen_func_8004FE84 -- adds the guest frame
+  //   push/pop (sp-=24, save/restore r16+r31 at sp+16/sp+20 with LIVE entry values) and the jal-site
+  //   r31 constants (0x8004FF30/40/50/60) before the 4 sub-state dispatch leaves, which the plain
+  //   sceneRenderListBuilder() body omits (a guest-stack scratch diff on every field frame under SBS).
+  void sceneRenderListBuilderFaithful();
 
   // sceneStateStep: the per-frame area SCENE-INIT / SCENE-RUN state machine at guest 0x80050DE4.
   //   Two overlay-handler tables of 22 entries each (indexed by the same render-mode byte
@@ -256,6 +308,7 @@ public:
   //   21 overlay leaves + 1 default no-op each). Handlers take a0 = 0x800F2418 (the scene-state
   //   base). Replaces `d0(c, 0x80050de4u)` in the field-frame body.
   void sceneStateStep();
+  void sceneStateStepFaithful();   // gen mirror of 0x80050DE4 (guest frame + jal-site ra discipline)
 
   // modePerFrameDispatch: the second per-frame render-mode dispatcher at guest 0x80022A80 (ov_field_frame
   //   calls it right after the object dispatcher). Keyed by the same render-mode byte 0x800BF870;
@@ -264,6 +317,12 @@ public:
   //   loaded overlay owns). Mode 3 (A00 fisherman village) is explicitly SKIPPED before the table
   //   read — the only special case. Replaces `d0(c, 0x80022a80u)` in the field-frame body.
   void modePerFrameDispatch();
+  // modePerFrameDispatchFaithful: pc_faithful mirror of gen_func_80022A80. Guest frame descent
+  // (sp-=24) + ra spill at sp+16 fire UNCONDITIONALLY (the gen `sw ra,16(sp)` is the beq's delay
+  // slot, so it executes whether idx==3 or not) + jal-site ra 0x80022AB8u set before the indirect
+  // dispatch. No null-target guard — matches gen (rec_dispatch(c,0) fail-fasts like the substrate
+  // would on a null jalr target).
+  void modePerFrameDispatchFaithful();
 
   // Small per-object leaves shared across many behavior handlers. Ghidra decomp
   // scratch/decomp/batch_leaves.c — see each method's body for the full RE. Kept as Engine
@@ -320,6 +379,7 @@ public:
   //   FX 42 then clear b42; otherwise = decrement b42. Trigger call = FUN_80074590(id, 2, -65) — a
   //   sound/vibration fx queue leaf, still substrate. Replaces `d0(c, 0x80077d8cu)` in ov_field_frame.
   void postRenderTick();
+  void postRenderTickFaithful();   // pc_faithful mirror of gen_func_80077D8C: guest frame + jal-site ras
 
   // frameStartTick: the first call in ov_field_frame's gameplay block (guest 0x80059D28). A per-frame
   //   prologue that (a) decrements the frame counter at 0x800BF819 and masks two 12-bit heading fields
@@ -331,6 +391,15 @@ public:
   //   (g) ticks the sub-counter at G+0x180 when 0x1F800137 (pause flag) is 0, (h) advances the LFSR
   //   rand at 0x8009A450 every frame. Replaces `d0(c, 0x80059d28u)` in ov_field_frame.
   void frameStartTick();
+  // frameStartTickFaithful: byte-exact port of gen_func_80059D28 (guest 0x80059D28), used under
+  //   pc_skip=false. Reproduces the gen prologue's frame descent (sp-=24) and r31/r16 spill/restore
+  //   (r16 is reassigned to G in the guest register itself, not just held in a local constant, since
+  //   callees are callee-saved on s0/r16 and spill it verbatim onto their own frames), sets the gen's
+  //   per-case jal-site r31 constant before each mode-dispatch/default call so the callee's own
+  //   guest-stack ra spill (e.g. func_8005950C's spill at its sp+28) matches core B, and dispatches
+  //   the real gen_func_8009A450 (not the register-opaque native Rng class) for the rand advance so
+  //   its trailing v0/v1/hi/lo side effects land bit-for-bit like core B.
+  void frameStartTickFaithful();
 
   // ── Boot-time INIT (called from native_boot.cpp before the scheduler starts) ──────────────────
   // The engine's own PC-native init prefix (was the free functions `eng_init_*` in startup.cpp).

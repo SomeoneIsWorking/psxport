@@ -12,6 +12,8 @@
 
 void rec_dispatch(Core*, uint32_t);
 void rec_super_call(Core*, uint32_t);
+// MV_CHECK (verify_harness.h, pulled in via game.h) — strict mirror TDD gate for the
+// dispatchFaithful() fork below.
 
 // FUN_80027254 — the sole handler installed in HANDLER_TABLE (all 4 slot indices point at this
 // one function). A 4-state PARTICLE STATE MACHINE (state byte @obj+4):
@@ -137,6 +139,7 @@ void ObjectTable::handler27254(uint32_t obj) {
 
 void ObjectTable::dispatch() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80026C88u, dispatchFaithful()); return; }
 
   auto body = [&]() {
     uint32_t obj = TABLE_BASE;
@@ -175,4 +178,47 @@ void ObjectTable::dispatch() {
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[disp26c88verify] MISMATCH ram@%x spad@%x sp=%x\n", ro, so, sp);
   } else if (++ng % 50 == 0) fprintf(stderr, "[disp26c88verify] %ld matches\n", ng);
+}
+
+// ObjectTable::dispatchFaithful — byte-mirror of gen_func_80026C88 (generated/shard_2.c:1607-1637).
+// Reproduces the guest frame descent, the s0/s1/s2/ra stack spill at [sp+16/20/24/28] with the
+// LIVE incoming register values (spilled BEFORE each register is repurposed, matching gen's
+// instruction order exactly), the per-iteration jal-site r31=0x80026CE0 before dispatching an
+// active slot's handler, and the full epilogue restore. The 40-slot loop runs off the guest
+// s0 (obj cursor, c->r[16]) / s1 (loop counter, c->r[17]) / s2 (handler table ptr, c->r[18])
+// registers rather than local C++ variables, since those 16 bytes of guest stack are
+// observable under SBS strict compare.
+void ObjectTable::dispatchFaithful() {
+  Core* c = core;
+  uint32_t ra = c->r[31], sp = c->r[29];
+  uint32_t s0 = c->r[16], s1 = c->r[17], s2 = c->r[18];
+
+  c->r[29] = sp - 32;                       // addiu sp,-0x20
+  c->mem_w32(c->r[29] + 20, s1);            // sw s1,0x14(sp) — LIVE incoming s1
+  c->r[17] = 0;                             // s1 = i = 0
+  c->mem_w32(c->r[29] + 24, s2);            // sw s2,0x18(sp) — LIVE incoming s2
+  c->r[18] = HANDLER_TABLE;                 // s2 = 0x8009D52C
+  c->mem_w32(c->r[29] + 16, s0);            // sw s0,0x10(sp) — LIVE incoming s0
+  c->r[16] = TABLE_BASE;                    // s0 = 0x800EC188 (obj cursor)
+  c->mem_w32(c->r[29] + 28, ra);            // sw ra,0x1c(sp)
+
+  for (int i = 0; i < SLOT_COUNT; i++) {
+    uint32_t obj = c->r[16];
+    if (c->mem_r8(obj + 0) != 0) {
+      uint32_t idx = c->mem_r8(obj + 1);
+      uint32_t fn  = c->mem_r32(c->r[18] + (idx << 2));
+      c->r[31] = 0x80026CE0u;               // jal-site ra (matches gen exactly)
+      c->r[4]  = obj;
+      if (fn == H_27254) handler27254(obj);
+      else rec_dispatch(c, fn);
+    }
+    c->r[17] = c->r[17] + 1;                // s1++
+    c->r[16] = c->r[16] + SLOT_STRIDE;      // s0 += 64 (delay-slot semantics: always executes)
+  }
+
+  c->r[31] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = c->r[29] + 32;
 }

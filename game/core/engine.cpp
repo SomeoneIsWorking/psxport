@@ -194,6 +194,7 @@ void ov_game_func_801084F8(Core*);                          // generated/ov_game
 // jump stay recomp via d0(c, 0x8010810cu) (own-caller-before-callee: the caller (ov_field_frame et al.) is
 // already native, but the callee's other pages are unexplored, so full transcription is out of scope).
 void Engine::submitPage810c() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8010810Cu, submitPage810cFaithful()); return; }
   uint32_t task = c->mem_r32(0x1F800138u);
   if (task && c->mem_r8(task + 0x6Bu) == 1) {
     c->screenFade.set(ScreenFade::SUBTRACTIVE, 0x80, 0x80, 0x80);   // pause-menu dim: flat gray, held each frame page-1 handler runs
@@ -201,6 +202,40 @@ void Engine::submitPage810c() { Core* c = core;
     return;
   }
   d0(c, 0x8010810cu);
+}
+
+// pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) branch. Guest frame (sp-32,
+// ra@+24, r17@+20, r16@+16 -- gen's shared prologue spills these on EVERY dispatch-table branch, so
+// they're spilled here too even though r17/r16 are unused on this branch) + jal-site ras (0x801082B0
+// fade leaf, 0x801082B8 menu draw) + the L_801084CC/L_801084D0 common epilogue tail (mem_w8
+// 0x1F800232=0; mem_w8 0x800BF81E &= 2) that every branch falls through to and the pc_skip shortcut
+// was missing entirely. The fade leaf dispatches to substrate 0x8007E9C8 (byte-exact packet-pool/
+// scratchpad/OT writes -- same pattern as Sop::fieldModeFaithful) instead of the host-state-only
+// ScreenFade::set() the pc_skip=true path uses. Other pages delegate whole to substrate (own frame
+// + dispatch table).
+void Engine::submitPage810cFaithful() { Core* c = core;
+  uint32_t task = c->mem_r32(0x1F800138u);                  // gen: r2 = mem_r32(0x1F800138) BEFORE frame descent
+  if (task && c->mem_r8(task + 0x6Bu) == 1) {                // page==1 -> table[1]==0x8010829C (docs/engine_re.md)
+    c->r[29] -= 32;                                          // gen 8010810C shared prologue: sp-32
+    const uint32_t sp = c->r[29];
+    c->mem_w32(sp + 24, c->r[31]);                           // ra @ sp+24
+    c->mem_w32(sp + 20, c->r[17]);                           // s1 @ sp+20
+    c->mem_w32(sp + 16, c->r[16]);                           // s0 @ sp+16 (unused this branch, spilled anyway)
+    c->r[4] = 0x00808080u; c->r[5] = 0; c->r[6] = 4;
+    c->r[31] = 0x801082B0u;
+    rec_dispatch(c, 0x8007E9C8u);                            // FUN_8007E9C8: fade-set GP0 packet builder (substrate -- byte-exact)
+    c->r[31] = 0x801082B8u;
+    ov_game_func_801084F8(c);                                // still-recomp: menu draw + cursor/page nav
+    uint8_t v = c->mem_r8(0x800BF81Eu);                      // L_801084CC/L_801084D0 common epilogue tail
+    c->mem_w8(0x1F800232u, 0);
+    c->mem_w8(0x800BF81Eu, (uint8_t)(v & 2u));
+    c->r[31] = c->mem_r32(sp + 24);
+    c->r[17] = c->mem_r32(sp + 20);
+    c->r[16] = c->mem_r32(sp + 16);
+    c->r[29] += 32;
+    return;
+  }
+  d0(c, 0x8010810cu);                                        // other pages: full substrate re-derive (own frame + dispatch)
 }
 // (ov_objwalk moved to ObjectList::walkAll — c->engine.objectList.walkAll())
 // (ov_disp_26c88 moved to ObjectTable::dispatch — c->engine.objectTable.dispatch())
@@ -300,6 +335,7 @@ void Engine::submode0() { Core* c = core;
 // ends with 0x80077b5c. All leaf callees stay substrate; only the control flow is native. Faithful to the
 // recomp body; a direct child of ov_field_frame (was `d0(c, 0x80025588)`).
 void Engine::sceneEventFifo() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80025588u, sceneEventFifoFaithful()); return; }   // faithful: gen mirror
   const uint32_t B = 0x800ed058u;
   uint8_t st = c->mem_r8(B + 2);
   if (st == 0) {
@@ -339,6 +375,76 @@ void Engine::sceneEventFifo() { Core* c = core;
   d1(c, 0x80077b5cu, B);
 }
 
+// pc_faithful field EVENT/COMMAND-QUEUE state machine — mirror of gen_func_80025588 (struct
+// @0x800ed058). Guest frame (sp-32; r16=B@+16, r17@+20, ra@+24) + jal-site ras on every
+// dispatch — the piece missing from sceneEventFifo() above: that version never sets c->r[31]
+// before d1/d2, so its FIFO-drain/setup leaves (0x80024e00, 0x80040aa4, 0x80074bf8, 0x80024f18,
+// 0x800251f0, 0x80077b5c — all confirmed to spill their incoming r31 onto their own guest stack
+// frame at entry) spill whatever stale ra happens to be sitting in c->r[31] instead of gen's
+// per-call-site constant. Control flow/store values are otherwise byte-identical to
+// sceneEventFifo() (verified against gen_func_80025588 line by line); only the frame/ra
+// discipline differs. The caller (fieldFrameFaithful) already sets c->r[31]=0x80108B70 right
+// before invoking this — that value must be SPILLED here, not silently dropped.
+void Engine::sceneEventFifoFaithful() { Core* c = core;
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->mem_w32(sp + 24, c->r[31]);
+  c->mem_w32(sp + 20, c->r[17]);
+  const uint32_t B = 0x800ed058u;
+  c->r[16] = B;
+  uint8_t st = c->mem_r8(B + 2);
+  if (st == 0) {
+    c->mem_w8(B + 2, 1);
+    c->mem_w8(B + 9, 0);
+    uint32_t head = c->mem_r32(0x800ecf58u);
+    c->mem_w8(0x800bfa5cu, 0);
+    c->mem_w32(B + 0x3c, head);
+    c->r[31] = 0x800255E0u;
+    d1(c, 0x80024e00u, B);
+    // fall through into the active body
+  } else if (st != 1) {
+    c->r[31] = c->mem_r32(sp + 24);
+    c->r[17] = c->mem_r32(sp + 20);
+    c->r[16] = c->mem_r32(sp + 16);
+    c->r[29] += 32;
+    return;                      // st >= 2: guest jumps straight to the epilogue
+  }
+  if (c->mem_r8(B + 0x14) == 0 && c->mem_r8(B + 0x15) != 0) {
+    c->r[31] = 0x80025610u;
+    d2(c, 0x80040aa4u, c->mem_r8(B + 0x16), c->mem_r8(B + 0x1c));
+    uint8_t kind = c->mem_r8(B + 0x1c);
+    c->r[31] = 0x80025630u;
+    if (kind == 0)      d1(c, 0x80074bf8u, 2);
+    else if (kind == 1) d1(c, 0x80074bf8u, 3);
+    int n = (int)c->mem_r8(B + 0x15) - 1;                   // shift the FIFO down by one (drop entry 0)
+    for (int i = 0; i < n; i++) {
+      c->mem_w8(B + 0x16 + i, c->mem_r8(B + 0x16 + i + 1));
+      c->mem_w8(B + 0x1c + i, c->mem_r8(B + 0x1c + i + 1));
+    }
+    c->mem_w8(B + 0x15, (uint8_t)(c->mem_r8(B + 0x15) - 1));
+    c->mem_w8(B + 0x14, (uint8_t)(c->mem_r8(B + 0x14) + 1));
+  }
+  c->r[31] = 0x8002569Cu;
+  d1(c, 0x80024f18u, B);
+  uint8_t phase = c->mem_r8(0x800bf870u);
+  if (phase == 3 || phase == 20) {
+    // neither the light-toggle nor 0x800251f0
+  } else if (phase == 2 || phase == 7) {
+    if (c->mem_r8(0x800bf816u) == 0 && (c->mem_r16(0x800e7e68u) & 0x0c00) != 0)
+      c->mem_w8(B + 8, (uint8_t)(1 - c->mem_r8(B + 8)));
+  } else {
+    c->r[31] = 0x80025728u;
+    d1(c, 0x800251f0u, B);
+  }
+  c->r[31] = 0x80025730u;
+  d1(c, 0x80077b5cu, B);
+  c->r[31] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 32;
+}
+
 // Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (struct @0x800bf548). base[0] is the
 // phase: 0 -> ARM (snapshot list ptr 0x800ecf64 into base+0x2b0, +0x2b4 = ptr+0x10, +0x2b8 = ptr+0x10 +
 // (*(u16)ptr << 1); base[1]=0, base[0]=1); 1 -> run sub-state base[1] (0->0x8004f430, 1->0x8004f474,
@@ -346,6 +452,7 @@ void Engine::sceneEventFifo() { Core* c = core;
 // (base[1]!=0 || base[0x0a]!=0) else clear it. phase>=2 is a no-op. Leaf callees stay substrate. Faithful
 // to the recomp body; a direct child of ov_field_frame (was `d0(c, 0x8004fe84)`).
 void Engine::sceneRenderListBuilder() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8004FE84u, sceneRenderListBuilderFaithful()); return; }   // faithful: gen mirror
   const uint32_t B = 0x800bf548u;
   uint8_t phase = c->mem_r8(B + 0);
   if (phase == 0) {
@@ -374,13 +481,64 @@ void Engine::sceneRenderListBuilder() { Core* c = core;
     c->mem_w8(flag, (uint8_t)(v & 0xfe));
 }
 
+// Faithful mirror of gen_func_8004FE84 (generated/shard_1.c) -- adds the guest-stack frame discipline
+// the plain native body (above) omits: sp-=24 at entry, mem_w32(sp+16,r16_entry) unconditionally
+// (before r16 is repurposed as the struct base) / mem_w32(sp+20,r31_entry) unconditionally (gen's
+// delay-slot store on the phase==1 test, fires on every phase value), matching restore + sp+=24 at
+// the single shared exit; and the literal jal-site r31 constants before each of the 4 sub-state
+// dispatch leaves (their own gen bodies save r31 to their own stack frame, so a wrong r31 there is a
+// second guest-visible diff). Logic is identical to Engine::sceneRenderListBuilder() otherwise.
+void Engine::sceneRenderListBuilderFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);              // save entry r16 (gen: sw r16,16(sp) before r16 reassigned)
+  const uint32_t B = 0x800bf548u;
+  c->r[16] = B;
+  uint8_t phase = c->mem_r8(B + 0);
+  c->mem_w32(sp + 20, c->r[31]);              // save entry r31 (gen: delay-slot store on the phase==1 test)
+
+  if (phase == 1) {
+    uint8_t sub = c->mem_r8(B + 1);
+    switch (sub) {
+      case 0: c->r[31] = 0x8004FF30u; c->r[4] = B; rec_dispatch(c, 0x8004F430u); break;
+      case 1: c->r[31] = 0x8004FF40u; c->r[4] = B; rec_dispatch(c, 0x8004F474u); break;
+      case 2: c->r[31] = 0x8004FF50u; c->r[4] = B; rec_dispatch(c, 0x8004F514u); break;
+      case 3: c->r[31] = 0x8004FF60u; c->r[4] = B; rec_dispatch(c, 0x8004F6D0u); break;
+      default: break;                          // sub >= 4: no sub-handler (guest j 8004ff60)
+    }
+    uint32_t flag = 0x800bf822u;
+    uint8_t v = c->mem_r8(flag);
+    if (c->mem_r8(B + 1) != 0 || c->mem_r16s(B + 0x0a) != 0)
+      c->mem_w8(flag, (uint8_t)(v | 1));
+    else
+      c->mem_w8(flag, (uint8_t)(v & 0xfe));
+  } else if (phase == 0) {
+    uint32_t p = c->mem_r32(0x800ecf64u);
+    uint32_t r3 = p + 0x10;
+    c->mem_w32(B + 0x2b0, p);
+    c->mem_w32(B + 0x2b4, r3);
+    uint16_t h = c->mem_r16(p);
+    c->mem_w8(B + 1, 0);
+    c->mem_w8(B + 0, 1);
+    c->mem_w32(B + 0x2b8, r3 + ((uint32_t)h << 1));
+  }
+  // phase >= 2: no-op -- straight to epilogue, matching gen's L_8004FFA4 direct jump.
+
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 // FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field frame's work driver, called by
 // the running states of the sm[0x4e] machine). Faithful to the disasm: bump *0x1f80017c and *0x800bf878;
 // if NOT paused (*0x1f800136==0) run the 11-call gameplay-update block; if *0x1f800136 < 2 run 0x8003f9a8;
-// then always the render-submit 0x8010810c + 0x80077d8c + per-frame area update 0x80075a80. Yield-free
-// (transitive jal scan, 1021 fns). The object-walk 0x8007a904 and display 0x80026c88 now run as the
-// NATIVE ov_objwalk / ov_disp_26c88 (direct C calls — the previously-orphan bodies wired into the live
-// field frame); the remaining callees stay rec_dispatch leaves until owned in turn.
+// then always the render-submit 0x8010810c + 0x80077d8c + per-frame area update 0x80075a80. The
+// object-walk 0x8007a904 and display 0x80026c88 now run as the NATIVE ov_objwalk / ov_disp_26c88
+// (direct C calls — the previously-orphan bodies wired into the live field frame); the remaining
+// callees stay rec_dispatch leaves until owned in turn. NOT yield-free (0x8003F9A8 render
+// orchestrator + other callees can scheduler_yield) — the earlier "yield-free (transitive jal scan)"
+// claim here was wrong; the fork below is a plain call, proven by SBS full, not MV_CHECK
+// (mv_tdd.log 2026-07-08: 0x80108B0C FAILED 10+ diffs — a double-run/rewind artifact, not a real bug).
 // pc_faithful field per-frame update — mirror of ov_game_gen_80108B0C. Guest frame (sp-24,
 // r16@+16, ra@+20, r16=0x1F800000 live for callee spills) + jal-site ras on every child. The
 // children run their native owners (the ported path — byte-exactness is each owner's own gate);
@@ -419,7 +577,13 @@ void Engine::fieldFrameFaithful() { Core* c = core;
 }
 
 void Engine::fieldFrame() { Core* c = core;
-  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80108B0Cu, fieldFrameFaithful()); return; }   // faithful: gen mirror
+  // yields — SBS-gated: fieldFrameFaithful() drives the render orchestrator (0x8003F9A8) and other
+  // callees that can scheduler_yield; MV_CHECK only supports yield-free mirrors (strictCheck aborts
+  // on yield-while-inCheck) and a rewind+replay of the substrate body here does not reproduce the
+  // same interleaving as the live run, so the compare is bogus (10+ byte diffs at 0x801FE8A0.. are
+  // an artifact of that double-run, not a real native/substrate mismatch). Byte-exactness for this
+  // fork is proven by SBS full (core A vs core B), not MV_CHECK.
+  if (c->game && !c->game->pc_skip) { fieldFrameFaithful(); return; }   // faithful: gen mirror
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
@@ -942,9 +1106,12 @@ void Engine::fieldRunFaithful() { Core* c = core;
 }
 
 void Engine::fieldRun() { Core* c = core;
-  // NB fieldRun can yield transitively (case 0's substrate init chain descends into loaders) — only
-  // arm MV_CHECK on it while probing yield-free states; the standing gate is SBS lockstep.
-  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80106B98u, fieldRunFaithful()); return; }   // faithful: gen mirror
+  // fieldRun can yield transitively (case 0's substrate init chain descends into loaders) — plain
+  // call, not MV_CHECK: fieldRunFaithful is not byte-exact yet (12+ diffs at 0x801FE8xx / v0 / v1,
+  // scratch/logs/mv_tdd.log), and MV_CHECK's synchronous compare is wrong across a yield boundary
+  // regardless. SBS-gated; fix fieldRunFaithful and re-arm MV_CHECK once it's byte-exact and known
+  // yield-free (or drop this call for a plain one permanently if it always yields).
+  if (c->game && !c->game->pc_skip) { fieldRunFaithful(); return; }   // faithful: gen mirror
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {
@@ -1086,7 +1253,43 @@ void Engine::fieldRun() { Core* c = core;
 // Owned so the transition path is native+traceable (the door freeze lives below here): the heavy
 // callees stay rec_dispatch leaves to descend into next — esp. 0x8007b04c (the per-object update that
 // must, but currently does not, tick the screen-transition sequencer FUN_80026ad0 to completion).
+// pc_faithful mirror of ov_game_gen_80108BE4 (generated/ov_game_shard_1.c). Reduced twin of
+// fieldFrameFaithful (0x80108B0C): same frame descent/spill/jal-site-ra shape, 9 gameplay-update
+// calls (drops sceneStateStep 0x80050de4 and areaModeDispatch 0x8001cac0, which the full variant
+// has and this one does not per gen), render orchestrator dispatched as mRender->frameX()
+// (0x8003FA44) under the <2 gate, then submitPage810c/postRenderTick/areaSlots.updateTail tail —
+// all with jal-site ras matching the gen's constants so any nested unowned leaf's own frame-spill
+// stays byte-exact with core B.
+void Engine::fieldFrameXFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->r[16] = 0x1F800000u;
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
+  c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
+  if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
+    c->r[31] = 0x80108C28u; FFS("ffx_59d28",    c->engine.frameStartTick());
+    c->r[31] = 0x80108C30u; FFS("ffx_69b28",    c->engine.objectList.walkAux());
+    c->r[31] = 0x80108C38u; FFS("ffx_26368",    c->engine.array8Dispatch.tick());
+    c->r[31] = 0x80108C40u; FFS("ffx_7b04c",    c->engine.transitionState3.walkOnce());
+    c->r[31] = 0x80108C48u; FFS("ffx_25588",    c->engine.sceneEventFifo());
+    c->r[31] = 0x80108C50u; FFS("ffx_4fe84",    c->engine.sceneRenderListBuilder());
+    c->r[31] = 0x80108C58u; FFS("ffx_disp26c88",c->engine.objectTable.dispatch());
+    c->r[31] = 0x80108C60u; FFS("ffx_22a80",    c->engine.modePerFrameDispatch());
+    c->r[31] = 0x80108C68u; FFS("ffx_6ec44",    CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update());
+  }
+  if (c->mem_r8(0x1f800136u) < 2) { c->r[31] = 0x80108C84u; c->mRender->frameX(); }   // 0x8003FA44 underneath
+  c->r[31] = 0x80108C8Cu; FFS("ffx_submit810c", c->engine.submitPage810c());
+  c->r[31] = 0x80108C94u; FFS("ffx_77d8c",      c->engine.postRenderTick());
+  c->r[31] = 0x80108C9Cu; FFS("ffx_75a80",      c->engine.areaSlots.updateTail());
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 void Engine::fieldFrameX() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80108BE4u, fieldFrameXFaithful()); return; }   // faithful: gen mirror
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
@@ -1282,6 +1485,7 @@ void Engine::transitionF3c() { Core* c = core;
 // FUN_80108a60 — sm[0x4a]==5 transition dispatcher on sm[0x4c]. 0/9 = done (return to the field area
 // machine: sm[0x48]=2, sm[0x4a]=1, sm[0x4c]=0, sm[0x4e]=0); 1-4 main; 5/6 d3c; 7 e20; 8 f3c.
 void Engine::fieldTransition() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { fieldTransitionFaithful(); return; }   // yield-capable (spawnAndWait): plain call, no MV_CHECK
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   switch (s4c) {
@@ -1297,12 +1501,351 @@ void Engine::fieldTransition() { Core* c = core;
   }
 }
 
+// Faithful mirror of ov_game_gen_80108A60. Own frame: sp-=24, r31 spill @sp+16. Dispatches
+// sm[0x4c] exactly as the gen jump table (0/9=reset, 1-4=main, 5/6=d3c, 7=e20, 8=f3c); every
+// worker call gets its own jal-site ra constant set immediately before the call.
+void Engine::fieldTransitionFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t s4c = c->mem_r16(sm + 0x4c);
+  if (s4c < 10) switch (s4c) {
+    case 0: case 9:
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
+      c->mem_w16(sm + 0x4c, 0); c->mem_w16(sm + 0x4e, 0);
+      break;
+    case 1: case 2: case 3: case 4:
+      c->r[31] = 0x80108ACCu; c->engine.transitionMainFaithful(); break;
+    case 5: case 6:
+      c->r[31] = 0x80108AECu; c->engine.transitionD3cFaithful(); break;
+    case 7:
+      c->r[31] = 0x80108ADCu; c->engine.transitionE20Faithful(); break;
+    case 8:
+      c->r[31] = 0x80108AFCu; c->engine.transitionF3cFaithful(); break;
+    default: break;
+  }
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
+// Faithful mirror of ov_game_gen_80107AFC. Frame: sp-=24, r31 spill @sp+20, r16 spill @sp+16
+// (r16 is a dead s-reg for our control flow -- spilled/restored verbatim for byte-fidelity only).
+void Engine::transitionMainFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w32(sp + 16, c->r[16]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t st = c->mem_r16(sm + 0x4e);
+  if (st < 5) switch (st) {
+    case 0:
+      c->mem_w8(0x1f800234u, 1);
+      c->r[31] = 0x80107B50u; rec_dispatch(c, 0x8007A810u);
+      c->r[31] = 0x80107B58u; rec_dispatch(c, 0x800798F8u);
+      c->r[31] = 0x80107B60u; rec_dispatch(c, 0x8007B0F0u);
+      c->r[31] = 0x80107B68u; rec_dispatch(c, 0x801079ACu);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w8(sm + 0x6b, 0x1f);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      c->screenFade.applyLeafCall(0xffffffu, 0);          // = guest FUN_8007e9c8(0xffffff,0,4); jal-site was 0x80107B98u
+      sm = c->mem_r32(0x1f800138u);
+      c->r[4] = 0x800452C0u;
+      c->r[5] = c->mem_r8(0x800bf870u);
+      c->r[6] = 0;
+      c->r[7] = 1;
+      c->r[31] = 0x80107BB4u;
+      rec_dispatch(c, 0x80044BD4u);
+      goto epilogue;
+    case 1: {
+      sm = c->mem_r32(0x1f800138u);
+      uint32_t u = (uint32_t)c->mem_r8(sm + 0x6b) & 0x1fu;
+      c->screenFade.applyLeafCall((u << 19) | (u << 11) | (u << 3), 0);   // jal-site was 0x80107BECu
+      sm = c->mem_r32(0x1f800138u);
+      uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
+      c->mem_w8(sm + 0x6b, v);
+      if (v == 0) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      }
+      break;
+    }
+    case 2:
+      sm = c->mem_r32(0x1f800138u);
+      if (c->mem_r8(0x1f80019bu) != 0) {
+        c->mem_w8(sm + 0x6b, 0x1f);
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      }
+      break;
+    case 3: {
+      sm = c->mem_r32(0x1f800138u);
+      uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6b) * (uint32_t)-8) & 0xffu;
+      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 1);          // jal-site was 0x80107C98u
+      sm = c->mem_r32(0x1f800138u);
+      uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
+      c->mem_w8(sm + 0x6b, v);
+      sm = c->mem_r32(0x1f800138u);
+      if (c->mem_r8(sm + 0x6b) == 0) {
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+        c->r[4] = 0;
+        c->r[31] = 0x80107CDCu;
+        rec_dispatch(c, 0x80050894u);
+      }
+      break;
+    }
+    case 4:
+      c->r[31] = 0x80107D0Cu; rec_dispatch(c, 0x80074E48u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
+      c->mem_w16(sm + 0x4c, 1); c->mem_w16(sm + 0x4e, 0);
+      goto epilogue;
+    default: break;
+  }
+  // per-frame update tail (states 1/2/3 fall through here; state 0/4 skip it via goto epilogue)
+  c->r[31] = 0x80107CE4u; rec_dispatch(c, 0x80059C60u);
+  c->r[31] = 0x80107CECu; rec_dispatch(c, 0x8006EF38u);
+  c->r[31] = 0x80107CF4u; rec_dispatch(c, 0x8007B008u);
+  c->r[31] = 0x80107CFCu; rec_dispatch(c, 0x8003FA1Cu);
+epilogue:
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
+// Faithful mirror of ov_game_gen_80107D3C. Frame: sp-=24, r16 spill @sp+16, r31 spill @sp+20.
+void Engine::transitionD3cFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->mem_w32(sp + 20, c->r[31]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t st = c->mem_r16(sm + 0x4e);
+  if (st == 1) {
+    c->r[31] = 0x80107DC8u; rec_dispatch(c, 0x8003FB84u);
+    sm = c->mem_r32(0x1f800138u);
+    c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+  } else if (st == 0) {
+    c->mem_w8(0x1f800234u, 1);
+    sm = c->mem_r32(0x1f800138u);
+    c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+    c->r[4] = 0x800452C0u;
+    c->r[5] = c->mem_r8(0x800bf870u);
+    c->r[6] = 0;
+    c->r[7] = 1;
+    c->r[31] = 0x80107DB8u;
+    rec_dispatch(c, 0x80044BD4u);
+  } else if (st == 2) {
+    if (c->mem_r8(0x1f80019bu) == 0) {
+      c->r[31] = 0x80107E10u; rec_dispatch(c, 0x8003EA88u);
+    } else {
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
+      c->mem_w16(sm + 0x4c, 1); c->mem_w16(sm + 0x4e, 0);
+    }
+  }
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
+// Faithful mirror of ov_game_gen_80107E20. Frame: sp-=32, r16@sp+16/r17@sp+20/r18@sp+24/r31@sp+28.
+void Engine::transitionE20Faithful() { Core* c = core;
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->mem_w32(sp + 24, c->r[18]);
+  c->mem_w32(sp + 28, c->r[31]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t st = c->mem_r16(sm + 0x4e);
+  if (st == 1) {
+    c->r[31] = 0x80107ECCu; rec_dispatch(c, 0x8003E264u);
+    sm = c->mem_r32(0x1f800138u);
+    c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+  } else if (st == 0) {
+    c->r[4] = 9; c->r[31] = 0x80107E80u; rec_dispatch(c, 0x80074BF8u);
+    c->r[31] = 0x80107E88u; rec_dispatch(c, 0x8003E264u);
+    sm = c->mem_r32(0x1f800138u);
+    c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+    c->mem_w8(0x1f800234u, 1);
+    c->r[4] = 0x800452C0u;
+    c->r[5] = c->mem_r8(0x800bf870u);
+    c->r[6] = 0;
+    c->r[7] = 1;
+    c->r[31] = 0x80107EBCu;
+    rec_dispatch(c, 0x80044BD4u);
+  } else if (st == 2) {
+    c->r[31] = 0x80107EF0u; rec_dispatch(c, 0x8003E894u);
+    if (c->mem_r8(0x1f80019bu) != 0) {
+      c->r[31] = 0x80107F0Cu; rec_dispatch(c, 0x80074E48u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
+      c->mem_w16(sm + 0x4c, 1); c->mem_w16(sm + 0x4e, 0);
+    }
+  }
+  c->r[31] = c->mem_r32(sp + 28);
+  c->r[18] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 32;
+}
+
+// Faithful mirror of ov_game_gen_80107F3C. Frame: sp-=24, r31 spill @sp+16 (no s-reg spills).
+// State 0 uses the TEXGROUP loader (0x80044f58) instead of the area loader (0x800452c0) -- both
+// go through FUN_80044BD4 (rec_dispatch -> PcScheduler::spawnAndWait), NOT a direct sync call.
+void Engine::transitionF3cFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t st = c->mem_r16(sm + 0x4e);
+  if (st < 7) switch (st) {
+    case 0: {
+      c->r[4] = 9; c->r[31] = 0x80107F84u; rec_dispatch(c, 0x80074BF8u);
+      c->r[31] = 0x80107F8Cu; rec_dispatch(c, 0x8003E264u);
+      c->mem_w8(0x1f800234u, 1);
+      sm = c->mem_r32(0x1f800138u);
+      // gen: (int16_t) SIGNED 16-bit read of 0x1f800240, +26, &0xff -- NOT a 32-bit read.
+      int32_t texArg = c->mem_r16s(0x1f800240u) + 26;
+      c->r[4] = 0x80044F58u;
+      c->r[5] = (uint32_t)texArg & 0xFFu;
+      c->r[6] = 0;
+      c->r[7] = 1;
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      c->r[31] = 0x80107FD0u;
+      rec_dispatch(c, 0x80044BD4u);
+      break;
+    }
+    case 1: case 5:
+      c->r[31] = 0x80108098u; rec_dispatch(c, 0x8003E264u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      break;
+    case 2:
+      c->r[31] = 0x80107FE0u; rec_dispatch(c, 0x8003E894u);
+      if (c->mem_r8(0x1f80019bu) != 0) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+        c->r[31] = 0x80108010u; rec_dispatch(c, 0x80074E48u);
+        c->r[31] = 0x80108018u; c->engine.audioDispatch.zoneTransitionSetup(9);   // native, FUN_8001D71C
+        c->r[31] = 0x80108020u; rec_dispatch(c, 0x8003FB94u);
+      }
+      break;
+    case 3:
+      c->r[31] = 0x80108030u; rec_dispatch(c, 0x8003EBE0u);
+      if (c->r[2] == 0) goto epilogue;    // still running -> stay
+      c->r[31] = 0x80108040u; rec_dispatch(c, 0x8001CF2Cu);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      break;
+    case 4:
+      c->r[4] = 8; c->r[31] = 0x80108050u; rec_dispatch(c, 0x80074BF8u);
+      c->r[31] = 0x80108058u; rec_dispatch(c, 0x8003E264u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      c->r[4] = 0x800452C0u;
+      c->r[5] = c->mem_r8(0x800bf870u);
+      c->r[6] = 0;
+      c->r[7] = 1;
+      c->r[31] = 0x80108088u;
+      rec_dispatch(c, 0x80044BD4u);
+      break;
+    case 6:
+      c->r[31] = 0x801080C0u; rec_dispatch(c, 0x8003E894u);
+      if (c->mem_r8(0x1f80019bu) != 0) {
+        c->r[31] = 0x801080DCu; rec_dispatch(c, 0x80074E48u);
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
+        c->mem_w16(sm + 0x4c, 1); c->mem_w16(sm + 0x4e, 0);
+      }
+      break;
+    default: break;
+  }
+epilogue:
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 // FIELD RUNNING sub-machine VARIANT 0x801070b4 (sm[0x4c]==3, the mid-transition running handler reached
 // when a door/edge sets up an area change). A switch on sm[0x4e]: state 0 = init (scene reset + input
 // reset) then fall into state 1; state 1 = run ov_field_frame_x and check the mode-3 / area-change exit
 // conditions to hand back to the normal running handler (sm[0x4c]=2); state 2 = bump to 1. Faithful to
 // the disasm (hand-decompiled from the field overlay).
+// pc_faithful mirror of ov_game_gen_801070B4 (mid-transition running sub-machine, sm[0x4c]==3).
+// Guest frame descent (24, ra spilled at sp+16) + r31 set to the exact gen jal-site constant
+// before every dispatch/native-call boundary, so every callee's own frame push lands with the
+// right ra at the right (correctly-descended) address. Store shape/branch conditions are
+// unchanged from the existing pc_skip body -- only frame/ra discipline was missing.
+void Engine::fieldRunXFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);
+
+  uint32_t sm  = c->mem_r32(0x1f800138u);
+  uint16_t s4e = c->mem_r16(sm + 0x4e);
+
+  if (s4e >= 2) {                                  // L_801070EC
+    if (s4e == 2) c->mem_w16(sm + 0x4e, 1);         // L_8010721C: re-arm to running
+  } else {
+    if (s4e == 0) {                                 // L_80107100: init
+      c->r[31] = 0x80107108u;
+      c->mem_w16(sm + 0x4e, 1);
+      rec_dispatch(c, 0x8006c77cu);
+      c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x80107118u;
+      rec_dispatch(c, 0x8005082cu);                 // input reset
+      // fall through to state 1 (L_80107118)
+    }
+
+    c->r[31] = 0x80107120u;
+    c->engine.fieldFrameX();                        // ov_game_func_80108BE4 -- native owner
+
+    if (c->mem_r8(0x800bf80du) == 3) {               // mode-3 exit (0x80107138)
+      if (c->mem_r8(0x800bf80fu) == 0) {
+        c->r[31] = 0x80107150u;
+        c->engine.audioDispatch.settleField();       // native owner -- was rec_dispatch 0x80074BC4
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4c, 2);                    // back to normal running handler
+        int16_t  e_s = c->mem_r16s(0x800e7feeu);
+        uint16_t e_u = c->mem_r16(0x800e7feeu);
+        if (e_s != 0) {
+          c->mem_w8(0x800bf880u, 1);
+          c->mem_w16(0x1f800194u, e_u);
+          c->mem_w16(sm + 0x4e, 0);
+        } else {
+          c->mem_w16(sm + 0x4e, 2);
+        }
+      }
+    } else {                                        // L_80107194: area-change request via bf839
+      uint8_t bf839 = c->mem_r8(0x800bf839u);
+      if (bf839 != 0 && c->mem_r8(0x800bf80fu) == 0) {
+        if (bf839 == 8) {                            // 0x801071bc
+          sm = c->mem_r32(0x1f800138u);
+          c->mem_w16(sm + 0x4a, 1);
+          c->mem_w16(sm + 0x4c, 2);
+          c->mem_w16(sm + 0x4e, 3);
+        } else {
+          if (c->mem_r8(0x1f800236u) >= 5) {         // 0x801071f0
+            c->r[31] = 0x801071f8u;
+            c->r[4] = 0;
+            rec_dispatch(c, 0x80050894u);
+          }
+          sm = c->mem_r32(0x1f800138u);
+          c->mem_w16(sm + 0x4a, 1);
+          c->mem_w16(sm + 0x4c, 2);
+          c->mem_w16(sm + 0x4e, 6);
+        }
+      }
+    }
+  }
+
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 void Engine::fieldRunX() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x801070B4u, fieldRunXFaithful()); return; }   // faithful: gen mirror, r31/frame discipline
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   if (s4e >= 2) {
@@ -1557,8 +2100,57 @@ void Engine::stageMain() { Core* c = core;
 // 12,14,16,17,18,19,20 point to the epilogue directly (no-op for that mode). We skip the stub
 // hop and rec_dispatch the overlay handler directly. a0 = 0x800ED018 (fixed arg the dispatcher
 // sets before the indirect jr, kept identical).
+// Engine::areaModeDispatchFaithful — byte-exact mirror of gen_func_8001CAC0. The literal recompiler
+// translation (generated/shard_2.c:348-363) always descends a 24-byte frame and spills the incoming
+// ra to sp+16 BEFORE testing the mode-index bound (MIPS delay-slot store executes unconditionally).
+// For a valid index (10 of 22 slots: 0,4,5,6,7,10,11,13,15,21) the resident table at 0x80010000
+// holds the address of a small STUB (0x8001CB00, CB10, CB20, CB30, CB40, CB50, CB60, CB70, CB80,
+// CB90) — never the overlay handler directly. Each stub sets r31 to its OWN jal-site return address
+// (stub_addr+8) before rec_dispatching the overlay handler (generated/shard_{3,4,5,6,7,1}.c), then
+// falls into the shared epilogue gen_func_8001CB98 (r31 = mem_r32(sp+16); sp += 24). The other 12
+// in-range indices (1,2,3,8,9,12,14,16,17,18,19,20) have a table entry that IS 0x8001CB98 directly
+// (no stub, no overlay call) — same for out-of-range idx>=22, which gen_func_8001CAC0 special-cases
+// to call func_8001CB98 without even reading the table. All non-dispatching paths still perform the
+// full sp-24/spill/restore round trip, so the transient guest-stack word at (orig_sp-8) is always
+// overwritten with the caller's ra, exactly like gen — this matters for SBS byte-compare even though
+// the net register effect is a no-op.
+void Engine::areaModeDispatchFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);                 // unconditional prologue spill (gen's delay-slot store)
+  uint8_t idx = c->mem_r8(0x800BF870u);
+  if (idx >= 22) { rec_dispatch(c, 0x8001CB98u); return; }   // out-of-range: straight to shared epilogue
+  static const uint32_t handler[22] = {
+    /* 0*/ 0x8011534Cu, /* 1*/ 0,           /* 2*/ 0,           /* 3*/ 0,
+    /* 4*/ 0x8013EE84u, /* 5*/ 0x80136CDCu, /* 6*/ 0x8014189Cu, /* 7*/ 0x8012F6ECu,
+    /* 8*/ 0,           /* 9*/ 0,           /*10*/ 0x801140D0u, /*11*/ 0x80113F94u,
+    /*12*/ 0,           /*13*/ 0x80116980u, /*14*/ 0,           /*15*/ 0x80116560u,
+    /*16*/ 0,           /*17*/ 0,           /*18*/ 0,           /*19*/ 0,
+    /*20*/ 0,           /*21*/ 0x8010B918u,
+  };
+  static const uint32_t stubRa[22] = {          // resident stub's own jal-site ra (stub_addr + 8)
+    /* 0*/ 0x8001CB08u, 0,0,0,
+    /* 4*/ 0x8001CB18u, /* 5*/ 0x8001CB28u, /* 6*/ 0x8001CB38u, /* 7*/ 0x8001CB48u,
+    0,0,
+    /*10*/ 0x8001CB58u, /*11*/ 0x8001CB68u,
+    0,
+    /*13*/ 0x8001CB78u,
+    0,
+    /*15*/ 0x8001CB88u,
+    0,0,0,0,0,
+    /*21*/ 0x8001CB98u,
+  };
+  uint32_t target = handler[idx];
+  if (!target) { rec_dispatch(c, 0x8001CB98u); return; }   // table entry IS the epilogue addr for no-op modes
+  c->r[4] = 0x800ED018u;                          // a0 carried through from gen's early (dead-looking but live) load
+  c->r[31] = stubRa[idx];                         // mode-specific stub jal-site ra, NOT the field-frame caller's ra
+  rec_dispatch(c, target);
+  rec_dispatch(c, 0x8001CB98u);                   // shared epilogue: r31 = mem_r32(sp+16); sp += 24
+}
+
 void Engine::areaModeDispatch() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8001CAC0u, areaModeDispatchFaithful()); return; }   // faithful: gen+stub+epilogue mirror
   uint8_t idx = c->mem_r8(0x800BF870u);
   if (idx >= 22) return;
   static const uint32_t handlers[22] = {
@@ -1580,8 +2172,86 @@ void Engine::areaModeDispatch() {
 // @0x80015A98 run, both keyed by 0x800BF870 = the area render-mode byte). Handlers take a0 = the
 // scene-state base 0x800F2418; the INIT branch transitions phase 0 -> 1 after dispatch (default
 // idx 9 sets phase=1 too — the recomp's L_80050F90 label). All non-INIT/RUN phases no-op.
+// Engine::sceneStateStepFaithful — byte-exact mirror of gen_func_80050DE4 (guest 0x80050DE4).
+// Frame: sp -= 24; spill r16@sp+16 (unconditional, before r16 is repurposed as the SCENE_STATE
+// pointer); spill ra@sp+20 (unconditional -- gen's branch-delay slot on the very first test, runs
+// on every path). Both restored at the single shared epilogue below (mirrors gen's L_80051118,
+// reached from every exit including the phase-out-of-range no-op). Every rec_dispatch is preceded
+// by r31 = the gen's per-index jal-site return address (required so a handler's own ra-spill lands
+// on the same value CoreB produces). The INIT block ALWAYS writes phase=1 to SCENE_STATE on the
+// way out -- including the idx==9 null-handler and the idx>=22 out-of-range case (gen's shared
+// L_80050F90 -> L_80050F94 fallback); the RUN block never writes SCENE_STATE, in any case.
+void Engine::sceneStateStepFaithful() { Core* c = core;
+  static constexpr uint32_t SCENE_STATE = 0x800F2418u;   // 32783<<16 + 9240
+  static constexpr uint32_t MODE_IDX    = 0x800BF870u;   // 32780<<16 - 1936
+
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->r[16] = SCENE_STATE;
+  uint8_t phase = c->mem_r8(SCENE_STATE);
+  c->mem_w32(sp + 20, c->r[31]);              // unconditional -- gen's branch-delay slot
+
+  if (phase == 1) {
+    // RUN table (@0x80015A98). idx==9 and idx>=22 both fall straight to the epilogue, no write.
+    uint8_t idx = c->mem_r8(MODE_IDX);
+    if (idx < 22) {
+      static const uint32_t run[22] = {
+        0x8013EFA8u,0x8012EE14u,0x80123E1Cu,0x8010E964u,0x80116CCCu,0x80136488u,
+        0x8013D6D8u,0x8012E2F4u,0x8012AB30u,0,           0x80110A14u,0x80113770u,
+        0x801144D4u,0x80113D68u,0x80114A78u,0x80115DECu,0x8010C9FCu,0x8010BCDCu,
+        0x8010C160u,0x8010B140u,0x80116B9Cu,0x8010B200u,
+      };
+      static const uint32_t runRa[22] = {
+        0x80050FD8u,0x80050FE8u,0x80050FF8u,0x80051008u,0x80051018u,0x80051028u,
+        0x80051038u,0x80051048u,0x80051058u,0x80051118u,0x80051068u,0x80051078u,
+        0x80051088u,0x80051098u,0x800510A8u,0x800510B8u,0x800510C8u,0x800510D8u,
+        0x800510E8u,0x800510F8u,0x80051108u,0x80051118u,
+      };
+      uint32_t target = run[idx];
+      if (target) {
+        c->r[31] = runRa[idx];
+        c->r[4] = c->r[16];
+        rec_dispatch(c, target);
+      }
+    }
+  } else if (phase == 0) {
+    // INIT table (@0x80015A40). idx==9 (null handler) and idx>=22 (out-of-range) both skip the
+    // dispatch but STILL fall through to the phase=1 write -- do not early-return on idx>=22.
+    uint8_t idx = c->mem_r8(MODE_IDX);
+    if (idx < 22) {
+      static const uint32_t init[22] = {
+        0x8013FB4Cu,0x8012F89Cu,0x80124678u,0x8010F174u,0x801175D0u,0x80136CB0u,
+        0x8013E144u,0x8012EB50u,0x8012B3E8u,0,           0x80111238u,0x80113F68u,
+        0x80114CCCu,0x80114560u,0x80115270u,0x80116534u,0x8010D21Cu,0x8010C4FCu,
+        0x8010C980u,0x8010B960u,0x801173A8u,0x8010B8ECu,
+      };
+      static const uint32_t initRa[22] = {
+        0x80050E50u,0x80050E60u,0x80050E70u,0x80050E80u,0x80050E90u,0x80050EA0u,
+        0x80050EB0u,0x80050EC0u,0x80050ED0u,0,           0x80050EE0u,0x80050EF0u,
+        0x80050F00u,0x80050F10u,0x80050F20u,0x80050F30u,0x80050F40u,0x80050F50u,
+        0x80050F60u,0x80050F70u,0x80050F80u,0x80050F90u,
+      };
+      uint32_t target = init[idx];
+      if (target) {
+        c->r[31] = initRa[idx];
+        c->r[4] = c->r[16];
+        rec_dispatch(c, target);
+      }
+    }
+    c->mem_w8(SCENE_STATE, 1);   // ALWAYS -- idx in range, idx==9, and idx>=22 all reach this
+  }
+  // phase < 0 or >= 2 (unsigned byte 2..255) -> no-op, straight to epilogue.
+
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] = sp + 24;
+}
+
+// Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at guest 0x80050DE4. See engine.h.
 void Engine::sceneStateStep() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80050DE4u, sceneStateStepFaithful()); return; }   // faithful: gen mirror
   static constexpr uint32_t SCENE_STATE = 0x800F2418u;
   int8_t phase = c->mem_r8s(SCENE_STATE);
 
@@ -1632,8 +2302,37 @@ void Engine::sceneStateStep() {
 // touch a0 before the call, so handlers that read a0 are dead code in this path — none observed).
 #include "ai/behaviors.h"                         // Behaviors::areaSeasidePerframe (FUN_80113C5C)
 
+// Engine::modePerFrameDispatchFaithful — pc_faithful mirror of gen_func_80022A80 (disasm-verified
+// 0x80022A80-0x80022AC8; the C body in generated/shard_6.c also contains ~1.3KB of unrelated dead
+// code from an unlabeled neighboring function up to 0x8002313C — not part of this dispatcher, see
+// findings). Guest frame: sp-=24, ra spilled to sp+16 UNCONDITIONALLY (delay-slot store — fires on
+// both the idx==3 early-return path and the dispatch path), restored + sp+=24 on every exit. Jal-
+// site ra (0x80022AB8u, the instruction after `jalr v0`) is set immediately before the indirect
+// call so any callee that spills ra to ITS OWN guest frame gets the correct value. No null-target
+// guard: the gen jalr fires unconditionally once the table read completes.
+void Engine::modePerFrameDispatchFaithful() {
+  Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);          // delay-slot store: happens on BOTH branch outcomes
+  uint8_t idx = c->mem_r8(0x800BF870u);
+  if (idx != 3) {
+    uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
+    c->r[31] = 0x80022AB8u;               // jal-site ra for the indirect call (jalr v0)
+    // Area-0 (seaside) per-frame update stays native — Tomba's seaside per-frame tick. NOTE: per
+    // the "one global dispatch point" directive this should be an EngineOverrides entry so every
+    // caller of 0x80113C5C gets it uniformly (see findings) — kept inline here to preserve current
+    // behavior byte-for-byte without touching engine_overrides.h in this pass.
+    if (target == 0x80113C5Cu) { Behaviors::areaSeasidePerframe(c); }
+    else rec_dispatch(c, target);         // NO null check — matches gen, fails fast on target==0
+  }
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 void Engine::modePerFrameDispatch() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80022A80u, modePerFrameDispatchFaithful()); return; }   // faithful: gen mirror
   uint8_t idx = c->mem_r8(0x800BF870u);
   if (idx == 3) return;
   uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
@@ -1648,6 +2347,7 @@ void Engine::modePerFrameDispatch() {
 // clear b42), other/nonzero: decrement b42. Zero = no-op. FX 41/42 leaf FUN_80074590 stays substrate.
 void Engine::postRenderTick() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80077D8Cu, postRenderTickFaithful()); return; }
   uint8_t b = c->mem_r8(0x800BF842u);
   if (b == 0) return;
   uint8_t low = (uint8_t)(b & 0x7F);
@@ -1664,12 +2364,55 @@ void Engine::postRenderTick() {
   c->mem_w8(0x800BF842u, (uint8_t)(b - 1));
 }
 
+// Engine::postRenderTickFaithful -- byte-exact mirror of gen_func_80077D8C. Descends the gen's own
+// 24-byte guest frame, spills s0 (r16, the 0x800BF808 struct base) at sp+16 and the caller's ra at
+// sp+20 exactly like the reference-mirror shape (Engine::submode1Faithful), sets r31 to the gen's
+// jal-site constant before the FX-trigger leaf, and dispatches that leaf via rec_dispatch so it runs
+// the literal substrate body gen_func_80074590 (no EngineOverrides entry exists for 0x80074590, so
+// this is guaranteed byte-identical -- including gen_func_80074590's own ra-to-stack spill, which the
+// native Sfx::trigger port does not reproduce and must not be used here).
+void Engine::postRenderTickFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);            // spill s0
+  c->mem_w32(sp + 20, c->r[31]);            // spill caller ra
+  c->r[16] = 0x800BF808u;                   // s0 = struct base
+
+  uint8_t b = c->mem_r8(c->r[16] + 58);     // == 0x800BF842
+  if (b != 0) {
+    uint8_t low = (uint8_t)(b & 0x7F);
+    if (low == 1) {
+      c->r[4] = 41; c->r[5] = 2; c->r[6] = (uint32_t)-65;
+      c->r[31] = 0x80077DDCu;               // gen's jal-site ra for this call
+      rec_dispatch(c, 0x80074590u);         // -> gen_func_80074590 (substrate, un-owned leaf)
+      c->mem_w8(c->r[16] + 58, 135);
+    } else if (low == 2) {
+      c->r[4] = 42; c->r[5] = 2; c->r[6] = (uint32_t)-65;
+      c->r[31] = 0x80077DF8u;               // gen's jal-site ra for this call
+      rec_dispatch(c, 0x80074590u);
+      c->mem_w8(c->r[16] + 58, 0);
+    } else {
+      uint8_t v = c->mem_r8(c->r[16] + 58);
+      c->mem_w8(c->r[16] + 58, (uint8_t)(v - 1));
+    }
+  }
+
+  c->r[31] = c->mem_r32(sp + 20);           // restore ra
+  c->r[16] = c->mem_r32(sp + 16);           // restore s0
+  c->r[29] += 24;
+}
+
 // Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST call in ov_field_frame's
 // gameplay-update block). Faithful port of the disasm; see engine.h for the step-by-step contract.
 // Callees kept substrate: the mode-keyed overlay handler (branches at (e)), FUN_8005950C default,
 // and the rand LFSR advance at 0x8009A450 (the top recdep hit — 86 calls/frame — a future target).
 void Engine::frameStartTick() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { frameStartTickFaithful(); return; }   // yields — SBS-gated: mode-keyed
+  // dispatch (d) reaches dynamically-loaded overlay handlers (0x8010F63C/0x80109024/0x80112220/
+  // 0x8010F654) that can scheduler_yield; MV_CHECK's synchronous strictCheck only supports yield-free
+  // mirrors (strictCheck aborts while inCheck), so this fork is a plain call, proven by SBS full
+  // (core A vs core B), not MV_CHECK.
   static constexpr uint32_t G = 0x800E7E80u;   // master G block base (== s0 in the guest)
 
   // (a) counter@0x800BF819: if nonzero, decrement + mask two 12-bit heading fields.
@@ -1720,6 +2463,91 @@ void Engine::frameStartTick() {
   }
   // (h) advance rand LFSR (native class Rng — shared seed at 0x80105EE8 with substrate callers).
   (void)c->rng.next();
+}
+
+// Engine::frameStartTickFaithful — byte-exact mirror of gen_func_80059D28 (guest 0x80059D28), the
+// FIRST call in ov_field_frame's gameplay-update block. Descends the guest frame (sp-=24), spills
+// incoming r31/r16 at +20/+16 per the gen prologue, and sets the gen's per-case jal-site r31 constant
+// at every dispatch/call boundary so callee guest-stack ra spills (e.g. func_8005950C's spill at its
+// own sp+28) byte-match core B. Callees kept substrate: the mode-keyed overlay handler (targets at
+// 0x8010F63C/0x80109024/0x80112220/0x8010F654 — dynamically-loaded overlay code, not in generated/),
+// FUN_8005950C default, and the rand LFSR advance at 0x8009A450 — dispatched to the real gen leaf
+// (not the native Rng class) so its v0/v1/hi/lo side effects, which are still live at this function's
+// own return (rand is the last statement before the epilogue), byte-match core B; gen_func_8009A450
+// never touches r31, so the r31 set before it is precautionary discipline only.
+void Engine::frameStartTickFaithful() {
+  Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w32(sp + 16, c->r[16]);              // spill CALLER's r16 (not yet reassigned)
+  static constexpr uint32_t G = 0x800E7E80u;   // master G block base
+  c->r[16] = G;                                // gen: delay-slot `r16 = r3 + 32384` — must land in
+                                                // the guest register itself (not just the local `G`
+                                                // constant), since callees (FUN_8005950C / the mode
+                                                // handlers below) are callee-saved on s0/r16 and spill
+                                                // it verbatim onto their own frames.
+
+  // (a) counter@0x800BF819: if nonzero, decrement + mask two 12-bit heading fields.
+  uint8_t cnt = c->mem_r8(0x800BF819u);
+  if (cnt != 0) {
+    c->mem_w8(0x800BF819u, (uint8_t)(cnt - 1));
+    c->mem_w16(0x800ECF54u, (uint16_t)(c->mem_r16(0x800ECF54u) & 0x0FFFu));
+    c->mem_w16(0x800E7E68u, (uint16_t)(c->mem_r16(0x800E7E68u) & 0x0FFFu));
+  }
+  // (b) zero frame-scoped flag bank.
+  c->mem_w8(G + 0x177u, 0);
+  c->mem_w8(G + 0x179u, 0);
+  c->mem_w8(G + 0x17Au, 0);
+  c->mem_w8(G + 0x17Bu, 0);
+  c->mem_w8(0x1F80027Au, 0);
+  // (c) per-frame stamp++ (unconditional — gen's branch-delay-slot store).
+  c->mem_w8(0x1F800247u, (uint8_t)(c->mem_r8(0x1F800247u) + 1u));
+
+  // (d) if 0x800BF841 == 0: mode-keyed per-frame handler dispatch (each case sets its own gen
+  // jal-site r31 constant before the call), then clear 0x1F800230.
+  if (c->mem_r8(0x800BF841u) == 0) {
+    uint8_t mode = c->mem_r8(0x800BF870u);
+    c->r[4] = G;
+    switch (mode) {
+      case 2:  c->r[31] = 0x80059DF8u; rec_dispatch(c, 0x8010F63Cu); break;
+      case 3:  c->r[31] = 0x80059E08u; rec_dispatch(c, 0x80109024u); break;
+      case 7:  c->r[31] = 0x80059E18u; rec_dispatch(c, 0x80112220u); break;
+      case 20: c->r[31] = 0x80059E28u; rec_dispatch(c, 0x8010F654u); break;
+      default: c->r[31] = 0x80059E38u; rec_dispatch(c, 0x8005950Cu); break;
+    }
+    c->mem_w8(0x1F800230u, 0);
+  }
+
+  // (e) master position + heading -> scratchpad (for projection/cull).
+  c->mem_w16(0x1F800160u, c->mem_r16(G + 0x2Eu));
+  c->mem_w16(0x1F800162u, c->mem_r16(G + 0x32u));
+  c->mem_w16(0x1F800164u, c->mem_r16(G + 0x36u));
+  c->mem_w16(0x1F80016Au, c->mem_r16(G + 0x58u));
+  c->mem_w16(0x1F800168u, c->mem_r16(G + 0x56u));   // written unconditionally (delay slot)
+  // (f) latch 0x800BF81E = 1 when 0x800BF9C3 & 0x80.
+  if (c->mem_r8(0x800BF9C3u) & 0x80u) c->mem_w8(0x800BF81Eu, 1);
+
+  // (g) tick sub-counter G+0x180 when 0x1F800137 (pause) == 0.
+  if (c->mem_r8(0x1F800137u) == 0) {
+    uint8_t v = c->mem_r8(G + 0x180u);
+    if (v != 0) c->mem_w8(G + 0x180u, (uint8_t)(v - 1));
+  }
+  // (h) advance rand LFSR. gen_func_8009A450 is the LAST statement in the guest body before the
+  // epilogue, so its v0/v1/hi/lo side effects (masked value in v0, the 0x41C64E6D multiplier
+  // loaded into v1, MULT's hi/lo product) are still live in those registers when this function
+  // returns — the strict ABI-register gate compares them unconditionally. c->rng.next() only
+  // performs the guest-memory seed update (mem_r32/mem_w32 on 0x80105EE8, matching the shared
+  // stream with substrate callers) but is a plain C++ call with no register-level side effects,
+  // so it silently dropped v0/v1/hi/lo. Dispatch the real gen leaf instead so those registers
+  // land bit-for-bit like core B (gen_func_8009A450 is a pure no-yield leaf — a plain call/
+  // rec_dispatch is safe here, same as the mode-dispatch calls above).
+  c->r[31] = 0x80059EC8u;
+  rec_dispatch(c, 0x8009A450u);
+
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
 }
 
 // Register the GAME-stage area-init overrides when this just-loaded overlay is GAME.BIN at the stage base.

@@ -171,7 +171,26 @@ void BehaviorDispatch::dispatchObj(uint32_t obj, uint32_t handler) {
   uint32_t prev = c->game->fps60.current_object;
   c->game->fps60.current_object = obj;
   c->r[4] = obj;                                     // $a0 — the behaviors read the object here
-  if (!dispatchNative(handler)) rec_dispatch(c, handler);
+  // Pure-substrate leg (SBS core B / MV_CHECK's strict-mirror replay, game/core/verify_harness.h) —
+  // OR pc_faithful itself (pc_skip=false): must reach the literal gen body like every other
+  // rec_dispatch call, NOT the native beh_* reimplementation. The native beh_* table reproduces the
+  // RESULT, not the PSX bytes (CLAUDE.md "REBUILD, don't transcribe") — that's a pc_skip=true
+  // shortcut (same fork shape as the two native CD readers / every other pc_skip fork), not
+  // something pc_faithful can take, because pc_faithful is required byte-exact to recomp_path
+  // (game.h "pc_skip" doc). Without the `!pc_skip` term here, ObjectList::walkAllFaithful (and
+  // Array8Dispatch::tickFaithful / TransitionState3::walkOnce / walkAuxFaithful, which all funnel
+  // per-object dispatch through this one method) would run the REBUILT beh_* on the native leg
+  // while MV_CHECK's substrate-replay leg runs the literal gen body for the same handler — two
+  // different implementations, so every register/stack write the handler makes diverges (this is
+  // what MISMATCH ram 0x801FE8xx / reg v0 / reg v1 at 0x8007A904 was: leg 1 took a native beh_*
+  // shortcut, leg 2 ran the substrate handler body, and their scratch-register/stack churn differ
+  // even though both are "correct" — they're just not byte-identical). This is called directly from
+  // native *Faithful() C++, bypassing rec_dispatch's own EngineOverrides gate entirely — so it needs
+  // the SAME suppression rec_dispatch itself applies (runtime/recomp/overlay_router.cpp), PLUS the
+  // pc_skip fork rec_dispatch doesn't need (EngineOverrides are required byte-exact even under
+  // pc_faithful; the beh_* table is not — it's an explicit shortcut).
+  bool substrateOnly = c->game->psx_fallback || c->game->verify.inSubstrateLeg || !c->game->pc_skip;
+  if (substrateOnly || !dispatchNative(handler)) rec_dispatch(c, handler);
   c->game->fps60.current_object = prev;
 }
 

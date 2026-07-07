@@ -41,7 +41,11 @@ public:
   static constexpr uint32_t AUX_LIST_HEAD = 0x800F2738u;
 
   void walkAll();
+  void walkAllFaithful();   // faithful mirror of guest FUN_8007A904 (gen_func_8007A904) — used
+                             // when c->game->pc_skip == false. See object_list.cpp for the
+                             // frame/ra/s0 discipline this reproduces byte-for-byte.
   void walkAux();
+  void walkAuxFaithful();   // faithful mirror of guest FUN_80069B28 (gen_func_80069B28)
 
   // == walkList2 (guest FUN_8007B008) ==
   //   Same shape as walkAll's second loop: walks ONLY T2_OBJLIST_HEAD_2 (list-2), clears the

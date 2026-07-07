@@ -47,6 +47,7 @@ inline void walk_list(Core* c, uint32_t head, long* count) {
 
 void ObjectList::walkAll() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8007A904u, walkAllFaithful()); return; }
   long nodes = 0;
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_1), &nodes);
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
@@ -56,6 +57,43 @@ void ObjectList::walkAll() {
   if (mDbg && (mWalksAll % 300) == 0)
     fprintf(stderr, "[engine] objwalk #%ld: %ld nodes\n", mWalksAll, nodes);
   mWalksAll++;
+}
+
+// pc_faithful mirror of gen_func_8007A904 (guest FUN_8007A904). Guest frame (sp-24, ra@+20,
+// s0(r16)@+16) descended/spilled up front, matching the gen's unconditional delay-slot spill
+// (both happen before the list-1 empty check). Each dispatch sets r31 to the RE'd jal-site
+// constant (0x8007A930 list-1 / 0x8007A964 list-2) and carries `next` in r16 across the call so
+// a substrate-routed handler's own ra/s0 spill byte-matches core B. No MarginRenderer::flush —
+// gen_func_8007A904 never calls it (that's a render-overlay addition, deferred — see the
+// unconditional call still in walkAll() above for the pc_skip=true path).
+void ObjectList::walkAllFaithful() {
+  Core* c = core;
+  uint32_t node = c->mem_r32(T2_OBJLIST_HEAD_1);
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w32(sp + 16, c->r[16]);
+
+  while (node) {
+    c->r[16] = c->mem_r32(node + T2OBJ_NEXT);   // s0 = next — live value for a callee's own spill
+    c->r[31] = 0x8007A930u;                     // jal-site ra (list-1 loop)
+    c->mem_w8(node + T2OBJ_RENDER_FLAG, 0);
+    call_handler(c, node);
+    node = c->r[16];
+  }
+
+  node = c->mem_r32(T2_OBJLIST_HEAD_2);
+  while (node) {
+    c->r[16] = c->mem_r32(node + T2OBJ_NEXT);
+    c->r[31] = 0x8007A964u;                     // jal-site ra (list-2 loop)
+    c->mem_w8(node + T2OBJ_RENDER_FLAG, 0);
+    call_handler(c, node);
+    node = c->r[16];
+  }
+
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] = sp + 24;
 }
 
 void ObjectList::walkList2() {
@@ -73,6 +111,7 @@ void ObjectList::walkList2() {
 
 void ObjectList::walkAux() {
   Core* c = core;
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80069B28u, walkAuxFaithful()); return; }
   // FUN_80069B28: does NOT clear the render flag; dispatches per handler ptr via the shared path.
   for (uint32_t n = c->mem_r32(AUX_LIST_HEAD); n; ) {
     uint32_t h    = c->mem_r32(n + 0x1Cu);
@@ -80,4 +119,37 @@ void ObjectList::walkAux() {
     c->engine.behaviors.dispatchObj(n, h);
     n = next;
   }
+}
+
+// pc_faithful mirror of gen_func_80069B28 (guest FUN_80069B28). Guest frame (sp-24, ra@+20,
+// s0(r16)@+16) spilled UNCONDITIONALLY before the loop (matches gen — the spill happens even
+// when the aux list is empty). v0 (r2) is ALSO clobbered unconditionally by gen's LUI half of the
+// AUX_LIST_HEAD address load, even on the empty-list fast path — reproduced explicitly below,
+// else v0 is left stale from whatever computation preceded this call (caught by MV_CHECK: native
+// left a stale v0 while the substrate always shows 0x800F0000 on an empty aux list). Each dispatch
+// is issued with r31 set to the RE'd jal site (0x80069B50) so a substrate-routed handler's own ra
+// spill byte-matches core B, and `next` is carried in r16 across the call (not a host local) so a
+// substrate handler's s0 spill also byte-matches. Does NOT clear the render flag (only
+// walkAll/walkList2 do that).
+void ObjectList::walkAuxFaithful() {
+  Core* c = core;
+  c->r[2] = (uint32_t)32783u << 16;    // gen's LUI half of the AUX_LIST_HEAD address load — clobbers
+                                        // v0 unconditionally (even on the empty-list fast path), so it
+                                        // must be reproduced here or v0 is left stale from an earlier
+                                        // computation instead of 0x800F0000.
+  uint32_t node = c->mem_r32(AUX_LIST_HEAD);
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w32(sp + 16, c->r[16]);
+  while (node != 0) {
+    uint32_t h = c->mem_r32(node + 0x1Cu);
+    c->r[16] = c->mem_r32(node + 0x24u);   // next — carried in s0 across the call, matches gen
+    c->r[31] = 0x80069B50u;                // jal-site ra — matches gen's spill target for callees
+    c->engine.behaviors.dispatchObj(node, h);
+    node = c->r[16];
+  }
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
 }
