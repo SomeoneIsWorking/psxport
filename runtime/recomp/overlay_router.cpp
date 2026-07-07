@@ -162,6 +162,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) { interp_run(c, addr); return; }
+  // ENGINE OVERRIDES (user 2026-07-07): a native engine wired by guest address intercepts here —
+  // the single global dispatch point — for EVERY caller, substrate included. psx_fallback cores
+  // (SBS core B, PSXPORT_GATE) never consult the table: they are the pure substrate reference the
+  // override is byte-compared against.
+  if (c->game && !c->game->psx_fallback && c->game->engine_overrides.run(c, addr)) return;
   if (cfg_dbg("recdep")) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
   // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this

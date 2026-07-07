@@ -36,6 +36,7 @@
 #include "rmlui_overlay.h"         // class RmlOverlay — mod/debug HTML UI + world readout HUD
 #include "native_gate.h"           // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
 #include "platform_hle.h"          // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
+#include "engine_overrides.h"      // class EngineOverrides — global-dispatch engine override table
 #include "memcard.h"               // class Memcard — host-backed 128 KB memory card device
 #include "dbg_server.h"            // class DbgServer — live TCP debug endpoint (127.0.0.1)
 #include "gpu_perf.h"              // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
@@ -81,6 +82,8 @@ public:
   RmlOverlay  rml_overlay;  // in-app mod/debug HTML UI + live world-position HUD
   NativeGates native_gates; // A/B gate registry: `native <name> on|off` diag (music/seqtick/…)
   PlatformHle platform_hle; // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
+  EngineOverrides engine_overrides; // global dispatch overrides: guest addr -> native engine method
+                                    // (consulted at rec_dispatch top; never on psx_fallback cores)
   Memcard     memcard;      // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
   DbgServer   dbg_server;   // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
   GpuPerf     perf;         // per-frame CPU phase / frame-time profiler (REPL `debug perf`)
@@ -157,7 +160,8 @@ public:
            hle.game = this; rq.game = this; pcSched.game = this; cd.game = this; fmv.game = this;
            stub.game = this;
            spu_audio.game = this; native_music.game = this; music_list.game = this;
-           rml_overlay.game = this; platform_hle.game = this; memcard.game = this;
+           rml_overlay.game = this; platform_hle.game = this; engine_overrides.game = this;
+           memcard.game = this;
            dbg_server.game = this; verify.core = &core; ffspan.core = &core;
            if (!GpuDevice::sInstance) GpuDevice::sInstance = &gpu_dev;   // first Game claims the host device
            disc_state_init(&disc); cdc_state_init(&cdc); xa_state_init(&xa);

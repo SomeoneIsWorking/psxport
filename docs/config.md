@@ -83,6 +83,11 @@ C-level `backtrace()` of the fiber thread = the recompiled `func_XXXX`/`ov_*_gen
 see exactly which recomp function yields and read its callee-saved regs — the reliable tool for the
 deep-field-coro freeze; see findings/sbs.md).
 
+`dispatch` (engine_overrides.cpp) — logs every ENGINE-OVERRIDE hit at the global dispatch point
+(`rec_dispatch` top): `[dispatch] fN core=A 0xADDR Class::method ra a0-a3`. Every native engine
+wired by guest address (see CLAUDE.md "One global dispatch point") funnels through here, so this
+channel is the uniform call trace across substrate→native and native→native dispatch calls.
+
 `fadetrace` (screen_fade.cpp) — logs every native-path `ScreenFade::set` / `applyLeafCall` with the
 mode+rgb, and edge-logs HOLD latched / released transitions. Pairs with
 `PSXPORT_DISPWATCH=0x8007E9C8` (which surfaces every substrate fade dispatch with its guest stack).

@@ -100,10 +100,17 @@ spot-check AFTER Ghidra only.
 - **REBUILD, don't transcribe.** A native fn that reproduces PSX instructions/packets byte-for-byte is
   PSX-simulation. Match the observable RESULT (world it builds, picture it draws, interface state
   content reads back), not the PSX mechanism.
-- **Top-down, PC-driven; PSX never calls PC.** The override/flip system is REMOVED. `rec_dispatch(c,
-  leaf)` runs a still-PSX leaf via the substrate; the substrate can never re-enter native. Contiguity
-  required — own callers before callees. **No interpreter fallback**: a `rec_dispatch` miss aborts with
-  a backtrace. Fix a miss by seeding the recompiler or porting.
+- **One global dispatch point; engine overrides allowed (USER 2026-07-07).** `rec_dispatch(c, addr)`
+  is THE choke point. A native engine class may be wired by guest address in `EngineOverrides`
+  (runtime/recomp/engine_overrides.h, registered on Game) — then EVERY caller, substrate included,
+  reaches the native method. This retires the old "PSX never calls PC / contiguity required / only
+  hardware-sync HLE" rule: a leaf engine (e.g. the fade engine) can be owned globally on its own.
+  Rules: handlers use guest ABI (args in r4..r7, ret in r2) and must byte-match the substrate body
+  (SBS gates it — core B / `psx_fallback` never consults the table, staying the pure reference);
+  native call sites prefer routing wired addresses through `rec_dispatch` so calls stay uniform and
+  traceable (`PSXPORT_DEBUG=dispatch` logs every override hit with frame/core/ra/args). PlatformHle
+  remains the separate BIOS/hardware-sync HLE table. **No interpreter fallback**: a `rec_dispatch`
+  miss aborts with a backtrace. Fix a miss by seeding the recompiler, porting, or wiring an override.
 - **FAIL-FAST.** All I/O and timing PC-native + synchronous. Any PSX async/wait (VSync waits, CD
   command-waits, async CD reader, GPU/MDEC DMA timeouts, IRQ loops) must be done inline or ABORT with a
   diagnostic. Do NOT re-introduce instant-VSync / fake-CD bandaids or env escape hatches.
