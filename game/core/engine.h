@@ -110,6 +110,12 @@ public:
   //   handled here (was `ov_game_frame`).
   void stagePrologue();
   int  frame();
+  // stageBodyFaithful: the whole ov_game_gen_8010637C arc as a native task body on a PcScheduler
+  // fiber (faithful-execution model, same shape as Demo::stageBodyFaithful): stagePrologue (already
+  // guest-frame-faithful), then the substate loop — frame() for natively-owned sm[0x48] states,
+  // the guest handler dispatched for unowned ones, substrate tail yield each iteration. pc_skip
+  // keeps the per-tick stagePrologue()/frame() pair via runGameStanza.
+  void stageBodyFaithful();
   // stageMain: OLD guest-loop entry (prologue + coro-redirect into 0x801063F4). Kept as reference /
   // fallback (native per-frame path calls stagePrologue + frame directly). Was ov_game_stage_main.
   void stageMain();

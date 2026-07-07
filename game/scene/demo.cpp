@@ -152,8 +152,8 @@ void Demo::s6() { Core* c = core;
   rec_dispatch(c, 0x8007b45cu);             // page sub-machine (SYNC)
   uint32_t sm = c->mem_r32(SM_PTR);
   if (c->mem_r16(sm + 0x50) == 3) {
-    c->r[4] = 1; c->r[5] = 1; rec_dispatch(c, 0x80106824u);   // commit (a0=1,a1=1)
-    c->r[4] = 1;             rec_dispatch(c, 0x80106690u);    // commit2 (a0=1)
+    c->r[4] = 1; c->r[5] = 1; c->r[31] = 0x80106618u; rec_dispatch(c, 0x80106824u);   // commit (a0=1,a1=1)
+    c->r[4] = 1;             c->r[31] = 0x80106620u; rec_dispatch(c, 0x80106690u);    // commit2 (a0=1)
     sm = c->mem_r32(SM_PTR);
   }
   uint8_t s6b = c->mem_r8(sm + 0x6b);
@@ -540,6 +540,7 @@ static void demo_tail_rend(Core* c);
 static void demo_tail_cf2c(Core* c);
 
 static void demo_frame_s2(Core* c) {
+  c->r[31] = 0x8010646Cu;
   rec_dispatch(c, 0x8010696cu);                // title sub-machine (SYNC)
   uint32_t v0 = c->r[2];
   uint32_t sm = c->mem_r32(SM_PTR);
@@ -549,6 +550,7 @@ static void demo_frame_s2(Core* c) {
     if (c->mem_r8(sm + 0x68) == 0) { c->mem_w16(sm + 0x48, 3); c->mem_w8(sm + 0x68, 2); }
     else {
       c->mem_w8(sm + 0x68, 0); c->mem_w16(sm + 0x48, 4); c->mem_w16(sm + 0x50, 0); c->mem_w8(sm + 0x6b, 0);
+      c->r[31] = 0x801064DCu;
       rec_dispatch(c, 0x8001cf2cu); c->mem_w8(0x800bf84au, 0);   // engine update (SYNC)
     }
     c->mem_w16(sm + 0x4a, 0);
@@ -581,6 +583,7 @@ static void demo_tail_cf2c(Core* c) {
 // twin of ov_demo_s3. Outcome 1 -> s7 (attract); 2 -> phase on sm[0x68]: ==2 -> s5 (LEAVE DEMO/New
 // Game) clearing *0x1F800134; else -> s6 (sub-page); 3 (back/cancel) -> s2. All paths end TAIL_REND.
 static void demo_frame_s3(Core* c) {
+  c->r[31] = 0x801064F0u;
   rec_dispatch(c, 0x80106ac4u);                // main-menu sub-machine (SYNC)
   uint32_t v0 = c->r[2];
   uint32_t sm = c->mem_r32(SM_PTR);
@@ -591,6 +594,7 @@ static void demo_frame_s3(Core* c) {
       c->mem_w16(sm + 0x48, 5); c->mem_w8(sm + 0x68, 0); c->mem_w8(0x1f800134u, 0);
     } else {                                   // -> s6 (sub-page)
       c->mem_w8(sm + 0x68, 0); c->mem_w16(sm + 0x48, 6); c->mem_w8(sm + 0x6b, 0); c->mem_w16(sm + 0x50, 0);
+      c->r[31] = 0x8010655Cu;
       rec_dispatch(c, 0x800750d8u); c->mem_w8(0x800bf808u, 0);   // page close (SYNC)
     }
   } else if (v0 == 3) {                        // back -> s2
@@ -668,11 +672,12 @@ static void demo_frame_s4(Core* c) {
 // 0x80106824(1,1)+0x80106690(1). Then on sm[0x6b]: ==1 -> s3 (sm[0x68]=3); ==2 -> s3 (sm[0x68]=2); both
 // end TAIL_CF2C; else stay -> TAIL_REND. Return-based twin of ov_demo_s6.
 static void demo_frame_s6(Core* c) {
+  c->r[31] = 0x801065F4u;
   rec_dispatch(c, 0x8007b45cu);                // page sub-machine (SYNC)
   uint32_t sm = c->mem_r32(SM_PTR);
   if (c->mem_r16(sm + 0x50) == 3) {
-    c->r[4] = 1; c->r[5] = 1; rec_dispatch(c, 0x80106824u);   // commit (a0=1,a1=1)
-    c->r[4] = 1;             rec_dispatch(c, 0x80106690u);    // commit2 (a0=1)
+    c->r[4] = 1; c->r[5] = 1; c->r[31] = 0x80106618u; rec_dispatch(c, 0x80106824u);   // commit (a0=1,a1=1)
+    c->r[4] = 1;             c->r[31] = 0x80106620u; rec_dispatch(c, 0x80106690u);    // commit2 (a0=1)
     sm = c->mem_r32(SM_PTR);
   }
   uint8_t s6b = c->mem_r8(sm + 0x6b);

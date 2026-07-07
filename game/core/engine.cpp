@@ -73,7 +73,9 @@ void Engine::s48_0() { Core* c = core;
   c->mem_w16(sm + 0x4a, 0);          // sm[0x4a] = 0
   c->mem_w16(sm + 0x4c, 0);          // sm[0x4c] = 0
   c->mem_w8 (sm + 0x69, 0);          // sm[0x69] = 0
+  c->r[31] = 0x80108708u;
   rec_dispatch(c, 0x8007a8e0u);      // per-area setup (resident system, synchronous)
+  c->r[31] = 0x80108710u;
   rec_dispatch(c, 0x8007b38cu);      // per-area setup (resident system, synchronous)
   c->r[29] = sp; c->r[31] = ra;      // mirror epilogue: addiu sp,+0x18; jr ra
 }
@@ -92,6 +94,7 @@ void Engine::s48_1() { Core* c = core;
   c->mem_w8 (sm + 0x69, 0);          // sm[0x69] = 0
   c->mem_w8 (0x1f8001ff, 0xff);      // DAT_1f8001ff = 0xff
   c->mem_w16(0x1f800278, 0);         // DAT_1f800278 = 0 (16-bit; delay-slot before the setup call)
+  c->r[31] = 0x80108760u;
   rec_dispatch(c, 0x8007b3f4u);      // per-area setup (resident system, synchronous)
   c->mem_w8 (0x1f800206, 0);         // display flags cleared after setup
   c->mem_w8 (0x1f800236, 0);
@@ -1221,6 +1224,31 @@ void Engine::stagePrologue() { Core* c = core;
   c->mem_w16(task + 0x4e, 0);
   c->mem_w16(task + 0x50, 0);
   if (cfg_dbg("stage")) fprintf(stderr, "[stage] ov_game_stage_prologue run, sm[0x48]=%u\n", init48);
+}
+
+// pc_faithful GAME stage body (fiber task; see engine.h). Byte shape: ov_game_gen_8010637C +
+// ov_game_gen_801063F4. stagePrologue leaves the guest frame descended and s0/s1/s2 holding the
+// loop constants, exactly like the substrate (the frame stays live for the whole stage). frame()
+// bumps the 0x1F800198 counter itself when it handles the state; the unowned-state fallback
+// dispatches the guest sm[0x48] handler (deep yields park the fiber) and bumps the counter here.
+void Engine::stageBodyFaithful() { Core* c = core;
+  stagePrologue();
+  for (;;) {
+    c->game->ffspan.begin();
+    int handled = frame();
+    c->game->ffspan.end("gameframe");
+    if (!handled) {
+      uint32_t sm = c->mem_r32(0x1f800138u);
+      uint16_t s48 = c->mem_r16(sm + 0x48);
+      if (s48 == 1)      { c->r[31] = 0x8010644Cu; rec_dispatch(c, 0x80108720u); }
+      else if (s48 == 0) { c->r[31] = 0x8010643Cu; rec_dispatch(c, 0x801086E0u); }
+      else if (s48 == 2) { c->r[31] = 0x8010645Cu; rec_dispatch(c, 0x80108784u); }
+      c->mem_w16(0x1f800198u, (uint16_t)(c->mem_r16(0x1f800198u) + 1));
+    }
+    c->r[4] = 1;
+    c->r[31] = 0x80106470u;
+    rec_dispatch(c, 0x80051F80u);          // loop-tail yield (EngineOverrides -> yieldPrim)
+  }
 }
 
 // OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x801063F4). SUPERSEDED by the

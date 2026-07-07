@@ -314,7 +314,7 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
     task_started[i] = 0;
   }
   if (!native_content) return STANZA_NOT_MINE;
-  // Native GAME stanza runs under BOTH pc_skip modes.
+  if (!game->pc_skip) return STANZA_NOT_MINE;    // pc_faithful GAME runs on the stage fiber
   if (!game_fresh && !(game_native[i] && st == 2 && task_started[i]))
     return STANZA_NOT_MINE;
   if (game_fresh) {
@@ -426,7 +426,7 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
   const int fresh = (st == 3 || (st == 2 && !task_started[i]));
   if (fresh) {
     const uint32_t entry = c->mem_r32(base + 0xc);
-    if (entry != 0x8010649Cu && entry != 0x801062E4u) return STANZA_NOT_MINE;
+    if (entry != 0x8010649Cu && entry != 0x801062E4u && entry != 0x8010637Cu) return STANZA_NOT_MINE;
     if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
     task_ctx[i] = loop;
     task_ctx[i].r[29] = c->mem_r32(base + 8);
@@ -437,8 +437,9 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
     demo_native[i] = 0; game_native[i] = 0; game_coop[i] = 0;
     Core* cc = c;
     co = new Coro();
-    if (entry == 0x8010649Cu) co->start([cc] { cc->engine.startBinStageFaithful(); });
-    else                      co->start([cc] { cc->engine.demo.stageBodyFaithful(); });
+    if (entry == 0x8010649Cu)      co->start([cc] { cc->engine.startBinStageFaithful(); });
+    else if (entry == 0x801062E4u) co->start([cc] { cc->engine.demo.stageBodyFaithful(); });
+    else                           co->start([cc] { cc->engine.stageBodyFaithful(); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;
   } else if (st != 2 || !co || co->done()) {
