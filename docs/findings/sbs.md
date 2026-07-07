@@ -5,7 +5,43 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
-## f0 strict-faithful divergence ANATOMY (2026-07-07) — dead MIPS stack scratch vs live yield context; reorg verified non-regressive
+## f0 strict-faithful divergence CLOSED by the faithful-execution model (2026-07-07); frontier now f2 FUN_800754F4 yield cadence
+
+**Status: the f0 0x801FE808..0x801FEA99 divergence below is FIXED** (commits a80c9f8 + cb1f0d7,
+implementing docs/faithful-execution.md). The "proposed resolution / dead-byte tracker" idea in the
+anatomy entry below was superseded by the user's ruling: no exemptions — the bytes are produced
+organically instead.
+
+- **Ported scheduler primitives** as PcScheduler methods with full guest-stack discipline (frame
+  descents, live s-reg/ra spills, task-slot writes): `yieldPrim` (FUN_80051F80), `spawnPrim`
+  (FUN_80051F14), `spawnAndWait` (FUN_80044BD4), `forceClose` (FUN_80052010), `selfClose`
+  (FUN_80051FB4). Registered in EngineOverrides at their guest addresses (boot.cpp); core B never
+  consults the table. Byte shapes from the generated recomp bodies (gen_func_* in shard_2/3/5/6.c).
+- **STAGE-0 native fiber body**: `Engine::startBinStageFaithful` is the complete ov_start_gen_8010649C
+  port run on a Coro fiber (`PcScheduler::runStage0FiberStanza`) — per-iteration CdlFILE records at
+  sp+16+i*24 (NOT one reused buffer; this was the 0x801FE848..A98 string-bytes gap), RECT at sp+400,
+  XA CdlFILE at sp+408, guest s-regs live through the loops, SM loop suspending naturally inside the
+  ported primitives. emit_fun_*_prologue byte blobs + stage0AdvanceFaithful step machinery DELETED.
+- **Task-1 FUN_80044F58 body**: `Asset::loadTexgroup` frame discipline + `unpackGroupFaithful`
+  (FUN_80044E84 frame + libgs LoadImage/DrawSync dispatched at the live guest sp) + lzDecompress
+  guest-frame offset table (gen_func_80044D8C sp+0..28).
+
+**Verified:** f0/f1 hold ZERO-DIFF strict. First divergence now **f2** (0x800AC638 gfx-ctx +
+0x800BE36A.. area file-table + done_flag): core B's task-1 FUN_8004514C fiber YIELDS INSIDE
+FUN_800754F4 (SEQ/VAB VRAM build; `[yieldpc] waitloop=0x8007542C sp=0x801FF188`) so its body spans
+frames, while A's `preloadStage1AsTask` completes in one tick. Next chunk: port the FUN_8004514C arc
+the same way — run it as a native fiber body (extend runTask1PreloadStanza or generalize the native-
+fiber stanza) and RE FUN_800754F4's yield loop (Ghidra) so A parks at the same points with the same
+frames. pc_skip (`./run.sh`, 120f stage=801062E4 sm48=2), GATE (200f), and standalone
+PSXPORT_PC_SKIP=0 (200f reaches DEMO) all verified non-regressed.
+
+**Known tooling issue:** the SBS rewind-and-wwatch replay can hang in `~Coro` (join) when tearing
+down a desynced native fiber after RAM-snapshot restore — fiber C-stack position no longer matches
+restored guest state. Watchdog SIGINT shows `runStage0FiberStanza -> ~Coro -> thread::join`. Harness
+interaction only (the pre-rewind divergence report is already printed); fix when it next blocks a
+diagnosis.
+
+## f0 strict-faithful divergence ANATOMY (2026-07-07, historical — see CLOSED entry above) — dead MIPS stack scratch vs live yield context; reorg verified non-regressive
 
 Strict compare (`PSXPORT_SBS_MODE=full PSXPORT_SBS_PCFAITHFUL=1`) diverges at lockstep f0,
 0x801FE808..0x801FEA99 (task-0 stack). Verified IDENTICAL signature on pre-reorg c308fd6 (same
