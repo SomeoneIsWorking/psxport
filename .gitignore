@@ -1,5 +1,5 @@
 # Generated recompiler output — regenerable from the ROM
-generated/
+generated
 
 # Build dirs
 build/
@@ -32,7 +32,7 @@ bios/scph5501.bin
 vendor/openbios-src/
 
 # recompiler generated output (regenerable; never hand-edit)
-/generated/
+/generated
 __pycache__/
 *.pyc
 
