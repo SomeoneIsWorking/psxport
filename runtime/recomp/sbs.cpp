@@ -351,7 +351,7 @@ public:
   void  summarizeDivergence(uint32_t every);
   void  stepCore(Game* g, int which);
   void  grabPane(Game* g, uint8_t* rgba, int* ow, int* oh);
-  void  presentPanes() { sbs_rl_present(mA, mRgbaA, mWa, mHa, mRgbaB, mWb, mHb); }
+  void  presentPanes();
   uint16_t btnBit(const char* n) const;
   void  parseKeys();
   void  feedInput();
@@ -740,7 +740,22 @@ void Sbs::Impl::stepCore(Game* g, int which) {
 // Render ONE core's just-emitted frame into the shared VK target HEADLESS and read it back to its CPU RGBA
 // pane buffer (SDL_GPU window then draws it). Resets the VK geometry batch. Records the live display-region
 // size for the SDL_GPU window upload.
+// PSXPORT_SBS_NOPRESENT=1 — headless byte-compare runs skip the per-frame pane readback +
+// present entirely (the VK readback dominates wall time once real 3D renders; the RAM compare
+// needs none of it). Lazy latch so REPL-less runs pay one getenv.
+static int sbs_nopresent() {
+  static int v = -1;
+  if (v < 0) { const char* e = getenv("PSXPORT_SBS_NOPRESENT"); v = (e && *e && e[0] != '0') ? 1 : 0; }
+  return v;
+}
+
+void Sbs::Impl::presentPanes() {
+  if (sbs_nopresent()) return;
+  sbs_rl_present(mA, mRgbaA, mWa, mHa, mRgbaB, mWb, mHb);
+}
+
 void Sbs::Impl::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
+  if (sbs_nopresent()) { *ow = 4; *oh = 4; return; }
   int sx, sy, w, h; gpu_disp_region(&g->core, &sx, &sy, &w, &h);
   if (w < 1) w = 1; if (h < 1) h = 1;
   if (w > 1024) w = 1024; if (h > 512) h = 512;

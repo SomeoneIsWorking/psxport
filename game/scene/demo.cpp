@@ -840,7 +840,10 @@ void Demo::stageBodyFaithful() { Core* c = core;
         rec_dispatch(c, 0x80052078u);           // does not return (entry rewrite + yield)
         break;
       case 6: demo_frame_s6(c); break;
-      case 7: demo_frame_s7(c); break;
+      case 7:                                   // L_80106668 — ATTRACT: run the real phase
+        c->r[31] = 0x80106670u;                 // machine; its deep loads yield on the fiber
+        rec_dispatch(c, 0x80106C24u);
+        break;
       default: break;                           // sub >= 8: straight to the tail
     }
     c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // L_80106674 frame counter
