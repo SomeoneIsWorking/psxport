@@ -5,6 +5,25 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Faithful s48_2 chain discipline (2026-07-07, 640d23e) — frontier f29 = SOP field-mode
+
+The RUNNING chain (frame -> s48_2_frame -> submode0) now mirrors the guest byte shape (frames,
+spills, per-case jal-site ras from gen 80108784 / 8010882C). Autonav frontier f28 -> **f29**.
+
+**OPEN FRONTIER f29 — the SOP field-mode subtree.** At f29 (SOP intro sm[0x50]==0 first work
+frame) A runs native Sop::fieldMode (game/scene/sop.cpp:471) vs B's guest 0x80109450, and they
+differ in SUBSTANCE, not just frames: different GP0 packet values in the packet pool
+(0x800BFE68: A=A0A0/0E04 vs B=5A60/0A03), different file-table values (0x800BE0E0 A=075F vs
+B=17D9), and A never makes B's 0x800834A0 (libgpu timeout-arm) call from jal site 0x80109218.
+Sop::fieldMode is a pre-fiber-era REBUILD full of hand-tuned slip machinery (sop_field_step
+defer, RNG compensations) — the same class demo_s0_step was, now obsolete under the fiber model.
+
+**Next-session recipe:** convert case-by-case against gen ov_sop/ov_game 0x80109450 (find its
+gen body first — 0x80109450 is the loaded MODE overlay's field-mode fn), with the established
+pattern: guest frame discipline + call-site ras + organic yields (spawnAndWait primitive) +
+lib leaves dispatched (lib-fallback directive). Delete the slip machinery as the fiber
+structure supersedes it. Each sub-case lands with a strict autonav run naming the next byte.
+
 ## Faithful GAME-stage fiber + ra sweep (2026-07-07, 4f0afba) — autonav frontier f28 = native submode0 vs guest
 
 GAME stage runs on the stage fiber (Engine::stageBodyFaithful); runGameStanza is pc_skip-only.
