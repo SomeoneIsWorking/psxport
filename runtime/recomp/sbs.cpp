@@ -76,7 +76,7 @@ void sbs_rl_present(Game* game, const unsigned char* rgbaA, int wA, int hA, cons
 // destroyed on process exit).
 // ============================================================================
 
-enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE };
+enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE, M_SKIP };
 constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
 constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
@@ -180,6 +180,18 @@ public:
   uint32_t mDivBytesN = 0;
   char     mBtA[4096] = {0}, mBtB[4096] = {0};
   bool     mHaveDbgsrv = false;
+
+  // ---- M_SKIP observable-output compare (USER 2026-07-08) ----
+  // pc_skip vs recomp is NOT byte-comparable (cadence legitimately collapses); instead compare a
+  // POSITIVE LIST of observable state and report only SETTLED divergences (a region must differ
+  // for kObsPersist consecutive frames — transient lead/lag during loads is by design).
+  static constexpr int kObsPersist = 60;
+  static constexpr int kNObs = 5;               // fixed regions + area-deref + SPU RAM (below)
+  int      mObsCnt[8]  = {0};                   // consecutive differing frames per observable
+  bool     mObsDone[8] = {false};               // reported already (report once, stay running)
+  uint8_t* mObsSpuA = nullptr;                  // 512 KB SPU RAM peek buffers
+  uint8_t* mObsSpuB = nullptr;
+  void checkObservables();
 
   // ---- write-watchpoint record (exact corrupting-write site) ----
   bool     mWwArmed = false;
@@ -365,7 +377,7 @@ public:
 
 const char* Sbs::Impl::modeName() const {
   return mMode == M_RENDER ? "render" : mMode == M_GAMEPLAY ? "gameplay" :
-         mMode == M_ORACLE ? "oracle" : "full";
+         mMode == M_ORACLE ? "oracle" : mMode == M_SKIP ? "skip" : "full";
 }
 
 // Noise-filter method DEFINITIONS were removed with their declarations above (2026-07-03).
@@ -443,6 +455,7 @@ void Sbs::Impl::applyMode(Game* g, int which) {
     case M_GAMEPLAY: r->mode.setPsxRender(true);          break;   // PSX render on BOTH (isolate gameplay)
     case M_FULL:     r->mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
     case M_ORACLE:   r->mode.setPsxRender(false);         break;   // A native; B goes through use_interp+soft_gpu
+    case M_SKIP:     r->mode.setPsxRender(which != 0);    break;   // A = real ./run.sh config, B PSX
   }
 }
 
@@ -613,7 +626,85 @@ static const char* addrLabel(uint32_t a) {
   return "?";
 }
 
+void Sbs::Impl::checkObservables() {
+  // Positive list of observable regions (label, lo, hi) — guest RAM unless noted. Grow this list
+  // as observable-output bugs surface; it is the OPPOSITE of an allowlist (what MUST match).
+  struct Obs { const char* label; uint32_t lo, hi; };
+  static const Obs kObs[kNObs] = {
+    { "AUDIO fx_table",        0x800A4D18u, 0x800A4EF8u },
+    { "AUDIO fx_area_ptrs",    0x800A4EF8u, 0x800A4F80u },
+    { "AUDIO seq_slots",       0x800BE3B8u, 0x800BE3F8u },
+    { "AUDIO global_scale",    0x800FB165u, 0x800FB166u },
+    { "libcd file-table",      0x800BE0F0u, 0x800BE110u },
+  };
+  auto ramA = [this](uint32_t a){ return mA->core.ram[(a & 0x1FFFFFFFu)]; };
+  auto ramB = [this](uint32_t a){ return mB->core.ram[(a & 0x1FFFFFFFu)]; };
+  auto report = [this](int idx, const char* label, uint32_t addr, uint8_t va, uint8_t vb) {
+    fprintf(stderr, "\n[sbs-obs] *** SETTLED OBSERVABLE DIVERGENCE f%u [%s] @0x%08X A=%02X B=%02X"
+                    " (persisted %d frames) ***\n", mFrame, label, addr, va, vb, kObsPersist);
+    mObsDone[idx] = true;
+    if (mHaveDbgsrv) { fprintf(stderr, "[sbs-obs] paused for inspection.\n"); mA->dbg_server.setPaused(true); }
+  };
+  for (int i = 0; i < kNObs; i++) {
+    if (mObsDone[i]) continue;
+    uint32_t bad = 0; uint8_t va = 0, vb = 0;
+    for (uint32_t a = kObs[i].lo; a < kObs[i].hi; a++)
+      if (ramA(a) != ramB(a)) { bad = a; va = ramA(a); vb = ramB(a); break; }
+    if (!bad) { mObsCnt[i] = 0; continue; }
+    if (++mObsCnt[i] >= kObsPersist) report(i, kObs[i].label, bad, va, vb);
+  }
+  { // area fx table deref: 0x800A4EF8[area] -> per-area SFX table content (in loaded area data)
+    const int idx = kNObs;
+    if (!mObsDone[idx]) {
+      uint8_t area = mA->core.mem_r8(0x800BF870u);
+      uint32_t pA = mA->core.mem_r32(0x800A4EF8u + area * 4u);
+      uint32_t pB = mB->core.mem_r32(0x800A4EF8u + area * 4u);
+      uint32_t bad = 0; uint8_t va = 0, vb = 0;
+      if (pA != pB) { bad = 0x800A4EF8u + area * 4u; va = (uint8_t)pA; vb = (uint8_t)pB; }
+      else if ((pA & 0x1FFFFFFFu) < 0x1FFE00u && pA)
+        for (uint32_t o = 0; o < 0x200; o++)
+          if (ramA(pA + o) != ramB(pA + o)) { bad = pA + o; va = ramA(pA + o); vb = ramB(pA + o); break; }
+      if (!bad) mObsCnt[idx] = 0;
+      else if (++mObsCnt[idx] >= kObsPersist) report(idx, "AUDIO area_fx_deref", bad, va, vb);
+    }
+  }
+  { // SPU RAM: the loaded VAB sample banks — THE observable for issue #29 (wrong sample selected).
+    // Peek both instances via bind-swap (each core's frame-step rebinds its own SPU afterwards).
+    const int idx = kNObs + 1;
+    if (!mObsDone[idx]) {
+      if (!mObsSpuA) { mObsSpuA = (uint8_t*)malloc(524288); mObsSpuB = (uint8_t*)malloc(524288); }
+      mA->spu.bind(); SPU_PeekRAM(mObsSpuA);
+      mB->spu.bind(); SPU_PeekRAM(mObsSpuB);
+      uint32_t bad = 0; bool diff = false;
+      if (memcmp(mObsSpuA, mObsSpuB, 524288) != 0) {
+        for (uint32_t o = 0; o < 524288; o++)
+          if (mObsSpuA[o] != mObsSpuB[o]) { bad = o; diff = true; break; }
+      }
+      if (!diff) mObsCnt[idx] = 0;
+      else if (++mObsCnt[idx] >= kObsPersist) {
+        fprintf(stderr, "\n[sbs-obs] *** SETTLED OBSERVABLE DIVERGENCE f%u [SPU RAM / VAB banks] "
+                        "@0x%05X A=%02X B=%02X (persisted %d frames) ***\n", mFrame, bad,
+                mObsSpuA[bad], mObsSpuB[bad], kObsPersist);
+        for (int k = 0; k < 3; k++) {   // a few following diff runs for shape
+          while (bad < 524288 && mObsSpuA[bad] == mObsSpuB[bad]) bad++;
+          if (bad >= 524288) break;
+          uint32_t run = bad; while (run < 524288 && mObsSpuA[run] != mObsSpuB[run] && run - bad < 16) run++;
+          fprintf(stderr, "[sbs-obs]   spu 0x%05X..0x%05X A:", bad, run);
+          for (uint32_t o = bad; o < run; o++) fprintf(stderr, " %02X", mObsSpuA[o]);
+          fprintf(stderr, "  B:");
+          for (uint32_t o = bad; o < run; o++) fprintf(stderr, " %02X", mObsSpuB[o]);
+          fprintf(stderr, "\n");
+          bad = run + 1;
+        }
+        mObsDone[idx] = true;
+        if (mHaveDbgsrv) { fprintf(stderr, "[sbs-obs] paused for inspection.\n"); mA->dbg_server.setPaused(true); }
+      }
+    }
+  }
+}
+
 void Sbs::Impl::checkDivergence() {
+  if (mMode == M_SKIP) { checkObservables(); return; }
   // PSXPORT_SBS_NOPAUSE=1 keeps SBS running past a divergence: each frame we log EVERY diverging
   // BYTE-RUN (contiguous run of differing bytes) with a category label and per-core values, then
   // continue. Purpose: let a native-code bug (e.g. #29 wrong SFX) surface as an AUDIO-labelled
@@ -1276,6 +1367,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (!strcmp(m, "gameplay"))               mMode = M_GAMEPLAY;
     else if (!strcmp(m, "full") || !strcmp(m, "both")) mMode = M_FULL;   // "both" = legacy alias
     else if (!strcmp(m, "oracle"))            mMode = M_ORACLE;
+    else if (!strcmp(m, "skip"))              mMode = M_SKIP;
     else                                       mMode = M_RENDER;
   }
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) mLo = (uint32_t)strtoul(e, 0, 0); }
@@ -1346,7 +1438,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // the faithful-execution model pc_skip=false runs NATIVE bodies — docs/faithful-execution.md.)
   // A future SEPARATE harness mode will compare pc_skip=true against the oracle on
   // OBSERVABLE-OUTPUT state only (user 2026-07-07, not yet built — see docs/findings/sbs.md).
-  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = false;
+  // M_SKIP (USER 2026-07-08): core A runs the REAL default config (pc_skip=true, the ./run.sh
+  // path) against the recomp oracle, compared on OBSERVABLE OUTPUT state only (checkObservables —
+  // settled-divergence semantics, since pc_skip legitimately collapses load cadence). All other
+  // modes keep core A hard-wired to pc_faithful strict.
+  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = (mMode == M_SKIP);
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
   mB->core.storeWatchCb = &Sbs::storeCb;

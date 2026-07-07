@@ -55,6 +55,18 @@ public:
   // run twice while armed (do not arm CD-advancing leaves — SBS covers those); no nesting.
   bool strictArmed(uint32_t addr);      // also false while inCheck (no nesting)
   void strictCheck(uint32_t addr, void (*fn)(void*), void* ctx);
+
+  // ---- fork-level SKIP-vs-FAITHFUL observable TDD gate (USER 2026-07-08) -------------------------
+  // SV_CHECK at a pc_skip fork: when armed (PSXPORT_SKIP_VERIFY=all or =0xADDR[,..]), run the SKIP
+  // leg, snapshot the OBSERVABLE set (game/core/observables.h positive list + 512 KB SPU RAM),
+  // rewind guest+SPU state, run the ORACLE leg — the substrate arc the skip leg replaces, inline
+  // and synchronous (in_stage forced 0 so yield/selfClose prims are no-ops; EngineOverrides
+  // suppressed) — then compare the observables and ABORT on any diff. Execution continues from
+  // the SKIP result. Everything OUTSIDE the observable list (stack scratch, cadence counters) is
+  // legitimately different between the paths and is NOT compared.
+  bool skipArmed(uint32_t addr);
+  void skipCheck(uint32_t addr, void (*skipFn)(void*), void* skipCtx,
+                 void (*oracleFn)(void*), void* oracleCtx);
   bool inSubstrateLeg = false;          // rec_dispatch: suppress EngineOverrides (pure-B leg)
   bool inCheck = false;                 // no-nesting + scheduler_yield guard
 
@@ -70,7 +82,28 @@ private:
   uint8_t* mStrictPreRam = nullptr; uint8_t* mStrictNatRam = nullptr;
   uint8_t  mStrictNatSpad[0x400];
   uint32_t mStrictNatRegs[16];
+  // skip-gate state
+  int      mSkipMode = -1;
+  uint32_t mSkipList[32]; int mSkipN = 0;
+  uint8_t* mSkipSpuA = nullptr; uint8_t* mSkipSpuB = nullptr; uint8_t* mSkipSpuPre = nullptr;
 };
+
+// Fork-site wrapper for the SKIP-vs-FAITHFUL observable gate: `skip_call` is the pc_skip leg,
+// `oracle_call` sets up regs and dispatches the substrate arc the skip leg replaces (it runs
+// with yield prims no-op'd, so use the TASK BODY address for spawn-and-wait arcs, e.g.
+// rec_dispatch(c, 0x800452C0) — NOT the 0x80044BD4 wrapper, whose wait loop can never complete
+// inline).
+#define SV_CHECK(c, addr, skip_call, oracle_call)                                              \
+  do {                                                                                         \
+    Core* sv_c = (c);                                                                          \
+    if (sv_c->game && sv_c->game->verify.skipArmed(addr)) {                                    \
+      auto sv_s = [&]() { skip_call; };                                                        \
+      auto sv_o = [&]() { oracle_call; };                                                      \
+      struct SvS { static void go(void* p) { (*static_cast<decltype(sv_s)*>(p))(); } };        \
+      struct SvO { static void go(void* p) { (*static_cast<decltype(sv_o)*>(p))(); } };        \
+      sv_c->game->verify.skipCheck((addr), &SvS::go, &sv_s, &SvO::go, &sv_o);                  \
+    } else { skip_call; }                                                                      \
+  } while (0)
 
 // Fork-site wrapper: strict-verify when armed, plain call otherwise.
 #define MV_CHECK(c, addr, call)                                                            \

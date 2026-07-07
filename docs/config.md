@@ -124,6 +124,8 @@ or level — they can't be a bare channel:
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
+- **SBS observable mode:** `SBS_MODE=skip` — pc_skip (real default config) vs recomp, compared on
+  a curated observable-state list with settled-divergence semantics (see skill `sbs-diverge`).
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the

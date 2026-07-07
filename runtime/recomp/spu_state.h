@@ -10,6 +10,8 @@ void* SPU_NewState(void);     // allocate+zero a fresh per-instance SPU state
 void  SPU_FreeState(void* p);
 void  SPU_BindState(void* p); // make `p` the active SPU instance (null -> the shared default)
 void  SPU_Power(void);        // reset the BOUND state to power-on (after SPU_Init has run once globally)
+void  SPU_PeekRAM(uint8_t* dst);       // copy the BOUND instance's 512 KB SPU RAM (observable compares)
+void  SPU_PokeRAM(const uint8_t* src); // restore it (SV_CHECK leg isolation)
 
 // SBS SPU write log (spu_beetle.c). Per-Game log buffer of (addr, val) pairs — spu_write appends
 // to the currently-bound log via spu_bind_log. SBS resets both cores' logs at frame start and

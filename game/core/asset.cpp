@@ -281,6 +281,12 @@ static void preload_cel(Core* c, uint32_t out, uint32_t desc, uint32_t cbarg) {
   int16_t slot = (int16_t)(rc3(c, 0x80096480u, desc, (uint32_t)-1, cbarg), c->r[2]);  // FUN_80096480(desc,-1,cbarg)
   c->mem_w16(out, (uint16_t)slot);                               // *(u16*)out = allocated slot
   rc2(c, 0x80096980u, cbarg, (uint32_t)slot);                    // FUN_80096980(cbarg, slot): kick upload
+  // FUN_800753D4 writes `out` a SECOND time with FUN_80096980's RETURN (the real slot handle; -1 when
+  // the SPU-DMA kick found no free channel). Dropping this write-back left a stale positive slot id in
+  // the cel handle (0x800BED84/0x800BED82) on the failure branch — the sprite/cel registrations then
+  // reference the wrong SPU sample bank: bug #29 "right instrument, wrong sample" on the skip path.
+  // RE: scratch/decomp/vab_open.c (FUN_800753d4) + vab_kick.c (FUN_80096980). 2026-07-08.
+  c->mem_w16(out, (uint16_t)c->r[2]);
   // Drain the BAV upload queue SYNCHRONOUSLY so this cel's VAB bank reaches SPU (and its slot frees so the
   // NEXT cel can allocate). The real FUN_800753d4 polls 0x80096a40, whose 0x800993a0 sync busy-waits on the
   // upload's DMA-complete IRQ event — which never fires in this no-IRQ preload, so the original code dropped
