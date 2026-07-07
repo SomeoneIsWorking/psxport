@@ -35,7 +35,6 @@
 #include "render/cull.h"         // Engine owns the Cull visibility subsystem
 #include "math/mathlib.h"        // Engine owns the Bit game-flag bitmap subsystem
 #include "world/spawn.h"         // Engine owns the Spawn entity-spawn/despawn subsystem
-#include "world/verify_gate.h"   // Engine owns the shared VerifyGate A/B diff helper
 #include "object/behavior_dispatch.h" // Engine owns the per-object BehaviorDispatch subsystem
 #include "scene/scene_events.h"       // Engine owns the SceneEvents arm subsystem (FUN_80040B48)
 #include "audio/sfx.h"                // Engine owns the Sfx trigger subsystem (FUN_80074590)
@@ -62,6 +61,10 @@ public:
   // on the next tick to execute the case 1 body.
   bool     mSubmode1LoadDeferred = false;
 
+  // `debug stage` change-detector for the RUNNING dispatcher's sm[0x4a]/sm[0x4c] log line (was a
+  // function-local static pair in Engine::s48_2 — per-Core so SBS's two cores log independently).
+  uint16_t mLast4a = 0xffff, mLast4c = 0xffff;
+
   // ── Scene subsystem instances owned by Engine ─────────────────────────────────────
   // Callers reach them as `c->engine.sceneTransition.method(args)`.
   SceneTransition sceneTransition;   // area-mask trigger + sub-scene swap handshake
@@ -83,7 +86,6 @@ public:
   Collision        collision;          // collision-grid family (list-scan + grid setup/query/resolve/step)
   Bit              bit;                // game progress-flag bitmap bit-test (FUN_8004D7EC / D868)
   Spawn            spawn;              // entity spawn/despawn dispatcher (FUN_8007A980 / A624 / 3116C)
-  VerifyGate       verifyGate;         // A/B snapshot-rollback + diff harness (diag only)
   BehaviorDispatch behaviors;          // per-object handler dispatch registry (50 native behaviors)
   Cull             cull;               // per-object visibility cull / margin re-include (orphaned)
   SceneEvents      sceneEvents;        // field-wide scene-event arm primitive (FUN_80040B48)

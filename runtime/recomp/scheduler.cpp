@@ -140,7 +140,6 @@ void scheduler_yield(Core* c) {
 // (not mine) to fall through to the next stanza. The PC-native stanzas live on PcScheduler
 // (game/core/pc_scheduler.cpp); the two below are the substrate fallbacks it calls.
 
-extern "C" void ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
 
 // FULL-PSX (psx_fallback) task — thread-fiber coroutine. The substrate can't re-enter mid-fn, so
 // each task runs on its own Coro thread that BLOCKS at a yield (preserving its C stack) and
@@ -259,7 +258,7 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
       c->game->pcSched.in_stage = 0;
       return 1;
     }
-    ffspan_begin(c); rec_coro_run(c, start); ffspan_end(c, "coro");
+    c->game->ffspan.begin(); rec_coro_run(c, start); c->game->ffspan.end("coro");
     c->mem_w16(base, 0);                                          // task returned (jr ra sentinel)
     c->game->pcSched.task_started[i] = 0;
   }

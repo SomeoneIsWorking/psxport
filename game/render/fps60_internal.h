@@ -79,6 +79,15 @@ struct Fps60 {
   void rq_capture(const struct RqItem* items, int n);   // copy the (sorted) queue snapshot
   int  build_lerp();                                    // match cur<->prev, lerp to midpoint; returns count
   void fps60_present_vk(Core* core);                    // emit in-between + real frame, paced (60fps)
+  // PSXPORT_DEBUG=fps60pass — prove the two 60fps presents emit the SAME COMPLETE frame: count the
+  // HUD-layer items and the shadow-casting prims in a queue set (was the file-scope fps60_pass_stats).
+  void pass_stats(const char* tag, long fence, const struct RqItem* items, int n);
+  int  s_lerpdbg = -1;                   // PSXPORT_DEBUG=fps60 — per-frame reproject stats (lazy latch)
+  int  s_chk = -1;                       // PSXPORT_DEBUG=fps60chk — mechanical t=1.0 reproject gate
+  int  s_passdbg = -1;                   // PSXPORT_DEBUG=fps60pass latch
+  int* s_bgdx = nullptr;                 // build_lerp per-tile bg displacement scratch (FPS60_RQ_MAX)
+  int* s_bgdy = nullptr;
+  ~Fps60() { delete[] s_bgdx; delete[] s_bgdy; }
 
   // ---- billboard registry (was file-scope s_bbCur / s_nBBCur in fps60.cpp) --------
   // Per-Core so SBS's two cores don't share the same billboard registry between their emits

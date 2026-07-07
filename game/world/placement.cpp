@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "placement.h"
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold
 #include "spawn.h"     // class Spawn (c->engine.spawn.dispatch)
 void rec_super_call(Core*, uint32_t);
 
@@ -100,10 +101,10 @@ static void place_objects(Core* c) {
 }
 
 void Placement::placeAreaObjects() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("placeverify") ? 1 : 0;
+  int s_v = c->game->verify.on("placeverify");
   if (!s_v) { place_objects(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t* ram0 = c->game->verify.ram0();
+  uint8_t* ramN = c->game->verify.ramN();
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
   uint32_t area = c->mem_r8(0x800BF870u), sub = c->mem_r8(0x800BF871u);
@@ -115,7 +116,8 @@ void Placement::placeAreaObjects() { Core* c = core;
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
+  VerifyHarness::Check& chk = c->game->verify.check("placeverify");
+  long &ng = chk.nMatch, &nb = chk.nMismatch;
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[placeverify] MISMATCH area=%u sub=%u ram@%x spad@%x sp=%x\n", area, sub, ro, so, sp);
   } else fprintf(stderr, "[placeverify] match #%ld (area=%u sub=%u)\n", ++ng, area, sub);
@@ -141,10 +143,10 @@ static uint32_t spawn_with_parent(Core* c) {
   return node;
 }
 void Placement::spawnWithParent() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawnparentverify") ? 1 : 0;
+  int s_v = c->game->verify.on("spawnparentverify");
   if (!s_v) { c->r[2] = spawn_with_parent(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t* ram0 = c->game->verify.ram0();
+  uint8_t* ramN = c->game->verify.ramN();
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
@@ -157,7 +159,8 @@ void Placement::spawnWithParent() { Core* c = core;
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
+  VerifyHarness::Check& chk = c->game->verify.check("spawnparentverify");
+  long &ng = chk.nMatch, &nb = chk.nMismatch;
   if (ro >= 0 || so >= 0 || v0_n != v0_o) {
     if (nb++ < 40) fprintf(stderr, "[spawnparentverify] MISMATCH v0 n=%x o=%x ram@%x spad@%x\n", v0_n, v0_o, ro, so);
   } else if (++ng % 20 == 0) fprintf(stderr, "[spawnparentverify] %ld matches\n", ng);

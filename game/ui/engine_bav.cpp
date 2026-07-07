@@ -56,6 +56,7 @@
 // VERIFY: `bavload` full RAM+scratchpad A/B vs rec_super_call (below). 0-diff is the gate.
 #include "core.h"
 #include "cfg.h"
+#include "game.h"      // c->game->verify.on — per-Game lazy debug-channel latch
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -249,8 +250,7 @@ static uint32_t bav_load_native(Core* c) {
 
   // BONUS: log the loaded cel's atlas params (under the `bavload` debug channel).
   {
-    static int dbg = -1; if (dbg < 0) dbg = cfg_dbg("bavload") ? 1 : 0;
-    if (dbg) {
+    if (c->game->verify.on("bavload")) {
       uint32_t kind = c->mem_r32(desc + 4);
       uint32_t r0_12 = c->mem_r16(s3rec + 12), r0_14 = c->mem_r16(s3rec + 14);
       uint32_t bpp = (kind < 5u) ? 4u : 8u;            // kind<5 -> <<2 (4bpp); else <<3 (8bpp)

@@ -7,6 +7,7 @@
 #include "cfg.h"
 #include <stdio.h>
 #include "mathlib.h"
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 
 // FUN_8009A450 — the platform PRNG (`rand`): the classic glibc LCG state*0x41C64E6D + 12345, state at
@@ -29,7 +30,7 @@ static inline uint32_t rand_lcg(Core* c) {
 // Pure function over a guest bitmap — exact native reimpl. `bitverify` (lazy gate) A/B's v0.
 uint32_t Bit::test7EC(int32_t idx, uint32_t sel) {
   Core* c = this->core;
-  static int v = -1; if (v < 0) v = cfg_dbg("bitverify") ? 1 : 0;
+  int v = c->game->verify.on("bitverify");
   int q  = (idx >= 0) ? idx : (idx + 7);
   int a2 = q >> 3;                        // idx/8 toward zero
   int a3 = idx - (a2 << 3);               // idx%8
@@ -39,7 +40,8 @@ uint32_t Bit::test7EC(int32_t idx, uint32_t sel) {
   if (v) {
     c->r[4] = (uint32_t)idx; c->r[5] = sel;         // taxi-in for the still-taxi verify super-call
     rec_super_call(c, 0x8004D7ECu);
-    static long ng = 0, nb = 0;
+    VerifyHarness::Check& chk = c->game->verify.check("bitverify");
+    long &ng = chk.nMatch, &nb = chk.nMismatch;
     if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify] MISMATCH idx=%d sel=%x mine=%x oracle=%x\n", idx, sel, mine, (uint32_t)c->r[2]); }
     else if (++ng % 20000 == 0) fprintf(stderr, "[bitverify] %ld matches\n", ng);
   }
@@ -52,7 +54,7 @@ uint32_t Bit::test7EC(int32_t idx, uint32_t sel) {
 // Shares the `bitverify` gate with test7EC.
 uint32_t Bit::test868(int32_t idx) {
   Core* c = this->core;
-  static int v = -1; if (v < 0) v = cfg_dbg("bitverify") ? 1 : 0;
+  int v = c->game->verify.on("bitverify");
   int q  = (idx >= 0) ? idx : (idx + 7);
   int a2 = q >> 3;                        // idx/8 toward zero
   int a3 = idx - (a2 << 3);               // idx%8
@@ -62,7 +64,8 @@ uint32_t Bit::test868(int32_t idx) {
   if (v) {
     c->r[4] = (uint32_t)idx;                        // taxi-in for the still-taxi verify super-call
     rec_super_call(c, 0x8004D868u);
-    static long ng = 0, nb = 0;
+    VerifyHarness::Check& chk = c->game->verify.check("bitverify868");
+    long &ng = chk.nMatch, &nb = chk.nMismatch;
     if ((uint32_t)c->r[2] != mine) { if (nb++ < 20) fprintf(stderr, "[bitverify868] MISMATCH idx=%d mine=%x oracle=%x\n", idx, mine, (uint32_t)c->r[2]); }
     else if (++ng % 20000 == 0) fprintf(stderr, "[bitverify868] %ld matches\n", ng);
   }

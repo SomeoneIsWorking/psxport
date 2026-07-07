@@ -321,8 +321,6 @@ void fps60_stamp_billboard(Core* c, uint32_t node) {
   it->fps_offy = 0;
 }
 
-static int s_lerpdbg = -1;        // PSXPORT_DEBUG=fps60 — per-frame reproject stats
-
 void Fps60::rq_capture(const RqItem* items, int n) {
   if (!s_rqCur) s_rqCur = new RqItem[FPS60_RQ_MAX];
   if (n > FPS60_RQ_MAX) n = FPS60_RQ_MAX;
@@ -429,7 +427,6 @@ int Fps60::build_lerp() {
   for (int j = 0; j < s_nPrev; j++) { const RqItem* P = &s_rqPrev[j];
     if (P->layer == RQ_BACKGROUND) prevbg.emplace(bg_fp(P), P); }   // first occurrence per cell wins
   // collect per-tile displacements, then median each axis
-  static int* s_bgdx = 0; static int* s_bgdy = 0;
   if (!s_bgdx) { s_bgdx = new int[FPS60_RQ_MAX]; s_bgdy = new int[FPS60_RQ_MAX]; }
   int nbg = 0;
   for (int i = 0; i < s_nCur && nbg < FPS60_RQ_MAX; i++) {
@@ -486,7 +483,7 @@ int Fps60::build_lerp() {
   // MECHANICAL GATE (PSXPORT_DEBUG=fps60chk): reproject every world prim at t=1.0 (crM = its OWN captured
   // composed transform, no averaging) — this MUST reproduce the prim's real screen verts. A non-zero error
   // means the capture/recompose/round path is wrong (not a smoothness issue). Pure diagnostic, no output change.
-  static int s_chk = -1; if (s_chk < 0) s_chk = cfg_dbg("fps60chk") ? 1 : 0;
+  if (s_chk < 0) s_chk = cfg_dbg("fps60chk") ? 1 : 0;
   if (s_chk) {
     long n = 0, maxe = 0; double sume = 0;
     for (int i = 0; i < s_nCur; i++) { const RqItem* C = &s_rqCur[i];
@@ -506,8 +503,8 @@ void gpu_gpu_shot(Core* core, const char* path);   // diagnostic: dump the CURRE
 // PSXPORT_DEBUG=fps60pass — prove the two 60fps presents emit the SAME COMPLETE frame: count the HUD-layer
 // items and the shadow-casting prims in a queue set. Both passes must report identical counts (the HUD and
 // the shadow are in the queue, so each pass emits them — no per-feature replay/keep_shadow).
-static void fps60_pass_stats(const char* tag, long fence, const RqItem* items, int n) {
-  static int on = -1; if (on < 0) on = cfg_dbg("fps60pass") ? 1 : 0; if (!on) return;
+void Fps60::pass_stats(const char* tag, long fence, const RqItem* items, int n) {
+  if (s_passdbg < 0) s_passdbg = cfg_dbg("fps60pass") ? 1 : 0; if (!s_passdbg) return;
   long hud = 0, shcast = 0;
   for (int i = 0; i < n; i++) { if (items[i].layer == RQ_HUD) hud++; if (items[i].sh_cast) shcast++; }
   fprintf(stderr, "[fps60pass] f%ld %s: prims=%d HUD=%ld shadow_cast=%ld\n", fence, tag, n, hud, shcast);
@@ -515,7 +512,7 @@ static void fps60_pass_stats(const char* tag, long fence, const RqItem* items, i
 void Fps60::fps60_present_vk(Core* core) {
   int nl = (s_have_prev && s_nCur > 0) ? build_lerp() : 0;
   if (nl > 0) {                                           // PASS 1 — the interpolated in-between
-    fps60_pass_stats("interp", s_fence, s_rqLerp, nl);
+    pass_stats("interp", s_fence, s_rqLerp, nl);
     for (int i = 0; i < nl; i++) gpu_emit_rq_item(core, &s_rqLerp[i]);
     gpu_fps60_present_pass(core);                         // show it + reset the VK batch (no s_frame++)
     // PSXPORT_FPS60_INTERPSHOT=path — one-shot: dump the INTERPOLATED in-between's s_tex (it persists until
@@ -532,7 +529,7 @@ void Fps60::fps60_present_vk(Core* core) {
         fprintf(stderr, "[fps60] interp-frame shot (f%ld) -> %s\n", s_fence, path); } }
     gpu_pace_subframe(core, 2);
   }
-  fps60_pass_stats("real  ", s_fence, s_rqCur, s_nCur);
+  pass_stats("real  ", s_fence, s_rqCur, s_nCur);
   for (int i = 0; i < s_nCur; i++) gpu_emit_rq_item(core, &s_rqCur[i]);   // PASS 2 — the real frame
   gpu_present_ex(core, 1);                                // present + per-logic-frame bookkeeping
   gpu_pace_subframe(core, nl > 0 ? 2 : 1);

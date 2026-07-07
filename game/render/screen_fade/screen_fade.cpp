@@ -13,18 +13,15 @@
 // the class never sees it (the HOLD then never releases). Rate-limited: only prints the C++
 // backtrace on FIRST occurrence of a given (op,mode,rgb) tuple; the one-line summary fires every
 // call so the frame cadence stays visible.
-static void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* extra) {
-  static int s_on = -1;
-  if (s_on < 0) s_on = cfg_dbg("fadetrace") ? 1 : 0;
-  if (!s_on) return;
+void ScreenFade::fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* extra) {
+  if (mTraceOn < 0) mTraceOn = cfg_dbg("fadetrace") ? 1 : 0;
+  if (!mTraceOn) return;
   const char* modeName = mode == 0 ? "NONE" : mode == 1 ? "ADDITIVE" : mode == 2 ? "SUBTRACTIVE" : "?";
   fprintf(stderr, "[fadetrace] %s mode=%s rgb=0x%06X%s%s\n", op, modeName, rgb,
           extra && *extra ? " " : "", extra ? extra : "");
-  static uint32_t seen[64] = {0};
-  static int seen_n = 0;
   uint32_t key = ((uint32_t)(uintptr_t)op * 0x9E37u) ^ ((uint32_t)mode << 24) ^ (rgb & 0xFFFFFFu);
-  for (int i = 0; i < seen_n; i++) if (seen[i] == key) return;
-  if (seen_n < 64) seen[seen_n++] = key;
+  for (int i = 0; i < mSeenN; i++) if (mSeen[i] == key) return;
+  if (mSeenN < 64) mSeen[mSeenN++] = key;
   void* stack[16];
   int n = backtrace(stack, 16);
   char** syms = backtrace_symbols(stack, n);

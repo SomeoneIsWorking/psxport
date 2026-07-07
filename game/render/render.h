@@ -19,6 +19,7 @@
 #include "proj_params.h"
 #include "engine_project.h"     // EObjXform (per-Core active per-object xform lives on Render below)
 #include "render_native.h"      // class NativeScenePass — the decoupled native render subsystem
+#include "margin_render.hpp"    // class MarginRenderer — widescreen margin collect-and-flush
 class Core;
 
 class Render {
@@ -41,7 +42,12 @@ public:
   EObjXform         mActiveXform{};
   bool              mActiveXformSet = false;
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
+  // PSXPORT_BDTAG per-node attribution names for the walk dispatch cases (engine_render_walk.cpp).
+  // The gp0 classify is deferred one frame, so the names live in a per-Core ring, not walk locals.
+  char              mWalkTagRing[512][20] = {};
+  int               mWalkTagPos = 0;
   NativeScenePass   mNativeScene;      // decoupled native render pass (collect + drawObject)
+  MarginRenderer    margin;            // widescreen margin re-include (collect in cull, flush post-walk)
 
   // ---- object-render projection ops (impl in engine_project.cpp) ----------
   // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)
@@ -93,6 +99,8 @@ public:
   // renderWalk: the master phase-2 render-list WALK (gen_func_8003C048). Drains the primary render
   // list, dispatching each live node by render type through the 33-entry jump table. Was ov_render_walk.
   void renderWalk();
+  // walkTag: format one BDTAG attribution name ("<pfx><fn low20>") into mWalkTagRing.
+  const char* walkTag(const char* pfx, uint32_t fn);
 
   // renderWalkSnapshot: the SNAPSHOT-QUEUE object render driver (gen_func_8003BB50). Drains the
   // per-object render QUEUE (scratchpad cursor), tagging each object's packet span with its world

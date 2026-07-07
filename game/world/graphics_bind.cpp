@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "graphics_bind.h"
-#include "verify_gate.h"
+#include "game.h"              // c->game->verify — the shared A/B verify scaffold
 #include "engine_math.h"       // Math::rotmat — libgte RotMatrix (native, static)
 
 // Forward native scene-data record the decoupled native renderer will consume (geometry + float
@@ -67,22 +67,19 @@ static uint32_t obj_record_init(Core* c) {
   return 0;
 }
 void GraphicsBind::recordAlloc() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recallocverify") ? 1 : 0;
   // Attack (a) attribution: log the C return-address (caller of recordAlloc()) when
   // PSXPORT_RECALLOC_TRACE=1. Combined with the [sbs] core-map line, tallies A-only ra's
   // to name the native caller responsible for the +3 pool delta at 0x800ED098.
-  static int s_trace = -1;
-  if (s_trace < 0) s_trace = getenv("PSXPORT_RECALLOC_TRACE") ? 1 : 0;
-  if (s_trace) {
+  if (mTrace < 0) mTrace = getenv("PSXPORT_RECALLOC_TRACE") ? 1 : 0;
+  if (mTrace) {
     void* ra = __builtin_return_address(0);
     fprintf(stderr, "[recalloc] core=%p ra=%p cnt_before=%d stage=%08X\n",
             (void*)c, ra, (int)c->mem_r16s(0x800ED098u), c->mem_r32(0x801fe00c));
   }
-  c->engine.verifyGate.run(record_alloc, 0x8007AAE8u, "recallocverify", s_v);
+  c->game->verify.run(record_alloc, 0x8007AAE8u, "recallocverify", c->game->verify.on("recallocverify"));
 }
 void GraphicsBind::recordInit() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("recinitverify") ? 1 : 0;
-  c->engine.verifyGate.run(obj_record_init, 0x80051B70u, "recinitverify", s_v);
+  c->game->verify.run(obj_record_init, 0x80051B70u, "recinitverify", c->game->verify.on("recinitverify"));
 }
 
 // FUN_80051B04 — two-level scene-data-table pointer resolve. Pure address arithmetic, no branches.
@@ -114,8 +111,7 @@ static uint32_t obj_render_update(Core* c) {
   return c->r[2];
 }
 void GraphicsBind::renderUpdate() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("rendupdverify") ? 1 : 0;
-  c->engine.verifyGate.run(obj_render_update, 0x800517F8u, "rendupdverify", s_v);
+  c->game->verify.run(obj_render_update, 0x800517F8u, "rendupdverify", c->game->verify.on("rendupdverify"));
 }
 
 // FUN_80077B38 — set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0x80077B38 (leaf):
@@ -129,8 +125,7 @@ static uint32_t obj_set_geom(Core* c) {
   return cnt;   // incidental v0 the recomp leaves (callers treat this void)
 }
 void GraphicsBind::setGeom() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setgeomverify") ? 1 : 0;
-  c->engine.verifyGate.run(obj_set_geom, 0x80077B38u, "setgeomverify", s_v);
+  c->game->verify.run(obj_set_geom, 0x80077B38u, "setgeomverify", c->game->verify.on("setgeomverify"));
 }
 
 // FUN_8006CBD0 — copy a 6-halfword TRANSFORM BLOCK from a1 into the scratchpad camera/transform block
@@ -149,8 +144,7 @@ static uint32_t obj_set_xformblk(Core* c) {
   return last;   // incidental v0
 }
 void GraphicsBind::setXformBlk() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("setxblkverify") ? 1 : 0;
-  c->engine.verifyGate.run(obj_set_xformblk, 0x8006CBD0u, "setxblkverify", s_v);
+  c->game->verify.run(obj_set_xformblk, 0x8006CBD0u, "setxblkverify", c->game->verify.on("setxblkverify"));
 }
 
 // FUN_8004BD64 — per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x8004BD64
@@ -191,6 +185,5 @@ static uint32_t obj_pos_compose(Core* c) {
   return last;
 }
 void GraphicsBind::posCompose() { Core* c = core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("poscomposeverify") ? 1 : 0;
-  c->engine.verifyGate.run(obj_pos_compose, 0x8004BD64u, "poscomposeverify", s_v);
+  c->game->verify.run(obj_pos_compose, 0x8004BD64u, "poscomposeverify", c->game->verify.on("poscomposeverify"));
 }

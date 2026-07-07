@@ -17,6 +17,11 @@ public:
   // Back-pointer set once by Core's constructor (same pattern as ScreenFade::core).
   Core* core = nullptr;
 
+  // REENTRANCY GUARD for the `invverify` A/B gate: while a gate's rec_super_call interprets a
+  // WRAPPER body, its inner `jal 0x8004D338` re-enters the entry — a nested gate would corrupt
+  // the outer snapshot/roll-back. Nonzero while inside a gate (was file-scope s_in_gate).
+  int inGate = 0;
+
   // Query -------------------------------------------------------------------------------
   int count(int item) const;                     // 0..99
   int has(int item) const;                       // count > 0

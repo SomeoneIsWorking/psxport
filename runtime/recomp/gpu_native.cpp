@@ -602,8 +602,6 @@ void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
 // When non-NULL and opaque, the queued item carries them and gpu_emit_rq_item re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
-extern "C" const char* ffspan_lookup(uint32_t);   // engine_stage.cpp — PSXPORT_BDTAG builder attribution
-extern "C" void ffspan_dump(uint32_t);
 
 // rq_emit_or_queue now lives in game/render/render_queue.cpp (2026-07 restructure, alongside
 // gpu_emit_rq_item/gpu_draw_world_quad/rq_push_2d_quad); this file's guest GP0/OT-walk poly + sprite
@@ -810,7 +808,7 @@ void GpuState::gp0_exec(Core* core) {
         // next ownership target is picked by data. Dedups by (builder,tp) and only after the field settles
         // (s_frame>=120, so transition/load frames don't dominate). Logs each unique (builder,tp) once.
         if (!is3d && cfg_str("PSXPORT_BDTAG") && s_frame >= 120) {
-          const char* t = ffspan_lookup(s_cur_node);
+          const char* t = core->game->ffspan.lookup(s_cur_node);
           static struct { const char* t; int tx, ty; } seen[64]; static int nseen = 0; int f = 0;
           for (int i = 0; i < nseen; i++) if (seen[i].t == t && seen[i].tx == s_tp_x && seen[i].ty == s_tp_y) { f = 1; break; }
           if (!f && nseen < 64) { seen[nseen].t = t; seen[nseen].tx = s_tp_x; seen[nseen].ty = s_tp_y; nseen++;

@@ -6,6 +6,7 @@
 // oracle UNIT TEST over every method incl. the driver (game/camera/cutscene_camera_test.cpp).
 #include "cutscene_camera.h"
 #include "cfg.h"
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold (camverify)
 #include "mtx.h"
 #include "trig.h"
 #include <stdint.h>
@@ -595,7 +596,7 @@ void CutsceneCamera::snapAccY(uint32_t target) {     // FUN_8006D950
   w32(S + 0x10, r32(target + 4));      // snap Y accumulator
 }
 void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("camverify") ? 1 : 0;
+  int s_v = c->game->verify.on("camverify");
   uint32_t cam0[64], sp0[256], rsave[32];
   if (s_v) {
     for (int i = 0; i < 64;  i++) cam0[i] = c->mem_r32(cam_ + i * 4);
@@ -621,12 +622,14 @@ void CutsceneCamera::snapFollow(uint32_t target) {   // FUN_8006E3B0
   uint32_t camO[64], spO[256];
   for (int i = 0; i < 64;  i++) camO[i] = c->mem_r32(cam_ + i * 4);
   for (int i = 0; i < 256; i++) spO[i]  = c->mem_r32(0x1F800000u + i * 4);
-  static int nbad = 0, ngood = 0; int bad = 0;
+  VerifyHarness::Check& chk = c->game->verify.check("camverify");
+  long &nbad = chk.nMismatch, &ngood = chk.nMatch;
+  int bad = 0;
   for (int i = 0; i < 64; i++) if (camM[i] != camO[i]) { bad = 1;
     if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow cam+0x%02x mine=%08x oracle=%08x\n", i*4, camM[i], camO[i]); }
   for (int i = 0; i < 256; i++) if (spM[i] != spO[i]) { bad = 1;
     if (nbad++ < 60) fprintf(stderr, "[camverify] snapFollow sp+0x%03x mine=%08x oracle=%08x\n", i*4, spM[i], spO[i]); }
-  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[camverify] snapFollow match #%d\n", ngood);
+  if (!bad && (ngood++ % 200) == 0) fprintf(stderr, "[camverify] snapFollow match #%d\n", (int)ngood);
 }
 void CutsceneCamera::snapFollowA(uint32_t target) {  // FUN_8006E294 (driver mode 2 + init post-check)
   snapAccXZ(target);

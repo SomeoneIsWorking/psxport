@@ -48,7 +48,7 @@
 #include <string.h>
 #include "spawn.h"
 #include "world_pool.h"
-#include "verify_gate.h"
+#include "game.h"       // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 
 // Pool addresses.
@@ -267,13 +267,13 @@ static const PoolDesc DESPAWN_POOL[5] = {
 };
 void Spawn::despawn(uint32_t node) {
   Core* c = this->core;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("despawnverify") ? 1 : 0;
-  static uint8_t* ram0 = nullptr;
-  static uint8_t* ramN = nullptr;
+  int s_v = c->game->verify.on("despawnverify");
+  uint8_t* ram0 = nullptr;
+  uint8_t* ramN = nullptr;
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32];
   if (s_v) {
-    if (!ram0) { ram0 = (uint8_t*)malloc(0x200000); ramN = (uint8_t*)malloc(0x200000); }
+    ram0 = c->game->verify.ram0(); ramN = c->game->verify.ramN();
     memcpy(regs0, c->r, sizeof regs0);
     memcpy(ram0, c->ram, 0x200000);
     memcpy(spad0, c->scratch, 0x400);
@@ -335,7 +335,8 @@ void Spawn::despawn(uint32_t node) {
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
+  VerifyHarness::Check& chk = c->game->verify.check("despawnverify");
+  long &ng = chk.nMatch, &nb = chk.nMismatch;
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[despawnverify] MISMATCH node=%08x list=%u ram@%x spad@%x sp=%x\n",
                            node, c->mem_r8(node + 0x0au), ro, so, sp);
@@ -345,8 +346,8 @@ void Spawn::despawn(uint32_t node) {
 uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // FUN_8003116C
   Core* c = this->core;
   c->r[4] = a0; c->r[5] = posSrc; c->r[6] = a2;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("spawninitverify") ? 1 : 0;
-  c->engine.verifyGate.run(spawn_and_init, 0x8003116Cu, "spawninitverify", s_v);
+  c->game->verify.run(spawn_and_init, 0x8003116Cu, "spawninitverify",
+                      c->game->verify.on("spawninitverify"));
   return c->r[2];
 }
 
@@ -422,8 +423,8 @@ uint32_t Spawn::sceneEntity(uint16_t sceneId, uint8_t subtype) {
   Core* c = this->core;
   c->r[4] = sceneId;
   c->r[5] = subtype;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sceneentityverify") ? 1 : 0;
-  c->engine.verifyGate.run(scene_entity_native, 0x8007E110u, "sceneentityverify", s_v);
+  c->game->verify.run(scene_entity_native, 0x8007E110u, "sceneentityverify",
+                      c->game->verify.on("sceneentityverify"));
   return c->r[2];
 }
 

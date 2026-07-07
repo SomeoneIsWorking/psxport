@@ -40,52 +40,19 @@
 // gp0 OT-walk classifier (gpu_native.cpp) can attribute a DEFERRED prim (e.g. the tp(576,256) sea backdrop)
 // to the call that BUILT it — reliable where per-pass tags / WWATCH-pc / pool-node-addresses are not. The
 // span table persists across the present (which classifies the prior frame's OT) because it is reset only at
-// the TOP of the next ov_field_frame. `ffspan_lookup(addr)` returns the builder name (latest-span-wins).
+// the TOP of the next ov_field_frame. `FfSpan::lookup(addr)` returns the builder name (latest-span-wins).
+// The span table + bracket stack live on `c->game->ffspan` (class FfSpan, game/render/ffspan.h).
 // g_pkt_track/lo/hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi (reached below).
 #include "dualview_snapshot.h"    // c->mRender->dualviewSnapshot.capturePre/restorePre
 // (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->mode.psxRender() / dualview())
-struct FFSpan { const char* name; uint32_t lo, hi; };
-static FFSpan s_ffspan[40]; static int s_ffspan_n = 0; static int s_bdtag = -1;
-static inline int bdtag_on() { if (s_bdtag < 0) s_bdtag = cfg_str("PSXPORT_BDTAG") ? 1 : 0; return s_bdtag; }
-extern "C" const char* ffspan_lookup(uint32_t a) {
-  // EARLIEST-first = INNERMOST-wins: an inner bracket ends (is recorded) before its outer, and outer spans
-  // merge in their children, so the first containing span in record order is the tightest (real) builder.
-  for (int i = 0; i < s_ffspan_n; i++) if (a >= s_ffspan[i].lo && a < s_ffspan[i].hi) return s_ffspan[i].name;
-  return "(unattributed)";
-}
-// Coarse top-level phase bracketing (called from native_step_frame): reset at frame top, then begin/end
-// around each frame phase to find WHICH phase builds the deferred backdrop packet (the gp0 classify runs
-// later in the same frame's DrawOTag). Nestable via a small stack of PktSpan snapshots.
-static PktSpan::Snapshot s_ff_stk[8]; static int s_ff_sp = 0;
-extern "C" void ffspan_reset_frame(void) { if (bdtag_on()) { s_ffspan_n = 0; s_ff_sp = 0; } }
-extern "C" void ffspan_begin(Core* c) {       // NESTABLE: save outer, open a fresh empty session
-  if (!bdtag_on() || s_ff_sp >= 8) return;
-  PktSpan& ps = c->mRender->pktSpan;
-  s_ff_stk[s_ff_sp++] = ps.save();
-  ps.open();
-}
-extern "C" void ffspan_end(Core* c, const char* nm) {
-  if (!bdtag_on() || s_ff_sp <= 0) return;
-  PktSpan& ps = c->mRender->pktSpan;
-  uint32_t mlo, mhi;
-  bool captured = ps.current(&mlo, &mhi);
-  if (captured && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm;
-    s_ffspan[s_ffspan_n].lo = mlo; s_ffspan[s_ffspan_n].hi = mhi; s_ffspan_n++; }
-  ps.restoreMerge(s_ff_stk[--s_ff_sp], captured ? mlo : 0xFFFFFFFFu, captured ? mhi : 0);
-}
-extern "C" void ffspan_dump(uint32_t a) {   // one-time: show the recorded spans vs an unattributed address
-  static int done = 0; if (done) return; done = 1;
-  fprintf(stderr, "[ffspan] addr %08x NOT in any of %d field-frame spans:\n", a, s_ffspan_n);
-  for (int i = 0; i < s_ffspan_n; i++)
-    fprintf(stderr, "[ffspan]   %-12s [%08x .. %08x)\n", s_ffspan[i].name, s_ffspan[i].lo, s_ffspan[i].hi);
-}
-// FFS: nested span tracker. c must be a Core* in scope. Same shape as ffspan_begin/end inlined.
+#include "game.h"                    // class Game — c->game->ffspan (FfSpan) + Game::sbs
+// FFS: nested span tracker. c must be a Core* in scope. Same shape as FfSpan::begin/end inlined.
 #define FFS(nm, call) do { \
-  if (bdtag_on()) { PktSpan& _ps = c->mRender->pktSpan; \
+  FfSpan& _ff = c->game->ffspan; \
+  if (_ff.bdtagOn()) { PktSpan& _ps = c->mRender->pktSpan; \
     PktSpan::Snapshot _outer = _ps.save(); _ps.open(); call; \
     uint32_t _mlo, _mhi; bool _captured = _ps.current(&_mlo, &_mhi); \
-    if (_captured && s_ffspan_n < 40) { s_ffspan[s_ffspan_n].name = nm; \
-      s_ffspan[s_ffspan_n].lo = _mlo; s_ffspan[s_ffspan_n].hi = _mhi; s_ffspan_n++; } \
+    if (_captured) _ff.record(nm, _mlo, _mhi); \
     _ps.restoreMerge(_outer, _captured ? _mlo : 0xFFFFFFFFu, _captured ? _mhi : 0); } \
   else { call; } } while (0)
 
@@ -155,11 +122,10 @@ void Engine::s48_2() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
   if (cfg_dbg("stage")) {
-    static uint16_t last4a = 0xffff, last4c = 0xffff;
     uint16_t s4c = c->mem_r16(sm + 0x4c);
-    if (s4a != last4a || s4c != last4c) {
+    if (s4a != mLast4a || s4c != mLast4c) {
       fprintf(stderr, "[stage] running: sm[0x4a]=%u sm[0x4c]=%u\n", s4a, s4c);
-      last4a = s4a; last4c = s4c;
+      mLast4a = s4a; mLast4c = s4c;
     }
   }
   if (s4a >= 6) { rec_coro_redirect(c, 0x8010881Cu); return; }   // out of range -> guest epilogue
@@ -211,7 +177,6 @@ void Engine::s4c() { Core* c = core;
 
 // (ov_sop_field_mode moved to Sop::fieldMode — c->engine.sop.fieldMode())
 #include "sop.h"                              // class Sop — transitionAreaLoad (sync FIELD transition load)
-#include "game.h"                             // class Game — Game::sbs (Slip #3 faithful/PC-mode gate)
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
 void ov_game_func_801084F8(Core*);                          // generated/ov_game_disp.c — still-recomp: draw pause
@@ -251,10 +216,10 @@ void Engine::s48_2_frame() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
   if (s4a >= 6) return;
-  if (s4a == 0) { ffspan_begin(c); c->engine.submode0(); ffspan_end(c, "submode0"); return; }
-  if (s4a == 1) { ffspan_begin(c); c->engine.submode1(); ffspan_end(c, "submode1"); return; }
-  if (s4a == 5) { ffspan_begin(c); c->engine.fieldTransition(); ffspan_end(c, "transition"); return; }  // native FUN_80108a60
-  ffspan_begin(c); rec_dispatch(c, handler[s4a]); ffspan_end(c, "s48_2_handler");
+  if (s4a == 0) { c->game->ffspan.begin(); c->engine.submode0(); c->game->ffspan.end("submode0"); return; }
+  if (s4a == 1) { c->game->ffspan.begin(); c->engine.submode1(); c->game->ffspan.end("submode1"); return; }
+  if (s4a == 5) { c->game->ffspan.begin(); c->engine.fieldTransition(); c->game->ffspan.end("transition"); return; }  // native FUN_80108a60
+  c->game->ffspan.begin(); rec_dispatch(c, handler[s4a]); c->game->ffspan.end("s48_2_handler");
 }
 
 // GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — native. Faithful to the disasm:
@@ -883,7 +848,7 @@ void Engine::fieldRun() { Core* c = core;
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       /* fallthrough */
     case 1: {
-      ffspan_begin(c); c->engine.fieldFrame(); ffspan_end(c, "fieldframe");   // native field per-frame update (0x80108b0c)
+      c->game->ffspan.begin(); c->engine.fieldFrame(); c->game->ffspan.end("fieldframe");   // native field per-frame update (0x80108b0c)
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
         if (c->mem_r8(0x800bf80fu) == 0) {
@@ -1307,7 +1272,7 @@ void Engine::submode1() { Core* c = core;
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: ffspan_begin(c); c->engine.fieldRun(); ffspan_end(c, "fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
+    case 2: c->game->ffspan.begin(); c->engine.fieldRun(); c->game->ffspan.end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
     case 3: c->engine.fieldRunX(); break;              // mid-transition running sub-machine 0x801070b4 — native
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;
@@ -1343,9 +1308,9 @@ int Engine::frame() { Core* c = core;
     }
     c->engine.s48_2_frame();
   } else if (s48 == 0) {
-    ffspan_begin(c); c->engine.s48_0(); ffspan_end(c, "s48_0");
+    c->game->ffspan.begin(); c->engine.s48_0(); c->game->ffspan.end("s48_0");
   } else if (s48 == 1) {
-    ffspan_begin(c); c->engine.s48_1(); ffspan_end(c, "s48_1");
+    c->game->ffspan.begin(); c->engine.s48_1(); c->game->ffspan.end("s48_1");
   } else {
     if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 unknown s48=%u sm@%08X\n", s48, sm); return 0; // unknown top state -> cooperative
   }

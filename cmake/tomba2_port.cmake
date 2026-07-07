@@ -89,6 +89,7 @@ set(PORT_SRC
   game/cd/libcd_native.cpp
   game/core/asset.cpp
   game/core/pc_scheduler.cpp
+  game/core/verify_harness.cpp
   game/math/mathlib.cpp
   game/math/rng.cpp
   game/math/mtx.cpp
@@ -103,7 +104,6 @@ set(PORT_SRC
   game/audio/sfx.cpp
   game/world/placement.cpp
   game/world/graphics_bind.cpp
-  game/world/verify_gate.cpp
   game/world/pool.cpp
   game/world/entity.cpp
   game/render/render_native.cpp
@@ -210,6 +210,7 @@ set(PORT_SRC
   game/render/render_queue.cpp
   game/render/screen_fade/screen_fade.cpp
   game/render/margin_render.cpp
+  game/render/ffspan.cpp
   game/audio/native_audio.c
   game/audio/native_music.cpp
   game/audio/music_list.cpp

@@ -9,7 +9,7 @@
 #include "cfg.h"
 #include "game.h"                 // Fps60::current_object
 #include "tomba2_types.h"         // T2_OBJLIST_HEAD_1/2, T2OBJ_HANDLER/NEXT/RENDER_FLAG
-#include "margin_render.hpp"      // margin_render_flush (native widescreen margin pass)
+#include "render.h"               // c->mRender->margin.flush (native widescreen margin pass)
 #include <stdint.h>
 #include <stdio.h>
 
@@ -23,7 +23,8 @@ namespace {
 inline void call_handler(Core* c, uint32_t node) {
   uint32_t h = c->mem_r32(node + T2OBJ_HANDLER);
   if (cfg_dbg("behhist")) {
-    static uint32_t addr[64]; static long cnt[64]; static int nh=0; static long w=0;
+    ObjectList& ol = c->engine.objectList;
+    uint32_t* addr = ol.mBehAddr; long* cnt = ol.mBehCnt; int& nh = ol.mBehN; long& w = ol.mBehW;
     int i=0; for(; i<nh; i++) if(addr[i]==h) break;
     if(i==nh && nh<64){ addr[nh]=h; cnt[nh]=0; nh++; }
     if(i<64) cnt[i]++;
@@ -49,14 +50,12 @@ void ObjectList::walkAll() {
   long nodes = 0;
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_1), &nodes);
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
-  margin_render_flush(c);
+  c->mRender->margin.flush(c);
 
-  static int  s_dbg   = -1;
-  static long s_walks = 0;
-  if (s_dbg < 0) s_dbg = cfg_dbg("engine") ? 1 : 0;
-  if (s_dbg && (s_walks % 300) == 0)
-    fprintf(stderr, "[engine] objwalk #%ld: %ld nodes\n", s_walks, nodes);
-  s_walks++;
+  if (mDbg < 0) mDbg = cfg_dbg("engine") ? 1 : 0;
+  if (mDbg && (mWalksAll % 300) == 0)
+    fprintf(stderr, "[engine] objwalk #%ld: %ld nodes\n", mWalksAll, nodes);
+  mWalksAll++;
 }
 
 void ObjectList::walkList2() {
@@ -66,12 +65,10 @@ void ObjectList::walkList2() {
   // NB: no margin_render_flush here — that belongs to walkAll (walkList2 is a distinct call site
   // from Sop::fieldUpdate, not a replacement of the whole entity walk).
 
-  static int  s_dbg   = -1;
-  static long s_walks = 0;
-  if (s_dbg < 0) s_dbg = cfg_dbg("engine") ? 1 : 0;
-  if (s_dbg && (s_walks % 300) == 0)
-    fprintf(stderr, "[engine] objwalk_l2 #%ld: %ld nodes\n", s_walks, nodes);
-  s_walks++;
+  if (mDbg < 0) mDbg = cfg_dbg("engine") ? 1 : 0;
+  if (mDbg && (mWalksL2 % 300) == 0)
+    fprintf(stderr, "[engine] objwalk_l2 #%ld: %ld nodes\n", mWalksL2, nodes);
+  mWalksL2++;
 }
 
 void ObjectList::walkAux() {

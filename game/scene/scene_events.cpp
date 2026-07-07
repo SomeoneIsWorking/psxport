@@ -8,7 +8,7 @@
 #include "cfg.h"
 #include "scene/scene_events.h"
 #include "scene/engine.h"
-#include "world/verify_gate.h"
+#include "game.h"              // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -35,7 +35,7 @@ uint32_t SceneEvents::classSize(uint8_t argKey, bool nibbleLo) {
   return c->mem_r32(TBL_B_BASE + nibble * 4u);
 }
 
-// The arm primitive body. Wrapped by SceneEvents::arm below so it can be A/B'd via verifyGate.
+// The arm primitive body. Wrapped by SceneEvents::arm below so it can be A/B'd via the verify harness.
 // Return value convention (mirrors the recomp exactly):
 //    -1 if events gate off (recomp's `addiu v0, zero, -1` on the early-return path)
 //     0 if the per-slot flag was already set (recomp's `addu v0, zero, zero` on the branch epilogue)
@@ -79,7 +79,7 @@ static uint32_t scene_events_arm_body(Core* c) {
 int32_t SceneEvents::arm(uint8_t eventId) {
   Core* c = this->core;
   c->r[4] = eventId;
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("sceneeventsarmverify") ? 1 : 0;
-  c->engine.verifyGate.run(scene_events_arm_body, 0x80040B48u, "sceneeventsarmverify", s_v);
+  c->game->verify.run(scene_events_arm_body, 0x80040B48u, "sceneeventsarmverify",
+                      c->game->verify.on("sceneeventsarmverify"));
   return (int32_t)c->r[2];
 }

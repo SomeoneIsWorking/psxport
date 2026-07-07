@@ -30,6 +30,8 @@
 #include "platform_hle.h"          // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
 #include "memcard.h"               // class Memcard — host-backed 128 KB memory card device
 #include "dbg_server.h"            // class DbgServer — live TCP debug endpoint (127.0.0.1)
+#include "verify_harness.h"        // class VerifyHarness — shared A/B verify scaffold (game/core)
+#include "ffspan.h"                // class FfSpan — PSXPORT_BDTAG builder-span attribution (game/render)
 
 class Sbs;                          // forward decl — Game holds `sbs` back-pointer set by Sbs::run
 #include <stdint.h>
@@ -188,6 +190,8 @@ public:
   PlatformHle platform_hle; // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
   Memcard     memcard;      // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
   DbgServer   dbg_server;   // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
+  VerifyHarness verify;     // shared A/B verify scaffold: snapshot buffers + per-check counters
+  FfSpan      ffspan;       // PSXPORT_BDTAG per-frame builder-span attribution
   Sbs*        sbs = nullptr;// SBS harness back-pointer (nullptr in standalone; set by Sbs::run)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
@@ -230,6 +234,10 @@ public:
   // just makes A run the same substrate as B (trivial byte-match).
   bool pc_skip = true;
 
+  // Field BGM director latch (game_tomba2.cpp field_bgm_director): a MusicList field song was
+  // started and is still considered live (was a function-local static — wrong under two Games).
+  int field_bgm_started = 0;
+
   // ---- dual-core diff mode (dualcore.cpp) ----------------------------------------------------------
   // When set, the frame body runs ONLY the guest-state-mutating work (per-frame update + scheduler +
   // loaders) and SKIPS all host output — present, pace, audio device feed, render submit, FMV. This lets
@@ -259,7 +267,7 @@ public:
            hle.game = this; rq.game = this; pcSched.game = this;
            spu_audio.game = this; native_music.game = this; music_list.game = this;
            rml_overlay.game = this; platform_hle.game = this; memcard.game = this;
-           dbg_server.game = this;
+           dbg_server.game = this; verify.core = &core; ffspan.core = &core;
            spu_state = SPU_NewState(); mdec_state = MDEC_NewState();
            cdc_state_init(&cdc); xa_state_init(&xa); }   // per-instance CD-controller + XA streamer defaults
   ~Game() { SPU_FreeState(spu_state); MDEC_FreeState(mdec_state); }

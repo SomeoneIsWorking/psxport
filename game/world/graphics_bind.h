@@ -18,6 +18,7 @@ class Core;
 class GraphicsBind {
 public:
   Core* core = nullptr;
+  int mTrace = -1;   // PSXPORT_RECALLOC_TRACE latch (-1 = not read yet); recordAlloc caller-attribution
   void recordAlloc();     // FUN_8007AAE8
   void recordInit();      // FUN_80051B70
   void renderUpdate();    // FUN_800517F8

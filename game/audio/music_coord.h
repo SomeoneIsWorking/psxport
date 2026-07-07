@@ -17,6 +17,10 @@ class MusicCoord {
 public:
   Core* core = nullptr;
 
+  // PSXPORT_XA_DBG change-detector for tick()'s [coord] log line (song/xa-active/xa-loop last-seen).
+  uint32_t mPrev = 0xDEAD;
+  int      mPa = -1, mPl = -1;
+
   // dialogToneActive(): true iff the CURRENT-SONG index (0x800bed80) is in [4, 7] — the
   //   dialog-tone range (regular/worry/etc, user-identified). Cheap read, safe every frame.
   bool dialogToneActive();

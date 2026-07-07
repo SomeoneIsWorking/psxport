@@ -8,7 +8,7 @@
 #include "core.h"
 #include "game.h"   // Fps60::current_object
 #include "cfg.h"
-#include "margin_render.hpp"
+#include "render.h"   // c->mRender->margin (widescreen margin collect)
 #include "cull.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -328,7 +328,7 @@ void Cull::objectCull() { Core* c = core;
         // (terrain/water/static scenery) — the dominant edge/corner pop-in. Dynamic entities are NOT
         // poked visible here (that would perturb their gameplay state), so widening the cone safely
         // un-pops the static world without disturbing enemy/item/NPC logic.
-        if (margin_native_enabled()) { margin_collect(c, o); }
+        if (c->mRender->margin.nativeEnabled()) { c->mRender->margin.collect(c, o); }
         else { c->mem_w8(o + 1, 1); c->r[2] = 1; }                          // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object

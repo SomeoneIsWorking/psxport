@@ -135,8 +135,7 @@ int NativeScenePass::collect() {
   }
 
   if (dbg) {
-    static long fr = 0;
-    if ((fr++ % 60) == 0)
+    if ((mDbgFrame++ % 60) == 0)
       fprintf(stderr, "[rendernative] scene: %d live, %d 3D-mesh nodes, %d geomblk objects (H=%.0f ofx=%.0f)\n",
               nlive, nmesh, out->count, (double)out->cam.H, (double)out->cam.ofx);
   }

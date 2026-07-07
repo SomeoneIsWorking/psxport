@@ -25,7 +25,6 @@
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
-extern "C" void ffspan_begin(Core*), ffspan_end(Core*, const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
 // (ov_bg_scene_transition_sm moved to BgSceneTransitionSm::step — c->engine.bgSceneTransitionSm.step())
 #include "render/screen_fade/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
@@ -391,16 +390,16 @@ void Sop::fieldUpdate() { Core* c = core;
     c->mem_w16(sm + 0x60, (uint16_t)(delay - 1));          // startup delay: just count down
   } else {
     // BG scene transition SM (native, FUN_8002655c) — the intro-cutscene fade manager.
-    ffspan_begin(c);
+    c->game->ffspan.begin();
     c->engine.bgSceneTransitionSm.step();
-    ffspan_end(c, "bgscene");
+    c->game->ffspan.end("bgscene");
 
     // Scene cam-frustum prepass (guest FUN_8010A0E0): builds the per-frame 2D frustum triangle in
     // scene-grid space and hands it to FUN_8010A3AC (still substrate) which raster-gathers covered
     // cell ids into the SCENE_ENT_TABLE list. Top-down layer above the list-2 walk.
-    ffspan_begin(c);
+    c->game->ffspan.begin();
     scenePrepass(SCENE_ENT_TABLE);
-    ffspan_end(c, "scenePrepass");
+    c->game->ffspan.end("scenePrepass");
 
     // Tomba/list-2 walk (guest FUN_8007B008): dispatches each list-2 node's +0x1c handler; Tomba
     // is one of those nodes, so this is the top-down layer immediately above Tomba's per-frame
@@ -433,9 +432,9 @@ void Sop::fieldUpdate() { Core* c = core;
     const bool bgVisible = (c->mem_r8(SCENE_BEAT) != 5);
     if (bgVisible) {
       // Parallax BG state machine (native, FUN_8010BFFC) — class ParallaxBg on Engine.
-      ffspan_begin(c);
+      c->game->ffspan.begin();
       c->engine.parallaxBg.step();
-      ffspan_end(c, "parallaxBG");
+      c->game->ffspan.end("parallaxBG");
     }
     // NOTE: no entity-render / object-walk call here. ov_scene_native (engine_render_walk.cpp) is the
     // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
@@ -447,9 +446,9 @@ void Sop::fieldUpdate() { Core* c = core;
     if (bgVisible) {
       // BG tile scroller (substrate — emits GP0 packets; belongs to the PC-native BG renderer
       // rewrite, not a mechanical port). See "REBUILD, don't transcribe" in CLAUDE.md.
-      ffspan_begin(c);
+      c->game->ffspan.begin();
       d1(c, 0x8010c26cu, PARALLAX_BG_SM);
-      ffspan_end(c, "bgscroll");
+      c->game->ffspan.end("bgscroll");
     }
     c->mem_w8(IN_FIELD_UPDATE, 0);
   }

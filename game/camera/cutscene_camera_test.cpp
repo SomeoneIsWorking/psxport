@@ -43,8 +43,13 @@ constexpr Region REGIONS[] = {
 constexpr int NREG = sizeof(REGIONS) / sizeof(REGIONS[0]);
 constexpr int MAXW = 256;
 
-uint32_t g_seed = 0x1234567u;
-uint32_t rnd() { g_seed = g_seed * 1664525u + 1013904223u; return g_seed; }
+// Deterministic test-local RNG + mismatch-report rate-limit (was file-scope g_seed / g_reported;
+// lives on the test driver's stack so nothing at file scope is mutable).
+struct CamTestState {
+  uint32_t seed = 0x1234567u;
+  int reported = 0;
+  uint32_t rnd() { seed = seed * 1664525u + 1013904223u; return seed; }
+};
 
 void snap(Core* c, uint32_t buf[NREG][MAXW]) {
   for (int r = 0; r < NREG; r++)
@@ -57,37 +62,37 @@ void restore(Core* c, uint32_t buf[NREG][MAXW]) {
 
 // Seed a fresh randomized-but-valid state. Selectors are drawn from small ranges so every switch arm is
 // reachable; pointer fields point at real RAM so pointer-chasing paths read valid (identical) memory.
-void seed(Core* c) {
+void seed(Core* c, CamTestState& ts) {
   for (int r = 0; r < NREG; r++)
-    for (uint32_t i = 0; i < REGIONS[r].words; i++) c->mem_w32(REGIONS[r].base + i * 4, rnd());
-  for (int i = 0; i < 64; i++) { c->mem_w32(P0 + i * 4, rnd()); c->mem_w32(P1 + i * 4, rnd()); }
+    for (uint32_t i = 0; i < REGIONS[r].words; i++) c->mem_w32(REGIONS[r].base + i * 4, ts.rnd());
+  for (int i = 0; i < 64; i++) { c->mem_w32(P0 + i * 4, ts.rnd()); c->mem_w32(P1 + i * 4, ts.rnd()); }
   // pointer fields -> valid RAM
   c->mem_w32(G + 0x10,  P0);
   c->mem_w32(G + 0x158, P1);
   // mode selectors across their full ranges (so all jump-table arms are exercised)
-  c->mem_w8(G + 0x164, (uint8_t)(rnd() % 14));      // main sub-op jump table (0..12, >=13)
-  c->mem_w8(G + 0x165, (uint8_t)(rnd() & 1));
-  c->mem_w8(G + 0x168, (uint8_t)(rnd() % 6));
-  c->mem_w8(G + 0x61,  (uint8_t)(rnd() & 0x93));    // rot/dist/heading selector bits
-  c->mem_w8(G + 0x147, (uint8_t)(rnd() & 1));
-  c->mem_w8(G + 0x145, (uint8_t)(rnd() % 3));
-  c->mem_w8(G + 0x17a, (uint8_t)(rnd() & 1));
-  c->mem_w8(0x800BF870u, (uint8_t)(rnd() % 15));    // render-mode selector (yFloor + table1)
-  c->mem_w8(0x800BF871u, (uint8_t)(rnd() % 8));
-  c->mem_w8(0x800BF816u, (uint8_t)(rnd() & 1));
-  c->mem_w8(0x800BF821u, (uint8_t)(rnd() % 3));
-  c->mem_w8(CAM + 0x72, (uint8_t)(rnd() & 0xC3));    // dist/rot flag byte
-  c->mem_w8(CAM + 0x74, (uint8_t)(rnd() & 0x0E));    // heading gate bits
-  c->mem_w8(CAM + 0x76, (uint8_t)(rnd() & 1));
-  c->mem_w8(CAM + 0x77, (uint8_t)(rnd() & 1));
+  c->mem_w8(G + 0x164, (uint8_t)(ts.rnd() % 14));      // main sub-op jump table (0..12, >=13)
+  c->mem_w8(G + 0x165, (uint8_t)(ts.rnd() & 1));
+  c->mem_w8(G + 0x168, (uint8_t)(ts.rnd() % 6));
+  c->mem_w8(G + 0x61,  (uint8_t)(ts.rnd() & 0x93));    // rot/dist/heading selector bits
+  c->mem_w8(G + 0x147, (uint8_t)(ts.rnd() & 1));
+  c->mem_w8(G + 0x145, (uint8_t)(ts.rnd() % 3));
+  c->mem_w8(G + 0x17a, (uint8_t)(ts.rnd() & 1));
+  c->mem_w8(0x800BF870u, (uint8_t)(ts.rnd() % 15));    // render-mode selector (yFloor + table1)
+  c->mem_w8(0x800BF871u, (uint8_t)(ts.rnd() % 8));
+  c->mem_w8(0x800BF816u, (uint8_t)(ts.rnd() & 1));
+  c->mem_w8(0x800BF821u, (uint8_t)(ts.rnd() % 3));
+  c->mem_w8(CAM + 0x72, (uint8_t)(ts.rnd() & 0xC3));    // dist/rot flag byte
+  c->mem_w8(CAM + 0x74, (uint8_t)(ts.rnd() & 0x0E));    // heading gate bits
+  c->mem_w8(CAM + 0x76, (uint8_t)(ts.rnd() & 1));
+  c->mem_w8(CAM + 0x77, (uint8_t)(ts.rnd() & 1));
 }
 
-int g_reported = 0;
 
 // Run one method vs the oracle; return mismatch count. `nat` invokes the native method; (addr,a0,a1) is the
 // guest function + its register args for the oracle. Inputs are snapshot before nat and restored before the
 // oracle so both run on identical state; outputs are diffed across every region.
-int check(Core* c, const char* name, uint32_t addr, std::function<void()> nat, uint32_t a0, uint32_t a1) {
+int check(Core* c, CamTestState& ts, const char* name, uint32_t addr, std::function<void()> nat,
+          uint32_t a0, uint32_t a1) {
   uint32_t in[NREG][MAXW], mine[NREG][MAXW], rs[32];
   snap(c, in);
   memcpy(rs, c->r, sizeof rs);
@@ -114,7 +119,7 @@ int check(Core* c, const char* name, uint32_t addr, std::function<void()> nat, u
       uint32_t o = c->mem_r32(REGIONS[r].base + i * 4);
       if (mine[r][i] != o) {
         bad++;
-        if (g_reported++ < 30)
+        if (ts.reported++ < 30)
           fprintf(stderr, "[camtest] MISMATCH %-10s %s+0x%03x  mine=%08x oracle=%08x\n",
                   name, REGIONS[r].name, i * 4, mine[r][i], o);
       }
@@ -127,10 +132,11 @@ int check(Core* c, const char* name, uint32_t addr, std::function<void()> nat, u
 int run_camera_oracle(const char* path) {
   Game* game = new Game();
   Core* c = &game->core;
+  CamTestState ts;
   load_exe(path, c);
 
   const int ITERS = cfg_str("PSXPORT_SELFTEST_ITERS") ? atoi(cfg_str("PSXPORT_SELFTEST_ITERS")) : 3000;
-  fprintf(stderr, "[camtest] CutsceneCamera oracle test: %d iterations/method, seed=0x%08x\n", ITERS, g_seed);
+  fprintf(stderr, "[camtest] CutsceneCamera oracle test: %d iterations/method, seed=0x%08x\n", ITERS, ts.seed);
 
   struct Case { const char* name; uint32_t addr; int usesTarget; };
   const Case cases[] = {
@@ -167,17 +173,17 @@ int run_camera_oracle(const char* path) {
     const Case& t = cases[ci];
     int bad = 0, skip = 0, ran = 0;
     for (int it = 0; it < ITERS; it++) {
-      if (cfg_on("PSXPORT_SELFTEST_VERBOSE")) { fprintf(stderr, "[camtest]  %s iter %d seed=%08x\n", t.name, it, g_seed); fflush(stderr); }
-      seed(c);
+      if (cfg_on("PSXPORT_SELFTEST_VERBOSE")) { fprintf(stderr, "[camtest]  %s iter %d seed=%08x\n", t.name, it, ts.seed); fflush(stderr); }
+      seed(c, ts);
       // Driver/init depend on the render-mode byte across its FULL range (init's 21-entry jump table +
       // the mode-0/1 render dispatch reach labels the default seed() range (0..14) misses); widen it here.
-      if (ci == 22 || ci == 23) c->mem_w8(0x800BF870u, (uint8_t)(rnd() % 22));
+      if (ci == 22 || ci == 23) c->mem_w8(0x800BF870u, (uint8_t)(ts.rnd() % 22));
       if (ci == 23) {                                  // update: force the run state + a real mode byte
         c->mem_w8(CAM + 0, 1);                         //   outer state = 1 (run)
-        c->mem_w8(CAM + 1, (uint8_t)(rnd() & 1));      //   sub-state 0/1
-        c->mem_w8(CAM + 0x64, (uint8_t)((rnd() % 20) | (rnd() & 0xC0)));   // mode + gate bits
+        c->mem_w8(CAM + 1, (uint8_t)(ts.rnd() & 1));      //   sub-state 0/1
+        c->mem_w8(CAM + 0x64, (uint8_t)((ts.rnd() % 20) | (ts.rnd() & 0xC0)));   // mode + gate bits
       }
-      if (ci == 24) c->mem_w8(CAM + 0x76, (uint8_t)(rnd() % 12));   // shakeTail: sweep every state + default
+      if (ci == 24) c->mem_w8(CAM + 0x76, (uint8_t)(ts.rnd() % 12));   // shakeTail: sweep every state + default
       CutsceneCamera cam(c, CAM);
       uint32_t a1 = t.usesTarget ? TGT : 0;
       std::function<void()> nat;
@@ -208,7 +214,7 @@ int run_camera_oracle(const char* path) {
         case 23: nat = [&]{ cam.update(); }; break;
         case 24: nat = [&]{ cam.shakeTail(); }; break;
       }
-      int m = check(c, t.name, t.addr, nat, CAM, a1);
+      int m = check(c, ts, t.name, t.addr, nat, CAM, a1);
       if (m < 0) skip++; else { bad += m; ran++; }
       total_runs++;
     }

@@ -42,6 +42,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "inventory.h"
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -111,30 +112,30 @@ static void inv_add_body(Core* c) {
 // snapshot/roll-back with the same buffers and corrupt the outer A/B). While inside a gate, every nested
 // inventory override runs its plain native body directly. (Same constraint the scriptvm/grid gates face;
 // here the wrapper→core call makes it explicit.)
-static int s_in_gate = 0;
 
 // Full RAM+scratchpad A/B vs rec_super_call. The pure-leaf core touches no guest stack; the wrappers
 // dispatch the PSX event sink (0x8004ED0C->0x8004FA38), whose own below-sp frame differs harmlessly across
 // the twice-run passes, so the wrapper gate excludes the top-of-RAM stack window [sp-0x800, sp).
 static void inv_ab_gate(Core* c, uint32_t addr, void (*native)(Core*), int exclude_stack, const char* nm) {
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t* ram0 = c->game->verify.ram0();
+  uint8_t* ramN = c->game->verify.ramN();
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
   uint32_t a0 = c->r[4], a1 = c->r[5];
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  s_in_gate++; native(c); s_in_gate--;
+  c->inventory.inGate++; native(c); c->inventory.inGate--;
   uint32_t v0_n = c->r[2];
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  s_in_gate++; rec_super_call(c, addr); s_in_gate--;    // inner jal 0x8004D338 re-enters native-only (guard)
+  c->inventory.inGate++; rec_super_call(c, addr); c->inventory.inGate--;    // inner jal 0x8004D338 re-enters native-only (guard)
   uint32_t v0_o = c->r[2];
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1;
   for (uint32_t a = 0; a < 0x200000; a++)
     if (c->ram[a] != ramN[a] && !(exclude_stack && a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
+  VerifyHarness::Check& chk = c->game->verify.check("invverify");
+  long &ng = chk.nMatch, &nb = chk.nMismatch;
   if (ro >= 0 || so >= 0) {  // these fns return void; v0 is dead, don't gate on it
     if (nb++ < 40)
       fprintf(stderr, "[%s] MISMATCH a0=%08x a1=%x v0 n=%x o=%x ram@%x(n=%02x o=%02x) spad@%x sp=%x\n",
@@ -142,11 +143,9 @@ static void inv_ab_gate(Core* c, uint32_t addr, void (*native)(Core*), int exclu
   } else if (++ng % 200 == 0) fprintf(stderr, "[%s] %ld matches (last a0=%08x a1=%x)\n", nm, ng, a0, a1);
 }
 
-static int s_invverify = -1;
-static inline int invverify_on(void) { if (s_invverify < 0) s_invverify = cfg_dbg("invverify") ? 1 : 0; return s_invverify; }
 
 void Inventory::addEntry(Core* c) {       // FUN_8004D338
-  if (invverify_on() && !s_in_gate) { inv_ab_gate(c, 0x8004D338u, inv_add_body, 0, "invverify"); return; }
+  if (c->game->verify.on("invverify") && !c->inventory.inGate) { inv_ab_gate(c, 0x8004D338u, inv_add_body, 0, "invverify"); return; }
   inv_add_body(c);
 }
 
@@ -159,7 +158,7 @@ static void inv_give_and_flag_body(Core* c) {
   rec_dispatch(c, 0x8004ED0Cu);
 }
 void Inventory::giveAndFlagEntry(Core* c) {    // FUN_8004D4C4
-  if (invverify_on() && !s_in_gate) { inv_ab_gate(c, 0x8004D4C4u, inv_give_and_flag_body, 1, "invverify"); return; }
+  if (c->game->verify.on("invverify") && !c->inventory.inGate) { inv_ab_gate(c, 0x8004D4C4u, inv_give_and_flag_body, 1, "invverify"); return; }
   inv_give_and_flag_body(c);
 }
 
@@ -168,7 +167,7 @@ static void inv_give_body(Core* c) {
   inventory_add_native(c, c->r[4], c->r[5]);
 }
 void Inventory::giveEntry(Core* c) {           // FUN_8004D4F4
-  if (invverify_on() && !s_in_gate) { inv_ab_gate(c, 0x8004D4F4u, inv_give_body, 1, "invverify"); return; }
+  if (c->game->verify.on("invverify") && !c->inventory.inGate) { inv_ab_gate(c, 0x8004D4F4u, inv_give_body, 1, "invverify"); return; }
   inv_give_body(c);
 }
 

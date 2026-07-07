@@ -100,4 +100,11 @@ private:
   uint8_t mHeldR     = 0;
   uint8_t mHeldG     = 0;
   uint8_t mHeldB     = 0;
+
+  // `debug fadetrace` channel — logs every native-path fade call with the calling context; prints
+  // the C++ backtrace only on FIRST occurrence of a given (op,mode,rgb) tuple (mSeen dedupe).
+  void fadetrace(const char* op, uint8_t mode, uint32_t rgb, const char* extra);
+  int      mTraceOn = -1;      // lazy cfg latch
+  uint32_t mSeen[64] = {};     // first-time (op,mode,rgb) dedupe keys
+  int      mSeenN = 0;
 };

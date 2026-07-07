@@ -137,12 +137,11 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
 void MusicCoord::tick() {
   Core* c = this->core;
   if (cfg_str("PSXPORT_XA_DBG")) {
-    static uint32_t prev = 0xDEAD; static int pa = -1, pl = -1;
     uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
-    if (s != prev || a != pa || l != pl) {
+    if (s != mPrev || a != mPa || l != mPl) {
       fprintf(stderr, "[coord] song=%u tone=%d xa_active=%d loop=%d pending=%d\n",
               s, dialogToneActive(), a, l, c->game->cd.pending_music);
-      prev = s; pa = a; pl = l;
+      mPrev = s; mPa = a; mPl = l;
     }
   }
   if (dialogToneActive()) {

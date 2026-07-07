@@ -27,6 +27,16 @@ class ObjectList {
 public:
   Core* core = nullptr;
 
+  // `behhist` diagnostic: distinct-handler histogram over the dispatch path (was function-local
+  // statics in the TU-local call_handler; per-Core so SBS's two cores tally independently).
+  uint32_t mBehAddr[64] = {};
+  long     mBehCnt[64] = {};
+  int      mBehN = 0;
+  long     mBehW = 0;
+  // `debug engine` objwalk log: cfg latch + per-walker cadence counters.
+  int  mDbg = -1;
+  long mWalksAll = 0, mWalksL2 = 0;
+
   // Auxiliary-list head (guest FUN_80069B28 walks this one only).
   static constexpr uint32_t AUX_LIST_HEAD = 0x800F2738u;
 

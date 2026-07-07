@@ -12,7 +12,6 @@
 #include <setjmp.h>
 #include <stdio.h>
 
-extern "C" void ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp)
 
 // Entry PCs the native stanzas handle. Under BOTH pc_skip modes native handlers run — that's the
 // actual test surface. The two modes differ in what the handlers DO:
@@ -141,7 +140,7 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
   int handled = 1;
   if (setjmp(yield_jmp) == 0) {
     if (game_fresh) c->engine.stagePrologue();
-    ffspan_begin(c); handled = c->engine.frame(); ffspan_end(c, "gameframe");
+    c->game->ffspan.begin(); handled = c->engine.frame(); c->game->ffspan.end("gameframe");
   } else if (cfg_dbg("sched")) {
     if (!warned_game_yield++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
                                               "yet sync) — frontier\n");

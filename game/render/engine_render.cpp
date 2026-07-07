@@ -48,18 +48,18 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 // c048) are owned SOLELY by ov_scene_native (engine_render_walk.cpp), which ov_draw_otag already runs every
 // field-stage frame — running them again here would double-submit every terrain/object prim. This function
 // now performs only the remaining non-walk PSX passes ov_scene_native does not cover.
-extern "C" void ffspan_begin(Core*), ffspan_end(Core*, const char*);   // PSXPORT_BDTAG attribution (engine_stage.cpp)
+#include "game.h"      // c->game->ffspan — PSXPORT_BDTAG builder-span attribution
 void Render::frame() { Core* c = mCore;
   if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
   if (mode.psxRender()) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
-  ffspan_begin(c); d0(c, 0x8004fd30u); ffspan_end(c, "rf_4fd30");
-  ffspan_begin(c); d0(c, 0x80025d98u); ffspan_end(c, "rf_25d98");   // 2D atlas SPRITE band (op-0x65)
+  c->game->ffspan.begin(); d0(c, 0x8004fd30u); c->game->ffspan.end("rf_4fd30");
+  c->game->ffspan.begin(); d0(c, 0x80025d98u); c->game->ffspan.end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
   // DIAG groundnative: route the ground table real-depth via Render::fieldEntityRender. Decode is CORRECT, but
   // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
   if (cfg_dbg("groundnative")) { fieldEntityRender(0x800f2418u); }
-  else { ffspan_begin(c); d1(c, 0x8003d0bcu, 0x800f2418u); ffspan_end(c, "rf_ground"); } // STILL-PSX GROUND (later-229)
-  ffspan_begin(c); d0(c, 0x8003f024u); ffspan_end(c, "rf_3f024");
-  ffspan_begin(c); d0(c, 0x8003df04u); ffspan_end(c, "rf_3df04");
+  else { c->game->ffspan.begin(); d1(c, 0x8003d0bcu, 0x800f2418u); c->game->ffspan.end("rf_ground"); } // STILL-PSX GROUND (later-229)
+  c->game->ffspan.begin(); d0(c, 0x8003f024u); c->game->ffspan.end("rf_3f024");
+  c->game->ffspan.begin(); d0(c, 0x8003df04u); c->game->ffspan.end("rf_3df04");
 }
 
 // 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). The walk cluster is owned by

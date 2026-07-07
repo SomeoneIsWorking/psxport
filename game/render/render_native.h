@@ -32,6 +32,8 @@ private:
   // static (per [[deglobalize_game_and_runtime_oop]]) and isn't on the stack. One buffer per Core; SBS's
   // two cores each get their own.
   RenderScene mScene;
+  // `rendernative` debug-log frame counter (collect()'s once-per-60 stats line).
+  long mDbgFrame = 0;
 };
 
 #endif

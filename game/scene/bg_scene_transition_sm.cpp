@@ -28,6 +28,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -173,10 +174,10 @@ void bg_scene_transition_sm(Core* c) {
 }
 
 static void bg_scene_transition_sm_verify(Core* c) {
-  static int s_v = -1; if (s_v < 0) s_v = cfg_dbg("bgscenesmverify") ? 1 : 0;
+  int s_v = c->game->verify.on("bgscenesmverify");
   if (!s_v) { bg_scene_transition_sm(c); return; }
-  static uint8_t* ram0 = (uint8_t*)malloc(0x200000);
-  static uint8_t* ramN = (uint8_t*)malloc(0x200000);
+  uint8_t* ram0 = c->game->verify.ram0();
+  uint8_t* ramN = c->game->verify.ramN();
   uint8_t spad0[0x400], spadN[0x400];
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
@@ -188,7 +189,8 @@ static void bg_scene_transition_sm_verify(Core* c) {
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
-  static long ng = 0, nb = 0;
+  VerifyHarness::Check& chk = c->game->verify.check("bgscenesmverify");
+  long &ng = chk.nMatch, &nb = chk.nMismatch;
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[bgscenesmverify] MISMATCH st=%u ram@%x (nat=%02x ora=%02x) spad@%x\n",
                            c->mem_r8(P + 4), ro, ro >= 0 ? ramN[ro] : 0, ro >= 0 ? c->ram[ro] : 0, so);

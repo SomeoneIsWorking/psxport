@@ -2,7 +2,7 @@
 // (the object pool + the three live doubly-linked object lists). The pool/list ADDRESS CONSTANTS and the
 // `struct PoolDesc` (a free-list head + count pair) live here so the spawn/despawn TU has one home for
 // them. Cross-TU shared SYMBOLS are declared in their owning headers, not here: spawn_dispatch in
-// spawn.h (used by placement.cpp), record_gate in verify_gate.h (used by spawn.cpp + graphics_bind.cpp).
+// spawn.h (used by placement.cpp), the verify harness in game/core/verify_harness.h.
 #ifndef GAME_WORLD_POOL_H
 #define GAME_WORLD_POOL_H
 #include <stdint.h>
