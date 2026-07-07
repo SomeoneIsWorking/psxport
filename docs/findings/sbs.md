@@ -5,6 +5,23 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Faithful SOP intro byte-exact (2026-07-07, c4c27a3) — frontier f114 packet-pool pointer
+
+Sop::fieldModeFaithful (mirror of ov_sop_gen_80109450) + Sop::areaLoadFaithful (mirror of
+ov_sop_gen_80109164, task-1 fiber body) landed; the ENTIRE SOP intro cutscene holds strict
+byte-exact lockstep (autonav f29 -> f114). The pre-fiber slip machinery (sop_field_step defer,
+RNG compensations) is pc_skip-only now.
+
+**OPEN FRONTIER f114:** 0x800BF544 (packet-pool write pointer) — A's writer is a NATIVE chain
+(stale pc=800834A0 from an HLE wrapper, ra=DEAD0000) vs B's substrate packet alloc
+(pc=0x80083DE0 ra=0x80078FA8) during the SOP intro's rendering, WITH PSXPORT_SBS_FORCE_PSX_RENDER=1
+on both cores. So some native frame-loop/render path still advances or resets the pool pointer
+differently from the substrate render under psx_render on core A. Chase: find who writes
+0x800BF544 on A at f114 (host backtrace via a narrow PREWATCH, or read native_boot.cpp's pool
+swap at ~line 105 + Render::frame's psxRender gating); the fix must make A's psx_render frame
+execute the same pool traffic as B's (the old f217 "render-mode mismatch by design" exemption is
+DEAD under the read-only-overlay directive — the substrate render is faithful state).
+
 ## Faithful s48_2 chain discipline (2026-07-07, 640d23e) — frontier f29 = SOP field-mode
 
 The RUNNING chain (frame -> s48_2_frame -> submode0) now mirrors the guest byte shape (frames,
