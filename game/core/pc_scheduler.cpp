@@ -367,27 +367,47 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
 PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uint32_t base, uint32_t st,
                                                              int native_content, const R3000& loop) {
   if (!native_content) return STANZA_NOT_MINE;
-  int t1_fresh = st == 3 || (st == 2 && !task_started[i]);
-  if (!t1_fresh) return STANZA_NOT_MINE;
-  const uint32_t entry_pc = c->mem_r32(base + 0xc);
-  const bool is_preload_body    = entry_pc == 0x80044F58u;
-  const bool is_stage1_callback = entry_pc == 0x8004514Cu;
-  if (!is_preload_body && !is_stage1_callback) return STANZA_NOT_MINE;
-  task_ctx[i] = loop;
-  task_ctx[i].r[29] = c->mem_r32(base + 8);
-  task_ctx[i].r[31] = 0xDEAD0000u;
-  task_started[i] = 1;
+  Coro*& co = coro[i];
+  const int fresh = (st == 3 || (st == 2 && !task_started[i]));
+  if (fresh) {
+    const uint32_t entry_pc = c->mem_r32(base + 0xc);
+    const bool is_preload_body    = entry_pc == 0x80044F58u;
+    const bool is_stage1_callback = entry_pc == 0x8004514Cu;
+    if (!is_preload_body && !is_stage1_callback) return STANZA_NOT_MINE;
+    if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
+    task_ctx[i] = loop;
+    task_ctx[i].r[29] = c->mem_r32(base + 8);
+    task_ctx[i].r[31] = 0xDEAD0000u;
+    task_started[i] = 1;
+    native_fiber[i] = 1;
+    Core* cc = c;
+    co = new Coro();
+    if (is_preload_body) co->start([cc] { cc->engine.asset.loadTexgroup(); });
+    else                 co->start([cc] { cc->engine.asset.preloadStage1AsTask(); });
+  } else if (!native_fiber[i]) {
+    return STANZA_NOT_MINE;
+  } else if (st != 2 || !co || co->done()) {
+    if (st == 2) { task_started[i] = 0; native_fiber[i] = 0; }
+    return STANZA_HANDLED;                      // sleeping (st==1) or dead fiber
+  }
   c->mem_w16(base, 4);
   c->mem_w32(CUR_TASK, base);
   cur_slot = i;
-  static_cast<R3000&>(*c) = task_ctx[i];
   in_stage = 1;
-  if (setjmp(yield_jmp) == 0) {
-    if (is_preload_body) c->engine.asset.loadTexgroup();
-    else                 c->engine.asset.preloadStage1AsTask();
-  }
+  cur_is_coro = 1;
+  static_cast<R3000&>(*c) = task_ctx[i];
+  if (cfg_dbg("sched"))
+    fprintf(stderr, "[sched] slot %d native-fiber %s st=%u sp=0x%08X\n", i,
+            fresh ? "start" : "resume", st, task_ctx[i].r[29]);
+  co->resume();
+  cur_is_coro = 0;
   in_stage = 0;
-  task_started[i] = 0;
+  if (co->done() || c->mem_r16(base) == 0) {
+    c->mem_w16(base, 0);
+    task_started[i] = 0;
+    native_fiber[i] = 0;
+    delete co; co = nullptr;
+  }
   return STANZA_HANDLED;
 }
 

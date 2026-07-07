@@ -328,12 +328,57 @@ void Asset::preloadStage1() {
   c->mem_w32(0x1F80022Cu, v0);
 }
 
-// Task-1 body wrapper — same work as preloadStage1() plus the FUN_8004514C task-body tail:
-// set done_flag=1 (unblocks task-0's FUN_80044BD4 wait loop) then rec_dispatch 0x80051FB4
-// (task-end — longjmps back into the scheduler's setjmp block).
+// Task-1 body — FAITHFUL FUN_8004514C, run on a PcScheduler native fiber. Guest-stack
+// discipline (faithful-execution model): frame descent 32 with s0/s1/ra spills at +16/+20/+24,
+// r16/r17 carried live along the shard's flow (deeper callees — 8001DC40, 800754F4 — spill
+// them into THEIR frames, so the values must match core B's at each dispatch boundary). The
+// SEQ/VAB VRAM build stays the substrate leaf 0x800754F4: its FUN_800753D4 poll loop yields
+// through scheduler_yield each frame the SsVabTransCompleted flag is still clear, which is what
+// spreads this body across two slices on core B — dispatching the real leaf reproduces both the
+// cadence and its stack bytes organically. Byte shape: generated gen_func_8004514C. The pc_skip
+// shortcut is preloadStage1() above (synchronous, no yields — must never run on this path).
 void Asset::preloadStage1AsTask() {
-  preloadStage1();
   Core* c = this->core;
-  c->mem_w8(0x1F80019Bu, 1);
-  rec_dispatch(c, 0x80051FB4u);
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->mem_w32(sp + 24, c->r[31]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->r[16] = 0x800BE0F0u;                                          // s0 = boot file table
+  c->r[4] = 0x80157000u;                                           // 1. SWDATA.BIN
+  c->r[5] = c->mem_r32(0x800BE110u);
+  c->r[6] = c->mem_r32(0x800BE114u);
+  c->r[31] = 0x80045178u;
+  rec_dispatch(c, 0x8001DC40u);
+  c->r[31] = 0x80045180u;                                          // 2. texgroup sub-load
+  c->r[17] = 0x800F0000u;                                          //    (s1 upper set in the jal delay slot)
+  loadTexgroup();                                                  //    faithful FUN_80044F58
+  c->r[17] = 0x800EF478u;                                          // s1 = SWDATA descriptor block
+  uint32_t lo = c->mem_r32(0x800EF480u), hi = c->mem_r32(0x800EF484u);
+  c->r[4] = 0x80158000u;                                           // 3. DAT payload
+  c->r[5] = c->mem_r32(0x800BE100u) + (lo >> 11);
+  c->r[6] = hi - lo;
+  c->r[16] = hi - lo;                                              // s0 = payload size
+  c->r[31] = 0x800451ACu;
+  rec_dispatch(c, 0x8001DC40u);
+  const uint32_t dat_end = (hi - lo) + 0x80158000u;
+  c->mem_w32(0x1F800228u, dat_end);
+  c->mem_w32(0x800ED014u, dat_end);
+  const int32_t n = (int32_t)c->mem_r32(0x800EF488u);              // 4. relocation table
+  for (int32_t i = 0; i < n; i++) {
+    uint32_t word = c->mem_r32(0x800EF48Cu + i * 4);
+    c->r[16] = word >> 24;                                         // shard clobbers s0 with the slot index
+    c->mem_w32(0x800ECF58u + (word >> 24) * 4, (word & 0x00FFFFFFu) + 0x80158000u);
+  }
+  c->r[4] = 0x80182000u;                                           // 5. SEQ/VAB VRAM build — substrate
+  c->r[31] = 0x80045228u;                                          //    leaf; parks in its VAB poll
+  rec_dispatch(c, 0x800754F4u);
+  c->mem_w32(0x1F80022Cu, c->r[2]);                                // v0 = work-area end
+  c->mem_w8(0x1F80019Bu, 1);                                       // done_flag -> task-0 wait exits
+  c->r[31] = 0x80045244u;
+  c->game->pcSched.selfClose();                                    // FUN_80051FB4 — does not return on a task
+  c->r[31] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 32;
 }
