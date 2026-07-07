@@ -47,6 +47,8 @@ extern int16_t  IntermediateBuffer[4096][2];
 
 // Config: SPU update granularity, in 44.1 kHz samples advanced per inner step.
 // Upstream default (libretro.c) is 1 = full per-sample accuracy. Faithful = 1.
+// SANCTIONED VENDOR INTEROP (this + psx_spu_silent_voice_opt): the vendored Beetle spu.c reads
+// these knobs by extern; both are compile-time-constant "faithful" values here.
 uint8_t spu_samples = 1;
 
 // Config: skip envelope/FIR/sweep work for voices that are fully silent (EnvLevel 0,
@@ -103,6 +105,9 @@ typedef struct SpuWriteLog_ {
    uint32_t entries[8192];   // (addr, val) pairs; 4096 writes/frame budget
    uint32_t count;
 } SpuWriteLog_;
+// SANCTIONED BIND POINTER: spu_write is reached from instance-free paths (MMIO/DMA), so the active
+// core's log is bound per frame-step (spu_bind_log <- SpuDevice::bind), exactly like SPU_BindState
+// binds the SPU state itself. NULL when SBS is off.
 static SpuWriteLog_* s_spu_log = 0;
 void  spu_bind_log(void* log) { s_spu_log = (SpuWriteLog_*)log; }
 void  spu_log_reset(void* log) { if (log) ((SpuWriteLog_*)log)->count = 0; }
@@ -124,26 +129,27 @@ void spu_write(uint32_t addr, uint32_t val)
    // PSXPORT_SPU_DBG: surface whether the game drives the SPU at all (silent-output triage).
    // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
    if (cfg_dbg("spu")) {
-      static long n; uint32_t off = addr & 0x3FF;
-      n++;
-      static long datacnt; static uint32_t lastaddr;
+      // Process-wide `debug spu` print counters, consolidated in one static struct (this module is
+      // instance-free at its MMIO entry; the counters are log numbering only, never machine state).
+      static struct { long n, datacnt, voice_w, koff_w, vol_w, cdvol_w; uint32_t lastaddr; } sd;
+      uint32_t off = addr & 0x3FF;
+      long n = ++sd.n;
       // Per-category counters to separate "driver never runs its note path" from
       // "driver runs but keys nothing". Voice regs are 0x000..0x17F (24 voices x 0x10);
       // pitch is voice*0x10+0x04, ADSR is +0x06/+0x08, start-addr +0x06... we just count.
-      static long voice_w, koff_w, vol_w, cdvol_w;
-      if      (off < 0x180)                voice_w++;          // any of the 24 voices
-      else if (off == 0x18C || off == 0x18E) koff_w++;          // KOFF (key-off)
-      else if (off == 0x1B0 || off == 0x1B2) cdvol_w++;         // CD input volume L/R
-      else if (off == 0x180 || off == 0x182) vol_w++;           // main volume L/R
+      if      (off < 0x180)                sd.voice_w++;       // any of the 24 voices
+      else if (off == 0x18C || off == 0x18E) sd.koff_w++;       // KOFF (key-off)
+      else if (off == 0x1B0 || off == 0x1B2) sd.cdvol_w++;      // CD input volume L/R
+      else if (off == 0x180 || off == 0x182) sd.vol_w++;        // main volume L/R
       if (off == 0x188 || off == 0x18A) fprintf(stderr, "[spudbg] KON off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
       else if (off == 0x18C || off == 0x18E) fprintf(stderr, "[spudbg] KOFF off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
       else if (off == 0x1AA) fprintf(stderr, "[spudbg] SPUCNT=%04X enable=%d cdaudio=%d xfermode=%d (writes=%ld)\n", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
       else if (off == 0x1B0 || off == 0x1B2) fprintf(stderr, "[spudbg] CDVOL off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
-      else if (off == 0x1A6) { lastaddr = (val & 0xFFFF) << 3; fprintf(stderr, "[spudbg] SPU xfer ADDR=0x%05X\n", lastaddr); }
-      else if (off == 0x1A8) { datacnt++; if ((datacnt % 1000) == 1) fprintf(stderr, "[spudbg] SPU DATA-port write #%ld (val=%04X)\n", datacnt, val & 0xFFFF); }
+      else if (off == 0x1A6) { sd.lastaddr = (val & 0xFFFF) << 3; fprintf(stderr, "[spudbg] SPU xfer ADDR=0x%05X\n", sd.lastaddr); }
+      else if (off == 0x1A8) { sd.datacnt++; if ((sd.datacnt % 1000) == 1) fprintf(stderr, "[spudbg] SPU DATA-port write #%ld (val=%04X)\n", sd.datacnt, val & 0xFFFF); }
       if ((n % 20000) == 0)
          fprintf(stderr, "[spudbg] SUMMARY writes=%ld voice=%ld koff=%ld mainvol=%ld cdvol=%ld\n",
-                 n, voice_w, koff_w, vol_w, cdvol_w);
+                 n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
    }
    SPU_Write(0, addr & 0x3FF, (uint16_t)val);
 }
@@ -159,8 +165,9 @@ uint32_t spu_read(uint32_t addr)
 void spu_dma_write(const uint32_t *words, int count)
 {
    if (cfg_dbg("spu")) {
-      static long calls, total; calls++; total += count;
-      fprintf(stderr, "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)\n", count, calls, total);
+      static struct { long calls, total; } sd;   // process-wide `debug spu` print counters (see spu_write)
+      sd.calls++; sd.total += count;
+      fprintf(stderr, "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)\n", count, sd.calls, sd.total);
    }
    int i;
    for (i = 0; i < count; i++)
@@ -196,7 +203,7 @@ int spu_render(int16_t *out, int max_frames)
    memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
 
    if (cfg_dbg("spu")) {
-      static long fr; int peak = 0;
+      static long fr; int peak = 0;   // process-wide `debug spu` print counter (see spu_write)
       for (uint32_t i = 0; i < n * 2; i++) { int v = out[i]; if (v < 0) v = -v; if (v > peak) peak = v; }
       if ((++fr % 60) == 0 || peak > 0)
          fprintf(stderr, "[spudbg] spu_render frame %ld: %u stereo samples, peak=%d\n", fr, n, peak);

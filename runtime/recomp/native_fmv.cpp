@@ -60,12 +60,11 @@ int      mdec_dma_can_read(void);
 static void mdec_pump(void) { MDEC_Run(0x40000000); }
 
 void gpu_gp1(Core*, uint32_t w);
-void gpu_native_init(void);
 
 // pad access via c->game->pad — class Pad on Game (see game.h): pollSdl(), buttons field
 #define PAD_START 0x0008u                                   // Start button bit (active-low)
 
-static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size);
+static int fmv_resolve_path(DiscState* disc, const char* path, uint32_t* out_lba, uint32_t* out_size);
 
 
 #define SECTOR_USER   2048u
@@ -675,7 +674,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   // it in would freeze both panes in the FMV. Skip it entirely (like a headless run does at the call site),
   // so the concurrent-lockstep nav reaches free-roam. Both cores skip identically, so they stay in step.
   if (game->sbs) return 0;   // SBS: skip FMV (see comment above)
-  gpu_native_init();
+  game->gpu.gpu_native_init();
   mdec_init();
 
   uint32_t nsectors = (size_bytes + SECTOR_USER - 1) / SECTOR_USER;
@@ -720,7 +719,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   int skipped = 0;
   uint8_t raw[2352];
   while (sec < nsectors) {
-    if (!disc_read_raw(lba + sec, raw, 2352)) break;
+    if (!disc_read_raw(&game->disc, lba + sec, raw, 2352)) break;
     sec++;
     int submode = raw[18];
 
@@ -790,7 +789,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
 
 int Fmv::play(const char* path) {
   uint32_t lba = 0, size = 0;
-  if (!fmv_resolve_path(path, &lba, &size)) {
+  if (!fmv_resolve_path(&game->disc, path, &lba, &size)) {
     fprintf(stderr, "[fmv] could not resolve %s on disc\n", path);
     return -1;
   }
@@ -812,7 +811,7 @@ static void iso_name(const uint8_t* rec, int nlen, char* out, int outsz) {
   }
   out[j] = 0;
 }
-static int iso_find_child(uint32_t dir_lba, uint32_t dir_size, const char* name,
+static int iso_find_child(DiscState* disc, uint32_t dir_lba, uint32_t dir_size, const char* name,
                           int want_dir, uint32_t* clba, uint32_t* csize) {
   char upper[256]; int n = 0;
   for (const char* p = name; *p && n < 255; p++) {
@@ -824,7 +823,7 @@ static int iso_find_child(uint32_t dir_lba, uint32_t dir_size, const char* name,
   uint32_t nsec = (dir_size + SECTOR_USER - 1) / SECTOR_USER;
   uint8_t sbuf[SECTOR_USER];
   for (uint32_t s = 0; s < nsec; s++) {
-    if (!disc_read_sector(dir_lba + s, sbuf)) return 0;
+    if (!disc_read_sector(disc, dir_lba + s, sbuf)) return 0;
     uint32_t pos = 0;
     while (pos < SECTOR_USER) {
       uint8_t len = sbuf[pos];
@@ -846,9 +845,9 @@ static int iso_find_child(uint32_t dir_lba, uint32_t dir_size, const char* name,
   }
   return 0;
 }
-static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_size) {
+static int fmv_resolve_path(DiscState* disc, const char* path, uint32_t* out_lba, uint32_t* out_size) {
   uint8_t pvd[SECTOR_USER];
-  if (!disc_read_sector(16, pvd)) return 0;
+  if (!disc_read_sector(disc, 16, pvd)) return 0;
   if (memcmp(pvd + 1, "CD001", 5) != 0) return 0;
   uint32_t dir_lba  = le32(pvd + 156 + 2);
   uint32_t dir_size = le32(pvd + 156 + 10);
@@ -861,7 +860,7 @@ static int fmv_resolve_path(const char* path, uint32_t* out_lba, uint32_t* out_s
     while (*p == '/' || *p == '\\') p++;
     int last = (*p == 0);
     uint32_t clba = 0, csize = 0;
-    if (!iso_find_child(dir_lba, dir_size, comp, last ? 0 : 1, &clba, &csize)) return 0;
+    if (!iso_find_child(disc, dir_lba, dir_size, comp, last ? 0 : 1, &clba, &csize)) return 0;
     if (last) { *out_lba = clba; *out_size = csize; return 1; }
     dir_lba = clba; dir_size = csize;
   }

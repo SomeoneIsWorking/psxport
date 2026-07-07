@@ -236,9 +236,9 @@ void PcScheduler::step() {
     // Task slot 2 = XA voice/BGM. When the native clip player owns it, do NOT run the (now unused)
     // FUN_8001cfc8 recomp coroutine; reflect clip state into task-2's state byte so the cutscene's
     // `while (DAT_801fe0e0 != 0)` wait advances exactly when the clip finishes.
-    if (i == 2 && xa_stream_owns_slot2()) {
-      if (xa_stream_voice_busy()) c->mem_w16(base, 2);
-      else { c->mem_w16(base, 0); xa_stream_voice_release(); }
+    if (i == 2 && xa_stream_owns_slot2(&c->game->xa)) {
+      if (xa_stream_voice_busy(&c->game->xa)) c->mem_w16(base, 2);
+      else { c->mem_w16(base, 0); xa_stream_voice_release(&c->game->xa); }
       task_started[2] = 0;
       continue;
     }

@@ -24,7 +24,9 @@ uint32_t GTE_ReadCR(unsigned which);
 uint32_t GTE_ReadDR(unsigned which);
 }
 
-// Externs gte.c references — faithful-first values.
+// Externs gte.c references — faithful-first values. SANCTIONED VENDOR INTEROP: the vendored Beetle
+// gte.c reads these four knobs by extern; folding them into GteRegs would mean editing the fork for
+// no behavioral gain (all are compile-time-constant "faithful" values here).
 bool     psx_gte_overclock = false;
 uint8_t  widescreen_hack = 0;                   // GTE widescreen-scale hack OFF (faithful)
 uint8_t  widescreen_hack_aspect_ratio_setting = 0;
@@ -57,29 +59,29 @@ void     gte_write_ctrl(uint32_t reg, uint32_t v){ GTE_WriteCR(reg, v); }
 // and gpu_present dumps it every 500 frames. Reads SXY-FIFO (DR12/13/14) after RTPS/RTPT.
 #include <stdio.h>
 #include <stdlib.h>
-static long s_sx_hist[16];   // buckets of 64px from -256..+704 (display is [0,320))
-static long s_sx_n, s_sx_oob_lo, s_sx_oob_hi;
-static int  s_sxhist_on = -1;
+// (histogram state lives on GteRegs::dbg — the bound core's instance, gte_state.h)
 static void ws_sx_record(void) {
-  if (s_sxhist_on < 0) s_sxhist_on = cfg_dbg("sxhist") ? 1 : 0;
-  if (!s_sxhist_on) return;
+  GteDebug& d = GTE_CurState()->dbg;
+  if (d.sxhist_on < 0) d.sxhist_on = cfg_dbg("sxhist") ? 1 : 0;
+  if (!d.sxhist_on) return;
   for (unsigned r = 12; r <= 14; r++) {
     int16_t sx = (int16_t)(GTE_ReadDR(r) & 0xFFFF);
-    s_sx_n++;
-    if (sx < 0)   s_sx_oob_lo++;
-    if (sx >= 320) s_sx_oob_hi++;
+    d.sx_n++;
+    if (sx < 0)   d.sx_oob_lo++;
+    if (sx >= 320) d.sx_oob_hi++;
     int b = (sx + 256) / 64; if (b < 0) b = 0; if (b > 15) b = 15;
-    s_sx_hist[b]++;
+    d.sx_hist[b]++;
   }
 }
 void ws_sx_dump(const char* tag) {
-  if (s_sxhist_on != 1 || s_sx_n == 0) return;
+  GteDebug& d = GTE_CurState()->dbg;
+  if (d.sxhist_on != 1 || d.sx_n == 0) return;
   fprintf(stderr, "[ws_sxhist] %s n=%ld  below0=%ld(%.1f%%)  atOrAbove320=%ld(%.1f%%)\n",
-          tag, s_sx_n, s_sx_oob_lo, 100.0*s_sx_oob_lo/s_sx_n, s_sx_oob_hi, 100.0*s_sx_oob_hi/s_sx_n);
+          tag, d.sx_n, d.sx_oob_lo, 100.0*d.sx_oob_lo/d.sx_n, d.sx_oob_hi, 100.0*d.sx_oob_hi/d.sx_n);
   for (int b = 0; b < 16; b++)
-    fprintf(stderr, "  [%5d..%5d) %ld\n", b*64-256, b*64-256+64, s_sx_hist[b]);
-  for (int b = 0; b < 16; b++) s_sx_hist[b] = 0;
-  s_sx_n = s_sx_oob_lo = s_sx_oob_hi = 0;
+    fprintf(stderr, "  [%5d..%5d) %ld\n", b*64-256, b*64-256+64, d.sx_hist[b]);
+  for (int b = 0; b < 16; b++) d.sx_hist[b] = 0;
+  d.sx_n = d.sx_oob_lo = d.sx_oob_hi = 0;
 }
 
 #include "mods.h"                                 // g_mods.fps60 gates the capture tap (was g_fps60_on)
@@ -88,8 +90,6 @@ void ws_sx_dump(const char* tag) {
 // Logs which GTE commands ACTUALLY execute (static call-site counts in generated/ aren't run-weighted)
 // and snapshots the lighting/fog control registers, to pin down Tomba2's shading model. Finding so far:
 // NO NC*/CC/CDP ops => no GTE dynamic per-vertex lighting; colors are baked + DPCS/DPCT depth-cue FOG.
-static long s_gte_hist[64];
-static int  s_gteprobe = -1, s_gteprobe_done = 0;
 static const char* gte_name(unsigned fn) {
   switch (fn) {
     case 0x01:return"RTPS"; case 0x06:return"NCLIP"; case 0x0C:return"OP"; case 0x10:return"DPCS";
@@ -101,10 +101,11 @@ static const char* gte_name(unsigned fn) {
   }
 }
 void gte_probe_dump(const char* tag) {
-  if (s_gteprobe <= 0) return;
+  GteDebug& d = GTE_CurState()->dbg;
+  if (d.gteprobe <= 0) return;
   fprintf(stderr, "[gteprobe %s] executed GTE ops:\n", tag);
-  for (unsigned fn = 0; fn < 64; fn++) if (s_gte_hist[fn])
-    fprintf(stderr, "    %-6s(0x%02X) = %ld\n", gte_name(fn), fn, s_gte_hist[fn]);
+  for (unsigned fn = 0; fn < 64; fn++) if (d.gte_hist[fn])
+    fprintf(stderr, "    %-6s(0x%02X) = %ld\n", gte_name(fn), fn, d.gte_hist[fn]);
   // lighting/fog control-register snapshot (cop2 CR numbering)
   fprintf(stderr, "  LightMatrix(LLM cr8-12): %08X %08X %08X %08X %08X\n",
           GTE_ReadCR(8),GTE_ReadCR(9),GTE_ReadCR(10),GTE_ReadCR(11),GTE_ReadCR(12));
@@ -131,8 +132,19 @@ void gte_probe_dump(const char* tag) {
 
 // ProjVtx typedef comes from engine_project.h (included via render.h above); dropped the local decl.
 
-static uint8_t  s_divtab[0x101];
-static int      s_divtab_init = 0;
+// UNR division table — deterministic, generated at compile time (was a lazily-built mutable static).
+struct ProjDivTab { uint8_t t[0x101]; };
+static constexpr ProjDivTab proj_make_divtab() {           // mirrors GTE_Init's DivTable build
+  ProjDivTab d{};
+  for (uint32_t v = 0x8000; v < 0x10000; v += 0x80) {
+    uint32_t xa = 512;
+    for (int i = 1; i < 5; i++) xa = (xa * (1024 * 512 - ((v >> 7) * xa))) >> 18;
+    d.t[(v >> 7) & 0xFF] = (uint8_t)(((xa + 1) >> 1) - 0x101);
+  }
+  d.t[0x100] = d.t[0xFF];
+  return d;
+}
+static const ProjDivTab s_divtab = proj_make_divtab();
 // per-frame projection constants moved to `class ProjParams` on Render (per-Core, SBS-safe) —
 // reach via `c->mRender->projParams.projH()` etc. Callers below without a Core* in scope go through
 // `ProjParams::current()` — the currently-bound instance, set by `bind()` at native_step_frame.
@@ -140,17 +152,8 @@ static int      s_divtab_init = 0;
 // proj_pz_to_ord + the camview + projection-plane accessors moved to game/render/proj_params.cpp — see
 // the free-function bridges at the bottom of that file. They forward to ProjParams::current() (bound
 // per-frame by gte_bind), so callers with no Core* in scope keep working.
-static void proj_divtab_init(void) {                       // mirrors GTE_Init's DivTable build
-  for (uint32_t d = 0x8000; d < 0x10000; d += 0x80) {
-    uint32_t xa = 512;
-    for (int i = 1; i < 5; i++) xa = (xa * (1024 * 512 - ((d >> 7) * xa))) >> 18;
-    s_divtab[(d >> 7) & 0xFF] = ((xa + 1) >> 1) - 0x101;
-  }
-  s_divtab[0x100] = s_divtab[0xFF];
-  s_divtab_init = 1;
-}
 static int32_t proj_recip(uint16_t divisor) {              // mirrors CalcRecip
-  int32_t x   = 0x101 + s_divtab[(((divisor & 0x7FFF) + 0x40) >> 7)];
+  int32_t x   = 0x101 + s_divtab.t[(((divisor & 0x7FFF) + 0x40) >> 7)];
   int32_t t   = (((int32_t)divisor * -x) + 0x80) >> 8;
   return ((x * (131072 + t)) + 0x80) >> 8;
 }
@@ -319,61 +322,60 @@ static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
   out->pz = pz;
 }
 
-// Verification accumulators (PSXPORT_PROJPROBE).
-static int  s_projprobe = -1;
-static long s_pp_verts, s_pp_bad_ir, s_pp_bad_sz, s_pp_bad_sx, s_pp_bad_sy;
-static int  s_pp_maxd_ir, s_pp_maxd_sz, s_pp_maxd_sx, s_pp_maxd_sy;
-static long s_pp_subpix_le1;   // how often round(precise) is within 1px of the integer screen coord
+// Verification accumulators (PSXPORT_PROJPROBE) live on GteRegs::dbg (bound core's instance).
 static void proj_probe_one(unsigned vidx, uint32_t insn, int b_ir1, int b_ir2, int b_ir3, int b_sz,
                            int b_sx, int b_sy) {
+  GteDebug& g = GTE_CurState()->dbg;
   ProjVtx p; proj_native_vertex(vidx, insn, &p);
-  s_pp_verts++;
+  g.pp_verts++;
   int dir = 0;
   if (p.ir1 != b_ir1) dir = abs(p.ir1 - b_ir1) > dir ? abs(p.ir1 - b_ir1) : dir;
   if (p.ir2 != b_ir2) { int d = abs(p.ir2 - b_ir2); if (d > dir) dir = d; }
   if (p.ir3 != b_ir3) { int d = abs(p.ir3 - b_ir3); if (d > dir) dir = d; }
-  if (dir) { s_pp_bad_ir++; if (dir > s_pp_maxd_ir) s_pp_maxd_ir = dir; }
-  int dsz = abs(p.sz - b_sz); if (dsz) { s_pp_bad_sz++; if (dsz > s_pp_maxd_sz) s_pp_maxd_sz = dsz; }
-  int dsx = abs(p.sx - b_sx); if (dsx) { s_pp_bad_sx++; if (dsx > s_pp_maxd_sx) s_pp_maxd_sx = dsx; }
-  int dsy = abs(p.sy - b_sy); if (dsy) { s_pp_bad_sy++; if (dsy > s_pp_maxd_sy) s_pp_maxd_sy = dsy; }
+  if (dir) { g.pp_bad_ir++; if (dir > g.pp_maxd_ir) g.pp_maxd_ir = dir; }
+  int dsz = abs(p.sz - b_sz); if (dsz) { g.pp_bad_sz++; if (dsz > g.pp_maxd_sz) g.pp_maxd_sz = dsz; }
+  int dsx = abs(p.sx - b_sx); if (dsx) { g.pp_bad_sx++; if (dsx > g.pp_maxd_sx) g.pp_maxd_sx = dsx; }
+  int dsy = abs(p.sy - b_sy); if (dsy) { g.pp_bad_sy++; if (dsy > g.pp_maxd_sy) g.pp_maxd_sy = dsy; }
   // sanity: our subpixel float, rounded, should land within 1px of the integer projection
   int rx = (int)(p.px < 0 ? p.px - 0.5f : p.px + 0.5f), ry = (int)(p.py < 0 ? p.py - 0.5f : p.py + 0.5f);
-  if (abs(rx - b_sx) <= 1 && abs(ry - b_sy) <= 1) s_pp_subpix_le1++;
+  if (abs(rx - b_sx) <= 1 && abs(ry - b_sy) <= 1) g.pp_subpix_le1++;
 }
 void proj_probe_dump(const char* tag) {
-  if (s_projprobe <= 0 || s_pp_verts == 0) return;
+  GteDebug& g = GTE_CurState()->dbg;
+  if (g.projprobe <= 0 || g.pp_verts == 0) return;
   fprintf(stderr, "[projprobe %s] verts=%ld  IR diff=%ld(max%d) SZ diff=%ld(max%d) "
           "SX diff=%ld(max%d) SY diff=%ld(max%d)  subpix<=1px=%ld(%.2f%%)\n",
-          tag, s_pp_verts, s_pp_bad_ir, s_pp_maxd_ir, s_pp_bad_sz, s_pp_maxd_sz,
-          s_pp_bad_sx, s_pp_maxd_sx, s_pp_bad_sy, s_pp_maxd_sy,
-          s_pp_subpix_le1, 100.0 * s_pp_subpix_le1 / s_pp_verts);
-  s_pp_verts = s_pp_bad_ir = s_pp_bad_sz = s_pp_bad_sx = s_pp_bad_sy = s_pp_subpix_le1 = 0;
-  s_pp_maxd_ir = s_pp_maxd_sz = s_pp_maxd_sx = s_pp_maxd_sy = 0;
+          tag, g.pp_verts, g.pp_bad_ir, g.pp_maxd_ir, g.pp_bad_sz, g.pp_maxd_sz,
+          g.pp_bad_sx, g.pp_maxd_sx, g.pp_bad_sy, g.pp_maxd_sy,
+          g.pp_subpix_le1, 100.0 * g.pp_subpix_le1 / g.pp_verts);
+  g.pp_verts = g.pp_bad_ir = g.pp_bad_sz = g.pp_bad_sx = g.pp_bad_sy = g.pp_subpix_le1 = 0;
+  g.pp_maxd_ir = g.pp_maxd_sz = g.pp_maxd_sx = g.pp_maxd_sy = 0;
 }
 
 // PSXPORT_RTPCALLER: histogram the return address (RA=r[31]) at each RTPS/RTPT — pins the submit/handler
 // call sites that build POLY packets from the projection, the targets for attach-at-submission.
-static struct { uint32_t ra; long n; } s_rtpcaller[64];
-static int s_rtpcaller_on = -1;
 static void rtpcaller_record(uint32_t ra) {
-  if (s_rtpcaller_on < 0) s_rtpcaller_on = cfg_dbg("rtpcaller") ? 1 : 0;
-  if (!s_rtpcaller_on) return;
-  for (int i = 0; i < 64; i++) { if (s_rtpcaller[i].n == 0) { s_rtpcaller[i].ra = ra; s_rtpcaller[i].n = 1; return; }
-                                 if (s_rtpcaller[i].ra == ra) { s_rtpcaller[i].n++; return; } }
+  GteDebug& d = GTE_CurState()->dbg;
+  if (d.rtpcaller_on < 0) d.rtpcaller_on = cfg_dbg("rtpcaller") ? 1 : 0;
+  if (!d.rtpcaller_on) return;
+  for (int i = 0; i < 64; i++) { if (d.rtpcaller[i].n == 0) { d.rtpcaller[i].ra = ra; d.rtpcaller[i].n = 1; return; }
+                                 if (d.rtpcaller[i].ra == ra) { d.rtpcaller[i].n++; return; } }
 }
 void rtpcaller_dump(Core* c, const char* tag) {
-  if (s_rtpcaller_on != 1) return;
+  GteDebug& d = c->game->gte.dbg;
+  if (d.rtpcaller_on != 1) return;
   fprintf(stderr, "[rtpcaller %s] RA histogram (caller return site -> jal target = projection fn):\n", tag);
-  for (int i = 0; i < 64 && s_rtpcaller[i].n; i++) {
+  for (int i = 0; i < 64 && d.rtpcaller[i].n; i++) {
     // the jal that set RA is at RA-8 (RA = jal_addr + 8, MIPS branch-delay). Decode its target.
-    uint32_t jal = c->mem_r32(s_rtpcaller[i].ra - 8);
-    uint32_t tgt = ((jal >> 26) == 3) ? (((s_rtpcaller[i].ra - 8) & 0xF0000000u) | ((jal & 0x03FFFFFFu) << 2))
+    uint32_t jal = c->mem_r32(d.rtpcaller[i].ra - 8);
+    uint32_t tgt = ((jal >> 26) == 3) ? (((d.rtpcaller[i].ra - 8) & 0xF0000000u) | ((jal & 0x03FFFFFFu) << 2))
                                       : 0;  // 0 = not a jal (jalr / inlined)
     fprintf(stderr, "    RA=0x%08X  %8ld   jal[%08X]->fn=0x%08X\n",
-            s_rtpcaller[i].ra, s_rtpcaller[i].n, jal, tgt);
+            d.rtpcaller[i].ra, d.rtpcaller[i].n, jal, tgt);
   }
 }
-void rtpcaller_reset(void) { for (int i = 0; i < 64; i++) { s_rtpcaller[i].ra = 0; s_rtpcaller[i].n = 0; } }
+void rtpcaller_reset(void) { GteDebug& d = GTE_CurState()->dbg;
+                             for (int i = 0; i < 64; i++) { d.rtpcaller[i].ra = 0; d.rtpcaller[i].n = 0; } }
 
 // Native per-vertex depth cache: now `class ProjPrim` on Render — reach as `c->mRender->projprim`.
 // See game/render/proj_prim.h. All previously free `projprim_*` functions retired 2026-07-03.
@@ -403,15 +405,15 @@ int attach_enabled(void) { return 1; }
 // Every gte_op caller ported this way removes work from GTE_Instruction; it vanishes when none remain.
 void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
-                                                   if (s_gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); s_gteprobe = e ? atoi(e) : 0; }
-                                                   if (s_gteprobe > 0) s_gte_hist[op]++;
+                                                   GteDebug& gd = c->game->gte.dbg;
+                                                   if (gd.gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); gd.gteprobe = e ? atoi(e) : 0; }
+                                                   if (gd.gteprobe > 0) gd.gte_hist[op]++;
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
                                                      if (g_mods.fps60) c->game->fps60.rtp(op);
-                                                     if (s_projprobe < 0) { s_projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
-                                                                            if (s_projprobe && !s_divtab_init) proj_divtab_init(); }
-                                                     if (s_projprobe > 0) {
+                                                     if (gd.projprobe < 0) gd.projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
+                                                     if (gd.projprobe > 0) {
                                                        // Compare native projection to Beetle's outputs. After RTPS the single vertex
                                                        // is in XY_FIFO(3)=DR15 / Z_FIFO(3)=DR19 / IR=DR9-11. After RTPT the 3 verts
                                                        // land in XY DR12,DR13,DR14 (DR15==DR14, see push quirk below) and Z DR17-19;

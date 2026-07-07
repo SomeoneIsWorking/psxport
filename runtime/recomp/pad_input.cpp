@@ -73,43 +73,38 @@ void Pad::fillBuffer(uint8_t* buf) {
 // (Pad::game is wired in Game()).
 
 // --- Game controller (gamepad) state ----------------------------------------
-// Up to this many simultaneously-open controllers; hotswap-aware (DEVICEADDED/REMOVED handled by a
-// per-frame rescan in pad_rescan_controllers() so NO other file needs editing — see pad_poll_sdl).
-#define PAD_MAX_GC 4
-static SDL_Gamepad* s_gc[PAD_MAX_GC] = { nullptr, nullptr, nullptr, nullptr };
-static int          s_gc_inst[PAD_MAX_GC] = { -1, -1, -1, -1 };  // SDL_JoystickID per slot (-1 = empty)
-static int          s_gc_sub_init = 0;                            // lazily added the gamepad subsystem?
+// Up to PAD_MAX_GC simultaneously-open controllers (Pad members); hotswap-aware (DEVICEADDED/REMOVED
+// handled by a per-frame rescan in rescanControllers() so NO other file needs editing — see pollSdl).
 
 // Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_gpu.cpp
 // (not owned here); the gamepad subsystem is independent, so we add it on first use. Idempotent.
-static void pad_ensure_gc_subsystem(void) {
-  if (s_gc_sub_init) return;
+void Pad::ensureGcSubsystem() {
+  if (mGcSubInit) return;
   if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0)
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);
-  s_gc_sub_init = 1;
+  mGcSubInit = 1;
 }
 
 // HOTSWAP: open any newly-connected controllers and drop any that vanished. Self-contained per-frame
 // rescan so we don't depend on SDL_CONTROLLERDEVICEADDED/REMOVED events reaching us through an event
 // pump we don't own (the pump lives in gpu_gpu.cpp). Cheap: SDL_NumJoysticks is a count, and we only
 // call SDL_GameControllerOpen for indices we haven't already opened.
-static void pad_rescan_controllers(void) {
+void Pad::rescanControllers() {
   // ESCAPE HATCH (Linux WASD-dead): PSXPORT_PAD_NOPAD=1 ignores ALL game controllers and uses the
   // keyboard only. Use this if a connected/phantom pad with a drifting analog stick ("analog mode")
   // is injecting a phantom direction and you can't unplug it. Close anything already open, then bail.
-  static int nopad = -1;
-  if (nopad < 0) { const char* v = cfg_str("PSXPORT_PAD_NOPAD"); nopad = (v && atoi(v) != 0) ? 1 : 0; }
-  if (nopad) {
+  if (mNoPad < 0) { const char* v = cfg_str("PSXPORT_PAD_NOPAD"); mNoPad = (v && atoi(v) != 0) ? 1 : 0; }
+  if (mNoPad) {
     for (int s = 0; s < PAD_MAX_GC; s++)
-      if (s_gc[s]) { SDL_CloseGamepad(s_gc[s]); s_gc[s] = nullptr; s_gc_inst[s] = -1; }
+      if (mGc[s]) { SDL_CloseGamepad(mGc[s]); mGc[s] = nullptr; mGcInst[s] = -1; }
     return;
   }
-  pad_ensure_gc_subsystem();
+  ensureGcSubsystem();
   // 1) Drop slots whose controller was unplugged.
   for (int s = 0; s < PAD_MAX_GC; s++) {
-    if (s_gc[s] && !SDL_GamepadConnected(s_gc[s])) {
-      SDL_CloseGamepad(s_gc[s]);
-      s_gc[s] = nullptr; s_gc_inst[s] = -1;
+    if (mGc[s] && !SDL_GamepadConnected(mGc[s])) {
+      SDL_CloseGamepad(mGc[s]);
+      mGc[s] = nullptr; mGcInst[s] = -1;
     }
   }
   // 2) Open any attached gamepad we don't already hold (dedup by instance id). SDL3 SDL_GetGamepads
@@ -119,12 +114,12 @@ static void pad_rescan_controllers(void) {
   for (int i = 0; i < n; i++) {
     SDL_JoystickID inst = ids[i];
     int already = 0;
-    for (int s = 0; s < PAD_MAX_GC; s++) if (s_gc_inst[s] == (int)inst) { already = 1; break; }
+    for (int s = 0; s < PAD_MAX_GC; s++) if (mGcInst[s] == (int)inst) { already = 1; break; }
     if (already) continue;
     for (int s = 0; s < PAD_MAX_GC; s++) {
-      if (!s_gc[s]) {
+      if (!mGc[s]) {
         SDL_Gamepad* gc = SDL_OpenGamepad(inst);
-        if (gc) { s_gc[s] = gc; s_gc_inst[s] = (int)SDL_GetGamepadID(gc); }
+        if (gc) { mGc[s] = gc; mGcInst[s] = (int)SDL_GetGamepadID(gc); }
         break;
       }
     }
@@ -210,12 +205,11 @@ void Pad::pollSdl() {
   // pad_poll_sdl runs every frame in BOTH the running loop and the paused wait. (dbg_server.c)
   if (game) {
     const bool* dks = SDL_GetKeyboardState(NULL);
-    static int prev_p = 0, prev_step = 0;
     int p  = dks && dks[SDL_SCANCODE_P]      != 0;
     int st = dks && dks[SDL_SCANCODE_PERIOD] != 0;
-    if (p  && !prev_p)    game->dbg_server.togglePause();
-    if (st && !prev_step) game->dbg_server.addStep(1);
-    prev_p = p; prev_step = st;
+    if (p  && !mPrevP)    game->dbg_server.togglePause();
+    if (st && !mPrevStep) game->dbg_server.addStep(1);
+    mPrevP = p; mPrevStep = st;
   }
 
   // HOTSWAP-aware controllers: open/close as devices come and go, then OR every connected pad into the
@@ -227,11 +221,11 @@ void Pad::pollSdl() {
   // already up at pump time. The subsystem is lazily initialized inside pad_rescan_controllers(), so on
   // the frames right after a controller is opened the button/axis reads could be stale (Linux: stale
   // axes read as a held direction). An explicit update guarantees fresh state before we read it.
-  pad_rescan_controllers();
+  rescanControllers();
   SDL_UpdateGamepads();
   uint16_t before_pads = mask;
   for (int s = 0; s < PAD_MAX_GC; s++)
-    if (s_gc[s]) pad_apply_controller(s_gc[s], &mask);
+    if (mGc[s]) pad_apply_controller(mGc[s], &mask);
 
   // DIAGNOSTIC (Linux WASD-dead hunt): if a controller is injecting directions while the keyboard
   // pressed nothing, say so once — this tells the user a connected/phantom pad (e.g. a drifting analog
@@ -240,14 +234,13 @@ void Pad::pollSdl() {
   // entirely (keyboard only) if a phantom device is the culprit and you can't unplug it.
   {
     const uint16_t DIRS = 0x00F0u;  // Up/Right/Down/Left
-    static int warned = 0;
     int pad_dirs   = (before_pads & DIRS) != (mask & DIRS);          // a pad changed a direction bit
     int kbd_no_dir = (before_pads & DIRS) == DIRS;                   // keyboard pressed no direction
-    if (pad_dirs && kbd_no_dir && !warned) {
+    if (pad_dirs && kbd_no_dir && !mPadDirsWarned) {
       fprintf(stderr, "[pad] a game controller is driving DIRECTIONS (host pad mask=0x%04x). If WASD "
                       "seems dead, an analog stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 "
                       "to use the keyboard only.\n", (unsigned)mask);
-      warned = 1;
+      mPadDirsWarned = 1;
     }
   }
 
@@ -324,14 +317,7 @@ void Pad::driveRelease() { repl_on = 0; repl_hold = PAD_NONE; repl_tap = PAD_NON
 
 void Pad::serviceFrame() {
   Core* c = &game->core;
-  static int s_have_window = -1;
-  static int s_force_init = 0;
-  static int s_force_on = 0;
-  static uint16_t s_force_mask = PAD_NONE;
-  static uint32_t s_fc = 0;       // internal frame counter for the pulse (== native frame index)
-  static uint16_t s_hold_mask = PAD_NONE;  // headless test hook: a HELD (not pulsed) mask...
-  static uint32_t s_hold_at = 0;           // ...applied from this native frame onward
-  s_have_window = gpu_windowed();                // a live on-screen window is up (gpu_gpu.cpp)
+  int have_window = gpu_windowed();              // a live on-screen window is up (gpu_gpu.cpp)
 #ifdef PSXPORT_SDL
   // Under SBS, the harness polls SDL ONCE per frame and feeds the SAME mask into both cores'
   // Pad::buttons via feedInput() (sbs.cpp). Skipping our own pollSdl here keeps the two cores'
@@ -339,18 +325,18 @@ void Pad::serviceFrame() {
   // mid-press (or a controller axis update in the tiny gap) gives them different masks → real
   // divergence downstream (area-update slot table, packet pool, etc.). Standalone runs still poll
   // as before (game->sbs is nullptr).
-  if (s_have_window && !game->sbs) pollSdl();    // host keyboard/gamepad -> this->buttons
+  if (have_window && !game->sbs) pollSdl();      // host keyboard/gamepad -> this->buttons
 #endif
-  if (!s_force_init) {                           // headless test hook: pulse an active-low mask
+  if (!mForceInit) {                             // headless test hook: pulse an active-low mask
     const char* force = cfg_str("PSXPORT_FORCE_BUTTONS");
-    if (force) { s_force_on = 1; s_force_mask = (uint16_t)strtoul(force, 0, 16); }
+    if (force) { mForceOn = 1; mForceMask = (uint16_t)strtoul(force, 0, 16); }
     // Second phase: HOLD a mask continuously from PSXPORT_FORCE_HOLD_AT onward (overrides the
     // pulse). Lets a headless run reach a state via pulsed Start, then hold a direction in-level
     // (a held direction is what the game reads for movement) — for interactivity testing.
     const char* hold = cfg_str("PSXPORT_FORCE_HOLD");
-    if (hold) { s_force_on = 1; s_hold_mask = (uint16_t)strtoul(hold, 0, 16);
-                const char* at = cfg_str("PSXPORT_FORCE_HOLD_AT"); s_hold_at = at ? strtoul(at, 0, 0) : 0; }
-    s_force_init = 1;
+    if (hold) { mForceOn = 1; mHoldMask = (uint16_t)strtoul(hold, 0, 16);
+                const char* at = cfg_str("PSXPORT_FORCE_HOLD_AT"); mHoldAt = at ? strtoul(at, 0, 0) : 0; }
+    mForceInit = 1;
   }
   // Pulse the forced buttons (pressed 8 frames, released 24) so each press is a fresh EDGE the
   // game's current&~prev input logic (FUN_800788ac) actually sees — a continuous hold would edge
@@ -360,18 +346,17 @@ void Pad::serviceFrame() {
   // pulse Start to drive through attract/menu/intro to a target scene, then go fully hands-off so
   // the scene's own BGM/state isn't disturbed by phantom presses (Start in gameplay = pause menu,
   // which stops BGM — that artifact poisoned earlier BGM captures).
-  static long s_stop_at = -2;
-  if (s_stop_at == -2) { const char* e = cfg_str("PSXPORT_FORCE_STOP_AT"); s_stop_at = e ? atol(e) : -1; }
-  if (s_force_on && !(s_stop_at >= 0 && (long)s_fc >= s_stop_at)) {
-    if (s_hold_mask != PAD_NONE && s_fc >= s_hold_at) setButtons(s_hold_mask);
-    else setButtons((s_fc % 32u) < 8u ? s_force_mask : PAD_NONE);
+  if (mStopAt == -2) { const char* e = cfg_str("PSXPORT_FORCE_STOP_AT"); mStopAt = e ? atol(e) : -1; }
+  if (mForceOn && !(mStopAt >= 0 && (long)mFc >= mStopAt)) {
+    if (mHoldMask != PAD_NONE && mFc >= mHoldAt) setButtons(mHoldMask);
+    else setButtons((mFc % 32u) < 8u ? mForceMask : PAD_NONE);
   }
   // REPL pad control: a tap (countdown) overrides the held mask while active.
   if (repl_on) {
     if (repl_tap_n > 0) { setButtons(repl_tap); repl_tap_n--; }
     else setButtons(repl_hold);
   }
-  s_fc++;
+  mFc++;
 
   // ---- INPUT RECORD / REPLAY (deterministic pad capture) ---------------------------------------
   // The engine has no wall-clock/RNG (Date/random are banned, see CLAUDE.md), so the per-frame final
@@ -383,13 +368,12 @@ void Pad::serviceFrame() {
   // per pad_service_frame call from frame 0). Past the recording's end, replay stops overriding
   // (hands-off) so the game free-runs.
   {
-    static int      rec_init = 0;
-    static FILE*     rec_fp = nullptr;     // record sink
-    static uint16_t* rep_buf = nullptr;    // replay source (loaded once)
-    static size_t    rep_n = 0;
-    static uint32_t  rec_fc = 0;           // shared record/replay frame index
-    if (!rec_init) {
-      rec_init = 1;
+    FILE*&     rec_fp = mRecFp;     // record sink
+    uint16_t*& rep_buf = mRepBuf;   // replay source (loaded once)
+    size_t&    rep_n = mRepN;
+    uint32_t&  rec_fc = mRecFc;     // shared record/replay frame index
+    if (!mRecInit) {
+      mRecInit = 1;
       // Recording is ALWAYS ON by default (so a hand-played session — e.g. on the user's macOS build —
       // is captured and can be sent over for deterministic replay/diagnosis). Default sink:
       // scratch/bin/pad_session.pad, overwritten each run. Override the path with PSXPORT_PAD_RECORD=<path>;
@@ -418,10 +402,9 @@ void Pad::serviceFrame() {
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
     // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
     // visual timeline of a replayed session. Done here, after the mask is applied for THIS frame.
-    static int      shot_init = 0;
-    static uint32_t shot_at[64]; static int shot_n = 0;
-    if (!shot_init) {
-      shot_init = 1;
+    uint32_t* shot_at = mShotAt; int& shot_n = mShotN;
+    if (!mShotInit) {
+      mShotInit = 1;
       const char* s = cfg_str("PSXPORT_PAD_SHOT_AT");
       if (s) { char buf[512]; snprintf(buf, sizeof buf, "%s", s);
         for (char* t = strtok(buf, ","); t && shot_n < 64; t = strtok(nullptr, ","))
@@ -435,8 +418,8 @@ void Pad::serviceFrame() {
     }
     // PSXPORT_PAD_DUMP_AT=f0,f1,... : dump 2MB guest RAM (+.spad) at these REPLAY frames to
     // scratch/bin/padram_<f>.bin — for A/B diffing scene state (e.g. village vs hut interior).
-    static int dump_init = 0; static uint32_t dump_at[32]; static int dump_n = 0;
-    if (!dump_init) { dump_init = 1; const char* s = cfg_str("PSXPORT_PAD_DUMP_AT");
+    uint32_t* dump_at = mDumpAt; int& dump_n = mDumpN;
+    if (!mDumpInit) { mDumpInit = 1; const char* s = cfg_str("PSXPORT_PAD_DUMP_AT");
       if (s) { char buf[256]; snprintf(buf, sizeof buf, "%s", s);
         for (char* t = strtok(buf, ","); t && dump_n < 32; t = strtok(nullptr, ","))
           dump_at[dump_n++] = (uint32_t)strtoul(t, 0, 0); } }
@@ -454,8 +437,8 @@ void Pad::serviceFrame() {
     // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
     // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
     // seamless sub-scene transition). All fixed-address globals; sm = *0x1f800138.
-    static int trace_init = 0; static uint32_t trace_lo = 1, trace_hi = 0;
-    if (!trace_init) { trace_init = 1; const char* s = cfg_str("PSXPORT_PAD_TRACE");
+    uint32_t& trace_lo = mTraceLo; uint32_t& trace_hi = mTraceHi;
+    if (!mTraceInit) { mTraceInit = 1; const char* s = cfg_str("PSXPORT_PAD_TRACE");
       if (s) { unsigned a=0,b=0; if (sscanf(s,"%u-%u",&a,&b)==2){trace_lo=a;trace_hi=b;} else if (sscanf(s,"%u",&a)==1){trace_lo=0;trace_hi=a;} } }
     if (rec_fc >= trace_lo && rec_fc <= trace_hi) {
       uint32_t sm = c->mem_r32(0x1f800138u);

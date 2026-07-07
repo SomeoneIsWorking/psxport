@@ -1737,7 +1737,7 @@ void Engine::startStage(uint32_t stage) {
 void Engine::task0Bootstrap() {
   Core* c = core;
   uint32_t lba = 0, size = 0;
-  if (!disc_find_file("\\BIN\\START.BIN", &lba, &size)) {
+  if (!disc_find_file(&c->game->disc, "\\BIN\\START.BIN", &lba, &size)) {
     fprintf(stderr, "[native_boot] FATAL: cannot resolve \\BIN\\START.BIN on disc\n");
     return;
   }
@@ -1803,7 +1803,7 @@ static constexpr StartBinXa kStartBinXa[] = {
 
 static bool resolve_via_iso9660(Core* c, uint32_t name_ptr, uint32_t* lba, uint32_t* size) {
   char name[80]; read_guest_str(c, name_ptr, name, sizeof name);
-  if (disc_find_file(name, lba, size)) return true;
+  if (disc_find_file(&c->game->disc, name, lba, size)) return true;
   fprintf(stderr, "[start.bin] not found: %s\n", name);
   return false;
 }
@@ -1848,7 +1848,7 @@ static constexpr uint32_t kGuestSectorScratch  = 0x80104368u;   // 2 KB scratch 
 // Read one 2048 B disc sector into a local buffer AND into the guest-RAM scratch at 0x80104368,
 // mirroring the substrate's per-sector read into DAT_80104368. Returns false on read failure.
 static bool cdlibcd_read_into_scratch(Core* c, uint32_t lba, uint8_t* out) {
-  if (!disc_read_sector(lba, out)) return false;
+  if (!disc_read_sector(&c->game->disc, lba, out)) return false;
   for (uint32_t i = 0; i < 2048; i++) c->mem_w8(kGuestSectorScratch + i, out[i]);
   return true;
 }

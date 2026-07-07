@@ -53,12 +53,12 @@ static void cd_command(Core* c) {
   uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
   uint8_t p0 = param ? (uint8_t)c->mem_r8(param) : 0;
   switch (cmd) {
-    case 0x0E: xa_stream_setmode(p0); break;                                  // Setmode
-    case 0x0D: xa_stream_setfilter(p0, param ? (uint8_t)c->mem_r8(param + 1) : 0); break;  // Setfilter
-    case 0x02: if (param) xa_stream_setloc(p0, (uint8_t)c->mem_r8(param + 1),     // Setloc
+    case 0x0E: xa_stream_setmode(&c->game->xa, p0); break;                                  // Setmode
+    case 0x0D: xa_stream_setfilter(&c->game->xa, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0); break;  // Setfilter
+    case 0x02: if (param) xa_stream_setloc(&c->game->xa, p0, (uint8_t)c->mem_r8(param + 1),     // Setloc
                                            (uint8_t)c->mem_r8(param + 2)); break;
-    case 0x06: case 0x1B: xa_stream_start(); break;                           // ReadN / ReadS
-    case 0x08: case 0x09: xa_stream_stop(); break;                            // Stop / Pause
+    case 0x06: case 0x1B: xa_stream_start(&c->game->xa); break;                           // ReadN / ReadS
+    case 0x08: case 0x09: xa_stream_stop(&c->game->xa); break;                            // Stop / Pause
     default: break;
   }
   zero_result(c, c->r[A2]); c->r[V0] = 0;
@@ -91,11 +91,11 @@ static void cd_cmd_stream(Core* c) {
   }
   { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)c->mem_r8(pp) : 0;
     switch (cmd) {
-      case 0x0E: xa_stream_setmode(p0); break;
-      case 0x0D: xa_stream_setfilter(p0, pp ? (uint8_t)c->mem_r8(pp + 1) : 0); break;
-      case 0x02: if (pp) xa_stream_setloc(p0, (uint8_t)c->mem_r8(pp+1), (uint8_t)c->mem_r8(pp+2)); break;
-      case 0x06: case 0x1B: xa_stream_start(); break;
-      case 0x08: case 0x09: xa_stream_stop(); break;
+      case 0x0E: xa_stream_setmode(&c->game->xa, p0); break;
+      case 0x0D: xa_stream_setfilter(&c->game->xa, p0, pp ? (uint8_t)c->mem_r8(pp + 1) : 0); break;
+      case 0x02: if (pp) xa_stream_setloc(&c->game->xa, p0, (uint8_t)c->mem_r8(pp+1), (uint8_t)c->mem_r8(pp+2)); break;
+      case 0x06: case 0x1B: xa_stream_start(&c->game->xa); break;
+      case 0x08: case 0x09: xa_stream_stop(&c->game->xa); break;
       default: break;
     } }
   if (cmd == 0x10 && result) {                  // GetlocL: report the drive-head position.
@@ -122,7 +122,7 @@ static void cd_read(Core* c) {
   uint32_t blocks = c->r[A0], lba = c->r[A1], buf = c->r[A2];
   uint8_t sec[2048];
   for (uint32_t i = 0; i < blocks; i++) {
-    if (!disc_read_sector(lba + i, sec)) { c->r[V0] = 0; return; }  // bool: 0 = failure
+    if (!disc_read_sector(&c->game->disc, lba + i, sec)) { c->r[V0] = 0; return; }  // bool: 0 = failure
     for (uint32_t j = 0; j < 2048; j++) c->mem_w8(buf + i * 2048u + j, sec[j]);
   }
   if (c->game->cd.verbose)
@@ -141,7 +141,7 @@ static void cd_loadfile(Core* c) {
   uint8_t sec[2048];
   uint32_t done = 0, nsec = 0;
   for (; done < size; nsec++) {
-    if (!disc_read_sector(lba + nsec, sec)) break;
+    if (!disc_read_sector(&c->game->disc, lba + nsec, sec)) break;
     uint32_t n = size - done < 2048 ? size - done : 2048;
     for (uint32_t j = 0; j < n; j++) c->mem_w8(dest + done + j, sec[j]);
     done += n;
@@ -190,7 +190,7 @@ void Cd::asyncRead() {
   uint8_t sec[2048];
   uint32_t done = 0, nsec = 0;
   for (; done < bytes; nsec++) {
-    if (!disc_read_sector(lba + nsec, sec)) break;
+    if (!disc_read_sector(&c->game->disc, lba + nsec, sec)) break;
     uint32_t n = bytes - done < 2048 ? bytes - done : 2048;
     for (uint32_t j = 0; j < n; j++) c->mem_w8(dest + done + j, sec[j]);
     done += n;
@@ -264,7 +264,7 @@ void Cd::audioTrace(const char* tag) {
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
   int nt=c->mem_r16s(0x800be222), ncur=c->mem_r16s(0x800be224), nmas=c->mem_r16s(0x800be220);
   int n19a=c->mem_r8(0x1f80019a), n137=c->mem_r8(0x1f800137);
-  int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(), nlp=xa_stream_is_looping();
+  int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(&c->game->xa), nlp=xa_stream_is_looping(&c->game->xa);
   int ngate=c->mem_r16(0x801fe0e0)&0xffff;
   if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
     fprintf(stderr,"[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d\n",
@@ -283,7 +283,7 @@ static void voice_play(Core* c) {
     c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
     if (c->engine.musicCoord.dialogToneActive()) return;   // suppress during a dialog; resumed by MusicCoord::tick
   }
-  xa_stream_play(chan, start, end, loop);
+  xa_stream_play(&c->game->xa, chan, start, end, loop);
   c->mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
   c->game->cd.toSpuMix(1);
   if (loop) c->engine.musicCoord.musicFadeIn();       // ingame music fades in from 0 (instant-CD mod)
@@ -294,12 +294,12 @@ static void voice_play(Core* c) {
 
 // 0x8001CF2C FUN_8001cf2c: stop the current voice/BGM clip.
 static void voice_stop(Core* c) {
-  xa_stream_stop(); c->mem_w16(0x801fe0e0, 0);
+  xa_stream_stop(&c->game->xa); c->mem_w16(0x801fe0e0, 0);
   // EXPLICIT stop: forget any remembered looping music so the per-frame MusicCoord::tick can't
   // resurrect it. Without this, navigating the front-end menus (title<->load<->options, each exit
   // runs 0x8001cf2c) stopped the looping menu clip then immediately had it RE-PLAYED by the
   // dialog-coord resume (pending_music was still set) — the audible "menu music starts over instead
-  // of stopping" bug. The in-game dialog suppression path stops via xa_stream_stop() directly (not
+  // of stopping" bug. The in-game dialog suppression path stops via xa_stream_stop(&c->game->xa) directly (not
   // this fn) and keeps pending_music, so its resume is unaffected. Guard on !dialog: during an
   // in-game dialog the area music is suppressed+pending, and a mid-dialog 0x8001cf2c (line change)
   // must NOT forget it, or it wouldn't resume when the dialog ends.

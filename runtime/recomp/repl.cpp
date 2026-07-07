@@ -54,12 +54,13 @@ static void repl_wav_write(const char* path, const int16_t* pcm, uint32_t frames
 
 // Decode ~`secs` of the XA stream on subheader channel `chan` starting at CHD `start_lba`,
 // write a WAV at the stream's native rate. Skips interleaved non-matching/non-audio sectors.
-static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int secs) {
-  static int16_t out[400000];                 // ~4.5s of 44100 stereo; XA max 37800*secs
+static void repl_xadump(DiscState* disc, uint8_t chan, uint32_t start_lba, const char* path, int secs) {
+  int16_t* out = (int16_t*)calloc(400000, sizeof(int16_t));   // ~4.5s of 44100 stereo; XA max 37800*secs
+  if (!out) return;
   uint8_t raw[2352]; int16_t hist[2][2] = {{0,0},{0,0}}; int freq = 37800;
   uint32_t frames = 0, lba = start_lba, cap = 0;
   for (int guard = 0; guard < 20000; guard++) {
-    if (!disc_read_raw(lba, raw, 2352)) break;
+    if (!disc_read_raw(disc, lba, raw, 2352)) break;
     if (raw[15] != 2) break;                   // ran off the Mode2 stream
     uint8_t fchan = raw[17], submode = raw[18];
     lba++;
@@ -73,6 +74,7 @@ static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int 
     if (frames >= cap || (submode & 0x80)) break;
   }
   repl_wav_write(path, out, frames, freq);
+  free(out);
 }
 
 // REPL auto-drive state (navNewgame / skipFrames / warpArmed / warpDest) lives on class Repl (repl.h) —
@@ -88,7 +90,7 @@ static void repl_xadump(uint8_t chan, uint32_t start_lba, const char* path, int 
 
 // Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
 long Repl::read(Core* c, uint32_t f) {
-  static uint16_t held = 0xFFFF;              // active-low held mask (all released)
+  uint16_t& held = mHeldMask;                 // active-low held mask (persists across REPL entries)
   char line[256];
   fprintf(stderr, "[repl] frame=%u ready\n", f); fflush(stderr);
   while (fgets(line, sizeof line, stdin)) {
@@ -250,19 +252,19 @@ long Repl::read(Core* c, uint32_t f) {
       }
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
-      if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump((uint8_t)ch, lba, path, secs ? (int)secs : 3); }
+      if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump(&c->game->disc, (uint8_t)ch, lba, path, secs ? (int)secs : 3); }
     else if (!strcmp(cmd, "prof")) {
-      void prof_start(void); void prof_stop(void); void prof_dump(const char*);
+      void prof_start(Core*); void prof_stop(Core*); void prof_dump(Core*, const char*);
       char sub[32] = {0}, path[200] = {0}; sscanf(line, "%*s %31s %199s", sub, path);
-      if (!strcmp(sub, "start")) prof_start();
-      else if (!strcmp(sub, "stop") || !strcmp(sub, "off")) prof_stop();
-      else if (!strcmp(sub, "dump")) prof_dump(path[0] ? path : 0);
+      if (!strcmp(sub, "start")) prof_start(c);
+      else if (!strcmp(sub, "stop") || !strcmp(sub, "off")) prof_stop(c);
+      else if (!strcmp(sub, "dump")) prof_dump(c, path[0] ? path : 0);
       else fprintf(stderr, "[repl] prof: start | stop | dump <path>\n");
     }
     else if (!strcmp(cmd, "trace")) {   // trace <path> : open the interp call tracer; `trace` alone closes
-      void interp_trace_open(const char*); char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) { interp_trace_open(path); fprintf(stderr, "[repl] trace -> %s\n", path); }
-      else { interp_trace_open(0); fprintf(stderr, "[repl] trace closed\n"); }
+      void interp_trace_open(Core*, const char*); char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) { interp_trace_open(c, path); fprintf(stderr, "[repl] trace -> %s\n", path); }
+      else { interp_trace_open(c, 0); fprintf(stderr, "[repl] trace closed\n"); }
     }
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }

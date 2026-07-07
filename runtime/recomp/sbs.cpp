@@ -55,7 +55,6 @@ void dc_step_frame(Core* c, uint32_t f);
 extern "C" int cfg_on(const char*);
 extern "C" void watchdog_disable(void);
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
-extern "C" void mem_set_store_watch_cb(void (*cb)(Core*, uint32_t, uint32_t));
 void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
 void gpu_gpu_select_target(int t);
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);
@@ -210,6 +209,7 @@ public:
   int      mAllocTraceOn = 0;
   int      mAllocA = 0, mAllocB = 0;   // per-frame decrement count (any write value < current)
   int      mAllocCumA = 0, mAllocCumB = 0;
+  uint32_t mStageTraceSigA = 0, mStageTraceSigB = 0;   // stagetrace change-detector signatures
   // Per-ra bucket: {alloc, release} counts by guest r[31] at store time, split A vs B. Landed as the
   // durable workflow-first invariant for +N-alloc attribution — ordinal-point-in-time comparison is
   // misleading (a timing-shifted alloc reads as "A-only") and the correct compare is at SETTLED STATE
@@ -1194,8 +1194,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) mLo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) mHi = (uint32_t)strtoul(e, 0, 0); }
 
-  // Install the write-watch callback + mark the harness active (native_fmv/native_boot gate off this).
-  mem_set_store_watch_cb(&Sbs::storeCb);
+  // Mark the harness active (native_fmv/native_boot gate off this). The per-core write-watch
+  // callback is installed on each Core right after the two Games are created below.
   mSbs = true;
 
   { const char* e = getenv("PSXPORT_SBS_BYTETRACE");
@@ -1215,8 +1215,9 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (mAllocTraceOn)
       fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
     // Register a per-ra bucket dump at process exit so the settled-state per-caller table lands even
-    // when the run is killed by SIGTERM (SBS AUTONAV normally runs indefinitely). Guarded via mSelfPtr
-    // so the atexit lambda can find the live Sbs::Impl without a global.
+    // when the run is killed by SIGTERM (SBS AUTONAV normally runs indefinitely). SANCTIONED
+    // ATEXIT/SIGNAL EXCEPTION: atexit lambdas and signal handlers take no context, so the live
+    // Sbs::Impl is reachable only through this one static pointer.
     static Sbs::Impl* s_selfForAtExit = nullptr;
     s_selfForAtExit = this;
     atexit([]{
@@ -1267,6 +1268,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (e && *e && strcmp(e, "0") != 0) a_pc_skip = false; }
   mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = a_pc_skip;
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
+  mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
+  mB->core.storeWatchCb = &Sbs::storeCb;
   // Scratch mask (see isPcSkipScratch above): apply ONLY under pc_skip=true (shortcut branches).
   // Under pc_skip=false native FAITHFUL branches target byte-exact — mask off, no residuals.
   mPcSkipMask = a_pc_skip;
@@ -1410,7 +1413,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       };
       auto [aE, aS_, a48, a4a, a4c, a4e, a50, aCut, aI34] = smState(&mA->core);
       auto [bE, bS_, b48, b4a, b4c, b4e, b50, bCut, bI34] = smState(&mB->core);
-      static uint32_t aP=0, bP=0;
+      uint32_t& aP = mStageTraceSigA; uint32_t& bP = mStageTraceSigB;
       // Signature includes ALL logged fields so any change triggers a log line.
       uint32_t aSig = aE ^ (aS_<<1) ^ (a48<<4) ^ (a4a<<8) ^ (a4c<<12) ^ (a4e<<16) ^ (a50<<20) ^ (aCut<<24) ^ (aI34<<26);
       uint32_t bSig = bE ^ (bS_<<1) ^ (b48<<4) ^ (b4a<<8) ^ (b4c<<12) ^ (b4e<<16) ^ (b50<<20) ^ (bCut<<24) ^ (bI34<<26);

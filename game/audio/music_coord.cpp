@@ -50,7 +50,7 @@ void MusicCoord::musicFadeIn() {
 // would otherwise stop it one frame late, after the mix). Keeps it remembered (c->game->cd
 // .pending_music) so tick() resumes it when the dialog ends.
 void MusicCoord::cutIfDialog() {
-  if (dialogToneActive() && xa_stream_is_looping()) xa_stream_stop();
+  if (dialogToneActive() && xa_stream_is_looping(&core->game->xa)) xa_stream_stop(&core->game->xa);
 }
 
 // Per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824 (RE'd via ghidra 2026-07-03). Called
@@ -136,7 +136,7 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
 void MusicCoord::tick() {
   Core* c = this->core;
   if (cfg_str("PSXPORT_XA_DBG")) {
-    uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(), l = xa_stream_is_looping();
+    uint32_t s = c->mem_r16(0x800bed80) & 0xFFFF; int a = xa_stream_is_active(&c->game->xa), l = xa_stream_is_looping(&c->game->xa);
     if (s != mPrev || a != mPa || l != mPl) {
       fprintf(stderr, "[coord] song=%u tone=%d xa_active=%d loop=%d pending=%d\n",
               s, dialogToneActive(), a, l, c->game->cd.pending_music);
@@ -144,9 +144,9 @@ void MusicCoord::tick() {
     }
   }
   if (dialogToneActive()) {
-    if (xa_stream_is_looping()) xa_stream_stop();    // dialog up: silence ingame music (kept pending)
-  } else if (c->game->cd.pending_music && !xa_stream_is_active()) {
-    xa_stream_play(c->game->cd.pm_chan, c->game->cd.pm_start, c->game->cd.pm_end, 1);   // dialog over: resume ingame music
+    if (xa_stream_is_looping(&c->game->xa)) xa_stream_stop(&c->game->xa);    // dialog up: silence ingame music (kept pending)
+  } else if (c->game->cd.pending_music && !xa_stream_is_active(&c->game->xa)) {
+    xa_stream_play(&c->game->xa, c->game->cd.pm_chan, c->game->cd.pm_start, c->game->cd.pm_end, 1);   // dialog over: resume ingame music
     c->mem_w16(0x801fe0e0, 2);
     c->game->cd.toSpuMix(1);
     musicFadeIn();                                    // resumed music fades in from 0 (no voice now)

@@ -16,8 +16,9 @@
 // unit (one pipeline per PSX blend mode), decoded from and re-encoded into the packed VRAM around that
 // pass — see render_geom's header comment for why (packed 1555 can't be correctly HW-blended directly).
 //
-// State model mirrors gpu_gpu.cpp: the SDL_GPU device/window/pipelines are file-static (one per process);
-// the wrappers ignore Core* exactly as before. The per-frame batch state lives on GpuGpuState (game.h).
+// State model: the SDL_GPU device/window/pipelines live on class GpuDevice (gpu_gpu_device.h),
+// ONE per process — the first Game constructed claims it (GpuDevice::sInstance); the wrappers
+// ignore Core* exactly as before. The per-frame batch state lives on GpuGpuState (game.h).
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
@@ -32,28 +33,49 @@
 #define VRAM_W 1024
 #define VRAM_H 512
 
-// ---- device / window singletons (one per process; not per-instance machine state) -------------------
-static int               s_gpu_on = -1;
-static int               s_inited = 0;
-static int               s_headless = 0;
-static SDL_Window*       s_win;
-static SDL_GPUDevice*    s_dev;
-static SDL_GPUTextureFormat s_swap_fmt;
-
-// VRAM image: RG8 1024x512 (PSX 1555 LE bytes) = PSX VRAM (1555). Uploaded from CPU s_vram each present, sampled by the
-// present pass (integer usampler2D → 1555 unpack), downloaded for `shot`.
-static SDL_GPUTexture*        s_vram_tex;
-static SDL_GPUTransferBuffer* s_vram_xfer;   // host→VRAM upload (1024*512*2)
-static SDL_GPUTransferBuffer* s_rb_xfer;     // VRAM→host download (readback / shot)
-static SDL_GPUSampler*        s_samp_nearest; // integer VRAM sampler (nearest)
-static SDL_GPUSampler*        s_samp_linear;  // RGBA image sampler (linear)
-static SDL_GPUGraphicsPipeline* s_present_pipe;
-static SDL_GPUGraphicsPipeline* s_image_pipe;
-
-// Fullscreen IMAGE present (gpu_gpu_present_image): RGBA8 texture, recreated on size change.
-static SDL_GPUTexture*        s_img_tex;
-static SDL_GPUTransferBuffer* s_img_xfer;
-static int                    s_img_w, s_img_h;
+// ---- device / window state — class GpuDevice (gpu_gpu_device.h), one per process ---------------------
+// The first Game constructed claims GpuDevice::sInstance (Game()); every entry point below reaches the
+// claimed instance through gdev(). The historical `s_*` spellings are shadow macros over gdev() fields
+// so the (large) function bodies are unchanged by the move.
+GpuDevice* GpuDevice::sInstance = nullptr;
+static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
+#define s_gpu_on       (gdev().s_gpu_on)
+#define s_inited       (gdev().s_inited)
+#define s_headless     (gdev().s_headless)
+#define s_win          (gdev().s_win)
+#define s_dev          (gdev().s_dev)
+#define s_swap_fmt     (gdev().s_swap_fmt)
+#define s_vram_tex     (gdev().s_vram_tex)
+#define s_vram_xfer    (gdev().s_vram_xfer)
+#define s_rb_xfer      (gdev().s_rb_xfer)
+#define s_samp_nearest (gdev().s_samp_nearest)
+#define s_samp_linear  (gdev().s_samp_linear)
+#define s_present_pipe (gdev().s_present_pipe)
+#define s_image_pipe   (gdev().s_image_pipe)
+#define s_img_tex      (gdev().s_img_tex)
+#define s_img_xfer     (gdev().s_img_xfer)
+#define s_img_w        (gdev().s_img_w)
+#define s_img_h        (gdev().s_img_h)
+#define s_vram_snap    (gdev().s_vram_snap)
+#define s_snap_xfer    (gdev().s_snap_xfer)
+#define s_depth        (gdev().s_depth)
+#define s_tri_vbuf     (gdev().s_tri_vbuf)
+#define s_tex_vbuf     (gdev().s_tex_vbuf)
+#define s_semi_vbuf    (gdev().s_semi_vbuf)
+#define s_tri_xfer     (gdev().s_tri_xfer)
+#define s_tex_xfer     (gdev().s_tex_xfer)
+#define s_semi_xfer    (gdev().s_semi_xfer)
+#define s_tri_pipe     (gdev().s_tri_pipe)
+#define s_tritex_pipe  (gdev().s_tritex_pipe)
+#define s_semi_pipe    (gdev().s_semi_pipe)
+#define s_color_rgba   (gdev().s_color_rgba)
+#define s_decode_pipe  (gdev().s_decode_pipe)
+#define s_encode_pipe  (gdev().s_encode_pipe)
+#define s_have_3d      (gdev().s_have_3d)
+#define s_sbs_tex      (gdev().s_sbs_tex)
+#define s_sbs_xfer     (gdev().s_sbs_xfer)
+#define s_sbs_w        (gdev().s_sbs_w)
+#define s_sbs_h        (gdev().s_sbs_h)
 
 // (Engine-owned screen fade moved to class ScreenFade at game/render/screen_fade/. State lives in guest
 // memory so it's per-Core / SBS-clean without needing per-instance C++ fields. Native present path
@@ -85,20 +107,7 @@ struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4];
 // Batch buffers + counts moved onto GpuGpuState (per-Core) — reach as `this->s_tri_buf` (cast from
 // void* to TriVtx*) inside the methods. The `render_geom` free function below takes a `GpuGpuState&`
 // so it can pull the right instance's batches at present time.
-static SDL_GPUTexture*        s_vram_snap;   // texture-source snapshot (RG8 SAMPLER): CLUT/atlas source
-static SDL_GPUTransferBuffer* s_snap_xfer;
-static SDL_GPUTexture*        s_depth;       // D32 depth (ordering)
-static SDL_GPUBuffer* s_tri_vbuf;  static SDL_GPUBuffer* s_tex_vbuf;
-static SDL_GPUBuffer* s_semi_vbuf[NUM_BLEND_MODES];
-static SDL_GPUTransferBuffer* s_tri_xfer; static SDL_GPUTransferBuffer* s_tex_xfer;
-static SDL_GPUTransferBuffer* s_semi_xfer[NUM_BLEND_MODES];
-static SDL_GPUGraphicsPipeline* s_tri_pipe;     // flat opaque (depth test + write)
-static SDL_GPUGraphicsPipeline* s_tritex_pipe;  // textured opaque (depth test + write)
-static SDL_GPUGraphicsPipeline* s_semi_pipe[NUM_BLEND_MODES];  // textured semi, real HW blend (depth test, no write)
-static SDL_GPUTexture*          s_color_rgba;   // float RGBA semi-blend intermediate (decoded/encoded around the semi pass)
-static SDL_GPUGraphicsPipeline* s_decode_pipe;  // fullscreen: packed 1555 -> float RGBA (s_vram_tex -> s_color_rgba)
-static SDL_GPUGraphicsPipeline* s_encode_pipe;  // fullscreen: float RGBA -> packed 1555 (s_color_rgba -> s_vram_tex)
-static int s_have_3d;                           // 3D resources created (windowed-only, needs depth/pipes)
+// (raster/pipeline resources live on GpuDevice — see the shadow macros above)
 static void create_3d(void);
 static void init_gpu(Game* game);
 static void poll_quit(Game* game);
@@ -528,15 +537,16 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;
 
   // PSXPORT_GPU_TRACE: per-present source-VRAM occupancy + sampled display region (diagnostic).
-  if (cfg_on("PSXPORT_GPU_TRACE")) { static int n = 0; if (n++ < 4 || (n % 200) == 0) {
+  if (cfg_on("PSXPORT_GPU_TRACE")) { int& n = gdev().s_trace_n; if (n++ < 4 || (n % 200) == 0) {
     long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (src[i]) nz++;
     int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += s_semi_n[m];
     fprintf(stderr, "[gpu_gpu] present #%d src nonzero=%ld/%d disp=%d,%d %dx%d | batch tri=%d tex=%d semi=%d\n",
             n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total); } }
   // `debug fadewatch`: per-present log of the ScreenFade state (the PC-native subsystem that owns fade).
   ScreenFade::State fade = game->core.screenFade.get();
-  if (cfg_dbg("fadewatch")) { static int lastmode = -999; static uint8_t lr=0,lg=0,lb=0;
-    static int lsx=-999, lsy=-999, lw=-999, lh=-999;
+  if (cfg_dbg("fadewatch")) { GpuDevice& gd = gdev();
+    int& lastmode = gd.s_fw_lastmode; uint8_t& lr = gd.s_fw_lr; uint8_t& lg = gd.s_fw_lg; uint8_t& lb = gd.s_fw_lb;
+    int& lsx = gd.s_fw_lsx; int& lsy = gd.s_fw_lsy; int& lw = gd.s_fw_lw; int& lh = gd.s_fw_lh;
     if (fade.mode != lastmode || fade.r != lr || fade.g != lg || fade.b != lb ||
         sx != lsx || sy != lsy || w != lw || h != lh) {
       fprintf(stderr, "[fadewatch] present disp=%d,%d %dx%d fade mode=%d rgb=(%d,%d,%d)\n",
@@ -825,7 +835,7 @@ void GpuGpuState::tritest() {
   SDL_GPUTransferBuffer* dl = SDL_CreateGPUTransferBuffer(s_dev, &dni); GPUCHK(dl, "selftest dl");
 
   // Pattern: VRAM top half (rows < 256) = PSX red (1555 0x001F), bottom half = PSX blue (0x7C00).
-  static uint16_t pat[VRAM_W * VRAM_H];
+  uint16_t* pat = gdev().s_selftest_pat;
   for (int y = 0; y < VRAM_H; y++) for (int x = 0; x < VRAM_W; x++)
     pat[y * VRAM_W + x] = (y < VRAM_H / 2) ? 0x001F : 0x7C00;
 
@@ -909,9 +919,6 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
 
 // SBS two-pane composite: draw CPU RGBA pane A (left) | pane B (right) to the swapchain in one window
 // frame, each letterboxed 4:3 within its half. Uses the image pipeline (RGBA sampler). Windowed only.
-static SDL_GPUTexture*        s_sbs_tex[2];
-static SDL_GPUTransferBuffer* s_sbs_xfer[2];
-static int                    s_sbs_w[2], s_sbs_h[2];
 static void sbs_make_tex(int i, int w, int h) {
   if (s_sbs_tex[i] && s_sbs_w[i] == w && s_sbs_h[i] == h) return;
   if (s_sbs_tex[i]) { SDL_ReleaseGPUTexture(s_dev, s_sbs_tex[i]); SDL_ReleaseGPUTransferBuffer(s_dev, s_sbs_xfer[i]); }
@@ -983,7 +990,9 @@ void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int
   // field-mode state / its own ramp counter) — to see which driver (if either) is live during the glitch
   // frame where the fade unexpectedly reads back to mode=0 mid-ramp.
   if (cfg_dbg("fadewatch")) {
-    static int lm=-999; static uint8_t lr=0,lg=0,lb=0; static int lsx=-999,lsy=-999,lw=-999,lh=-999;
+    GpuDevice& gd = gdev();
+    int& lm = gd.s_fws_lastmode; uint8_t& lr = gd.s_fws_lr; uint8_t& lg = gd.s_fws_lg; uint8_t& lb = gd.s_fws_lb;
+    int& lsx = gd.s_fws_lsx; int& lsy = gd.s_fws_lsy; int& lw = gd.s_fws_lw; int& lh = gd.s_fws_lh;
     ScreenFade::State f = core->screenFade.get();
     int m = f.mode; uint8_t r = f.r, g = f.g, b = f.b;
     if (m != lm || r != lr || g != lg || b != lb || sx != lsx || sy != lsy || w != lw || h != lh) {

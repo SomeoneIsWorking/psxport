@@ -7,6 +7,7 @@
 // (XA/STR) is a later front-end concern; data files are mode2/form1 with 2048 user bytes.
 #include "r3000.h"
 #include "cfg.h"
+#include "disc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,12 +16,7 @@
 #define RAW_FRAME 2448u   // 2352 raw + 96 subcode, CHD CD unit
 #define USER_DATA 2048u
 
-static chd_file*  s_chd = 0;
-static uint32_t   s_frames_per_hunk = 0;
-static uint32_t   s_hunk_count = 0;
-static uint32_t   s_hunk_bytes = 0;
-static uint8_t*   s_hunk_buf = 0;
-static uint32_t   s_cached_hunk = 0xFFFFFFFFu;
+void disc_state_init(DiscState* d) { memset(d, 0, sizeof *d); d->cached_hunk = 0xFFFFFFFFu; }
 
 // Resolve the disc path: PSXPORT_TOMBA2_DISC, then PSXPORT_DISC, then a KEY=VALUE line in
 // ./.env (the build/runtime run from the repo root). Mirrors common/env.h's order for the
@@ -55,35 +51,35 @@ static char* resolve_disc_path(void) {
   return env_from_dotenv("PSXPORT_DISC");
 }
 
-int disc_open(void) {
-  if (s_chd) return 1;
+int disc_open(DiscState* d) {
+  if (d->chd) return 1;
   char* path = resolve_disc_path();
   if (!path) { fprintf(stderr, "[disc] no disc image (PSXPORT_TOMBA2_DISC/PSXPORT_DISC/.env)\n"); return 0; }
-  if (chd_open(path, CHD_OPEN_READ, 0, &s_chd) != CHDERR_NONE) {
+  if (chd_open(path, CHD_OPEN_READ, 0, &d->chd) != CHDERR_NONE) {
     fprintf(stderr, "[disc] failed to open CHD: %s\n", path); free(path); return 0;
   }
-  const chd_header* h = chd_get_header(s_chd);
-  s_hunk_bytes = h->hunkbytes;
-  s_frames_per_hunk = h->hunkbytes / RAW_FRAME;
-  s_hunk_count = h->totalhunks;
-  s_hunk_buf = malloc(s_hunk_bytes);
+  const chd_header* h = chd_get_header(d->chd);
+  d->hunk_bytes = h->hunkbytes;
+  d->frames_per_hunk = h->hunkbytes / RAW_FRAME;
+  d->hunk_count = h->totalhunks;
+  d->hunk_buf = malloc(d->hunk_bytes);
   fprintf(stderr, "[disc] opened %s (%u hunks, %u frames/hunk)\n",
-          path, s_hunk_count, s_frames_per_hunk);
+          path, d->hunk_count, d->frames_per_hunk);
   free(path);
-  return s_frames_per_hunk > 0;
+  return d->frames_per_hunk > 0;
 }
 
 // Read one sector's 2048-byte user data. Returns 1 on success.
-int disc_read_sector(uint32_t lba, uint8_t* out) {
-  if (!s_chd && !disc_open()) return 0;
-  uint32_t hunk = lba / s_frames_per_hunk;
-  uint32_t off = (lba % s_frames_per_hunk) * RAW_FRAME;
-  if (hunk >= s_hunk_count) { fprintf(stderr, "[disc] LBA %u out of range\n", lba); return 0; }
-  if (hunk != s_cached_hunk) {
-    if (chd_read(s_chd, hunk, s_hunk_buf) != CHDERR_NONE) return 0;
-    s_cached_hunk = hunk;
+int disc_read_sector(DiscState* d, uint32_t lba, uint8_t* out) {
+  if (!d->chd && !disc_open(d)) return 0;
+  uint32_t hunk = lba / d->frames_per_hunk;
+  uint32_t off = (lba % d->frames_per_hunk) * RAW_FRAME;
+  if (hunk >= d->hunk_count) { fprintf(stderr, "[disc] LBA %u out of range\n", lba); return 0; }
+  if (hunk != d->cached_hunk) {
+    if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) return 0;
+    d->cached_hunk = hunk;
   }
-  const uint8_t* raw = s_hunk_buf + off;
+  const uint8_t* raw = d->hunk_buf + off;
   // Mode byte at raw[15]; mode-2 sectors carry an 8-byte subheader before user data.
   uint32_t data_off = (raw[15] == 2) ? 24 : 16;
   memcpy(out, raw + data_off, USER_DATA);
@@ -94,17 +90,17 @@ int disc_read_sector(uint32_t lba, uint8_t* out) {
 // Needed for CD-XA framing: the Mode2 subheader at raw[16..23] (submode raw[18], coding
 // raw[19]) distinguishes XA-ADPCM audio (Form2, 2324B) from MDEC video (Form1, 2048B)
 // sectors, which disc_read_sector() hides. Returns 1 on success. n is clamped to 2352.
-int disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n) {
-  if (!s_chd && !disc_open()) return 0;
+int disc_read_raw(DiscState* d, uint32_t lba, uint8_t* out, uint32_t n) {
+  if (!d->chd && !disc_open(d)) return 0;
   if (n > 2352u) n = 2352u;
-  uint32_t hunk = lba / s_frames_per_hunk;
-  uint32_t off = (lba % s_frames_per_hunk) * RAW_FRAME;
-  if (hunk >= s_hunk_count) return 0;
-  if (hunk != s_cached_hunk) {
-    if (chd_read(s_chd, hunk, s_hunk_buf) != CHDERR_NONE) return 0;
-    s_cached_hunk = hunk;
+  uint32_t hunk = lba / d->frames_per_hunk;
+  uint32_t off = (lba % d->frames_per_hunk) * RAW_FRAME;
+  if (hunk >= d->hunk_count) return 0;
+  if (hunk != d->cached_hunk) {
+    if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) return 0;
+    d->cached_hunk = hunk;
   }
-  memcpy(out, s_hunk_buf + off, n);
+  memcpy(out, d->hunk_buf + off, n);
   return 1;
 }
 
@@ -133,11 +129,11 @@ static int iso_name_eq(const uint8_t* name, int nlen, const char* want) {
 // ";version" and case are ignored) to its data LBA and byte size by walking the directory tree from
 // the Primary Volume Descriptor. This is the native CdSearchFile replacement for the game's
 // FUN_8008b8f0, which did the same ISO directory walk via busy-wait CD reads. Returns 1 on success.
-int disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size) {
-  if (!s_chd && !disc_open()) return 0;
+int disc_find_file(DiscState* d, const char* path, uint32_t* out_lba, uint32_t* out_size) {
+  if (!d->chd && !disc_open(d)) return 0;
   uint8_t sec[2048];
   // Primary Volume Descriptor at sector 16; its root directory record sits at offset 156 (34 bytes).
-  if (!disc_read_sector(16, sec)) return 0;
+  if (!disc_read_sector(d, 16, sec)) return 0;
   if (sec[0] != 1) return 0;                     // PVD type byte
   uint32_t dir_lba  = rd_le32(sec + 156 + 2);    // root extent LBA  (LE form of the 8-byte field)
   uint32_t dir_size = rd_le32(sec + 156 + 10);   // root data length (LE form)
@@ -155,7 +151,7 @@ int disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size) {
     // scan the directory's records (records never cross a 2048-byte sector boundary)
     uint32_t nsec = (dir_size + 2047u) / 2048u, found = 0;
     for (uint32_t s = 0; s < nsec && !found; s++) {
-      if (!disc_read_sector(dir_lba + s, sec)) return 0;
+      if (!disc_read_sector(d, dir_lba + s, sec)) return 0;
       uint32_t o = 0;
       while (o < 2048u) {
         uint32_t rlen = sec[o];

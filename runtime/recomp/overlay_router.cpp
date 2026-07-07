@@ -145,11 +145,13 @@ void interp_run(Core* c, uint32_t addr);   // interp.cpp — pure-interpreter en
 // recdep (later-286): RECOMP-DEPENDENCY meter — histogram every substrate function rec_dispatch routes to
 // (the native port; the oracle interp path is excluded), dumped top-40 at exit. The metric for the
 // "minimize recomp" goal: rank which substrate fns to own natively next. Gated on cfg_dbg("recdep").
-static std::map<uint32_t,uint64_t> s_recdep;
+// The histogram lives on Core (c->idiag.recdep); the atexit hook needs a static Core* because
+// atexit handlers take no context — documented signal/atexit exception, set once on first use.
+static Core* s_recdepCore = nullptr;
 extern "C" void recdep_dump() {
-  if (!cfg_dbg("recdep")) return;
+  if (!cfg_dbg("recdep") || !s_recdepCore) return;
   std::vector<std::pair<uint64_t,uint32_t>> v;
-  for (auto& kv : s_recdep) v.push_back({kv.second, kv.first});
+  for (auto& kv : s_recdepCore->idiag.recdep) v.push_back({kv.second, kv.first});
   std::sort(v.rbegin(), v.rend());
   fprintf(stderr, "[recdep] top substrate dispatch targets (addr: calls), %zu unique:\n", v.size());
   for (size_t i = 0; i < v.size() && i < 40; i++)
@@ -160,11 +162,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) { interp_run(c, addr); return; }
-  if (cfg_dbg("recdep")) { static int reg=0; if(!reg){reg=1;atexit(recdep_dump);} s_recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
+  if (cfg_dbg("recdep")) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
   // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this
   // handler" (real gap) from "B dispatches but the resident overlay isn't A00" (loader gap).
-  static uint32_t s_dw = (uint32_t)-1, s_dw_ra = 0;
+  uint32_t& s_dw = c->idiag.dispwatch; uint32_t& s_dw_ra = c->idiag.dispwatch_ra;
   if (s_dw == (uint32_t)-1) {
     const char* e = getenv("PSXPORT_DISPWATCH");
     s_dw = 0;

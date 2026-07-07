@@ -11,9 +11,8 @@
 void spu_bind(Core* c) { c->game->spu.bind(); }
 // Same for MDEC (per-instance; lazy power on first bind — MDEC has no separate global init).
 void mdec_bind(Core* c) { c->game->mdec.bind(); }
-// Bind THIS core's per-instance CD-controller (cdc_native.c) and XA streamer (xa_stream.c) state, so two
-// cores (native vs PSX-recomp) keep SEPARATE CD state — the recomp core busy-polls the CD registers /
-// streams XA, the native core mostly bypasses them via cd_override. Plain-C BindState (cdc_state.h /
-// xa_state.h), same per-frame-step contract as gte/spu/mdec.
-void cdc_bind(Core* c) { cdc_bind_state(&c->game->cdc); }   // decls in cdc_state.h (via game.h, extern "C")
+// Bind THIS core's per-instance XA streamer (xa_stream.c) state. Unlike the CD controller (whose
+// cdc_read/cdc_write now take the CdcState explicitly), the XA streamer still needs a bound instance:
+// the vendored Beetle spu.c pulls samples through the context-free CDC_GetCDAudioSample(s32*)
+// callback (sanctioned vendor interop). Same per-frame-step contract as gte/spu/mdec.
 void xa_bind(Core* c)  { xa_bind_state(&c->game->xa); }     // decls in xa_state.h  (via game.h, extern "C")

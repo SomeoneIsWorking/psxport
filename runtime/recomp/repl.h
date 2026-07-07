@@ -19,4 +19,8 @@ public:
 
   // Read+execute REPL commands from stdin until a `run N` (returns N) or quit/EOF (returns -1).
   long read(Core* c, uint32_t f);
+
+private:
+  uint16_t mHeldMask = 0xFFFF;   // active-low held pad mask (all released); `press`/`release` edit it
+
 };

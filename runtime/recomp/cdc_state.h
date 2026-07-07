@@ -2,10 +2,9 @@
 // SEPARATE CD-controller state (one native, one PSX-recomp). The CXD1199-style register model
 // (index/bank, param/response/data FIFOs, the pending-interrupt queue, drive/read state) used to live
 // in file-scope statics in cdc_native.c; that mutable state now lives in this struct, one per Game
-// (game.h embeds it). cdc_native.c is BOUND to one instance at a time via cdc_bind(Core*) — set from
-// the explicit Core before that core runs (native_step_frame), like gte_bind/spu_bind/mdec_bind — so
-// each core reads/writes only its own CD registers; nothing is shared (the disc image itself is a
-// read-only data source, shared by design, see disc.c).
+// (game.h embeds it). cdc_read/cdc_write take the instance EXPLICITLY (the MMIO dispatcher in
+// mem.cpp passes &game->cdc) — no bound "current" pointer — so each core reads/writes only its own
+// CD registers; nothing is shared (the disc image itself is a read-only data source, see disc.c).
 //
 // Plain-C struct (no C++) so cdc_native.c stays C, exactly like gte_state.h's GteRegs.
 #pragma once
@@ -26,6 +25,8 @@ typedef struct CdcState {
   int      reading;           // ReadN/ReadS active                          (was s_reading)
   CdcIrqEnt q[8];             // pending-interrupt queue                     (was s_q)
   int      q_head, q_tail, resp_rd;  //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  int      verbose;           // `debug cdc` log gate (config, read at init)  (was s_verbose)
+  struct DiscState* disc;     // Game-owned disc backend (wired by Game())
 } CdcState;
 
 #ifdef __cplusplus
@@ -33,8 +34,9 @@ extern "C" {
 #endif
 // Initialize a fresh CdcState to power-on defaults (stat=0x02, everything else 0). Called by Game().
 void cdc_state_init(CdcState* s);
-// Make `s` the active CD-controller instance for subsequent cdc_read/cdc_write (MMIO 0x1F801800-3).
-void cdc_bind_state(CdcState* s);
+// MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
+uint32_t cdc_read(CdcState* s, uint32_t p);
+void     cdc_write(CdcState* s, uint32_t p, uint8_t v);
 #ifdef __cplusplus
 }
 #endif

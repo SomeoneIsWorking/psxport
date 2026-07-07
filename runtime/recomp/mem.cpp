@@ -3,6 +3,7 @@
 // across KUSEG/KSEG0/KSEG1 + 1 KB scratchpad; hardware I/O (0x1F801xxx) routes to the per-game
 // peripheral modules. Host is little-endian (PSX is LE), so word access is a memcpy.
 #include "core.h"
+#include "game.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,8 +17,7 @@
 void gpu_gp0(Core* core, uint32_t w);
 void gpu_gp1(Core*, uint32_t w);
 extern "C" {
-uint32_t cdc_read(uint32_t p);
-void     cdc_write(uint32_t p, uint8_t v);
+#include "cdc_state.h"
 void     mdec_write(uint32_t addr, uint32_t val);
 uint32_t mdec_read(uint32_t addr);
 void     mdec_dma_in(const uint32_t* words, int count);
@@ -54,13 +54,6 @@ void Core::cw_check(uint32_t a, uint32_t v, int width) {
   }
 }
 
-// SBS divergence debugger: a store landing in a watched range fires this callback (set by sbs.cpp) with
-// the writing core + addr + value, so the harness can capture the EXACT corrupting-write guest backtrace.
-// One callback per process (only one SBS harness) — file-scope static + setter. Was g_store_watch_cb.
-using StoreWatchCb = void (*)(Core*, uint32_t, uint32_t);
-static StoreWatchCb s_store_watch_cb = nullptr;
-extern "C" void mem_set_store_watch_cb(StoreWatchCb cb) { s_store_watch_cb = cb; }
-
 // Normalize any incoming addr to kernel-segment form so callers can pass either raw scratchpad
 // (0x1F800xxx) or KSEG0/KSEG1 addrs and get the same behavior. wwatch_check ORs 0x80000000 into
 // the store's address before comparing, so lo/hi must be in the SAME form or scratchpad watches
@@ -72,7 +65,7 @@ void Core::wwatch_arm(uint32_t lo, uint32_t hi) {
 }
 
 // PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Also fires
-// s_store_watch_cb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.
+// storeWatchCb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.
 void Core::wwatch_check(uint32_t a, uint32_t v) {
   if (!s_ww_init) {
     s_ww_init = 1;
@@ -84,7 +77,7 @@ void Core::wwatch_check(uint32_t a, uint32_t v) {
     if (cfg_str("PSXPORT_WWATCH"))
       fprintf(stderr, "[wwatch] core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X\n",
               (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
-    if (s_store_watch_cb) s_store_watch_cb(this, ka, v);
+    if (storeWatchCb) storeWatchCb(this, ka, v);
   }
 }
 
@@ -109,7 +102,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     io_gpustat_toggle ^= 0x80000000u;              // per-instance (Core member), not a shared static
     return 0x1C000000u | io_gpustat_toggle;
   }
-  if (p >= 0x1F801800 && p <= 0x1F801803) return cdc_read(p);   // CD controller registers
+  if (p >= 0x1F801800 && p <= 0x1F801803) return cdc_read(&game->cdc, p);   // CD controller registers
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
   if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
   if (p == 0x1F801DAE) return 0;                 // SPUSTAT: report idle/transfer-complete
@@ -136,7 +129,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
 
 void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  if (p >= 0x1F801800 && p <= 0x1F801803) { cdc_write(p, (uint8_t)v); return; }  // CD controller
+  if (p >= 0x1F801800 && p <= 0x1F801803) { cdc_write(&game->cdc, p, (uint8_t)v); return; }  // CD controller
   if (p == 0x1F801810) { gpu_gp0(this, v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(this, v); return; }    // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl

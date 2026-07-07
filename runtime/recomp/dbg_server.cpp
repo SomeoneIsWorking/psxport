@@ -78,6 +78,13 @@ public:
   static int&            step()   { return sInstance->mStep;   }
   static Core*&          ctx()    { return sInstance->mCtx;    }
   static bool&           started(){ return sInstance->mStarted;}
+  static pthread_mutex_t& mtx()   { return sInstance->mMtx;    }
+  static pthread_cond_t&  done()  { return sInstance->mDone;   }
+  static char           (&cmd())[512] { return sInstance->mCmd; }
+  static int&    reqPending()     { return sInstance->mReqPending; }
+  static int&    respReady()      { return sInstance->mRespReady;  }
+  static char*&  respBuf()        { return sInstance->mRespBuf;    }
+  static size_t& respLen()        { return sInstance->mRespLen;    }
 };
 DbgServer* DbgServerInternals::sInstance = nullptr;
 
@@ -89,15 +96,15 @@ DbgServer* DbgServerInternals::sInstance = nullptr;
 #define s_ctx     (DbgServerInternals::ctx())
 #define s_started (DbgServerInternals::started())
 
-// --- main<->server handoff: a single pending request, serviced on the main thread once per frame --
-static pthread_mutex_t s_mtx  = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  s_done = PTHREAD_COND_INITIALIZER;   // signalled by main when a result is ready
-static char   s_cmd[512];        // command awaiting service (server -> main)
-static int    s_req_pending;     // 1 while a command is queued for the main thread
-static int    s_resp_ready;      // 1 once the main thread has produced a result
-static char*  s_resp_buf;        // malloc'd result (main -> server); server frees after sending
-static size_t s_resp_len;
-// s_started and s_ctx now live on `class DbgServer`; access via the DbgServerInternals aliases above.
+// main<->server handoff (a single pending request, serviced on the main thread once per frame) lives
+// on `class DbgServer` with the rest of the state; access via the DbgServerInternals aliases below.
+#define s_mtx         (DbgServerInternals::mtx())
+#define s_done        (DbgServerInternals::done())
+#define s_cmd         (DbgServerInternals::cmd())
+#define s_req_pending (DbgServerInternals::reqPending())
+#define s_resp_ready  (DbgServerInternals::respReady())
+#define s_resp_buf    (DbgServerInternals::respBuf())
+#define s_resp_len    (DbgServerInternals::respLen())
 
 // Per-command SBS core targeting. A leading "@a " / "@b " token (or "@A "/"@B ") swaps s_ctx to that
 // SBS core for the duration of ONE command, then restores the frame-loop's context. Lets one debug

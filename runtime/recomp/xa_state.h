@@ -2,7 +2,7 @@
 // Cores keep SEPARATE streaming state (active stream, position, decode ring, clip bookkeeping). This
 // used to be file-scope statics in xa_stream.c; it now lives in this struct, one per Game (game.h
 // embeds it). xa_stream.c is BOUND to one instance at a time via xa_bind(Core*) — set from the explicit
-// Core before that core runs (native_step_frame), like gte_bind/spu_bind/mdec_bind/cdc_bind. The
+// Core before that core runs (native_step_frame), like gte_bind/spu_bind/mdec_bind. The
 // decoded PCM still feeds the per-instance SPU which mixes to the SHARED host audio sink (one physical
 // speaker; a lockstep RAM/state diff is unaffected by the host device, shared by design — same policy
 // as the FMV audio sink and SPU output).
@@ -29,6 +29,8 @@ typedef struct XaState {
   double   rd;                // total frames read (monotonic, fractional)      (was s_rd)
   int16_t  hist[2][2];        // XA IIR history, persists across sectors        (was s_hist)
   int      src_freq;          //                                               (was s_src_freq, init 37800)
+  int      dbg;               // PSXPORT_XA_DBG level, -1 = not read yet        (was s_dbg)
+  struct DiscState* disc;     // Game-owned disc backend (wired by Game())
 } XaState;
 
 #ifdef __cplusplus
@@ -36,7 +38,9 @@ extern "C" {
 #endif
 // Initialize a fresh XaState to power-on defaults (src_freq=37800, everything else 0). Called by Game().
 void xa_state_init(XaState* s);
-// Make `s` the active XA streamer instance for subsequent xa_stream_* calls.
+// Bind `s` for the vendored Beetle spu.c sample pull ONLY: CDC_GetCDAudioSample(s32*) is a
+// context-free vendor callback, so it reads the bound instance (sanctioned vendor interop).
+// All xa_stream_* entry points take their XaState explicitly.
 void xa_bind_state(XaState* s);
 #ifdef __cplusplus
 }

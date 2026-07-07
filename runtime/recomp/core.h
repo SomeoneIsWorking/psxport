@@ -23,6 +23,7 @@
 #include "math/mtx.h"                         // Core owns a Mtx instance (libgte matrix leaves)
 #include "items/inventory.h"                  // Core owns an Inventory instance
 #include "items/save.h"                       // Core owns a SaveMenu instance
+#include "interp_diag.h"                      // Core owns an InterpDiag (interp.cpp trace/profile state)
 
 #ifdef __cplusplus
 
@@ -61,6 +62,11 @@ public:
   bool recMissTolerant = false;
   bool recMissed       = false;
 
+  // SBS divergence debugger: a store landing in the wwatch range fires this callback (set by
+  // sbs.cpp on each core) with the writing core + addr + value, so the harness captures the EXACT
+  // corrupting-write guest backtrace. Per-Core (was the process-global s_store_watch_cb).
+  void (*storeWatchCb)(Core*, uint32_t, uint32_t) = nullptr;
+
   // Cooperative-yield handshake (later-169): a native override of a YIELDING function cannot
   // rec_dispatch its callee (that nests a rec_interp with its own CORO_SENTINEL; a deep yield's
   // longjmp destroys that C frame, so the resume mis-reads the return as task-end). Instead the
@@ -82,6 +88,10 @@ public:
   // The four engine entry points (rec_dispatch / rec_coro_run / rec_interp / rec_super_call) check
   // this and route to interp_run / interp_coro_run when set.
   int use_interp = 0;
+
+  // Interpreter trace/profile/diagnostic state (interp.cpp) — per-Core so SBS profiles never
+  // interleave. Pure diagnostics; no guest-state effect.
+  InterpDiag idiag;
 
   Core();
   ~Core();
@@ -106,8 +116,8 @@ public:
   // Store watchpoints (REPL `watch` / PSXPORT_CW / PSXPORT_WWATCH).
   void mem_set_watch(uint32_t lo, uint32_t hi);
   int  mem_watch_hits();
-  // Programmatic write-watchpoint (SBS divergence debugger): stores landing in [lo,hi) fire the global
-  // the mem.cpp store-watch callback (installed via mem_set_store_watch_cb) with (this, addr, value) —
+  // Programmatic write-watchpoint (SBS divergence debugger): stores landing in [lo,hi) fire this
+  // Core's storeWatchCb (installed by sbs.cpp) with (this, addr, value) —
   void wwatch_arm(uint32_t lo, uint32_t hi);
 
 private:

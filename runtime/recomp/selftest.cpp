@@ -14,9 +14,10 @@
 #include <cstdlib>
 #include <cstring>
 
-extern "C" int xa_stream_owns_slot2(void);
-extern "C" int xa_stream_voice_busy(void);
-extern "C" int xa_stream_is_active(void);
+struct XaState;
+extern "C" int xa_stream_owns_slot2(XaState* xs);
+extern "C" int xa_stream_voice_busy(XaState* xs);
+extern "C" int xa_stream_is_active(XaState* xs);
 void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
@@ -99,10 +100,10 @@ static int run_startgame(const char* path) {
       const uint32_t WIN = 200, MAX_WINS = 40;
       for (uint32_t w = 0; w < MAX_WINS && !clip_ended; w++) {
         for (uint32_t k = 0; k < WIN; k++, f++) dc_step_frame(c, f);
-        if (xa_stream_is_active()) saw_clip = 1;
+        if (xa_stream_is_active(&game->xa)) saw_clip = 1;
         else if (saw_clip) clip_ended = 1;
         if (verbose) fprintf(stderr, "[selftest]   window %u: loop raw=%u xa_active=%d\n",
-                             w, c->mem_r16(0x1F800198u), xa_stream_is_active());
+                             w, c->mem_r16(0x1F800198u), xa_stream_is_active(&game->xa));
       }
       uint32_t loop_adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
       int loop_ran = (loop_adv > 0) || (sm48() == 2 && c->mem_r16(0x1F800198u) != c0);
@@ -135,7 +136,7 @@ static int run_startgame(const char* path) {
       }
       fprintf(stderr, "[selftest] FAIL: loop_ran=%d (counter +%u) saw_clip=%d clip_ended=%d "
                       "(xa_active=%d sm[0x48]=%u).\n",
-              loop_ran, loop_adv, saw_clip, clip_ended, xa_stream_is_active(), sm48());
+              loop_ran, loop_adv, saw_clip, clip_ended, xa_stream_is_active(&game->xa), sm48());
       return 1;
     }
     if (stage() != STAGE_GAME) {   // bounced back out of GAME (e.g. froze->reset) — not free-roam

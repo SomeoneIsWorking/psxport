@@ -20,9 +20,7 @@ void watchdog_disable(void);   // permanently disable (SBS debugger pauses indef
 int gpu_windowed(void);
 
 // disc.c
-int  disc_read_raw(uint32_t lba, uint8_t* out, uint32_t n);   // raw 2352-byte sector
-int  disc_read_sector(uint32_t lba, uint8_t* out);            // 2048-byte data sector
-int  disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size);  // native ISO9660 CdSearchFile
+// disc_* (disc.c) now take the Game-owned DiscState* explicitly — see disc.h.
 
 // mdec_beetle.c + vendored mednafen mdec.c
 void     mdec_init(void);
@@ -37,19 +35,21 @@ void     MDEC_Run(int32_t clocks);
 // (spu_audio has moved to `class SpuAudio` owned by Game — `c->game->spu_audio.method()`.
 //  No C shims; callers use the class directly via spu_audio.h.)
 
-// xa_stream.c — XA-ADPCM streaming (CD audio) + the raw-sector decoder
-void xa_stream_setmode(uint8_t mode);
-void xa_stream_setfilter(uint8_t file, uint8_t chan);
-void xa_stream_setloc(uint8_t amm, uint8_t ass, uint8_t asect);
-void xa_stream_start(void);
-void xa_stream_stop(void);
-int  xa_stream_play_lba(uint32_t* lba);
-void xa_stream_play(uint8_t chan, uint32_t start, uint32_t end, int loop);
-int  xa_stream_is_looping(void);
-int  xa_stream_is_active(void);
-int  xa_stream_owns_slot2(void);
-int  xa_stream_voice_busy(void);
-void xa_stream_voice_release(void);
+// xa_stream.c — XA-ADPCM streaming (CD audio) + the raw-sector decoder. Every entry point takes
+// the Game-owned XaState* explicitly (game->xa); see xa_state.h for the vendor-pull bind exception.
+struct XaState;
+void xa_stream_setmode(struct XaState* xs, uint8_t mode);
+void xa_stream_setfilter(struct XaState* xs, uint8_t file, uint8_t chan);
+void xa_stream_setloc(struct XaState* xs, uint8_t amm, uint8_t ass, uint8_t asect);
+void xa_stream_start(struct XaState* xs);
+void xa_stream_stop(struct XaState* xs);
+int  xa_stream_play_lba(struct XaState* xs, uint32_t* lba);
+void xa_stream_play(struct XaState* xs, uint8_t chan, uint32_t start, uint32_t end, int loop);
+int  xa_stream_is_looping(struct XaState* xs);
+int  xa_stream_is_active(struct XaState* xs);
+int  xa_stream_owns_slot2(struct XaState* xs);
+int  xa_stream_voice_busy(struct XaState* xs);
+void xa_stream_voice_release(struct XaState* xs);
 int  xa_decode_sector(const uint8_t* raw, int16_t* out, int16_t hist[2][2], int* freq);
 
 #ifdef __cplusplus

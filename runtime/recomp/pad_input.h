@@ -1,11 +1,12 @@
 // pad_input.h — class Pad — native controller input subsystem, owned by Game (c->game->pad).
 // Carries the current host button state + REPL drive control + all the pad_* behavior (host poll,
-// per-VBlank fill buffer, REPL hold/tap/release). Implemented in pad_input.cpp. (Test-hook /
-// config-cache statics inside the SDL poll path stay shared per the plan policy — those are
-// host-wide, not per-Core.)
+// per-VBlank fill buffer, REPL hold/tap/release), plus the SDL gamepad handles and the headless
+// test hooks (force/hold/record/replay/shot/dump/trace schedules). Implemented in pad_input.cpp.
 #pragma once
 #include <cstdint>
+#include <cstdio>
 class Game;
+typedef struct SDL_Gamepad SDL_Gamepad;   // opaque; only held as pointers (SDL build only)
 
 class Pad {
 public:
@@ -25,4 +26,37 @@ public:
   void driveTap(uint16_t activeLowMask, int nframes);  // was pad_repl_tap(c, mask, n) — press for n frames
   void driveRelease();                      // was pad_repl_release(c) — clear REPL drive
   void serviceFrame();                      // was pad_service_frame(c) — per-frame native pad service
+
+private:
+  // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
+  static const int PAD_MAX_GC = 4;
+  SDL_Gamepad* mGc[PAD_MAX_GC] = {};
+  int  mGcInst[PAD_MAX_GC] = { -1, -1, -1, -1 };  // SDL_JoystickID per slot (-1 = empty)
+  int  mGcSubInit = 0;                            // lazily added the gamepad subsystem?
+  int  mNoPad = -1;                               // PSXPORT_PAD_NOPAD cache (-1 = not read)
+  int  mPrevP = 0, mPrevStep = 0;                 // P / '.' debug-key edge detectors
+  int  mPadDirsWarned = 0;                        // "controller is driving directions" once-notice
+  void ensureGcSubsystem();
+  void rescanControllers();
+
+  // ---- serviceFrame test hooks / config caches ----
+  int      mForceInit = 0, mForceOn = 0;
+  uint16_t mForceMask = 0xFFFF;
+  uint32_t mFc = 0;                 // internal frame counter for the pulse (== native frame index)
+  uint16_t mHoldMask = 0xFFFF;      // headless test hook: a HELD (not pulsed) mask...
+  uint32_t mHoldAt = 0;             // ...applied from this native frame onward
+  long     mStopAt = -2;            // PSXPORT_FORCE_STOP_AT (-2 = not read, -1 = off)
+
+  // ---- input record / replay + schedules ----
+  int       mRecInit = 0;
+  FILE*     mRecFp = nullptr;       // record sink
+  uint16_t* mRepBuf = nullptr;      // replay source (loaded once)
+  size_t    mRepN = 0;
+  uint32_t  mRecFc = 0;             // shared record/replay frame index
+  int       mShotInit = 0, mShotN = 0;
+  uint32_t  mShotAt[64] = {};
+  int       mDumpInit = 0, mDumpN = 0;
+  uint32_t  mDumpAt[32] = {};
+  int       mTraceInit = 0;
+  uint32_t  mTraceLo = 1, mTraceHi = 0;
 };

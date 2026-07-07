@@ -8,6 +8,8 @@
 // listener bind fails and its `mStarted` stays false. Callers with `Core* c` reach the endpoint via
 // `c->game->dbg_server.method()`. No legacy free-function shims — all callers use the class directly.
 #pragma once
+#include <pthread.h>
+#include <cstddef>
 class Core;
 class Game;
 
@@ -46,5 +48,12 @@ private:
   // mCmd/mRespBuf/mRespLen. See dbg_server.cpp for the timed-wait dance in dbg_submit.
   bool  mStarted = false;
   Core* mCtx = nullptr;
+  pthread_mutex_t mMtx  = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t  mDone = PTHREAD_COND_INITIALIZER;   // signalled by main when a result is ready
+  char   mCmd[512] = {};      // command awaiting service (server -> main)
+  int    mReqPending = 0;     // 1 while a command is queued for the main thread
+  int    mRespReady  = 0;     // 1 once the main thread has produced a result
+  char*  mRespBuf = nullptr;  // malloc'd result (main -> server); server frees after sending
+  size_t mRespLen = 0;
   friend class DbgServerInternals;   // dbg_server.cpp accessor helper (see impl file)
 };

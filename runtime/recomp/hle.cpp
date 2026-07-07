@@ -215,8 +215,6 @@ void rec_break(Core* c, uint32_t code) {
   (void)c;
 }
 
-// Global miss counter — process-level diag only (numbering the miss log). Not per-Core.
-static int s_miss = 0;
 
 void rec_dispatch_miss(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
@@ -255,10 +253,10 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
       "  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n"
       "  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n"
       "  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.\n",
-      s_miss++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
+      c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     fflush(stderr);
     abort();
   }
-  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", s_miss++, addr);
+  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", c->game->hle.miss_count++, addr);
 }

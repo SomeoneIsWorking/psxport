@@ -28,7 +28,7 @@ public:
   int      coreId(Core* c) const;
   uint32_t frame() const;
   int      dbgCmd(FILE* out, const char* line);
-  // Write-watch trampoline installed on mem via mem_set_store_watch_cb — static so it fits the
+  // Write-watch trampoline installed on each Core (core.storeWatchCb) — static so it fits the
   // C callback signature. Dispatches to `c->game->sbs->…` when SBS is active.
   static void storeCb(Core* c, uint32_t addr, uint32_t val);
 

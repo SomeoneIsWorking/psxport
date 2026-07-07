@@ -13,8 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 
-extern "C" int disc_read_sector(uint32_t lba, uint8_t* out);
-extern "C" int disc_find_file(const char* path, uint32_t* out_lba, uint32_t* out_size);
+#include "disc.h"
 
 // Catalogue: track -> (seq scan-index in TOMBA2.SND, vab scan-index, name).
 //
@@ -52,14 +51,14 @@ const char* MusicList::name(int i) const {
 int MusicList::loadContainer() {
     if (mBuf) return 0;
     uint32_t lba = 0, size = 0;
-    if (!disc_find_file("\\CD\\TOMBA2.SND", &lba, &size) || size == 0) {
+    if (!disc_find_file(&game->disc, "\\CD\\TOMBA2.SND", &lba, &size) || size == 0) {
         fprintf(stderr, "[music_list] disc_find_file \\CD\\TOMBA2.SND failed\n"); return -1;
     }
     uint32_t nsec = (size + 2047) / 2048;
     mBuf = (uint8_t*)malloc((size_t)nsec * 2048);
     if (!mBuf) return -1;
     for (uint32_t i = 0; i < nsec; i++) {
-        if (!disc_read_sector(lba + i, mBuf + (size_t)i * 2048)) {
+        if (!disc_read_sector(&game->disc, lba + i, mBuf + (size_t)i * 2048)) {
             fprintf(stderr, "[music_list] disc read failed at sector %u\n", i);
             free(mBuf); mBuf = nullptr; return -1;
         }

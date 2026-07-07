@@ -20,7 +20,8 @@ int     spu_render(int16_t *out, int max_frames);
 // XA/CD streamer (xa_stream.c). When a clip is streaming, GAME LOGIC may BLOCK waiting for it to
 // finish; that progress only happens inside spu_update -> CDC_GetCDAudioSample, so the SPU must
 // advance for the wait to clear even headless.
-int     xa_stream_is_active(void);
+struct XaState;
+int     xa_stream_is_active(struct XaState* xs);
 int     gpu_windowed(void);
 }
 
@@ -133,28 +134,26 @@ void SpuAudio::frameEx(bool output) {
   bool sdl_on = false;
 #endif
   bool wav_on = output && mWav;
-  if (!sdl_on && !wav_on && !xa_stream_is_active()) return;
+  if (!sdl_on && !wav_on && !xa_stream_is_active(&game->xa)) return;
 
   // Advance the mixer by exactly one video frame of system clocks.
-  static int16_t buf[2 * (SPU_FRAMES_PER_VIDEO_FRAME + 64)];
+  int16_t* buf = mMixBuf;
 
   // Diagnostics: `debug spuprof` prints the average spu_update() wall time every 60 frames.
-  static int s_prof = -1;
-  if (s_prof < 0) s_prof = cfg_dbg("spuprof") ? 1 : 0;
-  if (s_prof) {
-    static double accum_ms, loop_ms; static int n;
-    static struct timespec prev; static int have_prev;
+  if (mProfOn < 0) mProfOn = cfg_dbg("spuprof") ? 1 : 0;
+  if (mProfOn) {
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
-    if (have_prev) loop_ms += (a.tv_sec - prev.tv_sec) * 1e3 + (a.tv_nsec - prev.tv_nsec) / 1e6;
+    if (mProfHavePrev) mProfLoopMs += (a.tv_sec - mProfPrev.tv_sec) * 1e3 + (a.tv_nsec - mProfPrev.tv_nsec) / 1e6;
     spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
     clock_gettime(CLOCK_MONOTONIC, &b);
-    accum_ms += (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
-    prev = a; have_prev = 1;
-    if (++n >= 60) {
+    mProfAccumMs += (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
+    mProfPrev = a; mProfHavePrev = 1;
+    if (++mProfN >= 60) {
       fprintf(stderr, "[spu_prof] spu_update %.4f ms | full frame iter %.4f ms | spu share %.1f%%\n",
-              accum_ms / n, loop_ms / n, loop_ms > 0 ? 100.0 * accum_ms / loop_ms : 0.0);
-      accum_ms = 0; loop_ms = 0; n = 0;
+              mProfAccumMs / mProfN, mProfLoopMs / mProfN,
+              mProfLoopMs > 0 ? 100.0 * mProfAccumMs / mProfLoopMs : 0.0);
+      mProfAccumMs = 0; mProfLoopMs = 0; mProfN = 0;
     }
   } else {
     spu_update(SPU_CLOCKS_PER_VIDEO_FRAME);
@@ -171,7 +170,7 @@ void SpuAudio::frameEx(bool output) {
 
   // Mix the native music engine on top of the SPU's output. Silent when nothing playing.
   if (game && game->native_music.active()) {
-    static int16_t mbuf[2 * (SPU_FRAMES_PER_VIDEO_FRAME + 64)];
+    int16_t* mbuf = mMonoBuf;
     game->native_music.render(mbuf, frames);
     for (int i = 0; i < frames * 2; i++) {
       int v = buf[i] + mbuf[i];
@@ -190,16 +189,16 @@ void SpuAudio::frameEx(bool output) {
 #ifdef PSXPORT_SDL
   if (!sdl_on) return;
   // `debug audiorate`: measure effective production rate (samples/wall-sec) + drop count.
-  { static int on = -1; if (on < 0) on = cfg_dbg("audiorate") ? 1 : 0;
-    if (on) { static double t0; static long samp, drops, calls; static int have;
+  { if (mRateOn < 0) mRateOn = cfg_dbg("audiorate") ? 1 : 0;
+    if (mRateOn) {
       struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-      double now = ts.tv_sec + ts.tv_nsec/1e9; if (!have) { t0 = now; have = 1; }
-      samp += frames; calls++;
-      if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) drops++;
-      double dt = now - t0;
+      double now = ts.tv_sec + ts.tv_nsec/1e9; if (!mRateHave) { mRateT0 = now; mRateHave = 1; }
+      mRateSamp += frames; mRateCalls++;
+      if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) mRateDrops++;
+      double dt = now - mRateT0;
       if (dt >= 2.0) { fprintf(stderr, "[audio_rate] %.0f samples/s (want 44100), %ld calls/%.1fs, drops=%ld, backlog=%d\n",
-                                samp/dt, calls, dt, drops, SDL_GetAudioStreamQueued(mStream));
-                       t0 = now; samp = 0; calls = 0; drops = 0; } } }
+                                mRateSamp/dt, mRateCalls, dt, mRateDrops, SDL_GetAudioStreamQueued(mStream));
+                       mRateT0 = now; mRateSamp = 0; mRateCalls = 0; mRateDrops = 0; } } }
   // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
   if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) return;
 

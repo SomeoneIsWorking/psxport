@@ -21,6 +21,7 @@ public:
   int      work_ok    = 0;        // was s_work_ok
   uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
   int      irq_enabled = 1;       // was s_irq_enabled
+  int      miss_count  = 0;       // recomp-miss log numbering (was s_miss)
 
   // deliverEvent(evClass, spec): mark every open+enabled event slot whose class matches evClass
   //   and whose spec masks against `spec` as fired. Called by the frame VBlank tick, memcard

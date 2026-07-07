@@ -68,9 +68,9 @@ void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, els
 // used to attach). NOT an override anymore; not static so native_boot can call it top-down.
 void Engine::frameUpdate() {
   Core* c = this->core;
-  perf_phase_begin(0);                               // perf: LOGIC = all guest interpreter work + render submit
+  c->game->perf.phaseBegin(0);                               // perf: LOGIC = all guest interpreter work + render submit
   rec_dispatch(c, 0x800788ACu);                      // real per-frame state update (still-PSX leaf)
-  perf_phase_end(0);
+  c->game->perf.phaseEnd(0);
   // Per-VBLANK audio work. On hardware the libsnd sequencer ticks once per VBlank IRQ (60 Hz NTSC)
   // and the SPU plays in realtime. One ov_frame_update is one *logic frame*, which on hardware spans
   // DAT_1f800235 (=quota) VBlanks (=2 => Tomba2's 30 fps). So the per-vblank work — the sequencer
@@ -102,23 +102,23 @@ void Engine::frameUpdate() {
   uint32_t seqfn = c->mem_r32(SEQ_FUNC_PTR);
   int seq_ok = !cfg_on("PSXPORT_T2_NOSEQTICK") && c->game->native_gates.get("seqtick")
                && (seqfn & 0x1FFFFFFFu) >= 0x10000u && (seqfn & 0x1FFFFFFFu) < 0x200000u;
-  perf_phase_begin(1);                               // perf: AUDIO = per-vblank sequencer tick + SPU advance
+  c->game->perf.phaseBegin(1);                               // perf: AUDIO = per-vblank sequencer tick + SPU advance
   for (int v = 0; v < quota; v++) {                  // once per VBlank this logic frame spans
     if (seq_ok) rec_dispatch(c, SEQ_TICK_WRAPPER);   // libsnd per-vblank tick (user cb + SsSeqCalled)
     c->game->spu_audio.frame();                      // advance SPU one 1/60 s field + feed device
   }
   // (native field-BGM director REMOVED — it played a HARDCODED song over everything from the menu on.
   //  Music is the recompiled libsnd path above; no native music engine, no hardcoded song.)
-  perf_phase_end(1);
+  c->game->perf.phaseEnd(1);
   c->mem_w16(DISPLAY_COUNTER, c->mem_r8(VBLANK_QUOTA));    // satisfy the pacing dwell immediately
   // fps60 (when enabled) OWNS presentation: it presents the interpolated in-between + the real frame
   // (60 fps, 1 frame behind) and paces both halves — see fps60_present_vk. The faithful path
   // presents frame B once and paces a full frame.
   c->game->fps60.frame_commit(c);
   if (!g_mods.fps60) {
-    perf_phase_begin(2);                             // perf: PRESENT-cpu = VRAM mirror upload + VK record/submit
+    c->game->perf.phaseBegin(2);                             // perf: PRESENT-cpu = VRAM mirror upload + VK record/submit
     gpu_present(c);
-    perf_phase_end(2);                               // (pacing/vsync sleep below is excluded -> shows as idle/pace)
+    c->game->perf.phaseEnd(2);                               // (pacing/vsync sleep below is excluded -> shows as idle/pace)
     gpu_pace_frame(c);
   }
 }

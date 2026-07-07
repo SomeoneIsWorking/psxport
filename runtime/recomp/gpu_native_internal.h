@@ -125,12 +125,35 @@ struct GpuState {
   struct VgRegion { int x, y, w, h; int frame; uint8_t live; char tag[12]; };
   VgRegion s_vg[VG_MAX] = {};
   int s_vg_n = 0;
+  long s_vg_oob_log = 0, s_vg_clobber_log = 0;   // vramguard log-rate counters (vram_xfer.cpp)
   // Register a texture-group/atlas upload rect as a protected, populated region (called from the native
   // upload). label distinguishes atlas vs CLUT vs framebuffer. Overlapping re-uploads refresh in place.
   void vram_register_atlas(int x, int y, int w, int h, const char* tag);
   // Guard a transfer: validate bounds; under vramguard, log if it clobbers a protected atlas region.
   // `path` names the writer (e.g. "A0", "80copy", "native"); src is the guest source addr (0 if N/A).
   void vram_guard_check(Core* core, const char* path, int x, int y, int w, int h, uint32_t src);
+
+  // ---- diagnostics (per-Core so SBS cores never share dedupe/log state) -----------------------
+  int s_log = 0;                    // PSXPORT_GPU_LOG / `debug gpu` per-frame prim log
+  int s_reddbg = 0;                 // PSXPORT_REDDBG: dark-red output anomaly probe
+  int s_oracle_prim_log = 0;        // ORACLE diag: when >0, log each soft_gpu primitive
+  long s_nd2d_hist[256] = {};       // op histogram of prims that fall to the 2D band (was g_nd2d_hist)
+  // PSXPORT_PRIMDUMP=frame: one-frame CSV dump of every OT prim (see primdump_open).
+  FILE* s_primdump_f = nullptr;
+  int   s_primdump_frame = -2;      // -2 = env not read, -1 = off
+  FILE* primdump_open(int frame);
+  // Fade-flash diagnostic (PSXPORT_FADEDBG) accumulators, reset per present.
+  int s_fade_maxc = 0, s_fade_npoly = 0, s_fade_nsemi = 0, s_fade_lasty = 0;
+  int s_fade_semimax = -1, s_fade_semimin = 999, s_fade_bigsemi = 0;
+  void fade_note(int r, int g, int b, int offy, int semi);
+  void fade_note_size(int w, int h, int semi);
+  // PSXPORT_CLUTWATCH[=x,y] watched CLUT point + pending-A0 latch.
+  int s_cw_x = -1, s_cw_y = 0, s_cw_pending = 0;
+  int clutwatch_covers(int rx, int ry, int rw, int rh);
+  // PSXPORT_TEXWATCH="x0,y0,x1,y1" watched VRAM rect.
+  int s_tw_init = 0, s_tw_x0 = -1, s_tw_y0 = 0, s_tw_x1 = 0, s_tw_y1 = 0;
+  int texwatch_overlap(int rx, int ry, int rw, int rh);
+  void gpu_native_init();           // seed the diag gates from cfg (boot + FMV player)
 
   // Frame + OT bookkeeping
   int s_frame = 0;                                            // present-frame counter

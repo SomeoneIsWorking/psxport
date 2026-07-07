@@ -17,7 +17,7 @@
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
 #include "core.h"
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
-#include "hw_bind.h"   // spu_bind/mdec_bind/cdc_bind/xa_bind (per-instance HW-peripheral binders)
+#include "hw_bind.h"   // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
@@ -72,12 +72,11 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->mRender->projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
-  cdc_bind(c);                          // bind THIS core's CD-controller registers (per-instance — no shared CD)
   xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
   c->game->ffspan.resetFrame();   // backdrop-attribution: reset the per-frame builder span table
   void gpu_set_disp_origin(Core* c, int x, int y);
   (void)f;
-  perf_frame_begin();   // perf: start the frame clock (top of the deterministic per-frame work)
+  c->game->perf.frameBegin();   // perf: start the frame clock (top of the deterministic per-frame work)
   // Advance the libetc VSync counter (DAT_800abde0) — one vblank per native frame. VSync(0) is trapped,
   // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
   c->game->timing.frameTick();
@@ -103,7 +102,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
   c->game->pad.serviceFrame();                                       // host input -> game pad buffer (pre-read)
   c->game->cd.audioTrace("pre");                                   // CD-vol fade state BEFORE tick+mix
-  perf_mark_pre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
+  c->game->perf.markPre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
   // PC-driven frame body: per-frame state update (still-PSX leaf) + per-vblank audio + fps60 commit +
   // present + pace. Called as a plain C call (top-down PC-driven model) — NOT an override. This is where
   // gpu_present / gpu_pace_frame / the per-vblank sequencer+SPU tick are reached every live frame; before
@@ -114,7 +113,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->engine.frameUpdate();                                    // tick + per-vblank audio + present + pace
   c->game->ffspan.end("frameupd");
   c->game->cd.audioTrace("post");                                  // CD-vol fade state AFTER tick+mix
-  perf_phase_begin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
+  c->game->perf.phaseBegin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
   // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
   // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
@@ -122,7 +121,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->game->ffspan.begin();
   c->game->pcSched.step();                                    // <- replaces FUN_80051e60 (BIOS scheduler)
   c->game->ffspan.end("scheduler");
-  perf_phase_end(3);
+  c->game->perf.phaseEnd(3);
   c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
   c->game->cd.audioTrace("coord");                                 // CD-vol fade state AFTER coord
   rc1(c, 0x80080f6c, 0);                                      // draw sync
@@ -173,7 +172,7 @@ static void native_step_frame(Core* c, uint32_t f) {
       dv.clearPre();
     }
   }
-  perf_frame_end();   // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
+  c->game->perf.frameEnd();   // perf: close the frame (post-tick remainder + full wall time) + emit rolling avg
 }
 
 // Native override of game-main FUN_80050b08: init prefix, then (later) native frame loop.
@@ -268,7 +267,7 @@ static void game_init(Core* c) {
 
 // Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
 // frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->mRender->projprim.bind(c); spu_bind(c); mdec_bind(c); cdc_bind(c); xa_bind(c); crt0_setup(c); game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->mRender->projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
@@ -276,7 +275,6 @@ static void game_main(Core* c) {
   c->mRender->projprim.bind(c);         // and this core's native depth-cache (class ProjPrim on Render)
   spu_bind(c);                          // and this core's SPU
   mdec_bind(c);                         // and this core's MDEC
-  cdc_bind(c);                          // and this core's CD-controller registers
   xa_bind(c);                           // and this core's XA streamer
   game_init(c);
   // --- native frame loop (replaces LAB_80050c6c). Per frame, faithful to the game-main loop
@@ -311,6 +309,14 @@ static void game_main(Core* c) {
           nframes ? "capped" : "interactive (until window close)");
   c->game->dbg_server.start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
+  // Per-loop state carried across frames (plain locals — one frame loop per Core, no hidden globals):
+  int      as_phase = -1;             // autoskip: -1 uninit, 0 reach-GAME, 1 await-cutscene, 2 skip, 3 done
+  int      as_idle  = 0;              // autoskip: consecutive flag==0 frames in phase 2
+  uint32_t seq_last = 0xFFFFFFFF;     // seqdbg change detector
+  uint64_t state_last_sig = 0;        // `debug state` change detector
+  uint32_t bgm_rd[14] = {};           // bgmtick per-slot read-pointer change detector
+  uint32_t last_entry = 0;            // stage/sm change detector
+  uint32_t last_sm = 0xFFFFFFFF;
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
     c->game->timing.logicFrame = f;
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
@@ -336,25 +342,23 @@ static void game_main(Core* c) {
     //       Start ONLY while the flag is 1 is what keeps us OUT of the pause menu (Start in free-roam opens
     //       it). Done once the flag has been 0 for a short persistence window (survives any brief beat gap).
     // Works with or without the REPL (the REPL's `run N` still gates frame budget).
-    static int  s_as_phase = -1;     // -1 uninit, 0 reach-GAME, 1 await-cutscene, 2 skip-cutscene, 3 done
-    static int  s_as_idle  = 0;      // consecutive flag==0 frames in phase 2
-    if (s_as_phase == -1) {
+    if (as_phase == -1) {
       const char* s = cfg_str("PSXPORT_AUTO_SKIP");
-      s_as_phase = (s && strcmp(s, "0")) ? 0 : 3;
-      if (s_as_phase == 0) fprintf(stderr, "[autoskip] armed: drive into GAME free-roam\n");
+      as_phase = (s && strcmp(s, "0")) ? 0 : 3;
+      if (as_phase == 0) fprintf(stderr, "[autoskip] armed: drive into GAME free-roam\n");
     }
-    if (s_as_phase < 3) {
+    if (as_phase < 3) {
       uint32_t stg = c->mem_r32(TASKBASE + 0xc);
       uint8_t  cut = c->mem_r8(0x1F800137u);             // cutscene-active flag
-      if (s_as_phase == 0) {                             // tap Cross until the GAME stage
+      if (as_phase == 0) {                             // tap Cross until the GAME stage
         if (stg != 0x8010637Cu) { if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); }
-        else { s_as_phase = 1; fprintf(stderr, "[autoskip] reached GAME at frame %u\n", f); }
-      } else if (s_as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
-        if (cut) { s_as_phase = 2; fprintf(stderr, "[autoskip] intro cutscene up at frame %u; skipping (Start)\n", f); }
+        else { as_phase = 1; fprintf(stderr, "[autoskip] reached GAME at frame %u\n", f); }
+      } else if (as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
+        if (cut) { as_phase = 2; fprintf(stderr, "[autoskip] intro cutscene up at frame %u; skipping (Start)\n", f); }
       } else {                                           // phase 2: pulse Start while the cutscene is active
-        if (cut) { s_as_idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6); }
-        else if (++s_as_idle >= 60) {   // ~2s after the flag clears: lets the cutscene-END FADE finish before
-          c->game->pad.driveRelease(); s_as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
+        if (cut) { as_idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6); }
+        else if (++as_idle >= 60) {   // ~2s after the flag clears: lets the cutscene-END FADE finish before
+          c->game->pad.driveRelease(); as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
           fprintf(stderr, "[autoskip] free-roam reached at frame %u (cutscene ended)\n", f);   // (not mid-fade)
         }
       }
@@ -434,13 +438,12 @@ static void game_main(Core* c) {
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
     // missing-BGM root cause is upstream (song open/play not happening), not the SPU/tick.
     if (cfg_dbg("seq")) {
-      static uint32_t ls = 0xFFFFFFFF;
       uint32_t st = (c->mem_r16(0x801054B0) << 16) | (c->mem_r32(0x80104C28) & 0xFFFF);
-      if (st != ls) {
+      if (st != seq_last) {
         fprintf(stderr, "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X\n",
                 f, c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
                 c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
-        ls = st;
+        seq_last = st;
       }
     }
     // PSXPORT_DEBUG=state — RELIABLE game-state probe (replaces the old `nav` camera guess, which
@@ -464,9 +467,8 @@ static void game_main(Core* c) {
         if (st && (ent & 0xFFFFF000u) == 0x80108000u) { menu_slot = i; menu_page = c->mem_r8(base + 0x6bu); }
       }
       sig = sig * 31 + ((uint64_t)menu_slot << 8 | menu_page);
-      static uint64_t last_sig = 0;
-      if (sig != last_sig) {
-        last_sig = sig;
+      if (sig != state_last_sig) {
+        state_last_sig = sig;
         fprintf(stderr, "[state] f%u", f);
         for (int i = 0; i < 3; i++) {
           uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
@@ -486,26 +488,24 @@ static void game_main(Core* c) {
     // advancing it (frozen, the handoff's hypothesis). Scene-independent: catches any window
     // where a BGM is active, without needing to reach a specific scene.
     if (cfg_str("PSXPORT_BGMDBG")) {
-      static uint32_t s_rd[14];
       for (int i = 0; i < 14; i++) {
         uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
         uint32_t flag = c->mem_r32(s + 0x98), rd = c->mem_r32(s);
-        if ((flag & 1) && rd != s_rd[i]) {
+        if ((flag & 1) && rd != bgm_rd[i]) {
           fprintf(stderr, "[bgmtick] f%u slot%d active rdptr=%08X base=%08X (%+d)\n",
                   f, i, rd, c->mem_r32(s + 4), (int)(rd - c->mem_r32(s + 4)));
-          s_rd[i] = rd;
+          bgm_rd[i] = rd;
         }
-        if (!(flag & 1)) s_rd[i] = 0;
+        if (!(flag & 1)) bgm_rd[i] = 0;
       }
     }
-    static uint32_t s_last_entry = 0; static uint32_t s_last_sm = 0xFFFFFFFF;
     uint32_t t0e = c->mem_r32(TASKBASE + 0xc), s48 = c->mem_r16(TASKBASE + 0x48);
     // GAME runs a 4-level nested state machine (task +0x48/4a/4c/4e). Track all of it so a
     // stuck leaf is visible, not just the outer s48.
     uint32_t sm = (c->mem_r16(TASKBASE+0x48)<<24)|(c->mem_r16(TASKBASE+0x4a)<<16)|
                   (c->mem_r16(TASKBASE+0x4c)<<8)|c->mem_r16(TASKBASE+0x4e)
                   ^ (c->mem_r16(TASKBASE+0x50)<<12)^(c->mem_r16(TASKBASE+0x52)<<4);
-    if (t0e != s_last_entry || sm != s_last_sm) {
+    if (t0e != last_entry || sm != last_sm) {
       const char* stg = t0e == 0x8010649Cu ? "START" : t0e == 0x801062E4u ? "DEMO" :
                         t0e == 0x8010637Cu ? "GAME" : "?";
       fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u]"
@@ -513,7 +513,7 @@ static void game_main(Core* c) {
               f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
               c->mem_r16(TASKBASE+0x4c), c->mem_r16(TASKBASE+0x4e), c->mem_r16(TASKBASE+0x50),
               c->mem_r16(TASKBASE+0x52), c->mem_r32(0x80109450));
-      s_last_entry = t0e; s_last_sm = sm;
+      last_entry = t0e; last_sm = sm;
     }
     // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
     // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals

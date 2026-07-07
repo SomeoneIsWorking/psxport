@@ -16,7 +16,7 @@
 #include <string.h>
 #include <setjmp.h>
 void native_boot_run(Core* c);
-void interp_trace_open(const char* path);
+void interp_trace_open(Core* c, const char* path);
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
@@ -107,7 +107,7 @@ static void native_scea_splash(Core* c) {
 void BootStub::run(const char* main_exe_path) {
   Core* c = &game->core;
   main_path = main_exe_path;
-  interp_trace_open(cfg_str("PSXPORT_INTERP_TRACE"));
+  interp_trace_open(c, cfg_str("PSXPORT_INTERP_TRACE"));
 
   // PC-native boot: render SCEA natively (no interpreted PSX stub), then load MAIN.EXE ourselves and
   // enter the native MAIN boot. (The PSX stub SCUS_944.54 is no longer run — see native_scea_splash.)

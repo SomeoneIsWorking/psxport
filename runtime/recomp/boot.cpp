@@ -15,7 +15,6 @@
 // C subsystems (compiled as C) reached across the boundary — declare with C linkage.
 extern "C" {
   void watchdog_init(void); void mdec_init(void); void spu_init(void);
-  void cdc_init(void);
 }
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
@@ -58,16 +57,13 @@ int main(int argc, char** argv) {
   void threads_init(Core*);
   void threads_register_overrides(void);
   void gte_init(void);
-  void gpu_native_init(void);
   void mdec_init(void);
   void spu_init(void);
   gte_init();               // GTE (COP2) coprocessor, lifted from Beetle
   mdec_init();              // MDEC video decoder (FMV), lifted from Beetle
   spu_init();               // SPU audio core, lifted from Beetle
   game->spu_audio.init();   // SDL audio output sink (PSXPORT_NOAUDIO to disable)
-  gpu_native_init();        // native GPU renderer (parses the game's GP0 stream)
-  void cdc_init(void);
-  cdc_init();               // native CD controller registers (0x1F801800-3) for raw-CD code
+  game->gpu.gpu_native_init();   // native GPU renderer (parses the game's GP0 stream)
   game->cd.overridesInit(); // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)

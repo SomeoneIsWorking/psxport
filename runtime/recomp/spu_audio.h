@@ -18,6 +18,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
 #endif
@@ -50,4 +51,21 @@ private:
   int      mState    = 0;               // 0 = uninit, 1 = enabled+open, -1 = disabled/failed
   FILE*    mWav      = nullptr;         // open WAV file, or NULL
   uint32_t mWavBytes = 0;               // PCM bytes written so far
+
+  // Per-frame mix buffers (735 stereo frames + slack). Per-instance so two SBS Games never mix
+  // through the same scratch.
+  int16_t  mMixBuf [2 * (735 + 64)] = {};   // SPU render target (+ native-music mixdown)
+  int16_t  mMonoBuf[2 * (735 + 64)] = {};   // native-music render scratch
+
+  // `debug spuprof` diagnostics (average spu_update() wall time every 60 frames).
+  int      mProfOn = -1;                // -1 = unknown, 0/1 cached
+  double   mProfAccumMs = 0, mProfLoopMs = 0;
+  int      mProfN = 0, mProfHavePrev = 0;
+  struct timespec mProfPrev = {};
+
+  // `debug audiorate` diagnostics (effective production rate + drop count).
+  int      mRateOn = -1;                // -1 = unknown, 0/1 cached
+  double   mRateT0 = 0;
+  long     mRateSamp = 0, mRateDrops = 0, mRateCalls = 0;
+  int      mRateHave = 0;
 };

@@ -31,13 +31,10 @@
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
 int gpu_gpu_enabled(void);                                    // gpu_gpu.c (declared early for the gp0 tee)
-// s_reddbg is a process-level env-gate cache (PSXPORT_REDDBG), so it stays file-scope.
-static int s_reddbg;              // PSXPORT_REDDBG: dark-red output anomaly probe
 
 // ---- Display control (GP1) ----------------------------------------------------------
 
 
-static int s_log = 0;             // PSXPORT_GPU_LOG (process-level env-gate cache)
 // s_prims moved to GpuState (deglobalize 2026-07-03) — was cross-core-shared per-frame draw counter.
 // s_seen3d / s_prev_had3d are per-instance GpuState members now (gpu_native_internal.h). The OT walk
 // tees geometry before present, so s_seen3d is final by the time the present/compose path queries it.
@@ -177,7 +174,6 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
 // s_gp0_words / s_dma2 moved to GpuState (per-Core; was cross-core-shared per-frame diag).
-static int s_oracle_prim_log = 0;  // ORACLE diag (was g_oracle_prim_log): when >0, log each soft_gpu primitive
 // g_nd_3d/nd_2d retired 2026-07-03 — Render::stats.nd3d/nd2d (RenderStats).
 // 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
 // (ov_scene_native), it STILL needs the guest's leftover 2D overlay prims — the opening-cutscene
@@ -225,8 +221,7 @@ static int ws_2d_local_x(int x, int is_bg) {
 // scratch/logs/prims_f<frame>.csv — one row per prim: id (walk order), kind, op, is3d, bg(ackdrop),
 // bbox, rgb, textured, semi. Lets a human identify which IDs are the water/sky backdrop so the
 // backdrop-vs-HUD band split can be made correct (and order-independent).
-static FILE* s_primdump_f = 0; static int s_primdump_frame = -2;
-static FILE* primdump_open(int frame) {
+FILE* GpuState::primdump_open(int frame) {
   if (s_primdump_frame == -2) { const char* e = cfg_str("PSXPORT_PRIMDUMP"); s_primdump_frame = e ? atoi(e) : -1; }
   if (s_primdump_frame < 0 || frame != s_primdump_frame) return 0;
   if (!s_primdump_f) {
@@ -239,30 +234,27 @@ static FILE* primdump_open(int frame) {
 }
 void prim_dump_poly(Core* core, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
                     const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi) {
-  (void)core; FILE* f = primdump_open(frame); if (!f) return;
+  FILE* f = core->game->gpu.primdump_open(frame); if (!f) return;
   int x0=xs[0],y0=ys[0],x1=xs[0],y1=ys[0];
   for (int i = 1; i < nv; i++) { if(xs[i]<x0)x0=xs[i]; if(xs[i]>x1)x1=xs[i]; if(ys[i]<y0)y0=ys[i]; if(ys[i]>y1)y1=ys[i]; }
   fprintf(f, "%u,poly,%02X,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", id, op, is3d, bg, x0,y0,x1,y1, r,g,b, tex, semi);
 }
 void prim_dump_sprite(Core* core, int frame, unsigned id, uint8_t op, int x, int y, int w, int h,
                       int bg, uint8_t r, uint8_t g, uint8_t b, int tex, int semi) {
-  (void)core; FILE* f = primdump_open(frame); if (!f) return;
+  FILE* f = core->game->gpu.primdump_open(frame); if (!f) return;
   fprintf(f, "%u,sprite,%02X,0,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", id, op, bg, x,y,x+w,y+h, r,g,b, tex, semi);
 }
-void prim_dump_close_if_done(int frame) {
-  if (s_primdump_f && s_primdump_frame >= 0 && frame > s_primdump_frame) {
-    fclose(s_primdump_f); s_primdump_f = 0;
-    fprintf(stderr, "[primdump] wrote scratch/logs/prims_f%d.csv\n", s_primdump_frame);
+void prim_dump_close_if_done(Core* core, int frame) {
+  GpuState& g = core->game->gpu;
+  if (g.s_primdump_f && g.s_primdump_frame >= 0 && frame > g.s_primdump_frame) {
+    fclose(g.s_primdump_f); g.s_primdump_f = 0;
+    fprintf(stderr, "[primdump] wrote scratch/logs/prims_f%d.csv\n", g.s_primdump_frame);
   }
 }
-long g_nd2d_hist[256];           // op histogram of prims that fall to the 2D band (ndepth diag)
-
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
 // scene is drawn, to settle whether a bright fade frame is in the GP0 (engine emits it) or invented
 // by VK. Works identically under SW and VK (same tee'd colors), so one playthrough pins the locus.
-static int s_fade_maxc = 0, s_fade_npoly = 0, s_fade_nsemi = 0, s_fade_lasty = 0;
-static int s_fade_semimax = -1, s_fade_semimin = 999, s_fade_bigsemi = 0;
-static void fade_note(int r, int g, int b, int offy, int semi) {
+void GpuState::fade_note(int r, int g, int b, int offy, int semi) {
   int m = r > g ? r : g; if (b > m) m = b;
   if (m > s_fade_maxc) s_fade_maxc = m;
   s_fade_npoly++; if (semi) { s_fade_nsemi++;
@@ -270,7 +262,7 @@ static void fade_note(int r, int g, int b, int offy, int semi) {
   s_fade_lasty = offy;
 }
 // flag a semi prim wider than ~half the screen (a full-screen fade overlay tile)
-static void fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && h >= 120) s_fade_bigsemi++; }
+void GpuState::fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && h >= 120) s_fade_bigsemi++; }
 // PSXPORT_SEMIDUMP=frame: log each SEMI prim (blend mode + color + bbox) at `frame`, to see how the
 // fade overlay tiles stack (VK draws them all vs one snapshot, so stacked tiles don't accumulate).
 void GpuState::semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
@@ -625,14 +617,13 @@ void GpuState::prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, u
 // (default 880,507 = the wrong grass palette found via the oracle compare, journal later 39),
 // in order, with the resulting 16-entry palette. Reveals whether the right palette is written
 // then overwritten, or never written, and by which transfer.
-static int s_cw_x = -1, s_cw_y = 0, s_cw_pending = 0;
 void GpuState::clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
   fprintf(stderr, "[clutwatch] %s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
           tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
   for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_cw_x + k, s_cw_y));
   fprintf(stderr, "\n");
 }
-static int clutwatch_covers(int rx, int ry, int rw, int rh) {
+int GpuState::clutwatch_covers(int rx, int ry, int rw, int rh) {
   if (s_cw_x < 0) return 0;
   return s_cw_y >= ry && s_cw_y < ry + rh && s_cw_x >= rx && s_cw_x < rx + rw;
 }
@@ -650,8 +641,7 @@ void GpuState::clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
 // DEST rect overlaps the watched VRAM rect (e.g. a character's texpage), with frame, dest rect,
 // DMA source addr, and the first source/dest bytes. Traces exactly when a model's texture pixels
 // change and what data fed them (gameplay sprite/CLUT corruption hunt).
-static int s_tw_init = 0, s_tw_x0 = -1, s_tw_y0 = 0, s_tw_x1 = 0, s_tw_y1 = 0;
-static int texwatch_overlap(int rx, int ry, int rw, int rh) {
+int GpuState::texwatch_overlap(int rx, int ry, int rw, int rh) {
   if (!s_tw_init) {
     s_tw_init = 1;
     const char* e = cfg_str("PSXPORT_TEXWATCH");
@@ -814,7 +804,7 @@ void GpuState::gp0_exec(Core* core) {
         if (!is3d && !bg) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
           for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; billboard = 1; } }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
-          extern long g_nd2d_hist[256]; g_nd2d_hist[op]++; }
+          s_nd2d_hist[op]++; }
         if (!is3d && !bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
           fprintf(stderr, "[polynode] id=%u op=%02x bbox=(%d,%d)-(%d,%d) node=%08x\n",
                   ord_idx, op, bx0, by0, bx1, by1, s_cur_node);
@@ -1402,15 +1392,14 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
           fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", st.odAdd, st.odHit, st.odMiss);
         st.odAdd = st.odHit = st.odMiss = 0; }
-      extern long g_nd2d_hist[256];
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
-        for (int o = 0; o < 256; o++) if (g_nd2d_hist[o]) {
+        for (int o = 0; o < 256; o++) if (s_nd2d_hist[o]) {
           int gour=o&0x10, quad=o&0x08, tex=o&0x04, semi=o&0x02;
           const char* k = (o>=0x60&&o<0x80) ? "SPRITE" : (o>=0x40&&o<0x60) ? "LINE" :
                           (o>=0x20&&o<0x40) ? "POLY" : (o>=0x80) ? "BLIT" : "misc";
-          fprintf(stderr, "    2D-band op 0x%02X x%ld  [%s%s%s%s %s]\n", o, g_nd2d_hist[o],
+          fprintf(stderr, "    2D-band op 0x%02X x%ld  [%s%s%s%s %s]\n", o, s_nd2d_hist[o],
                   gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
-        for (int o = 0; o < 256; o++) g_nd2d_hist[o] = 0;
+        for (int o = 0; o < 256; o++) s_nd2d_hist[o] = 0;
       }
       core->mRender->stats.nd3d = core->mRender->stats.nd2d = 0;
     } }
@@ -1472,7 +1461,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
-  { void prim_dump_close_if_done(int); prim_dump_close_if_done(s_frame); }   // PSXPORT_PRIMDUMP: flush the file
+  { void prim_dump_close_if_done(Core*, int); prim_dump_close_if_done(core, s_frame); }   // PSXPORT_PRIMDUMP: flush the file
 }
 void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 // FMV / SCEA-splash teardown (issues #7/#11): black out the DISPLAYED framebuffer region of s_vram and
@@ -1500,7 +1489,7 @@ void GpuState::gpu_fps60_present_pass(Core* core) {
   s_prim_order = 0;                          // restart per-frame OT submission order for the next pass
 }
 
-void gpu_native_init(void) {
+void GpuState::gpu_native_init() {
   if (cfg_dbg("gpu") || cfg_on("PSXPORT_GPU_LOG")) s_log = 1;   // diagnostic: per-frame prim log via env
   if (cfg_dbg("red")) s_reddbg = 1;
   const char* cw = cfg_str("PSXPORT_CLUTWATCH");
