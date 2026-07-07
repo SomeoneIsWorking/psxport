@@ -148,12 +148,12 @@ public:
     if (off >= 0x1F800000u && off < 0x1F800000u + LW_SPAD) return (int)(LW_RAM + (off - 0x1F800000u));
     return -1;
   }
-  void lwReport(uint32_t addr) {             // print both cores' last writer for a divergent byte
+  void lwReport(uint32_t addr, FILE* out = stderr) {   // print both cores' last writer for a divergent byte
     int idx = lwIndex(addr | 0x80000000u);
-    if (idx < 0 || !mLwOn) return;
+    if (idx < 0 || !mLwOn) { if (out != stderr) fprintf(out, "sbs lw: last-writer map off or addr out of range\n"); return; }
     const LastW& a = mLwA[idx];
     const LastW& b = mLwB[idx];
-    fprintf(stderr, "[sbs] last-writer 0x%08X:  A pc=%08X ra=%08X f%u  |  B pc=%08X ra=%08X f%u\n",
+    fprintf(out, "[sbs] last-writer 0x%08X:  A pc=%08X ra=%08X f%u  |  B pc=%08X ra=%08X f%u\n",
             addr, a.pc, a.ra, a.frame, b.pc, b.ra, b.frame);
   }
 
@@ -173,6 +173,11 @@ public:
   bool     mDivArmed = false;
   bool     mSeenCutA = false, mSeenCutB = false, mFrA = false, mFrB = false;
   uint32_t mDivFrame = 0, mDivAddr = 0, mDivEnd = 0;
+  // Detection-time byte snapshot of the divergent range. `sbs diff` must show THESE, not live
+  // memory: after rewind-and-arm both cores are restored to the pre-frame state, so a live read
+  // shows identical bytes and hides what actually differed.
+  uint8_t  mDivBytesA[64] = {0}, mDivBytesB[64] = {0};
+  uint32_t mDivBytesN = 0;
   char     mBtA[4096] = {0}, mBtB[4096] = {0};
   bool     mHaveDbgsrv = false;
 
@@ -536,17 +541,18 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   {
     uint32_t n = mDivEnd - mDivAddr;
     if (n > 64) n = 64;
+    mDivBytesN = n;
+    for (uint32_t i = 0; i < n; i++) {
+      mDivBytesA[i] = isSpad(mDivAddr+i) ? mA->core.scratch[(mDivAddr+i)-0x1F800000u] : mA->core.mem_r8(mDivAddr+i);
+      mDivBytesB[i] = isSpad(mDivAddr+i) ? mB->core.scratch[(mDivAddr+i)-0x1F800000u] : mB->core.mem_r8(mDivAddr+i);
+    }
     fprintf(stderr, "[sbs] diff bytes (up to 64):\n");
     fprintf(stderr, "  A @0x%08X:", mDivAddr);
-    for (uint32_t i = 0; i < n; i++) {
-      uint8_t va = isSpad(mDivAddr+i) ? mA->core.scratch[(mDivAddr+i)-0x1F800000u] : mA->core.mem_r8(mDivAddr+i);
-      fprintf(stderr, " %02X", va);
-    }
+    for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %02X", mDivBytesA[i]);
     fprintf(stderr, "\n  B @0x%08X:", mDivAddr);
-    for (uint32_t i = 0; i < n; i++) {
-      uint8_t vb = isSpad(mDivAddr+i) ? mB->core.scratch[(mDivAddr+i)-0x1F800000u] : mB->core.mem_r8(mDivAddr+i);
-      fprintf(stderr, " %02X", vb);
-    }
+    for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %02X", mDivBytesB[i]);
+    fprintf(stderr, "\n           ");
+    for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %s", mDivBytesA[i] != mDivBytesB[i] ? "^^" : "  ");
     fprintf(stderr, "\n");
   }
   // Print BOTH guest-stack backtraces — captured at the frame boundary AFTER the diverging write, but
@@ -565,13 +571,19 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
     lwReport(mDivAddr);
     for (uint32_t a = mDivAddr + 1; a < mDivEnd && a < mDivAddr + 8; a++) lwReport(a);
   }
-  // Native fibers cannot be rewound (their C stacks do not restore with the RAM snapshot; the
-  // replay hangs tearing them down) — with any live, rely on the last-writer map instead.
+  // Fibers cannot be rewound: a native fiber's C stack does not restore with the RAM snapshot,
+  // and a coro fiber parked MID-BODY cannot be replayed by respawning from the task entry
+  // (sbs_restore_sched deletes it; the fresh fiber re-runs the body from the start — different
+  // writes, post-rewind state is an ARTIFACT). With any fiber live on EITHER core, skip the
+  // rewind and rely on the last-writer map instead.
   bool nativeFiberLive = false;
-  for (int i = 0; i < 3; i++) if (mA->pcSched.native_fiber[i]) nativeFiberLive = true;
+  for (int i = 0; i < 3; i++) {
+    if (mA->pcSched.native_fiber[i] || mA->pcSched.coro[i]) nativeFiberLive = true;
+    if (mB && (mB->pcSched.native_fiber[i] || mB->pcSched.coro[i])) nativeFiberLive = true;
+  }
   if (!mWwArmed && !nativeFiberLive) rewindAndArm(mDivAddr);
   else if (nativeFiberLive) {
-    fprintf(stderr, "[sbs] rewind skipped (native fiber live) — last-writer map above is the write-site source.\n");
+    fprintf(stderr, "[sbs] rewind skipped (fiber live — coro replay is unsound) — last-writer map above is the write-site source.\n");
     if (!mHaveDbgsrv) { fprintf(stderr, "[sbs] headless: exiting after last-writer report.\n"); sbs_rl_shutdown(); exit(0); }
   }
   if (mHaveDbgsrv) {
@@ -966,10 +978,23 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
     if (!mDivFound) { fprintf(out, "sbs: no divergence yet\n"); return 1; }
     fprintf(out, "divergence @lockstep-frame %u  0x%08X..0x%08X  in %s\n",
             mDivFrame, mDivAddr, mDivEnd, isSpad(mDivAddr) ? "scratchpad" : "main RAM");
-    uint32_t end = mDivEnd; if (end > mDivAddr + 24) end = mDivAddr + 24;
+    // Detection-time bytes (captured in recordDivergence) — NOT live memory, which after a
+    // rewind-and-arm has been restored to the pre-frame state and reads identical A vs B.
+    fprintf(out, "  detection-time bytes:\n");
+    fprintf(out, "  A:"); for (uint32_t i = 0; i < mDivBytesN; i++) fprintf(out, " %02X", mDivBytesA[i]);
+    fprintf(out, "\n  B:"); for (uint32_t i = 0; i < mDivBytesN; i++) fprintf(out, " %02X", mDivBytesB[i]);
+    fprintf(out, "\n   :"); for (uint32_t i = 0; i < mDivBytesN; i++) fprintf(out, " %s", mDivBytesA[i] != mDivBytesB[i] ? "^^" : "  ");
+    fprintf(out, "\n  live bytes NOW (post-rewind these may match):\n");
+    uint32_t end = mDivEnd; if (end > mDivAddr + 64) end = mDivAddr + 64;
     fprintf(out, "  A:"); for (uint32_t x = mDivAddr; x < end; x++) fprintf(out, " %02X", mA->core.mem_r8(x));
     fprintf(out, "\n  B:"); for (uint32_t x = mDivAddr; x < end; x++) fprintf(out, " %02X", mB->core.mem_r8(x));
     fprintf(out, "\n");
+    if (mLwOn) for (uint32_t i = 0; i < mDivBytesN; i++)
+      if (mDivBytesA[i] != mDivBytesB[i]) { lwReport(mDivAddr + i, out); break; }
+  } else if (!strcmp(sub, "lw")) {
+    unsigned addr = 0;
+    if (sscanf(line, "%*s %*s %x", &addr) != 1 || !addr) { fprintf(out, "usage: sbs lw <hex-addr>\n"); return 1; }
+    lwReport(addr, out);
   } else if (!strcmp(sub, "bt")) {
     if (!mDivFound && !mWwHit) { fprintf(out, "sbs: no divergence yet, no write-watch hit yet\n"); return 1; }
     if (mDivFound) {

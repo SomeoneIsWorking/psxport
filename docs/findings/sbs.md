@@ -5,6 +5,30 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Rewind-and-arm is UNSOUND with live fibers — skipped; sbs diff shows detection-time bytes (2026-07-07)
+
+- **symptom**: attached to a paused f33 divergence (main-thread stack top 0x801FFFC8..) over the
+  debug server; `sbs diff` and live `r` dumps showed A and B IDENTICAL at the recorded range;
+  after `sbs step 1` the wwatch hit mask=3 with BOTH cores writing the SAME value — the
+  divergence appeared to have "healed", and a NEW diff (task0 state 0x801FE000 A=00 B=02)
+  appeared instead.
+- **cause (two tooling defects, both fixed)**: (1) `sbs diff` re-read LIVE memory — after
+  rewind-and-arm both cores are restored to the pre-frame snapshot, so live reads match; the
+  detection-time bytes were only on the terminal's stderr. (2) the rewind itself is UNSOUND when
+  coro fibers are live: `sbs_restore_sched` deletes live Coros, and a task parked MID-BODY
+  cannot be replayed by respawning from its entry — the re-step runs different code, producing
+  artifact state (the fake 0x801FE000 diff). The old guard only checked core A's native_fiber.
+- **fix**: recordDivergence snapshots the detection-time A/B bytes; `sbs diff` prints them with
+  `^^` diff markers + live bytes labeled separately + the first differing byte's last-writer.
+  New `sbs lw <hex>` queries the last-writer map over the debug server. The rewind is skipped
+  whenever ANY fiber (coro or native) is live on EITHER core — last-writer map is the write-site
+  source (log: "rewind skipped (fiber live — coro replay is unsound)").
+- **FALSIFIED**: the sbs.cpp comment claiming the restore's fresh-coro re-entry "spawns a new
+  fiber from a clean stack" and is therefore sound. It is only sound for tasks that never
+  yielded mid-body — i.e. almost never in the faithful boot flow.
+- **refs**: runtime/recomp/sbs.cpp (recordDivergence, sbs_restore_sched, dbgCmd), skill
+  `sbs-diverge` (Do NOT section), this session's repro: scratch/logs/sbs_diverge_f33.log.
+
 ## SBS = strict pc_faithful, hard-wired (2026-07-07, ba4f50b) + FUTURE: pc_skip observable-output compare
 
 Core A is hard-wired to pc_skip=false — no flag; the SBS harness IS the strict oracle compare,
@@ -62,9 +86,11 @@ structure supersedes it. Each sub-case lands with a strict autonav run naming th
 GAME stage runs on the stage fiber (Engine::stageBodyFaithful); runGameStanza is pc_skip-only.
 Two divergence classes closed en route, both caught by the last-writer map in one run each:
 - **pc_render guest write** (f26): submit.cpp:537 dispatches guest transform-setup 0x800597AC
-  from the render walk — guest-stack spills from the READ-ONLY overlay. Filed as issue #32,
-  fix deferred (render directive); strict compares run PSXPORT_SBS_FORCE_PSX_RENDER=1 until
-  pc_render is clean.
+  from the render walk — guest-stack spills from the READ-ONLY overlay. Filed as issue #32.
+  UPDATE 2026-07-07 (user, later session): UN-DEFERRED — "PSX render path should always be
+  active underneath even when PC rendering; PC renderer shouldn't write to guest memory; then
+  rendering should never affect diverges." FORCE_PSX_RENDER is no longer the accepted strict-
+  compare workaround; fixing the render-walk guest writes is the active arc (issue #32).
 - **Missing guest call-site ra** (f27 + menu wrappers): native handlers dispatching leaves with
   r31=DEAD0000 — the callee prologue spills r31, so every native dispatch must set the RE'd jal
   site first (s48_0/s48_1, demo s2/s3/s6 wrappers + inner cf2c/750d8/106824/106690 sites).
