@@ -149,6 +149,7 @@ full project rules.
 
 | Path | Contents |
 | --- | --- |
+| `game/` | The PC-native game engine, organized by subsystem folder (`core/ render/ scene/ world/ object/ ai/ player/ camera/ audio/ ui/ items/ math/ input/ cd/`). |
 | `runtime/` | The native PC port runtime; `runtime/recomp/` holds the modeled CPU, HLE BIOS, native CD/threads/GPU/GTE/MDEC/SPU, and the hybrid interpreter. |
 | `tools/recomp/` | The static recompiler (MIPS R3000A → C): `emit.py` (emitter), `decode.py` (decoder), `psexe.py` (PS-X EXE loader). |
 | `tools/` | Offline tooling, including `discdump` (CHD → files via libchdr). |

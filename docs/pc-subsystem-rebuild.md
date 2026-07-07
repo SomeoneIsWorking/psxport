@@ -34,11 +34,11 @@ around every leaf call — a sync wrapper around PSX code, i.e. transcription. S
   co-mutate its core state), rebuild the whole thing as a class, mirror the read surface.
 
 ## Existing native-model precedent to build on
-- `game/render/scene/scene_data.h` — `RenderScene`/`SceneObject`/`SceneCamera`: a native, float IR of the
+- `game/render/scene_data.h` — `RenderScene`/`SceneObject`/`SceneCamera`: a native, float IR of the
   frame the renderer consumes. READ-ONLY (built from guest RAM, mirrors nothing back). The gameplay-state
   equivalent (a bidirectional native model that mirrors TO guest) does not exist yet — that's the work.
-- `game/render/fps60_internal.h` `Fps60State`, `game/render/render_queue.h` `RenderQueue`,
-  `game/world/world_pool.h` `PoolDesc` — native state structs already in the tree.
+- `game/render/fps60.h` `Fps60`, `game/render/render_queue.h` `RenderQueue`,
+  `game/world/spawn.h` `PoolDesc` — native state structs already in the tree.
 - Object BEHAVIORS are already ~149/150 native at A00 free-roam (`ents` REPL) — the object system is the
   most-native subsystem and thus the strongest first candidate to formalize as `class ObjectWorld`
   (entity pool + spawn + node/animation), owning its data model and mirroring the node fields substrate

@@ -6,7 +6,7 @@ ONE render behavior (native per-pixel depth always on, no oracle to diff against
 
 ## The GP0 → screen path
 1. The game (recomp + native engine) builds an ordering-table (OT) of GP0 primitive packets in guest RAM.
-2. `ov_draw_otag` (engine/game_tomba2.c) → `gpu_dma2_linked_list` (gpu_native.c) walks the OT and calls
+2. `ov_draw_otag` (game/game_tomba2.cpp) → `gpu_dma2_linked_list` (gpu_native.cpp) walks the OT and calls
    **`gp0_exec`** (gpu_native.c) per primitive. `gp0_exec` decodes each packet (poly/sprite/fill/copy/
    upload/env) — this is the single chokepoint where every drawn primitive passes.
 3. **VK is THE renderer:** `gp0_exec` **tees** each poly/sprite prim to the GPU via
@@ -35,7 +35,7 @@ ONE render behavior (native per-pixel depth always on, no oracle to diff against
   overlay* and UI composites over the world. **This is a PC GAME: real per-pixel depth, not the PSX
   OT-order painter's algorithm.** The deferred SHADING pass (SSAO/light) is separate. (later-118; field
   attach coverage ~100%.)
-  - **Depth source = the OWNED submit path (engine/engine_submit.c), NOT a measurement hack.** Because the
+  - **Depth source = the OWNED submit path (game/render/submit.cpp), NOT a measurement hack.** Because the
     engine builds each GPU packet itself (the native POLY_GT3/GT4 submit), it records every vertex's real
     SZ (view-Z) keyed by the packet vertex word's ADDRESS (`projprim_set_pz`, gte_beetle.c); the renderer
     looks it up by the OT read address. Exact + deterministic. The table is reset each frame. This

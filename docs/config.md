@@ -63,7 +63,7 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 
 New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
 trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
-engine_stage.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
+game/core/engine.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
 the world even being queued?") · `ovload` (per-core MODE/AREA-slot overlay residency: logs each
 `overlay_note_load` — `core A/B slot N <- TAG` — so you can see WHICH overlay each core thinks is resident
 and WHEN it loaded; the tool that pinned later-273's "A00 code overlay never loaded on the PSX core",

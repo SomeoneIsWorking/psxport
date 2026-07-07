@@ -14,7 +14,7 @@ Pointers (detail lives there, STATUS lives HERE): RE map `docs/engine_re.md`; fi
 2. **RE it:** `tools/disas.py 0x<addr>` (function-scoped — it stops at `jr ra`; `--mem` = just loads/stores
    with resolved addr+WIDTH). Note args (a0=r[4], a1=r[5], …), every mem read/write (addr+width), the return
    (v0=r[2]), and any `jal` (callee = keep-as-reference or own-too). Record the RE in `engine_re.md`.
-3. **Classify** (see § BOUNDARY): ENGINE → reimplement PC-native in `engine/`. CONTENT → leave PSX. PLATFORM
+3. **Classify** (see § BOUNDARY): ENGINE → reimplement PC-native in `game/<subsystem>/`. CONTENT → leave PSX. PLATFORM
    → native platform service in `runtime/recomp/`.
 4. **Reimplement** as `ov_<name>(Core* c)` (ABI `void(Core*)`). Read args from `c->r[]`, do the work via
    `c->mem_r*/w*`, set `c->r[2]`. Register with `rec_set_override(0x<addr>, ov_<name>)` (or

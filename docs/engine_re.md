@@ -111,7 +111,7 @@ ENGINE = reimplement PC-native):**
 | 80080bf0(3) | **ResetGraph** | platform (native GPU) |
 | 80080d64/80080ed4 | SetGraphDebug / **SetDispMask** | platform |
 | 800865f0 | lib state setter (DAT_800abe20) | platform |
-| **80050a0c** | **frame-state init** (vblank ctr, buffer parity DAT_1f800135, frame divisor DAT_1f800235, swap-mode DAT_1f80019c, …, DAT_80105ee8=0x45) | **ENGINE — DONE (engine_init.cpp `eng_init_framestate`)** |
+| **80050a0c** | **frame-state init** (vblank ctr, buffer parity DAT_1f800135, frame divisor DAT_1f800235, swap-mode DAT_1f80019c, …, DAT_80105ee8=0x45) | **ENGINE — DONE (game/scene/startup.cpp `Engine::initFrameState`)** |
 | **800509b4** | **display + GTE projection**: InitGeom (80083ff8: ZSF3=0x155 ZSF4=0x100 H=1000 DQA/DQB), SetGeomOffset(160,120), H=350→DAT_801003f8, SetGeomScreen | **ENGINE — DONE (`eng_init_display`)**; FUN_80050738 (PSX draw/disp env structs) still dispatched (native single-env = next display step) |
 | **80050a80** | **camera init**: identity matrix → scratch 0x1F8000F8 (the camera-rot the renderer reads) + 0x1F800118; cam fields (_1f8000ec=0x1000, _ee=H*-5, _d8=H*-0x50000) | **ENGINE — DONE (`eng_init_camera`)** |
 | 80096a70/80099310/800991b0/800993a0 | SPU/sound + heap lib | platform (verify) |
@@ -126,7 +126,7 @@ ENGINE = reimplement PC-native):**
 | 80085bb0(LAB_800506b4) | register VSyncCallback | platform |
 
 **Order of attack / status:** init display+camera DONE (eng_init_*). **Level LOADER core DONE** —
-FUN_800450bc overlay loader is PC-native (engine/engine_level.cpp `eng_load_stage`, later-162); its
+FUN_800450bc overlay loader is PC-native (game/scene/level_load.cpp `eng_load_stage`, later-162); its
 scheduler-coupled orchestration (FUN_80052078 task-restart ending in ChangeTh/ov_switch longjmp,
 FUN_800499e8 file-resolve) stays dispatched and calls the native loader — native-izing them needs the
 cooperative-scheduler longjmp handshake first. Remaining named systems: **object/entity placement &
@@ -134,7 +134,7 @@ spawning**, the **main menu** (DEMO stage state machine @0x801062E4), font/text 
 subsystem init (800520e0), and a real PC-native single display env (replace FUN_80050738). Each: `disas.py`
 the fn, understand the data, reimplement PC-native in `engine/`, keep the PSX-content interface state exact.
 
-### FUN_80075130 font / text init (`ov_font_init`, engine/engine_font.cpp)
+### FUN_80075130 font / text init (`Font::init`, game/ui/font.cpp)
 Init-prefix slot (called from ov_game_main). No args, no return. Frame: `addiu sp,-48; sw ra,40(sp)`;
 epilogue `lw ra,40(sp); addiu sp,48; jr ra`. The body sets a handful of engine-state fields directly and
 orchestrates **14 callees in order**. SCOPE: own the orchestration + direct writes + the 3 ENGINE-STATE
@@ -193,7 +193,7 @@ So for a0=2: i 0..5 →0, 6..9 →2, 10..13 →3, 14..21 →1, 22..23 →4. The 
 branch `j`s to the loop tail 0x80075388). Returns count in v0 but the caller IGNORES it (the sh v0=-1 to
 0x800bed80 happened in the call's DELAY SLOT, before the function ran). Only writes 0x800be238+i*12+8.
 
-## BAV cel loader — `FUN_80096590` (`ov_bav_load`, engine/engine_bav.cpp, later-207) — OWNED native
+## BAV cel loader — `FUN_80096590` (`ov_bav_load`, game/ui/bav_loader.cpp, later-207) — OWNED native
 The per-area **effect/animation CEL loader**: parses a BAV descriptor, allocates a cel SLOT (one of 16),
 lays out the cel/UV tables, calls a VRAM allocator/upload callback, then patches per-frame tpage/clut
 halfwords into the cel records and latches the slot's cel-system globals. Fires on area entry (the
@@ -201,7 +201,7 @@ seaside field loads 3 cels at boot — descriptors 0x801846b4 / 0x801858d4 / 0x8
 0x80105Cxx/0x80105Dxx region as the font init above. Single caller wrapper `FUN_80096480` (prefills the
 callback fn-ptr `0x800964b4` in a2); `FUN_80096480` is itself called by area-loader `FUN_800753D4`.
 
-## Area CEL-GROUP load-and-wait — `FUN_800753D4` (`ov_cel_load_wait`, engine/engine_level.cpp) — OWNED native
+## Area CEL-GROUP load-and-wait — `FUN_800753D4` (`ov_cel_load_wait`, game/scene/level_load.cpp) — OWNED native
 The per-area asset bring-up primitive: pull ONE effect/animation cel group into VRAM and BLOCK until its
 upload finishes. ABI `FUN_800753D4(a0=u16* out_slot, a1=BAV desc, a2=cb_arg4)` (ret v0 ignored):
 1. `slot = FUN_80096480(desc, -1, cb_arg4)` — load via the native BAV loader (auto-slot; prefills upload
@@ -339,12 +339,12 @@ tails: 0x80106650 (jal 0x8001CF2C engine per-frame update → TAIL) · 0x8010665
   phase0 loader / phase2 teardown / 0x800524B4 poll, not via an in-s7 stage-request write.
 
 **To OWN native:** replace task-0's longjmp coroutine for the DEMO stage with a native dispatcher (like
-engine/engine_stage.cpp for GAME) — own the sm[0x48] switch + the per-frame loop/yield/frame-ctr, calling the
+game/core/engine.cpp for GAME) — own the sm[0x48] switch + the per-frame loop/yield/frame-ctr, calling the
 substate bodies C→C; the inner menu machines (0x80106F80 / 0x8010696C / 0x80106AC4 / 0x8007B45C) and the
 loader/SFX/render callees stay dispatched until ported. Gate on the interface state the retained content reads
 (sm fields above + the scratchpad flags). Frontier item 2 in docs/port-progress.md.
 
-**OWNED (later-182, engine/engine_demo.cpp, scan-registered `demo_scan_overlay` when the DEMO overlay loads):**
+**OWNED (later-182, game/scene/demo.cpp, scan-registered `demo_scan_overlay` when the DEMO overlay loads):**
 substates **s1/s2/s3/s6** — the ones whose only sub-call is SYNCHRONOUS (verified yield-free with the new
 `tools/yield_reach.py`). The override is NOT placed on the root function; it sits on each substate body's
 address, fires when the guest loop's `jr v0` table-dispatch reaches it, runs the transition LOGIC native, and
@@ -402,7 +402,7 @@ Three-level nested machine (disasm a GAME-stage RAM dump; `tools/disasm_overlay.
   0x801065b8, 0x801066b8, 0x80106830, 0x80106930, 0x8010694c, 0x801069b4}` = area load/intro/play states
   (timer countdown `sm[0x5c]` from 0x14a, pad-input skip via `*0x800e7e68`, calls resident system fns).
 
-**OWNED native (engine/engine_stage.cpp, scan-registered when GAME.BIN loads):** ALL THREE `sm[0x48]`
+**OWNED native (game/core/engine.cpp, scan-registered when GAME.BIN loads):** ALL THREE `sm[0x48]`
 handlers. The area-INIT pair (`==0`/`==1`) are clean `jr ra` functions whose callees are SYNCHRONOUS →
 faithful as override+dispatch. The RUNNING dispatcher (`==2`, `0x80108784`) owns the 6-way `sm[0x4a]`
 selection via the cooperative-yield handshake (below). Verified RAM 0-diff @ field f650/f1000 vs the
@@ -739,7 +739,7 @@ only mode 3 / ≥9). `*0x800BF870` is a GLOBAL set before/within a flush pass, s
   WITHOUT poking `+1` (which also ticks gameplay). Probes: `PSXPORT_DEBUG=cmdenq`/`flush`/`enq`,
   `PSXPORT_WWATCH=lo,hi` (word-store PC tap; NB byte stores like `list+8` count are not caught).
 - **NATIVE-OWNED (later-135) — `gen_func_8003CDD8` (the per-object flush), `gen_func_8003F698`
-  (dispatcher generic path) and `gen_func_800803DC` are now reimplemented in C** (`engine/engine_submit.c`
+  (dispatcher generic path) and `gen_func_800803DC` are now reimplemented in C** (`game/render/submit.cpp`
   `submit_perobj_flush`/`native_dispatch`/`native_gt3gt4`, registered on `0x8003CDD8`). The world render
   submission runs with NO guest render code; **VRAM byte-identical** vs the recomp body (headless field
   f328, A/B `PSXPORT_PEROBJ_RECOMP=1`). Only the per-scene overlay submitter variants (mode-table
@@ -757,9 +757,9 @@ only mode 3 / ≥9). `*0x800BF870` is a GLOBAL set before/within a flush pass, s
   `gen_func_80051C8C` + `gen_func_8003CCA4` after the walk → +24 margin renders, base 100 byte-identical,
   gameplay 0-diff to render-cache. See journal later-133/later-134. RE REPL: `dbgclient.py ents/node/call/geomblk`.
 
-## Geometry SUBMIT — `0x8007FDB0` (POLY_GT3 tri) + `0x8008007C` (POLY_GT4 quad) — NATIVE-OWNED (engine_submit.c)
+## Geometry SUBMIT — `0x8007FDB0` (POLY_GT3 tri) + `0x8008007C` (POLY_GT4 quad) — NATIVE-OWNED (game/render/submit.cpp)
 These are the resident routines that turn a model's pre-built primitive-record list into GPU packets in
-the OT. Both are now reimplemented natively in `engine/engine_submit.c` (`ov_submit_poly_gt3/4`),
+the OT. Both are now reimplemented natively in `game/render/submit.cpp` (`submitPolyGt3Native`/`Gt4`),
 **0-diff vs the recomp body on the field** (A/B: `PSXPORT_SUBMIT_RECOMP=1` keeps the recomp bodies).
 This is the deletion of the reason the value-keyed "attach" depth-recovery hack existed — the engine now
 computes the projection and can carry the real per-vertex view-Z straight to the renderer (Phase 2).
@@ -800,7 +800,7 @@ computes the projection and can carry the real per-vertex view-Z straight to the
   earlier "~70% of world polys fall to the 2D band / `0x80027768` is the next ownership target" claims are
   STALE — superseded by the render queue (M1, later-164) + the scan-on-load overlay ownership. Re-measured
   at the green field (present f650, `PSXPORT_AUTO_GAMEPLAY`):
-  - `0x80027768` is **already owned** — `engine/engine_submit.cpp` `ov_submit_poly_gt4_bp`, registered in
+  - `0x80027768` is **already owned** — `game/render/submit.cpp` `submit_poly_gt4_bp`, registered in
     `game_tomba2.cpp:424`. (The byte-packed GT4 decode is committed; it is NOT open work.)
   - The dominant field submitter, dispatcher **mode 0** → overlay renderer `0x80146478`, is a *CALLER*
     wrapper owned by the scan-on-load (`PSXPORT_DEBUG=submit`: "own overlay CALLER @ 0x80146478"); the
