@@ -508,8 +508,21 @@ void Demo::s0Faithful() { s0Body(); }
 
 // Substate s1 (0x8010641C) — wait/advance. Run the menu machine; on completion (v0!=0) reset sm[0x4a]
 // and advance sm[0x48] (1->2); else on any pad edge set the skip-request flag. Always TAIL_NONE.
+// pc_faithful flavor: every state runs the REAL 0x80106F80 — the state-0 CdControlB Setmode,
+// the skip-flag jump to state 7, and the state-7 CdlPause teardown are all platform-acked now
+// (core B runs this same machine per-frame; the "never acks / busy-loops forever" era is over).
+// The OP.STR playback states 4..6 only run when nothing sets the 0x1F80019D skip flag — if a
+// flow reaches them, the STR streaming becomes the next frontier (fail-fast will name it).
+static uint32_t demo_menu_machine_faithful(Core* c) {
+  c->r[4] = 0;
+  c->r[31] = 0x80106424u;
+  rec_dispatch(c, 0x80106f80u);
+  return c->r[2];
+}
+
 static void demo_frame_s1(Core* c) {
-  uint32_t v0 = demo_menu_machine(c);
+  uint32_t v0 = (c->game && !c->game->pc_skip) ? demo_menu_machine_faithful(c)
+                                               : demo_menu_machine(c);
   uint32_t sm = c->mem_r32(SM_PTR);
   if (v0 != 0) {
     c->mem_w16(sm + 0x4a, 0);
@@ -743,6 +756,80 @@ void Demo::frame() { Core* c = core;
       break;
   }
   c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // per-frame counter (every guest tail bumps it)
+}
+
+// pc_faithful DEMO stage body (fiber task; see demo.h). Byte shape: ov_demo_gen_801062E4.
+// r16..r19 carry the substrate's live callee-saved constants (0x1F800000 / 2 / 1 / 3) across the
+// loop — deeper callees spill them, so they must match core B's at every dispatch boundary.
+void Demo::stageBodyFaithful() { Core* c = core;
+  c->r[29] -= 48;
+  const uint32_t sp = c->r[29];
+  c->mem_w16(sp + 16, 0);                       // draw-env rect local {x,y,w,h-ish}
+  c->mem_w16(sp + 18, 0);
+  c->mem_w16(sp + 20, 320);
+  c->mem_w16(sp + 22, 512);
+  c->mem_w32(sp + 40, c->r[31]);
+  c->mem_w32(sp + 36, c->r[19]);
+  c->mem_w32(sp + 32, c->r[18]);
+  c->mem_w32(sp + 28, c->r[17]);
+  c->mem_w32(sp + 24, c->r[16]);
+  c->r[4] = sp + 16; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0;
+  c->r[31] = 0x80106328u;
+  rec_dispatch(c, 0x800810F0u);                 // UI / print-stream context init
+  c->r[16] = 0x1F800000u;                       // s0..s3 loop constants (live for deep spills)
+  c->r[18] = 1; c->r[17] = 2; c->r[19] = 3;
+  uint32_t sm = c->mem_r32(SM_PTR);
+  c->mem_w8 (0x800be0e4u, 0);
+  c->mem_w16(0x800e7e68u, 0);
+  c->mem_w16(0x800ecf54u, 0);
+  c->mem_w16(0x800ecf56u, 0);
+  c->mem_w8 (0x1f80019au, 0);
+  c->mem_w8 (0x1f80019du, 0);
+  c->mem_w16(sm + 0x48, 0);
+  c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
+  c->r[31] = 0x80106388u;
+  c->mem_w8 (sm + 0x6e, 0);
+  rec_dispatch(c, 0x8005082Cu);                 // mode-state arm (substrate leaf)
+  for (;;) {
+    sm = c->mem_r32(SM_PTR);
+    uint16_t sub = c->mem_r16(sm + 0x48);
+    switch (sub < 8 ? sub : 8) {
+      case 0: {                                 // L_801063C0 — init loaders; falls into s1
+        c->r[4] = 0x80108F9Cu;                  // loader-0 arg table
+        c->mem_w8(sm + 0x68, 0);
+        uint16_t s48 = c->mem_r16(sm + 0x48);
+        c->r[5] = 2;
+        c->r[6] = c->mem_r32(SM_PTR);
+        c->mem_w16(sm + 0x48, s48 + 1);
+        c->r[31] = 0x801063ECu;
+        c->mem_w16(sm + 0x4a, 0);               // jal delay slot: sh zero,0x4a(a2)
+        rec_dispatch(c, 0x80045080u);           // indexed file load (platform-sync)
+        c->r[4] = 0x80044F58u; c->r[5] = 2; c->r[6] = 0; c->r[7] = 0;
+        c->r[31] = 0x80106404u;
+        rec_dispatch(c, 0x80044BD4u);           // spawn-and-wait (EngineOverrides -> native prim)
+        c->r[31] = 0x8010640Cu; rec_dispatch(c, 0x8007982Cu);
+        c->r[31] = 0x80106414u; rec_dispatch(c, 0x80075240u);
+        c->r[4] = 1;
+        c->r[31] = 0x8010641Cu; rec_dispatch(c, 0x8001CF00u);
+      } [[fallthrough]];
+      case 1: demo_frame_s1(c); break;
+      case 2: demo_frame_s2(c); break;
+      case 3: demo_frame_s3(c); break;
+      case 4: demo_frame_s4(c); break;
+      case 5:                                   // L_801065DC — LEAVE DEMO: stage swap parks the fiber
+        c->r[4] = 2;
+        c->r[31] = 0x801065E4u;
+        rec_dispatch(c, 0x80052078u);           // does not return (entry rewrite + yield)
+        break;
+      case 6: demo_frame_s6(c); break;
+      case 7: demo_frame_s7(c); break;
+      default: break;                           // sub >= 8: straight to the tail
+    }
+    c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // L_80106674 frame counter
+    c->r[4] = 1;
+    c->r[31] = 0x80106688u;
+    rec_dispatch(c, 0x80051F80u);               // loop-tail yield (EngineOverrides -> yieldPrim)
+  }
 }
 
 // Register the DEMO substate overrides when the just-loaded overlay is the DEMO overlay at the stage

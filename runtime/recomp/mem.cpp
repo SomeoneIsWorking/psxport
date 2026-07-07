@@ -66,7 +66,7 @@ void Core::wwatch_arm(uint32_t lo, uint32_t hi) {
 
 // PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Also fires
 // storeWatchCb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.
-void Core::wwatch_check(uint32_t a, uint32_t v) {
+void Core::wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
   if (!s_ww_init) {
     s_ww_init = 1;
     const char* w = cfg_str("PSXPORT_WWATCH");
@@ -77,7 +77,7 @@ void Core::wwatch_check(uint32_t a, uint32_t v) {
     if (cfg_str("PSXPORT_WWATCH"))
       fprintf(stderr, "[wwatch] core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X\n",
               (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
-    if (storeWatchCb) storeWatchCb(this, ka, v);
+    if (storeWatchCb) storeWatchCb(this, ka, v, w);
   }
 }
 
@@ -255,19 +255,19 @@ static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
 }
 void Core::mem_w8(uint32_t a, uint8_t v) {
   uint8_t* p = host_ptr(a, 1);
-  wwatch_check(a, v);
+  wwatch_check(a, v, 1);
   cw_check(a, v, 1); pkt_track(this, a, 1);
   if (p) *p = v; else io_write(a, v, 1);
 }
 void Core::mem_w16(uint32_t a, uint16_t v) {
   uint8_t* p = host_ptr(a, 2);
-  wwatch_check(a, v);
+  wwatch_check(a, v, 2);
   cw_check(a, v, 2); pkt_track(this, a, 2);
   if (p) memcpy(p, &v, 2); else io_write(a, v, 2);
 }
 void Core::mem_w32(uint32_t a, uint32_t v) {
   uint8_t* p = host_ptr(a, 4);
-  wwatch_check(a, v);
+  wwatch_check(a, v, 4);
   cw_check(a, v, 4); pkt_track(this, a, 4);
   if (p) memcpy(p, &v, 4); else io_write(a, v, 4);
 }

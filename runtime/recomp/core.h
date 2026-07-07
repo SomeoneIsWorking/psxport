@@ -65,7 +65,7 @@ public:
   // SBS divergence debugger: a store landing in the wwatch range fires this callback (set by
   // sbs.cpp on each core) with the writing core + addr + value, so the harness captures the EXACT
   // corrupting-write guest backtrace. Per-Core (was the process-global s_store_watch_cb).
-  void (*storeWatchCb)(Core*, uint32_t, uint32_t) = nullptr;
+  void (*storeWatchCb)(Core*, uint32_t, uint32_t, uint32_t) = nullptr;  // (core, kaddr, val, width)
 
   // Cooperative-yield handshake (later-169): a native override of a YIELDING function cannot
   // rec_dispatch its callee (that nests a rec_interp with its own CORO_SENTINEL; a deep yield's
@@ -125,7 +125,7 @@ private:
   uint32_t io_read (uint32_t a, uint32_t bytes);
   void     io_write(uint32_t a, uint32_t v, uint32_t bytes);
   void     cw_check(uint32_t a, uint32_t v, int width);
-  void     wwatch_check(uint32_t a, uint32_t v);
+  void     wwatch_check(uint32_t a, uint32_t v, uint32_t w);
 
   // DMA channel state (per-instance) — DMA0 MDEC-in, 1 MDEC-out, 2 GPU, 4 SPU, 6 OTC.
   uint32_t s_dma0_madr=0, s_dma0_bcr=0, s_dma0_chcr=0;

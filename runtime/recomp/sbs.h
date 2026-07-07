@@ -30,7 +30,7 @@ public:
   int      dbgCmd(FILE* out, const char* line);
   // Write-watch trampoline installed on each Core (core.storeWatchCb) — static so it fits the
   // C callback signature. Dispatches to `c->game->sbs->…` when SBS is active.
-  static void storeCb(Core* c, uint32_t addr, uint32_t val);
+  static void storeCb(Core* c, uint32_t addr, uint32_t val, uint32_t width);
 
   // Per-command core targeting for the debug server: 'a'/'A' → core A, 'b'/'B' → core B, else null.
   Core*    coreByLetter(char which) const;

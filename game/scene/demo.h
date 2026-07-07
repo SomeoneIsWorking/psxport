@@ -25,6 +25,14 @@ public:
   void stageMain();      // one-time prologue + s0 (formerly ov_demo_stage_main)
   void frame();          // one per-frame substate dispatch + tail (formerly ov_demo_frame)
 
+  // pc_faithful DEMO stage body — the whole ov_demo_gen_801062E4 arc as a native task body on a
+  // PcScheduler fiber (faithful-execution model): prologue with guest frame -48 and live spills,
+  // then the substate loop ending each iteration in the substrate tail (frame counter +
+  // FUN_80051F80 yield). s0's texgroup spawn goes through rec_dispatch(0x80044BD4) -> the
+  // EngineOverrides spawn-and-wait; s5's stage swap through rec_dispatch(0x80052078) (parks the
+  // fiber; the stanza tears it down on the entry rewrite). pc_skip keeps stageMain()/frame().
+  void stageBodyFaithful();
+
   // Substate handlers (called by frame() based on the current sm[0x48] substate).
   void s0();             // formerly ov_demo_s0
 

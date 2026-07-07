@@ -114,7 +114,7 @@ public:
   int  dbgCmd(FILE* out, const char* line);
   void dumpAllocRa(FILE* out);
   void dumpByteTrace(FILE* out);
-  void storeCb(Core* c, uint32_t addr, uint32_t val);
+  void storeCb(Core* c, uint32_t addr, uint32_t val, uint32_t width);
   bool active() const { return mSbs; }
   int  coreId(Core* c) const {
     if (!mA) return -1;
@@ -135,6 +135,27 @@ public:
   Game* mA = nullptr;
   Game* mB = nullptr;
   bool  mSbs = false;   // "harness running" flag (native_fmv/native_boot gate off Sbs::active())
+
+  // ---- last-writer map (rewind-free write-site attribution) ----
+  struct LastW { uint32_t pc = 0, ra = 0, frame = 0xFFFFFFFFu; };
+  static constexpr uint32_t LW_RAM = 0x200000u, LW_SPAD = 0x400u, LW_N = LW_RAM + LW_SPAD;
+  LastW* mLwA = nullptr;
+  LastW* mLwB = nullptr;
+  bool   mLwOn = false;
+  static int lwIndex(uint32_t ka) {          // ka = kernelized store addr
+    uint32_t off = ka & 0x1FFFFFFFu;
+    if (off < LW_RAM) return (int)off;
+    if (off >= 0x1F800000u && off < 0x1F800000u + LW_SPAD) return (int)(LW_RAM + (off - 0x1F800000u));
+    return -1;
+  }
+  void lwReport(uint32_t addr) {             // print both cores' last writer for a divergent byte
+    int idx = lwIndex(addr | 0x80000000u);
+    if (idx < 0 || !mLwOn) return;
+    const LastW& a = mLwA[idx];
+    const LastW& b = mLwB[idx];
+    fprintf(stderr, "[sbs] last-writer 0x%08X:  A pc=%08X ra=%08X f%u  |  B pc=%08X ra=%08X f%u\n",
+            addr, a.pc, a.ra, a.frame, b.pc, b.ra, b.frame);
+  }
 
   // ---- lockstep state ----
   uint32_t mFrame = 0;
@@ -539,7 +560,20 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   // stores fire wwatch — we get BOTH cores' write-site backtraces + values in one pass. If a core
   // doesn't write to the addr in frame N, mask reflects that (single-side write => "the other core
   // took a different branch"), and we still get one exact backtrace. Skip in PREWATCH mode.
-  if (!mWwArmed) rewindAndArm(mDivAddr);
+  // Last-writer map first: names both cores' writers with zero replay (works with native fibers).
+  if (mLwOn) {
+    lwReport(mDivAddr);
+    for (uint32_t a = mDivAddr + 1; a < mDivEnd && a < mDivAddr + 8; a++) lwReport(a);
+  }
+  // Native fibers cannot be rewound (their C stacks do not restore with the RAM snapshot; the
+  // replay hangs tearing them down) — with any live, rely on the last-writer map instead.
+  bool nativeFiberLive = false;
+  for (int i = 0; i < 3; i++) if (mA->pcSched.native_fiber[i]) nativeFiberLive = true;
+  if (!mWwArmed && !nativeFiberLive) rewindAndArm(mDivAddr);
+  else if (nativeFiberLive) {
+    fprintf(stderr, "[sbs] rewind skipped (native fiber live) — last-writer map above is the write-site source.\n");
+    if (!mHaveDbgsrv) { fprintf(stderr, "[sbs] headless: exiting after last-writer report.\n"); sbs_rl_shutdown(); exit(0); }
+  }
   if (mHaveDbgsrv) {
     fprintf(stderr, "[sbs] paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.\n");
     mA->dbg_server.setPaused(true);
@@ -779,7 +813,20 @@ void Sbs::Impl::dumpPpm(const char* path) {
 // Write-watch callback. Fired mid-frame by whichever core writes the armed address; capture that core's
 // EXACT guest backtrace + value. We DON'T pause here (mid-frame is unsafe) — the lockstep loop pauses
 // after both cores finish the frame, with both write sites captured.
-void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v) {
+// LAST-WRITER map — per-core, per-byte {pc, ra, frame} of the most recent store, recorded on
+// EVERY store while SBS runs (the wwatch range is armed over all of RAM+scratchpad at init).
+// This is the rewind-free write-site mechanism: native fibers cannot be rewound (their C stacks
+// do not restore with the RAM snapshot), so on divergence the map names both cores' writers
+// directly. PSXPORT_SBS_LASTWRITER=0 disables (and restores the narrow-range wwatch arming).
+void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
+  if (mLwOn) {
+    int idx = lwIndex(a);
+    if (idx >= 0) {
+      LastW* m = (mB && c == &mB->core) ? mLwB : mLwA;
+      const LastW rec{c->pc, c->r[31], mFrame};
+      for (uint32_t k = 0; k < w && idx + (int)k < (int)LW_N; k++) m[idx + k] = rec;
+    }
+  }
   // UPPROBE (target-#4 upstream): when a write lands on the configured address (typically the
   // divergent rec+0x0C address, e.g. 0x800F0036), dump c->r[16] (which holds the owning obj address
   // in ov_a00_gen_801337E4) plus obj[+0x42] (arg to FUN_80083F50) and obj[+0x46] (branch gate) on
@@ -1270,6 +1317,18 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
   mB->core.storeWatchCb = &Sbs::storeCb;
+  { // last-writer map: on by default (PSXPORT_SBS_LASTWRITER=0 disables). Arms the wwatch range
+    // over ALL of RAM+scratchpad so every store reaches storeCb; the narrow wwatch filters by
+    // mWwAddr inside storeCb, so PREWATCH/rewind behavior is unchanged.
+    const char* lw = getenv("PSXPORT_SBS_LASTWRITER");
+    mLwOn = !(lw && *lw && lw[0] == '0');
+    if (mLwOn) {
+      mLwA = new LastW[LW_N];
+      mLwB = new LastW[LW_N];
+      mA->core.wwatch_arm(0x00000000u, 0x1F800000u + LW_SPAD);
+      mB->core.wwatch_arm(0x00000000u, 0x1F800000u + LW_SPAD);
+    }
+  }
   // Scratch mask (see isPcSkipScratch above): apply ONLY under pc_skip=true (shortcut branches).
   // Under pc_skip=false native FAITHFUL branches target byte-exact — mask off, no residuals.
   mPcSkipMask = a_pc_skip;
@@ -1919,8 +1978,8 @@ bool     Sbs::active() const                                { return mImpl->acti
 int      Sbs::coreId(Core* c) const                         { return mImpl->coreId(c); }
 uint32_t Sbs::frame() const                                 { return mImpl->frameNum(); }
 int      Sbs::dbgCmd(FILE* out, const char* line)           { return mImpl->dbgCmd(out, line); }
-void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val) {
-  if (c->game && c->game->sbs) c->game->sbs->mImpl->storeCb(c, addr, val);
+void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val, uint32_t width) {
+  if (c->game && c->game->sbs) c->game->sbs->mImpl->storeCb(c, addr, val, width);
 }
 Core*    Sbs::coreByLetter(char which) const                { return mImpl->coreByLetter(which); }
 Core*    Sbs::shownCore() const                             { return mImpl->shownCore(); }

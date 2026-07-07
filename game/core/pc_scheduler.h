@@ -59,6 +59,7 @@ public:
   // native C++ — the fiber is only the parking mechanism, so this does not route pc_skip=0 to the
   // substrate. native_fiber[i] marks the slot's Coro as a native body (vs a recomp substrate body).
   int     native_fiber[3] = {};
+  uint32_t fiber_entry[3] = {};  // guest entry the native fiber was started for (teardown detect)
 
   // Ported guest scheduler primitives. Each reproduces its substrate body's guest-stack discipline
   // exactly (frame descent, ra/s-reg spills of the LIVE register values, task-slot writes) so a

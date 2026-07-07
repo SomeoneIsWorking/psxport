@@ -238,6 +238,7 @@ void PcScheduler::runDemoBody(Core* c, int i, bool demo_fresh) {
 
 PcScheduler::StanzaResult PcScheduler::runDemoStanza(Core* c, int i, uint32_t base, uint32_t st,
                                                      int native_content, const R3000& loop) {
+  if (!game->pc_skip) return STANZA_NOT_MINE;    // pc_faithful DEMO runs on the stage fiber
   int demo_fresh = native_content && (st == 3 || (st == 2 && !task_started[i]))
                    && c->mem_r32(base + 0xc) == 0x801062E4u;
   if (!demo_fresh && !(demo_native[i] && st == 2 && task_started[i]))
@@ -424,17 +425,20 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
   Coro*& co = coro[i];
   const int fresh = (st == 3 || (st == 2 && !task_started[i]));
   if (fresh) {
-    if (c->mem_r32(base + 0xc) != 0x8010649Cu) return STANZA_NOT_MINE;
+    const uint32_t entry = c->mem_r32(base + 0xc);
+    if (entry != 0x8010649Cu && entry != 0x801062E4u) return STANZA_NOT_MINE;
     if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
     task_ctx[i] = loop;
     task_ctx[i].r[29] = c->mem_r32(base + 8);
     task_ctx[i].r[31] = 0xDEAD0000u;
     task_started[i] = 1;
     native_fiber[i] = 1;
+    fiber_entry[i] = entry;
     demo_native[i] = 0; game_native[i] = 0; game_coop[i] = 0;
     Core* cc = c;
     co = new Coro();
-    co->start([cc] { cc->engine.startBinStageFaithful(); });
+    if (entry == 0x8010649Cu) co->start([cc] { cc->engine.startBinStageFaithful(); });
+    else                      co->start([cc] { cc->engine.demo.stageBodyFaithful(); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;
   } else if (st != 2 || !co || co->done()) {
@@ -458,7 +462,7 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
     task_started[i] = 0;
     native_fiber[i] = 0;
     delete co; co = nullptr;
-  } else if (c->mem_r32(base + 0xc) != 0x8010649Cu) {
+  } else if (c->mem_r32(base + 0xc) != fiber_entry[i]) {
     // FUN_80052078 swapped the stage (entry rewritten, state=3): the parked body will never be
     // resumed — tear the fiber down so the new stage's stanza starts fresh.
     task_started[i] = 0;
