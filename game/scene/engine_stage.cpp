@@ -1246,6 +1246,41 @@ void Engine::fieldRunX() { Core* c = core;
   c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);
 }
 
+// submode1 case-0 fork bodies (see the Slip #3 comment at the case 0 dispatch below).
+// Faithful: split case 0 across two ticks to match the recomp coro cadence — run the load on tick 1
+// (return false: caller yields without falling through), consume the deferral flag on tick 2
+// (return true). sm[0x4c] stays 0 on tick 1, matching the recomp view where the coro is suspended
+// inside FUN_80044BD4 with the sm[0x4c] write not yet reached.
+bool Engine::submode1Case0Faithful() { Core* c = core;
+  if (!mSubmode1LoadDeferred) {
+    rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
+    (void)c->rng.next();                   // Slip #5: this replaces a rec_dispatch(0x80044BD4).
+    sop.transitionAreaLoad();              // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
+    mSubmode1LoadDeferred = true;
+    return false;                          // yield: match recomp coro yield inside FUN_80044BD4
+  }
+  mSubmode1LoadDeferred = false;           // second tick — consume the defer, fall through
+  return true;
+}
+
+// Skip: one tick, no per-frame yield cost. The two branches deliberately do not converge:
+// substrate parity demands cadence match, live gameplay does not.
+bool Engine::submode1Case0Skip() { Core* c = core;
+  rec_dispatch(c, 0x8005245cu);
+  (void)c->rng.next();                     // Slip #5: substrate makes 1 RNG call inside FUN_80044BD4
+  sop.transitionAreaLoad();
+  // pc_skip counter-bump ([[pc-skip-frame-counter-bump]]): substrate would consume 2 field-
+  // frame ticks in this case-0 body (Slip #3 in docs/findings/sbs.md — FUN_80044BD4 yields
+  // between load and fall-through), each bumping 0x1F80017C + 0x800BF878 via fieldFrame.
+  // pc_skip collapses to 1 tick and would bump those counters only once — so downstream
+  // phase-gated code (e.g. FUN_8004B374's obj+0xD gate on `0x1F80017C & 0x1F`) samples
+  // out-of-phase compared to recomp. Bump the counters here to inject the extra tick's
+  // worth of counter progression the substrate would have made.
+  c->mem_w16(0x1F80017Cu, (uint16_t)(c->mem_r16(0x1F80017Cu) + 1));
+  c->mem_w32(0x800BF878u, c->mem_r32(0x800BF878u) + 1);
+  return true;
+}
+
 void Engine::submode1() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
@@ -1260,39 +1295,10 @@ void Engine::submode1() { Core* c = core;
       // reaches 2 one tick earlier than the coro. That accumulates a +1 skew on the 0x1F80017C frame
       // counter over the cutscene-skip window (95 vs 94 by gameplay-start), producing the 0x800EE0DD
       // periodic-flag divergence (FUN_8004B374's `& 0x1F` gate samples out-of-phase at f217).
-      //
-      // pc_faithful (pc_skip=false, e.g. under SBS): split case 0 across two ticks to match coro
-      // cadence — run the load on tick 1 (return without falling through), consume the deferral
-      // flag on tick 2. sm[0x4c] stays 0 on tick 1, matching the recomp view where the coro is
-      // suspended inside FUN_80044BD4 with the sm[0x4c] write not yet reached.
-      //
-      // pc_skip (pc_skip=true, default): the native engine can skip the coro yield outright — fall
-      // through in one tick, no per-frame cost. The two branches deliberately do not converge:
-      // substrate parity demands cadence match, live gameplay does not, and pc_skip lives without
-      // the real yield.
-      if (c->game && !c->game->pc_skip) {
-        if (!c->engine.mSubmode1LoadDeferred) {
-          rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
-          (void)c->rng.next();               // Slip #5: this replaces a rec_dispatch(0x80044BD4).
-          c->engine.sop.transitionAreaLoad();     // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
-          c->engine.mSubmode1LoadDeferred = true;
-          return;                                 // yield: match recomp coro yield inside FUN_80044BD4
-        }
-        c->engine.mSubmode1LoadDeferred = false;  // second tick — consume the defer, fall through
-      } else {
-        rec_dispatch(c, 0x8005245cu);
-        (void)c->rng.next();               // Slip #5: substrate makes 1 RNG call inside FUN_80044BD4
-        c->engine.sop.transitionAreaLoad();
-        // pc_skip counter-bump ([[pc-skip-frame-counter-bump]]): substrate would consume 2 field-
-        // frame ticks in this case-0 body (Slip #3 in docs/findings/sbs.md — FUN_80044BD4 yields
-        // between load and fall-through), each bumping 0x1F80017C + 0x800BF878 via fieldFrame.
-        // pc_skip collapses to 1 tick and would bump those counters only once — so downstream
-        // phase-gated code (e.g. FUN_8004B374's obj+0xD gate on `0x1F80017C & 0x1F`) samples
-        // out-of-phase compared to recomp. Bump the counters here to inject the extra tick's
-        // worth of counter progression the substrate would have made.
-        c->mem_w16(0x1F80017Cu, (uint16_t)(c->mem_r16(0x1F80017Cu) + 1));
-        c->mem_w32(0x800BF878u, c->mem_r32(0x800BF878u) + 1);
-      }
+      // Faithful matches the coro cadence with a two-tick deferral; skip collapses to one tick
+      // with counter bumps — see the fork bodies above submode1.
+      if (!((c->game && !c->game->pc_skip) ? submode1Case0Faithful() : submode1Case0Skip()))
+        return;                                   // faithful yield tick — do not fall through yet
       /* fallthrough */
     case 1: {
       c->mem_w8(0x1f800234u, 0);

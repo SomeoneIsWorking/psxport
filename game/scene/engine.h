@@ -109,6 +109,12 @@ public:
   // Formerly `ov_game_submode0` / `ov_game_submode1` free functions in engine_stage.cpp.
   void submode0();
   void submode1();
+  // submode1 case-0 fork (Slip #3, docs/findings/sbs.md). Faithful: two-tick load deferral matching
+  // the recomp coro yield inside FUN_80044BD4 — returns false on the yield tick (caller returns
+  // without falling through to case 1), true when the deferral is consumed. Skip: one-tick load +
+  // the 0x1F80017C/0x800BF878 counter bumps standing in for the collapsed tick — always true.
+  bool submode1Case0Faithful();
+  bool submode1Case0Skip();
 
   // sm[0x48] state handlers (0=area INIT, 1=area RESUME-INIT, 2=RUNNING dispatcher) and the
   // sm[0x4c] area LOAD/TRANSITION machine. Formerly `ov_game_s48_0..2` / `ov_game_s4c` /

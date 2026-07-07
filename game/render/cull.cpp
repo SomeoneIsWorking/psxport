@@ -18,7 +18,6 @@ void rec_dispatch(Core*, uint32_t);
 uint32_t eng_isqrt16(uint32_t);
 // g_render_object retired (was defined + written but never read anywhere; dead).
 
-static int s_objlog = -1;
 static inline uint16_t obj_r16(Core* c, uint32_t a) { return (uint16_t)(c->mem_r8(a) | (c->mem_r8(a + 1) << 8)); }
 
 // Engine-owned visibility margin (the engine OWNS the cull decision; later-183, user 2026-06-20).
@@ -36,7 +35,6 @@ static inline uint16_t obj_r16(Core* c, uint32_t a) { return (uint16_t)(c->mem_r
 // body runs (it cleared the +1 flag for anything it culled), we re-include the dropped objects whose
 // (dist, forward-dot) fall inside the engine's own, wider kept region (collected for the post-walk margin
 // flush — no +1 poke, so gameplay stays 0-diff; see margin_render.hpp). Env overrides are diagnostic only.
-static int s_cull = -1, s_cull_far, s_cull_fov;
 static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v) b >>= 2;
   while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
 
@@ -81,27 +79,30 @@ static unsigned isqrt32(unsigned v) { unsigned r = 0, b = 1u << 30; while (b > v
 // (Cull::coneCull2b278 writes obj+1=1 for objects outside the stock cone but inside the ×4
 // extended one; recomp culls them). Live pc_skip gameplay still gets the ×4 boost — the two
 // modes deliberately do not converge. Same shape as Slip #3 (docs/findings/sbs.md).
-static int cull_far_mult(Core* c) {
-  if (c && c->game && !c->game->pc_skip) return 1;      // pc_faithful — stock cull for substrate parity
-  static int m = -1;
-  if (m < 0) { const char* s = cfg_str("PSXPORT_CULL_FAR_MULT"); int v = s ? atoi(s) : 0;
-               m = (v > 0) ? v : CULL_FAR_MULT; }
-  return m;
+int Cull::cullFarMult() { Core* c = core;
+  return (c && c->game && !c->game->pc_skip) ? cullFarMultFaithful() : cullFarMultSkip();
+}
+int Cull::cullFarMultFaithful() {
+  return 1;                                             // stock cull limits for substrate parity
+}
+int Cull::cullFarMultSkip() {
+  if (mFarMult < 0) { const char* s = cfg_str("PSXPORT_CULL_FAR_MULT"); int v = s ? atoi(s) : 0;
+                      mFarMult = (v > 0) ? v : CULL_FAR_MULT; }
+  return mFarMult;
 }
 
-struct CullDecision { int kept; int wrote_state2; int queue; };  // queue: 0=none,1=A,2=B,3=C
 static const uint32_t CULL_QPTR[3] = { 0x1f80013cu, 0x1f800148u, 0x1f800154u };
 static const uint32_t CULL_QCNT[3] = { 0x1f800144u, 0x1f800150u, 0x1f80015cu };
 static const int      CULL_QCAP[3] = { 24, 40, 28 };
 
 // Pure (read-only) cull decision — reproduces FUN_8007712c's control flow without committing writes.
-static CullDecision cull_decide(Core* c) {
+Cull::Decision Cull::decide() { Core* c = core;
   uint32_t obj = c->r[4];
   int32_t dx = (int16_t)c->r[5], dy = (int16_t)c->r[6], dz = (int16_t)c->r[7];   // pos - camera
   uint32_t sum  = (uint32_t)(dx*dx) + (uint32_t)(dy*dy) + (uint32_t)(dz*dz);     // addu-wrap, matches MIPS
   uint32_t dist = eng_isqrt16(sum) & 0xffffu;
   int32_t fx = c->mem_r16s(0x1F8000E8u), fy = c->mem_r16s(0x1F8000EAu), fz = c->mem_r16s(0x1F8000ECu);
-  CullDecision R = { 0, 0, 0 };
+  Decision R = { 0, 0, 0 };
   uint32_t state;
   if (c->mem_r8(0x800BF870u) == 4) { R.wrote_state2 = 1; state = 2; }
   else                              state = c->mem_r32(0x1F800084u);
@@ -123,7 +124,7 @@ static CullDecision cull_decide(Core* c) {
     }
     // Issue #22: extend the far limit (the per-state `fr` above is the byte-exact stock value;
     // we keep it readable and apply the named multiplier here so the kept set reaches further out).
-    fr *= cull_far_mult(c);
+    fr *= cullFarMult();
     if ((int)dist < nr || (int)dist >= fr) { R.kept = 0; }
     else {
       int32_t depth = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
@@ -147,7 +148,7 @@ static CullDecision cull_decide(Core* c) {
 // per-class render-list push, return in r[2]. Was the file-scope `cull_native_body` helper.
 void Cull::performBaseCull() { Core* c = core;
   uint32_t obj = c->r[4];
-  CullDecision R = cull_decide(c);
+  Decision R = decide();
   c->mem_w8(obj + 1, 0);                                  // prologue `sb zero,1(s3)`
   if (R.wrote_state2) c->mem_w32(0x1F800084u, 2);
   if (!R.kept) { c->r[2] = 0; return; }
@@ -171,7 +172,7 @@ void Cull::performBaseCull() { Core* c = core;
 // (return 0) if dist<512 or dist>=7169, else keep iff fwd·d >= dist*3424 (fwd @0x1F8000E8/EA/EC; 3424 =
 // 4*856, the no-divide form of 8007712C's depth/(dist*4) >= 856). On keep, set the visible flag node[1]=1
 // and return 1; on reject, return 0 and leave node[1] untouched. Pure leaf (only calls the owned isqrt).
-static int cone_cull_2b278(Core* c, int commit) {
+int Cull::coneCullBody(int commit) { Core* c = core;
   uint32_t node = c->r[4];
   int32_t dx = c->mem_r16s(node + 0x2C) - c->mem_r16s(0x1F8000D2u);
   int32_t dy = c->mem_r16s(node + 0x2E) - c->mem_r16s(0x1F8000D6u);
@@ -182,7 +183,7 @@ static int cone_cull_2b278(Core* c, int commit) {
   // Issue #22: this standalone view-cone cull (FUN_8002B278) shares the 7169 stock far; extend it with
   // the same named CULL_FAR_MULT so distant world geometry on this path also keeps rendering. The cone
   // threshold below stays a relative dot >= dist*3424 (independent of far), so only the far gate moves.
-  uint32_t far_lim = 7169u * (uint32_t)cull_far_mult(c);
+  uint32_t far_lim = 7169u * (uint32_t)cullFarMult();
   if (dist < 512u || dist >= far_lim) return 0;
   int32_t dot = (int32_t)((uint32_t)(fx*dx) + (uint32_t)(fy*dy) + (uint32_t)(fz*dz));  // addu-wrap
   int64_t thr = (int64_t)dist * 3424;                                                  // widened (dist now > 7169 possible)
@@ -191,7 +192,7 @@ static int cone_cull_2b278(Core* c, int commit) {
   return 1;
 }
 void Cull::coneCull2b278() { Core* c = core;
-  c->r[2] = (uint32_t)cone_cull_2b278(c, 1);
+  c->r[2] = (uint32_t)coneCullBody(1);
 }
 
 // Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push of `obj` onto the class-4
@@ -259,8 +260,8 @@ void Cull::objectCull() { Core* c = core;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
   c->game->fps60.current_object = o;               // fps60: tag every subsequent RTP with this object
 
-  if (s_objlog < 0) s_objlog = cfg_dbg("obj") ? 1 : 0;
-  if (s_objlog)
+  if (mObjLog < 0) mObjLog = cfg_dbg("obj") ? 1 : 0;
+  if (mObjLog)
     fprintf(stderr, "[objlog] obj=%08x type=%02x pos=(%d,%d,%d)\n", o, c->mem_r8(o + 0x0c),
             (int16_t)obj_r16(c, o + 0x2e), (int16_t)obj_r16(c, o + 0x32), (int16_t)obj_r16(c, o + 0x36));
   int p2 = (int16_t)c->r[5], p3 = (int16_t)c->r[6], p4 = (int16_t)c->r[7];   // pos - camera (s16 each)
@@ -268,8 +269,8 @@ void Cull::objectCull() { Core* c = core;
   // The engine OWNS this margin, so it is ALWAYS active — not gated on widescreen. Even at 4:3 the
   // stock ±34° cone over-culls (edge pop-in), so we keep the wide region in every aspect; widescreen
   // then needs no extra special-casing. Env overrides remain for diagnostics only (PSXPORT_CULL_FAR/_FOV).
-  if (s_cull < 0) { const char* f = cfg_str("PSXPORT_CULL_FAR"); s_cull_far = f ? atoi(f) : -1;
-                    const char* v = cfg_str("PSXPORT_CULL_FOV"); s_cull_fov = v ? atoi(v) : -1; s_cull = 1; }
+  if (mCullEnvRead < 0) { const char* f = cfg_str("PSXPORT_CULL_FAR"); mCullFar = f ? atoi(f) : -1;
+                          const char* v = cfg_str("PSXPORT_CULL_FOV"); mCullFov = v ? atoi(v) : -1; mCullEnvRead = 1; }
   int do_cull = 1;
   // FAR limit (engine units, same scale as `dist`) for the engine-owned wide RE-INCLUDE of margin
   // geometry the stock body culled. The widest stock far is 7169 (0x1C01).
@@ -285,7 +286,7 @@ void Cull::objectCull() { Core* c = core;
   #ifndef CULL_MARGIN_FAR
   #define CULL_MARGIN_FAR 0x10000   // ~9.1x the widest stock far (7169) — generous render-margin reach
   #endif
-  int cull_far = s_cull_far >= 0 ? s_cull_far : CULL_MARGIN_FAR;
+  int cull_far = mCullFar >= 0 ? mCullFar : CULL_MARGIN_FAR;
   // FOV-cone threshold for depth/(dist*4) [≈ cos·1024]. The engine keeps objects to the EDGE of the view
   // and a bit beyond: 0 = the full forward hemisphere (±90°, well past the widescreen frustum's ~±40°);
   // a small NEGATIVE value extends past 90° so an object whose ORIGIN is just behind the camera plane but
@@ -298,17 +299,16 @@ void Cull::objectCull() { Core* c = core;
   #ifndef CULL_MARGIN_FOV
   #define CULL_MARGIN_FOV (-0x60)   // ≈ cos(93.4°): full hemisphere + ~3.4° past the side
   #endif
-  int cull_fov = s_cull_fov >= 0 ? s_cull_fov : CULL_MARGIN_FOV;
+  int cull_fov = mCullFov >= 0 ? mCullFov : CULL_MARGIN_FOV;
   // MEASUREMENT (entity-type taxonomy RE, journal later-127 step 1; off by default): restrict the wide
   // re-include to a single entity type (+0xc), or exclude one, so a 4:3-vs-16:9 gameplay RAM self-diff
   // isolates whether re-including THAT type perturbs gameplay logic (static-world) or not (dynamic).
   // PSXPORT_CULL_ONLY_TYPE=<n> re-includes only type n; PSXPORT_CULL_SKIP_TYPE=<n> re-includes all but n.
-  static int s_only = -2, s_skip = -2;
-  if (s_only == -2) { const char* x = cfg_str("PSXPORT_CULL_ONLY_TYPE"); s_only = x ? (int)strtol(x,0,0) : -1;
-                      const char* y = cfg_str("PSXPORT_CULL_SKIP_TYPE"); s_skip = y ? (int)strtol(y,0,0) : -1; }
+  if (mOnlyType == -2) { const char* x = cfg_str("PSXPORT_CULL_ONLY_TYPE"); mOnlyType = x ? (int)strtol(x,0,0) : -1;
+                         const char* y = cfg_str("PSXPORT_CULL_SKIP_TYPE"); mSkipType = y ? (int)strtol(y,0,0) : -1; }
   int otype = c->mem_r8(o + 0x0c);
-  if (s_only >= 0 && otype != s_only) do_cull = 0;
-  if (s_skip >= 0 && otype == s_skip) do_cull = 0;
+  if (mOnlyType >= 0 && otype != mOnlyType) do_cull = 0;
+  if (mSkipType >= 0 && otype == mSkipType) do_cull = 0;
   if (do_cull && c->mem_r8(o + 1) == 0) {              // the game CULLED it — reconsider with engine bounds
     unsigned dist = isqrt32((unsigned)(p2*p2 + p3*p3 + p4*p4)) & 0xFFFF;
     // NEAR floor 0x80 (was 0x200): the stock body culls anything closer than ~512, so on-camera objects

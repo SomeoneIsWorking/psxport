@@ -74,4 +74,28 @@ public:
   // (bypassing the base cull test). Respects the cap-40 limit at *(0x1F800150). Callers set obj[+1]=1
   // themselves; this method only manipulates the queue. Was rec_dispatch(0x80077EBCu) in 5+ handlers.
   uint32_t enqueueVisibleClass4(uint32_t obj);   // returns v0 (new count on push, 0 on cap-hit)
+
+private:
+  // Pure (read-only) cull decision — reproduces FUN_8007712c's control flow without committing
+  // writes. queue: 0=none, 1=A, 2=B, 3=C.
+  struct Decision { int kept; int wrote_state2; int queue; };
+  Decision decide();
+
+  // coneCull2b278's body; commit!=0 also sets the node visible flag on keep.
+  int coneCullBody(int commit);
+
+  // Far-limit multiplier fork (issue #22 / Slip #3-shape, docs/findings/sbs.md). Faithful keeps the
+  // stock per-state far limits (×1) so SBS against recomp_path doesn't diverge at 0x800EE489; skip
+  // applies the extended multiplier (PSXPORT_CULL_FAR_MULT override, else CULL_FAR_MULT). The two
+  // modes deliberately do not converge.
+  int cullFarMult();
+  int cullFarMultFaithful();
+  int cullFarMultSkip();
+
+  // Lazily-initialized cfg caches (-1/-2 = not read yet). Per-instance so the two SBS cores don't
+  // share diagnostic state.
+  int mObjLog = -1;                              // PSXPORT_DEBUG=obj per-object log
+  int mCullEnvRead = -1, mCullFar = 0, mCullFov = 0;   // PSXPORT_CULL_FAR / PSXPORT_CULL_FOV
+  int mFarMult = -1;                             // skip-mode far multiplier
+  int mOnlyType = -2, mSkipType = -2;            // PSXPORT_CULL_ONLY_TYPE / PSXPORT_CULL_SKIP_TYPE
 };

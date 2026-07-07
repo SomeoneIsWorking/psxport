@@ -34,9 +34,19 @@ public:
   // advance sm[0x48] = 1. Called by run_demo_stanza's step-spread branch, not by frame() dispatch.
   void s0PreYield();
   void s0PostYield();
+  // frame() case-0 fork. s0Skip (pc_skip): task-1 doesn't run via fiber under normal PC play, so
+  // the preload runs synchronously inline (s0PreYield + preloadTexgroup + done_flag + s0PostYield).
+  // s0Faithful currently shares that same body: the intended pre-yield/post-yield task-1 split is
+  // a pending SBS-verified logic change (the demo_s0_step machinery is not advanced yet), so both
+  // modes must stay byte-identical for now.
+  void s0Skip();
+  void s0Faithful();
   void s1();             // formerly ov_demo_s1
   void s2();             // formerly ov_demo_s2
   void s3();             // formerly ov_demo_s3
   void s6();             // formerly ov_demo_s6
   void s7Phase();        // formerly ov_demo_s7_phase (a sub-phase of the s7 dispatch)
+
+private:
+  void s0Body();         // shared s0 case-0 body (see s0Skip/s0Faithful above)
 };

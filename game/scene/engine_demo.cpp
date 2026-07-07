@@ -35,6 +35,7 @@
 // (Disasm: 0x8010633c addiu s2,zero,1 · 0x80106340 addiu s1,zero,2 · 0x80106344 addiu s3,zero,3.)
 
 #include "core.h"
+#include "game.h"                         // Game::pc_skip — frame() case-0 fork
 #include "cfg.h"
 #include "scheduler.h"                    // native_task_spawn (FUN_80051F14 port) — Slip #4 s0 spawn
 #include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C) + siblings
@@ -336,8 +337,6 @@ void Demo::s7Phase() { Core* c = core;
   rec_coro_redirect(c, TAIL_NONE);
 }
 
-static void demo_frame_s0(Core* c);  // defined in the per-frame dispatcher section below
-
 // DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand to the guest per-frame loop body
 // @0x80106388 via the coro-redirect handshake. Mirrors ov_game_stage_main (engine_stage.cpp). Called
 // DIRECTLY from the native scheduler (native_boot.cpp) when task 0 enters stage 1 (DEMO); the override
@@ -387,7 +386,7 @@ void Demo::stageMain() { Core* c = core;
 
   // SLIP #1 residual fix (docs/findings/sbs.md attack (a)): do NOT dispatch s0 here. The recomp coro
   // of 0x801062E4 spends its FRESH iteration running the prologue only (sets sm[0x48]=0), then yields
-  // via FUN_80051F80. It dispatches s0 on its NEXT iteration. If stageMain runs demo_frame_s0 inline
+  // via FUN_80051F80. It dispatches s0 on its NEXT iteration. If stageMain runs the s0 body inline
   // on fresh, native does prologue+s0 in one tick vs coro's prologue-only — putting A one tick ahead
   // for the entire DEMO progression. Leave sm[0x48]=0 for the next scheduler tick's demo.frame() to
   // dispatch as case 0.
@@ -496,14 +495,17 @@ void Demo::s0PostYield() { Core* c = core;
                                "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
 }
 
-// Legacy inline s0 body kept for the pc_skip path (normal PC play — where task-1 wouldn't run
-// via fiber, so we do the preload synchronously inline). Runs both halves + fake done_flag.
-static void demo_frame_s0(Core* c) {
-  c->engine.demo.s0PreYield();
+// Inline s0 body: task-1 wouldn't run via fiber under normal PC play, so the preload runs
+// synchronously inline. Runs both halves + fake done_flag. Shared by both fork branches — the
+// faithful pre-yield/post-yield task-1 split is a pending SBS-verified logic change (see demo.h).
+void Demo::s0Body() { Core* c = core;
+  s0PreYield();
   c->engine.asset.preloadTexgroup(0, 2);       // synchronous FUN_80044F58 (task-1 callback body)
   c->mem_w8(0x1f80019bu, 1);                    // done_flag = 1 (as if task-1 signalled)
-  c->engine.demo.s0PostYield();
+  s0PostYield();
 }
+void Demo::s0Skip()     { s0Body(); }
+void Demo::s0Faithful() { s0Body(); }
 
 // Substate s1 (0x8010641C) — wait/advance. Run the menu machine; on completion (v0!=0) reset sm[0x4a]
 // and advance sm[0x48] (1->2); else on any pad edge set the skip-request flag. Always TAIL_NONE.
@@ -729,7 +731,7 @@ void Demo::frame() { Core* c = core;
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   switch (s48) {
-    case 0: demo_frame_s0(c); break;    // restart (attract -> title): reload menu resources, -> s1
+    case 0: (c->game && !c->game->pc_skip) ? s0Faithful() : s0Skip(); break;   // restart (attract -> title): reload menu resources, -> s1
     case 1: demo_frame_s1(c); break;
     case 2: demo_frame_s2(c); break;
     case 3: demo_frame_s3(c); break;
