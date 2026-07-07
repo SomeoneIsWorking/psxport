@@ -216,30 +216,47 @@ void Engine::s48_2_frame() { Core* c = core;
   static const uint32_t handler[6] = {
     0x8010882cu, 0x801088d8u, 0x80106478u, 0x80106a24u, 0x801089c4u, 0x80108a60u,
   };
+  static const uint32_t jal_ra[6] = {          // 80108784's per-case jal sites
+    0x801087CCu, 0x801087DCu, 0x801087ECu, 0x801087FCu, 0x8010880Cu, 0x8010881Cu,
+  };
+  c->r[29] -= 24;                              // gen 80108784 prologue (spill precedes the <6 check)
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
-  if (s4a >= 6) return;
-  if (s4a == 0) { c->game->ffspan.begin(); c->engine.submode0(); c->game->ffspan.end("submode0"); return; }
-  if (s4a == 1) { c->game->ffspan.begin(); c->engine.submode1(); c->game->ffspan.end("submode1"); return; }
-  if (s4a == 5) { c->game->ffspan.begin(); c->engine.fieldTransition(); c->game->ffspan.end("transition"); return; }  // native FUN_80108a60
-  c->game->ffspan.begin(); rec_dispatch(c, handler[s4a]); c->game->ffspan.end("s48_2_handler");
+  if (s4a < 6) {
+    c->r[31] = jal_ra[s4a];
+    if (s4a == 0)      { c->game->ffspan.begin(); c->engine.submode0(); c->game->ffspan.end("submode0"); }
+    else if (s4a == 1) { c->game->ffspan.begin(); c->engine.submode1(); c->game->ffspan.end("submode1"); }
+    else if (s4a == 5) { c->game->ffspan.begin(); c->engine.fieldTransition(); c->game->ffspan.end("transition"); }  // native FUN_80108a60
+    else               { c->game->ffspan.begin(); rec_dispatch(c, handler[s4a]); c->game->ffspan.end("s48_2_handler"); }
+  }
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
 }
 
 // GAME sub-mode-0 bridge 0x8010882c (sm[0x4c]/sm[0x4e] dispatch) — native. Faithful to the disasm:
 // sm[0x4c]==0 & sm[0x4e]==0 -> input-reset 0x8005082c (sync leaf) + sm[0x50]=0, sm[0x4e]=1; sm[0x4e]==1
 // -> run the native SOP field-mode machine; sm[0x4c]==1 -> sm[0x4c]=0, sm[0x4a]++.
 void Engine::submode0() { Core* c = core;
+  c->r[29] -= 40;                            // gen 8010882C frame: s0 @+32, ra @+36
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 32, c->r[16]);
+  c->r[16] = 0x1F800000u;
+  c->mem_w32(sp + 36, c->r[31]);
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   if (s4c == 0) {
     uint16_t s4e = c->mem_r16(sm + 0x4e);
     if (s4e == 0) {
       c->r[4] = 0; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x8010888Cu;
       rec_dispatch(c, 0x8005082cu);          // input reset (leaf, no yield)
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x50, 0);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
     } else if (s4e == 1) {
+      c->r[31] = 0x801088B0u;
       // 0x80109450 is the loaded MODE overlay's field-mode fn. Our native machine is SOP-specific, so
       // only use it when SOP is actually loaded (signature = its first insn `lui v0,0x1f80` = 0x3C021F80);
       // for any other mode/field overlay, dispatch the guest fn (until that overlay is owned natively too).
@@ -251,6 +268,9 @@ void Engine::submode0() { Core* c = core;
     c->mem_w16(sm + 0x4c, 0);
     c->mem_w16(sm + 0x4a, (uint16_t)(s4a + 1));
   }
+  c->r[31] = c->mem_r32(sp + 36);            // gen 8010882C epilogue
+  c->r[16] = c->mem_r32(sp + 32);
+  c->r[29] += 40;
 }
 
 // GAME sm[0x4a]==1 handler 0x801088d8 — the FIELD area machine (the actual walkable field, loaded
@@ -1173,10 +1193,13 @@ int Engine::frame() { Core* c = core;
     } else if (s4a != 1) {
       if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 s48=2 s4a=%u unowned-submode sm@%08X\n", s4a, sm); return 0; // unowned running sub-mode
     }
+    c->r[31] = 0x8010645Cu;                    // guest loop jal site (L_80106454)
     c->engine.s48_2_frame();
   } else if (s48 == 0) {
+    c->r[31] = 0x8010643Cu;                    // guest loop jal site (L_80106434)
     c->game->ffspan.begin(); c->engine.s48_0(); c->game->ffspan.end("s48_0");
   } else if (s48 == 1) {
+    c->r[31] = 0x8010644Cu;                    // guest loop jal site (L_80106444)
     c->game->ffspan.begin(); c->engine.s48_1(); c->game->ffspan.end("s48_1");
   } else {
     if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 unknown s48=%u sm@%08X\n", s48, sm); return 0; // unknown top state -> cooperative
