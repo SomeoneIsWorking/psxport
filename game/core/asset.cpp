@@ -33,11 +33,16 @@ uint32_t Asset::lzDecompress(uint32_t desc, uint32_t dst, uint32_t src0, uint32_
   Core* c = this->core;
   const uint32_t src_end = src0 + srclen;
   const int32_t stride = c->mem_r16s(desc + 4);
+  // Frame discipline (faithful-execution model): the substrate body descends sp by 32 and builds
+  // the 8-entry back-ref offset table IN ITS GUEST FRAME (sp+0..+28) — compared task-stack bytes
+  // under strict SBS. Keep the guest-frame copy authoritative alongside the host mirror.
+  c->r[29] -= 32;
   int32_t offtab[8];
   for (int i = 0; i < 8; i++) {
     const int32_t base   = (int32_t)c->mem_r32(LZ_OFFTAB_BASE + i * 8 + 0);
     const int32_t factor = (int32_t)c->mem_r32(LZ_OFFTAB_BASE + i * 8 + 4);
     offtab[i] = base + 2 * (factor * stride);
+    c->mem_w32(c->r[29] + (uint32_t)i * 4, (uint32_t)offtab[i]);
   }
   uint32_t src = src0, out = dst;
   while (src < src_end) {
@@ -51,6 +56,7 @@ uint32_t Asset::lzDecompress(uint32_t desc, uint32_t dst, uint32_t src0, uint32_
       for (uint32_t k = 0; k < len; k++) c->mem_w8(out++, c->mem_r8(src++));
     }
   }
+  c->r[29] += 32;                                     // frame ascent
   return out - dst;                                   // total bytes written
 }
 
@@ -99,6 +105,63 @@ void Asset::unpackGroup(uint32_t tablePtr, uint32_t anchorEnd) {
   }
 }
 
+// FAITHFUL texture-group unpacker — FUN_80044E84 with full guest-stack discipline (faithful-
+// execution model; used by the pc_faithful task-1 body loadTexgroup). Same algorithm as
+// unpackGroup above, but: frame descent 48 with the RE'd live s-reg/ra spills at +16..+44, loop
+// state maintained in the guest s-registers (nested callee prologues spill them into compared
+// task-1 stack bytes), and the two libgs leaves — LoadImage FUN_80081218 and DrawSync
+// FUN_80080F6C — dispatched at the live guest sp with their call-site ra constants, exactly as
+// core B's substrate body runs them. Byte shape: generated gen_func_80044E84 (shard_5.c).
+void Asset::unpackGroupFaithful(uint32_t tablePtr, uint32_t anchorEnd) {
+  Core* c = this->core;
+  c->r[29] -= 48;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 24, c->r[18]); c->r[18] = tablePtr;
+  c->mem_w32(sp + 40, c->r[22]); c->r[22] = anchorEnd;
+  c->mem_w32(sp + 36, c->r[21]); c->r[21] = tablePtr + 2048;   // packed source follows the table
+  c->mem_w32(sp + 44, c->r[31]);
+  c->mem_w32(sp + 32, c->r[20]);
+  c->mem_w32(sp + 28, c->r[19]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->mem_w32(sp + 16, c->r[16]);
+  const int32_t count = (int32_t)c->mem_r32(c->r[18]);
+  c->r[18] += 4;                                      // first 12-byte descriptor entry
+  c->r[20] = (uint32_t)(count - 1);                   // loop counter in s4 (branch-delay decrement)
+  if (count > 0) {
+    c->r[19] = c->r[18] - 6;
+    for (;;) {
+      c->r[19] += 12;
+      const int32_t stride = c->mem_r16s(c->r[19] - 2);        // desc+4
+      const int32_t field  = c->mem_r16s(c->r[19] + 0);        // desc+6
+      c->r[17] = c->r[18];                                     // desc (s1)
+      c->r[18] += 8;
+      const uint32_t srclen = c->mem_r32(c->r[18]);            // desc+8
+      c->r[18] += 4;                                           // next descriptor
+      c->r[6] = c->r[21];                                      // src
+      c->r[21] += srclen;
+      c->r[16] = c->r[22] - (uint32_t)(2 * stride * field);    // dst = transient scratch (s0)
+      c->r[4] = c->r[17]; c->r[5] = c->r[16]; c->r[7] = srclen; c->r[31] = 0x80044F10u;
+      lzDecompress(c->r[17], c->r[16], c->r[6], srclen);       // FUN_80044D8C (guest-frame offtab)
+      c->r[4] = c->r[17]; c->r[5] = c->r[16]; c->r[31] = 0x80044F1Cu;
+      rec_dispatch(c, 0x80081218u);                            // libgs LoadImage at the live sp
+      c->r[4] = 0; c->r[31] = 0x80044F24u;
+      rec_dispatch(c, 0x80080F6Cu);                            // libgs DrawSync(0)
+      const int32_t rem = (int32_t)c->r[20];
+      c->r[20] = (uint32_t)(rem - 1);
+      if (rem <= 0) break;
+    }
+  }
+  c->r[31] = c->mem_r32(sp + 44);
+  c->r[22] = c->mem_r32(sp + 40);
+  c->r[21] = c->mem_r32(sp + 36);
+  c->r[20] = c->mem_r32(sp + 32);
+  c->r[19] = c->mem_r32(sp + 28);
+  c->r[18] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 48;
+}
+
 // PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN_80044F58 (0x80044F58): the
 // per-group loader a level uses to stream a texture set into VRAM. RE (tools/disas.py + gen_func_80044F58):
 // the current task selects a set via task[0x6D]=mode / task[0x6E]=set, then
@@ -115,31 +178,48 @@ void Asset::unpackGroup(uint32_t tablePtr, uint32_t anchorEnd) {
 // mode/set inputs and the 0x800FB170 metadata are CONTENT-interface state, so this is gated on the main-
 // RAM A/B diff (later-177). For mode==0 the terminal yield does not return (switch longjmps mid-game),
 // exactly like eng_stage_transition's tail; there is no code after it.
+// FAITHFUL guest-stack discipline (faithful-execution model): frame descent 24 with ra/s0 spills
+// at +20/+16 (live values), header/archive CD reads dispatched with their call-site ra constants,
+// unpackGroupFaithful for step 3 (its libgs leaves run at the live guest sp), and the metadata-
+// copy cursor kept in the guest s0 (selfClose's prologue spills it). Byte shape: generated
+// gen_func_80044F58. This method only runs on the pc_faithful task-1 path (runTask1PreloadStanza);
+// the pc_skip shortcut is preloadTexgroup below.
 void Asset::loadTexgroup() {
   Core* c = this->core;
-  uint32_t ra = c->r[31], sp = c->r[29], s0 = c->r[16];   // preserve for the (non-yield) epilogue
-  uint32_t task = c->mem_r32(0x1F800138u);
-  uint32_t mode = c->mem_r8(task + 0x6Du);
-  uint32_t set  = c->mem_r8(task + 0x6Eu);
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w32(sp + 16, c->r[16]);
+  const uint32_t task = c->mem_r32(0x1F800138u);
+  const uint32_t mode = c->mem_r8(task + 0x6Du);
+  const uint32_t set  = c->mem_r8(task + 0x6Eu);
   uint32_t hdr_sector = c->mem_r32(0x800BE0F0u) + set;             // filebase0 + set
   if (mode == 2) {                                                 // mode-2 per-set 4/26-sector bias
     uint16_t mask = c->mem_r16(0x800BFE56u);
     hdr_sector += ((mask >> (set & 31)) & 1) ? 26u : 4u;
   }
   const uint32_t HDR = 0x800EF478u;
-  c->r[4] = HDR; c->r[5] = hdr_sector; c->r[6] = 2048;
+  c->r[4] = HDR; c->r[5] = hdr_sector; c->r[6] = 2048; c->r[31] = 0x80044FD8u;
   rec_dispatch(c, 0x8001DC40u);                                    // 1. CD-load 2KB header (platform)
+  c->r[16] = HDR;                                                  // s0 = header base (live for spills)
   uint32_t h0 = c->mem_r32(HDR + 0), h1 = c->mem_r32(HDR + 4);
   c->r[4] = 0x8018A000u; c->r[5] = c->mem_r32(0x800BE0F8u) + (h0 >> 11); c->r[6] = h1 - h0;
+  c->r[31] = 0x80045008u;
   rec_dispatch(c, 0x8001DC40u);                                    // 2. CD-load compressed archive -> staging
-  unpackGroup(0x8018A000u, 0x1FD000u);                             // 3. unpack -> decompress + VRAM upload (owned)
-  for (uint32_t i = 0; i < 42; i++)                                // 4. per-set metadata table
-    c->mem_w32(0x800FB170u + i * 4, c->mem_r32(HDR + 0x100u + i * 4));
-  c->r[16] = s0; c->r[29] = sp; c->r[31] = ra;
-  if (mode == 0) {                                                 // 5. terminal yield (streams one group/frame)
-    c->mem_w8(0x1F80019Bu, 1);
-    rec_dispatch(c, 0x80051FB4u);                                  // switch tail — does not return mid-game
+  c->r[4] = 0x8018A000u; c->r[5] = 0x001FD000u; c->r[31] = 0x8004501Cu;
+  unpackGroupFaithful(0x8018A000u, 0x1FD000u);                     // 3. unpack -> decompress + VRAM upload
+  for (uint32_t i = 0; i < 42; i++) {                              // 4. per-set metadata table (cursor in s0)
+    c->mem_w32(0x800FB170u + i * 4, c->mem_r32(c->r[16] + 256u));
+    c->r[16] += 4;
   }
+  if (c->mem_r8(c->mem_r32(0x1F800138u) + 0x6Du) == 0) {           // 5. terminal task end (mode 0)
+    c->mem_w8(0x1F80019Bu, 1);
+    c->r[31] = 0x80045070u;
+    c->game->pcSched.selfClose();                                  // FUN_80051FB4 — does not return on a task
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
 }
 
 // Per-image post-step FUN_80080f6c(0) = the game's libgs frame DrawSync: FUN_80083364(0) waits for the

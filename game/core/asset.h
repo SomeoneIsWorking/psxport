@@ -33,6 +33,11 @@ public:
   //   transient scratch ending at anchorEnd, then uploading (uploadImage) to its VRAM (x,y).
   void unpackGroup(uint32_t tablePtr, uint32_t anchorEnd);
 
+  // unpackGroupFaithful(tablePtr, anchorEnd): FUN_80044E84 with full guest-stack discipline
+  //   (frame descent 48, live s-reg/ra spills, libgs LoadImage/DrawSync dispatched at the live
+  //   guest sp) — the pc_faithful task-1 path, byte-exact to the substrate body under strict SBS.
+  void unpackGroupFaithful(uint32_t tablePtr, uint32_t anchorEnd);
+
   // loadTexgroup(): FUN_80044F58 — texture-group LOADER orchestration. mode/set inputs come from
   //   the current task struct at *(0x1F800138u) — [+0x6D]=mode, [+0x6E]=set — so no explicit
   //   args. CD-loads header + archive, unpacks, copies the 42-word metadata, then (mode==0) does
