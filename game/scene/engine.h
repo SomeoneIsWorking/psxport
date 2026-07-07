@@ -38,6 +38,9 @@
 #include "object/behavior_dispatch.h" // Engine owns the per-object BehaviorDispatch subsystem
 #include "scene/scene_events.h"       // Engine owns the SceneEvents arm subsystem (FUN_80040B48)
 #include "audio/sfx.h"                // Engine owns the Sfx trigger subsystem (FUN_80074590)
+#include "audio/audio_dispatch.h"     // Engine owns the AudioDispatch dispatch/settle cluster
+#include "world/area_slots.h"         // Engine owns the AreaSlots slot-table state machine
+#include "scene/mode_state_arm.h"     // Engine owns the ModeStateArm arm-primitive pair
 #include "scene/script_interp.h"      // Engine owns the ScriptInterp cutscene-script dispatcher
 #include "player/actor_tomba.h"       // Engine owns Tomba's per-frame logic + growth/movement
 class Core;
@@ -93,6 +96,9 @@ public:
   Cull             cull;               // per-object visibility cull / margin re-include (orphaned)
   SceneEvents      sceneEvents;        // field-wide scene-event arm primitive (FUN_80040B48)
   Sfx              sfx;                 // sound-FX trigger dispatcher (FUN_80074590)
+  AudioDispatch    audioDispatch;       // field-audio dispatch/settle cluster (FUN_800750D8 et al.)
+  AreaSlots        areaSlots;           // area-slot table state machine (FUN_80075A80 / FUN_80074AF0)
+  ModeStateArm     modeStateArm;        // mode-state arm primitive pair (FUN_8005082C / FUN_800508A8)
   ScriptInterp     script;              // cutscene bytecode dispatcher (FUN_80041098 et al.)
   ActorTomba       actorTomba;          // Tomba's per-frame logic + growth/movement over G block
 
@@ -280,31 +286,6 @@ public:
   // (playerGrowthStep moved to ActorTomba::growthStep — see game/player/actor_tomba.h; callers
   //  reach it as `c->engine.actorTomba.growthStep(mode)` since obj is always G.)
 
-  // audioDispatch3Way(idx): guest FUN_800750D8. 3-branch dispatcher used by area-machine state 0
-  //   (idx = 0x2C) and Pool::selectStateIndex (idx = s0):
-  //     idx == 0xFF → return (DAT_800BE0E4 & 4) — an "audio-armed" flag test.
-  //     idx == 0xFE → return FUN_8001CF2C's return value — settle-poll.
-  //     else       → run audioVoiceFetchBits(idx, second_arg) (substrate leaf), return 0.
-  //   Ghidra decomp scratch/decomp/fun_800750d8_v2.c. Return in c->r[2] preserved.
-  uint32_t audioDispatch3Way(uint32_t idx, uint32_t arg2 = 0);
-
-  // audioVoiceFetchBits(bits, flag): guest FUN_8001D364. Bit-packed XA/voice fetch selector.
-  //   bits[3..5] pick one of 8 per-class descriptor tables (0x8001005C..0x80010078); bits[0..2]
-  //   index a (u16 offset, u16 count) pair inside that table. Delegates to substrate
-  //   FUN_8001D2A8(class, base, tail, flag|2) where base = *0x1F800224 + offset*8 and
-  //   tail = base + (count-2)*8. Sister to Engine::zoneTransitionSetup (same substrate leaf,
-  //   different index shape). Ghidra decomp scratch/decomp/fun_8001d364.c.
-  void audioVoiceFetchBits(uint32_t bits, uint32_t flag);
-
-  // audioSettleField(): guest FUN_80074BC4. 4-step audio state SETTLE fired by Engine::fieldRun's
-  //   state 3 (init hand-off) / state 1's mode-3 branch / state 6 (transition entry): clears the
-  //   scratchpad audio-cue flag @0x1F80027E, runs the engine-tick settle FUN_8001CF2C (task-2
-  //   kill + VBlank sync), then two voice-table cleanups (FUN_80074B44 = tail voices reset;
-  //   FUN_80074E48 = SsSeqClose + full voice reset). The 3 leaves all wrap SPU/BIOS libsnd APIs
-  //   (SsSeqClose / SsSetMVol / SsAudUpdate) that don't have PC-native equivalents yet, so they
-  //   stay dispatched. Ghidra decomp scratch/decomp/fun_80074bc4.c + scratch/decomp/74bc4_subs.c.
-  void audioSettleField();
-
   // uploadModeSprites(): guest FUN_80067DA8. Uploads 5 sprite patterns (each a 16×1 BGR555 strip)
   //   to VRAM at fixed (X=0x1F0, Y=0x1E2/0x1E5/0x1C9/0x1D0/0x1B3) rects. The 5 source pointers
   //   are selected by mode byte DAT_800BF88D (0/1/2 → three distinct pattern sets in MAIN.EXE
@@ -326,36 +307,6 @@ public:
   //   Ghidra decomp scratch/decomp/fieldrun_s2_init.c. `op` is the u8 selector (a1 in the recomp).
   void gStateMutate(uint32_t G, uint8_t op);
 
-  // armModeState(a, b, c): guest FUN_8005082C. The engine's MODE-STATE ARM primitive — writes a
-  //   3-byte payload (a, b, c) into two mirrored triples at 0x800EA0D5..D7 and 0x800EC145..147,
-  //   backs the previous payload up at 0x800BF8A4..A6, sets the twin arm flags (0x800EA0D4 = 1,
-  //   0x800EC144 = 1), and stamps 0x800BF8A7 = (previous_arm_flag << 7) | 1. Widely called with
-  //   (0, 0, 0) to "arm the null mode" (input/pad reset shape used by scene_ui trigger, ScreenFade
-  //   sequencer, engine_demo prologue, bf816_dispatch, pool.finalViewInit's fall-through).
-  //   Ghidra decomp scratch/decomp/bf816_leaves.c.
-  void armModeState(uint8_t a = 0, uint8_t b = 0, uint8_t c = 0);
-
-  // armModeStateFromAreaTable(): guest FUN_800508A8. The area-table variant of armModeState —
-  //   pulls the 4-byte (class, a, b, c) payload from the per-area lookup table at 0x800A5500,
-  //   indexed by `area * 8 + collected_bit * 4` (collected_bit = 0x800BFE56 >> area & 1), then
-  //   applies the same arm-flag stamp pattern, with 0x800BF8A7 = 0x81 when class == 1 else 2.
-  //   Called by pool.finalViewInit (0x800508A8 hop) and bf816_dispatch. No caller args.
-  void armModeStateFromAreaTable();
-
-  // zoneTransitionSetup(idx): tiny dispatcher at guest FUN_8001D71C. Called from Sop::fieldUpdate
-  //   (idx=0xE, the tail's zone-transition setup after the intro scroller finishes) and from
-  //   Engine::fadeSequencer (idx=11, the fade-in-init step). Ghidra decomp
-  //   scratch/decomp/sop_tail_8001d71c.c.
-  //     - idx < 0                       : dispatches the engine tick FUN_8001CF2C (still substrate).
-  //     - idx >= 0                      : looks up a 6-byte record at 0x8009D110[idx] with fields
-  //         +0 u8 track    +1 u8 group  +2 u16 baseOff  +4 u16 span
-  //       and either short-circuits to `*0x800BE0E4 = 2` when `group==0 && DAT_800FB162==1`
-  //       (silent-track fast path — the audio subsystem is already at ready-state 1), or dispatches
-  //       FUN_8001D2A8(track, base, base+span, group) where `base = *0x1F800220 + baseOff*8`
-  //       (still substrate — the XA/CD voice fetch entry-point that the xa_stream.c comment refers
-  //       to). Control flow + record decode owned native; the two leaves stay dispatched.
-  void zoneTransitionSetup(int16_t idx);
-
   // postRenderTick: small 3-state machine on byte 0x800BF842 at guest 0x80077D8C, called after the
   //   per-frame render submit. `b42 & 0x7F` selects: 1 = trigger FX 41 then set b42=0x87; 2 = trigger
   //   FX 42 then clear b42; otherwise = decrement b42. Trigger call = FUN_80074590(id, 2, -65) — a
@@ -372,33 +323,6 @@ public:
   //   (g) ticks the sub-counter at G+0x180 when 0x1F800137 (pause flag) is 0, (h) advances the LFSR
   //   rand at 0x8009A450 every frame. Replaces `d0(c, 0x80059d28u)` in ov_field_frame.
   void frameStartTick();
-
-  // areaUpdateTail: the last direct child of ov_field_frame's gameplay block — per-frame area-slot
-  //   state machine at guest 0x80075A80. Iterates a 24-entry × 12-byte slot table at 0x800BE238
-  //   keyed by the counter at 0x800BED78; per slot the kind byte drives one of three arms:
-  //     kind == 0    -> skip to the buf[slot] post-check (nothing to do this frame).
-  //     kind == 0xFF -> fire the action leaf FUN_80092660(slot_s16, hword_g, sub1, sub2, [3 stacked
-  //                     bytes]) using either the g_a4f7e hword (top bit of sub2 set, arm-hi) or
-  //                     the 0xBED84 hword (arm-lo), clear the "armed" bit in the 24-bit mask at
-  //                     0x800BE358, then decrement kind.
-  //     other        -> if slot[7] == 4, decrement kind; if it went to 0, SET the bit in 0x800BE358
-  //                     and zero slot[1]/slot[2]. Else just decrement kind.
-  //   Then a per-slot post-check reads buf[slot] filled by FUN_800998e4 at entry (0=zero slot[1];
-  //   3=fall through unchanged; other=fall through). Tail: if 0x800BE358 nonzero call FUN_80098F90(0)
-  //   + clear it; then FUN_80075824(0x800BE1F8), FUN_80099490(0x800BE1F8); if key2 = mem_r16s(0x800BED80)
-  //   != -1, clear 0x800BE1F8, look up hword table[key2].w0 at 0x800BE368+key2*8, call FUN_8008E0C0
-  //   with that hword and 0 — if it returns nonzero on the low16, fall to epilogue; else read the
-  //   sub-object id at 0x800BE22A, if zero call FUN_80074E48 else call FUN_80074BF8(id) and clear
-  //   both 0x800BED80 and 0x800BE22A. All 8 callees stay substrate. Replaces `d0(c, 0x80075a80u)`.
-  void areaUpdateTail();
-
-  // areaSlotAckIfMatch(arg): FUN_80074AF0 — SIGNATURE-MATCHED slot ack primitive against the same
-  // 24-entry × 12-byte slot table at 0x800BE238 that areaUpdateTail iterates. The `arg` carries the
-  // entry index in its low byte (arg & 0xFF) plus a 3-byte SIGNATURE in the high bytes; if the high
-  // 3 bytes match the u32 stored at slot[idx].w0, this method sets the "armed" bit at
-  // *(u32)0x800BE358 |= (1 << idx) AND clears the trigger-pending byte at slot[idx].b1.
-  // Mismatched signatures are a no-op. RE'd from disas 0x80074AF0..0x80074B40.
-  void areaSlotAckIfMatch(uint32_t arg);
 
   // ── Boot-time INIT (called from native_boot.cpp before the scheduler starts) ──────────────────
   // The engine's own PC-native init prefix (was the free functions `eng_init_*` in engine_init.cpp).

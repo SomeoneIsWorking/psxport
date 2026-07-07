@@ -102,6 +102,9 @@ set(PORT_SRC
   game/scene/scene_events.cpp
   game/scene/script_interp.cpp
   game/audio/sfx.cpp
+  game/audio/audio_dispatch.cpp
+  game/world/area_slots.cpp
+  game/scene/mode_state_arm.cpp
   game/world/placement.cpp
   game/world/graphics_bind.cpp
   game/world/pool.cpp

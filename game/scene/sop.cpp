@@ -420,7 +420,7 @@ void Sop::fieldUpdate() { Core* c = core;
       }
     }
 
-    c->engine.areaUpdateTail();                            // 0x80075a80 NATIVE
+    c->engine.areaSlots.updateTail();                            // 0x80075a80 NATIVE
 
     // BG DRAW GATE — SOP scene-beat byte SCENE_BEAT selects the current beat within the SOP
     // intro cutscene. Beat 5 is the narration VOID (pure 2D swirl effect + text over black; no 3D
@@ -458,7 +458,7 @@ void Sop::fieldUpdate() { Core* c = core;
   } else {
     if (s52 != 0) return;                                  // s52 >= 2: done
     c->mem_w16(sm + 0x62, 0);
-    c->engine.zoneTransitionSetup(0xE);                    // native, FUN_8001D71C — zone/area transition setup
+    c->engine.audioDispatch.zoneTransitionSetup(0xE);                    // native, FUN_8001D71C — zone/area transition setup
   }
   c->mem_w16(sm + 0x52, (uint16_t)(c->mem_r16(sm + 0x52) + 1));
 }

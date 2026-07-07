@@ -90,8 +90,8 @@ void ScreenFade::sequence(uint32_t node) {
 
   if (outer == 0) {
     // Init step: three prep calls + arm the state to run its first ramp on the next tick.
-    c->engine.armModeState();                  // native — was rec_dispatch 0x8005082C(0,0,0)
-    c->engine.zoneTransitionSetup(11);         // FUN_8001D71C(11) — native
+    c->engine.modeStateArm.arm();                  // native — was rec_dispatch 0x8005082C(0,0,0)
+    c->engine.audioDispatch.zoneTransitionSetup(11);         // FUN_8001D71C(11) — native
     c->mem_w8(0x800BFA55u, 0);
     c->mem_w8(node + 3, 0);
     c->mem_w8(node + 2, (uint8_t)(outer + 1)); // -> outer state 1

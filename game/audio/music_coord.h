@@ -65,6 +65,6 @@ public:
   //   Also drops the fade to the "far" level (writes DAT_800BE222 = 0x47FF and pings the SPU
   //   queue helper 0x800750D8) if the running vol falls below 0x10 while voice[+0x33] is armed.
   //   Callable on any voice base; the field frame calls it with voice_base = 0x800BE1F8 (the
-  //   ambient/XA channel), per Engine::areaUpdateTail (game/scene/engine_stage.cpp).
+  //   ambient/XA channel), per AreaSlots::updateTail (game/world/area_slots.cpp).
   void voiceMixTick(uint32_t voice_base);
 };

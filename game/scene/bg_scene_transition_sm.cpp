@@ -82,11 +82,11 @@ void BgSceneTransitionSm::audioStub264BC(Core* c) {
   if (midTransitionGate(c)) { audioFadeTarget(c, -1); audioFadeTarget(c, 0x47FF); }
 }
 
-// FUN_80050970 — tiny dispatcher on the 800BF816 mode byte: 0 = armModeStateFromAreaTable ; else =
-// armModeState(0,0,0). Both native now (Engine::armModeState*).
+// FUN_80050970 — tiny dispatcher on the 800BF816 mode byte: 0 = ModeStateArm::armFromAreaTable ; else =
+// ModeStateArm::arm(0,0,0). Both native now.
 void BgSceneTransitionSm::bf816Dispatch(Core* c) {
-  if (c->mem_r8(0x800BF816u) == 0) c->engine.armModeStateFromAreaTable();
-  else                             c->engine.armModeState();
+  if (c->mem_r8(0x800BF816u) == 0) c->engine.modeStateArm.armFromAreaTable();
+  else                             c->engine.modeStateArm.arm();
 }
 
 void BgSceneTransitionSm::body(Core* c) {

@@ -42,6 +42,9 @@ Core::Core() {
   engine.cull.core = this;              // Engine-owned visibility cull subsystem
   engine.sceneEvents.core = this;       // Engine-owned scene-event arm subsystem
   engine.sfx.core = this;               // Engine-owned sound-FX trigger dispatcher
+  engine.audioDispatch.core = this;     // Engine-owned field-audio dispatch/settle cluster
+  engine.areaSlots.core = this;         // Engine-owned area-slot table state machine
+  engine.modeStateArm.core = this;      // Engine-owned mode-state arm primitive pair
   engine.script.core = this;            // Engine-owned cutscene bytecode dispatcher
   engine.actorTomba.core = this;        // Engine-owned Tomba per-frame logic (G-block owner)
   rng.core        = this;

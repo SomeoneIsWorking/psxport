@@ -1692,7 +1692,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           { 0x801054CEu, 56u, 25u, "input.record" },
           // Task-slot table (0x801FE000, stride 0x70, 3 slots) — scheduler state
           { 0x801FE000u, 0x70u, 3u, "task_slot" },
-          // Object arm-slot table (0x800BE238, stride 12, 24 slots) — walked by Engine::areaUpdateTail
+          // Object arm-slot table (0x800BE238, stride 12, 24 slots) — walked by AreaSlots::updateTail
           { 0x800BE238u, 12u, 24u, "area.arm_slot" },
           // Voice/audio state at 0x800BE1F8 (single struct, 0x40 B typical)
           { 0x800BE1F8u, 0x40u, 1u, "voice.state" },

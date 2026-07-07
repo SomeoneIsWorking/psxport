@@ -54,7 +54,7 @@ void MusicCoord::cutIfDialog() {
 }
 
 // Per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824 (RE'd via ghidra 2026-07-03). Called
-// from Engine::areaUpdateTail (game/scene/engine_stage.cpp) with voice_base = 0x800BE1F8 (the
+// from AreaSlots::updateTail (game/world/area_slots.cpp) with voice_base = 0x800BE1F8 (the
 // ambient/XA channel). Was previously — INCORRECTLY — wired to musicFadeIn() there, which merely
 // zeros the fade current + SPU CDVOL; that call was based on a wrong reading of what FUN_80075824
 // does. The RE'd body is a full ramp+boost+dialog-branch mixer (see header for the shape). SBS

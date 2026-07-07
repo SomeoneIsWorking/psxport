@@ -37,10 +37,10 @@ void Pool::resetControlBlock() {
   c->mem_w8 (S + 561, 0); c->mem_w8 (S + 593, 0); c->mem_w8 (S + 562, 0);
   c->mem_w8 (S + 595, 0); c->mem_w8 (S + 563, 0); c->mem_w8 (S + 571, 0);
   c->engine.sceneTransition.areaMaskTrigger((uint8_t)a4, (uint8_t)a5);   // was rec_dispatch 0x800782F0
-  c->engine.armModeStateFromAreaTable();                                  // was rec_dispatch 0x800508A8
+  c->engine.modeStateArm.armFromAreaTable();                                  // was rec_dispatch 0x800508A8
   uint32_t v = c->mem_r8(S + 566);
   uint8_t arg = (v == 0u || (uint32_t)(v - 7u) < 2u) ? 0u : 0xFFu;
-  c->engine.armModeState(arg, arg, arg);                                  // was rec_dispatch 0x8005082C
+  c->engine.modeStateArm.arm(arg, arg, arg);                                  // was rec_dispatch 0x8005082C
   c->mem_w8(0x800BF9D4u, 0);
   c->r[2] = 0x800C0000u;   // incidental v0
 }
@@ -310,7 +310,7 @@ void Pool::selectStateIndex(uint8_t area) {
     s0 = c->mem_r8(tbl + q);
   }
 
-  c->engine.audioDispatch3Way(s0, 1);   // native — was rec_dispatch 0x800750D8
+  c->engine.audioDispatch.dispatch3Way(s0, 1);   // native — was rec_dispatch 0x800750D8
   c->mem_w8(0x1F80023Bu, (uint8_t)s0);
   c->mem_w8(0x800BE22Bu, 0);
   c->r[2] = 0x800C0000u;   // incidental v0
