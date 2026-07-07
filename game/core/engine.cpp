@@ -419,7 +419,7 @@ void Engine::fieldFrameFaithful() { Core* c = core;
 }
 
 void Engine::fieldFrame() { Core* c = core;
-  if (c->game && !c->game->pc_skip) { fieldFrameFaithful(); return; }   // faithful: gen mirror
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80108B0Cu, fieldFrameFaithful()); return; }   // faithful: gen mirror
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
@@ -942,7 +942,9 @@ void Engine::fieldRunFaithful() { Core* c = core;
 }
 
 void Engine::fieldRun() { Core* c = core;
-  if (c->game && !c->game->pc_skip) { fieldRunFaithful(); return; }   // faithful: gen mirror
+  // NB fieldRun can yield transitively (case 0's substrate init chain descends into loaders) — only
+  // arm MV_CHECK on it while probing yield-free states; the standing gate is SBS lockstep.
+  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80106B98u, fieldRunFaithful()); return; }   // faithful: gen mirror
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {

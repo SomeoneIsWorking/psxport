@@ -45,12 +45,42 @@ public:
   // scratchpad + v0. (Was VerifyGate::run in game/world/verify_gate.cpp.)
   void run(uint32_t (*fn)(Core*), uint32_t superAddr, const char* gate, int on);
 
+  // ---- STRICT mirror TDD gate (USER 2026-07-08: verification must be RUN, not asserted) ----------
+  // MV_CHECK at a pc_faithful fork site: when armed for `addr` (PSXPORT_MIRROR_VERIFY=all or
+  // =0xADDR[,..]), snapshot guest state, run the NATIVE mirror, rewind, replay the PURE substrate
+  // body (EngineOverrides suppressed — exactly SBS core B), byte-compare RAM + scratchpad + the
+  // ABI register set (v0/v1, s0-s7, gp/sp/fp/ra, hi/lo) with NO exemptions (no dead-stack window),
+  // and ABORT on any diff. On a match, execution continues from the native result.
+  // Limits: yield-free mirrors only (scheduler_yield aborts while inCheck); host hw side effects
+  // run twice while armed (do not arm CD-advancing leaves — SBS covers those); no nesting.
+  bool strictArmed(uint32_t addr);      // also false while inCheck (no nesting)
+  void strictCheck(uint32_t addr, void (*fn)(void*), void* ctx);
+  bool inSubstrateLeg = false;          // rec_dispatch: suppress EngineOverrides (pure-B leg)
+  bool inCheck = false;                 // no-nesting + scheduler_yield guard
+
 private:
   static constexpr int kMaxChecks = 40;
   Check mChecks[kMaxChecks];
   int   mNChecks = 0;
   uint8_t* mRam0 = nullptr;
   uint8_t* mRamN = nullptr;
+  // strict-gate state
+  int      mStrictMode = -1;            // -1 unparsed, 0 off, 1 list, 2 all
+  uint32_t mStrictList[32]; int mStrictN = 0;
+  uint8_t* mStrictPreRam = nullptr; uint8_t* mStrictNatRam = nullptr;
+  uint8_t  mStrictNatSpad[0x400];
+  uint32_t mStrictNatRegs[16];
 };
+
+// Fork-site wrapper: strict-verify when armed, plain call otherwise.
+#define MV_CHECK(c, addr, call)                                                            \
+  do {                                                                                     \
+    Core* mv_c = (c);                                                                      \
+    if (mv_c->game && mv_c->game->verify.strictArmed(addr)) {                              \
+      auto mv_fn = [&]() { call; };                                                        \
+      struct MvRun { static void go(void* p) { (*static_cast<decltype(mv_fn)*>(p))(); } }; \
+      mv_c->game->verify.strictCheck((addr), &MvRun::go, &mv_fn);                          \
+    } else { call; }                                                                       \
+  } while (0)
 
 #endif

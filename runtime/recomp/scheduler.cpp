@@ -12,6 +12,7 @@
 #include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <execinfo.h>
 
 // Generic cooperative-task entry. POST-INTERPRETER (later-254): this is now just rec_dispatch
@@ -103,6 +104,11 @@ void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
 }
 
 void scheduler_yield(Core* c) {
+  if (c->game && c->game->verify.inCheck) {   // MV_CHECK legs must be yield-free (verify_harness.h)
+    fprintf(stderr, "[mirror-verify] FATAL: yield inside a strict-check leg — this mirror is not "
+                    "yield-free; gate it with SBS lockstep instead of MV_CHECK.\n");
+    abort();
+  }
   if (!c->game->pcSched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
   if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X\n",
                                   c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
