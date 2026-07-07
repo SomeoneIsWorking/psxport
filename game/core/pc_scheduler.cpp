@@ -9,8 +9,199 @@
 #include "cfg.h"
 #include "scheduler.h"  // TASKBASE/TASKSTRIDE/CUR_TASK + the substrate stanzas + yield primitive
 #include "c_subsys.h"   // xa_stream_owns_slot2/xa_stream_voice_busy/xa_stream_voice_release
+#include "coro.h"       // native task bodies park on the same Coro fiber the substrate bodies use
+#include "guest_call.h" // rec_dispatch — BIOS leaves + still-substrate leaves from the primitives
+#include "rng.h"        // Rng (c->rng) — FUN_8009A450, shared guest seed 0x80105EE8
 #include <setjmp.h>
 #include <stdio.h>
+
+// ---- Ported guest scheduler primitives (docs/faithful-execution.md) --------------------------
+// Byte-shape source: generated recomp bodies gen_func_80051F80 / 80051F14 / 80044BD4 / 80052010 /
+// 80051FB4 (shard_2/3/5/6.c) + Ghidra decomps (scratch/decomp/task_spawn.c, ram_f1000_all.c
+// 31833-31990). Every frame descent, spill offset and task-slot write below is that RE; the spill
+// VALUES are the live guest registers, so nested callee spills land organically.
+
+// Scratchpad/task-table anchors shared by the primitives (RE: FUN_80051E60 scheduler pass).
+static constexpr uint32_t kCurTaskPtr   = 0x1F800138u;  // scratchpad: current-task object ptr
+static constexpr uint32_t kDoneFlag     = 0x1F80019Bu;  // spawn-and-wait completion flag
+static constexpr uint32_t kWaitFrameCtr = 0x1F800198u;  // flag==2 wait-loop frame counter
+static constexpr uint32_t kSpawnParam3  = 0x801FE0DDu;  // FUN_80044BD4 param_3 latch
+static constexpr uint32_t kSpawnParam2  = 0x801FE0DEu;  // FUN_80044BD4 param_2 latch
+static constexpr uint32_t kTask1State   = 0x801FE070u;  // task-1 slot state hword
+
+// FUN_80051F80 — cooperative yield. Frame: sp-=24, ra spill at +16. Sets task[+0x02]=mode,
+// task[+0x00]=1 (YIELDED; FUN_800506D0 re-arms 1->2 next frame), then ChangeThread
+// (scheduler_yield: fiber-park on a Coro task, longjmp on a flat task, no-op outside a task).
+// The resume path is FUN_80051FA4 (ra reload + frame ascent) — also what a flat task's saved
+// r31=0x80051FA4 re-enters through the generic dispatch stanza.
+void PcScheduler::yieldPrim(uint16_t mode) {
+  Core* c = &game->core;
+  c->r[29] -= 24;
+  const uint32_t task = c->mem_r32(kCurTaskPtr);
+  c->mem_w32(c->r[29] + 16, c->r[31]);
+  c->mem_w16(task + 0x02, mode);
+  c->mem_w16(task + 0x00, 1);
+  c->r[2] = 1; c->r[3] = task; c->r[4] = 0xFF000000u;
+  c->r[31] = 0x80051FA4u;              // substrate resume PC (frame-ascent epilogue)
+  scheduler_yield(c);
+  // resumed (or the outside-a-task no-op): FUN_80051FA4 epilogue
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
+
+// FUN_80051F14 — arm a task slot. Frame: sp-=24, s0 spill at +16, ra at +20. Slot writes:
+// +0x0C=entry, +0x10=caller gp (FUN_80080930), +0x00=2 (RUNNABLE), +0x6F=0, +0x04=BIOS OpenTh
+// handle (0xFF000000 placeholder — threads.cpp thread_open). The BIOS-thread create maps to
+// arming the slot: the scheduler stanzas pick the RUNNABLE slot up on this frame's pass.
+void PcScheduler::spawnPrim(uint32_t slot, uint32_t entry_pc) {
+  Core* c = &game->core;
+  c->r[29] -= 24;
+  const uint32_t base = TASKBASE + slot * TASKSTRIDE;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = base;
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+  c->mem_w32(base + 0x0C, entry_pc);
+  c->r[31] = 0x80051F40u;
+  c->mem_w32(base + 0x10, c->r[28]);   // FUN_80080930 returns the caller's gp
+  c->mem_w16(base + 0x00, 2);          // RUNNABLE
+  c->r[31] = 0x80051F54u;
+  c->mem_w8(base + 0x6F, 0);
+  rec_dispatch(c, 0x80080890u);        // EnterCriticalSection
+  c->r[4] = c->mem_r32(base + 0x0C);
+  c->r[5] = c->mem_r32(base + 0x08);
+  c->r[6] = c->mem_r32(base + 0x10);
+  c->r[31] = 0x80051F68u;
+  rec_dispatch(c, 0x80080860u);        // BIOS OpenTh -> 0xFF000000 placeholder handle in v0
+  c->r[31] = 0x80051F70u;
+  c->mem_w32(base + 0x04, c->r[2]);
+  rec_dispatch(c, 0x800808A0u);        // ExitCriticalSection
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
+
+// FUN_80052010 — force-close a slot. Frame: sp-=24, s0 spill at +16, ra at +20 (written even on
+// the already-closed early-out, per the recomp prologue). Body: state=0, +0x6C=0, +0x6F=0,
+// EnterCS, CloseTh(task[+0x04]), ExitCS.
+void PcScheduler::forceClose(uint32_t slot) {
+  Core* c = &game->core;
+  c->r[29] -= 24;
+  const uint32_t base = TASKBASE + slot * TASKSTRIDE;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = base;
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+  if (c->mem_r16(base + 0x00) != 0) {
+    c->mem_w16(base + 0x00, 0);
+    c->mem_w8(base + 0x6C, 0);
+    c->r[31] = 0x80052054u;
+    c->mem_w8(base + 0x6F, 0);
+    rec_dispatch(c, 0x80080890u);      // EnterCriticalSection
+    c->r[4] = c->mem_r32(base + 0x04);
+    c->r[31] = 0x80052060u;
+    rec_dispatch(c, 0x80080870u);      // BIOS CloseTh
+    c->r[31] = 0x80052068u;
+    rec_dispatch(c, 0x800808A0u);      // ExitCriticalSection
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
+
+// FUN_80051FB4 — current task ends itself. Frame: sp-=24, s0 spill at +16, ra at +20. Sets
+// state=0 then ChangeThread: on a fiber task scheduler_yield sees state==0 and unwinds the
+// fiber (Coro::exit_now); on a flat task it longjmps to the stanza; outside a task it returns
+// and the epilogue runs.
+void PcScheduler::selfClose() {
+  Core* c = &game->core;
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = 0x1F800000u;
+  const uint32_t task = c->mem_r32(kCurTaskPtr);
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+  c->mem_w8(task + 0x6C, 0);
+  c->mem_w16(task + 0x00, 0);          // ENDED
+  c->r[31] = 0x80051FDCu;
+  c->mem_w8(task + 0x6F, 0);
+  rec_dispatch(c, 0x80080890u);        // EnterCriticalSection
+  c->r[4] = c->mem_r32(task + 0x04);
+  c->r[31] = 0x80051FF0u;
+  rec_dispatch(c, 0x80080870u);        // BIOS CloseTh
+  c->r[31] = 0x80051FF8u;
+  rec_dispatch(c, 0x800808A0u);        // ExitCriticalSection
+  c->r[4] = 0xFF000000u;
+  c->r[31] = 0x80052000u;
+  scheduler_yield(c);                  // ChangeThread — never returns on a task
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
+
+// FUN_80044BD4 — spawn a slot-1 task and wait for its done_flag. Frame: sp-=40, spills at
+// +16..+32 hold the caller's LIVE s0..s3 + ra; the body then keeps fn/flag/p2/p3 in s-regs
+// (r18/r19/r17/r16) so nested callee spills (spawnPrim's s0 etc.) hold live values too.
+void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag) {
+  Core* c = &game->core;
+  c->r[29] -= 40;
+  c->mem_w32(c->r[29] + 24, c->r[18]); c->r[18] = fn;
+  c->mem_w32(c->r[29] + 28, c->r[19]); c->r[19] = flag;
+  c->mem_w32(c->r[29] + 20, c->r[17]); c->r[17] = p2;
+  c->mem_w32(c->r[29] + 16, c->r[16]); c->r[16] = p3;
+  c->mem_w32(c->r[29] + 32, c->r[31]);
+  while (c->mem_r16(kTask1State) != 0) {           // drain: a live task-1 finishes first
+    c->r[4] = 1; c->r[31] = 0x80044C10u;
+    yieldPrim(1);
+  }
+  c->r[4] = 2; c->r[31] = 0x80044C2Cu;
+  forceClose(2);
+  c->mem_w8(kSpawnParam2, (uint8_t)c->r[17]);
+  c->r[17] = 0x1F800000u;
+  c->mem_w8(kSpawnParam3, (uint8_t)c->r[16]);
+  c->mem_w8(kDoneFlag, 0);
+  c->r[4] = 1; c->r[5] = c->r[18]; c->r[31] = 0x80044C50u;
+  spawnPrim(1, c->r[18]);
+  if (c->r[19] != 1) {
+    c->r[31] = 0x80044C64u;
+    const uint16_t stamp = (uint16_t)c->rng.next();        // FUN_8009A450 (guest seed 0x80105EE8)
+    const uint32_t task = c->mem_r32(kCurTaskPtr);
+    const uint8_t done = c->mem_r8(kDoneFlag);
+    c->mem_w16(task + 0x56, stamp);                        // RNG stamp on the waiting task
+    if (done == 0) {
+      c->r[18] = 2; c->r[16] = 0x1F800000u;                // wait-loop register state (RE)
+      do {
+        if (c->r[19] == 2) {
+          c->mem_w16(kWaitFrameCtr, (uint16_t)(c->mem_r16(kWaitFrameCtr) + 1));
+          c->r[31] = 0x80044CA0u;
+          rec_dispatch(c, 0x8007FD54u);                    // flag==2 per-wait-frame service
+        }
+        c->r[4] = 1; c->r[31] = 0x80044CA8u;
+        yieldPrim(1);                                      // parks the fiber one frame
+      } while (c->mem_r8(kDoneFlag) == 0);
+    }
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 32);
+  c->r[19] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 40;
+}
+
+// Guest-ABI trampolines: substrate callers reach the ported primitives through rec_dispatch
+// (EngineOverrides), args in r4..r7 exactly like the recomp bodies read them.
+static void eov_yield(Core* c)      { c->game->pcSched.yieldPrim((uint16_t)c->r[4]); }
+static void eov_spawn(Core* c)      { c->game->pcSched.spawnPrim(c->r[4], c->r[5]); }
+static void eov_spawnwait(Core* c)  { c->game->pcSched.spawnAndWait(c->r[4], c->r[5], c->r[6], c->r[7]); }
+static void eov_forceclose(Core* c) { c->game->pcSched.forceClose(c->r[4]); }
+static void eov_selfclose(Core* c)  { c->game->pcSched.selfClose(); }
+
+void PcScheduler::registerOverrides() {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80051F80u, "PcScheduler::yieldPrim",    eov_yield);
+  ov.register_(0x80051F14u, "PcScheduler::spawnPrim",    eov_spawn);
+  ov.register_(0x80044BD4u, "PcScheduler::spawnAndWait", eov_spawnwait);
+  ov.register_(0x80052010u, "PcScheduler::forceClose",   eov_forceclose);
+  ov.register_(0x80051FB4u, "PcScheduler::selfClose",    eov_selfclose);
+}
 
 
 // Entry PCs the native stanzas handle. Under BOTH pc_skip modes native handlers run — that's the
@@ -200,13 +391,70 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
   return STANZA_HANDLED;
 }
 
+// pc_faithful STAGE-0 — the whole ov_start arc as a NATIVE task body on a Coro fiber (faithful-
+// execution model). Fresh at entry 0x8010649C: fiber start with the task's guest sp and the
+// frame-loop registers, exactly like the substrate coro stanza. Resume: one co->resume() per
+// runnable frame; the body parks inside PcScheduler::yieldPrim with guest regs saved. Teardown:
+// when the body's sm==3 arm dispatches FUN_80052078 the entry rewrites to DEMO and state=3 —
+// cancel the fiber (its abandoned frames are plain data; the body holds no destructibles across
+// yields) so the DEMO stanza takes the slot fresh next tick.
+PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint32_t base, uint32_t st,
+                                                            int native_content, const R3000& loop) {
+  if (!native_content || game->pc_skip) return STANZA_NOT_MINE;
+  Coro*& co = coro[i];
+  const int fresh = (st == 3 || (st == 2 && !task_started[i]));
+  if (fresh) {
+    if (c->mem_r32(base + 0xc) != 0x8010649Cu) return STANZA_NOT_MINE;
+    if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
+    task_ctx[i] = loop;
+    task_ctx[i].r[29] = c->mem_r32(base + 8);
+    task_ctx[i].r[31] = 0xDEAD0000u;
+    task_started[i] = 1;
+    native_fiber[i] = 1;
+    demo_native[i] = 0; game_native[i] = 0; game_coop[i] = 0;
+    Core* cc = c;
+    co = new Coro();
+    co->start([cc] { cc->engine.startBinStageFaithful(); });
+  } else if (!native_fiber[i]) {
+    return STANZA_NOT_MINE;
+  } else if (st != 2 || !co || co->done()) {
+    if (st == 2) { task_started[i] = 0; native_fiber[i] = 0; }
+    return STANZA_HANDLED;                      // sleeping (st==1) or dead fiber
+  }
+  c->mem_w16(base, 4);
+  c->mem_w32(CUR_TASK, base);
+  cur_slot = i;
+  in_stage = 1;
+  cur_is_coro = 1;
+  static_cast<R3000&>(*c) = task_ctx[i];
+  if (cfg_dbg("sched"))
+    fprintf(stderr, "[sched] slot %d native-fiber %s st=%u sp=0x%08X\n", i,
+            fresh ? "start" : "resume", st, task_ctx[i].r[29]);
+  co->resume();
+  cur_is_coro = 0;
+  in_stage = 0;
+  if (co->done() || c->mem_r16(base) == 0) {
+    c->mem_w16(base, 0);
+    task_started[i] = 0;
+    native_fiber[i] = 0;
+    delete co; co = nullptr;
+  } else if (c->mem_r32(base + 0xc) != 0x8010649Cu) {
+    // FUN_80052078 swapped the stage (entry rewritten, state=3): the parked body will never be
+    // resumed — tear the fiber down so the new stage's stanza starts fresh.
+    task_started[i] = 0;
+    native_fiber[i] = 0;
+    delete co; co = nullptr;
+  }
+  return STANZA_HANDLED;
+}
+
 // STAGE-0 START.BIN step-spread — resume path. Between the fresh startBinStage tick (handled in
 // the generic dispatch stanza) and the final swap-to-DEMO tick, Engine::stage0Advance steps the
 // preload SM one step per scheduler tick to match the recomp coro yield cadence (docs/findings/
 // sbs.md Slip #1). Entry stays at 0x8010649C until the last step's native_start_stage swap.
 PcScheduler::StanzaResult PcScheduler::runStage0StepStanza(Core* c, int i, uint32_t base, uint32_t st,
                                                            int native_content) {
-  if (!(native_content && st == 2 && task_started[i]
+  if (!(native_content && game->pc_skip && st == 2 && task_started[i]
         && c->mem_r32(base + 0xc) == 0x8010649Cu && stage0_step[i] < 8))
     return STANZA_NOT_MINE;
   c->mem_w16(base, 4);
@@ -215,7 +463,7 @@ PcScheduler::StanzaResult PcScheduler::runStage0StepStanza(Core* c, int i, uint3
   static_cast<R3000&>(*c) = task_ctx[i];
   in_stage = 1;
   if (setjmp(yield_jmp) == 0) {                   // final step yields via longjmp
-    c->engine.stage0Advance(stage0_step[i]);
+    c->engine.stage0AdvanceSkip(stage0_step[i]);
   }
   in_stage = 0;
   task_ctx[i] = static_cast<R3000&>(*c);
@@ -255,6 +503,7 @@ void PcScheduler::step() {
     if (runGameStanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)          continue;
     if (!game->pc_skip && i == 1                                                                  // pc_faithful task-1 body
         && runTask1PreloadStanza(c, i, base, st, native_content, loop) == STANZA_HANDLED) continue;
+    if (runStage0FiberStanza(c, i, base, st, native_content, loop) == STANZA_HANDLED)   continue;
     if (recomp_run_coro_fiber_stanza(c, i, base, st, native_content, loop))             continue;
     if (runStage0StepStanza(c, i, base, st, native_content) == STANZA_HANDLED)          continue;
     recomp_run_generic_dispatch_stanza(c, i, base, st, native_content, loop);

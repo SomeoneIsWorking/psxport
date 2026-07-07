@@ -1540,22 +1540,6 @@ static bool resolve_via_iso9660(Core* c, uint32_t name_ptr, uint32_t* lba, uint3
   return false;
 }
 
-// FAITHFUL-mode resolver: rec_dispatch the substrate's CdSearchFile so libcd's dir cache is
-// populated as a side effect. Uses a caller-owned buffer in guest RAM for the 24-byte CdlFILE.
-static constexpr uint32_t kGuestCdSearchFile = 0x8008B8F0u;
-static constexpr uint32_t kGuestCdPosToInt   = 0x8008A110u;
-static bool resolve_via_libcd(Core* c, uint32_t name_ptr, uint32_t buf,
-                              uint32_t* lba, uint32_t* size) {
-  c->r[4] = buf; c->r[5] = name_ptr;
-  rec_dispatch(c, kGuestCdSearchFile);
-  if (c->r[2] == 0) return false;
-  c->r[4] = buf;
-  rec_dispatch(c, kGuestCdPosToInt);
-  *lba  = c->r[2];
-  *size = c->mem_r32(buf + 4);
-  return true;
-}
-
 // libcd directory cache — native port of FUN_8008BBE8 (CdNewMedia) + FUN_8008BF50 (CdCacheFile),
 // the two libcd helpers that populate the game's in-memory directory cache. The pc_skip path uses
 // native ISO9660 (resolve_via_iso9660 above) for file lookup — fast, doesn't touch libcd — but the
@@ -1689,32 +1673,6 @@ static void startBinCommonAdvance(Core* c, Asset& asset, Rng& rng) {
   c->mem_w16(task + 0x48, 1);
 }
 
-// Substrate's task-0 stack-write patterns during the STAGE-0 SM loop yields — emitted here so
-// A's guest RAM byte-matches B's fiber-driven substrate wait-loop scratch. Offsets are derived
-// from the recompiled shard prologues:
-//   ov_start_gen_8010649C : sp -= 456
-//   FUN_80044BD4          : sp -= 40, saves s0-s3+ra @ sp+16..32
-//   FUN_80051F80          : sp -= 24, saves ra       @ sp+16
-// so during a FUN_80044BD4 wait-loop yield, sp = task0_sp_initial - 520 and the ra save lands
-// at task0_sp_initial - 504.
-static uint32_t task0_initial_sp(Core* c) { return c->mem_r32(0x801FE008u); }
-
-// FUN_80051F80 prologue write: `sw ra, 16(sp)`. Called from FUN_80044BD4's inner wait loop
-// (ra=0x80044CA8) and from ov_start_gen_8010649C's trailing L_801067E4 yield (ra=0x801067EC).
-static void emit_fun_80051F80_prologue(Core* c, uint32_t sp, uint32_t ra) {
-  c->mem_w32(sp + 16, ra);
-}
-
-// FUN_80044BD4 prologue writes: sw s0..s3 + ra at sp+16..32. Called ONCE per spawn+wait cycle.
-static void emit_fun_80044BD4_prologue(Core* c, uint32_t sp, uint32_t ra,
-                                       uint32_t s0, uint32_t s1, uint32_t s2, uint32_t s3) {
-  c->mem_w32(sp + 16, s0);
-  c->mem_w32(sp + 20, s1);
-  c->mem_w32(sp + 24, s2);
-  c->mem_w32(sp + 28, s3);
-  c->mem_w32(sp + 32, ra);
-}
-
 // One-line dispatchers — the pc_skip/faithful fork lives at method granularity so each path
 // reads top-to-bottom without inline branching. User rule (2026-07-04): no code blocks inside
 // if (pc_skip) / if (!pc_skip) — call one of two named methods.
@@ -1771,86 +1729,130 @@ void Engine::startBinStageSkip() {
 }
 
 // ── STARTBINSTAGE — pc_faithful (PSXPORT_PC_SKIP=0) ─────────────────────────────────────
-// Hand port of ov_start_gen_8010649C's prologue + LoadImage + libcd file-table build up to
-// (but not including) its SM loop head at L_80106728. Substrate prologue:
-//   sp -= 456; sw ra 452; sw s4 448; sw s3 444; sw s2 440; sw s1 436; sw s0 432
-// LoadImage(rect,src) + DrawSync(0). Then the three file-name tables + three XA singletons via
-// CdSearchFile+CdPosToInt (CdlFILE output at sp+400 matches substrate's caller-local buffer).
-// SM loop tail (spawn+wait cycles) is driven by Engine::stage0AdvanceFaithful; here we prime the
-// first cycle by spawning task-1 (FUN_80044F58), stamping RNG (FUN_80044BD4 param_4=0 branch),
-// and writing sm[0x48]:=1 in the same tick as substrate L_8010678C.
+// The COMPLETE ov_start_gen_8010649C task body as a native port, run on a PcScheduler fiber
+// (runStage0FiberStanza) — faithful-execution model, docs/faithful-execution.md. It executes on
+// the guest machine state: locals in the real guest frame (sp descent 456; LoadImage RECT at
+// sp+400, per-iteration CdlFILE records at sp+16+i*24, XA CdlFILE at sp+408), s-registers
+// maintained live through the loops (nested callee prologues spill them into compared task-0
+// stack bytes), and suspension inside PcScheduler primitives — so the per-frame slice cadence
+// and every wait-loop stack byte match core B by construction. Guest identity constants (call-
+// site ra values, table addresses) are the RE of the START.BIN overlay body (generated/
+// ov_start_shard_0.c + scratch/decomp/overlay.c FUN_801064f0).
+//
+// The body never returns: the sm==3 arm dispatches the still-substrate stage-swap leaf
+// FUN_80052078, which parks the fiber forever; the stanza cancels it once the entry rewrites.
+// NOTE fiber teardown unwinds via longjmp — no destructibles may live across a yield here.
+namespace {
+struct StartBinFaithfulLoop {
+  uint32_t names, dest, count;
+  uint32_t raSearch, raPosToInt, raPrintf;   // guest call-site ra constants (part of the port's identity)
+};
+constexpr StartBinFaithfulLoop kStartBinFaithfulLoops[3] = {
+  { 0x80106808u, 0x800BE118u, 25, 0x8010651Cu, 0x80106540u, 0x80106530u },  // \BIN overlays
+  { 0x8010686Cu, 0x800BE1E0u,  3, 0x80106594u, 0x801065B8u, 0x801065A8u },  // \BIN stage .BINs
+  { 0x801067F4u, 0x800BE0F0u,  5, 0x8010660Cu, 0x80106630u, 0x80106620u },  // \CD data files
+};
+struct StartBinFaithfulXa {
+  uint32_t name, dest;
+  uint32_t raSearch, raPosToInt, raPrintf;
+};
+constexpr StartBinFaithfulXa kStartBinFaithfulXa[3] = {
+  { 0x8010646Cu, 0x1F80021Cu, 0x80106670u, 0x80106694u, 0x80106684u },      // \CD\VOICE.XA
+  { 0x8010647Cu, 0x1F800220u, 0x801066B4u, 0x801066D8u, 0x801066C8u },      // \CD\DEMO.XA
+  { 0x8010648Cu, 0x1F800224u, 0x801066F8u, 0x8010671Cu, 0x8010670Cu },      // \CD\BGM.XA
+};
+constexpr uint32_t kNotFoundFmt = 0x80106454u;   // "Not found file name %s"
+}  // namespace
+
 void Engine::startBinStageFaithful() {
   Core* c = core;
-  c->mem_w16(0x1F800008u + 0, 944);
-  c->mem_w16(0x1F800008u + 2, 256);
-  c->mem_w16(0x1F800008u + 4, 16);
-  c->mem_w16(0x1F800008u + 6, 1);
+  PcScheduler& sched = c->game->pcSched;
 
-  const uint32_t saved_sp = c->r[29];
+  // Prologue: sp -= 456; spill ra/s4..s0 at 452..432 (live values — at fiber start these are the
+  // frame-loop registers + the 0xDEAD0000 entry ra, same as core B's fiber).
   c->r[29] -= 456;
-  c->mem_w32(c->r[29] + 452, c->r[31]);
-  c->mem_w32(c->r[29] + 448, c->r[20]);
-  c->mem_w32(c->r[29] + 444, c->r[19]);
-  c->mem_w32(c->r[29] + 440, c->r[18]);
-  c->mem_w32(c->r[29] + 436, c->r[17]);
-  c->mem_w32(c->r[29] + 432, c->r[16]);
+  const uint32_t S = c->r[29];
+  c->mem_w32(S + 452, c->r[31]);
+  c->mem_w32(S + 448, c->r[20]);
+  c->mem_w32(S + 444, c->r[19]);
+  c->mem_w32(S + 440, c->r[18]);
+  c->mem_w32(S + 436, c->r[17]);
+  c->mem_w32(S + 432, c->r[16]);
 
-  c->r[4] = 0x1F800008u; c->r[5] = kStartBinLoadImageSrc; rec_dispatch(c, 0x80081218u);
-  c->r[4] = 0;                                            rec_dispatch(c, 0x80080F6Cu);
+  // LoadImage RECT {944,256,16,1} is a frame local at sp+400 (NOT scratchpad — that's the
+  // pc_skip shortcut's location).
+  c->mem_w16(S + 400, 944);
+  c->mem_w16(S + 402, 256);
+  c->mem_w16(S + 404, 16);
+  c->mem_w16(S + 406, 1);
+  c->r[4] = S + 400; c->r[5] = kStartBinLoadImageSrc; c->r[31] = 0x801064E8u;
+  rec_dispatch(c, 0x80081218u);                       // libgs LoadImage
+  c->r[4] = 0; c->r[31] = 0x801064F0u;
+  rec_dispatch(c, 0x80080F6Cu);                       // DrawSync(0)
 
+  // Three CdSearchFile loops. Loop registers live in the guest s-regs (r16=CdlFILE ptr,
+  // r17=name-table ptr, r18=dest ptr, r19=index, r20=i*24) because CdSearchFile's prologue
+  // spills them into its frame — compared task-0 stack bytes.
   LibcdNative libcd(c);
-  const uint32_t buf = c->r[29] + 400;
-  for (const auto& L : kStartBinLoops) {
-    for (uint32_t i = 0; i < L.count; i++) {
-      if (libcd.searchFile(buf, c->mem_r32(L.name_table + i * 4))) {
-        c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
-        c->mem_w32(L.dest_table + i * 8,     c->r[2]);
-        c->mem_w32(L.dest_table + i * 8 + 4, c->mem_r32(buf + 4));
+  for (const auto& L : kStartBinFaithfulLoops) {
+    c->r[19] = 0; c->r[20] = 0; c->r[18] = L.dest; c->r[17] = L.names;
+    do {
+      c->r[16] = S + 16 + c->r[20];                   // per-iteration CdlFILE record
+      if (libcd.searchFile(c->r[16], c->mem_r32(c->r[17]), L.raSearch)) {
+        c->mem_w32(c->r[18],     libcd.posToInt(c->r[16], L.raPosToInt));
+        c->mem_w32(c->r[18] + 4, c->mem_r32(c->r[16] + 4));
+      } else {
+        c->r[4] = kNotFoundFmt; c->r[5] = c->mem_r32(c->r[17]); c->r[31] = L.raPrintf;
+        rec_dispatch(c, 0x8009A730u);
       }
-    }
-  }
-  for (uint32_t i = 0; i < 3; i++) {
-    const auto& X = kStartBinXa[i];
-    if (libcd.searchFile(buf, X.name_ptr)) {
-      c->r[4] = buf; rec_dispatch(c, kGuestCdPosToInt);
-      c->mem_w32(X.lba_dest, c->r[2]);
-    }
+      c->r[18] += 8; c->r[17] += 4; c->r[19] += 1; c->r[20] += 24;
+    } while ((int32_t)c->r[19] < (int32_t)L.count);
   }
 
-  c->r[16] = c->mem_r32(c->r[29] + 432);
-  c->r[17] = c->mem_r32(c->r[29] + 436);
-  c->r[18] = c->mem_r32(c->r[29] + 440);
-  c->r[19] = c->mem_r32(c->r[29] + 444);
-  c->r[20] = c->mem_r32(c->r[29] + 448);
-  c->r[31] = c->mem_r32(c->r[29] + 452);
-  c->r[29] = saved_sp;
+  // Three XA singletons — CdlFILE at sp+408, LBA to the scratchpad slots.
+  for (const auto& X : kStartBinFaithfulXa) {
+    c->r[16] = S + 408;
+    c->r[17] = X.name;
+    if (libcd.searchFile(c->r[16], c->r[17], X.raSearch)) {
+      c->mem_w32(X.dest, libcd.posToInt(c->r[16], X.raPosToInt));
+    } else {
+      c->r[4] = kNotFoundFmt; c->r[5] = c->r[17]; c->r[31] = X.raPrintf;
+      rec_dispatch(c, 0x8009A730u);
+    }
+  }
+  fprintf(stderr, "[start.bin] pc_faithful file table built via libcd (fiber body)\n");
 
+  // SM loop (L_80106744): the state constants live in the s-regs — spawnAndWait's prologue
+  // spills them (s0=3, s1=2, s2=1, s3=r19 left at 5 by loop 3's exit — the RE'd live values).
+  c->r[16] = 3; c->r[17] = 2; c->r[18] = 1;
   uint32_t task = c->mem_r32(CUR_TASK);
-  c->mem_w16(task + 0x4a, 0);                // substrate L_80106728 initial task+74:=0
-
-  // Substrate L_80106744 loop, sm=0 case (L_8010678C): task-1 spawn + RNG + sm[0x48]:=1, then
-  // FUN_80044BD4 enters its wait loop → task-0 yields (handled by stage0AdvanceFaithful step 0).
-  // Emit FUN_80044BD4 prologue writes (once per cycle, at S0-496 offsets +16..+32). First-cycle
-  // ra=0x801067A8 (return of the first jal FUN_80044BD4 at L_8010678C), s0..s3 = params.
-  const uint32_t S0 = task0_initial_sp(c);
-  emit_fun_80044BD4_prologue(c, S0 - 496, 0x801067A8u,
-                             /*s0=*/0, /*s1=*/0, /*s2=*/0, /*s3=*/0);
-
-  const uint32_t saved_gp = c->r[28];
-  c->r[28] = 0x800BE0D4u;
-  native_task_spawn(c, 1, 0x80044F58u);      // leaves task-1 state=2 runnable — body runs on same tick
-  c->r[28] = saved_gp;
-  c->mem_w8(0x1F80019Bu, 0);                 // FUN_80044BD4: clear done_flag before spawn
-  c->mem_w8(0x801FE0DDu, 0);                 // FUN_80044BD4 param_3=0
-  c->mem_w8(0x801FE0DEu, 0);                 // FUN_80044BD4 param_2=0
-  c->mem_w16(task + 0x56, (uint16_t)c->rng.next());   // FUN_80044BD4 RNG stamp (param_4==0)
-  c->mem_w16(task + 0x48, 1);                // substrate L_8010678C writes sm:=1 BEFORE spawn call
-
-  fprintf(stderr, "[start.bin] pc_faithful file table built via libcd; SM loop primed\n");
-}
-
-int Engine::stage0Advance(uint8_t& step) {
-  return core->game->pc_skip ? stage0AdvanceSkip(step) : stage0AdvanceFaithful(step);
+  c->mem_w16(task + 0x48, 0);
+  c->mem_w16(task + 0x4A, 0);
+  for (;;) {
+    task = c->mem_r32(CUR_TASK);
+    switch (c->mem_r16(task + 0x48)) {
+      case 0:                                        // L_8010678C: spawn task-1 texgroup preload
+        c->mem_w16(task + 0x48, 1);
+        c->mem_w16(task + 0x4A, 0);
+        c->r[4] = 0x80044F58u; c->r[5] = 0; c->r[6] = 0; c->r[7] = 0; c->r[31] = 0x801067A8u;
+        sched.spawnAndWait(0x80044F58u, 0, 0, 0);    // parks here once per wait frame
+        break;
+      case 1:                                        // L_801067B0: spawn task-1 stage-1 preload
+        c->mem_w16(task + 0x48, 2);
+        c->r[4] = 0x8004514Cu; c->r[5] = 1; c->r[6] = 1; c->r[7] = 0; c->r[31] = 0x801067CCu;
+        sched.spawnAndWait(0x8004514Cu, 1, 1, 0);
+        break;
+      case 2:
+        c->mem_w16(task + 0x48, 3);
+        break;
+      case 3:                                        // L_801067DC: stage swap to DEMO
+        c->r[4] = 1; c->r[31] = 0x801067E4u;
+        rec_dispatch(c, 0x80052078u);                // parks the fiber; stanza cancels on entry rewrite
+        break;
+    }
+    c->r[4] = 1; c->r[31] = 0x801067ECu;             // L_801067E4 trailing per-iteration yield
+    sched.yieldPrim(1);
+  }
 }
 
 // ── STAGE0ADVANCE — pc_skip cadence ─────────────────────────────────────────────────────
@@ -1871,75 +1873,3 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
   return 1;
 }
 
-// ── STAGE0ADVANCE — pc_faithful cadence ─────────────────────────────────────────────────
-// Substrate ov_start_gen_8010649C SM loop (L_80106744..) — spawns task-1 TWICE via FUN_80044BD4
-// spawn+wait, yielding a tick per state transition. sm[0x48]:=1 was written by
-// startBinStageFaithful before this method is first called.
-//   step 0 : wait for task-1 (FUN_80044F58, spawned by startBinStageFaithful) done_flag
-//   step 1 : L_801067E4 trailing yield after wait exit
-//   step 2 : sm=1 case → sm:=2, FUN_80044BD4 spawn task-1 with FUN_8004514C + RNG stamp
-//   step 3 : wait for task-1 (FUN_8004514C) done_flag
-//   step 4 : trailing yield
-//   step 5 : sm=2 case → sm:=3
-//   step 6 : trailing yield
-//   step 7 : sm=3 case → startStage(1) (swap to DEMO)
-int Engine::stage0AdvanceFaithful(uint8_t& step) {
-  Core* c = core;
-  uint32_t task = c->mem_r32(CUR_TASK);
-  const uint32_t S0 = task0_initial_sp(c);
-  const uint32_t yield_sp_wait = S0 - 520;      // FUN_80051F80 sp during FUN_80044BD4 wait loop
-  const uint32_t yield_sp_tail = S0 - 480;      // FUN_80051F80 sp for ov_start's trailing yield
-  switch (step) {
-    case 0:
-      emit_fun_80051F80_prologue(c, yield_sp_wait, 0x80044CA8u);     // wait-loop iter save-ra
-      if (c->mem_r8(0x1F80019Bu) == 0) return 1;                     // still waiting on task-1
-      step++;
-      return 1;
-    case 1:
-      emit_fun_80051F80_prologue(c, yield_sp_tail, 0x801067ECu);     // ov_start L_801067E4 yield
-      step++;
-      return 1;
-    case 2: {
-      c->mem_w16(task + 0x48, 2);
-      // FUN_80044BD4 prologue for the second spawn+wait cycle. ra=0x801067CC (return of the second
-      // jal FUN_80044BD4 in ov_start at L_801067B0). s0=param_3=0, s1=param_2=1, s2=task[1] state
-      // read at prologue (task-1 slot is state=0 after previous FUN_8004514C completion), s3=param_4=0.
-      // Actually: the FIRST FUN_80044BD4 call had ra=0x801067A8 s1=0; we emit that in startBin —
-      // here we emit the SECOND cycle's prologue.
-      emit_fun_80044BD4_prologue(c, S0 - 496, 0x801067CCu,
-                                 /*s0=*/0, /*s1=*/1, /*s2=*/0, /*s3=*/0);
-      c->mem_w8(0x1F80019Bu, 0);
-      c->mem_w8(0x801FE0DDu, 0);
-      c->mem_w8(0x801FE0DEu, 0);
-      const uint32_t saved_gp = c->r[28];
-      c->r[28] = 0x800BE0D4u;
-      native_task_spawn(c, 1, 0x8004514Cu);
-      c->r[28] = saved_gp;
-      c->mem_w16(task + 0x56, (uint16_t)c->rng.next());
-      step++;
-      return 1;
-    }
-    case 3:
-      emit_fun_80051F80_prologue(c, yield_sp_wait, 0x80044CA8u);
-      if (c->mem_r8(0x1F80019Bu) == 0) return 1;
-      step++;
-      return 1;
-    case 4:
-      emit_fun_80051F80_prologue(c, yield_sp_tail, 0x801067ECu);
-      step++;
-      return 1;
-    case 5:
-      c->mem_w16(task + 0x48, 3);
-      step++;
-      return 1;
-    case 6:
-      emit_fun_80051F80_prologue(c, yield_sp_tail, 0x801067ECu);
-      step++;
-      return 1;
-    case 7:
-      startStage(1);
-      scheduler_yield(c);
-      return 0;
-  }
-  return 1;
-}

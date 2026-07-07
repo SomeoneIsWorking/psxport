@@ -191,20 +191,18 @@ public:
   // libcd dir cache populated by cdlibcd_* end-state (bypasses libcd), native ISO9660 file
   // lookups, inline asset.preloadTexgroup, task-1 slot closed with no body ever running.
   void startBinStageSkip();
-  // startBinStageFaithful: pc_skip=false byte-exact port. Substrate prologue (sp-=456 + r16-r20+ra
-  // spills), libgs LoadImage/DrawSync via rec_dispatch, libcd file-table build via LibcdNative,
-  // task-1 spawn+RNG-stamp+sm[0x48]=1 at same tick as substrate L_8010678C.
+  // startBinStageFaithful: pc_skip=false byte-exact port — the COMPLETE ov_start_gen_8010649C
+  // task body, run on a PcScheduler fiber (runStage0FiberStanza). Guest-frame locals (sp-=456,
+  // CdlFILE records at sp+16+i*24), live s-reg discipline, libcd file-table build via LibcdNative,
+  // SM loop suspending inside PcScheduler::spawnAndWait/yieldPrim each frame. Never returns —
+  // ends parked in the FUN_80052078 stage swap (the stanza cancels the fiber).
   void startBinStageFaithful();
 
-  // stage0Advance: one step of the STAGE-0 preload SM. Called by the scheduler on each tick after
-  // startBinStage. Returns 1 while more steps remain, 0 when the DEMO swap has landed.
-  int stage0Advance(uint8_t& step);
-  // stage0AdvanceSkip: pc_skip cadence — 5 steps: RNG stand-in, inline preloadStage1, sm advances,
-  // startStage(1). Collapses substrate's multi-tick spawn+wait cycles into inline calls.
+  // stage0AdvanceSkip: pc_skip cadence — one step per scheduler tick after startBinStageSkip:
+  // RNG stand-in, inline preloadStage1, sm advances, startStage(1). Collapses the substrate's
+  // multi-tick spawn+wait cycles into inline calls. (The faithful path has no step machinery —
+  // its cadence emerges from the fiber suspending in the ported primitives.)
   int stage0AdvanceSkip(uint8_t& step);
-  // stage0AdvanceFaithful: substrate ov_start_gen_8010649C's L_80106744 SM loop — 8 steps that
-  // mirror sm[0x48]=1 wait → yield → sm=2 spawn+RNG → wait → yield → sm=3 → yield → startStage(1).
-  int stage0AdvanceFaithful(uint8_t& step);
 
 
   // task0Bootstrap: the boot-init entry that (a) resolves \BIN\START.BIN natively via disc_find_file,

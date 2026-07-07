@@ -67,6 +67,8 @@ int main(int argc, char** argv) {
   game->cd.overridesInit(); // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
+  game->pcSched.registerOverrides();   // ported scheduler primitives (yield/spawn/spawn-and-wait/close)
+                                       // at their guest addresses (EngineOverrides; core B never consults)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0

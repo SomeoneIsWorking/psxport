@@ -52,6 +52,28 @@ public:
   Coro*   coro[3] = {};          // per-slot fiber (heap; nullptr = no live full-PSX task on this slot)
   int     cur_is_coro = 0;       // 1 while a Coro task is running -> switch yields via the fiber
 
+  // ---- Faithful-execution model (docs/faithful-execution.md, 2026-07-07) -----------------------
+  // A NATIVE ported task body can run on a Coro fiber (same suspension mechanism core B's substrate
+  // bodies use): one resume per runnable task per frame, suspension inside the ported yield
+  // primitive with guest registers saved to task_ctx. Every instruction of the body is ported
+  // native C++ — the fiber is only the parking mechanism, so this does not route pc_skip=0 to the
+  // substrate. native_fiber[i] marks the slot's Coro as a native body (vs a recomp substrate body).
+  int     native_fiber[3] = {};
+
+  // Ported guest scheduler primitives. Each reproduces its substrate body's guest-stack discipline
+  // exactly (frame descent, ra/s-reg spills of the LIVE register values, task-slot writes) so a
+  // strict SBS byte-compare holds. Callers must have c->r[31] set to the guest call-site constant
+  // of THEIR RE'd body before calling (the primitives spill it), exactly as a jal would.
+  void yieldPrim(uint16_t mode);                 // FUN_80051F80: task yield (state=1, fiber-park)
+  void spawnPrim(uint32_t slot, uint32_t entry_pc); // FUN_80051F14: arm slot (entry/gp/state=2/tcb)
+  void spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag); // FUN_80044BD4
+  void forceClose(uint32_t slot);                // FUN_80052010: close another slot
+  void selfClose();                              // FUN_80051FB4: current task ends itself
+  // Wire the five primitives into game->engine_overrides at their guest addresses so substrate
+  // callers on core A (via rec_dispatch) reach the same implementations. Core B (psx_fallback)
+  // never consults the table.
+  void registerOverrides();
+
   // ---- Native START.BIN (0x8010649C) step-spread (attack (a), docs/findings/sbs.md Slip #1) ----
   // The recomp body of 0x8010649C is a per-iteration yield loop over 4 sm[0x48] states; each state's
   // FUN_80044BD4 wait costs 1..2 ticks on B's coro. Native ran them all inline in ONE tick, collapsing
@@ -125,6 +147,11 @@ private:
                                      int native_content, const R3000& loop);
   StanzaResult runStage0StepStanza(Core* c, int i, uint32_t base, uint32_t st,
                                    int native_content);
+  // pc_faithful STAGE-0: the whole ov_start arc (Engine::startBinStageFaithful) as a native task
+  // body on a fiber — fresh at entry 0x8010649C, resumed while suspended in the ported yield,
+  // torn down when FUN_80052078 swaps the entry to DEMO (state=3).
+  StanzaResult runStage0FiberStanza(Core* c, int i, uint32_t base, uint32_t st,
+                                    int native_content, const R3000& loop);
   int warned_demo_yield = 0;   // warn-once latches for the frontier diagnostics
   int warned_game_yield = 0;
 };

@@ -34,10 +34,18 @@ public:
   // into the caller-owned output buffer at `out_cdlfile_guest_addr` (6 words @ that guest
   // address). Returns the guest address of the match (or 0 on no-match).
   //
-  // The 24-byte output write into caller-owned guest memory is what byte-exactness requires —
-  // that address must equal what the substrate caller would have used, i.e. the port on core A
-  // has to allocate its `CdlFILE` at the same guest-RAM address the substrate caller would.
-  uint32_t searchFile(uint32_t out_cdlfile_guest_addr, uint32_t path_guest_addr);
+  // GUEST-STACK-RESIDENT (faithful-execution model): the chain runs at the live guest sp
+  // (c->r[29]), so its locals — the ";1" filename copy buffers, dir-parse scratch — land in the
+  // same guest frames the substrate caller's chain used. Two caller obligations for strict SBS:
+  //   - `out_cdlfile_guest_addr` must be the SAME guest address the substrate caller used
+  //     (its own frame local), and
+  //   - `ra` is the guest call-site constant of the caller's RE'd body — CdSearchFile spills it
+  //     into its frame, so it is part of the byte contract.
+  uint32_t searchFile(uint32_t out_cdlfile_guest_addr, uint32_t path_guest_addr, uint32_t ra);
+
+  // FUN_8008A110 — CdPosToInt: BCD min/sec/frame in the CdlFILE -> absolute LBA in v0. Same
+  // `ra` contract as searchFile.
+  uint32_t posToInt(uint32_t cdlfile_guest_addr, uint32_t ra);
 
 private:
   Core* core;

@@ -19,7 +19,15 @@ uint32_t LibcdNative::cacheFile(uint32_t dir_index) {
   return core->r[2];
 }
 
-uint32_t LibcdNative::searchFile(uint32_t out_cdlfile_guest_addr, uint32_t path_guest_addr) {
+uint32_t LibcdNative::searchFile(uint32_t out_cdlfile_guest_addr, uint32_t path_guest_addr,
+                                 uint32_t ra) {
+  core->r[31] = ra;                     // guest call-site — spilled by CdSearchFile's prologue
   rc2(core, 0x8008B8F0u, out_cdlfile_guest_addr, path_guest_addr);
+  return core->r[2];
+}
+
+uint32_t LibcdNative::posToInt(uint32_t cdlfile_guest_addr, uint32_t ra) {
+  core->r[31] = ra;
+  rc1(core, 0x8008A110u, cdlfile_guest_addr);
   return core->r[2];
 }
