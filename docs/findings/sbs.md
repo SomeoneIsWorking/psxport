@@ -5,6 +5,28 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Strict mirror TDD gate landed (2026-07-08) — past "verified" claims are UNVERIFIED
+
+- **USER directive**: "Things have gotten this bad due to not having TDD in the first place —
+  [the earlier porting sessions] said [they] verified all the steps, meanwhile obviously [they]
+  didn't verify anything." Consequence: NO existing "verified"/"byte-exact"/"gated" note in this
+  repo may be trusted unless a gate run (SBS lockstep or the mirror gate below) is cited with its
+  result. Treat unverified faithful mirrors as WRONG until a gate passes.
+- **The gate**: `PSXPORT_MIRROR_VERIFY=all|0xADDR[,..]` + `MV_CHECK(c, addr, xFaithful())` at
+  pc_faithful fork sites (game/core/verify_harness.h strictCheck): runs the native mirror AND
+  replays the pure substrate body (EngineOverrides suppressed = core B) from the same pre-state,
+  byte-compares RAM+scratchpad+ABI regs (v0/v1, s0-s7, gp/sp/fp/ra, hi/lo) with NO exemptions
+  (no dead-stack window — the old VerifyHarness::run window exemption is exactly how false
+  positives slipped), aborts with per-byte attribution. Yield-free mirrors only.
+- **First catch**: armed on 0x80108B0C it named the walkAll (0x8007A904) missing sp-=24 frame
+  (native writes at 0x801FE870+0x18 vs substrate) in ONE run — the same defect SBS took a whole
+  lockstep run + DISPWATCH triangulation to localize.
+- **Systematic audit (sonnet fleet, wf_6726383d)**: ALL 18 field-frame-path natives audited are
+  missing their gen frame discipline (frame push/spills/jal-site ras) — the pre-TDD ports
+  reproduced the STORES but not the STACK BYTES. Fix fleet + TDD loop: wf_bf6b0541.
+- **refs**: game/core/verify_harness.{h,cpp}, docs/config.md MIRROR_VERIFY, skill sbs-diverge
+  "per-function TDD gate" section, memory feedback_delegate_mirror_audits_to_cheap_agents.
+
 ## Rewind-and-arm is UNSOUND with live fibers — skipped; sbs diff shows detection-time bytes (2026-07-07)
 
 - **symptom**: attached to a paused f33 divergence (main-thread stack top 0x801FFFC8..) over the

@@ -124,6 +124,15 @@ or level — they can't be a bare channel:
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
+- **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
+  equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
+  `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the
+  native mirror AND replays the pure substrate body (EngineOverrides suppressed = SBS core B)
+  from the same pre-state, byte-compares RAM + scratchpad + ABI regs with NO exemptions, and
+  ABORTS on any diff with per-byte native-vs-substrate attribution. Yield-free mirrors only
+  (a yield inside a check leg aborts with a message); host hw side effects run twice while armed
+  (do not arm CD-advancing leaves — SBS covers them). USER 2026-07-08: mirrors must be verified
+  by RUNNING this gate, never by assertion.
 - **Valued diagnostics (still named, gfx-debug.md documents them):** `SCENEDUMP`, `PROVAT`, `GTEPROBE`,
   `POLYDUMP`/`POLYAT`, `FADEDBG`, `SEMIDUMP`, `VK_SHOT`/`VK_SHOTSEQ`, `VK_DIFF`, `GPUTRACE`,
   `VRAMDUMP`/`VRAMDUMP_AT`, `RAMDUMP`/`RAMDUMP_FRAME`, `CLOBBERDUMP`, `CLUTWATCH`, `WWATCH`, `CW`/`CW_BT`,
