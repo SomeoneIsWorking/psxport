@@ -536,6 +536,9 @@ static void demo_frame_s1(Core* c) {
 // runs the title input). Outcome 1 -> s7 (attract launch); outcome 2 -> cursor two-phase (first pass
 // -> s3, second pass -> s4). All paths end with TAIL_REND (attract render 0x80075A80 — draws the
 // title). Mirrors ov_demo_s2 but return-based + runs the tail render inline. (Faithful to 0x80106464.)
+static void demo_tail_rend(Core* c);
+static void demo_tail_cf2c(Core* c);
+
 static void demo_frame_s2(Core* c) {
   rec_dispatch(c, 0x8010696cu);                // title sub-machine (SYNC)
   uint32_t v0 = c->r[2];
@@ -550,14 +553,29 @@ static void demo_frame_s2(Core* c) {
     }
     c->mem_w16(sm + 0x4a, 0);
   }
-  c->engine.areaSlots.updateTail();                 // 0x80075A80 NATIVE — TAIL_REND
+  demo_tail_rend(c);                                // 0x80075A80 — TAIL_REND (forked below)
 }
 
 // TAIL helpers (the guest loop's per-frame tail render, run inline after a substate's transition):
 //   TAIL_REND 0x80106658 = attract render 0x80075A80.  TAIL_CF2C 0x80106650 = engine-update 0x8001CF2C
 //   then the attract render.  TAIL_NONE = no render. (The per-frame counter is bumped by ov_demo_frame.)
-static void demo_tail_rend(Core* c) { c->engine.areaSlots.updateTail(); }
-static void demo_tail_cf2c(Core* c) { rec_dispatch(c, 0x8001cf2cu); c->engine.areaSlots.updateTail(); }
+// pc_faithful tail: dispatch the REAL 0x80075A80 (the per-frame AUDIO-COMMAND queue processor —
+// drains the 24-slot queue at 0x800BE1F8 into libsnd). Library/audio-glue code stays substrate
+// under faithful (user 2026-07-07: lib fallback to recomp); the native AreaSlots::updateTail
+// port serves pc_skip.
+static void demo_tail_75a80_faithful(Core* c) {
+  c->r[31] = 0x80106660u;
+  rec_dispatch(c, 0x80075a80u);
+}
+static void demo_tail_75a80(Core* c) {
+  (c->game && !c->game->pc_skip) ? demo_tail_75a80_faithful(c) : c->engine.areaSlots.updateTail();
+}
+static void demo_tail_rend(Core* c) { demo_tail_75a80(c); }
+static void demo_tail_cf2c(Core* c) {
+  c->r[31] = 0x80106658u;
+  rec_dispatch(c, 0x8001cf2cu);
+  demo_tail_75a80(c);
+}
 
 // Substate s3 (0x801064E8) — main-menu sub-machine 0x80106AC4 (mirror of 0x8010696C). Return-based
 // twin of ov_demo_s3. Outcome 1 -> s7 (attract); 2 -> phase on sm[0x68]: ==2 -> s5 (LEAVE DEMO/New
