@@ -5,6 +5,24 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Faithful IDLE LOOP zero-diff 137k+ frames (2026-07-07, 2acc712) — frontier now GAME-stage entry (autonav f26)
+
+With the attract s7 dispatching the real 0x80106C24 phase machine (its FUN_80044BD4 area-load
+and inner yields park the DEMO fiber naturally), the strict headless compare holds the ENTIRE
+idle cycle — boot -> title -> menu -> 450-frame idle timer -> attract demo -> loop —
+BYTE-IDENTICAL for 137,730+ lockstep frames ("[sbs] f137730: A/B identical").
+
+**Frontier (needs input, PSXPORT_SBS_AUTONAV=1):** f26 on the New Game path — the GAME stage
+entry (0x8010637C). runGameStanza is still the per-tick native dispatcher (the pre-fiber shape
+DEMO had); it needs the same stage-fiber conversion (body on a Coro, substrate tails/yields via
+the EngineOverrides primitives, lib glue dispatched per the lib-fallback directive). A-side f26
+writer: pc=0x800597AC ra=DEAD0000 (native chain) vs B pc=0x80082D04 (libgs zero-fill) in the
+main-thread stack top 0x801FFFC8... Also: the autonav run SEGFAULTS after the divergence pause
+(rc=139) — diagnose alongside the conversion.
+
+**Tooling:** PSXPORT_SBS_NOPRESENT=1 — skip pane readback+present for headless compares
+(~1000x throughput once real 3D renders; the compare needs no pixels).
+
 ## Faithful frontier f2 -> f11 (2026-07-07 session 2) — task-1 + DEMO on native fibers; LAST-WRITER map lands
 
 Strict compare progression (each step committed, pc_skip + GATE regression-checked):
