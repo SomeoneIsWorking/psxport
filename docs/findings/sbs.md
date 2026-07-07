@@ -5,6 +5,34 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Faithful frontier f2 -> f11 (2026-07-07 session 2) — task-1 + DEMO on native fibers; LAST-WRITER map lands
+
+Strict compare progression (each step committed, pc_skip + GATE regression-checked):
+f2 (task-1 fiber, eed1181) -> f8 (DEMO stage fiber) -> f9 (0x8005082C stale-args fix: a0-a2
+must be zeroed before the prologue dispatch) -> f10 (menu machine state-0 runs the REAL
+0x80106F80 — the Setmode native no-op was a pc_skip-era shortcut in the shared path) ->
+**f11 OPEN** (all in dff6973).
+
+**The reusable pattern:** the divergence names either (a) a cadence gap — fix by running the
+arc as a native FIBER body (yields via the EngineOverrides-wired primitives; counts emerge from
+real control flow), or (b) a pc_skip-era shortcut baked into a shared path — fix by giving the
+faithful fork the REAL substrate dispatch (the platform acks the old "busy-loops forever" libcd
+calls now: state-0 CdControlB Setmode, state-7 CdlPause teardown — core B proves it every run).
+
+**OPEN FRONTIER f11:** 0x800BE1F8 (A=0xC0 B=0x00), last-writer A pc=0x800998E4 (libsnd, stale
+native ra) vs B pc=0x80099490 ra=0x80075C60 (substrate per-frame audio tick). The native music
+engine (native_music/musicCoord, later-219) replaced the PSX sequencer wholesale — under strict
+faithful the per-frame libsnd tick state must byte-match, so the audio engine needs its
+faithful fork (dispatch the substrate tick under pc_faithful, or port it byte-exact). This is a
+session-scale arc: map the audio tick call graph FIRST (FUN_80075C34/0x80075C60 family,
+SsSeqCalledTbyT at 0x80099xxx) before chasing bytes.
+
+**Tooling landed (dff6973):** per-core per-byte LAST-WRITER map ({pc, ra, frame} recorded on
+every store while SBS runs; PSXPORT_SBS_LASTWRITER=0 disables) printed at divergence — the
+rewind-free write-site mechanism. Rewind-and-arm is auto-SKIPPED when a native fiber is live
+(fibers cannot be rewound; the replay used to hang in ~Coro::join — blocker gone). The store
+hook chain now carries the write width.
+
 ## f0 strict-faithful divergence CLOSED by the faithful-execution model (2026-07-07); frontier now f2 FUN_800754F4 yield cadence
 
 **Status: the f0 0x801FE808..0x801FEA99 divergence below is FIXED** (commits a80c9f8 + cb1f0d7,
