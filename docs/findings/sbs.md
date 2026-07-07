@@ -5,6 +5,47 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## f0 strict-faithful divergence ANATOMY (2026-07-07) — dead MIPS stack scratch vs live yield context; reorg verified non-regressive
+
+Strict compare (`PSXPORT_SBS_MODE=full PSXPORT_SBS_PCFAITHFUL=1`) diverges at lockstep f0,
+0x801FE808..0x801FEA99 (task-0 stack). Verified IDENTICAL signature on pre-reorg c308fd6 (same
+frame/range/write-pcs/CLASS) — the 2026-07-07 OOP reorg did not regress this; it is the frontier
+c308fd6's own commit message left open ("Not yet closing the 0x801FE808 divergence").
+
+**Anatomy (BYTETRACE 0x801FE808,0x801FEA99, both cores, f0):**
+- B (substrate coro): runs the WHOLE ov_start 8010649C state-0 body in f0 — CdSearchFile per file,
+  each call leaving its OWN stack locals (24-byte-stride entries with filename+";1" copy buffers,
+  the "…AB1"/".DAT" ASCII at 0x801FE848..0x801FEA98) + FUN_80044BD4 wait-loop yield spills
+  (ra=0x80044CA8 etc at sp+16, B-ras 0x80044C2C/0x80044C50/0x80044CA8) — suspended mid-wait at
+  frame end with live sp = 0x801FE7F8.
+- A (native faithful): startBinStageFaithful does the SEMANTIC work (sp descent 456 + s-reg saves,
+  FUN_80081218 LoadImage dispatch, LibcdNative::searchFile filling the real dest tables, task-1
+  native_task_spawn, RNG stamp, sm:=1, FUN_80044BD4-prologue emission) — but writes NONE of the
+  substrate CdSearchFile stack locals (A×0 on every string byte) and its dispatched substrate
+  leaves scribble their own frame zeros at 0x801FE818..834 (A×37, B×1).
+
+**Structural conclusion (revalidates the "doomed slip-by-slip" verdict from the fiber-era note):**
+the divergent bytes are transient MIPS callee stack locals. Native C++ cannot organically produce
+them; emitting them synthetically (emit_fun_*_prologue) is hardcoded-offset transcription and
+c308fd6 admits it does not close. Three standing directives collide on exactly this byte class:
+(1) strict byte-exact pc_faithful, no residuals; (2) never route pc_skip=0 to the fiber; (3)
+rebuild-don't-transcribe / no magic offsets. For PERSISTENT state all three hold together; for
+DEAD transient stack scratch they cannot.
+
+**Proposed resolution (pending user decision):** make the existing "memory the still-recomp side
+never reads" exception MECHANICAL for stack bytes: extend SBS with a read-after-boundary tracker —
+on divergence in a stack range, arm a READ-watch on core B; bytes B never reads before rewrite are
+proven dead → exempt by the existing rule (not an allowlist; evidence per byte per run). Bytes B
+DOES read back (live yield context: suspended-frame spills, task+0x00/02, done_flag, RNG stamps)
+stay strict — and THAT bounded surface is closed properly by porting the scheduler primitives
+(FUN_80051F80 yield / FUN_80044BD4 spawn-and-wait / FUN_80051F14) as native PcScheduler methods
+wired via EngineOverrides (2026-07-07 mechanism) writing real context at the real guest sp, with
+per-frame slice cadence matching the substrate scheduler loop.
+
+**Refs:** $CLAUDE_JOB_DIR/tmp/sbs_faithful.log (auto-diagnosis), sbs_bytetrace.log (write
+inventory), sbs_c308.log (baseline), scratch/decomp/task_spawn.c + f0_writers.c (RE),
+game/core/engine.cpp startBinStageFaithful/stage0AdvanceFaithful + emit_fun_* (current state).
+
 ## PC_FAITHFUL byte-exact IN GAMEPLAY (2026-07-04) — M_GAMEPLAY 22,980+ frames zero-diff
 
 After the fiber-only design (below), tested via `PSXPORT_SBS_MODE=gameplay
