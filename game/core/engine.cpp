@@ -381,7 +381,45 @@ void Engine::sceneRenderListBuilder() { Core* c = core;
 // (transitive jal scan, 1021 fns). The object-walk 0x8007a904 and display 0x80026c88 now run as the
 // NATIVE ov_objwalk / ov_disp_26c88 (direct C calls — the previously-orphan bodies wired into the live
 // field frame); the remaining callees stay rec_dispatch leaves until owned in turn.
+// pc_faithful field per-frame update — mirror of ov_game_gen_80108B0C. Guest frame (sp-24,
+// r16@+16, ra@+20, r16=0x1F800000 live for callee spills) + jal-site ras on every child. The
+// children run their native owners (the ported path — byte-exactness is each owner's own gate);
+// the audio-command-queue tail 0x80075A80 is dispatched substrate per the f11 lib-fallback
+// recipe (same fork the DEMO tail uses — demo.cpp demo_tail_75a80_faithful). NO dualviewSnapshot
+// capture/restore here: with the substrate render orchestrator executing underneath
+// (Render::frame), its guest writes ARE faithful state — rewinding them would diverge from B.
+void Engine::fieldFrameFaithful() { Core* c = core;
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->r[16] = 0x1F800000u;
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
+  c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
+  if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
+    c->r[31] = 0x80108B50u; FFS("ff_59d28", c->engine.frameStartTick());
+    c->r[31] = 0x80108B58u; FFS("ff_69b28", c->engine.objectList.walkAux());
+    c->r[31] = 0x80108B60u; FFS("ff_26368", c->engine.array8Dispatch.tick());
+    c->r[31] = 0x80108B68u; FFS("ff_objwalk", c->engine.objectList.walkAll());
+    c->r[31] = 0x80108B70u; FFS("ff_25588", c->engine.sceneEventFifo());
+    c->r[31] = 0x80108B78u; FFS("ff_4fe84", c->engine.sceneRenderListBuilder());
+    c->r[31] = 0x80108B80u; FFS("ff_disp26c88", c->engine.objectTable.dispatch());
+    c->r[31] = 0x80108B88u; FFS("ff_22a80", c->engine.modePerFrameDispatch());
+    c->r[31] = 0x80108B90u; FFS("ff_6ec44", CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update());
+    c->r[31] = 0x80108B98u; FFS("ff_50de4", c->engine.sceneStateStep());
+    c->r[31] = 0x80108BA0u; FFS("ff_1cac0", c->engine.areaModeDispatch());
+  }
+  if (c->mem_r8(0x1f800136u) < 2) { c->r[31] = 0x80108BBCu; c->mRender->frame(); }   // 0x8003F9A8 underneath
+  c->r[31] = 0x80108BC4u; FFS("ff_submit810c", c->engine.submitPage810c());
+  c->r[31] = 0x80108BCCu; FFS("ff_77d8c", c->engine.postRenderTick());
+  c->r[31] = 0x80108BD4u; rec_dispatch(c, 0x80075A80u);   // audio-cmd queue tail — substrate (lib fallback)
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 void Engine::fieldFrame() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { fieldFrameFaithful(); return; }   // faithful: gen mirror
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
@@ -698,7 +736,213 @@ void Engine::gStateMutate(uint32_t G, uint8_t op) { Core* c = core;
 // ov_field_frame (0x80108b0c) and the heavy leaf callees rec_dispatch. NB the guest fall-throughs are
 // faithful: case 2 -> 3, case 4 -> 1 (no break). sm[0x4e] >= 12 = no-op. This anchors the field frame
 // natively; the leaf callees (object-placement FUN_80072a78 etc.) are the next descent.
+// pc_faithful FIELD RUNNING sub-machine — exact mirror of ov_game_gen_80106B98 (12 states on
+// sm[0x4e]). Guest frame (sp-24, ra@+20, r16@+16, live values) + every leaf dispatched at its
+// RE'd jal site so callee spills byte-match core B. ov_game_func_80108B0C (the field per-frame
+// update) runs the native owner Engine::fieldFrame with the gen's r31. Notable gen details the
+// rebuilt fieldRun below got WRONG (kept there for pc_skip, fixed here): 0x1F800194 is a HALFWORD
+// store of u16(0x800E7FEE) (not w32), the state-0 area check is mem_r16(0x800BF870)==21 (not
+// r32==0x15), and state 6 writes 0x800BF870/71 as TWO byte stores of the swapped/masked halves.
+void Engine::fieldRunFaithful() { Core* c = core;
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20, c->r[31]);
+  c->mem_w32(sp + 16, c->r[16]);
+  uint16_t s4e = c->mem_r16(sm + 0x4e);
+  if (s4e < 12) switch (s4e) {
+    case 0: {                                  // L_80106BDC — area object/pool init chain
+      c->r[31] = 0x80106BE4u; rec_dispatch(c, 0x8007B18Cu);
+      c->r[31] = 0x80106BECu; rec_dispatch(c, 0x800796DCu);
+      c->r[31] = 0x80106BF4u; rec_dispatch(c, 0x800263E8u);
+      c->r[31] = 0x80106BFCu; rec_dispatch(c, 0x80072A78u);
+      c->r[31] = 0x80106C04u; rec_dispatch(c, 0x80075240u);
+      c->r[31] = 0x80106C0Cu; rec_dispatch(c, 0x800783DCu);
+      c->r[31] = 0x80106C14u; rec_dispatch(c, 0x80078610u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, 1);
+      c->mem_w8(sm + 0x6b, 0);
+      if (c->mem_r8(0x800BF89Cu) == 2) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4e, 9);
+      } else if (c->mem_r8(0x800BF870u) == 8) {
+        c->r[31] = 0x80106C88u; rec_dispatch(c, 0x80114B90u);
+      } else if (c->mem_r16(0x800BF870u) == 21) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4e, 11);
+        break;
+      }
+      c->r[4] = c->mem_r8(0x800BF870u);
+      c->r[31] = 0x80106C98u; rec_dispatch(c, 0x80074F24u);
+      break;
+    }
+    case 2:                                    // L_80106DDC — G-state mutate, fall into 3
+      c->r[4] = 0x800E7E80u; c->r[5] = 12;
+      c->r[31] = 0x80106DECu; rec_dispatch(c, 0x80058304u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      /* fallthrough */
+    case 3:                                    // L_80106E08 — settle audio, arm mode state
+      c->r[31] = 0x80106E10u; rec_dispatch(c, 0x80074BC4u);
+      c->r[4] = 0;
+      if (c->mem_r8(0x800BF870u) == 8) {
+        c->r[31] = 0x80106E2Cu; rec_dispatch(c, 0x80114B90u);
+        c->r[4] = 0;
+      }
+      c->r[5] = 0; c->r[6] = 0;
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4a, 2);
+      c->mem_w16(sm + 0x4c, 0);
+      c->mem_w16(sm + 0x4e, 0);
+      c->r[31] = 0x80106E54u; rec_dispatch(c, 0x8005082Cu);
+      break;
+    case 4:                                    // L_80106CE0 — camera + mode-state re-arm, fall into 1
+      c->r[31] = 0x80106CE8u; rec_dispatch(c, 0x8006C7C4u);
+      c->r[31] = 0x80106CF0u; rec_dispatch(c, 0x800508A8u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, 1);
+      /* fallthrough */
+    case 1: {                                  // L_80106D00 — the RUNNING field frame
+      c->r[31] = 0x80106D08u;
+      c->game->ffspan.begin(); c->engine.fieldFrame(); c->game->ffspan.end("fieldframe");
+      if ((int8_t)c->mem_r8(0x800BF80Du) == 3) {
+        if (c->mem_r8(0x800BF80Fu) != 0) break;
+        c->r[31] = 0x80106D38u; rec_dispatch(c, 0x80074BC4u);
+        int16_t ev = c->mem_r16s(0x800E7FEEu);
+        uint16_t evu = c->mem_r16(0x800E7FEEu);
+        if (ev == 0) {                         // L_80106F48 — s4e++
+          sm = c->mem_r32(0x1f800138u);
+          c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+          break;
+        }
+        c->mem_w8(0x800BF880u, 1);
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(0x1F800194u, evu);
+        c->mem_w16(sm + 0x4e, 0);
+        break;
+      }
+      uint8_t trig = c->mem_r8(0x800BF839u);
+      if (trig == 0) break;
+      if (c->mem_r8(0x800BF80Fu) != 0) break;
+      if (trig == 8) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4a, 3);
+        c->mem_w16(sm + 0x4c, 0);
+        c->mem_w16(sm + 0x4e, 0);
+        break;
+      }
+      if (c->mem_r8(0x1F800236u) >= 5) {
+        c->r[4] = 0;
+        c->r[31] = 0x80106DCCu; rec_dispatch(c, 0x80050894u);
+      }
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4a, 1);                // L_80106FAC join (r2 = 1)
+      c->mem_w16(sm + 0x4c, 2);
+      c->mem_w16(sm + 0x4e, 6);
+      break;
+    }
+    case 5:                                    // L_80106CA0 — area-7 mode re-arm + field frame
+      if (c->mem_r8(0x800BF870u) == 7) {
+        c->r[31] = 0x80106CBCu; rec_dispatch(c, 0x801128BCu);
+        c->r[31] = 0x80106CC4u; rec_dispatch(c, 0x800508A8u);
+      }
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4e, 1);
+      c->r[31] = 0x80106CD8u;
+      c->engine.fieldFrame();
+      break;
+    case 6: {                                  // L_80106E5C — zone-change settle + next-area select
+      int16_t ev = c->mem_r16s(0x800E7FEEu);
+      uint16_t evu = c->mem_r16(0x800E7FEEu);
+      if (ev != 0) {
+        c->mem_w8(0x800BF880u, 1);
+        c->mem_w16(0x1F800194u, evu);
+      }
+      c->r[31] = 0x80106E88u; rec_dispatch(c, 0x80074BC4u);
+      c->r[16] = 0x800BF808u;
+      c->mem_w8(0x800BF870u, (uint8_t)((c->mem_r16(0x800BF83Au) >> 8) & 31u));
+      c->mem_w8(0x800BF871u, (uint8_t)(c->mem_r8(0x800BF83Au) & 63u));
+      uint8_t trig = c->mem_r8(0x800BF839u);
+      if (trig == 7) {
+        c->r[31] = 0x80106ECCu; rec_dispatch(c, 0x80114B90u);
+        c->mem_w8(0x800BF839u, 3);
+        trig = c->mem_r8(0x800BF839u);
+      }
+      if (trig != 3) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x48, 2);
+        uint8_t b = c->mem_r8(0x1F800236u);
+        c->mem_w16(sm + 0x4a, 5);
+        c->mem_w16(sm + 0x4e, 0);
+        c->mem_w16(sm + 0x4c, b);
+      } else {                                 // L_80106F0C
+        c->r[31] = 0x80106F14u; rec_dispatch(c, 0x8005245Cu);
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x48, 2);
+        c->mem_w16(sm + 0x4a, 1);
+        c->mem_w16(sm + 0x4c, 1);
+        c->mem_w16(sm + 0x4e, 0);
+      }
+      break;
+    }
+    case 7:                                    // L_80106F38 — poll 0x80045580(1)
+      c->r[4] = 1;
+      c->r[31] = 0x80106F40u; rec_dispatch(c, 0x80045580u);
+      if (c->r[2] == 0) break;
+      sm = c->mem_r32(0x1f800138u);            // L_80106F48
+      c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+      break;
+    case 8:                                    // L_80106F68 — wait done_flag, arm transition
+      if (c->mem_r8(0x1F80019Bu) == 0) break;
+      c->mem_w8(0x800BF89Cu, 4);
+      c->mem_w8(0x1F800236u, 0);
+      c->mem_w8(0x800BF839u, 3);
+      c->mem_w16(0x800BF83Au, 0);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4a, 1);                // L_80106FAC join (r2 = 1)
+      c->mem_w16(sm + 0x4c, 2);
+      c->mem_w16(sm + 0x4e, 6);
+      break;
+    case 9:                                    // L_80106FC4 — field frame + gate on pad bit 3
+      c->r[31] = 0x80106FCCu;
+      c->engine.fieldFrame();
+      if (c->mem_r8(0x800BF89Cu) == 2 && (c->mem_r16(0x800E7E68u) & 8u) != 0) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
+        c->mem_w8(0x800BF809u, 1);
+        c->mem_w8(sm + 0x6e, 31);
+      }
+      break;
+    case 10: {                                 // L_80107020 — fade-out ramp then CD settle
+      c->r[31] = 0x80107028u;
+      c->r[16] = 0x1F800000u;
+      c->engine.fieldFrame();
+      sm = c->mem_r32(0x1f800138u);
+      uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xFFu;
+      c->r[4] = (u << 16) | (u << 8) | u; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x80107058u; rec_dispatch(c, 0x8007E9C8u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w8(sm + 0x6e, (uint8_t)(c->mem_r8(sm + 0x6e) - 1));
+      sm = c->mem_r32(0x1f800138u);
+      if (c->mem_r8(sm + 0x6e) == 0) {
+        c->mem_w16(sm + 0x4e, 7);
+        c->r[31] = 0x80107090u; rec_dispatch(c, 0x8001CF2Cu);
+      }
+      break;
+    }
+    case 11:                                   // L_80107098 — a0l fade sequencer on the BG node
+      c->r[4] = 0x800E8008u;
+      c->r[31] = 0x801070A4u; rec_dispatch(c, 0x8010957Cu);
+      break;
+    default: break;
+  }
+  c->r[31] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
+}
+
 void Engine::fieldRun() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { fieldRunFaithful(); return; }   // faithful: gen mirror
   uint32_t sm  = c->mem_r32(0x1f800138u);
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {
@@ -1100,21 +1344,48 @@ void Engine::fieldRunX() { Core* c = core;
   c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);
 }
 
-// submode1 case-0 fork bodies (see the Slip #3 comment at the case 0 dispatch below).
-// Faithful: split case 0 across two ticks to match the recomp coro cadence — run the load on tick 1
-// (return false: caller yields without falling through), consume the deferral flag on tick 2
-// (return true). sm[0x4c] stays 0 on tick 1, matching the recomp view where the coro is suspended
-// inside FUN_80044BD4 with the sm[0x4c] write not yet reached.
-bool Engine::submode1Case0Faithful() { Core* c = core;
-  if (!mSubmode1LoadDeferred) {
-    rec_dispatch(c, 0x8005245cu);          // FUN_8005245c (sound/CD setup, sync leaf)
-    (void)c->rng.next();                   // Slip #5: this replaces a rec_dispatch(0x80044BD4).
-    sop.transitionAreaLoad();              // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
-    mSubmode1LoadDeferred = true;
-    return false;                          // yield: match recomp coro yield inside FUN_80044BD4
+// pc_faithful walkable-field area machine — mirror of ov_game_gen_801088D8 (7 states on sm[0x4c]).
+// Same recipe as Sop::fieldModeFaithful: guest frame + jal-site ras; every un-owned leaf is the
+// substrate dispatch at its RE'd jal site; owned states run the native Engine methods. Case 0
+// dispatches the REAL 0x80044BD4 spawn-and-wait (EngineOverrides -> PcScheduler::spawnAndWait) of
+// the area-DATA loader 0x800452C0 (Asset::areaDataLoadAsTask, task-1 fiber) — the stage fiber
+// parks inside the wait loop and falls through to case 1 on completion, organically reproducing
+// the substrate's multi-tick cadence (retires the Slip #3 two-tick defer + Slip #5 RNG
+// compensation from the faithful path).
+void Engine::submode1Faithful() { Core* c = core;
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  c->r[29] -= 24;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[31]);
+  uint16_t s4c = c->mem_r16(sm + 0x4c);
+  if (s4c < 7) switch (s4c) {
+    case 0:                                   // L_80108918
+      c->r[31] = 0x80108920u;
+      rec_dispatch(c, 0x8005245Cu);           // sound/CD setup leaf
+      c->r[4] = 0x800452C0u;                  // area-DATA loader (task-1 body)
+      c->r[5] = c->mem_r8(0x800BF870u);       // area index
+      c->r[6] = 0;
+      c->r[7] = 2;
+      c->r[31] = 0x8010893Cu;
+      rec_dispatch(c, 0x80044BD4u);           // spawn-and-wait — parks the stage fiber
+      /* fallthrough */
+    case 1: {                                 // L_8010893C
+      c->mem_w8(0x1f800234u, 0);
+      uint8_t area = c->mem_r8(0x800BF870u);
+      uint8_t next = c->mem_r8(0x80108F60u + area);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 0x4c, next);
+      break;
+    }
+    case 2: c->r[31] = 0x80108974u; c->game->ffspan.begin(); c->engine.fieldRun(); c->game->ffspan.end("fieldrun"); break;
+    case 3: c->r[31] = 0x80108984u; c->engine.fieldRunX(); break;
+    case 4: c->r[31] = 0x80108994u; rec_dispatch(c, 0x80107230u); break;
+    case 5: c->r[31] = 0x801089A4u; rec_dispatch(c, 0x8010766Cu); break;
+    case 6: c->r[31] = 0x801089B4u; rec_dispatch(c, 0x80107790u); break;
+    default: break;
   }
-  mSubmode1LoadDeferred = false;           // second tick — consume the defer, fall through
-  return true;
+  c->r[31] = c->mem_r32(sp + 16);
+  c->r[29] += 24;
 }
 
 // Skip: one tick, no per-frame yield cost. The two branches deliberately do not converge:
@@ -1136,6 +1407,7 @@ bool Engine::submode1Case0Skip() { Core* c = core;
 }
 
 void Engine::submode1() { Core* c = core;
+  if (c->game && !c->game->pc_skip) { submode1Faithful(); return; }   // faithful: gen mirror on the stage fiber
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   if (cfg_dbg("stage") && s4c <= 1)
@@ -1143,16 +1415,8 @@ void Engine::submode1() { Core* c = core;
             s4c, c->mem_r8(0x800bf870u), c->mem_r8(0x80108f60u + c->mem_r8(0x800bf870u)));
   switch (s4c) {
     case 0:
-      // Slip #3 (docs/findings/sbs.md): the recomp body of 0x801088D8 case 0 calls FUN_80044BD4 which
-      // yields inside (task spawn-and-wait), so case 1's fall-through runs on the FOLLOWING tick when
-      // the coro resumes. Native's transitionAreaLoad is synchronous — if we fall through here, sm[0x4c]
-      // reaches 2 one tick earlier than the coro. That accumulates a +1 skew on the 0x1F80017C frame
-      // counter over the cutscene-skip window (95 vs 94 by gameplay-start), producing the 0x800EE0DD
-      // periodic-flag divergence (FUN_8004B374's `& 0x1F` gate samples out-of-phase at f217).
-      // Faithful matches the coro cadence with a two-tick deferral; skip collapses to one tick
-      // with counter bumps — see the fork bodies above submode1.
-      if (!((c->game && !c->game->pc_skip) ? submode1Case0Faithful() : submode1Case0Skip()))
-        return;                                   // faithful yield tick — do not fall through yet
+      if (!submode1Case0Skip())
+        return;
       /* fallthrough */
     case 1: {
       c->mem_w8(0x1f800234u, 0);

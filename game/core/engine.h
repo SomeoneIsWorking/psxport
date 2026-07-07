@@ -60,13 +60,6 @@ public:
   void camTeleport(int x, int y, int z) { mCamTpX = x; mCamTpY = y; mCamTpZ = z; mCamTpPending = true; }
   void camTeleportOff() { mCamTpPending = false; }
 
-  // Slip #3 fix (docs/findings/sbs.md): submode1 case 0 must yield ONCE mid-body to match the recomp
-  // coro cadence — recomp's FUN_80044BD4 (spawn-and-yield) yields between FUN_8005245C and the fall
-  // through into case 1. Native's transitionAreaLoad is synchronous, so we manually defer the fall
-  // through by one tick using this per-Engine flag. Set at the end of case 0's load body; consumed
-  // on the next tick to execute the case 1 body.
-  bool     mSubmode1LoadDeferred = false;
-
   // `debug stage` change-detector for the RUNNING dispatcher's sm[0x4a]/sm[0x4c] log line (was a
   // function-local static pair in Engine::s48_2 — per-Core so SBS's two cores log independently).
   uint16_t mLast4a = 0xffff, mLast4c = 0xffff;
@@ -126,11 +119,12 @@ public:
   // Formerly `ov_game_submode0` / `ov_game_submode1` free functions in engine.cpp.
   void submode0();
   void submode1();
-  // submode1 case-0 fork (Slip #3, docs/findings/sbs.md). Faithful: two-tick load deferral matching
-  // the recomp coro yield inside FUN_80044BD4 — returns false on the yield tick (caller returns
-  // without falling through to case 1), true when the deferral is consumed. Skip: one-tick load +
-  // the 0x1F80017C/0x800BF878 counter bumps standing in for the collapsed tick — always true.
-  bool submode1Case0Faithful();
+  // submode1Faithful: pc_faithful mirror of ov_game_gen_801088D8 — guest frame + jal-site ras;
+  // case 0 dispatches the REAL 0x80044BD4 spawn-and-wait of the area-DATA loader 0x800452C0
+  // (Asset::areaDataLoadAsTask on the task-1 fiber), parking the stage fiber organically. This
+  // retires the pre-fiber Slip #3/#5 machinery (two-tick defer + RNG compensation) from the
+  // faithful path; pc_skip keeps the one-tick shortcut (submode1Case0Skip + counter bumps).
+  void submode1Faithful();
   bool submode1Case0Skip();
 
   // sm[0x48] state handlers (0=area INIT, 1=area RESUME-INIT, 2=RUNNING dispatcher) and the
@@ -147,6 +141,12 @@ public:
   // mid-transition twin (0x80108BE4, sm[0x4a]==5 running-during-fade variant). Called by the
   // sm[0x4c] handlers and the transition drivers. Formerly ov_field_frame / ov_field_frame_x.
   void fieldFrame();
+  // fieldFrameFaithful: pc_faithful mirror of ov_game_gen_80108B0C — guest frame (sp-24, r16@+16,
+  // ra@+20, r16=0x1F800000 live), jal-site ras on every child, the render orchestrator dispatched
+  // underneath, and the audio-command-queue tail 0x80075A80 dispatched substrate (f11 lib-fallback
+  // recipe, same as the DEMO tail). No dualviewSnapshot capture/restore: under render-underneath
+  // the substrate render's guest writes ARE faithful state and must not be rewound.
+  void fieldFrameFaithful();
   void fieldFrameX();
 
   // fieldTransition + its 4 workers: the sm[0x4a]==5 sub-scene / door / area FADE transition
@@ -164,6 +164,10 @@ public:
   // FUN_80106B98) and its mid-transition twin (0x801070B4, sm[0x4c]==3). Formerly
   // ov_field_run / ov_field_run_x. Called by Engine::submode1 / fieldFrameX.
   void fieldRun();
+  // fieldRunFaithful: pc_faithful mirror of ov_game_gen_80106B98 (12 states on sm[0x4e]) — guest
+  // frame (sp-24, ra@+20, r16@+16) + jal-site ras; leaves are substrate dispatches at their RE'd
+  // sites (core B proves them); ov_game_func_80108B0C runs the native Engine::fieldFrame owner.
+  void fieldRunFaithful();
   void fieldRunX();
 
   // submitPage810c: the sm[task+0x6b]==1 page-1 (pause-menu dim) fade branch of the master submit

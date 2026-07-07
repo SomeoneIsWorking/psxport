@@ -62,5 +62,12 @@ public:
   //                           sees the wait-loop exit
   void preloadStage1();
   void preloadStage1AsTask();
+
+  // areaDataLoadAsTask(): FUN_800452C0 — the walkable-field AREA-DATA loader, spawned by the
+  //   submode1 case-0 spawn-and-wait (0x80044BD4(0x800452C0, area, 0, 2)). pc_faithful task-1
+  //   fiber body (runTask1PreloadStanza), byte-shape mirror of gen_func_800452C0: same-area
+  //   fast path, slot-2 drain wait loop (yields), area descriptor + texgroup + DAT payload
+  //   loads, relocation table, area-8 extra texgroup, done_flag + terminal task end.
+  void areaDataLoadAsTask();
 };
 #endif

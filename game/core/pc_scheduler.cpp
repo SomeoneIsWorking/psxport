@@ -376,7 +376,9 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
     const bool is_preload_body    = entry_pc == 0x80044F58u;
     const bool is_stage1_callback = entry_pc == 0x8004514Cu;
     const bool is_sop_area_load   = entry_pc == 0x80109164u;
-    if (!is_preload_body && !is_stage1_callback && !is_sop_area_load) return STANZA_NOT_MINE;
+    const bool is_area_data_load  = entry_pc == 0x800452C0u;   // walkable-field area-DATA loader
+    if (!is_preload_body && !is_stage1_callback && !is_sop_area_load && !is_area_data_load)
+      return STANZA_NOT_MINE;
     if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
     task_ctx[i] = loop;
     task_ctx[i].r[29] = c->mem_r32(base + 8);
@@ -387,6 +389,7 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
     co = new Coro();
     if (is_preload_body)         co->start([cc] { cc->engine.asset.loadTexgroup(); });
     else if (is_stage1_callback) co->start([cc] { cc->engine.asset.preloadStage1AsTask(); });
+    else if (is_area_data_load)  co->start([cc] { cc->engine.asset.areaDataLoadAsTask(); });
     else                         co->start([cc] { cc->engine.sop.areaLoadFaithful(); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;

@@ -382,3 +382,115 @@ void Asset::preloadStage1AsTask() {
   c->r[16] = c->mem_r32(sp + 16);
   c->r[29] += 32;
 }
+
+// Task-1 body — FAITHFUL FUN_800452C0 (the walkable-field AREA-DATA loader), run on a PcScheduler
+// native fiber. Spawned by submode1Faithful case 0: 0x80044BD4(0x800452C0, area, 0, 2) — the spawn
+// latches p3=0 -> sm[0x6D], p2=area -> sm[0x6E] on the slot-1 task struct. Guest-stack discipline:
+// frame descent 32 with ra/s1/s0 spills at +24/+20/+16 (live caller values), r16/r17 carried along
+// the shard's flow so deeper callees' spills match core B byte-for-byte. Every un-owned leaf is the
+// substrate dispatch at its RE'd jal site; owned leaves (0x80044F58 texgroup) run the native mirror.
+// Byte shape: generated gen_func_800452C0; RE: scratch/decomp/800452C0.c (Ghidra 2026-07-07).
+void Asset::areaDataLoadAsTask() {
+  Core* c = this->core;
+  uint32_t sm = c->mem_r32(0x1F800138u);           // read before the frame descent (gen order)
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 24, c->r[31]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->mem_w32(sp + 16, c->r[16]);
+  if (c->mem_r8(sm + 0x6D) == 0) {
+    c->r[16] = 1;
+    uint32_t set = c->mem_r8(sm + 0x6E);
+    uint32_t mask = 1u << (set & 31);
+    // SAME-AREA fast path: last-loaded set matches and the texgroup-bias mask bit is unchanged.
+    if ((uint32_t)c->mem_r8(0x1F8001FFu) == set &&
+        (c->mem_r16(0x800BFE56u) & mask) == (c->mem_r16(0x1F800278u) & mask)) {
+      c->r[4] = ((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1;
+      c->r[5] = 47;
+      c->r[31] = 0x80045338u;
+      rec_dispatch(c, 0x80045258u);
+      c->mem_w8(0x1F800206u, 0);
+      c->mem_w8(0x1F80019Bu, 1);                   // done_flag -> spawn-and-wait exits
+      c->r[31] = 0x80045350u;
+      rec_dispatch(c, 0x80051FB4u);                // terminal task end — does not return on a task
+    }
+  }
+  c->r[31] = 0x80045358u;
+  rec_dispatch(c, 0x8001CF2Cu);                    // kill the CD/load task (settle slot 2)
+  while (c->mem_r16(0x801FE0E0u) != 0) {           // drain: wait for the slot-2 task to finish
+    c->r[4] = 1;
+    c->r[31] = 0x80045374u;
+    rec_dispatch(c, 0x80051F80u);                  // yield — parks the fiber one frame
+  }
+  c->r[16] = 0x800C0000u;
+  c->r[17] = 0x800BF870u;
+  sm = c->mem_r32(0x1F800138u);
+  c->mem_w8(sm + 0x6D, 2);                         // mode = 2 (texgroup loader takes the bias path)
+  sm = c->mem_r32(0x1F800138u);
+  c->mem_w16(0x1F800278u, c->mem_r16(0x800BFE56u));// latch the bias mask for the fast-path compare
+  c->mem_w8(0x1F8001FFu, c->mem_r8(sm + 0x6E));    // latch the loaded set
+  c->mem_w8(0x800BF872u, c->mem_r8(sm + 0x6E));
+  uint32_t area = c->mem_r8(sm + 0x6E);
+  c->r[4] = 0x80108F9Cu;                           // area filename/descriptor table (GAME.BIN)
+  c->r[5] = (area + 3) & 0xFFu;
+  c->mem_w8(0x800BF870u, (uint8_t)area);
+  c->r[31] = 0x800453DCu;
+  rec_dispatch(c, 0x80045080u);                    // area descriptor load
+  c->r[4] = c->mem_r8(0x800BF870u);
+  c->r[5] = c->mem_r32(0x1F80022Cu);
+  c->r[31] = 0x800453F0u;
+  rec_dispatch(c, 0x8007566Cu);                    // per-area audio/vab select
+  c->r[31] = 0x800453F8u;
+  loadTexgroup();                                  // 0x80044F58 — native mirror (direct call, mode 2)
+  c->r[4] = 0x8018A000u;                           // DAT payload staging buffer
+  c->r[16] = 0x800EF478u;                          // s0 = header base (live for callee spills)
+  c->r[5] = c->mem_r32(0x800BE100u);
+  uint32_t lo = c->mem_r32(0x800EF480u);
+  c->r[6] = c->mem_r32(0x800EF484u) - lo;
+  c->r[7] = lo >> 11;
+  c->r[5] += c->r[7];
+  c->mem_w32(0x800A3EC8u, lo >> 11);
+  c->r[31] = 0x80045430u;
+  rec_dispatch(c, 0x8001DC40u);                    // CD read: DAT payload -> 0x8018A000
+  if (c->mem_r8(0x800BF89Cu) == 2) {
+    c->r[4] = 0;
+    c->r[31] = 0x80045448u;
+    rec_dispatch(c, 0x80045558u);
+  }
+  c->r[4] = ((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1;
+  c->r[5] = 47;
+  c->r[31] = 0x8004545Cu;
+  rec_dispatch(c, 0x80045258u);
+  {                                                // relocation table -> module pointer table
+    uint32_t p = c->r[16] + 20;                    // 0x800EF48C
+    int32_t n = (int32_t)c->mem_r32(c->r[16] + 16);
+    c->r[16] = (uint32_t)n;
+    for (int32_t i = 0; i < n; i++) {
+      uint32_t word = c->mem_r32(p + (uint32_t)i * 4);
+      c->mem_w32(0x800ECF58u + (word >> 24) * 4, (word & 0x00FFFFFFu) + 0x8018A000u);
+    }
+  }
+  if (c->mem_r8(0x800BF870u) == 8) {               // AREA 8: extra texgroup by sub-area band
+    c->mem_w32(0x800ECF94u, c->mem_r32(0x800ECF94u) + 0x11000u);
+    uint32_t sub = c->mem_r8(0x800BF871u);
+    uint32_t g;
+    if (sub < 9)       g = 34;
+    else if (sub < 16) g = 38;
+    else if (sub >= 21) g = 40;
+    else               g = 36;
+    c->r[16] = g;
+    c->r[4] = g;
+    c->r[5] = 8;
+    c->r[31] = 0x80045520u;
+    rec_dispatch(c, 0x80045258u);
+    c->mem_w8(0x800BFE60u, (uint8_t)g);
+  }
+  c->mem_w8(0x1F800206u, 1);
+  c->mem_w8(0x1F80019Bu, 1);                       // done_flag -> spawn-and-wait exits
+  c->r[31] = 0x80045544u;
+  rec_dispatch(c, 0x80051FB4u);                    // terminal task end — does not return on a task
+  c->r[31] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 32;
+}
