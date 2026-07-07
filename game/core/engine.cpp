@@ -260,7 +260,9 @@ void Engine::submode0() { Core* c = core;
       // 0x80109450 is the loaded MODE overlay's field-mode fn. Our native machine is SOP-specific, so
       // only use it when SOP is actually loaded (signature = its first insn `lui v0,0x1f80` = 0x3C021F80);
       // for any other mode/field overlay, dispatch the guest fn (until that overlay is owned natively too).
-      if (c->mem_r32(0x80109450u) == 0x3C021F80u) c->engine.sop.fieldMode();   // native SOP
+      if (c->mem_r32(0x80109450u) == 0x3C021F80u)
+        (c->game && c->game->pc_skip) ? c->engine.sop.fieldMode()          // native SOP (pc_skip)
+                                      : c->engine.sop.fieldModeFaithful(); // byte-mirror (faithful)
       else rec_dispatch(c, 0x80109450u);                                   // other overlay -> guest
     }
   } else if (s4c == 1) {

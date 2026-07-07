@@ -21,6 +21,17 @@ public:
 
   // Live-spine entry points.
   void fieldMode();     // was ov_sop_field_mode  (per-frame outer state dispatcher)
+  // pc_faithful mirror of ov_sop_gen_80109450: guest frame -32 with live ra/s0-s2 spills,
+  // per-state substrate leaf dispatch at the RE'd jal sites (fade engine 0x8007E9C8, pool
+  // leaves, spawn 0x8007A980, overlay ticks 0x8010A8D4/0x801092B4), the area load through
+  // rec_dispatch(0x80044BD4) -> the spawn-and-wait primitive. The rebuilt fieldMode() above
+  // (defer-steps + native leaf calls) is the pc_skip flavor.
+  void fieldModeFaithful();
+  // pc_faithful mirror of ov_sop_gen_80109164 — the SOP area-load TASK-1 body, run on a
+  // PcScheduler native fiber (spawned by fieldModeFaithful's 0x80044BD4 dispatch). Substrate
+  // leaves at their RE'd jal sites; ends with done_flag + selfClose. areaLoad() above is the
+  // pc_skip sync flavor.
+  void areaLoadFaithful();
   void fieldUpdate();   // was ov_sop_field_update (per-frame gameplay body — states 1/2/3)
 
   // Sync area-DATA load entry points (both mirror each other; both end with 1f80019b=1).

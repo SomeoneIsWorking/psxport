@@ -282,6 +282,7 @@ PcScheduler::StanzaResult PcScheduler::runSopAreaLoadStanza(Core* c, int i, uint
   int sop_fresh = (st == 3 || (st == 2 && !task_started[i]))
                   && c->mem_r32(base + 0xc) == 0x80109164u;
   if (!(sop_fresh && native_content)) return STANZA_NOT_MINE;
+  if (!game->pc_skip) return STANZA_NOT_MINE;    // pc_faithful: the task-1 fiber runs areaLoadFaithful
   task_ctx[i] = loop;
   task_ctx[i].r[29] = c->mem_r32(base + 8);
   task_ctx[i].r[31] = 0xDEAD0000u;
@@ -374,7 +375,8 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
     const uint32_t entry_pc = c->mem_r32(base + 0xc);
     const bool is_preload_body    = entry_pc == 0x80044F58u;
     const bool is_stage1_callback = entry_pc == 0x8004514Cu;
-    if (!is_preload_body && !is_stage1_callback) return STANZA_NOT_MINE;
+    const bool is_sop_area_load   = entry_pc == 0x80109164u;
+    if (!is_preload_body && !is_stage1_callback && !is_sop_area_load) return STANZA_NOT_MINE;
     if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
     task_ctx[i] = loop;
     task_ctx[i].r[29] = c->mem_r32(base + 8);
@@ -383,8 +385,9 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
     native_fiber[i] = 1;
     Core* cc = c;
     co = new Coro();
-    if (is_preload_body) co->start([cc] { cc->engine.asset.loadTexgroup(); });
-    else                 co->start([cc] { cc->engine.asset.preloadStage1AsTask(); });
+    if (is_preload_body)         co->start([cc] { cc->engine.asset.loadTexgroup(); });
+    else if (is_stage1_callback) co->start([cc] { cc->engine.asset.preloadStage1AsTask(); });
+    else                         co->start([cc] { cc->engine.sop.areaLoadFaithful(); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;
   } else if (st != 2 || !co || co->done()) {

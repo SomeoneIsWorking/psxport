@@ -580,3 +580,180 @@ void Sop::fieldMode() { Core* c = core;
     default: return;
   }
 }
+
+// pc_faithful SOP field-mode — mirror of ov_sop_gen_80109450 (see sop.h). Every leaf is the
+// substrate dispatch at its RE'd jal site; the stage structure (state switch, sm writes, the
+// fade-ramp arithmetic) is native. The 0x80044BD4 dispatch reaches the EngineOverrides
+// spawn-and-wait, whose wait loop parks the stage fiber while task-1 (0x80109164 SOP area
+// load) runs — organic cadence, no defer-step machinery.
+void Sop::fieldModeFaithful() { Core* c = core;
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 28, c->r[31]);
+  c->mem_w32(sp + 24, c->r[18]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->mem_w32(sp + 16, c->r[16]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  uint16_t st = c->mem_r16(sm + 0x50);
+  switch (st < 5 ? st : 5) {
+    case 0: {                                  // L_8010949C — load + scene setup
+      c->r[4] = 0x00FFFFFFu; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x801094B0u;
+      rec_dispatch(c, 0x8007E9C8u);            // fade engine: hold black
+      c->r[4] = 0x80109164u; c->r[5] = 0; c->r[6] = 0; c->r[7] = 3;
+      c->r[31] = 0x801094C8u;
+      rec_dispatch(c, 0x80044BD4u);            // spawn-and-wait: SOP area load (task-1)
+      c->r[18] = 0;
+      c->r[31] = 0x801094D0u; rec_dispatch(c, 0x8007B18Cu);
+      c->r[31] = 0x801094D8u; rec_dispatch(c, 0x800796DCu);
+      c->r[31] = 0x801094E0u; rec_dispatch(c, 0x80078610u);
+      c->r[4] = 0x800F2418u;
+      c->r[31] = 0x801094ECu; rec_dispatch(c, 0x8010A8D4u);     // SOP bg-ptr setup (overlay)
+      c->r[17] = 0x8010C98Cu;                  // scene-object stamp table (stride 12)
+      c->r[16] = c->r[17] + 8;
+      for (;;) {
+        c->r[4] = 3; c->r[5] = 3; c->r[6] = 1;
+        c->r[31] = 0x80109508u;
+        rec_dispatch(c, 0x8007A980u);          // spawn
+        uint32_t node = c->r[2];
+        c->mem_w16(node + 46, c->mem_r16(c->r[17] + 0));
+        c->mem_w16(node + 50, c->mem_r16(c->r[16] - 6));
+        c->r[17] += 12;
+        c->mem_w16(node + 54, c->mem_r16(c->r[16] - 4));
+        c->r[18] += 1;
+        c->mem_w32(node + 28, c->mem_r32(c->r[16] + 0));
+        if ((int32_t)c->r[18] >= 3) { c->r[16] += 12; break; }
+        c->r[16] += 12;
+      }
+      c->r[16] = 0x800E8008u;
+      c->r[4] = c->r[16]; c->r[5] = 0x8010C95Cu;
+      c->r[31] = 0x8010955Cu; rec_dispatch(c, 0x8006CBD0u);     // BG xform setup
+      c->r[4] = c->r[16]; c->r[5] = c->r[4] + 56;
+      c->r[31] = 0x80109568u; rec_dispatch(c, 0x8006E3B0u);     // BG camera snap-follow
+      c->r[16] = 0x1F800000u;
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 80, (uint16_t)(c->mem_r16(sm + 80) + 1)); // sm[0x50] -> 1
+      c->r[31] = 0x80109588u; rec_dispatch(c, 0x80075240u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w16(sm + 96, 30);                 // sm[0x60] intro timer
+      c->mem_w16(sm + 82, 0);
+      c->mem_w16(sm + 84, 0);
+      c->mem_w8 (sm + 108, 31);                // fade-ramp counter
+      c->mem_w8 (0x1F800137u, 1);              // cutMode
+      break;
+    }
+    case 1: {                                  // L_801095B4 — fade-in ramp + scene tick
+      c->r[16] = 0x1F800000u;
+      uint32_t v = ((uint32_t)c->mem_r8(sm + 108) << 3) & 0xFFu;
+      c->r[4] = (v << 16) | (v << 8) | v; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x801095E4u;
+      rec_dispatch(c, 0x8007E9C8u);            // fade engine: ramp level
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w8(sm + 108, (uint8_t)(c->mem_r8(sm + 108) - 1));
+      if (c->mem_r8(sm + 108) == 0) {
+        c->mem_w8(sm + 108, 31);
+        c->mem_w16(sm + 80, (uint16_t)(c->mem_r16(sm + 80) + 1));
+      }
+      c->r[31] = 0x801096F4u;
+      rec_dispatch(c, 0x801092B4u);            // SOP scene tick (overlay)
+      break;
+    }
+    case 2: {                                  // L_80109628 — scene tick + wait for skip/timeout
+      c->r[16] = 0x1F800000u;
+      c->r[31] = 0x80109630u;
+      rec_dispatch(c, 0x801092B4u);
+      int advance = c->mem_r8(0x800BF839u) != 0;
+      if (!advance) advance = (c->mem_r16(0x800E7E68u) & 8u) != 0;
+      if (advance) {
+        sm = c->mem_r32(0x1f800138u);
+        c->mem_w16(sm + 80, (uint16_t)(c->mem_r16(sm + 80) + 1));
+      }
+      break;
+    }
+    case 3: {                                  // L_80109678 — fade-out ramp + scene tick
+      c->r[16] = 0x1F800000u;
+      uint32_t v = (uint32_t)(0u - ((uint32_t)c->mem_r8(sm + 108) << 3)) & 0xFFu;
+      c->r[4] = (v << 16) | (v << 8) | v; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x801096ACu;
+      rec_dispatch(c, 0x8007E9C8u);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w8(sm + 108, (uint8_t)(c->mem_r8(sm + 108) - 1));
+      if (c->mem_r8(sm + 108) == 0)
+        c->mem_w16(sm + 80, (uint16_t)(c->mem_r16(sm + 80) + 1));
+      c->r[31] = 0x801096F4u;
+      rec_dispatch(c, 0x801092B4u);
+      break;
+    }
+    case 4: {                                  // L_801096FC — teardown, advance sm[0x4c]
+      c->r[31] = 0x80109704u;
+      rec_dispatch(c, 0x8001CF2Cu);
+      sm = c->mem_r32(0x1f800138u);
+      c->mem_w8 (0x1F800137u, 0);
+      c->mem_w16(sm + 78, 0);
+      c->mem_w16(sm + 80, 0);
+      c->mem_w16(sm + 82, 0);
+      c->mem_w16(sm + 84, 0);
+      c->mem_w16(sm + 76, (uint16_t)(c->mem_r16(sm + 76) + 1));
+      c->mem_w8 (0x800BF9B4u, 0);
+      break;
+    }
+    default: break;                            // st >= 5: straight to the epilogue
+  }
+  c->r[31] = c->mem_r32(sp + 28);
+  c->r[18] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 32;
+}
+
+// pc_faithful SOP area-load task body — mirror of ov_sop_gen_80109164 (see sop.h).
+void Sop::areaLoadFaithful() { Core* c = core;
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 24, c->r[18]); c->r[18] = 0x800F0000u;
+  c->mem_w32(sp + 20, c->r[17]); c->r[17] = 0x800EF478u;
+  c->mem_w32(sp + 16, c->r[16]); c->r[16] = 0x800BE0F0u;
+  c->mem_w32(sp + 28, c->r[31]);
+  uint32_t sm = c->mem_r32(0x1f800138u);
+  c->mem_w8(sm + 110, 3);                      // sm[0x6E] = file index 3
+  c->r[4] = 0x800EF478u;                       // 1. SOP descriptor sector
+  c->r[5] = c->mem_r32(0x800BE0F0u) + c->mem_r8(c->mem_r32(0x1f800138u) + 110);
+  c->r[6] = 2048;
+  c->r[31] = 0x801091B4u;
+  rec_dispatch(c, 0x8001DC40u);
+  uint32_t lo = c->mem_r32(0x800EF478u);
+  c->r[4] = 0x8018A000u;                       // 2. compressed archive
+  c->r[5] = c->mem_r32(0x800BE0F8u) + (lo >> 11);
+  c->r[6] = c->mem_r32(0x800EF47Cu) - lo;
+  c->r[31] = 0x801091D8u;
+  rec_dispatch(c, 0x8001DC40u);
+  c->r[4] = 0x8018A000u; c->r[5] = 0x001F8000u;
+  c->r[31] = 0x801091ECu;
+  rec_dispatch(c, 0x80044E84u);                // 3. unpack -> VRAM
+  uint32_t lo2 = c->mem_r32(0x800EF480u);
+  c->r[4] = 0x8018A000u;                       // 4. DAT payload
+  c->r[5] = c->mem_r32(0x800BE100u) + (lo2 >> 11);
+  c->r[6] = c->mem_r32(0x800EF484u) - lo2;
+  c->mem_w32(0x800A3EC8u, lo2 >> 11);
+  c->r[31] = 0x80109218u;
+  rec_dispatch(c, 0x8001DC40u);
+  c->r[4] = ((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1;   // 5. per-area table stamp
+  c->r[5] = 47;
+  c->r[31] = 0x80109230u;
+  rec_dispatch(c, 0x80045258u);
+  const int32_t n = (int32_t)c->mem_r32(0x800EF488u);         // 6. relocation table
+  c->r[4] = 0;
+  for (int32_t i = 0; i < n; i++) {
+    uint32_t word = c->mem_r32(0x800EF48Cu + i * 4);
+    c->r[4] += 1;
+    c->mem_w32(0x800ECF58u + (word >> 24) * 4, (word & 0x00FFFFFFu) + 0x8018A000u);
+  }
+  c->mem_w8(0x1F80019Bu, 1);                   // done_flag -> spawn-and-wait exits
+  c->r[31] = 0x8010929Cu;
+  c->game->pcSched.selfClose();                // FUN_80051FB4 — does not return on a task
+  c->r[31] = c->mem_r32(sp + 28);
+  c->r[18] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] += 32;
+}
