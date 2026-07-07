@@ -33,7 +33,7 @@ public:
   //   index becoming current. Kept pending so tick() resumes it when the dialog ends.
   void cutIfDialog();
 
-  // tick(): once-per-frame update (called from native_scheduler_step). Enforces "dialogs stop
+  // tick(): once-per-frame update (called from native_step_frame). Enforces "dialogs stop
   //   the ingame music" — stops a looping ingame-music clip while a dialog tone is up; resumes
   //   the remembered clip once the dialog ends and the XA stream is free (no voice playing).
   void tick();

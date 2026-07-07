@@ -88,6 +88,7 @@ set(PORT_SRC
   game/game_tomba2.cpp
   game/cd/libcd_native.cpp
   game/core/asset.cpp
+  game/core/pc_scheduler.cpp
   game/math/mathlib.cpp
   game/math/rng.cpp
   game/math/mtx.cpp

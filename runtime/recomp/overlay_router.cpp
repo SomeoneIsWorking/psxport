@@ -14,7 +14,7 @@
 // overlay address). The interpreter is gone (later-254): a slot address with no matching resident
 // overlay, or an address no module recompiled, still FAILS FAST in rec_dispatch_miss by design.
 #include "core.h"
-#include "game.h"              // SchedulerState::resident_ov (per-core resident-overlay-by-slot map)
+#include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
 #include "overlay_table.h"     // generated: REC_MAIN_LO/HI, main_dispatch, g_rec_overlays[]
 #include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
 #include <string.h>
@@ -51,13 +51,13 @@ void overlay_note_load(Core* c, uint32_t dest) {
     const RecOverlay* o = &g_rec_overlays[i];
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
-      c->game->sched.resident_ov[s] = o;
+      c->game->pcSched.resident_ov[s] = o;
       if (dbg) fprintf(stderr, "[ovload] core %c slot %d <- %s (frame %u)\n",
                        cid < 0 ? '?' : cid ? 'B' : 'A', s, o->name, fr);
       return;
     }
   }
-  c->game->sched.resident_ov[s] = 0;   // unknown content in this slot -> fall back to signature scan
+  c->game->pcSched.resident_ov[s] = 0;   // unknown content in this slot -> fall back to signature scan
   if (dbg) fprintf(stderr, "[ovload] core %c slot %d <- (none/unmatched, dest=0x%08X, frame %u)\n",
                    cid < 0 ? '?' : cid ? 'B' : 'A', s, dest, fr);
 }
@@ -70,7 +70,7 @@ void overlay_note_load(Core* c, uint32_t dest) {
 static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
   const unsigned char* ram = c->ram + (base & 0x1FFFFFFF);
   int s = slot_index(base);
-  const RecOverlay* cached = (s >= 0) ? c->game->sched.resident_ov[s] : 0;
+  const RecOverlay* cached = (s >= 0) ? c->game->pcSched.resident_ov[s] : 0;
   // Trust the load-time IDENTITY only while the live RAM still matches its signature. The cache becomes
   // STALE when the slot is reloaded with a different overlay by a path that bypasses overlay_note_load,
   // or when a noted load was a transient preload later overwritten by another overlay. A 32-byte memcmp
@@ -90,7 +90,7 @@ static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
     if (o->base != base || o->siglen > 32)
       continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
-      if (s >= 0) c->game->sched.resident_ov[s] = o;
+      if (s >= 0) c->game->pcSched.resident_ov[s] = o;
       return o;
     }
   }

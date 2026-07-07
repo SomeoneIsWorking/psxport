@@ -131,7 +131,7 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
   c->mem_w32(V + 0u, c->mem_r32(V + 0u) | 0xC0u);
 }
 
-// Called once per frame (native_scheduler_step). Enforces "dialogs stop the ingame music":
+// Called once per frame (native_step_frame). Enforces "dialogs stop the ingame music":
 // stop a looping ingame-music clip while a dialog tone is up; resume the remembered clip once
 // the dialog ends and the XA stream is free (no voice playing).
 void MusicCoord::tick() {

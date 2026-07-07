@@ -17,7 +17,7 @@
 // of 0x80109164 (faithful below, addresses annotated).
 
 #include "core.h"
-#include "game.h"    // SchedulerState.sop_field_step (Slip #2 fix — docs/findings/sbs.md)
+#include "game.h"    // PcScheduler::sop_field_step (Slip #2 fix — docs/findings/sbs.md)
 #include "cfg.h"
 #include "sop.h"
 #include <stdio.h>
@@ -486,8 +486,8 @@ void Sop::fieldMode() { Core* c = core;
       //   sop_field_step==0 → set to 1, RETURN (defer completion — screen stays black one tick)
       //   sop_field_step==1 → run the actual case 0 work, reset step to 0 for the next area load
       // Slot 0 is task-0 (the ONLY task that runs SOP fieldMode); array indexed for consistency.
-      if (c->game && c->game->sched.sop_field_step[0] == 0) {
-        c->game->sched.sop_field_step[0] = 1;
+      if (c->game && c->game->pcSched.sop_field_step[0] == 0) {
+        c->game->pcSched.sop_field_step[0] = 1;
         // Slip #5: match the FUN_80044BD4 RNG advance BEFORE the defer — the recomp fires the RNG
         // early in FUN_80044BD4's body, BEFORE the wait-loop yield that our defer models. Firing
         // rng.next() on the deferred re-entry (previously) put A's RNG advance one tick after
@@ -495,7 +495,7 @@ void Sop::fieldMode() { Core* c = core;
         (void)c->rng.next();
         break;   // defer — sm[0x50] stays 0; next tick re-enters this case
       }
-      c->game->sched.sop_field_step[0] = 0;   // completing now; arm again for the next area
+      c->game->pcSched.sop_field_step[0] = 0;   // completing now; arm again for the next area
       c->engine.sop.areaLoad();                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
       c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
       c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)

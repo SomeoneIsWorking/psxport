@@ -48,7 +48,7 @@ static void eng_load_stage(Core* c) {
 // CD content (dispatched through eng_load_stage / FUN_800450bc). Reimplemented PC-native, NOT transcribed:
 // the PSX body ends with thread plumbing (EnterCriticalSection / CloseThread(task[4]) / ExitCriticalSection /
 // ChangeThread(0xff000000)) whose only purpose is to stop the current task and switch away. The native
-// cooperative scheduler (native_scheduler_step) replaces all of that — setting the task state to 3 ("restart
+// cooperative scheduler (PcScheduler::step) replaces all of that — setting the task state to 3 ("restart
 // fresh at the new entry") IS the transition, and the terminal ChangeThread is the existing native yield
 // primitive switch (0x80080880). The four thread/critical-section calls are RAM- and IRQ-flag-neutral in
 // the native model (Enter+Exit cancel; Close/Change only set v0), so dropping them is faithful to the
@@ -56,7 +56,7 @@ static void eng_load_stage(Core* c) {
 // resumes into this function, it restarts at state 3 — so a plain override that does the work then ends the
 // run is correct; no coro-redirect handshake is needed (unlike the running dispatcher, later-169).
 //
-// switch behaves per context, matching the PSX: mid-game (in a task run, sched.in_stage==1) it longjmps
+// switch behaves per context, matching the PSX: mid-game (in a task run, pcSched.in_stage==1) it longjmps
 // to the scheduler and this function never returns (== ChangeThread suspending the task); at boot the
 // START->DEMO->GAME init transitions run via rc0(FUN_800499e8) with in_stage==0, where switch is a no-op
 // return and this function returns to FUN_800499e8, which continues — exactly as the stubbed thread layer

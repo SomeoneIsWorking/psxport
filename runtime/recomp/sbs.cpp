@@ -87,7 +87,7 @@ enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, DONE };
 struct Nav { Phase phase = REACH_GAME; int idle = 0; int postFrame = 0; };
 struct SbsKey { uint32_t from, to; uint16_t btn; };
 
-// One-frame rewind snapshot of the SchedulerState fields the harness must roll back alongside
+// One-frame rewind snapshot of the PcScheduler fields the harness must roll back alongside
 // guest RAM. Excludes jmp_buf yield_jmp (not trivially copyable — but only meaningful during a
 // task run; snapshot is taken outside one) and Coro* coro[] (fiber C-stack can't be rolled back;
 // rewind deletes fibers instead so the re-step re-spawns them).
@@ -435,9 +435,9 @@ static void sbs_restore_core(Core& c, const uint8_t* ram, const uint8_t* spad, c
   memcpy(c.r, regs, sizeof c.r);
   c.pc = pc;
 }
-// Snapshot the trivially-copyable SchedulerState fields (skip jmp_buf and Coro* — see SchedSnap
+// Snapshot the trivially-copyable PcScheduler fields (skip jmp_buf and Coro* — see SchedSnap
 // docstring on the harness class).
-static void sbs_snap_sched(const SchedulerState& s, SbsSchedSnap& out) {
+static void sbs_snap_sched(const PcScheduler& s, SbsSchedSnap& out) {
   memcpy(out.task_ctx,        s.task_ctx,        sizeof out.task_ctx);
   out.in_stage    = s.in_stage;
   out.cur_slot    = s.cur_slot;
@@ -456,7 +456,7 @@ static void sbs_snap_sched(const SchedulerState& s, SbsSchedSnap& out) {
 // the pre-rewind PSX execution and cannot be rolled back, so we delete + null it. The re-stepped
 // frame will re-enter the fresh-coro branch (task_started[] just got zeroed for started slots),
 // which spawns a new fiber from a clean stack.
-static void sbs_restore_sched(SchedulerState& s, const SbsSchedSnap& in) {
+static void sbs_restore_sched(PcScheduler& s, const SbsSchedSnap& in) {
   memcpy(s.task_ctx,        in.task_ctx,        sizeof s.task_ctx);
   s.in_stage    = in.in_stage;
   s.cur_slot    = in.cur_slot;
@@ -478,8 +478,8 @@ void Sbs::Impl::takePreStepSnap() {
   if (!mPreRamA) { mPreRamA = (uint8_t*)malloc(0x200000); mPreRamB = (uint8_t*)malloc(0x200000); }
   sbs_snap_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
   sbs_snap_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
-  sbs_snap_sched(mA->sched, mPreSchedA);
-  sbs_snap_sched(mB->sched, mPreSchedB);
+  sbs_snap_sched(mA->pcSched, mPreSchedA);
+  sbs_snap_sched(mB->pcSched, mPreSchedB);
   mPreSnapValid = true;
 }
 void Sbs::Impl::rewindAndArm(uint32_t addr) {
@@ -487,8 +487,8 @@ void Sbs::Impl::rewindAndArm(uint32_t addr) {
   fprintf(stderr, "[sbs] rewinding one frame to catch the divergent write on 0x%08X on BOTH cores.\n", addr);
   sbs_restore_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
   sbs_restore_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
-  sbs_restore_sched(mA->sched, mPreSchedA);
-  sbs_restore_sched(mB->sched, mPreSchedB);
+  sbs_restore_sched(mA->pcSched, mPreSchedA);
+  sbs_restore_sched(mB->pcSched, mPreSchedB);
   mWwAddr = (addr & ~3u) | 0x80000000u; mWwArmed = true; mWwPersist = true;
   mWwHit = 0; mWwVa = mWwVb = 0; mWwBtA[0] = mWwBtB[0] = 0;
   mWwPcA = mWwPcB = mWwRaA = mWwRaB = mWwSpA = mWwSpB = 0;

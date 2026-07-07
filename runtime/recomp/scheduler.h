@@ -2,11 +2,18 @@
 #define SCHEDULER_H
 #include <stdint.h>
 struct Core;
+struct R3000;
 #define TASKBASE 0x801fe000u   // task obj table base (slot i at +i*0x70)
 #define TASKSTRIDE 0x70u
 #define CUR_TASK 0x1f800138u   // DAT_1f800138: scheduler current-task ptr
 void scheduler_yield(Core* c);              // FUN_80080880 ChangeThread override — the universal task-switch/yield primitive
-void native_scheduler_step(Core* c);  // one scheduler pass over the 3 task slots (replaces FUN_80051e60)
+
+// Substrate task-slot stanzas (scheduler.cpp), called from PcScheduler::step when no PC-native
+// stanza claims the slot. Each returns 1 when it processed the tick, 0 to fall through.
+int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                 int native_content, const R3000& loop);
+int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t st,
+                                       int native_content, const R3000& loop);
 
 // Native port of FUN_80051F14 — the guest task-spawn primitive. Writes the same slot fields the
 // substrate does: base+0x0C = entry_pc, base+0x10 = caller's gp (r28), base+0x00 = 2 (RUNNABLE),

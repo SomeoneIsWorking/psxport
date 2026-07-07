@@ -1389,7 +1389,7 @@ void Engine::stagePrologue() { Core* c = core;
 }
 
 // OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x801063F4). SUPERSEDED by the
-// native per-frame path (game_native in native_scheduler_step calls c->engine.stagePrologue +
+// native per-frame path (game_native in PcScheduler::step calls c->engine.stagePrologue +
 // c->engine.frame). Retained as a reference / fallback; not on the live path.
 void Engine::stageMain() { Core* c = core;
   stagePrologue();

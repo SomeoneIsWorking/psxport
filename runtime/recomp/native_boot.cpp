@@ -16,9 +16,9 @@
 // MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
 #include "core.h"
-#include "game.h"      // SchedulerState (per-instance cooperative-task state) reached via c->game->sched
+#include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "hw_bind.h"   // spu_bind/mdec_bind/cdc_bind/xa_bind (per-instance HW-peripheral binders)
-#include "scheduler.h" // switch/native_scheduler_step + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
+#include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
 #include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
@@ -41,9 +41,9 @@
 // class MusicCoord (game/audio/music_coord.h) — reached as c->engine.musicCoord.tick() per frame
 void xa_audio_trace(Core* c, const char* tag);    // CD-vol fade + XA lifecycle trace (cd_override.cpp)
 
-// The native cooperative-task scheduler (switch + native_scheduler_step — the FUN_80080880/
-// FUN_80051e60 replacements) now lives in scheduler.cpp/scheduler.h; TASKBASE/TASKSTRIDE/CUR_TASK
-// (used by the REPL/debug state probes below) are reached via "scheduler.h".
+// The native cooperative-task scheduler (scheduler_yield + PcScheduler::step — the FUN_80080880/
+// FUN_80051e60 replacements) lives in scheduler.cpp + game/core/pc_scheduler.cpp; TASKBASE/
+// TASKSTRIDE/CUR_TASK (used by the REPL/debug state probes below) are reached via "scheduler.h".
 extern "C" void ffspan_reset_frame(void), ffspan_begin(Core*), ffspan_end(Core*, const char*);  // PSXPORT_BDTAG (engine_stage.cpp); native_step_frame below still calls these directly
 
 // ---- BGM frame counter (PSXPORT_BGMDBG trace shared with cd_override.cpp) --------------------
@@ -121,9 +121,9 @@ static void native_step_frame(Core* c, uint32_t f) {
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/
   // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
   // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
-  // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside native_scheduler_step.
+  // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside PcScheduler::step.
   ffspan_begin(c);
-  native_scheduler_step(c);                                   // <- replaces FUN_80051e60 (BIOS scheduler)
+  c->game->pcSched.step();                                    // <- replaces FUN_80051e60 (BIOS scheduler)
   ffspan_end(c, "scheduler");
   perf_phase_end(3);
   c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
