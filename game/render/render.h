@@ -45,8 +45,6 @@ public:
   NodeXform         mNodeXform;        // scene-node WORLD-TRANSFORM builder (guest FUN_80051844)
   // PSXPORT_BDTAG per-node attribution names for the walk dispatch cases (render_walk.cpp).
   // The gp0 classify is deferred one frame, so the names live in a per-Core ring, not walk locals.
-  char              mWalkTagRing[512][20] = {};
-  int               mWalkTagPos = 0;
   NativeScenePass   mNativeScene;      // decoupled native render pass (collect + drawObject)
   MarginRenderer    margin;            // widescreen margin re-include (collect in cull, flush post-walk)
   Lighting          lighting;          // per-area light registry (selected once per frame by shadeSelect)
@@ -83,35 +81,6 @@ public:
   // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).
   void perObjFlush();
 
-  // perObjRender: per-object render dispatch (guest 0x8003CCA4). Stashes current-object bookkeeping,
-  // picks a per-node dispatch case, routes flush-only via perObjFlush and secondary-effect cases via
-  // rec_super_call, then tags the produced packet span with the object's world-position depth.
-  // Taxi-parameter c->r[4] = node. Was ov_perobj_render / submit_perobj_render.
-  void perObjRender();
-
-  // bgRender: field seaside GROUND/BG node renderer — overlay 0x8013E9D8 native. Runs the GTE
-  // visibility/bound setup (rec_dispatch), then routes to submit_perobj_render for the native
-  // world-coord render. Taxi-parameter c->r[4] = node. Was ov_bg_render.
-  void bgRender();
-
-  // Aux render-list WALKS — the three per-frame auxiliary render lists the master scene render walks
-  // after the primary walk. Each drains a snapshot-double-buffered queue and dispatches each live node
-  // through its per-type case. Recomp-shaped bodies. Were ov_rwalk_aux_bcf4/bf00/eec0.
-  void rwalkAuxBcf4();
-  void rwalkAuxBf00();
-  void rwalkAuxEec0();
-
-  // renderWalk: the master phase-2 render-list WALK (gen_func_8003C048). Drains the primary render
-  // list, dispatching each live node by render type through the 33-entry jump table. Was ov_render_walk.
-  void renderWalk();
-  // walkTag: format one BDTAG attribution name ("<pfx><fn low20>") into mWalkTagRing.
-  const char* walkTag(const char* pfx, uint32_t fn);
-
-  // renderWalkSnapshot: the SNAPSHOT-QUEUE object render driver (gen_func_8003BB50). Drains the
-  // per-object render QUEUE (scratchpad cursor), tagging each object's packet span with its world
-  // depth. Was ov_render_walk_snapshot.
-  void renderWalkSnapshot();
-
   // terrain (guest 0x8002AB5C): the field terrain render entry. Picks the area's light config for
   // the frame, then either super-calls the recomp body (dual-core diff neutralize path) or runs the
   // PC-native float terrain render. Taxi-parameter c->r[4] = node. Was ov_terrain.
@@ -124,16 +93,6 @@ public:
   // gt3gt4 (gen_func_800803DC's first body): the generic GT3/GT4 renderer — split the geomblk's packed
   // prim counts (low16 tri, high16 quad) and run the two native submitters in sequence.
   void gt3gt4(uint32_t geomblk, uint32_t otbase);
-
-  // prepObjectMatrix: shared terrain scene-data prep (the faithful gameplay half of guest 0x8002AB5C):
-  // depth-cue regs + the two sway gameplay bytes, then the object rotation matrix at scratch SCR.
-  void prepObjectMatrix(uint32_t node);
-
-  // rwalkB588 (guest 0x8003B588): the field WATER render pass — later-231 "Pass A". Owns the water
-  // node 0x800E7E80's byte-state bookkeeping natively, runs the PSX per-object transform SETUP leaf
-  // (rec_dispatch), then routes the render to the native submit_perobj_render for real-depth world-
-  // coord projection. Was ov_rwalk_b588.
-  void rwalkB588();
 
   // sceneNative: the master scene-render walker (per-frame terrain + entity/object walk over
   // the 3 doubly-linked object lists, with backdrop + collectable-quad + native BG tilemap).

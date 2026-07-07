@@ -48,24 +48,20 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 // field-stage frame — running them again here would double-submit every terrain/object prim. This function
 // now performs only the remaining non-walk PSX passes ov_scene_native does not cover.
 #include "game.h"      // c->game->ffspan — PSXPORT_BDTAG builder-span attribution
+// THE PSX RENDER PATH ALWAYS EXECUTES UNDERNEATH (USER 2026-07-07, issue #32): the substrate render
+// orchestrator runs in BOTH render modes, on the faithful task's own guest call path, so every guest
+// write it makes (packet pool, OT links, walk-queue cursors, node bookkeeping, stack scratch) is
+// byte-identical to the recomp reference — rendering can never cause an SBS divergence. pc_render vs
+// psx_render differ ONLY in where the PICTURE comes from (drawOTag): the native read-only passes +
+// 2D-overlay OT walk vs the full OT walk. The old pc_render fork here ran a PARTIAL pass list and left
+// the walk cluster to native re-implementations in the display phase (sceneNative) — a different call
+// context than the recomp's, which is exactly what diverged (f26, guest-stack spills at a foreign sp).
 void Render::frame() { Core* c = mCore;
   if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
-  if (mode.psxRender()) { d0(c, 0x8003f9a8u); return; }   // COMPARE: render the field via the PSX recomp path
-  c->game->ffspan.begin(); d0(c, 0x8004fd30u); c->game->ffspan.end("rf_4fd30");
-  c->game->ffspan.begin(); d0(c, 0x80025d98u); c->game->ffspan.end("rf_25d98");   // 2D atlas SPRITE band (op-0x65)
-  // DIAG groundnative: route the ground table real-depth via Render::fieldEntityRender. Decode is CORRECT, but
-  // the 2D sea/water backdrop then composites OVER it (later-235 render-ordering blocker) — OFF by default.
-  if (cfg_dbg("groundnative")) { fieldEntityRender(0x800f2418u); }
-  else { c->game->ffspan.begin(); d1(c, 0x8003d0bcu, 0x800f2418u); c->game->ffspan.end("rf_ground"); } // STILL-PSX GROUND (later-229)
-  c->game->ffspan.begin(); d0(c, 0x8003f024u); c->game->ffspan.end("rf_3f024");
-  c->game->ffspan.begin(); d0(c, 0x8003df04u); c->game->ffspan.end("rf_3df04");
+  d0(c, 0x8003f9a8u);
 }
 
-// 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). The walk cluster is owned by
-// ov_scene_native (see ov_render_frame above); only the non-walk passes remain here.
+// 0x8003fa44 — mid-transition render orchestrator twin (reduced pass set). Same rule: substrate always.
 void Render::frameX() { Core* c = mCore;
-  if (mode.psxRender()) { d0(c, 0x8003fa44u); return; }   // COMPARE: render the field via the PSX recomp path
-  d0(c, 0x8004fd30u);
-  d0(c, 0x80025d98u);
-  d0(c, 0x8003f024u);
+  d0(c, 0x8003fa44u);
 }

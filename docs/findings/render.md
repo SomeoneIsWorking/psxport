@@ -1,5 +1,35 @@
 # Findings — render / engine submit
 
+## PSX render path always executes underneath; pc_render display pass is READ-ONLY (2026-07-07, issue #32)
+
+- **symptom**: strict SBS full (default, pc_render live) diverged at f26 in the main-thread guest
+  stack (0x801FFFC8..): core A's extra writer pc=0x800597AC ra=DEAD0000 — the native render-walk
+  lift (submit.cpp rwalkB588) dispatching the guest transform-setup from the DISPLAY phase, a
+  foreign call context whose guest-stack spills can never match the recomp reference's.
+- **cause (architectural)**: pc_render was built as native REPLACEMENTS of the substrate walk
+  cluster — byte-faithful lifts re-running the walks' guest writes (queue swaps, node bookkeeping,
+  guest renderer dispatches) from drawOTag instead of the task's own call path. Same writes,
+  different sp/cadence => structurally unable to hold the strict byte compare.
+- **fix (USER directive)**: "PSX render path should always be active underneath even when PC
+  rendering; PC renderer shouldn't write to guest memory — then rendering should never affect
+  diverges." Implemented: Render::frame/frameX ALWAYS dispatch the substrate orchestrator
+  (0x8003f9a8/0x8003fa44) in both render modes; the walk-cluster lifts (renderWalk,
+  renderWalkSnapshot, rwalkAuxBcf4/Bf00/Eec0, rwalkB588, perObjRender, bgRender) and
+  prepObjectMatrix are RETIRED (RE'd case tables preserved at commit 7989159); the display pass
+  (sceneNative: backdrop, read-only terrain float pass, fieldEntityRender, perObjFlush loops) is
+  read-only — terrain matrices now computed in HOST memory (native_terrain.cpp
+  terrain_obj_matrix_host = rotmat element math + FUN_80084520 column scale, Ghidra
+  scratch/decomp/80084520.c).
+- **verified**: default-mode SBS full+AUTONAV diverges at f114/0x800BF544 — byte-identical frontier
+  to the PSXPORT_SBS_FORCE_PSX_RENDER baseline (rendering no longer affects diverges); GATE=1 +
+  pc_render boots clean (no abort/recomp-MISS).
+- **known deferred render regressions**: per-object depth tags for guest-emitted billboard prims
+  are lost (the lifts attached them at dispatch time) — restore via a READ-ONLY observer
+  (EngineOverrides wrap teeing packet-span info) later; margin_render (widescreen mod) still
+  dispatches guest transforms — same violation class, inactive by default, fix with the observer.
+- **refs**: game/render/render_frame.cpp, render_walk.cpp, submit.cpp, native_terrain.cpp;
+  issue #32; skill sbs-diverge; memory feedback_native_renderer_readonly_overlay.
+
 ## Un-owned FUN_8007E9C8 fade callers — 3 of 3 SHIPPED (2026-07-03)
 - **symptom (from #27 investigation):** After surveying all 36 shard callsites of `func_8007E9C8` and mapping the enclosing fn per overlay, exactly THREE fade-caller SMs remained still-substrate. Any cutscene that reaches an un-owned caller via a still-substrate PARENT drops the fade rect (substrate FUN_8007E9C8 writes guest OT data our renderer no longer draws) and can trigger the #27 stuck-black symptom.
 - **status:** ALL 3 native (last landing: commit 560bac0). Also solved the sibling arc — the cutscene-script INTERPRETER that dispatches the A06 pair is fully native (dd40602 + 4c331a3 + a70092a), so op-0x03E fnptr routing is live for any A06 fade fn registered as a `beh_*`.

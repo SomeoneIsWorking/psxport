@@ -32,21 +32,64 @@ int   gpu_gpu_shadows_active(void);
 
 static inline float r16f(Core* c, uint32_t a) { return (float)c->mem_r16s(a); }
 
+// READ-ONLY terrain matrix build (USER 2026-07-07, issue #32: the display pass may not write guest
+// memory or GTE state). Mirrors the guest math bit-exactly with host storage:
+//   - rotation matrix from the node's euler angles = Math::rotmat's element math (FUN_80085480,
+//     R=Rz·Ry·Rx, same trig LUT reads @0x800a6490, same GPF clamp / >>12 truncation) minus its
+//     guest/GTE stores.
+//   - sway column-scale = FUN_80084520 (Ghidra 2026-07-07, scratch/decomp/80084520.c): M' = M·diag(f),
+//     per-column (f[col]*el)>>12 truncated to int16. f = {sway0<<2, sway1<<2, sway2<<2}; sway0/2
+//     computed from the node exactly as the substrate terrain body computes them, sway1 read back
+//     from the engine global 0x800A2015 (set elsewhere; the substrate body also reads it back).
+// The substrate terrain body (0x8002AB5C, running underneath via the render orchestrator) owns the
+// guest-visible writes of this prep (0x800A2014/16 sway bytes, IR0 stage, FarColor); this pass READS.
+static inline void trig_lut(Core* c, int32_t angle, int* s, int* co) {
+  int32_t sign = angle >> 31;
+  uint32_t absa = (uint32_t)((angle + sign) ^ sign);
+  uint32_t word = c->mem_r32(0x800a6490u + ((absa << 2) & 0x3ffcu));
+  *co = (int)((int32_t)word >> 16);
+  uint32_t at = (word << 16); at = (at + (uint32_t)sign) ^ (uint32_t)sign;
+  *s = (int)(int16_t)(at >> 16);
+}
+static inline int16_t gpf1s(int ir0, int ir) {
+  int32_t v = ((int32_t)ir0 * ir) >> 12;
+  return (int16_t)(v < -32768 ? -32768 : (v > 32767 ? 32767 : v));
+}
+static void terrain_obj_matrix_host(Core* c, uint32_t node, int16_t m[9]) {
+  uint32_t w0 = c->mem_r32(node + 84);
+  int sx,cx,sy,cy,sz,cz;
+  trig_lut(c, (int16_t)w0,       &sx, &cx);
+  trig_lut(c, (int16_t)(w0>>16), &sy, &cy);
+  trig_lut(c, c->mem_r16s(node + 88), &sz, &cz);
+  int16_t cxsy = gpf1s(cx, sy), cxsz = gpf1s(cx, sz), cxcz = gpf1s(cx, cz);
+  int16_t sxsy = gpf1s(sx, sy), sxsz = gpf1s(sx, sz), sxcz = gpf1s(sx, cz);
+  int16_t czcy = gpf1s(cz, cy), cz_sxsy = gpf1s(cz, sxsy), cz_cxsy = gpf1s(cz, cxsy);
+  int16_t szcy = gpf1s(sz, cy), sz_sxsy = gpf1s(sz, sxsy), sz_cxsy = gpf1s(sz, cxsy);
+  int16_t cycx = (int16_t)(((int32_t)cy * cx) >> 12);
+  int16_t cysx = (int16_t)(((int32_t)cy * sx) >> 12);
+  m[0]=czcy;                      m[1]=(int16_t)-szcy;            m[2]=(int16_t)sy;
+  m[3]=(int16_t)(cz_sxsy + cxsz); m[4]=(int16_t)(cxcz - sz_sxsy); m[5]=(int16_t)-cysx;
+  m[6]=(int16_t)(sxsz - cz_cxsy); m[7]=(int16_t)(sxcz + sz_cxsy); m[8]=cycx;
+  int32_t a80 = c->mem_r16s(node + 80);
+  int32_t f[3] = { (int32_t)((uint8_t)((c->mem_r16s(node + 64) * a80) >> 11)) << 2,
+                   (int32_t)c->mem_r8(0x800A2015u) << 2,
+                   (int32_t)((uint8_t)((c->mem_r16s(node + 66) * a80) >> 11)) << 2 };
+  for (int row = 0; row < 3; row++)
+    for (int col = 0; col < 3; col++)
+      m[row*3+col] = (int16_t)(((int32_t)m[row*3+col] * f[col]) >> 12);
+}
+
 // gen_func_8002AB5C, rebuilt PC-native. a0(=r4) = the terrain render-list node.
 void NativeScenePass::terrainRender() {
   Core* c = mCore;
   uint32_t node = c->r[4];
-  // Faithful gameplay half: write the sway bytes + build the object rotation matrix at SCR (interpreted
-  // leaves 0x80085480/0x80084520). This is scene data (the terrain's orientation); native-izing RotMatrix
-  // is a later step. After this the object matrix is at SCR, the camera matrix at SCR+0xF8 (set earlier).
-  c->mRender->prepObjectMatrix(node);
-
   // ---- read scene data as FLOAT ----------------------------------------------------------------------
-  // object rotation matrix @ SCR: element[row][col] = (int16)mem_r16(SCR + col*2 + row*6), /4096.
+  // object rotation matrix — host-computed (read-only), /4096.
+  int16_t mobj[9]; terrain_obj_matrix_host(c, node, mobj);
   float Robj[3][3];
   for (int row = 0; row < 3; row++)
     for (int col = 0; col < 3; col++)
-      Robj[row][col] = r16f(c, SCR + (uint32_t)col*2 + (uint32_t)row*6) / 4096.0f;
+      Robj[row][col] = (float)mobj[row*3+col] / 4096.0f;
   // camera rotation matrix @ SCR+0xF8 (CR-packed, same layout as GTE CR0-4), /4096.
   uint32_t k0 = c->mem_r32(SCR+0xF8), k1 = c->mem_r32(SCR+0xFC), k2 = c->mem_r32(SCR+0x100),
            k3 = c->mem_r32(SCR+0x104), k4 = c->mem_r32(SCR+0x108);

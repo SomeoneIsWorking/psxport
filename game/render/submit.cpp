@@ -409,136 +409,19 @@ void Render::fieldEntityRender(uint32_t es) {
 
 // ov_ground_probe (diagnostic, `debug groundprobe`) moved to render_debug_probes.cpp (2026-07 restructure).
 
-// NATIVE field TERRAIN renderer — gen_func_8002AB5C (later-135). The render fn (node+24) of the field's
-// t32 render-list node: the bulk map/terrain geometry. Interpreted-only (reached via fn-ptr; seeded into
-// the RE set). Decoded from the recomp body — it is structurally the per-object flush specialised for the
-// terrain strip: set the depth-cue, build the object matrix (euler + a secondary sway), compose it with
-// the camera via the same MVMVA columns as 8003CDD8, then submit the terrain prim records through the
-// already-owned byte-packed submitter 0x80027768. The matrix-build leaves (80085480 euler→matrix,
-// 80084520 secondary rotate) and the submit stay platform primitives (rec_dispatch / the owned override),
-// exactly as the recomp body calls them; we own the orchestration, scratch writes and GTE compose.
-//   - FarColor (CR21-23) = 0 (fog toward black); IR0 depth-cue factor (0x1F800090, read by 80027768) =
-//     (128 - node[78]) << 5.
-//   - two sway angle bytes at 0x800A2014/2016 = (node[64]*node[80])>>11 and (node[66]*node[80])>>11.
-//   - terrain geomblk = 0x8009FAE8 (fixed per-frame record buffer); a1=a2=a3=0.
-#define A2_PARAM     0x800A2014u             // 3-byte sway-angle param scratch (engine global)
-#define IR0_STAGE    0x1F800090u             // IR0 depth-cue factor staged for the 0x80027768 submitter
-// Terrain prim-record buffer (a0 to 80027768). The recomp body 0x8002AB5C loads `lui 0x800A; addiu -1304`
-// = 0x8009FAE8 (confirmed: all three real callers of 0x80027768 pass -1304; 0x800A1AE8 is referenced by
-// NO function as a geomblk — it was a fabricated address in the prior native port that read the WRONG
-// buffer → garbage/water terrain geometry instead of the actual field strip).
-#define MVMVA_TERRAIN_GEOMBLK 0x8009FAE8u
-// Shared terrain scene-data prep (the faithful gameplay half): write the depth-cue regs + the two sway
-// gameplay bytes, then build the object rotation matrix at scratch SCR (euler 0x80085480 + secondary
-// sway 0x80084520). Used by the PC-native NativeScenePass::terrainRender (native_terrain.cpp); the verified
-// sway-byte writes (later-157, A/B RAM-0-diff) have a single source of truth. Leaves the object matrix at SCR; camera matrix is at
-// SCR+0xF8 (set earlier). The matrix-build leaves stay platform primitives (rec_dispatch), as the
-// recomp body calls them.
-void Render::prepObjectMatrix(uint32_t node) {
-  Core* c = mCore;
-  // depth-cue: FarColor=0, IR0 factor staged for the submitter
-  gte_write_ctrl(21, 0); gte_write_ctrl(22, 0); gte_write_ctrl(23, 0);
-  uint32_t ir0 = (uint32_t)((128 - c->mem_r16s(node + 78)) << 5);
-  int32_t a80 = c->mem_r16s(node + 80);
-  // The two sway-angle bytes (0x800A2014/2016) are written by the recomp terrain body and read back
-  // by it (scaled <<2) into the secondary-rotation args; the middle byte 0x800A2015 is set elsewhere.
-  // We write them to guest exactly as the recomp does (the no-guest-write rule was discarded — these
-  // are part of the function's faithful behavior, and leaving them stale was the only true-gameplay
-  // divergence vs the recomp body, root-caused via the A/B RAM diff). Compute, store, use.
-  uint8_t sway0 = (uint8_t)((c->mem_r16s(node + 64) * a80) >> 11);
-  uint8_t sway2 = (uint8_t)((c->mem_r16s(node + 66) * a80) >> 11);
-  c->mem_w8(A2_PARAM + 0, sway0);
-  c->mem_w8(A2_PARAM + 2, sway2);
-  uint8_t sway1 = c->mem_r8(A2_PARAM + 1);                 // external (set elsewhere)
-  c->mem_w32(IR0_STAGE, ir0);
-  // build object rotation matrix at scratch SCR from the node's euler angles (node+84/86/88)
-  c->math.rotmat(node + 84, SCR);
-  // Secondary sway rotation by the host-computed angle bytes (scaled <<2). The recomp body 0x8002AB5C
-  // stages these three angle words on its OWN STACK FRAME (r29 -= 56; words at r29+16/20/24), NOT in
-  // scratchpad — and passes that stack pointer as 0x80084520's arg. The prior native code wrote them to
-  // scratchpad 0x1F8001C0 instead, a guest write the recomp NEVER makes; that clobbered whatever live
-  // engine state occupied 0x1F8001C0, corrupting gameplay (terrain collision → Tomba fell through). It
-  // was invisible to the later-157 A/B gate, which diffs only the 2 MB main RAM, not the scratchpad.
-  // Mirror the recomp exactly: take a guest stack frame, write the angles there, restore on the way out.
-  uint32_t saved_sp = c->r[29];
-  c->r[29] = saved_sp - 56;                               // recomp's stack frame (private scratch, not 0x1F800xxx)
-  c->mem_w32(c->r[29] + 16, (uint32_t)sway0 << 2);
-  c->mem_w32(c->r[29] + 20, (uint32_t)sway1 << 2);
-  c->mem_w32(c->r[29] + 24, (uint32_t)sway2 << 2);
-  c->r[4] = SCR; c->r[5] = c->r[29] + 16; rec_dispatch(c, 0x80084520u);
-  c->r[29] = saved_sp;                                    // pop the frame
-}
-
+// RETIRED 2026-07-07 (issue #32): Render::prepObjectMatrix (guest sway/IR0/GTE writes + the
+// 0x80084520 dispatch) and Render::rwalkB588 (the water-pass lift: node bookkeeping writes + the
+// 0x800597AC transform-setup dispatch — the SBS f26 writer). The substrate walk executes both
+// underneath via the render orchestrator; the display pass computes its matrices in host memory
+// (native_terrain.cpp terrain_obj_matrix_host). History: this file @ commit 7989159.
 void Render::terrain() {
   Core* c = mCore;
   if (cfg_dbg("terrgte")) fprintf(stderr, "[Render::terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Pick this area's light config ONCE per world frame (terrain renders first); the per-face shader reads
   // the cached pointer. Cheap guest-RAM fingerprint read; unknown area -> village SUN default.
   if (g_mods.light) shadeSelect();
-  // Dual-core diff: the `b` core neutralizes terrain to the recomp body via a per-Game flag (the override
-  // table is shared; the per-core choice is this flag, not a divergent table). `a` keeps the native path.
-  if (c->game->neutralize_terrain) { rec_super_call(c, 0x8002AB5Cu); return; }
-  // RENDER PC-NATIVE (USER DIRECTIVE: behave like a PC game, do NOT simulate PSX). The terrain is rendered
-  // by NativeScenePass::terrainRender — float transform + real per-pixel depth, drawn straight to the rasterizer, NO GTE
-  // compose / NO gte_op / NO byte-packed PSX packet. (The old GTE-compose + 0x80027768-submit transcription
-  // oracle was removed — no gating.) prepObjectMatrix does the gameplay sway writes + object-matrix
-  // scene data; the render method is PC-native float.
+  // READ-ONLY display pass (issue #32): float transform + real per-pixel depth, matrices computed in
+  // host memory (native_terrain.cpp terrain_obj_matrix_host). The substrate terrain body 0x8002AB5C
+  // executes underneath via the render orchestrator and owns all guest writes (sway bytes, IR0, GTE).
   mNativeScene.terrainRender();
-}
-
-// PSXPORT_DEBUG=rwalk — phase-2 render-walk caller counter. The per-object render dispatch
-// gen_func_8003CCA4 is driven by one of several orchestrators (the render-layer/list drainers); count
-// which fire per scene so the phase-2 flush walk worth owning next is picked by data. Super-calls.
-// 0x8003B588 (later-231 "Pass A") — the field WATER render pass, OWNED native real-depth.
-// Node 0x800E7E80 (cmd-ptr array @+0xC0). Structure (disas.py 0x8003b588): node-byte bookkeeping
-// (anim/state @0x8003b5a0..0x8003b698, ported 1:1 below), then the PSX per-object transform SETUP leaf
-// 0x800597AC (rec_dispatch — still PSX, does NO render), then the per-object RENDER. Live, node+0xD=0 →
-// (node+0xD)&0xB=0 → render-case table 0x80014EC8[0]=0x8003CD00 = the native eproj FLUSH case, so routing
-// the render through the native submit_perobj_render gives the water world-coord FLOAT projection with REAL
-// per-vertex depth. Previously the whole pass ran as pure PSX (render_frame.cpp d0(0x8003b588)), so the
-// inner jal 0x8003CCA4 emitted GTE packets the native renderer couldn't project (is3d=0) → the water drew
-// as a flat 2D FOREGROUND fill OVER the world (the "sea on top" bug). NB: own this TOGETHER with the native
-// ground (later-231 caveat) so both sort by real depth — a still-2D-FG ground would occlude the real-depth water.
-void Render::rwalkB588() {
-  Core* c = mCore;
-  const uint32_t node = 0x800E7E80u;
-  uint32_t v1 = c->mem_r8(node + 0x0D);
-  if ((v1 & 0xD0) == 0) {
-    c->mem_w8(node + 0x0D, 0);                                   // @698
-  } else {
-    v1 |= 0x02; c->mem_w8(node + 0x0D, v1);                      // @5b0/@5bc
-    if (!(v1 & 0x20)) {                                          // @5b8: (v1&0x20)==0 → byte setup
-      uint32_t g = c->mem_r8(0x1F800247u);                       // @5cc/@608/@658 (same addr)
-      if (v1 & 0x10) {                                           // @5c0 → @5cc
-        int to5f4 = ((g & 0x30) != 0) || ((g & 0x03) < 2);       // @5d4 / @5e0+@5e4
-        if (!to5f4) {                                            // @5e8 → @68c (v0=208)
-          c->mem_w8(node + 0x18, 208); c->mem_w8(node + 0x19, 208); c->mem_w8(node + 0x1A, 208);
-        } else {                                                 // @5f4
-          uint32_t v1b = c->mem_r8(node + 0x0D);
-          if (v1b & 0x80) {                                      // @5fc≠0 → @604/@684 (v0 computed, then 32/32)
-            int32_t r = ((int32_t)((uint32_t)c->trig.rsin((int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
-            c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
-          } else if (v1b & 0x40) {                               // @62c → @634 (v0=32)
-            c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
-          } else {                                               // @640 (v0=128)
-            c->mem_w8(node + 0x18, 128); c->mem_w8(node + 0x19, 128); c->mem_w8(node + 0x1A, 128);
-          }
-        }
-      } else {                                                   // @64c: (v1&0x10)==0
-        if (v1 & 0x80) {                                         // @650≠0 → @654/@680/@684 (v0=r+16+32, then 32/32)
-          int32_t r = ((int32_t)((uint32_t)c->trig.rsin((int32_t)((g & 0x0F) << 7)) << 16)) >> 22;   // FUN_80083E80 -> native Trig::rsin
-          c->mem_w8(node + 0x18, (uint8_t)(r + 48)); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
-        } else {                                                 // @67c → @680/@684 (v0=0+32)
-          c->mem_w8(node + 0x18, 32); c->mem_w8(node + 0x19, 32); c->mem_w8(node + 0x1A, 32);
-        }
-      }
-    }
-  }
-  c->r[4] = node; rec_dispatch(c, 0x800597ACu);                  // @69c: PSX transform setup (no render)
-  if (c->mem_r8(node + 1) != 0) {                                // @6a4: per-object RENDER (native real-depth)
-    uint8_t s1 = c->mem_r8(node + 8);
-    if ((c->mem_r16(node + 0x17E) & 0x20) && c->mem_r8(node + 0x179)) c->mem_w8(node + 8, c->mem_r8(node + 9));
-    c->r[4] = node; perObjRender();                              // was inner jal 0x8003CCA4 (PSX GTE)
-    c->mem_w8(node + 8, s1);
-  }
 }
