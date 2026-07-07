@@ -25,11 +25,14 @@ Two execution paths and two rendering paths. Any run is one exec × one render.
 ### Rendering (orthogonal to exec)
 
 - **psx_render** = `PSXPORT_RENDER_PSX=1` — the substrate's GTE + OT + GP0 renderer.
-- **pc_render** = default — native renderer. Rules:
-  - Bypasses GTE, OT, and PSX rendering subsystems entirely; native transforms + real depth buffer.
-  - Clean OOP, reads state from other classes (e.g. fade state from the fade engine).
-  - **MUST NOT WRITE to guest memory** — read-only from guest RAM. Any write is a bug that will surface as
-    an SBS diff.
+- **pc_render** = default — native renderer. Rules (USER 2026-07-07):
+  - A READ-ONLY OVERLAY: the PSX render path still EXECUTES underneath (its guest-memory operations
+    — packet pool, OT, libgs state — are part of the faithful byte-exact state); pc_render produces
+    the PICTURE from its own pass. It bypasses GTE/OT/PSX render subsystems for DRAWING only.
+  - Reads guest RAM + PC engine classes (e.g. fade state from the fade engine); writes ONLY its own
+    host memory. **Any guest-memory write from pc_render is a bug** that will surface as an SBS diff.
+  - Clean OOP. Render bugs are EXPECTED until fixed — and fixes are DEFERRED until pc_faithful is
+    recomp-identical.
 
 ### Combinations
 
