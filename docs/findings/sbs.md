@@ -12,15 +12,18 @@ ov_sop_gen_80109164, task-1 fiber body) landed; the ENTIRE SOP intro cutscene ho
 byte-exact lockstep (autonav f29 -> f114). The pre-fiber slip machinery (sop_field_step defer,
 RNG compensations) is pc_skip-only now.
 
-**OPEN FRONTIER f114:** 0x800BF544 (packet-pool write pointer) — A's writer is a NATIVE chain
-(stale pc=800834A0 from an HLE wrapper, ra=DEAD0000) vs B's substrate packet alloc
-(pc=0x80083DE0 ra=0x80078FA8) during the SOP intro's rendering, WITH PSXPORT_SBS_FORCE_PSX_RENDER=1
-on both cores. So some native frame-loop/render path still advances or resets the pool pointer
-differently from the substrate render under psx_render on core A. Chase: find who writes
-0x800BF544 on A at f114 (host backtrace via a narrow PREWATCH, or read native_boot.cpp's pool
-swap at ~line 105 + Render::frame's psxRender gating); the fix must make A's psx_render frame
-execute the same pool traffic as B's (the old f217 "render-mode mismatch by design" exemption is
-DEAD under the read-only-overlay directive — the substrate render is faithful state).
+**OPEN FRONTIER f114 — RESOLVED TO: the FIELD ENTRY (submode1 conversion).** PREWATCH persist
+on 0x800BF544 (sbs_v26): f112/f113 both cores write only the frame-top pool reset (identical);
+at f114 core B makes 9+ packet allocs from pc=0x80078CA8 ra=0x800793B4 at **sp=0x801FE910 =
+the task-0 stack** — the allocs are the GAME task's own slice, not the frame loop. f114 is the
+SOP intro completing (state 4 teardown -> sm[0x4c]++ -> submode0 s4c==1 -> sm[0x4a]++): the
+FIELD AREA MACHINE begins. A runs native Engine::submode1 (the pre-fiber rebuild with
+native_transition_area_load and the submode1Case0Faithful/Skip split); B runs guest 0x801088D8
+whose state work builds sprite/BG packets (FUN_800793xx). **Next arc = the submode1 subtree
+conversion** — the walkable field: mirror gen ov_game_gen_801088D8 (7 states on sm[0x4c], its
+state-0 spawn-and-wait of the area-DATA load 0x800452C0, states 2..6 field running sub-machine
+handlers), same recipe as fieldModeFaithful. This is the LAST major stage surface before field
+gameplay is oracle-covered (where bug #29 gets tool-flagged).
 
 ## Faithful s48_2 chain discipline (2026-07-07, 640d23e) — frontier f29 = SOP field-mode
 
