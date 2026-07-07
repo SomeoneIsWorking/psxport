@@ -19,7 +19,18 @@ real control flow), or (b) a pc_skip-era shortcut baked into a shared path — f
 faithful fork the REAL substrate dispatch (the platform acks the old "busy-loops forever" libcd
 calls now: state-0 CdControlB Setmode, state-7 CdlPause teardown — core B proves it every run).
 
-**OPEN FRONTIER f11:** 0x800BE1F8 (A=0xC0 B=0x00), last-writer A pc=0x800998E4 (libsnd, stale
+**f11 CLOSED (29fe1a0):** 0x80075A80 is the per-frame AUDIO-COMMAND QUEUE PROCESSOR (drains the
+24-slot queue at 0x800BE1F8 into libsnd) — NOT an "attract render" as older comments claimed.
+The faithful DEMO tail now dispatches the substrate body per the lib-fallback directive; the
+native AreaSlots::updateTail port serves pc_skip. Frontier moved f11 -> **f461**: the title's
+450-frame idle timer (sm[0x5a]) expiring into the ATTRACT DEMO launch — s7's phase machine
+(0x80106C24) uses native+sync area-load shortcuts (native_transition_area_load etc.) in the
+shared path; same faithful-fork treatment needed (fiber-yield for the cooperative loads,
+substrate dispatch for lib glue). A-only writer at f461: pc=0x8009A480 (libsnd clear) ras
+0x80106688/0x80079484. Note: without AUTONAV the strict boot compare idles into attract at
+~f461 — 460 frames of boot + full DEMO menu flow hold zero-diff as of 29fe1a0.
+
+**OPEN FRONTIER f11 (historical, closed above):** 0x800BE1F8 (A=0xC0 B=0x00), last-writer A pc=0x800998E4 (libsnd, stale
 native ra) vs B pc=0x80099490 ra=0x80075C60 (substrate per-frame audio tick). The native music
 engine (native_music/musicCoord, later-219) replaced the PSX sequencer wholesale — under strict
 faithful the per-frame libsnd tick state must byte-match, so the audio engine needs its
