@@ -154,43 +154,133 @@ def parse_file(path, natives):
         if comment:
             # first comment line, stripped of the leading address tokens, as a one-line summary
             desc = re.sub(r'^[/\s]*((0x8[0-9A-Fa-f]{7}|FUN_8[0-9a-fA-F]{7}|/)\s*)+[—:-]?\s*', '', comment[0]).strip()
-        natives.append(dict(sym=sym, file=rel, line=i + 1, impl=impl, deps=deps, desc=desc, body=bodytext))
+        natives.append(dict(sym=sym, file=rel, line=i + 1, impl=impl, deps=deps, desc=desc, body=bodytext,
+                             bstart=i, bend=j))
         i = j + 1
 
 
-def build(natives):
+def ordinary_corpus(files, natives):
+    """Full source text of the whole corpus with every indexed native's OWN body blanked out.
+    This is where the vast majority of real call sites live: ordinary (non-native-tagged) game
+    code — `beh_*.cpp`, `demo.cpp`, `sop.cpp`, HLE adapter shims — invoking a native method via
+    `c->game->cd.dc40Sync(...)`, `c->engine.asset.loadDescriptorChunk(...)`, `obj.build(...)`, or a
+    bare in-class call. Blanking each native's own body prevents its own signature/self-recursion
+    from counting as "called" (a def line like `void Asset::loadDescriptorChunk(...) {` contains
+    the callee text `loadDescriptorChunk(` too — that must NOT self-seed liveness)."""
+    by_file = {}
+    for n in natives:
+        by_file.setdefault(n["file"], []).append((n["bstart"], n["bend"]))
+    chunks = []
+    for f in files:
+        rel = os.path.relpath(f, ROOT)
+        lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
+        for lo, hi in by_file.get(rel, []):
+            for k in range(lo, min(hi + 1, len(lines))):
+                lines[k] = ""
+        chunks.append("\n".join(lines))
+    return "\n".join(chunks)
+
+
+def build(natives, files):
     by_sym = {n["sym"]: n for n in natives}
-    # direct C call graph: for each native, which other native symbols its body references
     sym_set = set(by_sym)
     callers = {s: set() for s in sym_set}
-    # Match ov_*/native_*/eng_* free-function calls AND ClassName::method calls (the OOP wiring
-    # — Engine::foo, CutsceneCamera::runFieldUpdate, Mtx::identity, etc.).
-    callee_re = re.compile(r'\b(ov_\w+|native_\w+|eng_\w+|[A-Z][A-Za-z0-9_]*::[A-Za-z_]\w*)\b')
+
+    # --- callee detection: two complementary forms -------------------------------------------
+    # (1) free-function / qualified-static syntax: ov_foo(...), native_bar(...), Class::method(...)
+    #     (this alone is what the tool originally recognized — it MISSES all instance-call syntax:
+    #     `obj.method(...)`, `ptr->method(...)`, and bare in-class `method(...)`, which is how nearly
+    #     every OOP native is actually invoked — c->game->cd.dc40Sync(...), c->mRender->mNodeXform.
+    #     buildWithOffset(...), c->engine.asset.loadDescriptorChunk(...). That gap is WHY the tool was
+    #     reporting 231/237 natives ORPHAN — almost all of them are wired, just via `.`/`->`.)
+    qualified_re = re.compile(r'\b(ov_\w+|native_\w+|eng_\w+|[A-Z][A-Za-z0-9_]*::[A-Za-z_]\w*)\b')
+    # (2) instance-call syntax for METHOD natives: `.name(`, `->name(`, or bare `name(` all share the
+    #     same trailing token — the callee's bare method name immediately before `(`. We can't see the
+    #     receiver's static type without a real parser, so to avoid a common method name (e.g. `run`,
+    #     `build`) spuriously wiring an unrelated native, only bare names that are UNIQUE across every
+    #     indexed method-native are matched this way; ambiguous names fall back to form (1) only
+    #     (ClassName::method(...) — still recognized, just not the shorthand instance-call form).
+    bare2sym, name_count = {}, {}
+    for s in sym_set:
+        if "::" in s:
+            bare = s.split("::")[-1]
+            name_count[bare] = name_count.get(bare, 0) + 1
+            bare2sym[bare] = s
+    unique_bares = [b for b, c in name_count.items() if c == 1]
+    bare_re = re.compile(r'\b(' + "|".join(re.escape(b) for b in unique_bares) + r')\s*\(') \
+        if unique_bares else None
+
+    # (3) ambiguous method names (e.g. `init` owned by Font, CutsceneCamera, Pool, ...): the bare
+    #     name alone is too common to attribute safely, but the RECEIVER right before `.`/`->` almost
+    #     always echoes the class name in some cheap lowercase form — `c->engine.font.init()` for
+    #     `Font::init`, `cam.init()` for `CutsceneCamera::init`, `c->engine.demo.stageMain()` for
+    #     `Demo::stageMain` vs. `c->engine.stageMain()` for `Engine::stageMain`. Build per-symbol
+    #     receiver-hint patterns from the class name's camelCase segments (full name, each segment,
+    #     and a short abbreviation of the last segment) and require the receiver to match one of them
+    #     immediately before the call — this disambiguates without a real type-checker.
+    seg_re = re.compile(r'[A-Z][a-z0-9]*')
+    ambiguous_re = {}
+    for s in sym_set:
+        if "::" not in s:
+            continue
+        cls, bare = s.split("::", 1)
+        if name_count.get(bare, 0) <= 1:
+            continue  # handled by the unique bare-name path above
+        segs = seg_re.findall(cls) or [cls]
+        hints = {cls.lower()}
+        hints.update(seg.lower() for seg in segs)
+        hints.add(segs[-1][:3].lower())
+        hints = {h for h in hints if len(h) >= 3}
+        if not hints:
+            continue
+        pat = r'\b(?:' + "|".join(re.escape(h) for h in hints) + r')\w*\s*(?:\.|->)\s*' + re.escape(bare) + r'\s*\('
+        ambiguous_re[s] = re.compile(pat)
+
+    def find_callees(text):
+        found = set(cal for cal in qualified_re.findall(text) if cal in sym_set)
+        if bare_re:
+            found.update(bare2sym[b] for b in bare_re.findall(text))
+        for s, rx in ambiguous_re.items():
+            if rx.search(text):
+                found.add(s)
+        return found
+
+    # native-to-native call graph (for transitive reachability + the "C callers" report column)
     for n in natives:
-        for cal in callee_re.findall(n["body"]):
-            if cal in sym_set and cal != n["sym"]:
+        for cal in find_callees(n["body"]):
+            if cal != n["sym"]:
                 callers[cal].add(n["sym"])
-    # reachability from ROOTS via direct C calls
+
+    # reachability from ROOTS via the native-to-native graph
     live = set()
     stack = [r for r in ROOTS if r in sym_set]
-    # also seed: anything native_boot.cpp references directly
-    nb = os.path.join(ROOT, "runtime/recomp/native_boot.cpp")
-    if os.path.exists(nb):
-        nbtext = open(nb, encoding="utf-8", errors="replace").read()
-        for s in sym_set:
-            if re.search(r'\b' + re.escape(s) + r'\s*\(', nbtext):
-                stack.append(s)
     while stack:
         s = stack.pop()
         if s in live:
             continue
         live.add(s)
-        # follow callees of s
         for n in [by_sym[s]] if s in by_sym else []:
-            for cal in callee_re.findall(n["body"]):
-                if cal in sym_set and cal not in live:
+            for cal in find_callees(n["body"]):
+                if cal not in live:
                     stack.append(cal)
-    return by_sym, callers, live
+
+    # additionally: anything invoked from ORDINARY (non-native-tagged) game/engine/runtime code —
+    # this is the actual call graph for OOP natives, since most callers are plain game logic
+    # (behavior scripts, scene/demo code, HLE adapter shims), not other codemap-indexed natives.
+    ordinary = ordinary_corpus(files, natives)
+    ordinary_hit = find_callees(ordinary)
+    for s in ordinary_hit:
+        if s not in live:
+            live.add(s)
+            stack = [s]
+            while stack:
+                cur = stack.pop()
+                for n in [by_sym[cur]] if cur in by_sym else []:
+                    for cal in find_callees(n["body"]):
+                        if cal not in live:
+                            live.add(cal)
+                            stack.append(cal)
+    return by_sym, callers, live, ordinary_hit
 
 
 def addr_index(natives):
@@ -203,9 +293,10 @@ def addr_index(natives):
 
 def main():
     natives = []
-    for f in collect_files():
+    files = collect_files()
+    for f in files:
         parse_file(f, natives)
-    by_sym, callers, live = build(natives)
+    by_sym, callers, live, ordinary_hit = build(natives, files)
     idx = addr_index(natives)
 
     args = sys.argv[1:]
@@ -220,7 +311,8 @@ def main():
             if n["desc"]: print(f"    desc: {n['desc']}")
             if n["deps"]: print(f"    depends on (still-PSX leaves): {', '.join('0x'+d for d in n['deps'])}")
             cs = sorted(callers.get(n["sym"], []))
-            print(f"    C callers: {', '.join(cs) if cs else '(none — only the removed override table)'}")
+            extra = " + ordinary game/engine code" if n["sym"] in ordinary_hit else ""
+            print(f"    C callers: {(', '.join(cs) if cs else '(none)') + extra}")
         # who depends on this address?
         dep_users = [n for n in natives if a in n["deps"]]
         if dep_users:
@@ -231,7 +323,8 @@ def main():
         rows = [(a, n) for a, ns in idx.items() for n in ns if n["sym"] not in live]
         for a, n in sorted(rows, key=lambda r: (r[0], r[1]["sym"])):
             print(f"0x{a}  {n['sym']:32s} {n['file']}:{n['line']}")
-        print(f"\n{len(rows)} owned addresses currently ORPHANED (native exists, nothing C-calls it).")
+        print(f"\n{len(rows)} owned addresses currently ORPHANED "
+              f"(native exists, nothing calls it — not even via `.`/`->`/bare method syntax).")
         return
 
     # default: emit the markdown index
@@ -239,9 +332,12 @@ def main():
     out.append("# Code map — guest address → PC-native owner\n")
     out.append("> GENERATED by `tools/codemap.py` — do not edit by hand; rerun the tool.\n")
     out.append("Before reimplementing any `FUN_xxxx`, look it up here (or `tools/codemap.py --addr <hex>`).")
-    out.append("A native may exist already. **LIVE** = reachable by direct C call from a native_boot")
-    out.append("dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override")
-    out.append("table used to reach it — it is dead code until a native parent calls it directly.\n")
+    out.append("A native may exist already. **LIVE** = reachable by a real call from either a native_boot")
+    out.append("dispatch root or ordinary (non-native-tagged) game/engine code — free-function syntax")
+    out.append("(`ov_foo(...)`), qualified static syntax (`Class::method(...)`), or C++ instance-call")
+    out.append("syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **ORPHAN** =")
+    out.append("native exists but no call site of any of those forms was found anywhere in the tree — it")
+    out.append("is genuinely dead code until something calls it.\n")
     n_live = sum(1 for n in natives if n["sym"] in live)
     out.append(f"Totals: {len(natives)} native fns, {len(idx)} owned addresses, "
                f"{n_live} LIVE / {len(natives)-n_live} ORPHAN.\n")
