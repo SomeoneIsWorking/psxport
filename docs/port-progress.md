@@ -1647,17 +1647,23 @@ owned as `Render::perObjRenderDispatch`/`billboardCompose1`/`billboardCompose2`/
   never staked out their own frame there. Fixed with the same LIVE-spill/restore `GuestFrame`-style
   RAII pattern as `Cull::performBaseCullFramed`/`Render::perObjRenderDispatch` (6 named frame structs
   in node_xform.cpp, one per RE'd layout).
-- **Effect:** the f117/f118 divergence dropped from a hard "wrong function entirely" collision to a
-  near-total convergence — SBS still shows exactly the same 2-3 `sbs-div` hits at f117/f157 (down
-  from 3, one class eliminated outright), all still at 0x801FE8E4..EF, but a `PSXPORT_SBS_BYTETRACE`
-  settled-state classification over a ~90k-sample run shows the writers on both sides are now the
-  SAME set of (still-substrate) functions with matching call counts to within single digits (e.g.
-  `0x8003BFD4×10628` vs `×10624`) — consistent with two legitimate, independently-scheduled
-  subsystems (NodeXform's own spill and a content write nearby) briefly sharing the same stack
-  address at slightly different moments within the frame, not a wrong-address bug. **NOT fully
-  0-diff** — the residual is real but is now confined to a tiny (<0.1%) count mismatch between
-  otherwise-identical writers, a materially different (and much better characterized) class than
-  before. Left OPEN, not excluded — no mask added.
+- **Effect (first pass):** the frame-descent alone dropped the divergence from a hard "wrong function
+  entirely" collision to a near-total convergence, but left exactly 2 `sbs-div` hits at f117/f157
+  (0x801FE8E4..EF). Root-caused those to completion (below).
+- ✅ **TRUE 0-DIFF (register-faithfulness, the second half of the fix).** Frame descent mirrors the
+  SP trajectory but not the REGISTER state. Last-writer trace of the f117 residual (extended to dump
+  sp — both cores at sp=0x801FE8D8, identical) plus a per-write UPPROBE dump named it precisely: the
+  recomp bodies load `node` into CALLEE-SAVED registers (`gen_func_80051C8C buildAxis: r16=node,
+  r17=node+152`) then TAIL-CALL a nested NodeXform fn (`propagateAxis`) whose prologue spills the
+  caller's live `r16..r22` into its own frame — so the spilled bytes at 0x801FE8E8 ARE `node`
+  (0x800FD010) on the recomp side, but the native C++ body uses local variables and never updates
+  `c->r[16]`, so it spilled a stale 0x1000. Fix: each OUTER NodeXform fn that makes a nested
+  NodeXform call now sets its callee-saved node/scratch registers to the RE'd recomp values after the
+  frame descent (`build`/`buildWithOffset`: r16=SCR_M/r17=node/r18=SCR_R; `buildAxis`: r16=node/
+  r17=node+152) — the nested callee then spills the correct bytes; the frame RAII still restores the
+  caller's own incoming values on exit. The Math leaves (rotmat/matMul/rotX/…) are frameless and
+  touch only r2..r15/r24/r25, so they never spill a callee-saved register — the ONLY nested spills
+  that matter are the NodeXform->NodeXform tail calls, which bounds the fix. **No mask, no exclusion.**
 - ✅ **`Animation::attach`'s OWN residual (the separate `0x801FE908..0x801FE914` exclusion) is FULLY
   CLOSED.** The 2026-07-08 revert of attach's frame mirror was based on the assumption that r29 at
   attach's entry differs between SBS cores (no canonical call site to mirror against, since every
@@ -1670,12 +1676,14 @@ owned as `Render::perObjRenderDispatch`/`billboardCompose1`/`billboardCompose2`/
   **`isDeadStackScratch` is DELETED from `runtime/recomp/sbs.cpp`** — SBS full-mode stays clean at
   this address across 8000+ frames post-fix (verified; see docs/findings/animation.md).
 - **Gate:** `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless, `isDeadStackScratch` deleted:
-  2 `sbs-div` events (f117, f157; down from 3), 0 elsewhere through 8400+ frames, run stopped by
-  external timeout not crash/divergence. `PSXPORT_DEBUG=ovhit`-style hit confirmation for the 4
+  **`grep -cE 'sbs-div|VIOLATION'` = 0** through f7440 (run stopped by external timeout, not
+  crash/divergence). TRUE zero-diff, no masks. `PSXPORT_DEBUG=ovhit`-style hit confirmation for the 4
   billboard leaves + NodeXform's 2 previously-uninstrumented siblings done via gdb dprintf probe
   (24390/11106/3728/14834/6920/1854 hits respectively over a ~30s run) since `ovhit`'s atexit dump
-  doesn't survive this harness's SIGTERM-based `_exit()` shutdown path (a pre-existing tooling gap,
-  same class as the already-documented BYTETRACE/signal-handler-safety issue below).
+  doesn't survive this harness's SIGTERM-based `_exit()` shutdown path (a pre-existing tooling gap).
+- **Diagnostic left in place:** the `Sbs::Impl::LastW` last-writer map now also records `sp` (r29 at
+  the store) — the enhancement that made this root-cause possible (proving both cores hit the divergent
+  slot at the SAME sp, isolating the bug to register state rather than sp trajectory).
 
 **SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
 80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**

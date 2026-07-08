@@ -495,19 +495,33 @@ Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY h
   the native side that stack address belonged to a DIFFERENT function's frame than on the recomp
   side, because propagateAxis (and siblings) never staked out their own frame there, letting whatever
   else was running at that moment "own" the address instead.
-- **fix:** added 6 named RAII frame structs (`BuildFrame`, `BuildAxisFrame`, `PropagateRotmatFrame`,
-  `PropagateAxisFrame`, `PropagateFrame`) to node_xform.cpp, each spilling the LIVE `c->r[16..23]`/
-  `c->r[31]` values at the RE'd offsets on construction and restoring them on destruction — same
-  pattern as `Cull::performBaseCullFramed`/`Render::perObjRenderDispatch`'s `GuestFrame`.
-- **effect / current state:** the divergence class changed from a hard "wrong function entirely"
-  address collision to near-total convergence (a `PSXPORT_SBS_BYTETRACE` settled-state pass over a
-  ~90k-sample run shows both cores' writers are now the SAME set of still-substrate functions with
-  matching call counts to within single digits, e.g. `0x8003BFD4×10628` vs `×10624`) — consistent with
-  two legitimate, independently-scheduled subsystems briefly sharing the same stack address at
-  slightly different moments within a frame, not a wrong-address bug. **NOT fully 0-diff**: SBS still
-  shows 2 `sbs-div` events (f117, f157) at 0x801FE8E4..EF every run. Left OPEN, not excluded — no mask
-  added. Next step if revisited: trace exactly which two functions land at this address within the
-  same frame and determine if their relative ORDER (not their address) needs to match the substrate's
-  scheduling.
-- **refs:** commit landing this fix (see git log, "render: mirror NodeXform's 6 guest-stack frames");
+- **fix (part 1, frame descent):** added 6 named RAII frame structs (`BuildFrame`, `BuildAxisFrame`,
+  `PropagateRotmatFrame`, `PropagateAxisFrame`, `PropagateFrame`) to node_xform.cpp, each spilling the
+  LIVE `c->r[16..23]`/`c->r[31]` values at the RE'd offsets on construction and restoring on
+  destruction — same pattern as `Cull::performBaseCullFramed`. This fixed the SP trajectory but left
+  2 residual `sbs-div` at f117/f157 (0x801FE8E4..EF).
+- **fix (part 2, register faithfulness) — the actual close to TRUE 0-diff:** the last-writer map
+  (extended to also dump `sp`) showed BOTH cores hit 0x801FE8E8 at the identical sp=0x801FE8D8 — so
+  the frames were sp-faithful; the divergence was the VALUE spilled. A per-write UPPROBE dump named it:
+  the recomp bodies load `node` into CALLEE-SAVED registers (`gen_func_80051C8C buildAxis: r16=node,
+  r17=node+152`) and then TAIL-CALL a nested NodeXform fn (`propagateAxis`) whose prologue spills the
+  caller's live `r16..r22` into its own frame. On the recomp side that spill = `node` (0x800FD010); on
+  the native side the C++ body uses local variables and never updates `c->r[16]`, so it spilled a
+  stale 0x1000. Fix: each OUTER NodeXform fn making a nested NodeXform call now sets its callee-saved
+  node/scratch registers to the RE'd recomp values right after the frame descent (build/buildWithOffset:
+  `r16=SCR_M, r17=node, r18=SCR_R`; buildAxis: `r16=node, r17=node+152`). The nested callee then spills
+  the correct bytes; the frame RAII still restores the caller's incoming values on exit.
+- **why the scope is bounded:** the Math leaves (rotmat 0x80085480 / matMul 0x80084110 / rotpair
+  0x80085050 etc.) are FRAMELESS — they never descend sp and only use r2..r15/r24/r25, so they never
+  spill a callee-saved register. The ONLY nested calls that spill callee-saved regs are the
+  NodeXform->NodeXform tail calls (build/buildWithOffset->propagate, buildAxis->propagateAxis), so
+  fixing register state in those 3 outer functions is complete.
+- **result:** `PSXPORT_SBS_MODE=full` autonav, headless, `isDeadStackScratch` deleted:
+  `grep -cE 'sbs-div|VIOLATION'` = **0** through f7440. TRUE zero-diff, no masks, no exclusions.
+- **lesson:** frame-descent mirroring gets sp right but NOT register state. When a stack-spill byte
+  still diverges after mirroring the frame, check whether the spilled value is a CALLEE-SAVED register
+  the recomp loaded (node/scratch-ptr passed through r16..r23) and a nested callee is spilling it — the
+  native body must maintain those registers, not just the sp. The extended last-writer `sp` field
+  (both cores same sp => it's register state, not sp) is the tell.
+- **refs:** commit landing this fix (see git log, "render: register-faithful NodeXform nested spills");
   docs/findings/animation.md (sibling investigation, same day, for `Animation::attach`).

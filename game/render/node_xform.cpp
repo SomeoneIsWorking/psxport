@@ -48,6 +48,20 @@ extern void gen_func_800517BC(Core*);
 // Render::perObjRenderDispatch's GuestFrame): spill the LIVE c->r[..] values (whatever they happen
 // to hold — that's what the substrate's own callee-save spill captures too, since it has no idea
 // what those registers "mean" to the caller) into the RE'd offsets, run the body, then restore.
+//
+// REGISTER FAITHFULNESS (2026-07-08, the f117 residual root cause): frame-descent alone is NOT
+// enough. These functions load `node` (and scratch-base pointers) into CALLEE-SAVED registers
+// (`r16=r4`, `r17=r16+152`, …) and then TAIL-CALL a nested NodeXform function (build/buildWithOffset
+// -> propagate, buildAxis -> propagateAxis) whose OWN prologue spills the caller's live r16..r23 into
+// ITS frame. For those spilled bytes to byte-match the substrate, the caller's c->r[16..] must hold
+// the SAME values the recomp computed — but the native C++ body uses local variables and never
+// touches c->r[16..], leaving them stale (a real reproducible SBS diff at 0x801FE8E8: the recomp
+// spilled r16=node=0x800FD010 while the native spilled a stale 0x1000). So each OUTER function that
+// makes a nested NodeXform call sets its callee-saved node/scratch registers to the RE'd recomp
+// values after the frame descent (the nested callee then spills the right bytes; the frame RAII
+// still restores the caller's own incoming values on exit). The Math leaves (rotmat/matMul/rotX/…,
+// game/math/gte_math.cpp) are FRAMELESS and touch only r2..r15/r24/r25, so they never spill a
+// callee-saved register — the ONLY nested spills that matter are the NodeXform->NodeXform tail calls.
 namespace {
 // -32: +16 r16, +20 r17, +24 ra   (build 0x80051844, buildWithOffset 0x800518FC, buildAxis 0x80051C8C
 // share this shape except buildAxis's own offsets — see BuildAxisFrame below for its distinct layout)
@@ -170,6 +184,9 @@ void NodeXform::build(uint32_t node) {
   BuildFrame frame(c);
   const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
   const uint32_t SCR_R = 0x1F800020u;   // rot output
+  // register faithfulness for the nested propagate() spill (gen_func_80051844: r16=SCR_M, r17=node,
+  // r18=SCR_R at the func_80051128 tail call).
+  c->r[16] = SCR_M; c->r[17] = node; c->r[18] = SCR_R;
   c->mem_w32(SCR_M +  4, 0);
   c->mem_w32(SCR_M + 12, 0);
   c->mem_w32(SCR_M + 20, 0);
@@ -203,6 +220,9 @@ void NodeXform::build(uint32_t node) {
 void NodeXform::buildWithOffset(uint32_t node) {
   Core* c = core;
   BuildFrame frame(c);
+  // register faithfulness for the nested propagate() spill (gen_func_800518FC: same r16/r17/r18 shape
+  // as build — r16=SCR_M, r17=node, r18=SCR_R at the func_80051128 tail call).
+  c->r[16] = 0x1F800000u; c->r[17] = node; c->r[18] = 0x1F800020u;
   const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
   const uint32_t SCR_R = 0x1F800020u;   // rot output
   c->mem_w32(SCR_M +  4, 0);
@@ -378,6 +398,9 @@ void NodeXform::propagateAxis(uint32_t node) {
 void NodeXform::buildAxis(uint32_t node) {
   Core* c = core;
   BuildAxisFrame frame(c);
+  // register faithfulness for the nested propagateAxis() spill (gen_func_80051C8C: r16=node,
+  // r17=node+152 at the func_80051464 tail call — the exact f117 residual writer).
+  c->r[16] = node; c->r[17] = node + 152u;
   const uint32_t M = node + 0x98;
   c->mem_w32(M +  0, 0x1000); c->mem_w32(M +  4, 0);
   c->mem_w32(M +  8, 0x1000); c->mem_w32(M + 12, 0);

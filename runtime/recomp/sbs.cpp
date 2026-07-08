@@ -167,7 +167,7 @@ public:
   bool  mSbs = false;   // "harness running" flag (native_fmv/native_boot gate off Sbs::active())
 
   // ---- last-writer map (rewind-free write-site attribution) ----
-  struct LastW { uint32_t pc = 0, ra = 0, frame = 0xFFFFFFFFu; };
+  struct LastW { uint32_t pc = 0, ra = 0, sp = 0, frame = 0xFFFFFFFFu; };
   static constexpr uint32_t LW_RAM = 0x200000u, LW_SPAD = 0x400u, LW_N = LW_RAM + LW_SPAD;
   LastW* mLwA = nullptr;
   LastW* mLwB = nullptr;
@@ -183,8 +183,8 @@ public:
     if (idx < 0 || !mLwOn) { if (out != stderr) fprintf(out, "sbs lw: last-writer map off or addr out of range\n"); return; }
     const LastW& a = mLwA[idx];
     const LastW& b = mLwB[idx];
-    fprintf(out, "[sbs] last-writer 0x%08X:  A pc=%08X ra=%08X f%u  |  B pc=%08X ra=%08X f%u\n",
-            addr, a.pc, a.ra, a.frame, b.pc, b.ra, b.frame);
+    fprintf(out, "[sbs] last-writer 0x%08X:  A pc=%08X ra=%08X sp=%08X f%u  |  B pc=%08X ra=%08X sp=%08X f%u\n",
+            addr, a.pc, a.ra, a.sp, a.frame, b.pc, b.ra, b.sp, b.frame);
   }
 
   // ---- lockstep state ----
@@ -1058,7 +1058,7 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     int idx = lwIndex(a);
     if (idx >= 0) {
       LastW* m = (mB && c == &mB->core) ? mLwB : mLwA;
-      const LastW rec{c->pc, c->r[31], mFrame};
+      const LastW rec{c->pc, c->r[31], c->r[29], mFrame};
       for (uint32_t k = 0; k < w && idx + (int)k < (int)LW_N; k++) m[idx + k] = rec;
     }
   }
