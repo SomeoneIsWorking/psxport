@@ -1416,6 +1416,60 @@ busiest still-substrate `rec_dispatch` leaf in free-roam): both owned as `class 
     visibility-flag issue upstream), not a packet-emission correctness issue this SBS-clean gate
     would have caught. Left for a follow-up debug session now that the leaf is a real, inspectable
     native function instead of an opaque substrate call.
+**SESSION 2026-07-08 — GTE matrix cluster (0x80084110/80084220/80084470/80085480/80084D10/80084EB0/
+80085050) FINISHED WIRING — `class Math` (game/math/gte_math.{h,cpp}) was fully RE'd + bit-exact but
+DEAD CODE until now.**
+- ✅ **DONE — completed the wiring for all 7 addresses.** `codemap.py --addr 0x80084110` reported
+  "NO native owner found" despite `Math::matMul` sitting right there in gte_math.cpp, fully RE'd
+  (44-bit GTE accumulator, MVMVA-exact) with a header comment calling it "16.2% of hot interpreter
+  time... the biggest single perf lever" — because a prior session ported the class but never
+  called `register_`/`shard_set_override` for it. `Math::registerOverrides()` was missing entirely;
+  `boot.cpp`'s `main()` never called it, so every substrate call site (`func_80084110(c)` etc.,
+  inline in shard_0/2/3/5/6/7.c + every overlay — 55k+/frame for matMul alone) fell through to the
+  interpreted `gen_func_*` GTE-op body. Only the handful of DIRECT `c->math.*` call sites
+  (node_xform.cpp/cutscene_camera.cpp/graphics_bind.cpp) ever actually executed the native class.
+  Added `Math::registerOverrides()` (gte_math.cpp): guest-ABI trampolines wired into BOTH
+  `EngineOverrides::register_` (native callers reaching via `rec_dispatch`) AND
+  `shard_set_override` (the recompiler's own `g_override[]` table — the mechanism the substrate's
+  DIRECT `func_<addr>(c)` calls actually consult; same dual-wiring shape as `ActorReward`, docs/
+  findings/tooling.md "EngineOverrides::register_ is BLIND to a direct substrate call"). The
+  `shard_set_override` trampolines are `psx_fallback`-gated (fall back to `gen_func_*`) since
+  `g_override[]` is a single PROCESS-GLOBAL table shared by every Core, including SBS's A/B cores.
+  Wired the call from `boot.cpp` alongside `Animation::registerOverrides()`. Also fixed the
+  `codemap.py` false-negative: the `// FUN_xxxx` header comments sat above file-local helper
+  functions (`load_mat3`/`clamp16s`/`sign44`), not directly above the `Math::` method defs, so
+  codemap's "comment block immediately above the def" heuristic found nothing; added the standard
+  trailing `// FUN_xxxx` def-line tag (same convention as `Camera::lookAt`) to all 4 methods that
+  lacked one (matMul/applyMatlv/applyMatrixLV/rotmat — rotX/Y/Z already had it). All 7 now show
+  `[LIVE]` in `docs/code-map.md`.
+- **Verification:** confirmed the `shard_set_override` path actually fires under real execution
+  (temporary instrumented print in `gov_matMul`, reverted before commit — `psx_fallback=0` hits
+  observed on core A, i.e. the native `Math::matMul` genuinely runs, not a silent no-op). Gate:
+  `PSXPORT_SBS_MODE=full` autonav headless, 3 separate runs across the wiring iterations (~7000,
+  ~7650, and a final confirmation run after the codemap tag fix), **zero `[sbs-div]`, zero
+  VIOLATION** each time — this is a REAL verification (unlike the zoned-attacker/reward clusters'
+  "0 hits observed" caveat below): the dispatch trace confirmed actual execution on the
+  non-fallback core, not just an untested 0-diff.
+- **Housekeeping (this session, same as the zoned-attacker session below):** this worktree needed
+  `vendor/beetle-psx/deps/libchdr` + `generated/` copied in from the main checkout, and the main
+  checkout's UNCOMMITTED `spu.c` `SPU_PokeRAM` edit re-applied — same gap flagged there, not fixed
+  here (shared submodule state, out of scope for a worktree).
+- **WORKFLOW FINDING (flagging, not fixed — out of this session's band-scoped task):** `dc_boot_init`
+  (the shared per-Core boot entry used by SBS/dualcore/selftest) does NOT call ANY subsystem's
+  `registerOverrides()` — those calls only happen in `boot.cpp`'s `main()`, on the PRIMARY throwaway
+  `Game` object, before it diverts into `Sbs::run()`/`DualCore`/selftest (which construct their OWN
+  `Game`s via `dc_boot_init`, not `main()`'s sequence). Net effect: `shard_set_override`
+  (`g_override[]`) still works under SBS because it's a PROCESS-GLOBAL table populated once by the
+  primary `game` object before the diversion — but `EngineOverrides::register_` (per-`Game`) does
+  NOT: SBS's `mA`/`mB` each get their OWN empty `engine_overrides` table, so EVERY existing
+  `EngineOverrides`-registered subsystem (`pcSched`, `Animation`, `ActorReward`,
+  `ActorZonedAttacker`, `Spawn::registerTypedChildOverrides`, `releaseTriggerMotion`, and now
+  `Math`) is UNREACHABLE via `rec_dispatch` under SBS specifically. This matches — and likely
+  explains — the "0 dispatch hits observed" caveats on the zoned-attacker and reward clusters below:
+  it's not that autonav never reaches those actors, it's that `rec_dispatch`'s `EngineOverrides::run`
+  can never fire on SBS's cores at all. A real fix would call every subsystem's
+  `registerOverrides()` from `dc_boot_init` (or a shared init helper `main()` and SBS both call) —
+  not done here since it touches every prior cluster's wiring call, not just this session's band.
 
 **SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
 80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**

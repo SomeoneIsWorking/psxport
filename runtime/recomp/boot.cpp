@@ -68,6 +68,7 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
 void register_engine_overrides(Game* game) {
   Core* c = &game->core;
   game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
+  c->math.registerOverrides();                // GTE matMul/applyMatlv/applyMatrixLV/rotmat/rotX/Y/Z (0x80084110 etc.)
   c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach (0x80076904 etc.)
   ActorReward::registerOverrides(game);      // reward/tally window actor SM family
   ActorZonedAttacker::registerOverrides(game); // 0x8014xxxx zoned-attacker sub-behavior cluster

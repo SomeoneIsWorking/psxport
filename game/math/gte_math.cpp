@@ -11,8 +11,24 @@
 #include "core.h"
 #include "cfg.h"
 #include "gte_math.h"   // class Math — static entry surface + ov_* free-fn decls for internal reuse
+#include "game.h"
+#include "engine_overrides.h"   // class EngineOverrides — global dispatch table (registerOverrides wires into it)
 #include <stdio.h>
 #include <string.h>
+
+// The recompiler's own PROCESS-GLOBAL call table (generated/shard_disp.c: g_override[]/
+// shard_set_override) — the substrate's OWN func_<addr>(c) call sites (e.g. `func_80084110(c);`
+// inline in shard_0.c/shard_6.c/…, 55k+/frame for matMul alone) check THIS table first, not
+// EngineOverrides (which only fires on an explicit rec_dispatch(c, addr) call — a small minority
+// of call sites for this cluster). Same dual-wiring pattern as ActorReward::registerOverrides.
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_80084110(Core*);
+extern void gen_func_80084220(Core*);
+extern void gen_func_80084470(Core*);
+extern void gen_func_80085480(Core*);
+extern void gen_func_80084D10(Core*);
+extern void gen_func_80084EB0(Core*);
+extern void gen_func_80085050(Core*);
 
 void rec_interp(Core* c, uint32_t pc);
 
@@ -76,7 +92,8 @@ static void load_mat3(Core* c, uint32_t p, int16_t m[3][3]) {
   m[1][0]=(int16_t)(w1>>16); m[1][1]=(int16_t)w2;       m[1][2]=(int16_t)(w2>>16);
   m[2][0]=(int16_t)w3;       m[2][1]=(int16_t)(w3>>16); m[2][2]=(int16_t)w4;
 }
-uint32_t Math::matMul(uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) { Core* c = this->core;
+uint32_t Math::matMul(uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) {   // FUN_80084110
+  Core* c = this->core;
   int16_t R[3][3], M[3][3], P[3][3];
   load_mat3(c, rPtr, R);
   load_mat3(c, mPtr, M);
@@ -122,7 +139,8 @@ uint32_t Math::matMul(uint32_t rPtr, uint32_t mPtr, uint32_t outPtr) { Core* c =
 //       into a2, not the clamped IR1-3 that applyMatlv writes.
 // The MVMVA opcode itself is identical to applyMatlv (sf=1, mx=ROT, v=V0, cv=Null, lm=0).
 // Same 44-bit accumulator + >>12 as matMul. Returns outPtr in v0.
-uint32_t Math::applyMatrixLV(uint32_t mPtr, uint32_t inPtr, uint32_t out) { Core* c = this->core;
+uint32_t Math::applyMatrixLV(uint32_t mPtr, uint32_t inPtr, uint32_t out) {   // FUN_80084470
+  Core* c = this->core;
   // Load matrix into CR0-4 (faithful CTC2). Also read it as R[3][3] for the MVMVA math.
   for (int i=0;i<5;i++) gte_write_ctrl(i, c->mem_r32(mPtr + i*4));
   int16_t R[3][3]; load_mat3(c, mPtr, R);
@@ -171,7 +189,8 @@ static inline void rotmat_trig(Core* c, int32_t angle, int* s, int* co) {
 }
 static inline int16_t gpf1(int ir0, int ir) { return clamp16s(((int32_t)ir0 * ir) >> 12); }  // MAC=(IR0*IR)>>12, clamp16
 static inline uint8_t lmC(int32_t v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }  // GTE Lm_C
-uint32_t Math::rotmat(uint32_t anglesPtr, uint32_t out) { Core* c = this->core;
+uint32_t Math::rotmat(uint32_t anglesPtr, uint32_t out) {   // FUN_80085480
+  Core* c = this->core;
   uint32_t w0 = c->mem_r32(anglesPtr);
   int sx,cx,sy,cy,sz,cz;
   rotmat_trig(c, (int16_t)w0,        &sx, &cx);            // vx (low half of +0)
@@ -256,7 +275,8 @@ uint32_t Math::rotX(int16_t angle, uint32_t matPtr) { Core* c = this->core; retu
 // mx=ROT, v=V0, cv=Null, lm=0) reading the rotation matrix from CR0-4 (loaded by a prior CTC2), then
 // SWC2 IR1-3 → a1. USER 2026-06-21: GTE math PC-native (the matrix is read from CR — i.e. content the
 // engine/game previously loaded — so this is content-interface; the C MVMVA must be GTE-exact).
-uint32_t Math::applyMatlv(uint32_t inPtr, uint32_t out) { Core* c = this->core;
+uint32_t Math::applyMatlv(uint32_t inPtr, uint32_t out) {   // FUN_80084220
+  Core* c = this->core;
   uint32_t w0 = c->mem_r32(inPtr), w1 = c->mem_r32(inPtr+4);
   int16_t v[3] = { (int16_t)w0, (int16_t)(w0>>16), (int16_t)w1 };
   // rotation matrix R from GTE CONTROL regs CR0..CR4 (same packing as load_mat3 but from ctrl)
@@ -281,5 +301,51 @@ uint32_t Math::applyMatlv(uint32_t inPtr, uint32_t out) { Core* c = this->core;
   gte_write_data(9,(uint32_t)(int32_t)ir[0]); gte_write_data(10,(uint32_t)(int32_t)ir[1]); gte_write_data(11,(uint32_t)(int32_t)ir[2]);
   gte_write_data(25,(uint32_t)mac[0]); gte_write_data(26,(uint32_t)mac[1]); gte_write_data(27,(uint32_t)mac[2]);
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Wiring — BOTH tables, same dual pattern as ActorReward::registerOverrides (game/object/
+// actor_sm_reward.cpp): (1) EngineOverrides for callers reaching these via an explicit
+// rec_dispatch(c, addr) (Engine::objMatrixCompose etc — traced by the `dispatch` debug channel),
+// and (2) shard_set_override for the recompiler's OWN g_override[] table, which is what the
+// substrate's inline `func_<addr>(c)` call sites actually consult (the 55k+/frame majority for
+// matMul). g_override[] is a single PROCESS-GLOBAL table shared by every Core — including SBS's
+// two separately-constructed cores — so the gate must live IN the installed function itself:
+// core B (psx_fallback, the pure substrate reference) must keep running the exact recompiled
+// gen_func_* body, or SBS would just be comparing this port against itself (a fake 0-diff).
+static void eov_matMul(Core* c)        { c->r[2] = c->math.matMul(c->r[4], c->r[5], c->r[6]); }
+static void eov_applyMatlv(Core* c)    { c->r[2] = c->math.applyMatlv(c->r[4], c->r[5]); }
+static void eov_applyMatrixLV(Core* c) { c->r[2] = c->math.applyMatrixLV(c->r[4], c->r[5], c->r[6]); }
+static void eov_rotmat(Core* c)        { c->r[2] = c->math.rotmat(c->r[4], c->r[5]); }
+static void eov_rotX(Core* c)          { c->r[2] = c->math.rotX((int16_t)c->r[4], c->r[5]); }
+static void eov_rotY(Core* c)          { c->r[2] = c->math.rotY((int16_t)c->r[4], c->r[5]); }
+static void eov_rotZ(Core* c)          { c->r[2] = c->math.rotZ((int16_t)c->r[4], c->r[5]); }
+
+// psx_fallback-gated trampolines for shard_set_override (core B must stay pure substrate).
+static void gov_matMul(Core* c)        { if (c->game->psx_fallback) { gen_func_80084110(c); return; } eov_matMul(c); }
+static void gov_applyMatlv(Core* c)    { if (c->game->psx_fallback) { gen_func_80084220(c); return; } eov_applyMatlv(c); }
+static void gov_applyMatrixLV(Core* c) { if (c->game->psx_fallback) { gen_func_80084470(c); return; } eov_applyMatrixLV(c); }
+static void gov_rotmat(Core* c)        { if (c->game->psx_fallback) { gen_func_80085480(c); return; } eov_rotmat(c); }
+static void gov_rotX(Core* c)          { if (c->game->psx_fallback) { gen_func_80084D10(c); return; } eov_rotX(c); }
+static void gov_rotY(Core* c)          { if (c->game->psx_fallback) { gen_func_80084EB0(c); return; } eov_rotY(c); }
+static void gov_rotZ(Core* c)          { if (c->game->psx_fallback) { gen_func_80085050(c); return; } eov_rotZ(c); }
+
+void Math::registerOverrides() {
+  EngineOverrides& ov = core->game->engine_overrides;
+  ov.register_(0x80084110u, "Math::matMul",        eov_matMul);
+  ov.register_(0x80084220u, "Math::applyMatlv",    eov_applyMatlv);
+  ov.register_(0x80084470u, "Math::applyMatrixLV", eov_applyMatrixLV);
+  ov.register_(0x80085480u, "Math::rotmat",        eov_rotmat);
+  ov.register_(0x80084D10u, "Math::rotX",          eov_rotX);
+  ov.register_(0x80084EB0u, "Math::rotY",          eov_rotY);
+  ov.register_(0x80085050u, "Math::rotZ",          eov_rotZ);
+
+  shard_set_override(0x80084110u, gov_matMul);
+  shard_set_override(0x80084220u, gov_applyMatlv);
+  shard_set_override(0x80084470u, gov_applyMatrixLV);
+  shard_set_override(0x80085480u, gov_rotmat);
+  shard_set_override(0x80084D10u, gov_rotX);
+  shard_set_override(0x80084EB0u, gov_rotY);
+  shard_set_override(0x80085050u, gov_rotZ);
 }
 

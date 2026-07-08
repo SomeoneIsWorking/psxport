@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
+Totals: 351 native fns, 305 owned addresses, 350 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -59,7 +59,7 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x80044F58 | LIVE | `Asset::loadTexgroup` | game/core/asset.cpp:187 | 0x8001DC40 | PC-native TEXTURE-GROUP LOADER — owns the asset-load ORCHESTRATION FUN… |
 | 0x80044F58 | LIVE | `Asset::preloadTexgroup` | game/core/asset.cpp:260 |  | texture-group load, synchronous. (Mirrors loadTexgroup but driven by e… |
 | 0x80044F58 | LIVE | `Engine::transitionF3cFaithful` | game/core/engine.cpp:1930 | 0x8001CF2C 0x8003E264 0x8003E894 0x8003EBE0 0x8003FB94 0x80044BD4 … | Faithful mirror of ov_game_gen_80107F3C. Frame: sp-=24, r31 spill @sp+… |
-| 0x80044F58 | LIVE | `PcScheduler::runTask1PreloadStanza` | game/core/pc_scheduler.cpp:369 |  | TASK-1 BODY under pc_faithful — dispatched by fresh-entry PC: |
+| 0x80044F58 | LIVE | `PcScheduler::runTask1PreloadStanza` | game/core/pc_scheduler.cpp:414 |  | TASK-1 BODY under pc_faithful — dispatched by fresh-entry PC: |
 | 0x800450BC | LIVE | `native_load_overlay` | game/core/engine.cpp:2855 |  | load the stage overlay (if any) and point the task's restart entry at … |
 | 0x800450BC | LIVE | `eng_load_stage` | game/scene/level_load.cpp:27 | 0x8001DB8C 0x80080930 | load a stage's overlay off the disc and set the task's stage entry poi… |
 | 0x8004514C | LIVE | `Asset::preloadStage1` | game/core/asset.cpp:319 |  | the stage-1 callback body. SWDATA + DAT load, shared texgroup sub-load… |
@@ -99,7 +99,7 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x800509B4 | LIVE | `Engine::initDisplay` | game/scene/startup.cpp:59 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
 | 0x80050A0C | LIVE | `Engine::initFrameState` | game/scene/startup.cpp:38 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
 | 0x80050A80 | LIVE | `Engine::initCamera` | game/scene/startup.cpp:84 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
-| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:567 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
+| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:584 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2438 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2513 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:89 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
@@ -109,7 +109,7 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:54 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
 | 0x80051B04 | LIVE | `GraphicsBind::installSceneRecord` | game/world/graphics_bind.cpp:89 |  | two-level scene-data-table pointer resolve. Pure address arithmetic, n… |
 | 0x80051B70 | LIVE | `GraphicsBind::recordInitBody` | game/world/graphics_bind.cpp:50 |  | per-object render-record INIT. Allocates a record (FUN_8007AAE8), zero… |
-| 0x80051E60 | LIVE | `PcScheduler::step` | game/core/pc_scheduler.cpp:510 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). The … |
+| 0x80051E60 | LIVE | `PcScheduler::step` | game/core/pc_scheduler.cpp:555 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). The … |
 | 0x80051F14 | LIVE | `PcScheduler::spawnPrim` | game/core/pc_scheduler.cpp:56 | 0x80080860 0x80080890 0x800808A0 | arm a task slot. Frame: sp-=24, s0 spill at +16, ra at +20. Slot write… |
 | 0x80051F80 | LIVE | `Engine::s4c` | game/core/engine.cpp:158 | 0x80106A14 | s4c() reference: sm[0x4c] == the AREA machine (the 9-state load/intro/… |
 | 0x80051F80 | LIVE | `PcScheduler::yieldPrim` | game/core/pc_scheduler.cpp:37 |  | cooperative yield. Frame: sp-=24, ra spill at +16. Sets task[+0x02]=mo… |
@@ -215,12 +215,14 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x80081218 | LIVE | `Asset::uploadImage` | game/core/asset.cpp:246 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
-| 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:259 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:125 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084110 | LIVE | `Math::matMul` | game/math/gte_math.cpp:95 |  |  |
+| 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:278 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:142 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80084520 | LIVE | `Render::terrain` | game/render/submit.cpp:417 |  | RETIRED 2026-07-07 (issue #32): Render::prepObjectMatrix (guest sway/I… |
-| 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:250 |  |  |
-| 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:249 |  |  |
-| 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:248 |  |  |
+| 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:269 |  |  |
+| 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:268 |  |  |
+| 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:267 |  |  |
+| 0x80085480 | LIVE | `Math::rotmat` | game/math/gte_math.cpp:192 |  |  |
 | 0x80085900 | LIVE | `Timing::vsync` | runtime/recomp/timing.cpp:38 |  | = libetc VSync(mode) reached via c->r[A0]: |
 | 0x80085BB0 | LIVE | `Timing::vsyncCallback` | runtime/recomp/timing.cpp:22 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
 | 0x80086620 | LIVE | `eng_init_mode_ctrl` | game/scene/startup.cpp:156 |  | engine MODE control: file-local helper (only called from Engine::initS… |
@@ -240,10 +242,10 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x800ED058 | LIVE | `Engine::sceneEventFifoFaithful` | game/core/engine.cpp:611 |  | pc_faithful field EVENT/COMMAND-QUEUE state machine — mirror of gen_fu… |
 | 0x800EE489 | LIVE | `Cull::cullFarMult` | game/render/cull.cpp:82 |  | pc_faithful/pc_skip split (2026-07-03): pc_faithful (pc_skip=false) us… |
 | 0x800F2624 | LIVE | `RenderQueue::objidOverlay` | game/render/render_queue.cpp:126 |  | Box + label every live GAME OBJECT, identified by ENUMERATING the rend… |
-| 0x801062E4 | LIVE | `PcScheduler::runDemoBody` | game/core/pc_scheduler.cpp:229 |  | DEMO 0x801062E4 — native per-frame dispatcher (both pc_skip modes; see… |
+| 0x801062E4 | LIVE | `PcScheduler::runDemoBody` | game/core/pc_scheduler.cpp:274 |  | DEMO 0x801062E4 — native per-frame dispatcher (both pc_skip modes; see… |
 | 0x801062E4 | LIVE | `Demo::stageMain` | game/scene/demo.cpp:356 | 0x800810F0 | DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand … |
 | 0x8010637C | LIVE | `Engine::stagePrologue` | game/core/engine.cpp:2269 |  | GAME stage TOP-LEVEL ENTRY 0x8010637C — task-0's stage driver: a one-t… |
-| 0x8010637C | LIVE | `PcScheduler::runGameStanza` | game/core/pc_scheduler.cpp:309 |  | GAME 0x8010637C — native per-frame dispatcher. Fresh: stagePrologue + … |
+| 0x8010637C | LIVE | `PcScheduler::runGameStanza` | game/core/pc_scheduler.cpp:354 |  | GAME 0x8010637C — native per-frame dispatcher. Fresh: stagePrologue + … |
 | 0x801063C0 | LIVE | `Demo::s0` | game/scene/demo.cpp:207 | 0x801063E4 | s0 0x801063C0 — run-once INIT then loaders; FALLS THROUGH into s1 same… |
 | 0x801063C0 | LIVE | `Demo::s0PreYield` | game/scene/demo.cpp:467 |  | Substate s0 (0x801063C0) — run-once INIT / restart: load the menu page… |
 | 0x801063F4 | LIVE | `Engine::frame` | game/core/engine.cpp:2222 |  | One native loop iteration of the guest body 0x801063F4: dispatch sm[0x… |
@@ -252,8 +254,8 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x80106464 | LIVE | `Demo::s2` | game/scene/demo.cpp:83 | 0x8001CF2C 0x8010696C | s2 0x80106464 — sub-machine v0 = 0x8010696c(). Outcome 1 -> go to s7 (… |
 | 0x80106478 | LIVE | `Engine::areaLoadState` | game/core/engine.cpp:200 | 0x8001CF2C 0x8004D8B0 0x80078824 0x8007BF20 0x8007E8DC 0x8007ED5C … | Engine::areaLoadState — native ownership of FUN_80106478 (the RUNNING/… |
 | 0x8010649C | LIVE | `native_stage0_sm` | game/core/engine.cpp:2926 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native. Recom… |
-| 0x8010649C | LIVE | `PcScheduler::runStage0FiberStanza` | game/core/pc_scheduler.cpp:428 |  | pc_faithful STAGE-0 — the whole ov_start arc as a NATIVE task body on … |
-| 0x8010649C | LIVE | `PcScheduler::runStage0StepStanza` | game/core/pc_scheduler.cpp:486 |  | STAGE-0 START.BIN step-spread — resume path. Between the fresh startBi… |
+| 0x8010649C | LIVE | `PcScheduler::runStage0FiberStanza` | game/core/pc_scheduler.cpp:473 |  | pc_faithful STAGE-0 — the whole ov_start arc as a NATIVE task body on … |
+| 0x8010649C | LIVE | `PcScheduler::runStage0StepStanza` | game/core/pc_scheduler.cpp:531 |  | STAGE-0 START.BIN step-spread — resume path. Between the fresh startBi… |
 | 0x801064E8 | LIVE | `Demo::s3` | game/scene/demo.cpp:118 | 0x800750D8 0x80106AC4 | s3 0x801064E8 — sub-machine v0 = 0x80106ac4() (mirror of 0x8010696c). … |
 | 0x801065EC | LIVE | `Demo::s6` | game/scene/demo.cpp:150 | 0x8007B45C 0x80106690 0x80106824 | s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the… |
 | 0x80106728 | LIVE | `native_stage0_sm` | game/core/engine.cpp:2926 |  | Stage-0 START.BIN state machine (overlay 0x80106728), PC-native. Recom… |
@@ -274,7 +276,7 @@ Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 | 0x80108A60 | LIVE | `Engine::fieldTransition` | game/core/engine.cpp:1720 |  | sm[0x4a]==5 transition dispatcher on sm[0x4c]. 0/9 = done (return to t… |
 | 0x80108B0C | LIVE | `Engine::fieldFrameFaithful` | game/core/engine.cpp:778 | 0x80075A80 | FIELD PER-FRAME UPDATE 0x80108b0c — native control flow (the field fra… |
 | 0x80108BE4 | LIVE | `Engine::fieldFrameXFaithful` | game/core/engine.cpp:1496 |  | FIELD PER-FRAME UPDATE VARIANT 0x80108be4 — the mid-TRANSITION field f… |
-| 0x80109164 | LIVE | `PcScheduler::runSopAreaLoadStanza` | game/core/pc_scheduler.cpp:280 |  | SOP area-load 0x80109164 — SOP.BIN's cooperative slot-1 loader run syn… |
+| 0x80109164 | LIVE | `PcScheduler::runSopAreaLoadStanza` | game/core/pc_scheduler.cpp:325 |  | SOP area-load 0x80109164 — SOP.BIN's cooperative slot-1 loader run syn… |
 | 0x80109164 | LIVE | `Sop::areaLoad` | game/scene/sop.cpp:64 | 0x8001DC40 | Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x… |
 | 0x801092B4 | LIVE | `Sop::fieldUpdate` | game/scene/sop.cpp:380 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
 | 0x80109450 | LIVE | `Sop::fieldMode` | game/scene/sop.cpp:469 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |

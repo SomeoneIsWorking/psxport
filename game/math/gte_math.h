@@ -48,6 +48,12 @@ public:
   uint32_t rotX(int16_t angle, uint32_t matPtr);
   uint32_t rotY(int16_t angle, uint32_t matPtr);
   uint32_t rotZ(int16_t angle, uint32_t matPtr);
+
+  // Wire all 7 addresses above into EngineOverrides (guest-ABI trampolines: args in r4..r6,
+  // return in r2) so EVERY caller reaching them via rec_dispatch — substrate included, not just
+  // the direct c->math.* call sites in node_xform.cpp/cutscene_camera.cpp/graphics_bind.cpp —
+  // runs this native bit-exact math instead of interpreting GTE ops. Called once from boot.cpp.
+  void registerOverrides();
 };
 
 #endif

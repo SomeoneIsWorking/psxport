@@ -173,3 +173,45 @@
 - **cause:** a `*_verify` wrapper (record_gate / an inline snapshot+super_call harness) means someone WROTE the compare scaffolding, not that the compare has ever RUN clean. The gate is off by default (cfg_dbg("orchverify") is 0 unless set), so the default path is unverified native. Wire-time A/B may still fail if the native impl and recomp body actually differ.
 - **fix / rule:** the wire-time A/B (main-RAM + scratchpad cmp = 0) is the ONLY proof. If a wire trips a diff, revert immediately — the "byte-perfect" native was never actually proven. Optionally rerun with the gate on (e.g. `PSXPORT_DEBUG=orchverify`) to localize the divergence, but do NOT ship the wire.
 - **refs:** attempted wire reverted 2026-07-02; game/render/engine_submit.cpp ov_orch597AC (orchverify gate); the earlier successful wires in this session (ov_unpack_group, ov_obj_pos_compose, spawn_dispatch, ov_obj_record_init, the collision-grid trio) all had A/B = 0.
+
+## A fully-RE'd, bit-exact `class Math` (GTE matrix cluster) sat dead — nobody ever called `registerOverrides()`
+- **symptom:** `tools/codemap.py --addr 0x80084110` said "NO native owner found", but `Math::matMul` was
+  right there in game/math/gte_math.cpp — RE'd to the 44-bit GTE accumulator, with a header comment
+  calling it "the biggest single perf lever" (16.2% of hot interpreter time, 55k+ calls/frame). The class
+  had NO `registerOverrides()` method at all; nothing ever called `EngineOverrides::register_` or
+  `shard_set_override` for its 7 addresses (matMul/applyMatlv/applyMatrixLV/rotmat/rotX/rotY/rotZ —
+  0x80084110/80084220/80084470/80085480/80084D10/80084EB0/85050). Only the small number of direct
+  `c->math.*` call sites in node_xform.cpp/cutscene_camera.cpp/graphics_bind.cpp ever ran it; every
+  substrate-originated `func_<addr>(c)` call (the actual hot path) still ran the interpreted `gen_func_*`
+  GTE-op body untouched.
+- **status:** fixed (this session) — `Math::registerOverrides()` added + called from `boot.cpp`; SBS
+  0-diff over 3 separate runs (~7000/~7650/final frames) with an instrumented print CONFIRMING the
+  native path actually executes (not just an untested 0-diff — see the caveat pattern below).
+- **cause:** a prior session ported + bit-exact-verified the class (per its header comments) but never
+  did the final wiring step. Nothing catches this: codemap.py's LIVE/ORPHAN reachability check only
+  walks the C call graph from native_boot roots — it doesn't know whether an address is actually WIRED
+  to a Core-reachable path, only whether the code exists and something calls it (and `c->math.matMul(...)`
+  direct call sites from node_xform.cpp DO make it call-graph-reachable, so it read as "LIVE" by that
+  metric even before this fix — LIVE ≠ "every caller of the guest address reaches this native").
+- **fix:** dual-wire same as `ActorReward` (see the entry above this file) — `EngineOverrides::register_`
+  for `rec_dispatch`-based native callers + `shard_set_override` with a `psx_fallback`-gated trampoline
+  for the substrate's own direct `func_<addr>(c)` calls. Verify a wire ACTUALLY fires (not just "SBS
+  stayed 0-diff", which is also true of a no-op wire) with a temporary instrumented print in the
+  installed trampoline, reverted before commit.
+- **also fixed:** codemap.py's "comment block immediately above the def" heuristic found nothing for 4 of
+  the 7 methods because their `// FUN_xxxx` header comments sat above file-local helper functions
+  (`load_mat3`/`clamp16s`/`sign44`), not directly above the `Math::` method defs. Added the standard
+  trailing `// FUN_xxxx` def-line tag (same convention as `Camera::lookAt`) — same class of gap as the
+  "orphan doc-comment block" entry above, just the opposite direction (comment too far ABOVE, not a
+  wrong block MERGED in).
+- **WORKFLOW GAP flagged, not fixed:** `dc_boot_init` (shared by SBS/dualcore/selftest) never calls ANY
+  subsystem's `registerOverrides()` — those only run in `boot.cpp`'s `main()`, on a throwaway `Game`
+  that SBS never uses. `shard_set_override` still works under SBS (process-global table, populated once
+  by that throwaway `game` before `Sbs::run()` diverts) but `EngineOverrides::register_` does NOT (SBS's
+  `mA`/`mB` each get an empty `engine_overrides` — `rec_dispatch`'s `EngineOverrides::run` can never fire
+  on an SBS core). This likely explains the "0 dispatch hits observed" caveats on other clusters
+  (`ActorZonedAttacker`, `ActorReward`) — not that autonav doesn't reach those actors, but that
+  `EngineOverrides` is structurally unreachable under SBS regardless. Real fix: call every subsystem's
+  `registerOverrides()` from `dc_boot_init` too. Out of scope here — touches every prior cluster's wiring.
+- **refs:** game/math/gte_math.{h,cpp} (Math::registerOverrides); runtime/recomp/boot.cpp; docs/port-
+  progress.md "GTE matrix cluster" session entry; the `ActorReward` dual-wiring entry above.
