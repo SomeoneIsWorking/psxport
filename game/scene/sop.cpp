@@ -537,6 +537,7 @@ void Sop::fieldMode() { Core* c = core;
       } else {
         uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
         uint8_t v = (uint8_t)((u << 3) & 0xff);
+        if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] Sop-case1 v=%02x sm6c=%u\n", v, c->mem_r8(sm+0x6c));
         c->screenFade.set(ScreenFade::SUBTRACTIVE, v, v, v);            // subtractive fade-in ramp (matches guest FUN_8007e9c8(...,0,4))
       }
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
@@ -556,6 +557,7 @@ void Sop::fieldMode() { Core* c = core;
     }
     case 3: {  // FADE-OUT — subtractive ramp (guest FUN_8007e9c8(...,0,4) per-frame equivalent)
       uint8_t u = (uint8_t)(((uint32_t)c->mem_r8(sm + 0x6c) * (uint32_t)-8) & 0xff);
+      if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] Sop-case3 u=%02x sm6c=%u\n", u, c->mem_r8(sm+0x6c));
       c->screenFade.set(ScreenFade::SUBTRACTIVE, u, u, u);
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, nv);

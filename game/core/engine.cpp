@@ -1461,6 +1461,7 @@ void Engine::fieldRun() { Core* c = core;
       c->engine.fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
+      if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] fieldRun-case10 u=%02x sm6e=%u\n", u, c->mem_r8(sm+0x6e));
       c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 0);   // = guest FUN_8007e9c8(color, 0, 4): area-transition subtractive fade-out ramp
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6e) - 1);
       c->mem_w8(sm + 0x6e, nv);

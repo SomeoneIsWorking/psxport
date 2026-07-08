@@ -33,7 +33,8 @@ void ScreenFade::fadetrace(const char* op, uint8_t mode, uint32_t rgb, const cha
 }
 
 void ScreenFade::frameStart() {
-  // Reset only the frame-scoped state. The held fully-faded state persists across frames.
+  // Reset the frame-scoped state. Matches PSX: OT slot 4 is rebuilt fresh every frame, so a frame
+  // with no caller has nothing in it. No cross-frame hold — see the class header note.
   mFrameMode = NONE;
   mFrameR = 0;
   mFrameG = 0;
@@ -43,25 +44,12 @@ void ScreenFade::frameStart() {
 void ScreenFade::set(Mode mode, uint8_t r, uint8_t g, uint8_t b, uint32_t otSlot) {
   fadetrace("set", (uint8_t)mode, ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b, nullptr);
 
-  // Update host-owned frame-scoped state (what the native renderer reads via get()).
+  // Update host-owned frame-scoped state (what the native renderer reads via get()). Last call
+  // wins for this frame; nothing persists past the next frameStart().
   mFrameMode = mode;
   mFrameR = r;
   mFrameG = g;
   mFrameB = b;
-
-  // Held-fully-faded latch. Latched only when the fade is at or above the threshold in every
-  // channel (screen essentially fully black for SUBTRACTIVE / fully white for ADDITIVE). A set()
-  // below the threshold in any channel — i.e. game is ramping back toward "scene visible" —
-  // releases the hold.
-  bool prevHeld = mHeldMode != NONE;
-  if (mode != NONE && r >= FULLY_FADED_THRESHOLD && g >= FULLY_FADED_THRESHOLD && b >= FULLY_FADED_THRESHOLD) {
-    mHeldMode = mode; mHeldR = r; mHeldG = g; mHeldB = b;
-    if (!prevHeld) fadetrace("HOLD latched", (uint8_t)mode,
-                             ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b, nullptr);
-  } else {
-    mHeldMode = NONE; mHeldR = 0; mHeldG = 0; mHeldB = 0;
-    if (prevHeld) fadetrace("HOLD released", 0, 0, nullptr);
-  }
 
   (void)otSlot;   // native renderer reads via get(); no guest-side packet build here
 }
@@ -74,8 +62,7 @@ void ScreenFade::applyLeafCall(uint32_t color, uint32_t a1, uint32_t otSlot) {
 }
 
 ScreenFade::State ScreenFade::get() const {
-  if (mFrameMode != NONE) return State{ mFrameMode, mFrameR, mFrameG, mFrameB };
-  return State{ mHeldMode, mHeldR, mHeldG, mHeldB };
+  return State{ mFrameMode, mFrameR, mFrameG, mFrameB };
 }
 
 // ScreenFade::sequence — the GAME-overlay a0l per-node fade sequencer (guest FUN_8010957C).

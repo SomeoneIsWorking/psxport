@@ -21,9 +21,9 @@
 //   The two packets together render a full-screen semi-transparent rect that blends over the frame.
 //
 // PC-native model:
-//   Native STATE lives on this class as C++ members (host memory) — the frame-scoped fade `{mode,r,g,b}`
-//   and a held-fully-faded latch (see FULLY_FADED_THRESHOLD). NO guest-RAM shadow at some invented BSS
-//   address — that would produce a divergence in gameplay-mode SBS where B substrate never touches it.
+//   Native STATE lives on this class as C++ members (host memory) — the frame-scoped fade `{mode,r,g,b}`,
+//   reset to NONE at the top of every logic frame by frameStart(). NO guest-RAM shadow at some invented
+//   BSS address — that would produce a divergence in gameplay-mode SBS where B substrate never touches it.
 //   The native renderer reads this class's members via `get()` to draw the fade.
 //
 //   `set()` / `applyLeafCall()` are host-state-only: they update the C++ members and write nothing
@@ -33,6 +33,21 @@
 //   Still-recomp fade callers do NOT reach this class; they run the substrate FUN_8007e9c8 body
 //   directly. Each substrate caller is a top-down port task tracked in docs/port-progress.md.
 //   Overrides are NOT the answer (violates top-down ownership).
+//
+//   NO cross-frame "held fully-faded" latch. An earlier revision inferred a persistent black/white HOLD
+//   from the last fade value's magnitude (a magic-threshold heuristic — banned by the no-magic-constant
+//   rule) whenever no caller called set() that frame, to avoid a residual-VRAM flicker during a few
+//   known menu/loading admin frames. It broke free-roam: the sm[0x4e] new-game bootstrap transition
+//   (Engine::fieldRun case 10, guest FUN_80106b98) ramps to full black via sm+0x6e, then hands off through
+//   states 7/8/6/0 (none of which call the fade leaf, on PSX OR here — RE'd via Ghidra decompile of
+//   FUN_80106b98) straight into steady case 1 gameplay, which likewise never calls the fade leaf again.
+//   On PSX this is correct: OT slot 4 goes unwritten those frames -> empty -> scene renders through
+//   immediately. The inferred HOLD instead latched the last (near-black) value FOREVER, since nothing
+//   ever called set() with a lower value to "release" it — a permanently black composite. Matching PSX:
+//   frameStart() resets to NONE every frame, full stop; a caller that needs a color held across multiple
+//   frames (real PSX callers always do, e.g. submitPage810c's pause-menu dim below) calls set()/
+//   applyLeafCall() EVERY one of those frames itself, which is already how every ported SM in this file
+//   behaves. See docs/findings/render.md "ScreenFade held-latch permanent black".
 #pragma once
 #include <cstdint>
 class Core;
@@ -47,14 +62,6 @@ public:
 
   struct State { Mode mode; uint8_t r, g, b; };
 
-  // "Fully faded" threshold. When the last fade rect the game drew was at or above this in every
-  // channel (subtractive => screen was fully black; additive => fully white), the class latches a
-  // HOLD. On subsequent frames where no caller sets a fade (mode NONE), the held state is what the
-  // renderer sees, so scene content freshly loaded during those admin frames doesn't leak through
-  // as a bright flash between fade-out and the next fade-in. The hold releases as soon as any
-  // caller sets a fade below this threshold in ANY channel (i.e. ramping back toward visible).
-  static constexpr uint8_t FULLY_FADED_THRESHOLD = 0xE0;
-
   // Canonical OT slot for full-screen fades — every substrate caller in Tomba passes 4. Callers
   // that pass a different slot override via the explicit `otSlot` parameter of applyLeafCall.
   static constexpr uint32_t DEFAULT_OT_SLOT = 4;
@@ -66,10 +73,10 @@ public:
   // touch the held fully-faded state — that persists across admin frames.
   void frameStart();
 
-  // Set the fade for THIS FRAME. If (mode, r, g, b) is at or above FULLY_FADED_THRESHOLD in every
-  // channel the HOLD is latched; if below in any channel the hold is released. Host-state-only:
-  // no guest-RAM writes in either pc_skip mode (`otSlot` is accepted for the guest-ABI shape but
-  // unused).
+  // Set the fade for THIS FRAME. Host-state-only: no guest-RAM writes in either pc_skip mode
+  // (`otSlot` is accepted for the guest-ABI shape but unused). Last call wins for this frame; a
+  // caller that needs the fade held across multiple frames must call this every one of them
+  // (matches PSX: OT slot 4 is rebuilt fresh each frame, so an unwritten frame renders no rect).
   void set(Mode mode, uint8_t r, uint8_t g, uint8_t b, uint32_t otSlot = DEFAULT_OT_SLOT);
 
   // Guest ABI convenience: `color` is 0x00RRGGBB in a0; `a1` selects blend (a1!=0 => ADDITIVE / white,
@@ -85,8 +92,7 @@ public:
   void sequence(uint32_t node);
 
   // Read this frame's effective state (native renderer's present prologue). Returns the frame-scoped
-  // state if a caller set it this frame; otherwise returns the held fully-faded state (if latched),
-  // otherwise NONE.
+  // state set by a caller this frame, otherwise NONE (matches PSX: nobody wrote OT slot 4 this frame).
   State get() const;
 
 private:
@@ -96,10 +102,6 @@ private:
   uint8_t mFrameR    = 0;
   uint8_t mFrameG    = 0;
   uint8_t mFrameB    = 0;
-  Mode    mHeldMode  = NONE;
-  uint8_t mHeldR     = 0;
-  uint8_t mHeldG     = 0;
-  uint8_t mHeldB     = 0;
 
   // `debug fadetrace` channel — logs every native-path fade call with the calling context; prints
   // the C++ backtrace only on FIRST occurrence of a given (op,mode,rgb) tuple (mSeen dedupe).

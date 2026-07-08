@@ -89,11 +89,18 @@ wired by guest address (see CLAUDE.md "One global dispatch point") funnels throu
 channel is the uniform call trace across substrate→native and native→native dispatch calls.
 
 `fadetrace` (screen_fade.cpp) — logs every native-path `ScreenFade::set` / `applyLeafCall` with the
-mode+rgb, and edge-logs HOLD latched / released transitions. Pairs with
-`PSXPORT_DISPWATCH=0x8007E9C8` (which surfaces every substrate fade dispatch with its guest stack).
-Together they show BOTH sides of the fade caller graph — essential when a cutscene fadeout stays
-stuck black: silent `fadetrace` + active `dispwatch` = the failing fade caller is a substrate SM
-handler that needs porting native. Issue #27.
+mode+rgb (first-time-per-tuple backtrace). Pairs with `PSXPORT_DISPWATCH=0x8007E9C8` (which surfaces
+every substrate fade dispatch with its guest stack). Together they show BOTH sides of the fade caller
+graph — essential when a cutscene fadeout stays stuck black: silent `fadetrace` + active `dispwatch` =
+the failing fade caller is a substrate SM handler that needs porting native. Issue #27. NOTE:
+`ScreenFade` has no cross-frame hold — see docs/findings/render.md "ScreenFade held-latch permanent
+black" for the removed heuristic and why.
+
+`fadesites` — one line per native fade call site each time it fires (`Sop::fieldMode` case 1/3,
+`Engine::fieldRun` case 10, `BgSceneTransitionSm::fadeRect`), tagged by site name + the raw ramp
+counter. Use when `fadetrace` shows the RGB value oscillating/stuck and you need to know WHICH of the
+several state machines sharing `c->screenFade` fired this frame (`fadetrace` alone dedupes by
+(op,mode,rgb) so a repeat value from a different caller prints no backtrace).
 
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs

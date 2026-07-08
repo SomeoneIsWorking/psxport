@@ -106,6 +106,49 @@
   `runtime/recomp/dualcore.cpp:isRenderRegion` / `docs/engine_re.md`'s packet-pool memory map BEFORE
   flagging a RAM-diff address range as gameplay corruption — this is exactly the kind of black-box
   guess the project's RE-first rule exists to prevent.
+## ScreenFade held-latch permanent black on default `./run.sh` free-roam (2026-07-08)
+
+- **symptom**: default path (pc_skip=ON, pc_render) reaches free-roam (poly=552 confirmed submitted —
+  b2ef2d1 fixed the OT-rewind-before-draw bug) but the final composited picture stays fully BLACK.
+- **ownership check (done first, per directive)**: the ScreenFade SM path was already fully native —
+  `Sop::fieldMode`/`fieldUpdate` (game/scene/sop.cpp), `Engine::submode0`/`fieldRun`
+  (game/core/engine.cpp), and `BgSceneTransitionSm::body` (game/scene/bg_scene_transition_sm.cpp) all
+  route every fade call through `c->screenFade.set/applyLeafCall`, byte-verified against the substrate
+  (BgSceneTransitionSm has its own `verifyBody` A/B gate). No unowned leaf in this path. So the bug was
+  in the OWNED code, not a missing port.
+- **RE (Ghidra headless decompile of `FUN_80106b98` = `Engine::fieldRun`'s guest source, GAME.gpr, via a
+  new xref/decomp pass — see `tools/ghidra_xrefs.py`)**: confirmed the new-game bootstrap transition
+  (`sm[0x4e]` states 0→9→10→7→8→6→0→1, gated by `DAT_800bf89c==2`, the fresh-game marker) ramps the
+  screen to full black via `case 10` (`Engine::fieldRun`, guest FUN_80106b98 case 10 — a real ramp using
+  `sm+0x6e`), then hands off through states 7/8/6/0 straight into steady case 1 gameplay. NONE of states
+  7/8/6/0/1 call the fade leaf (`FUN_8007e9c8`) again — confirmed in the decompiled C, not inferred. On
+  PSX this is correct: OT slot 4 is rebuilt every frame; an unwritten frame renders no rect, so the scene
+  shows through the instant the SM stops drawing it — no explicit "un-fade" call is needed or exists.
+- **cause**: `ScreenFade` (game/render/screen_fade.h/.cpp) carried an invented cross-frame "held
+  fully-faded" latch (`FULLY_FADED_THRESHOLD=0xE0`): if the last fade value was near-black/white, the
+  class kept re-presenting that color on every subsequent frame with no caller, releasing only when some
+  caller later called `set()` with a lower value. That release condition never occurs on the bootstrap
+  path (nothing ever ramps back down — matching real PSX, where nothing needs to). Net effect: the
+  screen latched black FOREVER the first time any transition faded to black and then genuinely finished
+  (no follow-up ramp), which is exactly the free-roam bootstrap case. This is a magic-threshold heuristic
+  standing in for "did the SM finish", banned by the no-magic-constant rule — not a faithfully-ported
+  PSX behavior.
+- **fix**: removed the hold latch entirely. `ScreenFade::get()` now returns only the frame-scoped state
+  set by `frameStart()`/`set()` this frame (NONE by default), matching PSX's "OT slot rebuilt every
+  frame" model exactly. Any caller that needs a color held across multiple frames (all current ones do,
+  e.g. `submitPage810c`'s pause-menu dim) already re-calls `set()`/`applyLeafCall()` every one of those
+  frames itself — verified by inspection of every existing caller.
+- **verification**: `PSXPORT_AUTO_SKIP=1 PSXPORT_VK_HEADLESS=1` headless shot at free-roam now shows the
+  village (hut, trees, grass) instead of black (`scratch/screenshots/fade_fixed.png`), matching
+  `PSXPORT_ORACLE=1`'s reference shot in scene content (Tomba's sprite itself is a separate, already-
+  deferred pc_render gap — issue #27/#28 territory, not this bug). SBS full: 0 `sbs-div`/`VIOLATION`
+  through 7500+ frames (`PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1`), confirming the fix is
+  render-side only and does not touch guest memory or the byte-exact compare.
+- **tooling added**: `tools/ghidra_xrefs.py` (list every xref to a guest address — "who reads/writes
+  DAT_X" — via `pyghidraRun -H <proj-dir> <proj> -process -noanalysis -scriptPath tools -postScript
+  ghidra_xrefs.py <addr_hex>`); `fadesites` debug channel (per-call-site fade tracing, since multiple SMs
+  share one `ScreenFade` instance and `fadetrace`'s dedup-by-value hides a repeat value from a different
+  caller) — both documented in docs/config.md.
 
 ## Graphical enhancements rewired PC-native / read-only overlay (2026-07-08)
 
