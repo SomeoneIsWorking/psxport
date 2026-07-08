@@ -369,3 +369,28 @@ Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY h
 - **A00 0x80109450 is a jump-table not a fn** (why the miss address is unrecompiled): MODE-slot sig at 0x80108F9C == A00's `0a000000aca31080`; A00.BIN offset 0x4B4 (=0x80109450) is all `0x801138A4` words (default-handler ptr table). SOP.BIN has a real fn there (`lui v0,0x1f80; …` = ov_sop_gen_80109450). GAME.BIN 0x8010882c's hardcoded `jal 0x80109450` (word 0x0C042514) is a SOP-mode path; it should NEVER run under A00 — and doesn't, until the stack-overflow corruption forces s4a=0.
 - **fix (was TODO, now KNOWN-INSUFFICIENT):** ~~own the A00 per-object render native-FLOAT so the render runs on the C stack~~ — later-285 proved the render is NOT the overflow source (skipping it entirely still crashes). The A00 render native-float ownership was prototyped this session (native ov_a00_node_render: submit_perobj_render for the 3D model + faithful 0x8013DD34 marshalling) and REVERTED — correct-by-RE but tangential + visually unverified. Real fix = the DIVERGENCE hunt in the correction block above (native recurses ~4× deeper than the oracle in the GAMEPLAY object-update). Do NOT bandaid (enlarge task0 stack / scratch render stack — banned).
 - **refs:** later-284b/284c/285. engine/engine_render_walk.cpp (ov_render_walk_snapshot:511, submit_render_walk_snapshot, rq_dispatch_case, RCASE_DEFAULT 0x8003C29C, submit_perobj_render:215), generated/ov_a00_shard_1.c, generated/ov_sop_shard_0.c, overlay_table.c:34/60. Repro: `newgame; run 4000` aborts ~f1184. Diagnostics: `watch 0x801fe04a 0x801fe050` (task-table spill), `debug gframe` (ret0 s4a=0), `PSXPORT_SELFTEST=oracle` (oracle holds s4e=9 steady).
+
+## 0x8013DD48 is a GTE cull/midpoint leaf (sibling of the already-excluded 0x8013DD34) — LEAVE PSX
+- **symptom / task framing:** flagged as an un-owned "HOT (8 native callers)" address in the
+  0x8012xxxx-0x8013xxxx behavior/AI region, assumed to be per-area event-dispatch game logic worth
+  owning (per "no engine-vs-content fence").
+- **status:** RE'd, then EXCLUDED — this is a render/GTE hardware leaf, not game logic. Do not port.
+- **RE (Ghidra headless on `scratch/bin/tomba2/ram_derail2.bin`, the A00-resident dump):** the fn body
+  computes a MIDPOINT between two vec3 pointers (s0, s1 — averages each of x/y/z: `(a+b)>>1` with
+  round-toward-zero via the sign-extend trick), writes it to scratchpad `0x1F8000C0..C4`, then issues
+  real `cop2`/GTE opcodes (RTPS-style perspective transform) against that scratchpad block, and finishes
+  with a GTE flag-register check (`lw v0, 0x1F800080`) that drives a clip/depth branch. This is EXACTLY
+  the GTE-compose family already identified and intentionally left PSX at the sibling address
+  **0x8013DD34** (docs/port-progress.md "later-283": "0x8013DD34 cull/bound... intentionally left PSX
+  (transcribing GTE compose is banned by the RENDER directive)") — 0x8013DD48 sits 0x14 bytes after it
+  in the same object-2D-marker-projector code (also referenced as a recursion-depth suspect in the
+  later-285/286 stack-leak investigation above, "0x8013DD34's callers").
+- **decision:** per CLAUDE.md's render directive ("Never read/honor/reproduce... GTE output... A native
+  fn that reproduces PSX instructions/packets byte-for-byte is PSX-simulation"), this is a hardware GTE
+  leaf, not portable game logic. LEAVE PSX (rec_dispatch, unchanged) — same call as 0x8013DD34.
+- **correction to the RE-first process:** address-range heuristics ("0x8012xxxx-0x8013xxxx = behavior
+  region") are not a substitute for RE — always disassemble before classifying. Two of this cluster's
+  three OTHER addresses (0x8012866C, 0x8012E168) also turned out to have non-trivial structure; see
+  docs/findings/scene.md "un-owned entity-behavior register-implicit leaves" for those.
+- **refs:** docs/port-progress.md later-283 (0x8013DD34 precedent); scratch/decomp (Ghidra project
+  `tomba2_derail2`, `scratch/bin/tomba2/ram_derail2.bin`).

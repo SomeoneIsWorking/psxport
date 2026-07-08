@@ -1192,6 +1192,38 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-08 — entity-behavior cluster (0x801244E8/0x8012866C/0x8012E168/0x8013DD48): 1 owned, 3
+correctly excluded (RE-first caught 3 non-game-logic/unsafe addresses before porting them).**
+- ✅ **DONE — 0x801244E8 owned as `release_position_801244e8`** (game/ai/beh_jumptable_release_trigger.cpp,
+  static fn alongside the file's existing `beh_jumptable_release_trigger`). Release-trigger POSITION/
+  RESPAWN sub-behavior: state 0 = one-shot placement (camera-relative offset or table `0x801498B0` keyed
+  by obj[0x60]); state 1 = per-frame respawn-adjacent-item roll (`Spawn::spawnAndInit`) + reposition +
+  re-arm. Self-contained function (own prologue/epilogue, no inherited register state) — RE'd 1:1 from
+  disas 0x801244E8..0x801246B0, cross-checked against Ghidra's decompile. Added `Engine::identityMatrixAt`
+  (game/core/engine.h/game/scene/startup.cpp) to expose the previously file-local `eng_identity_matrix` so
+  this new port (and any future caller) can reach that already-owned leaf without rec_dispatch. Gate:
+  `PSXPORT_SBS_MODE=full` autonav, 2700+ frames, zero `[sbs-div]`, zero VIOLATION — but this behavior is an
+  overlay-resident "release trigger" object that autonav's default field roam likely never reaches, so
+  this is CLEAN-BUT-LOW-COVERAGE (flagging per the verification caveat); correctness rests on the 1:1
+  disas cross-check, not the gate alone.
+- ⛔ **0x8012866C / 0x8012E168 — BLOCKED, NOT ported.** Both are FALL-THROUGH CONTINUATIONS inside a larger
+  enclosing function (no own prologue; Ghidra's isolated decompile flags `unaff_s0`/`in_v0`/`unaff_s1`),
+  reachable via an external `jal` from `entity.cpp`'s `sm40558` (FUN_80040558) as well as by internal
+  fallthrough with DIFFERENT register semantics. 0x8012866C's two external call sites ARE fully resolved
+  (a0=obj, mode=v0=obj[1]) but porting it in isolation would assume its enclosing function's stack-frame
+  convention without RE'ing that function. 0x8012E168 additionally reads `s1` with no local `lw s1,...` —
+  provenance untraced (traced up through `FUN_80040558` and `ObjectTable::dispatchFaithful`, which
+  repurposes s1 as a loop counter, without resolving it). Left as `rec_dispatch` (unchanged). See
+  docs/findings/scene.md "Un-owned entity-behavior cluster" for the full trace.
+- ⛔ **0x8013DD48 — LEAVE PSX, not game logic.** RE (Ghidra on `ram_derail2.bin`) shows a GTE cull/midpoint
+  + RTPS-transform leaf — the same family as the already-excluded sibling 0x8013DD34 (later-283, "GTE
+  compose banned"), 0x14 bytes away. Per the render directive, this is a hardware leaf to leave PSX, not
+  an ownable behavior fn despite living in the 0x8012xxxx-0x8013xxxx "behavior region". See
+  docs/findings/render.md.
+- **lesson for future sessions:** address-range heuristics are not RE. `unaff_sN`/`in_vN` in an isolated
+  Ghidra decompile is a real signal of a shared/mid-function fragment — verify against the caller's own
+  decompile + the raw bytes immediately before the target address before porting.
+
 **SESSION 2026-07-01 (later-286) — free-roam recomp-MISS FIXED; NEW frontier = MINIMIZE RECOMP DEPENDENCY
 (top-down descent, `recdep`-prioritized).** The free-roam abort (later-284c/285's frontier) was a recompiler
 bug — `emit.py` dropped a fall-through edge, leaking 0x28 of guest sp per field frame until the render pass

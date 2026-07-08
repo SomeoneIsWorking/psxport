@@ -85,14 +85,14 @@ Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
 | 0x8005082C | LIVE | `ModeStateArm::arm` | game/scene/mode_state_arm.cpp:10 |  | ModeStateArm::arm — native ownership of FUN_8005082C (Ghidra decomp sc… |
 | 0x800508A8 | LIVE | `ModeStateArm::armFromAreaTable` | game/scene/mode_state_arm.cpp:29 |  | ModeStateArm::armFromAreaTable — native ownership of FUN_800508A8 (Ghi… |
 | 0x80050970 | LIVE | `BgSceneTransitionSm::bf816Dispatch` | game/scene/bg_scene_transition_sm.cpp:87 |  | tiny dispatcher on the 800BF816 mode byte: 0 = ModeStateArm::armFromAr… |
-| 0x800509B4 | LIVE | `Engine::initDisplay` | game/scene/startup.cpp:56 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
-| 0x80050A0C | LIVE | `Engine::initFrameState` | game/scene/startup.cpp:35 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
-| 0x80050A80 | LIVE | `Engine::initCamera` | game/scene/startup.cpp:81 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
+| 0x800509B4 | LIVE | `Engine::initDisplay` | game/scene/startup.cpp:59 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
+| 0x80050A0C | LIVE | `Engine::initFrameState` | game/scene/startup.cpp:38 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
+| 0x80050A80 | LIVE | `Engine::initCamera` | game/scene/startup.cpp:84 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:567 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2434 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2509 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:89 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
-| 0x80051794 | LIVE | `eng_identity_matrix` | game/scene/startup.cpp:25 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
+| 0x80051794 | LIVE | `Engine::identityMatrixAt` | game/scene/startup.cpp:27 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
 | 0x800517F8 | LIVE | `GraphicsBind::renderUpdateBody` | game/world/graphics_bind.cpp:102 | 0x80051300 | per-object RENDER-STATE UPDATE: build the object's transform, then sna… |
 | 0x800518FC | LIVE | `Engine::objMatrixCompose` | game/core/engine.cpp:907 | 0x80051128 0x80084110 0x80084470 0x80085480 | Engine::objMatrixCompose — FUN_800518FC. |
 | 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:54 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
@@ -106,7 +106,7 @@ Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
 | 0x80052010 | LIVE | `PcScheduler::forceClose` | game/core/pc_scheduler.cpp:86 | 0x80080870 0x80080890 0x800808A0 | force-close a slot. Frame: sp-=24, s0 spill at +16, ra at +20 (written… |
 | 0x80052078 | LIVE | `Engine::startStage` | game/core/engine.cpp:2871 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x80052078 | LIVE | `eng_stage_transition` | game/scene/level_load.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
-| 0x800520E0 | LIVE | `Engine::initEntityPool` | game/scene/startup.cpp:101 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
+| 0x800520E0 | LIVE | `Engine::initEntityPool` | game/scene/startup.cpp:104 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
 | 0x80054198 | LIVE | `SceneTransition::clearSwapBlock` | game/scene/scene_transition.cpp:98 |  | small swap-block ephemeral clear. RE'd from disas 0x80054198..0x800541… |
 | 0x80054650 | LIVE | `ActorTomba::settleStep` | game/player/actor_tomba.cpp:383 | 0x8004954C | ======================================================================… |
 | 0x80054D14 | LIVE | `Engine::walkStart` | game/core/engine.cpp:928 | 0x80054790 | Engine::walkStart — FUN_80054D14. |
@@ -180,8 +180,8 @@ Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
 | 0x8007A964 | LIVE | `ObjectList::walkAllFaithful` | game/object/object_list.cpp:69 |  | pc_faithful mirror of gen_func_8007A904 (guest FUN_8007A904). Guest fr… |
 | 0x8007AAE8 | LIVE | `GraphicsBind::recordAllocBody` | game/world/graphics_bind.cpp:30 |  | ======================================================================… |
 | 0x8007B18C | LIVE | `Pool::init` | game/world/pool.cpp:109 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Zeroes 520 68-byte slots at 0x800F2740; bu… |
-| 0x8007B2C0 | LIVE | `Engine::seedDirectionMasks` | game/scene/startup.cpp:120 |  | direction-mask seeder. Called with 0 at boot (initEntityPool above) an… |
-| 0x8007B3F4 | LIVE | `Engine::reloadEntityPool` | game/scene/startup.cpp:137 |  | re-copy the staged per-area entity-pool control bytes onto the live he… |
+| 0x8007B2C0 | LIVE | `Engine::seedDirectionMasks` | game/scene/startup.cpp:123 |  | direction-mask seeder. Called with 0 at boot (initEntityPool above) an… |
+| 0x8007B3F4 | LIVE | `Engine::reloadEntityPool` | game/scene/startup.cpp:140 |  | re-copy the staged per-area entity-pool control bytes onto the live he… |
 | 0x8007E110 | LIVE | `Spawn::sceneEntityBody` | game/world/spawn.cpp:387 |  | SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4. |
 | 0x8007E9C8 | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x8007E9C8 | LIVE | `ScreenFade::fadetrace` | game/render/screen_fade.cpp:16 |  | `debug fadetrace` channel — logs every native-path fade call with the … |
@@ -197,8 +197,8 @@ Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
 | 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:248 |  |  |
 | 0x80085900 | LIVE | `Timing::vsync` | runtime/recomp/timing.cpp:38 |  | = libetc VSync(mode) reached via c->r[A0]: |
 | 0x80085BB0 | LIVE | `Timing::vsyncCallback` | runtime/recomp/timing.cpp:22 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
-| 0x80087A60 | LIVE | `Engine::initInput` | game/scene/startup.cpp:172 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as initInput(). |
-| 0x80088B00 | LIVE | `Engine::initAlloc` | game/scene/startup.cpp:197 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. `s1` / `s2` are the struct-spa… |
+| 0x80087A60 | LIVE | `Engine::initInput` | game/scene/startup.cpp:175 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as initInput(). |
+| 0x80088B00 | LIVE | `Engine::initAlloc` | game/scene/startup.cpp:200 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. `s1` / `s2` are the struct-spa… |
 | 0x800898A0 | LIVE | `Cd::hleInit` | runtime/recomp/cd_override.cpp:325 |  | ======================================================================… |
 | 0x80096370 | LIVE | `Font::bank2Store` | game/ui/font.cpp:41 |  | font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set … |
 | 0x800963A0 | LIVE | `Font::bankSelect` | game/ui/font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |

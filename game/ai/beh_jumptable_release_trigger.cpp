@@ -43,6 +43,78 @@ constexpr uint32_t BEH_FN = 0x80124E74u;
 
 }  // namespace
 
+// FUN_801244E8 — release-trigger POSITION / RESPAWN sub-behavior. Called from TWO of this file's
+// jump-table entries (jt[1] node[0x5e]==0 branch with mode=0; jt[4] node[0x5e]==0/2 branches with
+// mode=0/1) as `jal 0x801244e8(a0=obj, a1=mode)`. RE'd verbatim from disas 0x801244E8..0x801246B0 —
+// this IS a clean, self-contained function (own prologue: sw ra/s0/s1/s2/s3 + own epilogue restore;
+// no register state inherited from any caller), unlike its siblings below. obj[5] is its OWN state
+// byte (distinct from the caller's node[4]/node[5]): 0 = one-shot placement setup, 1 = per-frame
+// respawn-adjacent-item check + reposition, >=2 = no-op (falls straight to epilogue).
+//   ref = obj[0x10]              (a pointer field on the object itself — reloaded fresh, own memory)
+//   state 0: obj[5]=1;
+//     mode==0: obj[0x2e/32/36] = ref[0x2c]-20, ref[0x30]-200, ref[0x34]      (camera/parent offset)
+//     else:    idx=(obj[0x60]-2)*6; obj[0x2e/32/36] = TBL[idx+0/2/4]        (TBL=0x801498B0, u16 stride 6)
+//     obj[0xb]=0x13; obj[0x54]=0x100; FUN_80077B38(obj, 0x8014C808, 3)      (GraphicsBind::setGeom, native)
+//   state 1: if (Actor::boundsCull(obj)) { identity-matrix obj+0x98; FUN_800847F0(obj+0x54,obj+0x98);
+//            FUN_80084360(0x1F8000F8,obj+0x98); FUN_80077B5C(obj); }         (3 still-PSX leaves)
+//     if DAT_800bf9dd==0xe: rand()&0x3f==0 -> Spawn::spawnAndInit(0x107, obj+0x2c, -10) [native];
+//       reposition obj[0x2e/32/36] from ref + a random lateral offset table term; obj[5]=0, obj[6]=0,
+//       obj[0x5e]=1   (RE-ARMS state 0 for the next release)
+//     elif DAT_800bf9dd<0xe: FUN_80124328(obj)                              (still-PSX leaf)
+static void release_position_801244e8(Core* c, uint32_t obj, uint32_t mode) {
+  const uint32_t ref = c->mem_r32(obj + 0x10);
+  const uint8_t st = c->mem_r8(obj + 5);
+  if (st == 0) {
+    c->mem_w8(obj + 5, 1);
+    if (mode == 0) {
+      c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(ref + 0x2c) - 20));
+      c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(ref + 0x30) - 200));
+      c->mem_w16(obj + 0x36, c->mem_r16(ref + 0x34));
+    } else {
+      const uint32_t TBL = 0x801498B0u;                 // 3x u16 per entry, stride 6 bytes
+      int32_t idx = ((int32_t)c->mem_r16s(obj + 0x60) - 2) * 6;
+      c->mem_w16(obj + 0x2e, c->mem_r16((uint32_t)(TBL + idx + 0)));
+      c->mem_w16(obj + 0x32, c->mem_r16((uint32_t)(TBL + idx + 2)));
+      c->mem_w16(obj + 0x36, c->mem_r16((uint32_t)(TBL + idx + 4)));
+    }
+    c->mem_w8(obj + 0xb, 0x13);
+    c->mem_w16(obj + 0x54, 0x100);
+    c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 3;
+    c->engine.graphicsBind.setGeom();                   // FUN_80077B38 (native)
+    return;
+  }
+  if (st != 1) return;
+  if (Actor(c, obj).boundsCull() != 0) {                // FUN_8007778C (native)
+    const uint32_t xf = obj + 0x98;
+    c->engine.identityMatrixAt(xf);                     // FUN_80051794 (native)
+    c->r[4] = obj + 0x54; c->r[5] = xf;
+    rec_dispatch(c, 0x800847F0u);
+    c->r[4] = 0x1F8000F8u; c->r[5] = xf;
+    rec_dispatch(c, 0x80084360u);
+    c->r[4] = obj;
+    rec_dispatch(c, 0x80077B5Cu);
+  }
+  const uint8_t phase = c->mem_r8(0x800BF9DDu);
+  if (phase == 0xe) {
+    rec_dispatch(c, 0x8009A450u);                        // FUN_8009A450 (rand, still-PSX leaf)
+    if ((c->r[2] & 0x3f) == 0) {
+      c->engine.spawn.spawnAndInit(0x107u, obj + 0x2c, (uint32_t)-10);   // FUN_8003116C (native)
+    }
+    rec_dispatch(c, 0x8009A450u);
+    const uint32_t r2 = c->r[2] & 3u;
+    c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(ref + 0x2c) + (int32_t)(r2 - 1) * 0x28));
+    c->mem_w16(obj + 0x32, c->mem_r16(ref + 0x30));
+    const uint16_t last = c->mem_r16(ref + 0x34);
+    c->mem_w8(obj + 0x5e, 1);
+    c->mem_w8(obj + 5, 0);
+    c->mem_w8(obj + 6, 0);
+    c->mem_w16(obj + 0x36, last);
+  } else if (phase < 0xe) {
+    c->r[4] = obj;
+    rec_dispatch(c, 0x80124328u);                        // still-PSX leaf
+  }
+}
+
 void beh_jumptable_release_trigger(Core* c) {
   const uint32_t obj = c->r[4];                 // 80124E7C  move s2, a0  (s2 = obj node ptr)
   uint8_t st = c->mem_r8(obj + 4);              // 80124E90  lbu v1, 4(s2)  (state byte)
@@ -108,8 +180,7 @@ void beh_jumptable_release_trigger(Core* c) {
       // 80124F8C beqz -> 0x80125130 (delay move a0,s2) ; 80124F94 bne v1,1 -> 0x801251e8
       if (v == 0) {
         // 80125130: jal 0x801244e8(a0=s2, a1=0)
-        c->r[4] = obj; c->r[5] = 0;                    // 80125130 move a0,s2 ; 80125138 move a1,zero
-        rec_dispatch(c, 0x801244E8u);                  // 80125134 jal 0x801244e8
+        release_position_801244e8(c, obj, 0);           // FUN_801244E8 (native)
         c->mem_w8(obj + 0x29, 0);                       // 80125140 sb zero, 0x29(s2)  (delay slot)
         goto epilogue;                                  // 8012513C j 0x801252a4
       }
@@ -208,8 +279,7 @@ void beh_jumptable_release_trigger(Core* c) {
       }
       if (v < 2) {
         // v==0 -> 80125134 (80125108 beqz v1 -> 0x80125134, delay move a0,s2)
-        c->r[4] = obj; c->r[5] = 0;                     // 80125130/80125134 region: a0=s2, a1=0
-        rec_dispatch(c, 0x801244E8u);                   // 80125134 jal 0x801244e8
+        release_position_801244e8(c, obj, 0);            // FUN_801244E8 (native)
         c->mem_w8(obj + 0x29, 0);                       // 80125140 sb zero, 0x29(s2)  (delay slot)
         goto epilogue;                                  // 8012513C j 0x801252a4
       }
@@ -217,8 +287,7 @@ void beh_jumptable_release_trigger(Core* c) {
       // 8012511C addiu v0,zero,2 ; 80125120 beq v1,2 -> 0x80125154 ; else j epi
       if (v == 2) {
         // ---- 80125154 ----
-        c->r[4] = obj; c->r[5] = 1;                     // 80125154 move a0,s2 ; 80125158 addiu a1,zero,1
-        rec_dispatch(c, 0x801244E8u);                   // 80125154 jal 0x801244e8
+        release_position_801244e8(c, obj, 1);            // FUN_801244E8 (native)
         c->mem_w8(obj + 0x29, 0);                       // 80125160 sb zero, 0x29(s2)  (delay slot)
         goto epilogue;                                  // 8012515C j 0x801252a4
       }

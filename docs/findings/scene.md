@@ -82,3 +82,48 @@
   4. Once the loop is native, wire each fade fnptr from the script tables (0x8013B29C etc.) as its OWN `beh_*` in kTable — each is a small state machine to RE case-by-case. Only then do the two already-native fade sub-machines (whiteFlashPhaseRamp @0x801178A4, whiteFadeHold @0x80117AAC in `beh_a06_multi_actor.cpp`) share a "same visual mechanism, different SMs" family with them — the script-driven fns are DISTINCT addresses, not the same fns.
 - **misconception to avoid:** the handoff phrasing "porting this enables the two A06 fade sub-machines to be reached via native call chain" is imprecise — whiteFlashPhaseRamp/whiteFadeHold are ALREADY reached natively via `beh_a06_multi_actor` case 10 (they're static helpers there). The script interpreter dispatches a DIFFERENT family of fade fns (0x8013B*, 0x80139728). Both families likely coexist and drive different cutscene beats; landing the interpreter enables the SECOND family.
 - **refs:** commit 8ccbfca (fade sub-machines RE'd inline in beh_a06_multi_actor.cpp), tools/disas.py 0x80040CDC/0x80040DE0/0x80040E54/0x80041098/0x800412CC (interpreter fns), A06.BIN script tables around 0x80149A20 (fade scripts) and 0x80149CDC (opening-cutscene script header 0x0000000D), scratch/ghidra/A06 (Ghidra 12.0.4 project, base 0x80108F9C, 484 fns).
+
+## Un-owned entity-behavior cluster (0x801244E8/0x8012866C/0x8012E168/0x8013DD48) — 1 ported, 3 blocked
+- **task framing:** all 4 addresses were flagged "un-owned, likely per-area/behavior game logic" (siblings
+  of the HOT 0x8013DD48, 8 native callers) — the assumption was all 4 are ownable object-behavior fns.
+- **RE result (Ghidra headless, `ram_derail2.bin` — the only captured dump where this 0x8012/0x8013
+  overlay code is resident; `main_ram.bin`/most other scratch dumps have this range all-zero):**
+  - **0x801244E8 — PORTED.** `game/ai/beh_jumptable_release_trigger.cpp` `release_position_801244e8`.
+    Clean, self-contained function: own prologue (sw ra/s0/s1/s2/s3), own epilogue, every input (obj,
+    mode=a1, ref=obj[0x10]) resolved from its own args/memory — no inherited register state. A
+    release-trigger position/respawn sub-behavior: state 0 = one-shot placement (camera-relative offset
+    or a lookup-table entry, `0x801498B0`, keyed by obj[0x60]); state 1 = per-frame "respawn adjacent
+    item" (rand()&0x3f==0 → `Spawn::spawnAndInit(0x107,...)`) + reposition + re-arm to state 0. Verified
+    the TWO real call sites (jt[1]/jt[4] in the same file) always pass mode∈{0,1} exactly as ported.
+  - **0x8012866C — BLOCKED, not a real function.** Isolated Ghidra decompile flags `unaff_s0`/`in_v0`
+    (register-continuity vars with no local def) — confirmed by raw disas: the code reached at this
+    address has NO prologue of its own (no `addiu sp`/`sw ra`), it's a FALL-THROUGH continuation inside
+    a LARGER enclosing function (confirmed: the bytes just before 0x8012866c end in a `slti`/branch, and
+    the bytes after its `jal 0x80083e80` continue straight on to a REAL epilogue — `lw ra/s0; jr ra` —
+    at 0x80128750, i.e. one shared function body, entered EITHER by fallthrough OR by an external `jal`
+    from `FUN_80040558` (both call sites there pass mode=v0=obj[1]'s just-loaded byte, confirmed via
+    disas at 0x80040d[80-a0]). The two external callers ARE fully resolved (a0=obj, mode=v0), but porting
+    this as an isolated method would silently assume the enclosing function's OWN stack-frame convention
+    (ra @ sp+0x14, s0 @ sp+0x10, 24-byte frame) is safe to skip past — that requires RE'ing the TRUE
+    enclosing function first (not yet done; not one of the 4 assigned addresses). Left as rec_dispatch.
+  - **0x8012E168 — BLOCKED on register provenance.** Same fall-through-continuation shape (raw disas:
+    the instruction immediately before 0x8012e168 is `addiu v0,zero,-0xc8`, i.e. this address is ALSO
+    reached by fallthrough with a DIFFERENT semantic v0 than the external-jal case). Additionally the
+    function body reads `s1` (`lw a3,0xd0(s1)`, `lbu v0,1(s1)`) with NO local `lw s1,...` anywhere in it —
+    s1 must be live-resident from several call levels up. Traced as far as: `FUN_80040558` (the only
+    external caller, both call sites gated on `DAT_800bf870==8`, so `in_v0` IS resolved = constant 8) does
+    NOT set s1 in its own prologue, so s1 is inherited from EITHER `entity_walk_7a904` (which sets
+    NOTHING but a0 before dispatch) or `ObjectTable::dispatchFaithful`/`FUN_80026C88` (which explicitly
+    OVERWRITES s1 as its 0..39 LOOP COUNTER — game/world/object_table.cpp:194-224 — meaning if THIS is
+    the call path, `s1+0xD0` would read near-NULL, which can't be right). Which path actually feeds
+    FUN_80040558 was not resolved this session. Porting with a GUESSED s1 meaning would be exactly the
+    "magic constant" bandaid CLAUDE.md bans. Left as rec_dispatch pending that trace.
+  - **0x8013DD48 — LEAVE PSX (GTE render leaf), see docs/findings/render.md.**
+- **lesson:** an isolated-address Ghidra decompile that reports `unaff_sN`/`in_vN` pseudo-vars is a
+  reliable SIGNAL (not just decompiler noise) that the address is a shared fall-through fragment, not a
+  true function — always cross-check against the REAL caller's decompile (which usually shows a normal
+  call) AND the raw bytes immediately before the target address (a real prologue vs. a trailing branch)
+  before trusting an isolated RE.
+- **refs:** game/ai/beh_jumptable_release_trigger.cpp (release_position_801244e8), game/world/entity.cpp
+  (sm40558's calls to 0x8012866C/0x8012E168, unchanged), game/world/object_table.cpp (dispatchFaithful
+  s1 loop-counter reuse), docs/findings/render.md (0x8013DD48).
