@@ -373,6 +373,16 @@ public:
   void  parseKeys();
   void  feedInput();
   void  dumpPpm(const char* path);
+  // PICTURE compare (USER 2026-07-08): pixel-diff the port pane (A = pc_render) against the oracle
+  // pane (B = psx_render / recomp+psx_render in full mode). SBS's RAM compare is BLIND to render bugs
+  // (pc_render is a read-only overlay — it never writes guest RAM), so a wrong picture can coexist
+  // with byte-identical guest state. This names the frames + screen region where the port renders
+  // wrong. PSXPORT_SBS_RENDERDIFF=<pct> arms it (default threshold 2.0% of pixels); worst frames are
+  // dumped to scratch/screenshots/renderdiff/ for the user to eyeball.
+  void  checkPaneDiff();
+  bool     mRdiffOn = false; int mRdiffChecked = 0;
+  double   mRdiffThreshPct = 2.0;
+  uint32_t mRdiffWorstFrame = 0; double mRdiffWorstPct = 0.0;
 };
 
 const char* Sbs::Impl::modeName() const {
@@ -855,6 +865,51 @@ static int sbs_nopresent() {
 void Sbs::Impl::presentPanes() {
   if (sbs_nopresent()) return;
   sbs_rl_present(mA, mRgbaA, mWa, mHa, mRgbaB, mWb, mHb);
+}
+
+// Pixel-diff the port pane (A) vs the oracle pane (B). Tolerance-gated so PSX-fixed vs native-float
+// color/dither noise (a few LSBs everywhere) doesn't count — only STRUCTURAL differences (missing or
+// misplaced geometry, wrong fills, wrong colors) register. Reports per-frame diff% + the bounding box
+// of the differing region, tracks the worst frame, and dumps frames over threshold as side-by-side
+// PPMs (A=port left | B=oracle right) so the actual bug is visible.
+void Sbs::Impl::checkPaneDiff() {
+  static int inited = 0;
+  if (!inited) {
+    inited = 1;
+    const char* e = getenv("PSXPORT_SBS_RENDERDIFF");
+    if (e && *e) { mRdiffOn = true; double v = atof(e); if (v > 0) mRdiffThreshPct = v; }
+  }
+  if (!mRdiffOn) return;
+  int W = mWa < mWb ? mWa : mWb, H = mHa < mHb ? mHa : mHb;
+  if (W < 8 || H < 8) return;                       // no real picture yet
+  const int TOL = 40;                               // per-channel tolerance (absorbs dither/rounding)
+  long ndiff = 0; int minx = W, miny = H, maxx = -1, maxy = -1;
+  for (int y = 0; y < H; y++) {
+    const uint8_t* ra = mRgbaA + (size_t)y * mWa * 4;
+    const uint8_t* rb = mRgbaB + (size_t)y * mWb * 4;
+    for (int x = 0; x < W; x++) {
+      int dr = ra[x*4+0]-rb[x*4+0], dg = ra[x*4+1]-rb[x*4+1], db = ra[x*4+2]-rb[x*4+2];
+      if (dr<0)dr=-dr; if (dg<0)dg=-dg; if (db<0)db=-db;
+      if (dr > TOL || dg > TOL || db > TOL) {
+        ndiff++;
+        if (x<minx)minx=x; if (x>maxx)maxx=x; if (y<miny)miny=y; if (y>maxy)maxy=y;
+      }
+    }
+  }
+  double pct = 100.0 * (double)ndiff / ((double)W * H);
+  mRdiffChecked++;
+  if (pct > mRdiffWorstPct) { mRdiffWorstPct = pct; mRdiffWorstFrame = mFrame; }
+  if (pct >= mRdiffThreshPct) {
+    fprintf(stderr, "[renderdiff] f%u %.2f%% pixels differ (port vs oracle) bbox x[%d..%d] y[%d..%d] of %dx%d\n",
+            mFrame, pct, minx, maxx, miny, maxy, W, H);
+    static int dumped = 0;
+    if (dumped < 40) {                              // cap the dump flood
+      char path[256];
+      snprintf(path, sizeof path, "scratch/screenshots/renderdiff/f%05u_%02d.ppm", mFrame, (int)pct);
+      dumpPpm(path);
+      dumped++;
+    }
+  }
 }
 
 void Sbs::Impl::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
@@ -1646,6 +1701,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
     grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
+    checkPaneDiff();              // PICTURE compare: port pane (A) vs oracle pane (B) — render bugs
     // Compare per-Core SPU write logs. For each SPU register touched by EITHER core this frame,
     // compare the LAST value written to it. If A and B end this frame with different values in
     // a given SPU register, that's an audio-relevant divergence (e.g. voice N's StartAddr / Pitch
