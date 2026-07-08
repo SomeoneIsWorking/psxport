@@ -218,6 +218,7 @@ set(PORT_SRC
   game/render/screen_fade.cpp
   game/render/margin_render.cpp
   game/render/ffspan.cpp
+  game/render/quad_rtpt_submit.cpp
   game/audio/native_audio.c
   game/audio/native_music.cpp
   game/audio/music_list.cpp

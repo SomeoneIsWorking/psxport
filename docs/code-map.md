@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 380 native fns, 327 owned addresses, 379 LIVE / 1 ORPHAN.
+Totals: 382 native fns, 329 owned addresses, 381 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -47,6 +47,8 @@ Totals: 380 native fns, 327 owned addresses, 379 LIVE / 1 ORPHAN.
 | 0x80032A44 | LIVE | `Rng::inRange` | game/math/rng.cpp:105 |  | scaled random. Disas 0x80032A44..0x80032A84 verbatim: `sra v0, 15` on … |
 | 0x80036DFC | LIVE | `SaveMenu::dispatchBody` | game/ui/save_menu.cpp:136 |  | ----------------------------------------------------------------------… |
 | 0x8003AD48 | LIVE | `beh_cube_text_spawn` | game/ai/beh_cube_text_spawn.cpp:52 | 0x8003A790 0x8003A9A0 0x8003ABE4 0x8009A730 |  |
+| 0x8003B054 | LIVE | `QuadRtptSubmit::rotateQuadCorners` | game/render/quad_rtpt_submit.cpp:23 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x8003B320 | LIVE | `QuadRtptSubmit::submitQuad` | game/render/quad_rtpt_submit.cpp:94 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:229 |  |  |
 | 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:246 |  |  |
 | 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:268 |  | ======================================================================… |

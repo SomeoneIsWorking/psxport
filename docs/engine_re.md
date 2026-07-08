@@ -689,6 +689,95 @@ calls** (press right 400 + press left 400). RAM/scratchpad were byte-identical f
 the return reg needed mirroring (the gen's delay-slot `sh v0,26(a0)` leaves v0 in r2). a0 is typically a
 STACK-local struct (a0~0x801fe8c8). Registered in game_tomba2.cpp. (later: hitbox.cpp.)
 
+## RE survey — `0x80030000`-`0x8003BFFF` band (fleet agent, RE-ahead-of-frontier, UNWIRED/UNVERIFIED)
+
+Ghidra headless decompile of the whole band (`scratch/decomp/wr_re_80030000_8003c000.c`, project
+`ram_game`, 122 functions) + spot-check against `generated/shard_*.c` (ground truth for any GTE op —
+Ghidra's COP2 decompile of this band renders GTE data-register writes as synthetic
+`setCopReg`/`getCopReg`/`copFunction` "bus" pseudo-calls, unreliable for exact register indices).
+Codemap-confirmed unowned except `0x80031780`/`0x800310F4`/`0x8003116C`/`0x800312D4`/`0x80032A44`/
+`0x80032A84`/`0x80036DFC`/`0x8003A790`/`0x8003A9A0`/`0x8003ABE4`/`0x8003AD48` (already owned, skipped)
+and `0x8003B220` (owned — `game/player/hitbox.cpp`, see above; NOT reflected in `tools/codemap.py`'s
+address index yet — a workflow gap worth fixing, noted but not fixed this session). The band is NOT
+a single subsystem — it's at least four distinct clusters:
+
+1. **`0x80030000`-`0x80030FFF` — 5 "particle-burst" object AI+GTE-projection state machines**
+   (`FUN_800300D8`/`80030264`/`800308C0`/`80030A3C`/`80030D68`). Each is a `node[4]`-keyed 0..3 state
+   machine (init → run → spawn-child-particle via `FUN_8007A980`(spawn)/`FUN_80028E10`(init) → despawn
+   via `FUN_8007A624`) whose "run" state does an inline GTE compose (rotation via a `rotmat`-shape LUT
+   read, occasionally an `FUN_8009A450`-driven RNG spiral) and writes results through `FUN_80027768`
+   (the already-owned GT4bp submitter, `game/render/submit.cpp`). NAMED, NOT drafted — the GTE compose
+   needs `0x80084520`/`0x80084250`/`0x80051794` RE'd first (see cluster 3).
+2. **`0x800310F4`-`0x80031780` — thin particle-spawn wrappers + list-tail helpers.** `0x800310F4`/
+   `8003116C`/`800312D4`/`800313A0`/`80031470`/`80031558` are near-identical "spawn a child effect
+   object, copy position from a parent record, set an anim id" leaves around `FUN_8007A980`/
+   `FUN_80028E10` (both unowned, outside this band). `0x800315D4`/`80031708`/`80031744`/`80031780`
+   (owned) are small list-tail/byte-scan helpers of the same shape as the owned `80031780`.
+3. **`0x800317CC`, `0x800318A0`-`0x8003265C`, `0x80032AB4`/`80032CBC` — the "compose object transform
+   into scratchpad CR0-8" family (9 functions).** This is the genuine "GTE projection path" this band
+   was assigned for. Architecture (high confidence, NOT byte-verified): each variant (a) optionally
+   composes a rotation matrix — none (the two `0x80032xB4`/`CBC` reuse whatever's already in CR0-4),
+   `Math::rotmat` alone (`0x800318A0`), `rotmat`+`Math::rotX` (`80031AC4`), `rotmat`+`Math::rotY`
+   (`80031D24`/`80031F84`), or an as-yet-unRE'd `FUN_80084A80` "load matrix directly" alternative
+   (`800321D8`/`8003265C`/presumably `800323FC`) — all of `rotmat`/`rotX`/`rotY` are ALREADY OWNED
+   (`game/math/gte_math.cpp`); (b) MVMVA-composes the scene camera's rotation (scratchpad
+   `0x1F8000F8`, same CR-packing `game/render/projection.cpp`'s `Rcam` reads) against the just-built
+   object rotation, writing `R=(Rcam·Robj)/4096` back to `0x1F8000F8..108`; (c) MVMVA-composes `Rcam`
+   against a small per-call translation offset, adds the camera's translation (`0x1F80010C/110/114` —
+   the SAME `Tcam` `projection.cpp` reads), writing `T` to `0x1F800014/18/1C` AND `CR5-7`
+   (`0x1F800014/18/1C` again via `setCopControlWord` — same value, two destinations). This is
+   `projection.cpp`'s `projComposeCore`/`projActiveCr` formula (`R=(Rcam·Robj)/4096`,
+   `T=(Rcam·Tobj)/4096+Tcam`) but on the GUEST side, in fixed-point, feeding the OLD PSX pipeline —
+   i.e. these 9 leaves are what `projection.cpp` was reverse-engineered FROM. NOT drafted: bit-exact
+   MVMVA porting (44-bit accumulator, see `Math::matMul` in `gte_math.cpp` for the pattern to reuse)
+   needs `0x80084520` (translation-vector loader), `0x80084250` (a second compose step), `0x80084A80`
+   (direct-matrix-load alternative to `rotmat`), and `0x80051794` (identity-matrix init, guessed from
+   name/usage) RE'd first — none of the four has a caller inside this band to cross-check against, so
+   guessing their exact semantics without a live SBS comparator risks a confident-wrong port. Also
+   `0x800317CC`: a standalone single-point RTPS "distance→screen-scale" helper (writes
+   `_DAT_1f800080/84/8c`) — small, self-contained, a good follow-up candidate.
+4. **`0x800328BC`-`0x800368D0` — item/status-menu 2D UI draw calls**, NOT render/GTE at all: RECT/text
+   blits via `FUN_8007E1B8`/`FUN_8007E6DC`/`FUN_80079324` (see "Universal UI RECT emitter" section
+   below) building the inventory/status-menu box strings ("Pink items are used automatically", etc.),
+   plus a handful of small particle-recolor/state-machine leaves (`800328BC`-`80033080`). Belongs to
+   the UI subsystem, not this band's render/GTE mandate — flagged for a future UI-band pass, not
+   pursued further here.
+5. **`0x80036DFC`-`0x8003BF00` — mostly ALREADY OWNED** (save/load dispatch `ov_save_dispatch`, the
+   render-command dispatch chain `0x8003CDD8`/`0x8003F698`, aux render walks `0x8003BCF4`/`0x8003BF00`
+   — see port-progress.md "later-193"/"SESSION 2026-07-08" entries). The two remaining unowned leaves
+   directly under `0x8003C000`, `FUN_8003B054` and `FUN_8003B320`, are drafted below.
+
+### DRAFTED (compile-only, UNWIRED, UNVERIFIED) — `game/render/quad_rtpt_submit.{h,cpp}`
+
+- **`FUN_8003B054` — quad-corner rotate/swizzle.** `void(dst=a0, src=a1, cornerIndex=a2)`. Rotates 4
+  u16 corner fields from `src` into `dst`'s reserved slots (`+0xC/0x14/0x1C/0x24`, plus a shared 2nd
+  word at `+0xE/0x16` for `cornerIndex` 1..3 only), permuting which physical `src` corner lands in
+  which `dst` slot and applying a small per-byte `-1` shrink (low byte / high byte / both, depending on
+  `cornerIndex`). `cornerIndex==0` is qualitatively different: full 32-bit copies, no byte-shrink, and
+  an EARLY RETURN that skips the shared tail — traced exactly from `generated/shard_3.c
+  gen_func_8003B054` (pure integer, no GTE, so Ghidra's decompile was independently reliable and cross-
+  checked clean). Purely mechanical; not attempting to name the "meaning" of the 4 corners without a
+  caller to correlate against.
+- **`FUN_8003B320` — the "per-quad submitter" `game/render/submit.cpp`'s NESTING-SAFE-packet-span
+  comment already refers to** (rope/flame quads "emitted... via the per-quad submitter 0x8003B320
+  into 0x800C0xxx"). `void(out=a0, composedXform=a1, otzBias=a2)`: RTPT the first 3 corners
+  (`gte_op(c,0x4A280030)`), RTPS the 4th (`0x4A180001`), AVSZ4 (`0x4B68002E`), OT-bucket index from
+  the AVSZ4 result (same exponent-shift formula as the already-owned `overlay_gt_otz_index` in
+  `game/render/overlay_gt3gt4.cpp`, range gate `[4, 0x7FF]` — corrected from an initial off-by-one
+  during drafting, see `generated/shard_6.c gen_func_8003B320`'s exact `(otz-4) < 2044` compare), then
+  an on-screen bounds check (all 4 corners' SX<320 AND SY<240 — UNSIGNED, so a faithful 4:3-only
+  frustum test, not `gpu_gpu_wide_engine`-aware) before bump-copying the pre-built 10-word packet
+  into the pool (`0x800BF544`) and linking it into the OT (`0x800ED8C8`). Traced from `generated/
+  shard_6.c gen_func_8003B320` (RE ground truth for the GTE ops; Ghidra's decompile of this one uses
+  synthetic bus pseudo-calls and was cross-checked, not relied on). Mirrors the already-owned
+  `OverlayGt3Gt4::gt3/gt4` idiom (`gte_op`/`gte_read_data`/`gte_write_data`, same packet-pool/OT
+  constants) rather than reinventing it.
+- Both compile into `scratch/bin/tomba2_port` (added to `cmake/tomba2_port.cmake`). NOT registered in
+  `EngineOverrides` or `g_override[]` — no wiring, no SBS run, per this fleet agent's scope (RE-ahead-
+  of-frontier only). The caller side (which composes `composedXform` and builds `out`'s color/uv
+  fields before calling `submitQuad`) is un-RE'd and outside this band (cluster 3 above is the leading
+  hypothesis for who calls it, unconfirmed).
+
 ## Deferred render pipeline — the render-command QUEUE + flush (later-130, the missing architecture)
 Geometry submission is NOT inline in the entity handlers. It is a **deferred two-phase** system (proved by
 `PSXPORT_DEBUG=geomblk`: all owned submits run with `g_current_object==0`, AFTER every per-object cull):

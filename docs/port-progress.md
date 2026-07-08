@@ -2253,3 +2253,19 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
   needs visual steering or RE of the exit trigger in GAME.BIN handler `0x801088d8`. (NB: there is NO pause menu
   — the reliable `PSXPORT_DEBUG=state` task-slot probe confirms 0 menu tasks; an earlier "pause menu" claim was
   a broken probe.) Controls (which button = jump) are not yet identified — leave it; it reveals itself in play.
+- **Band 0x80030000-0x8003BFFF RE survey (fleet agent, 2026-07-08, RE-ahead-of-frontier — UNWIRED).**
+  122-function Ghidra decompile + shard cross-check (docs/engine_re.md "RE survey" section has the full
+  breakdown). NOT a single subsystem: (1) 5 particle-burst object state machines (`0x800300D8` family) —
+  NAMED, not drafted (needs `0x80084520`/`0x80084250`/`0x80051794` RE'd first); (2) thin particle-spawn
+  wrappers + list-tail helpers (`0x800310F4`-`0x80031780`) — named, not drafted; (3) the "compose object
+  transform into scratchpad CR0-8" family, 9 functions (`0x800317CC`, `0x800318A0`-`0x8003265C`,
+  `0x80032AB4`/`CBC`) — this IS the band's "GTE projection path" mandate; architecturally understood (it's
+  the guest-side origin of `game/render/projection.cpp`'s `projComposeCore` formula) but NOT drafted —
+  4 callee leaves (`80084520`/`80084250`/`80084A80`/`80051794`) need their own RE pass first, no in-band
+  caller to cross-check a guess against; (4) item/status-menu 2D UI draw calls (`0x800328BC`-`0x800368D0`)
+  — out of scope for this band, flagged for a UI-band pass; (5) `0x80036DFC`-`0x8003BF00` mostly already
+  owned. DRAFTED (compile-only, unwired, unverified): `FUN_8003B054` (quad-corner rotate/swizzle) +
+  `FUN_8003B320` (the RTPT+RTPS+OT "per-quad submitter" `submit.cpp` already references by address) in
+  new `game/render/quad_rtpt_submit.{h,cpp}` — mirrors the already-owned `OverlayGt3Gt4::gt3/gt4` idiom.
+  Also noted: `tools/codemap.py --addr 0x8003B220` reports "NO native owner" despite `game/player/
+  hitbox.cpp` owning it — a codemap detection gap, not fixed this session (flagged for the operator).
