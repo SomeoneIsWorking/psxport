@@ -378,6 +378,264 @@ void ActorTomba::postFrameWaterCheck() {
 }
 
 // =================================================================================
+// postInteractWalk sub-handlers — band 0x80020000-0x8002FFFF. RE'd + drafted 2026-07-08 from
+// Ghidra headless (scratch/decomp/region_8002.c) cross-checked against generated/shard_*.c
+// (ground truth for the guest-stack frame + jal-site `ra` constants). UNWIRED: postInteractWalk
+// above still reaches these via rec_dispatch(c, LEAF_TYPE_*) — wiring these methods in requires
+// adding EngineOverrides/shard_set_override entries, deliberately left for the next frontier
+// pass so this draft compiles as dead code only.
+// =================================================================================
+namespace {
+// Leaves called by these 4 handlers that stay substrate (out of the 0x8002xxxx band; not
+// RE'd by this pass). Named per the file's existing LEAF_* convention.
+constexpr uint32_t LEAF_PROX_STEP        = 0x8001F40Cu;   // FUN_8001F40C — shared proximity+step (== postInteractWalk's LEAF_TYPE_4_PROX_STEP)
+constexpr uint32_t LEAF_ALT_TAG_SET      = 0x8001FDB4u;   // FUN_8001FDB4 — alt-tag stamp (== postInteractWalk's LEAF_TYPE_4_TAG_SET)
+constexpr uint32_t LEAF_GROWN_PUSH       = 0x8001F054u;   // FUN_8001F054 — grown-state push (stepModeInteract's 0x8000-set/mode&3 branch)
+constexpr uint32_t LEAF_NILADIC_CUE      = 0x8001F830u;   // FUN_8001F830 — niladic substrate cue (type8Interact's item[0]==5 branch)
+constexpr uint32_t LEAF_GROWN_DELEGATE   = 0x8001EC3Cu;   // FUN_8001EC3C — whole-hog grown-state delegate (type8Interact's 0x8000-set branch)
+constexpr uint32_t LEAF_STEP_MODE_FLAG   = 0x8001FF7Cu;   // FUN_8001FF7C — type7Interact's mode/flag call
+}  // namespace
+
+// FUN_80020364 — postInteractWalk case 0xF/0x14/0x56 (mode=0) / 0x2F (mode=2).
+uint8_t ActorTomba::stepModeInteract(uint32_t item, uint32_t mode) {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+
+  // Guest frame: addiu sp,-40; spill s0,s1,s2,s3,ra (mirrored for completeness though this
+  // draft has no re-entrant native call that would observe the guest stack bytes yet).
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 40;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->mem_w32(c->r[29] + 24, c->r[18]);
+  c->mem_w32(c->r[29] + 32, c->r[31]);
+  c->mem_w32(c->r[29] + 28, c->r[19]);
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[17] = G; c->r[18] = item; c->r[19] = mode;
+
+  uint8_t result;
+  if (c->mem_r16(G + 0x17Eu) & 0x200u) {
+    result = 0;                                              // paused — no interaction
+  } else {
+    c->r[4] = G; c->r[5] = item; c->r[6] = 1;
+    c->r[31] = 0x800203A8u;
+    rec_dispatch(c, LEAF_PROX_STEP);
+    const int32_t v0 = (int32_t)c->r[2];
+    if (v0 < 0) {
+      result = 0;                                            // no hit
+    } else if (c->mem_r8(G + 0x144u) == 1 && v0 < 2) {
+      // Just-transitioned state.
+      if ((c->mem_r16(G + 0x17Eu) & 0x8000u) == 0) {
+        c->r[4] = item; c->r[5] = 1; c->r[6] = 0x10; c->r[7] = 0x20;
+        c->r[31] = 0x80020418u;
+        rec_dispatch(c, LEAF_ALT_TAG_SET);
+        result = 1;
+      } else if (mode & 3u) {
+        c->r[4] = G; c->r[5] = item;
+        c->r[31] = 0x800203FCu;
+        rec_dispatch(c, LEAF_GROWN_PUSH);
+        result = 1;
+      } else {
+        result = 1;
+      }
+    } else {
+      // Steady-state: optional trig-offset separation, then a mode-bit-keyed result/state stamp.
+      // Heading is the FULL 32-bit word proximityCheck stamped into OUT_HEADING_SPAD (a raw
+      // Trig::ratan2 result register width, not a 16-bit angle) — read as mem_r32 throughout.
+      if (mode & 0x3Fu) {
+        const int32_t heading = (int32_t)c->mem_r32(0x1F80009Cu);   // OUT_HEADING_SPAD
+        const int32_t cosv = c->trig.rcos(heading);
+        const int32_t sinv = c->trig.rsin(heading);
+        const int32_t sum80 = (int32_t)c->mem_r16s(G + 0x80u) + (int32_t)c->mem_r16s(item + 0x80u);
+        const int16_t dx = (int16_t)((cosv * sum80) >> 12);
+        const int16_t dz = (int16_t)((sinv * sum80) >> 12);
+        if ((mode & 0x7Fu) == 1) {
+          c->mem_w16(item + 0x2Eu, (uint16_t)((int16_t)c->mem_r16(G + 0x2Eu) - dx));
+          c->mem_w16(item + 0x36u, (uint16_t)((int16_t)c->mem_r16(G + 0x36u) + dz));
+        } else if ((c->mem_r8(G) & 4u) == 0) {
+          c->mem_w16(G + 0x2Eu, (uint16_t)((int16_t)c->mem_r16(item + 0x2Eu) + dx));
+          c->mem_w16(G + 0x36u, (uint16_t)((int16_t)c->mem_r16(item + 0x36u) - dz));
+        }
+      }
+      // bVar6 (gen: `(byte)(_DAT_1f80009c >> 4)`) — truncate the 32-bit heading word, not a byte load.
+      const uint8_t bVar6 = (uint8_t)((uint32_t)c->mem_r32(0x1F80009Cu) >> 4);
+      if ((mode & 0x40u) == 0) {
+        // mode&0x80 ladder — gate 0x1F80027A (proximityCheck's own "already consumed" guard).
+        if (mode & 0x80u) {
+          if (c->mem_r8(0x1F80027Au) != 0) { result = 2; goto done; }
+          if (c->mem_r8(G + 4u) != 1)      { result = 2; goto done; }
+          if (c->mem_r8(G + 5u) != 0x13) {
+            c->mem_w8(G + 5u, 0x13);
+            c->mem_w8(G + 6u, 0);
+            c->mem_w8(G + 7u, 0);
+            c->mem_w8(G + 0x2Bu, bVar6);
+            result = 3; goto done;
+          }
+        }
+        result = 2;
+      } else {
+        // mode&0x40 ladder — cascading result value: each gate's masked read IS the return code
+        // on early-exit (gen's `bVar3 = X; if (X==0) {...}` idiom — no early exit re-derives a
+        // fresh value, the failing mask itself is the result).
+        uint8_t bVar3 = c->mem_r8(0x1F800137u);                       // PAUSE_FLAG_SPAD
+        if (bVar3 == 0) {
+          bVar3 = c->mem_r8(G) & 6u;
+          if (bVar3 == 0) {
+            bVar3 = c->mem_r8(item) & 2u;
+            if (bVar3 == 0) {
+              bVar3 = 4;
+              c->mem_w8(G + 4u, 2);
+              c->mem_w8(G + 5u, 2);
+              c->mem_w8(G, 3);
+              c->mem_w8(G + 6u, 0);
+              c->mem_w16(G + 0x172u, 0x78u);   // single u16 store covers both G+0x172(=0x78)/G+0x173(=0)
+              c->mem_w8(G + 0x2Bu, bVar6);
+            }
+          }
+        }
+        result = bVar3;
+      }
+    }
+  }
+done:
+  c->r[31] = c->mem_r32(c->r[29] + 32);
+  c->r[19] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+  return result;
+}
+
+// FUN_800205CC — postInteractWalk case 8.
+void ActorTomba::type8Interact(uint32_t item) {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->mem_w32(c->r[29] + 24, c->r[18]);
+  c->mem_w32(c->r[29] + 28, c->r[31]);
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[17] = G; c->r[18] = item;
+
+  if (c->mem_r8(item) == 5) {
+    if ((c->mem_r16(G + 0x17Eu) & 0x200u) == 0 && c->mem_r8(G + 0x78u) == 0) {
+      c->r[31] = 0x80020620u;
+      rec_dispatch(c, LEAF_NILADIC_CUE);
+    }
+  } else if (c->mem_r16(G + 0x17Eu) & 0x8000u) {
+    c->r[4] = G; c->r[5] = item;
+    c->r[31] = 0x80020644u;
+    rec_dispatch(c, LEAF_GROWN_DELEGATE);
+  } else {
+    c->r[4] = G; c->r[5] = item; c->r[6] = 0;
+    c->r[31] = 0x80020658u;
+    rec_dispatch(c, LEAF_PROX_STEP);
+    const int32_t v0 = (int32_t)c->r[2];
+    if (v0 >= 0) {
+      if (c->mem_r8(item) == 1) {
+        if (c->mem_r8(G + 0x144u) == 1 && v0 < 2) {
+          c->r[4] = item; c->r[5] = (uint32_t)-32766; c->r[6] = 3; c->r[7] = 30;
+          c->r[31] = 0x8002069Cu;
+          rec_dispatch(c, LEAF_ALT_TAG_SET);
+        } else if ((c->mem_r16(G + 0x17Eu) & 0x200u) == 0) {
+          if ((v0 & 1) == 0) {
+            if ((c->mem_r8(G) & 4u) == 0) {
+              const int32_t heading = (int32_t)c->mem_r32(0x1F80009Cu);   // full 32-bit word
+              const int32_t cosv = c->trig.rcos(heading);
+              const int32_t sinv = c->trig.rsin(heading);
+              const int32_t sum80 = (int32_t)c->mem_r16s(G + 0x80u) + (int32_t)c->mem_r16s(item + 0x80u);
+              c->mem_w16(G + 0x2Eu, (uint16_t)((int16_t)c->mem_r16(item + 0x2Eu) + (int16_t)((cosv * sum80) >> 12)));
+              c->mem_w16(G + 0x36u, (uint16_t)((int16_t)c->mem_r16(item + 0x36u) - (int16_t)((sinv * sum80) >> 12)));
+            }
+            c->mem_w8(G + 0x60u, 1);
+            // Heading arg is the full 32-bit OUT_HEADING_SPAD word (Ghidra: `iVar7 = (int)_DAT_1f80009c`
+            // — a straight int cast, no 16-bit truncation, matching stepModeInteract's bVar6 fix).
+            const int32_t cmp = Trig::angleCmp((int32_t)c->mem_r32(0x1F80009Cu),
+                                                (int32_t)(int16_t)c->mem_r16(G + 0x140u), 1);
+            c->mem_w8(G + 0x5Fu, (uint8_t)(cmp + 2));
+          } else if (v0 == 1 && (c->mem_r8(G + 0x145u) & 1u) == 0) {
+            // G+0x32 = item[0x32] - (G[0x84] + item[0x84]) (all u16, unsigned per gen), THEN
+            // growthYSnap()'s own reset+gated-Y-resnap tail — this branch's G+0x29/0x145/0x4A/
+            // 0x50/0x148 reset (v0==1 here) plus the G+0x78/DAT_800BF816-gated const-140/70 snap
+            // on G+0x32 are BYTE-IDENTICAL to guest FUN_80022C78 (growthYSnap), reused rather than
+            // duplicated (generated/shard_0.c:1112 lines 1-19 == generated/shard_0.c:1466 lines 1-16).
+            const uint32_t gOff84   = c->mem_r16(G + 0x84u);
+            const uint32_t itOff84  = c->mem_r16(item + 0x84u);
+            const uint32_t itemY    = c->mem_r16(item + 0x32u);
+            c->mem_w16(G + 0x32u, (uint16_t)(itemY - (gOff84 + itOff84)));
+            growthYSnap();
+          }
+        }
+      } else if ((c->mem_r16(G + 0x17Eu) & 0x200u) == 0 && (c->mem_r8(G + 0x145u) & 1u) == 0) {
+        c->mem_w8(item + 0x29u, 1);
+      }
+    }
+  }
+
+  c->r[31] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+// FUN_800235A0 — postInteractWalk case 7.
+uint8_t ActorTomba::type7Interact(uint32_t item) {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+  c->r[16] = G; c->r[17] = item;
+
+  c->r[4] = G; c->r[5] = item; c->r[6] = 1;
+  c->r[31] = 0x800235C0u;
+  rec_dispatch(c, LEAF_PROX_STEP);
+  const int32_t v0 = (int32_t)c->r[2];
+  uint8_t result = 0;
+  if (v0 >= 0) {
+    const uint32_t flag = (c->mem_r8(G + 0x164u) == 0x0Cu) ? 4u : 1u;
+    c->r[4] = G; c->r[5] = item; c->r[6] = item; c->r[7] = flag;
+    c->r[31] = 0x80023600u;
+    rec_dispatch(c, LEAF_STEP_MODE_FLAG);
+    result = 1;
+  }
+
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+  return result;
+}
+
+// FUN_80022C78 — leaf, no guest-stack frame. Operates on G (postFrameWaterCheck's
+// LEAF_WATER_SPLASH call site).
+void ActorTomba::growthYSnap() {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+
+  c->mem_w8 (G + 0x29u, 1);
+  c->mem_w8 (G + 0x145u, 0);
+  c->mem_w16(G + 0x4Au, 0);
+  c->mem_w16(G + 0x50u, 0);
+  c->mem_w8 (G + 0x148u, 0);
+
+  if (c->mem_r8(G + 0x78u) != 0) return;
+  if (c->mem_r8(0x800BF816u) != 0) return;
+
+  const int16_t g17E = (int16_t)c->mem_r16(G + 0x17Eu);
+  const int16_t k    = (g17E < 0) ? 0x8C : 0x46;
+  const int16_t g84  = (int16_t)c->mem_r16(G + 0x84u);
+  if (g84 == k) return;                                        // no-op — already at the snap point
+  c->mem_w16(G + 0x32u, (uint16_t)(g84 + ((int16_t)c->mem_r16(G + 0x32u) - k)));
+}
+
+// =================================================================================
 // Settle helper — velocityIntegrate's tail dispatch (FUN_80054650)
 // =================================================================================
 uint32_t ActorTomba::settleStep(int32_t mode) {

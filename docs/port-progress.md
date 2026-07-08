@@ -2222,6 +2222,22 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    anything else" result, NOT an empirical confirm of the port's correctness. Flagged as limited coverage;
    re-verify with the counter re-added if/when a scene reaching this actor is identified.
 
+5. **RE'd, drafted, UNWIRED — ready to wire when frontier arrives (2026-07-08, band
+   0x80020000-0x8002FFFF).** `ActorTomba::stepModeInteract`/`type8Interact`/`type7Interact`/
+   `growthYSnap` (game/player/actor_tomba.{h,cpp}) — faithful native drafts of guest
+   `FUN_80020364`/`FUN_800205CC`/`FUN_800235A0`/`FUN_80022C78`, the 4 leaf handlers
+   `ActorTomba::postInteractWalk` already documents by name (its `LEAF_TYPE_0F_14_56` /
+   `LEAF_TYPE_8` / `LEAF_TYPE_7` / (postFrameWaterCheck's) `LEAF_WATER_SPLASH` rec_dispatch
+   call sites). All 4 mirror their guest-stack frames (40/32/32/0-byte, s0..s3+ra spills) per
+   generated/shard_*.c ground truth (Ghidra's decompile of the first was subtly wrong on 2 points
+   — a 32-bit heading word misread as 16-bit, and a cascading-result-value ladder — fixed against
+   the raw recompiled C). UNWIRED: postInteractWalk's own rec_dispatch(c, LEAF_TYPE_*) call sites
+   were deliberately left untouched — these are dead private methods until an EngineOverrides/
+   shard_set_override wiring pass + SBS-full 0-diff gate lands them. Region census: 184 `func_
+   8002xxxx` total, 13 already owned pre-pass, 171 unowned remain (only this coherent 4-function
+   cluster drafted this pass — the rest is un-RE'd frontier, not yet triaged for value). Compiles
+   clean in an isolated build2.
+
 # OPEN / BLOCKED (not on the critical path)
 - **Band 0x800A0000-0x800BFFFF has no ownable dispatch-target code — flagged for reassignment (2026-07-08).**
   Assigned as an "audio/SFX/sequencer tables + mid-engine leaves" ownership band; RE'd via static census

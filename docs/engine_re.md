@@ -1590,3 +1590,56 @@ NOT drafted — too large/entangled with unRE'd sub-dispatchers `FUN_8003fbc4`/`
 safely fold in one pass). `FUN_8004005C`/`FUN_80040400` resisted a clean Ghidra function-boundary
 decompile (0 functions returned) — their guest code likely straddles Ghidra's inferred boundary with
 a neighboring function; needs a manual disas.py spot-check of the boundary before a future RE pass.
+## Region MAP 0x80020000-0x8002FFFF — WIDE-RE pass (2026-07-08, UNWIRED drafts)
+
+Census: 184 `func_8002xxxx` defs across `generated/shard_{0,1,2,3,4,5,6,7,disp}.c`. 13 already
+owned pre-pass (Actor/Cull/Engine/Array8Dispatch/Pool/ObjectTable/BgSceneTransitionSm/behavior
+handlers — see `docs/code-map.md`). This pass RE'd + drafted the ONE coherent, already-documented
+cluster found in the region: the 4 leaf handlers `ActorTomba::postInteractWalk`
+(game/player/actor_tomba.cpp, guest `FUN_801130C4`, out-of-region) names by address in its own
+header comment but had left as bare `rec_dispatch(c, LEAF_TYPE_*)` calls:
+
+| addr | native (UNWIRED, private on ActorTomba) | postInteractWalk case | frame |
+|---|---|---|---|
+| `0x80020364` | `stepModeInteract(item, mode)` | 0xF/0x14/0x56 (mode=0), 0x2F (mode=2) | 40B, s0-s3+ra |
+| `0x800205CC` | `type8Interact(item)` | 8 | 32B, s0/s1/s2+ra |
+| `0x800235A0` | `type7Interact(item)` | 7 | 32B, s0/s1+ra |
+| `0x80022C78` | `growthYSnap()` | (postFrameWaterCheck's `LEAF_WATER_SPLASH`) | none (leaf) |
+
+RE method: Ghidra headless decompile (`tools/decomp.sh` against the `main_ram` project) for
+structure, cross-checked line-by-line against `generated/shard_{7,0,4}.c` (ground truth) for the
+guest-stack frame shape and every `jal`-site `ra` constant. Ghidra's decompile of `FUN_80020364`
+was subtly WRONG in one place the raw recompiled C caught: the `(byte)(_DAT_1f80009c >> 4)` tag
+and the trig-offset heading are reads of the FULL 32-bit `OUT_HEADING_SPAD` word (0x1F80009C,
+proximityCheck's `Trig::ratan2` result register width), not a 16-bit angle — Ghidra's C rendered
+it as `(int)*(short*)...` in one spot. The `mode&0x40`-set ladder (`DAT_1f800137`/`G[0]&6`/
+`item[0]&2` gates) IS a cascading result value — each failing gate's own masked read is the
+return code, not a fixed sentinel — Ghidra got this one right (`bVar3 = X; if (X==0) ...`), but
+it is easy to mis-transcribe by hand (an earlier draft of this port did, then was caught against
+the raw generated C and fixed before landing).
+
+Semantic notes (see game/player/actor_tomba.h doc-comments for the full per-function RE):
+- `stepModeInteract`/`type8Interact` both call the SAME shared substrate leaf `FUN_8001F40C`
+  (`LEAF_PROX_STEP`, = postInteractWalk's own `LEAF_TYPE_4_PROX_STEP`) for the proximity/step
+  check, then branch on its 0/1/2+ result the same way case-4's inline handler does — this whole
+  band is one proximity-interaction dispatch family; case-4's logic already documented inline in
+  `postInteractWalk` is the Rosetta stone for reading these two.
+- `type8Interact`'s "just left growth-transition" branch (v0==1) and `growthYSnap` (`FUN_80022C78`)
+  are BYTE-IDENTICAL on their shared tail (G+0x29/0x145/0x4A/0x50/0x148 reset + a G+0x17E-sign-
+  gated ±0x8C/±0x46 Y re-snap using the SAME constants `ActorTomba::growthStep` uses for its own
+  Y-compensation) — confirmed by diffing `generated/shard_0.c:1112` against `:1466`. The draft
+  calls `growthYSnap()` from `type8Interact` instead of duplicating the tail.
+- `rcos`/`rsin`/`angleCmp` (guest `FUN_80083F50`/`FUN_80083E80`/`FUN_80077768`) route through the
+  existing native `Trig` class (game/math/trig.h) rather than `rec_dispatch`, per the class-
+  ownership convention newer files in this tree already use (contrast: this file's OLDER
+  `proximityCheck` still dispatches `LEAF_ATAN2` — pre-existing debt, out of scope for this pass).
+- `FUN_8001F40C`/`FUN_8001FDB4`/`FUN_8001F054`/`FUN_8001F830`/`FUN_8001EC3C`/`FUN_8001FF7C` are all
+  0x8001xxxx (out of this band) and stay `rec_dispatch` substrate leaves — named as file-scope
+  `LEAF_*` constants for a future band-0x8001 pass to pick up.
+
+Remaining 171 unowned `func_8002xxxx` addresses were NOT individually RE'd this pass (only the
+above cluster was already flagged as a coherent, valuable target by existing documentation);
+they remain frontier for a future pass. `scratch/tmp/unowned_addrs.txt` /
+`scratch/decomp/region_8002.c` (this session's Ghidra batch decompile, 117/173 resolved) are
+local scratch artifacts (gitignored), not committed — regenerate via `tools/decomp.sh decomp
+main_ram <out.c> list <addrs...>` against the `main_ram` Ghidra project.
