@@ -825,39 +825,42 @@ void Engine::fieldFrame() { Core* c = core;
     FFS("ff_50de4", c->engine.sceneStateStep());                 // 0x80050de4 NATIVE (Engine::sceneStateStep)
     FFS("ff_1cac0", c->engine.areaModeDispatch());               // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
   }
-  // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass can run
-  // from it (the native render below consumes per-frame queues, so it is not re-runnable). No-op unless on.
+  // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass (the
+  // ACTUAL dualview feature, native_boot.cpp's mode.dualview() branch) can re-run the substrate render
+  // into the right-hand pane. No-op unless dualview is on; kept even though the plain pc_render fork
+  // below no longer rewinds (see comment there) because the dualview feature still needs a pre-render
+  // snapshot to make its second pass re-runnable.
   c->mRender->dualviewSnapshot.capturePre(c);
-  if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — NATIVE render orchestrator + walk
-  // RENDER GUEST-MEMORY DECOUPLING (user 2026-06-24: the native renderer must leave NO guest-memory side
-  // effect — only native GAMEPLAY may write guest memory). The native render above scribbles guest
-  // scratchpad/OT (e.g. the RotMatrix SVECTOR at 0x1F8000xx) as PSX-GTE transform workspace, which
-  // still-recomp content reads back wrong (the regression the DUALCORE harness pinned to scratchpad
-  // 0x1F8000C0). dualviewSnapshot.restorePre rewinds the post-gameplay guest state captured by
-  // capturePre above — undoing EVERY guest write the native render made.
+  if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — substrate render orchestrator (ALWAYS runs, both render modes)
+  // NO restorePre HERE (fixed 2026-07-08, issue: default ./run.sh renders BLACK — poly=0/rect=0 at
+  // free-roam). Render::frame() (game/render/render_frame.cpp) was repointed 2026-07-07 (commit 9d436e3,
+  // issue #32: "PSX render path ALWAYS executes underneath") to unconditionally dispatch the FULL substrate
+  // orchestrator 0x8003f9a8 in BOTH render modes — its guest writes (OT links, packet pool, walk cursors,
+  // scratchpad GTE workspace) are now BYTE-IDENTICAL to the recomp reference by construction, exactly like
+  // fieldFrameFaithful()'s call to the same c->mRender->frame() (which has never rewound them, is the
+  // fieldFrame the whole pc_faithful/SBS-full byte-exact proof is built on).
   //
-  // ORDER (2026-07-03, later-292 finding — docs/findings/sbs.md 0x800BF81E RENDER-mode divergence):
-  // restorePre runs RIGHT AFTER Render::frame(), BEFORE submitPage810c(). submitPage810c is the game's
-  // frame-submit leaf (not native render orchestration) and writes gameplay-relevant state (e.g. the
-  // 0x800BF81E clear read by later gameplay via `param_1[0x147]=DAT_800bf81f>>4`). Putting restore
-  // AFTER submitPage810c (the earlier order) rewound that legit clear on the native-render side and
-  // dropped it, while the PSX-render side kept it — exactly the byte the RENDER-mode SBS surfaced. Now
-  // only the RENDER path's side effects are undone; submitPage810c writes stick on both cores.
+  // The restore this replaces predates that pivot: back when Render::frame() ran a PARTIAL, pc_render-only
+  // pass list (see 9d436e3's diff) that genuinely diverged from the recomp reference's writes, rewinding
+  // them here was the correct decoupling (docs/findings/sbs.md 0x800BF81E finding, later-284/292). The
+  // pivot changed Render::frame() but this fork of fieldFrame() was never updated to match — an asymmetry
+  // between fieldFrame() (still restoring) and fieldFrameFaithful() (never did) that nothing caught because
+  // SBS full/9d436e3's own verification both exercise fieldFrameFaithful(), not this fork.
   //
-  // later-284: we USED to also re-run the PSX render (d0(0x8003f9a8)+d0(0x8010810c)) here "to leave guest
-  // OT/packets PSX-correct." That was REDUNDANT and HARMFUL: restorePre already yields the exact
-  // post-gameplay guest state, and NOTHING consumes the PSX-built OT/packets (the native display,
-  // ov_scene_native/ov_draw_otag, re-derives its transforms from node/entity data, not leftover OT). Proven:
-  // with the re-render removed, oraclediff stayed convergent native-vs-oracle through the whole opening incl.
-  // free-roam onset (only the benign baseline bytes differ). The re-render was ALSO the intro-cutscene FREEZE
-  // + red-diagonal corruption: 0x8003f9a8 recurses deep (A00 object render chain) on task0's ~2KB guest stack
-  // and overflowed into the task table, clobbering sm[0x48]=17 -> ov_game_frame ret 0 -> game_coop yield-loop
-  // freeze (+ the game_coop r29 SP leak that grew the red corruption). Removing it fixed all of it at once.
-  // The TRUE end-state (make ov_render_frame write ZERO guest memory so capturePre/restorePre can go too) is a
-  // separate perf/architecture follow-up; the rewind correctly enforces the invariant meanwhile.
-  if (!c->mRender->mode.psxRender() && !c->mRender->mode.dualview() && c->mem_r8(0x1f800136u) < 2) {
-    c->mRender->dualviewSnapshot.restorePre(c);
-  }
+  // The stale rewind's actual effect: it ran BEFORE the OT walk. The per-frame OT is main RAM (part of the
+  // 2MB dualviewSnapshot restores) and gets cleared once per frame near the top of the native_boot.cpp
+  // frame loop, before c->game->pcSched.step() (which is what reaches this function) even starts; capturePre
+  // above snapshots that CLEARED OT. mRender->frame() above then fills it. rec_dispatch(c,0x8003f9a8u)
+  // returns, this fork used to call restorePre() and wipe the OT straight back to the pre-render (i.e.
+  // EMPTY) snapshot — so by the time native_boot.cpp's own post-scheduler c->engine.drawOTag(...) walk ran
+  // (the pc_render picture draw, a read-only pass over guest RAM), the OT had nothing in it: poly=0, rect=0,
+  // black screen, every frame, forever. fieldFrameFaithful() never had this rewind, so its OT survives to
+  // drawOTag() intact — which is why GATE=1 (pc_faithful/pc_render) and PSXPORT_ORACLE=1 both rendered fine
+  // while the default ./run.sh (pc_skip=true, this fork) did not.
+  //
+  // pc_render stays a read-only overlay: it never itself writes guest memory (drawOTag only reads OT/scene
+  // data and writes host VK batches); the substrate writes above are gameplay-side (same call path
+  // fieldFrameFaithful takes), not a pc_render violation.
   FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
   FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)
   FFS("ff_area75a80", c->engine.areaSlots.updateTail());   // 0x80075a80 NATIVE (AreaSlots::updateTail)
