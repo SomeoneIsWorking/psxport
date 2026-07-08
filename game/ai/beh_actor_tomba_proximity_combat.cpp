@@ -5,21 +5,54 @@
 // `G` for readability, control-flow kept as goto/labels matching the recompiler's own shape 1:1
 // (per actor_melee_engage.cpp's precedent: "follows the recompiler's own control flow exactly
 // rather than risking a mis-restructure under time pressure" — this function has ~30 conditional
-// edges across 2 jump tables, high transcription risk for a manual restructure). UNWIRED/UNVERIFIED
-// — see .h banner. Needs an SBS-full gate once a real caller/spawn-table is found and this is wired.
+// edges across 2 jump tables, high transcription risk for a manual restructure).
+//
+// VERIFIED (this pass): the body logic (every branch polarity, register value, field offset) diffs
+// byte-for-byte identical to ground truth once cosmetic zero-representation (`c->r[0]+X` vs
+// `(uint32_t)0+X`) is normalized out — NO logic bugs found. The one REAL bug was structural: the
+// draft never reproduced the guest frame at all (ground truth descends -72, spills r16-r23+ra at
+// c->r[29]+32..+64, restores on exit) — fixed below (see the prologue/epilogue comments). Wired via
+// EngineOverrides only (no shard_set_override/ov_a00_set_override dual-wire): no static
+// `func_800527C8(c)` call site exists anywhere in generated/ (only the generic rec_dispatch switch-
+// case, which is EngineOverrides-visible) — same "EngineOverrides alone is correct here" shape as
+// game/player/actor_tomba.cpp's 4 postInteractWalk handlers. The real caller is presumably a per-
+// object "think" function-pointer slot (see .h banner) reached dynamically through rec_dispatch, so
+// EngineOverrides intercepts it regardless of which object stamped the pointer.
 #include "core.h"
+#include "game.h"
 #include "beh_actor_tomba_proximity_combat.h"
 void rec_dispatch(Core*, uint32_t);
 
 void beh_actor_tomba_proximity_combat(Core* c) {  // FUN_800527C8
+  // VERIFY FIX: ground truth (generated/shard_3.c:13494 gen_func_800527C8) descends its OWN -72
+  // guest frame and spills r16-r23+ra before doing anything else, restoring on the way out. The
+  // original draft omitted this entirely (no c->r[29] touch at all) — a real fidelity bug: those
+  // spill/restore writes land at c->r[29]+32..+64, which is part of the byte-exact guest-stack
+  // contract (fleet-workflow.md #1.4 "guest-stack frames: MIRROR, never revert/exclude"; pattern
+  // reference: Cull::performBaseCullFramed in game/render/cull.cpp). Captured live BEFORE self/G
+  // overwrite r22/r23, mirrored into the Core register file (not just local aliases) so the
+  // restore reads back the correct values.
+  const uint32_t save16 = c->r[16], save17 = c->r[17], save18 = c->r[18], save19 = c->r[19];
+  const uint32_t save20 = c->r[20], save21 = c->r[21], save22 = c->r[22], save23 = c->r[23];
+  const uint32_t saveRa = c->r[31];
+  c->r[29] -= 72;
+  c->mem_w32(c->r[29] + 56, save22);
+  c->mem_w32(c->r[29] + 60, save23);
+  c->mem_w32(c->r[29] + 64, saveRa);
+  c->mem_w32(c->r[29] + 52, save21);
+  c->mem_w32(c->r[29] + 48, save20);
+  c->mem_w32(c->r[29] + 44, save19);
+  c->mem_w32(c->r[29] + 40, save18);
+  c->mem_w32(c->r[29] + 36, save17);
+  c->mem_w32(c->r[29] + 32, save16);
+
   uint32_t self = 0, G = 0;
 
   self = c->r[4] + (uint32_t)0;
   c->r[2] = (uint32_t)32782u << 16;
   G = c->r[2] + (uint32_t)32384;
-
-
-
+  c->r[22] = self;  // mirror into the register file: this is what the spill above will restore
+  c->r[23] = G;
 
 
 
@@ -486,6 +519,42 @@ L_80053040:;
 L_80053058:;
   c->r[4] = self + (uint32_t)0; rec_dispatch(c, 0x8007A624u);
 L_80053060:;
+  // Epilogue mirrors the prologue descent above (ground truth 13985-13998). NOTE: the two
+  // jump-table `default: rec_dispatch(...); return;` cases earlier in this function do NOT reach
+  // here — that matches ground truth exactly (a real MIPS `jr` tail-jump out of the function, not
+  // a call-return, so no restore happens on that path either in the substrate).
+  c->r[31] = c->mem_r32(c->r[29] + 64);
+  c->r[23] = c->mem_r32(c->r[29] + 60);
+  c->r[22] = c->mem_r32(c->r[29] + 56);
+  c->r[21] = c->mem_r32(c->r[29] + 52);
+  c->r[20] = c->mem_r32(c->r[29] + 48);
+  c->r[19] = c->mem_r32(c->r[29] + 44);
+  c->r[18] = c->mem_r32(c->r[29] + 40);
+  c->r[17] = c->mem_r32(c->r[29] + 36);
+  c->r[16] = c->mem_r32(c->r[29] + 32);
+  c->r[29] += 72;
   return;
-  return;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Wiring: no static `func_800527C8(c)` call site found anywhere in generated/ — only the generic
+// rec_dispatch switch-case (shard_disp.c), which every recompiled address gets and which IS
+// EngineOverrides-visible (rec_dispatch checks EngineOverrides before ever reaching func_800527C8).
+// No shard_set_override dual-wire needed: unlike the ov_a00 toy-spawn cluster, there is no direct
+// intra-shard `jal`/call site bypassing rec_dispatch for this address. Same shape as
+// game/player/actor_tomba.cpp's registerOverrides() comment: "no substrate shard calls this address
+// directly."
+// ---------------------------------------------------------------------------------------------
+extern void gen_func_800527C8(Core*);  // substrate body — kept alive for psx_fallback (core B)
+
+namespace {
+void ov_behActorTombaProximityCombat(Core* c) {
+  if (c->game->psx_fallback) { gen_func_800527C8(c); return; }
+  beh_actor_tomba_proximity_combat(c);
+}
+}  // namespace
+
+void RegisterBehActorTombaProximityCombatOverride(Game* game) {
+  game->engine_overrides.register_(0x800527C8u, "beh_actor_tomba_proximity_combat",
+                                    ov_behActorTombaProximityCombat);
 }

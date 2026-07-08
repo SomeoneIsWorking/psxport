@@ -2,10 +2,19 @@
 // leaves in the A00 gameplay overlay (0x80126000-0x80127798 band, the frontier just below the
 // already-owned `beh_area_transition_machine` at 0x80127798).
 //
-// WIDE-RE TIER (UNWIRED, UNVERIFIED): these are faithful register-level transliterations of the
-// generated substrate C (`generated/ov_a00_shard_{0,1}.c`, symbols `ov_a00_gen_<addr>`) — the
-// ground truth for this overlay. NOT wired into rec_dispatch/EngineOverrides, NOT SBS-gated. A
-// future frontier pass must confirm field-role names against a live RAM dump before wiring.
+// VERIFIED + WIRED (this pass): line-by-line diffed against the generated substrate C
+// (`generated/ov_a00_shard_{0,1}.c`, symbols `ov_a00_gen_<addr>`) — the ground truth for this
+// overlay. 3 real bugs found and fixed (see the inline "BUG FIX" comments at each function):
+// beh_spawn_toy_child_type5_80127720 called the wrong callee arg AND returned the wrong value
+// (child pointer instead of the 0/1 success flag), beh_spawn_toy_child_type4_8012763c called the
+// wrong function address with the wrong argument (a residual-register case — ground truth reuses
+// whatever the prior FUN_80072DDC dispatch left in a0, not `child`), and
+// beh_spawn_toy_child_type2_80127510 had a wrong "boost gate" constant (should read GBASE+0x183,
+// the SAME byte the OR below writes — not a separate field). Wired via `ov_a00_set_override` (the
+// only real callers are DIRECT `ov_a00_func_<addr>(c)` sites inside ov_a00_shard_1.c) +
+// EngineOverrides (rec_dispatch/native-caller tracing), same dual-wiring shape as
+// game/ai/actor_melee_engage.cpp. Field-role names beyond what's RE'd here (e.g. exact semantics
+// of GBASE's individual bytes) still await a live RAM dump — see docs/engine_re.md.
 //
 // This file covers 5 of the ~19 functions in the surrounding cluster (a per-object "toy" behavior
 // family that spawns companion/effect child objects via the LEGACY allocator FUN_80072DDC —
@@ -23,6 +32,7 @@
 // stamps child[+0x1C] = handler fn ptr and other per-type fields — exactly the shape below.
 
 #include "core.h"
+#include "game.h"
 #include <cstdint>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
@@ -33,8 +43,6 @@ namespace {
 // beh_lift_platform.cpp names by absolute address (0x800BF854 etc); role of individual byte
 // offsets used here (0x82=130 dec, 0x183=387 dec) is NOT yet confirmed against a RAM dump.
 constexpr uint32_t GBASE = 0x800BF870u;
-// mem[0x800BFA33] == 32780<<16 - 1549 : a second byte in the same blob, gates the "boosted" path.
-constexpr uint32_t GBASE_BOOST_GATE = 0x800BFA33u;
 // The table pointer constant every spawned child's [+0x1C]/[+0x1C]-adjacent field gets seeded
 // with (32786<<16 + 25188 == 0x80019064) — same literal beh_lift_platform.cpp and
 // beh_a06_script_fades.cpp neighbors use for their own per-child table hookup.
@@ -84,26 +92,33 @@ int32_t beh_distance_band_predicate_801274bc(Core* c, uint32_t obj) {
 
 // FUN_80127720(owner) — spawn a type-5 companion child via the legacy allocator, no ready gate.
 //   child = FUN_80072DDC(owner, 0, 2, 20)
-//   if (child): FUN_8004D604(child, 1); child[+0x1C]=CHILD_TABLE_PTR; child[+3]=5; child[+0x5C]=0;
-//               owner[+0x24]=30
-//   return child (0 on pool-exhaustion)
+//   if (!child) return 0
+//   FUN_8004D604(84, 1)   -- ground truth passes the LITERAL constant 84 as a0, NOT child; that
+//                            function (gen_func_8004D604) indexes GBASE+a0 as a flag-byte array,
+//                            it is not an object-pointer callee. (draft originally guessed `child`)
+//   child[+0x1C]=CHILD_TABLE_PTR; child[+3]=5; child[+0x5C]=0; owner[+0x24]=30
+//   return 1     -- ground truth returns the success flag, NOT the child pointer (draft originally
+//                   returned `child`)
 uint32_t beh_spawn_toy_child_type5_80127720(Core* c, uint32_t owner) {
   const uint32_t child = leaf4Ret(c, owner, 0u, 2u, 20u, 0x80072DDCu);
-  if (child != 0) {
-    leaf2(c, child, 1u, 0x8004D604u);
-    c->mem_w32(child + 0x1Cu, CHILD_TABLE_PTR);
-    c->mem_w8(child + 0x03u, 5u);
-    c->mem_w16(child + 0x5Cu, 0u);
-    c->mem_w32(owner + 0x24u, 30u);
-  }
-  return child;
+  if (child == 0) return 0;
+  leaf2(c, 84u, 1u, 0x8004D604u);
+  c->mem_w32(child + 0x1Cu, CHILD_TABLE_PTR);
+  c->mem_w8(child + 0x03u, 5u);
+  c->mem_w16(child + 0x5Cu, 0u);
+  c->mem_w32(owner + 0x24u, 30u);
+  return 1u;
 }
 
 // FUN_8012763C(owner) — spawn a type-4 companion child, then feed GBASE's mode byte to pick which
 // SFX/anim variant (77 vs 78) plays via FUN_8004ED94(id, 65), and bump owner[+0x24]=30.
 //   child = FUN_80072DDC(owner, 0, 2, 20)
 //   if (!child) return 0
-//   FUN_8004D604(child, 1); child[+0x1C]=CHILD_TABLE_PTR; child[+3]=4; child[+0x5C]=0
+//   FUN_8004D650(<residual a0 left by the FUN_80072DDC dispatch above>, 1)   -- ground truth never
+//     reloads r4/a0 between the two calls, so a0 for this call is whatever gen_func_80072DDC left
+//     in r4 at return (real MIPS a0 is caller-saved / not respilled here). NOT `child` and NOT
+//     FUN_8004D604 (draft originally guessed both wrong: wrong callee address AND wrong arg).
+//   child[+0x1C]=CHILD_TABLE_PTR; child[+3]=4; child[+0x5C]=0
 //   if (GBASE[+0x82] == 1):
 //     child[+0x68]=0; GBASE[+0x82] |= 0x10; child[+0x5E] = GBASE[+0x183] & 4
 //   else:
@@ -114,7 +129,11 @@ uint32_t beh_spawn_toy_child_type5_80127720(Core* c, uint32_t owner) {
 uint32_t beh_spawn_toy_child_type4_8012763c(Core* c, uint32_t owner) {
   const uint32_t child = leaf4Ret(c, owner, 0u, 2u, 20u, 0x80072DDCu);
   if (child == 0) return 0;
-  leaf2(c, child, 1u, 0x8004D604u);
+  // Faithful residual-register reproduction: do NOT set r4 here. r4 must retain whatever the
+  // FUN_80072DDC dispatch above left it as (matches ground truth exactly since we route through
+  // the same rec_dispatch, which mutates the same shared Core register file).
+  c->r[5] = 1u;
+  rec_dispatch(c, 0x8004D650u);
   c->mem_w32(child + 0x1Cu, CHILD_TABLE_PTR);
   c->mem_w8(child + 0x03u, 4u);
   c->mem_w16(child + 0x5Cu, 0u);
@@ -143,7 +162,9 @@ uint32_t beh_spawn_toy_child_type4_8012763c(Core* c, uint32_t owner) {
 //   if (subtype == 57): child[+0x5C]=13439; child[+0x5E]=0; GBASE[+0x1D8]++       -- 0x1D8==472
 //   else:                child[+0x5C]=13375; child[+0x5E]=4
 //   combined = 1 | child[+0x5E]
-//   if (mem[GBASE_BOOST_GATE] != 0):
+//   if (GBASE[+0x183] != 0):     -- NOT a separate "gate" byte: same field the OR below writes,
+//                                   read BEFORE the OR (self-referential: once any bit is set by a
+//                                   prior call, every later call takes the boosted path)
 //     FUN_80040C00(61); mode = combined << 4; child[+0x68]=1; owner[+0x24]=120
 //   else:
 //     mode = combined; child[+0x68]=0; owner[+0x24]=30
@@ -170,7 +191,7 @@ uint32_t beh_spawn_toy_child_type2_80127510(Core* c, uint32_t owner, uint32_t su
 
   const uint8_t combined = (uint8_t)(1u | c->mem_r8(child + 0x5Eu));
   uint32_t mode;
-  if (c->mem_r8(GBASE_BOOST_GATE) != 0u) {
+  if (c->mem_r8(GBASE + 0x183u) != 0u) {
     leaf1(c, 61u, 0x80040C00u);
     mode = (uint32_t)combined << 4;
     c->mem_w16(child + 0x68u, 1u);
@@ -182,4 +203,61 @@ uint32_t beh_spawn_toy_child_type2_80127510(Core* c, uint32_t owner, uint32_t su
   }
   c->mem_w8(GBASE + 0x183u, (uint8_t)(c->mem_r8(GBASE + 0x183u) | mode));
   return 1u;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Wiring: the only real callers found for all 5 addresses are DIRECT `ov_a00_func_<addr>(c)` sites
+// inside ov_a00_shard_1.c (the surrounding cluster's top-level state dispatcher, not yet drafted —
+// see the file banner). That call shape goes through the recompiler's OWN per-overlay
+// g_ov_a00_override[] table, never rec_dispatch — so EngineOverrides::register_ alone is blind to
+// it (engine_overrides.h's documented gap). Dual-wire via ov_a00_set_override, psx_fallback-gated,
+// same pattern as game/ai/actor_melee_engage.cpp.
+// ---------------------------------------------------------------------------------------------
+extern void ov_a00_set_override(uint32_t, void (*)(Core*));
+extern void ov_a00_gen_80127420(Core*);
+extern void ov_a00_gen_801274BC(Core*);
+extern void ov_a00_gen_80127720(Core*);
+extern void ov_a00_gen_8012763C(Core*);
+extern void ov_a00_gen_80127510(Core*);
+
+namespace {
+void ov_behArmCountdown80127420(Core* c) {
+  if (c->game->psx_fallback) { ov_a00_gen_80127420(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80127420u);
+  c->r[2] = beh_arm_countdown_if_linked_ready_80127420(c, c->r[4]);
+}
+void ov_behDistanceBand801274bc(Core* c) {
+  if (c->game->psx_fallback) { ov_a00_gen_801274BC(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x801274BCu);
+  c->r[2] = (uint32_t)beh_distance_band_predicate_801274bc(c, c->r[4]);
+}
+void ov_behSpawnToyType5_80127720(Core* c) {
+  if (c->game->psx_fallback) { ov_a00_gen_80127720(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80127720u);
+  c->r[2] = beh_spawn_toy_child_type5_80127720(c, c->r[4]);
+}
+void ov_behSpawnToyType4_8012763c(Core* c) {
+  if (c->game->psx_fallback) { ov_a00_gen_8012763C(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8012763Cu);
+  c->r[2] = beh_spawn_toy_child_type4_8012763c(c, c->r[4]);
+}
+void ov_behSpawnToyType2_80127510(Core* c) {
+  if (c->game->psx_fallback) { ov_a00_gen_80127510(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80127510u);
+  c->r[2] = beh_spawn_toy_child_type2_80127510(c, c->r[4], c->r[5]);
+}
+}  // namespace
+
+void RegisterBehToySpawnFamilyOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80127420u, "beh_arm_countdown_if_linked_ready", ov_behArmCountdown80127420);
+  ov_a00_set_override(0x80127420u, ov_behArmCountdown80127420);
+  ov.register_(0x801274BCu, "beh_distance_band_predicate",       ov_behDistanceBand801274bc);
+  ov_a00_set_override(0x801274BCu, ov_behDistanceBand801274bc);
+  ov.register_(0x80127720u, "beh_spawn_toy_child_type5",         ov_behSpawnToyType5_80127720);
+  ov_a00_set_override(0x80127720u, ov_behSpawnToyType5_80127720);
+  ov.register_(0x8012763Cu, "beh_spawn_toy_child_type4",         ov_behSpawnToyType4_8012763c);
+  ov_a00_set_override(0x8012763Cu, ov_behSpawnToyType4_8012763c);
+  ov.register_(0x80127510u, "beh_spawn_toy_child_type2",         ov_behSpawnToyType2_80127510);
+  ov_a00_set_override(0x80127510u, ov_behSpawnToyType2_80127510);
 }

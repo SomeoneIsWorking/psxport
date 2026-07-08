@@ -21,6 +21,11 @@
 #include "melee_proximity.h"       // class MeleeProximity — melee-proximity/approach-anchor leaf
 #include "cutscene_camera.h"       // class CutsceneCamera — resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick
 #include <stdio.h>
+
+// Free-function beh_* wide-RE clusters (verified+wired this pass) — same "class-ifying is a
+// separate axis" acceptance behavior_dispatch.cpp's own table already uses for this family.
+void RegisterBehToySpawnFamilyOverrides(Game* game);              // game/ai/beh_toy_spawn_family.cpp (0x80127420/801274BC/80127720/8012763C/80127510)
+void RegisterBehActorTombaProximityCombatOverride(Game* game);    // game/ai/beh_actor_tomba_proximity_combat.cpp (0x800527C8)
 #include <stdlib.h>
 #include <string.h>
 
@@ -96,6 +101,8 @@ void register_engine_overrides(Game* game) {
   ActorMeleeEngage::registerOverrides(game);         // A00-overlay melee-engage/reposition/arm leaf (0x80112188)
   MeleeProximity::registerOverrides(game);           // melee-proximity/approach-anchor leaf (0x8001F9DC)
   CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
+  RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)
+  RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
 }
 
 int main(int argc, char** argv) {
