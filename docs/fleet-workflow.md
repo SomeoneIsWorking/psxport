@@ -94,3 +94,35 @@ Decouple expensive RE from the serial 0-diff gate by running two kinds of agent 
 - Sizing: wide-RE can be many agents (RE is embarrassingly parallel and gate-free); the frontier tier
   stays serial-ish because each push must gate 0-diff. Don't pile frontier integrations while the gate is
   red — converge first. Wide-RE never blocks on the gate, so it can always run.
+
+## 7. Integration gotchas (hard-won 2026-07-08)
+- **Reset to `origin/main` before EVERY cherry-pick.** A non-isolated agent can leak files/edits into the
+  main checkout (see below); a dirty tree makes `git cherry-pick` abort ("commit your changes first").
+  `git reset --hard origin/main` first guarantees a clean, known base each time.
+- **NEVER `git commit --amend` as a fallthrough.** If a cherry-pick aborts and your script still runs
+  `--amend`, it rewrites the CURRENT (already-pushed) tip → local diverges from origin, and the next push
+  is blocked or (worse) force-territory. Only regen docs + amend AFTER a confirmed-successful pick, guarded
+  by `git diff --quiet docs/code-map.md ||`.
+- **Iterate the conflict-file list with `while IFS= read -r f; do … done`**, NOT `for f in $U` — a
+  newline-joined `$U` mis-splits and passes both paths as one arg.
+- **Conflict resolution by file type:** generated docs (`code-map.md`, `findings/INDEX.md`) → `checkout
+  --theirs` then REGENERATE (`tools/codemap.py` / `tools/findings.py`); append docs (`engine_re.md`,
+  `port-progress.md`) → union-merge (keep both sides, dedup). Wiring files (`cmake`, `boot.cpp`) →
+  union-merge (additive).
+- **Marker check must be precise:** grep `^(<<<<<<< |>>>>>>> |=======$)` — a bare `^=======` over-matches
+  long `====…` section separators in docs and cries wolf.
+- **Wide-RE (unwired) integration needs no full SBS gate** — the drafts are dead code — but run a SHORT
+  `MODE=full` smoke anyway to prove a stray global ctor / cmake change didn't perturb 0-diff, then push.
+
+## 8. Agent isolation is NOT guaranteed — verify it
+Some `isolation:'worktree'` agents in the 2026-07-08 wide-RE wave were NOT truly isolated: one wrote
+`quad_rtpt_submit.*` into the MAIN checkout and dirtied its `cmake`, and an operator `git reset --hard`
+wiped that agent's uncommitted work. Defenses:
+- The operator integrates from the agent's COMMITTED BRANCH SHA (which is intact), never from whatever
+  leaked into the working tree. Relocate stray untracked files to `scratch/stray/` (mv, don't rm) and
+  `git reset --hard origin/main` before integrating.
+- Tell every source-editing agent EXPLICITLY: work only under your worktree cwd; NEVER write to
+  `<HOME>/repo/psxport/...`; copy `generated/` + `scratch/bin/tomba2/MAIN.EXE` INTO your worktree,
+  build in your own `build2`. Absolute-path writes are the leak vector.
+- If the main checkout keeps re-dirtying after a reset, an agent is actively leaking — stop it or wait for
+  it to finish before integrating.
