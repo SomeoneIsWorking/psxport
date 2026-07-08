@@ -988,6 +988,48 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   xformverify). NEXT clean §F targets: `FUN_80026C88` / `FUN_8003F024` (pure per-object dispatcher loops over
   the 40-entry 0x800ec188 table, no GTE — verify via full RAM+scratchpad A/B); `FUN_80051128`'s consumers in
   the transform cluster. AVOID `FUN_80027A4C` (16% but GTE/GP0 packet submitter, render-boundary).
+- ✅ **2026-07-08 (band 0x8004-0x8005FFFF sweep) — 4 more NodeXform siblings owned:
+  `NodeXform::seedBlock/propagateRotmat/propagateAxis/buildAxis` (0x800517BC/80051300/80051464/
+  80051C8C, game/render/node_xform.cpp).** `PSXPORT_DEBUG=recdep-all` free-roam histogram (3000
+  frames) ranked these the busiest still-substrate leaves in the band once the earlier 0x8003xxxx/
+  math/animation ownership had drained the top of the list: seedBlock 19971 calls, propagateRotmat
+  10998, buildAxis 2672 (propagateAxis is buildAxis's own tail-callee, not separately dispatched).
+  RE'd from Ghidra (`tools/decomp.sh`) then cross-checked verbatim against the ground-truth
+  recompiled bodies (`generated/shard_1.c` gen_func_80051300, `shard_2.c` gen_func_80051464,
+  `shard_5.c` gen_func_800517BC/gen_func_80051C8C):
+  - `seedBlock(ptr,x,y,z)` — trivial `{x,0,y,0,z,0,0,0}` 8-word seeder (the same diagonal shape
+    build()/buildWithOffset build inline for their scratch source matrix).
+  - `propagateRotmat(node)` — sibling of the existing `propagate()` (0x80051128): same per-child
+    root/sibling parent-frame compose + world-position accumulate, but seeds the child's rotation
+    via a single `Math::rotmat(child+8)` call (not the 2-stage rotmat+matMul-to-scratch40 propagate()
+    uses) and writes the child's matrix to child+0x18 / position to child+0x2C (not +0x24/+0x44).
+    Reached both via `rec_dispatch` (5 overlay cross-module callers, A00-A0A) and directly by
+    `GraphicsBind::renderUpdateBody`'s own recompiled body (`func_80051300(c)` in shard_3/shard_6) —
+    the latter REQUIRED the `shard_set_override` dual-wire (EngineOverrides alone would have missed
+    it, same gotcha `docs/findings/tooling.md` already flagged for ActorReward/PcScheduler).
+  - `propagateAxis(node)` — sibling of propagateRotmat using an EXPLICIT identity + rotX(child+8)/
+    rotY(child+0xA)/rotZ(child+0xC) composition instead of one rotmat() call; otherwise identical.
+    Only same-module caller found was `buildAxis`'s own body (shard_5.c) — dual-wired anyway
+    (defense-in-depth; no other caller currently exists to protect against, but the g_override[]
+    slot is process-global so a future substrate addition reaching it directly would still be safe).
+  - `buildAxis(node)` — node-level sibling of `build()`: composes THIS node's own world matrix via
+    identity+rotX/Y/Z (not rotmat) at node+0x98, copies raw local position straight into the
+    world-pos triple (NO rotation, unlike buildWithOffset), tail-calls propagateAxis(node). Every
+    caller found was `rec_dispatch(c, 0x80051C8Cu)` from an overlay (A00/A02/A06/A08) or the native
+    `beh_anim_trigger_gates.cpp` handler (via the `leaf()` rec_dispatch wrapper) — no same-module
+    substrate caller exists, so EngineOverrides alone suffices (no shard_set_override needed).
+  All four wired in `NodeXform::registerOverrides()`, called from `register_engine_overrides()`
+  (runtime/recomp/boot.cpp) so SBS's separately-constructed Games get them too. v0 note:
+  propagateRotmat/propagateAxis structurally always leave v0==0 at return (the loop-guard idiom
+  guarantees it on every path) — `GraphicsBind::renderUpdateBody` propagates this v0 as its own
+  return value, so the EngineOverrides trampolines set `c->r[2] = 0` explicitly rather than leaving
+  it as an accidental leftover. VERIFIED: `PSXPORT_SBS_MODE=full` autonav headless, zero sbs-div/
+  VIOLATION through f7500 (90s wall-clock, process still running when killed); `PSXPORT_DEBUG=ovhit`
+  confirms all four registrations actually fire in a free-roam session (seedBlock 19971,
+  propagateRotmat 10998, buildAxis 2672 — propagateAxis 0 external hits is EXPECTED, it's reached
+  only as buildAxis's internal native call, never through the override table); a follow-up
+  `recdep-all` histogram shows all 4 addresses gone from the substrate-dispatch list entirely
+  (substrate no longer executes for them at all).
 - ✅ **later-206 — `FUN_80026C88` `ov_disp_26c88` (per-object DISPATCHER LOOP over the 40-entry, 64-byte-
   stride object table at 0x800ec188 — the §F-flagged primary target).** No args, void return. **NO GTE, NO
   render packets — pure control flow.** Loop i in [0,40): read obj[0] (active byte) — if 0 skip; else

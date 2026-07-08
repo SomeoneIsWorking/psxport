@@ -12,10 +12,16 @@
 #pragma once
 #include <cstdint>
 class Core;
+class Game;
 
 class NodeXform {
 public:
   Core* core = nullptr;
+
+  // registerOverrides — dual-wire seedBlock/propagateRotmat/propagateAxis/buildAxis onto `game`
+  // (EngineOverrides + shard_set_override). Called once per Game from register_engine_overrides()
+  // (runtime/recomp/boot.cpp) — including SBS's own separately-constructed Games.
+  static void registerOverrides(Game* game);
 
   // build (guest FUN_80051844): compose this node's world matrix at node+0x98 from its local
   // euler+translation, copy the world-pos triple, and propagate to children via propagate().
@@ -36,4 +42,33 @@ public:
   // (sentinel child+6 == -1) reference this node; siblings reference node[0xC0 + sentinel*4].
   // Uses scratchpad 0x1F800000/20/40 as work areas. No render packets, no GTE ops.
   void propagate(uint32_t node);
+
+  // seedBlock (guest FUN_800517BC): write an 8-word {x,0,y,0,z,0,0,0} block at `ptr` — the same
+  // diagonal-seed shape build()/buildWithOffset build inline for their scratch source matrix.
+  // Pure leaf, no scratchpad/GTE touch. Args sign-extended from int16 (matches the guest ABI).
+  void seedBlock(uint32_t ptr, int16_t x, int16_t y, int16_t z);
+
+  // propagateRotmat (guest FUN_80051300): sibling of propagate() — per child on node+0xC0, build
+  // the child's rotation via a single Math::rotmat(child+8) call (NOT the identity+rotX/Y/Z
+  // sequence propagateAxis/buildAxis use), compose against the parent frame (node+0x98 for a ROOT
+  // child [child+6==-1], or the sibling's own frame at node[0xC0+sentinel*4]+0x18), and accumulate
+  // world position into child+0x2C/30/34. Uses scratchpad 0x1F800000 (rotmat output) as the ONLY
+  // work area — no intermediate 0x1F800040 buffer (unlike propagate()). Writes the child's world
+  // matrix at child+0x18 (not child+0x24 — propagate()'s target). Called directly by the
+  // recompiled GraphicsBind::renderUpdateBody body (FUN_800517F8) as its "downstream render setup".
+  void propagateRotmat(uint32_t node);
+
+  // propagateAxis (guest FUN_80051464): sibling of propagateRotmat() using the EXPLICIT
+  // identity + rotX(child+8) + rotY(child+0xA) + rotZ(child+0xC) composition (three separate
+  // int16 euler fields) instead of a single rotmat() call. Otherwise byte-identical control flow
+  // (root/sibling frame compose, child+0x18 matrix, child+0x2C/30/34 world position). Tail call of
+  // buildAxis(); also reached directly from AI behaviour handlers (beh_anim_trigger_gates).
+  void propagateAxis(uint32_t node);
+
+  // buildAxis (guest FUN_80051C8C): node-level sibling of build() — composes this node's OWN world
+  // matrix at node+0x98 via identity + rotX(node+0x54)/rotY(node+0x56)/rotZ(node+0x58) (explicit
+  // per-axis, matching propagateAxis's convention) instead of a single rotmat() call, copies the
+  // raw local position (node+0x2E/32/36) straight into the world-pos triple (node+0xAC/B0/B4) with
+  // NO rotation applied (unlike buildWithOffset), then tail-calls propagateAxis(node).
+  void buildAxis(uint32_t node);
 };

@@ -11,6 +11,7 @@
 #include "actor_sm_reward.h"  // class ActorReward — reward/tally window actor SM family
 #include "actor_zoned_attacker.h"  // class ActorZonedAttacker — 0x8014xxxx zoned-attacker sub-behavior cluster
 #include "overlay_gt3gt4.h"        // class OverlayGt3Gt4 — A00-overlay GT3/GT4 packet-emitter cluster
+#include "node_xform.h"            // class NodeXform — per-object child-transform-propagate family
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,6 +76,7 @@ void register_engine_overrides(Game* game) {
   c->engine.spawn.registerTypedChildOverrides();     // A00-overlay typed-child spawners
   c->engine.releaseTriggerMotion.registerOverrides(); // release-trigger sub-motion cluster
   OverlayGt3Gt4::registerOverrides(game);            // A00-overlay GT3/GT4 packet emitters (0x801465EC/801467BC)
+  NodeXform::registerOverrides(game);                // seedBlock/propagateRotmat/propagateAxis/buildAxis (0x800517BC/80051300/80051464/80051C8C)
 }
 
 int main(int argc, char** argv) {
