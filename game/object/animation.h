@@ -23,4 +23,36 @@ public:
   // read the returned "keep-going" flag). Retains the `animvm` A/B verify gate against the
   // recomp super-call at 0x80076D68 for regression checking.
   void step(uint32_t node);
+
+  // loadFrame(node): FUN_80076904 — POSE-TABLE FRAME LOADER. Given node's cursor (node+0x38,
+  // an index-record pointer) and pose table base (node+0x3C), resolves the CURRENT keyframe
+  // record (indexed by the u16 at cursor[0]) and unpacks its packed rotation/scale payload into
+  // the node's per-limb sub-structures (array of struct* at node+192, stride 4). Called every
+  // time the anim-VM (step()/FUN_80076D68) or attach() (FUN_80077C40) loads a new frame. Was
+  // rec_dispatch(c, 0x80076904u); now native (see loadFrame's own header comment in
+  // animation.cpp for the full field-packing RE).
+  void loadFrame(uint32_t node);
+
+  // advanceLinkChain(node): FUN_80077B5C. Decrements node's countdown (node+0xE); while running,
+  // returns 0. On expiry, walks ONE step of a small 4-byte-stride tag/jump-pointer chain rooted
+  // at node's cursor (node+0x38) — the same cursor field as loadFrame/step's keyframe stream, but
+  // a distinct, coarser chain format reused by many non-animation behavior handlers as a generic
+  // "tick this countdown, advance this event chain" primitive. Returns 0 (ADVANCE/FOLLOW, tag
+  // 0/0x4000) or 1 (HOLD/FOLLOW-terminal, tag 0x8000/0xc000). Was rec_dispatch(c, 0x80077B5Cu) /
+  // the `leaf1(c, nd, 0x80077B5Cu)` call-site idiom in ~10 beh_ handlers.
+  uint32_t advanceLinkChain(uint32_t node);
+
+  // attach(node, table, id): FUN_80077C40. Installs animation-table entry `id` (an array of
+  // struct* at `table`, stride 4) onto `node`: sets the cursor (node+0x38) to the entry pointer,
+  // seeds the countdown (node+0xE) from the entry's descriptor low-12 bits, calls loadFrame(node),
+  // then — if the descriptor's 0x2000 "execute" bit is set — dispatches the frame executor
+  // (FUN_80075ff8, kept reachable by address; same call shape as step()'s exec_tail) exactly like
+  // the anim-VM would for this entry's tag. Was rec_dispatch(c, 0x80077C40u) / the `call3(c, obj,
+  // table, id, 0x80077C40u)` idiom.
+  void attach(uint32_t node, uint32_t table, uint32_t id);
+
+  // registerOverrides(): wires FUN_80076904 / FUN_80077B5C / FUN_80077C40 into EngineOverrides at
+  // their guest addresses, so every existing rec_dispatch call site (native beh_ handlers AND any
+  // substrate-internal caller) reaches these native methods uniformly. Called once from boot.cpp.
+  void registerOverrides();
 };

@@ -940,6 +940,37 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   passing only a0 left the cursor's high byte clear; (3) T4000/TC000 FOLLOW [cur+8] when NOT frozen (the
   transient cur+8 store is dead, overwritten) — had it inverted with the freeze case first; (4) the apply
   path RE-READS s0+14 after 0x80075f0c (the applier may modify it) for the freeze-bit OR.
+- ✅ **later-XXX — `FUN_80076904`/`FUN_80077B5C`/`FUN_80077C40` (Animation::loadFrame/advanceLinkChain/
+  attach, game/object/animation.{h,cpp}).** RE'd by hand via `tools/disas.py` with careful delay-slot
+  tracing (Ghidra headless's decompile pass mis-resolved this cluster — verified wrong against the
+  already-committed `Cull::decide()` — so its output was discarded in favor of the manual MIPS walk).
+  - `loadFrame` (FUN_80076904) — POSE-TABLE FRAME LOADER: resolves the table entry `rec` at
+    `tableBase[idx]` (idx = cursor[0], tableBase = obj+0x3C), stamps the flags byte to obj+8, and — when
+    flags&0x40 is set — unconditionally unpacks 6 packed-nibble 12-bit fields (9 bytes) per limb into an
+    array of struct* at obj+192 (offsets 8/10/12 plain, 0x38/0x3a/0x3c then <<3); when flags&0x40 is
+    clear, unpacks 3 fields (4.5 bytes, parity-alternating nibble-sharing) into offsets 8/10/12 only.
+    Either arm may ALSO unpack a signed-12-bit XYZ triple into obj+0x88/0x8a/0x8c when flags&0x80 is set
+    (same 5-byte code, shared as `anim_unpack_pose_triple`). Loop bound = obj[8]&0x3f (top-checked) AND
+    obj[9] (bottom-checked, also the initial "any data" guard) — same dual-bound idiom in both loops.
+  - `advanceLinkChain` (FUN_80077B5C) — ticks obj+0xE (countdown); while running returns 0 (no-op). On
+    expiry, walks ONE node of a distinct 4-byte-stride tag chain rooted at the SAME cursor field obj+0x38
+    (tag halfword @cur+2, jump pointer @cur+4 — NOT the anim-VM's 8-byte/+6/+8 shape): tag 0/0x4000
+    advance-or-follow + reload payload, return 0; tag 0x8000 hold (no cursor move), return 1; tag 0xc000
+    follow + reload, return 1. Reused as a generic "tick + advance one event chain" leaf by ~10 beh_
+    handlers unrelated to skeletal animation (same obj+0xE/+0x38 field convention, different format).
+  - `attach` (FUN_80077C40) — installs table[id] (array of struct*, stride 4) onto a node: cursor =
+    entry, countdown = entry's descriptor low-12 (entry+6), calls `loadFrame`, then — if the descriptor's
+    0x2000 bit is set — dispatches the SAME frame executor (FUN_80075ff8, kept `rec_dispatch`) the anim-VM
+    uses, with the same tag-keyed (follow-pointer vs address) argument split.
+  - Wired via `EngineOverrides` (game/object/animation.cpp `registerOverrides()`, called from
+    `boot.cpp`) at all 3 guest addresses — every existing `rec_dispatch`/`leaf1`/`call3` call site across
+    the beh_ handlers reaches the native method uniformly with zero call-site edits. `step()`'s own
+    internal calls to FUN_80076904 (3 sites in `anim_vm_76d68`) call `loadFrame` directly (native→native).
+  - **SBS full 0-diff over ~7860+ frames of autonav gameplay** (loadFrame fires every frame via the
+    anim-VM — Tomba's own walk-cycle — so this is a high-frequency proof); `advanceLinkChain`/`attach`
+    did not fire within the autonav-reachable field area in this session (gated to specific NPC/trigger
+    object types) — structurally verified by RE + SBS-gated (any future call site that reaches them will
+    fail fast on divergence, not silently mismatch).
 - ✅ `FUN_80051C8C` per-object TRANSFORM build = `ov_build_xform`.
 - **Camera update — now `class CutsceneCamera` (game/camera/cutscene_camera.{h,cpp}), restructured from the old orphaned
   the old `engine_camera.cpp` register-convention statics into PC-game structure (methods over named state, no

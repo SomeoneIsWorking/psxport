@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "animation.h"
-#include "game.h"      // c->game->verify — the shared A/B verify scaffold
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold; c->game->engine_overrides
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -93,7 +93,7 @@ static void anim_vm_76d68(Core* c) {
     cur = c->mem_r32(s0 + 56);
     uint32_t dur = c->mem_r16(cur + 6) & 0x0fffu;        // duration low12
     c->mem_w16(s0 + 14, (uint16_t)dur);                  // sh BEFORE the call (delay slot)
-    c->r[4] = s0; rec_dispatch(c, 0x80076904u);          // load frame
+    c->engine.animation.loadFrame(s0);                   // load frame (native FUN_80076904)
     uint32_t a1c = c->mem_r32(s0 + 56);
     uint32_t v1  = c->mem_r16(a1c + 6);
     if ((v1 & 0x2000u) == 0) { c->r[2] = 0; return; }    // no exec flag
@@ -114,7 +114,7 @@ static void anim_vm_76d68(Core* c) {
     cur = c->mem_r32(s0 + 56);
     uint32_t dur = c->mem_r16(cur + 6) & 0x0fffu;
     c->mem_w16(s0 + 14, (uint16_t)dur);                  // sh in jal delay slot
-    c->r[4] = s0; rec_dispatch(c, 0x80076904u);          // load frame
+    c->engine.animation.loadFrame(s0);                   // load frame (native FUN_80076904)
     uint32_t a1c = c->mem_r32(s0 + 56);
     uint32_t v1  = c->mem_r16(a1c + 6);
     if ((v1 & 0x2000u) == 0) { c->r[2] = 0; return; }
@@ -141,7 +141,7 @@ static void anim_vm_76d68(Core* c) {
     cur = c->mem_r32(s0 + 56);
     uint32_t dur = c->mem_r16(cur + 6) & 0x0fffu;
     c->mem_w16(s0 + 14, (uint16_t)dur);
-    c->r[4] = s0; rec_dispatch(c, 0x80076904u);
+    c->engine.animation.loadFrame(s0);                   // load frame (native FUN_80076904)
     uint32_t a1c = c->mem_r32(s0 + 56);
     uint32_t v1  = c->mem_r16(a1c + 6);
     if ((v1 & 0x2000u) == 0) {                                    // beq -> 0x80076f5c (hold-store + return 1)
@@ -187,4 +187,204 @@ void Animation::step(uint32_t node) {
     if (nb++ < 40) fprintf(stderr, "[animvm] MISMATCH s0=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n",
                            s0, v0_n, v0_o, ro, so, sp);
   } else if (++ng % 2000 == 0) fprintf(stderr, "[animvm] %ld matches\n", ng);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80076904 — Animation::loadFrame: POSE-TABLE FRAME LOADER. RE'd via tools/disas.py (Ghidra
+// headless timed out on the full-binary import in this session; every field/branch below was
+// confirmed by hand-walking the MIPS with delay-slot semantics, including the two "dead" `j`
+// targets the compiler emits after an already-exhaustive if/else chain).
+//
+// obj = node. cur = obj+0x38 (the SAME cursor field the anim-VM/step() and attach() use). The
+// CURRENT keyframe-table entry is `rec = *(uint32_t*)(tableBase + idx*4)`, where idx = cur[0]
+// (u16) and tableBase = obj+0x3C. `rec`'s top byte is a FLAGS byte (obj+8 always gets this byte,
+// unconditionally); its low 24 bits are a byte offset added to tableBase to give the packed
+// PAYLOAD STREAM `stream`.
+//
+//   flags & 0x40: this entry carries per-limb pose data (else the function only stamps obj+8 and
+//     returns via the loop's zero-count guard).
+//     flags & 0x80 (checked in EITHER the 0x40-set or 0x40-clear arm, each with its own identical
+//       byte-code — RE'd once, shared as unpack12x3 below): unpack a signed 12-bit XYZ triple from
+//       5 packed bytes into obj+0x88/0x8a/0x8c (a base pose/offset triple).
+//     The "phase" seed for the per-limb parity loop (Loop2) differs by arm: flags&0x40 SET keeps
+//     `rec` itself (the raw 32-bit table entry) as the phase seed; flags&0x40 CLEAR uses phase=1 if
+//     flags&0x80 else phase=0.
+//   Then (both arms funnel here): boundA = obj[8]&0x3f becomes the loop's iteration count (obj[8] is
+//     OVERWRITTEN with this masked value — the flags byte doesn't survive past this point); if
+//     obj[9] (boundB, a distinct count) == 0, return immediately (no per-limb data at all).
+//     - flags&0x40 SET  -> Loop1 (unconditional, 6 fields/9 bytes per limb: fields 8/10/12 as plain
+//       12-bit values, fields 0x38/0x3a/0x3c as 12-bit values then <<3).
+//     - flags&0x40 CLEAR -> Loop2 (parity-gated on (i+phase)&1, 3 fields/4.5 bytes per limb, fields
+//       8/10/12 only — nibble-sharing alternates which half of a straddling byte an EVEN vs ODD
+//       struct index consumes).
+//   Both loops walk `a2` over an array of struct* at (obj+192 + i*4) [i.e. *(uint32_t*)(obj+192+4*i)
+//   is the destination limb struct for iteration i], stopping when i>=boundA (checked before the
+//   body) OR (after incrementing i) i>=boundB (checked after the body) — whichever hits first.
+static inline uint32_t rd_u32(Core* c, uint32_t a) { return c->mem_r32(a); }
+
+// unpack12x3 — shared 5-byte-stream -> 3x signed-12-bit unpack (dest = obj+0x88/0x8a/0x8c). Both
+// flags&0x40 arms run this IDENTICAL byte sequence when flags&0x80 is set.
+static void anim_unpack_pose_triple(Core* c, uint32_t obj, uint32_t& stream) {
+  uint32_t s = stream;
+  uint32_t e0 = c->mem_r8(s), e1 = c->mem_r8(s + 1), e2 = c->mem_r8(s + 2);
+  uint32_t e3 = c->mem_r8(s + 3), e4 = c->mem_r8(s + 4);
+  // Each shift pair mirrors the MIPS `sll N; sra M` idiom exactly (arithmetic right shift on a
+  // signed 32-bit value — sign-extends from whatever bit lands at bit31 after the sll):
+  //   v88 = sign_extend8(e0)<<4 | (e1>>4)              (sll 24; sra 20 on e0, then OR e1's hi nibble)
+  //   v8a = sign_extend4(e1&0xf)<<8 | e2                (sll 28; sra 20 on e1, then OR e2 full byte)
+  //   v8c = sign_extend8(e3)<<4 | (e4>>4)               (sll 24; sra 20 on e3, then OR e4's hi nibble)
+  int32_t v88 = ((int32_t)(e0 << 24) >> 20) | (int32_t)(e1 >> 4);
+  int32_t v8a = ((int32_t)(e1 << 28) >> 20) | (int32_t)e2;
+  int32_t v8c = ((int32_t)(e3 << 24) >> 20) | (int32_t)(e4 >> 4);
+  c->mem_w16(obj + 0x88, (uint16_t)v88);
+  c->mem_w16(obj + 0x8a, (uint16_t)v8a);
+  c->mem_w16(obj + 0x8c, (uint16_t)v8c);
+  stream = s + 5;
+}
+
+void Animation::loadFrame(uint32_t node) {   // FUN_80076904
+  Core* c = this->core;
+  const uint32_t obj  = node;
+  const uint32_t cur  = c->mem_r32(obj + 0x38);
+  const uint32_t idx  = c->mem_r16(cur + 0);
+  const uint32_t tableBase = c->mem_r32(obj + 0x3c);
+  const uint32_t entryPtr  = tableBase + idx * 4;
+  const uint32_t rec  = rd_u32(c, entryPtr);                 // packed table entry (NOT a pointer)
+  const int8_t   flagsByte = (int8_t)(rec >> 24);
+  const uint32_t off24 = rec & 0x00FFFFFFu;
+  uint32_t stream = tableBase + off24;
+  c->mem_w8(obj + 8, (uint8_t)flagsByte);                    // always stamped (delay-slot write)
+
+  uint32_t phase;
+  if (flagsByte & 0x40) {
+    if (flagsByte & 0x80) anim_unpack_pose_triple(c, obj, stream);
+    phase = rec;                                             // raw table entry seeds the parity
+  } else {
+    if (flagsByte & 0x80) { phase = 1; anim_unpack_pose_triple(c, obj, stream); }
+    else                  { phase = 0; }
+  }
+
+  uint32_t boundA = c->mem_r8(obj + 8) & 0x3fu;
+  uint32_t boundB0 = c->mem_r8(obj + 9);
+  c->mem_w8(obj + 8, (uint8_t)boundA);
+  if (boundB0 == 0) return;
+
+  uint32_t a2 = obj;
+  if (flagsByte & 0x40) {
+    // ---- Loop1: unconditional, 6 fields (8/10/12 plain 12-bit; 0x38/0x3a/0x3c 12-bit then <<3) ----
+    for (uint32_t i = 0; ; ) {
+      if (!(i < boundA)) return;
+      uint32_t s = rd_u32(c, a2 + 192);
+      uint8_t b0 = c->mem_r8(stream), b1 = c->mem_r8(stream + 1), b2 = c->mem_r8(stream + 2);
+      uint8_t b3 = c->mem_r8(stream + 3), b4 = c->mem_r8(stream + 4), b5 = c->mem_r8(stream + 5);
+      uint8_t b6 = c->mem_r8(stream + 6), b7 = c->mem_r8(stream + 7), b8 = c->mem_r8(stream + 8);
+      stream += 9;
+      uint16_t f8  = (uint16_t)((b0 << 4) | (b1 >> 4));
+      uint16_t f10 = (uint16_t)(((b1 & 0xf) << 8) | b2);
+      uint16_t f12 = (uint16_t)((b3 << 4) | (b4 >> 4));
+      uint16_t f56 = (uint16_t)((((b4 & 0xf) << 8) | b5) << 3);
+      uint16_t f58 = (uint16_t)(((b6 << 4) | (b7 >> 4)) << 3);
+      uint16_t f60 = (uint16_t)((((b7 & 0xf) << 8) | b8) << 3);
+      c->mem_w16(s + 8, f8); c->mem_w16(s + 10, f10); c->mem_w16(s + 12, f12);
+      c->mem_w16(s + 0x38, f56); c->mem_w16(s + 0x3a, f58); c->mem_w16(s + 0x3c, f60);
+      i++;
+      if (!(i < c->mem_r8(obj + 9))) return;
+      a2 += 4;
+    }
+  } else {
+    // ---- Loop2: parity-gated, 3 fields (8/10/12), nibble-shared 4.5 bytes/limb ----
+    for (uint32_t i = 0; ; ) {
+      if (!(i < boundA)) return;
+      uint32_t s = rd_u32(c, a2 + 192);
+      uint16_t f8, f10, f12;
+      if ((i + phase) & 1u) {
+        // ODD: finish a pending shared nibble, then 4 more bytes.
+        uint8_t c0 = c->mem_r8(stream), c1 = c->mem_r8(stream + 1), c2 = c->mem_r8(stream + 2);
+        uint8_t c3 = c->mem_r8(stream + 3), c4 = c->mem_r8(stream + 4);
+        stream += 5;
+        f8  = (uint16_t)(((c0 & 0xf) << 8) | c1);
+        f10 = (uint16_t)((c2 << 4) | (c3 >> 4));
+        f12 = (uint16_t)(((c3 & 0xf) << 8) | c4);
+      } else {
+        // EVEN: 4 full bytes, leave the 5th byte's low nibble pending for the next (odd) index.
+        uint8_t d0 = c->mem_r8(stream), d1 = c->mem_r8(stream + 1), d2 = c->mem_r8(stream + 2);
+        uint8_t d3 = c->mem_r8(stream + 3), d4 = c->mem_r8(stream + 4);
+        stream += 4;                                          // d4 stays pending (not consumed)
+        f8  = (uint16_t)((d0 << 4) | (d1 >> 4));
+        f10 = (uint16_t)(((d1 & 0xf) << 8) | d2);
+        f12 = (uint16_t)((d3 << 4) | (d4 >> 4));
+      }
+      c->mem_w16(s + 8, f8); c->mem_w16(s + 10, f10); c->mem_w16(s + 12, f12);
+      i++;
+      if (!(i < c->mem_r8(obj + 9))) return;
+      a2 += 4;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80077B5C — Animation::advanceLinkChain: countdown-tick + one-step 4-byte-stride tag chain
+// walk. Shares node's countdown (+0xE) and cursor (+0x38) fields with loadFrame/step, but a
+// DIFFERENT, coarser chain format (tag halfword at cur+2, jump-pointer word at cur+4 — vs the
+// anim-VM's 8-byte stride / tag at cur+6 / jump at cur+8). Reused as a generic "tick + advance one
+// small event chain" leaf by ~10 non-animation beh_ handlers (rec_dispatch(c, 0x80077B5Cu) /
+// `leaf1(c, nd, 0x80077B5Cu)`).
+uint32_t Animation::advanceLinkChain(uint32_t node) {
+  Core* c = this->core;
+  uint16_t v = (uint16_t)(c->mem_r16(node + 0xE) - 1);
+  c->mem_w16(node + 0xE, v);
+  if (v != 0) return 0;                                       // countdown still running
+
+  uint32_t cur = c->mem_r32(node + 0x38);
+  uint32_t tag = c->mem_r16(cur + 2) & 0xc000u;
+  uint32_t newcur;
+  uint32_t ret;
+  switch (tag) {
+    case 0x4000u: newcur = c->mem_r32(cur + 4); ret = 0; break;   // FOLLOW jump pointer
+    case 0u:      newcur = cur + 4;             ret = 0; break;   // ADVANCE linear
+    case 0x8000u:                                                  // TERMINAL/HOLD (no cursor move)
+      c->mem_w16(node + 0xE, (uint16_t)(c->mem_r16(cur + 2) & 0x3fffu));
+      return 1;
+    default:      newcur = c->mem_r32(cur + 4); ret = 1; break;   // 0xc000: FOLLOW jump pointer
+  }
+  c->mem_w32(node + 0x38, newcur);
+  c->mem_w16(node + 0xE, (uint16_t)(c->mem_r16(newcur + 2) & 0x3fffu));
+  return ret;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80077C40 — Animation::attach: install animation-table entry `id` onto `node`. `table` is an
+// array of struct* (stride 4); entryPtr = table[id]. entryPtr's descriptor halfword (at +6) low-12
+// bits seed the countdown; loadFrame() consumes it exactly like the anim-VM would. If the
+// descriptor's 0x2000 bit is set, dispatch the SAME frame executor (FUN_80075ff8) the VM's
+// exec_tail uses, with the SAME (jump-pointer-vs-address) split on the descriptor's tag bits.
+void Animation::attach(uint32_t node, uint32_t table, uint32_t id) {
+  Core* c = this->core;
+  const uint32_t entryPtr = rd_u32(c, table + id * 4);
+  c->mem_w32(node + 0x38, entryPtr);
+  uint32_t desc = c->mem_r16(entryPtr + 6);
+  c->mem_w16(node + 0xE, (uint16_t)(desc & 0xfffu));
+  loadFrame(node);
+
+  desc = c->mem_r16(entryPtr + 6);                              // re-read (loadFrame may not touch it)
+  if ((desc & 0x2000u) == 0) return;
+  uint32_t tag = desc & 0xc000u;
+  uint32_t a1;
+  if (tag == 0x8000u) return;                                   // no executor call
+  if (tag == 0x4000u || tag == 0xc000u) a1 = rd_u32(c, entryPtr + 8);   // follow jump pointer
+  else                                  a1 = entryPtr + 8;              // (tag == 0) address itself
+  c->r[4] = node; c->r[5] = a1; c->r[6] = (uint32_t)c->mem_r16s(node + 0xE);
+  rec_dispatch(c, 0x80075ff8u);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+static void eov_animLoadFrame(Core* c)      { c->engine.animation.loadFrame(c->r[4]); c->r[2] = 0; }
+static void eov_animAdvanceLink(Core* c)    { c->r[2] = c->engine.animation.advanceLinkChain(c->r[4]); }
+static void eov_animAttach(Core* c)         { c->engine.animation.attach(c->r[4], c->r[5], c->r[6]); }
+
+void Animation::registerOverrides() {
+  EngineOverrides& ov = core->game->engine_overrides;
+  ov.register_(0x80076904u, "Animation::loadFrame",      eov_animLoadFrame);
+  ov.register_(0x80077B5Cu, "Animation::advanceLinkChain", eov_animAdvanceLink);
+  ov.register_(0x80077C40u, "Animation::attach",          eov_animAttach);
 }

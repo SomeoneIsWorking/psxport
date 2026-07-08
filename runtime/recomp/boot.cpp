@@ -69,6 +69,8 @@ int main(int argc, char** argv) {
   game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
   game->pcSched.registerOverrides();   // ported scheduler primitives (yield/spawn/spawn-and-wait/close)
                                        // at their guest addresses (EngineOverrides; core B never consults)
+  c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach (FUN_80076904/
+                                              // 80077B5C/80077C40) at their guest addresses
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0
