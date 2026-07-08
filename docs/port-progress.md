@@ -1505,6 +1505,28 @@ approxDist3 wiring); 6 Cull camera-wrapper variants ported but left UNWIRED (gue
   divergence disappear entirely. Not fixed here (would need special-casing one address — a banned
   magic-constant bandaid, not a fix); reverted to unwired. `stepFramed()` kept, documented, for
   whoever RE's that call site next. Full trail in docs/findings/animation.md.
+**SESSION 2026-07-08 (WIDE-RE, unwired) — ground/scene GT3/GT4 sibling pair RE'd + DRAFTED, NOT
+wired/verified: `FUN_8013FB88`/`FUN_8013FE58`/`FUN_801401B8` → `class OverlayGroundGt3Gt4`
+(game/render/overlay_ground_gt3gt4.{h,cpp}).**
+- ☐ **RE'd + drafted, UNWIRED, UNVERIFIED (no SBS run performed this session — mandate was RE
+  ahead of the frontier, bank drafts, don't gate).** The sibling of the field-object pair directly
+  below (this file's own next entry) — ground/scene entities' copy of the same GT3/GT4-into-
+  packet-pool-and-OT emitter, reached via `0x8003D0BC → 0x801401B8 (entity loop) →
+  0x8013FE58/0x8013FB88`. RE'd off `generated/ov_a00_shard_{0,1}.c` (fresh recompile off the real
+  disc, this session). Full region-map + per-fn RE trace: `docs/engine_re.md` "A00-overlay region
+  map" section. Compiles clean into `scratch/bin/tomba2_port` (verified this session — full CMake
+  build, `-target tomba2_port`); `registerOverrides()` exists but is never called anywhere.
+  **Next session: wire via the overlay's own `ov_a00_set_override` table (NOT EngineOverrides,
+  same as OverlayGt3Gt4 below), gate SBS-full 0-diff, confirm firing via a hit-counter before
+  trusting a 0-diff.**
+- Also swept the whole A00-overlay upper-half region (0x80125000–0x8014E944, this session's
+  assigned band): 334 function addresses total, 44 already owned before this session, 287 STILL
+  fully substrate after landing the 3 addresses above — mapped (not RE'd) by adjacency/size into
+  three rough clusters for next-session triage in `docs/engine_re.md`. Two addresses that looked
+  like new targets in a naive scan turned out NOT to be: `0x801469BC` is DATA (the seaside
+  placement table, already 100% native per its own entry above) and `0x80147FC4` is a duplicate
+  tail-shared copy of `0x80146478`'s call sequence (redundant with the field GT3/GT4 pair below).
+
 **SESSION 2026-07-08 — A00-overlay GT3/GT4 render-packet emitter (0x801465EC/0x801467BC, the
 busiest still-substrate `rec_dispatch` leaf in free-roam): both owned as `class OverlayGt3Gt4`
 (game/render/overlay_gt3gt4.{h,cpp}).**

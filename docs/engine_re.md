@@ -1732,3 +1732,80 @@ they remain frontier for a future pass. `scratch/tmp/unowned_addrs.txt` /
 `scratch/decomp/region_8002.c` (this session's Ghidra batch decompile, 117/173 resolved) are
 local scratch artifacts (gitignored), not committed — regenerate via `tools/decomp.sh decomp
 main_ram <out.c> list <addrs...>` against the `main_ram` Ghidra project.
+## A00-overlay region map 0x80125000–0x8014E944 (WIDE-RE session, UNWIRED/UNVERIFIED drafts)
+Scope: the upper half of the A00 gameplay overlay (AI/spawn/render-leaf band; a sibling session
+owns 0x80108000–0x80125000). Method: `tools/codemap.py` cross-referenced against every top-level
+`ov_a00_gen_<addr>` definition in `generated/ov_a00_shard_{0,1}.c` (the recompiler's own register-
+accurate translation of a fresh recompile off the real disc — the project's preferred RE source
+for GTE-heavy leaves, since Ghidra's COP2 decompilation garbles GTE register indices into
+placeholder immediates). 334 distinct function addresses fall in this range; 44 were already
+LIVE-owned before this session (beh_* orchestrators/dispatchers, ActorZonedAttacker, Spawn's
+typed-child family, the seaside-placement-table handler cluster) — **290 were still fully
+substrate**.
+
+### RE'd + DRAFTED this session (3 addresses — `game/render/overlay_ground_gt3gt4.{h,cpp}`)
+The **ground/scene GT3/GT4 render-packet-emitter pair**, the sibling of the already-owned,
+SBS-gated field-object pair (`game/render/overlay_gt3gt4.cpp`, FUN_801465EC/801467BC). Named and
+cross-referenced in this file's own "GAME-STAGE OBJECT PIPELINE" step 7 note as the OTHER copy
+("ground/scene entities go 0x8003D0BC → 0x801401B8 (entity loop) → 0x8013FE58/0x8013FB88") but
+never itself ported:
+- **`FUN_8013FB88` → `OverlayGroundGt3Gt4::gt3`** — POLY_GT3 emit, 36-byte record (same field
+  layout as the field pair), RTPT+NCLIP+AVSZ3-or-3-way-min/max Z-select into the shared packet
+  pool (0x800BF544) + OT. Differs from the field leaf: colour mask 0x00F0F0F0 (drops the top byte)
+  instead of the field pair's 0xFFF0F0F0, and its Z-select flag encoding is `flag&3` (1=>max,
+  2=>min, 0=>AVSZ3) rather than the field pair's `flag&2` bit — a DIFFERENT convention, hand-
+  verified by fully unrolling both stack-spill branches of the recompiled body to their
+  convergence point (not guessed from the field pair's shape).
+- **`FUN_8013FE58` → `OverlayGroundGt3Gt4::gt4`** — POLY_GT4 sibling, 44-byte record, RTPT(3pt)+
+  RTPS(4th)+NCLIP+AVSZ4-or-4-way-min/max. Per-slot colour-mask MIX verified from the recomp body:
+  rgb0 uses the standard 0xFFF0F0F0, rgb1–3 use the ground 0x00F0F0F0 — not simplified to one mask.
+- **`FUN_801401B8` → `OverlayGroundGt3Gt4::entityLoop`** — the caller: loads the shared camera GTE
+  control-register block (CR0-7 from scratchpad 0x1F8000F8 — the SAME block the render-command-
+  flush note above calls out) once, then walks a list's u16 index array, each entry resolving
+  through a pointer table to a `{counts, records}` pair fed to gt3()/gt4().
+- Guest-stack frames MIRRORED per the hard directive (real `c->r[29]` descend/spill/ascend, cull.cpp's
+  `Cull::wrapFrame` idiom) for gt3 (-24, 6-word Z-select scratch) and gt4 (-32, 8-word) — the ONLY
+  memory those frames use. **Known, documented gap:** `entityLoop`'s own real -40 frame (6 register
+  spills around its two call sites) is NOT mirrored yet — left as plain C++ locals with an in-code
+  note, rather than faked with placeholder writes, since those bytes have no other reader within
+  the frame's lifetime and reproducing them exactly needs the real spilled values traced first.
+- **UNWIRED, UNVERIFIED**: not registered via `ov_a00_set_override` anywhere, no SBS run performed
+  (per this session's mandate — RE ahead of the frontier, bank drafts, don't gate). `registerOverrides()`
+  exists but is never called; a future session wires + SBS-gates it (same discipline as
+  `OverlayGt3Gt4::registerOverrides`, via the overlay's own override table, not `EngineOverrides` —
+  every call site reaches these three via a direct C call generated inside the ov_a00 shard).
+
+### Understood but NOT separate ownership targets
+- **`0x801469BC`** is DATA (the seaside placement table, 62 records / 22 handlers), not code — every
+  handler it installs is already native (see port-progress.md's "SEASIDE PLACEMENT TABLE" entry).
+  It shows up in a naive function-address scan only because the recompiler's jump-table discovery
+  treats some of its bytes as call targets; not a function to RE.
+- **`0x80147FC4`** (4752 lines) is a **duplicate tail-shared copy** of `0x80146478`'s own call
+  sequence into the field-object GT3/GT4 leaves (already documented in port-progress.md's GT3/GT4
+  session write-up) — redundant with already-owned code, not new logic.
+
+### Remaining 287 unowned addresses — mapped only, NOT RE'd (next-session triage)
+Not individually RE'd this session (quality-over-quantity given the size of the region). Rough
+shape from address adjacency + size distribution (`ov_a00_gen_*` body line counts):
+- **0x80125000–0x80133FFF (~140 addrs, mostly 10–450 lines each):** almost entirely per-object
+  AI/behavior LEAVES already reached (but not yet ported) from the owned orchestrators in this
+  band — `beh_substate_edge_orchestrator` (deps 0x8012E8A8/ED84/F494/F5B4/FD88/80130524…) and
+  `beh_cull_substate_orchestrator` (deps 0x8013272C/80132954/80132A88/80132D58/80132EDC/80133184…).
+  `tools/codemap.py --addr <hex>` on any of these prints `depended-on by: beh_*` — start there,
+  these are the highest-value next targets (their caller is already native, so owning the leaf
+  finishes the chain).
+- **0x80134000–0x80145FFF (~110 addrs):** mixed AI state-machine leaves adjoining the owned
+  ActorZonedAttacker / beh_id_compare_motion_dispatch / beh_a06_script_fades clusters; sizes mostly
+  under 300 lines (tractable single-session RE targets), a few 300–1000-line outliers
+  (0x8012AE84 967 ln, 0x80137198 529 ln, 0x80135414 503 ln) worth checking first for a shared
+  sub-behavior family before assuming one-off.
+- **0x80147E14–0x80147FC4 + 0x8014B098–0x8014E6BC (~35 addrs):** render-leaf-SHAPED — several use
+  `gte_write_data`/`gte_op` directly (0x8014B290, 0x8014B38C, 0x8014BB00, 0x8014BC20 [842 ln, the
+  largest unRE'd GTE user in the whole region]) but were NOT reached from this session's render-
+  dispatch-table cross-reference, so their caller context is still unknown — RE the caller first
+  (likely another per-scene mode-table variant or a margin/UI GTE path), don't guess from shape
+  alone.
+- Full candidate list (all 290, pre-session): `scratch/logs/unowned_range.txt` in this session's
+  worktree (not committed — regenerate via `tools/codemap.py --addr` swept over
+  `ov_a00_gen_*`/`ov_a00_func_*` addresses in `generated/ov_a00_shard_{0,1}.c` for 0x80125000–
+  0x8014E944).

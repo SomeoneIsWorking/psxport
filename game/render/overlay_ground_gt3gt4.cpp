@@ -1,0 +1,328 @@
+// game/render/overlay_ground_gt3gt4.cpp — DRAFT native mirror of the A00-overlay GROUND/SCENE
+// GT3/GT4 packet-emitter pair (FUN_8013FB88/8013FE58) + their entity-loop caller (FUN_801401B8).
+//
+// *** UNWIRED / UNVERIFIED — see overlay_ground_gt3gt4.h banner. Not registered, not SBS-gated. ***
+//
+// RE: read directly off the recompiler's own register-accurate translation (the project
+// convention for GTE-heavy leaves — generated/ov_a00_shard_0.c ov_a00_gen_8013FB88/801401B8,
+// generated/ov_a00_shard_1.c ov_a00_gen_8013FE58 — Ghidra's COP2 decompilation garbles GTE
+// register indices into placeholder immediates, so the recompiler's literal per-instruction C is
+// the more precise source here, same as overlay_gt3gt4.cpp's own RE note).
+//
+// SIBLING of the field-object pair (game/render/overlay_gt3gt4.cpp, FUN_801465EC/801467BC,
+// ALREADY OWNED + SBS-gated). docs/engine_re.md's "GAME-STAGE OBJECT PIPELINE" step 7 names this
+// pair explicitly as the OTHER (ground/scene) copy: "...ground/scene entities go
+// 0x8003D0BC -> 0x801401B8 (entity loop) -> 0x8013FE58/0x8013FB88 (overlay GT4/GT3 submitters)".
+// Same overall shape (GTE RTPT/RTPS + NCLIP + AVSZ-or-custom-blend -> packet-pool bump allocator
+// + OT linked list) but genuinely DIFFERENT in several concrete ways from the field pair —
+// preserved literally below, NOT "fixed" to match:
+//   - GT3's rec+4 colour word (rgb1/rgb2) masks with 0x00F0F0F0 (drops the top byte entirely),
+//     not the field pair's COL_MASK 0xFFF0F0F0.
+//   - GT4's rec+0 colour word (rgb0/rgb1) masks with the STANDARD 0xFFF0F0F0, but its rec+4
+//     word (rgb2/rgb3) masks with 0x00F0F0F0 — a per-slot mix, not a uniform choice.
+//   - GT3's rgb0|code word is written UNMASKED (raw) — this asymmetry IS shared with the field
+//     GT3 leaf (verified: same pattern), so it's a genuine cross-cutting PSX packet-format trait,
+//     not a copy-paste bug.
+//   - The near-plane Z-select for a nonzero flag byte is a TRUE 3-way (GT3) / 4-way (GT4)
+//     min-or-max of the raw SZ FIFO values, selected by flag&3 (1=>max/far, 2=>min/near, 0=>the
+//     ordinary AVSZ3/4 average) — verified by fully unrolling both stack-spill branches by hand
+//     (see sz3_minmax/sz4_minmax below). This differs from the field pair's flag&2 pairwise-clamp
+//     encoding (mathematically equivalent to min/max of 3, but a DIFFERENT flag-bit convention —
+//     do not conflate the two encodings when a future session wires this).
+//   - GT3 also stages a 16-bit uv2-hi word at packet offset +36 (mem_w16, from the upper half of
+//     rec+32) that the field GT3 leaf's OWN port does not currently write (its comment documents
+//     the field position but the already-landed body never stores it) — reproduced here because
+//     it IS a real guest write the recomp body performs; left as an open question for whoever
+//     next audits the field leaf's byte-exactness, not "fixed" on either side here.
+//
+// Guest-stack frames: MIRRORED per CLAUDE.md ("guest-stack frames: MIRROR, never revert/
+// exclude") — gt3's real frame is `addiu sp,-24` (6 words: two 3-slot scratch groups for the
+// unrolled min/max, no saved registers); gt4's is `addiu sp,-32` (8 words: two 4-slot groups);
+// entityLoop's is `addiu sp,-40` with 6 real register spills (s0..s4/ra equivalents + return
+// address) around its two call sites. All descend/spill/ascend on the REAL c->r[29], matching
+// game/render/cull.cpp's Cull::wrapFrame idiom.
+#include "core.h"
+#include "game.h"
+#include "overlay_ground_gt3gt4.h"
+#include "cfg.h"
+#include <cstdint>
+
+// -- packet-pool bump allocator (SAME process-global pointer the field pair uses — one shared
+//    pool across every render-underneath submitter in the frame; see overlay_gt3gt4.cpp).
+#define PKT_POOL_PTR      0x800BF544u
+
+// -- the two fixed SCRATCHPAD words this leaf pair uses as spilled locals (0x1F800000/0x1F800004
+//    — literal PSX addresses baked into the recompiled MIPS, not a tuning constant): the recomp
+//    body spills its "GTE FLAG / MAC0 sign" temp to +0 and its "OTZ pick" temp to +4. Scratchpad
+//    is part of the SBS-compared state, so these MUST be real c->mem_w32 writes, not C++ locals.
+#define SCRATCH_FLAG_TMP  0x1F800000u
+#define SCRATCH_OTZ_TMP   0x1F800004u
+
+// -- colour masks: the STANDARD field-pair mask (rgb0 slot of GT4 only) vs the ground-specific
+//    "drop the whole top byte" mask (every other colour slot in both ground leaves).
+#define COL_MASK_STD      0xFFF0F0F0u
+#define COL_MASK_GROUND   0x00F0F0F0u
+
+// -- OT tag length words (matches the field pair's convention: len<<24 packed into the recycled
+//    OT-bucket head pointer).
+#define TAG_LEN_GT3       (9u  << 24)   // 36-byte GT3 packet body (9 words)
+#define TAG_LEN_GT4       (12u << 24)   // 52-byte GT4 packet body (13 words incl. tag)
+
+// -- OT-index compute (byte-identical to overlay_gt3gt4.cpp's overlay_gt_otz_index — same
+//    bit-recombination + [4, 0x7ff) range gate). Kept as a private static twin rather than
+//    sharing the symbol across two still-independent, still-unwired classes.
+static int32_t ground_otz_index(int32_t z) {
+  int32_t shift = z >> 10;
+  int32_t idx = (z >> (shift & 31)) + shift * 0x200;
+  if (!(idx - 0x7ff < 0)) return -1;
+  if (!(idx - 4 > 0)) return -1;
+  return idx;
+}
+
+// Fully-unrolled 3-way min/max (GT3's flag&3==1 => max, ==2 => min branch, hand-verified by
+// walking BOTH stack-spill code paths of FUN_8013FB88 to their common convergence point).
+static int32_t sz3_minmax(bool want_max, int32_t a, int32_t b, int32_t c3) {
+  int32_t hi_ab = want_max ? (a > b ? a : b) : (a < b ? a : b);
+  int32_t r     = want_max ? (hi_ab > c3 ? hi_ab : c3) : (hi_ab < c3 ? hi_ab : c3);
+  return r;
+}
+// Same, 4-way (GT4's flag&3==1/2 branch: pairs (a,b) and (e,f), then combine).
+static int32_t sz4_minmax(bool want_max, int32_t a, int32_t b, int32_t e, int32_t f) {
+  int32_t hi_ab = want_max ? (a > b ? a : b) : (a < b ? a : b);
+  int32_t hi_ef = want_max ? (e > f ? e : f) : (e < f ? e : f);
+  return want_max ? (hi_ab > hi_ef ? hi_ab : hi_ef) : (hi_ab < hi_ef ? hi_ab : hi_ef);
+}
+
+// FUN_8013FB88 — ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as the
+// field-object GT3 leaf: {+0 rgb0|code, +4 rgb1(rgb2=rgb1<<4)|flag@[31:24], +8 uv0|clut,
+// +12 uv1|tpage, +16 VXY0, +20 VZ0(lo)|VZ1(hi), +24 VXY1, +28 VXY2, +32 VZ2(lo)|uv2hi(hi)}.
+// Output packet = 40 bytes: {+0 tag(len=9<<24|next), +4 rgb0|code RAW (unmasked, matches the
+// field leaf's own asymmetry), +8 SXY0, +12 uv0|clut, +16 rgb1&COL_MASK_GROUND, +20 SXY1,
+// +24 uv1|tpage, +28 rgb2&COL_MASK_GROUND, +32 SXY2, +36 uv2hi (16-bit)}.
+void OverlayGroundGt3Gt4::gt3(Core* c) {
+  uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
+  if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) fprintf(stderr, "[ovgtgnd] gt3 call#%ld count=%u\n", n, count); }
+  if (count == 0) { c->r[2] = rec; return; }
+
+  uint32_t pool = c->mem_r32(PKT_POOL_PTR);
+  uint32_t sp = c->r[29]; c->r[29] -= 24;              // real frame: 6 scratch words, no spills
+
+  for (; count != 0; count--, rec += 36) {
+    gte_write_data(0, c->mem_r32(rec + 16));            // VXY0
+    uint32_t vz01 = c->mem_r32(rec + 20);
+    gte_write_data(2, c->mem_r32(rec + 24));            // VXY1
+    gte_write_data(1, vz01);                            // VZ0
+    gte_write_data(4, c->mem_r32(rec + 28));            // VXY2
+    gte_write_data(3, vz01 >> 16);                       // VZ1
+    gte_write_data(5, c->mem_r32(rec + 32));             // VZ2(lo)|uv2hi(hi)
+    uint32_t rgb0_code = c->mem_r32(rec + 0);
+    c->mem_w32(pool + 4, rgb0_code);                     // staged early exactly like the recomp body
+    gte_op(c, 0x4A280030u);                              // RTPT
+
+    uint32_t rgb1_src = c->mem_r32(rec + 4);
+    uint32_t flagreg  = gte_read_ctrl(31);
+    c->mem_w32(SCRATCH_FLAG_TMP, flagreg);
+    if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) < 0) continue;   // GTE FLAG error -> drop record
+
+    gte_op(c, 0x4B400006u);                              // NCLIP (backface / MAC0)
+    uint32_t rgb1 = rgb1_src & COL_MASK_GROUND;
+    c->mem_w32(pool + 16, rgb1);
+    c->mem_w32(SCRATCH_FLAG_TMP, gte_read_data(24));      // MAC0
+    if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) <= 0) continue;  // backface cull
+
+    c->mem_w32(pool + 8,  gte_read_data(12));             // SXY0
+    c->mem_w32(pool + 20, gte_read_data(13));             // SXY1
+    c->mem_w32(pool + 32, gte_read_data(14));             // SXY2
+
+    if (!((c->mem_r16(pool+8) < 320) || (c->mem_r16(pool+20) < 320) || (c->mem_r16(pool+32) < 320))) continue;
+    if (!((c->mem_r16(pool+10) < 240) || (c->mem_r16(pool+22) < 240) || (c->mem_r16(pool+34) < 240))) continue;
+
+    uint32_t rgb2 = (rgb1_src << 4) & COL_MASK_GROUND;
+    c->mem_w32(pool + 28, rgb2);
+    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12);
+    c->mem_w32(pool + 12, uv0);
+    c->mem_w32(pool + 24, uv1);
+
+    uint32_t flagbyte = rgb1_src >> 24;
+    int32_t z;
+    uint32_t mode = flagbyte & 3u;
+    if (mode == 1u || mode == 2u) {
+      int32_t sz1 = (int32_t)gte_read_data(17), sz2 = (int32_t)gte_read_data(18), sz3 = (int32_t)gte_read_data(19);
+      c->mem_w32(sp - 24 + 0, sz1); c->mem_w32(sp - 24 + 4, sz2); c->mem_w32(sp - 24 + 8, sz3); // real stack mirror
+      z = sz3_minmax(mode == 1u, sz1, sz2, sz3);
+      c->mem_w32(SCRATCH_OTZ_TMP, z);
+    } else {
+      gte_op(c, 0x4B58002Du);                             // AVSZ3
+      z = (int32_t)gte_read_data(7);
+      c->mem_w32(SCRATCH_OTZ_TMP, z);
+    }
+
+    int32_t idx = ground_otz_index(z);
+    c->mem_w32(SCRATCH_OTZ_TMP, (uint32_t)idx);
+    if (idx < 0) continue;
+
+    // uv2hi (16-bit, high half of rec+32) — a real guest write the recomp body performs at this
+    // packet slot; see file banner re: the field leaf not currently reproducing it.
+    c->mem_w16(pool + 36, (uint16_t)(c->mem_r32(rec + 32) >> 16));
+
+    uint32_t slot_addr = ot_base + (uint32_t)idx * 4;
+    uint32_t old_head = c->mem_r32(slot_addr);
+    c->mem_w32(slot_addr, pool);
+    c->mem_w32(pool + 0, old_head | TAG_LEN_GT3);
+    pool += 40;
+  }
+
+  c->r[29] = sp;                                          // ascend
+  c->mem_w32(PKT_POOL_PTR, pool);
+  c->r[2] = rec;
+}
+
+// FUN_8013FE58 — ground/scene POLY_GT4 emit. Record = 44 bytes: {+0 rgb0(rgb1=rgb0<<4)|code,
+// +4 rgb2(rgb3=rgb2<<4)|flag@[31:24], +8 uv0, +12 uv1, +16 uv2(lo)|uv3(hi), +20 VXY0,
+// +24 VZ0(lo)|VZ1(hi), +28 VXY1, +32 VXY2, +36 VZ2(lo)|VZ3(hi), +40 VXY3}. Output packet = 52
+// bytes: {+0 tag(len=12<<24|next), +4 rgb0&COL_MASK_STD, +8 SXY0, +12 uv0, +16 rgb1&
+// COL_MASK_GROUND, +20 SXY1, +24 uv1, +28 rgb2&COL_MASK_GROUND, +32 SXY2, +36 uv2, +40
+// rgb3&COL_MASK_GROUND, +44 SXY3, +48 uv3}. Note the PER-SLOT mask mix (rgb0 standard, rgb1-3
+// ground) — verified against the recomp body, not simplified to one constant.
+void OverlayGroundGt3Gt4::gt4(Core* c) {
+  uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
+  if (count == 0) { c->r[2] = rec; return; }
+
+  uint32_t pool = c->mem_r32(PKT_POOL_PTR);
+  uint32_t sp = c->r[29]; c->r[29] -= 32;                 // real frame: 8 scratch words, no spills
+
+  for (; count != 0; count--, rec += 44) {
+    gte_write_data(0, c->mem_r32(rec + 20));              // VXY0
+    uint32_t vz01 = c->mem_r32(rec + 24);
+    gte_write_data(2, c->mem_r32(rec + 28));              // VXY1
+    gte_write_data(1, vz01);                              // VZ0
+    gte_write_data(4, c->mem_r32(rec + 32));              // VXY2
+    gte_write_data(3, vz01 >> 16);                        // VZ1
+    uint32_t vz23 = c->mem_r32(rec + 36);
+    gte_write_data(5, vz23);                              // VZ2
+
+    uint32_t hdr0 = c->mem_r32(rec + 0);
+    c->mem_w32(pool + 4, hdr0 & COL_MASK_STD);            // rgb0, STANDARD mask (differs from GT3's raw + from rgb1-3 below)
+    gte_op(c, 0x4A280030u);                                // RTPT (verts 0..2)
+    c->mem_w32(pool + 16, (hdr0 << 4) & COL_MASK_GROUND);  // rgb1
+
+    uint32_t flagreg = gte_read_ctrl(31);
+    c->mem_w32(SCRATCH_FLAG_TMP, flagreg);
+    if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) < 0) continue;
+    gte_op(c, 0x4B400006u);                                // NCLIP
+    c->mem_w32(SCRATCH_FLAG_TMP, gte_read_data(24));       // MAC0
+    if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) <= 0) continue;  // backface cull
+
+    c->mem_w32(pool + 8,  gte_read_data(12));              // SXY0
+    c->mem_w32(pool + 20, gte_read_data(13));              // SXY1
+    c->mem_w32(pool + 32, gte_read_data(14));              // SXY2
+
+    uint32_t rec4 = c->mem_r32(rec + 4);                   // rgb2|flag
+    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12);
+    c->mem_w32(pool + 12, uv0);
+    c->mem_w32(pool + 24, uv1);
+    c->mem_w32(pool + 28, rec4 & COL_MASK_GROUND);         // rgb2
+    c->mem_w32(pool + 40, (rec4 << 4) & COL_MASK_GROUND);  // rgb3
+    uint32_t uv23 = c->mem_r32(rec + 16);
+    c->mem_w32(pool + 36, uv23);                           // uv2 (lo half)
+    c->mem_w32(pool + 48, uv23 >> 16);                     // uv3 (hi half)
+
+    gte_write_data(0, c->mem_r32(rec + 40));               // VXY3
+    gte_write_data(1, vz23 >> 16);                          // VZ3
+    gte_op(c, 0x4A180001u);                                // RTPS (4th point)
+    uint32_t flagreg2 = gte_read_ctrl(31);
+    c->mem_w32(SCRATCH_FLAG_TMP, flagreg2);
+    if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) < 0) continue;
+    c->mem_w32(pool + 44, gte_read_data(14));              // SXY3
+
+    if (!((c->mem_r16(pool+8) < 320) || (c->mem_r16(pool+20) < 320) || (c->mem_r16(pool+32) < 320) || (c->mem_r16(pool+44) < 320))) continue;
+    if (!((c->mem_r16(pool+10) < 240) || (c->mem_r16(pool+22) < 240) || (c->mem_r16(pool+34) < 240) || (c->mem_r16(pool+46) < 240))) continue;
+
+    uint32_t flagbyte = rec4 >> 24;
+    int32_t z;
+    uint32_t mode = flagbyte & 3u;
+    if (mode == 1u || mode == 2u) {
+      int32_t sz1 = (int32_t)gte_read_data(16), sz2 = (int32_t)gte_read_data(17),
+              sz3 = (int32_t)gte_read_data(18), sz4 = (int32_t)gte_read_data(19);
+      c->mem_w32(sp - 32 + 0, sz1); c->mem_w32(sp - 32 + 4, sz2);
+      c->mem_w32(sp - 32 + 8, sz3); c->mem_w32(sp - 32 + 12, sz4);     // real stack mirror
+      z = sz4_minmax(mode == 1u, sz1, sz2, sz3, sz4);
+      c->mem_w32(SCRATCH_OTZ_TMP, z);
+    } else {
+      gte_op(c, 0x4B68002Eu);                              // AVSZ4
+      z = (int32_t)gte_read_data(7);
+      c->mem_w32(SCRATCH_OTZ_TMP, z);
+    }
+
+    int32_t idx = ground_otz_index(z);
+    c->mem_w32(SCRATCH_OTZ_TMP, (uint32_t)idx);
+    if (idx < 0) continue;
+
+    uint32_t slot_addr = ot_base + (uint32_t)idx * 4;
+    uint32_t old_head = c->mem_r32(slot_addr);
+    c->mem_w32(slot_addr, pool);
+    c->mem_w32(pool + 0, old_head | TAG_LEN_GT4);
+    pool += 52;
+  }
+
+  c->r[29] = sp;
+  c->mem_w32(PKT_POOL_PTR, pool);
+  c->r[2] = rec;
+}
+
+#define CAMERA_GTE_CTRL 0x1F8000F8u
+#define OT_BASE_GLOBAL  0x800ED8C8u
+
+// FUN_801401B8 — the ground-entity render list walker. list=a0: +6 (u8) entry count, +12 (u32)
+// pointer table base, +16.. (u16 index array, one per entry). Loads the SHARED camera GTE
+// control-register block once (CR0..7 from scratchpad 0x1F8000F8, the SAME "camera" block
+// docs/engine_re.md's render-command-flush note names as feeding the mode dispatcher), then for
+// each list entry: table[idx] -> a per-object record whose +0 word packs {lo byte: GT3 count,
+// (word>>16)&0xff: GT4 count} and whose +4 points at the actual GT3-record-then-GT4-record
+// array gt3()/gt4() walk. OT base = *0x800ED8C8 (the SAME global the render dispatcher's
+// "*0x800ED8C8 OTbase" note documents for queued commands).
+void OverlayGroundGt3Gt4::entityLoop(Core* c) {
+  uint32_t list = c->r[4];
+  // KNOWN GAP (honest, not papered over): the real FUN_801401B8 frame is `addiu sp,-40` with SIX
+  // real spills (s0..s4 + ra, at sp+16..+36) around its two "call" sites — those bytes ARE part
+  // of the SBS-compared guest stack. This draft does NOT yet reproduce them: it keeps its loop
+  // cursor/count/table-base as plain C++ locals (there is no OTHER guest code racing this frame
+  // while it runs, so functionally the loop below is correct), but a future session wiring this
+  // for real SBS-gating MUST descend c->r[29] by 40 and spill the actual live values (idxCursor/
+  // idxEnd/table/otBase/return-site) to their real offsets before the loop, and restore + ascend
+  // after — same idiom as gt3()/gt4() above and game/render/cull.cpp's Cull::wrapFrame. Left
+  // unmirrored here rather than faked with placeholder writes (an actually-wrong guest RAM value
+  // is worse than an honestly-missing one).
+  uint8_t count = c->mem_r8(list + 6);
+  uint32_t idxCursor = list + 16;
+  uint32_t idxEnd = idxCursor + (uint32_t)count * 2;
+
+  uint32_t otBase = c->mem_r32(OT_BASE_GLOBAL);
+  uint32_t table = c->mem_r32(list + 12);
+
+  // camera GTE control block (8 words, CR0..CR7 — matches the recomp body's own 8-word load)
+  for (int i = 0; i < 8; i++) gte_write_ctrl((uint32_t)i, c->mem_r32(CAMERA_GTE_CTRL + (uint32_t)i * 4));
+
+  while (idxCursor < idxEnd) {
+    uint16_t idx = c->mem_r16(idxCursor);
+    idxCursor += 2;
+    uint32_t rec = c->mem_r32(table + (uint32_t)idx * 4);
+    uint32_t counts = c->mem_r32(rec + 0);
+    uint32_t recBase = rec + 4;
+
+    c->r[4] = recBase; c->r[5] = otBase; c->r[6] = counts & 0xFFu;
+    gt3(c);
+    recBase = c->r[2];
+
+    c->r[4] = recBase; c->r[5] = otBase; c->r[6] = (counts >> 16) & 0xFFu;
+    gt4(c);
+  }
+}
+
+void OverlayGroundGt3Gt4::registerOverrides(Game*) {
+  // NOT CALLED — see file banner. Left here (unused) so wiring is a one-line addition once a
+  // future session SBS-gates this: extern void ov_a00_set_override(uint32_t, OverrideFn);
+  // ov_a00_set_override(0x8013FB88u, &OverlayGroundGt3Gt4::gt3);
+  // ov_a00_set_override(0x8013FE58u, &OverlayGroundGt3Gt4::gt4);
+  // ov_a00_set_override(0x801401B8u, &OverlayGroundGt3Gt4::entityLoop);
+}
