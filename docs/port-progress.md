@@ -431,9 +431,57 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
       (the ONLY actors Sop::fieldUpdate/walkList2 dispatches during the SOP intro). Ghidra decomp
       scratch/decomp/sop_scene_actors.c. Control flow + node writes native; sub-behavior leaves
       (FUN_800519E0 model attach, FUN_80040CDC/80077C40 anim setup, FUN_8007778C bounds cull,
-      FUN_800518FC post-cull, FUN_8004190C anim/graphics, FUN_8010AE30/8010B588 SOP helpers,
-      FUN_8003116C spawn) stay rec_dispatched. ScriptInterp::step (FUN_80041098) routes directly to
-      the native beh_script_interp_step via c->engine.script.step().
+      FUN_800518FC post-cull, FUN_8004190C anim/graphics, FUN_8003116C spawn) stay rec_dispatched.
+      ScriptInterp::step (FUN_80041098) routes directly to the native beh_script_interp_step via
+      c->engine.script.step().
+    - ✅ **`FUN_8010AE30` + `FUN_8010AB38` — the shared "SOP-overlay" drop-shadow helper pair, OWNED
+      native** (game/ai/sop_overlay_shadow.cpp). `FUN_8010AE30` is the one-shot spawn both
+      `beh_sop_intro_pilot` and `beh_sop_intro_lifted` fire once their model attach succeeds: it
+      calls the already-native `Spawn::dispatch(cls=0, type=6, list=1)` (FUN_8007A980) and wires the
+      new node as a per-actor drop-shadow quad — handler ptr node[+0x1C]=FUN_8010AB38, node[+0x10]=
+      parent back-pointer, node[+0x18]=0x8002AB5C (the RESIDENT TERRAIN quad-draw address, later-227's
+      `terrain_render_pc` — stored as a content-interface DATA value only, never called through).
+      `FUN_8010AB38` is the shadow's own per-frame tick (registered `beh_sop_overlay_shadow` in
+      BehaviorDispatch::kTable): copies the parent's world position each frame while the shared SOP
+      scene-beat byte (0x800BF9B4) stays < 5, and derives two alpha/scale ramps ([0,0x80] / [0,0x100])
+      from the parent's jump elevation (parent+0x84) that shrink the shadow the higher the actor
+      jumps — a classic PS1 drop-shadow. Ghidra decomp scratch/decomp/cluster1.c (FUN_8010AE30) +
+      scratch/decomp/cluster2.c (FUN_8010AB38). CONTROL FLOW + ALL memory ops owned native, byte-exact
+      transcription (no sub-behavior calls besides the already-native Spawn::dispatch/despawn).
+      VERIFIED: SBS full 0 sbs-div / 0 VIOLATION over 10900+ frames (unaffected — this is a
+      pc_skip=true-only kTable shortcut, SBS full always takes the substrate body); live REPL run
+      (`newgame; skip 400; run N`) shows `beh_sop_overlay_shadow` (0x8010AB38) firing 2×/frame (one
+      per spawned shadow) with zero derail/crash. Closes the `FUN_8010AE30/8010B588` frontier note —
+      `0x8010B588` (the "lifted" actor's OWN multi-state sub-tick, a deeper 6-state SM synced to the
+      same scene-beat global, calling ScriptInterp::step + 3 substrate anim-install leaves) is a
+      SEPARATE, more complex function — RE'd (scratch/decomp/cluster3.c) but left un-owned this pass.
+    - ☐ **`FUN_80111CCC` / `FUN_80114B90` — RE'd, NOT ported this pass (deliberately deferred).**
+      Both are the "rarer paths" `beh_record_list_scanner` (FUN_8004CE14, already owned) can call
+      per-record from its state-1 command loop (see "Rarer paths (0x80111CCC, state 3, G0==6)
+      transcribed from disasm, verify when a scene drives them" above). Ghidra decomp:
+      scratch/decomp/probe_field_ents.c (both), scratch/decomp/probe2.c (FUN_80023870, a dependency).
+      * `FUN_80111CCC(param_1)` — Ghidra decompiles it reading `unaff_s2/s3/s5/s6/s7`: it does NOT
+        use a normal a0..a3 ABI, it's a tight-loop continuation that consumes ITS CALLER's live s-regs
+        directly (a common PSX-compiler idiom for an inlined per-record command, not a real
+        function-call boundary). Porting this byte-exact requires first RE'ing exactly what
+        `beh_record_list_scanner`'s (FUN_8004CE14, game/ai/beh_record_list_scanner.cpp) inner loop
+        holds in s2/s3/s5/s6/s7 at the call site — a cross-function register-flow analysis, not a
+        clean single-function port. Left un-owned rather than guess the register mapping (CLAUDE.md:
+        RE first, no black-box).
+      * `FUN_80114B90(param_1, param_2)` — clean ABI (`FUN_80023870(param_1, param_2, param_2+0xc0)`;
+        if nonzero, clear `DAT_1f800182`), called from `Engine::fieldRunFaithful` gated on
+        `area==8`/`0x800bf870==8`/`0x800bf839==7` (game/core/engine.cpp:1162/1182/1260/1359/1370/1419)
+        — per pc-game-architecture.md "the area==8 conditional 0x80114b90 leaf … never hit on
+        [reachable areas]" (seaside is area 0). Its dependency `FUN_80023870` is a proximity/facing
+        hit-test (X/Z distance vs summed radii + Y-band check via `FUN_80084080` isqrt) that on a hit
+        computes a heading (`FUN_80085690`) and then TAIL-JUMPS (Ghidra: "Subroutine does not return")
+        into `FUN_80083f50`/`FUN_80083e80` — almost certainly a branch into the cutscene SCRIPT-VM
+        (sibling of the already-owned `ScriptInterp::step`/`FUN_80041098`), not a normal return. Both
+        the tail-jump control transfer and `FUN_80083e80/f50`'s own bodies need RE before this can be
+        ported correctly; left un-owned rather than port a guessed call-then-return shape. Neither
+        address is reachable in the exercised seaside/SOP-intro path, so this has NO coverage impact
+        on the current SBS gate — safe to leave for a dedicated pass once area 8 (or the script-VM's
+        tail-jump primitive) is being worked.
     - ✅ mode-state ARM primitives — `Engine::armModeState(a,b,c)` (guest FUN_8005082C) and
       `Engine::armModeStateFromAreaTable()` (guest FUN_800508A8). The 3-byte payload arm/backup
       pattern used by the intro fade sequencer, front-end DEMO prologue, scene-UI trigger's confirm

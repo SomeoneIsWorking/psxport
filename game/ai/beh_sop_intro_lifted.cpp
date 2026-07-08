@@ -26,6 +26,7 @@
 #include "core/engine.h"          // c->engine.spawn
 #include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);
+uint32_t native_sop_overlay_shadow_spawn(Core* c, uint32_t parent);   // FUN_8010AE30, native (sop_overlay_shadow.cpp)
 
 namespace {
 
@@ -51,7 +52,7 @@ inline void anim_env_setup(Core* c, uint32_t obj) {
   c->r[4] = obj; c->r[5] = ANIM_ENV_PTR; c->r[6] = 2;
   rec_dispatch(c, 0x80077C40u);
 }
-inline void overlay_oneshot   (Core* c)             {                        rec_dispatch(c, 0x8010AE30u); }
+inline void overlay_oneshot   (Core* c, uint32_t obj) {                        (void)native_sop_overlay_shadow_spawn(c, obj); }
 inline void overlay_subtick   (Core* c, uint32_t o) { c->r[4] = o;           rec_dispatch(c, 0x8010B588u); }
 inline void bounds_cull       (Core* c, uint32_t o) { c->r[4] = o;           rec_dispatch(c, 0x8007778Cu); }
 inline void anim_graphics_tick(Core* c, uint32_t o) { (void)c->engine.animTick(o); }                              // native FUN_8004190C
@@ -70,7 +71,7 @@ void state_init(Core* c, uint32_t obj) {
   const int16_t y = (int16_t)c->mem_r16(obj + 0x32);
   c->mem_w16(obj + 0x32, (uint16_t)(y - Y_LIFT));              // visual lift
 
-  overlay_oneshot(c);
+  overlay_oneshot(c, obj);
 }
 
 void state_running(Core* c, uint32_t obj) {

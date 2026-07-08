@@ -94,6 +94,8 @@ void beh_sop_intro_lifted(Core* c);                // 0x8010B798 (SOP overlay) �
 void beh_sop_intro_narration(Core* c);             // 0x8010B990 (SOP overlay) — narration-beat spawner
 void beh_seaside_prox_substate(Core* c);           // 0x8013C1DC (A00 overlay) — closes the seaside
                                                    //   placement-installed handler set (last unowned entry)
+void beh_sop_overlay_shadow(Core* c);              // 0x8010AB38 (SOP overlay) — the per-actor drop-shadow
+                                                   //   quad FUN_8010AE30 spawns for the pilot/lifted actors
 
 namespace {
 struct NativeBeh { uint32_t addr; void (*fn)(Core*); const char* name; };
@@ -163,6 +165,7 @@ constexpr NativeBeh kTable[] = {
   { 0x8010B798u, beh_sop_intro_lifted,          "sop_intro_lifted"     },        // SOP overlay — Y-lifted secondary intro actor
   { 0x8010B990u, beh_sop_intro_narration,       "sop_intro_narration"  },        // SOP overlay — narration-beat spawner
   { 0x8013C1DCu, beh_seaside_prox_substate,     "seaside_prox_substate"},        // A00 overlay — last seaside placement handler
+  { 0x8010AB38u, beh_sop_overlay_shadow,        "sop_overlay_shadow"   },        // SOP overlay — per-actor drop-shadow quad tick
 };
 }  // namespace
 

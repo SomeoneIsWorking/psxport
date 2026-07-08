@@ -29,6 +29,7 @@
 #include "object/actor.h"          // Actor::boundsCull (FUN_8007778C, native)
 #include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);
+uint32_t native_sop_overlay_shadow_spawn(Core* c, uint32_t parent);   // FUN_8010AE30, native (sop_overlay_shadow.cpp)
 
 namespace {
 
@@ -55,7 +56,7 @@ inline int  try_model_attach(Core* c, uint32_t obj) {
 }
 inline void anim_env_setup   (Core* c, uint32_t obj) { c->engine.animEnvInit(obj, ANIM_ENV_PTR, ANIM_DATA_PTR); }   // native FUN_80040CDC
 inline void walk_start       (Core* c, uint32_t obj) { c->engine.walkStart   (obj, 8, 0); }                        // native FUN_80054D14
-inline void overlay_oneshot  (Core* c)                {                                            rec_dispatch(c, 0x8010AE30u); }
+inline void overlay_oneshot  (Core* c, uint32_t obj)  { (void)native_sop_overlay_shadow_spawn(c, obj); }
 inline int  bounds_cull      (Core* c, uint32_t obj) { c->r[4] = obj;             rec_dispatch(c, 0x8007778Cu); return (int)c->r[2]; }
 inline void post_cull_update (Core* c, uint32_t obj) { c->engine.objMatrixCompose(obj); }                          // native FUN_800518FC
 inline void anim_graphics_tick(Core* c, uint32_t obj){ (void)c->engine.animTick(obj); }                            // native FUN_8004190C
@@ -75,7 +76,7 @@ void state_init(Core* c, uint32_t obj) {
   c->mem_w8 (obj + 0x70, 2);
   c->mem_w16(obj + 0x84, 0x8C);
 
-  overlay_oneshot(c);
+  overlay_oneshot(c, obj);
 }
 
 void state_running(Core* c, uint32_t obj) {

@@ -34,7 +34,7 @@ SRC_GLOBS = ["engine/**/*.cpp", "engine/**/*.h", "game/**/*.cpp", "game/**/*.h",
 ROOTS = {"ov_game_stage_main", "ov_start_bin_stage", "native_task0_bootstrap",
          "ov_game_main", "native_boot_run"}
 
-DEF_RE  = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?void\s+((?:ov_|native_|eng_)\w+)\s*\(\s*Core\s*\*')
+DEF_RE  = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?[\w:*&<>]+\s+((?:ov_|native_|eng_|beh_)\w+)\s*\(\s*Core\s*\*')
 # PC-game-structure natives are C++ CLASS METHODS (e.g. `void Camera::lookAt()`), which take no Core*
 # param (they hold it as a member). Index those too; the owned guest FUN_/addr is read from a trailing
 # `// FUN_xxxx` on the def line or the comment block above (same association logic as free functions).
@@ -58,7 +58,24 @@ def load_override_table():
     return sym2addrs
 
 
+def load_behavior_table():
+    """Authoritative addr->symbol map for per-object behavior handlers registered in
+    BehaviorDispatch::kTable (game/object/behavior_dispatch.cpp) — the pc_skip=true-only native
+    shortcut table (see CLAUDE.md engine-overrides + game.h pc_skip). These `beh_*` fns take no
+    address in their own name (unlike `ov_<hex>`) and their header comment sits at the TOP of their
+    file, not adjacent to the def — so the name/comment heuristic below misses them entirely (this
+    is what left the whole `beh_*` family — ~50 owned handlers — reporting 'NO native owner found'
+    to `--addr`, even though they're live and gated correctly). The table itself is the ground truth."""
+    path = os.path.join(ROOT, "game/object/behavior_dispatch.cpp")
+    sym2addrs = {}
+    if os.path.exists(path):
+        for m in re.finditer(r'\{\s*0x([0-9A-Fa-f]{8})u\s*,\s*(beh_\w+)\s*,', open(path, encoding="utf-8").read()):
+            sym2addrs.setdefault(m.group(2), []).append(m.group(1).upper())
+    return sym2addrs
+
+
 OVR = load_override_table()
+OVR.update(load_behavior_table())
 
 
 def collect_files():
@@ -78,6 +95,16 @@ def parse_file(path, natives):
         if not m:
             m = METHOD_RE.match(lines[i])
             is_method = True
+        if m:
+            # Reject a forward DECLARATION masquerading as a definition: a prototype ends in `;`
+            # before any `{` ever appears on the line (e.g. `uint32_t foo(Core*, uint32_t);  //
+            # FUN_xxxx, native (bar.cpp)`). Without this guard the def-line trailing-comment FUN
+            # tag makes the brace-balance scanner below treat everything from the prototype to the
+            # next unbalanced `}` as the "body" of a phantom native — a real bug this tool hit once
+            # `beh_`/`native_`-prefixed forward decls started carrying their own FUN_ tag comments.
+            code_part = lines[i].split("//", 1)[0]
+            if ";" in code_part and "{" not in code_part:
+                m = None
         if not m:
             i += 1
             continue
