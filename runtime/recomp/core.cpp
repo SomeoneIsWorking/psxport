@@ -49,6 +49,8 @@ Core::Core() {
   engine.actorTomba.core = this;        // Engine-owned Tomba per-frame logic (G-block owner)
   engine.attackOrbit.core = this;       // Engine-owned A00 attack-orbit sub-behaviors
   engine.releaseTriggerMotion.core = this;  // Engine-owned release-trigger sub-motion cluster
+  engine.actorMeleeEngage.core = this;      // Engine-owned melee-engage/reposition/arm leaf
+  engine.meleeProximity.core = this;        // Engine-owned melee-proximity/approach-anchor leaf
   rng.core        = this;
   trig.core       = this;
   math.core       = this;

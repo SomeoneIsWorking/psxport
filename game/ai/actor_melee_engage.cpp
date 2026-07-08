@@ -17,6 +17,8 @@
 // comment alone.
 #include "actor_melee_engage.h"
 #include "core.h"
+#include "game.h"
+#include "engine_overrides.h"
 #include "math/trig.h"
 
 // Still-substrate leaves this session did not chase (see .h banner). rec_dispatch already declared
@@ -25,9 +27,14 @@
 int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) {  // FUN_80112188 — UNWIRED draft
   Core* c = core;
 
-  // ---- kind-based anchor-Z bias: target.kind==5 -> 0, else -70 -----------------------------------
+  // ---- kind-based anchor-Z bias: target.kind==5 -> -70, else 0 -----------------------------------
+  // BUG FIX (RE cross-check against generated/ov_a00_shard_1.c:3527): the delay-slot idiom
+  // `{ int _t = (r3 != r2/*==5*/); r22 = 0; if (_t) goto L_801121D4; } r22 = -70;` sets r22=0
+  // UNCONDITIONALLY then jumps over the `r22 = -70` line only when kind != 5 — i.e. kind==5 falls
+  // through to the -70 assignment, kind!=5 keeps the delay-slot's 0. The original draft had this
+  // backwards ((kind==5)?0:-70).
   const uint8_t targetKind = c->mem_r8(target + 3u);
-  const int32_t kindZBias = (targetKind == 5) ? 0 : -70;
+  const int32_t kindZBias = (targetKind == 5) ? -70 : 0;
 
   // ---- XZ distance test ---------------------------------------------------------------------------
   // dz = self.Z(+46) - (anchor.Z(+44) + kindZBias); dx = self.X(+54) - anchor.X(+52)
@@ -47,14 +54,24 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
   if (radiusSum1 < (int32_t)dist16) return 0;  // too far in XZ
 
   // ---- Y-band test ----------------------------------------------------------------------------------
+  // BUG FIX (RE cross-check): ground truth's `{ int _t=(r2==0)/*!(yThreshold<yBandSum)*/; r23=dy;
+  // if(_t) goto L_8011228C(continue); } r2=0; goto return0;` means the FAIL/return-0 case is
+  // `yThreshold < yBandSum`, and continue is `yThreshold >= yBandSum` — the ORIGINAL draft had this
+  // inverted (same class of polarity bug as kindZBias above, and mirrored in MeleeProximity).
   const int32_t dy = (int32_t)((uint16_t)c->mem_r16(self + 50u) - (uint16_t)c->mem_r16(anchor + 48u));
   const uint32_t heightSum = (uint16_t)c->mem_r16(self + 132u) + (uint16_t)c->mem_r16(target + 132u);
   const uint16_t yBandSum = (uint16_t)((uint32_t)dy + heightSum);
   const int32_t yThreshold = (int16_t)c->mem_r16(self + 134u) + (int16_t)c->mem_r16(target + 134u);
-  if (!(yThreshold < (int32_t)yBandSum)) return 0;  // outside the Y band
+  if (yThreshold < (int32_t)yBandSum) return 0;  // outside the Y band
 
-  // ---- reach bounds (r19/r21 in the recomp) used by the angle-window test below -------------------
+  // ---- reach bounds (r19/r21 in the recomp) used by the tail arm-directly path below --------------
+  // absDy (r23 in the recomp) is a DISTINCT value from reachLo (r21): the recomp sets r23=dy
+  // unconditionally right after the Y-band test, then in the dy<0 branch OVERWRITES r23 with -dy —
+  // i.e. r23 == |dy| in both branches, entirely independent of r19/r21. The original draft
+  // conflated r23 with r21 (reused reachLo in the bandWidth formula below) — a real bug: r21 is
+  // used ONLY by the "already close, arm directly" tail (reachY), never by bandWidth.
   int32_t reachHi, reachLo;
+  const int32_t absDy = (dy >= 0) ? dy : -dy;
   if (dy >= 0) {
     const int32_t targetYFull = (uint16_t)c->mem_r16(target + 134u);
     const int32_t targetHeight = (uint16_t)c->mem_r16(target + 132u);
@@ -68,10 +85,14 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
   }
 
   // ---- angle-window test ---------------------------------------------------------------------------
-  const int32_t angle = c->trig.ratan2(-dzS, dxS);
+  // BUG FIX (RE cross-check): ground truth computes a0=-dxS (r20=dx, negated), a1=dzS (r16=dz, NOT
+  // negated) before the ratan2 dispatch — i.e. ratan2(-dxS, dzS). The original draft swapped dx/dz
+  // (ratan2(-dzS, dxS)); MeleeProximity's sibling function has the identical convention
+  // (ratan2(-dx, dz)), confirming this is the real argument order, not a mislabeling on my part.
+  const int32_t angle = c->trig.ratan2(-dxS, dzS);
   const int32_t radiusSum2 = (int16_t)c->mem_r16(self + 128u) + (int16_t)c->mem_r16(target + 128u);
   const int32_t margin = radiusSum2 - (int16_t)dist16;
-  const int32_t bandWidth = (int16_t)reachHi - (int16_t)reachLo;
+  const int32_t bandWidth = (int16_t)reachHi - (int16_t)absDy;
 
   bool doReposition;
   if (margin < bandWidth) {
@@ -83,19 +104,22 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
 
   if (doReposition) {
     // ---- L_80112320: reposition self toward target along `angle`, scaled by the combined radius ----
+    // BUG FIX (RE cross-check): ground truth calls FUN_80083F50(=Trig::rcos, see trig.h) FIRST and
+    // feeds ITS result into the Z update; FUN_80083E80(=Trig::rsin) is called SECOND and feeds the
+    // X update. The original draft had these swapped (rsin->Z, rcos->X).
     const int32_t radiusSum3 = (int16_t)c->mem_r16(self + 128u) + (int16_t)c->mem_r16(target + 128u);
-    const int32_t sinV = c->trig.rsin(angle);
-    const int32_t sinScaled = (int32_t)(((int64_t)sinV * (int64_t)radiusSum3) >> 12);
     const int32_t cosV = c->trig.rcos(angle);
     const int32_t cosScaled = (int32_t)(((int64_t)cosV * (int64_t)radiusSum3) >> 12);
+    const int32_t sinV = c->trig.rsin(angle);
+    const int32_t sinScaled = (int32_t)(((int64_t)sinV * (int64_t)radiusSum3) >> 12);
 
     const int32_t self320 = c->mem_r16s(self + 320u);  // angleCmp call1's a1 (NOT a dead read)
 
-    const int32_t newZ = sinScaled + (c->mem_r16(anchor + 44u) + kindZBias);
+    const int32_t newZ = cosScaled + (c->mem_r16(anchor + 44u) + kindZBias);
     c->mem_w16(self + 46u, (uint16_t)newZ);
     c->mem_w8(self + 96u, 1);  // "engaged" latch
 
-    const int32_t newX = (int16_t)c->mem_r16(anchor + 52u) - cosScaled;
+    const int32_t newX = (int16_t)c->mem_r16(anchor + 52u) - sinScaled;
     c->mem_w16(self + 54u, (uint16_t)newX);
 
     const int32_t angleS16 = (int16_t)c->mem_r32(0x1F80009Cu);
@@ -179,10 +203,14 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
   if (lockOwner != 2) return abortToDisengage();
   if (!(c->mem_r8(self + 4u) < 2)) return abortToDisengage();
 
-  // FUN_80055844 — still-substrate "may this actor attack now" permission check (see .h). NOTE: the
-  // recomp does not (re)set a0(r4) anywhere in this tail before this call — it runs with whatever r4
-  // last held from earlier in the function (NOT necessarily `self`); transcribed as-is rather than
-  // guessing an argument that isn't actually there in the guest code.
+  // FUN_80055844 — still-substrate "may this actor attack now" permission check (see .h).
+  // REGISTER-LIFETIME FIX (RE cross-check): the recomp does not (re)set a0(r4) IN THIS TAIL, but it
+  // isn't garbage either — r4 was last assigned `angle` (the ratan2 result) right before the
+  // reposition-vs-arm branch, and nothing on the L_801124C0 (arm-directly) path touches r4 between
+  // there and this call. Per faithful-execution.md ("ABI slots hold live values"), the native port
+  // must reproduce that live value explicitly, since c->r[4] in the NATIVE call sequence would
+  // otherwise still hold the FUN_80084080 sqrt call's stale a0 (sumSq), not `angle`.
+  c->r[4] = (uint32_t)angle;
   rec_dispatch(c, 0x80055844u);
 
   if (c->r[2] != 0) {
@@ -249,4 +277,33 @@ void ActorMeleeEngage::doItFramed() {
   c->r[17] = c->mem_r32(c->r[29] + 28);
   c->r[16] = c->mem_r32(c->r[29] + 24);
   c->r[29] += 64;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Wiring: the only real callers found for 0x80112188 are DIRECT `ov_a00_func_80112188(c)` sites
+// inside ov_a00_shard_1.c itself (lines ~4262/5255) — i.e. calls through the recompiler's OWN
+// per-overlay g_ov_a00_override[] table, never through rec_dispatch. Per engine_overrides.h's
+// documented gap, EngineOverrides::register_ alone is invisible to that call shape; this needs
+// the SECOND wire-up (ov_a00_set_override), same pattern as game/core/pc_scheduler.cpp /
+// game/object/actor_sm_reward.cpp.
+// ---------------------------------------------------------------------------------------------
+extern void ov_a00_set_override(uint32_t, void (*)(Core*));
+extern void ov_a00_gen_80112188(Core*);   // substrate body — kept alive for psx_fallback (core B)
+
+namespace {
+// psx_fallback-GATED trampoline: g_ov_a00_override[] is shared by every Core, so core B (the pure
+// SBS substrate reference) must keep running the exact recompiled body, or SBS would compare our
+// native port against itself. traceHit() before the native call keeps the dispatch/ovhit debug
+// channels able to see this hit (a direct g_ov_a00_override[] call never reaches rec_dispatch).
+void ov_actorMeleeEngage(Core* c) {
+  if (c->game->psx_fallback) { ov_a00_gen_80112188(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80112188u);
+  c->engine.actorMeleeEngage.doItFramed();
+}
+}  // namespace
+
+void ActorMeleeEngage::registerOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80112188u, "ActorMeleeEngage::doIt", ov_actorMeleeEngage);
+  ov_a00_set_override(0x80112188u, ov_actorMeleeEngage);
 }

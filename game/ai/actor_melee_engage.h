@@ -1,14 +1,17 @@
-// game/ai/actor_melee_engage.h — class ActorMeleeEngage: FAITHFUL DRAFT port of guest FUN_80112188
+// game/ai/actor_melee_engage.h — class ActorMeleeEngage: FAITHFUL port of guest FUN_80112188
 // (generated/ov_a00_shard_1.c:3527, function `ov_a00_gen_80112188`), an A00-overlay leaf that decides
 // whether an AI actor should CLOSE IN on / mutually ARM a melee attack against a target, given a third
 // "anchor" reference point (an approach-origin position, e.g. the actor's patrol/home spot).
 //
-// STATUS: RE'd + transcribed 1:1 from the recompiler's instruction-exact output. UNWIRED — no
-// EngineOverrides/shard_set_override registration, no call site added. Dead code (kept alive only by
-// the CMake source list) until a caller is identified and an SBS-full gate confirms it byte-matches.
-// No static call site to this address was found in any generated shard (only a mis-decoded data blob
-// in ov_a03_shard_1.c aliases the address, not a real call) — it is reached, if at all, via a runtime
-// function-pointer table this session did not chase down. RE-justify before wiring.
+// STATUS: RE'd + transcribed, then INDEPENDENTLY RE-VERIFIED line-by-line against
+// generated/ov_a00_shard_1.c (the recompiler's instruction-exact ground truth) — 6 real bugs found
+// and fixed in that pass (see actor_melee_engage.cpp's inline "BUG FIX" comments): a condition-
+// polarity inversion on the kind-based Z-bias, a condition-polarity inversion on the Y-band test, a
+// dx/dz argument swap in the ratan2 call, an rsin/rcos swap feeding the Z/X reposition update, a
+// register (r21 vs r23) conflation in the bandWidth formula, and a missing register-lifetime setup
+// (c->r[4]=angle) before the FUN_80055844 dispatch. WIRED via ov_a00_set_override (the only real
+// callers are DIRECT `ov_a00_func_80112188(c)` sites inside ov_a00_shard_1.c itself — see .cpp) +
+// EngineOverrides (rec_dispatch/native-caller tracing). SBS-gated 0-diff; see registerOverrides().
 //
 // Guest ABI: a0 = self (the AI actor evaluating the engage), a1 = target (the actor it might attack),
 // a2 = anchor (a position record — read-only, e.g. the patrol anchor or camera-follow point; NOT a
@@ -75,6 +78,7 @@
 #define GAME_AI_ACTOR_MELEE_ENGAGE_H
 #include <cstdint>
 class Core;
+class Game;
 
 class ActorMeleeEngage {
 public:
@@ -84,10 +88,14 @@ public:
   // caller (no guest stack frame needed). Returns v0 (0/1/2), see the .h banner above.
   int32_t doIt(uint32_t self, uint32_t target, uint32_t anchor);
 
-  // doItFramed: guest-ABI-facing twin for a future `shard_set_override`/`EngineOverrides` wiring —
+  // doItFramed: guest-ABI-facing twin used by the ov_a00_set_override trampoline (see .cpp) —
   // mirrors the real 64-byte guest frame (spills s0..s7/s8/ra at their RE'd offsets) around doIt(),
-  // per the CLAUDE.md "mirror the guest stack, never revert/exclude" directive. UNUSED this session
-  // (nothing calls it) but kept so wiring later is a one-line registration, not a re-RE.
+  // per the CLAUDE.md "mirror the guest stack, never revert/exclude" directive.
   void doItFramed();
+
+  // Wire doIt onto the guest address 0x80112188: BOTH ov_a00_set_override (the recompiler's own
+  // per-overlay call table — the only real callers found are direct `ov_a00_func_80112188(c)`
+  // sites) and EngineOverrides (rec_dispatch/native-caller tracing). See .cpp.
+  static void registerOverrides(Game* game);
 };
 #endif

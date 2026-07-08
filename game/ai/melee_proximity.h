@@ -7,9 +7,12 @@
 //
 // STATUS: RE'd via Ghidra headless decompile (scratch/decomp/region_8001.c) + cross-checked against
 // generated/shard_2.c:795 (the recompiler's instruction-exact C, the actual ground truth per
-// CLAUDE.md). UNWIRED — no EngineOverrides/shard_set_override registration, no call site added.
-// Dead code (kept alive only by the CMake source list) until a caller is identified and an SBS-full
-// gate confirms it byte-matches.
+// CLAUDE.md), then INDEPENDENTLY RE-VERIFIED line-by-line — 3 real bugs found and fixed (see
+// melee_proximity.cpp's inline "BUG FIX" comments): the +96/+100 anchor-offset fields were swapped
+// between X and Z, a condition-polarity inversion on the Y-band test (same class of bug as its
+// ActorMeleeEngage sibling), and a dx/dz argument swap in the ratan2 call. WIRED via
+// shard_set_override (the only real callers are direct `func_8001F9DC(c)` sites in shard_1.c/
+// shard_5.c) + EngineOverrides. SBS-gated 0-diff; see registerOverrides().
 //
 // Guest ABI: a0 = self (r19 in the recomp — the actor being tested), a1 = other (r16 — the actor
 // whose approach-anchor offset is the target point). Returns v0: 1 = self is within combined-radius
@@ -52,6 +55,7 @@
 #define GAME_AI_MELEE_PROXIMITY_H
 #include <cstdint>
 class Core;
+class Game;
 
 class MeleeProximity {
 public:
@@ -60,12 +64,16 @@ public:
   // isAtApproachAnchor (FUN_8001F9DC): native-C-stack call, NOT guest-ABI framed. Returns v0 (0/1).
   int32_t isAtApproachAnchor(uint32_t self, uint32_t other);
 
-  // isAtApproachAnchorFramed: guest-ABI-facing twin for a future wiring — mirrors the real 40-byte
-  // guest frame (spills s0..s2/ra at their RE'd offsets: r19->sp+28, r16->sp+16, ra->sp+32,
-  // r18->sp+24, r17->sp+20) around isAtApproachAnchor(), per the CLAUDE.md "mirror the guest stack"
-  // directive. UNUSED this session (nothing calls it) but kept so wiring later is a one-line
-  // registration, not a re-RE. Reads a0/a1 from c->r[4]/c->r[5] (guest ABI), writes result to
-  // c->r[2] (v0), matching gen_func_8001F9DC's own entry/exit convention.
+  // isAtApproachAnchorFramed: guest-ABI-facing twin used by the shard_set_override trampoline (see
+  // .cpp) — mirrors the real 40-byte guest frame (spills s0..s2/ra at their RE'd offsets:
+  // r19->sp+28, r16->sp+16, ra->sp+32, r18->sp+24, r17->sp+20) around isAtApproachAnchor(), per the
+  // CLAUDE.md "mirror the guest stack" directive. Reads a0/a1 from c->r[4]/c->r[5] (guest ABI),
+  // writes result to c->r[2] (v0), matching gen_func_8001F9DC's own entry/exit convention.
   void isAtApproachAnchorFramed();
+
+  // Wire isAtApproachAnchor onto guest address 0x8001F9DC: BOTH shard_set_override (the
+  // recompiler's own global call table — the only real callers found are direct
+  // `func_8001F9DC(c)` sites) and EngineOverrides (rec_dispatch/native-caller tracing). See .cpp.
+  static void registerOverrides(Game* game);
 };
 #endif

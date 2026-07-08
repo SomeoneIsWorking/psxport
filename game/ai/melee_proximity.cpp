@@ -8,20 +8,27 @@
 // convention as game/ai/actor_melee_engage.cpp, to avoid a hex/decimal transcription mismatch.
 #include "melee_proximity.h"
 #include "core.h"
+#include "game.h"
+#include "engine_overrides.h"
 #include "math/trig.h"
 
 int32_t MeleeProximity::isAtApproachAnchor(uint32_t self, uint32_t other) {  // FUN_8001F9DC — UNWIRED draft
   Core* c = core;
 
   // ---- XZ distance test: self's position vs other's approach anchor (other.pos + other.anchorOfs) --
-  // dx = self.X(+54) - (other.X(+54) + other.anchorOfsX(+96))
-  const int32_t otherAnchorX = (int32_t)(uint16_t)c->mem_r16(other + 54u) +
-                                (int32_t)(uint16_t)c->mem_r16(other + 96u);
-  const int32_t dx = (int32_t)(int16_t)((uint16_t)c->mem_r16(self + 54u) - (uint16_t)otherAnchorX);
-  // dz = self.Z(+46) - (other.Z(+46) + other.anchorOfsZ(+100))
+  // BUG FIX (RE cross-check against generated/shard_2.c:795): the +96/+100 anchor-offset fields were
+  // swapped in the original draft. Ground truth's FIRST block reads other+46 (Z) paired with
+  // other+96, and its SECOND block reads other+54 (X) paired with other+100 — i.e. +96 is the Z
+  // anchor offset and +100 is the X anchor offset (matching this file's own .h banner, which the
+  // .cpp itself contradicted).
+  // dz = self.Z(+46) - (other.Z(+46) + other.anchorOfsZ(+96))
   const int32_t otherAnchorZ = (int32_t)(uint16_t)c->mem_r16(other + 46u) +
-                                (int32_t)(uint16_t)c->mem_r16(other + 100u);
+                                (int32_t)(uint16_t)c->mem_r16(other + 96u);
   const int32_t dz = (int32_t)(int16_t)((uint16_t)c->mem_r16(self + 46u) - (uint16_t)otherAnchorZ);
+  // dx = self.X(+54) - (other.X(+54) + other.anchorOfsX(+100))
+  const int32_t otherAnchorX = (int32_t)(uint16_t)c->mem_r16(other + 54u) +
+                                (int32_t)(uint16_t)c->mem_r16(other + 100u);
+  const int32_t dx = (int32_t)(int16_t)((uint16_t)c->mem_r16(self + 54u) - (uint16_t)otherAnchorX);
   const int32_t sumSq = dx * dx + dz * dz;
 
   // FUN_80084080 — still-substrate GTE-LZCS-table sqrt (see .h). Left substrate, rec_dispatch'd.
@@ -38,11 +45,17 @@ int32_t MeleeProximity::isAtApproachAnchor(uint32_t self, uint32_t other) {  // 
   const int32_t dy = (int32_t)(int16_t)((uint16_t)c->mem_r16(self + 50u) - (uint16_t)otherAnchorY);
   const int32_t heightSum = (int16_t)c->mem_r16(other + 132u) + (int16_t)c->mem_r16(self + 132u);
   const int32_t yThreshold = (int16_t)c->mem_r16(other + 134u) + (int16_t)c->mem_r16(self + 134u);
-  if (!(yThreshold < (int32_t)(uint16_t)(dy + heightSum))) return 0;  // outside the Y band
+  // BUG FIX (RE cross-check, same polarity class as ActorMeleeEngage's Y-band test): ground truth's
+  // `{ int _t=(r3!=0)/*yThreshold<yBandSum*/; r4=-dx(delay); if(_t) goto returnFalse; }` fails (out
+  // of band -> return 0) when yThreshold < yBandSum, not the negated form the original draft used.
+  if (yThreshold < (int32_t)(uint16_t)(dy + heightSum)) return 0;  // outside the Y band
 
   // ---- pass: stamp the approach angle into shared scratchpad 0x1F80009C, using the ALREADY-NATIVE
-  // Trig::ratan2 (guest FUN_80085690; a0=y=-dz, a1=x=dx, matching the recomp's own arg order) -------
-  const int32_t angle = c->trig.ratan2(-dz, dx);
+  // Trig::ratan2. BUG FIX (RE cross-check): ground truth sets a0=-dx (r17=dx, negated, in the
+  // branch's delay slot), a1=dz (r18=dz, NOT negated) before the FUN_80085690 dispatch — i.e.
+  // ratan2(-dx, dz). The original draft swapped dx/dz (ratan2(-dz, dx)); ActorMeleeEngage's sibling
+  // function has the identical convention (ratan2(-dxS, dzS)), confirming this argument order.
+  const int32_t angle = c->trig.ratan2(-dx, dz);
   c->mem_w32(0x1F80009Cu, (uint32_t)angle);
   return 1;
 }
@@ -69,4 +82,31 @@ void MeleeProximity::isAtApproachAnchorFramed() {  // guest-ABI twin, mirrors ge
   c->r[17] = c->mem_r32(c->r[29] + 20u);
   c->r[16] = c->mem_r32(c->r[29] + 16u);
   c->r[29] = savedSp;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Wiring: the only real callers found for 0x8001F9DC are DIRECT `func_8001F9DC(c)` sites in
+// shard_1.c/shard_5.c — calls through the recompiler's OWN global g_override[] table, never
+// through rec_dispatch. Per engine_overrides.h's documented gap, EngineOverrides::register_ alone
+// is invisible to that call shape; this needs the SECOND wire-up (shard_set_override), same
+// pattern as game/core/pc_scheduler.cpp / game/object/actor_sm_reward.cpp.
+// ---------------------------------------------------------------------------------------------
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_8001F9DC(Core*);   // substrate body — kept alive for psx_fallback (core B)
+
+namespace {
+// psx_fallback-GATED trampoline: g_override[] is shared by every Core, so core B (the pure SBS
+// substrate reference) must keep running the exact recompiled body. traceHit() before the native
+// call keeps the dispatch/ovhit debug channels able to see this hit.
+void ov_meleeProximity(Core* c) {
+  if (c->game->psx_fallback) { gen_func_8001F9DC(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8001F9DCu);
+  c->engine.meleeProximity.isAtApproachAnchorFramed();
+}
+}  // namespace
+
+void MeleeProximity::registerOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x8001F9DCu, "MeleeProximity::isAtApproachAnchor", ov_meleeProximity);
+  shard_set_override(0x8001F9DCu, ov_meleeProximity);
 }

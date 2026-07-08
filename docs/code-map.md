@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 531 native fns, 450 owned addresses, 507 LIVE / 24 ORPHAN.
+Totals: 535 native fns, 450 owned addresses, 511 LIVE / 24 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -27,7 +27,8 @@ Totals: 531 native fns, 450 owned addresses, 507 LIVE / 24 ORPHAN.
 | 0x8001D940 | LIVE | `Cd::asyncRead` | runtime/recomp/cd_override.cpp:184 |  | the engine's ASYNC streaming reader. It is spawned as task1 (its body |
 | 0x8001DB8C | LIVE | `Cd::loadFile` | runtime/recomp/cd_override.cpp:162 |  | Direct-call native loadfile (used by the PC-native boot path, which ow… |
 | 0x8001DC40 | LIVE | `Cd::dc40Sync` | runtime/recomp/cd_override.cpp:215 |  | Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NO… |
-| 0x8001F9DC | LIVE | `MeleeProximity::isAtApproachAnchor` | game/ai/melee_proximity.cpp:13 | 0x80084080 |  |
+| 0x8001F9DC | LIVE | `MeleeProximity::isAtApproachAnchor` | game/ai/melee_proximity.cpp:15 | 0x80084080 |  |
+| 0x8001F9DC | LIVE | `MeleeProximity::registerOverrides` | game/ai/melee_proximity.cpp:108 |  |  |
 | 0x80020364 | LIVE | `ActorTomba::stepModeInteract` | game/player/actor_tomba.cpp:402 |  | postInteractWalk case 0xF/0x14/0x56 (mode=0) / 0x2F (mode=2). |
 | 0x800205CC | LIVE | `ActorTomba::type8Interact` | game/player/actor_tomba.cpp:512 |  | postInteractWalk case 8. |
 | 0x80022060 | LIVE | `ActorTomba::proximityCheck` | game/player/actor_tomba.cpp:100 |  | cylinder proximity + Y-band check. |
@@ -433,7 +434,8 @@ Totals: 531 native fns, 450 owned addresses, 507 LIVE / 24 ORPHAN.
 | 0x8010B798 | LIVE | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:86 |  |  |
 | 0x8010B990 | LIVE | `beh_sop_intro_narration` | game/ai/beh_sop_intro_narration.cpp:126 |  |  |
 | 0x8010E904 | LIVE | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:326 |  | ======================================================================… |
-| 0x80112188 | LIVE | `ActorMeleeEngage::doIt` | game/ai/actor_melee_engage.cpp:25 | 0x80022C78 0x80055844 0x80084080 |  |
+| 0x80112188 | LIVE | `ActorMeleeEngage::doIt` | game/ai/actor_melee_engage.cpp:27 | 0x80022C78 0x80055844 0x80084080 |  |
+| 0x80112188 | LIVE | `ActorMeleeEngage::registerOverrides` | game/ai/actor_melee_engage.cpp:305 |  |  |
 | 0x80112A60 | LIVE | `aux_list_walk` | game/ai/area_seaside_perframe.cpp:67 |  | Walk the aux render list, dispatching FUN_80112A60(item) per item type… |
 | 0x801130C4 | LIVE | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:183 |  | ======================================================================… |
 | 0x80113C5C | LIVE | `Behaviors::areaSeasidePerframe` | game/ai/area_seaside_perframe.cpp:90 |  |  |

@@ -45,6 +45,8 @@
 #include "player/actor_tomba.h"       // Engine owns Tomba's per-frame logic + growth/movement
 #include "ai/attack_orbit_substate.h" // Engine owns the A00-overlay AttackOrbitSubstate sub-behaviors
 #include "ai/release_trigger_motion.h" // Engine owns the release-trigger sub-motion cluster
+#include "ai/actor_melee_engage.h"     // Engine owns the ActorMeleeEngage AI leaf (FUN_80112188)
+#include "ai/melee_proximity.h"        // Engine owns the MeleeProximity AI leaf (FUN_8001F9DC)
 class Core;
 
 class Engine {
@@ -98,6 +100,8 @@ public:
   ActorTomba       actorTomba;          // Tomba's per-frame logic + growth/movement over G block
   AttackOrbitSubstate attackOrbit;      // A00 overlay: node[3]==0x80/0x81 sub-behaviors (FUN_80145AF0/801458E0)
   ReleaseTriggerMotion releaseTriggerMotion; // release-trigger sub-motion cluster (FUN_80123E9C family)
+  ActorMeleeEngage actorMeleeEngage;    // A00-overlay melee-engage/reposition/arm leaf (FUN_80112188)
+  MeleeProximity   meleeProximity;      // melee-proximity/approach-anchor leaf (FUN_8001F9DC)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first
