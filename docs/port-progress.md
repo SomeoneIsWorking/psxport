@@ -2297,6 +2297,18 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    via literal "Options"/"Load data"/"Quit game" string pointers). Full survey in `docs/
    engine_re.md`'s "Wide-RE survey: 0x80070000-0x8007FFFF" section. Compiles clean in build2.
 
+   **UPDATE (2026-07-08, wide-RE follow-up, worktree agent-a53f252288693983d):** the dialog/text-box
+   cluster's cursor-advance core is now DRAFTED (UNWIRED/UNVERIFIED, compiles) —
+   `DialogTextStream::advanceByte`/`applyRenderMode` (FUN_8007C0D0/FUN_8007D0D0) in
+   `game/ui/dialog_text_stream.{h,cpp}`. Found and documented a recompiler limitation along the way
+   (an 0xF8/0xF9 "dispatch" that's actually a local jump table masquerading as a real indirect call —
+   docs/findings/ui.md). The box's own state machine (`FUN_8007D594`), position/layout
+   (`FUN_8007D208`/`FUN_8007D14C`), and glyph-blit walker (`FUN_8007C940` + its callees) remain
+   mapped-not-drafted. The pause/quit-menu cluster was surveyed further (family extended to the
+   Save-confirm + Options sub-page builders) but still NOT drafted — its 3 shared layout helpers
+   (`FUN_80079374`/`FUN_800793C4`/`FUN_8007E998`) need their own RE pass first. Full detail in
+   docs/findings/ui.md.
+
 # OPEN / BLOCKED (not on the critical path)
 - **Band 0x800A0000-0x800BFFFF has no ownable dispatch-target code — flagged for reassignment (2026-07-08).**
   Assigned as an "audio/SFX/sequencer tables + mid-engine leaves" ownership band; RE'd via static census

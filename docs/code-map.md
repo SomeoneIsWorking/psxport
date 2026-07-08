@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 537 native fns, 450 owned addresses, 513 LIVE / 24 ORPHAN.
+Totals: 539 native fns, 452 owned addresses, 515 LIVE / 24 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -317,6 +317,8 @@ Totals: 537 native fns, 450 owned addresses, 513 LIVE / 24 ORPHAN.
 | 0x8007B2C0 | LIVE | `Engine::seedDirectionMasks` | game/scene/startup.cpp:123 |  | direction-mask seeder. Called with 0 at boot (initEntityPool above) an… |
 | 0x8007B328 | LIVE | `Engine::initEntityPool` | game/scene/startup.cpp:104 |  | engine SUBSYSTEM init (init-prefix slot, dispatched at native_boot.cpp… |
 | 0x8007B3F4 | LIVE | `Engine::reloadEntityPool` | game/scene/startup.cpp:140 |  | re-copy the staged per-area entity-pool control bytes onto the live he… |
+| 0x8007C0D0 | LIVE | `DialogTextStream::advanceByte` | game/ui/dialog_text_stream.cpp:62 |  | (obj a0, mode a1) -> v0. Guest frame MIRRORED per gen_func_8007C0D0: `… |
+| 0x8007D0D0 | LIVE | `DialogTextStream::applyRenderMode` | game/ui/dialog_text_stream.cpp:43 |  | (obj a0) -- LEAF (gen_func_8007D0D0 has no `sp` descent). Cross-checke… |
 | 0x8007DC38 | LIVE | `beh_variant_overlay_lifecycle` | game/ai/beh_variant_overlay_lifecycle.cpp:54 |  |  |
 | 0x8007E038 | LIVE | `Spawn::spawnOverlayVariantBody` | game/world/spawn.cpp:532 |  | VARIANT-OVERLAY SPAWN primitive. RE'd from disas 0x8007E038..0x8007E10… |
 | 0x8007E038 | LIVE | `Spawn::spawnOverlayVariant` | game/world/spawn.cpp:565 |  |  |

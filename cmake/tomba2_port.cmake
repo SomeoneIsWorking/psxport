@@ -193,6 +193,7 @@ set(PORT_SRC
   game/object/animation.cpp
   game/input/input.cpp
   game/ui/menu.cpp
+  game/ui/dialog_text_stream.cpp
   game/items/inventory.cpp
   game/render/lighting.cpp
   game/ui/bav_loader.cpp

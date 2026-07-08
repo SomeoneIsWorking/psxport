@@ -2016,6 +2016,14 @@ confidence, most self-contained cluster in the region:
   `DAT_800bf8a3` (looks like a text-speed/language mode byte, 0/1/other -> 3 distinct settings).
   This is clearly the message-box/dialog TEXT RENDERER -- large, many call sites, deserves a
   dedicated Ghidra pass + cross-reference against any already-owned UI/dialog class before porting.
+  **UPDATE (2026-07-08, wide-RE, worktree agent-a53f252288693983d): `FUN_8007C0D0` and
+  `FUN_8007D0D0` themselves DRAFTED** (UNWIRED/UNVERIFIED, compiles) as `DialogTextStream::
+  advanceByte`/`applyRenderMode` in `game/ui/dialog_text_stream.{h,cpp}` -- see docs/findings/ui.md
+  for the full trace, including a recompiler-limitation finding (an 0xF8/0xF9 table read looks like
+  a real indirect call but is actually a local jump table, same shape as `FUN_8007D0D0`'s). The
+  surrounding cluster (`FUN_8007D14C`/`FUN_8007D208`/`FUN_8007D594`/`FUN_8007C940` -- the box's own
+  state machine, position/size layout, and the actual glyph-blit walker) remains mapped-not-drafted;
+  see docs/findings/ui.md for per-function notes and the recommended next-pass order.
 - **0x8007EAE4-0x8007FDB0 -- PAUSE/QUIT MENU construction.** Confirmed via literal string pointers:
   `FUN_8007EAE4` builds the in-game pause menu ("Options"/"Load data"/"Quit game" via
   `PTR_s_Options_800a2854` etc.), `FUN_8007EE74`/`FUN_8007EF60` build "Continue"/"Load data"/
@@ -2024,6 +2032,14 @@ confidence, most self-contained cluster in the region:
   global), `FUN_8007E1B8`/`FUN_8007E6DC` emit the actual draw-list entries. A full menu-widget
   subsystem; would make a good self-contained follow-up cluster (its own dedicated menu-widget
   class, e.g. `ui/pause_menu.cpp`), distinct from any already-owned UI code.
+  **UPDATE (2026-07-08, wide-RE, worktree agent-a53f252288693983d): family extended, still NOT
+  drafted** -- also identified `FUN_8007ED5C` (Save-confirm), `FUN_8007F104`/`f250`/`f498`/`f73c`/
+  `f8f8`/`fc24` (the Options sub-page family reached from `FUN_8007F104`'s top-level 4-item list;
+  DEAD when `game/ui/menu.cpp`'s PC-native options overlay is active, but still unowned/reachable),
+  `FUN_8007F078` (shared "Return"/"Exit" footer). See docs/findings/ui.md for the full family map
+  and why this cluster was deliberately NOT drafted this session (the 3 shared layout helpers
+  `FUN_80079374`/`FUN_800793C4`/`FUN_8007E998` need their own RE pass first -- drafting the
+  screen builders against a misunderstood shared-helper contract would bank untrustworthy code).
 - **0x80070724-0x80070E60 -- small scratchpad-resident control-byte cluster.** Reads/writes fields
   on a fixed scratchpad struct at `_DAT_1f800214` (not an object -- a SINGLETON control block) plus
   a handful of `DAT_800bf8xx` globals; also touches `DAT_800bf816` (the SAME camera-lock gate byte
