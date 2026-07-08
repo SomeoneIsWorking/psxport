@@ -1,5 +1,44 @@
 # Findings — render / engine submit
 
+## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
+
+- **status**: DONE. `Render::cmdListDispatch`/`Render::perModeDispatch` (game/render/perobj_dispatch.cpp).
+- **context**: frontier task in address band 0x8003xxxx, the per-object render dispatch chain
+  `0x8003CCA4 → 0x8003CDD8 → 0x8003F698 → (per-area leaf)`. `0x8003CCA4` already carries a transparent
+  `RenderObserver` wrapper (billboard depth-tag fix, issue #4 class); `0x8003CDD8`/`0x8003F698` were
+  unowned and NOT wrapped by anything, so they're a clean additive slice of the same chain.
+- **RE**: Ghidra headless decompile of a live free-roam RAM dump (`scratch/bin/field_ram.bin`) — but the
+  Ghidra pseudo-C mislabels COP2 moves as fictitious `setCopReg`/`copFunction` helpers, so ground truth
+  was the ACTUAL recompiled body in `generated/shard_6.c`/`shard_4.c` (`gte_write_ctrl`/`gte_write_data`/
+  `gte_op`/`gte_read_data` — real calls into the Beetle GTE backend). Independently cross-checked against
+  a pre-existing "later-133" comment block in `game/render/submit.cpp` (a RETIRED, issue-#32-superseded
+  native lift of this exact pair) — same scratch addresses (`CAM_ROT` 0x1F8000F8, `CAM_TRANS` 0x1F80010C,
+  `WORLD_POS` 0x1F8000C0, composed matrix at `SCR` 0x1F800000), same MVMVA opcodes (`0x4A49E012` rotation
+  column, `0x4A486012` translate). Two independent sources agreeing gave high confidence without having
+  to hand-decode the MVMVA opcode bitfields.
+- **dead end avoided**: assumed `PSXPORT_DEBUG=recdep` (hooks `rec_dispatch`) would rank call volume for
+  every address in this chain. It shows ZERO hits for `0x8003CDD8`/`0x8003F698` even though
+  `PSXPORT_DISPWATCH` confirms `0x8003CCA4` fires 1375×/400 frames — the generated `gen_func_8003CCA4`
+  body calls `func_8003CDD8(c)`/`func_8003F698(c)` as a PLAIN INTRA-SHARD C CALL (recompiler emits a
+  direct call for any `jal` whose target is statically known within the same shard), never through
+  `rec_dispatch`. `recdep`/`EngineOverrides` are both blind to this call shape — the only interception
+  point is the `g_override[]` slot each `func_XXXX` wrapper in `shard_disp.c` already checks
+  (`shard_set_override()`, the same mechanism `render_observer.cpp` uses). Any future "is this hot /
+  called at all" search in this band should cross-check `PSXPORT_DISPWATCH=<addr>` before trusting
+  `recdep`'s silence.
+- **dead end avoided (2nd)**: first cut called `rec_dispatch(c, target)` where `target` was read directly
+  from the 22-entry mode table (`MODE_TABLE` 0x80015268). This aborts (`rec_dispatch_miss` at
+  `0x8003F6E8`) — the table does NOT store final `FUN_` target addresses, it stores addresses of
+  `FUN_8003F698`'s OWN internal jump-table case labels (each label's body separately calls
+  `rec_dispatch` to the real target, e.g. `0x80146478`). Confirmed by reading all 22 live table words
+  out of `scratch/bin/field_ram.bin`: every entry is one of 11 known label literals (`0x8003F6E8` ..
+  `0x8003F788`), never a bare `FUN_` address. Fixed with a literal 11-entry `perModeCaseTarget()` map
+  (fixed game data, identical to the switch in `generated/shard_4.c`).
+- **verification**: `PSXPORT_SBS_MODE=full` + `AUTONAV=1`, headless, zero `sbs-div`/`VIOLATION` through
+  frame 8760 across two separate runs (both only stopped by an external timeout, not a crash/divergence).
+- **refs**: game/render/perobj_dispatch.cpp, game/render/render.h, game/render/submit.cpp (later-133
+  comment), docs/port-progress.md CURRENT FRONTIER 2026-07-08.
+
 ## Narration-end -> fisherman-cutscene LOADING SCREEN shows garbage (pc_render) instead of black-hold + "Loading....." (2026-07-08)
 
 - **symptom (user-reported)**: between the end of the intro NARRATION cutscene and the start of the

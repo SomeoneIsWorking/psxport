@@ -355,7 +355,12 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     submit_perobj_flush (world-coord eproj). VERIFIED byte-identical to GTE + correct under motion. Per-object
     mesh + resident terrain + main ground are ALL world-coord float now (no GTE for those pictures).
   - ☐ NEXT (render): own 0x8003c8f4 (billboard-quad pickups, 0x8003c2d4/c464) projection via eproj to finish
-    the per-object render GTE-free; audit remaining RTPS/RTPT callers at the field; 0x8003cdd8 secondary cases.
+    the per-object render GTE-free; audit remaining RTPS/RTPT callers at the field. NOTE: this whole
+    paragraph predates issue #32 (2026-07-07, "PSX render path always executes underneath") — the
+    "GTE-free picture" framing describes the READ-ONLY pc_render display pass (Render::perObjFlush /
+    gt3gt4), a DIFFERENT thing from the guest-writing SUBSTRATE dispatch chain 0x8003CDD8/0x8003F698,
+    which IS now owned (2026-07-08, see CURRENT FRONTIER above) as a byte-exact mirror (still GTE, by
+    design — it feeds the SBS-gated faithful RAM, not a picture).
   - ☐ **FADE — own the cutscene/area screen-FADE PC-native (DESIGN COMPLETE, 2026-06-25; user-priority).**
     ROOT CAUSE of the "renderer struggling with cutscene fades": the fade is DELIVERED as a PSX full-screen
     semi-transparent OT RECT (`FUN_8007e9c8`: cmd 0x62, (0,0) 320x240, into OT @0x800ed8c8) and the PC
@@ -1470,6 +1475,45 @@ DEAD CODE until now.**
   can never fire on SBS's cores at all. A real fix would call every subsystem's
   `registerOverrides()` from `dc_boot_init` (or a shared init helper `main()` and SBS both call) —
   not done here since it touches every prior cluster's wiring call, not just this session's band.
+**SESSION 2026-07-08 — per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 owned as
+`Render::cmdListDispatch`/`Render::perModeDispatch` (game/render/perobj_dispatch.cpp, band 0x8003xxxx).**
+- ✅ **DONE — both addresses.** These are the SUBSTRATE (guest-writing) leaves `0x8003CCA4`
+  (submit_perobj_render, cases 0/4 — the only ones seaside objects hit) calls unconditionally as its
+  entire body: for each active render command on an object's persistent list, compose the WORLD
+  transform (camera-rot × object-local, via the SAME `gte_op`/`gte_write_ctrl` MVMVA calls the
+  recompiled body makes — `0x4A49E012` per rotation column, `0x4A486012` for the translate, cross-
+  checked against submit.cpp's pre-existing "later-133" RE comment, an independent source) into GTE
+  CR0-7, then dispatch to the per-mode renderer (mode-select byte @0x800BF870 + 22-entry jump table
+  @0x80015268 → `rec_dispatch` the resolved target — table entries are addresses of F698's OWN
+  internal case labels, not final FUN_ targets; resolved via a literal 11-entry map, confirmed by
+  reading all 22 live table words out of a free-roam RAM dump) or the generic GT3/GT4 packet emitter
+  `func_800803DC` fallback.
+- **NOT the `0x8003CCA4`/`0x8003C2D4`/`0x8003C464`/`0x8003C8F4` family**: those 4 addresses already
+  carry a transparent `RenderObserver` wrapper (`render_observer.cpp`, g_override slots 845/840/841/
+  844) that runs the literal gen body then tags host-side billboard depth
+  (`obj_world_ord`/`gpu_obj_depth_add`/`fps60_bb_node`, the issue-#4 occlusion fix). Owning those too
+  would mean reproducing CCA4's 5 special-effect sub-cases (`FUN_8003F4C4/F3F4/D584/F594/F344`, none
+  of which fire at seaside) AND folding the observer's host bookkeeping into the replacement to avoid
+  regressing that landed fix — out of scope for this focused 2-address slice. CDD8/F698 are NOT
+  currently wrapped by anything, so this is a clean, additive, non-conflicting cut of the same chain.
+- **MECHANISM NOTE (workflow-relevant): these are NOT reached via `rec_dispatch`.** `PSXPORT_DISPWATCH`
+  confirmed `0x8003CCA4` fires (1375 hits/400 frames) but `0x8003CDD8`/`0x8003F698` show ZERO
+  `rec_dispatch` hits in the same window — the generated CCA4 body calls `func_8003CDD8(c)` /
+  `func_8003F698(c)` as a PLAIN intra-shard C call (see `generated/shard_5.c gen_func_8003CCA4`),
+  bypassing `rec_dispatch` (and therefore `EngineOverrides`, which only intercepts inside
+  `rec_dispatch`) entirely. The only interception point for this call shape is the `g_override[]` slot
+  each `func_XXXX` wrapper in `shard_disp.c` already checks — `shard_set_override()`, the same
+  mechanism `render_observer.cpp` uses. `PSXPORT_DEBUG=recdep` (which hooks `rec_dispatch`) is
+  therefore BLIND to this whole call shape too — it under-counts any function reached only via direct
+  intra-shard calls. Any future "what's hot and unowned" search in this band should cross-check with
+  `PSXPORT_DISPWATCH=<addr>` before concluding an address is cold.
+- **Gate:** `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless, zero `sbs-div`/`VIOLATION`
+  through frame 8760 (two separate runs, 85s and ~200s wall-clock, both clean; the run only stopped on
+  an external timeout/interrupt, not a crash or divergence).
+- **Housekeeping (same gap a sibling session already flagged 2026-07-08):** this worktree needed
+  `vendor/beetle-psx/deps/libchdr` submodule init + `generated/`/`scratch/bin/tomba2/MAIN.EXE` copied
+  from the main checkout, and the main checkout's uncommitted `spu.c` `SPU_PokeRAM` edit re-applied
+  locally to build at all — not fixed here (shared submodule state, out of this session's band).
 
 **SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
 80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**

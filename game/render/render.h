@@ -137,6 +137,25 @@ public:
   // ov_field_entity_render (taxi-parameter c->r[4]).
   void fieldEntityRender(uint32_t es);
 
+  // ---- SUBSTRATE MIRROR: per-object cmd-list dispatch (guest FUN_8003CDD8 / FUN_8003F698) --------
+  // These run UNDER the render-underneath architecture (issue #32): the substrate walk cluster calls
+  // them as PLAIN intra-shard C calls (func_8003CDD8/func_8003F698), never through rec_dispatch, so
+  // they are owned via the shard override table (shard_set_override) — same mechanism RenderObserver
+  // already uses for the sibling 0x8003xxxx render leaves. Guest-writing here is LEGAL/REQUIRED (the
+  // scratchpad GTE compose + the OT/packet-pool writes made by the callee are part of BOTH SBS cores'
+  // faithful RAM) — this is NOT the read-only pc_render display pass. See perobj_dispatch.cpp for the
+  // full RE (byte-exact substrate mirror via the shared gte_op/gte_write_ctrl primitives, not a
+  // pc_render rebuild).
+  // cmdListDispatch (FUN_8003CDD8): a0=node (r4), a1=flag (r5). For each active render command on the
+  // node's persistent list, composes the WORLD object transform (camera-rot x object-local, via the
+  // same MVMVA ops submit.cpp's later-133 comment already RE'd) into CR0-7, then dispatches through
+  // perModeDispatch.
+  void cmdListDispatch();
+  // perModeDispatch (FUN_8003F698): a0=geomblk (r4), a1=otbase (r5), a2=flag (r6). Selects the area's
+  // per-mode renderer via the mode-select byte + jump table, or falls back to the generic GT3/GT4
+  // packet emitter (func_800803DC) when the generic-force flag or a2&1 is set.
+  void perModeDispatch();
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

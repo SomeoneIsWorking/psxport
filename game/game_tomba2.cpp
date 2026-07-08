@@ -236,6 +236,8 @@ void games_tomba2_init(void) {
   fps60_init();
   void render_observer_install();
   render_observer_install();   // read-only per-object depth tags at the substrate override choke point
+  void perobj_dispatch_install();
+  perobj_dispatch_install();   // FUN_8003CDD8/FUN_8003F698 substrate-mirror ownership (band 0x8003xxxx)
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }
