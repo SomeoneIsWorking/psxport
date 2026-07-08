@@ -65,6 +65,19 @@ public:
   void initPlace();               // FUN_8006E918 — init: place camera X/Z base (S+0x02/S+0x0a) from heading.
   void initSeedGrp(uint32_t src); // FUN_8006CBA8 — init: seed cam[0x3a/0x3e/0x42] from a source group.
 
+  // ── UNWIRED/UNVERIFIED drafts (2026-07-08 RE-ahead pass, 0x8006xxxx band). Siblings of the already-owned
+  // orchestrators above; all read/write the SAME cam_/S/G state and call already-owned methods, so they
+  // belong on this class rather than a new one. Faithfulness reproduces the RE'd guest arithmetic exactly
+  // (including reading fields whose low/high half may hold stale data from a prior write — never "fixed").
+  // Not registered in EngineOverrides/shard_set_override and not gated by any SBS run yet.
+  void resetFollowAccum();        // FUN_8006E8F8 — zero cam[0x24]/cam[0x28], seed S+0x1E, reset cam[0x56].
+  void pushMode(uint8_t mode);    // FUN_8006E1C0 — save cam[0x64] to cam[0x67], set new mode, zero cam[4..6].
+  void restoreMode();             // FUN_8006E1E4 — on G+2==1: mode=0 + camY=MASTER_Y; else restore cam[0x67].
+  void snapToMasterOffsetY200();  // FUN_8006EA00 — hard-reset the accumulators to MASTER_X/Y-200/Z, replace.
+  void orbitTick();               // FUN_8006EF38 — during render-timing window {3,4}: step the orbit angle
+                                   //   cam[0x70] and orbit the look point (S+0x02/0x0A) around the fixed
+                                   //   center cam[0x3a]/cam[0x42] at radius 500, snapping position to it.
+
   // ── Orchestrators (per-frame camera MODES). One is picked per frame by the caller/mode selector. ──
   void snapFollow(uint32_t target);    // FUN_8006E3B0 — SOP/cutscene: SNAP the follow accumulators to
                                        //   the target (no smoothing), then build the view (lookAt).

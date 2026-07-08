@@ -810,6 +810,52 @@ void CutsceneCamera::initSeedGrp(uint32_t src) {   // FUN_8006CBA8 (writes the F
   w16(CAM_OBJ + 0x42, r16(src + 10));
 }
 
+// ── UNWIRED/UNVERIFIED drafts (2026-07-08 RE-ahead pass) ─────────────────────────────────────────
+// Ghidra decomp: scratch/decomp_local/region_8006.c (import "main_ram", va 0x80060000-0x80070000) +
+// gen_func_8006E8F8 (generated/shard_5.c, Ghidra missed this one — read the recompiled body directly,
+// which is instruction-exact ground truth per CLAUDE.md). Not wired to any dispatch table; not SBS-gated.
+void CutsceneCamera::resetFollowAccum() {   // FUN_8006E8F8
+  camW32(0x24, 0);
+  camW32(0x28, 0);
+  w16(S + 0x1e, (uint16_t)(int16_t)-1750);
+  camW16(0x56, 256);
+}
+void CutsceneCamera::pushMode(uint8_t mode) {   // FUN_8006E1C0
+  camW8(0x67, camR8(0x64));   // stash the current mode
+  camW8(0x64, mode);
+  camW8(4, 0); camW8(5, 0); camW8(6, 0);
+}
+void CutsceneCamera::restoreMode() {   // FUN_8006E1E4
+  if (r8(G + 2) == 1) {
+    camW8(0x64, 0);
+    camW32(0x0c, r32(MASTER_Y));
+    return;
+  }
+  camW32(0x0c, r32(MASTER_Y));
+  camW8(0x64, camR8(0x67));   // restore the mode pushMode() stashed
+}
+void CutsceneCamera::snapToMasterOffsetY200() {   // FUN_8006EA00
+  // cam[8]/[0xc]/[0x10] are a 32-bit (X,Y,Z) staging triple (same shape trackXZ/trackY/snapAccXZ/snapAccY
+  // read as `target`); only the HIGH (integer) half is written here — the low half keeps whatever was
+  // already there, exactly like the guest (never "cleaned up").
+  w16(CAM_OBJ + 0x0e, (uint16_t)((int16_t)r16(MASTER_Y + 2) - 200));   // cam[0xc].hi = MASTER_Y.hi - 200
+  w16(CAM_OBJ + 0x0a, r16(MASTER_X + 2));                              // cam[8].hi   = MASTER_X.hi
+  w16(CAM_OBJ + 0x12, r16(MASTER_Z + 2));                              // cam[0x10].hi= MASTER_Z.hi
+  snapAccXZ(CAM_OBJ + 8);
+  snapAccY(CAM_OBJ + 8);
+  initPlace();
+  lookAt();
+}
+void CutsceneCamera::orbitTick() {   // FUN_8006EF38
+  if ((uint8_t)(r8(0x1F800236u) - 3) >= 2) return;   // only during render-timing window {3,4}
+  int32_t angle = (int16_t)camR16(0x70);
+  int32_t rc = c->trig.rcos(angle), rs = c->trig.rsin(angle);
+  w16(S + 0x02, (uint16_t)((int16_t)camR16(0x3a) + (int16_t)(mlo(rc, 500) >> 12)));
+  w16(S + 0x0a, (uint16_t)((int16_t)camR16(0x42) + (int16_t)(mlo(rs, 500) >> 12)));
+  camW16(0x70, (uint16_t)(angle + 8));
+  snapFollow(CAM_OBJ + 0x38);   // snap the camera's own position accumulators to the fixed orbit center
+}
+
 void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera driver; cam obj @0x800E8008)
   if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8006EC44u, updateFaithful()); return; }   // faithful: gen mirror
   uint8_t outer = camR8(0);                     // cam[0] = outer state

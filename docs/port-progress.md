@@ -1185,6 +1185,11 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     **CAMERA TREE FULLY NATIVE** (oracle 0-diff on every method) except the true field OVERLAYS reached by
     driver modes 0/1/9/10/17 (loaded `\BIN\*.BIN` content — a separate porting track). See docs/findings/
     camera.md. Next subsystem: ObjectWorld (entity pool + spawn + node/animation walk).
+  - ⚠️ **RE'd/DRAFTED/UNWIRED (2026-07-08, 0x8006 band RE-ahead pass):** 5 residual leaves added as
+    `CutsceneCamera` methods — `resetFollowAccum` (FUN_8006E8F8), `pushMode`/`restoreMode` (FUN_8006E1C0/
+    E1E4), `snapToMasterOffsetY200` (FUN_8006EA00), `orbitTick` (FUN_8006EF38). Compiles; NOT registered in
+    EngineOverrides/shard_set_override, NOT run through SBS, callers not yet identified for pushMode/
+    restoreMode/orbitTick. See docs/engine_re.md "CutsceneCamera — 5 residual leaves drafted".
 - ✅ Math helper `FUN_80077FB0` = `ov_isqrt` (engine_math.cpp, later-186) — 16-bit ROUNDING integer sqrt
   (libgte-style leaf). Was 8.41% of all interpreter instructions; owning it native dropped the field run
   42.93M→38.99M insns/300fr (−9.2%). Bit-exact: 65000+ live calls 0-diff vs recomp (`mathverify` gate).

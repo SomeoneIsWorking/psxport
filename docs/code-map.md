@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
+Totals: 376 native fns, 323 owned addresses, 375 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -108,17 +108,17 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:584 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2438 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2513 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
-| 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:239 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
-| 0x80051300 | LIVE | `NodeXform::propagateRotmat` | game/render/node_xform.cpp:303 |  | per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd… |
-| 0x80051464 | LIVE | `NodeXform::propagateAxis` | game/render/node_xform.cpp:337 |  | sibling of propagateRotmat(): identical control flow, but the child's … |
+| 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:259 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
+| 0x80051300 | LIVE | `NodeXform::propagateRotmat` | game/render/node_xform.cpp:323 |  | per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd… |
+| 0x80051464 | LIVE | `NodeXform::propagateAxis` | game/render/node_xform.cpp:357 |  | sibling of propagateRotmat(): identical control flow, but the child's … |
 | 0x80051794 | LIVE | `Engine::identityMatrixAt` | game/scene/startup.cpp:27 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
-| 0x800517BC | LIVE | `NodeXform::seedBlock` | game/render/node_xform.cpp:275 |  | trivial 8-word block seeder: {x,0,y,0,z,0,0,0}. RE'd + cross-checked v… |
+| 0x800517BC | LIVE | `NodeXform::seedBlock` | game/render/node_xform.cpp:295 |  | trivial 8-word block seeder: {x,0,y,0,z,0,0,0}. RE'd + cross-checked v… |
 | 0x800517F8 | LIVE | `GraphicsBind::renderUpdateBody` | game/world/graphics_bind.cpp:102 | 0x80051300 | per-object RENDER-STATE UPDATE: build the object's transform, then sna… |
 | 0x800518FC | LIVE | `Engine::objMatrixCompose` | game/core/engine.cpp:910 | 0x80051128 0x80084110 0x80084470 0x80085480 | Engine::objMatrixCompose — FUN_800518FC. |
-| 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:203 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
+| 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:220 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
 | 0x80051B04 | LIVE | `GraphicsBind::installSceneRecord` | game/world/graphics_bind.cpp:89 |  | two-level scene-data-table pointer resolve. Pure address arithmetic, n… |
 | 0x80051B70 | LIVE | `GraphicsBind::recordInitBody` | game/world/graphics_bind.cpp:50 |  | per-object render-record INIT. Allocates a record (FUN_8007AAE8), zero… |
-| 0x80051C8C | LIVE | `NodeXform::buildAxis` | game/render/node_xform.cpp:378 |  | node-level sibling of build(): composes THIS node's own world matrix a… |
+| 0x80051C8C | LIVE | `NodeXform::buildAxis` | game/render/node_xform.cpp:398 |  | node-level sibling of build(): composes THIS node's own world matrix a… |
 | 0x80051E60 | LIVE | `PcScheduler::step` | game/core/pc_scheduler.cpp:555 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). The … |
 | 0x80051F14 | LIVE | `PcScheduler::spawnPrim` | game/core/pc_scheduler.cpp:56 | 0x80080860 0x80080890 0x800808A0 | arm a task slot. Frame: sp-=24, s0 spill at +16, ra at +20. Slot write… |
 | 0x80051F80 | LIVE | `Engine::s4c` | game/core/engine.cpp:158 | 0x80106A14 | s4c() reference: sm[0x4c] == the AREA machine (the 9-state load/intro/… |
@@ -157,6 +157,8 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x8006DF88 | LIVE | `CutsceneCamera::headBuildA` | game/camera/cutscene_camera.cpp:116 |  |  |
 | 0x8006E010 | LIVE | `CutsceneCamera::angleStep` | game/camera/cutscene_camera.cpp:321 |  | ── angleStep ─────────────────────────────────────────────────────────… |
 | 0x8006E0F0 | LIVE | `CutsceneCamera::mainFollow` | game/camera/cutscene_camera.cpp:641 |  |  |
+| 0x8006E1C0 | LIVE | `CutsceneCamera::pushMode` | game/camera/cutscene_camera.cpp:823 |  |  |
+| 0x8006E1E4 | LIVE | `CutsceneCamera::restoreMode` | game/camera/cutscene_camera.cpp:828 |  |  |
 | 0x8006E228 | LIVE | `CutsceneCamera::trackFollow` | game/camera/cutscene_camera.cpp:658 |  |  |
 | 0x8006E294 | LIVE | `CutsceneCamera::snapFollowA` | game/camera/cutscene_camera.cpp:623 |  |  |
 | 0x8006E2FC | LIVE | `CutsceneCamera::snapFollowB` | game/camera/cutscene_camera.cpp:635 |  |  |
@@ -164,10 +166,13 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x8006E3B0 | LIVE | `CutsceneCamera::snapFollow` | game/camera/cutscene_camera.cpp:587 |  |  |
 | 0x8006E3F4 | LIVE | `CutsceneCamera::simpleFollow` | game/camera/cutscene_camera.cpp:653 |  |  |
 | 0x8006E464 | LIVE | `CutsceneCamera::rotBuild` | game/camera/cutscene_camera.cpp:204 |  |  |
+| 0x8006E8F8 | LIVE | `CutsceneCamera::resetFollowAccum` | game/camera/cutscene_camera.cpp:817 |  | ── UNWIRED/UNVERIFIED drafts (2026-07-08 RE-ahead pass) ──────────────… |
 | 0x8006E918 | LIVE | `CutsceneCamera::initPlace` | game/camera/cutscene_camera.cpp:794 |  |  |
-| 0x8006EA7C | LIVE | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:932 |  |  |
-| 0x8006EC44 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:813 |  |  |
-| 0x8006EC44 | LIVE | `CutsceneCamera::updateFaithful` | game/camera/cutscene_camera.cpp:842 | 0x8006C988 0x8006EA7C | pc_faithful mirror of gen_func_8006EC44 (generated/shard_1.c:13176-133… |
+| 0x8006EA00 | LIVE | `CutsceneCamera::snapToMasterOffsetY200` | game/camera/cutscene_camera.cpp:837 |  |  |
+| 0x8006EA7C | LIVE | `CutsceneCamera::init` | game/camera/cutscene_camera.cpp:978 |  |  |
+| 0x8006EC44 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:859 |  |  |
+| 0x8006EC44 | LIVE | `CutsceneCamera::updateFaithful` | game/camera/cutscene_camera.cpp:888 | 0x8006C988 0x8006EA7C | pc_faithful mirror of gen_func_8006EC44 (generated/shard_1.c:13176-133… |
+| 0x8006EF38 | LIVE | `CutsceneCamera::orbitTick` | game/camera/cutscene_camera.cpp:849 |  |  |
 | 0x8006EFF4 | LIVE | `Bit::testFE48` | game/math/mathlib.cpp:78 |  | u32 flag-bit TEST on the fixed 32-bit word at 0x800BFE48. Pure 5-instr… |
 | 0x8006F00C | LIVE | `Bit::setFE48` | game/math/mathlib.cpp:92 |  | sibling of setFE34: u32 flag-bit SET on 0x800BFE48 (the word testFE48 … |
 | 0x8006F02C | LIVE | `Bit::setFE34` | game/math/mathlib.cpp:85 |  | u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction… |
@@ -252,7 +257,7 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x800BF81E | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x800BF842 | LIVE | `Engine::postRenderTick` | game/core/engine.cpp:2608 |  | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
 | 0x800E8008 | LIVE | `CutsceneCamera::initSeedGrp` | game/camera/cutscene_camera.cpp:807 |  |  |
-| 0x800E8008 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:813 |  |  |
+| 0x800E8008 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:859 |  |  |
 | 0x800ED058 | LIVE | `Engine::sceneEventFifoFaithful` | game/core/engine.cpp:611 |  | pc_faithful field EVENT/COMMAND-QUEUE state machine — mirror of gen_fu… |
 | 0x800EE489 | LIVE | `Cull::cullFarMult` | game/render/cull.cpp:82 |  | pc_faithful/pc_skip split (2026-07-03): pc_faithful (pc_skip=false) us… |
 | 0x800F2624 | LIVE | `RenderQueue::objidOverlay` | game/render/render_queue.cpp:126 |  | Box + label every live GAME OBJECT, identified by ENUMERATING the rend… |

@@ -898,6 +898,66 @@ computes the projection and can carry the real per-vertex view-Z straight to the
 - Full basis (right/up): per-object rotation matrix is loaded to GTE CR0-4 + translation CR5-7 right
   before each RTPS/RTPT (96 / 54 static ctc2 sites) — the per-object transform, the Phase-3 native target.
 
+### CutsceneCamera — 5 residual leaves drafted (2026-07-08 RE-ahead pass, UNWIRED/UNVERIFIED)
+Ghidra decomp: `scratch/ghidra/main_ram` project, va range 0x80060000-0x80070000 (163 fns, one shot). These
+5 addresses write the SAME cam_/S/G state as the already-owned orchestrators above and call already-owned
+methods, so they were added as new `CutsceneCamera` methods (game/camera/cutscene_camera.{h,cpp}) rather
+than a new class. NOT registered in EngineOverrides/shard_set_override; NOT run through SBS — drafts only.
+- **`resetFollowAccum()`** — `FUN_8006E8F8`. Zeros cam[0x24]/cam[0x28], seeds scratchpad `S+0x1E` (the radius
+  used by `initPlace`'s look-angle build) to -1750, resets cam[0x56] (heading) to 256. Ghidra's auto-analysis
+  did NOT surface this address as a function (no static jal reaches it in the resident code — only
+  `rec_dispatch` from an a00-overlay caller does); read directly from `generated/shard_5.c:gen_func_8006E8F8`
+  instead (instruction-exact ground truth per CLAUDE.md) rather than re-importing an overlay-specific dump.
+- **`pushMode(mode)`** / **`restoreMode()`** — `FUN_8006E1C0` / `FUN_8006E1E4`. A mode-stack-of-one: pushMode
+  stashes the current cam[0x64] (the driver's MODE byte) into cam[0x67] and resets a 3-byte sub-state
+  (cam[4..6] — NOT the same triple as `update()`'s cam[1..3] ss-state); restoreMode either forces mode 0 +
+  syncs cam[0xC] to MASTER_Y (when scene flag G+2==1) or restores the pushed mode. No caller identified yet
+  in the 0x8006 band (likely driven by a still-substrate overlay/cutscene script) — mapped, not wired.
+- **`snapToMasterOffsetY200()`** — `FUN_8006EA00`. A second init-like entry point (sibling of `init()`/
+  `FUN_8006EA7C`): hard-resets the follow accumulators to Tomba's master position with Y offset -200, via
+  the SAME staging triple (cam[8]/[0xC]/[0x10]) that `distSolve` already scratch-uses at cam[8], then
+  `snapAccXZ`+`snapAccY`+`initPlace`+`lookAt`. Only the HIGH (integer) half of each staging field is
+  written — the low half is left as whatever was already there, reproduced exactly (never "cleaned up").
+- **`orbitTick()`** — `FUN_8006EF38`. Gated on render-timing byte 0x1F800236 ∈ {3,4} (a sibling gate to
+  `init()`'s post-check window {5,6}): steps an orbit angle (cam[0x70] += 8) and orbits the LOOK point
+  (S+0x02/S+0x0A) around the fixed center cam[0x3a]/cam[0x42] (the SAME fields `init()`'s pre-scripted-camera
+  branch seeds) at radius 500, then `snapFollow(cam+0x38)` to snap the camera's OWN position to that fixed
+  center. Reads like a scripted circular-pan camera (SOP/cutscene). Caller not yet identified.
+
+### 0x8006xxxx band — structural map (2026-07-08 RE-ahead pass; NOT ported, mapping only)
+Full-band Ghidra decomp confirms TWO distinct subsystems share this address range (163 fns total, 128 still
+unowned as of this pass — see `tools/codemap.py --addr` per-address, and the CutsceneCamera note above for
+the 5 that got drafted):
+- **0x80060064–0x800674F4ish — Tomba's PLAYER-ACTION state machine.** `param_1`=`G` (Tomba's own node,
+  `0x800E7E80`, same block `ActorTomba` already owns pieces of — confirmed via shared field offsets G+0x145/
+  0x147/0x169/0x14a/0x165 with `game/player/actor_tomba.h`). Each `FUN_8006xxxx` is a SEPARATE per-frame
+  "action" handler (attack/throw/examine/hit-react/respawn/grow-shrink-transform/etc.), driven by a giant
+  mode/sub-mode dispatcher at **`FUN_80058918`** (own band, ~9600-13300+ in `generated/shard_1.c`; itself
+  unowned, out of this pass's 0x8006-0x8007 scope) that `jal`s straight into one of these per the action ID
+  in G[5]/G[6]/G[7]. Each handler is its own 2-4 level state machine over those same 3 state bytes plus a
+  large set of G-block fields (0x40-0x5f, 0x140-0x17e range) shared with the growth/settle/velocity methods
+  `ActorTomba` already owns. **This is a MUCH bigger unit than a single-session draft can safely cover
+  byte-exact** (largest single function read this pass: `FUN_80060c60`, 466 lines, itself a a multi-state
+  "turn to face + zoom-approach" sequence spanning states 0-7, calling ~15 helper leaves both inside and
+  outside the band). Left UNPORTED this pass — a future wave should RE `FUN_80058918`'s dispatch table
+  first (correlates G[5] values to these addresses = the actual "action ID" catalog) before porting
+  individual handlers, so each handler lands with its real name (e.g. "throw item", "read sign") instead of
+  a bare `FUN_xxxx`.
+- **0x8006F0E4–0x8006FFE8 — a distinct, NOT-camera, NOT-Tomba subsystem.** `FUN_8006F0E4` spawns an object
+  via `FUN_8007A980(2,3,1)` and wires its per-frame behavior fn ptr to `FUN_8006F2D0` (250 lines) — a 4-state
+  object (state bytes at +4/+8/+9/+0xB) that reads raw controller-pad bitmasks (`_DAT_1F80018E`/`1F8001A8`/
+  `1F80018C`) directly and drives sub-objects via `FUN_8007AAE8`/table `DAT_800A4BA8` (a 4-uint16-per-entry
+  seed table) — looks like a rider/vehicle or player-input-shadowing companion object (candidate: Zippo or a
+  similar controllable companion; NOT confirmed). `FUN_8006F04C`/`8006EFF4`/`8006F00C`/`8006F02C` are a small
+  bitfield-flag trio+dispatcher (`DAT_800BFE34`/`800BFE48` bit arrays, `DAT_800BF840`/`800BFE3A[]` retry
+  counters) used by the state machine. Left UNPORTED — needs its own RE pass (identify the object type via
+  the `FUN_8007A980(2,3,1)` sprite/type args) before naming or drafting.
+Per-address one-liners for the front (Tomba-action) cluster's smaller/leaf members read this pass (not
+drafted — feed a future port, not a call graph): `FUN_80060268`/`FUN_8006032C`/`FUN_8006042C` are a shared
+"blink/invincibility flash" trio (G+0x145/0x147/0x168/0x169, a lookup table `DAT_800A46F0` maps a 0-15 blink
+counter to a flicker mask written to G+0x44); `FUN_80060544` is their driver (10-case sequencer). All still
+substrate.
+
 ## Projection setup — `gen_func_800509B4` (0x800509B4) = the NATIVE WIDESCREEN lever (RESOLVED later-98)
 Found by histogramming `gte_write_ctrl(reg,…)` in `generated/`: OFX/OFY/H (CR24/25/26) are written at
 exactly 2 sites — libgte `InitGeom` defaults + this one real config. The engine's projection config:
