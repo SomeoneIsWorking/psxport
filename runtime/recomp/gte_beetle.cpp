@@ -411,7 +411,12 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
-                                                     if (g_mods.fps60) c->game->fps60.rtp(op);
+                                                     // interp60 no longer taps the GTE op stream (2026-07-08):
+                                                     // build_lerp reprojects from the NATIVE capture
+                                                     // (stampWorldCr fps_cr/fps_mv + the observer's node-span
+                                                     // billboard registry), keyed on fps_key. The old
+                                                     // rtp()/xobj/mObjGrid GTE fingerprint fed only never-read
+                                                     // metrics (verified dead) — tap removed.
                                                      if (gd.projprobe < 0) gd.projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                      if (gd.projprobe > 0) {
                                                        // Compare native projection to Beetle's outputs. After RTPS the single vertex

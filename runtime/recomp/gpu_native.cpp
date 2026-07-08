@@ -751,7 +751,8 @@ void GpuState::gp0_exec(Core* core) {
         if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
       fade_note(mr, mg, mb, s_off_y, semi); fade_note_size(xmx-xmn, ymx-ymn, semi);
       if (semi) semi_dump("poly", s_tp_blend, mr, mg, mb, xmn, ymn, xmx, ymx, s_off_y); }
-    core->game->fps60.join_poly(v[0].x, v[0].y);  // fps60: object join
+    // fps60 object-join GTE-grid tap removed (2026-07-08): fed only the never-read mJoinHit/Miss
+    // metric; the 60fps reproject matches natively on fps_key + the node-span billboard registry.
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (vk_path()) {
