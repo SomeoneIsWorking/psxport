@@ -18,6 +18,7 @@
 #include "render_queue.h"
 #include "projection.h"   // EObjXform (per-object world-coord float projection; ops on Render)
 #include "render_internal.h"
+#include "player/actor_tomba.h"   // ActorTomba::G_ADDR — Tomba's node, outside the 3 generic entity lists
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -195,6 +196,23 @@ void Render::sceneNative() { Core* c = mCore;
         if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
         c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
         c->r[4] = n;
+        perObjFlush();
+      }
+    }
+    // (d) TOMBA (the master "G" block, ActorTomba::G_ADDR = 0x800E7E80) — verified RE (docs/port-
+    // progress.md "KEY FINDING", game/player/actor_tomba.h): the player is NOT a member of any of the
+    // 3 doubly-linked entity lists above (he is excluded from walkAll/walkList2/walkAux by design — his
+    // per-frame tick runs off the per-area callback table instead, see area_seaside_perframe.cpp). The
+    // generic entity-list walk above therefore never visits him and his geomblk render commands (the
+    // SAME node+0xC0 array / node+8 count shape every other object uses — live-verified at the seaside
+    // free-roam checkpoint: G+8=G+9=0x11, cmd ptrs 0x800F2740.. all valid) were never flushed — this was
+    // the pc_render "Tomba invisible" bug. Submit him the same way as any HEADS-list node: read-only,
+    // same generic perObjFlush path, no guest writes.
+    {
+      uint32_t g = ActorTomba::G_ADDR;
+      if (c->mem_r8(g + 8) != 0 && c->mem_r8(g + 9) != 0) {
+        c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(g + 8);
+        c->r[4] = g;
         perObjFlush();
       }
     }
