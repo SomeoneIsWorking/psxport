@@ -52,6 +52,30 @@ public:
   // cached pointer instead of re-reading guest RAM. Falls back to the SUN default when unset.
   const LightConfig* mShadeCfg = nullptr;
 
+  // AREA-SCOPED CACHE trust latches — read-only, host-only (no guest writes). Two guest structures
+  // that a per-area/per-beat SETUP step (re)populates and a per-tick STEP function refreshes while its
+  // owner is active — SCENE_ENT_TABLE (0x800F2418: count@+6, grid-ptr@+0xC, refreshed by the SOP
+  // cam-frustum prepass) and PARALLAX_BG_SM (0x800ED018: W@+0x10/H@+0x11, tilemap-ptr@+0x14, refreshed
+  // by the backdrop tile scroller) — go STALE for a handful of ticks at the exact moment SOP narration
+  // hands off to the field-area load: the narration's own prepass/scroller stops ticking them, the
+  // field-area machine's equivalent (still substrate) hasn't started yet, and the just-loaded field
+  // overlay has REPURPOSED the memory their leftover pointers still reference. Reading through a stale
+  // pointer into repurposed bytes is garbage geometry / a garbage tilemap (found via the narration-end
+  // -> fisherman-cutscene loading-screen bug: pc_render showed a tiled noise/atlas-grid garbage frame
+  // where the oracle — pure PSX render, same recomp gameplay — shows the expected black load-hold,
+  // because the PSX render path simply isn't drawing from these structures during the same window).
+  //
+  // Both structures happen to get explicitly RE-ZEROED (count/W momentarily 0) as part of the SAME
+  // "next area setup" step that eventually repopulates them fresh — that zero is the observable proof
+  // their owner has taken over again. Track (per structure) whether that zero has been seen since the
+  // last narration -> field handoff before trusting a nonzero value; each structure's own EXISTING
+  // "count==0 / W==0 -> skip" guard already makes the zero-window itself safe to read. Mirrors the
+  // ScreenFade held-fade latch: pure state derived from guest READS, no guest writes, per-Core host
+  // memory only.
+  bool mSceneTableTrusted  = false;   // may fieldEntityRender(SCENE_ENT_TABLE) run this frame?
+  bool mBackdropTrusted    = false;   // may render_bg_tilemap_native(PARALLAX_BG_SM) run this frame?
+  bool mAreaCacheWasNarration = false;   // previous frame's sop_narration value (shared edge detector)
+
   // ---- object-render projection ops (impl in projection.cpp) ----------
   // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)
   // and world position (cmd+0x2C), transformed by the live scene camera (scratchpad view matrix

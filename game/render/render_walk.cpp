@@ -144,11 +144,42 @@ void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
   c->mRender->stats.snObjs = c->mRender->stats.snCmds = 0;
+  // AREA-SCOPED CACHE trust latches (see render.h mSceneTableTrusted/mBackdropTrusted) — shared edge
+  // detector, computed once per frame. Both SCENE_ENT_TABLE (0x800F2418) and PARALLAX_BG_SM
+  // (0x800ED018, the backdrop tilemap struct below) go stale for a few ticks right when SOP narration
+  // hands off to the field-area load; each latches back to trusted once ITS OWN structure shows the
+  // natural re-zero its setup step performs before repopulating (see render.h for the full writeup).
+  //
+  // The handoff edge itself is read from the GAME submode dispatcher's own ownership switch
+  // (sm[0x4a]==0: SOP field-mode machine owns the per-tick prepass/scroller; sm[0x4a]==1: the field-
+  // area machine does, once it takes over) rather than the SOP overlay signature (0x80109450): the
+  // area-load that repurposes PARALLAX_BG_SM's referenced memory (an in-progress CD stream landing
+  // AS the same-tick RESET that also increments sm[0x4c]/sm[0x4a] — Sop::fieldMode case 4) clobbers it
+  // 1-2 ticks BEFORE the overlay's own first-instruction word is overwritten by the incoming stream
+  // (verified: sm[0x4c] leaves 0 the exact tick the garbage first appears, one tick ahead of sm[0x4a]
+  // and two ahead of the overlay signature). sm[0x4c]!=0 while sm[0x4a]==0 is SOP's own one-shot
+  // "narration ending, RESET case has fired" tail (it only ever increments once, at the single RESET
+  // that ends the whole cutscene — not per-beat), so `sm4a==0 && sm4c==0` is "SOP genuinely still
+  // owns this tick" without false-negatives across the narration's own beats.
+  uint16_t sm4a = c->mem_r16(0x801fe04au), sm4c = c->mem_r16(0x801fe04cu);
+  bool sop_narration_now = (sm4a == 0) && (sm4c == 0);
+  if (sop_narration_now) {
+    mSceneTableTrusted = true; mBackdropTrusted = true;      // narration's own prepass/scroller ticks both every tick
+    mAreaCacheWasNarration = true;
+  } else {
+    if (mAreaCacheWasNarration) { mSceneTableTrusted = false; mBackdropTrusted = false; mAreaCacheWasNarration = false; }  // handoff edge
+    if (!mSceneTableTrusted && c->mem_r8(0x800F2418u + 6u) == 0) mSceneTableTrusted = true;      // SCENE_ENT_TABLE owner reset seen
+    if (!mBackdropTrusted   && c->mem_r8(0x800ed018u + 0x10u) == 0) mBackdropTrusted = true;     // PARALLAX_BG_SM owner reset seen (W==0)
+  }
   // (0) BACKDROP (sky + distant parallax hills) — the field's background drawer, dispatched natively. The
   // PSX path is 0x8003df04's 16-state jump table @0x80014fc0 keyed on mem_r8(0x800bf870), gated by
   // mem_r8(0x800bf873)==0. Only state 0 (→ tilemap drawer 0x80115598) is owned natively so far; other
   // fields' drawers are still-PSX and stay black here until ported (frontier). RQ_BACKGROUND → behind world.
-  if (c->mem_r8(0x800bf873u) == 0) {
+  // Gated on mBackdropTrusted (see above): while untrusted, PARALLAX_BG_SM's tilemap pointer is the
+  // ended narration's leftover, now aliasing the just-loaded field overlay's raw bytes — drawing it
+  // produced a tiled noise/atlas-grid garbage frame (the narration-end -> fisherman-cutscene loading-
+  // screen bug) where the oracle (pure PSX render) shows the expected black load-hold instead.
+  if (mBackdropTrusted && c->mem_r8(0x800bf873u) == 0) {
     uint32_t bgstate = c->mem_r8(0x800bf870u);
     if (bgstate == 0) render_bg_tilemap_native(c, 0x800ed018u);
   }
@@ -188,7 +219,8 @@ void Render::sceneNative() { Core* c = mCore;
       }
     }
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
-    fieldEntityRender(0x800F2418u);
+    // Gated on mSceneTableTrusted (computed once, top of this function — see render.h for the writeup).
+    if (mSceneTableTrusted) fieldEntityRender(0x800F2418u);
     // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
     for (int h = 0; h < 3; h++) {
       uint32_t n = c->mem_r32(HEADS[h]);

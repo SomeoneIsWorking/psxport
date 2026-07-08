@@ -1328,6 +1328,24 @@ STALE (corrected).** Two corrections + one new capability this session:
   movement/physics convergence, and (b) drive to the SECOND area (area transition + loader), which exercises the
   effect cases idx1/2/3/8 + per-area submitters — add an oracle checkpoint, own those leaves gated. The opening
   STILL-STATE + render is fully verified; the untested frontier is actual interactive control and beyond.
+  **SUPERSEDED** — SBS `navStep`'s AWAIT_CONTROL phase (commit 303894b) already solved "how Tomba becomes
+  controllable": tap Cross to release `fieldRun` sm[0x4e]==9 (the scripted caught-pose HOLD) while gate
+  0x800BF89C==2, wait for sm[0x4e] to settle at 1 (30-frame sustain). Verified: autonav+postdrive reaches
+  control at f246 and stays A/B identical through 20000+ frames of real walk/jump.
+
+- ☐ **pc_skip=ON candidate — narration-end -> fisherman-cutscene multi-step LOAD.** This whole hand-off
+  (SOP narration RESET → field-area machine states 0/1/2 → `sm[0x4e]` scripted-hold entry 9→10→11→…→1) is
+  exactly the shape CLAUDE.md's per-fork rule describes: a collapsed multi-step init that currently only has
+  the FAITHFUL leg (still substrate end-to-end under both `pc_skip` values — none of `Engine::submode0` /
+  `Sop::fieldMode` / `Engine::fieldRun`'s `sm[0x4a]==1` handler is wired as an override, so `PSXPORT_GATE=1`
+  and the default port run the identical un-owned guest chain here). A `pc_skip=true` SHORTCUT fork would
+  seed the field-area machine straight to its post-load steady state (skip the CD-load ticks + the scripted
+  fishing-line hold) instead of stepping through it frame-by-frame — matching the "load_in_one_step vs
+  load_in_multi_step_faithfully" pattern already used for other collapsed inits (e.g. `Sop::areaLoad` vs
+  `areaLoadFaithful`). NOT implemented this session (out of scope for the render-ownership bug fixed here —
+  docs/findings/render.md "Narration-end -> fisherman-cutscene LOADING SCREEN"); flagging the fork point for
+  a follow-up. The render-side garbage bug is now fixed regardless of which exec fork runs (it's a pure
+  render-read staleness issue, not a logic-ownership one).
 
 **SESSION 2026-07-01 (later-282) — the ORACLE now verifies the field; free-roam opening is CONVERGENT.**
 The in-process interpreter+softGPU oracle (docs/oracle.md) has been extended to FREE-ROAM: it drives past the

@@ -1,5 +1,61 @@
 # Findings — render / engine submit
 
+## Narration-end -> fisherman-cutscene LOADING SCREEN shows garbage (pc_render) instead of black-hold + "Loading....." (2026-07-08)
+
+- **symptom (user-reported)**: between the end of the intro NARRATION cutscene and the start of the
+  FISHERMAN (caught-on-the-fishing-line) cutscene there is a brief loading transition; `GATE=1`
+  (recomp gameplay + pc_render) shows a tiled noise/atlas-grid GARBAGE picture there instead of the
+  correct black-hold-then-"Loading....." text the pure PSX render shows (`PSXPORT_ORACLE=1` = recomp
+  gameplay + pure PSX render, the picture oracle).
+- **characterization**: state-machine window pinned via task0's own sm array (0x801fe000): SOP
+  narration owns the tick while `sm[0x4a]==0`; the RESET that ends narration increments `sm[0x4c]`
+  ONE TIME (its only per-cutscene increment — not per-beat) in the same tick the field-area transition
+  load lands, then `sm[0x4a]` flips to 1 (the field-area machine takes over) a tick later, then the
+  overlay signature word `0x80109450` is overwritten by the incoming CD stream a further tick after
+  that. Captured GATE (pc_render) vs ORACLE (psx_render) frame-by-frame via the debug server
+  (`pause`/`step 1`/`shot`) at the SAME deterministic AUTO_SKIP frame: garbage ran f115-f119 (5
+  frames); oracle showed near-black through f114-f120, then the real "Loading....." text at f119+,
+  matching post-fix pc_render exactly.
+- **root cause (RE'd, not black-boxed)**: two guest structures are ticked EVERY FRAME by SOP's own
+  per-tick systems while narration owns the scene — `SCENE_ENT_TABLE` (0x800F2418: count@+6,
+  grid-ptr@+0xC, refreshed by `Sop::scenePrepass`/guest `FUN_8010A0E0`) and `PARALLAX_BG_SM`
+  (0x800ED018: W@+0x10/H@+0x11, tilemap-ptr@+0x14, refreshed by the backdrop tile scroller). The
+  INSTANT narration hands off to the field-area load, NOTHING re-validates either structure for a few
+  ticks: their count/W and pointer fields are the ended narration's LEFTOVER values, and the
+  field-area transition load's CD stream has ALREADY repurposed the memory those pointers reference
+  (verified via raw guest reads: `PARALLAX_BG_SM`'s tilemap ptr stayed `0x8019BD04` — inside the
+  narration's own loaded overlay blob — through the whole garbage window, then the field-area
+  machine's own equivalent legitimately RESETS both structures to 0 before repopulating them fresh).
+  `Render::sceneNative()`'s existing "AREA-INIT SUPPRESSION" guard (the `field_area_init` bool,
+  `sm[0x4e]==0` only) does NOT cover this: the scripted "caught on the fishing line" cutscene enters
+  via `sm[0x4e]=9` DIRECTLY (`Engine::fieldRunFaithful`/`fieldRun` case 0: `if (0x800BF89C==2)
+  sm[0x4e]=9`, skipping the normal `sm[0x4e]==1` path the guard's own comment assumes), so the
+  existing guard never triggers for this specific hand-off — and `sm[0x4e]==9` itself persists for
+  the ENTIRE (much longer) visible fisherman-cutscene, so blanket-suppressing on it would hide real,
+  correct content, not just the transient garbage.
+- **fix (native, read-only, no guest writes — `game/render/render.h` + `game/render/render_walk.cpp`)**:
+  two host-only trust latches on `Render` (`mSceneTableTrusted`, `mBackdropTrusted`, mirroring the
+  `ScreenFade` held-fade latch / `RenderObserver` read-only-tag precedent). Both structures are
+  trusted while `sm[0x4a]==0 && sm[0x4c]==0` (SOP's own one-shot "still owns this tick" test — chosen
+  over the overlay-signature check because the transition load clobbers the referenced memory 1-2
+  ticks BEFORE the overlay's own first-instruction word is overwritten by the same incoming stream);
+  the instant that flips false, both latch UNTRUSTED until each structure independently proves its
+  owner has taken over again by observing its own natural re-zero (`count==0` / `W==0`) — the same
+  zero-before-repopulate step `Sop::scenePrepass` already performs every tick, which is why reading
+  through the zero window is already safe (each structure's own EXISTING `count==0`/`W==0` -> skip
+  guard covers it). `Render::sceneNative()`'s BACKDROP draw and SCENE-TABLE draw are gated on their
+  respective latch. Pure guest READS + two per-Core host bools; no guest writes, no magic frame count.
+- **verify**: re-captured the same frame window post-fix — garbage gone, pixel-matches the oracle
+  frame-for-frame including the "Loading....." text at f119+; no `[pc_render VIOLATION]` fail-fast
+  trip (confirms no guest write); `PSXPORT_SBS_MODE=full` autonav+postdrive ran 18,690+ frames through
+  real interactive walk/jump gameplay with zero A/B divergences (the render change doesn't perturb
+  guest state).
+- **refs**: `game/render/render.h` (trust-latch fields + writeup), `game/render/render_walk.cpp`
+  (`Render::sceneNative()`), `game/scene/sop.cpp` (`Sop::scenePrepass`/`Sop::fieldMode` case 4 RESET),
+  `game/core/engine.cpp` (`Engine::fieldRunFaithful`/`fieldRun` case 0, the existing
+  `field_area_init` guard). Capture tool: `scratch/loadtrans_capture.py` (debug-server
+  pause/step/shot driver for a deterministic frame window, GATE vs ORACLE).
+
 ## 0x800C0000-0x800C8FFF "massive divergence" — FALSE POSITIVE; it's the GPU packet pool (2026-07-08)
 
 - **symptom (reported by a scout, RAM-diff based, no RE)**: default path (pc_faithful, mPcSkip=true)
