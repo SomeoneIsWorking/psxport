@@ -2364,3 +2364,18 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
   field-offset cross-reference against the already-owned `game/player/actor_tomba.cpp` fields, but
   far too large to RE to byte-exact fidelity in one pass; flagged as its own dedicated follow-up
   wave, not a tail end of this one.
+- **Band 0x80090000-0x8009FFFF RE survey (fleet agent, 2026-07-08, RE-ahead-of-frontier — UNWIRED,
+  NOTHING DRAFTED).** 209-function Ghidra decompile (`scratch/decomp/region_8009.c`) of the 194
+  `func_8009xxxx` symbols still on the substrate. Verdict: this band is **entirely PSY-Q SDK LIBRARY
+  code** — `libsnd` SEQ music sequencer (`SsSeqOpen`/`Play`/`Stop`/`SetVol`/`Called` tick, per-track
+  0xB0 control blocks), the raw `libspu` SPU-register driver (`Spu_Init`/transfer, hardware-register
+  offsets confirmed via literal `"SPU T.O.: %s"` timeout strings), `libmcrd` memory-card sector I/O,
+  and `libmdec` DCT sync (already correctly HLE'd as `sync_ok` in `sync_overrides.cpp`) — consistent
+  with that file's own comment marking `[0x80080000,0x8009E000)` as the resident SCEI library window.
+  **No `game/` port is appropriate here** (flagged, not forced, per the wide-RE brief's hardware-driver
+  carve-out) — the existing HLE taps + `PSXPORT_DEBUG=seqtick/keyon/septrace/SEQDBG` probes are the
+  correct treatment. Separately: `func_8009EB78/EBFC/EC80/EF18` (the only symbols past 0x8009D06C) are
+  a **recompiler misdecode of non-code bytes**, not real functions — decompiled bodies are full of
+  `UNHANDLED op` garbage and jump to addresses outside valid PSX RAM; Ghidra's own analyzer also finds
+  zero functions there. Flagged as a recompiler-coverage bug, not RE'd further. Full writeup:
+  docs/engine_re.md "Wide-RE survey: 0x80090000-0x8009FFFF".

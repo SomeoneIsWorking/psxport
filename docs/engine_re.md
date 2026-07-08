@@ -2148,3 +2148,93 @@ session per "quality of RE > quantity — refuse to draft what you can't verify"
 region_8005_survey.txt` (first-lines-only survey of all 145), `generated/shard_1.c` /
 `generated/shard_3.c` / `generated/shard_6.c` / `generated/shard_7.c` (ground truth for the 5
 drafted functions).
+
+## Wide-RE survey: 0x80090000-0x8009FFFF (2026-07-08, worktree agent-a207c9725f2c28d79)
+
+Region assignment for this session. 194 `func_8009xxxx` symbols appear in `generated/shard_*.c`.
+Already-owned/known coming in (per `tools/codemap.py`, `runtime/recomp/sync_overrides.cpp`,
+`runtime/recomp/native_boot.cpp`, `runtime/recomp/interp.cpp` debug taps): `input_dispatch_931c0`
+(0x800931C0), `Font::bank2Store`/`bankSelect` (0x80096370/0x800963A0), `bav_lock_ready`/`bav_lock_set`
+(0x80099450/0x80099478), `rand_lcg` (0x8009A450), `DecDCTinSync`/`DecDCToutSync` HLE (0x8009CAEC/
+0x8009CB80). Decompiled the full window (`tools/decomp.sh decomp main_ram scratch/decomp/region_8009.c
+0x80090000 0x8009FFFF`, project `scratch/ghidra/main_ram` copied in from the main checkout) → 209
+functions resolved to `scratch/decomp/region_8009.c`.
+
+### Finding: the whole band (minus the tail) is PSY-Q SDK LIBRARY code, not game/engine logic
+
+`runtime/recomp/sync_overrides.cpp` already documents `[0x80080000, 0x8009E000)` as "the SCEI LIBRARY
+TEXT (libgpu/libetc/libcd/libgs/libmdec) + the kernel". Reading the decompiled bodies confirms this
+band is entirely inside that library window and breaks into four PSY-Q library sub-clusters, none of
+which are game logic:
+
+- **`0x80090000-0x800921xx` — `libsnd` SEQ (MIDI-style) music-sequencer engine.** A per-track control
+  block of size **0xB0** at table base `DAT_80104c30` (`SsSeq*` API, confirmed by name-bearing strings
+  and shape): `0x80090210`=**SsSeqOpen** (parses a SEQ blob header, rejects it via
+  `FUN_8009a730("This is an old SEQ Data Format"/"This is not SEQ Data")` if the magic isn't `'S'`/`'p'`
+  or version byte isn't 1 — `FUN_8009a730` is a printf-style debug-string emitter, not game text),
+  `0x80090560`/`0x80090598`→`0x800905e0`=**SsSeqPlay**, `0x80090BD0`=**SsSeqCalled** (per-frame tick,
+  already tapped as `PSXPORT_DEBUG=seqtick`/`SEQDBG` in interp.cpp/native_boot.cpp), `0x80091050`/
+  `0x80091120`/`0x8009121C`/`0x80091460`=SEP (Sequence Event Point) track-step/event dispatcher,
+  `0x80091AF0`=**SsSeqStop**, `0x80091F50`=**SsSeqSetVol** (already used by `repl.cpp`'s `mute`/`bgm`
+  commands), `0x800939A0`=voice **keyon** (already tapped `PSXPORT_DEBUG=keyon`), `0x80090E40`=tempo/
+  fade ramp, `0x80095530`/`0x80095A9C`/`0x80095B90`=per-voice pan/vol get/set.
+- **`0x800922xx-0x800962xx` — continued SEQ engine + `libsnd` heap/init.** `0x80096A70`/`0x80099310`/
+  `0x800991B0`/`0x800993A0` = SPU driver heap alloc/init (already wired via `native_boot.cpp:231-234`,
+  `rc0/rc1(c, 0x80096a70/...)`).
+- **`0x800963xx-0x80099xxx` — `libgs`/font (mostly already flagged `✦ dispatch` in this doc's earlier
+  "font/text system init" section) plus the owned `Font`/`bav_loader` cluster.** No new finds here
+  beyond what's already documented.
+- **`0x8009A000-0x8009A7xx` — utility tail.** `0x8009A730`=printf-style debug string emitter (used
+  throughout this band for "SPU T.O.: %s", "MDEC ... sync" timeout diagnostics), `0x8009A450`=`rand_lcg`
+  (owned).
+- **`0x8009A800-0x8009C2xx` — `libmcrd` memory-card driver.** `0x8009BAF0`/`0x8009BB00`/`0x8009C600`/
+  `0x8009C610`/`0x8009A340` = low-level card sector read + XOR-checksum retry loop (`0x8009C2B0`: read,
+  verify checksum, retry up to 8x, `FUN_8009a730("card read error")` on failure). Real BIOS/hardware
+  library — memory-card I/O, not game logic.
+- **`0x8009C2B0-0x8009C9xx` — raw `libspu` HARDWARE-REGISTER driver.** `0x8009C620`/`0x8009C784` (called
+  from `native_boot.cpp:244` as `rc1(c, 0x8009c620, 0)`) and `0x80096BF0`/`0x80096E70` poke a struct at
+  `DAT_800ac604` whose field offsets (0xc0-0x1ae, control/status at +0x1aa/+0x1ae) match the real PSX
+  SPU register map (`0x1F801Axx`+ transfer-control/status regs) — this is `Spu_Init`/`SpuMalloc`/
+  `SpuSetTransferMode`, confirmed by the literal timeout strings `"SPU T.O.: %s"` / `"wait reset"` /
+  `"wait dmaf clear W"` / `"wait wrdy H>L"` at `0x8009BB7C`/`0x8009BBEC` call sites. Textbook hardware
+  driver — belongs in `runtime/recomp` platform HLE if ever ported, never `game/`.
+- **`0x8009C8E0-0x8009CC2C` — `libmdec` DCT sync (ALREADY HLE'd).** `0x8009C8E0`=DecDCTReset,
+  `0x8009C9D0`=DecDCTin (arm), `0x8009CA60`=DecDCTout (arm), `0x8009CAEC`/`0x8009CB80`=DecDCTin/outSync
+  (spin-wait on `DAT_800ad098`/`DAT_800ad078` bits — already the `sync_ok` HLE handlers in
+  `sync_overrides.cpp:122-123`), `0x8009CC14`=status read, `0x8009CC2C`=timeout handler (prints
+  `"MDEC in/out sync"` via `0x8009a730`, force-resets the DCT state). Confirms the existing HLE is
+  exactly the right shape — no change needed.
+- **`0x8009CC2C-0x8009D06C` — trailing MDEC/libcd glue**, not individually triaged (small, satellite of
+  the two clusters above).
+
+**Verdict: nothing in `0x80090000-0x8009D06C` should be ported to `game/`.** It is SCEI/PSY-Q SDK
+LIBRARY internals (sequencer + SPU register driver + memory-card + MDEC sync) exactly as
+`sync_overrides.cpp`'s resident-library-window comment already asserts. The existing HLE taps
+(`sync_ok`, the `PSXPORT_DEBUG=seqtick/keyon/septrace/SEQDBG` interp.cpp probes, the `rc0/rc1` boot
+wiring) are the correct treatment. FLAGGING per this session's brief rather than forcing a native
+class over PSX-hardware-register-poking code that has no "observable game result" to reimplement
+against — the SsSeq player's effect (which BGM track plays, at what volume) is already reachable and
+steerable through the existing taps/REPL commands (`repl.cpp:232-237`).
+
+### Finding: `0x8009EB78-0x8009EF18` is NOT REAL CODE — recompiler misdecode, not a function
+
+`func_8009EB78`/`func_8009EBFC`/`func_8009EC80`/`func_8009EF18` (the only `func_8009xxxx` symbols past
+0x8009D06C) decompile to garbage: `/* UNHANDLED op */` comments on nonsense raw words (e.g.
+`raw=0xFFFA0500`, `raw=0xF7F2F2ED`), and `rec_dispatch()` calls to targets like `0x8A0C23E0u` /
+`0x8330AB58u` / `0x8B18A754u` — addresses with top bits set that are **not valid PSX RAM** (2 MB RAM
+tops out at `0x80200000`; even KSEG1 mirrors don't reach `0x8A..`/`0x83..`/`0x8B..` with those low
+bits). Ghidra's own auto-analysis (independently, via its control-flow analyzer) defines **zero
+functions** in `[0x8009E000, 0x8009FFFF]` — it also doesn't believe this is code. Together this means
+the static recompiler's linear/recursive sweep walked into non-code bytes (most likely tail DATA after
+the SPU/libmcrd library — a padding/table region — being misread as instructions) and is chaining
+fabricated "functions" through equally fabricated jump targets. **Not a portable target — this is a
+recompiler-coverage bug, not a game function.** Flag for whoever owns recompiler/dispatch-table
+correctness: `func_8009EB78/EBFC/EC80/EF18` should not be treated as real dispatch entries; if
+anything calls into this range at runtime it's itself a sign of a wrong branch target upstream.
+
+### Refs
+- `scratch/decomp/region_8009.c` — full Ghidra decompile of the resolvable window (209 functions).
+- `runtime/recomp/sync_overrides.cpp`, `runtime/recomp/native_boot.cpp`, `runtime/recomp/interp.cpp`,
+  `runtime/recomp/repl.cpp` — existing HLE/tap wiring for this band (all consistent with the RE above,
+  no changes made).
+- No new `game/` files this session — see verdict above.
