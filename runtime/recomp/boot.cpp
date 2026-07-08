@@ -8,6 +8,7 @@
 #include "sbs.h"           // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
 #include "platform_hle.h"  // class PlatformHle — HW-sync HLE table (VSync/CdSync/MDEC/ChangeThread)
 #include "dualcore.h"      // class DualCore — NATIVE-render vs PSX-render RAM divergence harness
+#include "actor_sm_reward.h"  // class ActorReward — reward/tally window actor SM family
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +72,10 @@ int main(int argc, char** argv) {
                                        // at their guest addresses (EngineOverrides; core B never consults)
   c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach (FUN_80076904/
                                               // 80077B5C/80077C40) at their guest addresses
+  ActorReward::registerOverrides(game);  // reward/tally window actor SM family (also wires the
+                                          // recompiler's PROCESS-GLOBAL g_override[] table, so this one
+                                          // call covers every Core/Game created afterward — incl. SBS's
+                                          // two separately-constructed cores, which never run this main())
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0

@@ -14,6 +14,41 @@
 - **fix / how to actually tell if a resident fn runs:** don't infer from recdep. Use a GUEST-STACK backtrace at a known side effect (`PSXPORT_WWATCH=<addr>` on a memory location the fn writes + `guest_backtrace_to`, i.e. PSXPORT_WWATCH_BT), or instrument the recompiled `func_XXXX` / `gen_func_XXXX` directly, or grep the shards for `func_XXXX(c)` call sites. recdep remains valid for its stated purpose (ranking substrate/overlay dependency to minimize cross-module dispatch) — just never read "0 in recdep" as "dead".
 - **refs:** runtime/recomp/overlay_router.cpp rec_dispatch (only cross-module); generated/shard_3.c:16799 func_8006E3B0(c) direct; docs/findings/camera.md (the false trail this caused).
 
+## EngineOverrides::register_ is BLIND to a direct substrate call — needs shard_set_override too
+- **symptom:** a new native port (ActorReward, FUN_80049A60/9E54/A3D4/B150/B208) registered ONLY via
+  `EngineOverrides::register_` would silently never run when its sole caller is still-substrate
+  (`FUN_8004AAC4`, unowned) — the SBS gate would show a fake 0-diff (both cores keep running the OLD
+  substrate body unchanged), which looks identical to a real verified port. Same shape as the recdep
+  blind-spot above: absence-of-divergence does NOT mean "reached".
+- **status:** documented workaround (this session) — a real fix would make `EngineOverrides::register_`
+  always also wire `shard_set_override`, closing the gap generally; not done here (out of scope for a
+  single-cluster port).
+- **cause:** `EngineOverrides::run()` fires ONLY inside `rec_dispatch(c, addr)` — i.e. only for calls a
+  NATIVE caller makes explicitly through `rec_dispatch`. The recompiler's OWN emitted calls (`func_XXXX
+  (c)` for a direct jal, or the `main_dispatch` switch for an indirect jalr) NEVER go through
+  `rec_dispatch` — they check the recompiler's separate `g_override[]` table (`shard_disp.c`'s
+  `func_XXXX` wrapper: `if (g_override[i]) { g_override[i](c); return; } gen_func_XXXX(c);`).
+  `EngineOverrides::register_` does NOT populate `g_override[]`. So an EngineOverrides-only registration
+  is invisible to a substrate-originated call — only visible to a native caller that already knows to
+  reach the address via `rec_dispatch`. `PlatformHle::register_` (sync_overrides.cpp) already works
+  around this for its own table by calling `extern void shard_set_override(uint32_t, OverrideFn)` after
+  registering — the same fix a new game-logic port needs when its caller is still substrate.
+- **gotcha (core-B safety):** `g_override[]` is a SINGLE PROCESS-GLOBAL array shared by every `Core`
+  (unlike EngineOverrides, which is per-`Game`) — so `shard_set_override` can NOT gate on
+  `psx_fallback` the way `rec_dispatch` does for EngineOverrides. The installed function itself must
+  check `c->game->psx_fallback` and fall back to calling the real `gen_func_XXXX(c)` when true, or SBS
+  core B (the pure substrate reference) would silently start running the native port too — turning the
+  compare into "native vs itself" (a fake 0-diff that proves nothing). See game/object/actor_sm_reward.cpp
+  `ov_sm*` trampolines for the pattern.
+- **fix (this session, local):** register BOTH tables from one `registerOverrides(Game*)`: `EngineOverrides
+  ::register_` (native-caller tracing) + `shard_set_override` with a `psx_fallback`-gated trampoline
+  (actual substrate-call redirection). Called once from `boot.cpp`'s `main()` — sufficient for EVERY
+  Core/Game created afterward (including SBS's two separately-constructed cores, which never run
+  `boot.cpp`'s `main()`) because `g_override[]` is process-global, populated once.
+- **refs:** runtime/recomp/overlay_router.cpp `rec_dispatch` (EngineOverrides gate); generated/shard_disp.c
+  `func_XXXX` wrapper + `shard_set_override`; runtime/recomp/sync_overrides.cpp `PlatformHle::register_`
+  (the pre-existing dual-registration precedent); game/object/actor_sm_reward.{h,cpp}.
+
 ## A debug-server client disconnect kills the whole game (SIGPIPE)
 - **symptom:** the live port dies ("connection refused" on the next dbgclient call) when a debug client is killed / times out mid-reply — looked like a crash on entering a scene, but no abort/diagnostic is printed.
 - **status:** fixed 10a07e0

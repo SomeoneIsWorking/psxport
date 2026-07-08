@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 245 native fns, 210 owned addresses, 244 LIVE / 1 ORPHAN.
+Totals: 255 native fns, 215 owned addresses, 254 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -66,6 +66,11 @@ Totals: 245 native fns, 210 owned addresses, 244 LIVE / 1 ORPHAN.
 | 0x80049968 | LIVE | `Collision::gridSetup` | game/player/collision.cpp:53 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
 | 0x800499E8 | LIVE | `Engine::task0Bootstrap` | game/core/engine.cpp:2887 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/level_load.cpp:94 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
+| 0x80049A60 | LIVE | `ActorReward::smWindowScroll` | game/object/actor_sm_reward.cpp:141 |  | ActorReward::smWindowScroll(c) — FUN_80049A60(obj a0, side a1). Scroll… |
+| 0x80049E54 | LIVE | `ActorReward::smTallyTick` | game/object/actor_sm_reward.cpp:278 |  | ActorReward::smTallyTick(c) — FUN_80049E54(obj a0, step a1) -> v0. Tic… |
+| 0x8004A3D4 | LIVE | `ActorReward::smEventDispatch` | game/object/actor_sm_reward.cpp:329 |  | ActorReward::smEventDispatch(c) — FUN_8004A3D4(obj a0) -> v0. Mechanic… |
+| 0x8004B150 | LIVE | `ActorReward::smBlinkA` | game/object/actor_sm_reward.cpp:96 |  | ActorReward::smBlinkA(c) — FUN_8004B150(obj a0, side a1). One-shot ini… |
+| 0x8004B208 | LIVE | `ActorReward::smBlinkB` | game/object/actor_sm_reward.cpp:116 |  | ActorReward::smBlinkB(c) — FUN_8004B208(obj a0, side a1). Same shape a… |
 | 0x8004B3F4 | LIVE | `Spawn::dropScoreGem` | game/world/spawn.cpp:441 | 0x80071B44 | SCORE-GEM DROP wrapper. Every callsite passes one of the eight fixed A… |
 | 0x8004BD64 | LIVE | `GraphicsBind::posComposeBody` | game/world/graphics_bind.cpp:158 |  | per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x… |
 | 0x8004D338 | LIVE | `Inventory::addNative` | game/items/inventory.cpp:71 |  | PC-native reimplementation of FUN_8004D338 (inventory_add). Writes are… |

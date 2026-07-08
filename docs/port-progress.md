@@ -1725,6 +1725,21 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    eng_init_subsystems, boot A/B 0-diff); NEXT = descend into its 4 callees (8007b328/80088b00/80086620/87a60).
    `FUN_80075130` font/text init — ✅ DONE (ov_font_init, engine_font.cpp; 3 engine callees + memsets owned,
    libgpu callees kept dispatched in-context; boot run-2 0-diff vs initref.bin). See §A.
+4. ✅ **DONE — the reward/tally-window actor SM cluster owned native**
+   (`ActorReward`, game/object/actor_sm_reward.{h,cpp}): `FUN_80049A60`/`FUN_80049E54`/`FUN_8004A3D4`/
+   `FUN_8004B150`/`FUN_8004B208` — 5 contiguous per-object SM steps (scroll/fade sub-SM, a numeric tally-
+   counter tick, a large item/announcer EVENT dispatcher, and two blink-gate inits). Sole caller is the
+   still-substrate `FUN_8004AAC4` actor "process" dispatcher (out of scope; not one of these 5). Wired via
+   BOTH `shard_set_override` (redirects the substrate's DIRECT `func_<addr>(c)` call — the mechanism that
+   actually matters here, since EngineOverrides alone is never consulted by a substrate-originated call)
+   and `EngineOverrides::register_` (for native-code callers reaching these via `rec_dispatch` + tracing).
+   Every `ov_*` trampoline gates on `c->game->psx_fallback` so SBS core B still runs the exact recompiled
+   body — required because `g_override[]` is a single PROCESS-GLOBAL table shared by every Core, unlike
+   EngineOverrides which is per-Game. Gate: `PSXPORT_SBS_MODE=full` autonav, 8000+ frames, 0 `sbs-div`,
+   0 VIOLATION — **but 0 dispatch hits observed** (verified via a temporary stderr counter, since removed):
+   autonav never reaches whatever NPC/scene owns this actor type, so the 0-diff is a "doesn't break
+   anything else" result, NOT an empirical confirm of the port's correctness. Flagged as limited coverage;
+   re-verify with the counter re-added if/when a scene reaching this actor is identified.
 
 # OPEN / BLOCKED (not on the critical path)
 - **ov_game_s4c verification** needs an in-game AREA transition (sm[0x4a]==2). Free-roam IS reachable headless

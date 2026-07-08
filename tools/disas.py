@@ -10,6 +10,10 @@ Usage:
   tools/disas.py <addr> [count]        disassemble from <addr> (hex) until `jr ra` (or count instrs)
   tools/disas.py <addr> --mem          only the loads/stores, with resolved absolute target + width
   tools/disas.py <addr> --raw          no address resolution / annotation
+  tools/disas.py <addr> --all [count]  do NOT stop at the first `jr` — walk `count` instrs regardless.
+                                        Needed for switch-heavy functions where an early jump-table
+                                        `jr` (or a rarely-taken branch's early return) would otherwise
+                                        truncate the trace long before the real function end.
   tools/disas.py --exe <file> ...      use a different PSEXE (default scratch/bin/tomba2/MAIN.EXE)
 
 Resolution is intraprocedural and immediate-only (tracks regs built by lui/ori/addiu/lw-of-const-base);
@@ -89,18 +93,19 @@ def track(w, regval):
 def main():
     args = sys.argv[1:]
     exe_path = os.path.join(os.path.dirname(__file__), "..", "scratch", "bin", "tomba2", "MAIN.EXE")
-    mem_only = raw = ram = False; pos = []
+    mem_only = raw = ram = follow_all = False; pos = []
     i = 0
     while i < len(args):
         if args[i] == "--exe": exe_path = args[i+1]; i += 2; continue
         if args[i] == "--ram": exe_path = args[i+1]; ram = True; i += 2; continue
         if args[i] == "--mem": mem_only = True; i += 1; continue
         if args[i] == "--raw": raw = True; i += 1; continue
+        if args[i] == "--all": follow_all = True; i += 1; continue
         pos.append(args[i]); i += 1
     if not pos:
         print(__doc__); return 1
     start = int(pos[0], 16)
-    count = int(pos[1]) if len(pos) > 1 else 4096
+    count = int(pos[1]) if len(pos) > 1 else (65536 if follow_all else 4096)
     exe = psexe.load_ram(exe_path) if ram else psexe.load(exe_path)
     regval = [None] * 32; regval[0] = 0
     a = start
@@ -116,7 +121,7 @@ def main():
         elif width is not None:
             print(f"  {a:08x}: {text:24s}{ann}")
         track(w, regval)
-        if (w >> 26) == 0 and (w & 0x3f) == 0x08:   # jr (usually jr ra) -> function end after delay slot
+        if not follow_all and (w >> 26) == 0 and (w & 0x3f) == 0x08:   # jr (usually jr ra) -> function end after delay slot
             d = exe.word(a + 4)
             if not mem_only:
                 td, _, _ = fmt(d, a + 4, regval)

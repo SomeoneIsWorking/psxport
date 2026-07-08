@@ -113,6 +113,7 @@ set(PORT_SRC
   game/render/scene_build.cpp
   game/render/mesh_draw.cpp
   game/object/actor_sm_24448.cpp
+  game/object/actor_sm_reward.cpp
   game/ai/beh_scene_ui_trigger.cpp
   game/ai/beh_typed_init_scene_trigger.cpp
   game/ai/beh_pickup_collect_trigger.cpp

@@ -1,0 +1,44 @@
+// game/object/actor_sm_reward.h — PC-native "reward/tally window" actor SM family.
+//
+// FUN_80049A60 / FUN_80049E54 / FUN_8004A3D4 / FUN_8004B150 / FUN_8004B208 are five contiguous
+// per-object state-machine STEPS (all take the generic object node in a0, a control/side byte in a1)
+// called by the still-substrate FUN_8004AAC4 (an actor "process" dispatcher, itself unowned — outside
+// this cluster's scope). Behavior observed from the RE (see actor_sm_reward.cpp for the full trace):
+//   - FUN_80049A60 — a scroll/fade sub-SM: states 0 (init color+scroll-rate), 1 (scroll toward 0,
+//     probing the grid to detect ground), 2 (post-scroll hold / re-probe / camera-lock branch),
+//     3 (re-trigger scroll-out), 6 (despawn check via the cull wrapper). Writes a 24.8 fixed-point
+//     accumulator (+0x30) and a blink bit (+0xd) shared with the sibling functions below.
+//   - FUN_80049E54 — a numeric TALLY counter: ticks a displayed value (0x800E7FEE) toward a target by
+//     a step, clamped to a cap (0x800BF87D), with a short "settle" countdown (+0x40) before reporting
+//     done (v0==1).
+//   - FUN_8004A3D4 — an EVENT dispatcher: given an event id (obj+0x68), gives items / sets inventory
+//     flags / queues announcer cues, keyed by a large id table. Fully mechanical translation of the
+//     RE'd switch; the id constants are NOT independently understood (only their GUEST EFFECTS, which
+//     is what byte-exactness requires) — do not read named meaning into them.
+//   - FUN_8004B150 / FUN_8004B208 — trivial init-once + shared blink-bit gates (8004B208 additionally
+//     kicks a directional grid snap via FUN_80041194 on first entry).
+//
+// WIRING: the sole caller (FUN_8004AAC4) is SUBSTRATE, which calls each of these by a DIRECT C call
+// (`func_<addr>(c)`, emitted by the recompiler) — that path checks the recompiler's OWN g_override[]
+// table, NOT EngineOverrides (EngineOverrides.run() only fires inside rec_dispatch(), which substrate
+// code never calls for a direct jal target). So registerOverrides() below wires BOTH tables: shard_set_
+// override so the substrate's direct call redirects here, and EngineOverrides so any native caller
+// reaching these via rec_dispatch(c, addr) also lands here and gets traced by the `dispatch` channel.
+// (This dual-registration need is a latent gap in EngineOverrides — see docs/findings/engine-overrides.md.)
+#pragma once
+struct Core;
+class  Game;
+
+class ActorReward {
+public:
+  static void smWindowScroll(Core* c);   // FUN_80049A60(obj a0, side a1)
+  static void smTallyTick(Core* c);      // FUN_80049E54(obj a0, step a1) -> v0
+  static void smEventDispatch(Core* c);  // FUN_8004A3D4(obj a0) -> v0
+  static void smBlinkA(Core* c);         // FUN_8004B150(obj a0, side a1)
+  static void smBlinkB(Core* c);         // FUN_8004B208(obj a0, side a1)
+
+  // Wire all five guest addresses into both the recompiler's g_override[] table (so the substrate's
+  // direct func_<addr>(c) calls from FUN_8004AAC4 redirect here) and `game`'s EngineOverrides (so a
+  // native caller reaching these via rec_dispatch also lands here and gets `dispatch`-channel traced).
+  static void registerOverrides(Game* game);
+};
