@@ -496,6 +496,30 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
       pass. So the entire top-down chain `Engine::fieldRun state-0 → Placement::placeAreaObjects →
       each placement record's node[+0x1c] handler` is native for seaside. Ghidra decomp
       scratch/decomp/beh_8013c1dc.c.
+    - ✅ BEH_SEASIDE_PROX_SUBSTATE FAMILY — the 5 A00-overlay sub-behavior leaves this handler
+      drives directly are now ALSO native (2026-07-08): `FUN_8013B70C` (drawInit — event-slot
+      proximity/commit check), `FUN_8013B868` (subA — anim/SFX arm sequence), `FUN_8013BAB0`
+      (subB — camera-nudge/facing machine, nudges the shared camera-G position 0x800E7EAC/B0/B4),
+      `FUN_8013BCC8` (subC — cutscene data blast + collectible-style item spawn), `FUN_8013C0BC`
+      (modeArm — single-slot sprite-frame cycler via Asset::uploadImage). All ported 1:1 in
+      `game/ai/beh_seaside_prox_substate.cpp` from Ghidra decomp
+      (scratch/decomp/beh_seaside_cluster.c, scratch/decomp/beh_seaside_helpers.c) cross-checked
+      against a capstone disas of a fresh seaside RAM dump for every branch + address computation,
+      including exact guest-stack-frame depth for the two functions that stage a local struct
+      (`modeArm`'s and `subC`'s own `-0x30` prologues, folded on top of the top-level handler's own
+      `-0x20` — now applied via a `beh_seaside_prox_substate` wrapper). Their own un-owned callees
+      (FUN_8006E1C0/E1E4 sound-loop start/stop, FUN_8004766C/80048750 tile-move+anim-link,
+      FUN_8013B534 sub-object init, FUN_80027144 GPU packet emit, FUN_8009A450 PRNG) remain
+      rec_dispatch leaves — each its own future frontier item, shared by many other still-substrate
+      callers. NOTE: this actor is the SINGLE deep-underwater seaside placement (record 61,
+      world pos 16606,-4980,11200) — headless autonav does not reach it, so the SBS gate ran
+      trivially zero-diff (10800+ frames, no [sbs-div]/VIOLATION); correctness rests on the 1:1
+      RE + disas cross-check, not live exercise. `codemap.py` does not index these (free functions
+      in an anonymous namespace, matching the sibling beh_area_transition_machine.cpp /
+      beh_pickup_collect_trigger.cpp convention for behavior-handler internals — a known gap:
+      codemap only tracks Class::method / ov_/native_/eng_-prefixed natives, not BehaviorDispatch
+      leaves; even the already-owned top-level `beh_area_transition_machine` at 0x80127798 shows
+      "NO native owner found").
     - ✅ THIS PASS — 5 previously-RE'd but unported leaves owned as native:
       * `Pool::clearBf548Region` (FUN_8004FB20) — 700-byte zero-init at 0x800BF548 (per-area
         scene control block). Wired into `Pool::init`.
