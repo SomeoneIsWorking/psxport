@@ -1930,6 +1930,15 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    re-verify with the counter re-added if/when a scene reaching this actor is identified.
 
 # OPEN / BLOCKED (not on the critical path)
+- **Band 0x800A0000-0x800BFFFF has no ownable dispatch-target code — flagged for reassignment (2026-07-08).**
+  Assigned as an "audio/SFX/sequencer tables + mid-engine leaves" ownership band; RE'd via static census
+  (`generated/rec_decls.h`: only 7 declared funcs in-range, all recompiler garbage/misdecoded-data with
+  zero callers), live `recdep`/`recdep-all` (zero hits across walk/attack/100k+ frame sessions), and Ghidra
+  headless auto-analysis on a free-roam RAM dump (0 functions discovered in the whole range). The band is
+  the rodata/data tail of the loaded EXE image (`text 0xAE800` @ `0x80010000` → end `0x800BE800`); its
+  content (voice-mixer struct, fade/pause state bytes, libcd dir-cache) is DATA already read by code that
+  lives — and is owned — in OTHER bands. See `docs/findings/audio.md` "Ownership sweep of
+  0x800A0000-0x800BFFFF…" for the full evidence. No code ported from this assignment.
 - **ov_game_s4c verification** needs an in-game AREA transition (sm[0x4a]==2). Free-roam IS reachable headless
   (AUTO_SKIP=500 + AUTO_WALK) but the seaside exit isn't a plain walk/jump (hut door blocked by a barrel) —
   needs visual steering or RE of the exit trigger in GAME.BIN handler `0x801088d8`. (NB: there is NO pause menu

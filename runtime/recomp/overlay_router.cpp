@@ -153,8 +153,11 @@ extern "C" void recdep_dump() {
   std::vector<std::pair<uint64_t,uint32_t>> v;
   for (auto& kv : s_recdepCore->idiag.recdep) v.push_back({kv.second, kv.first});
   std::sort(v.rbegin(), v.rend());
+  // PSXPORT_DEBUG=recdep-all dumps the FULL histogram instead of the top-40 — needed to see rare
+  // (low-call-count) dispatch targets in a specific address band that the top-40 truncation hides.
+  size_t cap = cfg_dbg("recdep-all") ? v.size() : 40;
   fprintf(stderr, "[recdep] top substrate dispatch targets (addr: calls), %zu unique:\n", v.size());
-  for (size_t i = 0; i < v.size() && i < 40; i++)
+  for (size_t i = 0; i < v.size() && i < cap; i++)
     fprintf(stderr, "  0x%08X : %llu\n", v[i].second, (unsigned long long)v[i].first);
 }
 void rec_dispatch(Core* c, uint32_t addr) {
