@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 515 native fns, 438 owned addresses, 496 LIVE / 19 ORPHAN.
+Totals: 518 native fns, 441 owned addresses, 499 LIVE / 19 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -115,11 +115,11 @@ Totals: 515 native fns, 438 owned addresses, 496 LIVE / 19 ORPHAN.
 | 0x80049968 | LIVE | `Collision::gridSetup` | game/player/collision.cpp:53 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
 | 0x800499E8 | LIVE | `Engine::task0Bootstrap` | game/core/engine.cpp:2891 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/level_load.cpp:94 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
-| 0x80049A60 | LIVE | `ActorReward::smWindowScroll` | game/object/actor_sm_reward.cpp:141 |  | ActorReward::smWindowScroll(c) — FUN_80049A60(obj a0, side a1). Scroll… |
-| 0x80049E54 | LIVE | `ActorReward::smTallyTick` | game/object/actor_sm_reward.cpp:278 |  | ActorReward::smTallyTick(c) — FUN_80049E54(obj a0, step a1) -> v0. Tic… |
-| 0x8004A3D4 | LIVE | `ActorReward::smEventDispatch` | game/object/actor_sm_reward.cpp:329 |  | ActorReward::smEventDispatch(c) — FUN_8004A3D4(obj a0) -> v0. Mechanic… |
-| 0x8004B150 | LIVE | `ActorReward::smBlinkA` | game/object/actor_sm_reward.cpp:96 |  | ActorReward::smBlinkA(c) — FUN_8004B150(obj a0, side a1). One-shot ini… |
-| 0x8004B208 | LIVE | `ActorReward::smBlinkB` | game/object/actor_sm_reward.cpp:116 |  | ActorReward::smBlinkB(c) — FUN_8004B208(obj a0, side a1). Same shape a… |
+| 0x80049A60 | LIVE | `ActorReward::smWindowScroll` | game/object/actor_sm_reward.cpp:158 |  | ActorReward::smWindowScroll(c) — FUN_80049A60(obj a0, side a1). Scroll… |
+| 0x80049E54 | LIVE | `ActorReward::smTallyTick` | game/object/actor_sm_reward.cpp:295 |  | ActorReward::smTallyTick(c) — FUN_80049E54(obj a0, step a1) -> v0. Tic… |
+| 0x8004A3D4 | LIVE | `ActorReward::smEventDispatch` | game/object/actor_sm_reward.cpp:346 |  | ActorReward::smEventDispatch(c) — FUN_8004A3D4(obj a0) -> v0. Mechanic… |
+| 0x8004B150 | LIVE | `ActorReward::smBlinkA` | game/object/actor_sm_reward.cpp:113 |  | ActorReward::smBlinkA(c) — FUN_8004B150(obj a0, side a1). One-shot ini… |
+| 0x8004B208 | LIVE | `ActorReward::smBlinkB` | game/object/actor_sm_reward.cpp:133 |  | ActorReward::smBlinkB(c) — FUN_8004B208(obj a0, side a1). Same shape a… |
 | 0x8004B3F4 | LIVE | `Spawn::dropScoreGem` | game/world/spawn.cpp:508 | 0x80071B44 | SCORE-GEM DROP wrapper. Every callsite passes one of the eight fixed A… |
 | 0x8004BD64 | LIVE | `GraphicsBind::posComposeBody` | game/world/graphics_bind.cpp:158 |  | per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x… |
 | 0x8004BD64 | LIVE | `GraphicsBind::posCompose` | game/world/graphics_bind.cpp:186 |  |  |
@@ -229,6 +229,9 @@ Totals: 515 native fns, 438 owned addresses, 496 LIVE / 19 ORPHAN.
 | 0x8006F02C | LIVE | `Bit::setFE34` | game/math/mathlib.cpp:85 |  | u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction… |
 | 0x8006F04C | LIVE | `Bit::processLinkRequest` | game/math/mathlib.cpp:108 |  | child-link REQUEST-mailbox arbiter. disas 0x8006F04C..0x8006F0E0: |
 | 0x8006F2D0 | LIVE | `beh_pad_child_linker` | game/ai/beh_pad_child_linker.cpp:52 | 0x8004766C 0x80047B5C 0x8006F138 |  |
+| 0x80070018 | LIVE | `ActorReward::update` | game/object/actor_sm_reward.cpp:529 |  |  |
+| 0x800702C0 | LIVE | `ActorReward::resolvePosition` | game/object/actor_sm_reward.cpp:640 |  |  |
+| 0x80070650 | LIVE | `ActorReward::approachTargetX` | game/object/actor_sm_reward.cpp:750 |  | ActorReward::approachTargetX(c) — FUN_80070650(obj a0). Trivial ease: … |
 | 0x80071A3C | LIVE | `beh_area_event_dispatch` | game/ai/beh_area_event_dispatch.cpp:40 | 0x800716B4 0x80071768 0x801178E4 0x8011B79C |  |
 | 0x80072A78 | LIVE | `Placement::placeAreaObjects` | game/world/placement.cpp:102 | 0x80072A78 |  |
 | 0x80072DDC | LIVE | `Placement::spawnWithParent` | game/world/placement.cpp:144 | 0x80072DDC |  |

@@ -37,6 +37,17 @@ public:
   static void smBlinkA(Core* c);         // FUN_8004B150(obj a0, side a1)
   static void smBlinkB(Core* c);         // FUN_8004B208(obj a0, side a1)
 
+  // --- WIDE-RE DRAFT (2026-07-08, region 0x80070000-0x8007FFFF) --- UNWIRED, UNVERIFIED. ---
+  // FUN_80070018 is the reward/score-gem actor's TOP-LEVEL per-frame update: it drives the same
+  // obj+4 state machine that ends up calling the FIVE methods above (smTallyTick/smEventDispatch/
+  // Spawn::dropScoreGem), plus the position solver/approach helpers below and either
+  // GraphicsBind::renderUpdateBody or the Spawn/Trig cull wrapper (FN_77B5C) depending on obj+0x5f
+  // bit 0x80. Not independently wired: no override registration, no SBS run. See actor_sm_reward.cpp
+  // for the field map and docs/engine_re.md for the region survey.
+  static void update(Core* c);           // FUN_80070018(obj a0)
+  static void resolvePosition(Core* c);  // FUN_800702C0(obj a0) -- position-source switch (obj+0x5e)
+  static void approachTargetX(Core* c);  // FUN_80070650(obj a0) -- ease obj+0x2e toward obj+0x60
+
   // Wire all five guest addresses into both the recompiler's g_override[] table (so the substrate's
   // direct func_<addr>(c) calls from FUN_8004AAC4 redirect here) and `game`'s EngineOverrides (so a
   // native caller reaching these via rec_dispatch also lands here and gets `dispatch`-channel traced).

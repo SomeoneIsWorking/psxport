@@ -54,6 +54,23 @@ constexpr uint32_t FN_115AEC = 0x80115AECu;  // leaf (not independently RE'd)
 constexpr uint32_t FN_114F24 = 0x80114F24u;  // leaf (not independently RE'd)
 constexpr uint32_t FN_71B44  = 0x80071B44u;  // leaf (not independently RE'd)
 
+// --- WIDE-RE DRAFT callees (region 0x80070000-0x8007FFFF survey, 2026-07-08) ---
+constexpr uint32_t FN_A624  = 0x8007A624u;   // leaf (not independently RE'd) -- "despawn/finalize" (state 3)
+constexpr uint32_t FN_B3F4  = 0x8004B3F4u;   // Spawn::dropScoreGem (LIVE) -- fixed AP-gem values 100/200/500/1000/100000
+constexpr uint32_t FN_A118  = 0x8004A118u;   // leaf (not independently RE'd; depended-on by beh_visibility_gate_dispatch)
+constexpr uint32_t FN_A2A0  = 0x8004A2A0u;   // leaf (not independently RE'd; depended-on by beh_visibility_gate_dispatch)
+constexpr uint32_t FN_B428  = 0x8004B428u;   // leaf (not independently RE'd; depended-on by beh_visibility_gate_dispatch)
+constexpr uint32_t FN_517F8 = 0x800517F8u;   // GraphicsBind::renderUpdateBody (LIVE)
+constexpr uint32_t FN_77B5C = 0x80077B5Cu;   // Animation::advanceLinkChain (LIVE)
+
+// Globals used by ActorReward::resolvePosition (FUN_800702C0) -- two pointer-globals to the
+// scene's tracked entities (already named G_800E7F50/G_800E7F5C elsewhere, e.g.
+// game/ai/beh_a08_scene_actor.cpp, game/ai/beh_typed_anim_spawn.cpp -- consistently DEREFERENCED
+// pointers, read via a base-register load at 0x800E7E80+0xD0/0xDC in the raw recompiled code).
+constexpr uint32_t G_800E7F50 = 0x800E7F50u;
+constexpr uint32_t G_800E7F5C = 0x800E7F5Cu;
+constexpr uint32_t G_800E7ED6 = 0x800E7ED6u;  // i16 angle override used by resolvePosition case 0
+
 // Globals (widths confirmed via tools/disas.py --mem --all + Ghidra's data-type DB; see file header).
 constexpr uint32_t SC_1F80017C = 0x1F80017Cu; // u16 frame-parity/vblank tick (blink source)
 constexpr uint32_t SC_1F8001A6 = 0x1F8001A6u; // u16 grid-probe result tag (floor bits)
@@ -476,6 +493,271 @@ void ActorReward::smEventDispatch(Core* c) {
   }
   c->r[R_A0] = 0x28; c->r[R_A1] = 0; c->r[R_A2] = 0; rec_dispatch(c, FN_74590);
   c->r[R_V0] = 1;
+}
+
+// ==================================================================================================
+// WIDE-RE DRAFT (2026-07-08, region 0x80070000-0x8007FFFF). UNWIRED, UNVERIFIED -- no override
+// registration, no SBS run (see registerOverrides() below: these three are NOT in it). RE source:
+// Ghidra headless decompile (scratch/ghidra/main_ram, tools/decomp.sh) cross-checked against the
+// raw recompiled ground truth (generated/shard_0.c gen_func_80070018, shard_1.c gen_func_800702C0,
+// shard_2.c gen_func_80070650) for exact field widths, arithmetic order, and (for update/
+// resolvePosition) the guest-stack frame shape.
+// ==================================================================================================
+
+// ActorReward::update(c) — FUN_80070018(obj a0). The reward/score-gem actor's TOP-LEVEL per-frame
+// state machine (obj+4): state 0 -> 1 (arm); state 1 -> position solve (resolvePosition/
+// approachTargetX per obj+5 sub-mode) then advance obj+1 from the owner's script byte (owner =
+// obj+0x10), holding at state 2 if obj+0xbe is set and the global camera-lock gate (G_BF816) is
+// clear; state 2 -> either a countdown (obj+0x74) that re-advances obj+1 from the owner, or (once
+// the countdown hits 0) a fixed-value gem dispatch keyed by obj+3 (smTallyTick x1/x2, dropScoreGem
+// x100/200/500/1000/100000, or the three unnamed FN_A118/A2A0/B428 leaves) gated by obj+0x5f bits
+// 0/1, else smEventDispatch; state 3 -> the FN_A624 finalize/despawn leaf. Every state that keeps
+// running ends by branching obj+0x5f bit 0x80 into GraphicsBind::renderUpdateBody (bit clear) or
+// Animation::advanceLinkChain (bit set).
+// Guest frame: addiu sp,-0x20; spills s0(obj)=sp+16, ra=sp+24, s1(owner)=sp+20 (matches
+// gen_func_80070018 exactly -- see ObjectTable::dispatchFaithful for the same mirror shape).
+// ----------------------------------------------------------------------------------------------
+namespace {
+inline void updateEpilogue(Core* c) {
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = c->r[29] + 32;
+}
+}  // namespace
+
+void ActorReward::update(Core* c) {
+  uint32_t ra = c->r[31], sp = c->r[29];
+  uint32_t s0 = c->r[16], s1 = c->r[17];
+
+  c->r[29] = sp - 32;
+  c->mem_w32(c->r[29] + 16, s0);           // sw s0,0x10(sp) -- LIVE incoming s0
+  c->r[16] = c->r[R_A0];                   // s0 = obj
+  c->mem_w32(c->r[29] + 24, ra);           // sw ra,0x18(sp)
+  c->mem_w32(c->r[29] + 20, s1);           // sw s1,0x14(sp) -- LIVE incoming s1
+
+  const uint32_t obj = c->r[16];
+  uint8_t state = c->mem_r8(obj + 4);
+  uint32_t flags5f = 0;
+  bool haveFlags = false;
+
+  if (state == 1) {
+    if (c->mem_r8s(obj + 0xbe) != 0 && c->mem_r8(G_BF816) == 0) {
+      c->mem_w8(obj + 4, 2);
+      updateEpilogue(c);
+      return;
+    }
+    c->r[17] = c->mem_r32(obj + 0x10);     // s1 = owner
+    if (c->mem_r8(obj + 5) == 0) {
+      c->r[R_A0] = obj; ActorReward::resolvePosition(c);
+    } else if (c->mem_r8(obj + 5) == 1) {
+      c->r[R_A0] = obj; ActorReward::approachTargetX(c);
+    }
+    int8_t next = (int8_t)c->mem_r8(c->r[17] + 1);
+    c->mem_w8(obj + 1, (uint8_t)next);
+    if (next == 0) { updateEpilogue(c); return; }
+    flags5f = c->mem_r8(obj + 0x5f);
+    haveFlags = true;
+  } else {
+    if (state < 2) {
+      if (state != 0) { updateEpilogue(c); return; }
+      c->mem_w8(obj + 4, 1);
+      updateEpilogue(c);
+      return;
+    }
+    if (state != 2) {
+      if (state != 3) { updateEpilogue(c); return; }
+      c->r[R_A0] = obj; rec_dispatch(c, FN_A624);
+      updateEpilogue(c);
+      return;
+    }
+    if (c->mem_r16s(obj + 0x74) == 0) {
+      if ((c->mem_r8(obj + 0x5f) & 1) != 0) {
+        if ((c->mem_r8(obj + 0x5f) & 2) != 0) {
+          uint32_t result = 0;
+          switch (c->mem_r8(obj + 3)) {
+            case 0:    c->r[R_A0] = obj; c->r[R_A1] = 1;      ActorReward::smTallyTick(c); result = c->r[R_V0]; break;
+            case 1:    c->r[R_A0] = obj; c->r[R_A1] = 2;      ActorReward::smTallyTick(c); result = c->r[R_V0]; break;
+            case 4:    c->r[R_A0] = obj; c->r[R_A1] = 100;    rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 5:    c->r[R_A0] = obj; c->r[R_A1] = 200;    rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 6:    c->r[R_A0] = obj; c->r[R_A1] = 500;    rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 7:    c->r[R_A0] = obj; c->r[R_A1] = 1000;   rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 0xb:  c->r[R_A0] = obj; c->r[R_A1] = 100000; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 0xf:  c->r[R_A0] = obj;                      rec_dispatch(c, FN_A118);  result = c->r[R_V0]; break;
+            case 0x10: c->r[R_A0] = obj;                      rec_dispatch(c, FN_A2A0);  result = c->r[R_V0]; break;
+            case 0x11: c->r[R_A0] = obj;                      rec_dispatch(c, FN_B428);  result = c->r[R_V0]; break;
+            default: break;
+          }
+          if (result == 0) { updateEpilogue(c); return; }
+          c->mem_w8(obj + 4, 3);
+          updateEpilogue(c);
+          return;
+        }
+        c->r[R_A0] = obj; ActorReward::smEventDispatch(c);   // same class, direct call
+        if (c->r[R_V0] == 0) { updateEpilogue(c); return; }
+      }
+      c->mem_w8(obj + 4, 3);
+      updateEpilogue(c);
+      return;
+    }
+    c->mem_w16(obj + 0x74, (uint16_t)(c->mem_r16s(obj + 0x74) - 1));
+    c->r[17] = c->mem_r32(obj + 0x10);     // s1 = owner
+    int8_t next = (int8_t)c->mem_r8(c->r[17] + 1);
+    c->mem_w8(obj + 1, (uint8_t)next);
+    if (next == 0) { updateEpilogue(c); return; }
+    flags5f = c->mem_r8(obj + 0x5f);
+    haveFlags = true;
+  }
+
+  (void)haveFlags;  // always true on every fallthrough to here (asserted by RE, kept for clarity)
+  if ((flags5f & 0x80) == 0) {
+    c->r[R_A0] = obj; rec_dispatch(c, FN_517F8);  // GraphicsBind::renderUpdateBody
+  } else {
+    c->r[R_A0] = obj; rec_dispatch(c, FN_77B5C);  // Animation::advanceLinkChain
+  }
+  updateEpilogue(c);
+}
+
+// ActorReward::resolvePosition(c) — FUN_800702C0(obj a0). Solves obj+0x2e/0x32/0x36 (x/y/z) from
+// one of 8 position sources selected by obj+0x5e (the owner's various linked-entity slots +0xc0/
+// 0xd0/0xdc/0xe4, or the midpoint of the two scene-tracked entities G_800E7F50/G_800E7F5C), each
+// case optionally overriding the trailing radial-offset angle/radius (obj+0x62 amplitude,
+// owner+0x56 angle by default) applied via rcos/rsin at the tail (identical to the tail every case
+// falls into). Guest frame: addiu sp,-0x28; spills s2(obj)=sp+24, ra=sp+32, s3(radius applied
+// count)=sp+28, s1(angle)=sp+20, s0(owner)=sp+16 (matches gen_func_800702C0 exactly).
+// ----------------------------------------------------------------------------------------------
+namespace {
+inline void resolvePositionEpilogue(Core* c) {
+  c->r[31] = c->mem_r32(c->r[29] + 32);
+  c->r[19] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = c->r[29] + 40;
+}
+}  // namespace
+
+void ActorReward::resolvePosition(Core* c) {
+  uint32_t ra = c->r[31], sp = c->r[29];
+  uint32_t s0 = c->r[16], s1 = c->r[17], s2 = c->r[18], s3 = c->r[19];
+
+  c->r[29] = sp - 40;
+  c->mem_w32(c->r[29] + 24, s2);
+  c->r[18] = c->r[R_A0];                  // s2 = obj
+  c->mem_w32(c->r[29] + 32, ra);
+  c->mem_w32(c->r[29] + 28, s3);
+  c->mem_w32(c->r[29] + 20, s1);
+  c->mem_w32(c->r[29] + 16, s0);
+
+  const uint32_t obj = c->r[18];
+  int32_t  radius = c->mem_r16s(obj + 0x62);
+  uint32_t owner  = c->mem_r32(obj + 0x10);
+  c->r[16] = owner;
+  int32_t angle = c->mem_r16s(owner + 0x56);
+
+  uint8_t sel = c->mem_r8(obj + 0x5e);
+  if (sel < 8) {
+    switch (sel) {
+      case 0: {
+        uint32_t entA = c->mem_r32(G_800E7F50), entB = c->mem_r32(G_800E7F5C);  // pointer globals, deref
+        int32_t sumX = (int32_t)c->mem_r32(entA + 0x2c) + (int32_t)c->mem_r32(entB + 0x2c);
+        c->mem_w16(obj + 0x2e, (uint16_t)(sumX / 2));
+        int32_t sumY = (int32_t)c->mem_r32(entA + 0x30) + (int32_t)c->mem_r32(entB + 0x30);
+        c->mem_w16(obj + 0x32, (uint16_t)((int32_t)(sumY / 2) + c->mem_r16s(obj + 0x60)));
+        int32_t sumZ = (int32_t)c->mem_r32(entA + 0x34) + (int32_t)c->mem_r32(entB + 0x34);
+        c->mem_w16(obj + 0x36, (uint16_t)(sumZ / 2));
+        radius = 0x20;
+        angle  = c->mem_r16s(G_800E7ED6);
+        break;
+      }
+      case 1: {
+        uint32_t e = c->mem_r32(owner + 0xdc);
+        c->mem_w16(obj + 0x2e, c->mem_r16(e + 0x2c));
+        c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(e + 0x30) + c->mem_r16s(obj + 0x60)));
+        c->mem_w16(obj + 0x36, c->mem_r16(e + 0x34));
+        break;
+      }
+      case 2: {
+        uint32_t eA = c->mem_r32(owner + 0xd0), eB = c->mem_r32(owner + 0xdc);
+        int32_t sumX = (int32_t)c->mem_r32(eA + 0x2c) + (int32_t)c->mem_r32(eB + 0x2c);
+        c->mem_w16(obj + 0x2e, (uint16_t)(sumX / 2));
+        int32_t sumY = (int32_t)c->mem_r32(eA + 0x30) + (int32_t)c->mem_r32(eB + 0x30);
+        c->mem_w16(obj + 0x32, (uint16_t)((int32_t)(sumY / 2) + c->mem_r16s(obj + 0x60)));
+        int32_t sumZ = (int32_t)c->mem_r32(eA + 0x34) + (int32_t)c->mem_r32(eB + 0x34);
+        c->mem_w16(obj + 0x36, (uint16_t)(sumZ / 2));
+        break;
+      }
+      case 3: {
+        // Raw ground truth uses a ROUND-TOWARD-ZERO shift here (`(v - (v>>31)) >> 13`), unlike the
+        // shared tail's plain arithmetic `>>12` -- preserved exactly, do not simplify to `>>13`.
+        auto roundShiftR13 = [](int32_t v) -> int32_t { return (v - (v >> 31)) >> 13; };
+        uint32_t e = c->mem_r32(owner + 0xc0);
+        int32_t ownerAngle = c->mem_r16s(owner + 0x56);
+        int32_t ownerRadius = c->mem_r16s(owner + 0x80);
+        int32_t px = c->trig.rcos(ownerAngle) * ownerRadius;
+        c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(e + 0x2c) - (int16_t)roundShiftR13(px)));
+        c->mem_w16(obj + 0x32, c->mem_r16(e + 0x30));
+        int32_t pz = c->trig.rsin(ownerAngle) * ownerRadius;
+        c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(obj + 0x32) + c->mem_r16s(obj + 0x60)));
+        c->mem_w16(obj + 0x36, (uint16_t)(c->mem_r16s(e + 0x34) + (int16_t)roundShiftR13(pz)));
+        break;
+      }
+      case 4: {
+        uint32_t e = c->mem_r32(owner + 0xd0);
+        c->mem_w16(obj + 0x2e, c->mem_r16(e + 0x2c));
+        c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(e + 0x30) + c->mem_r16s(obj + 0x60)));
+        c->mem_w16(obj + 0x36, c->mem_r16(e + 0x34));
+        break;
+      }
+      case 5: {
+        uint32_t e = c->mem_r32(G_800E7F5C);  // pointer global, deref
+        c->mem_w16(obj + 0x2e, c->mem_r16(e + 0x2c));
+        c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(e + 0x30) + c->mem_r16s(obj + 0x60)));
+        c->mem_w16(obj + 0x36, c->mem_r16(e + 0x34));
+        break;
+      }
+      case 6: {
+        uint32_t e = c->mem_r32(G_800E7F50);  // pointer global, deref
+        c->mem_w16(obj + 0x2e, c->mem_r16(e + 0x2c));
+        c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(e + 0x30) + c->mem_r16s(obj + 0x60)));
+        c->mem_w16(obj + 0x36, c->mem_r16(e + 0x34));
+        break;
+      }
+      case 7: {
+        uint32_t e = c->mem_r32(owner + 0xe4);
+        c->mem_w16(obj + 0x2e, c->mem_r16(e + 0x2c));
+        c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(e + 0x30) + c->mem_r16s(obj + 0x60)));
+        c->mem_w16(obj + 0x36, c->mem_r16(e + 0x34));
+        break;
+      }
+    }
+  }
+  // Shared tail (every case, including sel>=8/default, falls here): radial offset by (angle,radius).
+  int32_t xOff = c->trig.rcos(angle) * radius;
+  c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(obj + 0x2e) + (int16_t)(xOff >> 12)));
+  int32_t zOff = c->trig.rsin(angle) * radius;
+  c->mem_w16(obj + 0x36, (uint16_t)(c->mem_r16s(obj + 0x36) + (int16_t)(-zOff >> 12)));
+
+  resolvePositionEpilogue(c);
+}
+
+// ActorReward::approachTargetX(c) — FUN_80070650(obj a0). Trivial ease: if obj+0x60 (target-X
+// delta scratch, reused for a different purpose than resolvePosition's Y-bias use of the same
+// field -- this is the obj+5==1 sibling sub-mode) is nonzero, step obj+0x2e toward it by +8/frame,
+// snapping to obj+0x60 and clearing it to 0 once obj+0x2e reaches or passes it. Leaf, no guest
+// stack frame (matches gen_func_80070650 exactly -- no sp descent in the raw recompiled body).
+// ----------------------------------------------------------------------------------------------
+void ActorReward::approachTargetX(Core* c) {
+  const uint32_t obj = c->r[R_A0];
+  int32_t target = c->mem_r16s(obj + 0x60);
+  if (target != 0) {
+    int32_t x = c->mem_r16s(obj + 0x2e) + 8;
+    c->mem_w16(obj + 0x2e, (uint16_t)x);
+    if (target <= x) {
+      c->mem_w16(obj + 0x2e, (uint16_t)target);
+      c->mem_w16(obj + 0x60, 0);
+    }
+  }
 }
 
 // ActorReward::registerOverrides() — wire all five guest addresses into BOTH the recompiler's own

@@ -2278,6 +2278,25 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
    cluster drafted this pass — the rest is un-RE'd frontier, not yet triaged for value). Compiles
    clean in an isolated build2.
 
+6. **RE'd, drafted, UNWIRED — ready to wire when frontier arrives (2026-07-08, band
+   0x80070000-0x8007FFFF).** `ActorReward::update`/`resolvePosition`/`approachTargetX`
+   (game/object/actor_sm_reward.{h,cpp}, EXTENDING the already-owned #4 cluster above) — faithful
+   native drafts of guest `FUN_80070018`/`FUN_800702C0`/`FUN_80070650`: the reward/score-gem
+   actor's top-level per-frame dispatcher + its two position-solve helpers, which directly call
+   the already-owned `smTallyTick`/`smEventDispatch` and (via `rec_dispatch`) the already-owned
+   `Spawn::dropScoreGem`/`GraphicsBind::renderUpdateBody`/`Animation::advanceLinkChain`. Guest
+   frames MIRRORED (0x20/0x28/0-byte descents, s-reg + ra spills) per generated/shard_0.c,1.c,2.c
+   ground truth; `resolvePosition`'s case-3 preserves a round-toward-zero shift
+   (`(v-(v>>31))>>13`) that differs from the shared tail's plain `>>12` — a real distinction the
+   Ghidra decompile's casts obscure, caught by cross-checking the raw recompiled arithmetic.
+   UNWIRED: not in `registerOverrides()`, no SBS run. Region census: 171 `func_8007xxxx` unowned
+   coming in (79 pre-owned incl. Animation/Cull/Trig/Spawn clusters); 142 Ghidra-decompiled to
+   `scratch/decomp/region_8007.c`, only this 3-function cluster drafted. Two large clusters
+   SURVEYED-not-drafted for a future pass: a dialog/text-box byte-stream renderer
+   (0x8007C0D0-0x8007D5xx) and a pause/quit-menu widget builder (0x8007EAE4-0x8007FDB0, confirmed
+   via literal "Options"/"Load data"/"Quit game" string pointers). Full survey in `docs/
+   engine_re.md`'s "Wide-RE survey: 0x80070000-0x8007FFFF" section. Compiles clean in build2.
+
 # OPEN / BLOCKED (not on the critical path)
 - **Band 0x800A0000-0x800BFFFF has no ownable dispatch-target code — flagged for reassignment (2026-07-08).**
   Assigned as an "audio/SFX/sequencer tables + mid-engine leaves" ownership band; RE'd via static census

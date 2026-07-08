@@ -1957,3 +1957,95 @@ Y-band overlap test (combined height/half-extent) between two actor records, usi
   - **Refs**: `scratch/decomp/region_8001.c` (full Ghidra decompile of the 33 real functions),
     `scratch/decomp/sqrt_80084080.c`, `generated/shard_2.c:795`, `scratch/bin/tomba2/main_ram.bin`
     (import source, `scratch/ghidra/main_ram_re.gpr`).
+## Wide-RE survey: 0x80070000-0x8007FFFF (2026-07-08, worktree agent-a13cd29e50a1478e5)
+
+Region assignment for this session. Already-owned clusters noted by the dispatcher (skipped, not
+re-examined): Animation (0x80076904/76D68/77B5C/77C40/75F0C), Cull (0x8007712C/778C/77FC/79D0/
+7A4C/78E4/7ACC), Spawn/Trig (0x80077768=Trig::angleCmp, 0x80077B5C=Animation::advanceLinkChain).
+79 addresses were owned coming in; 171 `func_8007xxxx` symbols remained unowned. Ghidra headless
+decompiled 142 of them to `scratch/decomp/region_8007.c` (project `scratch/ghidra/main_ram`, copied
+from the main checkout's existing analysis -- the remaining ~29 addresses are jump-table targets
+mid-function, not real entries, so Ghidra correctly folded them into their containing function).
+
+### Drafted + RE'd this session: ActorReward top-level update (UNWIRED, UNVERIFIED)
+
+`FUN_80070018`/`FUN_800702C0`/`FUN_80070650` extend the ALREADY-OWNED `ActorReward` class
+(`game/object/actor_sm_reward.{h,cpp}`, which owns `smWindowScroll`/`smTallyTick`/
+`smEventDispatch`/`smBlinkA`/`smBlinkB` at 0x80049xxx/0x8004Axxx/0x8004Bxxx). These three sit at the
+TOP of the same subsystem and directly call the already-owned methods, so they were the highest-
+confidence, most self-contained cluster in the region:
+
+- **`ActorReward::update`** (FUN_80070018) -- the reward/score-gem actor's top-level per-frame
+  dispatcher (obj+4 state machine: 0->1 arm, 1-> position-solve + advance obj+1 from the owner's
+  script byte (held at state 2 while a camera-lock gate is active), 2 -> either a countdown
+  re-advance or (at countdown 0) a FIXED-VALUE gem dispatch keyed by obj+3 -- smTallyTick x1/x2,
+  Spawn::dropScoreGem x100/200/500/1000/100000, or the three UNNAMED leaves FN_A118/A2A0/B428 (all
+  "depended-on by beh_visibility_gate_dispatch" per codemap, not independently RE'd) -- else
+  smEventDispatch; 3 -> the unnamed FN_A624 finalize/despawn leaf). Every path that keeps running
+  ends by branching obj+0x5f bit 0x80 into GraphicsBind::renderUpdateBody (LIVE) or
+  Animation::advanceLinkChain (LIVE, =FN_77B5C). Guest frame MIRRORED (`addiu sp,-0x20`; s0/ra/s1
+  spills at sp+16/24/20) per the CLAUDE.md directive, same shape as `ObjectTable::dispatchFaithful`.
+- **`ActorReward::resolvePosition`** (FUN_800702C0) -- solves obj+0x2e/0x32/0x36 (x/y/z) from one of
+  8 position sources selected by obj+0x5e: midpoint of the two scene-tracked-entity POINTER
+  GLOBALS `G_800E7F50`/`G_800E7F5C` (case 0, also overrides the trailing angle/radius to a fixed
+  0x20 / `G_800E7ED6`), several owner-relative linked-entity slots (+0xc0/+0xd0/+0xdc/+0xe4,
+  cases 1/2/3/4/7), or the two globals directly (cases 5/6). Every case (and the sel>=8 default)
+  falls into a SHARED tail: a radial offset by (angle, radius) applied via `Trig::rcos`/`Trig::rsin`
+  (already-owned, called directly -- no ABI shuffle needed). Case 3 additionally applies its OWN
+  radial offset using a different rounding rule (`(v - (v>>31)) >> 13`, round-toward-zero) than the
+  shared tail's plain `>>12` -- preserved exactly, not simplified, per a direct cross-check against
+  `generated/shard_1.c:gen_func_800702C0`'s raw MIPS-level arithmetic (Ghidra's C obscures this
+  distinction by printing both as casts). Guest frame MIRRORED (`addiu sp,-0x28`; s0/s1/s2/s3/ra
+  spills at sp+16/20/24/28/32).
+- **`ActorReward::approachTargetX`** (FUN_80070650) -- trivial ease: steps obj+0x2e toward obj+0x60
+  by +8/frame, snapping and zeroing obj+0x60 on arrival. Leaf, no guest-stack frame (confirmed via
+  `generated/shard_2.c:gen_func_80070650` -- no `sp` descent in the raw recompiled body). NOTE:
+  obj+0x60 is DUAL-USE across the object's two sub-modes (obj+5==0 uses it as a Y-bias in
+  `resolvePosition`; obj+5==1 uses it as approachTargetX's target-X) -- same PSX field, different
+  semantics per sub-mode, not a naming error.
+- Declarations added to `actor_sm_reward.h`; NOT added to `registerOverrides()` -- no
+  `EngineOverrides`/`shard_set_override` registration, no SBS run, per wide-RE-tier rules
+  (`docs/fleet-workflow.md` §6). `func_8007A624`/`0x8004A118`/`0x8004A2A0`/`0x8004B428` remain
+  unowned leaves reached via `rec_dispatch` (falls through to the substrate `gen_func_*` body).
+
+### Surveyed, NOT drafted (mapped only -- future wide-RE targets)
+
+- **0x8007C0D0-0x8007D5xx -- dialog/text-box RENDERER.** `FUN_8007C0D0(obj, mode)` walks a text
+  byte-stream at obj+0x14, treating bytes >=0xC0 as control/escape codes and 0xFF as end-of-string;
+  `FUN_8007D0D0(obj)` sets a obj+0x40 render-mode word from obj+3 (subtype) crossed with a global
+  `DAT_800bf8a3` (looks like a text-speed/language mode byte, 0/1/other -> 3 distinct settings).
+  This is clearly the message-box/dialog TEXT RENDERER -- large, many call sites, deserves a
+  dedicated Ghidra pass + cross-reference against any already-owned UI/dialog class before porting.
+- **0x8007EAE4-0x8007FDB0 -- PAUSE/QUIT MENU construction.** Confirmed via literal string pointers:
+  `FUN_8007EAE4` builds the in-game pause menu ("Options"/"Load data"/"Quit game" via
+  `PTR_s_Options_800a2854` etc.), `FUN_8007EE74`/`FUN_8007EF60` build "Continue"/"Load data"/
+  "Quit game" and "OK to quit game?" confirm dialogs. `FUN_80079374`/`FUN_800793C4` measure/lay out
+  text-button strings (width calc + highlight-cursor index via a `DAT_800bf808` selected-index
+  global), `FUN_8007E1B8`/`FUN_8007E6DC` emit the actual draw-list entries. A full menu-widget
+  subsystem; would make a good self-contained follow-up cluster (its own dedicated menu-widget
+  class, e.g. `ui/pause_menu.cpp`), distinct from any already-owned UI code.
+- **0x80070724-0x80070E60 -- small scratchpad-resident control-byte cluster.** Reads/writes fields
+  on a fixed scratchpad struct at `_DAT_1f800214` (not an object -- a SINGLETON control block) plus
+  a handful of `DAT_800bf8xx` globals; also touches `DAT_800bf816` (the SAME camera-lock gate byte
+  `ActorReward::update` checks). Likely a camera-lock / message-box "hold" controller. Too
+  under-determined (struct purpose unclear beyond field-level effects) to draft confidently this
+  session -- flagged, not guessed.
+- **0x80072114 (`FN_72114` in actor_sm_reward.cpp) -- tally digit/render leaf**, already referenced
+  as a callee by the owned `smTallyTick`; appears in this region's decompile
+  (`scratch/decomp/region_8007.c:1043`) but not independently drafted this session (small, but its
+  correctness is load-bearing for the owned tally display -- worth a dedicated pass, not a rushed
+  fold-in).
+- **Remaining ~100 addresses** (0x80078xxx text-measure/glyph helpers, 0x80079xxx string-width
+  table builders, 0x8007A0xx-0x8007ACxx more glyph/string helpers, 0x8007B0xx-0x8007BExx, misc
+  0x8007Cxxx/0x8007Dxxx helpers) were decompiled to `scratch/decomp/region_8007.c` but not
+  individually triaged -- signatures suggest they're mostly satellites of the two clusters above
+  (text/glyph layout + dialog rendering). Future session: start from `FUN_80078988`/`FUN_80078CA8`
+  (both take `short,undefined2,int,byte*,int` -- almost certainly the actual glyph-blit primitives
+  the menu-builder cluster calls) and work outward.
+
+### Refs
+- `scratch/decomp/region_8007.c` -- full Ghidra decompile of the 142 resolvable addresses.
+- `generated/shard_0.c` (FUN_80070018), `shard_1.c` (FUN_800702C0), `shard_2.c` (FUN_80070650) --
+  raw recompiled ground truth used for the byte-exact port (frame shape + the case-3 rounding rule).
+- Draft: `game/object/actor_sm_reward.{h,cpp}` (`ActorReward::update`/`resolvePosition`/
+  `approachTargetX`).
