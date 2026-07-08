@@ -1350,7 +1350,7 @@ static void native_area_load_bd4(Core* c, uint32_t area, uint32_t mode) {
   c->mem_w8(sm + 0x6d, (uint8_t)mode);     // DAT_801fe0dd = arg3 (mode) == sm[0x6d]
   c->mem_w8(0x1f80019bu, 0);               // DAT_1f80019b = 0 (load-done flag, set back to 1 by the load)
   (void)c->rng.next();                // Slip #5: this replaces a rec_dispatch(0x80044BD4).
-  c->engine.sop.transitionAreaLoad();      // = the slot-1 task body 0x800452c0, run inline+sync
+  SV_CHECK(c, 0x800452C0u, c->engine.sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // skip leg vs the slot-1 task body oracle (observable compare)
 }
 
 // FUN_80107afc — the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teardown+fade-clear+load,
@@ -1963,7 +1963,7 @@ void Engine::submode1Faithful() { Core* c = core;
 bool Engine::submode1Case0Skip() { Core* c = core;
   rec_dispatch(c, 0x8005245cu);
   (void)c->rng.next();                     // Slip #5: substrate makes 1 RNG call inside FUN_80044BD4
-  sop.transitionAreaLoad();
+  SV_CHECK(c, 0x800452C0u, sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // observable gate vs the 0x800452C0 oracle
   // pc_skip counter-bump ([[pc-skip-frame-counter-bump]]): substrate would consume 2 field-
   // frame ticks in this case-0 body (Slip #3 in docs/findings/sbs.md — FUN_80044BD4 yields
   // between load and fall-through), each bumping 0x1F80017C + 0x800BF878 via fieldFrame.

@@ -720,7 +720,7 @@ static void demo_frame_s7(Core* c) {
     c->mem_w8(0x801fe0ddu, 1);
     c->mem_w8(0x1f80019bu, 0);
     (void)c->rng.next();                                       // Slip #5: replaces rec_dispatch(0x80044BD4).
-    c->engine.sop.transitionAreaLoad();                             // = sync 0x800452c0; sets 1f80019b=1
+    SV_CHECK(c, 0x800452C0u, c->engine.sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // = sync 0x800452c0; sets 1f80019b=1 (observable-gated)
     // reinit subsystems (all SYNC; no incoming args / self-args)
     c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)
     c->engine.pool.resetControlBlock();           // 0x800796DC — native

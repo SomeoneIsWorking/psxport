@@ -183,6 +183,11 @@ void VerifyHarness::skipCheck(uint32_t addr, void (*skipFn)(void*), void* skipCt
   // run and funnel into scheduler_yield) no-ops; EngineOverrides off = pure core-B behavior.
   int in_stage_save = c->game->pcSched.in_stage;
   c->game->pcSched.in_stage = 0;
+  // Pre-deliver the sound-DMA-complete event: SPU-upload polls inside the oracle arc (e.g.
+  // FUN_800753D4 -> FUN_80096A40 -> FUN_800993A0) busy-wait on it, and with yields no-op'd the
+  // loop would spin forever (no frame stepping inside a leg). The skip legs deliver the same
+  // event themselves (Asset::preload_cel); the observable list does not include the event table.
+  c->game->hle.deliverEvent(0xF0000009u, 0xFFFFFFFFu);
   inSubstrateLeg = true;
   bool inCheck_save = inCheck; inCheck = false;   // allow the oracle leg's no-op yields (guard is for MV legs)
   oracleFn(oracleCtx);
