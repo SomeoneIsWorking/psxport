@@ -1,5 +1,56 @@
 # Findings — render / engine submit
 
+## 0x800C0000-0x800C8FFF "massive divergence" — FALSE POSITIVE; it's the GPU packet pool (2026-07-08)
+
+- **symptom (reported by a scout, RAM-diff based, no RE)**: default path (pc_faithful, mPcSkip=true)
+  guest RAM `0x800C0000..0x800C8FFF` diverges up to 100% of words vs `PSXPORT_ORACLE=1` (recomp
+  gameplay + PSX render). Scout guessed this was the "AREA-DATA / object-data overlay" (based only
+  on address proximity to the area-id byte `0x800BF870`) and suspected `Asset::areaDataLoadAsTask`
+  (game/core/asset.cpp:399) — specifically its pc_skip=true CD-load shortcut producing wrong bytes.
+- **RE (mandatory-first, per project rule)**: `docs/engine_re.md` §"Render-buffer memory map" already
+  names this exact range as the **GPU packet pool** — a per-frame double-buffered BUMP ALLOCATOR
+  (write ptr `DAT_800bf544`/`0x800BF544`) holding GT3/GT4 draw-primitive packets + OT link tags:
+  `packet pool parity0 [0x800BFE68, 0x800D3E68)`, `parity1 [0x800D3E68, 0x800E7E68)`. The requested
+  range `0x800C0000-0x800C8FFF` sits entirely inside parity0. It is RESET and rebuilt from scratch
+  EVERY FRAME (`game/render/submit.cpp`, `runtime/recomp/gpu_native.cpp`'s `DrawOTag` walk at
+  gpu_native.cpp:1602-1613) and consumed ONLY by the GPU/OT walk that builds the picture — no
+  AI/physics/gameplay code reads it back (grepped `game/ai`, `game/object`, `game/world`, `game/player`,
+  `game/items` for the address range: the only hit was `game/world/pool.cpp:45,316`, both explicitly
+  commented `// incidental v0` — a dead register clobber mirroring the original MIPS `lui v0,0x800c`
+  epilogue byte-shape, never dereferenced as a pointer). `Asset::areaDataLoadAsTask`'s
+  `c->r[16] = 0x800C0000u` (asset.cpp:431) is the same pattern: a register value that's overwritten
+  before use (r16 is reassigned to `0x800EF478` at line 452 before any later use), not a write target.
+  The codebase's own dual-core harness already treats this exact byte range as expected-to-differ:
+  `runtime/recomp/dualcore.cpp:119-123` `DualCore::isRenderRegion()` — `[0x800BFE68, 0x800EA200)` is
+  excluded from its report as "render noise, not the gameplay corruption we hunt."
+- **empirical verification**: built the port in a fresh worktree (bootstrapped `generated/` +
+  `scratch/bin/tomba2/MAIN.EXE` from the main checkout; one unrelated pre-existing beetle-psx local
+  edit, `SPU_PokeRAM` in `vendor/beetle-psx/mednafen/psx/spu.c`, had to be re-applied to unblock the
+  link — not yet committed to the beetle-psx fork, a housekeeping gap worth closing separately).
+  Recorded a `PSXPORT_AUTO_SKIP=1` pad session on the default path to free-roam (`[autoskip] free-roam
+  reached at frame 216`, matching the scout's own checkpoint), replayed the IDENTICAL pad file under
+  `PSXPORT_ORACLE=1`, dumped full guest RAM at replay-frame 300 on both, and diffed:
+  - Region `0x800C0000-0x800C8FFF` (36864 B): **28163 B differ (76%)** — consistent with "up to 100%
+    of words," but this is per-frame packet content, not corruption.
+  - Whole-RAM diff at f300: **30833 B total** — i.e. this ONE known render-scratch region accounts
+    for **91% of the entire reported divergence**. Per-page histogram: the top 9 divergent pages are
+    exactly `0x800c0000..0x800c8000` (packet-pool pages); the remainder (~2670 B) is scattered across
+    `0x801fe000`/`0x801ff000` (task-scheduler control, allowed-to-diverge scratch under pc_skip=ON
+    per `feedback_sbs_two_compare_modes`), plus small clusters at `0x800ee000`, `0x800bf000`,
+    `0x800f0000-0x800f9000`, `0x80105000` — all a few hundred bytes, none of them area-data.
+  - The area-id byte `0x800BF870` itself: `00` on BOTH sides at f300 — confirming (as the scout also
+    noted) the SAME area is loaded; there is no "wrong area content" — the diff is transient GP0
+    packets, not the area descriptor/asset payload.
+- **conclusion**: NOT a bug. `Asset::areaDataLoadAsTask` is not implicated — it does not write to
+  `0x800C0000` in any meaningful sense; the address only appears as an incidental dead-register
+  transcription artifact, both there and in `game/world/pool.cpp`. No fix applied (per project rule:
+  don't force a change onto a region that turns out benign/unconsumed). If a future scout flags this
+  range again, point it at `DualCore::isRenderRegion()` and this entry before re-investigating.
+- **workflow note**: worth teaching `tools/findings.py`-adjacent scouts to check
+  `runtime/recomp/dualcore.cpp:isRenderRegion` / `docs/engine_re.md`'s packet-pool memory map BEFORE
+  flagging a RAM-diff address range as gameplay corruption — this is exactly the kind of black-box
+  guess the project's RE-first rule exists to prevent.
+
 ## Graphical enhancements rewired PC-native / read-only overlay (2026-07-08)
 
 Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY host memory):
