@@ -57,6 +57,11 @@ public:
   // and world position (cmd+0x2C), transformed by the live scene camera (scratchpad view matrix
   // 0x1F8000F8 / translation 0x1F80010C). Projection constants are the camera's (CR24-26). No gte_op.
   void projComposeObject(uint32_t cmd, EObjXform* out);
+  // Host-supplied-transform variant: composes the same camera-x-object core as projComposeObject, but
+  // Robj/Tobj are HOST float values the caller already computed (margin's read-only path — a culled
+  // node's cmd+0x18/0x2C are stale, so we can't read them from guest RAM). Camera state is still read
+  // from scratchpad (never stale). No guest reads of Robj/Tobj, no guest writes anywhere.
+  void projComposeObjectHost(const float Robj[3][3], const float Tobj[3], EObjXform* out);
   // Compose an EObjXform from the scene camera ALONE (no per-object matrix) — for geometry already in
   // WORLD space (field entity render loop), where view = Rcam·world + Tcam directly. No gte_op.
   void projComposeCamera(EObjXform* out);

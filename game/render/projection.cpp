@@ -30,8 +30,12 @@ uint32_t gte_read_ctrl(uint32_t reg);
 
 static inline int16_t r16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 
-void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
-  Core* c = mCore;
+// Shared camera-compose core: R = (Rcam · Robj) / 4096, T = (Rcam · Tobj) / 4096 + Tcam, plus the
+// camera's projection constants. Robj/Tobj are already-float object rotation/translation — either read
+// from cmd+0x18/0x2C (projComposeObject) or host-computed by a caller whose object is stale in guest RAM
+// (projComposeObjectHost). Camera state (Rcam/Tcam/ofx/ofy/H) is always read from scratchpad/GTE ctrl —
+// the camera itself is never stale.
+static void projComposeCore(Core* c, const float Robj[3][3], const float Tobj[3], EObjXform* out) {
   // camera view rotation Rcam from scratchpad 0x1F8000F8 (CR0-4 halfword packing).
   uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
            w3 = c->mem_r32(SCR + 0x104), w4 = c->mem_r32(SCR + 0x108);
@@ -43,13 +47,6 @@ void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
   float Tcam[3] = { (float)(int32_t)c->mem_r32(SCR + 0x10C),
                     (float)(int32_t)c->mem_r32(SCR + 0x110),
                     (float)(int32_t)c->mem_r32(SCR + 0x114) };
-  // object world rotation matrix Robj from cmd+0x18: Robj[row][col] = halfword at cmd+0x18 + col*2 + row*6.
-  float Robj[3][3];
-  for (int col = 0; col < 3; col++)
-    for (int row = 0; row < 3; row++)
-      Robj[row][col] = (float)r16(c, cmd + 0x18 + col * 2 + row * 6);
-  // object world position Tobj from cmd+0x2C/0x30/0x34.
-  float Tobj[3] = { (float)r16(c, cmd + 0x2C), (float)r16(c, cmd + 0x30), (float)r16(c, cmd + 0x34) };
 
   // composed rotation R = (Rcam · Robj) / 4096, kept in 1.3.12 scale.
   for (int i = 0; i < 3; i++)
@@ -66,9 +63,26 @@ void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
   out->ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
   out->ofy = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
   out->H   = (float)(uint16_t)gte_read_ctrl(26);
+}
+
+void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
+  Core* c = mCore;
+  // object world rotation matrix Robj from cmd+0x18: Robj[row][col] = halfword at cmd+0x18 + col*2 + row*6.
+  float Robj[3][3];
+  for (int col = 0; col < 3; col++)
+    for (int row = 0; row < 3; row++)
+      Robj[row][col] = (float)r16(c, cmd + 0x18 + col * 2 + row * 6);
+  // object world position Tobj from cmd+0x2C/0x30/0x34.
+  float Tobj[3] = { (float)r16(c, cmd + 0x2C), (float)r16(c, cmd + 0x30), (float)r16(c, cmd + 0x34) };
+
+  projComposeCore(c, Robj, Tobj, out);
   if (cfg_dbg("eproj")) { static long n = 0; if (n++ % 240 == 0)
     fprintf(stderr, "[eproj] native compose #%ld cmd=%08x Tview=(%.0f,%.0f,%.0f) H=%.0f\n",
             n, cmd, (double)out->T[0], (double)out->T[1], (double)out->T[2], (double)out->H); }
+}
+
+void Render::projComposeObjectHost(const float Robj[3][3], const float Tobj[3], EObjXform* out) {
+  projComposeCore(mCore, Robj, Tobj, out);
 }
 
 void Render::projComposeCamera(EObjXform* out) {
