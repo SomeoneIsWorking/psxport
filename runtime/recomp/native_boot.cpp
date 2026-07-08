@@ -266,9 +266,26 @@ static void game_init(Core* c) {
           c->mem_r32(0x80106228), c->mem_r32(0x8010649c), c->mem_r16(0x801fe000), c->mem_r32(0x801fe00c));
 }
 
-// Dual-core harness hooks (dualcore.cpp): boot a core to the start of the frame loop, then step it one
-// frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap; dc_step_frame = one frame.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->mRender->projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); crt0_setup(c); game_init(c); }
+// Dual-core harness hooks (dualcore.cpp / selftest.cpp / sbs.cpp): boot a core to the start of the
+// frame loop, then step it one frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap;
+// dc_step_frame = one frame.
+//
+// register_engine_overrides(c->game) HAS to run here (2026-07-08 fix, docs/findings/tooling.md
+// "SBS/DualCore/Selftest never populate their own Game's EngineOverrides table"): every harness that
+// boots via dc_boot_init constructs its OWN Game, whose `engine_overrides` table starts empty — the
+// registration previously lived ONLY inline in boot.cpp's main(), against a single throwaway Game
+// these harnesses never touch. Without this, rec_dispatch's `game->engine_overrides.run(c, addr)`
+// check always misses on both SBS cores for anything wired ONLY via EngineOverrides::register_
+// (Animation, ActorZonedAttacker, Spawn, ReleaseTriggerMotion) — both cores silently ran the
+// identical substrate body, and SBS's byte-exact compare "passed" without the native port ever
+// running. See boot.cpp for the shared registration function + full writeup.
+// Runs BEFORE crt0_setup/game_init: game_init's init prefix can itself reach a direct-substrate
+// g_override[] call (e.g. FUN_80050b08's task0 bootstrap arming a scheduler slot via spawnPrim) —
+// this Core's OWN engine_overrides table must already be populated before any guest code runs, or
+// a psx_fallback-gated trampoline's traceHit() call aborts on "unregistered" (found live: SBS core
+// A crashed here before this line was moved above the init calls).
+void register_engine_overrides(Game* game);
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->mRender->projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); register_engine_overrides(c->game); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {

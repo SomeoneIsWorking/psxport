@@ -42,12 +42,95 @@
   `ov_sm*` trampolines for the pattern.
 - **fix (this session, local):** register BOTH tables from one `registerOverrides(Game*)`: `EngineOverrides
   ::register_` (native-caller tracing) + `shard_set_override` with a `psx_fallback`-gated trampoline
-  (actual substrate-call redirection). Called once from `boot.cpp`'s `main()` — sufficient for EVERY
-  Core/Game created afterward (including SBS's two separately-constructed cores, which never run
-  `boot.cpp`'s `main()`) because `g_override[]` is process-global, populated once.
+  (actual substrate-call redirection). Called once from `boot.cpp`'s `main()`.
+- **FALSIFIED claim, corrected 2026-07-08:** the line above used to also claim this single call was
+  "sufficient for EVERY Core/Game created afterward (including SBS's two separately-constructed
+  cores...) because `g_override[]` is process-global, populated once." That is true ONLY for the
+  `g_override[]`/`shard_set_override` half. It is FALSE for the `EngineOverrides::register_` half:
+  `EngineOverrides` is a **per-Game** member (`game->engine_overrides`), and `rec_dispatch`'s gate
+  reads the CALLING Core's OWN Game (`c->game->engine_overrides.run(c, addr)`). SBS/DualCore/
+  Selftest each construct their OWN `Game` instances and never ran `boot.cpp`'s `main()`, so their
+  `engine_overrides` table was **completely empty** — see the next entry, which is the bug this
+  false claim was hiding.
 - **refs:** runtime/recomp/overlay_router.cpp `rec_dispatch` (EngineOverrides gate); generated/shard_disp.c
   `func_XXXX` wrapper + `shard_set_override`; runtime/recomp/sync_overrides.cpp `PlatformHle::register_`
   (the pre-existing dual-registration precedent); game/object/actor_sm_reward.{h,cpp}.
+
+## CRITICAL (found + fixed 2026-07-08): SBS/DualCore/Selftest never populated their own Game's EngineOverrides table — every EngineOverrides-only override was COMPLETELY INERT under SBS
+- **symptom:** a verification pass (spawned to prove EngineOverrides actually intercepts on the
+  running game) found TWO smoking guns: (1) `PSXPORT_DEBUG=all` over a full session showed ZERO
+  `[dispatch]` lines project-wide, even for long-established overrides; (2) `recdep` showed HIGH
+  substrate-dispatch counts for guest addresses that codemap says are already natively owned
+  (`Math::applyMatlv` 0x80084220 etc.). Chasing (1)+(2) down with a real headless run (CHD attached,
+  `PSXPORT_AUTO_SKIP=1`, `PSXPORT_DEBUG=dispatch,recdep,ovhit`) found the TRUE, much bigger bug.
+- **status:** fixed this session (worktree `agent-a1a0cae350ac4aa9d`, not yet merged to main — see
+  commit list). New `ovhit` channel added alongside so this class of gap is observable going
+  forward without re-deriving it by hand.
+- **root cause, signal (2) — NOT a bug, an ORPHAN (already-documented pattern, re-confirmed):**
+  `Math::applyMatlv`/`applyMatrixLV`/`rotZ`/`rotY` are real native C++ methods with their OWN
+  NEW callers (`NodeXform::propagate` etc., per `codemap.py --addr`) — but they were NEVER
+  registered as an `EngineOverrides` entry NOR dual-wired via `shard_set_override`. So OLD
+  overlay-resident callers (still-substrate AI code in the 0x8014xxxx range, calling these MAIN-
+  module addresses cross-module — hence visible to `rec_dispatch`/`recdep`) still run the OLD
+  substrate `gen_func` body every time. `recdep`'s "high count for an owned function" is exactly
+  the already-documented "recdep hot-leaf leaderboard: entries may ALREADY be native-ported
+  (ORPHAN)" finding above, generalized past render/cull functions to Math. Confirmed empirically:
+  zero `[dispatch]` lines for these 4 addresses in a real free-roam session despite 26932/5492/
+  5392/5392 `recdep` hits each.
+- **root cause, signal (1) — a REAL, CRITICAL bug, much bigger than "PcScheduler looks silent":**
+  `EngineOverrides` is per-`Game`. `boot.cpp`'s `main()` populates it on ONE throwaway `Game` it
+  constructs itself, then (for SBS/DualCore/Selftest) hands off to a harness that builds its OWN
+  separate `Game`(s) and boots them via the shared `dc_boot_init(Core*)` (native_boot.cpp) —
+  which NEVER called any `registerOverrides()`. Result: on every SBS core (A AND B), `rec_dispatch`'s
+  `c->game->engine_overrides.run(c, addr)` check ALWAYS missed for every override wired ONLY via
+  `EngineOverrides::register_` (no `shard_set_override` dual-registration) — that's Animation
+  (loadFrame/advanceLinkChain/attach), ActorZonedAttacker (6 addresses), Spawn (4 addresses),
+  ReleaseTriggerMotion (6 addresses), and — until this session's separate fix below — PcScheduler
+  (5 addresses). **Both SBS cores silently ran the IDENTICAL substrate body for all of these
+  addresses.** SBS's byte-exact compare "passed" for anything routed only through these natives —
+  not because the native port matched, but because the native port never ran on EITHER side. This
+  is precisely the "SBS gate passed trivially" failure mode CLAUDE.md's "no residual RAM diverges"
+  rule exists to catch, and it had been silently true for every EngineOverrides-only registration
+  since the mechanism was introduced (2026-07-07).
+- **separate, additional finding — PcScheduler's 5 primitives were ALSO blind even OUTSIDE SBS:**
+  independent of the above, `PcScheduler::yieldPrim/spawnPrim/spawnAndWait/forceClose/selfClose`
+  were registered via `EngineOverrides::register_` ONLY (no `shard_set_override`). Every real
+  substrate call site to these 5 guest addresses is a DIRECT intra-module `func_<addr>(c)` (grep
+  `generated/shard_*.c`: 15/7/2/7/8 call sites respectively) — never `rec_dispatch` — so even on
+  the default (non-SBS) `pc_faithful`/`pc_skip` path these 5 addresses ran the OLD substrate body
+  for every real in-game yield/close. A live default-path run before the fix showed exactly ONE
+  `[dispatch]` hit total across all 5 (spawnPrim, called once from the native boot driver at
+  `ra=DEAD0000` — not from gameplay) and zero for the other four, despite the game visibly
+  scheduling tasks every frame.
+- **fix:**
+  1. `game/core/pc_scheduler.cpp`: dual-register all 5 primitives via `shard_set_override` with
+     psx_fallback-gated trampolines (the `game/object/actor_sm_reward.cpp` pattern), each calling
+     the NEW `EngineOverrides::traceHit()` before invoking the native handler so the hit stays
+     observable on the `dispatch`/`ovhit` channels despite bypassing `run()`.
+  2. `runtime/recomp/boot.cpp`: extracted the inline registration block in `main()` into
+     `void register_engine_overrides(Game*)`.
+  3. `runtime/recomp/native_boot.cpp`: call `register_engine_overrides(c->game)` inside
+     `dc_boot_init` — the ONE shared boot helper SBS/DualCore/Selftest all use — BEFORE
+     `crt0_setup`/`game_init` (a live crash proved ordering matters: `game_init`'s init prefix can
+     itself reach a direct-substrate g_override[] call before the table is populated, aborting
+     `traceHit`'s "unregistered" assert).
+  4. `runtime/recomp/engine_overrides.{h,cpp}`: added `traceHit(Core*, addr)` (records a hit that
+     bypassed `run()`) and `dumpHitCounts()` (the `ovhit` channel — per-address hit counts dumped
+     at exit, flagging any registered-but-zero address).
+- **verification:** rebuilt, re-ran. Default path (`PSXPORT_AUTO_SKIP=1`,
+  `PSXPORT_DEBUG=ovhit,dispatch,recdep`): PcScheduler's spawnPrim/forceClose/selfClose now show
+  real hit counts (2/1/2 in a 90s session) via `traceHit`, where before the fix they were exactly
+  0. SBS full mode (`PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1`): no longer crashes (after the
+  ordering fix), and — significant — **immediately surfaces a real guest-RAM divergence around
+  frame 61** in `Animation::loadFrame`/`advanceLinkChain` (SBS's last-writer report: core A pc
+  0x8007AAE8 vs core B pc 0x80076904/0x80077C74) that the broken registration was previously
+  hiding. That divergence is a NEW, real Job#1 target — NOT investigated or fixed in this session
+  (out of scope: this was a verification+tooling task); root-causing it is follow-up work, and it
+  should NOT be waved off as expected/residual per the "no residual RAM diverges" rule.
+- **refs:** runtime/recomp/engine_overrides.{h,cpp}; runtime/recomp/boot.cpp
+  `register_engine_overrides`; runtime/recomp/native_boot.cpp `dc_boot_init`; game/core/
+  pc_scheduler.cpp; docs/config.md `dispatch`/`ovhit`; scratch/logs/default_ovhit.log,
+  scratch/logs/sbs_ovhit3.log (this session's evidence, worktree-local, not committed).
 
 ## A debug-server client disconnect kills the whole game (SIGPIPE)
 - **symptom:** the live port dies ("connection refused" on the next dbgclient call) when a debug client is killed / times out mid-reply — looked like a crash on entering a scene, but no abort/diagnostic is printed.

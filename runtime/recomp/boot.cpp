@@ -43,6 +43,39 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
 
 // rec_dispatch_miss now lives in hle.c (routes A0/B0/C0 to the HLE BIOS).
 
+// register_engine_overrides — wire every EngineOverrides-based native handler onto ONE Game
+// instance's OWN table (per-Game; NOT the process-global g_override[]/g_ov_<mod>_override[]
+// tables some of these ALSO dual-wire via shard_set_override).
+//
+// CRITICAL GAP found + fixed here (2026-07-08, docs/findings/tooling.md "SBS/DualCore/Selftest
+// never populate their own Game's EngineOverrides table"): this call used to live ONLY inline in
+// main() below, run once against a single THROWAWAY Game before main() decided which harness to
+// hand off to. That throwaway Game's side effects on the PROCESS-GLOBAL g_override[] tables (via
+// shard_set_override — PlatformHle sync HLEs, ActorReward, and PcScheduler after today's fix)
+// persist for every Game created afterward, so those specific overrides happened to still work
+// under SBS/DualCore/Selftest. But `rec_dispatch`'s EngineOverrides check
+// (`c->game->engine_overrides.run(c, addr)`) reads the CALLING Core's OWN Game — and SBS/
+// DualCore/Selftest construct their own Game instances (sbs.cpp mA/mB, dualcore.cpp, selftest.cpp)
+// and NEVER called this registration block on them. Their `engine_overrides` table was completely
+// EMPTY. Result: every override wired ONLY via EngineOverrides::register_ (Animation,
+// ActorZonedAttacker, Spawn, ReleaseTriggerMotion — anything without its own shard_set_override
+// dual-registration) was COMPLETELY INERT in SBS/DualCore/Selftest: `run()` always returned false
+// on both sides, so BOTH SBS cores silently ran the identical SUBSTRATE body for those addresses
+// — a byte-exact "pass" that proved nothing (native vs itself would have been the same shape had
+// it fired; native never fired at all). Fix: call this once per Game, right after each harness's
+// own Game/Core is constructed (see sbs.cpp, dualcore.cpp, selftest.cpp), not just on main()'s
+// single throwaway instance.
+void register_engine_overrides(Game* game) {
+  Core* c = &game->core;
+  game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
+  c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach (0x80076904 etc.)
+  ActorReward::registerOverrides(game);      // reward/tally window actor SM family
+  ActorZonedAttacker::registerOverrides(game); // 0x8014xxxx zoned-attacker sub-behavior cluster
+  c->engine.spawn.registerTypedChildOverrides();     // A00-overlay typed-child spawners
+  c->engine.releaseTriggerMotion.registerOverrides(); // release-trigger sub-motion cluster
+  OverlayGt3Gt4::registerOverrides(game);            // A00-overlay GT3/GT4 packet emitters (0x801465EC/801467BC)
+}
+
 int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
@@ -70,21 +103,10 @@ int main(int argc, char** argv) {
   game->cd.overridesInit(); // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
-  game->pcSched.registerOverrides();   // ported scheduler primitives (yield/spawn/spawn-and-wait/close)
-                                       // at their guest addresses (EngineOverrides; core B never consults)
-  c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach (FUN_80076904/
-                                              // 80077B5C/80077C40) at their guest addresses
-  ActorReward::registerOverrides(game);  // reward/tally window actor SM family (also wires the
-                                          // recompiler's PROCESS-GLOBAL g_override[] table, so this one
-                                          // call covers every Core/Game created afterward — incl. SBS's
-                                          // two separately-constructed cores, which never run this main())
-  ActorZonedAttacker::registerOverrides(game);  // 0x8014xxxx zoned-attacker sub-behavior cluster
-                                                 // (FUN_8014047C/80140544/801409C0/80143A00/80144928/80144B50)
-  c->engine.spawn.registerTypedChildOverrides();   // A00-overlay typed-child spawners (0x801360F4/
-                                                    // 80139838/8013AC34/8013A730 -> Spawn::spawnTypedChild)
-  c->engine.releaseTriggerMotion.registerOverrides();  // release-trigger sub-motion cluster (band 0x8012xxxx)
-  OverlayGt3Gt4::registerOverrides(game);  // A00-overlay GT3/GT4 packet-emitter leaves
-                                            // (FUN_801465EC/801467BC — the busy 0x80146478 render leaf)
+  register_engine_overrides(game);     // ALL EngineOverrides clusters (PcScheduler/Animation/
+                                        // ActorReward/ActorZonedAttacker/Spawn/ReleaseTriggerMotion/
+                                        // GT3GT4/Math) — MUST also run for SBS/DualCore/Selftest's
+                                        // own separately-constructed Games (dc_boot_init calls it too).
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0

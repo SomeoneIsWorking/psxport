@@ -194,6 +194,45 @@ static void eov_spawnwait(Core* c)  { c->game->pcSched.spawnAndWait(c->r[4], c->
 static void eov_forceclose(Core* c) { c->game->pcSched.forceClose(c->r[4]); }
 static void eov_selfclose(Core* c)  { c->game->pcSched.selfClose(); }
 
+// shard_set_override wires the RECOMPILER's OWN g_override[] table (generated/shard_disp.c).
+// FOUND (2026-07-08, dispatch-blind-spot verification): all five of these guest addresses are
+// reached from MANY still-substrate call sites as a DIRECT C call `func_<addr>(c)` (grep across
+// generated/shard_*.c: 15/7/2/7/8 direct call sites for yield/spawn/spawnAndWait/forceClose/
+// selfClose respectively) — a MIPS jal the recompiler emits as an intra-module call, which NEVER
+// goes through rec_dispatch. EngineOverrides::register_ (above) only wires the EngineOverrides
+// table, which rec_dispatch consults; it does NOT populate g_override[]. So every one of those
+// direct-call sites fell through the wrapper's `if (g_override[i]) {...}` to `gen_func_<addr>(c)`
+// — running the OLD SUBSTRATE body — even though a byte-exact native port existed and was
+// "registered". A live run confirmed the gap empirically: PSXPORT_DEBUG=dispatch,recdep over a
+// real autonav session showed exactly ONE `[dispatch]` hit total for these five addresses
+// (PcScheduler::spawnPrim, called once from the native boot driver at ra=DEAD0000) and ZERO for
+// yieldPrim/spawnAndWait/forceClose/selfClose, despite the game visibly scheduling tasks every
+// frame — i.e. every REAL in-game yield/close ran the substrate body, not this port. See
+// docs/findings/tooling.md "EngineOverrides::register_ is BLIND to a direct substrate call" (the
+// gap was documented but left unfixed pending a concrete victim; this is that victim) and
+// game/object/actor_sm_reward.cpp (the existing precedent this copies).
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_80051F80(Core*);   // yieldPrim substrate body
+extern void gen_func_80051F14(Core*);   // spawnPrim substrate body
+extern void gen_func_80044BD4(Core*);   // spawnAndWait substrate body
+extern void gen_func_80052010(Core*);   // forceClose substrate body
+extern void gen_func_80051FB4(Core*);   // selfClose substrate body
+
+namespace {
+// psx_fallback-GATED trampolines: g_override[] is a single table shared by EVERY Core (both SBS
+// cores read the SAME array — unlike EngineOverrides, which is per-Game). Core B (the pure
+// substrate SBS reference) must keep running the exact recompiled body, or SBS would compare our
+// native port against itself (a fake 0-diff) instead of against the real substrate.
+// traceHit() BEFORE the native call: this is the ONLY path (dispatch/ovhit channels) that can see
+// these hits at all — rec_dispatch/recdep never run for a direct g_override[] call, so without
+// this the fix above would be invisible again (see engine_overrides.h "KNOWN GAP").
+void ov_yield(Core* c)      { if (c->game->psx_fallback) { gen_func_80051F80(c); return; } c->game->engine_overrides.traceHit(c, 0x80051F80u); eov_yield(c); }
+void ov_spawn(Core* c)      { if (c->game->psx_fallback) { gen_func_80051F14(c); return; } c->game->engine_overrides.traceHit(c, 0x80051F14u); eov_spawn(c); }
+void ov_spawnwait(Core* c)  { if (c->game->psx_fallback) { gen_func_80044BD4(c); return; } c->game->engine_overrides.traceHit(c, 0x80044BD4u); eov_spawnwait(c); }
+void ov_forceclose(Core* c) { if (c->game->psx_fallback) { gen_func_80052010(c); return; } c->game->engine_overrides.traceHit(c, 0x80052010u); eov_forceclose(c); }
+void ov_selfclose(Core* c)  { if (c->game->psx_fallback) { gen_func_80051FB4(c); return; } c->game->engine_overrides.traceHit(c, 0x80051FB4u); eov_selfclose(c); }
+}  // namespace
+
 void PcScheduler::registerOverrides() {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x80051F80u, "PcScheduler::yieldPrim",    eov_yield);
@@ -201,6 +240,12 @@ void PcScheduler::registerOverrides() {
   ov.register_(0x80044BD4u, "PcScheduler::spawnAndWait", eov_spawnwait);
   ov.register_(0x80052010u, "PcScheduler::forceClose",   eov_forceclose);
   ov.register_(0x80051FB4u, "PcScheduler::selfClose",    eov_selfclose);
+
+  shard_set_override(0x80051F80u, ov_yield);
+  shard_set_override(0x80051F14u, ov_spawn);
+  shard_set_override(0x80044BD4u, ov_spawnwait);
+  shard_set_override(0x80052010u, ov_forceclose);
+  shard_set_override(0x80051FB4u, ov_selfclose);
 }
 
 

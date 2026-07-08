@@ -86,10 +86,31 @@ C-level `backtrace()` of the fiber thread = the recompiled `func_XXXX`/`ov_*_gen
 see exactly which recomp function yields and read its callee-saved regs — the reliable tool for the
 deep-field-coro freeze; see findings/sbs.md).
 
-`dispatch` (engine_overrides.cpp) — logs every ENGINE-OVERRIDE hit at the global dispatch point
-(`rec_dispatch` top): `[dispatch] fN core=A 0xADDR Class::method ra a0-a3`. Every native engine
-wired by guest address (see CLAUDE.md "One global dispatch point") funnels through here, so this
-channel is the uniform call trace across substrate→native and native→native dispatch calls.
+`dispatch` (engine_overrides.cpp) — logs every ENGINE-OVERRIDE hit: `[dispatch] fN core=A 0xADDR
+Class::method ra a0-a3`. Fires from TWO places, both funneled through `EngineOverrides`: (1)
+`run()`, called at the top of `rec_dispatch` for the CALLER-explicit path; (2) `traceHit()`, called
+by a `shard_set_override`/`ov_<mod>_set_override` psx_fallback-gated trampoline BEFORE it invokes
+the native handler — this is the path a DIRECT recompiler-emitted `func_<addr>(c)`/`ov_<mod>_
+func_<addr>(c)` call takes (never touches `rec_dispatch`; see `docs/findings/tooling.md`
+"EngineOverrides::register_ is BLIND to a direct substrate call"). A trampoline that skips
+`traceHit()` is invisible here even while its native handler genuinely runs — always add the call
+when writing a new dual-registered override (game/core/pc_scheduler.cpp is the reference).
+
+`ovhit` (engine_overrides.cpp) — per-address override HIT COUNTS, dumped once at exit:
+`[ovhit] EngineOverrides hit counts (N registered): 0xADDR Class::method : count`, flagging any
+`: 0   <-- NEVER HIT (registered but unreached)`. Cheap enough (a counter bump, no per-hit I/O) to
+leave on for a full session, unlike the verbose `dispatch` trace — this is the tool for "was this
+override EVER reached", the exact question `recdep`/`dispatch` individually get wrong (each is
+blind to a different subset of call paths — see the class comment in runtime/recomp/
+engine_overrides.h). A `0` here for an address you KNOW should fire every frame (gameplay-critical
+scheduling, a hot AI leaf) is a real bug, not "not yet exercised" — found + fixed live 2026-07-08:
+PcScheduler's 5 primitives (yieldPrim/spawnPrim/spawnAndWait/forceClose/selfClose) were registered
+via `EngineOverrides::register_` only, but ALL their real callers reach them as a direct
+`func_<addr>(c)` substrate call that bypasses both `rec_dispatch` and `recdep` — `ovhit` (added
+alongside the fix) is what makes that class of gap observable going forward instead of requiring a
+manual grep of `generated/shard_*.c` for `func_<addr>(c)` call sites every time. See
+docs/findings/tooling.md for the full writeup, including the SBS/DualCore/Selftest registration gap
+this also uncovered.
 
 `fadetrace` (screen_fade.cpp) — logs every native-path `ScreenFade::set` / `applyLeafCall` with the
 mode+rgb (first-time-per-tuple backtrace). Pairs with `PSXPORT_DISPWATCH=0x8007E9C8` (which surfaces

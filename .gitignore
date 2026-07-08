@@ -4,6 +4,7 @@ generated
 # Build dirs
 build/
 build-*/
+build2/
 
 # Scratch / run artifacts (see CLAUDE.md — never /tmp; all tooling output goes here)
 scratch/
