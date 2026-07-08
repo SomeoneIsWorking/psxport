@@ -134,6 +134,16 @@ counter. Use when `fadetrace` shows the RGB value oscillating/stuck and you need
 several state machines sharing `c->screenFade` fired this frame (`fadetrace` alone dedupes by
 (op,mode,rgb) so a repeat value from a different caller prints no backtrace).
 
+`quadrtpt` (quad_rtpt_submit.cpp) — fires every ~512th `QuadRtptSubmit::submitQuad` call
+(0x8003B320, the rope/flame per-quad RTPT+OT-link submitter): `[quadrtpt] submitQuad call#N`.
+Firing confirmation for this shard_set_override-wired leaf (no `ovhit` coverage — that channel is
+EngineOverrides-only, blind to the recompiler's own g_override[] table).
+
+`ovgtgnd` (overlay_ground_gt3gt4.cpp) — fires every ~128th `OverlayGroundGt3Gt4::entityLoop` call
+(0x801401B8, the ground/scene GT3/GT4 entity-loop walker): `[ovgtgnd] entityLoop call#N`. Same
+"confirm it actually fires" role as `quadrtpt`, for the ov_a00_set_override-wired ground GT3/GT4
+cluster (sibling of the field pair's `ovgt` channel).
+
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
 couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.

@@ -1,7 +1,19 @@
-// game/render/overlay_ground_gt3gt4.cpp — DRAFT native mirror of the A00-overlay GROUND/SCENE
+// game/render/overlay_ground_gt3gt4.cpp — native mirror of the A00-overlay GROUND/SCENE
 // GT3/GT4 packet-emitter pair (FUN_8013FB88/8013FE58) + their entity-loop caller (FUN_801401B8).
 //
-// *** UNWIRED / UNVERIFIED — see overlay_ground_gt3gt4.h banner. Not registered, not SBS-gated. ***
+// WIRED + SBS-gated — see overlay_ground_gt3gt4.h banner. Two things fixed in this session
+// against generated/ov_a00_shard_0.c ov_a00_gen_801401B8 (ground truth):
+//   (1) BUG: entityLoop's ground-record lookup did an extra pointer dereference
+//       (`rec = mem_r32(table+idx*4); counts = mem_r32(rec+0); recBase = rec+4`). Ground truth
+//       has NO second dereference — `table+idx*4` IS the counts word's own address, and
+//       `table+idx*4+4` IS recBase (the table holds inline per-slot data: header word then the
+//       GT3-then-GT4 record array, not a pointer to a separate struct). Fixed below.
+//   (2) GAP: entityLoop's own real 40-byte guest-stack frame (`addiu sp,-40`, spills at
+//       +16(r16)/+20(r17)/+24(r18)/+28(r19)/+32(r20)/+36(ra)) was not mirrored at all (the
+//       file's own prior banner flagged this honestly). Mirrored below per CLAUDE.md's "MIRROR
+//       THE GUEST STACK" directive, same wrapFrame idiom as game/render/cull.cpp: spill the
+//       CALLER's live incoming values, run the body (host locals — nothing else touches these
+//       registers mid-call), restore, ascend.
 //
 // RE: read directly off the recompiler's own register-accurate translation (the project
 // convention for GTE-heavy leaves — generated/ov_a00_shard_0.c ov_a00_gen_8013FB88/801401B8,
@@ -283,16 +295,25 @@ void OverlayGroundGt3Gt4::gt4(Core* c) {
 // "*0x800ED8C8 OTbase" note documents for queued commands).
 void OverlayGroundGt3Gt4::entityLoop(Core* c) {
   uint32_t list = c->r[4];
-  // KNOWN GAP (honest, not papered over): the real FUN_801401B8 frame is `addiu sp,-40` with SIX
-  // real spills (s0..s4 + ra, at sp+16..+36) around its two "call" sites — those bytes ARE part
-  // of the SBS-compared guest stack. This draft does NOT yet reproduce them: it keeps its loop
-  // cursor/count/table-base as plain C++ locals (there is no OTHER guest code racing this frame
-  // while it runs, so functionally the loop below is correct), but a future session wiring this
-  // for real SBS-gating MUST descend c->r[29] by 40 and spill the actual live values (idxCursor/
-  // idxEnd/table/otBase/return-site) to their real offsets before the loop, and restore + ascend
-  // after — same idiom as gt3()/gt4() above and game/render/cull.cpp's Cull::wrapFrame. Left
-  // unmirrored here rather than faked with placeholder writes (an actually-wrong guest RAM value
-  // is worse than an honestly-missing one).
+  if (cfg_dbg("ovgtgnd")) { static long n = 0; if (n++ % 128 == 0) fprintf(stderr, "[ovgtgnd] entityLoop call#%ld\n", n); }
+
+  // Real 40-byte guest stack frame (RE: generated/ov_a00_shard_0.c ov_a00_gen_801401B8:
+  // `addiu sp,-40; sw ra,36(sp); sw r20,32(sp); sw r19,28(sp); sw r18,24(sp); sw r17,20(sp);
+  // sw r16,16(sp)`) — six LIVE incoming register spills. Mirrored per CLAUDE.md ("MIRROR THE
+  // GUEST STACK... never revert/exclude a leaf because it pushes a frame"): this function's own
+  // body never needs r16..r20/ra as WORKING registers mid-call (its locals below are host C++
+  // values; nothing else runs mid-call to observe a different value), so the mirror is exactly
+  // the simple wrapFrame idiom (cull.cpp): spill the caller's live values, run, restore, ascend.
+  uint32_t save16 = c->r[16], save17 = c->r[17], save18 = c->r[18];
+  uint32_t save19 = c->r[19], save20 = c->r[20], saveRa = c->r[31];
+  c->r[29] -= 40;
+  c->mem_w32(c->r[29] + 36, saveRa);
+  c->mem_w32(c->r[29] + 32, save20);
+  c->mem_w32(c->r[29] + 28, save19);
+  c->mem_w32(c->r[29] + 24, save18);
+  c->mem_w32(c->r[29] + 20, save17);
+  c->mem_w32(c->r[29] + 16, save16);
+
   uint8_t count = c->mem_r8(list + 6);
   uint32_t idxCursor = list + 16;
   uint32_t idxEnd = idxCursor + (uint32_t)count * 2;
@@ -306,9 +327,15 @@ void OverlayGroundGt3Gt4::entityLoop(Core* c) {
   while (idxCursor < idxEnd) {
     uint16_t idx = c->mem_r16(idxCursor);
     idxCursor += 2;
-    uint32_t rec = c->mem_r32(table + (uint32_t)idx * 4);
-    uint32_t counts = c->mem_r32(rec + 0);
-    uint32_t recBase = rec + 4;
+    // FIX (2026-07-08): a prior draft added a spurious extra pointer dereference here
+    // (`rec = mem_r32(table+idx*4); counts = mem_r32(rec+0); recBase = rec+4`). Ground truth
+    // (ov_a00_gen_801401B8) has only ONE dereference: `table+idx*4` IS the counts word's own
+    // address (r16 = mem_r32(table+idx*4) used directly as the packed count word, never
+    // re-dereferenced), and `table+idx*4+4` IS recBase — the table holds INLINE per-slot data
+    // (header word then the GT3-then-GT4 record array), not a pointer to a separate struct.
+    uint32_t tableSlot = table + (uint32_t)idx * 4;
+    uint32_t counts = c->mem_r32(tableSlot);
+    uint32_t recBase = tableSlot + 4;
 
     c->r[4] = recBase; c->r[5] = otBase; c->r[6] = counts & 0xFFu;
     gt3(c);
@@ -317,12 +344,22 @@ void OverlayGroundGt3Gt4::entityLoop(Core* c) {
     c->r[4] = recBase; c->r[5] = otBase; c->r[6] = (counts >> 16) & 0xFFu;
     gt4(c);
   }
+
+  c->r[31] = c->mem_r32(c->r[29] + 36);
+  c->r[20] = c->mem_r32(c->r[29] + 32);
+  c->r[19] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 40;
 }
 
+// Wiring (frontier, 2026-07-08): all three leaves are reached only by a direct C call the
+// recompiler generates inside the ov_a00 shard (never rec_dispatch), so wired via the overlay's
+// own process-global g_ov_a00_override[] table — same discipline as OverlayGt3Gt4's twin cluster.
 void OverlayGroundGt3Gt4::registerOverrides(Game*) {
-  // NOT CALLED — see file banner. Left here (unused) so wiring is a one-line addition once a
-  // future session SBS-gates this: extern void ov_a00_set_override(uint32_t, OverrideFn);
-  // ov_a00_set_override(0x8013FB88u, &OverlayGroundGt3Gt4::gt3);
-  // ov_a00_set_override(0x8013FE58u, &OverlayGroundGt3Gt4::gt4);
-  // ov_a00_set_override(0x801401B8u, &OverlayGroundGt3Gt4::entityLoop);
+  extern void ov_a00_set_override(uint32_t, OverrideFn);
+  ov_a00_set_override(0x8013FB88u, &OverlayGroundGt3Gt4::gt3);
+  ov_a00_set_override(0x8013FE58u, &OverlayGroundGt3Gt4::gt4);
+  ov_a00_set_override(0x801401B8u, &OverlayGroundGt3Gt4::entityLoop);
 }

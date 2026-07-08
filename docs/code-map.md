@@ -61,9 +61,9 @@ Totals: 525 native fns, 444 owned addresses, 506 LIVE / 19 ORPHAN.
 | 0x80036DFC | LIVE | `SaveMenu::runHandler` | game/ui/save_menu.cpp:104 |  | ----------------------------------------------------------------------… |
 | 0x80036DFC | LIVE | `SaveMenu::dispatchBody` | game/ui/save_menu.cpp:136 |  | ----------------------------------------------------------------------… |
 | 0x8003AD48 | LIVE | `beh_cube_text_spawn` | game/ai/beh_cube_text_spawn.cpp:52 | 0x8003A790 0x8003A9A0 0x8003ABE4 0x8009A730 |  |
-| 0x8003B054 | LIVE | `QuadRtptSubmit::rotateQuadCorners` | game/render/quad_rtpt_submit.cpp:23 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x8003B054 | LIVE | `QuadRtptSubmit::rotateQuadCorners` | game/render/quad_rtpt_submit.cpp:39 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8003B220 | ORPHAN | `hitbox_build_3b220` | game/player/hitbox.cpp:51 |  | Pure native body. Mirrors the recomp's exact in-memory load/store orde… |
-| 0x8003B320 | LIVE | `QuadRtptSubmit::submitQuad` | game/render/quad_rtpt_submit.cpp:94 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x8003B320 | LIVE | `QuadRtptSubmit::submitQuad` | game/render/quad_rtpt_submit.cpp:126 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:229 |  |  |
 | 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:246 |  |  |
 | 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:268 |  | ======================================================================… |
@@ -520,9 +520,9 @@ Totals: 525 native fns, 444 owned addresses, 506 LIVE / 19 ORPHAN.
 | 0x8013C538 | LIVE | `beh_scatter_record_dither` | game/ai/beh_scatter_record_dither.cpp:47 |  |  |
 | 0x8013C9C0 | LIVE | `beh_scatter_ramp_machine` | game/ai/beh_scatter_ramp_machine.cpp:46 |  |  |
 | 0x8013DD48 | ORPHAN | `sub8013DD48` | game/ai/beh_a08_scene_actor.cpp:148 | 0x80072DDC | (objAnim, subId) — allocate a spawner obj and hook its handler. |
-| 0x8013FB88 | LIVE | `OverlayGroundGt3Gt4::gt3` | game/render/overlay_ground_gt3gt4.cpp:102 |  | ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as th… |
-| 0x8013FE58 | LIVE | `OverlayGroundGt3Gt4::gt4` | game/render/overlay_ground_gt3gt4.cpp:187 |  | ground/scene POLY_GT4 emit. Record = 44 bytes: {+0 rgb0(rgb1=rgb0<<4)\|… |
-| 0x801401B8 | LIVE | `OverlayGroundGt3Gt4::entityLoop` | game/render/overlay_ground_gt3gt4.cpp:284 |  | the ground-entity render list walker. list=a0: +6 (u8) entry count, +1… |
+| 0x8013FB88 | LIVE | `OverlayGroundGt3Gt4::gt3` | game/render/overlay_ground_gt3gt4.cpp:114 |  | ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as th… |
+| 0x8013FE58 | LIVE | `OverlayGroundGt3Gt4::gt4` | game/render/overlay_ground_gt3gt4.cpp:199 |  | ground/scene POLY_GT4 emit. Record = 44 bytes: {+0 rgb0(rgb1=rgb0<<4)\|… |
+| 0x801401B8 | LIVE | `OverlayGroundGt3Gt4::entityLoop` | game/render/overlay_ground_gt3gt4.cpp:296 |  | the ground-entity render list walker. list=a0: +6 (u8) entry count, +1… |
 | 0x8014047C | LIVE | `ActorZonedAttacker::gateCheck` | game/ai/actor_zoned_attacker.cpp:124 |  | ActorZonedAttacker::gateCheck(c) — FUN_8014047c(node) -> bool v0. A ti… |
 | 0x80140544 | LIVE | `ActorZonedAttacker::typeInit` | game/ai/actor_zoned_attacker.cpp:163 |  | ActorZonedAttacker::typeInit(c) — FUN_80140544(node). One-shot per-typ… |
 | 0x801409C0 | LIVE | `ActorZonedAttacker::pickAttackByRange` | game/ai/actor_zoned_attacker.cpp:228 |  | ActorZonedAttacker::pickAttackByRange(c) — FUN_801409c0(node[, unused … |

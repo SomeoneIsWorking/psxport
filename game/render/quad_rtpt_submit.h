@@ -1,20 +1,24 @@
-// game/render/quad_rtpt_submit.h — PC-native DRAFT bodies for the two shared "GTE quad submit"
-// leaves in the 0x8003xxxx render-submit band: FUN_8003B054 (quad-corner UV/vertex-index ROTATE)
-// and FUN_8003B320 (RTPT+RTPS project-and-OT-link the quad the rotate helper built).
+// game/render/quad_rtpt_submit.h — PC-native bodies for the two shared "GTE quad submit" leaves
+// in the 0x8003xxxx render-submit band: FUN_8003B054 (quad-corner UV/vertex-index ROTATE) and
+// FUN_8003B320 (RTPT+RTPS project-and-OT-link the quad the rotate helper built).
 //
-// STATUS: RE'd from generated/shard_3.c (FUN_8003B054, gen_func_8003B054) and generated/shard_6.c
+// RE'd from generated/shard_3.c (FUN_8003B054, gen_func_8003B054) and generated/shard_6.c
 // (FUN_8003B320, gen_func_8003B320) — the recompiler's per-instruction translation, which is
 // ground truth for GTE ops per CLAUDE.md (Ghidra's COP2 decompile of these two garbles the GTE
 // register indices into synthetic setCopReg/copFunction "bus" pseudo-calls; the shard C does not).
-// UNWIRED / UNVERIFIED: no EngineOverrides registration, no shard_set_override, no SBS run. This
-// is fleet-agent RE-ahead-of-frontier work (see the dispatching prompt) — compile-only draft.
 //
-// See quad_rtpt_submit.cpp for the full per-field trace. Callers of both leaves are OUTSIDE this
-// 0x80030000-0x8003BFFF band (the >=0x8003C000 per-object render family, already owned elsewhere —
-// see game/render/perobj_dispatch.cpp / engine_submit.cpp), so neither leaf is drafted with a
-// caller-side wiring plan yet; that is future work once the caller side is RE'd too.
+// WIRED (frontier, 2026-07-08): registerOverrides() below installs both leaves into the
+// recompiler's OWN process-global override table via `shard_set_override` (g_override[] —
+// generated/shard_disp.c). Callers of both leaves are direct C calls the recompiler generates
+// (`func_8003B054(c)`/`func_8003B320(c)`, always routed through that table), so this ONE
+// registration covers every call site across shards uniformly — same discipline as
+// game/render/overlay_gt3gt4.cpp's ov_a00_set_override wiring, and (like that cluster) this is
+// the "faithful substrate mirror" carve-out: the process-global table is shared by BOTH SBS
+// cores, so both run the SAME native translation (byte/op-exact transcription verified against
+// generated/ ground truth, not a port DECISION differentially validated core-vs-core).
 #pragma once
 struct Core;
+class  Game;
 
 class QuadRtptSubmit {
 public:
@@ -34,9 +38,23 @@ public:
   // record (colour/uv already filled in by the caller at +4/+12/+20/+28/+36; this leaf fills the
   // 4 SXY slots at +8/+16/+24/+32 via RTPT+RTPS) that gets bump-copied whole into the packet pool.
   // Returns nothing (v0 unused by every known caller); drops the quad silently (packet-pool bytes
-  // written but pointer never advanced) on: RTPT/RTPS GTE FLAG error, off-screen (all 4 corners
-  // outside [0,320)x[0,240) — an UNSIGNED compare, so this is a faithful port of the recomp's own
-  // 4:3-only frustum test, NOT gpu_gpu_wide_engine-aware; a future wire-up should decide whether to
-  // widen it the way submit.cpp's submit_xmax() does), or an out-of-range OT bucket.
+  // written but pointer never advanced) on: RTPT/RTPS GTE FLAG error, off-screen (NONE of the 4
+  // corners' SX is inside [0,320), or NONE is inside [0,240) — unsigned 16-bit ANY-corner-in-range
+  // tests, same OR convention as the sibling OverlayGt3Gt4/OverlayGroundGt3Gt4 leaves; a prior
+  // draft of this comment + the .cpp both mis-stated this as an ALL-4-corners AND test — fixed
+  // 2026-07-08 against generated/shard_6.c gen_func_8003B320, which jumps to "keep" the instant
+  // any one corner is in range), or an out-of-range OT bucket. Also calls NCLIP between RTPT and
+  // the SXY3 project (see .cpp) — a REAL executed GTE op whose only output is provably clobbered
+  // before ever being read, reproduced anyway for full op-exact fidelity (a prior draft comment
+  // claimed "no NCLIP/backface test here"; the call exists, it's just a no-op here). Real 16-byte
+  // guest stack frame (RE: `addiu sp,-16`, pure scratch, no saved registers) MIRRORED per
+  // CLAUDE.md — see .cpp.
   static void submitQuad(Core* c);          // FUN_8003B320: a0=out, a1=composedXform(6 words), a2=otzBias
+
+  // Wire both leaf addresses into the recompiler's OWN process-global override table
+  // (shard_set_override -> g_override[], generated/shard_disp.c). Both leaves are reached by a
+  // direct C call the recompiler generates (`func_8003B054(c)`/`func_8003B320(c)`), never
+  // rec_dispatch, so this ONE registration (called once per Game — see runtime/recomp/boot.cpp's
+  // register_engine_overrides) covers every call site, including both SBS cores.
+  static void registerOverrides(Game* game);
 };
