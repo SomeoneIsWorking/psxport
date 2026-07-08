@@ -39,10 +39,66 @@ DEF_RE  = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?[\w:*&<>]+\s+((?:ov_|nati
 # param (they hold it as a member). Index those too; the owned guest FUN_/addr is read from a trailing
 # `// FUN_xxxx` on the def line or the comment block above (same association logic as free functions).
 METHOD_RE = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?[\w:*&<>]+\s+(\w+::\w+)\s*\(')
+# A SECOND class of native carries NO recognized prefix at all: a free function named
+# `<description>_<hexsuffix>` (grid_query_47cbc, child_spawn_40410, hitbox_build_3b220, ...) that
+# takes `Core*` exactly like an `ov_`/`native_` native and is tagged the same way (a `// FUN_xxxx —`
+# comment immediately above, or — see FILE_HEADER_ADDR_RE below — a file-level header tag). DEF_RE's
+# prefix requirement made every one of these invisible to `--addr` ("NO native owner found") despite
+# being real, tagged, called-by-direct-C++-call natives. Only reached when DEF_RE/METHOD_RE both miss;
+# still requires the `impl` (below) to be non-empty, so an untagged helper leaf (`s16`, `leaf1`, ...)
+# that happens to take `Core*` first is NOT mistaken for a native (see the is_freefn skip-if-empty guard).
+FREEFN_RE = re.compile(r'^\s*(?:static\s+)?(?:inline\s+)?[\w:*&<>]+\s+(\w+)\s*\(\s*Core\s*\*')
 ADDR_RE = re.compile(r'0x(8[0-9A-Fa-f]{7})')
 FUN_RE  = re.compile(r'FUN_(8[0-9a-fA-F]{7})')
 NAMEHEX = re.compile(r'^(?:ov|native|eng)_([0-9A-Fa-f]{6,8})$')
 DEP_RE  = re.compile(r'(?:rec_dispatch|rec_super_call|super_call|call_fn|rc[0-4]|rec_coro_redirect)\s*\(\s*c\s*,\s*0x(8[0-9A-Fa-f]{7})')
+# A file-level header ("game/player/hitbox.cpp — PC-native ownership of FUN_8003B220.") tags the ONE
+# guest address the file exists to own, for files where the tag sits at the top (file/module doc
+# comment) rather than immediately above the def (e.g. hitbox.cpp's def is preceded by an unrelated
+# one-line comment, with unrelated `#include`s and a tiny helper fn separating it from the real header).
+# Deliberately strict — "ownership of FUN_xxxx"/"ownership of 0x..." immediately adjacent, so it does
+# NOT fire on multi-native files whose header describes a SUBSYSTEM ("ownership of the engine's
+# geometry SUBMIT path") or lists several addresses in prose (release_trigger_motion.h) — those already
+# resolve per-method via their own adjacent tags.
+FILE_HEADER_ADDR_RE = re.compile(r'ownership of\s+(?:FUN_(8[0-9A-Fa-f]{7})|0x(8[0-9A-Fa-f]{7}))', re.IGNORECASE)
+
+
+def tag_portion(text):
+    """A header line names the owner LEFT of the first separator (—/:/-). Anything to the RIGHT is
+    description prose and may reference OTHER addresses (e.g. `// FUN_80107e20 — transition variant …
+    1 effect 0x8003e264 …`); those must NOT be counted as owner tags."""
+    for sep in ("—", " - ", ":"):
+        if sep in text:
+            return text.split(sep, 1)[0]
+    return text
+
+
+def comment_above(lines, i):
+    """The single comment line immediately above line i (or "" if none) — i.e. the FIRST line of the
+    contiguous `//` block right above a def/decl, which is where this tree's tag convention always
+    puts the owned address (see scan_decl_tags for why scanning further lines is unsafe)."""
+    c = i - 1
+    if c >= 0 and lines[c].lstrip().startswith("//"):
+        while c - 1 >= 0 and lines[c - 1].lstrip().startswith("//"):
+            c -= 1
+        return lines[c].strip()
+    return ""
+
+
+def file_header_addr(lines):
+    """The leading contiguous comment/blank block at the top of the file (the file's own doc-comment,
+    stopping at the first real code line), searched for the single-address 'ownership of FUN_xxxx'
+    tag. Returns None for the common case (no such phrase, or a multi-native/subsystem file whose
+    header doesn't name one specific address that way)."""
+    block = []
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("//") or s == "":
+            block.append(ln)
+        else:
+            break
+    m = FILE_HEADER_ADDR_RE.search("\n".join(block))
+    return (m.group(1) or m.group(2)).upper() if m else None
 
 
 def load_override_table():
@@ -74,10 +130,6 @@ def load_behavior_table():
     return sym2addrs
 
 
-OVR = load_override_table()
-OVR.update(load_behavior_table())
-
-
 def collect_files():
     files = []
     for g in SRC_GLOBS:
@@ -85,16 +137,87 @@ def collect_files():
     return sorted(set(files))
 
 
+CLASS_OPEN_RE = re.compile(r'^\s*class\s+(\w+)\b[^;{]*\{')
+DECL_RE = re.compile(r'^\s*(?:static\s+)?(?:virtual\s+)?[\w:*&<>]+\s+(\w+)\s*\([^;{]*\)\s*(?:const)?\s*(?:override)?\s*;')
+
+
+def scan_decl_tags(files):
+    """A second, ORTHOGONAL source of address ownership beyond load_override_table/
+    load_behavior_table: a class's method is declared (not defined) in its header with the guest FUN_
+    tag on/above the DECLARATION (e.g. Trig::rsin — game/math/trig.h tags `rsin`/`rcos`/`ratan2`/
+    `angleCmp` next to their in-class declarations), while the out-of-line DEFINITION in the .cpp has
+    no adjacent tag at all (trig.cpp's method bodies open with zero comment above them — the tag lives
+    only in the header, nowhere near the def the main parse_file() scanner inspects). Declarations
+    themselves are skipped by parse_file's forward-decl guard (correctly — there's no body to scan for
+    callees/deps), so without this pass those methods report 'NO native owner found' despite being
+    tagged, real, and reached by ordinary direct C++ calls. Declarations inside a class body have no
+    `ClassName::` qualifier (`int32_t rsin(...) const;`), so we track the enclosing `class Foo {` to
+    reconstruct the qualified symbol the .cpp definition (found by METHOD_RE) will use."""
+    tags = {}
+    for path in files:
+        if not path.endswith(".h") and not path.endswith(".hpp"):
+            continue
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        class_stack, depth = [], 0
+        for i, line in enumerate(lines):
+            m = CLASS_OPEN_RE.match(line)
+            if m:
+                class_stack.append((m.group(1), depth))
+            depth += line.count("{") - line.count("}")
+            while class_stack and depth <= class_stack[-1][1]:
+                class_stack.pop()
+            if not class_stack:
+                continue
+            dm = DECL_RE.match(line)
+            if not dm:
+                continue
+            defcomment = line[line.index("//"):].strip() if "//" in line else ""
+            # First-line-only, untruncated scan (deliberately NOT tag_portion's "left of separator"
+            # rule, and NOT a multi-line header scan): this codebase's declaration-tag convention is
+            # `methodName(args): guest FUN_xxxx. <description mentioning OTHER addresses>` — the colon
+            # comes BEFORE the real address, so tag_portion's split-at-colon truncates it away, and
+            # scanning a 2nd/3rd comment line for a fallback picks up a dependency address from the
+            # description instead (this exact shape mis-owned Engine::objMatrixCompose with its own
+            # `deps` — 0x80085480/80084110/80084470/80051128 — because line 1 (holding the true
+            # 0x800518FC) got truncated at ':' and line 2 (a pure dependency list) was scanned next).
+            # Every real declaration tag in this tree names its own address somewhere on the line
+            # immediately above the declaration (or trailing on the declaration line itself) — never
+            # needs a 2nd line — so take the FIRST match on defcomment/first-comment-line only.
+            first_line = defcomment or (comment_above(lines, i))
+            if not first_line:
+                continue
+            m3 = re.search(r'FUN_(8[0-9a-fA-F]{7})|0x(8[0-9A-Fa-f]{7})', first_line)
+            if not m3:
+                continue
+            addrs = [(m3.group(1) or m3.group(2)).upper()]
+            sym = f"{class_stack[-1][0]}::{dm.group(1)}"
+            for a in addrs:
+                tags.setdefault(sym, [])
+                if a not in tags[sym]:
+                    tags[sym].append(a)
+    return tags
+
+
+OVR = load_override_table()
+OVR.update(load_behavior_table())
+OVR.update(scan_decl_tags(collect_files()))
+
+
 def parse_file(path, natives):
     rel = os.path.relpath(path, ROOT)
     lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    pending_freefn = []  # candidates with no per-def tag; may be claimed by the file-header fallback
     i = 0
     while i < len(lines):
         m = DEF_RE.match(lines[i])
         is_method = False
+        is_freefn = False
         if not m:
             m = METHOD_RE.match(lines[i])
             is_method = True
+        if not m:
+            m = FREEFN_RE.match(lines[i])
+            is_freefn = True
         if m:
             # Reject a forward DECLARATION masquerading as a definition: a prototype ends in `;`
             # before any `{` ever appears on the line (e.g. `uint32_t foo(Core*, uint32_t);  //
@@ -118,15 +241,6 @@ def parse_file(path, natives):
         # a trailing `// ...` on the def line itself: class methods tag their guest FUN address there
         # (e.g. `void Camera::lookAt() {   // FUN_8006D02C`). Scan it first so it wins the association.
         defcomment = lines[i][lines[i].index("//"):].strip() if "//" in lines[i] else ""
-
-        def tag_portion(text):
-            """A header line names the owner LEFT of the first separator (—/:/-). Anything to the
-            RIGHT is description prose and may reference OTHER addresses (e.g. `// FUN_80107e20 —
-            transition variant … 1 effect 0x8003e264 …`); those must NOT be counted as owner tags."""
-            for sep in ("—", " - ", ":"):
-                if sep in text:
-                    return text.split(sep, 1)[0]
-            return text
         # gather the body until brace balance returns to 0 (handles one-liners and multiline)
         body, depth, started = [], 0, False
         j = i
@@ -167,13 +281,30 @@ def parse_file(path, natives):
             if not impl:  # last resort: first address anywhere in the comment block, in TEXTUAL order.
                 # A `Foo::bar — … guest 0x80059D28 …` class-method header names its owner in prose;
                 # taking the earliest hit avoids picking up a later callee reference (e.g. FUN_8005950C).
-                m2 = re.search(r'0x(8[0-9A-Fa-f]{7})|FUN_(8[0-9a-fA-F]{7})', " ".join(comment))
+                # For a name-agnostic free fn (is_freefn), scanning the WHOLE block is unsafe: unlike the
+                # disciplined "Class::method — native ownership of FUN_xxxx" header every tagged method
+                # uses, a free fn's preceding comment is often a multi-paragraph DESIGN NOTE that mentions
+                # several unrelated addresses before ever naming its own (e.g. gte_op's comment discusses
+                # `gte_math.cpp ov_mat_mul = FUN_80084110` — another function's address — while gte_op
+                # itself owns none; scanning the full block wrongly credited gte_op with 0x80084110,
+                # already correctly owned by Math::matMul). Every real free-fn tag observed in this tree
+                # names its address on the comment block's FIRST line, so restrict to that line only.
+                scan_text = comment[0] if (is_freefn and comment) else " ".join(comment)
+                m2 = re.search(r'0x(8[0-9A-Fa-f]{7})|FUN_(8[0-9a-fA-F]{7})', scan_text)
                 if m2:
                     impl.append((m2.group(1) or m2.group(2)).upper())
 
-        # A class method is only a NATIVE OWNER if it implements a guest address (FUN tag / comment addr).
-        # Un-owned helper methods tree-wide must NOT pollute the index.
-        if is_method and not impl:
+        # A class method / name-agnostic free fn is only a NATIVE OWNER if it implements a guest address
+        # (FUN tag / comment addr). Un-owned helper methods/leaf fns tree-wide must NOT pollute the index —
+        # EXCEPT: a name-agnostic free fn (is_freefn) with no address of its OWN gets one more chance below,
+        # via the file-header fallback, before being dropped (see pending_freefn).
+        if (is_method or is_freefn) and not impl:
+            if is_freefn:
+                deps = sorted({d.upper() for d in DEP_RE.findall(bodytext)})
+                desc = re.sub(r'^[/\s]*((0x8[0-9A-Fa-f]{7}|FUN_8[0-9a-fA-F]{7}|/)\s*)+[—:-]?\s*', '',
+                               comment[0]).strip() if comment else ""
+                pending_freefn.append(dict(sym=sym, file=rel, line=i + 1, deps=deps, desc=desc, body=bodytext,
+                                            bstart=i, bend=j, is_freefn=True))
             i = j + 1
             continue
         deps = sorted({d.upper() for d in DEP_RE.findall(bodytext)})
@@ -182,8 +313,22 @@ def parse_file(path, natives):
             # first comment line, stripped of the leading address tokens, as a one-line summary
             desc = re.sub(r'^[/\s]*((0x8[0-9A-Fa-f]{7}|FUN_8[0-9a-fA-F]{7}|/)\s*)+[—:-]?\s*', '', comment[0]).strip()
         natives.append(dict(sym=sym, file=rel, line=i + 1, impl=impl, deps=deps, desc=desc, body=bodytext,
-                             bstart=i, bend=j))
+                             bstart=i, bend=j, is_freefn=is_freefn))
         i = j + 1
+
+    # File-header fallback (Fix for hitbox.cpp-style files): a file's own leading doc-comment names
+    # ONE guest address it exists to own ("... ownership of FUN_8003B220."), but the tag sits far from
+    # the def (separated by #includes / a tiny unrelated helper fn), so no per-def scan above found it.
+    # Only fires when (a) the file actually makes that "ownership of FUN_xxxx" claim, and (b) nothing
+    # already indexed in this file claims that address — then attributes it to the LARGEST untagged
+    # free-fn candidate in the file (the primary implementation; incidental one-line helpers like `s16`
+    # are never the biggest body in a file dedicated to one leaf).
+    if pending_freefn:
+        addr = file_header_addr(lines)
+        if addr and not any(addr in n["impl"] for n in natives if n["file"] == rel):
+            best = max(pending_freefn, key=lambda n: n["bend"] - n["bstart"])
+            best["impl"] = [addr]
+            natives.append(best)
 
 
 def ordinary_corpus(files, natives):
@@ -238,11 +383,18 @@ def build(natives, files):
     #     indexed method-native are matched this way; ambiguous names fall back to form (1) only
     #     (ClassName::method(...) — still recognized, just not the shorthand instance-call form).
     bare2sym, name_count = {}, {}
+    # Name-agnostic free-fn natives (FREEFN_RE — grid_query_47cbc, hitbox_build_3b220, ...) have no
+    # `::` and no recognized prefix either, so qualified_re above never sees a call to them (`foo(c)`
+    # is just a bare identifier). They ARE always called by that exact bare name (there's no receiver
+    # syntax for a free function) — fold them into the same bare-name table as unique method names, one
+    # bucket keyed by "the whole symbol is its own bare name" instead of "the part after `::`".
     for s in sym_set:
         if "::" in s:
             bare = s.split("::")[-1]
-            name_count[bare] = name_count.get(bare, 0) + 1
-            bare2sym[bare] = s
+        else:
+            bare = s
+        name_count[bare] = name_count.get(bare, 0) + 1
+        bare2sym[bare] = s
     unique_bares = [b for b, c in name_count.items() if c == 1]
     bare_re = re.compile(r'\b(' + "|".join(re.escape(b) for b in unique_bares) + r')\s*\(') \
         if unique_bares else None
@@ -328,11 +480,32 @@ def addr_index(natives):
     return idx
 
 
+def reconcile_freefn_claims(natives):
+    """A name-agnostic free fn (FREEFN_RE) is often a THIN DISPATCH WRAPPER whose own doc-comment
+    names the address it CALLS, not one it implements (e.g. beh_scene_ui_trigger.cpp's
+    `render_and_return` — "dispatch the per-object render-state update FUN_800517F8 (owned)" — is a
+    2-line wrapper around the ALREADY-owned GraphicsBind::renderUpdate; several `beh_*` behavior files
+    each carry their own such wrapper around the same shared Engine::animTick/walkStart/etc.). Because
+    parse_file resolves one file at a time, it can't see whether some OTHER file properly (via
+    DEF_RE/METHOD_RE + a real per-def tag) already owns the same address — so this cross-file pass
+    runs once, after every file is parsed, and drops any freefn's claim on an address that a non-freefn
+    native already owns. Addresses shared among two non-freefn natives are left untouched (that's the
+    deliberate pc_skip fork pattern — doSkip()/doFaithful() legitimately both implement one address)."""
+    non_freefn_addrs = {a.upper() for n in natives if not n.get("is_freefn") for a in n["impl"]}
+    kept = []
+    for n in natives:
+        if n.get("is_freefn") and any(a.upper() in non_freefn_addrs for a in n["impl"]):
+            continue
+        kept.append(n)
+    return kept
+
+
 def main():
     natives = []
     files = collect_files()
     for f in files:
         parse_file(f, natives)
+    natives = reconcile_freefn_claims(natives)
     by_sym, callers, live, ordinary_hit = build(natives, files)
     idx = addr_index(natives)
 
