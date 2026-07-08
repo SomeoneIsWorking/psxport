@@ -47,6 +47,8 @@ Core::Core() {
   engine.modeStateArm.core = this;      // Engine-owned mode-state arm primitive pair
   engine.script.core = this;            // Engine-owned cutscene bytecode dispatcher
   engine.actorTomba.core = this;        // Engine-owned Tomba per-frame logic (G-block owner)
+  engine.attackOrbit.core = this;       // Engine-owned A00 attack-orbit sub-behaviors
+  engine.releaseTriggerMotion.core = this;  // Engine-owned release-trigger sub-motion cluster
   rng.core        = this;
   trig.core       = this;
   math.core       = this;

@@ -7,9 +7,10 @@
 //   state 0  -> FUN_80140544                          (per-type init; then -> epilogue)
 //   state 1  -> a despawn-gate (node[0x32]/node[0x66]/DAT_800e7eaa), an animation/tick gate
 //               (FUN_8014047c, node[0x2b] dec + node[0x56] +/-0x80 by pad bit), then a node[3]
-//               compare-dispatch — 1..5 -> motion (FUN_80144928/800781e0/801409c0); 0x80 ->
-//               FUN_80145af0; 0x81 -> FUN_801458e0; 0 OR any other (>=6) -> FUN_80143a00 default —
-//               then a common tail:
+//               compare-dispatch — 1..5 -> motion (FUN_80144928/800781e0/801409c0); 0x80/0x81 ->
+//               native c->engine.attackOrbit.{aimAtTargetAnchor,orbitTargetMotion}() (was
+//               FUN_80145af0/FUN_801458e0 — see game/ai/attack_orbit_substate.{h,cpp}); 0 OR any
+//               other (>=6) -> FUN_80143a00 default — then a common tail:
 //               cull FUN_800777fc, an SFX edge (node[0x67]==1 -> FUN_8009a450/FUN_80074590), a
 //               DAT_8014bf5e countdown that on underflow may spawn (FUN_8003116c) keyed on
 //               node[0x68], then FUN_80076d68 + render FUN_800518fc, and a node[0x29]->node[0xb]
@@ -163,11 +164,11 @@ void beh_id_compare_motion_dispatch(Core* c) {
       goto n3_motion;
     }
     if (n3 == 0x80) {                                   // beq 0x80 -> 0x801454f8       [0x801453DC]
-      c->r[4] = obj; rec_dispatch(c, 0x80145AF0u);      // FUN_80145af0                [0x801454F8]
+      c->r[4] = obj; c->engine.attackOrbit.aimAtTargetAnchor();  // FUN_80145af0 (native)  [0x801454F8]
       goto second_cull;                                 // j 0x80145510
     }
     if (n3 == 0x81) {                                   // beq 0x81 -> 0x80145508       [0x801453E4]
-      c->r[4] = obj; rec_dispatch(c, 0x801458E0u);      // FUN_801458e0                [0x80145508]
+      c->r[4] = obj; c->engine.attackOrbit.orbitTargetMotion();  // FUN_801458e0 (native)  [0x80145508]
       goto second_cull;                                 // j 0x80145510
     }
     // n3==0 OR (n3>=6 && !=0x80 && !=0x81) -> 0x801453EC

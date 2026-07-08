@@ -747,6 +747,16 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     diagnostic gates (`rendupdverify`/`recinitverify`/`setgeomverify`/`randverify`) under real gameplay
     traffic: **0 mismatches** (`randverify` alone saw 220000+ live calls).
     `ov_inventory_give_and_flag` (`FUN_8004D4C4`, 8 sites) similarly has no header yet — a follow-up.
+  - ✅ (2026-07-08): owned the A00-overlay attack-orbit sub-behaviors reached from
+    `beh_id_compare_motion_dispatch` (`FUN_80145230`, already native) when node[3]==0x80/0x81 — the last
+    two rec_dispatch-only leaves in that dispatcher's own address band. `FUN_80145AF0` →
+    `AttackOrbitSubstate::aimAtTargetAnchor` (aim-point recompute from a captured target + one-shot
+    attack-window trigger via `func_0x800331D8`), `FUN_801458E0` → `AttackOrbitSubstate::orbitTargetMotion`
+    (6-phase acquire/orbit state machine). New `game/ai/attack_orbit_substate.{h,cpp}`, engine member
+    `c->engine.attackOrbit`. RE'd via Ghidra headless (A00 overlay project) + cross-checked against the
+    recompiled substrate (`generated/ov_a00_shard_{0,1}.c`). SBS full ran ~150 frames autonav, 0 diffs,
+    but autonav didn't confirm it actually drove an object through this specific attack sub-state —
+    correctness rests on the RE + zero-regression, flagged per CLAUDE.md.
   - ✅ later-297 (2026-07-01): **wired the whole GTE-transform cluster onto the live path** — `ov_mat_mul`
     (`FUN_80084110`), `ov_apply_matlv` (`FUN_80084220`), `ov_rot_x/y/z` (`FUN_80084D10`/`EB0`/`85050`).
     These were `static` in `engine_math.cpp` (not even visible to other TUs), so this is a BIGGER version of

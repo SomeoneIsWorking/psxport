@@ -43,6 +43,8 @@
 #include "scene/mode_state_arm.h"     // Engine owns the ModeStateArm arm-primitive pair
 #include "scene/script_interp.h"      // Engine owns the ScriptInterp cutscene-script dispatcher
 #include "player/actor_tomba.h"       // Engine owns Tomba's per-frame logic + growth/movement
+#include "ai/attack_orbit_substate.h" // Engine owns the A00-overlay AttackOrbitSubstate sub-behaviors
+#include "ai/release_trigger_motion.h" // Engine owns the release-trigger sub-motion cluster
 class Core;
 
 class Engine {
@@ -94,6 +96,8 @@ public:
   ModeStateArm     modeStateArm;        // mode-state arm primitive pair (FUN_8005082C / FUN_800508A8)
   ScriptInterp     script;              // cutscene bytecode dispatcher (FUN_80041098 et al.)
   ActorTomba       actorTomba;          // Tomba's per-frame logic + growth/movement over G block
+  AttackOrbitSubstate attackOrbit;      // A00 overlay: node[3]==0x80/0x81 sub-behaviors (FUN_80145AF0/801458E0)
+  ReleaseTriggerMotion releaseTriggerMotion; // release-trigger sub-motion cluster (FUN_80123E9C family)
 
   // ── GAME-stage entry points (called by the scheduler each frame) ────────────────────────────
   // stagePrologue: one-time prologue that runs when the GAME task enters — task-slot setup, first
