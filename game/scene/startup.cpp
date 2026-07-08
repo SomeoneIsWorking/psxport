@@ -114,6 +114,39 @@ void Engine::initEntityPool() {
   c->mem_w16(0x1f800176u, 0x1000);
 }
 
+// FUN_8007b2c0 — direction-mask seeder. Called with 0 at boot (initEntityPool above) and again
+// from reloadEntityPool below with the staged per-area orientation byte; a nonzero arg reverses
+// the 4 fixed-point words' order (mirrored-facing swap).
+void Engine::seedDirectionMasks(bool flipped) {   // FUN_8007B2C0
+  Core* c = this->core;
+  if (!flipped) {
+    c->mem_w16(0x1f800170u, 0x8000);
+    c->mem_w16(0x1f800172u, 0x4000);
+    c->mem_w16(0x1f800174u, 0x2000);
+    c->mem_w16(0x1f800176u, 0x1000);
+  } else {
+    c->mem_w16(0x1f800170u, 0x1000);
+    c->mem_w16(0x1f800172u, 0x2000);
+    c->mem_w16(0x1f800174u, 0x4000);
+    c->mem_w16(0x1f800176u, 0x8000);
+  }
+}
+
+// FUN_8007b3f4 — re-copy the staged per-area entity-pool control bytes onto the live header
+// initEntityPool seeded at boot, then reseed the direction masks from the staged orientation byte.
+void Engine::reloadEntityPool() {   // FUN_8007B3F4
+  Core* c = this->core;
+  uint8_t orient = c->mem_r8(0x800bfe4cu);
+  c->mem_w8(0x800fb166u, orient);
+  c->mem_w8(0x800fb161u, c->mem_r8(0x800bf8a3u));
+  c->mem_w8(0x800fb162u, c->mem_r8(0x800bfe4eu));
+  c->mem_w8(0x800fb163u, c->mem_r8(0x800bfe4fu));
+  c->mem_w8(0x800fb164u, c->mem_r8(0x800bf88au));
+  c->mem_w8(0x800fb165u, c->mem_r8(0x800bf88bu));
+  c->mem_w8(0x800fb167u, c->mem_r8(0x800bfe4du));
+  seedDirectionMasks(orient != 0);
+}
+
 // FUN_80086620 — engine MODE control: file-local helper (only called from Engine::initSubsystems, which
 // invokes it with a0=1 where both flags + both counters are still BSS-zero, so it EARLY-RETURNS with no
 // writes — a verified no-op; the logic below reproduces that and the general case).

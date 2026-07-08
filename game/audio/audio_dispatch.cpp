@@ -73,6 +73,14 @@ void AudioDispatch::settleField() { Core* c = core;
   rec_dispatch(c, 0x80074E48u);         // SsSeqClose + full voice reset (substrate)
 }
 
+// AudioDispatch::selectState — native ownership of FUN_800750A4 (Ghidra decomp
+// scratch/decomp/area_load_leaves.c): dispatch3Way(idx, 1) then publish idx to the state-index
+// byte. Used by Engine::areaLoadState's state 2 (idx=4).
+void AudioDispatch::selectState(uint8_t idx) { Core* c = core;   // FUN_800750A4
+  dispatch3Way(idx, 1);
+  c->mem_w8(0x1F80023Bu, idx);
+}
+
 // AudioDispatch::zoneTransitionSetup — native ownership of the tiny dispatcher FUN_8001D71C. See
 // the class doc-comment (audio_dispatch.h) for the record layout + branch semantics. Ghidra decomp
 // scratch/decomp/sop_tail_8001d71c.c; widths spot-checked against tools/disas.py 0x8001d71c.

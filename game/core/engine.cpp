@@ -136,11 +136,16 @@ void Engine::s48_2() { Core* c = core;
   rec_coro_redirect(c, handler[s4a]);                  // run the handler IN-CONTEXT (survives a deep yield)
 }
 
-// sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state machine), GAME.BIN 0x80106478,
-// reached as ov_game_s48_2's sub-mode 2 (the area LOAD/TRANSITION path). STAGED, NOT REGISTERED: it owns the
-// 9-way sm[0x4c] state selection via the same coro-redirect handshake (the per-state bodies yield deep and
-// run IN-CONTEXT), but the headless idle-field gate never reaches s4a==2, so it can't be A/B-verified yet —
-// see the registration site. Faithful to 0x80106478:
+// s4c() reference: sm[0x4c] == the AREA machine (the 9-state load/intro/play scene state machine, GAME.BIN,
+// reached as ov_game_s48_2's sub-mode 2, the area LOAD/TRANSITION path). STAGED, NOT REGISTERED — dead
+// code kept for the coro-redirect handshake reference/comparison. CORRECTION (this pass): the "per-state
+// bodies yield deep" claim below is FALSE — Ghidra decomp (scratch/decomp/game_all_list.c) shows
+// this guest fn has NO jal to the yield primitive FUN_80051f80 anywhere in its 9 states; it's a plain
+// synchronous pause/save/quit-menu sequencer. It is now OWNED as `Engine::areaLoadState()` (a plain
+// method, no coro-redirect needed) and wired onto the LIVE path at `Engine::s48_2_frame`'s s4a==2 branch.
+// This s4c()/state[] coro-redirect body below is retained only as the original RE reference (see
+// Engine::areaLoadState's own doc comment for the ported semantics + the walkable-Tomba spawn-hunt
+// negative result). Faithful transcription of the guest body:
 //   prologue: addiu sp,-0x18; sw ra,0x14(sp); sw s0,0x10(sp)   (s0 saved in the jal's delay slot)
 //   jal 0x80075a80  — a per-frame area update BEFORE the dispatch. It is SYNCHRONOUS (a transitive
 //     jal-graph scan over its 57 reachable fns finds no yield FUN_80051f80; and the RAM 0-diff gate would
@@ -169,6 +174,200 @@ void Engine::s4c() { Core* c = core;
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   if (s4c >= 9) { rec_coro_redirect(c, 0x80106a14u); return; }   // out of range -> shared epilogue
   rec_coro_redirect(c, state[s4c]);             // run the state IN-CONTEXT (it `j`s to the epilogue itself)
+}
+
+// Engine::areaLoadState — native ownership of FUN_80106478 (the RUNNING/sm[0x4a]==2 sub-mode's
+// sm[0x4c] area LOAD/TRANSITION machine; s48_2_frame's handler[2]). Verified SYNCHRONOUS: the
+// decompiled body (Ghidra scratch/decomp/game_all_list.c) has no jal to the yield primitive
+// FUN_80051f80 anywhere in its 9 states, so it's safe to call as a plain native method (unlike
+// FUN_801088d8's FIELD area machine, which genuinely yields and stays behind rec_coro_redirect
+// via s4c() above — s4c() itself is a DIFFERENT sm[0x4c] context, reused field, not this one).
+//
+// WALKABLE-TOMBA SPAWN HUNT — NEGATIVE RESULT: none of states 0-8 spawn anything. This machine is
+// the PAUSE/SAVE/QUIT menu's confirm-dialog sequencer: state 0 arms a ~330-frame fade-out timer +
+// dispatch3Way(0x2C) (audio-armed poll) + a 128-byte zero-init (FUN_8004D8B0, still un-owned);
+// state 1 counts the fade-out timer down against pad-edge bit 0x800E7E68, driving a camera/view
+// helper (FUN_8007E8DC); state 2 selects state-index 4 (AudioDispatch::selectState) and advances;
+// states 3-5 are per-frame SAVE-prompt / CONTINUE-prompt renders (FUN_8007ED5C/EE74/EF60 — text
+// widgets, own the "Save"/"Continue"/"Load data"/"Quit game" strings) gated entirely on pad-edge
+// bits (0x4000 confirm, 0x10/0x40/0x2000 cursor/cancel) with SFX cues via c->engine.sfx.trigger;
+// state 6 just advances sm[0x4a] to 4 (hands off to the next running sub-mode, itself substrate);
+// states 7/8 are the QUIT-CONFIRM Y/N dialog (FUN_8007BF20, its own DAT_800bf84a-keyed SM) —
+// on accept, state 7 calls reloadEntityPool() (was FUN_8007B3F4) and returns to sm[0x4a]==1
+// (back to the FIELD area machine), i.e. "confirm quit-to-title" unwinds to the SOP/field bridge,
+// it does not spawn anything either. Rules out the last un-RE'd sibling of the sm[0x4c] area
+// machine as a spawn candidate.
+void Engine::areaLoadState() { Core* c = core;   // FUN_80106478
+  const uint32_t T = 0x1F800138u;               // *T == the sm task-state block (fixed addr)
+  uint16_t s4c = c->mem_r16(T + 0x4c);
+  switch (s4c) {
+    case 0: {
+      rec_dispatch(c, 0x8001CF2Cu);                          // engine tick (substrate)
+      c->mem_w16(0x800BE222u, 0x47FFu);                       // FUN_80075CEC(0x47ff): fade target (inlined —
+                                                               // same private leaf music_coord.cpp inlines;
+                                                               // see BgSceneTransitionSm::audioFadeTarget)
+      c->mem_w16(T + 0x5C, 0x14A);
+      c->mem_w16(T + 0x4C, (uint16_t)(c->mem_r16(T + 0x4C) + 1));
+      c->engine.audioDispatch.dispatch3Way(0x2C, 0);         // native — was FUN_800750D8(0x2c,0)
+      rec_dispatch(c, 0x8004D8B0u);                          // 128-byte zero-init (substrate; un-owned this pass)
+      c->mem_w8(0x1F800206u, 0);
+      break;
+    }
+    case 1: {
+      int16_t v = (int16_t)(c->mem_r16(T + 0x5C) - 1);
+      c->mem_w16(T + 0x5C, (uint16_t)v);
+      if (v == 0 || (v < 0x10E && c->mem_r16(0x800E7E68u) != 0)) {
+        c->mem_w16(T + 0x4C, (uint16_t)(c->mem_r16(T + 0x4C) + 1));
+      }
+      c->r[4] = 0xA0; c->r[5] = 0x70; c->r[6] = 0; c->r[7] = 0x17A;
+      rec_dispatch(c, 0x8007E8DCu);                          // camera/view helper (substrate)
+      break;
+    }
+    case 2:
+      rec_dispatch(c, 0x8001CF2Cu);                          // engine tick (substrate)
+      c->engine.audioDispatch.selectState(4);                // native — was FUN_800750A4(4)
+      c->mem_w16(T + 0x4E, 1);
+      c->mem_w8 (T + 0x6B, 0);
+      c->mem_w16(T + 0x4C, (uint16_t)(c->mem_r16(T + 0x4C) + 1));
+      c->mem_w16(T + 0x50, 0);
+      [[fallthrough]];
+    case 3: {
+      c->r[4] = c->mem_r16(T + 0x4E);
+      rec_dispatch(c, 0x8007ED5Cu);                          // SAVE-prompt text render (substrate)
+      if (c->mem_r16(0x800E7E68u) & 0x4000u) {
+        uint16_t e = c->mem_r16(T + 0x4E);
+        if (e == 0) {
+          rec_dispatch(c, 0x80078824u);                      // AREA START POS write (substrate)
+          c->mem_w16(T + 0x4C, 8);
+          c->mem_w8(0x800BF84Au, 0);
+        } else if (e == 1) {
+          c->mem_w16(T + 0x4C, (uint16_t)(c->mem_r16(T + 0x4C) + 1));
+        }
+        c->mem_w8 (T + 0x6B, 0);
+        c->mem_w16(T + 0x4E, 0);
+        c->mem_w16(T + 0x50, 0);
+        c->engine.sfx.trigger(0x11, 0, 0);                   // native — was FUN_80074590(0x11,0,0)
+      }
+      if ((c->mem_r16(0x800E7E68u) & 0x10u) == 0) {
+areaload_joined_68f4:
+        if ((c->mem_r16(0x800E7E68u) & 0x40u) == 0) return;
+        if (c->mem_r16(T + 0x4E) != 0) return;
+        c->mem_w16(T + 0x4E, 1);
+      } else {
+        if (c->mem_r16(T + 0x4E) == 0) return;
+        c->mem_w16(T + 0x4E, (uint16_t)(c->mem_r16(T + 0x4E) - 1));
+      }
+areaload_lab_106918:
+      c->engine.sfx.trigger(0x15, 0, 0);                     // native — was FUN_80074590(0x15,0,0)
+      break;
+    }
+    case 4: {
+      c->r[4] = c->mem_r16(T + 0x4E);
+      rec_dispatch(c, 0x8007EE74u);                          // CONTINUE/LOAD/QUIT prompt render (substrate)
+      if ((c->mem_r16(0x800E7E68u) & 0x4000u) == 0) {
+        if (c->mem_r16(0x800E7E68u) & 0x2000u) {
+          int16_t s = (int16_t)(c->mem_r16(T + 0x4C) - 1);
+          c->mem_w16(T + 0x4E, 0);
+          c->mem_w8 (T + 0x6B, 0);
+          c->mem_w16(T + 0x4C, (uint16_t)s);
+          c->engine.sfx.trigger(0x14, -9, 0);                // native — was FUN_80074590(0x14,-9,0)
+          goto areaload_case4_edge;
+        }
+      } else {
+        uint16_t e = c->mem_r16(T + 0x4E);
+        if (e == 1) {
+          c->mem_w16(T + 0x4C, 7);
+          c->mem_w8(0x800BF84Au, 0);
+          rec_dispatch(c, 0x8001CF2Cu);                      // engine tick (substrate)
+        } else if (e == 0) {
+          c->mem_w16(T + 0x48, 2);
+          c->mem_w16(T + 0x4A, 1);
+          c->mem_w16(T + 0x4C, 0);
+          rec_dispatch(c, 0x8001CF2Cu);                      // engine tick (substrate; guest arg 0x11 unused by callee)
+        }
+        // e == 2: sm[0x4c]++ (no other write) falls straight through to the shared tail below.
+        if (e == 2) c->mem_w16(T + 0x4C, (uint16_t)(c->mem_r16(T + 0x4C) + 1));
+        c->mem_w8 (T + 0x6B, 0);
+        c->mem_w16(T + 0x4E, 0);
+        c->mem_w16(T + 0x50, 0);
+        c->engine.sfx.trigger(0x11, 0, 0);                   // native — was FUN_80074590(0x11,0,0)
+      }
+areaload_case4_edge:
+      if ((c->mem_r16(0x800E7E68u) & 0x10u) == 0) {
+        if ((c->mem_r16(0x800E7E68u) & 0x40u) == 0) return;
+        if (c->mem_r16(T + 0x4E) > 1) return;
+        c->mem_w16(T + 0x4E, (uint16_t)(c->mem_r16(T + 0x4E) + 1));
+      } else {
+        if (c->mem_r16(T + 0x4E) == 0) return;
+        c->mem_w16(T + 0x4E, (uint16_t)(c->mem_r16(T + 0x4E) - 1));
+      }
+      goto areaload_lab_106918;
+    }
+    case 5: {
+      c->r[4] = c->mem_r16(T + 0x4E);
+      rec_dispatch(c, 0x8007EF60u);                          // QUIT-confirm render (substrate)
+      if (c->mem_r16(0x800E7E68u) & 0x4000u) {
+        uint16_t e = c->mem_r16(T + 0x4E);
+        if (e == 0) {
+          c->mem_w16(T + 0x4C, (uint16_t)(c->mem_r16(T + 0x4C) + 1));
+          rec_dispatch(c, 0x8001CF2Cu);                      // engine tick (substrate)
+          return;
+        }
+        if (e != 1) return;
+        int16_t s = (int16_t)(c->mem_r16(T + 0x4C) - 1);
+        c->mem_w16(T + 0x4E, 0);
+        c->mem_w8 (T + 0x6B, 0);
+        c->mem_w16(T + 0x4C, (uint16_t)s);
+        c->engine.sfx.trigger(0x14, -9, 0);                  // native — was FUN_80074590(0x14,-9,0)
+        return;
+      }
+      if (c->mem_r16(0x800E7E68u) & 0x10u) {
+        if (c->mem_r16(T + 0x4E) == 0) return;
+        c->mem_w16(T + 0x4E, (uint16_t)(c->mem_r16(T + 0x4E) - 1));
+        goto areaload_lab_106918;
+      }
+      goto areaload_joined_68f4;
+    }
+    case 6:
+      c->mem_w16(T + 0x4A, 4);
+      c->mem_w16(T + 0x4C, 0);
+      c->mem_w16(T + 0x4E, 0);
+      break;
+    case 7: {
+      c->r[4] = 0; c->r[5] = 1;
+      rec_dispatch(c, 0x8007BF20u);                          // QUIT-confirm Y/N dialog SM (substrate)
+      uint8_t result = c->mem_r8(T + 0x6B);
+      if (result == 7) {
+        reloadEntityPool();                                  // native — was FUN_8007B3F4()
+        c->mem_w8(0x1F800134u, 1);
+        c->mem_w16(T + 0x4A, 1);
+        c->mem_w16(T + 0x4C, 0);
+        c->mem_w16(T + 0x4E, 0);
+        return;
+      }
+      if ((uint8_t)(result - 1u) > 1u) return;
+      c->mem_w16(T + 0x4C, 4);
+      c->mem_w16(T + 0x4E, 1);
+      break;
+    }
+    case 8: {
+      c->r[4] = 0x81; c->r[5] = 1;
+      rec_dispatch(c, 0x8007BF20u);                          // QUIT-confirm Y/N dialog SM (substrate)
+      uint8_t result = c->mem_r8(T + 0x6B);
+      if (result == 9) {
+        c->mem_w8 (T + 0x6B, 0);
+        c->mem_w16(T + 0x4C, 4);
+        c->mem_w16(T + 0x4E, 0);
+        c->mem_w16(T + 0x50, 0);
+        return;
+      }
+      if ((uint8_t)(result - 1u) > 1u) return;
+      c->mem_w16(T + 0x4C, 3);
+      c->mem_w16(T + 0x4E, 1);
+      break;
+    }
+    default: break;   // s4c >= 9 -> no-op (shared epilogue; matches the guest's no-default switch)
+  }
 }
 
 // ---- NATIVE PER-FRAME GAME LOOP (game_native path, mirrors DEMO demo_native) ------------------------
@@ -259,11 +458,16 @@ void Engine::s48_2_frame() { Core* c = core;
   c->mem_w32(sp + 16, c->r[31]);
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4a = c->mem_r16(sm + 0x4a);
+  if (cfg_dbg("stage") && s4a != mLast4a) {
+    fprintf(stderr, "[stage] s48_2_frame: sm[0x4a]=%u sm[0x4c]=%u\n", s4a, c->mem_r16(sm + 0x4c));
+    mLast4a = s4a;
+  }
   if (s4a < 6) {
     c->r[31] = jal_ra[s4a];
     if (s4a == 0)      { c->game->ffspan.begin(); c->engine.submode0(); c->game->ffspan.end("submode0"); }
     else if (s4a == 1) { c->game->ffspan.begin(); c->engine.submode1(); c->game->ffspan.end("submode1"); }
     else if (s4a == 5) { c->game->ffspan.begin(); c->engine.fieldTransition(); c->game->ffspan.end("transition"); }  // native FUN_80108a60
+    else if (s4a == 2) { c->game->ffspan.begin(); c->engine.areaLoadState(); c->game->ffspan.end("areaload"); }      // native FUN_80106478
     else               { c->game->ffspan.begin(); rec_dispatch(c, handler[s4a]); c->game->ffspan.end("s48_2_handler"); }
   }
   c->r[31] = c->mem_r32(sp + 16);

@@ -573,17 +573,44 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
         its case 0 just runs `Sop::transitionAreaLoad` — no per-actor spawn).
       * Engine::fieldRun state 0 init chain (pool/placement/reset/view — nothing spawns Tomba).
       * Engine::fieldRun state 2 (FUN_80058304 case 0xC = "clear G flags", not a spawn).
-      * Engine::fieldRun state 3's `d0(0x80074BC4)` — needs RE (candidate).
+      * ~~Engine::fieldRun state 3's `d0(0x80074BC4)` — needs RE (candidate).~~ STALE, RESOLVED:
+        0x80074BC4 was RE'd and owned earlier this same section (see "`Engine::audioSettleField`
+        (FUN_80074BC4)" above) as `AudioDispatch::settleField` — a 4-step AUDIO STATE SETTLE
+        (clears the audio-cue scratchpad flag, engine-tick, 2 voice-table cleanups). NOT a spawn.
+        This note went stale because the walkable-Tomba write-up below wasn't updated when the
+        RE landed — corrected now (later pass, see below).
       * Area-machine `Engine::s4c` state 0 (0x801064C4 disassembled — audio-fade + sm bump +
         FUN_8004D8B0 which is a 128-byte zero-init — NOT a spawn).
       * Area-machine state 3 (0x801065B8) — calls FUN_8007ED5C (save-menu text render) and
         FUN_80078824 (writes AREA START POS for the player at 0x800BF890/894/898 from per-area
         table @PTR_DAT_800A54A8[area] + sub_area*8). This sets Tomba's spawn POSITION but the
-        node itself must already exist — pinpointing where the NODE is spawned needs a further
-        step (candidate: FUN_80074BC4 called from fieldRun state 3, still un-RE'd).
-      NEXT: RE FUN_80074BC4 (fieldRun state 3's mystery call) — most-likely remaining candidate
-      for walkable Tomba's initial spawn call. Sibling frontier: area-machine states 1/2/4..8
-      (still substrate via s4c's coro-redirect).
+        node itself must already exist.
+      * ✅ LATER PASS — the `s4c`/area-machine sm[0x4c] sibling frontier (states 1/2/4..8, guest
+        FUN_80106478) is now FULLY RE'd + OWNED as `Engine::areaLoadState()` (game/core/engine.cpp,
+        wired onto the live `Engine::s48_2_frame`'s sm[0x4a]==2 branch, replacing the rec_dispatch).
+        NEGATIVE RESULT: none of its 9 states spawn anything either — it's the PAUSE/SAVE/QUIT-menu
+        confirm-dialog sequencer (fade-out timer, SAVE-prompt/CONTINUE-prompt/QUIT-confirm text
+        renders gated on pad-edge bits @0x800E7E68, SFX cues via `c->engine.sfx.trigger`). This
+        rules out the LAST un-RE'd sibling of the sm[0x4c] area machine as a spawn candidate.
+        Ghidra decomp scratch/decomp/game_all_list.c (FUN_80106478) + area_load_leaves.c (its
+        sub-leaves — FUN_8007E8DC/ED5C/EE74/EF60/BF20/B3F4/B2C0/750A4, RE'd to classify + rule
+        out). Two more tiny leaves owned alongside it: `AudioDispatch::selectState` (FUN_800750A4,
+        audio_dispatch.cpp) and `Engine::seedDirectionMasks`/`reloadEntityPool` (FUN_8007B2C0/
+        FUN_8007B3F4, startup.cpp — entity-pool control-header reload + facing-direction mask
+        swap, used by the QUIT-confirm-accepted branch). COVERAGE CAVEAT: sm[0x4a] never reaches
+        2 under `PSXPORT_SBS_AUTONAV=1` (confirmed via a temporary `[stage] s48_2_frame` debug
+        print, both with and without `PSXPORT_SBS_KEYS=...:start` scripted presses at several
+        frame windows during the SOP intro) — opening the pause menu needs actual controllable
+        gameplay, which isn't reached yet. Verified instead by: build/boot clean, 0 SBS diffs
+        across the (unaffected sm[0x4a]==0/1) exercised path, and a careful 1:1 transcription of
+        the Ghidra decompile with the one uncertain point flagged in-code (a probably-spurious
+        `func_0x8001cf2c(0x11)` decompiler artifact — every other of the ~15 call sites to this
+        leaf in the codebase is niladic).
+      NEXT: with both `s4c`-family address groups (0x801064C4-family AND 0x80106478/state-machine)
+      now ruled out as spawns, the walkable-Tomba NODE-ACTIVATION site is still open. Remaining
+      candidates: the per-area mode-dispatch table @0x8009D1D4 (`Engine::modePerFrameDispatch`,
+      seaside entry [0] already native — check entries [1..23] for other areas), or a write to
+      the G block's "active"/"visible" flag word that hasn't been traced yet.
 
 ## D. Per-frame GAMEPLAY systems (inside the GAME stage loop)
 - ✅ `FUN_800788ac` frame update = `ov_frame_update` (pad read + present + audio kick) — game_tomba2.cpp.

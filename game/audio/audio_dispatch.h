@@ -24,6 +24,12 @@ public:
   //   Ghidra decomp scratch/decomp/fun_800750d8_v2.c. Return in c->r[2] preserved.
   uint32_t dispatch3Way(uint32_t idx, uint32_t arg2 = 0);
 
+  // selectState(idx): guest FUN_800750A4. Tiny wrapper used by the area LOAD/TRANSITION machine's
+  //   state 2 (Engine::areaLoadState, idx=4): dispatch3Way(idx, 1) then publish idx to the
+  //   scratchpad state-index byte 0x1F80023B — same tail Pool::selectStateIndex inlines for its
+  //   own s0. Ghidra decomp scratch/decomp/area_load_leaves.c.
+  void selectState(uint8_t idx);
+
   // voiceFetchBits(bits, flag): guest FUN_8001D364. Bit-packed XA/voice fetch selector.
   //   bits[3..5] pick one of 8 per-class descriptor tables (0x8001005C..0x80010078); bits[0..2]
   //   index a (u16 offset, u16 count) pair inside that table. Delegates to substrate

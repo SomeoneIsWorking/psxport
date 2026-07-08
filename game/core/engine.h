@@ -136,6 +136,22 @@ public:
   void s48_2();
   void s4c();
   void s48_2_frame();
+  // areaLoadState(): guest FUN_80106478 — the 9-state (sm[0x4c]==0..8) area LOAD/TRANSITION body
+  // that s4c() used to reach via rec_coro_redirect into the guest's own case-label addresses
+  // (0x801064c4/106510/106580/1065b8/1066b8/106830/106930/10694c/1069b4). It is a plain
+  // switch(sm[0x4c]) — Ghidra recovered it as ONE function, not 9 separate ones — so calling this
+  // method fresh reaches the same case body the coro-redirect used to jump into directly (the
+  // redirect skipped only the leading areaSlots.updateTail() call and the switch dispatch itself,
+  // both idempotent / already-current here). Owns control flow + every sm/DAT_800bf84a/etc state
+  // write; the pause/save-menu text-render leaves (FUN_8007E8DC/8007ED5C/8007EE74/8007EF60), the
+  // quit-confirm dialog sub-machine (FUN_8007BF20, its own DAT_800bf84a-keyed SM), and the
+  // audio-tick leaf (FUN_8001CF2C) stay substrate (font/pad-hold leaves with no PC-native
+  // equivalent yet). Ghidra decomp scratch/decomp/game_all_list.c (FUN_80106478) +
+  // scratch/decomp/area_load_leaves.c (the sub-leaves, RE'd to classify/rule them out as spawns).
+  // NEGATIVE RESULT (walkable-Tomba spawn hunt): none of states 0-8 spawn anything — this machine
+  // is entirely pause/save/quit menu UI + area audio-fade sequencing, driven by pad-edge bits at
+  // 0x800E7E68. Rules out the last un-RE'd sibling of the sm[0x4c] area machine.
+  void areaLoadState();
 
   // fieldFrame / fieldFrameX: the FIELD per-frame update body (guest 0x80108B0C) and its
   // mid-transition twin (0x80108BE4, sm[0x4a]==5 running-during-fade variant). Called by the
@@ -413,4 +429,18 @@ public:
   void initAlloc(uint32_t s1, uint32_t s2);  // FUN_80088B00 — allocator + 6-entry dispatch table
   void initInput();                    // FUN_80087A60 → 80086970 — input subsystem
   void initSubsystems();               // FUN_800520E0 — orchestrator (entity pool + alloc + mode + input)
+
+  // seedDirectionMasks(flipped): guest FUN_8007B2C0. Seeds the 4 fixed-point direction-mask words
+  //   at 0x1F800170/172/174/176 (the same words initEntityPool's FUN_8007B2C0(0) call seeds at
+  //   boot). flipped==0 -> 0x8000/0x4000/0x2000/0x1000; else the reverse order
+  //   0x1000/0x2000/0x4000/0x8000 (a mirrored-facing swap). Ghidra decomp
+  //   scratch/decomp/fun_8007b2c0.c.
+  void seedDirectionMasks(bool flipped);
+  // reloadEntityPool(): guest FUN_8007B3F4. Re-copies the staged per-area entity-pool control
+  //   bytes (0x800BFE4C/4D/4E/4F + 0x800BF8A3/88A/88B) onto the live control header
+  //   initEntityPool seeded at boot (0x800FB166/167/161/162/163/164/165 respectively), then
+  //   reseeds the direction masks via seedDirectionMasks(staged byte 0x800BFE4C). Called by
+  //   Engine::areaLoadState's state 7 confirm-branch (quit-confirm accepted -> resume). Ghidra
+  //   decomp scratch/decomp/area_load_leaves.c.
+  void reloadEntityPool();
 };
