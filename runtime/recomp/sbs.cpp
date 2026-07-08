@@ -82,8 +82,38 @@ constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
 constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_RIGHT = 0x2000, BTN_NONE = 0xFFFF;
 
-enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, DONE };
+enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, AWAIT_CONTROL, DONE };
 struct Nav { Phase phase = REACH_GAME; int idle = 0; int postFrame = 0; };
+
+// PSXPORT_SBS_POSTDRIVE=1 — keep exercising REAL interactive input (walk/jump) once player control
+// is reached (see Nav::DONE below), instead of handing off to feedInput()'s host-keyboard poll. One
+// evaluation, shared between navStep's DONE case and Sbs::Impl::run()'s per-frame dispatch (below).
+static bool sbsPostdriveOn() {
+  static const int on = []{ const char* e = getenv("PSXPORT_SBS_POSTDRIVE"); return e && *e && e[0] != '0' ? 1 : 0; }();
+  return on != 0;
+}
+
+// FIELD-RUNNING sub-machine offsets off task0 (0x801fe000) — see game/core/engine.cpp
+// Engine::fieldRunFaithful / Engine::fieldRun (the 12-way switch on sm[0x4e], RE'd from
+// 0x80106b98). sm[0x4e]==9 ("L_80106FC4 — field frame + gate on pad bit 3", engine.cpp:1095-1104)
+// is the scripted "caught on the fishing-line" HOLD that the cutscene-active flag (CUT_FLAG,
+// above) does NOT cover: CUT_FLAG belongs to the separate SOP intro-narration machine
+// (game/scene/sop.cpp Sop::fieldMode, sm[0x50]) and clears once THAT machine's state 4 (RESET)
+// runs — at which point fieldRun's OWN sub-machine has already been steered into s4e=9 by
+// fieldRun's case 0 (engine.cpp:954-957: "if (0x800BF89C==2) sm[0x4e]=9"). s4e==9 only advances
+// on a Cross-edge (0x800E7E68 & 8, engine.cpp:1098) while the scripted-camera gate 0x800BF89C==2
+// is still set — exactly the state docs/findings/sbs.md "oraclediff: interactive-play SCAN
+// added" (later-283) found: CUT_FLAG==0 (our old DONE trigger) reaches this frozen pose, NOT
+// real player control. s4e==1 ("L_80106D00 — the RUNNING field frame", engine.cpp:994-1032) is
+// the genuine free-roam per-frame state — it reads the scene trigger byte 0x800BF839 for
+// interactive movement/menu/area-exit dispatch. VERIFIED (this session, headless single-core
+// REPL `newgame`+`skip`+manual Cross taps + `ents`/`node`): Tomba's node position (obj+0x2e/32/36)
+// is flat while s4e==9 under held Right, and starts changing once s4e settles at 1 under the
+// same held Right — see docs/findings/sbs.md "AUTONAV: reaching real player control (s4e==9 -> 1)".
+constexpr uint32_t TASK0_BASE  = 0x801fe000u;
+constexpr uint32_t SM_S4A      = TASK0_BASE + 0x4au;   // running sub-mode (0=intro-cutscene machine, 1=field)
+constexpr uint32_t SM_S4E      = TASK0_BASE + 0x4eu;   // fieldRun's own running state (1 = steady playable frame, 9 = scripted caught hold)
+constexpr uint32_t FISH_GATE   = 0x800BF89Cu;          // scripted-camera/cull gate; ==2 while s4e==9's caught pose is armed
 struct SbsKey { uint32_t from, to; uint16_t btn; };
 
 // One-frame rewind snapshot of the PcScheduler fields the harness must roll back alongside
@@ -398,9 +428,13 @@ void Sbs::Impl::capBt(Core* c, char* buf, size_t n) {
   if (f) { guest_backtrace_to(c, f); fclose(f); }
 }
 
-// 3-phase navigation to gameplay-start (concurrent per-core AUTO-NAV — identical shape to AUTO_SKIP /
-// dualcore): (0) tap Cross until the GAME stage, (1) wait for the intro cutscene to begin, (2) pulse
-// Start while the cutscene flag is up, finishing once it has read 0 for 60 consecutive frames (fade settled).
+// Navigation to REAL PLAYER CONTROL (concurrent per-core AUTO-NAV — identical shape to AUTO_SKIP /
+// dualcore, extended 2026-07-08 per docs/findings/sbs.md "AUTONAV: reaching real player control"):
+// (0) tap Cross until the GAME stage, (1) wait for the intro cutscene to begin, (2) pulse Start
+// while the cutscene flag is up, until it has read 0 for 60 consecutive frames (fade settled — this
+// is FIELD RENDERING, not player control: Tomba is still scripted-caught), (3) AWAIT_CONTROL: tap
+// Cross to release the fishing-line hold (fieldRun sm[0x4e]==9) and wait for sm[0x4e] to settle at
+// 1 (the genuine running-field frame) — THIS is when Tomba responds to pad input.
 bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
   if ((f % 400u) == 0) fprintf(stderr, "[sbs-nav] %s f%u phase=%d stage=%08X cut=%u\n",
                                tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
@@ -428,7 +462,31 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
         bool press_ok = !watch_cut && (cut_presses < 0 || nv.postFrame < cut_presses);
         if (press_ok && (f % 40u) == 0) { c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); nv.postFrame++; }
       }
-      else if (++nv.idle >= 60) { fprintf(stderr, "[sbs] %s gameplay-start @f%u\n", tag, f); nv.phase = DONE; return true; }
+      else if (++nv.idle >= 60) { fprintf(stderr, "[sbs] %s field-rendering @f%u (still scripted-caught — awaiting real control)\n", tag, f); nv.phase = AWAIT_CONTROL; nv.idle = 0; nv.postFrame = 0; }
+      break;
+    }
+    case AWAIT_CONTROL: {
+      // The SOP narration ending (CUT_FLAG->0, previous phase) is NOT player control — Tomba is
+      // still caught on the fishing line (fieldRun sm[0x4e]==9, see the block comment above Nav).
+      // That state only advances on a Cross-press EDGE while the scripted-camera gate 0x800BF89C
+      // is armed (==2); tap Cross periodically (edges only — mashing every frame would still just
+      // be one edge on press, but a hold produces exactly one edge then nothing, so TAP not HOLD)
+      // until fieldRun settles at s4e==1 (the real "RUNNING field frame" state) for 30 consecutive
+      // frames — long enough to rule out a transient pass-through (s4e visits 6/7/8/10/11 on the
+      // way out of 9, and case 5 also sets s4e=1 transiently for an area-7 re-arm).
+      uint16_t s4e = c->mem_r16(SM_S4E);
+      if ((f % 20u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
+      if (s4e == 1) {
+        if (++nv.idle >= 30) {
+          fprintf(stderr, "[sbs] %s player-controllable @f%u (s4e settled at 1, s4a=%u, gate=%u)\n",
+                  tag, f, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
+          nv.phase = DONE; nv.idle = 0; return true;
+        }
+      } else {
+        nv.idle = 0;
+        if ((f % 200u) == 0) fprintf(stderr, "[sbs-nav] %s f%u awaiting control: s4e=%u s4a=%u gate=%u\n",
+                                      tag, f, s4e, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
+      }
       break;
     }
     case DONE: {
@@ -436,8 +494,7 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
       // things) and TAP Cross (jump — fires the jump SFX). This is what actually triggers native
       // SFX callers so `[AUDIO spu_write#N]` divergences show a voice-reg StartAddr mismatch
       // (Issue #29). Off by default so pc_skip=false runs stay quiet.
-      static const int postdrive = []{ const char* e = getenv("PSXPORT_SBS_POSTDRIVE"); return e && *e && e[0] != '0' ? 1 : 0; }();
-      if (postdrive) {
+      if (sbsPostdriveOn()) {
         nv.postFrame++;
         // Cycle: 30 frames walk Right, 6-frame Cross tap, repeat. Each Cross tap = jump = SFX fire.
         int cycle = nv.postFrame % 36;
@@ -1624,7 +1681,13 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       fprintf(stderr, "[sbs-trace] f%u post-service    A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",
               mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     bool nav_done = !sbsAutonav || (mNavA.phase == DONE && mNavB.phase == DONE);
-    if (!nav_done) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
+    // PSXPORT_SBS_POSTDRIVE=1: keep calling navStep() past nav_done too — its DONE case is where the
+    // post-control walk/jump SCRIPT lives (Nav::DONE below). Without this, nav_done short-circuits the
+    // dispatch straight to feedInput() (host keyboard) forever and the DONE-phase script never runs —
+    // it was DEAD CODE before this fix (2026-07-08): postdrive's static bool could be true, but the
+    // branch that would have called navStep() again was unreachable once nav_done latched. Fall back to
+    // feedInput() (live keyboard/debug-server driving) when postdrive is off, preserving that path.
+    if (!nav_done || sbsPostdriveOn()) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
     else feedInput();
     if (ww_trace_ext)
       fprintf(stderr, "[sbs-trace] f%u post-nav/input  A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",

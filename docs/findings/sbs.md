@@ -997,3 +997,47 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
 - **CORRECTION — ov_terrain is NOT orphaned:** the frontier/handoff claimed the PC-native terrain (engine_submit.cpp ov_terrain → native_terrain.cpp terrain_render_pc) had no caller and that field terrain rendered via the PSX substrate. FALSE (verified live, `debug terrgte`/`terrpc`): ov_render_walk (called from ov_sop_field_update, sop.cpp:218) routes the default-case terrain fn 0x8002AB5C → ov_terrain → terrain_render_pc every field frame (node 0x800ED8D8/0x800ED960, draws its geomblk quads PC-native float+depth). The field GROUND is also native (ov_field_entity_render, 0x80109fe0, table 0x800F2418). So "wire the orphaned ov_terrain" was ALREADY DONE. At the opening the only still-PSX render dispatches are GTE/scratchpad SETUP leaves (0x8003C2D4 matrix-compose, 0x8013DD34 cull/bound), intentionally left PSX per the RENDER directive; the per-object effect cases idx1/2/3/8 do not fire at the opening (`ccase` silent). ⇒ the render-leaf frontier is DONE-or-BLOCKED at the verifiable opening; advancing the effect leaves needs a LATER AREA that exercises them (extend the oracle envelope first).
 - **fix:** runtime/recomp/selftest.cpp run_oraclediff — PAD_RIGHT define, diff_band returns range count + count-only mode (label==nullptr), interactive-play walk block + summary_div. docs/port-progress.md CURRENT FRONTIER later-283 block.
 - **refs:** later-283, runtime/recomp/selftest.cpp (run_oraclediff interactive-play scan), engine/engine_render_walk.cpp (ov_render_walk terrain routing), engine/sop.cpp:218, engine/native_terrain.cpp, docs/port-progress.md
+
+## AUTONAV: reaching real player control (s4e==9 -> 1); interactive play is A/B byte-identical (2026-07-08)
+- **symptom:** SBS AUTONAV (and AUTO_SKIP) stopped at the intro-cutscene end (cutscene flag
+  `0x1F800137`==0 for 60 frames) and called that "gameplay-start". But at that onset Tomba is in the
+  scripted "caught on the fishing line" pose and does NOT respond to input (later-283, docs/oracle.md).
+  So genuine INTERACTIVE play (walk/jump/attack) was never exercised — pc_faithful during real play was
+  UNTESTED.
+- **status:** RESOLVED. AUTONAV now reaches real player control; a full interactive walk/jump run is
+  BYTE-IDENTICAL A/B (pc_faithful vs recomp oracle) for 20,000+ lockstep frames, ZERO divergences.
+- **the "controllable" predicate (RE'd):** the field-running sub-machine `fieldRun`/`fieldRunFaithful`
+  (game/core/engine.cpp, mirror of gen 0x80106B98) is a 12-way switch on `sm[0x4e]` = task0
+  (0x801fe000) + 0x4e. **s4e==9** ("L_80106FC4", engine.cpp case 9) is the scripted caught HOLD — it
+  only advances on a Cross-EDGE (`0x800E7E68 & 8`) while the scripted-camera gate `0x800BF89C`==2 is
+  armed. **s4e==1** ("L_80106D00 — the RUNNING field frame", engine.cpp case 1) is genuine free-roam:
+  it reads the interactive scene-trigger byte 0x800BF839 for movement/menu/area-exit dispatch. The
+  cutscene flag `0x1F800137` belongs to the SEPARATE SOP intro-narration machine (game/scene/sop.cpp
+  Sop::fieldMode, sm[0x50]) and clears when THAT machine hits its state-4 RESET — at which point
+  fieldRun's own sub-machine has already been steered into s4e==9 (engine.cpp case 0: `if 0x800BF89C==2
+  sm[0x4e]=9`). So flag==0 reaches the caught pose, NOT control. Predicate for "player can walk" =
+  **sm[0x4e]==1 sustained** (30 consecutive frames to reject transient pass-through: s4e visits
+  6/7/8/10/11 leaving 9, and case 5 sets s4e=1 transiently for an area-7 re-arm).
+- **VERIFIED (live, debug server, single native core):** after AUTONAV's new AWAIT_CONTROL phase taps
+  Cross to release the fishing-line hold and s4e settles at 1, holding Right MOVES the player node
+  (0x800FE8E8, handler 0x8006F2D0 "pad_child_linker") pos.x 3940->3951 before a wall — whereas the SAME
+  held Right at s4e==9 leaves pos flat. Camera scratch (0x1F8000D0 block) also pans only after control.
+  Confirms s4e==1 is the real control gate, not a render/animation artifact.
+- **nav extension:** runtime/recomp/sbs.cpp navStep — new Phase AWAIT_CONTROL between SKIP_CUT and DONE:
+  tap Cross every 20 frames, wait for sm[0x4e]==1 for 30 consecutive frames, then DONE. The old
+  "gameplay-start" log became "field-rendering (still scripted-caught)"; the new terminal log is
+  "player-controllable @fN (s4e settled at 1)". PSXPORT_SBS_POSTDRIVE=1 then drives the walk-Right /
+  jump-Cross script on BOTH cores past control.
+- **DEAD-CODE FIX (workflow-first):** the POSTDRIVE walk/jump script in navStep's DONE case was
+  UNREACHABLE — Sbs::Impl::run() stopped calling navStep() once nav_done latched (`else feedInput()`),
+  so DONE never re-ran. Fixed the dispatch to keep calling navStep when postdrive is armed
+  (`if (!nav_done || sbsPostdriveOn())`), else fall back to feedInput() (host keyboard/debug-server).
+  Factored the postdrive env check into file-scope `sbsPostdriveOn()`.
+- **KEY RESULT:** `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_POSTDRIVE=1` headless —
+  reaches control at f246, then walk/jump-drives both cores identically to f20070: every frame
+  "A/B identical", NO [sbs] DIVERGENCE / WRITE-SITE / abort. So pc_faithful is byte-exact to the recomp
+  oracle through genuine interactive play (walk + jump), not merely the scripted opening. This CLEARS
+  pc_skip=OFF for real seaside free-roam play — no first-interactive-play bug found.
+- **refs:** runtime/recomp/sbs.cpp (navStep AWAIT_CONTROL phase, sbsPostdriveOn, run() dispatch fix),
+  game/core/engine.cpp fieldRun/fieldRunFaithful (predicate RE source), docs/oracle.md later-283
+  (the "not controllable at onset" it corrects), scratch/logs/sbs_long.log.
