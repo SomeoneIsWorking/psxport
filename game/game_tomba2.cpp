@@ -176,7 +176,12 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
   // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
   bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
+  // FAIL-FAST guard (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): arm DisplayPassGuard around
+  // pc_render's OWN picture-producing calls only — sceneNative() + the native OT/queue draw below —
+  // never around the substrate orchestrator (Render::frame/frameX are called elsewhere and legitimately
+  // write the guest OT/packet-pool). Core::mem_w8/16/32 abort on any guest write while armed.
   if (sop_narration && !c->mRender->mode.psxRender()) {
+    DisplayPassGuard displayPass(c->mRender->mode);
     // SOP narration render (oracle-derived, docs/oracle.md). The cutscene's full picture is built by the PSX
     // SOP code into the guest OT — full-screen fills, the semi-transparent textured EFFECT quads, character
     // sprites, the sea tiles, and text — so we walk the FULL OT (g_ot_2d_only=0), NOT the 2D-only filter that
@@ -192,6 +197,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
     if (c->mem_r8(0x800BF9B4u) != 5) { c->mRender->sceneNative(); }
     gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);   // full walk incl. cutscene fills/effect quads
   } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
+    DisplayPassGuard displayPass(c->mRender->mode);
     c->mRender->sceneNative();
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
     // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,

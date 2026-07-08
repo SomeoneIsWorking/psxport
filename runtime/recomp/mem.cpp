@@ -5,6 +5,7 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include "render/render.h"     // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -249,24 +250,49 @@ uint32_t Core::mem_r32(uint32_t a) {
 // g_pkt_track/lo/hi retired — per-Core Render::pktSpan (a real PktSpan class, method-oriented).
 // Every store routes through Core::mem_w* -> pktSpan.track(addr, bytes); the class is a no-op unless
 // armed by a PktSpanSession or ffspan span.
-#include "render/render.h"
 static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
   c->mRender->pktSpan.track(a, bytes);
 }
+
+// FAIL-FAST guard for the pc_render READ-ONLY-OVERLAY invariant (CLAUDE.md): pc_render's native
+// display pass (DisplayPassGuard-armed scope in game_tomba2.cpp's Engine::drawOTag) reads guest RAM
+// + engine state and draws to HOST memory only — it must NEVER write guest main RAM or scratchpad.
+// Checked at the top of every guest store; the `!armed` branch is the hot-path no-op (single
+// predicted-false bool read gates the address test, so this is cheap when the flag is off, which is
+// always except during the pc_render display pass on this Core).
+extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace
+static void display_pass_write_guard(Core* c, uint32_t a, uint32_t v, int width) {
+  if (!c->mRender->mode.displayPassArmed()) return;
+  const uint32_t p = a & 0x1FFFFFFF;
+  const bool guest_ram   = p < 0x200000;
+  const bool scratchpad  = p >= 0x1F800000 && p < 0x1F800400;
+  if (!guest_ram && !scratchpad) return;
+  fprintf(stderr,
+          "\n[pc_render VIOLATION] guest write to 0x%08X (val 0x%X, width %d) during pc_render "
+          "display pass — pc_render MUST be a read-only overlay (CLAUDE.md). interp_pc=%08X sp=%08X\n",
+          0x80000000u | p, v, width, c->pc, c->r[29]);
+  guest_backtrace_to(c, stderr);
+  fflush(stderr);
+  abort();
+}
+
 void Core::mem_w8(uint32_t a, uint8_t v) {
   uint8_t* p = host_ptr(a, 1);
+  display_pass_write_guard(this, a, v, 1);
   wwatch_check(a, v, 1);
   cw_check(a, v, 1); pkt_track(this, a, 1);
   if (p) *p = v; else io_write(a, v, 1);
 }
 void Core::mem_w16(uint32_t a, uint16_t v) {
   uint8_t* p = host_ptr(a, 2);
+  display_pass_write_guard(this, a, v, 2);
   wwatch_check(a, v, 2);
   cw_check(a, v, 2); pkt_track(this, a, 2);
   if (p) memcpy(p, &v, 2); else io_write(a, v, 2);
 }
 void Core::mem_w32(uint32_t a, uint32_t v) {
   uint8_t* p = host_ptr(a, 4);
+  display_pass_write_guard(this, a, v, 4);
   wwatch_check(a, v, 4);
   cw_check(a, v, 4); pkt_track(this, a, 4);
   if (p) memcpy(p, &v, 4); else io_write(a, v, 4);
