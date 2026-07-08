@@ -228,6 +228,8 @@ void games_tomba2_init(void) {
   // the beh_*_register siblings) were left as empty stubs "in case." Every stub had a zero- or single-
   // dead-line body — dead scaffolding — and got deleted. Direct-call wiring is the shape now.
   fps60_init();
+  void render_observer_install();
+  render_observer_install();   // read-only per-object depth tags at the substrate override choke point
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }

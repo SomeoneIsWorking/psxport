@@ -1,0 +1,67 @@
+// RenderObserver — READ-ONLY per-object depth tagging at the substrate override choke point.
+//
+// Since the render-underneath architecture (issue #32) the substrate walk cluster emits every
+// object's GP0 packets itself; the retired native walk lifts were also the place that tagged each
+// object's packet-pool span with its PC-native world depth (gpu_obj_depth_add), so their removal
+// lost real-depth occlusion for guest-emitted 2D billboards (flames/ropes/collectables — the old
+// issue-#4 class). This restores the tags WITHOUT touching guest state: a TRANSPARENT wrapper in
+// the recomp override table (g_override — the same shared table both SBS cores consult) that
+//   1. reads the object node from a0,
+//   2. opens a nesting-safe PktSpanSession,
+//   3. runs the LITERAL gen body (guest-byte behavior identical by construction),
+//   4. tags the captured span with obj_world_ord(node) — HOST memory only.
+// Observed fns: the per-object render dispatch 0x8003CCA4 (the main flow: every walk case 0/15
+// funnels here) and the special-effect leaf renderers the master/aux walks call with a0=node.
+// Extend the table below when a new billboard source shows up untagged (PSXPORT_DEBUG=objid).
+#include "core.h"
+#include "game.h"
+#include "render.h"
+#include "pkt_span.h"
+#include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add / fps60_bb_node
+
+// OverrideFn is typedef'd in core.h. shard_set_override (generated/shard_disp.c) has C++ linkage.
+void shard_set_override(uint32_t addr, OverrideFn fn);
+
+extern void gen_func_8003CCA4(Core*);   // per-object render dispatch (transform + flush + fx pass)
+extern void gen_func_8003C2D4(Core*);   // special-effect leaf renderers (walk types 16..19)
+extern void gen_func_8003C464(Core*);
+extern void gen_func_8003C5F8(Core*);
+extern void gen_func_8003C788(Core*);
+extern void gen_func_80039F4C(Core*);   // type-4 multi-element object renderer
+
+static void obs_body(Core* c, void (*gen)(Core*)) {
+  const uint32_t node = c->r[4];
+  c->mRender->diag.beginObject(node);
+  uint32_t slo, shi;
+  PktSpanSession sess(c);
+  gen(c);                                             // the substrate body, untouched
+  if (sess.close(&slo, &shi)) {
+    float od = obj_world_ord(c, node);
+    gpu_obj_depth_add(c, slo, shi, od);
+    fps60_bb_node(c, slo, shi, node);
+  }
+  c->mRender->diag.endObject();
+}
+
+#define OBS_WRAP(genfn) static void obs_##genfn(Core* c) { obs_body(c, genfn); }
+OBS_WRAP(gen_func_8003CCA4)
+OBS_WRAP(gen_func_8003C2D4)
+OBS_WRAP(gen_func_8003C464)
+OBS_WRAP(gen_func_8003C5F8)
+OBS_WRAP(gen_func_8003C788)
+OBS_WRAP(gen_func_80039F4C)
+#undef OBS_WRAP
+
+// Install once per process (the override table is shared by both cores; the wrapper is guest-
+// transparent, so SBS strictness is unaffected — MV_CHECK substrate legs run through it too).
+void render_observer_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  shard_set_override(0x8003CCA4u, obs_gen_func_8003CCA4);
+  shard_set_override(0x8003C2D4u, obs_gen_func_8003C2D4);
+  shard_set_override(0x8003C464u, obs_gen_func_8003C464);
+  shard_set_override(0x8003C5F8u, obs_gen_func_8003C5F8);
+  shard_set_override(0x8003C788u, obs_gen_func_8003C788);
+  shard_set_override(0x80039F4Cu, obs_gen_func_80039F4C);
+}

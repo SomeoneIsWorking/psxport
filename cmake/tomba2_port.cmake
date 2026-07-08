@@ -218,6 +218,7 @@ set(PORT_SRC
   runtime/recomp/sync_overrides.cpp
   runtime/recomp/engine_overrides.cpp
   game/render/pkt_span.cpp
+  game/render/render_observer.cpp
   runtime/recomp/scheduler.cpp
   runtime/recomp/native_boot.cpp
   runtime/recomp/dualview_snapshot.cpp
