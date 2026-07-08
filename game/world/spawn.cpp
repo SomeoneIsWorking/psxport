@@ -445,3 +445,115 @@ void Spawn::dropScoreGem(uint32_t sourceNode, int32_t value) {
   rec_dispatch(c, 0x80071B44u);
   c->r[2] = 1;   // recomp returns v0 = 1 (unread by every current callsite, but faithful)
 }
+
+// FUN_8007E038 — VARIANT-OVERLAY SPAWN primitive. RE'd from disas 0x8007E038..0x8007E10C.
+// Same allocator shape as sceneEntityBody (FUN_8007A5A8: class-3 tail-insert into list 1 —
+// see the comment above sceneEntityBody for the primitive's full derivation), gated by:
+//   guard = (DAT_800BF81E == 2) || (variant != 0) || (DAT_800BF822 == 0);   // else return 0
+// then, post-alloc, installs the "variant overlay" per-frame handler instead of the scene-entity
+// one and stamps node[3] with `variant` instead of a plain subtype byte:
+//   node[0x47] = 1;                                          # (sceneEntity uses 2 here)
+//   node[0x1C] = 0x8007DC38;                                 # beh_variant_overlay_lifecycle
+//   node[3]    = (uint8_t)variant;
+//   node[0x28] |= 0x80;
+//   base = *(u32)0x800ECF60;                                 # SAME table sceneEntity reads
+//   node[0x48] = base; node[0x4C] = base+0x10;
+//   node[0x5C] = 0xFFFF; node[0x5E] = recordIndex;
+//   node[0x50] = base + 0x10 + (*(u16)base)*4;
+// Return: node ptr on success, 0 on guard-miss or freelist exhaustion.
+// A/B'd via `spawnoverlayverify` (full main-RAM + scratchpad diff vs rec_super_call(0x8007E038u)).
+uint32_t Spawn::spawnOverlayVariantBody(Core* c) {
+  const uint16_t recordIndex = (uint16_t)(c->r[4] & 0xFFFFu);
+  const int16_t  variant     = (int16_t)(c->r[5] & 0xFFFFu);   // guard needs the full 16-bit value
+  if (!(c->mem_r8(0x800BF81Eu) == 2 || variant != 0 || c->mem_r8(0x800BF822u) == 0)) return 0;
+  // ---- FUN_8007A5A8: alloc class-3 tail-insert into list 1 (identical to sceneEntityBody) ------
+  uint32_t node = c->mem_r32(FREE_HEAD);
+  if (node == 0) return 0;
+  uint32_t nextFree = c->mem_r32(node + 36);
+  uint32_t tail     = c->mem_r32(LIST_TAIL[1]);
+  c->mem_w32(node + 36, 0);
+  c->mem_w8(FREE_CNT, (uint8_t)(c->mem_r8(FREE_CNT) - 1));
+  c->mem_w32(FREE_HEAD, nextFree);
+  c->mem_w32(node + 32, tail);
+  if (tail == 0) c->mem_w32(LIST_HEAD[1], node);
+  else           c->mem_w32(tail + 36, node);
+  c->mem_w32(LIST_TAIL[1], node);
+  c->mem_w8(node + 10, 1);
+  c->mem_w8(node + 0,  2);
+  c->mem_w8(node + 12, 3);
+  // ---- FUN_8007E038: variant-overlay init on the fresh node -------------------------------------
+  c->mem_w8 (node + 0x47, 1);
+  c->mem_w8 (node + 3,    (uint8_t)variant);
+  c->mem_w32(node + 0x1C, 0x8007DC38u);
+  c->mem_w8 (node + 0x28, (uint8_t)(c->mem_r8(node + 0x28) | 0x80));
+  uint32_t base   = c->mem_r32(0x800ECF60u);
+  uint16_t hCount = c->mem_r16(base);
+  c->mem_w32(node + 0x48, base);
+  c->mem_w32(node + 0x4C, base + 0x10);
+  c->mem_w16(node + 0x5C, (uint16_t)0xFFFFu);
+  c->mem_w16(node + 0x5E, recordIndex);
+  c->mem_w32(node + 0x50, base + 0x10 + (uint32_t)hCount * 4);
+  return node;
+}
+uint32_t Spawn::spawnOverlayVariant(uint16_t recordIndex, int16_t variant) {
+  Core* c = this->core;
+  c->r[4] = recordIndex;
+  c->r[5] = (uint32_t)(int32_t)variant;
+  c->game->verify.run(&Spawn::spawnOverlayVariantBody, 0x8007E038u, "spawnoverlayverify",
+                      c->game->verify.on("spawnoverlayverify"));
+  return c->r[2];
+}
+
+// FUN_800735F4 — per-object controller that owns exactly ONE linked "variant overlay" child
+// (spawned via spawnOverlayVariant) at obj[0x14], driven by a state byte obj[7] and a countdown
+// obj[0x40]. RE'd from disas 0x800735F4..0x8007374C:
+//   state 0: if (0x800BF816==0 && obj[0x29]!=0): node = spawnOverlayVariant(recordId, 2);
+//            obj[0x14]=node; if (node!=0) { obj[0x40]=0x46; obj[7]++; }
+//   state 1: if (0x800BF816!=0 && 0x800BF80F==0) — pause/freeze gate — kill the child (obj[0x14]
+//            state->2 if still <2, clear the ptr) and obj[7]=0. Else: obj[0x40]-- ; once it rolls
+//            from 0 to -1, kill the child the same way and obj[7]++.
+//   state 2: if obj[0x29]==0, obj[7]=0; else no-op (holds at state 2 until the gate clears).
+//   state >2: no-op.
+// No other substrate calls in this body. "kill" writes the CHILD's own node[4]=2 (its OWN 4-state
+// lifecycle then advances itself 2->3->despawn next ticks — see beh_variant_overlay_lifecycle.cpp),
+// deliberately dereferenced unconditionally exactly as the recomp does (no defensive null-check:
+// the state invariant guarantees obj[0x14] is non-null whenever state==1 is reached).
+void Spawn::tickLinkedOverlay(uint32_t obj, int16_t recordId) {
+  Core* c = this->core;
+  uint8_t st = c->mem_r8(obj + 7);
+  if (st == 1) {
+    if (c->mem_r8(0x800BF816u) != 0 && c->mem_r8(0x800BF80Fu) == 0) {
+      uint32_t child = c->mem_r32(obj + 0x14);
+      if (c->mem_r8(child + 4) < 2) {
+        c->mem_w8(child + 4, 2);
+        c->mem_w32(obj + 0x14, 0);
+      }
+      c->mem_w8(obj + 7, 0);
+      return;
+    }
+    int16_t countdown = (int16_t)(c->mem_r16(obj + 0x40) - 1);
+    c->mem_w16(obj + 0x40, (uint16_t)countdown);
+    if (countdown != -1) return;
+    uint32_t child = c->mem_r32(obj + 0x14);
+    if (c->mem_r8(child + 4) < 2) {
+      c->mem_w8(child + 4, 2);
+      c->mem_w32(obj + 0x14, 0);
+    }
+    c->mem_w8(obj + 7, (uint8_t)(c->mem_r8(obj + 7) + 1));
+    return;
+  }
+  if (st > 1) {
+    if (st != 2) return;
+    if (c->mem_r8(obj + 0x29) != 0) return;
+    c->mem_w8(obj + 7, 0);
+    return;
+  }
+  // st == 0
+  if (c->mem_r8(0x800BF816u) != 0) return;
+  if (c->mem_r8(obj + 0x29) == 0) return;
+  uint32_t node = spawnOverlayVariant((uint16_t)(uint32_t)(int32_t)recordId, 2);
+  c->mem_w32(obj + 0x14, node);
+  if (node == 0) return;
+  c->mem_w16(obj + 0x40, 0x46);
+  c->mem_w8(obj + 7, (uint8_t)(c->mem_r8(obj + 7) + 1));
+}

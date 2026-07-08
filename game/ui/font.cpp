@@ -130,3 +130,33 @@ void Font::init() {
   c->r[29] = sp;
   c->r[31] = ra;
 }
+
+// FUN_80073750 — pure string measurer (disas 0x80073750..0x80073798, no sub-calls):
+//   prefix = 0; suffix = 0; sawNewline = false;
+//   for (ch = *p; ch != 0; ch = *++p) {
+//     if (ch == '\n') sawNewline = true;
+//     p++; if (sawNewline) suffix++; else prefix++;
+//   }
+//   NOTE: the '\n' char itself lands in `suffix` (sawNewline flips true the SAME iteration it's
+//   read, and the increment below it uses the now-true flag) and, once true, sawNewline never
+//   resets — a SECOND embedded '\n' is just an ordinary char counted into `suffix`.
+//   if (sawNewline) return -(max(prefix, suffix));
+//   else             return prefix;
+int32_t Font::measureLineWidth(Core* c, uint32_t strAddr) {
+  int32_t prefix = 0, suffix = 0;
+  bool sawNewline = false;
+  uint32_t p = strAddr;
+  uint8_t ch = c->mem_r8(p);
+  while (ch != 0) {
+    if (ch == '\n') sawNewline = true;
+    p += 1;
+    if (sawNewline) suffix += 1; else prefix += 1;
+    ch = c->mem_r8(p);
+  }
+  c->r[4] = p;   // ABI leftover: a0 ends at the NUL terminator (see header doc)
+  if (sawNewline) {
+    if (prefix < suffix) prefix = suffix;
+    return -prefix;
+  }
+  return prefix;
+}

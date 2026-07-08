@@ -32,6 +32,7 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "ui/font.h"   // Font::measureLineWidth (FUN_80073750)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -79,15 +80,13 @@ void beh_cube_text_spawn(Core* c) {
   uint8_t type = c->mem_r8(nd + 3);
   if (type == 2) {
     // "Clear" branch
-    c->r[4] = c->mem_r32(0x800A3A8Cu); rec_dispatch(c, 0x80073750u);   // FUN_80073750(PTR_s_Clear)
-    uint32_t len = c->r[2];
+    uint32_t len = (uint32_t)Font::measureLineWidth(c, c->mem_r32(0x800A3A8Cu));  // FUN_80073750(PTR_s_Clear)
     uVar7 = 0x16;
     c->mem_w8(nd + 8, (uint8_t)(len + 1));
   } else {
     // table branch
     uVar7 = 0xf;
-    c->r[4] = tbl_strp(c, nd); rec_dispatch(c, 0x80073750u);           // FUN_80073750(table str)
-    uint32_t len = c->r[2];
+    uint32_t len = (uint32_t)Font::measureLineWidth(c, tbl_strp(c, nd));         // FUN_80073750(table str)
     c->mem_w8(nd + 8, (uint8_t)len);
     if ((len & 0xff) >= 33) {
       // overflow: log + bail to state 2

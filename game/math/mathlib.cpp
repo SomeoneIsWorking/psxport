@@ -86,3 +86,47 @@ void Bit::setFE34(int32_t idx) {
   Core* c = this->core;
   c->mem_w32(0x800BFE34u, c->mem_r32(0x800BFE34u) | (1u << ((uint32_t)idx & 31u)));
 }
+
+// FUN_8006F00C — sibling of setFE34: u32 flag-bit SET on 0x800BFE48 (the word testFE48 polls).
+//   *(u32)0x800BFE48 |= (1u << idx);
+void Bit::setFE48(int32_t idx) {
+  Core* c = this->core;
+  c->mem_w32(0x800BFE48u, c->mem_r32(0x800BFE48u) | (1u << ((uint32_t)idx & 31u)));
+}
+
+// FUN_8006F04C — child-link REQUEST-mailbox arbiter. disas 0x8006F04C..0x8006F0E0:
+//   v1 = *(u8)0x800BF840; if ((v1 & 0x80) == 0) return;
+//   id = v1 & 0xF;
+//   if (id >= 9) goto CLEAR;                                  // sltiu id,9 guards the jump table
+//   switch (id) via table @0x80016A8C (9 entries):
+//     id==0,1,6 -> RETRY: cnt = *(u8)(0x800BFE3A+id); if (cnt<3) { cnt++; store; goto CLEAR; }
+//                  else fall to GRANT
+//     id==7,8   -> setFE34(id); fall to GRANT
+//     id==2..5  -> goto CLEAR directly (no grant)
+//   GRANT: setFE48(id);
+//   CLEAR: *(u8)0x800BF840 = 0;
+void Bit::processLinkRequest() {
+  Core* c = this->core;
+  uint8_t mailbox = c->mem_r8(0x800BF840u);
+  if ((mailbox & 0x80u) == 0) return;
+  uint32_t id = mailbox & 0xFu;
+  bool grant = false;
+  if (id < 9) {
+    if (id == 0 || id == 1 || id == 6) {
+      uint32_t addr = 0x800BFE3Au + id;
+      uint8_t cnt = c->mem_r8(addr);
+      if (cnt < 3) {
+        c->mem_w8(addr, (uint8_t)(cnt + 1));
+        c->mem_w8(0x800BF840u, 0);
+        return;
+      }
+      grant = true;
+    } else if (id == 7 || id == 8) {
+      setFE34((int32_t)id);
+      grant = true;
+    }
+    // id == 2..5: grant stays false (silently dropped)
+  }
+  if (grant) setFE48((int32_t)id);
+  c->mem_w8(0x800BF840u, 0);
+}

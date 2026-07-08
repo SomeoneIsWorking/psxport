@@ -26,6 +26,11 @@
 // rec_super_call) is the safety net. a0/a1 are written into c->r only where the guest writes them, so
 // c->r evolves identically to the recomp across the leaf rec_dispatch calls. v0 is NOT reproduced (the
 // per-object dispatcher ignores the handler return; the gate compares only RAM+scratchpad).
+//
+// FUN_8006F04C and FUN_8007E038 (this file's only two callers of each) are now OWNED NATIVE too:
+//   Bit::processLinkRequest()               — game/math/mathlib.{h,cpp} — was rec_dispatch(0x8006F04Cu)
+//   Spawn::spawnOverlayVariant(id, variant)  — game/world/spawn.{h,cpp} — was rec_dispatch(0x8007E038u)
+// PC calls PC directly for both (no rec_dispatch indirection) now that they're native.
 
 #include "core.h"
 #include "mathlib.h"    // class Bit (c->engine.bit.testFE48 / setFE34)
@@ -117,7 +122,7 @@ void beh_pad_child_linker(Core* c) {
   if (v0 != 0) { if (c->mem_r8(v0 + 4) < 2) c->mem_w8(v0 + 4, 3); c->mem_w32(obj + 0x14, 0); }
   v0 = c->mem_r32(obj + 0x10);
   if (v0 != 0) { if (c->mem_r8(v0 + 4) < 2) c->mem_w8(v0 + 4, 3); c->mem_w32(obj + 0x10, 0); }
-  rec_dispatch(c, 0x8006F04Cu);                 // a0 = obj (unchanged on this path)
+  c->engine.bit.processLinkRequest();           // FUN_8006F04C (native)
   goto L9ac;
  L4ec:
   s1 = 0x800E7E80u;                             // input/area block base
@@ -244,8 +249,8 @@ void beh_pad_child_linker(Core* c) {
  L7cc:
   v0 = c->mem_r32(obj + 0x14);
   if (v0 != 0) goto L800;
-  c->r[4] = (uint32_t)((int32_t)c->mem_r8(obj + 1) - 1); c->r[5] = 0; rec_dispatch(c, 0x8007E038u);
-  v0 = c->r[2];
+  v0 = c->engine.spawn.spawnOverlayVariant(
+      (uint16_t)(uint32_t)((int32_t)c->mem_r8(obj + 1) - 1), 0);   // FUN_8007E038 (native)
   c->mem_w32(obj + 0x14, v0);
   c->engine.bit.setFE34((int32_t)c->mem_r8(obj + 1) - 1);         // FUN_8006F02C (native)
   goto L87c;
@@ -267,7 +272,7 @@ void beh_pad_child_linker(Core* c) {
  L878:
   c->mem_w8(obj + 1, 0);
  L87c:
-  rec_dispatch(c, 0x8006F04Cu);                 // a0 left as-is (matches the guest's leftover)
+  c->engine.bit.processLinkRequest();           // FUN_8006F04C (native)
   v0 = c->mem_r8(s1 + 41);
   if (v0 != 0) { v1 = 1; goto L8ac; }
   v1 = c->mem_r8(0x800BF840u);
@@ -285,8 +290,7 @@ void beh_pad_child_linker(Core* c) {
   if ((c->mem_r8(s1 + 97) & 1) != 0) goto L970;
   v0 = c->mem_r32(obj + 0x10);
   if (v0 != 0) goto L93c;
-  c->r[4] = s0; c->r[5] = 0; rec_dispatch(c, 0x8007E038u);
-  v0 = c->r[2];
+  v0 = c->engine.spawn.spawnOverlayVariant((uint16_t)s0, 0);   // FUN_8007E038 (native)
   c->mem_w32(obj + 0x10, v0);
   c->engine.bit.setFE34((int32_t)s0);                              // FUN_8006F02C (native)
   c->mem_w8(obj + 0x46, (uint8_t)s0);

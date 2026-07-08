@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
+Totals: 242 native fns, 207 owned addresses, 241 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -147,7 +147,11 @@ Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
 | 0x8006EC44 | LIVE | `CutsceneCamera::update` | game/camera/cutscene_camera.cpp:813 |  |  |
 | 0x8006EC44 | LIVE | `CutsceneCamera::updateFaithful` | game/camera/cutscene_camera.cpp:842 | 0x8006C988 0x8006EA7C | pc_faithful mirror of gen_func_8006EC44 (generated/shard_1.c:13176-133… |
 | 0x8006EFF4 | LIVE | `Bit::testFE48` | game/math/mathlib.cpp:78 |  | u32 flag-bit TEST on the fixed 32-bit word at 0x800BFE48. Pure 5-instr… |
+| 0x8006F00C | LIVE | `Bit::setFE48` | game/math/mathlib.cpp:92 |  | sibling of setFE34: u32 flag-bit SET on 0x800BFE48 (the word testFE48 … |
 | 0x8006F02C | LIVE | `Bit::setFE34` | game/math/mathlib.cpp:85 |  | u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction… |
+| 0x8006F04C | LIVE | `Bit::processLinkRequest` | game/math/mathlib.cpp:108 |  | child-link REQUEST-mailbox arbiter. disas 0x8006F04C..0x8006F0E0: |
+| 0x800735F4 | LIVE | `Spawn::tickLinkedOverlay` | game/world/spawn.cpp:521 |  | per-object controller that owns exactly ONE linked "variant overlay" c… |
+| 0x80073750 | LIVE | `Font::measureLineWidth` | game/ui/font.cpp:145 |  | pure string measurer (disas 0x80073750..0x80073798, no sub-calls): |
 | 0x80074AF0 | LIVE | `AreaSlots::ackIfMatch` | game/world/area_slots.cpp:127 |  | AreaSlots::ackIfMatch — FUN_80074AF0 body. Pure 21-instruction primiti… |
 | 0x80074BC4 | LIVE | `AudioDispatch::settleField` | game/audio/audio_dispatch.cpp:69 | 0x8001CF2C 0x80074B44 0x80074E48 | AudioDispatch::settleField — native ownership of FUN_80074BC4 (Ghidra … |
 | 0x80074F24 | LIVE | `Pool::selectStateIndex` | game/world/pool.cpp:293 |  | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
@@ -182,6 +186,7 @@ Totals: 237 native fns, 202 owned addresses, 236 LIVE / 1 ORPHAN.
 | 0x8007B18C | LIVE | `Pool::init` | game/world/pool.cpp:109 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Zeroes 520 68-byte slots at 0x800F2740; bu… |
 | 0x8007B2C0 | LIVE | `Engine::seedDirectionMasks` | game/scene/startup.cpp:123 |  | direction-mask seeder. Called with 0 at boot (initEntityPool above) an… |
 | 0x8007B3F4 | LIVE | `Engine::reloadEntityPool` | game/scene/startup.cpp:140 |  | re-copy the staged per-area entity-pool control bytes onto the live he… |
+| 0x8007E038 | LIVE | `Spawn::spawnOverlayVariantBody` | game/world/spawn.cpp:465 |  | VARIANT-OVERLAY SPAWN primitive. RE'd from disas 0x8007E038..0x8007E10… |
 | 0x8007E110 | LIVE | `Spawn::sceneEntityBody` | game/world/spawn.cpp:387 |  | SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4. |
 | 0x8007E9C8 | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x8007E9C8 | LIVE | `ScreenFade::fadetrace` | game/render/screen_fade.cpp:16 |  | `debug fadetrace` channel — logs every native-path fade call with the … |

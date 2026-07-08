@@ -61,6 +61,32 @@ public:
   //   bump is dormant — replicate the wrapper's single unconditional bump.
   void dropScoreGem(uint32_t sourceNode, int32_t value);
 
+  // spawnOverlayVariant(recordIndex, variant): FUN_8007E038 — allocate a class-3 tail-insert node
+  //   (the SAME FUN_8007A5A8 specialised allocator sceneEntity uses) and install the per-frame
+  //   "variant overlay" handler (0x8007DC38, game/ai/beh_variant_overlay_lifecycle.cpp), seeding
+  //   node[3]=variant, node[0x5E]=recordIndex, and the record-table pointers node[0x48]/[0x4C]/
+  //   [0x50] from the SAME global list *(u32)0x800ECF60 that sceneEntity seeds from. Guarded: the
+  //   allocation only happens if (variant != 0) OR (DAT_800BF81E==2) OR (DAT_800BF822==0); every
+  //   other combination is a silent miss (returns 0). Returns the node ptr, or 0 on guard-miss /
+  //   freelist exhaustion. Used by tickLinkedOverlay (below) and directly by
+  //   game/ai/beh_pad_child_linker.cpp for its two linked-overlay children.
+  uint32_t spawnOverlayVariant(uint16_t recordIndex, int16_t variant);
+
+  // tickLinkedOverlay(obj, recordId): FUN_800735F4 — per-object controller that owns exactly ONE
+  //   linked "variant overlay" child (spawned via spawnOverlayVariant) at obj[0x14], driven by a
+  //   state byte obj[7] and a countdown obj[0x40]:
+  //     state 0: if 0x800BF816==0 && obj[0x29]!=0, spawn the child (spawnOverlayVariant(recordId,
+  //       2)); on success seed the countdown to 0x46 and advance obj[7].
+  //     state 1: if (0x800BF816!=0 && 0x800BF80F==0) — a pause/freeze gate — kill the child
+  //       (obj[0x14]->state=2 if still <2, clear the ptr) and reset obj[7]=0. Otherwise decrement
+  //       the countdown; once it rolls from 0 to -1, kill the child the same way and advance obj[7].
+  //     state 2: if obj[0x29]==0, reset obj[7]=0; otherwise no-op (holds at state 2 until the
+  //       gate byte clears).
+  //     state >2: no-op.
+  //   No other substrate calls in this body — every op is a direct memory read/write plus the one
+  //   call into spawnOverlayVariant. Body from disas 0x800735F4..0x8007374C.
+  void tickLinkedOverlay(uint32_t obj, int16_t recordId);
+
 private:
   // Guest-ABI bodies + shared pool helpers (static: plain fn-pointer shape for the verify gate).
   static void spawnLinkStamp(Core* c, uint32_t node, uint32_t ref, uint32_t type, uint32_t mode,
@@ -71,6 +97,7 @@ private:
   static uint32_t spawnVariantNative(Core* c, uint32_t cls);
   static uint32_t spawnAndInitBody(Core* c);                // FUN_8003116C
   static uint32_t sceneEntityBody(Core* c);                 // FUN_8007E110
+  static uint32_t spawnOverlayVariantBody(Core* c);         // FUN_8007E038
 };
 
 #endif

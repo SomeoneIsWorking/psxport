@@ -1069,6 +1069,41 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
   GP0 STATE (E1 texpage/E2 texwindow) in DRAW order so each 2D sprite binds the right texpage. later-172's
   linear packet-pool walk was REVERTED: memory order ≠ draw order broke 2D (title bg sprites went black).
   DrawOTag `0x80081560` = `ov_draw_otag`. Native projection `proj_native_vertex` (float matrices, real depth).
+- ✅ later-298 (2026-07-08): **"variant overlay" spawn/tick cluster** — the un-owned leaves
+  `beh_pad_child_linker.cpp` / `beh_typed_jumptable_pair.cpp` / `beh_cube_text_spawn.cpp` were calling
+  via `rec_dispatch`, RE'd with Ghidra + disas cross-check and owned:
+  - `Spawn::spawnOverlayVariant(recordIndex, variant)` (`FUN_8007E038`, game/world/spawn.cpp) — SAME
+    `FUN_8007A5A8` class-3 allocator `sceneEntity` (`FUN_8007E110`) already uses, installing the sibling
+    per-frame handler `beh_variant_overlay_lifecycle` (`FUN_8007DC38`) instead of the scene-entity one.
+    Guard: `(DAT_800BF81E==2) || (variant!=0) || (DAT_800BF822==0)`, else miss (returns 0).
+  - `Spawn::tickLinkedOverlay(obj, recordId)` (`FUN_800735F4`) — per-object controller that owns exactly
+    one `spawnOverlayVariant` child at `obj[0x14]`, on a state byte `obj[7]` + countdown `obj[0x40]`;
+    calls `spawnOverlayVariant` directly (no other substrate calls in the body).
+  - `Bit::setFE48(idx)` (`FUN_8006F00C`, game/math/mathlib.cpp) — sibling of the existing `setFE34`, same
+    u32 flag word `0x800BFE48` `testFE48` already polls.
+  - `Bit::processLinkRequest()` (`FUN_8006F04C`) — the child-link REQUEST-mailbox arbiter (byte
+    `0x800BF840`): ids 0/1/6 are retry-limited via a 3-try counter at `0x800BFE3A[id]`, ids 7/8 grant
+    immediately (raising `setFE34` first), ids 2..5/9..15 are silent misses; a grant calls `setFE48`.
+  - `Font::measureLineWidth(c, strAddr)` (`FUN_80073750`, game/ui/font.cpp) — pure string measurer (used
+    by the "cube letters" text actor). ABI GOTCHA preserved: the guest body's loop cursor IS a0, so on
+    return a0 == the NUL terminator's address — a register LEFTOVER `beh_cube_text_spawn.cpp`'s following
+    `GraphicsBind::recordAlloc()` call relies on implicitly (documented in its own "GOTCHA" comment); the
+    native version reproduces this by writing `c->r[4]` before returning.
+  - **LEFT substrate:** `FUN_8007BE18` — the resident LOAD-GAME menu UI driver (already documented at s4
+    0x80106580 above): a thin content-routing dispatcher into un-RE'd overlay UI screens
+    (`FUN_8018fa88`/`FUN_8018fbcc`) + SFX triggers (`FUN_80074590`), not game logic, already correctly
+    reached via `rec_dispatch`.
+  - **VERIFY:** `PSXPORT_SBS_MODE=full` autonav run, A/B identical through frame 8220, zero `[sbs-div]`,
+    zero VIOLATION. **EXERCISE COVERAGE CAVEAT:** none of the 5 call sites fired during that run (confirmed
+    via temporary call-counters on `beh_pad_child_linker`/`beh_typed_jumptable_pair`/`beh_cube_text_spawn`
+    themselves — all 3 owning behavior files were never invoked at all by the shallow autonav walk, which
+    only reaches basic free-roam past the caught pose). The ports are byte-exact BY CONSTRUCTION (1:1
+    disas transcription, cross-checked instruction-by-instruction against sibling patterns already proven
+    live — e.g. the identical `FUN_8007A5A8` allocator shape in `sceneEntityBody`) but are NOT yet exercised
+    by any headless run; a scene/area that spawns a `pad_child_linker`-handled object or a `typed_jumptable_
+    pair` overlay object is needed to actually drive `spawnOverlayVariant`/`tickLinkedOverlay`/
+    `processLinkRequest` and settle the SBS gate against real traffic. Same caveat class as
+    `beh_cube_text_spawn`'s own pre-existing "~x142/field-frame on seaside" note.
 
 ## E. PLATFORM services (native; the "remove Beetle by porting callers" axis — NOT game logic)
 - ✅ CD/disc (cdc_native, cd_override, disc), ✅ XA stream (xa_stream), ✅ libsnd BGM (ov_bgm_*) + SPU voice.

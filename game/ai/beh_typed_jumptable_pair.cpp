@@ -250,15 +250,13 @@ void beh_typed_jumptable_pair(Core* c) {
 
     case 1: {                                         // jt1[1] = 0x801393f8
       (void)c->engine.sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328 (v0 discarded)
-      c->r[4] = obj; c->r[5] = 0x45;                  // 80139400 move a0,s0 ; 80139408 addiu a1,zero,0x45
-      rec_dispatch(c, 0x800735F4u);                   // 80139404 jal 0x800735f4
+      c->engine.spawn.tickLinkedOverlay(obj, 0x45);   // 80139400/04/08 was rec_dispatch(0x800735F4u, a1=0x45)
       break;                                          // 8013940C j 0x80139580
     }
 
     case 2: {                                         // jt1[2] = 0x80139414
       (void)c->engine.sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328 (v0 discarded)
-      c->r[4] = obj; c->r[5] = 0x46;                  // 8013941C move a0,s0 ; 80139424 addiu a1,zero,0x46
-      rec_dispatch(c, 0x800735F4u);                   // 80139420 jal 0x800735f4
+      c->engine.spawn.tickLinkedOverlay(obj, 0x46);   // 8013941C/20/24 was rec_dispatch(0x800735F4u, a1=0x46)
       // 0x800c0000 - 0x7ec = 0x800BF814 ; v0 = lw & 0xffff0000 ; compare to 0x02010000
       uint32_t g = c->mem_r32(0x800BF814u) & 0xFFFF0000u;  // 8013942C lw v0 ; 80139434 and v0,v1(0xffff0000)
       if (g != 0x02010000u) {                         // 80139438 lui v1,0x201 ; 8013943C bne -> 0x80139470

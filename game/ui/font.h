@@ -40,4 +40,18 @@ public:
   //   (i>=24-cls -> 4; i>=16-cls -> 1; i>=12-cls -> 3; i>=8-cls -> 2; else 0) into 24 entries
   //   at 0x800be238 + i*12 + 8 (u8). Returns the loop-exit count in v0 (caller ignores).
   void glyphClassFill(int32_t cls);
+
+  // measureLineWidth(str): FUN_80073750 — string measurer. Walks a NUL-terminated guest C-string
+  //   counting a "prefix" length (chars before the FIRST '\n') and a "suffix" length (the first
+  //   '\n' itself + every char after it, cumulative — NOT reset on any later '\n'). If no '\n' was
+  //   ever seen, returns the plain length (prefix count) as a POSITIVE value. If a '\n' was seen,
+  //   returns -(max(prefix, suffix)) — a NEGATIVE value the caller (e.g. game/ai/
+  //   beh_cube_text_spawn.cpp's "cube letters" text actor) uses as a multi-line signal.
+  //   ABI NOTE: the guest body's loop cursor IS its a0 parameter (`addiu a0,a0,1` in the loop),
+  //   so on return a0 == the address of the string's NUL terminator — a register LEFTOVER the
+  //   caller relies on for its next call's implicit a0 (beh_cube_text_spawn.cpp's "GOTCHA" comment,
+  //   FUN_8007aae8 carries a0 through unset). This native version reproduces that leftover by
+  //   writing c->r[4] = end-of-string, exactly matching what a dispatched call would leave.
+  //   Body from disas 0x80073750..0x80073798 (no sub-calls; a plain byte scan).
+  static int32_t measureLineWidth(Core* c, uint32_t strAddr);
 };

@@ -36,6 +36,22 @@ public:
   // `*(u32)0x800BFE34 |= (1 << idx)` — `sllv` gives the same idx & 31 masking as above.
   // Body from disas 0x8006F02C..0x8006F048.
   void     setFE34(int32_t idx);
+
+  // setFE48 (guest FUN_8006F00C): bit-SET on the u32 flag WORD at 0x800BFE48 — the SAME word
+  // testFE48 polls. Sibling of setFE34: `*(u32)0x800BFE48 |= (1 << idx)`. Body from disas
+  // 0x8006F00C..0x8006F02C.
+  void     setFE48(int32_t idx);
+
+  // processLinkRequest (guest FUN_8006F04C): arbitrates the pending child-link REQUEST mailbox
+  // byte at 0x800BF840 (bit 0x80 = pending, low nibble = slot id 0..8; jump table 0x80016A8C, 9
+  // entries, id>=9 falls straight to the miss path). Ids 0/1/6 are RETRY-LIMITED via a per-id
+  // byte counter at 0x800BFE3A[id]: while the counter is <3 it just increments and clears the
+  // mailbox (no grant); once it reaches 3 the request finally grants (setFE48). Ids 7/8 grant
+  // immediately, additionally raising setFE34(id) first. Ids 2..5 (and any id>=9) are silently
+  // dropped — no grant. A "grant" = setFE48(id), the exact bit beh_pad_child_linker's testFE48
+  // polls before spawning a linked-overlay child (Spawn::spawnOverlayVariant). Every path clears
+  // the mailbox byte on exit. Body from disas 0x8006F04C..0x8006F0E0.
+  void     processLinkRequest();
 };
 
 #endif
