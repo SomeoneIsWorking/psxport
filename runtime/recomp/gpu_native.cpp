@@ -851,8 +851,11 @@ void GpuState::gp0_exec(Core* core) {
       // frame composites exactly as the PSX ordering table would. Render the field with and without this and
       // diff: the differing pixels are precisely where native per-pixel depth changes the picture (the
       // object-occlusion bug — terrain/atlas not obeying world-depth). Diagnostic only.
+      // PSXPORT_ORACLE forces this too: pure PSX painter order is exactly the unenhanced reference (no
+      // native per-pixel depth / bg-band split). obj_depth is already inert in oracle mode (observer skips
+      // tagging + sceneNative never runs), so every prim composites in OT order like the real PSX.
       { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; }
-        if (pm) { is3d = 0; bg = 0; } }
+        if (pm || oracle_mode()) { is3d = 0; bg = 0; } }
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);

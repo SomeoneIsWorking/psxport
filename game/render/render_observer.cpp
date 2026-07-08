@@ -16,6 +16,7 @@
 #include "core.h"
 #include "game.h"
 #include "render.h"
+#include "cfg.h"                // oracle_mode() — the observer is inert in the pure PSX oracle
 #include "pkt_span.h"
 #include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add / fps60_bb_node
 
@@ -30,6 +31,9 @@ extern void gen_func_8003C788(Core*);
 extern void gen_func_80039F4C(Core*);   // type-4 multi-element object renderer
 
 static void obs_body(Core* c, void (*gen)(Core*)) {
+  // PSXPORT_ORACLE: the oracle is PURE PSX — run the literal substrate body untouched, add NO host depth
+  // tag (obj_depth would only feed the native compositor, which oracle mode bypasses via painter order).
+  if (oracle_mode()) { gen(c); return; }
   const uint32_t node = c->r[4];
   c->mRender->diag.beginObject(node);
   uint32_t slo, shi;

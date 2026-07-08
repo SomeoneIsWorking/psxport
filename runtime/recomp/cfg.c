@@ -38,6 +38,14 @@ const char* cfg_str(const char* name) {
   return e;
 }
 
+// PSXPORT_ORACLE — pure PSX reference mode. Read once; dedicated accessor (vs cfg_on at the call site)
+// so hot render gates can consult it by a named predicate without a per-call name scan.
+int oracle_mode(void) {
+  static int v = -1;
+  if (v < 0) v = cfg_on("PSXPORT_ORACLE");
+  return v;
+}
+
 // --- Debug channel set — set at runtime via the REPL `debug <chanA,chanB,...|all>` command (no env) ---
 // Diagnostics are driven from the REPL, not an env var: `debug scene,stage` enables those channels,
 // `debug all` enables everything, `debug` (empty) clears. cfg_dbg(chan) is then true while enabled.

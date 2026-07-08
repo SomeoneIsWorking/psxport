@@ -137,7 +137,7 @@ static int wide_native_w(void) {
     default:          return 320;
   }
 }
-int gpu_gpu_wide_engine(void)     { mods_init(); return g_mods.aspect != ASPECT_4_3; }
+int gpu_gpu_wide_engine(void)     { mods_init(); return g_mods.aspect != ASPECT_4_3 && !oracle_mode(); }  // widescreen never touches the PSX oracle
 int gpu_gpu_wide_engine_ofx(void) { return wide_native_w() / 2; }
 int gpu_gpu_wide_engine_w(void)   { return wide_native_w(); }
 void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {

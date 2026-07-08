@@ -23,6 +23,7 @@
 #include "cfg.h"
 #include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
 #include "render/render.h"  // Render::setPsxRender/psxRender (per-Core render-path switch)
+#include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
 #include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
 #include <stdio.h>
 #include <stdlib.h>
@@ -565,6 +566,21 @@ static void game_main(Core* c) {
 // crt0; crt0's call to FUN_80050b08 lands in game_main.
 void native_boot_run(Core* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
+  // PSXPORT_ORACLE — THE PURE PSX REFERENCE (user 2026-07-08). recomp gameplay + UNENHANCED PSX render:
+  // the substrate's own GTE+OT+GP0 composited in painter order, with NO native enhancement able to touch
+  // the picture — no fps60 interpolation, no widescreen FOV/stretch, no native depth/obj_depth compositing,
+  // no RenderObserver tagging. THE trustworthy oracle for byte + picture comparison. Implies GATE +
+  // RENDER_PSX; the render-internal enhancement gates (painter order, wide_engine, observer) consult
+  // oracle_mode() so nothing can leak an enhancement into it. Forced here BEFORE the GATE/RENDER_PSX
+  // blocks so their log lines report the final state.
+  if (oracle_mode()) {
+    c->game->psx_fallback = 1;                  // recomp gameplay (substrate)
+    c->mRender->mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
+    g_mods.fps60  = 0;                           // no 60fps interpolation
+    g_mods.aspect = ASPECT_4_3;                  // no widescreen (wide FOV/stretch off)
+    fprintf(stderr, "[native_boot] PSXPORT_ORACLE=1 — pure recomp + pure PSX render "
+                    "(no fps60 / wide / native-depth / observer)\n");
+  }
   // PSX-fallback gate (diagnostic): boot + frame-loop stay native; everything the loop calls runs as PSX
   // recomp (sync CD). PSXPORT_GATE nonzero turns it on; the REPL `gate on|off` toggles it live.
   { const char* g = cfg_str("PSXPORT_GATE");
