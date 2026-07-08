@@ -1330,6 +1330,35 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
+80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**
+- ✅ **DONE — all 6 addresses.** These are SUB-BEHAVIOR callees of the already-native FUN_80145230
+  (`game/ai/beh_id_compare_motion_dispatch.cpp`, guest 0x8014xxxx OVERLAY area), reached exclusively via
+  `rec_dispatch(c, addr)` from that caller (never a direct substrate jal), so wiring is
+  `EngineOverrides`-only (no `shard_set_override` dual-registration needed, unlike `ActorReward`).
+  RE'd via Ghidra headless (`tools/decomp.sh decomp A00 ... list <addrs>`,
+  `scratch/decomp/cluster1.c`) — mechanical, faithful transcription (control flow + node/global
+  read-writes owned; every further callee, ~25 addresses like FUN_80141AC4/80142A94/etc., stays an
+  un-RE'd PSX leaf reached uniformly via `rec_dispatch`, same discipline as `actor_sm_reward.cpp`).
+  gateCheck/typeInit/pickAttackByRange are small self-contained predicates/inits; defaultSubStateMachine
+  (~250 lines) and idleTick (~230 lines) are large per-type attack/idle state machines transcribed
+  1:1 from the Ghidra C (goto/label structure preserved to avoid introducing logic drift).
+  Gate: `PSXPORT_SBS_MODE=full` autonav, ~11000 frames, zero `[sbs-div]`, zero VIOLATION.
+  **LOW COVERAGE CAVEAT:** `PSXPORT_DISPWATCH` on the outer caller (0x80145230) confirms this actor
+  IS present and ticking (~88k hits/90s, state=1 "active" the whole time, node[3] cycling 2/4/5/128)
+  — but `PSXPORT_DISPWATCH` on any of the 6 owned addresses themselves (0x8014047C, 0x80144928) shows
+  **zero hits** even over a 110s/~10000-frame run: the object's node[0x2b] tick-gate counter never
+  hits zero in this window, so the caller never falls through to the node[3] dispatch that would
+  invoke these bodies. Correctness rests on the 1:1 Ghidra transcription + the zero-regression gate,
+  NOT on an observed override hit — flagging per the verification caveat (same shape as the
+  0x801244E8 session below).
+- **Housekeeping note:** this worktree needed `vendor/beetle-psx/deps/libchdr` (nested submodule chain
+  broken — `deps/lightning/gnulib` has no `.gitmodules` mapping) and `generated/` (recompiler output,
+  gitignored) copied in from the main checkout to build at all; the main checkout's own
+  `vendor/beetle-psx` submodule also has an UNCOMMITTED `spu.c` edit (adds `SPU_PokeRAM`) that every
+  fresh worktree/clone will need until it's committed to the beetle-psx fork — flagging as a workflow
+  gap, not fixed here (out of this session's scope to touch the shared submodule state).
+
 **SESSION 2026-07-08 — entity-behavior cluster (0x801244E8/0x8012866C/0x8012E168/0x8013DD48): 1 owned, 3
 correctly excluded (RE-first caught 3 non-game-logic/unsafe addresses before porting them).**
 - ✅ **DONE — 0x801244E8 owned as `release_position_801244e8`** (game/ai/beh_jumptable_release_trigger.cpp,

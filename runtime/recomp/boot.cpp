@@ -9,6 +9,7 @@
 #include "platform_hle.h"  // class PlatformHle — HW-sync HLE table (VSync/CdSync/MDEC/ChangeThread)
 #include "dualcore.h"      // class DualCore — NATIVE-render vs PSX-render RAM divergence harness
 #include "actor_sm_reward.h"  // class ActorReward — reward/tally window actor SM family
+#include "actor_zoned_attacker.h"  // class ActorZonedAttacker — 0x8014xxxx zoned-attacker sub-behavior cluster
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,8 @@ int main(int argc, char** argv) {
                                           // recompiler's PROCESS-GLOBAL g_override[] table, so this one
                                           // call covers every Core/Game created afterward — incl. SBS's
                                           // two separately-constructed cores, which never run this main())
+  ActorZonedAttacker::registerOverrides(game);  // 0x8014xxxx zoned-attacker sub-behavior cluster
+                                                 // (FUN_8014047C/80140544/801409C0/80143A00/80144928/80144B50)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0

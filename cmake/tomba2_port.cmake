@@ -123,6 +123,7 @@ set(PORT_SRC
   game/ai/beh_typed_jumptable_pair.cpp
   game/ai/beh_cull_substate_orchestrator.cpp
   game/ai/beh_id_compare_motion_dispatch.cpp
+  game/ai/actor_zoned_attacker.cpp
   game/ai/beh_jumptable_flag_gate.cpp
   game/ai/beh_cull_tick_render.cpp
   game/ai/beh_sibling_angle_track.cpp
