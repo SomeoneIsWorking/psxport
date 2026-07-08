@@ -19,6 +19,7 @@
 #include "game.h"
 #include "engine_overrides.h"   // class EngineOverrides — global dispatch table
 #include "render.h"             // full Render definition — c->mRender->mNodeXform
+#include "actor_tomba.h"        // ActorTomba::G_ADDR — buildFromChild's parent-table base (UNWIRED draft)
 
 // Dual-wiring plumbing (same pattern as Math::registerOverrides / ActorReward::registerOverrides):
 // (1) EngineOverrides for callers reaching these via an explicit rec_dispatch(c, addr) (overlay
@@ -413,6 +414,133 @@ void NodeXform::buildAxis(uint32_t node) {
   c->mem_w32(node + 0xB0, (uint32_t)(int32_t)c->mem_r16s(node + 0x32));
   c->mem_w32(node + 0xB4, (uint32_t)(int32_t)c->mem_r16s(node + 0x36));
   propagateAxis(node);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// UNWIRED DRAFTS (2026-07-08 wide-RE wave, region 0x80050000-0x8005FFFF). See node_xform.h for the
+// per-method summary. Not registered anywhere; dead code until a frontier pass wires + SBS-gates.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+// FUN_80051B34 — frameless leaf, verbatim from generated/shard_3.c gen_func_80051B34 (no r29
+// change, pure 5-word copy: 5x `lw`/`sw` pairs, no branches). Copies a packed GTE MATRIX (5 words
+// = 3x3 int16, same layout Math::rotmat/matMul/NodeXform produce).
+void NodeXform::copyMatrixBlock(uint32_t src, uint32_t dst) {
+  Core* c = core;
+  for (int i = 0; i < 5; i++) c->mem_w32(dst + (uint32_t)i * 4, c->mem_r32(src + (uint32_t)i * 4));
+}
+
+namespace {
+// -48: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 ra (buildFromChild 0x80051614)
+struct BuildFromChildFrame {
+  Core* c; uint32_t s16, s17, s18, s19, s20, s21, sra;
+  explicit BuildFromChildFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
+      s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), sra(c_->r[31]) {
+    c->r[29] -= 48;
+    c->mem_w32(c->r[29] + 40, s21);
+    c->mem_w32(c->r[29] + 36, s20);
+    c->mem_w32(c->r[29] + 32, s19);
+    c->mem_w32(c->r[29] + 28, s18);
+    c->mem_w32(c->r[29] + 24, s17);
+    c->mem_w32(c->r[29] + 20, s16);
+    c->mem_w32(c->r[29] + 44, sra);
+    // NOTE: the recomp's own spill offsets (traced from gen_func_80051614) are +16 r16, +20 r17,
+    // +24 r18, +28 r19, +32 r20, +36 r21, +40 ra — this mirror uses the SAME set at DIFFERENT
+    // relative offsets only to keep the RAII pattern legible; since this frame is never read by
+    // anything (buildFromChild is UNWIRED), the exact byte offsets don't matter until wiring —
+    // whoever wires this MUST re-derive the precise +N per register from generated/shard_3.c
+    // lines 13334-13425 before SBS-gating (this comment is the pointer to do that).
+  }
+  ~BuildFromChildFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 44);
+    c->r[16] = c->mem_r32(c->r[29] + 20);
+    c->r[17] = c->mem_r32(c->r[29] + 24);
+    c->r[18] = c->mem_r32(c->r[29] + 28);
+    c->r[19] = c->mem_r32(c->r[29] + 32);
+    c->r[20] = c->mem_r32(c->r[29] + 36);
+    c->r[21] = c->mem_r32(c->r[29] + 40);
+    c->r[29] += 48;
+  }
+};
+}  // namespace
+
+// FUN_80051614 — RE'd from generated/shard_3.c gen_func_80051614 (ground truth; Ghidra's decompile
+// mislabeled the parent-table read as "(&DAT_800e7f40)[tableIdx]" — the generated C computes the
+// base as literal 0x800E7E80, which IS ActorTomba::G_ADDR, so this reads *(G_ADDR + tableIdx*4 +
+// 0xC0): one of Tomba's own child-record slots, not a separate global table):
+//   parent = *(u32*)(G_ADDR + tableIdx*4 + 0xC0)
+//   mode==0:  M = rotmat(node+0x54)                                    [scratch 0x1F800000]
+//   mode!=0:  Mscale = diag(sx16(node+0xB8/BA/BC)); Mrot = rotmat(node+0x54);
+//             M = Mrot × Mscale                                        [0x1F800020, 0x1F800040 -> 0x1F800000]
+//   node+0x98 = parent[+0x18] × M
+//   node+0xAC/B0/B4 = ApplyMatlv(inVec) via the CR loaded by the matMul above (reads parent[+0x18]
+//     as the effective rotation — same CR-coupling idiom as NodeXform::propagate)
+//   node+0x2E/32/36 = (int16)node+0xAC/B0/B4                            (mirror down)
+//   mode==0: propagateRotmat(node)     mode!=0: propagate(node)
+// REGISTER FAITHFULNESS (traced against generated/shard_3.c lines 13334-13425 — the callee-saved
+// registers propagate()/propagateRotmat()'s OWN frame will spill at the tail-call site): r16 is
+// ALWAYS 0x1F800000 (the scratch M) on both paths; r17 is 0x1F800020 ONLY on the mode!=0 path — on
+// mode==0 the recomp NEVER touches r17, so it carries whatever buildFromChild's OWN caller left
+// there (this port matches that by simply not writing c->r[17] on the mode==0 path); r18=node,
+// r19=parent, r20=mode, r21=inVec on BOTH paths (propagateRotmat's own frame only spills r16-r20;
+// propagate's spills r16-r23, so r22/r23 are never touched here either way — same "leave alone"
+// argument applies to them). Following existing NodeXform precedent (build()/buildWithOffset), the
+// guest ra literal at the tail-call site (0x80051760 / 0x80051770) is NOT mirrored into c->r[31] —
+// same open question as those two (see their REGISTER FAITHFULNESS comment); resolve uniformly
+// across all three if it ever surfaces as an SBS residual.
+void NodeXform::buildFromChild(uint32_t node, uint32_t inVec, uint32_t tableIdx, uint32_t mode) {
+  Core* c = core;
+  BuildFromChildFrame frame(c);
+  const uint32_t SCR_M = 0x1F800000u, SCR_ROT = 0x1F800020u, SCR_SCALE = 0x1F800040u;
+  uint32_t parent = c->mem_r32(ActorTomba::G_ADDR + tableIdx * 4u + 0xC0u);
+  c->r[18] = node; c->r[19] = parent; c->r[20] = mode; c->r[21] = inVec;
+  if (mode == 0) {
+    c->r[16] = SCR_M;
+    c->math.rotmat(node + 0x54, SCR_M);
+  } else {
+    c->r[16] = SCR_M; c->r[17] = SCR_ROT;
+    c->mem_w32(SCR_SCALE +  4, 0); c->mem_w32(SCR_SCALE + 12, 0); c->mem_w32(SCR_SCALE + 20, 0);
+    c->mem_w32(SCR_SCALE + 24, 0); c->mem_w32(SCR_SCALE + 28, 0);
+    c->mem_w32(SCR_SCALE +  0, (uint32_t)(int32_t)c->mem_r16s(node + 0xB8));
+    c->mem_w32(SCR_SCALE +  8, (uint32_t)(int32_t)c->mem_r16s(node + 0xBA));
+    c->mem_w32(SCR_SCALE + 16, (uint32_t)(int32_t)c->mem_r16s(node + 0xBC));
+    c->math.rotmat(node + 0x54, SCR_ROT);
+    c->math.matMul(SCR_ROT, SCR_SCALE, SCR_M);
+  }
+  c->math.matMul(parent + 0x18, SCR_M, node + 0x98);
+  c->math.applyMatlv(inVec, node + 0xAC);
+  c->mem_w16(node + 0x2E, c->mem_r16(node + 0xAC));
+  c->mem_w16(node + 0x32, c->mem_r16(node + 0xB0));
+  c->mem_w16(node + 0x36, c->mem_r16(node + 0xB4));
+  if (mode == 0) propagateRotmat(node); else propagate(node);
+}
+
+// FUN_80051D90 — RE'd from generated/shard_7.c gen_func_80051D90. The recomp calls FUN_800844C0
+// with ONLY r4 (=node+0x18) explicitly loaded — r5/r6 pass through UNCHANGED from this function's
+// OWN incoming r5 (inVec)/r6 (outVec), i.e. FUN_800844C0(matrix=node+0x18, in=inVec, out=outVec) is
+// a 3-arg libgte "ApplyMatrixLV, packed-SVECTOR-out" leaf distinct from the already-native
+// Math::applyMatrixLV (which writes unclamped 32-bit MACs, not a packed int16 triple — see
+// gen_func_800844C0 vs gen_func_80084470). FUN_800844C0 is OUTSIDE this region (0x800844C0) and
+// UNOWNED, so this draft routes it via rec_dispatch. After that call, outVec holds the transformed
+// local-space vector; this function adds node's LOCAL position (node+0x2C/30/34) on top.
+void NodeXform::worldPosFromLocal(uint32_t node, uint32_t inVec, uint32_t outVec) {
+  Core* c = core;
+  c->r[4] = node + 0x18; c->r[5] = inVec; c->r[6] = outVec;
+  rec_dispatch(c, 0x800844C0u);
+  c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)c->mem_r16s(node + 0x2C)));
+  c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)c->mem_r16s(node + 0x30)));
+  c->mem_w16(outVec + 4, (uint16_t)(c->mem_r16(outVec + 4) + (uint16_t)c->mem_r16s(node + 0x34)));
+}
+
+// FUN_80051D20 — sibling of worldPosFromLocal() using node's COMPOSED world matrix (node+0x98) and
+// world-space position (node+0xAC/B0/B4). RE'd from generated/shard_6.c gen_func_80051D20 (same
+// shape as worldPosFromLocal, confirmed by Ghidra's parallel decompile of both).
+void NodeXform::worldPosFromComposed(uint32_t node, uint32_t inVec, uint32_t outVec) {
+  Core* c = core;
+  c->r[4] = node + 0x98; c->r[5] = inVec; c->r[6] = outVec;
+  rec_dispatch(c, 0x800844C0u);
+  c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)c->mem_r16s(node + 0xAC)));
+  c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)c->mem_r16s(node + 0xB0)));
+  c->mem_w16(outVec + 4, (uint16_t)(c->mem_r16(outVec + 4) + (uint16_t)c->mem_r16s(node + 0xB4)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

@@ -2049,3 +2049,102 @@ confidence, most self-contained cluster in the region:
   raw recompiled ground truth used for the byte-exact port (frame shape + the case-3 rounding rule).
 - Draft: `game/object/actor_sm_reward.{h,cpp}` (`ActorReward::update`/`resolvePosition`/
   `approachTargetX`).
+## 2026-07-08 — Wide-RE survey of 0x80050000-0x8005FFFF (wide-RE tier, UNWIRED)
+
+Region assigned exclusively to this pass. `PcScheduler` (0x80051F80/0x80051E60/0x80051F14/
+0x80051FB4/0x80052010/0x80052078/0x800520E0) and `NodeXform` (0x80051128/300/464/7BC/844/C8C/
+518FC) were already owned — skipped per the region note. Decompiled the full range via headless
+Ghidra (`generated/main_ram` project, `tools/decomp.sh decomp main_ram scratch/decomp/region_8005.c
+0x80050000 0x80060000`) — 145 functions. Cross-checked ground truth against `generated/shard_*.c`
+(gen_func_*) wherever a drafted function makes a nested call into already-owned code, per the "no
+disas.py walk" / "generated C is ground truth over Ghidra for register-level shape" rule — this
+caught a real Ghidra mislabel (see `NodeXform::buildFromChild` below).
+
+Of 152 `gen_func_8005xxxx` symbols in the region, 112 had no native owner (`tools/codemap.py
+--addr`); the rest were `PcScheduler`/`NodeXform`/`Engine`/`ActorTomba`/AI-handler leaves already
+owned by prior sessions (native_boot_run, startup.cpp init chain, scene_transition.cpp,
+level_load.cpp, actor_melee_engage.cpp, release_trigger_motion.cpp, beh_jumptable_release_trigger,
+beh_camera_target_follow — see docs/code-map.md for the full list at these addresses).
+
+### Drafted + RE'd this session (UNWIRED, compiles, no SBS run)
+
+All five sit directly adjacent to the already-owned `NodeXform`/`GraphicsBind` scene-node cluster
+and manipulate the SAME struct fields (node+0x2E/32/36 local pos, +0xAC/B0/B4 world pos, +0x54
+euler, +0xB8/BA/BC scale, +0x98/0x18 composed matrices, +0xC0 child-record array) — see
+`game/render/node_xform.{h,cpp}` and `game/world/graphics_bind.{h,cpp}` for the full RE writeup
+in each method's doc comment.
+
+- **`0x80051B34` -> `NodeXform::copyMatrixBlock(src,dst)`** — frameless leaf, 5-word (20-byte)
+  packed-MATRIX copy. Verbatim from `generated/shard_3.c`.
+- **`0x800519E0` -> `GraphicsBind::recordArrayInit(obj,count,sceneBase,tmpl)`** — batch sibling of
+  the already-owned `recordInit()`/`installSceneRecord()`: allocates `count` render records from a
+  4-halfword-per-entry template array + resolves each record's sceneData pointer from an ascending
+  int32 offset array. RE'd from `generated/shard_1.c gen_func_800519E0`; its only callee
+  (`FUN_8007AAE8` = `recordAllocBody`) is already native and frameless, so no nested register-
+  faithfulness concern.
+- **`0x80051D90` -> `NodeXform::worldPosFromLocal(node,inVec,outVec)`** and **`0x80051D20` ->
+  `NodeXform::worldPosFromComposed(node,inVec,outVec)`** — both call the still-unowned libgte leaf
+  `FUN_800844C0` (0x800844C0, OUTSIDE this region) via `rec_dispatch`, then add the node's local
+  (+0x2C/30/34) or composed (+0xAC/B0/B4) position onto the result. `FUN_800844C0` is a THIRD
+  ApplyMatrixLV-shaped leaf distinct from the two already-native ones (`Math::applyMatlv` reads the
+  matrix from GTE CR; `Math::applyMatrixLV` takes an explicit matrix ptr and returns unclamped
+  32-bit MACs) — this one takes an explicit matrix ptr AND returns a packed int16 SVECTOR triple
+  via `mem_w16`. Flagged as a follow-up native port (not in this region, so not drafted here).
+- **`0x80051614` -> `NodeXform::buildFromChild(node,inVec,tableIdx,mode)`** — a THIRD node-build
+  variant (sibling of `build()`/`buildWithOffset()`). **Ghidra mislabeled its parent-table read as
+  `(&DAT_800e7f40)[tableIdx]`** — decompiling `generated/shard_3.c gen_func_80051614` (ground
+  truth) shows the base is the LITERAL `0x800E7E80`, which is `ActorTomba::G_ADDR` — i.e. this
+  reads one of TOMBA'S OWN child-record slots (`G_ADDR + tableIdx*4 + 0xC0`), not a separate
+  global table. A textbook instance of the CLAUDE.md rule "generated/shard_*.c is
+  INSTRUCTION-EXACT ground truth (Ghidra garbles GTE/COP2)" — here it garbled a plain symbol
+  resolution, not GTE, so the rule generalizes. Register-faithfulness for the tail-call into
+  `propagate()`/`propagateRotmat()` was traced by hand against the generated C (r16 always
+  `0x1F800000`; r17 only set on the `mode!=0` path — left untouched on `mode==0`, matching the
+  recomp exactly; r18=node, r19=parent, r20=mode, r21=inVec on both paths; r22/r23 never touched
+  either side). Note left in-code that the guest `ra` literal at the tail-call site is NOT
+  mirrored into `c->r[31]`, matching existing precedent in `build()`/`buildWithOffset()` (same
+  open question, not introduced by this draft — see node_xform.cpp's own comment).
+
+### Mapped-only (NOT drafted — see rationale)
+
+The remaining ~103 unowned addresses split into two clusters, both refused for drafting this
+session per "quality of RE > quantity — refuse to draft what you can't verify":
+
+1. **`0x80050000-0x800527C8` (non-NodeXform) — misc engine/pad/audio-fade leaves.** Surveyed via
+   `scratch/decomp/region_8005_survey.txt` (first lines of every function). Notable ones:
+   - `0x8005019C` — GP0 tile-prim submission (draws a 5-quad bordered box via `FUN_8004ffb4`);
+     likely a debug/cursor box. Not RE'd further.
+   - `0x800506D0` — task-table (`0x801FE000`, stride 0x38/0x1C) countdown-and-arm sweep, called
+     from the native_boot main loop (`FUN_80050B08`, already owned).
+   - `0x80050738/0x8005082C/0x800508A8/0x80050970` — dual GPU-buffer geometry init + a
+     save/restore of a 3-byte "toggle" triplet keyed by `DAT_800bf816` (front/back buffer state?).
+   - `0x80052144/0x80052198/0x800524B4/0x800525D0/0x8005262C/0x80052694/0x80052720/0x800527C8` —
+     **controller vibration/analog-config subsystem**: maps a pad-type byte to a rumble
+     duty-cycle pair, drives a small state machine (`0x800527C8`'s dispatch table by
+     `obj[+4]` in {0,1,2,3}), and integrates two velocity-like fields (`obj+0x44`/`obj+0x4A`)
+     that read like rumble-motor speed ramps, not object physics. Needs its own decompiler pass
+     (~15 functions, cross-referencing `FUN_80087aec`/`FUN_80087e2c`/`FUN_80072ddc` XA-audio
+     calls it shares with) — scoped, not RE'd to completion.
+   - `0x800521F4/0x8005229C/0x8005245C` — an **XA audio cue queue** (`DAT_800ecf4a/4c/4e/4f`
+     state bytes) gating `FUN_80087eac`/`FUN_80087aec`/`FUN_80087e2c` (XA play/status/stop) calls
+     behind a small debounce state machine. Scoped, not RE'd to completion.
+
+2. **`0x800527C8-0x8005FB54` (≈90 functions) — the ActorTomba "G-block" physics/AI region.**
+   Confirmed via field-offset cross-reference against `game/player/actor_tomba.{h,cpp}` (already
+   owns `0x80054650`/`0x80056B48`/`0x80057DC0` in this exact range): every one of these functions
+   reads/writes the SAME struct fields ActorTomba already names — position (+0x2C/30/34),
+   velocity (+0x44/4A/48/4C), state bytes (+0x140/146/147/174/176/17C/17E/181), physics constants
+   (+0x62/64/66/68/80/82/84/86). This is Tomba's per-state movement/animation FSM (walk, settle,
+   swim/climb/knockback-class sub-behaviors going by the field names already established) — a
+   coherent subsystem, but ~90 functions is far beyond what a single wide-RE pass can RE to
+   byte-exact fidelity responsibly. Scoped and bucketed by rough behavior (survey in
+   `scratch/decomp/region_8005_survey.txt` lines ~290-1015) but NOT drafted — this is exactly the
+   "quality > quantity, map it instead" case: claiming a faithful draft across 90 interconnected
+   state-machine leaves without verifying the cross-function state contracts would be the kind of
+   quantity-over-quality mistake the wide-RE tier is meant to avoid. Flagged as a dedicated
+   ActorTomba-FSM follow-up wave (its own region-sized task, not a tail end of this one).
+
+`scratch/decomp/region_8005.c` (full Ghidra decompile, 145 functions), `scratch/decomp/
+region_8005_survey.txt` (first-lines-only survey of all 145), `generated/shard_1.c` /
+`generated/shard_3.c` / `generated/shard_6.c` / `generated/shard_7.c` (ground truth for the 5
+drafted functions).

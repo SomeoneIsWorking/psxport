@@ -71,4 +71,43 @@ public:
   // raw local position (node+0x2E/32/36) straight into the world-pos triple (node+0xAC/B0/B4) with
   // NO rotation applied (unlike buildWithOffset), then tail-calls propagateAxis(node).
   void buildAxis(uint32_t node);
+
+  // ------------------------------------------------------------------------------------------
+  // UNWIRED DRAFTS (2026-07-08 wide-RE wave, region 0x80050000-0x8005FFFF). RE'd from
+  // generated/shard_*.c ground truth (Ghidra's decompile mis-resolved a table base on one of
+  // these — see buildFromChild — so the generated C, not Ghidra, is the source of truth per
+  // CLAUDE.md). NOT registered anywhere (no EngineOverrides, no shard_set_override) and NOT
+  // SBS-gated — dead code until a frontier pass wires + verifies them.
+  // ------------------------------------------------------------------------------------------
+
+  // copyMatrixBlock (guest FUN_80051B34): frameless leaf — copy a 5-word (20-byte) MATRIX block
+  // (the packed GTE 3x3 rotation-matrix layout Math::rotmat/matMul use) from `src` to `dst`.
+  void copyMatrixBlock(uint32_t src, uint32_t dst);
+
+  // buildFromChild (guest FUN_80051614): a THIRD node-build variant, sibling of build()/
+  // buildWithOffset(). Composes this node's world matrix at node+0x98 from either a straight
+  // rotmat(node+0x54) [mode==0] or a rotmat×scale compose using node+0xB8/BA/BC as the diagonal
+  // scale [mode!=0], multiplies against a PARENT frame read from
+  // *(ActorTomba::G_ADDR + tableIdx*4 + 0xC0) (Ghidra mislabeled this as a "DAT_800e7f40" table;
+  // the generated C proves it is Tomba's own child-record table, same +0xC0 array shape as
+  // NodeXform::propagate's node+0xC0), then applies that composed matrix to `inVec` to produce
+  // node's world position (node+0xAC/B0/B4, mirrored down to the int16 node+0x2E/32/36 slot).
+  // Tail-dispatches to propagateRotmat(node) [mode==0] or propagate(node) [mode!=0] — SAME
+  // register-faithfulness requirement as build()/buildWithOffset (the nested call's own frame
+  // spills whatever is currently in r16..r23/r19..r20, so this method sets the callee-saved
+  // registers the recomp has live at that point; see .cpp for the exact trace against
+  // generated/shard_3.c gen_func_80051614).
+  void buildFromChild(uint32_t node, uint32_t inVec, uint32_t tableIdx, uint32_t mode);
+
+  // worldPosFromLocal (guest FUN_80051D90): out[0..2] += node's LOCAL-frame world position
+  // (node+0x2C/30/34), after transforming `inVec` by node's LOCAL matrix (node+0x18) via the
+  // not-yet-owned libgte leaf FUN_800844C0 (ApplyMatrixLV variant that returns a packed SVECTOR,
+  // not a VECTOR — distinct from the already-native Math::applyMatrixLV). Routed via
+  // rec_dispatch since FUN_800844C0 (0x800844C0) is outside this region's ownership.
+  void worldPosFromLocal(uint32_t node, uint32_t inVec, uint32_t outVec);
+
+  // worldPosFromComposed (guest FUN_80051D20): sibling of worldPosFromLocal() using node's
+  // COMPOSED world matrix (node+0x98) and world-space position (node+0xAC/B0/B4) instead of the
+  // local ones. Same FUN_800844C0 dependency.
+  void worldPosFromComposed(uint32_t node, uint32_t inVec, uint32_t outVec);
 };

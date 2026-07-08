@@ -34,6 +34,18 @@ public:
   //   the shared source-of-truth. All 4 direct callsites pass classArg=12.
   void installSceneRecord(uint32_t rec, uint32_t classArg, uint32_t itemArg);
 
+  // recordArrayInit(obj, count, sceneBase, tmpl): FUN_800519E0 — UNWIRED DRAFT (2026-07-08
+  // wide-RE wave, region 0x80050000-0x8005FFFF). Batch sibling of recordInit(): allocates `count`
+  // render records (bump allocator, same pool as recordInit) into obj[+0xC0 .. +0xC0+4*(count-1)],
+  // seeding each from a 4-halfword template entry (tmpl[i*4 .. i*4+3] -> record+6/+0/+2/+4) and
+  // resolving each record's sceneData pointer as `sceneBase + tmpl-array-driven-offset` (same
+  // installSceneRecord idiom, but reading the offset from an ascending int32 array starting at
+  // sceneBase+4 instead of the classArg/itemArg double-index). obj+8/+9 = count, obj+0xB8/BA/BC =
+  // scale identity (0x1000), obj+0xD = 0. Returns 1 (obj despawn-pending, obj+9=0) if the record
+  // pool doesn't have `count` slots free; else 0. See .cpp for the full RE + generated/shard_1.c
+  // gen_func_800519E0 cross-check.
+  uint32_t recordArrayInit(uint32_t obj, uint32_t count, uint32_t sceneBase, uint32_t tmpl);
+
 private:
   // Guest-ABI bodies (plain fn-pointer shape for the verify gate).
   static uint32_t recordAllocBody(Core* c);      // FUN_8007AAE8

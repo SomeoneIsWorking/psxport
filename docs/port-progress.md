@@ -2347,3 +2347,20 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
   in new `game/ai/melee_proximity.{h,cpp}` — the simplest family member, guest 40-byte frame mirrored
   in `isAtApproachAnchorFramed()`. The other 8 family members are named/mapped, not drafted
   (side-effect fields not confidently disentangled in this session's window).
+- **Band 0x80050000-0x8005FFFF RE survey (fleet agent, 2026-07-08, RE-ahead-of-frontier — UNWIRED).**
+  145-function Ghidra decompile (`scratch/decomp/region_8005.c`) + shard cross-check; 112 of the
+  region's 152 `gen_func_8005xxxx` symbols were unowned (PcScheduler + NodeXform's core cluster were
+  already owned — skipped per the region assignment). Full breakdown in docs/engine_re.md "Wide-RE
+  survey of 0x80050000-0x8005FFFF". DRAFTED (compile-only, unwired, unverified, no SBS run): 5 new
+  methods on the already-owned `NodeXform`/`GraphicsBind` classes — `NodeXform::copyMatrixBlock`
+  (0x80051B34), `NodeXform::buildFromChild` (0x80051614 — Ghidra mislabeled its parent-table read;
+  ground-truth generated C shows it reads `ActorTomba::G_ADDR + tableIdx*4 + 0xC0`, one of Tomba's
+  own child-record slots, not a separate global table), `NodeXform::worldPosFromLocal` /
+  `worldPosFromComposed` (0x80051D90/0x80051D20 — both route the still-unowned libgte leaf
+  `0x800844C0` via `rec_dispatch`), and `GraphicsBind::recordArrayInit` (0x800519E0, batch sibling
+  of the already-owned `recordInit`). MAPPED-ONLY (not drafted, refused per "quality > quantity"):
+  (a) ~15 controller-vibration/analog-config + XA-audio-cue-queue leaves (0x80052144-0x800527C8);
+  (b) ~90-function ActorTomba "G-block" physics/AI FSM (0x800527C8-0x8005FB54) — confirmed via
+  field-offset cross-reference against the already-owned `game/player/actor_tomba.cpp` fields, but
+  far too large to RE to byte-exact fidelity in one pass; flagged as its own dedicated follow-up
+  wave, not a tail end of this one.

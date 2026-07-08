@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 518 native fns, 441 owned addresses, 499 LIVE / 19 ORPHAN.
+Totals: 522 native fns, 444 owned addresses, 503 LIVE / 19 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -152,23 +152,27 @@ Totals: 518 native fns, 441 owned addresses, 499 LIVE / 19 ORPHAN.
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:584 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2438 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2513 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
-| 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:259 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
-| 0x80051300 | LIVE | `NodeXform::propagateRotmat` | game/render/node_xform.cpp:323 |  | per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd… |
-| 0x80051464 | LIVE | `NodeXform::propagateAxis` | game/render/node_xform.cpp:357 |  | sibling of propagateRotmat(): identical control flow, but the child's … |
+| 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:260 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
+| 0x80051300 | LIVE | `NodeXform::propagateRotmat` | game/render/node_xform.cpp:324 |  | per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd… |
+| 0x80051464 | LIVE | `NodeXform::propagateAxis` | game/render/node_xform.cpp:358 |  | sibling of propagateRotmat(): identical control flow, but the child's … |
+| 0x80051614 | LIVE | `NodeXform::buildFromChild` | game/render/node_xform.cpp:490 |  | RE'd from generated/shard_3.c gen_func_80051614 (ground truth; Ghidra'… |
 | 0x80051794 | LIVE | `Mtx::identity` | game/math/mtx.cpp:4 |  |  |
 | 0x80051794 | LIVE | `Engine::identityMatrixAt` | game/scene/startup.cpp:27 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
 | 0x800517BC | LIVE | `Mtx::diagonal` | game/math/mtx.cpp:18 |  |  |
-| 0x800517BC | LIVE | `NodeXform::seedBlock` | game/render/node_xform.cpp:295 |  | trivial 8-word block seeder: {x,0,y,0,z,0,0,0}. RE'd + cross-checked v… |
+| 0x800517BC | LIVE | `NodeXform::seedBlock` | game/render/node_xform.cpp:296 |  | trivial 8-word block seeder: {x,0,y,0,z,0,0,0}. RE'd + cross-checked v… |
 | 0x800517F8 | LIVE | `GraphicsBind::renderUpdateBody` | game/world/graphics_bind.cpp:102 | 0x80051300 | per-object RENDER-STATE UPDATE: build the object's transform, then sna… |
 | 0x800517F8 | LIVE | `GraphicsBind::renderUpdate` | game/world/graphics_bind.cpp:112 |  |  |
-| 0x80051844 | LIVE | `NodeXform::build` | game/render/node_xform.cpp:182 |  |  |
+| 0x80051844 | LIVE | `NodeXform::build` | game/render/node_xform.cpp:183 |  |  |
 | 0x800518FC | LIVE | `Engine::objMatrixCompose` | game/core/engine.cpp:910 | 0x80051128 0x80084110 0x80084470 0x80085480 | Engine::objMatrixCompose — FUN_800518FC. |
-| 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:220 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
-| 0x800519E0 | LIVE | `assetInit` | game/ai/beh_a06_scripted_actor.cpp:122 | 0x800519E0 | (obj, 0xf, *(u32)0x800ECFA4, &DAT_80141E90) — asset-load init. Returns… |
+| 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:221 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
+| 0x800519E0 | LIVE | `GraphicsBind::recordArrayInit` | game/world/graphics_bind.cpp:214 |  | RE'd from generated/shard_1.c gen_func_800519E0 (48-byte frame: r16/r1… |
 | 0x80051B04 | LIVE | `GraphicsBind::installSceneRecord` | game/world/graphics_bind.cpp:89 |  | two-level scene-data-table pointer resolve. Pure address arithmetic, n… |
+| 0x80051B34 | LIVE | `NodeXform::copyMatrixBlock` | game/render/node_xform.cpp:427 |  | frameless leaf, verbatim from generated/shard_3.c gen_func_80051B34 (n… |
 | 0x80051B70 | LIVE | `GraphicsBind::recordInitBody` | game/world/graphics_bind.cpp:50 |  | per-object render-record INIT. Allocates a record (FUN_8007AAE8), zero… |
 | 0x80051B70 | LIVE | `GraphicsBind::recordInit` | game/world/graphics_bind.cpp:80 |  |  |
-| 0x80051C8C | LIVE | `NodeXform::buildAxis` | game/render/node_xform.cpp:398 |  | node-level sibling of build(): composes THIS node's own world matrix a… |
+| 0x80051C8C | LIVE | `NodeXform::buildAxis` | game/render/node_xform.cpp:399 |  | node-level sibling of build(): composes THIS node's own world matrix a… |
+| 0x80051D20 | LIVE | `NodeXform::worldPosFromComposed` | game/render/node_xform.cpp:537 | 0x800844C0 | sibling of worldPosFromLocal() using node's COMPOSED world matrix (nod… |
+| 0x80051D90 | LIVE | `NodeXform::worldPosFromLocal` | game/render/node_xform.cpp:525 | 0x800844C0 | RE'd from generated/shard_7.c gen_func_80051D90. The recomp calls FUN_… |
 | 0x80051E60 | LIVE | `PcScheduler::step` | game/core/pc_scheduler.cpp:555 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). The … |
 | 0x80051F14 | LIVE | `PcScheduler::spawnPrim` | game/core/pc_scheduler.cpp:56 | 0x80080860 0x80080890 0x800808A0 | arm a task slot. Frame: sp-=24, s0 spill at +16, ra at +20. Slot write… |
 | 0x80051F80 | LIVE | `Engine::s4c` | game/core/engine.cpp:158 | 0x80106A14 | s4c() reference: sm[0x4c] == the AREA machine (the 9-state load/intro/… |
@@ -371,7 +375,6 @@ Totals: 518 native fns, 441 owned addresses, 499 LIVE / 19 ORPHAN.
 | 0x800BF808 | LIVE | `Engine::postRenderTickFaithful` | game/core/engine.cpp:2637 | 0x80074590 | Engine::postRenderTickFaithful -- byte-exact mirror of gen_func_80077D… |
 | 0x800BF81E | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x800BF842 | LIVE | `Engine::postRenderTick` | game/core/engine.cpp:2608 |  | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
-| 0x800ECFA4 | LIVE | `assetInit` | game/ai/beh_a06_scripted_actor.cpp:122 | 0x800519E0 | (obj, 0xf, *(u32)0x800ECFA4, &DAT_80141E90) — asset-load init. Returns… |
 | 0x800ED058 | LIVE | `Engine::sceneEventFifoFaithful` | game/core/engine.cpp:611 |  | pc_faithful field EVENT/COMMAND-QUEUE state machine — mirror of gen_fu… |
 | 0x800EE489 | LIVE | `Cull::cullFarMult` | game/render/cull.cpp:82 |  | pc_faithful/pc_skip split (2026-07-03): pc_faithful (pc_skip=false) us… |
 | 0x800F2624 | LIVE | `RenderQueue::objidOverlay` | game/render/render_queue.cpp:126 |  | Box + label every live GAME OBJECT, identified by ENUMERATING the rend… |

@@ -186,3 +186,57 @@ uint32_t GraphicsBind::posComposeBody(Core* c) {
 void GraphicsBind::posCompose() { Core* c = core;
   c->game->verify.run(&GraphicsBind::posComposeBody, 0x8004BD64u, "poscomposeverify", c->game->verify.on("poscomposeverify"));
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// UNWIRED DRAFT (2026-07-08 wide-RE wave, region 0x80050000-0x8005FFFF). Not registered anywhere
+// (no EngineOverrides, no shard_set_override), not SBS-gated — dead code until a frontier pass
+// wires + verifies it.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+// FUN_800519E0 — RE'd from generated/shard_1.c gen_func_800519E0 (48-byte frame: r16/r17/r18/r19/
+// r20/r21/r22 + ra spilled at +16/+20/+24/+28/+32/+36/+40/+44). The ONLY call inside the body is to
+// recordAllocBody (FUN_8007AAE8, already native + frameless — confirmed via generated/shard_4.c:
+// no r29 change, no branches), so this function's OWN guest-stack push/pop has no register-
+// faithfulness consequence for a nested callee (unlike NodeXform::propagate/propagateRotmat) — it
+// is included anyway for consistency with the "mirror the guest stack" directive.
+//
+// Ghidra's decompile (undefined4 FUN_800519e0(int obj,uint count,int *sceneBase,undefined2 *tmpl))
+// matches the generated C exactly once the args are named:
+//   if ((s16)*0x800ED098 < count) { obj[9]=0; obj[4]=3; return 1; }         // pool too small -> fail
+//   obj[9] = obj[8] = (u8)count; obj[0xBC]=obj[0xBA]=obj[0xB8]=0x1000; obj[0xD]=0;
+//   for (i = 0; i < count; i++) {
+//     rec = recordAlloc();  obj[0xC0 + i*4] = rec;
+//     rec[6] = tmpl[i*4+0]; rec[0] = tmpl[i*4+1]; rec[2] = tmpl[i*4+2]; rec[4] = tmpl[i*4+3];
+//     rec[0x38] = rec[0x3A] = rec[0x3C] = 0x1000;                           // scale identity
+//     rec[0x40] = sceneBase + *(u32*)(sceneBase + 4 + i*4);                  // sceneData resolve
+//   }
+//   return 0;
+uint32_t GraphicsBind::recordArrayInit(uint32_t obj, uint32_t count, uint32_t sceneBase, uint32_t tmpl) {
+  Core* c = core;
+  if (c->mem_r16s(0x800ED098u) < (int32_t)count) {
+    c->mem_w8(obj + 9, 0);
+    c->mem_w8(obj + 4, 3);
+    return 1;
+  }
+  c->mem_w8(obj + 9, (uint8_t)count);
+  c->mem_w16(obj + 0xBC, 0x1000);
+  c->mem_w16(obj + 0xBA, 0x1000);
+  c->mem_w16(obj + 0xB8, 0x1000);
+  c->mem_w8(obj + 8, (uint8_t)count);
+  c->mem_w8(obj + 0xD, 0);
+  uint32_t sceneCursor = sceneBase + 4u;
+  for (uint32_t i = 0; i < (count & 0xffu); i++) {
+    uint32_t rec = recordAllocBody(c);
+    c->mem_w32(obj + 0xC0 + i * 4u, rec);
+    c->mem_w16(rec + 6, c->mem_r16(tmpl + i * 8u + 0));
+    c->mem_w16(rec + 0, c->mem_r16(tmpl + i * 8u + 2));
+    c->mem_w16(rec + 2, c->mem_r16(tmpl + i * 8u + 4));
+    c->mem_w16(rec + 4, c->mem_r16(tmpl + i * 8u + 6));
+    c->mem_w16(rec + 0x38, 0x1000);
+    c->mem_w16(rec + 0x3A, 0x1000);
+    c->mem_w16(rec + 0x3C, 0x1000);
+    c->mem_w32(rec + 0x40, sceneBase + c->mem_r32(sceneCursor));
+    sceneCursor += 4;
+  }
+  return 0;
+}
