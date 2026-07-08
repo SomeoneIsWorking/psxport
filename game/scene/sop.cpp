@@ -94,9 +94,7 @@ void Sop::areaLoad() {
 
   // COLLISION GRID — FUN_80045258((area&0xf)<<1, 0x2f)  (0x80109228)
   uint16_t area = c->mem_r16(0x800bf89eu);
-  c->r[4] = (uint32_t)((area & 0xf) << 1);
-  c->r[5] = 0x2f;
-  rec_dispatch(c, 0x80045258u);
+  c->engine.asset.loadDescriptorChunk((uint32_t)((area & 0xf) << 1), 0x2f);
 
   // RELOC PATCH — for i in 0..*0x800ef488: ecf58[w>>24] = 0x8018a000 + (w & 0xffffff), w=*0x800ef48c[i]
   int32_t count = (int32_t)c->mem_r32(0x800ef488u);    // (0x80109234; blez skip if <=0)
@@ -146,7 +144,7 @@ void Sop::transitionAreaLoad() {
     uint32_t v0   = (uint32_t)c->mem_r16(0x1f800278u) & mask;
     if (s1ff == s6e && a2 == v0) {
       // QUICK PATH (0x80045320-0x80045344): collision grid + done, no DMA load.
-      d2(c, 0x80045258u, (uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
+      c->engine.asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
       c->mem_w8(0x1f800206u, 0);
       c->mem_w8(0x1f80019bu, 1);
       if (cfg_dbg("stage")) fprintf(stderr, "[sop] native transition area-load (quick path) done\n");
@@ -177,7 +175,7 @@ void Sop::transitionAreaLoad() {
   // if (*0x800bf89c == 2) FUN_80045558(0)
   if (c->mem_r8(0x800bf89cu) == 2) d1(c, 0x80045558u, 0);
   // FUN_80045258((*0x800bf89e & 0xf)<<1, 47)   — collision grid
-  d2(c, 0x80045258u, (uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
+  c->engine.asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
   // RELOC PATCH (0x80045468-0x800454b0): for i in 0..*0x800ef488:
   //   w=*(0x800ef48c + i*4); ecf58[w>>24] = 0x8018a000 + (w & 0xffffff)
   int32_t count = (int32_t)c->mem_r32(0x800ef488u);
@@ -191,7 +189,7 @@ void Sop::transitionAreaLoad() {
     c->mem_w32(0x800ecf94u, c->mem_r32(0x800ecf94u) + 0x1000);
     uint8_t b = c->mem_r8(0x800bf871u);
     uint32_t idx = (b < 9) ? 34 : (b < 16) ? 38 : (b < 21) ? 40 : 36;
-    d2(c, 0x80045258u, idx, 8);
+    c->engine.asset.loadDescriptorChunk(idx, 8);
     c->mem_w8(0x800bfe60u, (uint8_t)idx);
   }
   c->mem_w8(0x1f800206u, 1);
@@ -737,10 +735,8 @@ void Sop::areaLoadFaithful() { Core* c = core;
   c->mem_w32(0x800A3EC8u, lo2 >> 11);
   c->r[31] = 0x80109218u;
   rec_dispatch(c, 0x8001DC40u);
-  c->r[4] = ((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1;   // 5. per-area table stamp
-  c->r[5] = 47;
   c->r[31] = 0x80109230u;
-  rec_dispatch(c, 0x80045258u);
+  c->engine.asset.loadDescriptorChunk(((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1, 47);  // 5. per-area table stamp
   const int32_t n = (int32_t)c->mem_r32(0x800EF488u);         // 6. relocation table
   c->r[4] = 0;
   for (int32_t i = 0; i < n; i++) {

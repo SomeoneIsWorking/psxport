@@ -320,6 +320,17 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     caught-yield / derail; clean newgame unaffected. KEY RE GOTCHA: 0x800452c0's `sb v0` at 0x800453d8 is
     in the jal DELAY SLOT → it stores the OLD v0 (sm[0x6e]), NOT the FUN_80045080 return (a 168-byte load
     size that derailed the BGM jump-table when mis-stored).
+  - ✅ **`FUN_80045258` `Asset::loadDescriptorChunk` OWNED native (leaf indexed-chunk CD reader).** The
+    collision-grid / area-8-extra-texgroup sub-chunk loader that the area-DATA load path (0x800452C0 and
+    the SOP/transition mirrors) called ~5× via rec_dispatch. Body:
+    `FUN_8001DC40((&DAT_800ECF58)[slot], DAT_800BE100 + ((&DAT_800FB170)[descIdx]>>11),
+    (&DAT_800FB170)[descIdx+1]-(&DAT_800FB170)[descIdx])` — reads one CD chunk (byte-offset descriptor
+    table @0x800FB170, word-indexed; sector = offset>>11, size = next-offset − offset) into the dest
+    pointer already latched at module-pointer slot 0x800ECF58[slot] (slot 47/0x2f = collision grid,
+    slot 8 = area-8 extra texgroup). Reuses `Cd::dc40Sync` (native FUN_8001DC40). Replaced all 5
+    `rec_dispatch(0x80045258)` sites (asset.cpp ×3, sop.cpp ×3→ now direct calls). VERIFIED: SBS full
+    autonav A/B IDENTICAL through f11250, zero sbs-div. 0x80044BD4/0x800452C0 left as substrate/existing
+    native forks (see above) — they are the spawn-and-wait + task-body wrappers, not leaf targets.
   - ✅ **FIELD per-frame RENDER owned PC-native (later-225, engine/engine_render.cpp).** The native
     ov_field_frame / ov_field_frame_x now call `ov_render_frame` (0x8003f9a8) / `ov_render_frame_x`
     (0x8003fa44) DIRECTLY (was rec_dispatch). The orchestrator wires the 4 per-object render-queue WALKS

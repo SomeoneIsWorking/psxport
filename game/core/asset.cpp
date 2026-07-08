@@ -411,10 +411,7 @@ void Asset::areaDataLoadAsTask() {
     // SAME-AREA fast path: last-loaded set matches and the texgroup-bias mask bit is unchanged.
     if ((uint32_t)c->mem_r8(0x1F8001FFu) == set &&
         (c->mem_r16(0x800BFE56u) & mask) == (c->mem_r16(0x1F800278u) & mask)) {
-      c->r[4] = ((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1;
-      c->r[5] = 47;
-      c->r[31] = 0x80045338u;
-      rec_dispatch(c, 0x80045258u);
+      loadDescriptorChunk(((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1, 47);  // FUN_80045258
       c->mem_w8(0x1F800206u, 0);
       c->mem_w8(0x1F80019Bu, 1);                   // done_flag -> spawn-and-wait exits
       c->r[31] = 0x80045350u;
@@ -463,10 +460,7 @@ void Asset::areaDataLoadAsTask() {
     c->r[31] = 0x80045448u;
     rec_dispatch(c, 0x80045558u);
   }
-  c->r[4] = ((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1;
-  c->r[5] = 47;
-  c->r[31] = 0x8004545Cu;
-  rec_dispatch(c, 0x80045258u);
+  loadDescriptorChunk(((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1, 47);  // FUN_80045258
   {                                                // relocation table -> module pointer table
     uint32_t p = c->r[16] + 20;                    // 0x800EF48C
     int32_t n = (int32_t)c->mem_r32(c->r[16] + 16);
@@ -485,10 +479,7 @@ void Asset::areaDataLoadAsTask() {
     else if (sub >= 21) g = 40;
     else               g = 36;
     c->r[16] = g;
-    c->r[4] = g;
-    c->r[5] = 8;
-    c->r[31] = 0x80045520u;
-    rec_dispatch(c, 0x80045258u);
+    loadDescriptorChunk(g, 8);  // FUN_80045258
     c->mem_w8(0x800BFE60u, (uint8_t)g);
   }
   c->mem_w8(0x1F800206u, 1);
@@ -499,4 +490,21 @@ void Asset::areaDataLoadAsTask() {
   c->r[17] = c->mem_r32(sp + 20);
   c->r[16] = c->mem_r32(sp + 16);
   c->r[29] += 32;
+}
+
+// loadDescriptorChunk(descIdx, slot): FAITHFUL FUN_80045258 — a leaf indexed-chunk CD reader.
+//   FUN_8001DC40((&DAT_800ECF58)[slot], DAT_800BE100 + ((&DAT_800FB170)[descIdx] >> 11),
+//                (&DAT_800FB170)[descIdx+1] - (&DAT_800FB170)[descIdx]).
+// Byte shape: ram_f1000_all.c:24254 (Ghidra, GAME project). Both tables are word-indexed
+// (4 bytes/entry): 0x800FB170 = per-chunk byte-offset descriptor table (sector = offset>>11,
+// size = next-offset - offset); 0x800ECF58 = the module/dest-pointer table this leaf reads FROM
+// (already latched — e.g. slot 47/0x2f is the collision-grid buffer, slot 8 the area-8 extra
+// texgroup buffer — NOT the table areaDataLoadAsTask's reloc loop writes moments later on the
+// general path).
+void Asset::loadDescriptorChunk(uint32_t descIdx, uint32_t slot) {   // FUN_80045258
+  Core* c = this->core;
+  uint32_t dest = c->mem_r32(0x800ECF58u + slot * 4u);
+  uint32_t off0 = c->mem_r32(0x800FB170u + descIdx * 4u);
+  uint32_t off1 = c->mem_r32(0x800FB170u + (descIdx + 1u) * 4u);
+  c->game->cd.dc40Sync(dest, c->mem_r32(0x800BE100u) + (off0 >> 11), off1 - off0);
 }

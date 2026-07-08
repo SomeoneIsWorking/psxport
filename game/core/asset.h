@@ -69,5 +69,14 @@ public:
   //   fast path, slot-2 drain wait loop (yields), area descriptor + texgroup + DAT payload
   //   loads, relocation table, area-8 extra texgroup, done_flag + terminal task end.
   void areaDataLoadAsTask();
+
+  // loadDescriptorChunk(descIdx, slot): FUN_80045258 — reads one CD sub-chunk described by the
+  //   byte-offset table @0x800FB170 (word-indexed: descTable[descIdx] = start offset,
+  //   descTable[descIdx+1] = end offset; size = end-start) into the destination pointer already
+  //   latched at module-pointer table @0x800ECF58[slot] (word-indexed: a fixed engine slot, e.g.
+  //   the collision-grid buffer at slot 47/0x2f, or the area-8 extra-texgroup buffer at slot 8).
+  //   Sector = DAT_800BE100 (the area's disc extent base) + (descTable[descIdx] >> 11). Pure
+  //   leaf: computes args and issues one Cd::dc40Sync read, byte-identical to the substrate.
+  void loadDescriptorChunk(uint32_t descIdx, uint32_t slot);
 };
 #endif
