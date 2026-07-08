@@ -549,9 +549,12 @@ void ActorReward::update(Core* c) {
     }
     c->r[17] = c->mem_r32(obj + 0x10);     // s1 = owner
     if (c->mem_r8(obj + 5) == 0) {
-      c->r[R_A0] = obj; ActorReward::resolvePosition(c);
+      // ra mirror: gen_func_80070018 sets c->r[31]=0x800700C8u before func_800702C0(c) --
+      // resolvePosition's own frame spills this ra at its +32 slot; must byte-match.
+      c->r[R_A0] = obj; c->r[31] = 0x800700C8u; ActorReward::resolvePosition(c);
     } else if (c->mem_r8(obj + 5) == 1) {
-      c->r[R_A0] = obj; ActorReward::approachTargetX(c);
+      // ra mirror: ground truth sets c->r[31]=0x800700D8u before func_80070650(c).
+      c->r[R_A0] = obj; c->r[31] = 0x800700D8u; ActorReward::approachTargetX(c);
     }
     int8_t next = (int8_t)c->mem_r8(c->r[17] + 1);
     c->mem_w8(obj + 1, (uint8_t)next);
@@ -567,25 +570,31 @@ void ActorReward::update(Core* c) {
     }
     if (state != 2) {
       if (state != 3) { updateEpilogue(c); return; }
-      c->r[R_A0] = obj; rec_dispatch(c, FN_A624);
+      // ra mirror: ground truth sets c->r[31]=0x800702ACu before func_8007A624(c); FN_A624
+      // spills it at its own +20 frame slot -- must byte-match.
+      c->r[R_A0] = obj; c->r[31] = 0x800702ACu; rec_dispatch(c, FN_A624);
       updateEpilogue(c);
       return;
     }
     if (c->mem_r16s(obj + 0x74) == 0) {
       if ((c->mem_r8(obj + 0x5f) & 1) != 0) {
         if ((c->mem_r8(obj + 0x5f) & 2) != 0) {
+          // ra mirror (per-case): ground truth sets a distinct c->r[31] retaddr right before each
+          // jump-table target -- every callee here (smTallyTick, dropScoreGem, FN_A118/A2A0/B428)
+          // spills the incoming ra at its own frame's +16/+20 slot, so the exact literal must be
+          // reproduced or the guest stack byte at that slot diverges.
           uint32_t result = 0;
           switch (c->mem_r8(obj + 3)) {
-            case 0:    c->r[R_A0] = obj; c->r[R_A1] = 1;      ActorReward::smTallyTick(c); result = c->r[R_V0]; break;
-            case 1:    c->r[R_A0] = obj; c->r[R_A1] = 2;      ActorReward::smTallyTick(c); result = c->r[R_V0]; break;
-            case 4:    c->r[R_A0] = obj; c->r[R_A1] = 100;    rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
-            case 5:    c->r[R_A0] = obj; c->r[R_A1] = 200;    rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
-            case 6:    c->r[R_A0] = obj; c->r[R_A1] = 500;    rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
-            case 7:    c->r[R_A0] = obj; c->r[R_A1] = 1000;   rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
-            case 0xb:  c->r[R_A0] = obj; c->r[R_A1] = 100000; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
-            case 0xf:  c->r[R_A0] = obj;                      rec_dispatch(c, FN_A118);  result = c->r[R_V0]; break;
-            case 0x10: c->r[R_A0] = obj;                      rec_dispatch(c, FN_A2A0);  result = c->r[R_V0]; break;
-            case 0x11: c->r[R_A0] = obj;                      rec_dispatch(c, FN_B428);  result = c->r[R_V0]; break;
+            case 0:    c->r[R_A0] = obj; c->r[R_A1] = 1;      c->r[31] = 0x800701C8u; ActorReward::smTallyTick(c); result = c->r[R_V0]; break;
+            case 1:    c->r[R_A0] = obj; c->r[R_A1] = 2;      c->r[31] = 0x800701DCu; ActorReward::smTallyTick(c); result = c->r[R_V0]; break;
+            case 4:    c->r[R_A0] = obj; c->r[R_A1] = 100;    c->r[31] = 0x800701F0u; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 5:    c->r[R_A0] = obj; c->r[R_A1] = 200;    c->r[31] = 0x80070204u; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 6:    c->r[R_A0] = obj; c->r[R_A1] = 500;    c->r[31] = 0x80070218u; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 7:    c->r[R_A0] = obj; c->r[R_A1] = 1000;   c->r[31] = 0x8007022Cu; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 0xb:  c->r[R_A0] = obj; c->r[R_A1] = 100000; c->r[31] = 0x80070244u; rec_dispatch(c, FN_B3F4);  result = c->r[R_V0]; break;
+            case 0xf:  c->r[R_A0] = obj;                      c->r[31] = 0x80070254u; rec_dispatch(c, FN_A118);  result = c->r[R_V0]; break;
+            case 0x10: c->r[R_A0] = obj;                      c->r[31] = 0x80070264u; rec_dispatch(c, FN_A2A0);  result = c->r[R_V0]; break;
+            case 0x11: c->r[R_A0] = obj;                      c->r[31] = 0x80070274u; rec_dispatch(c, FN_B428);  result = c->r[R_V0]; break;
             default: break;
           }
           if (result == 0) { updateEpilogue(c); return; }
@@ -593,7 +602,8 @@ void ActorReward::update(Core* c) {
           updateEpilogue(c);
           return;
         }
-        c->r[R_A0] = obj; ActorReward::smEventDispatch(c);   // same class, direct call
+        // ra mirror: ground truth sets c->r[31]=0x80070290u before func_8004A3D4(c).
+        c->r[R_A0] = obj; c->r[31] = 0x80070290u; ActorReward::smEventDispatch(c);   // same class, direct call
         if (c->r[R_V0] == 0) { updateEpilogue(c); return; }
       }
       c->mem_w8(obj + 4, 3);
@@ -610,10 +620,13 @@ void ActorReward::update(Core* c) {
   }
 
   (void)haveFlags;  // always true on every fallthrough to here (asserted by RE, kept for clarity)
+  // ra mirror: ground truth sets c->r[31]=0x80070168u before func_800517F8(c) (renderUpdateBody
+  // IS framed -- see GraphicsBind::renderUpdateBody -- and its nested propagateRotmat() tail call
+  // spills whatever's in c->r[31] into its own frame), or 0x80070158u before func_80077B5C(c).
   if ((flags5f & 0x80) == 0) {
-    c->r[R_A0] = obj; rec_dispatch(c, FN_517F8);  // GraphicsBind::renderUpdateBody
+    c->r[R_A0] = obj; c->r[31] = 0x80070168u; rec_dispatch(c, FN_517F8);  // GraphicsBind::renderUpdateBody
   } else {
-    c->r[R_A0] = obj; rec_dispatch(c, FN_77B5C);  // Animation::advanceLinkChain
+    c->r[R_A0] = obj; c->r[31] = 0x80070158u; rec_dispatch(c, FN_77B5C);  // Animation::advanceLinkChain
   }
   updateEpilogue(c);
 }
@@ -778,11 +791,32 @@ void ov_smBlinkA(Core* c)        { if (c->game->psx_fallback) { gen_func_8004B15
 void ov_smBlinkB(Core* c)        { if (c->game->psx_fallback) { gen_func_8004B208(c); return; } ActorReward::smBlinkB(c); }
 }  // namespace
 
+// --- WIDE-RE DRAFT wiring (2026-07-08 frontier pass) --- update/resolvePosition/approachTargetX.
+// update (0x80070018) has NO direct same-shard caller (grepped generated/*.c) -- it's reached only
+// via the DYNAMIC per-object dispatch in ObjectTable::dispatchFaithful (rec_dispatch(c, fn) with fn
+// read from the object's own type table at runtime), so EngineOverrides alone is the reach path.
+// resolvePosition (0x800702C0) / approachTargetX (0x80070650) DO have a direct same-shard caller
+// (gen_func_80070018's own func_800702C0(c)/func_80070650(c) calls) -- but that caller is FULLY
+// SUPERSEDED once update() is registered (ObjectTable::dispatchFaithful never falls through to
+// gen_func_80070018 anymore), so those direct calls become dead in practice for core A. Dual-wired
+// anyway for defensive completeness / consistency with the other 5 ActorReward leaves, and because
+// core B (psx_fallback) must still be able to reach the real substrate body via g_override[] if
+// anything ever calls func_800702C0/80070650 directly outside update()'s own reach.
+extern void gen_func_800702C0(Core*);
+extern void gen_func_80070650(Core*);
+namespace {
+void ov_resolvePosition(Core* c)  { if (c->game->psx_fallback) { gen_func_800702C0(c); return; } c->game->engine_overrides.traceHit(c, 0x800702C0u); ActorReward::resolvePosition(c); }
+void ov_approachTargetX(Core* c)  { if (c->game->psx_fallback) { gen_func_80070650(c); return; } c->game->engine_overrides.traceHit(c, 0x80070650u); ActorReward::approachTargetX(c); }
+}  // namespace
+
 void ActorReward::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x80049A60u, "ActorReward::smWindowScroll",  ActorReward::smWindowScroll);
   ov.register_(0x80049E54u, "ActorReward::smTallyTick",     ActorReward::smTallyTick);
   ov.register_(0x8004A3D4u, "ActorReward::smEventDispatch", ActorReward::smEventDispatch);
+  ov.register_(0x80070018u, "ActorReward::update",          ActorReward::update);
+  ov.register_(0x800702C0u, "ActorReward::resolvePosition", ActorReward::resolvePosition);
+  ov.register_(0x80070650u, "ActorReward::approachTargetX", ActorReward::approachTargetX);
   ov.register_(0x8004B150u, "ActorReward::smBlinkA",        ActorReward::smBlinkA);
   ov.register_(0x8004B208u, "ActorReward::smBlinkB",        ActorReward::smBlinkB);
 
@@ -791,4 +825,9 @@ void ActorReward::registerOverrides(Game* game) {
   shard_set_override(0x8004A3D4u, ov_smEventDispatch);
   shard_set_override(0x8004B150u, ov_smBlinkA);
   shard_set_override(0x8004B208u, ov_smBlinkB);
+  // update has no direct same-shard caller (only reached via ObjectTable::dispatchFaithful's
+  // rec_dispatch), so no shard_set_override entry for it; resolvePosition/approachTargetX DO have
+  // one (gen_func_80070018's own body), wired defensively per the header note above.
+  shard_set_override(0x800702C0u, ov_resolvePosition);
+  shard_set_override(0x80070650u, ov_approachTargetX);
 }

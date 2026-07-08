@@ -15,9 +15,18 @@
 #ifndef GAME_WORLD_GRAPHICS_BIND_CLASS_H
 #define GAME_WORLD_GRAPHICS_BIND_CLASS_H
 class Core;
+class Game;
 class GraphicsBind {
 public:
   Core* core = nullptr;
+
+  // registerOverrides — dual-wire recordArrayInit (EngineOverrides + shard_set_override) onto
+  // `game`. Unlike this class's OTHER 6 methods (recordAlloc/recordInit/renderUpdate/setGeom/
+  // setXformBlk/posCompose, wired via the verify-harness c->game->verify.run() A/B gate because
+  // their callers have ALREADY been converted to direct native calls), recordArrayInit's callers
+  // are still guest-ABI rec_dispatch(c, 0x800519E0u) sites in several un-ported AI beh_ handlers,
+  // so it needs the standard dual-wire reach (same pattern as NodeXform::registerOverrides).
+  static void registerOverrides(Game* game);
   int mTrace = -1;   // PSXPORT_RECALLOC_TRACE latch (-1 = not read yet); recordAlloc caller-attribution
   void recordAlloc();     // FUN_8007AAE8
   void recordInit();      // FUN_80051B70

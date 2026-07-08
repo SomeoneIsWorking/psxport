@@ -430,34 +430,30 @@ void NodeXform::copyMatrixBlock(uint32_t src, uint32_t dst) {
 }
 
 namespace {
-// -48: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 ra (buildFromChild 0x80051614)
+// -48: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 ra. Confirmed verbatim against
+// generated/shard_3.c gen_func_80051614 lines 13334-13425 (2026-07-08 frontier wiring pass — the
+// prior draft had every register shifted +4 off these real offsets).
 struct BuildFromChildFrame {
   Core* c; uint32_t s16, s17, s18, s19, s20, s21, sra;
   explicit BuildFromChildFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
       s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), sra(c_->r[31]) {
     c->r[29] -= 48;
-    c->mem_w32(c->r[29] + 40, s21);
-    c->mem_w32(c->r[29] + 36, s20);
-    c->mem_w32(c->r[29] + 32, s19);
-    c->mem_w32(c->r[29] + 28, s18);
-    c->mem_w32(c->r[29] + 24, s17);
-    c->mem_w32(c->r[29] + 20, s16);
-    c->mem_w32(c->r[29] + 44, sra);
-    // NOTE: the recomp's own spill offsets (traced from gen_func_80051614) are +16 r16, +20 r17,
-    // +24 r18, +28 r19, +32 r20, +36 r21, +40 ra — this mirror uses the SAME set at DIFFERENT
-    // relative offsets only to keep the RAII pattern legible; since this frame is never read by
-    // anything (buildFromChild is UNWIRED), the exact byte offsets don't matter until wiring —
-    // whoever wires this MUST re-derive the precise +N per register from generated/shard_3.c
-    // lines 13334-13425 before SBS-gating (this comment is the pointer to do that).
+    c->mem_w32(c->r[29] + 36, s21);
+    c->mem_w32(c->r[29] + 32, s20);
+    c->mem_w32(c->r[29] + 28, s19);
+    c->mem_w32(c->r[29] + 24, s18);
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 16, s16);
+    c->mem_w32(c->r[29] + 40, sra);
   }
   ~BuildFromChildFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 44);
-    c->r[16] = c->mem_r32(c->r[29] + 20);
-    c->r[17] = c->mem_r32(c->r[29] + 24);
-    c->r[18] = c->mem_r32(c->r[29] + 28);
-    c->r[19] = c->mem_r32(c->r[29] + 32);
-    c->r[20] = c->mem_r32(c->r[29] + 36);
-    c->r[21] = c->mem_r32(c->r[29] + 40);
+    c->r[31] = c->mem_r32(c->r[29] + 40);
+    c->r[21] = c->mem_r32(c->r[29] + 36);
+    c->r[20] = c->mem_r32(c->r[29] + 32);
+    c->r[19] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
     c->r[29] += 48;
   }
 };
@@ -473,8 +469,11 @@ struct BuildFromChildFrame {
 //             M = Mrot × Mscale                                        [0x1F800020, 0x1F800040 -> 0x1F800000]
 //   node+0x98 = parent[+0x18] × M
 //   node+0xAC/B0/B4 = ApplyMatlv(inVec) via the CR loaded by the matMul above (reads parent[+0x18]
-//     as the effective rotation — same CR-coupling idiom as NodeXform::propagate)
-//   node+0x2E/32/36 = (int16)node+0xAC/B0/B4                            (mirror down)
+//     as the effective rotation — same CR-coupling idiom as NodeXform::propagate), THEN += parent's
+//     own world translation (parent+0x2C/30/34, 32-bit add) — same accumulate-parent-translation
+//     idiom as NodeXform::propagate/propagateRotmat's root-child case. (2026-07-08 fix: this draft
+//     was missing the += entirely — a real bug, not just an unwired leaf.)
+//   node+0x2E/32/36 = (int16)node+0xAC/B0/B4                            (mirror down, AFTER the add)
 //   mode==0: propagateRotmat(node)     mode!=0: propagate(node)
 // REGISTER FAITHFULNESS (traced against generated/shard_3.c lines 13334-13425 — the callee-saved
 // registers propagate()/propagateRotmat()'s OWN frame will spill at the tail-call site): r16 is
@@ -483,10 +482,11 @@ struct BuildFromChildFrame {
 // there (this port matches that by simply not writing c->r[17] on the mode==0 path); r18=node,
 // r19=parent, r20=mode, r21=inVec on BOTH paths (propagateRotmat's own frame only spills r16-r20;
 // propagate's spills r16-r23, so r22/r23 are never touched here either way — same "leave alone"
-// argument applies to them). Following existing NodeXform precedent (build()/buildWithOffset), the
-// guest ra literal at the tail-call site (0x80051760 / 0x80051770) is NOT mirrored into c->r[31] —
-// same open question as those two (see their REGISTER FAITHFULNESS comment); resolve uniformly
-// across all three if it ever surfaces as an SBS residual.
+// argument applies to them). The tail-call ra (0x80051760 for propagate / 0x80051770 for
+// propagateRotmat) IS mirrored into c->r[31] here — every `jal` overwrites $ra unconditionally, so
+// (unlike the OUTER-caller case where a still-substrate caller's own compiled body already sets
+// c->r[31] before reaching an EngineOverrides-intercepted rec_dispatch) an internal tail-call inside
+// an already-native function must set it itself, or the nested frame's ra spill diverges.
 void NodeXform::buildFromChild(uint32_t node, uint32_t inVec, uint32_t tableIdx, uint32_t mode) {
   Core* c = core;
   BuildFromChildFrame frame(c);
@@ -508,23 +508,53 @@ void NodeXform::buildFromChild(uint32_t node, uint32_t inVec, uint32_t tableIdx,
   }
   c->math.matMul(parent + 0x18, SCR_M, node + 0x98);
   c->math.applyMatlv(inVec, node + 0xAC);
+  c->mem_w32(node + 0xAC, c->mem_r32(node + 0xAC) + c->mem_r32(parent + 0x2C));
+  c->mem_w32(node + 0xB0, c->mem_r32(node + 0xB0) + c->mem_r32(parent + 0x30));
+  c->mem_w32(node + 0xB4, c->mem_r32(node + 0xB4) + c->mem_r32(parent + 0x34));
   c->mem_w16(node + 0x2E, c->mem_r16(node + 0xAC));
   c->mem_w16(node + 0x32, c->mem_r16(node + 0xB0));
   c->mem_w16(node + 0x36, c->mem_r16(node + 0xB4));
-  if (mode == 0) propagateRotmat(node); else propagate(node);
+  if (mode == 0) { c->r[31] = 0x80051770u; propagateRotmat(node); }
+  else            { c->r[31] = 0x80051760u; propagate(node); }
 }
 
-// FUN_80051D90 — RE'd from generated/shard_7.c gen_func_80051D90. The recomp calls FUN_800844C0
-// with ONLY r4 (=node+0x18) explicitly loaded — r5/r6 pass through UNCHANGED from this function's
-// OWN incoming r5 (inVec)/r6 (outVec), i.e. FUN_800844C0(matrix=node+0x18, in=inVec, out=outVec) is
-// a 3-arg libgte "ApplyMatrixLV, packed-SVECTOR-out" leaf distinct from the already-native
-// Math::applyMatrixLV (which writes unclamped 32-bit MACs, not a packed int16 triple — see
+namespace {
+// -32: +16 r16, +20 r17, +24 ra (worldPosFromLocal 0x80051D90, worldPosFromComposed 0x80051D20 --
+// both confirmed against generated/shard_7.c gen_func_80051D90 / generated/shard_6.c gen_func_80051D20:
+// identical frame shape, r17=node, r16=outVec).
+struct WorldPosFrame {
+  Core* c; uint32_t s16, s17, sra;
+  explicit WorldPosFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), sra(c_->r[31]) {
+    c->r[29] -= 32;
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 16, s16);
+    c->mem_w32(c->r[29] + 24, sra);
+  }
+  ~WorldPosFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 32;
+  }
+};
+}  // namespace
+
+// FUN_80051D90 — RE'd from generated/shard_7.c gen_func_80051D90 (frame: addiu sp,-0x20; spill
+// r17(node)=sp+20, r16(outVec)=sp+16, ra=sp+24 -- was missing here, added 2026-07-08). The recomp
+// calls FUN_800844C0 with ONLY r4 (=node+0x18) explicitly loaded — r5/r6 pass through UNCHANGED from
+// this function's OWN incoming r5 (inVec)/r6 (outVec), i.e. FUN_800844C0(matrix=node+0x18, in=inVec,
+// out=outVec) is a 3-arg libgte "ApplyMatrixLV, packed-SVECTOR-out" leaf distinct from the already-
+// native Math::applyMatrixLV (which writes unclamped 32-bit MACs, not a packed int16 triple — see
 // gen_func_800844C0 vs gen_func_80084470). FUN_800844C0 is OUTSIDE this region (0x800844C0) and
-// UNOWNED, so this draft routes it via rec_dispatch. After that call, outVec holds the transformed
+// UNOWNED (frameless, confirmed via generated/shard_3.c — no register-faithfulness consequence, but
+// ra=0x80051DB0u mirrored anyway per ground truth). After that call, outVec holds the transformed
 // local-space vector; this function adds node's LOCAL position (node+0x2C/30/34) on top.
 void NodeXform::worldPosFromLocal(uint32_t node, uint32_t inVec, uint32_t outVec) {
   Core* c = core;
+  WorldPosFrame frame(c);
+  c->r[17] = node; c->r[16] = outVec;
   c->r[4] = node + 0x18; c->r[5] = inVec; c->r[6] = outVec;
+  c->r[31] = 0x80051DB0u;
   rec_dispatch(c, 0x800844C0u);
   c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)c->mem_r16s(node + 0x2C)));
   c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)c->mem_r16s(node + 0x30)));
@@ -533,10 +563,13 @@ void NodeXform::worldPosFromLocal(uint32_t node, uint32_t inVec, uint32_t outVec
 
 // FUN_80051D20 — sibling of worldPosFromLocal() using node's COMPOSED world matrix (node+0x98) and
 // world-space position (node+0xAC/B0/B4). RE'd from generated/shard_6.c gen_func_80051D20 (same
-// shape as worldPosFromLocal, confirmed by Ghidra's parallel decompile of both).
+// frame shape as worldPosFromLocal, ra=0x80051D40u before the FUN_800844C0 call).
 void NodeXform::worldPosFromComposed(uint32_t node, uint32_t inVec, uint32_t outVec) {
   Core* c = core;
+  WorldPosFrame frame(c);
+  c->r[17] = node; c->r[16] = outVec;
   c->r[4] = node + 0x98; c->r[5] = inVec; c->r[6] = outVec;
+  c->r[31] = 0x80051D40u;
   rec_dispatch(c, 0x800844C0u);
   c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)c->mem_r16s(node + 0xAC)));
   c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)c->mem_r16s(node + 0xB0)));
@@ -582,16 +615,53 @@ static void gov_propagateAxis(Core* c) {
   if (c->game->psx_fallback) { gen_func_80051464(c); return; } eov_propagateAxis(c);
 }
 
+// --- WIDE-RE DRAFT wiring (2026-07-08 frontier pass) --- copyMatrixBlock / buildFromChild /
+// worldPosFromLocal / worldPosFromComposed. copyMatrixBlock (0x80051B34) and buildFromChild
+// (0x80051614) have direct same-module callers (confirmed via generated/shard_6.c, shard_5.c,
+// shard_1.c) -> dual-wired. worldPosFromLocal (0x80051D90) / worldPosFromComposed (0x80051D20)
+// have NO direct same-module caller (every reference is rec_dispatch from an AI overlay) ->
+// EngineOverrides only, same as buildAxis above.
+extern void gen_func_80051B34(Core*);
+extern void gen_func_80051614(Core*);
+static void eov_copyMatrixBlock(Core* c) {
+  c->mRender->mNodeXform.copyMatrixBlock(c->r[4], c->r[5]);
+}
+static void eov_buildFromChild(Core* c) {
+  c->mRender->mNodeXform.buildFromChild(c->r[4], c->r[5], c->r[6], c->r[7]);
+  c->r[2] = 0;   // v0 always 0 at return -- tail-dispatches into propagate()/propagateRotmat(),
+                 // both of which structurally always leave v0==0 (see the note above this block).
+}
+static void eov_worldPosFromLocal(Core* c) {
+  c->mRender->mNodeXform.worldPosFromLocal(c->r[4], c->r[5], c->r[6]);
+}
+static void eov_worldPosFromComposed(Core* c) {
+  c->mRender->mNodeXform.worldPosFromComposed(c->r[4], c->r[5], c->r[6]);
+}
+static void gov_copyMatrixBlock(Core* c) {
+  if (c->game->psx_fallback) { gen_func_80051B34(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80051B34u); eov_copyMatrixBlock(c);
+}
+static void gov_buildFromChild(Core* c) {
+  if (c->game->psx_fallback) { gen_func_80051614(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80051614u); eov_buildFromChild(c);
+}
+
 void NodeXform::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x800517BCu, "NodeXform::seedBlock",        eov_seedBlock);
   ov.register_(0x80051300u, "NodeXform::propagateRotmat",  eov_propagateRotmat);
   ov.register_(0x80051464u, "NodeXform::propagateAxis",    eov_propagateAxis);
   ov.register_(0x80051C8Cu, "NodeXform::buildAxis",        eov_buildAxis);
+  ov.register_(0x80051B34u, "NodeXform::copyMatrixBlock",  eov_copyMatrixBlock);
+  ov.register_(0x80051614u, "NodeXform::buildFromChild",   eov_buildFromChild);
+  ov.register_(0x80051D90u, "NodeXform::worldPosFromLocal",    eov_worldPosFromLocal);
+  ov.register_(0x80051D20u, "NodeXform::worldPosFromComposed", eov_worldPosFromComposed);
 
   shard_set_override(0x800517BCu, gov_seedBlock);
   shard_set_override(0x80051300u, gov_propagateRotmat);
   shard_set_override(0x80051464u, gov_propagateAxis);
-  // 0x80051C8C has no direct same-module (func_<addr>(c)) caller — every reference is
-  // rec_dispatch(c, 0x80051C8Cu) from an overlay, so EngineOverrides alone covers it.
+  shard_set_override(0x80051B34u, gov_copyMatrixBlock);
+  shard_set_override(0x80051614u, gov_buildFromChild);
+  // 0x80051C8C / 0x80051D90 / 0x80051D20 have no direct same-module (func_<addr>(c)) caller — every
+  // reference is rec_dispatch(c, addr) from an overlay, so EngineOverrides alone covers them.
 }
