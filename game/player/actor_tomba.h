@@ -173,4 +173,101 @@ private:
   //   Ghidra 1:1). CORRECTED 2026-07-08: the original draft had the 0x46/0x8C polarity swapped —
   //   fixed by direct trace of gen_func_80022C78 (see actor_tomba.cpp).
   void growthYSnap();
+
+public:
+  // ----------------------------------------------------------------------------
+  // Per-frame G-block driver (0x8005950C cascade) — RE'd 2026-07-08 wide-RE pass. See
+  // docs/engine_re.md's "ActorTomba G-block" section for the full call-graph writeup of the
+  // ~99-function 0x80052xxx-0x8005Fxxx region this drives, and docs/code-map.md for addresses.
+  // ----------------------------------------------------------------------------
+  // frameTick() — guest FUN_8005950C. Tomba's own per-frame G-block driver, called directly
+  //   from the already-native Engine::frameStartTick/frameStartTickFaithful (game/core/
+  //   engine.cpp, the `default: target = 0x8005950Cu` arm of its mode-keyed dispatch) whenever
+  //   0x800BF870 isn't one of the 4 area-specific overlay modes (2/3/7/20). Dispatches on the
+  //   OUTER state byte G+4 (0-7; >=8 is unreachable — the guest's own jump table has exactly 8
+  //   entries and any value >=8 returns immediately with no-op):
+  //     0 = INIT       -> enterOuterState0 (still-substrate FUN_80058648, mode=0)
+  //     1 = ACTIVE     -> turnBiasCompute + FUN_80058918 (mode-N dispatch table A, still
+  //                       substrate) + matrix-compose (FUN_800597AC, still substrate) +
+  //                       outerTransitionCommit(mode=0)
+  //     2 = COMMITTING -> FUN_80067CA4 (still substrate) + matrix-compose
+  //     3 = (unused jump-table slot) -> no-op
+  //     4 = ACTIVE_ALT -> same shape as case 1, but the "turn-suppress mask" pair
+  //                       (0x800ECF54/0x800E7E68) is restored from 0x1F800166/0x1F800190
+  //                       instead of being cleared to 0 when unpaused, dispatches
+  //                       FUN_80058F5C (mode-N dispatch table B, the near-duplicate sibling of
+  //                       table A) instead of table A, and just TICKS outerTransitionGate()
+  //                       instead of committing a new target
+  //     5,6 = SCRIPTED -> direct dispatch into already-substrate cutscene-ish leaves
+  //                       0x8018BD30 / 0x8018BE40 (outside this RE region) + matrix-compose
+  //     7 = LOAD-WAIT  -> a 3-state (G+5: 0/1/2) sub-machine that kicks a load (FUN_8001CF2C),
+  //                       polls asset-readiness (assetReady, guest FUN_80045580), and on commit
+  //                       resets to state 1 (ACTIVE) and stamps an anim-pointer's mode fields
+  //                       (*0x1F800138 + 0x4C/0x4E)
+  //   0x800ECF54/0x800E7E68 (the SAME "turn-suppress mask" pair beh_actor_tomba_proximity_
+  //   combat's enemy-engage tables write) are save/restored around cases 1 and 4 so their
+  //   per-frame masking is scoped to just the sub-dispatch each wraps. Faithful 1:1 port from
+  //   gen_func_8005950C (generated/shard_4.c:7624 — ground truth; Ghidra's own decompile of
+  //   this function matched it exactly, cross-checked line-by-line against the recompiled C).
+  //   Guest frame: addiu sp,-32; spill s0(<-a0=G),s1,s2,ra. UNWIRED (Engine::frameStartTick's
+  //   dispatch site still targets the substrate func_8005950C directly) — wiring is a future
+  //   frontier-tier step (register an EngineOverrides entry + shard_set_override, then SBS-gate).
+  void frameTick();
+
+private:
+  // ----------------------------------------------------------------------------
+  // frameTick()'s immediate callees RE'd + drafted this pass (0x8005950C's direct sub-tree).
+  // ----------------------------------------------------------------------------
+  // turnBiasCompute(c, facing) — guest FUN_80055C9C. Frameless leaf (a0/G unused — only
+  //   a1=facing heading + fixed globals DAT_800E806C/DAT_1F8000F2/DAT_800E805A). Computes a
+  //   facing-vs-cached-view-heading delta, gated by a mode byte (DAT_800E806C==5 = a wide/menu
+  //   variant with its own delta formula) and a "close" threshold (2048 / 2560 / 1536 depending
+  //   on DAT_800E805A bit 0x800), then stamps a (turn-in, turn-out) bias-magnitude pair to
+  //   0x1F80016C/0x1F80016E — the SAME turn-bias slots beh_actor_tomba_proximity_combat's
+  //   enemy-engage tables also write (Tomba's own per-frame counterpart of that enemy nudge).
+  //   Faithful port from gen_func_80055C9C (generated/shard_1.c:9208, ground truth) — all 3
+  //   goto-chains fully traced and consolidated into one boolean; safe to restructure (unlike a
+  //   dense/DAG-shaped function) because every path was hand-verified against the recompiled C.
+  static void turnBiasCompute(Core* c, int16_t facing);
+
+  // outerTransitionGate() — guest FUN_80053E50(G). The gate outerTransitionCommit (and case 4)
+  //   call first: bails (false) while G+0x16E (a pending-frame counter) is still positive.
+  //   Otherwise clears 0x800BF81E, runs Engine::gStateMutate(G, 0xB) (already-native), and when
+  //   G+0x164==1 (a specific interaction-slot state) OR the global "busy" latch 0x800BF80D is
+  //   clear, resets the walk-state (G+0=3, G+0x16E/0x170/0x146 cleared) and commits outer-state
+  //   2 (G+4=2, G+5=1, G+6=0, 0x800BF80D=1) plus spawns a stop-motion task (FUN_800312D4).
+  //   Returns true once any path completes handling (frameTick's callers use it purely as a
+  //   bail-early check). Faithful port from gen_func_80053E50 (generated/shard_4.c:7161, ground
+  //   truth). Guest frame: addiu sp,-32; spill s0,s1,s2,ra.
+  bool outerTransitionGate();
+
+  // outerTransitionCommit(mode) — guest FUN_80053FDC(G, mode). Calls outerTransitionGate() as
+  //   its own first gate. If G+0x16E (pending counter) != G+0x170 (target), fires the
+  //   transition cue + gStateMutate(0xB) + conditional walk-reset, then commits a NEW target
+  //   (G+0x172=0x5A, G+0x170=G+0x16E) UNLESS the outer state is already 2 (mode!=1 branch only)
+  //   or a "cutscene/dialogue" flag (G+0 & 0xC) is set (in which case it fires an SFX cue +
+  //   spawns a task instead and returns without touching G+0). If they're already equal,
+  //   decrements the settle counter G+0x172 and — on it hitting zero — either commits walk-
+  //   state 1 (when G+0 != 0 AND (G+0 & 4) == 0) or re-arms the counter to 1 (G+0x172=1)
+  //   otherwise. CORRECTED 2026-07-08: Ghidra's own decompile of this last branch showed
+  //   `*param_1 != 2`; ground-truth gen_func_80053FDC compares against 0, not 2 (see
+  //   actor_tomba.cpp for the register trace) — a real Ghidra decompiler error caught by
+  //   cross-checking generated/shard_5.c:7749. Faithful port from that ground truth. Guest
+  //   frame: addiu sp,-32; spill s0,s1,ra (no s2 slot — a smaller frame than
+  //   outerTransitionGate's).
+  void outerTransitionCommit(int32_t mode);
+
+  // assetReady(c, slot) — guest FUN_80045580. Frameless-except-ra leaf: looks up a per-slot
+  //   4-byte record at (&DAT_800BE11C)[slot] and forwards it (plus 2 fixed table pointers
+  //   0x8018A000/DAT_800A3EC8) to the substrate loader-status leaf FUN_80044CD4, returning
+  //   whether it reported a positive (>0) status. Faithful port from gen_func_80045580
+  //   (generated/shard_6.c:6274, ground truth — matches Ghidra 1:1).
+  static bool assetReady(Core* c, int32_t slot);
+
+  // resetLoadGate(c) — guest FUN_80042310. Frameless-except-ra leaf: fires a niladic substrate
+  //   cue (FUN_8001CF78), an SFX/cue trigger (FUN_80074590(0x7F,0,0)), clears the pause latch
+  //   0x1F800137, then forwards the current area/mode byte (DAT_800BF870) into FUN_80074F24
+  //   (an already-substrate "commit area mode" leaf). Faithful port from gen_func_80042310
+  //   (generated/shard_5.c:5613, ground truth — matches Ghidra 1:1).
+  static void resetLoadGate(Core* c);
 };

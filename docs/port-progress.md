@@ -2423,3 +2423,18 @@ themselves are LIVE but dispatch out to substrate for every case body.
   walkStart/gStateMutate-adjacent enter/exit helpers, 3-4 near-identical "variant A/B/C(/D)"
   template triplets, a lift/ride cross-reference with `game/ai/beh_lift_platform.cpp`, etc.) — see
   docs/engine_re.md for the full family breakdown and next-step priority order.
+- **`0x8005950C` follow-up wave (fleet agent, 2026-07-08, RE-ahead-of-frontier — UNWIRED).** RE'd +
+  drafted the per-frame G-block driver flagged above as the region's real frontier, plus its full
+  immediate sub-tree of small/medium callees. New methods on `ActorTomba` (`game/player/
+  actor_tomba.{h,cpp}`), all faithful 1:1 ports from `generated/shard_*.c` ground truth (Ghidra
+  headless cross-check in `scratch/decomp/g_8005950C.c`), all UNWIRED (compile-only, no SBS run):
+  `frameTick` (`0x8005950C`), `turnBiasCompute` (`0x80055C9C`), `outerTransitionGate`
+  (`0x80053E50`), `outerTransitionCommit` (`0x80053FDC` — caught + documented a real Ghidra
+  decompiler error in this one, see the `.cpp` banner), `assetReady` (`0x80045580`),
+  `resetLoadGate` (`0x80042310`). Still-substrate/mapped-only (too large for this pass, each its
+  own dedicated-pass candidate): `0x80058648` (case-0 init driver), `0x80058918`/`0x80058F5C` (the
+  two ~50-function-deep mode-N dispatch tables `frameTick` cases 1/4 route into), `0x800597AC`
+  (matrix-compose loop over an attached-item list). Full writeup in docs/engine_re.md's "0x8005950C
+  — Tomba's per-frame G-block driver" section. Next: wire `frameTick` in
+  (`Engine::frameStartTick`'s dispatch site + EngineOverrides/`shard_set_override`) + SBS-gate,
+  then RE `0x80058648` and one of the two mode-N tables.

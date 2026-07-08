@@ -2413,18 +2413,68 @@ as `c->r[N]`, s0/s1 promoted to named `self`/`G` locals, goto/label control flow
 same "don't risk a mis-restructure under time pressure" call `actor_melee_engage.cpp` made for a
 comparably dense DAG), so transcription risk is low but UNVERIFIED (no SBS gate; dead code).
 
-### The REAL frontier: `0x8005950C` is Tomba's per-frame G-block driver
+### `0x8005950C` — Tomba's per-frame G-block driver — RE'd + DRAFTED 2026-07-08 (UNWIRED)
 
 **`0x8005950C` is called directly from the ALREADY-NATIVE `Engine::frameStartTick`/
 `frameStartTickFaithful`** (`game/core/engine.cpp:2684/2753`, confirmed via `docs/code-map.md`'s own
-call-graph column `0x8005950C 0x8009A450 ...` for `0x80059D28`). It is a 96-line switch-shaped
-orchestrator whose callees (`0x80053E50`, `0x80053FDC`, `0x80055C9C`, `0x80058648`, `0x80058918`,
-`0x80042310`, `0x80045580`, plus `Cd::toSpuMix` already-native) cascade into roughly HALF of the
-remaining functions in this region. **This is the highest-value next RE target in the region** —
-porting it (and the chain below it) is what actually retires most of the "mapped-only" families
-below, rather than treating them as independent leaves. Not attempted this session (a 96-line
-switch plus a ~15-function cascade is its own focused pass); flagged here so the next wave starts
-here instead of re-discovering it.
+call-graph column `0x8005950C 0x8009A450 ...` for `0x80059D28`). It is a switch-shaped orchestrator
+on the OUTER state byte `G+4` (0-7; the guest jump table has exactly 8 entries, any value >=8
+returns immediately):
+
+- **0 = INIT** → `FUN_80058648(G, 0)` (still substrate — see "Mapped-only" below).
+- **1 = ACTIVE** → turn-bias compute + `FUN_80058918` (mode-N dispatch table A, still substrate,
+  ~50-function cascade) + `FUN_800597AC` (matrix-compose, still substrate) + commit(mode=0).
+- **2 = COMMITTING** → `FUN_80067CA4` (still substrate) + matrix-compose.
+- **3** = unused jump-table slot, no-op.
+- **4 = ACTIVE_ALT** — same shape as case 1, but restores the "turn-suppress mask" pair
+  (`0x800ECF54`/`0x800E7E68`) from `0x1F800166`/`0x1F800190` instead of clearing to 0 when
+  unpaused, dispatches `FUN_80058F5C` (mode-N table B, the near-duplicate sibling of table A)
+  instead of table A, and just TICKS the transition gate instead of committing.
+- **5, 6 = SCRIPTED** → direct dispatch into already-substrate cutscene-ish leaves `0x8018BD30` /
+  `0x8018BE40` (outside this RE region) + matrix-compose.
+- **7 = LOAD-WAIT** → a 3-state (`G+5`: 0/1/2) sub-machine that kicks a load (`FUN_8001CF2C`),
+  polls asset-readiness (`FUN_80045580`), and on commit resets to state 1 (ACTIVE) and stamps an
+  anim-pointer's mode fields (`*0x1F800138 + 0x4C/0x4E`).
+
+**Drafted this session** as `ActorTomba::frameTick()` (`game/player/actor_tomba.{h,cpp}`) — a
+faithful 1:1 port from `gen_func_8005950C` (`generated/shard_4.c:7624`, ground truth; Ghidra's own
+decompile of this particular function matched it exactly, cross-checked line-by-line). Guest frame
+(`addiu sp,-32`; spill s0←a0=G, s1, s2, ra) is mirrored. **UNWIRED**: `Engine::frameStartTick`'s
+`default: target = 0x8005950Cu` dispatch site still reaches the substrate `func_8005950C` directly
+— wiring is a future frontier-tier step (EngineOverrides + `shard_set_override`, then SBS-gate).
+
+Also drafted (frameTick's full immediate sub-tree, all faithful 1:1 ports, all UNWIRED):
+
+- **`ActorTomba::turnBiasCompute`** (`0x80055C9C`) — frameless leaf (a0/G unused). Facing-vs-
+  cached-view-heading delta → `(turn-in, turn-out)` bias pair at `0x1F80016C`/`0x1F80016E` (the SAME
+  slots `beh_actor_tomba_proximity_combat`'s enemy-engage tables write). Faithful from
+  `generated/shard_1.c:9208`.
+- **`ActorTomba::outerTransitionGate`** (`0x80053E50`) — the "still mid-transition" gate
+  `outerTransitionCommit` (and case 4) call first. Faithful from `generated/shard_4.c:7161`. Guest
+  frame: `addiu sp,-32`; spill s0,s1,s2,ra.
+- **`ActorTomba::outerTransitionCommit`** (`0x80053FDC(G, mode)`) — commits a new load target or
+  decrements the settle counter to walk-state 1. Faithful from `generated/shard_5.c:7749`. **Caught
+  a real Ghidra decompiler error**: Ghidra's pseudocode for the decrement/settle tail showed
+  `*param_1 != 2`; the ground-truth register trace (shard) proves the compare is against **0**, not
+  2 — documented in the `.cpp` banner. Guest frame: `addiu sp,-32`; spill s0,s1,ra (no s2 slot).
+- **`ActorTomba::assetReady`** (`0x80045580`) — frameless-except-ra leaf, forwards a per-slot record
+  to the substrate loader-status leaf `FUN_80044CD4`. Faithful from `generated/shard_6.c:6274`
+  (matches Ghidra 1:1).
+- **`ActorTomba::resetLoadGate`** (`0x80042310`) — frameless-except-ra leaf, fires load-commit cues
+  + clears the pause latch. Faithful from `generated/shard_5.c:5613` (matches Ghidra 1:1).
+
+**Still substrate / mapped-only, NOT drafted this pass** (too large for a single wide-RE session —
+each is its own dedicated-pass candidate, per the "Mapped-only families" section below):
+`0x80058648` (case-0 init driver, ~150 shard lines — calls `growthStep`(owned) + `FUN_80057FD4` +
+an indirect table dispatch `PTR_DAT_800a45b8[DAT_800bf870]`), `0x80058918`/`0x80058F5C` (the two
+near-duplicate ~250-function-deep mode-N dispatch tables — see their own "Mapped-only" entries
+below), `0x800597AC` (the matrix-compose loop over a `G+0xC0`-indexed attached-item list — genuine
+IK/attachment-node geometry composition, its own dedicated pass), `0x8018BD30`/`0x8018BE40`
+(outside the `0x80052-5F` region entirely).
+
+Ghidra headless decompile used for cross-check: `scratch/decomp/g_8005950C.c` (this session,
+`main_ram` Ghidra project — 12 functions: the driver + its 5 drafted callees + `0x8005308C`/
+`0x800532A0`/`0x80053E50`/`0x80058648`/`0x80058918`/`0x80058F5C` for context).
 
 ### Mapped-only families (call-graph + partial-read triage, NOT drafted)
 
@@ -2488,7 +2538,7 @@ list below are triaged from call-set/global overlap + a skim, NOT a full read �
   almost the exact same call set (`531DC,53D90,54198,X8BC/X8F24,58910/58f24,5A910`) — a near-
   duplicate PAIR, likely two variants of the same state (e.g. normal vs. underwater, matching the
   `0x800BF870`/water-mode gates seen throughout this region).
-- **`0x8005950C`** — see "REAL frontier" section above.
+- **`0x8005950C`** — RE'd + drafted (`ActorTomba::frameTick`, UNWIRED) — see its own section above.
 - **`0x800597AC`** — calls `Math::applyMatrixLV` (already-native) 4+ times against fixed
   scratchpad vector/matrix addresses (`0x1F800020/40/74/C0`) — a secondary matrix-composition pass,
   likely IK/limb-specific (companion to `Engine::objMatrixCompose`).
@@ -2530,8 +2580,13 @@ list below are triaged from call-set/global overlap + a skim, NOT a full read �
 
 ### Next steps (for whoever picks up the follow-up wave)
 
-1. RE `0x8005950C` first (the real per-frame driver, see above) — everything else in this region
-   is more tractable once its dispatch shape is known.
+1. ~~RE `0x8005950C` first~~ — DONE 2026-07-08 (`ActorTomba::frameTick`, UNWIRED draft, compiles).
+   Next: wire it (EngineOverrides + `shard_set_override` at `Engine::frameStartTick`'s dispatch
+   site) + SBS-gate, THEN tackle its own still-substrate direct callees in priority order:
+   `0x80058648` (case-0 init, moderate size, concrete next RE target) and the two mode-N dispatch
+   tables `0x80058918`/`0x80058F5C` (each cascades into ~50 more functions — the real bulk of this
+   region; do NOT attempt both from scratch, they're near-duplicates per the "Mapped-only" note
+   below).
 2. The three/four "variant A/B/C(/D)" template families above (`8005A970/ACC8/AEE4`,
    `8005C8A0/CDF8/D16C`, `8005E580/E8FC/EC70/EF48`) are the best next RE targets after that: porting
    ONE member of each triplet + diffing against its siblings is far cheaper than four independent

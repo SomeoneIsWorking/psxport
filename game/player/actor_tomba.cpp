@@ -765,3 +765,341 @@ void ActorTomba::registerOverrides(Game* game) {
   ov.register_(0x800235A0u, "ActorTomba::type7Interact",    ov_type7Interact);
   ov.register_(0x80022C78u, "ActorTomba::growthYSnap",      ov_growthYSnap);
 }
+
+// =================================================================================
+// Per-frame G-block driver cascade (0x8005950C region) — RE'd + drafted 2026-07-08 wide-RE pass.
+// UNWIRED: Engine::frameStartTick's `default: target = 0x8005950Cu` dispatch site still reaches
+// the substrate func_8005950C directly (game/core/engine.cpp); wiring these in is a future
+// frontier-tier step (EngineOverrides + shard_set_override, then SBS-gate). All 6 functions below
+// are faithful 1:1 ports from generated/shard_*.c ground truth (cited per-function), cross-checked
+// against the Ghidra headless decompile in scratch/decomp/g_8005950C.c — which caught ONE real
+// Ghidra decompiler error (see outerTransitionCommit's banner).
+// =================================================================================
+
+// turnBiasCompute — guest FUN_80055C9C. See actor_tomba.h for the full RE writeup.
+void ActorTomba::turnBiasCompute(Core* c, int16_t facing) {
+  bool closeIn;
+  if (c->mem_r8(0x800E806Cu) == 5) {
+    // Wide/menu variant: delta from a fixed 0xC00 reference instead of DAT_1F8000F2 directly.
+    const uint32_t d = (3072u - c->mem_r16(0x1F8000F2u) - (uint32_t)(int32_t)facing) & 4095u;
+    closeIn = (int32_t)d < 2048;
+  } else {
+    uint32_t r3 = ((uint32_t)(uint8_t)c->mem_r8(0x800E806Cu) - (uint32_t)(int32_t)facing) & 4095u;
+    const uint32_t r2m = c->mem_r16(0x1F8000F2u) & 4095u;
+    r3 = r3 - r2m;
+    const uint32_t r4 = ((int16_t)r3 < 0) ? r3 : (r3 - 512u);
+    const uint32_t d = r4 & 4095u;
+    if (c->mem_r16(0x800E805Au) & 0x800u) closeIn = (int32_t)d < 1536;
+    else                                  closeIn = (int32_t)d < 2560;
+  }
+  if (closeIn) { c->mem_w16(0x1F80016Cu, 128); c->mem_w16(0x1F80016Eu, 32); }
+  else         { c->mem_w16(0x1F80016Cu, 32);  c->mem_w16(0x1F80016Eu, 128); }
+}
+
+// resetLoadGate — guest FUN_80042310. See actor_tomba.h for the full RE writeup.
+void ActorTomba::resetLoadGate(Core* c) {
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 24;
+  c->mem_w32(c->r[29] + 16, c->r[31]);
+
+  rec_dispatch(c, 0x8001CF78u);                    // niladic substrate cue
+  c->r[4] = 0x7Fu; c->r[5] = 0; c->r[6] = 0;
+  rec_dispatch(c, 0x80074590u);                     // FUN_80074590(0x7F, 0, 0)
+  const uint8_t mode = c->mem_r8(0x800BF870u);      // area/mode byte, read before the unpause write
+  c->mem_w8(0x1F800137u, 0);                        // unpause
+  c->r[4] = mode;
+  rec_dispatch(c, 0x80074F24u);                     // FUN_80074F24(DAT_800BF870)
+
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+// assetReady — guest FUN_80045580. See actor_tomba.h for the full RE writeup.
+bool ActorTomba::assetReady(Core* c, int32_t slot) {
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 24;
+  c->mem_w32(c->r[29] + 16, c->r[31]);
+
+  constexpr uint32_t TABLE_8018A000 = 0x8018A000u;
+  constexpr uint32_t DAT_800A3EC8   = 0x800A3EC8u;
+  constexpr uint32_t SLOT_TABLE     = 0x800BE118u;   // &DAT_800be11c - 4 (slot*8 + 4 == +0xC)
+  const uint32_t rec = c->mem_r32(SLOT_TABLE + (uint32_t)slot * 8u + 4u);
+  c->r[4] = TABLE_8018A000;
+  c->r[5] = c->mem_r32(DAT_800A3EC8);
+  c->r[6] = rec;
+  rec_dispatch(c, 0x80044CD4u);
+  const bool ready = (int32_t)c->r[2] > 0;
+
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+  return ready;
+}
+
+// outerTransitionGate — guest FUN_80053E50(G). See actor_tomba.h for the full RE writeup.
+bool ActorTomba::outerTransitionGate() {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->mem_w32(c->r[29] + 24, c->r[18]);
+  c->mem_w32(c->r[29] + 28, c->r[31]);
+
+  bool result = true;
+  if (c->mem_r16s(G + 0x16Eu) > 0) {
+    result = false;
+    goto done;
+  }
+
+  c->mem_w8(0x800BF81Eu, 0);
+  c->engine.gStateMutate(G, 0xB);
+
+  if (c->mem_r8(G + 0x164u) == 1) {
+    if ((c->mem_r8(G + 0u) & 4u) == 0) {
+      if ((c->mem_r8(G + 0xDu) & 0x80u) == 0) {
+        c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+        rec_dispatch(c, 0x800521F4u);
+      }
+      c->mem_w8(G + 0xDu, 0);
+      c->mem_w8(G + 0x61u, 0);
+      c->r[4] = G; rec_dispatch(c, 0x80053D90u);
+      c->mem_w8(G + 0u, 3);
+      c->mem_w16(G + 0x16Eu, 0);
+      c->mem_w16(G + 0x170u, 0);
+      c->mem_w8(G + 0x146u, 0);
+      c->mem_w8(G + 0x4u, 2);
+      c->mem_w8(G + 0x5u, 1);
+      c->mem_w8(G + 0x6u, 0);
+      c->mem_w8(0x800BF80Du, 1);
+      c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
+      rec_dispatch(c, 0x800312D4u);
+      goto done;
+    }
+    if ((c->mem_r8(G + 0xDu) & 0x80u) != 0) goto done;
+    c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+    rec_dispatch(c, 0x800521F4u);
+    c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) | 0x82u));
+    goto done;
+  }
+
+  if (c->mem_r8s(0x800BF80Du) < 1) {
+    c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+    rec_dispatch(c, 0x800521F4u);
+    c->mem_w8(G + 0xDu, 0);
+    c->mem_w8(G + 0x61u, 0);
+    c->r[4] = G; rec_dispatch(c, 0x80053D90u);
+    c->mem_w8(G + 0u, 3);
+    c->mem_w16(G + 0x16Eu, 0);
+    c->mem_w16(G + 0x170u, 0);
+    c->mem_w8(G + 0x146u, 0);
+    c->mem_w8(G + 0x16Au, 0);            // extra clear only on this path (verified vs shard)
+    c->mem_w8(G + 0x4u, 2);
+    c->mem_w8(G + 0x5u, 1);
+    c->mem_w8(G + 0x6u, 0);
+    c->mem_w8(0x800BF80Du, 1);
+    c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
+    rec_dispatch(c, 0x800312D4u);
+  }
+  // else (busy latch already set): result stays true, nothing to do.
+
+done:
+  c->r[31] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+  return result;
+}
+
+// outerTransitionCommit — guest FUN_80053FDC(G, mode). See actor_tomba.h for the full RE writeup
+// (incl. the Ghidra-vs-ground-truth correction in the decrement/settle tail below).
+void ActorTomba::outerTransitionCommit(int32_t mode) {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+
+  if (outerTransitionGate()) goto done;
+
+  if (c->mem_r16s(G + 0x16Eu) != c->mem_r16s(G + 0x170u)) {
+    // "reset to new target" — cue + gStateMutate(0xB) + conditional stop-motion clear.
+    c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+    rec_dispatch(c, 0x800521F4u);
+    c->engine.gStateMutate(G, 0xB);
+    c->mem_w8(0x800BF81Eu, 0);
+    if ((c->mem_r8(G + 0u) & 4u) == 0) {
+      c->r[4] = G; rec_dispatch(c, 0x80053D90u);
+      c->mem_w8(G + 0x61u, 0);
+    }
+    if (mode != 1 && c->mem_r8(G + 0x4u) == 2) goto done;   // already committing — nothing to do
+    // Commit a new target (shared by mode==1 and the mode!=1-but-not-yet-committing path).
+    c->mem_w16(G + 0x172u, 0x5A);
+    c->mem_w16(G + 0x170u, c->mem_r16(G + 0x16Eu));
+    c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) | 0x82u));
+    if ((c->mem_r8(G + 0u) & 0xCu) != 0) {
+      c->r[4] = 0x23; c->r[5] = 0; c->r[6] = 0;
+      rec_dispatch(c, 0x80074590u);
+      c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
+      rec_dispatch(c, 0x800312D4u);
+      goto done;
+    }
+    c->mem_w8(G + 0u, 3);
+    c->mem_w8(G + 0x146u, 0);
+    c->mem_w8(G + 0x145u, 0);
+    c->mem_w8(G + 0x4u, 2);
+    c->mem_w8(G + 0x5u, 0);
+    c->mem_w8(G + 0x6u, 0);
+    goto done;
+  }
+
+  // Pending counter already at target — decrement-and-settle path.
+  {
+    const int16_t remaining = (int16_t)c->mem_r16(G + 0x172u);
+    if (remaining == 0) goto done;
+    const int16_t newRemaining = (int16_t)(remaining - 1);
+    c->mem_w16(G + 0x172u, (uint16_t)newRemaining);
+    if (newRemaining != 0) goto done;
+
+    const uint8_t g0 = c->mem_r8(G + 0u);
+    if (g0 != 0 && (g0 & 4u) == 0) {
+      // "unobstructed" — commit to walk-state 1, clearing/masking the stop-motion latch bits.
+      c->mem_w8(G + 0u, 1);
+      if ((c->mem_r8(G + 0xDu) & 0x50u) != 0) {
+        c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) & 0x7Fu));
+      } else {
+        c->mem_w8(G + 0xDu, 0);
+      }
+    } else {
+      // g0==0 OR (g0&4)!=0 — re-arm the settle counter instead of committing.
+      c->mem_w16(G + 0x172u, 1);
+    }
+  }
+
+done:
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+// frameTick — guest FUN_8005950C. See actor_tomba.h for the full RE writeup.
+void ActorTomba::frameTick() {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = G;
+  c->mem_w32(c->r[29] + 28, c->r[31]);
+  c->mem_w32(c->r[29] + 24, c->r[18]);
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+
+  const uint8_t outerState = c->mem_r8(G + 0x4u);
+  if (outerState < 8) {
+    switch (outerState) {
+      case 0: {
+        c->r[4] = G; c->r[5] = 0;
+        rec_dispatch(c, 0x80058648u);                 // enterOuterState0 (still substrate)
+        break;
+      }
+      case 1: {
+        const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
+        const uint16_t savedE7E68 = c->mem_r16(0x800E7E68u);
+        if (c->mem_r8(0x1F800230u) != 0) {
+          const uint16_t mask = c->mem_r16(0x1F800174u);
+          c->mem_w16(0x800ECF54u, (uint16_t)(savedCF54  & ~mask));
+          c->mem_w16(0x800E7E68u, (uint16_t)(savedE7E68 & ~mask));
+        }
+        const bool skipClear = (c->mem_r8(0x800BF80Fu) != 0) && (c->mem_r8(0x1F800137u) == 0);
+        if (!skipClear) { c->mem_w16(0x800E7E68u, 0); c->mem_w16(0x800ECF54u, 0); }
+
+        const int16_t facing = (int16_t)c->mem_r16(G + 0x140u);
+        turnBiasCompute(c, facing);
+        c->r[4] = G; rec_dispatch(c, 0x80058918u);    // mode-N dispatch table A (still substrate)
+        if (c->mem_r8(G + 0x146u) == 0) c->mem_w8(0x1F800232u, 1);
+        c->r[4] = G; rec_dispatch(c, 0x800597ACu);    // matrix-compose (still substrate)
+        outerTransitionCommit(0);
+
+        c->mem_w16(0x800E7E68u, savedE7E68);
+        c->mem_w16(0x800ECF54u, savedCF54);
+        break;
+      }
+      case 2: {
+        c->mem_w8(G + 0x17Bu, 1);
+        c->r[4] = G; rec_dispatch(c, 0x80067CA4u);
+        c->r[4] = G; rec_dispatch(c, 0x800597ACu);
+        break;
+      }
+      case 3:
+        break;   // unused jump-table slot — no-op
+      case 4: {
+        const uint16_t savedE7E68 = c->mem_r16(0x800E7E68u);
+        const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
+        c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) & 0x7Fu));
+        if (c->mem_r8(0x1F800137u) != 0) {
+          c->mem_w16(0x800E7E68u, c->mem_r16(0x1F800166u));
+          c->mem_w16(0x800ECF54u, c->mem_r16(0x1F800190u));
+        } else {
+          c->mem_w16(0x800E7E68u, 0);
+          c->mem_w16(0x800ECF54u, 0);
+        }
+        const int16_t facing = (int16_t)c->mem_r16(G + 0x140u);
+        turnBiasCompute(c, facing);
+        c->r[4] = G; rec_dispatch(c, 0x80058F5Cu);    // mode-N dispatch table B (still substrate)
+        c->r[4] = G; rec_dispatch(c, 0x800597ACu);    // matrix-compose (still substrate)
+        (void)outerTransitionGate();                   // bare tick — return value unused
+
+        c->mem_w16(0x800E7E68u, savedE7E68);
+        c->mem_w16(0x800ECF54u, savedCF54);
+        break;
+      }
+      case 5: {
+        c->r[4] = G; rec_dispatch(c, 0x8018BD30u);     // scripted leaf (outside this RE region)
+        c->r[4] = G; rec_dispatch(c, 0x800597ACu);
+        break;
+      }
+      case 6: {
+        c->r[4] = G; rec_dispatch(c, 0x8018BE40u);     // scripted leaf (outside this RE region)
+        c->r[4] = G; rec_dispatch(c, 0x800597ACu);
+        break;
+      }
+      case 7: {
+        const uint8_t sub = c->mem_r8(G + 0x5u);
+        bool advance = false;
+        if (sub == 0) {
+          c->r[4] = G;
+          rec_dispatch(c, 0x8001CF2Cu);
+          advance = true;
+        } else if (sub == 1) {
+          if (assetReady(c, 1)) advance = true;
+        } else if (sub == 2) {
+          if (c->mem_r8(0x1F80019Bu) != 0) {
+            c->mem_w8(0x800BF89Cu, 4);
+            resetLoadGate(c);
+            c->mem_w8(G + 0x4u, 1);
+            c->mem_w8(G + 0x5u, 0);
+            c->mem_w8(G + 0x6u, 0);
+            c->mem_w8(G + 0x7u, 0);
+            const uint32_t anim = c->mem_r32(0x1F800138u);
+            c->mem_w16(anim + 0x4Cu, sub);   // sub==2 here — matches gen's register trace
+            c->mem_w16(anim + 0x4Eu, 1);
+          }
+        }
+        // sub > 2 falls straight to the tail — matches gen (no case for it, no-op).
+        if (advance) c->mem_w8(G + 0x5u, (uint8_t)(c->mem_r8(G + 0x5u) + 1));
+        c->r[4] = G; rec_dispatch(c, 0x80076D68u);
+        break;
+      }
+    }
+  }
+
+  c->r[31] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
