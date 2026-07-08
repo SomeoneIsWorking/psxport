@@ -1,5 +1,25 @@
 # Findings — render / engine submit
 
+## Graphical enhancements rewired PC-native / read-only overlay (2026-07-08)
+
+Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY host memory):
+- **RenderObserver** (game/render/render_observer.cpp, commit 262d709): transparent wrappers in
+  the shared recomp override table (shard_set_override) around the per-object render dispatch
+  0x8003CCA4 + effect-leaf renderers — run the LITERAL gen body then tag the produced packet span
+  with obj_world_ord(node) in host memory. Restores billboard real-depth occlusion lost when the
+  native walk-lifts were retired (issue #32). SBS 4:3 zero-diff (guest-transparent).
+- **interp60 fully native** (commit bf61ef1): removed both PSX GTE/GP0 op-stream taps
+  (gte_beetle.cpp rtp() per RTPS/RTPT, gpu_native.cpp join_poly per poly). build_lerp reprojects
+  purely from the native capture (fps_key + stampWorldCr fps_cr/fps_mv + the observer's node-span
+  billboard registry). Verified ALL THREE tap outputs dead: SXY object grid (mJoinHit/Miss never
+  read), XObj transform fingerprint (never read by build_lerp), logic-rate detector (mRd.period
+  never read). Behavior-preserving. Dead method bodies (rtp/xobj*/grid_*/fold/RateDet) sweep TBD.
+- **Widescreen margin read-only** (commit 68426d3): MarginRenderer::flush() no longer dispatches
+  the guest transform builder 0x80051C8C (which wrote node+0x98/+0xac) — builds the transform in
+  HOST float (identity -> rotX/rotY/rotZ from eulers -> root/sibling compose) and submits via the
+  native projComposeObjectHost -> gt3gt4. Zero guest writes. SBS 4:3 zero-diff through f21600.
+  Widescreen picture is user-eyeball (margin off-path at 4:3; didn't execute in headless boot).
+
 ## PSX render path always executes underneath; pc_render display pass is READ-ONLY (2026-07-07, issue #32)
 
 - **symptom**: strict SBS full (default, pc_render live) diverged at f26 in the main-thread guest
