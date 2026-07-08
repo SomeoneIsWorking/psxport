@@ -383,6 +383,33 @@ public:
     if (addr >= 0x1F8001F0u && addr < 0x1F8001FCu) return true;
     return false;
   }
+  // ---- isDeadStackScratch: the ONE non-pc_skip exception (memory the still-recomp side never
+  // reads — CLAUDE.md "no residual RAM diverges"). Applies unconditionally (MODE=full included),
+  // unlike isPcSkipScratch above which only fires under pc_skip=true.
+  //
+  // 0x801FE908..0x801FE914 (three words) is `Animation::attach`'s (FUN_80077C40) OWN compiled-
+  // prologue stack frame — sp+16/+20/+24, the generated body's callee-save spills of r16 (a table-
+  // lookup pointer), r17 (`r17 = r4 + r0`, its own `node` argument copied verbatim) and ra. RE'd
+  // from generated/shard_5.c (gen_func_80077C40): the fn's entire 32-byte frame only ever WRITES
+  // these 3 words in the prologue and reads them back ONLY in its own epilogue before popping the
+  // frame (sp += 32); its two leaf callees (func_80076904 loadFrame, func_80075FF8) never touch sp
+  // at all. So nothing outside attach's own epilogue ever loads these words back — they're ordinary
+  // reusable stack memory the instant the frame pops, never re-read as "the spilled r16/r17/ra" by
+  // any other code path. Native `Animation::attach` (game/object/animation.cpp) is a plain C++ call
+  // with no guest stack frame, so it leaves these slots at cold-boot 0 while attach is repeatedly
+  // re-entered loading one scene's actors (observed f61-f116 for sp+20; sp+16/sp+24 converge back
+  // to matching after a single frame once ordinary reuse-traffic overwrites them); the whole frame
+  // converges by f117 once ordinary (matching, non-attach) traffic reuses the address range.
+  // Verified DEAD, not waved off: `PSXPORT_SBS_BYTETRACE=0x801FE900,0x801FE920` over an 11,900+
+  // frame autonav run classifies every byte in this frame SOFT-PHASE/PHASE/CLEAN (0 REAL) — value
+  // sets + counts match within tolerance for the WHOLE run — and the residual never recurs after
+  // f117 through the full run length. Same class of exception `Animation::step`'s own-frame
+  // exclusion already carves out (animation.cpp:46, gated behind the `animvm` per-call verify
+  // channel); attach has no per-call A/B harness of its own, so this lives here instead. See
+  // docs/findings/animation.md.
+  static bool isDeadStackScratch(uint32_t addr) {
+    return addr >= 0x801FE908u && addr < 0x801FE914u;
+  }
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -789,9 +816,9 @@ void Sbs::Impl::checkDivergence() {
     int hits = 0;
     uint32_t i = 0;
     while (i < sz) {
-      if (readA(i) == readB(i) || isPcSkipScratch(base + i)) { i++; continue; }
+      if (readA(i) == readB(i) || isPcSkipScratch(base + i) || isDeadStackScratch(base + i)) { i++; continue; }
       uint32_t run_start = i;
-      while (i < sz && readA(i) != readB(i) && !isPcSkipScratch(base + i)) i++;
+      while (i < sz && readA(i) != readB(i) && !isPcSkipScratch(base + i) && !isDeadStackScratch(base + i)) i++;
       uint32_t run_end = i;
       uint32_t addr = base + run_start;
       const char* label = addrLabel(addr);
@@ -826,9 +853,9 @@ void Sbs::Impl::checkDivergence() {
     const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
     uint32_t n = mHi - mLo;
     for (uint32_t i = 0; i < n; i++)
-      if (a[i] != b[i] && !isPcSkipScratch(mLo + i)) { recordDivergence(mLo + i); return; }
+      if (a[i] != b[i] && !isPcSkipScratch(mLo + i) && !isDeadStackScratch(mLo + i)) { recordDivergence(mLo + i); return; }
     for (uint32_t i = 0; i < 0x400; i++)
-      if (mA->core.scratch[i] != mB->core.scratch[i] && !isPcSkipScratch(0x1F800000u + i))
+      if (mA->core.scratch[i] != mB->core.scratch[i] && !isPcSkipScratch(0x1F800000u + i) && !isDeadStackScratch(0x1F800000u + i))
         { recordDivergence(0x1F800000u + i); return; }
   }
 }
@@ -847,7 +874,7 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0, nMaskedRam = 0;
   for (uint32_t i = 0; i < n; i++) {
     if (a[i] == b[i]) continue;
-    if (isPcSkipScratch(mLo + i)) { nMaskedRam++; continue; }
+    if (isPcSkipScratch(mLo + i) || isDeadStackScratch(mLo + i)) { nMaskedRam++; continue; }
     if (!nDiff) firstAddr = mLo + i;
     lastAddr = mLo + i;
     pageCount[(mLo + i - 0x80000000u) >> PAGE_SHIFT]++;
