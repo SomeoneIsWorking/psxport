@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 385 native fns, 332 owned addresses, 384 LIVE / 1 ORPHAN.
+Totals: 386 native fns, 333 owned addresses, 385 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -314,6 +314,7 @@ Totals: 385 native fns, 332 owned addresses, 384 LIVE / 1 ORPHAN.
 | 0x8010B798 | LIVE | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:86 |  |  |
 | 0x8010B990 | LIVE | `beh_sop_intro_narration` | game/ai/beh_sop_intro_narration.cpp:126 |  |  |
 | 0x8010E904 | LIVE | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:324 |  | ======================================================================… |
+| 0x80112188 | LIVE | `ActorMeleeEngage::doIt` | game/ai/actor_melee_engage.cpp:25 | 0x80022C78 0x80055844 0x80084080 |  |
 | 0x801130C4 | LIVE | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:181 |  | ======================================================================… |
 | 0x80114E74 | LIVE | `ActorTomba::type4GuardedCheck` | game/player/actor_tomba.cpp:127 |  | type-4 guarded proximity. |
 | 0x80117658 | LIVE | `beh_prng_velocity_machine` | game/ai/beh_prng_velocity_machine.cpp:50 |  |  |

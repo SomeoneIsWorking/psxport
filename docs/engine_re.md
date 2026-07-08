@@ -1809,3 +1809,66 @@ shape from address adjacency + size distribution (`ov_a00_gen_*` body line count
   worktree (not committed — regenerate via `tools/codemap.py --addr` swept over
   `ov_a00_gen_*`/`ov_a00_func_*` addresses in `generated/ov_a00_shard_{0,1}.c` for 0x80125000–
   0x8014E944).
+===========================================================================================
+ A00 OVERLAY BAND 0x80108000-0x80125000 — RE survey + one drafted leaf (2026-07-08, WIDE-RE)
+Assigned region for a wide-RE ownership sweep (a sibling agent took 0x80125000+). Dumped a real
+free-roam RAM snapshot (`PSXPORT_AUTO_SKIP=1 PSXPORT_REPL=1`, `run 400; dumpram scratch/ram/a00lo.bin`
+— free-roam reached at frame 216) and cross-checked against `generated/ov_a00_shard_{0,1}.c`
+(instruction-exact ground truth per CLAUDE.md; Ghidra import of the dump was ALSO started for
+struct/xref cross-check but a 2MB full auto-analyze run did not finish within this session's
+window — the port below relies on the recompiler C only).
+
+**Region census** (`ov_a00_gen_<addr>` top-level entries in generated/ov_a00_shard_{0,1}.c whose
+address falls in [0x80108000, 0x80125000)): **260 functions total, 21 already natively owned
+(codemap cross-check), 239 still substrate-only.** A huge fraction of the low end of this band
+(0x8010810C-0x80109FE0-ish: Engine::s48_*/fieldFrame*/Sop::* machinery) and several named clusters
+higher up (release_trigger_motion, attack_orbit_substate, beh_prng_velocity_machine,
+beh_typed_init_exit_poker, beh_a06_multi_actor, beh_id_routed_dispatch) were already owned by prior
+sessions — this survey is the first full enumeration of what's LEFT in the band.
+
+Top-40 still-unowned functions by generated-source line count (a rough size/complexity proxy —
+`scratch/logs/inband_sizes_unowned.txt` has the full list of all 239):
+```
+8010CF90 497   801234A4 463   8011F278 419   80110584 410   8011EAD0 340
+8011ADA8 322   8010F608 320   8011B738 310   8010A33C 280   8011A14C 274
+8010E408 273   801220FC 270   80116328 270   8010FB88 270   8011E340 267
+80112188 255*  8010A7F8 253   801125EC 252   8010B940 249   8011D108 245
+801168C4 240   80111620 240   8011B324 238   8010EC58 233   8010BED0 224
+801200D0 220   8011C674 213   8011334C 212   80115598 207   801225BC 205
+80111E18 204   801206F4 203   8011DFC0 201   8010F034 200   80115CB0 199
+8011DCAC 197   801138E8 197   80111B34 176   8011F998 175   8011E7CC 174
+(* = drafted this session, see below.) `0x8010CF90` (497 lines) was scoped and found to be a
+16-way jump-table-on-`obj[+3]` state machine keyed off area-clock/season globals (`0x1F800xxx`
+region reads, `mem_r16(anchor+0x1EC)` comparisons against 3000/13000/13901-style day-cycle
+constants) — an NPC schedule/area-event dispatcher, NOT yet RE'd to completion this session
+(scoped only; too large to safely hand-transcribe in the remaining window without a decompiler
+pass — flagged for a follow-up with Ghidra decompile assistance rather than rushed).
+
+**Drafted + RE'd this session: `FUN_80112188` -> `ActorMeleeEngage::doIt`**
+(`game/ai/actor_melee_engage.{h,cpp}`, UNWIRED). A 3-argument (self, target, anchor) AI leaf that
+gates whether an actor should reposition toward / mutually arm a melee engagement against a target:
+XZ distance test (still-substrate `FUN_80084080`, a DIFFERENT sqrt-shaped leaf than the already-
+native `Math::isqrt16`/FUN_80077FB0) + a Y-band overlap test + an atan2 angle-window test, then
+either (a) repositions self via sin/cos of the approach angle and runs a turn-direction check
+(`Trig::angleCmp`, confirmed ALREADY NATIVE but currently ORPHANED/unwired — codemap shows "NO
+native owner found" for 0x80083E80/80083F50/80085690/80077768 despite `game/math/trig.cpp`
+existing and being correct; used here without needing to wire it, since this whole draft is dead
+code this session), or (b) arms a mutual attack state (self+5/target+94 stamps, a shared
+scratchpad "lock owner" slot at 0x1F800098 and an angle/cooldown word at 0x1F80009C) gated by a
+still-substrate "may attack now" check (`FUN_80055844`, not RE'd this session) and a disengage
+cleanup call (`FUN_80022C78`). No static call site to this address was found in ANY generated
+shard (only a mis-decoded data blob in `ov_a03_shard_1.c` — recompiler garbage, not a real call);
+reached only via a runtime function-pointer table this session did not chase.
+- **Transcription honesty note**: this ~250-line, ~30-branch MIPS DAG was hand-transcribed without
+  a decompiler pass (Ghidra's auto-analysis of the RAM dump did not finish in this session's
+  window). Self-review during transcription caught and fixed several condition-polarity and
+  branch-delay-slot register-lifetime mistakes (documented in the file's own top-of-file caveat
+  comment) — a live example of why this kind of function needs Ghidra/disas cross-check before
+  being trusted as byte-exact. UNWIRED + UNVERIFIED; do not wire without an independent RE pass or
+  an SBS gate.
+- Guest frame MIRRORED per CLAUDE.md directive: `doItFramed()` reproduces the real 64-byte
+  descent + s0-s7/s8/ra spills at their RE'd offsets, wrapping the native `doIt()` body — kept
+  even though nothing calls it yet, so wiring later needs no re-RE (reference shape:
+  `game/world/object_table.cpp`/`game/render/cull.cpp`).
+- **Refs**: `scratch/ram/a00lo.bin` (+`.spad`), `generated/ov_a00_shard_1.c:3527`,
+  `scratch/logs/a00_ownership.txt` / `a00_unowned.txt` / `inband_sizes_unowned.txt` (full census).

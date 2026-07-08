@@ -1452,6 +1452,24 @@ cube-text popup ledger RE'd + DRAFTED (UNWIRED, not gated); collision-walk clust
   drafted — entangled with un-RE'd sub-dispatchers). `FUN_8004005C`/`FUN_80040400` resisted a
   clean Ghidra function-boundary decompile — needs a disas.py boundary spot-check first.
 
+**SESSION 2026-07-08 (WIDE-RE, isolated worktree) — A00-overlay band 0x80108000-0x80125000 census +
+one drafted leaf. RE-AHEAD-OF-FRONTIER mode: UNWIRED, UNVERIFIED — do not build on this without an
+independent cross-check.**
+- Full census of the assigned band: 260 top-level `ov_a00_gen_<addr>` functions, 21 already owned
+  by prior sessions, **239 still substrate**. Sorted-by-size list banked at
+  `scratch/logs/inband_sizes_unowned.txt` (worktree-local, not committed) for whoever picks this up
+  next — see `docs/engine_re.md` "A00 OVERLAY BAND 0x80108000-0x80125000" for the full writeup and
+  the top-40 list inline.
+- `0x80112188` RE'd + drafted as `ActorMeleeEngage::doIt` (`game/ai/actor_melee_engage.{h,cpp}`) —
+  an AI melee-engage proximity/angle/arm-state gate. Compiles (added to
+  `cmake/tomba2_port.cmake`); **not wired** (no EngineOverrides/shard_set_override entry, no call
+  site) and **not verified** — a dense hand-transcribed MIPS DAG without a decompiler pass; treat
+  as a draft needing independent RE confirmation before use. Full field-offset map + callee list in
+  the header; honesty caveat about the transcription risk is in the .cpp banner.
+- `0x8010CF90` (497 lines, the single largest unowned function in-band) scoped only — a 16-way
+  jump-table NPC schedule/area-event dispatcher keyed on day-cycle globals. Too large to safely
+  hand-transcribe in one session's remaining window; flagged for a follow-up with an actual
+  Ghidra decompile pass (this session's Ghidra import of the RAM dump did not finish in time).
 **SESSION 2026-07-08 — 0x8006xxxx-0x8007xxxx band sweep: 5 new leaves owned + wired (AreaSlots
 grid-cell tracker, MusicCoord second-stage gain setter, Animation frame-applier, Math isqrt16/
 approxDist3 wiring); 6 Cull camera-wrapper variants ported but left UNWIRED (guest-stack risk).**
