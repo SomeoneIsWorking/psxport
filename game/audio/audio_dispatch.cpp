@@ -1,6 +1,20 @@
 // game/audio/audio_dispatch.cpp — AudioDispatch method bodies. See audio_dispatch.h for the
 // per-method RE contracts; each body owns control flow + index/record decode, the XA/voice/libsnd
 // leaves (FUN_8001CF2C / FUN_8001D2A8 / FUN_80074B44 / FUN_80074E48) stay substrate.
+//
+// FUN_8001CF2C re-confirmed 2026-07-08 (Ghidra decomp, scratch/decomp/cf2c_cluster.c):
+//   FUN_80052010(2)          -> already native: PcScheduler::forceClose(2)
+//   DAT_800be0e4 = 0         -> settle-flag clear (guest RAM write, mechanical)
+//   FUN_8001cf00(0)          -> already native: Cd::toSpuMix(0)
+//   do { } while(!FUN_80089e1c(9,0,0))
+//     -> FUN_80089e1c is libcd's retry-loop CD-command dispatcher (3 attempts, calls
+//        FUN_8008ac34 = CdControl-style command issue against the real CD-controller regs,
+//        FUN_8008a6ec = CdSync-style completion poll). Command id 9 + the retry/backoff shape
+//        is PSX CD-controller/BIOS protocol, not game logic — there is no "observable result"
+//        to rebuild here beyond replaying real hardware handshake timing, which the PSX HLE
+//        CD subsystem already does faithfully. Genuine PSX-hardware/BIOS leaf: STAYS SUBSTRATE.
+//        (The two calls it makes that ARE game logic — forceClose, toSpuMix — are already owned
+//        above it, so FUN_8001cf2c itself is now just a 2-line hardware-retry wrapper.)
 
 #include "audio/audio_dispatch.h"
 #include "core.h"
