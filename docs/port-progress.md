@@ -2438,3 +2438,24 @@ themselves are LIVE but dispatch out to substrate for every case body.
   — Tomba's per-frame G-block driver" section. Next: wire `frameTick` in
   (`Engine::frameStartTick`'s dispatch site + EngineOverrides/`shard_set_override`) + SBS-gate,
   then RE `0x80058648` and one of the two mode-N tables.
+- **Case-handler leaves of `beh_substate_edge_orchestrator` + `beh_cull_substate_orchestrator`
+  (wide-RE agent, 2026-07-08, UNWIRED).** Followed up on the HIGH-VALUE targets flagged by the
+  session above. Of the 12 leaves the two orchestrators dispatch out to, 7 DRAFTED (compile-only,
+  unwired, unverified, no SBS run) and 5 MAPPED (call-graph + field-shape RE only, not transcribed —
+  too large/uncertain to draft with confidence in one pass). New files
+  `game/ai/beh_substate_edge_leaves.cpp` (0x8012E8A8/0x8012F494/0x80130524) and
+  `game/ai/beh_cull_substate_leaves.cpp` (0x8013272C/0x80132954/0x80132D58/0x80133184), added to
+  `cmake/tomba2_port.cmake`; builds clean (`tomba2_port` links). MAPPED-ONLY (RE'd for call-graph but
+  not drafted): `0x8012ED84` (401 gen-C ln, calls `0x8012E8A8` directly + 6 more substrate leaves),
+  `0x8012F5B4` (428 ln), `0x8012FD88` (406 ln), `0x80132A88` (162 ln, the cull orchestrator's common
+  tail), `0x80132EDC` (146 ln). Full per-leaf field/branch notes in docs/engine_re.md "Case-handler
+  leaves of the two substate orchestrators (0x8012E8A8-0x80133184)". Confidence is UNEVEN across the
+  7 drafts — 0x8012F494/0x80130524/0x8013272C/0x80132954/0x80132D58/0x80133184 preserve ground-truth
+  control flow closely but several field roles (obj[+0x3C..0x7A]-ish counters/flags) are inferred
+  from operand shape only, not confirmed against a live RAM dump; 0x8012E8A8 is the highest-confidence
+  draft (a clean NodeXform::propagate-family sibling, cross-checked against `game/render/
+  node_xform.cpp`'s existing 3 propagate variants). Per fleet-workflow.md §9, a wiring pass MUST
+  re-diff every line against `generated/ov_a00_shard_{0,1}.c` before registering + SBS-gating — these
+  drafts almost certainly contain bugs per that section's own track record. None of these 7 leaves is
+  reachable from intro-area SBS autonav per the orchestrators' own header comments (they sit behind
+  the idle/active field path), so wiring will need broader scene coverage to actually gate them.

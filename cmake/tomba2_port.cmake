@@ -181,6 +181,8 @@ set(PORT_SRC
   game/ai/sop_overlay_shadow.cpp
   game/ai/beh_seaside_prox_substate.cpp
   game/ai/area_seaside_perframe.cpp
+  game/ai/beh_substate_edge_leaves.cpp
+  game/ai/beh_cull_substate_leaves.cpp
   game/player/actor_tomba.cpp
   game/scene/bg_scene_transition_sm.cpp
   game/scene/parallax_bg.cpp
