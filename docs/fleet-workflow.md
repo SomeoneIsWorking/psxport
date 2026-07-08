@@ -126,3 +126,19 @@ wiped that agent's uncommitted work. Defenses:
   build in your own `build2`. Absolute-path writes are the leak vector.
 - If the main checkout keeps re-dirtying after a reset, an agent is actively leaking — stop it or wait for
   it to finish before integrating.
+
+## 9. Wide-RE drafts are UNTRUSTED until verified — budget a verify pass before wiring
+The wide-RE tier's drafts are hand-transcriptions from the recompiled C and routinely contain MULTIPLE
+bugs even when they compile and the drafting agent self-checked. Real 2026-07-08 counts when wiring banked
+drafts: cube_text+actor_tomba = 2 bugs, render leaves = 4 bugs, and the two melee drafts = **9 bugs** (6 in
+one function) — inverted branch/band polarities, swapped `ratan2`/`rsin`/`rcos` args, wrong source register,
+a missing ABI-slot live value, an unmirrored stack frame, `&&`-vs-`||`. So:
+- The wiring step is ALSO a mandatory line-by-line VERIFY step: diff the native method against its
+  `gen_func_<addr>` / `ov_a00_gen_<addr>` in `generated/` (instruction-exact ground truth — Ghidra garbles
+  GTE/COP2 and delay slots), checking every branch polarity, register lifetime, field offset, and guest
+  frame + callee-saved spill. Fix all discrepancies before trusting the draft.
+- The SBS-full 0-diff gate catches these ONLY IF autonav exercises the leaf. Many AI/enemy leaves are NOT
+  reached by intro-area autonav (no enemy encounter) — for those, the 0-diff gate proves "no regression to
+  the frames reached," and correctness rests on the RE verification, not the gate. Say so honestly; a future
+  session with enemy-area coverage should re-gate. Don't claim a leaf is verified because SBS was 0-diff if
+  `ovhit` shows it never fired.
