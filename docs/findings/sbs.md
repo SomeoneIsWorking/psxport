@@ -5,6 +5,23 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Faithful frontier: f117 -> 32k+ zero-diff; skip observable gate passes the area load (2026-07-08)
+
+- **Mirror TDD fleet green** (wf_bf6b0541, ~20 rounds): every wired faithful mirror passes
+  MIRROR_VERIFY=all (74k+ checks, zero mismatch). Fix classes found by the gate, in order:
+  walkAll/walkAux/frameStartTick missing gen frames; rand ABI end-state (v0/v1/hi/lo of the LCG);
+  sceneRenderListBuilder v0/v1; modePerFrameDispatch routing the REBUILT seaside handler on the
+  faithful path; camera updateFaithful substrate leaves missing a0=CAM_OBJ. Standing rule
+  confirmed twice: REBUILT natives (behaviors, per-area handlers, camera helpers) are pc_skip
+  shortcuts — the faithful path dispatches substrate until each gets a faithful conversion.
+- **SBS full+autonav: 32,500+ lockstep frames byte-identical** (NOPRESENT throughput run, still
+  going at commit time) — from f117 at the start of the arc.
+- **SV_CHECK (skip-vs-oracle observable gate) first pass**: the area-load fork (0x800452C0 oracle)
+  passes on the full observable set including 512 KB SPU sample banks, WITH the preload_cel slot
+  write-back fix (bug #29). Gate detail: skipCheck pre-delivers event 0xF0000009 so SPU-upload
+  polls complete inline in the oracle leg.
+- **refs**: commits 9156324..cc06984; game/core/verify_harness.{h,cpp}; observables.h.
+
 ## Strict mirror TDD gate landed (2026-07-08) — past "verified" claims are UNVERIFIED
 
 - **USER directive**: "Things have gotten this bad due to not having TDD in the first place —
