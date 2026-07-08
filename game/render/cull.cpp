@@ -368,6 +368,61 @@ void Cull::objectCull() { Core* c = core;
 // zeros the cull scratchpad flags 0x1F800080/0x1F800084, then forwards to the per-object cull body
 // FUN_8007712C via rec_dispatch (so current-object tracking + the widescreen margin still fire).
 // Camera pos @0x1F8000D0 (+2=X,+6=Z,+10=Y, u16). Was ov_cull_wrapper.
+// Cull::wrapFrame — shared frame mirror for the whole cullWrapper* family (RE'd instruction-exact
+// from generated/shard_{0,1,2,4,5,7}.c: gen_func_8007778C/800777FC/80077ACC/800779D0/80077A4C/
+// 800778E4). All six share the IDENTICAL prologue/epilogue shape:
+//   addiu sp,sp,-24; sw ra,16(sp); <setup>; move ra,<per-site const>; jal FUN_8007712C;
+//   lw ra,16(sp); addiu sp,sp,24; jr ra
+// The `sw ra,16(sp)` spills the CALLER's LIVE incoming ra (whatever is currently in c->r[31])
+// BEFORE the jal overwrites it with the per-site constant — mirroring that (instead of the old
+// "leave unwired" workaround) makes the guest stack bytes byte-match the substrate with no SBS
+// exclusion. `raConst` is the RE'd guest return address for this call site's jal to FUN_8007712C.
+void Cull::wrapFrame(uint32_t raConst) { Core* c = core;
+  uint32_t savedRa = c->r[31];
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, savedRa);
+  c->r[31] = raConst;
+  performBaseCullFramed();                     // FUN_8007712C native (the jal target) — ITS OWN frame too
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
+
+// performBaseCullFramed — mirrors FUN_8007712C's OWN real 40-byte guest-stack frame (RE:
+// generated/shard_1.c gen_func_8007712C: `addiu sp,-40; sw r19,28(sp) [BEFORE r19<-a0=obj];
+// sw r16,16(sp) [BEFORE r16<-a1=dx]; sw r17,20(sp) [BEFORE r17<-a2=dy]; sw r18,24(sp)
+// [BEFORE r18<-a3=dz]; sw ra,32(sp)`). Bug found + fixed 2026-07-08: wrapFrame() above only
+// mirrored the OUTER wrapper's own frame (cullWrapper etc.'s `addiu sp,-24`); on the real
+// substrate, that wrapper's jal to FUN_8007712C ALSO pushes FUN_8007712C's OWN nested -40 frame
+// at that depth (visible in generated/shard_1.c) — a gap performBaseCull() (a pure-C++ leaf with
+// no r29 use at all) never reproduced. The missing nested frame left the guest-stack bytes at
+// that depth untouched on the native side, producing an SBS divergence at 0x801FE904..908
+// wherever an UNRELATED later write (from other guest code reusing the same stack depth) differed
+// from the substrate's own r16/r19 spill-then-restore. ONLY used from wrapFrame() (the guest-ABI
+// path) — performBaseCull() itself stays unframed for its OTHER, native (non-guest-ABI) callers
+// (Actor::boundsCull/boundsCullYOffset, cullWrapperFlag2()/cullWrap77acc()'s own unframed bodies),
+// same reasoning as cullWrap77acc()/cullWrapperFlag2()'s framed/unframed split above.
+void Cull::performBaseCullFramed() { Core* c = core;
+  uint32_t save16 = c->r[16], save17 = c->r[17], save18 = c->r[18], save19 = c->r[19], saveRa = c->r[31];
+  c->r[29] -= 40;
+  c->mem_w32(c->r[29] + 28, save19);           // sw r19,28(sp) — LIVE incoming r19 (before r19<-obj)
+  c->mem_w32(c->r[29] + 16, save16);           // sw r16,16(sp) — LIVE incoming r16 (before r16<-dx)
+  c->mem_w32(c->r[29] + 20, save17);           // sw r17,20(sp) — LIVE incoming r17 (before r17<-dy)
+  c->mem_w32(c->r[29] + 24, save18);           // sw r18,24(sp) — LIVE incoming r18 (before r18<-dz)
+  c->mem_w32(c->r[29] + 32, saveRa);           // sw ra,32(sp)
+
+  performBaseCull();
+
+  c->r[31] = c->mem_r32(c->r[29] + 32);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[19] = c->mem_r32(c->r[29] + 28);
+  c->r[29] += 40;
+}
+
+// FUN_8007778C — RA constant for the internal jal to FUN_8007712C (RE: generated/shard_4.c
+// gen_func_8007778C, `c->r[31] = 0x800777ECu;`).
+static constexpr uint32_t RA_8007778C = 0x800777ECu;
 void Cull::cullWrapper() { Core* c = core;
   uint32_t obj = c->r[4];
   uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);
@@ -379,7 +434,7 @@ void Cull::cullWrapper() { Core* c = core;
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - camz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);
   c->r[4] = obj;
-  performBaseCull();                           // FUN_8007712C native — was rec_dispatch
+  wrapFrame(RA_8007778C);                      // FUN_8007712C native — was rec_dispatch
 }
 
 // FUN_800777FC — cull-wrapper variant: same taxi shape as cullWrapper (obj in c->r[4], deltas
@@ -388,6 +443,14 @@ void Cull::cullWrapper() { Core* c = core;
 // Deltas match cullWrapper: coord[0] = D2, coord[1] = D6, coord[2] = DA — the local names in
 // cullWrapper (camz/camy for D6/DA) are misleading; the recomp subtracts D6 from obj+0x32 (r[6])
 // and DA from obj+0x36 (r[7]).
+// FUN_800777FC — RA constant (RE: generated/shard_5.c gen_func_800777FC, `c->r[31] = 0x80077860u;`).
+static constexpr uint32_t RA_800777FC = 0x80077860u;
+// UNFRAMED — the public entry point EXISTING native beh_ callers (beh_id_compare_motion_dispatch.cpp,
+// 3 call sites) already use as a plain C++ call. Bug found + fixed 2026-07-08: this method used to
+// ALSO wrapFrame() unconditionally, which corrupted an arbitrary guest-stack region for these native
+// callers (c->r[29] at their call sites is NOT a real guest sp belonging to this call — it's whatever
+// the last unrelated guest call left it at). Framing now lives ONLY in cullWrapperFlag2Framed(),
+// reached solely from the guest-ABI shard_set_override trampoline.
 void Cull::cullWrapperFlag2() { Core* c = core;
   uint32_t obj = c->r[4];
   uint16_t cam0 = (uint16_t)c->mem_r16(0x1F8000D2u);   // subtracted from obj+0x2E → r[5]
@@ -399,12 +462,26 @@ void Cull::cullWrapperFlag2() { Core* c = core;
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - cam1);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - cam2);
   c->r[4] = obj;
-  performBaseCull();                           // FUN_8007712C native
+  performBaseCull();                            // FUN_8007712C native — no frame (see above)
+}
+void Cull::cullWrapperFlag2Framed() { Core* c = core;
+  uint32_t saveRa = c->r[31];
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, saveRa);
+  c->r[31] = RA_800777FC;
+  cullWrapperFlag2();
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
 }
 
 // FUN_80077ACC — cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fields), flags
 // 0x1F800080=1 / 0x1F800084=4 (vs the 0/0 form above). Makes the position camera-relative then calls
 // the cull body 0x8007712C. Was ov_cull_wrap_77acc.
+// FUN_80077ACC — RA constant (RE: generated/shard_2.c gen_func_80077ACC, `c->r[31] = 0x80077B28u;`).
+static constexpr uint32_t RA_80077ACC = 0x80077B28u;
+// UNFRAMED — the public entry point EXISTING native callers (beh_record_list_scanner.cpp,
+// script_vm.cpp) already use as a plain C++ call. Same class of bug/fix as cullWrapperFlag2 above:
+// framing lives ONLY in cullWrap77accFramed(), reached solely from the guest-ABI trampoline.
 void Cull::cullWrap77acc() { Core* c = core;
   c->mem_w32(0x1F800080u, 1);
   c->mem_w32(0x1F800084u, 4);
@@ -414,13 +491,24 @@ void Cull::cullWrap77acc() { Core* c = core;
   c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[5] - cx);
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[6] - cz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[7] - cy);
-  performBaseCull();                           // FUN_8007712C native — was rec_dispatch
+  performBaseCull();                            // FUN_8007712C native — no frame (see above)
+}
+void Cull::cullWrap77accFramed() { Core* c = core;
+  uint32_t saveRa = c->r[31];
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, saveRa);
+  c->r[31] = RA_80077ACC;
+  cullWrap77acc();
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
 }
 
 // FUN_800779D0 — cull-wrapper variant: caller-supplied 3-component offset (a1/a2/a3, entering in
 // r[5]/r[6]/r[7]) is ADDED to the object's own position (obj+0x2E/0x32/0x36) BEFORE the camera-
 // relative subtraction. Flags 0/0 (same as cullWrapper). RE'd via Ghidra headless
 // (scratch/decomp/cluster1.c: FUN_800779d0).
+// FUN_800779D0 — RA constant (RE: generated/shard_0.c gen_func_800779D0, `c->r[31] = 0x80077A3Cu;`).
+static constexpr uint32_t RA_800779D0 = 0x80077A3Cu;
 void Cull::cullWrapperOffset() { Core* c = core;
   uint32_t obj = c->r[4];
   uint32_t offX = c->r[5], offZ = c->r[6], offY = c->r[7];
@@ -433,11 +521,13 @@ void Cull::cullWrapperOffset() { Core* c = core;
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x32) + offZ) - camz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x36) + offY) - camy);
   c->r[4] = obj;
-  performBaseCull();
+  wrapFrame(RA_800779D0);
 }
 
 // FUN_80077A4C — same offset-add shape as cullWrapperOffset, but writes 0x1F800080=1 / 0x1F800084=0
 // (vs 0/0). RE'd via Ghidra headless (scratch/decomp/cluster1.c: FUN_80077a4c).
+// FUN_80077A4C — RA constant (RE: generated/shard_1.c gen_func_80077A4C, `c->r[31] = 0x80077ABCu;`).
+static constexpr uint32_t RA_80077A4C = 0x80077ABCu;
 void Cull::cullWrapperOffsetFlag1() { Core* c = core;
   uint32_t obj = c->r[4];
   uint32_t offX = c->r[5], offZ = c->r[6], offY = c->r[7];
@@ -450,12 +540,16 @@ void Cull::cullWrapperOffsetFlag1() { Core* c = core;
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x32) + offZ) - camz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x36) + offY) - camy);
   c->r[4] = obj;
-  performBaseCull();
+  wrapFrame(RA_80077A4C);
 }
 
 // FUN_800778E4 — cull-wrapper variant: a SINGLE caller-supplied offset (a1, entering in r[5]) is
 // added ONLY to the object's Z-field (obj+0x32); X (obj+0x2E) and Y (obj+0x36) use the raw object
 // position. Flags 0/0. RE'd via Ghidra headless (scratch/decomp/cluster1.c: FUN_800778e4).
+// FUN_800778E4 — RA constant for the (reachable) live path (RE: generated/shard_7.c
+// gen_func_800778E4, `c->r[31] = 0x80077948u;` — a second, unreachable dead block follows the
+// first `return;` in the generated body; only the first block's ra is ever live).
+static constexpr uint32_t RA_800778E4 = 0x80077948u;
 void Cull::cullWrapperOffsetY() { Core* c = core;
   uint32_t obj = c->r[4];
   uint32_t offZ = c->r[5];
@@ -468,10 +562,43 @@ void Cull::cullWrapperOffsetY() { Core* c = core;
   c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x32) + offZ) - camz);
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);
   c->r[4] = obj;
-  performBaseCull();
+  wrapFrame(RA_800778E4);
 }
 
-// NOTE on wiring: see cull.h — this whole camera-relative-wrapper family is DELIBERATELY left
-// unwired (no EngineOverrides/shard_set_override registration). Each substrate body pushes a real
-// guest-stack frame these native methods don't replicate; wiring them produced an SBS guest-stack
-// divergence (0x801FE906, 2026-07-08). The methods remain available to any direct native caller.
+// ---- Wiring (RESOLVED 2026-07-08): shard_set_override for all 6 camera-relative wrappers -------
+// The substrate reaches these via DIRECT `func_<addr>(c)` call sites (jal, not jalr), so
+// EngineOverrides (rec_dispatch-gated) is blind to them; shard_set_override intercepts the
+// recompiler's OWN g_override[] table, the same dual-registration pattern as game/math/gte_math.cpp
+// and game/object/animation.cpp's applyFrame. psx_fallback-gated: core B (the pure substrate
+// reference) always runs the real gen_func_* body.
+extern void shard_set_override(uint32_t, void (*)(Core*));
+
+static void eov_cullWrapper(Core* c)             { c->engine.cull.cullWrapper(); }
+static void eov_cullWrapperFlag2(Core* c)        { c->engine.cull.cullWrapperFlag2Framed(); }
+static void eov_cullWrap77acc(Core* c)           { c->engine.cull.cullWrap77accFramed(); }
+static void eov_cullWrapperOffset(Core* c)       { c->engine.cull.cullWrapperOffset(); }
+static void eov_cullWrapperOffsetFlag1(Core* c)  { c->engine.cull.cullWrapperOffsetFlag1(); }
+static void eov_cullWrapperOffsetY(Core* c)      { c->engine.cull.cullWrapperOffsetY(); }
+
+extern void gen_func_8007778C(Core*);
+extern void gen_func_800777FC(Core*);
+extern void gen_func_80077ACC(Core*);
+extern void gen_func_800779D0(Core*);
+extern void gen_func_80077A4C(Core*);
+extern void gen_func_800778E4(Core*);
+
+static void gov_cullWrapper(Core* c)             { if (c->game->psx_fallback) { gen_func_8007778C(c); return; } eov_cullWrapper(c); }
+static void gov_cullWrapperFlag2(Core* c)        { if (c->game->psx_fallback) { gen_func_800777FC(c); return; } eov_cullWrapperFlag2(c); }
+static void gov_cullWrap77acc(Core* c)           { if (c->game->psx_fallback) { gen_func_80077ACC(c); return; } eov_cullWrap77acc(c); }
+static void gov_cullWrapperOffset(Core* c)       { if (c->game->psx_fallback) { gen_func_800779D0(c); return; } eov_cullWrapperOffset(c); }
+static void gov_cullWrapperOffsetFlag1(Core* c)  { if (c->game->psx_fallback) { gen_func_80077A4C(c); return; } eov_cullWrapperOffsetFlag1(c); }
+static void gov_cullWrapperOffsetY(Core* c)      { if (c->game->psx_fallback) { gen_func_800778E4(c); return; } eov_cullWrapperOffsetY(c); }
+
+void Cull::registerOverrides() {
+  shard_set_override(0x8007778Cu, gov_cullWrapper);
+  shard_set_override(0x800777FCu, gov_cullWrapperFlag2);
+  shard_set_override(0x80077ACCu, gov_cullWrap77acc);
+  shard_set_override(0x800779D0u, gov_cullWrapperOffset);
+  shard_set_override(0x80077A4Cu, gov_cullWrapperOffsetFlag1);
+  shard_set_override(0x800778E4u, gov_cullWrapperOffsetY);
+}

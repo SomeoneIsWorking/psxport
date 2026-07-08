@@ -159,6 +159,45 @@ static void anim_vm_76d68(Core* c) {
   }
 }
 
+// Animation::stepFramed — GUEST-ABI ENTRY ONLY for FUN_80076D68 (RE: generated/shard_7.c
+// gen_func_80076D68): `addiu sp,-40; sw s0,16(sp) [BEFORE s0<-a0]; sw ra,32(sp); sw s3,28(sp);
+// sw s2,24(sp); sw s1,20(sp)`. Each spill writes the CALLER's LIVE incoming r16/r17/r18/r19/ra
+// BEFORE the body repurposes r16 as its own `node` local, mirroring the real frame descent/spill/
+// ascent so a caller that reached this function through the GUEST CALL GRAPH (c->r[29] is a real
+// guest sp at a real guest call site — the shard_set_override/EngineOverrides trampolines below)
+// gets byte-exact guest-stack bytes.
+//
+// NOT used by step() below: step() is also called directly by NATIVE C++ beh_ handlers
+// (beh_actor_move_sm.cpp etc — see step()'s own header comment) that never cross the guest ABI —
+// at those call sites c->r[29] is WHATEVER the last unrelated guest call left it at, not a frame
+// belonging to this call. Framing there would push/pop against an essentially RANDOM stack
+// address, corrupting an unrelated live guest-stack region for the duration of the call (bug
+// found + fixed 2026-07-08: wiring this into step() itself produced an SBS packet_pool/scratch
+// divergence at f3773 in a completely unrelated subsystem, because the temporary frame collided
+// with real, concurrently-live guest stack data at whatever sp happened to be current for a
+// native caller). Guest-ABI reachers use THIS method directly instead of step().
+void Animation::stepFramed(uint32_t node) {
+  Core* c = this->core;
+  uint32_t save16 = c->r[16], save17 = c->r[17], save18 = c->r[18], save19 = c->r[19], saveRa = c->r[31];
+  c->r[29] -= 40;
+  c->mem_w32(c->r[29] + 16, save16);          // sw s0,16(sp) — LIVE incoming r16 (before s0<-a0)
+  c->r[16] = node;                            // s0 = a0 (node) — the body's own local
+  c->mem_w32(c->r[29] + 32, saveRa);          // sw ra,32(sp)
+  c->mem_w32(c->r[29] + 28, save19);          // sw s3,28(sp)
+  c->mem_w32(c->r[29] + 24, save18);          // sw s2,24(sp)
+  c->mem_w32(c->r[29] + 20, save17);          // sw s1,20(sp)
+
+  c->r[4] = node;                             // taxi-in for the still-taxi internal impl
+  anim_vm_76d68(c);
+
+  c->r[31] = c->mem_r32(c->r[29] + 32);
+  c->r[19] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 40;
+}
+
 void Animation::step(uint32_t node) {
   Core* c = this->core;
   c->r[4] = node;                            // taxi-in for the still-taxi internal impl
@@ -176,8 +215,11 @@ void Animation::step(uint32_t node) {
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
   rec_super_call(c, 0x80076D68u);
   uint32_t v0_o = c->r[2];
-  // Exclude FUN_80076D68's OWN 40-byte stack frame [sp-40, sp) — gen saves regs there, native never
-  // touches the guest stack. Sub-call frames are identical (both interpret the same jals).
+  // Exclude FUN_80076D68's OWN 40-byte stack frame [sp-40, sp) — this NATIVE (unframed) run never
+  // touches the guest stack (only stepFramed(), the guest-ABI entry, does); the SUBSTRATE run via
+  // rec_super_call pushes/pops its OWN real frame at whatever sp happens to be current for this
+  // native-triggered A/B check (not a real guest call site), so that transient frame is expected to
+  // differ from "untouched" and is excluded here, same as before this fix.
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 40) ? sp - 40 : 0;
   int ro = -1; for (uint32_t a = 0; a < 0x200000; a++) if (c->ram[a] != ramN[a] && !(a >= flo && a < sp)) { ro = (int)a; break; }
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
@@ -371,6 +413,27 @@ uint32_t Animation::advanceLinkChain(uint32_t node) {
 // bits seed the countdown; loadFrame() consumes it exactly like the anim-VM would. If the
 // descriptor's 0x2000 bit is set, dispatch the SAME frame executor (FUN_80075ff8) the VM's
 // exec_tail uses, with the SAME (jump-pointer-vs-address) split on the descriptor's tag bits.
+//
+// Guest frame mirror — TRIED and REVERTED 2026-07-08 (see docs/findings/animation.md for the full
+// investigation). FUN_80077C40's compiled body has a real 32-byte frame (`addiu sp,-32; sw ra,24
+// (sp); sw r17,20(sp); sw r16,16(sp)`, RE'd from generated/shard_5.c) — but unlike ObjectTable::
+// dispatch (object_table.cpp), attach() has NO single guest call site to mirror against: EVERY
+// reacher of Animation::attach is a NATIVE C++ "leaf dispatch" convenience call — rec_dispatch(c,
+// 0x80077C40u) / call3(...)/leaf3(...) from beh_a06_scripted_actor.cpp, beh_id_routed_dispatch.cpp,
+// beh_sop_intro_narration.cpp, beh_sop_intro_lifted.cpp — reached via EngineOverrides::run(), NOT
+// from compiled guest code executing a real `jal FUN_80077C40`. At every one of those call sites
+// c->r[29] is whatever an UNRELATED prior guest call left it at, not a frame belonging to this
+// call. (The substrate's OWN direct `func_80077C40(c)` call sites — e.g. generated/shard_2.c:6568 —
+// never reach this native override at all: attach is registered only via EngineOverrides, not
+// shard_set_override, so g_override[] stays empty and those calls just run gen_func_80077C40
+// unmodified on both A and B, byte-identical by construction.) Mirroring the frame here (tried)
+// pushed/popped 32 bytes at each of those ARBITRARY sp values, corrupting real, concurrently-live
+// guest-stack data at whatever depth the calling native beh_ handler happened to be at — produced a
+// NEW SBS divergence at 0x801FE906 (f62), a different address than the original residual, confirming
+// the mirror was writing over live data rather than reproducing a real frame. Reverted to the
+// original unframed body; the isDeadStackScratch exclusion in sbs.cpp is RESTORED (see there for the
+// full "verified dead, not waved off" analysis — this is a case where the residual is provably inert
+// scratch, not a byte-match target, because there is no canonical guest frame to match).
 void Animation::attach(uint32_t node, uint32_t table, uint32_t id) {
   Core* c = this->core;
   const uint32_t entryPtr = rd_u32(c, table + id * 4);
@@ -425,14 +488,34 @@ static void eov_animApplyFrame(Core* c)     { c->engine.animation.applyFrame(c->
 // psx_fallback-gated trampoline for shard_set_override (dual-registration pattern per
 // game/math/gte_math.cpp — core B / the pure substrate reference must keep running the exact
 // recompiled gen_func_* body, or SBS would just be comparing this port against itself).
-// NOTE: FUN_80076D68 (Animation::step) is DELIBERATELY left unwired for substrate interception —
-// unlike applyFrame, its guest body pushes a REAL 40-byte guest-stack frame (saves r16/r19/ra) that
-// this native path doesn't replicate; wiring it produced an SBS guest-stack-scratch divergence
-// (2026-07-08, same class of issue as the Animation::attach residual in docs/findings/animation.md).
+//
+// FUN_80076D68 (Animation::step) is DELIBERATELY LEFT UNWIRED here — investigated + reverted
+// 2026-07-08 (docs/findings/animation.md has the full trace). stepFramed() (above) DOES mirror
+// FUN_80076D68's real 40-byte guest-stack frame byte-exact — that part of the RE is correct and
+// kept for future use. But wiring gov_animStep (via shard_set_override, so every direct substrate
+// `func_80076D68(c)` call routes to the native body) reproducibly diverges at f3773 in
+// packet_pool/packet_pool_ptrs (0x800BF4F4+), cascading to 30,000+ RAM bytes within a few hundred
+// frames. Root-caused via a per-call A/B trace comparing every node/frame/return value: the
+// divergence is NOT the frame (proved — it persists identically even routing gov_animStep through
+// the fully UNFRAMED step() instead of stepFramed()) and NOT the decision logic (every TRACED
+// node/return-value pair matched between cores). It isolates to exactly one call: node address
+// 0x800E7E80 — which sits immediately after the active-object-pool free-counter
+// (0x800E7E7C, see game/render/cull.cpp's CULL_FAR_MULT comment) — one specific call-site
+// (ra=0x8005AA90) passes this address as FUN_80076D68's node argument. Excluding just that one
+// address from the native route (a targeted A/B test, not a shipped fix) made the divergence
+// disappear completely (0-diff through 7000+ frames). This means anim_vm_76d68 (the existing,
+// PRE-EXISTING native reimplementation of FUN_80076D68 — not written or modified this session)
+// has a genuine fidelity gap for whatever this pool-adjacent "node" really represents — most
+// likely it aliases pool bookkeeping fields, not a real per-object animation struct, and the
+// existing port doesn't reproduce the substrate's handling of that edge case. This is a logic bug
+// in anim_vm_76d68 itself, not a stack-frame problem, and needs its own RE session (what does the
+// substrate actually do with a "node" at the pool-adjacent address — is 0x800E7E80 a legitimate
+// sentinel entry, or is this call site's argument computed wrong upstream). Out of scope for a
+// frame-mirror fix: reverted to unwired rather than special-casing one address as a bandaid.
 // step() stays reachable only via DIRECT native C++ callers (beh_actor_move_sm etc — see step()'s
-// own header comment), which never cross the guest ABI/stack boundary in the first place.
+// own header comment) and via EngineOverrides (ActorZonedAttacker's call1() leaf-dispatch
+// convenience), which never cross the guest ABI/stack boundary in the first place.
 extern void gen_func_80075F0C(Core*);
-extern void shard_set_override(uint32_t, void (*)(Core*));
 static void gov_animApplyFrame(Core* c)     { if (c->game->psx_fallback) { gen_func_80075F0C(c); return; } eov_animApplyFrame(c); }
 
 void Animation::registerOverrides() {
@@ -446,5 +529,6 @@ void Animation::registerOverrides() {
   // bypass rec_dispatch/EngineOverrides entirely — those must go through the recompiler's OWN
   // g_override[] table (shard_set_override) to be intercepted. Safe here: FUN_80075F0C's guest body
   // has NO stack-frame adjustment (verified in generated/shard_4.c — never touches r[29]).
+  extern void shard_set_override(uint32_t, void (*)(Core*));
   shard_set_override(0x80075F0Cu, gov_animApplyFrame);
 }

@@ -32,8 +32,19 @@ public:
   void cullWrapper();
 
   // cullWrap77acc (FUN_80077ACC): cull-wrapper variant, caller-supplied position in r5/r6/r7 (flags
-  // 1/4 rather than 0/0). Was ov_cull_wrap_77acc.
+  // 1/4 rather than 0/0). Was ov_cull_wrap_77acc. UNFRAMED — this is the public entry point EXISTING
+  // native beh_ callers (beh_record_list_scanner.cpp, script_vm.cpp) already use as a plain C++ call,
+  // not through the guest ABI; at those call sites c->r[29] is NOT a real guest sp belonging to this
+  // call; see cullWrap77accFramed()'s comment for why framing this method itself is a bug.
   void cullWrap77acc();
+
+  // cullWrap77accFramed — GUEST-ABI ENTRY ONLY, used by the shard_set_override trampoline
+  // (gov_cullWrap77acc). Mirrors FUN_80077ACC's real `addiu sp,-24; sw ra,16(sp)` frame around
+  // cullWrap77acc()'s body, for callers reached through the actual guest call graph (where
+  // c->r[29] is a real guest sp). Do NOT call this from native C++ — see cullWrap77acc()'s comment
+  // (bug found + fixed 2026-07-08: framing the shared public method broke its existing native
+  // callers by pushing/popping a guest-stack frame against an unrelated, arbitrary sp).
+  void cullWrap77accFramed();
 
   // coneCull2b278 (FUN_8002B278): standalone view-cone cull, sets node visible flag on keep. Taxi
   // c->r[4] = node. Was ov_cone_cull_2b278.
@@ -43,7 +54,13 @@ public:
   // c->r[4], camera-relative delta computed from obj+0x2E/0x32/0x36), but writes MODE flag
   // *(u32)0x1F800084 = 2 (vs cullWrapper's 0 and cullWrap77acc's 4) before dispatching to the base
   // cull body. Body from disas 0x800777FC..0x8007786C. 3 callers in beh_id_compare_motion_dispatch.
+  // UNFRAMED — see cullWrapperFlag2Framed()'s comment (same class of bug/fix as cullWrap77acc).
   void cullWrapperFlag2();
+
+  // cullWrapperFlag2Framed — GUEST-ABI ENTRY ONLY, used by the shard_set_override trampoline
+  // (gov_cullWrapperFlag2). Mirrors FUN_800777FC's real `addiu sp,-24; sw ra,16(sp)` frame around
+  // cullWrapperFlag2()'s body. Do NOT call from native C++ — see cullWrapperFlag2()'s comment.
+  void cullWrapperFlag2Framed();
 
   // enqueueQueueC (FUN_80077EFC): MANUAL push of `obj` onto queue C (0x1F800154/0x1F80015C, cap 28) —
   // sibling of enqueueQueueA/enqueueVisibleClass4. Same slti-N gate + push + counter bump shape.
@@ -91,18 +108,30 @@ public:
   // c->r[4]=obj, c->r[5]=offset.
   void cullWrapperOffsetY();
 
-  // NOTE on wiring: this whole camera-relative-wrapper family (cullWrapper/cullWrapperFlag2/
-  // cullWrap77acc/cullWrapperOffset/cullWrapperOffsetFlag1/cullWrapperOffsetY) is DELIBERATELY
-  // left unwired (no EngineOverrides/shard_set_override registration). Their substrate bodies
-  // (FUN_8007778C etc.) each push a REAL guest-stack frame (`addiu sp,-24` + `sw ra,16(sp)`) that
-  // these native C++ methods do not replicate — wiring them for substrate interception was tried
-  // (2026-07-08) and produced an SBS guest-stack-scratch divergence at 0x801FE906 (same class of
-  // issue as the Animation::attach stack residual, docs/findings/animation.md) within ~60 frames.
-  // A safe wiring needs the native override to also mirror the prologue's transient stack writes
-  // (sp -= N; store ra at +16) byte-for-byte, which is future work — not done here. The methods
-  // stay available for any DIRECT native C++ caller (bypasses the guest ABI/stack entirely).
+  // NOTE on wiring (RESOLVED 2026-07-08): this whole camera-relative-wrapper family (cullWrapper/
+  // cullWrapperFlag2/cullWrap77acc/cullWrapperOffset/cullWrapperOffsetFlag1/cullWrapperOffsetY) is
+  // now wired via shard_set_override (see cull.cpp registerOverrides()). Each substrate body
+  // (FUN_8007778C etc.) pushes a REAL guest-stack frame (`addiu sp,-24` + `sw ra,16(sp)`); the
+  // 2026-07-08 wiring attempt diverged at 0x801FE906 because the native methods didn't replicate
+  // that frame. Fixed by mirroring it: wrapFrame() descends the frame, spills the LIVE incoming
+  // ra to the RE'd offset, sets ra to the per-site guest jal-return constant, runs the cull body,
+  // then restores ra from the stack and ascends — byte-exact to the generated prologue/epilogue.
+  void registerOverrides();
 
 private:
+  // wrapFrame — shared frame mirror for the whole cullWrapper* family: every one of the 6
+  // variants has the IDENTICAL shape (`addiu sp,-24; sw ra,16(sp); ...; jal 0x8007712C; lw
+  // ra,16(sp); addiu sp,24`), differing only in the guest ra constant used for the internal jal.
+  // RE'd instruction-exact from generated/shard_{0,1,2,4,5,7}.c (gen_func_8007778C/800777FC/
+  // 80077ACC/800779D0/80077A4C/800778E4). Mirrors the descent + LIVE-ra spill + ascent around
+  // performBaseCull() so the guest stack bytes byte-match the substrate (no SBS exclusion needed).
+  void wrapFrame(uint32_t raConst);
+
+  // performBaseCullFramed — mirrors FUN_8007712C's OWN real 40-byte guest-stack frame around
+  // performBaseCull(). Used ONLY from wrapFrame() (the guest-ABI path); performBaseCull() itself
+  // stays unframed for its other native callers. See cull.cpp for the full RE + bug history.
+  void performBaseCullFramed();
+
   // Pure (read-only) cull decision — reproduces FUN_8007712c's control flow without committing
   // writes. queue: 0=none, 1=A, 2=B, 3=C.
   struct Decision { int kept; int wrote_state2; int queue; };

@@ -389,22 +389,24 @@ public:
   //
   // 0x801FE908..0x801FE914 (three words) is `Animation::attach`'s (FUN_80077C40) OWN compiled-
   // prologue stack frame — sp+16/+20/+24, the generated body's callee-save spills of r16 (a table-
-  // lookup pointer), r17 (`r17 = r4 + r0`, its own `node` argument copied verbatim) and ra. RE'd
-  // from generated/shard_5.c (gen_func_80077C40): the fn's entire 32-byte frame only ever WRITES
-  // these 3 words in the prologue and reads them back ONLY in its own epilogue before popping the
-  // frame (sp += 32); its two leaf callees (func_80076904 loadFrame, func_80075FF8) never touch sp
-  // at all. So nothing outside attach's own epilogue ever loads these words back — they're ordinary
-  // reusable stack memory the instant the frame pops, never re-read as "the spilled r16/r17/ra" by
-  // any other code path. Native `Animation::attach` (game/object/animation.cpp) is a plain C++ call
-  // with no guest stack frame, so it leaves these slots at cold-boot 0 while attach is repeatedly
-  // re-entered loading one scene's actors (observed f61-f116 for sp+20; sp+16/sp+24 converge back
-  // to matching after a single frame once ordinary reuse-traffic overwrites them); the whole frame
-  // converges by f117 once ordinary (matching, non-attach) traffic reuses the address range.
+  // lookup pointer), r17 (`r17 = r4 + r0`, its own `node` argument copied verbatim) and ra.
+  //
+  // MIRRORING TRIED AND REVERTED (2026-07-08, docs/findings/animation.md): unlike ObjectTable::
+  // dispatch (which mirrors cleanly because it has exactly ONE call shape, reached the same way
+  // every time), Animation::attach has NO single guest call site to mirror against — every reacher
+  // is a NATIVE C++ "leaf dispatch" convenience call (rec_dispatch/call3/leaf3 from 4+ beh_ files),
+  // reached via EngineOverrides::run(), never from compiled guest code executing a real `jal
+  // FUN_80077C40`. c->r[29] at each of those call sites is whatever an unrelated prior guest call
+  // left it at. Mirroring the frame there pushed/popped 32 bytes at that ARBITRARY sp, corrupting
+  // real concurrently-live guest-stack data and producing a NEW divergence at 0x801FE906 (f62) —
+  // proof the "mirror" was overwriting live data, not reproducing a real frame. Reverted; this
+  // exclusion is restored.
+  //
   // Verified DEAD, not waved off: `PSXPORT_SBS_BYTETRACE=0x801FE900,0x801FE920` over an 11,900+
   // frame autonav run classifies every byte in this frame SOFT-PHASE/PHASE/CLEAN (0 REAL) — value
   // sets + counts match within tolerance for the WHOLE run — and the residual never recurs after
   // f117 through the full run length. Same class of exception `Animation::step`'s own-frame
-  // exclusion already carves out (animation.cpp:46, gated behind the `animvm` per-call verify
+  // exclusion already carves out (animation.cpp, gated behind the `animvm` per-call verify
   // channel); attach has no per-call A/B harness of its own, so this lives here instead. See
   // docs/findings/animation.md.
   static bool isDeadStackScratch(uint32_t addr) {

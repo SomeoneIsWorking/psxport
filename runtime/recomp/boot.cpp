@@ -79,6 +79,7 @@ void register_engine_overrides(Game* game) {
   c->engine.releaseTriggerMotion.registerOverrides(); // release-trigger sub-motion cluster
   OverlayGt3Gt4::registerOverrides(game);            // A00-overlay GT3/GT4 packet emitters (0x801465EC/801467BC)
   NodeXform::registerOverrides(game);                // seedBlock/propagateRotmat/propagateAxis/buildAxis (0x800517BC/80051300/80051464/80051C8C)
+  c->engine.cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
 }
 
 int main(int argc, char** argv) {

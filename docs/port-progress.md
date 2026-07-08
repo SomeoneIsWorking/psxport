@@ -1453,22 +1453,33 @@ approxDist3 wiring); 6 Cull camera-wrapper variants ported but left UNWIRED (gue
   the #1 profiled hot function historically (docs §D). Added `eng_approxDist3` (new RE, FUN_80078240
   — sort-3-abs-values + weighted-sum fast magnitude estimator) alongside it. Both dual-wired.
   ovhit: 2858 / 5442 hits.
-- ⚠️ **6 Cull camera-relative-wrapper variants ported but NOT wired** — game/render/cull.{h,cpp}.
-  Added 3 new members (`cullWrapperOffset`/`cullWrapperOffsetFlag1`/`cullWrapperOffsetY`, FUN_
-  800779D0/80077A4C/800778E4) alongside the 3 pre-existing ones (`cullWrapper`/`cullWrapperFlag2`/
-  `cullWrap77acc`). **Tried wiring all 6 via EngineOverrides+shard_set_override (dual pattern) —
-  broke SBS**: `0x8007778C` alone is the single busiest rec_dispatch target in this whole band
-  (20818 calls in ~1500 frames) and, like its 5 siblings, its substrate body pushes a REAL
-  guest-stack frame (`addiu sp,-24` + `sw ra,16(sp)`) that the native C++ methods don't replicate.
-  Wiring produced an `[sbs-div]` at `0x801FE906` (guest-stack scratch) within ~62 frames — same
-  class of issue as the Animation::attach residual (docs/findings/animation.md), just newly
-  triggered because these 6 functions had NEVER been wired before (the class's own header called
-  itself "Currently ORPHANED"). **Reverted the wiring, kept the 6 ported methods** (documented as
-  unwired in cull.h) — a safe wiring needs the native override to also mirror the prologue's
-  transient stack writes byte-for-byte, left as explicit future work.
-- Gate: `PSXPORT_SBS_MODE=full` autonav, 90s / several thousand frames, **zero `[sbs-div]`, zero
-  VIOLATION** (with the Cull wiring reverted). `PSXPORT_DEBUG=ovhit` confirms every wired leaf above
-  actually fires (not dormant).
+- ✅ **RESOLVED (2026-07-08, later session) — all 6 Cull camera-relative-wrapper variants WIRED,
+  byte-exact, 0-diff** — game/render/cull.{h,cpp}. The "wiring broke SBS, reverted" note above is
+  superseded: the divergence was a genuinely missing piece, not a reason to leave it unwired.
+  Fixed in two layers: (1) `Cull::wrapFrame(raConst)` mirrors each wrapper's own real 24-byte frame
+  (`addiu sp,-24; sw ra,16(sp)`, RE'd instruction-exact per-site from
+  generated/shard_{0,1,2,4,5,7}.c) — the piece the earlier attempt was missing; (2) a SECOND,
+  nested gap found only once (1) was fixed: FUN_8007712C (the cull body every wrapper calls) ALSO
+  pushes its own real 40-byte frame that the existing native `performBaseCull()` never mirrored —
+  added `performBaseCullFramed()` for that inner frame, used only from `wrapFrame()`. Additionally,
+  `cullWrapperFlag2`/`cullWrap77acc` already had EXISTING native C++ callers
+  (beh_id_compare_motion_dispatch.cpp; beh_record_list_scanner.cpp, script_vm.cpp) — framing the
+  shared method broke those; split into unframed public methods (native-facing, unchanged) +
+  `*Framed()` twins (guest-ABI-facing, used only by the `shard_set_override` trampolines). Full RE
+  + bisection trail in docs/findings/animation.md.
+- Gate: `PSXPORT_SBS_MODE=full` autonav, 95s / 8790+ frames, **zero `[sbs-div]`, zero VIOLATION**,
+  with all 6 Cull wrappers wired. Verified firing via a temporary hit-counter (removed after
+  confirmation): 8007778C≈160k, 80077ACC≈67k, 800777FC≈8k, 800779D0≈8k, 80077A4C≈5.6k,
+  800778E4≈2.7k hits in a 30s sample.
+- ⚠️ **`Animation::step` (FUN_80076D68) wiring investigated, reverted (2026-07-08)** — the guest
+  frame mirror (`Animation::stepFramed()`) IS correct (RE'd + verified byte-exact in isolation),
+  but wiring it exposes an UNRELATED, pre-existing fidelity gap in `anim_vm_76d68` (not written
+  this session) for node address `0x800E7E80` (pool-adjacent — sits right after the active-object
+  free-counter at 0x800E7E7C), called from one site (ra=0x8005AA90). Root-caused via per-call A/B
+  trace: every OTHER traced call matched exactly; excluding just this one address made the
+  divergence disappear entirely. Not fixed here (would need special-casing one address — a banned
+  magic-constant bandaid, not a fix); reverted to unwired. `stepFramed()` kept, documented, for
+  whoever RE's that call site next. Full trail in docs/findings/animation.md.
 **SESSION 2026-07-08 — A00-overlay GT3/GT4 render-packet emitter (0x801465EC/0x801467BC, the
 busiest still-substrate `rec_dispatch` leaf in free-roam): both owned as `class OverlayGt3Gt4`
 (game/render/overlay_gt3gt4.{h,cpp}).**

@@ -24,6 +24,14 @@ public:
   // recomp super-call at 0x80076D68 for regression checking.
   void step(uint32_t node);
 
+  // stepFramed(node): step()'s guest-frame-mirrored body — descends FUN_80076D68's real 40-byte
+  // stack frame (spilling the LIVE incoming r16/r17/r18/r19/ra), runs the VM, then ascends. The
+  // frame mirror itself is correct and RE'd from generated/shard_7.c, but NOT currently wired to
+  // anything (see registerOverrides()'s comment / docs/findings/animation.md): wiring it exposed a
+  // separate, PRE-EXISTING fidelity gap in anim_vm_76d68 for one pool-adjacent "node" address
+  // (0x800E7E80), unrelated to the frame. Kept available (public) for whoever picks that up.
+  void stepFramed(uint32_t node);
+
   // loadFrame(node): FUN_80076904 — POSE-TABLE FRAME LOADER. Given node's cursor (node+0x38,
   // an index-record pointer) and pose table base (node+0x3C), resolves the CURRENT keyframe
   // record (indexed by the u16 at cursor[0]) and unpacks its packed rotation/scale payload into
@@ -66,8 +74,10 @@ public:
   // beh_ handlers AND any substrate-internal caller) reaches these native methods uniformly.
   // FUN_80075F0C (applyFrame) is ALSO dual-wired via shard_set_override (see .cpp) because the
   // substrate reaches it through direct `func_<addr>(c)` call sites, not just rec_dispatch.
-  // FUN_80076D68 (step) is DELIBERATELY NOT wired here — see step()'s header comment and
-  // animation.cpp's gov_animApplyFrame comment for why (guest-stack-frame mismatch risk). Called
-  // once from boot.cpp.
+  // FUN_80076D68 (step) is DELIBERATELY NOT wired here (investigated + reverted 2026-07-08 — see
+  // the .cpp comment above gov_animApplyFrame / docs/findings/animation.md): the frame mirror
+  // (stepFramed()) is correct, but wiring surfaces an unrelated, pre-existing anim_vm_76d68
+  // fidelity gap for node address 0x800E7E80 (pool-adjacent, not a normal animation node) that
+  // needs its own RE session. Called once from boot.cpp.
   void registerOverrides();
 };

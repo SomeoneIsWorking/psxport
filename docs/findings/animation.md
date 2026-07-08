@@ -1,5 +1,128 @@
 # Findings — Animation subsystem (game/object/animation.cpp)
 
+## RESOLVED: Cull camera-relative wrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4) wired byte-exact via guest-frame mirroring (2026-07-08)
+
+- **Task**: own the 6 `Cull::cullWrapper*` variants (game/render/cull.{h,cpp}) that were RE'd/ported
+  but left deliberately unwired, because wiring them (2026-07-08, same day, earlier) diverged at
+  0x801FE906 — the native methods didn't replicate the substrate's real `addiu sp,-24; sw ra,16(sp)`
+  frame that each variant's compiled body pushes before its internal `jal FUN_8007712C`.
+- **Fix, layer 1 (the assigned task)**: `Cull::wrapFrame(raConst)` mirrors each wrapper's own 24-byte
+  frame — descend sp, spill the LIVE incoming `ra` at `sp+16` (RE'd instruction-exact from
+  generated/shard_{0,1,2,4,5,7}.c), set `ra` to the per-site constant, run the body, restore, ascend.
+  All 6 RA constants RE'd from the actual `c->r[31] = 0x…;` line in each `gen_func_*` body.
+- **Fix, layer 2 (found this session, not obviously implied by the task)**: mirroring the OUTER
+  wrapper frame alone still diverged at `0x801FE904..908`. RE'ing `gen_func_8007712C` itself
+  (generated/shard_1.c) showed FUN_8007712C — the cull body EVERY wrapper calls — ALSO pushes its
+  own real 40-byte frame (`sw r19,28(sp)` [obj, before repurpose] / `sw r16,16(sp)` [dx] /
+  `sw r17,20(sp)` [dy] / `sw r18,24(sp)` [dz] / `sw ra,32(sp)`), NESTED one level deeper. The
+  existing native `Cull::performBaseCull()` (a pure-C++ reimplementation, no r29 use at all) never
+  reproduced this INNER frame — a gap invisible until wiring made anything actually reach that
+  stack depth. Added `Cull::performBaseCullFramed()` (mirrors FUN_8007712C's own frame, used ONLY
+  from `wrapFrame()`) — with both layers, the wrapper family is fully byte-exact.
+- **Fix, layer 3 (a second, DIFFERENT bug found while wiring, same class as the leaf-dispatch bug
+  below)**: `cullWrapperFlag2()` (0x800777FC) and `cullWrap77acc()` (0x80077ACC) ALREADY had existing
+  NATIVE C++ callers (beh_id_compare_motion_dispatch.cpp; beh_record_list_scanner.cpp,
+  script_vm.cpp) that call them as plain methods, not through the guest ABI. Applying `wrapFrame()`
+  to the SHARED method body broke those callers (c->r[29] there is not a real guest sp — framing
+  pushed/popped against essentially-random stack, corrupting live unrelated guest-stack data).
+  Split each into an UNFRAMED public method (used by the existing native callers, calls
+  plain `performBaseCull()`, no frame) plus a `*Framed()` twin (wraps the unframed method in
+  `wrapFrame()`, used only by the guest-ABI `eov_`/`gov_` trampolines). The other 4
+  variants (cullWrapper, cullWrapperOffset, cullWrapperOffsetFlag1, cullWrapperOffsetY) have no
+  native callers and are framed directly, no split needed.
+- **Verification**: `PSXPORT_SBS_MODE=full` autonav headless, 95s run reaching frame 8790+: **0
+  sbs-div lines**. All 6 `shard_set_override` trampolines confirmed firing with substantial hit
+  counts via a temporary counter (removed after confirmation) — e.g. 8007778C≈160k,
+  80077ACC≈67k, 800777FC≈8k, 800779D0≈8k, 80077A4C≈5.6k, 800778E4≈2.7k hits in a 30s sample.
+- **Method note**: the "arbitrary sp for a native leaf-dispatch/direct-C++ caller" bug class (layer
+  3 here, and the `Animation::step`/`Animation::attach` entries below) recurred 3 times this
+  session. General rule going forward: before adding `wrapFrame()`/frame-mirroring to any method,
+  grep for existing NATIVE (non-guest-ABI) callers of that exact method name first — if any exist,
+  the method must split into an unframed (native-facing) and a framed (guest-ABI-facing) entry
+  point; never frame a method whose callers include a plain C++ call site.
+
+## INVESTIGATED, REVERTED: `Animation::step` (FUN_80076D68) wiring — frame mirror is correct, but exposes a pre-existing `anim_vm_76d68` fidelity gap for a pool-adjacent node address (2026-07-08)
+
+- **Task**: wire `Animation::step` (0x80076D68) via `shard_set_override`, mirroring its real 40-byte
+  guest-stack frame (`Animation::stepFramed()`, RE'd from generated/shard_7.c gen_func_80076D68 —
+  frame layout confirmed correct: `sw r16,16(sp)` [BEFORE repurpose to node] / `sw ra,32(sp)` /
+  `sw r19,28(sp)` / `sw r18,24(sp)` / `sw r17,20(sp)`).
+- **First bug found (same "arbitrary sp" class as the Cull wrappers above)**: `step()`'s existing
+  PUBLIC method is ALSO called directly by native beh_ handlers (beh_actor_move_sm.cpp,
+  beh_flagbit_timer_machine.cpp, beh_id_compare_motion_dispatch.cpp, game/core/engine.cpp) as a
+  plain C++ call — never crossing the guest ABI. Wiring `stepFramed()` INTO `step()` itself (the
+  first attempt) broke those callers. Fixed by keeping `step()` unframed (as originally) and adding
+  `stepFramed()` as a separate, guest-ABI-only entry point, exactly like the Cull wrapper split.
+- **Second bug found**: `EngineOverrides::register_(0x80076D68u, …, eov_animStep)` is ALSO reached
+  by a native "leaf dispatch" convenience call — `ActorZonedAttacker::call1(c, node, FN_80076D68)`
+  (game/ai/actor_zoned_attacker.cpp) calls `rec_dispatch(c, addr)` directly from native behavior
+  code, not from a real guest call site. `EngineOverrides::run()` intercepts this BEFORE the
+  substrate's own dispatch, so `eov_animStep` must ALSO stay unframed (verified: no substrate call
+  site reaches 0x80076D68 via `rec_dispatch` at all — every one uses the direct `func_80076D68(c)`
+  trampoline instead, so `EngineOverrides::run()` for this address only ever sees the native
+  leaf-dispatch case).
+- **Third bug found (a routing mistake introduced while fixing the second)**: after making
+  `eov_animStep` unframed, `gov_animStep` (the `shard_set_override` trampoline, reached ONLY from
+  genuine direct substrate `func_80076D68(c)` calls with a real guest sp) was ROUTING THROUGH
+  `eov_animStep` — silently losing the frame mirror for the one call path that actually needed it.
+  Fixed: `gov_animStep` calls `stepFramed()` directly, never through `eov_animStep`.
+- **After fixing all three routing bugs, the divergence PERSISTED** (f3773, packet_pool region,
+  cascading to 30,000+ bytes) — proving the remaining bug is not a routing/framing problem at all.
+  Root-caused via a per-call A/B trace (temporary debug prints comparing node/frame/sp/ra/v0 for
+  every `gov_animStep` invocation on both cores around f3760-3785):
+  - Every TRACED node/return-value pair matched exactly between core A and core B.
+  - The divergence persisted IDENTICALLY even when `gov_animStep` was changed to call the fully
+    UNFRAMED `step()` instead of `stepFramed()` — conclusively ruling out the frame as the cause.
+  - Isolated to exactly one call: node address **0x800E7E80**, which sits immediately after the
+    active-object-pool free-counter (0x800E7E7C — see game/render/cull.cpp's `CULL_FAR_MULT`
+    comment), called from one specific site (ra=0x8005AA90). A targeted A/B test (falling back to
+    `gen_func_80076D68` for just this one address, native routing for everything else) made the
+    divergence disappear completely — 0-diff through 7000+ frames.
+  - Conclusion: `anim_vm_76d68` (the existing native reimplementation of FUN_80076D68 — NOT written
+    or touched this session) has a genuine, pre-existing fidelity gap for whatever this
+    pool-adjacent "node" really represents. It's very likely aliasing pool bookkeeping fields
+    rather than a real per-object animation struct, and the current port's interpretation of that
+    edge case doesn't match the substrate. This is a LOGIC bug in `anim_vm_76d68`, not a
+    stack-frame problem — out of scope for a frame-mirror fix.
+- **Decision**: reverted `Animation::step`'s wiring entirely (both `EngineOverrides::register_` and
+  `shard_set_override` for 0x80076D68) rather than special-case the one address (that would be a
+  banned magic-constant bandaid, not a fix). `stepFramed()` is KEPT (correct, RE'd, documented) as
+  dead code available for whoever RE's the 0x800E7E80 call site and either fixes `anim_vm_76d68`'s
+  handling of it or determines it needs its own dedicated native path.
+- **Needed next**: RE the caller at ra=0x8005AA90 (what does it actually think 0x800E7E80 is —
+  a real animation node from a struct at a fixed offset, or a bug in ITS OWN argument
+  computation?) and RE what `gen_func_80076D68` does with that address on the substrate side that
+  `anim_vm_76d68` doesn't reproduce.
+
+## REVERTED (attempted, does not apply): `Animation::attach` (FUN_80077C40) guest-frame mirror — no single guest call site to mirror against (2026-07-08)
+
+- **Task**: replace the `isDeadStackScratch` (0x801FE908..0x801FE914) SBS exclusion for
+  `Animation::attach` with a proper frame mirror, following the `ObjectTable::dispatch` pattern.
+- **RE**: `gen_func_80077C40` (generated/shard_5.c) does have a real 32-byte frame (`sw ra,24(sp)`
+  / `sw r17,20(sp)` / `sw r16,16(sp)`), and mirroring it (descend, spill LIVE incoming r16/r17/ra,
+  run the body, restore, ascend) is mechanically straightforward and was implemented.
+- **Why it doesn't work, unlike `ObjectTable::dispatch`**: `ObjectTable::dispatch` mirrors cleanly
+  because it has exactly ONE call shape, reached the same way every time (a single guest
+  dispatch loop). `Animation::attach` has NO single guest call site to mirror against — EVERY
+  reacher is a NATIVE C++ "leaf dispatch" convenience call: `rec_dispatch(c, 0x80077C40u)` /
+  `call3(...)` / `leaf3(...)` from beh_a06_scripted_actor.cpp, beh_id_routed_dispatch.cpp,
+  beh_sop_intro_narration.cpp, beh_sop_intro_lifted.cpp — reached via `EngineOverrides::run()`,
+  never from compiled guest code executing a real `jal FUN_80077C40`. (The substrate's OWN direct
+  `func_80077C40(c)` call sites — e.g. generated/shard_2.c:6568 — never reach this native override
+  at all: attach is registered only via `EngineOverrides`, not `shard_set_override`, so
+  `g_override[]` stays empty for this address and those calls just run `gen_func_80077C40`
+  unmodified on both cores, byte-identical by construction — they were never the problem.)
+- **Result of mirroring anyway**: at every native leaf-dispatch call site, `c->r[29]` is whatever
+  an unrelated prior guest call left it at — not a frame belonging to this call. Pushing/popping 32
+  bytes there corrupted real, concurrently-live guest-stack data, producing a NEW divergence at
+  `0x801FE906` (f62) — a DIFFERENT address than the original residual, proof the "mirror" was
+  overwriting live data rather than reproducing a real frame.
+- **Decision**: reverted to the original unframed body; `isDeadStackScratch` restored in
+  `runtime/recomp/sbs.cpp` with an updated comment recording this investigation. The residual stays
+  masked — it is provably inert scratch (see the exclusion's own comment for the
+  `PSXPORT_SBS_BYTETRACE` verification), and there is no canonical guest frame for it to byte-match
+  against.
+
 ## FIXED: `anim_unpack_pose_triple` ate a shared nibble, corrupting every subsequent per-limb pose field (2026-07-08)
 
 - **Symptom**: after `register_engine_overrides()` was fixed to actually run for SBS/DualCore/Selftest's
