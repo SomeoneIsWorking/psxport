@@ -76,3 +76,21 @@ Narrate one line before acting; after each landed commit restate what happened. 
 each push. Keep a standing wave so the ownership gap always closes; only pause piling on when the gate is
 red (converge first). See also: docs/faithful-execution.md, docs/port-progress.md, tools/codemap.py,
 tools/findings.py, docs/config.md (PSXPORT_DEBUG channels).
+
+## 6. Two tiers: frontier (verified) + wide-RE (ahead of it)
+Decouple expensive RE from the serial 0-diff gate by running two kinds of agent at once:
+- **Frontier tier (verified ownership):** the tight loop of §1–§3 — own → wire → SBS-full 0-diff →
+  operator integrates → push. One coherent cluster at a time; every push is byte-verified. This is what
+  actually advances `main`'s trustworthy coverage.
+- **Wide-RE tier (ahead of the frontier):** a BIGGER fleet on disjoint address regions doing deep RE
+  into named struct types + FAITHFUL DRAFT native methods that stay **UNWIRED and UNVERIFIED** — no
+  override registration, no SBS run. Drafts are dead code that must still COMPILE (added to cmake). They
+  bank understanding + a ready-to-wire port so that when the frontier reaches a region, wiring+gating is
+  a fast follow instead of a from-scratch RE. Deliverable is RE docs (engine_re.md / code-map / findings)
+  + draft classes; the operator integrates the docs freely and the drafts compile-checked (they can't
+  affect the gate because nothing calls them).
+- Wiring a banked draft later = move it onto the frontier tier: register it, SBS-gate 0-diff, push. Mirror
+  guest-stack frames at draft time (per the CLAUDE.md directive) so the later gate passes first try.
+- Sizing: wide-RE can be many agents (RE is embarrassingly parallel and gate-free); the frontier tier
+  stays serial-ish because each push must gate 0-diff. Don't pile frontier integrations while the gate is
+  red — converge first. Wide-RE never blocks on the gate, so it can always run.
