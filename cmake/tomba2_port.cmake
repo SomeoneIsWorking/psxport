@@ -173,6 +173,7 @@ set(PORT_SRC
   game/ai/beh_a06_scripted_actor.cpp
   game/ai/beh_a06_script_fades.cpp
   game/ai/beh_a08_scene_actor.cpp
+  game/ai/beh_toy_spawn_family.cpp
   game/ai/beh_sop_intro_pilot.cpp
   game/ai/beh_sop_intro_lifted.cpp
   game/ai/beh_sop_intro_narration.cpp

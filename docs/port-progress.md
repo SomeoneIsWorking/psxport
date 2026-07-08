@@ -2379,3 +2379,18 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
   `UNHANDLED op` garbage and jump to addresses outside valid PSX RAM; Ghidra's own analyzer also finds
   zero functions there. Flagged as a recompiler-coverage bug, not RE'd further. Full writeup:
   docs/engine_re.md "Wide-RE survey: 0x80090000-0x8009FFFF".
+
+**SESSION 2026-07-08 (wide-RE) — 0x80126000-0x8013FFFF (A00 gameplay overlay, middle band):** ~210
+`ov_a00_gen_*` symbols in range; 55 already owned pre-session, 5 DRAFTED this session (compile-only,
+unwired, unverified, no SBS run), 153 still MAPPED-ONLY. DRAFTED (`game/ai/beh_toy_spawn_family.cpp`):
+`beh_arm_countdown_if_linked_ready_80127420`, `beh_distance_band_predicate_801274bc`,
+`beh_spawn_toy_child_type5_80127720`/`type4_8012763c`/`type2_80127510` — a per-object "toy/child
+spawner" family using the legacy `FUN_80072DDC` allocator (distinct from `Spawn::dispatch`). 14
+sibling functions in the same cluster (0x80126040-0x80127450, the top-level dispatcher + physics
+integrators) were traced but NOT drafted — they read/write the shared `GBASE=0x800BF870` global blob
+`beh_lift_platform.cpp` already references, and need a RAM dump to confirm field roles before porting
+byte-exact. Full per-function notes + the complete 153-address UNOWNED table in docs/engine_re.md
+"Wide-RE survey: 0x80126000-0x8013FFFF". Flagged two HIGH-VALUE next targets: the case-handler bodies
+of already-owned `beh_substate_edge_orchestrator` (6 unowned leaves, 0x8012E8A8-0x80130524) and
+`beh_cull_substate_orchestrator` (6 unowned leaves, 0x8013272C-0x80133184) — the orchestrators
+themselves are LIVE but dispatch out to substrate for every case body.

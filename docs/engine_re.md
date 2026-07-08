@@ -2238,3 +2238,130 @@ anything calls into this range at runtime it's itself a sign of a wrong branch t
   `runtime/recomp/repl.cpp` — existing HLE/tap wiring for this band (all consistent with the RE above,
   no changes made).
 - No new `game/` files this session — see verdict above.
+## Wide-RE survey: 0x80126000-0x8013FFFF (A00 gameplay overlay, middle band)
+
+Session scope: enumerate still-substrate addresses in the 0x80126000-0x8013FFFF band, RE + draft a
+tractable cluster, map the rest. Ground truth: `generated/ov_a00_shard_{0,1}.c` (`ov_a00_gen_<addr>`
+symbols). `tools/codemap.py` regenerated (`docs/code-map.md`) after this session's drafts landed —
+449 addresses tracked, 24 ORPHAN (includes this session's 5 new drafts, correctly unwired).
+
+### Drafted: the "toy/child spawner" cluster, 0x80126040-0x80127798 (19 functions)
+
+A per-object behavior family that spawns companion/effect child objects via the LEGACY allocator
+`FUN_80072DDC` (established call shape from `beh_a08_scene_actor.cpp`'s `sub8013DD48`: (owner, ?,
+cls, type) -> child ptr or 0) — a DIFFERENT primitive than the newer `Spawn::dispatch(cls,type,list)`
+family in `game/world/spawn.cpp`. Several functions here read/write a large shared global blob at
+`GBASE = 0x800BF870` — the SAME struct `beh_lift_platform.cpp` already names by absolute address
+(`mem[0x800BF854]`/`[0x800BF89C]`/`[0x800BF8B9]`/`[0x800BFAD8]`), confirming this cluster is a sibling
+of the already-owned seaside/lift-platform behavior family, not an isolated one-off.
+
+**Drafted (game/ai/beh_toy_spawn_family.cpp — UNWIRED, UNVERIFIED, compiles):**
+- `0x80127420` `beh_arm_countdown_if_linked_ready_80127420(obj)` — if the linked object
+  (`*(u32*)(obj+0x10)`)'s `[+0x5E]` byte is set, arm `obj[+0x40]=obj[+0x4A]=20` and `obj[+0x05]=1`.
+- `0x801274BC` `beh_distance_band_predicate_801274bc(obj)` — 3-way distance-band compare against a
+  per-slot table row (`row = *(u32*)(base+slot*4+0xC0)`, `base=*(u32*)(obj+0x10)`,
+  `slot=obj[+0x60]`): `d=row[+0x2C]-obj[+0x2E]`; `d>=601` -> 1; `251<=d<601` -> -1; `d<251` -> 0.
+- `0x80127720` `beh_spawn_toy_child_type5_80127720(owner)` — spawn a type-5 child, no gate.
+- `0x8012763C` `beh_spawn_toy_child_type4_8012763c(owner)` — spawn a type-4 child; picks SFX/anim
+  variant 77 vs 78 from `GBASE[+0x82]`/`GBASE[+0x183]` mode bits.
+- `0x80127510` `beh_spawn_toy_child_type2_80127510(owner, subtype)` — spawn a type-2 child whose
+  sub-behavior/anim table entry is picked by `subtype`; gated by `mem[0x800BFA33]` "boosted" flag.
+
+All 5 are verbatim register-level transliterations (branch order preserved exactly — see
+`beh_distance_band_predicate_801274bc`'s inline comment for a case where naive re-ordering would
+invert the result) with named offsets from the trace; NOT yet confirmed against a live RAM dump.
+
+**Mapped, NOT drafted (needs a RAM dump before porting — GBASE field roles + the type-dispatch table
+at `0x80193F64`-ish aren't confirmed, and the top-level dispatcher is stateful across all of them):**
+| addr | lines | role (best-effort from static trace) |
+|---|---|---|
+| 0x80126040 | 31 | leaf: obj[+7] type-gate + obj[+0x4A] angle += 512, clamp/wrap at 8192; clears obj[+0xBF] flag if obj[+0x29]==0 |
+| 0x801260CC | 30 | init: obj[+0x44]/[+0x56] seeded from `FUN_80077768(obj[+0x46]<<4, obj[+0x56])`; sets obj[+0x2F]/[+0x5F] |
+| 0x80126138 | 46 | physics integrator: accumulates fixed-point velocity (obj[+0x44]/[+0x48]/[+0x2C]/[+0x34]) from obj[+0x44]*obj[+0x48]/obj[+0x4C] products; obj[+0x29] gates a branch |
+| 0x801261FC | 28 | thin wrapper: calls `FUN_80077768`, shifts result >>4 into obj[+0x46], tail-calls `ov_a00_func_80125C4C` (OUT OF BAND — 0x80125C4C is below this survey's floor, unmapped) |
+| 0x80126264 | 117 | **TOP-LEVEL DISPATCHER** — 6-way switch on obj[+4] (0=init->80126468, 1=table-dispatch by obj[+5] into 80127420/801266C8/8012681C/80126F9C, 2=SFX/hitbox toggle via 0x80040B48/0x80040C00 + FUN_8004D4C4/FUN_8004B0D8, else passthrough to 0x8007778C/0x8007A624) |
+| 0x80126468 | 144 | 3-case inline switch keyed by obj[+3]*4 table lookup (own switch, not a call to siblings) — seeds obj[+0x2E..0x36] scale/anim fields from a per-type record at `(*(u32*)(obj+0x10))[+192][obj*4]`; case 2 branches into an SFX-cue block (`FUN_80077B38`) |
+| 0x801266C8 | 82 | obj[+6] 2-case sub-machine: countdown obj[+0x40], SFX gate (`FUN_80077B38` id 23), anim-flip via `FUN_80049250`/`FUN_80049674`/`FUN_80049760`, sets init fields (obj[+0x80..0x86], obj[+5]=2, obj[+6]=4) |
+| 0x8012681C | 146 | obj[+6] 6-case (0..5) table dispatch (own inline switch on obj[+3]*4-1 mirrors 80126468's shape) — RNG-gated hit reactions via `FUN_8009A450`, calls out to 80126AA8 + 80127450 siblings |
+| 0x80126AA8 | 82 | **position/velocity integrator** — accumulates obj[+0x2C]/[+0x34] from obj[+0x44]*obj[+0x48]/[+0x4C] products (same shape as 80126138); anim-flip tail via `FUN_8004766C`/`FUN_80049250`/`FUN_80049674`/`FUN_80049760` |
+| 0x80126C00 | 124 | complex gate tree reading `0x8009C830`-ish fixed globals + GBASE fields (+130/+387/+636/+637/+657/+664) to pick between calling 80126E4C/80127720/8012763C/80127510 — the DISPATCH ROOT that decides WHICH toy-child spawner to invoke |
+| 0x80126E4C | 84 | loop (2 iterations) allocating child records via `FUN_80072DDC(obj,0,2,20)` + `FUN_80121918`/set fields; a batch-spawn variant of the type2/4/5 wrappers, parameterized by a bitmask read from GBASE+387 |
+| 0x80126F9C | 214 | obj[+6] 5-case (0..4) sub-machine: countdown/anim-advance, hitbox-flag toggles on `0x800BF870+130`/`+387` (same GBASE), spawns via 80126AA8; largest of the mapped-not-drafted set |
+| 0x80127384 | 40 | init: seeds a freshly-obtained child (from `FUN_80072DDC(0,0,2,20)`) with the SAME `CHILD_TABLE_PTR`/anim-id pattern as the drafted spawn wrappers — a 4th (undrafted) variant, keyed off obj[+0x7A] bit 6 |
+| 0x80127450 | 26 | angle/counter step: obj[+0x64] toggled 1<->2 gates a clamp of obj[+0x4A] vs obj[+0x4A]<0; then obj[+0x4A]+=obj[+0x50], capped at 8192 (SAME shape as 80126040's tail — low confidence on the cap-vs-wrap direction without a RAM sample, deliberately NOT drafted) |
+
+### High-value next targets: case-handlers of ALREADY-OWNED orchestrators
+
+Two owned dispatchers in this band call out to substrate leaves for their per-state bodies — those
+leaves are NOT separately owned yet, despite the dispatcher itself being LIVE. These are the best
+next frontier-tier targets in the band (the hard "name every field" work is already done by the
+dispatcher's own header comment; only the case bodies remain):
+
+- `beh_substate_edge_orchestrator` (0x8012EB54, game/ai/beh_substate_edge_orchestrator.cpp:40) calls
+  out to: `0x8012E8A8` (162 ln), `0x8012ED84` (401 ln), `0x8012F494` (64 ln), `0x8012F5B4` (428 ln),
+  `0x8012FD88` (406 ln), `0x80130524` (133 ln) — all UNOWNED.
+- `beh_cull_substate_orchestrator` (0x8013259C, game/ai/beh_cull_substate_orchestrator.cpp:46) calls
+  out to: `0x8013272C` (131 ln), `0x80132954` (70 ln), `0x80132A88` (162 ln), `0x80132D58` (88 ln),
+  `0x80132EDC` (146 ln), `0x80133184` (82 ln) — all UNOWNED.
+
+### Full UNOWNED address list, 0x80126000-0x8013FFFF (excl. this session's drafts)
+
+153 addresses remain substrate-only in this band after this session (out of ~210 total `ov_a00_gen_*`
+symbols in range). Not individually RE'd this session beyond the two clusters above — this table
+exists so a future agent can pick a slice without re-deriving the address list from scratch (diff
+`generated/ov_a00_shard_{0,1}.c` symbols against `docs/code-map.md`'s address column, same recipe
+used here). Sizes are generated-C line counts (rough proxy for MIPS instruction count / complexity).
+
+| addr | lines | addr | lines | addr | lines |
+|---|---|---|---|---|---|
+| 0x80127450 | 26 | 0x80127D1C | 211 | 0x801280E8 | 51 |
+| 0x801281B8 | 83 | 0x80128308 | 104 | 0x801284AC | 72 |
+| 0x801285EC | 87 | 0x801288D8 | 28 | 0x8012894C | 41 |
+| 0x801289F8 | 105 | 0x80128BC0 | 75 | 0x80128D04 | 183 |
+| 0x80129008 | 59 | 0x80129100 | 24 | 0x80129160 | 89 |
+| 0x801292E4 | 156 | 0x801295B4 | 77 | 0x801296E0 | 80 |
+| 0x8012982C | 84 | 0x80129984 | 150 | 0x80129E8C | 132 |
+| 0x8012A2D8 | 87 | 0x8012A43C | 70 | 0x8012A54C | 82 |
+| 0x8012A6A0 | 94 | 0x8012A814 | 95 | 0x8012A99C | 278 |
+| 0x8012AE84 | 967 | 0x8012BF34 | 448 | 0x8012C6DC | 127 |
+| 0x8012C910 | 308 | 0x8012CE30 | 26 | 0x8012CE8C | 24 |
+| 0x8012CEE0 | 29 | 0x8012CF4C | 65 | 0x8012D05C | 65 |
+| 0x8012D16C | 65 | 0x8012D27C | 85 | 0x8012D908 | 58 |
+| 0x8012DE34 | 52 | 0x8012DF08 | 20 | 0x8012DF50 | 44 |
+| 0x8012DFF8 | 18 | 0x8012E034 | 13 | 0x8012E05C | 30 |
+| 0x8012E0D0 | 18 | 0x8012E10C | 55 | 0x8012E1E4 | 55 |
+| 0x8012E2BC | 102 | 0x8012E478 | 44 | 0x8012E53C | 36 |
+| 0x8012E5CC | 42 | 0x8012E678 | 40 | 0x8012E70C | 56 |
+| 0x8012E7EC | 39 | 0x8012E87C | 13 | 0x8012E8A8 | 162 |
+| 0x8012ED84 | 401 | 0x8012F494 | 64 | 0x8012F5B4 | 428 |
+| 0x8012FD88 | 406 | 0x80130524 | 133 | 0x80130788 | 67 |
+| 0x801308E0 | 100 | 0x80130AC4 | 151 | 0x80130D5C | 210 |
+| 0x80131134 | 86 | 0x801312CC | 60 | 0x801313C4 | 54 |
+| 0x801314B4 | 48 | 0x80131578 | 32 | 0x80131600 | 45 |
+| 0x801316CC | 38 | 0x80131768 | 52 | 0x80131840 | 288 |
+| 0x80131F34 | 56 | 0x80132020 | 211 | 0x80132548 | 24 |
+| 0x8013272C | 131 | 0x80132954 | 70 | 0x80132A88 | 162 |
+| 0x80132D58 | 88 | 0x80132EDC | 146 | 0x80133184 | 82 |
+| 0x801332C4 | 91 | 0x80133444 | 48 | 0x80133500 | 22 |
+| 0x80133550 | 42 | 0x80133610 | 59 | 0x80133700 | 25 |
+| 0x80133774 | 28 | 0x801337E4 | 242 | 0x80134064 | 99 |
+| 0x801341E8 | 164 | 0x801344AC | 193 | 0x801347E4 | 102 |
+| 0x80134990 | 147 | 0x80134C5C | 86 | 0x80134DE8 | 107 |
+| 0x80135414 | 503 | 0x801365C4 | 99 | 0x80136748 | 56 |
+| 0x8013681C | 71 | 0x80136F08 | 153 | 0x80137198 | 529 |
+| 0x80137BE8 | 133 | 0x80137E70 | 449 | 0x801386A0 | 143 |
+| 0x8013892C | 36 | 0x801389C8 | 41 | 0x80138A64 | 34 |
+| 0x80138B04 | 80 | 0x80138C70 | 188 | 0x8013989C | 109 |
+| 0x80139A70 | 100 | 0x80139C2C | 113 | 0x80139E64 | 89 |
+| 0x8013A008 | 80 | 0x8013A184 | 97 | 0x8013A784 | 36 |
+| 0x8013A818 | 58 | 0x8013AC98 | 64 | 0x8013AEC0 | 14 |
+| 0x8013AEEC | 13 | 0x8013AF18 | 65 | 0x8013B024 | 162 |
+| 0x8013B534 | 114 | 0x8013C7F0 | 113 | 0x8013CDD4 | 373 |
+| 0x8013D454 | 78 | 0x8013D588 | 153 | 0x8013D828 | 110 |
+| 0x8013D9D4 | 121 | 0x8013DBE4 | 79 | 0x8013DD34 | 210 |
+| 0x8013E08C | 218 | 0x8013E424 | 122 | 0x8013E620 | 127 |
+| 0x8013E840 | 94 | 0x8013E9D8 | 31 | 0x8013EA64 | 72 |
+| 0x8013EBA0 | 41 | 0x8013EC48 | 46 | 0x8013ED08 | 22 |
+| 0x8013ED54 | 26 | 0x8013EDD0 | 53 | 0x8013EEA0 | 45 |
+| 0x8013EF58 | 23 | 0x8013EFA8 | 319 | 0x8013F4DC | 345 |
+| 0x8013FAE0 | 18 | 0x8013FB1C | 15 | 0x8013FB4C | 16 |

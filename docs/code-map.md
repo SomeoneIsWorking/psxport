@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 525 native fns, 444 owned addresses, 506 LIVE / 19 ORPHAN.
+Totals: 530 native fns, 449 owned addresses, 506 LIVE / 24 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -456,6 +456,11 @@ Totals: 525 native fns, 444 owned addresses, 506 LIVE / 19 ORPHAN.
 | 0x80124C6C | LIVE | `ReleaseTriggerMotion::circleOrbitMotion` | game/ai/release_trigger_motion.cpp:378 | 0x80077B5C | ----------------------------------------------------------------------… |
 | 0x80124E74 | LIVE | `beh_jumptable_release_trigger` | game/ai/beh_jumptable_release_trigger.cpp:118 | 0x8004B0D8 0x8004DAEC 0x80051D90 0x80077B5C 0x80123E9C 0x801241BC … |  |
 | 0x80125E0C | LIVE | `beh_pure_substate_dispatch` | game/ai/beh_pure_substate_dispatch.cpp:36 |  |  |
+| 0x80127420 | ORPHAN | `beh_arm_countdown_if_linked_ready_80127420` | game/ai/beh_toy_spawn_family.cpp:56 |  | (obj) — arm a 20-frame countdown if the linked object (obj[+0x10]'s ta… |
+| 0x801274BC | ORPHAN | `beh_distance_band_predicate_801274bc` | game/ai/beh_toy_spawn_family.cpp:74 |  | (obj) — a distance-band predicate. `row` is looked up from a per-slot … |
+| 0x80127510 | ORPHAN | `beh_spawn_toy_child_type2_80127510` | game/ai/beh_toy_spawn_family.cpp:152 |  | (owner, subtype) — spawn a child whose sub-behavior is picked by `subt… |
+| 0x8012763C | ORPHAN | `beh_spawn_toy_child_type4_8012763c` | game/ai/beh_toy_spawn_family.cpp:114 |  | (owner) — spawn a type-4 companion child, then feed GBASE's mode byte … |
+| 0x80127720 | ORPHAN | `beh_spawn_toy_child_type5_80127720` | game/ai/beh_toy_spawn_family.cpp:90 |  | (owner) — spawn a type-5 companion child via the legacy allocator, no … |
 | 0x80127798 | LIVE | `beh_area_transition_machine` | game/ai/beh_area_transition_machine.cpp:170 | 0x80041194 |  |
 | 0x80127C58 | LIVE | `cutsceneDirector` | game/ai/beh_a08_scene_actor.cpp:169 | 0x80081218 0x8013DD48 | ── FUN_80127C58 — the 10-state cutscene director ─────────────────────… |
 | 0x80127C9C | LIVE | `dat_tail` | game/ai/beh_area_transition_machine.cpp:73 |  |  |
