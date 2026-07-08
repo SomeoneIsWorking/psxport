@@ -1427,6 +1427,26 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-08 (wide-RE-ahead-of-frontier, isolated worktree) — 0x80040000-0x8004FFFF band:
+cube-text popup ledger RE'd + DRAFTED (UNWIRED, not gated); collision-walk cluster RE'd + MAPPED
+(NOT drafted — too risky to fold blind); ~180 addresses in-band still untouched.**
+- RE'd/DRAFTED (game/object/cube_text_ledger.{h,cpp}, added to cmake, compiles+links clean):
+  `FUN_80040A58` (cost-table lookup), `FUN_80040AA4` (popup spawn), `FUN_80040B48` (ledger
+  activate), `FUN_80040C00` (ledger deactivate) — the two leaves `actor_sm_reward.cpp` already
+  calls through `rec_dispatch` under "not independently RE'd" (`FN_40B48`/`FN_40C00`), plus their
+  siblings. Full derivation + layout in `docs/engine_re.md` ("Region 0x80040000-0x8004FFFF sweep").
+  **UNWIRED**: no `shard_set_override`/`EngineOverrides` registration, SBS gate NOT run. A follow-
+  up wave wires (dual-registration, matching `actor_sm_reward.cpp`'s pattern) + gates it.
+- RE'd/MAPPED, NOT drafted: the collision-walk / room-cell-graph cluster (`FUN_8004720C` +14
+  siblings) — dense scratchpad-resident (0x1F8001A8-0x1F8001EC) fixed-point slope/edge-code
+  traversal with `trap()` div-by-zero paths. Deliberately left unported pending a cross-check
+  against whatever already-owned terrain code touches 0x1F8001Cx (CLAUDE.md's later-158 warning).
+  Decomps banked: `scratch/decomp/region4004x.c`, `scratch/decomp/region4004x_b.c`.
+- Untouched: `FUN_80040558` (large per-object SM, same shape as `actor_sm_24448.cpp`) + its
+  callees `FUN_8004022C`/`FUN_80040390`/`FUN_80040410` (RE'd via Ghidra, decomp banked, not
+  drafted — entangled with un-RE'd sub-dispatchers). `FUN_8004005C`/`FUN_80040400` resisted a
+  clean Ghidra function-boundary decompile — needs a disas.py boundary spot-check first.
+
 **SESSION 2026-07-08 — 0x8006xxxx-0x8007xxxx band sweep: 5 new leaves owned + wired (AreaSlots
 grid-cell tracker, MusicCoord second-stage gain setter, Animation frame-applier, Math isqrt16/
 approxDist3 wiring); 6 Cull camera-wrapper variants ported but left UNWIRED (guest-stack risk).**

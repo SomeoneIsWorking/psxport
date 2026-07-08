@@ -1447,3 +1447,86 @@ UI state. Issue #6 does not currently reproduce; deferred until it reappears.)
 
  This is a faithful repair of a stateless-submit gap, not a behavior change: explicit prims are
  byte-identical to the super-call output.
+
+## Region 0x80040000-0x8004FFFF sweep (wide-RE-ahead-of-frontier, 2026-07-08) — cube-text ledger OWNED (draft), collision-walk cluster MAPPED
+
+Scope note: this region has ~247 `func_8004xxxx` bodies, 200 of which were still substrate-only at
+the start of this pass (`docs/code-map.md` cross-check). ActorReward (0x80049A60/49E54/4A3D4/4B150/
+4B208), ObjectTable, and the PcScheduler primitives (0x8005x) were explicitly out of scope (already
+owned / owned by a different band). Given the size, this pass RE'd and drafted ONE clean self-
+contained cluster fully, and mapped (named struct fields, NOT drafted) a second, much riskier
+cluster for a future pass. The remaining ~180 addresses are untouched.
+
+### Cluster A — the cube-text popup ledger (RE'd + NATIVE DRAFT, UNWIRED)
+
+`FUN_80040A58` / `FUN_80040AA4` / `FUN_80040B48` / `FUN_80040C00` are the two leaves
+`game/object/actor_sm_reward.cpp` already calls via `rec_dispatch` under the comment "UI/event
+side-effect (leaf, not independently RE'd)" (its `FN_40B48`/`FN_40C00` constants) — plus their two
+siblings (the cost-table lookup + the popup spawner). All four back the SAME subsystem as the
+already-owned `game/ai/beh_cube_text_spawn.cpp` (`FUN_8003AD48`, the "cube letters"/flying-text
+popup actor): a small ledger of "popup slots" keyed by the cube-text STRING TABLE at 0x800A33C8
+(stride 12; `beh_cube_text_spawn.cpp`'s `tbl_strp()` reads the SAME table). `game/scene/
+bg_scene_transition_sm.cpp` already gates on this ledger's counters (`0x800BF849` popup-active-
+count, `0x800ED06D` log index) as its "drain before advancing" wait — so the consumers of this
+ledger were already native; only the 4 producers were unowned.
+
+Full layout + RE (walked from the recompiler's INSTRUCTION-EXACT emission — `generated/shard_2.c:
+4542`, `shard_3.c:11258`, `shard_4.c:4944`, `shard_5.c:5496` — every `<hi>16<<16 + <lo>` constant
+hand-folded and cross-checked against Ghidra's decompile for structure) is in
+`game/object/cube_text_ledger.h`. Summary:
+  - `FUN_80040A58(slot, mode)` — pure lookup: nibble (hi if mode==0, lo if mode!=0) of the string-
+    table entry's byte+1, indexes a 16-entry `u32` cost table at 0x800A3B38.
+  - `FUN_80040B48(slot)` — activate: -1 if the ledger gate (0x800E7FEE, alias of actor_sm_reward's
+    `G_TALLY_CUR`) is 0; 0 if already active; else marks the slot active, bumps
+    `ACTIVE_COUNT`(u16@0x800BF8A8), adds the start-cost into the running accumulator
+    (`u32@0x800BF874` — SAME cell `Spawn::dropScoreGem` calls "running AP total"; the dual use is
+    flagged, NOT reconciled), and appends a (slot,0) event to the ring log (0x800ED06D/6E/74).
+  - `FUN_80040C00(slot)` — deactivate: same gate; a genuine ground-truth quirk reproduced exactly —
+    a deactivate on a NEVER-activated slot still increments `ACTIVE_COUNT` before re-checking the
+    state byte; terminal state is 0xFF (a second deactivate on the same slot is a no-op returning 0).
+  - `FUN_80040AA4(value, variant)` — spawns a `beh_cube_text_spawn` node via the (still-unowned,
+    opaque) freelist allocator `FUN_8007A980`, stamps vtable/type/variant/value/active-flag, bumps
+    the popup-active-count (0x800BF849 — the SAME counter `beh_cube_text_spawn`'s STATE 2 already
+    decrements on despawn), then calls the (still-unowned) init leaf `FUN_800727D4(node,value,
+    variant)`.
+
+Draft: `game/object/cube_text_ledger.{h,cpp}`, added to `cmake/tomba2_port.cmake`. Compiles clean,
+links into `tomba2_port`. **UNWIRED** — no `shard_set_override`/`EngineOverrides` registration, and
+the SBS-full gate has NOT been run. A follow-up wave wires it (dual-registration, matching
+`actor_sm_reward.cpp`'s pattern, since the sole callers are substrate direct-calls) and gates it.
+
+### Cluster B — the collision-walk / room-cell traversal system (RE'd + MAPPED, NOT drafted)
+
+`FUN_8004720C`, `FUN_8004766C`, `FUN_80048894`, `FUN_80048B30`, `FUN_80049250`, `FUN_80049674`,
+`FUN_800455C0`, `FUN_80045810`, `FUN_800459D0`, `FUN_800462E4`, `FUN_80047778`, `FUN_80047CBC`,
+`FUN_80048034`, `FUN_80048134`, `FUN_80048360` form one cohesive, MUCH more intricate cluster: a
+grid-cell room-collision walker operating almost entirely on scratchpad state (0x1F8001A8..0x1F8001EC
+— a "WalkCtx" the whole cluster shares), with signed fixed-point slope interpolation, div-by-zero
+traps (`trap(0x1c00)`/`trap(0x1800)` on the raw disassembly — genuine PSX BIOS-style exception
+triggers, not incidental), 2-bit rotation/edge codes, and a linked cell-graph traversal
+(`_DAT_1f8001d0`-based node array, 8 bytes/node, high bits `0x8000`/`0x4000`/`0x2000` selecting
+leaf-vs-portal-vs-plain cells). This is almost certainly the collision system CLAUDE.md's own
+"Native terrain once clobbered scratchpad 0x1F8001C0 → broke collision" warning refers to (later-158)
+— i.e. some of this scratchpad range is ALREADY known load-bearing for terrain collision elsewhere
+in the port.
+
+Given the risk (gameplay-critical collision math, dense fixed-point control flow, several `trap()`
+paths whose guest-visible side effects are not yet independently verified), this cluster was
+DELIBERATELY NOT drafted this pass — RE-first discipline says name the structure before folding, not
+before verifying it's safe to fold blind. Decompile dumps are banked at `scratch/decomp/
+region4004x.c` and `scratch/decomp/region4004x_b.c` (Ghidra project `main_ram`) for the next pass.
+Recommended next step: cross-reference this cluster's scratchpad cells (0x1F8001A8-0x1F8001EC)
+against whatever ALREADY-owned terrain/collision code touches 0x1F8001Cx, to confirm whether this
+IS that already-partially-understood system (in which case it should be folded into that owner's
+file) or a distinct one, before writing any native body.
+
+### Remaining ~180 addresses in 0x80040000-0x8004FFFF
+
+Untouched this pass — includes the larger per-object state-machine dispatcher `FUN_80040558`
+(param_1 = node, state byte at +4, sub-state at +5, case selector at +0x5E — same per-object SM
+shape as `game/object/actor_sm_24448.cpp`) and its direct callees `FUN_8004022C`/`FUN_80040390`/
+`FUN_80040410` (RE'd via Ghidra this pass, decomp banked in `scratch/decomp/region4004x_b.c`, but
+NOT drafted — too large/entangled with unRE'd sub-dispatchers `FUN_8003fbc4`/`FUN_8003fc00`/etc. to
+safely fold in one pass). `FUN_8004005C`/`FUN_80040400` resisted a clean Ghidra function-boundary
+decompile (0 functions returned) — their guest code likely straddles Ghidra's inferred boundary with
+a neighboring function; needs a manual disas.py spot-check of the boundary before a future RE pass.
