@@ -452,7 +452,13 @@ void Engine::sceneEventFifoFaithful() { Core* c = core;
 // (base[1]!=0 || base[0x0a]!=0) else clear it. phase>=2 is a no-op. Leaf callees stay substrate. Faithful
 // to the recomp body; a direct child of ov_field_frame (was `d0(c, 0x8004fe84)`).
 void Engine::sceneRenderListBuilder() { Core* c = core;
-  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8004FE84u, sceneRenderListBuilderFaithful()); return; }   // faithful: gen mirror
+  // sceneRenderListBuilderFaithful dispatches through rec_dispatch to substrate leaves
+  // (0x8004F430/74/514/6D0, selected by base[1]); those leaves are not proven yield-free, so
+  // MV_CHECK's synchronous compare can observe residual v0/v1 across a yield boundary and
+  // misreport it as a divergence (mv_tdd.log 2026-07-08: 0x8004FE84 FAILED (2+ diffs) at v0/v1 —
+  // not a real yield-abort, a mismatch abort from this). Plain call, not MV_CHECK — yields —
+  // SBS-gated; re-arm once the leaves are proven yield-free or ported native.
+  if (c->game && !c->game->pc_skip) { sceneRenderListBuilderFaithful(); return; }   // faithful: gen mirror
   const uint32_t B = 0x800bf548u;
   uint8_t phase = c->mem_r8(B + 0);
   if (phase == 0) {
@@ -2319,12 +2325,11 @@ void Engine::modePerFrameDispatchFaithful() {
   if (idx != 3) {
     uint32_t target = c->mem_r32(0x8009D1D4u + (uint32_t)idx * 4u);
     c->r[31] = 0x80022AB8u;               // jal-site ra for the indirect call (jalr v0)
-    // Area-0 (seaside) per-frame update stays native — Tomba's seaside per-frame tick. NOTE: per
-    // the "one global dispatch point" directive this should be an EngineOverrides entry so every
-    // caller of 0x80113C5C gets it uniformly (see findings) — kept inline here to preserve current
-    // behavior byte-for-byte without touching engine_overrides.h in this pass.
-    if (target == 0x80113C5Cu) { Behaviors::areaSeasidePerframe(c); }
-    else rec_dispatch(c, target);         // NO null check — matches gen, fails fast on target==0
+    // Faithful path: dispatch the SUBSTRATE mode fn unconditionally. Behaviors::areaSeasidePerframe
+    // is a REBUILD (result-equivalent, not byte-exact) — routing it here is what failed the strict
+    // gate (2026-07-08: 18+ stack/hi-lo diffs). It stays the pc_skip shortcut below; the faithful
+    // conversion of 0x80113C5C is a behaviors-wave item (lib-fallback recipe meanwhile).
+    rec_dispatch(c, target);              // NO null check — matches gen, fails fast on target==0
   }
   c->r[31] = c->mem_r32(sp + 16);
   c->r[29] += 24;

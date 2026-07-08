@@ -846,7 +846,8 @@ void CutsceneCamera::updateFaithful() {   // FUN_8006EC44
   if (outer == 0) {
     c->mem_w8(c->r[16] + 0, 1);
     c->r[31] = 0x8006EC84u;
-    init();
+    c->r[4] = c->r[16];
+    rec_dispatch(c, 0x8006EA7Cu);   // init FUN_8006EA7C(cam) — substrate until its faithful conversion
     goto epilogue;
   }
   if (outer != 1) goto epilogue;
@@ -863,7 +864,8 @@ void CutsceneCamera::updateFaithful() {   // FUN_8006EC44
     c->mem_w8(c->r[16] + 102, 0);
     if (mode < 18) dispatchModeFaithful(mode);
     c->r[31] = 0x8006EF28u;
-    shakeTail();
+    c->r[4] = c->r[16];
+    rec_dispatch(c, 0x8006C988u);   // shakeTail FUN_8006C988(cam)
   }
 epilogue:
   c->r[31] = c->mem_r32(sp + 20);
@@ -879,8 +881,8 @@ void CutsceneCamera::dispatchModeFaithful(uint8_t mode) {
       if (rm == 20) { c->r[31] = 0x8006ED58u; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM20_M0); return; }
       if (rm == 2)  { c->r[31] = 0x8006ED38u; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM2_M0);  return; }
       if (!(c->mem_r8(c->r[16] + 100) & 0x80)) {
-        c->r[31] = 0x8006ED7Cu; mainFollow();
-        c->r[31] = 0x8006ED84u; rotBuild();
+        c->r[31] = 0x8006ED7Cu; c->r[4] = c->r[16]; rec_dispatch(c, 0x8006E0F0u);   // mainFollow(cam)
+        c->r[31] = 0x8006ED84u; c->r[4] = c->r[16]; rec_dispatch(c, 0x8006E464u);   // rotBuild(cam)
       }
       rm = c->mem_r8(0x800BF870u);
       uint32_t fn = c->mem_r32(RENDER_FP_TABLE + (uint32_t)rm * 4);
@@ -893,20 +895,20 @@ void CutsceneCamera::dispatchModeFaithful(uint8_t mode) {
       if (rm == 7)  { c->r[31] = 0x8006EDFCu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM7_M1);  return; }
       if (rm == 20) { c->r[31] = 0x8006EE1Cu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM20_M1); return; }
       if (rm == 2)  { c->r[31] = 0x8006EE0Cu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM2_M1);  return; }
-      c->r[31] = 0x8006EE2Cu; trackFollow(c->r[16] + 56);
+      c->r[31] = 0x8006EE2Cu; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E228u);   // trackFollow
       return;
     }
-    case 2:  c->r[31] = 0x8006EE40u; snapFollowA(c->r[16] + 56); return;
-    case 3:  c->r[31] = 0x8006EE54u; pitchFollow(c->r[16] + 56); return;
-    case 4:  c->r[31] = 0x8006EE68u; snapFollowB(c->r[16] + 56); return;
-    case 5:  c->r[31] = 0x8006EE80u; snapFollow(G + 0x2c); return;
+    case 2:  c->r[31] = 0x8006EE40u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E294u); return;   // snapFollowA
+    case 3:  c->r[31] = 0x8006EE54u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E360u); return;   // pitchFollow
+    case 4:  c->r[31] = 0x8006EE68u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E2FCu); return;   // snapFollowB
+    case 5:  c->r[31] = 0x8006EE80u; c->r[4] = G + 0x2c; rec_dispatch(c, 0x8006E3B0u); return;   // snapFollow
     case 6:
       c->mem_w8(c->r[16] + 100, 0);
       c->mem_w32(c->r[16] + 12, c->mem_r32(G + 0x30));
       return;
     case 7:
-    case 14: c->r[31] = 0x8006EEF8u; snapFollow(c->r[16] + 56); return;
-    case 8:  c->r[31] = 0x8006EEA8u; simpleFollow(c->r[16] + 56); return;
+    case 14: c->r[31] = 0x8006EEF8u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E3B0u); return;   // snapFollow
+    case 8:  c->r[31] = 0x8006EEA8u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E3F4u); return;   // simpleFollow
     case 9:  c->r[31] = 0x8006EEB8u; c->r[4] = c->r[16]; rec_dispatch(c, OV_MODE9);   return;
     case 10: c->r[31] = 0x8006EEC8u; c->r[4] = c->r[16]; rec_dispatch(c, OV_A00_CAM); return;
     case 11:
@@ -916,7 +918,7 @@ void CutsceneCamera::dispatchModeFaithful(uint8_t mode) {
       c->mem_w8(c->r[16] + 3, 0);
       return;
     case 13: c->mem_w8(c->r[16] + 100, 6); return;
-    case 15: c->r[31] = 0x8006EF10u; simpleFollow(G + 0x2c); return;
+    case 15: c->r[31] = 0x8006EF10u; c->r[4] = G + 0x2c; rec_dispatch(c, 0x8006E3F4u); return;   // simpleFollow
     case 16: return;   // tail only (falls through to shakeTail in updateFaithful, same as the gen's L_8006EF20 fallthrough)
     case 17: c->r[31] = 0x8006EF20u; c->r[4] = c->r[16]; rec_dispatch(c, OV_MODE17); return;
     default: return;   // unreachable: mode<18 and the 18-entry table's values are all enumerated above
