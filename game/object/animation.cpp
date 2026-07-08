@@ -239,7 +239,20 @@ static void anim_unpack_pose_triple(Core* c, uint32_t obj, uint32_t& stream) {
   c->mem_w16(obj + 0x88, (uint16_t)v88);
   c->mem_w16(obj + 0x8a, (uint16_t)v8a);
   c->mem_w16(obj + 0x8c, (uint16_t)v8c);
-  stream = s + 5;
+  // BUG FIX (2026-07-08, SBS-full f61 divergence 0x800F2Bxx region): this 5-byte window packs
+  // THREE 12-bit fields (36 bits) into 40 bits (5 bytes) — v8c only consumes e3 (8 bits) + e4's
+  // HIGH nibble (4 bits) = 36 bits total. e4's LOW nibble is never consumed here; it's a SHARED/
+  // STRADDLING nibble that belongs to the NEXT 12-bit-field reader (Loop2's ODD-phase first field,
+  // which is exactly why `phase` seeds to 1 when this unpack ran — "there's a pending nibble").
+  // The advance must leave `stream` POINTING AT e4 (byte offset 4), not past it (offset 5), so the
+  // next reader re-reads that byte and masks off the low nibble. Hand-verified byte-for-byte
+  // against the recomp oracle (docs/findings/animation.md): node=0x800FB960, entryPtr chain ->
+  // stream bytes `.. 00 0F E1 04 A0 9A FF`; with stream left at the 0x0F byte, Loop2's ODD branch
+  // (c0=0x0F,c1=0xE1,c2=0x04,c3=0xA0,c4=0x9A) reproduces the substrate's exact output f8=0x0FE1,
+  // f10=0x004A, f12=0x009A — byte-identical to recomp_path. The old `s + 5` silently ate the
+  // shared nibble, corrupting every subsequent per-limb field for any node whose pose-triple
+  // (flags&0x80) unpack precedes a Loop1/Loop2 per-limb walk.
+  stream = s + 4;
 }
 
 void Animation::loadFrame(uint32_t node) {   // FUN_80076904
