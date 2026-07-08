@@ -335,7 +335,26 @@ void Engine::submode0() { Core* c = core;
 // ends with 0x80077b5c. All leaf callees stay substrate; only the control flow is native. Faithful to the
 // recomp body; a direct child of ov_field_frame (was `d0(c, 0x80025588)`).
 void Engine::sceneEventFifo() { Core* c = core;
-  if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x80025588u, sceneEventFifoFaithful()); return; }   // faithful: gen mirror
+  // MV_CHECK on this fork FAILED at 0x801FE954 (a leaf's own stack spill slot) with registers
+  // (v0/v1/s0-s7/gp/sp/fp/ra/hi/lo) all MATCHING — i.e. sceneEventFifoFaithful()'s own control
+  // flow/constants are not in question. Re-derived gen_func_80025588 by hand against the mirror
+  // line-by-line (frame/ra discipline, the kind==0/1/>=2 branch at L_80025610..30, the FIFO
+  // shift-loop trip count, and the phase 3/20-nothing vs 2/7-light-toggle vs else-0x800251f0
+  // branch at L_80025694..728) and found it byte-identical — this method is NOT the bug.
+  // The FIFO-drain calls 6 leaves that all "stay substrate" (0x80024e00/40aa4/74bf8/24f18/251f0/
+  // 77b5c) and none is proven yield-free/side-effect-free: func_80074bf8's (music/track-control)
+  // call graph reaches gen_func_80086620, which dispatches through a RUNTIME function-pointer
+  // slot (not a static jump table the recompiler could enumerate, unlike every other indirect
+  // dispatch in this call graph, which resolves to a closed case set) — a plausible current-BGM-
+  // handler callback. MV_CHECK runs the whole call graph TWICE (native leg, then rewound
+  // substrate leg) from one snapshot; any such leaf whose outcome depends on state outside
+  // {RAM, scratchpad, GPRs, hi/lo} (audio/sequencer engine state, an SPU voice cursor, ...) can
+  // legitimately produce a different second-invocation result — exactly the documented gate
+  // limit ("host hw side effects run twice while armed") already hit and handled the same way by
+  // sceneRenderListBuilder() right below. Plain call, not MV_CHECK; SBS (true single-invocation
+  // lockstep) is the correct gate for this leaf chain. Re-arm once the leaves are proven
+  // side-effect-free or ported native.
+  if (c->game && !c->game->pc_skip) { sceneEventFifoFaithful(); return; }   // faithful: gen mirror
   const uint32_t B = 0x800ed058u;
   uint8_t st = c->mem_r8(B + 2);
   if (st == 0) {
@@ -2187,6 +2206,27 @@ void Engine::areaModeDispatch() {
 // on the same value CoreB produces). The INIT block ALWAYS writes phase=1 to SCENE_STATE on the
 // way out -- including the idx==9 null-handler and the idx>=22 out-of-range case (gen's shared
 // L_80050F90 -> L_80050F94 fallback); the RUN block never writes SCENE_STATE, in any case.
+//
+// v0 (r2) end-state (bug #TDD-80050DE4): the gen body is a literal MIPS register-reuse translation
+// that leaves v0 holding whichever scratch value the LAST instruction on the taken path happened to
+// write, even on paths that dispatch nothing -- there is no dedicated "return value" in the source.
+// The original mirror never touched c->r[2] at all, so v0 leaked whatever the PREVIOUS rec_dispatch
+// call (elsewhere) had left there (observed: 0x80150000) instead of the gen's own constant.  Traced
+// every exit in generated/shard_7.c (gen_func_80050DE4, lines 6729-6929):
+//   - INIT (phase==0), idx<22 dispatched, idx==9 null, AND idx>=22 out-of-range ALL converge on
+//     L_80050F90 ("r2 = r0+1") -> L_80050F94 ("mem_w8(SCENE_STATE, r2)") -> epilogue: v0 == 1,
+//     unconditionally, even when a handler was dispatched (its own return value in v0 is clobbered
+//     by the post-call `r2 = 1` before falling into L_80050F94).
+//   - RUN (phase==1), idx<22 with a real target: v0 == the dispatched handler's own return value
+//     (falls out naturally from rec_dispatch reusing c->r[2] as its ABI return slot -- no fixup
+//     needed here).
+//   - RUN, idx==9 (null slot): gen loads the RUN table entry (0x80051118, the epilogue label used
+//     as a table sentinel) into v0 and falls straight to the epilogue with NO call and NO further
+//     r2 write -- v0 == 0x80051118 verbatim.
+//   - RUN, idx>=22 (out-of-range): gen's bounds check leaves v0 == 32769<<16 == 0x80010000 in the
+//     branch-delay slot before jumping to the epilogue.
+//   - phase < 0 or >= 2 (no-op): gen's "(phase<2)" boolean is 0 for this range and that same v0==0
+//     is what triggers the jump straight to the epilogue -- v0 == 0.
 void Engine::sceneStateStepFaithful() { Core* c = core;
   static constexpr uint32_t SCENE_STATE = 0x800F2418u;   // 32783<<16 + 9240
   static constexpr uint32_t MODE_IDX    = 0x800BF870u;   // 32780<<16 - 1936
@@ -2218,8 +2258,12 @@ void Engine::sceneStateStepFaithful() { Core* c = core;
       if (target) {
         c->r[31] = runRa[idx];
         c->r[4] = c->r[16];
-        rec_dispatch(c, target);
+        rec_dispatch(c, target);             // v0 = handler's own return value (natural)
+      } else {
+        c->r[2] = 0x80051118u;               // idx==9: gen's RUN-table literal, no call made
       }
+    } else {
+      c->r[2] = 0x80010000u;                 // idx>=22: gen's out-of-range sentinel (32769<<16)
     }
   } else if (phase == 0) {
     // INIT table (@0x80015A40). idx==9 (null handler) and idx>=22 (out-of-range) both skip the
@@ -2242,12 +2286,15 @@ void Engine::sceneStateStepFaithful() { Core* c = core;
       if (target) {
         c->r[31] = initRa[idx];
         c->r[4] = c->r[16];
-        rec_dispatch(c, target);
+        rec_dispatch(c, target);             // v0 clobbered again below, matching gen's post-call reset
       }
     }
-    c->mem_w8(SCENE_STATE, 1);   // ALWAYS -- idx in range, idx==9, and idx>=22 all reach this
+    c->r[2] = 1;                 // gen: v0 == 1 on EVERY INIT exit (dispatched, idx==9, idx>=22 alike)
+    c->mem_w8(SCENE_STATE, (uint8_t)c->r[2]);   // ALWAYS -- idx in range, idx==9, and idx>=22 all reach this
+  } else {
+    // phase < 0 or >= 2 (unsigned byte 2..255) -> no-op, straight to epilogue.
+    c->r[2] = 0;                 // gen: the "(phase<2)" boolean (false here) IS v0 at this exit
   }
-  // phase < 0 or >= 2 (unsigned byte 2..255) -> no-op, straight to epilogue.
 
   c->r[31] = c->mem_r32(sp + 20);
   c->r[16] = c->mem_r32(sp + 16);
@@ -2375,7 +2422,10 @@ void Engine::postRenderTick() {
 // jal-site constant before the FX-trigger leaf, and dispatches that leaf via rec_dispatch so it runs
 // the literal substrate body gen_func_80074590 (no EngineOverrides entry exists for 0x80074590, so
 // this is guaranteed byte-identical -- including gen_func_80074590's own ra-to-stack spill, which the
-// native Sfx::trigger port does not reproduce and must not be used here).
+// native Sfx::trigger port does not reproduce and must not be used here). v0/v1 (r2/r3) are dead to
+// every known caller but gen_func_80077D8C leaves them holding whatever value each branch happened to
+// compute (b, b&0x7f, 135, 0, 0x800C0000, 0x800BF808, b-1) instead of restoring/clearing them -- the
+// mirror must reproduce that leftover ABI end-state per-branch or MV_CHECK's v0/v1 compare fails.
 void Engine::postRenderTickFaithful() { Core* c = core;
   c->r[29] -= 24;
   const uint32_t sp = c->r[29];
@@ -2384,22 +2434,34 @@ void Engine::postRenderTickFaithful() { Core* c = core;
   c->r[16] = 0x800BF808u;                   // s0 = struct base
 
   uint8_t b = c->mem_r8(c->r[16] + 58);     // == 0x800BF842
+  c->r[2] = b;                              // v0 = loaded byte (gen never re-clears it on the
+                                             // early-exit path -- the mirror must reproduce that
+                                             // leftover ABI value, not leave v0/v1 untouched from
+                                             // the caller)
   if (b != 0) {
     uint8_t low = (uint8_t)(b & 0x7F);
+    c->r[3] = low;                          // v1 = andi r3,r2,0x7f (gen's unconditional delay slot)
     if (low == 1) {
       c->r[4] = 41; c->r[5] = 2; c->r[6] = (uint32_t)-65;
       c->r[31] = 0x80077DDCu;               // gen's jal-site ra for this call
       rec_dispatch(c, 0x80074590u);         // -> gen_func_80074590 (substrate, un-owned leaf)
-      c->mem_w8(c->r[16] + 58, 135);
+      c->r[2] = 135;                        // v0 = 135 (gen literal, r3/v1 stays == 1)
+      c->mem_w8(c->r[16] + 58, (uint8_t)c->r[2]);
     } else if (low == 2) {
+      c->r[3] = 0x800C0000u;                // v1 = lui r3,0x800c (gen's delay-slot clobber of low)
       c->r[4] = 42; c->r[5] = 2; c->r[6] = (uint32_t)-65;
       c->r[31] = 0x80077DF8u;               // gen's jal-site ra for this call
       rec_dispatch(c, 0x80074590u);
+      c->r[2] = 0;                          // v0 = r0
       c->mem_w8(c->r[16] + 58, 0);
     } else {
-      uint8_t v = c->mem_r8(c->r[16] + 58);
-      c->mem_w8(c->r[16] + 58, (uint8_t)(v - 1));
+      c->r[3] = 0x800C0000u - 2040;         // v1 = 0x800BF808 (gen: r3 = 0x800c0000 + -2040)
+      uint8_t v = c->mem_r8(c->r[3] + 58);  // same address as b (0x800BF842); re-read per gen
+      c->r[2] = (uint32_t)v - 1;            // v0 = byte - 1 (full 32-bit, not just the stored 8 bits)
+      c->mem_w8(c->r[3] + 58, (uint8_t)c->r[2]);
     }
+  } else {
+    c->r[3] = 0;                            // v1 = 0 & 127 (gen's delay slot on the b==0 branch)
   }
 
   c->r[31] = c->mem_r32(sp + 20);           // restore ra

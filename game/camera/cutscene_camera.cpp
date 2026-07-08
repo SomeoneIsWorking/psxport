@@ -829,12 +829,16 @@ void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera dri
 // there before calling), ra(r31)@sp+20 spilled with the caller's jal-site (0x80108B90u), s0 reassigned to
 // CAM_OBJ (hardcoded in the gen, independent of any cam_ this instance was constructed with) for the body,
 // both restored and the frame deallocated on every exit path (including the two early-return/idle paths,
-// which skip shakeTail exactly like the gen's direct goto to the restore tail). Every callee (native
-// sibling method OR still-substrate rec_dispatch leaf) gets r31 set to the exact gen jal-site constant
-// first, matching the reference-mirror style (Engine::fieldFrameFaithful / Sop::fieldModeFaithful). Native
-// siblings (init/mainFollow/rotBuild/trackFollow/snapFollow*/pitchFollow/simpleFollow/shakeTail) are called
-// DIRECTLY as C++ (they touch neither r29 nor r16) — not via rec_dispatch, since no EngineOverrides entry
-// exists for their guest addresses (rec_dispatch would fall through to the substrate gen bodies instead).
+// which skip shakeTail exactly like the gen's direct goto to the restore tail). Every callee gets r31 set
+// to the exact gen jal-site constant first, matching the reference-mirror style (Engine::fieldFrameFaithful
+// / Sop::fieldModeFaithful). init/mainFollow/rotBuild/trackFollow/snapFollow*/pitchFollow/simpleFollow/
+// shakeTail are dispatched via rec_dispatch(c, addr) to their guest address — since no EngineOverrides
+// entry exists for any of them, this falls straight through to the substrate gen_func body (same code the
+// oracle runs), NOT a call to the native sibling *methods* on this class (those exist for the pc_skip
+// path only). Calling convention for the two-arg follow leaves (trackFollow/snapFollowA/pitchFollow/
+// snapFollowB/snapFollow/simpleFollow) is a0(r4)=cam, a1(r5)=cam+56 (or G+0x2C for the "snap-to-master"
+// variants of snapFollow/simpleFollow) — verified against the gen bodies AND the real mode-dispatch jump
+// table at 0x80016A44 (18 uint32 entries, read from scratch/bin/tomba2/MAIN.EXE @ file offset 0x7244).
 void CutsceneCamera::updateFaithful() {   // FUN_8006EC44
   uint8_t outer = camR8(0);
   c->r[29] -= 24;
@@ -895,20 +899,20 @@ void CutsceneCamera::dispatchModeFaithful(uint8_t mode) {
       if (rm == 7)  { c->r[31] = 0x8006EDFCu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM7_M1);  return; }
       if (rm == 20) { c->r[31] = 0x8006EE1Cu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM20_M1); return; }
       if (rm == 2)  { c->r[31] = 0x8006EE0Cu; c->r[4] = c->r[16]; rec_dispatch(c, OV_RENDER_RM2_M1);  return; }
-      c->r[31] = 0x8006EE2Cu; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E228u);   // trackFollow
+      c->r[31] = 0x8006EE2Cu; c->r[4] = c->r[16]; c->r[5] = c->r[16] + 56; rec_dispatch(c, 0x8006E228u);   // trackFollow(cam, cam+56)
       return;
     }
-    case 2:  c->r[31] = 0x8006EE40u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E294u); return;   // snapFollowA
-    case 3:  c->r[31] = 0x8006EE54u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E360u); return;   // pitchFollow
-    case 4:  c->r[31] = 0x8006EE68u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E2FCu); return;   // snapFollowB
-    case 5:  c->r[31] = 0x8006EE80u; c->r[4] = G + 0x2c; rec_dispatch(c, 0x8006E3B0u); return;   // snapFollow
+    case 2:  c->r[31] = 0x8006EE40u; c->r[4] = c->r[16]; c->r[5] = c->r[16] + 56; rec_dispatch(c, 0x8006E294u); return;   // snapFollowA(cam, cam+56)
+    case 3:  c->r[31] = 0x8006EE54u; c->r[4] = c->r[16]; c->r[5] = c->r[16] + 56; rec_dispatch(c, 0x8006E360u); return;   // pitchFollow(cam, cam+56)
+    case 4:  c->r[31] = 0x8006EE68u; c->r[4] = c->r[16]; c->r[5] = c->r[16] + 56; rec_dispatch(c, 0x8006E2FCu); return;   // snapFollowB(cam, cam+56)
+    case 5:  c->r[31] = 0x8006EE80u; c->r[4] = c->r[16]; c->r[5] = G + 0x2c; rec_dispatch(c, 0x8006E3B0u); return;   // snapFollow(cam, MASTER_X)
     case 6:
       c->mem_w8(c->r[16] + 100, 0);
       c->mem_w32(c->r[16] + 12, c->mem_r32(G + 0x30));
       return;
     case 7:
-    case 14: c->r[31] = 0x8006EEF8u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E3B0u); return;   // snapFollow
-    case 8:  c->r[31] = 0x8006EEA8u; c->r[4] = c->r[16] + 56; rec_dispatch(c, 0x8006E3F4u); return;   // simpleFollow
+    case 14: c->r[31] = 0x8006EEF8u; c->r[4] = c->r[16]; c->r[5] = c->r[16] + 56; rec_dispatch(c, 0x8006E3B0u); return;   // snapFollow(cam, cam+56)
+    case 8:  c->r[31] = 0x8006EEA8u; c->r[4] = c->r[16]; c->r[5] = c->r[16] + 56; rec_dispatch(c, 0x8006E3F4u); return;   // simpleFollow(cam, cam+56)
     case 9:  c->r[31] = 0x8006EEB8u; c->r[4] = c->r[16]; rec_dispatch(c, OV_MODE9);   return;
     case 10: c->r[31] = 0x8006EEC8u; c->r[4] = c->r[16]; rec_dispatch(c, OV_A00_CAM); return;
     case 11:
@@ -918,7 +922,7 @@ void CutsceneCamera::dispatchModeFaithful(uint8_t mode) {
       c->mem_w8(c->r[16] + 3, 0);
       return;
     case 13: c->mem_w8(c->r[16] + 100, 6); return;
-    case 15: c->r[31] = 0x8006EF10u; c->r[4] = G + 0x2c; rec_dispatch(c, 0x8006E3F4u); return;   // simpleFollow
+    case 15: c->r[31] = 0x8006EF10u; c->r[4] = c->r[16]; c->r[5] = G + 0x2c; rec_dispatch(c, 0x8006E3F4u); return;   // simpleFollow(cam, MASTER_X)
     case 16: return;   // tail only (falls through to shakeTail in updateFaithful, same as the gen's L_8006EF20 fallthrough)
     case 17: c->r[31] = 0x8006EF20u; c->r[4] = c->r[16]; rec_dispatch(c, OV_MODE17); return;
     default: return;   // unreachable: mode<18 and the 18-entry table's values are all enumerated above
