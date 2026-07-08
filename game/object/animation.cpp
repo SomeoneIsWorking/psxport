@@ -414,28 +414,38 @@ uint32_t Animation::advanceLinkChain(uint32_t node) {
 // descriptor's 0x2000 bit is set, dispatch the SAME frame executor (FUN_80075ff8) the VM's
 // exec_tail uses, with the SAME (jump-pointer-vs-address) split on the descriptor's tag bits.
 //
-// Guest frame mirror — TRIED and REVERTED 2026-07-08 (see docs/findings/animation.md for the full
-// investigation). FUN_80077C40's compiled body has a real 32-byte frame (`addiu sp,-32; sw ra,24
-// (sp); sw r17,20(sp); sw r16,16(sp)`, RE'd from generated/shard_5.c) — but unlike ObjectTable::
-// dispatch (object_table.cpp), attach() has NO single guest call site to mirror against: EVERY
-// reacher of Animation::attach is a NATIVE C++ "leaf dispatch" convenience call — rec_dispatch(c,
-// 0x80077C40u) / call3(...)/leaf3(...) from beh_a06_scripted_actor.cpp, beh_id_routed_dispatch.cpp,
-// beh_sop_intro_narration.cpp, beh_sop_intro_lifted.cpp — reached via EngineOverrides::run(), NOT
-// from compiled guest code executing a real `jal FUN_80077C40`. At every one of those call sites
-// c->r[29] is whatever an UNRELATED prior guest call left it at, not a frame belonging to this
-// call. (The substrate's OWN direct `func_80077C40(c)` call sites — e.g. generated/shard_2.c:6568 —
-// never reach this native override at all: attach is registered only via EngineOverrides, not
-// shard_set_override, so g_override[] stays empty and those calls just run gen_func_80077C40
-// unmodified on both A and B, byte-identical by construction.) Mirroring the frame here (tried)
-// pushed/popped 32 bytes at each of those ARBITRARY sp values, corrupting real, concurrently-live
-// guest-stack data at whatever depth the calling native beh_ handler happened to be at — produced a
-// NEW SBS divergence at 0x801FE906 (f62), a different address than the original residual, confirming
-// the mirror was writing over live data rather than reproducing a real frame. Reverted to the
-// original unframed body; the isDeadStackScratch exclusion in sbs.cpp is RESTORED (see there for the
-// full "verified dead, not waved off" analysis — this is a case where the residual is provably inert
-// scratch, not a byte-match target, because there is no canonical guest frame to match).
+// Guest frame mirror — RE-INVESTIGATED 2026-07-08 (docs/findings/animation.md). The 2026-07-08
+// revert above was based on the assumption that c->r[29] at attach's entry is "whatever an
+// unrelated prior guest call left it at" and would therefore differ between SBS core A and core B.
+// A direct probe (PSXPORT_DEBUG=animstack in rec_dispatch, comparing c->r[29] at every reach of
+// 0x80077C40 on both cores over a full autonav run) DISPROVES that: r29 is IDENTICAL between A and
+// B at every single call, every frame (all 4 leaf-dispatch call sites: beh_a06_scripted_actor,
+// beh_id_routed_dispatch, beh_sop_intro_narration/lifted). This makes sense once stated: every
+// caller reaches attach via rec_dispatch (leaf3/call3/direct), and rec_dispatch is a NATIVE C++ call
+// on both cores — it never itself pushes/pops a guest frame, so whatever r29 the CALLER (a beh_*
+// handler, itself invoked at a specific point in the per-object walk) currently holds is passed
+// through unchanged to attach on both A and B alike. The prior revert's actual bug must therefore
+// have been in the SPILL/RESTORE bookkeeping itself (e.g. wrong offsets or restoring stale values),
+// not "there is no canonical frame". FUN_80077C40's real 32-byte frame (`addiu sp,-32; sw ra,24
+// (sp); sw r17,20(sp); sw r16,16(sp)`, RE'd from generated/shard_5.c gen_func_80077C40) is mirrored
+// below with the same LIVE-spill/restore RAII pattern as NodeXform's frames (node_xform.cpp) and
+// Cull::performBaseCullFramed (cull.cpp). isDeadStackScratch's exclusion in sbs.cpp is REMOVED.
 void Animation::attach(uint32_t node, uint32_t table, uint32_t id) {
   Core* c = this->core;
+  uint32_t s16 = c->r[16], s17 = c->r[17], sra = c->r[31];
+  c->r[29] -= 32;
+  c->mem_w32(c->r[29] + 24, sra);
+  c->mem_w32(c->r[29] + 20, s17);
+  c->mem_w32(c->r[29] + 16, s16);
+  struct Restore {
+    Core* c; uint32_t s16, s17, sra;
+    ~Restore() {
+      c->r[31] = c->mem_r32(c->r[29] + 24);
+      c->r[17] = c->mem_r32(c->r[29] + 20);
+      c->r[16] = c->mem_r32(c->r[29] + 16);
+      c->r[29] += 32;
+    }
+  } restore{c, s16, s17, sra};
   const uint32_t entryPtr = rd_u32(c, table + id * 4);
   c->mem_w32(node + 0x38, entryPtr);
   uint32_t desc = c->mem_r16(entryPtr + 6);

@@ -383,35 +383,11 @@ public:
     if (addr >= 0x1F8001F0u && addr < 0x1F8001FCu) return true;
     return false;
   }
-  // ---- isDeadStackScratch: the ONE non-pc_skip exception (memory the still-recomp side never
-  // reads — CLAUDE.md "no residual RAM diverges"). Applies unconditionally (MODE=full included),
-  // unlike isPcSkipScratch above which only fires under pc_skip=true.
-  //
-  // 0x801FE908..0x801FE914 (three words) is `Animation::attach`'s (FUN_80077C40) OWN compiled-
-  // prologue stack frame — sp+16/+20/+24, the generated body's callee-save spills of r16 (a table-
-  // lookup pointer), r17 (`r17 = r4 + r0`, its own `node` argument copied verbatim) and ra.
-  //
-  // MIRRORING TRIED AND REVERTED (2026-07-08, docs/findings/animation.md): unlike ObjectTable::
-  // dispatch (which mirrors cleanly because it has exactly ONE call shape, reached the same way
-  // every time), Animation::attach has NO single guest call site to mirror against — every reacher
-  // is a NATIVE C++ "leaf dispatch" convenience call (rec_dispatch/call3/leaf3 from 4+ beh_ files),
-  // reached via EngineOverrides::run(), never from compiled guest code executing a real `jal
-  // FUN_80077C40`. c->r[29] at each of those call sites is whatever an unrelated prior guest call
-  // left it at. Mirroring the frame there pushed/popped 32 bytes at that ARBITRARY sp, corrupting
-  // real concurrently-live guest-stack data and producing a NEW divergence at 0x801FE906 (f62) —
-  // proof the "mirror" was overwriting live data, not reproducing a real frame. Reverted; this
-  // exclusion is restored.
-  //
-  // Verified DEAD, not waved off: `PSXPORT_SBS_BYTETRACE=0x801FE900,0x801FE920` over an 11,900+
-  // frame autonav run classifies every byte in this frame SOFT-PHASE/PHASE/CLEAN (0 REAL) — value
-  // sets + counts match within tolerance for the WHOLE run — and the residual never recurs after
-  // f117 through the full run length. Same class of exception `Animation::step`'s own-frame
-  // exclusion already carves out (animation.cpp, gated behind the `animvm` per-call verify
-  // channel); attach has no per-call A/B harness of its own, so this lives here instead. See
-  // docs/findings/animation.md.
-  static bool isDeadStackScratch(uint32_t addr) {
-    return addr >= 0x801FE908u && addr < 0x801FE914u;
-  }
+  // isDeadStackScratch REMOVED 2026-07-08 (docs/findings/animation.md): Animation::attach
+  // (FUN_80077C40) now mirrors its real 32-byte guest-stack frame (game/object/animation.cpp) —
+  // a probe (PSXPORT_DEBUG=animstack) proved c->r[29] is IDENTICAL between SBS core A and core B at
+  // every reach of attach, disproving the earlier "no canonical frame" assumption that justified
+  // this exclusion. No residual RAM diverges (CLAUDE.md) — this was the last such exception.
   static bool isSpad(uint32_t a) { return a >= 0x1F800000u && a < 0x1F800400u; }
   void  capBt(Core* c, char* buf, size_t n);
   bool  navStep(Core* c, Nav& nv, uint32_t f, const char* tag);
@@ -818,9 +794,9 @@ void Sbs::Impl::checkDivergence() {
     int hits = 0;
     uint32_t i = 0;
     while (i < sz) {
-      if (readA(i) == readB(i) || isPcSkipScratch(base + i) || isDeadStackScratch(base + i)) { i++; continue; }
+      if (readA(i) == readB(i) || isPcSkipScratch(base + i)) { i++; continue; }
       uint32_t run_start = i;
-      while (i < sz && readA(i) != readB(i) && !isPcSkipScratch(base + i) && !isDeadStackScratch(base + i)) i++;
+      while (i < sz && readA(i) != readB(i) && !isPcSkipScratch(base + i)) i++;
       uint32_t run_end = i;
       uint32_t addr = base + run_start;
       const char* label = addrLabel(addr);
@@ -855,9 +831,9 @@ void Sbs::Impl::checkDivergence() {
     const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
     uint32_t n = mHi - mLo;
     for (uint32_t i = 0; i < n; i++)
-      if (a[i] != b[i] && !isPcSkipScratch(mLo + i) && !isDeadStackScratch(mLo + i)) { recordDivergence(mLo + i); return; }
+      if (a[i] != b[i] && !isPcSkipScratch(mLo + i)) { recordDivergence(mLo + i); return; }
     for (uint32_t i = 0; i < 0x400; i++)
-      if (mA->core.scratch[i] != mB->core.scratch[i] && !isPcSkipScratch(0x1F800000u + i) && !isDeadStackScratch(0x1F800000u + i))
+      if (mA->core.scratch[i] != mB->core.scratch[i] && !isPcSkipScratch(0x1F800000u + i))
         { recordDivergence(0x1F800000u + i); return; }
   }
 }
@@ -876,7 +852,7 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0, nMaskedRam = 0;
   for (uint32_t i = 0; i < n; i++) {
     if (a[i] == b[i]) continue;
-    if (isPcSkipScratch(mLo + i) || isDeadStackScratch(mLo + i)) { nMaskedRam++; continue; }
+    if (isPcSkipScratch(mLo + i)) { nMaskedRam++; continue; }
     if (!nDiff) firstAddr = mLo + i;
     lastAddr = mLo + i;
     pageCount[(mLo + i - 0x80000000u) >> PAGE_SHIFT]++;

@@ -171,6 +171,15 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // override is byte-compared against.
   // verify.inSubstrateLeg: MV_CHECK's substrate replay leg must behave exactly like SBS core B —
   // no EngineOverrides (game/core/verify_harness.h strict mirror TDD gate).
+  // TEMP PROBE (Job 2 investigation, docs/findings/animation.md): r29-at-entry for Animation::attach
+  // on both SBS cores, to determine whether the isDeadStackScratch residual is caused by an upstream
+  // native caller failing to descend r29 like the substrate (vs. attach's own frame needing a mirror).
+  if ((addr & 0x1FFFFFFFu) == 0x00077C40u && cfg_dbg("animstack")) {
+    Sbs* sbs = c->game ? c->game->sbs : nullptr;
+    int cid = sbs ? sbs->coreId(c) : -1;
+    fprintf(stderr, "[animstack] f%u core=%c r29=%08X ra=%08X a0=%08X\n",
+            sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), c->r[29], c->r[31], c->r[4]);
+  }
   if (c->game && !c->game->psx_fallback && !c->game->verify.inSubstrateLeg
       && c->game->engine_overrides.run(c, addr)) return;
   if (cfg_dbg("recdep")) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }

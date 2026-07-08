@@ -108,17 +108,17 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:584 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2438 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2513 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
-| 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:106 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
-| 0x80051300 | LIVE | `NodeXform::propagateRotmat` | game/render/node_xform.cpp:169 |  | per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd… |
-| 0x80051464 | LIVE | `NodeXform::propagateAxis` | game/render/node_xform.cpp:202 |  | sibling of propagateRotmat(): identical control flow, but the child's … |
+| 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:239 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
+| 0x80051300 | LIVE | `NodeXform::propagateRotmat` | game/render/node_xform.cpp:303 |  | per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd… |
+| 0x80051464 | LIVE | `NodeXform::propagateAxis` | game/render/node_xform.cpp:337 |  | sibling of propagateRotmat(): identical control flow, but the child's … |
 | 0x80051794 | LIVE | `Engine::identityMatrixAt` | game/scene/startup.cpp:27 |  | set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagona… |
-| 0x800517BC | LIVE | `NodeXform::seedBlock` | game/render/node_xform.cpp:141 |  | trivial 8-word block seeder: {x,0,y,0,z,0,0,0}. RE'd + cross-checked v… |
+| 0x800517BC | LIVE | `NodeXform::seedBlock` | game/render/node_xform.cpp:275 |  | trivial 8-word block seeder: {x,0,y,0,z,0,0,0}. RE'd + cross-checked v… |
 | 0x800517F8 | LIVE | `GraphicsBind::renderUpdateBody` | game/world/graphics_bind.cpp:102 | 0x80051300 | per-object RENDER-STATE UPDATE: build the object's transform, then sna… |
 | 0x800518FC | LIVE | `Engine::objMatrixCompose` | game/core/engine.cpp:910 | 0x80051128 0x80084110 0x80084470 0x80085480 | Engine::objMatrixCompose — FUN_800518FC. |
-| 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:71 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
+| 0x800518FC | LIVE | `NodeXform::buildWithOffset` | game/render/node_xform.cpp:203 |  | NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC. |
 | 0x80051B04 | LIVE | `GraphicsBind::installSceneRecord` | game/world/graphics_bind.cpp:89 |  | two-level scene-data-table pointer resolve. Pure address arithmetic, n… |
 | 0x80051B70 | LIVE | `GraphicsBind::recordInitBody` | game/world/graphics_bind.cpp:50 |  | per-object render-record INIT. Allocates a record (FUN_8007AAE8), zero… |
-| 0x80051C8C | LIVE | `NodeXform::buildAxis` | game/render/node_xform.cpp:242 |  | node-level sibling of build(): composes THIS node's own world matrix a… |
+| 0x80051C8C | LIVE | `NodeXform::buildAxis` | game/render/node_xform.cpp:378 |  | node-level sibling of build(): composes THIS node's own world matrix a… |
 | 0x80051E60 | LIVE | `PcScheduler::step` | game/core/pc_scheduler.cpp:555 |  | One scheduler pass over the 3 task slots (replaces FUN_80051e60). The … |
 | 0x80051F14 | LIVE | `PcScheduler::spawnPrim` | game/core/pc_scheduler.cpp:56 | 0x80080860 0x80080890 0x800808A0 | arm a task slot. Frame: sp-=24, s0 spill at +16, ra at +20. Slot write… |
 | 0x80051F80 | LIVE | `Engine::s4c` | game/core/engine.cpp:158 | 0x80106A14 | s4c() reference: sm[0x4c] == the AREA machine (the 9-state load/intro/… |
@@ -194,7 +194,7 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x80075A80 | LIVE | `AreaSlots::updateTail` | game/world/area_slots.cpp:15 | 0x80074BF8 0x80074E48 0x8008E0C0 0x80092660 0x80098F90 0x80099490 … | AreaSlots::updateTail — the last direct child of ov_field_frame at gue… |
 | 0x80075CEC | LIVE | `BgSceneTransitionSm::audioFadeTarget` | game/scene/bg_scene_transition_sm.cpp:65 |  | - Native ports of the tiny sub-leaves this SM calls ------------------… |
 | 0x80075D24 | LIVE | `MusicCoord::setGain2` | game/audio/music_coord.cpp:136 |  | MusicCoord::setGain2 — FUN_80075D24 body. See music_coord.h for the RE… |
-| 0x80075F0C | LIVE | `Animation::applyFrame` | game/object/animation.cpp:461 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80075F0C | LIVE | `Animation::applyFrame` | game/object/animation.cpp:471 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80076904 | LIVE | `Animation::loadFrame` | game/object/animation.cpp:300 |  |  |
 | 0x80076D68 | LIVE | `Animation::stepFramed` | game/object/animation.cpp:179 |  | Animation::stepFramed — GUEST-ABI ENTRY ONLY for FUN_80076D68 (RE: gen… |
 | 0x8007703C | LIVE | `Cull::enqueueByClass` | game/render/cull.cpp:217 |  | Cull::enqueueByClass — PC-native FUN_8007703C body. Class-keyed queue … |
@@ -204,7 +204,7 @@ Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 | 0x8007778C | LIVE | `Cull::wrapFrame` | game/render/cull.cpp:380 |  | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
 | 0x80077B38 | LIVE | `GraphicsBind::setGeomBody` | game/world/graphics_bind.cpp:118 |  | set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0… |
 | 0x80077B5C | LIVE | `Animation::advanceLinkChain` | game/object/animation.cpp:387 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80077C40 | LIVE | `Animation::attach` | game/object/animation.cpp:437 | 0x80075FF8 | ──────────────────────────────────────────────────────────────────────… |
+| 0x80077C40 | LIVE | `Animation::attach` | game/object/animation.cpp:433 | 0x80075FF8 | ──────────────────────────────────────────────────────────────────────… |
 | 0x80077E7C | LIVE | `Cull::enqueueQueueA` | game/render/cull.cpp:233 |  | Cull::enqueueQueueA — PC-native FUN_80077E7C body. Manual push of `obj… |
 | 0x80077EBC | LIVE | `Cull::enqueueVisibleClass4` | game/render/cull.cpp:201 |  | Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push … |
 | 0x80077EFC | LIVE | `Cull::enqueueQueueC` | game/render/cull.cpp:247 |  | Cull::enqueueQueueC — PC-native FUN_80077EFC body. Manual push onto qu… |

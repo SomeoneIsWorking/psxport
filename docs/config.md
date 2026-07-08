@@ -112,6 +112,14 @@ manual grep of `generated/shard_*.c` for `func_<addr>(c)` call sites every time.
 docs/findings/tooling.md for the full writeup, including the SBS/DualCore/Selftest registration gap
 this also uncovered.
 
+`animstack` (overlay_router.cpp, `rec_dispatch`) — TEMP INVESTIGATION PROBE for `Animation::attach`
+(0x80077C40): logs `[animstack] fN core=A/B r29=... ra=... a0=...` on every reach. Used 2026-07-08 to
+disprove the assumption behind the (now-removed) `isDeadStackScratch` SBS exclusion — the probe
+showed r29 is IDENTICAL between SBS core A and core B at every call, proving attach's guest-stack
+frame COULD be mirrored (see game/object/animation.cpp, docs/findings/animation.md). Left in place
+(cheap, single address-filtered branch) as the reference technique for the next "does this leaf's
+r29 actually diverge before you refuse to mirror it" question.
+
 `fadetrace` (screen_fade.cpp) — logs every native-path `ScreenFade::set` / `applyLeafCall` with the
 mode+rgb (first-time-per-tuple backtrace). Pairs with `PSXPORT_DISPWATCH=0x8007E9C8` (which surfaces
 every substrate fade dispatch with its guest stack). Together they show BOTH sides of the fade caller

@@ -94,6 +94,33 @@
   computation?) and RE what `gen_func_80076D68` does with that address on the substrate side that
   `anim_vm_76d68` doesn't reproduce.
 
+## SUPERSEDED 2026-07-08 (later same day): the "no single guest call site" premise below was WRONG — attach's frame IS now mirrored, `isDeadStackScratch` DELETED
+
+The section below (kept for the historical bisection method + evidence) concluded attach has "NO
+single guest call site to mirror against" and that r29 at each call site is "whatever an unrelated
+prior guest call left it at". That conclusion was never actually measured — it was inferred from
+"every reacher is a native leaf-dispatch convenience call". A direct probe disproves it:
+`PSXPORT_DEBUG=animstack` (temporary instrumentation in `runtime/recomp/overlay_router.cpp`'s
+`rec_dispatch`, comparing `c->r[29]` at every reach of 0x80077C40 on both SBS cores over a full
+autonav run) shows r29 is **IDENTICAL between core A and core B at every single call**, every frame.
+This is obvious in hindsight: `rec_dispatch` is a plain native C++ function on BOTH cores and never
+itself pushes/pops a guest frame, so whichever caller (a beh_* handler reached at a specific point in
+the per-object walk) currently holds some value in r29, THAT value passes through unchanged to attach
+on A and B alike — because the caller itself is reached identically on both cores up to that point.
+
+**Fix**: mirrored attach's real 32-byte frame (`addiu sp,-32; sw ra,24(sp); sw r17,20(sp); sw
+r16,16(sp)`, RE'd from `generated/shard_5.c gen_func_80077C40`) with the same LIVE-spill/restore RAII
+pattern as `NodeXform`'s frames (node_xform.cpp) and `Cull::performBaseCullFramed` (cull.cpp) — spill
+whatever's currently in `c->r[16]/r[17]/r[31]` at the RE'd offsets, run the body, restore. Deleted
+`Sbs::Impl::isDeadStackScratch` and all 5 call sites in `runtime/recomp/sbs.cpp` entirely.
+
+**Verification**: `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless, `isDeadStackScratch`
+removed: 0 divergence at 0x801FE908..0x801FE914 through 8400+ frames (the exact range the exclusion
+used to mask) — the residual it hid is genuinely gone, not re-appearing under a different guise. The
+prior attempt's real bug must therefore have been in the spill/restore bookkeeping itself (wrong
+offsets, or restoring stale captured values), not "there is no canonical frame" — worth remembering
+for the next "no single call site" refusal: MEASURE r29 before concluding it varies.
+
 ## REVERTED (attempted, does not apply): `Animation::attach` (FUN_80077C40) guest-frame mirror — no single guest call site to mirror against (2026-07-08)
 
 - **Task**: replace the `isDeadStackScratch` (0x801FE908..0x801FE914) SBS exclusion for

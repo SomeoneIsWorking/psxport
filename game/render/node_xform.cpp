@@ -34,8 +34,140 @@ extern void gen_func_80051300(Core*);
 extern void gen_func_80051464(Core*);
 extern void gen_func_800517BC(Core*);
 
+// Guest-stack frame mirrors — RE'd from the generated prologues (gen_func_<addr>, see each
+// function's own comment block above for the exact `sw` sequence). None of these 6 functions
+// read/write r29 in their own C++ body (all locals are named C++ variables, not register-mapped
+// stack slots), but the RECOMP side descends a real frame and spills whatever the CALLER currently
+// has in r16../ra at the RE'd offsets, then restores those exact values on return — a net-zero r29
+// move that nonetheless writes real, comparable bytes into guest RAM for the frame's lifetime.
+// Omitting this (as this file did until now) leaves that stack region untouched on the native side
+// while the recomp side's spills/restores run, so whatever OTHER call last wrote there shows through
+// instead — a real, reproducible SBS residual (see docs/findings/render.md / the f117-class
+// NodeXform residual). Mirrored here per the "MIRROR THE GUEST STACK" directive
+// (docs/faithful-execution.md; same pattern as Cull::wrapFrame/performBaseCullFramed and
+// Render::perObjRenderDispatch's GuestFrame): spill the LIVE c->r[..] values (whatever they happen
+// to hold — that's what the substrate's own callee-save spill captures too, since it has no idea
+// what those registers "mean" to the caller) into the RE'd offsets, run the body, then restore.
+namespace {
+// -32: +16 r16, +20 r17, +24 ra   (build 0x80051844, buildWithOffset 0x800518FC, buildAxis 0x80051C8C
+// share this shape except buildAxis's own offsets — see BuildAxisFrame below for its distinct layout)
+struct BuildFrame {
+  Core* c; uint32_t s16, s17, s18, sra;
+  explicit BuildFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]), sra(c_->r[31]) {
+    c->r[29] -= 32;
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 24, s18);
+    c->mem_w32(c->r[29] + 28, sra);
+    c->mem_w32(c->r[29] + 16, s16);
+  }
+  ~BuildFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 32;
+  }
+};
+// -32: +16 r16, +20 r17, +24 ra   (buildAxis 0x80051C8C)
+struct BuildAxisFrame {
+  Core* c; uint32_t s16, s17, sra;
+  explicit BuildAxisFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), sra(c_->r[31]) {
+    c->r[29] -= 32;
+    c->mem_w32(c->r[29] + 16, s16);
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 24, sra);
+  }
+  ~BuildAxisFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 32;
+  }
+};
+// -40: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 ra   (propagateRotmat 0x80051300)
+struct PropagateRotmatFrame {
+  Core* c; uint32_t s16, s17, s18, s19, s20, sra;
+  explicit PropagateRotmatFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
+      s19(c_->r[19]), s20(c_->r[20]), sra(c_->r[31]) {
+    c->r[29] -= 40;
+    c->mem_w32(c->r[29] + 28, s19);
+    c->mem_w32(c->r[29] + 36, sra);
+    c->mem_w32(c->r[29] + 32, s20);
+    c->mem_w32(c->r[29] + 24, s18);
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 16, s16);
+  }
+  ~PropagateRotmatFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 36);
+    c->r[20] = c->mem_r32(c->r[29] + 32);
+    c->r[19] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 40;
+  }
+};
+// -48: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 r22, +44 ra   (propagateAxis 0x80051464)
+struct PropagateAxisFrame {
+  Core* c; uint32_t s16, s17, s18, s19, s20, s21, s22, sra;
+  explicit PropagateAxisFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
+      s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), s22(c_->r[22]), sra(c_->r[31]) {
+    c->r[29] -= 48;
+    c->mem_w32(c->r[29] + 32, s20);
+    c->mem_w32(c->r[29] + 44, sra);
+    c->mem_w32(c->r[29] + 40, s22);
+    c->mem_w32(c->r[29] + 36, s21);
+    c->mem_w32(c->r[29] + 28, s19);
+    c->mem_w32(c->r[29] + 24, s18);
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 16, s16);
+  }
+  ~PropagateAxisFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 44);
+    c->r[22] = c->mem_r32(c->r[29] + 40);
+    c->r[21] = c->mem_r32(c->r[29] + 36);
+    c->r[20] = c->mem_r32(c->r[29] + 32);
+    c->r[19] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 48;
+  }
+};
+// -56: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 r22, +44 r23, +48 ra (propagate 0x80051128)
+struct PropagateFrame {
+  Core* c; uint32_t s16, s17, s18, s19, s20, s21, s22, s23, sra;
+  explicit PropagateFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
+      s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), s22(c_->r[22]), s23(c_->r[23]), sra(c_->r[31]) {
+    c->r[29] -= 56;
+    c->mem_w32(c->r[29] + 28, s19);
+    c->mem_w32(c->r[29] + 48, sra);
+    c->mem_w32(c->r[29] + 44, s23);
+    c->mem_w32(c->r[29] + 40, s22);
+    c->mem_w32(c->r[29] + 36, s21);
+    c->mem_w32(c->r[29] + 32, s20);
+    c->mem_w32(c->r[29] + 24, s18);
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 16, s16);
+  }
+  ~PropagateFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 48);
+    c->r[23] = c->mem_r32(c->r[29] + 44);
+    c->r[22] = c->mem_r32(c->r[29] + 40);
+    c->r[21] = c->mem_r32(c->r[29] + 36);
+    c->r[20] = c->mem_r32(c->r[29] + 32);
+    c->r[19] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 56;
+  }
+};
+}  // namespace
+
 void NodeXform::build(uint32_t node) {
   Core* c = core;
+  BuildFrame frame(c);
   const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
   const uint32_t SCR_R = 0x1F800020u;   // rot output
   c->mem_w32(SCR_M +  4, 0);
@@ -70,6 +202,7 @@ void NodeXform::build(uint32_t node) {
 // beh_id_compare_motion_dispatch (×3).
 void NodeXform::buildWithOffset(uint32_t node) {
   Core* c = core;
+  BuildFrame frame(c);
   const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
   const uint32_t SCR_R = 0x1F800020u;   // rot output
   c->mem_w32(SCR_M +  4, 0);
@@ -105,6 +238,7 @@ void NodeXform::buildWithOffset(uint32_t node) {
 // so in the sibling path it's already a byte offset. NO render packets, NO GTE ops.)
 void NodeXform::propagate(uint32_t node) {
   Core* c = core;
+  PropagateFrame frame(c);
   if (c->mem_r8(node + 9) == 0) return;
   int i = 0;
   while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
@@ -168,6 +302,7 @@ void NodeXform::seedBlock(uint32_t ptr, int16_t x, int16_t y, int16_t z) {
 // (FUN_800517F8) — its "downstream render setup" step.
 void NodeXform::propagateRotmat(uint32_t node) {
   Core* c = core;
+  PropagateRotmatFrame frame(c);
   if (c->mem_r8(node + 9) == 0) return;
   int i = 0;
   while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
@@ -201,6 +336,7 @@ void NodeXform::propagateRotmat(uint32_t node) {
 // only way to reach MAIN from it).
 void NodeXform::propagateAxis(uint32_t node) {
   Core* c = core;
+  PropagateAxisFrame frame(c);
   if (c->mem_r8(node + 9) == 0) return;
   int i = 0;
   while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
@@ -241,6 +377,7 @@ void NodeXform::propagateAxis(uint32_t node) {
 // against generated/shard_5.c gen_func_80051C8C.
 void NodeXform::buildAxis(uint32_t node) {
   Core* c = core;
+  BuildAxisFrame frame(c);
   const uint32_t M = node + 0x98;
   c->mem_w32(M +  0, 0x1000); c->mem_w32(M +  4, 0);
   c->mem_w32(M +  8, 0x1000); c->mem_w32(M + 12, 0);

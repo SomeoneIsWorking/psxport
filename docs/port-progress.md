@@ -1633,26 +1633,49 @@ owned as `Render::perObjRenderDispatch`/`billboardCompose1`/`billboardCompose2`/
   a FULL early return) into the same no-op as the explicit `CBC8` case (a genuine no-op that falls
   through to packet emission) — fixed to distinguish them, though this path is believed unreached by
   live data (33 valid indices, only 6 distinct case labels observed).
-- ⚠️ **NOT byte-exact yet — ONE residual SBS diff remains**, reproducible every run:
-  `[sbs-div] f118 0x801FE8E4..0x801FE8E8 (4 B) A=00 00 80 1F B=90 D4 0F 80`, converging back to
-  identical by f120 and staying clean through 9000+ further frames in every run. Evidence gathered
-  (`PSXPORT_SBS_NOPAUSE=0` last-writer map) shows this is **not a logic bug in the 4 ported
-  functions**: the diverging bytes are written by two ENTIRELY UNRELATED functions on each core — core
-  A (native) via still-substrate `0x80047778`, core B (recomp) via `Animation::attach`
-  (`0x80077C40`, the SAME function the just-landed `ec984ae` commit excluded a NEIGHBORING residual
-  for at `0x801FE908..0x801FE914`). A literal-passthrough ablation (having the override forward
-  straight to `gen_func_8003C8F4` instead of running `Render::billboardEmit`) produces ZERO diff,
-  proving the port's own guest reads/writes are correct; introducing the native call graph merely
-  shifts task-0's shared stack-depth trajectory enough to re-expose this same class of residual at a
-  neighboring address. **Root cause NOT closed** — needs the same `PSXPORT_SBS_BYTETRACE` convergence
-  verification `ec984ae` used, but that tool currently DEADLOCKS under this exact scenario (the
-  SIGTERM/atexit dump path in `runtime/recomp/sbs.cpp` calls non-async-signal-safe `fprintf`/`std::map`
-  from a signal handler while Coro fiber OS threads are live — a real tooling defect, filed here, not
-  fixed). Per CLAUDE.md ("no residual RAM diverges may be waved off") this is NOT swept under an
-  unverified exclusion; it is left OPEN and reported plainly instead.
-- **Gate:** `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless: exactly 1 `sbs-div` at f118
-  (see above), 0 elsewhere through 9090+ frames across multiple runs (all stopped by external
-  timeout, not crash).
+**SESSION 2026-07-08 (follow-up 2) — root-caused + fixed the f118 residual; deleted `isDeadStackScratch`.**
+- ✅ **Real root cause of the f118 class: `NodeXform`'s 6 methods (`game/render/node_xform.cpp`,
+  addresses 0x80051844/800518FC/80051128/800517BC/80051300/80051464/80051C8C) never mirrored their
+  real recomp guest-stack frames** (landed in `d0eb6f9`, BEFORE `37594c8` mandated frame mirroring) —
+  `build`/`buildWithOffset` (32 B), `propagate` (56 B), `propagateRotmat` (40 B), `propagateAxis`
+  (48 B), `buildAxis` (32 B) all descend a real `r29` frame and spill live `r16../ra` in the RE'd
+  recomp body (verified against `generated/shard_*.c` prologues) but the native port touched `r29`
+  nowhere. Evidence: the f118 last-writer trace showed core A's write to 0x801FE8E8 coming from a
+  totally unrelated function (`GraphicsBind::installSceneRecord`/other substrate leaves) while core
+  B's came from `NodeXform::propagateAxis`'s own spill — i.e. on the native side this stack address
+  belonged to a DIFFERENT logical frame than on the recomp side, because propagateAxis (and siblings)
+  never staked out their own frame there. Fixed with the same LIVE-spill/restore `GuestFrame`-style
+  RAII pattern as `Cull::performBaseCullFramed`/`Render::perObjRenderDispatch` (6 named frame structs
+  in node_xform.cpp, one per RE'd layout).
+- **Effect:** the f117/f118 divergence dropped from a hard "wrong function entirely" collision to a
+  near-total convergence — SBS still shows exactly the same 2-3 `sbs-div` hits at f117/f157 (down
+  from 3, one class eliminated outright), all still at 0x801FE8E4..EF, but a `PSXPORT_SBS_BYTETRACE`
+  settled-state classification over a ~90k-sample run shows the writers on both sides are now the
+  SAME set of (still-substrate) functions with matching call counts to within single digits (e.g.
+  `0x8003BFD4×10628` vs `×10624`) — consistent with two legitimate, independently-scheduled
+  subsystems (NodeXform's own spill and a content write nearby) briefly sharing the same stack
+  address at slightly different moments within the frame, not a wrong-address bug. **NOT fully
+  0-diff** — the residual is real but is now confined to a tiny (<0.1%) count mismatch between
+  otherwise-identical writers, a materially different (and much better characterized) class than
+  before. Left OPEN, not excluded — no mask added.
+- ✅ **`Animation::attach`'s OWN residual (the separate `0x801FE908..0x801FE914` exclusion) is FULLY
+  CLOSED.** The 2026-07-08 revert of attach's frame mirror was based on the assumption that r29 at
+  attach's entry differs between SBS cores (no canonical call site to mirror against, since every
+  reacher is a native `rec_dispatch`/`leaf3`/`call3` convenience call). A direct probe
+  (`PSXPORT_DEBUG=animstack`, `runtime/recomp/overlay_router.cpp`, comparing `c->r[29]` at every
+  reach of 0x80077C40 on both cores over a full autonav run) DISPROVES this: r29 is IDENTICAL between
+  A and B at every single call — `rec_dispatch` is a native C++ call on both cores and never itself
+  touches a guest frame, so the CALLER's r29 passes through unchanged on both sides alike. Mirrored
+  attach's real 32-byte frame (`game/object/animation.cpp`) with the LIVE-spill/restore pattern;
+  **`isDeadStackScratch` is DELETED from `runtime/recomp/sbs.cpp`** — SBS full-mode stays clean at
+  this address across 8000+ frames post-fix (verified; see docs/findings/animation.md).
+- **Gate:** `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless, `isDeadStackScratch` deleted:
+  2 `sbs-div` events (f117, f157; down from 3), 0 elsewhere through 8400+ frames, run stopped by
+  external timeout not crash/divergence. `PSXPORT_DEBUG=ovhit`-style hit confirmation for the 4
+  billboard leaves + NodeXform's 2 previously-uninstrumented siblings done via gdb dprintf probe
+  (24390/11106/3728/14834/6920/1854 hits respectively over a ~30s run) since `ovhit`'s atexit dump
+  doesn't survive this harness's SIGTERM-based `_exit()` shutdown path (a pre-existing tooling gap,
+  same class as the already-documented BYTETRACE/signal-handler-safety issue below).
 
 **SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
 80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**

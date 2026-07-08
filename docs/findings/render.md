@@ -476,3 +476,38 @@ Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY h
   docs/findings/scene.md "un-owned entity-behavior register-implicit leaves" for those.
 - **refs:** docs/port-progress.md later-283 (0x8013DD34 precedent); scratch/decomp (Ghidra project
   `tomba2_derail2`, `scratch/bin/tomba2/ram_derail2.bin`).
+
+## `NodeXform`'s 6 methods missing guest-stack-frame mirror — reproducible f117-class SBS residual (2026-07-08)
+
+- **symptom:** after owning `Render::perObjRenderDispatch`/`billboardCompose1`/`billboardCompose2`/
+  `billboardEmit` (game/render/perobj_billboard.cpp, commit c6a780f), SBS full mode showed a
+  reproducible residual at 0x801FE8E4..0x801FE8EF around f117-f118, converging by f157 and staying
+  clean for 8000+ further frames every run.
+- **root cause:** `NodeXform`'s 6 methods (game/render/node_xform.cpp) — `build`/`buildWithOffset`
+  (0x80051844/0x800518FC, 32 B frame), `propagate` (0x80051128, 56 B), `propagateRotmat`
+  (0x80051300, 40 B), `propagateAxis` (0x80051464, 48 B), `buildAxis` (0x80051C8C, 32 B) — were landed
+  in `d0eb6f9` BEFORE `37594c8` mandated guest-stack frame mirroring, and NONE of them touch `c->r[29]`
+  at all despite every one having a real recomp frame (verified against `generated/shard_*.c`
+  prologues: each descends r29 and spills live r16../ra at RE'd offsets, then restores on return).
+  Last-writer trace at the divergent address showed core B (recomp) writing via
+  `NodeXform::propagateAxis`'s own compiled spill, while core A (native) wrote via a totally
+  unrelated function (`GraphicsBind::installSceneRecord` / other still-substrate leaves) — i.e. on
+  the native side that stack address belonged to a DIFFERENT function's frame than on the recomp
+  side, because propagateAxis (and siblings) never staked out their own frame there, letting whatever
+  else was running at that moment "own" the address instead.
+- **fix:** added 6 named RAII frame structs (`BuildFrame`, `BuildAxisFrame`, `PropagateRotmatFrame`,
+  `PropagateAxisFrame`, `PropagateFrame`) to node_xform.cpp, each spilling the LIVE `c->r[16..23]`/
+  `c->r[31]` values at the RE'd offsets on construction and restoring them on destruction — same
+  pattern as `Cull::performBaseCullFramed`/`Render::perObjRenderDispatch`'s `GuestFrame`.
+- **effect / current state:** the divergence class changed from a hard "wrong function entirely"
+  address collision to near-total convergence (a `PSXPORT_SBS_BYTETRACE` settled-state pass over a
+  ~90k-sample run shows both cores' writers are now the SAME set of still-substrate functions with
+  matching call counts to within single digits, e.g. `0x8003BFD4×10628` vs `×10624`) — consistent with
+  two legitimate, independently-scheduled subsystems briefly sharing the same stack address at
+  slightly different moments within a frame, not a wrong-address bug. **NOT fully 0-diff**: SBS still
+  shows 2 `sbs-div` events (f117, f157) at 0x801FE8E4..EF every run. Left OPEN, not excluded — no mask
+  added. Next step if revisited: trace exactly which two functions land at this address within the
+  same frame and determine if their relative ORDER (not their address) needs to match the substrate's
+  scheduling.
+- **refs:** commit landing this fix (see git log, "render: mirror NodeXform's 6 guest-stack frames");
+  docs/findings/animation.md (sibling investigation, same day, for `Animation::attach`).
