@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 366 native fns, 318 owned addresses, 365 LIVE / 1 ORPHAN.
+Totals: 371 native fns, 318 owned addresses, 370 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -43,6 +43,10 @@ Totals: 366 native fns, 318 owned addresses, 365 LIVE / 1 ORPHAN.
 | 0x80032A44 | LIVE | `Rng::inRange` | game/math/rng.cpp:105 |  | scaled random. Disas 0x80032A44..0x80032A84 verbatim: `sra v0, 15` on … |
 | 0x80036DFC | LIVE | `SaveMenu::dispatchBody` | game/ui/save_menu.cpp:136 |  | ----------------------------------------------------------------------… |
 | 0x8003AD48 | LIVE | `beh_cube_text_spawn` | game/ai/beh_cube_text_spawn.cpp:52 | 0x8003A790 0x8003A9A0 0x8003ABE4 0x8009A730 |  |
+| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:229 |  |  |
+| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:246 |  |  |
+| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:268 |  | ======================================================================… |
+| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:139 |  | ======================================================================… |
 | 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:84 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
 | 0x8003F698 | LIVE | `Render::perModeDispatch` | game/render/perobj_dispatch.cpp:188 |  | per-mode render dispatcher: routes to the area's per-mode renderer (mo… |
 | 0x8003FA44 | LIVE | `Render::frameX` | game/render/render_frame.cpp:65 |  | mid-transition render orchestrator twin (reduced pass set). Same rule:… |
@@ -190,20 +194,17 @@ Totals: 366 native fns, 318 owned addresses, 365 LIVE / 1 ORPHAN.
 | 0x80075A80 | LIVE | `AreaSlots::updateTail` | game/world/area_slots.cpp:15 | 0x80074BF8 0x80074E48 0x8008E0C0 0x80092660 0x80098F90 0x80099490 … | AreaSlots::updateTail — the last direct child of ov_field_frame at gue… |
 | 0x80075CEC | LIVE | `BgSceneTransitionSm::audioFadeTarget` | game/scene/bg_scene_transition_sm.cpp:65 |  | - Native ports of the tiny sub-leaves this SM calls ------------------… |
 | 0x80075D24 | LIVE | `MusicCoord::setGain2` | game/audio/music_coord.cpp:136 |  | MusicCoord::setGain2 — FUN_80075D24 body. See music_coord.h for the RE… |
-| 0x80075F0C | LIVE | `Animation::applyFrame` | game/object/animation.cpp:398 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80076904 | LIVE | `Animation::loadFrame` | game/object/animation.cpp:258 |  |  |
+| 0x80075F0C | LIVE | `Animation::applyFrame` | game/object/animation.cpp:461 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80076904 | LIVE | `Animation::loadFrame` | game/object/animation.cpp:300 |  |  |
+| 0x80076D68 | LIVE | `Animation::stepFramed` | game/object/animation.cpp:179 |  | Animation::stepFramed — GUEST-ABI ENTRY ONLY for FUN_80076D68 (RE: gen… |
 | 0x8007703C | LIVE | `Cull::enqueueByClass` | game/render/cull.cpp:217 |  | Cull::enqueueByClass — PC-native FUN_8007703C body. Class-keyed queue … |
 | 0x8007712C | LIVE | `Cull::decide` | game/render/cull.cpp:99 |  | Pure (read-only) cull decision — reproduces FUN_8007712c's control flo… |
 | 0x8007712C | LIVE | `Cull::performBaseCull` | game/render/cull.cpp:149 |  | Cull::performBaseCull — byte-exact PC-native FUN_8007712C body (no mar… |
-| 0x8007778C | LIVE | `Cull::cullWrapper` | game/render/cull.cpp:371 |  | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
-| 0x800777FC | LIVE | `Cull::cullWrapperFlag2` | game/render/cull.cpp:391 |  | cull-wrapper variant: same taxi shape as cullWrapper (obj in c->r[4], … |
-| 0x800778E4 | LIVE | `Cull::cullWrapperOffsetY` | game/render/cull.cpp:459 |  | cull-wrapper variant: a SINGLE caller-supplied offset (a1, entering in… |
-| 0x800779D0 | LIVE | `Cull::cullWrapperOffset` | game/render/cull.cpp:424 |  | cull-wrapper variant: caller-supplied 3-component offset (a1/a2/a3, en… |
-| 0x80077A4C | LIVE | `Cull::cullWrapperOffsetFlag1` | game/render/cull.cpp:441 |  | same offset-add shape as cullWrapperOffset, but writes 0x1F800080=1 / … |
-| 0x80077ACC | LIVE | `Cull::cullWrap77acc` | game/render/cull.cpp:408 |  | cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fi… |
+| 0x8007712C | LIVE | `Cull::performBaseCullFramed` | game/render/cull.cpp:404 |  | performBaseCullFramed — mirrors FUN_8007712C's OWN real 40-byte guest-… |
+| 0x8007778C | LIVE | `Cull::wrapFrame` | game/render/cull.cpp:380 |  | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
 | 0x80077B38 | LIVE | `GraphicsBind::setGeomBody` | game/world/graphics_bind.cpp:118 |  | set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0… |
-| 0x80077B5C | LIVE | `Animation::advanceLinkChain` | game/object/animation.cpp:345 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80077C40 | LIVE | `Animation::attach` | game/object/animation.cpp:374 | 0x80075FF8 | ──────────────────────────────────────────────────────────────────────… |
+| 0x80077B5C | LIVE | `Animation::advanceLinkChain` | game/object/animation.cpp:387 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80077C40 | LIVE | `Animation::attach` | game/object/animation.cpp:437 | 0x80075FF8 | ──────────────────────────────────────────────────────────────────────… |
 | 0x80077E7C | LIVE | `Cull::enqueueQueueA` | game/render/cull.cpp:233 |  | Cull::enqueueQueueA — PC-native FUN_80077E7C body. Manual push of `obj… |
 | 0x80077EBC | LIVE | `Cull::enqueueVisibleClass4` | game/render/cull.cpp:201 |  | Cull::enqueueVisibleClass4 — PC-native FUN_80077EBC body. Manual push … |
 | 0x80077EFC | LIVE | `Cull::enqueueQueueC` | game/render/cull.cpp:247 |  | Cull::enqueueQueueC — PC-native FUN_80077EFC body. Manual push onto qu… |

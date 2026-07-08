@@ -156,6 +156,28 @@ public:
   // packet emitter (func_800803DC) when the generic-force flag or a2&1 is set.
   void perModeDispatch();
 
+  // ---- SUBSTRATE MIRROR: per-object render-type dispatch + billboard/special-effect leaves --------
+  // Guest FUN_8003CCA4 / FUN_8003C2D4 / FUN_8003C464 / FUN_8003C8F4 — the walk cluster's per-object
+  // TYPE dispatch (CCA4) and 3 of its "special effect" leaf renderers (C2D4/C464/C8F4 build a
+  // camera-composed billboard quad per particle and emit it into the OT/packet pool — see
+  // perobj_billboard.cpp for the full RE). Same ownership mechanism as cmdListDispatch/perModeDispatch
+  // above: reached as plain intra-shard C calls, owned via shard_set_override. These were previously
+  // wrapped by the transparent RenderObserver (depth-tag) wrapper — CCA4/C2D4/C464/C8F4 fold that
+  // wrapping in directly now that they're native (see perobj_billboard.cpp), so RenderObserver no
+  // longer wraps these 4 addresses.
+  // perObjRenderDispatch (FUN_8003CCA4): a0=node (r4). Case 0/4 funnels here call cmdListDispatch();
+  // the other cases wrap it with one of 5 still-substrate special-effect leaves.
+  void perObjRenderDispatch();
+  // billboardCompose1/2 (FUN_8003C2D4 / FUN_8003C464): a0=node (r4). Compose a pure Z-rotation "local"
+  // matrix (C464 additionally seeds its base operand via the still-substrate FUN_800517BC) through the
+  // persistent camera MATRIX, transform the node's world position, then hand off to billboardEmit.
+  void billboardCompose1();
+  void billboardCompose2();
+  // billboardEmit (FUN_8003C8F4): a0=node (r4), a1=flag (r5). Walks the node's active particle
+  // sub-list, RTPT/RTPS-projects each particle's quad corners, culls off-screen, buckets into the OT
+  // by averaged depth, and emits a 10-word (tag+9) GT4-style packet into the packet pool.
+  void billboardEmit();
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

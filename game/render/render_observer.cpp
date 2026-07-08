@@ -10,8 +10,12 @@
 //   2. opens a nesting-safe PktSpanSession,
 //   3. runs the LITERAL gen body (guest-byte behavior identical by construction),
 //   4. tags the captured span with obj_world_ord(node) — HOST memory only.
-// Observed fns: the per-object render dispatch 0x8003CCA4 (the main flow: every walk case 0/15
-// funnels here) and the special-effect leaf renderers the master/aux walks call with a0=node.
+// Observed fns: originally 0x8003CCA4 (the per-object render dispatch), 0x8003C2D4/0x8003C464/
+// 0x8003C8F4 (billboard/particle-quad leaves) and the special-effect leaf renderers the master/aux
+// walks call with a0=node. 2026-07-08: CCA4/C2D4/C464/C8F4 are now OWNED natively
+// (game/render/perobj_billboard.cpp, Render::perObjRenderDispatch/billboardCompose1/2/billboardEmit) —
+// each folds this SAME depth-tag wrap in directly, so they are no longer installed here. This file
+// still wraps the remaining unowned siblings (C5F8, C788, 80039F4C).
 // Extend the table below when a new billboard source shows up untagged (PSXPORT_DEBUG=objid).
 #include "core.h"
 #include "game.h"
@@ -23,10 +27,7 @@
 // OverrideFn is typedef'd in core.h. shard_set_override (generated/shard_disp.c) has C++ linkage.
 void shard_set_override(uint32_t addr, OverrideFn fn);
 
-extern void gen_func_8003CCA4(Core*);   // per-object render dispatch (transform + flush + fx pass)
-extern void gen_func_8003C2D4(Core*);   // special-effect leaf renderers (walk types 16..19)
-extern void gen_func_8003C464(Core*);
-extern void gen_func_8003C5F8(Core*);
+extern void gen_func_8003C5F8(Core*);   // special-effect leaf renderers (walk types 16..19) — still substrate
 extern void gen_func_8003C788(Core*);
 extern void gen_func_80039F4C(Core*);   // type-4 multi-element object renderer
 
@@ -48,9 +49,6 @@ static void obs_body(Core* c, void (*gen)(Core*)) {
 }
 
 #define OBS_WRAP(genfn) static void obs_##genfn(Core* c) { obs_body(c, genfn); }
-OBS_WRAP(gen_func_8003CCA4)
-OBS_WRAP(gen_func_8003C2D4)
-OBS_WRAP(gen_func_8003C464)
 OBS_WRAP(gen_func_8003C5F8)
 OBS_WRAP(gen_func_8003C788)
 OBS_WRAP(gen_func_80039F4C)
@@ -62,9 +60,6 @@ void render_observer_install() {
   static bool done = false;
   if (done) return;
   done = true;
-  shard_set_override(0x8003CCA4u, obs_gen_func_8003CCA4);
-  shard_set_override(0x8003C2D4u, obs_gen_func_8003C2D4);
-  shard_set_override(0x8003C464u, obs_gen_func_8003C464);
   shard_set_override(0x8003C5F8u, obs_gen_func_8003C5F8);
   shard_set_override(0x8003C788u, obs_gen_func_8003C788);
   shard_set_override(0x80039F4Cu, obs_gen_func_80039F4C);

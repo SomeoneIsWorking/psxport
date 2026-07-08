@@ -1610,6 +1610,50 @@ DEAD CODE until now.**
   from the main checkout, and the main checkout's uncommitted `spu.c` `SPU_PokeRAM` edit re-applied
   locally to build at all — not fixed here (shared submodule state, out of this session's band).
 
+**SESSION 2026-07-08 (follow-up) — the remaining 4: `0x8003CCA4`/`0x8003C2D4`/`0x8003C464`/`0x8003C8F4`
+owned as `Render::perObjRenderDispatch`/`billboardCompose1`/`billboardCompose2`/`billboardEmit`
+(game/render/perobj_billboard.cpp).**
+- ✅ **RE + port done, all 4 addresses.** CCA4 = the case-0/13&0xB dispatcher (mirrors CDD8's own
+  6-case switch, calling the already-owned `cmdListDispatch` plus 5 still-substrate special-effect
+  leaves with a `(pre,post)` packet-pool-pointer bracket). C2D4/C464 = billboard "local Z-rotation ×
+  persistent camera MATRIX" composers (C464 seeds its base operand via still-substrate
+  `FUN_800517BC`); both hand off to C8F4. C8F4 = the particle-quad emitter: resolves the node's active
+  sub-list, RTPT/RTPS-projects 4 corners via still-substrate `FUN_8003B220`, culls off-screen,
+  quantizes depth into an OT bucket, fills color/UV via still-substrate `FUN_8003B054` + a 33-entry
+  case table, and emits a 10-word packet into the OT/packet-pool. RenderObserver's depth-tag wrap
+  (PktSpanSession + `obj_world_ord`/`gpu_obj_depth_add`/`fps60_bb_node`) is folded directly into each
+  of the 4 methods (`withDepthTag`); `render_observer.cpp` no longer installs wrappers for these 4
+  addresses (still wraps the 2 remaining unowned siblings C5F8/C788 + 80039F4C).
+- **Two real bugs found + fixed during verification** (both would have been silent SBS-gate failures):
+  (1) omitting a real guest-stack-frame allocation (`r29 -= size`) in C2D4/C464/CCA4 shifted C8F4's OWN
+  frame-relative addresses (`func_8003B220`'s corner-vector output) by the callers' frame size — fixed
+  with a `GuestFrame` RAII (real `r29 -= N` / `+= N`, matching each function's real recomp frame size:
+  CCA4=32, C2D4=40, C464=32, C8F4=96). (2) C8F4's 33-entry color/sprite-index case table collapsed the
+  switch's `default:` (an unrecognized table entry — the recomp does `rec_dispatch(caseTarget); return`,
+  a FULL early return) into the same no-op as the explicit `CBC8` case (a genuine no-op that falls
+  through to packet emission) — fixed to distinguish them, though this path is believed unreached by
+  live data (33 valid indices, only 6 distinct case labels observed).
+- ⚠️ **NOT byte-exact yet — ONE residual SBS diff remains**, reproducible every run:
+  `[sbs-div] f118 0x801FE8E4..0x801FE8E8 (4 B) A=00 00 80 1F B=90 D4 0F 80`, converging back to
+  identical by f120 and staying clean through 9000+ further frames in every run. Evidence gathered
+  (`PSXPORT_SBS_NOPAUSE=0` last-writer map) shows this is **not a logic bug in the 4 ported
+  functions**: the diverging bytes are written by two ENTIRELY UNRELATED functions on each core — core
+  A (native) via still-substrate `0x80047778`, core B (recomp) via `Animation::attach`
+  (`0x80077C40`, the SAME function the just-landed `ec984ae` commit excluded a NEIGHBORING residual
+  for at `0x801FE908..0x801FE914`). A literal-passthrough ablation (having the override forward
+  straight to `gen_func_8003C8F4` instead of running `Render::billboardEmit`) produces ZERO diff,
+  proving the port's own guest reads/writes are correct; introducing the native call graph merely
+  shifts task-0's shared stack-depth trajectory enough to re-expose this same class of residual at a
+  neighboring address. **Root cause NOT closed** — needs the same `PSXPORT_SBS_BYTETRACE` convergence
+  verification `ec984ae` used, but that tool currently DEADLOCKS under this exact scenario (the
+  SIGTERM/atexit dump path in `runtime/recomp/sbs.cpp` calls non-async-signal-safe `fprintf`/`std::map`
+  from a signal handler while Coro fiber OS threads are live — a real tooling defect, filed here, not
+  fixed). Per CLAUDE.md ("no residual RAM diverges may be waved off") this is NOT swept under an
+  unverified exclusion; it is left OPEN and reported plainly instead.
+- **Gate:** `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless: exactly 1 `sbs-div` at f118
+  (see above), 0 elsewhere through 9090+ frames across multiple runs (all stopped by external
+  timeout, not crash).
+
 **SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
 80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**
 - ✅ **DONE — all 6 addresses.** These are SUB-BEHAVIOR callees of the already-native FUN_80145230
