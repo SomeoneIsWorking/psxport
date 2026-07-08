@@ -348,6 +348,73 @@ uint32_t Spawn::spawnAndInit(uint32_t a0, uint32_t posSrc, uint32_t a2) {   // F
   return c->r[2];
 }
 
+// FUN_801360F4 / FUN_80139838 / FUN_8013AC34 / FUN_8013A730 — TYPED-CHILD SPAWN wrappers (A00 overlay,
+// 0x80135000-0x8013AFFF band). Called from per-object overlay behaviors — beh_box_seed_phase_gate
+// (FUN_8012A0B8) STATE 0 passes both `801360F4(node,node[3])` + `80139838(node,0)`/`(node,1)` when
+// node[3]<2, else `8013AC34(node,node[3])`; beh_single_child_cull (FUN_80132400) STATE 0 passes
+// `8013A730(node)` (no sub-index arg) — to allocate a companion object and wire it up. RE'd from disas:
+// each is IDENTICAL in shape — dispatch via the already-owned Spawn::dispatch(cls, type=4, list=0),
+// then on success stamp 3 (or 4) fields on the fresh child node:
+//   [+0x1C] = a fixed per-object AI HANDLER address (one of the already-native beh_* leaves below)
+//   [+0x10] = the CALLING node (owner back-pointer)
+//   [+2]    = a fixed content-type byte
+//   [+3]    = the caller's sub-index byte (three of the four leaves only — FUN_8013A730 has no 2nd
+//             guest arg and never touches [+3])
+// Pool-empty (dispatch()==0) propagates unchanged (recomp: `beq v0,zero,skip-the-stores; ... ; jr ra`).
+//   FUN_801360F4(node,sub): dispatch(cls=2,4,0); child[0x1C]=0x80135D64 (Spawn::despawn's sibling
+//                           beh_quad_record_table_seed); child[2]=7;  child[3]=sub.
+//   FUN_80139838(node,sub): dispatch(cls=1,4,0); child[0x1C]=0x801395C0 (beh_sibling_angle_track);
+//                           child[2]=13; child[3]=sub.
+//   FUN_8013AC34(node,sub): dispatch(cls=2,4,0); child[0x1C]=0x8013A900 (beh_child_trig_motion);
+//                           child[2]=17; child[3]=sub.
+//   FUN_8013A730(node):     dispatch(cls=3,4,0); child[0x1C]=0x8013A330 (beh_lift_platform);
+//                           child[2]=16.  (single-arg variant — no [+3] write.)
+uint32_t Spawn::spawnTypedChild(uint32_t owner, uint32_t cls, uint32_t handlerAddr, uint8_t typeByte,
+                                 bool hasSub, uint32_t sub) {
+  Core* c = this->core;
+  uint32_t child = dispatch(cls, /*type=*/4, /*list=*/0);
+  if (child == 0) return 0;
+  c->mem_w32(child + 0x1c, handlerAddr);
+  c->mem_w32(child + 0x10, owner);
+  c->mem_w8 (child + 2, typeByte);
+  if (hasSub) c->mem_w8(child + 3, (uint8_t)sub);
+  return child;
+}
+uint32_t Spawn::spawnQuadRecordChild(uint32_t owner, uint32_t sub) {   // FUN_801360F4
+  return spawnTypedChild(owner, /*cls=*/2, 0x80135D64u, /*type=*/7,  /*hasSub=*/true, sub);
+}
+uint32_t Spawn::spawnSiblingAngleChild(uint32_t owner, uint32_t sub) {   // FUN_80139838
+  return spawnTypedChild(owner, /*cls=*/1, 0x801395C0u, /*type=*/13, /*hasSub=*/true, sub);
+}
+uint32_t Spawn::spawnChildTrigChild(uint32_t owner, uint32_t sub) {   // FUN_8013AC34
+  return spawnTypedChild(owner, /*cls=*/2, 0x8013A900u, /*type=*/17, /*hasSub=*/true, sub);
+}
+uint32_t Spawn::spawnLiftPlatformChild(uint32_t owner) {   // FUN_8013A730
+  return spawnTypedChild(owner, /*cls=*/3, 0x8013A330u, /*type=*/16, /*hasSub=*/false, 0);
+}
+
+// Guest-ABI trampolines (EngineOverrides): substrate/native rec_dispatch callers reach the 4 native
+// bodies above exactly like the recomp bodies — args in r4/r5, return in r2.
+static void eov_spawnQuadRecordChild(Core* c) {
+  c->r[2] = c->engine.spawn.spawnQuadRecordChild(c->r[4], c->r[5]);
+}
+static void eov_spawnSiblingAngleChild(Core* c) {
+  c->r[2] = c->engine.spawn.spawnSiblingAngleChild(c->r[4], c->r[5]);
+}
+static void eov_spawnChildTrigChild(Core* c) {
+  c->r[2] = c->engine.spawn.spawnChildTrigChild(c->r[4], c->r[5]);
+}
+static void eov_spawnLiftPlatformChild(Core* c) {
+  c->r[2] = c->engine.spawn.spawnLiftPlatformChild(c->r[4]);
+}
+void Spawn::registerTypedChildOverrides() {
+  EngineOverrides& ov = core->game->engine_overrides;
+  ov.register_(0x801360F4u, "Spawn::spawnQuadRecordChild",   eov_spawnQuadRecordChild);
+  ov.register_(0x80139838u, "Spawn::spawnSiblingAngleChild", eov_spawnSiblingAngleChild);
+  ov.register_(0x8013AC34u, "Spawn::spawnChildTrigChild",    eov_spawnChildTrigChild);
+  ov.register_(0x8013A730u, "Spawn::spawnLiftPlatformChild", eov_spawnLiftPlatformChild);
+}
+
 // FUN_8007E110 — SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4.
 // Shape: allocate a class-3 slot via FUN_8007A5A8, install per-frame handler 0x8007DDE0, initialise
 // scene-data pointers from *(u32)0x800ECF60. FUN_8007A5A8 is the SPECIALISED ALLOCATOR — always list 1,

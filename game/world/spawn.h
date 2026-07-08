@@ -86,6 +86,21 @@ public:
   //   No other substrate calls in this body — every op is a direct memory read/write plus the one
   //   call into spawnOverlayVariant. Body from disas 0x800735F4..0x8007374C.
   void tickLinkedOverlay(uint32_t obj, int16_t recordId);
+  // spawnTypedChild(owner, cls, handlerAddr, typeByte, hasSub, sub): shared body for the 4 overlay
+  //   TYPED-CHILD SPAWN leaves below — allocate via the owned dispatch(cls, type=4, list=0), then on
+  //   success stamp the fresh node's per-object handler [+0x1C], owner back-pointer [+0x10], content-
+  //   type byte [+2], and (when hasSub) a caller sub-index byte [+3]. Returns 0 on pool-empty.
+  uint32_t spawnTypedChild(uint32_t owner, uint32_t cls, uint32_t handlerAddr, uint8_t typeByte,
+                           bool hasSub, uint32_t sub);
+  uint32_t spawnQuadRecordChild(uint32_t owner, uint32_t sub);    // FUN_801360F4
+  uint32_t spawnSiblingAngleChild(uint32_t owner, uint32_t sub);  // FUN_80139838
+  uint32_t spawnChildTrigChild(uint32_t owner, uint32_t sub);     // FUN_8013AC34
+  uint32_t spawnLiftPlatformChild(uint32_t owner);                // FUN_8013A730
+
+  // Wire the 4 typed-child spawners above into game->engine_overrides at their guest addresses so
+  // substrate/native rec_dispatch callers (beh_box_seed_phase_gate, beh_single_child_cull) reach the
+  // native bodies instead of the recompiled ones. Called once at boot (boot.cpp).
+  void registerTypedChildOverrides();
 
 private:
   // Guest-ABI bodies + shared pool helpers (static: plain fn-pointer shape for the verify gate).
