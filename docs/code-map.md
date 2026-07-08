@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
+Totals: 342 native fns, 301 owned addresses, 341 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -34,18 +34,18 @@ Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
 | 0x800263E8 | LIVE | `Pool::seedAreaObjects` | game/world/pool.cpp:142 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
 | 0x80026470 | LIVE | `BgSceneTransitionSm::midTransitionGate` | game/scene/bg_scene_transition_sm.cpp:78 |  | Common guard shared by FUN_80026470/80026510/800264BC — three inline a… |
 | 0x80026CE0 | LIVE | `ObjectTable::dispatchFaithful` | game/world/object_table.cpp:191 |  | ObjectTable::dispatchFaithful — byte-mirror of gen_func_80026C88 (gene… |
-| 0x8002918C | ORPHAN | `beh_rand_phase_cull` | game/ai/beh_rand_phase_cull.cpp:48 |  |  |
-| 0x80029B40 | ORPHAN | `beh_pos_history_trail` | game/ai/beh_pos_history_trail.cpp:64 |  |  |
+| 0x8002918C | LIVE | `beh_rand_phase_cull` | game/ai/beh_rand_phase_cull.cpp:48 |  |  |
+| 0x80029B40 | LIVE | `beh_pos_history_trail` | game/ai/beh_pos_history_trail.cpp:64 |  |  |
 | 0x8002B278 | LIVE | `Cull::coneCullBody` | game/render/cull.cpp:175 |  | standalone view-CONE cull (3.9% field hot). a0 = node. The multiply-fo… |
 | 0x8003116C | LIVE | `Spawn::spawnAndInitBody` | game/world/spawn.cpp:230 | 0x80028E10 | SPAWN-AND-INIT helper: spawn a type-6 object on list 1 (via the owned … |
 | 0x8003116C | LIVE | `Spawn::spawnAndInit` | game/world/spawn.cpp:343 |  |  |
 | 0x80031780 | LIVE | `Collision::listScan` | game/player/collision.cpp:24 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
 | 0x80032A44 | LIVE | `Rng::inRange` | game/math/rng.cpp:105 |  | scaled random. Disas 0x80032A44..0x80032A84 verbatim: `sra v0, 15` on … |
 | 0x80036DFC | LIVE | `SaveMenu::dispatchBody` | game/ui/save_menu.cpp:136 |  | ----------------------------------------------------------------------… |
-| 0x8003AD48 | ORPHAN | `beh_cube_text_spawn` | game/ai/beh_cube_text_spawn.cpp:52 | 0x8003A790 0x8003A9A0 0x8003ABE4 0x8009A730 |  |
+| 0x8003AD48 | LIVE | `beh_cube_text_spawn` | game/ai/beh_cube_text_spawn.cpp:52 | 0x8003A790 0x8003A9A0 0x8003ABE4 0x8009A730 |  |
 | 0x8003FA44 | LIVE | `Render::frameX` | game/render/render_frame.cpp:65 |  | mid-transition render orchestrator twin (reduced pass set). Same rule:… |
 | 0x80040CDC | LIVE | `Engine::animEnvInit` | game/core/engine.cpp:873 | 0x80040DE0 | Engine::animEnvInit — FUN_80040CDC. |
-| 0x80041098 | ORPHAN | `beh_script_interp_step` | game/scene/script_interp.cpp:139 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
+| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:139 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
 | 0x8004190C | LIVE | `Engine::animTick` | game/core/engine.cpp:890 |  | Engine::animTick — FUN_8004190C. Ticks the animation VM (native Animat… |
 | 0x80044BD4 | LIVE | `native_area_load_bd4` | game/core/engine.cpp:1555 | 0x800452C0 | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
 | 0x80044BD4 | LIVE | `Engine::submode1Faithful` | game/core/engine.cpp:2133 | 0x80044BD4 0x8005245C 0x80107230 0x8010766C 0x80107790 | pc_faithful walkable-field area machine — mirror of ov_game_gen_801088… |
@@ -77,8 +77,8 @@ Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
 | 0x8004B208 | LIVE | `ActorReward::smBlinkB` | game/object/actor_sm_reward.cpp:116 |  | ActorReward::smBlinkB(c) — FUN_8004B208(obj a0, side a1). Same shape a… |
 | 0x8004B3F4 | LIVE | `Spawn::dropScoreGem` | game/world/spawn.cpp:508 | 0x80071B44 | SCORE-GEM DROP wrapper. Every callsite passes one of the eight fixed A… |
 | 0x8004BD64 | LIVE | `GraphicsBind::posComposeBody` | game/world/graphics_bind.cpp:158 |  | per-object POSITION-COMPOSE + render-state refresh. RE'd from disas 0x… |
-| 0x8004C238 | ORPHAN | `beh_visibility_gate_dispatch` | game/ai/beh_visibility_gate_dispatch.cpp:75 | 0x80049A60 0x80049E54 0x8004A118 0x8004A2A0 0x8004A3D4 0x8004B150 … |  |
-| 0x8004CE14 | ORPHAN | `beh_record_list_scanner` | game/ai/beh_record_list_scanner.cpp:46 | 0x80111CCC |  |
+| 0x8004C238 | LIVE | `beh_visibility_gate_dispatch` | game/ai/beh_visibility_gate_dispatch.cpp:75 | 0x80049A60 0x80049E54 0x8004A118 0x8004A2A0 0x8004A3D4 0x8004B150 … |  |
+| 0x8004CE14 | LIVE | `beh_record_list_scanner` | game/ai/beh_record_list_scanner.cpp:46 | 0x80111CCC |  |
 | 0x8004D338 | LIVE | `Inventory::addNative` | game/items/inventory.cpp:71 |  | PC-native reimplementation of FUN_8004D338 (inventory_add). Writes are… |
 | 0x8004D338 | LIVE | `Inventory::addBody` | game/items/inventory.cpp:106 |  | --- the FUN_8004D338 override + invverify gate -----------------------… |
 | 0x8004D338 | LIVE | `Inventory::addEntry` | game/items/inventory.cpp:147 |  |  |
@@ -126,7 +126,7 @@ Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
 | 0x80058304 | LIVE | `Engine::gStateMutate` | game/core/engine.cpp:992 | 0x800310F4 | Engine::gStateMutate — native ownership of FUN_80058304 (Ghidra decomp… |
 | 0x80059D28 | LIVE | `Engine::frameStartTick` | game/core/engine.cpp:2684 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
 | 0x80059D28 | LIVE | `Engine::frameStartTickFaithful` | game/core/engine.cpp:2753 | 0x8005950C 0x8009A450 0x80109024 0x8010F63C 0x8010F654 0x80112220 | Engine::frameStartTickFaithful — byte-exact mirror of gen_func_80059D2… |
-| 0x80059ED8 | ORPHAN | `beh_camera_target_follow` | game/ai/beh_camera_target_follow.cpp:46 | 0x800312D4 0x800489E4 0x8010B238 0x8010BC10 0x8010C5A8 0x8011332C … |  |
+| 0x80059ED8 | LIVE | `beh_camera_target_follow` | game/ai/beh_camera_target_follow.cpp:46 | 0x800312D4 0x800489E4 0x8010B238 0x8010BC10 0x8010C5A8 0x8011332C … |  |
 | 0x80067DA8 | LIVE | `Engine::uploadModeSprites` | game/core/engine.cpp:950 | 0x80081218 | Engine::uploadModeSprites — native ownership of FUN_80067DA8 (Ghidra d… |
 | 0x80069B28 | LIVE | `ObjectList::walkAuxFaithful` | game/object/object_list.cpp:134 |  | pc_faithful mirror of gen_func_80069B28 (guest FUN_80069B28). Guest fr… |
 | 0x8006C80C | LIVE | `CutsceneCamera::yFloor` | game/camera/cutscene_camera.cpp:341 |  | ── yFloor (camera-Y floor clamp, per render mode) ────────────────────… |
@@ -162,13 +162,13 @@ Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
 | 0x8006F00C | LIVE | `Bit::setFE48` | game/math/mathlib.cpp:92 |  | sibling of setFE34: u32 flag-bit SET on 0x800BFE48 (the word testFE48 … |
 | 0x8006F02C | LIVE | `Bit::setFE34` | game/math/mathlib.cpp:85 |  | u32 flag-bit SET on the fixed 32-bit word at 0x800BFE34. 7-instruction… |
 | 0x8006F04C | LIVE | `Bit::processLinkRequest` | game/math/mathlib.cpp:108 |  | child-link REQUEST-mailbox arbiter. disas 0x8006F04C..0x8006F0E0: |
-| 0x8006F2D0 | ORPHAN | `beh_pad_child_linker` | game/ai/beh_pad_child_linker.cpp:52 | 0x8004766C 0x80047B5C 0x8006F138 |  |
-| 0x80071A3C | ORPHAN | `beh_area_event_dispatch` | game/ai/beh_area_event_dispatch.cpp:40 | 0x800716B4 0x80071768 0x801178E4 0x8011B79C |  |
+| 0x8006F2D0 | LIVE | `beh_pad_child_linker` | game/ai/beh_pad_child_linker.cpp:52 | 0x8004766C 0x80047B5C 0x8006F138 |  |
+| 0x80071A3C | LIVE | `beh_area_event_dispatch` | game/ai/beh_area_event_dispatch.cpp:40 | 0x800716B4 0x80071768 0x801178E4 0x8011B79C |  |
 | 0x800735F4 | LIVE | `Spawn::tickLinkedOverlay` | game/world/spawn.cpp:588 |  | per-object controller that owns exactly ONE linked "variant overlay" c… |
 | 0x80073750 | LIVE | `Font::measureLineWidth` | game/ui/font.cpp:145 |  | pure string measurer (disas 0x80073750..0x80073798, no sub-calls): |
-| 0x800739AC | ORPHAN | `beh_scene_ui_trigger` | game/ai/beh_scene_ui_trigger.cpp:53 | 0x800737F8 0x800738B0 0x80074BF8 |  |
-| 0x80073CD8 | ORPHAN | `beh_typed_init_scene_trigger` | game/ai/beh_typed_init_scene_trigger.cpp:95 |  |  |
-| 0x800741DC | ORPHAN | `beh_pickup_collect_trigger` | game/ai/beh_pickup_collect_trigger.cpp:166 |  |  |
+| 0x800739AC | LIVE | `beh_scene_ui_trigger` | game/ai/beh_scene_ui_trigger.cpp:53 | 0x800737F8 0x800738B0 0x80074BF8 |  |
+| 0x80073CD8 | LIVE | `beh_typed_init_scene_trigger` | game/ai/beh_typed_init_scene_trigger.cpp:95 |  |  |
+| 0x800741DC | LIVE | `beh_pickup_collect_trigger` | game/ai/beh_pickup_collect_trigger.cpp:166 |  |  |
 | 0x80074AF0 | LIVE | `AreaSlots::ackIfMatch` | game/world/area_slots.cpp:127 |  | AreaSlots::ackIfMatch — FUN_80074AF0 body. Pure 21-instruction primiti… |
 | 0x80074BC4 | LIVE | `AudioDispatch::settleField` | game/audio/audio_dispatch.cpp:69 | 0x8001CF2C 0x80074B44 0x80074E48 | AudioDispatch::settleField — native ownership of FUN_80074BC4 (Ghidra … |
 | 0x80074F24 | LIVE | `Pool::selectStateIndex` | game/world/pool.cpp:293 |  | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
@@ -206,7 +206,7 @@ Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
 | 0x8007B18C | LIVE | `Pool::init` | game/world/pool.cpp:109 | 0x8004FB20 0x800798F8 0x8007A810 0x8007AC14 0x8007AC40 0x8007AC6C … | top-level object-pool init. Zeroes 520 68-byte slots at 0x800F2740; bu… |
 | 0x8007B2C0 | LIVE | `Engine::seedDirectionMasks` | game/scene/startup.cpp:123 |  | direction-mask seeder. Called with 0 at boot (initEntityPool above) an… |
 | 0x8007B3F4 | LIVE | `Engine::reloadEntityPool` | game/scene/startup.cpp:140 |  | re-copy the staged per-area entity-pool control bytes onto the live he… |
-| 0x8007DC38 | ORPHAN | `beh_variant_overlay_lifecycle` | game/ai/beh_variant_overlay_lifecycle.cpp:54 |  |  |
+| 0x8007DC38 | LIVE | `beh_variant_overlay_lifecycle` | game/ai/beh_variant_overlay_lifecycle.cpp:54 |  |  |
 | 0x8007E038 | LIVE | `Spawn::spawnOverlayVariantBody` | game/world/spawn.cpp:532 |  | VARIANT-OVERLAY SPAWN primitive. RE'd from disas 0x8007E038..0x8007E10… |
 | 0x8007E110 | LIVE | `Spawn::sceneEntityBody` | game/world/spawn.cpp:454 |  | SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4. |
 | 0x8007E9C8 | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
@@ -281,81 +281,81 @@ Totals: 342 native fns, 301 owned addresses, 274 LIVE / 68 ORPHAN.
 | 0x80109FE0 | LIVE | `Render::fieldEntityRender` | game/render/submit.cpp:377 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
 | 0x8010A0E0 | LIVE | `Sop::scenePrepass` | game/scene/sop.cpp:317 |  | SOP scene cam-frustum prepass — native ownership of FUN_8010A0E0 (Ghid… |
 | 0x8010A3AC | LIVE | `Sop::sceneGridGather` | game/scene/sop.cpp:225 |  | sceneGridGather — native port of guest FUN_8010A3AC (Ghidra decomp scr… |
-| 0x8010AB38 | ORPHAN | `beh_sop_overlay_shadow` | game/ai/sop_overlay_shadow.cpp:74 |  | (node) — per-frame tick, dispatched via node+0x1C. |
-| 0x8010ACFC | ORPHAN | `beh_sop_intro_pilot` | game/ai/beh_sop_intro_pilot.cpp:90 |  |  |
+| 0x8010AB38 | LIVE | `beh_sop_overlay_shadow` | game/ai/sop_overlay_shadow.cpp:74 |  | (node) — per-frame tick, dispatched via node+0x1C. |
+| 0x8010ACFC | LIVE | `beh_sop_intro_pilot` | game/ai/beh_sop_intro_pilot.cpp:90 |  |  |
 | 0x8010AE30 | LIVE | `native_sop_overlay_shadow_spawn` | game/ai/sop_overlay_shadow.cpp:61 |  | (parent) -> node ptr (0 on pool exhaustion). |
-| 0x8010B798 | ORPHAN | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:86 |  |  |
-| 0x8010B990 | ORPHAN | `beh_sop_intro_narration` | game/ai/beh_sop_intro_narration.cpp:126 |  |  |
+| 0x8010B798 | LIVE | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:86 |  |  |
+| 0x8010B990 | LIVE | `beh_sop_intro_narration` | game/ai/beh_sop_intro_narration.cpp:126 |  |  |
 | 0x8010E904 | LIVE | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:324 |  | ======================================================================… |
 | 0x801130C4 | LIVE | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:181 |  | ======================================================================… |
 | 0x80114E74 | LIVE | `ActorTomba::type4GuardedCheck` | game/player/actor_tomba.cpp:127 |  | type-4 guarded proximity. |
-| 0x80117658 | ORPHAN | `beh_prng_velocity_machine` | game/ai/beh_prng_velocity_machine.cpp:50 |  |  |
-| 0x80118240 | ORPHAN | `beh_typed_init_exit_poker` | game/ai/beh_typed_init_exit_poker.cpp:67 |  |  |
-| 0x801189E8 | ORPHAN | `beh_a06_multi_actor` | game/ai/beh_a06_multi_actor.cpp:557 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x8011C164 | ORPHAN | `beh_typed_variant_router` | game/ai/beh_typed_variant_router.cpp:86 |  |  |
-| 0x8011CBD0 | ORPHAN | `beh_node3_router` | game/ai/beh_node3_router.cpp:34 |  |  |
-| 0x8011D578 | ORPHAN | `beh_variant_actor_sm` | game/ai/beh_variant_actor_sm.cpp:57 |  |  |
-| 0x8011D988 | ORPHAN | `beh_actor_move_sm` | game/ai/beh_actor_move_sm.cpp:48 |  |  |
-| 0x80121978 | ORPHAN | `beh_id_routed_dispatch` | game/ai/beh_id_routed_dispatch.cpp:43 |  |  |
+| 0x80117658 | LIVE | `beh_prng_velocity_machine` | game/ai/beh_prng_velocity_machine.cpp:50 |  |  |
+| 0x80118240 | LIVE | `beh_typed_init_exit_poker` | game/ai/beh_typed_init_exit_poker.cpp:67 |  |  |
+| 0x801189E8 | LIVE | `beh_a06_multi_actor` | game/ai/beh_a06_multi_actor.cpp:557 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x8011C164 | LIVE | `beh_typed_variant_router` | game/ai/beh_typed_variant_router.cpp:86 |  |  |
+| 0x8011CBD0 | LIVE | `beh_node3_router` | game/ai/beh_node3_router.cpp:34 |  |  |
+| 0x8011D578 | LIVE | `beh_variant_actor_sm` | game/ai/beh_variant_actor_sm.cpp:57 |  |  |
+| 0x8011D988 | LIVE | `beh_actor_move_sm` | game/ai/beh_actor_move_sm.cpp:48 |  |  |
+| 0x80121978 | LIVE | `beh_id_routed_dispatch` | game/ai/beh_id_routed_dispatch.cpp:43 |  |  |
 | 0x80123E9C | LIVE | `ReleaseTriggerMotion::hoverBobCycle` | game/ai/release_trigger_motion.cpp:36 | 0x80077B5C | ----------------------------------------------------------------------… |
 | 0x801241BC | LIVE | `ReleaseTriggerMotion::leaderFollowSync` | game/ai/release_trigger_motion.cpp:95 | 0x80051D90 0x80123C94 0x8012400C | ----------------------------------------------------------------------… |
 | 0x801244E8 | LIVE | `ReleaseTriggerMotion::driftReposition` | game/ai/release_trigger_motion.cpp:146 | 0x80051794 0x80077B5C 0x80084360 0x800847F0 0x80124328 | ----------------------------------------------------------------------… |
 | 0x801246B4 | LIVE | `ReleaseTriggerMotion::arcSwoopMotion` | game/ai/release_trigger_motion.cpp:196 | 0x80077B5C | ----------------------------------------------------------------------… |
 | 0x801249D4 | LIVE | `ReleaseTriggerMotion::doubleArcMotion` | game/ai/release_trigger_motion.cpp:289 | 0x80077B5C | ----------------------------------------------------------------------… |
 | 0x80124C6C | LIVE | `ReleaseTriggerMotion::circleOrbitMotion` | game/ai/release_trigger_motion.cpp:378 | 0x80077B5C | ----------------------------------------------------------------------… |
-| 0x80124E74 | ORPHAN | `beh_jumptable_release_trigger` | game/ai/beh_jumptable_release_trigger.cpp:118 | 0x8004B0D8 0x8004DAEC 0x80051D90 0x80077B5C 0x80123E9C 0x801241BC … |  |
-| 0x80125E0C | ORPHAN | `beh_pure_substate_dispatch` | game/ai/beh_pure_substate_dispatch.cpp:36 |  |  |
-| 0x80127798 | ORPHAN | `beh_area_transition_machine` | game/ai/beh_area_transition_machine.cpp:170 | 0x80041194 |  |
-| 0x801280D0 | ORPHAN | `beh_a08_scene_actor` | game/ai/beh_a08_scene_actor.cpp:673 |  |  |
-| 0x80128760 | ORPHAN | `beh_linked_advance_branch` | game/ai/beh_linked_advance_branch.cpp:36 |  |  |
-| 0x80129C00 | ORPHAN | `beh_anim_trigger_gates` | game/ai/beh_anim_trigger_gates.cpp:41 |  |  |
-| 0x8012A0B8 | ORPHAN | `beh_box_seed_phase_gate` | game/ai/beh_box_seed_phase_gate.cpp:45 |  |  |
-| 0x8012D404 | ORPHAN | `beh_cull_tick_render` | game/ai/beh_cull_tick_render.cpp:43 | 0x8012D27C |  |
-| 0x8012D4EC | ORPHAN | `beh_jumptable_flag_gate` | game/ai/beh_jumptable_flag_gate.cpp:110 |  |  |
-| 0x8012DA04 | ORPHAN | `beh_typed_anim_spawn` | game/ai/beh_typed_anim_spawn.cpp:58 |  |  |
-| 0x8012EB54 | ORPHAN | `beh_substate_edge_orchestrator` | game/ai/beh_substate_edge_orchestrator.cpp:40 | 0x8012E8A8 0x8012ED84 0x8012F494 0x8012F5B4 0x8012FD88 0x80130524 … |  |
-| 0x80131D08 | ORPHAN | `beh_two_child_steer` | game/ai/beh_two_child_steer.cpp:47 |  |  |
-| 0x80132400 | ORPHAN | `beh_single_child_cull` | game/ai/beh_single_child_cull.cpp:45 |  |  |
-| 0x8013259C | ORPHAN | `beh_cull_substate_orchestrator` | game/ai/beh_cull_substate_orchestrator.cpp:46 | 0x8013272C 0x80132954 0x80132A88 0x80132D58 0x80132EDC 0x80133184 … |  |
-| 0x80133C14 | ORPHAN | `beh_typed_table_seed_gate` | game/ai/beh_typed_table_seed_gate.cpp:291 |  |  |
-| 0x80133D6C | ORPHAN | `beh_twin_record_steer` | game/ai/beh_twin_record_steer.cpp:68 |  |  |
-| 0x80134FD8 | ORPHAN | `beh_multi_record_phase_machine` | game/ai/beh_multi_record_phase_machine.cpp:68 |  |  |
-| 0x80135D64 | ORPHAN | `beh_quad_record_table_seed` | game/ai/beh_quad_record_table_seed.cpp:48 |  |  |
+| 0x80124E74 | LIVE | `beh_jumptable_release_trigger` | game/ai/beh_jumptable_release_trigger.cpp:118 | 0x8004B0D8 0x8004DAEC 0x80051D90 0x80077B5C 0x80123E9C 0x801241BC … |  |
+| 0x80125E0C | LIVE | `beh_pure_substate_dispatch` | game/ai/beh_pure_substate_dispatch.cpp:36 |  |  |
+| 0x80127798 | LIVE | `beh_area_transition_machine` | game/ai/beh_area_transition_machine.cpp:170 | 0x80041194 |  |
+| 0x801280D0 | LIVE | `beh_a08_scene_actor` | game/ai/beh_a08_scene_actor.cpp:673 |  |  |
+| 0x80128760 | LIVE | `beh_linked_advance_branch` | game/ai/beh_linked_advance_branch.cpp:36 |  |  |
+| 0x80129C00 | LIVE | `beh_anim_trigger_gates` | game/ai/beh_anim_trigger_gates.cpp:41 |  |  |
+| 0x8012A0B8 | LIVE | `beh_box_seed_phase_gate` | game/ai/beh_box_seed_phase_gate.cpp:45 |  |  |
+| 0x8012D404 | LIVE | `beh_cull_tick_render` | game/ai/beh_cull_tick_render.cpp:43 | 0x8012D27C |  |
+| 0x8012D4EC | LIVE | `beh_jumptable_flag_gate` | game/ai/beh_jumptable_flag_gate.cpp:110 |  |  |
+| 0x8012DA04 | LIVE | `beh_typed_anim_spawn` | game/ai/beh_typed_anim_spawn.cpp:58 |  |  |
+| 0x8012EB54 | LIVE | `beh_substate_edge_orchestrator` | game/ai/beh_substate_edge_orchestrator.cpp:40 | 0x8012E8A8 0x8012ED84 0x8012F494 0x8012F5B4 0x8012FD88 0x80130524 … |  |
+| 0x80131D08 | LIVE | `beh_two_child_steer` | game/ai/beh_two_child_steer.cpp:47 |  |  |
+| 0x80132400 | LIVE | `beh_single_child_cull` | game/ai/beh_single_child_cull.cpp:45 |  |  |
+| 0x8013259C | LIVE | `beh_cull_substate_orchestrator` | game/ai/beh_cull_substate_orchestrator.cpp:46 | 0x8013272C 0x80132954 0x80132A88 0x80132D58 0x80132EDC 0x80133184 … |  |
+| 0x80133C14 | LIVE | `beh_typed_table_seed_gate` | game/ai/beh_typed_table_seed_gate.cpp:291 |  |  |
+| 0x80133D6C | LIVE | `beh_twin_record_steer` | game/ai/beh_twin_record_steer.cpp:68 |  |  |
+| 0x80134FD8 | LIVE | `beh_multi_record_phase_machine` | game/ai/beh_multi_record_phase_machine.cpp:68 |  |  |
+| 0x80135D64 | LIVE | `beh_quad_record_table_seed` | game/ai/beh_quad_record_table_seed.cpp:48 |  |  |
 | 0x801360F4 | LIVE | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
 | 0x801360F4 | LIVE | `Spawn::spawnQuadRecordChild` | game/world/spawn.cpp:383 |  |  |
-| 0x80136158 | ORPHAN | `beh_sine_motion_sfx` | game/ai/beh_sine_motion_sfx.cpp:47 | 0x8004766C 0x80048750 |  |
-| 0x80136954 | ORPHAN | `beh_event_record_machine` | game/ai/beh_event_record_machine.cpp:56 |  |  |
-| 0x80136D9C | ORPHAN | `beh_pure_inner_dispatch` | game/ai/beh_pure_inner_dispatch.cpp:35 |  |  |
-| 0x80138FC8 | ORPHAN | `beh_typed_jumptable_pair` | game/ai/beh_typed_jumptable_pair.cpp:63 | 0x8004ED94 0x80138B04 0x80138C70 |  |
-| 0x801395C0 | ORPHAN | `beh_sibling_angle_track` | game/ai/beh_sibling_angle_track.cpp:55 |  |  |
-| 0x80139728 | ORPHAN | `beh_a06_fade_flash_ramp_80139728` | game/ai/beh_a06_script_fades.cpp:81 |  | ── FUN_80139728 — 8-state additive-gray fade with music/spawn trigger … |
+| 0x80136158 | LIVE | `beh_sine_motion_sfx` | game/ai/beh_sine_motion_sfx.cpp:47 | 0x8004766C 0x80048750 |  |
+| 0x80136954 | LIVE | `beh_event_record_machine` | game/ai/beh_event_record_machine.cpp:56 |  |  |
+| 0x80136D9C | LIVE | `beh_pure_inner_dispatch` | game/ai/beh_pure_inner_dispatch.cpp:35 |  |  |
+| 0x80138FC8 | LIVE | `beh_typed_jumptable_pair` | game/ai/beh_typed_jumptable_pair.cpp:63 | 0x8004ED94 0x80138B04 0x80138C70 |  |
+| 0x801395C0 | LIVE | `beh_sibling_angle_track` | game/ai/beh_sibling_angle_track.cpp:55 |  |  |
+| 0x80139728 | LIVE | `beh_a06_fade_flash_ramp_80139728` | game/ai/beh_a06_script_fades.cpp:81 |  | ── FUN_80139728 — 8-state additive-gray fade with music/spawn trigger … |
 | 0x80139838 | LIVE | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
 | 0x80139838 | LIVE | `Spawn::spawnSiblingAngleChild` | game/world/spawn.cpp:386 |  |  |
-| 0x8013A330 | ORPHAN | `beh_lift_platform` | game/ai/beh_lift_platform.cpp:65 |  |  |
+| 0x8013A330 | LIVE | `beh_lift_platform` | game/ai/beh_lift_platform.cpp:65 |  |  |
 | 0x8013A730 | LIVE | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
 | 0x8013A730 | LIVE | `Spawn::spawnLiftPlatformChild` | game/world/spawn.cpp:392 |  |  |
-| 0x8013A900 | ORPHAN | `beh_child_trig_motion` | game/ai/beh_child_trig_motion.cpp:50 |  |  |
-| 0x8013AA14 | ORPHAN | `beh_a06_scripted_actor` | game/ai/beh_a06_scripted_actor.cpp:474 |  | Entry — the per-object handler the object walker's native path invokes… |
+| 0x8013A900 | LIVE | `beh_child_trig_motion` | game/ai/beh_child_trig_motion.cpp:50 |  |  |
+| 0x8013AA14 | LIVE | `beh_a06_scripted_actor` | game/ai/beh_a06_scripted_actor.cpp:474 |  | Entry — the per-object handler the object walker's native path invokes… |
 | 0x8013AC34 | LIVE | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
 | 0x8013AC34 | LIVE | `Spawn::spawnChildTrigChild` | game/world/spawn.cpp:389 |  |  |
-| 0x8013ADBC | ORPHAN | `beh_box_rearm_sub` | game/ai/beh_box_rearm_sub.cpp:39 |  |  |
-| 0x8013AEF0 | ORPHAN | `beh_a06_spawn_follow_obj_8013AEF0` | game/ai/beh_a06_script_fades.cpp:160 |  | ── FUN_8013AEF0 — spawn a follow-obj and hook it ─────────────────────… |
-| 0x8013AFD8 | ORPHAN | `beh_a06_sound_cmd_wait_8013AFD8` | game/ai/beh_a06_script_fades.cpp:187 | 0x800708B4 | ── FUN_8013AFD8 — kick a sound-command sequence and wait for scratchpa… |
-| 0x8013B074 | ORPHAN | `beh_a06_spawn_subobj_8013B074` | game/ai/beh_a06_script_fades.cpp:218 | 0x8006CBA8 | ── FUN_8013B074 — spawn a subobj + set field/anim params ─────────────… |
-| 0x8013B178 | ORPHAN | `beh_a06_fade_ramp_8013B178` | game/ai/beh_a06_script_fades.cpp:245 |  | ── FUN_8013B178 — 3-state simple additive fade (0x20 ramp) ───────────… |
-| 0x8013B274 | ORPHAN | `beh_a06_music_cue_8013B274` | game/ai/beh_a06_script_fades.cpp:272 |  | ── FUN_8013B274 — one-shot music/SFX cue then advance ────────────────… |
-| 0x8013B29C | ORPHAN | `beh_a06_timer_gate_8013B29C` | game/ai/beh_a06_script_fades.cpp:283 |  | ── FUN_8013B29C — 2-state (init + counted gate) primitive ────────────… |
-| 0x8013B2E4 | ORPHAN | `beh_flagbit_timer_machine` | game/ai/beh_flagbit_timer_machine.cpp:51 |  |  |
-| 0x8013C1DC | ORPHAN | `beh_seaside_prox_substate` | game/ai/beh_seaside_prox_substate.cpp:484 |  | 's own prologue is `addiu sp,sp,-0x20` (disas-verified). modeArm/subC'… |
-| 0x8013C3F4 | ORPHAN | `beh_area_threshold_ptr_swap` | game/ai/beh_area_threshold_ptr_swap.cpp:42 |  |  |
-| 0x8013C538 | ORPHAN | `beh_scatter_record_dither` | game/ai/beh_scatter_record_dither.cpp:47 |  |  |
-| 0x8013C9C0 | ORPHAN | `beh_scatter_ramp_machine` | game/ai/beh_scatter_ramp_machine.cpp:46 |  |  |
+| 0x8013ADBC | LIVE | `beh_box_rearm_sub` | game/ai/beh_box_rearm_sub.cpp:39 |  |  |
+| 0x8013AEF0 | LIVE | `beh_a06_spawn_follow_obj_8013AEF0` | game/ai/beh_a06_script_fades.cpp:160 |  | ── FUN_8013AEF0 — spawn a follow-obj and hook it ─────────────────────… |
+| 0x8013AFD8 | LIVE | `beh_a06_sound_cmd_wait_8013AFD8` | game/ai/beh_a06_script_fades.cpp:187 | 0x800708B4 | ── FUN_8013AFD8 — kick a sound-command sequence and wait for scratchpa… |
+| 0x8013B074 | LIVE | `beh_a06_spawn_subobj_8013B074` | game/ai/beh_a06_script_fades.cpp:218 | 0x8006CBA8 | ── FUN_8013B074 — spawn a subobj + set field/anim params ─────────────… |
+| 0x8013B178 | LIVE | `beh_a06_fade_ramp_8013B178` | game/ai/beh_a06_script_fades.cpp:245 |  | ── FUN_8013B178 — 3-state simple additive fade (0x20 ramp) ───────────… |
+| 0x8013B274 | LIVE | `beh_a06_music_cue_8013B274` | game/ai/beh_a06_script_fades.cpp:272 |  | ── FUN_8013B274 — one-shot music/SFX cue then advance ────────────────… |
+| 0x8013B29C | LIVE | `beh_a06_timer_gate_8013B29C` | game/ai/beh_a06_script_fades.cpp:283 |  | ── FUN_8013B29C — 2-state (init + counted gate) primitive ────────────… |
+| 0x8013B2E4 | LIVE | `beh_flagbit_timer_machine` | game/ai/beh_flagbit_timer_machine.cpp:51 |  |  |
+| 0x8013C1DC | LIVE | `beh_seaside_prox_substate` | game/ai/beh_seaside_prox_substate.cpp:484 |  | 's own prologue is `addiu sp,sp,-0x20` (disas-verified). modeArm/subC'… |
+| 0x8013C3F4 | LIVE | `beh_area_threshold_ptr_swap` | game/ai/beh_area_threshold_ptr_swap.cpp:42 |  |  |
+| 0x8013C538 | LIVE | `beh_scatter_record_dither` | game/ai/beh_scatter_record_dither.cpp:47 |  |  |
+| 0x8013C9C0 | LIVE | `beh_scatter_ramp_machine` | game/ai/beh_scatter_ramp_machine.cpp:46 |  |  |
 | 0x8014047C | LIVE | `ActorZonedAttacker::gateCheck` | game/ai/actor_zoned_attacker.cpp:124 |  | ActorZonedAttacker::gateCheck(c) — FUN_8014047c(node) -> bool v0. A ti… |
 | 0x80140544 | LIVE | `ActorZonedAttacker::typeInit` | game/ai/actor_zoned_attacker.cpp:163 |  | ActorZonedAttacker::typeInit(c) — FUN_80140544(node). One-shot per-typ… |
 | 0x801409C0 | LIVE | `ActorZonedAttacker::pickAttackByRange` | game/ai/actor_zoned_attacker.cpp:228 |  | ActorZonedAttacker::pickAttackByRange(c) — FUN_801409c0(node[, unused … |
 | 0x80143A00 | LIVE | `ActorZonedAttacker::defaultSubStateMachine` | game/ai/actor_zoned_attacker.cpp:362 |  | ActorZonedAttacker::defaultSubStateMachine(c) — FUN_80143a00(node). Th… |
 | 0x80144928 | LIVE | `ActorZonedAttacker::approachAndFace` | game/ai/actor_zoned_attacker.cpp:267 |  | ActorZonedAttacker::approachAndFace(c) — FUN_80144928(node) -> v0. A s… |
 | 0x80144B50 | LIVE | `ActorZonedAttacker::idleTick` | game/ai/actor_zoned_attacker.cpp:932 |  | ActorZonedAttacker::idleTick(c) — FUN_80144b50(node). The "idle" state… |
-| 0x80145230 | ORPHAN | `beh_id_compare_motion_dispatch` | game/ai/beh_id_compare_motion_dispatch.cpp:51 | 0x800781E0 0x8014047C 0x80140544 0x801409C0 0x80143A00 0x80144928 … |  |
+| 0x80145230 | LIVE | `beh_id_compare_motion_dispatch` | game/ai/beh_id_compare_motion_dispatch.cpp:51 | 0x800781E0 0x8014047C 0x80140544 0x801409C0 0x80143A00 0x80144928 … |  |
 | 0x801458E0 | LIVE | `AttackOrbitSubstate::orbitTargetMotion` | game/ai/attack_orbit_substate.cpp:44 |  | node[3]==0x81 sub-behavior: 6-phase acquire/orbit machine, see header … |
 | 0x80145AF0 | LIVE | `AttackOrbitSubstate::aimAtTargetAnchor` | game/ai/attack_orbit_substate.cpp:126 |  | node[3]==0x80 sub-behavior: aim-point recompute + one-shot attack-wind… |

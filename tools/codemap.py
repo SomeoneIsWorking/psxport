@@ -220,7 +220,17 @@ def build(natives, files):
     #     every OOP native is actually invoked — c->game->cd.dc40Sync(...), c->mRender->mNodeXform.
     #     buildWithOffset(...), c->engine.asset.loadDescriptorChunk(...). That gap is WHY the tool was
     #     reporting 231/237 natives ORPHAN — almost all of them are wired, just via `.`/`->`.)
-    qualified_re = re.compile(r'\b(ov_\w+|native_\w+|eng_\w+|[A-Z][A-Za-z0-9_]*::[A-Za-z_]\w*)\b')
+    # NOTE: `beh_\w+` is included here even though DEF_RE recognizes it as a def prefix and the
+    # call-detection loop below never required a trailing `(` — this is deliberate: `beh_*` handlers
+    # are wired as FUNCTION-POINTER VALUES in a registration table (BehaviorDispatch::kTable in
+    # game/object/behavior_dispatch.cpp — `{ 0xADDR, beh_foo, "foo" }`), called later via `b.fn(c)`
+    # indirection, never via literal `beh_foo(...)` call syntax anywhere in the tree. Before this was
+    # added, EVERY kTable-registered beh_* was invisible to find_callees() (qualified_re didn't match
+    # the `beh_` prefix at all) and reported ORPHAN despite being live — 65 of 66 ORPHAN rows in one
+    # audit were this exact false positive. The same "bare identifier used as a value, not a call" shape
+    # also covers other pointer-table registrations (EngineOverrides::register_, PlatformHle::register_)
+    # for symbols that already match one of these prefixes or the Class::method form.
+    qualified_re = re.compile(r'\b(ov_\w+|native_\w+|eng_\w+|beh_\w+|[A-Z][A-Za-z0-9_]*::[A-Za-z_]\w*)\b')
     # (2) instance-call syntax for METHOD natives: `.name(`, `->name(`, or bare `name(` all share the
     #     same trailing token — the callee's bare method name immediately before `(`. We can't see the
     #     receiver's static type without a real parser, so to avoid a common method name (e.g. `run`,
