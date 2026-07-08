@@ -128,6 +128,7 @@ set(PORT_SRC
   game/ai/actor_zoned_attacker.cpp
   game/ai/attack_orbit_substate.cpp
   game/ai/actor_melee_engage.cpp
+  game/ai/melee_proximity.cpp
   game/ai/beh_jumptable_flag_gate.cpp
   game/ai/beh_cull_tick_render.cpp
   game/ai/beh_sibling_angle_track.cpp

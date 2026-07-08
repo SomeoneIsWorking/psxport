@@ -1872,3 +1872,88 @@ reached only via a runtime function-pointer table this session did not chase.
   `game/world/object_table.cpp`/`game/render/cull.cpp`).
 - **Refs**: `scratch/ram/a00lo.bin` (+`.spad`), `generated/ov_a00_shard_1.c:3527`,
   `scratch/logs/a00_ownership.txt` / `a00_unowned.txt` / `inband_sizes_unowned.txt` (full census).
+
+## WIDE-RE survey: 0x80010000-0x8001FFFF (early MAIN.EXE — kernel/libc vs melee-proximity family)
+
+Ghidra headless full-analysis import of `main_ram.bin` (2 MB KSEG0 dump, see `tools/decomp.sh`)
+found only **33 real function starts** in this 64 KB band (`scratch/decomp/region_8001.c`), even
+though the recompiler emits **519 distinct `func_8001xxxx` addresses** here — the mismatch itself is
+the key finding: most of those 519 addresses are NOT independent functions, they're the recompiler's
+address-granularity view of two very different things:
+
+### 0x80010000-0x800109FF — kernel exception/trap chain (BIOS, DO NOT PORT)
+`func_800109F8 -> func_80010A00 -> func_80010A04 -> func_80010A08`, reading `cop0_mfc(c, 0)` (COP0
+status/cause) and calling `rec_break(c, <code>)` (a recompiler-emitted BIOS TRAP/break intrinsic).
+This is the exception-vector trampoline chain, not game code — same category as the platform's
+existing `PlatformHle` BIOS table. Leave substrate.
+
+### 0x80017930-0x8001CAC0 — BIOS jump table + embedded debug strings (DATA MISDECODED AS CODE)
+Ghidra's auto-analysis defined **zero** real functions in this ~19 KB span. The recompiler's own
+`func_XXXX`/`gen_func_XXXX` output here is almost entirely 2-instruction "trampoline" pairs spaced
+exactly 4 bytes apart (`void func_80017978(Core* c){ func_8001797C(c); return; }`, hundreds of
+these) — the signature of a **jump table being scanned as code**, not a real call graph. Confirmed
+by decompiling `func_8001CC00`'s callee `func_8001CC24` (guest addr in this band): Ghidra decoded
+raw ASCII bytes as MIPS opcodes (`/* UNHANDLED op:0x18 raw=0x616E6F4D */` = the string bytes
+`"Mona..."`/`"...razuL"`/`"...Sterk"` etc, reversed-endian fragments of an embedded debug/panic
+string table). **This band is not portable game logic — it is BIOS-adjacent jump-table/string data
+that the recompiler's linear scan mis-split into hundreds of fake "functions". Do not RE or port
+individual `func_8001793x..8001CAxx` addresses as game logic; they are not independently meaningful.**
+
+### 0x8001CB00-0x8001FFFC — REAL game/AI code: melee-proximity/cone-arbitration family
+Ghidra found all 33 real functions in this ~19 KB sub-range. Two clusters:
+
+**(a) Init + FSM cluster `0x8001CB00-0x8001DD90` — SCOPED, NOT RE'd to completion (lower
+confidence, do not draft yet).** `FUN_8001cc00` allocates 8 fixed-size regions via a
+still-substrate `FUN_80080830(region_id, size, align, flags)` allocator (region ids `0xf4000001`/
+`0xf0000011`, sizes 4/0x8000/0x100/0x2000 — looks like an SPU/DMA-adjacent sub-heap, NOT yet RE'd),
+zeroes a 15×0x3c-byte slot table (`DAT_800bed90`/`DAT_800bf114`), and calls `FUN_8001cba8` twice
+(a small, fully-understood 2-slot struct-zero: writes `0x00/0xfc/0x00/0xff` to `+0x48/0x4a/0x4c/0x4e`
+of each slot — shape matches a pad/analog-stick calibration reset, NOT confirmed). `FUN_8001ce04`
+through `FUN_8001dc9c` form a cooperative wait-loop chain around a `PcScheduler`-style yield
+(`FUN_80051f80`, ALREADY NATIVE = `Engine::s4c`) and a "done_flag"-style poll (`FUN_80089b44`/
+`FUN_80089e1c`, still substrate) — plausibly a CD/XA-adjacent async wait (shape resembles
+`docs/faithful-execution.md`'s `FUN_80044BD4` spawn-and-wait pattern) but NOT confirmed; flagged for
+a follow-up RE pass, not drafted. `FUN_8001d41c` dispatches on the SAME area-id global
+(`DAT_800bf870`) used by the object-placement table select (`docs/engine_re.md` §"Placement
+record" above) to one of 22 area-specific handlers in the 0x8010-0x8014 overlay range — likely a
+per-area sound-cue or scripted-event hook, NOT RE'd (out of band; those handlers live outside this
+session's assigned addresses).
+
+**(b) Melee-proximity/cone-arbitration family `0x8001EC3C-0x8001FF7C` — HIGH CONFIDENCE, ONE
+representative DRAFTED.** Nine near-identical functions (`FUN_8001ec3c`, `FUN_8001f054`,
+`FUN_8001f40c`, `FUN_8001f650`, `FUN_8001f830`, `FUN_8001f9dc`, `FUN_8001fae0`, `FUN_8001fc50`,
+`FUN_8001ff7c`) all implement the same shape: XZ-plane distance test (combined hitbox radius) +
+Y-band overlap test (combined height/half-extent) between two actor records, using an actor struct
+**confirmed IDENTICAL to the already-drafted `ActorMeleeEngage`** (`game/ai/actor_melee_engage.h`,
+0x80112188, A00-overlay band) — same field offsets `+46/+50/+54` (Z/Y/X position) and `+128/+132/
++134` (hitbox radius/height/Y-threshold), and the SAME two math callees:
+- `FUN_80084080` — a distance/sqrt-shaped leaf, **decompiled this session**
+  (`scratch/decomp/sqrt_80084080.c`): uses the GTE coprocessor's leading-zero-count trick
+  (`setCopReg(2,0xF000,x); getCopReg(2,0xF800)` = COP2 LZCS/LZCR) to normalize the input into a
+  1024-entry Q12 fixed-point reciprocal-sqrt table at guest `0x800A6310`, then rescales by the shift
+  count. Confirmed NOT the same algorithm/address as the already-native `Math::isqrt16`
+  (`FUN_80077FB0`, `game/math/gte_math.cpp`) — a genuinely different sqrt variant used only by this
+  AI-proximity family (and by `ActorMeleeEngage`, which already flagged it as "not RE'd this
+  session" — now RE'd, still not ported: it's a small, pure, table-driven leaf but the 1024-entry
+  LUT content itself wasn't extracted this session, so it stays substrate/rec_dispatch'd for now).
+- `FUN_80085690` -> already-native `Trig::ratan2` (`game/math/trig.h`) — used directly by the drafts
+  without wiring anything (same rationale `ActorMeleeEngage` used: `Trig` is RE'd-correct but
+  orphaned/unwired; this whole session's drafts are themselves unwired dead code).
+
+  **Drafted this session: `FUN_8001F9DC` -> `MeleeProximity::isAtApproachAnchor`**
+  (`game/ai/melee_proximity.{h,cpp}`, UNWIRED, not SBS-verified). The simplest family member — a
+  pure boolean test with one side effect (stamps the approach angle into shared scratchpad
+  `0x1F80009C`, the SAME slot `ActorMeleeEngage` writes). Transcribed directly from
+  `generated/shard_2.c:795` (`gen_func_8001F9DC`, the recompiler's instruction-exact output — used
+  as primary source over the Ghidra decompile per CLAUDE.md's RE-first/ground-truth rule). Guest
+  40-byte frame (spills r19/r16/r17/r18/ra) mirrored in `isAtApproachAnchorFramed()` per the
+  "mirror the guest stack" directive, kept dead/unused until a caller + SBS gate exist.
+  - The other 8 family members share the same shape but differ in side effects (position snap-to-
+    target via `Trig::rsin`/`rcos`, hit-reaction state stamps at `+0x140/0x144/0x145/0x147-149/
+    0x16e/0x17e`, SFX trigger via still-substrate `FUN_80074590`) and were NOT drafted this
+    session (quality-over-quantity: `isAtApproachAnchor` was the only one confidently disentangled
+    from its side-effect fields without risking a mistranscription; the other 8 are documented here
+    as a mapped, high-confidence FAMILY for a fast follow-up, not guessed at).
+  - **Refs**: `scratch/decomp/region_8001.c` (full Ghidra decompile of the 33 real functions),
+    `scratch/decomp/sqrt_80084080.c`, `generated/shard_2.c:795`, `scratch/bin/tomba2/main_ram.bin`
+    (import source, `scratch/ghidra/main_ram_re.gpr`).

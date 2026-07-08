@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 386 native fns, 333 owned addresses, 385 LIVE / 1 ORPHAN.
+Totals: 387 native fns, 334 owned addresses, 386 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -25,6 +25,7 @@ Totals: 386 native fns, 333 owned addresses, 385 LIVE / 1 ORPHAN.
 | 0x8001D940 | LIVE | `Cd::asyncRead` | runtime/recomp/cd_override.cpp:184 |  | the engine's ASYNC streaming reader. It is spawned as task1 (its body |
 | 0x8001DB8C | LIVE | `Cd::loadFile` | runtime/recomp/cd_override.cpp:162 |  | Direct-call native loadfile (used by the PC-native boot path, which ow… |
 | 0x8001DC40 | LIVE | `Cd::dc40Sync` | runtime/recomp/cd_override.cpp:215 |  | Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NO… |
+| 0x8001F9DC | LIVE | `MeleeProximity::isAtApproachAnchor` | game/ai/melee_proximity.cpp:13 | 0x80084080 |  |
 | 0x80020364 | LIVE | `ActorTomba::stepModeInteract` | game/player/actor_tomba.cpp:400 |  | postInteractWalk case 0xF/0x14/0x56 (mode=0) / 0x2F (mode=2). |
 | 0x800205CC | LIVE | `ActorTomba::type8Interact` | game/player/actor_tomba.cpp:510 |  | postInteractWalk case 8. |
 | 0x80022060 | LIVE | `ActorTomba::proximityCheck` | game/player/actor_tomba.cpp:98 |  | cylinder proximity + Y-band check. |

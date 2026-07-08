@@ -2309,3 +2309,22 @@ ties into render-ownership, NOT the asset pipeline). (Camera sub-fns below are D
   new `game/render/quad_rtpt_submit.{h,cpp}` — mirrors the already-owned `OverlayGt3Gt4::gt3/gt4` idiom.
   Also noted: `tools/codemap.py --addr 0x8003B220` reports "NO native owner" despite `game/player/
   hitbox.cpp` owning it — a codemap detection gap, not fixed this session (flagged for the operator).
+- **Band 0x80010000-0x8001FFFF RE survey (fleet agent, 2026-07-08, RE-ahead-of-frontier — UNWIRED).**
+  Ghidra headless full-analysis found only 33 real function starts in this 64 KB band, vs 519
+  recompiler `func_8001xxxx` addresses — the gap is the finding. `docs/engine_re.md` "WIDE-RE survey:
+  0x80010000-0x8001FFFF" has the full breakdown. NOT portable game logic for most of the band:
+  (1) 0x80010000-0x800109FF — kernel exception/trap chain (`rec_break` + `cop0_mfc`), BIOS, leave
+  substrate; (2) 0x80017930-0x8001CAC0 (~19 KB) — confirmed a BIOS jump table + embedded debug
+  strings MISDECODED AS CODE by the recompiler's linear scan (hundreds of 2-instruction "trampoline"
+  functions spaced 4 bytes apart; one callee decompiled to raw ASCII string bytes, not instructions)
+  — NOT individually meaningful, do not RE/port any `func_8001793x..8001CAxx` address as game logic.
+  (3) 0x8001CB00-0x80020000 — REAL game/AI code, two clusters: an init+FSM cluster
+  (0x8001CB00-0x8001DD90, SCOPED not RE'd to completion — pad-calibration-shaped slot reset +
+  cooperative wait-loop chain + an area-id-keyed 22-way dispatcher, all flagged for follow-up) and a
+  9-function melee-proximity/cone-arbitration family (0x8001EC3C-0x8001FF7C) using the SAME actor
+  struct as the already-drafted `ActorMeleeEngage` (0x80112188) and its same math callees
+  (`FUN_80084080` sqrt-via-GTE-LZCS, decompiled this session; `Trig::ratan2`, already native).
+  DRAFTED (compile-only, unwired, unverified): `FUN_8001F9DC` -> `MeleeProximity::isAtApproachAnchor`
+  in new `game/ai/melee_proximity.{h,cpp}` — the simplest family member, guest 40-byte frame mirrored
+  in `isAtApproachAnchorFramed()`. The other 8 family members are named/mapped, not drafted
+  (side-effect fields not confidently disentangled in this session's window).
