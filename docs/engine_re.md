@@ -2143,6 +2143,9 @@ session per "quality of RE > quantity — refuse to draft what you can't verify"
    state-machine leaves without verifying the cross-function state contracts would be the kind of
    quantity-over-quality mistake the wide-RE tier is meant to avoid. Flagged as a dedicated
    ActorTomba-FSM follow-up wave (its own region-sized task, not a tail end of this one).
+   **SUPERSEDED 2026-07-08 — see "Region 0x800527C8-0x8005FB54 follow-up wave" below**: the
+   dispatcher at the top of this range (`0x800527C8`) is now RE'd + drafted (UNWIRED), and the
+   remaining ~100 functions are triaged into named families with call-graph evidence.
 
 `scratch/decomp/region_8005.c` (full Ghidra decompile, 145 functions), `scratch/decomp/
 region_8005_survey.txt` (first-lines-only survey of all 145), `generated/shard_1.c` /
@@ -2365,3 +2368,158 @@ used here). Sizes are generated-C line counts (rough proxy for MIPS instruction 
 | 0x8013ED54 | 26 | 0x8013EDD0 | 53 | 0x8013EEA0 | 45 |
 | 0x8013EF58 | 23 | 0x8013EFA8 | 319 | 0x8013F4DC | 345 |
 | 0x8013FAE0 | 18 | 0x8013FB1C | 15 | 0x8013FB4C | 16 |
+## Region `0x800527C8-0x8005FB54` follow-up wave (2026-07-08, wide-RE tier, UNWIRED) — the
+## ActorTomba "G-block" physics/AI region, dispatcher-first pass
+
+Follow-up to the "Mapped-only" note above, per its own recommendation ("dedicated ActorTomba-FSM
+follow-up wave"). Approach taken: **RE the top-level dispatcher first** (per the CLAUDE.md
+"dispatch-first" guidance) to get real action names before the individual handlers, then wide-triage
+the rest by call-graph family rather than function-by-function (100 functions, several 200-390 lines
+— full deep RE of all of them is its own multi-session arc, not a single wide-RE pass).
+
+### Drafted this session: the enemy-vs-Tomba proximity-combat dispatcher
+
+**`0x800527C8` -> `beh_actor_tomba_proximity_combat(Core* c)`** (`game/ai/
+beh_actor_tomba_proximity_combat.{h,cpp}`, UNWIRED draft, compiles). Full writeup in the .h banner;
+summary: a0 = a generic hostile-actor record (the SAME field layout as `game/ai/
+actor_melee_engage.h`/`melee_proximity.h` — position triple at +46/50/54, timers at +64/66/74,
+engaged-latch at +96, turn-cooldown at +98, etc.), dispatched on `obj+4` (outer mode: 0=init,
+1=active, 2/3=despawn, >=4 idle). Mode 1 drives a 5-state (`obj+5`) machine, picked from ONE of
+TWO parallel jump tables selected by `obj+3` (a kind/mode gate) — table A @ `0x80016DB0` (cases
+`0x800529EC/80052B18/80052B70/80052C10/80052CB8`) vs table B @ `0x80016DC8` (cases `0x80052DA0/
+80052E68/80052EB0/80052F00/80052F50`). Both tables' states pull Tomba's own G-block fields (writes
+`G+46/50/54/86/378/1`) toward the enemy — i.e. this IS the native mirror of "an enemy interrupting/
+snapping Tomba's walk state on engage", NOT a Tomba-internal state. **No static call site exists in
+any generated shard for `0x800527C8`** (confirmed: only reachable via an indirect function-pointer
+"think" slot this session did not chase down) — wiring needs that caller/spawn-table search first.
+Translated as a mechanical 1:1 transliteration of `generated/shard_3.c:13494` (register scratch kept
+as `c->r[N]`, s0/s1 promoted to named `self`/`G` locals, goto/label control flow preserved exactly —
+same "don't risk a mis-restructure under time pressure" call `actor_melee_engage.cpp` made for a
+comparably dense DAG), so transcription risk is low but UNVERIFIED (no SBS gate; dead code).
+
+### The REAL frontier: `0x8005950C` is Tomba's per-frame G-block driver
+
+**`0x8005950C` is called directly from the ALREADY-NATIVE `Engine::frameStartTick`/
+`frameStartTickFaithful`** (`game/core/engine.cpp:2684/2753`, confirmed via `docs/code-map.md`'s own
+call-graph column `0x8005950C 0x8009A450 ...` for `0x80059D28`). It is a 96-line switch-shaped
+orchestrator whose callees (`0x80053E50`, `0x80053FDC`, `0x80055C9C`, `0x80058648`, `0x80058918`,
+`0x80042310`, `0x80045580`, plus `Cd::toSpuMix` already-native) cascade into roughly HALF of the
+remaining functions in this region. **This is the highest-value next RE target in the region** —
+porting it (and the chain below it) is what actually retires most of the "mapped-only" families
+below, rather than treating them as independent leaves. Not attempted this session (a 96-line
+switch plus a ~15-function cascade is its own focused pass); flagged here so the next wave starts
+here instead of re-discovering it.
+
+### Mapped-only families (call-graph + partial-read triage, NOT drafted)
+
+Grouped by shared call-set / shared globals (evidence: `scratch/re/` call-graph dump, this session;
+addresses read in full: `0x8005308C, 8005314C, 800531DC, 800532A0, 8005344C, 800534B0, 800535D4,
+800535E0, 80053670, 8005376C, 800537B8, 800538E0, 80053968, 80053BF8` [partial]). All others in the
+list below are triaged from call-set/global overlap + a skim, NOT a full read — confidence is
+"structural family", not "byte-exact semantics".
+
+- **Outer action-selector cluster (`0x8005308C-0x800535E0`, ~11 fns).** `0x800532A0` is the real
+  find: reads `obj+0x6a` (packed nibble fields) and `obj+0x142/0x44/0x147`, derives an action code
+  written to `obj+0x16A`, looks it up through table `DAT_800a4478` to get a final outer-state byte,
+  and — if it differs from the CURRENT `obj+5` — commits it (clearing `obj+6/7`) and returns 1. This
+  is Tomba's **outer-state chooser**, i.e. the function that decides which of the ~15 "mode-N"
+  handler families further down actually runs this frame. `0x8005308C` is a companion "can-act" gate
+  (checks `obj+4==1 && obj+5>1`, special-cases `obj+0x164==0`, calls the already-native
+  `SceneTransition::clearSwapBlock`). `0x8005314C` picks an SFX id from `obj+0x6a` nibbles and calls
+  `Sfx::trigger` (already-native). `0x800531DC` is a game-mode-gated (`DAT_800bf870`) Y-position
+  clamp on `obj+0x32` — confirms `obj` IS Tomba's own G-block here (matches `ActorTomba`'s own
+  `+0x32` Y-field), i.e. this whole cluster (unlike `0x800527C8` above) operates directly on G, not
+  a generic actor. `0x8005344C` is a one-shot mode-4 override. `0x800534B0`/`0x800537B8` both call
+  `FUN_8007ab20` (a record allocator) and copy a subset of G's fields into the new record — reads
+  like "spawn a linked hit-effect/shadow record cloned from Tomba's pose". `0x800535D4`/`0x800535E0`
+  are small state-byte queries (`obj+0x176`/`obj+0x79`) gating whether a "busy" flag is set.
+  `0x80053670`/`0x8005376C` toggle/query that same busy flag via `0x800534B0`.
+- **`0x80053968`/`0x80053BF8`** — proximity/interaction leaves: `0x80053968` walks the aux list at
+  `*0x1F800140` (SAME list `ActorTomba::interactWalk` walks) computing an angle via
+  `FUN_80085690`/`Trig::ratan2`-shaped math against a caller-supplied heading window; `0x80053BF8`
+  reads `obj+0x61` ("flag97", the SAME field `ActorTomba::velocityIntegrate`'s tail-dispatch checks)
+  and `obj+0x16b`/`obj+0x16c`, clearing/committing the "blocked" state — this is very likely
+  `velocityIntegrate`'s missing counterpart (the function that SETS what `settleStep` later reads).
+- **`0x80053D0C/80053D90/80053E50/80053FDC`** — cascading calls into the already-native
+  `Engine::gStateMutate` (`0x80058304`) — outer-state TRANSITION helpers (enter/verify/commit shape).
+- **`0x80054790/8005490C/80054B34/80054C08/80054D14(owned)/80054DAC/80054E24/80054E80`** — a family
+  of `Engine::walkStart`-adjacent helpers, each reading a small per-state constant table
+  (`0x800a44ac..44f0` region) and calling `walkStart`/`animTick`-shaped leaves — "enter walk-substate
+  N with anim/physics preset from table" wrappers.
+- **`0x800551C4/80055284/800552EC/80055390/80055634/80055704/800557EC/80055824/80055844/80055864`**
+  — a "target slot" family, all touching scratch `0x800ecf54` (a recurring "current interactable/
+  lock target" global) and/or `0x800e7e68` (`G+0x1E8`, an extended G field beyond
+  `actor_tomba.h`'s currently-named range) — query/clear/set helpers for whatever Tomba is currently
+  locked onto.
+- **`0x800558B4/80055F48/80055FBC`** — `0x80055FBC` is a 377-line self-contained mega-function
+  (table-driven off `0x800a455c/4574`) — NOT triaged beyond "big table-driven sub-FSM, likely a
+  specific interactable type (climb/push-class)"; flagged for its own dedicated pass.
+- **`0x80056C00/80056D44/80056E08/80056EC8/80056F3C/8005706C/80057150/800572EC/8005749C/800574E0`**
+  — walkStart/gStateMutate-adjacent "enter/exit a sub-mode" helpers (costume/tool-state changes —
+  e.g. climbing/riding), similar shape to the `0x80054790` family above but a second table set
+  (`0x800a4588/45a0`). `0x800574E0` (170 lines) is the biggest of this family — not fully read.
+- **`0x80057A68/80057C08`** — ties `growthStep` (`0x80057DC0`, owned) + `Engine::walkStart` +
+  `0x80054E80` + the target-slot family together — a "grown-state interaction" driver.
+- **`0x80057FD4`** — table-driven (`0x800a3fa8/4270`), touches `G+0x74` and `0x800ed014/98`. The
+  `0x800ed098` global is independently documented in `game/ai/beh_lift_platform.cpp`'s own header
+  comment ("mem[0x800ED098] is a SIGNED lh") — cross-reference suggests this is a **ride/lift
+  interaction handler for Tomba**, sharing state with the lift-platform overlay behavior. Worth a
+  dedicated pass given the existing lift_platform RE to build from.
+- **`0x80058648`** — calls `recordArrayInit` (already-native) + `growthStep` (owned) + `0x80057FD4`
+  + `0x800597AC` + 2 more — looks like a per-frame orchestrator ABOVE the growth/lift/target
+  families, i.e. one layer below `0x8005950C` (see "REAL frontier" above).
+- **`0x800588BC/80058918/80058F24/80058F5C`** — `0x80058918` (247L) and `0x80058F5C` (253L) share
+  almost the exact same call set (`531DC,53D90,54198,X8BC/X8F24,58910/58f24,5A910`) — a near-
+  duplicate PAIR, likely two variants of the same state (e.g. normal vs. underwater, matching the
+  `0x800BF870`/water-mode gates seen throughout this region).
+- **`0x8005950C`** — see "REAL frontier" section above.
+- **`0x800597AC`** — calls `Math::applyMatrixLV` (already-native) 4+ times against fixed
+  scratchpad vector/matrix addresses (`0x1F800020/40/74/C0`) — a secondary matrix-composition pass,
+  likely IK/limb-specific (companion to `Engine::objMatrixCompose`).
+- **`0x80059D28` (owned, `Engine::frameStartTick`), `0x80059ED8` (owned, `beh_camera_target_follow`)**
+  — already native, listed for completeness (both are IN this address range).
+- **`0x8005A39C`** — table-driven (`0x800a4610-4613`) angle-step + `walkStart` — a "turn toward"
+  helper (uses the still-substrate angle-step leaf `0x800776F8`, same one `0x800527C8`'s draft
+  above calls).
+- **`0x8005A714`** — calls `0x800538E0` (the record-spawn helper) + `Sfx::trigger` — a "spawn splash/
+  impact effect" helper.
+- **`0x8005A910/8005A970/8005ACC8/8005AEE4`** — `0x8005A910` (12 lines) is a tiny land/water
+  dispatcher gated on `0x800BF816` (the SAME water-mode global `ActorTomba::postFrameWaterCheck`
+  gates on) choosing between `0x8005A970` (land) and `FUN_80112B50` (water, outside this region,
+  already referenced by `ActorMeleeEngage`'s doc). `0x8005A970/8005ACC8/8005AEE4` are a near-
+  identical TRIPLET (call set `532A0,538E0,5444C,54D14,54E80,551C4,55390,558B4` shared across all
+  three) — almost certainly three "interactable-type A/B/C" variants of the same template (matches
+  the codebase's existing `beh_typed_variant_router.cpp`-style convention for this kind of family).
+- **`0x8005B134/8005B20C/8005B370/8005B5E4`** — smaller helpers; `0x8005B370` calls the already-
+  native `Trig::rsin`/`Trig::rcos` (`0x80083E80`/`0x80083F50`) — an "approach angle" computation.
+- **`0x8005B63C` (389 lines) / `0x8005C26C` (223 lines)** — a huge PAIR sharing most of their call
+  set (`49280,537B8,53BF8,53D0C,541F4,5444C,...`) — two large "interact" mega-handlers, likely
+  boss/companion-specific; NOT triaged further (each is its own dedicated-pass candidate).
+- **`0x8005C8A0/8005CDF8/8005D16C`** — a THIRD "variant A/B/C" triplet (call sets `532A0/53670/
+  5376C/5444C/5490C/54D14` for C8A0/D16C; `53670/5376C/53D90/54198/54B34/54C08` for CDF8).
+- **`0x8005D530` (335 lines)** — the biggest single function in the region; shares
+  `4766C/4960C`-family calls with `0x80053BF8`'s "blocked-state" leaves — likely a cutscene/
+  dialogue-triggered variant of the blocked/recovery handler. NOT triaged further.
+- **`0x8005DE54` (259 lines)** — shares `4766C/47B5C/4960C/54198/5444C/54D14` with the
+  `0x80053BF8` blocked-state family — another blocked/knockback-recovery variant.
+- **`0x8005E580/8005E8FC/8005EC70/8005EF48`** — a FOURTH near-identical family (call set
+  `54198,54D14,55824,558B4,55D5C,55E28,56B48(velocityIntegrate,owned),56C00` shared across all
+  four) — likely four sub-variants of a climb/swim locomotion handler (the only family that calls
+  `ActorTomba::velocityIntegrate` directly).
+- **`0x8005F1B0/8005F2F0/8005FA84/8005FB54`** — tail cluster. `0x8005F2F0` (249L) calls
+  already-native `Cd::toSpuMix` plus `0x80044CD4`/`0x8004ED94` and tables `0x800a4542/46e4` — looks
+  cutscene/ending-adjacent. `0x8005FA84`/`0x8005FB54` share globals `0x800BF809/80A/80B` and
+  `0x8005FB54` calls the SAME still-substrate predicate `0x80042728` that `0x800527C8`'s draft
+  above uses (substate-0's countdown-expiry gate) — a paired "final state" handler.
+
+### Next steps (for whoever picks up the follow-up wave)
+
+1. RE `0x8005950C` first (the real per-frame driver, see above) — everything else in this region
+   is more tractable once its dispatch shape is known.
+2. The three/four "variant A/B/C(/D)" template families above (`8005A970/ACC8/AEE4`,
+   `8005C8A0/CDF8/D16C`, `8005E580/E8FC/EC70/EF48`) are the best next RE targets after that: porting
+   ONE member of each triplet + diffing against its siblings is far cheaper than four independent
+   full RE passes.
+3. `0x80057FD4`'s lift/ride cross-reference with `game/ai/beh_lift_platform.cpp` is a concrete,
+   already-partially-RE'd lead — worth chasing before the anonymous mega-functions
+   (`0x8005B63C`/`0x8005C26C`/`0x8005D530`).

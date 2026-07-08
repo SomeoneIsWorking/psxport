@@ -2394,3 +2394,20 @@ byte-exact. Full per-function notes + the complete 153-address UNOWNED table in 
 of already-owned `beh_substate_edge_orchestrator` (6 unowned leaves, 0x8012E8A8-0x80130524) and
 `beh_cull_substate_orchestrator` (6 unowned leaves, 0x8013272C-0x80133184) — the orchestrators
 themselves are LIVE but dispatch out to substrate for every case body.
+- **Band 0x800527C8-0x8005FB54 follow-up wave (fleet agent, 2026-07-08, RE-ahead-of-frontier —
+  UNWIRED).** Dispatcher-first pass per the CLAUDE.md guidance. Full breakdown in docs/engine_re.md
+  "Region 0x800527C8-0x8005FB54 follow-up wave". DRAFTED (compile-only, unwired, unverified, no SBS
+  run, no static caller found — reached only via an indirect fn-ptr "think" slot): `0x800527C8` ->
+  `beh_actor_tomba_proximity_combat` (new `game/ai/beh_actor_tomba_proximity_combat.{h,cpp}`) — an
+  enemy-vs-Tomba proximity-combat state machine (2 parallel 5-state jump tables keyed on `obj+5`,
+  selected by `obj+3`), mechanically transliterated 1:1 from `generated/shard_3.c:13494`
+  (register-scratch-preserving style, per `actor_melee_engage.cpp`'s own "don't risk a
+  mis-restructure under time pressure" precedent for dense DAGs). KEY FINDING (not drafted, flagged
+  as the real next target): `0x8005950C` is Tomba's per-frame G-block state-machine driver, called
+  directly from the ALREADY-NATIVE `Engine::frameStartTick`/`frameStartTickFaithful` — most of the
+  remaining ~99 functions in the region cascade from it, so it should be RE'd FIRST in the next
+  wave rather than treating the region as ~99 independent leaves. The rest of the region (~99
+  functions) is triaged into 15 named call-graph families (outer action-selector, target-slot,
+  walkStart/gStateMutate-adjacent enter/exit helpers, 3-4 near-identical "variant A/B/C(/D)"
+  template triplets, a lift/ride cross-reference with `game/ai/beh_lift_platform.cpp`, etc.) — see
+  docs/engine_re.md for the full family breakdown and next-step priority order.

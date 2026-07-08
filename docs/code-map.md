@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 530 native fns, 449 owned addresses, 506 LIVE / 24 ORPHAN.
+Totals: 531 native fns, 450 owned addresses, 507 LIVE / 24 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -182,6 +182,7 @@ Totals: 530 native fns, 449 owned addresses, 506 LIVE / 24 ORPHAN.
 | 0x80052078 | LIVE | `Engine::startStage` | game/core/engine.cpp:2875 | 0x80080870 0x80080890 0x800808A0 | switch task 0 to the given stage (load overlay + reset the display/BIO… |
 | 0x80052078 | LIVE | `eng_stage_transition` | game/scene/level_load.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x800520E0 | LIVE | `Engine::initSubsystems` | game/scene/startup.cpp:235 |  |  |
+| 0x800527C8 | LIVE | `beh_actor_tomba_proximity_combat` | game/ai/beh_actor_tomba_proximity_combat.cpp:14 | 0x80041718 0x80041768 0x8004190C 0x80042728 0x800518FC 0x800519E0 … |  |
 | 0x80054198 | LIVE | `SceneTransition::clearSwapBlock` | game/scene/scene_transition.cpp:98 |  | small swap-block ephemeral clear. RE'd from disas 0x80054198..0x800541… |
 | 0x80054650 | LIVE | `ActorTomba::settleStep` | game/player/actor_tomba.cpp:658 | 0x8004954C | ======================================================================… |
 | 0x80054D14 | LIVE | `Engine::walkStart` | game/core/engine.cpp:931 | 0x80054790 | Engine::walkStart — FUN_80054D14. |
