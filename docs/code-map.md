@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 522 native fns, 444 owned addresses, 503 LIVE / 19 ORPHAN.
+Totals: 525 native fns, 444 owned addresses, 506 LIVE / 19 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -28,15 +28,15 @@ Totals: 522 native fns, 444 owned addresses, 503 LIVE / 19 ORPHAN.
 | 0x8001DB8C | LIVE | `Cd::loadFile` | runtime/recomp/cd_override.cpp:162 |  | Direct-call native loadfile (used by the PC-native boot path, which ow… |
 | 0x8001DC40 | LIVE | `Cd::dc40Sync` | runtime/recomp/cd_override.cpp:215 |  | Direct-call native FUN_8001DC40(dest, lba, size_bytes): the inline (NO… |
 | 0x8001F9DC | LIVE | `MeleeProximity::isAtApproachAnchor` | game/ai/melee_proximity.cpp:13 | 0x80084080 |  |
-| 0x80020364 | LIVE | `ActorTomba::stepModeInteract` | game/player/actor_tomba.cpp:400 |  | postInteractWalk case 0xF/0x14/0x56 (mode=0) / 0x2F (mode=2). |
-| 0x800205CC | LIVE | `ActorTomba::type8Interact` | game/player/actor_tomba.cpp:510 |  | postInteractWalk case 8. |
-| 0x80022060 | LIVE | `ActorTomba::proximityCheck` | game/player/actor_tomba.cpp:98 |  | cylinder proximity + Y-band check. |
-| 0x80022190 | LIVE | `ActorTomba::subHitboxCheck` | game/player/actor_tomba.cpp:141 |  | per-sub-hitbox collision variant. |
-| 0x80022760 | LIVE | `ActorTomba::interactWalk` | game/player/actor_tomba.cpp:58 |  | ======================================================================… |
+| 0x80020364 | LIVE | `ActorTomba::stepModeInteract` | game/player/actor_tomba.cpp:402 |  | postInteractWalk case 0xF/0x14/0x56 (mode=0) / 0x2F (mode=2). |
+| 0x800205CC | LIVE | `ActorTomba::type8Interact` | game/player/actor_tomba.cpp:512 |  | postInteractWalk case 8. |
+| 0x80022060 | LIVE | `ActorTomba::proximityCheck` | game/player/actor_tomba.cpp:100 |  | cylinder proximity + Y-band check. |
+| 0x80022190 | LIVE | `ActorTomba::subHitboxCheck` | game/player/actor_tomba.cpp:143 |  | per-sub-hitbox collision variant. |
+| 0x80022760 | LIVE | `ActorTomba::interactWalk` | game/player/actor_tomba.cpp:60 |  | ======================================================================… |
 | 0x80022A80 | LIVE | `Engine::modePerFrameDispatchFaithful` | game/core/engine.cpp:2574 |  | Engine::modePerFrameDispatchFaithful — pc_faithful mirror of gen_func_… |
 | 0x80022A80 | LIVE | `Engine::modePerFrameDispatch` | game/core/engine.cpp:2593 |  |  |
-| 0x80022C78 | LIVE | `ActorTomba::growthYSnap` | game/player/actor_tomba.cpp:618 |  | leaf, no guest-stack frame. Operates on G (postFrameWaterCheck's |
-| 0x800235A0 | LIVE | `ActorTomba::type7Interact` | game/player/actor_tomba.cpp:585 |  | postInteractWalk case 7. |
+| 0x80022C78 | LIVE | `ActorTomba::growthYSnap` | game/player/actor_tomba.cpp:628 |  | leaf, no guest-stack frame. Operates on G (postFrameWaterCheck's |
+| 0x800235A0 | LIVE | `ActorTomba::type7Interact` | game/player/actor_tomba.cpp:587 |  | postInteractWalk case 7. |
 | 0x80025588 | LIVE | `Engine::sceneEventFifo` | game/core/engine.cpp:541 |  | Native FUN_80025588 — the field EVENT/COMMAND-QUEUE state machine (str… |
 | 0x800263C0 | LIVE | `Array8Dispatch::tickFaithful` | game/object/array8_dispatch.cpp:23 |  | tickFaithful(): line-for-line mirror of gen_func_80026368 (generated/s… |
 | 0x800263E8 | LIVE | `Pool::seedAreaObjects` | game/world/pool.cpp:142 | 0x8007AD98 | area object-record seeding. Selects a per-area byte sequence (table 0x… |
@@ -74,7 +74,7 @@ Totals: 522 native fns, 444 owned addresses, 503 LIVE / 19 ORPHAN.
 | 0x8003FD10 | ORPHAN | `osc_fd10` | game/world/entity.cpp:323 |  | per-object OSCILLATE / FRAME-TOGGLE sub-behavior (one of sm40558 STATE… |
 | 0x80040410 | ORPHAN | `child_spawn_40410` | game/world/entity.cpp:45 |  | per-object CHILD-NODE SPAWN / sub-object builder (a callee of the per-… |
 | 0x80040558 | ORPHAN | `sm40558` | game/world/entity.cpp:135 | 0x8003FBC4 0x8003FC00 0x8003FC78 0x8003FC8C 0x8003FE00 0x8003FED8 … | per-object STATE-MACHINE HEAD (the dispatcher whose state-0 handler ca… |
-| 0x80040A58 | LIVE | `CubeTextLedger::lookupCost` | game/object/cube_text_ledger.cpp:45 |  |  |
+| 0x80040A58 | LIVE | `CubeTextLedger::lookupCost` | game/object/cube_text_ledger.cpp:48 |  |  |
 | 0x80040A58 | LIVE | `SceneEvents::classSize` | game/scene/scene_events.cpp:28 |  |  |
 | 0x80040B48 | LIVE | `SceneEvents::armBody` | game/scene/scene_events.cpp:44 |  | The arm primitive body. Wrapped by SceneEvents::arm below so it can be… |
 | 0x80040B48 | LIVE | `SceneEvents::arm` | game/scene/scene_events.cpp:79 |  |  |
@@ -183,10 +183,10 @@ Totals: 522 native fns, 444 owned addresses, 503 LIVE / 19 ORPHAN.
 | 0x80052078 | LIVE | `eng_stage_transition` | game/scene/level_load.cpp:66 |  | (stageIdx) — the cooperative STAGE TRANSITION: load the next stage's o… |
 | 0x800520E0 | LIVE | `Engine::initSubsystems` | game/scene/startup.cpp:235 |  |  |
 | 0x80054198 | LIVE | `SceneTransition::clearSwapBlock` | game/scene/scene_transition.cpp:98 |  | small swap-block ephemeral clear. RE'd from disas 0x80054198..0x800541… |
-| 0x80054650 | LIVE | `ActorTomba::settleStep` | game/player/actor_tomba.cpp:641 | 0x8004954C | ======================================================================… |
+| 0x80054650 | LIVE | `ActorTomba::settleStep` | game/player/actor_tomba.cpp:658 | 0x8004954C | ======================================================================… |
 | 0x80054D14 | LIVE | `Engine::walkStart` | game/core/engine.cpp:931 | 0x80054790 | Engine::walkStart — FUN_80054D14. |
-| 0x80056B48 | LIVE | `ActorTomba::velocityIntegrate` | game/player/actor_tomba.cpp:696 |  | ======================================================================… |
-| 0x80057DC0 | LIVE | `ActorTomba::growthStep` | game/player/actor_tomba.cpp:283 |  | ======================================================================… |
+| 0x80056B48 | LIVE | `ActorTomba::velocityIntegrate` | game/player/actor_tomba.cpp:713 |  | ======================================================================… |
+| 0x80057DC0 | LIVE | `ActorTomba::growthStep` | game/player/actor_tomba.cpp:285 |  | ======================================================================… |
 | 0x80058304 | LIVE | `Engine::gStateMutate` | game/core/engine.cpp:992 | 0x800310F4 | Engine::gStateMutate — native ownership of FUN_80058304 (Ghidra decomp… |
 | 0x80059D28 | LIVE | `Engine::frameStartTick` | game/core/engine.cpp:2684 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
 | 0x80059D28 | LIVE | `Engine::frameStartTickFaithful` | game/core/engine.cpp:2753 | 0x8005950C 0x8009A450 0x80109024 0x8010F63C 0x8010F654 0x80112220 | Engine::frameStartTickFaithful — byte-exact mirror of gen_func_80059D2… |
@@ -431,12 +431,12 @@ Totals: 522 native fns, 444 owned addresses, 503 LIVE / 19 ORPHAN.
 | 0x8010AE30 | LIVE | `native_sop_overlay_shadow_spawn` | game/ai/sop_overlay_shadow.cpp:61 |  | (parent) -> node ptr (0 on pool exhaustion). |
 | 0x8010B798 | LIVE | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:86 |  |  |
 | 0x8010B990 | LIVE | `beh_sop_intro_narration` | game/ai/beh_sop_intro_narration.cpp:126 |  |  |
-| 0x8010E904 | LIVE | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:324 |  | ======================================================================… |
+| 0x8010E904 | LIVE | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:326 |  | ======================================================================… |
 | 0x80112188 | LIVE | `ActorMeleeEngage::doIt` | game/ai/actor_melee_engage.cpp:25 | 0x80022C78 0x80055844 0x80084080 |  |
 | 0x80112A60 | LIVE | `aux_list_walk` | game/ai/area_seaside_perframe.cpp:67 |  | Walk the aux render list, dispatching FUN_80112A60(item) per item type… |
-| 0x801130C4 | LIVE | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:181 |  | ======================================================================… |
+| 0x801130C4 | LIVE | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:183 |  | ======================================================================… |
 | 0x80113C5C | LIVE | `Behaviors::areaSeasidePerframe` | game/ai/area_seaside_perframe.cpp:90 |  |  |
-| 0x80114E74 | LIVE | `ActorTomba::type4GuardedCheck` | game/player/actor_tomba.cpp:127 |  | type-4 guarded proximity. |
+| 0x80114E74 | LIVE | `ActorTomba::type4GuardedCheck` | game/player/actor_tomba.cpp:129 |  | type-4 guarded proximity. |
 | 0x80117658 | LIVE | `beh_prng_velocity_machine` | game/ai/beh_prng_velocity_machine.cpp:50 |  |  |
 | 0x801178A4 | LIVE | `whiteFlashPhaseRamp` | game/ai/beh_a06_multi_actor.cpp:69 |  | the 5-phase white-flash phase ramp SM. See the file header for the pha… |
 | 0x80117AAC | LIVE | `whiteFadeHold` | game/ai/beh_a06_multi_actor.cpp:126 |  | 3-state fade-hold-fade-back companion to whiteFlashPhaseRamp. |

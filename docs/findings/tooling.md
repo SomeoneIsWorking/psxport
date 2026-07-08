@@ -215,3 +215,51 @@
   `registerOverrides()` from `dc_boot_init` too. Out of scope here — touches every prior cluster's wiring.
 - **refs:** game/math/gte_math.{h,cpp} (Math::registerOverrides); runtime/recomp/boot.cpp; docs/port-
   progress.md "GTE matrix cluster" session entry; the `ActorReward` dual-wiring entry above.
+
+## Wiring a banked draft found 2 real transcription bugs via generated/ byte-trace (not caught by SBS alone)
+
+- **symptom:** two wide-RE-drafted-but-unwired clusters (game/object/cube_text_ledger.{h,cpp},
+  game/player/actor_tomba.cpp's 4 postInteractWalk sub-handlers) were ready to wire onto the frontier.
+  Both had extensive RE doc comments and "matches Ghidra 1:1" claims, but a line-by-line cross-check
+  against `generated/shard_*.c` (the recompiler's own emission — ground truth per faithful-execution.md)
+  found two real bugs the draft-time RE missed.
+- **bug 1 — register-leak clobbered:** `ActorTomba::type7Interact` set `c->r[6] = item` before its
+  second dispatch call (`LEAF_STEP_MODE_FLAG`). Ground truth (`gen_func_800235A0`) never reloads r6
+  there — a2 is a caller-saved scratch register left over from the FIRST call's (`LEAF_PROX_STEP`)
+  side effects, and the original PSX compiler simply never re-set it, so whatever that callee left in
+  r6 becomes an unintended argument to the second callee. Since `LEAF_PROX_STEP` is the SAME substrate
+  body on both SBS cores, its post-call r6 value is naturally identical either way — clobbering it with
+  `item` broke that identity. This is the kind of bug that's easy to miss reading a decompile (Ghidra
+  hides "unused" register carryover) but jumps out immediately in the raw per-register recompiler
+  emission.
+- **bug 2 — polarity swap:** `ActorTomba::growthYSnap` picked the growth-offset constant backwards:
+  `(g17E < 0) ? 0x8C : 0x46` when ground truth (`gen_func_80022C78`) is `(g17E < 0) ? 0x46 : 0x8C` — the
+  branch-taken path explicitly RESETS the constant register at its target label, while the fallthrough
+  keeps the branch instruction's own delay-slot preset; a decompile-level read can easily flip which
+  path "owns" which constant. The same swapped constant was inlined a second time in
+  `ActorTomba::type8Interact`'s "just left growth" tail, so one fix corrected both call sites.
+- **why SBS alone wouldn't have caught these cleanly:** SBS gates on DIVERGENCE, not on "did this branch
+  even execute" — bug 1's `LEAF_STEP_MODE_FLAG` reads a2 for something SBS would show diverging (good),
+  but only on a play-through that actually reaches type7Interact's `v0>=0` path; bug 2's growth-flag
+  branch requires the grow/shrink mechanic to trigger. A short autonav SBS run can easily land 0-diff
+  while never exercising the buggy branch, then regress later. **Lesson: for a wired draft, do the
+  register/constant-level RE cross-check against `generated/` BEFORE relying on a single SBS run to
+  "prove" it — SBS confirms no divergence on the states it reached, not correctness of unreached
+  branches.**
+- **fix:** both corrected in game/player/actor_tomba.cpp (see the in-code "BUG FIX" comments); re-gated
+  SBS-full, 0-diff over ~7650 frames, with `type7Interact` firing 1040 times in that run (exercising the
+  exact branch bug 1 touched) and 0 divergence. `stepModeInteract`/`type8Interact`/`growthYSnap`
+  (bug 2's branch) did not fire in this autonav window — their correctness rests on the RE trace, not
+  fresh empirical confirmation; flag for a future session with a longer/different playthrough.
+- **also wired this session (no bugs found):** `CubeTextLedger::activateSlot`/`deactivateSlot`/
+  `spawnPopup` (0x80040B48/80040C00/80040AA4), dual-wired same as `ActorReward`; `lookupCost`
+  (0x80040A58) deliberately left UNwired since it's only ever reached by a direct intra-function call
+  from inside `gen_func_80040B48`/`gen_func_80040C00`'s own bodies — no rec_dispatch caller exists, and
+  wiring it via `shard_set_override` would risk diverting core B's reference execution (the g_override[]
+  table is process-global and unconditional at the reader, unlike `EngineOverrides` which self-gates on
+  `psx_fallback`).
+- **refs:** game/object/cube_text_ledger.{h,cpp}; game/player/actor_tomba.{h,cpp}; runtime/recomp/
+  boot.cpp `register_engine_overrides`; generated/shard_2.c:4542 (`gen_func_80040A58`), shard_3.c:11258
+  (`gen_func_80040AA4`), shard_4.c:4944 (`gen_func_80040B48`), shard_5.c:5496 (`gen_func_80040C00`),
+  shard_7.c:1379 (`gen_func_80020364`), shard_0.c:1112/1466 (`gen_func_800205CC`/`gen_func_80022C78`),
+  shard_4.c:1267 (`gen_func_800235A0`).
