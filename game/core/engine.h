@@ -433,7 +433,8 @@ public:
   void initFrameState();               // FUN_80050A0C — vblank + double-buffer pacing state
   void initDisplay();                  // FUN_800509B4 — GTE projection CRs + display H
   void initCamera();                   // FUN_80050A80 — camera scratchpad matrices + state
-  void identityMatrixAt(uint32_t p);   // FUN_80051794 — identity 3x3 rot + zero translation (8 words)
+  // FUN_80051794 (identity 3x3 rot + zero translation) is owned by `Mtx::identity` (game/math/mtx.h)
+  // — call `c->mtx.identity(p)` directly (deduped 2026-07-08: this used to carry a redundant copy).
   void initEntityPool();               // FUN_8007B328 — entity-pool control block + fixed-pt scales
   void initAlloc(uint32_t s1, uint32_t s2);  // FUN_80088B00 — allocator + 6-entry dispatch table
   void initInput();                    // FUN_80087A60 → 80086970 — input subsystem

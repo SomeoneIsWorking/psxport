@@ -21,8 +21,9 @@ public:
   //   `addr`. 8 word stores, faithful to the guest.
   void identity(uint32_t addr);
 
-  // Diagonal-scale matrix (guest FUN_800517BC): write a 3x3 with m[0][0]=x, m[1][1]=y, m[2][2]=z
-  //   (sign-extended s16), all off-diagonals and the translation zeroed. Same 32-byte layout as
-  //   identity(). Faithful to the guest.
-  void diagonal(uint32_t addr, int32_t x, int32_t y, int32_t z);
+  // NOTE: the diagonal-scale matrix write (guest FUN_800517BC) is owned by
+  // `NodeXform::seedBlock` (game/render/node_xform.h) — that is the wired dispatch target for
+  // this address. A duplicate `Mtx::diagonal` (dead code, zero callers) lived here until
+  // 2026-07-08's dual-ownership dedup; do not re-add it — call `c->mRender->mNodeXform.seedBlock(...)`
+  // instead.
 };

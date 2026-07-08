@@ -10,15 +10,13 @@
 // (shard_set_override + EngineOverrides), same pattern as ActorReward. spawnPopup (FN_40AA4) has
 // only a substrate caller today but is dual-wired anyway for future-proofing/tracing consistency,
 // matching ActorReward's precedent of dual-wiring even currently-substrate-only leaves.
-// lookupCost (FN_40A58) is DELIBERATELY left UNWIRED: it is called ONLY via a direct
-// `func_80040A58(c)` from INSIDE gen_func_80040B48/gen_func_80040C00's own recompiled bodies (see
-// generated/shard_2.c:4542 / shard_4.c:4944 / shard_5.c:5496) — never via rec_dispatch, never from
-// any other substrate site. Wiring it through shard_set_override would risk corrupting core B (the
-// pure psx_fallback reference): g_override[] is a single process-global table read UNCONDITIONALLY
-// by func_80040A58's dispatcher wrapper, so an ungated entry would divert core B's own
-// gen_func_80040B48/C00 away from calling the real gen_func_80040A58. Our native
-// activateSlot/deactivateSlot call CubeTextLedger::lookupCost() directly as a C++ helper instead of
-// dispatching by address, so no override is needed for it at all — see registerOverrides().
+// FN_40A58 (the size-class/cost table lookup) has NO owner of its own in this file: it is the
+// SAME leaf as game/scene/scene_events.cpp's `SceneEvents::classSize` (identical two-level table
+// walk over the same STR_TABLE_BASE/COST_TABLE addresses — see scene_events.h). This file used to
+// carry a redundant copy (`CubeTextLedger::lookupCost`, deduped 2026-07-08 — dual-ownership found
+// via codemap); activateSlot/deactivateSlot now call `c->engine.sceneEvents.classSize(slot, mode)`
+// directly (mode 0 == nibbleLo=false / "start" cost, mode 1 == nibbleLo=true / "stop" cost). No
+// dispatch wiring needed for it here either way — see registerOverrides().
 //
 // FOUR functions, one shared subsystem: a small fixed ledger of "popup slots" keyed by the SAME
 // STRING TABLE that drives beh_cube_text_spawn's node[0x60] index (0x800A33C8, stride 12 bytes/
@@ -73,17 +71,12 @@ class  Game;
 
 class CubeTextLedger {
 public:
-  // FUN_80040A58(slot, mode) -> v0 (u32 cost). Pure table lookup, no side effects.
-  //   mode == 0 -> high nibble of STR_TABLE_BASE[slot*12 + 1]  (the "start"/activate cost index)
-  //   mode != 0 -> low  nibble of STR_TABLE_BASE[slot*12 + 1]  (the "stop"/deactivate cost index)
-  // then returns COST_TABLE[nibble].
-  static uint32_t lookupCost(Core* c, uint32_t slot, uint32_t mode);
-
   // FUN_80040B48(slot) -> v0. a0 = slot.
   //   v0 = -1  if G_LEDGER_GATE == 0 (ledger disabled — no tally in flight)
   //   v0 =  0  if SLOT_STATE[slot] != 0 (already active or already-deactivated-terminal)
-  //   v0 =  1  on success: SLOT_STATE[slot]=1; ACTIVE_COUNT++; RUNNING_COST += lookupCost(slot,0);
-  //            append (slot, event=0) to the ring log; LOG_INDEX++.
+  //   v0 =  1  on success: SLOT_STATE[slot]=1; ACTIVE_COUNT++; RUNNING_COST +=
+  //            SceneEvents::classSize(slot, /*nibbleLo=*/false) (FUN_80040A58, high nibble = "start"
+  //            cost index); append (slot, event=0) to the ring log; LOG_INDEX++.
   static void activateSlot(Core* c);   // a0 = slot; sets v0 (r2)
 
   // FUN_80040C00(slot) -> v0. a0 = slot.
@@ -91,7 +84,8 @@ public:
   //   v0 =  0  if SLOT_STATE[slot] == 0xFF (already deactivated — terminal, no-op)
   //   v0 =  1  otherwise: (if SLOT_STATE[slot]==0, ACTIVE_COUNT++ anyway — ground-truth quirk,
   //            reproduced exactly); SLOT_STATE[slot]=0xFF; DEACTIVATE_COUNT++;
-  //            RUNNING_COST += lookupCost(slot,1); append (slot, event=1); LOG_INDEX++.
+  //            RUNNING_COST += SceneEvents::classSize(slot, /*nibbleLo=*/true) (low nibble = "stop"
+  //            cost index); append (slot, event=1); LOG_INDEX++.
   static void deactivateSlot(Core* c); // a0 = slot; sets v0 (r2)
 
   // FUN_80040AA4(value, variant) -> v0 (node ptr, or 0 on freelist exhaustion). a0=value, a1=variant.

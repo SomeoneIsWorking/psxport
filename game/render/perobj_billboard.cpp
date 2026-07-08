@@ -32,9 +32,9 @@
 // billboard-type node and composes it with a persistent camera MATRIX before handing off to
 // billboardEmit. Both use a shared, non-scratchpad per-instance scratch region at main-RAM 0x800C0000
 // (BUF below) that holds ordinary libgte MATRIX structs (m[3][3] int16 row-major + 2 pad bytes + t[3]
-// int32 — exactly what Engine::identityMatrixAt's 8-word write pattern and Math::rotZ/matMul's byte
+// int32 — exactly what Mtx::identity's 8-word write pattern and Math::rotZ/matMul's byte
 // reads agree on):
-//   BUF+0x00 MAT_A     — C2D4: identity (Engine::identityMatrixAt). C464: seeded by the still-substrate
+//   BUF+0x00 MAT_A     — C2D4: identity (Mtx::identity). C464: seeded by the still-substrate
 //                         FUN_800517BC(node+122/124/126 as s16 x,y,z) instead of identity.
 //   BUF+0x20 MAT_ROTZ  — identity, then Z-rotated in place by mem16(node+90) via Math::rotZ.
 //   BUF+0x40 MAT_OUT   — Math::matMul(MAT_ROTZ, MAT_A, MAT_OUT) (= MAT_ROTZ for C2D4, since MAT_A is
@@ -233,8 +233,8 @@ void Render::billboardCompose1() {
   withDepthTag(c, node, [](Core* c) {
     GuestFrame frame(c, 40);
     const uint32_t node = c->r[4];
-    c->engine.identityMatrixAt(MAT_A);
-    c->engine.identityMatrixAt(MAT_ROTZ);
+    c->mtx.identity(MAT_A);
+    c->mtx.identity(MAT_ROTZ);
     c->math.rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
     const uint32_t flag = c->mem_r8(node + 71) & 1u;
     c->math.matMul(MAT_ROTZ, MAT_A, MAT_OUT);
@@ -255,7 +255,7 @@ void Render::billboardCompose2() {
     c->r[6] = (uint32_t)c->mem_r16s(node + 124);
     c->r[7] = (uint32_t)c->mem_r16s(node + 126);
     func_800517BC(c);
-    c->engine.identityMatrixAt(MAT_ROTZ);
+    c->mtx.identity(MAT_ROTZ);
     c->math.rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
     const uint32_t flag = c->mem_r8(node + 71) & 1u;
     c->math.matMul(MAT_ROTZ, MAT_A, MAT_OUT);

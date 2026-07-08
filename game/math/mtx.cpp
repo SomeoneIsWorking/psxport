@@ -15,19 +15,8 @@ void Mtx::identity(uint32_t addr) {
   c->mem_w32(addr + 28, 0);
 }
 
-void Mtx::diagonal(uint32_t addr, int32_t x, int32_t y, int32_t z) {
-  Core* c = this->core;
-  // Guest drops the high half via sll 16 / sra 16; the mask below is what actually matters (the
-  // sign-extend is a no-op once we `& 0xFFFF`, so no (int16_t) cast needed).
-  uint32_t xw = (uint32_t)x & 0xFFFFu;
-  uint32_t yw = (uint32_t)y & 0xFFFFu;
-  uint32_t zw = (uint32_t)z & 0xFFFFu;
-  c->mem_w32(addr +  0, xw);   // m[0][0]=x  m[0][1]=0
-  c->mem_w32(addr +  4, 0);    // m[0][2]=0  m[1][0]=0
-  c->mem_w32(addr +  8, yw);   // m[1][1]=y  m[1][2]=0
-  c->mem_w32(addr + 12, 0);    // m[2][0]=0  m[2][1]=0
-  c->mem_w32(addr + 16, zw);   // m[2][2]=z  pad=0
-  c->mem_w32(addr + 20, 0);
-  c->mem_w32(addr + 24, 0);
-  c->mem_w32(addr + 28, 0);
-}
+// FUN_800517BC (diagonal-scale matrix write) is owned by `NodeXform::seedBlock`
+// (game/render/node_xform.cpp), which is the real wired dispatch target for that address
+// (registered via NodeXform::registerOverrides / EngineOverrides). This class used to carry an
+// unused, uncalled duplicate implementation (`Mtx::diagonal`) — deleted 2026-07-08 (dual-ownership
+// found via codemap; dead code, zero callers).

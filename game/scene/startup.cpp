@@ -20,17 +20,9 @@
 
 void rec_dispatch(Core*, uint32_t);   // run a guest fn (for the few sub-bits not yet PC-native)
 
-// FUN_80051794 — set an identity 3x3 rotation matrix (0x1000 = 1.0 fixed on the diagonal) + zero
-// translation: 8 contiguous words [R11|R12, R13|R21, R22|R23, R31|R32, R33, 0, 0, 0]. (PSX "InitMatrix".)
-// Exposed as a public Engine method (not file-local) so other owned subsystems (e.g. entity.cpp's
-// FUN_801244E8 port) can call it directly instead of rec_dispatch-ing an already-owned leaf.
-void Engine::identityMatrixAt(uint32_t p) {
-  Core* c = this->core;
-  c->mem_w32(p + 0,  0x1000); c->mem_w32(p + 4,  0);
-  c->mem_w32(p + 8,  0x1000); c->mem_w32(p + 12, 0);
-  c->mem_w32(p + 16, 0x1000); c->mem_w32(p + 20, 0);
-  c->mem_w32(p + 24, 0);      c->mem_w32(p + 28, 0);
-}
+// FUN_80051794 (identity 3x3 rotation matrix + zero translation) is owned by `Mtx::identity`
+// (game/math/mtx.cpp) — the same leaf; deduped 2026-07-08 (this file used to carry a redundant
+// copy as `Engine::identityMatrixAt`). Callers use `c->mtx.identity(p)` directly.
 
 // FUN_80050a0c — engine frame-state init: zero the vblank counter and the double-buffer / frame-pacing
 // flags the main loop reads (DAT_1f800235 = frame-rate divisor, DAT_1f800135 = buffer parity,
@@ -83,8 +75,8 @@ void Engine::initDisplay() {
 // H*-0x50000 where H = DAT_801003f8 (the projection plane, signed halfword = 350, set by FUN_800509b4).
 void Engine::initCamera() {
   Core* c = this->core;
-  identityMatrixAt(0x1F8000F8);
-  identityMatrixAt(0x1F800118);
+  c->mtx.identity(0x1F8000F8);
+  c->mtx.identity(0x1F800118);
   int32_t h = c->mem_r16s(0x801003F8);   // projection plane H (set earlier; signed lh)
   c->mem_w32(0x1F8000DC, 0); c->mem_w32(0x1F8000E0, 0); c->mem_w32(0x1F8000E4, 0);
   c->mem_w32(0x1F8000D0, 0); c->mem_w32(0x1F8000D4, 0);

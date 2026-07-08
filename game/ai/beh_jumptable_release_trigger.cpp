@@ -86,7 +86,7 @@ static void release_position_801244e8(Core* c, uint32_t obj, uint32_t mode) {
   if (st != 1) return;
   if (Actor(c, obj).boundsCull() != 0) {                // FUN_8007778C (native)
     const uint32_t xf = obj + 0x98;
-    c->engine.identityMatrixAt(xf);                     // FUN_80051794 (native)
+    c->mtx.identity(xf);                                 // FUN_80051794 (native)
     c->r[4] = obj + 0x54; c->r[5] = xf;
     rec_dispatch(c, 0x800847F0u);
     c->r[4] = 0x1F8000F8u; c->r[5] = xf;

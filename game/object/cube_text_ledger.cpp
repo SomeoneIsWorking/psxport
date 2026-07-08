@@ -4,6 +4,7 @@
 #include "core.h"
 #include "cube_text_ledger.h"
 #include "engine_overrides.h"
+#include "core/engine.h"
 #include "game.h"
 #include <cstdint>
 
@@ -24,9 +25,6 @@ constexpr uint32_t G_LEDGER_GATE     = 0x800E7FEEu; // s16 (alias of actor_sm_re
 constexpr uint32_t LOG_INDEX         = 0x800ED06Du; // u8
 constexpr uint32_t LOG_SLOT_BASE     = 0x800ED06Eu; // u8[]
 constexpr uint32_t LOG_EVENT_BASE    = 0x800ED074u; // u8[]
-constexpr uint32_t STR_TABLE_BASE    = 0x800A33C8u; // stride 12
-constexpr uint32_t STR_TABLE_STRIDE  = 12u;
-constexpr uint32_t COST_TABLE_BASE   = 0x800A3B38u; // stride 4, 16 entries
 constexpr uint32_t POPUP_ACTIVE_COUNT= 0x800BF849u; // u8 (beh_cube_text_spawn.cpp counterpart)
 constexpr uint32_t CUBE_TEXT_VTABLE  = 0x8003AD48u; // beh_cube_text_spawn (LIVE, game/ai/)
 
@@ -45,12 +43,6 @@ void appendLog(Core* c, uint32_t slot, uint8_t event) {
 
 } // namespace
 
-uint32_t CubeTextLedger::lookupCost(Core* c, uint32_t slot, uint32_t mode) {
-  uint8_t packed = c->mem_r8(STR_TABLE_BASE + slot * STR_TABLE_STRIDE + 1);
-  uint32_t nibble = (mode == 0) ? (uint32_t)(packed >> 4) : (uint32_t)(packed & 0xF);
-  return c->mem_r32(COST_TABLE_BASE + nibble * 4);
-}
-
 void CubeTextLedger::activateSlot(Core* c) {
   const uint32_t slot = c->r[4];
   if (c->mem_r16s(G_LEDGER_GATE) == 0) { c->r[2] = 0xFFFFFFFFu; return; }
@@ -59,7 +51,7 @@ void CubeTextLedger::activateSlot(Core* c) {
 
   c->mem_w8(SLOT_STATE_BASE + slot, 1);
   c->mem_w16(ACTIVE_COUNT, (uint16_t)(c->mem_r16(ACTIVE_COUNT) + 1));
-  const uint32_t cost = lookupCost(c, slot, 0);
+  const uint32_t cost = c->engine.sceneEvents.classSize((uint8_t)slot, /*nibbleLo=*/false);
   c->mem_w32(RUNNING_COST, c->mem_r32(RUNNING_COST) + cost);
   appendLog(c, slot, 0);
   c->r[2] = 1;
@@ -80,7 +72,7 @@ void CubeTextLedger::deactivateSlot(Core* c) {
 
   c->mem_w8(SLOT_STATE_BASE + slot, 0xFF);
   c->mem_w16(DEACTIVATE_COUNT, (uint16_t)(c->mem_r16(DEACTIVATE_COUNT) + 1));
-  const uint32_t cost = lookupCost(c, slot, 1);
+  const uint32_t cost = c->engine.sceneEvents.classSize((uint8_t)slot, /*nibbleLo=*/true);
   c->mem_w32(RUNNING_COST, c->mem_r32(RUNNING_COST) + cost);
   appendLog(c, slot, 1);
   c->r[2] = 1;

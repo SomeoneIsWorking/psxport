@@ -10,16 +10,10 @@
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 
-// FUN_8009A450 — the platform PRNG (`rand`): the classic glibc LCG state*0x41C64E6D + 12345, state at
-// 0x80105EE8, returns (state>>16)&0x7FFF. Called from many hot per-frame loops (particle/effect jitter,
-// range-random 0x80032A44). Pure platform primitive — exact native reimplementation (mult low word =
-// mflo). `randverify` (lazy REPL gate) snapshots/restores the state word and A/B's v0 + new state vs the
-// recomp body.
-static inline uint32_t rand_lcg(Core* c) {
-  uint32_t st = c->mem_r32(0x80105EE8u) * 0x41C64E6Du + 12345u;
-  c->mem_w32(0x80105EE8u, st);
-  return (st >> 16) & 0x7FFFu;
-}
+// FUN_8009A450 (the platform PRNG) is owned by `Rng::next` (game/math/rng.cpp) — same LCG
+// (state*0x41C64E6D + 12345 at 0x80105EE8, returns (state>>16)&0x7FFF), called as `c->rng.next()`.
+// This file used to carry an unused, uncalled duplicate (`rand_lcg`, ORPHAN) — deleted 2026-07-08
+// (dual-ownership found via codemap; dead code, zero callers).
 // Trig LUTs (FUN_80083E80 sin / FUN_80083F50 cos) are OWNED by class Trig (game/math/trig.h),
 // which is byte-perfect vs the substrate (verified by the CutsceneCamera oracle test). The old
 // static trig_sin/trig_cos/trig_lut helpers + ov_trig_sin/ov_trig_cos/ov_trig_lut orphan
