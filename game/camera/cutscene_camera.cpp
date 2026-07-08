@@ -7,6 +7,7 @@
 #include "cutscene_camera.h"
 #include "cfg.h"
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold (camverify)
+#include "engine_overrides.h"   // class EngineOverrides — global dispatch table
 #include "mtx.h"
 #include "trig.h"
 #include <stdint.h>
@@ -810,10 +811,21 @@ void CutsceneCamera::initSeedGrp(uint32_t src) {   // FUN_8006CBA8 (writes the F
   w16(CAM_OBJ + 0x42, r16(src + 10));
 }
 
-// ── UNWIRED/UNVERIFIED drafts (2026-07-08 RE-ahead pass) ─────────────────────────────────────────
+// ── Wiring pass (2026-07-08 frontier follow-up) ─────────────────────────────────────────────────
 // Ghidra decomp: scratch/decomp_local/region_8006.c (import "main_ram", va 0x80060000-0x80070000) +
 // gen_func_8006E8F8 (generated/shard_5.c, Ghidra missed this one — read the recompiled body directly,
-// which is instruction-exact ground truth per CLAUDE.md). Not wired to any dispatch table; not SBS-gated.
+// which is instruction-exact ground truth per CLAUDE.md).
+//
+// REAL BUG found wiring this one (was drafted assuming camera-only semantics): the gen body reads
+// its object base from a0 (c->r[4]), NOT a hardcoded CAM_OBJ constant like pushMode/restoreMode/
+// snapToMasterOffsetY200/orbitTick below. Confirmed by its cross-module callers (generated/
+// ov_a00_shard_0.c..ov_a0k_shard_0.c etc.) — every one of them calls FUN_8006E8F8 with a0 = that
+// overlay's OWN actor-object pointer (e.g. `c->r[16]`, an A00-area actor base), not the camera
+// object at 0x800E8008. So this leaf is a generic "reset follow accumulator" applied to whatever
+// object shares this field shape (0x24/0x28/0x56) — the camera is just ONE caller (of many). The
+// method itself is unaffected (it already takes its base from the instance's `cam_`, which reads
+// as "cam" only by naming convention); the fix lives entirely in the EngineOverrides wiring below,
+// which constructs the instance from the LIVE a0 rather than hardcoding CAM_OBJ.
 void CutsceneCamera::resetFollowAccum() {   // FUN_8006E8F8
   camW32(0x24, 0);
   camW32(0x28, 0);
@@ -834,7 +846,22 @@ void CutsceneCamera::restoreMode() {   // FUN_8006E1E4
   camW32(0x0c, r32(MASTER_Y));
   camW8(0x64, camR8(0x67));   // restore the mode pushMode() stashed
 }
+// FUN_8006EA00 pushes a real 32-byte guest frame (r29-=32, s0/s1/ra spilled at +16/+20/+24,
+// restored symmetrically before every return) — confirmed against generated/shard_7.c
+// gen_func_8006EA00. Since this leaf is wired GLOBALLY (any rec_dispatch(c, 0x8006EA00u) caller,
+// substrate context included, per the "MIRROR THE GUEST STACK" directive), the frame is mirrored
+// relative to the CALLER's live c->r[29] (not a fixed offset): spill the live s0/s1/ra so their
+// bytes land in guest RAM exactly where the substrate would leave them, run the body (which never
+// itself needs s0/s1 as registers — CAM_OBJ is a compile-time constant here, matching the gen's
+// own hardcoded-constant s0/s1 load), then restore before returning (a nested call, e.g. lookAt's
+// LA_ISQRT rec_dispatch, can clobber the shared Core::r[] register file, so the restore is a real
+// requirement, not a formality).
 void CutsceneCamera::snapToMasterOffsetY200() {   // FUN_8006EA00
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->mem_w32(sp + 24, c->r[31]);
   // cam[8]/[0xc]/[0x10] are a 32-bit (X,Y,Z) staging triple (same shape trackXZ/trackY/snapAccXZ/snapAccY
   // read as `target`); only the HIGH (integer) half is written here — the low half keeps whatever was
   // already there, exactly like the guest (never "cleaned up").
@@ -845,15 +872,34 @@ void CutsceneCamera::snapToMasterOffsetY200() {   // FUN_8006EA00
   snapAccY(CAM_OBJ + 8);
   initPlace();
   lookAt();
+  c->r[31] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] = sp + 32;
 }
+// FUN_8006EF38 pushes the same shape of 32-byte frame (r29-=32, s0/s1/ra spilled at +16/+20/+24)
+// UNCONDITIONALLY — even on the early-return path (the gen's branch-delay-slot spill runs before
+// the {3,4}-window check, and the early-return target is the same restore tail as the normal
+// exit) — confirmed against generated/shard_2.c gen_func_8006EF38. Mirrored the same way as
+// snapToMasterOffsetY200 above; see that method's comment for the rationale.
 void CutsceneCamera::orbitTick() {   // FUN_8006EF38
-  if ((uint8_t)(r8(0x1F800236u) - 3) >= 2) return;   // only during render-timing window {3,4}
-  int32_t angle = (int16_t)camR16(0x70);
-  int32_t rc = c->trig.rcos(angle), rs = c->trig.rsin(angle);
-  w16(S + 0x02, (uint16_t)((int16_t)camR16(0x3a) + (int16_t)(mlo(rc, 500) >> 12)));
-  w16(S + 0x0a, (uint16_t)((int16_t)camR16(0x42) + (int16_t)(mlo(rs, 500) >> 12)));
-  camW16(0x70, (uint16_t)(angle + 8));
-  snapFollow(CAM_OBJ + 0x38);   // snap the camera's own position accumulators to the fixed orbit center
+  c->r[29] -= 32;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 16, c->r[16]);
+  c->mem_w32(sp + 20, c->r[17]);
+  c->mem_w32(sp + 24, c->r[31]);
+  if ((uint8_t)(r8(0x1F800236u) - 3) < 2) {   // only during render-timing window {3,4}
+    int32_t angle = (int16_t)camR16(0x70);
+    int32_t rc = c->trig.rcos(angle), rs = c->trig.rsin(angle);
+    w16(S + 0x02, (uint16_t)((int16_t)camR16(0x3a) + (int16_t)(mlo(rc, 500) >> 12)));
+    w16(S + 0x0a, (uint16_t)((int16_t)camR16(0x42) + (int16_t)(mlo(rs, 500) >> 12)));
+    camW16(0x70, (uint16_t)(angle + 8));
+    snapFollow(CAM_OBJ + 0x38);   // snap the camera's own position accumulators to the fixed orbit center
+  }
+  c->r[31] = c->mem_r32(sp + 24);
+  c->r[17] = c->mem_r32(sp + 20);
+  c->r[16] = c->mem_r32(sp + 16);
+  c->r[29] = sp + 32;
 }
 
 void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera driver; cam obj @0x800E8008)
@@ -1021,5 +1067,57 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
     snapFollowA(cam_ + 0x38);
     snapFollow(G + 0x2c);
   }
+}
+
+// ── EngineOverrides wiring (2026-07-08 frontier follow-up) ──────────────────────────────────────
+// resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick reach the substrate
+// EXCLUSIVELY via rec_dispatch(c, addr) from cross-module (overlay) call sites — confirmed by
+// grepping every generated/*.c reference to these 5 addresses: none appear as a direct same-module
+// `func_<addr>(c)` call EXCEPT pushMode (0x8006E1C0), which generated/shard_3.c, shard_4.c and
+// shard_6.c also call directly (MAIN calling its own resident code — the recompiler emits that as
+// a plain C call, bypassing rec_dispatch entirely and consulting the recompiler's OWN g_override[]
+// table instead). So pushMode needs the dual-wire (EngineOverrides + shard_set_override, same
+// pattern as PcScheduler's primitives in game/core/pc_scheduler.cpp); the other 4 only need
+// EngineOverrides.
+extern void gen_func_8006E1C0(Core*);
+
+static void eov_resetFollowAccum(Core* c) {
+  // a0 (c->r[4]) IS the target object base here — NOT hardcoded CAM_OBJ (see the RE note above
+  // resetFollowAccum's definition). Construct the instance from the live a0.
+  CutsceneCamera(c, c->r[4]).resetFollowAccum();
+}
+static void eov_pushMode(Core* c) {
+  CutsceneCamera(c, CutsceneCamera::CAM_OBJ).pushMode((uint8_t)c->r[4]);
+}
+static void eov_restoreMode(Core* c) {
+  CutsceneCamera(c, CutsceneCamera::CAM_OBJ).restoreMode();
+}
+static void eov_snapToMasterOffsetY200(Core* c) {
+  CutsceneCamera(c, CutsceneCamera::CAM_OBJ).snapToMasterOffsetY200();
+}
+static void eov_orbitTick(Core* c) {
+  CutsceneCamera(c, CutsceneCamera::CAM_OBJ).orbitTick();
+}
+
+// psx_fallback-gated trampoline for shard_set_override (core B must stay pure substrate). Must
+// call traceHit() itself — the recompiler's OWN g_override[] path never goes through
+// EngineOverrides::run(), so it would otherwise be invisible to the ovhit/dispatch channels (same
+// gap documented in engine_overrides.h / game/core/pc_scheduler.cpp).
+static void gov_pushMode(Core* c) {
+  if (c->game->psx_fallback) { gen_func_8006E1C0(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8006E1C0u);
+  eov_pushMode(c);
+}
+
+void CutsceneCamera::registerOverrides(Game* game) {
+  extern void shard_set_override(uint32_t, void (*)(Core*));
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x8006E8F8u, "CutsceneCamera::resetFollowAccum",       eov_resetFollowAccum);
+  ov.register_(0x8006E1C0u, "CutsceneCamera::pushMode",               eov_pushMode);
+  ov.register_(0x8006E1E4u, "CutsceneCamera::restoreMode",            eov_restoreMode);
+  ov.register_(0x8006EA00u, "CutsceneCamera::snapToMasterOffsetY200", eov_snapToMasterOffsetY200);
+  ov.register_(0x8006EF38u, "CutsceneCamera::orbitTick",              eov_orbitTick);
+
+  shard_set_override(0x8006E1C0u, gov_pushMode);
 }
 

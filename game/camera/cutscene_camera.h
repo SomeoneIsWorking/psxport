@@ -24,8 +24,15 @@
 #include "core.h"
 #include <stdint.h>
 
+class Game;
+
 class CutsceneCamera {
 public:
+  // Wire the 2026-07-08 RE-ahead drafts (resetFollowAccum/pushMode/restoreMode/
+  // snapToMasterOffsetY200/orbitTick) onto the global EngineOverrides dispatch table (+ a
+  // shard_set_override dual-wire for pushMode, which also has direct same-module substrate
+  // callers). See cutscene_camera.cpp for the wiring + guest-stack-frame notes.
+  static void registerOverrides(Game* game);
   // Note: pending-teleport state (mCamTpPending / mCamTpX/Y/Z) lives on `Engine` instead — CutsceneCamera
   // is instantiated per-call, so its own members can't persist across the REPL set → next-frame consume
   // boundary. Engine is per-Core and outlives every CutsceneCamera instance.

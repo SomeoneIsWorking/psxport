@@ -18,6 +18,7 @@
 #include "actor_tomba.h"           // class ActorTomba — Tomba's postInteractWalk sub-handler leaves
 #include "actor_melee_engage.h"    // class ActorMeleeEngage — A00-overlay melee-engage/reposition/arm leaf
 #include "melee_proximity.h"       // class MeleeProximity — melee-proximity/approach-anchor leaf
+#include "cutscene_camera.h"       // class CutsceneCamera — resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,6 +93,7 @@ void register_engine_overrides(Game* game) {
   ActorTomba::registerOverrides(game);               // postInteractWalk sub-handlers (0x80020364/800205CC/800235A0/80022C78)
   ActorMeleeEngage::registerOverrides(game);         // A00-overlay melee-engage/reposition/arm leaf (0x80112188)
   MeleeProximity::registerOverrides(game);           // melee-proximity/approach-anchor leaf (0x8001F9DC)
+  CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
 }
 
 int main(int argc, char** argv) {
