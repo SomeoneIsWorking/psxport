@@ -128,6 +128,16 @@ spot-check AFTER Ghidra only.
   `docs/oop.md` for the shape.
 - **No file-scope globals.** No `g_*`, no non-const file-scope statics anywhere in `game/` or
   `runtime/recomp/`. Everything a real class with a header, state on `Game`/`Engine`/subsystem.
+- **MIRROR THE GUEST STACK — never revert/exclude a leaf because it pushes a frame.** If the substrate
+  body of a leaf you're owning descends `sp` (`addiu sp,-N` + register spills), the native port MUST
+  reproduce that frame: `c->r[29] -= N` at entry, write the callee-save spills (`ra`/`s0..s3`) at their
+  RE'd offsets with the LIVE values (ra = the RE'd guest return-address constant, not a magic number),
+  `c->r[29] += N` before return. Then the guest-stack bytes byte-match and SBS is 0-diff. This IS the
+  port — `game/world/object_table.cpp` is the reference (also beh_pickup_collect_trigger/typed_anim_spawn/
+  a06_script_fades). "Diverges at 0x801FE9xx because native doesn't replicate the stack frame" is NOT a
+  reason to revert, leave unwired, or add an `isDeadStackScratch`-style exclusion — mirror the frame. A
+  dead-scratch exclusion is a last resort ONLY for a slot proven unread AND proven impossible to mirror;
+  it is never a substitute for guest-stack residency. See `docs/faithful-execution.md`.
 
 ## Render — reimplement, don't transcribe
 
