@@ -12,6 +12,8 @@
 #include "actor_zoned_attacker.h"  // class ActorZonedAttacker — 0x8014xxxx zoned-attacker sub-behavior cluster
 #include "overlay_gt3gt4.h"        // class OverlayGt3Gt4 — A00-overlay GT3/GT4 packet-emitter cluster
 #include "node_xform.h"            // class NodeXform — per-object child-transform-propagate family
+#include "cube_text_ledger.h"      // class CubeTextLedger — cube-text popup ledger (activate/deactivate/spawn)
+#include "actor_tomba.h"           // class ActorTomba — Tomba's postInteractWalk sub-handler leaves
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +82,8 @@ void register_engine_overrides(Game* game) {
   OverlayGt3Gt4::registerOverrides(game);            // A00-overlay GT3/GT4 packet emitters (0x801465EC/801467BC)
   NodeXform::registerOverrides(game);                // seedBlock/propagateRotmat/propagateAxis/buildAxis (0x800517BC/80051300/80051464/80051C8C)
   c->engine.cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
+  CubeTextLedger::registerOverrides(game);           // cube-text popup ledger activate/deactivate/spawn (0x80040B48/80040C00/80040AA4)
+  ActorTomba::registerOverrides(game);               // postInteractWalk sub-handlers (0x80020364/800205CC/800235A0/80022C78)
 }
 
 int main(int argc, char** argv) {

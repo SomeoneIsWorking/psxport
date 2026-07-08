@@ -1,13 +1,16 @@
-// game/object/cube_text_ledger.cpp — DRAFT / UNWIRED bodies. See cube_text_ledger.h for the full
-// RE derivation, layout, and the "why unwired" note. Do NOT call shard_set_override /
-// EngineOverrides::* for these from any wiring file without first running the SBS-full gate.
+// game/object/cube_text_ledger.cpp — see cube_text_ledger.h for the full RE derivation, layout,
+// and the WIRING note (2026-07-08: activateSlot/deactivateSlot/spawnPopup dual-wired, lookupCost
+// deliberately left unwired).
 #include "core.h"
 #include "cube_text_ledger.h"
+#include "engine_overrides.h"
+#include "game.h"
 #include <cstdint>
 
-void rec_dispatch(Core*, uint32_t); // hybrid call: override if wired (none here), else substrate.
+void rec_dispatch(Core*, uint32_t); // hybrid call: override if wired, else substrate.
                                      // Used only for the two still-unowned leaves this draft calls
                                      // through (freelist alloc + node init) — see the constants below.
+extern void shard_set_override(uint32_t, void (*)(Core*)); // wire the recompiler's OWN g_override[] table
 
 namespace {
 
@@ -104,7 +107,33 @@ void CubeTextLedger::spawnPopup(Core* c) {
   c->r[2] = node;
 }
 
-// NOTE: no `shard_set_override`/`EngineOverrides` registration function is provided here on
-// purpose — this file is a compile-only draft (cmake-listed, never called). A follow-up ownership
-// wave adds the wiring (dual shard_set_override + EngineOverrides, matching actor_sm_reward.cpp's
-// pattern) and the SBS-full 0-diff gate before this can be considered owned.
+// CubeTextLedger::registerOverrides() — dual-wire activateSlot/deactivateSlot/spawnPopup, same
+// shape as ActorReward::registerOverrides (see actor_sm_reward.cpp): EngineOverrides for any
+// native caller reaching these via rec_dispatch(c, addr) (ActorReward::smEventDispatch does, for
+// FN_40B48/FN_40C00), and shard_set_override for the recompiler's own g_override[] table (which is
+// what the substrate's direct `func_<addr>(c)` call sites consult — confirmed via
+// generated/shard_0.c, shard_1.c, shard_2.c, shard_4.c, shard_5.c for FN_40B48/FN_40C00, and
+// generated/shard_3.c:8421 for FN_40AA4). Each shard_set_override trampoline is psx_fallback-gated
+// so core B (the pure SBS reference) keeps running the exact recompiled body — g_override[] is a
+// single table shared by every Core/Game, unlike EngineOverrides which is per-Game and already
+// skips psx_fallback cores inside run().
+extern void gen_func_80040B48(Core*);
+extern void gen_func_80040C00(Core*);
+extern void gen_func_80040AA4(Core*);
+
+namespace {
+void ov_activateSlot(Core* c)   { if (c->game->psx_fallback) { gen_func_80040B48(c); return; } CubeTextLedger::activateSlot(c); }
+void ov_deactivateSlot(Core* c) { if (c->game->psx_fallback) { gen_func_80040C00(c); return; } CubeTextLedger::deactivateSlot(c); }
+void ov_spawnPopup(Core* c)     { if (c->game->psx_fallback) { gen_func_80040AA4(c); return; } CubeTextLedger::spawnPopup(c); }
+}  // namespace
+
+void CubeTextLedger::registerOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80040B48u, "CubeTextLedger::activateSlot",   CubeTextLedger::activateSlot);
+  ov.register_(0x80040C00u, "CubeTextLedger::deactivateSlot", CubeTextLedger::deactivateSlot);
+  ov.register_(0x80040AA4u, "CubeTextLedger::spawnPopup",     CubeTextLedger::spawnPopup);
+
+  shard_set_override(0x80040B48u, ov_activateSlot);
+  shard_set_override(0x80040C00u, ov_deactivateSlot);
+  shard_set_override(0x80040AA4u, ov_spawnPopup);
+}

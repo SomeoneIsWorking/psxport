@@ -16,6 +16,8 @@
 #include "core.h"
 #include "cfg.h"
 #include "core/engine.h"
+#include "engine_overrides.h"
+#include "game.h"
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
@@ -599,8 +601,16 @@ uint8_t ActorTomba::type7Interact(uint32_t item) {
   const int32_t v0 = (int32_t)c->r[2];
   uint8_t result = 0;
   if (v0 >= 0) {
+    // BUG FIX (RE cross-check against generated/shard_4.c:1267 gen_func_800235A0): the ground
+    // truth does NOT reload r6 (a2) before this second call — a2 is a caller-saved scratch
+    // register left as whatever LEAF_PROX_STEP's OWN body last wrote to it (a2 is never one of
+    // that leaf's declared inputs/outputs, so its post-call value is an incidental side effect,
+    // but it's a REAL, deterministic value since LEAF_PROX_STEP is the same substrate body on
+    // both SBS cores). The original draft clobbered it with `item`, which is byte-exact ONLY if
+    // it happens to equal what LEAF_PROX_STEP leaves behind — a latent SBS divergence. Leave r6
+    // untouched here so it carries through exactly like the recompiled body.
     const uint32_t flag = (c->mem_r8(G + 0x164u) == 0x0Cu) ? 4u : 1u;
-    c->r[4] = G; c->r[5] = item; c->r[6] = item; c->r[7] = flag;
+    c->r[4] = G; c->r[5] = item; c->r[7] = flag;
     c->r[31] = 0x80023600u;
     rec_dispatch(c, LEAF_STEP_MODE_FLAG);
     result = 1;
@@ -628,8 +638,15 @@ void ActorTomba::growthYSnap() {
   if (c->mem_r8(G + 0x78u) != 0) return;
   if (c->mem_r8(0x800BF816u) != 0) return;
 
+  // BUG FIX (RE cross-check against generated/shard_0.c:1466 gen_func_80022C78): the ground
+  // truth's `if (g17E<0) goto L_80022CD8` branch jumps to a block that explicitly re-sets r3=70
+  // (0x46) for the comparison/subtraction constant; the FALLTHROUGH (g17E>=0) keeps r3=140
+  // (0x8C) from the branch's own delay-slot preset. So g17E<0 -> 0x46, g17E>=0 -> 0x8C — the
+  // original draft had this backwards. Same polarity bug was inlined at type8Interact's "just
+  // left growth" tail (which reuses this constant indirectly via growthYSnap()), so this one fix
+  // corrects both call sites.
   const int16_t g17E = (int16_t)c->mem_r16(G + 0x17Eu);
-  const int16_t k    = (g17E < 0) ? 0x8C : 0x46;
+  const int16_t k    = (g17E < 0) ? 0x46 : 0x8C;
   const int16_t g84  = (int16_t)c->mem_r16(G + 0x84u);
   if (g84 == k) return;                                        // no-op — already at the snap point
   c->mem_w16(G + 0x32u, (uint16_t)(g84 + ((int16_t)c->mem_r16(G + 0x32u) - k)));
@@ -716,4 +733,35 @@ void ActorTomba::velocityIntegrate(bool suppressY) {
     c->mem_w8(G + 0x5Fu, f);
     c->r[2] = f;
   }
+}
+
+// =================================================================================
+// registerOverrides — wire the 4 postInteractWalk sub-handlers into EngineOverrides. Guest ABI:
+// a0=G (implicit/unused — G is always ActorTomba::G_ADDR), a1=item, a2=mode where applicable;
+// return via r[2] for the two that produce a v0. See actor_tomba.h for why EngineOverrides alone
+// (no shard_set_override) is correct here — no substrate shard calls these 4 addresses directly.
+// =================================================================================
+void ActorTomba::ov_stepModeInteract(Core* c) {
+  const uint32_t item = c->r[5];
+  const uint32_t mode = c->r[6];
+  c->r[2] = c->engine.actorTomba.stepModeInteract(item, mode);
+}
+void ActorTomba::ov_type8Interact(Core* c) {
+  const uint32_t item = c->r[5];
+  c->engine.actorTomba.type8Interact(item);
+}
+void ActorTomba::ov_type7Interact(Core* c) {
+  const uint32_t item = c->r[5];
+  c->r[2] = c->engine.actorTomba.type7Interact(item);
+}
+void ActorTomba::ov_growthYSnap(Core* c) {
+  c->engine.actorTomba.growthYSnap();
+}
+
+void ActorTomba::registerOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80020364u, "ActorTomba::stepModeInteract", ov_stepModeInteract);
+  ov.register_(0x800205CCu, "ActorTomba::type8Interact",    ov_type8Interact);
+  ov.register_(0x800235A0u, "ActorTomba::type7Interact",    ov_type7Interact);
+  ov.register_(0x80022C78u, "ActorTomba::growthYSnap",      ov_growthYSnap);
 }

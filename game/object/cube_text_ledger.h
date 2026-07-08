@@ -1,10 +1,24 @@
-// game/object/cube_text_ledger.h — DRAFT / UNWIRED. RE'd leaves that back the "cube-text" popup
-// family (game/ai/beh_cube_text_spawn.cpp, FUN_8003AD48) and its two callers already referenced
-// but NOT independently understood from game/object/actor_sm_reward.cpp (FN_40B48/FN_40C00 there:
+// game/object/cube_text_ledger.h — RE'd leaves that back the "cube-text" popup family
+// (game/ai/beh_cube_text_spawn.cpp, FUN_8003AD48) and its two callers already referenced but NOT
+// independently understood from game/object/actor_sm_reward.cpp (FN_40B48/FN_40C00 there:
 // "UI/event side-effect (leaf, not independently RE'd)"). This file supplies that RE + a faithful
-// native draft. It is intentionally **not wired** into shard_set_override or EngineOverrides, and
-// the SBS gate has NOT been run against it — per the wide-RE-ahead-of-frontier mandate, banking RE
-// + a compilable draft is the deliverable; a follow-up wave wires + gates it.
+// native port.
+//
+// WIRED 2026-07-08 (frontier pass): activateSlot (FN_40B48) and deactivateSlot (FN_40C00) have
+// BOTH substrate callers (direct `func_<addr>(c)` from several shards) and a native caller
+// (actor_sm_reward.cpp's ActorReward::smEventDispatch, via rec_dispatch) — dual-wired
+// (shard_set_override + EngineOverrides), same pattern as ActorReward. spawnPopup (FN_40AA4) has
+// only a substrate caller today but is dual-wired anyway for future-proofing/tracing consistency,
+// matching ActorReward's precedent of dual-wiring even currently-substrate-only leaves.
+// lookupCost (FN_40A58) is DELIBERATELY left UNWIRED: it is called ONLY via a direct
+// `func_80040A58(c)` from INSIDE gen_func_80040B48/gen_func_80040C00's own recompiled bodies (see
+// generated/shard_2.c:4542 / shard_4.c:4944 / shard_5.c:5496) — never via rec_dispatch, never from
+// any other substrate site. Wiring it through shard_set_override would risk corrupting core B (the
+// pure psx_fallback reference): g_override[] is a single process-global table read UNCONDITIONALLY
+// by func_80040A58's dispatcher wrapper, so an ungated entry would divert core B's own
+// gen_func_80040B48/C00 away from calling the real gen_func_80040A58. Our native
+// activateSlot/deactivateSlot call CubeTextLedger::lookupCost() directly as a C++ helper instead of
+// dispatching by address, so no override is needed for it at all — see registerOverrides().
 //
 // FOUR functions, one shared subsystem: a small fixed ledger of "popup slots" keyed by the SAME
 // STRING TABLE that drives beh_cube_text_spawn's node[0x60] index (0x800A33C8, stride 12 bytes/
@@ -55,6 +69,7 @@
 //                                        waits to reach 0.
 #pragma once
 struct Core;
+class  Game;
 
 class CubeTextLedger {
 public:
@@ -91,4 +106,10 @@ public:
   //   FUN_800727D4(node, value, variant)   (still-unowned init call — invoked, not reimplemented)
   // Returns the node pointer (0 if the allocator returned null).
   static void spawnPopup(Core* c);     // a0 = value, a1 = variant; sets v0 (r2)
+
+  // Wire activateSlot/deactivateSlot/spawnPopup into both the recompiler's g_override[] table
+  // (substrate's direct func_<addr>(c) calls redirect here) and `game`'s EngineOverrides (so
+  // ActorReward's rec_dispatch(c, FN_40B48/FN_40C00) calls also land here). lookupCost is
+  // deliberately NOT registered — see the file header "WIRED 2026-07-08" note.
+  static void registerOverrides(Game* game);
 };

@@ -21,6 +21,7 @@
 #pragma once
 #include <cstdint>
 class Core;
+class Game;
 
 class ActorTomba {
 public:
@@ -91,7 +92,21 @@ public:
   //   water-mode 2. NO SFX. Ghidra decomp scratch/decomp/tomba_postframe_10e904.c.
   void postFrameWaterCheck();
 
+  // Wire stepModeInteract/type8Interact/type7Interact/growthYSnap into `game`'s EngineOverrides —
+  // postInteractWalk's own rec_dispatch(c, LEAF_TYPE_*) call sites are the ONLY reachers of these 4
+  // addresses (confirmed: no substrate shard has a direct `func_<addr>(c)` call site for any of
+  // them — every reference is a rec_dispatch-routed indirect target, per shard_disp.c's dispatch
+  // switch), so EngineOverrides alone is sufficient; no shard_set_override dual-wire is needed.
+  static void registerOverrides(Game* game);
+
 private:
+  // EngineOverrideFn-shaped trampolines for registerOverrides (need class access to the private
+  // sub-handlers below).
+  static void ov_stepModeInteract(Core* c);
+  static void ov_type8Interact(Core* c);
+  static void ov_type7Interact(Core* c);
+  static void ov_growthYSnap(Core* c);
+
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
   void type4GuardedCheck (uint32_t item);     // FUN_80114E74
@@ -150,11 +165,12 @@ private:
   //   guest-stack frame. Operates on G only (a0=G): stamp G+0x29=1, G+0x145=0, G+0x4A=0 (u16),
   //   G+0x50=0 (u16), G+0x148=0 (walk/collision-frame reset — same fields type8Interact's
   //   "just left growth" branch also clears). If G+0x78==0 (not frozen) AND DAT_800BF816==0
-  //   (dry land): read G+0x17E sign to pick the growth-offset constant (0x8C when grown/negative
-  //   flag, else 0x46 — the SAME constants growthStep's Y-compensation uses); if G+0x84 (u16)
+  //   (dry land): read G+0x17E sign to pick the growth-offset constant (0x46 when grown/negative
+  //   flag, else 0x8C — the SAME constants growthStep's Y-compensation uses); if G+0x84 (u16)
   //   already equals that constant, no-op; else re-snap G+0x32 = G+0x84 + (G+0x32 - constant).
   //   Ties growthStep's grow/shrink transform to Tomba's actual on-ground Y after a growth-state
   //   change settles. Faithful draft from generated/shard_0.c:1466 (ground truth, matches
-  //   Ghidra 1:1).
+  //   Ghidra 1:1). CORRECTED 2026-07-08: the original draft had the 0x46/0x8C polarity swapped —
+  //   fixed by direct trace of gen_func_80022C78 (see actor_tomba.cpp).
   void growthYSnap();
 };
