@@ -75,6 +75,9 @@ workflow defects. Stop and fix them, then resume.
   by guest address (`docs/code-map.md`). Regenerate on add/move.
 - **Status & spine:** `docs/port-progress.md` — boot→gameplay execution spine, per-function status,
   current frontier. Port top-to-bottom. Update in the same commit as the work.
+- **Fleet workflow (operator + subagents):** `docs/fleet-workflow.md` — how to drive ownership at scale
+  (one operator orchestrates isolated sonnet subagents; dispatch → integrate → honest SBS gate → push).
+  Read it before running a fleet.
 - **Reference docs:** `docs/faithful-execution.md` (HOW pc_faithful achieves byte-exactness — guest-stack
   residency, native fibers, ported scheduler primitives; read before touching any faithful path),
   `docs/engine_re.md` (engine RE), `docs/render-arch.md` (VK renderer), `docs/gfx-
