@@ -79,6 +79,9 @@ int main(int argc, char** argv) {
                                           // two separately-constructed cores, which never run this main())
   ActorZonedAttacker::registerOverrides(game);  // 0x8014xxxx zoned-attacker sub-behavior cluster
                                                  // (FUN_8014047C/80140544/801409C0/80143A00/80144928/80144B50)
+  c->engine.spawn.registerTypedChildOverrides();   // A00-overlay typed-child spawners (0x801360F4/
+                                                    // 80139838/8013AC34/8013A730 -> Spawn::spawnTypedChild)
+  c->engine.releaseTriggerMotion.registerOverrides();  // release-trigger sub-motion cluster (band 0x8012xxxx)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0

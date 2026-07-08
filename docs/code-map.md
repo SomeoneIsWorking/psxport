@@ -7,7 +7,7 @@ A native may exist already. **LIVE** = reachable by direct C call from a native_
 dispatch root (actually runs). **ORPHAN** = native exists but only the REMOVED override
 table used to reach it — it is dead code until a native parent calls it directly.
 
-Totals: 241 native fns, 210 owned addresses, 6 LIVE / 235 ORPHAN.
+Totals: 245 native fns, 210 owned addresses, 6 LIVE / 239 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -248,15 +248,19 @@ Totals: 241 native fns, 210 owned addresses, 6 LIVE / 235 ORPHAN.
 | 0x8010E904 | ORPHAN | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:324 |  | ======================================================================… |
 | 0x801130C4 | ORPHAN | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:181 |  | ======================================================================… |
 | 0x80114E74 | ORPHAN | `ActorTomba::type4GuardedCheck` | game/player/actor_tomba.cpp:127 |  | type-4 guarded proximity. |
-| 0x80123E9C | ORPHAN | `ReleaseTriggerMotion::hoverBobCycle` | game/ai/release_trigger_motion.cpp:35 | 0x80077B5C | ----------------------------------------------------------------------… |
-| 0x801241BC | ORPHAN | `ReleaseTriggerMotion::leaderFollowSync` | game/ai/release_trigger_motion.cpp:94 | 0x80051D90 0x80123C94 0x8012400C | ----------------------------------------------------------------------… |
-| 0x801244E8 | ORPHAN | `ReleaseTriggerMotion::driftReposition` | game/ai/release_trigger_motion.cpp:145 | 0x80051794 0x80077B5C 0x80084360 0x800847F0 0x80124328 | ----------------------------------------------------------------------… |
-| 0x801246B4 | ORPHAN | `ReleaseTriggerMotion::arcSwoopMotion` | game/ai/release_trigger_motion.cpp:195 | 0x80077B5C | ----------------------------------------------------------------------… |
-| 0x801249D4 | ORPHAN | `ReleaseTriggerMotion::doubleArcMotion` | game/ai/release_trigger_motion.cpp:288 | 0x80077B5C | ----------------------------------------------------------------------… |
-| 0x80124C6C | ORPHAN | `ReleaseTriggerMotion::circleOrbitMotion` | game/ai/release_trigger_motion.cpp:377 | 0x80077B5C | ----------------------------------------------------------------------… |
+| 0x80123E9C | ORPHAN | `ReleaseTriggerMotion::hoverBobCycle` | game/ai/release_trigger_motion.cpp:36 | 0x80077B5C | ----------------------------------------------------------------------… |
+| 0x801241BC | ORPHAN | `ReleaseTriggerMotion::leaderFollowSync` | game/ai/release_trigger_motion.cpp:95 | 0x80051D90 0x80123C94 0x8012400C | ----------------------------------------------------------------------… |
+| 0x801244E8 | ORPHAN | `ReleaseTriggerMotion::driftReposition` | game/ai/release_trigger_motion.cpp:146 | 0x80051794 0x80077B5C 0x80084360 0x800847F0 0x80124328 | ----------------------------------------------------------------------… |
+| 0x801246B4 | ORPHAN | `ReleaseTriggerMotion::arcSwoopMotion` | game/ai/release_trigger_motion.cpp:196 | 0x80077B5C | ----------------------------------------------------------------------… |
+| 0x801249D4 | ORPHAN | `ReleaseTriggerMotion::doubleArcMotion` | game/ai/release_trigger_motion.cpp:289 | 0x80077B5C | ----------------------------------------------------------------------… |
+| 0x80124C6C | ORPHAN | `ReleaseTriggerMotion::circleOrbitMotion` | game/ai/release_trigger_motion.cpp:378 | 0x80077B5C | ----------------------------------------------------------------------… |
 | 0x801360F4 | ORPHAN | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
+| 0x801360F4 | ORPHAN | `Spawn::spawnQuadRecordChild` | game/world/spawn.cpp:383 |  |  |
 | 0x80139838 | ORPHAN | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
+| 0x80139838 | ORPHAN | `Spawn::spawnSiblingAngleChild` | game/world/spawn.cpp:386 |  |  |
 | 0x8013A730 | ORPHAN | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
+| 0x8013A730 | ORPHAN | `Spawn::spawnLiftPlatformChild` | game/world/spawn.cpp:392 |  |  |
 | 0x8013AC34 | ORPHAN | `Spawn::spawnTypedChild` | game/world/spawn.cpp:372 |  | TYPED-CHILD SPAWN wrappers (A00 overlay, |
+| 0x8013AC34 | ORPHAN | `Spawn::spawnChildTrigChild` | game/world/spawn.cpp:389 |  |  |
 | 0x801458E0 | ORPHAN | `AttackOrbitSubstate::orbitTargetMotion` | game/ai/attack_orbit_substate.cpp:44 |  | node[3]==0x81 sub-behavior: 6-phase acquire/orbit machine, see header … |
 | 0x80145AF0 | ORPHAN | `AttackOrbitSubstate::aimAtTargetAnchor` | game/ai/attack_orbit_substate.cpp:126 |  | node[3]==0x80 sub-behavior: aim-point recompute + one-shot attack-wind… |

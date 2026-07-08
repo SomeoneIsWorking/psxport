@@ -757,6 +757,26 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     recompiled substrate (`generated/ov_a00_shard_{0,1}.c`). SBS full ran ~150 frames autonav, 0 diffs,
     but autonav didn't confirm it actually drove an object through this specific attack sub-state —
     correctness rests on the RE + zero-regression, flagged per CLAUDE.md.
+  - ✅ (2026-07-08): owned the six field-overlay sub-motion leaves `beh_jumptable_release_trigger`
+    (already-native `FUN_80124E74`, address band 0x8012xxxx) dispatches into via `rec_dispatch`:
+    `FUN_80123E9C` → `ReleaseTriggerMotion::hoverBobCycle` (node[5] 5-state Y-bob timer), `FUN_801241BC` →
+    `leaderFollowSync` (snap-to-leader vs free-run off a node[0x10] "anchor" struct + a 0x800BF9CC
+    type-bitmask gate), `FUN_801244E8` → `driftReposition(obj, variant)` (2-state re-seed/idle drift,
+    variant picks camera-relative vs a DAT_801498B0 per-type table), `FUN_801246B4` → `arcSwoopMotion`
+    (4-state swoop ramp off DAT_80109B44), `FUN_801249D4` → `doubleArcMotion` (9-state two-pass X-impulse
+    off DAT_80109B50), `FUN_80124C6C` → `circleOrbitMotion` (3-state orbit toward a DAT_80109B7C
+    (X,Y,Z) table entry). New `game/ai/release_trigger_motion.{h,cpp}`, engine member
+    `c->engine.releaseTriggerMotion`, wired via `EngineOverrides` (not `BehaviorDispatch` — these are
+    internal `rec_dispatch` CALL TARGETS reached by the already-native outer dispatcher, not per-object
+    outer handlers) in `runtime/recomp/boot.cpp`. RE'd via Ghidra headless on a fresh free-roam RAM dump
+    (`scratch/ram/band12.bin`, PSXPORT_AUTO_SKIP=1), cross-checked with `tools/disas.py --ram` for the
+    hoverBobCycle jump table (0x80109B18), the shared FUN_80077B38 model pointer immediate (0x8014C808),
+    and the 0x800BF9CC bitmask width (byte, not word — the decompiler's `(int)(uint)DAT_800bf9cc`
+    notation was easy to misread). SBS full ran ~3150 frames autonav, 0 diffs; autonav's single field
+    scene only drove `driftReposition`/`leaderFollowSync` (node[3] types 0/1/4) — `hoverBobCycle`/
+    `arcSwoopMotion`/`doubleArcMotion`/`circleOrbitMotion` (types 4-v2/5/6, and the internal
+    hoverBobCycle call from leaderFollowSync's non-gated branch) weren't exercised in this window;
+    correctness for those four rests on the RE + zero-regression, flagged per CLAUDE.md.
   - ✅ later-297 (2026-07-01): **wired the whole GTE-transform cluster onto the live path** — `ov_mat_mul`
     (`FUN_80084110`), `ov_apply_matlv` (`FUN_80084220`), `ov_rot_x/y/z` (`FUN_80084D10`/`EB0`/`85050`).
     These were `static` in `engine_math.cpp` (not even visible to other TUs), so this is a BIGGER version of
@@ -773,6 +793,26 @@ for content fns (call it). Do NOT mimic PSX hardware (GTE/GP0/OT) — remove Bee
     screenshot of the seaside village scene — Tomba + the tree-hut render correctly, matching
     `docs/reference/ORACLE_village_f520.png` (no corruption, correct object placement/shading). Flag for the
     user to eyeball other scenes too since this touches every 3D object's transform.
+  - ✅ later-298 (2026-07-08): **TYPED-CHILD SPAWN cluster owned** — 4 A00-overlay leaves
+    (`FUN_801360F4`/`FUN_80139838`/`FUN_8013AC34`/`FUN_8013A730`, band 0x80135000-0x8013AFFF) called via
+    `rec_dispatch` from the already-native `beh_box_seed_phase_gate` (STATE 0) and `beh_single_child_cull`
+    (STATE 0). Each is byte-identical in shape: allocate via the already-owned `Spawn::dispatch(cls,
+    type=4, list=0)`, then on success stamp the fresh child's `[+0x1C]` handler (one of the ALREADY-native
+    siblings `beh_quad_record_table_seed`/`beh_sibling_angle_track`/`beh_child_trig_motion`/
+    `beh_lift_platform` — confirmed by decoding each function's `32787<<16 + imm` / `32788<<16 + imm`
+    constant back to the target address), `[+0x10]` owner back-pointer, `[+2]` content-type byte, and
+    (3 of 4) `[+3]` caller sub-index byte. RE'd directly from the recompiler-generated C
+    (`generated/ov_a00_shard_{0,1}.c`, `ov_a00_gen_<addr>`) — instruction-exact ground truth, cross-checked
+    against the existing `beh_box_seed_phase_gate.cpp`/`beh_single_child_cull.cpp` header comments which
+    already documented these as callees. Added `Spawn::spawnTypedChild` (shared body) +
+    `spawnQuadRecordChild`/`spawnSiblingAngleChild`/`spawnChildTrigChild`/`spawnLiftPlatformChild`
+    (game/world/spawn.{h,cpp}), wired via 4 new `EngineOverrides::register_` entries
+    (`Spawn::registerTypedChildOverrides`, called from `boot.cpp`) since the existing callers reach these
+    addresses through plain `rec_dispatch`, not `BehaviorDispatch`. SBS full: two runs (4530 + 4320 frames)
+    both 0 `sbs-div`/`VIOLATION`. Autonav within the ~85s window did not exercise ANY EngineOverride project-
+    wide (verified with `PSXPORT_DEBUG=all` — zero `[dispatch]` lines total, not just for this cluster), so
+    hit-coverage for these 4 specifically is unconfirmed this session; correctness rests on the RE +
+    zero-regression SBS run, flagged per CLAUDE.md.
 - ✅ `FUN_8007712c` per-object CULL / LOD = `ov_object_cull` (game_tomba2.cpp). **BODY now PC-native
   (later-188)** — was a `rec_super_call` WRAP (recomp body ran hot, ~11.2% of sampled interp time); now
   `cull_native_body` reimplements the full decision (RE'd from the disasm: jump table 0x80016cc0, 5 state
