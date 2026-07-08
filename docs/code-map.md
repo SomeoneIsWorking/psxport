@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 342 native fns, 301 owned addresses, 341 LIVE / 1 ORPHAN.
+Totals: 344 native fns, 303 owned addresses, 343 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -359,3 +359,5 @@ Totals: 342 native fns, 301 owned addresses, 341 LIVE / 1 ORPHAN.
 | 0x80145230 | LIVE | `beh_id_compare_motion_dispatch` | game/ai/beh_id_compare_motion_dispatch.cpp:51 | 0x800781E0 0x8014047C 0x80140544 0x801409C0 0x80143A00 0x80144928 … |  |
 | 0x801458E0 | LIVE | `AttackOrbitSubstate::orbitTargetMotion` | game/ai/attack_orbit_substate.cpp:44 |  | node[3]==0x81 sub-behavior: 6-phase acquire/orbit machine, see header … |
 | 0x80145AF0 | LIVE | `AttackOrbitSubstate::aimAtTargetAnchor` | game/ai/attack_orbit_substate.cpp:126 |  | node[3]==0x80 sub-behavior: aim-point recompute + one-shot attack-wind… |
+| 0x801465EC | LIVE | `OverlayGt3Gt4::gt3` | game/render/overlay_gt3gt4.cpp:78 |  | POLY_GT3 (gouraud-textured triangle) emit, GTE-driven, guest-writing. |
+| 0x801467BC | LIVE | `OverlayGt3Gt4::gt4` | game/render/overlay_gt3gt4.cpp:157 |  | POLY_GT4 (gouraud-textured quad) emit, GTE-driven, guest-writing. |

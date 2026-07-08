@@ -10,6 +10,7 @@
 #include "dualcore.h"      // class DualCore — NATIVE-render vs PSX-render RAM divergence harness
 #include "actor_sm_reward.h"  // class ActorReward — reward/tally window actor SM family
 #include "actor_zoned_attacker.h"  // class ActorZonedAttacker — 0x8014xxxx zoned-attacker sub-behavior cluster
+#include "overlay_gt3gt4.h"        // class OverlayGt3Gt4 — A00-overlay GT3/GT4 packet-emitter cluster
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,6 +83,8 @@ int main(int argc, char** argv) {
   c->engine.spawn.registerTypedChildOverrides();   // A00-overlay typed-child spawners (0x801360F4/
                                                     // 80139838/8013AC34/8013A730 -> Spawn::spawnTypedChild)
   c->engine.releaseTriggerMotion.registerOverrides();  // release-trigger sub-motion cluster (band 0x8012xxxx)
+  OverlayGt3Gt4::registerOverrides(game);  // A00-overlay GT3/GT4 packet-emitter leaves
+                                            // (FUN_801465EC/801467BC — the busy 0x80146478 render leaf)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0

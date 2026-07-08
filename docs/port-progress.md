@@ -1380,6 +1380,43 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-08 — A00-overlay GT3/GT4 render-packet emitter (0x801465EC/0x801467BC, the
+busiest still-substrate `rec_dispatch` leaf in free-roam): both owned as `class OverlayGt3Gt4`
+(game/render/overlay_gt3gt4.{h,cpp}).**
+- ✅ **DONE — both leaf addresses.** `PSXPORT_DEBUG=recdep` histogram flagged `0x80146478` (the
+  thin 2-instruction FUN that splits its record-count header and calls the two leaves below) as
+  ~75 calls/frame, 2.7x the runner-up. RE'd via Ghidra headless on a live seaside-field RAM dump
+  (`scratch/decomp/render146.c`, cross-checked against the recompiler's own register-accurate
+  translation `generated/ov_a00_shard_{0,1}.c` — the recompiler output is the more precise source
+  for GTE register indices/opcodes, which Ghidra's COP2 decompilation garbles).
+  - `FUN_801465EC` = **POLY_GT3** (gouraud-textured triangle) emit: GTE RTPT (perspective
+    transform) + NCLIP (backface/MAC0 cull) + AVSZ3 (or a custom near-plane-clamped Z blend when
+    the record's flag byte is set) to pick the OT bucket, then bump-allocates a 40-byte packet
+    into the shared packet pool (`0x800BF544`) and links it into the OT (`ot_base + idx*4`).
+  - `FUN_801467BC` = **POLY_GT4** (gouraud-textured quad) emit: same shape, plus a 4th-vertex RTPS
+    (RTPT only handles 3 points) and a 52-byte packet (AVSZ4 / widened near-clamp blend).
+  - **Framed as a FAITHFUL SUBSTRATE MIRROR, not pc_render**: this is the render-UNDERNEATH path
+    (writes packet-pool/OT guest memory on BOTH SBS cores), distinct from `game/render/submit.cpp`'s
+    `Render::submitPolyGt3/Gt4Native` (the MAIN engine's GT3/GT4 path, deliberately GTE-free /
+    no-guest-write for pc_render). Transcribed 1:1 including a real asymmetry the recomp body has:
+    the GT3 leaf's rgb0|code word is written UNMASKED while the GT4 leaf's rgb0 word IS masked
+    (`0xFFF0F0F0`) — verified against both decompilations, not "fixed" to match.
+  - **Wiring**: neither leaf is reached via `rec_dispatch` — both are called by a direct C function
+    pointer generated inside the ov_a00 overlay shard (from `FUN_80146478` itself AND from a
+    duplicate tail-shared copy of the same call sequence the recompiler folded into a second giant
+    function, `FUN_80147FC4`). Overriding via the overlay's own `ov_a00_set_override` (not
+    `EngineOverrides`) covers every call site uniformly — the same process-global-table discipline
+    as `ActorReward::registerOverrides`.
+  - Gate: `PSXPORT_SBS_MODE=full` autonav, 5340 frames, zero `[sbs-div]`, zero VIOLATION. Confirmed
+    firing (not dormant, unlike the zoned-attacker session below): `PSXPORT_DEBUG=ovgt` shows the
+    GT3 leaf alone firing ~250 calls/frame during a 350-frame free-roam probe.
+  - **Missing-hut-creature bug (separate task, not chased here):** owning this leaf did not, by
+    itself, make the seaside-hut decorative NPC appear on the default `pc_render` path — the
+    bug is downstream of this leaf being reached at all (an object/geomblk-selection or
+    visibility-flag issue upstream), not a packet-emission correctness issue this SBS-clean gate
+    would have caught. Left for a follow-up debug session now that the leaf is a real, inspectable
+    native function instead of an opaque substrate call.
+
 **SESSION 2026-07-08 — "zoned attacker" sub-behavior cluster (0x8014047C/80140544/801409C0/80143A00/
 80144928/80144B50): all 6 owned as `class ActorZonedAttacker` (game/ai/actor_zoned_attacker.{h,cpp}).**
 - ✅ **DONE — all 6 addresses.** These are SUB-BEHAVIOR callees of the already-native FUN_80145230
