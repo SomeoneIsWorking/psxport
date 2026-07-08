@@ -40,4 +40,24 @@ public:
   // *(u32)0x800BE358 |= (1 << idx) AND clears the trigger-pending byte at slot[idx].b1.
   // Mismatched signatures are a no-op. RE'd from disas 0x80074AF0..0x80074B40.
   void ackIfMatch(uint32_t arg);
+
+  // primeCountdown(idx): FUN_80074A38 — sets slot[idx].kind (byte 0) to 10 unconditionally (a
+  // 10-frame countdown; updateTail's "other-kind" arm decrements it each frame and, once it hits 0
+  // with slot[8]==4, sets the armed bit). Pure 1-store leaf. RE'd via Ghidra headless
+  // (scratch/decomp/cluster1.c: FUN_80074a38).
+  void primeCountdown(uint32_t idx);
+
+  // updateCell(sigArg, dx, dy): FUN_8007496C — SIGNATURE-MATCHED grid-cell tracker over the same
+  // slot table ackIfMatch uses: idx = sigArg & 0xFF; if the high 3 bytes of sigArg don't match the
+  // u32 stored at slot[idx].w0, no-op (return false). On match: subtract a fixed global cell offset
+  // (the byte at 0x800FB165, scaled ×16) from dx/dy, clamp both to [0,127], store the clamped
+  // cell coords into slot[idx]+6/+7, and notify FUN_80092E3C(idx, dx_cell<<7, dy_cell<<7) (kept
+  // substrate — a still-unRE'd notifier outside this band). RE'd via Ghidra headless
+  // (scratch/decomp/cluster1.c: FUN_8007496c).
+  bool updateCell(uint32_t sigArg, int32_t dx, int32_t dy);
+
+  // registerOverrides(): wires FUN_80074A38 / FUN_8007496C into EngineOverrides — both are ONLY
+  // ever reached via an indirect rec_dispatch (no static `func_<addr>(c)` call site in the
+  // recompiled output), so EngineOverrides alone is sufficient (no shard_set_override needed).
+  void registerOverrides();
 };

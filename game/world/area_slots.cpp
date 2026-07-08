@@ -3,6 +3,8 @@
 
 #include "world/area_slots.h"
 #include "core.h"
+#include "game.h"
+#include "engine_overrides.h"
 
 // AreaSlots::updateTail — the last direct child of ov_field_frame at guest 0x80075A80.
 // Slot-table state machine over the 24-entry × 12-byte area at 0x800BE238; see area_slots.h for
@@ -134,4 +136,45 @@ void AreaSlots::ackIfMatch(uint32_t arg) {
   uint32_t mask = c->mem_r32(0x800BE358u);
   c->mem_w32(0x800BE358u, mask | (1u << idx));       // set armed bit `idx`
   c->mem_w8 (entry + 1, 0);                            // clear trigger-pending byte
+}
+
+// AreaSlots::primeCountdown — FUN_80074A38 body. Pure 1-store leaf: table[idx].kind = 10.
+void AreaSlots::primeCountdown(uint32_t idx) {
+  Core* c = core;
+  uint32_t entry = 0x800BE238u + (idx & 0xFFu) * 12u;
+  c->mem_w8(entry, 10);
+}
+
+// AreaSlots::updateCell — FUN_8007496C body. sigArg carries {idx: low byte, signature: high 3
+// bytes} exactly like ackIfMatch's arg; on a signature mismatch this is a silent no-op (false).
+// On match: dx/dy are adjusted by a fixed global cell-scroll offset (the byte at 0x800FB165,
+// scaled), clamped to [0,127], written into the slot's cell-coord bytes (entry+6=dx, entry+7=dy),
+// and the notifier FUN_80092E3C(idx, dx<<7, dy<<7) fires (kept substrate — outside this band).
+// RE'd verbatim from Ghidra (scratch/decomp/cluster1.c: FUN_8007496c).
+bool AreaSlots::updateCell(uint32_t sigArg, int32_t dx, int32_t dy) {
+  Core* c = core;
+  uint32_t idx = sigArg & 0xFFu;
+  uint32_t entry = 0x800BE238u + idx * 12u;
+  if ((c->mem_r32(entry) & 0xFFFFFF00u) != (sigArg & 0xFFFFFF00u)) return false;
+
+  int32_t bias = ((int32_t)c->mem_r8(0x800FB165u) - 9) * 16;   // (9 - DAT_800FB165) * -16
+  dx += bias;
+  dy += bias;
+  if (dx < 0) dx = 0; else if (dx > 0x7F) dx = 0x7F;
+  if (dy < 0) dy = 0; else if (dy > 0x7F) dy = 0x7F;
+
+  c->mem_w8(entry + 6, (uint8_t)dx);
+  c->mem_w8(entry + 7, (uint8_t)dy);
+  c->r[4] = idx; c->r[5] = (uint32_t)(dx << 7); c->r[6] = (uint32_t)(dy << 7);
+  rec_dispatch(c, 0x80092E3Cu);
+  return true;
+}
+
+static void eov_areaSlotsPrime(Core* c)      { c->engine.areaSlots.primeCountdown(c->r[4]); }
+static void eov_areaSlotsUpdateCell(Core* c) { c->r[2] = c->engine.areaSlots.updateCell(c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]) ? 1 : 0; }
+
+void AreaSlots::registerOverrides() {
+  EngineOverrides& ov = core->game->engine_overrides;
+  ov.register_(0x80074A38u, "AreaSlots::primeCountdown", eov_areaSlotsPrime);
+  ov.register_(0x8007496Cu, "AreaSlots::updateCell",     eov_areaSlotsUpdateCell);
 }

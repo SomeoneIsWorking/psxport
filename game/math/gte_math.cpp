@@ -29,6 +29,8 @@ extern void gen_func_80085480(Core*);
 extern void gen_func_80084D10(Core*);
 extern void gen_func_80084EB0(Core*);
 extern void gen_func_80085050(Core*);
+extern void gen_func_80077FB0(Core*);
+extern void gen_func_80078240(Core*);
 
 void rec_interp(Core* c, uint32_t pc);
 
@@ -70,6 +72,26 @@ static uint32_t isqrt16(uint32_t a0) {
 // Exposed for the native per-object cull (game/render/cull.cpp): the cull body computes
 // dist = isqrt16(dx²+dy²+dz²) exactly as FUN_80077FB0 does, so it must use the SAME bit-exact leaf.
 uint32_t eng_isqrt16(uint32_t a0) { return isqrt16(a0); }
+
+// FUN_80078240 — fast 3-value MAGNITUDE APPROXIMATION (a cheaper substitute for a real sqrt
+// magnitude, matching the classic PSX-era "max - max/16 + (sum of the other two)*3/8" estimator).
+// Takes abs(a0,a1,a2), finds the MAX of the three (via two pairwise max/carry-the-loser compares —
+// transcribed exactly, not a full 3-way sort), and returns max*(15/16) + (other two)*(3/8). Pure
+// integer leaf, no memory/GTE. RE'd via Ghidra headless (scratch/decomp/cluster1.c: FUN_80078240):
+//   iVar1 = max(a,b); the LOSER of that compare becomes the new `b`
+//   iVar2 = max(iVar1,c); the LOSER of that compare becomes the new `c`
+//   return (iVar2 - iVar2/16) + (b+c)/4 + (b+c)/8
+uint32_t eng_approxDist3(int32_t a, int32_t b, int32_t c) {
+  if (a < 0) a = -a;
+  if (b < 0) b = -b;
+  if (c < 0) c = -c;
+  int32_t iVar1 = a;
+  if (a < b) { iVar1 = b; b = a; }
+  int32_t iVar2 = iVar1;
+  if (iVar1 < c) { iVar2 = c; c = iVar1; }
+  uint32_t sum = (uint32_t)(b + c);
+  return (uint32_t)(iVar2 - (iVar2 >> 4)) + (sum >> 2) + (sum >> 3);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // FUN_80084110 — 3x3 MATRIX MULTIPLY P = R × M via the GTE. a0 = matrix R, a1 = matrix M, a2 = out P
@@ -329,6 +351,10 @@ static void gov_rotmat(Core* c)        { if (c->game->psx_fallback) { gen_func_8
 static void gov_rotX(Core* c)          { if (c->game->psx_fallback) { gen_func_80084D10(c); return; } eov_rotX(c); }
 static void gov_rotY(Core* c)          { if (c->game->psx_fallback) { gen_func_80084EB0(c); return; } eov_rotY(c); }
 static void gov_rotZ(Core* c)          { if (c->game->psx_fallback) { gen_func_80085050(c); return; } eov_rotZ(c); }
+static void eov_isqrt16(Core* c)       { c->r[2] = eng_isqrt16(c->r[4]); }
+static void eov_approxDist3(Core* c)   { c->r[2] = eng_approxDist3((int32_t)c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]); }
+static void gov_isqrt16(Core* c)       { if (c->game->psx_fallback) { gen_func_80077FB0(c); return; } eov_isqrt16(c); }
+static void gov_approxDist3(Core* c)   { if (c->game->psx_fallback) { gen_func_80078240(c); return; } eov_approxDist3(c); }
 
 void Math::registerOverrides() {
   EngineOverrides& ov = core->game->engine_overrides;
@@ -339,6 +365,8 @@ void Math::registerOverrides() {
   ov.register_(0x80084D10u, "Math::rotX",          eov_rotX);
   ov.register_(0x80084EB0u, "Math::rotY",          eov_rotY);
   ov.register_(0x80085050u, "Math::rotZ",          eov_rotZ);
+  ov.register_(0x80077FB0u, "Math::isqrt16",       eov_isqrt16);
+  ov.register_(0x80078240u, "Math::approxDist3",   eov_approxDist3);
 
   shard_set_override(0x80084110u, gov_matMul);
   shard_set_override(0x80084220u, gov_applyMatlv);
@@ -347,5 +375,7 @@ void Math::registerOverrides() {
   shard_set_override(0x80084D10u, gov_rotX);
   shard_set_override(0x80084EB0u, gov_rotY);
   shard_set_override(0x80085050u, gov_rotZ);
+  shard_set_override(0x80077FB0u, gov_isqrt16);
+  shard_set_override(0x80078240u, gov_approxDist3);
 }
 

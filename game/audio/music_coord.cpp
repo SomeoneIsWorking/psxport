@@ -17,6 +17,7 @@
 #include "cfg.h"
 #include "music_coord.h"
 #include "native_gate.h"   // fieldBgmDirector's `music` gate
+#include "engine_overrides.h"
 #include <stdio.h>
 #include <string.h>        // memcmp (fieldBgmDirector bundle validation)
 #include <stdlib.h>        // atoi (PSXPORT_FIELD_SONG)
@@ -128,6 +129,27 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
   c->mem_w16(V + 0x04u, 0x3FFFu);
   c->mem_w16(V + 0x06u, 0x3FFFu);
   c->mem_w32(V + 0u, c->mem_r32(V + 0u) | 0xC0u);
+}
+
+// MusicCoord::setGain2 — FUN_80075D24 body. See music_coord.h for the RE contract. Always targets
+// the fixed ambient-voice control block at 0x800BE1F8 (same S5 base as voiceMixTick/updateTail).
+void MusicCoord::setGain2(int32_t val) {
+  Core* c = this->core;
+  const uint32_t V = 0x800BE1F8u;
+  if (val < 0) {
+    uint16_t snap = (uint16_t)(-(int16_t)val);
+    c->mem_w16(V + 0x2Eu, snap);   // target
+    c->mem_w16(V + 0x30u, snap);   // current — instant snap, no smoothing left to do
+    return;
+  }
+  if (val > 0x1FFF) val = 0x1FFF;
+  c->mem_w16(V + 0x2Eu, (uint16_t)val);   // target only — the per-frame smoother eases toward it
+}
+
+static void eov_musicCoordSetGain2(Core* c) { c->engine.musicCoord.setGain2((int32_t)c->r[4]); }
+
+void MusicCoord::registerOverrides() {
+  core->game->engine_overrides.register_(0x80075D24u, "MusicCoord::setGain2", eov_musicCoordSetGain2);
 }
 
 // Called once per frame (native_step_frame). Enforces "dialogs stop the ingame music":

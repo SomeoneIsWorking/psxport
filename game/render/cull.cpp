@@ -416,3 +416,62 @@ void Cull::cullWrap77acc() { Core* c = core;
   c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->r[7] - cy);
   performBaseCull();                           // FUN_8007712C native — was rec_dispatch
 }
+
+// FUN_800779D0 — cull-wrapper variant: caller-supplied 3-component offset (a1/a2/a3, entering in
+// r[5]/r[6]/r[7]) is ADDED to the object's own position (obj+0x2E/0x32/0x36) BEFORE the camera-
+// relative subtraction. Flags 0/0 (same as cullWrapper). RE'd via Ghidra headless
+// (scratch/decomp/cluster1.c: FUN_800779d0).
+void Cull::cullWrapperOffset() { Core* c = core;
+  uint32_t obj = c->r[4];
+  uint32_t offX = c->r[5], offZ = c->r[6], offY = c->r[7];
+  uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);
+  uint16_t camz = (uint16_t)c->mem_r16(0x1F8000D6u);
+  uint16_t camy = (uint16_t)c->mem_r16(0x1F8000DAu);
+  c->mem_w32(0x1F800080u, 0);
+  c->mem_w32(0x1F800084u, 0);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x2E) + offX) - camx);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x32) + offZ) - camz);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x36) + offY) - camy);
+  c->r[4] = obj;
+  performBaseCull();
+}
+
+// FUN_80077A4C — same offset-add shape as cullWrapperOffset, but writes 0x1F800080=1 / 0x1F800084=0
+// (vs 0/0). RE'd via Ghidra headless (scratch/decomp/cluster1.c: FUN_80077a4c).
+void Cull::cullWrapperOffsetFlag1() { Core* c = core;
+  uint32_t obj = c->r[4];
+  uint32_t offX = c->r[5], offZ = c->r[6], offY = c->r[7];
+  uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);
+  uint16_t camz = (uint16_t)c->mem_r16(0x1F8000D6u);
+  uint16_t camy = (uint16_t)c->mem_r16(0x1F8000DAu);
+  c->mem_w32(0x1F800080u, 1);
+  c->mem_w32(0x1F800084u, 0);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x2E) + offX) - camx);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x32) + offZ) - camz);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x36) + offY) - camy);
+  c->r[4] = obj;
+  performBaseCull();
+}
+
+// FUN_800778E4 — cull-wrapper variant: a SINGLE caller-supplied offset (a1, entering in r[5]) is
+// added ONLY to the object's Z-field (obj+0x32); X (obj+0x2E) and Y (obj+0x36) use the raw object
+// position. Flags 0/0. RE'd via Ghidra headless (scratch/decomp/cluster1.c: FUN_800778e4).
+void Cull::cullWrapperOffsetY() { Core* c = core;
+  uint32_t obj = c->r[4];
+  uint32_t offZ = c->r[5];
+  uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);
+  uint16_t camz = (uint16_t)c->mem_r16(0x1F8000D6u);
+  uint16_t camy = (uint16_t)c->mem_r16(0x1F8000DAu);
+  c->mem_w32(0x1F800080u, 0);
+  c->mem_w32(0x1F800084u, 0);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x2E) - camx);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)(((uint16_t)c->mem_r16(obj + 0x32) + offZ) - camz);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);
+  c->r[4] = obj;
+  performBaseCull();
+}
+
+// NOTE on wiring: see cull.h — this whole camera-relative-wrapper family is DELIBERATELY left
+// unwired (no EngineOverrides/shard_set_override registration). Each substrate body pushes a real
+// guest-stack frame these native methods don't replicate; wiring them produced an SBS guest-stack
+// divergence (0x801FE906, 2026-07-08). The methods remain available to any direct native caller.

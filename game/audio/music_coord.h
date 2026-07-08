@@ -67,4 +67,17 @@ public:
   //   Callable on any voice base; the field frame calls it with voice_base = 0x800BE1F8 (the
   //   ambient/XA channel), per AreaSlots::updateTail (game/world/area_slots.cpp).
   void voiceMixTick(uint32_t voice_base);
+
+  // setGain2(val): FUN_80075D24 — sets the ambient-voice second-stage gain the voiceMixTick
+  //   smoother chases (0x800BE1F8+0x2E, "g2_target" in voiceMixTick's comment). val < 0: an
+  //   INSTANT snap — writes -val into BOTH the target (+0x2E) AND the current (+0x30), so the
+  //   smoother has nothing left to chase (no fade). val >= 0: a RAMPED set — clamps val to
+  //   [0,0x1FFF] and writes only the target (+0x2E); voiceMixTick's `g2 += (target-g2)>>3` then
+  //   eases toward it over subsequent frames. RE'd via Ghidra headless (scratch/decomp/cluster1.c:
+  //   FUN_80075d24).
+  void setGain2(int32_t val);
+
+  // registerOverrides(): wires FUN_80075D24 into EngineOverrides (no static `func_<addr>(c)` call
+  // site exists in the recompiled output — only reached via indirect rec_dispatch).
+  void registerOverrides();
 };

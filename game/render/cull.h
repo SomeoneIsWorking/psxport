@@ -75,6 +75,33 @@ public:
   // themselves; this method only manipulates the queue. Was rec_dispatch(0x80077EBCu) in 5+ handlers.
   uint32_t enqueueVisibleClass4(uint32_t obj);   // returns v0 (new count on push, 0 on cap-hit)
 
+  // cullWrapperOffset (FUN_800779D0): cull-wrapper variant — caller-supplied 3-component OFFSET
+  // (a1/a2/a3) is ADDED to the object's own position (obj+0x2E/0x32/0x36) before the camera-
+  // relative subtraction, flags 0/0 (same as cullWrapper). Taxi: c->r[4]=obj, r[5]/[6]/[7]=offset.
+  void cullWrapperOffset();
+
+  // cullWrapperOffsetFlag1 (FUN_80077A4C): same offset-add shape as cullWrapperOffset, but flags
+  // 1/0 (matches cullWrap77acc's 0x1F800080=1, not its 0x1F800084=4). Taxi identical to
+  // cullWrapperOffset.
+  void cullWrapperOffsetFlag1();
+
+  // cullWrapperOffsetY (FUN_800778E4): cull-wrapper variant — a SINGLE caller-supplied offset
+  // (a1) is added ONLY to the object's Z-axis field (obj+0x32) before the camera-relative
+  // subtraction; X (obj+0x2E) and Y (obx+0x36) use the raw object position. Flags 0/0. Taxi:
+  // c->r[4]=obj, c->r[5]=offset.
+  void cullWrapperOffsetY();
+
+  // NOTE on wiring: this whole camera-relative-wrapper family (cullWrapper/cullWrapperFlag2/
+  // cullWrap77acc/cullWrapperOffset/cullWrapperOffsetFlag1/cullWrapperOffsetY) is DELIBERATELY
+  // left unwired (no EngineOverrides/shard_set_override registration). Their substrate bodies
+  // (FUN_8007778C etc.) each push a REAL guest-stack frame (`addiu sp,-24` + `sw ra,16(sp)`) that
+  // these native C++ methods do not replicate — wiring them for substrate interception was tried
+  // (2026-07-08) and produced an SBS guest-stack-scratch divergence at 0x801FE906 (same class of
+  // issue as the Animation::attach stack residual, docs/findings/animation.md) within ~60 frames.
+  // A safe wiring needs the native override to also mirror the prologue's transient stack writes
+  // (sp -= N; store ra at +16) byte-for-byte, which is future work — not done here. The methods
+  // stay available for any DIRECT native C++ caller (bypasses the guest ABI/stack entirely).
+
 private:
   // Pure (read-only) cull decision — reproduces FUN_8007712c's control flow without committing
   // writes. queue: 0=none, 1=A, 2=B, 3=C.

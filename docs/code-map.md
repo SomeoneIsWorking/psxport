@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 359 native fns, 311 owned addresses, 358 LIVE / 1 ORPHAN.
+Totals: 366 native fns, 318 owned addresses, 365 LIVE / 1 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -175,7 +175,9 @@ Totals: 359 native fns, 311 owned addresses, 358 LIVE / 1 ORPHAN.
 | 0x800739AC | LIVE | `beh_scene_ui_trigger` | game/ai/beh_scene_ui_trigger.cpp:53 | 0x800737F8 0x800738B0 0x80074BF8 |  |
 | 0x80073CD8 | LIVE | `beh_typed_init_scene_trigger` | game/ai/beh_typed_init_scene_trigger.cpp:95 |  |  |
 | 0x800741DC | LIVE | `beh_pickup_collect_trigger` | game/ai/beh_pickup_collect_trigger.cpp:166 |  |  |
-| 0x80074AF0 | LIVE | `AreaSlots::ackIfMatch` | game/world/area_slots.cpp:127 |  | AreaSlots::ackIfMatch — FUN_80074AF0 body. Pure 21-instruction primiti… |
+| 0x8007496C | LIVE | `AreaSlots::updateCell` | game/world/area_slots.cpp:154 | 0x80092E3C | AreaSlots::updateCell — FUN_8007496C body. sigArg carries {idx: low by… |
+| 0x80074A38 | LIVE | `AreaSlots::primeCountdown` | game/world/area_slots.cpp:142 |  | AreaSlots::primeCountdown — FUN_80074A38 body. Pure 1-store leaf: tabl… |
+| 0x80074AF0 | LIVE | `AreaSlots::ackIfMatch` | game/world/area_slots.cpp:129 |  | AreaSlots::ackIfMatch — FUN_80074AF0 body. Pure 21-instruction primiti… |
 | 0x80074BC4 | LIVE | `AudioDispatch::settleField` | game/audio/audio_dispatch.cpp:69 | 0x8001CF2C 0x80074B44 0x80074E48 | AudioDispatch::settleField — native ownership of FUN_80074BC4 (Ghidra … |
 | 0x80074F24 | LIVE | `Pool::selectStateIndex` | game/world/pool.cpp:293 |  | per-area STATE-INDEX select + apply. Early-out if scratchpad 0x1F80013… |
 | 0x800750A4 | LIVE | `AudioDispatch::selectState` | game/audio/audio_dispatch.cpp:79 |  | AudioDispatch::selectState — native ownership of FUN_800750A4 (Ghidra … |
@@ -183,16 +185,21 @@ Totals: 359 native fns, 311 owned addresses, 358 LIVE / 1 ORPHAN.
 | 0x80075130 | LIVE | `Font::init` | game/ui/font.cpp:69 | 0x8008E040 0x80090700 0x80090980 0x80091B50 0x80091D70 0x80098150 … | font / text system init orchestrator. No args, no return. Mirrors the … |
 | 0x80075240 | LIVE | `Pool::reset75240` | game/world/pool.cpp:160 | 0x80075824 0x80075D58 0x80099490 | reset the control block at 0x800BE1F8: call 0x80075D58 leaf, seed clam… |
 | 0x800752B4 | LIVE | `Font::glyphClassFill` | game/ui/font.cpp:50 |  | glyph-class table fill. Iterates i = 0..23 over a 24-entry table at ba… |
-| 0x80075824 | LIVE | `MusicCoord::voiceMixTick` | game/audio/music_coord.cpp:64 | 0x800750D8 | Per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824 (RE'd via … |
+| 0x80075824 | LIVE | `MusicCoord::voiceMixTick` | game/audio/music_coord.cpp:65 | 0x800750D8 | Per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824 (RE'd via … |
 | 0x80075824 | LIVE | `Cd::audioTrace` | runtime/recomp/cd_override.cpp:261 |  | Diagnostic: trace the game's CD-volume fade state + XA stream lifecycl… |
-| 0x80075A80 | LIVE | `AreaSlots::updateTail` | game/world/area_slots.cpp:13 | 0x80074BF8 0x80074E48 0x8008E0C0 0x80092660 0x80098F90 0x80099490 … | AreaSlots::updateTail — the last direct child of ov_field_frame at gue… |
+| 0x80075A80 | LIVE | `AreaSlots::updateTail` | game/world/area_slots.cpp:15 | 0x80074BF8 0x80074E48 0x8008E0C0 0x80092660 0x80098F90 0x80099490 … | AreaSlots::updateTail — the last direct child of ov_field_frame at gue… |
 | 0x80075CEC | LIVE | `BgSceneTransitionSm::audioFadeTarget` | game/scene/bg_scene_transition_sm.cpp:65 |  | - Native ports of the tiny sub-leaves this SM calls ------------------… |
+| 0x80075D24 | LIVE | `MusicCoord::setGain2` | game/audio/music_coord.cpp:136 |  | MusicCoord::setGain2 — FUN_80075D24 body. See music_coord.h for the RE… |
+| 0x80075F0C | LIVE | `Animation::applyFrame` | game/object/animation.cpp:398 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80076904 | LIVE | `Animation::loadFrame` | game/object/animation.cpp:258 |  |  |
 | 0x8007703C | LIVE | `Cull::enqueueByClass` | game/render/cull.cpp:217 |  | Cull::enqueueByClass — PC-native FUN_8007703C body. Class-keyed queue … |
 | 0x8007712C | LIVE | `Cull::decide` | game/render/cull.cpp:99 |  | Pure (read-only) cull decision — reproduces FUN_8007712c's control flo… |
 | 0x8007712C | LIVE | `Cull::performBaseCull` | game/render/cull.cpp:149 |  | Cull::performBaseCull — byte-exact PC-native FUN_8007712C body (no mar… |
 | 0x8007778C | LIVE | `Cull::cullWrapper` | game/render/cull.cpp:371 |  | camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, si… |
 | 0x800777FC | LIVE | `Cull::cullWrapperFlag2` | game/render/cull.cpp:391 |  | cull-wrapper variant: same taxi shape as cullWrapper (obj in c->r[4], … |
+| 0x800778E4 | LIVE | `Cull::cullWrapperOffsetY` | game/render/cull.cpp:459 |  | cull-wrapper variant: a SINGLE caller-supplied offset (a1, entering in… |
+| 0x800779D0 | LIVE | `Cull::cullWrapperOffset` | game/render/cull.cpp:424 |  | cull-wrapper variant: caller-supplied 3-component offset (a1/a2/a3, en… |
+| 0x80077A4C | LIVE | `Cull::cullWrapperOffsetFlag1` | game/render/cull.cpp:441 |  | same offset-add shape as cullWrapperOffset, but writes 0x1F800080=1 / … |
 | 0x80077ACC | LIVE | `Cull::cullWrap77acc` | game/render/cull.cpp:408 |  | cull-wrapper variant, caller-supplied position in a1/a2/a3 (not obj fi… |
 | 0x80077B38 | LIVE | `GraphicsBind::setGeomBody` | game/world/graphics_bind.cpp:118 |  | set an object's GEOMETRY-BLOCK pointer from a table. RE'd from disas 0… |
 | 0x80077B5C | LIVE | `Animation::advanceLinkChain` | game/object/animation.cpp:345 |  | ──────────────────────────────────────────────────────────────────────… |
@@ -221,14 +228,14 @@ Totals: 359 native fns, 311 owned addresses, 358 LIVE / 1 ORPHAN.
 | 0x80081218 | LIVE | `Asset::uploadImage` | game/core/asset.cpp:246 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
-| 0x80084110 | LIVE | `Math::matMul` | game/math/gte_math.cpp:95 |  |  |
-| 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:278 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:142 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084110 | LIVE | `Math::matMul` | game/math/gte_math.cpp:117 |  |  |
+| 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:300 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:164 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80084520 | LIVE | `Render::terrain` | game/render/submit.cpp:417 |  | RETIRED 2026-07-07 (issue #32): Render::prepObjectMatrix (guest sway/I… |
-| 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:269 |  |  |
-| 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:268 |  |  |
-| 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:267 |  |  |
-| 0x80085480 | LIVE | `Math::rotmat` | game/math/gte_math.cpp:192 |  |  |
+| 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:291 |  |  |
+| 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:290 |  |  |
+| 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:289 |  |  |
+| 0x80085480 | LIVE | `Math::rotmat` | game/math/gte_math.cpp:214 |  |  |
 | 0x80085900 | LIVE | `Timing::vsync` | runtime/recomp/timing.cpp:38 |  | = libetc VSync(mode) reached via c->r[A0]: |
 | 0x80085BB0 | LIVE | `Timing::vsyncCallback` | runtime/recomp/timing.cpp:22 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
 | 0x80086620 | LIVE | `eng_init_mode_ctrl` | game/scene/startup.cpp:156 |  | engine MODE control: file-local helper (only called from Engine::initS… |
@@ -239,7 +246,7 @@ Totals: 359 native fns, 311 owned addresses, 358 LIVE / 1 ORPHAN.
 | 0x800963A0 | LIVE | `Font::bankSelect` | game/ui/font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |
 | 0x800A5AC8 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x800BE0D4 | LIVE | `Engine::startBinStageSkip` | game/core/engine.cpp:3114 |  | ── STARTBINSTAGE — pc_skip (default ./run.sh) ────────────────────────… |
-| 0x800BE224 | LIVE | `MusicCoord::musicFadeIn` | game/audio/music_coord.cpp:40 |  | PC-added helper (NOT a port of any FUN_XXXX): snap the game's CD-volum… |
+| 0x800BE224 | LIVE | `MusicCoord::musicFadeIn` | game/audio/music_coord.cpp:41 |  | PC-added helper (NOT a port of any FUN_XXXX): snap the game's CD-volum… |
 | 0x800BF808 | LIVE | `Engine::postRenderTickFaithful` | game/core/engine.cpp:2637 | 0x80074590 | Engine::postRenderTickFaithful -- byte-exact mirror of gen_func_80077D… |
 | 0x800BF81E | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x800BF842 | LIVE | `Engine::postRenderTick` | game/core/engine.cpp:2608 |  | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |

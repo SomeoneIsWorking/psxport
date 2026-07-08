@@ -51,8 +51,23 @@ public:
   // table, id, 0x80077C40u)` idiom.
   void attach(uint32_t node, uint32_t table, uint32_t id);
 
-  // registerOverrides(): wires FUN_80076904 / FUN_80077B5C / FUN_80077C40 into EngineOverrides at
-  // their guest addresses, so every existing rec_dispatch call site (native beh_ handlers AND any
-  // substrate-internal caller) reaches these native methods uniformly. Called once from boot.cpp.
+  // applyFrame(node, snapCursor): FUN_80075F0C — per-frame KEYFRAME APPLIER. Integrates node's
+  // base position (node+0x88/0x8a/0x8c) by its per-frame delta (node+0x90/0x92/0x94), then — if
+  // node+9 (child count) is nonzero — walks the child-limb pointer array at node+0xC0 (up to
+  // node+8 entries) integrating each child's position (child+8/0xa/0xc) by its own delta
+  // (child+0x10/0x12/0x14). If `snapCursor` == 1, ORs the KSEG1 tag bit (0x80000000) into node's
+  // cursor word (node+0x38) — the anim-VM's "just-applied-the-first-frame" marker (RE'd verbatim
+  // from Ghidra: FUN_80075f0c). Called from step()'s DELAY branch with snapCursor = the
+  // post-decrement counter (only ever compared against 1 by the guest).
+  void applyFrame(uint32_t node, int32_t snapCursor);
+
+  // registerOverrides(): wires FUN_80076904 / FUN_80077B5C / FUN_80077C40 / FUN_80075F0C into
+  // EngineOverrides at their guest addresses, so every existing rec_dispatch call site (native
+  // beh_ handlers AND any substrate-internal caller) reaches these native methods uniformly.
+  // FUN_80075F0C (applyFrame) is ALSO dual-wired via shard_set_override (see .cpp) because the
+  // substrate reaches it through direct `func_<addr>(c)` call sites, not just rec_dispatch.
+  // FUN_80076D68 (step) is DELIBERATELY NOT wired here — see step()'s header comment and
+  // animation.cpp's gov_animApplyFrame comment for why (guest-stack-frame mismatch risk). Called
+  // once from boot.cpp.
   void registerOverrides();
 };

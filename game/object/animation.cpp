@@ -63,7 +63,7 @@ static void anim_vm_76d68(Core* c) {
     }
     // 0x80075f0c takes a1 = cnt (the counter, s1 at the jal) — it uses (int16_t)a1==1 to decide whether
     // to set the KSEG0 bit on the cursor (s0+56). The entry register a1 was `addu a1,s1,zero` (=cnt).
-    c->r[4] = s0; c->r[5] = cnt; rec_dispatch(c, 0x80075f0cu);   // apply current frame
+    c->engine.animation.applyFrame(s0, (int32_t)(int16_t)cnt);   // apply current frame (native FUN_80075F0C)
     // s0+14 is RE-READ here (the applier 0x80075f0c may have modified it); only bit 0x1000 is kept.
     uint32_t fz = c->mem_r16(s0 + 14) & 0x1000u;
     c->mem_w16(s0 + 14, (uint16_t)(cnt + fz));           // (low12-1) | (post-call s0[14] & 0x1000)
@@ -391,13 +391,60 @@ void Animation::attach(uint32_t node, uint32_t table, uint32_t id) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80075F0C — Animation::applyFrame: per-frame KEYFRAME APPLIER. Advances node's own base pose
+// by its stored per-frame delta, then (if any child limbs are registered) advances every child
+// limb's position by ITS OWN delta the same way. RE'd via Ghidra headless (scratch/decomp
+// cluster1.c, function FUN_80075f0c): a0=node, a1=snapCursor (only ever compared against 1).
+void Animation::applyFrame(uint32_t node, int32_t snapCursor) {
+  Core* c = this->core;
+  c->mem_w16(node + 0x88, (uint16_t)(c->mem_r16(node + 0x88) + c->mem_r16(node + 0x90)));
+  c->mem_w16(node + 0x8a, (uint16_t)(c->mem_r16(node + 0x8a) + c->mem_r16(node + 0x92)));
+  c->mem_w16(node + 0x8c, (uint16_t)(c->mem_r16(node + 0x8c) + c->mem_r16(node + 0x94)));
+  uint8_t childCount = c->mem_r8(node + 9);
+  if (childCount != 0) {
+    uint8_t limit = c->mem_r8(node + 8);
+    uint32_t p = node;                                   // walks +0xC0 off successive +4 slots
+    for (uint8_t i = 0; i < limit; i++, p += 4) {
+      uint32_t child = c->mem_r32(p + 0xC0);
+      c->mem_w16(child + 8,  (uint16_t)(c->mem_r16(child + 8)  + c->mem_r16(child + 0x10)));
+      c->mem_w16(child + 10, (uint16_t)(c->mem_r16(child + 10) + c->mem_r16(child + 0x12)));
+      c->mem_w16(child + 12, (uint16_t)(c->mem_r16(child + 12) + c->mem_r16(child + 0x14)));
+      if (i + 1 >= childCount) break;
+    }
+  }
+  if (snapCursor == 1) {
+    c->mem_w32(node + 0x38, c->mem_r32(node + 0x38) | 0x80000000u);
+  }
+}
+
 static void eov_animLoadFrame(Core* c)      { c->engine.animation.loadFrame(c->r[4]); c->r[2] = 0; }
 static void eov_animAdvanceLink(Core* c)    { c->r[2] = c->engine.animation.advanceLinkChain(c->r[4]); }
 static void eov_animAttach(Core* c)         { c->engine.animation.attach(c->r[4], c->r[5], c->r[6]); }
+static void eov_animApplyFrame(Core* c)     { c->engine.animation.applyFrame(c->r[4], (int32_t)c->r[5]); }
+
+// psx_fallback-gated trampoline for shard_set_override (dual-registration pattern per
+// game/math/gte_math.cpp — core B / the pure substrate reference must keep running the exact
+// recompiled gen_func_* body, or SBS would just be comparing this port against itself).
+// NOTE: FUN_80076D68 (Animation::step) is DELIBERATELY left unwired for substrate interception —
+// unlike applyFrame, its guest body pushes a REAL 40-byte guest-stack frame (saves r16/r19/ra) that
+// this native path doesn't replicate; wiring it produced an SBS guest-stack-scratch divergence
+// (2026-07-08, same class of issue as the Animation::attach residual in docs/findings/animation.md).
+// step() stays reachable only via DIRECT native C++ callers (beh_actor_move_sm etc — see step()'s
+// own header comment), which never cross the guest ABI/stack boundary in the first place.
+extern void gen_func_80075F0C(Core*);
+extern void shard_set_override(uint32_t, void (*)(Core*));
+static void gov_animApplyFrame(Core* c)     { if (c->game->psx_fallback) { gen_func_80075F0C(c); return; } eov_animApplyFrame(c); }
 
 void Animation::registerOverrides() {
   EngineOverrides& ov = core->game->engine_overrides;
   ov.register_(0x80076904u, "Animation::loadFrame",      eov_animLoadFrame);
   ov.register_(0x80077B5Cu, "Animation::advanceLinkChain", eov_animAdvanceLink);
   ov.register_(0x80077C40u, "Animation::attach",          eov_animAttach);
+  ov.register_(0x80075F0Cu, "Animation::applyFrame",     eov_animApplyFrame);
+
+  // 0x80075F0C is ALSO reached by direct substrate `func_<addr>(c)` call sites (jal, not jalr) that
+  // bypass rec_dispatch/EngineOverrides entirely — those must go through the recompiler's OWN
+  // g_override[] table (shard_set_override) to be intercepted. Safe here: FUN_80075F0C's guest body
+  // has NO stack-frame adjustment (verified in generated/shard_4.c — never touches r[29]).
+  shard_set_override(0x80075F0Cu, gov_animApplyFrame);
 }

@@ -70,7 +70,9 @@ void register_engine_overrides(Game* game) {
   Core* c = &game->core;
   game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
   c->math.registerOverrides();                // GTE matMul/applyMatlv/applyMatrixLV/rotmat/rotX/Y/Z (0x80084110 etc.)
-  c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach (0x80076904 etc.)
+  c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach/applyFrame (0x80076904 etc.)
+  c->engine.areaSlots.registerOverrides();   // primeCountdown/updateCell (0x80074A38/0x8007496C)
+  c->engine.musicCoord.registerOverrides();  // setGain2 (0x80075D24)
   ActorReward::registerOverrides(game);      // reward/tally window actor SM family
   ActorZonedAttacker::registerOverrides(game); // 0x8014xxxx zoned-attacker sub-behavior cluster
   c->engine.spawn.registerTypedChildOverrides();     // A00-overlay typed-child spawners

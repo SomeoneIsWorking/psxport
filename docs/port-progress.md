@@ -1427,6 +1427,48 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-08 — 0x8006xxxx-0x8007xxxx band sweep: 5 new leaves owned + wired (AreaSlots
+grid-cell tracker, MusicCoord second-stage gain setter, Animation frame-applier, Math isqrt16/
+approxDist3 wiring); 6 Cull camera-wrapper variants ported but left UNWIRED (guest-stack risk).**
+- `PSXPORT_DEBUG=recdep-all` histogram (autoskip free-roam, ~1500 frames) ranked the busiest still-
+  substrate leaves in the assigned 0x80060000-0x8007FFFF band. RE'd via Ghidra headless
+  (`tools/decomp.sh` on a live free-roam RAM dump, `scratch/decomp/cluster1.c`), cross-checked
+  against `generated/shard_*.c`.
+- ✅ **`AreaSlots::primeCountdown(idx)`** (FUN_80074A38) + **`AreaSlots::updateCell(sigArg,dx,dy)`**
+  (FUN_8007496C) — game/world/area_slots.{h,cpp}. Sibling leaves of the already-owned `ackIfMatch`
+  over the same 24×12 slot table at 0x800BE238. Wired via EngineOverrides only (no static
+  `func_<addr>(c)` call site exists for either — dynamic-dispatch-only). ovhit: 6317 / 7980 hits.
+- ✅ **`MusicCoord::setGain2(val)`** (FUN_80075D24) — game/audio/music_coord.{h,cpp}. Sets the
+  ambient-voice second-stage gain (0x800BE1F8+0x2E) that `voiceMixTick`'s smoother chases; negative
+  `val` is an instant snap (writes both target+current). EngineOverrides only. ovhit: 1379 hits.
+- ✅ **`Animation::applyFrame(node,snapCursor)`** (FUN_80075F0C) — game/object/animation.{h,cpp}.
+  The per-frame keyframe applier `Animation::step`'s header comment already named as staying
+  substrate; now native, dual-wired (EngineOverrides + shard_set_override — several direct
+  `func_80075F0C(c)` call sites in generated/shard_{4,6,7}.c). `anim_vm_76d68`'s own DELAY branch
+  now calls it directly instead of `rec_dispatch`. Safe to shard-wire: verified via
+  `generated/shard_4.c` that its guest body never touches `r[29]` (no stack frame to mismatch).
+- ✅ **`Math::isqrt16`/`Math::approxDist3`` WIRING** (0x80077FB0/0x80078240) — game/math/gte_math.cpp.
+  `eng_isqrt16` was already fully RE'd/correct (cull.cpp's own distance calc uses it) but had NEVER
+  been registered under EngineOverrides/shard_set_override — a pure dead-code leaf despite being
+  the #1 profiled hot function historically (docs §D). Added `eng_approxDist3` (new RE, FUN_80078240
+  — sort-3-abs-values + weighted-sum fast magnitude estimator) alongside it. Both dual-wired.
+  ovhit: 2858 / 5442 hits.
+- ⚠️ **6 Cull camera-relative-wrapper variants ported but NOT wired** — game/render/cull.{h,cpp}.
+  Added 3 new members (`cullWrapperOffset`/`cullWrapperOffsetFlag1`/`cullWrapperOffsetY`, FUN_
+  800779D0/80077A4C/800778E4) alongside the 3 pre-existing ones (`cullWrapper`/`cullWrapperFlag2`/
+  `cullWrap77acc`). **Tried wiring all 6 via EngineOverrides+shard_set_override (dual pattern) —
+  broke SBS**: `0x8007778C` alone is the single busiest rec_dispatch target in this whole band
+  (20818 calls in ~1500 frames) and, like its 5 siblings, its substrate body pushes a REAL
+  guest-stack frame (`addiu sp,-24` + `sw ra,16(sp)`) that the native C++ methods don't replicate.
+  Wiring produced an `[sbs-div]` at `0x801FE906` (guest-stack scratch) within ~62 frames — same
+  class of issue as the Animation::attach residual (docs/findings/animation.md), just newly
+  triggered because these 6 functions had NEVER been wired before (the class's own header called
+  itself "Currently ORPHANED"). **Reverted the wiring, kept the 6 ported methods** (documented as
+  unwired in cull.h) — a safe wiring needs the native override to also mirror the prologue's
+  transient stack writes byte-for-byte, left as explicit future work.
+- Gate: `PSXPORT_SBS_MODE=full` autonav, 90s / several thousand frames, **zero `[sbs-div]`, zero
+  VIOLATION** (with the Cull wiring reverted). `PSXPORT_DEBUG=ovhit` confirms every wired leaf above
+  actually fires (not dormant).
 **SESSION 2026-07-08 — A00-overlay GT3/GT4 render-packet emitter (0x801465EC/0x801467BC, the
 busiest still-substrate `rec_dispatch` leaf in free-roam): both owned as `class OverlayGt3Gt4`
 (game/render/overlay_gt3gt4.{h,cpp}).**
