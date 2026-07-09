@@ -106,7 +106,12 @@ namespace {
 constexpr uint32_t CUR_NODE_SCR = 0x1F80028Cu;   // "current render node" scratch (obj_world_ord fallback)
 constexpr uint32_t PKT_POOL_PTR = 0x800BF544u;   // packet-pool bump-allocator write pointer
 constexpr uint32_t OTBASE_PTR   = 0x800ED8C8u;   // *this = the active ordering-table base
-constexpr uint32_t BUF          = 0x800C0000u;   // per-instance MATRIX-compose scratch (C2D4/C464/C8F4)
+constexpr uint32_t BUF          = 0x1F800000u;   // SCRATCHPAD MATRIX-compose buffer (C2D4/C464/C8F4) —
+                                                  // gen_func_8003C2D4/8003C8F4 base r16/r17 = 8064<<16
+                                                  // = 0x1F800000, NOT main RAM. (Was wrongly 0x800C0000;
+                                                  // the mis-base made every emitted packet's data differ
+                                                  // from the substrate — the f117 divergence, masked by the
+                                                  // false 0-div until the oracle-gate fix surfaced it.)
 constexpr uint32_t MAT_A        = BUF + 0x00u;
 constexpr uint32_t MAT_ROTZ     = BUF + 0x20u;
 constexpr uint32_t MAT_OUT      = BUF + 0x40u;

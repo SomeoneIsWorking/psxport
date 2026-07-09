@@ -655,6 +655,18 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   if (mLwOn) {
     lwReport(mDivAddr);
     for (uint32_t a = mDivAddr + 1; a < mDivEnd && a < mDivAddr + 8; a++) lwReport(a);
+    // Optional extra probe: the lowest divergent byte is often a cascade (e.g. the packet-pool tail
+    // pointer, written last by substrate propagating an earlier native divergence). Point this at a
+    // divergent DATA byte to name the real writer. PSXPORT_SBS_LW_ADDR=0xADDR[,0xADDR2,...]
+    const char* extra = getenv("PSXPORT_SBS_LW_ADDR");
+    if (extra && *extra) {
+      fprintf(stderr, "[sbs] (PSXPORT_SBS_LW_ADDR probes)\n");
+      for (const char* p = extra; p && *p; ) {
+        uint32_t a = (uint32_t)strtoul(p, (char**)&p, 0);
+        if (a) { lwReport(a); for (uint32_t d = a + 1; d < a + 6; d++) lwReport(d); }
+        while (*p == ',' || *p == ' ') p++;
+      }
+    }
   }
   // Fibers cannot be rewound: a native fiber's C stack does not restore with the RAM snapshot,
   // and a coro fiber parked MID-BODY cannot be replayed by respawning from the task entry

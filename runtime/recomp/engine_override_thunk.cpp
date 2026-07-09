@@ -42,31 +42,72 @@ constexpr int kCap = 256;
 Entry g_tab[kCap];
 int g_n = 0;
 
-OverrideFn lookup(uint32_t addr, bool wantGen) {
-  for (int i = 0; i < g_n; i++)
-    if (g_tab[i].addr == addr) return wantGen ? g_tab[i].gen : g_tab[i].native;
-  return nullptr;
+// Per-slot hit counters (core A native vs core B oracle) for divergence attribution. Lightweight
+// (uint64), dumped at atexit — the thunk is only for a handful of render addresses, so negligible
+// overhead. Under SBS, native==core A, oracle==core B; a native/oracle count MISMATCH on a slot
+// means the two cores reach that address a different number of times (control-flow divergence),
+// while equal counts + divergent RAM means a logic (output) divergence in the native body.
+uint64_t g_nativeHits[kCap];
+uint64_t g_oracleHits[kCap];
+
+void dump_atexit() {
+  // Only meaningful under SBS (oracle=coreB). Skip the noise on standalone runs where oracle hits
+  // are all zero.
+  bool anyOracle = false;
+  for (int i = 0; i < g_n; i++) if (g_oracleHits[i]) { anyOracle = true; break; }
+  if (!anyOracle) return;
+  fprintf(stderr, "[engine_override_thunk] per-address hit counts (native=coreA / oracle=coreB):\n");
+  for (int i = 0; i < g_n; i++) {
+    fprintf(stderr, "  0x%08X : native=%llu  oracle=%llu%s\n",
+            g_tab[i].addr, (unsigned long long)g_nativeHits[i], (unsigned long long)g_oracleHits[i],
+            g_nativeHits[i] != g_oracleHits[i] ? "   <-- COUNT MISMATCH (control-flow divergence)" : "");
+  }
+}
+
+int lookup_slot(uint32_t addr) {
+  for (int i = 0; i < g_n; i++) if (g_tab[i].addr == addr) return i;
+  return -1;
 }
 
 void put(uint32_t addr, OverrideFn native, OverrideFn gen) {
-  for (int i = 0; i < g_n; i++)
-    if (g_tab[i].addr == addr) { g_tab[i] = {addr, native, gen}; return; }
-  if (g_n >= kCap) { fprintf(stderr, "[engine_override_thunk] table full (kCap=%d)\n", kCap); abort(); }
-  g_tab[g_n++] = {addr, native, gen};
+  int slot = lookup_slot(addr);
+  if (slot < 0) {
+    if (g_n >= kCap) { fprintf(stderr, "[engine_override_thunk] table full (kCap=%d)\n", kCap); abort(); }
+    slot = g_n++;
+    static bool s_atexit = false;
+    if (!s_atexit) { s_atexit = true; atexit(dump_atexit); }
+  }
+  g_tab[slot] = {addr, native, gen};
 }
 }
 
 // The ONE shared thunk the generated wrapper invokes. c->pc = guest address at entry.
+//
+// PSXPORT_THUNK_FORCE_GEN=0xADDR[,0xADDR2,...] — force the listed addresses to run their GEN body
+// even on core A (i.e. treat them as oracle). Bisection knob: when a native cluster diverges,
+// force-gen it to confirm it's the culprit (core A then matches core B). Parsed once, lazily.
 void engine_override_thunk(Core* c) {
+  static const char* s_force = (const char*)1;   // sentinel: parse on first call
+  if (s_force == (const char*)1) {
+    s_force = getenv("PSXPORT_THUNK_FORCE_GEN");
+    if (s_force) fprintf(stderr, "[engine_override_thunk] FORCE_GEN active: %s\n", s_force);
+  }
   const uint32_t addr = c->pc;
-  const bool oracle = c->game && c->game->psx_fallback;
-  OverrideFn fn = lookup(addr, oracle);
-  if (!fn) {
-    fprintf(stderr, "[engine_override_thunk] no %s entry for pc=%08X (table has %d)\n",
-            oracle ? "gen" : "native", addr, g_n);
+  const int slot = lookup_slot(addr);
+  if (slot < 0) {
+    fprintf(stderr, "[engine_override_thunk] no entry for pc=%08X (table has %d)\n", addr, g_n);
     abort();
   }
-  fn(c);
+  bool oracle = c->game && c->game->psx_fallback;
+  if (!oracle && s_force) {
+    for (const char* p = s_force; p && *p; ) {
+      uint32_t a = (uint32_t)strtoul(p, (char**)&p, 0);
+      if (a == addr) { oracle = true; break; }
+      while (*p == ',' || *p == ' ') p++;
+    }
+  }
+  if (oracle) { g_oracleHits[slot]++; g_tab[slot].gen(c); }
+  else        { g_nativeHits[slot]++; g_tab[slot].native(c); }
 }
 
 // Installers — one per recompiler module whose raw set_override we must reach. The shared thunk is
