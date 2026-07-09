@@ -2538,3 +2538,33 @@ themselves are LIVE but dispatch out to substrate for every case body.
   fired once before SsSeqCalled's seq loop) was ALREADY drafted by an earlier pass as
   `input_dispatch_931c0` (game/input/input.cpp, static free fn, unwired) — left as-is, called
   via `rec_dispatch` from `seqChannelDispatch()` since it's a different TU's static symbol.
+  fleet-workflow.md §9 warns about.
+
+- **Band 0x8010A000-0x8010CFFF + 0x80106AC4, SOP-intro-cutscene sub-tick cluster (wide-RE agent,
+  2026-07-10, UNWIRED).** Task band was the 8 hottest free-roam-dispatch-count unowned leaves in this
+  range. 6 of 8 DRAFTED (compile-only, unwired, unverified, no SBS run), + 2 confirmed dependencies
+  pulled in for completeness: `sopBeatAdvanceWalk`/`sopBeatAdvanceNarration` (0x8010AF60/0x8010B078,
+  HIGH confidence on the transcription — clean SCENE_BEAT timer sequencers — but the TRIGGER is
+  INFERRED: zero static call-site xrefs, both addresses are raw data in a keyframe/anim-event-shaped
+  table at 0x8010CA60-0x8010CAAC), `sopIntroEffectTick`/`sopIntroEffectSpawn`/`sopOrbitPathStep`
+  (0x8010B2D4/0x8010B44C/0x8010B11C, HIGH confidence, xref-confirmed spawn+dispatch chain: a 3rd SOP
+  model (id 0xC) spawned+ticked via the same node+0x1C mechanism as `beh_sop_overlay_shadow`),
+  `sopLiftedSubtick` (0x8010B588, HIGH confidence — closes the "lifted actor's own deeper sub-tick"
+  frontier note from the earlier sop_overlay_shadow pass; docs/port-progress.md's own prior "left for
+  its own pass" pointer), `Demo::s3SubMachine` (0x80106AC4, HIGH confidence — the main-menu title
+  cursor sub-machine `Demo::s3()`/`demo_frame_s3()` already document as "mirror of 0x8010696C" but
+  still rec_dispatch). New file `game/ai/sop_intro_events.{h,cpp}`, `Demo::s3SubMachine` added to
+  game/scene/demo.{h,cpp}; both added to `cmake/tomba2_port.cmake`; full `tomba2_port` build+link
+  verified clean (zero warnings) after `git submodule update --init --recursive` (vendor/beetle-psx +
+  its libchdr sub-submodule needed a fresh checkout in this worktree).
+  1 MAPPED-ONLY (context uncertain, not a transcription gap): `beh_orbit_spark_effect` (0x8010BEAC) —
+  state-machine transcription is HIGH confidence but its only xref is a raw DATA reference from a
+  MAIN.EXE-resident per-type table (0x800A22B8), not SOP-local — likely a GENERIC reusable particle
+  type, spawner not traced this pass.
+  1 DEFERRED BY DESIGN (not an RE gap): `0x8010C26C`/`0x8010C79C` — already correctly flagged
+  "DEFERRED to render rebuild" above (raw GP0 packet emitters; CLAUDE.md's "REBUILD, don't transcribe"
+  render rule bans a byte-exact draft here). Re-confirmed this pass: neither decompiles cleanly from
+  `ram_game.bin` (Ghidra hits bad-instruction-data at both — that dump doesn't have GAME.BIN resident
+  at those addresses); a future render-rebuild pass needs a fresh capture with the field's parallax/
+  end-of-area-text actually on screen. Full field-level RE + confidence notes in docs/engine_re.md
+  "Band 0x8010A000-0x8010CFFF wide-RE wave".

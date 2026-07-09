@@ -144,6 +144,80 @@ void Demo::s3() { Core* c = core;
   rec_coro_redirect(c, TAIL_REND);
 }
 
+// ===========================================================================================
+// DRAFT (UNWIRED, wide-RE fleet wave, band 0x8010A000-0x8010CFFF) — FUN_80106AC4, the main-menu
+// title cursor sub-machine s3() dispatches (both s3() above and demo_frame_s3() below still
+// `rec_dispatch(c, 0x80106ac4u)`; this method is NOT called from either yet). CONFIDENCE: HIGH —
+// byte-exact Ghidra transcription (scratch/decomp/band_menu.c, imported from
+// scratch/bin/tomba2/ram_menu.bin, Ghidra project `ram_menu`; regenerate with
+// `tools/decomp.sh decomp ram_menu <out.c> list 0x80106ac4` if scratch/ was cleaned).
+//
+// "Mirror of 0x8010696C" (the s2 sub-machine, both files already document this) but with THREE
+// outcomes instead of two: it also handles the Circle/back edge (the s2 twin only has confirm).
+// sm = *0x1F800138 (SM_PTR); 0x80106AC4 is a real jr-ra leaf, RE'd as a register-only function —
+// no stack frame observed in the decompile.
+//
+//   entry: if sm[0x4a]==0 (fresh entry): sm[0x4a]=1, sm[0x5a]=0x1C2 (450, the intro/hold timer —
+//     matches "sm[0x5a] inits 450" in the class RE map). else if sm[0x4a]!=1: return 0 (only valid
+//     re-entry state is 1; guards a stray call with sm[0x4a] in {2,3,...} — never observed but
+//     transcribed faithfully).
+//   FUN_80106690(0) — inner menu commit/redraw leaf (a0=0), STILL SUBSTRATE (no native owner).
+//   FUN_80106824(1, sm[0x68] != 2) — commit pair (a0=1, a1=bool), STILL SUBSTRATE.
+//   timer = sm[0x5a] (pre-decrement value); sm[0x5a]--; if timer==1 (just expired): return 1
+//     (outcome 1 = "attract launch", -> s7 in both callers).
+//   else (timer still running): read pad edges (0x800E7E68). cursor := 3 by default.
+//     if Down (0x20) pressed: cursor stays 3, cmp = sm[0x68] (no reassign).
+//     else: cursor := 2; if Up (0x80) pressed: cmp = sm[0x68] (no reassign).
+//       else (neither Down nor Up): if Confirm (0x4008) pressed: Sfx::trigger(0x11,0,0); return 2
+//         (outcome 2 = "launch selected"). else if Circle/back (0x2000) pressed: Sfx::trigger(0x14,
+//         -9, 0); return 3 (outcome 3 = "back/cancel" — the s2 twin does NOT have this branch).
+//         else: return 0 (no edge — stay).
+//     if cmp != cursor: Sfx::trigger(0x15,0,0) (cursor-move blip).
+//     sm[0x68] = cursor; sm[0x4a] = 0; return 0.
+uint32_t Demo::s3SubMachine() { Core* c = core;                 // FUN_80106AC4
+  uint32_t sm = c->mem_r32(SM_PTR);
+  if (c->mem_r16(sm + 0x4a) == 0) {
+    c->mem_w16(sm + 0x4a, 1);
+    c->mem_w16(sm + 0x5a, 0x1C2);
+  } else if (c->mem_r16(sm + 0x4a) != 1) {
+    return 0;
+  }
+
+  c->r[4] = 0; rec_dispatch(c, 0x80106690u);                              // still substrate
+  c->r[4] = 1; c->r[5] = (c->mem_r8(sm + 0x68) != 2) ? 1u : 0u;
+  rec_dispatch(c, 0x80106824u);                                           // still substrate
+
+  sm = c->mem_r32(SM_PTR);                                                // reload (matches the recomp's re-read)
+  int16_t timer = (int16_t)c->mem_r16(sm + 0x5a);
+  c->mem_w16(sm + 0x5a, (uint16_t)(timer - 1));
+  if (timer == 1) return 1;                                               // attract launch
+
+  uint16_t edges = c->mem_r16(0x800e7e68u);
+  uint8_t  cursor;
+  uint8_t  cmp;
+  if (edges & 0x20u) {                                                    // Down
+    cursor = 3;
+    cmp = c->mem_r8(sm + 0x68);
+  } else {
+    cursor = 2;
+    if (edges & 0x80u) {                                                  // Up
+      cmp = c->mem_r8(sm + 0x68);
+    } else if (edges & 0x4008u) {                                         // Confirm
+      c->engine.sfx.trigger(0x11, 0, 0);
+      return 2;
+    } else if (edges & 0x2000u) {                                         // Circle / back
+      c->engine.sfx.trigger(0x14, -9, 0);
+      return 3;
+    } else {
+      return 0;                                                           // no relevant edge
+    }
+  }
+  if (cmp != cursor) c->engine.sfx.trigger(0x15, 0, 0);                   // cursor-move blip
+  c->mem_w8 (sm + 0x68, cursor);
+  c->mem_w16(sm + 0x4a, 0);
+  return 0;
+}
+
 // s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the commit pair 0x80106824(1,1)
 // + 0x80106690(1). Then on sm[0x6b]: ==1 -> s3 (sm[0x48]=3, sm[0x68]=3) + TAIL_CF2C; ==2 -> s3
 // (sm[0x48]=3, sm[0x68]=2) + TAIL_CF2C; else stay -> TAIL_REND.

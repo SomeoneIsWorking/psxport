@@ -181,6 +181,7 @@ set(PORT_SRC
   game/ai/beh_sop_intro_lifted.cpp
   game/ai/beh_sop_intro_narration.cpp
   game/ai/sop_overlay_shadow.cpp
+  game/ai/sop_intro_events.cpp
   game/ai/beh_seaside_prox_substate.cpp
   game/ai/area_seaside_perframe.cpp
   game/ai/beh_substate_edge_leaves.cpp

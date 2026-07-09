@@ -2953,3 +2953,67 @@ before touching this cluster again. Summary:
   4 `rec_dispatch` call-outs for direct method calls.
 - `0x800931C0` (SsSeqCalled's one-shot "prep call") was already drafted by an earlier pass as
   `input_dispatch_931c0` (game/input/input.cpp) — untouched here, still reached via `rec_dispatch`.
+
+## Band 0x8010A000-0x8010CFFF wide-RE wave (later-231, DRAFT/UNWIRED)
+
+Wide-RE fleet pass over 8 hot unowned leaves in the free-roam dispatch histogram inside this range
+(plus 0x80106AC4, adjacent to the DEMO stage machine already owned in game/scene/demo.cpp). All new
+code is `game/ai/sop_intro_events.{h,cpp}` (5 of the 8, plus 2 confirmed dependencies pulled in for
+completeness) + `Demo::s3SubMachine` in game/scene/demo.cpp — **every one of these is DEAD CODE**: not
+registered in BehaviorDispatch::kTable, not called from any live path, every existing wired caller
+(beh_sop_intro_lifted.cpp, demo.cpp's s3()/demo_frame_s3()) still `rec_dispatch`es the substrate body.
+Ghidra decomp sources: `scratch/decomp/band_sop.c` (0x8010AF60/B078/B2D4/B588/BEAC, from
+`ram_sop.bin`), `band_sop2.c` (0x8010B44C), `band_sop4.c` (0x8010B11C), `band_menu.c` (0x80106AC4,
+0x8010696C, from `ram_menu.bin`) — all gitignored `scratch/`, regenerate via `tools/decomp.sh` (see
+each function's file-header comment for the exact import+decomp commands).
+
+- **0x8010B588 → `sopLiftedSubtick`** (game/ai/sop_intro_events.cpp) — HIGH confidence. The "lifted"
+  SOP-intro actor's own deeper per-frame sub-tick — beh_sop_intro_lifted.cpp's state_running already
+  calls it via rec_dispatch and its own comment already named it "a deeper 6-state SM synced to the
+  scene-beat global" (docs/port-progress.md's prior note, now filled in). A 6-state SM on node+6 that
+  re-targets the actor's anim-table pointer (node+0x3C) and installs progressively bigger scene-record
+  sets as SCENE_BEAT (0x800BF9B4) advances 2→3→6; states 1/6 poll ScriptInterp::step until the current
+  anim finishes; state 4 is gated on a separate per-actor flag (node+0x79) and calls the still-unowned
+  4-arg variant `FUN_80077CFC` (codemap-checked: no native owner) instead of the usual 3-arg
+  Animation::attach.
+- **0x8010B2D4 → `sopIntroEffectTick`** (+ its spawner **0x8010B44C → `sopIntroEffectSpawn`** and
+  dependency **0x8010B11C → `sopOrbitPathStep`**, pulled in for completeness) — HIGH confidence, xref-
+  confirmed call chain: `sopIntroEffectSpawn` is called by an un-RE'd script leaf FUN_8010BAF8 (outside
+  this band); it spawns a child via the already-native `Placement::spawnWithParent` (class=3 → dispatch
+  cls=3/type=3/list=1) and installs `sopIntroEffectTick` on the child's node+0x1C (same mechanism as
+  `beh_sop_overlay_shadow`'s SHADOW_HANDLER). The child ticks through model-attach (id 0xC, a THIRD SOP
+  model distinct from pilot/lifted/narration) → an orbit-path wait (`sopOrbitPathStep`, one full
+  revolution around a snapshot origin via Trig::rcos/rsin/ratan2 — already-owned trig) → a
+  ScriptInterp::step-driven running state → despawn.
+- **0x8010AF60 → `sopBeatAdvanceWalk`**, **0x8010B078 → `sopBeatAdvanceNarration`** — HIGH confidence
+  on the transcription (both are clean 2-4 state timer sequencers that stamp SCENE_BEAT and call
+  already-native Engine::walkStart / GraphicsBind::setXformBlk), but the TRIGGER MECHANISM IS INFERRED,
+  not confirmed: `tools/ghidra_xrefs.py` found ZERO static `jal`/`j` call sites to either address in
+  `ram_sop.bin`. Both addresses instead appear as raw 4-byte DATA at 0x8010CA7C / 0x8010CA94, inside a
+  small table (0x8010CA60-0x8010CAAC, `{u16, addr32, u32, u32}`-shaped entries every 0x18 bytes) that
+  also holds 0x8010AE9C (the sop_overlay_shadow cluster) — i.e. this looks like a per-KEYFRAME
+  ANIMATION-EVENT callback table near the pilot's own anim data (0x8010CA28), consulted via an indirect
+  jalr the static analysis doesn't resolve, not called by name. **Left UNWIRED for that reason** — a
+  future pass should trace the indirect call dynamically (write-watch / single-step through the pilot's
+  walk-start anim) before registering either.
+- **0x8010BEAC → `beh_orbit_spark_effect`** — state-machine transcription HIGH confidence, but
+  **ownership context is UNCONFIRMED**: its only xref in `ram_sop.bin` is a raw DATA reference at
+  `0x800A22B8` — a MAIN.EXE-RESIDENT table (not SOP-overlay-local; adjacent entry 0x8010BF54 is also
+  SOP-overlay code) shaped like a per-object-TYPE handler table (same idiom as Spawn::dispatch's 5
+  class-indexed variants). Most likely a GENERIC reusable "orbiting spark" particle type, not SOP-
+  exclusive. The actual spawner/table owner was not traced this pass — a future pass should xref
+  0x800A22B8 itself or entity_walk.py-scan live nodes for a +0x1C pointing here.
+- **0x80106AC4 → `Demo::s3SubMachine`** (game/scene/demo.cpp) — HIGH confidence, clean jr-ra leaf, no
+  stack frame. The main-menu title-page cursor sub-machine both `Demo::s3()` and `demo_frame_s3()`
+  already document as "mirror of 0x8010696C" but still `rec_dispatch`; this is the byte-exact port
+  (3-outcome mirror of the s2 twin — adds a Circle/back-edge branch the s2 twin doesn't have). Still
+  calls the two commit/redraw leaves `FUN_80106690`/`FUN_80106824` via rec_dispatch (both codemap-
+  checked: no native owner) and the already-native `Sfx::trigger`.
+- **0x8010C26C / 0x8010C79C — MAPPED, NOT drafted (by design, not oversight).** Already correctly
+  flagged DEFERRED in docs/port-progress.md ("BG tile scroller" / "end-of-area text scroller" — both
+  emit raw GP0 packets). Drafting a byte-exact transcription of a GP0-packet emitter is banned by
+  CLAUDE.md's "REBUILD, don't transcribe" render rule — these belong to the PC-native BG renderer
+  rewrite, not a mechanical RE port. Re-confirmed this pass: neither address decompiles cleanly from
+  `ram_game.bin` (Ghidra hits `halt_baddata()` at both — that RAM dump doesn't have the GAME.BIN overlay
+  resident at those addresses at capture time); a future pass targeting these for the render rebuild
+  needs a fresh RAM dump captured while the field's parallax/end-of-area-text is actually on screen.

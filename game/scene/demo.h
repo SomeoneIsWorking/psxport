@@ -55,6 +55,13 @@ public:
   void s6();             // formerly ov_demo_s6
   void s7Phase();        // formerly ov_demo_s7_phase (a sub-phase of the s7 dispatch)
 
+  // DRAFT (UNWIRED, wide-RE fleet wave) — native port of the main-menu title cursor sub-machine
+  // 0x80106AC4 that s3()/demo_frame_s3() still rec_dispatch. Returns v0 semantics identical to the
+  // guest function (0/1/2/3); does not itself write sm[0x48] (callers own the transition). See
+  // demo.cpp for the full RE + confidence notes. Not called from s3()/demo_frame_s3() yet — those
+  // keep rec_dispatch(c, 0x80106ac4u) until this is SBS-verified.
+  uint32_t s3SubMachine();   // FUN_80106AC4
+
 private:
   void s0Body();         // shared s0 case-0 body (see s0Skip/s0Faithful above)
 };
