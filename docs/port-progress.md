@@ -2459,3 +2459,15 @@ themselves are LIVE but dispatch out to substrate for every case body.
   drafts almost certainly contain bugs per that section's own track record. None of these 7 leaves is
   reachable from intro-area SBS autonav per the orchestrators' own header comments (they sit behind
   the idle/active field path), so wiring will need broader scene coverage to actually gate them.
+- **Two hottest unowned leaves + per-frame input fence (wide-RE agent, 2026-07-09, UNWIRED).**
+  Band: `0x80079528` (4235 dispatches/600 free-roam frames), `0x80079374` (4235), `0x800788AC`
+  (627, ~1/frame). All 3 DRAFTED (compile+link clean, unwired, unverified, no SBS run):
+  `Str::length` (game/core/str.h/.cpp, `strlen`), `Font::drawText` (game/ui/font.h/.cpp, arg-pack
+  wrapper around the still-unowned `FUN_80078CA8` font/glyph emitter), `Engine::padEdgeFenceDraft`
+  (game/input/pad_edge_fence.cpp, per-frame input-edge fence — computes `DAT_800E7E68`
+  pressed/`DAT_800F23A4` released, tail-calls `FUN_8005229C`; does NOT replace the live
+  `rec_dispatch(c, 0x800788ACu)` call site in `Engine::frameUpdate()`). Added to
+  `cmake/tomba2_port.cmake`. Full RE + confidence notes: docs/engine_re.md "Wide-RE wave
+  2026-07-09". `0x80079528` is trivial to wire (no deps). `0x80079374`/`0x800788AC` still
+  depend on un-owned callees (`0x80078CA8`, `0x800524B4`, `0x8005229C`) reached via
+  `rec_dispatch` — wiring those two first needs a re-diff pass per fleet-workflow.md §9.

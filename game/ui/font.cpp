@@ -160,3 +160,36 @@ int32_t Font::measureLineWidth(Core* c, uint32_t strAddr) {
   }
   return prefix;
 }
+
+// FUN_80079374 — WIDE-RE TIER DRAFT (2026-07-09), UNWIRED/UNVERIFIED. See header doc for the
+// full RE. Mirrors the guest frame (sp -= 32, ra spilled at +24 — the recomp body's ONLY spill;
+// the function otherwise reads args straight out of registers) because the callee it tail-calls
+// (still-unowned FUN_80078CA8) is reached via rec_dispatch and expects the caller's stack-arg
+// convention (5th arg at sp+16 of ITS caller's frame, i.e. THIS frame after the sp-=32 descent).
+void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t str, uint32_t color) {
+  uint32_t saved_sp = c->r[29];
+  uint32_t saved_ra = c->r[31];
+
+  c->r[29] = saved_sp - 32;                 // addiu sp,sp,-32
+  c->mem_w32(c->r[29] + 24, saved_ra);      // sw ra,24(sp)  (LIVE incoming ra)
+
+  // a0' = (int16)x | (y << 16) — packed vertex {x: lo16 sign-extended, y: hi16}
+  uint32_t a0p = (uint32_t)(int32_t)(int16_t)(uint16_t)x | ((uint32_t)y << 16);
+  // a1' = constant 0x00100008 (original a1/w argument is discarded — confirmed from the gen body)
+  uint32_t a1p = 0x00100008u;
+  // a2' = (int16)w | (h << 16) — packed size {w: lo16 sign-extended, h: hi16}
+  uint32_t a2p = (uint32_t)(int32_t)(int16_t)(uint16_t)w | ((uint32_t)h << 16);
+
+  c->mem_w16(0x1F800180u, 32);              // sh v0(32),384(v1) — scratchpad write, role unconfirmed
+
+  c->r[31] = 0x800793B4u;                   // jal-site ra (matches gen exactly)
+  c->r[4]  = a0p;
+  c->r[5]  = a1p;
+  c->r[6]  = a2p;
+  c->r[7]  = str;
+  c->mem_w32(c->r[29] + 16, color);         // 5th arg on stack, at the callee's expected slot
+  rec_dispatch(c, 0x80078CA8u);             // FUN_80078CA8 — font/glyph emitter (still unowned)
+
+  c->r[31] = c->mem_r32(c->r[29] + 24);     // lw ra,24(sp)
+  c->r[29] = saved_sp;                      // addiu sp,sp,32
+}

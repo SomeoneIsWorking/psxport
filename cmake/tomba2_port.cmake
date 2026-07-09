@@ -88,6 +88,7 @@ set(PORT_SRC
   game/game_tomba2.cpp
   game/cd/libcd_native.cpp
   game/core/asset.cpp
+  game/core/str.cpp
   game/core/pc_scheduler.cpp
   game/core/verify_harness.cpp
   game/math/mathlib.cpp
@@ -194,6 +195,7 @@ set(PORT_SRC
   game/object/script_vm.cpp
   game/object/animation.cpp
   game/input/input.cpp
+  game/input/pad_edge_fence.cpp
   game/ui/menu.cpp
   game/ui/dialog_text_stream.cpp
   game/items/inventory.cpp

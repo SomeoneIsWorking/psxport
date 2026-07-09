@@ -2716,3 +2716,52 @@ Ground truth for all 12: `generated/ov_a00_shard_0.c` / `ov_a00_shard_1.c`, symb
 - None of these 12 leaves is reachable from intro-area SBS autonav per the orchestrators' own header
   comments (idle/active field path only) — wiring will need broader scene coverage (an actual
   overlay-resident encounter) to gate for real, not just a 0-diff-on-frames-reached proof.
+
+## Wide-RE wave 2026-07-09 — hot unowned leaves (0x80079528, 0x80079374, 0x800788AC)
+
+WIDE-RE TIER — all three drafts UNWIRED/UNVERIFIED (docs/fleet-workflow.md §6/§9): no override
+registration, no SBS run, must be diffed line-by-line against the gen body again before wiring.
+Band: the two hottest unowned functions in a 600-frame free-roam (4235 dispatches each) plus a
+627-dispatch third (~1/frame).
+
+- **`FUN_80079528` = `Str::length`** (game/core/str.h/.cpp) — plain `strlen()`, byte-for-byte
+  transcription, no stack frame, no sub-calls, a true leaf. CONFIRMED via disas +
+  `generated/shard_2.c:10049`. Note: Ghidra's decompile of this range folds in a SECOND,
+  UNREACHABLE function's bytes (0x80079554 onward — no dispatch entry, no caller anywhere in
+  `generated/`); the recompiler's `gen_func_80079528` is instruction-exact and shows only the
+  strlen loop is reachable through this entry point. Trivial to wire (no dependencies).
+
+- **`FUN_80079374` = `Font::drawText`** (game/ui/font.h/.cpp) — a thin arg-packing wrapper: packs
+  `(x,y)` and `(w,h)` into 32-bit vertex/size words (sign-extending the low 16 bits of each,
+  exactly as the guest code does), overwrites the incoming `a1`/width arg with a hardcoded
+  `0x00100008` constant (CONFIRMED discarded — semantic role of the constant NOT confirmed),
+  writes `32` to scratchpad `0x1F800180` (role not confirmed), then tail-calls the still-unowned
+  font/glyph emitter `FUN_80078CA8` (docs' existing "FUN_80078ca8" section — full string-draw
+  engine with cursor state at `0x1F800000..0x1F80001F`) via `rec_dispatch`, passing the 5th
+  argument (color) on the stack at the callee's expected slot. Mirrors the guest's one-word `ra`
+  spill (`sp -= 32`, `sw ra,24(sp)`). CONFIRMED via disas + `generated/shard_7.c:11490`.
+
+- **`FUN_800788AC` = `Engine::padEdgeFenceDraft`** (declared in game/core/engine.h, implemented in
+  game/input/pad_edge_fence.cpp — no separate header, matches the file-per-leaf pattern) — the per-frame
+  INPUT-EDGE FENCE, already partly documented above ("Per-frame fence FUN_800788ac") and
+  cross-referenced from `runtime/recomp/pad_input.cpp`. Currently reached from
+  `Engine::frameUpdate()` (game/game_tomba2.cpp:72) via `rec_dispatch(c, 0x800788ACu)` — this
+  draft does NOT replace that call site (stays unwired). Confirmed structure: stashes last
+  frame's "cur" sample into "prev" (`0x800ECF54`/`0x800ECF56`), runs a countdown/refill state
+  machine gated by scratchpad flag `0x1F80019A` (either popping a 4-byte-stride queue entry at
+  `*0x800BED88` when a countdown at `0x800BED8C` hits zero, skipping a zero-tag terminator entry
+  first, or — when the flag isn't 1 — calling `FUN_800524B4(0)` and storing ITS return into "cur"),
+  computes `PRESSED = cur & ~prev` into `DAT_800E7E68` and `RELEASED = prev & ~cur` into
+  `DAT_800F23A4` (both CONFIRMED — match the existing doc + downstream readers), then tail-calls
+  `FUN_8005229C` (CD/load sub-state-machine, existing doc's "region-8005 survey") passing the
+  `released` mask as `a0` (CONFIRMED from the gen body — a0 is left live from the release-mask
+  compute, not explicitly reset before the call). MEDIUM confidence: the semantic ROLE of
+  `0x800ECF54` — this pass shows it's a flat 16-bit "current sample" fed by either a queue entry's
+  raw u16 value or `FUN_800524B4(0)`'s return, not necessarily "pad state" as an earlier pass's
+  summary labeled it; `FUN_800524B4` was separately filed under a "controller vibration/analog-
+  config subsystem" address family (0x80052144-0x800527C8) by that earlier pass, not
+  re-confirmed here. `FUN_800524B4`/`FUN_8005229C` themselves stay un-owned (`rec_dispatch`).
+
+Not drafted (out of band): `FUN_80078CA8` (font/glyph emitter, called by drawText — large,
+separate scope), `FUN_800524B4`/`FUN_8005229C` (padEdgeFenceDraft's callees — separate scope,
+partially already surveyed above under "region-8005").

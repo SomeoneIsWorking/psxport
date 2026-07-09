@@ -242,6 +242,16 @@ public:
   //   + pace. Was the free function `ov_frame_update` in game_tomba2.cpp.
   void frameUpdate();
 
+  // padEdgeFenceDraft: FUN_800788AC — WIDE-RE TIER DRAFT (2026-07-09), UNWIRED/UNVERIFIED
+  //   (docs/fleet-workflow.md §6/§9 — no override registration, `frameUpdate()` above still
+  //   reaches the substrate body via `rec_dispatch(c, 0x800788ACu)`; this draft is dead code that
+  //   must compile but is never called). The per-frame INPUT-EDGE FENCE — already documented as
+  //   `ov_frame_update`'s callee at docs/engine_re.md "Per-frame fence FUN_800788ac" and
+  //   cross-referenced from runtime/recomp/pad_input.cpp ("FUN_800788ac -> FUN_800524b4"). Called
+  //   exactly once per logic frame (627 dispatches / 600-frame free-roam matches 1:1). See
+  //   game/input/pad_edge_fence.cpp for the full RE + faithful port.
+  void padEdgeFenceDraft();
+
   // drawOTag: PC-native DrawOTag (libgpu FUN_80081560 equivalent) — the per-frame draw kick.
   //   Called directly from native_step_frame (top-down PC-driven, NOT an override). Owns the
   //   engine's decoupled render path: for the FIELD stage builds the world natively via
