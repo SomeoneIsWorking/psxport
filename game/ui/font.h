@@ -84,4 +84,70 @@ public:
   //   exact bit operations the guest performs, since sign-extension order matters for negative
   //   on-screen coordinates).
   static void drawText(Core* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t str, uint32_t color);
+
+  // glyphEmit(): FUN_80078CA8 — the font/glyph EMITTER drawText() tail-calls. WIDE-RE TIER DRAFT
+  //   (2026-07-10, disjoint band), UNWIRED/UNVERIFIED (docs/fleet-workflow.md §6/§9 — no override
+  //   registration, no SBS run; needs the line-by-line re-verify §9 requires before wiring).
+  //
+  //   A prior wave filed this as "large, separate scope, not drafted" at 403 gen-C lines. Re-read
+  //   this wave: gen_func_80078CA8 (generated/shard_5.c:12298) has a REAL `return` at gen-C line 210
+  //   with NO label between there and the closing brace — everything from line 211 to the end (192
+  //   more lines, a hand-unrolled 20-word struct copy + two more OT-chain packet builds) is
+  //   UNREACHABLE dead code (same "shard-grouping artifact" pattern documented elsewhere in this
+  //   file's history, e.g. channelEnvelopeRampTick's trailing func_800922A0). The REAL body is ~180
+  //   live lines: a null-terminated string walk with a per-CHARACTER-BYTE switch over a FIXED SCRATCH
+  //   STRUCT at guest 0x800C0000 (NOT scratchpad — corrects an earlier doc note that placed "cursor
+  //   state" at 0x1F800000..0x1F80001F; the ONLY scratchpad touch in the live body is a single read
+  //   of 0x1F800180, the fixed per-CALL horizontal-advance value drawText() writes as a constant 32
+  //   before every call — used inside the glyph-draw arm's width/height compute, NOT as the cursor
+  //   step itself; the shared "advance cursor" tail below always steps by a literal 8, independent of
+  //   that scratchpad value).
+  //
+  //   ABI: a0(r4)=packed vertex {x:lo16, y:hi16} (drawText's a0'), a1(r5)=drawText's 0x00100008
+  //   constant (LOW16=8 lands in the scratch struct's +16 field and is later read back as a per-
+  //   glyph width-scale factor — this is the "role" a prior pass left unconfirmed; HIGH16=0x10 is
+  //   never independently read in the live body), a2(r6)=packed size {w:lo16, h:hi16}, a3(r7)=str
+  //   pointer, stack[+16 of THIS frame after its own sp-=56, i.e. the caller's stack[+16] per o32
+  //   convention]=color (matches drawText's `mem_w32(c->r[29]+16, color)`).
+  //
+  //   Per-byte dispatch (scratch struct base = 0x800C0000, offsets below are +that; register-literal
+  //   transcription revealed the byte/table mapping is carried through MIPS delay-slot-merged
+  //   compare chains — worth stating explicitly since it's easy to misread from the gen C alone):
+  //     0x20 (' ')  -> falls straight to the shared "advance cursor by literal 8" tail (struct+8 +=8)
+  //     0x0A ('\n') -> LINE BREAK: struct+8 reset to (vertex-arg x & 0xFFF), struct+10 (cursor-y) +=
+  //                    struct+18 (a "line height" field — never WRITTEN anywhere in this function, so
+  //                    it must be initialized by a caller-adjacent leaf this wave did not trace; role
+  //                    inferred from usage, not independently confirmed)
+  //     0x01        -> calls still-unowned FUN_80078988 with tablePtr = 0x80010000+28072, then the
+  //                    shared "advance cursor by 8" tail
+  //     0x02        -> same, tablePtr = 0x80010000+28076
+  //     0x03        -> same, tablePtr = 0x80010000+28068
+  //     0x04        -> same, tablePtr = 0x80010000+28064
+  //     any other non-zero byte (every ordinary printable glyph) -> the GLYPH-DRAW arm: computes
+  //                    per-glyph pixel width/height into struct+12/+13 from the scratchpad advance
+  //                    value (0x1F800180) and struct+16/+18, then PREPENDS a 4-word GP0 packet at the
+  //                    packet-pool bump pointer (0x800BF544, same pool every other render leaf in
+  //                    game/render/ uses — see PKT_POOL_PTR in game/render/submit.cpp) into the OT
+  //                    bucket at *(0x800F0000-10040 + colorArg*4), tagged with draw-mode bit
+  //                    0x04000000, then falls into the same shared "advance cursor by 8" tail.
+  //     FUN_80078988 calls (byte 0x01/0x02/0x03/0x04 arms) each pass (cursorX, cursorY, w, tablePtr)
+  //       — role: draws a box/rule primitive (underline / box variants selected by which literal
+  //       table pointer is passed); STILL UNOWNED, stays rec_dispatch (out of this wave's band).
+  //   Tail (after the string NUL): builds a FINAL OT-chained packet via the ALREADY-owned
+  //     func_80083DE0 (0x80083DE0, game/render/wide_re_libgpu_leaves.cpp — draw-mode/texwin packet-
+  //     header builder, dispatched here since it's process-globally wired) plus a second packet
+  //     tagged 0x02000000, both linked into the same OT bucket, then advances the pool pointer by
+  //     12 more bytes and returns `(int16)size.w - color` in r2 (a value the caller — drawText() —
+  //     currently discards; CONFIRMED from drawText's own body, it never reads r2 after the call).
+  //
+  //   Guest-stack frame MIRRORED (sp-56, spill ra/s0-s5 at their RE'd offsets: r16..r21 = s0..s5).
+  //   Kept register-literal with goto/labels named after the guest addresses, same rationale as the
+  //   sequencer leaves this wave also drafted — dense character-class branching with a shared tail
+  //   (L_80078F70/L_80078F78 reached from multiple arms).
+  //
+  //   LOW-MEDIUM confidence: control flow + the scratch-struct BASE ADDRESS correction are solid
+  //   (direct re-read of the gen body); individual field ROLES beyond what's stated above (esp.
+  //   struct+18 "line height", which is never WRITTEN anywhere in this function — it must be
+  //   initialized by a caller-adjacent leaf this wave did not trace) are inferred, not confirmed.
+  static void glyphEmit(Core* c);
 };

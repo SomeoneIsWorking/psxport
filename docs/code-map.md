@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 595 native fns, 505 owned addresses, 567 LIVE / 28 ORPHAN.
+Totals: 598 native fns, 508 owned addresses, 570 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -310,6 +310,7 @@ Totals: 595 native fns, 505 owned addresses, 567 LIVE / 28 ORPHAN.
 | 0x800783DC | LIVE | `Pool::setupViewScroll` | game/world/pool.cpp:177 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C), builds the view… |
 | 0x80078610 | LIVE | `Pool::finalViewInit` | game/world/pool.cpp:249 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks, seed fixed view par… |
 | 0x800788AC | LIVE | `Engine::padEdgeFenceDraft` | game/input/pad_edge_fence.cpp:48 |  | per-frame input-edge fence. See the file header above for the full RE … |
+| 0x80078CA8 | LIVE | `Font::glyphEmit` | game/ui/font.cpp:204 | 0x80078988 0x80083DE0 | the font/glyph emitter drawText() tail-calls. WIDE-RE TIER DRAFT (2026… |
 | 0x80079374 | LIVE | `Font::drawText` | game/ui/font.cpp:169 | 0x80078CA8 | WIDE-RE TIER DRAFT (2026-07-09), UNWIRED/UNVERIFIED. See header doc fo… |
 | 0x80079528 | LIVE | `Str::length` | game/core/str.cpp:15 |  | strlen. RE (tools/disas.py 0x80079528 --all 20, cross-checked against |
 | 0x800796DC | LIVE | `Pool::resetControlBlock` | game/world/pool.cpp:21 | 0x8009A420 | zero the 104-byte control block at 0x800BF808, seed two bytes, clear ~… |
@@ -393,8 +394,10 @@ Totals: 595 native fns, 505 owned addresses, 567 LIVE / 28 ORPHAN.
 | 0x80092080 | LIVE | `Sequencer::channelEnvelopeRampTick` | game/audio/sequencer.cpp:457 |  | channelEnvelopeRampTick — ADSR/envelope ramp (SsSeqCalled flags bit6 A… |
 | 0x800931C0 | ORPHAN | `input_dispatch_931c0` | game/input/input.cpp:38 | 0x80097E10 0x80098DB0 0x80098F90 0x80099970 0x8009A1D0 | per-frame INPUT/controller-state processor (the heaviest un-owned resi… |
 | 0x80094B50 | LIVE | `Sequencer::channelKeyRegisterMerge` | game/audio/sequencer.cpp:223 |  | channelKeyRegisterMerge — true leaf (no stack frame). Faithful to gen_… |
+| 0x80095530 | LIVE | `Sequencer::channelVoiceRegisterWrite` | game/audio/sequencer.cpp:756 |  | channelVoiceRegisterWrite — the "SPU voice-register write leaf" channe… |
 | 0x80095A9C | LIVE | `Sequencer::channelVolumeSnapshot` | game/audio/sequencer.cpp:197 |  | channelVolumeSnapshot — true leaf (no stack frame). Faithful to gen_fu… |
 | 0x80095B90 | LIVE | `Sequencer::channelKeyEventScan` | game/audio/sequencer.cpp:260 |  | channelKeyEventScan — stack frame present (sp-32, spill ra/s16/s17/s18… |
+| 0x800962B0 | LIVE | `Sequencer::channelVoiceSelectPrep` | game/audio/sequencer.cpp:688 |  | channelVoiceSelectPrep — called mid-loop by channelVoiceRegisterWrite(… |
 | 0x80096370 | LIVE | `Font::bank2Store` | game/ui/font.cpp:41 |  | font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set … |
 | 0x800963A0 | LIVE | `Font::bankSelect` | game/ui/font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |
 | 0x80096878 | LIVE | `bav_cleanup_tail` | game/ui/bav_loader.cpp:88 |  | cleanup tail at 0x80096878: release lock (a0=0 path) + decrement refco… |

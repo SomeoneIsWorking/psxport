@@ -193,3 +193,298 @@ void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_
   c->r[31] = c->mem_r32(c->r[29] + 24);     // lw ra,24(sp)
   c->r[29] = saved_sp;                      // addiu sp,sp,32
 }
+
+// FUN_80078CA8 — the font/glyph emitter drawText() tail-calls. WIDE-RE TIER DRAFT (2026-07-10,
+// disjoint band), UNWIRED/UNVERIFIED. Faithful to gen_func_80078CA8 (generated/shard_5.c:12298),
+// LIVE BODY ONLY (gen-C lines 1-210; 211-402 is confirmed-unreachable dead code, no label targets
+// it). See font.h for the full RE writeup (per-byte dispatch table, scratch-struct layout,
+// dead-tail note). Guest-stack frame mirrored (sp-56, spill ra/s0-s5 at their RE'd offsets: r16..
+// r21 = s0..s5). Kept register-literal with goto/labels named after the guest addresses (dense
+// character-class branching with a shared tail reached from 5 different arms).
+void Font::glyphEmit(Core* c) {
+  uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 56u;
+  c->mem_w32(c->r[29] + 44u, c->r[21]);
+  c->r[21] = c->r[4] + c->r[0];             // r21 = vertex arg {x:lo16, y:hi16}
+  c->mem_w32(c->r[29] + 24u, c->r[16]);
+  c->r[16] = c->r[7] + c->r[0];             // r16 = str cursor (a3)
+  c->mem_w32(c->r[29] + 32u, c->r[18]);
+  c->r[18] = ((uint32_t)8064u << 16);       // 0x800C0000 -- fixed scratch struct base (NOT scratchpad)
+  c->r[3] = c->r[6] + c->r[0];              // r3 = size arg {w:lo16, h:hi16} (a2)
+  c->r[2] = c->r[6] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);   // sign-extended low16(size) = w
+  c->mem_w32(c->r[29] + 36u, c->r[19]);
+  c->r[19] = c->mem_r32(c->r[29] + 72u);    // 5th arg (color), caller's stack[+16]
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < 16);
+  c->mem_w32(c->r[29] + 48u, c->r[31]);
+  c->mem_w32(c->r[29] + 40u, c->r[20]);
+  c->mem_w32(c->r[29] + 28u, c->r[17]);
+  c->mem_w32(c->r[18] + 8u, c->r[21]);      // struct+8 (cursor-x u16 slot, written as u32 here -- low16 is x)
+  {
+    int _t = (c->r[2] != c->r[0]);
+    c->mem_w32(c->r[18] + 16u, c->r[5]);    // struct+16 = a1 (drawText's 0x00100008 constant)
+    if (_t) goto L_80078D04;
+  }
+  c->r[2] = c->r[6] + 480u;
+  c->r[2] = c->r[2] << 6;
+  c->r[2] = c->r[2] | 62u;
+  goto L_80078D10;
+L_80078D04:
+  c->r[2] = c->r[6] + 496u;
+  c->r[2] = c->r[2] << 6;
+  c->r[2] = c->r[2] | 63u;
+L_80078D10:
+  c->mem_w16(c->r[18] + 14u, (uint16_t)c->r[2]);
+  c->r[2] = c->r[0] + 101u;
+  c->mem_w8(c->r[18] + 7u, (uint8_t)c->r[2]);
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 0u);
+  {
+    int _t = (c->r[2] == c->r[0]);
+    c->r[17] = c->r[3] << 16;
+    if (_t) goto L_80078F88;                // empty string -- straight to tail
+  }
+  c->r[20] = 0x1F800000u;                   // scratchpad base (r20 is reused as scratchpad base here)
+  c->r[3] = c->r[2] & 255u;
+L_80078D34:
+  c->r[2] = c->r[0] + 32u;
+  {
+    int _t = (c->r[3] != c->r[2]);
+    c->r[2] = c->r[0] + 10u;                // delay-slot literal, live at L_80078D4C
+    if (_t) goto L_80078D4C;
+  }
+  // byte == 0x20 (' ') -- advance-cursor tail only
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[16] = c->r[16] + 1u;
+  goto L_80078F70;
+L_80078D4C:
+  {
+    int _t = (c->r[3] != c->r[2]);          // r2 == 10 here (delay-slot literal from above)
+    c->r[2] = c->r[0] + 1u;                 // delay-slot literal, live at L_80078D74
+    if (_t) goto L_80078D74;
+  }
+  // byte == 0x0A ('\n') -- line break: reset x, y += "line height" (struct+18)
+  c->r[16] = c->r[16] + 1u;
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 10u);
+  c->r[4] = (uint32_t)c->mem_r16(c->r[18] + 18u);
+  c->r[3] = c->r[21] & 4095u;
+  c->mem_w16(c->r[18] + 8u, (uint16_t)c->r[3]);
+  c->r[2] = c->r[2] + c->r[4];
+  c->mem_w16(c->r[18] + 10u, (uint16_t)c->r[2]);
+  goto L_80078F78;
+L_80078D74:
+  {
+    int _t = (c->r[3] != c->r[2]);          // r2 == 1 here
+    c->r[2] = c->r[0] + 2u;                 // delay-slot literal, live at L_80078DB4
+    if (_t) goto L_80078DB4;
+  }
+  // byte == 0x01 -- FUN_80078988(cursorX, cursorY, w, tablePtr=0x80010000+28072)
+  c->r[6] = (uint32_t)((int32_t)c->r[17] >> 16);
+  c->r[7] = ((uint32_t)32769u << 16);
+  c->r[4] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[7] = c->r[7] + 28072u;
+  c->mem_w32(c->r[29] + 16u, c->r[19]);
+  c->r[5] = (uint32_t)c->mem_r16(c->r[18] + 10u);
+  c->r[4] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 16);
+  c->r[5] = c->r[5] << 16;
+  c->r[31] = 0x80078DA8u;
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 16);
+  rec_dispatch(c, 0x80078988u);             // FUN_80078988 -- still unowned, out of this wave's band
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[16] = c->r[16] + 1u;
+  goto L_80078F70;
+L_80078DB4:
+  {
+    int _t = (c->r[3] != c->r[2]);          // r2 == 2 here
+    c->r[2] = c->r[0] + 3u;                 // delay-slot literal, live at L_80078DF4
+    if (_t) goto L_80078DF4;
+  }
+  // byte == 0x02 -- FUN_80078988(cursorX, cursorY, w, tablePtr=0x80010000+28076)
+  c->r[6] = (uint32_t)((int32_t)c->r[17] >> 16);
+  c->r[7] = ((uint32_t)32769u << 16);
+  c->r[4] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[7] = c->r[7] + 28076u;
+  c->mem_w32(c->r[29] + 16u, c->r[19]);
+  c->r[5] = (uint32_t)c->mem_r16(c->r[18] + 10u);
+  c->r[4] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 16);
+  c->r[5] = c->r[5] << 16;
+  c->r[31] = 0x80078DE8u;
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 16);
+  rec_dispatch(c, 0x80078988u);
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[16] = c->r[16] + 1u;
+  goto L_80078F70;
+L_80078DF4:
+  {
+    int _t = (c->r[3] != c->r[2]);          // r2 == 3 here
+    c->r[2] = c->r[0] + 4u;                 // delay-slot literal, live at L_80078E34
+    if (_t) goto L_80078E34;
+  }
+  // byte == 0x03 -- FUN_80078988(cursorX, cursorY, w, tablePtr=0x80010000+28068)
+  c->r[6] = (uint32_t)((int32_t)c->r[17] >> 16);
+  c->r[7] = ((uint32_t)32769u << 16);
+  c->r[4] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[7] = c->r[7] + 28068u;
+  c->mem_w32(c->r[29] + 16u, c->r[19]);
+  c->r[5] = (uint32_t)c->mem_r16(c->r[18] + 10u);
+  c->r[4] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 16);
+  c->r[5] = c->r[5] << 16;
+  c->r[31] = 0x80078E28u;
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 16);
+  rec_dispatch(c, 0x80078988u);
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[16] = c->r[16] + 1u;
+  goto L_80078F70;
+L_80078E34:
+  {
+    int _t = (c->r[3] != c->r[2]);          // r2 == 4 here
+    c->r[6] = (uint32_t)((int32_t)c->r[17] >> 16);   // delay-slot, live at L_80078E70 too
+    if (_t) goto L_80078E70;
+  }
+  // byte == 0x04 -- FUN_80078988(cursorX, cursorY, w, tablePtr=0x80010000+28064)
+  c->r[7] = ((uint32_t)32769u << 16);
+  c->r[4] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[7] = c->r[7] + 28064u;
+  c->mem_w32(c->r[29] + 16u, c->r[19]);
+  c->r[5] = (uint32_t)c->mem_r16(c->r[18] + 10u);
+  c->r[4] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 16);
+  c->r[5] = c->r[5] << 16;
+  c->r[31] = 0x80078E64u;
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 16);
+  rec_dispatch(c, 0x80078988u);
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[16] = c->r[16] + 1u;
+  goto L_80078F70;
+L_80078E70:
+  // default arm -- ordinary glyph: compute per-glyph width/height, prepend GP0 packet at the pool.
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 0u);
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[20] + 384u);   // scratchpad 0x1F800180 -- advance value
+  c->r[4] = c->r[3] + c->r[2];
+  {
+    int _t = ((int32_t)c->r[4] >= 0);
+    c->r[3] = c->r[4] + c->r[0];
+    if (_t) goto L_80078E8C;
+  }
+  c->r[3] = c->r[4] + 31u;
+L_80078E8C:
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 5);
+  c->r[3] = c->r[3] << 5;
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 16u);
+  c->r[3] = c->r[4] - c->r[3];
+  c->r[2] = c->r[2] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[8] = c->lo;
+  c->mem_w8(c->r[18] + 12u, (uint8_t)c->r[8]);
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 0u);
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[20] + 384u);
+  c->r[3] = c->r[3] + c->r[2];
+  {
+    int _t = ((int32_t)c->r[3] >= 0);
+    if (_t) goto L_80078ECC;
+  }
+  c->r[3] = c->r[3] + 31u;
+L_80078ECC:
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 18u);
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 5);
+  c->r[2] = c->r[2] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[3] = (uint32_t)c->mem_r16(c->r[18] + 18u);
+  c->r[2] = c->r[0] + 16u;
+  c->r[3] = c->r[3] << 16;
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 16);
+  c->r[4] = c->lo;
+  {
+    int _t = (c->r[3] != c->r[2]);
+    c->mem_w8(c->r[18] + 13u, (uint8_t)c->r[4]);
+    if (_t) goto L_80078F04;
+  }
+  c->r[2] = c->r[4] + 8u;
+  c->mem_w8(c->r[18] + 13u, (uint8_t)c->r[2]);
+L_80078F04:
+  // prepend a 4-word GP0 packet at the packet-pool bump pointer (PKT_POOL_PTR / 0x800BF544),
+  // link it into the OT bucket for this colorArg, exactly the pattern other render leaves use.
+  c->r[6] = 0x800C0000u - 2748u;            // 32780u<<16 - 2748 == PKT_POOL_PTR (0x800BF544)
+  c->r[4] = c->mem_r32(c->r[6] + 0u);
+  c->r[2] = 0x800F0000u;                    // 32783u<<16
+  c->r[5] = c->mem_r32(c->r[2] - 10040u);   // OT-slot table base
+  c->r[2] = c->r[19] << 2;
+  c->r[5] = c->r[5] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[5] + 0u);
+  c->r[3] = ((uint32_t)1024u << 16);
+  c->r[2] = c->r[2] | c->r[3];
+  c->mem_w32(c->r[4] + 0u, c->r[2]);
+  c->mem_w32(c->r[5] + 0u, c->r[4]);
+  c->r[4] = c->r[4] + 4u;
+  c->r[2] = c->mem_r32(c->r[18] + 4u);
+  c->r[16] = c->r[16] + 1u;
+  c->mem_w32(c->r[4] + 0u, c->r[2]);
+  c->r[2] = c->mem_r32(c->r[18] + 8u);
+  c->r[4] = c->r[4] + 4u;
+  c->mem_w32(c->r[4] + 0u, c->r[2]);
+  c->r[2] = c->mem_r32(c->r[18] + 12u);
+  c->r[4] = c->r[4] + 4u;
+  c->mem_w32(c->r[4] + 0u, c->r[2]);
+  c->r[2] = c->mem_r32(c->r[18] + 16u);
+  c->r[4] = c->r[4] + 4u;
+  c->mem_w32(c->r[4] + 0u, c->r[2]);
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[4] = c->r[4] + 4u;
+  c->mem_w32(c->r[6] + 0u, c->r[4]);        // advance PKT_POOL_PTR
+L_80078F70:
+  c->r[2] = c->r[2] + 8u;
+  c->mem_w16(c->r[18] + 8u, (uint16_t)c->r[2]);
+L_80078F78:
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 0u);
+  {
+    int _t = (c->r[2] != c->r[0]);
+    c->r[3] = c->r[2] & 255u;
+    if (_t) goto L_80078D34;
+  }
+L_80078F88:
+  // tail: final OT-chained packet via the already-owned func_80083DE0 (draw-mode/texwin header).
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[6] = c->r[5] + c->r[0];
+  c->r[17] = 0x800C0000u - 2748u;           // PKT_POOL_PTR
+  c->r[16] = c->mem_r32(c->r[17] + 0u);
+  c->r[7] = c->r[0] + 31u;
+  c->mem_w32(c->r[29] + 16u, c->r[0]);
+  c->r[31] = 0x80078FA8u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80083DE0u);             // func_80083DE0 -- already owned, process-globally wired
+  c->r[2] = 0x800F0000u;
+  c->r[4] = c->mem_r32(c->r[2] - 10040u);
+  c->r[2] = c->r[19] << 2;
+  c->r[4] = c->r[4] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[4] + 0u);
+  c->r[3] = ((uint32_t)512u << 16);
+  c->r[2] = c->r[2] | c->r[3];
+  c->mem_w32(c->r[16] + 0u, c->r[2]);
+  c->mem_w32(c->r[4] + 0u, c->r[16]);
+  c->r[3] = c->mem_r32(c->r[17] + 0u);
+  c->r[3] = c->r[3] + 12u;
+  c->mem_w32(c->r[17] + 0u, c->r[3]);       // advance PKT_POOL_PTR
+  c->r[3] = c->r[21] & 65535u;
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
+  c->r[31] = c->mem_r32(c->r[29] + 48u);
+  c->r[21] = c->mem_r32(c->r[29] + 44u);
+  c->r[20] = c->mem_r32(c->r[29] + 40u);
+  c->r[19] = c->mem_r32(c->r[29] + 36u);
+  c->r[18] = c->mem_r32(c->r[29] + 32u);
+  c->r[17] = c->mem_r32(c->r[29] + 28u);
+  c->r[16] = c->mem_r32(c->r[29] + 24u);
+  c->r[2] = c->r[2] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[2] = c->r[2] - c->r[3];              // return value -- caller (drawText) discards it
+  c->r[29] = sp0 + 56u;
+}

@@ -111,6 +111,52 @@
 //       register pair (OR-then-AND-mask idiom typical of SPU key-on/key-off command words) from the
 //       scratch value channelKeyEventScan() just stamped; self-contained, no calls, no branches.
 //
+// 2026-07-10 (2nd wide-RE wave, disjoint band) — closes the "0x80095530 stays MAPPED/rec_dispatch,
+// too large/deep" gap left by the pass above. DRAFTED (LOW-MEDIUM confidence — pure register-
+// literal transcription, semantics NOT independently reasoned about beyond what's needed to name
+// the method and identify the shared voice-record layout):
+//   channelVoiceRegisterWrite() (0x80095530, generated/shard_0.c:15026, 320 lines) — the "SPU
+//     voice-register write leaf" channelPitchSlideTick() calls via rec_dispatch. ABI a0(r4)=
+//     seq|chan<<8 packed byte pair (same packing channelVolumeSnapshot/channelPitchSlideTick use),
+//     a1(r5)/a2(r6)=clamped [0,127] snapshot pair (write-through into the channel's +88/+90 u16
+//     fields, matching channelPitchSlideTick's post-clamp r5/r6), a3(r7)=a small flag (values 0/1
+//     seen at call sites — channelPitchSlideTick always passes 1). Body: writes the clamped pair to
+//     the channel record's +88/+90 fields (clamping each to 127 again if either input was already
+//     >=127, a redundant-looking belt-and-suspenders re-clamp); if the KEYSCAN voice-count byte
+//     (SEQ_KEYSCAN_COUNT, +23788) is >0, loops voice index 0..count-1 over the SAME stride-56
+//     record array channelKeyEventScan()/channelKeyRegisterMerge() use (base offset +21712, i.e.
+//     SEQ_KEYSCAN_TABLE-8): skips any voice whose bit is set in the SAME hw voice-active bitmask
+//     (SEQ_KEYSCAN_VOICE_MASK) channelKeyEventScan() scans, then gates on three per-voice-record
+//     field compares (+21720 vs the packed-arg-derived channel index, +21728 vs channelBase+38,
+//     — the three-way gate that decides "this voice belongs to this channel/tone") before calling
+//     channelVoiceSelectPrep() (0x800962B0, new leaf this wave) and running a dense fixed-point
+//     pipeline (several 32x32->64 multiplies feeding a pan-table lookup at +23780/+23772/+23784
+//     stride-16-then-32 record clusters and constants 0x516*65536|2065, 0x33288<<16|8323,
+//     0x32770<<16|9 = ADSR/pan curve constants — NOT independently confirmed, just carried
+//     literally) that produces a left/right amplitude pair written to two parallel u16 tables at
+//     +23080 (r30) and +23082 (r8|r30-relative) indexed by voice*16, then ORs 0x3 into a per-voice
+//     status byte at +23048. This is the piece CLAUDE.md calls "GP0/OT reasoning is a red flag" —
+//     PC render must NEVER consume this table; it exists purely so pc_faithful's guest RAM matches
+//     recomp_path's SPU-adjacent scratch state byte-for-byte.
+//   channelVoiceSelectPrep() (0x800962B0, generated/shard_5.c:16263, 49 lines) — TRUE LEAF, no
+//     stack frame. ABI-ish: consumes whatever's live in r4/r5/r6/r7 at the call site (channel index
+//     value, pitch/velocity value, and two caller locals r6/r7 that are NOT freshly set by the
+//     caller — they're the outer function's OWN a2/a3-slot locals, still resident in the shared
+//     Core register file at call time, exactly the MIPS ABI's "whatever's in a2/a3" convention).
+//     Looks up an instrument/tone-table entry (byte @ +23832 indexed by channel) — if it's not
+//     exactly 1, writes -1 (0xFFFFFFFF) into a shared "voice select result" local and returns; else
+//     compares the pitch value against a lower bound (+23770) and, if in range, looks up 3 pointer-
+//     sized fields from a table indexed by tone (+23632/+23568/+23704 stride 4) and writes them
+//     into the SAME scratch fields channelVoiceRegisterWrite()'s pipeline reads right after this
+//     call returns (+23780/+23772/+23784, plus 3 status bytes at +23801/+23806/+23807). This is
+//     effectively "resolve tone->sample-bank pointers into scratch before the pan/volume compute."
+//   Both kept register-literal (c->r[] direct, goto/labels named after guest addresses) — same
+//   rationale as the bit4/6 leaves above: this is dense fixed-point arithmetic with re-converging
+//   branches (L_80095854/L_800958EC/L_80095970 are each reached from two paths); restructuring by
+//   hand risks a silent operand-order or shift-amount error that only an SBS run would catch, and
+//   this wave is explicitly UNWIRED/pre-gate. A future wiring pass MUST do the line-by-line verify
+//   docs/fleet-workflow.md §9 requires before registering these as overrides.
+//
 // WIDE-RE DRAFT, ALL METHODS UNWIRED: no EngineOverrides registration, no SBS run. Compiles only.
 #pragma once
 #include <cstdint>
@@ -142,4 +188,9 @@ public:
   void channelVolumeSnapshot();       // 0x80095A9C — HIGH confidence, true leaf
   void channelKeyEventScan();         // 0x80095B90 — LOW-MEDIUM confidence, true-leaf-ish (1 call)
   void channelKeyRegisterMerge();     // 0x80094B50 — MEDIUM confidence, true leaf
+
+  // --- 2026-07-10 (2nd wave): the SPU voice-register write leaf channelPitchSlideTick() still
+  //     rec_dispatch()es to, plus its own callee. See header comment for RE detail / confidence.
+  void channelVoiceRegisterWrite();   // 0x80095530 — LOW-MEDIUM confidence, ~320-line KON/pan loop
+  void channelVoiceSelectPrep();      // 0x800962B0 — LOW-MEDIUM confidence, true leaf
 };

@@ -3172,3 +3172,50 @@ each function's file-header comment for the exact import+decomp commands).
   `ram_game.bin` (Ghidra hits `halt_baddata()` at both — that RAM dump doesn't have the GAME.BIN overlay
   resident at those addresses at capture time); a future pass targeting these for the render rebuild
   needs a fresh RAM dump captured while the field's parallax/end-of-area-text is actually on screen.
+## Wide-RE wave 2026-07-10 (2nd disjoint band) — SPU voice-register write leaf + font/glyph emitter
+
+Closes two gaps a prior wave explicitly deferred. Both new methods UNWIRED (no override
+registration, no SBS run, docs/fleet-workflow.md §6/§9) — full RE writeup lives in the class header
+comments (this codebase's convention: "the class IS the RE artifact"), not duplicated here.
+
+- **`Sequencer::channelVoiceRegisterWrite()`** (0x80095530, `game/audio/sequencer.h`/`.cpp`) — the
+  "SPU voice-register write leaf" `channelPitchSlideTick()` (0x80090E40) still `rec_dispatch()`es to.
+  A prior wave (2026-07-10, 1st band) filed it "MAPPED, NOT drafted — ~320 lines, too large/deep for
+  this pass." Drafted this wave: register-literal/goto-label transcription (dense fixed-point pan/
+  volume compute over the same stride-56 voice-record array `channelKeyEventScan()` reads, base
+  offset `+21712` i.e. `SEQ_KEYSCAN_TABLE-8`). Its own callee `channelVoiceSelectPrep()` (0x800962B0,
+  49 gen-C lines, true leaf) drafted alongside it — consumes whatever's live in r4-r7 at the call
+  site rather than a named ABI (same shared-Core-register-file convention the whole file uses).
+  LOW-MEDIUM confidence: control flow is an exact transcription; field ROLES beyond what's needed to
+  name the methods (the pan-curve constants, the +23770/+23772/+23780/+23784/+23801/+23832 scratch
+  cluster) are inferred from the surrounding SPU-register neighborhood, not confirmed against a live
+  dump. See sequencer.h header comment for the full field-by-field writeup.
+
+- **`Font::glyphEmit()`** (0x80078CA8, `game/ui/font.h`/`.cpp`) — the font/glyph emitter
+  `Font::drawText()` (0x80079374) tail-calls. A 2026-07-09 wave filed it "large, separate scope, not
+  drafted" at "403 gen-C lines." Re-read this wave: `gen_func_80078CA8` (generated/shard_5.c:12298)
+  has a REAL `return` at gen-C line 210 with no label anywhere past it — lines 211-402 (192 lines, a
+  hand-unrolled 20-word struct copy + two more OT-chain packet builds) are confirmed UNREACHABLE dead
+  code, the same "shard-grouping artifact" documented elsewhere in this doc (e.g.
+  `channelEnvelopeRampTick`'s trailing `func_800922A0`). The REAL live body is ~180 lines — tractable.
+  Drafted register-literal/goto-label: a null-terminated string walk with a per-BYTE dispatch (not
+  per "control code" as the earlier doc phrasing implied) over a FIXED SCRATCH STRUCT at guest
+  `0x800C0000` — this CORRECTS the prior wave's doc note that placed "cursor state" at scratchpad
+  `0x1F800000..0x1F80001F`; the only scratchpad touch in the live body is a single read of
+  `0x1F800180` (the fixed per-call horizontal-advance value `drawText()` writes as a constant `32`
+  before every call), used inside the glyph-draw arm's width/height compute, NOT as the cursor
+  step itself (the shared "advance cursor" tail always steps by a literal `8`). Byte dispatch: `0x20`
+  (space) advances only; `0x0A` (`\n`) resets x and bumps y by a "line height" field (struct+18,
+  never written anywhere in this function — must be initialized by an untraced caller-adjacent
+  leaf); bytes `0x01`/`0x02`/`0x03`/`0x04` each call the still-unowned `FUN_80078988` (box/rule
+  primitive) with a different literal table pointer (`0x80010000+28072/28076/28068/28064`); any
+  other byte is the ordinary glyph-draw arm, which prepends a 4-word GP0 packet at the shared packet
+  pool (`PKT_POOL_PTR` 0x800BF544 — same pool every other render leaf in `game/render/` uses, see
+  `game/render/submit.cpp`) into the OT bucket for the caller's `color` arg. The function's tail
+  builds one more OT-chained packet via the ALREADY-OWNED `func_80083DE0`
+  (`game/render/wide_re_libgpu_leaves.cpp`, called via `rec_dispatch` since it's process-globally
+  wired) and returns a value (`(int16)size.w - color`) that `drawText()`'s existing body already
+  confirms it discards. LOW-MEDIUM confidence: control flow + the scratch-struct base-address
+  correction are solid (direct re-read of the gen body); individual field roles beyond that
+  (especially the never-written "line height" field) are inferred, not confirmed. See font.h header
+  comment for the full byte-dispatch table.

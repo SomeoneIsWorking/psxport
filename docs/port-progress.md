@@ -2626,3 +2626,30 @@ themselves are LIVE but dispatch out to substrate for every case body.
   the corrected offset math (several of this wave's clamp masks required re-deriving from the exact
   gen decimal immediates rather than trusting the prior wave's prose summary) in sequencer.h's header
   comment and docs/engine_re.md.
+
+- **SPU voice-register write leaf + font/glyph emitter (wide-RE agent, 2026-07-10, 2nd disjoint
+  band, UNWIRED).** Closes the prior sequencer wave's own deferred gap plus a separately-deferred
+  font leaf:
+  - `Sequencer::channelVoiceRegisterWrite()` (0x80095530, `game/audio/sequencer.cpp`) — the ~320-line
+    "SPU voice-register write leaf" `channelPitchSlideTick()` still `rec_dispatch()`es to. Drafted
+    register-literal/goto-label, LOW-MEDIUM confidence (dense fixed-point pan/volume compute over
+    the same stride-56 voice-record array `channelKeyEventScan()` reads; field ROLES beyond what's
+    needed to name the method are inferred, not confirmed). Its own callee `channelVoiceSelectPrep()`
+    (0x800962B0, true leaf) drafted alongside it.
+  - `Font::glyphEmit()` (0x80078CA8, `game/ui/font.cpp`/`.h`) — the font/glyph emitter
+    `Font::drawText()` tail-calls, previously filed by a 2026-07-09 wave as "large, separate scope,
+    not drafted" (403 gen-C lines). Re-read: gen-C lines 211-402 are confirmed UNREACHABLE dead code
+    (a real `return` at line 210 with no label past it, same shard-grouping artifact seen elsewhere)
+    — the LIVE body is only ~180 lines, tractable. Drafted register-literal/goto-label: null-
+    terminated string walk over a fixed scratch struct at guest `0x800C0000` (corrects an earlier doc
+    note that misplaced "cursor state" at scratchpad `0x1F800000..0x1F80001F`), per-byte dispatch
+    (space/`\n`/control bytes 1-4/default-glyph), glyph arm prepends a GP0 packet at the shared
+    packet pool (`PKT_POOL_PTR` 0x800BF544, same pool every other render leaf uses). Calls the
+    already-owned `func_80083DE0` (game/render/wide_re_libgpu_leaves.cpp) via `rec_dispatch`, and
+    leaves the still-unowned `FUN_80078988` (box/rule primitive, 4 call sites) `rec_dispatch`'d —
+    out of band, not drafted. LOW-MEDIUM confidence — control flow + the scratch-struct base-address
+    correction are solid (direct re-read), individual field roles beyond that are inferred.
+  Both new methods build+link clean in a fresh `build2`; UNWIRED (no override registration, no SBS
+  run) per docs/fleet-workflow.md §6. A wiring pass MUST do the line-by-line gen-body re-verify §9
+  requires before registering either as an override. Full RE writeup in sequencer.h/font.h header
+  comments and docs/engine_re.md.

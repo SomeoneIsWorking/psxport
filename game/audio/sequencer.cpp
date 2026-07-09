@@ -674,3 +674,503 @@ void Sequencer::channelNoteInit() {
   c->r[16] = c->mem_r32(c->r[29] + 16u);
   c->r[29] = sp0;
 }
+
+// 0x800962B0 channelVoiceSelectPrep — called mid-loop by channelVoiceRegisterWrite() (see below).
+// Faithful to gen_func_800962B0 (generated/shard_5.c:16263). TRUE LEAF, no stack frame. Consumes
+// whatever's live in r4/r5/r6/r7 at the call site (see sequencer.h header comment) rather than a
+// named ABI — this is a direct register-literal transcription operating on the same shared Core
+// register file as its caller, so caller-set r6/r7 (the outer function's own locals, never
+// re-set here) carry through exactly as the guest MIPS ABI would deliver them.
+//
+// LOW-MEDIUM confidence: control flow is exact; field semantics (an instrument/tone-table lookup
+// gating 3 pointer-table reads into channelVoiceRegisterWrite()'s scratch fields) are inferred
+// from the surrounding SPU-register cluster, not confirmed against a live dump.
+void Sequencer::channelVoiceSelectPrep() {
+  Core* c = core;
+  c->r[7] = c->r[4] + c->r[0];
+  c->r[2] = c->r[7] & 65535u;
+  c->r[2] = (uint32_t)(c->r[2] < 16u);
+  {
+    int _t = (c->r[2] == c->r[0]);
+    c->r[8] = c->r[5] + c->r[0];
+    if (_t) goto L_80096300;
+  }
+  c->r[2] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[3] = 0x80100000u + c->r[4];
+  c->r[3] = (uint32_t)c->mem_r8(c->r[3] + 23832u);
+  c->r[2] = c->r[0] + 1u;
+  {
+    int _t = (c->r[3] != c->r[2]);
+    c->r[2] = (uint32_t)-1;
+    if (_t) goto L_80096368;
+  }
+  c->r[3] = c->r[5] << 16;
+  c->r[2] = 0x80100000u;
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[2] + 23770u);
+  c->r[6] = (uint32_t)((int32_t)c->r[3] >> 16);
+  c->r[2] = (uint32_t)((int32_t)c->r[6] < (int32_t)c->r[2]);
+  {
+    int _t = (c->r[2] != c->r[0]);
+    c->r[2] = c->r[4] << 2;
+    if (_t) goto L_80096308;
+  }
+  c->r[2] = (uint32_t)-1;
+  goto L_80096368;
+
+L_80096308:
+  c->r[3] = 0x80100000u + c->r[2];
+  c->r[3] = c->mem_r32(c->r[3] + 23632u);
+  c->r[5] = 0x80100000u + c->r[2];
+  c->r[5] = c->mem_r32(c->r[5] + 23568u);
+  c->r[1] = 0x80100000u + c->r[2];
+  c->r[2] = c->mem_r32(c->r[1] + 23704u);
+  c->r[4] = 0x80100000u + 23801u;
+  c->mem_w8(c->r[4] + 0u, (uint8_t)c->r[7]);
+  c->mem_w8(c->r[4] + 5u, (uint8_t)c->r[8]);
+  c->mem_w32(0x80100000u + 23784u, c->r[2]);
+  c->r[2] = c->r[6] << 4;
+  c->r[2] = c->r[2] + c->r[5];
+  c->mem_w32(0x80100000u + 23780u, c->r[3]);
+  c->mem_w32(0x80100000u + 23772u, c->r[5]);
+  c->r[3] = (uint32_t)c->mem_r8(c->r[2] + 8u);
+  c->r[2] = c->r[0] + c->r[0];
+  c->mem_w8(c->r[4] + 6u, (uint8_t)c->r[3]);
+L_80096300:
+  ;
+L_80096368:
+  ;
+}
+
+// 0x80095530 channelVoiceRegisterWrite — the "SPU voice-register write leaf" channelPitchSlideTick()
+// (0x80090E40, this file) still rec_dispatch()es to. Faithful to gen_func_80095530
+// (generated/shard_0.c:15026). Guest-stack frame mirrored (sp-64, spill ra/s0-s7/fp(s8) at their
+// RE'd offsets: r16..r23 = s0..s7, r30 = s8/fp, r31 = ra).
+//
+// LOW-MEDIUM confidence — see sequencer.h header comment for the full field-layout writeup. Kept
+// strictly register-literal with goto/labels named after the guest addresses: several branches
+// re-converge on shared tails (L_80095854/L_800958EC/L_80095970 each reached from two paths) and
+// this is dense fixed-point arithmetic where a hand-restructure risks a silent operand-order or
+// shift-amount error. UNWIRED/pre-gate; a wiring pass must do the line-by-line verify
+// docs/fleet-workflow.md §9 requires before registering this as an override.
+void Sequencer::channelVoiceRegisterWrite() {
+  Core* c = core;
+  uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 64u;
+  c->r[7] = c->r[4] & 255u;
+  c->r[7] = c->r[7] << 2;
+  c->r[3] = c->r[4] & 65280u;
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 8);
+  c->r[2] = c->r[3] << 1;
+  c->r[2] = c->r[2] + c->r[3];
+  c->r[2] = c->r[2] << 2;
+  c->r[2] = c->r[2] - c->r[3];
+  c->mem_w32(c->r[29] + 60u, c->r[31]);
+  c->mem_w32(c->r[29] + 56u, c->r[30]);
+  c->mem_w32(c->r[29] + 52u, c->r[23]);
+  c->mem_w32(c->r[29] + 48u, c->r[22]);
+  c->mem_w32(c->r[29] + 44u, c->r[21]);
+  c->mem_w32(c->r[29] + 40u, c->r[20]);
+  c->mem_w32(c->r[29] + 36u, c->r[19]);
+  c->mem_w32(c->r[29] + 32u, c->r[18]);
+  c->mem_w32(c->r[29] + 28u, c->r[17]);
+  c->mem_w32(c->r[29] + 24u, c->r[16]);
+  c->r[3] = 0x80100000u + c->r[7];
+  c->r[3] = c->mem_r32(c->r[3] + 19504u);   // SEQ_PTR_ARRAY-relative, matches chBase() convention
+  c->r[2] = c->r[2] << 4;
+  c->r[17] = c->r[3] + c->r[2];             // channelBase
+  c->mem_w16(c->r[17] + 88u, (uint16_t)c->r[5]);
+  c->r[2] = (uint32_t)c->mem_r16(c->r[17] + 88u);
+  c->r[22] = c->r[4] + c->r[0];
+  c->r[2] = (uint32_t)(c->r[2] < 127u);
+  {
+    int _t = (c->r[2] != c->r[0]);
+    c->mem_w16(c->r[17] + 90u, (uint16_t)c->r[6]);
+    if (_t) goto L_800955B0;
+  }
+  c->r[2] = c->r[0] + 127u;
+  c->mem_w16(c->r[17] + 88u, (uint16_t)c->r[2]);
+L_800955B0:
+  c->r[2] = (uint32_t)c->mem_r16(c->r[17] + 90u);
+  c->r[2] = (uint32_t)(c->r[2] < 127u);
+  {
+    int _t = (c->r[2] != c->r[0]);
+    c->r[2] = c->r[0] + 127u;
+    if (_t) goto L_800955C8;
+  }
+  c->mem_w16(c->r[17] + 90u, (uint16_t)c->r[2]);
+L_800955C8:
+  c->r[2] = (uint32_t)(int8_t)c->mem_r8(0x80100000u + 23788u);   // SEQ_KEYSCAN_COUNT
+  {
+    int _t = ((int32_t)c->r[2] <= 0);
+    c->r[18] = c->r[0] + c->r[0];
+    if (_t) goto L_80095A64;
+  }
+  c->r[21] = ((uint32_t)516u << 16) | 2065u;
+  c->r[23] = c->r[0] + 127u;
+  c->r[19] = ((uint32_t)33288u << 16) | 8323u;
+  c->r[20] = ((uint32_t)32770u << 16) | 9u;
+  c->r[30] = 0x80100000u + 23080u;
+  c->r[2] = c->r[18] << 16;
+L_80095604:
+  c->r[4] = (uint32_t)((int32_t)c->r[2] >> 16);        // voice index i
+  c->r[2] = c->r[0] + 1u;
+  c->r[3] = c->mem_r32(SEQ_KEYSCAN_VOICE_MASK);
+  c->r[2] = c->r[2] << (c->r[4] & 31u);
+  c->r[3] = c->r[3] & c->r[2];
+  {
+    int _t = (c->r[3] != c->r[0]);
+    c->r[2] = c->r[18] + 1u;
+    if (_t) goto L_80095A44;                            // voice busy -- skip
+  }
+  c->r[2] = c->r[4] << 3;
+  c->r[2] = c->r[2] - c->r[4];
+  c->r[16] = c->r[2] << 3;                               // voice*56 (record base, SEQ_KEYSCAN_TABLE-8)
+  c->r[3] = 0x80100000u + c->r[16];
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16(c->r[3] + 21720u);
+  c->r[2] = c->r[22] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  {
+    int _t = (c->r[3] != c->r[2]);
+    c->r[2] = c->r[18] + 1u;
+    if (_t) goto L_80095A44;
+  }
+  c->r[4] = 0x80100000u + c->r[16];
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16(c->r[4] + 21728u);
+  c->r[2] = (uint32_t)(int8_t)c->mem_r8(c->r[17] + 38u);
+  {
+    int _t = (c->r[4] != c->r[2]);
+    c->r[2] = c->r[18] + 1u;
+    if (_t) goto L_80095A44;
+  }
+  c->r[5] = 0x80100000u + c->r[16];
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16(c->r[5] + 21722u);
+  channelVoiceSelectPrep();
+  c->r[2] = 0x80100000u + c->r[16];
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[2] + 21716u);
+  c->r[3] = 0x80100000u + c->r[16];
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16(c->r[3] + 21712u);
+  c->r[2] = c->r[2] << 1;
+  c->r[2] = c->r[2] + c->r[17];
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[2] + 96u);
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[3] = c->lo;
+  c->r[2] = ((uint32_t)33026u << 16) | 1033u;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[7] = c->hi;
+  c->r[4] = c->r[7] + c->r[3];
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 6);
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 31);
+  c->r[4] = c->r[4] - c->r[3];
+  c->r[3] = c->mem_r32(0x80100000u + 23780u);
+  c->r[2] = c->r[4] << 14;
+  c->r[3] = (uint32_t)c->mem_r8(c->r[3] + 24u);
+  c->r[2] = c->r[2] - c->r[4];
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[3] = c->lo;
+  c->r[2] = ((uint32_t)33286u << 16) | 4137u;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = 0x80100000u + c->r[16];
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[2] + 21724u);
+  c->r[4] = c->mem_r32(0x80100000u + 23772u);
+  c->r[2] = c->r[2] << 4;
+  c->r[2] = c->r[2] + c->r[4];
+  c->r[2] = (uint32_t)c->mem_r8(c->r[2] + 1u);
+  c->r[7] = c->hi;
+  c->r[5] = c->r[7] + c->r[3];
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 13);
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 31);
+  c->r[4] = c->r[5] - c->r[3];
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[4] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[6] = 0x80100000u + c->r[16];
+  c->r[6] = (uint32_t)(int16_t)c->mem_r16(c->r[6] + 21722u);
+  c->r[2] = 0x80100000u + c->r[16];
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[2] + 21726u);
+  c->r[6] = c->r[6] << 4;
+  c->r[6] = c->r[6] + c->r[2];
+  c->r[2] = c->mem_r32(0x80100000u + 23784u);
+  c->r[6] = c->r[6] << 5;
+  c->r[6] = c->r[6] + c->r[2];
+  c->r[3] = c->lo;
+  c->r[2] = (uint32_t)c->mem_r8(c->r[6] + 2u);
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  c->r[3] = ((uint32_t)1036u << 16) | 8273u;
+  {
+    uint64_t _p = (uint64_t)c->r[2] * (uint64_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)(_p >> 32);
+  }
+  c->r[3] = c->hi;
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[2] = c->r[2] >> 1;
+  c->r[3] = c->r[3] + c->r[2];
+  c->r[2] = (uint32_t)c->mem_r16(c->r[17] + 88u);
+  c->r[5] = c->r[3] >> 13;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[5] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  c->r[3] = (uint32_t)c->mem_r16(c->r[17] + 90u);
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[5] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[3] = c->lo;
+  {
+    uint64_t _p = (uint64_t)c->r[2] * (uint64_t)c->r[21];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)(_p >> 32);
+  }
+  c->r[4] = c->hi;
+  {
+    uint64_t _p = (uint64_t)c->r[3] * (uint64_t)c->r[21];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)(_p >> 32);
+  }
+  c->r[2] = c->r[2] - c->r[4];
+  c->r[2] = c->r[2] >> 1;
+  c->r[4] = c->r[4] + c->r[2];
+  c->r[4] = c->r[4] >> 6;
+  c->r[5] = c->hi;
+  c->r[3] = c->r[3] - c->r[5];
+  c->r[3] = c->r[3] >> 1;
+  c->r[5] = c->r[5] + c->r[3];
+  c->r[3] = (uint32_t)c->mem_r8(c->r[6] + 3u);
+  c->r[2] = (uint32_t)(c->r[3] < 64u);
+  {
+    int _t = (c->r[2] == c->r[0]);
+    c->r[5] = c->r[5] >> 6;
+    if (_t) goto L_80095828;
+  }
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[5] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  c->r[3] = ((uint32_t)1040u << 16) | 16645u;
+  {
+    uint64_t _p = (uint64_t)c->r[2] * (uint64_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)(_p >> 32);
+  }
+  c->r[3] = c->hi;
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[2] = c->r[2] >> 1;
+  c->r[3] = c->r[3] + c->r[2];
+  c->r[5] = c->r[3] >> 5;
+  goto L_80095854;
+L_80095828:
+  c->r[2] = c->r[23] - c->r[3];
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[4] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  c->r[3] = ((uint32_t)1040u << 16) | 16645u;
+  {
+    uint64_t _p = (uint64_t)c->r[2] * (uint64_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)(_p >> 32);
+  }
+  c->r[3] = c->hi;
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[2] = c->r[2] >> 1;
+  c->r[3] = c->r[3] + c->r[2];
+  c->r[4] = c->r[3] >> 5;
+L_80095854:
+  c->r[3] = c->r[18] << 16;
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 16);
+  c->r[2] = c->r[3] << 3;
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[2] = c->r[2] << 3;
+  c->r[1] = 0x80100000u + c->r[2];
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[1] + 21724u);
+  c->r[3] = c->mem_r32(0x80100000u + 23772u);
+  c->r[2] = c->r[2] << 4;
+  c->r[2] = c->r[2] + c->r[3];
+  c->r[3] = (uint32_t)c->mem_r8(c->r[2] + 4u);
+  c->r[2] = (uint32_t)(c->r[3] < 64u);
+  {
+    int _t = (c->r[2] == c->r[0]);
+    c->r[2] = c->r[5] & 65535u;
+    if (_t) goto L_800958BC;
+  }
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[19];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[8] = c->hi;
+  c->r[2] = c->r[8] + c->r[2];
+  c->r[5] = c->r[2] >> 5;
+  goto L_800958EC;
+L_800958BC:
+  c->r[2] = c->r[4] & 65535u;
+  c->r[3] = c->r[23] - c->r[3];
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[19];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[8] = c->hi;
+  c->r[3] = c->r[8] + c->r[2];
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 5);
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 31);
+  c->r[4] = c->r[3] - c->r[2];
+L_800958EC:
+  c->r[2] = c->r[18] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[3] = c->r[2] << 3;
+  c->r[3] = c->r[3] - c->r[2];
+  c->r[3] = c->r[3] << 3;
+  c->r[1] = 0x80100000u + c->r[3];
+  c->r[3] = (uint32_t)c->mem_r8(c->r[1] + 21714u);
+  c->r[2] = (uint32_t)(c->r[3] < 64u);
+  {
+    int _t = (c->r[2] == c->r[0]);
+    c->r[2] = c->r[5] & 65535u;
+    if (_t) goto L_80095940;
+  }
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[19];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[8] = c->hi;
+  c->r[2] = c->r[8] + c->r[2];
+  c->r[5] = c->r[2] >> 5;
+  goto L_80095970;
+L_80095940:
+  c->r[2] = c->r[4] & 65535u;
+  c->r[3] = c->r[23] - c->r[3];
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[19];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[8] = c->hi;
+  c->r[3] = c->r[8] + c->r[2];
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 5);
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 31);
+  c->r[4] = c->r[3] - c->r[2];
+L_80095970:
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16(0x80100000u + 23768u);
+  c->r[2] = c->r[0] + 1u;
+  {
+    int _t = (c->r[3] != c->r[2]);
+    c->r[2] = c->r[4] & 65535u;
+    if (_t) goto L_800959A4;
+  }
+  c->r[3] = c->r[5] & 65535u;
+  c->r[2] = (uint32_t)(c->r[2] < c->r[3]);
+  {
+    int _t = (c->r[2] == c->r[0]);
+    if (_t) goto L_8009599C;
+  }
+  c->r[4] = c->r[5] + c->r[0];
+  goto L_800959A0;
+L_8009599C:
+  c->r[5] = c->r[4] + c->r[0];
+L_800959A0:
+  c->r[2] = c->r[4] & 65535u;
+L_800959A4:
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[2];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[2] = c->lo;
+  c->r[3] = c->r[5] & 65535u;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[3];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[3] = c->lo;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[20];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[9] = c->hi;
+  {
+    int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[20];
+    c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32);
+  }
+  c->r[6] = c->r[18] << 16;
+  c->r[6] = (uint32_t)((int32_t)c->r[6] >> 16);
+  c->r[5] = c->r[6] << 4;
+  c->r[8] = 0x80100000u + 23082u;
+  c->r[4] = c->r[9] + c->r[2];
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 13);
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 31);
+  c->r[4] = c->r[4] - c->r[2];
+  c->r[2] = c->r[5] + c->r[30];
+  c->r[5] = c->r[5] + c->r[8];
+  c->mem_w16(c->r[2] + 0u, (uint16_t)c->r[4]);
+  c->r[7] = c->hi;
+  c->r[2] = c->r[7] + c->r[3];
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 13);
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 31);
+  c->r[2] = c->r[2] - c->r[3];
+  c->mem_w16(c->r[5] + 0u, (uint16_t)c->r[2]);
+  c->r[2] = 0x80100000u + c->r[6];
+  c->r[2] = (uint32_t)c->mem_r8(c->r[2] + 23048u);
+  c->r[2] = c->r[2] | 3u;
+  c->r[1] = 0x80100000u + c->r[6];
+  c->mem_w8(c->r[1] + 23048u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[18] + 1u;
+L_80095A44:
+  c->r[18] = c->r[2] + c->r[0];
+  c->r[2] = c->r[2] << 16;
+  c->r[3] = (uint32_t)(int8_t)c->mem_r8(0x80100000u + 23788u);   // SEQ_KEYSCAN_COUNT
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < (int32_t)c->r[3]);
+  {
+    int _t = (c->r[2] != c->r[0]);
+    c->r[2] = c->r[18] << 16;
+    if (_t) goto L_80095604;
+  }
+L_80095A64:
+  c->r[2] = c->r[22] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[31] = c->mem_r32(c->r[29] + 60u);
+  c->r[30] = c->mem_r32(c->r[29] + 56u);
+  c->r[23] = c->mem_r32(c->r[29] + 52u);
+  c->r[22] = c->mem_r32(c->r[29] + 48u);
+  c->r[21] = c->mem_r32(c->r[29] + 44u);
+  c->r[20] = c->mem_r32(c->r[29] + 40u);
+  c->r[19] = c->mem_r32(c->r[29] + 36u);
+  c->r[18] = c->mem_r32(c->r[29] + 32u);
+  c->r[17] = c->mem_r32(c->r[29] + 28u);
+  c->r[16] = c->mem_r32(c->r[29] + 24u);
+  c->r[29] = sp0;
+}
