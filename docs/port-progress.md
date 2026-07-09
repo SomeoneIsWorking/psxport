@@ -2517,4 +2517,24 @@ themselves are LIVE but dispatch out to substrate for every case body.
   docs/engine_re.md "Wide-RE wave: libgpu GPU sys jump-table cluster". Recommended next: RE the
   0x80082D04 queue cluster properly (highest dispatch count in the band by far) before drafting it —
   getting an interrupt-callback-queue's field semantics wrong is the exact failure mode
-  fleet-workflow.md §9 warns about.
+  fleet-workflow.md §9 warns about.- **SsSeqCalled cluster follow-up, 0x80090BD0 + its 7 per-channel leaves (wide-RE agent,
+  2026-07-09, UNWIRED).** Picked up the prior wave's "MAPPED, NOT drafted" gap. RE'd (and
+  CORRECTED — the prior pass's globals were off by an 0x8000/0x8xxx transcription slip;
+  reentrancy flag/active-mask/pointer-array/counts are actually 0x80104C24/28/30 and
+  0x801054B0/B2, re-derived fresh from `generated/shard_3.c`'s current gen body, not
+  0x8010CCxx/0x80109Exx) and DRAFTED `Sequencer::seqChannelDispatch()` (0x80090BD0 SsSeqCalled
+  itself — the reentrancy-guarded 7-seq x 15-chan double loop + all 8 per-channel flag-bit
+  tests) plus 3 of its 7 leaves: `channelPitchSelectDispatch` (0x800910F0, thin wrapper),
+  `channelReleaseClear` (0x80091050), `channelStopFlagSet` (0x80091910, true leaf). The other
+  4 leaf call sites (0x80090E40 x2, 0x80092080 x2, 0x80091970 x1) stay `rec_dispatch(c, addr)`
+  call-outs inside the now-native double loop — same pattern `frameTick()` already used for
+  SsSeqCalled itself; those 3 leaves are deep ADSR/pitch-slide/note-init state machines with
+  2+ further unowned callees each (0x80091120, 0x80095A9C, 0x80095530, 0x80095B90, 0x800931A0)
+  — control flow fully RE'd (generated/shard_4.c:15017 / shard_1.c:17775 / shard_4.c:15144) but
+  field semantics beyond the flags/counter fields are inferred, not confirmed; deprioritized
+  under the wide-RE effort budget. All new code in `game/audio/sequencer.{h,cpp}` (extends the
+  existing `Sequencer` class rather than a new file). Full per-function RE + bit-to-leaf map in
+  docs/engine_re.md's sequencer.h-referenced comment block. Note: 0x800931C0 (the "prep call"
+  fired once before SsSeqCalled's seq loop) was ALREADY drafted by an earlier pass as
+  `input_dispatch_931c0` (game/input/input.cpp, static free fn, unwired) — left as-is, called
+  via `rec_dispatch` from `seqChannelDispatch()` since it's a different TU's static symbol.

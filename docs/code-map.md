@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 566 native fns, 477 owned addresses, 538 LIVE / 28 ORPHAN.
+Totals: 570 native fns, 481 owned addresses, 542 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -373,7 +373,11 @@ Totals: 566 native fns, 477 owned addresses, 538 LIVE / 28 ORPHAN.
 | 0x8008BBE8 | LIVE | `LibcdNative::newMedia` | game/cd/libcd_native.cpp:12 |  |  |
 | 0x8008BF50 | LIVE | `LibcdNative::cacheFile` | game/cd/libcd_native.cpp:17 |  |  |
 | 0x8008C1EC | ORPHAN | `cd_read` | runtime/recomp/cd_override.cpp:121 |  | (a0=blocks, a1=lba, a2=buf): native synchronous read. |
-| 0x800909C0 | ORPHAN | `Sequencer::frameTick` | game/audio/sequencer.cpp:23 |  | libsnd per-VBlank tick wrapper. WIDE-RE DRAFT, UNWIRED (see header). |
+| 0x800909C0 | ORPHAN | `Sequencer::frameTick` | game/audio/sequencer.cpp:25 |  | libsnd per-VBlank tick wrapper. WIDE-RE DRAFT, UNWIRED (see header). |
+| 0x80090BD0 | LIVE | `Sequencer::seqChannelDispatch` | game/audio/sequencer.cpp:107 | 0x80090E40 0x80091970 0x80092080 | SsSeqCalled — the per-VBlank sequence/channel scheduler. Faithful to |
+| 0x80091050 | LIVE | `Sequencer::channelReleaseClear` | game/audio/sequencer.cpp:53 | 0x80095B90 | "release"/note-off housekeeping: zeroes the per-channel status byte at… |
+| 0x800910F0 | LIVE | `Sequencer::channelPitchSelectDispatch` | game/audio/sequencer.cpp:36 | 0x80091120 | thin arg-repacking wrapper: sign-extend (seq,chan) to 32-bit and tail-… |
+| 0x80091910 | LIVE | `Sequencer::channelStopFlagSet` | game/audio/sequencer.cpp:88 |  | sets the per-channel status byte at +20 to 1, clears flags bit3 (value… |
 | 0x800931C0 | ORPHAN | `input_dispatch_931c0` | game/input/input.cpp:38 | 0x80097E10 0x80098DB0 0x80098F90 0x80099970 0x8009A1D0 | per-frame INPUT/controller-state processor (the heaviest un-owned resi… |
 | 0x80096370 | LIVE | `Font::bank2Store` | game/ui/font.cpp:41 |  | font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set … |
 | 0x800963A0 | LIVE | `Font::bankSelect` | game/ui/font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |

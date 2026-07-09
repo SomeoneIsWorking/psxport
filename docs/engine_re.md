@@ -2918,3 +2918,38 @@ Band from the task brief's dispatch-count list: 0x80082D04(824) 0x80083364(629) 
     (this is textbook "GPU interrupt callback queue" shape) before drafting — getting the field
     semantics wrong here risks the "9 bugs in one function" failure mode fleet-workflow.md §9 warns
     about, given the 380+ gen-C lines and 5-way mutual recursion.
+## Wide-RE wave 2026-07-09 — SsSeqCalled (0x80090BD0) cluster DRAFTED (follow-up to the libsnd/BIOS wave)
+
+**Correction to the prior wave's "Mapped, NOT drafted" entry above**: its globals for this cluster
+(reentrancy flag `0x8010CC24`, active-bitmask `0x8010CC28`, seq/chan bounds `0x80109E70`/`0x72`)
+were a transcription error. Re-derived directly from the current `generated/shard_3.c:21497`
+gen body: base `32784u<<16 = 0x80100000`, offsets are the exact decimal immediates in that file —
+**reentrancy flag = 0x80104C24, active-mask = 0x80104C28, per-sequence pointer array (4-byte
+stride) = 0x80104C30, sequence count (s16) = 0x801054B0, channels-per-sequence count (s16) =
+0x801054B2**. Per-channel record base = `*(seqArray + seq*4) + chan*176`; flags bitfield at
+`channelBase+152`.
+
+Full RE (bit-to-leaf map, confidence per leaf, field offsets touched) lives as the header comment
+in `game/audio/sequencer.h` (kept there rather than duplicated here, since the class IS the
+authoritative RE artifact per this codebase's "decompile into the port" convention) — read it
+before touching this cluster again. Summary:
+
+- **DRAFTED (game/audio/sequencer.cpp, UNWIRED)**: `Sequencer::seqChannelDispatch()` (0x80090BD0
+  SsSeqCalled — the double loop + reentrancy guard + prep-call + all 8 flag-bit tests, guest-stack
+  mirrored sp-56/spill-10-regs including on the reentrancy early-exit path), plus 3 of its 7
+  leaves: `channelPitchSelectDispatch` (0x800910F0, HIGH confidence — 2-instruction sign-extend +
+  tail-dispatch), `channelReleaseClear` (0x80091050, HIGH confidence), `channelStopFlagSet`
+  (0x80091910, HIGH confidence, true leaf/no stack frame).
+- **MAPPED, NOT drafted** (control flow fully RE'd, field semantics beyond flags/counters
+  inferred not confirmed, each has 2+ further unowned callees): `0x80090E40` (pitch-slide/
+  portamento interpolator, called for both bit4 and bit5 — generated/shard_4.c:15017),
+  `0x80092080` (ADSR/envelope ramp, called for both bit6 and bit7 — generated/shard_1.c:17775),
+  `0x80091970` (per-channel note-init/retrigger, called for bit2 — generated/shard_4.c:15144, also
+  notable for reading a STALE/live `a2`(r6) register the SsSeqCalled caller never explicitly sets
+  before this call site — a genuine ABI-register-passthrough dependency, not a bug; preserved by
+  routing through `rec_dispatch` rather than a clean C++ parameter). Next step for whoever picks
+  this up: RE `0x80091120`/`0x80095A9C`/`0x80095530`/`0x80095B90`/`0x800931A0` (the 3 leaves'
+  shared callees) as a cluster, then draft the 3 remaining leaves and swap `seqChannelDispatch()`'s
+  4 `rec_dispatch` call-outs for direct method calls.
+- `0x800931C0` (SsSeqCalled's one-shot "prep call") was already drafted by an earlier pass as
+  `input_dispatch_931c0` (game/input/input.cpp) — untouched here, still reached via `rec_dispatch`.
