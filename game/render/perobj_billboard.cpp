@@ -163,38 +163,50 @@ void Render::perObjRenderDispatch() {
     if (sel >= 9u) return;
     constexpr uint32_t TABLE = 0x80014EC8u;
     const uint32_t target = c->mem_r32(TABLE + sel * 4u);
+    // RE'd return-address constants gen sets in r31 immediately before each nested call (see
+    // generated/shard_5.c gen_func_8003CCA4). Register-faithfulness (2026-07-09, the f118 residual
+    // root cause): a prior draft called cmdListDispatch()/the special-effect leaves without ever
+    // setting c->r[31], leaving whatever stale value the OUTER caller (FUN_8003C048) left there
+    // instead — a real, reproducible SBS diff at FUN_80146478's own ra spill slot (0x801FE8D0..),
+    // several frames deep in this call chain. Mirrored per CLAUDE.md ("MIRROR THE GUEST STACK...
+    // register-faithfulness"), same discipline as billboardCompose1/2's own fix (commit bef7769).
     switch (target) {
       case 0x8003CD00u: {
-        c->r[4] = node; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[31] = 0x8003CD08u; c->mRender->cmdListDispatch();
         break;
       }
       case 0x8003CD10u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[31] = 0x8003CD20u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = pre; c->r[6] = post; func_8003D584(c);
+        c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CD30u; func_8003D584(c);
         break;
       }
       case 0x8003CD38u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[31] = 0x8003CD48u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = pre; c->r[6] = post; func_8003F344(c);
+        c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CD58u; func_8003F344(c);
         break;
       }
       case 0x8003CD60u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[31] = 0x8003CD70u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post;
-        if (c->mem_r8(node + 27) == 0) func_8003F3F4(c); else func_8003F4C4(c);
+        // Branch polarity (2026-07-09, found during the same audit): gen_func_8003CCA4 L_8003CD60
+        // tests node+27==0 -> func_8003F4C4 (the L_8003CD90 target), node+27!=0 -> func_8003F3F4 —
+        // a prior draft had this INVERTED. Neither leaf fires at seaside (this file's own banner),
+        // so the flip was never caught by the autonav gate; fixed here to match gen exactly.
+        if (c->mem_r8(node + 27) == 0) { c->r[31] = 0x8003CD98u; func_8003F4C4(c); }
+        else                            { c->r[31] = 0x8003CD88u; func_8003F3F4(c); }
         break;
       }
       case 0x8003CDA0u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[31] = 0x8003CDB0u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = pre; c->r[6] = post; func_8003F594(c);
+        c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CDC0u; func_8003F594(c);
         break;
       }
       case 0x8003CDC0u:

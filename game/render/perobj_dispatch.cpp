@@ -66,6 +66,49 @@ void func_800803DC(Core*);                    // generated/shard_disp.c — gene
 void shard_set_override(uint32_t addr, OverrideFn fn);   // generated/shard_disp.c (C++ linkage)
 
 namespace {
+// Guest-stack frame RAII, mirroring gen_func_8003CDD8's real `addiu sp,-56` prologue (spills
+// r16..r23/ra at +16..+48) and gen_func_8003F698's real `addiu sp,-24` prologue (spills ra only at
+// +16) — see CLAUDE.md "MIRROR THE GUEST STACK". Neither function's own C++ body needs r16..r23 as
+// meaningful cross-call state (register-faithfulness concern only applies to nested TAIL-CALLS that
+// themselves spill a caller's live callee-saved regs — cmdListDispatch/perModeDispatch never set
+// r16..r23 to a value a callee depends on), so this is the simple spill-live/restore-live idiom
+// (same as game/render/cull.cpp's wrapFrame / perobj_billboard.cpp's GuestFrame), NOT the
+// value-injecting variant node_xform.cpp needed.
+struct CmdListFrame {
+  Core* c; uint32_t s16,s17,s18,s19,s20,s21,s22,s23,sra;
+  explicit CmdListFrame(Core* c_)
+    : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]), s19(c_->r[19]),
+      s20(c_->r[20]), s21(c_->r[21]), s22(c_->r[22]), s23(c_->r[23]), sra(c_->r[31]) {
+    c->r[29] -= 56;
+    c->mem_w32(c->r[29] + 16, s16); c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 24, s18); c->mem_w32(c->r[29] + 28, s19);
+    c->mem_w32(c->r[29] + 32, s20); c->mem_w32(c->r[29] + 36, s21);
+    c->mem_w32(c->r[29] + 40, s22); c->mem_w32(c->r[29] + 44, s23);
+    c->mem_w32(c->r[29] + 48, sra);
+  }
+  ~CmdListFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 48); c->r[23] = c->mem_r32(c->r[29] + 44);
+    c->r[22] = c->mem_r32(c->r[29] + 40); c->r[21] = c->mem_r32(c->r[29] + 36);
+    c->r[20] = c->mem_r32(c->r[29] + 32); c->r[19] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24); c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 56;
+  }
+};
+struct PerModeFrame {
+  Core* c; uint32_t sra;
+  explicit PerModeFrame(Core* c_) : c(c_), sra(c_->r[31]) {
+    c->r[29] -= 24;
+    c->mem_w32(c->r[29] + 16, sra);
+  }
+  ~PerModeFrame() {
+    c->r[31] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 24;
+  }
+};
+}
+
+namespace {
 constexpr uint32_t SCR        = 0x1F800000u;   // PSX scratchpad base (the engine's GTE-compose temp area)
 constexpr uint32_t WORLD_POS  = SCR + 0xC0u;   // object world position stash (0x1F8000C0/C2/C4)
 constexpr uint32_t CAM_ROT    = 0x1F8000F8u;   // scene camera view rotation (CR-packed 3x3, 5 words)
@@ -83,6 +126,8 @@ constexpr uint32_t MVMVA_TRANS  = 0x4A486012u; // MVMVA: camera-rot(CR0-4) x V0 
 // object-local, via MVMVA) into GTE CR0-7 for each active render command, then calls FUN_8003F698.
 void Render::cmdListDispatch() {
   Core* c = mCore;
+  CmdListFrame frame(c);   // real -56 guest frame (RE: gen_func_8003CDD8 prologue) — descended even
+                            // on the immediate-return path below, exactly like gen.
   const uint32_t node = c->r[4];
   const uint32_t flag = c->r[5];
   if (c->mem_r8(node + 8) == 0 || c->mem_r8(node + 9) == 0) return;
@@ -153,6 +198,7 @@ void Render::cmdListDispatch() {
       otbase = otbase_val + ((uint32_t)(int32_t)c->mem_r8s(cmd + 0x3Fu) << 2);
 
     c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;
+    c->r[31] = 0x8003D07Cu;   // RE'd return-address constant (gen_func_8003CDD8, right before func_8003F698)
     perModeDispatch();
     } // if (geomblk != 0)
     i++;
@@ -183,24 +229,34 @@ static uint32_t perModeCaseTarget(uint32_t caseLabel) {
   }
 }
 
+// RE'd return-address constant gen sets in r31 immediately before each case's dispatch call (see
+// generated/shard_4.c gen_func_8003F698, labels L_8003F6E8.. — each is `caseLabel + 8`). Register-
+// faithfulness (2026-07-09, the f118 residual root cause): a prior draft called rec_dispatch without
+// ever touching c->r[31], leaving whatever STALE value the caller (perObjRenderDispatch/cmdListDispatch)
+// left there instead — a real, reproducible SBS diff at FUN_80146478's own ra spill slot
+// (0x801FE8D0..). Mirrored below per CLAUDE.md ("MIRROR THE GUEST STACK... register-faithfulness").
+static uint32_t perModeCaseReturnAddr(uint32_t caseLabel) { return caseLabel + 8u; }
+
 // FUN_8003F698 — per-mode render dispatcher: routes to the area's per-mode renderer (mode-select byte
 // + jump table) or the generic GT3/GT4 packet emitter (func_800803DC).
 void Render::perModeDispatch() {
   Core* c = mCore;
+  PerModeFrame frame(c);   // real -24 guest frame (RE: gen_func_8003F698 prologue, ra spill only)
   const uint32_t flag = c->r[6];
   if (c->mem_r8(MODE_FORCE) == 0 && (flag & 1u) == 0) {
     const uint32_t mode = c->mem_r8(MODE_BYTE);
     if (mode < 22) {
       const uint32_t caseLabel = c->mem_r32(MODE_TABLE + mode * 4);
       const uint32_t target = perModeCaseTarget(caseLabel);
-      if (target != 0) { rec_dispatch(c, target); return; }
+      if (target != 0) { c->r[31] = perModeCaseReturnAddr(caseLabel); rec_dispatch(c, target); return; }
       // caseLabel == 0x8003F788 (or an unrecognized label) -> the recomp's own `default:
       // rec_dispatch(c, c->r[2])` would dispatch the RAW label address here; since 0x8003F788 IS the
       // generic-fallback label (whose body is just `func_800803DC(c)`, no rec_dispatch), reproduce
       // that directly rather than rec_dispatch-ing a label address that has no recompiled entry.
-      if (caseLabel != 0x8003F788u) { rec_dispatch(c, caseLabel); return; }
+      if (caseLabel != 0x8003F788u) { c->r[31] = perModeCaseReturnAddr(caseLabel); rec_dispatch(c, caseLabel); return; }
     }
   }
+  c->r[31] = 0x8003F790u;   // RE'd: L_8003F788's own r31 set before func_800803DC (the generic label)
   func_800803DC(c);
 }
 
@@ -209,10 +265,27 @@ void ov_cmdListDispatch(Core* c) { c->mRender->cmdListDispatch(); }
 void ov_perModeDispatch(Core* c) { c->mRender->perModeDispatch(); }
 }
 
+// ORACLE-PURITY FIX (2026-07-09, the f118 residual root cause): these two were installed via the RAW
+// shard_set_override — the process-global g_override[] table shard_disp.c's func_8003CDD8/func_8003F698
+// wrappers consult on BOTH cores, with no oracle gate. That means SBS core B (supposed to be the pure
+// gen_func_* substrate) was ALSO running this native code whenever gen_func_8003CCA4 (correctly running
+// pure on B via its own engine_set_override_main registration) called func_8003CDD8(c) — exactly the
+// failure mode engine_override_thunk.cpp's own banner documents ("clusters that forget it... silently
+// broke the oracle"). Concretely: native Render::perObjRenderDispatch never mirrors gen_func_8003CCA4's
+// `c->r[18] = node` prologue assignment (r18 is plain scratch to the native C++ body), so when B's PURE
+// gen_func_8003CCA4 called into this SAME native cmdListDispatch, the CmdListFrame RAII spilled A's
+// stale r18 instead of B's real node pointer — a genuine cross-core state leak, not just a byte diff.
+// Fixed by routing through the shared oracle-gated thunk (engine_set_override_main) like every other
+// engine/game native in this call chain (perobj_billboard.cpp, overlay_gt3gt4.cpp,
+// overlay_ground_gt3gt4.cpp, quad_rtpt_submit.cpp) — B now always runs the real gen_func_8003CDD8/
+// gen_func_8003F698 bodies, closing the leak at its source.
 void perobj_dispatch_install() {
   static bool done = false;
   if (done) return;
   done = true;
-  shard_set_override(0x8003CDD8u, ov_cmdListDispatch);
-  shard_set_override(0x8003F698u, ov_perModeDispatch);
+  extern void gen_func_8003CDD8(Core*);
+  extern void gen_func_8003F698(Core*);
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x8003CDD8u, ov_cmdListDispatch, gen_func_8003CDD8);
+  engine_set_override_main(0x8003F698u, ov_perModeDispatch, gen_func_8003F698);
 }

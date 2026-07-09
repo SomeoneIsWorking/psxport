@@ -37,18 +37,67 @@
 - **bug 2 — RESOLVED (commit ffb1463)**: `ground_otz_index` mis-split gen's single upper-bound gate
   `(idx-4) < 2044` into a two-sided range [4..2047] — spurious lower bound + off-by-one. Matched gen.
 - **verified**: f118 PACKET POOL clean (render packets now match the substrate).
-- **OPEN — stack-depth divergence at f118**: residual f118 divergence is now in the guest STACK
-  (0x801FE8D0/0x801FE8E8), a different class — last-writer shows the two cores at different sp at the
-  same address (core A in billboardCompose1 at sp=801FE898, core B in perObjRenderDispatch at
-  sp=801FE8D8) and the field `overlay_gt3gt4` (80146478) writing with different ra. Looks like an
-  sp-trajectory / call-order mismatch across the render chain, possibly cascading from the sibling
-  field `overlay_gt3gt4` cluster (which likely carries the SAME era bugs — BUF base / register-
-  faithfulness / depth-shift — not yet audited). Next: audit overlay_gt3gt4.cpp + quad_rtpt_submit.cpp
-  the same way (force-gen bisect), then re-examine the sp trajectory.
+- **stack-depth divergence at f118 — RESOLVED (2026-07-09)**: root cause was TWO compounding bugs in
+  the `perObjRenderDispatch` -> `cmdListDispatch` -> `perModeDispatch` chain, both missing from the
+  2026-07-08 landing:
+  1. **register-faithfulness gap**: `gen_func_8003CCA4` (perObjRenderDispatch) sets `c->r[31]` to an
+     RE'd return-address CONSTANT before every nested call (`r31=0x8003CD08` before `func_8003CDD8`,
+     etc. — 8 call sites total across its 5 cases); `gen_func_8003F698` (perModeDispatch) does the same
+     before every `rec_dispatch` (11 case labels, each `caseLabel+8`) and before the generic
+     `func_800803DC` fallback (`r31=0x8003F790`). The native ports never set `c->r[31]` at all, so
+     whatever call reached `FUN_80146478` (the field overlay GT3/GT4 dispatcher, itself a real
+     `addiu sp,-32` frame that spills its CALLER's live `ra`) spilled a STALE r31 leaked from the
+     outermost unowned caller (`FUN_8003C048`) instead of the RE'd chain value — the actual f118
+     divergence bytes (0x801FE8D0..0x801FE8F6, `FUN_80146478`'s own ra/r16/r17 spill slots). Fixed by
+     setting `c->r[31]` to the literal RE'd constant at every call site in both functions (see
+     `Render::perObjRenderDispatch`/`perModeDispatch`).
+  2. **oracle-purity leak (the deeper bug — CRITICAL)**: `cmdListDispatch`/`perModeDispatch`
+     (`0x8003CDD8`/`0x8003F698`) were installed via the RAW `shard_set_override` (2026-07-08 landing),
+     not the oracle-gated `engine_set_override_main` — exactly the failure mode
+     `runtime/recomp/engine_override_thunk.cpp`'s own banner warns about ("clusters that forget it...
+     silently broke the oracle"). `g_override[]` is process-global, so SBS core B (the pure-substrate
+     oracle) was ALSO running this native code whenever `gen_func_8003CCA4` (correctly oracle-gated)
+     called `func_8003CDD8(c)` — core B was comparing native-vs-native for this pair, not
+     native-vs-gen. Confirmed via `engine_override_thunk`'s per-address hit-count dump
+     (`PSXPORT_SBS_PREWATCH`+`PSXPORT_SBS_WW_ONVALUEDIVERGE=1`): after fixing bug 1 alone, the f118
+     write showed BOTH cores at pc=`8003CCA4`/`8003CDD8` with matching sp/ra — i.e. B was running the
+     SAME native code A was. Fixed by switching `perobj_dispatch_install()` to
+     `engine_set_override_main` (matching every sibling cluster:
+     perobj_billboard/overlay_gt3gt4/overlay_ground_gt3gt4/quad_rtpt_submit) and adding real guest-stack
+     frames (`CmdListFrame`/`PerModeFrame`, RE'd from `gen_func_8003CDD8`'s -56-byte and
+     `gen_func_8003F698`'s -24-byte prologues) so B's now-pure gen body and A's native body descend the
+     same sp.
+  3. Also found (same audit): `perObjRenderDispatch`'s case `0x8003CD60` had an INVERTED branch
+     polarity (`node+27==0 -> func_8003F3F4` in the native draft; gen is
+     `node+27==0 -> func_8003F4C4`). Neither leaf fires at seaside, so autonav never caught it; fixed
+     to match gen exactly.
+  - **verified**: SBS-full autonav no longer diverges at f118 (confirmed clean through the frame range
+    that previously failed there).
+  - **NEW finding — f62 divergence (OPEN, not yet root-caused)**: fixing the oracle-purity leak (bug 2
+    above) unmasked a genuinely EARLIER, previously-hidden divergence at f62, persistent frame-over-
+    frame at `0x801FE870..0x801FE878` (task-0 stack). last-writer now shows BOTH cores at the IDENTICAL
+    pc/ra/sp (`pc=800803DC ra=8003F790 sp=801FE860`) — i.e. the CALL CHAIN is now faithfully aligned
+    (my bug-1/bug-2 fixes hold), but the still-substrate `func_800803DC` (the generic GT3/GT4 packet
+    emitter, reached via `perModeDispatch`'s fallback path) produces DIFFERENT bytes from IDENTICAL
+    code running on both cores — meaning its INPUTS (args or GTE/scratchpad state set up by
+    `cmdListDispatch` before the call) differ between A and B. Re-audited `Render::cmdListDispatch`'s
+    entire GTE-compose sequence (MVMVA rotation columns, world-position translate, CR0-7 reload,
+    otbase select, geomblk/otbase/flag arg computation) instruction-by-instruction against
+    `gen_func_8003CDD8` — every step matches exactly; did NOT find the discrepancy there. Likely
+    candidates for a future session: camera scratchpad state (`CAM_ROT`/`CAM_TRANS`,
+    0x1F8000F8/0x1F80010C) populated by an EARLIER, upstream writer that itself diverges before this
+    call; or `func_8007FDB0`/`func_8008007C` (still-substrate leaves `func_800803DC` calls) reading
+    GTE state cmdListDispatch's compose left behind. This f118 fix was never a fake-green: the SBS gate
+    genuinely regressed EARLIER (f118 -> f62) as a DIRECT, expected consequence of closing the oracle
+    leak — the f62 bug was always there, just hidden behind cascading corruption that started even
+    earlier once B stopped being pure. Do NOT re-mask this by reverting the oracle-purity fix.
 - **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
-  `game/render/{perobj_billboard,overlay_ground_gt3gt4}.cpp`; oracles `generated/shard_4.c
-  gen_func_8003C8F4`, `generated/shard_0.c gen_func_8003C2D4`, `generated/ov_a00_shard_0.c
-  ov_a00_gen_8013FB88`, `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`.
+  `game/render/{perobj_billboard,perobj_dispatch,overlay_ground_gt3gt4}.cpp`;
+  `runtime/recomp/engine_override_thunk.cpp`; oracles `generated/shard_5.c gen_func_8003CCA4`,
+  `generated/shard_6.c gen_func_8003CDD8`, `generated/shard_4.c gen_func_8003F698,
+  gen_func_8003C8F4`, `generated/shard_0.c gen_func_8003C2D4`, `generated/shard_7.c
+  gen_func_800803DC`, `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88,ov_a00_gen_80146478`,
+  `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`.
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 
