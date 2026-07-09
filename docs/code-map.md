@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 593 native fns, 504 owned addresses, 565 LIVE / 28 ORPHAN.
+Totals: 595 native fns, 505 owned addresses, 567 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -65,9 +65,10 @@ Totals: 593 native fns, 504 owned addresses, 565 LIVE / 28 ORPHAN.
 | 0x8003B054 | LIVE | `QuadRtptSubmit::rotateQuadCorners` | game/render/quad_rtpt_submit.cpp:39 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8003B220 | ORPHAN | `hitbox_build_3b220` | game/player/hitbox.cpp:51 |  | Pure native body. Mirrors the recomp's exact in-memory load/store orde… |
 | 0x8003B320 | LIVE | `QuadRtptSubmit::submitQuad` | game/render/quad_rtpt_submit.cpp:126 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:290 |  |  |
-| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:325 |  |  |
-| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:361 |  | ======================================================================… |
+| 0x8003C048 | LIVE | `Render::renderWalk` | game/render/render_walk_dispatch.cpp:152 | 0x80129114 0x801295B4 0x8012A43C 0x8013DD58 |  |
+| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:310 |  |  |
+| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:345 |  |  |
+| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:381 |  | ======================================================================… |
 | 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:188 |  | ======================================================================… |
 | 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:127 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
 | 0x8003F698 | LIVE | `Render::perModeDispatch` | game/render/perobj_dispatch.cpp:265 |  | per-mode render dispatcher: routes to the area's per-mode renderer (mo… |

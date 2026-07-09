@@ -178,6 +178,22 @@ public:
   // by averaged depth, and emits a 10-word (tag+9) GT4-style packet into the packet pool.
   void billboardEmit();
 
+  // ---- SUBSTRATE MIRROR: the render-WALK loop (guest FUN_8003C048) --------------------------------
+  // renderWalk (FUN_8003C048, no args): iterates the global render-node list (head @0x800F2624, next
+  // ptr @node+36), skipping dead nodes (mem8(node+1)==0) and out-of-range case indices
+  // (mem8(node+11)>=33), and dispatches each live node through a 33-entry jump table (@0x800104B8) to
+  // one of: perObjRenderDispatch/billboardCompose1/billboardCompose2 (owned siblings, called
+  // natively), several still-substrate leaves (func_8003F174/EF9C/80039F4C/800726D4/C5F8/C788 +
+  // rec_dispatch to 0x8012A43C/801295B4/80129114/8013DD58), a "generic particle" case (0x8003C188,
+  // mode-4 direct dispatch or a func_8003B054+80084660/90+8003B320 packet-emit sequence), a fully
+  // dynamic per-node dispatch through node+24 (case 0x8003C29C), and a no-op skip entry. THE point of
+  // owning this loop: it is the caller CCA4Frame/CmdListFrame's register-faithfulness fixes assumed —
+  // gen keeps the loop's node pointer and next pointer LIVE in the real r16/r17 registers (and two
+  // constants in r18/r19) across every nested call, which the still-substrate callees' own prologues
+  // spill as "caller state" (see perobj_billboard.cpp's CCA4Frame / perobj_dispatch.cpp's
+  // CmdListFrame). See render_walk_dispatch.cpp for the full RE + the f118 residual this closes.
+  void renderWalk();
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

@@ -23,7 +23,7 @@
   spill no callee-saved regs, so only the prologue spills + pre-call register state matter.
 - **verified**: f117 fully clean.
 
-## overlay_ground_gt3gt4 cluster (8013FB88/8013FE58/801401B8) — depth >>2 + range gate (2026-07-09, packet-pool RESOLVED; stack-depth OPEN)
+## overlay_ground_gt3gt4 cluster (8013FB88/8013FE58/801401B8) — depth >>2 + range gate (2026-07-09, packet-pool RESOLVED; f118/f62 register-faithfulness RESOLVED 2026-07-10; gt3/gt4 DATA divergence OPEN — see bottom)
 
 - **how found**: once billboard's f117 cleared, f117→f118 in the packet pool. Last-writer: native
   `entityLoop` (801401B8) writing on core A vs gen `gt3` (8013FB88) on core B — native `gt3` is called
@@ -105,25 +105,71 @@
     dedicated `CCA4Frame` struct (mirrors `CmdListFrame`'s save/spill/restore idiom) in
     `game/render/perobj_billboard.cpp`, wired into `perObjRenderDispatch`. **Verified**: the
     `0x801FE8E8..0x801FE8F6` (r18/ra) divergence is gone.
-  - **f118 residual (OPEN)**: after the CCA4Frame fix, TWO ranges still diverge every frame from f118
-    onward: `0x801FE8B8..0x801FE8BC` (4B) and `0x801FE900..0x801FE902` (2B). `PSXPORT_SBS_PREWATCH`
-    traced the LAST WRITER of `0x801FE8B8` to `Render::cmdListDispatch`'s OWN `r16`/`r17` prologue spill
-    (matching `gen_func_8003CDD8`+0x18 on core B, both cores at identical pc) — i.e. this is a DEEPER
-    occurrence of the SAME callee-save-chain issue f62 was, one call-frame further out: `cmdListDispatch`
-    is entered (via `CCA4`'s case `0x8003CD00`, which per gen does NOT touch r16/r17 before the call)
-    with whatever `r16`/`r17` `CCA4`'s caller (`gen_func_8003C048`, the render-WALK loop, still fully
-    UNOWNED/shared substrate) had at that point. `gen_func_8003C048` runs byte-identical code on both
-    cores, so its own r16/r17 should match — UNLESS an EARLIER native call for a PRECEDING node in the
-    SAME walk iteration failed to restore r16/r17 to gen's real value. Audited the other three owned
-    leaves in this cluster (`billboardCompose1`/`billboardCompose2`/`billboardEmit`) — all three already
-    do correct inline spill/restore of their real gen-prologue register sets (confirmed against
-    `generated/shard_0.c`/`shard_1.c`/`shard_4.c`); did not find a fourth leak there in the time
-    available. Root-causing this residual requires either (a) RE-ing enough of `gen_func_8003C048`
-    (`renderWalk`) to confirm what it expects r16-r23 to hold across its OTHER dispatch cases (not just
-    the CD00/billboard ones already owned), or (b) walking the object list at f118 with per-node
-    PREWATCH to find which node's call leaves r16/r17 wrong for the NEXT node. Left OPEN — do not
-    speculative-patch `cmdListDispatch` again without finding the actual upstream writer; the fix
-    pattern (explicit register-faithfulness injection) is proven, just needs the right call site.
+  - **f118 residual — RESOLVED (2026-07-10, owning `gen_func_8003C048`)**: root cause was exactly what
+    the OPEN note below predicted — `gen_func_8003C048` (the render-WALK loop) was the outermost
+    UNOWNED caller leaking stale r16/r17/r18/r19 into every downstream spill. Owned it as
+    `Render::renderWalk` (`game/render/render_walk_dispatch.cpp`, new file, `WalkFrame` mirrors the
+    real `-112` prologue/epilogue) via `engine_set_override_main`. Instruction-exact transcription of
+    `generated/shard_7.c gen_func_8003C048`: walks the global render-node list (head @0x800F2624, next
+    ptr @node+36), dispatches live nodes (mem8(node+1)!=0, case idx mem8(node+11)<33) through a
+    33-entry table at **0x80014DB8** (adjacent to CCA4's own 9-slot table at 0x80014EC8 — part of one
+    shared jump-table data region) to the owned siblings (perObjRenderDispatch/billboardCompose1/2,
+    called natively — keeping r16=node/r17=next/r18=CASE188_SCR(0x1F8000F8)/r19=JUMP_TABLE live in the
+    real registers throughout, exactly as gen does) or still-substrate leaves (func_8003F174/EF9C/
+    80039F4C/800726D4/C5F8/C788, rec_dispatch to 0x8012A43C/801295B4/80129114/8013DD58, a "generic
+    particle" case 0x8003C188, and a fully dynamic per-node dispatch through node+24, case 0x8003C29C).
+    **Dead end (caught before landing):** an early draft computed `JUMP_TABLE` as `0x800104B8` — a
+    plain hex-addition slip (`0x80010000 + 0x4DB8` written out wrong; correct is `0x80014DB8`). That
+    address happens to land inside a completely UNRELATED jump table belonging to another function in
+    `shard_1.c`, and following it crashed with `recomp-MISS 0x80035F4C` — caught by dumping the live
+    table content and cross-checking against the static EXE bytes at that offset before it ever reached
+    the SBS gate as a false "residual."
+  - **f62/f118 second layer — RESOLVED (2026-07-10, in `perObjRenderDispatch`)**: even with `renderWalk`
+    owned and feeding correct r16-r19, `CmdListFrame`'s r18 spill (inside `cmdListDispatch`) STILL
+    diverged (`PSXPORT_SBS_PREWATCH=0x801FE8B8`: core B's write traced to `gen_func_8003CDD8+0x18`,
+    i.e. its OWN r18 spill, with the caller `gen_func_8003CCA4` holding `r18=node` per its real
+    prologue `r18 = r4` immediately after ITS OWN spill — generated/shard_5.c:5060-5071). The EXISTING
+    (pre-this-task) `Render::perObjRenderDispatch` never mirrored that reassignment — `CCA4Frame`
+    correctly spilled/restored the CALLER's r18 (renderWalk's CASE188_SCR constant) but the function
+    body itself never set `c->r[18] = node` for its OWN nested calls, so `cmdListDispatch`'s later
+    "caller r18" spill got the wrong value once `renderWalk` started feeding a real (non-garbage)
+    caller r18. Same root cause also affects `cmdListDispatch`'s `flag` parameter (`c->r[5]`): gen
+    computes `flag = ((mem8(node+11) ^ 15) < 1)` ONCE early in `gen_func_8003CCA4` and it stays live
+    (plain register lifetime) into every case's `func_8003CDD8` call — the native body never set
+    `c->r[5]` at all. **Dead end (caught before landing):** the first fix attempt read the flag from
+    `mem8(node+13)` (confusing it with the ADJACENT `sel` field, which legitimately does use node+13)
+    — this made `perModeDispatch`'s `flag&1` test route the WRONG WAY for some nodes (native took the
+    per-mode-table path where gen took the generic `func_800803DC` fallback, confirmed via
+    `PSXPORT_SBS_PREWATCH` showing core A ending in `ov_a00_gen_80146478` vs core B in
+    `gen_func_800803DC`); fixed by re-reading gen's exact source (node+11 for flag, node+13 for sel).
+    Fix: `perObjRenderDispatch` now sets `c->r[18] = node` and computes `flag` once right after
+    `CCA4Frame`'s construction, and every case that calls `cmdListDispatch()` sets `c->r[5] = flag`
+    before the call (`game/render/perobj_billboard.cpp`).
+  - **verified**: SBS-full autonav no longer diverges anywhere in the `0x801FE8xx` task-0-stack range
+    or in the packet pool up to f157 (previously the first divergence was f118; now clean through
+    f157). `PSXPORT_DEBUG=ovhit` confirms `0x8003C048` fires (native=oracle call counts match exactly
+    every run, e.g. native=88/oracle=88) — the override is genuinely wired and exercised, not a
+    fake-green gate.
+  - **NEW frontier (OPEN, 2026-07-10): gt3/gt4 DATA divergence in the OverlayGroundGt3Gt4 cluster.**
+    With f118 closed, SBS-full's first divergence moves to **f158**, in `[packet_pool]` bytes emitted
+    by `OverlayGroundGt3Gt4::gt3`/`gt4` (0x8013FB88/0x8013FE58) — reached via a DIFFERENT, still fully
+    unowned top-level dispatcher `gen_func_8003D0BC` (a sibling of `gen_func_8003C048` in
+    `generated/shard_7.c`, its own 21-entry jump table at `32769<<16+20208 = 0x80014EF0`) calling the
+    ALREADY-OWNED `entityLoop`(801401B8)/`gt3`/`gt4` leaves from the ORIGINAL 2026-07-09 landing of
+    this cluster. `PSXPORT_SBS_PREWATCH=0x800C133E` + `ovhit`: `entityLoop`'s own call count matches
+    exactly (native=37/oracle=37 — NOT a control-flow divergence in the walk), but the EMITTED PACKET
+    BYTES differ (e.g. `A=FD 01 B=80 7C` at one offset) — a genuine DATA/logic bug in `gt3`'s math or
+    field reads, not a register-faithfulness/stack-frame issue (the class this task's fixes targeted).
+    `gt3`/`gt4`'s own thunk hit-counts show `native=0 oracle=2533` — this is EXPECTED (same
+    direct-native-call bypass every other leaf in this file shows, e.g. CCA4/CDD8 also show 0-ish
+    native counts despite running; NOT itself a bug) so it does not, by itself, indicate the fault.
+    Left OPEN per this task's scope (owning `FUN_8003C048`, not `FUN_8003D0BC` or re-auditing gt3's
+    math) — do not speculative-patch `OverlayGroundGt3Gt4::gt3` without a proper RE diff against
+    `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88` line-by-line. A LATER, SEPARATE run (SIGINT after
+    ~95s, no crash) shows the run stays alive and stable through f8580+ with only packet_pool bytes
+    (+ occasional task-0-stack `?`-tag bytes, likely a downstream cascade of the same gt3/gt4 data bug)
+    diverging — i.e. the game no longer crashes or diverges catastrophically, just this one still-open
+    data-correctness gap.
 - **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
   `game/render/{perobj_billboard,perobj_dispatch,overlay_ground_gt3gt4}.cpp`;
   `runtime/recomp/engine_override_thunk.cpp`; oracles `generated/shard_5.c gen_func_8003CCA4`,
@@ -134,6 +180,14 @@
   gen_func_8003CCA4`, `generated/shard_6.c gen_func_8003CDD8` (loop-invariant r16-r23), `game/render/
   perobj_dispatch.cpp` (`Render::cmdListDispatch`), `game/render/perobj_billboard.cpp` (`CCA4Frame`).
   Repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x801FE8B8
+  PSXPORT_SBS_WW_ONVALUEDIVERGE=1`. f118/f62-RESOLVED + gt3/gt4-OPEN (2026-07-10): commit (this task);
+  `game/render/render_walk_dispatch.cpp` (new, `Render::renderWalk`), `game/render/perobj_billboard.cpp`
+  (`Render::perObjRenderDispatch` r18/flag fix); oracle `generated/shard_7.c gen_func_8003C048`
+  (renderWalk), `generated/shard_5.c gen_func_8003CCA4` (r18/flag prologue lines 5060-5071),
+  `generated/shard_7.c gen_func_8003D0BC` (the NEW OPEN frontier's still-unowned caller),
+  `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88` (gt3, next RE target). Repro (f118/f62, now
+  0-diff): same PREWATCH command above. Repro (NEW gt3/gt4 frontier):
+  `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x800C133E
   PSXPORT_SBS_WW_ONVALUEDIVERGE=1`.
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)

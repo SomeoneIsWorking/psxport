@@ -191,6 +191,26 @@ void Render::perObjRenderDispatch() {
   withDepthTag(c, node, [](Core* c) {
     CCA4Frame frame(c);
     const uint32_t node = c->r[4];
+    // Register-faithfulness (2026-07-10, the f118 residual root cause — one level deeper than the
+    // FUN_8003C048 ownership fix): gen_func_8003CCA4's REAL prologue (generated/shard_5.c:5060-5071)
+    // reassigns r18 = r4 (node) IMMEDIATELY after its own spill, and computes r5 = ((mem8(node+13) ^
+    // 15) < 1) ONCE, before the case switch — both values stay LIVE (plain MIPS register lifetime,
+    // never re-set per case) all the way to whichever case's `func_8003CDD8(c)` call. This function's
+    // own C++ body only ever needed the local `node`, so a prior draft never wrote c->r[18]/c->r[5] —
+    // meaning cmdListDispatch's CmdListFrame (which spills "caller r18" as part of its own real
+    // prologue) span stale bytes instead of gen's real node/flag, and cmdListDispatch's `flag` param
+    // (c->r[5]) silently held garbage instead of gen's real per-node flag. Confirmed via
+    // PSXPORT_SBS_PREWATCH=0x801FE8B8: core B's write came from gen_func_8003CDD8+0x18 (its own r18
+    // spill) with the caller (gen_func_8003CCA4, reached via FUN_8003C048) holding r18=node, while
+    // core A held whatever renderWalk's own r18 (CASE188_SCR, an unrelated constant) still was.
+    c->r[18] = node;
+    // gen: r3=mem8(node+11); r3^=15; r5=(r3<1) — the FLAG field is node+11 (NOT node+13, which is the
+    // separate `sel` case-table index below). A prior draft of this fix used node+13 for both,
+    // routing cmdListDispatch's flag&1 test the wrong way and making perModeDispatch pick the
+    // per-mode table (native) instead of gen's real generic-fallback path (func_800803DC) for nodes
+    // whose real flag has bit0 set — confirmed via PSXPORT_SBS_PREWATCH: core B's chain ended in
+    // gen_func_800803DC while core A's ended in the per-mode target ov_a00_gen_80146478.
+    const uint32_t flag = ((c->mem_r8(node + 11) ^ 15u) < 1u) ? 1u : 0u;
     c->mem_w32(CUR_NODE_SCR, node);
     const uint32_t sel = c->mem_r8(node + 13) & 11u;
     if (sel >= 9u) return;
@@ -205,26 +225,26 @@ void Render::perObjRenderDispatch() {
     // register-faithfulness"), same discipline as billboardCompose1/2's own fix (commit bef7769).
     switch (target) {
       case 0x8003CD00u: {
-        c->r[4] = node; c->r[31] = 0x8003CD08u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD08u; c->mRender->cmdListDispatch();
         break;
       }
       case 0x8003CD10u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[31] = 0x8003CD20u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD20u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CD30u; func_8003D584(c);
         break;
       }
       case 0x8003CD38u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[31] = 0x8003CD48u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD48u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CD58u; func_8003F344(c);
         break;
       }
       case 0x8003CD60u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[31] = 0x8003CD70u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD70u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post;
         // Branch polarity (2026-07-09, found during the same audit): gen_func_8003CCA4 L_8003CD60
@@ -237,7 +257,7 @@ void Render::perObjRenderDispatch() {
       }
       case 0x8003CDA0u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[31] = 0x8003CDB0u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CDB0u; c->mRender->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CDC0u; func_8003F594(c);
         break;

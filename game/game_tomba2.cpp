@@ -240,6 +240,8 @@ void games_tomba2_init(void) {
   perobj_dispatch_install();   // FUN_8003CDD8/FUN_8003F698 substrate-mirror ownership (band 0x8003xxxx)
   void perobj_billboard_install();
   perobj_billboard_install();  // FUN_8003CCA4/C2D4/C464/C8F4 substrate-mirror ownership (band 0x8003xxxx)
+  void render_walk_dispatch_install();
+  render_walk_dispatch_install();  // FUN_8003C048 render-walk loop ownership (band 0x8003xxxx)
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }
