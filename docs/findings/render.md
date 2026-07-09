@@ -211,6 +211,76 @@
       bytes (+ occasional task-0-stack `?`-tag bytes, likely a downstream cascade of this same cursor
       divergence) diverging — i.e. the game no longer crashes or diverges catastrophically, just this
       one still-open data-correctness gap.
+  - **f158 packet-pool residual — ROOT-CAUSED (2026-07-10, convergence-agent): every f158 `sbs-div`
+    address is the +38/+39 TAIL-PADDING of a GT3 pool-slot record, carrying 2-FRAME-STALE content —
+    NOT a logic bug in `gt3`/`gt4`/`entityLoop` (all three re-verified byte-identical, live, this
+    session).** Method: temporarily instrumented BOTH `OverlayGroundGt3Gt4::entityLoop` (native,
+    `game/render/overlay_ground_gt3gt4.cpp`) and `ov_a00_gen_801401B8` (oracle,
+    `generated/ov_a00_shard_0.c`, gitignored — safe to hack for a session and revert) to print, gated
+    on `c->game->sbs->frame()==158`, every ground-list entry's `tableSlot`/packed `counts` word and the
+    `PKT_POOL_PTR` (`0x800BF544`) value before/after each `gt3()`/`gt4()` call. Both cores printed the
+    EXACT SAME 714-line sequence of `(tableSlot, counts, pool_pre, pool_post)` tuples for the entire
+    f158 ground-entity walk — i.e. **entityLoop's list membership, per-entity GT3/GT4 counts, and the
+    resulting pool-cursor trajectory are already proven byte-identical for f158** (this directly
+    supersedes the "39-record shortfall" line of inquiry for THIS frame — no count divergence exists
+    here at all, on either accepted-record or attempted-record granularity).
+    - Cross-referencing the trace against each `sbs-div` address: `0x800C133E` sits at
+      `record_base(0x800C1318) + 38`; `0x800C143A` at `record_base(0x800C1414) + 38`;
+      `0x800C14F2` at `record_base(0x800C14CC) + 38`; `0x800C22B6` at `record_base(0x800C2290) + 38` —
+      **4 of the 6 f158 addresses confirmed exactly** against the live pool-cursor trace (both cores'
+      pool transitions for these record bases are IDENTICAL: e.g. `0x000C2290 -> 0x000C22B8` on BOTH A
+      and B, a clean single accepted 40-byte GT3 record). The remaining 2 (`0x800C2CDA`, `0x800C375A`)
+      fit the same `base+38` arithmetic against later entities in the same trace and were not
+      individually re-verified line-by-line this session (mechanism is airtight from the 4 confirmed
+      cases; no reason to expect these differ in kind).
+    - **Why offset +38 specifically**: `OverlayGroundGt3Gt4::gt3`'s 40-byte pool-slot record only
+      writes fields at +0 (tag, written LAST), +4 (rgb0|code), +8 (SXY0), +12 (uv0|clut), +16 (rgb1),
+      +20 (SXY1), +24 (uv1|tpage), +28 (rgb2), +32 (SXY2), and +36 (`mem_w16`, uv2-hi, 2 bytes only:
+      `+36`/`+37`) — **`+38`/`+39` are never assigned by any field write**, confirmed identically in
+      the generated body (`generated/ov_a00_shard_0.c` line ~24079: `c->mem_w16((c->r[8] + 0), ...)`
+      where `r8 = r10+36`, i.e. the SAME single halfword store, nothing at `+38`). This 2-byte gap is
+      the "PAD" half of the real PSX `POLY_GT3` hardware packet's final GPU word (`UV2 | PAD`, a
+      documented PSX packet-format field the ORIGINAL game's own C never initializes either — not a
+      psxport artifact). The packet pool is a per-frame BUMP ALLOCATOR whose CURSOR resets each frame
+      but whose MEMORY CONTENT is never cleared (double-buffered by parity, so a byte's prior content
+      is whatever the SAME-parity buffer held 2 frames earlier); since `+38/+39` are structurally
+      unwritten, their value at any frame is always carried over from whichever EARLIER record's
+      dead-space last overlapped that exact byte offset, entirely independent of the CURRENT frame's
+      (proven byte-identical) gt3/gt4/entityLoop execution.
+    - **Read-but-inert**: `runtime/recomp/gpu_native.cpp`'s `DrawOTag` walk (~line 1602-1613, invoked
+      unconditionally every frame via `Engine::drawOTag`, not gated on `PSXPORT_RENDER_PSX`) DOES read
+      this word as part of a GT3 tag's declared `n=9` GP0 data words (`addr+4..addr+36`, the last
+      iteration `i=8` reads the full 4-byte word at `+36..+39`) and passes it to `gpu_gp0()` — so this
+      byte does NOT cleanly satisfy CLAUDE.md's narrow "memory the still-recomp side never reads"
+      exception on a literal reading. However: (a) real PSX hardware's GT3 rasterizer only consumes
+      the LOW 16 bits of that word (U2,V2); the upper 16 bits are inert pad on real hardware too; (b)
+      per `docs/render-arch.md`/CLAUDE.md, the ONLY consumer of this word's downstream effect is
+      Beetle's software-GPU VRAM raster state, which is exclusively `psx_render`'s own reference
+      picture — "never a byte-match target," explicitly render-only and deferred; no gameplay logic
+      reads VRAM back. Not independently verified this session (would require walking Beetle's GT3
+      rasterizer, `vendor/beetle-psx/mednafen/psx/gpu*`, to prove the upper 16 bits are truly discarded
+      — flagged as the one remaining gap in the proof chain, not attempted for effort-budget reasons).
+    - **Disposition: NOT a bug in the ported code; no patch applied.** All three functions
+      (`entityLoop`/`gt3`/`gt4`) are re-confirmed byte-exact transcriptions this session via live dual-
+      core tracing, not just static reading. Artificially writing `+38/+39` to force a byte-match would
+      be exactly the banned "match the PSX mechanism, not the observable result" bandaid — the ORIGINAL
+      game doesn't initialize these bytes either, so forcing a specific value achieves nothing but
+      papering over an already-provably-correct implementation, and would still be fragile (the SAME
+      stale-carry-forward mechanism would just resurface at a different frame/offset once upstream
+      pool-cursor placement drifts again for any unrelated reason). If the project wants literal
+      zero-diff SBS even through this class of dead-padding carry-forward, the clean fix is either (a)
+      have `gt3` explicitly zero `pool+38..+39` on every record (matching neither hardware nor the
+      recompiled game, a deliberate divergence-from-source purely for tooling cleanliness — needs a
+      user call, not a unilateral change), or (b) teach the SBS byte-comparator to skip GT3 pool-slot
+      tail-padding specifically (a principled, narrow, RE-justified mask — NOT a residual-diff
+      allowlist by address, but a real "this byte is provably never written by either implementation"
+      exclusion, the same class of exception `game/world/object_table.cpp`'s dead-stack-scratch
+      precedent already uses for an analogous never-written-but-technically-in-range slot). Left to the
+      user/next session to decide; no code changed this session (instrumentation added and fully
+      reverted — `git diff` clean).
+    - **Verified no regression**: SBS-full gate re-run post-revert, byte-identical to pre-session
+      baseline — first divergence still f158/`0x800C133E`, same 6 addresses, stable through f9880+
+      (SIGINT, no crash) with only this same packet_pool class diverging.
 - **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
   `game/render/{perobj_billboard,perobj_dispatch,overlay_ground_gt3gt4}.cpp`;
   `runtime/recomp/engine_override_thunk.cpp`; oracles `generated/shard_5.c gen_func_8003CCA4`,
