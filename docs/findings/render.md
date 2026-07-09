@@ -1,6 +1,6 @@
 # Findings — render / engine submit
 
-## perobj_billboard cluster (C2D4/C464/C8F4) — BUF base wrong + register-faithfulness gap (2026-07-09, OPEN)
+## perobj_billboard cluster (C2D4/C464/C8F4) — BUF base + register-faithfulness (2026-07-09, RESOLVED)
 
 - **how found**: the oracle-gate fix (commit 5483a83, `engine_override_thunk`) made SBS honest for the
   `g_override[]` render clusters. Post-fix `PSXPORT_SBS_MODE=full` immediately surfaced 19 `[sbs-div]`
@@ -11,22 +11,44 @@
 - **bug 1 — RESOLVED (commit a457082)**: the whole cluster wrote its MATRIX-compose + projected-coord
   buffer to MAIN RAM `0x800C0000`, but `gen_func_8003C2D4`/`8003C8F4` base `r16/r17 = 8064<<16 =
   0x1F800000` (SCRATCHPAD). Emitted packets (copied BUF+4..+36) therefore differed from the substrate.
-  Single-constant fix: `BUF = 0x1F800000`. Packet-pool divergence eliminated.
-- **bug 2 — OPEN (register-faithfulness, same family as frameTick / NodeXform)**: with bug 1 fixed, f117
-  now diverges in the GUEST STACK at 0x801FE8D8 (signature A=80 1F / B=00 00). `gen_func_8003C8F4`
-  spills the CALLER's `r16..r22/ra` at `sp+64..+92` (its own prologue); native `billboardEmit`'s
-  `GuestFrame(96)` only allocates the frame, doesn't spill. The spilled "caller r16" further differs
-  because the caller `billboardCompose1` (C2D4) in gen reassigns `r16=MAT_OUT`/`r17=MAT_A`/`r18=flag`/
-  `r19=node` but native C2D4 uses C++ locals and never writes `c->r[16..]`. Callees of C8F4
-  (`func_8003B220`, `func_8003B054`) are leaves that spill NO callee-saved regs, so the fix is purely
-  the prologue spill bytes + the C2D4/C464 mid-body register assignments — the frame-mirror treatment
-  per docs/findings/animation.md (NodeXform's named frame structs). Two layers: (1) C8F4 spills caller
-  r16..ra at sp+64..92; (2) C2D4/C464 set c->r[16..] to gen's reassigned values so C8F4's "caller r16"
-  matches. More f117+ divergences likely stack behind this (other render clusters: quad_rtpt,
-  overlay_gt3gt4, overlay_ground_gt3gt4) — chase them the same way once billboard is clean.
-- **refs**: game/render/perobj_billboard.cpp (BUF constant; `Render::billboardCompose1/2/billboardEmit`;
-  `billboardComposeTail`); oracle `generated/shard_4.c gen_func_8003C8F4` (L4365) + `generated/shard_0.c
-  gen_func_8003C2D4` (L4507); commits 5483a83 (oracle gate), a457082 (BUF fix).
+  Single-constant fix: `BUF = 0x1F800000`.
+- **bug 2 — RESOLVED (commit bef7769)**: register-faithfulness. `gen_func_8003C8F4` spills the
+  caller's r16..r22/ra at sp+64..+92 (native GuestFrame only allocated the frame). And the caller
+  `billboardCompose1/2` (C2D4/C464) keeps specific callee-saved regs live to the C8F4 call (C2D4:
+  r16=MAT_OUT/r17=MAT_A/r18=flag/r19=node/ra=0x8003C448; C464 differs: r17=flag/r18=node/ra=
+  0x8003C5E0) — native used C++ locals and never set them, so C8F4's spill of "caller r17" got stale
+  values. Fix: native C8F4 spills caller r16..ra at gen's offsets; C2D4/C464 set c->r[16..] to gen's
+  values before the call AND restore them from the spill slots at epilogue (the restore is mandatory —
+  leaking r31 corrupts the substrate render-walk caller). Callees (func_8003B220/B054) are leaves that
+  spill no callee-saved regs, so only the prologue spills + pre-call register state matter.
+- **verified**: f117 fully clean.
+
+## overlay_ground_gt3gt4 cluster (8013FB88/8013FE58/801401B8) — depth >>2 + range gate (2026-07-09, packet-pool RESOLVED; stack-depth OPEN)
+
+- **how found**: once billboard's f117 cleared, f117→f118 in the packet pool. Last-writer: native
+  `entityLoop` (801401B8) writing on core A vs gen `gt3` (8013FB88) on core B — native `gt3` is called
+  direct-C++ from `entityLoop` (bypasses the thunk, like billboard's C8F4), so it had never been
+  oracle-compared until the gate fix.
+- **bug 1 — RESOLVED (commit ffb1463)**: `sz3_minmax`/`sz4_minmax` returned the RAW min/max, but gen's
+  manual min/max depth path applies a trailing arithmetic `>>2` at the convergence labels
+  (`r2 = r3 >> 2`, FUN_8013FB88 L_8013FD38 / gt4 L_80140100) before storing to the OTZ scratch. 4x too
+  large → records failed the `idx>=2048` gate → dropped (pool offset shift). (AVSZ3/AVSZ4 paths
+  correctly have NO >>2 in both — only the manual path.)
+- **bug 2 — RESOLVED (commit ffb1463)**: `ground_otz_index` mis-split gen's single upper-bound gate
+  `(idx-4) < 2044` into a two-sided range [4..2047] — spurious lower bound + off-by-one. Matched gen.
+- **verified**: f118 PACKET POOL clean (render packets now match the substrate).
+- **OPEN — stack-depth divergence at f118**: residual f118 divergence is now in the guest STACK
+  (0x801FE8D0/0x801FE8E8), a different class — last-writer shows the two cores at different sp at the
+  same address (core A in billboardCompose1 at sp=801FE898, core B in perObjRenderDispatch at
+  sp=801FE8D8) and the field `overlay_gt3gt4` (80146478) writing with different ra. Looks like an
+  sp-trajectory / call-order mismatch across the render chain, possibly cascading from the sibling
+  field `overlay_gt3gt4` cluster (which likely carries the SAME era bugs — BUF base / register-
+  faithfulness / depth-shift — not yet audited). Next: audit overlay_gt3gt4.cpp + quad_rtpt_submit.cpp
+  the same way (force-gen bisect), then re-examine the sp trajectory.
+- **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
+  `game/render/{perobj_billboard,overlay_ground_gt3gt4}.cpp`; oracles `generated/shard_4.c
+  gen_func_8003C8F4`, `generated/shard_0.c gen_func_8003C2D4`, `generated/ov_a00_shard_0.c
+  ov_a00_gen_8013FB88`, `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`.
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 
