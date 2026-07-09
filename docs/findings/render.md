@@ -237,6 +237,68 @@
   above. Repro (gt3/gt4 cursor-divergence frontier, still OPEN):
   `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x800C133E` (omit
   `WW_ONVALUEDIVERGE` to see every raw store + host backtrace, not just the first value-diverging one).
+  - **f158 cursor divergence — NARROWED FURTHER (2026-07-10, convergence-agent task): the ground-entity
+    `counts`/`table` content is confirmed CLEAN (ruled out, not just deprioritized) — the real
+    divergence is a shared packet-pool BUMP-ALLOCATOR ADVANCE-COUNT mismatch that starts at f118, 40
+    frames before the first byte-level `sbs-div`.** Method: `entityLoop`'s `list`/`table`/`idx`/`counts`
+    were traced directly (temporary instrumentation, since removed) — `list=0x800F2418` (SCENE_ENT_TABLE)
+    and `table=0x801A5724` are FIXED area-resource pointers, identical across the whole run; the ground/
+    scene table itself is not where the divergence originates. Pivoted to arming PREWATCH directly on
+    the pool CURSOR variable itself (`0x800BF544`, `PKT_POOL_PTR`) with
+    `PSXPORT_SBS_WW_ONVALUEDIVERGE=1` — this mode pauses+dumps host backtraces the first LOCKSTEP FRAME
+    where the two cores' *store count* to the armed address differs (every accepted GT3/GT4/etc record
+    bumps this pointer once, so the count IS "how many packets got accepted this frame"). Result,
+    **reproduced identically across 2 independent runs**:
+    `[sbs] === RNG advance-count divergence: f118  A_calls=109  B_calls=148  (delta=-39) endA=0x90
+    endB=0x90 ===` — core A (pc_faithful) accepts **39 fewer packet-pool records than the oracle in the
+    same frame**, a ~26% shortfall, first appearing at f118 (f0/f30/f60/f90 all had matching per-frame
+    counts). This is NOT the same thing as the register-spill diff the f118/f62-RESOLVED entry above
+    fixed — that fix closed a BYTE-level SBS diff at 0x801FE8B8/0x801FE900; this is a COUNT/CONTENT
+    divergence in the SAME address band that the byte-compare doesn't surface until f158, because the
+    packet pool resets to the same base every frame and a short-by-N frame's unwritten tail bytes
+    happen to still hold the PRIOR (clean) frame's content on both cores — until, 40 frames later, some
+    record's real content differs enough for the tail alignment to matter and `sbs-div` finally fires.
+    Both cores' LAST cursor-advancing write of f118 land on the **exact same logical leaf**
+    (`OverlayGt3Gt4::gt4` / `ov_a00_gen_801467BC`, reached via `0x80146478`) via **structurally
+    equivalent call chains** — A: `gen_func_8003F9A8 -> Render::renderWalk -> Render::
+    perObjRenderDispatch -> Render::cmdListDispatch -> Render::perModeDispatch -> ov_a00_gen_80146478
+    -> OverlayGt3Gt4::gt4`; B: `gen_func_8003F9A8 -> gen_func_8003C048 -> gen_func_8003CCA4 ->
+    gen_func_8003CDD8 -> gen_func_8003F698 -> ov_a00_gen_80146478 -> ov_a00_gen_801467BC` — so the
+    shortfall is NOT a wrong-leaf dispatch; it's that A's native fan-out (`Render::renderWalk` /
+    `perObjRenderDispatch` / `cmdListDispatch` / `perModeDispatch`, all already RE'd + wired per the
+    banners in `game/render/{render_walk_dispatch,perobj_billboard,perobj_dispatch}.cpp`) visits fewer
+    total (node, command) pairs — or takes a rejecting branch the oracle doesn't — somewhere in that
+    fan-out or one of its still-substrate per-mode/per-case leaves (`func_8003C5F8`/`func_8003C788`/
+    `func_800726D4`/`func_8003EF9C`/`func_80039F4C`/`func_8003F174`/case-0x8003C188's particle path, or
+    `perObjRenderDispatch`'s own 5 special-case leaves `FUN_8003F4C4/F3F4/D584/F594/F344` — none of
+    these were individually instrumented this session). **Ruled out this session**: the render-mode
+    select byte `MODE_BYTE`/`MODE_BYTE_188` (`0x800BF870`) does NOT diverge (armed the same
+    PREWATCH+`WW_ONVALUEDIVERGE` probe on it directly — ran 60s / well past f158 with zero trigger), so
+    it is not a per-node mode-routing flip. Also ruled out (dead end): the `engine_override_thunk`
+    per-address hit-counter dump is NOT usable to compare native-vs-oracle call counts for this chain —
+    `0x8003CDD8`/`0x8003F698`/`0x8003CCA4` show `native=0` even though the native bodies visibly ran
+    (confirmed in the backtrace) — because native-to-native calls in this fan-out are plain C++ method
+    calls that bypass the `g_override[]`-table thunk entirely (only the ORACLE's calls, which go through
+    the generated `func_XXXX` wrapper, get counted); do not mistake a 0 in that dump for "native never
+    ran" in an already-owned chain.
+    - **Left OPEN, no speculative patch applied** (all of `Render::renderWalk`/`perObjRenderDispatch`/
+      `cmdListDispatch`/`perModeDispatch` were re-read this session and their control flow is a faithful,
+      well-commented, register-accurate transcription of `generated/shard_5.c gen_func_8003CCA4` /
+      `shard_6.c gen_func_8003CDD8` / `shard_4.c gen_func_8003F698` / `shard_7.c gen_func_8003C048` — no
+      obvious bug was found by inspection, so the 39-record shortfall likely lives in one of the
+      still-substrate per-case leaves listed above, or in upstream per-object active-count state
+      (`node+8`/`node+9`) that has ALREADY diverged from something earlier than f118).
+    - **Next-session repro** (deterministic, reproduced 2/2 runs): `PSXPORT_VK_HEADLESS=1 PSXPORT_SBS=1
+      PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_NOAUDIO=1 PSXPORT_SBS_NOPAUSE=1
+      PSXPORT_SBS_PREWATCH=0x800BF544 PSXPORT_SBS_WW_ONVALUEDIVERGE=1 ./scratch/bin/tomba2_port` — exits
+      at f118 with both cores' host backtraces. Suggested next step: instrument
+      `Render::cmdListDispatch`'s node loop with a per-frame (node-visited, geomblk!=0, packet-accepted)
+      counter (native side only, cheap `cfg_dbg`-gated), and separately count how many times each
+      still-substrate per-case leaf in `renderWalkCase188`/renderWalk's `default:` fallthrough fires, to
+      find which node/case the native fan-out visits fewer times than the oracle at f118. A cross-check
+      worth trying first: dump `RENDER_LIST_HEAD`'s (`0x800F2624`) linked-list LENGTH on both cores at
+      f118 (before any node body runs) — if the lengths already differ, the bug is upstream of this
+      whole render band (object spawn/despawn), not in it.
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 
