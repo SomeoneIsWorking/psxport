@@ -154,4 +154,65 @@ public:
   // guest 0x8001534C, 7 x u32, values 0x80040FE0/8004100C/8004103C/80041080/80041050/8004105C/
   // 80041070 for index 0..6 respectively (matches the recomp's switch-case literals exactly).
   int advanceStep(uint32_t obj, uint32_t kindArg);
+
+  // ==== Wide-RE pass 2026-07-10 (dedicated follow-up session) — op36/op31 movement-script family ==
+  // DRAFT, UNWIRED. Both cross-checked via Ghidra headless decompile (scratch/decomp/
+  // op36_op31_band.c) against generated/shard_3.c / shard_5.c (instruction-exact ground truth) —
+  // see game/scene/script_interp.cpp for the per-function commentary and the two self-caught
+  // transcription slips (both corrected before landing, documented inline at the fix site).
+
+  // op36 — FUN_80043108 (opcode table index 36, 95 dispatch hits, the highest-traffic unowned leaf
+  //   in the original wide-RE band). "Move toward a script-literal target position." The entry's
+  //   argA/argB/argC (obj+0x72/0x74/0x76) hold TARGET Z/Y/X directly (NOT a secondary object
+  //   pointer, despite the original mapped-only pass's guess — see .cpp banner for the correction);
+  //   the extended-block halfword at obj+0x66 (scriptPtr+10) is a turn-mode flag (-1/0/other) and
+  //   obj+0x68/0x6A (scriptPtr+12/14) are a flags-word + packed-arg pair forwarded to the still-
+  //   unowned stepEventPulse (FUN_80042EA4) leaf once per call. Phase machine on obj+0x78 (0=init:
+  //   solve a sqrt+2-div step schedule with the guest's own rec_break(7168)/rec_break(6144) traps,
+  //   1=turn toward the computed angle via turnFacing(), 2=pure position interpolation). Frame:
+  //   sp-=40, spills s0/s1/s2/s3/s4/ra (all LIVE cross-call locals — s1 survives the sqrt call).
+  int op36MoveTowardScriptTarget(uint32_t obj);
+
+  // op31 — FUN_80041468 (opcode table index 31, 11 dispatch hits). "Turn a self-or-designated actor
+  //   toward a computed angle." The acted-upon actor is `self` (obj) when argA's sign bit (0x8000)
+  //   is CLEAR, or the single GLOBAL secondary-actor slot at scratchpad 0x1F800214 when SET — NOT a
+  //   per-entry table (the original mapped-only pass's "0x8064*10000-ish constant table" guess was a
+  //   single scratchpad pointer slot, not a table). Phase 0: a 5-way mode switch on argA's low 15
+  //   bits (0/1/2/3/10) computes a target angle into obj+0x76 (via Trig::ratan2, modes 1/2/3/10 each
+  //   reading a different position-pair — two of them share scratchpad anchors 0x1F800160/0x1F800164
+  //   — mode 2 additionally subtracts a 180 degree/2048 half-turn), then snaps-or-arms the acted-upon
+  //   actor's facing (target+0x56) toward it. Phase 1: polls turnFacing() every call until it snaps.
+  //   Frame: sp-=48, spills s0/s1/ra.
+  int op31TurnTowardTarget(uint32_t obj);
+
+  // FUN_80041438 — thin ABI wrapper: turnFacing(obj, targetAngle, step) turns obj's OWN facing angle
+  //   field (obj+0x56) toward targetAngle by up to `step` (Q12 angle units), snapping if within
+  //   reach — delegates to the leaf stepAngleToward() below at anglePtr = obj+0x56. Both op36 (on
+  //   itself) and op31 (on the resolved actor, self-or-global) call this by address, so the object
+  //   passed here is NOT always the driven script object. Frame: sp-=24, spills ra only.
+  int turnFacing(uint32_t obj, int16_t targetAngle, int16_t step);
+  // Guest-ABI twin: reads obj/targetAngle/step from c->r[4..6], mirrors FUN_80041438's own sp-=24/
+  // ra-spill frame (nested ON TOP of the caller's already-descended sp), writes result to c->r[2].
+  void turnFacingFramed();
+
+  // FUN_8004139C — leaf angle-stepper (no guest frame; called only via turnFacing/turnFacingFramed
+  //   above). Nudge the 16-bit angle at `anglePtr` toward `targetAngle` by up to `step` (both Q12/
+  //   4096 angle units): snap immediately if already within `step`; otherwise step by `step` in
+  //   whichever direction is the SHORT way around the circle (per the masked-delta-vs-2048 test),
+  //   then re-test and snap if the remainder is now within `step`. Returns 1 iff it snapped exactly
+  //   to targetAngle this call, else 0. Faithful from generated/shard_1.c:6657.
+  int stepAngleToward(uint32_t anglePtr, int16_t targetAngle, int16_t step);
+
+  // FUN_80042EA4 — stepEventPulse(obj, flagsPtr, packedArg): op36's per-call "movement event" gate
+  //   (obj unused inside except via `*(obj+0x38)` — an owner/parent pointer — for the bit-0x80 arm).
+  //   flagsPtr points at a 16-bit flags word (obj+0x68 in every known caller): 0 -> no-op; low 6
+  //   bits clear + bit 0x80 set -> an "arm once" latch gated on `*(int*)(obj+0x38)+4` (clears/sets
+  //   bit 0x40, firing Sfx::trigger exactly once on the 0->1 edge, returns 1 that call); low 6 bits
+  //   clear + bit 0x80 clear -> no-op; low 6 bits nonzero -> fires Sfx::trigger every call the
+  //   scratchpad mask at 0x1F80017C has none of flagsWord's bits set (a per-frame repeat pulse,
+  //   gated OFF by that shared mask, e.g. a "sound already playing this frame" guard). packedArg
+  //   packs (lowByte=sfx id, highByte=pitch bend) — matches Sfx::trigger(id, pan, pitchBend)'s ABI
+  //   with pan=0. Frame: sp-=24, spills ra only. Faithful from generated/shard_3.c:11682.
+  int stepEventPulse(uint32_t obj, uint32_t flagsPtr, uint32_t packedArg);
+  void stepEventPulseFramed();  // guest-ABI twin: obj/flagsPtr/packedArg from c->r[4..6]
 };

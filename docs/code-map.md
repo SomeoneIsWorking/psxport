@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 600 native fns, 509 owned addresses, 572 LIVE / 28 ORPHAN.
+Totals: 607 native fns, 514 owned addresses, 579 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -81,19 +81,26 @@ Totals: 600 native fns, 509 owned addresses, 572 LIVE / 28 ORPHAN.
 | 0x80040B48 | LIVE | `SceneEvents::armBody` | game/scene/scene_events.cpp:44 |  | The arm primitive body. Wrapped by SceneEvents::arm below so it can be… |
 | 0x80040B48 | LIVE | `SceneEvents::arm` | game/scene/scene_events.cpp:79 |  |  |
 | 0x80040CDC | LIVE | `Engine::animEnvInit` | game/core/engine.cpp:873 | 0x80040DE0 | Engine::animEnvInit — FUN_80040CDC. |
-| 0x80040CDC | LIVE | `ScriptInterp::init` | game/scene/script_interp.cpp:62 |  |  |
-| 0x80040DE0 | LIVE | `ScriptInterp::loadCurrentEntry` | game/scene/script_interp.cpp:84 |  |  |
-| 0x80040E54 | LIVE | `ScriptInterp::advanceEntry` | game/scene/script_interp.cpp:102 | 0x80040FA0 |  |
-| 0x80040FA0 | LIVE | `ScriptInterp::advanceStep` | game/scene/script_interp.cpp:191 | 0x80040E54 | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4564… |
-| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:260 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
-| 0x80041098 | LIVE | `ScriptInterp::step` | game/scene/script_interp.cpp:264 |  |  |
-| 0x800412CC | LIVE | `ScriptInterp::callFnptr` | game/scene/script_interp.cpp:239 |  |  |
+| 0x80040CDC | LIVE | `ScriptInterp::init` | game/scene/script_interp.cpp:92 |  |  |
+| 0x80040DE0 | LIVE | `ScriptInterp::loadCurrentEntry` | game/scene/script_interp.cpp:114 |  |  |
+| 0x80040E54 | LIVE | `ScriptInterp::advanceEntry` | game/scene/script_interp.cpp:132 | 0x80040FA0 |  |
+| 0x80040FA0 | LIVE | `ScriptInterp::advanceStep` | game/scene/script_interp.cpp:221 | 0x80040E54 | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4564… |
+| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:290 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
+| 0x80041098 | LIVE | `ScriptInterp::step` | game/scene/script_interp.cpp:294 |  |  |
+| 0x800412CC | LIVE | `ScriptInterp::callFnptr` | game/scene/script_interp.cpp:269 |  |  |
+| 0x8004139C | LIVE | `ScriptInterp::stepAngleToward` | game/scene/script_interp.cpp:363 |  | leaf angle-stepper (no guest frame). See script_interp.h for the seman… |
+| 0x80041438 | LIVE | `ScriptInterp::turnFacing` | game/scene/script_interp.cpp:390 |  | thin wrapper: turnFacing(obj, targetAngle, step) = stepAngleToward(obj… |
+| 0x80041438 | LIVE | `ScriptInterp::turnFacingFramed` | game/scene/script_interp.cpp:396 |  | Guest-ABI twin — mirrors FUN_80041438's own sp-=24 / ra-spill-at-+16 f… |
+| 0x80041468 | LIVE | `ScriptInterp::op31TurnTowardTarget` | game/scene/script_interp.cpp:623 | 0x80085690 | op31 — FUN_80041468 (opcode table index 31). See script_interp.h for t… |
 | 0x8004190C | LIVE | `Engine::animTick` | game/core/engine.cpp:890 |  | Engine::animTick — FUN_8004190C. Ticks the animation VM (native Animat… |
-| 0x80042090 | LIVE | `ScriptInterp::op05WaitFrames` | game/scene/script_interp.cpp:134 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_7.c:5216… |
-| 0x800420AC | LIVE | `ScriptInterp::op06TestSceneFlag` | game/scene/script_interp.cpp:143 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_0.c:5231… |
+| 0x80042090 | LIVE | `ScriptInterp::op05WaitFrames` | game/scene/script_interp.cpp:164 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_7.c:5216… |
+| 0x800420AC | LIVE | `ScriptInterp::op06TestSceneFlag` | game/scene/script_interp.cpp:173 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_0.c:5231… |
 | 0x80042310 | LIVE | `ActorTomba::resetLoadGate` | game/player/actor_tomba.cpp:805 | 0x8001CF78 0x80074590 0x80074F24 | resetLoadGate — guest FUN_80042310. See actor_tomba.h for the full RE … |
 | 0x80042728 | LIVE | `BgSceneTransitionSm::readyForProgress` | game/scene/bg_scene_transition_sm.cpp:206 |  |  |
-| 0x80042E10 | LIVE | `ScriptInterp::op34ClaimGate` | game/scene/script_interp.cpp:167 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4772… |
+| 0x80042E10 | LIVE | `ScriptInterp::op34ClaimGate` | game/scene/script_interp.cpp:197 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4772… |
+| 0x80042EA4 | LIVE | `ScriptInterp::stepEventPulse` | game/scene/script_interp.cpp:411 |  | see script_interp.h for the full semantics writeup. |
+| 0x80042EA4 | LIVE | `ScriptInterp::stepEventPulseFramed` | game/scene/script_interp.cpp:439 |  | Guest-ABI twin — mirrors FUN_80042EA4's own sp-=24 / ra-spill-at-+16 f… |
+| 0x80043108 | LIVE | `ScriptInterp::op36MoveTowardScriptTarget` | game/scene/script_interp.cpp:457 | 0x80084080 0x80085690 | op36 — FUN_80043108 (opcode table index 36). See script_interp.h for t… |
 | 0x80044BD4 | LIVE | `native_area_load_bd4` | game/core/engine.cpp:1555 | 0x800452C0 | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
 | 0x80044BD4 | LIVE | `Engine::submode1Faithful` | game/core/engine.cpp:2133 | 0x80044BD4 0x8005245C 0x80107230 0x8010766C 0x80107790 | pc_faithful walkable-field area machine — mirror of ov_game_gen_801088… |
 | 0x80044BD4 | LIVE | `Engine::stage0AdvanceSkip` | game/core/engine.cpp:3284 |  | ── STAGE0ADVANCE — pc_skip cadence ───────────────────────────────────… |

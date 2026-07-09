@@ -2608,6 +2608,34 @@ themselves are LIVE but dispatch out to substrate for every case body.
   docs/engine_re.md "Wide-RE pass 2026-07-10 — scheduler sleep-countdown + 4 ScriptInterp opcode
   handlers".
 
+- **Dedicated follow-up: op36/op31 movement-script family (wide-RE agent, 2026-07-10, UNWIRED),
+  closing the two functions the prior wave refused.** Both `0x80043108` (op36, "move toward a
+  script-literal target position") and `0x80041468` (op31, "turn self-or-designated actor toward a
+  computed angle") DRAFTED, plus their still-unowned callees `0x80041438` (`ScriptInterp::
+  turnFacing`/`turnFacingFramed`) and `0x80042EA4` (`ScriptInterp::stepEventPulse`/
+  `stepEventPulseFramed`), plus a bonus leaf `0x8004139C` (`ScriptInterp::stepAngleToward`, the
+  actual angle-nudge primitive `turnFacing` delegates to) — all in `game/scene/script_interp.{h,
+  cpp}`. Method: raw `generated/shard_*.c` (instruction-exact ground truth) transcribed near-
+  literally, THEN independently cross-checked against a fresh Ghidra headless decompile (`tools/
+  decomp.sh`, `scratch/decomp/op36_op31_band.c`) function-by-function. The cross-check caught ONE
+  real Ghidra-vs-raw-C divergence (Ghidra misplaced a `trap(0x1c00)` div-by-zero check into the
+  wrong spot in op36's step-schedule solver — the raw recompiled C has no trap there; ground truth
+  wins per CLAUDE.md) and this session self-caught one of its OWN transcription slips on a second
+  hand-trace before writing any code (op31's sign-bit actor-selection direction was initially
+  backwards). All guest frames mirrored per CLAUDE.md ("MIRROR THE GUEST STACK") even though this
+  tier stays unwired/ungated (sp descent + LIVE-value spills at the RE'd offsets, matching game/
+  world/object_table.cpp's style). Corrected the ORIGINAL mapped-only guess that op36's obj+108
+  pointer was a separate "target object" struct — it is in fact the SAME `OBJ_SCRIPT_PTR` field
+  the interpreter itself uses (obj+0x6C), and op36 reads the target position directly out of the
+  CURRENT script entry's argA/B/C (Z/Y/X) plus its extended-block halfword, not from any secondary
+  object. Similarly corrected op31's "0x8064*10000-ish constant table" guess to a single scratchpad
+  pointer slot (0x1F800214), not a table. Builds and links clean (`cmake --build build2 --target
+  tomba2_port`); confirmed via `tools/codemap.py --addr` that all 5 addresses now resolve LIVE with
+  zero remaining unowned callees in this cluster. Full field-level RE in docs/engine_re.md "Wide-RE
+  follow-up 2026-07-10 — op36/op31 movement-script family (drafted)". UNVERIFIED — no override
+  registration, no SBS run; a future frontier-tier session must wire + gate before trusting the
+  behavior in-game.
+
 - **SsSeqCalled cluster, remaining bit4/5/6/7/2 leaves (wide-RE agent, 2026-07-10, UNWIRED).** Closes
   the prior wave's "MAPPED, NOT drafted" trio: `channelPitchSlideTick` (0x80090E40, bit4/5,
   portamento ramp — MEDIUM confidence, register-literal goto/label transcription per multiple

@@ -3219,3 +3219,117 @@ comments (this codebase's convention: "the class IS the RE artifact"), not dupli
   correction are solid (direct re-read of the gen body); individual field roles beyond that
   (especially the never-written "line height" field) are inferred, not confirmed. See font.h header
   comment for the full byte-dispatch table.
+
+### Wide-RE follow-up 2026-07-10 — op36/op31 movement-script family (drafted)
+
+Dedicated follow-up session to the two functions the 2026-07-10 scheduler/ScriptInterp wave (see
+above) explicitly refused: `0x80043108` (opcode table index 36) and `0x80041468` (opcode table
+index 31), plus their still-unowned callees `0x80041438` and `0x80042EA4` (both assigned), plus a
+bonus leaf `0x8004139C` (not assigned but trivial and fully understood, ported anyway since it's
+`turnFacing`'s entire body). All five are now `ScriptInterp` methods in `game/scene/script_interp.
+{h,cpp}` — DRAFTED, UNWIRED, UNVERIFIED (no override registration, no SBS run; must compile, does).
+
+**Method.** `generated/shard_*.c` (instruction-exact ground truth) read and hand-traced first, THEN
+independently cross-checked against a fresh Ghidra headless decompile (`tools/decomp.sh import` +
+`decomp ... list 0x80043108 0x80041468 0x80041438 0x80042ea4 0x8004139c`, output at
+`scratch/decomp/op36_op31_band.c` — worktree-local scratch, not committed). Every branch polarity in
+both target functions was traced TWICE (once from the raw generated C's own delay-slot-assignment
+ordering, once from Ghidra's structured if/else) and reconciled before any code was written.
+
+**Real divergence caught (Ghidra wrong, raw C right):** op36's phase-0 step-schedule solver does two
+guarded `cpu_div`s back to back (dist/stepsRequested, then 4096/stepDiv), each faithfully reproducing
+the guest's own `rec_break(7168)` div-by-zero and `rec_break(6144)` INT_MIN/-1-overflow traps (same
+idiom as `game/audio/sequencer.cpp`). Ghidra's decompile rendered a THIRD `trap(0x1c00)` call
+immediately after the FIRST division's post-clamp store (testing the just-clamped value for zero
+again) — that trap does not exist there in the raw recompiled C (`generated/shard_5.c:5727-5736`
+has no `rec_break` call between the clamp and the second `cpu_div`). Ghidra had folded the SECOND
+division's own (real) div-by-zero trap into the wrong position in its output. Confirmed by direct
+re-read of the raw C twice; the ported code omits the phantom trap and documents the finding inline
+at the fix site (`game/scene/script_interp.cpp`, `op36MoveTowardScriptTarget`).
+
+**Self-caught transcription slip (this session's own error, corrected before writing code, not by
+Ghidra):** op31's actor-selection logic (`argA`'s sign bit 0x8000 selects between `self` and the
+global secondary-actor slot at scratchpad `0x1F800214`) was mislabeled BACKWARDS on this session's
+first hand-trace of the raw generated C (misreading which side of the `if(_t) goto` branch-delay
+pattern corresponded to which case). Re-deriving a second time directly from the recompiler's own
+instruction ordering, and independently confirming against Ghidra's decompile (both agree: sign bit
+SET selects the scratchpad global, CLEAR selects self), caught and fixed it before any code existed.
+Documented inline at the fix site in `op31TurnTowardTarget`.
+
+**Corrections to the prior wave's "mapped, not drafted" notes** (see the "Wide-RE pass 2026-07-10 —
+scheduler sleep-countdown + 4 ScriptInterp opcode handlers" section above for the original guesses):
+- op36's `obj+108` pointer is **not** a separate "target object" struct distinct from
+  `OBJ_TABLE_A_7C` (0x7C) as the original note guessed — `108` decimal **is** `0x6C`, the SAME
+  `OBJ_SCRIPT_PTR` field the interpreter itself uses as its script cursor. op36 reads the target
+  position directly out of the CURRENT script entry's own argA/argB/argC (target Z/Y/X respectively
+  — the entry's "args" double as literal move-to coordinates for this opcode, not indices or flags)
+  plus the extended-block halfword at scriptPtr+10 (the turn-mode flag). There is no secondary
+  object involved in op36 at all.
+- op31's "a literal `0x8064*10000`-ish constant table" (the original note's phrase for the
+  scratchpad-relative address arithmetic idiom) is a single GLOBAL POINTER SLOT at scratchpad
+  `0x1F800214`, not a table — one secondary-actor pointer, selected once per call by argA's sign bit,
+  not indexed by anything.
+
+**Field map (op36, `ScriptInterp::op36MoveTowardScriptTarget`, `0x80043108`).** Frame: sp-=40,
+spills s0(obj)@+16, s4(constant 1)@+32, ra@+36, s3(turn-mode flag)@+28, s2(scriptPtr)@+24,
+s1(step-count divisor, a LIVE local that survives the sqrt call)@+20 — all HIGH confidence, verified
+register-by-register against `generated/shard_5.c:5667`. Phase machine on obj+0x78 (0=init, 1=turn,
+2=pure interpolate — same phase slot op34/op31 use). Fields (all HIGH confidence): obj+0x72/0x74/0x76
+= target Z/Y/X (entry argA/B/C reused as literal coordinates); obj+0x2E/0x32/0x36 = self Z/Y/X;
+obj+0x48/0x4A/0x4C = dz/dy/dx; obj+0x44 = Q12 "fraction of move remaining" (starts 0x1000); obj+0x64
+= dual-purpose step-count-then-step-divisor; obj+0x66 = second turn-target angle; obj+0x56 = self's
+own facing angle (via `turnFacing`); obj+0x68/0x6A = flagsPtr/packedArg forwarded to
+`stepEventPulse` once per call while still moving. MEDIUM confidence on WHY the guest computes TWO
+near-identical `ratan2(-dx,dz)` calls when the turn-mode flag is -1 (storing to both obj+0x56 and
+obj+0x66) — ported faithfully as written; the game-design purpose of the redundant store not traced.
+
+**Field map (op31, `ScriptInterp::op31TurnTowardTarget`, `0x80041468`).** Frame: sp-=48, spills
+s0(obj)@+32, ra@+40, s1(resolved target actor)@+36 — HIGH confidence, verified against
+`generated/shard_3.c:11362`. Phase 0: a 5-way mode switch on argA's low 15 bits (0/1/2/3/10) — modes
+1/2/3/10 each call `Trig::ratan2` (via the wired `0x80085690` override, reached through
+`rec_dispatch` for register-ABI fidelity rather than a direct `c->trig.ratan2()` call, since this
+draft stays in a register-literal transcription style throughout for minimum transcription risk) —
+HIGH confidence on the arithmetic (independently confirmed against both raw C and Ghidra), MEDIUM
+confidence on the GAME-DESIGN meaning of each mode (mode 1/2 share scratchpad anchors 0x1F800160/
+0x1F800164 whose OWNER was not traced this pass — likely a camera or scripted-anchor position; mode
+2 is mode 1 plus a 180-degree flip; mode 3 aims at the resolved target from self; mode 10 continuously
+re-aims using the entry's own argB/argC as a live tracked point, resetting the turn-step to a fixed
+0x100 each time). Phase 1 polls `turnFacing` every call until it snaps. Commit tail: snaps the
+resolved actor's facing (target+0x56) toward obj+0x76 when the masked angular delta is under the
+threshold (obj+0x74) OR the threshold is non-positive (forced instant snap); otherwise clears
+target+0x58 and advances the phase — HIGH confidence, this exact polarity is the corrected version
+of the branch this session's own first pass got backwards (see above).
+
+**FUN_80041438 (`ScriptInterp::turnFacing`/`turnFacingFramed`) and FUN_8004139C
+(`ScriptInterp::stepAngleToward`).** HIGH confidence, both trivial leaves verified against
+`generated/shard_2.c:4628` and `generated/shard_1.c:6657` respectively and matching Ghidra's
+independent decompile exactly with no discrepancies. `stepAngleToward` is a generic Q12-angle
+incremental-turn-toward-target primitive (snap if within `step`, else step by `step` the short way
+around the circle, re-test, snap if now within reach) operating on an arbitrary guest angle pointer
+— not ScriptInterp-specific in principle, but kept as a private ScriptInterp method for now since it
+has no other known caller; a future session adding more callers should consider promoting it to a
+Math/Trig-adjacent utility.
+
+**FUN_80042EA4 (`ScriptInterp::stepEventPulse`/`stepEventPulseFramed`).** HIGH confidence on the
+control flow (verified against `generated/shard_3.c:11682`, matches Ghidra's decompile exactly — no
+discrepancy found here). A per-call "movement event" gate read via a flags-word pointer (obj+0x68 in
+every known op36 caller): 0 -> no-op; low 6 bits clear + bit 0x80 set -> an "arm once" latch gated on
+`*(int*)(obj+0x38)+4` (an owner/parent pointer's byte-at-+4), firing `Sfx::trigger` exactly once on
+a 0->1 edge of a companion bit (0x40) in the flags word; low 6 bits clear + bit 0x80 clear -> no-op;
+low 6 bits nonzero -> fires `Sfx::trigger` every call a shared scratchpad mask (0x1F80017C) has none
+of the flags word's bits set (a per-frame repeat-pulse gate). MEDIUM confidence on the GAME-DESIGN
+purpose (almost certainly a footstep/movement SFX trigger keyed to the moving object's parent/owner
+state) — the owner-pointer's (obj+0x38) semantics and the exact SFX ids passed via packedArg were
+not traced this pass.
+
+**Verification status.** Compiles and links clean (`cmake -S . -B build2 && cmake --build build2
+--target tomba2_port`, zero errors/warnings touching `script_interp.cpp`). `tools/codemap.py --addr`
+confirms all five addresses (`0x80043108`, `0x80041468`, `0x80041438`, `0x80042EA4`, `0x8004139C`)
+now resolve to LIVE native owners with zero remaining unowned callees in this specific cluster
+(op36's `0x80084080` sqrt leaf and both functions' `0x80085690` ratan2 leaf remain still-substrate,
+routed via `rec_dispatch`/the wired override — expected, both are shared leaves used elsewhere in
+the codebase, not part of this band). UNWIRED: no `EngineOverrides` registration, no SBS run — per
+`docs/fleet-workflow.md` §9, a frontier-tier session must do the line-by-line wiring-time re-verify
+(diff against `generated/` one more time) before trusting this in-game, and the `ovhit` debug channel
+must show these opcodes actually firing during an SBS-full run before either is considered gated
+(free-roam autonav coverage for opcodes 31/36 specifically was NOT checked this pass).
