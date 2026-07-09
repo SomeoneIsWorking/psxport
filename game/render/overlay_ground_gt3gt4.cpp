@@ -86,23 +86,33 @@
 static int32_t ground_otz_index(int32_t z) {
   int32_t shift = z >> 10;
   int32_t idx = (z >> (shift & 31)) + shift * 0x200;
-  if (!(idx - 0x7ff < 0)) return -1;
-  if (!(idx - 4 > 0)) return -1;
+  // gen_func_8013FB88 L24069-24075: the ONLY range gate is `(idx - 4) < 2044` -> keep (i.e. drop
+  // when idx >= 2048), then `if (idx < 0) skip`. NO lower bound. A prior draft mis-split gen's
+  // single upper-bound expression into a two-sided range [4..2047] — the spurious `idx <= 4`
+  // rejection dropped records gen emits (pool offset shift, the f118 divergence) and the upper
+  // bound was off-by-one (2047 vs 2048). Match gen's one check exactly.
+  if ((uint32_t)(idx - 4) >= 2044u) return -1;
   return idx;
 }
 
 // Fully-unrolled 3-way min/max (GT3's flag&3==1 => max, ==2 => min branch, hand-verified by
-// walking BOTH stack-spill code paths of FUN_8013FB88 to their common convergence point).
+// walking BOTH stack-spill code paths of FUN_8013FB88 to their common convergence point). The
+// convergence labels (L_8013FD38/L_8013FD98/L_8013FDA4) apply a final ARITHMETIC `>> 2` to the
+// selected value before storing it to the OTZ scratch (gen L24053/24056: `r2 = r3 >> 2`). The
+// prior draft returned the raw min/max — 4x too large, so too many records failed the
+// `idx >= 2048` depth gate and got dropped (pool offset shift, the f118 divergence). The AVSZ3
+// path (below, in gt3/gt4) correctly has NO >>2 — only this manual min/max path does.
 static int32_t sz3_minmax(bool want_max, int32_t a, int32_t b, int32_t c3) {
   int32_t hi_ab = want_max ? (a > b ? a : b) : (a < b ? a : b);
   int32_t r     = want_max ? (hi_ab > c3 ? hi_ab : c3) : (hi_ab < c3 ? hi_ab : c3);
-  return r;
+  return r >> 2;
 }
-// Same, 4-way (GT4's flag&3==1/2 branch: pairs (a,b) and (e,f), then combine).
+// Same, 4-way (GT4's flag&3==1/2 branch: pairs (a,b) and (e,f), then combine). Same trailing
+// `>> 2` as sz3_minmax (gen gt4 L_80140100: `r2 = r3 >> 2` at the convergence label, stored to OTZ).
 static int32_t sz4_minmax(bool want_max, int32_t a, int32_t b, int32_t e, int32_t f) {
   int32_t hi_ab = want_max ? (a > b ? a : b) : (a < b ? a : b);
   int32_t hi_ef = want_max ? (e > f ? e : f) : (e < f ? e : f);
-  return want_max ? (hi_ab > hi_ef ? hi_ab : hi_ef) : (hi_ab < hi_ef ? hi_ab : hi_ef);
+  return (want_max ? (hi_ab > hi_ef ? hi_ab : hi_ef) : (hi_ab < hi_ef ? hi_ab : hi_ef)) >> 2;
 }
 
 // FUN_8013FB88 — ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as the
