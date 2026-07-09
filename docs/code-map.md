@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 614 native fns, 521 owned addresses, 586 LIVE / 28 ORPHAN.
+Totals: 616 native fns, 523 owned addresses, 586 LIVE / 30 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -551,10 +551,12 @@ Totals: 614 native fns, 521 owned addresses, 586 LIVE / 28 ORPHAN.
 | 0x80131D08 | LIVE | `beh_two_child_steer` | game/ai/beh_two_child_steer.cpp:47 |  |  |
 | 0x80132400 | LIVE | `beh_single_child_cull` | game/ai/beh_single_child_cull.cpp:45 |  |  |
 | 0x8013259C | LIVE | `beh_cull_substate_orchestrator` | game/ai/beh_cull_substate_orchestrator.cpp:46 | 0x8013272C 0x80132954 0x80132A88 0x80132D58 0x80132EDC 0x80133184 … |  |
-| 0x8013272C | ORPHAN | `func_8013272C` | game/ai/beh_cull_substate_leaves.cpp:48 | 0x80048750 0x800518FC 0x80051B70 0x801252C0 0x80133774 | func_8013272C — DRAFT. RE'd from generated/ov_a00_shard_1.c gen_801327… |
-| 0x80132954 | ORPHAN | `func_80132954` | game/ai/beh_cull_substate_leaves.cpp:146 | 0x801332C4 0x80133610 0x80133700 | func_80132954 — DRAFT. RE'd from generated/ov_a00_shard_0.c gen_801329… |
-| 0x80132D58 | ORPHAN | `func_80132D58` | game/ai/beh_cull_substate_leaves.cpp:201 | 0x80051B04 0x80133610 0x80133700 0x80133774 | func_80132D58 — DRAFT. RE'd from generated/ov_a00_shard_0.c gen_80132D… |
-| 0x80133184 | ORPHAN | `func_80133184` | game/ai/beh_cull_substate_leaves.cpp:276 | 0x80027144 0x80040B48 0x8004ED94 0x80074590 | func_80133184 — DRAFT. RE'd from generated/ov_a00_shard_0.c gen_801331… |
+| 0x8013272C | ORPHAN | `func_8013272C` | game/ai/beh_cull_substate_leaves.cpp:55 | 0x80048750 0x800518FC 0x80051B70 0x801252C0 0x80133774 | func_8013272C — DRAFT. RE'd from generated/ov_a00_shard_1.c gen_801327… |
+| 0x80132954 | ORPHAN | `func_80132954` | game/ai/beh_cull_substate_leaves.cpp:153 | 0x801332C4 0x80133610 0x80133700 | func_80132954 — DRAFT. RE'd from generated/ov_a00_shard_0.c gen_801329… |
+| 0x80132A88 | ORPHAN | `func_80132A88` | game/ai/beh_cull_substate_leaves.cpp:361 | 0x8004CBD8 0x80074590 0x80077768 | func_80132A88 — DRAFT. RE'd from generated/ov_a00_shard_1.c gen_80132A… |
+| 0x80132D58 | ORPHAN | `func_80132D58` | game/ai/beh_cull_substate_leaves.cpp:208 | 0x80051B04 0x80133610 0x80133700 0x80133774 | func_80132D58 — DRAFT. RE'd from generated/ov_a00_shard_0.c gen_80132D… |
+| 0x80132EDC | ORPHAN | `func_80132EDC` | game/ai/beh_cull_substate_leaves.cpp:554 | 0x80133610 0x80133700 0x80133774 | func_80132EDC — DRAFT. RE'd from generated/ov_a00_shard_1.c gen_80132E… |
+| 0x80133184 | ORPHAN | `func_80133184` | game/ai/beh_cull_substate_leaves.cpp:283 | 0x80027144 0x80040B48 0x8004ED94 0x80074590 | func_80133184 — DRAFT. RE'd from generated/ov_a00_shard_0.c gen_801331… |
 | 0x80133C14 | LIVE | `beh_typed_table_seed_gate` | game/ai/beh_typed_table_seed_gate.cpp:291 |  |  |
 | 0x80133D6C | LIVE | `beh_twin_record_steer` | game/ai/beh_twin_record_steer.cpp:68 |  |  |
 | 0x80134FD8 | LIVE | `beh_multi_record_phase_machine` | game/ai/beh_multi_record_phase_machine.cpp:68 |  |  |

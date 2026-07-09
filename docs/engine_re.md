@@ -2756,6 +2756,14 @@ Ground truth for all 12: `generated/ov_a00_shard_0.c` / `ov_a00_shard_1.c`, symb
 
 ### MAPPED-ONLY (RE'd for call-graph/shape, NOT drafted — too large/uncertain for one pass)
 
+Still MAPPED-ONLY after the 2026-07-10 wide-RE wave — these 3 are the edge-orchestrator's
+remaining ~400-line node[5] sub-states. They were assessed and DELIBERATELY NOT drafted this
+session: full goto-preserving transliteration of `0x80132A88`/`0x80132EDC` (162/146 gen-C lines)
+already required catching 2 real branch-target/constant-base bugs during hand-tracing (see the
+DRAFTED section below); these three are ~2.5-3x longer with more spilled registers (r16-r23+r30
+vs r16-r18), so a rushed draft would land squarely in docs/fleet-workflow.md §9's "bug-farm"
+territory. Per that doc: an honest MAP beats a buggy draft.
+
 - **`0x8012ED84`** (401 ln, edge-orchestrator STATE 0 init) — calls (in order) unowned leaves
   `0x80125F50`, **`0x8012E8A8` directly** (confirming the drafted leaf above is itself a shared
   sub-routine, not just an orchestrator-tail call), `0x801312CC`, `0x801314B4`, `0x80131600`,
@@ -2763,8 +2771,16 @@ Ground truth for all 12: `generated/ov_a00_shard_0.c` / `ov_a00_shard_1.c`, symb
   `0x8004CBD8`/`0x8007AAE8` (record-alloc family, same as `0x8012ED84`'s neighbor
   `0x8012EEA4:` loop reading `0x8007AAE8` — a per-type multi-record allocation loop, ~3 iterations
   gated by `obj[96]&2` and a running index against a fixed bound of 3). Opens with a small fixed
-  6-entry lookup loop into `obj[96]` from a table at `0x800BF9xx`-shape base (same GBASE family as
-  the edge-orchestrator's own `0x800BF9D2` read).
+  **5-entry** lookup loop (CORRECTED 2026-07-10 — was previously documented as "6-entry"; the
+  ground-truth loop counter `r18` runs `0,1,2,3,4` against a `<5` guard, confirmed by re-reading
+  `generated/ov_a00_shard_1.c:18795-18808`) filling `obj[96]`/`[98]`/`[100]`/`[102]`/`[104]`
+  (5 consecutive u16 slots, written via a pointer that starts at `obj+96` and increments by 2 each
+  iteration) from a TWO-LEVEL lookup: `class = byte_table[0x8014A334 + obj[3]]` (a single-byte
+  remap of the type into a smaller class id, table base `0x80150000-23756`), then
+  `obj[96+2*i] = u16_table[0x8014A340 + (class*5 + i)*2]` (table base `0x80150000-23744`, stride
+  2, 5 entries per class) for `i` in `[0,5)`. Both tables same GBASE-family constant-address shape
+  the drafted `0x80132A88`/`0x8013272C` also read from (different bases/strides). Spills
+  r16-r23+r30+ra (frame -56) — the widest frame in this cluster.
 - **`0x8012F5B4`** (428 ln, edge-orchestrator node[5]==1 sub-state) — calls unowned
   `0x80130788`/`0x801308E0`/`0x801314B4`/`0x80131578`, plus `rec_dispatch` to
   `Sfx::trigger`-shaped `0x80074590`, an unowned `0x80074AF0`, and `Trig::rsin`-shaped `0x80083E80`
@@ -2774,19 +2790,66 @@ Ground truth for all 12: `generated/ov_a00_shard_0.c` / `ov_a00_shard_1.c`, symb
   `0x80127384`/`0x801308E0`/`0x80131768`, plus `rec_dispatch` to `GraphicsBind`-shaped
   `0x8004CBD8`, `Sfx::trigger`-shaped `0x80074590`, and `Trig::angleCmp`-shaped `0x80077768`.
   NOT triaged past the call list.
-- **`0x80132A88`** (162 ln, cull-orchestrator common tail — called after EVERY node[5] sub-case)
-  — reads `obj[118]` (a signed counter) with 3 branches (`==1`/`<2`/`==0`) into obj[43] bit-128 and
-  obj[3]-bit-192 gated table lookups (constant base `0x80150000-22824`-shape, SAME family as
-  `0x8013272C`'s per-type table) feeding `obj[76]`/`obj[72]` "target" fields, an RNG-ish
-  `Trig::angleCmp`-shaped `0x80077768` call (routed via rec_dispatch) that flips their sign, and a
-  `rec_dispatch`-routed `0x8004CBD8` (`GraphicsBind`-shaped) call. Partially traced (through line
-  ~130 of 162); the tail past `L_80132BB0` NOT yet walked.
-- **`0x80132EDC`** (146 ln, cull-orchestrator node[5]==3 sub-state) — near-symmetric obj[6]==0/1
-  pair (mirrored +/- signs on `child[56]/[58]` heading accumulate, same `obj[78]/[80]` fields
-  `0x80132D58` reads) feeding a shared `obj[64]` countdown -> snap-to-`obj[116]` tail with an
-  `obj[104]`/`obj[108]`-gated branch selecting between two "reset to defaults" literal blocks (one
-  matches `0x8013272C`'s init-tail shape almost exactly: `obj[56]=obj[100]`, `obj[58]=obj[102]`).
-  Calls unowned `0x80133610`/`0x80133700`/`0x80133774` (same family the drafted leaves above use).
+
+### DRAFTED — game/ai/beh_cull_substate_leaves.cpp, wide-RE wave 2026-07-10
+
+The 2 remaining cull-orchestrator leaves (both previously MAPPED-ONLY) — drafted this session by
+near-mechanical goto/label transliteration (control flow kept 1:1 against the generated C rather
+than restructured into if/else) specifically to minimize the branch-polarity/operand-order risk
+docs/fleet-workflow.md §9 calls out. Both cross-checked against neighboring leaves' field usage
+(see "Field cross-check findings" below); confirmed HIGH-MEDIUM on control flow, LOW-MEDIUM on
+field semantics past the fields already documented for `0x8013272C`/`0x80132954`/`0x80132D58`/
+`0x80133184` above.
+
+- **`0x80132A88`** (162 ln, cull-orchestrator COMMON TAIL — called after EVERY node[5] sub-case)
+  — `obj[118]` (s16) 4-way phase dispatch (`==1`/`==2`/`==0`/other) into a main per-frame body
+  (obj[43] bit7 gate -> fixed-384 or GBASE-table lookup into obj[76]/obj[72], optional
+  `0x8004CBD8` call caching its result pointer for a later `target[120]=obj[76]` write, obj[98]==0
+  subtracts 128 from both fields, an `0x80077768` RNG call conditionally negates obj[76]/obj[82],
+  obj[1]==0 gates an `Sfx::trigger`-shaped `0x80074590(15,-5,0)`), a "snap" body accumulating
+  obj[76] into `child(obj[192])[12]` with a +-obj[72] band-clamp that decays obj[72] by 24/frame,
+  and a shared tail resetting obj[118] to the LITERAL `1` (not `+1` — confirmed distinct from the
+  other two paths' explicit increment; this was the first bug caught during hand-tracing, an
+  earlier draft pass wrote `+1` here by pattern-matching the other sites before re-checking ground
+  truth line-by-line).
+- **`0x80132EDC`** (146 ln, cull-orchestrator node[5]==3 sub-state) — near-mirrored obj[6]==0/1
+  pair on `child(obj[192])[56]/[58]` (state0: `child[56]+=obj[78]`, `child[58]-=obj[80]`; state1:
+  the sign-flipped mirror) each banded against a target derived from `obj[116]-obj[64]` (state0)
+  / `obj[116]+obj[64]` (state1) — NOT a pure sign-flip of the same comparison, the operand order
+  is genuinely swapped between the two states (RE'd exactly, not assumed symmetric). On a band
+  hit, a NEW field `obj[74]` (not previously documented in this cluster) drives a countdown
+  (`obj[64] -= obj[74]`) that either TOGGLES `obj[6]` itself (`obj[6] = 1 - obj[6]`, confirmed via
+  the literal `1 - r3` shape) while still counting down, or on expiry either resets to defaults
+  (mirrors `0x8013272C`'s init-tail: `child[56]=obj[100]`, `child[58]=obj[102]`, `obj[64]=20`) or
+  sets `obj[5]=4` — **both of these expiry sub-paths jump STRAIGHT to the function epilogue,
+  bypassing the shared tail entirely** (the second bug caught during hand-tracing: ground truth's
+  `L_8013302C`/`L_80133060` both end in `goto L_80133174`, not a fallthrough into the shared-tail
+  block at `L_80133078` — an initial draft pass had both falling through, which would have run the
+  obj[80] decay + `0x80133774` tail-leaf call an extra time on those paths). The shared tail
+  (reached only when the band wasn't hit, or when the countdown is still running) branches on
+  `obj[108]`/`obj[94]`/`obj[41]`/`obj[6]` to call `0x80133700`/`0x80133610`, or bump a **fixed
+  main-RAM record pointer** `0x800E7E80+50` (a u16 field) by 5 — NOT a GBASE-family table despite
+  superficially similar constant-arithmetic shape (`32782<<16 + 32384`); this is its own distinct
+  literal address, gated by two flag bytes at `+325`(bit0) and `+356`. Always decays `obj[80]` by
+  1/frame (floor 33) before the unconditional `0x80133774(obj)` tail-leaf call.
+
+**Field cross-check findings (task item: cross-check obj+0x3C..0x7A roles against existing
+drafts):**
+- `obj[78]`/`obj[80]` (heading deltas applied to `child[56]`/`child[58]`) are read by BOTH
+  `0x80132D58` (node[5]==2, always `child[56]+=obj[78]`, `child[58]+=obj[80]` — both additions,
+  unconditional) and `0x80132EDC` (node[5]==3, sign depends on ITS OWN `obj[6]` substate: state0 is
+  `+78/-80`, state1 is `-78/+80`). NOT a contradiction — these are different orchestrator states
+  each running their own `obj[6]` sub-machine over the same field pair; documented here so a future
+  reader doesn't mistake the differing signs for a bug in one of the two drafts.
+- `obj[64]` is confirmed as a general-purpose reusable counter/target field across this cluster,
+  NOT single-purpose: `0x8013272C`/`0x80132954` reset/read it as a jitter-cycle "20-frame" cooldown
+  (matches `0x80132EDC`'s own `obj[64]=20` reset-to-defaults path), while `0x80132EDC`'s main body
+  treats it as a live countdown decremented by the newly-found `obj[74]`. Confirms the prior wave's
+  "counters/flags whose exact meaning is not independently confirmed" caveat on `0x80130524`'s
+  similarly-named `obj[64]` usage in the EDGE (not cull) orchestrator — these are almost certainly
+  unrelated fields on the SAME struct offset reused across the two orchestrators' different node
+  types, not a shared semantic. No fix needed, just flagging so nobody assumes cross-orchestrator
+  field-role unification.
 
 ### Notes for whoever wires these
 

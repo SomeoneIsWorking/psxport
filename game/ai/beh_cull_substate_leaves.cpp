@@ -11,10 +11,17 @@
 // is already registered, and safely falls through to the substrate body otherwise (no interpreter
 // abort, since the overlay's own generated C for that address still exists).
 //
-// Drafted this session: 0x8013272C (131 gen-C ln, state-0 init), 0x80132954 (70 ln, node[5]==0),
-// 0x80132D58 (88 ln, node[5]==2), 0x80133184 (82 ln, state-2 dispatch). The other 2 leaves the
-// orchestrator calls (0x80132A88 162 ln common tail, 0x80132EDC 146 ln node[5]==3) were RE'd for
-// call-graph/field shape but NOT drafted this session — see docs/engine_re.md for the mapping notes.
+// Drafted 2026-07-08 session: 0x8013272C (131 gen-C ln, state-0 init), 0x80132954 (70 ln,
+// node[5]==0), 0x80132D58 (88 ln, node[5]==2), 0x80133184 (82 ln, state-2 dispatch).
+//
+// Drafted THIS session (2026-07-09/10, wide-RE band: the 5 mapped-only leaves): 0x80132A88 (162
+// ln, common tail called after EVERY node[5] sub-case) and 0x80132EDC (146 ln, node[5]==3). Both
+// transliterated near-mechanically (goto/label structure preserved 1:1 against the generated C,
+// including exact delay-slot execution order and signed-vs-unsigned read widths per site) rather
+// than restructured into idiomatic if/else, specifically to avoid the branch-polarity/operand-
+// order bugs called out in docs/fleet-workflow.md §9 — this is HIGH-MEDIUM confidence on CONTROL
+// FLOW fidelity, LOW-MEDIUM confidence on FIELD SEMANTICS (obj+0x4A/0x4C/0x4E "target" fields,
+// GBASE-relative constant tables) exactly as flagged by the prior mapping pass in docs/engine_re.md.
 #include "core.h"
 #include "cfg.h"
 #include <stdint.h>
@@ -318,4 +325,377 @@ void func_80133184(Core* c) {
 
   c->r[17] = s17; c->r[16] = s16;
   c->r[29] += 32;
+}
+
+// func_80132A88 — DRAFT. RE'd from generated/ov_a00_shard_1.c gen_80132A88 (0x80132A88..0x80132D48).
+// Called by beh_cull_substate_orchestrator's COMMON TAIL — after EVERY node[5] sub-case, per the
+// orchestrator's own control flow (game/ai/beh_cull_substate_orchestrator.cpp). Frame -32: spills
+// r16/r17+ra at +16/+20/+24.
+//
+// obj[118] (s16) is a signed "phase" counter dispatching 4 ways:
+//   phase==1  ("AF4"): main per-frame body — obj[43] bit7 gate picks a fixed base (384) or a
+//     per-type/flag constant-table lookup (SAME GBASE-family table 0x8014A694-shape the other
+//     leaves in this cluster read, entry = (obj[3]&63)+6 if (obj[3]&0xC0)==0 else raw obj[3]) into
+//     obj[76]/obj[72]; if the table entry != -1, calls the GraphicsBind-shaped leaf 0x8004CBD8(obj)
+//     and keeps its result as a "target" pointer (r17) for a later obj[76]->target[120] write.
+//     obj[98]==0 subtracts 128 from both obj[76]/obj[72]. An RNG-ish 0x80077768 call (angleCmp-
+//     shaped) conditionally negates obj[76]/obj[82]. obj[1]==0 gates an Sfx::trigger-shaped
+//     0x80074590(15,-5,0) call. Always bumps obj[118] by 1 at the end (falls to the shared tail).
+//   phase==2  ("C34"): "snap" body — accumulates obj[76] into child(obj[192])[12] (a heading
+//     field), then bands the result against +-obj[72]: out-of-band clamps child[12] to +-obj[72]
+//     and decays obj[72] by 24/frame (resetting child[12] and obj[118] to 0 once obj[72] expires
+//     to <=0, or clearing obj[95] once it drops under 161); in-band negates obj[76]/obj[82] and
+//     falls to a sum-and-clamp block on obj[76]+obj[82] (clamped to +-96 outside a +-95 dead zone).
+//   phase==0  ("ADC"): if obj[43]==0, exits without touching obj[118]; else bumps obj[118] by 1
+//     and falls to the shared tail below.
+//   phase<0 or phase>2: falls straight to the shared tail.
+// Shared tail ("D30"): if obj[43]!=0, obj[118] is reset to the LITERAL 1 (not incremented) —
+// confirmed distinct from the phase==0/phase==1 paths' obj[118]+=1 (RE'd exactly from ground
+// truth's `c->r[2] = c->r[0] + 1` vs the other sites' explicit `+1` on the read-back value).
+//
+// LOW-MEDIUM CONFIDENCE on field semantics past obj[43]/[76]/[72]/[82]/[86]/[70]/[95]/[118] — never
+// independently confirmed against a live dump; transliterated close to the generated C's own
+// control-flow shape (goto/label 1:1) specifically to preserve every branch polarity and the mixed
+// signed/unsigned read widths exactly, per docs/fleet-workflow.md §9's caution against
+// restructuring bugs in this cluster.
+void func_80132A88(Core* c) {
+  const uint32_t obj = c->r[4];
+  const uint32_t s16 = c->r[16], s17 = c->r[17];
+  c->r[29] -= 32;
+
+  uint32_t r17 = 0;
+  int16_t phase = (int16_t)c->mem_r16(obj + 118);
+
+  if (phase == 1) goto AF4;
+  if (phase >= 2) { if (phase == 2) goto C34; else goto D30; }
+  if (phase == 0) goto ADC;
+  goto D30;
+
+ADC: {
+    uint8_t f43 = c->mem_r8(obj + 43);
+    if (f43 == 0) goto D44;
+    c->mem_w16(obj + 118, (uint16_t)(c->mem_r16(obj + 118) + 1));
+    goto D30;
+  }
+
+AF4: {
+    uint8_t f43 = c->mem_r8(obj + 43);
+    if ((f43 & 128) == 0) {
+      c->mem_w16(obj + 76, 384);
+      c->mem_w16(obj + 72, 384);
+      goto B84;
+    }
+    int16_t f98 = (int16_t)c->mem_r16(obj + 98);
+    c->mem_w16(obj + 76, 512);
+    if (f98 == 0) {
+      c->mem_w16(obj + 72, 512);
+      goto B84;
+    }
+    // GBASE constant-table lookup (SAME family/base as 0x8013272C's per-type table)
+    uint8_t type = c->mem_r8(obj + 3);
+    const uint32_t tblBase = 0x80150000u - 22824u;
+    uint32_t idx = ((type & 192) == 0) ? ((uint32_t)(type & 63) + 6) : (uint32_t)type;
+    int16_t entry = (int16_t)c->mem_r16(tblBase + idx * 2);
+    if (entry != -1) {
+      c->r[4] = obj;
+      rec_dispatch(c, 0x8004CBD8u);   // GraphicsBind-shaped, dual-owned per codemap — unconfirmed here
+      r17 = c->r[2];
+    }
+    goto B84;
+  }
+
+B84: {
+    int16_t f98 = (int16_t)c->mem_r16(obj + 98);
+    if (f98 != 0) goto BB0;
+  }
+  // B94 fallthrough (f98==0):
+  {
+    int16_t v76 = (int16_t)(c->mem_r16(obj + 76) - 128);
+    int16_t v72 = (int16_t)(c->mem_r16(obj + 72) - 128);
+    c->mem_w16(obj + 76, (uint16_t)v76);
+    c->mem_w16(obj + 72, (uint16_t)v72);
+  }
+BB0: {
+    int16_t f86 = (int16_t)c->mem_r16(obj + 86);
+    uint8_t f70 = c->mem_r8(obj + 70);
+    c->mem_w16(obj + 82, (uint16_t)(uint32_t)-8);
+    c->r[4] = (uint32_t)f70 << 4;
+    c->r[5] = (uint32_t)(uint16_t)(uint32_t)(int32_t)f86;
+    rec_dispatch(c, 0x80077768u);   // UNOWNED RNG-ish angleCmp-shaped leaf
+    if ((int32_t)c->r[2] != 0) {
+      int16_t v76 = (int16_t)c->mem_r16(obj + 76);
+      int16_t v82 = (int16_t)c->mem_r16(obj + 82);
+      c->mem_w16(obj + 76, (uint16_t)(0 - v76));
+      c->mem_w16(obj + 82, (uint16_t)(0 - v82));
+    }
+    if (r17 != 0) {
+      c->mem_w16(r17 + 120, c->mem_r16(obj + 76));
+    }
+    uint8_t f1 = c->mem_r8(obj + 1);
+    c->mem_w8(obj + 43, 0);
+    c->mem_w8(obj + 95, 1);
+    if (f1 != 0) {
+      c->r[4] = 15; c->r[5] = (uint32_t)(int32_t)-5; c->r[6] = 0;
+      rec_dispatch(c, 0x80074590u);   // Sfx::trigger-shaped
+    }
+  }
+  // C20:
+  c->mem_w16(obj + 118, (uint16_t)(c->mem_r16(obj + 118) + 1));
+  goto D30;
+
+C34: {
+    uint32_t child = c->mem_r32(obj + 192);
+    int16_t v76 = (int16_t)c->mem_r16(obj + 76);
+    int16_t c12 = (int16_t)(c->mem_r16(child + 12) + v76);
+    c->mem_w16(child + 12, (uint16_t)c12);
+    child = c->mem_r32(obj + 192);
+    int16_t v72s = (int16_t)c->mem_r16(obj + 72);
+    int16_t c12b = (int16_t)c->mem_r16(child + 12);
+    bool outOfBand = (c12b < -v72s) || (v72s < c12b);
+    if (outOfBand) goto C74;
+    goto CE8;
+  }
+
+C74: {
+    uint32_t child = c->mem_r32(obj + 192);
+    int16_t v76 = (int16_t)c->mem_r16(obj + 76);
+    int16_t v72s = (int16_t)c->mem_r16(obj + 72);
+    if (v76 <= 0) {
+      c->mem_w16(child + 12, (uint16_t)(0 - v72s));
+    } else {
+      c->mem_w16(child + 12, (uint16_t)v72s);
+    }
+    int16_t v72new = (int16_t)(c->mem_r16(obj + 72) - 24);
+    c->mem_w16(obj + 72, (uint16_t)v72new);
+    if (v72new > 0) goto CC4;
+    child = c->mem_r32(obj + 192);
+    c->mem_w16(child + 12, 0);
+    c->mem_w16(obj + 118, 0);
+    goto D30;
+  }
+
+CC4: {
+    int16_t v72new = (int16_t)c->mem_r16(obj + 72);
+    if (v72new < 161) {
+      c->mem_w8(obj + 95, 0);
+    }
+    int16_t v76 = (int16_t)c->mem_r16(obj + 76);
+    int16_t v82 = (int16_t)c->mem_r16(obj + 82);
+    c->mem_w16(obj + 76, (uint16_t)(0 - v76));
+    c->mem_w16(obj + 82, (uint16_t)(0 - v82));
+    goto CE8;
+  }
+
+CE8: {
+    int16_t v76 = (int16_t)c->mem_r16(obj + 76);
+    int16_t v82 = (int16_t)c->mem_r16(obj + 82);
+    int16_t sum = (int16_t)(v76 + v82);
+    uint16_t chk = (uint16_t)((uint16_t)sum - 1);
+    bool inRange = chk < 95u;
+    c->mem_w16(obj + 76, (uint16_t)sum);
+    if (inRange) {
+      c->mem_w16(obj + 76, 96);
+      goto D30;
+    }
+    // D14:
+    int16_t s = sum;
+    if (s >= 0) goto D30;
+    if (s < -95) goto D30;
+    c->mem_w16(obj + 76, (uint16_t)(uint32_t)-96);
+    goto D30;
+  }
+
+D30: {
+    uint8_t f43 = c->mem_r8(obj + 43);
+    if (f43 != 0) {
+      c->mem_w16(obj + 118, 1);   // RE'd literal 1 (NOT obj[118]+1 — confirmed distinct from
+                                   // the phase==0/phase==1 paths' explicit increment above)
+    }
+  }
+D44:
+  c->r[17] = s17; c->r[16] = s16;
+  c->r[29] += 32;
+}
+
+// func_80132EDC — DRAFT. RE'd from generated/ov_a00_shard_1.c gen_80132EDC (0x80132EDC..0x80133174).
+// Called by beh_cull_substate_orchestrator's node[5]==3 sub-state case
+// (game/ai/beh_cull_substate_orchestrator.cpp). Frame -24: spills r16+ra at +16/+20.
+//
+// obj[6] (u8) drives a near-mirrored 0/1 pair on child=obj[192]'s heading fields (child[56]/[58]),
+// using obj[78]/[80] as the per-frame deltas (SAME fields 0x80132D58 reads) — state0 does
+// child[56]+=obj[78], child[58]-=obj[80]; state1 does the mirror (child[56]-=obj[78],
+// child[58]+=obj[80]). Both then band-check child[58] against a target derived from
+// obj[116]-obj[64] (state0, `<` sense) / obj[116]+obj[64] (state1, `<` sense on the OPPOSITE
+// operand order — RE'd exactly, not a simple sign flip) and on a hit, snap child[58] to that
+// target and set a "did-update" flag (shared "FCC"/"FD0" join, r6 in ground truth).
+//
+// If the update flag is set, a second block runs: obj[64] -= obj[74] (a countdown), and:
+//   - if the new obj[64] > 0: TOGGLE obj[6] itself (obj[6] = 1 - obj[6] — this is the SAME field
+//     this function switched on at entry; RE'd exactly, confirmed via the `1 - obj[6]` shape).
+//   - else (obj[64] expired): snap child[58] = obj[116] (final target), then EITHER reset to
+//     defaults (child[56]=obj[100], child[58]=obj[102], obj[5]=0, obj[6]=0, obj[64]=20) when
+//     obj[104]==1 OR obj[108]!=0, OR set obj[5]=4 when obj[104]!=1 AND obj[108]==0.
+// Both sub-blocks then fall to the shared tail (regardless of whether the update-flag block ran):
+//   obj[108]!=0: calls trigger leaf 0x80133700(obj); on nonzero result, resets child[56]/[58] to
+//     obj[100]/[102] and calls 0x80133610(obj,0), then clears obj[6]/obj[108].
+//   obj[108]==0 && obj[94]!=0: calls 0x80133610(obj, obj[94]) and sets obj[6]=1, obj[108]=1.
+//   obj[108]==0 && obj[94]==0 && obj[41]!=0 && obj[6]==0: bumps a GBASE-relative record's [+50]
+//     u16 field by 5, gated by two more GBASE byte flag checks at [+325]bit0 and [+356] — the
+//     SAME 0x8014E000-ish constant-table family as 0x8013272C/0x80132A88's tables, different
+//     stride/base (record-indexed here, not per-type/rotating-index).
+//   ALWAYS at the very end: obj[80] decays by 1/frame once obj[80]>=33 (else left unchanged), then
+//   the tail leaf 0x80133774(obj) is called unconditionally before returning.
+//
+// LOW-MEDIUM CONFIDENCE on field semantics (matches the prior mapping pass's caveats in
+// docs/engine_re.md); HIGH-MEDIUM CONFIDENCE on control flow — transliterated goto/label 1:1
+// against ground truth, preserving the exact signed/unsigned read widths at each site (the two
+// heading-band comparisons deliberately mix (int16) and zero-extended (u16) reads of the SAME
+// field for the threshold vs. the stored value, exactly as ground truth does).
+void func_80132EDC(Core* c) {
+  const uint32_t obj = c->r[4];
+  const uint32_t s16 = c->r[16];
+  c->r[29] -= 24;
+
+  uint32_t r6 = 0;
+  uint8_t sub = c->mem_r8(obj + 6);
+  bool updated = false;
+
+  if (sub == 0) goto F10;
+  if (sub == 1) goto F70;
+  goto FD4;
+
+F10: {
+    uint32_t child = c->mem_r32(obj + 192);
+    c->mem_w16(child + 56, (uint16_t)(c->mem_r16(child + 56) + c->mem_r16(obj + 78)));
+    child = c->mem_r32(obj + 192);
+    c->mem_w16(child + 58, (uint16_t)(c->mem_r16(child + 58) - c->mem_r16(obj + 80)));
+
+    int32_t threshold = (int32_t)(int16_t)c->mem_r16(obj + 116) - (int32_t)(int16_t)c->mem_r16(obj + 64);
+    child = c->mem_r32(obj + 192);
+    uint32_t child58zx = c->mem_r16(child + 58);
+    uint32_t obj64zx = c->mem_r16(obj + 64);
+    uint32_t obj116zx = c->mem_r16(obj + 116);
+    uint32_t rhs = obj116zx - obj64zx;   // delay-slot recompute (unsigned), only used if cond true
+    bool cond = ((int32_t)child58zx < threshold);
+    if (!cond) goto FD0;
+    c->mem_w16(child + 58, (uint16_t)rhs);
+    goto FCC;
+  }
+
+F70: {
+    uint32_t child = c->mem_r32(obj + 192);
+    c->mem_w16(child + 56, (uint16_t)(c->mem_r16(child + 56) - c->mem_r16(obj + 78)));
+    child = c->mem_r32(obj + 192);
+    c->mem_w16(child + 58, (uint16_t)(c->mem_r16(child + 58) + c->mem_r16(obj + 80)));
+
+    int32_t threshold = (int32_t)(int16_t)c->mem_r16(obj + 116) + (int32_t)(int16_t)c->mem_r16(obj + 64);
+    child = c->mem_r32(obj + 192);
+    uint32_t child58zx = c->mem_r16(child + 58);
+    uint32_t obj64zx = c->mem_r16(obj + 64);
+    uint32_t obj116zx = c->mem_r16(obj + 116);
+    uint32_t rhs = obj116zx + obj64zx;   // delay-slot recompute (unsigned), only used if cond true
+    bool cond = (threshold < (int32_t)child58zx);
+    if (!cond) goto FD0;
+    c->mem_w16(child + 58, (uint16_t)rhs);
+    goto FCC;
+  }
+
+FCC:
+  r6 = 1;
+FD0:
+  updated = (r6 != 0);
+FD4:
+  if (!updated) goto Tail078;
+
+  {
+    int16_t newObj64 = (int16_t)(c->mem_r16(obj + 64) - c->mem_r16(obj + 74));
+    c->mem_w16(obj + 64, (uint16_t)newObj64);
+    if (newObj64 > 0) {
+      // toggle obj[6] itself: obj[6] = 1 - obj[6]
+      uint8_t f6 = c->mem_r8(obj + 6);
+      c->mem_w8(obj + 6, (uint8_t)(1 - f6));
+      goto Tail078;
+    }
+    uint32_t child = c->mem_r32(obj + 192);
+    c->mem_w16(child + 58, c->mem_r16(obj + 116));   // snap to final target
+
+    int16_t f104 = (int16_t)c->mem_r8(obj + 104);
+    bool resetToDefaults;
+    if (f104 == 1) {
+      resetToDefaults = true;
+    } else {
+      int16_t f108 = (int16_t)c->mem_r16(obj + 108);
+      resetToDefaults = (f108 != 0);
+      if (!resetToDefaults) {
+        c->mem_w8(obj + 5, 4);
+        goto TailExit;   // CONFIRMED: ground truth's L_80133060 jumps straight to the epilogue
+                          // (L_80133174), bypassing the Tail078 shared-tail block entirely — no
+                          // obj[80] decay, no 0x80133774 tail-leaf call on this path.
+      }
+    }
+    if (resetToDefaults) {
+      child = c->mem_r32(obj + 192);
+      c->mem_w16(child + 56, c->mem_r16(obj + 100));
+      child = c->mem_r32(obj + 192);
+      c->mem_w16(child + 58, c->mem_r16(obj + 102));
+      c->mem_w8(obj + 5, 0);
+      c->mem_w8(obj + 6, 0);
+      c->mem_w16(obj + 64, 20);
+      goto TailExit;   // CONFIRMED: ground truth's L_8013302C also jumps straight to the epilogue,
+                        // bypassing Tail078 (same as above).
+    }
+  }
+
+Tail078: {
+    int16_t f108 = (int16_t)c->mem_r16(obj + 108);
+    if (f108 != 0) {
+      c->r[4] = obj;
+      rec_dispatch(c, 0x80133700u);   // UNOWNED trigger leaf
+      if ((int32_t)(int16_t)c->r[2] != 0) {
+        uint32_t child = c->mem_r32(obj + 192);
+        c->mem_w16(child + 56, c->mem_r16(obj + 100));
+        child = c->mem_r32(obj + 192);
+        c->mem_w16(child + 58, c->mem_r16(obj + 102));
+        c->r[4] = obj; c->r[5] = 0;
+        rec_dispatch(c, 0x80133610u);   // UNOWNED
+        c->mem_w8(obj + 6, 0);
+        c->mem_w16(obj + 108, 0);
+      }
+    } else {
+      uint8_t f94 = c->mem_r8(obj + 94);
+      if (f94 != 0) {
+        c->r[4] = obj; c->r[5] = f94;
+        rec_dispatch(c, 0x80133610u);   // UNOWNED
+        c->mem_w8(obj + 6, 1);
+        c->mem_w16(obj + 108, 1);
+      } else {
+        uint8_t f41 = c->mem_r8(obj + 41);
+        if (f41 != 0) {
+          uint8_t f6 = c->mem_r8(obj + 6);
+          if (f6 == 0) {
+            // RE'd literal: rec = (32782<<16) + 32384 = 0x800E0000 + 0x7E80 = 0x800E7E80 — a
+            // FIXED main-RAM record pointer (NOT the 0x8014Cxxx "GBASE" family the other leaves
+            // in this cluster read; this is its own distinct constant). Two byte-flag gates at
+            // rec+325 (bit0) and rec+356 then a +5 bump on a u16 field at rec+50. LOW CONFIDENCE
+            // on the record's semantic identity — never confirmed against a live dump.
+            const uint32_t rec = 0x800E7E80u;
+            if ((c->mem_r8(rec + 325) & 1) == 0 && c->mem_r8(rec + 356) == 0) {
+              c->mem_w16(rec + 50, (uint16_t)(c->mem_r16(rec + 50) + 5));
+            }
+          }
+        }
+      }
+    }
+
+    int16_t f80 = (int16_t)c->mem_r16(obj + 80);
+    if (f80 >= 33) {
+      c->mem_w16(obj + 80, (uint16_t)(c->mem_r16(obj + 80) - 1));
+    }
+    c->r[4] = obj;
+    rec_dispatch(c, 0x80133774u);   // UNOWNED tail leaf — unconditional
+  }
+
+TailExit:
+  c->r[16] = s16;
+  c->r[29] += 24;
 }

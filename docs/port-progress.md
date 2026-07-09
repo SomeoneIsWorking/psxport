@@ -2459,6 +2459,28 @@ themselves are LIVE but dispatch out to substrate for every case body.
   drafts almost certainly contain bugs per that section's own track record. None of these 7 leaves is
   reachable from intro-area SBS autonav per the orchestrators' own header comments (they sit behind
   the idle/active field path), so wiring will need broader scene coverage to actually gate them.
+- **Follow-up: the 5 mapped-only substate leaves, dedicated band (wide-RE agent, 2026-07-10,
+  UNWIRED, isolated worktree).** Targeted the exact 5 leaves the 2026-07-08 session above left
+  MAPPED-ONLY. Drafted the 2 smaller ones with full confidence: `0x80132A88` (162 gen-C ln, the cull
+  orchestrator's common tail — appended to `game/ai/beh_cull_substate_leaves.cpp`) and `0x80132EDC`
+  (146 ln, cull orchestrator node[5]==3 — same file). Both transliterated goto/label 1:1 against
+  ground truth (not restructured into if/else) specifically to dodge §9's branch-polarity risk; 2
+  real bugs were caught and fixed mid-trace before the code was written (an obj[118] literal-vs-
+  increment mixup, and two "reset to defaults" branches that jump straight past the shared tail
+  rather than falling through it — both would have been silent, hard-to-spot divergences at wiring
+  time). Build verified: `tomba2_port` links clean, no warnings on the touched file.
+  The remaining 3 (`0x8012ED84` 401 ln, `0x8012F5B4` 428 ln, `0x8012FD88` 406 ln — the edge-
+  orchestrator's node[5]==0/1/2 states) were DEMOTED back to MAPPED-ONLY rather than drafted:
+  ~2.5-3x the gen-C length of the two just-drafted leaves, wider register frames (r16-r23+r30 vs
+  r16-r18), and the same hand-tracing effort that caught 2 bugs in 300 combined lines would not
+  scale confidently to 1235 combined lines in one pass. `0x8012ED84`'s opening 5-entry constant-
+  table lookup was traced and its call-graph note in docs/engine_re.md corrected (was previously
+  documented as "6-entry", confirmed 5 via the loop's own `<5` guard) — an honest map beats a buggy
+  draft per fleet-workflow.md §9. Also cross-checked `obj[78]`/`obj[80]`/`obj[64]` field roles
+  across the now-6 drafted cull leaves — no contradictions found, but the differing sign
+  conventions and the discovery of a new `obj[74]` countdown-source field are recorded in
+  docs/engine_re.md so a future reader doesn't mistake them for bugs. Regenerated docs/code-map.md
+  (616 natives, 30 ORPHAN — the 2 new drafts show as ORPHAN/unwired, as expected).
 - **Two hottest unowned leaves + per-frame input fence (wide-RE agent, 2026-07-09, UNWIRED).**
   Band: `0x80079528` (4235 dispatches/600 free-roam frames), `0x80079374` (4235), `0x800788AC`
   (627, ~1/frame). All 3 DRAFTED (compile+link clean, unwired, unverified, no SBS run):
