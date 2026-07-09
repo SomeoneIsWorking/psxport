@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 616 native fns, 523 owned addresses, 586 LIVE / 30 ORPHAN.
+Totals: 618 native fns, 525 owned addresses, 588 LIVE / 30 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -206,7 +206,9 @@ Totals: 616 native fns, 523 owned addresses, 586 LIVE / 30 ORPHAN.
 | 0x80056B48 | LIVE | `ActorTomba::velocityIntegrate` | game/player/actor_tomba.cpp:713 |  | ======================================================================… |
 | 0x80057DC0 | LIVE | `ActorTomba::growthStep` | game/player/actor_tomba.cpp:285 |  | ======================================================================… |
 | 0x80058304 | LIVE | `Engine::gStateMutate` | game/core/engine.cpp:992 | 0x800310F4 | Engine::gStateMutate — native ownership of FUN_80058304 (Ghidra decomp… |
+| 0x80058648 | LIVE | `ActorTomba::enterOuterState0` | game/player/actor_tomba.cpp:1568 | 0x800519E0 0x80057DC0 0x80057FD4 0x800597AC 0x80068214 0x800682C4 | ======================================================================… |
 | 0x8005950C | LIVE | `ActorTomba::frameTick` | game/player/actor_tomba.cpp:1015 | 0x8001CF2C 0x80042310 0x80045580 0x80053E50 0x80053FDC 0x80055C9C … | frameTick — guest FUN_8005950C. See actor_tomba.h for the full RE writ… |
+| 0x800597AC | LIVE | `ActorTomba::matrixComposeAttached` | game/player/actor_tomba.cpp:1208 | 0x800517BC 0x80084110 0x80084220 0x80084250 0x80084360 0x80084470 … | ======================================================================… |
 | 0x80059D28 | LIVE | `Engine::frameStartTick` | game/core/engine.cpp:2684 |  | Engine::frameStartTick — per-frame prologue at guest 0x80059D28 (FIRST… |
 | 0x80059D28 | LIVE | `Engine::frameStartTickFaithful` | game/core/engine.cpp:2753 | 0x8005950C 0x8009A450 0x80109024 0x8010F63C 0x8010F654 0x80112220 | Engine::frameStartTickFaithful — byte-exact mirror of gen_func_80059D2… |
 | 0x80059ED8 | LIVE | `beh_camera_target_follow` | game/ai/beh_camera_target_follow.cpp:46 | 0x800312D4 0x800489E4 0x8010B238 0x8010BC10 0x8010C5A8 0x8011332C … |  |

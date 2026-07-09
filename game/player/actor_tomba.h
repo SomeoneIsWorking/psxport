@@ -288,4 +288,30 @@ private:
   //   (an already-substrate "commit area mode" leaf). Faithful port from gen_func_80042310
   //   (generated/shard_5.c:5613, ground truth — matches Ghidra 1:1).
   static void resetLoadGate(Core* c);
+
+  // ----------------------------------------------------------------------------
+  // 2026-07-10 wide-RE dedicated pass — frameTick's two "too large for the first pass" direct
+  // callees (docs/engine_re.md's 0x8005950C "Mapped-only" note). Both faithful 1:1 ports, UNWIRED
+  // (frameTick's own rec_dispatch call sites for 0x80058648/0x800597AC still reach the substrate —
+  // wiring is a future frontier-tier step). Both kept as LITERAL register-level transcriptions
+  // (goto/label-preserving, not restructured into named C++ control flow) per fleet-workflow.md §9
+  // — see the .cpp banners for concrete restructuring bugs this caught during drafting.
+  // ----------------------------------------------------------------------------
+
+  // enterOuterState0(mode) — guest FUN_80058648(G, mode). frameTick's case-0 (INIT) handler:
+  //   (re)allocates Tomba's 17-record attach array via GraphicsBind::recordArrayInit (already
+  //   native), resets a large block of per-frame G scratch fields, dispatches the still-substrate
+  //   FUN_800682C4/FUN_80057FD4 plus the already-native growthStep, and — when mode==0 — an
+  //   indirect jump-table dispatch keyed by DAT_800BF870 through one of two 32-entry tables
+  //   (0x800A45B8 / 0x800C45B8; table CONTENTS not yet enumerated — a follow-up dedicated pass).
+  //   Faithful from generated/shard_7.c:7739. Guest frame: addiu sp,-32; spill s0(G),s1,s2(mode),ra.
+  void enterOuterState0(int32_t mode);
+
+  // matrixComposeAttached() — guest FUN_800597AC(G). frameTick's matrix-compose tail (all cases):
+  //   composes Tomba's own SRT, then — when G+0x8 (attach count) is nonzero — a per-attached-item
+  //   pass over G+0xC0[i*4] (the SAME array GraphicsBind::recordArrayInit populates) applying each
+  //   item's local rotation onto G's (or an "attach B" variant) matrix and accumulating the
+  //   translate into item+0x2C/30/34. Faithful from generated/shard_5.c:8654. Guest frame:
+  //   addiu sp,-64; spill r16-r23,r30(scratch, not fp),ra.
+  void matrixComposeAttached();
 };

@@ -2718,3 +2718,23 @@ themselves are LIVE but dispatch out to substrate for every case body.
   ClearOTagR dummy-tail constants off by 0xC0) plus address corrections to prior prose (clip pair =
   0x800A59A4/A6, GP0 port ptr = 0x800A5AA4). Everything unwired; build+link verified clean. Full RE
   in the two file headers + docs/engine_re.md "Wide-RE wave 2026-07-10 — dedicated libgpu pass".
+- **`0x8005950C` band follow-up — `0x80058648`/`0x800597AC` DRAFTED, mode-N table case-map added
+  (wide-RE agent, 2026-07-10, RE-ahead-of-frontier — UNWIRED).** Picked up the two dedicated-pass
+  candidates the 2026-07-08 `frameTick` wave flagged as too large: `ActorTomba::enterOuterState0`
+  (`0x80058648`, frameTick's case-0/INIT driver) and `ActorTomba::matrixComposeAttached`
+  (`0x800597AC`, the matrix-compose loop over Tomba's attached-item array at `G+0xC0`) — both new
+  methods on `game/player/actor_tomba.{h,cpp}`, faithful 1:1 from `generated/shard_7.c:7739` /
+  `generated/shard_5.c:8654`, kept as LITERAL register-level transcriptions (goto/label-preserving,
+  not restructured) per fleet-workflow.md §9 — a first restructuring attempt at enterOuterState0's
+  `{5,6}`-vs-`G+348` tail inverted two branch polarities, caught by re-diffing before commit. Both
+  compile+link clean (`tomba2_port` links); `tools/codemap.py --addr` confirms both resolve LIVE.
+  UNWIRED: frameTick's own `rec_dispatch` sites for both addresses still reach the substrate. Did
+  NOT draft the two mode-N dispatch tables `0x80058918`/`0x80058F5C` (per instruction — too deep,
+  46/55 case targets cascading into ~40 more still-substrate leaves each) — instead extracted their
+  full case-target maps directly from the recompiler's own switch reconstruction (ground truth) and
+  cross-referenced against this file's existing "variant A/B/C(/D) template family" triage, flagging
+  a fresh ~10-address untriaged cluster (`0x80060064-0x80065374`) as the next concrete RE target.
+  Full writeup: docs/engine_re.md "Wide-RE wave 2026-07-10 — dedicated pass: `0x8005950C` band's
+  case-0 init driver...". Next: wire `enterOuterState0`+`matrixComposeAttached` in (with the
+  mandatory line-by-line re-verify per §9) + SBS-gate, then RE the `60064-65374` cluster or one of
+  the already-flagged variant-triplet families before attempting either mode-N table.

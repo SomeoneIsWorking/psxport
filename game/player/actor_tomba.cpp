@@ -1168,3 +1168,606 @@ void ActorTomba::frameTick() {
   c->r[16] = c->mem_r32(c->r[29] + 16);
   c->r[29] = sp0;
 }
+
+// =================================================================================
+// matrixComposeAttached() — guest FUN_800597AC. 2026-07-10 wide-RE dedicated pass, UNWIRED
+// (frameTick's own rec_dispatch(c, 0x800597ACu) call sites — cases 1/2/4/5/6 — still reach the
+// substrate; wiring this in is a future frontier-tier step).
+//
+// Composes Tomba's own SRT (translate+rotate at G+0x2C.. via G+0xB8/BA/BC-derived scale, angles
+// at G+0x54/56/58 read indirectly through G+0x144-adjacent bytes) plus, when G+0x8 (attach count)
+// is nonzero, a per-attached-item pass over G+0xC0[i*4] (the SAME attach-record-pointer array
+// GraphicsBind::recordArrayInit populates at obj+0xC0+i*4 — this is the loop that CONSUMES those
+// records every frame) applying each item's own local rotation (item+0x38/3A/3C fields) composed
+// onto G's matrix and adding G's + a per-item translate offset into item+0x2C/30/34 (the fresh
+// record's own onto-world position, later read by the object's own render/collision code).
+//
+// LITERAL register-level transcription this pass (goto/label-preserving, NOT restructured into
+// named locals) — deliberate per fleet-workflow.md §9 ("restructuring is where wide-RE drafts pick
+// up bugs"; this function has 9 branch targets over a single densely-conditioned attach loop, so a
+// first-pass mechanical port is the safer draft; a later verify/wire pass can fold it into named
+// fields once every branch is independently confirmed against gen_func_800597AC). Faithful from
+// generated/shard_5.c:8654 (ground truth) — every store/load/branch below is a 1:1 transcription;
+// r18 = a0 = G for the whole body (gen keeps G resident in s2, not a separate local). Guest frame:
+// addiu sp,-64; spill r16,r17,r18,r19,r20,r21,r22,r23 (all of s0-s7), r30 used here as a plain
+// callee-saved scratch (not a frame pointer — gen loads it with the base scratchpad address
+// 0x1F800000), ra(r31). One local byte at sp+16 (padded to the 64-byte frame) holds a saved copy
+// of G+0x8 (attach count) across the two possible mutations of G+0x8 mid-function (case-block
+// clears then restores it — see gen 8670/8919-20).
+//
+// Substrate callees still un-owned at draft time: FUN_800851F0 (an angle-mangling rotmat variant —
+// takes the SAME anglesPtr the plain rotmat() call at 0x80059828-area builds, but with the "pan"
+// field patched to a 3rd source and x/z zeroed; NOT yet triaged as its own method) and FUN_80084360
+// (called right after matMul in every branch — likely a second matrix combine/copy step, mirrors
+// the shape of Math::matMul's own "load result into CR0-4" side effect noted in gte_math.h;
+// NOT yet triaged). Both are dispatched via rec_dispatch so this draft compiles without inventing
+// their semantics. Already-native callees (matMul/rotmat/applyMatrixLV/applyMatlv/seedBlock) are
+// ALSO reached via rec_dispatch here (not direct c->math.*/c->engine.nodeXform.* calls) to keep
+// this pass a pure mechanical transcription — a follow-up pass can fold those into direct native
+// calls once the whole function is line-verified.
+void ActorTomba::matrixComposeAttached() {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 64;
+  c->mem_w32(c->r[29] + 32, c->r[18]);
+  c->r[18] = c->r[4] + c->r[0];
+  c->mem_w32(c->r[29] + 60, c->r[31]);
+  c->mem_w32(c->r[29] + 56, c->r[30]);
+  c->mem_w32(c->r[29] + 52, c->r[23]);
+  c->mem_w32(c->r[29] + 48, c->r[22]);
+  c->mem_w32(c->r[29] + 44, c->r[21]);
+  c->mem_w32(c->r[29] + 40, c->r[20]);
+  c->mem_w32(c->r[29] + 36, c->r[19]);
+  c->mem_w32(c->r[29] + 28, c->r[17]);
+  c->mem_w32(c->r[29] + 24, c->r[16]);
+
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 382u);
+  c->r[8] = (uint32_t)c->mem_r8(c->r[18] + 8u);
+  c->r[2] = c->r[2] & 32u;
+  c->mem_w8(c->r[29] + 16u, (uint8_t)c->r[8]);
+  if (c->r[2] != 0) {
+    c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 377u);
+    if (c->r[2] != 0) {
+      c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 9u);
+      c->mem_w8(c->r[18] + 8u, (uint8_t)c->r[2]);
+    }
+  }
+  c->r[2] = 0x1F800000u;
+  c->r[30] = c->r[2];
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 184u);
+  c->r[6] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 186u);
+  c->r[7] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 188u);
+  c->r[31] = 0x80059828u;
+  c->r[4] = c->r[30];
+  rec_dispatch(c, 0x800517BCu);                          // seedBlock(0x1F800000, x,y,z)
+
+  c->r[19] = 0x1F800000u;
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 84u);
+  c->r[17] = c->r[19] + 192u;
+  c->mem_w16(c->r[19] + 192u, (uint16_t)c->r[2]);
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 86u);
+  c->r[4] = c->r[17];
+  c->mem_w16(c->r[17] + 2u, (uint16_t)c->r[2]);
+  c->r[2] = 0x1F800000u;
+  c->r[21] = c->r[2] + 64u;
+  c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 88u);
+  c->r[5] = c->r[21];
+  c->r[31] = 0x8005985Cu;
+  c->mem_w16(c->r[17] + 4u, (uint16_t)c->r[2]);
+  rec_dispatch(c, 0x80085480u);                           // rotmat(anglesPtr=0x1F8000C0, outPtr=0x1F800040)
+
+  c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 375u);
+  c->r[2] = c->r[2] & 1u;
+  if (c->r[2] == 0) {
+    c->r[3] = (uint32_t)c->mem_r16(c->r[18] + 334u);
+  } else {
+    c->r[3] = 0;
+  }
+  c->r[4] = c->r[17];
+  c->r[2] = 0x1F800000u;
+  c->r[20] = c->r[2] + 32u;
+  c->r[5] = c->r[20];
+  c->mem_w16(c->r[19] + 192u, 0);
+  c->mem_w16(c->r[17] + 2u, (uint16_t)c->r[3]);
+  c->r[31] = 0x80059894u;
+  c->mem_w16(c->r[17] + 4u, 0);
+  rec_dispatch(c, 0x800851F0u);                           // FUN_800851F0(0x1F8000C0, outPtr=0x1F800020) — un-triaged rotmat variant
+
+  c->r[4] = c->r[20];
+  c->r[5] = c->r[30];
+  c->r[16] = c->r[18] + 152u;
+  c->r[31] = 0x800598A8u;
+  c->r[6] = c->r[16];
+  rec_dispatch(c, 0x80084110u);                           // matMul(0x1F800020, 0x1F800000, G+152)
+
+  c->r[4] = c->r[21];
+  c->r[31] = 0x800598B4u;
+  c->r[5] = c->r[16];
+  rec_dispatch(c, 0x80084360u);                           // FUN_80084360(0x1F800040, G+152) — un-triaged combine
+
+  c->r[4] = c->r[16];
+  c->r[22] = c->r[18] + 136u;
+  c->r[5] = c->r[22];
+  c->r[31] = 0x800598C8u;
+  c->r[6] = c->r[18] + 172u;
+  rec_dispatch(c, 0x80084470u);                           // applyMatrixLV(G+152, G+136, outPtr=G+172)
+
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 46u);
+  c->r[2] = c->mem_r32(c->r[18] + 172u);
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 50u);
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 54u);
+  c->r[2] = c->r[2] + c->r[3];
+  c->r[3] = c->mem_r32(c->r[18] + 180u);
+  c->mem_w32(c->r[18] + 172u, c->r[2]);
+  c->r[2] = c->mem_r32(c->r[18] + 176u);
+  c->r[3] = c->r[3] + c->r[5];
+  c->mem_w32(c->r[18] + 180u, c->r[3]);
+  c->r[3] = (uint32_t)c->mem_r8(c->r[18] + 356u);
+  c->r[2] = c->r[2] + c->r[4];
+  c->mem_w32(c->r[18] + 176u, c->r[2]);
+  if (c->r[3] == 5u) {
+    c->r[4] = c->r[16];
+    c->r[5] = c->mem_r32(c->r[18] + 16u);
+    c->r[31] = 0x80059914u;
+    c->r[5] = c->r[5] + 24u;
+    rec_dispatch(c, 0x80084250u);                         // FUN_80084250 (see game/math/wide_re_gte_transform3.cpp — drafted, ORPHAN)
+  }
+
+  bool haveAttachB = false;
+  c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 325u);
+  if (c->r[2] != 0) {
+    c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 326u);
+    c->r[2] = c->r[2] & 3u;
+    if (c->r[2] != 0) {
+      c->r[4] = c->r[17];
+      c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 84u);
+      c->mem_w16(c->r[19] + 192u, (uint16_t)c->r[2]);
+      c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 86u);
+      c->r[5] = c->r[21];
+      c->mem_w16(c->r[4] + 4u, 0);
+      c->r[31] = 0x80059958u;
+      c->mem_w16(c->r[4] + 2u, (uint16_t)c->r[2]);
+      rec_dispatch(c, 0x80085480u);                       // rotmat(0x1F8000C0, 0x1F800040)
+
+      c->r[4] = c->r[20];
+      c->r[5] = c->r[30];
+      c->r[16] = 0x1F800000u + 96u;
+      c->r[31] = 0x80059970u;
+      c->r[6] = c->r[16];
+      rec_dispatch(c, 0x80084110u);                       // matMul(0x1F800020, 0x1F800000, 0x1F800060)
+
+      c->r[4] = c->r[21];
+      c->r[31] = 0x8005997Cu;
+      c->r[5] = c->r[16];
+      rec_dispatch(c, 0x80084360u);                       // FUN_80084360(0x1F800040, 0x1F800060)
+
+      c->r[4] = c->r[16];
+      c->r[5] = c->r[22];
+      c->r[31] = 0x8005998Cu;
+      c->r[6] = c->r[16] + 20u;
+      rec_dispatch(c, 0x80084470u);                       // applyMatrixLV(0x1F800060, G+136, outPtr=0x1F800074)
+
+      c->r[3] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 46u);
+      c->r[2] = c->mem_r32(c->r[16] + 20u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[16] + 20u, c->r[2]);
+      c->r[3] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 50u);
+      c->r[2] = c->mem_r32(c->r[16] + 24u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[16] + 24u, c->r[2]);
+      c->r[3] = (uint32_t)(int16_t)c->mem_r16(c->r[18] + 54u);
+      c->r[2] = c->mem_r32(c->r[16] + 28u);
+      c->r[22] = 1u;
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[16] + 28u, c->r[2]);
+      haveAttachB = true;
+    }
+  }
+  if (!haveAttachB) c->r[22] = 0u;
+
+  // Per-attached-item loop: for i in [0, G+8), item = *(G+0xC0 + i*4); compose G's SRT (or, when
+  // (G+0x146&3)!=0, the alt "attach B" matrix at 0x1F800060 computed above) onto item's own local
+  // rotation and accumulate the translate into item+0x2C/30/34.
+  c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 9u);
+  if (c->r[2] != 0) {
+    c->r[2] = 0x1F800000u;
+    c->r[30] = c->r[2] + 32u;
+    c->r[2] = 0x1F800000u;
+    c->r[20] = c->r[2] + 64u;
+    c->r[2] = 0x1F800000u;
+    c->r[21] = c->r[2] + 96u;
+    c->r[17] = c->r[18];
+    c->r[19] = 0;
+    while (true) {
+      c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 8u);
+      if (!((int32_t)c->r[19] < (int32_t)c->r[2])) break;
+      c->r[2] = c->mem_r32(c->r[17] + 192u);
+      const uint32_t item = c->r[2];
+      c->r[4] = 0x1F800000u;
+      c->r[5] = (uint32_t)(int16_t)c->mem_r16(item + 56u);
+      c->r[6] = (uint32_t)(int16_t)c->mem_r16(item + 58u);
+      c->r[7] = (uint32_t)(int16_t)c->mem_r16(item + 60u);
+      c->r[16] = (uint32_t)(int16_t)c->mem_r16(item + 6u);
+      c->r[31] = 0x80059A34u;
+      rec_dispatch(c, 0x800517BCu);                       // seedBlock(0x1F800000, item local rot x/y/z)
+
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[5] = c->r[30];
+      c->r[31] = 0x80059A44u;
+      c->r[4] = c->r[4] + 8u;
+      rec_dispatch(c, 0x80085480u);                       // rotmat(item+8, 0x1F800020)
+
+      c->r[4] = c->r[30];
+      c->r[5] = 0x1F800000u;
+      c->r[31] = 0x80059A58u;
+      c->r[6] = c->r[20];
+      rec_dispatch(c, 0x80084110u);                       // matMul(0x1F800020, 0x1F800000, 0x1F800040)
+
+      uint32_t dstPtr;
+      if ((int32_t)c->r[16] >= 0) {
+        c->r[16] = c->r[16] << 2;
+        c->r[16] = c->r[18] + c->r[16];
+        c->r[4] = c->mem_r32(c->r[16] + 192u);
+        c->r[6] = c->mem_r32(c->r[17] + 192u);
+        c->r[4] = c->r[4] + 24u;
+        c->r[31] = 0x80059BB0u;
+        c->r[6] = c->r[6] + 24u;
+        rec_dispatch(c, 0x80084110u);                     // matMul(prevItem+24, thisItem+24, ...)
+
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[31] = 0x80059BBCu;
+        c->r[5] = c->r[4] + 44u;
+        rec_dispatch(c, 0x80084220u);                     // applyMatlv(item+44)
+
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[16] + 192u);
+        c->r[2] = c->mem_r32(c->r[4] + 44u);
+        c->r[3] = c->mem_r32(c->r[3] + 44u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->mem_w32(c->r[4] + 44u, c->r[2]);
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[16] + 192u);
+        c->r[2] = c->mem_r32(c->r[4] + 48u);
+        c->r[3] = c->mem_r32(c->r[3] + 48u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->mem_w32(c->r[4] + 48u, c->r[2]);
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[16] + 192u);
+        c->r[2] = c->mem_r32(c->r[4] + 52u);
+        c->r[3] = c->mem_r32(c->r[3] + 52u);
+        c->r[2] = c->r[2] + c->r[3];
+        dstPtr = c->r[4];
+      } else if (c->r[22] == 0) {
+        // "attach B" branch never armed this frame — compose against G's own matrix (G+152).
+        c->r[6] = c->mem_r32(c->r[17] + 192u);
+        c->r[5] = c->r[20];
+        c->r[31] = 0x80059B44u;
+        c->r[6] = c->r[6] + 24u;
+        rec_dispatch(c, 0x80084110u);                     // matMul(0x1F800040, item+24, ...)
+
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[31] = 0x80059B50u;
+        c->r[5] = c->r[4] + 44u;
+        rec_dispatch(c, 0x80084220u);                     // applyMatlv(item+44)
+
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[18] + 172u);
+        c->r[2] = c->mem_r32(c->r[4] + 44u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->mem_w32(c->r[4] + 44u, c->r[2]);
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[18] + 176u);
+        c->r[2] = c->mem_r32(c->r[4] + 48u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->mem_w32(c->r[4] + 48u, c->r[2]);
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[18] + 180u);
+        c->r[2] = c->mem_r32(c->r[4] + 52u);
+        c->r[2] = c->r[2] + c->r[3];
+        dstPtr = c->r[4];
+      } else {
+        // "attach B" branch armed — compose against the alt matrix at 0x1F800060.
+        c->r[4] = c->r[21];
+        c->r[6] = c->mem_r32(c->r[17] + 192u);
+        c->r[5] = c->r[20];
+        c->r[31] = 0x80059AE4u;
+        c->r[6] = c->r[6] + 24u;
+        rec_dispatch(c, 0x80084110u);                     // matMul(0x1F800040, item+24, 0x1F800060)
+
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[31] = 0x80059AF0u;
+        c->r[5] = c->r[4] + 44u;
+        rec_dispatch(c, 0x80084220u);                     // applyMatlv(item+44)
+
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[21] + 20u);
+        c->r[2] = c->mem_r32(c->r[4] + 44u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->mem_w32(c->r[4] + 44u, c->r[2]);
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[21] + 24u);
+        c->r[2] = c->mem_r32(c->r[4] + 48u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->mem_w32(c->r[4] + 48u, c->r[2]);
+        c->r[4] = c->mem_r32(c->r[17] + 192u);
+        c->r[3] = c->mem_r32(c->r[21] + 28u);
+        c->r[2] = c->mem_r32(c->r[4] + 52u);
+        c->r[2] = c->r[2] + c->r[3];
+        c->r[23] = 1u;
+        dstPtr = c->r[4];
+      }
+      c->mem_w32(dstPtr + 52u, c->r[2]);
+
+      c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 9u);
+      c->r[19] = c->r[19] + 1u;
+      if (!((int32_t)c->r[19] < (int32_t)c->r[2])) break;
+      c->r[17] = c->r[17] + 4u;
+    }
+  }
+
+  c->r[8] = (uint32_t)c->mem_r8(c->r[29] + 16u);
+  c->mem_w8(c->r[18] + 8u, (uint8_t)c->r[8]);
+  c->r[31] = c->mem_r32(c->r[29] + 60);
+  c->r[30] = c->mem_r32(c->r[29] + 56);
+  c->r[23] = c->mem_r32(c->r[29] + 52);
+  c->r[22] = c->mem_r32(c->r[29] + 48);
+  c->r[21] = c->mem_r32(c->r[29] + 44);
+  c->r[20] = c->mem_r32(c->r[29] + 40);
+  c->r[19] = c->mem_r32(c->r[29] + 36);
+  c->r[18] = c->mem_r32(c->r[29] + 32);
+  c->r[17] = c->mem_r32(c->r[29] + 28);
+  c->r[16] = c->mem_r32(c->r[29] + 24);
+  c->r[29] = sp0;
+}
+
+// =================================================================================
+// enterOuterState0(mode) — guest FUN_80058648(G, mode). 2026-07-10 wide-RE dedicated pass,
+// UNWIRED (frameTick's case-0 branch still rec_dispatch(c, 0x80058648u)s to the substrate).
+//
+// Tomba's OUTER-STATE-0 (INIT) driver. Calls GraphicsBind::recordArrayInit(G, 17, *(0x800ED054),
+// 0x800A3FA8) (already-native) to (re)allocate Tomba's 17-record attach array (the SAME array
+// matrixComposeAttached's per-item loop walks at G+0xC0); on a bail (insufficient growth budget —
+// recordArrayInit's own `mem_r16s(0x800ED098) < count` early-return path, see graphics_bind.cpp)
+// skips straight to the matrix-compose tail. On success: zeroes a large block of G's per-frame
+// scratch fields (G+0x40/42/178/50/14E), bumps G+4 (the outer-state byte itself — plausible
+// "re-armed" bookkeeping the caller's own switch doesn't re-read until next frame), stamps fixed
+// defaults (G+0xB..0x163 region: hitbox radius 15, alpha 255x2, timer trio 1/7/4), snapshots
+// G+0x2C/30/34 (world position) into a scratch struct at 0x1F8000D0+12/16/20, clears a second
+// cluster of G fields (0x180/175/148/29/145/16B), then dispatches FUN_800682C4(G, mode) (still
+// substrate — un-triaged) and ActorTomba::growthStep(G, sign-bit of G+0x17E) (ALREADY NATIVE —
+// dispatched here via rec_dispatch, not a direct call, to keep this pass a pure mechanical
+// transcription; a follow-up verify pass should fold it to `growthStep(...)` directly) and
+// FUN_80057FD4(G) (still substrate — the lift/ride interaction handler, docs/engine_re.md's
+// "0x80057FD4" mapped-only entry).
+//
+// When `mode` (a1) == 0: reads DAT_800BF870 (the area/game-mode selector byte — the SAME global
+// postFrameWaterCheck/interactWalk gate on) and, via a small comparison cascade (== 3 / < 4 / == 2
+// / == 7 / == 20), picks one of TWO 32-entry jump tables — 0x800A45B8 (docs' PTR_DAT_800a45b8) or
+// its companion 0x800C45B8 — indexed by DAT_800BF870 again, and rec_dispatches to
+// `*(table + DAT_800BF870*4)` with a0=G. This is the "indirect table dispatch" docs/engine_re.md
+// flagged as un-drafted; the table CONTENTS (32 function pointers per table) are a follow-up
+// dedicated-pass target — this draft only reproduces the SELECTION + dispatch mechanics, not the
+// table entries themselves (they stay opaque `rec_dispatch(c, c->r[2])` — the target address is
+// read from guest memory at runtime, matching gen exactly).
+// Tail (all mode values): reads DAT_1F800000+566 (a mode/animation-slot byte); if it's in {5,6}
+// (checked via `(byte-5) < 2`), and G+2 is 0, bumps a scratch G+86 field by 1024 (Q12 +1.0) before
+// stamping G's own state machine to a fixed "settle" preset (G+0=6, 0x1F8000000x137=2, G+4=4,
+// G+5=40) and firing FUN_80068214(G) (still substrate — un-triaged); if the byte is NOT in {5,6},
+// falls into the "G+348 gate" branch instead: no-op if G+348==0, else stamps G+4=4/G+5=36 and
+// either G+6=4 (G+2==0) or G+6=0 (G+2!=0) [gen's own branch condition is on G+2, re-read as r3,
+// NOT G+348's own value], then clears G+7 and G+348. Finally always dispatches matrixComposeAttached
+// (0x800597AC — drafted above, still reached via rec_dispatch here since THIS draft is unwired).
+//
+// LITERAL register-level transcription (goto/label-preserving) per fleet-workflow.md §9 — a first
+// restructuring attempt at the 566-byte "{5,6} vs G+348" tail (lines gen 7843-7877) mis-inverted
+// BOTH inner branch polarities (G+320-increment gate at gen 7849, and G+6=0-vs-4 gate at gen 7871)
+// before this mechanical pass caught it by re-diffing line-by-line against generated/shard_7.c —
+// concrete evidence for why this function stays a literal transcription rather than clean control
+// flow until a dedicated verify pass. Faithful from generated/shard_7.c:7739 (ground truth). Guest
+// frame: addiu sp,-32; spill s0(r16)<-a0=G, s1(r17), s2(r18)<-a1=mode, ra(r31).
+void ActorTomba::enterOuterState0(int32_t mode) {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = c->r[4] + c->r[0];
+  c->mem_w32(c->r[29] + 24, c->r[18]);
+  c->r[18] = c->r[5] + c->r[0];
+  c->r[5] = c->r[0] + 17u;
+  c->r[2] = (uint32_t)32783u << 16;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->r[17] = c->r[2] + (uint32_t)-12456;
+  c->r[7] = (uint32_t)32778u << 16;
+  c->mem_w32(c->r[29] + 28, c->r[31]);
+  c->r[6] = c->mem_r32(c->r[17] + 188u);
+  c->r[31] = 0x80058680u;
+  c->r[7] = c->r[7] + 16296u;
+  rec_dispatch(c, 0x800519E0u);          // GraphicsBind::recordArrayInit(G,17,*(0x800ED054),0x800A3FA8)
+  {
+    const bool bail = (c->r[2] != c->r[0]);
+    c->r[3] = (uint32_t)8064u << 16;
+    if (bail) goto L_800588A4;
+  }
+  c->r[2] = c->r[0] + (uint32_t)-1;
+  c->mem_w8(c->r[16] + 12u, (uint8_t)c->r[0]);
+  c->mem_w16(c->r[3] + 530u, (uint16_t)c->r[2]);
+  c->r[3] = c->mem_r32(c->r[17] + 16u);
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 4u);
+  c->mem_w16(c->r[16] + 64u, 0);
+  c->mem_w16(c->r[16] + 66u, 0);
+  c->mem_w8(c->r[16] + 376u, 0);
+  c->mem_w16(c->r[16] + 80u, 0);
+  c->mem_w16(c->r[16] + 334u, 0);
+  c->r[2] = c->r[2] + 1u;
+  c->mem_w8(c->r[16] + 4u, (uint8_t)c->r[2]);
+  c->r[2] = (uint32_t)8064u << 16;
+  c->mem_w16(c->r[2] + 358u, 0);
+  c->r[2] = (uint32_t)8064u << 16;
+  c->mem_w16(c->r[2] + 400u, 0);
+  c->r[2] = (uint32_t)8064u << 16;
+  c->mem_w8(c->r[2] + 594u, 0);
+  c->r[2] = c->r[0] + 15u;
+  c->mem_w8(c->r[16] + 11u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 255u;
+  c->mem_w8(c->r[16] + 70u, (uint8_t)c->r[2]);
+  c->mem_w8(c->r[16] + 71u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 1u;
+  c->mem_w8(c->r[16] + 353u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 7u;
+  c->mem_w8(c->r[16] + 354u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 4u;
+  c->mem_w8(c->r[16] + 355u, (uint8_t)c->r[2]);
+  c->r[2] = (uint32_t)8064u << 16;
+  c->mem_w32(c->r[16] + 60u, c->r[3]);
+  c->r[3] = c->mem_r32(c->r[16] + 44u);
+  c->r[2] = c->r[2] + 208u;
+  c->mem_w8(c->r[16] + 384u, 0);
+  c->mem_w8(c->r[16] + 373u, 0);
+  c->mem_w8(c->r[16] + 328u, 0);
+  c->mem_w8(c->r[16] + 41u, 0);
+  c->mem_w8(c->r[16] + 325u, 0);
+  c->mem_w8(c->r[16] + 363u, 0);
+  c->mem_w32(c->r[2] + 12u, c->r[3]);
+  c->r[3] = c->mem_r32(c->r[16] + 48u);
+  c->r[4] = c->r[16] + c->r[0];
+  c->mem_w32(c->r[2] + 16u, c->r[3]);
+  c->r[3] = c->mem_r32(c->r[16] + 52u);
+  c->r[5] = c->r[18] + c->r[0];
+  c->r[31] = 0x80058744u;
+  c->mem_w32(c->r[2] + 20u, c->r[3]);
+  rec_dispatch(c, 0x800682C4u);          // still-substrate leaf FUN_800682C4(G, mode) — un-triaged
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16(c->r[16] + 382u);
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[5] >> 15;
+  c->r[31] = 0x80058758u;
+  c->r[5] = c->r[5] & 1u;
+  rec_dispatch(c, 0x80057DC0u);          // ActorTomba::growthStep(G, sign-bit(G+0x17E)) — ALREADY NATIVE, dispatched here for now
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[2] = (uint32_t)8064u << 16;
+  c->r[31] = 0x80058768u;
+  c->mem_w16(c->r[2] + 398u, 0);
+  rec_dispatch(c, 0x80057FD4u);          // still-substrate leaf FUN_80057FD4(G) — lift/ride handler, un-triaged
+  {
+    const bool skip = (c->r[18] != c->r[0]);
+    c->r[2] = (uint32_t)32780u << 16;
+    if (skip) goto L_8005889C;
+  }
+  c->r[3] = (uint32_t)c->mem_r8(c->r[2] + (uint32_t)-1936);   // DAT_800BF870 (area/game-mode selector)
+  c->r[2] = c->r[0] + 3u;
+  {
+    const bool eq3 = (c->r[3] == c->r[2]);
+    c->r[2] = (uint32_t)((int32_t)c->r[3] < 4);
+    if (eq3) goto L_800587B8;
+  }
+  {
+    const bool notLt4 = (c->r[2] == c->r[0]);
+    c->r[2] = c->r[0] + 2u;
+    if (notLt4) goto L_80058798;
+  }
+  {
+    const bool eq2 = (c->r[3] == c->r[2]);
+    c->r[3] = (uint32_t)32778u << 16;
+    if (eq2) goto L_800587C0;
+  }
+  c->r[2] = (uint32_t)32780u << 16;
+  goto L_800587D4;
+L_80058798:
+  c->r[2] = c->r[0] + 7u;
+  {
+    const bool eq7 = (c->r[3] == c->r[2]);
+    c->r[2] = c->r[0] + 1u;
+    if (eq7) goto L_800587C4;
+  }
+  c->r[2] = c->r[0] + 20u;
+  {
+    const bool eq20 = (c->r[3] == c->r[2]);
+    c->r[3] = (uint32_t)32778u << 16;
+    if (eq20) goto L_800587C0;
+  }
+  c->r[2] = (uint32_t)32780u << 16;
+  goto L_800587D4;
+L_800587B8:
+  c->mem_w8(c->r[16] + 2u, 0);
+  goto L_800587F8;
+L_800587C0:
+  c->r[2] = c->r[0] + 1u;
+L_800587C4:
+  c->r[3] = (uint32_t)32778u << 16;
+  c->mem_w8(c->r[16] + 2u, (uint8_t)c->r[2]);
+  c->r[2] = (uint32_t)32780u << 16;
+  goto L_800587D8;
+L_800587D4:
+  c->mem_w8(c->r[16] + 2u, 0);
+L_800587D8:
+  c->r[2] = (uint32_t)c->mem_r8(c->r[2] + (uint32_t)-1936);
+  c->r[3] = c->r[3] + 17848u;
+  c->r[2] = c->r[2] << 2;
+  c->r[2] = c->r[2] + c->r[3];
+  c->r[2] = c->mem_r32(c->r[2] + 0u);
+  c->r[31] = 0x800587F8u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, c->r[2]);              // table-dispatched substrate leaf (table @ 0x800A45B8 or 0x800C45B8, indexed by DAT_800BF870)
+L_800587F8:
+  c->r[2] = (uint32_t)8064u << 16;
+  c->r[2] = (uint32_t)c->mem_r8(c->r[2] + 566u);
+  c->r[2] = c->r[2] + (uint32_t)-5;
+  c->r[2] = (uint32_t)(c->r[2] < 2u);
+  {
+    const bool in5or6 = (c->r[2] == c->r[0]);
+    if (in5or6) goto L_80058864;
+  }
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 2u);
+  {
+    const bool skipBump = (c->r[2] != c->r[0]);
+    c->r[4] = c->r[16] + c->r[0];
+    if (skipBump) goto L_80058834;
+  }
+  c->r[2] = (uint32_t)c->mem_r16(c->r[16] + 320u);
+  c->r[2] = c->r[2] + 1024u;
+  c->mem_w16(c->r[16] + 86u, (uint16_t)c->r[2]);
+L_80058834:
+  c->r[2] = c->r[0] + 6u;
+  c->r[3] = (uint32_t)8064u << 16;
+  c->mem_w8(c->r[16] + 0u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 2u;
+  c->mem_w8(c->r[3] + 311u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 4u;
+  c->mem_w8(c->r[16] + 4u, (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + 40u;
+  c->r[31] = 0x8005885Cu;
+  c->mem_w8(c->r[16] + 5u, (uint8_t)c->r[2]);
+  rec_dispatch(c, 0x80068214u);          // still-substrate leaf FUN_80068214(G) — un-triaged
+  goto L_8005889C;
+L_80058864:
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 348u);
+  {
+    const bool clear = (c->r[2] == c->r[0]);
+    c->r[4] = c->r[0] + 4u;
+    if (clear) goto L_8005889C;
+  }
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 2u);
+  c->r[2] = c->r[0] + 36u;
+  c->mem_w8(c->r[16] + 4u, (uint8_t)c->r[4]);
+  {
+    const bool g2set = (c->r[3] != c->r[0]);
+    c->mem_w8(c->r[16] + 5u, (uint8_t)c->r[2]);
+    if (g2set) goto L_80058890;
+  }
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[4]);
+  goto L_80058894;
+L_80058890:
+  c->mem_w8(c->r[16] + 6u, 0);
+L_80058894:
+  c->mem_w8(c->r[16] + 7u, 0);
+  c->mem_w8(c->r[16] + 348u, 0);
+L_8005889C:
+  c->r[31] = 0x800588A4u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x800597ACu);          // matrixComposeAttached (drafted above; still dispatched — this draft is unwired)
+L_800588A4:
+  c->r[31] = c->mem_r32(c->r[29] + 28);
+  c->r[18] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}

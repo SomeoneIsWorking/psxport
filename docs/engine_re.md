@@ -3454,3 +3454,164 @@ the codebase, not part of this band). UNWIRED: no `EngineOverrides` registration
 (diff against `generated/` one more time) before trusting this in-game, and the `ovhit` debug channel
 must show these opcodes actually firing during an SBS-full run before either is considered gated
 (free-roam autonav coverage for opcodes 31/36 specifically was NOT checked this pass).
+## Wide-RE wave 2026-07-10 — dedicated pass: `0x8005950C` band's case-0 init driver (`0x80058648`)
+## + matrix-compose loop (`0x800597AC`) DRAFTED; mode-N dispatch tables `0x80058918`/`0x80058F5C`
+## case-target map (NOT drafted — banded out, per instruction, for a future dedicated wave)
+
+Follow-up to the 2026-07-08 `0x8005950C` wave (`ActorTomba::frameTick`, WIRED+SBS-verified
+2026-07-09 — see that section above). That wave flagged 4 direct callees as "too large for the
+first pass": `0x80058648`, `0x800597AC` (both drafted THIS pass), and `0x80058918`/`0x80058F5C`
+(the two ~250-function-deep mode-N dispatch tables — explicitly OUT OF SCOPE for a single wide-RE
+pass; this pass instead enumerates their jump-table case targets so a future band can be sized
+correctly).
+
+### `0x80058648` — `ActorTomba::enterOuterState0(mode)` — DRAFTED (UNWIRED)
+
+frameTick's case-0 (INIT) handler. (Re)allocates Tomba's 17-record attach array via
+`GraphicsBind::recordArrayInit` (already-native, `0x800519E0`), resets a large block of G's
+per-frame scratch fields to fixed defaults, dispatches still-substrate `0x800682C4`/`0x80057FD4`
+plus the already-native `growthStep` (`0x80057DC0` — dispatched via `rec_dispatch` for now, not a
+direct call, to keep this pass a pure mechanical transcription), and — only when `mode==0` — an
+indirect jump-table dispatch keyed by `DAT_800BF870` (the area/game-mode selector byte) through
+ONE of two 32-entry function-pointer tables at `0x800A45B8` or `0x800C45B8` (selected by a small
+comparison cascade on the SAME byte: `==3` / `<4` / `==2` / `==7` / `==20`). This IS the "indirect
+table dispatch `PTR_DAT_800a45b8[DAT_800bf870]`" docs/engine_re.md's earlier pass flagged as
+un-drafted — this pass reproduces the SELECTION + dispatch mechanics faithfully but does NOT
+enumerate either table's 32 entries (a separate, orthogonal dedicated-pass target from the
+`0x80058918`/`0x80058F5C` case-target map below — different tables, different index bytes).
+Tail (all mode values): a `{5,6}`-vs-`G+348` gated settle-state stamp, then always tail-dispatches
+`matrixComposeAttached`.
+
+Faithful from `generated/shard_7.c:7739` (ground truth) — kept as a LITERAL register-level
+transcription (goto/label-preserving, not restructured into named C++ control flow) per
+`docs/fleet-workflow.md` §9. Concrete evidence for why: a first restructuring attempt at the
+`{5,6}`-vs-`G+348` tail (gen lines 7843-7877) inverted BOTH inner branch polarities (the
+G+320-increment gate at gen 7849, and the G+6=0-vs-4 gate at gen 7871) — caught by re-diffing
+line-by-line against the recompiled C before committing, not by any runtime test (this draft is
+unwired — no SBS coverage). Guest frame: `addiu sp,-32`; spill `s0(r16)<-a0=G, s1(r17),
+s2(r18)<-a1=mode, ra(r31)`. Callees still un-triaged/substrate: `0x800682C4`, `0x80057FD4`
+(docs' existing "lift/ride interaction handler" lead), `0x80068214`, plus every entry of the two
+32-slot indirect tables.
+
+### `0x800597AC` — `ActorTomba::matrixComposeAttached()` — DRAFTED (UNWIRED)
+
+frameTick's matrix-compose tail, called from every reachable case (0 via enterOuterState0's own
+tail-dispatch, 1/2/4/5/6 directly). Composes Tomba's own SRT (translate accumulate into
+`G+0xAC/B0/B4`≈`G+172/176/180`, rotation via `Math::rotmat`/`Math::matMul`/`Math::applyMatrixLV` —
+all already-native, `0x80085480`/`0x80084110`/`0x80084470`) from angles at a scratchpad-resident
+SVECTOR (`0x1F8000C0`, built from `G+0x54/56/58`≈`G+84/86/88`) and a position seed block at
+`0x1F800000` (`G+0xB8/BA/BC`≈`G+184/186/188`, via the already-native `NodeXform::seedBlock`,
+`0x800517BC`). When `G+0x8` (attach count) is nonzero, a per-attached-item loop over
+`G+0xC0[i*4]` — THE SAME pointer array `GraphicsBind::recordArrayInit` populates at
+`obj+0xC0+i*4` — applies each item's own local rotation (`item+0x38/3A/3C`) composed onto either
+G's own matrix (`G+152`) or an alt "attach B" matrix at `0x1F800060` (armed by a separate gate on
+`G+325/326`), then MVMVA's (`Math::applyMatlv`, `0x80084220`) and accumulates the translate into
+`item+0x2C/30/34`.
+
+Faithful from `generated/shard_5.c:8654` (ground truth) — ALSO kept as a literal register-level
+transcription (9 branch targets over one densely-conditioned loop; same §9 rationale as above).
+Guest frame: `addiu sp,-64`; spill `r16..r23` (all of s0-s7), `r30` used here as a plain
+callee-saved scratch (NOT a frame pointer — gen loads it with the base scratchpad address
+`0x1F800000`), `ra(r31)`. One local byte at `sp+16` (padded to the 64-byte frame) saves `G+0x8`
+across the function's own two mutations of it. Callees still un-triaged/substrate: `0x800851F0`
+(an angle-mangling rotmat variant — same anglesPtr as the plain rotmat call, "pan" field patched
+to a 3rd source, x/z zeroed) and `0x80084360` (called immediately after every `matMul` — likely a
+second matrix combine/copy step; NOT triaged). `0x80084250` is reached too — already drafted as an
+ORPHAN (`game/math/wide_re_gte_transform3.cpp:41`, ownership status NOT LIVE — needs its own
+wiring pass, unrelated to this one).
+
+**Verification status.** Both compile+link clean (`cmake -S . -B build2 && cmake --build build2
+--target tomba2_port`, zero errors/warnings touching `actor_tomba.cpp`). `tools/codemap.py --addr`
+confirms `0x80058648`→`ActorTomba::enterOuterState0` and `0x800597AC`→`ActorTomba::
+matrixComposeAttached` now resolve LIVE. UNWIRED: frameTick's own `rec_dispatch` call sites for
+both addresses still reach the substrate (unchanged) — wiring + the mandatory line-by-line
+re-verify against `generated/` (per fleet-workflow.md §9) is a future frontier-tier step, and per
+that same section, correctness here rests on the RE + the mechanical-transcription discipline, NOT
+on any SBS run (frameTick's own case-1/4 dispatch sites to `0x80058648`/`0x800597AC` are reached
+every frame Tomba is in outer-state 0/1/2/4/5/6, so SBS coverage should be good once wired — but
+that's a claim for the wiring session to confirm, not this one).
+
+### `0x80058918` (mode-N dispatch table A) / `0x80058F5C` (table B) — case-target MAP, NOT drafted
+
+Both explicitly OUT OF BAND for this pass (too deep — ~46-55 case targets each, cascading into
+~250 more functions per docs' earlier estimate). Both switch on a per-G mode byte at `G+0x5`
+(checked `< 60` before the table lookup; table base is computed at runtime as
+`0x80010000 + 23748 = 0x80015CC4`-style arithmetic in the recompiled C, i.e. a real `.rodata`
+function-pointer array, NOT the same table `enterOuterState0` uses). Extracted directly from the
+recompiler's own `switch(c->r[2]) { case ADDR: goto L_ADDR; ... }` reconstruction (ground truth —
+`generated/shard_1.c:9611` for A, `generated/shard_3.c:14417` for B; scratch dumps
+`scratch/re/g_80058918.c` / `scratch/re/g_80058F5C.c`, this session). Case ORDER below matches the
+switch's own declaration order (believed to match table-slot order, i.e. mode-byte value order,
+since the recompiler reconstructs the switch directly off the jump table — NOT independently
+confirmed by reading the actual `.rodata` bytes this pass).
+
+**Table A (`0x80058918`, 46 case targets)** — case target -> first callee in that case's block
+(blank = case body has no direct `func_` call, e.g. falls through to a shared tail):
+
+```
+80058998 8005A910   800589E4 8005ACC8   800589F4 8005AEE4   80058A04 8005B63C
+80058A1C 800645E0   80058A34 8005C8A0   80058A4C 8005D16C   80058A64 80064BA0,800588BC
+80058A84 80064E48   80058A9C 8005CDF8   80058AB4 8005D530   80058AC4 8005DE54
+80058AD4 8005E580   80058AE4 8005E8FC   80058AF4 8005EC70   80058B04 8005EF48
+80058B14 8005C26C   80058B7C 8005F2F0   80058B94 8005FB54   80058BC4 8005F1B0
+80058BDC 8006506C   80058BEC 80065374   80058BFC 800653F4   80058C1C 80060064
+80058C2C (none)     80058C98 80060C60   80058CF8 (none)     80058D2C 80061A7C
+80058D3C 80061C64   80058D54 (none)     80058F10 (none, DEFAULT/no-op)
+80058E98 80065A54   80058EB0 800660AC   80058EC0 (none)     80058ED0 (none)
+80058EE0 (none)     80058EF0 (none)     80058DC0 (none)     80058DFC (none)
+80058E0C (none)     80058E1C (none)     80058E50 (none)     80058E60 800620D0
+80058E70 8006228C   80058E80 800624B4   80058F08 (none)
+```
+
+**Table B (`0x80058F5C`, 55 case targets)** — same layout convention:
+
+```
+80058F9C 8005A910   80058FAC 8005ACC8   80058FBC 8005AEE4   80058FCC 8005B63C
+80058FE8 800645E0   80059000 8005C8A0   80059018 8005D16C   80059030 80064BA0
+80059048 80064E48   80059060 8005CDF8   80059070 8005D530   80059080 8005DE54
+80059090 8005E580   800590A0 8005E8FC   800590B0 8005EC70   800590C0 8005EF48
+800590D0 8005C26C   80059124 8005F2F0   8005913C 8005FB54   80059154 8005F1B0
+8005916C 8006506C   8005917C 80065374   8005918C 800653F4   800591AC 80060064
+800591BC (none)     80059210 80060C60   80059230 (none)     80059264 80061A7C
+80059274 80061C64   80059284 (none)     800593FC 800654D4   8005940C 800655DC
+8005941C 800656FC   8005942C 8006585C   8005943C 800658E4   8005944C 800655A0
+8005945C 80065A54   80059474 800660AC   80059484 80065990   800594FC (none)
+80059494 800661E0   800594BC (none)     800593DC (none)     800593EC (none)
+800594CC (none)     800594E4 (none)     80059304 (none)     80059340 (none)
+80059350 (none)     80059360 (none)     80059394 (none)     800593A4 800620D0
+800593B4 8006228C   800593C4 800624B4   800594F4 (none)
+```
+
+**Cross-table observation.** The two tables are near-total supersets of each other (table B has 9
+extra "underwater"-shaped entries around `654D4-661E0` that table A lacks; table A has one entry
+table B doesn't — `800588BC`, called alongside `80064BA0` in the same case block — table B's
+analog case (`80059030`) calls only `80064BA0`, and `80058F24` (table B's own "extra companion"
+function, not called from any case body directly but present in the shared call set both tables'
+header-preamble reads) is presumably B's structural analog of `800588BC`). Both tables share the
+same shared-preamble reads (`0x800531DC`, `0x80053D90`, `0x80054198`=`SceneTransition::
+clearSwapBlock`, already-native) confirming both dispatchers are variants of the SAME per-mode
+state-machine, consistent with the existing "normal vs underwater" hypothesis in this file's
+"Mapped-only families" section.
+
+**Ownership check** (`tools/codemap.py --addr`, this session, sampled — the tool is slow per-call
+so not every one of the ~55 distinct targets was individually re-checked, but every address
+checked, plus every one independently documented in this file's existing "Mapped-only families"
+section, is confirmed unowned): `0x800531DC`, `0x80053D90` — unowned. `0x80054198` — OWNED
+(`SceneTransition::clearSwapBlock`, already-native — called from BOTH tables' shared preamble, not
+a per-case target). `0x800588BC`, `0x80058F24`, `0x8005A910`, `0x8005ACC8`, `0x8005AEE4`,
+`0x8005B63C`, `0x8005C26C`, `0x8005C8A0`, `0x8005CDF8`, `0x8005D16C`, `0x8005D530`, `0x8005DE54`,
+`0x8005E580`, `0x8005E8FC`, `0x8005EC70`, `0x8005EF48`, `0x8005F1B0`, `0x8005F2F0`, `0x8005FB54`,
+`0x80060064`, `0x80060C60`, `0x80061A7C`, `0x80061C64`, `0x800620D0`, `0x8006228C`, `0x800624B4`,
+`0x80064BA0`, `0x80064E48`, `0x8006506C`, `0x80065374` — all confirmed unowned (`NO native owner
+found`). The remaining table-B-only targets (`654D4/655A0/655DC/656FC/6585C/658E4/65990/661E0`)
+were not individually re-checked this pass but are new addresses not appearing anywhere else in
+`docs/code-map.md`'s existing entries, so are almost certainly unowned too — a wiring/RE session
+should re-confirm before banding.
+
+**Sizing note for whoever bands this next**: table A alone reaches ~30 distinct still-substrate
+leaves directly, several of which (`8005A910/ACC8/AEE4`, `8005C8A0/CDF8/D16C`, `8005E580/E8FC/
+EC70/EF48`) are ALREADY documented as "variant A/B/C(/D) template families" in this file's
+"Mapped-only families" section — port one member of each triplet/quad, diff siblings, rather than
+independent full RE. The `60064/60C60/61A7C/61C64/620D0/6228C/624B4/6506C/65374/653F4` cluster
+(10 addresses) is NOT yet triaged anywhere in this file — a concrete next-wave target once the
+known template families are down.
