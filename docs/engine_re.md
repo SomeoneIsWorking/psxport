@@ -3088,6 +3088,27 @@ before touching this cluster again. Summary:
 - `0x800931C0` (SsSeqCalled's one-shot "prep call") was already drafted by an earlier pass as
   `input_dispatch_931c0` (game/input/input.cpp) — untouched here, still reached via `rec_dispatch`.
 
+### 2026-07-10 follow-up — the bit4/5/6/7/2 leaves DRAFTED, closing this cluster's ownership gap
+
+The 3 leaves left MAPPED-not-drafted above are now drafted: `channelPitchSlideTick` (0x80090E40,
+bit4/5), `channelEnvelopeRampTick` (0x80092080, bit6/7), `channelNoteInit` (0x80091970, bit2), plus
+3 of their own small callees (`channelVolumeSnapshot` 0x80095A9C, `channelKeyEventScan` 0x80095B90,
+`channelKeyRegisterMerge` 0x80094B50 — all true leaves, no further unowned dependencies). One callee
+stays MAPPED: 0x80095530 (a ~320-line SPU voice-register write loop `channelPitchSlideTick` calls).
+`seqChannelDispatch()`'s corresponding 4 `rec_dispatch` call-outs were swapped to direct native calls
+(the whole chain remains fully UNWIRED — no EngineOverrides/shard_set_override registration, no SBS
+run). Full field-level RE (offsets, branch-fallthrough semantics, confidence per leaf) lives in
+`game/audio/sequencer.h`'s header comment, per this file's own "the class IS the RE artifact"
+convention — read it before touching this cluster again. One correction worth flagging: the two
+branchy leaves (`channelPitchSlideTick`/`channelEnvelopeRampTick`) were transcribed register-literal
+with goto/labels named after the guest addresses rather than restructured into if/else, specifically
+because an initial semantic-shortcut attempt at `channelEnvelopeRampTick` got the rate<=0 step
+direction backwards (`cur - rate` vs the correct `cur + rate` when rate<=0) and silently dropped the
+"nonzero cpu_div remainder skips everything below, including the bit-clear tail" early-return — both
+caught by re-deriving directly from the exact `generated/shard_*.c` line numbers instead of trusting
+a prose paraphrase. Lesson for future leaves in this style: prefer literal register transcription
+over hand-simplified control flow whenever branches re-converge on shared tails.
+
 ## Band 0x8010A000-0x8010CFFF wide-RE wave (later-231, DRAFT/UNWIRED)
 
 Wide-RE fleet pass over 8 hot unowned leaves in the free-roam dispatch histogram inside this range

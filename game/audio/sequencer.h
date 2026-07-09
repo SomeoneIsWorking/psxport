@@ -70,6 +70,47 @@
 // reentrancy-guard early-exit path, since the gen prologue spills unconditionally before the
 // guard test — CLAUDE.md "mirror the guest stack" applies even to the do-nothing path).
 //
+// 2026-07-10 wide-RE wave — the 3 remaining bit4/5/6/7/2 leaves DRAFTED (follow-up closing the
+// prior wave's "MAPPED, NOT drafted" trio). Corrects nothing global; only adds methods + their
+// own small callees. Full field-level detail lives at each method's definition in sequencer.cpp
+// (kept there per this file's own "class IS the RE artifact" convention) — summary:
+//
+//   bit4/bit5 (0x800910E40) -> channelPitchSlideTick(): portamento ramp. Faithful transcription
+//     kept register-literal with goto/labels named after the guest addresses (the gen body has
+//     several re-converging branches -- L_80090FF8 is reached from two different call sites, and
+//     restructuring into if/else risks silently changing fallthrough order). Calls the newly
+//     drafted channelVolumeSnapshot() (0x80095A9C) for both its "read +88/+90" points; the SPU
+//     voice-register write (0x80095530, generated/shard_0.c:15026, ~320 lines, a KON/pan-table
+//     loop over the hardware voice-bit array) stays MAPPED/rec_dispatch — too large/deep for this
+//     pass, see docs/engine_re.md.
+//   bit6/bit7 (0x80092080) -> channelEnvelopeRampTick(): ADSR ramp. TRUE LEAF in the gen body (no
+//     `addiu sp,-N` at all) -- no stack frame to mirror. Same goto/label-literal style as the
+//     pitch-slide leaf (multiple branches re-converge on the shared "clear bit6+bit7" tail at
+//     L_80092284). No unowned callees (the gen body's trailing `func_800922A0(c)` after the real
+//     `return` is the same shard-grouping dead-tail artifact documented elsewhere in this file;
+//     not ported).
+//   bit2 (0x80091970) -> channelNoteInit(): per-channel note retrigger. Mostly linear (bit-clear
+//     housekeeping + a 16-entry breakpoint-table init loop), ported as structured C++ rather than
+//     goto/labels since there's exactly one real branch (the 16-iteration loop). Calls two newly
+//     drafted leaves: channelKeyEventScan() (0x80095B90) and channelKeyRegisterMerge()
+//     (0x80094B50, called via channelKeyEventScan, not directly).
+//
+//   New small callees drafted this wave (all true leaves, no stack frame):
+//     channelVolumeSnapshot() (0x80095A9C) — HIGH confidence: reads a channel's +88/+90 u16 pair
+//       into two caller-given guest addresses; also has a genuine (if likely inert) side-effect
+//       write of the combined seq|chan<<8 arg to a scratch global (0x80105D0C) that the gen body
+//       itself never reads back (the reload 3 lines later is dead — an unreachable duplicate tail,
+//       same shard artifact pattern, not ported).
+//     channelKeyEventScan() (0x80095B90) — LOW-MEDIUM confidence: role NOT independently confirmed
+//       (inherited uncertainty from the prior wave's note). Scans the 0x800AC3F4 hardware-voice
+//       bitmask (32779u<<16-15372) against a per-voice pitch table at 0x801054D8 (stride 8) for a
+//       match, and on hit stamps a scratch u16 at 0x80105D10 then calls channelKeyRegisterMerge().
+//       Control-flow transcription is exact; the SEMANTIC read ("what does a matching voice mean")
+//       is inferred from the neighboring SPU-register cluster, not confirmed against a live dump.
+//     channelKeyRegisterMerge() (0x80094B50) — MEDIUM confidence: builds a KON/KOFF-shaped 16-bit
+//       register pair (OR-then-AND-mask idiom typical of SPU key-on/key-off command words) from the
+//       scratch value channelKeyEventScan() just stamped; self-contained, no calls, no branches.
+//
 // WIDE-RE DRAFT, ALL METHODS UNWIRED: no EngineOverrides registration, no SBS run. Compiles only.
 #pragma once
 #include <cstdint>
@@ -93,4 +134,12 @@ public:
   void channelPitchSelectDispatch();  // 0x800910F0 — HIGH confidence, thin wrapper
   void channelReleaseClear();         // 0x80091050 — HIGH confidence
   void channelStopFlagSet();          // 0x80091910 — HIGH confidence, true leaf
+
+  // --- 2026-07-10 wave: the remaining bit4/5/6/7/2 leaves + their own small callees ---
+  void channelPitchSlideTick();       // 0x80090E40 — MEDIUM confidence, portamento ramp (bit4/5)
+  void channelEnvelopeRampTick();     // 0x80092080 — MEDIUM confidence, ADSR ramp (bit6/7), true leaf
+  void channelNoteInit();             // 0x80091970 — MEDIUM confidence, note retrigger (bit2)
+  void channelVolumeSnapshot();       // 0x80095A9C — HIGH confidence, true leaf
+  void channelKeyEventScan();         // 0x80095B90 — LOW-MEDIUM confidence, true-leaf-ish (1 call)
+  void channelKeyRegisterMerge();     // 0x80094B50 — MEDIUM confidence, true leaf
 };

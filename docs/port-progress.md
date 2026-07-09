@@ -2607,3 +2607,22 @@ themselves are LIVE but dispatch out to substrate for every case body.
   cross-check pass, not a from-scratch manual MIPS transcription. Full field-level RE in
   docs/engine_re.md "Wide-RE pass 2026-07-10 — scheduler sleep-countdown + 4 ScriptInterp opcode
   handlers".
+
+- **SsSeqCalled cluster, remaining bit4/5/6/7/2 leaves (wide-RE agent, 2026-07-10, UNWIRED).** Closes
+  the prior wave's "MAPPED, NOT drafted" trio: `channelPitchSlideTick` (0x80090E40, bit4/5,
+  portamento ramp — MEDIUM confidence, register-literal goto/label transcription per multiple
+  re-converging branches), `channelEnvelopeRampTick` (0x80092080, bit6/7, ADSR ramp — MEDIUM
+  confidence, true leaf/no stack frame, same goto/label style), `channelNoteInit` (0x80091970, bit2,
+  note retrigger — MEDIUM confidence, mostly linear, structured C++). Also drafted their own small
+  callees: `channelVolumeSnapshot` (0x80095A9C, HIGH confidence, true leaf), `channelKeyEventScan`
+  (0x80095B90, LOW-MEDIUM confidence — role of the hw-voice-bitmask scan not independently confirmed,
+  inherited from the prior wave's note; control flow exact), `channelKeyRegisterMerge` (0x80094B50,
+  MEDIUM confidence, true leaf, builds a KON-style register pair). `seqChannelDispatch()`'s 4
+  remaining `rec_dispatch` call-outs for these addresses swapped to direct native calls (still fully
+  UNWIRED overall — nothing in this chain is registered anywhere). One callee left MAPPED, not
+  drafted: 0x80095530 (the SPU voice-register write leaf `channelPitchSlideTick` calls — ~320 lines,
+  a KON/pan-table write loop, too large for this pass). All new code in `game/audio/sequencer.cpp`
+  (extends the existing class); full `tomba2_port` build+link verified clean. Full field-level RE +
+  the corrected offset math (several of this wave's clamp masks required re-deriving from the exact
+  gen decimal immediates rather than trusting the prior wave's prose summary) in sequencer.h's header
+  comment and docs/engine_re.md.
