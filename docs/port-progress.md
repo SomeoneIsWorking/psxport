@@ -2492,3 +2492,29 @@ themselves are LIVE but dispatch out to substrate for every case body.
   `spu.c` was missing `SPU_PokeRAM` (declared in spu_state.h, used by verify_harness.cpp) — added
   the symmetric write-back next to the existing `SPU_PeekRAM`; this had been failing EVERY fresh
   checkout's link, unrelated to this band.
+- **libgpu "GPU sys" jump-table cluster, 0x80080000-0x80085000 band (wide-RE agent, 2026-07-09,
+  UNWIRED).** Task band was the top-12 free-roam-dispatch-count unowned leaves in this range
+  (0x80081218 dropped — already owned by Asset::uploadImage). Identified the WHOLE band as libgpu's
+  GPU-sys jump table + OT-DMA-send status block (guest 0x800A5998 table, 0x800A5A80-ish status
+  region shared with the already-owned `gpu_timeout_arm`/`gpu_timeout_chk`, runtime/recomp/
+  sync_overrides.cpp) — cross-confirms and extends the per-frame-loop RE already in docs/engine_re.md.
+  6 DRAFTED (compile-only, unwired, unverified, no SBS run): `func_80080F6C`=DrawSync,
+  `func_80081458`=ClearOTagR, `func_80082C68`=GPU-DMA status-block reset, `func_80083DE0`=draw-mode/
+  texwin packet-header builder, `func_800847B0`=vertex-header repack (LOW confidence on semantic
+  role), `func_80084250`=GTE 3-vertex rotate-and-pack (sits right after the owned Math cluster in
+  gte_math.cpp — MEDIUM confidence, register-flow exact, source-struct field roles inferred). New
+  files `game/render/wide_re_libgpu_leaves.cpp`, `game/math/wide_re_gte_transform3.cpp`, added to
+  `cmake/tomba2_port.cmake`; both compile clean with zero warnings (final `tomba2_port` link is
+  currently blocked by an UNRELATED pre-existing gap — `SPU_PokeRAM` has no definition anywhere in
+  the tree, reproduced identically on baseline `main` with these two files removed — not caused by
+  this session's changes, out of this band's scope to fix).
+  5 MAPPED-ONLY (too large/uncertain to draft with confidence): **0x800815D0 = PutDrawEnv**
+  (CONFIRMED identity, already the doc's own "next widescreen lever" target — calls `func_80081FB0`
+  + 5 more unowned leaves, needs those RE'd first) and the **0x80082D04 GPU-DMA completion-callback
+  queue cluster** (0x80082D04 itself is the single HIGHEST dispatch-count target in the band at 824
+  hits/frame — 0x80082FB4/0x80083364/0x80082424/0x80082734, a 64-slot mutually-recursive ring buffer
+  at 0x80100C30, gated by the same timeout status block). Full field-level RE + confidence notes in
+  docs/engine_re.md "Wide-RE wave: libgpu GPU sys jump-table cluster". Recommended next: RE the
+  0x80082D04 queue cluster properly (highest dispatch count in the band by far) before drafting it —
+  getting an interrupt-callback-queue's field semantics wrong is the exact failure mode
+  fleet-workflow.md §9 warns about.

@@ -223,6 +223,8 @@ set(PORT_SRC
   game/camera/cutscene_camera.cpp
   game/camera/cutscene_camera_selftest.cpp
   game/math/gte_math.cpp
+  game/math/wide_re_gte_transform3.cpp
+  game/render/wide_re_libgpu_leaves.cpp
   game/render/native_terrain.cpp
   game/render/render_queue.cpp
   game/render/screen_fade.cpp

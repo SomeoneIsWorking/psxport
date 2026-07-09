@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 560 native fns, 471 owned addresses, 533 LIVE / 27 ORPHAN.
+Totals: 566 native fns, 477 owned addresses, 538 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -65,12 +65,12 @@ Totals: 560 native fns, 471 owned addresses, 533 LIVE / 27 ORPHAN.
 | 0x8003B054 | LIVE | `QuadRtptSubmit::rotateQuadCorners` | game/render/quad_rtpt_submit.cpp:39 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8003B220 | ORPHAN | `hitbox_build_3b220` | game/player/hitbox.cpp:51 |  | Pure native body. Mirrors the recomp's exact in-memory load/store orde… |
 | 0x8003B320 | LIVE | `QuadRtptSubmit::submitQuad` | game/render/quad_rtpt_submit.cpp:126 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:245 |  |  |
-| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:280 |  |  |
-| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:316 |  | ======================================================================… |
+| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:257 |  |  |
+| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:292 |  |  |
+| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:328 |  | ======================================================================… |
 | 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:155 |  | ======================================================================… |
-| 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:84 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
-| 0x8003F698 | LIVE | `Render::perModeDispatch` | game/render/perobj_dispatch.cpp:188 |  | per-mode render dispatcher: routes to the area's per-mode renderer (mo… |
+| 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:127 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
+| 0x8003F698 | LIVE | `Render::perModeDispatch` | game/render/perobj_dispatch.cpp:242 |  | per-mode render dispatcher: routes to the area's per-mode renderer (mo… |
 | 0x8003FA44 | LIVE | `Render::frameX` | game/render/render_frame.cpp:65 |  | mid-transition render orchestrator twin (reduced pass set). Same rule:… |
 | 0x8003FD10 | ORPHAN | `osc_fd10` | game/world/entity.cpp:323 |  | per-object OSCILLATE / FRAME-TOGGLE sub-behavior (one of sm40558 STATE… |
 | 0x80040410 | ORPHAN | `child_spawn_40410` | game/world/entity.cpp:45 |  | per-object CHILD-NODE SPAWN / sub-object builder (a callee of the per-… |
@@ -333,16 +333,22 @@ Totals: 560 native fns, 471 owned addresses, 533 LIVE / 27 ORPHAN.
 | 0x8007E9C8 | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x8007E9C8 | LIVE | `ScreenFade::fadetrace` | game/render/screen_fade.cpp:16 |  | `debug fadetrace` channel — logs every native-path fade call with the … |
 | 0x8007E9C8 | LIVE | `BgSceneTransitionSm::fadeRect` | game/scene/bg_scene_transition_sm.cpp:51 |  | Screen fade — same shape as the guest's FUN_8007e9c8(color, P[3], 4) l… |
+| 0x80080F6C | LIVE | `func_80080F6C` | game/render/wide_re_libgpu_leaves.cpp:75 |  | func_80080F6C (0x80080F6C) — DrawSync(mode). DRAFT. RE'd from generate… |
 | 0x80081218 | LIVE | `Asset::uploadImage` | game/core/asset.cpp:246 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
+| 0x80081458 | LIVE | `func_80081458` | game/render/wide_re_libgpu_leaves.cpp:109 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). DRAFT. RE'd from… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
+| 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:153 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
 | 0x800834A0 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x800834D4 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
+| 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:188 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |
 | 0x80083E80 | LIVE | `Trig::rsin` | game/math/trig.cpp:4 |  |  |
 | 0x80083F50 | LIVE | `Trig::rcos` | game/math/trig.cpp:69 |  |  |
 | 0x80084110 | LIVE | `Math::matMul` | game/math/gte_math.cpp:117 |  |  |
 | 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:300 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x80084250 | ORPHAN | `func_80084250` | game/math/wide_re_gte_transform3.cpp:41 |  |  |
 | 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:164 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x800847B0 | LIVE | `func_800847B0` | game/render/wide_re_libgpu_leaves.cpp:235 |  | func_800847B0 (0x800847B0) — 20-byte SoA->AoS vertex-header REPACK. DR… |
 | 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:291 |  |  |
 | 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:290 |  |  |
 | 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:289 |  |  |

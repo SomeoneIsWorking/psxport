@@ -2857,3 +2857,64 @@ via `tools/codemap.py --addr`. This region sits right at the psyq libc/libsnd bl
 `VerifyHarness::skipCheck`. A fresh checkout fails to LINK `tomba2_port` at all regardless of any
 wide-RE change. Fixed minimally (symmetric `memcpy(SPURAM, src, sizeof(SPURAM))`) in the committed
 fork per workflow-first — this blocked every build in this session, not just this band.
+## Wide-RE wave: libgpu "GPU sys" jump-table cluster, 0x80080000-0x80085000 band (2026-07-09)
+
+Band from the task brief's dispatch-count list: 0x80082D04(824) 0x80083364(629) 0x80082C68 0x80082424
+0x800815D0 0x80081458 0x80080F6C(627 each) 0x800847B0 0x80084250(566 each) 0x80083DE0(506) 0x80082734(196)
+0x80081218(194, ALREADY OWNED — Asset::uploadImage / GpuState::gpu_native_load_vram, dropped from band).
+
+**Key finding: this whole band is the libgpu "GPU sys" subsystem already partially documented above**
+("Graphics pipeline — the REAL draw path (libgpu)"). Confirmed this session:
+- The fn-ptr jump table at guest **0x800A5998** (`32778u<<16 + 22936`) — table+0x2C=ClearOTagR
+  (0x80081458), table+0x3C=DrawSync (0x80080F6C) — matches the doc's per-frame-loop RE exactly (both
+  addresses and both table offsets independently re-derived from the gen-C body, then cross-checked
+  against the existing doc — full agreement).
+- The GPU-DMA-completion **TIMEOUT arm/check** pair already native-owned in `runtime/recomp/
+  sync_overrides.cpp` (`gpu_timeout_arm`/`gpu_timeout_chk`, guest 0x800834A0/0x800834D4) write fields
+  at **0x800A5ADC/0x800A5AE0** — i.e. `(32778u<<16) + 23260/23264`, the SAME base as the jump table.
+  This CONFIRMS the whole `0x800A5A80-0x800A5B20`-ish region is one libgpu OT-DMA-send status block,
+  and ties the unexplored queue cluster below directly to that already-owned timeout pair.
+- **DRAFTED this session** (game/render/wide_re_libgpu_leaves.cpp, game/math/wide_re_gte_transform3.cpp
+  — wide-RE tier, UNWIRED/UNVERIFIED, see file headers for full field-level RE):
+  - `func_80080F6C` = **DrawSync(mode)**. Boot-flag-gated one-time init hook, then table[+0x3C].
+  - `func_80081458` = **ClearOTagR(OT, entries)**. Same init-hook pattern, then table[+0x2C], then
+    links `*OT` to a shared fixed "dummy tail packet" built at 0x800A5B20 — the classic ClearOTagR
+    internal (every OT build shares one small terminator/padding structure). NOTE: the gen-C emission
+    for this address contains a SECOND, unreachable prologue/epilogue pair after the real `return` — a
+    recompiler shard-grouping artifact (adjacent guest code with no clean symbol boundary), NOT ported.
+  - `func_80082C68` = GPU-DMA status-block RESET (writes the flags/arg0/arg1/state pointer targets the
+    queue cluster below tests every call). Self-contained, no calls, no branches.
+  - `func_80083DE0` = libgpu draw-mode / texture-window packet-HEADER builder (raw GP0 command words
+    matching DR_TPAGE 0xE1 / DR_TWIN 0xE2 top-byte tags). LOW-MEDIUM confidence on exact SCEI name;
+    register-flow transcription is exact (verified twice against the gen body after an initial
+    transcription error — see git history — mixed up which register fed which output field).
+  - `func_800847B0` = 20-byte SoA→AoS vertex-header repack (self-contained, no calls/branches). No
+    confirmed caller found in generated/shard_*.c (reached only via rec_dispatch, consistent with its
+    free-roam dispatch count); LOW confidence on semantic role, but the same "two halfwords packed
+    into one word" idiom the GT3/GT4 packet builders use (game/render/overlay_gt3gt4.cpp,
+    overlay_ground_gt3gt4.cpp) — plausibly a shared vertex/UV-pair repacker for that family.
+  - `func_80084250` = GTE 3-vertex rotate-and-pack (3x RTPS via gte_op 0x4A486012, matrix loaded from
+    CR0-4). Reads its OWN 5-word input buffer as a rotation matrix and OVERWRITES it in place with the
+    3 vertices' packed IR1/2/3 results — same address family as the owned Math cluster (matMul=
+    0x80084110, applyMatlv=0x80084220, applyMatrixLV=0x80084470). MEDIUM confidence: register-level
+    port is exact; the source vertex-array field layout (X0/X1/X2/Y0/Y1/Y2/VZ0/Z1/VZ2, SoA-packed into
+    5 words) is INFERRED from operand width/shift patterns, never confirmed against a live dump.
+
+- **MAPPED but NOT drafted this session** (too large / too deep a callee chain to transcribe with
+  confidence in one pass — see game/render/wide_re_libgpu_leaves.cpp's file header for the full note):
+  - `0x800815D0` = **PutDrawEnv** (CONFIRMED identity, already named in the per-frame-loop doc above).
+    Calls `func_80081FB0` (a 40-line struct-pack helper) which itself calls 5 more unowned leaves
+    (0x80082240, 0x800822D8, 0x80082370, 0x80082220, 0x8008238C) — needs those RE'd first. HIGH VALUE:
+    the existing doc's own "Next" note says PutDrawEnv is the literal next widescreen-lever target.
+  - `0x80082D04` (824 dispatch hits — the single highest-value target in the whole band), `0x80082FB4`,
+    `0x80083364`, `0x80082424`, `0x80082734` — a mutually-recursive GPU-DMA **completion-callback
+    queue**: a 64-slot ring buffer at guest `0x80100C30` (stride 0x60 = 96 B, holding {fnPtr, arg1,
+    arg2} triples), head/tail counters mod 64 at `0x800A5A88`/`0x800A5A8C`, gated by the SAME status
+    block `gpu_timeout_arm`/`gpu_timeout_chk` already own (bit tests on 0x800A5AA8's target and a
+    busy-wait on bit 0x10000000 before draining). Callers install a callback fn-ptr + 2 args into the
+    next free slot; the drain loop `rec_dispatch`s each queued fn-ptr in order. Almost certainly the
+    ASYNC half of DrawOTag's OT-DMA-kick (the GPU-DMA-done interrupt would normally fire these; here
+    it's polled). Recommended follow-up: RE with the actual PSX SDK docs/symbol names if available
+    (this is textbook "GPU interrupt callback queue" shape) before drafting — getting the field
+    semantics wrong here risks the "9 bugs in one function" failure mode fleet-workflow.md §9 warns
+    about, given the 380+ gen-C lines and 5-way mutual recursion.
