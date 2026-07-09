@@ -132,6 +132,39 @@ struct GuestFrame {
   ~GuestFrame() { c->r[29] += size; }
 };
 
+// FUN_8003CCA4's REAL prologue (register-faithfulness, f118 root cause, 2026-07-09): unlike the
+// call sites above where GuestFrame's bare sp-adjust is enough (their bodies spill live-injected
+// values inline themselves), gen_func_8003CCA4 (generated/shard_5.c) actually SPILLS its caller's
+// live r16/r17/r18/r31 to guest memory at entry (mem_w32 sp+16/20/24/28) and restores them at every
+// exit (L_8003CDC0) — a plain MIPS callee-save prologue/epilogue, not a value injection. The bare
+// GuestFrame(c,32) this call site used only adjusted c->r[29] and never wrote those 4 words, leaving
+// WHATEVER STALE bytes were already sitting in that guest-stack region (leftover from an unrelated
+// earlier writer) instead of the caller's real r16/r17/r18/r31 — the exact SBS diff at
+// 0x801FE8B8../0x801FE8E8.. (task-0 stack, several frames into this call chain) that unmasked once
+// the f62 register-faithfulness gap (cmdListDispatch's r16=loop-index/r17=SCR, see
+// perobj_dispatch.cpp) was fixed and the SBS gate advanced past it. r18 is reassigned to `node`
+// immediately after the spill (matching gen's `r18 = r4` right after `mem_w32(sp+24,r18)`); r16/r17
+// are pure save/restore (this function's own body never sets them — case 0x8003CD00, the only case
+// seaside objects hit, doesn't either, per gen).
+struct CCA4Frame {
+  Core* c; uint32_t s16, s17, s18, sra;
+  explicit CCA4Frame(Core* c_)
+    : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]), sra(c_->r[31]) {
+    c->r[29] -= 32;
+    c->mem_w32(c->r[29] + 24, s18);
+    c->mem_w32(c->r[29] + 28, sra);
+    c->mem_w32(c->r[29] + 20, s17);
+    c->mem_w32(c->r[29] + 16, s16);
+  }
+  ~CCA4Frame() {
+    c->r[31] = c->mem_r32(c->r[29] + 28);
+    c->r[18] = c->mem_r32(c->r[29] + 24);
+    c->r[17] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 32;
+  }
+};
+
 // Guest-transparent depth-tag wrap (RenderObserver's obs_body, folded in): PSXPORT_ORACLE runs pure,
 // everyone else opens a nested PktSpanSession and tags the packet span this call emits with the
 // object's PC-native world depth.
@@ -156,7 +189,7 @@ void Render::perObjRenderDispatch() {
   Core* c = mCore;
   const uint32_t node = c->r[4];
   withDepthTag(c, node, [](Core* c) {
-    GuestFrame frame(c, 32);
+    CCA4Frame frame(c);
     const uint32_t node = c->r[4];
     c->mem_w32(CUR_NODE_SCR, node);
     const uint32_t sel = c->mem_r8(node + 13) & 11u;

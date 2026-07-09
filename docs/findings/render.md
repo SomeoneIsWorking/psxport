@@ -73,31 +73,68 @@
      to match gen exactly.
   - **verified**: SBS-full autonav no longer diverges at f118 (confirmed clean through the frame range
     that previously failed there).
-  - **NEW finding — f62 divergence (OPEN, not yet root-caused)**: fixing the oracle-purity leak (bug 2
-    above) unmasked a genuinely EARLIER, previously-hidden divergence at f62, persistent frame-over-
-    frame at `0x801FE870..0x801FE878` (task-0 stack). last-writer now shows BOTH cores at the IDENTICAL
-    pc/ra/sp (`pc=800803DC ra=8003F790 sp=801FE860`) — i.e. the CALL CHAIN is now faithfully aligned
-    (my bug-1/bug-2 fixes hold), but the still-substrate `func_800803DC` (the generic GT3/GT4 packet
-    emitter, reached via `perModeDispatch`'s fallback path) produces DIFFERENT bytes from IDENTICAL
-    code running on both cores — meaning its INPUTS (args or GTE/scratchpad state set up by
-    `cmdListDispatch` before the call) differ between A and B. Re-audited `Render::cmdListDispatch`'s
-    entire GTE-compose sequence (MVMVA rotation columns, world-position translate, CR0-7 reload,
-    otbase select, geomblk/otbase/flag arg computation) instruction-by-instruction against
-    `gen_func_8003CDD8` — every step matches exactly; did NOT find the discrepancy there. Likely
-    candidates for a future session: camera scratchpad state (`CAM_ROT`/`CAM_TRANS`,
-    0x1F8000F8/0x1F80010C) populated by an EARLIER, upstream writer that itself diverges before this
-    call; or `func_8007FDB0`/`func_8008007C` (still-substrate leaves `func_800803DC` calls) reading
-    GTE state cmdListDispatch's compose left behind. This f118 fix was never a fake-green: the SBS gate
-    genuinely regressed EARLIER (f118 -> f62) as a DIRECT, expected consequence of closing the oracle
-    leak — the f62 bug was always there, just hidden behind cascading corruption that started even
-    earlier once B stopped being pure. Do NOT re-mask this by reverting the oracle-purity fix.
+  - **f62 divergence — RESOLVED (2026-07-10)**: root cause was a THIRD register-faithfulness gap in the
+    SAME family as bug 1 above, one level deeper. `gen_func_8003CDD8`'s loop keeps `r16..r23` LIVE as
+    loop-invariant/loop-index scratch for its **entire** loop body — `r16=i` (the loop counter,
+    incremented post-call at `L_8003D07C`), `r17=r23=SCR` (scratchpad base `0x1F800000`), `r18=node`,
+    `r19=SCR+0xD0`, `r20=OTBASE_PTR` (`0x800ED8C8`), `r21=WORLD_POS` (`SCR+0xC0`), `r22=flag` — verified
+    line-by-line against `generated/shard_6.c` (lines ~5119-5285). These survive the nested
+    `func_8003F698`/`func_800803DC` call chain via plain MIPS callee-save (gen never explicitly reloads
+    them before each per-iteration call — they're just left live in the register file). The still-
+    substrate `func_800803DC` (unowned generic GT3/GT4 emitter, shared code on both cores) SPILLS the
+    incoming `r16`/`r17` to its own guest-stack frame (`sp+16`/`sp+20`) before reusing them as locals,
+    then restores them on return — i.e. their CALLER value is genuine guest-stack-visible state, not
+    dead scratch. Native `Render::cmdListDispatch` used C++ locals for `i`/`node`/`flag` and never wrote
+    `c->r[16..23]`, so `func_800803DC`'s prologue was spilling STALE leftover register content instead
+    of gen's real loop state — exactly the observed diff (`A=0x800FB858/0x800FB960` stale garbage vs
+    `B=0x00000010/0x1F800000` = real loop-index/SCR values). Fix: `Render::cmdListDispatch` now sets
+    `c->r[16..23]` to gen's live values immediately before every `perModeDispatch()` call (not just
+    `r16`/`r17` — the mode-table path can reach OTHER still-substrate per-mode renderers that may
+    equally depend on this callee-save state). **Verified**: the specific `0x801FE870..0x801FE878`
+    diff is gone from the SBS-full gate; the GTE-compose audit from the previous session (which found
+    no discrepancy) was correct — the bug was never in the compose math, only in this uninitialized-
+    register spill.
+  - **f118 divergence — PARTIALLY RESOLVED, residual OPEN (2026-07-10)**: fixing f62 advanced the SBS
+    gate from ~156k div lines/run to ~85k and moved the frontier back to the (previously masked) f118
+    stack region. Root cause (part 1, FIXED): `Render::perObjRenderDispatch` (`FUN_8003CCA4`) used the
+    bare `GuestFrame` RAII (sp-adjust only, no register spill) for its `-32` frame, but
+    `gen_func_8003CCA4`'s real prologue spills the caller's live `r16/r17/r18/r31` to guest memory at
+    entry (`sp+16/20/24/28`) and restores them at every exit (`L_8003CDC0`) — a plain MIPS callee-save
+    prologue the bare RAII never reproduced, leaving stale bytes at `0x801FE8D0..0x801FE8F6`-class
+    addresses (this function's own ra/r18 spill slots) instead of the caller's real values. Fixed with a
+    dedicated `CCA4Frame` struct (mirrors `CmdListFrame`'s save/spill/restore idiom) in
+    `game/render/perobj_billboard.cpp`, wired into `perObjRenderDispatch`. **Verified**: the
+    `0x801FE8E8..0x801FE8F6` (r18/ra) divergence is gone.
+  - **f118 residual (OPEN)**: after the CCA4Frame fix, TWO ranges still diverge every frame from f118
+    onward: `0x801FE8B8..0x801FE8BC` (4B) and `0x801FE900..0x801FE902` (2B). `PSXPORT_SBS_PREWATCH`
+    traced the LAST WRITER of `0x801FE8B8` to `Render::cmdListDispatch`'s OWN `r16`/`r17` prologue spill
+    (matching `gen_func_8003CDD8`+0x18 on core B, both cores at identical pc) — i.e. this is a DEEPER
+    occurrence of the SAME callee-save-chain issue f62 was, one call-frame further out: `cmdListDispatch`
+    is entered (via `CCA4`'s case `0x8003CD00`, which per gen does NOT touch r16/r17 before the call)
+    with whatever `r16`/`r17` `CCA4`'s caller (`gen_func_8003C048`, the render-WALK loop, still fully
+    UNOWNED/shared substrate) had at that point. `gen_func_8003C048` runs byte-identical code on both
+    cores, so its own r16/r17 should match — UNLESS an EARLIER native call for a PRECEDING node in the
+    SAME walk iteration failed to restore r16/r17 to gen's real value. Audited the other three owned
+    leaves in this cluster (`billboardCompose1`/`billboardCompose2`/`billboardEmit`) — all three already
+    do correct inline spill/restore of their real gen-prologue register sets (confirmed against
+    `generated/shard_0.c`/`shard_1.c`/`shard_4.c`); did not find a fourth leak there in the time
+    available. Root-causing this residual requires either (a) RE-ing enough of `gen_func_8003C048`
+    (`renderWalk`) to confirm what it expects r16-r23 to hold across its OTHER dispatch cases (not just
+    the CD00/billboard ones already owned), or (b) walking the object list at f118 with per-node
+    PREWATCH to find which node's call leaves r16/r17 wrong for the NEXT node. Left OPEN — do not
+    speculative-patch `cmdListDispatch` again without finding the actual upstream writer; the fix
+    pattern (explicit register-faithfulness injection) is proven, just needs the right call site.
 - **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
   `game/render/{perobj_billboard,perobj_dispatch,overlay_ground_gt3gt4}.cpp`;
   `runtime/recomp/engine_override_thunk.cpp`; oracles `generated/shard_5.c gen_func_8003CCA4`,
   `generated/shard_6.c gen_func_8003CDD8`, `generated/shard_4.c gen_func_8003F698,
   gen_func_8003C8F4`, `generated/shard_0.c gen_func_8003C2D4`, `generated/shard_7.c
   gen_func_800803DC`, `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88,ov_a00_gen_80146478`,
-  `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`.
+  `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`. f62/f118-residual: `generated/shard_5.c
+  gen_func_8003CCA4`, `generated/shard_6.c gen_func_8003CDD8` (loop-invariant r16-r23), `game/render/
+  perobj_dispatch.cpp` (`Render::cmdListDispatch`), `game/render/perobj_billboard.cpp` (`CCA4Frame`).
+  Repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x801FE8B8
+  PSXPORT_SBS_WW_ONVALUEDIVERGE=1`.
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 

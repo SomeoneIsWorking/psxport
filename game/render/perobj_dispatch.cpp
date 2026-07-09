@@ -198,6 +198,29 @@ void Render::cmdListDispatch() {
       otbase = otbase_val + ((uint32_t)(int32_t)c->mem_r8s(cmd + 0x3Fu) << 2);
 
     c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;
+    // Register-faithfulness (f62 residual root cause, 2026-07-09): gen_func_8003CDD8 keeps r16..r23
+    // LIVE as loop-invariant/loop-index scratch for its ENTIRE loop body (r16=i the loop counter,
+    // r17=r23=SCR scratchpad base 0x1F800000, r18=node, r19=SCR+0xD0, r20=OTBASE_PTR, r21=WORLD_POS,
+    // r22=flag — verified against generated/shard_6.c gen_func_8003CDD8 lines 5119-5285). These
+    // survive the nested func_8003F698/func_800803DC call chain via plain MIPS callee-save (never
+    // explicitly reloaded before each per-iteration call). The still-substrate `func_800803DC`
+    // (unowned generic GT3/GT4 emitter) SPILLS the incoming r16/r17 to its own guest stack frame
+    // (sp+16/sp+20) before reusing them as locals, then restores them on return — i.e. r16/r17's
+    // CALLER value is genuine guest-stack-visible state, not dead scratch. Native cmdListDispatch used
+    // C++ locals for `i`/`node`/`flag` and never wrote c->r[16..23], so func_800803DC's prologue was
+    // spilling STALE leftover register content instead of gen's real loop state — the exact SBS diff
+    // at 0x801FE870..0x801FE878 (verified: gen's r16=i, r17=SCR match the two divergent words byte-
+    // for-byte). Set the full live set here (not just r16/r17) since perModeDispatch's mode-table path
+    // can reach OTHER still-substrate per-mode renderers that may equally depend on this callee-save
+    // state.
+    c->r[16] = (uint32_t)i;
+    c->r[17] = SCR;
+    c->r[18] = node;
+    c->r[19] = SCR + 0xD0u;
+    c->r[20] = OTBASE_PTR;
+    c->r[21] = WORLD_POS;
+    c->r[22] = flag;
+    c->r[23] = SCR;
     c->r[31] = 0x8003D07Cu;   // RE'd return-address constant (gen_func_8003CDD8, right before func_8003F698)
     perModeDispatch();
     } // if (geomblk != 0)
