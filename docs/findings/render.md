@@ -299,6 +299,81 @@
       worth trying first: dump `RENDER_LIST_HEAD`'s (`0x800F2624`) linked-list LENGTH on both cores at
       f118 (before any node body runs) — if the lengths already differ, the bug is upstream of this
       whole render band (object spawn/despawn), not in it.
+  - **"39-record packet-pool shortfall" — RETRACTED, IT WAS NEVER A REAL DIVERGENCE (2026-07-10,
+    convergence-agent).** Followed the next-session repro exactly (`PSXPORT_SBS_PREWATCH=0x800BF544
+    PSXPORT_SBS_WW_ONVALUEDIVERGE=1`, reproduced f118 A_calls=109/B_calls=148/delta=-39 identically
+    to the prior session) and then went one level deeper than any previous session: dumped the render
+    node LIST at the f118 boundary on both cores (25 nodes, byte-identical membership+active-flags on
+    both, only ONE active node idx=0), that node's `cmdListDispatch` fields (count/cap/geomblk/header
+    word — ALL byte-identical), the `SCENE_ENT_TABLE` ground-entity list `entityLoop` consumes
+    (`count=71`, the full 71-entry idx/counts array — BYTE-IDENTICAL, not just same-length), the camera
+    GTE control block AND the GTE projection constants (OFX/OFY/H/DQA/DQB/ZSF3/ZSF4, read via a
+    temporary `gte_bind()`-rebind probe) at that exact point — ALL identical. Then instrumented
+    (temporarily, removed before commit) per-function cumulative ACCEPTED-record counters in all 4
+    GT3/GT4 emitters (ground gt3/gt4, field gt3/gt4) on both native (core A) and gen (core B): accepted
+    counts matched EXACTLY (ground-gt3 17=17, ground-gt4 46=46, field-gt3/gt4 0=0 both). The actual
+    `PKT_POOL_PTR` (`0x800BF544`) BYTE VALUE at frame end was ALSO already known-identical from the
+    original repro output (`endA=0x00000090 endB=0x00000090`) — a fact every prior session had in hand
+    but not connected to what it implies: **if the accepted-record counts match AND the final pointer
+    value matches, there is no missing/extra packet — the "39-record shortfall" framing was wrong from
+    its first appearance.**
+    Root cause of the FALSE SIGNAL: `PSXPORT_SBS_WW_ONVALUEDIVERGE`'s "RNG advance-count" check
+    (`Sbs::Impl::run`, the `mWwCountA`/`mWwCountB` comparison) counts raw STORE EVENTS to the armed
+    address via `storeCb`, not distinct VALUES or accepted records. `gen_func_8013FB88`/
+    `gen_func_8013FE58` (the GROUND-pair GT3/GT4 emitters — NOT the field pair, which correctly skips
+    the write) have an exit shape where the `count==0` early-out (`generated/ov_a00_shard_0.c` L23955:
+    `if (r2==r0) goto L_8013FE44`) jumps to the SAME label the loop's natural end falls through to
+    (L_8013FE44, `generated/ov_a00_shard_0.c` L24092-24096), which UNCONDITIONALLY re-stores
+    `PKT_POOL_PTR` with the value it read at entry — i.e. a real MIPS instruction the original PSX
+    binary executes even when there's nothing to do, writing back the SAME value (a harmless artifact
+    of how the ORIGINAL game's C compiled this function's control flow, faithfully transcribed by the
+    recompiler — not a recompiler bug). Native's `OverlayGroundGt3Gt4::gt3`/`gt4`
+    (`game/render/overlay_ground_gt3gt4.cpp`) instead has a clean early `return` for `count==0` (RE'd
+    correctly against the same source — the field pair's early-return, by contrast, DOES skip the
+    write in gen too, matching native) and so never issues that self-store. Counting the ground table's
+    71 ground-entities dump from this session: exactly 31 entries have `gt3count==0` and 8 have
+    `gt4count==0` → 31+8=**39** — the EXACT delta. Confirmed mechanically, not by coincidence.
+    **Disposition: NOT a bug, NOT fixed, NOT fixable-and-shouldn't-be** — adding a pointless
+    write-back-same-value self-store to native purely to satisfy this counter would be CLAUDE.md's
+    banned "REBUILD, don't transcribe... match the observable RESULT... not the PSX mechanism"
+    anti-pattern; the guest-observable RAM content is byte-identical either way. The `sbs-div` BYTE-LEVEL
+    gate (the real fatal comparator) does NOT fire on this — confirmed by running the gate after this
+    finding with ZERO code changes: still exactly the same first divergence at **f158** (see below),
+    unaffected. This retraction does not touch or explain the f158 `gt3`/`gt4` residual documented
+    above (still OPEN, genuinely a different, still-unexplained byte-level divergence) — this entry
+    only kills the "packet-pool cursor/count divergence at f118" thread as a real lead. **Tooling
+    takeaway (recorded, not yet acted on):** `PSXPORT_SBS_WW_ONVALUEDIVERGE`'s count-divergence trigger
+    should ideally also require the END-OF-FRAME VALUE to differ (it already computes `value_diverge`
+    separately — the bug is that `count_diverge` alone is sufficient to fire and print "divergence",
+    with no annotation that a matching end value means the miscount was harmless) before a future
+    session burns a whole investigation on a leg matching this exact shape again.
+
+## packet-pool 39-record shortfall at f118 — RETRACTED, false positive (2026-07-10)
+
+- **symptom:** `PSXPORT_SBS_PREWATCH=0x800BF544 PSXPORT_SBS_WW_ONVALUEDIVERGE=1` reports
+  `RNG advance-count divergence: f118 A_calls=109 B_calls=148 (delta=-39)` — read by prior sessions as
+  "core A (native) accepts 39 fewer GT3/GT4 packet-pool records than the oracle".
+  Do NOT re-investigate this as a record/accept-count bug — see cause below.
+- **status:** dead-end (tool false-positive, not a game-state bug) — 2026-07-10.
+- **cause:** `PSXPORT_SBS_WW_ONVALUEDIVERGE`'s "advance-count" check counts raw STORE EVENTS to the
+  armed address, not distinct values or accepted records. `gen_func_8013FB88`/`gen_func_8013FE58`
+  (ground-pair GT3/GT4 emitters) unconditionally re-store `PKT_POOL_PTR` with the SAME value they read
+  at entry even when their `count` parameter is 0 (a real MIPS instruction the original game executes,
+  faithfully transcribed) — native's clean early-`return` on `count==0` correctly skips that no-op
+  store. 31 ground-table entries have `gt3count==0` and 8 have `gt4count==0` this frame = 31+8=39,
+  exactly the reported delta. Verified exhaustively: render-node list, `cmdListDispatch` fields,
+  `SCENE_ENT_TABLE`'s full 71-entry array, camera GTE block, GTE projection constants, and per-function
+  ACCEPTED-record counts (ground-gt3 17=17, ground-gt4 46=46, field-gt3/gt4 0=0) are ALL byte-identical
+  between core A and core B at this frame; `PKT_POOL_PTR`'s actual end-of-frame VALUE was already
+  `0x90`==`0x90` in the original repro output.
+- **fix:** none needed/wanted — native's behavior is correct (matches observable RAM state exactly);
+  adding a pointless self-store to native to satisfy the counter would be a banned
+  transcription-over-observable-result anti-pattern. `sbs-div` (the real byte-level gate) does not fire
+  from this; confirmed the gate's first divergence is still f158, unchanged, after this investigation
+  with zero code changes.
+- **refs:** full narrative + verification method: `docs/findings/render.md` "overlay_ground_gt3gt4
+  cluster" section, sub-bullet "39-record packet-pool shortfall — RETRACTED". Does NOT explain or
+  resolve the separate, still-OPEN f158 gt3/gt4 byte-level divergence (same section, bottom).
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 
