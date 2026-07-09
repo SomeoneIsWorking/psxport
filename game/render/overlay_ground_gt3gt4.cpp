@@ -121,6 +121,19 @@ static int32_t sz4_minmax(bool want_max, int32_t a, int32_t b, int32_t e, int32_
 // Output packet = 40 bytes: {+0 tag(len=9<<24|next), +4 rgb0|code RAW (unmasked, matches the
 // field leaf's own asymmetry), +8 SXY0, +12 uv0|clut, +16 rgb1&COL_MASK_GROUND, +20 SXY1,
 // +24 uv1|tpage, +28 rgb2&COL_MASK_GROUND, +32 SXY2, +36 uv2hi (16-bit)}.
+//
+// WRITE-ORDER FIX (2026-07-10, convergence-agent): a prior draft grouped rgb2/uv0/uv1 into one
+// block placed AFTER the on-screen tests. Ground truth (`ov_a00_gen_8013FB88`, re-read
+// instruction-by-instruction this session) writes uv0 (pool+12) and uv1 (pool+24) UNCONDITIONALLY
+// right after RTPT — BEFORE the GTE-FLAG check, BEFORE NCLIP, BEFORE the backface/on-screen gates
+// — while rgb2 (pool+28) stays where it was, genuinely AFTER the on-screen tests. This is NOT
+// cosmetic: for a REJECTED record (one that fails a LATER gate — GTE FLAG, backface, on-screen,
+// or the OTZ range check), gen has ALREADY written pool+12/pool+24 as dead-but-real bump-allocator
+// scratch before bailing, while the prior draft's native body — gating uv0/uv1 behind the SAME
+// late block as rgb2 — never wrote them for that rejected record at all. When a LATER record from
+// a different emitter (or a later loop iteration) reuses that exact pool address, the two engines'
+// "dead" leftover bytes differ — the f158 packet-pool `sbs-div` residual (docs/findings/render.md).
+// Fix: uv0/uv1 moved to fire exactly where gen fires them (right after RTPT, unconditional).
 void OverlayGroundGt3Gt4::gt3(Core* c) {
   uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
   if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) fprintf(stderr, "[ovgtgnd] gt3 call#%ld count=%u\n", n, count); }
@@ -138,8 +151,14 @@ void OverlayGroundGt3Gt4::gt3(Core* c) {
     gte_write_data(3, vz01 >> 16);                       // VZ1
     gte_write_data(5, c->mem_r32(rec + 32));             // VZ2(lo)|uv2hi(hi)
     uint32_t rgb0_code = c->mem_r32(rec + 0);
-    c->mem_w32(pool + 4, rgb0_code);                     // staged early exactly like the recomp body
+    c->mem_w32(pool + 4, rgb0_code);                     // rgb0 -- unconditional
     gte_op(c, 0x4A280030u);                              // RTPT
+
+    // uv0/uv1 -- UNCONDITIONAL right after RTPT (gen writes these before ANY gate, including the
+    // GTE FLAG check below); see banner.
+    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12);
+    c->mem_w32(pool + 12, uv0);
+    c->mem_w32(pool + 24, uv1);
 
     uint32_t rgb1_src = c->mem_r32(rec + 4);
     uint32_t flagreg  = gte_read_ctrl(31);
@@ -160,10 +179,7 @@ void OverlayGroundGt3Gt4::gt3(Core* c) {
     if (!((c->mem_r16(pool+10) < 240) || (c->mem_r16(pool+22) < 240) || (c->mem_r16(pool+34) < 240))) continue;
 
     uint32_t rgb2 = (rgb1_src << 4) & COL_MASK_GROUND;
-    c->mem_w32(pool + 28, rgb2);
-    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12);
-    c->mem_w32(pool + 12, uv0);
-    c->mem_w32(pool + 24, uv1);
+    c->mem_w32(pool + 28, rgb2);                          // rgb2 -- LATE, after the on-screen tests (unchanged)
 
     uint32_t flagbyte = rgb1_src >> 24;
     int32_t z;
@@ -206,6 +222,26 @@ void OverlayGroundGt3Gt4::gt3(Core* c) {
 // COL_MASK_GROUND, +20 SXY1, +24 uv1, +28 rgb2&COL_MASK_GROUND, +32 SXY2, +36 uv2, +40
 // rgb3&COL_MASK_GROUND, +44 SXY3, +48 uv3}. Note the PER-SLOT mask mix (rgb0 standard, rgb1-3
 // ground) — verified against the recomp body, not simplified to one constant.
+//
+// WRITE-ORDER FIX (2026-07-10, convergence-agent): same class of bug as gt3 above, found by fully
+// re-reading `ov_a00_gen_8013FE58` instruction-by-instruction (a prior draft's block-grouped
+// uv0/rgb2/rgb3/uv1/uv2/uv3 writes right after the backface gate did NOT match gen's real,
+// interleaved gate/write order). Ground truth's actual order per record:
+//   rgb0(pool+4) -> RTPT -> rgb1(pool+16) -> [load rec4] -> GTE-FLAG#1 gate -> NCLIP ->
+//   uv0(pool+12) -> MAC0/backface gate -> SXY0/1/2 -> [GTE-write VXY3/VZ3] -> rgb2(pool+28) ->
+//   RTPS -> rgb3(pool+40) -> uv1(pool+24) -> GTE-FLAG#2 gate -> SXY3(pool+44) -> on-screen X/Y
+//   gates -> OTZ range gate -> uv2(pool+36)/uv3(pool+48) [LATEST — only once fully accepted] ->
+//   OT link. Two consequences the prior draft's block grouping got wrong for a REJECTED record:
+//   uv0 is written UNCONDITIONALLY right after NCLIP (before the backface gate — gen has already
+//   written it even for a backface-culled record), and uv2/uv3 are written ONLY once the record
+//   clears every gate including the OTZ range check (the prior draft wrote them right after the
+//   backface gate, i.e. for records that get rejected LATER by the on-screen or OTZ gates, when
+//   gen never touches pool+36/+48 at all for that same rejected record). This exact mismatch —
+//   native leaving real uv2/uv3 content in a "dead" pool slot that gen leaves untouched — is the
+//   f158 packet-pool `sbs-div` residual (docs/findings/render.md): a LATER record (from this same
+//   emitter or an adjacent one) that reuses that exact pool address inherits two different
+//   "leftover" byte patterns on the two engines. Fix: reordered to match gen's write timing
+//   exactly, gate for gate.
 void OverlayGroundGt3Gt4::gt4(Core* c) {
   uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
   if (count == 0) { c->r[2] = rec; return; }
@@ -228,10 +264,15 @@ void OverlayGroundGt3Gt4::gt4(Core* c) {
     gte_op(c, 0x4A280030u);                                // RTPT (verts 0..2)
     c->mem_w32(pool + 16, (hdr0 << 4) & COL_MASK_GROUND);  // rgb1
 
+    uint32_t rec4 = c->mem_r32(rec + 4);                   // rgb2|flag -- loaded EARLY, before any gate
+
     uint32_t flagreg = gte_read_ctrl(31);
     c->mem_w32(SCRATCH_FLAG_TMP, flagreg);
     if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) < 0) continue;
     gte_op(c, 0x4B400006u);                                // NCLIP
+    uint32_t uv0 = c->mem_r32(rec + 8);
+    c->mem_w32(pool + 12, uv0);                            // uv0 -- UNCONDITIONAL right after NCLIP, before the backface gate
+
     c->mem_w32(SCRATCH_FLAG_TMP, gte_read_data(24));       // MAC0
     if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) <= 0) continue;  // backface cull
 
@@ -239,19 +280,15 @@ void OverlayGroundGt3Gt4::gt4(Core* c) {
     c->mem_w32(pool + 20, gte_read_data(13));              // SXY1
     c->mem_w32(pool + 32, gte_read_data(14));              // SXY2
 
-    uint32_t rec4 = c->mem_r32(rec + 4);                   // rgb2|flag
-    uint32_t uv0 = c->mem_r32(rec + 8), uv1 = c->mem_r32(rec + 12);
-    c->mem_w32(pool + 12, uv0);
-    c->mem_w32(pool + 24, uv1);
-    c->mem_w32(pool + 28, rec4 & COL_MASK_GROUND);         // rgb2
-    c->mem_w32(pool + 40, (rec4 << 4) & COL_MASK_GROUND);  // rgb3
-    uint32_t uv23 = c->mem_r32(rec + 16);
-    c->mem_w32(pool + 36, uv23);                           // uv2 (lo half)
-    c->mem_w32(pool + 48, uv23 >> 16);                     // uv3 (hi half)
-
     gte_write_data(0, c->mem_r32(rec + 40));               // VXY3
     gte_write_data(1, vz23 >> 16);                          // VZ3
+
+    c->mem_w32(pool + 28, rec4 & COL_MASK_GROUND);         // rgb2
     gte_op(c, 0x4A180001u);                                // RTPS (4th point)
+    c->mem_w32(pool + 40, (rec4 << 4) & COL_MASK_GROUND);  // rgb3
+    uint32_t uv1 = c->mem_r32(rec + 12);
+    c->mem_w32(pool + 24, uv1);                            // uv1
+
     uint32_t flagreg2 = gte_read_ctrl(31);
     c->mem_w32(SCRATCH_FLAG_TMP, flagreg2);
     if ((int32_t)c->mem_r32(SCRATCH_FLAG_TMP) < 0) continue;
@@ -279,6 +316,12 @@ void OverlayGroundGt3Gt4::gt4(Core* c) {
     int32_t idx = ground_otz_index(z);
     c->mem_w32(SCRATCH_OTZ_TMP, (uint32_t)idx);
     if (idx < 0) continue;
+
+    // uv2/uv3 -- LATEST: only once the record has cleared every gate including this OTZ range
+    // check (matches gen's placement immediately before the OT-link below).
+    uint32_t uv23 = c->mem_r32(rec + 16);
+    c->mem_w32(pool + 36, uv23);                           // uv2 (lo half)
+    c->mem_w32(pool + 48, uv23 >> 16);                     // uv3 (hi half)
 
     uint32_t slot_addr = ot_base + (uint32_t)idx * 4;
     uint32_t old_head = c->mem_r32(slot_addr);

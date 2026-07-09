@@ -169,8 +169,15 @@
     `Render::overlayTypeDispatch` correctly calling into the already-owned `OverlayGroundGt3Gt4::
     entityLoop`/`gt3`/`gt4` on core A, while core B's backtrace shows the pure `gen_func_8003D0BC` body
     (oracle purity intact — no native code leaked onto core B).
-  - **f158 gt3/gt4 "DATA divergence" — RE-NARROWED (2026-07-10): NOT a gt3/gt4 field-math bug; it's an
-    upstream packet-pool CURSOR-POSITION divergence.** `PSXPORT_SBS_PREWATCH=0x800C133E
+  - **f158 gt3/gt4 "DATA divergence" — RE-NARROWED (2026-07-10): PARTIALLY FALSIFIED (2026-07-10,
+    convergence-agent second pass) — see "f158 packet-pool residual — ACTUALLY FIXED" below for the
+    real mechanism and fix. This entry's RAW OBSERVATION (gt4 performs two extra writes to the
+    divergent dword that core B never performs) is CORRECT and was the key clue; its INTERPRETATION
+    ("a genuine COUNT/DATA divergence in what counts resolves to... an upstream game-STATE
+    divergence") was wrong — the counts/pool-cursor trajectory is byte-identical (confirmed by the
+    later "ROOT-CAUSED" entry); the real cause is a write-ORDER/gating bug within gt3/gt4 themselves,
+    not upstream state.** Original text preserved below for the record: NOT a gt3/gt4 field-math bug;
+    it's an upstream packet-pool CURSOR-POSITION divergence.** `PSXPORT_SBS_PREWATCH=0x800C133E
     PSXPORT_SBS_WW_ONVALUEDIVERGE=0` (plain persist mode) traced every raw store to the watched dword
     `0x800C133C..0x800C133F` at f158 and its host C++ call stack:
     - Core A: 2 writes via `OverlayGroundGt3Gt4::gt4` (`mem_w32(pool+4, rgb0&COL_MASK_STD)`, values
@@ -211,10 +218,27 @@
       bytes (+ occasional task-0-stack `?`-tag bytes, likely a downstream cascade of this same cursor
       divergence) diverging — i.e. the game no longer crashes or diverges catastrophically, just this
       one still-open data-correctness gap.
-  - **f158 packet-pool residual — ROOT-CAUSED (2026-07-10, convergence-agent): every f158 `sbs-div`
-    address is the +38/+39 TAIL-PADDING of a GT3 pool-slot record, carrying 2-FRAME-STALE content —
-    NOT a logic bug in `gt3`/`gt4`/`entityLoop` (all three re-verified byte-identical, live, this
-    session).** Method: temporarily instrumented BOTH `OverlayGroundGt3Gt4::entityLoop` (native,
+  - **f158 packet-pool residual — the "ROOT-CAUSED... GT3 tail-padding" entry below is FALSIFIED
+    (2026-07-10, convergence-agent, second pass). The actual bug — RESOLVED, see the entry further
+    below titled "f158 packet-pool residual — ACTUALLY FIXED".** Two prior same-day entries
+    contradicted each other: the "RE-NARROWED" entry (further up this file) traced a genuine SECOND
+    writer — `OverlayGroundGt3Gt4::gt4` performing TWO back-to-back writes to the exact divergent
+    dword — while THIS "ROOT-CAUSED" entry (immediately below) claims gt3/gt4 "never write" that
+    offset and blames inert PSX pad bytes. Both partially right, both partially wrong: this entry's
+    static field-offset table (which bytes gt3/gt4 write) is correct, but its CONCLUSION — "no logic
+    bug, it's the game's own uninitialized hardware padding" — is wrong, because its instrumentation
+    only logged the (tableSlot, counts, pool_pre, pool_post) TUPLE per gt3()/gt4() CALL, never the
+    per-FIELD write ORDER inside those calls relative to the reject/backface/on-screen/OTZ gates —
+    so it could not see that `gt4`'s uv2/uv3 writes (and `gt3`'s uv0/uv1 writes) fire at a WRONG
+    POINT in the gate sequence relative to gen, which is exactly what produces "extra" or "missing"
+    dead-scratch writes for REJECTED records without ever touching the ACCEPTED-record counts/pool-
+    cursor trajectory this entry verified (correctly) as byte-identical. Left as-is below for the
+    historical record, but its "Disposition: NOT a bug... no patch applied" is FALSE — do not
+    re-derive this dead end.
+  - **f158 packet-pool residual — ROOT-CAUSED (2026-07-10, convergence-agent): [FALSIFIED — see
+    retraction directly above] every f158 `sbs-div` address is the +38/+39 TAIL-PADDING of a GT3
+    pool-slot record, carrying 2-FRAME-STALE content — NOT a logic bug in `gt3`/`gt4`/`entityLoop`
+    (all three re-verified byte-identical, live, this session).** Method: temporarily instrumented BOTH `OverlayGroundGt3Gt4::entityLoop` (native,
     `game/render/overlay_ground_gt3gt4.cpp`) and `ov_a00_gen_801401B8` (oracle,
     `generated/ov_a00_shard_0.c`, gitignored — safe to hack for a session and revert) to print, gated
     on `c->game->sbs->frame()==158`, every ground-list entry's `tableSlot`/packed `counts` word and the
@@ -280,7 +304,78 @@
       reverted — `git diff` clean).
     - **Verified no regression**: SBS-full gate re-run post-revert, byte-identical to pre-session
       baseline — first divergence still f158/`0x800C133E`, same 6 addresses, stable through f9880+
-      (SIGINT, no crash) with only this same packet_pool class diverging.
+      (SIGINT, no crash) with only this same packet_pool class diverging. [This "no regression"
+      framing is moot — see the retraction above; the entry it validated was itself wrong.]
+  - **f158 packet-pool residual — ACTUALLY FIXED (2026-07-10, convergence-agent, resolving the
+    RE-NARROWED-vs-ROOT-CAUSED contradiction).** The contradiction: gate history proves end-of-f157
+    bytes at `0x800C133E/F` were IDENTICAL on both cores (first `sbs-div` is f158); the RE-NARROWED
+    entry's PREWATCH persist trace showed core A performing TWO EXTRA writes to that exact dword
+    during f158 that core B never performs; the ROOT-CAUSED entry's per-call tuple trace showed
+    entityLoop/gt3/gt4's (tableSlot, counts, pool_pre, pool_post) sequence byte-identical on both
+    cores for the whole frame. All three observations are correct — the missing piece was per-FIELD
+    write ORDER inside gt3/gt4 relative to their own reject gates, which neither prior trace granularity
+    could see (RE-NARROWED logged raw stores without reconciling them against pool arithmetic;
+    ROOT-CAUSED logged only call-boundary/accept-boundary state, not what happens INSIDE a call that
+    is later rejected).
+    - **Method**: rebuilt the two traces at once — (a) instrumented `OverlayGroundGt3Gt4::gt3`/`gt4`
+      (native) AND `ov_a00_gen_8013FB88`/`ov_a00_gen_8013FE58` (oracle, `generated/ov_a00_shard_{0,1}.c`
+      — gitignored, safe to hack for a session and fully revert) to print every field write's target
+      address + value, gated on frame 158 only; (b) added a temporary end-of-frame RAM snapshot hook
+      in `Sbs::Impl` (`runtime/recomp/sbs.cpp`) dumping `0x800C1300..0x800C1380` on both cores at the
+      f156/f157/f158 frame boundaries; (c) re-ran `PSXPORT_SBS_PREWATCH=0x800C133C` (persist, plain —
+      no `WW_ONVALUEDIVERGE`) to capture full host backtraces per store. Confirmed end-of-f157 both
+      cores hold `0x7C808080` at `0x800C133C` (bytes 133E/F = `80 7C`, matching the gate's prior
+      baseline); end-of-f158 core A holds `0x01FD4097`, core B holds `0x7C804097` — LOW 16 bits
+      (`4097`) identical on both (the shared `gt3` uv2hi write, confirmed byte-for-byte equal, exactly
+      as the ROOT-CAUSED entry found), HIGH 16 bits diverge (A=`01FD`, B=`7C80`, B's half being
+      f157's untouched leftover — exactly as the RE-NARROWED entry found). Both prior entries were
+      looking at the SAME dword from two different angles and each had half the picture.
+    - **Root cause, precisely**: `OverlayGroundGt3Gt4::gt4`'s host backtrace for the extra store
+      (`OverlayGroundGt3Gt4::gt4` → `entityLoop` → `Render::overlayTypeDispatch` → `gen_func_8003F9A8`)
+      named the exact function. Reading `ov_a00_gen_8013FE58` instruction-by-instruction end to end
+      (not just spot-checking individual field offsets, which is what let the ROOT-CAUSED entry's
+      "gt3/gt4 never write +38/39" claim stand unchallenged) shows gen's REAL per-record write order
+      interleaves fields between gates in a way the prior native port did not reproduce:
+      `rgb0(pool+4) → RTPT → rgb1(pool+16) → [load rec+4] → GTE-FLAG gate#1 → NCLIP → uv0(pool+12) →
+      MAC0/backface gate → SXY0/1/2 → [GTE-write 4th vert] → rgb2(pool+28) → RTPS → rgb3(pool+40) →
+      uv1(pool+24) → GTE-FLAG gate#2 → SXY3(pool+44) → on-screen X/Y gates → OTZ range gate →
+      uv2(pool+36)/uv3(pool+48) [LAST, only once every gate has passed] → OT link`. The prior native
+      body instead block-grouped uv0/rgb2/rgb3/uv1/uv2/uv3 into ONE write right after the backface
+      gate — meaning for a record that is later REJECTED by the on-screen or OTZ gates (which is
+      exactly what happens at pool position `0x800C1338` this frame — two ground-entity GT4 candidates
+      land there, both ultimately rejected, but only after clearing the backface gate), gen NEVER
+      reaches its own uv2/uv3 write (they're gated behind the OTZ check the record fails), while the
+      prior native body had ALREADY written them as an unconditional side effect of clearing backface.
+      That extra, gen-never-performs write is exactly the two "extra" stores the RE-NARROWED entry's
+      PREWATCH trace caught, and it lands on a pool byte that a LATER, genuinely-accepted `gt3` record
+      (base `0x800C1318`) reuses for its own 16-bit uv2hi field — so native's dead-but-real uv2/uv3
+      content bleeds into the low 16 bits' NEIGHBORING high-16 tail, while gen's untouched (f157-stale)
+      content stays put. `OverlayGroundGt3Gt4::gt3` has the SAME class of bug in the OPPOSITE
+      direction: gen writes uv0(pool+12)/uv1(pool+24) UNCONDITIONALLY right after RTPT (before even
+      the first GTE-FLAG gate), while the prior native body gated them behind the on-screen tests —
+      so for a gt3 record rejected by the FLAG or backface gate, gen has already written dead uv0/uv1
+      content that the prior native body never wrote.
+    - **Fix** (`game/render/overlay_ground_gt3gt4.cpp`): reordered both `gt3()` and `gt4()`'s field
+      writes to fire at the EXACT point gen fires them, gate for gate — `gt3`'s uv0/uv1 moved from the
+      late (post-on-screen-test) block to immediately after `RTPT`, unconditional; `gt4`'s uv0 moved
+      from the late block to immediately after `NCLIP` (before the backface gate), and uv2/uv3 moved
+      from the early (post-backface) block to the very end, immediately before the OT-link, gated
+      behind the OTZ range check exactly like gen. No field's VALUE or MASK changed — only WHEN each
+      write executes relative to the reject gates. This is not a "reproduce the PSX packet format"
+      transcription call (which CLAUDE.md's render section bans for `pc_render`) — this is the
+      faithful SUBSTRATE-MIRROR leaf that SBS byte-compares; per `docs/faithful-execution.md`, a
+      faithful port executes the same algorithm against the same machine state, including which dead
+      bytes a rejected record leaves behind.
+    - **Verified**: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1` gate, 95s window (autonav headless).
+      Zero `packet_pool`-tagged `sbs-div` hits anywhere in the run (previously the very first
+      divergence, every run). f158 now shows `A/B identical`; the run stays byte-exact through the
+      f150/f180/f1500.../f8880 periodic checkpoints and does not crash (SIGINT-terminated by the 95s
+      window at ~f8890, no watchdog stall). A SEPARATE, PRE-EXISTING divergence class first appears at
+      f179 (`0x801FE924`, task-0-stack region, tag `[?]`) — NOT part of this fix's scope (a different
+      address family, a different call chain, not packet-pool); this was already flagged in the
+      ROOT-CAUSED entry's own re-run notes as "occasional task-0-stack '?'-tag bytes, likely a
+      downstream cascade" and is confirmed here to be an independent, still-open bug, now the new
+      SBS-full frontier. Do not conflate the two.
 - **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
   `game/render/{perobj_billboard,perobj_dispatch,overlay_ground_gt3gt4}.cpp`;
   `runtime/recomp/engine_override_thunk.cpp`; oracles `generated/shard_5.c gen_func_8003CCA4`,
