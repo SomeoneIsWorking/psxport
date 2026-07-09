@@ -27,10 +27,9 @@
 //                     `gpu_timeout_arm`/`gpu_timeout_chk` already own as the libgpu GPU-DMA-completion
 //                     TIMEOUT (arm/check) — CONFIRMS this whole struct is the libgpu OT-DMA-send
 //                     status block, and the 0x80082D04 queue cluster is its interrupt/completion-
-//                     callback ring buffer (64 slots, stride 0x60, base 0x80100000+0xC30). That
-//                     cluster is real libgpu internals but too deep (5 mutually-recursive functions,
-//                     ~380 gen-C lines total) to transcribe with confidence this session — MAPPED
-//                     only, see docs/engine_re.md.
+//                     callback ring buffer (64 slots, stride 0x60, base 0x80100000+0xC30). UPDATE
+//                     (2026-07-10, dedicated deep-RE pass): DRAFTED — see
+//                     game/render/wide_re_gpu_dma_queue.cpp and docs/engine_re.md.
 //
 // MAP-only this session (identified, NOT drafted — too large / too deep a callee chain):
 //   0x800815D0 = PutDrawEnv (CONFIRMED identity, already named in docs/engine_re.md). Calls
@@ -38,14 +37,12 @@
 //     (0x80082240, 0x800822D8, 0x80082370, 0x80082220, 0x8008238C) — a proper port needs those RE'd
 //     first. Left for a dedicated frontier pass; this file only covers the two CONFIRMED single-leaf
 //     table entries (DrawSync, ClearOTagR) plus the queue-reset helper.
-//   0x80082D04, 0x80082FB4, 0x80083364, 0x80082424, 0x80082734 — the GPU-DMA completion callback
-//     queue (64-slot ring @0x80100C30, stride 0x60, holds {fn,arg1,arg2} triples; head/tail counters
-//     @0x800A5A88/0x800A5A8C mod 64; busy-waits on the GPU_DMA_FLAGS bit 0x10000000 before draining).
-//     Callers dispatch queued fn-ptrs via rec_dispatch. This is almost certainly the async half of
-//     DrawOTag's OT-DMA-kick (the GPU interrupt handler queues a completion callback here; DrawSync's
-//     wait loop and 0x80082424/0x80082734 drain it) — same family as gpu_timeout_arm/chk. RE'd enough
-//     to map the fields (this comment) but NOT transcribed: this is the highest-value follow-up RE
-//     target in the band (0x80082D04 alone is 824 free-roam dispatch hits).
+//   0x80082D04, 0x80082FB4, 0x80083364, 0x80082424 — the GPU-DMA completion callback queue. UPDATE
+//     (2026-07-10, dedicated deep-RE pass): DRAFTED in game/render/wide_re_gpu_dma_queue.cpp — see
+//     that file's header for the corrected field map (this comment's head/tail addresses,
+//     0x800A5A88/0x800A5A8C, were a wrong guess; ground truth is 0x800A5AC8/0x800A5ACC) and call
+//     graph. 0x80082734 turned out NOT to be part of this cluster (a separate, larger LoadImage-style
+//     FIFO streamer) — still MAPPED only, see the new file's header.
 #include "core.h"
 #include <stdint.h>
 

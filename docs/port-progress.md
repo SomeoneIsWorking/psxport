@@ -2568,3 +2568,19 @@ themselves are LIVE but dispatch out to substrate for every case body.
   at those addresses); a future render-rebuild pass needs a fresh capture with the field's parallax/
   end-of-area-text actually on screen. Full field-level RE + confidence notes in docs/engine_re.md
   "Band 0x8010A000-0x8010CFFF wide-RE wave".
+- **libgpu GPU-DMA completion-callback queue cluster (wide-RE agent, 2026-07-10, UNWIRED, dedicated
+  deep pass).** Prior wave (2026-07-09) explicitly deferred this cluster citing fleet-workflow.md §9's
+  "9 bugs in one function" risk (~380 gen-C lines, mutual recursion). This session RE'd the whole call
+  graph from `generated/shard_*.c` `gen_func_<addr>` bodies line-by-line (every branch polarity
+  checked twice against the gen-C) and DRAFTED 4 of the 5 targeted addresses:
+  `0x80082D04`=GpuDmaQueueEnqueue (824 dispatch hits, the single highest-value target in the whole
+  band), `0x80082FB4`=GpuDmaQueueDrain (also the GPU-DMA interrupt-handler body), `0x80083364`=
+  GpuDmaQueueSync, `0x80082424`=GpuDmaSend (the DMA kick). New file
+  `game/render/wide_re_gpu_dma_queue.cpp`, added to `cmake/tomba2_port.cmake`; `tomba2_port` build+
+  link verified clean. **Corrected a wrong field-map guess from the prior wave**: ring head/tail
+  counters are at `0x800A5AC8`/`0x800A5ACC`, not `0x800A5A88`/`0x800A5A8C`. Full field map + call
+  graph in the new file's header comment and `docs/engine_re.md`'s "Wide-RE wave 2026-07-10" section.
+  1 MAPPED, NOT drafted: `0x80082734` — turned out on RE to be a separate, larger (48-byte frame, 6
+  spills) libgpu `LoadImage()`-style chunked GP0-FIFO pixel streamer, NOT part of this cluster's
+  mutual recursion (shares only the busy-wait idiom on the same status-block globals). HIGH confidence
+  on role, MEDIUM-LOW on the rect-clip/chunking arithmetic — left for its own dedicated RE pass.

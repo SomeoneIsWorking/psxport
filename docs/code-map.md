@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 578 native fns, 489 owned addresses, 550 LIVE / 28 ORPHAN.
+Totals: 582 native fns, 493 owned addresses, 554 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -338,7 +338,11 @@ Totals: 578 native fns, 489 owned addresses, 550 LIVE / 28 ORPHAN.
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x80081458 | LIVE | `func_80081458` | game/render/wide_re_libgpu_leaves.cpp:109 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). DRAFT. RE'd from… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
+| 0x80082424 | LIVE | `func_80082424` | game/render/wide_re_gpu_dma_queue.cpp:477 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). DRAFT. RE'd … |
 | 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:153 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
+| 0x80082D04 | LIVE | `func_80082D04` | game/render/wide_re_gpu_dma_queue.cpp:164 |  | func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeB… |
+| 0x80082FB4 | LIVE | `func_80082FB4` | game/render/wide_re_gpu_dma_queue.cpp:294 |  | func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). DRAFT. RE'd from gene… |
+| 0x80083364 | LIVE | `func_80083364` | game/render/wide_re_gpu_dma_queue.cpp:404 |  | func_80083364 (0x80083364) — GpuDmaQueueSync(mode). DRAFT. RE'd from g… |
 | 0x800834A0 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x800834D4 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:188 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |

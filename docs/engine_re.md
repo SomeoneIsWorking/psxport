@@ -2906,18 +2906,64 @@ Band from the task brief's dispatch-count list: 0x80082D04(824) 0x80083364(629) 
     Calls `func_80081FB0` (a 40-line struct-pack helper) which itself calls 5 more unowned leaves
     (0x80082240, 0x800822D8, 0x80082370, 0x80082220, 0x8008238C) — needs those RE'd first. HIGH VALUE:
     the existing doc's own "Next" note says PutDrawEnv is the literal next widescreen-lever target.
-  - `0x80082D04` (824 dispatch hits — the single highest-value target in the whole band), `0x80082FB4`,
-    `0x80083364`, `0x80082424`, `0x80082734` — a mutually-recursive GPU-DMA **completion-callback
-    queue**: a 64-slot ring buffer at guest `0x80100C30` (stride 0x60 = 96 B, holding {fnPtr, arg1,
-    arg2} triples), head/tail counters mod 64 at `0x800A5A88`/`0x800A5A8C`, gated by the SAME status
-    block `gpu_timeout_arm`/`gpu_timeout_chk` already own (bit tests on 0x800A5AA8's target and a
-    busy-wait on bit 0x10000000 before draining). Callers install a callback fn-ptr + 2 args into the
-    next free slot; the drain loop `rec_dispatch`s each queued fn-ptr in order. Almost certainly the
-    ASYNC half of DrawOTag's OT-DMA-kick (the GPU-DMA-done interrupt would normally fire these; here
-    it's polled). Recommended follow-up: RE with the actual PSX SDK docs/symbol names if available
-    (this is textbook "GPU interrupt callback queue" shape) before drafting — getting the field
-    semantics wrong here risks the "9 bugs in one function" failure mode fleet-workflow.md §9 warns
-    about, given the 380+ gen-C lines and 5-way mutual recursion.
+  - `0x80082D04`/`0x80082FB4`/`0x80083364`/`0x80082424`/`0x80082734` — the GPU-DMA completion-callback
+    queue. **UPDATE (2026-07-10 dedicated deep-RE pass, see below): 4 of the 5 DRAFTED, field map
+    CORRECTED.** The head/tail addresses above (`0x800A5A88`/`0x800A5A8C`) were a guess and were
+    WRONG — see the 2026-07-10 entry for the ground-truth map (re-derived line-by-line from the
+    gen-C). `0x80082734` turned out NOT to be part of this cluster's mutual recursion (a separate,
+    larger LoadImage-style FIFO streamer) — still MAPPED, not drafted.
+
+## Wide-RE wave 2026-07-10 — GPU-DMA completion-callback queue cluster DRAFTED (dedicated deep pass)
+
+Dedicated single-cluster pass per the prior wave's explicit deferral above (citing fleet-workflow.md
+§9's "9 bugs in one function" risk given ~380 gen-C lines and mutual recursion). RE'd the full call
+graph from `generated/shard_*.c` `gen_func_<addr>` bodies line-by-line, every branch polarity checked
+twice against the gen-C before transcription. **DRAFTED** (`game/render/wide_re_gpu_dma_queue.cpp`,
+wide-RE tier, UNWIRED/UNVERIFIED — see the file's header comment for the full field-level RE, ring
+entry layout, and per-function commentary; only summarized here):
+
+- `0x80082D04` = **GpuDmaQueueEnqueue(fn, argValOrPtr, sizeBytes, arg3)** — 824 dispatch hits, the
+  single highest-value target in the whole band. Waits for a free ring slot (Drain+timeout-checked
+  retry if full), then either dispatches `fn` immediately (fast/idle path) or copies an optional
+  inline payload and appends `{fn, argValOrPtr-or-payloadPtr, arg3}` to the ring, installing Drain as
+  the completion ISR on first use.
+- `0x80082FB4` = **GpuDmaQueueDrain()** — the completion-callback ring's drain body; ALSO the
+  interrupt-handler body Enqueue installs via `func_80085B80(2, &0x80082FB4)`. Drains ring entries via
+  `rec_dispatch`, fires a one-shot "queue fully drained" completion handler (`GPU_QSTAT_HANDLER`,
+  0x800A59AC) when the queue empties idle.
+- `0x80083364` = **GpuDmaQueueSync(mode)** — mode==0 BLOCKS until the queue drains and the DMA
+  channel goes idle+ready (arm timeout, loop Drain+timeout-check); mode!=0 does a single-shot
+  poll/drain-once and reports queue depth. Same mode-0-blocks/mode!=0-polls shape as the real SDK
+  `DrawSync(mode)`, but a DIFFERENT function scoped to this queue (`DrawSync` itself is
+  `func_80080F6C`, already drafted in `wide_re_libgpu_leaves.cpp`).
+- `0x80082424` = **GpuDmaSend(arrayPtr, count)** — the actual OT-linked-list DMA KICK: programs
+  last-address + count fields, writes the DMA channel control register with the start value
+  `0x11000002`, arms the timeout, busy-waits (timeout-checked) for the channel busy bit to clear.
+  Shares the status-block globals with the queue but doesn't touch the ring itself — not mutually
+  recursive with the other 3, just a sibling that shares state.
+
+**CORRECTED field map** (base `0x800A0000` = `32778u<<16`, ring base `0x80100C30` stride `0x60`,
+64 slots — the ring base/stride were right in the prior wave's note, but its head/tail ADDRESSES
+were a wrong guess): **RING_HEAD = 0x800A5AC8** (not 0x800A5A88), **RING_TAIL = 0x800A5ACC** (not
+0x800A5A8C). Also newly mapped: `GPU_QSTAT` sub-struct at `0x800A59A0` (+1 started byte, +8 active
+flag, +12 one-shot completion-handler fn-ptr — the field the doc above vaguely called "the SAME
+status block"), `GPU_DMA_LASTADDR_PTR`/`GPU_DMA_COUNT_PTR`/`GPU_DMA_CHCR_PTR`/`GPU_DMA_ENABLE_PTR`
+(0x800A5AB8/BC/C0/C4, all written only by the DMA-kick). Full map with every offset is the file
+header comment in `game/render/wide_re_gpu_dma_queue.cpp` (kept there per this codebase's
+"decompile into the port" convention).
+
+**MAPPED, NOT drafted**: `0x80082734`. On close RE this turned out to be a substantially larger
+(48-byte frame, 6 callee-save spills) function that streams pixel words directly to the raw GP0 FIFO
+port with a rectangle argument clipped against a DIFFERENT pair of global max-W/H shorts
+(`0x800A5964`/`0x800A5966`), chunked into FIFO-sized bursts — the classic libgpu `LoadImage()`-
+internal chunked transfer, NOT part of this cluster's mutual recursion (shares only the busy-wait
+idiom). HIGH confidence on role, MEDIUM-LOW on the rect-clip/chunking arithmetic (not verified
+against a live VRAM-transfer dump). Left for a dedicated follow-up RE pass.
+
+Build check: `cmake --build build2 --target tomba2_port` links clean with the new file added to
+`cmake/tomba2_port.cmake`. Still fully unwired — no `EngineOverrides`/`shard_set_override`
+registration, no SBS run. A wiring pass must re-diff every line against the gen-C and go through the
+SBS gate before this cluster is live.
 ## Wide-RE wave 2026-07-09 — SsSeqCalled (0x80090BD0) cluster DRAFTED (follow-up to the libsnd/BIOS wave)
 
 **Correction to the prior wave's "Mapped, NOT drafted" entry above**: its globals for this cluster
