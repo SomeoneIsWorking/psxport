@@ -248,13 +248,31 @@ void Render::billboardCompose1() {
   if (c->mem_r32(node + 56) == 0) return;
   withDepthTag(c, node, [](Core* c) {
     GuestFrame frame(c, 40);
+    // Register-faithfulness (gen_func_8003C2D4 prologue, L4509-4514): spill the caller's
+    // r16..r19/ra at sp+16..+32. The GuestFrame only allocates the frame; the spill BYTES are
+    // what SBS compares (gen writes them; the bare RAII left stale bytes there).
+    const uint32_t sp = c->r[29];
+    c->mem_w32(sp + 16, c->r[16]); c->mem_w32(sp + 20, c->r[17]);
+    c->mem_w32(sp + 24, c->r[18]); c->mem_w32(sp + 28, c->r[19]);
+    c->mem_w32(sp + 32, c->r[31]);
     const uint32_t node = c->r[4];
     c->mtx.identity(MAT_A);
     c->mtx.identity(MAT_ROTZ);
     c->math.rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
     const uint32_t flag = c->mem_r8(node + 71) & 1u;
     c->math.matMul(MAT_ROTZ, MAT_A, MAT_OUT);
+    // gen's live callee-saved state at the func_8003C8F4 call site (L4593-4595): billboardEmit
+    // spills these as its "caller" registers, so they must hold gen's values here.
+    c->r[16] = MAT_OUT; c->r[17] = MAT_A; c->r[18] = flag; c->r[19] = node;
+    c->r[31] = 0x8003C448u;
     billboardComposeTail(c, node, flag);
+    // Epilogue restore (gen_func_8003C2D4 L4597-4601): read the caller's values back from the spill
+    // slots. MUST restore — the reassignments above (esp. r31=0x8003C448) would otherwise leak to the
+    // substrate render-walk caller and corrupt its control flow (registers aren't SBS-compared, but
+    // the substrate reads them).
+    c->r[16] = c->mem_r32(sp + 16); c->r[17] = c->mem_r32(sp + 20);
+    c->r[18] = c->mem_r32(sp + 24); c->r[19] = c->mem_r32(sp + 28);
+    c->r[31] = c->mem_r32(sp + 32);
   });
 }
 
@@ -265,6 +283,11 @@ void Render::billboardCompose2() {
   if (c->mem_r32(node + 56) == 0) return;
   withDepthTag(c, node, [](Core* c) {
     GuestFrame frame(c, 32);
+    // Register-faithfulness (gen_func_8003C464 prologue, L5907-5911): spill caller's
+    // r16/r17/r18/ra at sp+16/+20/+24/+28. (C464's prologue does NOT spill r19 — it passes through.)
+    const uint32_t sp = c->r[29];
+    c->mem_w32(sp + 16, c->r[16]); c->mem_w32(sp + 20, c->r[17]);
+    c->mem_w32(sp + 24, c->r[18]); c->mem_w32(sp + 28, c->r[31]);
     const uint32_t node = c->r[4];
     c->r[4] = MAT_A;
     c->r[5] = (uint32_t)c->mem_r16s(node + 122);
@@ -275,7 +298,16 @@ void Render::billboardCompose2() {
     c->math.rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
     const uint32_t flag = c->mem_r8(node + 71) & 1u;
     c->math.matMul(MAT_ROTZ, MAT_A, MAT_OUT);
+    // gen's live callee-saved state at the func_8003C8F4 call site (L5993-5995) — NOTE C464 differs
+    // from C2D4: r17=flag (not MAT_A) and r18=node (gen reassigns r17 to flag at L5931 and keeps
+    // r18=node from the prologue). billboardEmit spills these, so match gen exactly.
+    c->r[16] = MAT_OUT; c->r[17] = flag; c->r[18] = node;
+    c->r[31] = 0x8003C5E0u;
     billboardComposeTail(c, node, flag);
+    // Epilogue restore (gen_func_8003C464): read the caller's values back from the spill slots
+    // (r16/r17/r18/ra — C464 does not save r19). Same anti-leak discipline as billboardCompose1.
+    c->r[16] = c->mem_r32(sp + 16); c->r[17] = c->mem_r32(sp + 20);
+    c->r[18] = c->mem_r32(sp + 24); c->r[31] = c->mem_r32(sp + 28);
   });
 }
 
@@ -291,6 +323,14 @@ void Render::billboardEmit() {
                                 // guest address, and callers' own frames must already be allocated
                                 // (see GuestFrame's comment) for this base to land on the same bytes
                                 // the recomp path uses.
+    // Register-faithfulness (gen_func_8003C8F4 prologue, L4367-4376): spill the caller's
+    // r16..r22/ra at sp+64..+92. The spilled values are the caller's (billboardCompose1/2) live
+    // callee-saved registers — which this port now sets correctly before the call (see above).
+    const uint32_t sp = c->r[29];
+    c->mem_w32(sp + 64, c->r[16]); c->mem_w32(sp + 68, c->r[17]);
+    c->mem_w32(sp + 72, c->r[18]); c->mem_w32(sp + 76, c->r[19]);
+    c->mem_w32(sp + 80, c->r[20]); c->mem_w32(sp + 84, c->r[21]);
+    c->mem_w32(sp + 88, c->r[22]); c->mem_w32(sp + 92, c->r[31]);
     const uint32_t node = c->r[4];
     const uint32_t flag = c->r[5];
     auto FR = [c](uint32_t off) { return c->r[29] + off; };
