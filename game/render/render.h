@@ -194,6 +194,16 @@ public:
   // CmdListFrame). See render_walk_dispatch.cpp for the full RE + the f118 residual this closes.
   void renderWalk();
 
+  // ---- SUBSTRATE MIRROR: per-AREA-TYPE overlay dispatch (guest FUN_8003D0BC) -----------------------
+  // overlayTypeDispatch (FUN_8003D0BC, a0=list — never touched by this fn's own body, plain
+  // pass-through from the caller, gen_func_8003F9A8 passes SCENE_ENT_TABLE @0x800F2418): reads the
+  // AREA_TYPE byte @0x800BF870 (the same render-mode-select byte perModeDispatch/renderWalk's case
+  // 0x8003C188 both read); if >=22, no-op. Else dispatches through a 22-entry jump table
+  // (@0x80014EF0) to one of 20 per-area-type overlay leaves — area type 0 reaches the ALREADY-OWNED
+  // OverlayGroundGt3Gt4::entityLoop (FUN_801401B8) -> gt3/gt4; the other 19 are still-substrate. See
+  // overlay_type_dispatch.cpp for the full RE.
+  void overlayTypeDispatch();
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

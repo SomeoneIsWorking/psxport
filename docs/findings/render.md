@@ -150,26 +150,67 @@
     f157). `PSXPORT_DEBUG=ovhit` confirms `0x8003C048` fires (native=oracle call counts match exactly
     every run, e.g. native=88/oracle=88) — the override is genuinely wired and exercised, not a
     fake-green gate.
-  - **NEW frontier (OPEN, 2026-07-10): gt3/gt4 DATA divergence in the OverlayGroundGt3Gt4 cluster.**
-    With f118 closed, SBS-full's first divergence moves to **f158**, in `[packet_pool]` bytes emitted
-    by `OverlayGroundGt3Gt4::gt3`/`gt4` (0x8013FB88/0x8013FE58) — reached via a DIFFERENT, still fully
-    unowned top-level dispatcher `gen_func_8003D0BC` (a sibling of `gen_func_8003C048` in
-    `generated/shard_7.c`, its own 21-entry jump table at `32769<<16+20208 = 0x80014EF0`) calling the
-    ALREADY-OWNED `entityLoop`(801401B8)/`gt3`/`gt4` leaves from the ORIGINAL 2026-07-09 landing of
-    this cluster. `PSXPORT_SBS_PREWATCH=0x800C133E` + `ovhit`: `entityLoop`'s own call count matches
-    exactly (native=37/oracle=37 — NOT a control-flow divergence in the walk), but the EMITTED PACKET
-    BYTES differ (e.g. `A=FD 01 B=80 7C` at one offset) — a genuine DATA/logic bug in `gt3`'s math or
-    field reads, not a register-faithfulness/stack-frame issue (the class this task's fixes targeted).
-    `gt3`/`gt4`'s own thunk hit-counts show `native=0 oracle=2533` — this is EXPECTED (same
-    direct-native-call bypass every other leaf in this file shows, e.g. CCA4/CDD8 also show 0-ish
-    native counts despite running; NOT itself a bug) so it does not, by itself, indicate the fault.
-    Left OPEN per this task's scope (owning `FUN_8003C048`, not `FUN_8003D0BC` or re-auditing gt3's
-    math) — do not speculative-patch `OverlayGroundGt3Gt4::gt3` without a proper RE diff against
-    `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88` line-by-line. A LATER, SEPARATE run (SIGINT after
-    ~95s, no crash) shows the run stays alive and stable through f8580+ with only packet_pool bytes
-    (+ occasional task-0-stack `?`-tag bytes, likely a downstream cascade of the same gt3/gt4 data bug)
-    diverging — i.e. the game no longer crashes or diverges catastrophically, just this one still-open
-    data-correctness gap.
+  - **`gen_func_8003D0BC` OWNED (2026-07-10) — `Render::overlayTypeDispatch`
+    (`game/render/overlay_type_dispatch.cpp`, new file).** Per CLAUDE.md's "never debug through
+    unowned code" rule, this dispatcher had to be owned FIRST before any gt3/gt4 data diff-hunt (it
+    was the last fully-unowned link in the `0x8003D0BC -> 0x801401B8 (entityLoop) -> gt3/gt4` chain).
+    RE: instruction-exact transcription of `generated/shard_7.c gen_func_8003D0BC` — a pure `-24`-frame
+    integer dispatch (no GTE), no loop: reads `AREA_TYPE = mem8(0x800BF870)` (the same render-mode byte
+    `perModeDispatch`/`renderWalk`'s case-0x8003C188 read), early-outs if `>=22`, else indexes a
+    22-entry table at `0x80014EF0` (`32769<<16+20208`, adjacent to `renderWalk`'s own table at
+    `0x80014DB8`) to 20 case labels, each `c->r[31]=<RE'd return constant>; rec_dispatch(c, target)`.
+    The function's OWN body never touches `r4` — whatever the caller (`gen_func_8003F9A8`, which passes
+    `SCENE_ENT_TABLE=0x800F2418`) set flows through unchanged, so the port correctly leaves `c->r[4]`
+    alone (verified against gen: no r4 read/write anywhere in the function). Wired via
+    `engine_set_override_main` (oracle-gated, matching every sibling in this band). Frame mirrored
+    (`DispatchFrame`: sp-=24, spill/restore r31 at sp+16, exactly gen's prologue/epilogue).
+    **Verified NOT a regression, NOT the residual's cause**: SBS-full still reaches the exact same first
+    divergence at f158/0x800C133E as before ownership — confirmed via host backtraces showing
+    `Render::overlayTypeDispatch` correctly calling into the already-owned `OverlayGroundGt3Gt4::
+    entityLoop`/`gt3`/`gt4` on core A, while core B's backtrace shows the pure `gen_func_8003D0BC` body
+    (oracle purity intact — no native code leaked onto core B).
+  - **f158 gt3/gt4 "DATA divergence" — RE-NARROWED (2026-07-10): NOT a gt3/gt4 field-math bug; it's an
+    upstream packet-pool CURSOR-POSITION divergence.** `PSXPORT_SBS_PREWATCH=0x800C133E
+    PSXPORT_SBS_WW_ONVALUEDIVERGE=0` (plain persist mode) traced every raw store to the watched dword
+    `0x800C133C..0x800C133F` at f158 and its host C++ call stack:
+    - Core A: 2 writes via `OverlayGroundGt3Gt4::gt4` (`mem_w32(pool+4, rgb0&COL_MASK_STD)`, values
+      `0x5FC000C0` then `0x01FD5EFE` — TWO back-to-back GT4 loop iterations landing on the exact same
+      pool address, i.e. the FIRST iteration's record was rejected — backface/OOB `continue` — before
+      `pool += 52`, so the SECOND iteration's unconditional rgb0 write overwrote the same slot; this is
+      correct/expected bump-allocator behavior, not a bug), then 1 write via `OverlayGroundGt3Gt4::gt3`
+      (`mem_w16(pool+36, uv2hi)`, value `0x4097`, from a DIFFERENT record whose pool base happens to sit
+      32 bytes earlier — again ordinary aliasing in a bump allocator, not a bug).
+    - Core B: exactly ONE write to this dword the ENTIRE frame — the same `gt3` uv2hi write, SAME value
+      `0x4097` (`ov_a00_gen_8013FB88`) — i.e. core B's gt3/gt4 pipeline computes the IDENTICAL field
+      value A does, at the IDENTICAL pool address, when it actually runs. **Core B never performs the
+      GT4 rgb0 writes A performs at this address at all** — its live-writer map at the frame-boundary
+      pause (`sbs bt`) shows B's LAST writer to `0x800C133E/F` was `pc=80115598 ra=8003DF80` at **frame
+      157** (a fully different, unrelated function, one frame EARLIER) — meaning core B's packet stream
+      for frame 158 never reaches this byte offset again after the gt3 uv2hi write only touches the low
+      half (`133C-133D`); the high half (`133E-133F`) is simply never revisited by ANY writer on core B
+      in f158, so it keeps frame 157's leftover value (`80 7C`), while core A's extra GT4 iteration DOES
+      overwrite it (`FD 01`).
+    - **Conclusion**: `gt3`'s and `gt4`'s own per-field math is verified byte-identical where both cores
+      actually execute it (confirmed above: same value, same address, same function). The real
+      divergence is that core A's GT4 loop for this ground-entity record processes (at least) 2
+      iterations (one rejected, one accepted) while core B's equivalent substrate execution apparently
+      does not reach a second GT4 iteration at this pool position at all — i.e. a genuine COUNT/DATA
+      divergence in what `counts = mem_r32(table+idx*4)` (the packed GT3/GT4 counts word `entityLoop`
+      reads) resolves to, or in an EARLIER packet-pool consumer this same frame (all 7 functions
+      `gen_func_8003F9A8` calls before `0x8003D0BC` — `0x8004FD30/80025D98/8003BF00/8003EEC0/8003B588/
+      8003BB50/8003BCF4` — are confirmed **still fully unowned** via `tools/codemap.py`, so both cores
+      run the byte-identical `gen_func_*` body for all of them; if one of those diverges it can only be
+      because the GUEST STATE feeding it already diverged from something earlier, not from a
+      register-faithfulness gap in this band). **Left OPEN** — do not speculative-patch `gt3`/`gt4`'s
+      already-verified-correct field math; the next session should either (a) diff the raw `counts`
+      word / ground-entity table content between core A and core B guest RAM at this exact call (a
+      genuine upstream game-STATE divergence would show up there directly), or (b) RE `0x80115598`
+      (core B's actual last legitimate writer to this address, one frame earlier) and audit whether IT
+      is a still-unowned leaf feeding wrong sizes into the shared pool. A LATER, SEPARATE run (SIGINT
+      after ~95s, no crash) shows the run stays alive and stable through f8580+ with only packet_pool
+      bytes (+ occasional task-0-stack `?`-tag bytes, likely a downstream cascade of this same cursor
+      divergence) diverging — i.e. the game no longer crashes or diverges catastrophically, just this
+      one still-open data-correctness gap.
 - **refs**: commits 5483a83 (oracle gate), a457082/bef7769 (billboard), ffb1463 (overlay_ground);
   `game/render/{perobj_billboard,perobj_dispatch,overlay_ground_gt3gt4}.cpp`;
   `runtime/recomp/engine_override_thunk.cpp`; oracles `generated/shard_5.c gen_func_8003CCA4`,
@@ -180,15 +221,22 @@
   gen_func_8003CCA4`, `generated/shard_6.c gen_func_8003CDD8` (loop-invariant r16-r23), `game/render/
   perobj_dispatch.cpp` (`Render::cmdListDispatch`), `game/render/perobj_billboard.cpp` (`CCA4Frame`).
   Repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x801FE8B8
-  PSXPORT_SBS_WW_ONVALUEDIVERGE=1`. f118/f62-RESOLVED + gt3/gt4-OPEN (2026-07-10): commit (this task);
+  PSXPORT_SBS_WW_ONVALUEDIVERGE=1`. f118/f62-RESOLVED (2026-07-10): commit (prior task);
   `game/render/render_walk_dispatch.cpp` (new, `Render::renderWalk`), `game/render/perobj_billboard.cpp`
   (`Render::perObjRenderDispatch` r18/flag fix); oracle `generated/shard_7.c gen_func_8003C048`
-  (renderWalk), `generated/shard_5.c gen_func_8003CCA4` (r18/flag prologue lines 5060-5071),
-  `generated/shard_7.c gen_func_8003D0BC` (the NEW OPEN frontier's still-unowned caller),
-  `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88` (gt3, next RE target). Repro (f118/f62, now
-  0-diff): same PREWATCH command above. Repro (NEW gt3/gt4 frontier):
-  `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x800C133E
-  PSXPORT_SBS_WW_ONVALUEDIVERGE=1`.
+  (renderWalk), `generated/shard_5.c gen_func_8003CCA4` (r18/flag prologue lines 5060-5071).
+  `gen_func_8003D0BC` OWNED (2026-07-10, this task): `game/render/overlay_type_dispatch.cpp` (new,
+  `Render::overlayTypeDispatch`); oracle `generated/shard_7.c gen_func_8003D0BC`. gt3/gt4 f158 residual
+  RE-NARROWED to a packet-pool cursor divergence (this task, still OPEN): traced via
+  `PSXPORT_SBS_PREWATCH=0x800C133E` (persist mode, no `WW_ONVALUEDIVERGE`) + `sbs bt`'s last-writer map
+  at the frame-boundary pause; oracle `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88` (gt3, confirmed
+  byte-identical to native where both actually write), `generated/shard_7.c gen_func_8003F9A8` (the
+  frame orchestrator; the 7 still-unowned functions it calls before `0x8003D0BC` — see body above),
+  `0x80115598` (core B's actual last writer to the residual address, one frame earlier — next RE
+  target). Repro (f118/f62/overlayTypeDispatch, all 0-diff up to this point): same PREWATCH command
+  above. Repro (gt3/gt4 cursor-divergence frontier, still OPEN):
+  `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x800C133E` (omit
+  `WW_ONVALUEDIVERGE` to see every raw store + host backtrace, not just the first value-diverging one).
 
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 

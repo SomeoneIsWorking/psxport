@@ -246,6 +246,7 @@ set(PORT_SRC
   game/render/perobj_dispatch.cpp
   game/render/perobj_billboard.cpp
   game/render/render_walk_dispatch.cpp
+  game/render/overlay_type_dispatch.cpp
   runtime/recomp/scheduler.cpp
   runtime/recomp/native_boot.cpp
   runtime/recomp/dualview_snapshot.cpp
