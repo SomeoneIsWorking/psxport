@@ -79,6 +79,17 @@
 void rec_dispatch(Core*, uint32_t);
 void shard_set_override(uint32_t addr, OverrideFn fn);   // generated/shard_disp.c (C++ linkage)
 
+// gen_func_* fallbacks for the psx_fallback gate. g_override[] is a single PROCESS-GLOBAL table
+// shared by EVERY Core (SBS core A AND core B), so the trampolines below MUST defer to the real
+// recompiled body on core B (the pure-substrate oracle) — otherwise the oracle runs this native
+// mirror and SBS compares native-vs-native (a false 0-div) instead of native-vs-substrate. Same
+// discipline as every other shard_set_override cluster (gte_math/node_xform/cull/...). The oracle
+// may carry ONLY async→sync conversions (sync_overrides.cpp) + HLE BIOS — nothing engine/game.
+extern void gen_func_8003CCA4(Core*);
+extern void gen_func_8003C2D4(Core*);
+extern void gen_func_8003C464(Core*);
+extern void gen_func_8003C8F4(Core*);
+
 // Still-substrate leaves called by these 4 (declared, called via plain guest-ABI intra-shard calls —
 // exactly as the generated code reaches them; g_override still gates each, so if one is ever owned
 // later these calls transparently pick that up).
@@ -406,6 +417,10 @@ void Render::billboardEmit() {
 
 // ==================================================================================================
 namespace {
+// Engine/game natives installed into the process-global g_override[] table. These are NOT gated
+// here — the gate lives in ONE place (engine_override_thunk, runtime/recomp/engine_override_thunk.cpp)
+// so it can't be forgotten cluster-by-cluster. engine_set_override_main() installs the shared thunk,
+// which runs the real gen_func_* body on the oracle (psx_fallback) and the native everywhere else.
 void ov_perObjRenderDispatch(Core* c) { c->mRender->perObjRenderDispatch(); }
 void ov_billboardCompose1(Core* c)    { c->mRender->billboardCompose1(); }
 void ov_billboardCompose2(Core* c)    { c->mRender->billboardCompose2(); }
@@ -416,8 +431,12 @@ void perobj_billboard_install() {
   static bool done = false;
   if (done) return;
   done = true;
-  shard_set_override(0x8003CCA4u, ov_perObjRenderDispatch);
-  shard_set_override(0x8003C2D4u, ov_billboardCompose1);
-  shard_set_override(0x8003C464u, ov_billboardCompose2);
-  shard_set_override(0x8003C8F4u, ov_billboardEmit);
+  // engine_set_override_main installs the shared oracle-gated thunk (runs gen_func_* on core B),
+  // NOT a raw shard_set_override — these are engine/game natives, and the oracle must run the pure
+  // recompiled body for them. See runtime/recomp/engine_override_thunk.cpp.
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x8003CCA4u, ov_perObjRenderDispatch, gen_func_8003CCA4);
+  engine_set_override_main(0x8003C2D4u, ov_billboardCompose1,    gen_func_8003C2D4);
+  engine_set_override_main(0x8003C464u, ov_billboardCompose2,    gen_func_8003C464);
+  engine_set_override_main(0x8003C8F4u, ov_billboardEmit,        gen_func_8003C8F4);
 }

@@ -238,7 +238,12 @@ void OverlayGt3Gt4::gt4(Core* c) {
 }
 
 void OverlayGt3Gt4::registerOverrides(Game*) {
-  extern void ov_a00_set_override(uint32_t, OverrideFn);
-  ov_a00_set_override(0x801465ECu, &OverlayGt3Gt4::gt3);
-  ov_a00_set_override(0x801467BCu, &OverlayGt3Gt4::gt4);
+  // engine_set_override_a00 installs the shared oracle-gated thunk (runs ov_a00_gen_* on core B),
+  // NOT a raw ov_a00_set_override — these are engine/game natives, and the oracle must run the pure
+  // recompiled body. See runtime/recomp/engine_override_thunk.cpp.
+  extern void ov_a00_gen_801465EC(Core*);
+  extern void ov_a00_gen_801467BC(Core*);
+  extern void engine_set_override_a00(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_a00(0x801465ECu, &OverlayGt3Gt4::gt3, ov_a00_gen_801465EC);
+  engine_set_override_a00(0x801467BCu, &OverlayGt3Gt4::gt4, ov_a00_gen_801467BC);
 }

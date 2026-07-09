@@ -231,6 +231,7 @@ set(PORT_SRC
   game/audio/music_list.cpp
   runtime/recomp/sync_overrides.cpp
   runtime/recomp/engine_overrides.cpp
+  runtime/recomp/engine_override_thunk.cpp
   game/render/pkt_span.cpp
   game/render/render_observer.cpp
   game/render/overlay_gt3gt4.cpp

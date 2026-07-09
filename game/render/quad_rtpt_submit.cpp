@@ -200,10 +200,13 @@ void QuadRtptSubmit::submitQuad(Core* c) {
 
 // Wiring (frontier, 2026-07-08): both leaves are reached only via direct C calls the recompiler
 // generates (`func_8003B054(c)`/`func_8003B320(c)`), which always route through the recompiler's
-// own process-global g_override[] table — shard_set_override installs into that SAME table, the
-// same dual-registration discipline as game/math/gte_math.cpp and OverlayGt3Gt4's ov_a00 twin.
+// own process-global g_override[] table. engine_set_override_main installs the shared oracle-gated
+// thunk (runs gen_func_* on core B), NOT a raw shard_set_override — these are engine/game natives,
+// and the oracle must run the pure recompiled body. See runtime/recomp/engine_override_thunk.cpp.
 void QuadRtptSubmit::registerOverrides(Game*) {
-  extern void shard_set_override(uint32_t, OverrideFn);
-  shard_set_override(0x8003B054u, &QuadRtptSubmit::rotateQuadCorners);
-  shard_set_override(0x8003B320u, &QuadRtptSubmit::submitQuad);
+  extern void gen_func_8003B054(Core*);
+  extern void gen_func_8003B320(Core*);
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x8003B054u, &QuadRtptSubmit::rotateQuadCorners, gen_func_8003B054);
+  engine_set_override_main(0x8003B320u, &QuadRtptSubmit::submitQuad,        gen_func_8003B320);
 }

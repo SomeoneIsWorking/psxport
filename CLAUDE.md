@@ -156,6 +156,12 @@ you find yourself wanting to write guest RAM from render code, you're building t
 
 ## Verification
 
+- **Bug-hunt loop + oracle integrity: `docs/bug-hunt-workflow.md` (read first).** Find bugs by oracle
+  compare across the PC SKIP × RENDERER matrix; NEVER debug a divergence before the divergent call
+  chain is FULLY OWNED end-to-end (grow ownership first). The SBS oracle (core B) must stay pure —
+  only PlatformHle + the `gen_func_*` body; engine/game natives on the process-global `g_override[]`/
+  `g_ov_*` tables MUST install via `engine_set_override_*` (runtime/recomp/engine_override_thunk.cpp),
+  never the raw `shard_set_override`. A sudden 0-div where SBS used to diverge = suspect the oracle.
 - **Job #1 — SBS byte-exact.** `PSXPORT_SBS_MODE=full ./run.sh`. Every diff is fatal. Root-cause + fix.
 - **Rendering (once byte-exact) — observable result.** Agent builds, USER eyeballs. Non-visual RAM/
   state probes fine. Don't gate render on reproducing PSX packets — that forces transcription.
