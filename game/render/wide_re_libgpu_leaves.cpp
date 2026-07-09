@@ -10,9 +10,10 @@
 // Struct map confirmed this session (base = 0x800A0000, i.e. `(32778u<<16)`):
 //   +22936 (0x5998)  GPU_SYS: fn-ptr jump table (per docs/engine_re.md: +0x08 DMA-send, +0x14
 //                     DrawOTagEnv, +0x18 DrawOTag, +0x2C ClearOTagR, +0x3C DrawSync)
-//   +22940 (0x599C)  GPU_SYS_INIT: a SECOND fn-ptr, called by DrawSync only while a boot/reset flag
-//                     (byte @+22946) is < 2 — looks like a one-time "GPU op init" hook distinct from
-//                     the steady-state table, not itself in the jump table.
+//   +22940 (0x599C)  GPU_SYS_INIT: a SECOND fn-ptr, called by DrawSync/ClearOTagR/PutDrawEnv only
+//                     while the flag byte @+22946 is >= 2 (POLARITY CORRECTED 2026-07-10 — the
+//                     original "< 2 / one-time init" reading was inverted; it's a steady-state
+//                     "GPU sys is up" hook), not itself in the jump table.
 //   +22944 (0x59A0)..+22950 (0x59A6): small ints/shorts read by func_80081FB0 (PutDrawEnv helper,
 //                     NOT drafted this session — see MAP note below); +22946 is the same boot/reset
 //                     flag byte DrawSync/ClearOTagR both gate on.
@@ -64,15 +65,20 @@ constexpr uint32_t GPU_DMA_STATE_PTR  = GPU_SYS_BASE + 23220; // 0x800A5AB4
 // // WAIT for previous frame's draw to finish"). Guest ABI: a0=mode (arg not read by this leaf body
 // itself — passed straight through to the callee as the 2nd dispatch's a1).
 //
-// While the boot/reset flag byte @GPU_BOOT_FLAG is < 2 (i.e. during the first couple of frames after
-// reset): call the one-time init hook GPU_SYS_INIT_FN with (a0 = a fixed BIOS-window constant
-// 0x8001BEDC, a1 = mode). Unconditionally after that: call GPU_SYS_TABLE[+60] (table+0x3C =
-// DrawSync's OWN table slot per the doc) with (a0 = mode). No stack frame in the gen body (leaf,
-// sp untouched) — this native port needs none either.
+// When the boot/reset flag byte @GPU_BOOT_FLAG is >= 2: call the hook GPU_SYS_INIT_FN with (a0 = a
+// fixed BIOS-window constant 0x8001BEDC, a1 = mode). [POLARITY CORRECTED 2026-07-10 by the dedicated
+// PutDrawEnv/streamer pass: the original draft had `< 2` — inverted. The raw gen-C
+// (generated/shard_2.c gen_func_80080F6C) is `_t = (bootFlag < 2); if (_t) goto L_80080FA8;`, i.e.
+// bootFlag<2 SKIPS the hook call; the call happens on fallthrough, when bootFlag>=2. ClearOTagR
+// below and PutDrawEnv (wide_re_gpu_putdrawenv.cpp) have the same shape and polarity — all three
+// now agree. The hook is therefore NOT a "first frames after reset" init but a "GPU sys is up"
+// steady-state hook; naming updated accordingly.] Unconditionally after that: call
+// GPU_SYS_TABLE[+60] (table+0x3C = DrawSync's OWN table slot per the doc) with (a0 = mode). No
+// stack frame in the gen body (leaf, sp untouched) — this native port needs none either.
 static void func_80080F6C(Core* c) {
   const uint32_t mode = c->r[4];
   uint8_t bootFlag = c->mem_r8(GPU_BOOT_FLAG);
-  if (bootFlag < 2) {
+  if (bootFlag >= 2) {
     c->r[4] = (32770u << 16) + (uint32_t)(int32_t)(-16676);  // 0x8001BEDC — fixed BIOS-window arg
     uint32_t initFn = c->mem_r32(GPU_SYS_INIT_FN);
     c->r[5] = mode;
@@ -92,16 +98,22 @@ static void func_80080F6C(Core* c) {
 // guest code without a clean symbol boundary). That trailing block is a DIFFERENT, un-RE'd MIPS
 // function reachable only via its own call sites (not via a call to 0x80081458) — NOT ported here.
 //
-// Guest ABI: a0=OT pointer, a1=entry count. Same boot-flag-gated init-hook pattern as DrawSync
-// (init hook gets a0=fixed const 0x8001BF68, a1=OT, a2=entryCount); then calls GPU_SYS_TABLE[+44]
-// (table+0x2C, ClearOTagR's own slot) with (a0=OT, a1=entryCount) — this is presumably the real
-// hardware-facing OT-clear loop, opaque to this leaf. AFTER that call, ClearOTagR additionally links
-// *OT to a small shared "dummy tail packet" at the fixed address 0x800A5B20 (classic libgpu
-// ClearOTagR internal: every table build shares one small terminator/padding structure) — writes a
-// tag word (0x04000000 | (0x800A5B0C & 0x00FFFFFF)) to 0x800A5B20, then sets *OT = (0x800A5B20 &
+// Guest ABI: a0=OT pointer, a1=entry count. Same boot-flag-gated hook pattern as DrawSync
+// (hook gets a0=fixed const 0x8001BF68, a1=OT, a2=entryCount) — and the SAME polarity correction
+// applies (2026-07-10, dedicated PutDrawEnv/streamer pass): the gen-C
+// (generated/shard_7.c gen_func_80081458) is `_t = (bootFlag < 2); if (_t) goto L_800814A0;`, i.e.
+// bootFlag<2 SKIPS the hook; the call happens when bootFlag>=2 (the original draft had this
+// inverted). Then calls GPU_SYS_TABLE[+44] (table+0x2C, ClearOTagR's own slot) with
+// (a0=OT, a1=entryCount) — presumably the real hardware-facing OT-clear loop, opaque to this leaf.
+// AFTER that call, ClearOTagR additionally links *OT to a small shared "dummy tail packet"
+// (classic libgpu ClearOTagR internal: every table build shares one small terminator/padding
+// structure) — CONSTANTS CORRECTED 2026-07-10: the gen-C decimals are +23136/+23116 from base
+// 0x800A0000, i.e. tail packet at **0x800A5A60** and tag content **0x800A5A4C** (the original
+// draft's 0x800A5B20/0x800A5B0C was a decimal→hex conversion slip, off by 0xC0). Writes a tag word
+// (0x04000000 | (0x800A5A4C & 0x00FFFFFF)) to 0x800A5A60, then sets *OT = (0x800A5A60 &
 // 0x00FFFFFF). Transcribed as literal constant-folded values (the gen body computes on raw
 // addresses-as-integers, not memory reads through pointers, for this whole tail — no dereference).
-// Frame -32, spills ra/s17/s16 at +24/+20/+16 (s16=OT ptr kept live across the init-hook call,
+// Frame -32, spills ra/s17/s16 at +24/+20/+16 (s16=OT ptr kept live across the hook call,
 // s17=entryCount).
 static void func_80081458(Core* c) {
   c->r[29] -= 32;
@@ -111,7 +123,7 @@ static void func_80081458(Core* c) {
   c->r[17] = c->r[5];                       // s17 = entryCount
   uint8_t bootFlag = c->mem_r8(GPU_BOOT_FLAG);
   c->mem_w32(c->r[29] + 24, c->r[31]);  // ra spill happens unconditionally (branch-delay-slot write)
-  if (bootFlag < 2) {
+  if (bootFlag >= 2) {
     c->r[4] = (32770u << 16) + (uint32_t)(int32_t)(-16536);  // 0x8001BF68 — fixed BIOS-window arg
     c->r[5] = c->r[16];
     uint32_t initFn = c->mem_r32(GPU_SYS_INIT_FN);
@@ -126,11 +138,11 @@ static void func_80081458(Core* c) {
   rec_dispatch(c, tableSlot44);
 
   const uint32_t mask24 = (255u << 16) | 65535u;  // 0x00FFFFFF
-  constexpr uint32_t kDummyTagAddr = 0x800A5B20u;
-  constexpr uint32_t kDummyTagContent = 0x800A5B0Cu;
+  constexpr uint32_t kDummyTagAddr = 0x800A0000u + 23136u;     // 0x800A5A60 (gen-C decimal, CORRECTED — see header)
+  constexpr uint32_t kDummyTagContent = 0x800A0000u + 23116u;  // 0x800A5A4C (gen-C decimal, CORRECTED)
   uint32_t tag = (kDummyTagContent & mask24) | (1024u << 16);  // 0x04000000 | low24
   c->mem_w32(kDummyTagAddr, tag);
-  c->mem_w32(c->r[16], kDummyTagAddr & mask24);  // *OT = low24(0x800A5B20)
+  c->mem_w32(c->r[16], kDummyTagAddr & mask24);  // *OT = low24(0x800A5A60)
 
   c->r[31] = c->mem_r32(c->r[29] + 24);
   c->r[17] = c->mem_r32(c->r[29] + 20);

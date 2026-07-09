@@ -227,6 +227,8 @@ set(PORT_SRC
   game/math/wide_re_gte_transform3.cpp
   game/render/wide_re_libgpu_leaves.cpp
   game/render/wide_re_gpu_dma_queue.cpp
+  game/render/wide_re_gpu_loadimage_streamer.cpp
+  game/render/wide_re_gpu_putdrawenv.cpp
   game/render/native_terrain.cpp
   game/render/render_queue.cpp
   game/render/screen_fade.cpp

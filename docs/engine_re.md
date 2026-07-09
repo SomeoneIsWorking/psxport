@@ -3052,6 +3052,64 @@ Build check: `cmake --build build2 --target tomba2_port` links clean with the ne
 `cmake/tomba2_port.cmake`. Still fully unwired — no `EngineOverrides`/`shard_set_override`
 registration, no SBS run. A wiring pass must re-diff every line against the gen-C and go through the
 SBS gate before this cluster is live.
+
+## Wide-RE wave 2026-07-10 — dedicated libgpu pass: LoadImage streamer (0x80082734) + PutDrawEnv (0x800815D0) chain DRAFTED
+
+Dedicated pass on the two libgpu targets every prior wave explicitly deferred. Both drafted from the
+raw `generated/shard_*.c` gen-C line-by-line (wide-RE tier, UNWIRED/UNVERIFIED, compile-checked).
+
+**DRAFTED — `game/render/wide_re_gpu_loadimage_streamer.cpp`:**
+- `0x80082734` = **libgpu LoadImage()-internal chunked GP0-FIFO pixel streamer** (~196 dispatches/600
+  frames; gen at generated/shard_5.c:13663, 48-byte frame, spills ra/s0..s5). ABI: a0=RECT16 ptr
+  {x,y,w,h s16}, a1=pixel-word src ptr; ret -1 on timeout or empty clamped rect, else 0. Clamps w/h IN
+  PLACE against its own clip-max pair, computes numWords=ceil(w*h/2), splits into 16-word FIFO chunks
+  + a 0..15-word PIO remainder streamed through the raw GP0 port, then hands the chunked part to an
+  async GPU-DMA continuation by stashing {srcPtr, (chunkCount<<16)|16, 0x01000201} into the shared
+  GPU_DMA_ARG0/ARG1/STATE globals (the consumer of that stash was NOT located — MEDIUM-LOW confidence
+  on the async handoff's semantics; the values are transcribed exactly). The GP0(0xA0) CopyRect-
+  CPU->VRAM tag has a provably-dead 0xB0 sibling arm (selector register unconditionally zeroed) —
+  omitted, documented in the file header. Confidence: HIGH on control flow + every memory access.
+- **ADDRESS CORRECTIONS to the prior waves' prose** (decimal→hex slips, re-derived from the exact
+  gen-C decimals): the streamer's clip pair is **0x800A59A4/0x800A59A6** (+22948/+22950), NOT
+  0x800A5964/66 as the 2026-07-10 queue-pass note above says; the GP0 FIFO port pointer is
+  **0x800A5AA4** (+23204), NOT 0x5A84 as wide_re_gpu_dma_queue.cpp's header says.
+
+**DRAFTED — `game/render/wide_re_gpu_putdrawenv.cpp`:**
+- `0x800815D0` = **PutDrawEnv(drawEnvPtr)** (gen at generated/shard_1.c:15851, frame -32, spills
+  ra/s0/s1/s2; returns its argument). Boot-flag-gated hook (fires when flag>=2 — see corrections
+  below), then func_80081FB0 packs the DRAWENV into a GP0 packet at drawEnvPtr+28, ORs 0x00FFFFFF
+  into the packet's tag word, sends it via GPU_SYS_TABLE[+0x08] (a0=table[+0x18] VALUE-as-data,
+  a1=packet, a2=64, a3=0), then memcpy(0x800A59B0, drawEnvPtr, 92) caches it as the current env.
+  Keeps s0/s1/s2 LIVE in the guest register file across dispatches (callees spill them). HIGH
+  confidence. Its callee chain, previously "5 unowned leaves": 4 DRAFTED here —
+  `0x80082240` (SetDrawAreaTopLeft word, 0xE3, clamps vs clip-max−1), `0x800822D8`
+  (SetDrawAreaBottomRight, 0xE4, same shape), `0x80082370` (SetDrawingOffset, 0xE5, 11-bit fields, no
+  clamp), `0x80082220` (DR_TPAGE mode word — standalone twin of func_80083DE0's inline computation,
+  byte-identical; a0→0x400 low bit, a1→0x200 tag bit), `0x8008238C` (DR_TWIN word — algebraically
+  identical to func_80083DE0's tail; 16-byte dead-store scratch frame mirrored). All HIGH confidence
+  (small, self-contained, each verified twice).
+- **MAPPED, NOT drafted: `0x80081FB0`** (the packer — actually ~147 gen-C lines, not "40-line").
+  6-word header path fully understood (calls the 5 leaves in order, writes dst+4..+24, length byte
+  dst+3=5); but when *(drawEnv+24)!=0 it appends a FillRect-shaped tail whose two sp-scratch source
+  words were not traced to named fields, with two alternative word-layout arms keyed on clip w/h
+  mod-64 — exactly §9's bug-farm shape, deferred rather than guessed. PutDrawEnv reaches it via
+  rec_dispatch, so drafting it later needs no change to PutDrawEnv.
+- `0x8009A3E0` (memcpy-like, out of band) left substrate.
+
+**CORRECTIONS APPLIED to the committed `wide_re_libgpu_leaves.cpp` drafts** (found by cross-checking
+the identical hook shape; §9's bug-prediction landing in practice — 2 real bugs in 2 "verified twice"
+drafts):
+1. `func_80080F6C` (DrawSync) and `func_80081458` (ClearOTagR) both had the boot-flag hook gate
+   INVERTED (`<2` vs the gen's skip-when-`<2`, i.e. call-when->=2). Fixed. Consequence: GPU_SYS_INIT_FN
+   (0x800A599C) is a steady-state "GPU sys is up" hook, not a one-time boot init — doc naming updated.
+2. `func_80081458`'s dummy-tail-packet constants were 0x800A5B20/0x800A5B0C; gen decimals +23136/+23116
+   = **0x800A5A60/0x800A5A4C** (off by 0xC0, decimal→hex slip). Fixed.
+Also fixed one bug in THIS pass's own first transcription (caught on self re-diff): the streamer's
+ceil-div carry is a LOGICAL `>>31` (srl), not arithmetic.
+
+Build check: `cmake --build build2 --target tomba2_port` links clean with both files added to
+`cmake/tomba2_port.cmake`. Everything above remains fully unwired — no override registration, no SBS
+run. A wiring pass must re-diff every line against the gen-C and SBS-gate before any of it is live.
 ## Wide-RE wave 2026-07-09 — SsSeqCalled (0x80090BD0) cluster DRAFTED (follow-up to the libsnd/BIOS wave)
 
 **Correction to the prior wave's "Mapped, NOT drafted" entry above**: its globals for this cluster

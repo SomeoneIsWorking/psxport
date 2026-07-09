@@ -2681,3 +2681,18 @@ themselves are LIVE but dispatch out to substrate for every case body.
   run) per docs/fleet-workflow.md §6. A wiring pass MUST do the line-by-line gen-body re-verify §9
   requires before registering either as an override. Full RE writeup in sequencer.h/font.h header
   comments and docs/engine_re.md.
+- **libgpu dedicated pass: LoadImage streamer + PutDrawEnv chain (wide-RE agent, 2026-07-10,
+  UNWIRED).** The two libgpu targets both prior waves explicitly deferred, now drafted from raw gen-C:
+  `func_80082734` (LoadImage-internal chunked GP0-FIFO pixel streamer, 48-byte frame / 6 spills
+  mirrored, HIGH confidence on flow, MEDIUM-LOW on the async chunk-DMA handoff semantics) in
+  `game/render/wide_re_gpu_loadimage_streamer.cpp`; `func_800815D0` (PutDrawEnv, s-regs kept LIVE
+  across dispatches for callee-frame fidelity, HIGH confidence) plus 4 of its 5 unowned callees
+  (0x80082240/0x800822D8 SetDrawArea TL/BR, 0x80082370 SetDrawingOffset, 0x80082220 DR_TPAGE,
+  0x8008238C DR_TWIN — all HIGH confidence true leaves) in `game/render/wide_re_gpu_putdrawenv.cpp`.
+  MAPPED not drafted: 0x80081FB0 (the DRAWENV packer — 147 gen-C lines; 6-word header path fully
+  RE'd, FillRect tail's two scratch-word sources untraced — §9 bug-farm shape, deferred honestly);
+  0x8009A3E0 (memcpy-like, out of band). ALSO FIXED two real bugs found in the already-committed
+  `wide_re_libgpu_leaves.cpp` drafts (inverted boot-flag hook polarity in DrawSync AND ClearOTagR;
+  ClearOTagR dummy-tail constants off by 0xC0) plus address corrections to prior prose (clip pair =
+  0x800A59A4/A6, GP0 port ptr = 0x800A5AA4). Everything unwired; build+link verified clean. Full RE
+  in the two file headers + docs/engine_re.md "Wide-RE wave 2026-07-10 — dedicated libgpu pass".
