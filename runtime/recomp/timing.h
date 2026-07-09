@@ -24,4 +24,16 @@ public:
   //   the PC-native frame loop (native_step_frame) so recomp code reading DAT_800abde0 for
   //   pacing/idle-timers keeps advancing.
   void frameTick();
+
+  // vsyncCallbackDispatch(): 0x80086288 FUN_80086288 — the BIOS intr.c VSyncCallback CHAIN
+  //   invoker (real retail BIOS VSyncCallback table has exactly 8 slots at 0x800AFDC0, plus an
+  //   incrementing IRQ-tick counter at 0x800AFDE0). Body per gen_func_80086288
+  //   (generated/shard_4.c:13351): bump the counter, then walk the 8-entry fn-ptr table and
+  //   rec_dispatch() any non-null slot. WIDE-RE DRAFT, UNWIRED: nothing in the port currently
+  //   installs a callback into that table (vsyncCallback() above is a no-op — see its comment —
+  //   so the real per-vblank IRQ vector this dispatcher hangs off is never modeled), and no
+  //   static caller was found in generated/ (only ever reached indirectly through the IRQ
+  //   vector, like 0x800909C0/0x80090BD0 — see game/audio/sequencer.h). Kept for RE reference /
+  //   future re-enable if a callback slot is ever installed faithfully.
+  void vsyncCallbackDispatch();
 };

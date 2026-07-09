@@ -104,6 +104,7 @@ set(PORT_SRC
   game/scene/script_interp.cpp
   game/audio/sfx.cpp
   game/audio/audio_dispatch.cpp
+  game/audio/sequencer.cpp
   game/world/area_slots.cpp
   game/scene/mode_state_arm.cpp
   game/world/placement.cpp

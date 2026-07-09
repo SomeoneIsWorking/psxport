@@ -61,3 +61,35 @@ void Timing::frameTick() {
   vblank += 1u;
   game->core.mem_w32(VBLANK_COUNT, vblank);
 }
+
+#define VSYNC_CB_TABLE 0x800AFDC0u  // real retail BIOS VSyncCallback array — 8 fn-ptr slots
+#define VSYNC_CB_COUNT  0x800AFDE0u // IRQ-tick counter bumped once per dispatch pass
+
+// 0x80086288 FUN_80086288 — BIOS intr.c VSyncCallback chain invoker. WIDE-RE DRAFT, UNWIRED
+// (see timing.h). Faithful to gen_func_80086288: descend sp 32, spill s0(r16)/s1(r17)/ra(r31)
+// (the substrate's own callee-save frame — mirrored per CLAUDE.md so a future caller sees
+// byte-identical guest-stack bytes), bump the tick counter, walk the 8-entry fn-ptr table
+// rec_dispatch()-ing every non-null slot, then restore + ascend. No caller reaches this
+// natively today (see header note) so nothing currently observes the spilled bytes.
+void Timing::vsyncCallbackDispatch() {
+  Core* c = &game->core;
+  const uint32_t sp_save = c->r[29];
+  const uint32_t ra_save = c->r[31];
+  c->r[29] = sp_save - 32u;
+  const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 20u, c->r[16]);
+  c->mem_w32(sp + 16u, c->r[17]);
+  c->mem_w32(sp + 24u, ra_save);
+
+  c->mem_w32(VSYNC_CB_COUNT, c->mem_r32(VSYNC_CB_COUNT) + 1u);
+  for (uint32_t i = 0; i < 8u; i++) {
+    uint32_t slot = c->mem_r32(VSYNC_CB_TABLE + i * 4u);
+    if (slot != 0u) { c->r[31] = 0x800862D0u; rec_dispatch(c, slot); }
+  }
+
+  c->r[31] = c->mem_r32(sp + 24u);
+  c->r[17] = c->mem_r32(sp + 20u);
+  c->r[16] = c->mem_r32(sp + 16u);
+  c->r[29] = sp_save;
+  c->r[31] = ra_save;
+}

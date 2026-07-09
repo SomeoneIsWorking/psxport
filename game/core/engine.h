@@ -47,6 +47,7 @@
 #include "ai/release_trigger_motion.h" // Engine owns the release-trigger sub-motion cluster
 #include "ai/actor_melee_engage.h"     // Engine owns the ActorMeleeEngage AI leaf (FUN_80112188)
 #include "ai/melee_proximity.h"        // Engine owns the MeleeProximity AI leaf (FUN_8001F9DC)
+#include "audio/sequencer.h"            // Engine owns the Sequencer libsnd tick wrapper (FUN_800909C0, wide-RE draft, unwired)
 class Core;
 
 class Engine {
@@ -94,6 +95,7 @@ public:
   SceneEvents      sceneEvents;        // field-wide scene-event arm primitive (FUN_80040B48)
   Sfx              sfx;                 // sound-FX trigger dispatcher (FUN_80074590)
   AudioDispatch    audioDispatch;       // field-audio dispatch/settle cluster (FUN_800750D8 et al.)
+  Sequencer        sequencer;            // libsnd per-VBlank tick wrapper (FUN_800909C0, wide-RE draft, unwired)
   AreaSlots        areaSlots;           // area-slot table state machine (FUN_80075A80 / FUN_80074AF0)
   ModeStateArm     modeStateArm;        // mode-state arm primitive pair (FUN_8005082C / FUN_800508A8)
   ScriptInterp     script;              // cutscene bytecode dispatcher (FUN_80041098 et al.)

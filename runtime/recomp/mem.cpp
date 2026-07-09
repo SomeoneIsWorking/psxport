@@ -327,6 +327,22 @@ void Core::mem_swr(uint32_t a, uint32_t v) {
   mem_w32(base, (aligned & keep) | (v << sh));
 }
 
+// 0x8009A420 FUN_8009A420 — psyq libc `memset`, statically linked into MAIN.EXE (confirmed by
+// its position immediately below `rand` at 0x8009A450 in the psyq libc block, per
+// docs/engine_re.md). WIDE-RE DRAFT, UNWIRED (see core.h): a callsite exists today
+// (game/world/pool.cpp Pool::resetControlBlock/init, via `call_fn(c, 0x8009A420u)` == rec_dispatch,
+// still substrate) but this native body is not yet wired to replace it. Faithful to
+// gen_func_8009A420 (generated/shard_1.c:19508): dst NULL -> return 0 immediately; n<=0 -> return
+// dst as-is (no write); else byte-fill [dst, dst+n) and return the ORIGINAL dst (the guest loop
+// advances a copy of a0, never the value it returns).
+uint32_t Core::guestMemset(uint32_t dst, uint8_t val, int32_t n) {
+  if (dst == 0u) return 0u;
+  if (n <= 0) return dst;
+  uint32_t cur = dst;
+  for (int32_t i = 0; i < n; i++, cur++) mem_w8(cur, val);
+  return dst;
+}
+
 // R3000 integer division semantics (no traps; defined results for /0 and overflow).
 extern "C" void cpu_div(Core* c, uint32_t n, uint32_t d) {
   int32_t sn = (int32_t)n, sd = (int32_t)d;

@@ -43,6 +43,7 @@ Core::Core() {
   engine.sceneEvents.core = this;       // Engine-owned scene-event arm subsystem
   engine.sfx.core = this;               // Engine-owned sound-FX trigger dispatcher
   engine.audioDispatch.core = this;     // Engine-owned field-audio dispatch/settle cluster
+  engine.sequencer.core = this;         // Engine-owned libsnd per-VBlank tick wrapper (wide-RE draft, unwired)
   engine.areaSlots.core = this;         // Engine-owned area-slot table state machine
   engine.modeStateArm.core = this;      // Engine-owned mode-state arm primitive pair
   engine.script.core = this;            // Engine-owned cutscene bytecode dispatcher

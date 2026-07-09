@@ -113,6 +113,13 @@ public:
   void     mem_swl(uint32_t a, uint32_t v);
   void     mem_swr(uint32_t a, uint32_t v);
 
+  // guestMemset(dst, val, n): 0x8009A420 FUN_8009A420 — the psyq libc `memset` linked into
+  //   MAIN.EXE (byte-loop over guest RAM; NOT a host memcpy since dst/n address guest space).
+  //   WIDE-RE DRAFT, UNWIRED — see mem.cpp for the RE note. Faithful to gen_func_8009A420:
+  //   dst==0 -> return 0; n<=0 -> return dst unmodified; else byte-fill and return the ORIGINAL
+  //   dst (the loop's local cursor advances a copy, never the returned value).
+  uint32_t guestMemset(uint32_t dst, uint8_t val, int32_t n);
+
   // Store watchpoints (REPL `watch` / PSXPORT_CW / PSXPORT_WWATCH).
   void mem_set_watch(uint32_t lo, uint32_t hi);
   int  mem_watch_hits();

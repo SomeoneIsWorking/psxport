@@ -2765,3 +2765,95 @@ Band: the two hottest unowned functions in a 600-frame free-roam (4235 dispatche
 Not drafted (out of band): `FUN_80078CA8` (font/glyph emitter, called by drawText — large,
 separate scope), `FUN_800524B4`/`FUN_8005229C` (padEdgeFenceDraft's callees — separate scope,
 partially already surveyed above under "region-8005").
+## Wide-RE wave 2026-07-09 — libsnd/BIOS cluster 0x80086000-0x8009AFFF (dispatch-count band)
+
+Band: unowned hot leaves 0x80086288(1254) 0x80090BD0(1254) 0x800909C0(1254) 0x8008913C(627)
+0x80099490(581) 0x800998E4(579) 0x8009A420(521), free-roam dispatch count. All confirmed unowned
+via `tools/codemap.py --addr`. This region sits right at the psyq libc/libsnd block boundary
+(0x8009A450 = `rand`, already owned as `prng`).
+
+### Drafted (UNWIRED, compiles+links)
+
+- **0x80086288 → `Timing::vsyncCallbackDispatch()`** (runtime/recomp/timing.cpp/.h). BIOS intr.c
+  VSyncCallback CHAIN invoker — the real retail BIOS's fixed 8-slot callback array
+  (table `0x800AFDC0`, tick counter `0x800AFDE0`). 1:1 with `gen_func_80086288`
+  (generated/shard_4.c:13351): bump the counter, walk 8 slots, `rec_dispatch()` any non-null one.
+  Guest-stack frame mirrored (sp-32, s0/s1/ra spilled at the RE'd offsets) per CLAUDE.md, even
+  though no static caller was found — it's only ever reached through an IRQ vector we don't model
+  (same as `Timing::vsyncCallback()`/`vsync()` above it, already documented as no-op/unreachable).
+  Confidence: HIGH (control flow is trivial, addresses cross-checked byte-for-byte against the
+  generated C's `32779u<<16 + offset` immediates).
+
+- **0x800909C0 → `Sequencer::frameTick()`** (new: game/audio/sequencer.h/.cpp). libsnd's per-VBlank
+  TICK WRAPPER, installed by `SsSetTickMode` (docs/journal.md 2026-06-15 "later 54" — already
+  RE'd there: tick mode `DAT_800ac424=5`, `*SsSeqCalled` ptr `DAT_800ac42c=0x80090BD0`, optional
+  user-cb `DAT_800ac430=0x80086288`). 1:1 with `gen_func_800909C0` (generated/shard_7.c:14127): if
+  the user-cb slot is non-null, dispatch it; unconditionally dispatch `*SsSeqCalled`. Confidence:
+  HIGH (2 straight-line dispatches, addresses match the journal's prior live-RAM-dump RE exactly).
+  NOTE: `game/game_tomba2.cpp`'s `SEQ_TICK_WRAPPER` constant still routes to the interpreter/
+  substrate body directly (unrelated call site) — this draft does not touch that wiring.
+
+- **0x8009A420 → `Core::guestMemset(dst, val, n)`** (runtime/recomp/mem.cpp/core.h). Confirmed
+  **psyq libc `memset`** — classic byte-fill loop with a NULL-dst guard and `n<=0` early-out,
+  returning the ORIGINAL dst pointer (not the advanced cursor). 1:1 with `gen_func_8009A420`
+  (generated/shard_1.c:19508). Confidence: HIGH — unambiguous libc shape. Already has a live
+  (still-substrate) call site: `game/world/pool.cpp` `Pool::resetControlBlock()` / `Pool::init()`
+  both do `call_fn(c, 0x8009A420u)` i.e. `rec_dispatch` — a follow-up wiring pass can swap those
+  to `c->guestMemset(...)` directly once this draft is SBS-gated.
+
+### Mapped, NOT drafted (too deep for this pass — see reasoning below)
+
+- **0x80090BD0 = `SsSeqCalled`** (the sequencer engine `*SsSeqCalled` points at). RE'd via
+  generated/shard_3.c:21497: reentrancy-guarded (flag `0x8010CC24`) double loop — up to 7
+  sequences × up to 15 channels each (bounds read from `0x80109E70`/`0x80109E72` shorts), testing
+  a per-sequence active bitmask (`0x8010CC28`) and then, per channel, testing 8 independent bits
+  in a per-channel struct field at `channel[+152]` to conditionally call 7 DISTINCT unowned leaves
+  (`0x800910F0`, `0x80090E40` from two call sites, `0x80092080` from two call sites, `0x80091050`,
+  `0x80091910`, `0x80091970`) plus a prep call (`0x800931C0`). None of the 7 leaves is owned; each
+  is itself nontrivial per-channel note/ADSR-flag state logic. Faithfully porting `SsSeqCalled`
+  needs those 7 leaves RE'd + owned FIRST. Left as a `rec_dispatch` call inside the drafted
+  `Sequencer::frameTick()` (see game/audio/sequencer.cpp header comment). Next step for whoever
+  picks this up: RE `0x800910F0`/`0x80090E40`/`0x80092080`/`0x80091050`/`0x80091910`/`0x80091970`/
+  `0x800931C0` as a cluster, THEN draft `SsSeqCalled` itself.
+
+- **0x80099490** and **0x800998E4** — both already have a LIVE native caller:
+  `AreaSlots::updateTail()` (game/world/area_slots.cpp) calls `rec_dispatch(c, 0x800998E4u)` (the
+  "buf-fill" step) and `rec_dispatch(c, 0x80099490u)` (the "common tail" step, called with
+  `a0 = 0x800BE1F8`, the same control block `Pool::reset75240()` targets). Both are deep libsnd/SPU
+  register-value builders:
+  - `0x80099490` (generated/shard_7.c:14849): reads a 2-byte flag/value field from `a0`, uses it to
+    select among fixed SPU-register-style constants (`0x8000,0x9000,0xA000,...,0xE000` — looks like
+    ADSR/attenuation mode words) via a jump table at `0x8009xxxx - 14656` and `-14624` (two nearly-
+    identical halves, one per stereo channel), clamps/encodes a second field into 15 bits, and
+    writes the packed halfword to a struct at `0x8009xxxx - 14844 + 384`. Reads as an SPU
+    voice-attenuation-mode word builder (channel volume/ADSR control-word packer), consistent with
+    being "the common tail" of the per-frame area-audio slot state machine.
+  - `0x800998E4` (generated/shard_0.c:15899): for i in 0..23, tests a bit of a global armed-mask
+    (`0x8009xxxx-14960`) AND a `u16` flag at a per-index 16-byte table row
+    (`0x8009xxxx-14844 + i*16 + 12`), classifies into one of 4 states {0,1,2,3} written to
+    `buf[i]` — exactly the "24-byte per-slot state buffer" `AreaSlots::updateTail` already
+    documents consuming. Genuinely SPU/libsnd internals (same `-14844` struct base as
+    `0x80099490`'s `+384` write and `SsSeqCalled`'s neighboring globals `0x800AC42C/30` — this
+    whole `0x800AC4xx-0x800AC6xx` range is one libsnd control-globals cluster).
+  Both are confidently RE'd in SHAPE but their semantic constant tables (`0x8009D000`-ish jump
+  targets, the 16-byte-stride struct at `-14844`) were not fully walked in this pass — drafting
+  them 1:1 is mechanical (no branches on unknowns) but was deprioritized in favor of the higher-
+  confidence trio above, given the wide-RE effort budget for this wave. Good next pickup: draft
+  both verbatim (they're branchy but NOT dependent on other unowned leaves, unlike `SsSeqCalled`).
+
+- **0x8008913C** — 3-instruction leaf: `return (arg & 0xF0) ? (0x80102500+240) : 0x80102500` (table
+  address confirmed byte-exact from `generated/shard_0.c:13941`; the two 0x801025xx addresses are a
+  pair of adjacent fixed-size tables, contents not walked). No static caller found in `generated/`
+  (indirect-only, like the sequencer cluster above). Trivial to draft but its SEMANTIC role
+  (attenuation-table select? stereo-pan table select?) is unconfirmed — left mapped rather than
+  drafted under an unverified name/comment, per "no bandaid" — a wrong docstring is worse than an
+  honest MAP entry. Safe next step: Ghidra-decompile `0x80102500`/`0x801025F0`'s xrefs to see who
+  else reads those tables before naming this.
+
+### Build-blocking discovery (fixed, out-of-band)
+
+`vendor/beetle-psx/mednafen/psx/spu.c` had `SPU_PeekRAM` (added 1c0d395a) but never its declared
+(`runtime/recomp/spu_state.h`) counterpart `SPU_PokeRAM`, used by `game/core/verify_harness.cpp`
+`VerifyHarness::skipCheck`. A fresh checkout fails to LINK `tomba2_port` at all regardless of any
+wide-RE change. Fixed minimally (symmetric `memcpy(SPURAM, src, sizeof(SPURAM))`) in the committed
+fork per workflow-first — this blocked every build in this session, not just this band.

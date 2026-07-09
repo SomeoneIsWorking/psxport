@@ -2471,3 +2471,24 @@ themselves are LIVE but dispatch out to substrate for every case body.
   2026-07-09". `0x80079528` is trivial to wire (no deps). `0x80079374`/`0x800788AC` still
   depend on un-owned callees (`0x80078CA8`, `0x800524B4`, `0x8005229C`) reached via
   `rec_dispatch` — wiring those two first needs a re-diff pass per fleet-workflow.md §9.
+
+- **libsnd/BIOS cluster 0x80086000-0x8009AFFF (wide-RE agent, 2026-07-09, UNWIRED).** Free-roam
+  dispatch-count-ordered band: 0x80086288(1254) 0x80090BD0(1254) 0x800909C0(1254) 0x8008913C(627)
+  0x80099490(581) 0x800998E4(579) 0x8009A420(521) — all confirmed unowned via `codemap.py --addr`,
+  right at the psyq libc/libsnd boundary (`rand`=0x8009A450). 3 DRAFTED (compile+link-only, unwired,
+  unverified, no SBS run): `Timing::vsyncCallbackDispatch()` (0x80086288, BIOS VSyncCallback chain
+  invoker, runtime/recomp/timing.cpp), `Sequencer::frameTick()` (0x800909C0, libsnd per-VBlank tick
+  wrapper, new game/audio/sequencer.h/.cpp, wired onto `Engine::sequencer`), `Core::guestMemset()`
+  (0x8009A420, confirmed psyq libc `memset`, runtime/recomp/mem.cpp — has an existing still-substrate
+  call site in `game/world/pool.cpp` `Pool::resetControlBlock`/`init` ready for a follow-up direct-
+  call swap). 4 MAPPED-ONLY (too deep / semantically unconfirmed for this pass): `0x80090BD0`
+  (`SsSeqCalled` — the sequencer engine itself, gated on RE'ing 7 more unowned per-channel leaves
+  first), `0x80099490`/`0x800998E4` (both already have LIVE native callers in
+  `AreaSlots::updateTail()` via `rec_dispatch` — SPU voice-attenuation/state-buffer builders,
+  shape-confirmed but constant tables not fully walked), `0x8008913C` (trivial 3-instruction table
+  selector, mechanically easy but semantic role unconfirmed — left unnamed rather than guessed).
+  Full per-function RE + reasoning in docs/engine_re.md "Wide-RE wave 2026-07-09 — libsnd/BIOS
+  cluster". Also fixed an out-of-band build-blocker discovered while verifying the link: vendor fork
+  `spu.c` was missing `SPU_PokeRAM` (declared in spu_state.h, used by verify_harness.cpp) — added
+  the symmetric write-back next to the existing `SPU_PeekRAM`; this had been failing EVERY fresh
+  checkout's link, unrelated to this band.

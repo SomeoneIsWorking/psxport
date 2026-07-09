@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 557 native fns, 468 owned addresses, 532 LIVE / 25 ORPHAN.
+Totals: 560 native fns, 471 owned addresses, 533 LIVE / 27 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -350,6 +350,7 @@ Totals: 557 native fns, 468 owned addresses, 532 LIVE / 25 ORPHAN.
 | 0x80085690 | LIVE | `Trig::ratan2` | game/math/trig.cpp:23 |  |  |
 | 0x80085900 | LIVE | `Timing::vsync` | runtime/recomp/timing.cpp:38 |  | = libetc VSync(mode) reached via c->r[A0]: |
 | 0x80085BB0 | LIVE | `Timing::vsyncCallback` | runtime/recomp/timing.cpp:22 |  | VSyncCallback(func): no-op. The original routes the per-vblank |
+| 0x80086288 | LIVE | `Timing::vsyncCallbackDispatch` | runtime/recomp/timing.cpp:74 |  | BIOS intr.c VSyncCallback chain invoker. WIDE-RE DRAFT, UNWIRED |
 | 0x80086620 | LIVE | `eng_init_mode_ctrl` | game/scene/startup.cpp:148 |  | engine MODE control: file-local helper (only called from Engine::initS… |
 | 0x80087A60 | LIVE | `Engine::initInput` | game/scene/startup.cpp:167 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as initInput(). |
 | 0x80088B00 | LIVE | `Engine::initAlloc` | game/scene/startup.cpp:192 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. `s1` / `s2` are the struct-spa… |
@@ -366,6 +367,7 @@ Totals: 557 native fns, 468 owned addresses, 532 LIVE / 25 ORPHAN.
 | 0x8008BBE8 | LIVE | `LibcdNative::newMedia` | game/cd/libcd_native.cpp:12 |  |  |
 | 0x8008BF50 | LIVE | `LibcdNative::cacheFile` | game/cd/libcd_native.cpp:17 |  |  |
 | 0x8008C1EC | ORPHAN | `cd_read` | runtime/recomp/cd_override.cpp:121 |  | (a0=blocks, a1=lba, a2=buf): native synchronous read. |
+| 0x800909C0 | ORPHAN | `Sequencer::frameTick` | game/audio/sequencer.cpp:23 |  | libsnd per-VBlank tick wrapper. WIDE-RE DRAFT, UNWIRED (see header). |
 | 0x800931C0 | ORPHAN | `input_dispatch_931c0` | game/input/input.cpp:38 | 0x80097E10 0x80098DB0 0x80098F90 0x80099970 0x8009A1D0 | per-frame INPUT/controller-state processor (the heaviest un-owned resi… |
 | 0x80096370 | LIVE | `Font::bank2Store` | game/ui/font.cpp:41 |  | font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set … |
 | 0x800963A0 | LIVE | `Font::bankSelect` | game/ui/font.cpp:28 |  | font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at |
@@ -373,6 +375,7 @@ Totals: 557 native fns, 468 owned addresses, 532 LIVE / 25 ORPHAN.
 | 0x80099450 | LIVE | `bav_lock_ready` | game/ui/bav_loader.cpp:79 |  | -- lock helpers (FUN_80099478 / FUN_80099450), inlined --- |
 | 0x80099450 | LIVE | `bav_lock_set` | game/ui/bav_loader.cpp:82 |  |  |
 | 0x80099478 | LIVE | `bav_lock_ready` | game/ui/bav_loader.cpp:79 |  | -- lock helpers (FUN_80099478 / FUN_80099450), inlined --- |
+| 0x8009A420 | ORPHAN | `Core::guestMemset` | runtime/recomp/mem.cpp:338 |  | psyq libc `memset`, statically linked into MAIN.EXE (confirmed by |
 | 0x8009A450 | LIVE | `prng` | game/ai/beh_typed_variant_router.cpp:46 |  |  |
 | 0x8009CAEC | ORPHAN | `sync_ok` | runtime/recomp/sync_overrides.cpp:27 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
 | 0x8009CB80 | ORPHAN | `sync_ok` | runtime/recomp/sync_overrides.cpp:27 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
