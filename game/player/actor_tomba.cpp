@@ -758,12 +758,17 @@ void ActorTomba::ov_growthYSnap(Core* c) {
   c->engine.actorTomba.growthYSnap();
 }
 
+void ActorTomba::ov_frameTick(Core* c) {
+  c->engine.actorTomba.frameTick();
+}
+
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x80020364u, "ActorTomba::stepModeInteract", ov_stepModeInteract);
   ov.register_(0x800205CCu, "ActorTomba::type8Interact",    ov_type8Interact);
   ov.register_(0x800235A0u, "ActorTomba::type7Interact",    ov_type7Interact);
   ov.register_(0x80022C78u, "ActorTomba::growthYSnap",      ov_growthYSnap);
+  ov.register_(0x8005950Cu, "ActorTomba::frameTick",        ov_frameTick);
 }
 
 // =================================================================================
@@ -987,9 +992,29 @@ done:
 }
 
 // frameTick — guest FUN_8005950C. See actor_tomba.h for the full RE writeup.
+//
+// Wired 2026-07-09: EngineOverrides-only (no shard_set_override — the only direct caller of
+// func_8005950C is gen_func_80059D28 = the SUBSTRATE frameStartTickFaithful, which runs on core B
+// only; core A reaches 0x8005950C via the native frameStartTickFaithful's rec_dispatch, which
+// consults EngineOverrides). The 5 drafted native sub-callees (turnBiasCompute / outerTransitionGate
+// / outerTransitionCommit / assetReady / resetLoadGate) are NOT called from here yet — line-by-line
+// verification vs generated/shard_*.c found real transcription bugs in the first two checked
+// (turnBiasCompute: 0x800-threshold branches swapped; frameTick case-1 skipClear: 0x800BF80F
+// condition inverted) and the fleet-workflow rule is "drafts are untrusted"; they are dispatched
+// to the SUBSTRATE here so SBS gates only frameTick's own logic. Each sub-callee gets its own
+// verify+fix+wire pass later. Every substrate callee dispatch sets the gen jal-site r31 constant
+// first (matching gen_func_8005950C) so any callee that spills ra byte-matches core B.
+//
+// SBS-VERIFIED 2026-07-09: PSXPORT_SBS_MODE=full autonav, 0 sbs-div / 0 VIOLATION through f15600+.
+// The first attempt diverged at f158 (A=0x1F80, B=0x0000 at an Animation::step r17 spill) — root
+// caused to register-faithfulness: gen holds r17/r18 live across the case-1/4/7 callees (see the
+// c->r[17]/c->r[18] writes in each case below), but the first draft used C++ locals alone, leaving
+// stale caller values in those registers for the substrate callees (func_800597AC spills r18,
+// func_80053FDC spills r17, func_80076D68 spills both) to spill. Mirroring gen's register
+// assignments fixed it.
 void ActorTomba::frameTick() {
   Core* c = core;
-  const uint32_t G = G_ADDR;
+  const uint32_t G = c->r[4];                // a0 (== G_ADDR from both callers; matches gen's r16=r4+r0)
   const uint32_t sp0 = c->r[29];
   c->r[29] = sp0 - 32;
   c->mem_w32(c->r[29] + 16, c->r[16]);
@@ -1003,26 +1028,39 @@ void ActorTomba::frameTick() {
     switch (outerState) {
       case 0: {
         c->r[4] = G; c->r[5] = 0;
-        rec_dispatch(c, 0x80058648u);                 // enterOuterState0 (still substrate)
+        c->r[31] = 0x80059560u;
+        rec_dispatch(c, 0x80058648u);                 // enterOuterState0 (substrate)
         break;
       }
       case 1: {
-        const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
         const uint16_t savedE7E68 = c->mem_r16(0x800E7E68u);
+        const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
+        // Register-faithfulness (gen 7648/7650): r18/r17 hold the saved pair live across the
+        // case-1 callees. func_800597AC spills r18, func_80053FDC spills r17 — without these
+        // assignments the substrate callees spill stale caller values on core A and diverge.
+        c->r[18] = savedE7E68;
+        c->r[17] = savedCF54;
         if (c->mem_r8(0x1F800230u) != 0) {
           const uint16_t mask = c->mem_r16(0x1F800174u);
           c->mem_w16(0x800ECF54u, (uint16_t)(savedCF54  & ~mask));
           c->mem_w16(0x800E7E68u, (uint16_t)(savedE7E68 & ~mask));
         }
-        const bool skipClear = (c->mem_r8(0x800BF80Fu) != 0) && (c->mem_r8(0x1F800137u) == 0);
+        // GT clears the turn-suppress pair unless BOTH 0x800BF80F==0 AND 0x1F800137==0
+        // (the wide-RE draft inverted the 0x800BF80F condition — fixed).
+        const bool skipClear = (c->mem_r8(0x800BF80Fu) == 0) && (c->mem_r8(0x1F800137u) == 0);
         if (!skipClear) { c->mem_w16(0x800E7E68u, 0); c->mem_w16(0x800ECF54u, 0); }
 
-        const int16_t facing = (int16_t)c->mem_r16(G + 0x140u);
-        turnBiasCompute(c, facing);
-        c->r[4] = G; rec_dispatch(c, 0x80058918u);    // mode-N dispatch table A (still substrate)
+        c->r[5] = (uint32_t)(int16_t)c->mem_r16(G + 0x140u);
+        c->r[31] = 0x800595DCu; c->r[4] = G;
+        rec_dispatch(c, 0x80055C9Cu);                  // turnBiasCompute (substrate)
+        c->r[31] = 0x800595E4u; c->r[4] = G;
+        rec_dispatch(c, 0x80058918u);                   // mode-N dispatch table A (substrate)
         if (c->mem_r8(G + 0x146u) == 0) c->mem_w8(0x1F800232u, 1);
-        c->r[4] = G; rec_dispatch(c, 0x800597ACu);    // matrix-compose (still substrate)
-        outerTransitionCommit(0);
+        c->r[31] = 0x80059604u; c->r[4] = G;
+        rec_dispatch(c, 0x800597ACu);                   // matrix-compose (substrate)
+        c->r[4] = G; c->r[5] = 0;
+        c->r[31] = 0x80059610u;
+        rec_dispatch(c, 0x80053FDCu);                   // outerTransitionCommit (substrate, mode=0)
 
         c->mem_w16(0x800E7E68u, savedE7E68);
         c->mem_w16(0x800ECF54u, savedCF54);
@@ -1030,15 +1068,20 @@ void ActorTomba::frameTick() {
       }
       case 2: {
         c->mem_w8(G + 0x17Bu, 1);
-        c->r[4] = G; rec_dispatch(c, 0x80067CA4u);
-        c->r[4] = G; rec_dispatch(c, 0x800597ACu);
+        c->r[31] = 0x80059628u; c->r[4] = G;
+        rec_dispatch(c, 0x80067CA4u);
+        c->r[31] = 0x800596D8u; c->r[4] = G;
+        rec_dispatch(c, 0x800597ACu);
         break;
       }
       case 3:
-        break;   // unused jump-table slot — no-op
+        break;   // unused jump-table slot (jump target = epilogue) — no-op
       case 4: {
         const uint16_t savedE7E68 = c->mem_r16(0x800E7E68u);
         const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
+        // Register-faithfulness (gen 7693/7695): same live-across-callees pair as case 1.
+        c->r[18] = savedE7E68;
+        c->r[17] = savedCF54;
         c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) & 0x7Fu));
         if (c->mem_r8(0x1F800137u) != 0) {
           c->mem_w16(0x800E7E68u, c->mem_r16(0x1F800166u));
@@ -1047,51 +1090,73 @@ void ActorTomba::frameTick() {
           c->mem_w16(0x800E7E68u, 0);
           c->mem_w16(0x800ECF54u, 0);
         }
-        const int16_t facing = (int16_t)c->mem_r16(G + 0x140u);
-        turnBiasCompute(c, facing);
-        c->r[4] = G; rec_dispatch(c, 0x80058F5Cu);    // mode-N dispatch table B (still substrate)
-        c->r[4] = G; rec_dispatch(c, 0x800597ACu);    // matrix-compose (still substrate)
-        (void)outerTransitionGate();                   // bare tick — return value unused
+        c->r[5] = (uint32_t)(int16_t)c->mem_r16(G + 0x140u);
+        c->r[31] = 0x8005968Cu; c->r[4] = G;
+        rec_dispatch(c, 0x80055C9Cu);                  // turnBiasCompute (substrate)
+        c->r[31] = 0x80059694u; c->r[4] = G;
+        rec_dispatch(c, 0x80058F5Cu);                   // mode-N dispatch table B (substrate)
+        c->r[31] = 0x8005969Cu; c->r[4] = G;
+        rec_dispatch(c, 0x800597ACu);                   // matrix-compose (substrate)
+        c->r[31] = 0x800596A4u; c->r[4] = G;
+        rec_dispatch(c, 0x80053E50u);                   // outerTransitionGate (substrate, bare tick)
 
         c->mem_w16(0x800E7E68u, savedE7E68);
         c->mem_w16(0x800ECF54u, savedCF54);
         break;
       }
       case 5: {
-        c->r[4] = G; rec_dispatch(c, 0x8018BD30u);     // scripted leaf (outside this RE region)
-        c->r[4] = G; rec_dispatch(c, 0x800597ACu);
+        c->r[31] = 0x800596C0u; c->r[4] = G;
+        rec_dispatch(c, 0x8018BD30u);                   // scripted leaf (overlay)
+        c->r[31] = 0x800596D8u; c->r[4] = G;
+        rec_dispatch(c, 0x800597ACu);
         break;
       }
       case 6: {
-        c->r[4] = G; rec_dispatch(c, 0x8018BE40u);     // scripted leaf (outside this RE region)
-        c->r[4] = G; rec_dispatch(c, 0x800597ACu);
+        c->r[31] = 0x800596D0u; c->r[4] = G;
+        rec_dispatch(c, 0x8018BE40u);                   // scripted leaf (overlay)
+        c->r[31] = 0x800596D8u; c->r[4] = G;
+        rec_dispatch(c, 0x800597ACu);
         break;
       }
       case 7: {
         const uint8_t sub = c->mem_r8(G + 0x5u);
+        // Register-faithfulness (gen 7736/7737): r17=sub, r18=1 held live across the sub-dispatch
+        // and into the tail Animation::step call (which spills r17@+20, r18@+24). The sub==2 path
+        // also stores r17/r18 verbatim into anim+0x4C/0x4E — but those are covered by the local
+        // `sub` / literal 1 below; these register writes are purely for the callee spills.
+        c->r[17] = sub;
+        c->r[18] = 1;
         bool advance = false;
         if (sub == 0) {
           c->r[4] = G;
-          rec_dispatch(c, 0x8001CF2Cu);
+          c->r[31] = 0x80059720u;
+          rec_dispatch(c, 0x8001CF2Cu);                 // engine tick cue (substrate)
           advance = true;
         } else if (sub == 1) {
-          if (assetReady(c, 1)) advance = true;
+          c->r[4] = 1;
+          c->r[31] = 0x80059730u;
+          rec_dispatch(c, 0x80045580u);                 // assetReady (substrate)
+          if (c->r[2] != 0) advance = true;
         } else if (sub == 2) {
           if (c->mem_r8(0x1F80019Bu) != 0) {
             c->mem_w8(0x800BF89Cu, 4);
-            resetLoadGate(c);
+            c->r[4] = G;
+            c->r[31] = 0x80059768u;
+            rec_dispatch(c, 0x80042310u);               // resetLoadGate (substrate)
             c->mem_w8(G + 0x4u, 1);
             c->mem_w8(G + 0x5u, 0);
             c->mem_w8(G + 0x6u, 0);
             c->mem_w8(G + 0x7u, 0);
             const uint32_t anim = c->mem_r32(0x1F800138u);
-            c->mem_w16(anim + 0x4Cu, sub);   // sub==2 here — matches gen's register trace
+            c->mem_w16(anim + 0x4Cu, (uint16_t)sub);   // sub==2 — matches gen's r17 trace
             c->mem_w16(anim + 0x4Eu, 1);
           }
         }
-        // sub > 2 falls straight to the tail — matches gen (no case for it, no-op).
+        // sub > 2: no advance, straight to tail — matches gen (no case, no-op).
         if (advance) c->mem_w8(G + 0x5u, (uint8_t)(c->mem_r8(G + 0x5u) + 1));
-        c->r[4] = G; rec_dispatch(c, 0x80076D68u);
+        c->r[4] = G;
+        c->r[31] = 0x80059794u;
+        rec_dispatch(c, 0x80076D68u);                   // Animation::step (substrate)
         break;
       }
     }

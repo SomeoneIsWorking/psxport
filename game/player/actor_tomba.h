@@ -92,11 +92,12 @@ public:
   //   water-mode 2. NO SFX. Ghidra decomp scratch/decomp/tomba_postframe_10e904.c.
   void postFrameWaterCheck();
 
-  // Wire stepModeInteract/type8Interact/type7Interact/growthYSnap into `game`'s EngineOverrides —
-  // postInteractWalk's own rec_dispatch(c, LEAF_TYPE_*) call sites are the ONLY reachers of these 4
-  // addresses (confirmed: no substrate shard has a direct `func_<addr>(c)` call site for any of
-  // them — every reference is a rec_dispatch-routed indirect target, per shard_disp.c's dispatch
-  // switch), so EngineOverrides alone is sufficient; no shard_set_override dual-wire is needed.
+  // Wire stepModeInteract/type8Interact/type7Interact/growthYSnap/frameTick into `game`'s
+  // EngineOverrides — postInteractWalk's own rec_dispatch(c, LEAF_TYPE_*) call sites are the ONLY
+  // reachers of the 4 interactWalk addresses, and the native frameStartTickFaithful's
+  // rec_dispatch(c, 0x8005950C) is the only core-A reacher of frameTick (the sole direct
+  // func_8005950C caller is gen_func_80059D28 = the substrate frameStartTickFaithful, core-B only),
+  // so EngineOverrides alone is sufficient for all 5; no shard_set_override dual-wire is needed.
   static void registerOverrides(Game* game);
 
 private:
@@ -106,6 +107,7 @@ private:
   static void ov_type8Interact(Core* c);
   static void ov_type7Interact(Core* c);
   static void ov_growthYSnap(Core* c);
+  static void ov_frameTick(Core* c);
 
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
@@ -209,9 +211,25 @@ public:
   //   per-frame masking is scoped to just the sub-dispatch each wraps. Faithful 1:1 port from
   //   gen_func_8005950C (generated/shard_4.c:7624 — ground truth; Ghidra's own decompile of
   //   this function matched it exactly, cross-checked line-by-line against the recompiled C).
-  //   Guest frame: addiu sp,-32; spill s0(<-a0=G),s1,s2,ra. UNWIRED (Engine::frameStartTick's
-  //   dispatch site still targets the substrate func_8005950C directly) — wiring is a future
-  //   frontier-tier step (register an EngineOverrides entry + shard_set_override, then SBS-gate).
+  //   Guest frame: addiu sp,-32; spill s0(<-a0=G),s1,s2,ra. WIRED + SBS-VERIFIED 2026-07-09
+  //   (EngineOverrides; frameStartTickFaithful's `default: rec_dispatch(c, 0x8005950Cu)` now hits
+  //   the native). frameTick's OWN logic is byte-exact: PSXPORT_SBS_MODE=full autonav ran 0
+  //   sbs-div / 0 VIOLATION through f15600+ (was diverging at f158 before the register-faithfulness
+  //   fix — see below). The 5 drafted sub-callees below (turnBiasCompute/outerTransitionGate/
+  //   outerTransitionCommit/assetReady/resetLoadGate) are NOT called from frameTick yet —
+  //   line-by-line verification vs generated/shard_*.c found real transcription bugs in the first
+  //   two checked (turnBiasCompute: 0x800-threshold branches swapped; frameTick's own case-1
+  //   skipClear: 0x800BF80F condition inverted, fixed in frameTick). Per fleet-workflow.md §9
+  //   ("drafts are untrusted"), all 5 are dispatched to the SUBSTRATE from frameTick so SBS gates
+  //   only frameTick's own logic; each gets its own verify+fix+wire pass later. Every dispatch
+  //   sets the gen jal-site r31 constant first so substrate callees that spill ra byte-match core B.
+  //   REGISTER-FAITHFULNESS (the f158 root cause): gen keeps r17/r18 live across the case-1/4/7
+  //   callees (r17=ECF54_saved/r18=E7E68_saved in cases 1,4; r17=sub/r18=1 in case 7). The case
+  //   callees func_800597AC (spills r18), func_80053FDC (spills r17), func_80076D68 (spills
+  //   r17+r18) read those register values via their own spill slots — so frameTick MUST write
+  //   c->r[17]/c->r[18] at the same points gen does (using C++ locals alone leaves the stale
+  //   caller values in the registers → the callee spills diverge). Same pattern as the
+  //   NodeXform register-faithfulness fix (docs/findings/animation.md).
   void frameTick();
 
 private:

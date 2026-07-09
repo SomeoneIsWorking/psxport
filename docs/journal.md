@@ -1,5 +1,34 @@
 # Debug / progress journal
 
+## later-290 — wire + SBS-verify ActorTomba::frameTick (FUN_8005950C); root-cause the f158 register-faithfulness divergence
+Wired the wide-RE draft of Tomba's per-frame G-block driver onto the live path (EngineOverrides;
+the only core-A reacher is the native `frameStartTickFaithful`'s `default: rec_dispatch(c,
+0x8005950Cu)`, the sole direct `func_8005950C` caller being the substrate `gen_func_80059D28`
+which is core-B only — so no `shard_set_override` dual-wire). The 5 RE'd-but-untrusted sub-callees
+(turnBiasCompute / outerTransitionGate / outerTransitionCommit / assetReady / resetLoadGate) stay
+dispatched to the SUBSTRATE from frameTick — line-by-line vs generated/shard_4.c found real bugs in
+the first two drafts (turnBiasCompute 0x800-threshold branches swapped; frameTick's own case-1
+skipClear had the 0x800BF80F condition inverted, fixed). Each sub-callee gets its own verify+wire
+pass. Every dispatch sets the gen jal-site r31 constant first so substrate callees that spill ra
+byte-match core B.
+- ROOT CAUSE of the first divergence (the real work this session): the first wiring diverged hard
+  at lockstep f158 — `[sbs-div] 0x801FE8DE..E0 A=80 1F B=00 00`, last-writer Animation::step
+  (gen_func_80076D68) spilling the caller's r17. Per the user directive ("don't stash/bisect, use
+  Ghidra or compare against recomp"), root-caused by reading the oracle gen_func_8005950C
+  (generated/shard_4.c:7624) line-by-line rather than bisection. Cause was INTRA-BODY register
+  faithfulness: gen keeps r17/r18 live across the case-1/4/7 callees (r17=ECF54_saved/
+  r18=E7E68_saved in cases 1,4 [gen 7648/7650, 7693/7695]; r17=sub/r18=1 in case 7 [gen
+  7736/7737]), and those case callees read the values via their OWN prologue spills (func_800597AC
+  spills r18, func_80053FDC spills r17, func_80076D68 spills both). The draft used C++ locals for
+  frameTick's own logic and never wrote c->r[17]/c->r[18] — so substrate callees spilled stale
+  caller values on core A (0x1F80xxxx scratchpad ptr) vs the saved/sub values on core B
+  (0x0000xxxx zero-extended flag). Fix: write c->r[17]/c->r[18] at the same points gen does. This
+  is a distinct flavor of the register-faithfulness family already in docs/findings/animation.md
+  (NodeXform/attach frame-mirror): the FRAME prologue was already correct; the gap was mid-body
+  callee-saved assignments held live across callees. Recorded there + a general audit rule.
+- VERIFY: PSXPORT_SBS_MODE=full + PSXPORT_SBS_AUTONAV=1, headless: 0 sbs-div / 0 VIOLATION through
+  f15600+ (150 s wall-clock; pre-fix diverged at f158 every run).
+
 ## later-289 — own the two PURE-engine ov_field_frame children native (FUN_80025588 / FUN_8004fe84)
 Top-down descent per the minimize-recomp frontier (later-287): owned the two remaining ov_field_frame
 direct children that make NO overlay/content calls, so they are cleanly A/B-verifiable.

@@ -63,9 +63,8 @@
   substrate-dispatch counts for guest addresses that codemap says are already natively owned
   (`Math::applyMatlv` 0x80084220 etc.). Chasing (1)+(2) down with a real headless run (CHD attached,
   `PSXPORT_AUTO_SKIP=1`, `PSXPORT_DEBUG=dispatch,recdep,ovhit`) found the TRUE, much bigger bug.
-- **status:** fixed this session (worktree `agent-a1a0cae350ac4aa9d`, not yet merged to main — see
-  commit list). New `ovhit` channel added alongside so this class of gap is observable going
-  forward without re-deriving it by hand.
+- **status:** fixed (commit b078729, merged to main). New `ovhit` channel added alongside so this
+  class of gap is observable going forward without re-deriving it by hand.
 - **root cause, signal (2) — NOT a bug, an ORPHAN (already-documented pattern, re-confirmed):**
   `Math::applyMatlv`/`applyMatrixLV`/`rotZ`/`rotY` are real native C++ methods with their OWN
   NEW callers (`NodeXform::propagate` etc., per `codemap.py --addr`) — but they were NEVER
@@ -120,13 +119,14 @@
 - **verification:** rebuilt, re-ran. Default path (`PSXPORT_AUTO_SKIP=1`,
   `PSXPORT_DEBUG=ovhit,dispatch,recdep`): PcScheduler's spawnPrim/forceClose/selfClose now show
   real hit counts (2/1/2 in a 90s session) via `traceHit`, where before the fix they were exactly
-  0. SBS full mode (`PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1`): no longer crashes (after the
+  0. SBS full mode (  `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1`): no longer crashes (after the
   ordering fix), and — significant — **immediately surfaces a real guest-RAM divergence around
   frame 61** in `Animation::loadFrame`/`advanceLinkChain` (SBS's last-writer report: core A pc
   0x8007AAE8 vs core B pc 0x80076904/0x80077C74) that the broken registration was previously
-  hiding. That divergence is a NEW, real Job#1 target — NOT investigated or fixed in this session
-  (out of scope: this was a verification+tooling task); root-causing it is follow-up work, and it
-  should NOT be waved off as expected/residual per the "no residual RAM diverges" rule.
+  hiding. **RESOLVED in a follow-up commit (8c6e1ce)** — root-caused to a one-line bit-accounting
+  bug in `anim_unpack_pose_triple` (`stream = s + 5` ate a shared nibble → `stream = s + 4`);
+  post-fix SBS full autonav is 0 sbs-div through f9100+. Full trail in
+  docs/findings/animation.md ("anim_unpack_pose_triple ate a shared nibble").
 - **refs:** runtime/recomp/engine_overrides.{h,cpp}; runtime/recomp/boot.cpp
   `register_engine_overrides`; runtime/recomp/native_boot.cpp `dc_boot_init`; game/core/
   pc_scheduler.cpp; docs/config.md `dispatch`/`ovhit`; scratch/logs/default_ovhit.log,

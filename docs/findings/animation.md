@@ -242,3 +242,47 @@ for the next "no single call site" refusal: MEASURE r29 before concluding it var
   workflow follow-up, not fixed here).
 - **refs**: commits b078729 (register_engine_overrides fix), 7187c93 (Math wiring) — the two prior
   commits that made this gate honest; this fix commit; `game/object/animation.cpp`.
+
+## RESOLVED: ActorTomba::frameTick (FUN_8005950C) intra-body register-faithfulness — C++ locals are not enough when a substrate callee spills the callee-saved reg (2026-07-09)
+
+- **Task**: wire the wide-RE draft of `ActorTomba::frameTick` (Tomba's per-frame G-block driver,
+  guest 0x8005950C, the `default:` target of `Engine::frameStartTickFaithful`) via EngineOverrides
+  and SBS-gate it. The frame + frame-prologue spills were already correct (sp-=32; spill
+  r16@+16/r17@+20/r18@+24/ra@+28); the 5 sub-callees were deliberately dispatched to substrate
+  (their own drafts had transcription bugs).
+- **Symptom**: first wiring diverged hard at lockstep f158 — `[sbs-div] f158 0x801FE8DE..E0 (2 B)
+  A=80 1F  B=00 00`. Last-writer on BOTH cores: `Animation::step` (gen_func_80076D68, pc=80076D68)
+  spilling `r17` (word at sp+20; the divergent halfword at sp+22 is its high half). The spilled
+  value is the CALLER's r17: core A = `0x1F80xxxx` (a stale scratchpad pointer), core B =
+  `0x0000xxxx` (a zero-extended 16-bit flag word).
+- **Root cause — NOT frame/spill mirroring (that was already right), but intra-body register
+  assignments**: `gen_func_8005950C` keeps `r17`/`r18` LIVE across the case-1/4/7 callees —
+  `r17=ECF54_saved` / `r18=E7E68_saved` at gen lines 7648/7650 (case 1) and 7693/7695 (case 4),
+  and `r17=sub` / `r18=1` at gen lines 7736/7737 (case 7). The case callees then read those values
+  via THEIR OWN prologue spills: `func_800597AC` (matrix-compose) spills `r18@+32`,
+  `func_80053FDC` (outerTransitionCommit) spills `r17@+20`, `func_80076D68` (Animation::step)
+  spills `r17@+20`+`r18@+24`. The wide-RE draft used C++ locals (`savedE7E68`/`savedCF54`/`sub`)
+  for frameTick's own computation and never wrote `c->r[17]`/`c->r[18]` — so the substrate callees
+  spilled the stale CALLER values on core A and the SAVED/SUB values on core B. The `0x1F80` vs
+  `0x0000` signature is the tell-tale: stale-caller-scratchpad-ptr vs zero-extended-flag-word.
+- **Why f158 (not earlier)**: that's the first lockstep frame where frameTick runs a case whose
+  callee actually spills r17/r18 AND the spilled halfword lands in a byte SBS compares. (frameTick
+  is the FIRST call in `ov_field_frame`'s gameplay-update block, so its callee-spill divergences
+  are among the earliest in each frame.)
+- **Fix**: write `c->r[17]`/`c->r[18]` at the same points gen does — at the top of case 1 and 4
+  (`r18=savedE7E68; r17=savedCF54`) and at the top of case 7 (`r17=sub; r18=1`) — in addition to
+  the C++ locals. The epilogue already restores r17/r18 from the prologue spill slots, so the
+  caller's values are unchanged at frameTick exit on both cores (this is purely intra-case state
+  for the substrate callees to observe).
+- **General rule (same family as the NodeXform/attach frame-mirror findings above, but a distinct
+  flavor)**: a native port that reproduces a function's FRAME prologue correctly can STILL diverge
+  if the gen body assigns callee-saved registers (s0-s7 = r16-r23) mid-body and holds them live
+  across callees. C++ locals cover the function's OWN logic but NOT the register state a substrate
+  callee reads by spilling that register. Mirror gen's mid-body `r[N] = …` assignments verbatim,
+  not just its prologue/epilogue. Audit for this any time SBS's last-writer is a substrate callee
+  spilling a callee-saved reg with a "stale caller value vs fresh local value" signature.
+- **Verification**: `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless: 0 `sbs-div` /
+  0 VIOLATION through f15600+ (150 s wall-clock, run stopped only on the external timeout — no
+  crash/divergence). Pre-fix the same run diverged at f158 every time.
+- **refs**: `game/player/actor_tomba.{h,cpp}` (`ActorTomba::frameTick`); oracle
+  `generated/shard_4.c gen_func_8005950C` (L7624); this fix commit.
