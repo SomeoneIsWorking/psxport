@@ -1679,6 +1679,94 @@ NOT drafted — too large/entangled with unRE'd sub-dispatchers `FUN_8003fbc4`/`
 safely fold in one pass). `FUN_8004005C`/`FUN_80040400` resisted a clean Ghidra function-boundary
 decompile (0 functions returned) — their guest code likely straddles Ghidra's inferred boundary with
 a neighboring function; needs a manual disas.py spot-check of the boundary before a future RE pass.
+
+### Wide-RE pass 2026-07-10 — scheduler sleep-countdown + 4 ScriptInterp opcode handlers (DRAFTED, UNWIRED)
+
+Band: `0x800506D0 0x800420AC 0x80042090 0x80042E10 0x80043108 0x80041468 0x80040FA0` (0x800518FC and
+0x8004190C from the original assignment were already owned — `Engine::objMatrixCompose` /
+`Engine::animTick` — skipped). Source-of-truth throughout: `generated/shard_*.c` (instruction-exact;
+no Ghidra pass needed — none of these leaves touch GTE/COP2). The resident opcode-handler table at
+guest `0x800A3B78` (63 entries) and the FUN_80040FA0 internal switch-table at `0x8001534C` (7
+entries) were both READ DIRECTLY out of `scratch/bin/tomba2/MAIN.EXE` .rodata this session
+(`scratch/re/opcode_table.txt`, `scratch/re/advance_switch_table.txt`) to positively identify which
+addresses are script-opcode handlers, rather than inferred from field-offset pattern-matching alone.
+
+**Drafted (high confidence, self-checked against the generated C register-by-register):**
+
+- **`PcScheduler::tickSleepCountdown`** (`0x800506D0`, `game/core/pc_scheduler.{h,cpp}`) — the
+  per-frame "sleep countdown / re-arm" sweep long referenced but never drafted in
+  `scheduler.cpp`/`pc_scheduler.cpp` comments ("FUN_800506D0 re-arms 1->2"). Leaf (no guest frame).
+  Walks exactly 3 task slots (`TASKBASE + i*TASKSTRIDE`, i=0..2 — the loop bound
+  `0x801FE000..0x801FE14F` divides out to precisely 3 iterations, confirming the long-standing "up
+  to 3 cooperative tasks" comment). For each slot with state(+0)==1 (YIELDED), decrements the
+  countdown at +2; on exact underflow to 0, re-arms state to 2 (RUNNABLE). Still-substrate call site:
+  `runtime/recomp/native_boot.cpp:129` (`rc0(c, 0x800506d0)`); wiring (swap that call for
+  `c->game->pcSched.tickSleepCountdown()`) is a frontier-tier follow-up.
+- **`ScriptInterp::op05WaitFrames`** (`0x80042090` = opcode table index 5) — decrements argA
+  (obj+0x72) each call; the guest computes a sign-replicate idiom (`(v<<16)>>31`), NOT a 0/1 flag —
+  returns exactly 0 (RET_PAUSE) or -1 (0xFFFFFFFF, matches none of step()'s switch cases, falls to
+  its `default`: exit without pause-flag/without advance). A naive "return 1 on negative" reading
+  would have been a real bug — documented explicitly in-code to prevent a future "fix".
+- **`ScriptInterp::op06TestSceneFlag`** (`0x800420AC` = opcode 6) — the COND-flagged entries'
+  predicate. Reads a byte from a shared table at `0x800BF870+324+argB`, tests it against argC per a
+  3-way argA mode (0=exact-match, 1=and-nonzero, 2=and-zero). CAUGHT A BUG mid-draft: the exact-match
+  arm (argA==0) compares the ZERO-extended byte against the FULL 32-bit SIGN-extended argC (not a
+  byte-truncated compare) — a negative or >255 argC can never match a byte in the guest, but an
+  initial `tableByte == (uint8_t)argC` draft would have falsely matched via truncation. Fixed before
+  landing.
+- **`ScriptInterp::op34ClaimGate`** (`0x80042E10` = opcode 34) — claim-and-poll on a shared 1-byte
+  gate at `0x800BF86F` using obj+0x78 as a 2-phase (claim/poll) counter. CAUGHT A BUG mid-draft: when
+  `argA & 7 == 0`, the guest skips BOTH the gate-claim write AND the argA-sign-bit "no-wait" check —
+  it jumps straight to the phase-increment tail. An initial draft that checked the sign bit
+  unconditionally would have returned 1 (advance) in cases the guest never does. Fixed before landing.
+- **`ScriptInterp::advanceStep`** (`0x80040FA0`) — the REAL body of what `ScriptInterp::advanceEntry`
+  (already-wired, `game/scene/script_interp.cpp:102`) currently only `rec_dispatch`es to. NAMING TRAP
+  for future sessions: `advanceEntry`'s own doc comment says it implements `kAdvanceAddr =
+  0x80040E54`, but its actual body dispatches to `0x80040FA0` (this draft) instead — `0x80040E54`
+  itself stays wholly substrate (out of this session's band; `advanceStep` still `rec_dispatch`es to
+  it). Body: calls `FUN_80040E54(obj, kindArg)` for a 0..6 index (>=7 -> immediate -1), then runs one
+  of 7 straight-line case blocks that write the interpreter's OWN loop-control bytes (obj+0x70/0x71,
+  the same fields `step()`'s loop-guard and pause-flag use) plus a shared "scratch" reset at
+  obj+0x78 — verified index-by-index against the table read out of the .rodata. One case (index 2,
+  `0x8004103C`) jumps directly to return and SKIPS the +0x78 tail write every other non-`-1` case
+  performs — flagged in-code since it is easy to "normalize away" as an oversight. Once verified,
+  this should REPLACE `advanceEntry`'s `rec_dispatch(c, 0x80040FA0u)` call — a frontier-tier wiring
+  step, not done here.
+
+**Mapped only, NOT drafted (too dense/risky for this pass — refused per "quality of RE > quantity",
+same precedent as the `0x80050000-0x800527C8` cluster above):**
+
+- **`0x80043108`** (opcode table index 36, 95 dispatch hits — the highest-traffic unowned leaf in
+  this band besides the scheduler sweep). `generated/shard_5.c:7667`. Frame: sp-=40, spills
+  s0/s1/s2/s3/s4/ra. Dispatches on obj+0x78 (phase byte, 0/1/2, same "phase" slot op34 uses) reading
+  a secondary object via a pointer stored at obj+0x6C… no — via `obj+108` (a POINTER field, distinct
+  from the interpreter's own OBJ_TABLE_A_7C at +0x7C) into a `target` struct read at target+2/+4/+6/
+  +10. Phase 0 (init): computes squared-distance components from obj vs target position/velocity
+  fields (+46/+50/+54/+68/+72/+74/+76/+86/+102/+104/+106), calls the still-substrate GTE-LZCS sqrt
+  leaf `0x80084080` (already known substrate from `game/ai/actor_melee_engage.cpp`/
+  `game/ai/melee_proximity.cpp` — NOT `Math::isqrt16`), then TWO `cpu_div` fixed-point divisions each
+  guarded by `rec_break(7168)`/`rec_break(6144)` guest-abort traps on div-by-zero/overflow (a real
+  bounds-check the guest performs, not incidental) — looks like a normalized-direction /
+  time-to-target velocity solve. Phase 1/2 continue the motion and eventually call the also-unowned
+  `0x80042EA4`. This is a dense ~170-line fixed-point-math DAG with the exact shape
+  (`ratan2`/division/sqrt chain on a per-frame phase machine) that the 2026-07-08 melee wave got
+  WRONG 6 times in one function (docs/fleet-workflow.md §9) — refused for a from-scratch manual
+  transcription without a Ghidra cross-check pass. Needs its own dedicated RE session (Ghidra
+  headless + a `scratch/decomp/` cross-check) before drafting.
+- **`0x80041468`** (opcode table index 31, 11 dispatch hits). `generated/shard_3.c:11362`. Frame:
+  sp-=48, spills s0/s1/ra. Switch on argA (0/2/3/4/other) driving `Trig::ratan2` (already-native,
+  `0x80085690`) calls between obj/target position fields (+46/+54 self, a secondary object read via
+  a pointer at `argA's sign bit`-selected base — either `obj` itself or `*(base+532)` where base is a
+  literal `0x8064*10000`-ish constant table, i.e. a GLOBAL secondary object slot, not obj+108 like
+  0x80043108's target) then calls the also-unowned `0x80041438` to apply the turn. Structurally a
+  "turn toward / face target" script op, sibling to 0x80043108's movement op. Same refusal rationale:
+  dense trig DAG, low traffic (11 hits) does not justify the mistranslation risk without a decompiler
+  cross-check pass.
+
+Both mapped-only functions call `0x80041438` and/or `0x80042EA4` — neither is drafted or mapped in
+depth this pass; worth RE'ing together with 0x80043108/0x80041468 in the dedicated follow-up session
+since all four are the actor-movement-script op family.
+
 ## Region MAP 0x80020000-0x8002FFFF — WIDE-RE pass (2026-07-08, UNWIRED drafts)
 
 Census: 184 `func_8002xxxx` defs across `generated/shard_{0,1,2,3,4,5,6,7,disp}.c`. 13 already

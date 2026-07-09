@@ -115,6 +115,127 @@ int ScriptInterp::advanceEntry(uint32_t obj, uint32_t kindArg) {
   return (int)c->r[2];
 }
 
+namespace {
+// Shared byte-array anchors op06/op34 read/write (guest MAIN.EXE .data/.bss, resident). Purpose
+// beyond "flag storage indexed by argB" / "single-byte gate" not traced further this pass — see
+// the header banner for the honest caveat.
+constexpr uint32_t kSceneFlagTable = 0x800BF870u + 324u;  // op06: byte[argB]
+constexpr uint32_t kClaimGateByte  = 0x800BF86Fu;          // op34: single-byte semaphore
+}  // namespace
+
+// FUN_80042090 — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_7.c:5216.
+// NOTE ON RETURN VALUE: the guest computes `(decremented << 16) >> 31` (arithmetic) — a MIPS
+// sign-replicate idiom, NOT a 0/1 flag. It yields exactly 0 (still counting down) or -1 i.e.
+// 0xFFFFFFFF (went negative). Per step()'s ret-code switch (RET_PAUSE=0 / RET_ADVANCE_*={1,2,3}),
+// 0 hits RET_PAUSE (sets the pause flag, exits); -1 matches NONE of the switch's cases and falls
+// to `default` (exits WITHOUT setting the pause flag, WITHOUT advancing) — so this op never
+// actually advances the script cursor itself in either branch; only the pause-flag side effect
+// differs. Do not "fix" this to return 1 — it would change step()'s dispatch outcome.
+int ScriptInterp::op05WaitFrames(uint32_t obj) {
+  Core* c = core;
+  const uint16_t decremented = (uint16_t)(c->mem_r16(obj + OBJ_ARG_A_72) - 1u);
+  c->mem_w16(obj + OBJ_ARG_A_72, decremented);
+  return ((int16_t)decremented < 0) ? -1 : 0;
+}
+
+// FUN_800420AC — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_0.c:5231. See
+// script_interp.h for the 3-mode (eq/and-nonzero/and-zero) semantics.
+int ScriptInterp::op06TestSceneFlag(uint32_t obj) {
+  Core* c = core;
+  const int16_t argA = (int16_t)c->mem_r16(obj + OBJ_ARG_A_72);
+  const int16_t argB = (int16_t)c->mem_r16(obj + OBJ_FNPTR_LO_74);
+  const int16_t argC = (int16_t)c->mem_r16(obj + OBJ_FNPTR_HI_76);
+  const uint8_t tableByte = c->mem_r8(kSceneFlagTable + (uint32_t)(int32_t)argB);
+  if (argA == 1) {
+    // Guest ANDs the zero-extended byte (0..255) with the sign-extended argC; the AND's upper 24
+    // bits are always 0 (tableByte has no high bits), so truncating argC to a byte before the AND
+    // gives the identical low-byte result — safe, unlike the equality arm below.
+    return ((tableByte & (uint8_t)argC) != 0) ? 1 : 0;
+  } else if (argA == 0) {
+    // EXACT match: guest compares the zero-extended byte (r3, always 0..255) against the FULL
+    // sign-extended argC (r2, 32-bit) — NOT a byte-truncated compare. A negative or >255 argC can
+    // never equal a byte, so this must sign-extend argC, not truncate it.
+    return ((uint32_t)tableByte == (uint32_t)(int32_t)argC) ? 1 : 0;
+  } else if (argA == 2) {
+    return ((tableByte & (uint8_t)argC) == 0) ? 1 : 0;
+  }
+  return 0;  // argA >= 3: unreachable in the guest's own byte-shape, kept for parity
+}
+
+// FUN_80042E10 — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4772. See
+// script_interp.h for the claim/poll phase-machine semantics.
+int ScriptInterp::op34ClaimGate(uint32_t obj) {
+  Core* c = core;
+  uint8_t phase = c->mem_r8(obj + OBJ_SCRATCH_78);
+  if (phase == 0) {
+    const uint16_t argARaw = c->mem_r16(obj + OBJ_ARG_A_72);
+    const uint8_t claimTag = (uint8_t)(argARaw & 7u);
+    // Guest control flow: when claimTag==0 it jumps STRAIGHT to the phase-increment tail, skipping
+    // the write AND the sign-bit ("no-wait") check entirely — both are gated on claimTag != 0.
+    if (claimTag != 0) {
+      if (c->mem_r8(kClaimGateByte) == 0) c->mem_w8(kClaimGateByte, claimTag);
+      if (argARaw & 0x8000u) return 1;            // "no-wait" argA -> advance immediately
+    }
+    c->mem_w8(obj + OBJ_SCRATCH_78, (uint8_t)(phase + 1));
+    return 0;
+  } else if (phase == 1) {
+    return (c->mem_r8(kClaimGateByte) == 0) ? 1 : 0;
+  }
+  return 0;  // phase >= 2: unreachable in the guest's own byte-shape, kept for parity
+}
+
+// FUN_80040FA0 — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4564. See
+// script_interp.h for the naming caveat (advanceEntry() above already rec_dispatch's HERE) and the
+// 7-entry switch-table verification. The sp-=24/ra-spill guest frame is this function's OWN
+// activation record (not shared/observable state beyond the call) so it is not reproduced.
+int ScriptInterp::advanceStep(uint32_t obj, uint32_t kindArg) {
+  Core* c = core;
+  c->r[4] = obj;
+  c->r[5] = kindArg;
+  rec_dispatch(c, 0x80040E54u);  // still-substrate FUN_80040E54 (out of band for this pass)
+  const uint32_t ret = c->r[2];
+  if (ret >= 7u) return -1;      // matches table[3]'s literal -1 (index 3 IS 0x80041080)
+  switch (ret) {
+    case 0: {  // table[0] = 0x80040FE0
+      const uint8_t state = c->mem_r8(obj + OBJ_PROGRESS_70);
+      int32_t r3;
+      if (state == 2u) { c->mem_w8(obj + OBJ_FLAGS_71, state); r3 = 1; }
+      else { c->mem_w8(obj + OBJ_FLAGS_71, 0); c->mem_w8(obj + OBJ_PROGRESS_70, 0); r3 = 0; }
+      c->mem_w8(obj + OBJ_SCRATCH_78, 0);
+      return r3;
+    }
+    case 1: {  // table[1] = 0x8004100C
+      const uint8_t state = c->mem_r8(obj + OBJ_PROGRESS_70);
+      int32_t r3;
+      if (state == 2u) { c->mem_w8(obj + OBJ_FLAGS_71, 6); r3 = 1; }
+      else { c->mem_w8(obj + OBJ_FLAGS_71, 4); c->mem_w8(obj + OBJ_PROGRESS_70, 0); r3 = 0; }
+      c->mem_w8(obj + OBJ_SCRATCH_78, 0);
+      return r3;
+    }
+    case 2:  // table[2] = 0x8004103C — jumps straight to return, SKIPS the +0x78 tail write
+      c->mem_w8(obj + OBJ_PROGRESS_70, 255);
+      c->mem_w8(obj + OBJ_FLAGS_71, 255);
+      return 0;
+    case 3:  // table[3] = 0x80041080 — no writes at all
+      return -1;
+    case 4:  // table[4] = 0x80041050
+      c->mem_w8(obj + OBJ_FLAGS_71, 2);
+      c->mem_w8(obj + OBJ_SCRATCH_78, 0);
+      return 1;
+    case 5:  // table[5] = 0x8004105C
+      c->mem_w8(obj + OBJ_FLAGS_71, 6);
+      c->mem_w8(obj + OBJ_SCRATCH_78, 0);
+      return 1;
+    case 6:  // table[6] = 0x80041070
+      c->mem_w8(obj + OBJ_FLAGS_71, 0);
+      c->mem_w8(obj + OBJ_PROGRESS_70, 0);
+      c->mem_w8(obj + OBJ_SCRATCH_78, 0);
+      return 0;
+    default:
+      return -1;  // unreachable (ret already bounded to 0..6 above)
+  }
+}
+
 int ScriptInterp::callFnptr(uint32_t obj) {
   Core* c = core;
   // Guest 0x800412CC: `lw v0, 0x74(a0); jalr v0; jr ra` — v0 (the ret code) is EXACTLY what the

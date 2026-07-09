@@ -87,4 +87,71 @@ public:
   //   BehaviorDispatch::dispatchObj(obj, fnptr). Returns 0 (the guest handler's return convention
   //   — signals "advance" in the step loop; matches guest fall-through to jr ra after the jalr).
   int callFnptr(uint32_t obj);
+
+  // ---- Opcode-table handlers (0x800A3B78, 63 entries) — DRAFT, UNWIRED (wide-RE 2026-07-10) ----
+  // These read/write generic obj fields that step()/loadCurrentEntry() already load per-entry:
+  //   argA = obj[+0x72] (OBJ_ARG_A_72), argB = obj[+0x74] (OBJ_FNPTR_LO_74, reused as a plain u16
+  //   arg by every opcode except 0x3E), argC = obj[+0x76] (OBJ_FNPTR_HI_76, ditto). obj[+0x78]
+  //   (OBJ_SCRATCH_78) doubles as a per-opcode PHASE byte for multi-call ops (34/36/31 below), same
+  //   slot init() clears to 0. Verified against the resident opcode table read out of MAIN.EXE
+  //   .rodata directly (scratch/re/opcode_table.txt, this session): table[5]=0x80042090,
+  //   table[6]=0x800420AC, table[31]=0x80041468, table[34]=0x80042E10, table[36]=0x80043108 — so
+  //   these ARE opcode handlers, called as handler(obj) with ABI a0=obj / ret=v0, exactly the shape
+  //   step()'s non-0x3E dispatch already uses via rec_dispatch(handler). None are wired into the
+  //   dispatch table yet (step() still calls the substrate handler for every opcode but 0x3E).
+
+  // op05 — FUN_80042090: "wait N frames". Decrements argA each call; returns 0 (RET_PAUSE) while
+  //   still counting down, or -1 (0xFFFFFFFF — matches NO case in step()'s ret-code switch, so it
+  //   falls to `default`: exit without pause-flag, without advance) once the decremented value goes
+  //   negative. No object state besides argA touched. Faithful from generated/shard_7.c:5216 (leaf,
+  //   no frame).
+  int op05WaitFrames(uint32_t obj);
+
+  // op06 — FUN_800420AC: "test scene-flag byte" (the COND-flagged script entries' predicate — see
+  //   the 0x0800 opcode-word flag bit in the header comment above). Reads a shared byte array at
+  //   guest 0x800BF870+324 (DAT_800bf870, the same area/scene-context anchor documented elsewhere
+  //   in docs/engine_re.md — table purpose beyond "flag byte array" NOT traced this pass), indexed
+  //   by argB, then combines with argC per argA's 3-way mode:
+  //     argA==0 -> return 1 iff table[argB] == argC (exact match)
+  //     argA==1 -> return 1 iff (table[argB] & argC) != 0   (any masked bit set)
+  //     argA==2 -> return 1 iff (table[argB] & argC) == 0   (masked bits all clear)
+  //     argA>=3 -> return 0 (falls through the guest's own unreachable default, byte-shape says 0)
+  //   Faithful from generated/shard_0.c:5231 (leaf, no frame).
+  int op06TestSceneFlag(uint32_t obj);
+
+  // op34 — FUN_80042E10: "claim-and-wait on a shared 1-byte gate" at guest 0x800BF86F (byte +7 of
+  //   the 0x800BF868 table — same table family as op06's 0x800BF870 anchor, offset -8 from it;
+  //   consumer/producer of this specific byte NOT traced this pass). Uses obj[+0x78] as a 2-phase
+  //   counter (0=claim, 1=poll):
+  //     phase 0: if (argA & 7) == 0, skip straight to the phase-increment tail (no claim attempt,
+  //       no sign-bit check — return 0/pause, phase becomes 1). Else (claimTag != 0): if the gate
+  //       byte currently reads 0, claim it by writing claimTag into the gate byte; then if argA's
+  //       sign bit (0x8000 on the raw 16-bit read) is set, return 1 (advance) immediately without
+  //       ever polling; otherwise fall through to the same phase++ / return 0 tail.
+  //     phase 1: poll the gate byte; return 1 (advance, gate cleared) once it reads 0, else 0
+  //       (pause, keep polling).
+  //     phase >=2: return 0 (no-op; guest byte-shape never reaches this, kept for parity).
+  //   Faithful from generated/shard_2.c:4772 (leaf, no frame).
+  int op34ClaimGate(uint32_t obj);
+
+  // ---- FUN_80040FA0 — DRAFT, UNWIRED (wide-RE 2026-07-10) --------------------------------------
+  // "Advance sub-machine" wrapper the guest step() calls after every non-pause handler return
+  // (see the `RET_ADVANCE_*` comment above `advanceEntry()`). NOTE ON NAMING: the CURRENT
+  // `advanceEntry()` method above (kAdvanceAddr = 0x80040E54 per its own doc comment) actually
+  // `rec_dispatch`es to THIS address (0x80040FA0), not to 0x80040E54 — i.e. the wired method's
+  // real behavior today IS this function's substrate body, reached indirectly. This draft is the
+  // faithful native body of 0x80040FA0 itself (which in turn calls the STILL-substrate
+  // 0x80040E54 for the raw entry-advance, out of band for this wide-RE pass — not in the assigned
+  // address range). Once verified, this should REPLACE `advanceEntry`'s `rec_dispatch(c,
+  // 0x80040FA0u)` body (a frontier-tier wiring step, not done here).
+  //
+  // Byte-shape source: generated/shard_2.c:4564 (gen_func_80040FA0). Frame: sp-=24, spill s0(obj)
+  // and ra at +16/+20. Calls the substrate FUN_80040E54(obj, kindArg) [still rec_dispatch'd — out
+  // of band], gets a 0..6 index (or >=7 -> return -1 immediately, matching table slot 3's literal),
+  // and runs one of 7 straight-line case blocks that manipulate the SAME bytes step()'s own loop
+  // uses: obj[+0x70] (OBJ_PROGRESS_70, the step() loop-guard byte) and obj[+0x71] (OBJ_FLAGS_71).
+  // Table read directly out of MAIN.EXE (scratch/re/advance_switch_table.txt, this session) at
+  // guest 0x8001534C, 7 x u32, values 0x80040FE0/8004100C/8004103C/80041080/80041050/8004105C/
+  // 80041070 for index 0..6 respectively (matches the recomp's switch-case literals exactly).
+  int advanceStep(uint32_t obj, uint32_t kindArg);
 };

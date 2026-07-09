@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 582 native fns, 493 owned addresses, 554 LIVE / 28 ORPHAN.
+Totals: 587 native fns, 498 owned addresses, 559 LIVE / 28 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -82,12 +82,16 @@ Totals: 582 native fns, 493 owned addresses, 554 LIVE / 28 ORPHAN.
 | 0x80040CDC | LIVE | `ScriptInterp::init` | game/scene/script_interp.cpp:62 |  |  |
 | 0x80040DE0 | LIVE | `ScriptInterp::loadCurrentEntry` | game/scene/script_interp.cpp:84 |  |  |
 | 0x80040E54 | LIVE | `ScriptInterp::advanceEntry` | game/scene/script_interp.cpp:102 | 0x80040FA0 |  |
-| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:139 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
-| 0x80041098 | LIVE | `ScriptInterp::step` | game/scene/script_interp.cpp:143 |  |  |
-| 0x800412CC | LIVE | `ScriptInterp::callFnptr` | game/scene/script_interp.cpp:118 |  |  |
+| 0x80040FA0 | LIVE | `ScriptInterp::advanceStep` | game/scene/script_interp.cpp:191 | 0x80040E54 | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4564… |
+| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:260 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
+| 0x80041098 | LIVE | `ScriptInterp::step` | game/scene/script_interp.cpp:264 |  |  |
+| 0x800412CC | LIVE | `ScriptInterp::callFnptr` | game/scene/script_interp.cpp:239 |  |  |
 | 0x8004190C | LIVE | `Engine::animTick` | game/core/engine.cpp:890 |  | Engine::animTick — FUN_8004190C. Ticks the animation VM (native Animat… |
+| 0x80042090 | LIVE | `ScriptInterp::op05WaitFrames` | game/scene/script_interp.cpp:134 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_7.c:5216… |
+| 0x800420AC | LIVE | `ScriptInterp::op06TestSceneFlag` | game/scene/script_interp.cpp:143 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_0.c:5231… |
 | 0x80042310 | LIVE | `ActorTomba::resetLoadGate` | game/player/actor_tomba.cpp:805 | 0x8001CF78 0x80074590 0x80074F24 | resetLoadGate — guest FUN_80042310. See actor_tomba.h for the full RE … |
 | 0x80042728 | LIVE | `BgSceneTransitionSm::readyForProgress` | game/scene/bg_scene_transition_sm.cpp:206 |  |  |
+| 0x80042E10 | LIVE | `ScriptInterp::op34ClaimGate` | game/scene/script_interp.cpp:167 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4772… |
 | 0x80044BD4 | LIVE | `native_area_load_bd4` | game/core/engine.cpp:1555 | 0x800452C0 | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
 | 0x80044BD4 | LIVE | `Engine::submode1Faithful` | game/core/engine.cpp:2133 | 0x80044BD4 0x8005245C 0x80107230 0x8010766C 0x80107790 | pc_faithful walkable-field area machine — mirror of ov_game_gen_801088… |
 | 0x80044BD4 | LIVE | `Engine::stage0AdvanceSkip` | game/core/engine.cpp:3284 |  | ── STAGE0ADVANCE — pc_skip cadence ───────────────────────────────────… |
@@ -145,6 +149,7 @@ Totals: 582 native fns, 493 owned addresses, 554 LIVE / 28 ORPHAN.
 | 0x8004FA38 | LIVE | `Inventory::abGate` | game/items/inventory.cpp:119 |  | Full RAM+scratchpad A/B vs rec_super_call. The pure-leaf core touches … |
 | 0x8004FB20 | LIVE | `Pool::clearBf548Region` | game/world/pool.cpp:50 |  | zero 700 bytes at 0x800BF548. Trivial memset wrapper. Every field of t… |
 | 0x8004FE84 | LIVE | `Engine::sceneRenderListBuilder` | game/core/engine.cpp:677 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
+| 0x800506D0 | LIVE | `PcScheduler::tickSleepCountdown` | game/core/pc_scheduler.cpp:597 |  | DRAFT, UNWIRED (wide-RE 2026-07-10). See pc_scheduler.h for the RE sum… |
 | 0x8005082C | LIVE | `ModeStateArm::arm` | game/scene/mode_state_arm.cpp:10 |  | ModeStateArm::arm — native ownership of FUN_8005082C (Ghidra decomp sc… |
 | 0x800508A8 | LIVE | `ModeStateArm::armFromAreaTable` | game/scene/mode_state_arm.cpp:29 |  | ModeStateArm::armFromAreaTable — native ownership of FUN_800508A8 (Ghi… |
 | 0x80050970 | LIVE | `BgSceneTransitionSm::bf816Dispatch` | game/scene/bg_scene_transition_sm.cpp:89 |  | tiny dispatcher on the 800BF816 mode byte: 0 = ModeStateArm::armFromAr… |
@@ -333,26 +338,26 @@ Totals: 582 native fns, 493 owned addresses, 554 LIVE / 28 ORPHAN.
 | 0x8007E9C8 | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x8007E9C8 | LIVE | `ScreenFade::fadetrace` | game/render/screen_fade.cpp:16 |  | `debug fadetrace` channel — logs every native-path fade call with the … |
 | 0x8007E9C8 | LIVE | `BgSceneTransitionSm::fadeRect` | game/scene/bg_scene_transition_sm.cpp:51 |  | Screen fade — same shape as the guest's FUN_8007e9c8(color, P[3], 4) l… |
-| 0x80080F6C | LIVE | `func_80080F6C` | game/render/wide_re_libgpu_leaves.cpp:75 |  | func_80080F6C (0x80080F6C) — DrawSync(mode). DRAFT. RE'd from generate… |
+| 0x80080F6C | LIVE | `func_80080F6C` | game/render/wide_re_libgpu_leaves.cpp:72 |  | func_80080F6C (0x80080F6C) — DrawSync(mode). DRAFT. RE'd from generate… |
 | 0x80081218 | LIVE | `Asset::uploadImage` | game/core/asset.cpp:246 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
-| 0x80081458 | LIVE | `func_80081458` | game/render/wide_re_libgpu_leaves.cpp:109 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). DRAFT. RE'd from… |
+| 0x80081458 | LIVE | `func_80081458` | game/render/wide_re_libgpu_leaves.cpp:106 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). DRAFT. RE'd from… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
 | 0x80082424 | LIVE | `func_80082424` | game/render/wide_re_gpu_dma_queue.cpp:477 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). DRAFT. RE'd … |
-| 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:153 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
+| 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:150 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
 | 0x80082D04 | LIVE | `func_80082D04` | game/render/wide_re_gpu_dma_queue.cpp:164 |  | func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeB… |
 | 0x80082FB4 | LIVE | `func_80082FB4` | game/render/wide_re_gpu_dma_queue.cpp:294 |  | func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). DRAFT. RE'd from gene… |
 | 0x80083364 | LIVE | `func_80083364` | game/render/wide_re_gpu_dma_queue.cpp:404 |  | func_80083364 (0x80083364) — GpuDmaQueueSync(mode). DRAFT. RE'd from g… |
 | 0x800834A0 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x800834D4 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
-| 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:188 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |
+| 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:185 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |
 | 0x80083E80 | LIVE | `Trig::rsin` | game/math/trig.cpp:4 |  |  |
 | 0x80083F50 | LIVE | `Trig::rcos` | game/math/trig.cpp:69 |  |  |
 | 0x80084110 | LIVE | `Math::matMul` | game/math/gte_math.cpp:117 |  |  |
 | 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:300 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80084250 | ORPHAN | `func_80084250` | game/math/wide_re_gte_transform3.cpp:41 |  |  |
 | 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:164 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x800847B0 | LIVE | `func_800847B0` | game/render/wide_re_libgpu_leaves.cpp:235 |  | func_800847B0 (0x800847B0) — 20-byte SoA->AoS vertex-header REPACK. DR… |
+| 0x800847B0 | LIVE | `func_800847B0` | game/render/wide_re_libgpu_leaves.cpp:232 |  | func_800847B0 (0x800847B0) — 20-byte SoA->AoS vertex-header REPACK. DR… |
 | 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:291 |  |  |
 | 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:290 |  |  |
 | 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:289 |  |  |

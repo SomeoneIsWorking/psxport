@@ -586,3 +586,20 @@ void PcScheduler::step() {
   }
   static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }
+
+// FUN_800506D0 — DRAFT, UNWIRED (wide-RE 2026-07-10). See pc_scheduler.h for the RE summary. 1:1
+// with generated/shard_5.c:7522: no frame descent (leaf, no sp/ra touched), 3-slot sweep over
+// TASKBASE+i*TASKSTRIDE for i=0..2 (verified against the guest loop bound 0x801FE000..0x801FE14F
+// inclusive-by-112 == exactly 3 iterations), state==1 -> decrement countdown at +2 -> re-arm to 2
+// on underflow-to-exactly-zero. The still-substrate call site is
+// runtime/recomp/native_boot.cpp:129 (`rc0(c, 0x800506d0)`); wiring is a frontier-tier follow-up
+// (swap that call for `c->game->pcSched.tickSleepCountdown()` once SBS-gated).
+void PcScheduler::tickSleepCountdown() {
+  Core* c = &game->core;
+  for (uint32_t base = TASKBASE; base <= TASKBASE + 2u * TASKSTRIDE; base += TASKSTRIDE) {
+    if (c->mem_r16(base + 0x00u) != 1u) continue;               // only YIELDED (state==1) slots tick
+    uint16_t countdown = (uint16_t)(c->mem_r16(base + 0x02u) - 1u);
+    c->mem_w16(base + 0x02u, countdown);
+    if (countdown == 0u) c->mem_w16(base + 0x00u, 2u);           // re-arm 1 -> 2 (RUNNABLE)
+  }
+}

@@ -2584,3 +2584,26 @@ themselves are LIVE but dispatch out to substrate for every case body.
   spills) libgpu `LoadImage()`-style chunked GP0-FIFO pixel streamer, NOT part of this cluster's
   mutual recursion (shares only the busy-wait idiom on the same status-block globals). HIGH confidence
   on role, MEDIUM-LOW on the rect-clip/chunking arithmetic — left for its own dedicated RE pass.
+
+- **Band 0x800506D0/0x800420AC/0x80042090/0x80042E10/0x80043108/0x80041468/0x80040FA0, scheduler
+  sleep-countdown + ScriptInterp opcode-table cluster (wide-RE agent, 2026-07-10, UNWIRED).** Task
+  band was the 9 hottest free-roam-dispatch-count unowned leaves in the range; 2 of the original 9
+  (0x800518FC `Engine::objMatrixCompose`, 0x8004190C `Engine::animTick`) were already owned and
+  skipped. 5 of 7 DRAFTED (compile-only, unwired, unverified, no SBS run): `PcScheduler::
+  tickSleepCountdown` (0x800506D0, `game/core/pc_scheduler.{h,cpp}` — the long-referenced "sleep
+  countdown / re-arm 1->2" sweep, never previously drafted as a body); `ScriptInterp::
+  op05WaitFrames`/`op06TestSceneFlag`/`op34ClaimGate`/`advanceStep` (0x80042090/0x800420AC/
+  0x80042E10/0x80040FA0, `game/scene/script_interp.{h,cpp}`) — 4 of the 63-entry script-opcode
+  handler table at guest 0x800A3B78 (positively identified by reading the table directly out of
+  MAIN.EXE .rodata, not inferred), plus the "advance sub-machine" wrapper `advanceEntry` currently
+  only `rec_dispatch`es to. TWO REAL BUGS caught and fixed mid-draft before landing (op06's
+  exact-match arm was truncating argC to a byte instead of sign-extend-comparing; op34 was checking
+  the "no-wait" sign bit even when the guest skips that check entirely) — see docs/engine_re.md for
+  the full write-ups; a reminder that even "simple" opcode handlers need line-by-line care.
+  2 MAPPED-ONLY, refused for drafting (dense fixed-point-math DAGs — same risk class the melee wave
+  got wrong 6 times in one function, docs/fleet-workflow.md §9): 0x80043108 (opcode 36, 95 dispatch
+  hits — squared-distance/sqrt/div movement solver with guest div-by-zero `rec_break` traps) and
+  0x80041468 (opcode 31, 11 hits — ratan2-based turn-toward-target). Both need a dedicated Ghidra
+  cross-check pass, not a from-scratch manual MIPS transcription. Full field-level RE in
+  docs/engine_re.md "Wide-RE pass 2026-07-10 — scheduler sleep-countdown + 4 ScriptInterp opcode
+  handlers".

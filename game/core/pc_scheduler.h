@@ -132,6 +132,18 @@ public:
   // step(): one scheduler pass over the 3 task slots (replaces FUN_80051e60).
   void step();
 
+  // tickSleepCountdown(): FUN_800506D0 — DRAFT, UNWIRED (wide-RE 2026-07-10). The "sleep
+  // countdown / re-arm" sweep called once per frame from native_boot.cpp's `rc0(c, 0x800506d0)`
+  // site (still substrate there — this method is a faithful native port, not yet wired in).
+  // Byte-shape source: generated/shard_5.c:7522 (gen_func_800506D0) — a leaf, no stack frame (no
+  // sp descent, no ra use). Walks task slots 0..2 (TASKBASE + i*TASKSTRIDE, matches "Tomba2 runs
+  // up to 3 cooperative tasks" in scheduler.cpp): for each slot whose state (base+0x00, u16) ==
+  // 1 (YIELDED, per PcScheduler::yieldPrim's doc comment), decrement the countdown at base+0x02
+  // (u16); when it reaches exactly 0, re-arm the slot's state to 2 (RUNNABLE) — this is the
+  // "FUN_800506D0 re-arms 1->2" mechanism referenced throughout scheduler.cpp/pc_scheduler.cpp
+  // comments as already-known behavior but never previously drafted as a method body.
+  void tickSleepCountdown();
+
   // True when entry_pc is one of the stage entries the PC port handles natively.
   bool hasNativeHandlerForEntry(uint32_t entry_pc) const;
 
