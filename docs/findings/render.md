@@ -1,5 +1,33 @@
 # Findings — render / engine submit
 
+## perobj_billboard cluster (C2D4/C464/C8F4) — BUF base wrong + register-faithfulness gap (2026-07-09, OPEN)
+
+- **how found**: the oracle-gate fix (commit 5483a83, `engine_override_thunk`) made SBS honest for the
+  `g_override[]` render clusters. Post-fix `PSXPORT_SBS_MODE=full` immediately surfaced 19 `[sbs-div]`
+  at f117 in the packet pool (0x800BFFxx) + scratchpad — exactly the writes the false 0-div had hidden.
+- **bisected** with `PSXPORT_THUNK_FORCE_GEN` (force a cluster to gen even on core A): disabling the
+  billboard leaves cleared f117 → billboard; `C2D4`-only force-gen left packet data divergent →
+  `billboardEmit` (C8F4, reached direct-C++ on core A so the thunk hit-counter showed 0 native).
+- **bug 1 — RESOLVED (commit a457082)**: the whole cluster wrote its MATRIX-compose + projected-coord
+  buffer to MAIN RAM `0x800C0000`, but `gen_func_8003C2D4`/`8003C8F4` base `r16/r17 = 8064<<16 =
+  0x1F800000` (SCRATCHPAD). Emitted packets (copied BUF+4..+36) therefore differed from the substrate.
+  Single-constant fix: `BUF = 0x1F800000`. Packet-pool divergence eliminated.
+- **bug 2 — OPEN (register-faithfulness, same family as frameTick / NodeXform)**: with bug 1 fixed, f117
+  now diverges in the GUEST STACK at 0x801FE8D8 (signature A=80 1F / B=00 00). `gen_func_8003C8F4`
+  spills the CALLER's `r16..r22/ra` at `sp+64..+92` (its own prologue); native `billboardEmit`'s
+  `GuestFrame(96)` only allocates the frame, doesn't spill. The spilled "caller r16" further differs
+  because the caller `billboardCompose1` (C2D4) in gen reassigns `r16=MAT_OUT`/`r17=MAT_A`/`r18=flag`/
+  `r19=node` but native C2D4 uses C++ locals and never writes `c->r[16..]`. Callees of C8F4
+  (`func_8003B220`, `func_8003B054`) are leaves that spill NO callee-saved regs, so the fix is purely
+  the prologue spill bytes + the C2D4/C464 mid-body register assignments — the frame-mirror treatment
+  per docs/findings/animation.md (NodeXform's named frame structs). Two layers: (1) C8F4 spills caller
+  r16..ra at sp+64..92; (2) C2D4/C464 set c->r[16..] to gen's reassigned values so C8F4's "caller r16"
+  matches. More f117+ divergences likely stack behind this (other render clusters: quad_rtpt,
+  overlay_gt3gt4, overlay_ground_gt3gt4) — chase them the same way once billboard is clean.
+- **refs**: game/render/perobj_billboard.cpp (BUF constant; `Render::billboardCompose1/2/billboardEmit`;
+  `billboardComposeTail`); oracle `generated/shard_4.c gen_func_8003C8F4` (L4365) + `generated/shard_0.c
+  gen_func_8003C2D4` (L4507); commits 5483a83 (oracle gate), a457082 (BUF fix).
+
 ## Owned the per-object cmd-list dispatch chain 0x8003CDD8/0x8003F698 (2026-07-08)
 
 - **status**: DONE. `Render::cmdListDispatch`/`Render::perModeDispatch` (game/render/perobj_dispatch.cpp).
