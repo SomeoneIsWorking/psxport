@@ -8,9 +8,10 @@ boilerplate wrong. This tool parses the RECOMPILED C TEXT (ground truth — neve
 which garbles COP2/delay slots) and emits:
 
   1. --contract (default): a human-readable + JSON-able description of the function's guest-ABI
-     contract: frame size, ordered sp-relative stores (prologue spills / scratch stores / epilogue
-     restores) in PROGRAM ORDER, and every call site with its target, its r31 (return-address) constant,
-     and which callee-saved registers (r16..r23, r30) look live going into it.
+     contract: frame size, ordered sp-relative stores (prologue spills / scratch stores) with their
+     CFG branch context, and every call site with its target, its r31 (return-address) constant, and
+     which callee-saved registers (r16..r23, r30) are live going into it — computed over the
+     function's real control-flow graph, not file order.
   2. --scaffold: a ready-to-paste C++ Frame RAII struct + call-site comment block in the house style
      (game/render/perobj_dispatch.cpp's CmdListFrame / game/world/object_table.cpp's frame idiom).
   3. --audit <native.cpp>: best-effort heuristic grep-level check of an EXISTING native port against
@@ -18,13 +19,15 @@ which garbles COP2/delay slots) and emits:
      intentionally noisy/heuristic — labelled as such in the output; it is not a substitute for the
      line-by-line RE verify pass docs/fleet-workflow.md §9 requires.
 
-This is a STATIC TEXT parser over the recompiler's fixed emission idioms, not a general MIPS/C dataflow
-engine. It recognizes the emission patterns actually seen in generated/*.c; if it hits a function body
-whose shape doesn't match those idioms, it FAILS LOUDLY (raises AbiParseError) rather than emit a
-guessed/wrong contract — a wrong contract is worse than none (see CLAUDE.md "No bandaids").
+This is a STATIC TEXT parser over the recompiler's fixed emission idioms, plus a real basic-block CFG
+built from those idioms (labels, conditional/unconditional gotos, the switch-dispatch jump-table shape,
+and function returns — see docs/abi-extract.md for the enumerated corpus shapes). It recognizes the
+emission patterns actually seen in generated/*.c; if it hits a function body whose shape doesn't match
+those idioms, it FAILS LOUDLY (raises AbiParseError) rather than emit a guessed/wrong contract — a wrong
+contract is worse than none (see CLAUDE.md "No bandaids").
 
 Usage:
-    python3 tools/abi_extract.py <hexaddr> [--contract|--scaffold|--audit <native.cpp>] [--json] [--repo <path>]
+    python3 tools/abi_extract.py <hexaddr> [--contract|--scaffold|--audit] [--json] [--repo <path>]
 
 Pure stdlib. No new dependencies.
 """
@@ -115,9 +118,40 @@ def locate_function(repo: str, hexaddr: str) -> FoundFunction:
 # Line-level idiom patterns (recompiler emission dialect)
 # --------------------------------------------------------------------------------------------------
 
-FRAME_OPEN_RE = re.compile(r'^\s*c->r\[29\] = c->r\[29\] \+ \(uint32_t\)-(\d+);\s*$')
-FRAME_CLOSE_RE = re.compile(r'^\s*c->r\[29\] = c->r\[29\] \+ \(uint32_t\)(\d+); return;\s*$')
-LABEL_RE = re.compile(r'^\s*(L_[0-9A-Fa-f]+):;\s*$')
+FRAME_OPEN_RE = re.compile(r'^c->r\[29\] = c->r\[29\] \+ \(uint32_t\)-(\d+);$')
+FRAME_CLOSE_RE = re.compile(r'^c->r\[29\] = c->r\[29\] \+ \(uint32_t\)(\d+); return;$')
+LABEL_FULL_RE = re.compile(r'^(L_[0-9A-Fa-f]+):;$')
+# A label immediately followed by a statement on the SAME physical line (the recompiler does this
+# when a jump target coincides with the first instruction of what would otherwise be a plain
+# statement line — verified 4030 corpus instances, always exactly one label + one trailing statement,
+# never chained/multi-label). e.g. `L_8013B07C:; c->r[2] = c->r[2] << 16;`
+LABEL_PREFIX_RE = re.compile(r'^(L_[0-9A-Fa-f]+):;\s*(\S.*)$')
+
+# MIPS branch-delay-slot compound: { int _t = (COND); DELAY_INSN; if (_t) goto LABEL; }
+# DELAY_INSN always executes (branch delay slot) regardless of COND; verified over the whole
+# generated/ corpus (47524 instances) that the delay part is always a single statement (no embedded
+# ';') — see docs/abi-extract.md "corpus shapes".
+COMPOUND_DELAY_RE = re.compile(r'^\{ int _t = \((.+?)\); (.+?); if \(_t\) goto (L_[0-9A-Fa-f]+); \}$')
+# Compound with no delay insn (pure conditional branch).
+COMPOUND_NODELAY_RE = re.compile(r'^\{ int _t = \((.+?)\); if \(_t\) goto (L_[0-9A-Fa-f]+); \}$')
+
+# Unconditional goto, optionally preceded by exactly one plain statement on the same line
+# ("STMT; goto L;"); verified over the corpus that this shape never carries more than one leading
+# statement. Order matters: try the two-part shape first, then the bare shape.
+GOTO_SUFFIX_RE = re.compile(r'^(.+); goto (L_[0-9A-Fa-f]+);$')
+BARE_GOTO_RE = re.compile(r'^goto (L_[0-9A-Fa-f]+);$')
+
+# Bare return, or "STMT; return;" (a tail call/dispatch immediately followed by return — very common:
+# ~17k instances in the corpus). FRAME_CLOSE_RE (sp ascent + return) is checked first since it's a
+# more specific variant of this same shape.
+BARE_RETURN_RE = re.compile(r'^return;$')
+RETURN_SUFFIX_RE = re.compile(r'^(.+); return;$')
+
+# Switch-dispatch jump table: {  switch (EXPR) { case C: goto L; ... default: DEFAULT; return; } }
+# This is the recompiler's coroutine/state-resume dispatch idiom (verified uniform shape across all
+# 1041 corpus instances: N "case CONST: goto LABEL;" clauses then one "default: STMT; return;").
+SWITCH_RE = re.compile(r'^\{ {1,2}switch \((.+?)\) \{ (.*) default: (.+?); return; \} \}$')
+SWITCH_CASE_RE = re.compile(r'case ([^:]+): goto (L_[0-9A-Fa-f]+);')
 
 # sp-relative store, any width. Group: width(8/16/32), offset (signed decimal), source expr.
 SP_STORE_RE = re.compile(
@@ -125,21 +159,24 @@ SP_STORE_RE = re.compile(
 )
 # sp-relative load into a register (restore candidate). Group: dest reg, width, offset.
 SP_LOAD_RE = re.compile(
-    r'^\s*c->r\[(\d+)\] = \(uint32_t\)c->mem_r(8|16|32)\(\(c->r\[29\] \+ \(uint32_t\)(-?\d+)\)\);\s*$'
-    r'|^\s*c->r\[(\d+)\] = c->mem_r(8|16|32)\(\(c->r\[29\] \+ \(uint32_t\)(-?\d+)\)\);\s*$'
+    r'^c->r\[(\d+)\] = \(uint32_t\)c->mem_r(8|16|32)\(\(c->r\[29\] \+ \(uint32_t\)(-?\d+)\)\);$'
+    r'|^c->r\[(\d+)\] = c->mem_r(8|16|32)\(\(c->r\[29\] \+ \(uint32_t\)(-?\d+)\)\);$'
 )
 
 # INDIRECT sp-relative access: the recompiler sometimes materializes an sp-relative address into a
 # scratch register first (`c->r[2] = c->r[29] + (uint32_t)4;`) and stores/loads through THAT register
 # on a later line (`c->mem_w32((c->r[2] + (uint32_t)0), ...);`). Seen e.g. in ov_a00_gen_8013FB88's
-# per-branch inline scratch (the mode==1/mode==2 SZ-scratch idiom) — without tracking this, those
-# stores are invisible to the sp-relative store scan even though they ARE guest-stack-frame content.
-SP_ADDR_MATERIALIZE_RE = re.compile(r'^\s*c->r\[(\d+)\] = c->r\[29\] \+ \(uint32_t\)(-?\d+);\s*$')
+# per-branch inline scratch (the mode==1/mode==2 SZ-scratch idiom). Tracking this idiom PER CFG BLOCK
+# (via the reaching-definitions dataflow below) — not globally in file order — is what fixes the
+# previously-missed sp+12 slot: r2's materialized value at block entry now comes from the actual CFG
+# predecessor edge(s) reaching that block, not from whatever a differently-ordered-in-the-FILE sibling
+# block happened to leave behind.
+SP_ADDR_MATERIALIZE_RE = re.compile(r'^c->r\[(\d+)\] = c->r\[29\] \+ \(uint32_t\)(-?\d+);$')
 INDIRECT_SP_STORE_RE = re.compile(
     r'c->mem_w(8|16|32)\(\(c->r\[(\d+)\] \+ \(uint32_t\)(-?\d+)\), (.+?)\);'
 )
 INDIRECT_SP_LOAD_RE = re.compile(
-    r'^\s*c->r\[(\d+)\] = (?:\(uint32_t\))?c->mem_r(8|16|32)\(\(c->r\[(\d+)\] \+ \(uint32_t\)(-?\d+)\)\);\s*$'
+    r'^c->r\[(\d+)\] = (?:\(uint32_t\))?c->mem_r(8|16|32)\(\(c->r\[(\d+)\] \+ \(uint32_t\)(-?\d+)\)\);$'
 )
 
 # r31 (ra) set to a literal constant — always precedes a real call in this dialect.
@@ -151,7 +188,7 @@ CALL_RE = re.compile(r'\b((?:ov_[a-z0-9]+_func_|func_)([0-9A-Fa-f]{8}))\(c\);')
 RECDISP_RE = re.compile(r'rec_dispatch\(c, ([^)]+)\);')
 
 # Plain register-to-register assignment: c->r[N] = <expr>;  (used to track callee-saved liveness)
-REG_ASSIGN_RE = re.compile(r'^\s*c->r\[(\d+)\] = (.+);\s*$')
+REG_ASSIGN_RE = re.compile(r'^c->r\[(\d+)\] = (.+);$')
 
 CALLEE_SAVED = list(range(16, 24)) + [30]  # r16..r23, r30 (s8/fp) — MIPS o32 callee-saved (ra=r31 separate)
 
@@ -162,25 +199,358 @@ CALLEE_SAVED = list(range(16, 24)) + [30]  # r16..r23, r30 (s8/fp) — MIPS o32 
 MEM_W_ANY_RE = re.compile(r'c->mem_w(8|16|32)\(')
 
 
+# --------------------------------------------------------------------------------------------------
+# Tokenizer: raw body lines -> a flat instruction-level token stream (branch-delay compounds
+# decomposed into their real execution order, terminator statements split from any leading stmt).
+# --------------------------------------------------------------------------------------------------
+
+@dataclass
+class Tok:
+    kind: str        # 'label' | 'stmt' | 'condgoto' | 'goto' | 'return' | 'switch'
+    line_no: int      # index into fn.body
+    text: str = ""            # for 'stmt'
+    target: str = ""          # for 'condgoto' / 'goto'
+    cond_text: str = ""       # for 'condgoto' (source condition expression, for human-readable context)
+    frame_close: Optional[int] = None   # for 'return', if this was the frame-ascent+return combo
+    cases: list = field(default_factory=list)   # for 'switch': [(case_val, target_label), ...]
+    default_text: str = ""    # for 'switch'
+
+
+def tokenize(body: list) -> list:
+    toks = []
+    for i, raw in enumerate(body):
+        stmt = raw.strip()
+        if not stmt:
+            continue
+
+        lm = LABEL_FULL_RE.match(stmt)
+        if lm:
+            toks.append(Tok(kind='label', line_no=i, target=lm.group(1)))
+            continue
+
+        lp = LABEL_PREFIX_RE.match(stmt)
+        if lp:
+            toks.append(Tok(kind='label', line_no=i, target=lp.group(1)))
+            toks.extend(_classify_stmt(lp.group(2), i))
+            continue
+
+        toks.extend(_classify_stmt(stmt, i))
+    return toks
+
+
+def _classify_stmt(stmt: str, i: int) -> list:
+    """Classify one (label-stripped) physical-line statement into its token(s)."""
+    fc = FRAME_CLOSE_RE.match(stmt)
+    if fc:
+        return [Tok(kind='return', line_no=i, frame_close=int(fc.group(1)))]
+
+    if BARE_RETURN_RE.match(stmt):
+        return [Tok(kind='return', line_no=i)]
+
+    cd = COMPOUND_DELAY_RE.match(stmt)
+    if cd:
+        cond_text, delay_insn, target = cd.group(1), cd.group(2), cd.group(3)
+        return [Tok(kind='stmt', line_no=i, text=delay_insn + ';'),
+                Tok(kind='condgoto', line_no=i, target=target, cond_text=cond_text)]
+
+    cn = COMPOUND_NODELAY_RE.match(stmt)
+    if cn:
+        cond_text, target = cn.group(1), cn.group(2)
+        return [Tok(kind='condgoto', line_no=i, target=target, cond_text=cond_text)]
+
+    sw = SWITCH_RE.match(stmt)
+    if sw:
+        expr, cases_part, default_text = sw.group(1), sw.group(2), sw.group(3)
+        cases = SWITCH_CASE_RE.findall(cases_part)
+        # sanity: the case list, re-joined, must reconstruct the source exactly (else this is an
+        # emission shape we haven't seen — fail loudly rather than silently drop a case edge).
+        rejoined = ''.join(f'case {c}: goto {t}; ' for c, t in cases)
+        if rejoined.strip() != cases_part.strip():
+            raise AbiParseError(
+                f"line {i}: switch-dispatch case list doesn't round-trip cleanly "
+                f"(unrecognized case shape) — refusing to emit a possibly-wrong contract: {stmt!r}"
+            )
+        return [Tok(kind='switch', line_no=i, cases=cases, default_text=default_text,
+                     text=f"switch({expr})")]
+
+    rs = RETURN_SUFFIX_RE.match(stmt)
+    if rs:
+        return [Tok(kind='stmt', line_no=i, text=rs.group(1) + ';'),
+                Tok(kind='return', line_no=i)]
+
+    gs = GOTO_SUFFIX_RE.match(stmt)
+    if gs:
+        return [Tok(kind='stmt', line_no=i, text=gs.group(1) + ';'),
+                Tok(kind='goto', line_no=i, target=gs.group(2))]
+
+    bg = BARE_GOTO_RE.match(stmt)
+    if bg:
+        return [Tok(kind='goto', line_no=i, target=bg.group(1))]
+
+    # plain statement, falls through to the next physical line
+    return [Tok(kind='stmt', line_no=i, text=stmt)]
+
+
+# --------------------------------------------------------------------------------------------------
+# CFG construction
+# --------------------------------------------------------------------------------------------------
+
+@dataclass
+class Edge:
+    target: str
+    kind: str                    # 'fallthrough' | 'cond_taken' | 'cond_fallthrough' | 'uncond' |
+                                  # 'switch_case'
+    cond_text: str = ""
+    case_val: str = ""
+
+
+@dataclass
+class Block:
+    name: str
+    stmts: list = field(default_factory=list)     # list of Tok(kind='stmt')
+    out_edges: list = field(default_factory=list)  # list of Edge
+    in_edges: list = field(default_factory=list)   # list of (pred_name, Edge)
+    is_exit: bool = False        # ends in return (no successors)
+    exit_frame_close: Optional[int] = None   # frame-ascent size fused into this block's return, if any
+    orphan: bool = False         # created right after an uncond goto/return/switch: NOT entered by
+                                  # fallthrough (real MIPS semantics — code after an unconditional
+                                  # control transfer, before the next branch target, never executes
+                                  # unless something else jumps to a label reusing this spot; see
+                                  # docs/abi-extract.md). Must NOT get an implicit fallthrough edge
+                                  # from a following label.
+    switch_default_text: Optional[str] = None
+    switch_default_line: Optional[int] = None
+
+
+def build_cfg(toks: list) -> tuple:
+    """Split the token stream into basic blocks + edges. Returns (blocks dict, order list, entry_name)."""
+    blocks = {}
+    order = []  # block names in the order first created, for stable iteration
+
+    def new_block(name=None, _ctr=[0]):
+        if name is None:
+            _ctr[0] += 1
+            name = f"__anon_{_ctr[0]}"
+        if name not in blocks:
+            blocks[name] = Block(name=name)
+            order.append(name)
+        return blocks[name]
+
+    entry = new_block("entry")
+    cur = entry
+
+    def link(pred_name, edge: Edge):
+        blocks[pred_name].out_edges.append(edge)
+
+    for t in toks:
+        if t.kind == 'label':
+            target_block = new_block(t.target)
+            if not cur.is_exit and not cur.orphan and cur.name != t.target:
+                link(cur.name, Edge(target=t.target, kind='fallthrough'))
+            cur = target_block
+            continue
+
+        if t.kind == 'stmt':
+            cur.stmts.append(t)
+            continue
+
+        if t.kind == 'condgoto':
+            link(cur.name, Edge(target=t.target, kind='cond_taken', cond_text=t.cond_text))
+            nxt = new_block()
+            link(cur.name, Edge(target=nxt.name, kind='cond_fallthrough', cond_text=t.cond_text))
+            cur = nxt
+            continue
+
+        if t.kind == 'goto':
+            link(cur.name, Edge(target=t.target, kind='uncond'))
+            cur = new_block()
+            cur.orphan = True  # dead placeholder unless a later label happens to be jumped to
+            continue
+
+        if t.kind == 'return':
+            cur.is_exit = True
+            cur.exit_frame_close = t.frame_close
+            cur = new_block()
+            cur.orphan = True  # dead placeholder — see above
+            continue
+
+        if t.kind == 'switch':
+            for case_val, case_target in t.cases:
+                link(cur.name, Edge(target=case_target, kind='switch_case', case_val=case_val))
+            cur.switch_default_text = t.default_text
+            cur.switch_default_line = t.line_no
+            cur.is_exit = True  # default: STMT; return; — no fallthrough out of the switch
+            cur = new_block()
+            cur.orphan = True  # dead placeholder — see above
+            continue
+
+        raise AbiParseError(f"unrecognized token kind {t.kind!r} — internal tokenizer bug")
+
+    for name, blk in blocks.items():
+        for e in blk.out_edges:
+            if e.target not in blocks:
+                raise AbiParseError(
+                    f"branch/goto target {e.target!r} from block {name!r} has no matching label in "
+                    f"this function body — unrecognized emission shape, refusing to guess"
+                )
+            blocks[e.target].in_edges.append((name, e))
+
+    return blocks, order, "entry"
+
+
+# --------------------------------------------------------------------------------------------------
+# CFG dataflow: reaching sp-address-materializations + reaching callee-saved register values
+# --------------------------------------------------------------------------------------------------
+
+def _reachable_blocks(blocks: dict, order: list, entry: str) -> list:
+    """BFS from entry; blocks unreachable from entry (dead code after an unconditional
+    goto/return with no label picking it back up) are dropped from analysis — they are, by
+    construction, never executed."""
+    seen_set = {entry}
+    stack = [entry]
+    while stack:
+        n = stack.pop()
+        for e in blocks[n].out_edges:
+            if e.target not in seen_set:
+                seen_set.add(e.target)
+                stack.append(e.target)
+    return [n for n in order if n in seen_set]
+
+
+def _within_block_sp_addr_effects(blk: Block) -> dict:
+    """Net effect of this block's own statements (in program order) on the sp-address-
+    materialization map: reg -> sp-offset if this block (re)materializes it and it survives to the
+    block's end, reg absent if the block never touches it, reg -> None if the block kills it
+    (reassigns to something that isn't a materialization)."""
+    effects = {}
+    for t in blk.stmts:
+        am = SP_ADDR_MATERIALIZE_RE.match(t.text)
+        if am:
+            effects[int(am.group(1))] = int(am.group(2))
+            continue
+        rm = REG_ASSIGN_RE.match(t.text)
+        if rm:
+            effects[int(rm.group(1))] = None
+    return effects
+
+
+def compute_reaching_sp_addr(blocks: dict, order: list, entry: str) -> dict:
+    """Per-block ENTRY reaching-value map: reg -> sp-offset (only when EVERY predecessor path agrees;
+    otherwise the reg is simply not known at block entry, matching how a real CFG dataflow "meet"
+    (intersection) operates). Standard iterative fixpoint over the CFG (handles gt3's loop)."""
+    reachable = _reachable_blocks(blocks, order, entry)
+    in_state = {n: {} for n in reachable}   # entry-state per block
+    changed = True
+    iterations = 0
+    while changed:
+        changed = False
+        iterations += 1
+        if iterations > 10000:
+            raise AbiParseError("sp-address dataflow did not converge — unexpected CFG shape")
+        for n in reachable:
+            blk = blocks[n]
+            preds = [(p, e) for (p, e) in blk.in_edges if p in in_state]
+            if not preds:
+                merged = {} if n == entry else in_state[n]
+            else:
+                merged = None
+                for p, _e in preds:
+                    p_out = dict(in_state[p])
+                    p_out.update(_within_block_sp_addr_effects(blocks[p]))
+                    p_out = {r: v for r, v in p_out.items() if v is not None}
+                    if merged is None:
+                        merged = dict(p_out)
+                    else:
+                        merged = {r: v for r, v in merged.items() if p_out.get(r) == v}
+            if merged != in_state[n]:
+                in_state[n] = merged
+                changed = True
+    return in_state
+
+
+def compute_reaching_callee_saved(blocks: dict, order: list, entry: str) -> dict:
+    """Per-block ENTRY reaching-value map for CALLEE_SAVED regs: reg -> frozenset of distinct
+    (expr) strings reaching this block along different CFG paths. size==1 => definite single value;
+    size>1 => genuinely path-conditional (report per-path, don't collapse to one answer)."""
+    reachable = _reachable_blocks(blocks, order, entry)
+    in_state = {n: {} for n in reachable}   # reg -> frozenset[str]
+
+    def block_effect(blk: Block) -> dict:
+        eff = {}
+        for t in blk.stmts:
+            rm = REG_ASSIGN_RE.match(t.text)
+            if rm:
+                reg = int(rm.group(1))
+                if reg in CALLEE_SAVED:
+                    eff[reg] = frozenset([rm.group(2)])
+        return eff
+
+    block_defs = {n: block_effect(blocks[n]) for n in reachable}
+
+    changed = True
+    iterations = 0
+    while changed:
+        changed = False
+        iterations += 1
+        if iterations > 10000:
+            raise AbiParseError("callee-saved dataflow did not converge — unexpected CFG shape")
+        for n in reachable:
+            blk = blocks[n]
+            preds = [(p, e) for (p, e) in blk.in_edges if p in in_state]
+            if not preds:
+                merged = {} if n == entry else in_state[n]
+            else:
+                merged = {}
+                all_regs = set()
+                out_states = []
+                for p, _e in preds:
+                    p_out = dict(in_state[p])
+                    p_out.update(block_defs[p])  # block's own defs override inherited values
+                    out_states.append(p_out)
+                    all_regs |= set(p_out.keys())
+                for r in all_regs:
+                    vals = set()
+                    for st in out_states:
+                        if r in st:
+                            vals |= st[r]
+                    defined_on_all = all(r in st for st in out_states)
+                    if not defined_on_all:
+                        # a reg not defined on every incoming path is, itself, a form of
+                        # path-conditionality (whatever value it has depends on which path was
+                        # taken) — surface it rather than silently reporting only the defined subset.
+                        vals = vals | {"<undefined on some incoming path>"}
+                    merged[r] = frozenset(vals)
+            if merged != in_state[n]:
+                in_state[n] = merged
+                changed = True
+    return in_state
+
+
+# --------------------------------------------------------------------------------------------------
+# Contract data model
+# --------------------------------------------------------------------------------------------------
+
 @dataclass
 class StoreRecord:
     offset: int
     width: int
     source: str
-    label: str            # label context ("entry" or the last-seen L_xxxx before this line)
-    line_no: int           # index into body
-    kind: str = "store"    # "prologue_spill" | "epilogue_restore" | "scratch"
-    reg: Optional[int] = None   # if source/dest is a bare c->r[N], which N
+    label: str             # enclosing block name
+    line_no: int            # index into body
+    kind: str = "store"     # "prologue_spill" | "scratch"
+    reg: Optional[int] = None    # if source/dest is a bare c->r[N], which N
+    guard_chain: list = field(default_factory=list)   # human-readable branch-context, entry -> this block
 
 
 @dataclass
 class CallSite:
     line_no: int
     label: str
-    target: str             # func name / rec_dispatch target expr
-    kind: str                # "direct" | "rec_dispatch" | "switch_default_rec_dispatch"
-    ra_const: Optional[str]  # hex string w/o 0x, or None if missing (BUG SMELL)
-    live_regs: dict = field(default_factory=dict)  # {reg_num: last_write_expr}
+    target: str              # func name / rec_dispatch target expr
+    kind: str                 # "direct" | "rec_dispatch" | "switch_default_rec_dispatch"
+    ra_const: Optional[str]   # hex string w/o 0x, or None if missing (BUG SMELL)
+    live_regs: dict = field(default_factory=dict)     # {reg_num: single expr}      (definite)
+    conditional_live_regs: dict = field(default_factory=dict)  # {reg_num: [expr, ...]} (path-dependent)
 
 
 @dataclass
@@ -193,183 +563,97 @@ class Contract:
     frame_size: int                       # 0 if leafless (no sp descent)
     frame_close_sizes: list               # every observed ascent value (should all equal frame_size)
     prologue_spills: list                 # StoreRecord, program order
-    epilogue_restores: list               # (reg, offset) pairs found in the tail restore block
-    scratch_stores: list                  # StoreRecord, program order — the "everything else" bucket
+    epilogue_restores: list               # (reg, offset, width, line_no, block_name)
+    scratch_stores: list                  # StoreRecord, CFG-block order — the "everything else" bucket
     call_sites: list                      # CallSite, program order
     own_callee_saved_used: list           # which of CALLEE_SAVED + [31] this function itself spills/uses
+    unreachable_block_count: int = 0      # dead-code blocks dropped from analysis (informational)
 
     def to_json(self) -> dict:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
-def _decompound_line(raw: str) -> list:
-    """The recompiler emits MIPS branch-delay-slot instructions inline in a compound statement:
-        { int _t = (COND); DELAY_INSN; if (_t) goto LABEL; }
-    DELAY_INSN always executes (branch delay slot) regardless of COND. Split such a line into
-    the DELAY_INSN (as an unconditional statement) followed by a synthetic 'goto LABEL' guarded
-    marker — for our purposes we only need to walk DELAY_INSN as an ordinary statement in program
-    order and record the branch existed. Return a list of pseudo-statement strings, in the ORDER
-    the guest actually executes them (delay insn first, branch decision second)."""
-    m = re.match(r'^\s*\{ int _t = \(.+?\); (.+?); if \(_t\) goto (L_[0-9A-Fa-f]+); \}\s*$', raw)
-    if m:
-        delay_insn, target = m.group(1), m.group(2)
-        return [delay_insn + ';', f'/*branch-> {target}*/']
-    # Some compounds have no delay insn (pure conditional branch), e.g.:
-    #   { int _t = (c->r[2] != c->r[0]);  if (_t) goto L_..; }
-    m2 = re.match(r'^\s*\{ int _t = \(.+?\);\s*if \(_t\) goto (L_[0-9A-Fa-f]+); \}\s*$', raw)
-    if m2:
-        return [f'/*branch-> {m2.group(1)}*/']
-    return [raw]
+def _guard_chain_for(name: str, blocks: dict, max_hops: int = 8) -> list:
+    """Walk backward via the unique-predecessor chain to build a short, readable description of
+    which branch(es) guard reachability of this block. Stops at entry, at a merge point (>1
+    predecessor — reported as such rather than picking one arbitrarily), or after max_hops."""
+    chain = []
+    cur = name
+    hops = 0
+    while hops < max_hops:
+        blk = blocks[cur]
+        preds = blk.in_edges
+        if not preds:
+            break  # entry, or an otherwise-unreached block
+        if len(preds) > 1:
+            chain.append(f"<= merge of {len(preds)} paths: " + ", ".join(p for p, _e in preds))
+            break
+        p, e = preds[0]
+        if e.kind in ('cond_taken', 'cond_fallthrough'):
+            taken = "true" if e.kind == 'cond_taken' else "false"
+            chain.append(f"{p}: ({e.cond_text}) == {taken}")
+        elif e.kind == 'switch_case':
+            chain.append(f"{p}: switch case {e.case_val}")
+        elif e.kind == 'uncond':
+            chain.append(f"{p}: (unconditional goto)")
+        else:
+            chain.append(f"{p}: (fallthrough)")
+        cur = p
+        hops += 1
+        if cur == 'entry':
+            break
+    chain.reverse()
+    return chain
 
 
 def parse_contract(fn: FoundFunction) -> Contract:
+    toks = tokenize(fn.body)
+    blocks, order, entry_name = build_cfg(toks)
+    reachable = _reachable_blocks(blocks, order, entry_name)
+    unreachable_count = len(order) - len(reachable)
+
+    # ---- frame open/close ----
+    # The `addiu sp,-N` prologue is not always the very first statement (the recompiler sometimes
+    # emits a couple of register loads ahead of it) — scan the whole entry block, not just stmts[0],
+    # matching the original tool's whole-body scan-until-found behavior.
+    # Prologue block: normally `entry`, but some bodies open with a label on their very first
+    # instruction (e.g. ov_a03_gen_8010F1A0's `L_8010F1A0:;` before the sp descent) which makes the
+    # literal entry block EMPTY — walk forward through empty single-fallthrough blocks to the first
+    # block that has statements; that block's code is still executed unconditionally at function
+    # entry, so it is the prologue for spill-classification purposes.
+    entry_blk = blocks[entry_name]
+    while not entry_blk.stmts and len(entry_blk.out_edges) == 1 \
+            and entry_blk.out_edges[0].kind == 'fallthrough':
+        entry_blk = blocks[entry_blk.out_edges[0].target]
     frame_size = 0
-    frame_close_sizes = []
-    prologue_spills = []
-    epilogue_restores = []
-    scratch_stores = []
-    call_sites = []
-
-    label = "entry"
-    seen_first_label = False
-    pending_ra = None          # (const_hex, line_no)
-    last_write = {}            # reg -> (expr, line_no) for CALLEE_SAVED liveness tracking
-    sp_addr_regs = {}          # reg -> sp offset, for the "materialize address, store through it" idiom
     saw_frame_open = False
-    body_end_idx = len(fn.body)
+    frame_open_idx = None
+    for idx, t in enumerate(entry_blk.stmts):
+        fo = FRAME_OPEN_RE.match(t.text)
+        if fo:
+            frame_size = int(fo.group(1))
+            saw_frame_open = True
+            frame_open_idx = idx
+            break
 
-    # Flatten delay-slot compounds into a pseudo-statement stream, remembering original line index.
-    stream = []  # (orig_line_no, stmt_text)
-    for i, raw in enumerate(fn.body):
-        for stmt in _decompound_line(raw.strip()):
-            stream.append((i, stmt))
-
-    for line_no, stmt in stream:
-        lm = LABEL_RE.match(stmt if stmt.endswith(':;') else '')
-        if stmt.endswith(':;'):
-            lm2 = re.match(r'^(L_[0-9A-Fa-f]+):;$', stmt)
-            if lm2:
-                label = lm2.group(1)
-                seen_first_label = True
-                continue
-
-        if not saw_frame_open:
-            fo = FRAME_OPEN_RE.match(stmt)
-            if fo:
-                frame_size = int(fo.group(1))
-                saw_frame_open = True
-                continue
-
-        fc = FRAME_CLOSE_RE.match(stmt)
-        if fc:
-            frame_close_sizes.append(int(fc.group(1)))
+    # Frame closes come in two emitted spellings: the fused `sp-ascent; return;` single line
+    # (captured on the exit block's return token) and the two-line form (a plain sp-ascent statement
+    # as the LAST statement of an exit block — e.g. gen_func_80087A60). Only REACHABLE exit blocks
+    # count: several gen bodies carry a dead, never-entered sibling function's code after their real
+    # return (e.g. gen_func_800232F4/80079528), whose frame ops must not pollute — or false-fail —
+    # this function's open/close consistency check.
+    frame_close_sizes = []
+    ascend_re = re.compile(r'^c->r\[29\] = c->r\[29\] \+ \(uint32_t\)(\d+);$')
+    for n in reachable:
+        blk = blocks[n]
+        if not blk.is_exit:
             continue
-
-        # address materialization: c->r[N] = c->r[29] + (uint32_t)K;  -- remember for indirect access,
-        # then fall through to the normal REG_ASSIGN/CALLEE_SAVED liveness bookkeeping below (do NOT
-        # 'continue' here — some functions do use a materialized address reg as a callee-saved value).
-        am_sp = SP_ADDR_MATERIALIZE_RE.match(stmt)
-        if am_sp:
-            sp_addr_regs[int(am_sp.group(1))] = int(am_sp.group(2))
-
-        # sp-relative store (direct)?
-        sm = SP_STORE_RE.search(stmt)
-        # sp-relative store (indirect through a materialized address register)?
-        ism = None if sm else INDIRECT_SP_STORE_RE.search(stmt)
-        if sm or (ism and int(ism.group(2)) in sp_addr_regs):
-            if sm:
-                width, off, src = int(sm.group(1)), int(sm.group(2)), sm.group(3)
-            else:
-                width = int(ism.group(1))
-                off = sp_addr_regs[int(ism.group(2))] + int(ism.group(3))
-                src = ism.group(4)
-            reg_m = re.match(r'^c->r\[(\d+)\]$', src)
-            rec = StoreRecord(offset=off, width=width, source=src, label=label,
-                               line_no=line_no, reg=int(reg_m.group(1)) if reg_m else None)
-            if not seen_first_label and reg_m is not None and sm is not None:
-                rec.kind = "prologue_spill"
-                prologue_spills.append(rec)
-            else:
-                rec.kind = "scratch"
-                scratch_stores.append(rec)
-            continue
-
-        # sp-relative restore (register load, direct)?
-        slm = SP_LOAD_RE.match(stmt)
-        # sp-relative restore (indirect through a materialized address register)?
-        islm = None if slm else INDIRECT_SP_LOAD_RE.match(stmt)
-        if slm:
-            g = slm.groups()
-            if g[0] is not None:
-                reg, width, off = int(g[0]), int(g[1]), int(g[2])
-            else:
-                reg, width, off = int(g[3]), int(g[4]), int(g[5])
-            epilogue_restores.append((reg, off, width, line_no))
-            last_write[reg] = (stmt, line_no)
-            continue
-        if islm and int(islm.group(3)) in sp_addr_regs:
-            reg, width = int(islm.group(1)), int(islm.group(2))
-            off = sp_addr_regs[int(islm.group(3))] + int(islm.group(4))
-            epilogue_restores.append((reg, off, width, line_no))
-            last_write[reg] = (stmt, line_no)
-            continue
-
-        # r31 (ra) constant set — remember for the next call site
-        ram = RA_SET_RE.search(stmt)
-        if ram:
-            pending_ra = (ram.group(1), line_no)
-            # r31 write itself also counts as a plain reg assign for liveness bookkeeping (rare to matter)
-
-        # plain register assignment -> liveness tracking for callee-saved regs, and invalidate any
-        # stale sp-address-materialization entry for a register that just got reassigned to something
-        # else (unless this line WAS the materialization itself, handled above).
-        for am in REG_ASSIGN_RE.finditer(stmt):
-            reg = int(am.group(1))
-            if reg in CALLEE_SAVED:
-                last_write[reg] = (am.group(2), line_no)
-            if reg in sp_addr_regs and not (am_sp and int(am_sp.group(1)) == reg):
-                del sp_addr_regs[reg]
-
-        # direct call?
-        cm = CALL_RE.search(stmt)
-        if cm:
-            target = cm.group(1)
-            live = {r: last_write[r][0] for r in CALLEE_SAVED if r in last_write}
-            call_sites.append(CallSite(
-                line_no=line_no, label=label, target=target, kind="direct",
-                ra_const=pending_ra[0] if pending_ra else None, live_regs=live,
-            ))
-            pending_ra = None
-            continue
-
-        # rec_dispatch(c, expr) direct call in a statement
-        rm = RECDISP_RE.search(stmt)
-        if rm and 'default:' not in stmt:
-            target = rm.group(1)
-            live = {r: last_write[r][0] for r in CALLEE_SAVED if r in last_write}
-            call_sites.append(CallSite(
-                line_no=line_no, label=label, target=f"rec_dispatch({target})", kind="rec_dispatch",
-                ra_const=pending_ra[0] if pending_ra else None, live_regs=live,
-            ))
-            pending_ra = None
-            continue
-
-        # switch(...) { case ...: goto ...; default: rec_dispatch(c, expr); return; } }
-        if 'default: rec_dispatch(c,' in stmt:
-            rm2 = re.search(r'default: rec_dispatch\(c, ([^)]+)\);', stmt)
-            if rm2:
-                live = {r: last_write[r][0] for r in CALLEE_SAVED if r in last_write}
-                call_sites.append(CallSite(
-                    line_no=line_no, label=label, target=f"rec_dispatch({rm2.group(1)})",
-                    kind="switch_default_rec_dispatch",
-                    ra_const=pending_ra[0] if pending_ra else None, live_regs=live,
-                ))
-                pending_ra = None
-
-    if not saw_frame_open and not frame_close_sizes:
-        # Leaf function with no sp frame at all — valid, not an error.
-        frame_size = 0
+        if blk.exit_frame_close is not None:
+            frame_close_sizes.append(blk.exit_frame_close)
+        elif blk.stmts:
+            am = ascend_re.match(blk.stmts[-1].text)
+            if am:
+                frame_close_sizes.append(int(am.group(1)))
 
     if frame_close_sizes and saw_frame_open:
         bad = [s for s in frame_close_sizes if s != frame_size]
@@ -379,8 +663,125 @@ def parse_contract(fn: FoundFunction) -> Contract:
                 f"— unrecognized frame idiom, refusing to emit a possibly-wrong contract"
             )
 
-    # cross-check: prologue spill offsets should be restored at matching offsets in epilogue_restores
-    # (best-effort note only; not fatal — some functions spill more than they restore across branches)
+    # ---- reaching-value dataflow over the real CFG ----
+    sp_addr_in = compute_reaching_sp_addr(blocks, order, entry_name)
+    callee_in = compute_reaching_callee_saved(blocks, order, entry_name)
+
+    # ---- prologue spills: unconditionally-executed stores in the entry block only, register-sourced,
+    # after the frame-open statement (wherever it falls in the entry block) ----
+    prologue_spills = []
+    for t in (entry_blk.stmts[frame_open_idx + 1:] if saw_frame_open else []):
+        sm = SP_STORE_RE.search(t.text)
+        if sm:
+            width, off, src = int(sm.group(1)), int(sm.group(2)), sm.group(3)
+            reg_m = re.match(r'^c->r\[(\d+)\]$', src)
+            if reg_m:
+                prologue_spills.append(StoreRecord(
+                    offset=off, width=width, source=src, label='entry', line_no=t.line_no,
+                    kind='prologue_spill', reg=int(reg_m.group(1)), guard_chain=[],
+                ))
+
+    prologue_line_nos = {s.line_no for s in prologue_spills}
+
+    # ---- per-block scan: scratch stores, epilogue restores, call sites ----
+    scratch_stores = []
+    epilogue_restores = []
+    call_sites = []
+
+    for n in reachable:
+        blk = blocks[n]
+        sp_addr_regs = dict(sp_addr_in.get(n, {}))
+        callee_live = {r: set(vs) for r, vs in callee_in.get(n, {}).items()}
+        guard_chain_cache = {}
+
+        def get_guard_chain():
+            if n not in guard_chain_cache:
+                guard_chain_cache[n] = _guard_chain_for(n, blocks)
+            return guard_chain_cache[n]
+
+        pending_ra = None
+
+        for t in blk.stmts:
+            stmt = t.text
+
+            am = SP_ADDR_MATERIALIZE_RE.match(stmt)
+            if am:
+                sp_addr_regs[int(am.group(1))] = int(am.group(2))
+
+            sm = SP_STORE_RE.search(stmt)
+            ism = None if sm else INDIRECT_SP_STORE_RE.search(stmt)
+            if sm or (ism and int(ism.group(2)) in sp_addr_regs):
+                if sm:
+                    width, off, src = int(sm.group(1)), int(sm.group(2)), sm.group(3)
+                else:
+                    width = int(ism.group(1))
+                    off = sp_addr_regs[int(ism.group(2))] + int(ism.group(3))
+                    src = ism.group(4)
+                if t.line_no not in prologue_line_nos:
+                    reg_m = re.match(r'^c->r\[(\d+)\]$', src)
+                    scratch_stores.append(StoreRecord(
+                        offset=off, width=width, source=src, label=n, line_no=t.line_no,
+                        kind='scratch', reg=int(reg_m.group(1)) if reg_m else None,
+                        guard_chain=get_guard_chain(),
+                    ))
+
+            slm = SP_LOAD_RE.match(stmt)
+            islm = None if slm else INDIRECT_SP_LOAD_RE.match(stmt)
+            if slm:
+                g = slm.groups()
+                if g[0] is not None:
+                    reg, width, off = int(g[0]), int(g[1]), int(g[2])
+                else:
+                    reg, width, off = int(g[3]), int(g[4]), int(g[5])
+                epilogue_restores.append((reg, off, width, t.line_no, n))
+            elif islm and int(islm.group(3)) in sp_addr_regs:
+                reg, width = int(islm.group(1)), int(islm.group(2))
+                off = sp_addr_regs[int(islm.group(3))] + int(islm.group(4))
+                epilogue_restores.append((reg, off, width, t.line_no, n))
+
+            ram = RA_SET_RE.search(stmt)
+            if ram:
+                pending_ra = (ram.group(1), t.line_no)
+
+            for rm in REG_ASSIGN_RE.finditer(stmt):
+                reg = int(rm.group(1))
+                if reg in CALLEE_SAVED:
+                    callee_live[reg] = {rm.group(2)}
+                if reg in sp_addr_regs and not (am and int(am.group(1)) == reg):
+                    del sp_addr_regs[reg]
+
+            cm = CALL_RE.search(stmt)
+            rm2 = None if cm else RECDISP_RE.search(stmt)
+            if cm or (rm2 and 'default:' not in stmt):
+                if cm:
+                    target, kind = cm.group(1), "direct"
+                else:
+                    target, kind = f"rec_dispatch({rm2.group(1)})", "rec_dispatch"
+                live, cond_live = _split_definite_conditional(callee_live)
+                call_sites.append(CallSite(
+                    line_no=t.line_no, label=n, target=target, kind=kind,
+                    ra_const=pending_ra[0] if pending_ra else None,
+                    live_regs=live, conditional_live_regs=cond_live,
+                ))
+                pending_ra = None
+
+        # switch's default: rec_dispatch(...) tail-dispatch call site
+        if blk.switch_default_text is not None:
+            rm3 = re.search(r'rec_dispatch\(c, ([^)]+)\)', blk.switch_default_text)
+            if rm3:
+                live, cond_live = _split_definite_conditional(callee_live)
+                call_sites.append(CallSite(
+                    line_no=blk.switch_default_line, label=n,
+                    target=f"rec_dispatch({rm3.group(1)})", kind="switch_default_rec_dispatch",
+                    ra_const=pending_ra[0] if pending_ra else None,
+                    live_regs=live, conditional_live_regs=cond_live,
+                ))
+
+    # stable ordering for readability: by (line_no)
+    scratch_stores.sort(key=lambda s: s.line_no)
+    call_sites.sort(key=lambda c: c.line_no)
+    epilogue_restores.sort(key=lambda r: r[3])
+
     own_callee_saved_used = sorted({r.reg for r in prologue_spills if r.reg is not None})
 
     return Contract(
@@ -389,7 +790,39 @@ def parse_contract(fn: FoundFunction) -> Contract:
         prologue_spills=prologue_spills, epilogue_restores=epilogue_restores,
         scratch_stores=scratch_stores, call_sites=call_sites,
         own_callee_saved_used=own_callee_saved_used,
+        unreachable_block_count=unreachable_count,
     )
+
+
+def _split_definite_conditional(callee_live: dict) -> tuple:
+    """callee_live: reg -> set[str] (possibly containing the '<undefined on some incoming path>'
+    sentinel). Returns (definite: {reg: expr}, conditional: {reg: [expr,...]})."""
+    live = {}
+    cond_live = {}
+    for r, vals in sorted(callee_live.items()):
+        vals = set(vals)
+        if len(vals) == 1:
+            live[r] = next(iter(vals))
+        elif len(vals) > 1:
+            cond_live[r] = sorted(vals)
+    return live, cond_live
+
+
+# --------------------------------------------------------------------------------------------------
+# Op-sequence extraction (tools/port_check.py's shared token layer)
+# --------------------------------------------------------------------------------------------------
+
+def _decompound_line(raw: str) -> list:
+    """Decompose a MIPS branch-delay-slot compound into its real execution order (delay insn first,
+    branch marker second). Kept as the compatibility surface for tools/port_check.py's op-sequence
+    extraction; the contract/CFG path uses tokenize()/_classify_stmt() instead (same regexes)."""
+    cd = COMPOUND_DELAY_RE.match(raw)
+    if cd:
+        return [cd.group(2) + ';', f'/*branch-> {cd.group(3)}*/']
+    cn = COMPOUND_NODELAY_RE.match(raw)
+    if cn:
+        return [f'/*branch-> {cn.group(2)}*/']
+    return [raw]
 
 
 @dataclass
@@ -415,7 +848,7 @@ class OpSequence:
 def extract_op_sequence(body_lines) -> "OpSequence":
     """Extract an OpSequence from a raw list of C/C++ statement lines (gen body OR a native method
     body — same extraction is applied to both sides by tools/port_check.py). Uses the same
-    delay-slot decompounding as parse_contract so branch-delay-slot statements execute in the right
+    delay-slot decompounding as the tokenizer so branch-delay-slot statements execute in the right
     order; a native C++ method has no such compounds, so decompounding is a no-op for it."""
     frame_opens, frame_closes = [], []
     calls: list = []
@@ -481,6 +914,9 @@ def render_contract_text(c: Contract) -> str:
                 + ("  (no sp descent — leaf/no-frame function)" if c.frame_size == 0 else ""))
     if c.frame_close_sizes:
         out.append(f"frame_close_sizes = {c.frame_close_sizes}  (exits, should all == frame_size)")
+    if c.unreachable_block_count:
+        out.append(f"unreachable_block_count = {c.unreachable_block_count}  (dead code after "
+                    f"uncond goto/return with no label reusing it — excluded from analysis)")
     out.append("")
 
     out.append(f"## prologue spills ({len(c.prologue_spills)}), sp-relative, program order")
@@ -491,18 +927,20 @@ def render_contract_text(c: Contract) -> str:
     out.append("")
 
     out.append(f"## epilogue restores ({len(c.epilogue_restores)})")
-    for reg, off, width, line_no in c.epilogue_restores:
+    for reg, off, width, line_no, blk_name in c.epilogue_restores:
         matched = any(s.reg == reg and s.offset == off for s in c.prologue_spills)
         tag = "" if matched else "  [!] no matching prologue spill at this offset"
-        out.append(f"  r{reg:<2} <- sp+{off:<4}  (w{width}){tag}")
+        out.append(f"  [{blk_name}] r{reg:<2} <- sp+{off:<4}  (w{width}){tag}")
     if not c.epilogue_restores:
         out.append("  (none)")
     out.append("")
 
-    out.append(f"## scratch / local sp-relative stores ({len(c.scratch_stores)}), program order, "
-                f"with branch-label context")
+    out.append(f"## scratch / local sp-relative stores ({len(c.scratch_stores)}), CFG block order, "
+                f"with branch-guard context")
     for s in c.scratch_stores:
         out.append(f"  [{s.label}] sp+{s.offset:<5} <- {s.source}   (w{s.width})")
+        for hop in s.guard_chain:
+            out.append(f"        guard: {hop}")
     if not c.scratch_stores:
         out.append("  (none)")
     out.append("")
@@ -514,9 +952,13 @@ def render_contract_text(c: Contract) -> str:
         out.append(f"       c->r[31] = {ra}")
         if cs.live_regs:
             live_str = ", ".join(f"r{r}={expr}" for r, expr in sorted(cs.live_regs.items()))
-            out.append(f"       live callee-saved regs (heuristic, last-write-before-call): {live_str}")
-        else:
-            out.append(f"       live callee-saved regs: (none written this function before this call)")
+            out.append(f"       live callee-saved regs (definite, same on every reaching path): {live_str}")
+        if cs.conditional_live_regs:
+            for r, exprs in sorted(cs.conditional_live_regs.items()):
+                out.append(f"       [!] r{r} is CONDITIONALLY live — differs by incoming path: "
+                            + " | ".join(exprs))
+        if not cs.live_regs and not cs.conditional_live_regs:
+            out.append(f"       live callee-saved regs: (none written on any path reaching this call)")
     if not c.call_sites:
         out.append("  (none)")
     out.append("")
@@ -568,6 +1010,25 @@ def render_scaffold(c: Contract) -> str:
         out.append(f"    c->r[29] += {c.frame_size};")
         out.append(f"  }}")
         out.append(f"}};")
+
+    if c.scratch_stores:
+        out.append("")
+        out.append(f"// Per-branch scratch mirrors ({len(c.scratch_stores)}) — these are NOT part of the")
+        out.append(f"// callee-save frame above; they are transient local scratch at the offsets/branch")
+        out.append(f"// paths shown. Group by [block] below — each group only executes when its guard")
+        out.append(f"// chain is satisfied; mirror them as locals scoped to that branch, not as fields")
+        out.append(f"// on {cname} (which would falsely imply they're always live).")
+        by_block = {}
+        for s in c.scratch_stores:
+            by_block.setdefault(s.label, []).append(s)
+        for blk_name, stores in by_block.items():
+            out.append(f"// -- block [{blk_name}] --")
+            if stores[0].guard_chain:
+                for hop in stores[0].guard_chain:
+                    out.append(f"//    guard: {hop}")
+            for s in stores:
+                out.append(f"//    sp+{s.offset} <- {s.source}  (w{s.width})")
+
     out.append("")
     out.append(f"// Call sites ({len(c.call_sites)}) — set c->r[31] to the EXACT RE'd constant before each,")
     out.append(f"// and mirror any callee-saved regs shown live (this function keeps them in the real")
@@ -580,6 +1041,12 @@ def render_scaffold(c: Contract) -> str:
         out.append(f"c->r[31] = {ra};")
         for r, expr in sorted(cs.live_regs.items()):
             out.append(f"c->r[{r}] = {expr};  // mirror gen's live value before this call")
+        for r, exprs in sorted(cs.conditional_live_regs.items()):
+            out.append(f"// [!] r{r} is CONDITIONALLY live depending on which path reached this call:")
+            for expr in exprs:
+                out.append(f"//       c->r[{r}] = {expr};  // on some incoming path(s)")
+            out.append(f"// mirror whichever value matches the branch actually taken on THIS call — "
+                        f"do not pick one arbitrarily.")
         out.append(f"// {cs.target}(c);")
         out.append("")
     return "\n".join(out)
@@ -599,13 +1066,30 @@ def render_scaffold_guestabi(c: Contract) -> str:
         out.append(f"// GuestFrame<0, 0> frame(c, kSpills_{c.addr});   // (NumSpills must be 0; adjust decl)")
     else:
         n = len(c.prologue_spills)
-        out.append(f"static constexpr GuestFrameSpill kSpills_{c.addr}[{n}] = {{")
+        # array extent max(n,1): C++ forbids zero-length arrays, and a frame CAN legitimately have
+        # zero spills (e.g. gt3's pure-scratch -24 frame) — NumSpills in the GuestFrame decl stays n.
+        out.append(f"static constexpr GuestFrameSpill kSpills_{c.addr}[{max(n, 1)}] = {{")
         for s in c.prologue_spills:
             regname = "31 /*ra*/" if s.reg == 31 else str(s.reg)
             out.append(f"  {{ {regname}, {s.offset} }},")
         out.append("};")
         out.append(f"// At method entry:")
         out.append(f"//   GuestFrame<{c.frame_size}, {n}> frame(c, kSpills_{c.addr});")
+    if c.scratch_stores:
+        out.append("")
+        out.append(f"// Per-branch scratch stores ({len(c.scratch_stores)}) — NOT covered by the spill table")
+        out.append(f"// above; each group below only executes on its guarded path (mirror as branch-scoped")
+        out.append(f"// writes, exactly like the gen body — the gt3/gt4 f179 bug class):")
+        by_block = {}
+        for s in c.scratch_stores:
+            by_block.setdefault(s.label, []).append(s)
+        for blk_name, stores in by_block.items():
+            out.append(f"//   -- block [{blk_name}] --")
+            if stores[0].guard_chain:
+                for hop in stores[0].guard_chain:
+                    out.append(f"//      guard: {hop}")
+            for s in stores:
+                out.append(f"//      sp+{s.offset} <- {s.source}  (w{s.width})")
     out.append("")
     out.append(f"// Call sites ({len(c.call_sites)}) — use guest_call/guest_dispatch so the ra constant can")
     out.append(f"// never be forgotten:")
@@ -620,6 +1104,10 @@ def render_scaffold_guestabi(c: Contract) -> str:
             out.append(f"//   guest_dispatch(c, {ra}, {target_expr});   // [{i}] label={cs.label}")
         for r, expr in sorted(cs.live_regs.items()):
             out.append(f"//     GuestReg<{r}>(c) = {expr};  // mirror gen's live value before this call")
+        for r, exprs in sorted(cs.conditional_live_regs.items()):
+            out.append(f"//     [!] r{r} CONDITIONALLY live (differs by incoming path) — mirror the value")
+            for expr in exprs:
+                out.append(f"//         {expr}")
     return "\n".join(out)
 
 
@@ -644,7 +1132,6 @@ def render_audit(c: Contract, native_path: str) -> str:
     oks = []
 
     if c.frame_size:
-        # look for the frame size appearing near r[29] adjustments
         if re.search(rf'\br\[29\]\s*[-+]=\s*{c.frame_size}\b', text) or \
            re.search(rf'-\s*{c.frame_size}\b', text):
             oks.append(f"frame size {c.frame_size} literal found somewhere in file")
@@ -660,6 +1147,13 @@ def render_audit(c: Contract, native_path: str) -> str:
         else:
             warnings.append(f"spill offset {s.offset} (r{s.reg}) NOT found as a literal — "
                              f"is this callee-save spilled?")
+
+    for s in c.scratch_stores:
+        if re.search(rf'\b{s.offset}\b', text):
+            oks.append(f"scratch offset {s.offset} [{s.label}] literal present")
+        else:
+            warnings.append(f"scratch offset {s.offset} [{s.label}] NOT found as a literal — "
+                             f"is this per-branch scratch slot mirrored?")
 
     for i, cs in enumerate(c.call_sites):
         if cs.ra_const is None:
@@ -680,6 +1174,14 @@ def render_audit(c: Contract, native_path: str) -> str:
                 warnings.append(f"call site {i} ({cs.target}): r{r} is live in source but "
                                  f"c->r[{r}] never appears in native file — likely missing "
                                  f"register-faithfulness mirror (the cmdListDispatch bug class)")
+        for r in cs.conditional_live_regs:
+            if re.search(rf'r\[{r}\]', text):
+                oks.append(f"call site {i}: r{r} is CONDITIONALLY live in source and c->r[{r}] "
+                            f"appears somewhere in file (verify per-path manually)")
+            else:
+                warnings.append(f"call site {i} ({cs.target}): r{r} is CONDITIONALLY live in source "
+                                 f"(differs by incoming branch) but c->r[{r}] never appears in native "
+                                 f"file — likely missing register-faithfulness mirror")
 
     out.append(f"OK ({len(oks)}):")
     for o in oks:
