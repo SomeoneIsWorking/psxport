@@ -664,11 +664,9 @@ static const uint16_t* readback_vram(void) {
     fprintf(stderr, "[gpu_gpu] readback nonzero=%ld/%d\n", nz, VRAM_W * VRAM_H); }
   return p;
 }
-// A ".png" path gets a real PNG (vendored stb, static so no clash with beetle's own copy);
+// A ".png" path gets a real PNG (SDL3_image, same ecosystem as the SDL_GPU renderer);
 // anything else keeps the raw P6 PPM. Previously .png paths silently received PPM bytes.
-#define STB_IMAGE_WRITE_STATIC
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../../vendor/beetle-psx/parallel-psx/stb/stb_image_write.h"
+#include <SDL3_image/SDL_image.h>
 static void dump_to(const char* path, int sx, int sy, int w, int h,
                     int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
   const uint16_t* vram = readback_vram();
@@ -684,7 +682,8 @@ static void dump_to(const char* path, int sx, int sy, int w, int h,
   }
   size_t n = strlen(path);
   if (n > 4 && strcmp(path + n - 4, ".png") == 0) {
-    stbi_write_png(path, w, h, 3, rgb, w * 3);
+    SDL_Surface* s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, rgb, w * 3);
+    if (s) { IMG_SavePNG(s, path); SDL_DestroySurface(s); }
   } else {
     FILE* f = fopen(path, "wb");
     if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }

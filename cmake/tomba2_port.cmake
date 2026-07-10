@@ -18,10 +18,11 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL3 sdl3)
+pkg_check_modules(SDL3_IMAGE sdl3-image)
 pkg_check_modules(FREETYPE freetype2)
-if(NOT (SDL3_FOUND AND FREETYPE_FOUND))
-  message(WARNING "tomba2_port skipped: needs pkg-config sdl3 + freetype2 "
-                  "(found sdl3=${SDL3_FOUND} freetype2=${FREETYPE_FOUND})")
+if(NOT (SDL3_FOUND AND SDL3_IMAGE_FOUND AND FREETYPE_FOUND))
+  message(WARNING "tomba2_port skipped: needs pkg-config sdl3 + sdl3-image + freetype2 "
+                  "(found sdl3=${SDL3_FOUND} sdl3-image=${SDL3_IMAGE_FOUND} freetype2=${FREETYPE_FOUND})")
   return()
 endif()
 
@@ -307,7 +308,7 @@ target_include_directories(tomba2_port PRIVATE
   vendor/beetle-psx/libretro-common/include vendor/beetle-psx
   vendor/beetle-psx/deps/libchdr/include
   vendor/rmlui/Include vendor/rmlui/Backends
-  ${SDL3_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
+  ${SDL3_INCLUDE_DIRS} ${SDL3_IMAGE_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
 
 target_compile_definitions(tomba2_port PRIVATE
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
@@ -320,7 +321,7 @@ target_compile_options(tomba2_port PRIVATE -w -O2 -g
 
 target_link_libraries(tomba2_port PRIVATE
   rmlui_debugger rmlui_core chdr-static
-  ${SDL3_LIBRARIES} ${FREETYPE_LIBRARIES}
+  ${SDL3_LIBRARIES} ${SDL3_IMAGE_LIBRARIES} ${FREETYPE_LIBRARIES}
   Threads::Threads m)
 target_link_directories(tomba2_port PRIVATE
-  ${SDL3_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
+  ${SDL3_LIBRARY_DIRS} ${SDL3_IMAGE_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
