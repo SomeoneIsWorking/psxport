@@ -2015,6 +2015,96 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // divergence can be pinned by rewind. Skip during the rewind re-step itself so we don't
     // overwrite the good snapshot.
     if ((nav_done || prenav) && !mDivFound && !mRewindActive) takePreStepSnap();
+    // PSXPORT_SBS_WARP="frame:area[:sub]" — deterministic HEADLESS area-load repro for gating #37
+    // (hut-entry updateTail guest-frame mirror). At lockstep frame `frame`, write the SAME real DOOR
+    // RECORD (0x800BF83A=(area<<8)|sub, 0x800BF839=3) into BOTH cores — identical to native_boot.cpp's
+    // `warp` REPL command. The running field-run machine then executes the game's own cross-area
+    // transition on both cores in lockstep, exercising AreaSlots::updateTail's spawn arm (0x80092660)
+    // during the load so SBS can byte-compare it. Fire once, after AUTO-NAV has reached free-roam.
+    {
+      static long warpFrame = -1, warpArea = 0, warpSub = 0; static int warpParsed = 0, warpFired = 0;
+      if (!warpParsed) { warpParsed = 1;
+        if (const char* e = getenv("PSXPORT_SBS_WARP"); e && *e) {
+          long fr = -1, ar = 0, su = 0; int n = sscanf(e, "%ld:%ld:%ld", &fr, &ar, &su);
+          if (n >= 2) { warpFrame = fr; warpArea = ar; warpSub = su;
+            fprintf(stderr, "[sbs] PSXPORT_SBS_WARP: at f%ld write door-record area=%ld sub=%ld to BOTH cores\n", fr, ar, su); }
+        } }
+      if (warpFrame >= 0 && !warpFired && (long)mFrame >= warpFrame) {
+        warpFired = 1;
+        const uint16_t rec = (uint16_t)(((warpArea & 0x1f) << 8) | (warpSub & 0x3f));
+        for (Core* c : { &mA->core, &mB->core }) {
+          c->mem_w16(0x800bf83au, rec);
+          c->mem_w8 (0x800bf839u, 3);
+        }
+        fprintf(stderr, "[sbs] WARP fired at f%u: door-record 0x800BF83A=%04X trig=3 (curA=%u curB=%u)\n",
+                mFrame, rec, mA->core.mem_r8(0x800bf870u), mB->core.mem_r8(0x800bf870u));
+      }
+      // Post-warp trace: confirm the field-run machine consumes the door record and runs the area
+      // load (trigger byte 0x800BF839 clears, area id 0x800bf870 commits, sm[0x4c] area-machine cycles).
+      if (warpFrame >= 0 && warpFired && (long)mFrame >= warpFrame && (long)mFrame <= warpFrame + 220) {
+        uint32_t sm = mA->core.mem_r32(0x1f800138u);
+        static uint32_t sig = 0xffffffffu;
+        uint32_t s = (mA->core.mem_r8(0x800bf870u)) | (mA->core.mem_r8(0x800bf839u) << 8)
+                   | (mA->core.mem_r16(sm + 0x4a) << 16) | (mA->core.mem_r16(sm + 0x4c) << 24);
+        if (s != sig) { sig = s;
+          fprintf(stderr, "[sbs-warptrace] f%u A area=%u trig=%u sm[4a]=%u/4c=%u/4e=%u  B area=%u trig=%u\n",
+                  mFrame, mA->core.mem_r8(0x800bf870u), mA->core.mem_r8(0x800bf839u),
+                  mA->core.mem_r16(sm + 0x4a), mA->core.mem_r16(sm + 0x4c), mA->core.mem_r16(sm + 0x4e),
+                  mB->core.mem_r8(0x800bf870u), mB->core.mem_r8(0x800bf839u)); }
+      }
+    }
+    // PSXPORT_SBS_ARMSLOT="frame:slotidx" — deterministic gate for #37's updateTail action-arm
+    // (0x80092660 spawn) which never fires in free-roam/warp (it needs a slot armed to kind 0xFF by
+    // the destination area's object-init overlay — the one warp can't load). We arm the slot IDENTICALLY
+    // on BOTH cores so the spawn leaf runs on both; it spills updateTail's live r16..r21/r31 onto its own
+    // guest frame at 0x801FE900.., which is exactly the region #37 diverged in. Those spilled values come
+    // from updateTail's register mirror (s0/s1/s2..), NOT from slot data, so any armed slot exercises the
+    // fix. If the native mirror is faithful -> identical spills -> 0-diff; if not -> diverge at 0x801FE900.
+    {
+      static long armFrame = -1, armSlot = 0; static int armParsed = 0, armFired = 0;
+      if (!armParsed) { armParsed = 1;
+        if (const char* e = getenv("PSXPORT_SBS_ARMSLOT"); e && *e) {
+          long fr = -1, sl = 0; if (sscanf(e, "%ld:%ld", &fr, &sl) >= 1) { armFrame = fr; armSlot = sl;
+            fprintf(stderr, "[sbs] PSXPORT_SBS_ARMSLOT: at f%ld arm slot %ld (kind=0xFF) on BOTH cores\n", fr, sl); } }
+      }
+      if (armFrame >= 0 && !armFired && (long)mFrame >= armFrame) {
+        armFired = 1;
+        const uint32_t slotBase = 0x800BE238u + (uint32_t)armSlot * 12u;
+        for (Core* c : { &mA->core, &mB->core }) {
+          c->mem_w32(0x800BED78u, (uint32_t)armSlot);   // loop-start counter <= slot so the loop reaches it
+          c->mem_w8 (slotBase + 0u, 0xFF);               // kind = 0xFF -> action arm
+          // benign identical arg bytes (slot[1..7]); value is irrelevant to the register-mirror spill
+          for (uint32_t k = 1; k < 8; k++) c->mem_w8(slotBase + k, 0);
+        }
+        fprintf(stderr, "[sbs] ARMSLOT fired at f%u: slot %ld @0x%08X kind=0xFF (both cores)\n",
+                mFrame, armSlot, slotBase);
+      }
+    }
+    // PSXPORT_SBS_FORCES4C="frame:value" — deterministic hook to force the GAME sm[0x4c] area-machine
+    // state on BOTH cores at `frame`. sm[0x4c]==3 routes the field-run through fieldRunX->fieldFrameX,
+    // which is the ONLY pc_faithful path that runs the NATIVE AreaSlots::updateTail (0x80075A80) — the
+    // #37 register-mirror fix. In free-roam/same-area-warp pc_faithful dispatches 0x80075A80 to
+    // SUBSTRATE (fieldFrameFaithful), so the native fix never executes; the cross-area transition that
+    // naturally reaches sm[0x4c]==3 is blocked by the A0X code-overlay residency gap. Forcing it here
+    // (identically on both cores) makes native updateTail run under the byte-compare so its guest-frame
+    // register mirror is exercised vs the oracle. Fire once, after AUTO-NAV reaches free-roam.
+    {
+      static long fs4cFrame = -1, fs4cVal = 3; static int fs4cParsed = 0, fs4cFired = 0;
+      if (!fs4cParsed) { fs4cParsed = 1;
+        if (const char* e = getenv("PSXPORT_SBS_FORCES4C"); e && *e) {
+          long fr = -1, v = 3; if (sscanf(e, "%ld:%ld", &fr, &v) >= 1) { fs4cFrame = fr; fs4cVal = v;
+            fprintf(stderr, "[sbs] PSXPORT_SBS_FORCES4C: at f%ld set sm[0x4c]=%ld on BOTH cores\n", fr, v); } }
+      }
+      if (fs4cFrame >= 0 && !fs4cFired && (long)mFrame >= fs4cFrame) {
+        fs4cFired = 1;
+        for (Core* c : { &mA->core, &mB->core }) {
+          uint32_t sm = c->mem_r32(0x1f800138u);
+          c->mem_w16(sm + 0x4cu, (uint16_t)fs4cVal);
+          c->mem_w16(sm + 0x4eu, 0);                    // reset the sm[0x4e] sub-machine to init
+        }
+        fprintf(stderr, "[sbs] FORCES4C fired at f%u: sm[0x4c]=%ld (both cores)\n", mFrame, fs4cVal);
+      }
+    }
     // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
     spu_log_reset(mA->spu.writeLog);
     spu_log_reset(mB->spu.writeLog);

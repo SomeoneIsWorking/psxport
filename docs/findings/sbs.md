@@ -23,8 +23,27 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   overlay code-residency gap: cross-area `warp` recomp-MISSes at the destination overlay's object-init
   0x8010B37C before updateTail runs. Closing that gap (or a hut save-state) is the enabler for a true
   hut-entry #37 gate.
+- **MEASURED (2026-07-11, headless SBS-full, AUTONAV=1, the gate this finding was built to run):**
+  1. **Hollow gate CONFIRMED:** `PSXPORT_SBS_MODE=full AUTONAV=1 EXIT_FRAME=900 DEBUG=asent NOAUDIO=1`
+     → `[asent]` count = **0**, `A/B identical` f0..f870, clean exit @f900. The #37 "0-diff@f900" claim
+     (commit de72e40) proved NOTHING — native `updateTail` never executed once.
+  2. **Force makes native code RUN:** `FORCES4C=400:3` → native `updateTail` ENTER logged (counter=14,
+     loopEntered=1), action-arm spawn leaf 0x80092660 fired 4× (slots 18/19/22/23). The force mechanism
+     works; the precondition (native body executes under compare) is met.
+  3. **Diverges at f400 in r22/r23/r30 — and it IS a forcing artifact, NOT a #37 bug.** Range
+     0x801FE91A..0x801FE923 = the spawn leaf's own-frame spills of r23 (@leaf+52) and r30 (@leaf+56).
+     `gen_func_80075A80`'s callee-saved footprint is r[16..21,31] ONLY — it does NOT touch r22/r23/r30,
+     which transit unchanged from `updateTail`'s CALLER (the field-frame chain). `asent` entry-probe on
+     core A: r22=0 r23=0 r30=**0x801FFFF8** (the INITIAL SP — never set by the forced dispatch). Those
+     entry values == the spilled values (faithful transit). Core B (recomp oracle) entered with LIVE
+     r22/r23/r30 its dispatch happened to carry. So the divergence is in the forced ENTRY conditions,
+     not in `updateTail`'s body or the #37 mirror. The #37 fix is NOT implicated — but neither is it
+     EXONERATED, because the force can't reproduce the natural caller's callee-saved setup.
 - **Lesson (extends "SBS gate honest"):** a green SBS gate only means what it EXERCISED. For any native
   code reached only under specific stage/mode state, force that state AND probe that the native body ran.
+  **And:** a divergence under forced state is only actionable once you've shown the divergence is in the
+  code-under-test's OWN footprint, not in entry conditions the force failed to reproduce (compare entry
+  regs both cores; check the function's callee-saved footprint via `abi_extract <addr> --contract`).
 
 ## SBS skips gpu_present_ex → per-frame render bookkeeping never resets → wrong ordering (2026-07-10)
 

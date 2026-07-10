@@ -361,6 +361,29 @@ or level — they can't be a bare channel:
   autonav never reaches (docs/findings/ai.md). Stays off by default so the standard gate command is
   unaffected; opt in explicitly when working the combat/AI cluster. Pair with `PSXPORT_DEBUG=
   combatnav` (below) to watch it navigate.
+- **SBS field-frame forcing hooks** (raw `getenv`, `sbs.cpp` local-static pattern; all fire ONCE,
+  identically on BOTH cores, after AUTO-NAV reaches free-roam). These exist to defeat the HOLLOW GATE
+  (docs/findings/sbs.md): in free-roam, pc_faithful dispatches the field-frame chain to substrate, so
+  native field-frame code (e.g. `AreaSlots::updateTail` @0x80075A80) never runs and a "0-diff" gate
+  proves nothing. Forcing sm[0x4c]=3 routes through fieldFrameX, which DOES run the native method.
+  - `PSXPORT_SBS_FORCES4C=<frame>:<val>` — write `val` to the GAME area-machine halfword sm[0x4c] on
+    both cores at `frame` (resets sm[0x4e]=0). `val=3` is the only path that runs native
+    `updateTail`. **Forcing caveat:** the forced transition does NOT reproduce the natural area
+    transition's caller setup (callee-saved r22/r23/r30 etc.), so a divergence under forcing can be a
+    forcing ARTIFACT — only actionable once shown to be in the function's OWN footprint, not entry
+    conditions (see the finding's MEASURED block). The honest gate for #37 still needs a REAL
+    area/hut transition (blocked by the A0X overlay residency gap).
+  - `PSXPORT_SBS_WARP=<frame>:<area>[:<sub>]` — write a door-record (0x800BF83A=(area<<8)|sub,
+    0x800BF839=3) into both cores at `frame`, identical to native_boot's `warp` REPL — exercises the
+    cross-area transition + `updateTail`'s spawn arm during the load. Currently recomp-MISSes at the
+    destination overlay's object-init 0x8010B37C (the A0X residency gap above).
+  - `PSXPORT_SBS_ARMSLOT=<frame>:<slotidx>` — arm slot `slotidx` (kind=0xFF) on both cores at `frame`
+    so `updateTail`'s action arm (spawn leaf 0x80092660) runs on both; its spilled caller-regs land at
+    0x801FE900.., the region #37 targets. The spilled values come from updateTail's register mirror,
+    not the slot, so any armed slot exercises the fix.
+  - Pair with `PSXPORT_DEBUG=asent` (updateTail ENTER: counter/loopEntered/area/r22/r23/r30 on entry)
+    and `as37` (per action-arm spawn: slot/r16/r19) — ALWAYS require `[asent]` count>0 before trusting
+    any 0-diff on a field-frame native port.
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the

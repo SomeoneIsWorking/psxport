@@ -5,6 +5,8 @@
 #include "core.h"
 #include "game.h"
 #include "engine_overrides.h"
+#include "cfg.h"
+#include <cstdio>
 
 // AreaSlots::updateTail — the last direct child of ov_field_frame at guest 0x80075A80.
 // Slot-table state machine over the 24-entry × 12-byte area at 0x800BE238; see area_slots.h for
@@ -51,6 +53,9 @@ void AreaSlots::updateTail() {
   int32_t s2  = (int32_t)c->mem_r32(0x800BED78u);
   uint32_t s1 = 0x800BE238u + (uint32_t)s2 * 12u;
   const bool loopEntered = (s2 < 24);
+  if (cfg_dbg("asent")) fprintf(stderr, "[asent] updateTail ENTER counter(0x800BED78)=%d loopEntered=%d area=%u slot23kind=%02X sp=%08X r22=%08X r23=%08X r30=%08X\n",
+                                s2, (int)loopEntered, c->mem_r8(0x800BF870u), c->mem_r8(0x800BE34Cu),
+                                c->r[29], c->r[22], c->r[23], c->r[30]);
   if (loopEntered) c->r[20] = 0x800C0000u;      // gen: r20 set once before the loop, ONLY on the
                                                  // taken path — left incoming/untouched if skipped.
   for (; s2 < 24; s2++, s1 += 12u) {
@@ -90,6 +95,8 @@ void AreaSlots::updateTail() {
       c->r[20] = 0x800C0000u;
       c->r[21] = S5;
       c->r[31] = 0x80075B84u;
+      if (cfg_dbg("as37")) fprintf(stderr, "[as37] updateTail action-arm spawn 0x80092660 slot=%d r16=%08X r19=%08X area=%u\n",
+                                   s2, c->r[16], c->r[19], c->mem_r8(0x800BF870u));
       rec_dispatch(c, 0x80092660u);
       uint32_t mask = c->mem_r32(0x800BE358u);     // clear bit s2 in the arm-mask
       mask &= ~(1u << (uint32_t)s2);
