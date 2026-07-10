@@ -869,7 +869,14 @@ void GpuState::gp0_exec(Core* core) {
         // double-draw, observed as the free-roam crash). 2D-poly overlays (gradient/fade panels) are a
         // known frontier; the cutscene narration + the common HUD are SPRITES, handled below. (engine
         // owns the field's 3D geometry; the guest OT supplies only the leftover 2D SPRITES.)
-        if (s_ot_2d_only) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
+        // ... EXCEPT obj-depth-tagged BILLBOARD polys (issue #28): the billboardEmit family's textured
+        // quads (weapon flail, AP gems, apples, splash) are "2D objects with 3D world positions" —
+        // polys by GP0 op, but NOT part of the native-owned world (sceneNative never draws them; they
+        // exist only in the guest OT). `billboard` is set above via obj_depth_lookup(s_cur_node),
+        // which works on the native field path because the owned billboardEmit registers its packet
+        // span through withDepthTag/gpu_obj_depth_add. Dropping these with the world polys is what
+        // made the whole class invisible under pc_render.
+        if (s_ot_2d_only && !billboard) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
         else {
         core->game->rq.emitOrQueue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
@@ -1044,7 +1051,9 @@ void GpuState::gp0_exec(Core* core) {
         int layer = objz ? RQ_WORLD     : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = objz ? RQ_OM_DEPTH  : (bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG);
         // 2D-overlay-only field pass: drop the 3D-world / backdrop prims (owned natively); keep 2D HUD.
-        if (s_ot_2d_only && layer != RQ_HUD) { /* world/bg owned by ov_scene_native — skip */ }
+        // objz sprites are billboard-class "2D objects with 3D world positions" (issue #28) — keep
+        // them like the poly path's `billboard` prims; only the native-owned world/bg is redundant.
+        if (s_ot_2d_only && layer != RQ_HUD && !objz) { /* world/bg owned by ov_scene_native — skip */ }
         else {
         core->game->rq.emitOrQueue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
