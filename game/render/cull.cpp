@@ -326,22 +326,18 @@ void Cull::objectCull() { Core* c = core;
         // (terrain/water/static scenery) — the dominant edge/corner pop-in. Dynamic entities are NOT
         // poked visible here (that would perturb their gameplay state), so widening the cone safely
         // un-pops the static world without disturbing enemy/item/NPC logic.
-        // WIDESCREEN margin population (USER 2026-07-10): the stock cull is tuned for the 320px view and
-        // is very aggressive — at a wide aspect, dynamic props/entities in the side margins pop out because
-        // the read-only static-only margin (collect, type-0x03) never re-includes them. Under widescreen
-        // we therefore POKE +1 (run the object's visible branch) so EVERY type — dynamic entities included
-        // — populates the wide margins. This DOES perturb guest state, which is explicitly allowed for the
-        // widescreen enhancement; it is gated on gpu_gpu_wide_engine() (false at 4:3 / under PSXPORT_ORACLE
-        // and in the SBS legs, which run 4:3), so the byte-exact reference is untouched. At 4:3 the original
-        // read-only static-world margin (0-diff) still applies.
-        int gpu_gpu_wide_engine(Core*);
-        // Under the SBS harness the wide poke is SUPPRESSED (it perturbs guest state, which would
-        // diverge core A from the pure core B by design, not by bug) — wide panes fall back to the
-        // read-only static margin, so dynamic entities may pop at the pane margins where a
-        // standalone wide run re-includes them. Guest evolution stays byte-identical to core B.
-        if (gpu_gpu_wide_engine(c) && !c->game->sbs)   { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // wide: all types populate
-        else if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // 4:3/SBS: read-only static margin
-        else                                           { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
+        // WIDESCREEN is render-only (USER 2026-07-10, revised): widening the visual reach must be
+        // guest-READ-ONLY. The earlier wide +1 poke (to populate dynamic side-margin entities) perturbed
+        // guest state and had to be SBS-suppressed — both removed. Dynamic entities in the extreme wide
+        // margins are therefore dropped until each type's read-only render is added (wide de-prioritized).
+        // Re-include margin geometry READ-ONLY in every aspect (MarginRenderer host overlay, zero guest
+        // writes): no +1 poke, so the object's guest state is untouched — core A stays byte-identical to
+        // the oracle core B AND to a standalone run, with NO game->sbs special-casing. Widescreen is a
+        // render-only concern (wider visual reach), served by this same read-only path; it must NEVER
+        // poke guest state (the old wide +1 poke perturbed 5638 B of object state and forced an SBS
+        // special-case — both removed). PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include for A/B diffing.
+        if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // read-only margin, all aspects
+        else                                      { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // POKE fallback (A/B diffing only)
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object
         // architecture for approach B. One line per re-include; grep a single frame.

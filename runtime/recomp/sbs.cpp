@@ -1806,7 +1806,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   //   the SAME per-Game config as standalone `PSXPORT_ORACLE=1 ./run.sh`, so pane B IS the oracle
   //   picture (render_observer/billboard/painter/wide gates all read game->oracle per core).
   if (fb_b) mB->setOracle(); else mB->mods.forceNeutral();
-  fprintf(stderr, "[sbs] per-core config: A = user mods (aspect=%d fps60=%d; wide guest-poke off), B %s\n",
+  fprintf(stderr, "[sbs] per-core config: A = user mods (aspect=%d fps60=%d), B %s\n",
           mA->mods.aspect, mA->mods.fps60,
           fb_b ? "ORACLE (recomp + neutral mods, game->oracle=1)" : "mods=neutral");
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
@@ -2023,19 +2023,24 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // <prefix>_A.ppm / <prefix>_B.ppm. Mechanical pane-vs-standalone-`shot` comparison (the
     // "SBS pane must equal the standalone config's picture" gate) — the composite dumpPpm can't
     // be diffed against a single-config shot.
-    { static long shotFrame = -2; static char shotPrefix[192];
-      if (shotFrame == -2) { shotFrame = -1;
+    { static int shotInit = 0; static long shotFrames[32]; static int shotN = 0; static char shotPrefix[192];
+      if (!shotInit) { shotInit = 1;
         if (const char* e = getenv("PSXPORT_SBS_SHOT"); e && *e) {
-          const char* colon = strchr(e, ':');
-          if (colon) { shotFrame = atol(e); snprintf(shotPrefix, sizeof shotPrefix, "%.*s", (int)(sizeof shotPrefix - 1), colon + 1); }
+          const char* colon = strrchr(e, ':');
+          if (colon) {
+            snprintf(shotPrefix, sizeof shotPrefix, "%.*s", (int)(sizeof shotPrefix - 1), colon + 1);
+            char list[192]; snprintf(list, sizeof list, "%.*s", (int)(colon - e), e);
+            for (char* p = strtok(list, ","); p && shotN < 32; p = strtok(nullptr, ",")) shotFrames[shotN++] = atol(p);
+          }
         } }
-      if (shotFrame >= 0 && (long)mFrame == shotFrame) {
-        auto wr = [](const char* pfx, char side, const uint8_t* rgba, int w, int h) {
-          char p[224]; snprintf(p, sizeof p, "%s_%c.ppm", pfx, side);
+      bool hit = false; for (int i = 0; i < shotN; i++) if ((long)mFrame == shotFrames[i]) hit = true;
+      if (hit) {
+        auto wr = [this](const char* pfx, char side, const uint8_t* rgba, int w, int h) {
+          char p[240]; snprintf(p, sizeof p, "%s_f%u_%c.ppm", pfx, mFrame, side);
           FILE* f = fopen(p, "wb"); if (!f) { fprintf(stderr, "[sbs] SHOT: cannot open %s\n", p); return; }
           fprintf(f, "P6\n%d %d\n255\n", w, h);
           for (int i = 0; i < w * h; i++) fwrite(rgba + (size_t)i * 4, 1, 3, f);
-          fclose(f); fprintf(stderr, "[sbs] SHOT f%ld pane %c (%dx%d) -> %s\n", (long)shotFrame, side, w, h, p);
+          fclose(f); fprintf(stderr, "[sbs] SHOT f%u pane %c (%dx%d) -> %s\n", mFrame, side, w, h, p);
         };
         wr(shotPrefix, 'A', mRgbaA, mWa, mHa);
         wr(shotPrefix, 'B', mRgbaB, mWb, mHb);

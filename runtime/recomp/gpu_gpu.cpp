@@ -125,9 +125,10 @@ static int wide_native_w(const Game* game) {
   switch (game->mods.aspect) {
     case ASPECT_16_9: return 428;
     case ASPECT_21_9: return 560;
-    case ASPECT_AUTO: { // AUTO = match the live window aspect. Under SBS each core gets HALF the
-                        // window (two panes side by side), so derive from the half-width.
-                        int ww = win_w(); if (game->sbs) ww /= 2;
+    case ASPECT_AUTO: { // AUTO = match the live window aspect — identically in standalone and under SBS
+                        // (each core renders its full-window FOV into its own target; the SBS compositor
+                        // letterboxes that into its half-window pane, so no special-case here).
+                        int ww = win_w();
                         int w = (int)((240.0 * ww) / win_h() + 0.5); w &= ~1;
                         if (w < 320) w = 320; if (w > VRAM_W) w = VRAM_W; return w; }
     default:          return 320;
