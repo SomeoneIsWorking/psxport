@@ -1312,6 +1312,16 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
   else       { mWwVa = v; capBt(c, mWwBtA, sizeof mWwBtA);
                mWwPcA = c->pc; mWwRaA = c->r[31]; mWwSpA = c->r[29]; mWwCountA++;
                mWwHostBtNA = backtrace(mWwHostBtA, WW_HOST_BT_DEPTH); }
+  // Guest a/s registers at the diverging store — the fastest way to compare the two cores'
+  // argument chains when the store site is identical but its inputs differ.
+  {
+    char* bt = which ? mWwBtB : mWwBtA;
+    size_t used = strlen(bt), cap = which ? sizeof mWwBtB : sizeof mWwBtA;
+    if (used + 220 < cap)
+      snprintf(bt + used, cap - used,
+               "  [ww-regs] a0=%08X a1=%08X a2=%08X a3=%08X s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X\n",
+               c->r[4], c->r[5], c->r[6], c->r[7], c->r[16], c->r[17], c->r[18], c->r[19], c->r[20], c->r[21]);
+  }
   mWwHit |= (1 << which);
   // PSXPORT_SBS_WW_ONVALUEDIVERGE=1 — instead of pausing on the first PREWATCH fire (which normally
   // treats an asymmetric-but-same-value store as a divergence), pause on the first store that leaves

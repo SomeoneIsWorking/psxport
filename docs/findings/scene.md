@@ -445,7 +445,17 @@
   `Font::glyphEmit`'s epilogue restoring `sp = sp0 + 56` where sp0 was already the ENTRY sp — the
   guest stack leaked UP 0x38 per call (MIRROR_VERIFY=0x80078CA8 caught it at invocation #1: exit
   sp 801FE980 vs entry 801FE948). Fixed to `sp = sp0`; 2497 invocations now byte-exact.
-- **OPEN — next up (watch-cut SBS still 922 divs at f289)**: with stacks aligned the remaining
+- **OPEN — narrowed further (2026-07-10 late)**: at the f289 store (`sbs watch 800c3c54` + the new
+  `[ww-regs]` line), core A and core B are in DIFFERENT PRIM-TYPE BRANCHES of gen_func_8007FDB0
+  (`(cmdword>>24)&3`: A=1 at L_8007FF24, B=2 at L_8007FF78) — i.e. the mid-frame CMD-LIST ENTRY for
+  Charles' prim (s2=0x800FB960 live at the store) has a DIFFERENT command word on core A. The
+  producer is the object-walk side (native behaviors enqueueing render cmds); the cmd list is
+  consumed within the frame so end-of-frame SBS never sees it directly — watch the cmd-list write
+  next (find the list base via Render::cmdListDispatch, then `sbs watch` the entry). Chain:
+  Render::renderWalk(native A) / gen_func_8003C048(B) → mode handler (A: perModeDispatch replaces
+  gen_func_8003F698 — NB that gen also runs a PER-AREA pre-draw hook via table 0x80015268 gated on
+  0x1F800234==0, verify the native replicates the gate) → gen_func_800803DC → gen_func_8007FDB0.
+- **prior framing (kept for context)**: with stacks aligned the remaining
   first-div is an ACTOR VERTEX: `sbs watch 800c3c54` fires in the entity render walk (ra chain
   0x8003F790/0x8003D07C; Charles 0x800FB960 + effect child 0x800FBB70 on the stack) with A packing
   vertex (0x116,0x82) vs B (0x113,0x83) — a (3,1)px pose delta, i.e. an anim/orbit phase lead on
