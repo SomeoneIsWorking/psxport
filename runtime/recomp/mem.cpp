@@ -254,6 +254,20 @@ static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
   c->mRender->pktSpan.track(a, bytes);
 }
 
+// Mirror-verify write journal (game/core/verify_harness.h): while a strictCheck invocation is
+// in-flight (PSXPORT_MIRROR_VERIFY), every MAIN-RAM store's pre-write byte gets journaled (once per
+// byte per invocation — dirty-bitmap gated) so strictCheck can snapshot/rewind/compare only the
+// touched bytes instead of the whole 2 MB buffer. Scratchpad stores are NOT journaled — strictCheck
+// always full-compares the 1 KB scratchpad (already cheap). `!armed` is the hot-path no-op: a single
+// bool read gates everything else, so this is free when MIRROR_VERIFY is unset (matches the existing
+// display_pass_write_guard/pkt_track pattern on this same path).
+static inline void journal_track(Core* c, uint8_t* p, uint32_t bytes) {
+  if (!c->game || !c->game->verify.journalIsArmed()) return;
+  if (p < c->ram || p + bytes > c->ram + 0x200000) return;   // not main RAM (scratchpad/none) — skip
+  uint32_t off = (uint32_t)(p - c->ram);
+  for (uint32_t i = 0; i < bytes; i++) c->game->verify.journalTrack(off + i, p[i]);
+}
+
 // FAIL-FAST guard for the pc_render READ-ONLY-OVERLAY invariant (CLAUDE.md): pc_render's native
 // display pass (DisplayPassGuard-armed scope in game_tomba2.cpp's Engine::drawOTag) reads guest RAM
 // + engine state and draws to HOST memory only — it must NEVER write guest main RAM or scratchpad.
@@ -281,6 +295,7 @@ void Core::mem_w8(uint32_t a, uint8_t v) {
   display_pass_write_guard(this, a, v, 1);
   wwatch_check(a, v, 1);
   cw_check(a, v, 1); pkt_track(this, a, 1);
+  if (p) journal_track(this, p, 1);
   if (p) *p = v; else io_write(a, v, 1);
 }
 void Core::mem_w16(uint32_t a, uint16_t v) {
@@ -288,6 +303,7 @@ void Core::mem_w16(uint32_t a, uint16_t v) {
   display_pass_write_guard(this, a, v, 2);
   wwatch_check(a, v, 2);
   cw_check(a, v, 2); pkt_track(this, a, 2);
+  if (p) journal_track(this, p, 2);
   if (p) memcpy(p, &v, 2); else io_write(a, v, 2);
 }
 void Core::mem_w32(uint32_t a, uint32_t v) {
@@ -295,6 +311,7 @@ void Core::mem_w32(uint32_t a, uint32_t v) {
   display_pass_write_guard(this, a, v, 4);
   wwatch_check(a, v, 4);
   cw_check(a, v, 4); pkt_track(this, a, 4);
+  if (p) journal_track(this, p, 4);
   if (p) memcpy(p, &v, 4); else io_write(a, v, 4);
 }
 

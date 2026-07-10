@@ -242,11 +242,42 @@ or level — they can't be a bare channel:
     over speed by default, per the "never silently narrow the compared state without a knob"
     rule) — per-ADDRESS sampling: only every Nth invocation of a given address is actually
     checked (still runs the real call every time; only the verify-and-compare machinery is
-    skipped on the other N-1). A hot render-dispatch address firing 1000s of times/frame makes
-    `EVERY=1` impractically slow for a multi-thousand-frame session (measured: baseline 3000
-    headless frames ~6s vs `=all EVERY=1` unable to finish 3000 frames in 100s on a hot
-    address) — raise `EVERY` (e.g. 50-200) for a longer soak run; `EVERY=1` is still the right
-    default for a targeted single-address wiring-pass gate.
+    skipped on the other N-1). Raise `EVERY` (e.g. 50-200) only if you specifically want to trade
+    coverage for speed; since the 2026-07-10 fast path below, `EVERY=1` is fast enough for a
+    normal multi-thousand-frame soak and is the default for a reason — coverage over speed.
+  - **FAST PATH (2026-07-10, `strictCheck`'s write-journal): `=all EVERY=1` now covers a full
+    session soak, not just a targeted single-address gate.** `strictCheck` used to snapshot AND
+    linear-scan-compare the FULL 2 MB main-RAM buffer per invocation (2x `memcpy(0x200000)` +
+    a 2 MB compare loop) — with a hot render-dispatch address firing 1000s of times/frame this
+    made `=all EVERY=1` unable to finish 3000 headless free-roam frames in 100s (measured: only
+    ~570 frames). Root cause: comparing the WHOLE 2 MB when a typical leaf touches a few dozen to
+    a few hundred bytes. Fix: copy-on-first-write JOURNALING, not a narrower compare — every
+    guest store to main RAM (scratchpad stays a full 1 KB compare; already cheap) funnels through
+    `Core::mem_w8/16/32` (`runtime/recomp/mem.cpp`, the audited SOLE write path reachable during
+    an armed check — `game/*.cpp` only ever READS `c->ram[]` directly; the two raw-write sites,
+    `boot.cpp`/`native_stub.cpp`'s EXE-load `memcpy`, run before any check is ever armed). Those
+    hooks are a no-op unless `VerifyHarness::journalIsArmed()` (a single bool `strictCheck` sets
+    for the duration of each leg) — zero overhead when `MIRROR_VERIFY` is unset. `strictCheck`
+    then snapshots/rewinds/compares only the UNION of both legs' touched bytes instead of all
+    2 MB; anything neither leg wrote can't have diverged, so skipping it is a proof by
+    construction, not a narrowing. Same compared-state definition as before (RAM + scratchpad +
+    ABI regs), computed incrementally instead of by full scan. Measured (same 3000-frame headless
+    free-roam scenario, `PSXPORT_AUTO_SKIP=1`): `=all EVERY=1` old full-scan path reached only
+    ~570 frames in a 95 s window; the journal fast path finishes all 3000 frames in ~9.5 s (a
+    >250x wall-clock speedup on this scenario) with baseline (`MIRROR_VERIFY` unset) unaffected —
+    identical boot log, ~3.4 s for the same 3000 frames.
+  - **`MIRROR_VERIFY_FULL=1`** (`cfg_on`) — forces the OLD full-2MB-snapshot/linear-scan path
+    (`VerifyHarness::strictCheckFull`), kept as the authoritative slow reference the fast journal
+    path is validated against. Validated 2026-07-10: same scenario run under both modes produces
+    the same set of MISMATCH addresses/bytes/values and the same overall verdict per invocation
+    (byte-level report ORDER can differ — fast reports in first-touch/insertion order, full
+    reports in ascending-address order — but the same bytes/values are found, nothing is missed).
+    A deliberate sabotage (`Sequencer::frameTick`'s guest-stack spill XORed with a known constant,
+    reverted before commit) was caught identically by both modes at the exact same invocation with
+    the exact same byte values, proving the journal isn't just replaying pre-existing matches.
+    Use `MIRROR_VERIFY_FULL=1` to re-validate the fast path after touching `strictCheck`/
+    `journalTrack`/`mem_w8`/`mem_w16`/`mem_w32`, or when you specifically distrust the journal for
+    a new address (e.g. a suspected unhooked write path) and want the brute-force ground truth.
   - **`MIRROR_VERIFY_CONTINUE=1`** (`cfg_on`) — log-and-continue on a mismatch instead of
     `abort()`ing (execution proceeds from the NATIVE result either way — the gate never corrupts
     state, matched or not). Needed to survey `=all` across a whole session instead of dying at

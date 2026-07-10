@@ -84,7 +84,132 @@ static const int   kStrictReg[]  = { 2, 3, 16, 17, 18, 19, 20, 21, 22, 23, 28, 2
 static const char* kStrictName[] = { "v0","v1","s0","s1","s2","s3","s4","s5","s6","s7","gp","sp","fp","ra" };
 static constexpr int kNStrictReg = 14;
 
+void VerifyHarness::journalTrack(uint32_t off, uint8_t origByte) {
+  if (!mJournalDirty) mJournalDirty = (uint8_t*)calloc(0x200000 / 8, 1);
+  uint32_t byteIdx = off >> 3; uint8_t bit = (uint8_t)(1u << (off & 7));
+  if (mJournalDirty[byteIdx] & bit) return;   // already touched this invocation — orig already recorded
+  mJournalDirty[byteIdx] |= bit;
+  mJournal.push_back({off, origByte, origByte});   // .nat defaults to .orig (right for a leg-2-only touch — see strictCheck)
+}
+
+// strictCheck: the fast journal-based path (default). Dispatches to strictCheckFull under
+// PSXPORT_MIRROR_VERIFY_FULL=1 — the authoritative full-2MB-scan reference this path is validated
+// against (same verdicts / same first mismatch, see docs/config.md "Mirror TDD gate").
+//
+// Two-leg protocol (mirrors strictCheckFull's semantics exactly, just incrementally):
+//   1. Snapshot scratch+regs (small, still a full copy — cheap). Arm the journal, run leg 1 (native
+//      mirror). Every first-touch RAM byte gets an entry {addr, orig, nat=orig}. After leg 1, fix up
+//      .nat for those n1 entries to the byte's ACTUAL leg-1-final value (mJournal[i].nat = c->ram[addr]).
+//   2. Rewind: write .orig back over just the n1 touched bytes (not all 2 MB), restore scratch+regs.
+//      Arm the journal again (bitmap carries over, so leg-1 addresses are NOT re-recorded — their
+//      .orig is already correct) and run leg 2 (pure substrate replay). Any NEW address leg 2 touches
+//      gets an entry with .nat left at .orig — correct, because leg 1 never wrote there, so leg 1's
+//      "final" value for that byte IS the original (this exactly matches strictCheckFull, where an
+//      address untouched by leg 1 keeps its pre-leg1 value in the post-leg1 snapshot).
+//   3. Compare: for every entry in the UNION (both legs), current c->ram[addr] (leg 2's result, never
+//      rewound) vs .nat (leg 1's result). This is the same comparison strictCheckFull does over all
+//      2 MB — restricted to the only addresses that could possibly differ (anything neither leg wrote
+//      is byte-identical by construction, so skipping it is not a narrowing, it's a proof by
+//      construction that it can't diverge).
+//   4. Continue-from-native: write .nat back over the union (matches strictCheckFull's unconditional
+//      `memcpy(c->ram, mStrictNatRam, ...)` — for a leg-2-only address that's .orig, i.e. "as if leg 2
+//      never ran", identical to what a full memcpy from the post-leg1 snapshot would produce there).
 void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
+  if (mFullMode < 0) mFullMode = cfg_on("PSXPORT_MIRROR_VERIFY_FULL") ? 1 : 0;
+  if (mFullMode) { strictCheckFull(addr, fn, ctx); return; }
+  Core* c = core;
+  uint8_t preSpad[0x400]; uint32_t preRegs[34];
+  inCheck = true;
+  memcpy(preSpad, c->scratch, 0x400);
+  memcpy(preRegs, c->r, 32 * 4); preRegs[32] = c->hi; preRegs[33] = c->lo;
+  uint32_t entrySp = preRegs[29], entryRa = preRegs[31];
+  uint64_t invocation = mLastMirrorCount;   // stamped by mirrorSampleGate just before this call
+
+  mJournal.clear();
+  mJournalArmed = true;
+  fn(ctx);                                          // leg 1: the native mirror
+  mJournalArmed = false;
+  size_t n1 = mJournal.size();
+  for (size_t i = 0; i < n1; i++) mJournal[i].nat = c->ram[mJournal[i].addr];   // leg-1-final values
+  uint8_t natSpad[0x400]; memcpy(natSpad, c->scratch, 0x400);
+  uint32_t natRegs[kNStrictReg]; for (int i = 0; i < kNStrictReg; i++) natRegs[i] = c->r[kStrictReg[i]];
+  uint32_t natHi = c->hi, natLo = c->lo;
+
+  for (size_t i = 0; i < n1; i++) c->ram[mJournal[i].addr] = mJournal[i].orig;   // rewind (touched bytes only)
+  memcpy(c->scratch, preSpad, 0x400);
+  memcpy(c->r, preRegs, 32 * 4); c->hi = preRegs[32]; c->lo = preRegs[33];
+
+  inSubstrateLeg = true;                            // leg 2: pure substrate (EngineOverrides off)
+  mJournalArmed = true;                              // journal continues into the SAME touched-set
+  rec_dispatch(c, addr);
+  mJournalArmed = false;
+  inSubstrateLeg = false;
+
+  for (size_t i = 0; i < mJournal.size(); i++) {     // clear only the bits we set (not the whole bitmap)
+    uint32_t off = mJournal[i].addr;
+    mJournalDirty[off >> 3] &= (uint8_t)~(1u << (off & 7));
+  }
+
+  int bad = 0;
+  bool headerPrinted = false;
+  auto printHeader = [&]() {
+    if (headerPrinted) return;
+    headerPrinted = true;
+    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X\n",
+            addr, (unsigned long long)invocation, entrySp, entryRa);
+  };
+  for (size_t i = 0; i < mJournal.size() && bad < 16; i++) {
+    uint32_t a = mJournal[i].addr;
+    uint8_t curVal = c->ram[a];                      // leg 2's result (never rewound)
+    if (curVal != mJournal[i].nat) {
+      printHeader();
+      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH ram 0x%08X: native=%02X substrate=%02X\n",
+              addr, 0x80000000u + a, mJournal[i].nat, curVal); bad++;
+    }
+  }
+  for (uint32_t i = 0; i < 0x400 && bad < 16; i++)
+    if (c->scratch[i] != natSpad[i]) {
+      printHeader();
+      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH spad 0x%08X: native=%02X substrate=%02X\n",
+              addr, 0x1F800000u + i, natSpad[i], c->scratch[i]); bad++;
+    }
+  for (int i = 0; i < kNStrictReg; i++)
+    if (c->r[kStrictReg[i]] != natRegs[i]) {
+      printHeader();
+      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH reg %s: native=%08X substrate=%08X\n",
+              addr, kStrictName[i], natRegs[i], c->r[kStrictReg[i]]); bad++;
+    }
+  if (c->hi != natHi || c->lo != natLo) {
+    printHeader();
+    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH hi/lo: native=%08X/%08X substrate=%08X/%08X\n",
+            addr, natHi, natLo, c->hi, c->lo); bad++;
+  }
+  if (bad) {
+    bool cont = cfg_on("PSXPORT_MIRROR_VERIFY_CONTINUE");
+    Check& k = check("mirror-verify");
+    k.nMismatch++;
+    if (!cont) {
+      fprintf(stderr, "[mirror-verify] 0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact. "
+                      "Aborting (set PSXPORT_MIRROR_VERIFY_CONTINUE=1 to log-and-continue).\n", addr, bad);
+      abort();
+    }
+    fprintf(stderr, "[mirror-verify] 0x%08X CONTINUING past %d+ diffs (PSXPORT_MIRROR_VERIFY_CONTINUE=1) "
+                    "— execution proceeds from the NATIVE result.\n", addr, bad);
+  }
+  for (size_t i = 0; i < mJournal.size(); i++) c->ram[mJournal[i].addr] = mJournal[i].nat;   // continue-from-native
+  memcpy(c->scratch, natSpad, 0x400);
+  for (int i = 0; i < kNStrictReg; i++) c->r[kStrictReg[i]] = natRegs[i];
+  c->hi = natHi; c->lo = natLo;
+  inCheck = false;
+  if (!bad) {
+    Check& k = check("mirror-verify");
+    if (++k.nMatch % 64 == 1) fprintf(stderr, "[mirror-verify] 0x%08X OK (pass #%ld)\n", addr, k.nMatch);
+  }
+}
+
+// strictCheckFull: the ORIGINAL full-2MB-snapshot/compare path (PSXPORT_MIRROR_VERIFY_FULL=1). Kept
+// as the authoritative slow reference strictCheck's fast journal path is validated against.
+void VerifyHarness::strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx) {
   Core* c = core;
   if (!mStrictPreRam) { mStrictPreRam = (uint8_t*)malloc(0x200000); mStrictNatRam = (uint8_t*)malloc(0x200000); }
   uint8_t preSpad[0x400]; uint32_t preRegs[34];

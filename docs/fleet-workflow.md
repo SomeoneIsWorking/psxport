@@ -141,9 +141,14 @@ the newly-wired address(es) — this is now the STANDARD mechanical detector for
 order bugs, catching them at the exact offending invocation instead of waiting for an SBS diff frames
 (or a whole session) later. It is generalized: it needs no per-call-site `MV_CHECK`, so `=all` covers
 every address wired via `engine_set_override_main`/`_a00` OR `EngineOverrides::register_` in one run
-(see docs/config.md "Mirror TDD gate" for the mechanism + the `EVERY`/`CONTINUE` sampling knobs — a
-hot address needs `EVERY>1` for a multi-thousand-frame soak, `EVERY=1` is fine for a targeted single-
-address gate). SBS-full 0-diff alone is NOT sufficient: SBS's `diff_mode` skips whole subsystems
+(see docs/config.md "Mirror TDD gate" for the mechanism + the `EVERY`/`CONTINUE` sampling knobs).
+**As of the 2026-07-10 write-journal fast path, `EVERY=1` covers a normal multi-thousand-frame free-
+roam soak in gate-window time** (measured: 3000 headless frames in ~9.5s, vs the old full-2MB-scan
+path only reaching ~570 frames in 95s) — `EVERY>1` is now only needed if you specifically want to
+trade coverage for even more speed, not to make a soak finish at all. `MIRROR_VERIFY_FULL=1` forces
+the old full-scan path if you need to re-validate the journal after touching `strictCheck`/
+`journalTrack`/`mem_w8`/`16`/`32` (game/core/verify_harness.{h,cpp}, runtime/recomp/mem.cpp). SBS-full
+0-diff alone is NOT sufficient: SBS's `diff_mode` skips whole subsystems
 (e.g. the per-vblank audio block, docs/findings/audio.md) and only compares whatever autonav actually
 reaches — MIRROR_VERIFY checks the ABI contract (regs + RAM + scratchpad, no exemptions) on every
 armed invocation regardless of whether SBS's autonav path exercises it. A real discovery run

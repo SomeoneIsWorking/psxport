@@ -1041,3 +1041,15 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
 - **refs:** runtime/recomp/sbs.cpp (navStep AWAIT_CONTROL phase, sbsPostdriveOn, run() dispatch fix),
   game/core/engine.cpp fieldRun/fieldRunFaithful (predicate RE source), docs/oracle.md later-283
   (the "not controllable at onset" it corrects), scratch/logs/sbs_long.log.
+
+- **OPEN (2026-07-10, found incidentally while validating the MIRROR_VERIFY fast path, NOT
+  investigated):** `PSXPORT_SBS_MODE=full PSXPORT_VK_HEADLESS=1 PSXPORT_NOAUDIO=1
+  PSXPORT_NATIVE_FRAMES=100000` with **no** `SBS_AUTONAV`/`SBS_POSTDRIVE` (plain idle boot, no input
+  driving) diverges deterministically at lockstep frame 1019, byte range 0x1F80009C..0x1F8000A0
+  (scratchpad), reproduced identically on unmodified `main` (confirmed by reverting the journal
+  patch below and re-running — same frame, same byte range, same native/oracle hit-count table).
+  This does NOT contradict the KEY RESULT above (autonav+postdrive walk/jump 0-diff through f20070)
+  — different scenario (no input at all vs a scripted walk/jump script), so plausibly a different
+  code path (e.g. an idle-only timing/counter divergence never exercised once autonav starts
+  feeding input). Not root-caused; logged here so it isn't re-discovered from scratch. Repro: unset
+  any `SBS_AUTONAV`/`SBS_POSTDRIVE`, run the command above, grep for `DIVERGENCE`.

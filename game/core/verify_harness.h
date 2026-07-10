@@ -15,6 +15,8 @@
 #ifndef GAME_CORE_VERIFY_HARNESS_H
 #define GAME_CORE_VERIFY_HARNESS_H
 #include <cstdint>
+#include <cstddef>
+#include <vector>
 struct Core;
 void rec_super_call(Core*, uint32_t);
 
@@ -56,6 +58,26 @@ public:
   bool strictArmed(uint32_t addr);      // also false while inCheck (no nesting)
   void strictCheck(uint32_t addr, void (*fn)(void*), void* ctx);
 
+  // ---- write-journal fast path for strictCheck (2026-07-10) --------------------------------------
+  // strictCheck used to snapshot+compare the FULL 2 MB main-RAM buffer twice per invocation (pre-leg
+  // save, post-leg1 save, 2 MB linear compare) — with hot render-dispatch addresses firing 1000s of
+  // times/frame this made `MIRROR_VERIFY=all EVERY=1` unable to finish even a few hundred frames in a
+  // normal gate window. Root cause: comparing the WHOLE buffer when a typical leaf touches a few dozen
+  // to a few hundred bytes. Fix: copy-on-first-write journaling. Every guest store to MAIN RAM (not
+  // scratchpad — that stays a full 1 KB compare, already cheap) funnels through Core::mem_w8/16/32
+  // (runtime/recomp/mem.cpp; audited as the SOLE write path during gameplay — game/*.cpp only ever
+  // READS `c->ram[]` directly, and the two raw-write sites (boot.cpp/native_stub.cpp EXE-load memcpy)
+  // run before any mirror check is ever armed). journalTrack(addr, orig) is called once per BYTE on
+  // its first touch during an armed invocation (a dirty bitmap gates re-recording so a byte written
+  // 1000 times is journaled once); strictCheck then snapshots/rewinds/compares only the UNION of both
+  // legs' touched addresses instead of all 2 MB. See strictCheck's comment for the two-leg protocol.
+  // PSXPORT_MIRROR_VERIFY_FULL=1 keeps the OLD full-2MB-scan path available (strictCheckFull) as the
+  // authoritative slow reference the fast path is validated against — same verdicts, same first
+  // mismatch, just slower. `journalTrack` is a no-op unless `mJournalArmed` (a single bool the hot
+  // mem_w* path branches on — zero overhead when MIRROR_VERIFY is unset).
+  bool journalIsArmed() const { return mJournalArmed; }
+  void journalTrack(uint32_t ramOff, uint8_t origByte);
+
   // ---- Generalized "verify ALL wired overrides" gate (2026-07-10) --------------------------------
   // The two CENTRAL native-dispatch injection points — runtime/recomp/engine_override_thunk.cpp
   // (the engine_set_override_main/_a00 g_tab[] table) and EngineOverrides::run (rec_dispatch's
@@ -93,9 +115,16 @@ private:
   // strict-gate state
   int      mStrictMode = -1;            // -1 unparsed, 0 off, 1 list, 2 all
   uint32_t mStrictList[32]; int mStrictN = 0;
-  uint8_t* mStrictPreRam = nullptr; uint8_t* mStrictNatRam = nullptr;
+  uint8_t* mStrictPreRam = nullptr; uint8_t* mStrictNatRam = nullptr;   // strictCheckFull only
   uint8_t  mStrictNatSpad[0x400];
   uint32_t mStrictNatRegs[16];
+  int      mFullMode = -1;              // -1 unparsed; PSXPORT_MIRROR_VERIFY_FULL (forces strictCheckFull)
+  void strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx);   // old full-2MB-scan path (validation reference)
+  // journal fast-path state (see header comment above)
+  struct JEntry { uint32_t addr; uint8_t orig; uint8_t nat; };
+  bool     mJournalArmed = false;
+  uint8_t* mJournalDirty = nullptr;     // 1 bit / RAM byte (0x200000/8 = 256 KiB), lazily calloc'd
+  std::vector<JEntry> mJournal;         // touched-byte log for the in-flight strictCheck invocation
   // mirrorSampleGate: per-address invocation counter + PSXPORT_MIRROR_VERIFY_EVERY sampling.
   static constexpr int kMaxMirrorAddrs = 256;
   int      mMirrorEvery = -1;           // -1 unparsed
