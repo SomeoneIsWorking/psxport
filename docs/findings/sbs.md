@@ -5,6 +5,27 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## HOLLOW GATE: free-roam SBS never runs native field-frame code (fieldFrameX / updateTail) (2026-07-11)
+
+- **Trap:** "SBS-full 0-diff through fN" in FREE-ROAM does NOT gate native field-frame subsystems.
+  In free-roam, pc_faithful dispatches the field-frame chain (e.g. AreaSlots::updateTail @0x80075A80)
+  to the SUBSTRATE via fieldFrameFaithful — the NATIVE method never executes. So a native field-frame
+  port can be committed "0-diff verified" while never having been byte-compared at all. (This burned the
+  #37 updateTail fix: claimed 0-diff@f900, but an `asent` entry-probe showed 0 native calls.)
+- **Only path that runs native field-frame code:** the pc_faithful fieldFrameX path, gated on stage
+  sm[0x4c]==3. Reach it naturally (an area transition) OR force it: `PSXPORT_SBS_FORCES4C=<frame>:3`
+  (sbs.cpp hook, added 2026-07-11) forces sm[0x4c]=3 on both cores mid-run so native updateTail runs
+  under compare. ALWAYS confirm the native code actually executed before trusting a 0-diff — add/keep an
+  entry-probe (`PSXPORT_DEBUG=asent` logs updateTail ENTER) and require count>0.
+- **Forcing caveat:** FORCES4C bypasses the NATURAL transition, which may itself set guest state (e.g.
+  callee-saved r22/r23/r30) the forced path doesn't — so a divergence under forcing can be a forcing
+  ARTIFACT. The honest gate needs a REAL area/hut entry, which is currently blocked by the A0X MODE-
+  overlay code-residency gap: cross-area `warp` recomp-MISSes at the destination overlay's object-init
+  0x8010B37C before updateTail runs. Closing that gap (or a hut save-state) is the enabler for a true
+  hut-entry #37 gate.
+- **Lesson (extends "SBS gate honest"):** a green SBS gate only means what it EXERCISED. For any native
+  code reached only under specific stage/mode state, force that state AND probe that the native body ran.
+
 ## SBS skips gpu_present_ex → per-frame render bookkeeping never resets → wrong ordering (2026-07-10)
 
 - **Symptom (USER):** SBS-full oracle pane drew the semi-transparent SEA over the fisherman
