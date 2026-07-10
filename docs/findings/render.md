@@ -1504,3 +1504,18 @@ draft was already byte-faithful.
   (`frame_via_fb()==0`, no supersampled scratch FB). The merged Vanilla/X2/X3/X4/Auto selector + the 4x cap
   persist and report correctly, but X2..X4 do not visibly sharpen until the scaled-FB pass lands. Do not
   claim ires sharpening is verified — it is a forward-looking selector.
+
+## Billboard OBJECT MODEL — manager node + per-particle records (RE 2026-07-10, operator)
+- **symptom:** gems "react poorly" at 60fps; historic objid rectangle covered ALL visible billboards
+  at once (USER, "many moons ago") — because the billboard identity used everywhere (fps_key,
+  obj-depth span, anchors) is the MANAGER node, not the individual billboard.
+- **model (gen_func_8003B220, shard_4):** one manager node per billboard class; its sub-list
+  (node+56 → {count,byteOff}[], base node+60) holds 16-byte PARTICLE records — each particle is one
+  visible billboard (gem/effect). particle[10]/[11] = quad w/h; particle[14]/[15] = s8 X/Y offsets
+  SCALED ×5; corners are 2D (z=0) around 5×offset; world pos = node composed translation +
+  R·(5·p14, 5·p15, 0) via the CR0-7 billboardCompose1/2 loaded. p14/p15 are ANIMATED per frame by
+  the owning behavior (bobbing).
+- **consequence:** any per-object mechanism keyed on the node (fps60 anchors, objid rects, obj-depth)
+  lumps every billboard of the class together. Correct identity = PARTICLE ADDRESS (stable while the
+  object lives). Fix direction handed to the fps60-residue agent: per-particle anchor capture +
+  interpolation. Score-gem lifecycle traceable via beh_pickup_collect_trigger.cpp (FUN_8007413C spawn).
