@@ -1432,6 +1432,22 @@ in-port profiler (later-186, `interp.cpp`) gives the TIME + FREQUENCY histograms
 ---
 
 # CURRENT FRONTIER (work these, in this order)
+**SESSION 2026-07-10 (fleet run, 69a1fb3..118dbc3) — SBS-full ZERO-DIFF re-reached, verified A/B
+identical through f12390 (120s autonav).** Peeled the whole render residual cluster in 5 hops (f62
+r16-r23 callee-save contract → f118 CCA4/renderWalk frames, owned FUN_8003C048 + FUN_8003D0BC → f158
+gt3/gt4 field write-order vs reject gates → f179 mode==2 SZ-scratch stack offsets), fixed a SECOND
+oracle-purity leak (perobj chain via raw `shard_set_override` → core B ran native; commit 68e1c14),
+and retracted one instrumentation false positive (39-record "shortfall" = store-event counting).
+Full chain in `docs/findings/render.md`. Wide-RE bank grew ~10 clusters (all UNWIRED drafts, §9
+re-verify required at wiring): libgpu (DrawSync/ClearOTagR/GPU-DMA ring/LoadImage streamer/
+PutDrawEnv chain), libsnd (SsSeqCalled + channel leaves + voice-register write), script-interp
+(op5/6/34/36/31 + advanceStep), SOP-intro sub-ticks, ActorTomba enterOuterState0 +
+matrixComposeAttached (+ mode-N table maps, 46+55 case targets), cull-orchestrator tails, pad edge
+fence, Str::length/Font::drawText/glyphEmit, Core::guestMemset, Timing::vsyncCallbackDispatch,
+Sequencer::frameTick. **Next frontier: wire the banked drafts one cluster at a time (line-by-line
+gen re-verify per §9, oracle-gated thunks, ovhit + 0-diff gate each), and extend autonav coverage
+past the intro area so unfired leaves actually gate.**
+
 **SESSION 2026-07-08 (wide-RE-ahead-of-frontier, isolated worktree) — 0x80040000-0x8004FFFF band:
 cube-text popup ledger RE'd + DRAFTED (UNWIRED, not gated); collision-walk cluster RE'd + MAPPED
 (NOT drafted — too risky to fold blind); ~180 addresses in-band still untouched.**
