@@ -94,13 +94,16 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
   const int32_t margin = radiusSum2 - (int16_t)dist16;
   const int32_t bandWidth = (int16_t)reachHi - (int16_t)absDy;
 
-  bool doReposition;
-  if (margin < bandWidth) {
-    c->mem_w32(0x1F80009Cu, (uint32_t)angle);   // stamp the shared approach-angle scratch word
-    doReposition = true;
-  } else {
-    doReposition = (margin < 3);
-  }
+  // BUG FIX (RE cross-check against generated/ov_a00_shard_1.c:3603-3606, gen_func_80112188):
+  // ground truth's `mem_w32(scratch+156, angle)` sits in the DELAY SLOT of the `bne` that branches
+  // on `margin < bandWidth` — per MIPS delay-slot semantics that store executes UNCONDITIONALLY on
+  // every call that reaches this point (both the reposition branch AND the "margin>=bandWidth,
+  // arm-directly" branch below). The prior draft gated the write inside `if (margin < bandWidth)`,
+  // silently dropping it on the arm-directly path and leaving the scratch word stale — the actual
+  // root cause of the frame~1019 melee-encounter SBS divergence at scratchpad 0x1F80009C (mismatched
+  // RA trace inside Trig::ratan2 was a downstream symptom of this stale-write, not a ratan2 bug).
+  c->mem_w32(0x1F80009Cu, (uint32_t)angle);   // stamp the shared approach-angle scratch word (ALWAYS)
+  const bool doReposition = (margin < bandWidth) || (margin < 3);
 
   if (doReposition) {
     // ---- L_80112320: reposition self toward target along `angle`, scaled by the combined radius ----
