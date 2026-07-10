@@ -157,6 +157,7 @@ void Sequencer::channelStopFlagSet() {
 //     r23=seq, r22=chan counter, r21=seq<<16, r20=seq, r19=chan<<16, r18=seqArrayPtr, r17=chan,
 //     r16=chan*176), and every leaf spills r16..r18+ into its own frame — a C++-locals loop leaves
 //     stale register bytes in those spill slots. Same bug class as channelNoteInit's r16 (f154).
+// ORACLE: gen_func_80090BD0 (tools/port_check.py equivalence-gate marker; see docs/port-framework.md)
 void Sequencer::seqChannelDispatch() {
   Core* c = core;
   uint32_t sp0 = c->r[29];

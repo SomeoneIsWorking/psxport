@@ -134,6 +134,7 @@ static int32_t sz4_minmax(bool want_max, int32_t a, int32_t b, int32_t e, int32_
 // a different emitter (or a later loop iteration) reuses that exact pool address, the two engines'
 // "dead" leftover bytes differ — the f158 packet-pool `sbs-div` residual (docs/findings/render.md).
 // Fix: uv0/uv1 moved to fire exactly where gen fires them (right after RTPT, unconditional).
+// ORACLE: ov_a00_gen_8013FB88 (tools/port_check.py equivalence-gate marker; see docs/port-framework.md)
 void OverlayGroundGt3Gt4::gt3(Core* c) {
   uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
   if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) fprintf(stderr, "[ovgtgnd] gt3 call#%ld count=%u\n", n, count); }

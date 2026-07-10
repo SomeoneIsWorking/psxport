@@ -194,6 +194,8 @@ set(PORT_SRC
   game/object/object_list.cpp
   game/object/array8_dispatch.cpp
   game/world/object_table.cpp
+  game/core/demo_leaf_a.cpp     # port_gen.py validation draft (0x8001CE90), UNWIRED dead code
+  game/core/demo_leaf_b.cpp     # port_gen.py validation draft (0x8002311C), UNWIRED dead code
   game/object/script_vm.cpp
   game/object/animation.cpp
   game/input/input.cpp

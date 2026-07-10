@@ -155,6 +155,12 @@ REG_ASSIGN_RE = re.compile(r'^\s*c->r\[(\d+)\] = (.+);\s*$')
 
 CALLEE_SAVED = list(range(16, 24)) + [30]  # r16..r23, r30 (s8/fp) — MIPS o32 callee-saved (ra=r31 separate)
 
+# Address-agnostic memory-write matcher (ANY c->mem_wNN(...) call, sp-relative or not) — used by
+# tools/port_check.py's op-sequence extraction. Deliberately just the width, not the address: address
+# expressions can be arbitrarily reformatted by a faithful rename without changing behavior, but a
+# missing/extra/reordered/width-changed store is a real semantic difference.
+MEM_W_ANY_RE = re.compile(r'c->mem_w(8|16|32)\(')
+
 
 @dataclass
 class StoreRecord:
@@ -386,6 +392,80 @@ def parse_contract(fn: FoundFunction) -> Contract:
     )
 
 
+@dataclass
+class OpSeqCall:
+    ra_const: Optional[str]   # hex string, or None if no r31 literal seen before this call
+    target: Optional[str]     # func_XXXXXXXX / rec_dispatch target literal, or None if unresolved
+
+
+@dataclass
+class OpSequence:
+    """Address-agnostic guest-visible operation sequence, for tools/port_check.py's equivalence
+    check. Reuses the SAME line-level idiom regexes as parse_contract (this module's one parser —
+    see docs/abi-extract.md 'do not fork a second parser'), just projected onto a coarser, renaming-
+    tolerant view: frame open/close sizes, ordered call sites (ra constant + resolved target, in
+    program order — NOT scoped to callee-saved liveness like Contract.call_sites), and the ordered
+    sequence of memory-store WIDTHS (address-agnostic — see MEM_W_ANY_RE)."""
+    frame_opens: list      # ints, program order (normally 0 or 1 entry)
+    frame_closes: list     # ints, program order
+    calls: list             # OpSeqCall, program order
+    mem_write_widths: list  # ints (8/16/32), program order
+
+
+def extract_op_sequence(body_lines) -> "OpSequence":
+    """Extract an OpSequence from a raw list of C/C++ statement lines (gen body OR a native method
+    body — same extraction is applied to both sides by tools/port_check.py). Uses the same
+    delay-slot decompounding as parse_contract so branch-delay-slot statements execute in the right
+    order; a native C++ method has no such compounds, so decompounding is a no-op for it."""
+    frame_opens, frame_closes = [], []
+    calls: list = []
+    widths: list = []
+    pending_ra = None
+
+    # Native ports don't necessarily use the exact `c->r[29] = c->r[29] + (uint32_t)-N;` gen idiom
+    # (e.g. `c->r[29] -= N;`, or `c->r[29] += N;`), so accept both spellings here — this function is
+    # intentionally MORE permissive than parse_contract's FRAME_OPEN_RE/FRAME_CLOSE_RE, which must
+    # stay strict because they gate the authoritative --contract/--scaffold output.
+    frame_dec_re = re.compile(r'c->r\[29\]\s*(?:-=|\+=\s*\(uint32_t\)-|=\s*c->r\[29\]\s*\+\s*\(uint32_t\)-|=\s*[A-Za-z_]\w*\s*-\s*\(?uint32_t\)?)\s*(\d+)')
+    frame_inc_re = re.compile(r'c->r\[29\]\s*(?:\+=|=\s*c->r\[29\]\s*\+\s*\(uint32_t\)|=\s*[A-Za-z_]\w*\s*\+\s*\(?uint32_t\)?)\s*(\d+)')
+
+    stream = []
+    for i, raw in enumerate(body_lines):
+        for stmt in _decompound_line(raw.strip()):
+            stream.append((i, stmt))
+
+    for _line_no, stmt in stream:
+        # frame open (descent) / close (ascent) — checked before generic +=/-= to avoid double count
+        fo = frame_dec_re.search(stmt)
+        fc = frame_inc_re.search(stmt) if not fo else None
+        if fo:
+            frame_opens.append(int(fo.group(1)))
+        elif fc:
+            frame_closes.append(int(fc.group(1)))
+
+        for w in MEM_W_ANY_RE.finditer(stmt):
+            widths.append(int(w.group(1)))
+
+        ram = RA_SET_RE.search(stmt)
+        if ram:
+            pending_ra = ram.group(1)
+
+        cm = CALL_RE.search(stmt)
+        rm = RECDISP_RE.search(stmt) if not cm else None
+        if cm:
+            calls.append(OpSeqCall(ra_const=pending_ra, target=cm.group(1)))
+            pending_ra = None
+        elif rm and 'default:' not in stmt:
+            raw_target = rm.group(1).strip()
+            lit = re.match(r'^0x([0-9A-Fa-f]+)u?$', raw_target)
+            target = ('0x' + lit.group(1).upper()) if lit else None  # None = unresolved (symbolic expr)
+            calls.append(OpSeqCall(ra_const=pending_ra, target=target))
+            pending_ra = None
+
+    return OpSequence(frame_opens=frame_opens, frame_closes=frame_closes, calls=calls,
+                       mem_write_widths=widths)
+
+
 # --------------------------------------------------------------------------------------------------
 # --contract rendering
 # --------------------------------------------------------------------------------------------------
@@ -505,6 +585,44 @@ def render_scaffold(c: Contract) -> str:
     return "\n".join(out)
 
 
+def render_scaffold_guestabi(c: Contract) -> str:
+    """Emit a runtime/recomp/guest_abi.h-based scaffold: a `kSpills` table + `GuestFrame<...>`
+    declaration, ready to paste into a new faithful port. See docs/port-framework.md."""
+    out = []
+    out.append(f'#include "guest_abi.h"')
+    out.append(f"// Guest-stack frame for {c.name} (0x{c.addr}) — table order matches abi_extract's")
+    out.append(f"// 'prologue spills' section exactly (program order). Regenerate if the gen body changes:")
+    out.append(f"//   python3 tools/abi_extract.py 0x{c.addr} --scaffold --guestabi")
+    if c.frame_size == 0:
+        out.append(f"// NOTE: no sp descent detected in the gen body — use an empty-spill zero-size frame:")
+        out.append(f"static constexpr GuestFrameSpill kSpills_{c.addr}[1] = {{}};")
+        out.append(f"// GuestFrame<0, 0> frame(c, kSpills_{c.addr});   // (NumSpills must be 0; adjust decl)")
+    else:
+        n = len(c.prologue_spills)
+        out.append(f"static constexpr GuestFrameSpill kSpills_{c.addr}[{n}] = {{")
+        for s in c.prologue_spills:
+            regname = "31 /*ra*/" if s.reg == 31 else str(s.reg)
+            out.append(f"  {{ {regname}, {s.offset} }},")
+        out.append("};")
+        out.append(f"// At method entry:")
+        out.append(f"//   GuestFrame<{c.frame_size}, {n}> frame(c, kSpills_{c.addr});")
+    out.append("")
+    out.append(f"// Call sites ({len(c.call_sites)}) — use guest_call/guest_dispatch so the ra constant can")
+    out.append(f"// never be forgotten:")
+    for i, cs in enumerate(c.call_sites):
+        ra = f"0x{cs.ra_const}u" if cs.ra_const else "0x????????u /* MISSING in source — investigate */"
+        if cs.kind == "direct":
+            out.append(f"//   guest_call(c, {ra}, {cs.target});   // [{i}] label={cs.label}")
+        else:
+            target_expr = cs.target
+            if target_expr.startswith("rec_dispatch("):
+                target_expr = target_expr[len("rec_dispatch("):-1]
+            out.append(f"//   guest_dispatch(c, {ra}, {target_expr});   // [{i}] label={cs.label}")
+        for r, expr in sorted(cs.live_regs.items()):
+            out.append(f"//     GuestReg<{r}>(c) = {expr};  // mirror gen's live value before this call")
+    return "\n".join(out)
+
+
 # --------------------------------------------------------------------------------------------------
 # --audit (heuristic, best-effort)
 # --------------------------------------------------------------------------------------------------
@@ -584,6 +702,9 @@ def main(argv=None):
     ap.add_argument('addr', help='guest address, hex, e.g. 8003CDD8 or 0x8003CDD8')
     ap.add_argument('--contract', action='store_true', help='emit the ABI contract (default action)')
     ap.add_argument('--scaffold', action='store_true', help='emit a C++ Frame RAII + call-site scaffold')
+    ap.add_argument('--guestabi', action='store_true',
+                     help='with --scaffold, emit the runtime/recomp/guest_abi.h GuestFrame form instead '
+                          'of the ad-hoc struct form')
     ap.add_argument('--audit', metavar='NATIVE_CPP', help='heuristic audit of an existing native port')
     ap.add_argument('--json', action='store_true', help='emit --contract as JSON instead of text')
     ap.add_argument('--repo', default=None, help='repo root (default: dir containing this script\'s parent)')
@@ -597,7 +718,7 @@ def main(argv=None):
 
         did_something = False
         if args.scaffold:
-            print(render_scaffold(contract))
+            print(render_scaffold_guestabi(contract) if args.guestabi else render_scaffold(contract))
             did_something = True
         if args.audit:
             print(render_audit(contract, args.audit))

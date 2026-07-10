@@ -143,7 +143,9 @@ spot-check AFTER Ghidra only.
   it is never a substitute for guest-stack residency. See `docs/faithful-execution.md`. Run
   `tools/abi_extract.py <addr> --contract`/`--scaffold` FIRST — it derives the frame size/spill offsets/
   ra constants/callee-saved liveness straight from `generated/`, so this stops being hand-derived. See
-  `docs/abi-extract.md`.
+  `docs/abi-extract.md`. For a NEW port, prefer `tools/port_gen.py` (byte-faithful draft) +
+  `runtime/recomp/guest_abi.h` (opt-in register/frame proxies) + `tools/port_check.py` (equivalence
+  gate) — see `docs/port-framework.md`.
 
 ## Render — reimplement, don't transcribe
 

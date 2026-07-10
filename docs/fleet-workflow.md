@@ -22,6 +22,13 @@ wants to run the fleet.
 - Prompt skeleton (every ownership agent):
   1. Read CLAUDE.md + faithful-execution.md. RE-first (Ghidra headless; `generated/` C is ground
      truth — Ghidra garbles GTE/COP2). REAL C++ classes in the right `game/` subsystem folder.
+     **Start the draft from `tools/port_gen.py <addr> --class Foo --method bar`** (see
+     `docs/port-framework.md`) — it emits the gen body verbatim as a compilable class method, so the
+     agent's job is renaming/restructuring (verified by `tools/port_check.py`) instead of hand-
+     transcribing the ABI/stack shape from scratch. For a from-scratch hand-write (no `port_gen`
+     draft), use `runtime/recomp/guest_abi.h`'s `GuestReg`/`GuestFrame`/`guest_call`/`guest_dispatch`
+     instead of raw `c->r[]` so the callee-saved-liveness and missing-`ra` bug classes are
+     structurally harder to write.
   2. Self-select an unowned cluster: `PSXPORT_DEBUG=recdep-all` (uncapped dispatch histogram) on the
      default path to rank busy substrate leaves; confirm each unowned via `tools/codemap.py --addr`.
   3. Wire correctly: EngineOverrides intercepts only NATIVE (rec_dispatch) callers; SUBSTRATE callers
@@ -159,6 +166,13 @@ a missing ABI-slot live value, an unmirrored stack frame, `&&`-vs-`||`. So:
   `gen_func_<addr>` / `ov_a00_gen_<addr>` in `generated/` (instruction-exact ground truth — Ghidra garbles
   GTE/COP2 and delay slots), checking every branch polarity, register lifetime, field offset, and guest
   frame + callee-saved spill. Fix all discrepancies before trusting the draft.
+- **Run `tools/port_check.py <native.cpp>` as part of this verify step** (add an `// ORACLE:
+  gen_func_<addr>` marker above the method if it isn't a `port_gen.py` draft already carrying a
+  `// PORT_GEN:` marker). PASS/FAIL/UNPROVABLE per docs/port-framework.md — treat FAIL as a required
+  fix, and manually cross-check any UNPROVABLE (usually an indirect/sibling-method call the tool
+  can't resolve, or a loop-unrolling-boundary width-count artifact — see that doc's Validation §3 for
+  a worked example of telling the two apart) before trusting the draft. This is a mechanical
+  complement to the by-eye diff above, not a replacement for it.
 - The SBS-full 0-diff gate catches these ONLY IF autonav exercises the leaf. Many AI/enemy leaves are NOT
   reached by intro-area autonav (no enemy encounter) — for those, the 0-diff gate proves "no regression to
   the frames reached," and correctness rests on the RE verification, not the gate. Say so honestly; a future

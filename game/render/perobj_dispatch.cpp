@@ -60,6 +60,7 @@
 #include "game.h"
 #include "render.h"
 #include "cfg.h"
+#include "guest_abi.h"   // GuestFrame/guest_dispatch — perModeDispatch's demo migration (docs/port-framework.md)
 
 void rec_dispatch(Core*, uint32_t);          // overlay_router.cpp — the shared choke point for owned/substrate leaves
 void func_800803DC(Core*);                    // generated/shard_disp.c — generic GT3/GT4 packet emitter (still substrate)
@@ -95,18 +96,14 @@ struct CmdListFrame {
     c->r[29] += 56;
   }
 };
-struct PerModeFrame {
-  Core* c; uint32_t sra;
-  explicit PerModeFrame(Core* c_) : c(c_), sra(c_->r[31]) {
-    c->r[29] -= 24;
-    c->mem_w32(c->r[29] + 16, sra);
-  }
-  ~PerModeFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 24;
-  }
-};
 }
+
+// DEMO MIGRATION (docs/port-framework.md validation #4): PerModeFrame's hand-rolled RAII replaced
+// by runtime/recomp/guest_abi.h's GuestFrame<FrameSize, NumSpills> — the contract-driven form
+// tools/abi_extract.py <addr> --scaffold --guestabi emits straight from gen_func_8003F698's real
+// `addiu sp,-24` prologue (ra spill only, at sp+16). Behavior identical; this is purely the OPT-IN
+// style swap the framework's deliverable 2 exists to validate (SBS-full 0-diff gate covers it).
+static constexpr GuestFrameSpill kSpills_8003F698[1] = { { 31 /*ra*/, 16 } };
 
 namespace {
 constexpr uint32_t SCR        = 0x1F800000u;   // PSX scratchpad base (the engine's GTE-compose temp area)
@@ -124,6 +121,7 @@ constexpr uint32_t MVMVA_TRANS  = 0x4A486012u; // MVMVA: camera-rot(CR0-4) x V0 
 
 // FUN_8003CDD8 — per-object cmd-list dispatch: composes the WORLD object transform (camera-rot x
 // object-local, via MVMVA) into GTE CR0-7 for each active render command, then calls FUN_8003F698.
+// ORACLE: gen_func_8003CDD8 (tools/port_check.py equivalence-gate marker; see docs/port-framework.md)
 void Render::cmdListDispatch() {
   Core* c = mCore;
   CmdListFrame frame(c);   // real -56 guest frame (RE: gen_func_8003CDD8 prologue) — descended even
@@ -264,19 +262,19 @@ static uint32_t perModeCaseReturnAddr(uint32_t caseLabel) { return caseLabel + 8
 // + jump table) or the generic GT3/GT4 packet emitter (func_800803DC).
 void Render::perModeDispatch() {
   Core* c = mCore;
-  PerModeFrame frame(c);   // real -24 guest frame (RE: gen_func_8003F698 prologue, ra spill only)
+  GuestFrame<24, 1> frame(c, kSpills_8003F698);   // real -24 guest frame (RE: gen_func_8003F698 prologue, ra spill only)
   const uint32_t flag = c->r[6];
   if (c->mem_r8(MODE_FORCE) == 0 && (flag & 1u) == 0) {
     const uint32_t mode = c->mem_r8(MODE_BYTE);
     if (mode < 22) {
       const uint32_t caseLabel = c->mem_r32(MODE_TABLE + mode * 4);
       const uint32_t target = perModeCaseTarget(caseLabel);
-      if (target != 0) { c->r[31] = perModeCaseReturnAddr(caseLabel); rec_dispatch(c, target); return; }
+      if (target != 0) { guest_dispatch(c, perModeCaseReturnAddr(caseLabel), target); return; }
       // caseLabel == 0x8003F788 (or an unrecognized label) -> the recomp's own `default:
       // rec_dispatch(c, c->r[2])` would dispatch the RAW label address here; since 0x8003F788 IS the
       // generic-fallback label (whose body is just `func_800803DC(c)`, no rec_dispatch), reproduce
       // that directly rather than rec_dispatch-ing a label address that has no recompiled entry.
-      if (caseLabel != 0x8003F788u) { c->r[31] = perModeCaseReturnAddr(caseLabel); rec_dispatch(c, caseLabel); return; }
+      if (caseLabel != 0x8003F788u) { guest_dispatch(c, perModeCaseReturnAddr(caseLabel), caseLabel); return; }
     }
   }
   c->r[31] = 0x8003F790u;   // RE'd: L_8003F788's own r31 set before func_800803DC (the generic label)
