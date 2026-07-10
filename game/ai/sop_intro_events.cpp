@@ -39,17 +39,17 @@ constexpr uint32_t SCENE_BEAT = 0x800BF9B4u;   // shared SOP scene-beat byte (do
 
 // ===================================================================================================
 // FUN_8010AF60 — sopBeatAdvanceWalk. CONFIDENCE: state-machine shape + every field write/call arg is a
-// direct Ghidra transcription (HIGH). The TRIGGER is INFERRED: this address has ZERO static code xrefs
-// in ram_sop.bin (checked via tools/ghidra_xrefs.py — no `jal`/`j` anywhere targets it) but its raw
-// 4-byte address IS embedded as literal DATA at 0x8010CA7C, inside a small table
-// (0x8010CA60..0x8010CAAC, entries shaped {u16, addr32, u32, u32} every 0x18 bytes) that also holds
-// 0x8010AE9C (an address in the sop_overlay_shadow cluster) and 0x8010B078 (this file's other beat
-// sequencer) — i.e. it looks like a per-KEYFRAME ANIMATION-EVENT callback table (the same region as the
-// pilot's anim data at 0x8010CA28, docs/engine_re.md), consulted indirectly (jalr through a loaded
-// pointer) by the animation system rather than called directly by name. NOT confirmed which anim clip
-// fires it or via which of Animation::attach/animTick's still-substrate leaves. Left UNWIRED for that
-// reason — a future pass should trace the indirect call dynamically (e.g. a write-watch on
-// 0x8010AF60's own code page, or single-stepping the pilot's walk-start anim) before registering it.
+// direct Ghidra transcription (HIGH). TRIGGER (corrected 2026-07-10, op05WaitFrames diagnosis): the
+// "per-KEYFRAME ANIMATION-EVENT callback table" hypothesis below is FALSIFIED. 0x8010CA60/0x8010CA78/
+// 0x8010CA90 are op-0x3E (call-fnptr) entries of the pilot's cutscene SCRIPT at 0x8010CA28 (seeded by
+// beh_sop_intro_pilot's init via animEnvInit(obj, 0x80017FE8, 0x8010CA28) = ScriptInterp::init),
+// stepped per-frame by ScriptInterp::step from beh_sop_intro_pilot::state_running — NOT an animation-
+// event table, and NOT reached indirectly by the animation system. This address (0x8010AE9C, an
+// address in the sop_overlay_shadow cluster) and 0x8010B078 (this file's other beat sequencer) also
+// live as literal DATA at 0x8010CA60..0x8010CAAC (entries shaped {u16, addr32, u32, u32} every 0x18
+// bytes), which is exactly the script's op-0x3E fnptr encoding. Both this function and
+// sopBeatAdvanceNarration ARE registered (see RegisterSopIntroEventOverrides below) — the "Left
+// UNWIRED" state is stale.
 //
 // Behavior (4-state timer sequencer on node+0x78 / node+0x42, byte-exact):
 //   state 0: -> state 1, timer = 0x1E (30).
@@ -111,8 +111,9 @@ uint32_t sopBeatAdvanceWalk(Core* c) {                          // FUN_8010AF60
 
 // ===================================================================================================
 // FUN_8010B078 — sopBeatAdvanceNarration. CONFIDENCE: same shape as sopBeatAdvanceWalk (HIGH for the
-// transcription, INFERRED trigger — its address is data at 0x8010CA94 in the SAME table described
-// above). Sets SCENE_BEAT = 5 (the narration/void beat beh_sop_intro_narration gates its running body
+// transcription; TRIGGER is the pilot's cutscene SCRIPT at 0x8010CA28, see the corrected note above —
+// its address is an op-0x3E fnptr entry at 0x8010CA94, NOT an animation-event table). Sets
+// SCENE_BEAT = 5 (the narration/void beat beh_sop_intro_narration gates its running body
 // on) and re-snaps the BG transform block (GraphicsBind::setXformBlkBody with FIXED globals, not the
 // calling node — a0=0x800E8008 the shared BG object per game/scene/sop.cpp:509-510, a1=0x8010C974 a
 // SOP-overlay-resident transform-data blob) before a 10-frame hold that stamps a completion flag.

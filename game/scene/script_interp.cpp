@@ -166,19 +166,19 @@ constexpr uint32_t kClaimGateByte  = 0x800BF80Fu;          // op34: single-byte 
                                                              // an unrelated table's address got copied).
 }  // namespace
 
-// FUN_80042090 — VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard_7.c:5216.
-// NOTE ON RETURN VALUE: the guest computes `(decremented << 16) >> 31` (arithmetic) — a MIPS
-// sign-replicate idiom, NOT a 0/1 flag. It yields exactly 0 (still counting down) or -1 i.e.
-// 0xFFFFFFFF (went negative). Per step()'s ret-code switch (RET_PAUSE=0 / RET_ADVANCE_*={1,2,3}),
-// 0 hits RET_PAUSE (sets the pause flag, exits); -1 matches NONE of the switch's cases and falls
-// to `default` (exits WITHOUT setting the pause flag, WITHOUT advancing) — so this op never
-// actually advances the script cursor itself in either branch; only the pause-flag side effect
-// differs. Do not "fix" this to return 1 — it would change step()'s dispatch outcome.
+// FUN_80042090 — VERIFIED + WIRED (frontier tier, 2026-07-10; return-value fix 2026-07-10).
+// 1:1 with generated/shard_7.c:5216 (gen_func_80042090). The guest's r[2] is `uint32_t`, so
+// `(decremented << 16) >> 31` is a LOGICAL shift (guest srl, not sra) — it extracts bit15 of the
+// decremented 16-bit counter as 0 (still counting) or 1 (expired), NOT a sign-replicate 0/-1
+// idiom. Per step()'s ret-code switch (RET_PAUSE=0 / RET_ADVANCE_*={1,2,3}), 0 hits RET_PAUSE
+// (sets the pause flag, exits without advancing); 1 hits RET_ADVANCE_0_A, so
+// advanceEntry(obj,0) DOES advance the script cursor on expiry — the wait op advancing on
+// expiry is correct behavior, confirmed against the substrate ground truth.
 int ScriptInterp::op05WaitFrames(uint32_t obj) {
   Core* c = core;
   const uint16_t decremented = (uint16_t)(c->mem_r16(obj + OBJ_ARG_A_72) - 1u);
   c->mem_w16(obj + OBJ_ARG_A_72, decremented);
-  return ((int16_t)decremented < 0) ? -1 : 0;
+  return ((int16_t)decremented < 0) ? 1 : 0;
 }
 
 // FUN_800420AC — VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard_0.c:5231. See

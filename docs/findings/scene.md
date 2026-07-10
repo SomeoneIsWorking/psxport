@@ -298,7 +298,26 @@
   registry + g_tab merge; see docs/findings/animation.md). ovhit is now reliable under SBS.- **refs:** game/ai/sop_intro_events.{h,cpp}, game/ai/beh_sop_intro_lifted.cpp, game/scene/demo.{h,cpp},
   runtime/recomp/boot.cpp.
 
-## pc_skip exec: prologue vortex backdrop missing + scene SM stalls before area load (2026-07-10, OPEN)
+## pc_skip exec: prologue vortex backdrop missing + scene SM stalls before area load (2026-07-10, RESOLVED)
+
+- **status: RESOLVED (2026-07-10).** Root cause: `ScriptInterp::op05WaitFrames` (game/scene/script_
+  interp.cpp) returned -1 on wait-expiry, mis-RE'd as a MIPS sign-replicate 0/-1 idiom. The generated
+  substrate (`generated/shard_7.c:5216`, `gen_func_80042090`) computes `c->r[2] = c->r[2] << 16;
+  c->r[2] = c->r[2] >> 31;` on a `uint32_t` — a LOGICAL shift (srl, not sra) yielding 0 or 1, not
+  0/-1. In `ScriptInterp::step()`'s ret-code switch, ret=1 is RET_ADVANCE_0_A (cursor advances);
+  ret=-1 falls to `default` (never advances). Every script in any exec path consulting
+  EngineOverrides (default/pc_skip) was permanently parked at its first `op05` wait — the GAME-
+  prologue pilot actor's script at 0x8010CA28 opens with `op05 wait 0x3C`, so it never reached the
+  downstream beat-advance chain (SCENE_BEAT 0x800BF9B4: 0→1→2→3→5) that spawns the vortex void prop
+  (beat==5 gate in beh_sop_intro_narration). Covers BOTH symptom 1 (wrong backdrop) and symptom 2 (SM
+  freeze at 50=2/52=2 — same stalled script never reaches its terminal ops). Fix: flip the expiry
+  return to `1`, rewrite the stale banner comment. GATE=1 core (recomp_path) was never affected — it
+  doesn't consult EngineOverrides, so this only masked default/pc_skip.
+- **also falsified in the same pass**: `game/ai/sop_intro_events.cpp`'s "per-KEYFRAME ANIMATION-EVENT
+  callback table at 0x8010CA60" hypothesis — those are op-0x3E (call-fnptr) SCRIPT entries of the same
+  pilot script at 0x8010CA28, not an animation-event table; both sopBeatAdvanceWalk/Narration ARE
+  registered in RegisterSopIntroEventOverrides (the "Left UNWIRED" note was stale).
+- **verification**: see below (rebuild + f600 screenshot + SCENE_BEAT trace + SBS-full gate).
 
 - **how found**: operator live oracle-compare session (screenshot matrix drive, scratch/screenshots/oc/).
   Identical REPL input scripts (newgame; run 600; walk right; tap x) in two configs:

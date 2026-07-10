@@ -265,7 +265,7 @@ public:
   // legitimately still lags at f1 because ITS fork isn't rendezvous-gated yet will show up here
   // honestly as a divergence — that's the harness doing its job, not a false positive to mask.
   static constexpr int kObsPersist = 1;
-  static constexpr int kNObs = 5;               // fixed regions + area-deref + SPU RAM (below)
+  static constexpr int kNObs = 6;               // fixed regions + area-deref + SPU RAM (below)
   int      mObsCnt[8]  = {0};                   // consecutive differing frames per observable
   bool     mObsDone[8] = {false};               // reported already (report once, stay running)
   uint8_t* mObsSpuA = nullptr;                  // 512 KB SPU RAM peek buffers
@@ -878,6 +878,9 @@ void Sbs::Impl::checkObservables() {
     { "AUDIO seq_slots",       0x800BE3B8u, 0x800BE3F8u },
     { "AUDIO global_scale",    0x800FB165u, 0x800FB166u },
     { "libcd file-table",      0x800BE0F0u, 0x800BE110u },
+    { "SCENE_BEAT",            0x800BF9B4u, 0x800BF9B5u },  // SOP scene/backdrop identity byte —
+                                                             // docs/findings/scene.md "prologue
+                                                             // vortex backdrop missing" (2026-07-10)
   };
   auto ramA = [this](uint32_t a){ return mA->core.ram[(a & 0x1FFFFFFFu)]; };
   auto ramB = [this](uint32_t a){ return mB->core.ram[(a & 0x1FFFFFFFu)]; };
