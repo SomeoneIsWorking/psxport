@@ -617,12 +617,15 @@ void RegisterSopIntroEventOverrides(Game* game) {
   ov_sop_set_override(0x8010B11Cu, ov_sopOrbitPathStep);
   ov.register_(0x8010B44Cu, "sopIntroEffectSpawn",      ov_sopIntroEffectSpawn);
   ov_sop_set_override(0x8010B44Cu, ov_sopIntroEffectSpawn);
-  // sopLiftedSubtick (0x8010B588) DELIBERATELY NOT registered here — see docs/findings/ai.md
-  // "sopLiftedSubtick / ScriptInterp::step SBS divergence" (2026-07-10). §9 re-verify found
-  // sopLiftedSubtick itself byte-exact (transcription + guest-stack frame both checked against
-  // ov_sop_gen_8010B588), but wiring it exposed a PRE-EXISTING divergence in the already-native
-  // ScriptInterp::step (game/scene/script_interp.cpp, NOT part of this cluster) at obj+0x71 the
-  // first time SOP's specific script content exercises it under SBS. Root-causing ScriptInterp is
-  // out of this cluster's scope; beh_sop_intro_lifted.cpp's caller stays on rec_dispatch (runs the
-  // oracle-verified substrate body) until a follow-up session fixes ScriptInterp::step and re-wires.
+  // sopLiftedSubtick (0x8010B588) — WIRED (2026-07-10, frontier convergence pass). Was deliberately
+  // left unregistered because wiring it exposed a pre-existing ScriptInterp::step divergence at
+  // obj+0x71 (docs/findings/scene.md "ScriptInterp opcode cluster" / ai.md cross-ref): the RET_PAUSE
+  // handler ORed the wrong mask (0x02 instead of the ground-truth 0x01, re-derived from
+  // generated/shard_3.c:11302 gen_func_80041098's own delay-slot chain) — fixed in
+  // game/scene/script_interp.cpp. sopLiftedSubtick itself was already byte-exact; only the
+  // registration was gated on the ScriptInterp fix. beh_sop_intro_lifted.cpp's overlay_subtick stays
+  // on rec_dispatch(c, 0x8010B588u) — now transparently routed native since rec_dispatch consults
+  // EngineOverrides before falling to the substrate body.
+  ov.register_(0x8010B588u, "sopLiftedSubtick",         ov_sopLiftedSubtick);
+  ov_sop_set_override(0x8010B588u, ov_sopLiftedSubtick);
 }

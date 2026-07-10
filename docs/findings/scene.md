@@ -171,16 +171,20 @@
   runtime/recomp/{boot,native_boot}.cpp.
 
 ## SOP intro-cutscene cluster (0x8010AF60-0x8010BEAC) + Demo::s3SubMachine (0x80106AC4) — §9 promote pass (2026-07-10)
-- **status:** SOP cluster 5/6 promoted VERIFIED+WIRED (sopBeatAdvanceWalk 0x8010AF60,
+- **status:** SOP cluster now 6/6 promoted VERIFIED+WIRED (sopBeatAdvanceWalk 0x8010AF60,
   sopBeatAdvanceNarration 0x8010B078, sopOrbitPathStep 0x8010B11C, sopIntroEffectTick 0x8010B2D4,
-  sopIntroEffectSpawn 0x8010B44C, beh_orbit_spark_effect 0x8010BEAC — `game/ai/sop_intro_events.cpp`).
-  `sopLiftedSubtick` (0x8010B588) and `Demo::s3SubMachine` (0x80106AC4, `game/scene/demo.cpp`) are
-  §9-verified byte-exact but DELIBERATELY left UNWIRED — each exposed a pre-existing bug OUTSIDE this
-  cluster when wired (see below). SBS-full 0-diff held to f9120 with the 5/6 + demo unwired.
-  `PSXPORT_DEBUG=dispatch` over a 95s intro-area autonav run shows ZERO hits for all 6 SOP addresses —
-  intro-area autonav doesn't reach the SOP scene (a later cutscene, not the opening intro). Correctness
-  for the wired 5 rests on the §9 line-by-line re-verify, not the gate; a future session with SOP-area
-  coverage should re-gate to confirm they actually fire.
+  sopIntroEffectSpawn 0x8010B44C, beh_orbit_spark_effect 0x8010BEAC, **sopLiftedSubtick 0x8010B588 —
+  RESOLVED 2026-07-10, frontier convergence pass, see the "sopLiftedSubtick / ScriptInterp::step"
+  finding below** — `game/ai/sop_intro_events.cpp`). `Demo::s3SubMachine` (0x80106AC4,
+  `game/scene/demo.cpp`) is still §9-verified byte-exact but DELIBERATELY left UNWIRED — a separate
+  pre-existing r16 register-liveness gap OUTSIDE this cluster (unrelated to ScriptInterp, see below).
+  **Correction to the earlier claim "intro-area autonav doesn't reach the SOP scene":** that was true
+  only for `PSXPORT_AUTO_SKIP=1` (which deliberately SKIPS the intro narration by pulsing Start).
+  `PSXPORT_SBS_AUTONAV=1` (the standard SBS gate's own autonav, `docs/fleet-workflow.md` §2) does NOT
+  skip it — the SOP narration IS the opening intro cutscene (`docs/narration-port.md`) and fires
+  `sopLiftedSubtick` from frame ~62 onward, hundreds of hits by f5000. SBS-full 0-diff (`PSXPORT_SBS_
+  AUTONAV=1`, standard gate command) now holds through f5070+ WITH all 6 SOP addresses wired and firing
+  — a genuine content-specific gate, not just "never reached."
 - **systemic bug found (§9 re-verify catch, all 7 functions incl. Demo's):** EVERY function in the
   original wide-RE draft was logically byte-exact (confirmed instruction-by-instruction against
   `generated/ov_sop_shard_*.c` / `generated/ov_demo_shard_0.c`) but NONE mirrored the guest-stack
@@ -192,21 +196,28 @@
   leaves call still-substrate `rec_dispatch` leaves internally (Animation::attach, GraphicsBind::
   recordArrayInit, etc.) that DO clobber the shared r16/r17/r31 register file, so without the mirror
   the CALLER's registers come back corrupted, not just the stack bytes.
-- **finding: sopLiftedSubtick wiring exposes a pre-existing ScriptInterp::step divergence** —
-  registering `sopLiftedSubtick` (states 1/6 call `ScriptInterp::step(node)`, already-native,
-  `game/scene/script_interp.cpp`, NOT part of this cluster) produces an SBS diff at `node+0x71`
-  (`OBJ_FLAGS_71`) starting ~frame 63 of intro-area autonav: native (A) stays `02`, oracle (B) advances
-  to `03`. Isolated by disabling ONLY `sopLiftedSubtick`'s `EngineOverrides::register_`/
-  `ov_sop_set_override` calls — the other 5 SOP functions + Demo all still 0-diff. `sopLiftedSubtick`
-  itself re-verified byte-exact (including its stack frame) against `ov_sop_gen_8010B588`; the
-  divergence traces to `ScriptInterp::step`'s handling of SOP's specific script opcode content (an
-  opcode/ret-code path this leaf is apparently the first caller to exercise under SBS since it was
-  wired). `game/ai/beh_sop_intro_lifted.cpp`'s `overlay_subtick` deliberately stays on
-  `rec_dispatch(c, 0x8010B588u)` (runs the oracle-verified substrate body under BOTH pc_skip=true
-  default play AND pc_skip=false/SBS) rather than calling the native `sopLiftedSubtick` directly, so
-  normal gameplay isn't exposed to the latent ScriptInterp bug either. NEXT: root-cause
-  `ScriptInterp::step`/`advanceEntry` against `generated/shard_3.c:11302` (`gen_func_80041098`) for
-  the specific opcode SOP's script data selects — out of THIS cluster's scope.
+- **finding: sopLiftedSubtick / ScriptInterp::step divergence — RESOLVED (2026-07-10, frontier
+  convergence pass).** Registering `sopLiftedSubtick` (states 1/6 call `ScriptInterp::step(node)`,
+  already-native, `game/scene/script_interp.cpp`, NOT part of this cluster) produced an SBS diff at
+  `node+0x71` (`OBJ_FLAGS_71`) starting ~frame 63: native (A) stayed `02`, oracle (B) advanced to `03`.
+  `sopLiftedSubtick` itself was already byte-exact; the bug was in `ScriptInterp::step`'s RET_PAUSE
+  handler (§9 re-verify against `generated/shard_3.c:11302` `gen_func_80041098`, line-by-line delay-
+  slot trace of `L_800410C0..L_80041178`): the handler ORed `obj[+0x71] |= 0x02u`, but tracing the
+  guest's own delay-slot chain (`r2` gets set to `1` — NOT `2` — by the time control reaches the OR at
+  `L_80041138`, via three chained `{compare; delay-slot-assign; branch}` blocks at 0x800410FC-
+  0x80041120) proves the ground-truth mask is `0x01u`. Native re-ORing the already-set 0x02 pause bit
+  with the wrong mask was a no-op (stayed `02`); oracle correctly ORed in the new `0x01` bit on top of
+  the existing `0x02` (`03`) — exactly matching the recorded symptom. Fixed in
+  `game/scene/script_interp.cpp` (`RET_PAUSE` case, plus the stale header-comment table and the
+  `OBJ_FLAGS_71` bit-layout comment, both of which had mistranscribed the same bit). `sopLiftedSubtick`
+  is now registered in `EngineOverrides` (`ScriptInterp::registerOverrides`-adjacent
+  `RegisterSopIntroEventOverrides`, `game/ai/sop_intro_events.cpp`); `beh_sop_intro_lifted.cpp`'s
+  `overlay_subtick` call site is UNCHANGED (`rec_dispatch(c, 0x8010B588u)`) since `rec_dispatch`
+  already routes through `EngineOverrides` before falling to substrate — no taxi needed. **Gated:**
+  `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1` (standard gate) 0-diff through f5070+ with
+  `sopLiftedSubtick` firing hundreds of times from f62 (the SOP narration IS the opening intro, see
+  the status note above); `PSXPORT_MIRROR_VERIFY=0x8010B588 PSXPORT_MIRROR_VERIFY_CONTINUE=1` armed
+  over the same run: 0 mismatches across ~4400 invocations through f4470+.
 - **finding: Demo::s3SubMachine wiring exposes a pre-existing r16 register-liveness gap** — registering
   `Demo::s3SubMachine` produces an SBS diff at the guest stack (`0x801FE98C`, sp+16 slot of
   `demo_frame_s3()`'s call frame) starting frame 13: oracle (B) spills r16=`0x1F800000` (the live loop

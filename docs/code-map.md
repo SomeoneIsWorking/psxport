@@ -81,26 +81,26 @@ Totals: 647 native fns, 535 owned addresses, 618 LIVE / 29 ORPHAN.
 | 0x80040B48 | LIVE | `SceneEvents::armBody` | game/scene/scene_events.cpp:44 |  | The arm primitive body. Wrapped by SceneEvents::arm below so it can be… |
 | 0x80040B48 | LIVE | `SceneEvents::arm` | game/scene/scene_events.cpp:79 |  |  |
 | 0x80040CDC | LIVE | `Engine::animEnvInit` | game/core/engine.cpp:873 | 0x80040DE0 | Engine::animEnvInit — FUN_80040CDC. |
-| 0x80040CDC | LIVE | `ScriptInterp::init` | game/scene/script_interp.cpp:95 |  |  |
-| 0x80040DE0 | LIVE | `ScriptInterp::loadCurrentEntry` | game/scene/script_interp.cpp:117 |  |  |
-| 0x80040E54 | LIVE | `ScriptInterp::advanceEntry` | game/scene/script_interp.cpp:135 |  |  |
-| 0x80040FA0 | LIVE | `ScriptInterp::advanceStep` | game/scene/script_interp.cpp:226 | 0x80040E54 | VERIFIED + WIRED (frontier tier, 2026-07-10; advanceEntry() now calls … |
-| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:295 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
-| 0x80041098 | LIVE | `ScriptInterp::step` | game/scene/script_interp.cpp:299 |  |  |
-| 0x800412CC | LIVE | `ScriptInterp::callFnptr` | game/scene/script_interp.cpp:274 |  |  |
-| 0x8004139C | LIVE | `ScriptInterp::stepAngleToward` | game/scene/script_interp.cpp:368 |  | leaf angle-stepper (no guest frame). See script_interp.h for the seman… |
-| 0x80041438 | LIVE | `ScriptInterp::turnFacing` | game/scene/script_interp.cpp:395 |  | thin wrapper: turnFacing(obj, targetAngle, step) = stepAngleToward(obj… |
-| 0x80041438 | LIVE | `ScriptInterp::turnFacingFramed` | game/scene/script_interp.cpp:401 |  | Guest-ABI twin — mirrors FUN_80041438's own sp-=24 / ra-spill-at-+16 f… |
-| 0x80041468 | LIVE | `ScriptInterp::op31TurnTowardTarget` | game/scene/script_interp.cpp:628 | 0x80085690 | op31 — FUN_80041468 (opcode table index 31). See script_interp.h for t… |
+| 0x80040CDC | LIVE | `ScriptInterp::init` | game/scene/script_interp.cpp:105 |  |  |
+| 0x80040DE0 | LIVE | `ScriptInterp::loadCurrentEntry` | game/scene/script_interp.cpp:127 |  |  |
+| 0x80040E54 | LIVE | `ScriptInterp::advanceEntry` | game/scene/script_interp.cpp:145 |  |  |
+| 0x80040FA0 | LIVE | `ScriptInterp::advanceStep` | game/scene/script_interp.cpp:236 | 0x80040E54 | VERIFIED + WIRED (frontier tier, 2026-07-10; advanceEntry() now calls … |
+| 0x80041098 | LIVE | `beh_script_interp_step` | game/scene/script_interp.cpp:305 |  | C-ABI wrapper for BehaviorDispatch::kTable registration. Takes obj fro… |
+| 0x80041098 | LIVE | `ScriptInterp::step` | game/scene/script_interp.cpp:309 |  |  |
+| 0x800412CC | LIVE | `ScriptInterp::callFnptr` | game/scene/script_interp.cpp:284 |  |  |
+| 0x8004139C | LIVE | `ScriptInterp::stepAngleToward` | game/scene/script_interp.cpp:378 |  | leaf angle-stepper (no guest frame). See script_interp.h for the seman… |
+| 0x80041438 | LIVE | `ScriptInterp::turnFacing` | game/scene/script_interp.cpp:405 |  | thin wrapper: turnFacing(obj, targetAngle, step) = stepAngleToward(obj… |
+| 0x80041438 | LIVE | `ScriptInterp::turnFacingFramed` | game/scene/script_interp.cpp:411 |  | Guest-ABI twin — mirrors FUN_80041438's own sp-=24 / ra-spill-at-+16 f… |
+| 0x80041468 | LIVE | `ScriptInterp::op31TurnTowardTarget` | game/scene/script_interp.cpp:638 | 0x80085690 | op31 — FUN_80041468 (opcode table index 31). See script_interp.h for t… |
 | 0x8004190C | LIVE | `Engine::animTick` | game/core/engine.cpp:890 |  | Engine::animTick — FUN_8004190C. Ticks the animation VM (native Animat… |
-| 0x80042090 | LIVE | `ScriptInterp::op05WaitFrames` | game/scene/script_interp.cpp:167 |  | VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard… |
-| 0x800420AC | LIVE | `ScriptInterp::op06TestSceneFlag` | game/scene/script_interp.cpp:176 |  | VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard… |
+| 0x80042090 | LIVE | `ScriptInterp::op05WaitFrames` | game/scene/script_interp.cpp:177 |  | VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard… |
+| 0x800420AC | LIVE | `ScriptInterp::op06TestSceneFlag` | game/scene/script_interp.cpp:186 |  | VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard… |
 | 0x80042310 | LIVE | `ActorTomba::resetLoadGate` | game/player/actor_tomba.cpp:865 | 0x8001CF78 0x80074590 0x80074F24 | resetLoadGate — guest FUN_80042310. See actor_tomba.h for the full RE … |
 | 0x80042728 | LIVE | `BgSceneTransitionSm::readyForProgress` | game/scene/bg_scene_transition_sm.cpp:206 |  |  |
-| 0x80042E10 | LIVE | `ScriptInterp::op34ClaimGate` | game/scene/script_interp.cpp:201 |  | VERIFIED + WIRED (frontier tier, 2026-07-10; §9 re-verify caught+fixed… |
-| 0x80042EA4 | LIVE | `ScriptInterp::stepEventPulse` | game/scene/script_interp.cpp:416 |  | see script_interp.h for the full semantics writeup. |
-| 0x80042EA4 | LIVE | `ScriptInterp::stepEventPulseFramed` | game/scene/script_interp.cpp:444 |  | Guest-ABI twin — mirrors FUN_80042EA4's own sp-=24 / ra-spill-at-+16 f… |
-| 0x80043108 | LIVE | `ScriptInterp::op36MoveTowardScriptTarget` | game/scene/script_interp.cpp:462 | 0x80084080 0x80085690 | op36 — FUN_80043108 (opcode table index 36). See script_interp.h for t… |
+| 0x80042E10 | LIVE | `ScriptInterp::op34ClaimGate` | game/scene/script_interp.cpp:211 |  | VERIFIED + WIRED (frontier tier, 2026-07-10; §9 re-verify caught+fixed… |
+| 0x80042EA4 | LIVE | `ScriptInterp::stepEventPulse` | game/scene/script_interp.cpp:426 |  | see script_interp.h for the full semantics writeup. |
+| 0x80042EA4 | LIVE | `ScriptInterp::stepEventPulseFramed` | game/scene/script_interp.cpp:454 |  | Guest-ABI twin — mirrors FUN_80042EA4's own sp-=24 / ra-spill-at-+16 f… |
+| 0x80043108 | LIVE | `ScriptInterp::op36MoveTowardScriptTarget` | game/scene/script_interp.cpp:472 | 0x80084080 0x80085690 | op36 — FUN_80043108 (opcode table index 36). See script_interp.h for t… |
 | 0x80044BD4 | LIVE | `native_area_load_bd4` | game/core/engine.cpp:1555 | 0x800452C0 | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
 | 0x80044BD4 | LIVE | `Engine::submode1Faithful` | game/core/engine.cpp:2133 | 0x80044BD4 0x8005245C 0x80107230 0x8010766C 0x80107790 | pc_faithful walkable-field area machine — mirror of ov_game_gen_801088… |
 | 0x80044BD4 | LIVE | `Engine::stage0AdvanceSkip` | game/core/engine.cpp:3284 |  | ── STAGE0ADVANCE — pc_skip cadence ───────────────────────────────────… |
@@ -504,9 +504,9 @@ Totals: 647 native fns, 535 owned addresses, 618 LIVE / 29 ORPHAN.
 | 0x8010B11C | LIVE | `sopOrbitPathStep` | game/ai/sop_intro_events.cpp:181 | 0x80077C40 | ======================================================================… |
 | 0x8010B2D4 | LIVE | `sopIntroEffectTick` | game/ai/sop_intro_events.cpp:311 | 0x800519E0 0x8007778C 0x80077C40 | ======================================================================… |
 | 0x8010B44C | LIVE | `sopIntroEffectSpawn` | game/ai/sop_intro_events.cpp:265 |  | ======================================================================… |
-| 0x8010B588 | LIVE | `overlay_subtick` | game/ai/beh_sop_intro_lifted.cpp:61 | 0x8010B588 | (sopLiftedSubtick, sop_intro_events.cpp) is §9-verified byte-exact but… |
+| 0x8010B588 | LIVE | `overlay_subtick` | game/ai/beh_sop_intro_lifted.cpp:62 | 0x8010B588 | (sopLiftedSubtick, sop_intro_events.cpp) is VERIFIED + WIRED (2026-07-… |
 | 0x8010B588 | LIVE | `sopLiftedSubtick` | game/ai/sop_intro_events.cpp:474 |  | GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010B588 pushes `addiu sp,… |
-| 0x8010B798 | LIVE | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:91 |  |  |
+| 0x8010B798 | LIVE | `beh_sop_intro_lifted` | game/ai/beh_sop_intro_lifted.cpp:92 |  |  |
 | 0x8010B990 | LIVE | `beh_sop_intro_narration` | game/ai/beh_sop_intro_narration.cpp:126 |  |  |
 | 0x8010BEAC | LIVE | `beh_orbit_spark_effect` | game/ai/sop_intro_events.cpp:513 |  | ======================================================================… |
 | 0x8010E904 | LIVE | `ActorTomba::postFrameWaterCheck` | game/player/actor_tomba.cpp:326 |  | ======================================================================… |

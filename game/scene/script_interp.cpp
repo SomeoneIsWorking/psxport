@@ -35,7 +35,10 @@ constexpr uint32_t OBJ_MARKER_46     = 0x46u;  // init writes 0xFF here
 constexpr uint32_t OBJ_SCRATCH_10    = 0x10u;  // init zeroes this word
 constexpr uint32_t OBJ_SCRIPT_PTR    = 0x6Cu;  // current script cursor
 constexpr uint32_t OBJ_PROGRESS_70   = 0x70u;  // loop guard byte (signed; step exits when <= 0)
-constexpr uint32_t OBJ_FLAGS_71      = 0x71u;  // flag byte (bit1 = paused, bit2 = 0x4000-flag)
+constexpr uint32_t OBJ_FLAGS_71      = 0x71u;  // flag byte (bit0=0x01 = RET_PAUSE step()-exit flag
+                                                // [fixed 2026-07-10, was mistranscribed as bit1/0x02],
+                                                // bit1=0x02 = init's OP_FLAG_INIT_MODE state, bit2=0x04
+                                                // = 0x4000-flag)
 constexpr uint32_t OBJ_ARG_A_72      = 0x72u;  // current entry's argA (u16)
 constexpr uint32_t OBJ_FNPTR_LO_74   = 0x74u;  // current entry's argB — LOW half of op-0x03E fnptr
 constexpr uint32_t OBJ_FNPTR_HI_76   = 0x76u;  // current entry's argC — HIGH half of op-0x03E fnptr
@@ -78,12 +81,19 @@ constexpr uint16_t OP_FLAG_HAS_EXTRA = 0x2000u;  // if set, entry is 16 bytes (e
 constexpr uint16_t OP_FLAG_INIT_MODE = 0x1000u;  // init: obj[+0x71] = 2 when this bit is set
 constexpr uint16_t OP_FLAG_INIT_BIT2 = 0x4000u;  // init: obj[+0x71] |= 4 when this bit is set
 
-// step()'s return-code convention (VERBATIM from disas of FUN_80041098 @0x800410FC..0x80041174):
-//   ret == 0      -> set obj[+0x71] |= 2, EXIT step loop immediately (no advance)
+// step()'s return-code convention (VERBATIM re-derivation from generated/shard_3.c:11302
+// gen_func_80041098, 2026-07-10 — the ORIGINAL RE below had the RET_PAUSE mask wrong, see bug note):
+//   ret == 0      -> set obj[+0x71] |= 1, EXIT step loop immediately (no advance)
 //   ret == 1      -> FUN_80040FA0(obj, 0), continue-if-FA0-returns-1
 //   ret == 2      -> FUN_80040FA0(obj, 1), continue-if-FA0-returns-1
 //   ret == 3      -> FUN_80040FA0(obj, 0), continue-if-FA0-returns-1  (same as ret==1 — falls into it)
 //   ret >= 4      -> no advance; exit loop (recomp defaults s0=3, loop check `s0 == 1` fails)
+// BUG FIX (2026-07-10, docs/findings/scene.md "sopLiftedSubtick wiring exposes a pre-existing
+// ScriptInterp::step divergence"): RET_PAUSE's mask was transcribed as 0x02 in the original RE but
+// the ground truth (traced through gen_func_80041098's own delay-slot chain, r2 ends up 1 not 2 by
+// the time L_80041138 ORs it into obj+0x71) is 0x01. This exactly matches the recorded SBS symptom:
+// native stayed 0x02 (re-ORing the already-set pause bit with the wrong mask is a no-op), oracle
+// advanced to 0x03 (correctly ORing in the NEW bit 0x01 on top of the existing 0x02).
 // The loop continues ONLY when FA0 returns exactly 1; anything else exits with the FA0 return
 // discarded (guest fn's overall v0 is 0).
 constexpr uint32_t RET_PAUSE       = 0u;
@@ -332,7 +342,7 @@ void ScriptInterp::step(uint32_t obj) {
     switch (ret) {
       case RET_PAUSE: {
         uint8_t f = c->mem_r8(obj + OBJ_FLAGS_71);
-        c->mem_w8(obj + OBJ_FLAGS_71, (uint8_t)(f | 0x02u));
+        c->mem_w8(obj + OBJ_FLAGS_71, (uint8_t)(f | 0x01u));
         return;
       }
       case RET_ADVANCE_0_A:
