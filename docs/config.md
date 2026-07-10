@@ -392,6 +392,13 @@ or level — they can't be a bare channel:
   `POLYDUMP`/`POLYAT`, `FADEDBG`, `SEMIDUMP`, `VK_SHOT`/`VK_SHOTSEQ`, `VK_DIFF`, `GPUTRACE`,
   `VRAMDUMP`/`VRAMDUMP_AT`, `RAMDUMP`/`RAMDUMP_FRAME`, `CLOBBERDUMP`, `CLUTWATCH`, `WWATCH`, `CW`/`CW_BT`,
   `XA_DBG` (level), `BGMDBG` (level), `GPU_DUMP`, `WAV`, `SS`, `SBS`.
+  - `WWATCH` lines print the exact GPU frame number (`[wwatch] f<N> ...`) — do NOT bracket by the
+    30-frame `[native_boot] frame` prints, that aliasing has produced false "X frames early"
+    conclusions. `PSXPORT_WWATCH_BT=1` adds a host backtrace per hit (names the gen_func_*/native
+    chain even where guest pc/ra are stale under native execution) plus a `[wwatch-regs]` line with
+    a0-a3/s0-s7 — the fastest way to attribute a write when pc/ra lie.
+  - `PSXPORT_DEBUG=script` — one line per ScriptInterp::step opcode dispatch (obj, cursor, opword,
+    ret). Native-step configs only; the oracle steps scripts in the substrate and logs nothing.
 - **Dual-core render-diff harness (`PSXPORT_DUALCORE=1`, class DualCore, dualcore.cpp):** `DC_N`
   (frames after gameplay-start, default 180, `cfg_int`), `DC_LO`/`DC_HI` (focused guest region
   base/end, default 0x800B0000..0x80110000, `cfg_str`, hex OK), `DC_ALL` (include the render-only

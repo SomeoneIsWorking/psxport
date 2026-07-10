@@ -246,6 +246,16 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
               sm ? c->mem_r16(sm + 0x4c) : 0xffff, sm ? c->mem_r16(sm + 0x4e) : 0xffff,
               sm ? c->mem_r16(sm + 0x50) : 0xffff, sm ? c->mem_r16(sm + 0x52) : 0xffff,
               c->mem_r8(0x1f80019bu), c->mem_r8(0x800bf870u), c->mem_r32(0x80109450u), c->mem_r8(0x1f800234u));
+      // Callee-saved regs often still hold the guest caller's locals (e.g. s0 = the object node in
+      // the 0x8007D208 SFX-update family) — dump them plus the node fields s0 would imply.
+      fprintf(stderr, "[miss-regs] s0=0x%08X s1=0x%08X s2=0x%08X s3=0x%08X\n",
+              c->r[16], c->r[17], c->r[18], c->r[19]);
+      uint32_t s0 = c->r[16];
+      if (s0 >= 0x80000000u && s0 < 0x80200000u - 0x60u) {
+        fprintf(stderr, "[miss-node s0] +0x00=0x%08X +0x1c(handler)=0x%08X +0x0d=%u +0x29=%u +0x44=%d +0x46=0x%02X +0x5c=%d\n",
+                c->mem_r32(s0), c->mem_r32(s0 + 0x1cu), c->mem_r8(s0 + 0x0du), c->mem_r8(s0 + 0x29u),
+                (int16_t)c->mem_r16(s0 + 0x44u), c->mem_r8(s0 + 0x46u), (int16_t)c->mem_r16(s0 + 0x5cu));
+      }
     }
     fprintf(stderr,
       "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n"

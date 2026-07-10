@@ -940,6 +940,11 @@ void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
   c->mem_w32(obj + 0xACu, c->mem_r32(obj + 0xACu) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x2Eu));
   c->mem_w32(obj + 0xB0u, c->mem_r32(obj + 0xB0u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x32u));
   c->mem_w32(obj + 0xB4u, c->mem_r32(obj + 0xB4u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x36u));
+  // gen_func_800518FC re-arms a0 = obj (`r4 = r17`) before this call; leaving r4 at the previous
+  // dispatch's obj+0x98 made FUN_80051128 walk a fake skeleton (obj+0x98 as the object base) whose
+  // "bone pointer" slots land in the NEIGHBOR node — matMul then zeroed SOP script data at
+  // 0x8010CAD8 (prologue-vortex cause #3, 2026-07-10).
+  c->r[4] = obj;
   rec_dispatch(c, 0x80051128u);                                       // finalize (substrate)
 }
 

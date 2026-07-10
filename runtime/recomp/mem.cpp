@@ -75,9 +75,18 @@ void Core::wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
   }
   uint32_t ka = a | 0x80000000u;
   if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
-    if (cfg_str("PSXPORT_WWATCH"))
-      fprintf(stderr, "[wwatch] core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X\n",
-              (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
+    if (cfg_str("PSXPORT_WWATCH")) {
+      extern int gpu_frame_no(Core*);
+      fprintf(stderr, "[wwatch] f%d core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X\n",
+              gpu_frame_no(this), (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
+      // PSXPORT_WWATCH_BT=1 — host backtrace per hit. Names the gen_func_*/native call chain even
+      // for static gen-to-gen calls (where guest pc/ra go stale under native execution).
+      if (cfg_str("PSXPORT_WWATCH_BT")) {
+        fprintf(stderr, "[wwatch-regs] a0=%08X a1=%08X a2=%08X a3=%08X s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X\n",
+                r[4], r[5], r[6], r[7], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
+        void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n");
+      }
+    }
     if (storeWatchCb) storeWatchCb(this, ka, v, w);
   }
 }

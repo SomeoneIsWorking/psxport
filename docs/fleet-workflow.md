@@ -13,7 +13,9 @@ Task verbs decide the model tier:
   (traces/dumps/censuses, NO interpretation), transcribe against `generated/` ground truth with the
   port framework (`port_gen`/`abi_extract`/`port_check`), apply an EXACT fix spec written by a
   higher tier, run gates, integrate-style chores. A sonnet prompt must never contain the verbs
-  "root-cause", "figure out why", or an unspecified "fix".
+  "root-cause", "figure out why", or the word "fix" at all — spell out in detail exactly what to do,
+  and keep each sonnet task SMALL in scope (one function, one trace, one spec application; split
+  anything bigger into multiple small tasks or move it up a tier).
 - **Fable (main session / high-tier agents):** diagnosis, root-cause, fix DESIGN, adversarial
   verification of applied fixes, and anything where a wrong-but-plausible answer costs more than the
   tokens saved. For big problems use the ultracode Workflow pipeline:
@@ -24,6 +26,11 @@ Task verbs decide the model tier:
   stage in the main loop from the evidence.
 - **Operator (main session):** picks targets, authors specs/workflows, INTEGRATES commits onto
   `main`, runs the gates, pushes, and personally reviews diffs + drives the game after each batch.
+  The operator READS CODE, REs, and edits directly — do not route thinking-work through agents to
+  avoid it (USER 2026-07-10: "you need to be aware of the codebase as well; use Sonnet for manual
+  labor"). Delegate only mechanical labor: long trace collection, spec application across files,
+  gate runs, transcription. The 2026-07-10 cause-#3 diagnosis (stale-a0 matMul clobber) was found
+  operator-hands-on in ~10 tool calls after two agent rounds produced only partial evidence.
 - Hard rule: **no agent ever debugs UNOWNED code** — own it first (port the substrate leaf), then
   debug. Always keep a wave of agents closing the ownership gap.
 

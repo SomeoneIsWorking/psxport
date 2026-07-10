@@ -365,3 +365,55 @@
   substrate calls for its RETURN VALUE must set c->r[2]; grep for `(void)` wrappers when wiring.
 - **refs**: workflow wf_a7f630fd-dc6; game/ai/sop_intro_events.{h,cpp}, game/scene/script_interp.cpp
   (callFnptr banner), runtime/recomp/sbs.cpp (SCENE_BEAT observable).
+
+## Prologue-vortex root cause #3: objMatrixCompose dispatched FUN_80051128 with stale a0 → matMul zeroed SOP script data (2026-07-10, RESOLVED)
+
+- **stacked on** causes #1 (op05 expiry return) and #2 (op3E wrapper r[2]) — with both fixed, the
+  default config crashed at ~f750: `rec_dispatch_miss 0x801464C0` (caller `gen_func_8001D4C8`,
+  a0=0).
+- **cause chain** (each step verified live, exact frames):
+  1. `Engine::objMatrixCompose` (FUN_800518FC, game/core/engine.cpp) dispatched its finalize leaf
+     `rec_dispatch(0x80051128)` WITHOUT re-arming a0 — `gen_func_800518FC` does `r4 = r17` (obj)
+     first. r4 was still `obj+0x98` from the preceding 0x80084470 call.
+  2. `FUN_80051128` (skeleton bone-matrix composer) walked `obj+0x98` as an object: fake bone count
+     0x50, "bone pointer" slot i=7 lands at `obj+0x174` — INSIDE THE NEIGHBOR NODE, on the SOP intro
+     effect child's script cursor (0x8010CAC0). matMul then wrote a zero matrix over SOP overlay
+     script data at 0x8010CAD8/0x8010CADC (caught by PSXPORT_WWATCH_BT: `[wwatch-regs] s3=800FBB00
+     s1=8010CAC0 s2=7`).
+  3. The child script's entry at 0x8010CAD8 (op 0x101E on the oracle) read back as opword 0x0000 =
+     table[0] = `FUN_80041C54` (spawn positional-SFX emitter) with argA=0 → emitter node with sfx
+     id 0 / zone fields 0 → first tick ran the zone-SFX dispatcher `FUN_8001D41C` → jump table at
+     0x80010080 indexed by area byte 0x800BF870 (=0 during the prologue) → trampoline
+     `gen_func_8001D4C8` → hard call 0x801464C0 (area-0 overlay, not resident) → recomp-MISS.
+- **trigger config**: only paths where objMatrixCompose runs native (default/pc_skip). The clobber
+  fired from `beh_sop_intro_narration` state_running sub==1 (beat 5, ~f544+).
+- **second defect found in the same diagnosis**: `spawn_narration_prop`
+  (game/ai/beh_sop_intro_narration.cpp) staged the FUN_8003116C arg block PACKED (X/Y/Z at
+  +0/+2/+4); `ov_sop_gen_8010B990` stages halfwords at sp+18/+22/+26 with a1=sp+16 — the callee
+  reads X/Y/Z at a1+2/+6/+10. The narration prop spawned at garbage coordinates. Fixed to the gen
+  layout.
+- **fixes**: `c->r[4] = obj` before the finalize dispatch (engine.cpp); arg-block layout
+  (beh_sop_intro_narration.cpp). Verified: default runs past f1500 with 0 misses, script bytes at
+  0x8010CAD8 stay `1E 10 ...`, narration text sequence matches oracle at aligned frames, SBS-full
+  AUTONAV=combat 0-diff (f9030).
+- **measurement traps closed** (recorded so nobody re-walks them):
+  - wwatch pc/ra go STALE under native execution (native mem_w* doesn't advance c->pc) — writer
+    attribution by pc alone produced three wrong suspects (spawn, classifier, sequencer) before
+    PSXPORT_WWATCH_BT (host backtrace + guest regs) pinned matMul. Use the BT.
+  - The 30-frame `[native_boot] frame` brackets ALIAS event timing: "beat 3 fires 30 frames early"
+    was false — exact-frame wwatch shows EVERY beat lands at a constant +12-frame offset
+    (default enters GAME 12 frames before the oracle; cadence identical). Frame-aligned compares
+    must use default fN ↔ oracle fN+12 for this drive script.
+  - `pc_skip exec + RENDER_PSX=1` shows NO scene entities — that's ARCHITECTURAL (entity render is
+    owned by the pc walker `ov_scene_native`, which doesn't feed the PSX OT), not an exec bug. Do
+    not use that combination to judge exec state; compare pc_render pictures or RAM.
+- **still open after this chain** (default config, prologue, aligned-frame compare vs oracle):
+  (a) beat-5 vortex swirl + spinning-Tomba visual missing under pc_render — the swirl packet
+  builder is substrate overlay code whose output pc_render must rebuild natively (packets 0x34/0x09
+  into 0x800C0xxx on the oracle; nothing on default); (b) oversized black shadow blob bottom-right
+  at ~f300 (pc_render); (c) a missing character sprite + lighting/fade differences ~f500;
+  (d) pilot anim-field divergence at aligned frames (+0x0E/+0x38/+0x8A/+0x92) — suspect follow-on
+  of the walk anim chain, needs its own diagnosis. These go on the default-config burndown.
+- **refs**: game/core/engine.cpp (objMatrixCompose), game/ai/beh_sop_intro_narration.cpp,
+  runtime/recomp/mem.cpp (WWATCH frame/BT/regs), runtime/recomp/hle.cpp (miss-regs/miss-node),
+  game/scene/script_interp.cpp (`PSXPORT_DEBUG=script`), docs/config.md.

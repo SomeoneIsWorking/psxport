@@ -67,24 +67,29 @@ inline void post_cull_update  (Core* c, uint32_t o) { c->engine.objMatrixCompose
 inline void bounds_cull       (Core* c, uint32_t o) { c->r[4] = o; rec_dispatch(c, 0x8007778Cu); }
 
 // Spawn a narration prop at (X, Y, Z+0x76C). FUN_8003116C(a0=type, a1=spawn-arg-block-ptr, a2=0) —
-// stays substrate. We stage a 3-halfword (X, Y, Z) block on the guest stack immediately below the
-// current sp, hand its address in a1, and restore sp after the dispatch.
+// stays substrate. We stage the block on the guest stack and restore sp after the dispatch.
+//
+// BLOCK LAYOUT (fixed 2026-07-10, prologue-vortex): ov_sop_gen_8010B990 stages the halfwords at
+// sp+18/+22/+26 and passes a1 = sp+16 — i.e. the callee reads X at a1+2, Y at a1+6, Z at a1+10
+// (stride-4 SVECTOR-style slots), NOT a packed +0/+2/+4 triple. The original packed layout fed
+// FUN_8003116C garbage coordinates, so the narration prop (the vortex/text visual) spawned at a
+// junk position.
 void spawn_narration_prop(Core* c, uint32_t obj) {
   const uint32_t sp_save = c->r[29];
   const uint32_t ra_save = c->r[31];
-  c->r[29] = sp_save - 0x20u;                          // small frame — 3 halfwords + padding
-  const uint32_t sp = c->r[29];
+  c->r[29] = sp_save - 0x30u;                          // mirrors the gen handler's own sp-48 frame
+  const uint32_t blk = c->r[29] + 16u;                 // a1 = sp+16, as in the gen body
 
   const uint16_t sx = c->mem_r16(obj + 0x2E);
   const uint16_t sy = c->mem_r16(obj + 0x32);
   const int16_t  z  = (int16_t)c->mem_r16(obj + 0x36) + SPAWN_Z_OFFSET;
 
-  c->mem_w16(sp + 0x00u, sx);                          // arg-block layout: X, Y, Z at +0/+2/+4
-  c->mem_w16(sp + 0x02u, sy);
-  c->mem_w16(sp + 0x04u, (uint16_t)z);
+  c->mem_w16(blk + 0x02u, sx);                         // gen: sw16 @ sp+18
+  c->mem_w16(blk + 0x06u, sy);                         // gen: sw16 @ sp+22
+  c->mem_w16(blk + 0x0Au, (uint16_t)z);                // gen: sw16 @ sp+26
 
   c->r[4] = SPAWN_TYPE;
-  c->r[5] = sp;
+  c->r[5] = blk;
   c->r[6] = 0;
   rec_dispatch(c, 0x8003116Cu);                        // narration-prop spawn (substrate)
 
