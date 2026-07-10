@@ -204,6 +204,14 @@ uint32_t Demo::s3SubMachine() { Core* c = core;                 // FUN_80106AC4
   if (proceed) {
     c->r[4] = 0; rec_dispatch(c, 0x80106690u);                              // still substrate
     c->r[4] = 1; c->r[5] = (c->mem_r8(sm + 0x68) != 2) ? 1u : 0u;
+    // ov_demo_gen_80106AC4:333 sets s1(r17)=0x1F800000 in the jal DELAY SLOT right before this call —
+    // NOT an argument to 0x80106824 (a0/a1=r4/r5 only; 0x80106824 just spills+restores incoming r17
+    // verbatim, never reading it), but the CALLER reusing its own callee-saved s1 as a scratch base
+    // register it wants ready for the post-call read (line 334: sm = *(r17+312) = *0x1F800138). Since
+    // 0x80106824 spills the INCOMING r17 to its OWN guest stack (sp+36) before restoring it, that spill
+    // byte is part of the byte-exact guest-stack comparison — mirror the exact register prep so the
+    // spilled value matches oracle (was leaking our loop's persistent r17=2 into that slot instead).
+    c->r[17] = 0x1F800000u;
     rec_dispatch(c, 0x80106824u);                                           // still substrate
 
     sm = c->mem_r32(SM_PTR);                                                // reload (matches the recomp's re-read)

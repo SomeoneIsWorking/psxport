@@ -108,14 +108,13 @@ void register_engine_overrides(Game* game) {
   c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
   c->engine.script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)
   RegisterSopIntroEventOverrides(game);               // SOP intro-cutscene sub-tick/sub-motion/timer cluster (0x8010AF60/8010B078/8010B11C/8010B2D4/8010B44C/8010BEAC — sopLiftedSubtick 0x8010B588 deliberately unwired, docs/findings/ai.md)
-  // Demo::registerOverrides(game) DELIBERATELY NOT called — see docs/findings/ai.md "Demo::s3SubMachine
-  // r16 register-liveness SBS divergence" (2026-07-10). §9 re-verify found Demo::s3SubMachine itself
-  // byte-exact, but wiring it exposed a pre-existing register-liveness gap: demo_frame_s3() (this
-  // file's OWN pre-existing native s3-substate caller, not part of this pass) invokes it with
-  // whatever's currently in c->r[16] rather than the LIVE loop constant (0x1F800000) Demo::
-  // stageBodyFaithful documents as required at every dispatch boundary — some earlier native
-  // substate (demo_frame_s1/s2, also pre-existing) doesn't preserve it. Root-causing that gap is out
-  // of this cluster's scope; a follow-up session should fix the r16 liveness chain and re-wire.
+  Demo::registerOverrides(game);      // main-menu title cursor sub-machine (0x80106AC4) — the r16/r17
+  // register-liveness gap that blocked this wire (docs/findings/ai.md "Demo::s3SubMachine r16
+  // register-liveness SBS divergence") is FIXED (2026-07-10): s3SubMachine's own port was missing the
+  // `r17 = 0x1F800000` scratch-register prep ov_demo_gen_80106AC4:333 does right before calling
+  // 0x80106824 — that instruction's only purpose is a post-call re-read of *0x1F800138, but 0x80106824
+  // spills the INCOMING r17 to its own guest stack (sp+36) before restoring it, so the value must
+  // match for byte-exact SBS. Root cause was never r16 (that was already correct) — see the finding.
 }
 
 int main(int argc, char** argv) {
