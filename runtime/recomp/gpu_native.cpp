@@ -847,7 +847,11 @@ void GpuState::gp0_exec(Core* core) {
         if (!is3d && gpu_gpu_wide_engine(core) && s_prev_had3d) {  // 2D widen only on gameplay frames
           // HUD: identity (shader centers it). Backdrop AND full-screen fade/dim: stretch-to-fill so the fade
           // covers the whole wide FB (no undimmed margins, #21). See ws_2d_local_x.
-          int fill = bg || fade_full;
+          // #38: stretch-fill uses PROVENANCE only (node_is_bg), not `bg`'s coverage heuristic — a
+          // large screen-space panel (weapon carousel) can exceed bg_2d's >=3/4-screen threshold and get
+          // mis-tagged backdrop, bleeding it to the wide-screen edges. `bg` itself (RQ_BACKGROUND depth
+          // band) is left untouched.
+          int fill = node_is_bg(s_cur_node) || fade_full;
           for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(core, xs[i], fill); } }   // engine-owned 2D layout
       // DIAG PSXPORT_PAINTER=1: force PURE PSX OT painter order (is3d=0 / no bg split) for EVERY prim, so the
       // frame composites exactly as the PSX ordering table would. Render the field with and without this and
@@ -1038,7 +1042,10 @@ void GpuState::gp0_exec(Core* core) {
       // FB; HUD/UI is identity (the relocation shader's +margin already centers it). See ws_2d_local_x.
       { int gpu_gpu_wide_engine(Core*);
         if (gpu_gpu_wide_engine(core) && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
-          int fill = bg || fade_full;                     // backdrop AND full-screen fade/dim stretch-to-fill (#21)
+          // #38: PROVENANCE-only backdrop test for stretch-fill (node_is_bg / sprite_is_bg_texpage), not
+          // `bg`'s coverage heuristic — pins the weapon carousel panel to the centered/HUD branch instead
+          // of stretch-filling it to the screen edges. `bg` (RQ_BACKGROUND band) is unchanged.
+          int fill = (node_is_bg(s_cur_node) || sprite_is_bg_texpage(core, s_tp_x, s_tp_y)) || fade_full;  // backdrop AND full-screen fade/dim stretch-to-fill (#21)
           XL = ws_2d_local_x(core, XL, fill);                   // engine-owned 2D layout (HUD centered, bg/fade fills)
           XR = ws_2d_local_x(core, XR, fill);
         } }
