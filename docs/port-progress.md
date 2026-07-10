@@ -2854,3 +2854,23 @@ themselves are LIVE but dispatch out to substrate for every case body.
   gate (say so honestly; re-gate with cutscene/movement-script coverage in a future session). Full
   writeup: `docs/findings/scene.md` "ScriptInterp opcode cluster — §9 re-verify + frontier-tier
   wiring".
+  (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.
+- **GPU-DMA cluster CLOSED — Enqueue + LoadImage streamer wired, 6/6 (frontier agent, 2026-07-10
+  follow-up).** Drafted+verified+wired `Render::gpuLoadImageStream` (0x80082734, the "LoadImage-
+  style FIFO streamer" the entry above left mapped-not-drafted) — line-by-line re-verify against
+  gen found zero bugs, it was already byte-faithful. Re-ran the planned isolation
+  (`PSXPORT_SBS_PREWATCH=0x801FF154`) with the streamer native and found the REAL root cause was
+  never the streamer: `GpuDmaQueueEnqueue`'s draft captured its guest ABI args (`fn`/`argValOrPtr`/
+  `sizeBytes`/`arg3`, real MIPS s0-s3/r16-r19) as plain C++ locals instead of writing them into the
+  LIVE emulated register file — so when Enqueue's fast path dispatched into the streamer, the
+  streamer's own callee-save prologue spilled STALE register content (left over from an ancestor
+  caller's frame) instead of Enqueue's real live values, an SBS-fatal 1-byte diff from frame 0.
+  Fixed by writing `c->r[16..19]` directly (matching gen's real register assignments) and aliasing
+  read sites into them. Found + fixed the SAME bug class (by inspection) in `GpuDmaQueueSync`
+  (s0/r16=depth across a nested Drain call) and `GpuDmaQueueDrain` (s0/s1 = BUSY_BIT/READY_BIT
+  across the drain loop's nested dispatches) — both previously claimed "verified" by the prior
+  wiring pass. `GpuDmaSend` checked clean (its only nested calls are true HLE leaves). SBS-full
+  gate: 0-diff through f3690 (95s autonav window); dispatch-count parity confirmed directly via
+  `PSXPORT_DISPWATCH` (streamer 6361/6361 exact). Full writeup: `docs/findings/render.md` "GPU-DMA
+  Enqueue residual CLOSED". This closes the last open item in the GPU-DMA/libgpu band from
+  `docs/engine_re.md`'s 2026-07-09/10 wide-RE waves.

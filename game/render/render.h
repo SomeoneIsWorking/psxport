@@ -222,6 +222,11 @@ public:
   void drawSync();     // FUN_80080F6C(mode)
   void clearOTagR();   // FUN_80081458(ot,entries)
 
+  // ---- SUBSTRATE MIRROR: libgpu LoadImage()-internal chunked GP0-FIFO pixel streamer (wired 2026-07-10)
+  // 0x80082734 — see game/render/wide_re_gpu_loadimage_streamer.cpp for the full RE (struct map,
+  // control flow, dead-code note). Guest ABI: a0(r4)=rectPtr, a1(r5)=srcPtr; ret v0.
+  void gpuLoadImageStream();  // FUN_80082734(rectPtr,srcPtr) -> -1 timeout/empty, else 0
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

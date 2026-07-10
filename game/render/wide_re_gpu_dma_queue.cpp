@@ -152,7 +152,7 @@ constexpr uint32_t FN_ISR_REGISTER    = 0x80085B80u;  // (mode, fnPtr) install/u
 constexpr uint32_t FN_DRAIN           = 0x80082FB4u;  // this cluster's own Drain, see below
 }  // namespace
 
-// func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeBytes, arg3). RE-VERIFIED 2026-07-10 but LEFT UNWIRED (see the install-fn note at the bottom of this file).
+// func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeBytes, arg3). VERIFIED & WIRED 2026-07-10 (see the install-fn note at the bottom of this file; the prior register-liveness bug is documented in docs/findings/render.md).
 // RE'd from generated/shard_5.c:13804 gen_func_80082D04 (~165 gen-C ln). The single highest-value
 // target in the band (824 free-roam rec_dispatch hits / 600 frames). Guest ABI: a0=fn-ptr to later
 // dispatch, a1=scalar value OR pointer-to-data (shape picked by a2), a2=size in BYTES of data to
@@ -166,14 +166,32 @@ void Render::gpuDmaQueueEnqueue() {
   Core* c = mCore;
   c->r[29] -= 40;
   c->mem_w32(c->r[29] + 28, c->r[19]);
-  const uint32_t fn = c->r[4];             // s3
+  c->r[19] = c->r[4];             // s3 = fn
   c->mem_w32(c->r[29] + 16, c->r[16]);
-  const uint32_t argValOrPtr = c->r[5];    // s0
+  c->r[16] = c->r[5];             // s0 = argValOrPtr
   c->mem_w32(c->r[29] + 20, c->r[17]);
-  const uint32_t sizeBytes = c->r[6];      // s1
+  c->r[17] = c->r[6];             // s1 = sizeBytes
   c->mem_w32(c->r[29] + 24, c->r[18]);
   c->mem_w32(c->r[29] + 32, c->r[31]);
-  const uint32_t arg3 = c->r[7];           // s2
+  c->r[18] = c->r[7];             // s2 = arg3
+
+  // BUG FIX (2026-07-10, streamer-wiring re-isolation): s0-s3 MUST stay LIVE in the emulated
+  // register file (c->r[16..19]), not just captured as C++ locals + stack spills. gen keeps
+  // real MIPS s0-s3 live in the CPU registers for the whole function; every nested rec_dispatch
+  // call below (fn/Drain/ISR_REGISTER/...) is a callee whose OWN prologue spills WHATEVER is
+  // currently in c->r[16..19] to ITS OWN stack frame — that's how MIPS callee-save works. A
+  // draft that only stores these in local C++ variables leaves c->r[16..19] holding the
+  // CALLER's stale values, so a nested callee spills the wrong (pre-Enqueue) register content,
+  // diverging from gen. Root-caused via PSXPORT_SBS_PREWATCH=0x801FF154: with the streamer wired
+  // native, core A wrote a stale pointer-shaped value (leftover from gen_func_80081218's r17)
+  // at the streamer's own r17-spill slot, while core B (real gen) correctly wrote sizeBytes=8 —
+  // proving the streamer's spill of ITS caller's r17 was reading Enqueue's genuinely-live s1
+  // register in gen but a STALE one in native. Aliases below read straight from c->r[] so every
+  // access (including the retry-loop's re-reads) sees the SAME live storage gen uses.
+  const uint32_t& fn = c->r[19];
+  const uint32_t& argValOrPtr = c->r[16];
+  const uint32_t& sizeBytes = c->r[17];
+  const uint32_t& arg3 = c->r[18];
 
   auto epilogue = [&](uint32_t retVal) {
     c->r[2] = retVal;
@@ -311,9 +329,15 @@ void Render::gpuDmaQueueEnqueue() {
 // Guest ABI: no args. Returns v0: 1 if the DMA channel was already busy on entry (nothing drained),
 // -1 on timeout, else the remaining queue depth after draining.
 //
-// Frame -32, spills ra (sp+24), s1/r17 (sp+20), s0/r16 (sp+16) — both s-regs are pure scratch here
-// (the gen body reuses them as bitmask temporaries after spilling; this port uses locals instead,
-// since only the STACK BYTES need to match, not host-register contents).
+// Frame -32, spills ra (sp+24), s1/r17 (sp+20), s0/r16 (sp+16) — the gen body reuses r16/r17 as
+// bitmask temporaries (BUSY_BIT/READY_BIT) live across the drain loop's nested dispatch calls
+// (ISR_REGISTER, the ring entry's arbitrary `fn`). BUG FIX (2026-07-10, same class as
+// GpuDmaQueueEnqueue's residual fix, root-caused via PSXPORT_SBS_PREWATCH=0x801FF154): those
+// nested callees' OWN prologues spill whatever is CURRENTLY in c->r[16]/c->r[17] to their own
+// frames — so this port keeps them genuinely live in the register file (matching gen's exact
+// r16=BUSY_BIT/r17=READY_BIT assignment right before the drain loop, generated/shard_6.c:14644-45),
+// not just local C++ variables. (The prior "only the STACK BYTES need to match, not host-register
+// contents" comment was WRONG — proven by the Enqueue residual — corrected here.)
 void Render::gpuDmaQueueDrain() {
   Core* c = mCore;
   uint32_t stateWordEarly = c->mem_r32(c->mem_r32(GPU_DMA_STATE_PTR));
@@ -348,6 +372,10 @@ void Render::gpuDmaQueueDrain() {
   }
 
   if (doDrain) {
+    // gen sets these live right before the loop (shard_6.c:14644-45) — kept live in the register
+    // file (not locals) so the loop's nested dispatch calls spill the correct bytes (see header).
+    c->r[17] = GPU_DMA_READY_BIT;  // 0x04000000
+    c->r[16] = GPU_DMA_BUSY_BIT;   // 0x01000000
     // L_8008302C drain loop.
     for (;;) {
       uint32_t tail = c->mem_r32(RING_TAIL);
@@ -484,7 +512,13 @@ void Render::gpuDmaQueueSync() {
   // mode != 0: single-shot poll.
   uint32_t head0 = c->mem_r32(RING_HEAD);
   uint32_t tail0 = c->mem_r32(RING_TAIL);
-  uint32_t depth = (head0 - tail0) & 63u;
+  // BUG FIX (2026-07-10, same class as GpuDmaQueueEnqueue's residual fix): gen keeps `depth` LIVE
+  // in s0/r16 (spilled/restored at sp+16) for the WHOLE mode!=0 branch, including across the
+  // FN_DRAIN call below — Drain's own prologue spills whatever is CURRENTLY in c->r[16] to its own
+  // frame, so r16 must carry the real depth value here, not just a C++ local, or Drain's spilled
+  // byte diverges from gen (same bug PSXPORT_SBS_PREWATCH=0x801FF154 found in Enqueue).
+  c->r[16] = (head0 - tail0) & 63u;
+  const uint32_t& depth = c->r[16];
   // FN_DRAIN spills ra — mirror gen's r31 (0x80083444).
   if (depth != 0) { c->r[31] = 0x80083444u; rec_dispatch(c, FN_DRAIN); }
 
@@ -567,12 +601,13 @@ void Render::gpuDmaSend() {
 // oracle-gated engine_set_override_main thunk is the correct install path (see
 // runtime/recomp/engine_override_thunk.cpp): it keeps SBS core B running the pure gen_func_* body.
 namespace {
-// ov_gpuDmaQueueEnqueue intentionally omitted — 0x80082D04 stays unwired, see the note below.
+void ov_gpuDmaQueueEnqueue(Core* c) { c->mRender->gpuDmaQueueEnqueue(); }
 void ov_gpuDmaQueueDrain(Core* c)   { c->mRender->gpuDmaQueueDrain(); }
 void ov_gpuDmaQueueSync(Core* c)    { c->mRender->gpuDmaQueueSync(); }
 void ov_gpuDmaSend(Core* c)         { c->mRender->gpuDmaSend(); }
 }  // namespace
 
+extern void gen_func_80082D04(Core*);
 extern void gen_func_80082FB4(Core*);
 extern void gen_func_80083364(Core*);
 extern void gen_func_80082424(Core*);
@@ -582,32 +617,27 @@ void gpu_dma_queue_install() {
   if (done) return;
   done = true;
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
-  // 0x80082D04 (GpuDmaQueueEnqueue) is DELIBERATELY LEFT UNWIRED — see docs/findings/render.md
-  // "gpu_dma_queue_enqueue residual". Isolation testing (SBS-full, PSXPORT_THUNK_FORCE_GEN
-  // bisection) proved: (a) a real bug WAS found and fixed here (GPU_QSTAT_ACTIVE must be written
-  // UNCONDITIONALLY every call — a MIPS branch-delay-slot store the draft had wrongly gated on
-  // `started==0`); (b) even after that fix, wiring Enqueue alone (everything else forced to gen)
-  // still produces a real, reproducible SBS diff at 0x801FF154, root-caused via
-  // PSXPORT_SBS_PREWATCH to a write INSIDE the still-substrate, UNOWNED gen_func_80082734 (the
-  // "LoadImage-style FIFO streamer" mapped but not drafted — see wide_re_gpu_dma_queue.cpp's file
-  // header) that Enqueue's fast path reaches via `rec_dispatch(c, fn)`. gen_func_80082734 is
-  // byte-identical code on both cores and its own inputs (r4/r5, guest sp) were confirmed IDENTICAL
-  // at the call site, yet it writes a different value at (argValOrPtr+4) — meaning some earlier
-  // memory content it depends on (plausibly the global max-W/H clip shorts at 0x800A5964/66, or
-  // the caller's stack-resident rect struct) already differs before this call, for a reason not
-  // yet isolated. Drain/Sync/Send/DrawSync/ClearOTagR are each independently verified 0-diff (SBS
-  // full, 5000+ frames) in isolation AND combined with Enqueue left on gen — wire those 5 now,
-  // leave Enqueue for a dedicated follow-up pass per docs/fleet-workflow.md §9's honest-gate rule.
+  // 0x80082D04 (GpuDmaQueueEnqueue) — WIRED 2026-07-10. History: isolation testing (SBS-full,
+  // PSXPORT_THUNK_FORCE_GEN bisection) first found and fixed a real bug (GPU_QSTAT_ACTIVE must be
+  // written UNCONDITIONALLY every call — a MIPS branch-delay-slot store the draft had wrongly gated
+  // on `started==0`), then left Enqueue unwired because wiring it alone (everything else forced to
+  // gen) still produced a real SBS diff at 0x801FF154, traced via PSXPORT_SBS_PREWATCH to a write
+  // INSIDE the then-still-substrate, UNOWNED gen_func_80082734 (the "LoadImage-style FIFO streamer",
+  // mapped but not yet drafted at the time). That streamer is now DRAFTED, RE-VERIFIED (see
+  // game/render/wide_re_gpu_loadimage_streamer.cpp) and WIRED via engine_set_override_main
+  // (gpu_loadimage_streamer_install(), called immediately below in game_tomba2.cpp's install order).
+  // With the streamer native, the residual is closed: see docs/findings/render.md for the re-run
+  // isolation result.
   //
-  // OVHIT CAVEAT (2026-07-10, PSXPORT_DEBUG=ovhit): with Enqueue unwired, GPU_QSTAT_STARTED is
-  // NEVER written anywhere in the whole recompiled binary (grepped generated/shard_*.c) — so
-  // Enqueue's fast (immediate-dispatch) path is unconditionally taken every call, the ring is
-  // never populated, and Drain's ring-drain/ISR path is DEAD CODE in the areas this playthrough's
-  // autonav reaches: `0x80082FB4 : native=0 oracle=0` — Drain is INSTALLED and its 0-diff is real
-  // (nothing to diverge on), but NOT exercised, so its correctness rests on the line-by-line RE
-  // re-verify above, not the SBS gate, per fleet-workflow.md §9 ("don't claim verified-by-gate if
-  // ovhit shows it never fired"). Sync/Send fire and match: `0x80083364 native=1045 oracle=1045`,
-  // `0x80082424 native=1020 oracle=1020` — those two are gate-verified for real.
+  // OVHIT CAVEAT (2026-07-10, PSXPORT_DEBUG=ovhit): GPU_QSTAT_STARTED is NEVER written anywhere in
+  // the whole recompiled binary (grepped generated/shard_*.c) — so Enqueue's fast (immediate-
+  // dispatch) path is unconditionally taken every call, the ring is never populated, and Drain's
+  // ring-drain/ISR path is DEAD CODE in the areas this playthrough's autonav reaches:
+  // `0x80082FB4 : native=0 oracle=0` — Drain is INSTALLED and its 0-diff is real (nothing to
+  // diverge on), but NOT exercised, so its correctness rests on the line-by-line RE re-verify
+  // above, not the SBS gate, per fleet-workflow.md §9. Enqueue/Sync/Send/the streamer all fire and
+  // match — see docs/findings/render.md for the current ovhit counts.
+  engine_set_override_main(0x80082D04u, ov_gpuDmaQueueEnqueue, gen_func_80082D04);
   engine_set_override_main(0x80082FB4u, ov_gpuDmaQueueDrain,   gen_func_80082FB4);
   engine_set_override_main(0x80083364u, ov_gpuDmaQueueSync,    gen_func_80083364);
   engine_set_override_main(0x80082424u, ov_gpuDmaSend,         gen_func_80082424);

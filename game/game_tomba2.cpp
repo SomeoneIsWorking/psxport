@@ -248,6 +248,8 @@ void games_tomba2_init(void) {
   gpu_dma_queue_install();     // FUN_80082D04/FB4/83364/82424 GPU-DMA completion-queue cluster
   void gpu_libgpu_leaves_install();
   gpu_libgpu_leaves_install(); // FUN_80080F6C/81458 DrawSync/ClearOTagR (libgpu GPU-sys jump table)
+  void gpu_loadimage_streamer_install();
+  gpu_loadimage_streamer_install(); // FUN_80082734 libgpu LoadImage() chunked GP0-FIFO pixel streamer
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }

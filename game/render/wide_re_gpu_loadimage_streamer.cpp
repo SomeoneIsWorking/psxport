@@ -10,10 +10,14 @@
 // recompiler emits them textually inside the branch's `{ ... }` block — same convention flagged in
 // wide_re_libgpu_leaves.cpp's ClearOTagR comment).
 //
-// Wide-RE tier (docs/fleet-workflow.md §6): UNWIRED / UNVERIFIED. Nothing here is called from
-// anywhere (no EngineOverrides registration, no shard_set_override) — dead code that only needs to
-// COMPILE. A wiring pass MUST re-diff every line against the generated C (and run SBS) before
-// registering + gating.
+// WIRED 2026-07-10: promoted from wide-RE draft to verified ownership per docs/fleet-workflow.md §9.
+// Re-verified line-by-line against generated/shard_5.c gen_func_80082734 (the exhaustive re-diff found
+// NO discrepancies — every branch polarity, delay-slot write, double-pointer-dereference, and the
+// decrement-then-test PIO remainder loop's net iteration count were re-checked and match gen exactly).
+// Reached as a plain intra-shard C call from the substrate (func_80082D04/GpuDmaQueueEnqueue's fast
+// path calls it via `rec_dispatch(c, fn)` where fn resolves to this address), so it is owned via
+// `engine_set_override_main` — the oracle-gated thunk that keeps SBS core B running the pure
+// gen_func_80082734 body while core A dispatches to the native method below.
 //
 // ------------------------------------------------------------------------------------------------
 // CORRECTION to both prior waves' field-map notes: the raw decimal offset used by the gen-C body for
@@ -102,6 +106,7 @@
 // alone. A wiring pass should grep for other readers of GPU_DMA_ARG0/ARG1/STATE before trusting the
 // async path is fully understood.
 #include "core.h"
+#include "render.h"
 #include <stdint.h>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
@@ -124,9 +129,10 @@ constexpr uint32_t FN_GPU_TIMEOUT_ARM = 0x800834A0u;  // native-owned HLE, runti
 constexpr uint32_t FN_GPU_TIMEOUT_CHK = 0x800834D4u;  // native-owned HLE, runtime/recomp/sync_overrides.cpp
 }  // namespace
 
-// func_80082734 (0x80082734) — libgpu LoadImage()-internal chunked GP0-FIFO pixel streamer. DRAFT.
+// func_80082734 (0x80082734) — libgpu LoadImage()-internal chunked GP0-FIFO pixel streamer.
 // See file header for the full RE (struct map, control flow, dead-code note, confidence).
-static void func_80082734(Core* c) {
+void Render::gpuLoadImageStream() {
+  Core* c = mCore;
   c->r[29] -= 48;
   c->mem_w32(c->r[29] + 20, c->r[17]);
   const uint32_t rectPtr = c->r[4];   // s1
@@ -240,4 +246,24 @@ static void func_80082734(Core* c) {
   c->mem_w32(c->mem_r32(GPU_DMA_STATE_PTR), GP0_CLEAR_CACHE | 513u);    // 0x01000201
 
   epilogue(0);
+}
+
+// ==================================================================================================
+// Wiring (2026-07-10): promoted from wide-RE draft to verified ownership per docs/fleet-workflow.md
+// §9. Reached as a plain intra-shard C call (func_80082D04's fast-path `rec_dispatch(c, fn)` where fn
+// resolves here — NOT via a jump table), so the oracle-gated `engine_set_override_main` thunk is the
+// correct install path (see runtime/recomp/engine_override_thunk.cpp): it keeps SBS core B running the
+// pure gen_func_80082734 body while core A dispatches to Render::gpuLoadImageStream().
+namespace {
+void ov_gpuLoadImageStream(Core* c) { c->mRender->gpuLoadImageStream(); }
+}  // namespace
+
+extern void gen_func_80082734(Core*);
+
+void gpu_loadimage_streamer_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x80082734u, ov_gpuLoadImageStream, gen_func_80082734);
 }

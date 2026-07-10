@@ -1122,7 +1122,7 @@ and the 2 sibling drafts in `game/render/wide_re_libgpu_leaves.cpp` (`DrawSync` 
 Re-verify found and fixed real bugs in 5 of the 6 functions; SBS-full stayed 0-diff through the
 wiring (verified to f9690+, 95s autonav window).
 
-- **status: RESOLVED (5/6 wired), 1 LEFT UNWIRED with an open residual (Enqueue)**
+- **status: RESOLVED — 6/6 wired 2026-07-10 (Enqueue's residual closed, see follow-up entry below).**
 - **bugs found at re-verify (statistics for §9):**
   1. `GpuDmaQueueDrain`/`GpuDmaQueueSync`/`GpuDmaQueueEnqueue` — 9 combined missing
      branch-delay-slot `r31`-mirror bugs: every call site to a non-leaf callee (`Drain` itself,
@@ -1146,23 +1146,9 @@ wiring (verified to f9690+, 95s autonav window).
      crashed via render-queue-overflow within a few frames. This was the most severe bug: 629-diff
      crash on the full run, traced with `PSXPORT_THUNK_FORCE_GEN` bisection down to ClearOTagR
      alone, then pinned exactly via a temporary stderr print of `tableSlot44` (showed 0xFFFFFFFF).
-- **NOT wired: `GpuDmaQueueEnqueue` (0x80082D04)** — real residual, root cause NOT fully isolated.
-  After fixing the ACTIVE bug above, wiring Enqueue alone (rest forced to gen via
-  `PSXPORT_THUNK_FORCE_GEN`) still produces a real SBS diff at guest address 0x801FF154 from frame
-  0. `PSXPORT_SBS_PREWATCH=0x801FF154` traced the write to INSIDE the still-substrate, UNOWNED
-  `gen_func_80082734` (the "LoadImage-style FIFO streamer" mapped-but-not-drafted — see
-  `wide_re_gpu_dma_queue.cpp`'s header), reached via Enqueue's fast-path `rec_dispatch(c, fn)`.
-  `gen_func_80082734` is byte-identical code on both SBS cores and its own inputs (r4/r5, guest sp)
-  were confirmed IDENTICAL at the call site (both write-site captures showed `sp=0x801FF140`), yet
-  it writes a different clipped-width value at `(argValOrPtr+4)` — core A wrote `0x001FCA00`, core
-  B wrote `0x00000008`. This means some memory content `gen_func_80082734` depends on (plausibly
-  the global max-W/H clip shorts at 0x800A5964/66, or the caller's stack-resident rect struct that
-  `argValOrPtr` points at) already differs BEFORE this call — for a reason not yet isolated. Ruled
-  out: register-mapping bugs (exhaustive line-by-line match against gen found none), frame-depth
-  mismatch (sp confirmed identical), and STARTED-byte path selection (STARTED is never written
-  anywhere in the whole recompiled binary, so `fastPath` is unconditionally true every call on
-  both sides — not a source of divergence). Left unwired per fleet-workflow.md §9 ("if an address
-  can't be made 0-diff, leave it unwired with an honest note, wire the rest").
+- **`GpuDmaQueueEnqueue` (0x80082D04) — WAS left unwired here with an open residual at 0x801FF154;
+  CLOSED 2026-07-10, see "GPU-DMA Enqueue residual CLOSED" below for the root cause (a
+  register-liveness bug in this file, not in the then-undrafted streamer) and the fix.**
 - **ovhit caveat:** `PSXPORT_DEBUG=ovhit` (5-frame REPL run) shows `Sync`/`Send`/`DrawSync`/
   `ClearOTagR` FIRE with matching native/oracle counts (real gate coverage: 1045/1045, 1020/1020,
   1045/1045, 1020/1020). `Drain` shows `native=0 oracle=0` — it is INSTALLED and its 0-diff is
@@ -1181,3 +1167,86 @@ wiring (verified to f9690+, 95s autonav window).
 - **refs:** `game/render/wide_re_gpu_dma_queue.cpp`, `game/render/wide_re_libgpu_leaves.cpp`;
   install sites `gpu_dma_queue_install()` / `gpu_libgpu_leaves_install()`, called from
   `games_tomba2_init()` in `game/game_tomba2.cpp`.
+
+## GPU-DMA Enqueue residual CLOSED — LoadImage streamer (0x80082734) wired + register-liveness bug fixed (2026-07-10)
+
+Follow-up to the entry above. The LoadImage-style FIFO streamer (0x80082734) that Enqueue's fast
+path dispatches into is now drafted (`game/render/wide_re_gpu_loadimage_streamer.cpp`, a separate
+wide-RE wave — 48-byte frame, spills ra/s0-s5, W/H rect-clip + chunked-FIFO/async-DMA-handoff, full
+struct map in the file header). Re-verifying it line-by-line against `generated/shard_5.c:13663
+gen_func_80082734` (every branch polarity, every delay-slot write, both pointer double-derefs, and
+the decrement-then-test PIO-remainder loop's net iteration count) found **zero discrepancies** — the
+draft was already byte-faithful.
+
+- **status: RESOLVED.** `GpuDmaQueueEnqueue` (0x80082D04) and the streamer (0x80082734) are both
+  wired via `engine_set_override_main` (`Render::gpuDmaQueueEnqueue()` / `Render::
+  gpuLoadImageStream()`). All 6 addresses in this cluster (Enqueue/Drain/Sync/Send/DrawSync/
+  ClearOTagR) plus the streamer are now native.
+- **real root cause of the 0x801FF154 residual (NOT the streamer):** a register-liveness bug in
+  `GpuDmaQueueEnqueue` itself, one level more subtle than the branch-delay-slot / ra-mirror bugs
+  already fixed in this cluster. Diagnosed by re-running the isolation exactly as planned — wire
+  Enqueue+streamer, `PSXPORT_SBS_PREWATCH=0x801FF154` — which this time pinned the write to the
+  STREAMER's OWN prologue spill of its caller's `r17` (`c->mem_w32(c->r[29]+20, c->r[17])`, its
+  first instruction after the frame descent): core A wrote a stale pointer-shaped value, core B
+  (real gen) wrote `0x00000008` — which is exactly Enqueue's `sizeBytes` argument (confirmed via
+  `PSXPORT_DISPWATCH=0x80082D04`: every Enqueue call reaching the streamer passes `a2=8`, an 8-byte
+  RECT16 payload size, not a coincidence).
+  - **the actual bug:** gen's real MIPS execution keeps s0-s3 (r16-r19 = argValOrPtr/sizeBytes/
+    arg3/fn) genuinely LIVE in the CPU register file for Enqueue's whole body — `r16=r5; r17=r6;
+    r18=r7; r19=r4` are real register writes at entry, generated/shard_5.c:13805-13815, and they
+    stay in those physical registers (by MIPS callee-save convention) across every nested call
+    Enqueue makes, including the fast-path dispatch to `fn`. Any callee reached via that dispatch —
+    here, the streamer — is itself a function with its OWN callee-save prologue, and that prologue
+    unconditionally spills WHATEVER is currently in `c->r[16..19]` to ITS OWN stack frame, exactly
+    as real MIPS hardware would. The `GpuDmaQueueEnqueue` **draft** captured `fn`/`argValOrPtr`/
+    `sizeBytes`/`arg3` as plain C++ `const uint32_t` locals and never wrote them back into
+    `c->r[16..19]` — so those emulated registers kept whatever STALE content they held from
+    *Enqueue's own caller's* frame (`gen_func_80081218`'s live `r17` = a VRAM-scratch destination
+    pointer, not `sizeBytes`). The streamer's prologue then spilled that stale pointer instead of
+    Enqueue's real `sizeBytes=8` — an SBS-fatal 1-byte diff from frame 0, on a call chain that
+    otherwise (args, sp, dispatch target) was byte-identical on both cores, exactly matching the
+    prior session's "some memory content already differs before this call, reason not isolated"
+    note.
+  - **why this is a DIFFERENT bug class from the delay-slot/ra-mirror fixes above:** those fixed
+    `c->r[31]` (ra) before a call so the callee's ra-spill matched gen. This is the SAME principle
+    (CLAUDE.md "mirror the guest stack" — a live value must be live in the register file, not just
+    a local, whenever a nested dispatch can observe it) applied to the OTHER callee-save registers
+    (s0-s3), which is easy to miss because C++ locals "look correct" until a downstream callee's
+    OWN prologue spills them.
+  - **fix:** `Render::gpuDmaQueueEnqueue()` now writes `c->r[19]=fn`, `c->r[16]=argValOrPtr`,
+    `c->r[17]=sizeBytes`, `c->r[18]=arg3` directly (matching gen's exact assignment order) and uses
+    `const uint32_t&` aliases into `c->r[]` for the rest of the body, so every nested dispatch call
+    (the ring-full retry's `Drain`, the fast path's `fn`, the deferred path's `ISR_REGISTER`/
+    `Drain`) sees the SAME live values gen's real registers would hold.
+  - **same bug found (by inspection, before it could surface) in 2 more functions in this file**,
+    both already claimed "verified" by the prior wiring pass — fixed alongside the Enqueue fix:
+    - `GpuDmaQueueSync` (0x80083364): the mode!=0 poll path computes `depth` and keeps it live in
+      s0/r16 across a nested `Drain` call (`generated/shard_0.c:13000-13003`); the draft used a
+      plain local. Fixed the same way (`c->r[16] = depth` before the `Drain` call).
+    - `GpuDmaQueueDrain` (0x80082FB4): keeps READY_BIT/BUSY_BIT live in s1/r17 and s0/r16 across the
+      drain loop's nested `ISR_REGISTER` and ring-entry `fn` dispatch calls (`generated/
+      shard_6.c:14644-45`); the draft's header explicitly (and wrongly) claimed "only the STACK
+      BYTES need to match, not host-register contents" — corrected. NOTE: per the existing ovhit
+      caveat, Drain's ring-drain path is still dead code under this playthrough's autonav coverage
+      (STARTED never gets set), so this fix rests on the RE re-verify, not a live SBS exercise of
+      the drain loop — same honesty caveat as before.
+    - `GpuDmaSend` (0x80082424) was checked too and does NOT have this bug: its only nested calls
+      are the native-HLE timeout arm/chk leaves, which don't read or spill any register.
+  - **lesson for future wide-RE wiring passes:** "only the stack bytes need to match" is true ONLY
+    when nothing downstream ever dispatches through a value the function computed while that
+    register's physical slot is being reused as scratch. Any function whose body computes a value
+    into what gen treats as a callee-save register (s0-s7/r16-r23) and THEN makes a nested
+    `rec_dispatch`/direct call MUST write that value into `c->r[N]` (not just a C++ local), because
+    the callee's own prologue can and will spill whatever is currently there. This is the same
+    class of finding as `docs/findings/render.md`'s "renderWalk r16-r23" note and object_table.cpp's
+    guest-stack mirroring — but framed at the REGISTER level rather than the stack-slot level.
+- **verified:** `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1`, 95s window:
+  zero `sbs-div`/`VIOLATION`, byte-exact through f3690 (SIGINT-terminated by the watchdog, no
+  crash — watchdog uses `_exit()` so the per-address ovhit atexit dump doesn't fire on this run
+  path; fired via `PSXPORT_DISPWATCH=0x80082D04`/`0x80082734` instead). Dispatch-count parity
+  confirmed directly: Enqueue fired ~10017/10011 (A/B, small count skew is run-length/cutoff
+  timing, not a divergence — sbs-div stayed 0), streamer fired 6361/6361 (exact match).
+- **refs:** `game/render/wide_re_gpu_loadimage_streamer.cpp` (`Render::gpuLoadImageStream`,
+  `gpu_loadimage_streamer_install()`), `game/render/wide_re_gpu_dma_queue.cpp` (Enqueue/Sync/Drain
+  fixes), `game/render/render.h`. Repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
+  PSXPORT_SBS_PREWATCH=0x801FF154` (now clean) or `PSXPORT_SBS_NOPAUSE=1` for the gate count.

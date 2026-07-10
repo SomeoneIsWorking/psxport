@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 628 native fns, 530 owned addresses, 599 LIVE / 29 ORPHAN.
+Totals: 630 native fns, 530 owned addresses, 601 LIVE / 29 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -366,13 +366,12 @@ Totals: 628 native fns, 530 owned addresses, 599 LIVE / 29 ORPHAN.
 | 0x800822D8 | LIVE | `func_800822D8` | game/render/wide_re_gpu_putdrawenv.cpp:130 |  | func_800822D8 (0x800822D8) — SetDrawAreaBottomRight(x,y) word builder.… |
 | 0x80082370 | LIVE | `func_80082370` | game/render/wide_re_gpu_putdrawenv.cpp:159 |  | func_80082370 (0x80082370) — SetDrawingOffset(x,y) word builder. DRAFT… |
 | 0x8008238C | LIVE | `func_8008238C` | game/render/wide_re_gpu_putdrawenv.cpp:197 |  | func_8008238C (0x8008238C) — DR_TWIN word builder. DRAFT. RE'd from ge… |
-| 0x80082424 | LIVE | `Render::gpuDmaSend` | game/render/wide_re_gpu_dma_queue.cpp:512 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & W… |
-| 0x80082734 | LIVE | `func_80082734` | game/render/wide_re_gpu_loadimage_streamer.cpp:129 |  | func_80082734 (0x80082734) — libgpu LoadImage()-internal chunked GP0-F… |
+| 0x80082424 | LIVE | `Render::gpuDmaSend` | game/render/wide_re_gpu_dma_queue.cpp:546 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & W… |
+| 0x80082734 | LIVE | `Render::gpuLoadImageStream` | game/render/wide_re_gpu_loadimage_streamer.cpp:134 |  | func_80082734 (0x80082734) — libgpu LoadImage()-internal chunked GP0-F… |
 | 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:237 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
 | 0x80082D04 | LIVE | `Render::gpuDmaQueueEnqueue` | game/render/wide_re_gpu_dma_queue.cpp:165 |  | func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeB… |
-| 0x80082D04 | LIVE | `ov_gpuDmaQueueDrain` | game/render/wide_re_gpu_dma_queue.cpp:571 |  | ov_gpuDmaQueueEnqueue intentionally omitted — 0x80082D04 stays unwired… |
-| 0x80082FB4 | LIVE | `Render::gpuDmaQueueDrain` | game/render/wide_re_gpu_dma_queue.cpp:317 |  | func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). VERIFIED & WIRED 2026… |
-| 0x80083364 | LIVE | `Render::gpuDmaQueueSync` | game/render/wide_re_gpu_dma_queue.cpp:435 |  | func_80083364 (0x80083364) — GpuDmaQueueSync(mode). VERIFIED & WIRED 2… |
+| 0x80082FB4 | LIVE | `Render::gpuDmaQueueDrain` | game/render/wide_re_gpu_dma_queue.cpp:341 |  | func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). VERIFIED & WIRED 2026… |
+| 0x80083364 | LIVE | `Render::gpuDmaQueueSync` | game/render/wide_re_gpu_dma_queue.cpp:463 |  | func_80083364 (0x80083364) — GpuDmaQueueSync(mode). VERIFIED & WIRED 2… |
 | 0x800834A0 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x800834D4 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:272 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |
