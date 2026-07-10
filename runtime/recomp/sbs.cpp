@@ -60,6 +60,7 @@ extern "C" void guest_backtrace_to(Core* c, FILE* out);
 void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
 void gpu_gpu_select_target(int t);
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);
+void gpu_present_finalize(Core* core);   // per-frame reset/bookkeeping standalone does in gpu_present (SBS skips present)
 const uint16_t* gpu_vram_ptr(Core* core);
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h);
 
@@ -1171,7 +1172,10 @@ void Sbs::Impl::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
   if (w < 1) w = 1; if (h < 1) h = 1;
   if (w > 1024) w = 1024; if (h > 512) h = 512;
   gpu_gpu_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
-  gpu_gpu_frame_end(&g->core, gpu_vram_ptr(&g->core), (int)mFrame);
+  // Same per-frame finalize standalone runs in gpu_present (which SBS skips via diff_mode): resets the
+  // batch AND this core's s_prim_order / s_seen3d / native depth table / s_frame. Without it those
+  // accumulate across frames and corrupt cross-frame draw ordering (semi sea over the fisherman sprite).
+  gpu_present_finalize(&g->core);
   *ow = w; *oh = h;
 }
 

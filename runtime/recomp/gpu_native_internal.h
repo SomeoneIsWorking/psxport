@@ -209,6 +209,8 @@ struct GpuState {
   void gpu_native_shot(Core* core, const char* path);
   void gpu_present_ex(Core* core, int do_blit);
   void gpu_present(Core* core);
+  void frame_finalize(Core* core);          // per-frame reset/bookkeeping (no window blit) — shared by
+                                            // gpu_present_ex AND the SBS per-core grab (which skips present)
   uint16_t gpu_vram_peek(int x, int y);
   void gpu_blank_display();                 // zero the display FB rect (no present)
   void gpu_clear_display(Core* core);      // gpu_blank_display + present (FMV teardown)

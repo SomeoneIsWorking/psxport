@@ -1399,11 +1399,6 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     // (a cumulative-since-boot count is dominated by the title/menu phase before the field is reached).
     if (cfg_dbg("rtpcaller") && s_frame > 0 && (s_frame % 50) == 0) {
       char t[24]; snprintf(t, sizeof t, "f%d(last50)", s_frame); rtpcaller_dump(core, t); rtpcaller_reset(); } }
-  // Reset the per-vertex depth table EVERY frame the native-depth path is live (NATIVE_DEPTH or SBS),
-  // here — after this frame's DrawOTag/lookups, before next frame's projections record into it — so a
-  // vertex word never reads an OLD frame's depth. The engine (submit.cpp) repopulates it each frame.
-  { int attach_enabled(void);
-    if (attach_enabled()) core->mRender->projprim.reset(); }
   {
     {
 
@@ -1481,8 +1476,25 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       fprintf(stderr, "[fadedbg] f%d disp=(%d,%d) drawY=%d maxcol=%d nprim=%d nsemi=%d semi[%d..%d] bigsemi=%d\n",
               s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
               s_fade_semimin == 999 ? -1 : s_fade_semimin, s_fade_semimax, s_fade_bigsemi); }
+  frame_finalize(core);   // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
+}
+// Per-frame render finalize: the "advance to the next frame" work that is INDEPENDENT of the window blit —
+// native per-vertex depth-table reset, geometry-batch reset, and the per-frame GpuState counters
+// (s_frame, the s_prim_order painter-order/VK-depth index, the s_seen3d backdrop-vs-HUD flag). Shared so
+// BOTH paths run identical bookkeeping: standalone via gpu_present_ex, and the SBS per-core grab, which
+// returns before gpu_present (game_tomba2.cpp diff_mode early-return) and so would otherwise NEVER reset
+// s_prim_order / s_seen3d / the depth table — they'd accumulate across frames and corrupt cross-frame
+// ordering (a semi-transparent sea drawn over a sprite, the fisherman-cutscene bug), diverging each SBS
+// pane from its standalone counterpart. The frame counter also drives the per-frame span caches
+// (bg_range / obj_depth), which self-clear only when s_frame advances.
+void GpuState::frame_finalize(Core* core) {
+  // per-vertex depth table (native-depth path): clear after this frame's DrawOTag/lookups, before next
+  // frame's projections record into it — so a vertex word never reads an OLD frame's depth (submit.cpp
+  // repopulates each frame). Same reset gpu_present_ex used to do inline before its diagnostics.
+  { int attach_enabled(void);
+    if (attach_enabled()) core->mRender->projprim.reset(); }
   s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
-  { gpu_gpu_frame_end(core, s_vram, s_frame); }  // VK: diff + batch reset
+  gpu_gpu_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
@@ -1672,6 +1684,10 @@ void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) { core->game
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
+// SBS per-core frame finalize: the readback grab renders + reads this core's frame but skips gpu_present,
+// so it must run the same per-frame reset/bookkeeping standalone's present does (else s_prim_order etc.
+// never reset — see GpuState::frame_finalize). Replaces the bare gpu_gpu_frame_end grabPane used to call.
+void gpu_present_finalize(Core* core) { core->game->gpu.frame_finalize(core); }
 // PSXPORT_SBS accessors: each core's CPU front-buffer (s_vram) + its current display region, so the SBS
 // composite can present each core's frame into its own pane (gpu_gpu_present_sbs). GpuState is a plain
 // struct (all-public), so these reach the members directly.
