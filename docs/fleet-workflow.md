@@ -53,8 +53,9 @@ git cherry-pick -x <SHA>
 #   shared wiring files (cmake/boot.cpp) -> UNION merge (keep both sides, dedup) — they are additive.
 python3 tools/codemap.py ; python3 tools/findings.py   # regen, git add, --continue
 cmake --build build --target tomba2_port -j$(nproc)    # must compile
-# SBS-full gate — PUSH ONLY IF 0-diff:
-timeout 95 env PSXPORT_VK_HEADLESS=1 PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 \
+# SBS-full gate — PUSH ONLY IF 0-diff. AUTONAV=combat = standard nav + a deterministic melee
+# encounter leg (2026-07-10; exercises ActorMeleeEngage/MeleeProximity, which plain =1 never reaches):
+timeout 95 env PSXPORT_VK_HEADLESS=1 PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=combat \
   PSXPORT_NOAUDIO=1 PSXPORT_SBS_NOPAUSE=1 ./scratch/bin/tomba2_port > sbs.log 2>&1   # run in background
 grep -cE 'sbs-div|VIOLATION' sbs.log    # 0 -> git push ; nonzero -> HOLD, root-cause
 ```
