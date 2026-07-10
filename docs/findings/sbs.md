@@ -1201,3 +1201,27 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   gpu_gpu_internal.h + gpu_gpu.cpp (per-Game targets, ensure_targets, threaded
   upload_vram/readback_vram/dump_to), gpu_gpu_device.h (pipelines-only), sbs.cpp (per-core pin),
   native_boot.cpp (setOracle), rmlui_overlay.cpp (per-game mods editing).
+
+## SBS pane parity vs standalone configs — VERIFIED pixel-faithful (2026-07-10, follow-up)
+- **symptom (USER, after the deglobalization):** panes still "completely different" from
+  `PSXPORT_PC_SKIP=0 ./run.sh` and `PSXPORT_ORACLE=1 ./run.sh`.
+- **status:** FIXED + mechanically verified.
+- **cause:** the SBS-only DEMO intro-FMV guest poke (`mem_w8(0x1f80019d,1)` while DEMO SM[0x48]==1)
+  tore the demo machine's FMV sub-state down in ~1 frame while a standalone run spends the guest's
+  own strNext timeout there — the SBS timeline ran tens of frames AHEAD of both standalones, so at
+  any frame index every pane showed a different game moment (95% pixel diff).
+- **fix:** poke removed (sbs.cpp stepCore); both cores now take the guest's own timeout path — the
+  same one standalone ORACLE takes. Slower wall-clock, frame-parity with standalone.
+- **verify tool:** `PSXPORT_SBS_SHOT=<frame>:<prefix>` (sbs.cpp) dumps each pane separately at one
+  lockstep frame → diff against standalone REPL `run N; shot`.
+- **measured:** SBS pane B @ lockstep f500 vs standalone `PSXPORT_ORACLE=1` @ REPL f502 =
+  **0.00% structural** (tol 40 + ±1px). Pane A vs `PC_SKIP=0` @ f502 = 1.35% floor (best across
+  501..503; settings-ini ruled out) — a pc_render-specific residue, same open bug family as below.
+- **frame-index bookkeeping:** SBS lockstep fN ≡ standalone REPL frame N+2 (constant origin offset,
+  REPL runs 2 boot frames before its first command; timeline identical).
+- **exposed open bug (pc_render, demo/attract):** with byte-identical guest RAM, pane A (pc_render)
+  draws a DIFFERENT CAMERA than pane B and drops Tomba + the DEMO blink text; standalone PC_SKIP=0
+  shows the same wrong picture, so this is the renderer-boundary-leak family (same as abcompare
+  f160 Tomba+Zippo missing in the prologue cutscene), now honestly visible in the SBS panes.
+- **refs:** runtime/recomp/sbs.cpp (stepCore poke removal + PSXPORT_SBS_SHOT), scratch/sbscmp/
+  (evidence quads), tools/abcompare.py (the standalone-vs-oracle compare).

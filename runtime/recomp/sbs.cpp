@@ -1076,18 +1076,13 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
 void Sbs::Impl::stepCore(Game* g, int which) {
   g->core.game->diff_mode  = 1;
   g->core.game->sbs_render = 1;
-  // PSXPORT_SBS intro-FMV: the OP.STR opening movie is OWNED by the native FMV player (skipped in SBS),
-  // but the PSX core (B) runs the GUEST demo machine whose STR streamer strNext (FUN_8010755c) waits on
-  // CD-streamed STR sectors that are NEVER fed here → busy-polls StGetNext ~2000x2000 times per attract
-  // cycle, stalls the lockstep. Convert that async wait to a SYNC skip using the game's OWN skip-request
-  // flag DAT_1f80019d (the demo machine's prologue forces teardown when set). Set only while the DEMO
-  // stage is in its intro-FMV sub-state (SM[0x48]==1); the GAME opening cutscene is never skipped.
-  { Core* c = &g->core;
-    if (c->mem_r32(0x801fe00cu) == 0x801062E4u) {            // DEMO stage
-      uint32_t sm = c->mem_r32(0x1f800138u);
-      if (sm && c->mem_r16(sm + 0x48u) == 1)
-        c->mem_w8(0x1f80019du, 1);
-    } }
+  // (The old DEMO intro-FMV guest poke — mem_w8(0x1f80019d,1) while DEMO SM[0x48]==1 — is REMOVED,
+  //  2026-07-10: it force-tore-down the demo machine's FMV sub-state in ~1 frame while a standalone
+  //  run spends the guest's own strNext timeout there, so the SBS lockstep timeline ran AHEAD of both
+  //  standalone configs and no pane could ever match a standalone picture at the same frame index.
+  //  The guest's own timeout path (the same one standalone PSXPORT_ORACLE=1 takes — "skips OP.FMV")
+  //  is slower in wall-clock but keeps frame-for-frame parity with the standalone timeline, which is
+  //  the whole point of the panes.)
   applyMode(g, which);
   gpu_gpu_select_target(which);
   dc_step_frame(&g->core, mFrame);
@@ -2018,6 +2013,27 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     stepCore(mB, 1);              ww_log("post-stepB");
     grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
     checkPaneDiff();              // PICTURE compare: port pane (A) vs oracle pane (B) — render bugs
+    // PSXPORT_SBS_SHOT=<frame>:<prefix> — dump each pane SEPARATELY at one lockstep frame, as
+    // <prefix>_A.ppm / <prefix>_B.ppm. Mechanical pane-vs-standalone-`shot` comparison (the
+    // "SBS pane must equal the standalone config's picture" gate) — the composite dumpPpm can't
+    // be diffed against a single-config shot.
+    { static long shotFrame = -2; static char shotPrefix[192];
+      if (shotFrame == -2) { shotFrame = -1;
+        if (const char* e = getenv("PSXPORT_SBS_SHOT"); e && *e) {
+          const char* colon = strchr(e, ':');
+          if (colon) { shotFrame = atol(e); snprintf(shotPrefix, sizeof shotPrefix, "%.*s", (int)(sizeof shotPrefix - 1), colon + 1); }
+        } }
+      if (shotFrame >= 0 && (long)mFrame == shotFrame) {
+        auto wr = [](const char* pfx, char side, const uint8_t* rgba, int w, int h) {
+          char p[224]; snprintf(p, sizeof p, "%s_%c.ppm", pfx, side);
+          FILE* f = fopen(p, "wb"); if (!f) { fprintf(stderr, "[sbs] SHOT: cannot open %s\n", p); return; }
+          fprintf(f, "P6\n%d %d\n255\n", w, h);
+          for (int i = 0; i < w * h; i++) fwrite(rgba + (size_t)i * 4, 1, 3, f);
+          fclose(f); fprintf(stderr, "[sbs] SHOT f%ld pane %c (%dx%d) -> %s\n", (long)shotFrame, side, w, h, p);
+        };
+        wr(shotPrefix, 'A', mRgbaA, mWa, mHa);
+        wr(shotPrefix, 'B', mRgbaB, mWb, mHb);
+      } }
     // Compare per-Core SPU write logs. For each SPU register touched by EITHER core this frame,
     // compare the LAST value written to it. If A and B end this frame with different values in
     // a given SPU register, that's an audio-relevant divergence (e.g. voice N's StartAddr / Pitch
