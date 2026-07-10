@@ -75,6 +75,43 @@
 - **refs**: game/render/fps60.{h,cpp}, projection.cpp, native_terrain.cpp, render_walk.cpp,
   render_queue.{h,cpp}, submit.cpp, game_tomba2.cpp (drawOTag mSceneTag + frameUpdate bbFrameReset).
 
+## fps60 billboard anchor must be PER-PARTICLE, not per-manager-node (2026-07-10, gems RESOLVED)
+
+- **symptom (USER)**: with the redesigned fps60 tier, 2D GEMS (and the objective banner) "still react
+  poorly at 60fps — definitely not done per objects." The per-object redesign re-anchors obj-depth-tagged
+  billboards through the real projection, but a whole CLASS of billboards still snapped/jittered.
+- **root cause**: what the fps60 registry treated as "one billboard object" (fps_key = the entity NODE) is
+  actually a MANAGER node whose particle sub-list holds MANY visible sprites (all the score-gems / effect
+  quads of that class). `Fps60::recordBillboardSpan`/`stampBillboard` keyed the anchor by node and used the
+  node's single world position (node+46/50/54), so EVERY sprite of a manager shared ONE anchor. In the
+  mid-present all those sprites got the SAME rigid screen-translation — losing each particle's own animated
+  bob. Each particle carries its OWN planar offset at `particle+14/+15` (s8), which `func_8003B220` (shard_4,
+  the quad-corner builder) scales ×5 (`x<<2 + x`) and builds the quad corners around; that offset is
+  animated per frame by the gem/effect behaviour, so a shared node anchor + rigid translate is exactly wrong.
+- **fix**: `billboardEmit` (perobj_billboard.cpp) now records ONE anchor PER PARTICLE it emits, keyed by the
+  particle's guest ADDRESS (stable while the sprite lives). The anchor is the manager node's world position
+  + the node rotation (`MAT_OUT` rows, /4096) applied to the particle's own 5×(p[14],p[15],0) offset — the
+  SAME 5×offset the corner builder uses — so each sprite's anchor moves with its own animation. New registry
+  `Fps60::mBbPart[]` (recordBillboardParticle); `billboardForNode` searches it BEFORE the node-level spans,
+  so a gem sprite's OT packet resolves to its particle, not its manager. Node-level `mBbCur` stays as the
+  fallback for single-sprite billboards. Host-only (guest READ, host WRITE) — no guest-state change.
+- **evidence**: `tools/preseqobj_check.py` per-object gate — the new `preseqobj` channel (see below /
+  docs/config.md) logs each emitted RqItem per present; the tracker groups by object identity and flags
+  oscillation / stall-step. Post-fix, billboardEmit particles carry per-particle keys (new addresses in the
+  particle-data band, e.g. 0x801Cxxxx/0x80158xxx) and track smoothly; field capture PASSes (0 flagged over a
+  24-present walk, `scratch/logs/cap6.log`). SBS-full 0-diff BOTH legs (combat→f9330, watch_cut→f15120):
+  the anchor recording is gated off in SBS (fps60 is off; env-driven) and is a pure host read regardless.
+- **DEAD END / still OPEN**: the *stationary field PICKUP gem* I could see renders via a different path (a
+  layer-0 sprite + layer-1 key=0 sparkles), NOT billboardEmit — this fix does not cover it. The live field
+  also carries ~775/present guest-OT projected WORLD polys (key=0 layer=1 scene=0) that are re-emitted
+  unchanged on the interp present (they are world geometry, not discrete objects; the tracker skips scene=1
+  rebuilt mesh but these are scene=0). The objective BANNER could not be triggered in a fresh headless
+  newgame to characterise it. Extending per-object anchoring to those paths is follow-up work.
+- **refs**: game/render/perobj_billboard.cpp (billboardEmit per-particle record), game/render/fps60.{h,cpp}
+  (mBbPart / recordBillboardParticle / billboardForNode), game/render/render_queue.cpp (preseqobj emit log),
+  runtime/recomp/gpu_gpu.{h,cpp} (gpu_gpu_preseq_present_index), tools/preseqobj_check.py, generated/shard_4.c
+  gen_func_8003B220.
+
 ## perobj_billboard cluster (C2D4/C464/C8F4) — BUF base + register-faithfulness (2026-07-09, RESOLVED)
 
 - **how found**: the oracle-gate fix (commit 5483a83, `engine_override_thunk`) made SBS honest for the

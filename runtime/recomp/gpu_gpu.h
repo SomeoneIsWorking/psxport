@@ -50,6 +50,9 @@ void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int
 // only uploads (no present) — verify headless via the caller's own CPU-side dump.
 void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float fade);
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);
+// preseqobj (per-object motion tracker): the present index this emit pass will dump, or -1 if no preseq
+// capture is armed. Lets RenderQueue::emitItem key each [preseqobj] line to its present frame.
+int gpu_gpu_preseq_present_index(Core* core);
 void gpu_gpu_shot(Core* core, const char* path);
 void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
 

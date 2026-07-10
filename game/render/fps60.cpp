@@ -150,8 +150,25 @@ void Fps60::recordBillboardSpan(Core* c, uint32_t lo, uint32_t hi, uint32_t iden
   e->wy = (float)c->mem_r16s(ident + 50);
   e->wz = (float)c->mem_r16s(ident + 54);
 }
+// Per-particle anchor: the caller (billboardEmit) already computed the interpolatable WORLD anchor for THIS
+// particle (node world pos + node-rotation × the particle's own 5×offset). Store it keyed by particle addr.
+void Fps60::recordBillboardParticle(uint32_t pktLo, uint32_t pktHi, uint32_t ident, float wx, float wy, float wz) {
+  if (!ident || pktHi <= pktLo || mNBbPart >= kBbPartMax) return;
+  BbSpan* e = &mBbPart[mNBbPart++];
+  e->lo = pktLo | 0x80000000u; e->hi = pktHi | 0x80000000u; e->ident = ident;   // KSEG (matches s_cur_node)
+  e->wx = wx; e->wy = wy; e->wz = wz;
+}
 int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) const {
   uint32_t n = node | 0x80000000u;
+  // Per-particle anchors win: a gem sprite's OT packet lies INSIDE its manager node's span, so search the
+  // finer per-particle table first — otherwise every sprite of a manager resolves to the manager's single
+  // node anchor (the rigid-translate bug). Node-level spans remain the fallback for non-particle billboards.
+  for (int i = 0; i < mNBbPart; i++)
+    if (n >= mBbPart[i].lo && n < mBbPart[i].hi) {
+      if (identOut) *identOut = mBbPart[i].ident;
+      if (wpos) { wpos[0] = mBbPart[i].wx; wpos[1] = mBbPart[i].wy; wpos[2] = mBbPart[i].wz; }
+      return 1;
+    }
   for (int i = 0; i < mNBbCur; i++)
     if (n >= mBbCur[i].lo && n < mBbCur[i].hi) {
       if (identOut) *identOut = mBbCur[i].ident;

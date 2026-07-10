@@ -278,6 +278,20 @@ void RenderQueue::flush(Core* core) {
 int gpu_gpu_enabled(void);   // gpu_gpu.cpp — Core*-less device-singleton query (declared at use; see gpu_gpu.h)
 void RenderQueue::emitItem(Core* core, const RqItem* it) {
   if (!gpu_gpu_enabled()) return;
+  // preseqobj (per-object motion tracker, tools/preseqobj_check.py): when a `preseq` capture is armed AND
+  // the `preseqobj` channel is on, log one line per emitted RqItem keyed to the present index this pass
+  // will dump. present index >= 0 only while armed, so the cfg_dbg scan is skipped entirely otherwise —
+  // zero cost in a normal run. The tracker groups by `key` (fps_key = billboard/object identity; 0 = an
+  // un-keyed 2D/HUD prim) and follows each object's screen x/y across consecutive presents to flag
+  // sign-alternating (oscillation) or stall-step (snapping) motion. Both 60fps present passes (interp +
+  // real) emit through here, so their prims are logged under their own present index.
+  { int pi = gpu_gpu_preseq_present_index(core);
+    if (pi >= 0 && cfg_dbg("preseqobj"))
+      // scene=1 marks a prim REBUILT by sceneNative at the interpolated midpoint (terrain/mesh/backdrop) —
+      // dense, correct-by-construction geometry the tracker does NOT judge per-object; scene=0 is an OT-walk
+      // prim (billboard/2D/HUD), the object class this instrument actually verifies.
+      fprintf(stderr, "[preseqobj] p%04d key=%08X layer=%d x=%d y=%d scene=%d\n",
+              pi, it->fps_key, it->layer, it->xs[0], it->ys[0], it->fps_scene); }
   GpuState& s = core->game->gpu;
   // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
   // exactly where the native 3D world geometry rasterizes (vs the backdrop). Answers the recurring "the

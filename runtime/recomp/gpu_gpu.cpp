@@ -1060,3 +1060,10 @@ void gpu_gpu_preseq_arm(Core* core, int n, const char* dir) {
   char mk[200]; snprintf(mk, sizeof mk, "mkdir -p %s", dir); if (system(mk)) {}
   s.s_preseq_idx = 0; s.s_preseq_left = n;
 }
+// Present index (0-based) that THIS emit pass will dump to `p<idx>.ppm` at frame_end, or -1 when no
+// preseq capture is armed. The emit passes (RenderQueue::emitItem) consult this for the `preseqobj`
+// per-object motion log so each logged line is keyed to the exact present frame it belongs to.
+int gpu_gpu_preseq_present_index(Core* core) {
+  GpuGpuState& s = core->game->gpu_gpu;
+  return s.s_preseq_left > 0 ? s.s_preseq_idx : -1;
+}

@@ -83,8 +83,25 @@ struct Fps60 {
   struct BbSpan { uint32_t lo, hi, ident; float wx, wy, wz; };
   BbSpan mBbCur[kBbMax] = {};
   int    mNBbCur = 0;
-  void bbFrameReset() { mNBbCur = 0; }
+
+  // PER-PARTICLE billboard anchors (the true fps60 identity, 2026-07-10). A "billboard object" the guest
+  // walks is a MANAGER node whose particle sub-list holds MANY visible sprites (all the gems/effect quads
+  // of that class). Keying anchors by NODE makes every sprite share ONE anchor → they translate rigidly and
+  // the per-sprite BOBBING (each particle's animated offset particle+14/+15) is lost — the "gems react
+  // poorly at 60fps" bug. billboardEmit (perobj_billboard.cpp) instead records ONE entry PER PARTICLE it
+  // emits: identity = the particle's guest ADDRESS (stable across frames while the gem lives), world anchor
+  // = the manager node's world position (node+46/50/54) + the node-rotation (MAT_OUT, /4096) applied to the
+  // particle's own 5×(p[14],p[15]) offset — so each sprite's anchor moves with its own animation. These are
+  // searched BEFORE the node-level spans so a per-particle packet resolves to its particle, not its manager.
+  static constexpr int kBbPartMax = 4096;
+  BbSpan mBbPart[kBbPartMax] = {};
+  int    mNBbPart = 0;
+
+  void bbFrameReset() { mNBbCur = 0; mNBbPart = 0; }
   void recordBillboardSpan(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
+  // Record one PER-PARTICLE anchor: span [pktLo,pktHi) is the particle's emitted OT packet, ident is the
+  // particle's guest address, (wx,wy,wz) its interpolatable WORLD anchor. Called from billboardEmit.
+  void recordBillboardParticle(uint32_t pktLo, uint32_t pktHi, uint32_t ident, float wx, float wy, float wz);
   int  billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) const;
   void stampBillboard(Core* c, uint32_t node);
 

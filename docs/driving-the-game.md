@@ -91,6 +91,13 @@ Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FR
   INTERPOLATED frames — the only headless way to see temporal artifacts (interp flicker/judder).
   Analyze with `python3 tools/preseq_flicker.py <dir>`: per-band frame-to-frame displacement via
   profile cross-correlation; alternating-sign motion (the 30Hz oscillation class) is flagged FLICKER.
+  - PER-OBJECT variant: run `debug preseqobj` alongside `preseq <N>` and the emit path ALSO logs one
+    stderr line per drawn RqItem (`[preseqobj] p<idx> key=… layer=… x=… y=… scene=…`), keyed to each
+    present. Feed the captured stderr to `python3 tools/preseqobj_check.py <log>` — the per-object
+    acceptance gate that flags any billboard/2D object that OSCILLATES or STALL-STEPS across the presents
+    (the fps60 per-object verification instrument; see docs/config.md `preseqobj` + docs/findings/render.md).
+    Typical field run: `debug preseqobj` → `preseq 24 scratch/screenshots/preseq_field` → `run 20` → `quit`;
+    the fps60 setting comes from `PSXPORT_SETTINGS=<ini with fps60=1>`.
 - `pause` / `play` / `step`.
 
 ### RE commands (later-134) — inspect/poke/call live, no recompile-a-probe loop

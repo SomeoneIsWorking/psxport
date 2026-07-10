@@ -509,7 +509,8 @@ void Render::billboardEmit() {
       }
 
       // 5) Emit the 10-word packet (tag + 9 data words) at the pool tail, prepended into the OT bucket.
-      uint32_t tail = c->mem_r32(PKT_POOL_PTR);
+      uint32_t pktStart = c->mem_r32(PKT_POOL_PTR);
+      uint32_t tail = pktStart;
       uint32_t otbase = c->mem_r32(OTBASE_PTR);
       uint32_t otslot = otbase + (c->mem_r32(FR(56)) << 2);
       uint32_t oldHead = c->mem_r32(otslot);
@@ -521,6 +522,25 @@ void Render::billboardEmit() {
         tail += 4;
       }
       c->mem_w32(PKT_POOL_PTR, tail);
+
+      // fps60 PER-PARTICLE anchor (host-only read; no guest write). Identity = this particle's guest
+      // address (stable while the sprite lives). World anchor = the manager node's world position
+      // (node+46/50/54) + the node rotation (MAT_OUT rotation rows, /4096) applied to the particle's own
+      // 5×(p[14],p[15]) planar offset — the SAME 5×offset func_8003B220 builds the quad corners around, so
+      // the anchor moves with each sprite's per-frame bobbing. The mid-present re-projects this through the
+      // interpolated camera, so every gem interpolates on its OWN motion instead of the shared node anchor.
+      if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) {
+        const int sx5 = 5 * (int)(int8_t)c->mem_r8(particle + 14);
+        const int sy5 = 5 * (int)(int8_t)c->mem_r8(particle + 15);
+        auto R = [c](uint32_t off) { return (float)c->mem_r16s(MAT_OUT + off); };   // /4096 int16 rows
+        const float nx = (float)c->mem_r16s(node + 46);
+        const float ny = (float)c->mem_r16s(node + 50);
+        const float nz = (float)c->mem_r16s(node + 54);
+        const float ox = (R(0) * sx5 + R(2) * sy5) / 4096.0f;
+        const float oy = (R(6) * sx5 + R(8) * sy5) / 4096.0f;
+        const float oz = (R(12) * sx5 + R(14) * sy5) / 4096.0f;
+        c->game->fps60.recordBillboardParticle(pktStart, tail, particle, nx + ox, ny + oy, nz + oz);
+      }
     }
   });
 }

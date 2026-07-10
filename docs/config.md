@@ -276,6 +276,21 @@ native world go?": `PSXPORT_ONLYWORLD=1` (emit ONLY RQ_WORLD), `PSXPORT_NOBG=1` 
 `PSXPORT_NOHUD=1` (drop RQ_HUD). `PSXPORT_PRIMAT="x,y[,f0]"` gained an optional min-frame `f0` so the
 6000-line cap isn't exhausted before the target scene (e.g. reach free-roam at f216 with `,400`).
 
+`preseqobj` (per-object fps60 motion tracker, `RenderQueue::emitItem` in game/render/render_queue.cpp) —
+when this channel is on AND a REPL `preseq <N>` present-sequence capture is armed, every render-queue emit
+pass ALSO logs one line PER emitted RqItem to stderr:
+`[preseqobj] p<presentIdx> key=<fps_key> layer=<layer> x=<xs0> y=<ys0> scene=<0|1>`. `presentIdx` is the
+present frame the pass will dump (`gpu_gpu_preseq_present_index`), so lines are keyed to the exact present
+(both fps60 present passes — the interpolated in-between AND the real frame — emit through here and log
+under their own index). `key` is the object identity (fps_key: per-particle billboard address / node; 0 =
+un-keyed 2D/HUD prim), `scene=1` marks a prim REBUILT by sceneNative at the interpolated midpoint (dense,
+correct-by-construction terrain/mesh/backdrop the tracker does not per-object judge). Cost is zero outside
+an armed capture (the present index is −1 → the `cfg_dbg` scan is skipped). Feed the log to
+`tools/preseqobj_check.py` (the acceptance gate): it groups by object identity and flags any object present
+in ≥6 consecutive presents that OSCILLATES (sign-alternating jitter) or STALL-STEPS (snaps every 2nd
+present) — the two signatures of a badly-interpolated 60fps object — and prints a FAIL/PASS summary. This is
+the instrument the operator runs to verify the fps60 per-object work; see docs/findings/render.md.
+
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:
