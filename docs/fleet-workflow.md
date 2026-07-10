@@ -142,3 +142,13 @@ a missing ABI-slot live value, an unmirrored stack frame, `&&`-vs-`||`. So:
   the frames reached," and correctness rests on the RE verification, not the gate. Say so honestly; a future
   session with enemy-area coverage should re-gate. Don't claim a leaf is verified because SBS was 0-diff if
   `ovhit` shows it never fired.
+- **Run `tools/abi_extract.py <addr> --contract` FIRST at draft time, and again at wiring time.** The
+  "unmirrored stack frame" / "missing ABI-slot live value" bug classes above are exactly what it's for:
+  it parses the `gen_func_<addr>`/`ov_<area>_gen_<addr>` body straight out of `generated/` and reports the
+  frame size, every prologue spill/epilogue restore offset, every scratch sp-relative store in program
+  order, and every call site's `c->r[31]` return-address constant plus which callee-saved registers
+  (r16..r23/r30) look live going into it — the exact fields a hand-transcription drops. `--scaffold` emits
+  a ready-to-paste Frame RAII struct + call-site block in the house style. It is NOT a substitute for the
+  line-by-line verify above (no dataflow/CFG — a purely linear scan, so cross-branch register liveness is
+  a heuristic), but it removes the bulk of the boilerplate-transcription error surface before that pass
+  starts. See `docs/abi-extract.md`.

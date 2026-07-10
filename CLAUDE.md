@@ -140,7 +140,10 @@ spot-check AFTER Ghidra only.
   a06_script_fades). "Diverges at 0x801FE9xx because native doesn't replicate the stack frame" is NOT a
   reason to revert, leave unwired, or add an `isDeadStackScratch`-style exclusion — mirror the frame. A
   dead-scratch exclusion is a last resort ONLY for a slot proven unread AND proven impossible to mirror;
-  it is never a substitute for guest-stack residency. See `docs/faithful-execution.md`.
+  it is never a substitute for guest-stack residency. See `docs/faithful-execution.md`. Run
+  `tools/abi_extract.py <addr> --contract`/`--scaffold` FIRST — it derives the frame size/spill offsets/
+  ra constants/callee-saved liveness straight from `generated/`, so this stops being hand-derived. See
+  `docs/abi-extract.md`.
 
 ## Render — reimplement, don't transcribe
 
