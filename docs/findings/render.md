@@ -1,5 +1,36 @@
 # Findings — render / engine submit
 
+## Fisherman's-hut interior "much different than oracle" — repro BLOCKED (quest-gate + cross-area warp overlay gap) (2026-07-10, OPEN)
+
+- **symptom (USER):** entering the fisherman's hut (fish-painted door, first field) shows something much
+  different under the default config (`./run.sh`, pc_skip + pc_render) vs the oracle. Given entry position
+  X=4002 Y=-1372 Z=2352, entry = `press up` ("Use ↑ to jump to" prompt).
+- **status:** the interior divergence could **NOT be reproduced headless** this session, for two concrete
+  reasons — recorded so the next session doesn't re-walk them:
+  1. **The hut EXTERIOR renders byte-identically** default vs oracle (evidence:
+     `scratch/screenshots/hut/cmp_grid.png` — 3 matched points, pixel-identical). So the divergence is
+     inside/after entry, not the field render at that spot.
+  2. **The hut entry is quest-GATED and not available in a fresh headless newgame.** Nav lands Tomba on the
+     front lane (Z=3968); the user's Z=2352 is a different lane. A definitive 28-spot sweep of the whole lane
+     (idle + `tap up` + `up+Circle` at each, watchpoint on the area id `0x800bf870`) produced **0 area-id
+     writes** — no up/up+Circle interaction anywhere loads a new area. The in-game prompts reachable in this
+     state are "Use ↑+O to read signs" (a signpost) and "Use ↑ to jump to the back" (the hut's back-yard,
+     not the interior). So the interior is a separate area whose door is closed until quest progress the
+     fresh newgame lacks.
+- **why this matters / render-arch hypothesis (unverified):** if the interior is a separate area, its field
+  code runs a per-mode renderer selected by the area's mode byte `0x800BF870` through the 22-entry table at
+  `0x80015268` (`game/render/perobj_dispatch.cpp`). Several table entries are per-scene OVERLAY submitter
+  variants (`0x8013xxxx`) that pc_render does not rebuild — same class as the fixed billboard drop. That
+  would explain "much different" (pc_render draws nothing / wrong for the interior's mode). **Cannot confirm
+  without reaching the interior.**
+- **the unblock path = clean cross-area warp** (Part 2, `docs/engine_re.md` "DOOR RECORD"): warp directly
+  into the hut interior area to A/B it. Blocked in turn by the A0X MODE-overlay residency gap (below /
+  engine_re.md) — a future session with that gap closed, or a save-state at the enterable quest step, can
+  reproduce and root-cause. Filed as a GitHub issue.
+- **refs:** `scratch/screenshots/hut/` (cmp_grid, nudge_grid, back_grid, cmd_w0), `game/render/
+  perobj_dispatch.cpp`, `docs/engine_re.md` "Area WARP / DOOR RECORD".
+
+
 ## perobj_billboard cluster (C2D4/C464/C8F4) — BUF base + register-faithfulness (2026-07-09, RESOLVED)
 
 - **how found**: the oracle-gate fix (commit 5483a83, `engine_override_thunk`) made SBS honest for the

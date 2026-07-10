@@ -410,48 +410,32 @@ static void game_main(Core* c) {
       if (--c->game->repl.skipFrames == 0) { c->game->pad.driveRelease();
         fprintf(stderr, "[repl] skip done at frame %u\n", f); }
     }
-    // `warp` — fire the armed area change. We replicate the NON-yielding essential body of the GAME-stage
-    // area-change call FUN_80044bd4(0x800452c0, dest, mode=0, phase=2). FUN_80044bd4 cannot be rec_dispatched
-    // directly here: it has cooperative FUN_80051f80(1) yields (waiting for in-flight CD-DMA on 0x801fe070)
-    // that deadlock when invoked outside a real task run (verified: a direct dispatch hangs). Its meaningful
-    // work in a steady field (DMA idle) is just: (1) FUN_80052010(2) kill sub-task slot 2; (2) write the
-    // dest area id into task0[0x6e] and the load mode into task0[0x6d]; (3) FUN_80051f14(1, 0x800452c0)
-    // restart AREA-LOAD TASK slot 1 at its entry. The cooperative area-load task then runs naturally over
-    // the following frames (commits 0x800bf870=translate(dest), pulls the area overlay from the table at
-    // 0x800be118[id+3], walks the asset table) — no nested-yield hazard. Both callees are non-yielding.
+    // `warp` — fire the armed area change by writing the REAL DOOR RECORD, then letting the game's own
+    // field-run state machine run its natural transition sequence. RE (engine_re.md "Area WARP", door-record
+    // mechanism): a door does NOT write the destination area id (0x800bf870) directly. It writes a 2-word
+    // DOOR RECORD read by the running field-run frame (Engine::fieldRun / fieldRunFaithful case 1):
+    //   - 0x800BF83A (u16) = packed dest: (destArea << 8) | subState   [decoded in case 6:
+    //                        0x800bf870 = byteswap(0x800BF83A) & 0x3f1f -> area=high&0x1f, sub=low&0x3f]
+    //   - 0x800BF839 (u8)  = trigger type: 3 = normal cross-area door (routes case 6 -> sm[0x4c]=1, the
+    //                        FULL area machine: FUN_8005245c CD-lib cleanup, then teardown+reload).
+    // The running field frame sees 0x800BF839!=0 (with 0x800BF80F==0) and arms sm[0x4a]=1/4c=2/4e=6; case 6
+    // decodes the record into 0x800bf870, and (trig==3) hands off to the sm[0x4c]=1 area machine which tears
+    // down the old area's object tasks BEFORE swapping the overlay. This is why it is CLEAN where the old
+    // forced-case0 warp was not: case0 skipped straight to FUN_80044bd4's reload while the old area's spawned
+    // handlers were still registered and ran against swapped memory (bad-opcode flood). VERIFIED: same-area
+    // `warp 0` = 0 recomp-miss, full respawn; cross-area teardown drops warp-1 from a 72-miss flood to a
+    // single overlay-seed miss (the destination area's MODE code overlay A0<id> not yet resident — a
+    // separate recompiler-seeding gap, see engine_re.md). We write the record inline at the frame-loop top;
+    // no yielding call is involved (unlike the old FUN_80044bd4 direct-dispatch that deadlocked).
     if (c->game->repl.warpArmed) {
       c->game->repl.warpArmed = 0;
-      // The IN-GAME area reload (no DEMO/title bounce) is driven by the GAME-stage steady handler
-      // 0x801088d8 case sm[0x4c]==0 (running sub-mode sm[0x4a]==1): it calls
-      // FUN_80044bd4(0x800452c0, a1=lbu@0x800bf870, a2=0, a3=2) IN-CONTEXT (task0), so FUN_80044bd4's
-      // cooperative FUN_80051f80 yields work correctly — task0 yields, the area-load task (slot 1) pulls the
-      // new overlay, task0 resumes. (Restarting the load task ourselves, or rec_dispatching FUN_80044bd4
-      // from the frame-loop top, both fail: the former corrupts the live area -> bad opcodes, the latter
-      // deadlocks on the yield outside a task run — both verified.) So we DON'T do the load here: we seed the
-      // destination into the area id global 0x800bf870 (case0's a1) and set sm[0x4a]=1, sm[0x4c]=0 so the
-      // GAME stage runs case0 itself next frame and loads the dest area. (sm[0x4c]==4 -> FUN_80052078(1) is
-      // the title/DEMO teardown, NOT an area-to-area warp — verified it bounces to stage DEMO.)
-      const uint32_t TASK0 = 0x801fe000u;
-      if (c->game->repl.warpS4e >= 0) {
-        // Door-preamble route (`warp <id> <s4e>`): seed the dest and hand the transition to the
-        // fieldRun machine by setting sm[0x4e] — the game's own exit states run the fade-out +
-        // per-area object teardown BEFORE the reload (what the direct case0 force skips; see
-        // engine_re.md "CROSS-area is prerequisite-state-dependent"). Experimental mapping tool:
-        // the observed natural transition ran s4e 7 -> 8 -> 6 before sm[0x4c] advanced.
-        fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive sm[0x4e]=%d\n",
-                c->game->repl.warpDest, f, c->mem_r8(0x800bf870u), c->game->repl.warpS4e);
-        c->mem_w8(0x800bf870u, (uint8_t)c->game->repl.warpDest);
-        c->mem_w16(TASK0 + 0x4eu, (uint16_t)c->game->repl.warpS4e);
-        c->game->repl.warpS4e = -1;
-      } else {
-        fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive GAME case0\n",
-                c->game->repl.warpDest, f, c->mem_r8(0x800bf870u));
-        c->mem_w8(0x800bf870u, (uint8_t)c->game->repl.warpDest);    // area id global = dest (case0 passes it to FUN_80044bd4)
-        c->mem_w16(TASK0 + 0x4au, 1);                    // sm[0x4a] = 1 (running sub-mode -> handler 0x801088d8)
-        c->mem_w16(TASK0 + 0x4cu, 0);                    // sm[0x4c] = 0 -> case0 = FUN_80044bd4 area-load
-        fprintf(stderr, "[repl] warp: drove GAME case0; sm[0x4a]=%u sm[0x4c]=%u — run frames to load\n",
-                c->mem_r16(TASK0 + 0x4au), c->mem_r16(TASK0 + 0x4cu));
-      }
+      const uint32_t dest = c->game->repl.warpDest & 0x1fu;
+      const uint32_t sub  = c->game->repl.warpSub  & 0x3fu;
+      const uint16_t rec  = (uint16_t)((dest << 8) | sub);   // 0x800BF83A packed door record
+      fprintf(stderr, "[repl] warp: dest=%u sub=%u at f%u (cur area=%u) -> write door record 0x800BF83A=%04X, trig=3\n",
+              dest, sub, f, c->mem_r8(0x800bf870u), rec);
+      c->mem_w16(0x800bf83au, rec);
+      c->mem_w8 (0x800bf839u, 3);   // trigger type 3 = normal cross-area door
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs

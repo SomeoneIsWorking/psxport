@@ -487,27 +487,48 @@ the steady handler reloads. **`sm[0x4a]==4` (`0x801089c4`, `sm[0x4c]==1`) is the
 zeroes `task[0x69..0x6b]` + `sm[0x4a/4c/4e]` and calls `FUN_80052078(1)` (full stage reload → bounces to
 the DEMO stage `0x801062E4`); it is NOT an area-to-area warp.
 
-**`warp <area_id>` REPL dev command (runtime/recomp/native_boot.cpp).** From the field, seeds
-`0x800bf870 = dest` and drives `sm[0x4a]=1, sm[0x4c]=0` so the GAME stage runs case0 itself next frame and
-loads the dest area IN-CONTEXT (FUN_80044bd4's cooperative `FUN_80051f80` yields work because task0 yields →
-task1 loads → task0 resumes). Two approaches that DON'T work (both verified): (a) `rec_dispatch(FUN_80044bd4)`
-from the frame-loop top **deadlocks** (yields outside a task run); (b) restarting the load task ourselves under
-a live area **corrupts task0** (overlay swap mid object-walk → bad-opcode flood).
-- **VERIFIED CLEAN:** same-area reload `warp 0` from the seaside field — **0 bad opcodes**, stays in GAME
-  stage, area machine runs (`sm[0x4c]` 0→2). The trigger mechanism is sound.
-- **`warp <id> <s4e>` experiment (2026-07-10):** driving `sm[0x4e]` alone (tried 6 and 7, the values
-  the natural post-cutscene transition visits) does NOT fire a transition — no crash, no load, the
-  machine just carries on in the current area. The door trigger must write companion state (door
-  record / dest fields the `0x8010626c` 12-way table handlers consume via `FUN_80106b98`) alongside
-  s4e. Next step for the clean cross-area warp: RE a real door's writes (breakpoint a door touch,
-  diff task0 sm + 0x800bf8xx before/after).
-- **CROSS-area is prerequisite-state-dependent:** `warp 6`/`warp 20` ran with **0 bad opcodes** (got
-  furthest), `warp 3` 7, `warp 1` / `warp 19` crash hard (1000s of bad opcodes). Root cause: case0 reloads
-  the overlay while the OLD area's spawned object tasks/handlers are still registered and run against the
-  swapped `0x80182000` memory. A clean cross-area warp needs the **door-transition preamble** that quiesces/
-  tears down the per-area object tasks BEFORE the reload (the game runs this on a real door; reproducing it is
-  the scoped follow-up = the "prerequisite-state" work for a boss/level selector). The destination mechanism
-  itself (above) is fully mapped.
+### The DOOR RECORD — how a real door arms a transition (RESOLVED 2026-07-10)
+
+A door does **NOT** write the destination area id (`0x800bf870`) directly. It writes a two-field **DOOR
+RECORD** consumed by the *running field-run frame* (`Engine::fieldRun` / `fieldRunFaithful`, the `sm[0x4e]`
+machine `FUN_80106b98`, case 1):
+
+- **`0x800BF83A` (u16)** = packed destination: **`(destArea << 8) | subState`** (dest in the high byte,
+  sub-state in the low byte). Verified against 3 in-game writers:
+  `game/render/screen_fade.cpp` writes `0x1501` (→ area 21, sub 1); `game/player/actor_tomba.cpp`'s
+  off-map exit writes `0x100` (→ area 1, sub 0); `game/ai/beh_seaside_prox_substate.cpp` writes
+  `obj[+0xBF]<<4`.
+- **`0x800BF839` (u8)** = trigger type: **3** = normal cross-area door.
+
+`fieldRun` **case 1** sees `0x800BF839 != 0` (with `0x800BF80F == 0`) and arms `sm[0x4a]=1 / 0x4c=2 /
+0x4e=6`. **Case 6** then decodes the record — `0x800bf870 = byteswap(0x800BF83A) & 0x3f1f` (i.e.
+`area = (0x800BF83A>>8)&0x1f`, `sub = 0x800BF83A & 0x3f`) into `0x800bf870 / 0x800bf871` — and, for
+`trig==3`, calls `FUN_8005245c` (CD-lib cleanup) and hands off to `sm[0x4a]=1 / 0x4c=1`, the steady
+handler's area-load state that **tears the old area's object tasks down BEFORE swapping the overlay**.
+(Cases 7–10 are the poll/done-flag/fade-out/CD-settle steps of that teardown; `0x8010626c` is `FUN_80106b98`'s
+own switch jump-table, not a separate companion table — the "12-way table" note above is superseded.)
+
+**`warp <area_id> [sub]` REPL dev command — now uses the DOOR RECORD (2026-07-10).**
+`runtime/recomp/native_boot.cpp` writes `0x800BF83A = (dest<<8)|sub` + `0x800BF839 = 3` at the frame-loop
+top and lets the running field-run machine run the game's own transition. This **replaces** the old
+forced-`case0` warp (which seeded `0x800bf870` and drove `sm[0x4c]=0` to run `FUN_80044bd4` directly,
+skipping the teardown). Results (oracle + default configs, headless via `newgame`→field→`warp N`→`run 500`):
+- **Same-area `warp 0`: 0 recomp-miss, full object respawn, renders correctly** (both configs). The proper
+  teardown+reload runs (`sm[0x4c]` 1→5).
+- **Cross-area teardown is now CLEAN:** the door-record path drops **`warp 1` from a 72-recomp-miss flood
+  (old forced-case0) to a single miss** (same for `warp 3`), on both configs. The stale-object bad-opcode
+  flood the old note described is **GONE** — the earlier "CROSS-area is prerequisite-state-dependent /
+  1000s of bad opcodes" diagnosis was for forced-case0 and is now obsolete for the door-record path.
+- **REMAINING cross-area blocker — the A0X MODE code overlay is not loaded during the warp.** The single
+  surviving miss is a **recomp-MISS**, not a bad-opcode derail: `warp 1` → `0x80109F7C` (A01's per-area
+  object-init handler, jt[1]); `warp 3` → `0x8010B37C` (A03 code). `PSXPORT_DEBUG=ovload` shows the MODE
+  slot (base `0x80108F9C`) only ever holds **SOP then A00** — the destination area's field-code overlay
+  (`ov_a0<id>`) **never loads into the MODE slot**, so the per-area init handler (dispatched from resident
+  `FUN_80058648` via the `0x800A45B8[area]` JT) routes into the stale A00 switch → miss. The area DATA
+  (OPN → AREA slot `0x18A000`) *does* load; only the CODE overlay step is missing. This is a distinct
+  overlay-load-orchestration gap (the steady handler's `sm[0x4c]==1/5` area-load states don't fetch the
+  A0X code overlay in this warp context), NOT a teardown problem — the scoped follow-up for a boss/level
+  selector. `ov_a03` etc. ARE recompiled; the gap is residency/loading, not recompilation.
 
 ## Object / entity model — the entity LIST + node (RESOLVED via RAM-dump search)
 The active entities are a **doubly-linked list of pool nodes, stride 0xD0 (208 bytes)** (found by

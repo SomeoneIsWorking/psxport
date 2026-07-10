@@ -167,19 +167,23 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "newgame")) { this->navNewgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
     else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; this->skipFrames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "warp")) {
-      // warp <area_id> — load a different area on demand (foundation for a level/boss selector). Only valid
-      // from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the dest; the frame loop fires it.
-      unsigned s4e = 0; int nargs = sscanf(line, "%*s %u %u", &a, &s4e);
+      // warp <area_id> [sub] — load a different area on demand via the REAL DOOR RECORD (foundation for a
+      // level/boss selector). Only valid from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the
+      // dest; the frame loop writes the door record (0x800BF839/0x800BF83A) so the running field-run
+      // machine runs the game's own transition sequence — fade-out, object teardown, CD settle, reload —
+      // exactly as a real door does (engine_re.md "Area WARP"). Replaces the old forced-case0 warp, which
+      // skipped the teardown and flooded recomp-misses from stale objects.
+      unsigned sub = 0; int nargs = sscanf(line, "%*s %u %u", &a, &sub);
       if (nargs >= 1) {
         if (c->mem_r32(0x801fe00c) != 0x8010637Cu)
           fprintf(stderr, "[repl] warp: not in GAME stage (stage=%08X) — reach the field first (newgame/skip)\n",
                   c->mem_r32(0x801fe00c));
         else {
-          this->warpDest = a; this->warpArmed = 1; this->warpS4e = (nargs == 2) ? (int)s4e : -1;
-          fprintf(stderr, "[repl] warp: armed dest area id=%u (cur=%u)%s — run frames to load\n",
-                  a, c->mem_r8(0x800bf870u), (nargs == 2) ? " via sm[0x4e] door-preamble" : "");
+          this->warpDest = a; this->warpSub = (nargs == 2) ? sub : 0; this->warpArmed = 1;
+          fprintf(stderr, "[repl] warp: armed dest area id=%u sub=%u (cur=%u) via door record — run frames to load\n",
+                  a, this->warpSub, c->mem_r8(0x800bf870u));
         }
-      } else fprintf(stderr, "[repl] warp <area_id> [s4e]  (area table @0x800be118, ids 0..23; s4e = drive fieldRun exit state instead of forcing case0)\n");
+      } else fprintf(stderr, "[repl] warp <area_id> [sub]  (area table @0x800be118, ids 0..0x1f; sub = 0x800BF871 sub-state)\n");
     }
     else if (!strcmp(cmd, "preseq")) {   // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
       unsigned n = 0; char dir[120] = "scratch/screenshots/preseq";
