@@ -1339,7 +1339,11 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     // return here so the OLD PREWATCH pause-on-first-fire logic is skipped.
     return;
   }
-  if (mWwPersist) {  // PREWATCH's continuous logging — per-store attribution to A vs B
+  // PSXPORT_SBS_WW_FROMFRAME=<n> — suppress the persist per-store logging before lockstep frame n.
+  // Lets PREWATCH stay armed from boot (so the FIRST divergent frame is fully captured) without
+  // writing hundreds of thousands of store lines for the clean frames before it.
+  static const uint32_t ww_from_frame = []{ const char* e = getenv("PSXPORT_SBS_WW_FROMFRAME"); return e && *e ? (uint32_t)strtoul(e, 0, 0) : 0u; }();
+  if (mWwPersist && mFrame >= ww_from_frame) {  // PREWATCH's continuous logging — per-store attribution to A vs B
     // pc = c->pc (fn entry set by the last wrapper — often STALE, reflecting the last jal-callee).
     // ra = c->r[31] (guest return address) — points into the CALLER just past its jal, so it names
     //      the true call site regardless of stale c->pc. If ra differs A vs B for the same address,
@@ -1349,6 +1353,25 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     fprintf(stderr, "[sbs-ww] f%u %c wrote [%08X]=%08X (pc=%08X ra=%08X sp=%08X stage=%08X) [c=%p mA=%p mB=%p]\n",
             mFrame, which ? 'B' : 'A', a, v, c->pc, c->r[31], c->r[29], c->mem_r32(0x801fe00c),
             (void*)c, (void*)&mA->core, (void*)&mB->core);
+    // t/v/a regs per store: the substrate packet emitters (gen_func_8007FDB0 etc.) keep their
+    // prim-walk state in t-regs (t5=r13 prim ptr, t2=r10 pool cursor). Printing them per store lets
+    // an offline diff of the A vs B store sequences name the exact prim where the walks diverge.
+    fprintf(stderr, "[sbs-ww]     t: v0=%08X v1=%08X t0=%08X t1=%08X t2=%08X t3=%08X t4=%08X t5=%08X t6=%08X t7=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
+            c->r[2], c->r[3], c->r[8], c->r[9], c->r[10], c->r[11], c->r[12], c->r[13], c->r[14], c->r[15],
+            c->r[4], c->r[5], c->r[6], c->r[7]);
+    // GTE control regs at the store — the packet emitters are pure functions of (prim data, CR
+    // rotation+translation, CR projection). When RAM matches but the emit diverges, this is the
+    // input that differs. CR0-7 = composed rotation+translation, CR24-30 = OFX/OFY/H/DQA/DQB/ZSF3/ZSF4.
+    {
+      // gte_read_ctrl reads the CURRENT core's GTE instance — correct here because the store
+      // callback runs synchronously inside core c's execution (GTE_CurState is c's).
+      uint32_t cr[8], pj[7];
+      for (int k = 0; k < 8; k++) cr[k] = gte_read_ctrl(k);
+      for (int k = 0; k < 7; k++) pj[k] = gte_read_ctrl(24 + k);
+      fprintf(stderr, "[sbs-ww]     gte: cr0-7=%08X %08X %08X %08X %08X %08X %08X %08X  cr24-30=%08X %08X %08X %08X %08X %08X %08X\n",
+              cr[0], cr[1], cr[2], cr[3], cr[4], cr[5], cr[6], cr[7],
+              pj[0], pj[1], pj[2], pj[3], pj[4], pj[5], pj[6]);
+    }
     // Peek AFTER the actual host write, so we see the byte the store LANDED in. (mem_w8 does wwatch_check
     // BEFORE the write, so we peek RIGHT NOW = pre-store, but the write is imminent one-line below.)
     fprintf(stderr, "[sbs-ww]     pre-store peek A[%08X]=%u  B[%08X]=%u\n",
@@ -1417,14 +1440,20 @@ int Sbs::Impl::dbgCmd(FILE* out, const char* line) {
       if (mWwHit & 2) fprintf(out, "== WRITE SITE — core B wrote 0x%08X=%08X ==\n%s", mWwAddr, mWwVb, mWwBtB);
       else            fprintf(out, "== WRITE SITE — core B: no store this frame ==\n");
     }
-  } else if (!strcmp(sub, "watch")) {
+  } else if (!strcmp(sub, "watch") || !strcmp(sub, "watchp")) {
     unsigned addr = 0;
     if (sscanf(line, "%*s %*s %x", &addr) != 1) addr = mDivAddr;
     if (!addr) { fprintf(out, "sbs watch: no address (no divergence yet, give one: `sbs watch <hex>`)\n"); return 1; }
     mWwAddr = addr; mWwArmed = true; mWwHit = 0; mWwBtA[0] = mWwBtB[0] = 0;
+    // watchp = PERSIST watch: log EVERY store (with regs) to stderr instead of pausing on the first
+    // fire — the manual-arm equivalent of rewindAndArm's continuous logging, for when the rewind is
+    // unavailable (fiber live). Diff the A/B store sequences offline to find the first divergent one.
+    mWwPersist = (sub[5] == 'p');
     mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
     mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
-    fprintf(out, "write-watch armed on 0x%08X — `sbs resume`; the diverging write will re-pause with the site.\n", addr);
+    fprintf(out, "write-watch armed on 0x%08X%s — `sbs resume`; %s\n", addr,
+            mWwPersist ? " (persist)" : "",
+            mWwPersist ? "every store logs to stderr with regs." : "the diverging write will re-pause with the site.");
   } else if (!strcmp(sub, "show")) {
     char w = 0; sscanf(line, "%*s %*s %c", &w);
     if (w == 'b' || w == 'B') mSel = 1; else if (w == 'a' || w == 'A') mSel = 0;

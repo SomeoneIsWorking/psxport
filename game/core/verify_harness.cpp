@@ -155,8 +155,8 @@ void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
   auto printHeader = [&]() {
     if (headerPrinted) return;
     headerPrinted = true;
-    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X\n",
-            addr, (unsigned long long)invocation, entrySp, entryRa);
+    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
+            addr, (unsigned long long)invocation, entrySp, entryRa, preRegs[4], preRegs[5], preRegs[6], preRegs[7]);
   };
   for (size_t i = 0; i < mJournal.size() && bad < 16; i++) {
     uint32_t a = mJournal[i].addr;
@@ -232,8 +232,8 @@ void VerifyHarness::strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx)
   auto printHeader = [&]() {
     if (headerPrinted) return;
     headerPrinted = true;
-    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X\n",
-            addr, (unsigned long long)invocation, entrySp, entryRa);
+    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
+            addr, (unsigned long long)invocation, entrySp, entryRa, preRegs[4], preRegs[5], preRegs[6], preRegs[7]);
   };
   for (uint32_t i = 0; i < 0x200000 && bad < 16; i++)
     if (c->ram[i] != mStrictNatRam[i]) {

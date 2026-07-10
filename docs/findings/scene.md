@@ -445,7 +445,39 @@
   `Font::glyphEmit`'s epilogue restoring `sp = sp0 + 56` where sp0 was already the ENTRY sp — the
   guest stack leaked UP 0x38 per call (MIRROR_VERIFY=0x80078CA8 caught it at invocation #1: exit
   sp 801FE980 vs entry 801FE948). Fixed to `sp = sp0`; 2497 invocations now byte-exact.
-- **OPEN — narrowed further (2026-07-10 late)**: at the f289 store (`sbs watch 800c3c54` + the new
+- **RESOLVED (actor half, 2026-07-10 late-late)**: the f289 "different cmd-word branch" framing
+  was FALLOUT — the real chain, walked with three new probes (per-store `[sbs-ww]` t-reg + GTE-CR
+  dumps via `sbs watchp`/`PSXPORT_SBS_PREWATCH`+`PSXPORT_SBS_WW_FROMFRAME`, then
+  `PSXPORT_MIRROR_VERIFY` with entry-args in the header):
+  1. Pool-cursor (0x800BF544) store sequences: both cores make the SAME 340 stores at f289; first
+     divergent VALUE at store #159 — one extra GT3 passes the screen-cull on A (Δ=0x28) for prim
+     group 0x8018E5DC.
+  2. GTE CR dump at that store: composed ROTATION CR0-4 differs, translation CR5-7 matches ⇒ the
+     compose input `cmd+0x18` differed MID-FRAME (frame-end RAM matched — one-frame transient, the
+     "settled" reporter never flags it).
+  3. `PSXPORT_SBS_PREWATCH=0x800F2BDC` (Charles cmd[0]+0x18): written once/frame by
+     Math::matMul ← gen_func_80051128 ← objMatrixCompose, same site both cores, DIFFERENT values
+     only at f289 (pose kickoff frame). Angle source (cmd+0x38): core A wrote via native
+     Animation chain, core B via gen — different code paths on identical RAM.
+  4. `PSXPORT_MIRROR_VERIFY=0x80077C40` (Animation::attach): TWO native defects, both fixed:
+     (a) **v0/v1 leak** — gen attach's return value is the last callee's v0 (0 from
+     FUN_80076904) or 0xC000 on the tag==0x8000 exit; the native never set v0, and the SOP
+     overlay call site 0x8010B828 (ra=0x8010B830) BRANCHES on it — flipping the lifted actor's
+     pose-kickoff arm for exactly one frame. Native now mirrors v0/v1 per exit.
+     (b) **loadFrame 9-byte header** — gen's flags&0x40 arm has its OWN inline pose-triple unpack
+     that advances the stream by 9 (padded header; final read does `r5+=5`), while the native
+     reused the shared +4 (shared-nibble) helper — Loop1 then decoded every limb 5 bytes early
+     (native f8=0x0020 constants vs gen 0x0FF5/0x0222, MV invocation #5, entry a0=800FB960
+     a1=8010D39C a2=2, entry 0x8010D428 rec=0xCF000778). Native now skips the 5 pad bytes.
+  5. f328 next: same class one deeper — native sopLiftedSubtick dispatched its callees
+     (attach/77CFC/sfx/installSceneRecord/animEnvInit/script.step) WITHOUT arming r31; the
+     substrate callees spill the caller's ra into their guest frames (A spilled stale 0x8010B874
+     where gen B spilled 0x8010B6C8 at 0x801FE90C). All ten gen call-site ra constants now armed
+     in sopLiftedSubtickBody.
+  LESSON (recurring): a native replacing a gen body must mirror (i) return-value v0/v1 dataflow
+  per exit — real callers branch on it; (ii) r31 before EVERY call — callees spill it; (iii) the
+  exact stream-cursor arithmetic of per-branch inline decoders, not a shared helper's contract.
+- **OPEN (superseded framing, kept for the probe trail)**: at the f289 store (`sbs watch 800c3c54` + the new
   `[ww-regs]` line), core A and core B are in DIFFERENT PRIM-TYPE BRANCHES of gen_func_8007FDB0
   (`(cmdword>>24)&3`: A=1 at L_8007FF24, B=2 at L_8007FF78) — i.e. the mid-frame CMD-LIST ENTRY for
   Charles' prim (s2=0x800FB960 live at the store) has a DIFFERENT command word on core A. The

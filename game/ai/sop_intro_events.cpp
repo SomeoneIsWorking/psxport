@@ -414,6 +414,7 @@ void sopLiftedSubtickBody(Core* c) {
       break;
     case 1:
     case 6: {
+      c->r[31] = 0x8010B768u;                                      // gen call-site ra (see state 3)
       c->engine.script.step(node);                                 // FUN_80041098
       if ((int8_t)c->mem_r8(node + 0x70) != -1) return;
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));      // advance only, no anim-install
@@ -430,10 +431,17 @@ void sopLiftedSubtickBody(Core* c) {
     case 3: {
       if (c->mem_r8(SCENE_BEAT) != 3) return;
       c->mem_w32(node + 0x3Cu, c->mem_r32(0x800ECFA8u));
+      // r31 = gen call-site constants (ov_sop_gen_8010B588): every callee here spills the caller's
+      // ra into its own guest frame (attach's frame mirror / FUN_80051B04's substrate prologue), so
+      // a stale r31 lands as a real guest-stack byte diff (watch-cut f328, 0x801FE90C).
       c->r[4] = node; c->r[5] = 0x8010D39Cu; c->r[6] = 2;
+      c->r[31] = 0x8010B644u;
       rec_dispatch(c, 0x80077C40u);                                 // Animation::attach (still substrate here)
+      c->r[31] = 0x8010B654u;
       c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xC4u), 0x12u, 0x0Fu);   // FUN_80051B04
+      c->r[31] = 0x8010B664u;
       c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xD0u), 0x12u, 0x10u);
+      c->r[31] = 0x8010B674u;
       c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xDCu), 0x12u, 0x11u);
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));      // advance only, no anim-install
       return;
@@ -441,12 +449,17 @@ void sopLiftedSubtickBody(Core* c) {
     case 4: {
       if (c->mem_r8(node + 0x79u) != 1) return;
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
+      c->r[31] = 0x8010B6A4u;                                        // gen call-site ra (see state 3)
       c->engine.sfx.trigger(3, 0, 0);                                // FUN_80074590
       c->mem_w32(node + 0x3Cu, c->mem_r32(0x800ECF68u));
       c->r[4] = node; c->r[5] = 0x80017FE8u; c->r[6] = 2; c->r[7] = 6;
+      c->r[31] = 0x8010B6C8u;
       rec_dispatch(c, 0x80077CFCu);                                 // still substrate (no native owner)
+      c->r[31] = 0x8010B6D8u;
       c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xC4u), 0x12u, 1u);
+      c->r[31] = 0x8010B6E8u;
       c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xD0u), 0x12u, 4u);
+      c->r[31] = 0x8010B6F8u;
       c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xDCu), 0x12u, 7u);
       return;
     }
@@ -465,6 +478,7 @@ void sopLiftedSubtickBody(Core* c) {
 
   if (runTail) {
     c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
+    c->r[31] = 0x8010B754u;                                          // gen call-site ra (see state 3)
     c->engine.animEnvInit(node, 0x80017FE8u, animData);              // FUN_80040CDC
     c->mem_w8(node + 0x70u, 1);
   }

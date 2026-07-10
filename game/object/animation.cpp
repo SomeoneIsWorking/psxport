@@ -312,7 +312,13 @@ void Animation::loadFrame(uint32_t node) {   // FUN_80076904
 
   uint32_t phase;
   if (flagsByte & 0x40) {
-    if (flagsByte & 0x80) anim_unpack_pose_triple(c, obj, stream);
+    // Gen's 0x40-set arm has its OWN inline pose-triple unpack whose final read advances `r5 += 5`
+    // (gen_func_80076904, the block before L_800769C4): the header is PADDED to 9 bytes so Loop1's
+    // 9-byte-per-limb stream stays aligned — no shared straddling nibble in this variant. The
+    // shared helper leaves stream at s+4 (the Loop2 shared-nibble contract), so skip the 5 pad
+    // bytes here. Without this, Loop1 decoded every limb 5 bytes early (watch-cut f289: Charles'
+    // one-frame pose transient — native wrote f8=0x0020.. constants where gen wrote 0x0FF5/0x0222).
+    if (flagsByte & 0x80) { anim_unpack_pose_triple(c, obj, stream); stream += 5; }
     phase = rec;                                             // raw table entry seeds the parity
   } else {
     if (flagsByte & 0x80) { phase = 1; anim_unpack_pose_triple(c, obj, stream); }
@@ -452,11 +458,20 @@ void Animation::attach(uint32_t node, uint32_t table, uint32_t id) {
   c->mem_w16(node + 0xE, (uint16_t)(desc & 0xfffu));
   loadFrame(node);
 
+  // v0/v1 mirror (gen_func_80077C40 never sets v0 itself — the CALLER-visible v0 is whatever the
+  // last callee left, and the SOP overlay call site at 0x8010B828 (ra=0x8010B830) BRANCHES on it.
+  // Leaving native junk here flipped the lifted actor's pose-kickoff arm exactly once per anim
+  // change (watch-cut f289: A snapped angles via the overlay's own FUN_80075FF8 call while B took
+  // gen attach's executor path — one-frame pose transient, packet-pool divergence). Gen dataflow:
+  //   FUN_80076904 returns 0 on every path (all three exits are failed `<` compares), then
+  //   r3 = desc; r2 = r3 & 0x2000; early-exit leaves v0=0, v1=desc&0xC000 (delay slot);
+  //   tag==0x8000 exit leaves v0=0xC000 (delay-slot r2 arm), v1=0x8000;
+  //   executor exits return FUN_80075FF8's own v0/v1 (rec_dispatch below leaves them naturally.)
   desc = c->mem_r16(entryPtr + 6);                              // re-read (loadFrame may not touch it)
-  if ((desc & 0x2000u) == 0) return;
   uint32_t tag = desc & 0xc000u;
+  if ((desc & 0x2000u) == 0) { c->r[2] = 0; c->r[3] = tag; return; }
   uint32_t a1;
-  if (tag == 0x8000u) return;                                   // no executor call
+  if (tag == 0x8000u) { c->r[2] = 0xC000u; c->r[3] = tag; return; }     // no executor call
   if (tag == 0x4000u || tag == 0xc000u) a1 = rd_u32(c, entryPtr + 8);   // follow jump pointer
   else                                  a1 = entryPtr + 8;              // (tag == 0) address itself
   c->r[4] = node; c->r[5] = a1; c->r[6] = (uint32_t)c->mem_r16s(node + 0xE);
