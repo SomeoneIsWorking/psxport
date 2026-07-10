@@ -69,6 +69,18 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
   const uint8_t  state      = c->mem_r8(0x1F80019Au);         // scratchpad "active audio" state
   const uint8_t  cutMode    = c->mem_r8(0x1F800137u);         // 0/1/2 — dialog/cut mode
   int32_t vol;                                                // computed 16-bit volume result
+  // PSXPORT_DEBUG=vmt — voiceMixTick trace (RE/SBS diagnostic: docs/findings/audio.md "pc_skip vs
+  // oracle: SPU register stream divergences"). Under SBS the two Games are separate Core/RAM
+  // instances; this + the paired [gain2] trace in setGain2() below let a session correlate each
+  // core's ramp/smoother state and setGain2 call cadence directly, instead of re-deriving it by
+  // hand every time this bug class resurfaces.
+  if (cfg_dbg("vmt")) {
+    fprintf(stderr, "[vmt] f%u %s state=%u cut=%u boost=%u cur=%d tgt=%d g2cur=%u g2tgt=%d base=%d\n",
+            c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", state, cutMode,
+            boost_flag, (int16_t)c->mem_r16(V+0x2Cu), (int16_t)c->mem_r16(V+0x2Au),
+            (uint16_t)c->mem_r16(V+0x30u), (int16_t)c->mem_r16(V+0x2Eu),
+            (int16_t)c->mem_r16(V+0x28u));
+  }
 
   if (state != 2) {
     // Boot / silence path: scale base by a fixed 0x47FF / 0x7FFF ratio (~89%), no ramp.
@@ -136,6 +148,10 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
 void MusicCoord::setGain2(int32_t val) {
   Core* c = this->core;
   const uint32_t V = 0x800BE1F8u;
+  if (cfg_dbg("vmt")) {
+    fprintf(stderr, "[gain2] f%u %s val=%d\n",
+            c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", val);
+  }
   if (val < 0) {
     uint16_t snap = (uint16_t)(-(int16_t)val);
     c->mem_w16(V + 0x2Eu, snap);   // target

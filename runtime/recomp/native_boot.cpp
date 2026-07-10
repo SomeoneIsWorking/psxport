@@ -76,7 +76,13 @@ static void native_step_frame(Core* c, uint32_t f) {
   xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
   c->game->ffspan.resetFrame();   // backdrop-attribution: reset the per-frame builder span table
   void gpu_set_disp_origin(Core* c, int x, int y);
-  (void)f;
+  // Timing::logicFrame is the per-Core frame counter several subsystems consult (audio trace tags,
+  // BGM-director gating, findings/debug instrumentation). The standalone frame loop (below, in main())
+  // used to be the ONLY writer (`c->game->timing.logicFrame = f` right before calling this function),
+  // so under SBS — which reaches this function via dc_step_frame()/stepCore() without ever running that
+  // loop — logicFrame silently stayed 0 for the whole run. Set it here, at the single per-frame entry
+  // point both the standalone loop and SBS funnel through, so it is correct under every caller.
+  c->game->timing.logicFrame = f;
   c->game->perf.frameBegin();   // perf: start the frame clock (top of the deterministic per-frame work)
   // Advance the libetc VSync counter (DAT_800abde0) — one vblank per native frame. VSync(0) is trapped,
   // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
@@ -336,7 +342,8 @@ static void game_main(Core* c) {
   uint32_t last_entry = 0;            // stage/sm change detector
   uint32_t last_sm = 0xFFFFFFFF;
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
-    c->game->timing.logicFrame = f;
+    // c->game->timing.logicFrame = f is now set centrally in native_step_frame() itself (so SBS's
+    // dc_step_frame() path gets it too, not just this standalone loop).
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills
     // it (immediate commands — r/w/watch/input/regs/seq — execute between frames). Quit/EOF breaks.
     if (repl_mode) {

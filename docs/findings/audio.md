@@ -173,3 +173,81 @@
   consumable state (audible) — the skip path must produce the same audio programming as the faithful
   path. Related history: issue #29 (SFX divergence class).
 - **repro**: scratch/logs/oc_skip.log.
+## pc_skip vs oracle: SPU register stream divergences — MODE=skip (2026-07-10, root-caused)
+
+- **how found**: operator oracle-compare session, `PSXPORT_SBS_MODE=skip PSXPORT_SBS_AUTONAV=combat`
+  (95s): 54 sbs-div lines, ALL `[AUDIO spu_reg]`, guest RAM otherwise clean. Full repro (this session,
+  same binary/build) reproduces the identical 54-line sequence — see `scratch/logs/final_skip.log`.
+  Register offsets (relative to SPU base 0x1F801C00): 0x1A6 = Sound RAM xfer address, 0x1AA = SPUCNT,
+  0x1B0/0x1B2 = CD-input volume L/R (`MusicCoord`'s "CDVOL" — game/audio/music_coord.cpp), 0x18C/0x18E
+  = voice KOFF, 0x180/0x182 = main volume L/R.
+- **mechanism (root cause)**: under `MODE=skip`, core A runs with `pc_skip=true` (the real
+  `./run.sh` default config) and core B is the pure oracle (`pc_skip=false`, and — this is the key
+  fact the earlier symptom writeup didn't establish — **B ALSO never takes any `EngineOverrides`
+  entry under SBS**: `engine_override_thunk`'s `verify.inSubstrateLeg` gate forces the oracle leg to
+  stay pure substrate for every wired address, so B always executes the literal recompiled
+  `gen_func_80075824`/`gen_func_80075D24` (voiceMixTick/setGain2), never the native C++ port, even
+  though the port is globally registered). Confirmed by instrumenting both `MusicCoord::voiceMixTick`
+  and `MusicCoord::setGain2` (new `PSXPORT_DEBUG=vmt` channel, `[vmt]`/`[gain2]` traces,
+  game/audio/music_coord.cpp) — under the SBS-skip repro, **every** `[vmt]`/`[gain2]` line tags
+  `A(skip)`; core B never fires the native method at all (by design — oracle purity), so its
+  equivalent state can only be observed indirectly via the SPU register write log.
+  - **(a) f2–f9 boot-time one-sided writes (0x1A6/0x1AA/0x1B0/0x1B2)**: value-for-value IDENTICAL
+    writes appear on the two cores a few frames apart (e.g. f2 B writes 0x1A6=0x5C22 / 0x1AA=0xC0A0;
+    f3 A writes the SAME two values). This is a pure **frame-cadence phase-skew of one-time boot SPU
+    programming** — pc_skip's collapsed init reaches the same SPU-init call a few frames earlier/later
+    than the oracle's multi-step boot. **Verdict: phase-skew, not a real bug** — confirmed by exact
+    value equality across the shifted frames (the diagnostic the new alignment work should use: same
+    value, different frame == skew; different value == real).
+  - **(b) f890–f894 CD-volume ramp (0x1B0/0x1B2) "1-2 steps behind"**: NOT a simple constant frame
+    shift. Tested directly: comparing `A[f]` vs `B[f-k]` for k ∈ {-1,0,+1} over the f882-894 window,
+    `k=0` (no shift) gives the SMALLEST **and monotonically shrinking** residual (5,5,5,3,3,4,3,1,1,
+    2,2,1,1); k=±1 make it worse or bigger. A pure frame-shift of an otherwise-identical value
+    sequence would produce a residual that's either ~0 at the right k or roughly CONSTANT at the
+    wrong k's — not a decaying one. The decay pattern is the signature of `voiceMixTick`'s g2
+    **exponential smoother** (`g2 += (g2_target - g2) >> 3`, ~12.5%/frame decay) chasing a
+    `setGain2`-supplied target (`g2_target`, V+0x2E) whose *call timing* differs by a frame or two
+    between the two cores (native override calls for A vs the substrate's own internal call graph for
+    B) — i.e. the ramp's OUTPUT looks time-shifted-and-blended rather than plain time-shifted, because
+    an IIR filter mixes history across the very call-timing skew that's the real cause. Root mechanism
+    is the SAME class of bug as (a) — pc_skip's collapsed load/area-transition cadence firing the
+    `setGain2`/`voiceMixTick` chain 1-2 frames off from the oracle's real (uncollapsed) timing — just
+    observed through a filter that blends it instead of passing it through cleanly.
+    **Verdict: phase-skew propagated through an IIR smoother, not a port-accuracy bug.** Per USER
+    directive (2026-07-10): do NOT patch the ramp/smoother to "compensate" for this — that would be
+    exactly the kind of magic-constant bandaid CLAUDE.md bans. The correct fix is the frame-rendezvous
+    alignment a separate harness agent is adding to `PSXPORT_SBS_MODE=skip` (hold pc_skip's frame
+    counter in lockstep with the oracle's real multi-step cost) — once landed, `setGain2`/
+    `voiceMixTick` will fire on the same absolute frame on both cores and this residual should vanish
+    on its own. Re-verify after that lands; if it does NOT vanish, that's the signal the port itself
+    (not the cadence) has a real bug.
+  - **f115–f171 (NOT in original symptom scope, present in every repro of this run)**: a third
+    cluster around the game's FIRST BGM start (title/menu music) — same register set (0x1AA/0x1B0/
+    0x1B2/0x180/0x182) plus voice KOFF (0x18C/0x18E) with genuinely large value deltas (e.g. f157
+    `0x18C A=0x0080 B=0xFF00`, f117 `0x1B0 A=0x638C B=0x00C6`) that do NOT look like small-residual
+    smoother convergence — this looks like a materially different KOFF voice-mask / CDVOL-snap
+    sequence between the two cores at the very first music start, the single most collapsed-load-
+    sensitive point in the run (first-ever CD/area load). **OPEN, not analyzed to completion this
+    session** — same phase-skew-vs-real-bug question as (b), needs the same k-shift/timing analysis
+    once the ramp harness lands; flagging so it isn't silently dropped from the 54-line symptom set.
+- **workflow fix (tooling defect found + fixed while root-causing)**: `Timing::logicFrame`
+  (`runtime/recomp/timing.h`) was **silently 0 for the entire run under SBS**. It was only ever
+  written by the standalone `native_boot.cpp` frame loop (`c->game->timing.logicFrame = f;` right
+  before calling `native_step_frame`); SBS reaches `native_step_frame` via `dc_step_frame()` /
+  `stepCore()`, which never runs that loop, so every consumer (`Cd::audioTrace`'s `[xa f%u ...]` tag,
+  the new `[vmt]`/`[gain2]` traces, any future frame-tagged debug print) silently printed `f0` forever
+  under SBS. Fixed by moving the assignment into `native_step_frame()` itself (the single per-frame
+  entry point both the standalone loop and `dc_step_frame` funnel through) — `runtime/recomp/
+  native_boot.cpp`. This is exactly the workflow-first class of bug CLAUDE.md flags: a diagnostic that
+  looked like it worked (never errored, printed a plausible-looking `f0`) but was quietly useless for
+  its actual purpose under the one mode (SBS) most debugging happens in.
+- **new tooling**: `PSXPORT_DEBUG=vmt` — `[vmt]` traces `MusicCoord::voiceMixTick`'s ramp/smoother
+  state every call (cur/tgt/g2cur/g2tgt/base, tagged `A(skip)`/`B(oracle)` + `Timing::logicFrame`);
+  `[gain2]` traces every `MusicCoord::setGain2` call the same way. Registered in docs/config.md.
+- **repro**: `scratch/logs/oc_skip.log` (original), `scratch/logs/final_skip.log` (this session,
+  identical 54-line reproduction), `scratch/logs/vmt_dbg4.log` / `gain2_dbg.log` (per-core internal
+  state traces used for the k-shift analysis above).
+- **gates**: `MODE=skip` still shows the same 54 `[AUDIO spu_reg]` lines (expected — no ramp code was
+  patched, per the no-bandaid directive above; the fix is upstream in the alignment harness, owned by
+  a separate agent). `MODE=full PSXPORT_SBS_AUTONAV=combat` (95s) — **0-diff**, unaffected by the
+  `Timing::logicFrame` fix or the new debug channel (both are diagnostic-only, no behavior change).
