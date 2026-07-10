@@ -79,3 +79,68 @@
   (parent FUN_80075A80 = `Engine::areaUpdateTail`); SBS extension that pinpointed the write site:
   runtime/recomp/sbs.cpp `recordDivergence` + wwatch-hit block; skills: `sbs-diverge` (find),
   `ghidra-re` (RE), this file (record).
+
+## Sequencer (libsnd SsSeqCalled) cluster wiring — 5 bugs found at §9 re-verify; 8 addresses wired 0-diff, 5 left unwired-honest (2026-07-10)
+
+- **symptom / task:** promote the banked wide-RE Sequencer drafts (game/audio/sequencer.{h,cpp} —
+  0x800909C0 frameTick, 0x80090BD0 SsSeqCalled, and 11 leaves) from draft to VERIFIED ownership.
+- **status: DONE for 8 addresses (wired via `engine_set_override_main`, SBS-full 0-diff through
+  f9030 + 23k-invocation MIRROR_VERIFY byte-compare); 5 addresses DELIBERATELY UNWIRED** (never
+  fired in any run — honest-gate rule; drafts stay banked in sequencer.cpp).
+- **bugs found at re-verify (fleet-workflow §9 predicted "multiple bugs even in high-confidence
+  drafts" — 5 real ones):**
+  1. **`channelKeyEventScan` (0x80095B90) stamped the WRONG VALUE to the 0x80105D10 scratch:** the
+     draft wrote `tableVal` (the matched pitch); the gen's delay-slot value is `i & 255` — the
+     matched **voice index**. `channelKeyRegisterMerge` reads it back as `value*56` (the same
+     stride the scan just used for `i*56`), so pitch-vs-index corrupts every downstream KON bit.
+  2. **`channelKeyEventScan` omitted the s0(r16) spill/restore entirely** (gen frame: sp-32,
+     spills ra/s0/s1/s2 — draft spilled only ra/s1/s2). Root-caused via SBS bisect: f154 diff at
+     0x801FE928, A=stale 0x1F800000 vs B=channelBase 0x800BE698.
+  3. **Register-lifetime class bug in every structured (non-register-literal) body:** gen keeps
+     live values in callee-save regs across calls, and CALLEES spill those regs into their own
+     frames — so a draft that keeps the value only in a C++ local leaves stale bytes in the
+     callee's spill slots. Instances fixed: `channelNoteInit` (r16=channelBase), `channelReleaseClear`
+     (r16=chanStride, r17=channelBase, r18=seqPtrSlot), `frameTick` (r16=0x800AC430 cb-slot base,
+     + its whole sp-24 frame was missing), `seqChannelDispatch` (whole loop state r16-r23/r30 —
+     rewritten register-literal).
+  4. **`seqChannelDispatch` control-flow bug:** gen only tests flag bits 0x10/0x20/0x40/0x80 when
+     bit 0x01 was SET (the bit0-clear branch jumps straight to the 0x02 test at L_80090D48); the
+     structured draft tested all 8 bits unconditionally.
+  5. **Missing `ra` return-site constants:** every call site in the cluster sets r31 to the RE'd
+     guest return address before the jal (0x80090C1C/CA8/CD0/CF8/D20/D48/D70/D98/DC0, 0x800909EC/FC,
+     0x8009110C, 0x800910B0, 0x80091A38/40, 0x80095C0C, 0x8009567C); the drafts set none of them.
+- **wired + how each was verified** (SBS gate = `PSXPORT_SBS_MODE=full` autonav, NOAUDIO; MV =
+  `PSXPORT_MIRROR_VERIFY=0x800909C0` single-core run — SBS diff_mode SKIPS the whole per-vblank
+  audio block on BOTH cores (game_tomba2.cpp), so NO SBS config can exercise the tick path; the
+  strict mirror gate is the byte-verifier for the tick subtree):
+  - 0x800909C0 frameTick + 0x80090BD0 seqChannelDispatch — MV: 3000 armed invocations per run
+    (23,080 total in the input-driven run), full RAM+spad+ABI-reg compare each, 0 mismatches.
+  - 0x800910F0 channelPitchSelectDispatch — MV subtree (212 firings), 0 mismatches.
+  - 0x80091970 channelNoteInit — SBS 1/1 hit 0-diff + MV subtree (7 firings).
+  - 0x80095B90 channelKeyEventScan — SBS (B-side 1 hit, A ran it natively inside noteInit) 0-diff
+    + MV subtree (10 firings).
+  - 0x80094B50 channelKeyRegisterMerge — SBS 24/24 0-diff + MV subtree (195 firings).
+  - 0x80095530 channelVoiceRegisterWrite — SBS 2/2 0-diff (LOW-confidence draft: survived).
+  - 0x800962B0 channelVoiceSelectPrep — SBS 9806/9806 0-diff (heavily exercised by substrate SFX
+    callers outside the tick; LOW-confidence draft: survived).
+- **deliberately UNWIRED (never fired in ANY run — SBS autonav 9k frames, 12k-frame free-roam MV
+  run, 23k-tick input-driven run with jumps + pause menu):** 0x80091050 channelReleaseClear,
+  0x80091910 channelStopFlagSet, 0x80090E40 channelPitchSlideTick, 0x80092080
+  channelEnvelopeRampTick, 0x80095A9C channelVolumeSnapshot. Their flag bits
+  (0x02/0x08/0x10/0x20/0x40/0x80) never came up in reachable content. §9-line-verified drafts stay
+  banked; native seqChannelDispatch routes those bits via `rec_dispatch` to the substrate body. A
+  future session reaching SEQ content with note-releases/pitch-slides/envelope-ramps should
+  exercise, wire, and gate them (nat_ trampolines already exist in registerOverrides).
+- **tooling added:** `PSXPORT_SBS_EXIT_FRAME=<n>` (sbs.cpp, docs/config.md) — clean `exit(0)` at
+  frame n so atexit hit-count dumps print (a `timeout`-killed gate dies via the watchdog's SIGTERM
+  `_exit(130)`, skipping atexit — hit counts are how a wiring pass proves addresses FIRED).
+- **oracle-integrity fix:** engine_override_thunk.cpp now consults `verify.inSubstrateLeg` — before
+  this, MV_CHECK's "substrate replay" leg on a thunk-wired address ran the NATIVE body and compared
+  native-vs-native (fake pass). overlay_router already had the gate; the thunk didn't.
+- **dead end recorded:** tried exercising the 5 dormant leaves with an input-driven REPL run
+  (jump SFX, pause-menu open/close, walking) — bits never set. Tomba!2's field BGM is XA, not SEQ;
+  SEQ appears to be used for jingles/SFX whose reachable content only uses bit0 (pitch select) +
+  bit2 (note init) here.
+- **refs:** game/audio/sequencer.{h,cpp}, runtime/recomp/engine_override_thunk.cpp,
+  runtime/recomp/sbs.cpp, docs/engine_re.md (SsSeqCalled cluster entries), scratch/logs/sbs_gate.log
+  + mv_final.log (regenerable).

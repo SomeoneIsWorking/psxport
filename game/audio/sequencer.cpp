@@ -2,6 +2,8 @@
 
 #include "audio/sequencer.h"
 #include "core.h"
+#include "game.h"           // MV_CHECK / VerifyHarness (frameTick trampoline strict gate)
+#include <cstdio>
 
 #define SEQ_USER_CB    0x800AC430u   // DAT_800ac430 — optional user callback fn-ptr
 #define SEQ_TICK_FN    0x800AC42Cu   // DAT_800ac42c — *SsSeqCalled fn-ptr (0x80090BD0 today)
@@ -25,7 +27,8 @@
 #define SEQ_KEYSCAN_VOICE_MASK  0x800AC3F4u   // 32779u<<16-15372 — hw voice-active bitmask (SPU)
 #define SEQ_KEYSCAN_COUNT       0x80105CECu   // s8  @ +23788 — channelKeyEventScan() loop bound
 #define SEQ_KEYSCAN_TABLE       0x801054D8u   // s16 @ +21720, stride 56 — per-voice pitch table
-#define SEQ_KEYSCAN_MATCH       0x80105D10u   // u16 @ +23824 — scratch: matched pitch value
+#define SEQ_KEYSCAN_MATCH       0x80105D10u   // u16 @ +23824 — scratch: matched VOICE INDEX (i), not
+                                               // the pitch value (RE correction, see channelKeyEventScan)
 #define SEQ_KEYMERGE_STATUS     21733u        // u8  offset into the stride-56 voice table (cleared)
 #define SEQ_KON_LO              0x80105BF0u   // u16 @ +23536 — KON-style armed-mask low word
 #define SEQ_KON_HI              0x80105BF2u   // u16 @ +23538 — KON-style armed-mask high word
@@ -37,12 +40,29 @@ void rec_dispatch(Core*, uint32_t);
 // cpu_div / rec_break already declared in core.h (included above).
 
 // 0x800909C0 FUN_800909c0 — libsnd per-VBlank tick wrapper. WIDE-RE DRAFT, UNWIRED (see header).
+// FIX (re-verify pass): gen_func_800909C0 descends sp by 24 and spills s0(r16)/ra BEFORE either
+// dispatch, and sets ra to the real return-site constant before each call (0x800909EC /
+// 0x800909FC) -- the prior draft had NO stack frame at all, which shifts every guest-stack
+// address used by nested calls (e.g. seqChannelDispatch's own sp-56 frame) by 24 bytes relative
+// to the oracle. Mirrored per CLAUDE.md's "MIRROR THE GUEST STACK" rule.
 void Sequencer::frameTick() {
   Core* c = core;
+  uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 24u;
+  c->mem_w32(c->r[29] + 16u, c->r[16]);
+  // FIX (re-verify pass, same class as channelNoteInit's r16 bug): gen loads r16 = 0x800AC430 (the
+  // libsnd cb-slot base it reads +0/-4 from) and keeps it LIVE across both dispatches -- callees
+  // that spill r16 must see that value, not the caller's stale one.
+  c->r[16] = SEQ_USER_CB;
+  c->mem_w32(c->r[29] + 20u, c->r[31]);
   uint32_t cb = c->mem_r32(SEQ_USER_CB);
-  if (cb != 0u) rec_dispatch(c, cb);
+  if (cb != 0u) { c->r[31] = 0x800909ECu; rec_dispatch(c, cb); }
   uint32_t seq = c->mem_r32(SEQ_TICK_FN);
+  c->r[31] = 0x800909FCu;
   rec_dispatch(c, seq);
+  c->r[31] = c->mem_r32(c->r[29] + 20u);
+  c->r[16] = c->mem_r32(c->r[29] + 16u);
+  c->r[29] = sp0;
 }
 
 // 0x800910F0 — thin arg-repacking wrapper: sign-extend (seq,chan) to 32-bit and tail-dispatch the
@@ -55,6 +75,7 @@ void Sequencer::channelPitchSelectDispatch() {
   c->mem_w32(c->r[29] + 16u, c->r[31]);
   c->r[4] = (uint32_t)(int32_t)(int16_t)(uint16_t)c->r[4];
   c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)c->r[5];
+  c->r[31] = 0x8009110Cu;   // FIX: gen sets the real return-site const before the jal
   rec_dispatch(c, 0x80091120u);
   c->r[31] = c->mem_r32(c->r[29] + 16u);
   c->r[29] = sp0;
@@ -82,8 +103,15 @@ void Sequencer::channelReleaseClear() {
   c->mem_w32(c->r[29] + 20u, c->r[17]);
   uint32_t seqPtrSlot = SEQ_PTR_ARRAY + (uint32_t)(((int32_t)(seqRaw << 16)) >> 14);  // seq*4
   uint32_t channelBase = c->mem_r32(seqPtrSlot) + chanStride;
+  // FIX (re-verify pass, same class as channelNoteInit's r16 bug): gen keeps r18=seqPtrSlot,
+  // r16=chanStride, r17=channelBase LIVE across the 0x80095B90 call, and channelKeyEventScan spills
+  // r16/r17/r18 into its frame -- mirror the register lifetimes so the spilled bytes match.
+  c->r[18] = seqPtrSlot;
+  c->r[16] = chanStride;
+  c->r[17] = channelBase;
   c->r[4] = combined;
-  rec_dispatch(c, 0x80095B90u);
+  c->r[31] = 0x800910B0u;   // FIX: gen sets the real return-site const before the jal
+  channelKeyEventScan();    // FIX: 0x80095B90 is now owned -- direct native call, not rec_dispatch
   c->mem_w8(channelBase + 20u, 0u);
   // gen re-derefs seqArrayPtr fresh here (redundant unless the callee above mutated it) — mirror
   // that re-read for strict register/memory faithfulness rather than reusing the cached pointer.
@@ -119,10 +147,22 @@ void Sequencer::channelStopFlagSet() {
 // map and confidence notes. Guest-stack frame MIRRORED (sp-56, spill ra/s0-s7 at their RE'd
 // offsets) — including on the reentrancy-guard early-exit path, since the gen prologue's spills
 // are unconditional (they execute before the guard test in the gen body).
+//
+// REWRITTEN register-literal at the 2026-07-10 wiring pass (§9 re-verify found TWO bugs in the
+// structured draft):
+//  1. CONTROL FLOW: gen only tests bits 0x10/0x20/0x40/0x80 when bit 0x01 was SET — the bit0-clear
+//     branch jumps straight past them to the 0x02 test (L_80090D48). The draft tested all 8 bits
+//     unconditionally, which would run pitch-slide/envelope leaves the substrate never runs.
+//  2. REGISTER LIFETIME: gen keeps its loop state LIVE in callee-save regs (r30=seqArrayPtr cursor,
+//     r23=seq, r22=chan counter, r21=seq<<16, r20=seq, r19=chan<<16, r18=seqArrayPtr, r17=chan,
+//     r16=chan*176), and every leaf spills r16..r18+ into its own frame — a C++-locals loop leaves
+//     stale register bytes in those spill slots. Same bug class as channelNoteInit's r16 (f154).
 void Sequencer::seqChannelDispatch() {
   Core* c = core;
   uint32_t sp0 = c->r[29];
   c->r[29] = sp0 - 56u;
+  c->r[2] = c->mem_r32(SEQ_REENTRY_FLAG);
+  c->r[3] = 1u;
   c->mem_w32(c->r[29] + 52u, c->r[31]);
   c->mem_w32(c->r[29] + 48u, c->r[30]);
   c->mem_w32(c->r[29] + 44u, c->r[23]);
@@ -132,43 +172,121 @@ void Sequencer::seqChannelDispatch() {
   c->mem_w32(c->r[29] + 28u, c->r[19]);
   c->mem_w32(c->r[29] + 24u, c->r[18]);
   c->mem_w32(c->r[29] + 20u, c->r[17]);
-  c->mem_w32(c->r[29] + 16u, c->r[16]);
-
-  if (c->mem_r32(SEQ_REENTRY_FLAG) != 1u) {
-    c->mem_w32(SEQ_REENTRY_FLAG, 1u);
-    rec_dispatch(c, SEQ_PREP_FN);   // 0x800931C0 input_dispatch_931c0 — still-unwired by us
-
-    int32_t seqCount = c->mem_r16s(SEQ_COUNT);
-    if (seqCount > 0) {
-      uint32_t seqArrayPtr = SEQ_PTR_ARRAY;
-      for (int32_t seq = 0; seq < seqCount; seq++, seqArrayPtr += 4u, seqCount = c->mem_r16s(SEQ_COUNT)) {
-        if ((c->mem_r32(SEQ_ACTIVE_MASK) & (1u << (uint32_t)(seq & 31))) == 0u) continue;
-
-        int32_t chanCount = c->mem_r16s(SEQ_CHAN_COUNT);
-        for (int32_t chan = 0; chan < chanCount; chan++, chanCount = c->mem_r16s(SEQ_CHAN_COUNT)) {
-          // gen re-derefs seqArrayPtr fresh before EVERY bit test (not cached across leaf calls,
-          // in case a leaf mutates the seq base-pointer table) — mirror that literally.
-          auto chBase = [&]() -> uint32_t { return c->mem_r32(seqArrayPtr) + (uint32_t)chan * CH_STRIDE; };
-          uint32_t s = (uint32_t)seq, ch = (uint32_t)chan;
-
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x01u) { c->r[4] = s; c->r[5] = ch; channelPitchSelectDispatch(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x10u) { c->r[4] = s; c->r[5] = ch; channelPitchSlideTick(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x20u) { c->r[4] = s; c->r[5] = ch; channelPitchSlideTick(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x40u) { c->r[4] = s; c->r[5] = ch; channelEnvelopeRampTick(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x80u) { c->r[4] = s; c->r[5] = ch; channelEnvelopeRampTick(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x02u) { c->r[4] = s; c->r[5] = ch; channelReleaseClear(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x08u) { c->r[4] = s; c->r[5] = ch; channelStopFlagSet(); }
-          if (c->mem_r32(chBase() + CH_FLAGS) & 0x04u) {
-            c->r[4] = s; c->r[5] = ch;
-            channelNoteInit();
-            c->mem_w32(chBase() + CH_FLAGS, 0u);   // SsSeqCalled's OWN post-call full clear (native)
-          }
-        }
-      }
-    }
-    c->mem_w32(SEQ_REENTRY_FLAG, 0u);
+  {
+    int _t = (c->r[2] == c->r[3]);
+    c->mem_w32(c->r[29] + 16u, c->r[16]);
+    if (_t) goto L_80090E10;
   }
-
+  c->mem_w32(SEQ_REENTRY_FLAG, c->r[3]);
+  c->r[31] = 0x80090C1Cu;
+  c->r[23] = 0u;
+  rec_dispatch(c, SEQ_PREP_FN);   // 0x800931C0 input_dispatch_931c0 — still-unwired by us
+  c->r[2] = (uint32_t)c->mem_r16s(SEQ_COUNT);
+  { int _t = ((int32_t)c->r[2] <= 0); if (_t) goto L_80090E08; }
+  c->r[30] = SEQ_PTR_ARRAY;
+L_80090C38:
+  c->r[2] = 1u;
+  c->r[3] = c->mem_r32(SEQ_ACTIVE_MASK);
+  c->r[2] = c->r[2] << (c->r[23] & 31u);
+  c->r[3] = c->r[3] & c->r[2];
+  { int _t = (c->r[3] == 0u); if (_t) goto L_80090DF0; }
+  c->r[2] = (uint32_t)c->mem_r16s(SEQ_CHAN_COUNT);
+  { int _t = ((int32_t)c->r[2] <= 0); c->r[22] = 0u; if (_t) goto L_80090DF0; }
+  c->r[18] = c->r[30];
+  c->r[21] = c->r[23] << 16;
+  c->r[20] = (uint32_t)((int32_t)c->r[21] >> 16);
+  c->r[19] = 0u;
+  c->r[16] = 0u;
+L_80090C7C:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 1u;
+  { int _t = (c->r[2] == 0u); c->r[4] = c->r[20]; if (_t) goto L_80090D48; }
+  c->r[17] = (uint32_t)((int32_t)c->r[19] >> 16);
+  c->r[31] = 0x80090CA8u;
+  c->r[5] = c->r[17];
+  channelPitchSelectDispatch();
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 16u;
+  { int _t = (c->r[2] == 0u); c->r[4] = c->r[20]; if (_t) goto L_80090CD0; }
+  c->r[31] = 0x80090CD0u;
+  c->r[5] = c->r[17];
+  rec_dispatch(c, 0x80090E40u);   // pitch-slide: UNWIRED (never fired in any run -- see findings/audio.md)
+L_80090CD0:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 32u;
+  { int _t = (c->r[2] == 0u); c->r[4] = c->r[20]; if (_t) goto L_80090CF8; }
+  c->r[31] = 0x80090CF8u;
+  c->r[5] = c->r[17];
+  rec_dispatch(c, 0x80090E40u);   // pitch-slide: UNWIRED (never fired in any run)
+L_80090CF8:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 64u;
+  { int _t = (c->r[2] == 0u); c->r[4] = c->r[20]; if (_t) goto L_80090D20; }
+  c->r[31] = 0x80090D20u;
+  c->r[5] = c->r[17];
+  rec_dispatch(c, 0x80092080u);   // envelope ramp: UNWIRED (never fired in any run)
+L_80090D20:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 128u;
+  { int _t = (c->r[2] == 0u); c->r[4] = c->r[20]; if (_t) goto L_80090D48; }
+  c->r[31] = 0x80090D48u;
+  c->r[5] = c->r[17];
+  rec_dispatch(c, 0x80092080u);   // envelope ramp: UNWIRED (never fired in any run)
+L_80090D48:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 2u;
+  { int _t = (c->r[2] == 0u); c->r[4] = (uint32_t)((int32_t)c->r[21] >> 16); if (_t) goto L_80090D70; }
+  c->r[31] = 0x80090D70u;
+  c->r[5] = (uint32_t)((int32_t)c->r[19] >> 16);
+  rec_dispatch(c, 0x80091050u);   // release-clear: UNWIRED (never fired in any run)
+L_80090D70:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 8u;
+  { int _t = (c->r[2] == 0u); c->r[4] = (uint32_t)((int32_t)c->r[21] >> 16); if (_t) goto L_80090D98; }
+  c->r[31] = 0x80090D98u;
+  c->r[5] = (uint32_t)((int32_t)c->r[19] >> 16);
+  rec_dispatch(c, 0x80091910u);   // stop-flag: UNWIRED (never fired in any run)
+L_80090D98:
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->r[2] = c->mem_r32(c->r[2] + 152u);
+  c->r[2] = c->r[2] & 4u;
+  { int _t = (c->r[2] == 0u); c->r[4] = (uint32_t)((int32_t)c->r[21] >> 16); if (_t) goto L_80090DD0; }
+  c->r[31] = 0x80090DC0u;
+  c->r[5] = (uint32_t)((int32_t)c->r[19] >> 16);
+  channelNoteInit();
+  c->r[2] = c->mem_r32(c->r[18] + 0u);
+  c->r[2] = c->r[16] + c->r[2];
+  c->mem_w32(c->r[2] + 152u, 0u);   // SsSeqCalled's OWN post-call full flags clear
+L_80090DD0:
+  c->r[2] = 1u << 16;
+  c->r[19] = c->r[19] + c->r[2];
+  c->r[2] = (uint32_t)c->mem_r16s(SEQ_CHAN_COUNT);
+  c->r[22] = c->r[22] + 1u;
+  c->r[2] = (uint32_t)((int32_t)c->r[22] < (int32_t)c->r[2]);
+  { int _t = (c->r[2] != 0u); c->r[16] = c->r[16] + 176u; if (_t) goto L_80090C7C; }
+L_80090DF0:
+  c->r[2] = (uint32_t)c->mem_r16s(SEQ_COUNT);
+  c->r[23] = c->r[23] + 1u;
+  c->r[2] = (uint32_t)((int32_t)c->r[23] < (int32_t)c->r[2]);
+  { int _t = (c->r[2] != 0u); c->r[30] = c->r[30] + 4u; if (_t) goto L_80090C38; }
+L_80090E08:
+  c->mem_w32(SEQ_REENTRY_FLAG, 0u);
+L_80090E10:
   c->r[31] = c->mem_r32(c->r[29] + 52u);
   c->r[30] = c->mem_r32(c->r[29] + 48u);
   c->r[23] = c->mem_r32(c->r[29] + 44u);
@@ -262,6 +380,8 @@ void Sequencer::channelKeyEventScan() {
   uint32_t sp0 = c->r[29];
   int8_t count = (int8_t)c->mem_r8(SEQ_KEYSCAN_COUNT);
   c->r[29] = sp0 - 32u;
+  c->mem_w32(c->r[29] + 16u, c->r[16]);   // FIX: gen spills s0(r16) here -- prior draft omitted it entirely
+  c->r[16] = 0u;
   c->mem_w32(c->r[29] + 28u, c->r[31]);
   c->mem_w32(c->r[29] + 24u, c->r[18]);
   c->mem_w32(c->r[29] + 20u, c->r[17]);
@@ -273,13 +393,22 @@ void Sequencer::channelKeyEventScan() {
       uint32_t tableOff = (uint32_t)(i * 7) << 3;                            // i*56
       int32_t tableVal = (int32_t)(int16_t)c->mem_r16(SEQ_KEYSCAN_TABLE + tableOff);
       if (tableVal != target) continue;
-      c->mem_w16(SEQ_KEYSCAN_MATCH, (uint16_t)tableVal);
+      // FIX (re-verify pass, root-caused via SBS bisect to f154 0x801FE928): gen's delay-slot value
+      // still live here is `i` (the voice index, set by the branch's delay slot `r2 = r16&255`
+      // right before the not-taken fallthrough), NOT tableVal -- the scratch stamp is the matched
+      // VOICE INDEX, not the pitch. The prior draft stamped tableVal, corrupting
+      // channelKeyRegisterMerge()'s downstream KON-bit/table-offset math (it reads this same value
+      // back as `value*56`, the SAME stride channelKeyEventScan just used for `i*56` -- only
+      // consistent if the stamped value is the voice index).
+      c->mem_w16(SEQ_KEYSCAN_MATCH, (uint16_t)(uint32_t)i);
+      c->r[31] = 0x80095C0Cu;   // FIX: gen sets the real return-site const before the jal
       channelKeyRegisterMerge();
     }
   }
   c->r[31] = c->mem_r32(c->r[29] + 28u);
   c->r[18] = c->mem_r32(c->r[29] + 24u);
   c->r[17] = c->mem_r32(c->r[29] + 20u);
+  c->r[16] = c->mem_r32(c->r[29] + 16u);   // FIX: restore s0(r16), matching the now-mirrored spill above
   c->r[29] = sp0;
 }
 
@@ -367,6 +496,7 @@ L_80090EC4:
   c->r[6] = c->r[29] + 18u;
   c->r[2] = c->r[3] + c->r[16];
   c->mem_w16(c->r[18] + 74u, (uint16_t)c->r[2]);
+  c->r[31] = 0x80090F40u;   // FIX: gen sets the real return-site const before the jal
   channelVolumeSnapshot();
   c->r[2] = (uint32_t)c->mem_r16(c->r[29] + 16u);
   c->r[17] = c->r[2] + c->r[16];
@@ -388,7 +518,8 @@ L_80090F90:
   c->r[6] = c->r[16] & 65535u;
   c->r[4] = c->r[19];
   c->r[7] = 1u;
-  rec_dispatch(c, 0x80095530u);   // MAPPED, not drafted (see comment above)
+  c->r[31] = 0x80090FA0u;   // FIX: gen sets the real return-site const before the jal
+  channelVoiceRegisterWrite();   // FIX: 0x80095530 is now owned -- direct native call
   {
     int _t = (c->r[17] != 127u);
     if (_t) goto L_80090FB4;
@@ -421,6 +552,7 @@ L_8009100C:
 L_80091010:
   c->r[4] = (uint32_t)((int32_t)(c->r[4] << 16) >> 16);
   c->r[5] = c->r[18] + 92u;
+  c->r[31] = 0x80091024u;   // FIX: gen sets the real return-site const before the jal
   c->r[6] = c->r[18] + 94u;
   channelVolumeSnapshot();
   c->r[31] = c->mem_r32(c->r[29] + 48u);
@@ -623,6 +755,11 @@ void Sequencer::channelNoteInit() {
 
   uint32_t seqBasePtr = c->mem_r32(seqPtrSlot);
   uint32_t channelBase = seqBasePtr + chanStride;   // r16 -- the target channel record
+  // FIX (re-verify pass, root-caused via SBS bisect to f154 0x801FE928): gen holds channelBase in
+  // LIVE r16 (callee-save) across both calls below, and channelKeyEventScan spills r16 into its own
+  // frame -- the guest-stack bytes only match if c->r[16] actually carries channelBase at call time.
+  // Keeping it solely in a C++ local made the callee spill a stale r16 (A=0x1F800000 vs B=0x800BE698).
+  c->r[16] = channelBase;
 
   c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) & ~1u);      // clear bit0
   c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) & ~2u);      // clear bit1
@@ -633,7 +770,9 @@ void Sequencer::channelNoteInit() {
   c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) | 4u);       // set bit2
 
   c->r[4] = combined;
+  c->r[31] = 0x80091A38u;   // FIX: gen sets the real return-site const before the jal
   channelKeyEventScan();
+  c->r[31] = 0x80091A40u;   // FIX: gen sets the real return-site const before the jal
   rec_dispatch(c, 0x800931A0u);   // input_dispatch_931c0's neighbor, not this wave's target (MAPPED)
 
   uint32_t f132 = c->mem_r32(channelBase + 132u);
@@ -845,6 +984,7 @@ L_80095604:
   }
   c->r[5] = 0x80100000u + c->r[16];
   c->r[5] = (uint32_t)(int16_t)c->mem_r16(c->r[5] + 21722u);
+  c->r[31] = 0x8009567Cu;   // FIX: gen sets the real return-site const before the jal
   channelVoiceSelectPrep();
   c->r[2] = 0x80100000u + c->r[16];
   c->r[2] = (uint32_t)(int16_t)c->mem_r16(c->r[2] + 21716u);
@@ -1173,4 +1313,73 @@ L_80095A64:
   c->r[17] = c->mem_r32(c->r[29] + 28u);
   c->r[16] = c->mem_r32(c->r[29] + 24u);
   c->r[29] = sp0;
+}
+
+// ============================================================================
+// Wiring (frontier, 2026-07-10): every method above installed into the process-global
+// g_override[] table via engine_set_override_main (runtime/recomp/engine_override_thunk.cpp) —
+// oracle-gated (core B / psx_fallback always runs gen_func_<addr>; core A runs native). This is
+// the mechanism BOTH rec_dispatch's main_dispatch() AND direct in-body calls like
+// `func_800910F0(c)` inside gen_func_80090BD0 ultimately reach for MAIN-shard addresses, so one
+// registration covers both call paths — no separate EngineOverrides::register_ needed.
+// ============================================================================
+static void nat_channelPitchSelectDispatch(Core* c) { c->engine.sequencer.channelPitchSelectDispatch(); }
+static void nat_channelReleaseClear(Core* c)        { c->engine.sequencer.channelReleaseClear(); }
+static void nat_channelStopFlagSet(Core* c)         { c->engine.sequencer.channelStopFlagSet(); }
+static void nat_channelPitchSlideTick(Core* c)      { c->engine.sequencer.channelPitchSlideTick(); }
+static void nat_channelEnvelopeRampTick(Core* c)    { c->engine.sequencer.channelEnvelopeRampTick(); }
+static void nat_channelNoteInit(Core* c)            { c->engine.sequencer.channelNoteInit(); }
+static void nat_channelVolumeSnapshot(Core* c)      { c->engine.sequencer.channelVolumeSnapshot(); }
+static void nat_channelKeyEventScan(Core* c)        { c->engine.sequencer.channelKeyEventScan(); }
+static void nat_channelKeyRegisterMerge(Core* c)    { c->engine.sequencer.channelKeyRegisterMerge(); }
+static void nat_channelVoiceRegisterWrite(Core* c)  { c->engine.sequencer.channelVoiceRegisterWrite(); }
+static void nat_channelVoiceSelectPrep(Core* c)     { c->engine.sequencer.channelVoiceSelectPrep(); }
+static void nat_seqChannelDispatch(Core* c)         { c->engine.sequencer.seqChannelDispatch(); }
+// frameTick's trampoline is MV_CHECK-able: SBS diff_mode skips the whole per-vblank audio block on
+// both cores (game_tomba2.cpp), so NO SBS config can exercise the tick path -- the strict
+// mirror-verify gate (PSXPORT_MIRROR_VERIFY=0x800909C0, normal single-core run with the sequencer
+// ticking) is how this cluster's tick-only subtree is byte-verified: each armed invocation runs the
+// FULL native subtree (frameTick -> seqChannelDispatch -> all leaves), rewinds, replays the pure
+// substrate subtree (the thunk consults verify.inSubstrateLeg), and byte-compares RAM + scratchpad
+// + ABI regs. See docs/findings/audio.md.
+static void nat_frameTick(Core* c)                  { MV_CHECK(c, 0x800909C0u, c->engine.sequencer.frameTick()); }
+
+void Sequencer::registerOverrides() {
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  extern void gen_func_800910F0(Core*);
+  extern void gen_func_80091050(Core*);
+  extern void gen_func_80091910(Core*);
+  extern void gen_func_80090E40(Core*);
+  extern void gen_func_80092080(Core*);
+  extern void gen_func_80091970(Core*);
+  extern void gen_func_80095A9C(Core*);
+  extern void gen_func_80095B90(Core*);
+  extern void gen_func_80094B50(Core*);
+  extern void gen_func_80095530(Core*);
+  extern void gen_func_800962B0(Core*);
+  extern void gen_func_80090BD0(Core*);
+  extern void gen_func_800909C0(Core*);
+
+  // Bottom-up (fleet-workflow.md §9): leaves first, then the dispatch loop, then the tick wrapper.
+  // Each was gated 0-diff at this tier before the next tier was added (see docs/findings/audio.md).
+  engine_set_override_main(0x800910F0u, nat_channelPitchSelectDispatch, gen_func_800910F0);
+  engine_set_override_main(0x80091970u, nat_channelNoteInit,            gen_func_80091970);
+  engine_set_override_main(0x80095B90u, nat_channelKeyEventScan,        gen_func_80095B90);
+  engine_set_override_main(0x80094B50u, nat_channelKeyRegisterMerge,    gen_func_80094B50);
+  engine_set_override_main(0x80095530u, nat_channelVoiceRegisterWrite,  gen_func_80095530);
+  engine_set_override_main(0x800962B0u, nat_channelVoiceSelectPrep,     gen_func_800962B0);
+  engine_set_override_main(0x80090BD0u, nat_seqChannelDispatch,         gen_func_80090BD0);
+  engine_set_override_main(0x800909C0u, nat_frameTick,                  gen_func_800909C0);
+  // DELIBERATELY UNWIRED (2026-07-10 wiring pass, honest-gate rule): 0x80091050 channelReleaseClear,
+  // 0x80091910 channelStopFlagSet, 0x80090E40 channelPitchSlideTick, 0x80092080
+  // channelEnvelopeRampTick, 0x80095A9C channelVolumeSnapshot. None EVER fired in any run tried
+  // (SBS-full autonav gate, 12k-frame free-roam MIRROR_VERIFY run, 23k-tick input-driven gameplay
+  // run with jumps/menu) -- their flag bits (0x02/0x08/0x10/0x20/0x40/0x80) never came up. §9-line-
+  // verified drafts stay banked above; seqChannelDispatch routes their bits via rec_dispatch to the
+  // substrate body. A future session that reaches SEQ content with releases/slides/envelopes should
+  // exercise, wire, and gate them. (nat_ trampolines kept for that pass.) See docs/findings/audio.md.
+  (void)nat_channelReleaseClear; (void)nat_channelStopFlagSet; (void)nat_channelPitchSlideTick;
+  (void)nat_channelEnvelopeRampTick; (void)nat_channelVolumeSnapshot;
+  (void)gen_func_80091050; (void)gen_func_80091910; (void)gen_func_80090E40;
+  (void)gen_func_80092080; (void)gen_func_80095A9C;
 }

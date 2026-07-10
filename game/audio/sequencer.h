@@ -157,7 +157,17 @@
 //   this wave is explicitly UNWIRED/pre-gate. A future wiring pass MUST do the line-by-line verify
 //   docs/fleet-workflow.md §9 requires before registering these as overrides.
 //
-// WIDE-RE DRAFT, ALL METHODS UNWIRED: no EngineOverrides registration, no SBS run. Compiles only.
+// STATUS (2026-07-10 wiring pass — supersedes the draft-status notes above): 8 addresses WIRED via
+// engine_set_override_main + VERIFIED (SBS-full 0-diff through f9030; MIRROR_VERIFY 23k armed tick
+// subtrees byte-compared, 0 mismatches): frameTick, seqChannelDispatch, channelPitchSelectDispatch,
+// channelNoteInit, channelKeyEventScan, channelKeyRegisterMerge, channelVoiceRegisterWrite,
+// channelVoiceSelectPrep. 5 leaves DELIBERATELY UNWIRED (never fired in any run — honest-gate rule;
+// seqChannelDispatch routes their bits to the substrate via rec_dispatch): channelReleaseClear,
+// channelStopFlagSet, channelPitchSlideTick, channelEnvelopeRampTick, channelVolumeSnapshot.
+// 5 real bugs found+fixed at the §9 re-verify — full list in docs/findings/audio.md ("Sequencer
+// cluster wiring", 2026-07-10). NOTE: SBS diff_mode skips the per-vblank audio block on BOTH cores,
+// so the tick path is UNREACHABLE under any SBS config — PSXPORT_MIRROR_VERIFY=0x800909C0 in a
+// normal run is the byte-verifier for this cluster's tick subtree.
 #pragma once
 #include <cstdint>
 class Core;
@@ -193,4 +203,15 @@ public:
   //     rec_dispatch()es to, plus its own callee. See header comment for RE detail / confidence.
   void channelVoiceRegisterWrite();   // 0x80095530 — LOW-MEDIUM confidence, ~320-line KON/pan loop
   void channelVoiceSelectPrep();      // 0x800962B0 — LOW-MEDIUM confidence, true leaf
+
+  // 2026-07-10 wiring pass (frontier): registers every method above into the process-global
+  // g_override[] table via engine_set_override_main (runtime/recomp/engine_override_thunk.cpp) —
+  // oracle-gated (core B / psx_fallback always runs the gen_func_* body; core A runs native). This
+  // is the SAME mechanism rec_dispatch's main_dispatch() ultimately reaches for MAIN-shard
+  // addresses, and ALSO the mechanism direct in-body calls like `func_800910F0(c)` inside
+  // gen_func_80090BD0 reach — one registration covers both call paths. See sequencer.cpp for the
+  // per-address wiring list / bottom-up order (leaves first, then seqChannelDispatch, then
+  // frameTick) and docs/fleet-workflow.md §9 for the re-verify-before-wire discipline this pass
+  // followed.
+  void registerOverrides();
 };

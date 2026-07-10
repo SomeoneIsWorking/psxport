@@ -103,6 +103,7 @@ void register_engine_overrides(Game* game) {
   CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
   RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)
   RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
+  c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
 }
 
 int main(int argc, char** argv) {

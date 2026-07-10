@@ -1448,6 +1448,17 @@ Sequencer::frameTick. **Next frontier: wire the banked drafts one cluster at a t
 gen re-verify per §9, oracle-gated thunks, ovhit + 0-diff gate each), and extend autonav coverage
 past the intro area so unfired leaves actually gate.**
 
+**2026-07-10 (sequencer wiring pass): the libsnd SsSeqCalled cluster is WIRED + VERIFIED** — 8
+addresses live (0x800909C0 frameTick, 0x80090BD0 SsSeqCalled, 0x800910F0/0x80091970/0x80095B90/
+0x80094B50/0x80095530/0x800962B0 leaves) via `engine_set_override_main`; SBS-full 0-diff through
+f9030 + `PSXPORT_MIRROR_VERIFY=0x800909C0` 23k armed tick-subtree byte-compares (SBS diff_mode
+skips the audio block on both cores, so MIRROR_VERIFY is the tick path's byte-verifier). 5 bugs
+found+fixed at the §9 re-verify; 5 never-fired leaves (0x80091050/0x80091910/0x80090E40/
+0x80092080/0x80095A9C) deliberately left unwired with banked drafts — full detail in
+docs/findings/audio.md. New tooling: `PSXPORT_SBS_EXIT_FRAME` clean-exit knob (atexit hit-count
+dumps under a bounded gate); engine_override_thunk now honors `verify.inSubstrateLeg` (MV_CHECK on
+thunk-wired addresses previously compared native-vs-native).
+
 **SESSION 2026-07-08 (wide-RE-ahead-of-frontier, isolated worktree) — 0x80040000-0x8004FFFF band:
 cube-text popup ledger RE'd + DRAFTED (UNWIRED, not gated); collision-walk cluster RE'd + MAPPED
 (NOT drafted — too risky to fold blind); ~180 addresses in-band still untouched.**

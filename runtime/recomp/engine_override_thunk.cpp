@@ -98,7 +98,11 @@ void engine_override_thunk(Core* c) {
     fprintf(stderr, "[engine_override_thunk] no entry for pc=%08X (table has %d)\n", addr, g_n);
     abort();
   }
-  bool oracle = c->game && c->game->psx_fallback;
+  // verify.inSubstrateLeg: MV_CHECK's substrate replay leg must behave exactly like SBS core B.
+  // overlay_router.cpp already gates the EngineOverrides path on it; without the same gate HERE, a
+  // strictCheck on a thunk-wired address would run the NATIVE body in its "substrate" leg and
+  // compare native-vs-native -- a fake pass (found at the 2026-07-10 sequencer wiring pass).
+  bool oracle = c->game && (c->game->psx_fallback || c->game->verify.inSubstrateLeg);
   if (!oracle && s_force) {
     for (const char* p = s_force; p && *p; ) {
       uint32_t a = (uint32_t)strtoul(p, (char**)&p, 0);

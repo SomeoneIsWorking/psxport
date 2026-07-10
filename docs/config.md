@@ -175,6 +175,11 @@ or level — they can't be a bare channel:
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
 - **SBS observable mode:** `SBS_MODE=skip` — pc_skip (real default config) vs recomp, compared on
   a curated observable-state list with settled-divergence semantics (see skill `sbs-diverge`).
+- **SBS bounded clean exit:** `SBS_EXIT_FRAME=<n>` (`cfg_int`) — the SBS loop calls `exit(0)` once
+  frame n is reached, so atexit dumps (engine_override_thunk per-address native/oracle hit counts,
+  EngineOverrides `ovhit`) actually print. A `timeout`-killed gate dies via the watchdog's SIGTERM
+  `_exit(130)`, which skips atexit — wiring passes need the hit counts to prove every registered
+  address FIRED on both cores.
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the

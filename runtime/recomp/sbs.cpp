@@ -35,6 +35,7 @@
 
 #include "sbs.h"
 #include "game.h"
+#include "cfg.h"
 #include "render/render.h"    // Render::setPsxRender (per-Core render-path switch)
 #include <cstdio>
 #include <cstring>
@@ -2218,6 +2219,17 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       // Else: identical shared write in PREWATCH mode — silently continue and keep watching.
     }
     mFrame++;
+    // PSXPORT_SBS_EXIT_FRAME=<n>: CLEAN exit(0) once frame n is reached, so atexit dumps
+    // (engine_override_thunk per-address hit counts, EngineOverrides ovhit) actually print.
+    // A `timeout`-killed gate dies via the watchdog's SIGTERM _exit(130), which skips atexit —
+    // wiring passes need the hit counts to prove every registered address FIRED (docs/config.md).
+    { static int s_exitFrame = -2;
+      if (s_exitFrame == -2) s_exitFrame = cfg_int("PSXPORT_SBS_EXIT_FRAME", -1);
+      if (s_exitFrame >= 0 && mFrame >= (uint32_t)s_exitFrame) {
+        fprintf(stderr, "[sbs] PSXPORT_SBS_EXIT_FRAME=%d reached — clean exit for atexit dumps.\n", s_exitFrame);
+        sbs_rl_shutdown();
+        exit(0);
+      } }
   }
   sbs_rl_shutdown();
   exit(0);
