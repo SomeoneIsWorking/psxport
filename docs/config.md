@@ -145,6 +145,54 @@ instance that DID register (the "sanctioned atexit exception" shape, same as the
 trace hooks), picking the non-`psx_fallback` registrant as primary and its `sbs`-matched peer for
 the B(gen) column — order-independent, no longer "first wins".
 
+**A/B call-count MISMATCH triage (2026-07-10) — read before treating a `COUNT MISMATCH` as a bug**:
+a first honest SBS-full run with `ovhit` surfaced ~15 addresses where A and B(gen)/oracle disagree,
+sometimes wildly (`0x8003CDD8 native=0 oracle=37527`, `ActorTomba::frameTick A=2878 B(gen)=0`).
+Every one triaged so far (docs/findings/tooling.md "ovhit A/B mismatch is often a call-GRAPH
+asymmetry, not a counting bug") is a MEASUREMENT ARTIFACT of one of two shapes, NOT a functional
+bug — confirmed via 0-diff SBS (every frame, not just the 30-frame print granularity) plus, for the
+hardest case, a runtime probe (`sefprobe` below) rather than static reading alone:
+  1. **Direct native-to-native call mirrors the guest's own direct intra-shard call.** A ported
+     method calling its own already-ported sibling directly (`c->mRender->billboardEmit()`,
+     `outerTransitionCommit()`'s `outerTransitionGate()` call, `entityLoop`'s `gt3(c)`/`gt4(c)`) is
+     invisible to BOTH counters (bypasses `rec_dispatch` AND the `g_override[]` wrapper) on the
+     NATIVE side, while the SUBSTRATE side's identical direct intra-shard call DOES hit the g_tab
+     wrapper (since `shard_set_override` intercepts the wrapper regardless of caller) — giving a
+     `native=0, oracle=N` shape that's provably correct: e.g. `billboardEmit`'s oracle count (22689)
+     equals `billboardCompose1`(17007) + `billboardCompose2`(5682) EXACTLY, and
+     `outerTransitionGate`'s oracle count equals `outerTransitionCommit`'s own count EXACTLY (it's
+     the unconditional first statement in that method's body).
+  2. **The two SBS cores reach a shared leaf via structurally different call GRAPHS.** Core A
+     (pc_faithful) runs the ported native `Engine` per-frame driver (`frameStartTickFaithful`,
+     `sceneEventFifoFaithful`, …), which explicitly `rec_dispatch`es to wired leaves
+     (`ActorTomba::turnBiasCompute`, `Animation::advanceLinkChain`, …). Core B (recomp_path/oracle)
+     reaches the SAME final RAM state via the PURE SUBSTRATE per-frame chain instead — proven by the
+     `sefprobe` channel below: `Engine::sceneEventFifoFaithful` gets 0 core=B `ENTRY` hits over 200
+     frames vs ~78 for core=A, despite 0-diff RAM every single frame. A leaf reached from BOTH graphs
+     (e.g. `Animation::advanceLinkChain`, reached from a still-substrate a00-overlay caller on BOTH
+     cores AND from `sceneEventFifoFaithful` on core A only) legitimately fires more often on A.
+     Call-count parity is only a meaningful signal for a leaf reached via the EXACT SAME call-graph
+     shape on both sides (Math functions, `billboardCompose1`/`2`, `ActorTomba::type7Interact`, …,
+     which all show clean parity in this run) — for a leaf whose UPSTREAM caller chain is itself
+     asymmetric between the ported driver and the pure substrate, a mismatch is EXPECTED.
+  - **PcScheduler's small mismatches (spawnPrim/spawnAndWait/forceClose/selfClose, values 0-5)** are
+    boot-time-only (frames <200) and shape (1) applies once more: `PSXPORT_DEBUG=dispatch` shows
+    `PcScheduler::spawnPrim` fired once at f0 with `ra=DEAD0000` — a native-only boot bootstrap call
+    with no oracle-side equivalent (`FUN_80050b08`'s task0 arming), not a per-frame gameplay signal.
+  - **Do NOT "fix" this by adding `noteSubstrateDispatch`/`traceGenHit` calls inside a
+    psx_fallback-gated trampoline's gen branch** — tried live during this triage and reverted: the
+    gen branch is ALSO reached via `rec_dispatch`'s own `main_dispatch(c,addr)` fallthrough for the
+    resident-module case (`generated/shard_disp.c main_dispatch` calls the SAME `func_<addr>(c)`
+    wrapper `noteSubstrateDispatch` already ran ahead of), so an extra call inside the trampoline
+    DOUBLE-COUNTS every rec_dispatch-routed invocation (confirmed: `PcScheduler::yieldPrim`, which
+    matched exactly at A=2990/B=2990 before the change, went to B=5989 after — ~2×). The counters as
+    they stand are individually complete for their OWN call shape; the mismatch is a real, structural
+    caller-graph fact, not something to paper over.
+  - **Verdict for this triage pass**: every mismatch found is CLASS 1 or CLASS 2 above (artifact),
+    none is a real functional defect — 0-diff SBS confirmed per-frame through f3000 before and after.
+    No code changes were needed to "fix" the counting (both attempted counter changes were reverted
+    as wrong); the fix that stuck is this documentation + the permanent `sefprobe` reference probe.
+
 `animstack` (overlay_router.cpp, `rec_dispatch`) — TEMP INVESTIGATION PROBE for `Animation::attach`
 (0x80077C40): logs `[animstack] fN core=A/B r29=... ra=... a0=...` on every reach. Used 2026-07-08 to
 disprove the assumption behind the (now-removed) `isDeadStackScratch` SBS exclusion — the probe
@@ -178,6 +226,17 @@ this address with an exact per-call count — `quadrtpt` remains useful as a liv
 (0x801401B8, the ground/scene GT3/GT4 entity-loop walker): `[ovgtgnd] entityLoop call#N`. Same
 "confirm it actually fires" role as `quadrtpt`, for the ov_a00_set_override-wired ground GT3/GT4
 cluster (sibling of the field pair's `ovgt` channel).
+
+`sefprobe` (game/core/engine.cpp, `Engine::sceneEventFifoFaithful`) — logs
+`[sefprobe] fN core=A/B ENTRY st=<FIFO-state-byte>` on every entry. Added 2026-07-10 during the
+`ovhit` A/B call-count triage (docs/findings/tooling.md "ovhit A/B mismatch is often a call-GRAPH
+asymmetry, not a counting bug") to settle, with a runtime measurement rather than static reading,
+whether a native `Engine` per-frame method genuinely never runs on SBS core B. It does: 0 core=B
+ENTRY lines over a 200-frame run, vs ~78 for core=A, despite 0-diff RAM every frame — core B
+(recomp_path/oracle) reaches the same final state via the pure-substrate per-frame chain instead.
+Kept as the reference technique for the next "is this A-only/B-only ovhit count a real bug or an
+expected native-driver-vs-substrate-chain asymmetry" question — same role `animstack` plays for
+guest-stack-residency questions.
 
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs

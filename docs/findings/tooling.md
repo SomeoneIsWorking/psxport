@@ -1,5 +1,83 @@
 # Findings — tooling / debug server / harness
 
+## ovhit A/B mismatch is often a call-GRAPH asymmetry, not a counting bug
+- **symptom:** the first honest `PSXPORT_DEBUG=ovhit` SBS-full run (post the 2026-07-10 target-
+  binding + g_tab-merge fix) surfaced ~15 addresses with A/B count mismatches, some large:
+  `0x8003CDD8 (Render::cmdListDispatch) native=0 oracle=37527`, `0x8003C8F4 (billboardEmit)
+  native=0 oracle=22689`, `0x8013FB88/0x8013FE58 (gt3/gt4) native=0 oracle=377233`,
+  `ActorTomba::frameTick A=2878 B(gen)=0`, `ActorTomba::turnBiasCompute/outerTransitionGate/
+  outerTransitionCommit` similarly A-only, `Animation::advanceLinkChain A=5719 B(gen)=2841`
+  (~2x, not exact), plus small (0-5 count) mismatches on PcScheduler's 5 primitives,
+  `GraphicsBind::recordArrayInit`, `CubeTextLedger::spawnPopup`.
+- **status:** RESOLVED — every one triaged is a measurement ARTIFACT, not a functional defect.
+  0-diff SBS-full confirmed per-frame (not just the 30-frame print granularity — `Sbs::Impl::run`
+  calls `stepCore(A)`, `stepCore(B)`, `checkDivergence()` every single frame) through f3000, before
+  and after this triage pass.
+- **cause — two distinct artifact shapes, both already-known blind spots resurfacing through the
+  NEW ovhit counters:**
+  1. **Direct native-to-native call, mirroring the guest's own direct intra-shard call.** A ported
+     method calling its own already-ported sibling directly — `perobj_billboard.cpp`'s
+     `c->mRender->cmdListDispatch()` (5 sites) / `c->mRender->billboardEmit()`,
+     `outerTransitionCommit()`'s unconditional first-statement call to `outerTransitionGate()`,
+     `OverlayGroundGt3Gt4::entityLoop`'s `gt3(c)`/`gt4(c)` calls — bypasses BOTH ovhit counters on
+     the NATIVE side (never touches `rec_dispatch`, never touches the `g_override[]` wrapper since
+     it's a direct C++ call), while the SUBSTRATE side's IDENTICAL direct intra-shard call DOES hit
+     the g_tab wrapper (`shard_set_override`/`engine_set_override_main` installs at the wrapper,
+     which intercepts regardless of caller) — giving the `native=0, oracle=N` shape. PROVEN, not
+     just plausible: `billboardEmit`'s oracle count (22689) equals `billboardCompose1`(17007) +
+     `billboardCompose2`(5682) EXACTLY (its only two native callers); `outerTransitionGate`'s oracle
+     count (2842) equals `outerTransitionCommit`'s own count (2842) EXACTLY (read the source:
+     `if (outerTransitionGate()) goto done;` is literally outerTransitionCommit's first statement,
+     game/player/actor_tomba.cpp:1004). This is the SAME root cause already documented in
+     docs/findings/render.md "dead end avoided" (the `0x8003CCA4 → 0x8003CDD8 → 0x8003F698` chain)
+     — that finding predates `ovhit`; this is it resurfacing through a different counter.
+  2. **The two SBS cores reach a shared leaf via structurally different call GRAPHS.** Core A
+     (pc_faithful) runs the ported native `Engine` per-frame driver (`frameStartTickFaithful`,
+     `sceneEventFifoFaithful`, …), which explicitly `rec_dispatch`es to wired leaves. Core B
+     (recomp_path/oracle) reaches the SAME final RAM state via the PURE SUBSTRATE per-frame chain
+     instead — a topologically different call graph. PROVEN via a runtime probe, not static
+     reading: `sefprobe` (game/core/engine.cpp, gated `PSXPORT_DEBUG=sefprobe`) printed on every
+     entry to `Engine::sceneEventFifoFaithful`; over a 200-frame SBS-full run it showed 78 core=A
+     `ENTRY` lines and ZERO core=B lines, despite `mB->pc_skip=false` (same as A, per
+     runtime/recomp/sbs.cpp:1576) and 0-diff RAM every frame. Core B never runs this native method
+     at all — it reaches `Animation::advanceLinkChain` (called from this method's own unconditional
+     tail, `d1(c, 0x80077b5cu, B)`) via the substrate's OWN per-frame chain instead, which for THIS
+     particular leaf is ALSO reached from an independent still-substrate a00-overlay caller
+     (`ra=0x80117AC0`, confirmed via `PSXPORT_DISPWATCH=0x80077B5C`) common to both cores — hence
+     the observed A=5719 (2841 shared + 2878 A-only) vs B(gen)=2841 (shared only, exactly). A leaf
+     reached via the EXACT SAME call-graph shape on both sides shows clean parity (Math functions,
+     `billboardCompose1`/`2`, `ActorTomba::type7Interact`, `CubeTextLedger::activateSlot`, …) — the
+     mismatch signal is only meaningful once the caller graph itself is confirmed symmetric.
+  - **PcScheduler's small mismatches** (spawnPrim/spawnAndWait/forceClose/selfClose, values 0-5) are
+    boot-time-only (frames <200): `PSXPORT_DEBUG=dispatch` shows `PcScheduler::spawnPrim` fired
+    once at f0 with `ra=DEAD0000` from the native boot driver's task0 bootstrap (`FUN_80050b08`
+    equivalent) — a one-time native-only call with no oracle-side per-frame equivalent, same class
+    as (1)/(2) but at boot-scale rather than per-frame-scale.
+- **dead end — DO NOT "fix" by adding a `noteSubstrateDispatch` call inside a psx_fallback-gated
+  hand-rolled `shard_set_override` trampoline's gen branch.** Tried live during this triage
+  (`EngineOverrides::traceGenHit` helper + call sites in pc_scheduler.cpp/graphics_bind.cpp/
+  cube_text_ledger.cpp), then reverted: the gen branch is ALSO reached via `rec_dispatch`'s own
+  `main_dispatch(c,addr)` fallthrough for a resident-module target (`generated/shard_disp.c
+  main_dispatch` calls the SAME `func_<addr>(c)` wrapper), which `noteSubstrateDispatch` (called
+  inside `rec_dispatch`, BEFORE the fallthrough) already counted — so the extra trampoline-side call
+  DOUBLE-COUNTS every rec_dispatch-routed invocation. Confirmed: `PcScheduler::yieldPrim`, which
+  matched EXACTLY at A=2990/B(gen)=2990 before the change, became B(gen)=5989 (~2×) after. The two
+  ovhit counters are each individually complete for their OWN call shape (rec_dispatch vs raw
+  g_override wrapper); a mismatch between them is real, structural, caller-graph information, not
+  an instrumentation gap to paper over with more counting.
+- **fix:** documentation only (docs/config.md "A/B call-count MISMATCH triage" + the permanent
+  `sefprobe` probe as the reference technique for the next such question) — no code/counter change
+  was correct here. `ovhit`'s existing `<-- COUNT MISMATCH` flag stays as-is (it's an accurate
+  signal that the two call shapes differ in count; the triage step of "is the caller graph itself
+  symmetric" still has to happen by hand, the same way `recdep`'s "0 in recdep ≠ dead" caveat does).
+- **verification:** `PSXPORT_SBS_MODE=full` autonav headless, 0 `sbs-div`/`VIOLATION` through
+  f3000, both before this triage pass and after landing the `sefprobe` probe.
+- **refs:** docs/config.md (ovhit + sefprobe sections); game/core/engine.cpp
+  `sceneEventFifoFaithful` (`sefprobe`); game/render/perobj_billboard.cpp; game/render/
+  overlay_ground_gt3gt4.cpp; game/player/actor_tomba.cpp (`outerTransitionCommit`); game/core/
+  pc_scheduler.cpp; docs/findings/render.md "dead end avoided" (the pre-existing sibling finding
+  for the cmdListDispatch chain, predates `ovhit`).
+
 ## Engine/game overrides on the process-global g_override[]/g_ov_* tables contaminated the SBS oracle (false 0-div)
 - **symptom:** SBS full reported 0 `sbs-div` through 15000+ frames for clusters that were actually WRONG. The oracle (core B) was running the NATIVE mirror for several render-packet-emitter clusters, not the pure substrate — so SBS compared native-vs-native and reported a clean gate, masking every real divergence.
 - **status:** fixed 2026-07-09 (central oracle-gated thunk installer).

@@ -46,6 +46,7 @@
 #include "dualview_snapshot.h"    // c->mRender->dualviewSnapshot.capturePre/restorePre
 // (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->mode.psxRender() / dualview())
 #include "game.h"                    // class Game — c->game->ffspan (FfSpan) + Game::sbs
+#include "sbs.h"                     // `sefprobe` probe below — Sbs::coreId/frame
 // FFS: nested span tracker. c must be a Core* in scope. Same shape as FfSpan::begin/end inlined.
 #define FFS(nm, call) do { \
   FfSpan& _ff = c->game->ffspan; \
@@ -617,6 +618,21 @@ void Engine::sceneEventFifoFaithful() { Core* c = core;
   const uint32_t B = 0x800ed058u;
   c->r[16] = B;
   uint8_t st = c->mem_r8(B + 2);
+  // `sefprobe` (2026-07-10, ovhit A/B triage — docs/findings/tooling.md "ovhit A/B mismatch is
+  // often a call-GRAPH asymmetry, not a counting bug"): proves this NATIVE Engine method is
+  // reached ONLY on SBS core A (pc_faithful) — core B (recomp_path/oracle) never enters it even
+  // once, despite both cores having pc_skip=false and byte-identical RAM every frame (0-diff SBS).
+  // Core B reaches the SAME final RAM state via the pure-substrate per-frame chain instead (a
+  // topologically different call graph that happens to converge on the same guest leaves this
+  // method also calls, e.g. Animation::advanceLinkChain/0x80077b5c below) — this is the reference
+  // technique for telling "genuine control-flow bug" apart from "expected native-vs-substrate
+  // call-graph asymmetry" the next time ovhit flags an A-only or B-only leaf.
+  if (cfg_dbg("sefprobe")) {
+    Sbs* sbs = c->game ? c->game->sbs : nullptr;
+    int cid = sbs ? sbs->coreId(c) : -1;
+    fprintf(stderr, "[sefprobe] f%u core=%c ENTRY st=%u\n",
+            sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), (unsigned)st);
+  }
   if (st == 0) {
     c->mem_w8(B + 2, 1);
     c->mem_w8(B + 9, 0);
