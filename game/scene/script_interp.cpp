@@ -5,20 +5,23 @@
 // INTERPRETER" for the full RE (opcode entry format, flag bits, handler table location, ret-code
 // switch).
 //
-// TOP-DOWN DOCTRINE — the interpreter LEAVES it doesn't own yet (each opcode handler at the 63-
-// entry table 0x800A3B78) stay reachable via rec_dispatch. Only the DISPATCH LOOP is owned here,
-// plus op 0x03E (call fnptr) which is native-routed through BehaviorDispatch::dispatchObj — so any
-// script-driven fade / cutscene fnptr registered as a native `beh_*` runs native automatically;
-// unregistered fnptrs fall through to the substrate leaf. No revived rec_set_override.
+// TOP-DOWN DOCTRINE — the interpreter LEAVES it doesn't own yet (58 of the 63-entry table at
+// 0x800A3B78) stay reachable via rec_dispatch. The DISPATCH LOOP is owned here, plus op 0x03E (call
+// fnptr) which is native-routed through BehaviorDispatch::dispatchObj — so any script-driven fade /
+// cutscene fnptr registered as a native `beh_*` runs native automatically; unregistered fnptrs fall
+// through to the substrate leaf. No revived rec_set_override.
 //
-// The advance sub-machine at guest FUN_80040FA0 (small post-advance JT wrapper around advanceEntry)
-// stays substrate for now — it's pure state manipulation on the driven object, easy to promote to
-// a native method in a follow-up once the caller chain reaches this class from native code. Same
-// for the 62 unowned opcode handlers.
+// FRONTIER-TIER WIRING (2026-07-10) — 5 opcode handlers (05/06/34/36/31) plus the advance sub-
+// machine at guest FUN_80040FA0 are now VERIFIED (§9 line-by-line re-check against generated/) and
+// WIRED via ScriptInterp::registerOverrides() at the bottom of this file. advanceEntry() calls
+// advanceStep() (FUN_80040FA0's native body) directly instead of rec_dispatch'ing to it. The
+// remaining 58 opcode handlers stay substrate.
 
 #include "scene/script_interp.h"
 #include "core.h"
 #include "core/engine.h"
+#include "game.h"
+#include "engine_overrides.h"
 #include "object/behavior_dispatch.h"
 #include <cstdint>
 
@@ -130,19 +133,13 @@ void ScriptInterp::loadCurrentEntry(uint32_t obj, uint32_t scriptPtr) {
 }
 
 int ScriptInterp::advanceEntry(uint32_t obj, uint32_t kindArg) {
-  Core* c = core;
-  // The advance sub-machine at guest FUN_80040E54 has a fine-grained 3-bit-flag → advance-amount /
-  // branch-fetch table; the FUN_80040FA0 wrapper adds a small post-advance JT on the return code.
-  // Both stay substrate for now — pure state manipulation on `obj`, easy to promote in a follow-up.
-  // We route through 0x80040FA0 (the wrapper the step loop uses) so obj+0x70 stays in sync.
-  c->r[4] = obj;
-  c->r[5] = kindArg;
-  const uint32_t sp_save = c->r[29];
-  const uint32_t ra_save = c->r[31];
-  rec_dispatch(c, 0x80040FA0u);
-  c->r[29] = sp_save;
-  c->r[31] = ra_save;
-  return (int)c->r[2];
+  // NAMING FIX (2026-07-10 frontier wiring): this method is documented as owning guest FUN_80040E54
+  // (kAdvanceAddr), but its real behavior has always been FUN_80040FA0's — the small post-advance
+  // switch that step() actually calls (see advanceStep()'s own banner). FUN_80040E54 (the raw entry-
+  // advance byte-shape) stays substrate/out-of-band; call the now-verified native advanceStep() body
+  // directly instead of rec_dispatch'ing to 0x80040FA0 so this class stops taxi-ing through the
+  // substrate for its own already-owned leaf.
+  return advanceStep(obj, kindArg);
 }
 
 namespace {
@@ -150,10 +147,16 @@ namespace {
 // beyond "flag storage indexed by argB" / "single-byte gate" not traced further this pass — see
 // the header banner for the honest caveat.
 constexpr uint32_t kSceneFlagTable = 0x800BF870u + 324u;  // op06: byte[argB]
-constexpr uint32_t kClaimGateByte  = 0x800BF86Fu;          // op34: single-byte semaphore
+constexpr uint32_t kClaimGateByte  = 0x800BF80Fu;          // op34: single-byte semaphore. §9 re-verify
+                                                             // 2026-07-10: recomputed from generated/
+                                                             // shard_2.c:4772 (32780<<16 + -2040 + 7,
+                                                             // and independently + -2033 in the poll
+                                                             // path) = 0x800BF80F, NOT 0x800BF86F as the
+                                                             // original wide-RE draft had it (0x60 off —
+                                                             // an unrelated table's address got copied).
 }  // namespace
 
-// FUN_80042090 — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_7.c:5216.
+// FUN_80042090 — VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard_7.c:5216.
 // NOTE ON RETURN VALUE: the guest computes `(decremented << 16) >> 31` (arithmetic) — a MIPS
 // sign-replicate idiom, NOT a 0/1 flag. It yields exactly 0 (still counting down) or -1 i.e.
 // 0xFFFFFFFF (went negative). Per step()'s ret-code switch (RET_PAUSE=0 / RET_ADVANCE_*={1,2,3}),
@@ -168,7 +171,7 @@ int ScriptInterp::op05WaitFrames(uint32_t obj) {
   return ((int16_t)decremented < 0) ? -1 : 0;
 }
 
-// FUN_800420AC — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_0.c:5231. See
+// FUN_800420AC — VERIFIED + WIRED (frontier tier, 2026-07-10). 1:1 with generated/shard_0.c:5231. See
 // script_interp.h for the 3-mode (eq/and-nonzero/and-zero) semantics.
 int ScriptInterp::op06TestSceneFlag(uint32_t obj) {
   Core* c = core;
@@ -192,7 +195,8 @@ int ScriptInterp::op06TestSceneFlag(uint32_t obj) {
   return 0;  // argA >= 3: unreachable in the guest's own byte-shape, kept for parity
 }
 
-// FUN_80042E10 — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4772. See
+// FUN_80042E10 — VERIFIED + WIRED (frontier tier, 2026-07-10; §9 re-verify caught+fixed the
+// kClaimGateByte constant, see below). 1:1 with generated/shard_2.c:4772. See
 // script_interp.h for the claim/poll phase-machine semantics.
 int ScriptInterp::op34ClaimGate(uint32_t obj) {
   Core* c = core;
@@ -214,7 +218,8 @@ int ScriptInterp::op34ClaimGate(uint32_t obj) {
   return 0;  // phase >= 2: unreachable in the guest's own byte-shape, kept for parity
 }
 
-// FUN_80040FA0 — DRAFT, UNWIRED (wide-RE 2026-07-10). 1:1 with generated/shard_2.c:4564. See
+// FUN_80040FA0 — VERIFIED + WIRED (frontier tier, 2026-07-10; advanceEntry() now calls this
+// directly, see the naming-fix note there). 1:1 with generated/shard_2.c:4564. See
 // script_interp.h for the naming caveat (advanceEntry() above already rec_dispatch's HERE) and the
 // 7-entry switch-table verification. The sp-=24/ra-spill guest frame is this function's OWN
 // activation record (not shared/observable state beyond the call) so it is not reproduced.
@@ -736,4 +741,28 @@ int ScriptInterp::op31TurnTowardTarget(uint32_t obj) {
     c->mem_w8(obj + OBJ_SCRATCH_78, (uint8_t)(c->mem_r8(obj + OBJ_SCRATCH_78) + 1u));
     return epilogue(0);
   }
+}
+
+// =================================================================================================
+// Frontier-tier wiring (2026-07-10) — promote the §9-verified opcode drafts to VERIFIED ownership.
+// Guest ABI per EngineOverrides' contract: obj in c->r[4], ret in c->r[2]. step()'s dispatch loop
+// already calls rec_dispatch(c, handler) for every non-0x3E opcode (with sp/ra saved+restored
+// around the call), and rec_dispatch consults c->game->engine_overrides BEFORE falling to the
+// gen_func_* body — oracle-gated (core B / psx_fallback never consults the table) — so registering
+// these 5 addresses here is the entire wiring step; step()'s loop itself is untouched.
+namespace {
+void eov_op05WaitFrames(Core* c)               { c->r[2] = (uint32_t)c->engine.script.op05WaitFrames(c->r[4]); }
+void eov_op06TestSceneFlag(Core* c)            { c->r[2] = (uint32_t)c->engine.script.op06TestSceneFlag(c->r[4]); }
+void eov_op34ClaimGate(Core* c)                { c->r[2] = (uint32_t)c->engine.script.op34ClaimGate(c->r[4]); }
+void eov_op36MoveTowardScriptTarget(Core* c)   { c->r[2] = (uint32_t)c->engine.script.op36MoveTowardScriptTarget(c->r[4]); }
+void eov_op31TurnTowardTarget(Core* c)         { c->r[2] = (uint32_t)c->engine.script.op31TurnTowardTarget(c->r[4]); }
+}  // namespace
+
+void ScriptInterp::registerOverrides() {
+  EngineOverrides& ov = core->game->engine_overrides;
+  ov.register_(kOp05Addr, "ScriptInterp::op05WaitFrames",             eov_op05WaitFrames);
+  ov.register_(kOp06Addr, "ScriptInterp::op06TestSceneFlag",          eov_op06TestSceneFlag);
+  ov.register_(kOp34Addr, "ScriptInterp::op34ClaimGate",              eov_op34ClaimGate);
+  ov.register_(kOp36Addr, "ScriptInterp::op36MoveTowardScriptTarget", eov_op36MoveTowardScriptTarget);
+  ov.register_(kOp31Addr, "ScriptInterp::op31TurnTowardTarget",       eov_op31TurnTowardTarget);
 }

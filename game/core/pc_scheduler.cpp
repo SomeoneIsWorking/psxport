@@ -587,7 +587,7 @@ void PcScheduler::step() {
   static_cast<R3000&>(*c) = loop;             // restore the frame-loop REGISTERS (shared RAM untouched)
 }
 
-// FUN_800506D0 — DRAFT, UNWIRED (wide-RE 2026-07-10). See pc_scheduler.h for the RE summary. 1:1
+// FUN_800506D0 — VERIFIED + WIRED (frontier tier, 2026-07-10). See pc_scheduler.h for the RE summary. 1:1
 // with generated/shard_5.c:7522: no frame descent (leaf, no sp/ra touched), 3-slot sweep over
 // TASKBASE+i*TASKSTRIDE for i=0..2 (verified against the guest loop bound 0x801FE000..0x801FE14F
 // inclusive-by-112 == exactly 3 iterations), state==1 -> decrement countdown at +2 -> re-arm to 2

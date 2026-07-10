@@ -132,7 +132,7 @@ public:
   // step(): one scheduler pass over the 3 task slots (replaces FUN_80051e60).
   void step();
 
-  // tickSleepCountdown(): FUN_800506D0 — DRAFT, UNWIRED (wide-RE 2026-07-10). The "sleep
+  // tickSleepCountdown(): FUN_800506D0 — VERIFIED + WIRED (frontier tier, 2026-07-10). The "sleep
   // countdown / re-arm" sweep called once per frame from native_boot.cpp's `rc0(c, 0x800506d0)`
   // site (still substrate there — this method is a faithful native port, not yet wired in).
   // Byte-shape source: generated/shard_5.c:7522 (gen_func_800506D0) — a leaf, no stack frame (no

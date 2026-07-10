@@ -104,6 +104,7 @@ void register_engine_overrides(Game* game) {
   RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)
   RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
   c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
+  c->engine.script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)
 }
 
 int main(int argc, char** argv) {

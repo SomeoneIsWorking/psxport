@@ -126,7 +126,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
   c->game->cd.audioTrace("coord");                                 // CD-vol fade state AFTER coord
   rc1(c, 0x80080f6c, 0);                                      // draw sync
-  rc0(c, 0x800506d0);                                         // task sleep-countdown (re-arm 1->2)
+  c->game->pcSched.tickSleepCountdown();                      // was rc0(c, 0x800506d0) — task sleep-countdown (re-arm 1->2)
   // Display + OT submit (LAB_80050c6c, DAT_1f80019c==0 branch). Single-buffered, PC-native display.
   // The PSX disp-env dance is GONE: we draw page `parity` (env0 → VRAM (0,0)) and tell the PC present to
   // scan that very page DIRECTLY via gpu_set_disp_origin, instead of routing through PutDispEnv and the

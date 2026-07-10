@@ -127,3 +127,45 @@
 - **refs:** game/ai/beh_jumptable_release_trigger.cpp (release_position_801244e8), game/world/entity.cpp
   (sm40558's calls to 0x8012866C/0x8012E168, unchanged), game/world/object_table.cpp (dispatchFaithful
   s1 loop-counter reuse), docs/findings/render.md (0x8013DD48).
+
+## ScriptInterp opcode cluster — §9 re-verify + frontier-tier wiring (2026-07-10)
+
+- **status:** RESOLVED (5 opcode handlers + advanceStep + PcScheduler::tickSleepCountdown promoted
+  from wide-RE draft to VERIFIED, WIRED). SBS-full 0-diff held (6720+ frames, autonav). `PSXPORT_DEBUG=
+  dispatch` confirms op05WaitFrames/op06TestSceneFlag actually FIRE during intro-area autonav (49-50
+  hits each, matching A/B); op34ClaimGate/op36MoveTowardScriptTarget/op31TurnTowardTarget are
+  installed via `ScriptInterp::registerOverrides()` but NOT exercised by this autonav path (0 hits) —
+  correctness for those three rests on the §9 line-by-line re-verify below, not the gate. A future
+  session with cutscene/movement-script coverage should re-gate to confirm they fire.
+- **bug found (§9 re-verify catch):** `op34ClaimGate`'s `kClaimGateByte` constant was wrong —
+  `0x800BF86Fu` in the original wide-RE draft vs the ground truth `0x800BF80Fu` (an 0x60 transcription
+  slip, apparently copied from op06's unrelated `0x800BF870` table neighborhood). Recomputed directly
+  from `generated/shard_2.c:4772`'s own constant arithmetic: `(32780<<16) + (-2040) + 7` in the
+  claim/write path and independently `(32780<<16) + (-2033)` in the poll path — both give
+  `0x800BF80F`, confirmed self-consistent within the function. Fixed in `game/scene/script_interp.cpp`
+  (`kClaimGateByte`) and the header banner (`game/scene/script_interp.h`).
+- **everything else verified clean:** op05WaitFrames (shard_7.c:5216), op06TestSceneFlag
+  (shard_0.c:5231), advanceStep/FUN_80040FA0 (shard_2.c:4564), stepAngleToward/FUN_8004139C
+  (shard_1.c:6657), stepEventPulse/FUN_80042EA4 (shard_3.c:11682), op36MoveTowardScriptTarget
+  (shard_5.c:5667), op31TurnTowardTarget (shard_3.c:11362) all matched their `generated/` bodies
+  instruction-for-instruction on independent re-derivation — including the two op31 polarity fixes the
+  original draft's own commentary claimed to have self-caught (both confirmed correct: argA sign bit
+  SET selects the scratchpad secondary-actor global / CLEAR selects self; the commit-tail SNAPs when
+  `maskedDelta < threshold OR threshold <= 0`).
+- **naming fix:** `ScriptInterp::advanceEntry()` was documented as owning guest FUN_80040E54
+  (`kAdvanceAddr`) but its actual behavior has always been FUN_80040FA0's (the post-advance switch
+  step() really calls) — `advanceEntry()` now calls the native `advanceStep()` body directly instead
+  of `rec_dispatch(c, 0x80040FA0u)`; FUN_80040E54 (the raw entry-advance) stays substrate, called from
+  inside `advanceStep()` (out of band for this pass).
+- **wiring mechanism:** `step()`'s opcode dispatch already calls `rec_dispatch(c, handler)` for every
+  non-0x3E opcode (handler = the resident table read from `0x800A3B78 + oid*4`), and `rec_dispatch`
+  consults `c->game->engine_overrides` before falling to the `gen_func_*` body — already oracle-gated
+  (core B / psx_fallback never consults it). So wiring these 5 opcodes was ONLY
+  `ScriptInterp::registerOverrides()` registering `kOp05Addr/kOp06Addr/kOp34Addr/kOp36Addr/kOp31Addr`
+  onto `EngineOverrides` (called from `register_engine_overrides()` in `runtime/recomp/boot.cpp`) — no
+  change to `step()`'s dispatch loop itself.
+- **PcScheduler::tickSleepCountdown** (FUN_800506D0, `game/core/pc_scheduler.cpp`) verified clean
+  against `generated/shard_5.c:7522` (3-slot sweep, state==1 decrement+re-arm-to-2-on-underflow) and
+  wired by direct-call swap at `runtime/recomp/native_boot.cpp:129` (was `rc0(c, 0x800506d0)`).
+- **refs:** game/scene/script_interp.{h,cpp}, game/core/pc_scheduler.{h,cpp},
+  runtime/recomp/{boot,native_boot}.cpp.

@@ -58,6 +58,13 @@ public:
   static constexpr uint32_t kStepAddr    = 0x80041098u;  // FUN_80041098 — step(obj)
   static constexpr uint32_t kOp03EAddr   = 0x800412CCu;  // op-table[0x3E] handler — call fnptr
 
+  // Verified-and-wired opcode handler addresses (frontier tier, 2026-07-10 — see registerOverrides()).
+  static constexpr uint32_t kOp05Addr = 0x80042090u;  // op05WaitFrames
+  static constexpr uint32_t kOp06Addr = 0x800420ACu;  // op06TestSceneFlag
+  static constexpr uint32_t kOp34Addr = 0x80042E10u;  // op34ClaimGate
+  static constexpr uint32_t kOp36Addr = 0x80043108u;  // op36MoveTowardScriptTarget
+  static constexpr uint32_t kOp31Addr = 0x80041468u;  // op31TurnTowardTarget
+
   // The MAIN.EXE handler table base (63 entries, indexed by `opcodeWord & 0x07FF`).
   static constexpr uint32_t kHandlerTableBase = 0x800A3B78u;
 
@@ -88,7 +95,7 @@ public:
   //   — signals "advance" in the step loop; matches guest fall-through to jr ra after the jalr).
   int callFnptr(uint32_t obj);
 
-  // ---- Opcode-table handlers (0x800A3B78, 63 entries) — DRAFT, UNWIRED (wide-RE 2026-07-10) ----
+  // ---- Opcode-table handlers (0x800A3B78, 63 entries) — VERIFIED + WIRED (frontier tier, 2026-07-10) ----
   // These read/write generic obj fields that step()/loadCurrentEntry() already load per-entry:
   //   argA = obj[+0x72] (OBJ_ARG_A_72), argB = obj[+0x74] (OBJ_FNPTR_LO_74, reused as a plain u16
   //   arg by every opcode except 0x3E), argC = obj[+0x76] (OBJ_FNPTR_HI_76, ditto). obj[+0x78]
@@ -97,8 +104,10 @@ public:
   //   .rodata directly (scratch/re/opcode_table.txt, this session): table[5]=0x80042090,
   //   table[6]=0x800420AC, table[31]=0x80041468, table[34]=0x80042E10, table[36]=0x80043108 — so
   //   these ARE opcode handlers, called as handler(obj) with ABI a0=obj / ret=v0, exactly the shape
-  //   step()'s non-0x3E dispatch already uses via rec_dispatch(handler). None are wired into the
-  //   dispatch table yet (step() still calls the substrate handler for every opcode but 0x3E).
+  //   step()'s non-0x3E dispatch already uses via rec_dispatch(handler). WIRED (frontier tier,
+  //   2026-07-10) via registerOverrides() below — step()'s rec_dispatch(handler) call needed no
+  //   change since EngineOverrides is already the interception point on that call path. The
+  //   remaining 58 opcode handlers stay substrate.
 
   // op05 — FUN_80042090: "wait N frames". Decrements argA each call; returns 0 (RET_PAUSE) while
   //   still counting down, or -1 (0xFFFFFFFF — matches NO case in step()'s ret-code switch, so it
@@ -119,8 +128,10 @@ public:
   //   Faithful from generated/shard_0.c:5231 (leaf, no frame).
   int op06TestSceneFlag(uint32_t obj);
 
-  // op34 — FUN_80042E10: "claim-and-wait on a shared 1-byte gate" at guest 0x800BF86F (byte +7 of
-  //   the 0x800BF868 table — same table family as op06's 0x800BF870 anchor, offset -8 from it;
+  // op34 — FUN_80042E10: "claim-and-wait on a shared 1-byte gate" at guest 0x800BF80F (§9 re-verify
+  //   2026-07-10: the original wide-RE draft had this at 0x800BF86F, an 0x60 transcription slip —
+  //   recomputed from generated/shard_2.c:4772's own constant math (32780<<16 + -2040 + 7, confirmed
+  //   independently against the poll path's + -2033); NOT part of op06's 0x800BF870 table family —
   //   consumer/producer of this specific byte NOT traced this pass). Uses obj[+0x78] as a 2-phase
   //   counter (0=claim, 1=poll):
   //     phase 0: if (argA & 7) == 0, skip straight to the phase-increment tail (no claim attempt,
@@ -134,7 +145,7 @@ public:
   //   Faithful from generated/shard_2.c:4772 (leaf, no frame).
   int op34ClaimGate(uint32_t obj);
 
-  // ---- FUN_80040FA0 — DRAFT, UNWIRED (wide-RE 2026-07-10) --------------------------------------
+  // ---- FUN_80040FA0 — VERIFIED + WIRED (frontier tier, 2026-07-10) — advanceEntry() now calls this directly ----
   // "Advance sub-machine" wrapper the guest step() calls after every non-pause handler return
   // (see the `RET_ADVANCE_*` comment above `advanceEntry()`). NOTE ON NAMING: the CURRENT
   // `advanceEntry()` method above (kAdvanceAddr = 0x80040E54 per its own doc comment) actually
@@ -156,7 +167,7 @@ public:
   int advanceStep(uint32_t obj, uint32_t kindArg);
 
   // ==== Wide-RE pass 2026-07-10 (dedicated follow-up session) — op36/op31 movement-script family ==
-  // DRAFT, UNWIRED. Both cross-checked via Ghidra headless decompile (scratch/decomp/
+  // VERIFIED + WIRED (frontier tier, 2026-07-10 wiring pass). Both cross-checked via Ghidra headless decompile (scratch/decomp/
   // op36_op31_band.c) against generated/shard_3.c / shard_5.c (instruction-exact ground truth) —
   // see game/scene/script_interp.cpp for the per-function commentary and the two self-caught
   // transcription slips (both corrected before landing, documented inline at the fix site).
@@ -215,4 +226,13 @@ public:
   //   with pan=0. Frame: sp-=24, spills ra only. Faithful from generated/shard_3.c:11682.
   int stepEventPulse(uint32_t obj, uint32_t flagsPtr, uint32_t packedArg);
   void stepEventPulseFramed();  // guest-ABI twin: obj/flagsPtr/packedArg from c->r[4..6]
+
+  // Wire the §9-verified opcode handlers onto game->engine_overrides at their guest addresses
+  // (0x80042090/0x800420AC/0x80042E10/0x80043108/0x80041468) — frontier-tier promotion, 2026-07-10.
+  // step()'s rec_dispatch(handler) call already routes through EngineOverrides (oracle-gated: core B
+  // / psx_fallback never consults the table), so registering here is sufficient — no change needed
+  // in step()'s dispatch loop itself. The other draft leaves (turnFacing/stepAngleToward/
+  // stepEventPulse/advanceStep) are reached only as C++ callees of the two opcode handlers, not
+  // separately dispatched, so they need no table entry of their own.
+  void registerOverrides();
 };

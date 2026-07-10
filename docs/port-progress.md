@@ -2832,3 +2832,25 @@ themselves are LIVE but dispatch out to substrate for every case body.
   comments in the .cpp). Next: RE the two nested tables' contents, draft `0x8006228C`/`0x8006506C`/
   `0x80061C64`, then a verify+wire pass on all of it together with `enterOuterState0`/
   `matrixComposeAttached`.
+  (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.
+- **ScriptInterp opcode cluster (op05/op06/op34/op36/op31) + advanceStep + PcScheduler::
+  tickSleepCountdown — WIRED, verified (frontier agent, 2026-07-10).** Promoted the banked wide-RE
+  drafts (§9 re-verify + wire) covering the cutscene-script opcode-table family: `op05WaitFrames`
+  (0x80042090), `op06TestSceneFlag` (0x800420AC), `op34ClaimGate` (0x80042E10),
+  `op36MoveTowardScriptTarget` (0x80043108), `op31TurnTowardTarget` (0x80041468) — wired via
+  `ScriptInterp::registerOverrides()` (`game/scene/script_interp.{h,cpp}`), called from
+  `register_engine_overrides()` in `runtime/recomp/boot.cpp`. `advanceEntry()` now calls the
+  verified `advanceStep()` (FUN_80040FA0) body directly instead of `rec_dispatch`'ing to it (fixed a
+  naming mismatch — `advanceEntry` was documented as owning FUN_80040E54 but always ran FUN_80040FA0's
+  behavior). `PcScheduler::tickSleepCountdown` (FUN_800506D0) wired by direct-call swap at
+  `runtime/recomp/native_boot.cpp:129` (was `rc0(c, 0x800506d0)`). §9 re-verify found ONE real bug:
+  `op34ClaimGate`'s gate-byte constant was `0x800BF86Fu`, should be `0x800BF80Fu` (0x60 off, an
+  apparent copy from op06's unrelated table) — fixed. Everything else (op05/op06/op36/op31/
+  advanceStep/turnFacing/stepAngleToward/stepEventPulse/tickSleepCountdown) matched `generated/`
+  instruction-for-instruction on independent re-derivation, no further bugs. SBS-full gate: 0-diff
+  through 6720+ frames (autonav). `PSXPORT_DEBUG=dispatch` confirms op05/op06 actually FIRE (49-50
+  hits, autonav reaches scripted wait/flag-test opcodes); op34/op36/op31 are installed but NOT
+  exercised by this autonav path — correctness for those three rests on the §9 re-verify, not the
+  gate (say so honestly; re-gate with cutscene/movement-script coverage in a future session). Full
+  writeup: `docs/findings/scene.md` "ScriptInterp opcode cluster — §9 re-verify + frontier-tier
+  wiring".
