@@ -2832,6 +2832,24 @@ themselves are LIVE but dispatch out to substrate for every case body.
   comments in the .cpp). Next: RE the two nested tables' contents, draft `0x8006228C`/`0x8006506C`/
   `0x80061C64`, then a verify+wire pass on all of it together with `enterOuterState0`/
   `matrixComposeAttached`.
+- **`60064-65374` cluster follow-up: the remaining 4 resolved (wide-RE agent #2, 2026-07-10,
+  RE-ahead-of-frontier — UNWIRED).** Drafted the 4 leftovers flagged above. `0x8006228C`
+  (`ActorTomba::caseModeFsm_8006228C`, 127L) and `0x8006506C` (`caseModeFsm_8006506C`, 175L) —
+  both full 1:1 transcriptions, same G+0x6 4-state FSM shape as the drafted-6 cluster.
+  `0x800624B4` (`ActorTomba::nestedDispatch_800624B4`, 144L) — full transcription INCLUDING all 5
+  inner case bodies of its nested `.rodata` table @ 0x800163DC (small enough to fit in one pass).
+  `0x80060C60` (`ActorTomba::nestedDispatch_80060C60`, 792L, the largest in the whole cluster) —
+  per fleet-workflow.md §9's "honest map beats buggy draft", only the frame/gate/switch skeleton +
+  smallest inner case (`0x800611B0`, ~10L) were drafted faithfully; the other 7 inner cases of its
+  8-entry nested table @ 0x800163BC are MAPPED ONLY (line ranges + one-line shape notes in
+  docs/engine_re.md's "third dispatch layer map", incl. the notable finding that case
+  `0x80061010` calls the ALREADY-DRAFTED `matrixComposeAttached()` — first concrete cross-link
+  between this cluster and the earlier drafted trio, reinforcing the "per-frame FSM update, not
+  enemy/AI content" hypothesis). All 4 confirmed unowned before drafting, `LIVE` in
+  `docs/code-map.md` after. Compiles+links clean (`build2`). UNWIRED and UNVERIFIED per §9 — same
+  re-diff-before-wiring caveat as the drafted-6. Next: RE + draft `0x80060C60`'s remaining 7 cases
+  (especially `0x80061010`, `0x80060CAC`), then a verify+wire pass on the full 10-address cluster
+  together with `enterOuterState0`/`matrixComposeAttached`.
   (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.
 - **ScriptInterp opcode cluster (op05/op06/op34/op36/op31) + advanceStep + PcScheduler::
   tickSleepCountdown — WIRED, verified (frontier agent, 2026-07-10).** Promoted the banked wide-RE

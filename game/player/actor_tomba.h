@@ -398,4 +398,110 @@ private:
   //   this pass. Faithful from generated/shard_3.c:15659. Guest frame: addiu sp,-32; spill
   //   s0(G),s1,ra.
   void caseModeFsm_80060064(uint32_t G);
+
+  // ----------------------------------------------------------------------------
+  // 2026-07-10 wide-RE pass #2 — the 4 mapped-not-drafted leftovers of the 60064-65374 cluster.
+  // Same table A/B case-cluster as above (G in r4, per-G sub-FSM on G+0x6). Two of the four
+  // (0x800624B4 / 0x80060C60) are NOT leaves — each is itself a nested dispatch layer indexing a
+  // small `.rodata` function-pointer array and switching on the loaded target. FAITHFUL DRAFTS,
+  // UNWIRED, per fleet-workflow.md §9. See docs/engine_re.md's "third dispatch layer map" section
+  // for the full case-target enumeration of both nested tables.
+  // ----------------------------------------------------------------------------
+
+  // caseModeFsm_8006228C(G) — guest FUN_8006228C(G). Table A/B case target. Same G+0x6 4-state
+  //   sub-FSM shape as caseModeFsm_800620D0/80061A7C (states 0..3 gated by <2/==2/==3), but state 1
+  //   is denser: every call does func_80055FBC(G, byte@G+327), func_80076D68(G), func_80056B48(G,0),
+  //   func_80055D5C(G), G+0x32(50)+=8 then func_8005444C(G); if byte@G+0x29(41)!=0, decrements the
+  //   16-bit G+0x40(64) timer and, when it lands on exactly the value whose low 16 bits sign-extend
+  //   to 0 (`(timer<<16)==0`, i.e. timer wrapped through 0), fires func_8005A714(G) once; always
+  //   tail-calls func_80056C00(G,1) and func_800551C4(G). It then independently ticks a SEPARATE
+  //   8-bit counter at G+0x167(359) (set to 30 by both state-0-shaped inits): decrementing it every
+  //   call, and only once it BOTTOMS OUT at 0 does it check byte@G+0x29(41) to either re-idle
+  //   (G+5=G+6=0) or call func_80056D44(G,0) — i.e. this state never advances G+0x6 itself; only
+  //   states 2/3's own G+0x6++ move the FSM forward. State-0 init: clear G+0x146(326), resetSwap,
+  //   func_80054D14(G,224,4), SFX cue func_80074590(58,0,0), G+0x167(359)=30, G+7=0, G+0x40(64)=7,
+  //   G+0x42(66)=0, G+6++ (falls through into state-1's body the same call). State 2: clears global
+  //   byte 0x800BF80E (`0x800C0000-2034`), resetSwap, func_80054D14(G,223,4) — NOTE 223, not 224 —
+  //   SFX cue func_80074590(58,0,0), timer=30, G+6++ (exits directly, no fallthrough). State 3:
+  //   func_80076D68(G), func_800551C4(G), decrements G+0x40 timer; once it lands on the sign-extends-
+  //   to-0 value, writes global byte 0x800BF80E=1, G+4=4, G+5=32, clears G+6/G+7 (re-idles);
+  //   otherwise no-op. Faithful from generated/shard_5.c:9664. Guest frame: addiu sp,-32; spill
+  //   s0(G, r16),s1(r17),ra — s1 holds the constant 1, never restored (dead scratch, matches gen).
+  void caseModeFsm_8006228C(uint32_t G);
+
+  // caseModeFsm_8006506C(G) — guest FUN_8006506C(G). Table A/B case target. Same outer G+0x6
+  //   4-state shape (0..3, `<2`/`==2`/`==3` gates) as the drafted cluster, but state 0's init is
+  //   GATED: reads `mem_r32(G+380) & (0x1088<<16|0x200)` and compares to 0x200 — if EQUAL, runs the
+  //   usual resetSwap(func_80054198)/func_80054D14(G,64,3)/G+6=3,G+7=0 sequence then bails straight
+  //   to the shared state-1 tail (L_8006535C is NOT it — falls into L_80065138's alternate path,
+  //   see .cpp for the exact branch map); if NOT equal, it instead re-checks a bit-1 flag at
+  //   byte@G+0x15C(348): set -> func_80054D14(G,64,3), G+6=2,G+7=0; clear -> func_80054D14(G,64,3),
+  //   G+6++,G+7=0, falling into the shared tail. The shared tail (state-1-ish, reached from every
+  //   init path AND from a direct G+6==1 dispatch) reads a hardware/DAT flag at 0x8004CED4
+  //   (`32783<<16-12460`) bit4: set -> func_80054D14(G,65,0)/func_80062D8C(G,0), then picks an SFX
+  //   band arg (3 or -2) off a scratchpad byte `mem_r16(0x1F800000+380)&3`; clear -> bit6 of that
+  //   same DAT_8004CED4 gates func_80062D8C(G,1) vs (G,64) before the same SFX dispatch
+  //   (func_80074590(<band>,0,-60)). Then func_80055824(G) — the same call caseModeFsm_80060064
+  //   uses (an ActorTomba::frameTick leaf per its own header comment) — feeds a big committing block
+  //   nearly identical to caseModeFsm_80060064's own commit tail (G+5=4,G+6=2,G+356=0,G+7=0,
+  //   G+344(dword)=0,G+88(word)=0,G+64(timer)=8, SFX cue func_80074590(29,0,0), func_80055E28(G,0),
+  //   func_80054D14(G, 2|(byte@G+330&1), 20)). State 2 (label L_800652B0): func_80076D68(G), reads
+  //   DAT bit4 at 0x80047E68 (`32782<<16+32360`) OR'd with a func_80055824(G) fallback, and on
+  //   either being truthy sets G+5=7,G+6=1(the r18 constant),G+7=0; else if bit6 of DAT_8004CED4
+  //   set, G+0x32(50)+=16 via func_80062D8C(G,1), G+6=1. State 3 (label L_80065324):
+  //   func_80076D68(G), func_80062D8C(G,129), then conditionally an SFX cue (-2 band) same as
+  //   state-0's tail — does NOT itself advance G+0x6 (no self-write to G+6 in this branch).
+  //   Faithful from generated/shard_1.c:12103. Guest frame: addiu sp,-32; spill
+  //   s0(G,r16),s2(r18),s1(r17),ra.
+  void caseModeFsm_8006506C(uint32_t G);
+
+  // nestedDispatch_800624B4(G) — guest FUN_800624B4(G). Table A/B case target — **NOT a leaf**:
+  //   after two unconditional side-effect writes (G+0x17B(379)=1, global byte 0x8008027A
+  //   (`0x80080000+634`, i.e. `8064<<16 + 634`) =2), gates `byte@G+0x6 < 5` (exit straight to the
+  //   epilogue if not) and, when true, indexes a **5-entry `.rodata` function-pointer table at
+  //   0x800163DC** (`32769<<16 + 25628`, i.e. `0x8001CADC`... literal gen constant kept: base
+  //   `0x80010000` region + 25628) with `byte@G+0x6`, landing on an internal 5-way switch over the
+  //   loaded address. Case-target addresses (all still-substrate; see docs/engine_re.md's "third
+  //   dispatch layer map" for the full RE of all 5 bodies): `0x8006250C` (init: sets byte@0x800BF7FA
+  //   (`32780<<16-2040`, offset+6)=0, G+0=6, +1=1, conditionally resetSwap+func_800551C4, then
+  //   func_80067EF4(G, byte@G+111)/func_8001CF2C()/func_80055D5C(G), G+6++, func_80076D68(G),
+  //   func_800310F4(30,0) spawning-style call whose return (r16) OR's flag 0x80 into ret+0x28 when
+  //   nonzero, SFX cue func_80074590(22,0,30), G+16(dword)=r16, G+0x40(64)=5); `0x800625D4`
+  //   (timer@G+0x40 decrement, re-idle-ish clear of G+1 + advance G+6 once it lands on 0);
+  //   `0x800625F8` (checks DAT_800FE0A0 (`32800<<16-7968`) word !=0, calls func_8001CF2C());
+  //   `0x8006261C` (reads two lookup-table entries off DAT_8009D014(`32783<<16-12268`, a dword
+  //   pointer) and a per-item table at `32784<<16-20112` indexed by `byte@G+382 & 15`, feeds
+  //   func_80044CD4(G, entry>>11, entry2-entry) — return==0 re-enters the G+6++ tail, nonzero exits
+  //   without advancing); `0x80062678` (checks scratchpad byte@0x1F8001AB(411)!=0 as a gate; if the
+  //   dword at G+16 is set, writes ret+4=2,ret+5=0; func_80057FD4(G); G+1=1; conditionally
+  //   func_80074F24(byte@0x1F80022C(-1936)) when scratchpad byte@G+16... (see cpp for the exact
+  //   dword-vs-byte read at r16+311==1); G+0=3, G+4(dword)=DAT_8009D010(`8064<<16+572`, i.e.
+  //   scratchpad+572), G+370(word)=30; conditionally clears r16+311 and byte 0x800BF7D9(-2039)).
+  //   `default:` (dead per the `<5` gate) calls `rec_dispatch(c, r2)` and returns WITHOUT the
+  //   epilogue — mirrored literally. Faithful from generated/shard_6.c:9622. Guest frame:
+  //   addiu sp,-32; spill s1(G,r17),ra,s0(r16, only live inside cases 0x8006250C/80062678).
+  void nestedDispatch_800624B4(uint32_t G);
+
+  // nestedDispatch_80060C60(G) — guest FUN_80060C60(G). Table A/B case target — **NOT a leaf, same
+  //   shape as nestedDispatch_800624B4**: an unconditional side-effect write (scratchpad byte
+  //   0x1F80027B (`8064<<16+635`) =0), gates `byte@G+0x6 < 8` (exit to epilogue if not), then
+  //   indexes an **8-entry `.rodata` function-pointer table at 0x800163BC** (`32769<<16 + 25596`)
+  //   with `byte@G+0x6`, landing on an internal 8-way switch. At 792 gen-C lines this is by far the
+  //   largest of the whole cluster and — per fleet-workflow.md §9's "honest map beats buggy draft"
+  //   — this pass drafts ONLY the frame/gate/switch skeleton plus the smallest case body
+  //   (`0x800611B0`, ~10 gen-C lines) faithfully; the other 7 case bodies (ranging ~42-191 gen-C
+  //   lines each, several themselves multi-branch with nested sub-dispatches like case
+  //   `0x80061010`'s call into the already-drafted `matrixComposeAttached()`) are MAPPED ONLY —
+  //   see docs/engine_re.md's "third dispatch layer map" for line ranges + one-line shape notes per
+  //   case, and the .cpp for a `// TODO(wide-RE): not transcribed` stub at each undrafted label
+  //   (falls straight to the shared epilogue — NOT faithful, dead code only, safe because unwired).
+  //   Drafted case `0x800611B0`: reads byte@G+327(0x147), picks 1792 or 256, writes G+332(word)=
+  //   that value, G+334(word)=0, G+6++ (falls through to the next case's own entry per gen's own
+  //   fallthrough — NOT taken here since this is the shortest/last-checked case in isolation; see
+  //   cpp for the literal `goto` target, which the drafted body preserves even though the target
+  //   label itself is a TODO stub). Faithful (for the drafted case + skeleton) from
+  //   generated/shard_1.c:10924. Guest frame: addiu sp,-32; spill s0(G,r17 — note: this function
+  //   uses r17 as G, NOT r16, unlike its siblings),ra; r16 is live-but-uninitialized-at-entry
+  //   scratch used inside several (undrafted) case bodies, not part of the guest frame spill set.
+  void nestedDispatch_80060C60(uint32_t G);
 };

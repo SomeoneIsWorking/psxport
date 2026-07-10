@@ -3736,3 +3736,85 @@ each of these two alone adds 5 and 8 more still-substrate targets respectively, 
 `80061A7C`/`80061C64`) are plausibly MORE case targets of the same outer G+0x6-style shape. A
 follow-up pass should RE the two `.rodata` tables' contents (0x800163DC × 5, 0x800163BC × 8)
 before drafting their case bodies.
+
+### 2026-07-10 wide-RE pass #2 — the 4 mapped-not-drafted leftovers, resolved
+
+All 4 confirmed unowned (`tools/codemap.py --addr`, this session) before drafting; all 4 now
+`LIVE` in `docs/code-map.md` as `ActorTomba::` methods in `game/player/actor_tomba.{h,cpp}` —
+FAITHFUL DRAFTS, UNWIRED (no `EngineOverrides`/`shard_set_override` registration, no SBS run),
+compile+link clean (`cmake -S . -B build2 && cmake --build build2 --target tomba2_port`, zero
+warnings touching `actor_tomba.cpp`). Per fleet-workflow.md §9, a future wiring session must still
+re-diff these line-by-line against `generated/` before trusting them — this pass's own transcription
+was checked once during drafting, not independently re-verified after.
+
+| addr | lines | shard:line | status |
+|---|---|---|---|
+| 0x8006228C | 127 | shard_5.c:9664 | **DRAFTED** `ActorTomba::caseModeFsm_8006228C` — full transcription |
+| 0x8006506C | 175 | shard_1.c:12103 | **DRAFTED** `ActorTomba::caseModeFsm_8006506C` — full transcription |
+| 0x800624B4 | 144 | shard_6.c:9622 | **DRAFTED** `ActorTomba::nestedDispatch_800624B4` — full transcription, including all 5 inner case bodies (small enough to fit in one pass) |
+| 0x80060C60 | 792 | shard_1.c:10924 | **PARTIALLY DRAFTED** `ActorTomba::nestedDispatch_80060C60` — frame/gate/switch skeleton + smallest inner case (`0x800611B0`, ~10 lines) drafted faithfully; other 7 inner cases MAPPED ONLY (see below), stubbed as dead no-ops that jump straight to the epilogue — honestly marked non-faithful past the switch dispatch for those 7 |
+
+**`0x8006228C`** — same G+0x6 4-state shape as `caseModeFsm_800620D0`/`80061A7C` (states 0..3,
+`<2`/`==2`/`==3` gates), but state 1 is denser than its siblings: every call does
+`func_80055FBC(G,byte@G+327)` / `func_80076D68(G)` / `func_80056B48(G,0)` / `func_80055D5C(G)` /
+`G+0x32+=8` / `func_8005444C(G)`, and (only if `byte@G+0x29!=0`) decrements the `G+0x40` timer,
+firing `func_8005A714(G)` once when it wraps through 0 — but this state does NOT itself advance
+`G+0x6`; a SEPARATE 8-bit counter at `G+0x167` (set to 30 by state 0/2's init) is what eventually
+re-idles the FSM or calls `func_80056D44(G,0)` once IT bottoms out. State 0 init writes
+`func_80054D14(G,224,4)`; state 2's near-identical init uses `224`→`223` (one-digit difference,
+easy to transcribe wrong — flagged during drafting). State 3 counts the same `G+0x40` timer down
+to re-idle, setting `G+4=4,G+5=32`.
+
+**`0x8006506C`** — same outer G+0x6 4-state shape, but state 0's init is GATED on
+`mem_r32(G+0x17C) & (0x1088<<16|0x200) == 0x200`: true → plain `func_80054D14(G,64,3)` + set
+`G+6=3`; false → re-checks bit1 of `byte@G+0x15C` to choose between `G+6=2` or `G+6++`, both via
+`func_80054D14(G,64,3)` or `(G,24,3)`. The shared tail (state-1-ish, reached from every init path)
+branches on hardware/DAT flag bits (`0x8004CED4` bits 4/6) to pick `func_80062D8C` bias args and an
+SFX band (3 vs -2), then calls `func_80055824(G)` — the SAME leaf `caseModeFsm_80060064` uses
+(documented there as "ActorTomba::frameTick's own leaf") — feeding a commit block that's near-
+identical to `caseModeFsm_80060064`'s own commit tail (G+5/6/356/7/344/88/64 resets, SFX cue 29,
+`func_80054D14(G,2|(byte@G+0x14A&1),20)`). State 2 reads `0x80047E68` bit4 OR's a
+`func_80055824(G)` fallback to jump the FSM to state 1 directly (`G+5=7,G+6=1`); state 3 is a
+simple `func_80076D68`/`func_80062D8C(G,129)`/conditional-SFX tail, no self G+6 write.
+
+**`0x800624B4` (nested dispatch, 5-entry table @ 0x800163DC)** — full RE of all 5 inner case
+bodies, addresses as previously mapped:
+- `0x8006250C` (init) — clears `byte@0x800BF800`, sets `byte@0x800BF7FB=1`, `G+0=6`; conditionally
+  resetSwap+`func_800551C4`; `func_80067EF4(G,byte@G+111)` / `func_8001CF2C()` /
+  `func_80055D5C(G)`; `G+6++`; `func_80076D68(G)`; `func_800310F4(30,0)` (spawning-style, result
+  in r2 — OR's flag 0x80 into `result+0x28` if nonzero); SFX cue `func_80074590(22,0,30)`;
+  `G+0x10(dword)=result`; `G+0x40(timer)=5`.
+- `0x800625D4` — decrements `G+0x40` timer; on hitting the sign-extends-to-0 value, clears `G+1`
+  and falls into the shared `G+6++` tail (label `L_80062668`).
+- `0x800625F8` — checks `DAT_800FE0A0` (word) != 0, calls `func_8001CF2C()`; either way falls to
+  the shared `G+6++` tail (via `L_80062664`).
+- `0x8006261C` — reads a lookup-table entry via `DAT_8009D014` (dword pointer) and a per-item
+  table indexed by `byte@G+0x17E & 15`; `func_80044CD4(G, entry>>11, entry2-entry)` — result==0
+  falls to the shared `G+6++` tail, nonzero exits without advancing.
+- `0x80062678` — gated on scratchpad `byte@0x1F8001AB(+411)!=0`; if `G+0x10(dword)` (set by case
+  `0x8006250C`) is nonzero, writes `item+4=2,item+5=0`; `func_80057FD4(G)`; `G+1=1`; conditional
+  `func_80074F24(byte)` on scratchpad `byte@+311==1`; commits `G+0=3`, `G+4(dword)=` scratchpad
+  dword@+572, `G+0x172(word)=30`; conditionally clears scratchpad `byte@+311` and
+  `byte@0x800BF7D9`.
+
+**`0x80060C60` (nested dispatch, 8-entry table @ 0x800163BC) — DRAFTED: skeleton + smallest case
+only.** Case-target addresses (all still-substrate, confirmed unowned) with gen-C line-range +
+one-line shape notes (NOT independently RE'd to field-level this pass — a future dedicated pass
+should finish these, they're each comparable in size/complexity to the already-drafted 6+4-of-10
+cluster above):
+
+| case addr | gen-C lines (approx) | shape note |
+|---|---|---|
+| 0x80060CAC | ~191 | largest inner case; sets scratchpad busy flag, `G+326=4`, `G+7/358=0`,`G+359=5`,`G+6++`, clears scratchpad word@+568, then branches on scratchpad byte@+636 (difficulty/type selector, 0/1/other) picking one of 3 constant triples for `G+360/G+78/G+68` — looks like a difficulty-parameterized table, same shape family as `caseModeFsm_80060064`'s param picks |
+| 0x80061010 | ~88 | decrements a scratchpad dword counter (@+524) clamped by `G+0x42`; calls `func_800597AC(G)` — the ALREADY-DRAFTED `ActorTomba::matrixComposeAttached()` (same guest addr `0x800597AC`); computes 3 position-delta fields (`G+46/50/54` -= per-axis deltas read off a `G+0xDC`-pointed struct); calls `func_80060A80(G)` (still substrate); reads scratchpad byte@+636 again, branching into nested logic that reads `G+95`/scratchpad byte@+567/+595 to conditionally set `G+0x42` from scratchpad word@+524; on match, and if `byte@G+41!=0`, resets `G+7/325=0`, `G+6++`, `G+0x58(word)=scratchpad word@+78`, calls `func_80063B94(G,...)` |
+| 0x800611B0 | ~10 | **DRAFTED** (see actor_tomba.cpp) — `byte@G+327` picks 1792-or-256 → `G+0x14C`; `G+0x14E=0`; `G+6++`; falls through (undrafted) into 0x800611D8 in gen |
+| 0x800611D8 | ~110 | sets bit0 of `byte@G+375`; `func_80076D68(G)`; `func_80055E28(G,0)`; picks 1792-or-256 off `byte@G+330` bit0 into a scratch reg, feeds into a further branch (not traced past `L_80061210` this pass) |
+| 0x800613F0 | ~50 | scratchpad busy flag=2; scratchpad dword@+524 += 32 (position/counter accumulate) |
+| 0x800614C0 | ~64 | same scratchpad-busy-flag+dword@+524+=32 opening as `0x800613F0` — likely a near-duplicate/sibling case, not diffed this pass |
+| 0x800615C8 | ~72 | scratchpad busy flag=2; `func_80076D68(G)`; further body not traced |
+| 0x80061710 | ~42 | scratchpad busy flag=2; `func_80076D68(G)`; `func_80055D5C(G)`; further body not traced |
+
+A follow-up pass should finish RE'ing + drafting these 7 (especially `0x80061010`, which is the
+only one of the whole `60064-65374`+nested cluster observed calling an ALREADY-NATIVE method —
+`matrixComposeAttached()` — a concrete signal this cluster genuinely is Tomba's per-frame FSM
+update, not enemy/AI content) before this table can be considered done.
