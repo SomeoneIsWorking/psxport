@@ -2874,3 +2874,29 @@ themselves are LIVE but dispatch out to substrate for every case body.
   `PSXPORT_DISPWATCH` (streamer 6361/6361 exact). Full writeup: `docs/findings/render.md` "GPU-DMA
   Enqueue residual CLOSED". This closes the last open item in the GPU-DMA/libgpu band from
   `docs/engine_re.md`'s 2026-07-09/10 wide-RE waves.
+  (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.
+- **PutDrawEnv cluster + Font::drawText/glyphEmit + Str::length — WIRED, 9/9 verified (frontier
+  agent, 2026-07-10).** Promoted the banked libgpu `PutDrawEnv` chain and the two hottest banked
+  font drafts to VERIFIED ownership per §9: `PutDrawEnv` (0x800815D0) + its 4 DRAWENV-field-word
+  builders (`SetDrawAreaTopLeft` 0x80082240, `SetDrawAreaBottomRight` 0x800822D8,
+  `SetDrawingOffset` 0x80082370, DR_TPAGE builder 0x80082220, DR_TWIN builder 0x8008238C),
+  `Font::drawText` (0x80079374, ~4235 dispatches/600 frames — one of the hottest unowned leaves in
+  the game), `Font::glyphEmit` (0x80078CA8, the string-draw engine `drawText` tail-calls), and
+  `Str::length` (0x80079528, generic strlen, also ~4235 dispatches). All 9 wired via
+  `engine_set_override_main` (`gpu_putdrawenv_install()` / `font_wide_re_install()` /
+  `str_wide_re_install()`, called from `games_tomba2_init()`). Re-verify found+fixed 2 real bugs:
+  (1) PutDrawEnv's DMA-send dispatch had the SAME `GPU_SYS_TABLE` single-deref bug already found
+  in DrawSync/ClearOTagR the session before — a pointer FIELD read directly instead of
+  double-dereferenced; (2) `Font::drawText`'s draft had fabricated a 6th "h" argument that doesn't
+  exist in the real 5-arg guest ABI (`x,y,w,str,color`) and OR'd it into the packed size word,
+  corrupting it whenever nonzero — traced from every one of ~15 call sites across
+  `generated/shard_*.c`, none of which pass a 6th value. `glyphEmit`, `Str::length`, and the 4
+  DRAWENV leaf builders were byte-exact on re-verify, no bugs found. `func_80081FB0` (the DRAWENV
+  packet packer) stays MAPPED-not-drafted/substrate; `PutDrawEnv` reaches it via `rec_dispatch`.
+  ovhit (5-frame REPL+SBS-full window): 8/9 addresses fire with matching native/oracle counts;
+  `Str::length` shows `0/0` in that short window (not exercised — its heavier call sites are
+  UI/menu text), so its correctness rests on the RE re-verify, not gate coverage, honestly noted.
+  SBS-full gate: 0-diff through f8880+ (95s standard autonav window). Full writeup + the ruled-out
+  "ovhit+REPL+autonav triggers a pre-existing timing-sensitive melee divergence, unrelated to this
+  pass" finding: `docs/findings/render.md` "PutDrawEnv cluster + Font::drawText/glyphEmit +
+  Str::length — wiring pass".

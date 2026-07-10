@@ -1250,3 +1250,73 @@ draft was already byte-faithful.
   `gpu_loadimage_streamer_install()`), `game/render/wide_re_gpu_dma_queue.cpp` (Enqueue/Sync/Drain
   fixes), `game/render/render.h`. Repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
   PSXPORT_SBS_PREWATCH=0x801FF154` (now clean) or `PSXPORT_SBS_NOPAUSE=1` for the gate count.
+## PutDrawEnv cluster + Font::drawText/glyphEmit + Str::length — wiring pass (2026-07-10)
+
+- **symptom:** frontier wiring session — promote the banked PutDrawEnv chain (0x800815D0 + 4 leaf
+  DRAWENV-field builders) and the two hottest banked font drafts (Font::drawText 0x80079374,
+  Font::glyphEmit 0x80078CA8) + Str::length (0x80079528) from wide-RE drafts to VERIFIED, WIRED
+  ownership per fleet-workflow.md §9.
+- **status:** WIRED. All 9 addresses installed via `engine_set_override_main` (oracle-gated thunk,
+  SBS core B keeps running the pure `gen_func_*` body). Two real bugs found+fixed during the §9
+  re-verify pass; the rest byte-diffed clean.
+- **bug #1 — PutDrawEnv's GPU_SYS_TABLE single-deref (game/render/wide_re_gpu_putdrawenv.cpp,
+  func_800815D0):** the DMA-send dispatch read `mem_r32(GPU_SYS_TABLE + 24)` /
+  `mem_r32(GPU_SYS_TABLE + 8)` directly. `GPU_SYS_TABLE` (0x800A5998) is a POINTER FIELD holding
+  the real jump table's base, not the table itself — gen dereferences it TWICE
+  (`generated/shard_1.c:15876-15878`: `r3=mem_r32(base+22936); r4=mem_r32(r3+24);
+  r2=mem_r32(r3+8)`). Same missing-indirection shape already found+fixed in DrawSync/ClearOTagR
+  (wide_re_libgpu_leaves.cpp, prior session) — this is the SAME class of bug landing again in a
+  sibling file, exactly as fleet-workflow.md §9 predicts ("routinely contain multiple bugs even
+  when they compile"). Fixed: `tableBase = mem_r32(GPU_SYS_TABLE); mem_r32(tableBase + 24/8)`.
+- **bug #2 — Font::drawText's fabricated 6th "h" argument (game/ui/font.h / font.cpp,
+  Font::drawText):** the original wide-RE draft's signature was
+  `drawText(x, y, w, h, str, color)` and packed `a2' = (int16)w | (h << 16)`. Traced every call
+  site of `func_80079374` (generated/shard_0.c:11403, shard_6.c:13960/13987/14010/14031,
+  shard_7.c:11935/12062/12102/12132/12143, shard_2.c:10751/10776, shard_5.c:13279/13303/13363/
+  13371/13394) — the REAL guest ABI is 5 args: `a0=x, a1=y, a2=w, a3=str` (a pointer — e.g.
+  `shard_0.c:11405 r7 = mem_r32(r16+12)`), `stack[+16]=color`. `a3`/r7 is never read inside
+  `gen_func_80079374`'s body at all; it passes through UNTOUCHED to the tail call, which is only
+  consistent with a3 being the string pointer. There is no `h` parameter in the real function —
+  the fabricated one corrupted `a2'` (the packed size word `func_80078CA8` reads) whenever `h`
+  was nonzero. Fixed: dropped `h` from the signature, `a2' = sign_extend16(w)` only.
+- **glyphEmit (Font::glyphEmit, 0x80078CA8) — clean, no bugs found:** re-diffed byte-for-byte
+  against `generated/shard_5.c:12298`. Confirms the prior wave's dead-tail-code claim: the live
+  body's `return` at gen-C line 210 has no label past it (lines 211-402 are unreachable, a
+  hand-unrolled struct copy the recompiler grouped in from an adjacent shard region).
+- **Str::length (0x80079528) — clean, no bugs found:** byte-for-byte strlen transcription. Checked
+  every call site for an `a0`-leftover dependency (like `Font::measureLineWidth`'s documented
+  GOTCHA) — none found; every caller overwrites r4 before its next use, so no leftover-register
+  mirroring was needed.
+- **PutDrawEnv's 4 leaf DRAWENV-field builders (0x80082240/800822D8/80082370/80082220/8008238C)
+  — clean, no bugs found** beyond the shared bug #1 above (which lives in PutDrawEnv itself, not
+  the leaves). `func_80081FB0` (the DRAWENV packet packer PutDrawEnv calls) stays MAPPED-not-
+  drafted/substrate as the prior session left it — PutDrawEnv reaches it via `rec_dispatch`,
+  correct either way.
+- **ovhit (PSXPORT_DEBUG=ovhit, 5-frame REPL+SBS-full run, before any melee encounter):** all
+  wired addresses except Str::length fired with MATCHING native/oracle counts — real gate
+  coverage: `0x800815D0` 1020/1020, `0x80082240` 2100/2100, `0x800822D8` 2100/2100, `0x80082370`
+  1020/1020, `0x80082220` 1020/1020, `0x8008238C` 1020/1020, `0x80079374` 273/273, `0x80078CA8`
+  273/273. `Str::length` (0x80079528) showed `native=0 oracle=0` in this short window — installed
+  and 0-diff, but NOT exercised (its heavier call sites are UI/menu text, not hit in the first few
+  frames of intro autonav). Per §9: Str::length's correctness rests on the RE re-verify above, not
+  gate coverage, in this particular short window — a longer/different playthrough should confirm
+  it fires.
+- **unrelated timing-sensitive finding (NOT caused by this pass, ruled out by A/B comparison):**
+  running `PSXPORT_DEBUG=ovhit` together with `PSXPORT_REPL=1 PSXPORT_SBS_AUTONAV=1` (an unusual
+  combination the standard gate command doesn't use) triggers a real SBS divergence around f1019
+  inside `Trig::ratan2` (0x80085690, already-owned) with mismatched return addresses between core
+  A/B — a control-flow divergence one frame upstream, in melee-encounter code. Confirmed this is
+  PRE-EXISTING and unrelated to this pass: built a `main`-tip (8b7cafb) baseline binary and ran the
+  identical `PSXPORT_REPL=1 PSXPORT_SBS_AUTONAV=1` command (without `ovhit`) — 0-diff through
+  f11760 in 150s; this session's binary ran the SAME command 0-diff through f12060 in the same
+  window (further than baseline, not less). The divergence only manifests when the extra `ovhit`
+  bookkeeping overhead perturbs autonav's timing enough to reach a melee fight earlier — it
+  reproduces on unmodified `main` too. Matches the already-tracked "stack-depth OPEN" note (commit
+  69a1fb3, `docs/findings/render.md`'s billboard/overlay_ground entries) — not re-investigated
+  here, out of this pass's scope.
+- **verified:** `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1`, 95s window
+  (the standard gate command): zero `sbs-div`/`VIOLATION`, byte-exact through f8880+,
+  SIGINT-terminated by the watchdog (no crash, no divergence).
+- **refs:** `game/render/wide_re_gpu_putdrawenv.cpp`, `game/ui/font.{h,cpp}`, `game/core/str.cpp`;
+  install sites `gpu_putdrawenv_install()` / `font_wide_re_install()` / `str_wide_re_install()`,
+  called from `games_tomba2_init()` in `game/game_tomba2.cpp`.

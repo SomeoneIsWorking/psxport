@@ -6,10 +6,11 @@
 // header). Dedicated deep-RE pass per docs/fleet-workflow.md §6/§9 (both prior wide-RE waves over
 // game/render/wide_re_libgpu_leaves.cpp explicitly deferred this whole cluster).
 //
-// Wide-RE tier (docs/fleet-workflow.md §6): UNWIRED / UNVERIFIED. Nothing here is called from
-// anywhere (no EngineOverrides registration, no shard_set_override) — dead code that only needs to
-// COMPILE. A wiring pass MUST re-diff every line against the generated C (and run SBS) before
-// registering + gating.
+// WIRED (2026-07-10 verify pass, docs/fleet-workflow.md §9): PutDrawEnv + the 4 leaf builders are
+// re-diffed line-by-line against generated/shard_*.c (one bug found+fixed, see BUG FIX comment
+// inside func_800815D0) and installed via gpu_putdrawenv_install() -> engine_set_override_main
+// (game_tomba2.cpp). func_80081FB0 stays MAPPED-not-drafted/substrate as documented below; PutDrawEnv
+// reaches it via rec_dispatch, which is correct with or without a future draft of it.
 //
 // ------------------------------------------------------------------------------------------------
 // CORRECTIONS APPLIED TO THE PRIOR WAVE'S DRAFTS (2026-07-10, this pass — fixed in
@@ -40,12 +41,14 @@
 // src=drawEnvPtr) packs the DRAWENV fields into a GP0 packet at drawEnvPtr+28 (6+ words: TL/BR/
 // offset/tpage/twin/maskbit, optionally +FillRect words — MAPPED not drafted, see below). (3) ORs
 // 0x00FFFFFF into *(drawEnvPtr+28) (the packet's first word — an OT-tag-style "no next" terminator
-// pattern, same idiom as ClearOTagR's dummy-tail-packet). (4) Calls GPU_SYS_TABLE[+0x08] (the "DMA-
-// send" table slot, per docs/engine_re.md's per-frame-loop RE) with a0=GPU_SYS_TABLE[+0x18] (the
-// DrawOTag table slot's raw VALUE, passed as DATA not invoked — exact semantic role not confirmed
-// this session, transcribed literally), a1=drawEnvPtr+28 (the packed packet), a2=64, a3=0. (5)
-// memcpy(dst=0x800A59B0, src=drawEnvPtr, 92 bytes) via func_8009A3E0 — caches the DRAWENV as the
-// "current" env for later reference (classic libgpu PutDrawEnv semantic: remembers the last env set).
+// pattern, same idiom as ClearOTagR's dummy-tail-packet). (4) Calls (*GPU_SYS_TABLE)[+0x08] (the
+// "DMA-send" table slot — GPU_SYS_TABLE is a POINTER FIELD, dereferenced TWICE, same
+// missing-indirection shape already found+fixed in DrawSync/ClearOTagR, see BUG FIX comment at the
+// call site) with a0=(*GPU_SYS_TABLE)[+0x18] (the DrawOTag table slot's raw VALUE, passed as DATA not
+// invoked — exact semantic role not confirmed this session, transcribed literally), a1=drawEnvPtr+28
+// (the packed packet), a2=64, a3=0. (5) memcpy(dst=0x800A59B0, src=drawEnvPtr, 92 bytes) via
+// func_8009A3E0 — caches the DRAWENV as the "current" env for later reference (classic libgpu
+// PutDrawEnv semantic: remembers the last env set).
 //
 // MAPPED, NOT DRAFTED this session: **func_80081FB0** (0x80081FB0). RE'd its full structure from
 // generated/shard_4.c:12768 (147 gen-C lines, frame -40, spills ra/s0/s1 == r16/r17):
@@ -281,8 +284,14 @@ static void func_800815D0(Core* c) {
 
   c->mem_w32(c->r[17] + 28, c->mem_r32(c->r[17] + 28) | 0x00FFFFFFu);
 
-  uint32_t drawOTagFnValue = c->mem_r32(GPU_SYS_TABLE + 24);  // table+0x18 = DrawOTag slot's VALUE, passed as DATA
-  uint32_t dmaSendFn = c->mem_r32(GPU_SYS_TABLE + 8);         // table+0x08 = DMA-send slot
+  // BUG FIX (verify pass): GPU_SYS_TABLE (0x800A5998) is a POINTER FIELD holding the real table's
+  // base, not the table itself — gen dereferences it TWICE (generated/shard_1.c:15876-15878:
+  // `r3=mem_r32(base+22936); r4=mem_r32(r3+24); r2=mem_r32(r3+8)`), matching the SAME missing-
+  // indirection bug already found+fixed in DrawSync/ClearOTagR (wide_re_libgpu_leaves.cpp). The
+  // original draft here read `mem_r32(GPU_SYS_TABLE + 24/8)` directly (single deref) — wrong.
+  uint32_t tableBase = c->mem_r32(GPU_SYS_TABLE);
+  uint32_t drawOTagFnValue = c->mem_r32(tableBase + 24);  // table+0x18 = DrawOTag slot's VALUE, passed as DATA
+  uint32_t dmaSendFn = c->mem_r32(tableBase + 8);         // table+0x08 = DMA-send slot
   c->r[4] = drawOTagFnValue;
   c->r[5] = c->r[16];
   c->r[6] = 64u;
@@ -297,4 +306,32 @@ static void func_800815D0(Core* c) {
   rec_dispatch(c, FN_MEMCPY_92);  // func_8009A3E0, out-of-band shared primitive, not drafted
 
   epilogue(c->r[17]);
+}
+
+// ------------------------------------------------------------------------------------------------
+// WIRING (verify pass, 2026-07-10): re-diffed every line of func_800815D0 and the 4 leaf builders
+// above against generated/shard_*.c per fleet-workflow.md §9. One real bug found+fixed (see the BUG
+// FIX comment inside func_800815D0): GPU_SYS_TABLE double-deref, same missing-indirection shape
+// already found in DrawSync/ClearOTagR (wide_re_libgpu_leaves.cpp). All 5 addresses are PLAIN
+// intra-shard C calls (func_X(c), not rec_dispatch) at their call sites in generated/, so they wire
+// via the oracle-gated engine_set_override_main thunk (same shape as gpu_libgpu_leaves_install) —
+// this keeps SBS core B running the pure gen_func_* body.
+extern void gen_func_800815D0(Core*);
+extern void gen_func_80082240(Core*);
+extern void gen_func_800822D8(Core*);
+extern void gen_func_80082370(Core*);
+extern void gen_func_80082220(Core*);
+extern void gen_func_8008238C(Core*);
+
+void gpu_putdrawenv_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x800815D0u, func_800815D0, gen_func_800815D0);
+  engine_set_override_main(0x80082240u, func_80082240, gen_func_80082240);
+  engine_set_override_main(0x800822D8u, func_800822D8, gen_func_800822D8);
+  engine_set_override_main(0x80082370u, func_80082370, gen_func_80082370);
+  engine_set_override_main(0x80082220u, func_80082220, gen_func_80082220);
+  engine_set_override_main(0x8008238Cu, func_8008238C, gen_func_8008238C);
 }

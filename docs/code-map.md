@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 630 native fns, 530 owned addresses, 601 LIVE / 29 ORPHAN.
+Totals: 632 native fns, 530 owned addresses, 603 LIVE / 29 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -325,7 +325,7 @@ Totals: 630 native fns, 530 owned addresses, 601 LIVE / 29 ORPHAN.
 | 0x800783DC | LIVE | `Pool::setupViewScroll` | game/world/pool.cpp:177 | 0x80048D3C | per-area VIEW/SCROLL setup. Calls a leaf (0x80048D3C), builds the view… |
 | 0x80078610 | LIVE | `Pool::finalViewInit` | game/world/pool.cpp:249 | 0x8006D02C 0x800846F0 | final per-area view init: zero two control blocks, seed fixed view par… |
 | 0x800788AC | LIVE | `Engine::padEdgeFenceDraft` | game/input/pad_edge_fence.cpp:48 |  | per-frame input-edge fence. See the file header above for the full RE … |
-| 0x80078CA8 | LIVE | `Font::glyphEmit` | game/ui/font.cpp:204 | 0x80078988 0x80083DE0 | the font/glyph emitter drawText() tail-calls. WIDE-RE TIER DRAFT (2026… |
+| 0x80078CA8 | LIVE | `Font::glyphEmit` | game/ui/font.cpp:206 | 0x80078988 0x80083DE0 | the font/glyph emitter drawText() tail-calls. WIDE-RE TIER DRAFT (2026… |
 | 0x80079374 | LIVE | `Font::drawText` | game/ui/font.cpp:169 | 0x80078CA8 | WIDE-RE TIER DRAFT (2026-07-09), UNWIRED/UNVERIFIED. See header doc fo… |
 | 0x80079528 | LIVE | `Str::length` | game/core/str.cpp:15 |  | strlen. RE (tools/disas.py 0x80079528 --all 20, cross-checked against |
 | 0x800796DC | LIVE | `Pool::resetControlBlock` | game/world/pool.cpp:21 | 0x8009A420 | zero the 104-byte control block at 0x800BF808, seed two bytes, clear ~… |
@@ -360,12 +360,12 @@ Totals: 630 native fns, 530 owned addresses, 601 LIVE / 29 ORPHAN.
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x80081458 | LIVE | `Render::clearOTagR` | game/render/wide_re_libgpu_leaves.cpp:151 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). VERIFIED & WIRED… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
-| 0x800815D0 | LIVE | `func_800815D0` | game/render/wide_re_gpu_putdrawenv.cpp:247 |  | func_800815D0 (0x800815D0) — libgpu PutDrawEnv(drawEnvPtr). DRAFT. RE'… |
-| 0x80082220 | LIVE | `func_80082220` | game/render/wide_re_gpu_putdrawenv.cpp:173 |  | func_80082220 (0x80082220) — DR_TPAGE mode-word builder. DRAFT. RE'd f… |
-| 0x80082240 | LIVE | `func_80082240` | game/render/wide_re_gpu_putdrawenv.cpp:101 |  | func_80082240 (0x80082240) — SetDrawAreaTopLeft(x,y) word builder. DRA… |
-| 0x800822D8 | LIVE | `func_800822D8` | game/render/wide_re_gpu_putdrawenv.cpp:130 |  | func_800822D8 (0x800822D8) — SetDrawAreaBottomRight(x,y) word builder.… |
-| 0x80082370 | LIVE | `func_80082370` | game/render/wide_re_gpu_putdrawenv.cpp:159 |  | func_80082370 (0x80082370) — SetDrawingOffset(x,y) word builder. DRAFT… |
-| 0x8008238C | LIVE | `func_8008238C` | game/render/wide_re_gpu_putdrawenv.cpp:197 |  | func_8008238C (0x8008238C) — DR_TWIN word builder. DRAFT. RE'd from ge… |
+| 0x800815D0 | LIVE | `func_800815D0` | game/render/wide_re_gpu_putdrawenv.cpp:250 |  | func_800815D0 (0x800815D0) — libgpu PutDrawEnv(drawEnvPtr). DRAFT. RE'… |
+| 0x80082220 | LIVE | `func_80082220` | game/render/wide_re_gpu_putdrawenv.cpp:176 |  | func_80082220 (0x80082220) — DR_TPAGE mode-word builder. DRAFT. RE'd f… |
+| 0x80082240 | LIVE | `func_80082240` | game/render/wide_re_gpu_putdrawenv.cpp:104 |  | func_80082240 (0x80082240) — SetDrawAreaTopLeft(x,y) word builder. DRA… |
+| 0x800822D8 | LIVE | `func_800822D8` | game/render/wide_re_gpu_putdrawenv.cpp:133 |  | func_800822D8 (0x800822D8) — SetDrawAreaBottomRight(x,y) word builder.… |
+| 0x80082370 | LIVE | `func_80082370` | game/render/wide_re_gpu_putdrawenv.cpp:162 |  | func_80082370 (0x80082370) — SetDrawingOffset(x,y) word builder. DRAFT… |
+| 0x8008238C | LIVE | `func_8008238C` | game/render/wide_re_gpu_putdrawenv.cpp:200 |  | func_8008238C (0x8008238C) — DR_TWIN word builder. DRAFT. RE'd from ge… |
 | 0x80082424 | LIVE | `Render::gpuDmaSend` | game/render/wide_re_gpu_dma_queue.cpp:546 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & W… |
 | 0x80082734 | LIVE | `Render::gpuLoadImageStream` | game/render/wide_re_gpu_loadimage_streamer.cpp:134 |  | func_80082734 (0x80082734) — libgpu LoadImage()-internal chunked GP0-F… |
 | 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:237 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |

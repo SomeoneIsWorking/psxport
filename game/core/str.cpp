@@ -1,4 +1,4 @@
-// game/core/str.cpp — see str.h. WIDE-RE TIER DRAFT, UNWIRED/UNVERIFIED (docs/fleet-workflow.md §6/§9).
+// game/core/str.cpp — see str.h. WIRED (2026-07-10 verify pass, docs/fleet-workflow.md §9).
 #include "core.h"
 #include "str.h"
 
@@ -21,4 +21,28 @@ uint32_t Str::length(Core* c, uint32_t addr) {
   }
   c->r[2] = len;
   return len;
+}
+
+// ------------------------------------------------------------------------------------------------
+// WIRING (verify pass, 2026-07-10, docs/fleet-workflow.md §9): re-diffed byte-for-byte against
+// generated/shard_2.c:10049 -- exact strlen transcription, no bugs found. Checked every call site
+// (generated/shard_0.c:12595, shard_5.c:4668, shard_6.c:4476, shard_7.c:12065/12089): a0(r4) is
+// never read back for a "leftover cursor" the way Font::measureLineWidth's caller does -- every
+// call site overwrites r4 before its next use, so no leftover-register mirroring is needed here.
+// PLAIN intra-shard C calls at every call site (func_80079528(c), not rec_dispatch) -> wired via
+// the oracle-gated engine_set_override_main thunk, SBS core B keeps running the pure gen_func_* body.
+namespace {
+void ov_strLength(Core* c) {
+  Str::length(c, c->r[4]);
+}
+}  // namespace
+
+extern void gen_func_80079528(Core*);
+
+void str_wide_re_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x80079528u, ov_strLength, gen_func_80079528);
 }

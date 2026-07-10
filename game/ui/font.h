@@ -55,14 +55,11 @@ public:
   //   Body from disas 0x80073750..0x80073798 (no sub-calls; a plain byte scan).
   static int32_t measureLineWidth(Core* c, uint32_t strAddr);
 
-  // drawText(x, y, w, str, color): FUN_80079374 — WIDE-RE TIER DRAFT (2026-07-09), UNWIRED /
-  //   UNVERIFIED (docs/fleet-workflow.md §6/§9 — no override registration, no SBS run; a faithful
-  //   hand-transcription that must be diffed line-by-line against the gen body again before it is
-  //   trusted/wired). One of the two hottest unowned leaves in the game (~4235 dispatches / 600
-  //   frames of free-roam). A thin arg-packing wrapper around the still-unowned font/glyph emitter
-  //   FUN_80078CA8 (see docs/engine_re.md "FUN_80078ca8" — full string-draw engine with cursor
-  //   state at scratchpad 0x1F800000..0x1F80001F; NOT ported here, only reached via rec_dispatch,
-  //   same as font.cpp's other KEPT libgpu/sound callees).
+  // drawText(x, y, w, str, color): FUN_80079374 — WIDE-RE TIER DRAFT (2026-07-09), re-verified and
+  //   WIRED. A thin arg-packing wrapper around the still-unowned font/glyph emitter FUN_80078CA8
+  //   (see docs/engine_re.md "FUN_80078ca8" section — full string-draw engine with cursor state at
+  //   scratchpad 0x1F800000..0x1F80001F; NOT ported here, only reached via rec_dispatch, same as
+  //   font.cpp's other KEPT libgpu/sound callees).
   //   Disas 0x80079374..0x800793C0 (tools/disas.py 0x80079374 --all 40) / gen_func_80079374
   //   (generated/shard_7.c:11490):
   //     a0' = (int16)x | (y << 16)              — packed {y:hi16, x:lo16, x sign-extended} vertex
@@ -72,18 +69,28 @@ public:
   //                                                  the incoming a1 is entirely overwritten before
   //                                                  use — semantic ROLE of 0x100008 unconfirmed,
   //                                                  likely a packed 16/8 draw-attribute pair)
-  //     a2' = (int16)w | (h << 16)                — packed {h:hi16, w:lo16, w sign-extended}
+  //     a2' = (int16)w                            — sign-extended low16(w) ONLY.
+  //   BUG FIX (verify pass, 2026-07-10): the original wide-RE draft invented a 6th "h" parameter and
+  //   OR'd `h << 16` into a2' ("packed size {w:lo16, h:hi16}"). Traced every call site
+  //   (generated/shard_0.c:11403, shard_6.c:13960/13987/14010/14031, shard_7.c:11935/12062/12102/
+  //   12132/12143, shard_2.c:10751/10776, shard_5.c:13279/13303/13363/13371/13394) — the REAL guest
+  //   ABI is 5 args: a0=x, a1=y, a2=w, a3=str (a pointer, e.g. shard_0.c:11405 `r7 =
+  //   mem_r32(r16+12)`), stack[+16]=color. `a3`/r7 is NEVER referenced inside gen_func_80079374's
+  //   body at all — it passes through to the tail call UNTOUCHED, consistent only with a3 being the
+  //   string pointer, not an "h" register the body would fold into a2'. There is NO h parameter in
+  //   the real function; the fabricated one corrupted a2' whenever nonzero. Fixed at both the
+  //   signature and the a2' computation.
   //     a3' = str (unchanged)
   //     stack[16] = color (5th arg, passed on the caller's stack at +48)
   //     *0x1F800180 (u16) = 32                    — scratchpad write BEFORE the call (role
   //                                                  unconfirmed; a fixed constant, not derived
   //                                                  from any argument)
   //     tail-calls FUN_80078CA8(a0', a1', a2', a3', color) via rec_dispatch, ra = 0x800793B4
-  //   x/y/w/h are taken as raw guest register values (already packed by the CALLER into low16 of
+  //   x/y/w are taken as raw guest register values (already packed by the CALLER into low16 of
   //   each 32-bit arg — this wrapper does NOT decode them into separate ints, it reproduces the
   //   exact bit operations the guest performs, since sign-extension order matters for negative
   //   on-screen coordinates).
-  static void drawText(Core* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t str, uint32_t color);
+  static void drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color);
 
   // glyphEmit(): FUN_80078CA8 — the font/glyph EMITTER drawText() tail-calls. WIDE-RE TIER DRAFT
   //   (2026-07-10, disjoint band), UNWIRED/UNVERIFIED (docs/fleet-workflow.md §6/§9 — no override

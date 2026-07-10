@@ -166,7 +166,7 @@ int32_t Font::measureLineWidth(Core* c, uint32_t strAddr) {
 // the function otherwise reads args straight out of registers) because the callee it tail-calls
 // (still-unowned FUN_80078CA8) is reached via rec_dispatch and expects the caller's stack-arg
 // convention (5th arg at sp+16 of ITS caller's frame, i.e. THIS frame after the sp-=32 descent).
-void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t str, uint32_t color) {
+void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color) {
   uint32_t saved_sp = c->r[29];
   uint32_t saved_ra = c->r[31];
 
@@ -177,8 +177,10 @@ void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, int32_t h, uint32_
   uint32_t a0p = (uint32_t)(int32_t)(int16_t)(uint16_t)x | ((uint32_t)y << 16);
   // a1' = constant 0x00100008 (original a1/w argument is discarded — confirmed from the gen body)
   uint32_t a1p = 0x00100008u;
-  // a2' = (int16)w | (h << 16) — packed size {w: lo16 sign-extended, h: hi16}
-  uint32_t a2p = (uint32_t)(int32_t)(int16_t)(uint16_t)w | ((uint32_t)h << 16);
+  // a2' = (int16)w — sign-extended low16(w) ONLY. BUG FIX (verify pass): the prior draft OR'd a
+  // fabricated "h" arg into the upper 16 bits (see font.h header for the call-site trace proving
+  // there is no h parameter in the real 5-arg guest ABI: x,y,w,str,color).
+  uint32_t a2p = (uint32_t)(int32_t)(int16_t)(uint16_t)w;
 
   c->mem_w16(0x1F800180u, 32);              // sh v0(32),384(v1) — scratchpad write, role unconfirmed
 
@@ -487,4 +489,38 @@ L_80078F88:
   c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
   c->r[2] = c->r[2] - c->r[3];              // return value -- caller (drawText) discards it
   c->r[29] = sp0 + 56u;
+}
+
+// ------------------------------------------------------------------------------------------------
+// WIRING (verify pass, 2026-07-10, docs/fleet-workflow.md §9): drawText re-diffed line-by-line
+// against generated/shard_7.c:11490 -- one real bug found+fixed (the fabricated "h" 6th argument,
+// see font.h header for the full call-site trace). glyphEmit re-diffed against
+// generated/shard_5.c:12298 -- byte-exact, no bugs found (also confirms the dead-tail-code claim:
+// the live body's `return` at gen-C line 210 has no label past it). Both are PLAIN intra-shard C
+// calls at their call sites (func_X(c), not rec_dispatch), so they wire via the oracle-gated
+// engine_set_override_main thunk -- SBS core B keeps running the pure gen_func_* body.
+namespace {
+// ov_drawText: extracts drawText's typed args from the guest ABI registers at function entry
+// (a0..a2 = x,y,w; a3 = str; caller's stack[+16] = color -- matches gen_func_80079374's own read of
+// sp+48 AFTER its own sp-=32, i.e. the SAME physical slot read here BEFORE any descent).
+void ov_drawText(Core* c) {
+  int32_t x = (int32_t)c->r[4];
+  int32_t y = (int32_t)c->r[5];
+  int32_t w = (int32_t)c->r[6];
+  uint32_t str = c->r[7];
+  uint32_t color = c->mem_r32(c->r[29] + 16u);
+  Font::drawText(c, x, y, w, str, color);
+}
+}  // namespace
+
+extern void gen_func_80079374(Core*);
+extern void gen_func_80078CA8(Core*);
+
+void font_wide_re_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x80079374u, ov_drawText,    gen_func_80079374);
+  engine_set_override_main(0x80078CA8u, Font::glyphEmit, gen_func_80078CA8);
 }
