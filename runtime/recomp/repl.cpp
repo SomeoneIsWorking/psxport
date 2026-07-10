@@ -169,16 +169,17 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "warp")) {
       // warp <area_id> — load a different area on demand (foundation for a level/boss selector). Only valid
       // from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the dest; the frame loop fires it.
-      if (sscanf(line, "%*s %u", &a) == 1) {
+      unsigned s4e = 0; int nargs = sscanf(line, "%*s %u %u", &a, &s4e);
+      if (nargs >= 1) {
         if (c->mem_r32(0x801fe00c) != 0x8010637Cu)
           fprintf(stderr, "[repl] warp: not in GAME stage (stage=%08X) — reach the field first (newgame/skip)\n",
                   c->mem_r32(0x801fe00c));
         else {
-          this->warpDest = a; this->warpArmed = 1;
-          fprintf(stderr, "[repl] warp: armed dest area id=%u (cur=%u) — run frames to load\n",
-                  a, c->mem_r8(0x800bf870u));
+          this->warpDest = a; this->warpArmed = 1; this->warpS4e = (nargs == 2) ? (int)s4e : -1;
+          fprintf(stderr, "[repl] warp: armed dest area id=%u (cur=%u)%s — run frames to load\n",
+                  a, c->mem_r8(0x800bf870u), (nargs == 2) ? " via sm[0x4e] door-preamble" : "");
         }
-      } else fprintf(stderr, "[repl] warp <area_id>  (area table @0x800be118, ids 0..23)\n");
+      } else fprintf(stderr, "[repl] warp <area_id> [s4e]  (area table @0x800be118, ids 0..23; s4e = drive fieldRun exit state instead of forcing case0)\n");
     }
     else if (!strcmp(cmd, "shot")) {   // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
       char path[200] = {0};

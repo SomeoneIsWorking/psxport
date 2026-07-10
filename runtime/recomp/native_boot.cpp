@@ -432,13 +432,26 @@ static void game_main(Core* c) {
       // GAME stage runs case0 itself next frame and loads the dest area. (sm[0x4c]==4 -> FUN_80052078(1) is
       // the title/DEMO teardown, NOT an area-to-area warp — verified it bounces to stage DEMO.)
       const uint32_t TASK0 = 0x801fe000u;
-      fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive GAME case0\n",
-              c->game->repl.warpDest, f, c->mem_r8(0x800bf870u));
-      c->mem_w8(0x800bf870u, (uint8_t)c->game->repl.warpDest);    // area id global = dest (case0 passes it to FUN_80044bd4)
-      c->mem_w16(TASK0 + 0x4au, 1);                    // sm[0x4a] = 1 (running sub-mode -> handler 0x801088d8)
-      c->mem_w16(TASK0 + 0x4cu, 0);                    // sm[0x4c] = 0 -> case0 = FUN_80044bd4 area-load
-      fprintf(stderr, "[repl] warp: drove GAME case0; sm[0x4a]=%u sm[0x4c]=%u — run frames to load\n",
-              c->mem_r16(TASK0 + 0x4au), c->mem_r16(TASK0 + 0x4cu));
+      if (c->game->repl.warpS4e >= 0) {
+        // Door-preamble route (`warp <id> <s4e>`): seed the dest and hand the transition to the
+        // fieldRun machine by setting sm[0x4e] — the game's own exit states run the fade-out +
+        // per-area object teardown BEFORE the reload (what the direct case0 force skips; see
+        // engine_re.md "CROSS-area is prerequisite-state-dependent"). Experimental mapping tool:
+        // the observed natural transition ran s4e 7 -> 8 -> 6 before sm[0x4c] advanced.
+        fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive sm[0x4e]=%d\n",
+                c->game->repl.warpDest, f, c->mem_r8(0x800bf870u), c->game->repl.warpS4e);
+        c->mem_w8(0x800bf870u, (uint8_t)c->game->repl.warpDest);
+        c->mem_w16(TASK0 + 0x4eu, (uint16_t)c->game->repl.warpS4e);
+        c->game->repl.warpS4e = -1;
+      } else {
+        fprintf(stderr, "[repl] warp: dest=%u at f%u (cur area=%u) -> seed area id + drive GAME case0\n",
+                c->game->repl.warpDest, f, c->mem_r8(0x800bf870u));
+        c->mem_w8(0x800bf870u, (uint8_t)c->game->repl.warpDest);    // area id global = dest (case0 passes it to FUN_80044bd4)
+        c->mem_w16(TASK0 + 0x4au, 1);                    // sm[0x4a] = 1 (running sub-mode -> handler 0x801088d8)
+        c->mem_w16(TASK0 + 0x4cu, 0);                    // sm[0x4c] = 0 -> case0 = FUN_80044bd4 area-load
+        fprintf(stderr, "[repl] warp: drove GAME case0; sm[0x4a]=%u sm[0x4c]=%u — run frames to load\n",
+                c->mem_r16(TASK0 + 0x4au), c->mem_r16(TASK0 + 0x4cu));
+      }
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs

@@ -16,6 +16,9 @@ public:
   long     skipFrames = 0;   // `skip N`: pulse Start N frames into the field
   int      warpArmed  = 0;   // `warp <id>`: arm an area warp
   uint32_t warpDest   = 0;
+  int      warpS4e    = -1;  // `warp <id> <s4e>`: drive the fieldRun machine (sm[0x4e]) instead of
+                             // forcing case0 — the door-transition preamble experiment (engine_re.md
+                             // "CROSS-area is prerequisite-state-dependent")
 
   // Read+execute REPL commands from stdin until a `run N` (returns N) or quit/EOF (returns -1).
   long read(Core* c, uint32_t f);

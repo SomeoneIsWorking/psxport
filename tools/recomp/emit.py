@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-07-04.2"
+RECOMP_VERSION = "2026-07-10.1"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1147,8 +1147,13 @@ def main():
         # rec_dispatch_miss(0x80109F7C) crash — DEMO attract cursor=1 loaded A01, called the JT
         # dispatch, missed. Fixes #31.
         "A00": {0x8010AC20},   # jt[ 0]
-        "A01": {0x80109F7C},   # jt[ 1]
-        "A02": {0x8010F9E4},   # jt[ 2]
+        # + 0x801158E0 (2026-07-10): area-1 handler reached via a computed pointer from resident
+        #   FUN_800263C0's dispatch (a0=node) — REPL `warp 1` under PSXPORT_GATE=1 hit
+        #   rec_dispatch_miss; same resident->overlay indirection class as the jt[] seeds.
+        "A01": {0x80109F7C, 0x801158E0},   # jt[ 1]
+        # + 0x80111A20 (2026-07-10, issue #33): attract-demo chain ov_a02 FUN_801122A4 dispatches it
+        #   (caller ra=0x80111CAC); discovery missed it — un-driven title screen crashed the port.
+        "A02": {0x8010F9E4, 0x80111A20},   # jt[ 2]
         "A03": {0x801127EC},   # jt[ 3] (also jt[4] — duplicate)
         "A04": {0x801127EC},   # jt[ 4]
         "A05": {0x8010F0F8},   # jt[ 5]

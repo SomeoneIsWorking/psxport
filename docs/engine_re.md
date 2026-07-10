@@ -495,6 +495,12 @@ from the frame-loop top **deadlocks** (yields outside a task run); (b) restartin
 a live area **corrupts task0** (overlay swap mid object-walk → bad-opcode flood).
 - **VERIFIED CLEAN:** same-area reload `warp 0` from the seaside field — **0 bad opcodes**, stays in GAME
   stage, area machine runs (`sm[0x4c]` 0→2). The trigger mechanism is sound.
+- **`warp <id> <s4e>` experiment (2026-07-10):** driving `sm[0x4e]` alone (tried 6 and 7, the values
+  the natural post-cutscene transition visits) does NOT fire a transition — no crash, no load, the
+  machine just carries on in the current area. The door trigger must write companion state (door
+  record / dest fields the `0x8010626c` 12-way table handlers consume via `FUN_80106b98`) alongside
+  s4e. Next step for the clean cross-area warp: RE a real door's writes (breakpoint a door touch,
+  diff task0 sm + 0x800bf8xx before/after).
 - **CROSS-area is prerequisite-state-dependent:** `warp 6`/`warp 20` ran with **0 bad opcodes** (got
   furthest), `warp 3` 7, `warp 1` / `warp 19` crash hard (1000s of bad opcodes). Root cause: case0 reloads
   the overlay while the OLD area's spawned object tasks/handlers are still registered and run against the
