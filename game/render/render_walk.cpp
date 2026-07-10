@@ -250,6 +250,7 @@ void Render::sceneNative() { Core* c = mCore;
     for (int h = 0; h < 3; h++) {
       uint32_t n = c->mem_r32(HEADS[h]);
       for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
+        if (c->mem_r8(n + 1) == 0) continue;   // per-frame visibility marker (guest cull chain, cull.cpp)
         if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
         c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
         c->r[4] = n;
