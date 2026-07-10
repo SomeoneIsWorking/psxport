@@ -12,8 +12,8 @@ enum { ASPECT_4_3 = 0, ASPECT_16_9 = 1, ASPECT_21_9 = 2, ASPECT_AUTO = 3 };
 typedef struct {
   int   ui;            // overlay system enabled (always on): keeps the deferred SSAO/light infra built
   int   aspect;        // ASPECT_4_3 / _16_9 / _21_9 / _AUTO (widescreen = wider FOV; not a present stretch)
-  int   ires;          // internal resolution scale (1..3; capped by VRAM_W=1024 / current FB width)
-  int   ires_auto;     // derive ires from the live window height (~round(h/240)), clamped to the width cap
+  int   ires;          // internal resolution scale: 0 = AUTO (derive from window height), 1..4 = fixed
+                       // Vanilla(1x)/X2/X3/X4. Capped by VRAM_W=1024 / current FB width (gpu_gpu_video_status).
   int   ssao;          // ambient occlusion
   int   light;         // directional light
   int   shadows;       // dynamic shadow mapping cast by the directional light (needs light on)

@@ -1453,3 +1453,54 @@ draft was already byte-faithful.
 - **refs:** `game/core/verify_harness.{h,cpp}` (`mirrorSampleGate`, generalized `strictCheck`
   reporting: invocation #, entry sp/ra, `MIRROR_VERIFY_CONTINUE`), `runtime/recomp/
   engine_override_thunk.cpp`, `runtime/recomp/engine_overrides.cpp`.
+## Widescreen re-enabled (aspect FOV + present) — SDL_GPU Pass-1 lost the wide present + OFX (2026-07-10)
+- **symptom (USER):** widescreen (aspect 16:9/21:9) "no longer works". Enabling 16:9 via the settings
+  file showed the plain 4:3 view in the left 320px + raw VRAM texture-atlas GARBAGE in the [320,nw) band;
+  after an interim OFX-only fix the whole scene appeared DOUBLED (two Tombas/benches offset by ~54px).
+- **status:** FIXED (headless field shots at 4:3 / 16:9 / 21:9: single, centered, genuinely-wider,
+  un-stretched world; no garbage margins). Both SBS legs 0-diff (wide is 4:3-gated so the reference is
+  untouched). `scratch/screenshots/g43,g169,g219.png` (session artifacts).
+- **root cause (multi-part, all from the Vulkan→SDL_GPU renderer rewrite, commit 3fd50c4 "Pass 1"):**
+  1. **Present hard-coded 4:3.** `GpuGpuState::present` / `present_image` sampled the 4:3 `s_disp_w` and
+     `letterbox(4,3,…)` unconditionally. The wider FB the engine renders (VRAM columns `[sx, sx+nw)`,
+     nw=428@16:9 / 560@21:9) was never sampled → cropped to 4:3, and the sampled region was squeezed into a
+     4:3 box. The old VK present handled wide; the Pass-1 rewrite dropped it. `s_last_w` (what `shot`/vkshot
+     read) was also 4:3, so headless wide captures silently cropped (the docs' "428 present width TODO").
+  2. **OFX widen lever lost.** later-117's genuine-wide shifted the projection center OFX 160→nw/2 (214@16:9)
+     so the FOV widens symmetrically. That lived in the old per-frame `ov_set_geom_offset`; the OOP rewrite
+     folded display init into `Engine::initDisplay` (`game/scene/startup.cpp`) which hard-wrote OFX=160 with
+     NO wide shift. So the world never actually projected wider.
+  3. **Draw-area clip stopped at 320.** GP0 E4 set `s_da_x1` to the 4:3 FB right edge, so even once the FOV
+     widened, wide-side fragments were clipped and the [320,nw) band showed raw VRAM.
+  4. **2D backdrop mapping assumed a shader margin that no longer exists.** `ws_2d_local_x` (gpu_native.cpp)
+     was written for the VK relocation shader that added `fb_x0=margin`; the SDL_GPU `tritex.vert` adds none,
+     so the backdrop stretch (`x*ww/320 - margin`) under-filled the wide frame (21:9 top-right garbage).
+- **why the interim OFX-only fix DOUBLED the scene:** the guest OT-walk draws the guest packets at the guest
+  GTE's OFX=160, while the natively-owned submit/terrain re-projections were shifted to 214. At 4:3 both
+  centers coincide (double-draw, invisible); at wide they separate by the margin → two copies. The unifying
+  fix is to widen the projection center at the SOURCE — `Engine::initDisplay` writes CR24 = `nw/2` when wide
+  — so the GUEST GTE itself projects wide and every reader (guest packets + all native re-projections) agrees
+  on one center. This is an authorized widescreen guest-state write, gated on `gpu_gpu_wide_engine()` (false
+  at 4:3 / under `PSXPORT_ORACLE` and in the SBS legs). Per-read `render_wide_ofx` bumps in the native paths
+  were tried first but are redundant with the source write AND risk re-introducing the double if a scene
+  legitimately uses OFX=160 — removed.
+- **the fix (all wide-gated on `gpu_gpu_wide_engine()`):**
+  - `Engine::initDisplay` (game/scene/startup.cpp): OFX = `gpu_gpu_wide_engine_ofx()` (nw/2) when wide.
+  - `GpuGpuState::present` (gpu_gpu.cpp): sample width = `gpu_gpu_wide_engine_w()`; `letterbox(disp_w,240)`
+    (aspect nw:240); store the wide width into `s_last_w` so `shot`/vkshot capture it. `gpu_native_shot`
+    (gpu_native.cpp) crops the wide width too.
+  - GP0 E4 handler (gpu_native.cpp): extend `s_da_x1` by `(nw-320)` when wide (render-clip only; the GPU
+    batch's `i_da`).
+  - `ws_2d_local_x` (gpu_native.cpp): backdrop `x*ww/320` (fill), HUD `x+margin` (center) — matches the
+    SDL_GPU shader (no shader-added margin). 4:3 (`margin==0`) byte-identical.
+- **widescreen cull population (USER 2026-07-10):** the stock cull is tuned for 320px and very aggressive,
+  so dynamic props/entities in the wide side-margins pop out (the read-only static-only margin re-include,
+  `MarginRenderer::collect`/type-0x03, never re-includes them). Under widescreen the `Cull::objectCull`
+  margin re-include now POKES `obj+1=1` for EVERY culled margin object (dynamic included) so the wide
+  margins fully populate. This perturbs guest state — explicitly allowed for the widescreen enhancement —
+  and is gated on `gpu_gpu_wide_engine()`, so 4:3 keeps the read-only 0-diff margin and the SBS/oracle
+  reference is untouched. refs: `game/render/cull.cpp` (`objectCull`).
+- **DEAD END / NOTE:** `ires` (internal-resolution scale) is NOT consumed by the Pass-1 renderer
+  (`frame_via_fb()==0`, no supersampled scratch FB). The merged Vanilla/X2/X3/X4/Auto selector + the 4x cap
+  persist and report correctly, but X2..X4 do not visibly sharpen until the scaled-FB pass lands. Do not
+  claim ires sharpening is verified — it is a forward-looking selector.

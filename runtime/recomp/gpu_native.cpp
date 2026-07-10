@@ -204,17 +204,19 @@ void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->
 // prompt/meter stays centered with the world. The whole element shifts by one offset (its size and
 // internal layout are preserved exactly — no stretch), so multi-vertex prims stay rigid.
 int gpu_gpu_wide_engine_w(void);
-// 2D X mapping for widescreen. The relocation shader (tritex.vert) already adds fb_x0 = margin*ss to
-// every 2D vertex, so an UNMODIFIED PSX-320 prim lands in a centered [margin, margin+320] band. Therefore:
-//   HUD/UI  -> identity: keep the native-320 X; the shader's +margin centers it in the wide FB (matches 4:3,
-//              just centered). Previously this anchored thirds out to the wide edges (issue #16 smearing).
-//   backdrop-> STRETCH to fill the wide FB (after the shader's +margin -> [0,fbw)) for sky/water backdrops.
-// In 4:3 margin==0 -> identity for both (byte-identical).
+// 2D X mapping for widescreen. Unlike the old VK renderer, the SDL_GPU tritex.vert does NOT add a
+// per-vertex fb_x0=margin (there is no scaled scratch FB in Pass 1 — geometry is in absolute VRAM px).
+// So this mapping must place 2D prims into the wide [0,ww) band itself:
+//   backdrop-> STRETCH the native-320 span to fill the whole wide FB: x*ww/320 -> [0,ww). Sky/water tiles
+//              then cover the full wide frame (no VRAM-atlas garbage in the wide margins).
+//   HUD/UI  -> CENTER the native-320 element: x + margin, so a native-x lands in the centered [margin,
+//              margin+320] band (matches 4:3, just centered). (Was identity, which left HUD left-anchored.)
+// In 4:3 margin==0 -> backdrop x*320/320=x, HUD x+0=x — byte-identical.
 static int ws_2d_local_x(int x, int is_bg) {
   int ww = gpu_gpu_wide_engine_w(), margin = (ww - 320) / 2;
   if (margin <= 0) return x;                          // 4:3 -> no-op
-  if (is_bg) return x * ww / 320 - margin;            // backdrop: fill (after +margin -> [0,fbw))
-  return x;                                           // HUD: identity (shader's +margin keeps it centered)
+  if (is_bg) return x * ww / 320;                     // backdrop: stretch to fill [0,ww)
+  return x + margin;                                  // HUD: center the native-320 element in the wide FB
 }
 
 // PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to
@@ -1169,6 +1171,13 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF;
         if (cfg_dbg("env")) fprintf(stderr, "[env] E3 clip_tl=(%d,%d)\n", s_da_x0, s_da_y0); return;
       case 0xE4: s_da_x1 = w & 0x3FF; s_da_y1 = (w >> 10) & 0x1FF;
+        // Widescreen: the guest clips the draw area to the 4:3 FB right edge (s_disp_x+319). The engine
+        // renders a wider FOV (OFX shifted to nw/2) into VRAM columns up to s_disp_x+nw, so extend the
+        // right clip by (nw-320) — else the wide-side world fragments are clipped and the present shows
+        // raw VRAM texture-atlas garbage in the [320,nw) band. Off at 4:3 (wide_engine()==0). This is a
+        // render-clip widen consumed by the GPU batch (i_da); it never widens where guest logic reads.
+        { int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
+          if (gpu_gpu_wide_engine()) s_da_x1 += (gpu_gpu_wide_engine_w() - 320); }
         if (cfg_dbg("env")) fprintf(stderr, "[env] E4 clip_br=(%d,%d)\n", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
         if (cfg_dbg("env")) fprintf(stderr, "[env] E5 offset=(%d,%d)\n", s_off_x, s_off_y); return;
@@ -1346,7 +1355,11 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
   // (soft_gpu oracle: VK is off for this Core, so fall through to the s_vram PPM dump below.)
   if (vk_path()) {
     void gpu_gpu_shot_region(Core*, const char*, int, int, int, int);
+    int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
     int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
+    // Widescreen: crop the wider FB the engine rendered (nw@aspect), matching the windowed present's
+    // wide sample region — otherwise a headless wide shot silently crops back to the 4:3 s_disp_w.
+    if (gpu_gpu_wide_engine()) dw = gpu_gpu_wide_engine_w();
     gpu_gpu_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;
   }

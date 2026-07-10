@@ -142,8 +142,14 @@ int gpu_gpu_wide_engine_ofx(void) { return wide_native_w() / 2; }
 int gpu_gpu_wide_engine_w(void)   { return wide_native_w(); }
 void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
   mods_init();
-  int nw = wide_native_w(), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 3) cap = 3;
-  int i = g_mods.ires < 1 ? 1 : (g_mods.ires > cap ? cap : g_mods.ires);
+  // Cap = how many integer multiples of the (possibly wide) native FB width fit in VRAM. Raised to 4 (was
+  // 3): at 4:3 native_w=320 → VRAM_W/320 = 3, so 4x needs the extra headroom the cap now allows; at 16:9
+  // native_w=428 → cap=2, at 21:9 native_w=560 → cap=1. The clamp keeps the scaled FB inside VRAM.
+  int nw = wide_native_w(), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 4) cap = 4;
+  // g_mods.ires: 0 = AUTO (derive the scale from the live window height, ~round(h/240)), 1..4 = fixed.
+  int i = g_mods.ires;
+  if (i == 0) { i = (int)((win_h() / 240.0) + 0.5); if (i < 1) i = 1; }
+  if (i < 1) i = 1; if (i > cap) i = cap;
   if (native_w) *native_w = nw; if (ires) *ires = i; if (fbw) *fbw = nw * i;
   if (fbh) *fbh = 240 * i;      if (ww) *ww = win_w(); if (wh) *wh = win_h();
   if (ires_cap) *ires_cap = cap;
@@ -534,8 +540,13 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_gpu_enabled()) return;
   if (!s_inited) init_gpu(game);
   mods_init();
+  // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw). Everything downstream (the
+  // windowed present sample region AND the `shot`/vkshot readback, which use s_last_w) must span that wide
+  // width, else the wide FB is cropped back to the 4:3 s_disp_w. At 4:3 nw==320 so w is unchanged.
+  int disp_w = w;
+  if (gpu_gpu_wide_engine()) disp_w = gpu_gpu_wide_engine_w();
   s_present_sx = sx; s_present_sy = sy;
-  s_last_sx = sx; s_last_sy = sy; s_last_w = w; s_last_h = h;
+  s_last_sx = sx; s_last_sy = sy; s_last_w = disp_w; s_last_h = h;
 
   // PSXPORT_GPU_TRACE: per-present source-VRAM occupancy + sampled display region (diagnostic).
   if (cfg_on("PSXPORT_GPU_TRACE")) { int& n = gdev().s_trace_n; if (n++ < 4 || (n % 200) == 0) {
@@ -572,11 +583,13 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
 
-  PresentPC pc; pc.disp[0] = sx; pc.disp[1] = sy; pc.disp[2] = w; pc.disp[3] = h;
+  // Widescreen present (disp_w computed above): SAMPLE the wide FB region [sx, sx+nw) and letterbox to the
+  // aspect's display shape (nw:240), else the wide FB is squeezed into a 4:3 box. At 4:3 nw==320 = old path.
+  PresentPC pc; pc.disp[0] = sx; pc.disp[1] = sy; pc.disp[2] = disp_w; pc.disp[3] = h;
   pc.fade[0] = fade.mode; pc.fade[1] = fade.r; pc.fade[2] = fade.g; pc.fade[3] = fade.b;
   SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
 
-  SDL_GPUViewport vp = letterbox(4, 3, (int)sw, (int)sh);
+  SDL_GPUViewport vp = letterbox(disp_w, 240, (int)sw, (int)sh);
   SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
   SDL_BindGPUGraphicsPipeline(rp, s_present_pipe);
   SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);

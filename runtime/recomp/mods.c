@@ -16,8 +16,8 @@ static const char* mods_path(void) { const char* p = cfg_str("PSXPORT_SETTINGS")
 
 void mods_save(void) {
   FILE* f = fopen(mods_path(), "w"); if (!f) return;
-  fprintf(f, "aspect=%d\nires=%d\nires_auto=%d\nssao=%d\nlight=%d\nshadows=%d\nfps60=%d\n",
-          g_mods.aspect, g_mods.ires, g_mods.ires_auto, g_mods.ssao, g_mods.light, g_mods.shadows, g_mods.fps60);
+  fprintf(f, "aspect=%d\nires=%d\nssao=%d\nlight=%d\nshadows=%d\nfps60=%d\n",
+          g_mods.aspect, g_mods.ires, g_mods.ssao, g_mods.light, g_mods.shadows, g_mods.fps60);
   fprintf(f, "ssao_strength=%g\nssao_radius=%g\nssao_bias=%g\nssao_range=%g\nshadow_strength=%g\n",
           g_mods.ssao_strength, g_mods.ssao_radius, g_mods.ssao_bias, g_mods.ssao_range, g_mods.shadow_strength);
   fprintf(f, "light_dir=%g,%g,%g\nlight_ambient=%g\nlight_diffuse=%g\n",
@@ -33,7 +33,9 @@ void mods_load(void) {
     const char* k = line; const char* v = eq + 1;
     if      (!strcmp(k, "aspect"))        g_mods.aspect = atoi(v);
     else if (!strcmp(k, "ires"))          g_mods.ires = atoi(v);
-    else if (!strcmp(k, "ires_auto"))     g_mods.ires_auto = atoi(v);
+    // Legacy compat: the old two-field shape (ires 1..3 + ires_auto bool). If a pre-merge settings
+    // file still carries ires_auto=1, map it to the merged AUTO convention (ires=0).
+    else if (!strcmp(k, "ires_auto"))     { if (atoi(v)) g_mods.ires = 0; }
     else if (!strcmp(k, "ssao"))          g_mods.ssao = atoi(v);
     else if (!strcmp(k, "light"))         g_mods.light = atoi(v);
     else if (!strcmp(k, "shadows"))       g_mods.shadows = atoi(v);
@@ -48,7 +50,7 @@ void mods_load(void) {
     else if (!strcmp(k, "light_diffuse")) g_mods.light_diffuse = (float)atof(v);
   }
   fclose(f);
-  if (g_mods.ires < 1) g_mods.ires = 1; if (g_mods.ires > 3) g_mods.ires = 3;
+  if (g_mods.ires < 0) g_mods.ires = 0; if (g_mods.ires > 4) g_mods.ires = 4;   // 0=Auto, 1..4 = 1x..4x
   if (g_mods.aspect < 0 || g_mods.aspect > ASPECT_AUTO) g_mods.aspect = ASPECT_4_3;
 }
 
@@ -60,8 +62,7 @@ void mods_init(void) {
   // are the factory state; mods_load() (if the file exists) overrides them with the player's choices.
   g_mods.ui = 1;                 // overlay always available (live-toggle + the deferred SSAO/light infra)
   g_mods.aspect = ASPECT_4_3;    // 4:3 until the player picks widescreen
-  g_mods.ires = 1;               // native internal resolution
-  g_mods.ires_auto = 0;
+  g_mods.ires = 1;               // native internal resolution (Vanilla 1x); 0=Auto, 1..4 = 1x..4x
   g_mods.ssao = 0;
   g_mods.light = 0;
   g_mods.shadows = 0;            // dynamic shadow mapping off by default (toggled live in the overlay)

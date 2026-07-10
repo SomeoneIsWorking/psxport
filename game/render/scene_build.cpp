@@ -71,7 +71,7 @@ int NativeScenePass::collect() {
 
   float Rcam[3][3], Tcam[3];
   read_camera(c, Rcam, Tcam);
-  out->cam.ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
+  out->cam.ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;   // CR24 already carries the widescreen center
   out->cam.ofy = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
   out->cam.H   = (float)(uint16_t)gte_read_ctrl(26);
 

@@ -75,6 +75,8 @@ void  proj_screen_center(float* cx, float* cy) {
 // function in gte_beetle.cpp; state lands on the currently-bound ProjParams.
 void camview_publish(const float R[3][3], const float T[3]) {
   auto* pp = ProjParams::current(); if (!pp) return;
+  // CR24 already carries the widescreen center (Engine::initDisplay writes nw/2 when wide), so this
+  // published camera and every native projection agree with the guest GTE — no per-read wide adjustment.
   float H   = (float)(uint16_t)GTE_ReadCR(26);
   float OFX = (float)(int32_t)GTE_ReadCR(24) / 65536.0f;
   float OFY = (float)(int32_t)GTE_ReadCR(25) / 65536.0f;

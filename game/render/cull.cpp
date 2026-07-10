@@ -326,8 +326,18 @@ void Cull::objectCull() { Core* c = core;
         // (terrain/water/static scenery) — the dominant edge/corner pop-in. Dynamic entities are NOT
         // poked visible here (that would perturb their gameplay state), so widening the cone safely
         // un-pops the static world without disturbing enemy/item/NPC logic.
-        if (c->mRender->margin.nativeEnabled()) { c->mRender->margin.collect(c, o); }
-        else { c->mem_w8(o + 1, 1); c->r[2] = 1; }                          // re-include: mark visible
+        // WIDESCREEN margin population (USER 2026-07-10): the stock cull is tuned for the 320px view and
+        // is very aggressive — at a wide aspect, dynamic props/entities in the side margins pop out because
+        // the read-only static-only margin (collect, type-0x03) never re-includes them. Under widescreen
+        // we therefore POKE +1 (run the object's visible branch) so EVERY type — dynamic entities included
+        // — populates the wide margins. This DOES perturb guest state, which is explicitly allowed for the
+        // widescreen enhancement; it is gated on gpu_gpu_wide_engine() (false at 4:3 / under PSXPORT_ORACLE
+        // and in the SBS legs, which run 4:3), so the byte-exact reference is untouched. At 4:3 the original
+        // read-only static-world margin (0-diff) still applies.
+        int gpu_gpu_wide_engine(void);
+        if (gpu_gpu_wide_engine())                     { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // wide: all types populate
+        else if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // 4:3: read-only static margin
+        else                                           { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object
         // architecture for approach B. One line per re-include; grep a single frame.

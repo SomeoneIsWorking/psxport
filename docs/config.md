@@ -22,6 +22,21 @@ the F1 overlay + `psxport_settings.ini` (`runtime/recomp/mods.c`), not env. Diag
 `debug <chan>` command (below), not env. `cfg_*` remains only for genuine launch config (disc path,
 window/headless run mode).
 
+### Video settings file (`psxport_settings.ini`, path overridable with `PSXPORT_SETTINGS`)
+The F1 overlay writes `key=value` lines; `mods_load()` restores them at launch (`runtime/recomp/mods.{h,c}`).
+The two video selectors:
+- **`aspect`** — `0`=Vanilla (4:3), `1`=16:9, `2`=21:9, `3`=Auto (match the live window aspect). Widescreen
+  is a genuine wider FOV (the engine shifts the projection center OFX to `nw/2`), not a present stretch;
+  it is forced OFF under `PSXPORT_ORACLE` and in the SBS legs (they run 4:3), so the byte-exact reference
+  is untouched. Overlay row: "Aspect Ratio".
+- **`ires`** — internal-resolution scale, ONE merged selector: `0`=Auto (derive from window height),
+  `1`=Vanilla (1x), `2`=X2, `3`=X3, `4`=X4. Capped by `VRAM_W(1024) / native_w` in `gpu_gpu_video_status`.
+  Overlay row: "Internal Resolution". (Replaced the old two-row `ires` 1..3 + `ires_auto` bool; a legacy
+  file carrying `ires_auto=1` is migrated to `ires=0` on load.) NOTE: the Pass-1 SDL_GPU renderer does not
+  yet render to a supersampled scratch FB (`GpuGpuState::frame_via_fb()==0`), so `ires` currently persists
+  and reports but is not yet consumed by the raster — X2..X4 do not visibly sharpen until the scaled-FB pass
+  lands. The selector + cap are in place for that pass.
+
 ## The rule: don't call `getenv` — use `cfg` (`runtime/recomp/cfg.h`)
 ```c
 #include "cfg.h"

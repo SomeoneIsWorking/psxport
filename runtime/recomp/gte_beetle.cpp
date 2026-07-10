@@ -206,6 +206,9 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
   out->ir3 = proj_clampi(mac[2], lo_b, 32767);
   out->sz  = proj_clampi((int32_t)(tmp2_unshifted >> 12), 0, 65535);
   out->vx  = (float)out->ir1; out->vy = (float)out->ir2; out->vz = (float)out->ir3;
+  // OFX/OFY/H come straight from the GTE control regs. Widescreen widens the projection center at the
+  // SOURCE (Engine::initDisplay writes CR24 = nw/2 when wide), so this native path — like the guest GTE
+  // and every other reader — sees the one wide center; no per-read adjustment needed here.
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
   if (auto* pp = ProjParams::current()) pp->setProjH(H);

@@ -26,9 +26,8 @@
 				<div id="world_readout" class="readout"></div>
 
 				<div class="section-heading">Display</div>
-				<select-button toggle="aspect"><key>Aspect Ratio</key><value>4:3</value></select-button>
-				<select-button toggle="ires_auto"><key>Auto Internal Resolution</key><value>On</value></select-button>
-				<select-button adjust="ires"><key>Internal Resolution</key><value>1x</value></select-button>
+				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
+				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
 				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
 			</pane>
