@@ -1677,3 +1677,15 @@ draft was already byte-faithful.
     per-frame margin clear was NOT added: it would write into texture VRAM every frame (the margin overlaps
     the atlas, esp. at 21:9) with no observed benefit for the field (the backdrop widening covers it), and
     the correct owner of the margin is the background layer, not a clear.
+
+## CORRECTION (USER, 2026-07-10): throw-chain is a RENDERER bug, not a pc_skip fork
+- The earlier inference (chain visible under SBS-full ⇒ pc_faithful has it ⇒ pc_skip init loses it)
+  was WRONG — it trusted SBS panes that the user showed are unrepresentative of both real configs.
+- USER: the chain bug is a RENDERER bug — the render paths (pc_render / psx_render) still LEAK into
+  each other instead of being truly OOP-isolated ("asked a million times"). Same exec state, chain
+  appears under one render path and not the other ⇒ the chain's prims exist; pc_render loses them
+  through shared/leaked renderer state, not through spawn/init.
+- Direction: audit the renderer boundary as an OOP-isolation defect (shared statics/buffers/flags
+  crossing between the PSX render path and pc_render — the historical class of leaks), with
+  abcompare (docs/abcompare-design.md) as the instrument: same run, flip ONLY the renderer, diff.
+- The pc_skip-fork hypothesis in the entry above is FALSIFIED for this bug; kept for the record.
