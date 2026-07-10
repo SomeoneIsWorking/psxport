@@ -5,6 +5,36 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## Panes ≠ standalone = SBS special-casing, NOT a cross-core leak (2026-07-10)
+
+- **Symptom (USER):** in `PSXPORT_SBS_MODE=full`, pane A didn't look like standalone
+  `PSXPORT_PC_SKIP=0` (pc_render) and pane B didn't look like `PSXPORT_ORACLE=1`. USER read
+  it as state "leaking between cores."
+- **Not a leak.** Cores are fully isolated: all HW backends (GTE/SPU/MDEC/GPU) are per-`Game`
+  (bound per step), `Render`/`GpuGpuState` are per-Core, and SBS RAM is byte-identical A↔B
+  (0-diff). The only shared object is the physical `GpuDevice` singleton (correct). The
+  mismatch was **deliberate `game->sbs` branches** that made a pane render/execute differently
+  than its standalone.
+- **Root cause (pane A):** the widescreen margin re-include POKED guest RAM
+  (`cull.cpp: c->mem_w8(o+1,1)`) to populate dynamic side-margin entities. That diverges core A
+  from oracle B, so it had been bandaided with `!c->game->sbs` — which is exactly why pane A ≠
+  standalone wide. A render enhancement writing guest RAM violates the read-only-overlay rule.
+- **Fix (USER: "wide rendering must be guest-read-only"):** drop the poke entirely; re-include
+  margin geometry READ-ONLY in every aspect via the existing `MarginRenderer` host overlay
+  (`cull.cpp`). No poke, no `game->sbs`/`gpu_gpu_wide_engine` branch → pane A == standalone AND
+  core A stays byte-identical to B (0-diff). Also dropped `gpu_gpu.cpp` AUTO `ww/=2`-under-SBS
+  (each core derives full-window FOV like standalone; compositor letterboxes the pane).
+  Trade-off: dynamic entities in the extreme wide margins drop until each type gets a read-only
+  render (wide de-prioritized; `PSXPORT_MARGIN_POKE=1` restores the poke for A/B diffing).
+- **Object-cull relaxation ≠ wide.** The "game over-culls even at 4:3" relaxation the PC side
+  already does IS this read-only margin render (culled objects still draw, so they don't pop);
+  it is aspect-independent and guest-write-free — do not confuse it with the removed guest poke.
+- **Verified:** build clean; SBS-full headless 0-diff through f600. Live wide visual parity =
+  USER eyeball. **Remaining special-case:** `native_fmv.cpp:676 if(game->sbs) return 0` skips
+  FMV under SBS (blocking player the harness can't drive) — needs a non-blocking rework.
+- **Refs:** commit "sbs: wide margin read-only in all aspects"; `game/render/cull.cpp`,
+  `game/render/margin_render.cpp` (read-only host overlay, static type-0x03 only today).
+
 ## Faithful frontier: f117 -> 32k+ zero-diff; skip observable gate passes the area load (2026-07-08)
 
 - **Mirror TDD fleet green** (wf_bf6b0541, ~20 rounds): every wired faithful mirror passes
