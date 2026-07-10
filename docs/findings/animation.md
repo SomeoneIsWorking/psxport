@@ -286,3 +286,79 @@ for the next "no single call site" refusal: MEASURE r29 before concluding it var
   crash/divergence). Pre-fix the same run diverged at f158 every time.
 - **refs**: `game/player/actor_tomba.{h,cpp}` (`ActorTomba::frameTick`); oracle
   `generated/shard_4.c gen_func_8005950C` (L7624); this fix commit.
+
+## RESOLVED: turnBiasCompute/outerTransitionGate/outerTransitionCommit/assetReady — §9 promotion found a MIPS branch-delay-slot misread + 6 missing r31 mirrors + 1 wrong-constant gate (2026-07-10)
+
+- **Task**: promote the 4 banked `frameTick` sub-callee drafts (guest `0x80055C9C`/`0x80053E50`/
+  `0x80053FDC`/`0x80045580`, all UNWIRED since the 2026-07-08 wave — frameTick dispatched to
+  substrate for these on purpose per its own banner, "drafts are untrusted") to verified ownership
+  per fleet-workflow.md §9: line-by-line re-diff against `generated/shard_*.c`, fix, wire, SBS-gate.
+- **Bug 1 (turnBiasCompute, `0x80055C9C`) — MIPS branch-delay-slot misread, the real root cause**:
+  the non-wide-variant path's `r3==5` check is `{ int _t=(r3==r2); r3=3072; if(_t) goto wide; }` —
+  the delay-slot assignment `r3=3072` executes UNCONDITIONALLY (branch-delay-slot semantics: the
+  instruction after a MIPS branch always executes, taken or not), so by the time the NOT-taken
+  (non-wide) path reaches `r3 = r3 - r5`, r3 already holds the literal `3072`, not the mode byte.
+  The mode byte is used ONLY to select which formula runs; it's never a subtraction operand in
+  EITHER path. The wide-RE draft read this idiom as "r3 stays the mode byte" and subtracted the
+  mode byte instead of 3072 — silently wrong for every non-wide-variant call (mode 0-4, i.e. almost
+  always). This one bug alone made every SBS run diverge at whatever frame `0x1F80016C/16E`
+  (Tomba's turn-bias output pair) first got compared, ~100% reproducible.
+- **How it was found**: mechanical re-derivation (hand-tracing the gen C line-by-line) initially
+  looked consistent and led to a false "fix" (swapping what looked like inverted 1536/2560
+  thresholds — that swap WAS independently correct and is kept, see below, but didn't explain the
+  observed divergence). Only a live debug trace (temporary `fprintf` inserted into
+  `gen_func_80055C9C` itself, gated on a throwaway env var, reverted before commit) proved the
+  runtime r3 value was `0x00000C00` (3072) with mode=0 facing=0 — impossible under the "r3=mode"
+  reading — which is what surfaced the delay-slot semantics. Lesson for future §9 passes: when a
+  hand-traced "fix" doesn't converge SBS, get a REAL runtime value out of the generated function
+  before re-deriving again; MIPS branch-delay-slot idioms in the flattened `{ ...; r3=X; if(_t)
+  goto L; }` recompiler output are an easy misread (the assignment looks like "the delay slot's
+  dead value for the taken path" but it is NOT dead on the not-taken path).
+- **Bug 2 (turnBiasCompute) — real, independent of bug 1**: the mask/threshold selection was
+  genuinely inverted in the pre-existing draft (`mem_r16(0x800E805A)&0x800` bit SET should select
+  threshold 2560, bit CLEAR should select 1536 — the draft had them backwards). Fixed alongside
+  bug 1.
+- **Bug 3 (outerTransitionCommit, `0x80053FDC`) — wrong gate constant**: the decrement-and-settle
+  tail's commit-vs-rearm gate compared the walk-state byte `G+0x0` against the literal `0` (`g0 !=
+  0 && (g0&4)==0` → commit), but gen's `gen_func_80053FDC` compares it against the literal `2`
+  (`r3==2` → rearm, independent of the `&4` check) — i.e. gen never special-cases `g0==0` and DOES
+  special-case `g0==2`. Fixed to `g0 != 2 && (g0&4)==0`.
+- **Bug 4 (outerTransitionGate `0x80053E50`, outerTransitionCommit `0x80053FDC`, assetReady
+  `0x80045580`) — 6 + 1 missing branch-delay-slot `r31` mirrors**: every `rec_dispatch(c, addr)`
+  call site to a still-substrate leaf needs `c->r[31]` set to gen's jal-site return-address constant
+  immediately before the call (the callee spills `ra` to ITS OWN guest-stack frame, which is a
+  live, SBS-compared guest-RAM byte). The wide-RE drafts had the correct ARGS at every call site but
+  never set `c->r[31]`. Fixed all 7 sites (6 in outerTransitionGate + 1 each in
+  outerTransitionCommit/assetReady) with the exact gen jal-site constants
+  (`0x80053ED8`/`0x80053F14`/`0x80053F24`/`0x80053F74`/`0x80053F84`/`0x80053FC0` for
+  outerTransitionGate's own dispatches; `0x80053FF8` for outerTransitionCommit's native-to-native
+  call into `outerTransitionGate()` itself — same rule applies to a native-to-native call when the
+  callee spills/restores `ra` into a guest frame; `0x80054024`/`0x80054054`/`0x80054108`/
+  `0x80054118` for outerTransitionCommit's own substrate dispatches; `0x800455B0` for assetReady).
+- **Wiring gotcha — EngineOverrides alone is insufficient (fleet-workflow.md §1 step 3, learned
+  the hard way)**: all 4 addresses have DIRECT substrate `func_<addr>(c)` callers (e.g.
+  `generated/shard_2.c`'s `gen_func_8005DE54`, one of the mode-N table 0x80058918/0x80058F5C
+  targets, calls `func_80055C9C(c)` with a DIFFERENT facing source than frameTick's own call) that
+  never go through `rec_dispatch`, so `EngineOverrides::register_` alone misses them. First attempt
+  hand-rolled a `shard_set_override` + manual `psx_fallback` gate (copying the older
+  `Math::registerOverrides` pattern) — works, but violates CLAUDE.md's newer rule ("engine/game
+  natives on the process-global g_override[]/g_ov_* tables MUST install via `engine_set_override_*`
+  ... never the raw shard_set_override"); rewired through `engine_set_override_main`
+  (`runtime/recomp/engine_override_thunk.cpp`) instead — the single oracle-gated choke point, no
+  per-cluster gate to forget.
+- **ovhit tooling caveat (pre-existing, not introduced here)**: `PSXPORT_DEBUG=ovhit`'s atexit dump
+  showed 0 hits for ALL EngineOverrides addresses (including already-verified ones like
+  `GraphicsBind::recordArrayInit`) in this SBS-full run — `s_ovhitTarget` appears to bind to
+  whichever `Game`'s `EngineOverrides::register_` fires first, which is not reliably core A in SBS
+  mode. Firing was instead confirmed with `PSXPORT_DEBUG=dispatch`, which showed `core=A` hits for
+  all 4 addresses every relevant frame (e.g. `[dispatch] f159 core=A 0x80055C9C
+  ActorTomba::turnBiasCompute ra=800595DC ...`). Flagging honestly per fleet-workflow.md — a future
+  session should fix `ovhit`'s target selection to be SBS-aware (bind to the non-psx_fallback Game
+  explicitly) rather than "first registrant".
+- **Verification**: `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless: 0 `sbs-div` / 0
+  VIOLATION through f6720+ (95s wall-clock window, `PSXPORT_SBS_EXIT_FRAME` clean-exit variant also
+  ran 0-diff through f5910+/f6000). Pre-fix (bug 1 present) diverged within ~160 frames every run.
+- **refs**: `game/player/actor_tomba.{h,cpp}` (all 4 methods + `registerOverrides`); oracle
+  `generated/shard_1.c gen_func_80055C9C` (L9208), `generated/shard_4.c gen_func_80053E50` (L7161),
+  `generated/shard_5.c gen_func_80053FDC` (L7749), `generated/shard_6.c gen_func_80045580` (L6274);
+  `runtime/recomp/engine_override_thunk.cpp`; this commit.

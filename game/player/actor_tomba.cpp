@@ -762,13 +762,61 @@ void ActorTomba::ov_frameTick(Core* c) {
   c->engine.actorTomba.frameTick();
 }
 
+// ov_turnBiasCompute/ov_outerTransitionGate/ov_outerTransitionCommit/ov_assetReady — guest ABI
+// trampolines for the frameTick sub-callee cluster (§9 re-verified + wired 2026-07-10). Guest ABI
+// per gen_func_<addr> (see the definitions above for the cited call sites): turnBiasCompute takes
+// facing in a1 (a0=G is unused — the guest body never reads r4 in this leaf); outerTransitionGate/
+// outerTransitionCommit always operate on Tomba's single fixed G block (a0=G is always G_ADDR, so
+// the instance methods read G_ADDR directly rather than c->r[4]); outerTransitionCommit takes mode
+// in a1; assetReady takes slot in a0 (NOT a1 — gen_func_80045580 uses r4<<3 directly).
+void ActorTomba::ov_turnBiasCompute(Core* c) {
+  turnBiasCompute(c, (int16_t)c->r[5]);
+}
+void ActorTomba::ov_outerTransitionGate(Core* c) {
+  c->r[2] = c->engine.actorTomba.outerTransitionGate() ? 1u : 0u;
+}
+void ActorTomba::ov_outerTransitionCommit(Core* c) {
+  c->engine.actorTomba.outerTransitionCommit((int32_t)c->r[5]);
+}
+void ActorTomba::ov_assetReady(Core* c) {
+  c->r[2] = assetReady(c, (int32_t)c->r[4]) ? 1u : 0u;
+}
+
+// Dual-wire (§9 + fleet-workflow.md "most leaves are substrate-called"): all 4 addresses have
+// direct substrate func_<addr>(c) callers (generated/shard_2.c, shard_4.c, shard_5.c — the
+// still-substrate mode-N dispatch tables 0x80058918/0x80058F5C and enterOuterState0's own body)
+// that do NOT go through rec_dispatch, so EngineOverrides alone misses them. Per CLAUDE.md ("engine/
+// game natives on the process-global g_override[]/g_ov_* tables MUST install via
+// engine_set_override_* ... never the raw shard_set_override"), route through
+// engine_set_override_main (runtime/recomp/engine_override_thunk.cpp) — the ONE oracle-gated choke
+// point for this table (core B/psx_fallback always runs the passed gen_func_<addr>, core A always
+// runs the native trampoline; no per-cluster hand-rolled psx_fallback gate to forget).
+void ActorTomba::gov_turnBiasCompute(Core* c)      { ov_turnBiasCompute(c); }
+void ActorTomba::gov_outerTransitionGate(Core* c)  { ov_outerTransitionGate(c); }
+void ActorTomba::gov_outerTransitionCommit(Core* c){ ov_outerTransitionCommit(c); }
+void ActorTomba::gov_assetReady(Core* c)           { ov_assetReady(c); }
+
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80020364u, "ActorTomba::stepModeInteract", ov_stepModeInteract);
-  ov.register_(0x800205CCu, "ActorTomba::type8Interact",    ov_type8Interact);
-  ov.register_(0x800235A0u, "ActorTomba::type7Interact",    ov_type7Interact);
-  ov.register_(0x80022C78u, "ActorTomba::growthYSnap",      ov_growthYSnap);
-  ov.register_(0x8005950Cu, "ActorTomba::frameTick",        ov_frameTick);
+  ov.register_(0x80020364u, "ActorTomba::stepModeInteract",     ov_stepModeInteract);
+  ov.register_(0x800205CCu, "ActorTomba::type8Interact",        ov_type8Interact);
+  ov.register_(0x800235A0u, "ActorTomba::type7Interact",        ov_type7Interact);
+  ov.register_(0x80022C78u, "ActorTomba::growthYSnap",          ov_growthYSnap);
+  ov.register_(0x8005950Cu, "ActorTomba::frameTick",            ov_frameTick);
+  ov.register_(0x80055C9Cu, "ActorTomba::turnBiasCompute",      ov_turnBiasCompute);
+  ov.register_(0x80053E50u, "ActorTomba::outerTransitionGate",  ov_outerTransitionGate);
+  ov.register_(0x80053FDCu, "ActorTomba::outerTransitionCommit",ov_outerTransitionCommit);
+  ov.register_(0x80045580u, "ActorTomba::assetReady",           ov_assetReady);
+
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  extern void gen_func_80055C9C(Core*);
+  extern void gen_func_80053E50(Core*);
+  extern void gen_func_80053FDC(Core*);
+  extern void gen_func_80045580(Core*);
+  engine_set_override_main(0x80055C9Cu, gov_turnBiasCompute,       gen_func_80055C9C);
+  engine_set_override_main(0x80053E50u, gov_outerTransitionGate,   gen_func_80053E50);
+  engine_set_override_main(0x80053FDCu, gov_outerTransitionCommit, gen_func_80053FDC);
+  engine_set_override_main(0x80045580u, gov_assetReady,            gen_func_80045580);
 }
 
 // =================================================================================
@@ -785,17 +833,29 @@ void ActorTomba::registerOverrides(Game* game) {
 void ActorTomba::turnBiasCompute(Core* c, int16_t facing) {
   bool closeIn;
   if (c->mem_r8(0x800E806Cu) == 5) {
-    // Wide/menu variant: delta from a fixed 0xC00 reference instead of DAT_1F8000F2 directly.
+    // Wide/menu variant: delta from a fixed 0xC00(3072) reference minus DAT_1F8000F2 and facing.
     const uint32_t d = (3072u - c->mem_r16(0x1F8000F2u) - (uint32_t)(int32_t)facing) & 4095u;
     closeIn = (int32_t)d < 2048;
   } else {
-    uint32_t r3 = ((uint32_t)(uint8_t)c->mem_r8(0x800E806Cu) - (uint32_t)(int32_t)facing) & 4095u;
+    // §9 re-verify 2026-07-10 (real bug found): gen_func_80055C9C's non-wide path does NOT use
+    // the mode byte as a subtraction operand — the branch-delay slot of the `r3==5` compare
+    // ALWAYS executes `r3 = 3072` (MIPS branch-delay-slot semantics: the delay-slot instruction
+    // runs regardless of whether the branch is taken), so by the time the non-taken path reaches
+    // `r3 = r3 - r5`, r3 already holds the literal 3072, not the mode byte. The mode byte is used
+    // ONLY to select which formula runs (this branch vs the wide-variant one above), never as an
+    // operand. The wide-RE draft mis-read this MIPS idiom and subtracted the mode byte instead —
+    // confirmed via a live debug trace (`r3(mode-facing raw)=0x00000C00` i.e. 3072, not the mode
+    // byte, immediately before the subtraction) which also fully explained the earlier apparent
+    // "threshold swap" (a downstream symptom of this same root cause, not a separate bug — the
+    // swapped-looking thresholds still needed the mask==0->1536/mask!=0->2560 fix independently
+    // confirmed against gen above — that part of the earlier fix was correct and stays).
+    uint32_t r3 = (3072u - (uint32_t)(int32_t)facing) & 4095u;
     const uint32_t r2m = c->mem_r16(0x1F8000F2u) & 4095u;
     r3 = r3 - r2m;
     const uint32_t r4 = ((int16_t)r3 < 0) ? r3 : (r3 - 512u);
     const uint32_t d = r4 & 4095u;
-    if (c->mem_r16(0x800E805Au) & 0x800u) closeIn = (int32_t)d < 1536;
-    else                                  closeIn = (int32_t)d < 2560;
+    if (c->mem_r16(0x800E805Au) & 0x800u) closeIn = (int32_t)d < 2560;
+    else                                  closeIn = (int32_t)d < 1536;
   }
   if (closeIn) { c->mem_w16(0x1F80016Cu, 128); c->mem_w16(0x1F80016Eu, 32); }
   else         { c->mem_w16(0x1F80016Cu, 32);  c->mem_w16(0x1F80016Eu, 128); }
@@ -832,6 +892,7 @@ bool ActorTomba::assetReady(Core* c, int32_t slot) {
   c->r[4] = TABLE_8018A000;
   c->r[5] = c->mem_r32(DAT_800A3EC8);
   c->r[6] = rec;
+  c->r[31] = 0x800455B0u;              // §9: missing r31 mirror (gen jal-site) — fixed 2026-07-10
   rec_dispatch(c, 0x80044CD4u);
   const bool ready = (int32_t)c->r[2] > 0;
 
@@ -864,11 +925,14 @@ bool ActorTomba::outerTransitionGate() {
     if ((c->mem_r8(G + 0u) & 4u) == 0) {
       if ((c->mem_r8(G + 0xDu) & 0x80u) == 0) {
         c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+        c->r[31] = 0x80053F14u;          // §9: missing r31 mirror — fixed 2026-07-10
         rec_dispatch(c, 0x800521F4u);
       }
       c->mem_w8(G + 0xDu, 0);
       c->mem_w8(G + 0x61u, 0);
-      c->r[4] = G; rec_dispatch(c, 0x80053D90u);
+      c->r[4] = G;
+      c->r[31] = 0x80053F24u;            // §9: missing r31 mirror — fixed 2026-07-10
+      rec_dispatch(c, 0x80053D90u);
       c->mem_w8(G + 0u, 3);
       c->mem_w16(G + 0x16Eu, 0);
       c->mem_w16(G + 0x170u, 0);
@@ -878,11 +942,13 @@ bool ActorTomba::outerTransitionGate() {
       c->mem_w8(G + 0x6u, 0);
       c->mem_w8(0x800BF80Du, 1);
       c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
+      c->r[31] = 0x80053FC0u;            // §9: missing r31 mirror — fixed 2026-07-10
       rec_dispatch(c, 0x800312D4u);
       goto done;
     }
     if ((c->mem_r8(G + 0xDu) & 0x80u) != 0) goto done;
     c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+    c->r[31] = 0x80053ED8u;              // §9: missing r31 mirror — fixed 2026-07-10
     rec_dispatch(c, 0x800521F4u);
     c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) | 0x82u));
     goto done;
@@ -890,10 +956,13 @@ bool ActorTomba::outerTransitionGate() {
 
   if (c->mem_r8s(0x800BF80Du) < 1) {
     c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+    c->r[31] = 0x80053F74u;              // §9: missing r31 mirror — fixed 2026-07-10
     rec_dispatch(c, 0x800521F4u);
     c->mem_w8(G + 0xDu, 0);
     c->mem_w8(G + 0x61u, 0);
-    c->r[4] = G; rec_dispatch(c, 0x80053D90u);
+    c->r[4] = G;
+    c->r[31] = 0x80053F84u;              // §9: missing r31 mirror — fixed 2026-07-10
+    rec_dispatch(c, 0x80053D90u);
     c->mem_w8(G + 0u, 3);
     c->mem_w16(G + 0x16Eu, 0);
     c->mem_w16(G + 0x170u, 0);
@@ -904,6 +973,7 @@ bool ActorTomba::outerTransitionGate() {
     c->mem_w8(G + 0x6u, 0);
     c->mem_w8(0x800BF80Du, 1);
     c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
+    c->r[31] = 0x80053FC0u;              // §9: missing r31 mirror — fixed 2026-07-10
     rec_dispatch(c, 0x800312D4u);
   }
   // else (busy latch already set): result stays true, nothing to do.
@@ -928,16 +998,22 @@ void ActorTomba::outerTransitionCommit(int32_t mode) {
   c->mem_w32(c->r[29] + 20, c->r[17]);
   c->mem_w32(c->r[29] + 24, c->r[31]);
 
+  c->r[31] = 0x80053FF8u;               // §9: missing r31 mirror — fixed 2026-07-10 (outerTransitionGate
+                                          // spills/restores ra to ITS OWN guest frame, so the caller's r31
+                                          // at call time is a live guest-RAM byte and must match gen).
   if (outerTransitionGate()) goto done;
 
   if (c->mem_r16s(G + 0x16Eu) != c->mem_r16s(G + 0x170u)) {
     // "reset to new target" — cue + gStateMutate(0xB) + conditional stop-motion clear.
     c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
+    c->r[31] = 0x80054024u;              // §9: missing r31 mirror — fixed 2026-07-10
     rec_dispatch(c, 0x800521F4u);
     c->engine.gStateMutate(G, 0xB);
     c->mem_w8(0x800BF81Eu, 0);
     if ((c->mem_r8(G + 0u) & 4u) == 0) {
-      c->r[4] = G; rec_dispatch(c, 0x80053D90u);
+      c->r[4] = G;
+      c->r[31] = 0x80054054u;            // §9: missing r31 mirror — fixed 2026-07-10
+      rec_dispatch(c, 0x80053D90u);
       c->mem_w8(G + 0x61u, 0);
     }
     if (mode != 1 && c->mem_r8(G + 0x4u) == 2) goto done;   // already committing — nothing to do
@@ -947,8 +1023,10 @@ void ActorTomba::outerTransitionCommit(int32_t mode) {
     c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) | 0x82u));
     if ((c->mem_r8(G + 0u) & 0xCu) != 0) {
       c->r[4] = 0x23; c->r[5] = 0; c->r[6] = 0;
+      c->r[31] = 0x80054108u;            // §9: missing r31 mirror — fixed 2026-07-10
       rec_dispatch(c, 0x80074590u);
       c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
+      c->r[31] = 0x80054118u;            // §9: missing r31 mirror — fixed 2026-07-10
       rec_dispatch(c, 0x800312D4u);
       goto done;
     }
@@ -970,7 +1048,11 @@ void ActorTomba::outerTransitionCommit(int32_t mode) {
     if (newRemaining != 0) goto done;
 
     const uint8_t g0 = c->mem_r8(G + 0u);
-    if (g0 != 0 && (g0 & 4u) == 0) {
+    // §9 re-verify 2026-07-10: gen_func_80053FDC's gate compares g0 against the LITERAL 2, not 0
+    // (`r3=g0; if(r3==2) goto rearm;` — a genuinely distinct constant, not a stand-in for "g0!=0").
+    // The wide-RE draft had `g0 != 0`, which flips behavior at g0==0 (gen commits) and g0==2 (gen
+    // re-arms) — fixed to match gen exactly.
+    if (g0 != 2 && (g0 & 4u) == 0) {
       // "unobstructed" — commit to walk-state 1, clearing/masking the stop-motion latch bits.
       c->mem_w8(G + 0u, 1);
       if ((c->mem_r8(G + 0xDu) & 0x50u) != 0) {
@@ -979,7 +1061,7 @@ void ActorTomba::outerTransitionCommit(int32_t mode) {
         c->mem_w8(G + 0xDu, 0);
       }
     } else {
-      // g0==0 OR (g0&4)!=0 — re-arm the settle counter instead of committing.
+      // g0==2 OR (g0&4)!=0 — re-arm the settle counter instead of committing.
       c->mem_w16(G + 0x172u, 1);
     }
   }
@@ -996,14 +1078,17 @@ done:
 // Wired 2026-07-09: EngineOverrides-only (no shard_set_override — the only direct caller of
 // func_8005950C is gen_func_80059D28 = the SUBSTRATE frameStartTickFaithful, which runs on core B
 // only; core A reaches 0x8005950C via the native frameStartTickFaithful's rec_dispatch, which
-// consults EngineOverrides). The 5 drafted native sub-callees (turnBiasCompute / outerTransitionGate
-// / outerTransitionCommit / assetReady / resetLoadGate) are NOT called from here yet — line-by-line
-// verification vs generated/shard_*.c found real transcription bugs in the first two checked
-// (turnBiasCompute: 0x800-threshold branches swapped; frameTick case-1 skipClear: 0x800BF80F
-// condition inverted) and the fleet-workflow rule is "drafts are untrusted"; they are dispatched
-// to the SUBSTRATE here so SBS gates only frameTick's own logic. Each sub-callee gets its own
-// verify+fix+wire pass later. Every substrate callee dispatch sets the gen jal-site r31 constant
-// first (matching gen_func_8005950C) so any callee that spills ra byte-matches core B.
+// consults EngineOverrides). Of the 5 drafted native sub-callees, 4 (turnBiasCompute /
+// outerTransitionGate / outerTransitionCommit / assetReady) are now ALSO wired+verified as of
+// 2026-07-10 (own EngineOverrides + engine_set_override_main registrations in registerOverrides()
+// below — see docs/findings/animation.md "turnBiasCompute/outerTransitionGate/
+// outerTransitionCommit/assetReady — §9 promotion" for the bugs that pass found and fixed:
+// a MIPS branch-delay-slot misread in turnBiasCompute, a wrong gate constant in
+// outerTransitionCommit, and 7 missing r31 mirrors). resetLoadGate is still UNWIRED (out of this
+// pass's scope) and still dispatched to the SUBSTRATE below. The call sites below are UNCHANGED
+// (still `rec_dispatch(c, addr)`, same r31-mirror-then-dispatch shape) — per CLAUDE.md, a wired
+// leaf reached via `rec_dispatch` automatically routes through the new EngineOverrides
+// registration, so frameTick's own body needed no edits to pick up the 4 newly-wired callees.
 //
 // SBS-VERIFIED 2026-07-09: PSXPORT_SBS_MODE=full autonav, 0 sbs-div / 0 VIOLATION through f15600+.
 // The first attempt diverged at f158 (A=0x1F80, B=0x0000 at an Animation::step r17 spill) — root

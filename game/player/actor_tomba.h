@@ -108,6 +108,15 @@ private:
   static void ov_type7Interact(Core* c);
   static void ov_growthYSnap(Core* c);
   static void ov_frameTick(Core* c);
+  static void ov_turnBiasCompute(Core* c);
+  static void ov_outerTransitionGate(Core* c);
+  static void ov_outerTransitionCommit(Core* c);
+  static void ov_assetReady(Core* c);
+  // shard_set_override trampolines (psx_fallback-gated — see .cpp banner).
+  static void gov_turnBiasCompute(Core* c);
+  static void gov_outerTransitionGate(Core* c);
+  static void gov_outerTransitionCommit(Core* c);
+  static void gov_assetReady(Core* c);
 
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
@@ -215,14 +224,15 @@ public:
   //   (EngineOverrides; frameStartTickFaithful's `default: rec_dispatch(c, 0x8005950Cu)` now hits
   //   the native). frameTick's OWN logic is byte-exact: PSXPORT_SBS_MODE=full autonav ran 0
   //   sbs-div / 0 VIOLATION through f15600+ (was diverging at f158 before the register-faithfulness
-  //   fix — see below). The 5 drafted sub-callees below (turnBiasCompute/outerTransitionGate/
-  //   outerTransitionCommit/assetReady/resetLoadGate) are NOT called from frameTick yet —
-  //   line-by-line verification vs generated/shard_*.c found real transcription bugs in the first
-  //   two checked (turnBiasCompute: 0x800-threshold branches swapped; frameTick's own case-1
-  //   skipClear: 0x800BF80F condition inverted, fixed in frameTick). Per fleet-workflow.md §9
-  //   ("drafts are untrusted"), all 5 are dispatched to the SUBSTRATE from frameTick so SBS gates
-  //   only frameTick's own logic; each gets its own verify+fix+wire pass later. Every dispatch
-  //   sets the gen jal-site r31 constant first so substrate callees that spill ra byte-match core B.
+  //   fix — see below). Of the 5 drafted sub-callees below, 4 (turnBiasCompute/outerTransitionGate/
+  //   outerTransitionCommit/assetReady) are now ALSO wired+verified (2026-07-10 §9 promotion pass —
+  //   see docs/findings/animation.md for the bugs that pass found: a MIPS branch-delay-slot misread
+  //   in turnBiasCompute, a wrong gate constant in outerTransitionCommit, 7 missing r31 mirrors)
+  //   and reached through their own EngineOverrides + engine_set_override_main registrations —
+  //   frameTick's `rec_dispatch(c, addr)` call sites below are unchanged and pick them up
+  //   automatically. resetLoadGate remains UNWIRED (dispatched to substrate, out of that pass's
+  //   scope). Every dispatch sets the gen jal-site r31 constant first so substrate/native callees
+  //   that spill ra byte-match core B.
   //   REGISTER-FAITHFULNESS (the f158 root cause): gen keeps r17/r18 live across the case-1/4/7
   //   callees (r17=ECF54_saved/r18=E7E68_saved in cases 1,4; r17=sub/r18=1 in case 7). The case
   //   callees func_800597AC (spills r18), func_80053FDC (spills r17), func_80076D68 (spills
@@ -266,13 +276,18 @@ private:
   //   or a "cutscene/dialogue" flag (G+0 & 0xC) is set (in which case it fires an SFX cue +
   //   spawns a task instead and returns without touching G+0). If they're already equal,
   //   decrements the settle counter G+0x172 and — on it hitting zero — either commits walk-
-  //   state 1 (when G+0 != 0 AND (G+0 & 4) == 0) or re-arms the counter to 1 (G+0x172=1)
-  //   otherwise. CORRECTED 2026-07-08: Ghidra's own decompile of this last branch showed
-  //   `*param_1 != 2`; ground-truth gen_func_80053FDC compares against 0, not 2 (see
-  //   actor_tomba.cpp for the register trace) — a real Ghidra decompiler error caught by
-  //   cross-checking generated/shard_5.c:7749. Faithful port from that ground truth. Guest
-  //   frame: addiu sp,-32; spill s0,s1,ra (no s2 slot — a smaller frame than
-  //   outerTransitionGate's).
+  //   state 1 (when G+0 != 2 AND (G+0 & 4) == 0) or re-arms the counter to 1 (G+0x172=1)
+  //   otherwise. RE-CORRECTED 2026-07-10 (§9 promotion pass): the 2026-07-08 draft's "CORRECTED"
+  //   note below was itself wrong — it claimed ground-truth gen_func_80053FDC compares g0 against
+  //   0 (reverting what it called a Ghidra decompiler error showing `!= 2`), but a fresh line-by-
+  //   line re-diff of generated/shard_5.c:7749 (`r3=u8(G+0); if(r3==2) goto rearm;` — a literal
+  //   constant 2, unambiguous in the recompiler's own C, not a Ghidra artifact) plus an SBS-
+  //   confirmed fix (0-diff only after reverting to `!= 2`) proves gen genuinely gates on the
+  //   literal 2, not 0: gen never special-cases g0==0 and DOES special-case g0==2. The pre-existing
+  //   comment inverted this while "fixing" a Ghidra mismatch that wasn't actually wrong. See
+  //   docs/findings/animation.md "turnBiasCompute/.../outerTransitionCommit ... §9 promotion"
+  //   for the full writeup. Faithful port from ground truth. Guest frame: addiu sp,-32; spill
+  //   s0,s1,ra (no s2 slot — a smaller frame than outerTransitionGate's).
   void outerTransitionCommit(int32_t mode);
 
   // assetReady(c, slot) — guest FUN_80045580. Frameless-except-ra leaf: looks up a per-slot

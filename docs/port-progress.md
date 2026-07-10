@@ -2918,3 +2918,34 @@ themselves are LIVE but dispatch out to substrate for every case body.
   "ovhit+REPL+autonav triggers a pre-existing timing-sensitive melee divergence, unrelated to this
   pass" finding: `docs/findings/render.md` "PutDrawEnv cluster + Font::drawText/glyphEmit +
   Str::length — wiring pass".
+- **ActorTomba G-block frameTick sub-callee cluster — 4/6 promoted to verified ownership (frontier
+  agent, 2026-07-10).** §9 re-verified + wired the 4 smallest of the 6 banked `0x8005950C` drafts
+  the operator flagged: `turnBiasCompute` (`0x80055C9C`), `outerTransitionGate` (`0x80053E50`),
+  `outerTransitionCommit` (`0x80053FDC`), `assetReady` (`0x80045580`) — all now LIVE via their own
+  `EngineOverrides` + `engine_set_override_main` registrations in `ActorTomba::registerOverrides`
+  (`game/player/actor_tomba.cpp`); `frameTick`'s existing `rec_dispatch` call sites pick them up
+  automatically, no edits needed there. Re-verify found and fixed 3 REAL bugs the 2026-07-08 draft
+  missed (not just the "1536/2560 threshold swap" the draft's own banner already flagged): (1) a
+  MIPS branch-delay-slot misread in `turnBiasCompute` — the non-wide path actually subtracts the
+  literal `3072`, never the mode byte, because the delay slot of the `mode==5` branch check
+  unconditionally sets `r3=3072` before falling through; this was the one making EVERY SBS run
+  diverge, found only after inserting a temporary trace directly into `gen_func_80055C9C` (reverted
+  before commit) to get a real runtime value; (2) `outerTransitionCommit`'s decrement-and-settle
+  gate compared the walk-state byte against the literal `0`, but gen compares against `2` — this
+  ALSO corrects a 2026-07-08 header comment that had "corrected" a real Ghidra-vs-gen mismatch in
+  the wrong direction; (3) 7 missing branch-delay-slot `r31` mirrors across the three larger
+  functions' `rec_dispatch` call sites (guest-stack ra-spill bytes that SBS compares). Also
+  corrected the wiring mechanism itself mid-pass: the addresses have direct substrate
+  `func_<addr>(c)` callers (the mode-N dispatch tables), so a first attempt hand-rolled
+  `shard_set_override` + a manual `psx_fallback` gate (copying the older Math pattern) — rewired
+  through `engine_set_override_main` (`runtime/recomp/engine_override_thunk.cpp`) per CLAUDE.md's
+  newer rule instead. `enterOuterState0` (`0x80058648`) and `matrixComposeAttached` (`0x800597AC`)
+  — the two larger "literal transcription" drafts — and `resetLoadGate` (`0x80042310`) remain
+  UNWIRED; their own §9 re-verify passes are future work (both are dense enough that the same class
+  of subtle bug should be assumed present until independently re-diffed). SBS-full gate: 0-diff
+  through f6720+ (95s autonav window; a `PSXPORT_SBS_EXIT_FRAME` clean-exit variant also ran
+  0-diff through f5910+/f6000+). Firing confirmed via `PSXPORT_DEBUG=dispatch` (`ovhit`'s atexit
+  dump is unreliable under SBS full — binds to whichever Game registers first, not necessarily
+  core A; flagged as a tooling gap, not fixed this pass). Full writeup: `docs/findings/
+  animation.md` "turnBiasCompute/outerTransitionGate/outerTransitionCommit/assetReady — §9
+  promotion".
