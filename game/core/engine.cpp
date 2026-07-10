@@ -3300,6 +3300,22 @@ void Engine::startBinStageFaithful() {
 int Engine::stage0AdvanceSkip(uint8_t& step) {
   Core* c = core;
   uint32_t task = c->mem_r32(CUR_TASK);
+  // FRAME ALIGNMENT (USER 2026-07-10, compare-mode only — SBS MODE=skip): startBinStageSkip()
+  // already built the WHOLE file table and stamped this task's +0x48 preload-SM byte to 1 in ONE
+  // native call/frame (see its header comment above); the oracle recomp substrate on SBS's sibling
+  // core spreads the equivalent CD-directory work across many frames (docs/config.md "Boot-preload
+  // TRANSIENT regions" — "native's startBinStage collapsing many substrate ticks into ~5 ticks…
+  // while substrate B spreads the same work across ~10+ ticks"). Rather than let A race ahead of B
+  // at the same lockstep frame index (the old settled-divergence-tolerance shape), hold at step 0
+  // (no state advance — task+0x48 stays at its already-1 value, nothing downstream observes step
+  // itself) until the sibling core's OWN task+0x48 (same shared task-slot layout) reaches the same
+  // "load done" value. `c->game->sbs` is null outside the SBS harness and skipRendezvousReached()
+  // is a pass-through in every SBS mode except M_SKIP, so this is a genuine no-op everywhere but
+  // the compare harness — no PSXPORT_* gameplay toggle.
+  if (step == 0 && c->game->sbs &&
+      !c->game->sbs->skipRendezvousReached(c, task + 0x48u, 1u, "start_bin_load")) {
+    return 1;   // idle this frame — retry next frame, no step advance
+  }
   switch (step) {
     case 0: break;
     case 1: (void)c->rng.next();                                     break;

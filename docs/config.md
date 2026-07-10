@@ -246,6 +246,12 @@ guest-stack-residency questions.
 `repl_tap_n`) while the combat-coverage leg runs. The tool used to trace the leg live while building
 it (2026-07-10, docs/findings/ai.md) — use it to confirm the leg is actually walking/jumping instead
 of stuck against an obstacle in a future session.
+`skiprv` (sbs.cpp, `Sbs::Impl::skipRendezvousReached`) — MODE=skip frame-alignment barrier trace:
+logs `[sbs][rendezvous] f<N> waiting on '<label>': …` every 60 frames while a fork-site rendezvous
+is stalled, and a `SETTLED after N frame(s)` line when the wait resolves. Cheap enough to leave on
+for a whole `MODE=skip` run; the end-of-run `dumpRendezvousSites()` summary (checks/stalls/maxWait
+per label) prints unconditionally under `MODE=skip` regardless of this channel. See docs/findings/
+sbs.md "SKIP-mode frame alignment".
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
 couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.
@@ -275,8 +281,28 @@ or level — they can't be a bare channel:
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
-- **SBS observable mode:** `SBS_MODE=skip` — pc_skip (real default config) vs recomp, compared on
-  a curated observable-state list with settled-divergence semantics (see skill `sbs-diverge`).
+- **SBS observable mode:** `SBS_MODE=skip` — pc_skip (real default config, core A) vs recomp
+  (oracle, core B), compared on a curated observable-state list (see skill `sbs-diverge`).
+  **FRAME-ALIGNED, strict per-frame semantics (2026-07-10, docs/findings/sbs.md "SKIP-mode frame
+  alignment"):** every collapsed-multi-step `pc_skip` fork (CLAUDE.md "The 5 paths") is meant to
+  call `Sbs::skipRendezvousReached(c, addr, minVal, label)` (sbs.h) right after doing its own
+  (host-only) shortcut work but BEFORE flipping any guest-visible "load complete" state — while the
+  oracle core hasn't independently reached the same shared-layout completion field yet, the
+  shortcut side idles (no state advance) instead of racing ahead at the same lockstep frame. A
+  no-op (pass-through) outside `MODE=skip`, so this never affects `./run.sh` or any other SBS mode.
+  A wait that never resolves in 3600 frames (60s @ 60fps) **aborts** with both sides' state — a
+  loud diagnostic, not a hang. Because of this barrier the observable compare's old 60-frame
+  "settled divergence" tolerance is GONE — `checkObservables` is now strict per-frame (first
+  differing frame reports and, by default, aborts; `PSXPORT_SBS_SKIP_CONTINUE=1` demotes to
+  log-and-continue for triage). `MODE=skip` also auto-arms the existing pane pixel-diff
+  (`checkPaneDiff`, normally opt-in via `SBS_RENDERDIFF`) as the per-frame VISUAL compare — covers
+  STRUCTURAL rendered-picture differences only, not audio or non-visual state. **Only ONE fork is
+  actually wired so far** (`Engine::stage0AdvanceSkip`'s START.BIN-load gate, label
+  `start_bin_load`) — the fork inventory entry in docs/findings/sbs.md lists which of the ~25
+  `pc_skip` sites are genuine load-collapse rendezvous candidates (most are per-frame parity forks
+  that don't need one) and which are still unwired; an unwired fork's downstream content can still
+  legitimately drift and will now report as a real (unmasked) divergence instead of being silently
+  tolerated — that is by design, not a regression.
 - **SBS bounded clean exit:** `SBS_EXIT_FRAME=<n>` (`cfg_int`) — the SBS loop calls `exit(0)` once
   frame n is reached, so atexit dumps (engine_override_thunk per-address native/oracle hit counts,
   EngineOverrides `ovhit`) actually print. A `timeout`-killed gate dies via the watchdog's SIGTERM

@@ -30,8 +30,16 @@ configuration against it, never by eyeballing a single run:
 - **PC SKIP OFF cell** → `PSXPORT_SBS_MODE=full` (core A = pc_faithful, core B = recomp_path; both
   `mPcSkip=false`; byte-compares guest RAM every lockstep frame). This is the honest gate AS LONG AS
   the oracle is clean (see "Oracle integrity" below).
-- **PC SKIP ON cell** → compare the shortcut path's guest RAM / observable output against the oracle
-  (the shortcut must produce the SAME end-state as the faithful path). [Harness details TBD per cell.]
+- **PC SKIP ON cell** → `PSXPORT_SBS_MODE=skip` (core A = pc_skip=true / the real `./run.sh`
+  shortcut config, core B = the pure recomp oracle). **Frame-aligned as of 2026-07-10** (docs/
+  findings/sbs.md "SKIP-mode frame alignment"): every collapsed-multi-step fork is meant to call
+  `Sbs::skipRendezvousReached` (sbs.h) so A idles rather than racing ahead of B at the same lockstep
+  frame — only ONE fork is wired so far (`Engine::stage0AdvanceSkip`'s START.BIN-load gate); the
+  compare itself is now strict per-frame (no more 60-frame settle tolerance) plus an auto-armed
+  per-frame picture pixel-diff. A fork that isn't rendezvous-gated yet can still legitimately drift
+  and will show up as a real divergence — check the fork inventory in docs/findings/sbs.md before
+  assuming a PC-SKIP-ON divergence is a genuine logic bug vs "this fork's rendezvous isn't wired
+  yet".
 - **RENDERER cells** → `PSXPORT_SBS_MODE=render` (A = pc_render, B = psx_render, both pc_faithful);
   pc_render must leave guest RAM identical to psx_render.
 

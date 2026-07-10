@@ -48,6 +48,7 @@
 #include <set>
 #include <algorithm>
 #include <csignal>
+#include <string>
 
 // --- runtime entry points reused from the normal boot path / dual-core harness ---
 void load_exe(const char* path, Core* c);
@@ -248,17 +249,43 @@ public:
   char     mBtA[4096] = {0}, mBtB[4096] = {0};
   bool     mHaveDbgsrv = false;
 
-  // ---- M_SKIP observable-output compare (USER 2026-07-08) ----
-  // pc_skip vs recomp is NOT byte-comparable (cadence legitimately collapses); instead compare a
-  // POSITIVE LIST of observable state and report only SETTLED divergences (a region must differ
-  // for kObsPersist consecutive frames — transient lead/lag during loads is by design).
-  static constexpr int kObsPersist = 60;
+  // ---- M_SKIP observable-output compare (USER 2026-07-08, tightened 2026-07-10) ----
+  // Originally: pc_skip vs recomp is NOT byte-comparable (cadence legitimately collapses); compare
+  // a POSITIVE LIST of observable state and report only SETTLED divergences (a region must differ
+  // for kObsPersist consecutive frames — transient lead/lag during loads was "by design").
+  //
+  // 2026-07-10 FRAME ALIGNMENT: that 60-frame tolerance existed to paper over exactly the cadence
+  // drift the skipRendezvousReached() barrier (above) now closes at each wired fork site — once a
+  // fork rendezvous-waits for the oracle to catch up, "differ for a while during the load, then
+  // converge" is no longer an expected shape for content downstream of that fork; a divergence that
+  // shows up and STAYS is either a genuine behavioral bug or a fork this pass didn't wire yet (see
+  // docs/findings/sbs.md "SKIP-mode frame alignment" for the wired/unwired fork inventory). Dropped
+  // to 1 (first differing frame reports immediately, no persistence window) so this compare is now
+  // as strict as checkDivergence()'s byte-exact path elsewhere in this file. Any address that
+  // legitimately still lags at f1 because ITS fork isn't rendezvous-gated yet will show up here
+  // honestly as a divergence — that's the harness doing its job, not a false positive to mask.
+  static constexpr int kObsPersist = 1;
   static constexpr int kNObs = 5;               // fixed regions + area-deref + SPU RAM (below)
   int      mObsCnt[8]  = {0};                   // consecutive differing frames per observable
   bool     mObsDone[8] = {false};               // reported already (report once, stay running)
   uint8_t* mObsSpuA = nullptr;                  // 512 KB SPU RAM peek buffers
   uint8_t* mObsSpuB = nullptr;
   void checkObservables();
+
+  // ---- SKIP-mode rendezvous (frame alignment, USER 2026-07-10, see sbs.h skipRendezvousReached) ----
+  // Per-label wait bookkeeping: when did we start waiting on this label, is a wait currently active,
+  // and (for the end-of-run audit report) how many times did we check it / how many frames total did
+  // we spend stalled on it. A label that's checked but never once stalls is a clean pass-through; a
+  // label whose wait count only ever grows and times out is the deadlock case skipRendezvousReached
+  // aborts on directly (loud, not a hang).
+  struct RvSite { uint32_t firstWaitFrame = 0; bool waiting = false; uint32_t checks = 0;
+                  uint32_t stalls = 0; uint32_t maxWaitFrames = 0; };
+  std::map<std::string, RvSite> mRvSites;
+  static constexpr uint32_t kRvTimeoutFrames = 3600;   // 60s @ 60fps — deadlock diagnostic, not a hang
+  bool mRvDumped = false;
+  void dumpRendezvousSites(FILE* out);
+  bool skipCompareMode() const { return mMode == M_SKIP; }
+  bool skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label);
 
   // ---- write-watchpoint record (exact corrupting-write site) ----
   bool     mWwArmed = false;
@@ -770,6 +797,77 @@ static const char* addrLabel(uint32_t a) {
   return "?";
 }
 
+// SKIP-mode frame alignment (USER 2026-07-10) — see sbs.h for the full design rationale. Reads the
+// CALLING core's sibling's memory at `addr`; true once sibling's value >= minVal. A pass-through
+// (always true) outside MODE=skip, so calling this from a fork site is safe in every context —
+// callers still gate on skipCompareMode() first purely to avoid a per-frame map lookup + fprintf
+// path in the hot default-play case.
+//
+// HALFWORD, not word: every known fork-completion field in this codebase (the stage-0/stage-1
+// preload SM's task+0x48 etc.) is written with mem_w16, packed adjacent to a SIBLING sm byte at
+// +2 (e.g. +0x4a) that's independently live. A mem_r32 read here would silently OR that sibling's
+// garbage into the compared value and report "reached" the moment EITHER half went nonzero — found
+// live during the first MODE=skip smoke run (start_bin_load "reached" after a single check, 0
+// stalls, when the substrate oracle should still have been many frames from done). mem_r16 is the
+// correct width for every current caller; widen this (and its callers' minVal range) the day a
+// fork's shared completion field is genuinely a full word.
+bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label) {
+  RvSite& site = mRvSites[label];
+  site.checks++;
+  if (mMode != M_SKIP) return true;
+  Core* other = (coreId(c) == 0) ? &mB->core : &mA->core;
+  uint32_t v = other->mem_r16(addr);
+  bool ok = v >= minVal;
+  if (ok) {
+    if (site.waiting) {
+      uint32_t waited = mFrame - site.firstWaitFrame;
+      if (cfg_dbg("skiprv"))
+        fprintf(stderr, "[sbs][rendezvous] f%u '%s' SETTLED after %u frame(s) — 0x%08X now %u (wanted >=%u)\n",
+                mFrame, label, waited, addr, v, minVal);
+      site.waiting = false;
+    }
+    return true;
+  }
+  site.stalls++;
+  if (!site.waiting) { site.waiting = true; site.firstWaitFrame = mFrame; }
+  uint32_t waited = mFrame - site.firstWaitFrame;
+  if (waited > site.maxWaitFrames) site.maxWaitFrames = waited;
+  if (cfg_dbg("skiprv") && (waited % 60) == 0)
+    fprintf(stderr, "[sbs][rendezvous] f%u waiting on '%s': 0x%08X=%u want>=%u (%u frame(s) so far)\n",
+            mFrame, label, addr, v, minVal, waited);
+  if (waited >= kRvTimeoutFrames) {
+    // Deadlock diagnostic, not a hang (CLAUDE.md fail-fast): the shortcut side has been idling on
+    // this milestone for a full minute of frames with no sign the oracle side is ever going to
+    // write it — that's either a genuinely broken rendezvous predicate (wrong addr/minVal for this
+    // fork) or the oracle side is itself stuck. Either way, printing both sides' relevant state and
+    // aborting beats a silent 10-minute-gate hang that just looks like "the harness is slow".
+    fprintf(stderr, "\n[sbs][rendezvous] *** DEADLOCK f%u: fork '%s' waited %u frames (>= timeout %u) ***\n"
+                    "  addr 0x%08X: A=%u B=%u (want >= %u)\n"
+                    "  A last id=%s\n",
+            mFrame, label, waited, kRvTimeoutFrames, addr,
+            mA->core.mem_r16(addr), mB->core.mem_r16(addr), minVal,
+            coreId(c) == 0 ? "A(skip side)" : "B(oracle side)");
+    dumpRendezvousSites(stderr);
+    fflush(stderr);
+    abort();
+  }
+  return false;
+}
+
+void Sbs::Impl::dumpRendezvousSites(FILE* out) {
+  fprintf(out, "[sbs][rendezvous] fork-site audit (%zu label(s) checked this run):\n", mRvSites.size());
+  if (mRvSites.empty()) {
+    fprintf(out, "  (none — no rendezvous-gated fork site was reached, or this run wasn't MODE=skip)\n");
+    return;
+  }
+  for (const auto& [label, s] : mRvSites) {
+    fprintf(out, "  %-24s checks=%-8u stalls=%-8u maxWait=%-6u %s\n",
+            label.c_str(), s.checks, s.stalls, s.maxWaitFrames,
+            s.stalls == 0 ? "(never stalled — A and B were already aligned every time it was checked)"
+                          : (s.waiting ? "(STILL WAITING AT EXIT — one-sided passage, harness error)" : "(stalled then settled)"));
+  }
+}
+
 void Sbs::Impl::checkObservables() {
   // Positive list of observable regions (label, lo, hi) — guest RAM unless noted. Grow this list
   // as observable-output bugs surface; it is the OPPOSITE of an allowlist (what MUST match).
@@ -783,11 +881,19 @@ void Sbs::Impl::checkObservables() {
   };
   auto ramA = [this](uint32_t a){ return mA->core.ram[(a & 0x1FFFFFFFu)]; };
   auto ramB = [this](uint32_t a){ return mB->core.ram[(a & 0x1FFFFFFFu)]; };
+  // PSXPORT_SBS_SKIP_CONTINUE=1 — log-and-continue instead of abort() on a strict observable
+  // divergence (same escape-hatch shape as MIRROR_VERIFY_CONTINUE, docs/config.md) — useful to
+  // survey ALL observable regions in one run while triaging the first post-alignment frontier
+  // instead of dying at the very first hit. Default is fail-fast abort, matching every other
+  // strict SBS compare in this file (no residual RAM diverges, CLAUDE.md).
+  static const bool skip_continue = []{ const char* e = getenv("PSXPORT_SBS_SKIP_CONTINUE");
+    return e && *e && e[0] != '0'; }();
   auto report = [this](int idx, const char* label, uint32_t addr, uint8_t va, uint8_t vb) {
-    fprintf(stderr, "\n[sbs-obs] *** SETTLED OBSERVABLE DIVERGENCE f%u [%s] @0x%08X A=%02X B=%02X"
-                    " (persisted %d frames) ***\n", mFrame, label, addr, va, vb, kObsPersist);
+    fprintf(stderr, "\n[sbs-obs] *** OBSERVABLE DIVERGENCE f%u [%s] @0x%08X A=%02X B=%02X ***\n",
+            mFrame, label, addr, va, vb);
     mObsDone[idx] = true;
     if (mHaveDbgsrv) { fprintf(stderr, "[sbs-obs] paused for inspection.\n"); mA->dbg_server.setPaused(true); }
+    if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
   };
   for (int i = 0; i < kNObs; i++) {
     if (mObsDone[i]) continue;
@@ -826,9 +932,8 @@ void Sbs::Impl::checkObservables() {
       }
       if (!diff) mObsCnt[idx] = 0;
       else if (++mObsCnt[idx] >= kObsPersist) {
-        fprintf(stderr, "\n[sbs-obs] *** SETTLED OBSERVABLE DIVERGENCE f%u [SPU RAM / VAB banks] "
-                        "@0x%05X A=%02X B=%02X (persisted %d frames) ***\n", mFrame, bad,
-                mObsSpuA[bad], mObsSpuB[bad], kObsPersist);
+        fprintf(stderr, "\n[sbs-obs] *** OBSERVABLE DIVERGENCE f%u [SPU RAM / VAB banks] "
+                        "@0x%05X A=%02X B=%02X ***\n", mFrame, bad, mObsSpuA[bad], mObsSpuB[bad]);
         for (int k = 0; k < 3; k++) {   // a few following diff runs for shape
           while (bad < 524288 && mObsSpuA[bad] == mObsSpuB[bad]) bad++;
           if (bad >= 524288) break;
@@ -842,6 +947,7 @@ void Sbs::Impl::checkObservables() {
         }
         mObsDone[idx] = true;
         if (mHaveDbgsrv) { fprintf(stderr, "[sbs-obs] paused for inspection.\n"); mA->dbg_server.setPaused(true); }
+        if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
       }
     }
   }
@@ -1011,7 +1117,18 @@ void Sbs::Impl::checkPaneDiff() {
   if (!inited) {
     inited = 1;
     const char* e = getenv("PSXPORT_SBS_RENDERDIFF");
-    if (e && *e) { mRdiffOn = true; double v = atof(e); if (v > 0) mRdiffThreshPct = v; }
+    if (e && *e) { mRdiffOn = (e[0] != '0'); double v = atof(e); if (v > 0) mRdiffThreshPct = v; }
+    // MODE=skip auto-arms the per-frame PICTURE compare (USER 2026-07-10 "per-frame VISUAL compare
+    // hook"): this pixel-diff of A's pc_render pane against B's psx_render/oracle pane, tolerance-
+    // gated (±40/channel) to absorb PSX-fixed-vs-float dither noise, IS the visual-compare hook —
+    // no new mechanism needed, just wiring it on by default for this mode instead of requiring the
+    // env var. Covers: STRUCTURAL rendered-picture differences (missing/misplaced geometry, wrong
+    // fills/colors) frame over frame, worst-frame tracked, over-threshold frames dumped as side-by-
+    // side PPMs to scratch/screenshots/renderdiff/. Does NOT cover: audio (see the SPU-write-log +
+    // checkObservables SPU-RAM compare below/above), or any non-visual guest state (the RAM/scratch
+    // divergence + rendezvous checks cover that). PSXPORT_SBS_RENDERDIFF=0 explicitly disables even
+    // under skip mode if a run needs to ignore known-deferred render bugs while triaging content.
+    else if (!e && mMode == M_SKIP) mRdiffOn = true;
   }
   if (!mRdiffOn) return;
   int W = mWa < mWb ? mWa : mWb, H = mHa < mHb ? mHa : mHb;
@@ -1579,35 +1696,34 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
   }
   { const char* e = getenv("PSXPORT_SBS_ALLOCTRACE"); if (e && *e && strcmp(e, "0") != 0) mAllocTraceOn = 1; }
-  if (mAllocTraceOn || mByteTraceOn) {
-    if (mAllocTraceOn)
-      fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
-    // Register a per-ra bucket dump at process exit so the settled-state per-caller table lands even
-    // when the run is killed by SIGTERM (SBS AUTONAV normally runs indefinitely). SANCTIONED
-    // ATEXIT/SIGNAL EXCEPTION: atexit lambdas and signal handlers take no context, so the live
-    // Sbs::Impl is reachable only through this one static pointer.
-    static Sbs::Impl* s_selfForAtExit = nullptr;
-    s_selfForAtExit = this;
-    atexit([]{
-      if (!s_selfForAtExit) return;
-      // The SIGTERM/SIGINT handler below already ran a full dump before _exit(128+sig); if we're
-      // still here it means the process exited normally (main returned or exit(0)) — dump once now.
-      if (s_selfForAtExit->mAllocRaDumped) return;
-      s_selfForAtExit->mAllocRaDumped = 1;
-      s_selfForAtExit->dumpAllocRa(stderr);
-      s_selfForAtExit->dumpByteTrace(stderr);
-    });
-    // Also trap SIGTERM/SIGINT (the common shell-timeout / Ctrl-C path) so the settled-state per-ra
-    // table lands under `timeout N …` too. Dump then call _exit — cheap, no atexit chain re-entry.
+  if (mAllocTraceOn)
+    fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
+  {
+    // Unified atexit/SIGTERM/SIGINT dump registration — ONE handler per signal for the whole
+    // harness, not one per feature. Each opt-in diagnostic (ALLOCTRACE/BYTETRACE) plus the
+    // MODE=skip rendezvous-site audit (see sbs.h skipRendezvousReached / dumpRendezvousSites)
+    // registers its own "am I on" flag and dump function here so a run with several diagnostics
+    // active at once (or killed by `timeout` mid-run) gets every one of them, instead of the last
+    // std::signal() call silently replacing all the earlier installs (that WAS the shape here
+    // before this dump was added — SANCTIONED ATEXIT/SIGNAL EXCEPTION: atexit/signal handlers take
+    // no context, so the live Sbs::Impl is reachable only through this one static pointer).
+    static Sbs::Impl* s_self = nullptr;
+    s_self = this;
+    static void (*dumpAll)() = +[]{
+      if (!s_self) return;
+      if (s_self->mAllocTraceOn || s_self->mByteTraceOn) {
+        if (!s_self->mAllocRaDumped) { s_self->mAllocRaDumped = 1; s_self->dumpAllocRa(stderr); s_self->dumpByteTrace(stderr); }
+      }
+      if (s_self->mMode == M_SKIP) {
+        if (!s_self->mRvDumped) { s_self->mRvDumped = true; s_self->dumpRendezvousSites(stderr); }
+      }
+    };
+    atexit(dumpAll);
     static bool s_sigHooked = false;
     if (!s_sigHooked) {
       s_sigHooked = true;
       auto handler = +[](int sig){
-        if (s_selfForAtExit && !s_selfForAtExit->mAllocRaDumped) {
-          s_selfForAtExit->mAllocRaDumped = 1;
-          s_selfForAtExit->dumpAllocRa(stderr);
-          s_selfForAtExit->dumpByteTrace(stderr);
-        }
+        dumpAll();
         fflush(stderr);
         _exit(128 + sig);
       };
@@ -1625,12 +1741,17 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // pure substrate. No flag: strictness is the mode. (The old note claiming pc_skip=false
   // "routes every task to the fiber substrate" described the REJECTED fiber-only design; under
   // the faithful-execution model pc_skip=false runs NATIVE bodies — docs/faithful-execution.md.)
-  // A future SEPARATE harness mode will compare pc_skip=true against the oracle on
-  // OBSERVABLE-OUTPUT state only (user 2026-07-07, not yet built — see docs/findings/sbs.md).
-  // M_SKIP (USER 2026-07-08): core A runs the REAL default config (pc_skip=true, the ./run.sh
-  // path) against the recomp oracle, compared on OBSERVABLE OUTPUT state only (checkObservables —
-  // settled-divergence semantics, since pc_skip legitimately collapses load cadence). All other
-  // modes keep core A hard-wired to pc_faithful strict.
+  // M_SKIP (USER 2026-07-08, frame-aligned 2026-07-10): core A runs the REAL default config
+  // (pc_skip=true, the ./run.sh path) against the recomp oracle on core B, compared on OBSERVABLE
+  // OUTPUT state (checkObservables). Each pc_skip fork that collapses a multi-frame substrate load
+  // into one native call is expected to call skipRendezvousReached() (sbs.h) after doing its own
+  // (harmless, host-only) work but BEFORE flipping any guest-visible "load complete" state, so A
+  // idles rather than racing B at the same lockstep frame index — see docs/findings/sbs.md "SKIP-
+  // mode frame alignment" for which forks are wired vs still-TODO. Because of that barrier,
+  // checkObservables no longer needs a settled-divergence tolerance (kObsPersist=1, strict per-
+  // frame) for content downstream of a WIRED fork; a fork this pass hasn't wired yet can still
+  // legitimately drift and will show up honestly as a divergence rather than being silently masked.
+  // All other modes keep core A hard-wired to pc_faithful strict (unaffected by any of this).
   mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = (mMode == M_SKIP);
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
@@ -2318,3 +2439,7 @@ void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val, uint32_t width) {
 }
 Core*    Sbs::coreByLetter(char which) const                { return mImpl->coreByLetter(which); }
 Core*    Sbs::shownCore() const                             { return mImpl->shownCore(); }
+bool     Sbs::skipCompareMode() const                       { return mImpl->skipCompareMode(); }
+bool     Sbs::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label) {
+  return mImpl->skipRendezvousReached(c, addr, minVal, label);
+}

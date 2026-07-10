@@ -1053,3 +1053,120 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   code path (e.g. an idle-only timing/counter divergence never exercised once autonav starts
   feeding input). Not root-caused; logged here so it isn't re-discovered from scratch. Repro: unset
   any `SBS_AUTONAV`/`SBS_POSTDRIVE`, run the command above, grep for `DIVERGENCE`.
+
+## SKIP-mode frame alignment (USER 2026-07-10) — mechanism landed, first fork wired, honest frontier
+
+- **goal:** `PSXPORT_SBS_MODE=skip` compares core A (`pc_skip=true`, the real `./run.sh` shortcut
+  config) against core B (the pure recomp oracle, `psx_fallback=1`). A's collapsed-multi-step forks
+  (every `if (game->pc_skip) shortcut(); else faithful();` site — CLAUDE.md "The 5 paths") finish a
+  multi-frame substrate load in ONE native call, so A's game state used to race ahead of B's at the
+  SAME lockstep `mFrame` — checkObservables() covered for this with a 60-consecutive-frame
+  "settled-divergence" tolerance instead of comparing every frame. USER directive: replace the
+  tolerance with an actual barrier ("drag behind on skips… so it should always be visually and
+  audio-wise identical on the same frames"), compare-mode only.
+- **mechanism (landed):** `Sbs::skipCompareMode()` / `Sbs::skipRendezvousReached(c, addr, minVal,
+  label)` (runtime/recomp/sbs.h, impl in sbs.cpp). A fork's shortcut leg calls
+  `skipRendezvousReached` right after doing its own (harmless, host-only) work but BEFORE flipping
+  any guest-visible "load complete" state; while the sibling core (read via `Sbs::Impl::coreId` +
+  `mem_r16`) hasn't independently driven the SAME shared-layout field to the same value yet, the
+  caller idles (no state advance, re-check next frame) instead of proceeding. Pass-through (always
+  `true`) outside `MODE=skip`, so every fork site is a genuine no-op in `./run.sh` and every other
+  SBS mode — no new `PSXPORT_*` gameplay toggle, gated entirely through the existing `Game::sbs`
+  back-pointer. A wait that never resolves within `kRvTimeoutFrames` (3600 = 60s @ 60fps) **aborts**
+  with both sides' state dumped (fail-fast diagnostic, not a silent hang) — this is a hard
+  requirement, not a nice-to-have: a naive "just wait forever" barrier would turn a bad predicate
+  into an un-diagnosable stuck gate. `dumpRendezvousSites()` (atexit/SIGTERM, shares the ALLOCTRACE
+  dump registration) prints per-label checks/stalls/maxWait so a fork whose predicate silently
+  never fires (checks==0 across a run known to exercise it) or that's stuck waiting at exit is
+  visible in the log, not just inferred.
+- **kObsPersist dropped 60 → 1** (checkObservables, sbs.cpp): now that alignment removes the
+  legitimate reason for transient drift at a WIRED fork, the observable compare is strict per-frame
+  — first differing frame reports (and by default `abort()`s; `PSXPORT_SBS_SKIP_CONTINUE=1` demotes
+  to log-and-continue for triage runs, same shape as `MIRROR_VERIFY_CONTINUE`). Covers: the 5 fixed
+  observable regions (AUDIO fx_table/fx_area_ptrs/seq_slots/global_scale, libcd file-table), the
+  area-fx dereference, and SPU RAM (VAB sample banks).
+- **visual compare:** `MODE=skip` now auto-arms the existing `checkPaneDiff()` pixel-diff (was
+  opt-in via `PSXPORT_SBS_RENDERDIFF`) — this pixel-diffs A's pc_render pane against B's
+  psx_render/oracle pane (±40/channel tolerance for PSX-fixed-vs-float dither noise), tracks the
+  worst frame, dumps over-threshold frames as side-by-side PPMs to
+  `scratch/screenshots/renderdiff/`. **What it covers, honestly:** STRUCTURAL differences in the
+  rendered PICTURE only (missing/misplaced geometry, wrong fills/colors) — it does NOT cover audio
+  (the SPU-write-log compare + checkObservables' SPU-RAM section do), and it does NOT cover any
+  non-visual guest state (the RAM/scratch divergence + rendezvous checks do). No new mechanism was
+  built for this — it was already the right tool, just gated off by default; this pass just turns
+  it on for the mode it's most relevant to.
+- **fork inventory — what's actually a "collapsed multi-step init" (rendezvous candidate) vs a
+  per-frame parity fork (NOT a rendezvous candidate):** grepping every `pc_skip`/`mPcSkip` site
+  (`game/`, `runtime/recomp/`) turns up ~25 hits, but most are STEADY-STATE forks — two
+  IMPLEMENTATIONS of the SAME per-frame tick (native shortcut vs a literal byte-exact mirror of the
+  substrate), both already running once per lockstep frame on both cores by construction
+  (`fieldFrame`/`fieldFrameFaithful`, `fieldRun`/`fieldRunFaithful`, `sceneEventFifo`/…Faithful,
+  `submode1`/…Faithful, `areaModeDispatch`/…Faithful, `sceneStateStep`/…Faithful,
+  `modePerFrameDispatch`/…Faithful, `postRenderTick`/…Faithful, `frameStartTick`/…Faithful,
+  `walkAll`/`walkAllFaithful`, `walkAux`/`walkAuxFaithful`, `ObjectTable::dispatch`/`dispatchFaithful`,
+  `CutsceneCamera::update`/`updateFaithful`, `Cull::farMult` skip/faithful, `Array8Dispatch::tick`/
+  `tickFaithful`). These do NOT need a rendezvous barrier — they don't collapse frames, so there's
+  nothing to align.
+  - **genuine load-collapse forks (rendezvous candidates), in rough boot order:**
+    1. **`Engine::startBinStage` (startBinStageSkip vs startBinStageFaithful)** — the START.BIN
+       ISO9660/CD directory + XA-singleton file-table build. **WIRED THIS PASS** at the
+       `stage0AdvanceSkip` step-0 gate (game/core/engine.cpp), predicate = sibling's
+       `CUR_TASK`-relative `+0x48` preload-SM halfword reaching `>=1`, label `start_bin_load`.
+       **MEASURED RESULT (2026-07-10, `MODE=skip`, `PSXPORT_SBS_EXIT_FRAME=150`):
+       checks=1 stalls=0 maxWait=0** — the two cores were ALREADY aligned on this specific field
+       every time it was checked. Reading the RE more carefully post-measurement: the substrate's
+       own `CdSearchFile` loops (in `startBinStageFaithful`'s mirror of the gen body) also run with
+       no yield-capable primitive inside them, so BOTH the native shortcut and the real substrate
+       resolve the whole file table synchronously within one scheduler tick — task+0x48 reaching 1
+       is NOT where the "~10+ substrate ticks vs ~5 native ticks" cadence gap (docs/config.md
+       "Boot-preload TRANSIENT regions") actually lives. This is an honest negative result, not a
+       wasted wire: it rules out task+0x48 as the drift source and narrows where the REAL gap is
+       (next point).
+    2. **`asset.preloadTexgroup`/`asset.preloadStage1` — the texgroup + stage-1 VRAM/relocation
+       build invoked inline by `startBinStageSkip`/`stage0AdvanceSkip` (native) vs spawned as a
+       task-1 fiber body (`PcScheduler::runTask1PreloadStanza`, substrate/faithful) — NOT YET
+       WIRED.** This is where the isPcSkipScratch mask's "preload cel_h/task-state/metadata" boot-
+       transient regions (0x800BE0E0, 0x800BED80, 0x800ECF54, 0x800ED000, 0x800EF478, 0x80105C10,
+       0x80105D00..0x80105F00, 0x80157000..0x8017D000, sbs.cpp) point — the actual multi-frame
+       collapse this task set out to fix. Candidate predicate: task-1's slot state
+       (`native_fiber[1]`/`task_started[1]` don't exist on the pure-substrate oracle core, so the
+       predicate must be a GUEST-visible field the substrate's own task-1 body sets on completion —
+       needs its own RE pass, same shape as the `start_bin_load` wire above, before landing).
+    3. **The two native CD readers** (`cdlibcd_new_media`/`cdlibcd_cache_file`, pc_skip shortcut,
+       vs `LibcdNative`'s faithful chain, game/cd/libcd_native.h) — used inside
+       `startBinStageSkip` itself; likely converges with fork 1's measurement (same synchronous-CD
+       assumption) but not independently measured.
+    4. **`Demo::s0Skip`/`s0Faithful`** (game/scene/demo.cpp) — attract→title reload-menu-resources
+       collapse. Not measured this pass.
+    5. **`pc_scheduler.cpp`'s DEMO/GAME task stanzas** (`runTask1PreloadStanza`'s native-vs-fiber
+       split, `runStage0StepStanza`) — the SCHEDULING side of forks 1-2; already touched by fork
+       1's wire (shares `stage0_step`) but the DEMO/GAME per-task collapse itself isn't separately
+       gated.
+  - **first post-alignment divergences surfaced (2026-07-10, `MODE=skip PSXPORT_SBS_SKIP_CONTINUE=1
+    PSXPORT_DEBUG=skiprv`, headless, no autonav needed — these are all pre-control boot-window
+    hits):** NOT investigated past this triage; recorded honestly as the new frontier, not
+    allowlisted.
+    - `f2` **SPU RAM / VAB banks** `@0x01020 A=00 B=33` — fires before any pc_skip fork logic has
+      had a chance to run at all (2 lockstep frames in); most likely an SPU init-order artifact
+      unrelated to the load-collapse forks above (nothing to rendezvous against yet at f2). Needs
+      its own RE pass to confirm — flagged, not fixed.
+    - `f459` **AUDIO fx_area_ptrs** `@0x800A4F7E A=02 B=FF` and the resulting **AUDIO
+      area_fx_deref** `@0x8014C124 A=04 B=00` — downstream of area/asset content that differs
+      between the two cores at this point; the natural suspect given the fork-2 gap above
+      (texgroup/stage1 preload not yet rendezvous-gated) but not confirmed by tracing the actual
+      write site — next session should `PSXPORT_SBS_WW_ONVALUEDIVERGE`/rewind-watch
+      `0x800A4F7E` to pin the writer before assuming this is fork 2's fault.
+  - A subsequent, unrelated crash (`rec_dispatch_miss 0x80111A20`, an un-recompiled A02-overlay
+    function reached via the DEMO stanza around f3169 in a longer smoke run) is a pre-existing
+    MODE=skip coverage gap, NOT caused by this change — confirmed by the same miss being reachable
+    via the DEMO/menu path regardless of the rendezvous mechanism; out of scope for this pass.
+- **gates:** standard `SBS_MODE=full AUTONAV=combat` 95s gate — **0-diff**, unaffected (this
+  change is entirely `MODE=skip`-scoped: `skipRendezvousReached` is a pass-through outside
+  `M_SKIP`, and `kObsPersist`/`checkObservables` are only reached from `checkDivergence()`'s
+  `mMode == M_SKIP` branch). `MODE=skip` smoke run to f3169 — the rendezvous barrier itself never
+  stalled/timed-out/deadlocked (confirmed via `dumpRendezvousSites` at a clean `SBS_EXIT_FRAME`
+  cutoff); the run's eventual failure is the pre-existing, unrelated recomp-miss above.
+- **refs:** runtime/recomp/sbs.h (skipCompareMode/skipRendezvousReached API doc), runtime/recomp/
+  sbs.cpp (Impl::skipRendezvousReached, dumpRendezvousSites, checkObservables strictness,
+  checkPaneDiff auto-arm), game/core/engine.cpp `Engine::stage0AdvanceSkip` (the one wired fork),
+  docs/config.md `SBS_MODE=skip` section (rewritten), docs/bug-hunt-workflow.md PC-SKIP-ON cell.
