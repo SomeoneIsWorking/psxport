@@ -180,7 +180,14 @@ long Repl::read(Core* c, uint32_t f) {
         }
       } else fprintf(stderr, "[repl] warp <area_id>  (area table @0x800be118, ids 0..23)\n");
     }
-    else if (!strcmp(cmd, "shot")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) { void gpu_native_shot(Core*, const char*); gpu_native_shot(c, path); } }
+    else if (!strcmp(cmd, "shot")) {   // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) {
+        int gpu_gpu_enabled(void); void gpu_gpu_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
+        if (gpu_gpu_enabled()) { gpu_gpu_shot(c, path); fprintf(stderr, "[repl] shot (VK) -> %s\n", path); }
+        else                   { gpu_native_shot(c, path); fprintf(stderr, "[repl] shot (SW) -> %s\n", path); }
+      }
+    }
     else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
       if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
         void gpu_gpu_vram_region(const char*, int, int, int, int); gpu_gpu_vram_region(path, (int)x,(int)y,(int)w,(int)h); } }
