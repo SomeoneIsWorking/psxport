@@ -5,11 +5,25 @@ fleet of cheap subagents. Proven 2026-07-08 (owned ~40 substrate addresses, fixe
 found+fixed a fake-green SBS gate, reached true zero-diff). Read this first in a fresh session that
 wants to run the fleet.
 
-## 0. Roles — the operator does NOT do the work
-- **Operator (main session):** picks targets, dispatches subagents, INTEGRATES their commits onto
-  `main`, runs the SBS gate, pushes. Root-causes only when triaging. Never does RE/port/fix by hand.
-- **Subagents (sonnet, isolated):** do the RE, port, fix, verify. Each in its OWN git worktree, on a
-  disjoint slice, reports a commit SHA + file list. The operator cherry-picks it.
+## 0. Roles — model tiers by task shape (★USER 2026-07-10)
+Sonnet is NOT capable of open-ended "fix X" / root-cause work — the 2026-07-10 session produced a
+string of confidently-wrong sonnet diagnoses (each needing a later correction pass) before this rule.
+Task verbs decide the model tier:
+- **Sonnet (cheap, fleets):** mechanical, contract-verifiable execution ONLY — collect evidence
+  (traces/dumps/censuses, NO interpretation), transcribe against `generated/` ground truth with the
+  port framework (`port_gen`/`abi_extract`/`port_check`), apply an EXACT fix spec written by a
+  higher tier, run gates, integrate-style chores. A sonnet prompt must never contain the verbs
+  "root-cause", "figure out why", or an unspecified "fix".
+- **Fable (main session / high-tier agents):** diagnosis, root-cause, fix DESIGN, adversarial
+  verification of applied fixes, and anything where a wrong-but-plausible answer costs more than the
+  tokens saved. For big problems use the ultracode Workflow pipeline:
+  **Evidence (sonnet fan-out) → Diagnose (Fable, writes ROOT CAUSE + exact FIX SPEC + PREDICTIONS)
+  → Execute (sonnet, applies spec verbatim, may only report SPEC MISMATCH — never improvise)
+  → Verify (Fable, adversarial PASS/BOUNCE against the predictions; BOUNCE loops to Diagnose).**
+  Keep Fable agent counts low (session-limit risk); if a Fable stage dies, the operator does that
+  stage in the main loop from the evidence.
+- **Operator (main session):** picks targets, authors specs/workflows, INTEGRATES commits onto
+  `main`, runs the gates, pushes, and personally reviews diffs + drives the game after each batch.
 - Hard rule: **no agent ever debugs UNOWNED code** — own it first (port the substrate leaf), then
   debug. Always keep a wave of agents closing the ownership gap.
 
