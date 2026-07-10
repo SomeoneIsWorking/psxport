@@ -145,10 +145,16 @@ int main(int argc, char** argv) {
   game->cd.overridesInit(); // native CD: drive-ready + by-LBA read (S3)
   games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
   game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
-  register_engine_overrides(game);     // ALL EngineOverrides clusters (PcScheduler/Animation/
-                                        // ActorReward/ActorZonedAttacker/Spawn/ReleaseTriggerMotion/
-                                        // GT3GT4/Math) — MUST also run for SBS/DualCore/Selftest's
-                                        // own separately-constructed Games (dc_boot_init calls it too).
+  // register_engine_overrides(game) is called further down, ONLY on the plain (no-harness) path —
+  // NOT here. It used to run unconditionally on this `game`, even though PSXPORT_DUALCORE/
+  // SELFTEST/SBS below construct and drive their OWN separate Game instances (dc_boot_init calls
+  // register_engine_overrides on those), leaving THIS registration a dead throwaway whenever one of
+  // those harnesses is selected. That throwaway registration corrupted `ovhit`'s target selection
+  // (docs/findings/animation.md "ovhit tooling caveat", 2026-07-10 fix): it always registers FIRST
+  // (before any harness-owned Game exists) and is psx_fallback=0, so a "first non-fallback
+  // registrant wins" pick — or any other order-based heuristic — always lands on this inert Game
+  // instead of the real SBS core A. Registering it only when it's actually the Game that ends up
+  // driven removes the ambiguity at the source instead of working around it downstream.
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0
@@ -186,6 +192,11 @@ int main(int argc, char** argv) {
     Sbs::run(path);
     return 0;
   }
+  // Plain (no-harness) path: THIS `game` is the one actually driven, so register its
+  // EngineOverrides table here (see the comment above where this used to run unconditionally).
+  register_engine_overrides(game);     // ALL EngineOverrides clusters (PcScheduler/Animation/
+                                        // ActorReward/ActorZonedAttacker/Spawn/ReleaseTriggerMotion/
+                                        // GT3GT4/Math)
   game->stub.run(path);                  // stub draws SCEA, then hands off to native MAIN boot
   fprintf(stderr, "[boot] boot stub returned\n");
   return 0;

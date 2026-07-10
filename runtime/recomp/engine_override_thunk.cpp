@@ -29,6 +29,7 @@
 #include "core.h"
 #include "game.h"
 #include "verify_harness.h"
+#include "cfg.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -51,17 +52,23 @@ int g_n = 0;
 uint64_t g_nativeHits[kCap];
 uint64_t g_oracleHits[kCap];
 
+// Merged into the `ovhit` channel (2026-07-10, docs/findings/animation.md "ovhit tooling caveat"):
+// these g_tab[]-wired addresses (engine_set_override_main/_a00 — PutDrawEnv/DrawSync/renderWalk/
+// billboard/sequencer/font/etc.) are a COMPLETELY SEPARATE table from EngineOverrides
+// (engine_overrides.cpp) and were previously invisible to `ovhit`'s dump — the only reason those
+// long-verified addresses read "0" there wasn't just the old first-registrant binding bug, it's
+// that they were never IN that table to begin with. Gating this dump on the same `PSXPORT_DEBUG=
+// ovhit` channel (instead of the old "only if any oracle hit exists" heuristic, which also
+// silently suppressed native-only standalone runs) makes `ovhit` the ONE place to check "did this
+// override fire", regardless of which of the two override tables it's wired through.
 void dump_atexit() {
-  // Only meaningful under SBS (oracle=coreB). Skip the noise on standalone runs where oracle hits
-  // are all zero.
-  bool anyOracle = false;
-  for (int i = 0; i < g_n; i++) if (g_oracleHits[i]) { anyOracle = true; break; }
-  if (!anyOracle) return;
-  fprintf(stderr, "[engine_override_thunk] per-address hit counts (native=coreA / oracle=coreB):\n");
+  if (!cfg_dbg("ovhit") || g_n == 0) return;
+  fprintf(stderr, "[ovhit] engine_override_thunk (g_tab) hit counts (native=coreA / oracle=coreB):\n");
   for (int i = 0; i < g_n; i++) {
-    fprintf(stderr, "  0x%08X : native=%llu  oracle=%llu%s\n",
+    fprintf(stderr, "  0x%08X : native=%llu  oracle=%llu%s%s\n",
             g_tab[i].addr, (unsigned long long)g_nativeHits[i], (unsigned long long)g_oracleHits[i],
-            g_nativeHits[i] != g_oracleHits[i] ? "   <-- COUNT MISMATCH (control-flow divergence)" : "");
+            g_nativeHits[i] == 0 && g_oracleHits[i] == 0 ? "   <-- NEVER HIT (registered but unreached)" : "",
+            (g_oracleHits[i] != 0 && g_nativeHits[i] != g_oracleHits[i]) ? "   <-- COUNT MISMATCH (control-flow divergence)" : "");
   }
 }
 

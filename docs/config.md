@@ -96,21 +96,54 @@ func_<addr>(c)` call takes (never touches `rec_dispatch`; see `docs/findings/too
 `traceHit()` is invisible here even while its native handler genuinely runs — always add the call
 when writing a new dual-registered override (game/core/pc_scheduler.cpp is the reference).
 
-`ovhit` (engine_overrides.cpp) — per-address override HIT COUNTS, dumped once at exit:
-`[ovhit] EngineOverrides hit counts (N registered): 0xADDR Class::method : count`, flagging any
-`: 0   <-- NEVER HIT (registered but unreached)`. Cheap enough (a counter bump, no per-hit I/O) to
-leave on for a full session, unlike the verbose `dispatch` trace — this is the tool for "was this
-override EVER reached", the exact question `recdep`/`dispatch` individually get wrong (each is
-blind to a different subset of call paths — see the class comment in runtime/recomp/
-engine_overrides.h). A `0` here for an address you KNOW should fire every frame (gameplay-critical
-scheduling, a hot AI leaf) is a real bug, not "not yet exercised" — found + fixed live 2026-07-08:
-PcScheduler's 5 primitives (yieldPrim/spawnPrim/spawnAndWait/forceClose/selfClose) were registered
-via `EngineOverrides::register_` only, but ALL their real callers reach them as a direct
-`func_<addr>(c)` substrate call that bypasses both `rec_dispatch` and `recdep` — `ovhit` (added
-alongside the fix) is what makes that class of gap observable going forward instead of requiring a
-manual grep of `generated/shard_*.c` for `func_<addr>(c)` call sites every time. See
-docs/findings/tooling.md for the full writeup, including the SBS/DualCore/Selftest registration gap
-this also uncovered.
+`ovhit` — per-address override HIT COUNTS, dumped once at exit from TWO sources, both gated on
+this one channel (2026-07-10 rework, docs/findings/animation.md "ovhit tooling caveat" RESOLVED):
+
+1. `EngineOverrides::dumpHitCounts()` (engine_overrides.cpp) —
+   `[ovhit] EngineOverrides hit counts (N registered): 0xADDR Class::method : count`, flagging any
+   `: 0   <-- NEVER HIT (registered but unreached)`. Under SBS, prints as
+   `A=<hits> B(gen)=<count>` — A is core A's real override-fire count; B(gen) is SBS core B's
+   substrate-dispatch count for the SAME address (via `noteSubstrateDispatch`, cheap — no new
+   per-address instrumentation in generated code), so parity (`A=1020 B(gen)=1020`) confirms the
+   two cores reach the address the same number of times. A count MISMATCH (fires unequal) is
+   flagged and is a real signal worth investigating (control-flow divergence between the ported
+   native body and the substrate, OR the native body legitimately takes a different call count for
+   a reason you should be able to name — do not treat it as noise).
+2. `engine_override_thunk` (engine_override_thunk.cpp) — `[ovhit] engine_override_thunk (g_tab)
+   hit counts (native=coreA / oracle=coreB): 0xADDR : native=N oracle=M`, covering every address
+   wired ONLY through `engine_set_override_main`/`_a00` (PutDrawEnv 0x800815D0, DrawSync
+   0x80080F6C, renderWalk 0x8003C048, the billboard/sequencer/font clusters, …) — these live in a
+   COMPLETELY SEPARATE table from (1) and were previously invisible to `ovhit` even after the
+   target-binding fix, because they were never registered into `EngineOverrides` at all (no
+   `ov.register_` call for most of them). Merging this dump into the same channel makes `ovhit`
+   the ONE place to check "did this override fire", regardless of which of the two override tables
+   it's wired through.
+
+Cheap enough (a counter bump, no per-hit I/O) to leave on for a full session, unlike the verbose
+`dispatch` trace — this is the tool for "was this override EVER reached", the exact question
+`recdep`/`dispatch` individually get wrong (each is blind to a different subset of call paths —
+see the class comment in runtime/recomp/engine_overrides.h). A `0` here for an address you KNOW
+should fire every frame (gameplay-critical scheduling, a hot AI leaf) is a real bug, not "not yet
+exercised" — found + fixed live 2026-07-08: PcScheduler's 5 primitives (yieldPrim/spawnPrim/
+spawnAndWait/forceClose/selfClose) were registered via `EngineOverrides::register_` only, but ALL
+their real callers reach them as a direct `func_<addr>(c)` substrate call that bypasses both
+`rec_dispatch` and `recdep` — `ovhit` (added alongside the fix) is what makes that class of gap
+observable going forward instead of requiring a manual grep of `generated/shard_*.c` for
+`func_<addr>(c)` call sites every time. See docs/findings/tooling.md for the full writeup,
+including the SBS/DualCore/Selftest registration gap this also uncovered.
+
+**Target-selection fix (2026-07-10):** `EngineOverrides::dumpHitCounts()` used to bind to whichever
+Game's `EngineOverrides::register_` fired FIRST via a single static pointer — under SBS full,
+`main()` ALSO unconditionally constructed and registered a THROWAWAY `Game` before dispatching to
+the SBS/DualCore/Selftest harness (each of which builds its own separate Game(s)), and that
+throwaway registered first every time, so the dump always printed an all-zero table that was never
+actually driven — reading 0 for EVERY address including long-verified overrides. Fixed two ways:
+(a) `main()` (runtime/recomp/boot.cpp) now only calls `register_engine_overrides()` on the plain
+no-harness path, right before `game->stub.run(path)` — eliminating the throwaway registration at
+the source instead of working around it; (b) the dump target is now a bounded registry of every
+instance that DID register (the "sanctioned atexit exception" shape, same as the `recdep`/alloc-
+trace hooks), picking the non-`psx_fallback` registrant as primary and its `sbs`-matched peer for
+the B(gen) column — order-independent, no longer "first wins".
 
 `animstack` (overlay_router.cpp, `rec_dispatch`) — TEMP INVESTIGATION PROBE for `Animation::attach`
 (0x80077C40): logs `[animstack] fN core=A/B r29=... ra=... a0=...` on every reach. Used 2026-07-08 to
@@ -136,8 +169,10 @@ several state machines sharing `c->screenFade` fired this frame (`fadetrace` alo
 
 `quadrtpt` (quad_rtpt_submit.cpp) — fires every ~512th `QuadRtptSubmit::submitQuad` call
 (0x8003B320, the rope/flame per-quad RTPT+OT-link submitter): `[quadrtpt] submitQuad call#N`.
-Firing confirmation for this shard_set_override-wired leaf (no `ovhit` coverage — that channel is
-EngineOverrides-only, blind to the recompiler's own g_override[] table).
+Sampled firing confirmation (every 512th call, not every call) for this `engine_set_override_main`-
+wired leaf; `ovhit`'s `engine_override_thunk (g_tab)` dump (see above, 2026-07-10) now ALSO covers
+this address with an exact per-call count — `quadrtpt` remains useful as a live/streaming signal,
+`ovhit` for the definitive end-of-run count.
 
 `ovgtgnd` (overlay_ground_gt3gt4.cpp) — fires every ~128th `OverlayGroundGt3Gt4::entityLoop` call
 (0x801401B8, the ground/scene GT3/GT4 entity-loop walker): `[ovgtgnd] entityLoop call#N`. Same

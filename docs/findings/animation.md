@@ -346,15 +346,31 @@ for the next "no single call site" refusal: MEASURE r29 before concluding it var
   ... never the raw shard_set_override"); rewired through `engine_set_override_main`
   (`runtime/recomp/engine_override_thunk.cpp`) instead — the single oracle-gated choke point, no
   per-cluster gate to forget.
-- **ovhit tooling caveat (pre-existing, not introduced here)**: `PSXPORT_DEBUG=ovhit`'s atexit dump
-  showed 0 hits for ALL EngineOverrides addresses (including already-verified ones like
-  `GraphicsBind::recordArrayInit`) in this SBS-full run — `s_ovhitTarget` appears to bind to
-  whichever `Game`'s `EngineOverrides::register_` fires first, which is not reliably core A in SBS
-  mode. Firing was instead confirmed with `PSXPORT_DEBUG=dispatch`, which showed `core=A` hits for
-  all 4 addresses every relevant frame (e.g. `[dispatch] f159 core=A 0x80055C9C
-  ActorTomba::turnBiasCompute ra=800595DC ...`). Flagging honestly per fleet-workflow.md — a future
-  session should fix `ovhit`'s target selection to be SBS-aware (bind to the non-psx_fallback Game
-  explicitly) rather than "first registrant".
+- **ovhit tooling caveat — RESOLVED 2026-07-10** (was: pre-existing, not introduced here):
+  `PSXPORT_DEBUG=ovhit`'s atexit dump showed 0 hits for ALL EngineOverrides addresses (including
+  already-verified ones like `GraphicsBind::recordArrayInit`) in SBS-full runs. Root cause was
+  TWO-FOLD, not just target binding: (1) `s_ovhitTarget` bound to whichever `Game`'s
+  `EngineOverrides::register_` fired FIRST via a single static pointer — and `main()`
+  (runtime/recomp/boot.cpp) unconditionally constructed+registered a THROWAWAY `Game` before even
+  checking whether to dispatch to the SBS/DualCore/Selftest harness (each of which builds its own
+  separate Game(s) and registers those separately via `dc_boot_init`), so the throwaway always won
+  the race and its table stayed all-zero forever (never actually driven); (2) several long-verified
+  addresses (PutDrawEnv 0x800815D0, DrawSync 0x80080F6C, renderWalk 0x8003C048, and most of the
+  billboard/sequencer/font/GT3GT4 clusters) are wired ONLY through `engine_set_override_main`/`_a00`
+  (`runtime/recomp/engine_override_thunk.cpp`'s `g_tab`), a COMPLETELY SEPARATE table from
+  `EngineOverrides` — they were never in the table `ovhit` was dumping at all, regardless of which
+  instance it picked. Fixed: (a) `main()` now only registers its own `Game` on the plain no-harness
+  path (right before `game->stub.run(path)`), so a harness run never creates the throwaway
+  registration in the first place; (b) the dump target is a bounded registry of every instance that
+  DID register, picking the non-`psx_fallback` one as primary and its `sbs`-matched peer for a
+  substrate-parity column (`A=<hits> B(gen)=<count>`); (c) `engine_override_thunk`'s own dump
+  merged into the SAME `ovhit` channel so g_tab-only addresses show up too. Verified: SBS-full run
+  with `PSXPORT_DEBUG=ovhit PSXPORT_SBS_EXIT_FRAME=3000` now prints `EngineOverrides primary = core
+  A / pc_faithful (SBS)` and nonzero `A=` counts for `ActorTomba::turnBiasCompute` (A=2842) and the
+  other 3 addresses from this cluster, plus `0x800815D0 : native=3000 oracle=3000`,
+  `0x80080F6C : native=3029 oracle=3029`, `0x8003C048 : native=2929 oracle=2929` in the g_tab dump.
+  A plain non-SBS session confirms counts still populate (`primary = single`, no B(gen) column).
+  See docs/config.md's `ovhit` section for the full output shape.
 - **Verification**: `PSXPORT_SBS_MODE=full` + `PSXPORT_SBS_AUTONAV=1`, headless: 0 `sbs-div` / 0
   VIOLATION through f6720+ (95s wall-clock window, `PSXPORT_SBS_EXIT_FRAME` clean-exit variant also
   ran 0-diff through f5910+/f6000). Pre-fix (bug 1 present) diverged within ~160 frames every run.

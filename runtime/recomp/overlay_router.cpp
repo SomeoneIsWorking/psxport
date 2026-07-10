@@ -182,6 +182,13 @@ void rec_dispatch(Core* c, uint32_t addr) {
   }
   if (c->game && !c->game->psx_fallback && !c->game->verify.inSubstrateLeg
       && c->game->engine_overrides.run(c, addr)) return;
+  // `ovhit` substrate-parity counter (engine_overrides.h noteSubstrateDispatch): reached whenever
+  // dispatch lands on an address THIS Game's own EngineOverrides table has registered but did NOT
+  // run natively (SBS core B — psx_fallback — never takes the run() branch above, so every one of
+  // its registered addresses funnels through here). Cheap early-reject inside the call; no-op for
+  // the vast majority of addresses that aren't registered at all. Gated on the ovhit channel so it
+  // costs nothing when the channel is off.
+  if (cfg_dbg("ovhit") && c->game) c->game->engine_overrides.noteSubstrateDispatch(addr);
   if (cfg_dbg("recdep")) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
   // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this

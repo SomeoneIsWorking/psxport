@@ -53,15 +53,30 @@ public:
   // that traces an unregistered address is itself a bug). `viaDirect` labels the trace line.
   void traceHit(Core* c, uint32_t addr, bool viaDirect = true);
 
+  // Record a dispatch that reached one of THIS instance's registered addresses via the pure
+  // substrate path (i.e. run() did NOT fire — either this Game is psx_fallback/inSubstrateLeg, or
+  // the override was registered-but-not-taken). Cheap early-reject via the same [mLo,mHi] gate as
+  // run(); silently ignores addresses not in this table (most rec_dispatch targets aren't
+  // registered here at all). This is what lets `ovhit` show substrate-side call-count PARITY for
+  // an SBS core-B instance (whose real mHits stay 0 by design — B never consults run()) against
+  // core A's real override hit count for the same address, without adding any new per-address
+  // instrumentation to the generated code.
+  void noteSubstrateDispatch(uint32_t addr);
+
   // `ovhit` channel (PSXPORT_DEBUG=ovhit): dump per-address hit counts at exit — the definitive
   // "was this override ever reached" answer, cheap enough to run over a full session (a counter
   // bump, no per-hit I/O) unlike the verbose per-hit `dispatch` trace. Counts EVERY hit, via
   // either run() or traceHit(), so a registered-but-never-reached address reads 0 even though the
   // recdep/dispatch channels are individually blind to different subsets of callers (see the class
-  // comment above + docs/findings/tooling.md).
-  void dumpHitCounts() const;
+  // comment above + docs/findings/tooling.md). `peerSubstrate` (optional) is the SBS peer core's
+  // EngineOverrides instance (core B when this is core A) — its noteSubstrateDispatch() counts are
+  // printed alongside as "B(gen)" parity, looked up BY ADDRESS (so the two tables need not
+  // register identically).
+  void dumpHitCounts(const EngineOverrides* peerSubstrate = nullptr) const;
 
   int count() const { return mN; }
+  bool addrAt(int i, uint32_t& outAddr) const { if (i < 0 || i >= mN) return false; outAddr = mAddr[i]; return true; }
+  uint64_t subHitsFor(uint32_t addr) const;
 
 private:
   static constexpr int kMax = 128;
@@ -69,6 +84,7 @@ private:
   const char*      mName[kMax] = {nullptr};
   EngineOverrideFn mFn[kMax]   = {nullptr};
   uint64_t         mHits[kMax] = {0};
+  uint64_t         mSubHits[kMax] = {0};        // substrate-path dispatch count (see noteSubstrateDispatch)
   uint32_t         mLo = 0xFFFFFFFF, mHi = 0;   // [min,max] fast reject gate
   int              mN = 0;
 };
