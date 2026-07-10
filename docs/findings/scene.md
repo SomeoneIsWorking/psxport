@@ -477,6 +477,16 @@
   LESSON (recurring): a native replacing a gen body must mirror (i) return-value v0/v1 dataflow
   per exit — real callers branch on it; (ii) r31 before EVERY call — callees spill it; (iii) the
   exact stream-cursor arithmetic of per-branch inline decoders, not a shared helper's contract.
+- **OPEN — next frontier f735 (after 24c7727)**: watch-cut first-div now 0x801FE8C0..CC (stack):
+  last-writer A pc=80054D14 (native walkStart) ra=8010A990 (from substrate ov_sop_gen_8010A900) vs
+  B pc=80077C40 (attach) ra=8010B4D0 (from substrate ov_sop_gen_8010B498) — the cores run DIFFERENT
+  SOP behavior handlers at the same sp, and the stack bytes name different actor nodes (A spills
+  0x800FB858, B 0x800FBB70). Both handlers are pure substrate; the flip is upstream (behavior-SM
+  state or walk order). walkStart's v0 is NOT consumed at 0x8010A990 (checked — r2 overwritten
+  immediately). Playbook that cracked f289/f328: `PSXPORT_SBS_PREWATCH=0x801FE8C0
+  PSXPORT_SBS_WW_FROMFRAME=734` for the write sequences, then `PSXPORT_MIRROR_VERIFY=<suspect>`
+  (header now prints entry a0-a3). Repro: PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
+  PSXPORT_SBS_WATCH_CUT=1 (headless exits at first div with last-writer map).
 - **OPEN (superseded framing, kept for the probe trail)**: at the f289 store (`sbs watch 800c3c54` + the new
   `[ww-regs]` line), core A and core B are in DIFFERENT PRIM-TYPE BRANCHES of gen_func_8007FDB0
   (`(cmdword>>24)&3`: A=1 at L_8007FF24, B=2 at L_8007FF78) — i.e. the mid-frame CMD-LIST ENTRY for
