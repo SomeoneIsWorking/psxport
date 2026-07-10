@@ -314,4 +314,88 @@ private:
   //   translate into item+0x2C/30/34. Faithful from generated/shard_5.c:8654. Guest frame:
   //   addiu sp,-64; spill r16-r23,r30(scratch, not fp),ra.
   void matrixComposeAttached();
+
+  // ----------------------------------------------------------------------------
+  // 2026-07-10 wide-RE pass — mode-N dispatch table A/B (FUN_80058918/FUN_80058F5C) case-target
+  // cluster 0x80060064-0x80065374 (docs/engine_re.md's "NOT yet triaged" 10-address band). Both
+  // tables pass G (r4) to every case target, so ALL of these read/write G's own fields — but as a
+  // SEPARATE per-case sub-state machine keyed off G+0x6 (0/1/2/3...), distinct from the outer
+  // G+0x5 mode selector that chose which of these got called. Field semantics past G+0x6/G+0x7
+  // (the sub-state counter itself) are NOT derived this pass — offsets only, honestly unnamed.
+  // FAITHFUL DRAFTS, UNWIRED, literal register-level transcription (goto/label-preserving) per
+  // fleet-workflow.md §9. Every rec_dispatch callee target is a still-substrate leaf.
+  // ----------------------------------------------------------------------------
+
+  // caseAreaEntryHook_80065374() — guest FUN_80065374(G unused; frame-only). Table A/B case
+  //   target. Reads NOT G but the current-area-id global DAT_800BF870 and fires exactly one of
+  //   three area-specific one-shot hooks by area id, no-op for any other area:
+  //     area==0 -> rec_dispatch(0x8010AECC)   area==5 -> rec_dispatch(0x80110CB8)
+  //     area==6 -> rec_dispatch(0x80113E3C)   else    -> no-op
+  //   All three targets are outside MAIN.EXE's own 0x80058xxx-0x80066xxx band (0x8010xxxx/
+  //   0x8011xxxx), consistent with per-area overlay entry points. Faithful from
+  //   generated/shard_2.c:7999. Guest frame: addiu sp,-24; spill ra only (no callee-saved regs —
+  //   param in r4 is loaded but never read).
+  void caseAreaEntryHook_80065374();
+
+  // caseArea0EntryHook_800653F4(G) — guest FUN_800653F4(G). Table A/B case target. A 2-state
+  //   sub-FSM on G+0x6: state 0 -> one-shot init (SceneTransition::resetSwap-style clear via
+  //   rec_dispatch(0x80054198) i.e. func_80054198(G), then func_80054D14(G,64,0)), clears G+0x7,
+  //   advances G+0x6 to 1, falls through; state 1 -> every call, if the current-area-id global
+  //   DAT_800BF870 == 0, fires rec_dispatch(0x8010C780)(G) (area-0-specific hook, same overlay
+  //   band as caseAreaEntryHook_80065374's targets) — does NOT itself advance G+0x6 further, so
+  //   (per this function alone) it re-fires every frame while area==0 unless 0x8010C780 changes
+  //   G+0x6 itself (unconfirmed — that callee is still substrate); state >=2 -> no-op.
+  //   Faithful from generated/shard_3.c:16208. Guest frame: addiu sp,-24; spill s0(G),ra.
+  void caseArea0EntryHook_800653F4(uint32_t G);
+
+  // caseModeFsm_800620D0(G) — guest FUN_800620D0(G). Table A/B case target. 4-state sub-FSM on
+  //   G+0x6 (values 0..3) with a 16-bit countdown timer at G+0x40 (offset 64):
+  //     state 0 -> one-shot setup (clear G+0x146/326, resetSwap, func_80054D14(G,225,4), an SFX
+  //       cue func_80074590(57,0,0), timer=30, advance to state 1)
+  //     state 1 -> per-call tick: func_80055D5C(G), timer += 8 written back at G+0x32(50)... NOTE:
+  //       this state's own body ALSO touches G+0x32/0x50 fields via func_8005444C/func_80056C00 —
+  //       not independently confirmed field names, offsets only; on timer (G+0x40, signed 16-bit)
+  //       hitting <=0: if G+0x29(41)==0 clears G+0x5/0x6 (returns FSM to idle) else calls
+  //       func_80056D44(G,0); otherwise leaves state unchanged.
+  //     state 2 (from table dispatch value 2, label L_800621E4) -> ANOTHER one-shot setup variant
+  //       (clears byte at 0x800BF80E(-2034 off 0x800C0000), same resetSwap/func_80054D14/cue
+  //       sequence with DIFFERENT operand (225,4 reused) then timer=30, G+0x6++) — note this
+  //       branch is reached when G+0x6==2 per the case-target dispatch value 3 (see cpp for the
+  //       exact branch-vs-label mapping, preserved literally from gen).
+  //     state 3 -> per-call countdown at G+0x40 only; on it hitting exactly 0, writes G+0(byte at
+  //       -2034) = 1, sets G+0x4=4, G+0x5=32, clears G+0x6/0x7 (re-idles).
+  //   Faithful from generated/shard_4.c:8288. Guest frame: addiu sp,-32; spill s0(G),s1,ra.
+  void caseModeFsm_800620D0(uint32_t G);
+
+  // caseModeFsm_80061A7C(G) — guest FUN_80061A7C(G). Table A/B case target. Same G+0x6 sub-FSM
+  //   shape as caseModeFsm_800620D0 (states 0..3, timer G+0x40) but with a companion 16-bit field
+  //   at G+0x42(66) used as a secondary sub-timer/flag in states 2/3, plus a DAT_800BF87B(123)/
+  //   DAT_800BF86A(14)-ish global-table decrement gated on G+0x42 bit0 in state 2's tail, and a
+  //   direct re-entrant self-write at the end (writes G+0x0=3, G+0x172(370)=20, G+0x5/6/7=0, plus
+  //   clearing byte 0x800BF7D9(-2039)) when both timers hit specific end conditions. Field
+  //   semantics past the state byte are NOT derived this pass. Faithful from
+  //   generated/shard_2.c:7732. Guest frame: addiu sp,-24; spill s0(G),ra.
+  void caseModeFsm_80061A7C(uint32_t G);
+
+  // caseModeFsm_80060064(G) — guest FUN_80060064(G). Table A/B case target. A DIFFERENT-shaped
+  //   sub-FSM: outer switch on G+0x6 in {0,1,else}; state 0 branches AGAIN on G+0x7 in {0,1,else}:
+  //     G+0x6==0,G+0x7==0 -> one-shot init (clear G+0x145/326, an animation-ish call
+  //       func_80055E28(G,1), func_80055D5C(G), func_80054D14(G,22,3), advance G+0x7)
+  //     G+0x6==0,G+0x7==1 -> func_80055E28(G,1)/func_80055D5C(G)/func_80076D68(G) (this last one
+  //       is ActorTomba::frameTick's own leaf per its header comment — return value compared
+  //       against G+0x7's PRE-increment value) then, if they match, a big committing block:
+  //       clears G+0x7, sets G+0x145=(the matched value), G+0x50(80)=0, advances G+0x6, fires two
+  //       SFX cues func_80074590(15,0,0)/func_80074590(37,0,0), func_80054D14(G,18,4),
+  //       func_800538E0(G,G+44,0), func_80055F48(G,0), func_80055844(G) — then branches on that
+  //       LAST call's return value to adjust G+0x4A(74) by -1408 or reload it from
+  //       byte@G+0x165(357), finishing with a signed-divide-by-4-ish reshape of G+0x4A
+  //       (`x + (x<<16>>18)`, i.e. `x + x/4` on the sign-extended 16-bit value).
+  //     G+0x6==1 -> func_80055E28(G,1), func_80055FBC(G,byte@G+0x14A(330)), func_80056B48(G,1),
+  //       func_80055D5C(G), func_80076D68(G); compares result to G+0x145(325): if ==2, calls
+  //       func_800574E0(G,0) else func_800574E0(G,17), then func_80057C08(G,1-or-0).
+  //   ALL paths tail-call func_800551C4(G) unconditionally before return (label L_8006024C is a
+  //   shared tail every branch funnels through). Field semantics past the state bytes NOT derived
+  //   this pass. Faithful from generated/shard_3.c:15659. Guest frame: addiu sp,-32; spill
+  //   s0(G),s1,ra.
+  void caseModeFsm_80060064(uint32_t G);
 };

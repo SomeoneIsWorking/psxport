@@ -1771,3 +1771,525 @@ L_800588A4:
   c->r[16] = c->mem_r32(c->r[29] + 16);
   c->r[29] = sp0;
 }
+
+// ----------------------------------------------------------------------------
+// 2026-07-10 wide-RE pass — mode-N dispatch table A/B case-target cluster
+// 0x80060064-0x80065374. See actor_tomba.h banner for the shared caveats (G+0x6 sub-FSM,
+// field semantics past the state byte NOT derived). Literal register-level transcriptions.
+// ----------------------------------------------------------------------------
+
+void ActorTomba::caseAreaEntryHook_80065374() {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 24;
+  c->r[2] = (uint32_t)32780u << 16;
+  c->r[3] = (uint32_t)c->mem_r8(c->r[2] + (uint32_t)-1936);   // DAT_800BF870 (current area id)
+  c->r[2] = c->r[0] + 5u;
+  c->mem_w32(c->r[29] + 16, c->r[31]);
+  if (c->r[3] == c->r[2]) goto L_800653CC;                    // area==5
+  c->r[2] = (uint32_t)((int32_t)c->r[3] < 6);
+  if (c->r[2] == c->r[0]) goto L_800653A8;                    // area>=6
+  if (c->r[3] == c->r[0]) goto L_800653BC;                    // area==0
+  goto L_800653E4;                                            // area in 1..4: no-op
+L_800653A8:
+  c->r[2] = c->r[0] + 6u;
+  if (c->r[3] == c->r[2]) goto L_800653DC;                    // area==6
+  goto L_800653E4;                                            // area>6: no-op
+L_800653BC:
+  c->r[31] = 0x800653C4u;
+  rec_dispatch(c, 0x8010AECCu);                                // still-substrate area-0 hook — un-triaged
+  goto L_800653E4;
+L_800653CC:
+  c->r[31] = 0x800653D4u;
+  rec_dispatch(c, 0x80110CB8u);                                // still-substrate area-5 hook — un-triaged
+  goto L_800653E4;
+L_800653DC:
+  c->r[31] = 0x800653E4u;
+  rec_dispatch(c, 0x80113E3Cu);                                // still-substrate area-6 hook — un-triaged
+L_800653E4:
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+void ActorTomba::caseArea0EntryHook_800653F4(uint32_t G) {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 24;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = G + c->r[0];
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 6u);                // G+0x6 (sub-state)
+  c->r[2] = c->r[0] + 1u;
+  if (c->r[3] == c->r[0]) goto L_80065424;                     // state 0: init
+  {
+    const uint32_t r2_state1 = (uint32_t)32780u << 16;
+    if (c->r[3] == c->r[2]) { c->r[2] = r2_state1; goto L_80065450; }  // state 1: skip init
+  }
+  goto L_80065468;                                             // state >=2: no-op
+L_80065424:
+  c->r[31] = 0x8006542Cu;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80054198u);                                // func_80054198(G) — SceneTransition-style resetSwap, still-substrate
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 64u;
+  c->r[31] = 0x8006543Cu;
+  c->r[6] = c->r[0] + c->r[0];
+  rec_dispatch(c, 0x80054D14u);                                // func_80054D14(G,64,0) — still-substrate, un-triaged
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+  c->mem_w8(c->r[16] + 7u, (uint8_t)c->r[0]);                  // G+0x7 = 0
+  c->r[2] = c->r[2] + 1u;
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[2]);                  // G+0x6++ (0 -> 1)
+  c->r[2] = (uint32_t)32780u << 16;
+L_80065450:
+  c->r[2] = (uint32_t)c->mem_r8(c->r[2] + (uint32_t)-1936);    // DAT_800BF870 (current area id)
+  if (c->r[2] != c->r[0]) goto L_80065468;                     // area != 0: skip
+  c->r[31] = 0x80065468u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x8010C780u);                                // still-substrate area-0 hook — un-triaged
+L_80065468:
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+void ActorTomba::caseModeFsm_800620D0(uint32_t G) {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = G + c->r[0];
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+  c->r[31] = 0x800620E8u;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  rec_dispatch(c, 0x80076D68u);                                // still-substrate leaf FUN_80076D68(G) — un-triaged (ActorTomba::frameTick uses the same addr as a leaf; here reached as a plain substrate call)
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 6u);                 // G+0x6 (sub-state)
+  c->r[17] = c->r[0] + 1u;
+  if (c->r[3] == c->r[17]) goto L_80062178;                     // state 1
+  {
+    const bool lt2 = ((int32_t)c->r[3] < 2);
+    if (!lt2) goto L_80062110;                                  // state >=2
+  }
+  c->r[4] = c->r[16] + c->r[0];
+  if (c->r[3] == c->r[0]) goto L_8006212C;                      // state 0
+  goto L_80062278;                                               // unreachable in practice (state<2, !=0, !=1 impossible for uint8) — kept for fidelity
+L_80062110:
+  {
+    const uint32_t two = c->r[0] + 2u;
+    if (c->r[3] == two) goto L_800621E4;                        // state 2
+  }
+  {
+    const uint32_t three = c->r[0] + 3u;
+    if (c->r[3] == three) goto L_80062238;                      // state 3
+  }
+  goto L_80062278;                                                // state >3: no-op
+L_8006212C:
+  c->r[31] = 0x80062134u;
+  c->mem_w8(c->r[16] + 326u, (uint8_t)c->r[0]);
+  rec_dispatch(c, 0x80053D90u);                                  // still-substrate leaf — un-triaged
+  c->r[31] = 0x8006213Cu;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80054198u);                                  // func_80054198(G)
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 225u;
+  c->r[31] = 0x8006214Cu;
+  c->r[6] = c->r[0] + 4u;
+  rec_dispatch(c, 0x80054D14u);                                  // func_80054D14(G,225,4)
+  c->r[4] = c->r[0] + 57u;
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[31] = 0x8006215Cu;
+  c->r[6] = c->r[5] + c->r[0];
+  rec_dispatch(c, 0x80074590u);                                  // SFX/cue trigger(57,0,0)
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+  c->r[3] = c->r[0] + 30u;
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[3]);                 // G+0x40 (timer) = 30
+  c->r[2] = c->r[2] + 1u;
+  c->r[31] = 0x80062178u;
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[2]);                    // G+0x6++
+  rec_dispatch(c, 0x800551C4u);                                  // still-substrate leaf — un-triaged
+L_80062178:
+  c->r[31] = 0x80062180u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80055D5Cu);                                  // still-substrate leaf(G) — un-triaged
+  c->r[2] = (uint32_t)c->mem_r16(c->r[16] + 50u);
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[2] = c->r[2] + 8u;
+  c->r[31] = 0x80062194u;
+  c->mem_w16(c->r[16] + 50u, (uint16_t)c->r[2]);                 // G+0x32 += 8
+  rec_dispatch(c, 0x8005444Cu);                                  // still-substrate leaf(G) — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[31] = 0x800621A0u;
+  c->r[5] = c->r[0] + 1u;
+  rec_dispatch(c, 0x80056C00u);                                  // still-substrate leaf(G,1) — un-triaged
+  {
+    const int32_t timer_s = (int32_t)(int16_t)c->mem_r16(c->r[16] + 64u);
+    const uint32_t timer_u = (uint32_t)c->mem_r16(c->r[16] + 64u);
+    c->r[2] = (uint32_t)timer_s;
+    c->r[3] = timer_u;
+    if (c->r[2] != c->r[0]) { c->r[2] = c->r[3] - 1u; goto L_800621DC; }  // timer != 0: decrement, store, done
+  }
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 41u);                 // G+0x29
+  c->r[4] = c->r[16] + c->r[0];
+  if (c->r[2] == c->r[0]) goto L_800621CC;                       // G+0x29 == 0
+  c->mem_w8(c->r[16] + 5u, (uint8_t)c->r[0]);                    // G+0x5 = 0 (re-idle)
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[0]);                    // G+0x6 = 0
+  goto L_80062278;
+L_800621CC:
+  c->r[31] = 0x800621D4u;
+  c->r[5] = c->r[0] + c->r[0];
+  rec_dispatch(c, 0x80056D44u);                                  // still-substrate leaf(G,0) — un-triaged
+  goto L_80062278;
+L_800621DC:
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[2]);                 // G+0x40 -= 1
+  goto L_80062278;
+L_800621E4:
+  c->r[4] = c->r[16] + c->r[0];
+  {
+    const uint32_t base = (uint32_t)32780u << 16;
+    c->mem_w8(base + (uint32_t)-2034, (uint8_t)c->r[0]);         // clear byte @ 0x800BF80E
+  }
+  c->r[31] = 0x800621F8u;
+  c->mem_w8(c->r[16] + 326u, (uint8_t)c->r[0]);
+  rec_dispatch(c, 0x80053D90u);                                  // still-substrate leaf — un-triaged
+  c->r[31] = 0x80062200u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80054198u);                                  // func_80054198(G)
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 225u;
+  c->r[31] = 0x80062210u;
+  c->r[6] = c->r[0] + 4u;
+  rec_dispatch(c, 0x80054D14u);                                  // func_80054D14(G,225,4)
+  c->r[4] = c->r[0] + 57u;
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[31] = 0x80062220u;
+  c->r[6] = c->r[5] + c->r[0];
+  rec_dispatch(c, 0x80074590u);                                  // SFX/cue trigger(57,0,0)
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+  c->r[3] = c->r[0] + 30u;
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[3]);                 // G+0x40 (timer) = 30
+  c->r[2] = c->r[2] + 1u;
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[2]);                    // G+0x6++ (2 -> 3)
+  goto L_80062278;
+L_80062238:
+  c->r[31] = 0x80062240u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x800551C4u);                                  // still-substrate leaf — un-triaged
+  c->r[2] = (uint32_t)c->mem_r16(c->r[16] + 64u);
+  c->r[2] = c->r[2] - 1u;
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[2]);                 // G+0x40 -= 1
+  {
+    const uint32_t shifted = c->r[2] << 16;
+    if (shifted != c->r[0]) goto L_80062278;                     // timer != 0: done
+  }
+  {
+    const uint32_t base = (uint32_t)32780u << 16;
+    c->mem_w8(base + (uint32_t)-2034, (uint8_t)c->r[17]);        // byte @ 0x800BF80E = 1 (r17 still holds 1 from entry)
+  }
+  c->r[2] = c->r[0] + 4u;
+  c->mem_w8(c->r[16] + 4u, (uint8_t)c->r[2]);                    // G+0x4 = 4
+  c->r[2] = c->r[0] + 32u;
+  c->mem_w8(c->r[16] + 5u, (uint8_t)c->r[2]);                    // G+0x5 = 32
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[0]);                    // G+0x6 = 0
+  c->mem_w8(c->r[16] + 7u, (uint8_t)c->r[0]);                    // G+0x7 = 0
+L_80062278:
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+void ActorTomba::caseModeFsm_80061A7C(uint32_t G) {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 24;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+  c->r[31] = 0x80061A90u;
+  c->r[16] = G + c->r[0];
+  rec_dispatch(c, 0x80076D68u);                                  // still-substrate leaf(G) — un-triaged
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 6u);                  // G+0x6 (sub-state)
+  c->r[5] = c->r[0] + 1u;
+  if (c->r[3] == c->r[5]) goto L_80061B04;                       // state 1
+  {
+    const bool lt2 = ((int32_t)c->r[3] < 2);
+    if (!lt2) goto L_80061AB8;                                    // state >=2
+  }
+  c->r[4] = c->r[16] + c->r[0];
+  if (c->r[3] == c->r[0]) goto L_80061AD4;                        // state 0
+  goto L_80061C54;                                                 // unreachable (see caseModeFsm_800620D0)
+L_80061AB8:
+  {
+    const uint32_t two = c->r[0] + 2u;
+    if (c->r[3] == two) goto L_80061B6C;                          // state 2
+  }
+  {
+    const uint32_t three = c->r[0] + 3u;
+    if (c->r[3] == three) goto L_80061BAC;                        // state 3
+  }
+  goto L_80061C54;                                                  // state >3: no-op
+L_80061AD4:
+  {
+    const uint32_t base = (uint32_t)32780u << 16;
+    c->mem_w8(base + (uint32_t)-2039, (uint8_t)c->r[5]);           // byte @ 0x800BF7D9 = 1
+  }
+  c->r[2] = c->r[0] + 7u;
+  c->r[31] = 0x80061AE8u;
+  c->mem_w8(c->r[16] + 0u, (uint8_t)c->r[2]);                      // G+0x0 = 7
+  rec_dispatch(c, 0x80054198u);                                    // func_80054198(G)
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 114u;
+  c->r[31] = 0x80061AF8u;
+  c->r[6] = c->r[0] + 4u;
+  rec_dispatch(c, 0x80054D14u);                                    // func_80054D14(G,114,4)
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+  c->r[3] = c->r[0] + 25u;
+  goto L_80061B9C;
+L_80061B04:
+  c->r[2] = (uint32_t)c->mem_r16(c->r[16] + 64u);
+  c->r[2] = c->r[2] - 1u;
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[2]);                   // G+0x40 (timer) -= 1
+  {
+    const uint32_t shifted = c->r[2] << 16;
+    c->r[4] = c->r[0] + 6u;
+    if (shifted != c->r[0]) goto L_80061C54;                       // timer != 0: done
+  }
+  c->r[31] = 0x80061B28u;
+  c->r[5] = c->r[0] + c->r[0];
+  rec_dispatch(c, 0x8002F514u);                                    // still-substrate leaf(6,0) — un-triaged
+  c->r[4] = c->r[0] + 55u;
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[31] = 0x80061B38u;
+  c->r[6] = c->r[5] + c->r[0];
+  rec_dispatch(c, 0x80074590u);                                    // SFX/cue trigger(55,0,0)
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+  c->r[3] = c->r[0] + 10u;
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[3]);                   // G+0x40 (timer) = 10
+  c->r[2] = c->r[2] + 1u;
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[2]);                      // G+0x6++ (1 -> 2)
+  {
+    const uint32_t idx = ((uint32_t)c->mem_r16(c->r[16] + 382u)) & 15u;   // G+0x17E & 0xF
+    const uint32_t tbl = ((uint32_t)32778u << 16) + 17748u;
+    c->r[2] = (uint32_t)c->mem_r8(tbl + idx - 4u);                  // .rodata lookup table
+  }
+  c->mem_w16(c->r[16] + 66u, (uint16_t)c->r[2]);                    // G+0x42 = table[idx]
+  goto L_80061C54;
+L_80061B6C:
+  c->r[2] = (uint32_t)c->mem_r16(c->r[16] + 64u);
+  c->r[2] = c->r[2] - 1u;
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[2]);                    // G+0x40 (timer) -= 1
+  {
+    const uint32_t shifted = c->r[2] << 16;
+    if (shifted != c->r[0]) goto L_80061C54;                        // timer != 0: done
+  }
+  c->r[31] = 0x80061B90u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x800248D0u);                                     // still-substrate leaf(G) — un-triaged, result in r2
+  if (c->r[2] == c->r[0]) { c->r[3] = c->r[0] + 70u; goto L_80061C18; }
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+L_80061B9C:
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[3]);                    // G+0x40 (timer) = r3 (25 or the fallthrough value)
+  c->r[2] = c->r[2] + 1u;
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[2]);                       // G+0x6++
+  goto L_80061C54;
+L_80061BAC:
+  {
+    const uint32_t bit0 = ((uint32_t)c->mem_r16(c->r[16] + 66u)) & 1u;  // G+0x42 bit 0
+    c->r[2] = bit0;
+  }
+  if (c->r[2] == c->r[0]) goto L_80061BE4;
+  {
+    const uint32_t base = ((uint32_t)32780u << 16) + (uint32_t)-1936; // 0x800BF870
+    c->r[2] = (uint32_t)c->mem_r8(base + 123u);                      // byte @ 0x800BF8EB
+    if (c->r[2] != c->r[0]) goto L_80061BE4;
+    c->r[2] = (uint32_t)c->mem_r8(base + 14u);                       // byte @ 0x800BF87E
+    c->r[2] = c->r[2] - 1u;
+    c->mem_w8(base + 14u, (uint8_t)c->r[2]);                         // byte @ 0x800BF87E -= 1
+  }
+L_80061BE4:
+  c->r[2] = (uint32_t)(int32_t)(int16_t)c->mem_r16(c->r[16] + 66u);
+  c->r[3] = (uint32_t)c->mem_r16(c->r[16] + 66u);
+  c->r[2] = c->r[3] - 1u;                                           // delay-slot value, computed always
+  if ((int32_t)(int16_t)c->mem_r16(c->r[16] + 66u) == 0) goto L_80061BF8;   // v66==0: skip write-back
+  c->mem_w16(c->r[16] + 66u, (uint16_t)c->r[2]);                    // v66 -= 1
+L_80061BF8:
+  c->r[2] = (uint32_t)(int32_t)(int16_t)c->mem_r16(c->r[16] + 64u);
+  c->r[3] = (uint32_t)c->mem_r16(c->r[16] + 64u);
+  c->r[2] = c->r[3] - 1u;                                           // delay-slot value, computed always
+  if ((int32_t)(int16_t)c->mem_r16(c->r[16] + 64u) != 0) goto L_80061C50;   // v64!=0: store decrement, done
+  c->r[2] = (uint32_t)(int32_t)(int16_t)c->mem_r16(c->r[16] + 66u);
+  if ((int32_t)(int16_t)c->mem_r16(c->r[16] + 66u) != 0) goto L_80061C54;   // v66(current) != 0: no-op
+L_80061C18:
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 2u;
+  c->r[6] = c->r[0] + 5u;
+  c->r[2] = c->r[0] + 3u;
+  c->mem_w8(c->r[4] + 0u, (uint8_t)c->r[2]);                        // G+0x0 = 3
+  c->r[2] = c->r[0] + 20u;
+  c->mem_w16(c->r[4] + 370u, (uint16_t)c->r[2]);                    // G+0x172 = 20
+  c->mem_w8(c->r[4] + 5u, (uint8_t)c->r[0]);                        // G+0x5 = 0
+  c->mem_w8(c->r[4] + 6u, (uint8_t)c->r[0]);                        // G+0x6 = 0
+  c->r[31] = 0x80061C44u;
+  c->mem_w8(c->r[4] + 7u, (uint8_t)c->r[0]);                        // G+0x7 = 0
+  rec_dispatch(c, 0x80054D14u);                                     // func_80054D14(G,2,5)
+  {
+    const uint32_t base = (uint32_t)32780u << 16;
+    c->mem_w8(base + (uint32_t)-2039, (uint8_t)c->r[0]);            // byte @ 0x800BF7D9 = 0
+  }
+  goto L_80061C54;
+L_80061C50:
+  c->mem_w16(c->r[16] + 64u, (uint16_t)c->r[2]);
+L_80061C54:
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}
+
+void ActorTomba::caseModeFsm_80060064(uint32_t G) {
+  Core* c = core;
+  const uint32_t sp0 = c->r[29];
+  c->r[29] = sp0 - 32;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = G + c->r[0];
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 6u);                  // G+0x6 (outer sub-state)
+  c->r[2] = c->r[0] + 1u;
+  if (c->r[3] == c->r[0]) goto L_80060098;                       // G+0x6 == 0
+  c->r[4] = c->r[16] + c->r[0];
+  if (c->r[3] == c->r[2]) goto L_800601D8;                       // G+0x6 == 1
+  goto L_8006024C;                                                // G+0x6 >=2: skip straight to tail
+L_80060098:
+  c->r[17] = (uint32_t)c->mem_r8(c->r[16] + 7u);                 // G+0x7 (inner sub-state)
+  c->r[4] = c->r[16] + c->r[0];
+  if (c->r[17] == c->r[0]) goto L_800600B8;                      // G+0x7 == 0
+  if (c->r[17] == c->r[2]) goto L_80060100;                      // G+0x7 == 1
+  goto L_8006024C;                                                 // G+0x7 >=2: skip straight to tail
+L_800600B8:
+  c->mem_w8(c->r[16] + 325u, (uint8_t)c->r[0]);                   // G+0x145 = 0
+  c->r[31] = 0x800600C4u;
+  c->mem_w8(c->r[16] + 326u, (uint8_t)c->r[0]);                   // G+0x146 = 0
+  rec_dispatch(c, 0x80053D90u);                                   // still-substrate leaf — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 1u;
+  c->r[31] = 0x800600D4u;
+  c->mem_w16(c->r[16] + 88u, 0);                                  // G+0x58 = 0
+  rec_dispatch(c, 0x80055E28u);                                   // still-substrate leaf(G,1) — un-triaged
+  c->r[31] = 0x800600DCu;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80055D5Cu);                                   // still-substrate leaf(G) — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 22u;
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 7u);
+  c->r[6] = c->r[0] + 3u;
+  c->r[2] = c->r[2] + 1u;
+  c->r[31] = 0x800600F8u;
+  c->mem_w8(c->r[16] + 7u, (uint8_t)c->r[2]);                     // G+0x7++
+  rec_dispatch(c, 0x80054D14u);                                   // func_80054D14(G,22,3)
+  goto L_8006024C;
+L_80060100:
+  c->r[31] = 0x80060108u;
+  c->r[5] = c->r[0] + 1u;
+  rec_dispatch(c, 0x80055E28u);                                   // still-substrate leaf(G,1) — un-triaged
+  c->r[31] = 0x80060110u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80055D5Cu);                                   // still-substrate leaf(G) — un-triaged
+  c->r[31] = 0x80060118u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80076D68u);                                   // still-substrate leaf(G) — un-triaged, result in r2
+  c->r[3] = c->r[2] + c->r[0];
+  c->r[4] = c->r[0] + 15u;
+  if (c->r[3] != c->r[17]) goto L_8006024C;                       // result != G+0x7's pre-fetch value: bail to tail
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 6u);
+  c->r[6] = c->r[5] + c->r[0];
+  c->mem_w8(c->r[16] + 7u, (uint8_t)c->r[0]);                     // G+0x7 = 0
+  c->mem_w8(c->r[16] + 325u, (uint8_t)c->r[3]);                   // G+0x145 = matched value
+  c->mem_w16(c->r[16] + 80u, 0);                                  // G+0x50 = 0
+  c->r[2] = c->r[2] + 1u;
+  c->r[31] = 0x80060148u;
+  c->mem_w8(c->r[16] + 6u, (uint8_t)c->r[2]);                     // G+0x6++
+  rec_dispatch(c, 0x80074590u);                                   // still-substrate leaf: r4 is LEFTOVER=G (not reloaded since the func_80076D68 call above), r5=0, r6=0 — matches gen exactly; not necessarily the same (cueId,0,0) signature as the other func_80074590 call sites in this file
+  c->r[4] = c->r[0] + 37u;
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[31] = 0x80060158u;
+  c->r[6] = c->r[5] + c->r[0];
+  rec_dispatch(c, 0x80074590u);                                   // SFX/cue trigger(37,0,0)
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 18u;
+  c->r[31] = 0x80060168u;
+  c->r[6] = c->r[0] + 4u;
+  rec_dispatch(c, 0x80054D14u);                                   // func_80054D14(G,18,4)
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[16] + 44u;
+  c->r[31] = 0x80060178u;
+  c->r[6] = c->r[0] + c->r[0];
+  rec_dispatch(c, 0x800538E0u);                                   // still-substrate leaf(G,G+44,0) — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[31] = 0x80060184u;
+  c->r[5] = c->r[0] + c->r[0];
+  rec_dispatch(c, 0x80055F48u);                                   // still-substrate leaf(G,0) — un-triaged
+  c->r[31] = 0x8006018Cu;
+  rec_dispatch(c, 0x80055844u);                                   // ActorMeleeEngage::doIt's own leaf — still substrate here, result in r2
+  if (c->r[2] == c->r[0]) { c->r[2] = c->r[0] + (uint32_t)-10240; goto L_800601D0; }
+  c->r[2] = (uint32_t)c->mem_r8(c->r[16] + 357u);                 // G+0x165
+  if (c->r[2] == c->r[0]) goto L_800601B4;
+  c->r[2] = (uint32_t)c->mem_r16(c->r[16] + 74u);                 // G+0x4A
+  c->r[2] = c->r[2] - 1408u;
+  c->mem_w16(c->r[16] + 74u, (uint16_t)c->r[2]);                  // G+0x4A -= 1408
+L_800601B4:
+  c->r[3] = (uint32_t)c->mem_r16(c->r[16] + 74u);                 // G+0x4A
+  c->r[2] = c->r[3] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 18);                   // sign-extended G+0x4A / 4
+  c->r[3] = c->r[3] + c->r[2];                                    // G+0x4A + G+0x4A/4
+  c->mem_w16(c->r[16] + 74u, (uint16_t)c->r[3]);
+  goto L_8006024C;
+L_800601D0:
+  c->mem_w16(c->r[16] + 74u, (uint16_t)c->r[2]);                  // G+0x4A = -10240 (0xD800)
+  goto L_8006024C;
+L_800601D8:
+  c->r[31] = 0x800601E0u;
+  c->r[5] = c->r[0] + 1u;
+  rec_dispatch(c, 0x80055E28u);                                   // still-substrate leaf(G,1) — un-triaged
+  c->r[5] = (uint32_t)c->mem_r8(c->r[16] + 330u);                 // G+0x14A
+  c->r[31] = 0x800601ECu;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80055FBCu);                                   // still-substrate leaf(G, byte@G+0x14A) — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[31] = 0x800601F8u;
+  c->r[5] = c->r[0] + 1u;
+  rec_dispatch(c, 0x80056B48u);                                   // still-substrate leaf(G,1) — un-triaged (same addr as ActorTomba::velocityIntegrate's guest FUN)
+  c->r[31] = 0x80060200u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80055D5Cu);                                   // still-substrate leaf(G) — un-triaged
+  c->r[31] = 0x80060208u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x80076D68u);                                   // still-substrate leaf(G) — un-triaged
+  c->r[3] = (uint32_t)c->mem_r8(c->r[16] + 325u);                 // G+0x145
+  c->r[2] = c->r[0] + 2u;
+  if (c->r[3] != c->r[2]) goto L_80060230;                        // G+0x145 != 2
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[31] = 0x80060224u;
+  c->r[5] = c->r[0] + c->r[0];
+  rec_dispatch(c, 0x800574E0u);                                   // still-substrate leaf(G,0) — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + c->r[0];
+  goto L_80060244;
+L_80060230:
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[31] = 0x8006023Cu;
+  c->r[5] = c->r[0] + 17u;
+  rec_dispatch(c, 0x800574E0u);                                   // still-substrate leaf(G,17) — un-triaged
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[5] = c->r[0] + 1u;
+L_80060244:
+  c->r[31] = 0x8006024Cu;
+  rec_dispatch(c, 0x80057C08u);                                   // still-substrate leaf(G, 0-or-1) — un-triaged
+L_8006024C:
+  c->r[31] = 0x80060254u;
+  c->r[4] = c->r[16] + c->r[0];
+  rec_dispatch(c, 0x800551C4u);                                   // still-substrate leaf(G) — un-triaged, shared tail every branch funnels through
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] = sp0;
+}

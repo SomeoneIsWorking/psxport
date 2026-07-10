@@ -3615,3 +3615,85 @@ EC70/EF48`) are ALREADY documented as "variant A/B/C(/D) template families" in t
 independent full RE. The `60064/60C60/61A7C/61C64/620D0/6228C/624B4/6506C/65374/653F4` cluster
 (10 addresses) is NOT yet triaged anywhere in this file — a concrete next-wave target once the
 known template families are down.
+
+### 2026-07-10 wide-RE pass — the `60064-65374` cluster triaged: 6 drafted, 4 mapped (still deep)
+
+All 10 addresses confirmed unowned (`tools/codemap.py --addr`, this session) and, per a
+cross-shard grep, appear ONLY as the dispatcher registration in `generated/shard_disp.c` — no
+other emitted C references them by constant, consistent with being reached exclusively through
+table A/B's runtime `.rodata` case-target arrays (never a compiled call site). Every one of the
+10 receives **G in r4** — same param table A/B passes into all its case targets — so all 10 read/
+write G's own fields. Sorted by gen-C body size (`generated/shard_*.c` line count):
+
+| addr | lines | shard:line | status |
+|---|---|---|---|
+| 0x80065374 | 29 | shard_2.c:7999 | **DRAFTED** `ActorTomba::caseAreaEntryHook_80065374` |
+| 0x800653F4 | 31 | shard_3.c:16208 | **DRAFTED** `ActorTomba::caseArea0EntryHook_800653F4` |
+| 0x800620D0 | 104 | shard_4.c:8288 | **DRAFTED** `ActorTomba::caseModeFsm_800620D0` |
+| 0x80061A7C | 109 | shard_2.c:7732 | **DRAFTED** `ActorTomba::caseModeFsm_80061A7C` |
+| 0x80060064 | 120 | shard_3.c:15659 | **DRAFTED** `ActorTomba::caseModeFsm_80060064` |
+| 0x8006228C | 127 | shard_5.c:9664 | MAPPED only (see below) — same G+0x6 FSM shape as the 4 above, not transcribed this pass |
+| 0x800624B4 | 144 | shard_6.c:9622 | MAPPED only — itself a NESTED dispatch table (see below) |
+| 0x8006506C | 175 | shard_1.c:12103 | MAPPED only — same G+0x6 FSM shape, larger body, not transcribed |
+| 0x80061C64 | 253 | shard_3.c:15781 | MAPPED only — same G+0x6 FSM shape, larger body, not transcribed |
+| 0x80060C60 | 792 | shard_1.c:10924 | MAPPED only — itself a NESTED dispatch table (see below), too large for this pass |
+
+**Drafted (6 of 10)** — see `game/player/actor_tomba.h`/`.cpp` (2026-07-10 banner) for full
+per-function doc comments. All are FAITHFUL DRAFTS, UNWIRED, literal register-level
+transcriptions (goto/label-preserving) per fleet-workflow.md §9 — flagged UNVERIFIED, needs a
+line-by-line re-diff against `generated/shard_*.c` before wiring (the §9 track record is
+multiple bugs per draft even after self-check; this pass already caught and fixed one inverted
+branch polarity in `caseModeFsm_80061A7C`'s G+0x42 decrement during drafting — grep the .cpp for
+"matches gen" comments marking the spots that looked wrong at first glance but are correct, and
+"NOTE"/"unreachable" comments marking spots worth a second look).
+
+Common shape: every drafted function starts by reading a per-G sub-state byte at **G+0x6**
+(0/1/2/3...) — a DIFFERENT byte from the outer G+0x5 mode selector that table A/B itself uses to
+choose which of these 10 (of ~50-55) case targets to call. So the overall structure is a 2-level
+state machine: G+0x5 selects WHICH mode (owned by table A/B, not this pass), G+0x6 sequences
+that mode's OWN internal steps across frames (owned by these drafts). A 16-bit countdown timer
+at G+0x40 (and, in `caseModeFsm_80061A7C`, a companion at G+0x42) gates state advancement in
+several of them. Field semantics past the state byte itself (G+0x145/146/165/14A/29/357/etc,
+G+0x4A, G+0x32/0x50, G+0x172) are **NOT derived this pass** — offsets only, no confidence claim
+on game-visible meaning (quicksand/underwater/ladder/etc — deliberately not guessed).
+
+**Mapped only (4 of 10) — NOT drafted, next targets**:
+
+- **`0x8006228C`** (127L, shard_5.c:9664) — same G+0x6 4-state shape as the drafted cluster
+  (states 0-3 gated by the same `< 2` / `==2` / `==3` branch pattern seen in
+  `caseModeFsm_800620D0`/`caseModeFsm_80061A7C`); state-0 init writes G+0x146=0, resetSwap,
+  `func_80054D14(G,224,4)`, an SFX cue `func_80074590(58,0,0)`, then G+0x167(359)=30, G+0x7=0,
+  G+0x40(64)=7, G+0x42(66)=0, G+0x6++ — a close sibling of the drafted 4, should port fast by
+  diffing against `caseModeFsm_800620D0`.
+- **`0x800624B4`** (144L, shard_6.c:9622) — **NOT a leaf**: after an unconditional 2-byte
+  side-effect write (`G+0x17B(379)=1`, a global byte at `0x80080000+634`=`0x8008027A`=`2`), it
+  gates G+0x6 < 5 and, if true, indexes a **5-entry `.rodata` function-pointer table at
+  0x800163DC** (`32769<<16 + 25628`), landing on ANOTHER internal 5-way `switch` over the loaded
+  address (cases `8006250C/800625D4/800625F8/8006261C/80062678` — all still-substrate, confirmed
+  via the same cross-shard "only in shard_disp.c" grep this pass ran on the outer 10) with a
+  `default: rec_dispatch(c, r2)` catch-all for anything the switch's own reconstruction missed.
+  This is a genuine SECOND dispatch layer (not a flat G+0x6 FSM) — a dedicated follow-up pass
+  should RE the 5-entry table's contents before drafting.
+- **`0x8006506C`** (175L, shard_1.c:12103) — same outer G+0x6 4-state shape (states 0-3, same
+  `<2`/`==2`/`==3` gates) as the drafted cluster; state-0 init is unusually GATED (checks a bit
+  in `mem_r32(G+380) & 0x88200`≈`{0x1088<<16|0x200}` against `0x200` before deciding whether to
+  run the usual resetSwap/func_80054D14/cue sequence at all, vs skipping straight past the
+  `func_80054D14(G,64,3)` call to a `G+0x15C(348)` bit-2 gated branch touching G+0x32(50)+32/
+  0x80(129)-ish fields) — NOT transcribed this pass; larger and more branchy than the 4 drafted.
+- **`0x80060C60`** (792L, shard_1.c:10924) — **NOT a leaf, same shape as `0x800624B4`**: an
+  unconditional side-effect write (global byte `0x80080000+635`=0), then gates G+0x6 < 8 and
+  indexes an **8-entry `.rodata` function-pointer table at 0x800163BC**
+  (`32769<<16 + 25596`), landing on an internal 8-way `switch` (cases `80060CAC/80061010/
+  800611B0/800611D8/800613F0/800614C0/800615C8/80061710` — all still-substrate) plus the same
+  `default: rec_dispatch` catch-all. At 792 lines this is by far the largest of the 10 and is
+  itself the entry point into a THIRD dispatch layer (the 8 case targets are each presumably
+  their own G+0x6-style FSM, unexplored) — explicitly OUT OF SCOPE for a single wide-RE pass,
+  flagged for a dedicated follow-up exactly like table A/B itself was.
+
+**Cross-table observation carried forward**: `0x800624B4` and `0x80060C60` being nested dispatch
+tables (not leaves) means the "~250-function-deep" cascade estimate for table A/B undercounts —
+each of these two alone adds 5 and 8 more still-substrate targets respectively, several of which
+(going by address proximity, e.g. `80061010`/`800611B0` sitting right next to the drafted
+`80061A7C`/`80061C64`) are plausibly MORE case targets of the same outer G+0x6-style shape. A
+follow-up pass should RE the two `.rodata` tables' contents (0x800163DC × 5, 0x800163BC × 8)
+before drafting their case bodies.

@@ -2781,4 +2781,29 @@ themselves are LIVE but dispatch out to substrate for every case body.
   playthrough's autonav coverage since `GPU_QSTAT_STARTED` is never written anywhere in the whole
   recompiled binary, so Enqueue's ring/deferred path — the only caller of Drain — is dead code).
   SBS-full gate: 0-diff through f9690+ (95s autonav window). Next: root-cause the Enqueue residual
-  (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.
+  (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.- **`60064-65374` cluster triaged: 6 drafted, 4 mapped (wide-RE agent, 2026-07-10, RE-ahead-of-
+  frontier — UNWIRED).** Picked up the fresh untriaged cluster flagged by the `0x8005950C` band
+  wave above — the 10 case targets of mode-N dispatch table A/B (`0x80058918`/`0x80058F5C`) at
+  `0x80060064-0x80065374`, all confirmed unowned. Sorted by gen-C body size and drafted the 5
+  smallest plus one more (29-120 lines): `ActorTomba::caseAreaEntryHook_80065374`,
+  `caseArea0EntryHook_800653F4`, `caseModeFsm_800620D0`, `caseModeFsm_80061A7C`,
+  `caseModeFsm_80060064` — all faithful 1:1 literal register-level transcriptions (goto/label-
+  preserving) per fleet-workflow.md §9, new methods on `game/player/actor_tomba.{h,cpp}`. Common
+  shape found: every one of the 10 receives G (same param table A/B passes) and runs its OWN
+  G+0x6 sub-state FSM (distinct from the outer G+0x5 mode selector table A/B itself uses) — a
+  2-level state machine. Field semantics past the state byte (G+0x145/146/165/14A/29/357/4A/32/
+  50/172 etc) NOT derived this pass — offsets only, no game-meaning guessed. Compiles+links clean
+  (`tomba2_port` built via `build2`). The remaining 4 (`0x8006228C` 127L, `0x800624B4` 144L,
+  `0x8006506C` 175L, `0x80061C64` 253L) were MAPPED, not drafted: `0x8006228C` is a close sibling
+  of the drafted 4 (same shape, fast follow); `0x800624B4` and `0x80060C60` (the one already known
+  to be too large) are BOTH themselves nested dispatch tables (5-entry `.rodata` table at
+  0x800163DC and 8-entry at 0x800163BC respectively, gated on G+0x6), not flat FSM leaves — a
+  genuine 3rd dispatch layer under table A/B, undercounting the "~250-function cascade" estimate
+  further; `0x8006506C` has an unusually gated state-0 init not yet transcribed. Full writeup incl.
+  the case-size table and per-function field notes: docs/engine_re.md "2026-07-10 wide-RE pass —
+  the `60064-65374` cluster triaged". UNWIRED and UNVERIFIED per §9 — needs a line-by-line re-diff
+  against `generated/shard_*.c` before wiring (this pass's own drafting already caught and fixed
+  one inverted branch polarity in `caseModeFsm_80061A7C`'s G+0x42 decrement — see the "matches gen"
+  comments in the .cpp). Next: RE the two nested tables' contents, draft `0x8006228C`/`0x8006506C`/
+  `0x80061C64`, then a verify+wire pass on all of it together with `enterOuterState0`/
+  `matrixComposeAttached`.
