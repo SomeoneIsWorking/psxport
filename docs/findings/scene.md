@@ -441,12 +441,23 @@
   (Start-mashing), so none of these divergences could ever trip it. `PSXPORT_SBS_AUTONAV=1` +
   `PSXPORT_SBS_WATCH_CUT=1` (cutscene plays out) is the leg that catches them: 3102 divs before
   these fixes, 922 after — remaining cluster is ONE defect (below).
-- **OPEN — next up**: watch-cut SBS first-div f289 `[packet_pool]`: core A native `Font::glyphEmit`
-  (via Font::drawText, called from the end-of-area text scroller ov_sop_gen_8010C79C) emits a
-  glyph packet that is NOT byte-identical to core B's substrate emitter `gen_func_80078CA8` —
-  prior-packet link differs by 0x60 (extra/missing prim) plus small vertex deltas. Also a f1126
-  stack residual (0x801FE888: A=0x800FB960 B=0x0000000E) — likely another missing mirror in that
-  window. Both reproduce with: `PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
-  PSXPORT_SBS_WATCH_CUT=1`.
+- **RESOLVED (glyph half)**: the f289 `[packet_pool_ptrs]` 0x60 pool-pointer skew was
+  `Font::glyphEmit`'s epilogue restoring `sp = sp0 + 56` where sp0 was already the ENTRY sp — the
+  guest stack leaked UP 0x38 per call (MIRROR_VERIFY=0x80078CA8 caught it at invocation #1: exit
+  sp 801FE980 vs entry 801FE948). Fixed to `sp = sp0`; 2497 invocations now byte-exact.
+- **OPEN — next up (watch-cut SBS still 922 divs at f289)**: with stacks aligned the remaining
+  first-div is an ACTOR VERTEX: `sbs watch 800c3c54` fires in the entity render walk (ra chain
+  0x8003F790/0x8003D07C; Charles 0x800FB960 + effect child 0x800FBB70 on the stack) with A packing
+  vertex (0x116,0x82) vs B (0x113,0x83) — a (3,1)px pose delta, i.e. an anim/orbit phase lead on
+  core A. MIRROR_VERIFY=all through f320 (PSXPORT_MIRROR_VERIFY_CONTINUE=1) flags real non-reg
+  divergences to triage: `Demo::s3SubMachine` 0x80106AC4 writes stack bytes 0x801FE9A8-AD
+  native=F0,64 vs substrate=40/10,6B (real RAM diff, default path), and
+  `Render::gpuDmaQueueEnqueue` 0x80082D04 leaves hi/lo=FFFFFFFF/FFFFFF00 vs 0/0000F000 (callee
+  mult/div not reproduced natively — matters only if a caller reads hi/lo after). Plus ~7k
+  caller-saved-register-only (v0/v1/t) mismatches across 0x80079528/0x80080F6C/0x80081458/
+  sopLiftedSubtick/sopIntroEffectTick/op36/op34/sopBeatAdvanceWalk — likely harness-visible noise
+  but any one whose caller stores the stale reg is a real source; triage next session. Also a
+  f1126 stack residual (0x801FE888: A=0x800FB960 B=0x0000000E). Repro:
+  `PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_WATCH_CUT=1`.
 - **tooling added**: `PSXPORT_SPUBT=<hex SPU reg off>` host backtrace per SPU write; `debug spu`
   logs per-voice pitch/start; wwatch prints exact gpu frame (see config.md).

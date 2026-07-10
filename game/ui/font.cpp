@@ -488,7 +488,10 @@ L_80078F88:
   c->r[2] = c->r[2] << 16;
   c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
   c->r[2] = c->r[2] - c->r[3];              // return value -- caller (drawText) discards it
-  c->r[29] = sp0 + 56u;
+  // sp0 IS the entry sp (saved before the -56 descent); the gen's `sp += 56` operates on the
+  // DESCENDED sp. `sp0 + 56` overshot by 56 every call — the caller's frame slid up 0x38, warping
+  // every subsequent packet/stack byte (MIRROR_VERIFY invocation #1: exit sp 801FE980 vs 801FE948).
+  c->r[29] = sp0;
 }
 
 // ------------------------------------------------------------------------------------------------
