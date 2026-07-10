@@ -664,20 +664,32 @@ static const uint16_t* readback_vram(void) {
     fprintf(stderr, "[gpu_gpu] readback nonzero=%ld/%d\n", nz, VRAM_W * VRAM_H); }
   return p;
 }
+// A ".png" path gets a real PNG (vendored stb, static so no clash with beetle's own copy);
+// anything else keeps the raw P6 PPM. Previously .png paths silently received PPM bytes.
+#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../../vendor/beetle-psx/parallel-psx/stb/stb_image_write.h"
 static void dump_to(const char* path, int sx, int sy, int w, int h,
                     int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
   const uint16_t* vram = readback_vram();
-  FILE* f = fopen(path, "wb"); if (!f) { SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer); return; }
-  fprintf(f, "P6\n%d %d\n255\n", w, h);
+  unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
+  if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer); return; }
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
     uint16_t p = vram[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
     int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, b = ((p >> 10) & 31) << 3;
     if (fade_mode == 1)      { r += fade_r; g += fade_g; b += fade_b; if (r>255)r=255; if (g>255)g=255; if (b>255)b=255; }
     else if (fade_mode == 2) { r -= fade_r; g -= fade_g; b -= fade_b; if (r<0)r=0; if (g<0)g=0; if (b<0)b=0; }
-    unsigned char c[3] = { (unsigned char)r, (unsigned char)g, (unsigned char)b };
-    fwrite(c, 1, 3, f);
+    unsigned char* c = &rgb[((size_t)y * w + x) * 3];
+    c[0] = (unsigned char)r; c[1] = (unsigned char)g; c[2] = (unsigned char)b;
   }
-  fclose(f);
+  size_t n = strlen(path);
+  if (n > 4 && strcmp(path + n - 4, ".png") == 0) {
+    stbi_write_png(path, w, h, 3, rgb, w * 3);
+  } else {
+    FILE* f = fopen(path, "wb");
+    if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }
+  }
+  free(rgb);
   SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
 }
 void GpuGpuState::shot(const char* path) {

@@ -297,3 +297,27 @@
   SBS" binding bug — that was independently root-caused and FIXED on main (commit b63eac3, per-Game
   registry + g_tab merge; see docs/findings/animation.md). ovhit is now reliable under SBS.- **refs:** game/ai/sop_intro_events.{h,cpp}, game/ai/beh_sop_intro_lifted.cpp, game/scene/demo.{h,cpp},
   runtime/recomp/boot.cpp.
+
+## pc_skip exec: prologue vortex backdrop missing + scene SM stalls before area load (2026-07-10, OPEN)
+
+- **how found**: operator live oracle-compare session (screenshot matrix drive, scratch/screenshots/oc/).
+  Identical REPL input scripts (newgame; run 600; walk right; tap x) in two configs:
+  oracle (`PSXPORT_ORACLE=1`) vs default pc run (pc_skip=true + pc_render).
+- **symptom 1 — wrong prologue backdrop**: at f600 BOTH configs show the identical prologue dialogue
+  ("Was she kidnapped? / Is she safe?") — state in sync — but oracle draws the purple VORTEX cutscene
+  backdrop with spinning Tomba, while the pc config draws the gameplay FIELD (grass/fence/tree/
+  birdhouse) with a grey/pink object at left. ISOLATED: `PSXPORT_GATE=1` + pc_render draws the vortex
+  CORRECTLY (scratch/screenshots/oc/gate_pcrender_f600.png ≈ oracle) → the bug is in the PC (pc_skip)
+  EXECUTION path, NOT pc_render. The vortex scene's state is never built by the shortcut path.
+- **symptom 2 — scene SM stall**: with the same scripted input, oracle's stage SM advances into the
+  area load at ~f1135 (`sm[4c]` transitions; `@0x80109450` flips 3C021F80 → 801138A4, then "Loading...",
+  then gameplay at f1500); the pc run's SM counters freeze at `50=2 52=2` (f1054) and its picture is
+  byte-identical from f1100 to f1500. Input-timing sensitivity between configs hasn't been excluded for
+  symptom 2 (the x-tap may land on different dialogue lines); symptom 1 needs no such caveat.
+- **tooling gap (fix with the root-cause)**: `PSXPORT_SBS_MODE=skip`'s curated observable-state list
+  did NOT flag the missing vortex scene state (54/54 of its divergences were AUDIO spu_regs). When this
+  is root-caused, add the scene/backdrop identity state to the observable list so the harness catches
+  this class without screenshots.
+- **repro**: scratch/logs/oc_drive_{oracle,pc}.repl + logs; screenshots under scratch/screenshots/oc/.
+- **refs**: docs/bug-hunt-workflow.md (PC SKIP ON cell); MODE=render verified 0-diff same session
+  (pc_render read-only invariant holds).

@@ -160,3 +160,16 @@
   individually re-verified here). **OPEN** — re-RE `channelNoteInit`'s callers from
   `gen_func_80093650`/`SEQ_PREP_FN` to confirm whether v0/v1 are genuinely dead at this call site or
   whether the draft is missing a real return value a caller consumes.
+
+## pc_skip vs oracle: SPU register stream divergences — MODE=skip (2026-07-10, OPEN)
+
+- **how found**: operator oracle-compare session, `PSXPORT_SBS_MODE=skip PSXPORT_SBS_AUTONAV=combat`
+  (95s): 54 sbs-div lines, ALL `[AUDIO spu_reg]` — guest RAM otherwise clean.
+- **shape**: (a) f2–f9 one-sided writes (regs 0x1A6/0x1AA/0x1B0/0x1B2 present on one core only,
+  alternating only-A/only-B — boot-order skew of the first SPU reg programming); (b) f890–f894 a
+  sustained value lag on 0x1B0/0x1B2 (main-volume pair): A=0x32E8 B=0x32E9 … A=0x330B B=0x330C — the
+  pc_skip music volume RAMP runs 1–2 steps behind the oracle's.
+- **why it matters**: pc_skip scratch diverges are by design, but SPU registers are observable/
+  consumable state (audible) — the skip path must produce the same audio programming as the faithful
+  path. Related history: issue #29 (SFX divergence class).
+- **repro**: scratch/logs/oc_skip.log.
