@@ -98,6 +98,7 @@ struct RenderQueue {
   void     flush(Core* core);   // sort by (layer, seq), then capture (fps60) OR emit each, mark consumed
   void     sortQueue();    // stable_sort items by (layer, seq) — the engine draw order (fps60 mid-present)
   void     emitQueue(Core* core);   // emit each item to the VK rasterizer + mark consumed (no sort)
+  void     zfightScan(Core* core);  // PSXPORT_ZFIGHT diag: SW-rasterize opaque depth prims, find near-equal top-2 contests
   void     mark_consumed();
 
   // push2dQuad: enqueue a 2D textured quad (HUD / overlay / background) into the render queue so it is

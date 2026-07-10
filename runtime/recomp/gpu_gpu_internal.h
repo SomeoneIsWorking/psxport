@@ -47,6 +47,13 @@ struct GpuGpuState {
   const float* s_vd = nullptr;
   const float* s_vdn = nullptr;
   float s_cur_ord = 0, s_cur_ordn = 0;
+  // Paint-order depth TIEBREAK bias (z-fighting fix): a tiny per-prim increment = paint_order * ZBIAS_UNIT,
+  // added to the 3D-band per-vertex depth so that when two world prims are at (near-)EQUAL real depth — the
+  // barrel/decoration case where the game's integer geometry is genuinely coplanar to GTE fixed-point
+  // resolution (1/4096) and PSX disambiguates purely by OT/paint order — the LATER-drawn prim deterministically
+  // wins (GREATER_OR_EQUAL). The bias is far below any genuine world depth separation, so real occlusion is
+  // unchanged; it only breaks otherwise-unstable ties. Set in set_order from the emit index; 0 for 2D bands.
+  float s_depth_bias = 0.f;
 
   // Sub-pixel float SCREEN XY for the engine-owned 3D world path (vertex smoothing / issue #15). When set,
   // tex_emit uses these floats for the vertex POSITION instead of the integer xs/ys (which the world submit

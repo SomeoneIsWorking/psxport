@@ -99,6 +99,13 @@ struct PresentPC { int32_t disp[4]; int32_t fade[4]; };
 #define NATIVE_3D_MIN 0.0625f
 #define NATIVE_3D_MAX 0.9375f
 static inline float ord3d(float d) { return NATIVE_3D_MIN + d * (NATIVE_3D_MAX - NATIVE_3D_MIN); }
+// 3D-band depth with the paint-order tiebreak folded in and clamped to the 3D band. When two world prims
+// share a (near-)equal real depth, the later-emitted one gets a marginally larger value and wins the
+// GREATER_OR_EQUAL depth test uniformly (deterministic, motion-stable), replacing the per-pixel
+// interpolation-noise coin-flip that produced the barrel/decoration z-fight flicker. Clamp to NATIVE_3D_MAX:
+// two prims that both hit the ceiling still resolve later-wins (paint order), and stay below the 2D bands.
+static inline float ord3d_b(float d, float bias) { float o = ord3d(d) + bias;
+  return o < NATIVE_3D_MIN ? NATIVE_3D_MIN : (o > NATIVE_3D_MAX ? NATIVE_3D_MAX : o); }
 #define TRI_CAP 196608   // max batched vertices (= 65536 tris)
 #define TEX_CAP 196608
 #define NUM_BLEND_MODES GGS_NUM_BLEND_MODES   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
@@ -746,8 +753,17 @@ void gpu_gpu_vram_raw(const char* path) {
 void GpuGpuState::set_vd(const float* d3) { s_vd = d3; }
 void GpuGpuState::set_vd_n(const float* d3) { s_vdn = d3; }
 void GpuGpuState::set_xyf(const float* xf, const float* yf) { s_xf = xf; s_yf = yf; }
+// Paint-order z-fight TIEBREAK. ZBIAS_UNIT = the depth nudge per emit-order step; ZBIAS_MAX = the reserved
+// headroom cap (the accumulated bias never exceeds this, so it can never push a 3D prim past NATIVE_3D_MAX
+// into the 2D/HUD band nor overrun a genuine world depth separation — measured world separations near the
+// camera are ~1e-3+, an order of magnitude above ZBIAS_MAX). Tunable via PSXPORT_ZBIAS for sweeps.
+// Exposed (non-static) for the zfight scanner (render_queue.cpp) so it can model the fix without a re-run.
+float gpu_zbias_unit() { static float u = -1.f; if (u < 0.f) { const char* e = cfg_str("PSXPORT_ZBIAS");
+                                                                u = e ? (float)atof(e) : 4e-7f; if (u < 0.f) u = 0.f; } return u; }
+#define ZBIAS_MAX 1.5e-3f
 void GpuGpuState::set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
-                                           s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; s_xf = 0; s_yf = 0; }
+                                           s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; s_xf = 0; s_yf = 0;
+                                           float b = (float)idx * gpu_zbias_unit(); s_depth_bias = b > ZBIAS_MAX ? ZBIAS_MAX : b; }
 void GpuGpuState::set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                               s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
 void GpuGpuState::set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
@@ -791,9 +807,9 @@ void GpuGpuState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int
   if (!s_have_3d || s_tri_n + 3 > TRI_CAP) return;
   ggs_alloc_batches(*this);
   TriVtx* v = ((TriVtx*)s_tri_buf) + s_tri_n;
-  v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d(s_vd[0]) : s_cur_ord };
-  v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d(s_vd[1]) : s_cur_ord };
-  v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d(s_vd[2]) : s_cur_ord };
+  v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d_b(s_vd[0], s_depth_bias) : s_cur_ord };
+  v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d_b(s_vd[1], s_depth_bias) : s_cur_ord };
+  v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d_b(s_vd[2], s_depth_bias) : s_cur_ord };
   s_tri_n += 3;
 }
 // Fill 3 textured vertices: per-vertex pos/uv/color + shared page/CLUT/window/clip/semi/blend state. Uses
@@ -812,7 +828,7 @@ void GpuGpuState::tex_emit(TexVtx* t, const int* xs, const int* ys, const int* u
     t[i].clut[0] = clutx; t[i].clut[1] = cluty; t[i].clut[2] = semi; t[i].clut[3] = blend;
     t[i].tw[0] = twmx; t[i].tw[1] = twmy; t[i].tw[2] = twox; t[i].tw[3] = twoy;
     t[i].da[0] = dax0; t[i].da[1] = day0; t[i].da[2] = dax1; t[i].da[3] = day1;
-    t[i].ord = s_vd ? ord3d(s_vd[i]) : s_cur_ord;
+    t[i].ord = s_vd ? ord3d_b(s_vd[i], s_depth_bias) : s_cur_ord;
   }
 }
 void GpuGpuState::draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,

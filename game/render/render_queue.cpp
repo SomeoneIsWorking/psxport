@@ -9,6 +9,8 @@
 #include "gpu_gpu.h"
 #include <algorithm>
 #include <unordered_map>
+#include <vector>
+#include <cmath>
 #include <stdio.h>
 #include <stdlib.h>
 #include <execinfo.h>
@@ -243,7 +245,112 @@ void RenderQueue::emitQueue(Core* core) {
               n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
   }
   for (int i = 0; i < n; i++) emitItem(core, &items[i]);
+  zfightScan(core);
   mark_consumed();
+}
+
+// PSXPORT_ZFIGHT[=eps]: automatic z-fight FINDER. Software-rasterize every opaque RQ_OM_DEPTH world prim
+// into a per-pixel top-2 interpolated-D32-depth buffer (exactly what the VK D32 buffer receives —
+// ord3d(barycentric depth)). A z-fight pixel = the two frontmost coverers come from DIFFERENT prims yet
+// their interpolated D32 values differ by < eps (default 6e-5, ~ the D32 ULP band near 1.0). Reports the
+// count + the worst contesting prim pairs (dbg_node / color / D32 gap) and writes a heatmap PPM. Pure
+// host diagnostic (no guest write, no effect on the real render). One shot per s_zfight_frame window.
+void RenderQueue::zfightScan(Core* core) {
+  static float eps = -1.f; static int scan_from = -1;
+  if (eps < 0.f) { const char* e = cfg_str("PSXPORT_ZFIGHT"); if (!e) { eps = -2.f; }
+                   else { eps = (float)atof(e); if (eps <= 0.f) eps = 6e-5f;
+                          const char* f = cfg_str("PSXPORT_ZFIGHT_FRAME"); scan_from = f ? atoi(f) : 0; } }
+  if (eps < 0.f) return;   // -2 = disabled
+  float gpu_zbias_unit();   // gpu_gpu.cpp — the shipped paint-order bias unit (PSXPORT_ZBIAS), modeled here
+  GpuState& s = core->game->gpu;
+  if ((int)s.s_frame < scan_from) return;
+  const int W = s.s_disp_w, H = s.s_disp_h, DX = s.s_disp_x, DY = s.s_disp_y;
+  if (W <= 0 || H <= 0) return;
+  // Optional PSXPORT_ZFIGHT_BOX="x0,y0,x1,y1" (display coords): restrict the contest report to a region.
+  static int bx0=-1,by0=-1,bx1=1<<20,by1=1<<20,boxset=-1;
+  if (boxset<0){ boxset=0; const char* bb=cfg_str("PSXPORT_ZFIGHT_BOX"); if(bb&&sscanf(bb,"%d,%d,%d,%d",&bx0,&by0,&bx1,&by1)==4) boxset=1; }
+  // top-2 D32 per pixel + owning prim index
+  std::vector<float> d1(W*H, -1.f), d2(W*H, -1.f);
+  std::vector<int>   p1(W*H, -1),   p2(W*H, -1);
+  auto edge=[](float ax,float ay,float x0,float y0,float x1,float y1){ return (x1-x0)*(ay-y0)-(y1-y0)*(ax-x0); };
+  for (int idx = 0; idx < n; idx++) {
+    const RqItem* it = &items[idx];
+    if (it->semi || it->order_mode != RQ_OM_DEPTH || !it->depth) continue;
+    int nv = it->nv ? it->nv : 4;
+    const float* fx = it->has_xyf ? it->xsf : nullptr; const float* fy = it->has_xyf ? it->ysf : nullptr;
+    for (int t = 0; t < (nv==4?2:1); t++) {   // tris: (0,1,2) and for a quad also (1,2,3)
+      int i0=t, i1=t+1, i2=t+2;
+      float X0=(fx?fx[i0]:(float)it->xs[i0])-DX, Y0=(fy?fy[i0]:(float)it->ys[i0])-DY;
+      float X1=(fx?fx[i1]:(float)it->xs[i1])-DX, Y1=(fy?fy[i1]:(float)it->ys[i1])-DY;
+      float X2=(fx?fx[i2]:(float)it->xs[i2])-DX, Y2=(fy?fy[i2]:(float)it->ys[i2])-DY;
+      float den = (Y1-Y2)*(X0-X2) + (X2-X1)*(Y0-Y2);
+      if (den == 0.f) continue;
+      int bx0=(int)floorf(fminf(fminf(X0,X1),X2)), bx1=(int)ceilf(fmaxf(fmaxf(X0,X1),X2));
+      int by0=(int)floorf(fminf(fminf(Y0,Y1),Y2)), by1=(int)ceilf(fmaxf(fmaxf(Y0,Y1),Y2));
+      if (bx0<0)bx0=0; if(by0<0)by0=0; if(bx1>=W)bx1=W-1; if(by1>=H)by1=H-1;
+      for (int y=by0; y<=by1; y++) for (int x=bx0; x<=bx1; x++) {
+        float px=x+0.5f, py=y+0.5f;
+        float l0=((Y1-Y2)*(px-X2)+(X2-X1)*(py-Y2))/den;
+        float l1=((Y2-Y0)*(px-X2)+(X0-X2)*(py-Y2))/den;
+        float l2=1.f-l0-l1;
+        if (l0<-0.001f||l1<-0.001f||l2<-0.001f) continue;
+        float ord=l0*it->depth[i0]+l1*it->depth[i1]+l2*it->depth[i2];
+        float d32=0.0625f+ord*(0.9375f-0.0625f);
+        int k=y*W+x;
+        if (d32>d1[k]) { d2[k]=d1[k]; p2[k]=p1[k]; d1[k]=d32; p1[k]=idx; }
+        else if (d32>d2[k]) { d2[k]=d32; p2[k]=idx; }
+      }
+    }
+  }
+  // Scan for contests: top-2 from different prims within eps.
+  // Model the SHIPPED fix: with the paint-order bias (idx*U added to each prim's d32), the LATER-emitted prim
+  // (max array idx = paint order) should win the GREATER_OR_EQUAL test uniformly. "paint-stable" = the winner
+  // is the later prim => motion-invariant (no z-fight pop). Count raw (U=0) vs biased so one run shows the
+  // fix converting depth-driven (unstable) contests into paint-order (stable) ones.
+  const float Usw[4] = { 4e-7f, 1e-6f, 4e-6f, 1e-5f };   // U sweep for the stability report
+  std::vector<unsigned char> heat(W*H*3, 0);
+  int nfight=0, paint_stable_raw=0, ps_b[4]={0,0,0,0};
+  int ntie=0, ptie_raw=0, ptie_b[4]={0,0,0,0};          // gap<1e-5 subset = the true (flickery) ties
+  struct Pair{int a,b,cnt; float gap;}; std::vector<Pair> pairs;
+  for (int k=0;k<W*H;k++){
+    if (p1[k]<0||p2[k]<0||p1[k]==p2[k]) continue;
+    if (boxset==1){ int x=k%W, y=k/W; if(x<bx0||x>bx1||y<by0||y>by1) continue; }
+    float gap=fabsf(d1[k]-d2[k]);
+    if (gap<eps) {
+      // paint-order stability of this contest, raw vs biased (later-emitted prim should win => motion-stable)
+      int ia=p1[k], ib=p2[k]; float da=d1[k], db=d2[k];
+      float d_later = ia>ib?da:db, d_earlier = ia>ib?db:da;
+      int later_idx = ia>ib?ia:ib, earlier_idx = ia>ib?ib:ia;
+      bool tie = gap < 1e-5f; if (tie) ntie++;
+      if (d_later >= d_earlier) { paint_stable_raw++; if (tie) ptie_raw++; }
+      for (int u=0;u<4;u++) if (d_later + later_idx*Usw[u] >= d_earlier + earlier_idx*Usw[u]) { ps_b[u]++; if(tie) ptie_b[u]++; }
+      nfight++; heat[k*3]=255; heat[k*3+1]= (unsigned char)fminf(255.f, gap/eps*255.f); heat[k*3+2]=0;
+      int a=p1[k], b=p2[k]; if(a>b){int t2=a;a=b;b=t2;}
+      int found=-1; for(size_t i=0;i<pairs.size();i++) if(pairs[i].a==a&&pairs[i].b==b){found=(int)i;break;}
+      if(found<0){ pairs.push_back({a,b,1,gap}); } else { pairs[found].cnt++; pairs[found].gap=fminf(pairs[found].gap,gap); }
+    }
+  }
+  std::sort(pairs.begin(),pairs.end(),[](const Pair&a,const Pair&b){return a.cnt>b.cnt;});
+  auto pc=[](int a,int b){ return b?100.f*a/b:0.f; };
+  fprintf(stderr,"[zfight] f%d eps=%.6g fight=%d ties(<1e-5)=%d | ALL paint-stable raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%% | TIES raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%%\n",
+    s.s_frame, eps, nfight, ntie,
+    pc(paint_stable_raw,nfight), pc(ps_b[0],nfight), pc(ps_b[1],nfight), pc(ps_b[2],nfight), pc(ps_b[3],nfight),
+    pc(ptie_raw,ntie), pc(ptie_b[0],ntie), pc(ptie_b[1],ntie), pc(ptie_b[2],ntie), pc(ptie_b[3],ntie));
+  auto vd=[](const RqItem&P,int i){ return P.depth?P.depth[i]:-1.f; };
+  for (size_t i=0;i<pairs.size()&&i<10;i++){
+    const RqItem&A=items[pairs[i].a]; const RqItem&B=items[pairs[i].b];
+    int an=A.nv?A.nv:4, bn=B.nv?B.nv:4;
+    fprintf(stderr,"[zfight]   pair px=%d gap>=%.7f\n", pairs[i].cnt, pairs[i].gap);
+    fprintf(stderr,"[zfight]     A node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d anch=%d key=%08X vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
+      A.dbg_node,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf,A.fps_anchor,A.fps_key, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
+      A.xs[0],A.ys[0],A.xs[1],A.ys[1],A.xs[2],A.ys[2],an==4?A.xs[3]:0,an==4?A.ys[3]:0);
+    fprintf(stderr,"[zfight]     B node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d anch=%d key=%08X vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
+      B.dbg_node,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf,B.fps_anchor,B.fps_key, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
+      B.xs[0],B.ys[0],B.xs[1],B.ys[1],B.xs[2],B.ys[2],bn==4?B.xs[3]:0,bn==4?B.ys[3]:0);
+  }
+  if (nfight>0) { char path[128]; snprintf(path,sizeof path,"scratch/screenshots/zfight/heat_f%d.ppm",s.s_frame);
+    FILE* fp=fopen(path,"wb"); if(fp){ fprintf(fp,"P6\n%d %d\n255\n",W,H); fwrite(heat.data(),3,W*H,fp); fclose(fp);
+      fprintf(stderr,"[zfight]   heatmap -> %s\n",path); } }
 }
 
 void RenderQueue::flush(Core* core) {
@@ -335,11 +442,31 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
       auto intri=[&](int i0,int i1,int i2){ int64_t w0=edge(ax,ay,xs[i1],ys[i1],xs[i2],ys[i2]);
         int64_t w1=edge(ax,ay,xs[i2],ys[i2],xs[i0],ys[i0]); int64_t w2=edge(ax,ay,xs[i0],ys[i0],xs[i1],ys[i1]);
         return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
-      if (intri(0,1,2) || (nv==4 && intri(1,2,3))) { static int n=0; if(n++<6000)
-        fprintf(stderr,"[primat-rq] f%d dbgnode=%08X layer=%d om=%d semi=%d depth=[%.4f %.4f %.4f %.4f] col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)\n",
-          s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi,
-          depth?depth[0]:-1.f, depth?depth[1]:-1.f, depth?depth[2]:-1.f, (depth&&nv==4)?depth[3]:-1.f,
-          rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } }
+      int t0 = intri(0,1,2) ? 0 : ((nv==4 && intri(1,2,3)) ? 1 : -1);
+      if (t0 >= 0) { static int n=0; if(n++<6000) {
+        // Interpolated depth at (ax,ay) = the value the D32 buffer actually receives, so a z-fight shows as
+        // two prims with (near-)equal INTERPOLATED ord3d here. Barycentric on the float verts the rasterizer
+        // uses (has_xyf) else the rounded xs/ys. ord3d(d)=NATIVE_3D_MIN+d*(NATIVE_3D_MAX-NATIVE_3D_MIN) for
+        // RQ_OM_DEPTH; 2D-band prims store a screen-space band value (not depth) so print raw.
+        const float* fx = it->has_xyf ? it->xsf : nullptr; const float* fy = it->has_xyf ? it->ysf : nullptr;
+        int i0=t0, i1=t0+1, i2=t0+2;
+        float ax0 = fx?fx[i0]:(float)xs[i0], ay0 = fy?fy[i0]:(float)ys[i0];
+        float ax1 = fx?fx[i1]:(float)xs[i1], ay1 = fy?fy[i1]:(float)ys[i1];
+        float ax2 = fx?fx[i2]:(float)xs[i2], ay2 = fy?fy[i2]:(float)ys[i2];
+        float d0 = depth?depth[i0]:-1.f, d1 = depth?depth[i1]:-1.f, d2 = depth?depth[i2]:-1.f;
+        float den = (ay1-ay2)*(ax0-ax2) + (ax2-ax1)*(ay0-ay2);
+        float interp_ord = -1.f, d32 = -1.f;
+        if (depth && den != 0.f) {
+          float l0 = ((ay1-ay2)*(ax-ax2) + (ax2-ax1)*(ay-ay2)) / den;
+          float l1 = ((ay2-ay0)*(ax-ax2) + (ax0-ax2)*(ay-ay2)) / den;
+          float l2 = 1.f - l0 - l1;
+          interp_ord = l0*d0 + l1*d1 + l2*d2;
+          d32 = 0.0625f + interp_ord * (0.9375f - 0.0625f);   // ord3d
+        }
+        fprintf(stderr,"[primat-rq] f%d dbgnode=%08X layer=%d om=%d semi=%d tri=%d vdepth=[%.6f %.6f %.6f] interp_ord=%.6f D32=%.6f col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)\n",
+          s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi, t0,
+          d0, d1, d2, interp_ord, d32,
+          rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } } }
   unsigned ord = s.s_prim_order++;
   gpu_gpu_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near

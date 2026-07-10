@@ -1,5 +1,52 @@
 # Findings — render / engine submit
 
+## Coplanar z-FIGHTING on barrel/decoration surfaces (black chunks flicker) — paint-order depth tiebreak (2026-07-10, PARTIAL FIX)
+
+- **symptom (USER):** on the waterpump/seesaw barrel a black chunk flickers through the red basket top
+  (`scratch/screenshots/reports/zfight_pump.png`), and barrel top/bottom surfaces generally shimmer;
+  same expected on indoor wall decorations. A dark interior/back face wins the depth test over the red
+  top face in a large patch, and the patch changes as the barrel/camera moves.
+- **mechanism (root cause, first-principles — NOT quantization we can "fix"):** the barrel is INTEGER
+  model geometry projected through the GTE fixed-point pipeline, so per-vertex view-Z (`proj_native_xform`
+  → `tmp2_unshifted/4096`, gte_beetle.cpp) has 1/4096 granularity — the finest this pipeline offers (an
+  earlier fix already moved off the even-coarser integer SZ; comment there flags "#5 barrel"). For a small
+  near object the real per-face view-Z spread is ≤ 1/4096, so near-coplanar detail faces/quads collapse
+  onto a FEW discrete depth buckets (measured: three values 0.096767/0.096782/0.096798, ~1.5e-5 apart in
+  ord, overlapping). The D32 `GREATER_OR_EQUAL` test then orders them by these unstable buckets — which (a)
+  can disagree with the paint order and (b) flips as sub-pixel motion nudges the depths across a bucket
+  boundary → the black chunk pops. There is NO finer depth to recover: the surfaces are genuinely coplanar
+  at the geometry's native resolution. **PSX has no depth buffer — it resolves these purely by OT/paint
+  order (last drawn wins uniformly), which is stable.** So paint order is the only correct disambiguator.
+- **fix (host-render-only; game/, runtime/recomp/gpu_gpu.cpp):** a minimal deterministic PAINT-ORDER depth
+  bias. For 3D-band prims the per-vertex depth = `ord3d(depth) + emit_order * ZBIAS_UNIT` (clamped to the
+  3D band, cap `ZBIAS_MAX=1.5e-3`), so on a (near-)equal-depth tie the LATER-emitted prim wins `>=`
+  uniformly and motion-invariantly — reproducing PSX's paint-order resolution. `ZBIAS_UNIT` default 4e-7
+  (tunable `PSXPORT_ZBIAS`); span ≈ 1e-3 at ~2500 prims, an order of magnitude below measured genuine
+  world depth separations (~4.5e-3), so real occlusion is UNCHANGED (verified: world renders identically
+  except the coplanar-contest pixels).
+- **why this does NOT violate the no-OT-inheritance rule:** the engine still owns PRIMARY ordering (real
+  per-pixel depth decides all genuinely-separated geometry). The paint/emit order is used ONLY as a
+  sub-ULP TIEBREAK between prims the depth buffer cannot distinguish (genuinely coplanar at geometry
+  resolution) — the one case where PSX's own answer is paint order. It is a bounded epsilon on the depth
+  we own, not a read of the guest OT/draw-order/GP0.
+- **verification:** host-only → SBS-full **0-diff BOTH legs** (combat AUTONAV + WATCH_CUT, f11640/f12400,
+  0 divergence — the bias never touches guest RAM). New auto-finder `PSXPORT_ZFIGHT[=eps]` (render_queue.cpp
+  `zfightScan`) SW-rasterizes opaque depth prims into a per-pixel top-2 buffer and reports contests +
+  paint-order stability + a heatmap; it measures the fix resolving **~87% of true ties** (gap<1e-5) to
+  deterministic paint order at the safe U=4e-7 (incl. the barrel-detail contests, Δemit~140), up from ~70%
+  raw. Evidence: `scratch/screenshots/zfight/` (heatmaps, before/after crops, stability logs
+  `scratch/logs/stability2.log`).
+- **PARTIAL / open:** a GLOBAL paint-order bias cannot resolve 100% of ties at a world-safe magnitude —
+  per-step × prim-count = span, so raising the per-step enough to beat the largest tie gaps (needs U≈4e-6)
+  blows the span past genuine world separations. ~13% of ties (small-Δemit adjacent-mesh SEAMS + contests
+  near the eps boundary) remain depth-resolved. **Full elimination needs the architectural fix:** route
+  intra-object detail prims to ONE shared object depth (like `obj_depth_lookup` billboards) so they are
+  EXACT ties → paint-order-resolved with no bias and no span budget. Deferred (needs object grouping for
+  the guest-OT-walk detail polys, which arrive with per-vertex projprim depth + dbg_node=0).
+- **refs:** `runtime/recomp/gpu_gpu.cpp` (`gpu_zbias_unit`/`set_order` bias, `ord3d_b`, draw_tri/tex_emit),
+  `runtime/recomp/gpu_gpu_internal.h` (`s_depth_bias`), `game/render/render_queue.cpp` (`zfightScan` diag),
+  `runtime/recomp/gte_beetle.cpp:218` (the 1/4096 depth source). Config: `PSXPORT_ZBIAS`, `PSXPORT_ZFIGHT`.
+
 ## Fisherman's-hut interior "much different than oracle" — repro BLOCKED (quest-gate + cross-area warp overlay gap) (2026-07-10, OPEN)
 
 - **symptom (USER):** entering the fisherman's hut (fish-painted door, first field) shows something much

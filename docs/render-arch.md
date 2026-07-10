@@ -44,6 +44,20 @@ ONE render behavior (native per-pixel depth always on, no oracle to diff against
     OPEN: only OWNED-submit prims carry real depth; prims from not-yet-ported overlay submitters fall to
     the 2D band, and 3D-projected overlay banners (e.g. a hint sign drawn on-top by OT order) get their
     true geometric depth and so sit behind nearer world geo — overlay-vs-world depth semantics, next.
+  - **Coplanar TIEBREAK by paint order (z-fighting fix; does NOT inherit the OT).** Small near objects are
+    integer geometry projected through the GTE fixed-point pipeline, so per-vertex view-Z is quantized to
+    1/4096 — near-coplanar detail faces genuinely collapse onto one/adjacent depth buckets (nothing finer
+    to recover). The D32 `GREATER_OR_EQUAL` test then coin-flips their occlusion per-pixel and it POPS as
+    the object moves (the barrel "black chunk through the red top", #5). PSX has no depth buffer and
+    resolves these purely by OT/paint order (last drawn wins, stable). We reproduce that as a **bounded
+    epsilon on the depth WE own**: `ord3d(depth) + emit_order·ZBIAS_UNIT` (gpu_gpu.cpp `ord3d_b`/`set_order`,
+    default 4e-7, capped 1.5e-3). This is NOT reading the guest OT/draw order/GP0 — the engine still owns
+    PRIMARY ordering (real depth decides every genuinely-separated surface); the emit/paint order is used
+    ONLY as a sub-ULP tiebreak between prims the depth buffer cannot distinguish (coplanar at geometry
+    resolution), the one case whose correct answer IS paint order. Span (unit × prim count ≈ 1e-3) sits an
+    order of magnitude below genuine world separations (~4.5e-3), so real occlusion is unchanged; host-only
+    so SBS stays 0-diff. Resolves ~87% of true ties at the safe magnitude — full coverage needs shared
+    per-object depth for detail prims (deferred). See docs/findings/render.md + `PSXPORT_ZFIGHT`/`ZBIAS`.
 
 ## SSAO / LIGHT — PC-native deferred shading (one post pass)
 **Enabled via the F1 imgui overlay (g_mods), default OFF, persisted to `psxport_settings.ini`
