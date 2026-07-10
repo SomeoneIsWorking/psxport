@@ -21,7 +21,8 @@ float proj_obj_center_ord(void);
 // dispatch in the native render walk; PER-INSTANCE identity for every prim an object emits, incl.
 // billboards rasterized later at the OT walk).
 #include "render.h"    // Render (needed for cur_render_node below)
-#include "game.h"      // c->game->fps60 (billboard-span recorder)
+#include "game.h"      // c->game->fps60 (billboard-span recorder), c->game->oracle
+#include "pkt_span.h"  // PktSpanSession (withDepthTag below)
 
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
@@ -46,6 +47,27 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
 // gpu_obj_depth_add(span, node-depth). Reads node+46/50/54 for the world anchor — needs Core*.
 static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t node) {
   if (c->game->mods.fps60 || c->game->mods.debug_ids || cfg_dbg("objid")) c->game->fps60.recordBillboardSpan(c, lo, hi, node);
+}
+
+// Guest-transparent depth-tag wrap (RenderObserver's obs_body, folded in): PSXPORT_ORACLE runs `body`
+// pure (core B / psx_fallback stays the untouched reference), everyone else opens a nested
+// PktSpanSession around `body` and tags the packet span it emits with the object's PC-native world
+// depth — so the field tee (s_ot_2d_only) KEEPS the resulting is3d=0 prims instead of dropping them for
+// lack of a depth tag (#39: weapon chain + impact effect). Shared by every per-node dispatch site that
+// reaches an otherwise-untagged custom renderer (perObjRenderDispatch's CCA4 body, renderWalk's
+// 0x8003C29C RCASE_DEFAULT body).
+static inline void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
+  if (c->game->oracle) { body(c); return; }
+  c->mRender->diag.beginObject(node);
+  uint32_t slo, shi;
+  PktSpanSession sess(c);
+  body(c);
+  if (sess.close(&slo, &shi)) {
+    float od = obj_world_ord(c, node);
+    gpu_obj_depth_add(c, slo, shi, od);
+    fps60_bb_node(c, slo, shi, node);
+  }
+  c->mRender->diag.endObject();
 }
 
 // PktSpan (per-Core packet-pool store-address-span tracker) + PktSpanSession (RAII object scope) live

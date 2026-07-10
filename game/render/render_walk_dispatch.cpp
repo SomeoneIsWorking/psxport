@@ -47,6 +47,7 @@
 #include "core.h"
 #include "game.h"
 #include "render.h"
+#include "render_internal.h"   // withDepthTag (#39: depth-tag the RCASE_DEFAULT custom renderer)
 #include "cfg.h"
 #include <stdio.h>
 
@@ -212,9 +213,13 @@ void Render::renderWalk() {
             break;
           case 0x8003C29Cu: {
             // Fully dynamic per-node dispatch through a function pointer at node+24 (the RCASE_DEFAULT
-            // class documented in older render findings — a per-object-type custom renderer).
-            const uint32_t fn = c->mem_r32(c->r[16] + 24u);
-            c->r[4] = c->r[16]; c->r[31] = 0x8003C2ACu; rec_dispatch(c, fn);
+            // class documented in older render findings — a per-object-type custom renderer). #39: wrap
+            // in withDepthTag (like perObjRenderDispatch) so the emitted prims get the object's world
+            // depth and the field tee KEEPS them (weapon chain + impact effect were dropped untagged).
+            withDepthTag(c, c->r[16], [](Core* c) {
+              const uint32_t fn = c->mem_r32(c->r[16] + 24u);
+              c->r[4] = c->r[16]; c->r[31] = 0x8003C2ACu; rec_dispatch(c, fn);
+            });
             break;
           }
           case 0x8003C2ACu:

@@ -165,22 +165,8 @@ struct CCA4Frame {
   }
 };
 
-// Guest-transparent depth-tag wrap (RenderObserver's obs_body, folded in): PSXPORT_ORACLE runs pure,
-// everyone else opens a nested PktSpanSession and tags the packet span this call emits with the
-// object's PC-native world depth.
-void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
-  if (c->game->oracle) { body(c); return; }
-  c->mRender->diag.beginObject(node);
-  uint32_t slo, shi;
-  PktSpanSession sess(c);
-  body(c);
-  if (sess.close(&slo, &shi)) {
-    float od = obj_world_ord(c, node);
-    gpu_obj_depth_add(c, slo, shi, od);
-    fps60_bb_node(c, slo, shi, node);
-  }
-  c->mRender->diag.endObject();
-}
+// withDepthTag moved to render_internal.h (#39) so renderWalk's 0x8003C29C RCASE_DEFAULT dispatch can
+// share the exact same depth-tag discipline — see render_internal.h.
 } // namespace
 
 // ==================================================================================================
