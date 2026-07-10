@@ -81,7 +81,12 @@ enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE, M_SKIP };
 constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
 constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
-constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_RIGHT = 0x2000, BTN_NONE = 0xFFFF;
+// BTN_RIGHT FIX (2026-07-10): was 0x2000 — that bit is CIRCLE, not Right (see the pad-button table in
+// docs/driving-the-game.md: Right=0x0020, Circle=0x2000). This mislabeling meant PSXPORT_SBS_POSTDRIVE=1's
+// "walk into things" script (Nav::DONE below) pressed Circle the whole time, never actually walking —
+// found while building the PSXPORT_SBS_AUTONAV=combat leg (docs/findings/ai.md), which used the same
+// constant and went nowhere until this was traced back. Fixing the constant fixes BOTH scripts.
+constexpr uint16_t BTN_CROSS = 0x4000, BTN_START = 0x0008, BTN_RIGHT = 0x0020, BTN_NONE = 0xFFFF;
 
 enum Phase { REACH_GAME, AWAIT_CUT, SKIP_CUT, AWAIT_CONTROL, DONE };
 struct Nav { Phase phase = REACH_GAME; int idle = 0; int postFrame = 0; };
@@ -91,6 +96,37 @@ struct Nav { Phase phase = REACH_GAME; int idle = 0; int postFrame = 0; };
 // evaluation, shared between navStep's DONE case and Sbs::Impl::run()'s per-frame dispatch (below).
 static bool sbsPostdriveOn() {
   static const int on = []{ const char* e = getenv("PSXPORT_SBS_POSTDRIVE"); return e && *e && e[0] != '0' ? 1 : 0; }();
+  return on != 0;
+}
+
+// PSXPORT_SBS_AUTONAV=combat — closes the "combat-cluster overrides are RE-verified only, never
+// SBS-exercised" coverage gap (docs/fleet-workflow.md §9, docs/findings/ai.md). Standard autonav
+// (plain `=1`) never leaves the immediate spawn area, so ActorMeleeEngage (0x80112188),
+// MeleeProximity (0x8001F9DC), and beh_actor_tomba_proximity_combat (0x800527C8) sat at "verified by
+// RE only" — `ovhit` reads 0 for all three under the standard gate command. This leg is a
+// DETERMINISTIC input script (same requirement as the rest of Nav — SBS runs two cores in lockstep
+// off identical input, so no wall-clock/RNG-driven navigation) empirically found 2026-07-10 via a
+// live single-core REPL/debug-server session (`tools/dbgclient.py`, `PSXPORT_DEBUG=dispatch`): hold
+// Right from the seaside spawn (~Z=3940) until it collides with the first `ActorZonedAttacker`
+// encounter (`id_compare_motion_dispatch`, node handler 0x80145230, physical wall at Z≈6190), fire
+// ONE Cross-jump edge to clear that obstacle (lands at Z≈7922), then keep holding Right. From there
+// `ActorMeleeEngage::doIt` (0x80112188) fires EVERY FRAME for the nearby `cull_substate_orchestrator`
+// object (0x800F1008, handler 0x8013259C) even though a second, taller ledge (~399 Y units) still
+// blocks physically reaching that object — confirmed via `PSXPORT_DEBUG=dispatch` showing continuous
+// `[dispatch] ... 0x80112188 ActorMeleeEngage::doIt` hits while stuck at the ledge.
+// STILL A REAL GAP (not fixed by this leg): MeleeProximity (0x8001F9DC, called only from two
+// currently-unowned engine leaves 0x80020868/0x80023618) and beh_actor_tomba_proximity_combat
+// (0x800527C8, reached only via an indirect per-object "think" pointer) require an object whose
+// think-slot/call-site is actually LIVE — no such object is spawned anywhere in the ~150-entity
+// reachable seaside/intro area in this playthrough (confirmed by a full `ents` walk). Reaching them
+// needs either solving the second ledge (deeper platforming/grow-shrink RE) or a wider-area
+// playthrough with a real melee encounter — tracked OPEN in docs/findings/ai.md, not solved here.
+// A red gate from this leg is real coverage working as intended (CLAUDE.md "no residual diverges") —
+// this knob stays OFF by default so the standard gate command (`docs/fleet-workflow.md` §2, no
+// `=combat`) is unaffected; it must be opted into explicitly.
+static bool sbsCombatOn() {
+  static const int on = []{ const char* e = getenv("PSXPORT_SBS_AUTONAV");
+    return (e && !strcmp(e, "combat")) ? 1 : 0; }();
   return on != 0;
 }
 
@@ -496,11 +532,34 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
       break;
     }
     case DONE: {
-      // PSXPORT_SBS_POSTDRIVE=1 — after gameplay-start, alternate between HOLD Right (walk into
-      // things) and TAP Cross (jump — fires the jump SFX). This is what actually triggers native
-      // SFX callers so `[AUDIO spu_write#N]` divergences show a voice-reg StartAddr mismatch
-      // (Issue #29). Off by default so pc_skip=false runs stay quiet.
-      if (sbsPostdriveOn()) {
+      // PSXPORT_SBS_AUTONAV=combat — the combat-coverage leg (see the sbsCombatOn() banner above).
+      // Deterministic: hold Right the whole time (driveHold's auto-resume after each tap keeps it
+      // held with no re-scripting needed), and fire a JUMP EDGE every COMBAT_JUMP_PERIOD frames
+      // starting at COMBAT_JUMP_FRAME — a single well-timed jump cleared the first ledge in an
+      // interactive repro, but a fixed single frame offset in the free-running SBS timeline isn't
+      // guaranteed to land on the same collision-window edge every ledge (Tomba can end up pinned
+      // against an obstacle for a stretch, same shape as the live REPL session's "stuck" case) —
+      // repeated periodic jump attempts make the leg robust to that without needing to poll game
+      // state (edges only, same "TAP not HOLD" rule as the rest of Nav). ActorMeleeEngage already
+      // fires once merely adjacent to the first obstacle (confirmed 2026-07-10), so this also keeps
+      // giving that address fresh coverage every run even if a further ledge is never cleared.
+      if (sbsCombatOn()) {
+        nv.postFrame++;
+        constexpr int COMBAT_JUMP_FRAME = 300, COMBAT_JUMP_PERIOD = 60;
+        if (nv.postFrame == 1) c->game->pad.driveHold((uint16_t)(BTN_NONE & ~BTN_RIGHT));
+        else if (nv.postFrame >= COMBAT_JUMP_FRAME && (nv.postFrame - COMBAT_JUMP_FRAME) % COMBAT_JUMP_PERIOD == 0)
+          c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
+        // PSXPORT_DEBUG=combatnav — periodic progress print (Tomba G-block position + pad drive
+        // state), the tool used to trace this leg's navigation live (2026-07-10) and to confirm it
+        // reaches the ActorMeleeEngage/MeleeProximity encounter zone in future sessions.
+        if (cfg_dbg("combatnav") && (nv.postFrame % 100) == 1) {
+          constexpr uint32_t G_ADDR = 0x800E7E80u;
+          fprintf(stderr, "[combatnav] %s pf=%d f=%u pos(Z,Y,X)=(%d,%d,%d) repl_on=%d hold=%04X tap_n=%d\n",
+                  tag, nv.postFrame, f,
+                  (int16_t)c->mem_r16(G_ADDR+46), (int16_t)c->mem_r16(G_ADDR+50), (int16_t)c->mem_r16(G_ADDR+54),
+                  c->game->pad.repl_on, c->game->pad.repl_hold, c->game->pad.repl_tap_n);
+        }
+      } else if (sbsPostdriveOn()) {
         nv.postFrame++;
         // Cycle: 30 frames walk Right, 6-frame Cross tap, repeat. Each Cross tap = jump = SFX fire.
         int cycle = nv.postFrame % 36;
@@ -1699,13 +1758,14 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       fprintf(stderr, "[sbs-trace] f%u post-service    A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",
               mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     bool nav_done = !sbsAutonav || (mNavA.phase == DONE && mNavB.phase == DONE);
-    // PSXPORT_SBS_POSTDRIVE=1: keep calling navStep() past nav_done too — its DONE case is where the
-    // post-control walk/jump SCRIPT lives (Nav::DONE below). Without this, nav_done short-circuits the
-    // dispatch straight to feedInput() (host keyboard) forever and the DONE-phase script never runs —
-    // it was DEAD CODE before this fix (2026-07-08): postdrive's static bool could be true, but the
-    // branch that would have called navStep() again was unreachable once nav_done latched. Fall back to
-    // feedInput() (live keyboard/debug-server driving) when postdrive is off, preserving that path.
-    if (!nav_done || sbsPostdriveOn()) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
+    // PSXPORT_SBS_POSTDRIVE=1 / PSXPORT_SBS_AUTONAV=combat: keep calling navStep() past nav_done too —
+    // its DONE case is where the post-control walk/jump SCRIPT lives (Nav::DONE below). Without this,
+    // nav_done short-circuits the dispatch straight to feedInput() (host keyboard) forever and the
+    // DONE-phase script never runs — it was DEAD CODE before the 2026-07-08 postdrive fix, and the
+    // SAME bug class bit the combat leg on introduction (2026-07-10: sbsCombatOn() was missing from
+    // this condition, so the combat script in Nav::DONE never ran despite being wired). Fall back to
+    // feedInput() (live keyboard/debug-server driving) when neither is on, preserving that path.
+    if (!nav_done || sbsPostdriveOn() || sbsCombatOn()) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
     else feedInput();
     if (ww_trace_ext)
       fprintf(stderr, "[sbs-trace] f%u post-nav/input  A[0x800BF81E]=%u  B[0x800BF81E]=%u\n",

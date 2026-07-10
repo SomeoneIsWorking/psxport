@@ -183,6 +183,14 @@ a missing ABI-slot live value, an unmirrored stack frame, `&&`-vs-`||`. So:
   the frames reached," and correctness rests on the RE verification, not the gate. Say so honestly; a future
   session with enemy-area coverage should re-gate. Don't claim a leaf is verified because SBS was 0-diff if
   `ovhit` shows it never fired.
+  - **`PSXPORT_SBS_AUTONAV=combat`** (2026-07-10, docs/findings/ai.md) closes this gap for the
+    seaside `ActorMeleeEngage`/`MeleeProximity` melee cluster specifically — an OPT-IN extension of
+    the standard gate's Nav script that walks Tomba into the first melee encounter after reaching
+    control. It is NOT part of the standard gate command below (stays off by default — see the next
+    bullet for why) but is the tool to reach for when a combat/AI leaf's `ovhit` reads 0 under the
+    standard command. It found (and left OPEN, not fixed) a real pre-existing SBS divergence tied to
+    the already-tracked "stack-depth OPEN" register-faithfulness cluster (docs/findings/render.md) —
+    a red gate from this leg is that cluster, not a regression from whatever you just wired.
 - **Run `tools/abi_extract.py <addr> --contract` FIRST at draft time, and again at wiring time.** The
   "unmirrored stack frame" / "missing ABI-slot live value" bug classes above are exactly what it's for:
   it parses the `gen_func_<addr>`/`ov_<area>_gen_<addr>` body straight out of `generated/` and reports the

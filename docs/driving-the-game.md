@@ -70,6 +70,14 @@ held direction is what gameplay reads for movement.
   Example — press Start once at ~f760: `PSXPORT_FORCE_HOLD=FFF7 FORCE_HOLD_AT=760 FORCE_STOP_AT=768`.
   NOTE the FORCE frame counter is the pad-service frame `s_fc`, which may differ slightly from the present
   frame used by `PSXPORT_VK_SHOTSEQ`.
+- **`PSXPORT_SBS_AUTONAV=combat`** (SBS-only, `runtime/recomp/sbs.cpp`) — after the standard
+  `SBS_AUTONAV` Nav machine reaches player control, holds Right and fires a jump edge every 60
+  frames from frame 300 onward: walks Tomba out of the seaside spawn past the first
+  `ActorZonedAttacker` encounter into the melee-cluster zone (`ActorMeleeEngage::doIt`/
+  `MeleeProximity::isAtApproachAnchor`, 0x80112188/0x8001F9DC) — the combat-cluster coverage the
+  standard `SBS_AUTONAV=1` gate never reaches (docs/findings/ai.md). Pair with `PSXPORT_DEBUG=
+  combatnav` to watch it navigate (prints Tomba's world position + pad-drive state every 100
+  frames) and `PSXPORT_DEBUG=ovhit` to confirm the addresses fire.
 
 ## 3. Live / interactive — the debug server (drive while it runs)
 Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FRAMES`**. Drive with

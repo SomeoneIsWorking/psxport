@@ -237,7 +237,11 @@ ENTRY lines over a 200-frame run, vs ~78 for core=A, despite 0-diff RAM every fr
 Kept as the reference technique for the next "is this A-only/B-only ovhit count a real bug or an
 expected native-driver-vs-substrate-chain asymmetry" question — same role `animstack` plays for
 guest-stack-residency questions.
-
+`combatnav` (sbs.cpp, `Nav::DONE`'s `PSXPORT_SBS_AUTONAV=combat` leg) — periodic progress print
+(every 100 frames) of Tomba's G-block world position + the pad drive state (`repl_on`/`repl_hold`/
+`repl_tap_n`) while the combat-coverage leg runs. The tool used to trace the leg live while building
+it (2026-07-10, docs/findings/ai.md) — use it to confirm the leg is actually walking/jumping instead
+of stuck against an obstacle in a future session.
 **`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
 previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
 couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.
@@ -274,6 +278,15 @@ or level — they can't be a bare channel:
   EngineOverrides `ovhit`) actually print. A `timeout`-killed gate dies via the watchdog's SIGTERM
   `_exit(130)`, which skips atexit — wiring passes need the hit counts to prove every registered
   address FIRED on both cores.
+- **SBS combat-coverage leg:** `SBS_AUTONAV=combat` (raw `getenv`, `sbs.cpp`'s own local-static
+  pattern, matching this file's other `SBS_*` knobs) — an OPT-IN extension of the standard
+  `SBS_AUTONAV=1` Nav state machine (runtime/recomp/sbs.cpp): once player control is reached, hold
+  Right + jump periodically to walk Tomba into the seaside `ActorZonedAttacker`/`cull_substate_
+  orchestrator` encounter, exercising `ActorMeleeEngage::doIt` (0x80112188) and
+  `MeleeProximity::isAtApproachAnchor` (0x8001F9DC) — combat-cluster overrides the STANDARD gate's
+  autonav never reaches (docs/findings/ai.md). Stays off by default so the standard gate command is
+  unaffected; opt in explicitly when working the combat/AI cluster. Pair with `PSXPORT_DEBUG=
+  combatnav` (below) to watch it navigate.
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the
