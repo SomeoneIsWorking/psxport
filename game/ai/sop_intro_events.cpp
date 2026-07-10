@@ -571,11 +571,13 @@ extern void ov_sop_set_override(uint32_t, void (*)(Core*));
 namespace {
 void ov_sopBeatAdvanceWalk(Core* c) {
   if (c->game->psx_fallback) { ov_sop_gen_8010AF60(c); return; }
-  (void)sopBeatAdvanceWalk(c);
+  // op-0x3E fnptr callee: ScriptInterp::callFnptr consumes v0 as the script pause/advance code —
+  // the wrapper MUST publish the return in r[2] like the gen tail does (0 running / 1 done).
+  c->r[2] = sopBeatAdvanceWalk(c);
 }
 void ov_sopBeatAdvanceNarration(Core* c) {
   if (c->game->psx_fallback) { ov_sop_gen_8010B078(c); return; }
-  (void)sopBeatAdvanceNarration(c);
+  c->r[2] = sopBeatAdvanceNarration(c);
 }
 void ov_sopOrbitPathStep(Core* c) {
   if (c->game->psx_fallback) { ov_sop_gen_8010B11C(c); return; }

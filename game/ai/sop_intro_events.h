@@ -3,8 +3,10 @@
 //
 // Wired via EngineOverrides (RegisterSopIntroEventOverrides, called from
 // runtime/recomp/boot.cpp's register_engine_overrides()). sopBeatAdvanceWalk/sopBeatAdvanceNarration
-// are reached ONLY via the animation-event fn-ptr table at 0x8010CA60-0x8010CAAC (indirect jalr, so
-// only dynamically confirmed by PSXPORT_DEBUG=ovhit showing nonzero hits — see docs/findings/ai.md).
+// are reached as op-0x3E (call-fnptr) entries of the pilot's cutscene script at 0x8010CA28, via
+// ScriptInterp::callFnptr — whose return value in r[2] is the script stepper's pause/advance code,
+// so the override wrappers MUST set c->r[2] (2026-07-10 prologue-vortex root cause #2; the earlier
+// "animation-event fn-ptr table 0x8010CA60" claim was falsified by the workflow evidence pass).
 #pragma once
 #include <cstdint>
 class Core;

@@ -340,3 +340,28 @@
 - **repro**: scratch/logs/oc_drive_{oracle,pc}.repl + logs; screenshots under scratch/screenshots/oc/.
 - **refs**: docs/bug-hunt-workflow.md (PC SKIP ON cell); MODE=render verified 0-diff same session
   (pc_render read-only invariant holds).
+
+## Prologue-vortex root cause #2: SOP op3E wrappers discarded v0 (2026-07-10, ultracode workflow, RESOLVED)
+
+- **stacked on** the op05WaitFrames expiry-return fix (root cause #1, same workflow, commit
+  "scene: fix ScriptInterp::op05WaitFrames expiry return"): with op05 fixed the pilot's cutscene
+  script ran up to its first op-0x3E entry and derailed there.
+- **cause**: `ov_sopBeatAdvanceWalk`/`ov_sopBeatAdvanceNarration` (game/ai/sop_intro_events.cpp) did
+  `(void)fn(c)` and never wrote `c->r[2]`, but these are op-0x3E fnptr callees —
+  `ScriptInterp::callFnptr` returns `(int)c->r[2]` and `step()` drives pause(0)/advance(1..3) from
+  it. Stale r[2] (whatever the last rec_dispatch left) fed garbage advance codes: walk exited at
+  call 31 (first internal rec_dispatch) instead of 101; narration churned 156 calls without ever
+  reaching its state-1 expiry that stamps 0x800BF80F=1 — so the script never reached the
+  reveal/terminal ops → no vortex scene, SM freeze (both prologue symptoms, one chain).
+- **fix**: wrappers publish the return (`c->r[2] = fn(c)`), matching the gen tails (0 running /
+  1 done). Bodies untouched (transcription-correct). Header's falsified "animation-event table"
+  reachability claim corrected.
+- **dead ends closed**: ScriptInterp::step()'s ret-switch and both beat-advance bodies re-verified
+  correct — the defect was wrapper-layer only. The op3E contract is now documented at
+  ScriptInterp::callFnptr and in sop_intro_events.h.
+- **process note**: found by the Evidence(sonnet)→Diagnose(Fable)→Execute(sonnet)→Verify(Fable)
+  ultracode pipeline — two rounds, verifier independently confirmed cause #1 and forced the
+  revision that found cause #2. Wrapper audit rule: any EngineOverrides wrapper for a function the
+  substrate calls for its RETURN VALUE must set c->r[2]; grep for `(void)` wrappers when wiring.
+- **refs**: workflow wf_a7f630fd-dc6; game/ai/sop_intro_events.{h,cpp}, game/scene/script_interp.cpp
+  (callFnptr banner), runtime/recomp/sbs.cpp (SCENE_BEAT observable).
