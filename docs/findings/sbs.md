@@ -1225,3 +1225,22 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   f160 Tomba+Zippo missing in the prologue cutscene), now honestly visible in the SBS panes.
 - **refs:** runtime/recomp/sbs.cpp (stepCore poke removal + PSXPORT_SBS_SHOT), scratch/sbscmp/
   (evidence quads), tools/abcompare.py (the standalone-vs-oracle compare).
+
+## SBS pane A = the USER's real config (2026-07-10, follow-up 2)
+- **symptom (USER):** panes still didn't visually match the standalone runs — because the user's
+  standalone runs are WINDOWED with their settings ini (aspect=AUTO → widescreen, fps60=1), while
+  the harness pinned both cores factory-neutral (pane A was a 4:3/30fps picture vs a wide standalone).
+- **fix:** core A keeps the user's mods (settings ini loads in the Game ctor); ONLY core B is
+  oracle-pinned. The byte-gate conflict is solved at the root instead of by neutering the pane:
+  the one guest-poking enhancement (widescreen cull re-include, cull.cpp) is suppressed under SBS
+  (`game->sbs`) so core A's guest evolution stays byte-identical to core B — cost: dynamic-entity
+  pop-in at wide pane margins (standalone wide re-includes them; the pane uses the read-only static
+  margin). fps60 presentation is inert under diff_mode (panes sample real frames), so pane A shows
+  30fps real frames while a standalone fps60 run interpolates — static content identical.
+- **wide pane plumbing:** grabPane samples the wide FB width (was cropped to 4:3);
+  gpu_gpu_present_sbs2 letterboxes each pane by its own aspect (was hard-coded 4:3);
+  wide AUTO under SBS derives from HALF the window (two panes side by side).
+- **verified (headless):** byte gate 0-diff through f13890 with the user ini live on core A;
+  pane B @f500 vs standalone ORACLE @f502 = 0.00%; pane A at the known 1.35% pc_render floor.
+  Windowed wide panes = USER eyeball (headless AUTO resolves 4:3, so the wide leg can't be
+  machine-checked headless).

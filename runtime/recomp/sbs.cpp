@@ -1164,6 +1164,10 @@ void Sbs::Impl::checkPaneDiff() {
 void Sbs::Impl::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
   if (sbs_nopresent()) { *ow = 4; *oh = 4; return; }
   int sx, sy, w, h; gpu_disp_region(&g->core, &sx, &sy, &w, &h);
+  // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw) — sample the wide
+  // width like the standalone present does (else the wide pane is cropped back to 4:3).
+  { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
+    if (gpu_gpu_wide_engine(&g->core)) w = gpu_gpu_wide_engine_w(&g->core); }
   if (w < 1) w = 1; if (h < 1) h = 1;
   if (w > 1024) w = 1024; if (h > 512) h = 512;
   gpu_gpu_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
@@ -1792,16 +1796,18 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = (mMode == M_SKIP);
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
   // Per-Game enhancement state (mods + oracle are Game members now, not process globals):
-  // - BOTH cores run factory-neutral mods. A guest-poking enhancement (the widescreen cull
-  //   re-include) enabled on one core would break the byte-exact gate BY DESIGN, so the harness
-  //   pins both sides to the PSX-neutral state the compare is defined over.
-  // - Core B additionally gets the full oracle pin (Game::setOracle) whenever it runs the substrate
-  //   (fb_b) — the SAME per-Game config as standalone `PSXPORT_ORACLE=1 ./run.sh`, so pane B IS the
-  //   oracle picture (no enhancement can leak in; render_observer/billboard/painter gates all read
-  //   game->oracle per core).
-  mA->mods.forceNeutral();
+  // - Core A keeps the USER'S mods (loaded from the settings file in the Game ctor) — pane A must
+  //   look exactly like `PSXPORT_PC_SKIP=0 ./run.sh` (USER 2026-07-10), widescreen included. The
+  //   one guest-poking enhancement (the widescreen cull re-include) is suppressed under SBS at its
+  //   site (cull.cpp reads game->sbs) so guest evolution stays byte-identical to core B; its only
+  //   cost is margin pop-in for dynamic entities in wide panes. fps60 presentation is inert under
+  //   diff_mode (panes sample real frames).
+  // - Core B gets the full oracle pin (Game::setOracle) whenever it runs the substrate (fb_b) —
+  //   the SAME per-Game config as standalone `PSXPORT_ORACLE=1 ./run.sh`, so pane B IS the oracle
+  //   picture (render_observer/billboard/painter/wide gates all read game->oracle per core).
   if (fb_b) mB->setOracle(); else mB->mods.forceNeutral();
-  fprintf(stderr, "[sbs] per-core config: A mods=neutral, B %s\n",
+  fprintf(stderr, "[sbs] per-core config: A = user mods (aspect=%d fps60=%d; wide guest-poke off), B %s\n",
+          mA->mods.aspect, mA->mods.fps60,
           fb_b ? "ORACLE (recomp + neutral mods, game->oracle=1)" : "mods=neutral");
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
   mB->core.storeWatchCb = &Sbs::storeCb;

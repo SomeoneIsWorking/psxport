@@ -335,8 +335,12 @@ void Cull::objectCull() { Core* c = core;
         // and in the SBS legs, which run 4:3), so the byte-exact reference is untouched. At 4:3 the original
         // read-only static-world margin (0-diff) still applies.
         int gpu_gpu_wide_engine(Core*);
-        if (gpu_gpu_wide_engine(c))                    { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // wide: all types populate
-        else if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // 4:3: read-only static margin
+        // Under the SBS harness the wide poke is SUPPRESSED (it perturbs guest state, which would
+        // diverge core A from the pure core B by design, not by bug) — wide panes fall back to the
+        // read-only static margin, so dynamic entities may pop at the pane margins where a
+        // standalone wide run re-includes them. Guest evolution stays byte-identical to core B.
+        if (gpu_gpu_wide_engine(c) && !c->game->sbs)   { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // wide: all types populate
+        else if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // 4:3/SBS: read-only static margin
         else                                           { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object

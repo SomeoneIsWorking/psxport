@@ -121,11 +121,14 @@ static int win_w(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPix
 static int win_h(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return h > 0 ? h : 240; }
 
 // ---- PC-native widescreen accessors (kept; the engine projection reads these) -----------------------
-static int wide_native_w(const Mods& m) {
-  switch (m.aspect) {
+static int wide_native_w(const Game* game) {
+  switch (game->mods.aspect) {
     case ASPECT_16_9: return 428;
     case ASPECT_21_9: return 560;
-    case ASPECT_AUTO: { int w = (int)((240.0 * win_w()) / win_h() + 0.5); w &= ~1;
+    case ASPECT_AUTO: { // AUTO = match the live window aspect. Under SBS each core gets HALF the
+                        // window (two panes side by side), so derive from the half-width.
+                        int ww = win_w(); if (game->sbs) ww /= 2;
+                        int w = (int)((240.0 * ww) / win_h() + 0.5); w &= ~1;
                         if (w < 320) w = 320; if (w > VRAM_W) w = VRAM_W; return w; }
     default:          return 320;
   }
@@ -133,14 +136,14 @@ static int wide_native_w(const Mods& m) {
 // Per-core (was process-global): widescreen never touches the PSX oracle — and `oracle` is per-Game
 // now, so one process can hold a wide user core and a pure 4:3 oracle core (SBS honesty).
 int gpu_gpu_wide_engine(Core* c)     { Game* g = c->game; return g->mods.aspect != ASPECT_4_3 && !g->oracle; }
-int gpu_gpu_wide_engine_ofx(Core* c) { return wide_native_w(c->game->mods) / 2; }
-int gpu_gpu_wide_engine_w(Core* c)   { return wide_native_w(c->game->mods); }
+int gpu_gpu_wide_engine_ofx(Core* c) { return wide_native_w(c->game) / 2; }
+int gpu_gpu_wide_engine_w(Core* c)   { return wide_native_w(c->game); }
 void gpu_gpu_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
   const Mods& m = c->game->mods;
   // Cap = how many integer multiples of the (possibly wide) native FB width fit in VRAM. Raised to 4 (was
   // 3): at 4:3 native_w=320 → VRAM_W/320 = 3, so 4x needs the extra headroom the cap now allows; at 16:9
   // native_w=428 → cap=2, at 21:9 native_w=560 → cap=1. The clamp keeps the scaled FB inside VRAM.
-  int nw = wide_native_w(m), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 4) cap = 4;
+  int nw = wide_native_w(c->game), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 4) cap = 4;
   // mods.ires: 0 = AUTO (derive the scale from the live window height, ~round(h/240)), 1..4 = fixed.
   int i = m.ires;
   if (i == 0) { i = (int)((win_h() / 240.0) + 0.5); if (i < 1) i = 1; }
@@ -1004,7 +1007,7 @@ void gpu_gpu_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, cons
   int paneW = (int)sw / 2;
   SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
   for (int i = 0; i < 2; i++) {
-    SDL_GPUViewport vp = letterbox(4, 3, paneW, (int)sh);
+    SDL_GPUViewport vp = letterbox(pw[i], ph[i], paneW, (int)sh);   // per-pane aspect (A may be wide, B 4:3)
     vp.x += (float)(i * paneW);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
     SDL_GPUTextureSamplerBinding tsb = { s_sbs_tex[i], s_samp_linear };
