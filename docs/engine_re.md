@@ -2693,8 +2693,12 @@ are LIVE and their own control flow is already owned; only the per-state BODIES 
 Ground truth for all 12: `generated/ov_a00_shard_0.c` / `ov_a00_shard_1.c`, symbol
 `ov_a00_gen_<addr>`.
 
-**Status this session:** 7 DRAFTED (compile-only, UNWIRED — no EngineOverrides registration, no
-`shard_set_override`, no SBS run), 5 MAPPED (RE'd for call-graph + field shape, NOT transcribed).
+**Status as of the 2026-07-10 wide-RE waves:** 8 DRAFTED (compile-only, UNWIRED — no EngineOverrides
+registration, no `shard_set_override`, no SBS run), 4 MAPPED (RE'd for call-graph + field shape, NOT
+transcribed). The 8th draft (`0x8012ED84`) was added by a dedicated single-function follow-up
+session after the original 2026-07-10 wave demoted all 3 remaining edge-orchestrator leaves to
+MAPPED-ONLY as too risky for one rushed pass — see the DRAFTED entry for `0x8012ED84` below for
+details and the bugs caught during hand-tracing.
 
 ### DRAFTED — game/ai/beh_substate_edge_leaves.cpp
 
@@ -2754,33 +2758,68 @@ Ground truth for all 12: `generated/ov_a00_shard_0.c` / `ov_a00_shard_1.c`, symb
   `rec_dispatch`). On arm failure (<0), a GBASE bit-set + rolling counter gates
   `Engine::announcerCue`-shaped `0x8004ED94(110,65)`. `obj[4]=3` unconditionally at the end.
 
+### DRAFTED — game/ai/beh_substate_edge_leaves.cpp, dedicated wide-RE pass 2026-07-10
+
+**`0x8012ED84`** (401 ln, edge-orchestrator STATE 0 init) — promoted from MAPPED-ONLY to DRAFTED by
+a follow-up wide-RE session dedicated to this one function (the 2026-07-10 wave above judged all
+3 remaining edge-orchestrator leaves too risky for one rushed pass; this session budgeted its full
+effort to the smallest of the three instead of spreading thin across all 3, per
+docs/fleet-workflow.md §9 "correctness over coverage"). Near-mechanical goto-preserving
+transliteration (same style as `0x80132A88`/`0x80132EDC` below), cross-checked against ground
+truth (`generated/ov_a00_shard_1.c:18777-19125`) TWICE line-by-line. Confirmed structure:
+  1. The **5-entry** two-level lookup loop filling `obj[96]`/`[98]`/`[100]`/`[102]`/`[104]` from
+     `class = byte_table[0x8014A334 + obj[3]]` / `obj[96+2i] = u16_table[0x8014A340 + (class*5+i)*2]`
+     (already corrected 6->5 in the entry below — reconfirmed here).
+  2. `obj[112] = (obj[3]==0) ? (u16)-170 : 0`; header init (`obj[0]=1, obj[4]++, obj[13]=4,
+     obj[11]=0, obj[9]=0`); `r21 = *(u32*)0x800ECFAC` (fixed main-RAM global, LOW CONFIDENCE role,
+     inferred record-pool base pointer — **note: this address was originally mistranscribed as
+     0x801ECFAC during drafting** (`32783<<16` is `0x800F0000`, not `0x801F0000` — an off-by-
+     0x100000 hex slip) and caught by re-deriving every constant in the function with a Python
+     cross-check after the initial draft; every other constant in the function (`0x8014A334/40/
+     74/7E/EC`, `0x800BF89C`) was verified the same way and matched).
+  3. TWO near-identical record-allocation loops (obj[96]&1 selects which; up to 3 entries each,
+     walking `obj[192]/[196]/[200]/[204]` — a per-slot "linked child" array), each calling the
+     UNOWNED `0x8007AAE8` with an argument that is a REGISTER LEFTOVER from step 2's `obj[96]&1`
+     test (no intervening write to that register between the test and either loop's call site —
+     a genuine register-reuse-across-unrelated-uses pattern, the same bug CLASS the
+     perobj_billboard findings flagged for C2D4/C464/C8F4; preserved literally rather than
+     "cleaned up" so the draft doesn't silently paper over it). A null result from `0x8007AAE8` in
+     EITHER loop sets `obj[4]=3` and jumps STRAIGHT to the epilogue — the SAME epilogue-bypass trap
+     shape as `0x80132EDC` below, confirmed by re-reading the goto targets, not assumed.
+  4. Each loop has its own lookup switch selecting which GBASE table entry seeds a child record's
+     `+64` field — **loop A's switch keys on `r20`** (a counter that can advance by 1 OR 2 per
+     iteration, diverging from the `r18` loop index whenever an extra bump condition fires) while
+     **loop B's switch keys on `r18`** (the loop index itself, since loop B never does the extra
+     bump). An initial draft pass of both switches nested the "index==2" special case as a
+     sub-branch of "index==1" and silently dropped the "index>2" generic-default fallthrough
+     (`L_8012F01C`/`L_8012F1F4` in ground truth) — caught by re-reading each switch's goto targets
+     a second time and rewritten as goto-preserving label blocks instead of nested if/else.
+  5. Common tail (only reached if neither loop's alloc failed): default position-table values;
+     conditional `+12` field write gated by `obj[96]` bits 8/1; a 4-way switch on `obj[3]` writing
+     `+8`/`+10` fields (with a `type3==11` sub-case that skips the final `+8` write entirely,
+     `goto L_8012F340` in ground truth — another confirmed epilogue-adjacent bypass, though not a
+     full-epilogue bypass this time, just a skipped single write); calls into `0x80131600`,
+     `0x801314B4`, `0x8012E8A8` (confirming it's a shared sub-routine per the note below),
+     `0x80133444`, conditionally `0x8013892C`/`0x80125F50` (whose masked return value becomes a
+     NEW child-slot index that gets OR'd into that slot's record `+62` byte), `0x801312CC`, and a
+     final `obj[3]`-gated call into `0x8004CBD8(obj, 0 or 6)` plus a fixed `0x800BF89C` byte-flag
+     check gating `obj[5]=5`.
+UNVERIFIED/UNWIRED per docs/fleet-workflow.md §6/§9 (no EngineOverrides registration, no
+`shard_set_override`, no SBS run — the draft only needs to compile, confirmed clean build+link).
+LOW CONFIDENCE items flagged in-code: `r21`'s 0x800ECFAC global role, the 0x800BF89C byte's role,
+and the final child-slot `record[62] |= 3` write's exact purpose.
+
 ### MAPPED-ONLY (RE'd for call-graph/shape, NOT drafted — too large/uncertain for one pass)
 
-Still MAPPED-ONLY after the 2026-07-10 wide-RE wave — these 3 are the edge-orchestrator's
-remaining ~400-line node[5] sub-states. They were assessed and DELIBERATELY NOT drafted this
-session: full goto-preserving transliteration of `0x80132A88`/`0x80132EDC` (162/146 gen-C lines)
-already required catching 2 real branch-target/constant-base bugs during hand-tracing (see the
-DRAFTED section below); these three are ~2.5-3x longer with more spilled registers (r16-r23+r30
-vs r16-r18), so a rushed draft would land squarely in docs/fleet-workflow.md §9's "bug-farm"
-territory. Per that doc: an honest MAP beats a buggy draft.
+Still MAPPED-ONLY — these 2 are the edge-orchestrator's remaining ~400-line node[5] sub-states
+(the third, `0x8012ED84`, was promoted to DRAFTED above by a dedicated 2026-07-10 follow-up
+session). They remain DELIBERATELY NOT drafted: full goto-preserving transliteration of
+`0x80132A88`/`0x80132EDC` (162/146 gen-C lines) and `0x8012ED84` (401 ln) already required catching
+several real branch-target/constant-base bugs during hand-tracing even with a dedicated single-
+function session; these two are ~2.5-3x longer than the 80132A88/EDC pair with more spilled
+registers (r16-r23+r30 vs r16-r18), so a rushed draft would land squarely in
+docs/fleet-workflow.md §9's "bug-farm" territory. Per that doc: an honest MAP beats a buggy draft.
 
-- **`0x8012ED84`** (401 ln, edge-orchestrator STATE 0 init) — calls (in order) unowned leaves
-  `0x80125F50`, **`0x8012E8A8` directly** (confirming the drafted leaf above is itself a shared
-  sub-routine, not just an orchestrator-tail call), `0x801312CC`, `0x801314B4`, `0x80131600`,
-  `0x80133444`, `0x8013892C`, plus `rec_dispatch` calls to the already-owned-shaped
-  `0x8004CBD8`/`0x8007AAE8` (record-alloc family, same as `0x8012ED84`'s neighbor
-  `0x8012EEA4:` loop reading `0x8007AAE8` — a per-type multi-record allocation loop, ~3 iterations
-  gated by `obj[96]&2` and a running index against a fixed bound of 3). Opens with a small fixed
-  **5-entry** lookup loop (CORRECTED 2026-07-10 — was previously documented as "6-entry"; the
-  ground-truth loop counter `r18` runs `0,1,2,3,4` against a `<5` guard, confirmed by re-reading
-  `generated/ov_a00_shard_1.c:18795-18808`) filling `obj[96]`/`[98]`/`[100]`/`[102]`/`[104]`
-  (5 consecutive u16 slots, written via a pointer that starts at `obj+96` and increments by 2 each
-  iteration) from a TWO-LEVEL lookup: `class = byte_table[0x8014A334 + obj[3]]` (a single-byte
-  remap of the type into a smaller class id, table base `0x80150000-23756`), then
-  `obj[96+2*i] = u16_table[0x8014A340 + (class*5 + i)*2]` (table base `0x80150000-23744`, stride
-  2, 5 entries per class) for `i` in `[0,5)`. Both tables same GBASE-family constant-address shape
-  the drafted `0x80132A88`/`0x8013272C` also read from (different bases/strides). Spills
-  r16-r23+r30+ra (frame -56) — the widest frame in this cluster.
 - **`0x8012F5B4`** (428 ln, edge-orchestrator node[5]==1 sub-state) — calls unowned
   `0x80130788`/`0x801308E0`/`0x801314B4`/`0x80131578`, plus `rec_dispatch` to
   `Sfx::trigger`-shaped `0x80074590`, an unowned `0x80074AF0`, and `Trig::rsin`-shaped `0x80083E80`

@@ -2508,6 +2508,31 @@ themselves are LIVE but dispatch out to substrate for every case body.
   conventions and the discovery of a new `obj[74]` countdown-source field are recorded in
   docs/engine_re.md so a future reader doesn't mistake them for bugs. Regenerated docs/code-map.md
   (616 natives, 30 ORPHAN — the 2 new drafts show as ORPHAN/unwired, as expected).
+- **Dedicated follow-up: `0x8012ED84` drafted (wide-RE agent, 2026-07-10, UNWIRED, isolated
+  worktree).** Of the 3 edge-orchestrator leaves the session above demoted to MAPPED-ONLY, this
+  session budgeted its full effort into one careful draft of the smallest (`0x8012ED84`, 401 gen-C
+  ln, STATE 0 init) rather than a rushed pass over all 3, per fleet-workflow.md §9 "correctness
+  over coverage". Appended to `game/ai/beh_substate_edge_leaves.cpp`; goto-preserving 1:1
+  transliteration (same style as `0x80132A88`/`0x80132EDC`), cross-checked against ground truth
+  (`generated/ov_a00_shard_1.c:18777-19125`) twice. Caught 3 real bugs during hand-tracing before
+  landing the final version: (1) an off-by-`0x100000` hex slip transcribing a fixed global address
+  (`32783<<16` is `0x800F0000` not `0x801F0000` — caught by cross-checking every constant in the
+  function with a Python one-liner rather than trusting hand arithmetic); (2) loop A's per-entry
+  lookup switch mis-nested "index==2" as a sub-case of "index==1" and silently dropped the
+  "index>2" generic-default fallthrough; (3) the same mis-nesting bug independently in loop B's
+  switch (different key register — loop A keys on the diverging counter `r20`, loop B keys on the
+  loop index `r18` itself, since loop B never does loop A's extra bump). Both switches rewritten as
+  goto-preserving label blocks instead of nested if/else to eliminate the risk class. Also
+  reconfirmed the record-alloc epilogue-bypass trap (a null alloc result in EITHER of the function's
+  2 record-loops jumps straight to the epilogue, skipping the entire common-tail init) and a
+  leftover-register-as-call-argument pattern (the `obj[96]&1` test result stays live in the ABI arg
+  register across ~15 unrelated lines and becomes the argument to `0x8007AAE8` in both loops — the
+  same register-reuse bug class flagged in the perobj_billboard findings). Build verified:
+  `tomba2_port` links clean, no warnings on the touched file. `0x8012F5B4` (428 ln) and `0x8012FD88`
+  (406 ln) remain MAPPED-ONLY — not attempted this session, per the same "one well beats three
+  badly" call. Docs updated: docs/engine_re.md's DRAFTED/MAPPED-ONLY split for this cluster, and
+  docs/code-map.md regenerated (`0x8012ED84` still shows as a dependency of the LIVE orchestrator,
+  not yet LIVE itself — expected for an unwired draft).
 - **Two hottest unowned leaves + per-frame input fence (wide-RE agent, 2026-07-09, UNWIRED).**
   Band: `0x80079528` (4235 dispatches/600 free-roam frames), `0x80079374` (4235), `0x800788AC`
   (627, ~1/frame). All 3 DRAFTED (compile+link clean, unwired, unverified, no SBS run):
