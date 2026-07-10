@@ -30,6 +30,7 @@
 
 struct Core;
 struct RqItem;
+class Game;
 
 // logic-rate detector (validated lrate_proto): votes on the number of frames each projected-geometry
 // fingerprint is HELD, so the tier knows how many in-betweens to synthesize (Tomba2 logic = 30fps → 1).
@@ -37,6 +38,7 @@ typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long ch
 
 // ---- Fps60 — the 60fps tier's per-instance interpolation state + methods ------------------------------
 struct Fps60 {
+  Game* game = nullptr;   // owner back-pointer (set in Game()) — gates via game->mods.fps60
   // ---- logic-rate detector (kept) --------------------------------------------------------------------
   uint64_t mFrameHash = 1469598103934665603ull;   // per-frame projected-geometry fingerprint (rate input)
   long     mFrameGeom = 0;                          // #verts folded this frame (0 => idle frame)

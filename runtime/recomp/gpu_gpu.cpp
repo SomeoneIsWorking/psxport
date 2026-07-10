@@ -22,7 +22,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
-#include "mods.h"             // g_mods: live PC-native mod toggles (wide/ires); seeded from cfg
+#include "mods.h"             // Mods: per-Game mod toggles (wide/ires) — reached via game->mods
 #include "overlay_glue.h"     // RmlUi mod/debug overlay hooks (init / event / per-frame / record)
 #include "gpu_gpu_shaders.h"  // generated: spv_g_present_{vert,frag} / spv_g_image_{vert,frag}
 #include <stdint.h>
@@ -45,9 +45,6 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 #define s_win          (gdev().s_win)
 #define s_dev          (gdev().s_dev)
 #define s_swap_fmt     (gdev().s_swap_fmt)
-#define s_vram_tex     (gdev().s_vram_tex)
-#define s_vram_xfer    (gdev().s_vram_xfer)
-#define s_rb_xfer      (gdev().s_rb_xfer)
 #define s_samp_nearest (gdev().s_samp_nearest)
 #define s_samp_linear  (gdev().s_samp_linear)
 #define s_present_pipe (gdev().s_present_pipe)
@@ -56,22 +53,11 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 #define s_img_xfer     (gdev().s_img_xfer)
 #define s_img_w        (gdev().s_img_w)
 #define s_img_h        (gdev().s_img_h)
-#define s_vram_snap    (gdev().s_vram_snap)
-#define s_snap_xfer    (gdev().s_snap_xfer)
-#define s_depth        (gdev().s_depth)
-#define s_tri_vbuf     (gdev().s_tri_vbuf)
-#define s_tex_vbuf     (gdev().s_tex_vbuf)
-#define s_semi_vbuf    (gdev().s_semi_vbuf)
-#define s_tri_xfer     (gdev().s_tri_xfer)
-#define s_tex_xfer     (gdev().s_tex_xfer)
-#define s_semi_xfer    (gdev().s_semi_xfer)
 #define s_tri_pipe     (gdev().s_tri_pipe)
 #define s_tritex_pipe  (gdev().s_tritex_pipe)
 #define s_semi_pipe    (gdev().s_semi_pipe)
-#define s_color_rgba   (gdev().s_color_rgba)
 #define s_decode_pipe  (gdev().s_decode_pipe)
 #define s_encode_pipe  (gdev().s_encode_pipe)
-#define s_have_3d      (gdev().s_have_3d)
 #define s_sbs_tex      (gdev().s_sbs_tex)
 #define s_sbs_xfer     (gdev().s_sbs_xfer)
 #define s_sbs_w        (gdev().s_sbs_w)
@@ -115,7 +101,7 @@ struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4];
 // void* to TriVtx*) inside the methods. The `render_geom` free function below takes a `GpuGpuState&`
 // so it can pull the right instance's batches at present time.
 // (raster/pipeline resources live on GpuDevice — see the shadow macros above)
-static void create_3d(void);
+static void create_3d_pipelines(void);
 static void init_gpu(Game* game);
 static void poll_quit(Game* game);
 
@@ -135,8 +121,8 @@ static int win_w(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPix
 static int win_h(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return h > 0 ? h : 240; }
 
 // ---- PC-native widescreen accessors (kept; the engine projection reads these) -----------------------
-static int wide_native_w(void) {
-  switch (g_mods.aspect) {
+static int wide_native_w(const Mods& m) {
+  switch (m.aspect) {
     case ASPECT_16_9: return 428;
     case ASPECT_21_9: return 560;
     case ASPECT_AUTO: { int w = (int)((240.0 * win_w()) / win_h() + 0.5); w &= ~1;
@@ -144,17 +130,19 @@ static int wide_native_w(void) {
     default:          return 320;
   }
 }
-int gpu_gpu_wide_engine(void)     { mods_init(); return g_mods.aspect != ASPECT_4_3 && !oracle_mode(); }  // widescreen never touches the PSX oracle
-int gpu_gpu_wide_engine_ofx(void) { return wide_native_w() / 2; }
-int gpu_gpu_wide_engine_w(void)   { return wide_native_w(); }
-void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
-  mods_init();
+// Per-core (was process-global): widescreen never touches the PSX oracle — and `oracle` is per-Game
+// now, so one process can hold a wide user core and a pure 4:3 oracle core (SBS honesty).
+int gpu_gpu_wide_engine(Core* c)     { Game* g = c->game; return g->mods.aspect != ASPECT_4_3 && !g->oracle; }
+int gpu_gpu_wide_engine_ofx(Core* c) { return wide_native_w(c->game->mods) / 2; }
+int gpu_gpu_wide_engine_w(Core* c)   { return wide_native_w(c->game->mods); }
+void gpu_gpu_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
+  const Mods& m = c->game->mods;
   // Cap = how many integer multiples of the (possibly wide) native FB width fit in VRAM. Raised to 4 (was
   // 3): at 4:3 native_w=320 → VRAM_W/320 = 3, so 4x needs the extra headroom the cap now allows; at 16:9
   // native_w=428 → cap=2, at 21:9 native_w=560 → cap=1. The clamp keeps the scaled FB inside VRAM.
-  int nw = wide_native_w(), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 4) cap = 4;
-  // g_mods.ires: 0 = AUTO (derive the scale from the live window height, ~round(h/240)), 1..4 = fixed.
-  int i = g_mods.ires;
+  int nw = wide_native_w(m), cap = VRAM_W / nw; if (cap < 1) cap = 1; if (cap > 4) cap = 4;
+  // mods.ires: 0 = AUTO (derive the scale from the live window height, ~round(h/240)), 1..4 = fixed.
+  int i = m.ires;
   if (i == 0) { i = (int)((win_h() / 240.0) + 0.5); if (i < 1) i = 1; }
   if (i < 1) i = 1; if (i > cap) i = cap;
   if (native_w) *native_w = nw; if (ires) *ires = i; if (fbw) *fbw = nw * i;
@@ -296,10 +284,22 @@ static SDL_GPUGraphicsPipeline* make_semi_pipeline(int mode,
   return p;
 }
 
-// Build the 3D raster resources: the VRAM snapshot (texture source), the D32 depth buffer, the three host
-// vertex buffers (+ their upload staging) and the flat/textured-opaque/textured-semi pipelines. Once.
-static void create_3d(void) {
+// Per-Game GPU render TARGETS (deglobalized 2026-07-10): each Game owns its own guest-VRAM image,
+// upload/readback staging, texture-atlas snapshot, depth buffer, float semi-blend intermediate and
+// vertex buffers, so two Games (SBS) can never render through each other's surfaces. Lazy: needs the
+// shared device up (init_gpu), then created once per Game on first touch.
+void GpuGpuState::ensure_targets() {
   if (s_have_3d) return;
+  s_have_3d = 1;
+  SDL_GPUTextureCreateInfo vi = {};
+  vi.type = SDL_GPU_TEXTURETYPE_2D; vi.format = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
+  vi.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+  vi.width = VRAM_W; vi.height = VRAM_H; vi.layer_count_or_depth = 1; vi.num_levels = 1;
+  s_vram_tex = SDL_CreateGPUTexture(s_dev, &vi); GPUCHK(s_vram_tex, "CreateGPUTexture(VRAM)");
+  SDL_GPUTransferBufferCreateInfo up = {}; up.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD; up.size = VRAM_W * VRAM_H * 2;
+  s_vram_xfer = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_vram_xfer, "CreateGPUTransferBuffer(up)");
+  SDL_GPUTransferBufferCreateInfo dn = {}; dn.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; dn.size = VRAM_W * VRAM_H * 2;
+  s_rb_xfer = SDL_CreateGPUTransferBuffer(s_dev, &dn); GPUCHK(s_rb_xfer, "CreateGPUTransferBuffer(dn)");
   SDL_GPUTextureCreateInfo ti = {}; ti.type = SDL_GPU_TEXTURETYPE_2D; ti.format = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
   ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER; ti.width = VRAM_W; ti.height = VRAM_H; ti.layer_count_or_depth = 1; ti.num_levels = 1;
   s_vram_snap = SDL_CreateGPUTexture(s_dev, &ti); GPUCHK(s_vram_snap, "snapshot tex");
@@ -319,14 +319,17 @@ static void create_3d(void) {
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     mkbuf(sizeof(TexVtx) * TEX_CAP, &s_semi_vbuf[m], &s_semi_xfer[m]);
   }
-  // CPU-side batch buffers moved onto GpuGpuState — allocated lazily in each draw_tri / draw_tritri /
-  // draw_semi call (see the alloc_batches guard at the top of each). Per-Core so SBS's two cores keep
-  // separate per-frame geometry (2026-07-03).
+  // CPU-side batch buffers stay lazily allocated per draw call (ggs_alloc_batches).
   // Float RGBA semi-blend intermediate (decode target / real-HW-blend target / encode source).
   SDL_GPUTextureCreateInfo cti = {}; cti.type = SDL_GPU_TEXTURETYPE_2D; cti.format = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
   cti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
   cti.width = VRAM_W; cti.height = VRAM_H; cti.layer_count_or_depth = 1; cti.num_levels = 1;
   s_color_rgba = SDL_CreateGPUTexture(s_dev, &cti); GPUCHK(s_color_rgba, "color_rgba tex");
+}
+
+// Build the 3D raster PIPELINES (shared device objects; the render targets are per-Game). Once.
+static void create_3d_pipelines(void) {
+  if (gdev().s_pipes_3d) return;
   static const SDL_GPUVertexAttribute tri_attr[] = {
     { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, 0 },
     { 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, 8 },
@@ -353,13 +356,12 @@ static void create_3d(void) {
   s_encode_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert, spv_g_fsq_vert_len,
                                                       spv_g_encode_frag, spv_g_encode_frag_len,
                                                       SDL_GPU_TEXTUREFORMAT_R8G8_UNORM);
-  s_have_3d = 1;
-  fprintf(stderr, "[gpu_gpu] 3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate)\n");
+  gdev().s_pipes_3d = 1;
+  fprintf(stderr, "[gpu_gpu] 3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)\n");
 }
 
 static void init_gpu(Game* game) {
   s_inited = 1;
-  mods_init();
   // SDL_GPU requires the video subsystem even headless (the device is created against it; we just don't
   // open a window or claim a swapchain).
   if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "[gpu_gpu] SDL_Init(VIDEO) failed: %s\n", SDL_GetError()); exit(2); }
@@ -379,21 +381,9 @@ static void init_gpu(Game* game) {
     s_swap_fmt = SDL_GetGPUSwapchainTextureFormat(s_dev, s_win);
   }
 
-  // VRAM R16_UINT image: SAMPLER (present samples it) + COLOR_TARGET (the 3D raster renders the geometry
-  // batch into it, on top of the uploaded 2D backdrop). + upload/download transfer buffers.
-  // R8G8_UNORM (NOT R16_UINT): SDL_GPU forbids SAMPLER usage on integer formats, so VRAM is stored as two
-  // 8-bit channels (R=low byte, G=high byte) — the same uint16 LE bytes — and the shaders reconstruct the
-  // 16-bit 1555 word. RG8 is sampler-legal + renderable on every backend (incl. Metal).
-  SDL_GPUTextureCreateInfo ti = {};
-  ti.type = SDL_GPU_TEXTURETYPE_2D; ti.format = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-  ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
-  ti.width = VRAM_W; ti.height = VRAM_H; ti.layer_count_or_depth = 1; ti.num_levels = 1;
-  s_vram_tex = SDL_CreateGPUTexture(s_dev, &ti); GPUCHK(s_vram_tex, "CreateGPUTexture(VRAM)");
-  SDL_GPUTransferBufferCreateInfo up = {}; up.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD; up.size = VRAM_W * VRAM_H * 2;
-  s_vram_xfer = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_vram_xfer, "CreateGPUTransferBuffer(up)");
-  SDL_GPUTransferBufferCreateInfo dn = {}; dn.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; dn.size = VRAM_W * VRAM_H * 2;
-  s_rb_xfer = SDL_CreateGPUTransferBuffer(s_dev, &dn); GPUCHK(s_rb_xfer, "CreateGPUTransferBuffer(dn)");
-
+  // (the guest-VRAM image + its upload/download staging are PER-GAME now — GpuGpuState::ensure_targets.
+  //  VRAM is stored R8G8_UNORM, not R16_UINT: SDL_GPU forbids SAMPLER usage on integer formats, so the
+  //  uint16 LE 1555 word rides as two 8-bit channels and the shaders reconstruct it.)
   SDL_GPUSamplerCreateInfo si = {};
   si.min_filter = SDL_GPU_FILTER_NEAREST; si.mag_filter = SDL_GPU_FILTER_NEAREST;
   si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
@@ -406,7 +396,7 @@ static void init_gpu(Game* game) {
     s_present_pipe = make_fullscreen_pipeline(spv_g_present_vert, spv_g_present_vert_len, spv_g_present_frag, spv_g_present_frag_len, s_swap_fmt);
     s_image_pipe   = make_fullscreen_pipeline(spv_g_image_vert,   spv_g_image_vert_len,   spv_g_image_frag,   spv_g_image_frag_len, s_swap_fmt);
   }
-  create_3d();   // the native 3D/textured raster (R16_UINT color target + depth) — windowed AND headless
+  create_3d_pipelines();   // the native 3D/textured raster pipelines — windowed AND headless
   fprintf(stderr, "[gpu_gpu] %s renderer up (VRAM %dx%d RG8 = PSX 1555)\n", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
   // RmlUi mod/debug overlay — windowed only (it records into the swapchain present pass). No-op if its
   // assets/fonts are missing; ESC toggles it once up.
@@ -421,14 +411,15 @@ static void poll_quit(Game* game) {
   }
 }
 
-// Upload the whole CPU VRAM (src, 1024*512 uint16) into s_vram_tex via a copy pass on `cmd`.
-static void upload_vram(SDL_GPUCommandBuffer* cmd, const uint16_t* src) {
-  void* p = SDL_MapGPUTransferBuffer(s_dev, s_vram_xfer, true);
+// Upload the whole CPU VRAM (src, 1024*512 uint16) into THIS Game's VRAM image via a copy pass on `cmd`.
+static void upload_vram(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src) {
+  g.ensure_targets();
+  void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_vram_xfer, true);
   memcpy(p, src, (size_t)VRAM_W * VRAM_H * 2);
-  SDL_UnmapGPUTransferBuffer(s_dev, s_vram_xfer);
+  SDL_UnmapGPUTransferBuffer(s_dev, g.s_vram_xfer);
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
-  SDL_GPUTextureTransferInfo srci = {}; srci.transfer_buffer = s_vram_xfer; srci.pixels_per_row = VRAM_W; srci.rows_per_layer = VRAM_H;
-  SDL_GPUTextureRegion dst = {}; dst.texture = s_vram_tex; dst.w = VRAM_W; dst.h = VRAM_H; dst.d = 1;
+  SDL_GPUTextureTransferInfo srci = {}; srci.transfer_buffer = g.s_vram_xfer; srci.pixels_per_row = VRAM_W; srci.rows_per_layer = VRAM_H;
+  SDL_GPUTextureRegion dst = {}; dst.texture = g.s_vram_tex; dst.w = VRAM_W; dst.h = VRAM_H; dst.d = 1;
   SDL_UploadToGPUTexture(cp, &srci, &dst, false);
   SDL_EndGPUCopyPass(cp);
 }
@@ -466,50 +457,51 @@ static SDL_GPUViewport letterbox(int aw, int ah, int ow, int oh) {
 static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src, int* dtri, int* dtex, int* dsemi) {
   int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += g.s_semi_n[m];
   *dtri = g.s_tri_n; *dtex = g.s_tex_n; *dsemi = semi_total;
-  if (!s_have_3d || (g.s_tri_n + g.s_tex_n + semi_total) == 0) return;
-  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_snap_xfer, true); memcpy(p, src, (size_t)VRAM_W*VRAM_H*2); SDL_UnmapGPUTransferBuffer(s_dev, s_snap_xfer); }
-  if (g.s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_tri_xfer, true);  memcpy(p, g.s_tri_buf,  (size_t)g.s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, s_tri_xfer); }
-  if (g.s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, s_tex_xfer, true);  memcpy(p, g.s_tex_buf,  (size_t)g.s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, s_tex_xfer); }
+  if ((g.s_tri_n + g.s_tex_n + semi_total) == 0) return;
+  g.ensure_targets();
+  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_snap_xfer, true); memcpy(p, src, (size_t)VRAM_W*VRAM_H*2); SDL_UnmapGPUTransferBuffer(s_dev, g.s_snap_xfer); }
+  if (g.s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tri_xfer, true);  memcpy(p, g.s_tri_buf,  (size_t)g.s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tri_xfer); }
+  if (g.s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tex_xfer, true);  memcpy(p, g.s_tex_buf,  (size_t)g.s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tex_xfer); }
   for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
-    void* p = SDL_MapGPUTransferBuffer(s_dev, s_semi_xfer[m], true);
+    void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_semi_xfer[m], true);
     memcpy(p, g.s_semi_buf[m], (size_t)g.s_semi_n[m]*sizeof(TexVtx));
-    SDL_UnmapGPUTransferBuffer(s_dev, s_semi_xfer[m]);
+    SDL_UnmapGPUTransferBuffer(s_dev, g.s_semi_xfer[m]);
   }
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
-  { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = s_snap_xfer; si.pixels_per_row = VRAM_W; si.rows_per_layer = VRAM_H;
-    SDL_GPUTextureRegion dr = {}; dr.texture = s_vram_snap; dr.w = VRAM_W; dr.h = VRAM_H; dr.d = 1;
+  { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = g.s_snap_xfer; si.pixels_per_row = VRAM_W; si.rows_per_layer = VRAM_H;
+    SDL_GPUTextureRegion dr = {}; dr.texture = g.s_vram_snap; dr.w = VRAM_W; dr.h = VRAM_H; dr.d = 1;
     SDL_UploadToGPUTexture(cp, &si, &dr, false); }
   auto upv = [&](SDL_GPUTransferBuffer* x, SDL_GPUBuffer* b, int n, Uint32 stride){ if (!n) return;
     SDL_GPUTransferBufferLocation s = {}; s.transfer_buffer = x;
     SDL_GPUBufferRegion d = {}; d.buffer = b; d.offset = 0; d.size = (Uint32)n*stride;
     SDL_UploadToGPUBuffer(cp, &s, &d, false); };
-  upv(s_tri_xfer, s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
-  upv(s_tex_xfer, s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
-  for (int m = 0; m < NUM_BLEND_MODES; m++) upv(s_semi_xfer[m], s_semi_vbuf[m], g.s_semi_n[m], sizeof(TexVtx));
+  upv(g.s_tri_xfer, g.s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
+  upv(g.s_tex_xfer, g.s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
+  for (int m = 0; m < NUM_BLEND_MODES; m++) upv(g.s_semi_xfer[m], g.s_semi_vbuf[m], g.s_semi_n[m], sizeof(TexVtx));
   SDL_EndGPUCopyPass(cp);
-  SDL_GPUTextureSamplerBinding snap = { s_vram_snap, s_samp_nearest };
+  SDL_GPUTextureSamplerBinding snap = { g.s_vram_snap, s_samp_nearest };
   SDL_GPUBufferBinding bb = {}; bb.offset = 0;
   SDL_GPUViewport vp = { 0, 0, (float)VRAM_W, (float)VRAM_H, 0.0f, 1.0f }; SDL_Rect sc = { 0, 0, VRAM_W, VRAM_H };
   // ---- Pass A: opaque (flat + textured) -----------------------------------------------------------
   {
-    SDL_GPUColorTargetInfo ct = {}; ct.texture = s_vram_tex; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = s_depth; dt.clear_depth = 0.0f;
+    SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_vram_tex; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = g.s_depth; dt.clear_depth = 0.0f;
     dt.load_op = SDL_GPU_LOADOP_CLEAR; dt.store_op = SDL_GPU_STOREOP_STORE;   // STORE: the semi pass reuses this depth
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    if (g.s_tri_n) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = s_tri_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, g.s_tri_n, 1, 0, 0); }
-    if (g.s_tex_n) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = s_tex_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+    if (g.s_tri_n) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = g.s_tri_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, g.s_tri_n, 1, 0, 0); }
+    if (g.s_tex_n) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = g.s_tex_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
                    SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, g.s_tex_n, 1, 0, 0); }
     SDL_EndGPURenderPass(rp);
   }
   if (!semi_total) return;
   // ---- decode: s_vram_tex (this frame's opaque content) -> s_color_rgba (float, real-blend target) ----
   {
-    SDL_GPUColorTargetInfo ct = {}; ct.texture = s_color_rgba; ct.load_op = SDL_GPU_LOADOP_DONT_CARE; ct.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_color_rgba; ct.load_op = SDL_GPU_LOADOP_DONT_CARE; ct.store_op = SDL_GPU_STOREOP_STORE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    SDL_GPUTextureSamplerBinding vramtex = { s_vram_tex, s_samp_nearest };
+    SDL_GPUTextureSamplerBinding vramtex = { g.s_vram_tex, s_samp_nearest };
     SDL_BindGPUGraphicsPipeline(rp, s_decode_pipe); SDL_BindGPUFragmentSamplers(rp, 0, &vramtex, 1);
     SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
     SDL_EndGPURenderPass(rp);
@@ -517,24 +509,24 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   // ---- Pass B: textured-semi, one draw call per non-empty blend-mode bucket, REAL HW blend, testing
   //      (not clearing/writing) Pass A's depth ----------------------------------------------------------
   {
-    SDL_GPUColorTargetInfo ct = {}; ct.texture = s_color_rgba; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = s_depth;
+    SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_color_rgba; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = g.s_depth;
     dt.load_op = SDL_GPU_LOADOP_LOAD; dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
     for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
-      SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]); bb.buffer = s_semi_vbuf[m]; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+      SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]); bb.buffer = g.s_semi_vbuf[m]; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
       SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, g.s_semi_n[m], 1, 0, 0);
     }
     SDL_EndGPURenderPass(rp);
   }
   // ---- encode: s_color_rgba -> s_vram_tex (1555), for present/shot/vkvram/provat/SBS -------------------
   {
-    SDL_GPUColorTargetInfo ct = {}; ct.texture = s_vram_tex; ct.load_op = SDL_GPU_LOADOP_DONT_CARE; ct.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_vram_tex; ct.load_op = SDL_GPU_LOADOP_DONT_CARE; ct.store_op = SDL_GPU_STOREOP_STORE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    SDL_GPUTextureSamplerBinding colorrgba = { s_color_rgba, s_samp_nearest };
+    SDL_GPUTextureSamplerBinding colorrgba = { g.s_color_rgba, s_samp_nearest };
     SDL_BindGPUGraphicsPipeline(rp, s_encode_pipe); SDL_BindGPUFragmentSamplers(rp, 0, &colorrgba, 1);
     SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
     SDL_EndGPURenderPass(rp);
@@ -542,16 +534,15 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
 }
 
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
-static void dump_to(const char*, int, int, int, int, int, uint8_t, uint8_t, uint8_t);   // fwd (defined below) — preseq dump
+static void dump_to(GpuGpuState& g, const char*, int, int, int, int, int, uint8_t, uint8_t, uint8_t);   // fwd (defined below) — preseq dump
 void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_gpu_enabled()) return;
   if (!s_inited) init_gpu(game);
-  mods_init();
   // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw). Everything downstream (the
   // windowed present sample region AND the `shot`/vkshot readback, which use s_last_w) must span that wide
   // width, else the wide FB is cropped back to the 4:3 s_disp_w. At 4:3 nw==320 so w is unchanged.
   int disp_w = w;
-  if (gpu_gpu_wide_engine()) disp_w = gpu_gpu_wide_engine_w();
+  if (gpu_gpu_wide_engine(&game->core)) disp_w = gpu_gpu_wide_engine_w(&game->core);
   s_present_sx = sx; s_present_sy = sy;
   s_last_sx = sx; s_last_sy = sy; s_last_w = disp_w; s_last_h = h;
 
@@ -576,7 +567,7 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   }
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev);
   GPUCHK(cmd, "AcquireGPUCommandBuffer");
-  upload_vram(cmd, src);                                    // CPU VRAM -> s_vram_tex (2D backdrop)
+  upload_vram(*this, cmd, src);                             // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
   render_geom(*this, cmd, src, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c);   // draw the tee batch on top (+depth)
 
   if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // shot reads s_vram_tex via its own cmd
@@ -669,18 +660,19 @@ void gpu_gpu_present_image(Core* core, const uint8_t* rgba, int iw, int ih, floa
   poll_quit(game);
 }
 
-// ---- readback (shot / vram dump): download s_vram_tex → host, decode 1555 → PPM with the fade ---------
-static const uint16_t* readback_vram(void) {
+// ---- readback (shot / vram dump): download THIS Game's VRAM image → host, decode 1555 → PPM ---------
+static const uint16_t* readback_vram(GpuGpuState& g) {
+  g.ensure_targets();
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "AcquireGPUCommandBuffer");
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
-  SDL_GPUTextureRegion srcr = {}; srcr.texture = s_vram_tex; srcr.w = VRAM_W; srcr.h = VRAM_H; srcr.d = 1;
-  SDL_GPUTextureTransferInfo dsti = {}; dsti.transfer_buffer = s_rb_xfer; dsti.pixels_per_row = VRAM_W; dsti.rows_per_layer = VRAM_H;
+  SDL_GPUTextureRegion srcr = {}; srcr.texture = g.s_vram_tex; srcr.w = VRAM_W; srcr.h = VRAM_H; srcr.d = 1;
+  SDL_GPUTextureTransferInfo dsti = {}; dsti.transfer_buffer = g.s_rb_xfer; dsti.pixels_per_row = VRAM_W; dsti.rows_per_layer = VRAM_H;
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
   SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
   SDL_WaitForGPUFences(s_dev, true, &fence, 1);
   SDL_ReleaseGPUFence(s_dev, fence);
-  const uint16_t* p = (const uint16_t*)SDL_MapGPUTransferBuffer(s_dev, s_rb_xfer, false);
+  const uint16_t* p = (const uint16_t*)SDL_MapGPUTransferBuffer(s_dev, g.s_rb_xfer, false);
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (p[i]) nz++;
     fprintf(stderr, "[gpu_gpu] readback nonzero=%ld/%d\n", nz, VRAM_W * VRAM_H); }
   return p;
@@ -688,11 +680,11 @@ static const uint16_t* readback_vram(void) {
 // A ".png" path gets a real PNG (SDL3_image, same ecosystem as the SDL_GPU renderer);
 // anything else keeps the raw P6 PPM. Previously .png paths silently received PPM bytes.
 #include <SDL3_image/SDL_image.h>
-static void dump_to(const char* path, int sx, int sy, int w, int h,
+static void dump_to(GpuGpuState& g, const char* path, int sx, int sy, int w, int h,
                     int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
-  const uint16_t* vram = readback_vram();
+  const uint16_t* vram = readback_vram(g);
   unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
-  if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer); return; }
+  if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return; }
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
     uint16_t p = vram[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
     int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, b = ((p >> 10) & 31) << 3;
@@ -710,42 +702,44 @@ static void dump_to(const char* path, int sx, int sy, int w, int h,
     if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }
   }
   free(rgb);
-  SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
+  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
 }
 void GpuGpuState::shot(const char* path) {
   if (!gpu_gpu_enabled() || !s_inited) { fprintf(stderr, "[gpu_shot] GPU not active\n"); return; }
   ScreenFade::State f = game->core.screenFade.get();
-  dump_to(path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
+  dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuGpuState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
 void gpu_gpu_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
   if (!gpu_gpu_enabled() || !s_inited) return;
   ScreenFade::State f = core->screenFade.get();
-  dump_to(path, sx, sy, w, h, f.mode, f.r, f.g, f.b);
+  dump_to(core->game->gpu_gpu, path, sx, sy, w, h, f.mode, f.r, f.g, f.b);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
 }
-void gpu_gpu_vram_region(const char* path, int x, int y, int w, int h) {
+void gpu_gpu_vram_region(Core* core, const char* path, int x, int y, int w, int h) {
   if (!gpu_gpu_enabled() || !s_inited) return;
-  dump_to(path, x, y, w, h, 0, 0, 0, 0);   // raw VRAM region dump — no engine fade applied
+  dump_to(core->game->gpu_gpu, path, x, y, w, h, 0, 0, 0, 0);   // raw VRAM region dump — no engine fade applied
   fprintf(stderr, "[gpu_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
 }
 // Raw 16-bit VRAM words at (x,y..y+n-1 wrapped along X) — dark-outline STP-bit diag (2026-07-01,
 // scratch/handoff.md): tells apart a genuine opaque texel (STP=0, faithful) from a lost/miscomputed
 // STP bit (would-be-blended texel drawing solid instead of translucent).
-void gpu_gpu_vram_words(int x, int y, int n, uint16_t* out) {
+void gpu_gpu_vram_words(Core* core, int x, int y, int n, uint16_t* out) {
   if (!gpu_gpu_enabled() || !s_inited) { for (int i = 0; i < n; i++) out[i] = 0; return; }
-  const uint16_t* vram = readback_vram();
+  GpuGpuState& g = core->game->gpu_gpu;
+  const uint16_t* vram = readback_vram(g);
   for (int i = 0; i < n; i++) out[i] = vram[(y % VRAM_H) * VRAM_W + ((x + i) & 1023)];
-  SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
+  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
 }
-void gpu_gpu_vram_raw(const char* path) {
+void gpu_gpu_vram_raw(Core* core, const char* path) {
   if (!gpu_gpu_enabled() || !s_inited) return;
-  const uint16_t* vram = readback_vram();
-  FILE* f = fopen(path, "wb"); if (!f) { SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer); return; }
+  GpuGpuState& g = core->game->gpu_gpu;
+  const uint16_t* vram = readback_vram(g);
+  FILE* f = fopen(path, "wb"); if (!f) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return; }
   for (int y = 0; y < VRAM_H; y++) fwrite(&vram[y * VRAM_W], 2, VRAM_W, f);
   fclose(f);
-  SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
+  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
   fprintf(stderr, "[gpu_vram] wrote RAW %s (%dx%d u16)\n", path, VRAM_W, VRAM_H);
 }
 
@@ -784,7 +778,7 @@ void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (vo
   if (s_preseq_left > 0) {
     char p[192]; snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
     ScreenFade::State f = game->core.screenFade.get();
-    dump_to(p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
+    dump_to(*this, p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
     if (--s_preseq_left == 0) fprintf(stderr, "[preseq] done: %d frames -> %s\n", s_preseq_idx, s_preseq_dir);
   }
   s_tri_n = s_tex_n = 0;
@@ -804,7 +798,7 @@ static inline void ggs_alloc_batches(GpuGpuState& g) {
 
 void GpuGpuState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                           int x2,int y2,int r2,int g2,int b2) {
-  if (!s_have_3d || s_tri_n + 3 > TRI_CAP) return;
+  if (s_tri_n + 3 > TRI_CAP) return;
   ggs_alloc_batches(*this);
   TriVtx* v = ((TriVtx*)s_tri_buf) + s_tri_n;
   v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d_b(s_vd[0], s_depth_bias) : s_cur_ord };
@@ -835,7 +829,7 @@ void GpuGpuState::draw_tritri(const int* xs, const int* ys, const int* us, const
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                              int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) {
-  if (!s_have_3d || s_tex_n + 3 > TEX_CAP) return;
+  if (s_tex_n + 3 > TEX_CAP) return;
   ggs_alloc_batches(*this);
   tex_emit(((TexVtx*)s_tex_buf) + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
@@ -846,7 +840,7 @@ void GpuGpuState::draw_semi(const int* xs, const int* ys, const int* us, const i
                            int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                            int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) {
   int m = blend & 3;   // bucket by PSX blend mode: one HW-blend pipeline/vertex-buffer per mode (see render_geom)
-  if (!s_have_3d || s_semi_n[m] + 3 > TEX_CAP) return;
+  if (s_semi_n[m] + 3 > TEX_CAP) return;
   ggs_alloc_batches(*this);
   tex_emit(((TexVtx*)s_semi_buf[m]) + s_semi_n[m], xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
@@ -892,7 +886,7 @@ void GpuGpuState::tritest() {
     pat[y * VRAM_W + x] = (y < VRAM_H / 2) ? 0x001F : 0x7C00;
 
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "selftest cmd");
-  upload_vram(cmd, pat);
+  upload_vram(*this, cmd, pat);
   SDL_GPUColorTargetInfo cti = {}; cti.texture = tgt; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
   cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
@@ -950,11 +944,12 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
   const uint8_t s_fade_r = f.r, s_fade_g = f.g, s_fade_b = f.b;
   if (!gpu_gpu_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
   if (!s_inited) init_gpu(core ? core->game : nullptr);
+  GpuGpuState& g = core->game->gpu_gpu;            // THIS core's own VRAM image + targets (no cross-core sharing)
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
-  upload_vram(cmd, vram);
-  int a, b, c; render_geom(core->game->gpu_gpu, cmd, vram, &a, &b, &c);
-  SDL_SubmitGPUCommandBuffer(cmd);                 // render into s_vram_tex; NO swapchain present
-  const uint16_t* src = readback_vram();           // download s_vram_tex (RG8 bytes == uint16 1555 words)
+  upload_vram(g, cmd, vram);
+  int a, b, c; render_geom(g, cmd, vram, &a, &b, &c);
+  SDL_SubmitGPUCommandBuffer(cmd);                 // render into THIS core's VRAM image; NO swapchain present
+  const uint16_t* src = readback_vram(g);          // download it (RG8 bytes == uint16 1555 words)
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (int yy=0; yy<h; yy++) for (int xx=0; xx<w; xx++) if (src[((sy+yy)%VRAM_H)*VRAM_W + ((sx+xx)&1023)]) nz++;
     RenderStats& st = core->mRender->stats;
     fprintf(stderr, "[gpu_gpu] readback region sx=%d sy=%d %dx%d region-nonzero=%ld/%d fade=%d(%d,%d,%d) batch tri=%d tex=%d semi=%d worldquads=%ld\n", sx, sy, w, h, nz, w*h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b, a, b, c, st.dbgWorldQuads);
@@ -966,7 +961,7 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
     else if (s_fade_mode == 2) { r -= s_fade_r; g -= s_fade_g; bl -= s_fade_b; if (r<0)r=0; if (g<0)g=0; if (bl<0)bl=0; }
     uint8_t* o = rgba + ((size_t)y * w + x) * 4; o[0] = (uint8_t)r; o[1] = (uint8_t)g; o[2] = (uint8_t)bl; o[3] = 255;
   }
-  SDL_UnmapGPUTransferBuffer(s_dev, s_rb_xfer);
+  SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
 }
 
 // SBS two-pane composite: draw CPU RGBA pane A (left) | pane B (right) to the swapchain in one window

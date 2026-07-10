@@ -19,6 +19,11 @@ struct Game;     // back-pointer target (game.h); only frame_via_fb() uses it (t
 struct Panel;    // gpu_gpu.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
 struct TexVtx;   // gpu_gpu.cpp: a textured vertex (defined there; pointer-only in the tex_emit signature)
 struct Core;     // CPU/RAM handle (core.h)
+// SDL_GPU opaque handle types (per-Game render TARGETS live here now — see below). Forward decls only,
+// so this header still pulls no SDL headers.
+struct SDL_GPUTexture;
+struct SDL_GPUBuffer;
+struct SDL_GPUTransferBuffer;
 
 // Capacities for the moved array members (also used by the gpu_gpu.cpp bodies via this header).
 #define SEMI_GRP_CAP 2048
@@ -36,6 +41,28 @@ struct VkRect { int x, y, w, h; };
 // ---- GpuGpuState — the VK backend's per-instance, per-frame render machine state + its methods --------
 struct GpuGpuState {
   Game* game = nullptr;   // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
+
+  // ---- per-Game GPU render TARGETS (deglobalized off GpuDevice 2026-07-10) --------------------------
+  // Each Game owns its own GPU-side guest VRAM image + everything a frame renders through: the texture/
+  // CLUT atlas snapshot, the depth buffer, the float semi-blend intermediate, and the vertex buffers.
+  // Under SBS the two cores previously rendered through ONE shared set on the device singleton — a
+  // structural cross-core leak. Only true host-device objects (window, SDL device, samplers, PIPELINES)
+  // stay on GpuDevice. Created lazily by ensure_targets() (needs the device up); process-lifetime.
+  SDL_GPUTexture*         s_vram_tex = nullptr;   // guest VRAM (RG8 = PSX 1555 LE bytes), render target
+  SDL_GPUTransferBuffer*  s_vram_xfer = nullptr;  // host→VRAM upload (1024*512*2)
+  SDL_GPUTransferBuffer*  s_rb_xfer = nullptr;    // VRAM→host download (readback / shot)
+  SDL_GPUTexture*         s_vram_snap = nullptr;  // texture-source snapshot (RG8 SAMPLER)
+  SDL_GPUTransferBuffer*  s_snap_xfer = nullptr;
+  SDL_GPUTexture*         s_depth = nullptr;      // D32 depth (ordering)
+  SDL_GPUTexture*         s_color_rgba = nullptr; // float RGBA semi-blend intermediate
+  SDL_GPUBuffer*          s_tri_vbuf = nullptr;
+  SDL_GPUBuffer*          s_tex_vbuf = nullptr;
+  SDL_GPUBuffer*          s_semi_vbuf[GGS_NUM_BLEND_MODES] = {};
+  SDL_GPUTransferBuffer*  s_tri_xfer = nullptr;
+  SDL_GPUTransferBuffer*  s_tex_xfer = nullptr;
+  SDL_GPUTransferBuffer*  s_semi_xfer[GGS_NUM_BLEND_MODES] = {};
+  int s_have_3d = 0;                              // THIS Game's targets created
+  void ensure_targets();                          // lazy target creation (device must be inited)
 
   // M2/M3 batch state (counters + the three host vertex buffers + the semi-overlap grouping + the dirty-
   // VRAM list) moved OUT of GpuGpuState into the file-scope GeomBatch s_gb[2] in gpu_gpu.cpp, so the renderer

@@ -84,7 +84,7 @@ set(PORT_SRC
   runtime/recomp/timing.cpp
   runtime/recomp/gpu_gpu.cpp
   runtime/recomp/gpu_perf.cpp
-  runtime/recomp/mods.c
+  runtime/recomp/mods.cpp
   runtime/recomp/native_gate.cpp
   game/game_tomba2.cpp
   game/cd/libcd_native.cpp

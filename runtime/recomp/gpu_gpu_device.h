@@ -28,10 +28,8 @@ public:
   SDL_GPUDevice*       s_dev = nullptr;
   SDL_GPUTextureFormat s_swap_fmt = SDL_GPU_TEXTUREFORMAT_INVALID;
 
-  // ---- VRAM present path (RG8 1024x512 = PSX 1555 LE bytes) ----
-  SDL_GPUTexture*         s_vram_tex = nullptr;
-  SDL_GPUTransferBuffer*  s_vram_xfer = nullptr;   // host→VRAM upload (1024*512*2)
-  SDL_GPUTransferBuffer*  s_rb_xfer = nullptr;     // VRAM→host download (readback / shot)
+  // (per-Game render TARGETS — the guest-VRAM image, snapshot, depth, color intermediate and vertex
+  //  buffers — moved to GpuGpuState 2026-07-10: two Games must not share mutable GPU surfaces.)
   SDL_GPUSampler*         s_samp_nearest = nullptr; // integer VRAM sampler (nearest)
   SDL_GPUSampler*         s_samp_linear = nullptr;  // RGBA image sampler (linear)
   SDL_GPUGraphicsPipeline* s_present_pipe = nullptr;
@@ -42,23 +40,13 @@ public:
   SDL_GPUTransferBuffer* s_img_xfer = nullptr;
   int                    s_img_w = 0, s_img_h = 0;
 
-  // ---- Pass 2: native 3D / textured raster resources ----
-  SDL_GPUTexture*        s_vram_snap = nullptr;   // texture-source snapshot (RG8 SAMPLER)
-  SDL_GPUTransferBuffer* s_snap_xfer = nullptr;
-  SDL_GPUTexture*        s_depth = nullptr;       // D32 depth (ordering)
-  SDL_GPUBuffer*         s_tri_vbuf = nullptr;
-  SDL_GPUBuffer*         s_tex_vbuf = nullptr;
-  SDL_GPUBuffer*         s_semi_vbuf[GGS_NUM_BLEND_MODES] = {};
-  SDL_GPUTransferBuffer* s_tri_xfer = nullptr;
-  SDL_GPUTransferBuffer* s_tex_xfer = nullptr;
-  SDL_GPUTransferBuffer* s_semi_xfer[GGS_NUM_BLEND_MODES] = {};
+  // ---- Pass 2: native 3D / textured raster PIPELINES (shared; per-Game targets on GpuGpuState) ----
   SDL_GPUGraphicsPipeline* s_tri_pipe = nullptr;     // flat opaque (depth test + write)
   SDL_GPUGraphicsPipeline* s_tritex_pipe = nullptr;  // textured opaque (depth test + write)
   SDL_GPUGraphicsPipeline* s_semi_pipe[GGS_NUM_BLEND_MODES] = {};  // textured semi, real HW blend
-  SDL_GPUTexture*          s_color_rgba = nullptr;   // float RGBA semi-blend intermediate
   SDL_GPUGraphicsPipeline* s_decode_pipe = nullptr;  // fullscreen: packed 1555 -> float RGBA
   SDL_GPUGraphicsPipeline* s_encode_pipe = nullptr;  // fullscreen: float RGBA -> packed 1555
-  int s_have_3d = 0;                                 // 3D resources created
+  int s_pipes_3d = 0;                                // 3D pipelines created (once per process)
 
   // ---- SBS two-pane composite textures ----
   SDL_GPUTexture*        s_sbs_tex[2] = {};

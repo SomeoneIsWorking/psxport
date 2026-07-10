@@ -169,7 +169,7 @@ struct CCA4Frame {
 // everyone else opens a nested PktSpanSession and tags the packet span this call emits with the
 // object's PC-native world depth.
 void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
-  if (oracle_mode()) { body(c); return; }
+  if (c->game->oracle) { body(c); return; }
   c->mRender->diag.beginObject(node);
   uint32_t slo, shi;
   PktSpanSession sess(c);
@@ -529,7 +529,7 @@ void Render::billboardEmit() {
       // 5×(p[14],p[15]) planar offset — the SAME 5×offset func_8003B220 builds the quad corners around, so
       // the anchor moves with each sprite's per-frame bobbing. The mid-present re-projects this through the
       // interpolated camera, so every gem interpolates on its OWN motion instead of the shared node anchor.
-      if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) {
+      if (c->game->mods.fps60 || c->game->mods.debug_ids || cfg_dbg("objid")) {
         const int sx5 = 5 * (int)(int8_t)c->mem_r8(particle + 14);
         const int sy5 = 5 * (int)(int8_t)c->mem_r8(particle + 15);
         auto R = [c](uint32_t off) { return (float)c->mem_r16s(MAT_OUT + off); };   // /4096 int16 rows

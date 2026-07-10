@@ -9,7 +9,7 @@
 #include "render.h"   // class Render — sceneNative(); DisplayPassGuard (via render_mode.h)
 #include "render_queue.h"
 #include "cfg.h"
-#include "mods.h"     // g_mods.fps60
+#include "mods.h"     // Mods (game->mods.fps60)
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -39,7 +39,7 @@ void Fps60::fold(uint32_t v) {
 // one SXY (DR14); RTPT(0x30) writes three (DR12/13/14). This is the ONLY remaining GTE tap — it feeds the
 // rate detector so the tier knows the logic rate (Tomba2 = 30fps → one in-between per frame).
 void Fps60::rtp(uint32_t op) {
-  if (!g_mods.fps60) return;
+  if (!game->mods.fps60) return;
   unsigned lo = (op == 0x30) ? 12 : 14;
   for (unsigned r = lo; r <= 14; r++) fold(GTE_ReadDR(r));
 }
@@ -55,7 +55,7 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 
 // ---- transform capture / midpoint provider -----------------------------------------------------------
 void Fps60::beginCapture() {
-  if (!g_mods.fps60) return;
+  if (!game->mods.fps60) return;
   mObjCur.clear();
   mCamCur.valid = false;
   mScrollCur.valid = false;
@@ -88,7 +88,7 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
   ofy = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
   H   = (float)(uint16_t)gte_read_ctrl(26);
-  if (!g_mods.fps60) return;
+  if (!game->mods.fps60) return;
   // Capture (true /4096 scale, so billboard world-anchor projection + camera lerp are in a single scale).
   for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamCur.R[i][j] = R[i][j] / 4096.0f;
                                 mCamCur.T[i] = T[i]; }
@@ -104,7 +104,7 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
 }
 
 void Fps60::objXform(uint32_t cmd, float R[3][3], float T[3]) {
-  if (!g_mods.fps60 || !cmd) return;
+  if (!game->mods.fps60 || !cmd) return;
   ObjX cur;
   for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) cur.R[i][j] = R[i][j];
                                 cur.T[i] = T[i]; }
@@ -118,7 +118,7 @@ void Fps60::objXform(uint32_t cmd, float R[3][3], float T[3]) {
 }
 
 void Fps60::bgScroll(int& sx, int& sy) {
-  if (!g_mods.fps60) return;
+  if (!game->mods.fps60) return;
   mScrollCur.x = sx; mScrollCur.y = sy; mScrollCur.valid = true;
   if (mInterp && mScrollPrev.valid) {
     sx = (int)lroundf((float)mScrollPrev.x + (float)(mScrollCur.x - mScrollPrev.x) * mT);
@@ -181,7 +181,7 @@ int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) co
 // identity + world anchor position, so the mid-present can re-project the anchor through the interpolated
 // camera and place the sprite there. Called from the OT walk (gpu_native.cpp) with the source OT-node.
 void Fps60::stampBillboard(Core* c, uint32_t node) {
-  if (!g_mods.fps60) return;
+  if (!game->mods.fps60) return;
   RenderQueue& q = c->game->rq;
   if (q.consumed || q.n == 0) return;
   RqItem* it = &q.items[q.n - 1];
@@ -204,7 +204,7 @@ void Fps60::rq_capture(const RqItem* items, int n) {
 }
 
 void Fps60::frame_commit(Core* core) {
-  if (!g_mods.fps60) return;
+  if (!game->mods.fps60) return;
   uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&mRd, set_hash);
   mFence++;
@@ -287,8 +287,3 @@ void Fps60::present_vk(Core* core) {
   // (mBbCur is reset at the top of Engine::frameUpdate — the frame boundary before fieldFrame records.)
 }
 
-void fps60_init(void) {
-  // 60fps is toggled in the overlay (persisted with the other user settings via mods); g_mods.fps60 is
-  // loaded by mods_init BEFORE this runs. NO env gate — just report the loaded state.
-  if (g_mods.fps60) fprintf(stderr, "[fps60] TRUE per-object interpolated 60fps ON (overlay)\n");
-}

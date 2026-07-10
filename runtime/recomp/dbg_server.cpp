@@ -52,7 +52,7 @@ int  gpu_frame_no(Core* core);
 int  gpu_gpu_enabled(void);
 void gpu_gpu_shot(Core* core, const char* path);
 void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
-void gpu_gpu_vram_region(const char* path, int x, int y, int w, int h);
+void gpu_gpu_vram_region(Core* core, const char* path, int x, int y, int w, int h);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
 
 // PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
@@ -273,13 +273,13 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "vkvram")) {
     unsigned x = 0, y = 0, w = 64, h = 64; char path[256] = "scratch/screenshots/dbg_vkvram.ppm";
     sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
-    gpu_gpu_vram_region(path, (int)x, (int)y, (int)w, (int)h);
+    gpu_gpu_vram_region(s_ctx, path, (int)x, (int)y, (int)w, (int)h);
     fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
   } else if (!strcmp(cmd, "vkpix")) {          // raw 16-bit VRAM word(s) at x,y (dark-outline STP diag)
     unsigned x = 0, y = 0, n = 1; sscanf(line, "%*s %u %u %u", &x, &y, &n);
     uint16_t words[64]; if (n > 64) n = 64;
-    void gpu_gpu_vram_words(int, int, int, uint16_t*);
-    gpu_gpu_vram_words((int)x, (int)y, (int)n, words);
+    void gpu_gpu_vram_words(Core*, int, int, int, uint16_t*);
+    gpu_gpu_vram_words(s_ctx, (int)x, (int)y, (int)n, words);
     fprintf(out, "vkpix (%u,%u x%u):", x, y, n);
     for (unsigned i = 0; i < n; i++) fprintf(out, " %04X", words[i]);
     fprintf(out, "\n");

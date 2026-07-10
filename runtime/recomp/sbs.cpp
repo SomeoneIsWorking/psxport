@@ -1796,6 +1796,18 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // All other modes keep core A hard-wired to pc_faithful strict (unaffected by any of this).
   mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = (mMode == M_SKIP);
   mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
+  // Per-Game enhancement state (mods + oracle are Game members now, not process globals):
+  // - BOTH cores run factory-neutral mods. A guest-poking enhancement (the widescreen cull
+  //   re-include) enabled on one core would break the byte-exact gate BY DESIGN, so the harness
+  //   pins both sides to the PSX-neutral state the compare is defined over.
+  // - Core B additionally gets the full oracle pin (Game::setOracle) whenever it runs the substrate
+  //   (fb_b) — the SAME per-Game config as standalone `PSXPORT_ORACLE=1 ./run.sh`, so pane B IS the
+  //   oracle picture (no enhancement can leak in; render_observer/billboard/painter gates all read
+  //   game->oracle per core).
+  mA->mods.forceNeutral();
+  if (fb_b) mB->setOracle(); else mB->mods.forceNeutral();
+  fprintf(stderr, "[sbs] per-core config: A mods=neutral, B %s\n",
+          fb_b ? "ORACLE (recomp + neutral mods, game->oracle=1)" : "mods=neutral");
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
   mB->core.storeWatchCb = &Sbs::storeCb;
   { // last-writer map: on by default (PSXPORT_SBS_LASTWRITER=0 disables). Arms the wwatch range

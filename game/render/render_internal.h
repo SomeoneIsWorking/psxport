@@ -45,7 +45,7 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
 // fps60: record the billboard entry (span + identity + world anchor position) mirroring a just-published
 // gpu_obj_depth_add(span, node-depth). Reads node+46/50/54 for the world anchor — needs Core*.
 static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t node) {
-  if (g_mods.fps60 || g_mods.debug_ids || cfg_dbg("objid")) c->game->fps60.recordBillboardSpan(c, lo, hi, node);
+  if (c->game->mods.fps60 || c->game->mods.debug_ids || cfg_dbg("objid")) c->game->fps60.recordBillboardSpan(c, lo, hi, node);
 }
 
 // PktSpan (per-Core packet-pool store-address-span tracker) + PktSpanSession (RAII object scope) live

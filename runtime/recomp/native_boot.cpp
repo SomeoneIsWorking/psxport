@@ -595,10 +595,8 @@ void native_boot_run(Core* c) {
   // oracle_mode() so nothing can leak an enhancement into it. Forced here BEFORE the GATE/RENDER_PSX
   // blocks so their log lines report the final state.
   if (oracle_mode()) {
-    c->game->psx_fallback = 1;                  // recomp gameplay (substrate)
+    c->game->setOracle();                        // per-Game: recomp gameplay + mods forced neutral
     c->mRender->mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
-    g_mods.fps60  = 0;                           // no 60fps interpolation
-    g_mods.aspect = ASPECT_4_3;                  // no widescreen (wide FOV/stretch off)
     fprintf(stderr, "[native_boot] PSXPORT_ORACLE=1 — pure recomp + pure PSX render "
                     "(no fps60 / wide / native-depth / observer)\n");
   }

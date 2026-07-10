@@ -1170,3 +1170,34 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   sbs.cpp (Impl::skipRendezvousReached, dumpRendezvousSites, checkObservables strictness,
   checkPaneDiff auto-arm), game/core/engine.cpp `Engine::stage0AdvanceSkip` (the one wired fork),
   docs/config.md `SBS_MODE=skip` section (rewritten), docs/bug-hunt-workflow.md PC-SKIP-ON cell.
+
+## SBS panes ≠ standalone configs — process-global enhancement/render state (FIXED 2026-07-10)
+- **symptom (USER):** `PSXPORT_SBS_MODE=full` panes look like NEITHER `PSXPORT_PC_SKIP=0 ./run.sh`
+  nor `PSXPORT_ORACLE=1 ./run.sh` — "they leak into each other".
+- **status:** FIXED (structural deglobalization, 3 layers).
+- **cause:** three families of process-global state meant per-core configs were impossible:
+  1. `g_mods` (aspect/ires/ssao/light/shadows/fps60) — ONE global for both cores;
+  2. `oracle_mode()` — a process-wide cfg predicate, so SBS core B never got the ORACLE pin
+     (standalone `PSXPORT_ORACLE=1` forces enhancements off in `native_boot_run`, which SBS cores
+     never execute — they boot via `dc_boot_init`);
+  3. the VK render TARGETS (`s_vram_tex` guest-VRAM image, atlas snapshot, depth, float semi
+     intermediate, vertex buffers) lived on the `GpuDevice` singleton — both cores rendered
+     through ONE set of GPU surfaces.
+- **fix:** all three per-Game. `class Mods` = `Game::mods` (mods.cpp; overlay edits its game's
+  instance); `Game::oracle` + `Game::setOracle()` (seeds from PSXPORT_ORACLE in native_boot_run;
+  SBS calls it on core B whenever fb_b — every enhancement gate, incl. `gpu_gpu_wide_engine(Core*)`,
+  painter-order force, observer, billboards, reads `game->oracle`); render targets moved onto
+  `GpuGpuState` (`ensure_targets()`, lazy) — only window/device/samplers/PIPELINES stay on
+  GpuDevice. SBS pins BOTH cores' mods factory-neutral (a guest-poking enhancement — the widescreen
+  cull re-include — on one core would break the byte gate BY DESIGN) and oracle-pins core B.
+- **NOT equivalent to the pane picture being the standalone present:** panes are still produced by
+  `gpu_gpu_render_readback` (raw display-region readback + 4:3 letterbox composite), not the real
+  present pass, and SBS still skips FMVs + force-skips the DEMO intro-FMV sub-state (timeline
+  differs from a standalone run). For a picture-faithful ./run.sh-vs-oracle compare use
+  `tools/abcompare.py` (two isolated processes; docs/abcompare-design.md).
+- **gates:** build clean; abcompare golden drive byte-identical pre/post (5 probes RAM 0-diff,
+  same pixel diffs); `SBS_MODE=full` headless 120 s — A/B identical through f25560, no divergence.
+- **refs:** runtime/recomp/mods.{h,cpp}, game.h (Mods member + oracle/setOracle),
+  gpu_gpu_internal.h + gpu_gpu.cpp (per-Game targets, ensure_targets, threaded
+  upload_vram/readback_vram/dump_to), gpu_gpu_device.h (pipelines-only), sbs.cpp (per-core pin),
+  native_boot.cpp (setOracle), rmlui_overlay.cpp (per-game mods editing).

@@ -203,7 +203,7 @@ void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->
 // is stable (no straddle flip) and matches real HUD intent: corner/edge HUD hugs its side, a centered
 // prompt/meter stays centered with the world. The whole element shifts by one offset (its size and
 // internal layout are preserved exactly — no stretch), so multi-vertex prims stay rigid.
-int gpu_gpu_wide_engine_w(void);
+int gpu_gpu_wide_engine_w(Core*);
 // 2D X mapping for widescreen. Unlike the old VK renderer, the SDL_GPU tritex.vert does NOT add a
 // per-vertex fb_x0=margin (there is no scaled scratch FB in Pass 1 — geometry is in absolute VRAM px).
 // So this mapping must place 2D prims into the wide [0,ww) band itself:
@@ -212,8 +212,8 @@ int gpu_gpu_wide_engine_w(void);
 //   HUD/UI  -> CENTER the native-320 element: x + margin, so a native-x lands in the centered [margin,
 //              margin+320] band (matches 4:3, just centered). (Was identity, which left HUD left-anchored.)
 // In 4:3 margin==0 -> backdrop x*320/320=x, HUD x+0=x — byte-identical.
-static int ws_2d_local_x(int x, int is_bg) {
-  int ww = gpu_gpu_wide_engine_w(), margin = (ww - 320) / 2;
+static int ws_2d_local_x(Core* core, int x, int is_bg) {
+  int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
   if (margin <= 0) return x;                          // 4:3 -> no-op
   if (is_bg) return x * ww / 320;                     // backdrop: stretch to fill [0,ww)
   return x + margin;                                  // HUD: center the native-320 element in the wide FB
@@ -843,12 +843,12 @@ void GpuState::gp0_exec(Core* core) {
       // overlay) drawn as polys rather than sprites. The 3D world widens via the projection (OFX); these
       // 2D polys would stay left-anchored at 320 (the banner gets cut). Widen them like the 2D sprites:
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
-      { int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
-        if (!is3d && gpu_gpu_wide_engine() && s_prev_had3d) {  // 2D widen only on gameplay frames
+      { int gpu_gpu_wide_engine(Core*);
+        if (!is3d && gpu_gpu_wide_engine(core) && s_prev_had3d) {  // 2D widen only on gameplay frames
           // HUD: identity (shader centers it). Backdrop AND full-screen fade/dim: stretch-to-fill so the fade
           // covers the whole wide FB (no undimmed margins, #21). See ws_2d_local_x.
           int fill = bg || fade_full;
-          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(xs[i], fill); } }   // engine-owned 2D layout
+          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(core, xs[i], fill); } }   // engine-owned 2D layout
       // DIAG PSXPORT_PAINTER=1: force PURE PSX OT painter order (is3d=0 / no bg split) for EVERY prim, so the
       // frame composites exactly as the PSX ordering table would. Render the field with and without this and
       // diff: the differing pixels are precisely where native per-pixel depth changes the picture (the
@@ -857,7 +857,7 @@ void GpuState::gp0_exec(Core* core) {
       // native per-pixel depth / bg-band split). obj_depth is already inert in oracle mode (observer skips
       // tagging + sceneNative never runs), so every prim composites in OT order like the real PSX.
       { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; }
-        if (pm || oracle_mode()) { is3d = 0; bg = 0; } }
+        if (pm || core->game->oracle) { is3d = 0; bg = 0; } }
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
@@ -1036,11 +1036,11 @@ void GpuState::gp0_exec(Core* core) {
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
       // sprites bypass the GTE, so they are mapped here. A backdrop (sky/water) STRETCHES to fill the wide
       // FB; HUD/UI is identity (the relocation shader's +margin already centers it). See ws_2d_local_x.
-      { int gpu_gpu_wide_engine(void);
-        if (gpu_gpu_wide_engine() && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
+      { int gpu_gpu_wide_engine(Core*);
+        if (gpu_gpu_wide_engine(core) && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
           int fill = bg || fade_full;                     // backdrop AND full-screen fade/dim stretch-to-fill (#21)
-          XL = ws_2d_local_x(XL, fill);                   // engine-owned 2D layout (HUD centered, bg/fade fills)
-          XR = ws_2d_local_x(XR, fill);
+          XL = ws_2d_local_x(core, XL, fill);                   // engine-owned 2D layout (HUD centered, bg/fade fills)
+          XR = ws_2d_local_x(core, XR, fill);
         } }
       int qx[4] = { XL, XR, XL, XR }, qy[4] = { Y, Y, Y+h, Y+h };
       int qu[4] = { u0, u0+w, u0, u0+w }, qv[4] = { v0, v0, v0+h, v0+h };
@@ -1176,8 +1176,8 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         // right clip by (nw-320) — else the wide-side world fragments are clipped and the present shows
         // raw VRAM texture-atlas garbage in the [320,nw) band. Off at 4:3 (wide_engine()==0). This is a
         // render-clip widen consumed by the GPU batch (i_da); it never widens where guest logic reads.
-        { int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
-          if (gpu_gpu_wide_engine()) s_da_x1 += (gpu_gpu_wide_engine_w() - 320); }
+        { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
+          if (gpu_gpu_wide_engine(core)) s_da_x1 += (gpu_gpu_wide_engine_w(core) - 320); }
         if (cfg_dbg("env")) fprintf(stderr, "[env] E4 clip_br=(%d,%d)\n", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
         if (cfg_dbg("env")) fprintf(stderr, "[env] E5 offset=(%d,%d)\n", s_off_x, s_off_y); return;
@@ -1355,11 +1355,11 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
   // (soft_gpu oracle: VK is off for this Core, so fall through to the s_vram PPM dump below.)
   if (vk_path()) {
     void gpu_gpu_shot_region(Core*, const char*, int, int, int, int);
-    int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
+    int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
     int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
     // Widescreen: crop the wider FB the engine rendered (nw@aspect), matching the windowed present's
     // wide sample region — otherwise a headless wide shot silently crops back to the 4:3 s_disp_w.
-    if (gpu_gpu_wide_engine()) dw = gpu_gpu_wide_engine_w();
+    if (gpu_gpu_wide_engine(core)) dw = gpu_gpu_wide_engine_w(core);
     gpu_gpu_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;
   }

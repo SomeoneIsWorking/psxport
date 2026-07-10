@@ -334,8 +334,8 @@ void Cull::objectCull() { Core* c = core;
         // widescreen enhancement; it is gated on gpu_gpu_wide_engine() (false at 4:3 / under PSXPORT_ORACLE
         // and in the SBS legs, which run 4:3), so the byte-exact reference is untouched. At 4:3 the original
         // read-only static-world margin (0-diff) still applies.
-        int gpu_gpu_wide_engine(void);
-        if (gpu_gpu_wide_engine())                     { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // wide: all types populate
+        int gpu_gpu_wide_engine(Core*);
+        if (gpu_gpu_wide_engine(c))                    { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // wide: all types populate
         else if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // 4:3: read-only static margin
         else                                           { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // re-include: mark visible
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,

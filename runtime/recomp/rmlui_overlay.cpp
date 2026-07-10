@@ -34,12 +34,10 @@
 #include <memory>
 #include <algorithm>
 
-extern "C" {
 #include "mods.h"
-}
-// g_fps60_on retired — read g_mods.fps60 (mods.h; #included above via the overlay's other includes)
+// g_fps60_on retired — read game->mods.fps60 (mods.h; #included above)
 extern "C" int cfg_on(const char* name);    // cfg.c
-void gpu_gpu_video_status(int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
+void gpu_gpu_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
 // ---- typed accessors for the void* handles stored on the class ----------------------------------
 // The header keeps RmlUi types out (so C callers can include it). Impl-side helpers cast back.
@@ -77,71 +75,71 @@ using TabListVec = std::vector<std::unique_ptr<TabClick>>;
 static std::string fmt_f(float v, int prec) { char b[32]; snprintf(b, sizeof b, "%.*f", prec, v); return b; }
 
 // Build the <value> text for a row given its attribute kind/id. Returns false if unknown.
-static bool row_value_text(const std::string& kind, const std::string& id, std::string& out) {
+static bool row_value_text(Mods& m, const std::string& kind, const std::string& id, std::string& out) {
     if (kind == "toggle") {
         if (id == "aspect") {
             static const char* A[] = { "Vanilla", "16:9", "21:9", "Auto" };
-            int a = g_mods.aspect; if (a < 0 || a > 3) a = 0; out = A[a]; return true;
+            int a = m.aspect; if (a < 0 || a > 3) a = 0; out = A[a]; return true;
         }
         if (id == "ires") {
             // Merged resolution selector: 0 = Auto, 1..4 = Vanilla(1x)/X2/X3/X4.
             static const char* R[] = { "Auto", "Vanilla", "X2", "X3", "X4" };
-            int r = g_mods.ires; if (r < 0 || r > 4) r = 1; out = R[r]; return true;
+            int r = m.ires; if (r < 0 || r > 4) r = 1; out = R[r]; return true;
         }
-        if (id == "fps60")     { out = g_mods.fps60 ? "On" : "Off"; return true; }
-        if (id == "ssao")      { out = g_mods.ssao ? "On" : "Off"; return true; }
-        if (id == "light")     { out = g_mods.light ? "On" : "Off"; return true; }
-        if (id == "shadows")   { out = g_mods.shadows ? "On" : "Off"; return true; }
-        if (id == "debug_ids")     { out = g_mods.debug_ids ? "On" : "Off"; return true; }
-        if (id == "debug_quads")   { out = g_mods.debug_quads ? "On" : "Off"; return true; }
-        if (id == "debug_objects") { out = g_mods.debug_objects ? "On" : "Off"; return true; }
+        if (id == "fps60")     { out = m.fps60 ? "On" : "Off"; return true; }
+        if (id == "ssao")      { out = m.ssao ? "On" : "Off"; return true; }
+        if (id == "light")     { out = m.light ? "On" : "Off"; return true; }
+        if (id == "shadows")   { out = m.shadows ? "On" : "Off"; return true; }
+        if (id == "debug_ids")     { out = m.debug_ids ? "On" : "Off"; return true; }
+        if (id == "debug_quads")   { out = m.debug_quads ? "On" : "Off"; return true; }
+        if (id == "debug_objects") { out = m.debug_objects ? "On" : "Off"; return true; }
     } else if (kind == "adjust") {
-        if (id == "ssao_strength")   { out = fmt_f(g_mods.ssao_strength, 2); return true; }
-        if (id == "ssao_radius")     { out = fmt_f(g_mods.ssao_radius, 1); return true; }
-        if (id == "ssao_bias")       { out = fmt_f(g_mods.ssao_bias, 3); return true; }
-        if (id == "ssao_range")      { out = fmt_f(g_mods.ssao_range, 3); return true; }
-        if (id == "light_dir_x")     { out = fmt_f(g_mods.light_dir[0], 2); return true; }
-        if (id == "light_dir_y")     { out = fmt_f(g_mods.light_dir[1], 2); return true; }
-        if (id == "light_dir_z")     { out = fmt_f(g_mods.light_dir[2], 2); return true; }
-        if (id == "light_ambient")   { out = fmt_f(g_mods.light_ambient, 2); return true; }
-        if (id == "light_diffuse")   { out = fmt_f(g_mods.light_diffuse, 2); return true; }
-        if (id == "shadow_strength") { out = fmt_f(g_mods.shadow_strength, 2); return true; }
+        if (id == "ssao_strength")   { out = fmt_f(m.ssao_strength, 2); return true; }
+        if (id == "ssao_radius")     { out = fmt_f(m.ssao_radius, 1); return true; }
+        if (id == "ssao_bias")       { out = fmt_f(m.ssao_bias, 3); return true; }
+        if (id == "ssao_range")      { out = fmt_f(m.ssao_range, 3); return true; }
+        if (id == "light_dir_x")     { out = fmt_f(m.light_dir[0], 2); return true; }
+        if (id == "light_dir_y")     { out = fmt_f(m.light_dir[1], 2); return true; }
+        if (id == "light_dir_z")     { out = fmt_f(m.light_dir[2], 2); return true; }
+        if (id == "light_ambient")   { out = fmt_f(m.light_ambient, 2); return true; }
+        if (id == "light_diffuse")   { out = fmt_f(m.light_diffuse, 2); return true; }
+        if (id == "shadow_strength") { out = fmt_f(m.shadow_strength, 2); return true; }
     }
     return false;
 }
 
 // Toggle (cycle bool / aspect) a row's state. mods_save() persists.
-static void do_toggle(const std::string& id) {
-    if (id == "aspect")          g_mods.aspect = (g_mods.aspect + 1) & 3;
+static void do_toggle(Mods& m, const std::string& id) {
+    if (id == "aspect")          m.aspect = (m.aspect + 1) & 3;
     // Merged resolution cycle: Vanilla(1)->X2(2)->X3(3)->X4(4)->Auto(0)->Vanilla. (0=Auto convention.)
-    else if (id == "ires")       { g_mods.ires += 1; if (g_mods.ires > 4) g_mods.ires = 0; }
-    else if (id == "fps60")      g_mods.fps60 = !g_mods.fps60;
-    else if (id == "ssao")       g_mods.ssao = !g_mods.ssao;
-    else if (id == "light")      g_mods.light = !g_mods.light;
-    else if (id == "shadows")    g_mods.shadows = !g_mods.shadows;
-    else if (id == "debug_ids")     { g_mods.debug_ids = !g_mods.debug_ids; return; }      // debug toggles:
-    else if (id == "debug_quads")   { g_mods.debug_quads = !g_mods.debug_quads; return; }   // not persisted
-    else if (id == "debug_objects") { g_mods.debug_objects = !g_mods.debug_objects; return; }
+    else if (id == "ires")       { m.ires += 1; if (m.ires > 4) m.ires = 0; }
+    else if (id == "fps60")      m.fps60 = !m.fps60;
+    else if (id == "ssao")       m.ssao = !m.ssao;
+    else if (id == "light")      m.light = !m.light;
+    else if (id == "shadows")    m.shadows = !m.shadows;
+    else if (id == "debug_ids")     { m.debug_ids = !m.debug_ids; return; }      // debug toggles:
+    else if (id == "debug_quads")   { m.debug_quads = !m.debug_quads; return; }   // not persisted
+    else if (id == "debug_objects") { m.debug_objects = !m.debug_objects; return; }
     else return;
-    mods_save();
+    m.save();
 }
 
 static void clampf(float& v, float lo, float hi) { if (v < lo) v = lo; if (v > hi) v = hi; }
 
 // Step a numeric row by dir (+1 = Enter/A or Right, -1 = Left), clamped/wrapped. mods_save() persists.
-static void do_adjust(const std::string& id, int dir) {
-    if (id == "ssao_strength")        { g_mods.ssao_strength   += 0.05f * dir; clampf(g_mods.ssao_strength, 0.0f, 2.0f); }
-    else if (id == "ssao_radius")     { g_mods.ssao_radius     += 0.5f  * dir; clampf(g_mods.ssao_radius, 1.0f, 20.0f); }
-    else if (id == "ssao_bias")       { g_mods.ssao_bias       += 0.002f* dir; clampf(g_mods.ssao_bias, 0.0f, 0.1f); }
-    else if (id == "ssao_range")      { g_mods.ssao_range      += 0.01f * dir; clampf(g_mods.ssao_range, 0.02f, 0.6f); }
-    else if (id == "light_dir_x")     { g_mods.light_dir[0]    += 0.05f * dir; clampf(g_mods.light_dir[0], -1.0f, 1.0f); }
-    else if (id == "light_dir_y")     { g_mods.light_dir[1]    += 0.05f * dir; clampf(g_mods.light_dir[1], -1.0f, 1.0f); }
-    else if (id == "light_dir_z")     { g_mods.light_dir[2]    += 0.05f * dir; clampf(g_mods.light_dir[2], -1.0f, 1.0f); }
-    else if (id == "light_ambient")   { g_mods.light_ambient   += 0.05f * dir; clampf(g_mods.light_ambient, 0.0f, 1.5f); }
-    else if (id == "light_diffuse")   { g_mods.light_diffuse   += 0.05f * dir; clampf(g_mods.light_diffuse, 0.0f, 1.5f); }
-    else if (id == "shadow_strength") { g_mods.shadow_strength += 0.05f * dir; clampf(g_mods.shadow_strength, 0.0f, 1.0f); }
+static void do_adjust(Mods& m, const std::string& id, int dir) {
+    if (id == "ssao_strength")        { m.ssao_strength   += 0.05f * dir; clampf(m.ssao_strength, 0.0f, 2.0f); }
+    else if (id == "ssao_radius")     { m.ssao_radius     += 0.5f  * dir; clampf(m.ssao_radius, 1.0f, 20.0f); }
+    else if (id == "ssao_bias")       { m.ssao_bias       += 0.002f* dir; clampf(m.ssao_bias, 0.0f, 0.1f); }
+    else if (id == "ssao_range")      { m.ssao_range      += 0.01f * dir; clampf(m.ssao_range, 0.02f, 0.6f); }
+    else if (id == "light_dir_x")     { m.light_dir[0]    += 0.05f * dir; clampf(m.light_dir[0], -1.0f, 1.0f); }
+    else if (id == "light_dir_y")     { m.light_dir[1]    += 0.05f * dir; clampf(m.light_dir[1], -1.0f, 1.0f); }
+    else if (id == "light_dir_z")     { m.light_dir[2]    += 0.05f * dir; clampf(m.light_dir[2], -1.0f, 1.0f); }
+    else if (id == "light_ambient")   { m.light_ambient   += 0.05f * dir; clampf(m.light_ambient, 0.0f, 1.5f); }
+    else if (id == "light_diffuse")   { m.light_diffuse   += 0.05f * dir; clampf(m.light_diffuse, 0.0f, 1.5f); }
+    else if (id == "shadow_strength") { m.shadow_strength += 0.05f * dir; clampf(m.shadow_strength, 0.0f, 1.0f); }
     else return;
-    mods_save();
+    m.save();
 }
 
 // ---- value-text + readout refresh ---------------------------------------------------------------
@@ -152,7 +150,8 @@ void RmlOverlay::setRowValue(void* rowRaw) {
     else if (!(id = row->GetAttribute<Rml::String>("adjust", "")).empty()) kind = "adjust";
     else return;
     std::string txt;
-    if (!row_value_text(kind, id, txt)) return;
+    if (!game) return;
+    if (!row_value_text(game->mods, kind, id, txt)) return;
     if (Rml::Element* v = row->QuerySelector("value"))
         if (v->GetInnerRML() != txt) v->SetInnerRML(txt);
 }
@@ -169,7 +168,7 @@ void RmlOverlay::refreshReadouts() {
     Rml::ElementDocument* d = doc_(mDoc);
     if (!d) return;
     int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 4;
-    gpu_gpu_video_status(&nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
+    gpu_gpu_video_status(game ? &game->core : nullptr, &nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
     char buf[192];
     if (Rml::Element* e = d->GetElementById("video_readout")) {
         snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
@@ -269,8 +268,8 @@ void RmlOverlay::activateFocused(int dir) {
         }
         return;
     }
-    if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { do_toggle(id); setRowValue(f); return; }
-    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) { do_adjust(id, dir); setRowValue(f); return; }
+    if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { if (game) { do_toggle(game->mods, id); setRowValue(f); } return; }
+    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) { if (game) { do_adjust(game->mods, id, dir); setRowValue(f); } return; }
 }
 
 void RmlOverlay::attachHandlers() {
@@ -392,13 +391,13 @@ void RmlOverlay::event(const SDL_Event* e) {
             case SDLK_RIGHT: {
                 Rml::Element* f = c->GetFocusElement();
                 std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
-                if (!id.empty()) { do_adjust(id, +1); setRowValue(f); } else nextTab();
+                if (!id.empty()) { if (game) do_adjust(game->mods, id, +1); setRowValue(f); } else nextTab();
                 return;
             }
             case SDLK_LEFT: {
                 Rml::Element* f = c->GetFocusElement();
                 std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
-                if (!id.empty()) { do_adjust(id, -1); setRowValue(f); } else prevTab();
+                if (!id.empty()) { if (game) do_adjust(game->mods, id, -1); setRowValue(f); } else prevTab();
                 return;
             }
             case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: activateFocused(+1); return;

@@ -23,7 +23,7 @@
 #include "core.h"
 #include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
-#include "mods.h"   // g_mods — live PC-native lighting params (engine-native shading, not a deferred pass)
+#include "mods.h"   // Mods (game->mods) — live PC-native lighting params (engine-native shading, not a deferred pass)
 #include "lighting.h" // PER-AREA light registry (sun / lava+torch); selected per frame in Render::shadeSelect
 #include "render_queue.h" // RQ_BACKGROUND + RenderQueue::push2dQuad — native backdrop tilemap path
 #include "render_internal.h" // shared render internals (PktSpanSession, obj_world_ord)
@@ -70,8 +70,8 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 // screen to the wide width (428@16:9), so geometry projected into the [320,wide) right band is ON-screen
 // and MUST NOT be dropped — widen the threshold to the wide width. THIS is why the right-side terrain was
 // missing in wide: the engine's own submit culled it to 4:3. (Vertical 240 cull unchanged.) later-119.
-int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
-static int submit_xmax(void) { return gpu_gpu_wide_engine() ? gpu_gpu_wide_engine_w() : 320; }
+int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
+static int submit_xmax(Core* c) { return gpu_gpu_wide_engine(c) ? gpu_gpu_wide_engine_w(c) : 320; }
 
 // PSXPORT_DEBUG=geomblk — geometry-record CAPTURE probe. Dumps the RAW primitive records of every geomblk
 // submitted through the three natively-owned submitters (GT3 0x8007FDB0, GT4 0x8008007C, GT4bp 0x80027768).
@@ -98,7 +98,7 @@ float proj_obj_center_ord(void);
 // class ProjParams (game/render/proj_params.h) — per-Core; the header brings in the free-function bridges
 // (proj_pz_to_ord, proj_set_H, proj_camview_world_ord, camview_valid) that used to be declared inline here.
 #include "proj_params.h"
-// g_fps60_on retired — read g_mods.fps60 (mods.h)
+// g_fps60_on retired — read game->mods.fps60 (mods.h)
 // The entity node the native render walk is currently rendering (set around each per-object dispatch,
 // below). The PER-INSTANCE identity for every prim an object emits — including a 2D billboard whose quad
 // rasterizes later at the OT walk. Used both for the objid overlay (RenderQueue::emitOrQueue) and as the
@@ -140,7 +140,7 @@ static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, flo
 // vertex colours by ambient + diffuse*max(0,N·L). This shades ONLY the opaque world geometry it is called
 // on — it never touches semi-transparent surfaces (water etc.), so translucency is unaffected by
 // construction (that was the deferred pass's bug: it re-shaded/clobbered pixels behind translucent water).
-// Light dir is the to-light vector in view space (g_mods.light_dir), same convention as the retired pass.
+// Light dir is the to-light vector in view space (mods.light_dir), same convention as the retired pass.
 // PER-AREA lighting (engine/lighting.cpp): the directional light is now COLOURED and AREA-SELECTED (open
 // areas get a warm SUN, mines get a dim cave ambient), plus optional POINT lights (lava up-glow / torches)
 // attenuated by the face's view-space position. Config picked once per frame in Render::shadeSelect() (the
@@ -150,7 +150,7 @@ void Render::shadeSelect() {                 // called once per world frame befo
   mShadeCfg = lighting.select(lighting.areaKeyFrom(mCore));
 }
 static inline void engine_shade_face(Core* c, const ProjVtx* p, int nv, uint8_t r[4], uint8_t g[4], uint8_t b[4]) {
-  if (!g_mods.light) return;
+  if (!c->game->mods.light) return;
   Render* rr = c->mRender;
   const LightConfig* cfg = rr->mShadeCfg ? rr->mShadeCfg : rr->lighting.defaultConfig();
   float e1x = p[1].vx - p[0].vx, e1y = p[1].vy - p[0].vy, e1z = p[1].vz - p[0].vz;
@@ -206,7 +206,7 @@ void Render::submitPolyGt3Native(Core* c) {
     c->mRender->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface
-    int xmax = submit_xmax();
+    int xmax = submit_xmax(c);
     if (p[0].sx >= xmax && p[1].sx >= xmax && p[2].sx >= xmax) continue;
     if (p[0].sy >= 240 && p[1].sy >= 240 && p[2].sy >= 240) continue;
     uint32_t code = c->mem_r32(rec + 0);                      // rgb0|op ; rgb1 @rec+4, rgb2 = rgb1<<4
@@ -258,7 +258,7 @@ void Render::submitPolyGt4Native(Core* c) {
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface (matches MAC0<=0 drop)
     // frustum cull (right/bottom edges only, as the original) over all 4 verts.
-    int xmax = submit_xmax();
+    int xmax = submit_xmax(c);
     if (p[0].sx >= xmax && p[1].sx >= xmax && p[2].sx >= xmax && p[3].sx >= xmax) continue;
     if (p[0].sy >= 240 && p[1].sy >= 240 && p[2].sy >= 240 && p[3].sy >= 240) continue;
     // decode RGB (rgb0 @rec+0, rgb1=rgb0<<4; rgb2 @rec+4, rgb3=rgb2<<4) and UV/CLUT/texpage.
@@ -395,7 +395,7 @@ void Render::terrain() {
   if (cfg_dbg("terrgte")) fprintf(stderr, "[Render::terrain] node(a0=r4)=%08X\n", c->r[4]);
   // Pick this area's light config ONCE per world frame (terrain renders first); the per-face shader reads
   // the cached pointer. Cheap guest-RAM fingerprint read; unknown area -> village SUN default.
-  if (g_mods.light) shadeSelect();
+  if (c->game->mods.light) shadeSelect();
   // READ-ONLY display pass (issue #32): float transform + real per-pixel depth, matrices computed in
   // host memory (native_terrain.cpp terrain_obj_matrix_host). The substrate terrain body 0x8002AB5C
   // executes underneath via the render orchestrator and owns all guest writes (sway bytes, IR0, GTE).

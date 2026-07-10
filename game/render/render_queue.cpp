@@ -17,9 +17,9 @@
 
 // Debug object-ID overlay: split into QUAD (billboard) and 3D-OBJECT (mesh) highlighting so the user can
 // box only one class. On when its RmlUi/cfg toggle is set. `objid` channel + legacy debug_ids = both.
-static inline int objid_quads_on(void)   { return g_mods.debug_quads   || g_mods.debug_ids || cfg_dbg("objid"); }
-static inline int objid_objects_on(void) { return g_mods.debug_objects || g_mods.debug_ids || cfg_dbg("objid"); }
-static inline int objid_on(void) { return objid_quads_on() || objid_objects_on(); }
+static inline int objid_quads_on(Core* c)   { const Mods& m = c->game->mods; return m.debug_quads   || m.debug_ids || cfg_dbg("objid"); }
+static inline int objid_objects_on(Core* c) { const Mods& m = c->game->mods; return m.debug_objects || m.debug_ids || cfg_dbg("objid"); }
+static inline int objid_on(Core* c) { return objid_quads_on(c) || objid_objects_on(c); }
 
 int  gpu_gpu_enabled(void);        // gpu_gpu.cpp — Core*-less device-singleton query (declared at use)
 
@@ -154,7 +154,7 @@ void RenderQueue::objidOverlay(Core* core) {
   // next==0). There are three (heads @ 0x800FB168 / 0x800F2624 / 0x800F2738; the object walk uses the
   // first two, cull touches all three). Walk all three so EVERY live object is enumerated individually.
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
-  static int s_logframe = 0; int dolog = objid_on() && ((s_logframe++ % 120) == 0);
+  static int s_logframe = 0; int dolog = objid_on(core) && ((s_logframe++ % 120) == 0);
   int nquad = 0, nobj = 0, nlive = 0;
   for (int li = 0; li < 3; li++) {
     for (uint32_t n = core->mem_r32(HEADS[li]), g = 0; n >= 0x80000000u && n < 0x80200000u && g < 512;
@@ -170,7 +170,7 @@ void RenderQueue::objidOverlay(Core* core) {
       // mesh. (The old fps_anchor signal is dead — its feeder ov_render_cmd is orphaned post override-removal.)
       uint8_t rtype = core->mem_r8(n + 0xB);
       int quad = (rtype >= 0x10 && rtype <= 0x14) ? 1 : 0;
-      if (quad ? !objid_quads_on() : !objid_objects_on()) continue;  // class toggled off
+      if (quad ? !objid_quads_on(core) : !objid_objects_on(core)) continue;  // class toggled off
       float sx = 0, sy = 0;
       if (!proj_camview_world_screen((float)wx, (float)wy, (float)wz, &sx, &sy)) continue;  // behind camera
       int cx = (int)(sx + 0.5f), cy = (int)(sy + 0.5f);
@@ -354,7 +354,7 @@ void RenderQueue::zfightScan(Core* core) {
 }
 
 void RenderQueue::flush(Core* core) {
-  if (n && objid_on()) objidOverlay(core);   // debug: label each object with its engine ID
+  if (n && objid_on(core)) objidOverlay(core);   // debug: label each object with its engine ID
   sortQueue();
   // fps60: the interpolated-60fps tier OWNS presentation — it re-runs the scene render for the in-between
   // and re-emits the captured non-scene prims, then presents this frame (Fps60::present_vk). So it must
@@ -362,7 +362,7 @@ void RenderQueue::flush(Core* core) {
   // per-frame: under diff_mode (SBS dual-core compare) per-core present is suppressed, so present_vk never
   // runs — capturing would leave the geometry batch empty (black SBS panes). In diff_mode the SBS composite
   // reads the geometry batch directly, so flush MUST inline-emit. Gate the fps60 capture on !diff_mode.
-  if (g_mods.fps60 && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  if (core->game->mods.fps60 && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
   emitQueue(core);
 }
 

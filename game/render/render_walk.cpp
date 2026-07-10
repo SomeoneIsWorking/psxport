@@ -116,9 +116,9 @@ static void render_bg_tilemap_native(Core* c, uint32_t t4) {
   // centre (cx=nw/2) and widen the tiled window to nw+32 so it fills the full wide FB, matching the
   // world's OFX shift. cx/winw reduce to the exact 4:3 values (160 / 0x160) when not wide, so the 4:3
   // path stays byte-identical. Gated on gpu_gpu_wide_engine() (false at 4:3 / oracle / SBS legs).
-  int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
+  int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
   int cx = 160, winw = 0x160;                       // screen-centre X / tiled window width (4:3 defaults)
-  if (gpu_gpu_wide_engine()) { int nw = gpu_gpu_wide_engine_w(); cx = nw / 2; winw = nw + 0x20; }
+  if (gpu_gpu_wide_engine(c)) { int nw = gpu_gpu_wide_engine_w(c); cx = nw / 2; winw = nw + 0x20; }
   // Starting tile row/col = (scroll - screen-center) >> 4, wrapped into [0,H) / [0,W).
   int rowtile = ((scrollY - 120) >> 4) % H; if (rowtile < 0) rowtile += H;
   int coltile = ((scrollX - cx) >> 4) % W; if (coltile < 0) coltile += W;

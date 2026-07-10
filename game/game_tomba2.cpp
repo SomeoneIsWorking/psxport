@@ -35,7 +35,6 @@
 #include <stdio.h>
 
 void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (super-call / A/B oracle)
-void fps60_init(void);            // fps60: read PSXPORT_FPS60
 // g_render_object retired 2026-07-03 — was defined + written by Cull::objectCull but never read; dead.
 // g_fps60_on retired — read g_mods.fps60 (mods.h)
 // SpuAudio methods are called via c->game->spu_audio (owner: Game, see runtime/recomp/spu_audio.h).
@@ -120,7 +119,7 @@ void Engine::frameUpdate() {
   // (60 fps, 1 frame behind) and paces both halves — see fps60_present_vk. The faithful path
   // presents frame B once and paces a full frame.
   c->game->fps60.frame_commit(c);
-  if (!g_mods.fps60) {
+  if (!c->game->mods.fps60) {
     c->game->perf.phaseBegin(2);                             // perf: PRESENT-cpu = VRAM mirror upload + VK record/submit
     gpu_present(c);
     c->game->perf.phaseEnd(2);                               // (pacing/vsync sleep below is excluded -> shows as idle/pace)
@@ -134,7 +133,7 @@ void Engine::frameUpdate() {
 // PSXPORT_OBJLOG=1: dump every object the cull dispatcher visits (addr + type@+0xc +
 // pos@+0x2e/32/36). Empirically maps the active-object pool/list for the native entity
 // manager (Phase 1) — more reliable than static-tracing the overlay handler dispatch.
-int gpu_gpu_wide_engine(void);   // gpu_gpu.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
+int gpu_gpu_wide_engine(Core*);   // gpu_gpu.c — genuine engine-wide active (PSXPORT_WIDE_ENGINE && aspect!=4:3)
 
 // Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw kick): the recomp body just
 // programs the GPU linked-list DMA to walk the ordering table at a0 — which our renderer already does
@@ -247,7 +246,6 @@ void games_tomba2_init(void) {
   // (engine_math_register, save_register, sound_register, hud_register, actor_sm_24448_register, and
   // the beh_*_register siblings) were left as empty stubs "in case." Every stub had a zero- or single-
   // dead-line body — dead scaffolding — and got deleted. Direct-call wiring is the shape now.
-  fps60_init();
   void render_observer_install();
   render_observer_install();   // read-only per-object depth tags at the substrate override choke point
   void perobj_dispatch_install();

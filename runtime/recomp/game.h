@@ -37,6 +37,7 @@
 #include "native_gate.h"           // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
 #include "platform_hle.h"          // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
 #include "engine_overrides.h"      // class EngineOverrides — global-dispatch engine override table
+#include "mods.h"                  // class Mods — per-Game PC-native mod toggles (aspect/ires/ssao/light/fps60)
 #include "memcard.h"               // class Memcard — host-backed 128 KB memory card device
 #include "dbg_server.h"            // class DbgServer — live TCP debug endpoint (127.0.0.1)
 #include "gpu_perf.h"              // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
@@ -85,6 +86,7 @@ public:
   EngineOverrides engine_overrides; // global dispatch overrides: guest addr -> native engine method
                                     // (consulted at rec_dispatch top; never on psx_fallback cores)
   Memcard     memcard;      // host-backed 128 KB memory card device (BIOS libcard/libmcrd)
+  Mods        mods;         // per-Game mod toggles + params (was the process-global g_mods, 2026-07-10)
   DbgServer   dbg_server;   // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
   GpuPerf     perf;         // per-frame CPU phase / frame-time profiler (REPL `debug perf`)
   VerifyHarness verify;     // shared A/B verify scaffold: snapshot buffers + per-check counters
@@ -104,6 +106,15 @@ public:
   // restores a working PSX baseline to compare the native path against. Set by PSXPORT_GATE (nonzero) and
   // the REPL `gate on|off`. Default OFF = full native (shipped behavior). Wired in native_boot.cpp.
   int psx_fallback = 0;
+
+  // ---- PSXPORT_ORACLE / SBS core B: the pure PSX reference, PER-GAME ------------------------------
+  // oracle=1 pins THIS Game to the trustworthy reference config: recomp gameplay + no native
+  // enhancement may touch it. Seeded from PSXPORT_ORACLE in native_boot_run (standalone) or set by
+  // the SBS harness on core B — per-instance, so one process can hold a user-config core and a pure
+  // oracle core without leaking into each other (was the process-global oracle_mode() cfg predicate).
+  // The render-side flag (Render::mode.setPsxRender) is set by the caller, which owns mRender.
+  int oracle = 0;
+  void setOracle() { oracle = 1; psx_fallback = 1; mods.forceNeutral(); }
 
   // ---- pc_skip: per-fork shortcut flag (see CLAUDE.md "The 5 paths") -----------------------------
   // Per-site fork bool. Every collapsed-multi-step-init in the native path is shaped:
@@ -157,6 +168,7 @@ public:
   // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
   // gpu_gpu.game->core). Set once here so no file-scope global is needed.
   Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
+           fps60.game = this;
            hle.game = this; rq.game = this; pcSched.game = this; cd.game = this; fmv.game = this;
            stub.game = this;
            spu_audio.game = this; native_music.game = this; music_list.game = this;
@@ -164,6 +176,7 @@ public:
            memcard.game = this;
            dbg_server.game = this; verify.core = &core; ffspan.core = &core;
            if (!GpuDevice::sInstance) GpuDevice::sInstance = &gpu_dev;   // first Game claims the host device
+           mods.init();   // per-Game mod state: factory defaults + the player's settings file
            disc_state_init(&disc); cdc_state_init(&cdc); xa_state_init(&xa);
            gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
            cdc.disc = &disc; xa.disc = &disc; }   // per-instance disc backend + CD-controller + XA streamer
