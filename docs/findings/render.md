@@ -46,6 +46,54 @@
 - **refs:** `runtime/recomp/gpu_gpu.cpp` (`gpu_zbias_unit`/`set_order` bias, `ord3d_b`, draw_tri/tex_emit),
   `runtime/recomp/gpu_gpu_internal.h` (`s_depth_bias`), `game/render/render_queue.cpp` (`zfightScan` diag),
   `runtime/recomp/gte_beetle.cpp:218` (the 1/4096 depth source). Config: `PSXPORT_ZBIAS`, `PSXPORT_ZFIGHT`.
+## Weapon "ball but no CHAIN" (#28 follow-up) — chain-LINK billboards already render; only a minor grab/dust semi-quad is dropped (2026-07-10, could-not-reproduce a significant chain)
+
+- **symptom (task/USER):** under the default config (pc_render), Tomba's weapon mid-swing shows the BALL
+  but not the CHAIN. Ball renders since f6aebd4 (the field's 2D-only OT pass keeps obj-depth-tagged
+  billboard prims — `runtime/recomp/gpu_native.cpp` `billboard` keep in the poly path + `objz` keep in the
+  sprite path). Premise: the chain segments are still dropped.
+- **repro used:** REPL nav to the first field (pipe 8×{run 12/tap x}, 25×{run 40/tap start}, 15×{run 20/tap
+  x}), then `tap sq 8`; shots every 2 frames. This drives Tomba's **basic square attack (the crouch-grab)**,
+  matching the earlier session's `scratch/screenshots/vischeck/atkcmp_atk*.png`.
+- **prim anatomy at the swing (all coords display 320×240, pinned via `PSXPORT_PRIMAT="x,y,frame"`):** the
+  weapon is built into the **0x800C0000-region per-instance GPU packet buffer** (NOT the main pool
+  0x800BF544; see the "0x800C0000-0x800C8FFF is the packet pool" finding below). Two distinct prim families
+  cover the wrist/ball:
+  1. **0x800C0xxx** — small textured tris/quads (GP0 op **0x34/0x3c**), tp=(448,256). These are the ball
+     **and the chain LINKS**. **Every one is `is3d=1 bb=1`** (obj-depth-tagged via the billboardEmit family
+     `perObjRenderDispatch`/`billboardCompose1/2`/`billboardEmit` = 0x8003C2D4/C464/C8F4) → KEPT and drawn.
+     Verified: a full `PRIMAT` scan at the swing found **zero** 0x800C0xxx prims with `bb=0`.
+  2. **0x800C7xxx** — large **semi-transparent** textured quads (GP0 op **0x2E**), tp=(320,256), covering
+     Tomba's body/hands. `is3d=0 bb=0` → DROPPED by the 2D-only filter. This is a minor grab/dust/shadow
+     smear, NOT the chain (see below).
+- **builder of the dropped 0x800C7xxx quads (RE'd via a write-watch backtrace + `generated/` caller trace):**
+  the packet writer is `gen_func_80027A4C`, called from `gen_func_80027E5C` (a0=node sprite/quad builder),
+  reached through the master render-walk's DEFAULT case (`0x8003C29C`, `rec_dispatch(node+24)`) — the object's
+  own `node+24` render fn (contains 0x8003DF80). A persistent object (node 0x800FB218) also reaches it via
+  `gen_func_80033080`. `QuadRtptSubmit::submitQuad` (0x8003B320, the rope/flame RTPT quad path) is NOT
+  involved here (0 calls during the swing).
+- **DEAD END — wrapping the builder in RenderObserver does not visibly help:** added `gen_func_80027E5C`
+  (and separately 0x80033080) to `game/render/render_observer.cpp`'s obs-wrap set so a `PktSpanSession`
+  tags its packets with `obj_world_ord(node)`. Result: the 0x800C7xxx quads become `bb=1` (kept) but render
+  **fully occluded — 0 pixel change** (the object's world depth places them behind Tomba's opaque body).
+  Routing them to `RQ_HUD` instead (drawn on top, painter-style) makes them visible but **overshoots**:
+  same-exec (`PSXPORT_GATE=1`) pc-vs-psx weapon-region diff goes 1540px → 1581px (WORSE, not better). Their
+  total contribution is ~40px — negligible. Reverted; NOT shipped (tagging the wrong thing / adds a hot-fn
+  wrap + SBS risk for no visible gain = bandaid).
+- **conclusion:** in the current build (HEAD w/ f6aebd4) the discrete weapon **chain-link billboards
+  already render** — they are the same 0x800C0xxx billboard class as the ball, which f6aebd4's keep already
+  covers. A same-exec `GATE` pc-vs-psx compare shows the ball+wrist weapon present in BOTH; the residual
+  ~1540px weapon-region difference is dominated by pc_render's global **lighting/shading style** (deferred,
+  expected), not a dropped chain prim. **Could not reproduce a significantly-missing chain with this repro.**
+- **most likely gap (for the next session / operator):** the task's repro drives Tomba's **basic grab**, not
+  a distinct equipped **ball-and-chain WEAPON**. If the user's "chain" is a purchasable/equipped weapon, a
+  fresh headless newgame can't reach it — the operator should confirm the exact weapon/scenario (or provide a
+  save-state at the equipped step), then re-run this PRIMAT/`bb`-flag check on that weapon's prims.
+- **refs:** `runtime/recomp/gpu_native.cpp` (2D-only keep rules L881/L1058, `obj_depth_lookup`/`_add`),
+  `game/render/render_observer.cpp` (obs-wrap set), `game/render/submit.cpp` (PktSpanSession rationale),
+  `generated/shard_6.c` gen_func_80027E5C/80033080; evidence shots `scratch/screenshots/chain/` (G_pc_*/
+  G_psx_* same-exec pairs, wrist_*, csg_*). Diagnostics used (all reverted): PSXPORT_DEBUG chaintrace/
+  chainshow/poolwatch/cw7/odlk/obswrap.
 
 ## Fisherman's-hut interior "much different than oracle" — repro BLOCKED (quest-gate + cross-area warp overlay gap) (2026-07-10, OPEN)
 
