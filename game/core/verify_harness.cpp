@@ -91,6 +91,8 @@ void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
   inCheck = true;
   memcpy(mStrictPreRam, c->ram, 0x200000); memcpy(preSpad, c->scratch, 0x400);
   memcpy(preRegs, c->r, 32 * 4); preRegs[32] = c->hi; preRegs[33] = c->lo;
+  uint32_t entrySp = preRegs[29], entryRa = preRegs[31];
+  uint64_t invocation = mLastMirrorCount;   // stamped by mirrorSampleGate just before this call
   fn(ctx);                                          // leg 1: the native mirror
   memcpy(mStrictNatRam, c->ram, 0x200000); memcpy(mStrictNatSpad, c->scratch, 0x400);
   for (int i = 0; i < kNStrictReg; i++) mStrictNatRegs[i] = c->r[kStrictReg[i]];
@@ -101,35 +103,77 @@ void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
   rec_dispatch(c, addr);
   inSubstrateLeg = false;
   int bad = 0;
+  bool headerPrinted = false;
+  auto printHeader = [&]() {
+    if (headerPrinted) return;
+    headerPrinted = true;
+    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X\n",
+            addr, (unsigned long long)invocation, entrySp, entryRa);
+  };
   for (uint32_t i = 0; i < 0x200000 && bad < 16; i++)
     if (c->ram[i] != mStrictNatRam[i]) {
+      printHeader();
       fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH ram 0x%08X: native=%02X substrate=%02X\n",
               addr, 0x80000000u + i, mStrictNatRam[i], c->ram[i]); bad++;
     }
   for (uint32_t i = 0; i < 0x400 && bad < 16; i++)
     if (c->scratch[i] != mStrictNatSpad[i]) {
+      printHeader();
       fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH spad 0x%08X: native=%02X substrate=%02X\n",
               addr, 0x1F800000u + i, mStrictNatSpad[i], c->scratch[i]); bad++;
     }
   for (int i = 0; i < kNStrictReg; i++)
     if (c->r[kStrictReg[i]] != mStrictNatRegs[i]) {
+      printHeader();
       fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH reg %s: native=%08X substrate=%08X\n",
               addr, kStrictName[i], mStrictNatRegs[i], c->r[kStrictReg[i]]); bad++;
     }
   if (c->hi != mStrictNatRegs[14] || c->lo != mStrictNatRegs[15]) {
+    printHeader();
     fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH hi/lo: native=%08X/%08X substrate=%08X/%08X\n",
             addr, mStrictNatRegs[14], mStrictNatRegs[15], c->hi, c->lo); bad++;
   }
   if (bad) {
-    fprintf(stderr, "[mirror-verify] 0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact.\n", addr, bad);
-    abort();
+    bool cont = cfg_on("PSXPORT_MIRROR_VERIFY_CONTINUE");
+    Check& k = check("mirror-verify");
+    k.nMismatch++;
+    if (!cont) {
+      fprintf(stderr, "[mirror-verify] 0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact. "
+                      "Aborting (set PSXPORT_MIRROR_VERIFY_CONTINUE=1 to log-and-continue).\n", addr, bad);
+      abort();
+    }
+    fprintf(stderr, "[mirror-verify] 0x%08X CONTINUING past %d+ diffs (PSXPORT_MIRROR_VERIFY_CONTINUE=1) "
+                    "— execution proceeds from the NATIVE result.\n", addr, bad);
   }
   memcpy(c->ram, mStrictNatRam, 0x200000); memcpy(c->scratch, mStrictNatSpad, 0x400);
   for (int i = 0; i < kNStrictReg; i++) c->r[kStrictReg[i]] = mStrictNatRegs[i];
   c->hi = mStrictNatRegs[14]; c->lo = mStrictNatRegs[15];
   inCheck = false;
-  Check& k = check("mirror-verify");
-  if (++k.nMatch % 64 == 1) fprintf(stderr, "[mirror-verify] 0x%08X OK (pass #%ld)\n", addr, k.nMatch);
+  if (!bad) {
+    Check& k = check("mirror-verify");
+    if (++k.nMatch % 64 == 1) fprintf(stderr, "[mirror-verify] 0x%08X OK (pass #%ld)\n", addr, k.nMatch);
+  }
+}
+
+// mirrorSampleGate: the generalized "verify ALL wired overrides" entry point. Central injection
+// points (engine_override_thunk.cpp, EngineOverrides::run) call this instead of strictArmed(addr)
+// directly, so PSXPORT_MIRROR_VERIFY=all covers every wired address with no per-call-site MV_CHECK.
+bool VerifyHarness::mirrorSampleGate(uint32_t addr) {
+  if (!strictArmed(addr)) return false;   // handles mode parsing + inCheck no-nesting guard
+  if (mMirrorEvery < 0) {
+    mMirrorEvery = cfg_int("PSXPORT_MIRROR_VERIFY_EVERY", 1);
+    if (mMirrorEvery < 1) mMirrorEvery = 1;
+  }
+  uint32_t k = addr & 0x1FFFFFFFu;
+  int slot = -1;
+  for (int i = 0; i < mMirrorCntN; i++) if (mMirrorCntAddr[i] == k) { slot = i; break; }
+  if (slot < 0) {
+    if (mMirrorCntN < kMaxMirrorAddrs) { slot = mMirrorCntN++; mMirrorCntAddr[slot] = k; mMirrorCnt[slot] = 0; }
+    else slot = kMaxMirrorAddrs - 1;    // table full — diagnostics only, degrade to a shared counter
+  }
+  uint64_t n = ++mMirrorCnt[slot];
+  mLastMirrorCount = n;
+  return mMirrorEvery <= 1 || (n % (uint64_t)mMirrorEvery) == 1;
 }
 
 // ---- fork-level SKIP-vs-FAITHFUL observable gate (see header). ----

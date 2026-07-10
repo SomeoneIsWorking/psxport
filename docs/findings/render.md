@@ -1320,3 +1320,61 @@ draft was already byte-faithful.
 - **refs:** `game/render/wide_re_gpu_putdrawenv.cpp`, `game/ui/font.{h,cpp}`, `game/core/str.cpp`;
   install sites `gpu_putdrawenv_install()` / `font_wide_re_install()` / `str_wide_re_install()`,
   called from `games_tomba2_init()` in `game/game_tomba2.cpp`.
+
+## `PSXPORT_MIRROR_VERIFY=all` generalization — reproduces the tracked register-faithfulness/
+## stack-depth cluster mechanically, plus surfaces new OPEN addresses in the same chain (2026-07-10)
+
+- **task:** generalize `PSXPORT_MIRROR_VERIFY` (previously required a hand-placed `MV_CHECK` per
+  call site) to `=all` — automatic per-invocation native-vs-substrate byte-compare for EVERY
+  address wired via `engine_set_override_main`/`_a00` or `EngineOverrides::register_`, hooked at
+  the two central dispatch points instead of at each call site (`runtime/recomp/
+  engine_override_thunk.cpp`, `runtime/recomp/engine_overrides.cpp`; mechanism + knobs in
+  docs/config.md "Mirror TDD gate"). See docs/fleet-workflow.md §9a for the new mandatory-step rule.
+- **validation run (unmodified `main` + this tooling change, `PSXPORT_AUTO_SKIP=1
+  PSXPORT_MIRROR_VERIFY=all PSXPORT_MIRROR_VERIFY_EVERY=50 PSXPORT_MIRROR_VERIFY_CONTINUE=1`,
+  headless free-roam, ~3000 target frames, watchdog-limited to ~90s wall):**
+  - **Confirms already-tracked bugs, not harness noise:** the dominant mismatching addresses —
+    `0x8003CCA4` (perObjRenderDispatch), `0x8003C2D4`/`0x8003C464` (billboardCompose1/2),
+    `0x8003C048` (renderWalk), `0x8003D0BC` (overlayTypeDispatch), `0x801401B8` (entityLoop),
+    `0x80082220/240/370/38C/424/734` + `0x80079374`/`0x80078CA8`/`0x80080F6C`/`0x80081458`/
+    `0x80082D04`/`0x80083364`/`0x8005950C`/`0x800822D8` — are EXACTLY the perobj_billboard /
+    overlay_ground_gt3gt4 register-faithfulness cluster already documented above ("stack-depth
+    OPEN", commit 69a1fb3) and in the melee/Str::length entry just above this one. The tool
+    reproduces the SAME known-open divergence mechanically, at the exact invocation, instead of
+    needing an SBS diff several frames later — this is the validation that it works, not a new bug.
+  - **Newly-surfaced addresses not previously tracked by address** (mismatches only, mix of
+    ABI-register-only diffs and RAM/scratchpad diffs — same v0/v1-dominant shape as the tracked
+    cluster, consistent with the same register-faithfulness bug class rather than a distinct one,
+    but NOT individually root-caused in this pass — **OPEN, needs a future triage/fix pass**):
+    `0x800205CC`, `0x8003B054`, `0x800420AC`, `0x80051C8C`, `0x80075D24`, `0x80077B5C`,
+    `0x801241BC`, `0x801360F4`, `0x80139838`, `0x8013A730`, `0x8013AC34`, `0x8014047C`,
+    `0x80140544`, `0x80144928`, `0x801465EC`, `0x801467BC`. Also flagged: `0x80091970`
+    (`Sequencer::channelNoteInit`, docs/findings/audio.md) — a v0/v1-only mismatch on invocation
+    #1 from a caller context (`ra=0x80091B08`) NOT exercised by the earlier narrow single-address
+    `MIRROR_VERIFY=0x800909C0` subtree run that certified it 0-diff; `=all`'s central-gate
+    injection reaches every caller path, not just the one a hand-targeted run happened to drive.
+  - **Ruled out as harness artifact:** re-running with `EVERY=1` (armed for the whole render
+    cluster) shows the SAME addresses mismatching from invocation #1 deterministically (not a rare
+    flake); the gate's own state handling never perturbs subsequent frames either way (native
+    result is what continues execution whether the check runs or not, matched or `CONTINUE`d past
+    a mismatch) — so the volume/shape of mismatches reflects real register/RAM divergence in the
+    existing native ports, not an artifact of sampling or of arming `=all` itself.
+  - **Performance:** baseline (no MIRROR_VERIFY) does 3000 headless free-roam frames in ~6s.
+    `=all EVERY=1` could not finish 3000 frames in a 100s watchdog window (some addresses fire
+    1000s of times/frame; each checked invocation costs two 2 MB RAM memcpy/memcmp passes).
+    `=all EVERY=50 CONTINUE=1` still could not finish in 90s (43.6s CPU / 56s wall before the
+    watchdog fired) — the render cluster's invocation volume dominates even at 50x sampling. For a
+    targeted single-address wiring-pass gate (the common case, docs/fleet-workflow.md §9a) `EVERY=1`
+    over the content that reaches the address is fine; a full-session `=all` soak needs a much
+    higher `EVERY` (several hundred) or a bounded frame count.
+- **not fixed in this pass** (tooling task; per fleet-workflow.md §6 this is a discovery to log, not
+  a mandate to fix everything found) — the newly-surfaced addresses above are OPEN for a future
+  RE/fix pass on the render-dispatch chain; the already-tracked cluster's fix is tracked in this
+  file's earlier entries.
+- **gate:** `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1` (MIRROR_VERIFY
+  unset, i.e. the standard gate command) re-run after this tooling change: zero `sbs-div`/
+  `VIOLATION` through the 95s watchdog window, unperturbed by the new central-gate hooks (dormant
+  when `PSXPORT_MIRROR_VERIFY` is unset — `mirrorSampleGate` returns false immediately).
+- **refs:** `game/core/verify_harness.{h,cpp}` (`mirrorSampleGate`, generalized `strictCheck`
+  reporting: invocation #, entry sp/ra, `MIRROR_VERIFY_CONTINUE`), `runtime/recomp/
+  engine_override_thunk.cpp`, `runtime/recomp/engine_overrides.cpp`.

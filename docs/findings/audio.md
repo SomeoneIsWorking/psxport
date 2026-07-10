@@ -144,3 +144,19 @@
 - **refs:** game/audio/sequencer.{h,cpp}, runtime/recomp/engine_override_thunk.cpp,
   runtime/recomp/sbs.cpp, docs/engine_re.md (SsSeqCalled cluster entries), scratch/logs/sbs_gate.log
   + mv_final.log (regenerable).
+
+## `channelNoteInit` (0x80091970) flagged by the new generalized `MIRROR_VERIFY=all` gate — OPEN, needs re-check (2026-07-10)
+
+- Earlier entry above certified `0x80091970` 0-diff via a narrow `PSXPORT_MIRROR_VERIFY=0x800909C0`
+  subtree run (7 firings, all reached through the `frameTick` tick subtree). The new generalized
+  `=all` gate (docs/config.md "Mirror TDD gate", docs/fleet-workflow.md §9a; hooks
+  `engine_override_thunk`/`EngineOverrides::run` centrally instead of per-call-site) reaches EVERY
+  caller path, not just the one the earlier targeted run happened to exercise, and flags a v0/v1-
+  only ABI-register mismatch on invocation #1 (`ra=0x80091B08`, a caller context outside the
+  frameTick subtree — likely the boot-time `SEQ_PREP_FN` (0x800931C0) init path). No RAM/scratchpad
+  diff observed, only `v0`/`v1` (native leaves pointer values `0x800BE368`/`0x800BE388`, substrate
+  leaves small ints `0x7F`/`0x82` — looks like the same v0/v1-dead-scratch-vs-live-pointer pattern
+  as the render cluster, see docs/findings/render.md's `MIRROR_VERIFY=all` entry, but NOT
+  individually re-verified here). **OPEN** — re-RE `channelNoteInit`'s callers from
+  `gen_func_80093650`/`SEQ_PREP_FN` to confirm whether v0/v1 are genuinely dead at this call site or
+  whether the draft is missing a real return value a caller consumes.

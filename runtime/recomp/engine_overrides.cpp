@@ -3,6 +3,7 @@
 #include "game.h"
 #include "sbs.h"
 #include "cfg.h"
+#include "verify_harness.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -32,6 +33,16 @@ void EngineOverrides::register_(uint32_t addr, const char* name, EngineOverrideF
 bool EngineOverrides::run(Core* c, uint32_t addr) {
   uint32_t k = (addr & 0x1FFFFFFF) | 0x80000000u;
   if (k < mLo || k > mHi) return false;
+  // Self-check (2026-07-10): overlay_router.cpp already gates the call to run() on
+  // !psx_fallback && !inSubstrateLeg — this defends the invariant AT the choke point too, so a
+  // future caller that forgets the gate aborts loudly instead of silently contaminating the oracle
+  // (the exact fake-green bug class this whole file's header comment documents).
+  if (game && game->verify.inSubstrateLeg) {
+    fprintf(stderr, "[engine-ov] BUG: run() reached while inSubstrateLeg is set (oracle purity "
+                    "violated) addr=0x%08X — the substrate replay leg must never consult "
+                    "EngineOverrides.\n", addr);
+    abort();
+  }
   for (int i = 0; i < mN; i++) {
     if (mAddr[i] != k) continue;
     mHits[i]++;
@@ -42,7 +53,17 @@ bool EngineOverrides::run(Core* c, uint32_t addr) {
               sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'),
               addr, mName[i], c->r[31], c->r[4], c->r[5], c->r[6], c->r[7]);
     }
-    mFn[i](c);
+    // PSXPORT_MIRROR_VERIFY[=all|=0xADDR,...]: same generalized gate as engine_override_thunk.cpp
+    // (see its comment) — covers every address wired via EngineOverrides::register_ as well as the
+    // g_tab[] thunk table, so `=all` reaches BOTH override mechanisms per requirement.
+    if (game && game->verify.mirrorSampleGate(addr)) {
+      struct NativeCtx { EngineOverrideFn fn; Core* c; };
+      NativeCtx nc{mFn[i], c};
+      auto go = [](void* p) { NativeCtx* n = (NativeCtx*)p; n->fn(n->c); };
+      game->verify.strictCheck(addr, go, &nc);
+    } else {
+      mFn[i](c);
+    }
     return true;
   }
   return false;

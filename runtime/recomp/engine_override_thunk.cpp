@@ -28,6 +28,7 @@
 // change. This file is for the DIRECT-substrate-call path that bypasses rec_dispatch.
 #include "core.h"
 #include "game.h"
+#include "verify_harness.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -110,8 +111,23 @@ void engine_override_thunk(Core* c) {
       while (*p == ',' || *p == ' ') p++;
     }
   }
-  if (oracle) { g_oracleHits[slot]++; g_tab[slot].gen(c); }
-  else        { g_nativeHits[slot]++; g_tab[slot].native(c); }
+  if (oracle) { g_oracleHits[slot]++; g_tab[slot].gen(c); return; }
+  g_nativeHits[slot]++;
+  // PSXPORT_MIRROR_VERIFY[=all|=0xADDR,...]: generalized per-invocation mechanical oracle. Every
+  // address wired through engine_set_override_main/_a00 lands in g_tab[] here — hooking THIS one
+  // spot (rather than a hand-placed MV_CHECK per call site) makes `=all` cover every such address
+  // automatically. mirrorSampleGate applies strictArmed's mode/list parsing + no-nesting guard PLUS
+  // PSXPORT_MIRROR_VERIFY_EVERY sampling; strictCheck replays the pure gen leg via rec_dispatch with
+  // inSubstrateLeg=true (the thunk's own `oracle` test above honors that flag, so nested wired calls
+  // during the substrate replay also stay pure-gen all the way down).
+  if (c->game && c->game->verify.mirrorSampleGate(addr)) {
+    struct NativeCtx { OverrideFn fn; Core* c; };
+    NativeCtx nc{g_tab[slot].native, c};
+    auto go = [](void* p) { NativeCtx* n = (NativeCtx*)p; n->fn(n->c); };
+    c->game->verify.strictCheck(addr, go, &nc);
+  } else {
+    g_tab[slot].native(c);
+  }
 }
 
 // Installers — one per recompiler module whose raw set_override we must reach. The shared thunk is

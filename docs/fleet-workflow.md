@@ -127,6 +127,28 @@ wiped that agent's uncommitted work. Defenses:
 - If the main checkout keeps re-dirtying after a reset, an agent is actively leaking — stop it or wait for
   it to finish before integrating.
 
+## 9a. `PSXPORT_MIRROR_VERIFY=all` is a MANDATORY step of every wiring pass (2026-07-10)
+Every wiring pass in §1 must, before declaring an address verified, run a normal (non-SBS) session
+with `PSXPORT_MIRROR_VERIFY=all PSXPORT_MIRROR_VERIFY_CONTINUE=1` covering the content that reaches
+the newly-wired address(es) — this is now the STANDARD mechanical detector for register/frame/store-
+order bugs, catching them at the exact offending invocation instead of waiting for an SBS diff frames
+(or a whole session) later. It is generalized: it needs no per-call-site `MV_CHECK`, so `=all` covers
+every address wired via `engine_set_override_main`/`_a00` OR `EngineOverrides::register_` in one run
+(see docs/config.md "Mirror TDD gate" for the mechanism + the `EVERY`/`CONTINUE` sampling knobs — a
+hot address needs `EVERY>1` for a multi-thousand-frame soak, `EVERY=1` is fine for a targeted single-
+address gate). SBS-full 0-diff alone is NOT sufficient: SBS's `diff_mode` skips whole subsystems
+(e.g. the per-vblank audio block, docs/findings/audio.md) and only compares whatever autonav actually
+reaches — MIRROR_VERIFY checks the ABI contract (regs + RAM + scratchpad, no exemptions) on every
+armed invocation regardless of whether SBS's autonav path exercises it. A real discovery run
+(2026-07-10, unmodified `main`, `=all EVERY=50 CONTINUE=1`, ~3000 headless free-roam frames)
+reproduced the ALREADY-TRACKED perobj_billboard/overlay_ground_gt3gt4 register-faithfulness /
+stack-depth cluster (docs/findings/render.md "stack-depth OPEN") mechanically at the exact call —
+confirming the tool finds REAL bugs, not harness artifacts — plus surfaced several previously-
+untracked-by-address mismatches in the same render-dispatch chain (logged as OPEN, not fixed in that
+pass; see docs/findings/render.md addendum). Treat a `=all` run that finds nothing on freshly-wired
+content as real verification; one that finds something is a fix target like any other divergence —
+record it (findings, OPEN if not fixed same-session) rather than waving it off.
+
 ## 9. Wide-RE drafts are UNTRUSTED until verified — budget a verify pass before wiring
 The wide-RE tier's drafts are hand-transcriptions from the recompiled C and routinely contain MULTIPLE
 bugs even when they compile and the drafting agent self-checked. Real 2026-07-08 counts when wiring banked

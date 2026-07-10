@@ -189,6 +189,37 @@ or level — they can't be a bare channel:
   (a yield inside a check leg aborts with a message); host hw side effects run twice while armed
   (do not arm CD-advancing leaves — SBS covers them). USER 2026-07-08: mirrors must be verified
   by RUNNING this gate, never by assertion.
+  - **`MIRROR_VERIFY=all` is GENERALIZED (2026-07-10, `VerifyHarness::mirrorSampleGate`):** it no
+    longer needs a hand-placed `MV_CHECK` at every call site. The two CENTRAL native-dispatch
+    injection points — `engine_override_thunk` (`runtime/recomp/engine_override_thunk.cpp`, the
+    `engine_set_override_main`/`_a00` g_tab[] table) and `EngineOverrides::run`
+    (`runtime/recomp/engine_overrides.cpp`, the rec_dispatch registration table) — call
+    `mirrorSampleGate(addr)` before invoking the native handler, so `=all` mechanically covers
+    EVERY address wired through EITHER mechanism in one run. An existing `MV_CHECK`-wrapped site
+    (e.g. sequencer.cpp's `nat_frameTick`) is unaffected: the outer `strictCheck` sets `inCheck`
+    before calling the native leg, so the inner `MV_CHECK`'s own `strictArmed` sees `inCheck` and
+    is a no-op pass-through — no double-check, no double cost. Nested wired calls during the
+    substrate-replay leg stay pure-gen all the way down because `inSubstrateLeg` is a Game-level
+    flag consulted by BOTH injection points (not stack-scoped per-call) — `EngineOverrides::run`
+    also self-checks (`abort()`) if ever reached with `inSubstrateLeg` set, defending the exact
+    fake-green bug class the sequencer wiring pass found and fixed (docs/findings/audio.md).
+  - **`MIRROR_VERIFY_EVERY=N`** (`cfg_int`, default **1** = check every invocation — correctness
+    over speed by default, per the "never silently narrow the compared state without a knob"
+    rule) — per-ADDRESS sampling: only every Nth invocation of a given address is actually
+    checked (still runs the real call every time; only the verify-and-compare machinery is
+    skipped on the other N-1). A hot render-dispatch address firing 1000s of times/frame makes
+    `EVERY=1` impractically slow for a multi-thousand-frame session (measured: baseline 3000
+    headless frames ~6s vs `=all EVERY=1` unable to finish 3000 frames in 100s on a hot
+    address) — raise `EVERY` (e.g. 50-200) for a longer soak run; `EVERY=1` is still the right
+    default for a targeted single-address wiring-pass gate.
+  - **`MIRROR_VERIFY_CONTINUE=1`** (`cfg_on`) — log-and-continue on a mismatch instead of
+    `abort()`ing (execution proceeds from the NATIVE result either way — the gate never corrupts
+    state, matched or not). Needed to survey `=all` across a whole session instead of dying at
+    the first hit; default is still fail-fast abort (per CLAUDE.md) for a targeted verify.
+  - On mismatch the abort/log message includes: address, invocation number (per-address counter),
+    guest `sp`/`ra` at entry, and the first ~16 differing RAM/scratchpad bytes or ABI registers
+    (addr, native value, substrate value) — enough to root-cause without re-running under a
+    debugger.
 - **Valued diagnostics (still named, gfx-debug.md documents them):** `SCENEDUMP`, `PROVAT`, `GTEPROBE`,
   `POLYDUMP`/`POLYAT`, `FADEDBG`, `SEMIDUMP`, `VK_SHOT`/`VK_SHOTSEQ`, `VK_DIFF`, `GPUTRACE`,
   `VRAMDUMP`/`VRAMDUMP_AT`, `RAMDUMP`/`RAMDUMP_FRAME`, `CLOBBERDUMP`, `CLUTWATCH`, `WWATCH`, `CW`/`CW_BT`,

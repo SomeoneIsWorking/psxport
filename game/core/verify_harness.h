@@ -56,6 +56,20 @@ public:
   bool strictArmed(uint32_t addr);      // also false while inCheck (no nesting)
   void strictCheck(uint32_t addr, void (*fn)(void*), void* ctx);
 
+  // ---- Generalized "verify ALL wired overrides" gate (2026-07-10) --------------------------------
+  // The two CENTRAL native-dispatch injection points — runtime/recomp/engine_override_thunk.cpp
+  // (the engine_set_override_main/_a00 g_tab[] table) and EngineOverrides::run (rec_dispatch's
+  // registration table) — call mirrorSampleGate(addr) instead of strictArmed(addr) directly before
+  // invoking the native handler. This makes `PSXPORT_MIRROR_VERIFY=all` cover EVERY address wired
+  // through either mechanism automatically, with no per-call-site MV_CHECK needed: strictArmed's
+  // mode/list parsing + inCheck no-nesting guard apply unchanged, PLUS per-address sampling
+  // (PSXPORT_MIRROR_VERIFY_EVERY=N, default 1 = check every invocation — correctness over speed by
+  // default; raise N to trade coverage for FPS on a hot address). A call site that already wraps
+  // itself in MV_CHECK (e.g. sequencer.cpp's nat_frameTick) is unaffected: the outer strictCheck
+  // sets inCheck=true before invoking the native leg, so the inner MV_CHECK's own strictArmed(addr)
+  // sees inCheck and falls through to a plain call — no double-check, no double cost.
+  bool mirrorSampleGate(uint32_t addr);
+
   // ---- fork-level SKIP-vs-FAITHFUL observable TDD gate (USER 2026-07-08) -------------------------
   // SV_CHECK at a pc_skip fork: when armed (PSXPORT_SKIP_VERIFY=all or =0xADDR[,..]), run the SKIP
   // leg, snapshot the OBSERVABLE set (game/core/observables.h positive list + 512 KB SPU RAM),
@@ -82,6 +96,13 @@ private:
   uint8_t* mStrictPreRam = nullptr; uint8_t* mStrictNatRam = nullptr;
   uint8_t  mStrictNatSpad[0x400];
   uint32_t mStrictNatRegs[16];
+  // mirrorSampleGate: per-address invocation counter + PSXPORT_MIRROR_VERIFY_EVERY sampling.
+  static constexpr int kMaxMirrorAddrs = 256;
+  int      mMirrorEvery = -1;           // -1 unparsed
+  uint32_t mMirrorCntAddr[kMaxMirrorAddrs] = {0};
+  uint64_t mMirrorCnt[kMaxMirrorAddrs] = {0};
+  int      mMirrorCntN = 0;
+  uint64_t mLastMirrorCount = 0;        // invocation # of the check strictCheck is about to run
   // skip-gate state
   int      mSkipMode = -1;
   uint32_t mSkipList[32]; int mSkipN = 0;
