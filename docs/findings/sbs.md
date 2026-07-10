@@ -5,6 +5,32 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## SBS skips gpu_present_ex → per-frame render bookkeeping never resets → wrong ordering (2026-07-10)
+
+- **Symptom (USER):** SBS-full oracle pane drew the semi-transparent SEA over the fisherman
+  sprite (standalone `PSXPORT_ORACLE=1` never does); some standalone-broken renders were
+  wrongly "fixed" in SBS. Proof the SBS render was NOT isolated/identical to standalone.
+- **Root cause:** SBS steps each core with `diff_mode=1`. `game/game_tomba2.cpp` per-frame tail
+  RETURNS EARLY under diff_mode (before `gpu_present`). `GpuState::gpu_present_ex` is the ONLY
+  place that resets the per-frame render bookkeeping: `s_prim_order` (OT-submission / VK-depth
+  index), `s_seen3d`, `s_frame`, and the native per-vertex depth table (`projprim.reset()`).
+  `grabPane` only reset the geometry BATCH (`gpu_gpu_frame_end`). So in SBS `s_prim_order`
+  ACCUMULATED every frame and `s_frame` never advanced (freezing the `bg_range`/`obj_depth`
+  per-frame span caches) → corrupted cross-frame draw ordering → semi over sprite; both panes
+  diverged from their standalone counterpart.
+- **Fix:** extracted the per-frame finalize (depth-table reset + `gpu_gpu_frame_end` +
+  `s_frame++`/`s_prim_order=0`/`s_seen3d=0` — everything EXCEPT the window blit) into
+  `GpuState::frame_finalize()`, called from BOTH `gpu_present_ex` (standalone) and the SBS
+  per-core grab (`grabPane` → `gpu_present_finalize`). Each SBS core now runs byte-identical
+  per-frame render bookkeeping to a standalone run.
+- **Lesson:** SBS suppresses per-core PRESENT (`diff_mode`) but the RENDER FINALIZE bookkeeping
+  (depth/order/frame counters) is render-correctness state that must still run per core per
+  frame. When adding per-frame render state, reset it in `frame_finalize`, not `gpu_present_ex`.
+- **Verified:** build clean; standalone abcompare byte + pixel IDENTICAL to pre-fix; SBS-full
+  0-diff through f1500. Fisherman-cutscene picture = USER eyeball (autonav skips it headless).
+- **Refs:** commit "sbs: run per-frame render finalize per core"; `runtime/recomp/gpu_native.cpp`
+  (`GpuState::frame_finalize`), `runtime/recomp/sbs.cpp` (`grabPane`), `game/game_tomba2.cpp:94`.
+
 ## Panes ≠ standalone = SBS special-casing, NOT a cross-core leak (2026-07-10)
 
 - **Symptom (USER):** in `PSXPORT_SBS_MODE=full`, pane A didn't look like standalone
