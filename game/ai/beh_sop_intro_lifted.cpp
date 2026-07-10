@@ -53,6 +53,11 @@ inline void anim_env_setup(Core* c, uint32_t obj) {
   rec_dispatch(c, 0x80077C40u);
 }
 inline void overlay_oneshot   (Core* c, uint32_t obj) {                        (void)native_sop_overlay_shadow_spawn(c, obj); }
+// FUN_8010B588 (sopLiftedSubtick, sop_intro_events.cpp) is §9-verified byte-exact but DELIBERATELY
+// left UNREGISTERED in EngineOverrides (docs/findings/ai.md, 2026-07-10): wiring it exposed a
+// pre-existing ScriptInterp::step divergence (obj+0x71 flags byte, SBS-caught) on THIS specific
+// SOP intro script content — unrelated to sopLiftedSubtick's own logic, out of this cluster's scope.
+// Stay on rec_dispatch so this keeps running the oracle-verified substrate body until that's fixed.
 inline void overlay_subtick   (Core* c, uint32_t o) { c->r[4] = o;           rec_dispatch(c, 0x8010B588u); }
 inline void bounds_cull       (Core* c, uint32_t o) { c->r[4] = o;           rec_dispatch(c, 0x8007778Cu); }
 inline void anim_graphics_tick(Core* c, uint32_t o) { (void)c->engine.animTick(o); }                              // native FUN_8004190C

@@ -16,10 +16,17 @@
 #pragma once
 #include <cstdint>
 class Core;
+class Game;
 
 class Demo {
 public:
   Core* core = nullptr;
+
+  // Wire s3SubMachine (0x80106AC4) into EngineOverrides — called from
+  // runtime/recomp/boot.cpp's register_engine_overrides(). §9-verified 2026-07-10 (docs/
+  // fleet-workflow.md §9): re-checked instruction-by-instruction against generated/ov_demo_shard_0.c;
+  // only defect found was the missing guest-stack-frame mirror (now fixed in demo.cpp).
+  static void registerOverrides(Game* game);
 
   // Live-spine entry points (called by the scheduler each frame — runtime/recomp/scheduler.cpp).
   void stageMain();      // one-time prologue + s0 (formerly ov_demo_stage_main)

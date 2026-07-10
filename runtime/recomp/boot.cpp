@@ -20,6 +20,8 @@
 #include "actor_melee_engage.h"    // class ActorMeleeEngage — A00-overlay melee-engage/reposition/arm leaf
 #include "melee_proximity.h"       // class MeleeProximity — melee-proximity/approach-anchor leaf
 #include "cutscene_camera.h"       // class CutsceneCamera — resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick
+#include "sop_intro_events.h"      // RegisterSopIntroEventOverrides — SOP intro-cutscene sub-tick/sub-motion/timer cluster
+#include "demo.h"                  // class Demo — DEMO main-menu title cursor sub-machine (registerOverrides)
 #include <stdio.h>
 
 // Free-function beh_* wide-RE clusters (verified+wired this pass) — same "class-ifying is a
@@ -105,6 +107,15 @@ void register_engine_overrides(Game* game) {
   RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
   c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
   c->engine.script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)
+  RegisterSopIntroEventOverrides(game);               // SOP intro-cutscene sub-tick/sub-motion/timer cluster (0x8010AF60/8010B078/8010B11C/8010B2D4/8010B44C/8010BEAC — sopLiftedSubtick 0x8010B588 deliberately unwired, docs/findings/ai.md)
+  // Demo::registerOverrides(game) DELIBERATELY NOT called — see docs/findings/ai.md "Demo::s3SubMachine
+  // r16 register-liveness SBS divergence" (2026-07-10). §9 re-verify found Demo::s3SubMachine itself
+  // byte-exact, but wiring it exposed a pre-existing register-liveness gap: demo_frame_s3() (this
+  // file's OWN pre-existing native s3-substate caller, not part of this pass) invokes it with
+  // whatever's currently in c->r[16] rather than the LIVE loop constant (0x1F800000) Demo::
+  // stageBodyFaithful documents as required at every dispatch boundary — some earlier native
+  // substate (demo_frame_s1/s2, also pre-existing) doesn't preserve it. Root-causing that gap is out
+  // of this cluster's scope; a follow-up session should fix the r16 liveness chain and re-wire.
 }
 
 int main(int argc, char** argv) {

@@ -169,3 +169,60 @@
   wired by direct-call swap at `runtime/recomp/native_boot.cpp:129` (was `rc0(c, 0x800506d0)`).
 - **refs:** game/scene/script_interp.{h,cpp}, game/core/pc_scheduler.{h,cpp},
   runtime/recomp/{boot,native_boot}.cpp.
+
+## SOP intro-cutscene cluster (0x8010AF60-0x8010BEAC) + Demo::s3SubMachine (0x80106AC4) — §9 promote pass (2026-07-10)
+- **status:** SOP cluster 5/6 promoted VERIFIED+WIRED (sopBeatAdvanceWalk 0x8010AF60,
+  sopBeatAdvanceNarration 0x8010B078, sopOrbitPathStep 0x8010B11C, sopIntroEffectTick 0x8010B2D4,
+  sopIntroEffectSpawn 0x8010B44C, beh_orbit_spark_effect 0x8010BEAC — `game/ai/sop_intro_events.cpp`).
+  `sopLiftedSubtick` (0x8010B588) and `Demo::s3SubMachine` (0x80106AC4, `game/scene/demo.cpp`) are
+  §9-verified byte-exact but DELIBERATELY left UNWIRED — each exposed a pre-existing bug OUTSIDE this
+  cluster when wired (see below). SBS-full 0-diff held to f9120 with the 5/6 + demo unwired.
+  `PSXPORT_DEBUG=dispatch` over a 95s intro-area autonav run shows ZERO hits for all 6 SOP addresses —
+  intro-area autonav doesn't reach the SOP scene (a later cutscene, not the opening intro). Correctness
+  for the wired 5 rests on the §9 line-by-line re-verify, not the gate; a future session with SOP-area
+  coverage should re-gate to confirm they actually fire.
+- **systemic bug found (§9 re-verify catch, all 7 functions incl. Demo's):** EVERY function in the
+  original wide-RE draft was logically byte-exact (confirmed instruction-by-instruction against
+  `generated/ov_sop_shard_*.c` / `generated/ov_demo_shard_0.c`) but NONE mirrored the guest-stack
+  frame their `ov_*_gen_*` counterpart pushes (`addiu sp,-N` + s0/s1/ra spills) — CLAUDE.md's "MIRROR
+  THE GUEST STACK" rule. `Demo::s3SubMachine`'s own draft comment ("no stack frame observed in the
+  decompile") was flatly WRONG — `ov_demo_gen_80106AC4` pushes `addiu sp,-32` + spills ra/s1/s0. Fixed
+  in all 7 (save incoming r16/r17/r31, spill to the RE'd sp offsets, restore before every return —
+  `game/ai/sop_intro_events.cpp` + `game/scene/demo.cpp`). This mattered in practice: several of these
+  leaves call still-substrate `rec_dispatch` leaves internally (Animation::attach, GraphicsBind::
+  recordArrayInit, etc.) that DO clobber the shared r16/r17/r31 register file, so without the mirror
+  the CALLER's registers come back corrupted, not just the stack bytes.
+- **finding: sopLiftedSubtick wiring exposes a pre-existing ScriptInterp::step divergence** —
+  registering `sopLiftedSubtick` (states 1/6 call `ScriptInterp::step(node)`, already-native,
+  `game/scene/script_interp.cpp`, NOT part of this cluster) produces an SBS diff at `node+0x71`
+  (`OBJ_FLAGS_71`) starting ~frame 63 of intro-area autonav: native (A) stays `02`, oracle (B) advances
+  to `03`. Isolated by disabling ONLY `sopLiftedSubtick`'s `EngineOverrides::register_`/
+  `ov_sop_set_override` calls — the other 5 SOP functions + Demo all still 0-diff. `sopLiftedSubtick`
+  itself re-verified byte-exact (including its stack frame) against `ov_sop_gen_8010B588`; the
+  divergence traces to `ScriptInterp::step`'s handling of SOP's specific script opcode content (an
+  opcode/ret-code path this leaf is apparently the first caller to exercise under SBS since it was
+  wired). `game/ai/beh_sop_intro_lifted.cpp`'s `overlay_subtick` deliberately stays on
+  `rec_dispatch(c, 0x8010B588u)` (runs the oracle-verified substrate body under BOTH pc_skip=true
+  default play AND pc_skip=false/SBS) rather than calling the native `sopLiftedSubtick` directly, so
+  normal gameplay isn't exposed to the latent ScriptInterp bug either. NEXT: root-cause
+  `ScriptInterp::step`/`advanceEntry` against `generated/shard_3.c:11302` (`gen_func_80041098`) for
+  the specific opcode SOP's script data selects — out of THIS cluster's scope.
+- **finding: Demo::s3SubMachine wiring exposes a pre-existing r16 register-liveness gap** — registering
+  `Demo::s3SubMachine` produces an SBS diff at the guest stack (`0x801FE98C`, sp+16 slot of
+  `demo_frame_s3()`'s call frame) starting frame 13: oracle (B) spills r16=`0x1F800000` (the live loop
+  constant `Demo::stageBodyFaithful` sets up and documents as required "at every dispatch boundary");
+  native (A) spills r16=`2` instead. `demo_frame_s3()` (`game/scene/demo.cpp`, PRE-EXISTING, not part
+  of this pass) calls `rec_dispatch(c, 0x80106ac4u)` without re-establishing r16 itself, relying on it
+  staying live from `stageBodyFaithful`'s setup through whichever earlier substate
+  (`demo_frame_s1`/`demo_frame_s2`, also pre-existing) ran first in the same faithful-loop iteration —
+  one of those doesn't preserve it. `Demo::registerOverrides()` exists (`game/scene/demo.cpp`) but is
+  NOT called from `register_engine_overrides()` (`runtime/recomp/boot.cpp`) pending that fix.
+  Also DISPROVED en route: `0x80106AC4` DOES have a direct intra-shard call site
+  (`ov_demo_shard_0.c:126`, inside `FUN_801064E8` = the substrate's own s3 body) exactly like
+  `game/ai/actor_melee_engage.cpp`'s shape — but dual-wiring it via `ov_demo_set_override` caused a
+  genuine DOUBLE-FIRE per frame (the guest's own root coroutine at 0x80106388 keeps walking its
+  substate dispatch in parallel with the native `demo_frame_s3()` path). Removing the dual-wire (kept
+  ONLY `EngineOverrides::register_`, the route `demo_frame_s3()`'s `rec_dispatch` actually uses) fixed
+  the double-fire but NOT the r16 divergence — two separate bugs, both pre-existing/out-of-scope.
+- **refs:** game/ai/sop_intro_events.{h,cpp}, game/ai/beh_sop_intro_lifted.cpp, game/scene/demo.{h,cpp},
+  runtime/recomp/boot.cpp.

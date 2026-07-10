@@ -2614,8 +2614,21 @@ themselves are LIVE but dispatch out to substrate for every case body.
   via `rec_dispatch` from `seqChannelDispatch()` since it's a different TU's static symbol.
   fleet-workflow.md §9 warns about.
 
-- **Band 0x8010A000-0x8010CFFF + 0x80106AC4, SOP-intro-cutscene sub-tick cluster (wide-RE agent,
-  2026-07-10, UNWIRED).** Task band was the 8 hottest free-roam-dispatch-count unowned leaves in this
+- **Band 0x8010A000-0x8010CFFF + 0x80106AC4, SOP-intro-cutscene sub-tick cluster — §9 promote pass
+  (2026-07-10): 5/7 VERIFIED+WIRED, 2 verified-but-deliberately-unwired.** `sopBeatAdvanceWalk`,
+  `sopBeatAdvanceNarration`, `sopOrbitPathStep`, `sopIntroEffectTick`, `sopIntroEffectSpawn`,
+  `beh_orbit_spark_effect` wired via `RegisterSopIntroEventOverrides` (`runtime/recomp/boot.cpp`).
+  `sopLiftedSubtick` (0x8010B588) and `Demo::s3SubMachine` (0x80106AC4) are §9-verified byte-exact
+  but each exposed a PRE-EXISTING bug outside this cluster when wired — see docs/findings/scene.md
+  "SOP intro-cutscene cluster + Demo::s3SubMachine" for the full root-cause (ScriptInterp::step
+  obj+0x71 divergence; Demo's r16 register-liveness gap in demo_frame_s1/s2). Both stay unregistered
+  pending a follow-up fix. SBS-full 0-diff held to f9120; intro-area autonav never exercises any of
+  the 6 wired addresses (0 ovhit/dispatch hits over a 95s run — SOP is a later scene, not the opening
+  intro), so correctness for the wired 5 rests on the §9 re-verify, not the gate. Every one of the 7
+  functions was ALSO missing its guest-stack-frame mirror (the wide-RE draft's own confidence note for
+  Demo's was WRONG — "no stack frame observed" — it does push one); fixed in all 7.
+  Below is the ORIGINAL wide-RE draft wave's own description (2026-07-10, first pass, before this
+  promote pass). Task band was the 8 hottest free-roam-dispatch-count unowned leaves in this
   range. 6 of 8 DRAFTED (compile-only, unwired, unverified, no SBS run), + 2 confirmed dependencies
   pulled in for completeness: `sopBeatAdvanceWalk`/`sopBeatAdvanceNarration` (0x8010AF60/0x8010B078,
   HIGH confidence on the transcription — clean SCENE_BEAT timer sequencers — but the TRIGGER is

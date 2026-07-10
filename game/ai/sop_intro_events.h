@@ -1,13 +1,16 @@
-// game/ai/sop_intro_events.h — DRAFT (UNWIRED) native ports for a cluster of small SOP intro-cutscene
-// state-machine leaves. See sop_intro_events.cpp for full RE + confidence notes per function.
+// game/ai/sop_intro_events.h — native ports for a cluster of small SOP intro-cutscene state-machine
+// leaves. See sop_intro_events.cpp for full RE + §9 re-verify notes per function.
 //
-// None of these are registered in BehaviorDispatch::kTable or called from any live path yet — they
-// are dead code, kept here to (a) prove the RE by compiling a byte-exact transcription and (b) let a
-// later pass wire them once the trigger mechanism for the two anim-event leaves (sopBeatAdvanceWalk /
-// sopBeatAdvanceNarration) is confirmed dynamically (see file header "CONFIDENCE" notes).
+// Wired via EngineOverrides (RegisterSopIntroEventOverrides, called from
+// runtime/recomp/boot.cpp's register_engine_overrides()). sopBeatAdvanceWalk/sopBeatAdvanceNarration
+// are reached ONLY via the animation-event fn-ptr table at 0x8010CA60-0x8010CAAC (indirect jalr, so
+// only dynamically confirmed by PSXPORT_DEBUG=ovhit showing nonzero hits — see docs/findings/ai.md).
 #pragma once
 #include <cstdint>
 class Core;
+class Game;
+
+void RegisterSopIntroEventOverrides(Game* game);
 
 // FUN_8010AF60 — per-object scene-beat delay sequencer (beat 2->3 hold, then beat 3->6 hold).
 // a0 = node (r4). No return value used by any known caller (draft signature keeps it faithful: u32).

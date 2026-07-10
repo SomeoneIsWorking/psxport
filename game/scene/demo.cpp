@@ -154,8 +154,15 @@ void Demo::s3() { Core* c = core;
 //
 // "Mirror of 0x8010696C" (the s2 sub-machine, both files already document this) but with THREE
 // outcomes instead of two: it also handles the Circle/back edge (the s2 twin only has confirm).
-// sm = *0x1F800138 (SM_PTR); 0x80106AC4 is a real jr-ra leaf, RE'd as a register-only function —
-// no stack frame observed in the decompile.
+// sm = *0x1F800138 (SM_PTR).
+//
+// GUEST FRAME (2026-07-10 §9 re-verify correction): the original draft's confidence note ("no
+// stack frame observed") was WRONG — ov_demo_gen_80106AC4 pushes `addiu sp,-32` and spills
+// ra(r31)@sp+24, s1(r17)@sp+20, s0(r16)@sp+16 before any body work (checked directly against
+// generated/ov_demo_shard_0.c). The two rec_dispatch calls inside (0x80106690/0x80106824, both
+// still-substrate) clobber the shared r16/r17/r31 register file, so mirroring the frame is
+// required for SBS byte-exactness, not optional. Restructured to a single exit point below so
+// every return path shares the one epilogue.
 //
 //   entry: if sm[0x4a]==0 (fresh entry): sm[0x4a]=1, sm[0x5a]=0x1C2 (450, the intro/hold timer —
 //     matches "sm[0x5a] inits 450" in the class RE map). else if sm[0x4a]!=1: return 0 (only valid
@@ -175,47 +182,100 @@ void Demo::s3() { Core* c = core;
 //     if cmp != cursor: Sfx::trigger(0x15,0,0) (cursor-move blip).
 //     sm[0x68] = cursor; sm[0x4a] = 0; return 0.
 uint32_t Demo::s3SubMachine() { Core* c = core;                 // FUN_80106AC4
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR17 = c->r[17];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 32u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR17);
+  c->mem_w32(c->r[29] + 24u, savedR31);
+
+  uint32_t result = 0;
   uint32_t sm = c->mem_r32(SM_PTR);
+  bool proceed = true;
   if (c->mem_r16(sm + 0x4a) == 0) {
     c->mem_w16(sm + 0x4a, 1);
     c->mem_w16(sm + 0x5a, 0x1C2);
   } else if (c->mem_r16(sm + 0x4a) != 1) {
-    return 0;
+    proceed = false;
   }
 
-  c->r[4] = 0; rec_dispatch(c, 0x80106690u);                              // still substrate
-  c->r[4] = 1; c->r[5] = (c->mem_r8(sm + 0x68) != 2) ? 1u : 0u;
-  rec_dispatch(c, 0x80106824u);                                           // still substrate
+  if (proceed) {
+    c->r[4] = 0; rec_dispatch(c, 0x80106690u);                              // still substrate
+    c->r[4] = 1; c->r[5] = (c->mem_r8(sm + 0x68) != 2) ? 1u : 0u;
+    rec_dispatch(c, 0x80106824u);                                           // still substrate
 
-  sm = c->mem_r32(SM_PTR);                                                // reload (matches the recomp's re-read)
-  int16_t timer = (int16_t)c->mem_r16(sm + 0x5a);
-  c->mem_w16(sm + 0x5a, (uint16_t)(timer - 1));
-  if (timer == 1) return 1;                                               // attract launch
-
-  uint16_t edges = c->mem_r16(0x800e7e68u);
-  uint8_t  cursor;
-  uint8_t  cmp;
-  if (edges & 0x20u) {                                                    // Down
-    cursor = 3;
-    cmp = c->mem_r8(sm + 0x68);
-  } else {
-    cursor = 2;
-    if (edges & 0x80u) {                                                  // Up
-      cmp = c->mem_r8(sm + 0x68);
-    } else if (edges & 0x4008u) {                                         // Confirm
-      c->engine.sfx.trigger(0x11, 0, 0);
-      return 2;
-    } else if (edges & 0x2000u) {                                         // Circle / back
-      c->engine.sfx.trigger(0x14, -9, 0);
-      return 3;
+    sm = c->mem_r32(SM_PTR);                                                // reload (matches the recomp's re-read)
+    int16_t timer = (int16_t)c->mem_r16(sm + 0x5a);
+    c->mem_w16(sm + 0x5a, (uint16_t)(timer - 1));
+    if (timer == 1) {
+      result = 1;                                                           // attract launch
     } else {
-      return 0;                                                           // no relevant edge
+      uint16_t edges = c->mem_r16(0x800e7e68u);
+      uint8_t  cursor;
+      uint8_t  cmp;
+      bool     haveCmp = true;
+      if (edges & 0x20u) {                                                  // Down
+        cursor = 3;
+        cmp = c->mem_r8(sm + 0x68);
+      } else {
+        cursor = 2;
+        if (edges & 0x80u) {                                                // Up
+          cmp = c->mem_r8(sm + 0x68);
+        } else if (edges & 0x4008u) {                                       // Confirm
+          c->engine.sfx.trigger(0x11, 0, 0);
+          result = 2;
+          haveCmp = false;
+        } else if (edges & 0x2000u) {                                       // Circle / back
+          c->engine.sfx.trigger(0x14, -9, 0);
+          result = 3;
+          haveCmp = false;
+        } else {
+          haveCmp = false;                                                  // no relevant edge -> result stays 0
+        }
+      }
+      if (haveCmp) {
+        if (cmp != cursor) c->engine.sfx.trigger(0x15, 0, 0);               // cursor-move blip
+        c->mem_w8 (sm + 0x68, cursor);
+        c->mem_w16(sm + 0x4a, 0);
+      }
     }
   }
-  if (cmp != cursor) c->engine.sfx.trigger(0x15, 0, 0);                   // cursor-move blip
-  c->mem_w8 (sm + 0x68, cursor);
-  c->mem_w16(sm + 0x4a, 0);
-  return 0;
+
+  c->r[31] = savedR31;
+  c->r[17] = savedR17;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
+  return result;
+}
+
+// ===================================================================================================
+// Wiring (2026-07-10). ov_demo_gen_80106AC4 DOES have a direct intra-shard call site
+// (ov_demo_shard_0.c:126, inside FUN_801064E8 = the substrate's OWN s3 body) — same shape as
+// game/ai/actor_melee_engage.cpp, which would normally call for the ov_demo_set_override dual-wire.
+// BUT: empirically wiring that dual-wire double-fires this address every frame on core A (SBS
+// PSXPORT_DEBUG=dispatch showed TWO hits per frame, one via demo_frame_s3()'s rec_dispatch, one via
+// "direct/g_override, bypassed rec_dispatch") — the DEMO stage's guest root coroutine (0x80106388,
+// still substrate/interpreted, per this file's header) evidently keeps walking its OWN per-frame
+// substate dispatch IN PARALLEL with the native "OWNED HERE" s1/s2/s3/s6 substates
+// (demo_frame_s3() below), redundantly re-entering FUN_801064E8 a second time. Core B (psx_fallback,
+// pure substrate — never runs any of this file's C++) reaches 0x80106AC4 via ONLY that same guest
+// root-coroutine path, so its call COUNT is whatever the real PSX code does — comparing against it
+// requires A's call sites to line up 1:1 with B's, not fire twice for B's once. register_() alone
+// (the route demo_frame_s3()'s rec_dispatch actually uses) matches B's cadence; the direct call site
+// inside FUN_801064E8 stays UNHOOKED so it falls through to the plain substrate ov_demo_gen_80106AC4
+// body when the guest root coroutine's own redundant pass reaches it — identical to what ran there
+// before this wiring pass (harmless, pre-existing, unrelated to this cluster). See docs/findings/ai.md.
+namespace {
+void ov_demoS3SubMachine(Core* c) {
+  c->r[2] = c->engine.demo.s3SubMachine();
+}
+}  // namespace
+
+void Demo::registerOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80106AC4u, "Demo::s3SubMachine", ov_demoS3SubMachine);
 }
 
 // s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the commit pair 0x80106824(1,1)

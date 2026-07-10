@@ -1,9 +1,15 @@
-// game/ai/sop_intro_events.cpp — DRAFT (UNWIRED) native ports for a cluster of SOP intro-cutscene
-// leaves in the 0x8010A000-0x8010CFFF band (wide-RE fleet wave, see docs/port-progress.md wave entry
-// and docs/engine_re.md "SOP intro-cutscene scene actors"). None of these are registered in
-// BehaviorDispatch::kTable or reached from any live call site — every existing caller (demo.cpp,
-// beh_sop_intro_lifted.cpp) still `rec_dispatch`es the substrate body. This file exists to (a) prove
-// the RE compiles as a byte-exact transcription and (b) hand a later pass ready-to-wire methods.
+// game/ai/sop_intro_events.cpp — native ports for a cluster of SOP intro-cutscene leaves in the
+// 0x8010A000-0x8010CFFF band (wide-RE fleet wave, see docs/port-progress.md wave entry and
+// docs/engine_re.md "SOP intro-cutscene scene actors"). §9 re-verified + wired 2026-07-10 (docs/
+// fleet-workflow.md §9): every function's guest-stack frame (all six push one — the original draft
+// omitted the mirror entirely) was cross-checked instruction-by-instruction against
+// generated/ov_sop_shard_*.c and found otherwise byte-exact; the ONLY defect was the missing
+// r16/r17/r31 spill/restore, now fixed per-function above. Wired via EngineOverrides
+// (RegisterSopIntroEventOverrides, bottom of this file) — sopBeatAdvanceWalk/Narration and
+// sopIntroEffectTick/beh_orbit_spark_effect are reached only via rec_dispatch (register_ alone is
+// enough); sopOrbitPathStep/sopIntroEffectSpawn/sopLiftedSubtick have DIRECT intra-shard call sites
+// in ov_sop_shard_*.c that bypass rec_dispatch, so those three also need the ov_sop_set_override
+// dual-wire (same shape as game/ai/actor_melee_engage.cpp).
 //
 // Ghidra decomp source: `scratch/decomp/band_sop.c` (FUN_8010AF60/8010B078/8010B2D4/8010B588/8010BEAC),
 // `scratch/decomp/band_sop2.c` (FUN_8010B44C), `scratch/decomp/band_sop4.c` (FUN_8010B11C) — imported
@@ -20,6 +26,7 @@
 
 #include "core.h"
 #include "cfg.h"
+#include "game.h"                  // Game::engine_overrides
 #include "core/engine.h"          // c->engine.spawn / c->engine.placement / c->engine.script
 #include "spawn.h"                 // Spawn::dispatch/despawn (native)
 #include "world/placement.h"       // Placement::spawnWithParent (native, FUN_80072DDC)
@@ -50,41 +57,56 @@ constexpr uint32_t SCENE_BEAT = 0x800BF9B4u;   // shared SOP scene-beat byte (do
 //     timer = 0x28 (40).
 //   state 2: countdown; on expiry: Engine::walkStart(node, 2, 6), -> state 3, timer = 0x1E (30).
 //   state 3: countdown; on expiry: return 1 (done signal; state stays 3, no further writes).
+//
+// GUEST FRAME (2026-07-10 §9 re-verify fix): ov_sop_gen_8010AF60 pushes `addiu sp,-24` and spills
+// s0(r16)/ra(r31) at sp+16/sp+20 before ANY body work — the original draft omitted this entirely.
+// Mirror it: decrement r29, stash the incoming r16/r31 (they're callee-saved — Engine::walkStart
+// below calls still-substrate leaves via rec_dispatch, which DOES clobber the shared r16/r31
+// register file), restore both + r29 before every return so the caller's registers/guest-stack
+// bytes come back byte-exact (docs/faithful-execution.md; game/ai/melee_proximity.cpp is the
+// reference shape for a same-size frame).
 uint32_t sopBeatAdvanceWalk(Core* c) {                          // FUN_8010AF60
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR31);
+
   const uint32_t node = c->r[4];
   uint8_t state = c->mem_r8(node + 0x78);
+  uint32_t result = 0;
 
   if (state == 1) {
     int16_t timer = (int16_t)c->mem_r16(node + 0x42);
     c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
-    if (timer != 1) return 0;
-    c->mem_w8(SCENE_BEAT, 3);
-    c->engine.walkStart(node, 0xB4u, 4);                        // FUN_80054D14
-    c->mem_w16(node + 0x42, 0x28);
-    c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
-    return 0;
-  }
-  if (state == 0) {
+    if (timer == 1) {
+      c->mem_w8(SCENE_BEAT, 3);
+      c->engine.walkStart(node, 0xB4u, 4);                      // FUN_80054D14
+      c->mem_w16(node + 0x42, 0x28);
+      c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
+    }
+  } else if (state == 0) {
     c->mem_w8 (node + 0x78, 1);
     c->mem_w16(node + 0x42, 0x1E);
-    return 0;
-  }
-  if (state == 2) {
+  } else if (state == 2) {
     int16_t timer = (int16_t)c->mem_r16(node + 0x42);
     c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
-    if (timer != 1) return 0;
-    c->engine.walkStart(node, 2u, 6);                           // FUN_80054D14
-    c->mem_w16(node + 0x42, 0x1E);
-    c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
-    return 0;
-  }
-  if (state == 3) {
+    if (timer == 1) {
+      c->engine.walkStart(node, 2u, 6);                         // FUN_80054D14
+      c->mem_w16(node + 0x42, 0x1E);
+      c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
+    }
+  } else if (state == 3) {
     int16_t timer = (int16_t)c->mem_r16(node + 0x42);
     c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
-    if (timer == 1) return 1;
-    return 0;
+    if (timer == 1) result = 1;
   }
-  return 0;
+
+  c->r[31] = savedR31;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
+  return result;
 }
 
 // ===================================================================================================
@@ -99,9 +121,22 @@ uint32_t sopBeatAdvanceWalk(Core* c) {                          // FUN_8010AF60
 //     -> state 1.
 //   state 1: countdown; on expiry: byte at (0x800BF80C + 3) = 1 (a flag byte within a shared dword);
 //     return 1 (done). Otherwise return 0.
+//
+// GUEST FRAME (2026-07-10 §9 fix): same shape as sopBeatAdvanceWalk — ov_sop_gen_8010B078 pushes
+// `addiu sp,-24` + s0/ra spills at sp+16/sp+20. Mirrored below (r16/r31 not touched by
+// GraphicsBind::setXformBlk's own rec_dispatch(0x8006CBD0) call, but restore unconditionally to
+// stay correct if that ever changes).
 uint32_t sopBeatAdvanceNarration(Core* c) {                     // FUN_8010B078
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR31);
+
   const uint32_t node = c->r[4];
   uint8_t state = c->mem_r8(node + 0x78);
+  uint32_t result = 0;
 
   if (state == 0) {
     c->mem_w8(SCENE_BEAT, 5);
@@ -109,16 +144,19 @@ uint32_t sopBeatAdvanceNarration(Core* c) {                     // FUN_8010B078
     c->engine.graphicsBind.setXformBlk();                       // FUN_8006CBD0 (fixed globals, not `node`)
     c->mem_w16(node + 0x42, 10);
     c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
-    return 0;
+  } else if (state == 1) {
+    int16_t timer = (int16_t)c->mem_r16(node + 0x42);
+    c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
+    if (timer == 1) {
+      c->mem_w8(0x800BF80Cu + 3u, 1);
+      result = 1;
+    }
   }
-  if (state != 1) return 0;
-  int16_t timer = (int16_t)c->mem_r16(node + 0x42);
-  c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
-  if (timer == 1) {
-    c->mem_w8(0x800BF80Cu + 3u, 1);
-    return 1;
-  }
-  return 0;
+
+  c->r[31] = savedR31;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
+  return result;
 }
 
 // ===================================================================================================
@@ -134,64 +172,82 @@ uint32_t sopBeatAdvanceNarration(Core* c) {                     // FUN_8010B078
 // exceeds 0x1BFF (one full 0x1C00-unit revolution), at which point state advances again. State 3 resets
 // state to 0, installs anim env (Animation::attach, obj, env=0x8001B860, mode=2) and returns 1 (the
 // "orbit complete" signal sopIntroEffectTick polls for) — every other state/tick returns 0.
+// GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010B11C pushes `addiu sp,-24` + s0(r16)/ra(r31)
+// spills at sp+16/sp+20, same as the beat-advance pair above. The state==3 branch's
+// rec_dispatch(0x80077C40) (Animation::attach, still substrate) DOES clobber the shared r16/r31
+// register file internally, so restoring the SAVED incoming values (not whatever rec_dispatch left
+// behind) is required, not optional. Restructured to a single exit point below so every return path
+// shares the one epilogue.
 uint32_t sopOrbitPathStep(Core* c) {                            // FUN_8010B11C
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR31);
+
   const uint32_t node = c->r[4];
   uint8_t state = c->mem_r8(node + 6);
+  uint32_t result = 0;
 
   if (state == 3) {
     c->mem_w8(node + 6, 0);
     c->r[4] = node; c->r[5] = 0x8001B860u; c->r[6] = 2;
     rec_dispatch(c, 0x80077C40u);                                // Animation::attach (still substrate here)
-    return 1;
-  }
-  if (state == 0) {
-    c->mem_w8 (node + 6, 1);
-    c->mem_w16(node + 0x4E, 0);
-    c->mem_w16(node + 0x90, c->mem_r16(node + 0x2E));
-    c->mem_w16(node + 0x92, c->mem_r16(node + 0x32));
-    c->mem_w16(node + 0x94, c->mem_r16(node + 0x36));
-  } else if (state != 1 && state != 2) {
-    return 0;                                                   // out-of-range state — matches recomp's implicit `return 0`
-  }
+    result = 1;
+  } else if (state == 0 || state == 1 || state == 2) {
+    if (state == 0) {
+      c->mem_w8 (node + 6, 1);
+      c->mem_w16(node + 0x4E, 0);
+      c->mem_w16(node + 0x90, c->mem_r16(node + 0x2E));
+      c->mem_w16(node + 0x92, c->mem_r16(node + 0x32));
+      c->mem_w16(node + 0x94, c->mem_r16(node + 0x36));
+    }
 
-  // Shared per-tick body (states 0-after-init, 1, 2 all fall into this; state 2 skips straight here).
-  if (state != 2) {
-    int16_t b8 = (int16_t)c->mem_r16(node + 0xB8);
-    int16_t ba = (int16_t)c->mem_r16(node + 0xBA);
-    int16_t bc = (int16_t)c->mem_r16(node + 0xBC);
-    c->mem_w16(node + 0xB8, (uint16_t)(b8 + 0x80));
-    c->mem_w16(node + 0xBA, (uint16_t)(ba + 0x80));
-    c->mem_w16(node + 0xBC, (uint16_t)(bc + 0x80));
-    if (c->mem_r16(node + 0xB8) > 0x0FFFu) {                     // unsigned compare, faithful to the recomp
+    // Shared per-tick body (states 0-after-init, 1, 2 all fall into this; state 2 skips straight here).
+    if (state != 2) {
+      int16_t b8 = (int16_t)c->mem_r16(node + 0xB8);
+      int16_t ba = (int16_t)c->mem_r16(node + 0xBA);
+      int16_t bc = (int16_t)c->mem_r16(node + 0xBC);
+      c->mem_w16(node + 0xB8, (uint16_t)(b8 + 0x80));
+      c->mem_w16(node + 0xBA, (uint16_t)(ba + 0x80));
+      c->mem_w16(node + 0xBC, (uint16_t)(bc + 0x80));
+      if (c->mem_r16(node + 0xB8) > 0x0FFFu) {                   // unsigned compare, faithful to the recomp
+        c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
+      }
+    }
+
+    c->mem_w16(node + 0x2E, c->mem_r16(node + 0x90));
+    c->mem_w16(node + 0x32, c->mem_r16(node + 0x92));
+    c->mem_w16(node + 0x36, c->mem_r16(node + 0x94));
+
+    int32_t phase = (int16_t)c->mem_r16(node + 0x4E);
+    c->mem_w32(node + 0x2C, c->mem_r32(node + 0x2C) + c->trig.rcos(phase) * 0xA00);
+    int32_t sinv = c->trig.rsin(phase);
+    c->mem_w16(node + 0x32, (uint16_t)((int16_t)c->mem_r16(node + 0x32) - 2));
+    c->mem_w32(node + 0x34, c->mem_r32(node + 0x34) + sinv * 0xA00);
+
+    int16_t s94 = (int16_t)(c->mem_r16(node + 0x94) - 1);
+    c->mem_w16(node + 0x94, (uint16_t)s94);
+    int16_t s36 = (int16_t)(c->mem_r16(node + 0x36) - 1);
+    c->mem_w16(node + 0x36, (uint16_t)s36);
+
+    int32_t y = (int32_t)s36 - (int32_t)s94;
+    int32_t x = (int32_t)(int16_t)c->mem_r16(node + 0x90) - (int32_t)(int16_t)c->mem_r16(node + 0x2E);
+    c->mem_w16(node + 0x56, (uint16_t)c->trig.ratan2(y, x));
+
+    int16_t phaseNext = (int16_t)(c->mem_r16(node + 0x4E) + 0x80);
+    c->mem_w16(node + 0x4E, (uint16_t)phaseNext);
+    if (phaseNext > 0x1BFF) {
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
     }
   }
+  // else: out-of-range state — matches recomp's implicit `return 0` (result stays 0)
 
-  c->mem_w16(node + 0x2E, c->mem_r16(node + 0x90));
-  c->mem_w16(node + 0x32, c->mem_r16(node + 0x92));
-  c->mem_w16(node + 0x36, c->mem_r16(node + 0x94));
-
-  int32_t phase = (int16_t)c->mem_r16(node + 0x4E);
-  c->mem_w32(node + 0x2C, c->mem_r32(node + 0x2C) + c->trig.rcos(phase) * 0xA00);
-  int32_t sinv = c->trig.rsin(phase);
-  c->mem_w16(node + 0x32, (uint16_t)((int16_t)c->mem_r16(node + 0x32) - 2));
-  c->mem_w32(node + 0x34, c->mem_r32(node + 0x34) + sinv * 0xA00);
-
-  int16_t s94 = (int16_t)(c->mem_r16(node + 0x94) - 1);
-  c->mem_w16(node + 0x94, (uint16_t)s94);
-  int16_t s36 = (int16_t)(c->mem_r16(node + 0x36) - 1);
-  c->mem_w16(node + 0x36, (uint16_t)s36);
-
-  int32_t y = (int32_t)s36 - (int32_t)s94;
-  int32_t x = (int32_t)(int16_t)c->mem_r16(node + 0x90) - (int32_t)(int16_t)c->mem_r16(node + 0x2E);
-  c->mem_w16(node + 0x56, (uint16_t)c->trig.ratan2(y, x));
-
-  int16_t phaseNext = (int16_t)(c->mem_r16(node + 0x4E) + 0x80);
-  c->mem_w16(node + 0x4E, (uint16_t)phaseNext);
-  if (phaseNext > 0x1BFF) {
-    c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
-  }
-  return 0;
+  c->r[31] = savedR31;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
+  return result;
 }
 
 // ===================================================================================================
@@ -203,7 +259,17 @@ uint32_t sopOrbitPathStep(Core* c) {                            // FUN_8010B11C
 // as the child's node+0x1C handler (mirrors sop_overlay_shadow.cpp's SHADOW_HANDLER pattern) and
 // re-stamp node+0x10 = parent (redundant with spawnWithParent's own write — faithful to the recomp,
 // which re-writes it).
+// GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010B44C pushes `addiu sp,-24` + s0(r16)/ra(r31)
+// spills at sp+16/sp+20 around the Placement::spawnWithParent call (0x80072DDC, still substrate —
+// clobbers the shared r16/r31 register file). Mirrored below.
 uint32_t sopIntroEffectSpawn(Core* c) {                          // FUN_8010B44C
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR31);
+
   const uint32_t parent = c->r[4];
   c->r[4] = parent; c->r[5] = 3; c->r[6] = 3; c->r[7] = 0x1Au;
   c->engine.placement.spawnWithParent();
@@ -212,6 +278,10 @@ uint32_t sopIntroEffectSpawn(Core* c) {                          // FUN_8010B44C
     c->mem_w32(node + 0x1Cu, /*sopIntroEffectTick*/ 0x8010B2D4u);
     c->mem_w32(node + 0x10u, parent);
   }
+
+  c->r[31] = savedR31;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
   return node;
 }
 
@@ -231,7 +301,23 @@ uint32_t sopIntroEffectSpawn(Core* c) {                          // FUN_8010B44C
 //     Always then: Engine::animTick(node); Engine::objMatrixCompose(node).
 //   state 3 = DESPAWN: Spawn::despawn(node).
 //   anything else: no-op (matches the recomp's `bVar1 != 2 && bVar1 == 3` guard shape).
+// GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010B2D4 pushes `addiu sp,-32` + spills s1(r17)@sp+20
+// (=node, held live across the whole function), ra(r31)@sp+24, s0(r16)@sp+16 (r16 is reused
+// internally by the recomp as a scratch base pointer during the INIT branch; our native body never
+// needs a persistent r16, so only the callee-save contract — preserve the CALLER's incoming r16 —
+// matters here). Every `rec_dispatch` call inside (Cull::wrapFrame/recordArrayInit/Animation::attach)
+// is still-substrate and clobbers the shared r16/r17/r31 register file, so restoring the SAVED
+// incoming values before return is required.
 void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR17 = c->r[17];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 32u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR17);
+  c->mem_w32(c->r[29] + 24u, savedR31);
+
   const uint32_t node = c->r[4];
   uint8_t state = c->mem_r8(node + 4);
 
@@ -254,9 +340,7 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
     }
     (void)c->engine.animTick(node);                                // FUN_8004190C
     c->engine.objMatrixCompose(node);                              // FUN_800518FC
-    return;
-  }
-  if (state == 0) {
+  } else if (state == 0) {
     c->r[4] = node; c->r[5] = 0xCu; c->r[6] = c->mem_r32(0x800ECF98u); c->r[7] = 0x800A4BC8u;
     rec_dispatch(c, 0x800519E0u);                                   // GraphicsBind::recordArrayInit (still substrate here)
     if (c->r[2] == 0) {
@@ -269,12 +353,15 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
       c->mem_w8 (node + 4, (uint8_t)(c->mem_r8(node + 4) + 1));
       c->mem_w16(node + 0x32u, (uint16_t)((int16_t)c->mem_r16(node + 0x32u) - 0x8C));
     }
-    return;
-  }
-  if (state == 3) {
+  } else if (state == 3) {
     c->engine.spawn.despawn(node);                                  // FUN_8007A624
   }
   // else: no-op
+
+  c->r[31] = savedR31;
+  c->r[17] = savedR17;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
 }
 
 // ===================================================================================================
@@ -304,7 +391,10 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
 //
 //   SHARED TAIL (states 0 and 5 only): state = state+1; Engine::animEnvInit(node, 0x80017FE8, data);
 //   node+0x70 = 1.
-void sopLiftedSubtick(Core* c) {                                  // FUN_8010B588
+namespace {
+// Body-only implementation (early-return-heavy switch) — wrapped below by sopLiftedSubtick's guest
+// frame mirror. Same split as beh_pickup_collect_trigger.cpp's *_body() / wrapper shape.
+void sopLiftedSubtickBody(Core* c) {
   const uint32_t node = c->r[4];
   const uint8_t  state = c->mem_r8(node + 6);
 
@@ -373,6 +463,28 @@ void sopLiftedSubtick(Core* c) {                                  // FUN_8010B58
     c->mem_w8(node + 0x70u, 1);
   }
 }
+}  // namespace
+
+// GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010B588 pushes `addiu sp,-24` + s0(r16)/ra(r31)
+// spills at sp+16/sp+20 (r16 = node, held live across the whole switch). The state==3/4 branches'
+// rec_dispatch calls (Animation::attach, the 4-arg anim-attach variant) are still-substrate and
+// clobber the shared r16/r31 register file, so this mirrors the frame around the whole body
+// (early-return-heavy, factored into sopLiftedSubtickBody above so every return path still hits
+// this one entry/exit).
+void sopLiftedSubtick(Core* c) {                                  // FUN_8010B588
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR31);
+
+  sopLiftedSubtickBody(c);
+
+  c->r[31] = savedR31;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
+}
 
 // ===================================================================================================
 // FUN_8010BEAC — beh_orbit_spark_effect. CONFIDENCE: state-machine shape + field writes HIGH (direct
@@ -393,24 +505,37 @@ void sopLiftedSubtick(Core* c) {                                  // FUN_8010B58
 //   states 2/3: Spawn::despawn(node) (recomp shows the call with no visible arg — the real ABI is a0 =
 //     node like every other despawn call in this codebase; matches c->engine.spawn.despawn(node)).
 //   state > 3: no-op.
+// GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010BEAC pushes `addiu sp,-24` + ra(r31) ONLY at
+// sp+16 — unlike its five siblings above, this leaf never reuses r16 as a scratch/base register
+// (it addresses everything off the live a0=r4 directly), so no s0 spill exists in the recomp
+// prologue. Mirror just the ra spill/restore; restructured to a single exit so the early-return
+// branches (state>3, state==2/3) share it.
 void beh_orbit_spark_effect(Core* c) {                            // FUN_8010BEAC
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, savedR31);
+
   const uint32_t node = c->r[4];
   uint8_t state = c->mem_r8(node + 4);
+  bool active = true;
 
   if (state != 1) {
     if (state > 1) {
-      if (state > 3) return;
-      c->engine.spawn.despawn(node);                                // FUN_8007A624
-      return;
+      if (state <= 3) c->engine.spawn.despawn(node);                 // FUN_8007A624
+      active = false;
+    } else if (state != 0) {
+      active = false;
+    } else {
+      c->mem_w8 (node + 4, 1);
+      c->mem_w16(node + 0x48u, 0x400);
+      c->mem_w16(node + 0x4Au, 0);
+      c->mem_w32(node + 0x4Cu, 0);
+      c->mem_w16(node + 0x50u, 0);
     }
-    if (state != 0) return;
-    c->mem_w8 (node + 4, 1);
-    c->mem_w16(node + 0x48u, 0x400);
-    c->mem_w16(node + 0x4Au, 0);
-    c->mem_w32(node + 0x4Cu, 0);
-    c->mem_w16(node + 0x50u, 0);
   }
 
+  if (active) {
   c->mem_w8 (node + 1, 1);
   c->mem_w16(node + 0x4Eu, (uint16_t)((int16_t)c->mem_r16(node + 0x4Eu) - 0x20));
 
@@ -420,4 +545,84 @@ void beh_orbit_spark_effect(Core* c) {                            // FUN_8010BEA
   if (v2 < 0) {
     c->mem_w16(node + 0x50u, (uint16_t)(v + 0x4Bu));
   }
+  }  // if (active)
+
+  c->r[31] = savedR31;
+  c->r[29] = savedSp;
+}
+
+// ===================================================================================================
+// Wiring (2026-07-10). psx_fallback-gated trampolines keep SBS core B / MV_CHECK's substrate-replay
+// leg running the literal ov_sop_gen_* body (the pure reference the native port is byte-compared
+// against) — same shape as game/ai/actor_melee_engage.cpp / game/ai/beh_actor_tomba_proximity_combat.cpp.
+extern void ov_sop_gen_8010AF60(Core*);
+extern void ov_sop_gen_8010B078(Core*);
+extern void ov_sop_gen_8010B11C(Core*);
+extern void ov_sop_gen_8010B2D4(Core*);
+extern void ov_sop_gen_8010B44C(Core*);
+extern void ov_sop_gen_8010B588(Core*);
+extern void ov_sop_gen_8010BEAC(Core*);
+// ov_sop_set_override: the SECOND wire-up needed for addresses with a DIRECT ov_sop_func_XXXX(c)
+// call site inside ov_sop_shard_*.c (bypasses rec_dispatch, so EngineOverrides::register_ alone is
+// invisible to that call shape) — sopOrbitPathStep/sopIntroEffectSpawn/sopLiftedSubtick only.
+extern void ov_sop_set_override(uint32_t, void (*)(Core*));
+
+namespace {
+void ov_sopBeatAdvanceWalk(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010AF60(c); return; }
+  (void)sopBeatAdvanceWalk(c);
+}
+void ov_sopBeatAdvanceNarration(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010B078(c); return; }
+  (void)sopBeatAdvanceNarration(c);
+}
+void ov_sopOrbitPathStep(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010B11C(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8010B11Cu);
+  c->r[2] = sopOrbitPathStep(c);
+}
+void ov_sopIntroEffectTick(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010B2D4(c); return; }
+  sopIntroEffectTick(c);
+}
+void ov_sopIntroEffectSpawn(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010B44C(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8010B44Cu);
+  c->r[2] = sopIntroEffectSpawn(c);
+}
+// ov_sopLiftedSubtick: kept compiled (not dead code — a future pass wires it once the
+// ScriptInterp::step finding below is fixed) but INTENTIONALLY not passed to register_()/
+// ov_sop_set_override in RegisterSopIntroEventOverrides. See the finding note there.
+void ov_sopLiftedSubtick(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010B588(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8010B588u);
+  sopLiftedSubtick(c);
+}
+void ov_behOrbitSparkEffect(Core* c) {
+  if (c->game->psx_fallback) { ov_sop_gen_8010BEAC(c); return; }
+  beh_orbit_spark_effect(c);
+}
+}  // namespace
+
+void RegisterSopIntroEventOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  // Reached only via rec_dispatch (animation-event fn-ptr table / node+0x1C dispatch) — no direct
+  // intra-shard call site found, so register_() alone is sufficient.
+  ov.register_(0x8010AF60u, "sopBeatAdvanceWalk",       ov_sopBeatAdvanceWalk);
+  ov.register_(0x8010B078u, "sopBeatAdvanceNarration",  ov_sopBeatAdvanceNarration);
+  ov.register_(0x8010B2D4u, "sopIntroEffectTick",       ov_sopIntroEffectTick);
+  ov.register_(0x8010BEACu, "beh_orbit_spark_effect",   ov_behOrbitSparkEffect);
+  // Direct intra-shard call sites (ov_sop_func_XXXX(c), bypassing rec_dispatch) — need the dual wire.
+  ov.register_(0x8010B11Cu, "sopOrbitPathStep",         ov_sopOrbitPathStep);
+  ov_sop_set_override(0x8010B11Cu, ov_sopOrbitPathStep);
+  ov.register_(0x8010B44Cu, "sopIntroEffectSpawn",      ov_sopIntroEffectSpawn);
+  ov_sop_set_override(0x8010B44Cu, ov_sopIntroEffectSpawn);
+  // sopLiftedSubtick (0x8010B588) DELIBERATELY NOT registered here — see docs/findings/ai.md
+  // "sopLiftedSubtick / ScriptInterp::step SBS divergence" (2026-07-10). §9 re-verify found
+  // sopLiftedSubtick itself byte-exact (transcription + guest-stack frame both checked against
+  // ov_sop_gen_8010B588), but wiring it exposed a PRE-EXISTING divergence in the already-native
+  // ScriptInterp::step (game/scene/script_interp.cpp, NOT part of this cluster) at obj+0x71 the
+  // first time SOP's specific script content exercises it under SBS. Root-causing ScriptInterp is
+  // out of this cluster's scope; beh_sop_intro_lifted.cpp's caller stays on rec_dispatch (runs the
+  // oracle-verified substrate body) until a follow-up session fixes ScriptInterp::step and re-wires.
 }
