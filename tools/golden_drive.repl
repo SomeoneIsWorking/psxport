@@ -1,0 +1,18 @@
+newgame
+run 160
+probe f160
+run 440
+probe f600
+press right
+run 200
+release right
+probe f800
+press right
+run 200
+tap x
+run 100
+release right
+probe f1100
+run 400
+probe f1500
+quit
