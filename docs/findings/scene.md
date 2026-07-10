@@ -487,6 +487,16 @@
   PSXPORT_SBS_WW_FROMFRAME=734` for the write sequences, then `PSXPORT_MIRROR_VERIFY=<suspect>`
   (header now prints entry a0-a3). Repro: PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
   PSXPORT_SBS_WATCH_CUT=1 (headless exits at first div with last-writer map).
+  NARROWED (same session, PREWATCH capture at f733-735): the walkStart writes match on both cores
+  (the a3=0x659-vs-0 in the reg dump is mid-body trash, store values equal); the REAL first diff is
+  that core B makes a SECOND write A never makes — ov_sop_gen_8010B498 (a tiny standalone snap-pose
+  +attach helper: node+46/50/54/86 = 16000/-3888/20149/0x800 then attach(node,0x8001B860,0),
+  ra=0x8010B4D0) runs for the effect child 0x800FBB70 on B only. Nothing jals 0x8010B498 — it is
+  reached as a SCRIPT-OPCODE FUNCTION POINTER (ScriptInterp op3E callFnptr), i.e. the child's
+  script CURSOR is one op ahead on B at f735 while script state matched at f734 end — a
+  gated-op / mid-frame-condition timing split (same class as the "pilot 1-anim-step lead").
+  Next probe: PSXPORT_DEBUG=script on both cores at f734-735 (per-opcode dispatch log) to see
+  which opcode/condition diverges, then MIRROR_VERIFY the native that produces the gate value.
 - **OPEN (superseded framing, kept for the probe trail)**: at the f289 store (`sbs watch 800c3c54` + the new
   `[ww-regs]` line), core A and core B are in DIFFERENT PRIM-TYPE BRANCHES of gen_func_8007FDB0
   (`(cmdword>>24)&3`: A=1 at L_8007FF24, B=2 at L_8007FF78) — i.e. the mid-frame CMD-LIST ENTRY for
