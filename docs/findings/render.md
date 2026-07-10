@@ -23,7 +23,7 @@
   spill no callee-saved regs, so only the prologue spills + pre-call register state matter.
 - **verified**: f117 fully clean.
 
-## overlay_ground_gt3gt4 cluster (8013FB88/8013FE58/801401B8) — depth >>2 + range gate (2026-07-09, packet-pool RESOLVED; f118/f62 register-faithfulness RESOLVED 2026-07-10; gt3/gt4 DATA divergence OPEN — see bottom)
+## overlay_ground_gt3gt4 cluster (8013FB88/8013FE58/801401B8) — depth >>2 + range gate (2026-07-09, packet-pool RESOLVED; f118/f62 register-faithfulness RESOLVED 2026-07-10; f179 task-0-stack mode==2 mirror-offset RESOLVED 2026-07-10 — see bottom)
 
 - **how found**: once billboard's f117 cleared, f117→f118 in the packet pool. Last-writer: native
   `entityLoop` (801401B8) writing on core A vs gen `gt3` (8013FB88) on core B — native `gt3` is called
@@ -1065,3 +1065,50 @@ Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY h
   (both cores same sp => it's register state, not sp) is the tell.
 - **refs:** commit landing this fix (see git log, "render: register-faithful NodeXform nested spills");
   docs/findings/animation.md (sibling investigation, same day, for `Animation::attach`).
+
+## f179 task-0-stack `0x801FE924` — `OverlayGroundGt3Gt4::gt3/gt4` mode==2 SZ-mirror used the WRONG stack offset (2026-07-10, RESOLVED)
+
+- **symptom:** SBS-full frontier moved to f179 after the packet-pool write-order fix (commit 79f50a5)
+  closed f158: `[sbs-div] f179 [?] 0x801FE924..0x801FE928 (4 B) A=00 00 80 1F B=BC 13 00 00`, recurring
+  every ~3 frames at the same address. Core A always held `0x1F800000` (a scratchpad-base pointer
+  constant, LE); core B held a small slowly-incrementing counter.
+- **root cause:** `OverlayGroundGt3Gt4::gt3`/`gt4` (`game/render/overlay_ground_gt3gt4.cpp`) each have a
+  `mode == 1u || mode == 2u` branch that mirrors the 3 (gt3) / 4 (gt4) `gte_read_data` SZ values onto the
+  function's OWN real guest-stack frame before calling `sz3_minmax`/`sz4_minmax`. Ground truth
+  (`ov_a00_gen_8013FB88`/`ov_a00_gen_8013FE58`) is the ORIGINAL compiler having inlined the SAME
+  sz-minmax computation TWICE at compile time, once per `mode` value, each copy writing its own dead
+  scratch to a DIFFERENT stack offset: `mode==1` writes to (new-sp)+0/4/8[/12]; `mode==2` writes to
+  (new-sp)+12/16/20 (gt3, 3 words) or +16/20/24/28 (gt4, 4 words) — NOT the same offsets. A prior draft
+  of the native port always used the `mode==1` offsets regardless of which mode fired, so `mode==2`
+  records never touched (new-sp)+12..+23 (gt3) — exactly `0x801FE924` when a `mode==2` ground quad
+  reuses this call's guest frame (`sp=0x801FE910`, offset +0x14=+20). Once a LATER, unrelated function
+  reused that same shared task-0 stack address later the same frame (`ActorTomba::matrixComposeAttached`,
+  guest `FUN_800597AC`, spilling the scratchpad-base constant `0x1F800000`), core A's version — which
+  never overwrote that byte via the mode==2 mirror — kept the STALE `0x1F800000` at frame end where core
+  B's real mode==2 mirror write left its own live counter. This is the same class of bug CLAUDE.md's
+  "MIRROR THE GUEST STACK" rule targets ("never exclude a slot because it looks like dead scratch") —
+  even though this specific stack region is never READ by the game (it is genuinely dead-but-real
+  scratch from a compiler inlining artifact), a LATER, unrelated function's spill onto the SAME reused
+  stack address makes the two engines' end-of-frame bytes diverge unless the dead write happens at the
+  gen-faithful offset too.
+- **method:** `PSXPORT_SBS_PREWATCH=0x801FE924` (raw per-store log, no `WW_ONVALUEDIVERGE`) captured
+  BOTH cores' full write history to the address across f0..f179; the LAST writer differed — core A:
+  `pc=800597AC ra=8003B6A4` (matrix-compose, unowned substrate on both sides — same code, ran
+  identically); core B: `pc=8013FB88 ra=80140278` (gt3's own frame, ONE more write after the same
+  matrix-compose call that core A also made). Cross-referencing `generated/ov_a00_shard_0.c
+  ov_a00_gen_8013FB88` / `ov_a00_shard_1.c ov_a00_gen_8013FE58` instruction-by-instruction found the
+  duplicated-inline mode==1/mode==2 stack-offset split; the native port's `sz3_minmax`/`sz4_minmax` call
+  sites used a single fixed offset for both modes. `ActorTomba::matrixComposeAttached`/`Render::
+  perObjRenderDispatch`/`overlayTypeDispatch`/`entityLoop` were all re-verified as correctly
+  register-faithful and NOT the cause (their own call counts and register state matched B exactly) —
+  the bug was purely a dead-scratch offset choice one level below, inside gt3/gt4 themselves.
+- **fix:** branch the guest-stack mirror write's BASE offset on `mode` (mirroring gen's real per-mode
+  offset) while keeping the `sz3_minmax`/`sz4_minmax` VALUE computation unchanged — `game/render/
+  overlay_ground_gt3gt4.cpp` `OverlayGroundGt3Gt4::gt3`/`gt4`.
+- **verified:** `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1` gate, 95s window
+  (autonav headless): zero `sbs-div`/`VIOLATION` hits; run stays byte-exact through f9210 (the prior
+  frontier was f179), SIGINT-terminated by the 95s watchdog, no crash.
+- **refs:** `game/render/overlay_ground_gt3gt4.cpp` (`OverlayGroundGt3Gt4::gt3`/`gt4`); oracle
+  `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88`, `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`;
+  repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x801FE924` (raw log) or
+  `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1` (gate count).

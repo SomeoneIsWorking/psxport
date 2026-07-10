@@ -186,7 +186,15 @@ void OverlayGroundGt3Gt4::gt3(Core* c) {
     uint32_t mode = flagbyte & 3u;
     if (mode == 1u || mode == 2u) {
       int32_t sz1 = (int32_t)gte_read_data(17), sz2 = (int32_t)gte_read_data(18), sz3 = (int32_t)gte_read_data(19);
-      c->mem_w32(sp - 24 + 0, sz1); c->mem_w32(sp - 24 + 4, sz2); c->mem_w32(sp - 24 + 8, sz3); // real stack mirror
+      // Guest-stack mirror (RE: ov_a00_gen_8013FB88 L_8013FD00 vs L_8013FD54) — the ORIGINAL
+      // compiler inlined the same sz-minmax computation TWICE at two DIFFERENT dead-scratch stack
+      // offsets depending on mode: mode==1 writes to (new sp)+0/4/8, mode==2 writes to (new
+      // sp)+12/16/20. A prior draft always used the mode==1 offsets, so mode==2 records never
+      // touched (new sp)+12..+23 — the exact f179 SBS residual at 0x801FE924 (task-0 stack, this
+      // function's own frame at offset +20). Mirror the REAL offset per CLAUDE.md ("MIRROR THE
+      // GUEST STACK... never exclude a slot because it looks like dead scratch").
+      const uint32_t base = (mode == 1u) ? (sp - 24 + 0) : (sp - 24 + 12);
+      c->mem_w32(base + 0, sz1); c->mem_w32(base + 4, sz2); c->mem_w32(base + 8, sz3); // real stack mirror
       z = sz3_minmax(mode == 1u, sz1, sz2, sz3);
       c->mem_w32(SCRATCH_OTZ_TMP, z);
     } else {
@@ -303,8 +311,13 @@ void OverlayGroundGt3Gt4::gt4(Core* c) {
     if (mode == 1u || mode == 2u) {
       int32_t sz1 = (int32_t)gte_read_data(16), sz2 = (int32_t)gte_read_data(17),
               sz3 = (int32_t)gte_read_data(18), sz4 = (int32_t)gte_read_data(19);
-      c->mem_w32(sp - 32 + 0, sz1); c->mem_w32(sp - 32 + 4, sz2);
-      c->mem_w32(sp - 32 + 8, sz3); c->mem_w32(sp - 32 + 12, sz4);     // real stack mirror
+      // Guest-stack mirror (RE: ov_a00_gen_8013FE58, same duplicated-inline shape as gt3 above) —
+      // mode==1 writes to (new sp)+0/4/8/12, mode==2 writes to (new sp)+16/20/24/28. A prior draft
+      // always used the mode==1 offsets; mirror the real per-mode offset (CLAUDE.md "MIRROR THE
+      // GUEST STACK").
+      const uint32_t base = (mode == 1u) ? (sp - 32 + 0) : (sp - 32 + 16);
+      c->mem_w32(base + 0, sz1); c->mem_w32(base + 4, sz2);
+      c->mem_w32(base + 8, sz3); c->mem_w32(base + 12, sz4);     // real stack mirror
       z = sz4_minmax(mode == 1u, sz1, sz2, sz3, sz4);
       c->mem_w32(SCRATCH_OTZ_TMP, z);
     } else {
