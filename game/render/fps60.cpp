@@ -185,6 +185,7 @@ void Fps60::frame_commit(Core* core) {
 #include "render_queue.h"
 #include "game.h"
 #include <unordered_map>
+#include <vector>
 #include <algorithm>
 #include <math.h>
 void gpu_present_ex(Core* core, int do_blit);
@@ -410,29 +411,42 @@ int Fps60::build_lerp() {
          ^ ((uint64_t)(uint32_t)it->clut_x << 20) ^ ((uint64_t)(uint32_t)it->clut_y << 28)
          ^ ((uint64_t)(uint32_t)it->mode  << 36) ^ ((uint64_t)(uint32_t)(it->us[0] & 0xFF) << 40)
          ^ ((uint64_t)(uint32_t)(it->vs[0] & 0xFF) << 48); };
-  std::unordered_map<uint64_t, const RqItem*> prevbg;
+  // PER-TILE matching (60fps parallax flicker fix, 2026-07-10): the old single global median gave every
+  // backdrop tile ONE shift — parallax layers scrolling at different speeds got another layer's shift on
+  // the midpoint frame and their own position on the real frame, a 30Hz oscillation the user sees as
+  // background/atlas flicker. Each tile now gets its OWN matched displacement (fingerprint + NEAREST
+  // POSITION, which also fixes repeated-atlas-cell tiles matching the wrong instance under first-
+  // occurrence-wins); the median survives only as the teleport/outlier GATE, not as the shift itself.
+  std::unordered_multimap<uint64_t, const RqItem*> prevbg;
   prevbg.reserve((size_t)mNPrev + 16);
   for (int j = 0; j < mNPrev; j++) { const RqItem* P = &mRqPrev[j];
-    if (P->layer == RQ_BACKGROUND) prevbg.emplace(bg_fp(P), P); }   // first occurrence per cell wins
-  // collect per-tile displacements, then median each axis
+    if (P->layer == RQ_BACKGROUND) prevbg.emplace(bg_fp(P), P); }
   if (!mBgDx) { mBgDx = new int[FPS60_RQ_MAX]; mBgDy = new int[FPS60_RQ_MAX]; }
+  // pass 1: per-cur-tile displacement (fingerprint match, nearest by screen distance), + sorted copies
+  // for the median gate. mBgDx/mBgDy hold the SORTED displacement sets; the per-tile values live in
+  // tileDx/tileDy indexed by cur item.
+  std::vector<int> tileDx((size_t)mNCur, INT32_MIN), tileDy((size_t)mNCur, INT32_MIN);
   int nbg = 0;
   for (int i = 0; i < mNCur && nbg < FPS60_RQ_MAX; i++) {
     const RqItem* C = &mRqCur[i]; if (C->layer != RQ_BACKGROUND) continue;
-    auto it = prevbg.find(bg_fp(C)); if (it == prevbg.end()) continue;
-    mBgDx[nbg] = C->xs[0] - it->second->xs[0];
-    mBgDy[nbg] = C->ys[0] - it->second->ys[0]; nbg++;
+    auto range = prevbg.equal_range(bg_fp(C));
+    const RqItem* best = nullptr; int bestd = INT32_MAX;
+    for (auto it = range.first; it != range.second; ++it) {
+      int dx = C->xs[0] - it->second->xs[0], dy = C->ys[0] - it->second->ys[0];
+      int d = abs(dx) + abs(dy);
+      if (d < bestd) { bestd = d; best = it->second; }
+    }
+    if (!best) continue;
+    tileDx[i] = C->xs[0] - best->xs[0];
+    tileDy[i] = C->ys[0] - best->ys[0];
+    mBgDx[nbg] = tileDx[i]; mBgDy[nbg] = tileDy[i]; nbg++;
   }
-  int bg_have = 0, bg_hdx = 0, bg_hdy = 0;                // HALF-median bg translation (the midpoint shift)
+  int bg_have = 0, bg_mdx = 0, bg_mdy = 0;                // median displacement — the OUTLIER GATE
   if (nbg >= 4) {                                         // need a few matches for a meaningful median
     std::sort(mBgDx, mBgDx + nbg); std::sort(mBgDy, mBgDy + nbg);
-    int mdx = mBgDx[nbg / 2], mdy = mBgDy[nbg / 2];     // median per axis (robust)
+    bg_mdx = mBgDx[nbg / 2]; bg_mdy = mBgDy[nbg / 2];
     // Snap (don't smear) on a teleport/area-cut: a huge median = the whole backdrop jumped, not a pan.
-    if (abs(mdx) <= 128 && abs(mdy) <= 128) {
-      bg_have = 1;
-      // HALF of the B->cur motion = how far the in-between (t=0.5) sits BEHIND the real frame; shift cur back.
-      bg_hdx = -(mdx / 2); bg_hdy = -(mdy / 2);
-    }
+    if (abs(bg_mdx) <= 128 && abs(bg_mdy) <= 128) bg_have = 1;
   }
 
   long moved = 0, snapped = 0, bgmoved = 0;
@@ -442,12 +456,21 @@ int Fps60::build_lerp() {
     // BACKGROUND layer (#25): shift the whole backdrop by the half-median camera scroll so it pans WITH the
     // world at the midpoint instead of snapping. Uniform integer screen translate (+ the sub-pixel copy).
     if (C->layer == RQ_BACKGROUND) {
-      if (bg_have && (bg_hdx || bg_hdy)) {
-        for (int k = 0; k < C->nv; k++) {
-          mRqLerp[i].xs[k] = C->xs[k] + bg_hdx; mRqLerp[i].ys[k] = C->ys[k] + bg_hdy;
-          mRqLerp[i].xsf[k] = C->xsf[k] + (float)bg_hdx; mRqLerp[i].ysf[k] = C->ysf[k] + (float)bg_hdy;
-        }
-        bgmoved++;
+      // Per-tile half-shift, gated by the median: a tile whose own displacement is wildly off the
+      // layer consensus (bad match / spawn) snaps instead of smearing. |d - median| <= 64 accepts the
+      // real parallax spread (layers scroll at fractions of the camera speed, well inside 64px/frame).
+      int dx = (i < (int)tileDx.size()) ? tileDx[i] : INT32_MIN;
+      int dy = (i < (int)tileDy.size()) ? tileDy[i] : INT32_MIN;
+      if (bg_have && dx != INT32_MIN && abs(dx - bg_mdx) <= 64 && abs(dy - bg_mdy) <= 64) {
+        // HALF of the B->cur motion = how far the in-between (t=0.5) sits BEHIND the real frame.
+        int hdx = -(dx / 2), hdy = -(dy / 2);
+        if (hdx || hdy) {
+          for (int k = 0; k < C->nv; k++) {
+            mRqLerp[i].xs[k] = C->xs[k] + hdx; mRqLerp[i].ys[k] = C->ys[k] + hdy;
+            mRqLerp[i].xsf[k] = C->xsf[k] + (float)hdx; mRqLerp[i].ysf[k] = C->ysf[k] + (float)hdy;
+          }
+          bgmoved++;
+        } else snapped++;
       } else snapped++;
       continue;
     }
@@ -466,8 +489,8 @@ int Fps60::build_lerp() {
   }
   if (mLerpDbg < 0) mLerpDbg = cfg_dbg("fps60") ? 1 : 0;
   if (mLerpDbg) fprintf(stderr, "[fps60] f%ld reproject: prims=%d moved=%ld bgmoved=%ld snapped=%ld actors=%zu "
-                         "bg(matches=%d have=%d half=%d,%d)\n",
-                         mFence, mNCur, moved, bgmoved, snapped, prevcr.size(), nbg, bg_have, bg_hdx, bg_hdy);
+                         "bg(matches=%d have=%d median=%d,%d)\n",
+                         mFence, mNCur, moved, bgmoved, snapped, prevcr.size(), nbg, bg_have, bg_mdx, bg_mdy);
   // MECHANICAL GATE (PSXPORT_DEBUG=fps60chk): reproject every world prim at t=1.0 (crM = its OWN captured
   // composed transform, no averaging) — this MUST reproduce the prim's real screen verts. A non-zero error
   // means the capture/recompose/round path is wrong (not a smoothness issue). Pure diagnostic, no output change.
