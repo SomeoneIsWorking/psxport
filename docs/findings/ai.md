@@ -69,7 +69,7 @@
   `docs/findings/render.md` ("PutDrawEnv cluster" entry, original repro note).
 # Findings — AI / combat
 
-## Combat-cluster autonav coverage gap — CLOSED for 2/3 addresses; 1 real (pre-existing) SBS divergence discovered (2026-07-10)
+## Combat-cluster autonav coverage gap — CLOSED for 2/3 addresses; combat-leg SBS divergence RESOLVED (2026-07-10)
 
 - **symptom (the gap):** `ActorMeleeEngage::doIt` (0x80112188), `MeleeProximity::isAtApproachAnchor`
   (0x8001F9DC), and `beh_actor_tomba_proximity_combat` (0x800527C8) were all wired/registered but
@@ -119,54 +119,51 @@
     "ovhit" section, item 2): `noteSubstrateDispatch` isn't wired for every direct/g_override call
     site, so `B(gen)`'s count is a metric-tracking gap, not evidence the override didn't fire on
     core B — `sbs-div` (the real byte-level RAM/scratchpad compare) is the trustworthy signal.
-- **real SBS divergence discovered by this coverage (NOT fixed this session — filed as next
-  frontier, per the task's own "a red gate from new coverage is the tool working" framing):**
+- **SBS divergence discovered by this coverage — RESOLVED (2026-07-10, same-day follow-up session).**
   5 identical `[sbs-div]` hits, all at the same byte, f807-f811:
   `[sbs-div] f807 0x1F80009D..0x1F80009E (1 B)  A=00  B=08` (and f808/809/810/811, same values).
-  `0x1F80009C` is the "shared approach-angle scratch word"
-  `ActorMeleeEngage::doIt` stamps on its `doReposition` branch (`c->mem_w32(0x1F80009Cu,
-  (uint32_t)angle)`, `game/ai/actor_melee_engage.cpp`) — core A (native) leaves the byte at 0x1F80009D
-  as 0x00, core B (oracle/substrate) writes 0x08, i.e. a different `angle` value (or a different
-  doReposition decision entirely) between the two independently-evolving cores.
-  - **Triage — root cause is NOT a new bug in `ActorMeleeEngage`/`MeleeProximity` themselves.**
-    Re-ran the identical leg with `PSXPORT_MIRROR_VERIFY=0x80112188,0x8001F9DC,0x800527C8
-    PSXPORT_MIRROR_VERIFY_CONTINUE=1` (per-invocation native-vs-gen-replay-from-the-SAME-state
-    check, the strict ABI/RAM/scratchpad equivalence gate — see `docs/config.md` "Mirror TDD
-    gate") over the SAME leg, same frame budget: **zero mismatches** on both addresses across the
-    whole run. MIRROR_VERIFY proves the two functions' OWN bodies are byte-faithful transcriptions
-    of their `generated/` ground truth when run from identical starting state. The SBS divergence
-    only shows up in the two-CORES-diverging-independently comparison, meaning something UPSTREAM
-    of this leaf already differs between core A and core B's RAM by f807 (this leg is just the
-    first thing that reads/writes a location sensitive enough to make that upstream drift visible).
-  - **Matches the already-tracked "stack-depth OPEN" register-faithfulness cluster**
-    (`docs/findings/render.md`, perobj_billboard/overlay_ground_gt3gt4 entries, commit 69a1fb3) —
-    that finding's own "unrelated timing-sensitive finding" paragraph already documented a
-    `Trig::ratan2`-adjacent SBS divergence in melee-encounter code, reproduced only when extra
-    per-call bookkeeping (there: `PSXPORT_DEBUG=ovhit` + REPL) perturbed autonav's timing enough to
-    reach a melee interaction earlier — and noted it as PRE-EXISTING on unmodified `main`, not
-    introduced by that pass. This combat leg reproduces the same class of divergence
-    DETERMINISTICALLY (no REPL, no manual timing) — a stronger, gate-shaped repro of the same open
-    issue, not a new one.
-  - **Not fixed this session** (root cause is the upstream register/stack-faithfulness cluster,
-    already tracked OPEN in `docs/findings/render.md`, and chasing it fully needs the same
-    Ghidra-anchored register-liveness pass that cluster is waiting on — out of scope for a
-    tooling/coverage task). Filed here as the first DETERMINISTIC repro of that cluster inside a
-    combat encounter specifically, for whoever picks up the stack-depth cluster next.
-  - **repro:** `timeout 60 env PSXPORT_VK_HEADLESS=1 PSXPORT_SBS=1 PSXPORT_SBS_MODE=full
-    PSXPORT_SBS_AUTONAV=combat PSXPORT_SBS_EXIT_FRAME=1000 PSXPORT_NOAUDIO=1 PSXPORT_SBS_NOPAUSE=1
-    ./scratch/bin/tomba2_port` — `[sbs-div]` at f807-811, `0x1F80009D`, `A=00 B=08`, every run
-    (deterministic, no MIRROR_VERIFY/ovhit overhead needed to reproduce — unlike the earlier REPL
-    repro, this one does NOT need extra bookkeeping to surface).
-- **gate policy:** `PSXPORT_SBS_AUTONAV=combat` stays OFF by default — the standard gate command
-  (`docs/fleet-workflow.md` §2, plain `PSXPORT_SBS_AUTONAV=1`) is UNCHANGED and stays green (verified
-  0-diff through f10470+, 95s window, post-`BTN_RIGHT`-fix). Do not flip the standard gate to
-  `=combat` until the stack-depth cluster this uncovers is resolved — that would turn an
-  always-green gate red for a pre-existing, already-tracked issue, which is not what "closing the
-  coverage gap" is supposed to buy: the point is an OPTIONAL deeper gate for sessions specifically
-  working the combat/AI cluster, not a default-on regression.
+  `0x1F80009C` is the "shared approach-angle scratch word" `ActorMeleeEngage::doIt` stamps
+  (`game/ai/actor_melee_engage.cpp`) — core A (native) left the byte at 0x1F80009D as stale 0x00,
+  core B (oracle/substrate) wrote fresh 0x08.
+  - **Original triage (this entry, first pass) mischaracterized this as an UPSTREAM
+    register/stack-faithfulness divergence** ("stack-depth OPEN" cluster) because a targeted
+    `MIRROR_VERIFY=0x80112188,0x8001F9DC` pass showed zero mismatches in `doIt`'s own body,
+    implying the bad state must already exist on entry. That reasoning was correct as far as it
+    went but missed the actual mechanism: **the shape `A=00 (stale) / B=08 (fresh)` is the exact
+    signature of a dropped WRITE, not a wrong VALUE computed from bad inputs.**
+  - **Actual root cause: the SAME bug as this file's first entry above**
+    ("`ActorMeleeEngage::doIt` — scratchpad 0x1F80009C stale-write on the arm-directly path",
+    fixed in commit 76227b8, landed in this branch's history AFTER the combat-leg coverage that
+    surfaced this paragraph was originally written, but BEFORE this follow-up session started).
+    `gen_func_80112188`'s `mem_w32(scratch+156, angle)` sits in the delay slot of the
+    `margin < bandWidth` branch and fires unconditionally; the pre-fix native port gated it behind
+    `if (margin < bandWidth)`, dropping the store on the "arm-directly" branch
+    (`margin >= bandWidth && margin >= 3`) and leaving 0x1F80009C/9D stale on core A whenever a
+    melee actor's `doIt()` call took that branch — exactly reproducing `A=00 (never refreshed)
+    B=08 (oracle always refreshes)`. There was never a second, distinct upstream bug here; the
+    combat leg's coverage-gap discovery and the RE-derived fix happened to be authored in
+    different sessions before the fix's effect on THIS specific repro was re-verified live.
+  - **Re-verified live (2026-07-10 follow-up, worktree `agent-acd7fa85ffaccbf1a`, tip
+    `4ebaec6` rebased):** the exact repro command below now runs 0-diff through f9510 (95s
+    watchdog window, no early exit), well past the old f807-811 hit — the divergence no longer
+    reproduces. Standard gate (`PSXPORT_SBS_AUTONAV=1`) independently re-confirmed 0-diff through
+    f10440 in the same session, so the fix does not regress the default leg either.
+  - **repro (now clean):** `timeout 100 env PSXPORT_VK_HEADLESS=1 PSXPORT_SBS=1
+    PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=combat PSXPORT_NOAUDIO=1 PSXPORT_SBS_NOPAUSE=1
+    ./scratch/bin/tomba2_port` — 0-diff to the watchdog limit (was `[sbs-div]` at f807-811,
+    `0x1F80009D`, `A=00 B=08` before commit 76227b8).
+  - **process lesson:** when a fix targets scratch word X via an RE-identified mechanism (dropped
+    delay-slot store), re-check EVERY other repro that touches the same word before filing it as a
+    separate/upstream issue — `A=stale / B=fresh` on the same address the fix touches is a strong
+    prior for "already fixed, not yet re-verified" over "new bug in a different layer".
+- **gate policy:** `PSXPORT_SBS_AUTONAV=combat` stays OFF by default (still an OPTIONAL deeper gate
+  for sessions specifically working the combat/AI cluster, not wired into the standard command) —
+  but as of the 2026-07-10 follow-up above it is ALSO verified 0-diff through f9510 (95s window),
+  same as the standard `=1` leg (0-diff through f10440+). Nothing currently blocks promoting it to
+  the default gate; it remains opt-in only because `docs/fleet-workflow.md` §2's standard command
+  hasn't been updated to include it, not because of any known-red issue.
 - **refs:** `runtime/recomp/sbs.cpp` (`sbsCombatOn()`, `Nav::DONE`'s combat leg, `BTN_RIGHT` fix),
   `game/ai/actor_melee_engage.{h,cpp}`, `game/ai/melee_proximity.{h,cpp}`,
-  `game/ai/beh_actor_tomba_proximity_combat.{h,cpp}`, `docs/findings/render.md` ("stack-depth OPEN"
-  cluster + its "unrelated timing-sensitive finding" paragraph), `docs/config.md` ("ovhit" +
+  `game/ai/beh_actor_tomba_proximity_combat.{h,cpp}`, `docs/config.md` ("ovhit" +
   "Mirror TDD gate" sections), `docs/fleet-workflow.md` §9 (autonav-coverage caveat this closes
   for 2/3 addresses).

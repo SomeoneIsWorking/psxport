@@ -7,7 +7,7 @@ already solved or ruled out. 131 findings across 10 subsystems.
 ## ai
 
 - **ActorMeleeEngage::doIt — scratchpad 0x1F80009C stale-write on the "arm-directly" path (RESOLVED, 2026-07-10)** [?] — two independent frontier-convergence agents (2026-07-10) reproduced an SBS-full  ↪ docs/findings/ai.md
-- **Combat-cluster autonav coverage gap — CLOSED for 2/3 addresses; 1 real (pre-existing) SBS divergence discovered (2026-07-10)** [?] —   ↪ docs/findings/ai.md
+- **Combat-cluster autonav coverage gap — CLOSED for 2/3 addresses; combat-leg SBS divergence RESOLVED (2026-07-10)** [?] —   ↪ docs/findings/ai.md
 
 ## animation
 
