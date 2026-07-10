@@ -12,14 +12,36 @@
 // leaf, FUN_80098F90 mask-drain, FUN_80075824 + FUN_80099490 common tail, FUN_8008E0C0 key2 probe,
 // FUN_80074BF8 / FUN_80074E48 sub-obj tails). Guest allocates 88 bytes of stack — the buffer address
 // is passed to FUN_800998E4 and the action leaf's 4 stacked args, so we mirror the sp adjust.
+//
+// GUEST-FRAME FIDELITY (tools/abi_extract.py 0x80075A80 --contract): the prologue spills the
+// LIVE incoming r16..r21/r31 to sp+56..80, and every one of the 8 leaf calls below runs with a
+// specific r16..r21/r31 live in the guest register file — FUN_80092660 in particular re-spills
+// those onto ITS OWN guest stack frame, so if we don't reproduce the exact live values here the
+// bytes it spills diverge from recomp_path (SBS byte diff at 0x801FE900). r16..r21/r31 are set
+// at every point gen reassigns them and otherwise left untouched (a compliant callee transparently
+// preserves them across its own call, so a value set once here rides unchanged through subsequent
+// calls exactly like it does in gen).
 void AreaSlots::updateTail() {
   Core* c = core;
   uint32_t sp_save = c->r[29];
-  uint32_t ra_save = c->r[31];
   c->r[29] = sp_save - 88u;                    // addiu sp, -88
   const uint32_t sp = c->r[29];
   const uint32_t S5 = 0x800BE1F8u;
   const uint32_t buf_addr = sp + 0x20u;
+
+  // Prologue register spills (7), gen program order: sp+76<-r21(incoming); r21:=S5; sp+80<-r31
+  // (incoming ra); sp+72<-r20; sp+68<-r19; sp+64<-r18; sp+60<-r17; r31:=0x80075AB0 (jal-site for
+  // FUN_800998E4); sp+56<-r16(incoming). r16..r20 stay at their INCOMING values for that first
+  // call — gen never reassigns them before it.
+  c->mem_w32(sp + 76u, c->r[21]);
+  c->r[21] = S5;
+  c->mem_w32(sp + 80u, c->r[31]);
+  c->mem_w32(sp + 72u, c->r[20]);
+  c->mem_w32(sp + 68u, c->r[19]);
+  c->mem_w32(sp + 64u, c->r[18]);
+  c->mem_w32(sp + 60u, c->r[17]);
+  c->r[31] = 0x80075AB0u;
+  c->mem_w32(sp + 56u, c->r[16]);
 
   // (1) Fill the 24-byte per-slot state buffer for this frame.
   c->r[4] = buf_addr;
@@ -28,6 +50,9 @@ void AreaSlots::updateTail() {
   // (2) Slot loop over 24 entries at 0x800BE238 (12 bytes each), starting at the counter at 0x800BED78.
   int32_t s2  = (int32_t)c->mem_r32(0x800BED78u);
   uint32_t s1 = 0x800BE238u + (uint32_t)s2 * 12u;
+  const bool loopEntered = (s2 < 24);
+  if (loopEntered) c->r[20] = 0x800C0000u;      // gen: r20 set once before the loop, ONLY on the
+                                                 // taken path — left incoming/untouched if skipped.
   for (; s2 < 24; s2++, s1 += 12u) {
     const uint32_t s0 = s1 + 1u;
     uint8_t kind = c->mem_r8(s1);
@@ -56,11 +81,23 @@ void AreaSlots::updateTail() {
                                                     // routed SFX in the prologue played program 0x0F
                                                     // instead of 0x01 (wrong sample, wrong pitch).
       c->r[7] = a3;
+      // Live regs at THIS call (abi_extract): r16=s0, r17=s1, r18=s2, r19=s2<<16, r20=0x800C0000,
+      // r21=S5 — FUN_80092660 spills these onto its own guest stack frame; must be exact.
+      c->r[16] = s0;
+      c->r[17] = s1;
+      c->r[18] = (uint32_t)s2;
+      c->r[19] = (uint32_t)s2 << 16;
+      c->r[20] = 0x800C0000u;
+      c->r[21] = S5;
+      c->r[31] = 0x80075B84u;
       rec_dispatch(c, 0x80092660u);
       uint32_t mask = c->mem_r32(0x800BE358u);     // clear bit s2 in the arm-mask
       mask &= ~(1u << (uint32_t)s2);
       c->mem_w32(0x800BE358u, mask);
-      c->mem_w8(s1, (uint8_t)(kind - 1u));         // kind -= 1 (0xFF -> 0xFE)
+      // gen re-reads slot[0] AFTER FUN_80092660 returns (it may mutate the slot) rather than using
+      // the pre-call cached `kind` — subtract 1 from the FRESH value, not the stale local.
+      uint8_t freshKind = c->mem_r8(s1);
+      c->mem_w8(s1, (uint8_t)(freshKind - 1u));    // kind -= 1 (0xFF -> 0xFE)
       continue;                                     // skip buf post-check (guest goto 0x80075C14)
     }
     if (kind != 0) {
@@ -82,9 +119,19 @@ void AreaSlots::updateTail() {
     if (bv == 0 || bv == 3) c->mem_w8(s1 + 1u, 0);
   }
 
+  // Post-loop live-register mirror (gen L_80075C30): r16:=0x800C0000; r17/r18 hold the loop-final
+  // s1/s2 (or, if the loop never ran, still the incoming s1/s2 — same locals either way); r19 only
+  // touched if the loop ran (else left at its incoming value, matching gen leaving it unset).
+  c->r[16] = 0x800C0000u;
+  c->r[17] = s1;
+  c->r[18] = (uint32_t)s2;
+  if (loopEntered) c->r[19] = (uint32_t)s2 << 16;
+  c->r[21] = S5;
+
   // (3) Mask-drain: if any bit set, call FUN_80098F90(0) then clear the mask.
   if (c->mem_r32(0x800BE358u) != 0) {
     c->r[4] = 0;
+    c->r[31] = 0x80075C4Cu;
     rec_dispatch(c, 0x80098F90u);
     c->mem_w32(0x800BE358u, 0);
   }
@@ -94,34 +141,60 @@ void AreaSlots::updateTail() {
   // the RE (2026-07-03, ghidra) shows it is the per-voice VOLUME MIXER tick, not a fade snap.
   // SBS gameplay mode surfaced the divergence at 0x800BE208/A the moment we replaced the recomp
   // dispatch with musicFadeIn; the proper port is voiceMixTick(0x800BE1F8).
+  c->r[4] = S5;
+  c->r[31] = 0x80075C58u;                           // jal-site const, kept even for the native call
   c->engine.musicCoord.voiceMixTick(S5);            // FUN_80075824 (native)
-  c->r[4] = S5; rec_dispatch(c, 0x80099490u);
+  c->r[4] = S5;
+  c->r[31] = 0x80075C60u;
+  rec_dispatch(c, 0x80099490u);
 
-  // (5) Key2 branch: if the s16 at 0x800BED80 != -1, look up the entry hword and probe with FUN_8008E0C0.
+  // (5) Key2 branch. gen reassigns r17:=0x800C0000 right here, before the key2 read, and the S5
+  // zero-write below is UNCONDITIONAL — it lives in the branch's delay slot, so it fires whether
+  // or not key2 == -1 (was gated on `key2 != -1`, dropping the write on the skip path).
+  c->r[17] = 0x800C0000u;
   int16_t key2 = c->mem_r16s(0x800BED80u);
+  c->mem_w32(S5, 0);
   if (key2 != -1) {
-    c->mem_w32(S5, 0);
     uint32_t entry_addr = 0x800BE368u + (uint32_t)((int32_t)key2 * 8);
     int16_t entry_hw = c->mem_r16s(entry_addr);
     c->r[4] = (uint32_t)(int32_t)entry_hw;
     c->r[5] = 0;
+    c->r[31] = 0x80075C90u;
     rec_dispatch(c, 0x8008E0C0u);
     if ((c->r[2] & 0xFFFFu) == 0) {
       // Guest checked (return << 16) != 0 == (return & 0xFFFF) != 0.
+      // gen reassigns r16:=S5 here (r16 = 0x800C0000 - 7688), live for both the subid==0 and
+      // subid!=0 leaves below.
+      c->r[16] = S5;
       uint8_t subid = c->mem_r8(0x800BE22Au);
-      if (subid == 0) {
-        rec_dispatch(c, 0x80074E48u);
-      } else {
-        c->r[4] = (uint32_t)subid;
-        rec_dispatch(c, 0x80074BF8u);
+      // gen source order (shard_7.c:11082-11087): the subid!=0 (BF8) leaf is the fall-through and
+      // comes FIRST, the subid==0 (E48) leaf is the branch target — mirror that order so the static
+      // call/store sequence matches the oracle (logically identical; the two leaves are exclusive).
+      if (subid != 0) {
+        // gen zeroes key2 (0x800BED80) in FUN_80074BF8's call delay slot — BEFORE the callee runs.
         c->mem_w16(0x800BED80u, 0);
-        c->mem_w8(0x800BE22Au, 0);
+        c->r[4] = (uint32_t)subid;
+        c->r[31] = 0x80075CB8u;
+        rec_dispatch(c, 0x80074BF8u);
+        c->mem_w8(0x800BE22Au, 0);                  // gen mem_w8(r16+50,0) after BF8 (r16=S5, +50=0x800BE22A)
+      } else {
+        c->r[4] = 0;
+        c->r[31] = 0x80075CC8u;
+        rec_dispatch(c, 0x80074E48u);
       }
     }
   }
 
+  // Epilogue: restore r16..r21,r31 from the FRAME (gen L_80075CC8) — not from C++ locals, so the
+  // guest-stack read that produced them stays the byte-exact source of truth.
+  c->r[31] = c->mem_r32(sp + 80u);
+  c->r[21] = c->mem_r32(sp + 76u);
+  c->r[20] = c->mem_r32(sp + 72u);
+  c->r[19] = c->mem_r32(sp + 68u);
+  c->r[18] = c->mem_r32(sp + 64u);
+  c->r[17] = c->mem_r32(sp + 60u);
+  c->r[16] = c->mem_r32(sp + 56u);
   c->r[29] = sp_save;
-  c->r[31] = ra_save;
 }
 
 // AreaSlots::ackIfMatch — FUN_80074AF0 body. Pure 21-instruction primitive over the same
