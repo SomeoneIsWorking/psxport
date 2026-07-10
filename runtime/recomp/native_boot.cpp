@@ -70,6 +70,14 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 
 static void native_step_frame(Core* c, uint32_t f) {
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
+  // #42 widescreen symmetry: re-assert the projection center (GTE CR24 = OFX) from the LIVE present
+  // width every frame. Engine::initDisplay baked OFX once at boot, but the SDL window is lazy-created
+  // (first present), so at boot win_w=320 -> AUTO nw=320 -> OFX=160 (the 4:3 center) got baked, and the
+  // wide view then expanded only to the RIGHT. Re-asserting nw/2 each frame centers it symmetrically
+  // (the middle 4:3 band stays pixel-identical). CR24 is a GTE control reg, not guest RAM -> read-only-
+  // overlay compliant; gated on wide_engine so 4:3 (OFX=160, margin==0) and the oracle are untouched.
+  { int gpu_gpu_wide_engine(Core*); int gpu_gpu_wide_engine_ofx(Core*);
+    if (gpu_gpu_wide_engine(c)) gte_write_ctrl(24u, (uint32_t)gpu_gpu_wide_engine_ofx(c) << 16); }
   c->mRender->projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
