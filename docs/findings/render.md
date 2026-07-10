@@ -1112,3 +1112,72 @@ Per the read-only-overlay directive (pc_render reads guest+engine, writes ONLY h
   `generated/ov_a00_shard_0.c ov_a00_gen_8013FB88`, `generated/ov_a00_shard_1.c ov_a00_gen_8013FE58`;
   repro: `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_PREWATCH=0x801FE924` (raw log) or
   `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1` (gate count).
+
+## libgpu GPU-DMA completion-queue cluster + DrawSync/ClearOTagR — wide-RE wiring pass (2026-07-10)
+
+Promoted the 4 banked `game/render/wide_re_gpu_dma_queue.cpp` drafts (`GpuDmaQueueEnqueue`
+0x80082D04, `GpuDmaQueueDrain` 0x80082FB4, `GpuDmaQueueSync` 0x80083364, `GpuDmaSend` 0x80082424)
+and the 2 sibling drafts in `game/render/wide_re_libgpu_leaves.cpp` (`DrawSync` 0x80080F6C,
+`ClearOTagR` 0x80081458) from wide-RE draft to verified ownership per `docs/fleet-workflow.md` §9.
+Re-verify found and fixed real bugs in 5 of the 6 functions; SBS-full stayed 0-diff through the
+wiring (verified to f9690+, 95s autonav window).
+
+- **status: RESOLVED (5/6 wired), 1 LEFT UNWIRED with an open residual (Enqueue)**
+- **bugs found at re-verify (statistics for §9):**
+  1. `GpuDmaQueueDrain`/`GpuDmaQueueSync`/`GpuDmaQueueEnqueue` — 9 combined missing
+     branch-delay-slot `r31`-mirror bugs: every call site to a non-leaf callee (`Drain` itself,
+     the ISR-register leaf `func_80085B80`, the caller-supplied `fn`/ring-entry/completion-handler
+     dispatch targets) needs `c->r[31]` set to gen's literal return-address constant BEFORE the
+     call, because the callee spills the caller's ra into ITS OWN guest-stack frame — omitting it
+     means the spilled byte diverges from gen (CLAUDE.md "mirror the guest stack"). `func_80085C9C`
+     (int-mask set) and the GPU-DMA timeout arm/chk HLE no-ops are true leaves and don't need it.
+  2. `GpuDmaQueueEnqueue` — `GPU_QSTAT_ACTIVE` (0x800A59A8) must be written **unconditionally**
+     every call (a MIPS branch-delay-slot store — `generated/shard_5.c:13837-13838`); the draft
+     gated it on `started==0`, so on every call after the first, ACTIVE never got rearmed. Root
+     cause: literal transcription missed that the delay-slot instruction executes regardless of
+     the branch outcome. 1-byte SBS-fatal diff at 0x800A59A8 from frame 0.
+  3. `DrawSync` (0x80080F6C) — the draft's comment claimed "no stack frame, leaf, sp untouched";
+     gen_func_80080F6C actually pushes a -24 frame and spills s0/r16+ra. Missing entirely.
+  4. `DrawSync` AND `ClearOTagR` — both read `GPU_SYS_TABLE + offset` with a SINGLE dereference;
+     `GPU_SYS_TABLE` (0x800A5998) is actually a POINTER FIELD to the real jump table and gen
+     dereferences it TWICE (`r2=mem_r32(base+22936); r2=mem_r32(r2+60)`). The single-deref version
+     read garbage (observed 0xFFFFFFFF / stale 0x0101000A-style scratch) and dispatched into
+     nowhere — corrupted the ENTIRE downstream OT array (6109+ bytes diverged at frame 0), then
+     crashed via render-queue-overflow within a few frames. This was the most severe bug: 629-diff
+     crash on the full run, traced with `PSXPORT_THUNK_FORCE_GEN` bisection down to ClearOTagR
+     alone, then pinned exactly via a temporary stderr print of `tableSlot44` (showed 0xFFFFFFFF).
+- **NOT wired: `GpuDmaQueueEnqueue` (0x80082D04)** — real residual, root cause NOT fully isolated.
+  After fixing the ACTIVE bug above, wiring Enqueue alone (rest forced to gen via
+  `PSXPORT_THUNK_FORCE_GEN`) still produces a real SBS diff at guest address 0x801FF154 from frame
+  0. `PSXPORT_SBS_PREWATCH=0x801FF154` traced the write to INSIDE the still-substrate, UNOWNED
+  `gen_func_80082734` (the "LoadImage-style FIFO streamer" mapped-but-not-drafted — see
+  `wide_re_gpu_dma_queue.cpp`'s header), reached via Enqueue's fast-path `rec_dispatch(c, fn)`.
+  `gen_func_80082734` is byte-identical code on both SBS cores and its own inputs (r4/r5, guest sp)
+  were confirmed IDENTICAL at the call site (both write-site captures showed `sp=0x801FF140`), yet
+  it writes a different clipped-width value at `(argValOrPtr+4)` — core A wrote `0x001FCA00`, core
+  B wrote `0x00000008`. This means some memory content `gen_func_80082734` depends on (plausibly
+  the global max-W/H clip shorts at 0x800A5964/66, or the caller's stack-resident rect struct that
+  `argValOrPtr` points at) already differs BEFORE this call — for a reason not yet isolated. Ruled
+  out: register-mapping bugs (exhaustive line-by-line match against gen found none), frame-depth
+  mismatch (sp confirmed identical), and STARTED-byte path selection (STARTED is never written
+  anywhere in the whole recompiled binary, so `fastPath` is unconditionally true every call on
+  both sides — not a source of divergence). Left unwired per fleet-workflow.md §9 ("if an address
+  can't be made 0-diff, leave it unwired with an honest note, wire the rest").
+- **ovhit caveat:** `PSXPORT_DEBUG=ovhit` (5-frame REPL run) shows `Sync`/`Send`/`DrawSync`/
+  `ClearOTagR` FIRE with matching native/oracle counts (real gate coverage: 1045/1045, 1020/1020,
+  1045/1045, 1020/1020). `Drain` shows `native=0 oracle=0` — it is INSTALLED and its 0-diff is
+  real, but NOT exercised by this playthrough's autonav coverage, because Enqueue's ring/deferred
+  path (the only thing that calls Drain) is dead code while STARTED stays 0. Drain's correctness
+  therefore rests on the line-by-line RE re-verify (bug #1 above), not the SBS gate, per §9's rule
+  against claiming gate-verification for a leaf that never fired.
+- **method:** `PSXPORT_THUNK_FORCE_GEN=<comma-list>` bisection (force individual addresses back to
+  the gen body while keeping others native) isolated each bug to one function; `PSXPORT_SBS_
+  PREWATCH=<addr>` + the write-site host/guest backtrace dump pinned the exact write instruction
+  for the two hardest bugs (ClearOTagR's double-deref, Enqueue's residual).
+- **verified:** `PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_NOPAUSE=1`, 95s window:
+  zero `sbs-div`/`VIOLATION`, byte-exact through f9690+, SIGINT-terminated by the watchdog (no
+  crash). Per-address isolation runs (Drain/Sync/Send/DrawSync/ClearOTagR individually, and all 5
+  combined with Enqueue left on gen) each independently confirmed 0-diff over 5000+ frames.
+- **refs:** `game/render/wide_re_gpu_dma_queue.cpp`, `game/render/wide_re_libgpu_leaves.cpp`;
+  install sites `gpu_dma_queue_install()` / `gpu_libgpu_leaves_install()`, called from
+  `games_tomba2_init()` in `game/game_tomba2.cpp`.

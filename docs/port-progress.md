@@ -2754,3 +2754,20 @@ themselves are LIVE but dispatch out to substrate for every case body.
   case-0 init driver...". Next: wire `enterOuterState0`+`matrixComposeAttached` in (with the
   mandatory line-by-line re-verify per §9) + SBS-gate, then RE the `60064-65374` cluster or one of
   the already-flagged variant-triplet families before attempting either mode-N table.
+- **libgpu GPU-DMA completion-queue cluster + DrawSync/ClearOTagR — WIRED, 5/6 verified (frontier
+  agent, 2026-07-10).** Promoted the banked wide-RE drafts (§9 re-verify + wire) from the two
+  sessions above: `GpuDmaQueueDrain` (0x80082FB4), `GpuDmaQueueSync` (0x80083364), `GpuDmaSend`
+  (0x80082424), `DrawSync` (0x80080F6C), `ClearOTagR` (0x80081458) are now LIVE-and-WIRED via
+  `gpu_dma_queue_install()`/`gpu_libgpu_leaves_install()` (`game_tomba2.cpp`). Re-verify found and
+  fixed 5 real bugs (9 missing branch-delay-slot `r31`-mirror sites across the queue cluster, one
+  unconditional-write miss on `GPU_QSTAT_ACTIVE`, DrawSync's entirely-missing guest-stack frame,
+  and a SEVERE double-dereference miss on `GPU_SYS_TABLE` in both DrawSync AND ClearOTagR that
+  corrupted the whole 2048-entry OT array and crashed the game within a few frames of boot).
+  `GpuDmaQueueEnqueue` (0x80082D04) is DELIBERATELY LEFT UNWIRED — a real SBS residual traced to a
+  write inside the unrelated, still-substrate `gen_func_80082734` whose root cause isn't isolated
+  yet; see `docs/findings/render.md` "libgpu GPU-DMA completion-queue cluster ... wiring pass" for
+  the full writeup (including the ovhit caveat: Drain is installed+0-diff but never fires in this
+  playthrough's autonav coverage since `GPU_QSTAT_STARTED` is never written anywhere in the whole
+  recompiled binary, so Enqueue's ring/deferred path — the only caller of Drain — is dead code).
+  SBS-full gate: 0-diff through f9690+ (95s autonav window). Next: root-cause the Enqueue residual
+  (follow `PSXPORT_SBS_PREWATCH=0x801FF154` from a fresh boot) and wire it in.

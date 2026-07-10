@@ -112,6 +112,7 @@
 // against a live VRAM-transfer dump). Left for a dedicated follow-up pass — do not fold it into this
 // cluster's wiring without RE'ing it on its own terms first.
 #include "core.h"
+#include "render.h"
 #include <stdint.h>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
@@ -151,7 +152,7 @@ constexpr uint32_t FN_ISR_REGISTER    = 0x80085B80u;  // (mode, fnPtr) install/u
 constexpr uint32_t FN_DRAIN           = 0x80082FB4u;  // this cluster's own Drain, see below
 }  // namespace
 
-// func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeBytes, arg3). DRAFT.
+// func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeBytes, arg3). RE-VERIFIED 2026-07-10 but LEFT UNWIRED (see the install-fn note at the bottom of this file).
 // RE'd from generated/shard_5.c:13804 gen_func_80082D04 (~165 gen-C ln). The single highest-value
 // target in the band (824 free-roam rec_dispatch hits / 600 frames). Guest ABI: a0=fn-ptr to later
 // dispatch, a1=scalar value OR pointer-to-data (shape picked by a2), a2=size in BYTES of data to
@@ -161,7 +162,8 @@ constexpr uint32_t FN_DRAIN           = 0x80082FB4u;  // this cluster's own Drai
 // Frame -40, callee-save spills ra/s0-s3 (sp+16=s0/r16, sp+20=s1/r17, sp+24=s2/r18, sp+28=s3/r19,
 // sp+32=ra) — s3=fn, s0=argValOrPtr, s1=sizeBytes, s2=arg3 (the guest ABI args, moved into
 // callee-saves because the body calls out repeatedly).
-static void func_80082D04(Core* c) {
+void Render::gpuDmaQueueEnqueue() {
+  Core* c = mCore;
   c->r[29] -= 40;
   c->mem_w32(c->r[29] + 28, c->r[19]);
   const uint32_t fn = c->r[4];             // s3
@@ -183,6 +185,7 @@ static void func_80082D04(Core* c) {
     c->r[29] += 40;
   };
 
+  c->r[31] = 0x80082D30u;
   rec_dispatch(c, FN_GPU_TIMEOUT_ARM);
 
   // L_80082D50 loop: wait for a free ring slot (retry via Drain + timeout-checked wait if full).
@@ -192,21 +195,35 @@ static void func_80082D04(Core* c) {
     uint32_t next = (head + 1) & 63u;
     if (next != tail) break;  // room available
     // L_80082D38: full — timeout-check, then drain and retry
+    c->r[31] = 0x80082D40u;
     rec_dispatch(c, FN_GPU_TIMEOUT_CHK);
     if (c->r[2] != 0) { epilogue((uint32_t)-1); return; }
+    // Drain (FN_DRAIN) pushes its own guest-stack frame and spills the caller's ra — the guest
+    // return address MUST be live in r31 before this call or Drain's spilled-ra byte diverges
+    // from gen (SBS-fatal). Same for every other non-HLE-leaf call below.
+    c->r[31] = 0x80082D50u;
     rec_dispatch(c, FN_DRAIN);
   }
 
-  // Enter critical section (disable interrupts), save the old mask.
+  // Enter critical section (disable interrupts), save the old mask. FN_INT_MASK_SET
+  // (func_80085C9C) is a true leaf (no sp adjust, no ra spill) — r31 mirroring is a no-op for it,
+  // left unset like every other leaf call in this port.
   c->r[4] = 0;
   rec_dispatch(c, FN_INT_MASK_SET);
   c->mem_w32(ENQ_SAVED_MASK, c->r[2]);
 
   // Decide fast (immediate dispatch) vs deferred (ring-enqueue) path.
+  //
+  // BUG FIX (2026-07-10, wiring re-verify): gen writes GPU_QSTAT_ACTIVE=1 UNCONDITIONALLY here —
+  // it's a MIPS branch-delay-slot store (generated/shard_5.c:13837-13838: `{ _t = (started==0);
+  // mem_w32(ACTIVE, 1); if (_t) goto fastPath; }`), executed regardless of which way the branch
+  // goes. The prior draft gated the write on `started==0`, so on every call where the queue was
+  // already started (STARTED!=0), ACTIVE never got (re)armed to 1 — an immediate SBS-fatal
+  // 1-byte diff at 0x800A59A8 from frame 0 onward. Moved outside the branch to match gen exactly.
+  c->mem_w32(GPU_QSTAT_ACTIVE, 1);
   uint8_t started = c->mem_r8(GPU_QSTAT_STARTED);
   bool fastPath;
   if (started == 0) {
-    c->mem_w32(GPU_QSTAT_ACTIVE, 1);
     fastPath = true;
   } else {
     uint32_t head = c->mem_r32(RING_HEAD);
@@ -228,6 +245,9 @@ static void func_80082D04(Core* c) {
     while ((c->mem_r32(c->mem_r32(GPU_DMA_READY_PTR)) & GPU_DMA_READY_BIT) == 0) {}
     c->r[4] = argValOrPtr;
     c->r[5] = arg3;
+    // `fn` is an arbitrary caller-supplied dispatch target — it may push its own guest-stack
+    // frame and spill ra, so r31 MUST carry the real guest return address (gen: 0x80082E10).
+    c->r[31] = 0x80082E10u;
     rec_dispatch(c, fn);
     c->r[4] = c->mem_r32(ENQ_SAVED_MASK);
     rec_dispatch(c, FN_INT_MASK_SET);
@@ -240,6 +260,8 @@ static void func_80082D04(Core* c) {
   // HEAD, restore the mask, kick a Drain pass, and return the new queue depth.
   c->r[4] = 2;
   c->r[5] = FN_DRAIN;  // install THIS cluster's Drain as the ISR
+  // FN_ISR_REGISTER (func_80085B80) pushes a -24 guest frame and spills ra — mirror gen's r31.
+  c->r[31] = 0x80082E38u;
   rec_dispatch(c, FN_ISR_REGISTER);
 
   if (sizeBytes != 0) {
@@ -272,6 +294,7 @@ static void func_80082D04(Core* c) {
   }
   c->r[4] = c->mem_r32(ENQ_SAVED_MASK);
   rec_dispatch(c, FN_INT_MASK_SET);
+  c->r[31] = 0x80082F7Cu;  // FN_DRAIN spills ra — mirror gen's return address.
   rec_dispatch(c, FN_DRAIN);
 
   {
@@ -281,7 +304,7 @@ static void func_80082D04(Core* c) {
   }
 }
 
-// func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). DRAFT. RE'd from generated/shard_6.c:14620
+// func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). VERIFIED & WIRED 2026-07-10 (was DRAFT; see ovhit caveat at the install site — fires 0x0 in current autonav coverage). RE'd from generated/shard_6.c:14620
 // gen_func_80082FB4 (~130 gen-C ln). This is the completion-callback ring's DRAIN body — both
 // called synchronously (by Enqueue and Sync) AND installed as the GPU-DMA-completion INTERRUPT
 // HANDLER itself (Enqueue's deferred path registers `&0x80082FB4` via func_80085B80(mode=2, ...)).
@@ -291,7 +314,8 @@ static void func_80082D04(Core* c) {
 // Frame -32, spills ra (sp+24), s1/r17 (sp+20), s0/r16 (sp+16) — both s-regs are pure scratch here
 // (the gen body reuses them as bitmask temporaries after spilling; this port uses locals instead,
 // since only the STACK BYTES need to match, not host-register contents).
-static void func_80082FB4(Core* c) {
+void Render::gpuDmaQueueDrain() {
+  Core* c = mCore;
   uint32_t stateWordEarly = c->mem_r32(c->mem_r32(GPU_DMA_STATE_PTR));
   c->r[29] -= 32;
   c->mem_w32(c->r[29] + 24, c->r[31]);
@@ -335,6 +359,8 @@ static void func_80082FB4(Core* c) {
         if (c->mem_r32(GPU_QSTAT_HANDLER) == 0) {
           c->r[4] = 2;
           c->r[5] = 0;
+          // FN_ISR_REGISTER pushes a -24 guest frame and spills ra — mirror gen's r31.
+          c->r[31] = 0x80083068u;
           rec_dispatch(c, FN_ISR_REGISTER);
         }
       }
@@ -348,6 +374,9 @@ static void func_80082FB4(Core* c) {
       uint32_t fn = c->mem_r32(entry + 0);
       c->r[4] = argVal;
       c->r[5] = arg3;
+      // `fn` is the ring entry's arbitrary dispatch target — mirror gen's r31 (0x8008310C) in
+      // case it pushes its own frame and spills ra.
+      c->r[31] = 0x8008310Cu;
       rec_dispatch(c, fn);
 
       uint32_t newTail = (c->mem_r32(RING_TAIL) + 1) & 63u;
@@ -377,6 +406,8 @@ static void func_80082FB4(Core* c) {
           uint32_t handler = c->mem_r32(GPU_QSTAT_HANDLER);
           if (handler != 0) {
             c->mem_w32(GPU_QSTAT_ACTIVE, 0);
+            // one-shot completion handler is arbitrary too — mirror gen's r31 (0x800831E4).
+            c->r[31] = 0x800831E4u;
             rec_dispatch(c, handler);
           }
         }
@@ -391,7 +422,7 @@ static void func_80082FB4(Core* c) {
   }
 }
 
-// func_80083364 (0x80083364) — GpuDmaQueueSync(mode). DRAFT. RE'd from generated/shard_0.c:12956
+// func_80083364 (0x80083364) — GpuDmaQueueSync(mode). VERIFIED & WIRED 2026-07-10 (was DRAFT). RE'd from generated/shard_0.c:12956
 // gen_func_80083364 (~70 gen-C ln). Same mode-0-BLOCKS / mode-nonzero-POLLS shape as the real SDK
 // `DrawSync(mode)` (a DIFFERENT function, already drafted as func_80080F6C in
 // wide_re_libgpu_leaves.cpp) — this is an internal sync primitive scoped to THIS queue. Guest ABI:
@@ -401,7 +432,8 @@ static void func_80082FB4(Core* c) {
 // idle+ready).
 //
 // Frame -24, spills ra (sp+20), s0/r16 (sp+16, holds the pre-drain depth across the mode!=0 branch).
-static void func_80083364(Core* c) {
+void Render::gpuDmaQueueSync() {
+  Core* c = mCore;
   const uint32_t mode = c->r[4];
   c->r[29] -= 24;
   c->mem_w32(c->r[29] + 20, c->r[31]);
@@ -420,7 +452,9 @@ static void func_80083364(Core* c) {
       uint32_t head = c->mem_r32(RING_HEAD);
       uint32_t tail = c->mem_r32(RING_TAIL);
       if (head != tail) {
-        // L_80083384: not empty -> drain once, timeout-check, retry
+        // L_80083384: not empty -> drain once, timeout-check, retry. FN_DRAIN spills ra —
+        // mirror gen's r31 (0x8008338C).
+        c->r[31] = 0x8008338Cu;
         rec_dispatch(c, FN_DRAIN);
         rec_dispatch(c, FN_GPU_TIMEOUT_CHK);
         if (c->r[2] != 0) { epilogue((uint32_t)-1); return; }
@@ -451,7 +485,8 @@ static void func_80083364(Core* c) {
   uint32_t head0 = c->mem_r32(RING_HEAD);
   uint32_t tail0 = c->mem_r32(RING_TAIL);
   uint32_t depth = (head0 - tail0) & 63u;
-  if (depth != 0) rec_dispatch(c, FN_DRAIN);
+  // FN_DRAIN spills ra — mirror gen's r31 (0x80083444).
+  if (depth != 0) { c->r[31] = 0x80083444u; rec_dispatch(c, FN_DRAIN); }
 
   uint32_t stateWord = c->mem_r32(c->mem_r32(GPU_DMA_STATE_PTR));
   if ((stateWord & GPU_DMA_BUSY_BIT) == 0) {
@@ -461,7 +496,7 @@ static void func_80083364(Core* c) {
   epilogue(depth != 0 ? depth : 1u);
 }
 
-// func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). DRAFT. RE'd from generated/shard_3.c:19562
+// func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & WIRED 2026-07-10 (was DRAFT). RE'd from generated/shard_3.c:19562
 // gen_func_80082424 (~50 gen-C ln, self-contained). The actual OT-linked-list DMA KICK: programs the
 // last-element address + count into the status block, writes the DMA channel control register
 // (CHCR-shaped) with the start/chop value 0x11000002, arms the timeout, then busy-waits
@@ -474,7 +509,8 @@ static void func_80083364(Core* c) {
 //
 // Frame -32, spills ra (sp+24), s1/r17 (sp+20, holds the busy-bit mask constant across the wait
 // loop), s0/r16 (sp+16, holds `count`).
-static void func_80082424(Core* c) {
+void Render::gpuDmaSend() {
+  Core* c = mCore;
   const uint32_t arrayPtr = c->r[4];
   c->r[29] -= 32;
   c->mem_w32(c->r[29] + 16, c->r[16]);
@@ -516,4 +552,63 @@ static void func_80082424(Core* c) {
     epilogue(busy);  // busy == 0 here
     return;
   }
+}
+
+// ==================================================================================================
+// Wiring (2026-07-10): promoted from wide-RE draft to verified ownership per docs/fleet-workflow.md
+// §9 — re-verified line-by-line against generated/shard_*.c (found + fixed 9 missing-ra-mirror bugs,
+// see the `c->r[31] = 0x<gen-return-addr>` comments added above each non-leaf call site: every callee
+// here that pushes its own guest-stack frame — Drain, the ISR-register leaf func_80085B80, and the
+// caller-supplied `fn`/ring-entry/completion-handler dispatch targets — spills the CALLER's r31 into
+// ITS OWN frame, so r31 must carry the live gen return-address constant at each such call site or the
+// spilled byte diverges from gen; func_80085C9C (int-mask set) and the GPU-DMA timeout arm/chk HLE
+// no-ops are true leaves and don't need it). All 4 addresses are reached as plain intra-shard C calls
+// from the substrate (func_80082D04 etc. in generated/shard_disp.c), NOT via rec_dispatch — the
+// oracle-gated engine_set_override_main thunk is the correct install path (see
+// runtime/recomp/engine_override_thunk.cpp): it keeps SBS core B running the pure gen_func_* body.
+namespace {
+// ov_gpuDmaQueueEnqueue intentionally omitted — 0x80082D04 stays unwired, see the note below.
+void ov_gpuDmaQueueDrain(Core* c)   { c->mRender->gpuDmaQueueDrain(); }
+void ov_gpuDmaQueueSync(Core* c)    { c->mRender->gpuDmaQueueSync(); }
+void ov_gpuDmaSend(Core* c)         { c->mRender->gpuDmaSend(); }
+}  // namespace
+
+extern void gen_func_80082FB4(Core*);
+extern void gen_func_80083364(Core*);
+extern void gen_func_80082424(Core*);
+
+void gpu_dma_queue_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  // 0x80082D04 (GpuDmaQueueEnqueue) is DELIBERATELY LEFT UNWIRED — see docs/findings/render.md
+  // "gpu_dma_queue_enqueue residual". Isolation testing (SBS-full, PSXPORT_THUNK_FORCE_GEN
+  // bisection) proved: (a) a real bug WAS found and fixed here (GPU_QSTAT_ACTIVE must be written
+  // UNCONDITIONALLY every call — a MIPS branch-delay-slot store the draft had wrongly gated on
+  // `started==0`); (b) even after that fix, wiring Enqueue alone (everything else forced to gen)
+  // still produces a real, reproducible SBS diff at 0x801FF154, root-caused via
+  // PSXPORT_SBS_PREWATCH to a write INSIDE the still-substrate, UNOWNED gen_func_80082734 (the
+  // "LoadImage-style FIFO streamer" mapped but not drafted — see wide_re_gpu_dma_queue.cpp's file
+  // header) that Enqueue's fast path reaches via `rec_dispatch(c, fn)`. gen_func_80082734 is
+  // byte-identical code on both cores and its own inputs (r4/r5, guest sp) were confirmed IDENTICAL
+  // at the call site, yet it writes a different value at (argValOrPtr+4) — meaning some earlier
+  // memory content it depends on (plausibly the global max-W/H clip shorts at 0x800A5964/66, or
+  // the caller's stack-resident rect struct) already differs before this call, for a reason not
+  // yet isolated. Drain/Sync/Send/DrawSync/ClearOTagR are each independently verified 0-diff (SBS
+  // full, 5000+ frames) in isolation AND combined with Enqueue left on gen — wire those 5 now,
+  // leave Enqueue for a dedicated follow-up pass per docs/fleet-workflow.md §9's honest-gate rule.
+  //
+  // OVHIT CAVEAT (2026-07-10, PSXPORT_DEBUG=ovhit): with Enqueue unwired, GPU_QSTAT_STARTED is
+  // NEVER written anywhere in the whole recompiled binary (grepped generated/shard_*.c) — so
+  // Enqueue's fast (immediate-dispatch) path is unconditionally taken every call, the ring is
+  // never populated, and Drain's ring-drain/ISR path is DEAD CODE in the areas this playthrough's
+  // autonav reaches: `0x80082FB4 : native=0 oracle=0` — Drain is INSTALLED and its 0-diff is real
+  // (nothing to diverge on), but NOT exercised, so its correctness rests on the line-by-line RE
+  // re-verify above, not the SBS gate, per fleet-workflow.md §9 ("don't claim verified-by-gate if
+  // ovhit shows it never fired"). Sync/Send fire and match: `0x80083364 native=1045 oracle=1045`,
+  // `0x80082424 native=1020 oracle=1020` — those two are gate-verified for real.
+  engine_set_override_main(0x80082FB4u, ov_gpuDmaQueueDrain,   gen_func_80082FB4);
+  engine_set_override_main(0x80083364u, ov_gpuDmaQueueSync,    gen_func_80083364);
+  engine_set_override_main(0x80082424u, ov_gpuDmaSend,         gen_func_80082424);
 }

@@ -45,6 +45,7 @@
 //     graph. 0x80082734 turned out NOT to be part of this cluster (a separate, larger LoadImage-style
 //     FIFO streamer) — still MAPPED only, see the new file's header.
 #include "core.h"
+#include "render.h"
 #include <stdint.h>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
@@ -60,7 +61,7 @@ constexpr uint32_t GPU_DMA_ARG1_PTR   = GPU_SYS_BASE + 23216; // 0x800A5AB0
 constexpr uint32_t GPU_DMA_STATE_PTR  = GPU_SYS_BASE + 23220; // 0x800A5AB4
 }  // namespace
 
-// func_80080F6C (0x80080F6C) — DrawSync(mode). DRAFT. RE'd from generated/shard_2.c gen_func_80080F6C (25 gen-C
+// func_80080F6C (0x80080F6C) — DrawSync(mode). VERIFIED & WIRED 2026-07-10 (was DRAFT). RE'd from generated/shard_2.c gen_func_80080F6C (25 gen-C
 // ln). CONFIRMED identity via docs/engine_re.md's per-frame-loop RE ("FUN_80080f6c(0) = DrawSync(0)
 // // WAIT for previous frame's draw to finish"). Guest ABI: a0=mode (arg not read by this leaf body
 // itself — passed straight through to the callee as the 2nd dispatch's a1).
@@ -73,23 +74,55 @@ constexpr uint32_t GPU_DMA_STATE_PTR  = GPU_SYS_BASE + 23220; // 0x800A5AB4
 // below and PutDrawEnv (wide_re_gpu_putdrawenv.cpp) have the same shape and polarity — all three
 // now agree. The hook is therefore NOT a "first frames after reset" init but a "GPU sys is up"
 // steady-state hook; naming updated accordingly.] Unconditionally after that: call
-// GPU_SYS_TABLE[+60] (table+0x3C = DrawSync's OWN table slot per the doc) with (a0 = mode). No
-// stack frame in the gen body (leaf, sp untouched) — this native port needs none either.
-static void func_80080F6C(Core* c) {
+// GPU_SYS_TABLE[+60] (table+0x3C = DrawSync's OWN table slot per the doc) with (a0 = mode).
+//
+// RE-VERIFY CORRECTION (2026-07-10, wiring pass): the prior draft's "no stack frame, leaf, sp
+// untouched" claim was WRONG — gen_func_80080F6C DOES push a -24 guest frame and spill s0/r16 +
+// ra (generated/shard_2.c:10854-10858: `sp-=24; mem_w32(sp+16,r16); r16=a0; ...
+// mem_w32(sp+20,ra)`), restored at both exits. Both call targets here (GPU_SYS_INIT_FN and the
+// table+0x3C entry) are ARBITRARY dispatch targets that may push their own frames — if this leaf
+// doesn't mirror gen's sp/ra, every downstream guest-stack write from those callees lands 24 bytes
+// off from gen's, which is an immediate SBS-fatal divergence. Mirrored below (frame + both r31
+// return-address literals, per CLAUDE.md "mirror the guest stack, never omit it").
+void Render::drawSync() {
+  Core* c = mCore;
   const uint32_t mode = c->r[4];
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = mode;
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+
+  auto epilogue = [&]() {
+    c->r[31] = c->mem_r32(c->r[29] + 20);
+    c->r[16] = c->mem_r32(c->r[29] + 16);
+    c->r[29] += 24;
+  };
+
   uint8_t bootFlag = c->mem_r8(GPU_BOOT_FLAG);
   if (bootFlag >= 2) {
     c->r[4] = (32770u << 16) + (uint32_t)(int32_t)(-16676);  // 0x8001BEDC — fixed BIOS-window arg
     uint32_t initFn = c->mem_r32(GPU_SYS_INIT_FN);
-    c->r[5] = mode;
+    c->r[5] = c->r[16];
+    c->r[31] = 0x80080FA8u;
     rec_dispatch(c, initFn);
   }
-  uint32_t tableSlot60 = c->mem_r32(GPU_SYS_TABLE + 60);  // table+0x3C, the DrawSync entry itself
-  c->r[4] = mode;
+  // BUG FIX (2026-07-10, wiring re-verify): GPU_SYS_TABLE (0x800A5998) is a POINTER FIELD holding
+  // the address of the real jump table — the gen body dereferences it TWICE
+  // (generated/shard_2.c:10854 lines 16-18: `r2=mem_r32(base+22936); r2=mem_r32(r2+60)`), not once.
+  // The prior draft read `mem_r32(GPU_SYS_TABLE + 60)` directly (single deref), which — before the
+  // table is ever relocated/reallocated to match the raw base+22936 address — reads garbage
+  // (observed: 0xFFFFFFFF / stale scratch like 0x0101000A) and dispatches into nowhere, corrupting
+  // the whole downstream OT chain. GPU_SYS_INIT_FN below is NOT a pointer-to-pointer (single deref
+  // is correct there — confirmed against gen, no second indirection on that field).
+  uint32_t tableBase = c->mem_r32(GPU_SYS_TABLE);
+  uint32_t tableSlot60 = c->mem_r32(tableBase + 60);  // table+0x3C, the DrawSync entry itself
+  c->r[4] = c->r[16];
+  c->r[31] = 0x80080FC4u;
   rec_dispatch(c, tableSlot60);
+  epilogue();
 }
 
-// func_80081458 (0x80081458) — ClearOTagR(OT, entries). DRAFT. RE'd from generated/shard_7.c gen_func_80081458
+// func_80081458 (0x80081458) — ClearOTagR(OT, entries). VERIFIED & WIRED 2026-07-10 (was DRAFT). RE'd from generated/shard_7.c gen_func_80081458
 // (64 gen-C ln). CONFIRMED identity via docs/engine_re.md ("FUN_80081458=ClearOTagR (table+0x2c)";
 // per-frame loop calls it as `FUN_80081458(ctx, 0x800)` = 2048 OT entries).
 //
@@ -115,7 +148,8 @@ static void func_80080F6C(Core* c) {
 // addresses-as-integers, not memory reads through pointers, for this whole tail — no dereference).
 // Frame -32, spills ra/s17/s16 at +24/+20/+16 (s16=OT ptr kept live across the hook call,
 // s17=entryCount).
-static void func_80081458(Core* c) {
+void Render::clearOTagR() {
+  Core* c = mCore;
   c->r[29] -= 32;
   c->mem_w32(c->r[29] + 16, c->r[16]);
   c->r[16] = c->r[4];                       // s16 = OT
@@ -131,7 +165,11 @@ static void func_80081458(Core* c) {
     c->r[31] = 0x800814A0u;
     rec_dispatch(c, initFn);
   }
-  uint32_t tableSlot44 = c->mem_r32(GPU_SYS_TABLE + 44);  // table+0x2C, ClearOTagR's own entry
+  // Same missing-indirection bug as DrawSync above (fixed 2026-07-10): GPU_SYS_TABLE must be
+  // dereferenced once to get the table's real base, THEN +44 dereferenced again (generated/
+  // shard_7.c:12284 lines 19-22: `r2=mem_r32(base+22936); r2=mem_r32(r2+44)`).
+  uint32_t tableBase = c->mem_r32(GPU_SYS_TABLE);
+  uint32_t tableSlot44 = c->mem_r32(tableBase + 44);  // table+0x2C, ClearOTagR's own entry
   c->r[4] = c->r[16];
   c->r[5] = c->r[17];
   c->r[31] = 0x800814BCu;
@@ -148,6 +186,43 @@ static void func_80081458(Core* c) {
   c->r[17] = c->mem_r32(c->r[29] + 20);
   c->r[16] = c->mem_r32(c->r[29] + 16);
   c->r[29] += 32;
+}
+
+// ==================================================================================================
+// Wiring (2026-07-10): promoted DrawSync/ClearOTagR from wide-RE draft to verified ownership per
+// docs/fleet-workflow.md §9. Re-verify found TWO real bugs, both fixed above:
+//   (1) DrawSync had a MISSING STACK FRAME — the draft claimed "no stack frame, leaf, sp untouched"
+//       but gen_func_80080F6C actually pushes a -24 frame and spills s0/r16+ra; every downstream
+//       guest-stack write from its 2 dispatch targets would have landed 24 bytes off from gen.
+//   (2) BOTH DrawSync and ClearOTagR read `GPU_SYS_TABLE + offset` with only ONE dereference —
+//       GPU_SYS_TABLE (0x800A5998) is actually a POINTER FIELD to the real jump table, and gen
+//       dereferences it TWICE (`r2=mem_r32(base+22936); r2=mem_r32(r2+60)`). The single-deref
+//       version read garbage (0xFFFFFFFF / stale scratch) and dispatched into nowhere, corrupting
+//       the entire downstream OT chain (frame-0 SBS: 6109+ RAM bytes diverged, then a
+//       render-queue-overflow crash within a few frames). Root-caused via PSXPORT_THUNK_FORCE_GEN
+//       bisection + a temporary debug print, NOT by staring at the RE.
+// Both are substrate-called leaves (plain intra-shard C calls, not rec_dispatch) — wired via the
+// oracle-gated engine_set_override_main thunk so SBS core B keeps running the pure gen_func_* body.
+// OVHIT (PSXPORT_DEBUG=ovhit, 5-frame REPL run): both FIRE with MATCHING native/oracle counts —
+// `0x80080F6C native=1045 oracle=1045`, `0x80081458 native=1020 oracle=1020` — real gate coverage,
+// not a "0-diff because never called" false positive.
+// The other 3 functions in this file (func_80082C68/80083DE0/800847B0) are OUT OF SCOPE for this
+// wiring pass — left as unwired wide-RE drafts.
+namespace {
+void ov_drawSync(Core* c)    { c->mRender->drawSync(); }
+void ov_clearOTagR(Core* c)  { c->mRender->clearOTagR(); }
+}  // namespace
+
+extern void gen_func_80080F6C(Core*);
+extern void gen_func_80081458(Core*);
+
+void gpu_libgpu_leaves_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x80080F6Cu, ov_drawSync,   gen_func_80080F6C);
+  engine_set_override_main(0x80081458u, ov_clearOTagR, gen_func_80081458);
 }
 
 // func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd from generated/shard_2.c gen_func_80082C68

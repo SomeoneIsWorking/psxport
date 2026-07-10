@@ -204,6 +204,24 @@ public:
   // overlay_type_dispatch.cpp for the full RE.
   void overlayTypeDispatch();
 
+  // ---- SUBSTRATE MIRROR: libgpu GPU-DMA completion-callback QUEUE (wide-RE, wired 2026-07-10) -----
+  // 0x80082D04/0x80082FB4/0x80083364/0x80082424 — see game/render/wide_re_gpu_dma_queue.cpp for the
+  // full RE (struct map, call graph, ring-entry layout). Reached as plain intra-shard C calls from
+  // the substrate (NOT via rec_dispatch), owned via engine_set_override_main so the SBS oracle keeps
+  // running the pure gen_func_* body.
+  // Guest ABI args are read from c->r[4..7] inside each method (same convention as
+  // perObjRenderDispatch/billboardCompose1 above) so the override thunk's `native(Core*)` shape
+  // needs no per-address adapter.
+  void gpuDmaQueueEnqueue();  // FUN_80082D04(fn,argValOrPtr,sizeBytes,arg3) -> queue depth / -1 timeout
+  void gpuDmaQueueDrain();    // FUN_80082FB4() — also the GPU-DMA-completion ISR body
+  void gpuDmaQueueSync();     // FUN_80083364(mode) — internal DrawSync-shaped blocking/poll
+  void gpuDmaSend();          // FUN_80082424(arrayPtr,count) — the OT-linked-list DMA kick
+
+  // ---- SUBSTRATE MIRROR: libgpu GPU-sys jump-table leaves DrawSync/ClearOTagR (wired 2026-07-10) ---
+  // 0x80080F6C / 0x80081458 — see game/render/wide_re_libgpu_leaves.cpp for the full RE.
+  void drawSync();     // FUN_80080F6C(mode)
+  void clearOTagR();   // FUN_80081458(ot,entries)
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

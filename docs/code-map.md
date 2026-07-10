@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 618 native fns, 525 owned addresses, 588 LIVE / 30 ORPHAN.
+Totals: 623 native fns, 525 owned addresses, 593 LIVE / 30 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -350,10 +350,10 @@ Totals: 618 native fns, 525 owned addresses, 588 LIVE / 30 ORPHAN.
 | 0x8007E9C8 | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:415 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x8007E9C8 | LIVE | `ScreenFade::fadetrace` | game/render/screen_fade.cpp:16 |  | `debug fadetrace` channel — logs every native-path fade call with the … |
 | 0x8007E9C8 | LIVE | `BgSceneTransitionSm::fadeRect` | game/scene/bg_scene_transition_sm.cpp:51 |  | Screen fade — same shape as the guest's FUN_8007e9c8(color, P[3], 4) l… |
-| 0x80080F6C | LIVE | `func_80080F6C` | game/render/wide_re_libgpu_leaves.cpp:78 |  | func_80080F6C (0x80080F6C) — DrawSync(mode). DRAFT. RE'd from generate… |
+| 0x80080F6C | LIVE | `Render::drawSync` | game/render/wide_re_libgpu_leaves.cpp:87 |  | func_80080F6C (0x80080F6C) — DrawSync(mode). VERIFIED & WIRED 2026-07-… |
 | 0x80081218 | LIVE | `Asset::uploadImage` | game/core/asset.cpp:246 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
 | 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:550 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
-| 0x80081458 | LIVE | `func_80081458` | game/render/wide_re_libgpu_leaves.cpp:118 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). DRAFT. RE'd from… |
+| 0x80081458 | LIVE | `Render::clearOTagR` | game/render/wide_re_libgpu_leaves.cpp:151 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). VERIFIED & WIRED… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:140 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
 | 0x800815D0 | LIVE | `func_800815D0` | game/render/wide_re_gpu_putdrawenv.cpp:247 |  | func_800815D0 (0x800815D0) — libgpu PutDrawEnv(drawEnvPtr). DRAFT. RE'… |
 | 0x80082220 | LIVE | `func_80082220` | game/render/wide_re_gpu_putdrawenv.cpp:173 |  | func_80082220 (0x80082220) — DR_TPAGE mode-word builder. DRAFT. RE'd f… |
@@ -361,22 +361,23 @@ Totals: 618 native fns, 525 owned addresses, 588 LIVE / 30 ORPHAN.
 | 0x800822D8 | LIVE | `func_800822D8` | game/render/wide_re_gpu_putdrawenv.cpp:130 |  | func_800822D8 (0x800822D8) — SetDrawAreaBottomRight(x,y) word builder.… |
 | 0x80082370 | LIVE | `func_80082370` | game/render/wide_re_gpu_putdrawenv.cpp:159 |  | func_80082370 (0x80082370) — SetDrawingOffset(x,y) word builder. DRAFT… |
 | 0x8008238C | LIVE | `func_8008238C` | game/render/wide_re_gpu_putdrawenv.cpp:197 |  | func_8008238C (0x8008238C) — DR_TWIN word builder. DRAFT. RE'd from ge… |
-| 0x80082424 | LIVE | `func_80082424` | game/render/wide_re_gpu_dma_queue.cpp:477 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). DRAFT. RE'd … |
+| 0x80082424 | LIVE | `Render::gpuDmaSend` | game/render/wide_re_gpu_dma_queue.cpp:512 |  | func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & W… |
 | 0x80082734 | LIVE | `func_80082734` | game/render/wide_re_gpu_loadimage_streamer.cpp:129 |  | func_80082734 (0x80082734) — libgpu LoadImage()-internal chunked GP0-F… |
-| 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:162 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
-| 0x80082D04 | LIVE | `func_80082D04` | game/render/wide_re_gpu_dma_queue.cpp:164 |  | func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeB… |
-| 0x80082FB4 | LIVE | `func_80082FB4` | game/render/wide_re_gpu_dma_queue.cpp:294 |  | func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). DRAFT. RE'd from gene… |
-| 0x80083364 | LIVE | `func_80083364` | game/render/wide_re_gpu_dma_queue.cpp:404 |  | func_80083364 (0x80083364) — GpuDmaQueueSync(mode). DRAFT. RE'd from g… |
+| 0x80082C68 | LIVE | `func_80082C68` | game/render/wide_re_libgpu_leaves.cpp:237 |  | func_80082C68 (0x80082C68) — GPU-DMA status-block RESET. DRAFT. RE'd f… |
+| 0x80082D04 | LIVE | `Render::gpuDmaQueueEnqueue` | game/render/wide_re_gpu_dma_queue.cpp:165 |  | func_80082D04 (0x80082D04) — GpuDmaQueueEnqueue(fn, argValOrPtr, sizeB… |
+| 0x80082D04 | LIVE | `ov_gpuDmaQueueDrain` | game/render/wide_re_gpu_dma_queue.cpp:571 |  | ov_gpuDmaQueueEnqueue intentionally omitted — 0x80082D04 stays unwired… |
+| 0x80082FB4 | LIVE | `Render::gpuDmaQueueDrain` | game/render/wide_re_gpu_dma_queue.cpp:317 |  | func_80082FB4 (0x80082FB4) — GpuDmaQueueDrain(). VERIFIED & WIRED 2026… |
+| 0x80083364 | LIVE | `Render::gpuDmaQueueSync` | game/render/wide_re_gpu_dma_queue.cpp:435 |  | func_80083364 (0x80083364) — GpuDmaQueueSync(mode). VERIFIED & WIRED 2… |
 | 0x800834A0 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
 | 0x800834D4 | ORPHAN | `gpu_timeout_arm` | runtime/recomp/sync_overrides.cpp:48 |  | libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK… |
-| 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:197 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |
+| 0x80083DE0 | LIVE | `func_80083DE0` | game/render/wide_re_libgpu_leaves.cpp:272 |  | func_80083DE0 (0x80083DE0) — libgpu draw-mode / texture-window PACKET-… |
 | 0x80083E80 | LIVE | `Trig::rsin` | game/math/trig.cpp:4 |  |  |
 | 0x80083F50 | LIVE | `Trig::rcos` | game/math/trig.cpp:69 |  |  |
 | 0x80084110 | LIVE | `Math::matMul` | game/math/gte_math.cpp:117 |  |  |
 | 0x80084220 | LIVE | `Math::applyMatlv` | game/math/gte_math.cpp:300 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x80084250 | ORPHAN | `func_80084250` | game/math/wide_re_gte_transform3.cpp:41 |  |  |
 | 0x80084470 | LIVE | `Math::applyMatrixLV` | game/math/gte_math.cpp:164 |  | ──────────────────────────────────────────────────────────────────────… |
-| 0x800847B0 | LIVE | `func_800847B0` | game/render/wide_re_libgpu_leaves.cpp:244 |  | func_800847B0 (0x800847B0) — 20-byte SoA->AoS vertex-header REPACK. DR… |
+| 0x800847B0 | LIVE | `func_800847B0` | game/render/wide_re_libgpu_leaves.cpp:319 |  | func_800847B0 (0x800847B0) — 20-byte SoA->AoS vertex-header REPACK. DR… |
 | 0x80084D10 | LIVE | `Math::rotX` | game/math/gte_math.cpp:291 |  |  |
 | 0x80084EB0 | LIVE | `Math::rotY` | game/math/gte_math.cpp:290 |  |  |
 | 0x80085050 | LIVE | `Math::rotZ` | game/math/gte_math.cpp:289 |  |  |
@@ -601,9 +602,9 @@ Totals: 618 native fns, 525 owned addresses, 588 LIVE / 30 ORPHAN.
 | 0x8013C538 | LIVE | `beh_scatter_record_dither` | game/ai/beh_scatter_record_dither.cpp:47 |  |  |
 | 0x8013C9C0 | LIVE | `beh_scatter_ramp_machine` | game/ai/beh_scatter_ramp_machine.cpp:46 |  |  |
 | 0x8013DD48 | ORPHAN | `sub8013DD48` | game/ai/beh_a08_scene_actor.cpp:148 | 0x80072DDC | (objAnim, subId) — allocate a spawner obj and hook its handler. |
-| 0x8013FB88 | LIVE | `OverlayGroundGt3Gt4::gt3` | game/render/overlay_ground_gt3gt4.cpp:124 |  | ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as th… |
-| 0x8013FE58 | LIVE | `OverlayGroundGt3Gt4::gt4` | game/render/overlay_ground_gt3gt4.cpp:209 |  | ground/scene POLY_GT4 emit. Record = 44 bytes: {+0 rgb0(rgb1=rgb0<<4)\|… |
-| 0x801401B8 | LIVE | `OverlayGroundGt3Gt4::entityLoop` | game/render/overlay_ground_gt3gt4.cpp:306 |  | the ground-entity render list walker. list=a0: +6 (u8) entry count, +1… |
+| 0x8013FB88 | LIVE | `OverlayGroundGt3Gt4::gt3` | game/render/overlay_ground_gt3gt4.cpp:137 |  | ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as th… |
+| 0x8013FE58 | LIVE | `OverlayGroundGt3Gt4::gt4` | game/render/overlay_ground_gt3gt4.cpp:253 |  | ground/scene POLY_GT4 emit. Record = 44 bytes: {+0 rgb0(rgb1=rgb0<<4)\|… |
+| 0x801401B8 | LIVE | `OverlayGroundGt3Gt4::entityLoop` | game/render/overlay_ground_gt3gt4.cpp:362 |  | the ground-entity render list walker. list=a0: +6 (u8) entry count, +1… |
 | 0x8014047C | LIVE | `ActorZonedAttacker::gateCheck` | game/ai/actor_zoned_attacker.cpp:124 |  | ActorZonedAttacker::gateCheck(c) — FUN_8014047c(node) -> bool v0. A ti… |
 | 0x80140544 | LIVE | `ActorZonedAttacker::typeInit` | game/ai/actor_zoned_attacker.cpp:163 |  | ActorZonedAttacker::typeInit(c) — FUN_80140544(node). One-shot per-typ… |
 | 0x801409C0 | LIVE | `ActorZonedAttacker::pickAttackByRange` | game/ai/actor_zoned_attacker.cpp:228 |  | ActorZonedAttacker::pickAttackByRange(c) — FUN_801409c0(node[, unused … |

@@ -244,6 +244,10 @@ void games_tomba2_init(void) {
   render_walk_dispatch_install();  // FUN_8003C048 render-walk loop ownership (band 0x8003xxxx)
   void overlay_type_dispatch_install();
   overlay_type_dispatch_install();  // FUN_8003D0BC per-area-type overlay dispatch (band 0x8003xxxx)
+  void gpu_dma_queue_install();
+  gpu_dma_queue_install();     // FUN_80082D04/FB4/83364/82424 GPU-DMA completion-queue cluster
+  void gpu_libgpu_leaves_install();
+  gpu_libgpu_leaves_install(); // FUN_80080F6C/81458 DrawSync/ClearOTagR (libgpu GPU-sys jump table)
   if (cfg_dbg("engine"))
     fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
 }
