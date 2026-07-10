@@ -306,10 +306,22 @@ int ScriptInterp::advanceStep(uint32_t obj, uint32_t kindArg) {
 
 int ScriptInterp::callFnptr(uint32_t obj) {
   Core* c = core;
-  // Guest 0x800412CC: `lw v0, 0x74(a0); jalr v0; jr ra` — v0 (the ret code) is EXACTLY what the
-  // fnptr callee left there. Compose the 32-bit fnptr from the two adjacent halfwords (LE order
-  // matches the guest `lw`), route via BehaviorDispatch so any fnptr owned as native `beh_*` runs
-  // native; unowned addresses fall through to rec_dispatch (substrate).
+  // Guest 0x800412CC (gen_func_800412CC, shard_5): NOT frameless — it descends `addiu sp,-24`,
+  // spills ra@+16, loads the fnptr (`lw v0, 0x74(a0)`), sets r31=0x800412E4, jalr, restores.
+  // Skipping that frame ran every op3E callee 24 bytes HIGH on the guest stack, so all its
+  // callees' frame spills landed at shifted addresses (watch-cut f735: A's attach spill missed
+  // 0x801FE8C0 where gen's landed). Mirror the full frame here.
+  const uint32_t traRa = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, traRa);
+  struct TrampFrame {
+    Core* c;
+    ~TrampFrame() { c->r[31] = c->mem_r32(c->r[29] + 16u); c->r[29] += 24u; }
+  } tframe{c};
+  // v0 (the ret code) is EXACTLY what the fnptr callee left there. Compose the 32-bit fnptr from
+  // the two adjacent halfwords (LE order matches the guest `lw`), route via BehaviorDispatch so
+  // any fnptr owned as native `beh_*` runs native; unowned addresses fall through to rec_dispatch
+  // (substrate).
   //
   // RET-CODE PRESERVATION: rec_dispatch sets c->r[2] to the substrate leaf's return, so the
   // substrate path is transparent. Native `beh_*` handlers are `void`-returning, so a native
@@ -318,6 +330,7 @@ int ScriptInterp::callFnptr(uint32_t obj) {
   const uint16_t lo = c->mem_r16(obj + OBJ_FNPTR_LO_74);
   const uint16_t hi = c->mem_r16(obj + OBJ_FNPTR_HI_76);
   const uint32_t fnptr = ((uint32_t)hi << 16) | (uint32_t)lo;
+  c->r[31] = 0x800412E4u;                 // the trampoline's own post-jalr constant, set AFTER the descent
   c->engine.behaviors.dispatchObj(obj, fnptr);
   return (int)c->r[2];
 }
@@ -375,9 +388,11 @@ void ScriptInterp::step(uint32_t obj) {
     if (oid == 0x3Eu) {
       // NATIVE routing for op 0x03E — the "call fnptr" mechanism the script-driven cutscene fade
       // family rides. Any fade fn registered in BehaviorDispatch::kTable runs native transparently.
-      // The gen reaches the callee through the 0x800412CC trampoline (frameless), which leaves
-      // r31 = 0x800412E4 in the callee — arm it so substrate callees spill the same ra byte.
-      c->r[31] = 0x800412E4u;
+      // Gen does NOT special-case 0x3E: the handler table maps it to the 0x800412CC trampoline,
+      // reached via the same `r31 = 0x800410FC` jalr as every other opcode. callFnptr mirrors the
+      // trampoline's real sp-24 frame (spilling THIS 0x800410FC at +16) and arms r31=0x800412E4
+      // for the callee itself.
+      c->r[31] = 0x800410FCu;
       ret = (uint32_t)callFnptr(obj);
     } else {
       // Every OTHER opcode: dispatch to the substrate handler via the resident handler table at

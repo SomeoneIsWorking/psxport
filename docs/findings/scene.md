@@ -487,7 +487,17 @@
   PSXPORT_SBS_WW_FROMFRAME=734` for the write sequences, then `PSXPORT_MIRROR_VERIFY=<suspect>`
   (header now prints entry a0-a3). Repro: PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
   PSXPORT_SBS_WATCH_CUT=1 (headless exits at first div with last-writer map).
-  NARROWED (same session, PREWATCH capture at f733-735): the walkStart writes match on both cores
+  RESOLVED (same session, commit after ce522c4): three probes deep, the cause was the op3E
+  TRAMPOLINE FRAME — gen does not special-case op 0x3E (the handler table maps it to
+  gen_func_800412CC, reached with r31=0x800410FC like every opcode), and that trampoline is NOT
+  frameless: `addiu sp,-24`, spills ra@+16, arms r31=0x800412E4, jalr fnptr. Native callFnptr
+  skipped the frame, so EVERY op3E callee on core A ran 24 bytes high on the guest stack — all
+  their spills landed at shifted addresses (f735: A's attach spill missed 0x801FE8C0). Fixed by
+  mirroring the frame in ScriptInterp::callFnptr (script_interp.cpp) + arming 0x800410FC at the
+  step call site. RESULT: watch-cut leg **0-diff through f57300** (entire cutscene + gameplay
+  horizon; was 3102 divs at leg introduction). Leg promoted into the standard push gate
+  (docs/fleet-workflow.md §2). Probe trail below kept for the method.
+  NARROWED (earlier same session, PREWATCH capture at f733-735): the walkStart writes match on both cores
   (the a3=0x659-vs-0 in the reg dump is mid-body trash, store values equal); the REAL first diff is
   that core B makes a SECOND write A never makes — ov_sop_gen_8010B498 (a tiny standalone snap-pose
   +attach helper: node+46/50/54/86 = 16000/-3888/20149/0x800 then attach(node,0x8001B860,0),
