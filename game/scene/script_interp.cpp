@@ -237,10 +237,31 @@ int ScriptInterp::op34ClaimGate(uint32_t obj) {
 // activation record (not shared/observable state beyond the call) so it is not reproduced.
 int ScriptInterp::advanceStep(uint32_t obj, uint32_t kindArg) {
   Core* c = core;
+  // MIRROR gen_func_80040FA0's own frame (sp-24; r16@+16, ra@+20; r31=0x80040FB4, r16=obj live).
+  // The earlier "not shared/observable beyond the call" claim was wrong: the still-substrate
+  // classifier FUN_80040E54 (and anything it calls) spills relative to THIS frame's sp — without
+  // the descent every downstream spill lands 24 bytes high vs core B (SBS f153, Charles' anim
+  // install chain, 2026-07-10).
+  const uint32_t savedSp = c->r[29];
+  const uint32_t in16 = c->r[16], inRa = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, in16);
+  c->mem_w32(c->r[29] + 20u, inRa);
+  c->r[16] = obj;
+  c->r[31] = 0x80040FB4u;
   c->r[4] = obj;
   c->r[5] = kindArg;
   rec_dispatch(c, 0x80040E54u);  // still-substrate FUN_80040E54 (out of band for this pass)
   const uint32_t ret = c->r[2];
+  // Epilogue restores mirror the gen (registers reloaded from the frame slots).
+  struct Frame {
+    Core* c;
+    ~Frame() {
+      c->r[16] = c->mem_r32(c->r[29] + 16u);
+      c->r[31] = c->mem_r32(c->r[29] + 20u);
+      c->r[29] += 24u;
+    }
+  } frame{c};
   if (ret >= 7u) return -1;      // matches table[3]'s literal -1 (index 3 IS 0x80041080)
   switch (ret) {
     case 0: {  // table[0] = 0x80040FE0
@@ -311,9 +332,41 @@ void beh_script_interp_step(Core* c) {
 void ScriptInterp::step(uint32_t obj) {
   Core* c = core;
   // FUN_80041098 body — the dispatch loop. Runs while obj[+0x70] > 0 (signed).
+  //
+  // GUEST FRAME MIRROR (2026-07-10, SBS f153 — Charles' anim-install chain): gen_func_80041098
+  // descends sp by 40 and spills the incoming s0-s3/ra at +16/+20/+24/+28/+32 BEFORE stepping, and
+  // holds r17=obj, r18=1, r19=handler-table live across the loop. Every substrate op handler (and
+  // its callees, e.g. FUN_80041718 → FUN_80077C40) spills relative to THIS sp with THESE register
+  // values — without the mirror all of core A's downstream stack bytes land 40 high with stale
+  // register contents. r31 is armed per call site with the gen's own return constants.
+  const uint32_t savedSp = c->r[29];
+  const uint32_t in16 = c->r[16], in17 = c->r[17], in18 = c->r[18], in19 = c->r[19];
+  const uint32_t inRa = c->r[31];
+  c->r[29] -= 40u;
+  c->mem_w32(c->r[29] + 20u, in17);
+  c->mem_w32(c->r[29] + 28u, in19);
+  c->mem_w32(c->r[29] + 24u, in18);
+  c->mem_w32(c->r[29] + 32u, inRa);
+  c->mem_w32(c->r[29] + 16u, in16);
+  c->r[17] = obj;
+  c->r[19] = kHandlerTableBase;
+  c->r[18] = 1u;
+  struct Frame {
+    Core* c;
+    ~Frame() {
+      c->r[31] = c->mem_r32(c->r[29] + 32u);
+      c->r[19] = c->mem_r32(c->r[29] + 28u);
+      c->r[18] = c->mem_r32(c->r[29] + 24u);
+      c->r[17] = c->mem_r32(c->r[29] + 20u);
+      c->r[16] = c->mem_r32(c->r[29] + 16u);
+      c->r[29] += 40u;
+    }
+  } frame{c};
+
   for (;;) {
     const int8_t prog = (int8_t)c->mem_r8(obj + OBJ_PROGRESS_70);
-    if (prog <= 0) return;
+    c->r[16] = 0u;                                   // gen: delay slot at the loop-top test
+    if (prog <= 0) { c->r[2] = 0u; return; }         // gen exit path leaves v0 = 0
     const uint32_t scriptPtr = c->mem_r32(obj + OBJ_SCRIPT_PTR);
     const uint16_t opWord = c->mem_r16(scriptPtr + 0);
     const uint32_t oid = (uint32_t)(opWord & OP_ID_MASK);
@@ -322,18 +375,18 @@ void ScriptInterp::step(uint32_t obj) {
     if (oid == 0x3Eu) {
       // NATIVE routing for op 0x03E — the "call fnptr" mechanism the script-driven cutscene fade
       // family rides. Any fade fn registered in BehaviorDispatch::kTable runs native transparently.
+      // The gen reaches the callee through the 0x800412CC trampoline (frameless), which leaves
+      // r31 = 0x800412E4 in the callee — arm it so substrate callees spill the same ra byte.
+      c->r[31] = 0x800412E4u;
       ret = (uint32_t)callFnptr(obj);
     } else {
       // Every OTHER opcode: dispatch to the substrate handler via the resident handler table at
-      // 0x800A3B78. Guest ABI: a0=obj; returns v0. Save/restore sp+ra so any downstream leaf that
-      // reads its own stack args lands cleanly.
+      // 0x800A3B78. Guest ABI: a0=obj; returns v0; handler runs with r31 = 0x800410FC (the gen's
+      // jalr return constant — handlers/callees spill it).
       const uint32_t handler = c->mem_r32(kHandlerTableBase + oid * 4u);
       c->r[4] = obj;
-      const uint32_t sp_save = c->r[29];
-      const uint32_t ra_save = c->r[31];
+      c->r[31] = 0x800410FCu;
       rec_dispatch(c, handler);
-      c->r[29] = sp_save;
-      c->r[31] = ra_save;
       ret = c->r[2];
     }
 
@@ -350,17 +403,21 @@ void ScriptInterp::step(uint32_t obj) {
       case RET_PAUSE: {
         uint8_t f = c->mem_r8(obj + OBJ_FLAGS_71);
         c->mem_w8(obj + OBJ_FLAGS_71, (uint8_t)(f | 0x01u));
+        c->r[2] = 1u;                              // gen pause-exit leaves v0 = 1
         return;
       }
       case RET_ADVANCE_0_A:
       case RET_ADVANCE_0_B: faKind = 0u; break;
       case RET_ADVANCE_1:   faKind = 1u; break;
       default:
-        // ret >= 4: recomp falls through with s0=3 → loop check `s0 == 1` fails → exit.
+        // ret >= 4: recomp falls to the loop check with s0 still 0 → exits with v0 = 0.
+        c->r[2] = 0u;
         return;
     }
+    c->r[31] = 0x80041168u;                        // gen's return constant at the FA0 call site
     const int faRet = advanceEntry(obj, faKind);
-    if (faRet != 1) return;   // any non-1 return exits the loop (matches `beq s0, s2, LOOP`)
+    c->r[16] = (uint32_t)faRet;                    // gen: s0 = FA0 return (live across the loop test)
+    if (faRet != 1) { c->r[2] = 0u; return; }      // any non-1 return exits (matches `beq s0, s2, LOOP`)
   }
 }
 

@@ -417,3 +417,36 @@
 - **refs**: game/core/engine.cpp (objMatrixCompose), game/ai/beh_sop_intro_narration.cpp,
   runtime/recomp/mem.cpp (WWATCH frame/BT/regs), runtime/recomp/hle.cpp (miss-regs/miss-node),
   game/scene/script_interp.cpp (`PSXPORT_DEBUG=script`), docs/config.md.
+
+## Prologue audio + anim divergences: one-byte instrument slip, stale-a3 anim seed, missing guest-frame mirrors (2026-07-10, RESOLVED except font)
+
+- **audio (user-confirmed fixed)**: `AreaSlots::updateTail` action arm passed a2 = slot byte +1 to
+  the note-request leaf FUN_80092660; gen (`gen_func_80075A80`) passes slot byte +2 (`r6 =
+  mem_r8(r16+1)`, r16=slot+1). Every sequencer-routed SFX in the prologue played INSTRUMENT 0x0F
+  instead of 0x01 (wrong sample 0x13D0 vs 0x0202, wrong pitch). Found by diffing per-voice
+  `[spudbg] Vnn start/pitch` streams (extended `debug spu` channel) — after the fix the default
+  config's SPU stream is byte-identical to the oracle through f800.
+- **anim (Charles vertex explosion + Tomba pose)**: `Engine::walkStart` dispatched the anim-attach
+  leaves without a3 — `gen_func_80054D14` passes a3 = subMode, which `gen_func_80077CFC` consumes
+  as the anim PHASE SEED (obj+0x0E = a3+0x1000) and the decoder frame-seek arg. Stale a3 seeked the
+  stream decoder to a garbage frame.
+- **guest-frame mirrors added** (SBS-full WATCH_CUT leg divergences, worked with `sbs diff`/`sbs
+  watch` + abi_extract contracts): ScriptInterp::step (sp-40, live r17=obj/r18=1/r19=table, r31
+  constants 0x800410FC/0x800412E4/0x80041168, v0 on exits), ScriptInterp::advanceStep (sp-24,
+  r16=obj, r31=0x80040FB4), Engine::animTick (sp-24, r16=obj, r31=0x80041920; now routes to
+  Animation::stepFramed), Engine::objMatrixCompose (sp-32 + live r16/r17/r18 + per-site r31),
+  Engine::walkStart (sp-32 + live regs + per-site r31), Engine::animEnvInit (sp-32),
+  Sfx::trigger (ra@+32 spill), sopIntroEffectTick (live r17=node, r16 per gen; r31=0x8010B348).
+- **gate-coverage gap (workflow)**: the standard AUTONAV=combat SBS leg SKIPS the intro cutscene
+  (Start-mashing), so none of these divergences could ever trip it. `PSXPORT_SBS_AUTONAV=1` +
+  `PSXPORT_SBS_WATCH_CUT=1` (cutscene plays out) is the leg that catches them: 3102 divs before
+  these fixes, 922 after — remaining cluster is ONE defect (below).
+- **OPEN — next up**: watch-cut SBS first-div f289 `[packet_pool]`: core A native `Font::glyphEmit`
+  (via Font::drawText, called from the end-of-area text scroller ov_sop_gen_8010C79C) emits a
+  glyph packet that is NOT byte-identical to core B's substrate emitter `gen_func_80078CA8` —
+  prior-packet link differs by 0x60 (extra/missing prim) plus small vertex deltas. Also a f1126
+  stack residual (0x801FE888: A=0x800FB960 B=0x0000000E) — likely another missing mirror in that
+  window. Both reproduce with: `PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1
+  PSXPORT_SBS_WATCH_CUT=1`.
+- **tooling added**: `PSXPORT_SPUBT=<hex SPU reg off>` host backtrace per SPU write; `debug spu`
+  logs per-voice pitch/start; wwatch prints exact gpu frame (see config.md).

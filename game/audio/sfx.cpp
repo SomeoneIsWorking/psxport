@@ -21,6 +21,7 @@ void Sfx::trigger(int id, int pan, int pitchBend) {
   const uint32_t ra_save = c->r[31];
   c->r[29] = sp_save - 40u;
   const uint32_t sp = c->r[29];
+  c->mem_w32(sp + 32u, ra_save);               // gen prologue: sw ra,32(sp) (abi_extract contract)
 
   const uint32_t idb = (uint32_t)(id & 0xFF);
 

@@ -141,6 +141,13 @@ void spu_write(uint32_t addr, uint32_t val)
       else if (off == 0x18C || off == 0x18E) sd.koff_w++;       // KOFF (key-off)
       else if (off == 0x1B0 || off == 0x1B2) sd.cdvol_w++;      // CD input volume L/R
       else if (off == 0x180 || off == 0x182) sd.vol_w++;        // main volume L/R
+      // Per-voice pitch/start-addr writes — with the KON lines these give the full "which sample,
+      // what pitch, when" stream for A/B sequence diffs (docs/config.md `spu` channel).
+      if (off < 0x180) {
+         uint32_t vreg = off & 0xF, vno = off >> 4;
+         if (vreg == 0x4)      fprintf(stderr, "[spudbg] V%02u pitch=%04X\n", vno, val & 0xFFFF);
+         else if (vreg == 0x6) fprintf(stderr, "[spudbg] V%02u start=%04X\n", vno, val & 0xFFFF);
+      }
       if (off == 0x188 || off == 0x18A) fprintf(stderr, "[spudbg] KON off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
       else if (off == 0x18C || off == 0x18E) fprintf(stderr, "[spudbg] KOFF off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
       else if (off == 0x1AA) fprintf(stderr, "[spudbg] SPUCNT=%04X enable=%d cdaudio=%d xfermode=%d (writes=%ld)\n", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
@@ -150,6 +157,19 @@ void spu_write(uint32_t addr, uint32_t val)
       if ((n % 20000) == 0)
          fprintf(stderr, "[spudbg] SUMMARY writes=%ld voice=%ld koff=%ld mainvol=%ld cdvol=%ld\n",
                  n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
+   }
+   // PSXPORT_SPUBT=<hex reg offset> — host backtrace on every write to that SPU register (e.g.
+   // 156 = voice 21 start-addr). Guest-side attribution for SPU writes: wwatch can't see MMIO and
+   // dispwatch misses static gen-to-gen calls; the host stack names the gen_func_*/native chain.
+   {
+      const char* bt = cfg_str("PSXPORT_SPUBT");
+      if (bt && (addr & 0x3FF) == (uint32_t)strtoul(bt, 0, 16)) {
+         extern int backtrace(void**, int);
+         extern void backtrace_symbols_fd(void* const*, int, int);
+         void* frames[32]; int n = backtrace(frames, 32);
+         fprintf(stderr, "[spubt] off=%03X val=%04X\n", addr & 0x3FF, val & 0xFFFF);
+         backtrace_symbols_fd(frames, n, 2); fprintf(stderr, "----\n");
+      }
    }
    SPU_Write(0, addr & 0x3FF, (uint16_t)val);
 }

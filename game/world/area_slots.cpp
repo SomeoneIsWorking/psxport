@@ -49,7 +49,12 @@ void AreaSlots::updateTail() {
       c->mem_w32(sp + 0x1Cu, (uint32_t)c->mem_r8(s0 + 6u));
       c->r[4] = (uint32_t)(int32_t)(int16_t)s2;
       c->r[5] = (uint32_t)(int32_t)hword;
-      c->r[6] = (uint32_t)c->mem_r8(s0);           // slot[2]
+      c->r[6] = (uint32_t)c->mem_r8(s0 + 1u);      // slot byte +2 — gen: `r6 = mem_r8(r16+1)` with
+                                                    // r16 = slot+1. The original `mem_r8(s0)` read
+                                                    // slot byte +1 (one short) and fed the wrong
+                                                    // INSTRUMENT to FUN_80092660 — every sequencer-
+                                                    // routed SFX in the prologue played program 0x0F
+                                                    // instead of 0x01 (wrong sample, wrong pitch).
       c->r[7] = a3;
       rec_dispatch(c, 0x80092660u);
       uint32_t mask = c->mem_r32(0x800BE358u);     // clear bit s2 in the arm-mask

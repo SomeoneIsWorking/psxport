@@ -320,7 +320,10 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
   c->mem_w32(c->r[29] + 24u, savedR31);
 
   const uint32_t node = c->r[4];
+  c->r[17] = node;                                 // gen: r17 = a0 live across the body — callee
+                                                   // prologues (FUN_800519E0 etc.) spill it
   uint8_t state = c->mem_r8(node + 4);
+  c->r[16] = state;                                // gen: r16 = state byte (live)
 
   if (state == 1) {
     c->r[4] = node; rec_dispatch(c, 0x8007778Cu);                // Cull::wrapFrame (still substrate here; result unused)
@@ -342,7 +345,9 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
     (void)c->engine.animTick(node);                                // FUN_8004190C
     c->engine.objMatrixCompose(node);                              // FUN_800518FC
   } else if (state == 0) {
+    c->r[16] = 0x800ECF58u;                                         // gen L_8010B32C: r16 = reloc base (live at the call)
     c->r[4] = node; c->r[5] = 0xCu; c->r[6] = c->mem_r32(0x800ECF98u); c->r[7] = 0x800A4BC8u;
+    c->r[31] = 0x8010B348u;                                         // gen's return constant at this site
     rec_dispatch(c, 0x800519E0u);                                   // GraphicsBind::recordArrayInit (still substrate here)
     if (c->r[2] == 0) {
       c->mem_w32(node + 0x3Cu, c->mem_r32(0x800ECF9Cu));

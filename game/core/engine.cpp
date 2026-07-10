@@ -886,13 +886,32 @@ void Engine::fieldFrame() { Core* c = core;
 //    scratch/decomp/batch_leaves.c ----------------------------------------------------------
 
 // Engine::animEnvInit — FUN_80040CDC.
+// GUEST FRAME MIRROR (abi_extract contract, 2026-07-10): sp-32; r16@+16, r17@+20, ra@+24; live
+// r16=obj, r17=animData; r31=0x80040D14 at the FUN_80040DE0 dispatch.
 void Engine::animEnvInit(uint32_t obj, uint32_t envArg, uint32_t animData) { Core* c = core;
+  const uint32_t in16 = c->r[16], in17 = c->r[17], inRa = c->r[31];
+  c->r[29] -= 32u;
+  c->mem_w32(c->r[29] + 16u, in16);
+  c->mem_w32(c->r[29] + 20u, in17);
+  c->mem_w32(c->r[29] + 24u, inRa);
+  c->r[16] = obj;
+  c->r[17] = animData;
+  struct Frame {
+    Core* c;
+    ~Frame() {
+      c->r[31] = c->mem_r32(c->r[29] + 24u);
+      c->r[17] = c->mem_r32(c->r[29] + 20u);
+      c->r[16] = c->mem_r32(c->r[29] + 16u);
+      c->r[29] += 32u;
+    }
+  } frame{c};
   c->mem_w32(obj + 0x7Cu, envArg);
   c->mem_w8 (obj + 0x46u, 0xFF);
   c->mem_w32(obj + 0x10u, 0);
   c->mem_w8 (obj + 0x70u, 0);
   c->mem_w8 (obj + 0x78u, 0);
-  c->r[4] = obj; c->r[5] = animData; rec_dispatch(c, 0x80040DE0u);   // anim sub-setup (substrate)
+  c->r[4] = obj; c->r[5] = animData; c->r[31] = 0x80040D14u;
+  rec_dispatch(c, 0x80040DE0u);                                      // anim sub-setup (substrate)
   const uint16_t bits = c->mem_r16(animData);                        // *animData (u16)
   uint8_t f71 = 0;
   if (bits & 0x1000) f71 |= 2;
@@ -904,8 +923,21 @@ void Engine::animEnvInit(uint32_t obj, uint32_t envArg, uint32_t animData) { Cor
 // full port of FUN_80076D68 — its 3 frame sub-leaves stay substrate) and stashes its return byte
 // into obj+0x79. Returns 1 (matches recomp v0).
 uint32_t Engine::animTick(uint32_t obj) { Core* c = core;
-  c->engine.animation.step(obj);                                     // native Animation::step
+  // MIRROR gen_func_8004190C's frame (abi_extract contract: sp-24; r16@+16, ra@+20; live r16=obj,
+  // r31=0x80041920 at the FUN_80076D68 call). stepFramed pushes 76D68's own 40-byte frame exactly
+  // like the gen callee does — step() (frameless) left every downstream substrate spill 24+40
+  // bytes high vs core B (SBS watch-cut f218, 2026-07-10).
+  const uint32_t in16 = c->r[16], inRa = c->r[31];
+  c->r[29] -= 24u;
+  c->mem_w32(c->r[29] + 16u, in16);
+  c->mem_w32(c->r[29] + 20u, inRa);
+  c->r[16] = obj;
+  c->r[31] = 0x80041920u;
+  c->engine.animation.stepFramed(obj);                               // native, mirrors 76D68's frame
   c->mem_w8(obj + 0x79u, (uint8_t)c->r[2]);
+  c->r[31] = c->mem_r32(c->r[29] + 20u);
+  c->r[16] = c->mem_r32(c->r[29] + 16u);
+  c->r[29] += 24u;
   c->r[2] = 1;
   return 1;
 }
@@ -923,7 +955,30 @@ void Engine::announcerCue(uint32_t id, uint8_t flag) { Core* c = core;
 }
 
 // Engine::objMatrixCompose — FUN_800518FC.
+// GUEST FRAME MIRROR (2026-07-10, abi_extract contract): sp-32; spills r17@+20, r18@+24, ra@+28,
+// r16@+16 (incoming values); live regs r17=obj, r18=0x1F800020, r16=0x1F800000 then obj+152, and
+// the gen's r31 return constants at each leaf call. The substrate leaves spill THESE registers
+// relative to THIS sp — unframed, all of it landed 32 bytes high vs core B.
 void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
+  const uint32_t in16 = c->r[16], in17 = c->r[17], in18 = c->r[18], inRa = c->r[31];
+  c->r[29] -= 32u;
+  c->mem_w32(c->r[29] + 20u, in17);
+  c->mem_w32(c->r[29] + 24u, in18);
+  c->mem_w32(c->r[29] + 28u, inRa);
+  c->mem_w32(c->r[29] + 16u, in16);
+  c->r[17] = obj;
+  c->r[18] = 0x1F800020u;
+  c->r[16] = 0x1F800000u;
+  struct Frame {
+    Core* c;
+    ~Frame() {
+      c->r[31] = c->mem_r32(c->r[29] + 28u);
+      c->r[18] = c->mem_r32(c->r[29] + 24u);
+      c->r[17] = c->mem_r32(c->r[29] + 20u);
+      c->r[16] = c->mem_r32(c->r[29] + 16u);
+      c->r[29] += 32u;
+    }
+  } frame{c};
   // scratchpad 0x1F800000..0x1F80001F: SVECTOR-like scale + zeros (rotation identity + zero translation)
   c->mem_w32(0x1F800000u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xB8u));
   c->mem_w32(0x1F800004u, 0);
@@ -933,9 +988,10 @@ void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
   c->mem_w32(0x1F800014u, 0);
   c->mem_w32(0x1F800018u, 0);
   c->mem_w32(0x1F80001Cu, 0);
-  c->r[4] = obj + 0x54u; c->r[5] = 0x1F800020u; rec_dispatch(c, 0x80085480u);   // setvec (substrate)
-  c->r[4] = 0x1F800020u; c->r[5] = 0x1F800000u; c->r[6] = obj + 0x98u; rec_dispatch(c, 0x80084110u);   // matrix-mul (substrate)
-  c->r[4] = obj + 0x98u; c->r[5] = obj + 0x88u; c->r[6] = obj + 0xACu; rec_dispatch(c, 0x80084470u);   // matrix-apply (substrate)
+  c->r[4] = obj + 0x54u; c->r[5] = 0x1F800020u; c->r[31] = 0x8005196Cu; rec_dispatch(c, 0x80085480u);   // setvec (substrate)
+  c->r[16] = obj + 0x98u;                                                        // gen: r16 = r17+152 before the mul
+  c->r[4] = 0x1F800020u; c->r[5] = 0x1F800000u; c->r[6] = obj + 0x98u; c->r[31] = 0x80051980u; rec_dispatch(c, 0x80084110u);   // matrix-mul (substrate)
+  c->r[4] = obj + 0x98u; c->r[5] = obj + 0x88u; c->r[6] = obj + 0xACu; c->r[31] = 0x80051990u; rec_dispatch(c, 0x80084470u);   // matrix-apply (substrate)
   // Bake world position into the translation columns (sign-extended s16 → s32 add).
   c->mem_w32(obj + 0xACu, c->mem_r32(obj + 0xACu) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x2Eu));
   c->mem_w32(obj + 0xB0u, c->mem_r32(obj + 0xB0u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x32u));
@@ -945,6 +1001,7 @@ void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
   // "bone pointer" slots land in the NEIGHBOR node — matMul then zeroed SOP script data at
   // 0x8010CAD8 (prologue-vortex cause #3, 2026-07-10).
   c->r[4] = obj;
+  c->r[31] = 0x800519C8u;
   rec_dispatch(c, 0x80051128u);                                       // finalize (substrate)
 }
 
@@ -952,11 +1009,38 @@ void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
 uint32_t Engine::walkStart(uint32_t obj, uint32_t mode, int16_t subMode) { Core* c = core;
   const uint8_t cur = c->mem_r8(obj + 0x46u);
   if ((uint32_t)cur == (mode & 0xFFu)) { c->r[2] = 0; return 0; }
+  // GUEST FRAME MIRROR (2026-07-10, abi_extract contract): gen_func_80054D14 = sp-32; spills
+  // r16@+16, r17@+20, r18@+24, ra@+28; live r16=obj, r17=mode, r18=subMode; r31 constants per
+  // call site. The gen spills BEFORE the early-exit test too, but the early exit above performs
+  // no calls, so mirroring from here keeps every observable spill byte identical.
+  const uint32_t in16 = c->r[16], in17 = c->r[17], in18 = c->r[18], inRa = c->r[31];
+  c->r[29] -= 32u;
+  c->mem_w32(c->r[29] + 16u, in16);
+  c->mem_w32(c->r[29] + 20u, in17);
+  c->mem_w32(c->r[29] + 24u, in18);
+  c->mem_w32(c->r[29] + 28u, inRa);
+  c->r[16] = obj; c->r[17] = mode; c->r[18] = (uint32_t)(int32_t)subMode;
+  struct Frame {
+    Core* c;
+    ~Frame() {
+      c->r[31] = c->mem_r32(c->r[29] + 28u);
+      c->r[18] = c->mem_r32(c->r[29] + 24u);
+      c->r[17] = c->mem_r32(c->r[29] + 20u);
+      c->r[16] = c->mem_r32(c->r[29] + 16u);
+      c->r[29] += 32u;
+    }
+  } frame{c};
   c->mem_w8(obj + 0x46u, (uint8_t)mode);
-  c->r[4] = obj; c->r[5] = mode; rec_dispatch(c, 0x80054790u);        // pre-hook (substrate)
-  const uint32_t leaf = (subMode == 0) ? 0x80077C40u : 0x80077CFCu;   // anim-attach variants (substrate)
+  c->r[4] = obj; c->r[5] = mode; c->r[31] = 0x80054D58u;
+  rec_dispatch(c, 0x80054790u);                                       // pre-hook (substrate)
+  // gen_func_80054D14 passes FOUR args: a3 = subMode (sext16). gen_func_80077CFC consumes it as
+  // the anim PHASE SEED (obj+0x0E = a3 + 0x1000) and as the frame-seek arg for the stream decoder
+  // (FUN_80075FF8/75F0C a2). Leaving a3 stale seeked the decoder to a garbage frame — Tomba's
+  // wrong walk pose + Charles' narration-scene vertex explosion (2026-07-10).
   c->r[4] = obj; c->r[5] = 0x80017FE8u; c->r[6] = mode;
-  rec_dispatch(c, leaf);
+  c->r[7] = (uint32_t)(int32_t)subMode;
+  if (subMode == 0) { c->r[31] = 0x80054D78u; rec_dispatch(c, 0x80077C40u); }
+  else              { c->r[31] = 0x80054D90u; rec_dispatch(c, 0x80077CFCu); }
   c->r[2] = 1;
   return 1;
 }
