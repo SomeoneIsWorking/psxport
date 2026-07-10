@@ -30,6 +30,50 @@
 - **refs:** `scratch/screenshots/hut/` (cmp_grid, nudge_grid, back_grid, cmd_w0), `game/render/
   perobj_dispatch.cpp`, `docs/engine_re.md` "Area WARP / DOOR RECORD".
 
+## fps60 redesigned as TRUE per-object interpolation (2026-07-10, RESOLVED)
+
+- **symptom (USER)**: the 60fps tier "looks like a hack, especially how the billboards move; many things
+  are jittery." The old `game/render/fps60.cpp` was a post-hoc SCREEN-SPACE layer: it snapshotted the
+  resolved `RqItem` render-queue prims, matched them across frames by a material fingerprint, reprojected
+  mesh SCREEN verts at a crude packed-CR midpoint, screen-translated billboards by an anchor delta, and
+  per-tile-shifted backdrop tiles. Billboards translated in screen space (wrong perspective); terrain +
+  backdrop juddered because they SNAPPED to frame B while meshes interpolated.
+- **fix — interpolate at the OBJECT level, render the in-between through the REAL native pipeline**:
+  - Each logic frame the native scene render CAPTURES, host-side, every object's WORLD transform (rotation
+    matrix + position, keyed by render-command ptr `cmd`) and the scene CAMERA (view R/T + OFX/OFY/H), plus
+    the backdrop scroll and each billboard's WORLD anchor (node+46/50/54). All guest READS.
+  - The mid-present RE-RUNS `Render::sceneNative()` (read-only, `DisplayPassGuard`) with a MIDPOINT provider
+    armed (`Fps60::mInterp`): the camera choke `Fps60::sceneCam` (routed through `projComposeCore` /
+    `projComposeCamera` / `native_terrain`), the object choke `Fps60::objXform` (in `projComposeObject`),
+    and `Fps60::bgScroll` (backdrop) all return the `(prev,cur)` t=0.5 lerp instead of the raw guest value.
+    Terrain, scene-table, meshes AND backdrop therefore pan through the SAME interpolated camera the real
+    projection uses — no screen-space reproject, no per-layer judder.
+  - Billboards (guest OT 2D quads, not produced by sceneNative) are re-emitted from the captured queue and
+    re-anchored by projecting their WORLD anchor through the real projection at the interpolated world
+    position + interpolated camera (`projWorld` = `view = Rcam·w + Tcam`, same math as `native_terrain`).
+  - `RqItem` tagged `fps_scene` (armed around `sceneNative()` in `drawOTag`): the mid-present rebuilds the
+    `fps_scene=1` prims fresh and re-emits the `fps_scene=0` (2D/HUD/billboard) prims.
+  - Retired: the whole screen-space matcher (`build_lerp`, `fps60_reproject{,_anchor}`, `fps60_compose_mid`,
+    the SXY→obj grid, `XObj` capture, `stampWorld{,Cr}`, the backdrop median, the `fps_cr`/`fps_mv`/
+    `fps_world`/`current_object`/`fps_cur_key` members). Kept: the logic-rate detector.
+- **billboard registry timing bug (also RESOLVED)**: `Fps60::mBbCur` (the OT-node→entity span map the OT
+  walk uses to re-anchor billboards) was reset lazily at `RenderQueue::push()`'s first per-frame push —
+  which is inside `drawOTag`, AFTER `fieldFrame`'s substrate render already recorded the spans (in
+  `pcSched.step`). The reset wiped that frame's billboards before the OT walk could stamp them, so
+  `bb moved=0` (billboards never re-anchored). Moved the reset to the top of `Engine::frameUpdate` (the
+  true frame boundary, before `fieldFrame` records) → `bb moved≈570/frame`.
+- **verification**: build OK; `PSXPORT_SETTINGS=…fps60=1` field free-roam →
+  `tools/preseq_flicker.py scratch/screenshots/preseq_new` PASS (0/4 bands, alt-frac=0.00 — no 30Hz
+  oscillation); consecutive frames show the purple gem + black item-ball billboards translating smoothly.
+  SBS-full both legs 0-diff (fps60 off → the camera/object choke reads are byte-identical to the old inline
+  reads; every capture is a host-only guest read). `bb moved=574 kept=115 snapped=0`, objs=438/frame.
+- **DEAD END avoided**: NOT "write interpolated transforms into guest objects and restore" (violates the
+  READ-ONLY OVERLAY invariant + races SBS). The provider is a host-side override consulted by the native
+  projection during the interp pass; guest RAM is never written (DisplayPassGuard-gated).
+- **note**: `proj_native_xform_cr` (runtime/recomp/gte_beetle.cpp) is now dead (was the old CR-midpoint
+  reprojector) — left in place, harmless; remove on a future gte_beetle pass.
+- **refs**: game/render/fps60.{h,cpp}, projection.cpp, native_terrain.cpp, render_walk.cpp,
+  render_queue.{h,cpp}, submit.cpp, game_tomba2.cpp (drawOTag mSceneTag + frameUpdate bbFrameReset).
 
 ## perobj_billboard cluster (C2D4/C464/C8F4) — BUF base + register-faithfulness (2026-07-09, RESOLVED)
 

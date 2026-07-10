@@ -68,6 +68,11 @@ void rec_dispatch(Core*, uint32_t);  // hybrid call: recomp body if emitted, els
 // used to attach). NOT an override anymore; not static so native_boot can call it top-down.
 void Engine::frameUpdate() {
   Core* c = this->core;
+  // Reset the fps60/objid billboard registry at the true frame boundary — BEFORE fieldFrame's substrate
+  // render (in the scheduler step below) records this frame's billboard spans, and before drawOTag's OT
+  // walk stamps them. (Was reset lazily at drawOTag's first rq push, which is AFTER fieldFrame recorded —
+  // wiping the spans before the OT walk could use them; billboards were never re-anchored.)
+  c->game->fps60.bbFrameReset();
   c->game->perf.phaseBegin(0);                               // perf: LOGIC = all guest interpreter work + render submit
   rec_dispatch(c, 0x800788ACu);                      // real per-frame state update (still-PSX leaf)
   c->game->perf.phaseEnd(0);
@@ -176,6 +181,13 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
   // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
   bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
+  // fps60 TRUE per-object tier: did the native scene render run this frame? The 60fps mid-present re-runs
+  // sceneNative for the in-between only when it built THIS frame (field). Also arm mSceneTag around each
+  // sceneNative() call so the prims it queues are tagged fps_scene=1 (rebuilt at midpoint) vs the OT-walk's
+  // 2D/HUD/billboard prims (fps_scene=0, re-emitted). Fps60::sceneNativeTag RAII sets/clears it.
+  bool sceneRan = false;
+  struct SceneTagArm { Core* c; SceneTagArm(Core* c_):c(c_){ c->game->fps60.mSceneTag = true; }
+                       ~SceneTagArm(){ c->game->fps60.mSceneTag = false; } };
   // FAIL-FAST guard (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): arm DisplayPassGuard around
   // pc_render's OWN picture-producing calls only — sceneNative() + the native OT/queue draw below —
   // never around the substrate orchestrator (Render::frame/frameX are called elsewhere and legitimately
@@ -194,11 +206,11 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
     // running ov_scene_native there draws a stale field/sea behind the swirl (the original bug-2). Gate the
     // native 3D render off only for the void — the SOP scene byte is the game's per-beat state, not a magic
     // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
-    if (c->mem_r8(0x800BF9B4u) != 5) { c->mRender->sceneNative(); }
+    if (c->mem_r8(0x800BF9B4u) != 5) { SceneTagArm t(c); c->mRender->sceneNative(); sceneRan = true; }
     gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);   // full walk incl. cutscene fills/effect quads
   } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
     DisplayPassGuard displayPass(c->mRender->mode);
-    c->mRender->sceneNative();
+    { SceneTagArm t(c); c->mRender->sceneNative(); sceneRan = true; }
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
     // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,
     // HUD. Enumerate the OT in 2D-overlay-only mode so those 2D prims are queued as RQ_HUD on top of
@@ -218,6 +230,8 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // pass is never invoked and the PSX-vanilla path is the only renderer. Emitted before rq_flush so its
   // world quads drain with this frame.
   if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
+  // fps60: record whether the native scene render ran this frame (gates the mid-present scene rebuild).
+  c->game->fps60.mSceneRan = sceneRan;
   c->game->rq.flush(c);
 }
 

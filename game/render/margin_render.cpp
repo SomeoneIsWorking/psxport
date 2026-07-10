@@ -166,9 +166,7 @@ void MarginRenderer::flush(Core* c) {
       c->mRender->projSetActive(&w);
       uint32_t otbase = otbase_ptr;
       if ((c->mem_r8(node + 0xD) & 0xF) == 4) otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
-      c->game->fps60.fps_cur_key = cmd;
       c->mRender->gt3gt4(geomblk, otbase);           // fully-native GT3/GT4 submit — no guest writes
-      c->game->fps60.fps_cur_key = 0;
       c->mRender->projClearActive();
     }
   }

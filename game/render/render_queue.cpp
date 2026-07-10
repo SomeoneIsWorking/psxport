@@ -196,12 +196,11 @@ int rq_active(void) { return 1; }
 void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
 
 RqItem* RenderQueue::push() {
-  if (consumed) {
-    reset();
-    // Per-Core billboard-registry reset (was file-scope fps60_bb_frame_reset → shared across SBS cores).
-    // Reach THIS core's Fps60 via the RenderQueue's back-pointer to Game.
-    if (game) game->fps60.bbFrameReset();
-  }
+  if (consumed) reset();
+  // NOTE: the fps60/objid billboard registry (Fps60::mBbCur) is NOT reset here. It is populated during
+  // fieldFrame's substrate render (recordBillboardSpan, in pcSched.step) which runs BEFORE drawOTag's
+  // first push — resetting it here wiped that frame's billboards before the OT walk could stamp them. It
+  // is now reset once per frame at the top of Engine::frameUpdate (before fieldFrame records).
   if (n >= RQ_MAX) {
     // FAIL-FAST (user 2026-06-30): never silently drop prims. RQ_MAX already covers the real worst-case
     // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
@@ -221,29 +220,21 @@ RqItem* RenderQueue::push() {
 
 void RenderQueue::mark_consumed() { if (n) consumed = 1; }
 
-void RenderQueue::flush(Core* core) {
-  if (n && objid_on()) objidOverlay(core);   // debug: label each object with its engine ID
-  // Engine-decided order: layer low->high, submission order within a layer. stable_sort keeps the
-  // within-layer submission order exactly (matters for semi-transparent blending). The D32 depth buffer
-  // does fine-grained occlusion inside RQ_WORLD regardless of this order.
+// Engine-decided order: layer low->high, submission order within a layer. stable_sort keeps the within-
+// layer submission order exactly (matters for semi-transparent blending). The D32 depth buffer does fine-
+// grained occlusion inside RQ_WORLD regardless. Kept as its own method so the fps60 mid-present (which
+// builds a fresh queue by re-running sceneNative + re-appending non-scene prims) sorts identically.
+// NOTE (coplanar z-fight follow-up): a secondary tie-break key can layer on top of the (layer,seq) sort
+// here — keep this comparator the single sort authority so it has one place to extend.
+void RenderQueue::sortQueue() {
   if (n) std::stable_sort(items, items + n, [](const RqItem& a, const RqItem& b) {
     return a.layer != b.layer ? a.layer < b.layer : a.seq < b.seq;
   });
-  // fps60: the interpolated-60fps tier OWNS presentation — it needs to emit this frame TWICE (the lerped
-  // in-between, then the real frame), so it must hold the items rather than have flush emit them now.
-  // Snapshot the sorted queue to it and skip the inline emit; fps60_present_vk emits + presents both.
-  // BUT only when this core actually presents per-frame: under diff_mode (the SBS dual-core compare) the
-  // per-core present is suppressed (ov_frame_update early-returns on diff_mode), so fps60_present_vk NEVER
-  // runs — capturing here would leave the captured queue undrawn and the geometry batch EMPTY, which is
-  // exactly why the SBS panes rendered black (worldquads queued, batch tex=0). In diff_mode the SBS
-  // composite reads the geometry batch directly via gpu_gpu_render_readback, so the flush MUST do the
-  // inline emit to fill that batch. Gate the fps60 capture on !diff_mode.
-  if (g_mods.fps60 && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+}
+
+void RenderQueue::emitQueue(Core* core) {
   if (!n) { mark_consumed(); return; }
   // `debug rqhist` (diag): per-frame histogram of what the queue actually emits, by layer × opaque/semi.
-  // Answers "the native field shows only sky/sea — is the LAND geometry even being queued as opaque world
-  // prims?" without depending on shader paint behavior (PAINTWORLD's mode=3 is unreliable through the
-  // textured pipe). bg=RQ_BACKGROUND world=RQ_WORLD ovl=RQ_OVERLAY hud=RQ_HUD. (diag, 2026-06-26; render.md OPEN #1)
   if (cfg_dbg("rqhist")) {
     int c[4][2] = {{0,0},{0,0},{0,0},{0,0}};
     for (int i = 0; i < n; i++) { int L = items[i].layer & 3, sm = items[i].semi ? 1 : 0; c[L][sm]++; }
@@ -253,6 +244,19 @@ void RenderQueue::flush(Core* core) {
   }
   for (int i = 0; i < n; i++) emitItem(core, &items[i]);
   mark_consumed();
+}
+
+void RenderQueue::flush(Core* core) {
+  if (n && objid_on()) objidOverlay(core);   // debug: label each object with its engine ID
+  sortQueue();
+  // fps60: the interpolated-60fps tier OWNS presentation — it re-runs the scene render for the in-between
+  // and re-emits the captured non-scene prims, then presents this frame (Fps60::present_vk). So it must
+  // HOLD the sorted queue rather than have flush emit it now. Only when this core actually presents
+  // per-frame: under diff_mode (SBS dual-core compare) per-core present is suppressed, so present_vk never
+  // runs — capturing would leave the geometry batch empty (black SBS panes). In diff_mode the SBS composite
+  // reads the geometry batch directly, so flush MUST inline-emit. Gate the fps60 capture on !diff_mode.
+  if (g_mods.fps60 && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  emitQueue(core);
 }
 
 // ---- Native render-queue EMISSION (moved from gpu_native.cpp, 2026-07 restructure): the engine's OWN
@@ -380,7 +384,13 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
-  it.fps_world = 0;   // fps60 capture: cleared here, set only by Fps60::stampWorld on GTE-composed world prims
+  // fps60 TRUE per-object tier: tag prims produced by the read-only native scene render (armed around
+  // sceneNative() in Engine::drawOTag) so the mid-present can rebuild them at the interpolated transform
+  // and re-emit only the OT-walk (2D/HUD/billboard) prims. Billboard identity/anchor set later by
+  // Fps60::stampBillboard. When fps60 is off mSceneTag is always false — pure host state, no diff effect.
+  it.fps_scene = core->game->fps60.mSceneTag ? 1 : 0;
+  it.fps_anchor = 0; it.fps_key = 0;
+  it.fps_wpos[0] = it.fps_wpos[1] = it.fps_wpos[2] = 0.0f;
   // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.

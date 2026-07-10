@@ -49,33 +49,23 @@ struct RqItem {
   int      da_x0, da_y0, da_x1, da_y1;                // draw-area clip
   int      tp_blend;                                  // semi blend mode
 
-  // ---- fps60 reprojection capture (host-only; never guest RAM, does not affect a lockstep diff) ----
-  // Captured at native GTE projection (Fps60::stampWorld) so the interpolated-60fps tier can recompose +
-  // reproject this prim's verts at the A/B midpoint WITHOUT re-running any guest/interpreted render code
-  // (the actor-transform layer the user mandated — engine/fps60.cpp). Only the GTE-composed world path
-  // (proj_native_xform) fills these; terrain/2D/HUD leave fps_world=0 and snap.
-  uint8_t  fps_world;      // 1 = world prim with valid reprojection capture below (native mesh OR billboard)
-  // 3D-POSITIONED 2D QUAD (billboard) capture (host-only). Collectable/overlay billboard quads are
-  // screen-aligned 2D quads anchored at a 3D WORLD point — they are NOT projections of model verts, so
-  // they cannot be per-vertex reprojected like a mesh. They reach the render queue at the DEFERRED OT walk
-  // (gpu_native.cpp) as RQ_WORLD/RQ_OM_DEPTH items with NO sub-pixel float XY (has_xyf==0), inheriting the
-  // object's PC-native world-position view-Z via obj_depth_lookup. They are tagged AT QUEUE TIME, in the OT
-  // walk: submit.cpp recorded each object's packet-pool SPAN + identity + composed transform
-  // (Fps60::recordBillboardSpan), and the OT walk — which knows the source OT-node — calls
-  // Fps60::stampBillboard, which looks the node up in that span registry (Fps60::billboardForNode) and sets
-  // fps_world=1, fps_anchor=1, fps_key = the object identity, fps_cr = the composed camera×object transform,
-  // fps_mv[0] = the object origin (= the WORLD-POSITION anchor; CR5-7 is its view-space pos). build_lerp then
-  // reprojects the ANCHOR at the A/B-midpoint camera and TRANSLATES the whole 2D quad by (anchor_mid -
-  // anchor_B), so the billboard pans/moves smoothly instead of snapping to camera-B. The cross-frame match
-  // is keyed on the object IDENTITY (fps_key), not a fragile depth-ord reverse-match.
-  uint8_t  fps_anchor;     // 1 = 3D-positioned 2D quad: translate by the anchor's midpoint screen delta
-  uint32_t fps_key;        // cross-frame ACTOR identity (cmd ptr from submit_perobj_flush; 0 = snap)
+  // ---- fps60 TRUE per-object interpolation (host-only; never guest RAM, no lockstep-diff effect) ----
+  // fps_scene: 1 = this prim was produced by the READ-ONLY native scene render (Render::sceneNative:
+  //   terrain / per-object meshes / backdrop), armed via Fps60::mSceneTag around the sceneNative() call in
+  //   Engine::drawOTag. 0 = an OT-walk prim (2D / HUD / billboard). The mid-present REBUILDS the fps_scene
+  //   prims fresh at the interpolated transform (re-running sceneNative) and RE-EMITS the fps_scene=0 prims.
+  uint8_t  fps_scene;
+  // 3D-POSITIONED 2D QUAD (billboard): a screen-aligned sprite anchored at a 3D WORLD point, emitted by the
+  // guest into the OT and picked up at the deferred OT walk (gpu_native.cpp) as an RQ_WORLD/RQ_OM_DEPTH
+  // item. It is NOT a projection of model verts, so it cannot be per-vertex re-projected like a mesh; the
+  // OT walk stamps it (Fps60::stampBillboard) with its object IDENTITY (fps_key) + captured WORLD anchor
+  // position (fps_wpos, from node+46/50/54). The mid-present re-projects that anchor through the real
+  // projection at the interpolated (prev,cur) world position + interpolated camera and translates the quad.
+  uint8_t  fps_anchor;     // 1 = 3D-positioned 2D quad (billboard): re-project the world anchor at midpoint
+  uint32_t fps_key;        // cross-frame billboard identity (object node ptr; 0 = not a tracked billboard)
+  float    fps_wpos[3];    // billboard object WORLD position (node+46/50/54) — the anchor to project
   uint32_t dbg_node;       // DEBUG (objid overlay): the per-instance ENTITY NODE ptr this prim belongs to
                            // (0 = unknown). Its model id (node+0xe & 0x3fff) is the GAME object id we display.
-  uint32_t fps_cr[11];     // projection state at draw: [0..7]=composed CR0-7 (rot CR0-4, trans CR5-7),
-                           // [8]=CR24 OFX, [9]=CR25 OFY, [10]=CR26 H — proj_native_xform reads all of these.
-  int16_t  fps_mv[4][3];   // per-vertex MODEL-space coords = the input to proj_native_xform
-  int16_t  fps_offx, fps_offy;  // draw offset baked into xs/ys (so a reproject reproduces them exactly)
 
   // ---- dynamic-shadow capture (host-only) ----------------------------------------------------------
   // Opaque world prims cast into the shadow map. The shadow GEOMETRY is part of THE FRAME (the queue),
@@ -105,7 +95,9 @@ struct RenderQueue {
   int      consumed = 1;   // start consumed so the first push begins a clean frame
   void     reset();
   RqItem*  push();         // NULL on overflow (reserves a slot; lazy per-frame reset)
-  void     flush(Core* core);   // sort by (layer, seq), emit each, mark consumed
+  void     flush(Core* core);   // sort by (layer, seq), then capture (fps60) OR emit each, mark consumed
+  void     sortQueue();    // stable_sort items by (layer, seq) — the engine draw order (fps60 mid-present)
+  void     emitQueue(Core* core);   // emit each item to the VK rasterizer + mark consumed (no sort)
   void     mark_consumed();
 
   // push2dQuad: enqueue a 2D textured quad (HUD / overlay / background) into the render queue so it is

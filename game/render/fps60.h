@@ -1,120 +1,101 @@
 // game/render/fps60.h — the interpolated-60fps tier's per-instance state (fps60.cpp).
 //
-// De-globalization (2026-06-19): fps60.cpp's RTP-tap capture buffers, the render-queue snapshots and
-// the rate detector live on an `Fps60` instance owned by Game (game.h), reached via core->game->
-// fps60. All external touching functions ARE methods of Fps60; callers reach them directly as `c->game->fps60.rtp(op)` etc. — no free-function
-// wrappers. The whole tier is RENDER-SIDE (never writes guest RAM) and gated behind PSXPORT_FPS60.
+// TRUE PER-OBJECT interpolation (redesign 2026-07-10, user directive). The old tier was a post-hoc
+// SCREEN-SPACE layer: it snapshotted the resolved render-queue prims, matched them across frames by a
+// material fingerprint, and reprojected/translated the SCREEN verts at a crude packed-CR midpoint. It
+// "looked like a hack" (billboards translated in screen space; terrain/backdrop juddered). That whole
+// matcher is retired.
 //
-// STAYS SHARED (not here): the config-caches s_disp_gate/s_ocen_gate/s_sdbg + the live UI gate
-// g_mods.fps60 (the overlay-edited persistent user setting) + function-local diag statics.
+// The new tier interpolates at the OBJECT level and renders the in-between frame THROUGH THE REAL NATIVE
+// SCENE RENDER (Render::sceneNative + the float projection path). Each logic frame the native render path
+// captures, host-side, every object's WORLD transform (rotation matrix + position) and the scene CAMERA
+// (view rotation + translation + projection constants) — the exact inputs the float projection consumes.
+// For the mid-present, sceneNative is re-run with a MIDPOINT-transform provider armed: projComposeObject /
+// terrain / backdrop consult this class and receive the t=0.5 lerp of (prev frame, this frame) instead of
+// the raw guest value, so camera pan + object motion are reproduced perspective-correctly by the SAME
+// projection that draws the real frame — no screen-space reproject. Billboards (guest-emitted 2D quads
+// that reach the queue at the OT walk, not via sceneNative) carry their captured WORLD anchor position and
+// are re-projected through the real projection at the interpolated anchor + interpolated camera.
+//
+// HOST-ONLY (the READ-ONLY OVERLAY invariant): every capture is a guest READ; every store is host memory;
+// the mid-present re-runs sceneNative under a DisplayPassGuard so any stray guest write fails fast. When
+// g_mods.fps60 is off, none of this arms and the 30fps path is byte-identical.
+//
+// De-globalization (2026-06-19): all state lives on this Fps60 instance owned by Game (game.h), reached
+// via core->game->fps60; every touching function is a method (callers use c->game->fps60.method(...)).
 #ifndef GAME_RENDER_FPS60_H
 #define GAME_RENDER_FPS60_H
 #include <stdint.h>
+#include <unordered_map>
 
 struct Core;
+struct RqItem;
 
-#define GW 1024
-#define GH 512
-#define XOBJ_MAX 1024
-#define XV_MAX   80000
+// logic-rate detector (validated lrate_proto): votes on the number of frames each projected-geometry
+// fingerprint is HELD, so the tier knows how many in-betweens to synthesize (Tomba2 logic = 30fps → 1).
+typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long changes; } RateDet;
 
-// A GTE transform group (camera+model), identified across frames by its local-vertex fingerprint.
-typedef struct {
-  uint32_t r0, r1, r2, r3, r4;     // rotation matrix, GTE control regs CR0..4 (packed int16 pairs)
-  int32_t  trx, try_, trz;         // translation, CR5..7
-  uint64_t fp;                     // local-vertex fingerprint = cross-frame identity
-  long     nrtps;                  // RTPS/RTPT count (object size)
-  int      v0, nv;                 // range [v0,v0+nv) into the per-frame local-vertex pool
-} XObj;
-
-typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long changes; } RateDet;  // logic-rate detector
-
-// ---- Fps60 — the 60fps tier's per-instance render-interp state + methods --------------------
+// ---- Fps60 — the 60fps tier's per-instance interpolation state + methods ------------------------------
 struct Fps60 {
-  // object tag (was the cross-TU global g_current_object): the object whose RTP ops are being tagged
-  uint32_t current_object = 0;
+  // ---- logic-rate detector (kept) --------------------------------------------------------------------
+  uint64_t mFrameHash = 1469598103934665603ull;   // per-frame projected-geometry fingerprint (rate input)
+  long     mFrameGeom = 0;                          // #verts folded this frame (0 => idle frame)
+  long     mFence     = 0;                          // logic-frame counter
+  RateDet  mRd = { 0, 0, 2, {}, 0 };
+  void fold(uint32_t v);                            // fold a projected SXY into the frame fingerprint
+  void rtp(uint32_t op);                            // gte RTP tap (fps60 gate) → fold the new SXY(s)
+  void frame_commit(Core* core);                    // per-logic-frame fence + present orchestration
 
-  // fps60 actor key: the per-object render command (cmd ptr) whose world quads are CURRENTLY being
-  // submitted (set by submit_perobj_flush around native_dispatch). Stamped onto each captured world
-  // RqItem (fps_key) so the 60fps tier can match an actor's prims across frames and reproject them at
-  // the A/B transform midpoint. 0 = no actor context (the prim snaps).
-  uint32_t fps_cur_key = 0;
+  // ---- transform capture / midpoint provider ---------------------------------------------------------
+  // mSceneTag: armed around sceneNative() in Engine::drawOTag so every prim sceneNative queues is tagged
+  //   fps_scene=1 (terrain/meshes/backdrop). OT-walk prims (2D/HUD/billboards) stay fps_scene=0. The
+  //   mid-present rebuilds the fps_scene items fresh (interpolated) and re-emits the fps_scene=0 ones.
+  // mInterp: true only while the mid-present re-runs sceneNative — the provider returns midpoint values.
+  bool  mSceneTag = false;
+  bool  mInterp   = false;
+  bool  mSceneRan = false;      // did sceneNative run this frame (field)? gates the mid-present rebuild
+  float mT        = 0.5f;       // in-between parameter (t=0.5 for one midpoint at 30→60fps)
 
-  // per-frame projected-geometry fingerprint (rate-detector input)
-  uint64_t mFrameHash = 1469598103934665603ull;
-  long     mFrameGeom = 0;
-  long     mFence = 0;
+  struct Cam    { float R[3][3]; float T[3]; float ofx, ofy, H; bool valid = false; };  // R in true (/4096) scale
+  struct ObjX   { float R[3][3]; float T[3]; };                                          // R,T in raw int16 units
+  struct Scroll { int x, y; bool valid = false; };                                       // backdrop tile scroll
+  Cam mCamCur, mCamPrev;
+  Scroll mScrollCur, mScrollPrev;
+  std::unordered_map<uint32_t, ObjX> mObjCur, mObjPrev;   // per render-command (cmd ptr) object transform
 
-  // SXY -> object-id grid (the join), epoch-stamped
-  uint32_t mObjGrid[GW * GH] = {};
-  uint32_t mObjStamp[GW * GH] = {};
-  uint32_t mEpoch = 0;
-  long     mJoinHit = 0, mJoinMiss = 0;
+  void beginCapture();          // clear this-frame captures (called at sceneNative top)
+  // Scene camera read choke: fills R(int16 units)/T/ofx/ofy/H from the scratchpad view matrix; captures it,
+  // and — if the mid-present is armed and a previous camera exists — overwrites with the t midpoint.
+  void sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy, float& H);
+  // Object transform choke: R/T are the object's raw world rotation/position the caller just read from the
+  // render command. Captured under `cmd`; on the mid-present, overwritten with the (prev,cur) t midpoint.
+  void objXform(uint32_t cmd, float R[3][3], float T[3]);
+  // Backdrop scroll choke: sx/sy are the tilemap scroll the backdrop drawer just read. Captured; on the
+  // mid-present, overwritten with the (prev,cur) t midpoint so the parallax backdrop pans with the world.
+  void bgScroll(int& sx, int& sy);
 
-  // native graphical objects (GTE transform groups) + per-frame local-vertex pool
-  XObj  mXa[XOBJ_MAX] = {}, mXb[XOBJ_MAX] = {};
-  XObj* mXA = mXa;          // previous frame's objects
-  XObj* mXB = mXb;          // current frame's objects (capturing)
-  int   mNxA = 0, mNxB = 0;
-  int   mXbStarted = 0;
-  int16_t mLvx[XV_MAX] = {}, mLvy[XV_MAX] = {}, mLvz[XV_MAX] = {};
-  int32_t mOsxy[XV_MAX] = {};
-  int   mNv = 0;
-  uint32_t mRtpsInsn = 0x00080001;
-
-  // diag: how many RTPS carry an object context (were non-static file-scope globals; fps60-local)
-  long mRtpCalls = 0, mRtpWithObj = 0;
-
-  // logic-rate detector
-  RateDet mRd = { 0, 0, 2, {}, 0 };
-
-  // ---- VK queue-snapshot interpolation (the real 60fps path) ----
-  // Snapshot the engine render queue (whole frame: world + 2D) each logic frame; interpolate matched
-  // world prims to the A/B midpoint and render the in-between THROUGH VK.
-  struct RqItem* mRqPrev = nullptr;     // previous logic frame's queue snapshot
-  struct RqItem* mRqCur  = nullptr;     // current frame's snapshot (captured at flush)
-  struct RqItem* mRqLerp = nullptr;     // built in-between
-  int mNPrev = 0, mNCur = 0, mHavePrev = 0;
-  void rq_capture(const struct RqItem* items, int n);   // copy the (sorted) queue snapshot
-  int  build_lerp();                                    // match cur<->prev, lerp to midpoint; returns count
-  void fps60_present_vk(Core* core);                    // emit in-between + real frame, paced (60fps)
-  // PSXPORT_DEBUG=fps60pass — prove the two 60fps presents emit the SAME COMPLETE frame: count the
-  // HUD-layer items and the shadow-casting prims in a queue set (was the file-scope fps60_pass_stats).
-  void pass_stats(const char* tag, long fence, const struct RqItem* items, int n);
-  int  mLerpDbg = -1;                   // PSXPORT_DEBUG=fps60 — per-frame reproject stats (lazy latch)
-  int  mChk = -1;                       // PSXPORT_DEBUG=fps60chk — mechanical t=1.0 reproject gate
-  int  mPassDbg = -1;                   // PSXPORT_DEBUG=fps60pass latch
-  int* mBgDx = nullptr;                 // build_lerp per-tile bg displacement scratch (FPS60_RQ_MAX)
-  int* mBgDy = nullptr;
-  ~Fps60() { delete[] mBgDx; delete[] mBgDy; }
-
-  // ---- billboard registry --------
-  // Per-Core so SBS's two cores don't share the same billboard registry between their emits
-  // (submit.cpp calls recordBillboardSpan from THIS core's frame; the OT walk reads it
-  // via billboard_for_node — must be same core's) (deglobalize 2026-07-03).
+  // ---- billboard registry (3D-positioned 2D quads emitted by the guest into the OT) ------------------
+  // recordBillboardSpan is called at the SAME instant the object publishes its packet-pool depth span; it
+  // stores that span [lo,hi), the object identity, and the object's WORLD position (node+46/50/54). The OT
+  // walk then matches each billboard prim's source OT-node to a recorded span and stamps the queued item
+  // with the identity + world pos (stampBillboard). Per-Core so SBS's two cores keep separate registries.
   static constexpr int kBbMax = 1024;
-  struct Billboard { uint32_t lo, hi; uint32_t ident; uint32_t crM[11]; };
-  Billboard mBbCur[kBbMax] = {};
-  int       mNBbCur = 0;
-
-  // ---- methods (bodies in fps60.cpp; reached via core->game->fps60) ----
-  void     fold(uint32_t v);
-  void     grid_put(int sx, int sy, uint32_t obj);
-  uint32_t grid_get(int px, int py);
-  void     xvert(int16_t vx, int16_t vy, int16_t vz, uint32_t sxy);
-  void     xobj_rtp(uint32_t insn);
-  void     xobj_commit();
-  void     rtp(uint32_t op);
-  void     join_poly(int px, int py);
-  void     frame_commit(Core* core);
-  // billboard-registry methods (former file-scope free fns)
+  struct BbSpan { uint32_t lo, hi, ident; float wx, wy, wz; };
+  BbSpan mBbCur[kBbMax] = {};
+  int    mNBbCur = 0;
   void bbFrameReset() { mNBbCur = 0; }
-  void recordBillboardSpan(uint32_t lo, uint32_t hi, uint32_t ident);
-  int  billboardForNode(uint32_t node, uint32_t* identOut, uint32_t crOut[11]) const;
-  // world-prim / billboard capture hooks (former free fns fps60_stamp_world* / fps60_stamp_billboard)
-  void stampWorldCr(Core* c, const int16_t mv[4][3], int nv, uint32_t key, const uint32_t cr[11]);
-  void stampWorld(Core* c, const int16_t mv[4][3], int nv, uint32_t key);
+  void recordBillboardSpan(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
+  int  billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) const;
   void stampBillboard(Core* c, uint32_t node);
+
+  // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
+  RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
+  RqItem* mRqPrev = nullptr;    // previous frame's snapshot (billboard prev-anchor source)
+  int mNCur = 0, mNPrev = 0, mHavePrev = 0;
+  void rq_capture(const RqItem* items, int n);      // copy the sorted queue snapshot
+  void present_vk(Core* core);                      // build+present the in-between, then the real frame
+  int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
+  ~Fps60();
 };
 
 #endif // GAME_RENDER_FPS60_H

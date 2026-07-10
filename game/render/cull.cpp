@@ -256,9 +256,7 @@ uint32_t Cull::enqueueQueueC(uint32_t obj) { Core* c = core;
 }
 
 void Cull::objectCull() { Core* c = core;
-  uint32_t prev = c->game->fps60.current_object;
   uint32_t o = c->r[4];                            // a0 = object* (MIPS arg register $a0)
-  c->game->fps60.current_object = o;               // fps60: tag every subsequent RTP with this object
 
   if (mObjLog < 0) mObjLog = cfg_dbg("obj") ? 1 : 0;
   if (mObjLog)
@@ -361,7 +359,6 @@ void Cull::objectCull() { Core* c = core;
       }
     }
   }
-  c->game->fps60.current_object = prev;
 }
 
 // FUN_8007778C — camera-relative cull WRAPPER. Computes obj-cam delta (wrapping s16, sign-extended),

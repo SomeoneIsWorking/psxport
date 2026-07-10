@@ -90,17 +90,14 @@ void NativeScenePass::terrainRender() {
   for (int row = 0; row < 3; row++)
     for (int col = 0; col < 3; col++)
       Robj[row][col] = (float)mobj[row*3+col] / 4096.0f;
-  // camera rotation matrix @ SCR+0xF8 (CR-packed, same layout as GTE CR0-4), /4096.
-  uint32_t k0 = c->mem_r32(SCR+0xF8), k1 = c->mem_r32(SCR+0xFC), k2 = c->mem_r32(SCR+0x100),
-           k3 = c->mem_r32(SCR+0x104), k4 = c->mem_r32(SCR+0x108);
-  float Rcam[3][3] = {
-    { (int16_t)k0/4096.0f,        (int16_t)(k0>>16)/4096.0f, (int16_t)k1/4096.0f },
-    { (int16_t)(k1>>16)/4096.0f,  (int16_t)k2/4096.0f,       (int16_t)(k2>>16)/4096.0f },
-    { (int16_t)k3/4096.0f,        (int16_t)(k3>>16)/4096.0f, (int16_t)k4/4096.0f } };
-  // camera translation @ SCR+0x10C/110/114 (int32 view units — NOT /4096).
-  float camT[3] = { (float)(int32_t)c->mem_r32(SCR+0x10C),
-                    (float)(int32_t)c->mem_r32(SCR+0x110),
-                    (float)(int32_t)c->mem_r32(SCR+0x114) };
+  // camera rotation (CR-packed int16 rows) + translation (int32 view units) + projection constants, read
+  // through the fps60 provider: byte-identical to the old inline scratchpad/CR read when fps60 is off, and
+  // the (prev,cur) MIDPOINT camera during the 60fps mid-present, so the terrain pans through the same
+  // interpolated camera the objects do (no separate backdrop/terrain judder). Also captures this camera.
+  float Rc_i16[3][3], camT[3], cam_ofx, cam_ofy, cam_H;
+  c->game->fps60.sceneCam(c, Rc_i16, camT, cam_ofx, cam_ofy, cam_H);
+  float Rcam[3][3];
+  for (int rr = 0; rr < 3; rr++) for (int cc = 0; cc < 3; cc++) Rcam[rr][cc] = Rc_i16[rr][cc] / 4096.0f;
   // Publish the MAIN scene camera view matrix (Rcam + camT) for deterministic per-object world-position
   // depth: it is read here from the scratchpad at terrain-draw time, when it holds the real scene camera
   // (the per-object compose later overwrites the scratchpad with object-specific transforms, so reading it
@@ -121,10 +118,10 @@ void NativeScenePass::terrainRender() {
     float t = camT[i]; for (int k = 0; k < 3; k++) t += Rcam[i][k] * objP[k]; Tview[i] = t;
   }
 
-  // projection params (match proj_native_vertex float path, gte_beetle.cpp).
-  uint16_t H = (uint16_t)gte_read_ctrl(26);
-  float ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
-  float ofy = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
+  // projection params (from the fps60 provider above — interpolated during the mid-present).
+  uint16_t H = (uint16_t)cam_H;
+  float ofx = cam_ofx;
+  float ofy = cam_ofy;
   proj_set_H(H);
   float nearp = (float)H * 0.5f; if (nearp < 1.0f) nearp = 1.0f;
 

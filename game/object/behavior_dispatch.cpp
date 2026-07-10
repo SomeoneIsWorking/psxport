@@ -171,8 +171,6 @@ constexpr NativeBeh kTable[] = {
 
 void BehaviorDispatch::dispatchObj(uint32_t obj, uint32_t handler) {
   Core* c = this->core;
-  uint32_t prev = c->game->fps60.current_object;
-  c->game->fps60.current_object = obj;
   c->r[4] = obj;                                     // $a0 — the behaviors read the object here
   // Pure-substrate leg (SBS core B / MV_CHECK's strict-mirror replay, game/core/verify_harness.h) —
   // OR pc_faithful itself (pc_skip=false): must reach the literal gen body like every other
@@ -194,7 +192,6 @@ void BehaviorDispatch::dispatchObj(uint32_t obj, uint32_t handler) {
   // pc_faithful; the beh_* table is not — it's an explicit shortcut).
   bool substrateOnly = c->game->psx_fallback || c->game->verify.inSubstrateLeg || !c->game->pc_skip;
   if (substrateOnly || !dispatchNative(handler)) rec_dispatch(c, handler);
-  c->game->fps60.current_object = prev;
 }
 
 bool BehaviorDispatch::dispatchNative(uint32_t handler) {

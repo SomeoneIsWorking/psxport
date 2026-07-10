@@ -128,33 +128,11 @@ static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, flo
     vv[k][0] = p[s].vx; vv[k][1] = p[s].vy; vv[k][2] = p[s].pz; }   // view space (x=ir1, y=ir2, z=pz)
   return vv;
 }
-// fps60: after a GTE-composed world quad is pushed to the render queue, capture its model verts + the
-// composed transform (CR0-7) + the current actor key so the 60fps tier can reproject it at the A/B
-// midpoint (engine/fps60.cpp). No-op unless g_mods.fps60. mv[k] = per-vertex model coords (4th = v2 for tris).
-// (fps60 gate is g_mods.fps60; the capture hooks are Fps60 methods on c->game->fps60.)
-
-// fps60: 3D-POSITIONED 2D QUAD (billboard) capture. The collectable/flame/decal billboards are guest GP0
-// quads/sprites the per-object renderers emit; they reach the render queue LATER, at the deferred OT walk
-// (gpu_native.cpp, off the engine-submit path), where they inherit the object's WORLD-POSITION depth via
-// obj_depth_lookup — so they carry fps_world=0 and the 60fps tier snapped them to camera-B (they juddered
-// while Tomba moved smoothly). We tag them at QUEUE TIME from the OT walk now: we record an fps60 BILLBOARD
-// entry (Fps60::recordBillboardSpan) at the SAME instant we publish the object's depth span — keyed
-// by that SPAN [lo,hi) (the OT walk matches each billboard item's source node against it, identical to
-// obj_depth_lookup) + the object's stable cross-frame identity (`ident`, the node/cmd ptr) + the live
-// composed camera×object transform. The OT walk (gpu_native.cpp) then stamps each billboard item directly
-// as an anchor-reproject billboard, and build_lerp reprojects its WORLD ANCHOR at the midpoint camera — the
-// same anchor-translate the mesh path uses, keyed on identity (not depth ord). Host-only; no guest write.
-// fps60_bb_node now lives in render_internal.h (shared with render_walk.cpp).
-static inline void fps60_stamp(Core* c, const ProjVtx* p, int nv) {
-  if (!g_mods.fps60) return;
-  int16_t mv[4][3];
-  for (int k = 0; k < 4; k++) { int s = k < nv ? k : nv - 1;
-    mv[k][0] = (int16_t)p[s].mx; mv[k][1] = (int16_t)p[s].my; mv[k][2] = (int16_t)p[s].mz; }
-  // World-coord native path: capture the composed transform from the active float xform; GTE path (the
-  // resident byte-packed emitter) falls back to reading the live control registers.
-  if (c->mRender->projActive()) { uint32_t cr[11]; c->mRender->projActiveCr(cr); c->game->fps60.stampWorldCr(c, mv, nv, c->game->fps60.fps_cur_key, cr); }
-  else                  c->game->fps60.stampWorld(c, mv, nv, c->game->fps60.fps_cur_key);
-}
+// fps60 TRUE per-object tier (redesign 2026-07-10): meshes are NO LONGER captured as reprojectable screen
+// prims here. The 60fps in-between is built by RE-RUNNING the native scene render at the interpolated
+// OBJECT transform (captured in projComposeObject) — so there is no per-quad model-vertex/transform stamp.
+// Billboards (guest OT 2D quads) are still tagged at the OT walk (Fps60::stampBillboard, keyed on identity
+// + captured world anchor) since they don't flow through this submit path. See game/render/fps60.cpp.
 
 // ENGINE-NATIVE directional lighting (user directive 2026-06-21: lighting must be engine-native, NOT a
 // screen-space deferred pass). Compute a real per-FACE normal from the prim's own view-space geometry
@@ -250,7 +228,6 @@ void Render::submitPolyGt3Native(Core* c) {
     { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
       c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
-    fps60_stamp(c, p, 3);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;
 }
@@ -304,7 +281,6 @@ void Render::submitPolyGt4Native(Core* c) {
     { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
       c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
-    fps60_stamp(c, p, 4);                                    // fps60: capture for midpoint reprojection
   }
   c->r[2] = rec;                                              // return: record pointer advanced past the array
 }
@@ -398,11 +374,11 @@ void Render::fieldEntityRender(uint32_t es) {
   for (; p < end; p += 2) {
     uint32_t cmd = base + (uint32_t)c->mem_r16(p) * 4;
     uint32_t s0  = c->mem_r32(cmd);
-    c->game->fps60.fps_cur_key = cmd;                                  // fps60: per-entity reproject key
+    // fps60: scene-table entities are world-space (projComposeCamera, camera-only) — they interpolate via
+    // the camera during the mid-present, no per-object transform key needed.
     c->mRender->diag.setGeomblk(cmd);   // sil_bbox_log diag: tag this entity's cmd record (Render::gt3gt4 is NOT the caller here)
     c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submitPolyGt3Native(c);
     c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submitPolyGt4Native(c);
-    c->game->fps60.fps_cur_key = 0;
   }
   c->mRender->projClearActive();
 }
