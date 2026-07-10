@@ -1556,3 +1556,29 @@ draft was already byte-faithful.
   lumps every billboard of the class together. Correct identity = PARTICLE ADDRESS (stable while the
   object lives). Fix direction handed to the fps60-residue agent: per-particle anchor capture +
   interpolation. Score-gem lifecycle traceable via beh_pickup_collect_trigger.cpp (FUN_8007413C spawn).
+- **FOLLOW-UP REGRESSION — native backdrop did NOT cover the wide margin → atlas garbage (2026-07-10,
+  fixed):** after f831172 the reported garbage (`scratch/screenshots/reports/ws_garbage.png`) REMAINED in
+  scenes whose right margin is SKY: a grid of rainbow texture-atlas tiles filled the `[~344, nw)` band
+  wherever no opaque geometry happened to overdraw it (clearest behind the entrance-field's big tree, where
+  sky shows through the foliage gaps). RE / evidence: the present samples guest-VRAM columns `[sx, sx+nw)`
+  (software-rasterized FB, `frame_via_fb()==0`); a full-VRAM dump (`vkvram 0 0 1024 512`) shows the field FB
+  at the top-left with the **texture atlas abutting it immediately to the right** (the later-55 VRAM packing).
+  So every margin pixel not painted by clear+geometry samples the atlas. The E4 draw-area extend (fix #3
+  above) let GEOMETRY reach the margin, but the SKY/PARALLAX layer did not: the native backdrop drawer
+  `render_bg_tilemap_native` (game/render/render_walk.cpp) transcribes the PSX tilemap window centred at
+  screen-x 160 with a fixed 352px (`0x160`) span — tuned for the 320 view, covering only `~[0,344)`. It
+  draws via the native render queue (RQ_BACKGROUND), so `ws_2d_local_x` (which stretches only GP0-path 2D
+  sprites) never touched it. A `vkpix` scan of a sky row confirmed sky up to x≈344 then atlas. **Fix:** widen
+  the backdrop window to the wide FB — `cx = nw/2`, `winw = nw+0x20`, replacing the literal `160`/`152`/
+  `0x160`; reduces to the exact 4:3 constants when not wide (gated on `gpu_gpu_wide_engine()`), so 4:3 stays
+  byte-identical. This re-centres the sky/parallax on the wide projection centre (matching the world's
+  OFX=nw/2 shift) and tiles it across the full `[0,nw)`. Verified: full first field, both directions, at 16:9
+  (nw=428) AND 21:9 (nw=560) — zero atlas garbage anywhere, sky/sea fills all margins, wide margins still
+  populated (cull fix intact); both SBS legs 0-diff. refs: `game/render/render_walk.cpp`
+  (`render_bg_tilemap_native`); artifacts `scratch/screenshots/wsfix/`.
+  - **remaining exposure (future):** only the state-0 tilemap backdrop is owned natively; other fields'
+    backdrop states are still-PSX and render black (frontier). If such a field is widescreened its margin
+    is uncovered → the safety net is to give each ported backdrop the same full-`nw` coverage. A blanket
+    per-frame margin clear was NOT added: it would write into texture VRAM every frame (the margin overlaps
+    the atlas, esp. at 21:9) with no observed benefit for the field (the backdrop widening covers it), and
+    the correct owner of the margin is the background layer, not a clear.

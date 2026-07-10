@@ -108,21 +108,32 @@ static void render_bg_tilemap_native(Core* c, uint32_t t4) {
   // the override-system removal 2026-06-22), which is why the redundant tiles regressed to RQ_HUD and
   // occluded the world (render.md OPEN #1). Data-derived (real backdrop tpage), not a magic constant.
   void gpu_bg_texpage_set(Core*, int, int); gpu_bg_texpage_set(c, tp_x, tp_y);
+  // WIDESCREEN backdrop coverage (root-cause fix for the [320,nw) atlas-garbage band): the PSX body tiles
+  // a 320-wide window centred at screen-x 160 (t5 = ...+0x160 = 352 = 320+32 slack). At a wide aspect the
+  // engine projects the world with OFX=nw/2, so the visible field spans [0,nw) — but the sky/parallax
+  // backdrop, drawn only across ~[0,344), left the right margin uncovered, exposing the raw VRAM texture
+  // atlas that lives past the 320-wide FB (later-55 VRAM packing). Re-centre the backdrop on the wide
+  // centre (cx=nw/2) and widen the tiled window to nw+32 so it fills the full wide FB, matching the
+  // world's OFX shift. cx/winw reduce to the exact 4:3 values (160 / 0x160) when not wide, so the 4:3
+  // path stays byte-identical. Gated on gpu_gpu_wide_engine() (false at 4:3 / oracle / SBS legs).
+  int gpu_gpu_wide_engine(void), gpu_gpu_wide_engine_w(void);
+  int cx = 160, winw = 0x160;                       // screen-centre X / tiled window width (4:3 defaults)
+  if (gpu_gpu_wide_engine()) { int nw = gpu_gpu_wide_engine_w(); cx = nw / 2; winw = nw + 0x20; }
   // Starting tile row/col = (scroll - screen-center) >> 4, wrapped into [0,H) / [0,W).
   int rowtile = ((scrollY - 120) >> 4) % H; if (rowtile < 0) rowtile += H;
-  int coltile = ((scrollX - 160) >> 4) % W; if (coltile < 0) coltile += W;
+  int coltile = ((scrollX - cx) >> 4) % W; if (coltile < 0) coltile += W;
   int t2 = rowtile * rowstride;                   // current row byte offset (wraps mod mapbytes)
   int coloff0 = coltile * 2;                       // starting col byte offset (wraps mod rowstride)
-  int xoff = (int16_t)(152 - scrollX);             // t9 — sub-tile X scroll remainder + screen offset
+  int xoff = (int16_t)(cx - 8 - scrollX);          // t9 — sub-tile X scroll remainder + screen offset
   int yoff = (int16_t)(112 - scrollY);             // s7 — sub-tile Y scroll remainder + screen offset
   unsigned char col[4] = { 0x80, 0x80, 0x80, 0x80 };  // 0x7d is raw-texture: color ignored
   int outer_bound = (int16_t)(scrollY - 120) + 0x100; // 16 rows
-  int t5 = (int16_t)(scrollX - 160) + 0x160;          // ~22 cols
+  int t5 = (int16_t)(scrollX - cx) + winw;            // wide-covering column window (4:3: ~22 cols)
   for (int t8 = scrollY - 120;;) {
     int Y = (int16_t)((t8 & 0xFFF0) + yoff);
     int t6 = (int16_t)t2;                          // row byte offset (sign-extended)
     int t0 = coloff0;
-    for (int t1 = scrollX - 160;;) {
+    for (int t1 = scrollX - cx;;) {
       int X = (int16_t)((t1 & 0xFFF0) + xoff);
       uint16_t tile = c->mem_r16(map + (uint32_t)(t6 + t0));
       int u = (tile & 0xF) << 4, v = (tile & 0xF0) + 8;
