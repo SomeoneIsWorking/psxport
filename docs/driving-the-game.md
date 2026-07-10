@@ -84,7 +84,13 @@ Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FR
 `tools/dbgclient.py <cmd>` (or no arg = REPL):
 - `tap <btn> [frames]`, `press <btn>`, `release <btn>` — btn = `start x o triangle square up down left right select`.
 - `stage`, `scene` (on-demand classified display list), `frame`, `r <addr> [n]` / `rw <addr> [n]` (read mem).
-- `vkshot [path]` (headless VK readback → PPM), `shot [path]` (SW), `gputrace [path]` (arm a gpu_differ capture).
+- `vkshot [path]` (headless VK readback → PPM), `shot [path]` (VK-aware: captures the PRESENTED picture,
+  falls back to SW VRAM when VK is off), `gputrace [path]` (arm a gpu_differ capture).
+- `preseq <N> [dir]` — dump the next N PRESENTED frames (default `scratch/screenshots/preseq`) as
+  `p%04d.ppm`. Fires once per present PASS, so with 60fps on the sequence interleaves REAL and
+  INTERPOLATED frames — the only headless way to see temporal artifacts (interp flicker/judder).
+  Analyze with `python3 tools/preseq_flicker.py <dir>`: per-band frame-to-frame displacement via
+  profile cross-correlation; alternating-sign motion (the 30Hz oscillation class) is flagged FLICKER.
 - `pause` / `play` / `step`.
 
 ### RE commands (later-134) — inspect/poke/call live, no recompile-a-probe loop

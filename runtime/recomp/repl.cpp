@@ -181,6 +181,14 @@ long Repl::read(Core* c, uint32_t f) {
         }
       } else fprintf(stderr, "[repl] warp <area_id> [s4e]  (area table @0x800be118, ids 0..23; s4e = drive fieldRun exit state instead of forcing case0)\n");
     }
+    else if (!strcmp(cmd, "preseq")) {   // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
+      unsigned n = 0; char dir[120] = "scratch/screenshots/preseq";
+      if (sscanf(line, "%*s %u %119s", &n, dir) >= 1 && n > 0) {
+        extern void gpu_gpu_preseq_arm(Core*, int, const char*);
+        gpu_gpu_preseq_arm(c, (int)n, dir);
+        fprintf(stderr, "[repl] preseq armed: next %u presents -> %s/p%%04d.ppm\n", n, dir);
+      } else fprintf(stderr, "[repl] preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)\n");
+    }
     else if (!strcmp(cmd, "shot")) {   // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {

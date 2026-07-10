@@ -66,6 +66,12 @@ struct GpuGpuState {
   int s_present_sx = 0, s_present_sy = 0;
   int s_last_sx = 0, s_last_sy = 0, s_last_w = 320, s_last_h = 240;
   int s_dbg_tri = 0, s_dbg_tex = 0, s_dbg_semi = 0;
+  // PRESENT-SEQUENCE capture (REPL `preseq <N> [dir]`): dump the next N PRESENTED frames — every
+  // present-pass readback, so REAL and fps60-INTERPOLATED frames both land — as dir/p%04d.ppm.
+  // This is the headless way to verify temporal artifacts (interp-frame flicker/judder) that the
+  // per-game-frame `shot` can never see (it only samples real frames).
+  int  s_preseq_left = 0, s_preseq_idx = 0;
+  char s_preseq_dir[128] = {0};
 
   // Per-Core CPU vertex batches — filled during gp0_exec (draw_tri/draw_tritri/draw_semi below), read
   // by render_geom at grab_pane/present time, and RESET by frame_end. Two SBS cores each keep their

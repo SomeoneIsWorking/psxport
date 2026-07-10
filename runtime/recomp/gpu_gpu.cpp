@@ -529,6 +529,7 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
 }
 
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
+static void dump_to(const char*, int, int, int, int, int, uint8_t, uint8_t, uint8_t);   // fwd (defined below) — preseq dump
 void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_gpu_enabled()) return;
   if (!s_inited) init_gpu(game);
@@ -746,7 +747,18 @@ void GpuGpuState::semi_group(int x0, int y0, int x1, int y1) { (void)x0; (void)y
 void GpuGpuState::dirty(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
 void GpuGpuState::stats(int* tri, int* tex, int* semi) { if (tri) *tri = s_dbg_tri_c; if (tex) *tex = s_dbg_tex_c; if (semi) *semi = s_dbg_semi_c; }
 // Per-logic-frame reset of the host geometry batch (present consumed it; the next frame re-emits the queue).
-void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame; s_tri_n = s_tex_n = 0;
+void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame;
+  // PRESENT-SEQUENCE capture (REPL `preseq <N> [dir]`): frame_end runs once per PRESENT PASS — the
+  // real pass AND the fps60 interp pass, windowed AND headless — so dumping here (before the batch
+  // reset; dump_to's readback renders the pending batch) interleaves real/interp frames for
+  // tools/preseq_flicker.py's 30Hz-oscillation detection.
+  if (s_preseq_left > 0) {
+    char p[192]; snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
+    ScreenFade::State f = game->core.screenFade.get();
+    dump_to(p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
+    if (--s_preseq_left == 0) fprintf(stderr, "[preseq] done: %d frames -> %s\n", s_preseq_idx, s_preseq_dir);
+  }
+  s_tri_n = s_tex_n = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_n[m] = 0; }
 
 // ---- native 3D / textured raster: accumulate the tee'd geometry into the host batch (Pass 2) ---------
@@ -1027,3 +1039,11 @@ void gpu_gpu_draw_semi(Core* core, const int* xs, const int* ys, const int* us, 
 void gpu_gpu_shot(Core* core, const char* path) { core->game->gpu_gpu.shot(path); }
 void gpu_gpu_shot_b(Core* core, const char* path) { core->game->gpu_gpu.shot_b(path); }
 void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_gpu.frame_end(svram, frame); }
+
+// REPL `preseq` arm (repl.cpp) — creates the dir and arms the per-present dump in present().
+void gpu_gpu_preseq_arm(Core* core, int n, const char* dir) {
+  GpuGpuState& s = core->game->gpu_gpu;
+  snprintf(s.s_preseq_dir, sizeof s.s_preseq_dir, "%s", dir);
+  char mk[200]; snprintf(mk, sizeof mk, "mkdir -p %s", dir); if (system(mk)) {}
+  s.s_preseq_idx = 0; s.s_preseq_left = n;
+}
