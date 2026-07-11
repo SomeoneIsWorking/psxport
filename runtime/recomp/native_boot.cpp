@@ -69,6 +69,23 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 #include "sbs.h"                        // class Sbs — the PSXPORT_SBS two-core side-by-side harness
 
 static void native_step_frame(Core* c, uint32_t f) {
+  // Area-id change probe (PSXPORT_DEBUG=area): logs when the area-id byte (0x800BF870) changes,
+  // plus the stage state machine (sm[0x48/4a/4c/4e]). Answers "does the area transition actually
+  // fire?" — distinguishing a render bug (transition fires, wrong picture) from a game-logic bug
+  // (transition never fires, stays on the same scene).
+  if (cfg_dbg("area")) {
+    static uint8_t prevArea = 0xFF;
+    static uint8_t prev4c = 0xFF;
+    uint8_t area = c->mem_r8(0x800BF870u);
+    uint32_t sm = c->mem_r32(0x1F800138u);
+    uint8_t s4c = c->mem_r16(sm + 0x4cu) & 0xFF;
+    if (area != prevArea || (s4c != prev4c && s4c <= 3)) {
+      fprintf(stderr, "[area] f%u area=%u sm[48=%u 4a=%u 4c=%u 4e=%u]\n", f, area,
+              c->mem_r8(sm + 0x48u), c->mem_r16(sm + 0x4au) & 0xFF, s4c,
+              c->mem_r16(sm + 0x4eu) & 0xFF);
+      prevArea = area; prev4c = s4c;
+    }
+  }
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
   // #42 widescreen symmetry: re-assert the projection center (GTE CR24 = OFX) from the LIVE present
   // width every frame. Engine::initDisplay baked OFX once at boot, but the SDL window is lazy-created
