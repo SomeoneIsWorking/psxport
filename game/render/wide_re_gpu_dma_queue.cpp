@@ -510,7 +510,11 @@ void Render::gpuDmaQueueSync() {
           if (c->r[2] != 0) { epilogue((uint32_t)-1, c->mem_r32(0x800A5AC8u)); return; }
           continue;
         }
-        epilogue(readyBit, R3_NORMAL);
+        // gen mode==0 success path (L_800833D0 -> L_80083490): line 36 does `r2 = r0+r0` (=0)
+        // unconditionally before the goto, so v0 = 0 on success (NOT readyBit). The prior draft
+        // returned readyBit (0x04000000), which the DrawSync caller's MIRROR_VERIFY caught as
+        // native v0=0x04000000 substrate v0=0.
+        epilogue(0, R3_NORMAL);
         return;
       }
     }
@@ -534,7 +538,9 @@ void Render::gpuDmaQueueSync() {
     uint32_t readyWord = c->mem_r32(c->mem_r32(GPU_DMA_READY_PTR));
     if ((readyWord & GPU_DMA_READY_BIT) != 0) { epilogue(depth, R3_NORMAL); return; }
   }
-  epilogue(depth != 0 ? depth : 1u, R3_NORMAL);
+  // gen mode!=0 tail (shard_0.c:60-63): ready+anyDepth -> depth; notReady+depth!=0 -> depth;
+  // notReady+depth==0 -> 0. The prior draft returned 1 in the last case; gen returns 0.
+  epilogue(depth, R3_NORMAL);
 }
 
 // func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & WIRED 2026-07-10 (was DRAFT). RE'd from generated/shard_3.c:19562
