@@ -82,7 +82,8 @@ workflow defects. Stop and fix them, then resume.
   residency, native fibers, ported scheduler primitives; read before touching any faithful path),
   `docs/engine_re.md` (engine RE), `docs/render-arch.md` (VK renderer), `docs/gfx-
   debug.md` + skill `gfx-debug` (render bugs), `docs/config.md` (cfg module — no raw getenv), `docs/
-  driving-the-game.md` (REPL), `docs/project-map.md` (build).
+  driving-the-game.md` (REPL + scenario replays), `replays/` (deterministic pad-capture library —
+  reproduce bugs/scenarios headless without live input; see `replays/README.md`), `docs/project-map.md` (build).
 - **Self-governance:** improve doc/tool/workflow when it falls short, same session.
 
 ## RE first — never black-box debug

@@ -27,6 +27,18 @@ Do NOT use the attract demo to judge the native render path.
 Verify you're in free-roam (not the menu/cutscene) before rendering: object-list head 0x800FB168 != 0 AND the
 cutscene flag `*(0x1F800137)` == 0.
 
+## ⭐ DETERMINISTIC SCENARIO REPLAYS — `PSXPORT_PAD_REPLAY=replays/<...>/<name>.pad`
+For scenarios AUTO-NAV/AUTO-SKIP can't drive (walking into a hut, reaching a specific door, a
+visual bug that needs real navigation), use a **recorded pad replay** — a captured button sequence
+reproduced bit-for-bit. The categorized library lives in **`replays/`** (see `replays/README.md`
+for the full index + how to record one). Replay any scenario headless or under SBS-full:
+```
+PSXPORT_PAD_REPLAY=replays/scene-transitions/hut-entry-door-freeze.pad   # the key one: surfaces the hut-entry SBS diverge @0x801FE91A
+```
+Record a new one on a windowed run: `PSXPORT_PAD_RECORD=replays/<cat>/<name>.pad ./run.sh`,
+play the scenario, close, add a README entry. Replays start from frame 0 (fresh boot) — prefix with
+`newgame`/AUTO_SKIP to reach free-roam first if the scenario begins there.
+
 ## 0. Gotchas that waste time
 - **Headless runs auto-SKIP the intro FMVs and fast-forward in-game FMVs** (later-134). A field probe is
   ~1.4s, not ~77s — the intro movie used to be played back in REAL TIME even headless. Just use
