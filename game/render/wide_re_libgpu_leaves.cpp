@@ -181,6 +181,13 @@ void Render::clearOTagR() {
   uint32_t tag = (kDummyTagContent & mask24) | (1024u << 16);  // 0x04000000 | low24
   c->mem_w32(kDummyTagAddr, tag);
   c->mem_w32(c->r[16], kDummyTagAddr & mask24);  // *OT = low24(0x800A5A60)
+  // gen publishes v0 (r2) = s16 = the OT pointer (arg r4) — its final r2 after `r2 = r16+0` right
+  // before the *OT store. The prior draft left r2 stale (MIRROR_VERIFY: native=0x800
+  // substrate=<OT ptr e.g. 0x800E80A8>) because it wrote *OT via c->r[16] without also publishing r2.
+  // gen also publishes v1 (r3) = the dummy-tag word itself (r3 = low24(content)|0x04000000) — its
+  // final r3 after `r3 = r3|r4` (MIRROR_VERIFY: substrate=0x040A5A4C). Native left it stale.
+  c->r[2] = c->r[16];
+  c->r[3] = tag;
 
   c->r[31] = c->mem_r32(c->r[29] + 24);
   c->r[17] = c->mem_r32(c->r[29] + 20);
