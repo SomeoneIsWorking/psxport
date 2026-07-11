@@ -64,6 +64,20 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
     returns differ; subtler — the native relies on rec_dispatch(tableSlot60) to set r2/r3 but the
     substrate replay sees different returns) and 0x80082D04 `Render::gpuDmaQueueEnqueue` (hi/lo
     lo=0x200 vs 0x10 — a multiply the native doesn't reproduce). Each is a real faithful-mirror gap.
+  - **drawSync RESOLVED (2026-07-11):** the drawSync v0/v1 mismatch was actually in its dispatch
+    target `Render::gpuDmaQueueSync` (0x80083364, drawSync dispatches table+60 = this fn). Two bugs:
+    (1) gpuDmaQueueSync never published v1 (r3) — gen's final r3 = 0x04000000 on normal exits
+    (1024<<16, shard_0.c:34/58) / mem_r32(0x800A5AC8) on timeout exits; (2) gpuDmaQueueSync returned
+    readyBit (0x04000000) as v0 on the mode==0 ready-success path but gen does `r2 = r0+r0` (=0) at
+    shard_0.c:36 — v0 must be 0; and the mode!=0 tail returned 1 where gen returns 0. Fixed commits
+    a4f0e3d + 81c9498. MIRROR_VERIFY now PASSES both 0x80083364 and 0x80080F6C.
+  - **gpuDmaQueueEnqueue (0x80082D04) — REMAINING, deeper:** hi/lo (lo native=0x200 substrate=0x10/
+    0x3800). Neither the function nor its HLE callees (FN_INT_MASK_SET/ISR_REGISTER/DRAIN/TIMEOUT)
+    have any `mult`/`div` instruction. The lo divergence is a CALLEE REGISTER SIDE-EFFECT — gen's
+    `Render::gpuDmaQueueDrain` (0x80082FB4, native override) and/or gpu_timeout_arm (0x800834A0,
+    orphan) set lo incidentally where the native override doesn't match. Needs per-callee lo
+    auditing. Four mirrors fixed this session (keyRegMerge/clearOTagR/queueSync/drawSync); this is
+    the 5th and last before the gate advances past the libgpu band.
 - **PRECISE WRITE-SITE (2026-07-11, live session re-pause @f408, wwatch on 0x801FE91A):** this is
   the **next layer of the f118 render-stack register-faithfulness family** (docs/findings/render.md
   "f118 residual — RESOLVED" fixed the lower slots 0x801FE8B8/8D0..8F6; this is the next slot UP at
