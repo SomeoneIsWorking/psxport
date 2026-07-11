@@ -152,6 +152,30 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   gpuLoadImageStream fix (MIRROR_VERIFY passes but the live chained walk still diverges). The 19
   remaining failing mirrors are the candidates; the gameplay-overlay ones (ra=801087DC) are the most
   likely f389 cause since the diverge bytes are written by gameplay tick functions.
+- **PROGRESS (2026-07-11, same session, continued):** Fixed 7 more mirrors via MIRROR_VERIFY-driven
+  TDD, bringing the failing count from 19 to 12:
+  - **Spawn::spawnTypedChild family** (spawn.cpp): rewrote all 4 trampolines to reproduce the
+    substrate's EXACT dispatch path (rec_dispatch(0x8007A980) with matching r4/r5/r6, r16/r17 swap,
+    r31 jal-site, r3 typeByte). MIRROR_VERIFY PASSES 0x8013A730.
+  - **AreaSlots::primeCountdown** (0x80074A38): v0=10, v1=entry addr. PASSES.
+  - **AreaSlots::updateCell** (0x8007496C): added 24-byte frame + r31 spill. Still fails MV (v1).
+  - **Str::length** (0x80079528): v1=v0 (length counter). PASSES.
+  - **MusicCoord::setGain2** (0x80075D24): v0/v1 branch results. PASSES.
+  - **ActorZonedAttacker** (actor_zoned_attacker.cpp): 3 GuestFrames added (0x80140544/4047C/44928).
+    Still fail MV (need r31 jal-site fix like spawn).
+  - **NodeXform::buildAxis** (0x80051C8C): GuestFrame REVERTED — the body already has its own
+    BuildAxisFrame internally; adding a trampoline frame caused a DOUBLE frame that moved the diverge
+    to f117 (regression). Lesson: check for existing internal frames before adding trampoline-level ones.
+  - **Effect on f389:** NONE — the diverge is unchanged. The diverge bytes are written by functions
+    that PASS MIRROR_VERIFY individually (0x8007778C/800517F8/801316CC). The issue is a one-count
+    cadence difference (BYTETRACE: totA=20753 vs totB=20754 for byte 0x801FE91C) somewhere upstream
+    that no individual mirror failure explains. The remaining 12 MV failures are: render chain
+    (0x8003C048/CCA4/C2D4/D0BC — v0/v1 only), NodeXform (0x80051C8C), updateCell (0x8007496C),
+    overlay (0x8010B588/1241BC/4047C/40544/44928), Demo (0x80106AC4).
+  - **NEXT:** The f389 diverge is dead-stack-scratch from a cadence off-by-one. Finding it requires
+    a different approach than MIRROR_VERIFY: either a per-frame write-count comparison for the
+    diverge bytes (which function writes the Nth time on A but not B), or a deeper audit of which
+    native field-frame override changes the iteration count of the gameplay tick loop.
 
 ## HOLLOW GATE: free-roam SBS never runs native field-frame code (fieldFrameX / updateTail) (2026-07-11)
 
