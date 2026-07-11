@@ -51,6 +51,21 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   gap (the f118-class family). **Definitive next step: `PSXPORT_MIRROR_VERIFY=all` rebuild + run**
   (per-invocation byte+reg compare of every wired override) to catch which native mirror writes the
   wrong r22/r23/r30. The live paused session can't take this further without a rebuild.
+- **RESOLVING (2026-07-11, MIRROR_VERIFY=all run headless):** the per-mirror register-output bugs
+  are the upstream cause. `PSXPORT_MIRROR_VERIFY=all PSXPORT_MIRROR_VERIFY_CONTINUE=1` surfaced a
+  chain of native mirrors that compute memory writes correctly but publish WRONG register outputs
+  (v0/v1/hi/lo), leaving stale caller registers across the whole field-frame/render chain — exactly
+  the liveness gap that manifests as the r22/r23/r30 residual here. Fixed so far:
+  - **0x80094B50 `Sequencer::channelKeyRegisterMerge`** — missing v1 = `~(KON_LO|bitLo)` (gen
+    shard_3.c:22073 `r3=~(r0|r3)`). Fixed commit 0ed169e. MIRROR_VERIFY now passes it.
+  - **0x80081458 `Render::clearOTagR`** — missing v0 = OT ptr (r16) AND v1 = dummy-tag word
+    (`0x04000000|low24(0x800A5A4C)`). Fixed commit 1ff52cb. MIRROR_VERIFY now passes it (0 fails).
+  - **Still open (MIRROR_VERIFY):** 0x80080F6C `Render::drawSync` (v0/v1 stale — dispatch target
+    returns differ; subtler — the native relies on rec_dispatch(tableSlot60) to set r2/r3 but the
+    substrate replay sees different returns) and 0x80082D04 `Render::gpuDmaQueueEnqueue` (hi/lo
+    lo=0x200 vs 0x10 — a multiply the native doesn't reproduce). Each is a real faithful-mirror gap;
+    fix them and the r22/r23/r30 liveness converges. The spawn-leaf residual is downstream fallout
+    of these register-output bugs, not its own bug.
 - **Tooling used (works on the LIVE windowed debug-server session, no rebuild):** `sbs watch <addr>`
   (rewind-and-arm wwatch on both cores + re-step the divergent frame), then `sbs diff` (last-writer
   pc/ra/sp per core) and `sbs bt` (write-site guest-stack backtrace + `[ww-regs]` a0-a3/s0-s5 per
