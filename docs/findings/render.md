@@ -124,6 +124,13 @@
   reproduce and root-cause. Filed as a GitHub issue.
 - **refs:** `scratch/screenshots/hut/` (cmp_grid, nudge_grid, back_grid, cmd_w0), `game/render/
   perobj_dispatch.cpp`, `docs/engine_re.md` "Area WARP / DOOR RECORD".
+- **UPDATE (2026-07-11): USER confirmed this is a TRANSITION issue, not a render issue** — "PC still not
+  showing hut interiors, it still shows the outside area when in hut." The area transition either doesn't
+  fire or fires but the destination area's A0X overlay never loads (the MODE slot stays at A00). Root cause
+  identified in `fieldRun` case 6 (trig==3): it enters submode1 at `sm[0x4c]==1`, SKIPPING case 0 (the
+  overlay-load state). A first fix attempt (loading FUN_80045080 in case 6) was REVERTED — it caused a
+  massive f154 regression because it fired during normal gameplay, not just cross-area transitions. The fix
+  needs proper gating (only fire when destArea != currentArea during an actual cross-area transition).
 
 ## fps60 redesigned as TRUE per-object interpolation (2026-07-10, RESOLVED)
 

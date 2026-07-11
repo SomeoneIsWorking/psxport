@@ -178,14 +178,18 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
     native field-frame override changes the iteration count of the gameplay tick loop.
 - **FRAMEPROF TOOL REVEALED THE ROOT CAUSE (2026-07-11):** Built PSXPORT_SBS_FRAMEPROF=<frame>
   (sbs.cpp) — counts every store per (pc,ra) per core during the target frame, then reports the
-  A-vs-B count deltas sorted by |delta|. First run at f389 directly named the top cadence gap:
-  **Render::gpuDmaSend (0x80082424) — 2048-count delta.** Core A calls it 2051× from
-  ra=0x800814BC (clearOTagR), core B calls it 2048× from ra=0x8008249C (gpuDmaSend itself, i.e.
-  the substrate's internal store loop). The 3-store gap means the native gpuDmaSend writes 3 more
-  stores than the substrate during clearOTagR's OT-clear. Other top entries: beh_id_routed_dispatch
-  (0x80121978, 424-count), 0x80075FF8 (456-count, pure substrate — called differently by natives
-  above it). The cadence gap is in the RENDER DMA path, not the gameplay tick — connecting to the
-  render invariant (the faithful render must produce the same DMA writes as the substrate).
+  A-vs-B count deltas sorted by |delta|. First run at f389 surfaced the candidates. **CORRECTION after
+  deeper analysis:** the gpuDmaSend (0x80082424) 2048-count delta was a FALSE ALARM — the TOTAL store
+  count matches (A=2051, B=2048+3=2051); the ra split differs because native vs substrate set different
+  r31 values, but the DMA send count is identical. The REAL one-sided gap is:
+  **beh_id_routed_dispatch (0x80121978) — core A runs it 554×, core B runs it 0× during f389.** This is
+  a native gameplay AI handler override (`game/ai/beh_id_routed_dispatch.cpp`) that core A's field-frame
+  chain dispatches but core B's substrate chain doesn't reach. The object list is byte-identical at f388,
+  so both cores should dispatch the same handlers — the divergence is in how the native
+  `fieldFrameXFaithful` / `array8Dispatch` chain routes object ticks vs the substrate. Many other paired
+  entries (same pc, same count, different ra) are expected native-vs-substrate call-site differences and
+  are NOT bugs (the ra differs because native fieldFrameXFaithful at 0x80108C40 replaces substrate
+  walkOnce at 0x8007B08C). The beh_id_routed_dispatch A-only gap IS the bug.
 
 ## HOLLOW GATE: free-roam SBS never runs native field-frame code (fieldFrameX / updateTail) (2026-07-11)
 
