@@ -63,9 +63,18 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   - **Still open (MIRROR_VERIFY):** 0x80080F6C `Render::drawSync` (v0/v1 stale — dispatch target
     returns differ; subtler — the native relies on rec_dispatch(tableSlot60) to set r2/r3 but the
     substrate replay sees different returns) and 0x80082D04 `Render::gpuDmaQueueEnqueue` (hi/lo
-    lo=0x200 vs 0x10 — a multiply the native doesn't reproduce). Each is a real faithful-mirror gap;
-    fix them and the r22/r23/r30 liveness converges. The spawn-leaf residual is downstream fallout
-    of these register-output bugs, not its own bug.
+    lo=0x200 vs 0x10 — a multiply the native doesn't reproduce). Each is a real faithful-mirror gap.
+- **PRECISE WRITE-SITE (2026-07-11, live session re-pause @f408, wwatch on 0x801FE91A):** this is
+  the **next layer of the f118 render-stack register-faithfulness family** (docs/findings/render.md
+  "f118 residual — RESOLVED" fixed the lower slots 0x801FE8B8/8D0..8F6; this is the next slot UP at
+  0x801FE91A..923 that those fixes didn't reach). wwatch caught: **core A** wrote 0x801FE91A from the
+  RENDER chain — pc=0x8003CCA4 (perObjRenderDispatch), sp=0x801FE8E8, backtrace render-band
+  (0x8003C0BC, 0x8003CD08=cmdListDispatch jal-site), ww-regs a0=0x15(slot idx) s2=0x15. **Core B**
+  wrote it from updateTail's spawn-leaf callee — pc=0x80075824, sp=0x801FE908 (0x20 different), ww-regs
+  s0=0x800C0000 s1=0x800BE1F8 (updateTail locals). The 0x20 sp gap = the render chain pushed a frame
+  on A that B's render didn't (or vice versa) — a nested render frame (perObjRenderDispatch's
+  callee, cmdListDispatch or deeper) isn't byte-faithful at this stack depth. Same shape as the f118
+  layers the prior session peeled: each fix exposes the next slot up. NOT the spawn leaf's own bug.
 - **Tooling used (works on the LIVE windowed debug-server session, no rebuild):** `sbs watch <addr>`
   (rewind-and-arm wwatch on both cores + re-step the divergent frame), then `sbs diff` (last-writer
   pc/ra/sp per core) and `sbs bt` (write-site guest-stack backtrace + `[ww-regs]` a0-a3/s0-s5 per
