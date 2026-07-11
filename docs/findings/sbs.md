@@ -5,7 +5,7 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
-## spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11, RESOLVED)
+## spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11, OPEN)
 
 - **Symptom:** SBS-full, normal AUTO-NAV area-0 free-roam (no forcing), diverged @f491 at
   `0x801FE91A..0x801FE923` (9 B) and the residual **persisted/wandered** through f1380+ (never
@@ -13,6 +13,19 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
 - **RESOLVED (2026-07-11): SBS-full now 0-diff through f2000** after the four register-output mirror
   fixes below. The spawn-leaf r22/r23/r30 residual was downstream fallout of stale caller registers
   propagated by the libgpu/sequencer mirror chain; fixing those upstream mirrors cleared it.
+- **CORRECTION (2026-07-11, same day): the RESOLVED claim above was FALSE** — it was based on the
+  headless AUTO-NAV gate (0-diff through f2000), but AUTO-NAV does not exercise the path that
+  triggers this diverge. A live windowed SBS-full run with real input re-hits the SAME diverge at
+  the SAME address (0x801FE91A, f375) on the rebuilt binary WITH all four fixes. The four mirror
+  fixes (keyRegMerge/clearOTagR/queueSync/drawSync) are real bugs and correctly fixed, but they were
+  NOT the cause of this diverge. The diverge is a **render-walk recursion-depth divergence**: core A
+  (native renderWalk) pushes one extra 0x20-byte frame vs core B (substrate renderWalk) between the
+  fieldFrameXFaithful frame and the write site, so the two cores' render paths write the same stack
+  address (0x801FE918 = cmdListDispatch's ra spill at sp+48) from different call depths. The render
+  node lists are byte-identical (same nodes, same node+24 dispatch targets, same live flags); each
+  render function (renderWalk/perObjRenderDispatch/cmdListDispatch/perModeDispatch) passes
+  MIRROR_VERIFY individually. The divergence only appears in the LIVE chained walk — a register/
+  state interaction MIRROR_VERIFY's per-function pre-state reset doesn't reproduce. Still OPEN.
 - **NOT the #37 r16-r21/r31 register mirror** (that fix targets r16..r21/r31; this is r22/r23/r30).
   NOT a forcing artifact — the earlier HOLLOW-GATE "forcing caveat" note guessed the FORCES4C
   divergence was an entry-condition artifact; it is NOT — **the same divergence appears in natural
