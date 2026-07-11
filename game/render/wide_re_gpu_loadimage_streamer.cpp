@@ -192,7 +192,13 @@ void Render::gpuLoadImageStream() {
   int32_t wSignExt = c->mem_r16s(rectPtr + 4);
   int32_t hSignExt = c->mem_r16s(rectPtr + 6);
   int64_t product = (int64_t)wSignExt * (int64_t)hSignExt;
-  uint32_t pixelCount = (uint32_t)(int32_t)product;  // mflo (lo 32 bits) only, hi half unused by gen body
+  uint32_t pixelCount = (uint32_t)(int32_t)product;  // mflo (lo 32 bits)
+  // Mirror gen's `mult` side-effect on HI/LO (generated/shard_5.c:13707) — the streamer's own
+  // algorithm only reads lo (pixelCount), but HI/LO are ABI registers that persist across calls;
+  // MIRROR_VERIFY compares them, and downstream callees (gpuDmaQueueEnqueue's fn dispatch path)
+  // inherit them. An earlier draft left them stale — the f389 SBS diverge root cause.
+  c->lo = (uint32_t)product;
+  c->hi = (uint32_t)((uint64_t)product >> 32);
 
   // numWords = ceil(pixelCount / 2) via the gen body's "(x+1) + sign-bit carry, then >>1" idiom.
   // NOTE the carry term is a LOGICAL >>31 in the gen (`c->r[3] >> 31` on uint32 — srl, adds 0 or 1),
