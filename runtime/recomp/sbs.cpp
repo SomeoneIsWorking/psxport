@@ -49,6 +49,7 @@
 #include <algorithm>
 #include <csignal>
 #include <string>
+#include <unordered_map>
 
 // --- runtime entry points reused from the normal boot path / dual-core harness ---
 void load_exe(const char* path, Core* c);
@@ -231,6 +232,15 @@ public:
   int      mSel   = 0;   // 0 = A, 1 = B (window + debug-server target)
   uint32_t mLo = 0x80010000u;
   uint32_t mHi = 0x80200000u;
+
+  // ---- FRAMEPROF: per-frame store-site count diff (PSXPORT_SBS_FRAMEPROF=<frame>) ----
+  // During the target frame, counts every store per (pc, ra) per core. At frame end, reports
+  // every (pc, ra) where A and B disagree in count. Directly names the cadence off-by-one.
+  struct FpKey { uint32_t pc, ra; bool operator<(const FpKey& o) const { return pc<o.pc || (pc==o.pc && ra<o.ra); } };
+  std::map<FpKey, uint32_t> mFpA, mFpB;   // (pc,ra) -> store count per core
+  uint32_t mFpFrame = 0xFFFFFFFFu;
+  bool     mFpArmed = false;
+  bool     mFpDumped = false;
 
   // ---- per-pane RGBA readback ----
   uint8_t  mRgbaA[1024 * 512 * 4];
@@ -1291,6 +1301,13 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     pc.vals[(uint8_t)(v & 0xFFu)]++;
     pc.ras[ra]++;
   }
+  // FRAMEPROF: per-frame store-site count per (pc, ra) per core. At the target frame's end, dump
+  // every (pc, ra) where A and B disagree in count — directly names the cadence off-by-one.
+  if (mFpArmed && mFrame == mFpFrame) {
+    FpKey key{c->pc, c->r[31]};
+    if (mB && c == &mB->core) mFpB[key]++;
+    else                      mFpA[key]++;
+  }
   if (mAllocTraceOn && a == 0x800ED098u) {
     int which_a = (mB && c == &mB->core) ? 1 : 0;
     uint32_t cur = c->mem_r16(0x800ED098u);
@@ -1743,6 +1760,14 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   { const char* e = getenv("PSXPORT_SBS_ALLOCTRACE"); if (e && *e && strcmp(e, "0") != 0) mAllocTraceOn = 1; }
   if (mAllocTraceOn)
     fprintf(stderr, "[sbs] ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B\n");
+  { const char* e = getenv("PSXPORT_SBS_FRAMEPROF");
+    if (e && *e) {
+      unsigned long f = strtoul(e, nullptr, 0);
+      mFpFrame = (uint32_t)f;
+      mFpArmed = true;
+      fprintf(stderr, "[sbs] FRAMEPROF on — per-(pc,ra) store-count A-vs-B diff at frame %u\n", mFpFrame);
+    }
+  }
   {
     // Unified atexit/SIGTERM/SIGINT dump registration — ONE handler per signal for the whole
     // harness, not one per feature. Each opt-in diagnostic (ALLOCTRACE/BYTETRACE) plus the
@@ -2286,9 +2311,64 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // debug server) so `sbs diff` / `sbs bt` / `sbs watch` can inspect. The 30-frame summary is
     // the running "how far apart are they" metric so you see divergence GROW even before the first
     // recorded hit (in render/full modes the render regions are excluded by design).
+    // FRAMEPROF dump: BEFORE checkDivergence (which may halt) — reports every (pc, ra) where
+    // the store counts differ. Sorted by |countA - countB| descending so the biggest cadence gap
+    // surfaces first. The top entry is the root-cause function.
+    if (mFpArmed && !mFpDumped && mFrame == mFpFrame) {
+      mFpDumped = true;
+      std::set<FpKey> keys;
+      for (auto& kv : mFpA) keys.insert(kv.first);
+      for (auto& kv : mFpB) keys.insert(kv.first);
+      struct Diff { FpKey key; uint32_t ca, cb; };
+      std::vector<Diff> diffs;
+      for (auto& k : keys) {
+        uint32_t ca = mFpA.count(k) ? mFpA[k] : 0;
+        uint32_t cb = mFpB.count(k) ? mFpB[k] : 0;
+        if (ca != cb) diffs.push_back({k, ca, cb});
+      }
+      std::sort(diffs.begin(), diffs.end(), [](const Diff& a, const Diff& b) {
+        int da = std::abs((int)a.ca - (int)a.cb), db = std::abs((int)b.ca - (int)b.cb);
+        return da > db;
+      });
+      fprintf(stderr, "[sbs-frameprof] f%u: %zu (pc,ra) sites with count mismatch (top 30):\n", mFpFrame, diffs.size());
+      int n = 0;
+      for (auto& d : diffs) {
+        if (n++ >= 30) break;
+        fprintf(stderr, "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)\n",
+                d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
+      }
+      fflush(stderr);
+    }
     if (nav_done || prenav) {
       summarizeDivergence(30);
       checkDivergence();
+    }
+    // the store counts differ. Sorted by |countA - countB| descending so the biggest cadence gap
+    // surfaces first. The top entry is the root-cause function.
+    if (mFpArmed && !mFpDumped && mFrame == mFpFrame) {
+      mFpDumped = true;
+      std::set<FpKey> keys;
+      for (auto& kv : mFpA) keys.insert(kv.first);
+      for (auto& kv : mFpB) keys.insert(kv.first);
+      struct Diff { FpKey key; uint32_t ca, cb; };
+      std::vector<Diff> diffs;
+      for (auto& k : keys) {
+        uint32_t ca = mFpA.count(k) ? mFpA[k] : 0;
+        uint32_t cb = mFpB.count(k) ? mFpB[k] : 0;
+        if (ca != cb) diffs.push_back({k, ca, cb});
+      }
+      std::sort(diffs.begin(), diffs.end(), [](const Diff& a, const Diff& b) {
+        int da = std::abs((int)a.ca - (int)a.cb), db = std::abs((int)b.ca - (int)b.cb);
+        return da > db;
+      });
+      fprintf(stderr, "[sbs-frameprof] f%u: %zu (pc,ra) sites with count mismatch (top 30):\n", mFpFrame, diffs.size());
+      int n = 0;
+      for (auto& d : diffs) {
+        if (n++ >= 30) break;
+        fprintf(stderr, "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)\n",
+                d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
+      }
+      fflush(stderr);
     }
     if (sbsDumpPath && nav_done && !dumped && mWa > 0 && mWb > 0) { dumpPpm(sbsDumpPath); dumped = true; }
 
