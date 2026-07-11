@@ -360,6 +360,10 @@ void Sequencer::channelKeyRegisterMerge() {
   c->mem_w16(SEQ_KON_LO, (uint16_t)konLo);
   uint32_t activeLo = c->mem_r16(SEQ_ACTIVE_VOICE_LO) & ~konLo;
   c->mem_w16(SEQ_ACTIVE_VOICE_LO, (uint16_t)activeLo);
+  // gen publishes v1 (r3) = ~(KON_LO | bitLo) — its final r3 after `r3 = ~(r0|r3)` (r0≡0).
+  // The prior draft left r3 stale (MIRROR_VERIFY: native=0x0D substrate=0xFFFFFFFE) because the
+  // C rewrite computed konLo as a local but never wrote the ~konLo result the caller reads in v1.
+  c->r[3] = ~konLo;
 
   uint32_t konHi = c->mem_r16(SEQ_KON_HI) | bitHi;
   c->mem_w16(SEQ_KON_HI, (uint16_t)konHi);
