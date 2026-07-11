@@ -467,12 +467,19 @@ void Render::gpuDmaQueueSync() {
   c->mem_w32(c->r[29] + 20, c->r[31]);
   c->mem_w32(c->r[29] + 16, c->r[16]);
 
-  auto epilogue = [&](uint32_t retVal) {
+  auto epilogue = [&](uint32_t retVal, uint32_t retR3) {
     c->r[2] = retVal;
+    c->r[3] = retR3;   // gen publishes v1 (r3): 0x04000000 on normal exits (1024<<16, the ready-mask
+                       // it ANDs at shard_0.c:34/58), or the GPU state word on the timeout (-1) path
+                       // (shard_0.c:14-15). The prior draft left r3 stale (MIRROR_VERIFY on the
+                       // DrawSync caller saw v1 drift because this fn is drawSync's dispatch target).
     c->r[31] = c->mem_r32(c->r[29] + 20);
     c->r[16] = c->mem_r32(c->r[29] + 16);
     c->r[29] += 24;
   };
+  // gen's final r3 per exit path (gen_func_80083364 shard_0.c): normal exits (both modes) have
+  // r3 = 1024<<16 (0x04000000); timeout exits have r3 = mem_r32(0x800A5AC8) (GPU state global).
+  constexpr uint32_t R3_NORMAL = 1024u << 16;   // 0x04000000
 
   if (mode == 0) {
     rec_dispatch(c, FN_GPU_TIMEOUT_ARM);
@@ -485,7 +492,7 @@ void Render::gpuDmaQueueSync() {
         c->r[31] = 0x8008338Cu;
         rec_dispatch(c, FN_DRAIN);
         rec_dispatch(c, FN_GPU_TIMEOUT_CHK);
-        if (c->r[2] != 0) { epilogue((uint32_t)-1); return; }
+        if (c->r[2] != 0) { epilogue((uint32_t)-1, c->mem_r32(0x800A5AC8u)); return; }
         continue;
       }
       // L_800833D0: empty -> wait for channel idle (busy bit clear) AND ready
@@ -493,17 +500,17 @@ void Render::gpuDmaQueueSync() {
         uint32_t stateWord = c->mem_r32(c->mem_r32(GPU_DMA_STATE_PTR));
         if ((stateWord & GPU_DMA_BUSY_BIT) != 0) {
           rec_dispatch(c, FN_GPU_TIMEOUT_CHK);
-          if (c->r[2] != 0) { epilogue((uint32_t)-1); return; }
+          if (c->r[2] != 0) { epilogue((uint32_t)-1, c->mem_r32(0x800A5AC8u)); return; }
           continue;
         }
         uint32_t readyWord = c->mem_r32(c->mem_r32(GPU_DMA_READY_PTR));
         uint32_t readyBit = readyWord & GPU_DMA_READY_BIT;
         if (readyBit == 0) {
           rec_dispatch(c, FN_GPU_TIMEOUT_CHK);
-          if (c->r[2] != 0) { epilogue((uint32_t)-1); return; }
+          if (c->r[2] != 0) { epilogue((uint32_t)-1, c->mem_r32(0x800A5AC8u)); return; }
           continue;
         }
-        epilogue(readyBit);
+        epilogue(readyBit, R3_NORMAL);
         return;
       }
     }
@@ -525,9 +532,9 @@ void Render::gpuDmaQueueSync() {
   uint32_t stateWord = c->mem_r32(c->mem_r32(GPU_DMA_STATE_PTR));
   if ((stateWord & GPU_DMA_BUSY_BIT) == 0) {
     uint32_t readyWord = c->mem_r32(c->mem_r32(GPU_DMA_READY_PTR));
-    if ((readyWord & GPU_DMA_READY_BIT) != 0) { epilogue(depth); return; }
+    if ((readyWord & GPU_DMA_READY_BIT) != 0) { epilogue(depth, R3_NORMAL); return; }
   }
-  epilogue(depth != 0 ? depth : 1u);
+  epilogue(depth != 0 ? depth : 1u, R3_NORMAL);
 }
 
 // func_80082424 (0x80082424) — GpuDmaSend(arrayPtr, count). VERIFIED & WIRED 2026-07-10 (was DRAFT). RE'd from generated/shard_3.c:19562
