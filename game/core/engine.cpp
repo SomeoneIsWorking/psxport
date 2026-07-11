@@ -1378,14 +1378,6 @@ void Engine::fieldRunFaithful() { Core* c = core;
         c->mem_w16(sm + 0x4c, b);
       } else {                                 // L_80106F0C
         c->r[31] = 0x80106F14u; rec_dispatch(c, 0x8005245Cu);
-        // Load the destination area's A0X MODE code overlay into the MODE slot (0x80108F9C). The
-        // door-record path enters submode1 at sm[0x4c]==1, which SKIPS case 0 (the overlay-load state).
-        // Without this, the MODE slot stays at the old area's overlay (A00) and the destination's
-        // per-area object-init handler is a recomp-MISS → the area never renders (hut-interior bug).
-        // FUN_80045080(0x80108F9C, area+3) loads the overlay, matching transitionAreaLoad (sop.cpp:166).
-        { uint8_t destArea = c->mem_r8(0x800BF870u);
-          c->r[4] = 0x80108F9Cu; c->r[5] = (uint32_t)((destArea + 3) & 0xFF);
-          c->r[31] = 0x80106F14u; rec_dispatch(c, 0x80045080u); }
         sm = c->mem_r32(0x1f800138u);
         c->mem_w16(sm + 0x48, 2);
         c->mem_w16(sm + 0x4a, 1);
@@ -1536,13 +1528,6 @@ void Engine::fieldRun() { Core* c = core;
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf839u) == 3) {
         d0(c, 0x8005245cu);
-        // Load the destination area's A0X MODE code overlay into the MODE slot. The door-record path
-        // enters submode1 at sm[0x4c]==1, skipping case 0 (the overlay-load state). Without this the
-        // MODE slot stays at the old area's overlay and the destination's object-init handler misses
-        // (hut-interior bug). FUN_80045080(0x80108F9C, area+3), matching transitionAreaLoad.
-        { uint8_t destArea = (uint8_t)(v & 0xFF);
-          c->r[4] = 0x80108F9Cu; c->r[5] = (uint32_t)((destArea + 3) & 0xFF);
-          c->r[31] = 0x80106F14u; rec_dispatch(c, 0x80045080u); }
         sm = c->mem_r32(0x1f800138u);
         c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 1); c->mem_w16(sm + 0x4e, 0);
       } else {
