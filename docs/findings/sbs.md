@@ -5,6 +5,50 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## OPEN: spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11)
+
+- **Symptom:** SBS-full, normal AUTO-NAV area-0 free-roam (no forcing), diverges @f491 at
+  `0x801FE91A..0x801FE923` (9 B) and the residual **persists/wanders** through f1380+ (never
+  converges). detection bytes: A=`00 00 00 00 00 00 08 CD 03` B=`0C 80 58 E3 0B 80 58 5C 07`.
+- **NOT the #37 r16-r21/r31 register mirror** (that fix targets r16..r21/r31; this is r22/r23/r30).
+  NOT a forcing artifact — the earlier HOLLOW-GATE "forcing caveat" note guessed the FORCES4C
+  divergence was an entry-condition artifact; it is NOT — **the same divergence appears in natural
+  free-roam play** (verified on a live windowed SBS-full session, no FORCES4C). Correcting that here.
+- **Region = the spawn leaf (FUN_80092660) frame's incoming-register spills.** Leaf frame 64 B,
+  sp≈0x801FE8E8 (leaf sp = updateTail_sp − 64; updateTail sp = 0x801FE928). Spill slots:
+  sp+48=r22 → 0x801FE918, sp+52=r23 → 0x801FE91C, sp+56=r30 → 0x801FE920. These three words are
+  what diverge. The leaf spills whatever r22/r23/r30 it was called with.
+- **Root cause (wwatch-confirmed):** core A runs the action-arm spawn leaf `0x80092660`
+  (pc=80092660, ra=80075B84 = updateTail's jal-site) and writes the region; core B does NOT run the
+  spawn leaf on the same frame — its last writer attributed to the region is voiceMixTick
+  (0x80075824) at a different sp (0x801FE908), i.e. B never touched these bytes this frame; the B
+  values are STALE. So the two cores DISAGREE on whether any slot's action-arm fired: a slot is
+  transiently kind==0xFF on A but not B (the slot table reads IDENTICAL on both cores when inspected
+  after the fact — kind==0xFF is a 1-frame transient that updateTail itself decrements to 0xFE).
+  r22/r23/r30 are CALLER-transit registers (gen updateTail's callee-saved footprint is r[16..21,31]
+  ONLY — verified via `abi_extract 0x80075A80 --contract`); the #37 mirror can't touch them, so
+  even a perfect updateTail mirror leaves this residual whenever the action-arm fires on one core
+  only.
+- **Why the cores disagree on the arm fire is the open question.** The arm fires for slots with
+  kind==0xFF; kind is set to 0xFF by the A00-overlay per-area object-init handler (the A0X object-init
+  family — 0x8010B37C etc., the same overlay-residency-gap cluster as #36/#37). Suspect: a native
+  object-init/spawn path on core A primes a slot to 0xFF that the substrate path on core B primes
+  differently or one frame late — a transient that updateTail's per-frame kind decrement then
+  resolves, but not before the spawn leaf's frame spill diverges. Needs a wwatch on a slot's kind
+  byte going to 0xFF to catch the priming site on both cores (the `PSXPORT_SBS_WW_ONVALUEDIVERGE`
+  /slot-byte approach, armed before the divergence frame).
+- **Tooling used (works on the LIVE windowed debug-server session, no rebuild):** `sbs watch <addr>`
+  (rewind-and-arm wwatch on both cores + re-step the divergent frame), then `sbs diff` (last-writer
+  pc/ra/sp per core) and `sbs bt` (write-site guest-stack backtrace + `[ww-regs]` a0-a3/s0-s5 per
+  core). `@a`/`@b` route reads to each core. Confirmed both cores run updateTail IDENTICALLY
+  (wwatch on the arm-mask clear 0x800BE358: same sp 0x801FE928, same backtrace, same ww-regs) — the
+  divergence is strictly the transient spawn-leaf spill, downstream of a slot-priming disagreement.
+- **Lesson:** stale stack-frame residuals that "wander" (different bytes each re-inspection but same
+  address range) are almost always a *does-this-leaf-run-this-frame* disagreement, not a
+  register-value bug. Confirm by wwatch-ing the leaf's own spill slot and checking whether BOTH cores
+  wrote it this frame; if only one did, the bug is upstream in whatever primes the leaf's trigger, not
+  in the leaf or its caller's register mirror.
+
 ## HOLLOW GATE: free-roam SBS never runs native field-frame code (fieldFrameX / updateTail) (2026-07-11)
 
 - **Trap:** "SBS-full 0-diff through fN" in FREE-ROAM does NOT gate native field-frame subsystems.
@@ -30,15 +74,18 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   2. **Force makes native code RUN:** `FORCES4C=400:3` → native `updateTail` ENTER logged (counter=14,
      loopEntered=1), action-arm spawn leaf 0x80092660 fired 4× (slots 18/19/22/23). The force mechanism
      works; the precondition (native body executes under compare) is met.
-  3. **Diverges at f400 in r22/r23/r30 — and it IS a forcing artifact, NOT a #37 bug.** Range
-     0x801FE91A..0x801FE923 = the spawn leaf's own-frame spills of r23 (@leaf+52) and r30 (@leaf+56).
-     `gen_func_80075A80`'s callee-saved footprint is r[16..21,31] ONLY — it does NOT touch r22/r23/r30,
-     which transit unchanged from `updateTail`'s CALLER (the field-frame chain). `asent` entry-probe on
-     core A: r22=0 r23=0 r30=**0x801FFFF8** (the INITIAL SP — never set by the forced dispatch). Those
-     entry values == the spilled values (faithful transit). Core B (recomp oracle) entered with LIVE
-     r22/r23/r30 its dispatch happened to carry. So the divergence is in the forced ENTRY conditions,
-     not in `updateTail`'s body or the #37 mirror. The #37 fix is NOT implicated — but neither is it
-     EXONERATED, because the force can't reproduce the natural caller's callee-saved setup.
+  3. **Diverges at f400 in r22/r23/r30** — Range 0x801FE91A..0x801FE923 = the spawn leaf's
+     own-frame spills of r23 (@leaf+52) and r30 (@leaf+56). `gen_func_80075A80`'s callee-saved
+     footprint is r[16..21,31] ONLY — it does NOT touch r22/r23/r30, which transit unchanged from
+     `updateTail`'s CALLER (the field-frame chain). `asent` entry-probe on core A: r22=0 r23=0
+     r30=**0x801FFFF8** (the INITIAL SP). Those entry values == the spilled values (faithful transit).
+     **NOTE: the original version of this bullet concluded "it IS a forcing artifact" — that was
+     WRONG.** The same 0x801FE918..0x801FE923 divergence appears in NATURAL free-roam play (no
+     FORCES4C), verified on a live windowed SBS-full session @f491 — see the "OPEN: spawn-leaf frame
+     residual" finding directly above. The divergence is a real does-this-leaf-run-this-frame
+     disagreement (action-arm spawn fires on core A but not B for a transiently-0xFF slot), NOT a
+     forcing entry-condition artifact. The #37 register mirror is not the fix for this (r22/r23/r30
+     are outside updateTail's footprint); the upstream slot-priming disagreement is.
 - **Lesson (extends "SBS gate honest"):** a green SBS gate only means what it EXERCISED. For any native
   code reached only under specific stage/mode state, force that state AND probe that the native body ran.
   **And:** a divergence under forced state is only actionable once you've shown the divergence is in the
