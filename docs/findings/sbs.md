@@ -10,6 +10,11 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
 - **Symptom:** SBS-full, normal AUTO-NAV area-0 free-roam (no forcing), diverged @f491 at
   `0x801FE91A..0x801FE923` (9 B) and the residual **persisted/wandered** through f1380+ (never
   converged). detection bytes: A=`00 00 00 00 00 00 08 CD 03` B=`0C 80 58 E3 0B 80 58 5C 07`.
+  **HEADLESS REPRO (2026-07-11):** `PSXPORT_SBS_MODE=full PSXPORT_NOWINDOW=1 PSXPORT_VK_HEADLESS=1
+  PSXPORT_NOAUDIO=1 PSXPORT_PAD_REPLAY=replays/scene-transitions/hut-entry-door-freeze.pad` → diverges
+  @f389 (first diverge frame, not f491 — the prior windowed run's f375/f491 were from different
+  session state). NOPAUSE run confirms the residual PERSISTS through 23180+ frames — never converges.
+  Only 9 bytes in ALL of guest RAM diverge (entire 2MB stays byte-identical except this stack range).
 - **RESOLVED (2026-07-11): SBS-full now 0-diff through f2000** after the four register-output mirror
   fixes below. The spawn-leaf r22/r23/r30 residual was downstream fallout of stale caller registers
   propagated by the libgpu/sequencer mirror chain; fixing those upstream mirrors cleared it.
@@ -116,6 +121,37 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   register-value bug. Confirm by wwatch-ing the leaf's own spill slot and checking whether BOTH cores
   wrote it this frame; if only one did, the bug is upstream in whatever primes the leaf's trigger, not
   in the leaf or its caller's register mirror.
+- **DEFINITIVE HEADLESS ANALYSIS (2026-07-11, BYTETRACE + MIRROR_VERIFY=all):** The diverge is NOT
+  a render-path bug (contrary to the "PRECISE WRITE-SITE" note above — the last-writer map pointing
+  at the render chain was a red herring; it captured the last write of f389, not the causal one).
+  **BYTETRACE** (`PSXPORT_SBS_BYTETRACE=0x801FE918,0x801FE928`) on the 9-byte range reveals the bytes
+  are written by **gameplay object-tick functions** (0x8007778C cull family, 0x800517F8, 0x801316CC)
+  — NOT render functions. Both cores run the EXACT same ras (0x800777EC×5908, 0x8012F5A4×3146,
+  0x80131728×2120, 0x80051834×1779 — identical between cores). The divergence is a VALUE/COUNT
+  difference: for byte 0x801FE91C, totA=20753 vs totB=20754 (ONE-OFF); for 0x801FE920, totA=32550
+  vs totB=33708 (1158-count gap). The settled-state classifier marks 0x801FE91C and 0x801FE920 as
+  REAL (not PHASE/SOFT). This is a cadence divergence where one core runs a gameplay tick function
+  one extra time or with different state, producing different stack-scratch residuals.
+- **MIRROR_VERIFY=all SURFACED 19 FAILING MIRRORS** — the REAL scope of the faithful-mirror
+  register-faithfulness gap. Fixed this session: 0x80082734 gpuLoadImageStream (missing HI/LO write
+  from gen's `mult` — the streamer computed w*h into a C++ local but never wrote c->hi/c->lo;
+  shard_5.c:13707 writes both halves). This resolved 0x80082D04 gpuDmaQueueEnqueue (which inherited
+  the stale HI/LO via its fn-dispatch callee). **19 mirrors still fail:**
+  - Render chain: 0x8003C048 (renderWalk), 0x8003CCA4 (perObjRenderDispatch), 0x8003C2D4
+    (billboardCompose1), 0x8003D0BC — all "reg" mismatches.
+  - Gameplay overlays (all ra=801087DC, the field-frame dispatch): 0x8013A730, 0x801360F4, 0x80139838,
+    0x8013AC34, 0x801241BC, 0x80140544, 0x8014047C, 0x80144928, 0x8010B588 — "ram" + "reg" mismatches;
+    the native spills wrong callee-saved register values (e.g. 0x801FFFF8 = initial SP where substrate
+    spills 0x1F800000 = scratchpad base).
+  - Main-band: 0x80079528, 0x8007496C, 0x80075D24, 0x80074A38, 0x80051C8C — "reg"/"ram" mismatches.
+  - Demo: 0x80106AC4 (Demo::s3SubMachine) — "hi"/"ram"/"reg" (likely not f389-relevant — demo stage).
+  Each is a real register-faithfulness gap; the gameplay-overlay ones (all from the same caller
+  ra=801087DC) share a systematic pattern suggesting a common upstream cause in how the field-frame
+  dispatch sets up callee-saved registers before calling overlay handlers.
+- **NOT FIXED by the hi/lo fix alone:** SBS-full + hut-entry replay still diverges @f389 after the
+  gpuLoadImageStream fix (MIRROR_VERIFY passes but the live chained walk still diverges). The 19
+  remaining failing mirrors are the candidates; the gameplay-overlay ones (ra=801087DC) are the most
+  likely f389 cause since the diverge bytes are written by gameplay tick functions.
 
 ## HOLLOW GATE: free-roam SBS never runs native field-frame code (fieldFrameX / updateTail) (2026-07-11)
 
