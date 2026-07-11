@@ -34,6 +34,9 @@ uint32_t Str::length(Core* c, uint32_t addr) {
 namespace {
 void ov_strLength(Core* c) {
   Str::length(c, c->r[4]);
+  // Mirror gen_func_80079528's v1 (r3) output (shard_2.c): the substrate's loop counter ends up
+  // in r3 == r2 (the length) at return. The native C++ body only sets r2.
+  c->r[3] = c->r[2];
 }
 }  // namespace
 

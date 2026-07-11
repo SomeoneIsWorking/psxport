@@ -162,7 +162,16 @@ void MusicCoord::setGain2(int32_t val) {
   c->mem_w16(V + 0x2Eu, (uint16_t)val);   // target only — the per-frame smoother eases toward it
 }
 
-static void eov_musicCoordSetGain2(Core* c) { c->engine.musicCoord.setGain2((int32_t)c->r[4]); }
+static void eov_musicCoordSetGain2(Core* c) {
+  int32_t val = (int32_t)c->r[4];
+  c->engine.musicCoord.setGain2(val);
+  // Mirror gen_func_80075D24's register outputs (shard_1.c): r3 = 0x800BE1F8 (the voice block addr,
+  // computed as 32780<<16 + (-7688)); r2 = the last value the substrate's branch leaves in r2:
+  //   negative val: r2 = -val;  positive <8192: r2 = 1;  positive >=8192: r2 = 0.
+  c->r[3] = 0x800BE1F8u;
+  if (val < 0) c->r[2] = (uint32_t)(-val);
+  else         c->r[2] = (val < 8192) ? 1u : 0u;
+}
 
 void MusicCoord::registerOverrides() {
   core->game->engine_overrides.register_(0x80075D24u, "MusicCoord::setGain2", eov_musicCoordSetGain2);

@@ -48,6 +48,7 @@
 #include <string.h>
 #include "spawn.h"
 #include "game.h"       // c->game->verify — the shared A/B verify scaffold
+#include "guest_abi.h"  // GuestFrame — guest-stack frame discipline for spawnTypedChild trampolines
 void rec_super_call(Core*, uint32_t);
 
 // Pool addresses.
@@ -395,16 +396,28 @@ uint32_t Spawn::spawnLiftPlatformChild(uint32_t owner) {   // FUN_8013A730
 
 // Guest-ABI trampolines (EngineOverrides): substrate/native rec_dispatch callers reach the 4 native
 // bodies above exactly like the recomp bodies — args in r4/r5, return in r2.
+// Each trampoline MUST mirror its substrate gen_func's guest-stack frame (alloc + callee-save spills)
+// — MIRROR_VERIFY compares the full guest RAM+regs. An earlier draft had bare trampolines (no frame),
+// leaving whatever stale bytes sat in the spill slots; fixed by adding GuestFrame per the abi_extract
+// contracts (2026-07-11, the f389 diverge root-cause family).
+static constexpr GuestFrameSpill kSpills_8013A730[2] = { {16, 16}, {31, 20} };   // frame=24
+static constexpr GuestFrameSpill kSpills_801360F4[3] = { {16, 16}, {17, 20}, {31, 24} };   // frame=32
+static constexpr GuestFrameSpill kSpills_80139838[3] = { {16, 16}, {17, 20}, {31, 24} };
+static constexpr GuestFrameSpill kSpills_8013AC34[3] = { {16, 16}, {17, 20}, {31, 24} };
 static void eov_spawnQuadRecordChild(Core* c) {
+  GuestFrame<32, 3> frame(c, kSpills_801360F4);
   c->r[2] = c->engine.spawn.spawnQuadRecordChild(c->r[4], c->r[5]);
 }
 static void eov_spawnSiblingAngleChild(Core* c) {
+  GuestFrame<32, 3> frame(c, kSpills_80139838);
   c->r[2] = c->engine.spawn.spawnSiblingAngleChild(c->r[4], c->r[5]);
 }
 static void eov_spawnChildTrigChild(Core* c) {
+  GuestFrame<32, 3> frame(c, kSpills_8013AC34);
   c->r[2] = c->engine.spawn.spawnChildTrigChild(c->r[4], c->r[5]);
 }
 static void eov_spawnLiftPlatformChild(Core* c) {
+  GuestFrame<24, 2> frame(c, kSpills_8013A730);
   c->r[2] = c->engine.spawn.spawnLiftPlatformChild(c->r[4]);
 }
 void Spawn::registerTypedChildOverrides() {

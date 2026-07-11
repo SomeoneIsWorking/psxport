@@ -32,6 +32,7 @@
 #include "actor_zoned_attacker.h"
 #include "engine_overrides.h"
 #include "game.h"
+#include "guest_abi.h"  // GuestFrame — guest-stack frame discipline for the override trampolines
 #include "spawn.h"   // Spawn::spawnAndInit (FUN_8003116C, already native)
 #include <cstdint>
 
@@ -113,6 +114,16 @@ inline void call1(Core* c, uint32_t node, uint32_t addr) {
   rec_dispatch(c, addr);
 }
 
+// Guest-ABI frame contracts for the three override trampolines that allocate a guest stack frame
+// (from `python3 tools/abi_extract.py <addr> --contract`). Each trampoline MUST mirror its substrate
+// gen_func's guest-stack frame (alloc + callee-save spills) — MIRROR_VERIFY compares the full guest
+// RAM+regs. An earlier draft had bare trampolines (no frame), leaving whatever stale bytes sat in the
+// spill slots; fixed by wrapping the body in GuestFrame (2026-07-11, the f389 diverge root-cause
+// family — same fix as game/world/spawn.cpp's eov_* trampolines).
+static constexpr GuestFrameSpill kSpills_80140544[4] = { {16, 16}, {17, 20}, {18, 24}, {31, 28} };   // frame=32
+static constexpr GuestFrameSpill kSpills_8014047C[2] = { {16, 16}, {31, 20} };                       // frame=24
+static constexpr GuestFrameSpill kSpills_80144928[4] = { {16, 16}, {17, 20}, {18, 24}, {31, 28} };   // frame=32
+
 }  // namespace
 
 // ActorZonedAttacker::gateCheck(c) — FUN_8014047c(node) -> bool v0. A tick/despawn-gate predicate:
@@ -122,6 +133,7 @@ inline void call1(Core* c, uint32_t node, uint32_t addr) {
 // thresholds (2 then 0xb).
 // ----------------------------------------------------------------------------------------------
 void ActorZonedAttacker::gateCheck(Core* c) {
+  GuestFrame<24, 2> frame(c, kSpills_8014047C);
   const uint32_t node = c->r[R_A0];
   const int8_t n66 = (int8_t)c->mem_r8(node + 0x66);
   bool result;
@@ -161,6 +173,7 @@ void ActorZonedAttacker::gateCheck(Core* c) {
 // range/scroll constants (matches the "per-type init; then -> epilogue" comment in the caller).
 // ----------------------------------------------------------------------------------------------
 void ActorZonedAttacker::typeInit(Core* c) {
+  GuestFrame<32, 4> frame(c, kSpills_80140544);
   const uint32_t node = c->r[R_A0];
   if (c->mem_r16s(G_800ED098) < 0x12) {
     c->mem_w8(node + 9, 0);
@@ -265,6 +278,7 @@ void ActorZonedAttacker::pickAttackByRange(Core* c) {
 // node[0x32] (heading) by 0x10 and stepping FN_801406e4 every call.
 // ----------------------------------------------------------------------------------------------
 void ActorZonedAttacker::approachAndFace(Core* c) {
+  GuestFrame<32, 4> frame(c, kSpills_80144928);
   const uint32_t node = c->r[R_A0];
   uint32_t uVar4 = 0;
   const uint8_t st = c->mem_r8(node + 7);

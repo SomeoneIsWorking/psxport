@@ -255,8 +255,22 @@ bool AreaSlots::updateCell(uint32_t sigArg, int32_t dx, int32_t dy) {
   return true;
 }
 
-static void eov_areaSlotsPrime(Core* c)      { c->engine.areaSlots.primeCountdown(c->r[4]); }
-static void eov_areaSlotsUpdateCell(Core* c) { c->r[2] = c->engine.areaSlots.updateCell(c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]) ? 1 : 0; }
+static void eov_areaSlotsPrime(Core* c) {
+  c->engine.areaSlots.primeCountdown(c->r[4]);
+  // Mirror gen_func_80074A38's register outputs (shard_0.c): r2=10 (the kind byte), r3=entry addr.
+  // The native C++ body only writes the guest byte; the substrate leaves these in v0/v1 at return.
+  c->r[2] = 10;
+  c->r[3] = 0x800BE238u + (c->r[4] & 0xFFu) * 12u;
+}
+static void eov_areaSlotsUpdateCell(Core* c) {
+  // gen_func_8007496C allocates a 24-byte frame + spills r31@sp+16 (shard_0.c). The native body
+  // dispatches a still-substrate leaf (FUN_80092E3C) which spills caller r31 — needs the frame.
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, c->r[31]);
+  c->r[2] = c->engine.areaSlots.updateCell(c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]) ? 1 : 0;
+  c->r[31] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
 
 void AreaSlots::registerOverrides() {
   EngineOverrides& ov = core->game->engine_overrides;
