@@ -37,6 +37,20 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
   resolves, but not before the spawn leaf's frame spill diverges. Needs a wwatch on a slot's kind
   byte going to 0xFF to catch the priming site on both cores (the `PSXPORT_SBS_WW_ONVALUEDIVERGE`
   /slot-byte approach, armed before the divergence frame).
+- **REFINEMENT (same session, slot-priming RULED OUT):** wwatch on slot 18's kind byte
+  (0x800BE310) shows BOTH cores write it IDENTICALLY (same sp 0x801FE928, same backtrace, same
+  ww-regs a2=18) — slot priming is NOT the cause; the slot table evolves the same on both cores.
+  The real divergence is a **register-liveness / register-faithfulness gap** in r22/r23/r30 high up
+  the field-frame call chain (neither updateTail r[16..21,31] nor fieldFrameX r[16,31] touch them —
+  they transit from callers above, and the two cores' register files carry different stale values).
+  Core B (oracle = correct reference) has r22=`0x800C0000` r23=`0x800BE358` r30=`0x80075C58` —
+  updateTail's OWN constants (r20=0x800C0000, the arm-mask addr, the voiceMixTick jal-site) reused
+  as scratch by the real game across the field-frame chain. Core A has r22=0 r23=0 r30=`0x8003CD08`
+  (a render cmdListDispatch jal-site). So a native faithful mirror in the field-frame/render chain
+  is NOT reproducing the exact r22/r23/r30 liveness the substrate does — a register-faithfulness
+  gap (the f118-class family). **Definitive next step: `PSXPORT_MIRROR_VERIFY=all` rebuild + run**
+  (per-invocation byte+reg compare of every wired override) to catch which native mirror writes the
+  wrong r22/r23/r30. The live paused session can't take this further without a rebuild.
 - **Tooling used (works on the LIVE windowed debug-server session, no rebuild):** `sbs watch <addr>`
   (rewind-and-arm wwatch on both cores + re-step the divergent frame), then `sbs diff` (last-writer
   pc/ra/sp per core) and `sbs bt` (write-site guest-stack backtrace + `[ww-regs]` a0-a3/s0-s5 per
