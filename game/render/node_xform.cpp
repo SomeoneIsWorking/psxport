@@ -20,7 +20,7 @@
 #include "engine_overrides.h"   // class EngineOverrides — global dispatch table
 #include "render.h"             // full Render definition — c->mRender->mNodeXform
 #include "actor_tomba.h"        // ActorTomba::G_ADDR — buildFromChild's parent-table base (UNWIRED draft)
-#include "guest_abi.h"          // GuestFrame — guest-stack frame discipline for the buildAxis trampoline
+
 
 // Dual-wiring plumbing (same pattern as Math::registerOverrides / ActorReward::registerOverrides):
 // (1) EngineOverrides for callers reaching these via an explicit rec_dispatch(c, addr) (overlay
@@ -601,14 +601,13 @@ static void eov_propagateAxis(Core* c) {
   c->mRender->mNodeXform.propagateAxis(c->r[4]);
   c->r[2] = 0;
 }
-// Guest-stack frame for buildAxis's trampoline (frame=32, spills r16@sp+16, r17@sp+20, r31@sp+24 —
-// per `python3 tools/abi_extract.py 0x80051C8C --contract`). The native NodeXform::buildAxis body
-// already mirrors this frame internally (BuildAxisFrame above), but THIS trampoline is the
-// EngineOverrides entry point rec_dispatch reaches — without its own frame the spill slots are left
-// stale and MIRROR_VERIFY diverges on the stack bytes.
-static constexpr GuestFrameSpill kSpills_80051C8C[3] = { {16, 16}, {17, 20}, {31, 24} };   // frame=32
+// buildAxis (0x80051C8C): the native NodeXform::buildAxis body already mirrors the substrate's
+// 32-byte frame internally (BuildAxisFrame above, verified matching the abi_extract contract).
+// Adding a trampoline-level GuestFrame here would create a DOUBLE frame (pushing sp 32 bytes too
+// deep), which shifts all downstream callee spills to wrong addresses — confirmed: it moved the
+// SBS diverge from f389 to f117. The MIRROR_VERIFY failure on 0x80051C8C is from the internal
+// frame's register setup, NOT a missing trampoline frame. Left bare.
 static void eov_buildAxis(Core* c) {
-  GuestFrame<32, 3> frame(c, kSpills_80051C8C);
   c->mRender->mNodeXform.buildAxis(c->r[4]);
 }
 
