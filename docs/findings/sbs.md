@@ -5,11 +5,14 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
-## OPEN: spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11)
+## spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11, RESOLVED)
 
-- **Symptom:** SBS-full, normal AUTO-NAV area-0 free-roam (no forcing), diverges @f491 at
-  `0x801FE91A..0x801FE923` (9 B) and the residual **persists/wanders** through f1380+ (never
-  converges). detection bytes: A=`00 00 00 00 00 00 08 CD 03` B=`0C 80 58 E3 0B 80 58 5C 07`.
+- **Symptom:** SBS-full, normal AUTO-NAV area-0 free-roam (no forcing), diverged @f491 at
+  `0x801FE91A..0x801FE923` (9 B) and the residual **persisted/wandered** through f1380+ (never
+  converged). detection bytes: A=`00 00 00 00 00 00 08 CD 03` B=`0C 80 58 E3 0B 80 58 5C 07`.
+- **RESOLVED (2026-07-11): SBS-full now 0-diff through f2000** after the four register-output mirror
+  fixes below. The spawn-leaf r22/r23/r30 residual was downstream fallout of stale caller registers
+  propagated by the libgpu/sequencer mirror chain; fixing those upstream mirrors cleared it.
 - **NOT the #37 r16-r21/r31 register mirror** (that fix targets r16..r21/r31; this is r22/r23/r30).
   NOT a forcing artifact — the earlier HOLLOW-GATE "forcing caveat" note guessed the FORCES4C
   divergence was an entry-condition artifact; it is NOT — **the same divergence appears in natural
