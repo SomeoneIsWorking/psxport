@@ -48,7 +48,6 @@
 #include <string.h>
 #include "spawn.h"
 #include "game.h"       // c->game->verify — the shared A/B verify scaffold
-#include "guest_abi.h"  // GuestFrame — guest-stack frame discipline for spawnTypedChild trampolines
 void rec_super_call(Core*, uint32_t);
 
 // Pool addresses.
@@ -396,29 +395,124 @@ uint32_t Spawn::spawnLiftPlatformChild(uint32_t owner) {   // FUN_8013A730
 
 // Guest-ABI trampolines (EngineOverrides): substrate/native rec_dispatch callers reach the 4 native
 // bodies above exactly like the recomp bodies — args in r4/r5, return in r2.
-// Each trampoline MUST mirror its substrate gen_func's guest-stack frame (alloc + callee-save spills)
-// — MIRROR_VERIFY compares the full guest RAM+regs. An earlier draft had bare trampolines (no frame),
-// leaving whatever stale bytes sat in the spill slots; fixed by adding GuestFrame per the abi_extract
-// contracts (2026-07-11, the f389 diverge root-cause family).
-static constexpr GuestFrameSpill kSpills_8013A730[2] = { {16, 16}, {31, 20} };   // frame=24
-static constexpr GuestFrameSpill kSpills_801360F4[3] = { {16, 16}, {17, 20}, {31, 24} };   // frame=32
-static constexpr GuestFrameSpill kSpills_80139838[3] = { {16, 16}, {17, 20}, {31, 24} };
-static constexpr GuestFrameSpill kSpills_8013AC34[3] = { {16, 16}, {17, 20}, {31, 24} };
-static void eov_spawnQuadRecordChild(Core* c) {
-  GuestFrame<32, 3> frame(c, kSpills_801360F4);
-  c->r[2] = c->engine.spawn.spawnQuadRecordChild(c->r[4], c->r[5]);
-}
-static void eov_spawnSiblingAngleChild(Core* c) {
-  GuestFrame<32, 3> frame(c, kSpills_80139838);
-  c->r[2] = c->engine.spawn.spawnSiblingAngleChild(c->r[4], c->r[5]);
-}
-static void eov_spawnChildTrigChild(Core* c) {
-  GuestFrame<32, 3> frame(c, kSpills_8013AC34);
-  c->r[2] = c->engine.spawn.spawnChildTrigChild(c->r[4], c->r[5]);
-}
+//
+// REGISTER-FAITHFULNESS (2026-07-11, the f389 diverge root cause): the native C++ spawnTypedChild
+// above takes a SHORTCUT — it calls the native Spawn::dispatch which remaps args and calls native
+// spawn bodies, bypassing the substrate's gen_func_8007A980 table dispatch. That leaves different
+// r31/r3 values and different callee stack-frame residuals than the substrate. MIRROR_VERIFY
+// compares the full RAM+regs, so the trampoline MUST reproduce the substrate's EXACT dispatch path:
+// set up the same registers (r4=cls, r5=4, r6=0, r16=owner, r31=jal-site), call
+// rec_dispatch(0x8007A980), then do the child-field writes. Each variant's jal-site ra and post-
+// dispatch writes come from the substrate gen_ body (generated/ov_a00_shard_0.c).
+static constexpr uint32_t SPAWN_DISPATCH = 0x8007A980u;   // gen_func_8007A980 — the table dispatch
+static constexpr uint32_t HANDLER_LIFT    = 0x8013A330u;  // child+0x1C handler (beh_lift_platform)
+static constexpr uint32_t HANDLER_QUADREC = 0x80135D64u;
+static constexpr uint32_t HANDLER_SIBANG  = 0x801395C0u;
+static constexpr uint32_t HANDLER_CHILDTRIG = 0x8013A900u;
+// 0x8013A730 — spawnLiftPlatformChild: frame=24, spills r16@16, r31@20; dispatch(cls=3); single-arg.
 static void eov_spawnLiftPlatformChild(Core* c) {
-  GuestFrame<24, 2> frame(c, kSpills_8013A730);
-  c->r[2] = c->engine.spawn.spawnLiftPlatformChild(c->r[4]);
+  const uint32_t owner = c->r[4];
+  c->r[29] -= 24;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = owner;
+  c->r[4] = 3; c->r[5] = 4; c->r[6] = 0;
+  c->mem_w32(c->r[29] + 20, c->r[31]);
+  c->r[31] = 0x8013A750u;
+  rec_dispatch(c, SPAWN_DISPATCH);
+  c->r[3] = (uint32_t)32788u << 16;   // r3 = 0x80140000 (set before null-check, per substrate)
+  if (c->r[2] != 0) {
+    c->mem_w32(c->r[2] + 0x1Cu, HANDLER_LIFT);
+    c->r[3] = 16;
+    c->mem_w32(c->r[2] + 0x10u, c->r[16]);
+    c->mem_w8 (c->r[2] + 2u, (uint8_t)c->r[3]);
+  } else {
+    c->r[2] = 0;   // explicit return 0 (matches substrate L_8013A770)
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 24;
+}
+// 0x801360F4 — spawnQuadRecordChild: frame=32, spills r16@16, r17@20, r31@24; dispatch(cls=2).
+// Substrate swaps: r17=owner(r4), r16=sub(r5). child+16=r17(owner), child+3=r16(sub).
+static void eov_spawnQuadRecordChild(Core* c) {
+  const uint32_t owner = c->r[4], sub = c->r[5];
+  c->r[29] -= 32;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->r[17] = owner;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = sub;
+  c->r[4] = 2; c->r[5] = 4; c->r[6] = 0;
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+  c->r[31] = 0x8013611Cu;
+  rec_dispatch(c, SPAWN_DISPATCH);
+  c->r[3] = (uint32_t)32787u << 16;   // 32787 (not 32788) per substrate
+  if (c->r[2] != 0) {
+    c->mem_w32(c->r[2] + 0x1Cu, HANDLER_QUADREC);
+    c->r[3] = 7;
+    c->mem_w32(c->r[2] + 0x10u, c->r[17]);
+    c->mem_w8 (c->r[2] + 2u, (uint8_t)c->r[3]);
+    c->mem_w8 (c->r[2] + 3u, (uint8_t)c->r[16]);
+  } else {
+    c->r[2] = 0;
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 32;
+}
+// 0x80139838 — spawnSiblingAngleChild: frame=32, spills r16@16, r17@20, r31@24; dispatch(cls=1).
+static void eov_spawnSiblingAngleChild(Core* c) {
+  const uint32_t owner = c->r[4], sub = c->r[5];
+  c->r[29] -= 32;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->r[17] = owner;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = sub;
+  c->r[4] = 1; c->r[5] = 4; c->r[6] = 0;
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+  c->r[31] = 0x80139860u;
+  rec_dispatch(c, SPAWN_DISPATCH);
+  c->r[3] = (uint32_t)32788u << 16;
+  if (c->r[2] != 0) {
+    c->mem_w32(c->r[2] + 0x1Cu, HANDLER_SIBANG);
+    c->r[3] = 13;
+    c->mem_w32(c->r[2] + 0x10u, c->r[17]);
+    c->mem_w8 (c->r[2] + 2u, (uint8_t)c->r[3]);
+    c->mem_w8 (c->r[2] + 3u, (uint8_t)c->r[16]);
+  } else {
+    c->r[2] = 0;
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 32;
+}
+// 0x8013AC34 — spawnChildTrigChild: frame=32, spills r16@16, r17@20, r31@24; dispatch(cls=2).
+static void eov_spawnChildTrigChild(Core* c) {
+  const uint32_t owner = c->r[4], sub = c->r[5];
+  c->r[29] -= 32;
+  c->mem_w32(c->r[29] + 20, c->r[17]);
+  c->r[17] = owner;
+  c->mem_w32(c->r[29] + 16, c->r[16]);
+  c->r[16] = sub;
+  c->r[4] = 2; c->r[5] = 4; c->r[6] = 0;
+  c->mem_w32(c->r[29] + 24, c->r[31]);
+  c->r[31] = 0x8013AC5Cu;
+  rec_dispatch(c, SPAWN_DISPATCH);
+  c->r[3] = (uint32_t)32788u << 16;
+  if (c->r[2] != 0) {
+    c->mem_w32(c->r[2] + 0x1Cu, HANDLER_CHILDTRIG);
+    c->r[3] = 17;
+    c->mem_w32(c->r[2] + 0x10u, c->r[17]);
+    c->mem_w8 (c->r[2] + 2u, (uint8_t)c->r[3]);
+    c->mem_w8 (c->r[2] + 3u, (uint8_t)c->r[16]);
+  } else {
+    c->r[2] = 0;
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 32;
 }
 void Spawn::registerTypedChildOverrides() {
   EngineOverrides& ov = core->game->engine_overrides;
