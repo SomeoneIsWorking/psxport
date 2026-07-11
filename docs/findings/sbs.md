@@ -176,6 +176,16 @@ Divergences are FATAL — no residual allowlist. Older notes below refer to the 
     a different approach than MIRROR_VERIFY: either a per-frame write-count comparison for the
     diverge bytes (which function writes the Nth time on A but not B), or a deeper audit of which
     native field-frame override changes the iteration count of the gameplay tick loop.
+- **FRAMEPROF TOOL REVEALED THE ROOT CAUSE (2026-07-11):** Built PSXPORT_SBS_FRAMEPROF=<frame>
+  (sbs.cpp) — counts every store per (pc,ra) per core during the target frame, then reports the
+  A-vs-B count deltas sorted by |delta|. First run at f389 directly named the top cadence gap:
+  **Render::gpuDmaSend (0x80082424) — 2048-count delta.** Core A calls it 2051× from
+  ra=0x800814BC (clearOTagR), core B calls it 2048× from ra=0x8008249C (gpuDmaSend itself, i.e.
+  the substrate's internal store loop). The 3-store gap means the native gpuDmaSend writes 3 more
+  stores than the substrate during clearOTagR's OT-clear. Other top entries: beh_id_routed_dispatch
+  (0x80121978, 424-count), 0x80075FF8 (456-count, pure substrate — called differently by natives
+  above it). The cadence gap is in the RENDER DMA path, not the gameplay tick — connecting to the
+  render invariant (the faithful render must produce the same DMA writes as the substrate).
 
 ## HOLLOW GATE: free-roam SBS never runs native field-frame code (fieldFrameX / updateTail) (2026-07-11)
 
