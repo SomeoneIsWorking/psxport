@@ -122,6 +122,28 @@ as `recdep`/`ovhit`), no guest-memory writes. Tables are per-Core, sized statica
 GTE buckets 512), reset lazily on the frame's first touch; overflow is counted, never silently dropped.
 Pipe stderr through `tools/symres.py` to resolve the raw hex fn/node/beh addresses to FUN_/native names.
 
+LAST-WRITER PROVENANCE extension (USER 2026-07-14, follow-up when call-path attribution names only the
+BATCHER — the object identity is lost at a RAM copy through a shared staging buffer before emission).
+Independent of call-flow: a per-WORD (4-byte) last-writer table {fn, caller, frame} fed from the SAME
+`Core::mem_w8/16/32 -> pkt_track -> OtAttr::trackStore` interception point, so it works on ANY watched
+address — not just the packet pool, e.g. scratchpad (GTE staging at 0x1F800000-0x1F8003FF) or a
+game-specific staging buffer. Up to 8 regions, 64 KB of word records total (`OtAttr::WATCH_SLOTS`/
+`WATCH_CAP_WORDS`); overflow counted. REPL sub-commands (`runtime/recomp/repl.cpp`):
+  - `otattr watch <addr-hex> <len-hex>` — register a region (physical-masked, so RAM and scratchpad both
+    work). Reports the slot used / rejects with slot+word budget on overflow.
+  - `otattr who <addr-hex> [len-hex]` — word-granular last-writer dump over the range, coalescing
+    consecutive words with the same (fn, caller, frame) into one run.
+  - `otattr trace <addr-hex>` — one-hop helper: prints the last writer, then a heuristic ("does this fn's
+    stores fan out across many distinct 4KB pages this frame?" via a per-fn store-count/page-touch stat,
+    `OtAttr::FnStoreStat`) for whether the writer LOOKS like a copy/batch loop. Never claims to find the
+    SOURCE automatically (this tool only sees writes, not reads) — says so and points at Ghidra + a
+    follow-up `watch` on the suspected source once a human/agent identifies it from one decompile.
+Same off-cost and no-guest-write guarantees as the base `otattr` tool (single `cfg_dbg("otattr")` gate).
+Known gap: scratchpad DOES route through `Core::mem_w*` like main RAM (verified), so it CAN be watched;
+what this tool cannot see is a store issued by fully-native (non-recompiled, no guest PC) C++ code, since
+`otattrTop()` reflects the last guest fn reached via `rec_dispatch` — a native-only copy shows up
+attributed to whichever guest fn most recently called INTO native code, not the native copier itself.
+
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames
 `waitloop` heuristic — prefer btyield) · `btyield` (at each coro yield: guest-stack scan AND a PRECISE

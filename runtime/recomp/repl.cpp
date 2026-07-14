@@ -297,8 +297,113 @@ long Repl::read(Core* c, uint32_t f) {
     // Pipe stderr through tools/symres.py to resolve the raw hex fn/node addresses to FUN_/native names.
     else if (!strcmp(cmd, "otattr")) {
       OtAttr& oa = c->mRender->otAttr;
-      fprintf(stderr, "[otattr] frame=%u spans=%d(overflow=%d) gteBuckets=%d(overflow=%d)\n",
-              oa.frame(), oa.spanCount(), oa.spanOverflow(), oa.gteCount(), oa.gteOverflow());
+      char sub[32] = {0};
+      sscanf(line, "%*s %31s", sub);
+      // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of
+      // call-flow, for the staging-buffer case where call-path attribution only names the batcher.
+      if (!strcmp(sub, "watch")) {
+        uint32_t addr = 0, len = 0;
+        if (sscanf(line, "%*s %*s %x %x", &addr, &len) != 2 || len == 0) {
+          fprintf(stderr, "[otattr] usage: otattr watch <addr-hex> <len-hex>\n");
+        } else {
+          int slot = oa.watchRegister(addr, len);
+          if (slot < 0)
+            fprintf(stderr, "[otattr] watch REJECTED (slots=%d/%d wordsUsed=%d/%d overflow=%d) — free a "
+                             "slot or shrink the region\n",
+                    oa.watchSlotCount(), OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), OtAttr::WATCH_CAP_WORDS,
+                    oa.watchOverflow());
+          else {
+            const OtAttr::WatchRegion* r = oa.watchAt(slot);
+            // Decorate as KSEG0 (0x800xxxxx) ONLY for main-RAM regions — scratchpad (0x1F800000-
+            // 0x1F8003FF) is NOT mirrored across segments the way RAM is, so blindly OR-ing 0x80000000
+            // onto it prints a bogus 0x9F8xxxxx address. Print scratchpad addresses as-is (their own
+            // canonical form).
+            uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
+            uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
+            fprintf(stderr, "[otattr] watch[%d] = [0x%08X,0x%08X) (%u words) — slots %d/%d, %d/%d words used\n",
+                    slot, dlo, dhi, (r->hi - r->lo) / 4,
+                    oa.watchSlotCount(), OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), OtAttr::WATCH_CAP_WORDS);
+          }
+        }
+        fflush(stderr);
+        continue;
+      }
+      if (!strcmp(sub, "who")) {
+        uint32_t addr = 0, len = 4;
+        int got = sscanf(line, "%*s %*s %x %x", &addr, &len);
+        if (got < 1) { fprintf(stderr, "[otattr] usage: otattr who <addr-hex> [len-hex]\n"); fflush(stderr); continue; }
+        if (got == 1) len = 4;
+        fprintf(stderr, "[otattr] who 0x%08X..0x%08X (word-granular, coalesced runs):\n", addr, addr + len);
+        uint32_t w = addr & ~3u, end = addr + len;
+        bool any = false;
+        OtAttr::WordRec cur{}; uint32_t runLo = 0, runHi = 0; bool haveRun = false;
+        auto flush_run = [&]() {
+          if (!haveRun) return;
+          if (cur.frame == 0xFFFFFFFFu)
+            fprintf(stderr, "  [0x%08X,0x%08X) NEVER WRITTEN since watch registered\n", runLo, runHi);
+          else
+            fprintf(stderr, "  [0x%08X,0x%08X) fn=0x%08X caller=0x%08X frame=%u\n",
+                    runLo, runHi, cur.fn, cur.caller, cur.frame);
+          any = true; haveRun = false;
+        };
+        for (; w < end; w += 4) {
+          OtAttr::WordRec rec{}; uint32_t wa = 0;
+          if (!oa.watchLookup(w, &rec, &wa)) {
+            flush_run();
+            fprintf(stderr, "  [0x%08X,0x%08X) NOT WATCHED — run `otattr watch` first\n", w, w + 4);
+            continue;
+          }
+          if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
+            runHi = wa + 4;
+          } else {
+            flush_run();
+            cur = rec; runLo = wa; runHi = wa + 4; haveRun = true;
+          }
+        }
+        flush_run();
+        if (!any) fprintf(stderr, "  (nothing in range)\n");
+        fflush(stderr);
+        continue;
+      }
+      if (!strcmp(sub, "trace")) {
+        uint32_t addr = 0;
+        if (sscanf(line, "%*s %*s %x", &addr) != 1) { fprintf(stderr, "[otattr] usage: otattr trace <addr-hex>\n"); fflush(stderr); continue; }
+        OtAttr::WordRec rec{}; uint32_t wa = 0;
+        if (!oa.watchLookup(addr, &rec, &wa)) {
+          fprintf(stderr, "[otattr] trace 0x%08X: NOT in any watched region — `otattr watch <addr> <len>` first\n", addr);
+          fflush(stderr); continue;
+        }
+        if (rec.frame == 0xFFFFFFFFu) {
+          fprintf(stderr, "[otattr] trace 0x%08X: watched, but NEVER WRITTEN since registration\n", addr);
+          fflush(stderr); continue;
+        }
+        fprintf(stderr, "[otattr] trace 0x%08X (word 0x%08X): last writer fn=0x%08X caller=0x%08X frame=%u\n",
+                addr, wa, rec.fn, rec.caller, rec.frame);
+        // One-hop heuristic: does the writer LOOK like a copy loop (touches many distinct 4KB pages in
+        // the same frame, i.e. it fans out across many destinations rather than emitting one thing)?
+        const OtAttr::FnStoreStat* st = oa.fnStatFind(rec.fn);
+        if (!st) {
+          fprintf(stderr, "  [trace] no per-fn store stat recorded for this fn this frame (stale/cross-frame "
+                           "lookup) — re-run `otattr trace` in the same frame the write happened.\n");
+        } else {
+          bool looksLikeCopyLoop = st->pageOverflow || st->pageCount >= 3;
+          fprintf(stderr, "  [trace] fn=0x%08X made %u store(s) touching %d distinct 4KB page(s) this frame%s -> %s\n",
+                  rec.fn, st->count, st->pageCount, st->pageOverflow ? "+" : "",
+                  looksLikeCopyLoop ? "LOOKS LIKE A COPY/BATCH LOOP (writes fan out across many destinations; "
+                                      "the object identity was likely already lost by the time it reached this word)"
+                                    : "looks like a direct, single-destination writer");
+          fprintf(stderr, "  [trace] SOURCE not statically determinable from store data alone (this tool only "
+                           "sees writes, not reads) — Ghidra-decompile fn=0x%08X (tools/decomp.sh) to find its "
+                           "read pointer/source struct, then `otattr watch <src_addr> <len>` and re-run `otattr "
+                           "who`/`trace` on the source to walk one more hop back.\n", rec.fn);
+        }
+        fflush(stderr);
+        continue;
+      }
+      fprintf(stderr, "[otattr] frame=%u spans=%d(overflow=%d) gteBuckets=%d(overflow=%d) watch: slots=%d/%d "
+                       "words=%d/%d(overflow=%d)\n",
+              oa.frame(), oa.spanCount(), oa.spanOverflow(), oa.gteCount(), oa.gteOverflow(),
+              oa.watchSlotCount(), OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), OtAttr::WATCH_CAP_WORDS, oa.watchOverflow());
       uint32_t madr = c->game->gpu.s_ot_madr;
       if (!madr) {
         fprintf(stderr, "[otattr] GpuState::s_ot_madr == 0 — no OT walked yet this run\n");

@@ -31,6 +31,24 @@
 // Reached as `core->mRender->otAttr`. The REPL `otattr` command (repl.cpp) re-walks the CURRENT OT
 // read-only (no gpu_gp0 side effects) and looks up each packet's pool address in table 1, printing the
 // GTE histogram from table 2 alongside.
+//
+// LAST-WRITER PROVENANCE extension (USER 2026-07-14, follow-up to the census's open question: call-path
+// attribution alone names only the BATCHER when a game copies many objects' quads through one shared
+// staging buffer before emission — the object identity is lost at the RAM copy). Answers "who wrote this
+// WORD", independent of call-flow:
+//
+//   3. Watched-region registry (`otattr watch <addr> <len>`, up to WATCH_SLOTS regions, WATCH_CAP_WORDS
+//      words total across all regions) — a per-WORD (4-byte) last-writer table {fn = otattr shadow-stack
+//      top at store time, caller, frame}. Any address, not just the packet pool — this is what lets it
+//      watch scratchpad (GTE staging) or a game-specific staging buffer once one is suspected. Fed from
+//      the SAME store-interception point as table 1 (Core::mem_w8/16/32 -> pkt_track -> trackStore), so
+//      it inherits the same "off costs one branch" guarantee and the same scratchpad/native-code caveats
+//      documented at trackStore's definition.
+//
+//   4. Per-fn store-count stat for the current frame (`mFnStat`, fed unconditionally alongside the watch
+//      table) — total store count + up to FNSTAT_PAGES distinct 4KB destination pages touched. Powers the
+//      `otattr trace <addr>` heuristic: a writer fn that touches many distinct pages in one frame LOOKS
+//      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
 #include <stdint.h>
 class Core;
@@ -65,8 +83,50 @@ public:
   const GteBucket* gteAt(int i) const { return &mGte[i]; }
   uint32_t frame() const { return mFrame; }
 
+  // --- LAST-WRITER PROVENANCE (watched regions) ---
+
+  // Up to 8 regions; 64 KB of word-granular last-writer records total across all of them (static, so
+  // this is diagnostic memory that's live regardless of whether `otattr` is on — cheap, always allocated
+  // like the span/GTE tables above).
+  static constexpr int WATCH_SLOTS     = 8;
+  static constexpr int WATCH_CAP_BYTES = 65536;
+  static constexpr int WATCH_CAP_WORDS = WATCH_CAP_BYTES / 4;
+
+  // Physical (0x1FFFFFFF-masked) address range — works uniformly for main RAM (KUSEG/KSEG0/KSEG1 all
+  // mask to the same 0x000xxxxx..0x1FFFFFxx physical range) AND scratchpad (0x1F800000-0x1F8003FF,
+  // which is NOT mirrored across segments the way main RAM is — see trackStore's `phys` comment).
+  struct WatchRegion { uint32_t lo = 0, hi = 0, wordBase = 0; bool active = false; };
+  struct WordRec     { uint32_t fn = 0, caller = 0, frame = 0xFFFFFFFFu; };
+
+  static constexpr int FNSTAT_CAP   = 256;
+  static constexpr int FNSTAT_PAGES = 8;   // distinct 4KB dest pages tracked per fn before "overflow" (many)
+  struct FnStoreStat {
+    uint32_t fn = 0, count = 0;
+    uint32_t pages[FNSTAT_PAGES] = {};
+    int      pageCount = 0;
+    bool     pageOverflow = false;
+  };
+
+  // Register a watched region [addr, addr+len). Returns the slot index, or -1 if all WATCH_SLOTS are
+  // used or the WATCH_CAP_WORDS word budget is exhausted (both counted so `otattr watch` can report why).
+  int watchRegister(uint32_t addr, uint32_t len);
+  int watchSlotCount() const { return mWatchCount; }
+  int watchWordsUsed() const { return mWatchWordsUsed; }
+  int watchOverflow()  const { return mWatchOverflow; }
+  const WatchRegion* watchAt(int i) const { return &mWatch[i]; }
+
+  // Word-granular last-writer lookup. `addr` may be any address inside a watched region (rounded down
+  // to its containing word). Returns false if `addr` isn't inside ANY watched region.
+  bool watchLookup(uint32_t addr, WordRec* out, uint32_t* wordAddrOut = nullptr) const;
+
+  const FnStoreStat* fnStatFind(uint32_t fn) const;
+  int fnStatCount() const { return mFnStatCount; }
+  const FnStoreStat* fnStatAt(int i) const { return &mFnStat[i]; }
+
 private:
   void resetIfNewFrame(uint32_t frame);
+  void trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame);
+  void recordFnStat(uint32_t frame, uint32_t fn, uint32_t phys);
 
   uint32_t mFrame = 0xFFFFFFFFu;
   Span     mSpans[SPAN_CAP] = {};
@@ -77,4 +137,15 @@ private:
   GteBucket mGte[GTE_CAP] = {};
   int       mGteCount = 0;
   int       mGteOverflow = 0;
+
+  WatchRegion mWatch[WATCH_SLOTS] = {};
+  int         mWatchCount = 0;
+  int         mWatchWordsUsed = 0;
+  int         mWatchOverflow = 0;
+  WordRec     mWatchWords[WATCH_CAP_WORDS] = {};   // pooled backing store, indexed via wordBase + offset
+
+  uint32_t    mFnStatFrame = 0xFFFFFFFFu;
+  FnStoreStat mFnStat[FNSTAT_CAP] = {};
+  int         mFnStatCount = 0;
+  int         mFnStatOverflow = 0;
 };
