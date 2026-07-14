@@ -1756,3 +1756,17 @@ draft was already byte-faithful.
   eyeball. Residual: per-quad anchor captures camera motion only (object's own motion within the
   span is not interpolated — correct next step remains per-element RE/ownership of the emitters,
   0x80039F4C first).
+
+## 0x8003F9A8 474-prim attribution resolved — 4 substrate list-walkers, no hidden emitter (2026-07-14)
+
+- The field draw dispatcher 0x8003F9A8's misattributed prims are the ALREADY-NATIVE chain
+  (cca4→cdd8→f698→80146478→OverlayGt3Gt4::gt3/gt4) reached via four still-substrate object-list
+  walkers: 0x8003BB50 (list @0x800F2410), 0x8003BCF4 (@0x800F26C8), 0x8003BF00 (@0x800F2738),
+  0x8003EEC0 — direct C calls, invisible to the otattr shadow stack. PORT ORDER: (1) the 4 walkers
+  (no new emitter RE; identity = walked object ptr; wire the case-0x15/16/17/20 per-object vtable
+  slots through rec_dispatch); (2) FUN_8004FD30+FUN_8004FB4C (self-contained HUD gauge emitter,
+  loop identity = 0x800BF548 stride-0x8C index); (3) single-object dispatchers (defer).
+- 0x8013CDD4 = the un-owned widescreen-margin OT.LINE/GT3 submitter (prior scoped debt, journal
+  later-129/131), reached via the walkers' per-object vtable slots — NOT part of the gt3/gt4 chain.
+- Decomps: scratch/decomp/otattr_subs.c, otattr_leaf{,2}.c, otattr_f698.c; Ghidra project
+  scratch/ghidra/otattr_census.
