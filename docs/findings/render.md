@@ -1722,3 +1722,28 @@ draft was already byte-faithful.
   pipeline (projComposeObject → EObjXform::project → submitPolyGt3/Gt4Native) is pixel-exact vs the
   GTE for this scene — do not re-investigate it for orientation/position symptoms.** Decoder scripts:
   scratch/bug44_decode_ot.py, scratch/bug44_fit_transform.py.
+
+## Quad batching (#45) — evidence pass: scope narrowed to 0x80039F4C (2026-07-14)
+
+- **user report:** quads lack RE; all visible quads share one "billboard" → react badly to fps60.
+- **proven from code (not sampled):** provenance is manager-granular by construction — otattr spans
+  coalesce on (fn, caller, node); obs_body/withDepthTag register ONE depth span + ONE fps60 identity
+  per gen call regardless of how many world objects the call draws.
+- **but two of the three suspect emitters are already covered:** 0x8003C5F8/0x8003C788 are thin GTE
+  compose wrappers that direct-call 0x8003C8F4 = native Render::billboardEmit, whose per-particle
+  loop already records recordBillboardParticle (identity + world anchor per particle), and
+  Fps60::billboardForNode searches the per-particle table FIRST (fps60.cpp:161-179) — gem/pickup/
+  flame sprites interpolate individually. Occlusion depth remains whole-batch (outer withDepthTag) —
+  not user-reported, left as-is.
+- **the real gap = 0x80039F4C** (UNOWNED, wrapped by obs_body): a genuine multi-element loop —
+  iterates per-element object pointers (iVar7 = param+4k), reads a glyph index per element, resolves
+  per-element transform at iVar7+0xC0, emits one quad each via FUN_8003F7D8 (decomp:
+  scratch/decomp/bug45.c). This is the score/AP popup / icon-strip renderer. N elements' quads land
+  in ONE span with ONE node identity → fps60 reprojects the strip rigidly. Natural per-element
+  boundary: each loop iteration's element pointer.
+- **fix direction:** port 0x80039F4C native (full ownership) with per-element provenance
+  (recordBillboardParticle-equivalent + per-element identity); port framework + port_check gate.
+- **outstanding:** live otattr confirmation of 0x80039F4C firing (needs a score/AP popup on screen —
+  collect a pickup; the evidence agent's jump-traversal never collected one). Confirm before landing.
+- **refs:** issue #45; scratch/decomp/bug45.c; game/render/perobj_billboard.cpp:388,512-529;
+  game/render/fps60.cpp:142-196; game/render/render_observer.cpp; ot_attr.cpp:44-49 (coalescing key).
