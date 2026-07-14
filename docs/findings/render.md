@@ -1828,3 +1828,11 @@ draft was already byte-faithful.
   — no native rebuild exists, so pc_render keeps presenting the exterior field pass. GATE+pc_render
   reproduces; GATE+RENDER_PSX draws the interior. Fix = RE+native ownership of the frameX/state-3
   interior pass. Filed as a bug; evidence scratch/screenshots/hut_verify/ + hut_otattr_out.log.
+- **UPDATE (2026-07-15): the "missing native rebuild" fix premise is FALSIFIED.** render_field_native_active
+  already fires the f1527b5 redirect in sm[4c]==3 (verified PSXPORT_DEBUG=redirect names node 800FD850 room +
+  the two NPC nodes), and sceneNative composes all 4 interior objects (PSXPORT_DEBUG=scenenative: objs=4
+  cmds=407, eproj transforms sane) — yet the presented frame is still the closed-door EXTERIOR. So #49 is
+  DOWNSTREAM of geometry submission: a present/framebuffer-target selection issue OR the twoDOnly OT walk
+  (game_tomba2.cpp:209) redrawing stale exterior packets over the correctly-submitted native world. Next:
+  diff VK draw-call/present-target selection between GATE+RENDER_PSX (works) and default (broken) at the
+  same interior frame. No fix landed (no-bandaids — mechanism not yet named).

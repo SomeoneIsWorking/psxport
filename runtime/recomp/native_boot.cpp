@@ -333,6 +333,10 @@ static void game_main(Core* c) {
   // PSXPORT_AUTO_SKIP needs time to tap through title -> GAME -> field: raise the headless smoke cap so a
   // no-REPL run actually reaches free-roam before the loop ends (REPL runs gate frames via `run N` instead).
   if (!repl_mode && !gpu_windowed() && cfg_str("PSXPORT_AUTO_SKIP")) nframes = 1500;
+  // PSXPORT_NATIVE_FRAMES: the comment above (and docs/driving-the-game.md) promised "an explicit
+  // NATIVE_FRAMES always wins" but nothing ever READ the var — every headless PAD_REPLAY/no-REPL run
+  // silently hit the smoke cap regardless. Explicit request now wins over every default above.
+  if (!repl_mode) { int nf = cfg_int("PSXPORT_NATIVE_FRAMES", 0); if (nf > 0) nframes = (uint32_t)nf; }
   // When the debug server is up (headless, no REPL), the run is INTERACTIVELY DRIVEN over the socket
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
