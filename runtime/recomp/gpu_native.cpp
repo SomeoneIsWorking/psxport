@@ -191,6 +191,24 @@ int GpuState::ui_span_lookup(uint32_t addr) {
 }
 void gpu_ui_span_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.ui_span_add(lo, hi); }
 
+// NATIVE-COVER registry (docs/fps60-rework.md REDIRECT, gpu_native_internal.h). Presence-only, same
+// shape as ui_span_add/lookup: a packet-pool span whose geometry Render::cmdListDispatch ALSO drew
+// through the real per-object float path this frame (real identity + real per-vertex depth) — the
+// gp0_exec classifier below drops a covered span's guest-OT polys unconditionally, before even
+// considering the obj_depth billboard fallback (see the `!is3d && !bg` block).
+void GpuState::nativeCoverAdd(uint32_t lo, uint32_t hi) {
+  if (hi <= lo) return;
+  if (s_nc_frame != s_frame) { s_nc_n = 0; s_nc_frame = s_frame; }   // new frame -> clear prior spans
+  if (s_nc_n < NATIVE_COVER_MAX) { s_nc_lo[s_nc_n] = lo; s_nc_hi[s_nc_n] = hi; s_nc_n++; }
+}
+int GpuState::nativeCoverLookup(uint32_t addr) {
+  if (s_nc_frame != s_frame) return 0;
+  uint32_t n = addr | 0x80000000u;
+  for (int i = 0; i < s_nc_n; i++) if (n >= s_nc_lo[i] && n < s_nc_hi[i]) return 1;
+  return 0;
+}
+void gpu_native_cover_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.nativeCoverAdd(lo, hi); }
+
 // s_gp0_words / s_dma2 moved to GpuState (per-Core; was cross-core-shared per-frame diag).
 // g_nd_3d/nd_2d retired 2026-07-03 — Render::stats.nd3d/nd2d (RenderStats).
 // 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
@@ -818,9 +836,16 @@ void GpuState::gp0_exec(Core* core) {
         // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
         // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.
         if (!is3d && !bg && semi && fade_full_2d(s_disp_w, s_disp_h, bx0, by0, bx1, by1)) fade_full = 1;
+        // NATIVE-COVER (docs/fps60-rework.md REDIRECT): this span's geometry was ALSO drawn through the
+        // real per-object float path this frame (real identity + real per-vertex depth) — the guest-OT
+        // copy is a strictly worse redundant duplicate (coarse GTE screen position, flat per-object
+        // depth, no dbg_node). Drop it outright; do NOT fall through to the obj_depth billboard
+        // promotion below (checked first on purpose — a covered span may ALSO carry a stale obj_depth
+        // tag from the same withDepthTag scope, and native-cover must win).
+        bool native_covered = !is3d && !bg && nativeCoverLookup(s_cur_node);
         // PC-native object depth: a 2D billboard prim (no projected verts) whose OT-node falls in an
         // object's packet-pool span inherits that object's world-position view-Z and occludes for real.
-        if (!is3d && !bg) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
+        if (!is3d && !bg && !native_covered) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
           for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; billboard = 1; } }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           s_nd2d_hist[op]++; }

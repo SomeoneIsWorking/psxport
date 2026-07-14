@@ -92,6 +92,24 @@ struct GpuState {
   void ui_span_add(uint32_t lo, uint32_t hi);   // record a UI-panel emitter's packet-pool span
   int  ui_span_lookup(uint32_t addr);           // is this OT node inside a UI span this frame?
 
+  // NATIVE-COVER registry (docs/fps60-rework.md REDIRECT — windmill-family GT3/GT4 objects). When
+  // Render::cmdListDispatch (perobj_dispatch.cpp) ALSO draws a cmd's geometry through the real
+  // per-object float path (Render::gt3gt4, real identity + real per-vertex depth) because
+  // perModeDispatch would otherwise route it to the byte-exact substrate mirror
+  // (OverlayGt3Gt4::gt3/gt4), the substrate's OWN guest-OT copy of that same geometry becomes
+  // redundant. Presence-only span registry (same shape as ui_span_add/lookup): the field's 2D-only OT
+  // walk checks this FIRST and unconditionally drops a covered span's guest polys — NOT via
+  // obj_depth's billboard promotion (that would draw the coarse GTE-positioned copy AGAIN with a flat
+  // per-object depth, i.e. a double draw with a worse picture). The substrate GTE math that produced
+  // this span still runs untouched underneath (SBS byte-exactness unaffected); only the PICTURE
+  // decision changes.
+  static const int NATIVE_COVER_MAX = 64;
+  uint32_t s_nc_lo[NATIVE_COVER_MAX] = {}, s_nc_hi[NATIVE_COVER_MAX] = {};
+  int s_nc_n = 0;
+  int s_nc_frame = -1;
+  void nativeCoverAdd(uint32_t lo, uint32_t hi);   // record a natively-redrawn cmd's packet-pool span
+  int  nativeCoverLookup(uint32_t addr);           // is this OT node inside a native-covered span?
+
   // VRAM (textures + framebuffers)
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};
   uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }

@@ -61,6 +61,8 @@
 #include "render.h"
 #include "cfg.h"
 #include "guest_abi.h"   // GuestFrame/guest_dispatch — perModeDispatch's demo migration (docs/port-framework.md)
+#include "render_internal.h"   // render_field_native_active / gpu_native_cover_add (REDIRECT below)
+#include "pkt_span.h"           // PktSpanSession (REDIRECT's own inner span capture)
 
 void rec_dispatch(Core*, uint32_t);          // overlay_router.cpp — the shared choke point for owned/substrate leaves
 void func_800803DC(Core*);                    // generated/shard_disp.c — generic GT3/GT4 packet emitter (still substrate)
@@ -118,6 +120,11 @@ constexpr uint32_t MODE_TABLE = 0x80015268u;   // 22-entry jump table: mode -> p
 constexpr uint32_t MVMVA_ROTCOL = 0x4A49E012u; // MVMVA: camera-rot(CR0-4) x IR vector -> composed col
 constexpr uint32_t MVMVA_TRANS  = 0x4A486012u; // MVMVA: camera-rot(CR0-4) x V0 (object world position)
 }
+
+// Forward decl: perModeCaseTarget's real definition sits with perModeDispatch below (it decodes
+// MODE_TABLE's per-mode jump-table LABEL values into the actual FUN_ target address); cmdListDispatch's
+// REDIRECT (below) needs it to recognize the generic-overlay case BEFORE calling perModeDispatch.
+static uint32_t perModeCaseTarget(uint32_t caseLabel);
 
 // FUN_8003CDD8 — per-object cmd-list dispatch: composes the WORLD object transform (camera-rot x
 // object-local, via MVMVA) into GTE CR0-7 for each active render command, then calls FUN_8003F698.
@@ -195,6 +202,58 @@ void Render::cmdListDispatch() {
     if ((c->mem_r8(node + 0xDu) & 0xFu) == 4)
       otbase = otbase_val + ((uint32_t)(int32_t)c->mem_r8s(cmd + 0x3Fu) << 2);
 
+    // REDIRECT (docs/fps60-rework.md, RE+PORT not stamping): give this cmd's PICTURE real engine
+    // identity when perModeDispatch is about to route it to the generic-overlay leaf FUN_80146478
+    // (OverlayGt3Gt4::gt3/gt4, overlay_gt3gt4.cpp) — a byte-exact GTE mirror with no object identity
+    // (no dbg_node, coarse flat per-object depth via the obj_depth billboard fallback, screen position
+    // from the GTE not the engine). FUN_80146478's own record format — geomblk+0 = {GT3 count lo16,
+    // GT4 count hi16}, GT3 records at geomblk+16 (36B stride), GT4 records after (44B stride) — is
+    // IDENTICAL to what Render::gt3gt4/submitPolyGt3/4Native already parse for every native-owned
+    // object (submit.cpp Render::gt3gt4: `counts=mem32(geomblk+0); gt3(geomblk+16,...)`). And this
+    // cmd's own `cmd+0x18` rotation / `cmd+0x2C` world position — the SAME fields cmdListDispatch just
+    // read to compose the GTE CR0-7 transform above — are the SAME fields Render::projComposeObject
+    // reads for perObjFlush's world objects. So the geometry FITS the existing native path exactly;
+    // this is a real REDIRECT (drawing the SAME data through the owned path), not a stamp/fake.
+    //
+    // Gated to render_field_native_active(c) (pc_render's native field-pass window — see
+    // render_internal.h) so this NEVER runs under psx_render/oracle/menus/narration, where the guest
+    // OT's full walk is the sole picture source and an extra native draw would double-draw.
+    //
+    // Invariant (a): the substrate GTE math below (perModeDispatch -> FUN_80146478 -> gt3/gt4) is
+    // UNTOUCHED and still runs unconditionally — SBS byte-exactness is unaffected, only the PICTURE
+    // decision changes.
+    // Invariant (b) NO DOUBLE-DRAW: register this cmd's own packet-pool span (captured via a nested
+    // PktSpanSession bracketing ONLY the perModeDispatch call below) into the native-cover registry,
+    // so gpu_native.cpp's field OT walk drops the substrate's now-redundant guest-OT copy instead of
+    // billboard-promoting it via obj_depth (see gpu_native_internal.h's NATIVE-COVER banner). The
+    // nested session's span still MERGES into perObjRenderDispatch's own outer withDepthTag session
+    // (pkt_span.h: nesting always merges) — harmless, since native-cover is checked BEFORE the
+    // obj_depth billboard promotion in gp0_exec.
+    // Invariant (c): dbg_node = the real owning node (perObjRenderDispatch's `node` — beginObject
+    // brackets ONLY this native draw, mirroring withDepthTag's own discipline) so matchAndLerp covers
+    // these prims with no matcher changes.
+    bool redirectGeneric = false;
+    if (render_field_native_active(c)) {
+      const uint32_t modeByte = c->mem_r8(MODE_BYTE);
+      redirectGeneric = c->mem_r8(MODE_FORCE) == 0 && (flag & 1u) == 0 && modeByte < 22 &&
+                        perModeCaseTarget(c->mem_r32(MODE_TABLE + modeByte * 4u)) == 0x80146478u;
+      if (redirectGeneric) {
+        if (cfg_dbg("redirect")) { static long n=0; if (n++%256==0)
+          fprintf(stderr, "[redirect] cmdListDispatch node=%08X cmd=%08X geomblk=%08X otbase=%08X\n", node, cmd, geomblk, otbase); }
+        // FAIL-FAST (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): this native draw is a
+        // display-pass addition living INSIDE cmdListDispatch, whose surrounding substrate body
+        // legitimately writes guest RAM (GTE CR/OT/packet-pool) — so the guard is scoped tightly to
+        // JUST this block, not the whole function, the same discipline game_tomba2.cpp's
+        // Engine::drawOTag uses around sceneNative().
+        DisplayPassGuard displayPass(c->mRender->mode);
+        c->mRender->diag.beginObject(node);           // real dbg_node identity for this cmd's RqItems
+        EObjXform w; c->mRender->projComposeObject(cmd, &w); c->mRender->projSetActive(&w);
+        c->mRender->gt3gt4(geomblk, otbase);           // the real picture: native float, real per-vertex depth
+        c->mRender->projClearActive();
+        c->mRender->diag.endObject();
+      }
+    }
+
     c->r[4] = geomblk; c->r[5] = otbase; c->r[6] = flag;
     // Register-faithfulness (f62 residual root cause, 2026-07-09): gen_func_8003CDD8 keeps r16..r23
     // LIVE as loop-invariant/loop-index scratch for its ENTIRE loop body (r16=i the loop counter,
@@ -220,7 +279,21 @@ void Render::cmdListDispatch() {
     c->r[22] = flag;
     c->r[23] = SCR;
     c->r[31] = 0x8003D07Cu;   // RE'd return-address constant (gen_func_8003CDD8, right before func_8003F698)
-    perModeDispatch();
+    if (redirectGeneric) {
+      // NO DOUBLE-DRAW (invariant b): capture the substrate's own packet-pool span (bracketing ONLY
+      // this call, so terrain/other cmds on the SAME node aren't mis-attributed) and register it as
+      // native-covered — gpu_native.cpp's field OT walk drops it unconditionally instead of
+      // billboard-promoting it via obj_depth (checked first in gp0_exec; see the NATIVE-COVER banner
+      // in gpu_native_internal.h). This nested session's range still merges into perObjRenderDispatch's
+      // outer withDepthTag session (pkt_span.h: nesting always merges) — harmless, since native-cover
+      // wins over obj_depth regardless of which registry also holds the span.
+      PktSpanSession nativeCoverSess(c);
+      perModeDispatch();
+      uint32_t nlo, nhi;
+      if (nativeCoverSess.close(&nlo, &nhi)) gpu_native_cover_add(c, nlo, nhi);
+    } else {
+      perModeDispatch();
+    }
     } // if (geomblk != 0)
     i++;
     if (!(i < (int)c->mem_r8(node + 9))) return;

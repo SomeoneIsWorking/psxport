@@ -17,6 +17,11 @@ void  gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 // keeps it as RQ_HUD instead of dropping it with the redundant native-owned world polys. No depth/ord —
 // distinct from gpu_obj_depth_add's world-position billboard occlusion.
 void  gpu_ui_span_add(Core*, uint32_t lo, uint32_t hi);
+// --- NATIVE-COVER registry (docs/fps60-rework.md REDIRECT) --- see gpu_native_internal.h for the
+// full rationale: marks a packet-pool span whose geometry was ALSO drawn through the real per-object
+// float path this frame, so the field's 2D-only OT walk drops the substrate's redundant copy instead
+// of billboard-promoting it.
+void  gpu_native_cover_add(Core*, uint32_t lo, uint32_t hi);
 float proj_obj_center_ord(void);
 // class ProjParams (game/render/proj_params.h) — per-Core; brings in camview_valid/proj_camview_world_ord etc.
 #include "proj_params.h"
@@ -33,6 +38,21 @@ float proj_obj_center_ord(void);
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
 static inline uint32_t cur_render_node(Core* c) {
   return c->mRender->diag.currentNode() ? c->mRender->diag.currentNode() : c->mem_r32(0x1F80028Cu);
+}
+
+// render_field_native_active: true iff pc_render's native field pass (Render::sceneNative + the
+// twoDOnly OT walk, game_tomba2.cpp Engine::drawOTag) owns THIS frame's picture — GAME stage,
+// free-roam (not SOP intro narration), pc_render (not psx_render), not the oracle. Any OTHER
+// picture-producing addition that wants to draw real geometry natively (e.g. cmdListDispatch's
+// generic-overlay REDIRECT, perobj_dispatch.cpp) must gate on this SAME condition: outside this
+// window the guest OT's full walk (twoDOnly=false) is the sole picture source, so an extra native
+// draw would double-draw. Deliberately narrower than drawOTag's own `scenenative` diagnostic branch
+// (that debug channel stays diagnostic-only; it must not also arm new native draws).
+static inline bool render_field_native_active(Core* c) {
+  if (c->game->oracle || c->mRender->mode.psxRender()) return false;
+  if (c->mem_r32(0x801FE00Cu) != 0x8010637Cu) return false;         // GAME stage resident
+  if (c->mem_r32(0x80109450u) == 0x3C021F80u) return false;         // SOP intro narration overlay active
+  return true;
 }
 
 // The engine's PC-native depth for an object: project its REAL spawned WORLD position (node+0x2e/0x32/0x36)
