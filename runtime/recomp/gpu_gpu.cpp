@@ -681,9 +681,22 @@ static const uint16_t* readback_vram(GpuGpuState& g) {
     fprintf(stderr, "[gpu_gpu] readback nonzero=%ld/%d\n", nz, VRAM_W * VRAM_H); }
   return p;
 }
-// A ".png" path gets a real PNG (SDL3_image, same ecosystem as the SDL_GPU renderer);
-// anything else keeps the raw P6 PPM. Previously .png paths silently received PPM bytes.
 #include <SDL3_image/SDL_image.h>
+// THE one place any shot/dump turns an RGB24 buffer into a file. Format is chosen by extension, and
+// PNG is the DEFAULT (a bare or unknown extension writes PNG) so callers get a directly-viewable file
+// with no PPM->PNG convert step — only an explicit `.ppm` path keeps the raw P6 dump. Shared by the VK
+// readback (dump_to) and the software-GPU shot (gpu_native.cpp) so the rule can't drift between them.
+void image_write_rgb24(const char* path, const unsigned char* rgb, int w, int h) {
+  size_t n = strlen(path);
+  bool ppm = (n > 4 && strcmp(path + n - 4, ".ppm") == 0);
+  if (ppm) {
+    FILE* f = fopen(path, "wb");
+    if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }
+    return;
+  }
+  SDL_Surface* s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, (void*)rgb, w * 3);
+  if (s) { IMG_SavePNG(s, path); SDL_DestroySurface(s); }
+}
 static void dump_to(GpuGpuState& g, const char* path, int sx, int sy, int w, int h,
                     int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
   const uint16_t* vram = readback_vram(g);
@@ -697,14 +710,7 @@ static void dump_to(GpuGpuState& g, const char* path, int sx, int sy, int w, int
     unsigned char* c = &rgb[((size_t)y * w + x) * 3];
     c[0] = (unsigned char)r; c[1] = (unsigned char)g; c[2] = (unsigned char)b;
   }
-  size_t n = strlen(path);
-  if (n > 4 && strcmp(path + n - 4, ".png") == 0) {
-    SDL_Surface* s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, rgb, w * 3);
-    if (s) { IMG_SavePNG(s, path); SDL_DestroySurface(s); }
-  } else {
-    FILE* f = fopen(path, "wb");
-    if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }
-  }
+  image_write_rgb24(path, rgb, w, h);
   free(rgb);
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
 }

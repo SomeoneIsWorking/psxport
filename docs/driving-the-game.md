@@ -96,6 +96,8 @@ Launch with `PSXPORT_DEBUG_SERVER=1` (port 5959) **and a high `PSXPORT_NATIVE_FR
 `tools/dbgclient.py <cmd>` (or no arg = REPL):
 - `tap <btn> [frames]`, `press <btn>`, `release <btn>` — btn = `start x o triangle square up down left right select`.
 - `stage`, `scene` (on-demand classified display list), `frame`, `r <addr> [n]` / `rw <addr> [n]` (read mem).
+- `shot [path]` writes **PNG by default** (any path not ending in `.ppm` → PNG via SDL3_image; pass
+  `foo.png` or just `foo`). No PPM→PNG convert step — the Read tool renders the PNG directly.
 - `vkshot [path]` (headless VK readback → PPM), `shot [path]` (VK-aware: captures the PRESENTED picture,
   falls back to SW VRAM when VK is off), `gputrace [path]` (arm a gpu_differ capture).
 - `preseq <N> [dir]` — dump the next N PRESENTED frames (default `scratch/screenshots/preseq`) as

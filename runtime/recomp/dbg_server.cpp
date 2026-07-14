@@ -14,7 +14,7 @@
 //   stage                 — scene/stage latches (0x801fe00c / 0x801fe048 / scene-active 0x800BE258)
 //   scene                 — classified display list of the CURRENT frame (gpu_scene_dump_now)
 //   provat <x> <y>        — which prim drew each displayed pixel around (x,y) (gpu_provat_display)
-//   shot [path]           — screenshot of the presented display region (PPM); default scratch/screenshots/dbg.ppm
+//   shot [path]           — screenshot of the presented display region; default scratch/screenshots/dbg.png (PNG unless path ends .ppm)
 //   frame                 — current present-frame counter
 //
 // Drive it from the repo with tools/dbgclient.py (or `nc 127.0.0.1 5959`).
@@ -239,7 +239,7 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "shot")) {
     // Capture what is actually PRESENTED: VK readback when VK is the active renderer, else the SW
     // display region. (Under VK the SW s_vram has only uploads, not the rasterized geometry.)
-    char path[256] = "scratch/screenshots/dbg.ppm";
+    char path[256] = "scratch/screenshots/dbg.png";
     sscanf(line, "%*s %255s", path);
     if (gpu_gpu_enabled()) { gpu_gpu_shot(s_ctx, path); fprintf(out, "shot (VK) -> %s\n", path); }
     else                  { gpu_native_shot(s_ctx, path); fprintf(out, "shot (SW) -> %s\n", path); }
@@ -257,12 +257,12 @@ static void dbg_exec(FILE* out, const char* line) {
     if (sp) { fwrite(s_ctx->scratch, 1, sizeof s_ctx->scratch, sp); fclose(sp); fprintf(out, "dumpram scratchpad -> %s\n", spath); }
   } else if (!strcmp(cmd, "shotb")) {
     // SBS only: capture render TARGET 1 (core B / right pane). Plain `shot` reads target 0 (core A).
-    char path[256] = "scratch/screenshots/dbg_b.ppm";
+    char path[256] = "scratch/screenshots/dbg_b.png";
     sscanf(line, "%*s %255s", path);
     void gpu_gpu_shot_b(Core*, const char*); gpu_gpu_shot_b(s_ctx, path);
     fprintf(out, "shotb (VK target B) -> %s\n", path);
   } else if (!strcmp(cmd, "vkshot")) {
-    char path[256] = "scratch/screenshots/dbg_vk.ppm";
+    char path[256] = "scratch/screenshots/dbg_vk.png";
     sscanf(line, "%*s %255s", path);
     gpu_gpu_shot(s_ctx, path);
     fprintf(out, "vkshot -> %s\n", path);

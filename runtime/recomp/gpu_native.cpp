@@ -1413,16 +1413,17 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
     gpu_gpu_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;
   }
-  FILE* f = fopen(path, "wb");
-  if (!f) { fprintf(stderr, "[shot] cannot open %s\n", path); return; }
-  fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
+  void image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_gpu.cpp — PNG by default
+  unsigned char* buf = (unsigned char*)malloc((size_t)s_disp_w * s_disp_h * 3);
+  if (!buf) { fprintf(stderr, "[shot] alloc failed for %s\n", path); return; }
   for (int y = 0; y < s_disp_h; y++)
     for (int x = 0; x < s_disp_w; x++) {
       uint16_t p = *vram(s_disp_x + x, s_disp_y + y);
-      uint8_t rgb[3] = { (uint8_t)((p & 31) << 3), (uint8_t)(((p >> 5) & 31) << 3), (uint8_t)(((p >> 10) & 31) << 3) };
-      fwrite(rgb, 1, 3, f);
+      unsigned char* c = &buf[((size_t)y * s_disp_w + x) * 3];
+      c[0] = (uint8_t)((p & 31) << 3); c[1] = (uint8_t)(((p >> 5) & 31) << 3); c[2] = (uint8_t)(((p >> 10) & 31) << 3);
     }
-  fclose(f);
+  image_write_rgb24(path, buf, s_disp_w, s_disp_h);
+  free(buf);
   fprintf(stderr, "[shot] f%d -> %s (%dx%d disp@%d,%d)\n", s_frame, path, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
 }
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
