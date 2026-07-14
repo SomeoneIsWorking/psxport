@@ -1817,7 +1817,7 @@ draft was already byte-faithful.
   real config.
 - Artifacts: scratch/logs/zfight_sweep_*.log, scratch/screenshots/zfight_sweep*/, heat_f*.ppm.
 
-## Hut interior RESOLVED to a precise render gap (2026-07-14) — supersedes the entries above
+## Hut interior FIXED (2026-07-15) — authored OT sub-scene walked full, not native-field-reconstructed
 
 - Replay-verified (hut-entry-door-freeze.pad): entry = SUB-SCENE swap, sm[4c]==3, area id UNCHANGED
   (the "separate area / mode table" hypothesis above is WRONG for this door). Transition COMPLETES
@@ -1836,3 +1836,13 @@ draft was already byte-faithful.
   (game_tomba2.cpp:209) redrawing stale exterior packets over the correctly-submitted native world. Next:
   diff VK draw-call/present-target selection between GATE+RENDER_PSX (works) and default (broken) at the
   same interior frame. No fix landed (no-bandaids — mechanism not yet named).
+- **FIXED (2026-07-15, root-caused live):** the interior room's 3D geometry IS in the guest OT (proven:
+  PSXPORT_DEBUG=scenenativehud full-walk shows the room; oracle full-walk shows it). pc_render's field
+  branch ran sceneNative (reconstructs the walkable FIELD — draws the stale exterior through the interior
+  camera) + a 2D-only OT walk that DROPPED the interior's 3D world. Discriminant (RE-grounded, not magic):
+  the game's field submode dispatches per-frame by sm[0x4c] through its own 9-state table (Engine::s4c,
+  engine.cpp) — state 2 = walkable field (Render::frame), state 3 = fieldRunX→frameX reduced pass that
+  composites an AUTHORED scene into the OT (interior/transition). Fix (game_tomba2.cpp): when field &&
+  sm[0x4c]==3, walk the FULL guest OT with no native field render — same treatment as the void beat.
+  Verified: interior room renders (matches oracle, no exterior leak); free-roam field (sm[4c]==2)
+  unaffected; SBS-full 0-diff f23940. Shots scratch/screenshots/hut_FIXED_*.png.

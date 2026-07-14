@@ -175,6 +175,18 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
   // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
   bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
+  // AUTHORED OT SUB-SCENE (hut/door interior, #49): the field running submode dispatches its per-frame
+  // handler by sm[0x4c] through the game's own 9-state jump table (Engine::s4c, engine.cpp) — state 2 is
+  // the walkable field (full Render::frame orchestrator), state 3 is fieldRunX → Render::frameX, the
+  // REDUCED pass that composites an AUTHORED scene (the fisherman's-hut interior + its NPCs) into the
+  // guest OT via the substrate state-3 walker (0x8007B04C builds the render list). It is field-stage but
+  // NOT a walkable field, so the native field reconstruction (sceneNative: terrain + entity lists through
+  // the sub-scene camera) draws the wrong thing — the stale exterior field, zoomed by the interior
+  // camera — and the 2D-only OT filter DROPS the interior room's 3D geometry that IS in the OT. Same
+  // class as the SOP void beat: walk the FULL guest OT, no native field render. sm[0x4c]==3 is the
+  // game's OWN selector for this pass (not a magic render constant), read from the live task-sm block.
+  uint32_t task_sm = c->mem_r32(0x1F800138u);
+  bool authored_subscene = field && task_sm && c->mem_r16(task_sm + 0x4Cu) == 3;
   // FAIL-FAST guard (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): arm DisplayPassGuard around
   // pc_render's OWN picture-producing calls only — sceneNative() + the native OT/queue draw below —
   // never around the substrate orchestrator (Render::frame/frameX are called elsewhere and legitimately
@@ -195,6 +207,10 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
     // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
     if (c->mem_r8(0x800BF9B4u) != 5) c->mRender->sceneNative();
     gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);   // full walk incl. cutscene fills/effect quads
+  } else if (authored_subscene && !c->mRender->mode.psxRender()) {
+    // #49 hut/door interior: the authored sub-scene lives entirely in the guest OT (built by the
+    // substrate frameX pass). No native field render — walk the FULL OT, exactly like the void beat.
+    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
   } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
     DisplayPassGuard displayPass(c->mRender->mode);
     c->mRender->sceneNative();
