@@ -26,6 +26,7 @@
 #ifndef GAME_RENDER_FPS60_H
 #define GAME_RENDER_FPS60_H
 #include <stdint.h>
+#include <cstring>
 #include <unordered_map>
 
 struct Core;
@@ -85,6 +86,10 @@ struct Fps60 {
   struct BbSpan { uint32_t lo, hi, ident; float wx, wy, wz; };
   BbSpan mBbCur[kBbMax] = {};
   int    mNBbCur = 0;
+  // DIAGNOSTIC ONLY (bbanchor channel, #45): per-node-span stamp counter for this frame, so a single
+  // manager span that gets stamped onto MULTIPLE distinct prims (i.e. the fallback path incorrectly
+  // sharing one rigid anchor across several quads) is visible. Reset alongside mNBbCur.
+  int    mBbCurStamps[kBbMax] = {};
 
   // PER-PARTICLE billboard anchors (the true fps60 identity, 2026-07-10). A "billboard object" the guest
   // walks is a MANAGER node whose particle sub-list holds MANY visible sprites (all the gems/effect quads
@@ -99,12 +104,14 @@ struct Fps60 {
   BbSpan mBbPart[kBbPartMax] = {};
   int    mNBbPart = 0;
 
-  void bbFrameReset() { mNBbCur = 0; mNBbPart = 0; }
+  void bbFrameReset() { mNBbCur = 0; mNBbPart = 0; memset(mBbCurStamps, 0, sizeof(mBbCurStamps)); }
   void recordBillboardSpan(Core* c, uint32_t lo, uint32_t hi, uint32_t ident);
   // Record one PER-PARTICLE anchor: span [pktLo,pktHi) is the particle's emitted OT packet, ident is the
   // particle's guest address, (wx,wy,wz) its interpolatable WORLD anchor. Called from billboardEmit.
   void recordBillboardParticle(uint32_t pktLo, uint32_t pktHi, uint32_t ident, float wx, float wy, float wz);
-  int  billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) const;
+  // which: 0=miss, 1=per-particle table hit, 2=node-span (fallback) table hit. spanIdxOut only valid on
+  // which==2 (index into mBbCur / mBbCurStamps) — DIAGNOSTIC (bbanchor).
+  int  billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3], int* which = nullptr, int* spanIdxOut = nullptr) const;
   void stampBillboard(Core* c, uint32_t node);
 
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------

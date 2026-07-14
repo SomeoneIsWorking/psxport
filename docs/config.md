@@ -328,6 +328,16 @@ in ≥6 consecutive presents that OSCILLATES (sign-alternating jitter) or STALL-
 present) — the two signatures of a badly-interpolated 60fps object — and prints a FAIL/PASS summary. This is
 the instrument the operator runs to verify the fps60 per-object work; see docs/findings/render.md.
 
+`bbanchor` (billboard node-span anchor diagnostic, `Fps60::stampBillboard` in game/render/fps60.cpp +
+`Render::billboardEmit` in game/render/perobj_billboard.cpp) — logs one `[bbanchor]` line per emitted
+per-particle billboard packet (billboardEmit) and one `[bbanchor][stamp]` line per OT-walk billboard quad
+(stampBillboard), reporting which anchor table matched (PARTICLE / NODE-SPAN / MISS) and, for a node-span
+hit, `anchorProjSXY` (the stored world anchor reprojected through this frame's camera) vs `quadRealSXY0`
+(the quad's actual un-interpolated base screen vert) with the pixel delta between them — the instrument
+used to diagnose + verify the #45 node-span teleport fix (many quads in one manager span used to share a
+single rigid node anchor; each quad's anchor is now unprojected from its own screen centroid, so the delta
+is ~0 by construction). Pure host diagnostic, no guest write.
+
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:

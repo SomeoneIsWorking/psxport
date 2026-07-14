@@ -526,6 +526,16 @@ void Render::billboardEmit() {
         const float oy = (R(6) * sx5 + R(8) * sy5) / 4096.0f;
         const float oz = (R(12) * sx5 + R(14) * sy5) / 4096.0f;
         c->game->fps60.recordBillboardParticle(pktStart, tail, particle, nx + ox, ny + oy, nz + oz);
+        if (cfg_dbg("bbanchor")) {
+          const int16_t sx0 = (int16_t)c->mem_r16(BUF + 8);
+          const int16_t sy0 = (int16_t)c->mem_r16(BUF + 10);
+          const uint8_t p10 = c->mem_r8(particle + 10), p11 = c->mem_r8(particle + 11);
+          fprintf(stderr,
+            "[bbanchor] node=%08X part=%08X pktLo=%08X pktHi=%08X sx=%d sy=%d p10=%u p11=%u "
+            "nx=%.2f ny=%.2f nz=%.2f ox=%.2f oy=%.2f oz=%.2f anchor=(%.2f,%.2f,%.2f) baseSXY0=(%d,%d)\n",
+            node, particle, pktStart, tail, sx5 / 5, sy5 / 5, p10, p11,
+            nx, ny, nz, ox, oy, oz, nx + ox, ny + oy, nz + oz, sx0, sy0);
+        }
       }
     }
   });

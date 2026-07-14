@@ -139,6 +139,25 @@ static void projWorld(const Fps60::Cam& cam, float wx, float wy, float wz, float
   sy = cam.ofy + vy * ph;
 }
 
+// Unproject a quad's screen centroid back to a WORLD point, using the node's own world position only to
+// pick the view-space DEPTH plane the quad was drawn at (screen-aligned billboard quads share one depth
+// with the node that emitted them). This is the exact inverse of projWorld's ph = H/pz screen mapping, so
+// projecting the returned world point back through the SAME camera reproduces (cx,cy) to float precision.
+// R is /4096 true scale (matches cam's storage convention, see sceneCam) and orthonormal, so its inverse
+// is its transpose — no separate inverse-matrix machinery needed.
+static void unprojectQuadAnchor(const Fps60::Cam& cam, float nwx, float nwy, float nwz,
+                                 float cx, float cy, float out[3]) {
+  float vz = cam.R[2][0]*nwx + cam.R[2][1]*nwy + cam.R[2][2]*nwz + cam.T[2];
+  float nearp = cam.H * 0.5f; if (nearp < 1.0f) nearp = 1.0f;
+  if (vz < nearp) vz = nearp;
+  float vx = cam.H > 0.0f ? (cx - cam.ofx) * vz / cam.H : 0.0f;
+  float vy = cam.H > 0.0f ? (cy - cam.ofy) * vz / cam.H : 0.0f;
+  float dx = vx - cam.T[0], dy = vy - cam.T[1], dz = vz - cam.T[2];
+  out[0] = cam.R[0][0]*dx + cam.R[1][0]*dy + cam.R[2][0]*dz;
+  out[1] = cam.R[0][1]*dx + cam.R[1][1]*dy + cam.R[2][1]*dz;
+  out[2] = cam.R[0][2]*dx + cam.R[1][2]*dy + cam.R[2][2]*dz;
+}
+
 // ---- billboard registry ------------------------------------------------------------------------------
 // Record a billboard object's packet-pool span [lo,hi) + identity + WORLD position (node+46/50/54, the
 // triple billboardCompose1/2 transform through the camera — see perobj_billboard.cpp). Host-only reads.
@@ -158,7 +177,7 @@ void Fps60::recordBillboardParticle(uint32_t pktLo, uint32_t pktHi, uint32_t ide
   e->lo = pktLo | 0x80000000u; e->hi = pktHi | 0x80000000u; e->ident = ident;   // KSEG (matches s_cur_node)
   e->wx = wx; e->wy = wy; e->wz = wz;
 }
-int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) const {
+int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3], int* which, int* spanIdxOut) const {
   uint32_t n = node | 0x80000000u;
   // Per-particle anchors win: a gem sprite's OT packet lies INSIDE its manager node's span, so search the
   // finer per-particle table first — otherwise every sprite of a manager resolves to the manager's single
@@ -167,14 +186,18 @@ int Fps60::billboardForNode(uint32_t node, uint32_t* identOut, float wpos[3]) co
     if (n >= mBbPart[i].lo && n < mBbPart[i].hi) {
       if (identOut) *identOut = mBbPart[i].ident;
       if (wpos) { wpos[0] = mBbPart[i].wx; wpos[1] = mBbPart[i].wy; wpos[2] = mBbPart[i].wz; }
+      if (which) *which = 1;
       return 1;
     }
   for (int i = 0; i < mNBbCur; i++)
     if (n >= mBbCur[i].lo && n < mBbCur[i].hi) {
       if (identOut) *identOut = mBbCur[i].ident;
       if (wpos) { wpos[0] = mBbCur[i].wx; wpos[1] = mBbCur[i].wy; wpos[2] = mBbCur[i].wz; }
+      if (which) *which = 2;
+      if (spanIdxOut) *spanIdxOut = i;
       return 1;
     }
+  if (which) *which = 0;
   return 0;
 }
 // Stamp the just-queued billboard RqItem (RQ_WORLD/RQ_OM_DEPTH, from the OT walk) with its object's
@@ -186,10 +209,74 @@ void Fps60::stampBillboard(Core* c, uint32_t node) {
   if (q.consumed || q.n == 0) return;
   RqItem* it = &q.items[q.n - 1];
   if (it->layer != RQ_WORLD || it->order_mode != RQ_OM_DEPTH) return;
-  uint32_t ident; float wpos[3];
-  if (!billboardForNode(node, &ident, wpos)) return;
+  uint32_t ident; float wpos[3]; int which = 0, spanIdx = -1;
+  if (!billboardForNode(node, &ident, wpos, &which, &spanIdx)) {
+    if (cfg_dbg("bbanchor")) fprintf(stderr, "[bbanchor][stamp] node=%08X MISS (no table hit)\n", node);
+    return;
+  }
+  // #45 fix (node-span teleport): a NODE-SPAN table hit (which==2) means many quads in this span all
+  // matched the SAME entry — one static object-granular anchor (node+46/50/54) for potentially many
+  // billboard quads scattered across the object (e.g. a tree's 8-51 fruit/leaf quads). Reprojecting that
+  // single anchor at the mid-present moves EVERY quad in the span by the same screen delta, so any quad
+  // whose real position isn't at the node's anchor teleports toward it — confirmed numerically (fruit
+  // quad's real base SXY (250,4) vs the node-anchor's projected SXY (289,155), ~150px off).
+  //
+  // Per-particle table entries (mBbPart, which==1) already carry a per-quad anchor computed forward from
+  // the guest transform (billboardEmit) and are UNCHANGED here — only the node-span fallback is wrong.
+  //
+  // Fix: for a node-span hit, don't store the node's world pos as the anchor. Instead UNPROJECT this
+  // quad's own screen centroid back to world space, using the node's world position only to pick the
+  // view-space depth plane (screen-aligned quads in one span share the node's depth). The unprojection is
+  // the exact algebraic inverse of projWorld's camera projection (same R//4096, T, ofx/ofy/H convention),
+  // so projecting the result back through the SAME camera reproduces this quad's exact base screen
+  // position by construction — the mid-present's motion is then pure camera interpolation per quad,
+  // not a shared rigid translate.
+  float quadCx = 0.0f, quadCy = 0.0f;   // DIAGNOSTIC (bbanchor log below): the quad's own screen centroid —
+                                          // the unprojection target when which==2, so the log can show the
+                                          // anchor round-trips EXACTLY to its actual target (not vertex 0).
+  if (which == 2) {
+    int nv = it->nv; if (nv < 1) nv = 1; if (nv > 4) nv = 4;
+    for (int k = 0; k < nv; k++) {
+      quadCx += it->has_xyf ? it->xsf[k] : (float)it->xs[k];
+      quadCy += it->has_xyf ? it->ysf[k] : (float)it->ys[k];
+    }
+    quadCx /= (float)nv; quadCy /= (float)nv;
+    if (mCamCur.valid) {
+      float quadWpos[3];
+      unprojectQuadAnchor(mCamCur, wpos[0], wpos[1], wpos[2], quadCx, quadCy, quadWpos);
+      wpos[0] = quadWpos[0]; wpos[1] = quadWpos[1]; wpos[2] = quadWpos[2];
+    }
+    // else: mCamCur not captured this frame (shouldn't happen — sceneNative runs before the OT walk in
+    // drawOTag) — fall back to the node anchor rather than unproject through a garbage camera.
+  }
   it->fps_anchor = 1; it->fps_key = ident;
   it->fps_wpos[0] = wpos[0]; it->fps_wpos[1] = wpos[1]; it->fps_wpos[2] = wpos[2];
+  if (cfg_dbg("bbanchor")) {
+    fprintf(stderr,
+      "[bbanchor][stamp] node=%08X which=%s ident=%08X anchor=(%.2f,%.2f,%.2f)\n",
+      node, which == 1 ? "PARTICLE" : (which == 2 ? "NODE-SPAN" : "MISS"), ident,
+      wpos[0], wpos[1], wpos[2]);
+    if (which == 2 && spanIdx >= 0 && spanIdx < kBbMax) {
+      int stampCount = ++mBbCurStamps[spanIdx];
+      // Compare the NEW per-quad anchor's reprojection against (a) THIS quad's ACTUAL base-frame vertex-0
+      // screen pos (quadRealSXY0 — kept for continuity with the pre-fix diagnosis) and (b) its own
+      // unprojection TARGET, the quad's screen centroid (quadCentroidSXY/centroidDeltaPx) — the fix
+      // unprojects the centroid, not vertex 0, so (b) is the round-trip that must be ~0 by construction;
+      // the vertex-0 delta is expected to be nonzero (the corner-to-centroid geometric offset, up to
+      // ~half the quad's screen size), NOT anchor error.
+      float ax0 = it->has_xyf ? it->xsf[0] : (float)it->xs[0];
+      float ay0 = it->has_xyf ? it->ysf[0] : (float)it->ys[0];
+      float psx, psy;
+      if (mCamCur.valid) projWorld(mCamCur, wpos[0], wpos[1], wpos[2], psx, psy); else { psx = psy = -1.0f; }
+      fprintf(stderr,
+        "[bbanchor][stamp]   span[%d] lo=%08X hi=%08X stampsThisFrame=%d nodeWorldPos(node+46/50/54)=(%.2f,%.2f,%.2f) "
+        "anchorProjSXY=(%.1f,%.1f) quadRealSXY0=(%.1f,%.1f) deltaPx=(%.1f,%.1f) quadCentroidSXY=(%.1f,%.1f) "
+        "centroidDeltaPx=(%.2f,%.2f)\n",
+        spanIdx, mBbCur[spanIdx].lo, mBbCur[spanIdx].hi, stampCount,
+        (double)(int16_t)c->mem_r16(ident + 46), (double)(int16_t)c->mem_r16(ident + 50), (double)(int16_t)c->mem_r16(ident + 54),
+        psx, psy, ax0, ay0, psx - ax0, psy - ay0, quadCx, quadCy, psx - quadCx, psy - quadCy);
+    }
+  }
   // objid overlay recovery: a billboard rasterizes after the render walk's node scope ended, so it was
   // queued with dbg_node=0 — recover it from the span-matched entity node (KSEG).
   if (ident >= 0x80000000u && ident < 0x80200000u) it->dbg_node = ident;
