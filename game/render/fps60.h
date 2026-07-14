@@ -121,6 +121,16 @@ struct Fps60 {
   void rq_capture(const RqItem* items, int n);      // copy the sorted queue snapshot
   void present_vk(Core* core);                      // build+present the in-between, then the real frame
   int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
+
+  // ---- per-present frame dump (debug channel `fps60dump`, REPL `debug fps60dump`) ---------------------
+  // Writes one PNG per PRESENTED frame (real AND interp) to scratch/framedump/, so a Python script can
+  // walk the sequence and check whether interpolated frames sit between their neighboring real frames
+  // (fps60 correctness) instead of teleporting. Reuses the same VRAM-readback writer as REPL `shot`
+  // (gpu_gpu_shot / gpu_native_shot) — no new pixel-readback path. Capped at kDumpMax files so an
+  // unbounded run can't fill disk; toggling the channel back on resets the cap.
+  static constexpr int kDumpMax = 600;
+  int mDumpSeq = 0;
+  void dumpPresent(Core* core, bool interp);          // called from present_vk after each present pass
   ~Fps60();
 };
 

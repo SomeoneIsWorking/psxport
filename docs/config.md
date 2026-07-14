@@ -74,6 +74,7 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 | `PSXPORT_OBJLOG`       | `obj`     | | `PSXPORT_VSYNCLOG`   | `vsync`     |
 | `PSXPORT_OTDBG`        | `ot`      | | `PSXPORT_VRAMSCAN`   | `vramscan`  |
 | `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_FPS60_SDBG` | `fps60`     |
+| (no legacy var)        | `fps60dump` (per-present PNG frame dump — see below) | | | |
 | (so e.g. `PSXPORT_CDCMD_DBG=1` → `PSXPORT_DEBUG=cdcmd`) | | | `PSXPORT_WS_SXHIST` | `sxhist` |
 
 New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
@@ -327,6 +328,16 @@ an armed capture (the present index is −1 → the `cfg_dbg` scan is skipped). 
 in ≥6 consecutive presents that OSCILLATES (sign-alternating jitter) or STALL-STEPS (snaps every 2nd
 present) — the two signatures of a badly-interpolated 60fps object — and prints a FAIL/PASS summary. This is
 the instrument the operator runs to verify the fps60 per-object work; see docs/findings/render.md.
+
+`fps60dump` (per-present frame dump, `Fps60::dumpPresent` in game/render/fps60.cpp, called from
+`Fps60::present_vk` right after each present pass) — when on, writes EVERY presented frame (the
+interpolated in-between AND the real frame) to `scratch/framedump/f<logicframe>_<seq>_<real|interp>.png`,
+via the same VRAM-readback writer REPL `shot` uses (`gpu_gpu_shot`/`gpu_native_shot` — no new pixel path).
+Capped at `Fps60::kDumpMax` (600) files so a long headless run can't fill disk; toggling the channel off
+then back on (REPL `debug fps60dump`) resets the cap. Feed the sequence to a Python centroid/pixel-diff
+script to check whether interp frames sit BETWEEN their real neighbors (correct) or teleport (bug) — this
+is the harness for verifying stampBillboard's per-quad anchor fix, complementing `preseqobj`'s per-object
+oscillation gate above (this one is pixel-ground-truth, `preseqobj` is queue-position ground-truth).
 
 `bbanchor` (billboard node-span anchor diagnostic, `Fps60::stampBillboard` in game/render/fps60.cpp +
 `Render::billboardEmit` in game/render/perobj_billboard.cpp) — logs one `[bbanchor]` line per emitted

@@ -10,6 +10,7 @@
 #include "render_queue.h"
 #include "cfg.h"
 #include "mods.h"     // Mods (game->mods.fps60)
+#include "fs_util.h"  // Fs::ensureParentDirs — no hand-rolled mkdir
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -282,6 +283,25 @@ void Fps60::stampBillboard(Core* c, uint32_t node) {
   if (ident >= 0x80000000u && ident < 0x80200000u) it->dbg_node = ident;
 }
 
+// ---- per-present frame dump (debug channel `fps60dump`) ----------------------------------------------
+// Writes what THIS present pass just put in s_vram_tex, exactly like REPL `shot` — same VRAM-readback
+// writer (gpu_gpu_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
+// filled the target (present_vk's PASS 1 for interp, PASS 2 for real) so the readback sees that pass's
+// content, not the next one's.
+void Fps60::dumpPresent(Core* core, bool interp) {
+  if (!cfg_dbg("fps60dump")) { mDumpSeq = 0; return; }   // channel off: idle, and reset the cap for next arm
+  if (mDumpSeq >= kDumpMax) {
+    if (mDumpSeq == kDumpMax) { fprintf(stderr, "[fps60dump] cap (%d files) reached — stop capturing\n", kDumpMax); mDumpSeq++; }
+    return;
+  }
+  char path[192];
+  snprintf(path, sizeof path, "scratch/framedump/f%06ld_%04d_%s.png", mFence, mDumpSeq, interp ? "interp" : "real");
+  if (!Fs::ensureParentDirs(path)) return;
+  int gpu_gpu_enabled(void); void gpu_gpu_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
+  if (gpu_gpu_enabled()) gpu_gpu_shot(core, path); else gpu_native_shot(core, path);
+  mDumpSeq++;
+}
+
 // ---- per-logic-frame fence + present -----------------------------------------------------------------
 void Fps60::rq_capture(const RqItem* items, int n) {
   if (!mRqCur) mRqCur = new RqItem[FPS60_RQ_MAX];
@@ -354,6 +374,7 @@ void Fps60::present_vk(Core* core) {
     q.sortQueue();
     q.emitQueue(c);
     gpu_fps60_present_pass(c);
+    dumpPresent(c, /*interp=*/true);
     if (mDbg) fprintf(stderr, "[fps60] f%ld interp: scene-rebuilt + non-scene(bb moved=%ld kept=%ld snapped=%ld) objs=%zu\n",
                       mFence, moved, kept, snapped, mObjCur.size());
     gpu_pace_subframe(c, 2);
@@ -363,6 +384,7 @@ void Fps60::present_vk(Core* core) {
   // ---- PASS 2: the real frame (the captured queue, exactly as drawOTag built it) ---------------------
   for (int i = 0; i < mNCur; i++) q.emitItem(c, &mRqCur[i]);
   gpu_present_ex(c, 1);
+  dumpPresent(c, /*interp=*/false);
   gpu_pace_subframe(c, didInterp ? 2 : 1);
 
   // ---- rotate captures: this frame becomes the previous frame -----------------------------------------
