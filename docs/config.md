@@ -300,6 +300,12 @@ this address with an exact per-call count — `quadrtpt` remains useful as a liv
 "confirm it actually fires" role as `quadrtpt`, for the ov_a00_set_override-wired ground GT3/GT4
 cluster (sibling of the field pair's `ovgt` channel).
 
+`wmq` (widescreen_margin_quad.cpp) — fires every `WidescreenMarginQuad::emit` call (0x8013CDD4,
+the widescreen-margin OT.GT4 quad emitter): `[wmq] obj=.. pool=.. recArrayPtr=.. node=..`. "Confirm
+it actually fires + see the dereferenced record-array pointer" signal — this leaf's record array is
+`mem32(obj+80)`, not `obj+80` itself (a real RE trap the pool-corruption bug this channel helped find
+was rooted in).
+
 `sefprobe` (game/core/engine.cpp, `Engine::sceneEventFifoFaithful`) — logs
 `[sefprobe] fN core=A/B ENTRY st=<FIFO-state-byte>` on every entry. Added 2026-07-10 during the
 `ovhit` A/B call-count triage (docs/findings/tooling.md "ovhit A/B mismatch is often a call-GRAPH

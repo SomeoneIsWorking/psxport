@@ -1830,6 +1830,40 @@ draft was already byte-faithful.
 - Priority per the 0x8003F9A8 resolution above: the 4 substrate list-walkers port FIRST; 8013CDD4
   stays under the widescreen-margin debt (journal later-129/131).
 
+### PORTED (2026-07-15) — game/render/widescreen_margin_quad.cpp, WidescreenMarginQuad::emit — 0-DIFF
+
+- **status:** SBS-full AUTONAV **0-diff to f26790+** (895 checkpoints, exits on 250s wall-clock
+  timeout, no divergence). `PSXPORT_MIRROR_VERIFY=0x8013CDD4` — **3905+ invocations, every one
+  byte-exact** (RAM + scratchpad + ABI regs v0/v1, zero mismatches). Wired via
+  `engine_set_override_a00(0x8013CDD4, &WidescreenMarginQuad::emit, ov_a00_gen_8013CDD4)` (oracle-gated).
+- **Three bugs found + fixed during bring-up, all via `PSXPORT_MIRROR_VERIFY`:**
+  1. **Record array is `mem32(obj+80)` (a POINTER DEREFERENCE), not `obj+80`.** `r19 = obj+80` is a
+     SEPARATE register used only to derive `fogBase = mem16(obj+86)`; `r10 = mem32(obj+80)` is the
+     actual record-array base. Using `obj+80` directly read a foreign region (every record field
+     came back 0). Caught by mirror-verify showing the emitted packet bytes wildly wrong.
+  2. **Guest-stack vertex-staging scratch (sp+32..sp+61) must be WRITTEN, not bypassed.** gen stages
+     each vertex screen-delta coordinate as a halfword into stack scratch (offsets 32/34/36/40/42/
+     44/48/50/52/56/58/60 per `tools/abi_extract.py --contract`), then loads 32-bit words from there
+     into the GTE VXY/VZ registers (the gap bytes sp+38/46/54/62 are read as GTE-ignored VZ upper
+     halves). The first port draft computed the packing in HOST registers and fed the GTE directly,
+     never writing the guest stack → those 13 bytes diverged (the f570 SBS stop). Fix = mirror the
+     stack writes exactly (`kVtxScratch_*` offsets), then load the GTE from the stack — guest-stack
+     residency per CLAUDE.md "MIRROR THE GUEST STACK", NOT a dead-scratch exclusion.
+  3. **v0/v1 return-register residue.** gen leaves v0=`kPktPoolBase` (0x800C0000, the base it derives
+     the final pool-cursor store address from) and v1=`kPktTag` (0x0C000000, the POLY_GT4 tag high
+     word held live from the last commit). Reproduced exactly (hold the tag in `c->r[3]` during
+     commit; compute the exit store via `kPktPoolBase - 2748`); the node==0 early-out reproduces
+     v0=`mem8(obj+7)` (gen's surviving r2 on that path). Now register-exact too.
+- **Frame:** 104-byte frame, spills r16-r22/r31 at 72/76/80/84/88/92/96/100 via `GuestFrame` +
+  `GuestReg` (guest_abi.h). obj+72's node carries 3 angle bytes (×10) fed as a1 to the still-unowned
+  "compose object transform into GTE CR0-8" leaf (0x800318A0, docs/engine_re.md cluster 3) via
+  `guest_fn` — this port is the FIRST caller to exercise 0x800318A0→0x80084520→rotmat under SBS-full;
+  rotmat (0x80085480) is already natively owned and 0-diff, 0x800318A0/0x80084520 stay pure substrate
+  on both legs.
+- **Gates:** build clean; mirror-verify 3905+ passes 0-diff; SBS-full 895 checkpoints 0-diff to
+  f26790+; default free-roam (pc_skip+pc_render) reaches free-roam f216 + shot; fps60=1 ("TRUE
+  per-object interpolated 60fps ON") reaches free-roam + shot, no crash.
+
 ## ires (internal resolution) modifier is a NO-OP — never wired past the readout (2026-07-14)
 
 - Proven: ires=1 vs ires=4 frames byte-identical (md5 8c4e6a32..., scratch/screenshots/ires{1,4}_before.ppm).

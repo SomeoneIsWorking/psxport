@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
+Totals: 660 native fns, 543 owned addresses, 631 LIVE / 29 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -51,7 +51,7 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x8002918C | LIVE | `beh_rand_phase_cull` | game/ai/beh_rand_phase_cull.cpp:48 |  |  |
 | 0x80029B40 | LIVE | `beh_pos_history_trail` | game/ai/beh_pos_history_trail.cpp:62 |  |  |
 | 0x8002AB5C | LIVE | `NativeScenePass::terrainRender` | game/render/native_terrain.cpp:83 |  | gen_func_8002AB5C, rebuilt PC-native. a0(=r4) = the terrain render-lis… |
-| 0x8002AB5C | LIVE | `Render::terrain` | game/render/submit.cpp:393 |  | RETIRED 2026-07-07 (issue #32): Render::prepObjectMatrix (guest sway/I… |
+| 0x8002AB5C | LIVE | `Render::terrain` | game/render/submit.cpp:433 |  | RETIRED 2026-07-07 (issue #32): Render::prepObjectMatrix (guest sway/I… |
 | 0x8002B278 | LIVE | `Cull::coneCullBody` | game/render/cull.cpp:175 |  | standalone view-CONE cull (3.9% field hot). a0 = node. The multiply-fo… |
 | 0x8002B278 | LIVE | `Cull::coneCull2b278` | game/render/cull.cpp:194 |  |  |
 | 0x8003116C | LIVE | `Spawn::spawnAndInitBody` | game/world/spawn.cpp:230 | 0x80028E10 | SPAWN-AND-INIT helper: spawn a type-6 object on list 1 (via the owned … |
@@ -64,14 +64,19 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x8003B054 | LIVE | `QuadRtptSubmit::rotateQuadCorners` | game/render/quad_rtpt_submit.cpp:39 |  | ──────────────────────────────────────────────────────────────────────… |
 | 0x8003B220 | ORPHAN | `hitbox_build_3b220` | game/player/hitbox.cpp:51 |  | Pure native body. Mirrors the recomp's exact in-memory load/store orde… |
 | 0x8003B320 | LIVE | `QuadRtptSubmit::submitQuad` | game/render/quad_rtpt_submit.cpp:126 |  | ──────────────────────────────────────────────────────────────────────… |
+| 0x8003BB50 | LIVE | `Render::objListWalk1` | game/render/objlist_walk.cpp:114 | 0x80122974 | ======================================================================… |
+| 0x8003BCF4 | LIVE | `Render::objListWalk2` | game/render/objlist_walk.cpp:217 |  | ======================================================================… |
+| 0x8003BED8 | LIVE | `Render::objListWalk2Continue` | game/render/objlist_walk.cpp:265 |  | (Render::objListWalk2Continue) — the walk's shared "process the rest o… |
+| 0x8003BF00 | LIVE | `Render::objListWalk3` | game/render/objlist_walk.cpp:290 | 0x8010FC70 | ======================================================================… |
 | 0x8003C048 | LIVE | `Render::renderWalk` | game/render/render_walk_dispatch.cpp:153 | 0x80129114 0x801295B4 0x8012A43C 0x8013DD58 |  |
-| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:296 |  |  |
-| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:331 |  |  |
-| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:367 |  | ======================================================================… |
-| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:174 |  | ======================================================================… |
-| 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:125 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
+| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:295 |  |  |
+| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:330 |  |  |
+| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:366 |  | ======================================================================… |
+| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:173 |  | ======================================================================… |
+| 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:132 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
 | 0x8003D0BC | LIVE | `Render::overlayTypeDispatch` | game/render/overlay_type_dispatch.cpp:70 | 0x8010AA20 0x8010B0B8 0x8010B5BC 0x8010BA40 0x8010C2A4 0x8011024C … |  |
-| 0x8003F698 | LIVE | `Render::perModeDispatch` | game/render/perobj_dispatch.cpp:263 |  | per-mode render dispatcher: routes to the area's per-mode renderer (mo… |
+| 0x8003EEC0 | LIVE | `Render::objListWalk4` | game/render/objlist_walk.cpp:354 |  | ======================================================================… |
+| 0x8003F698 | LIVE | `Render::perModeDispatch` | game/render/perobj_dispatch.cpp:347 |  | per-mode render dispatcher: routes to the area's per-mode renderer (mo… |
 | 0x8003FA44 | LIVE | `Render::frameX` | game/render/render_frame.cpp:65 |  | mid-transition render orchestrator twin (reduced pass set). Same rule:… |
 | 0x8003FD10 | ORPHAN | `osc_fd10` | game/world/entity.cpp:323 |  | per-object OSCILLATE / FRAME-TOGGLE sub-behavior (one of sm40558 STATE… |
 | 0x80040410 | ORPHAN | `child_spawn_40410` | game/world/entity.cpp:45 |  | per-object CHILD-NODE SPAWN / sub-object builder (a callee of the per-… |
@@ -107,7 +112,7 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x80044BD4 | LIVE | `Demo::s0PreYield` | game/scene/demo.cpp:610 |  | Substate s0 (0x801063C0) — run-once INIT / restart: load the menu page… |
 | 0x80044BD4 | LIVE | `Demo::s0PostYield` | game/scene/demo.cpp:632 | 0x8001CF00 0x8007982C | s0 post-yield (Slip #4): substrate order in state 0 body after FUN_800… |
 | 0x80044BD4 | LIVE | `Sop::transitionAreaLoad` | game/scene/sop.cpp:127 |  | Synchronous TRANSITION area-DATA load — replaces the cooperative spawn… |
-| 0x80044BD4 | LIVE | `Sop::fieldModeFaithful` | game/scene/sop.cpp:589 | 0x8001CF2C 0x80044BD4 0x8006CBD0 0x8006E3B0 0x80075240 0x80078610 … | pc_faithful SOP field-mode — mirror of ov_sop_gen_80109450 (see sop.h)… |
+| 0x80044BD4 | LIVE | `Sop::fieldModeFaithful` | game/scene/sop.cpp:593 | 0x8001CF2C 0x80044BD4 0x8006CBD0 0x8006E3B0 0x80075240 0x80078610 … | pc_faithful SOP field-mode — mirror of ov_sop_gen_80109450 (see sop.h)… |
 | 0x80044D8C | LIVE | `Asset::lzDecompress` | game/core/asset.cpp:32 |  |  |
 | 0x80044E84 | LIVE | `Asset::unpackGroup` | game/core/asset.cpp:71 | 0x80080F6C | PC-owned texture-group unpacker — replaces recompiled FUN_80044E84 (0x… |
 | 0x80044E84 | LIVE | `Asset::unpackGroupFaithful` | game/core/asset.cpp:115 | 0x80080F6C 0x80081218 | FAITHFUL texture-group unpacker — FUN_80044E84 with full guest-stack d… |
@@ -164,7 +169,7 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x800509B4 | LIVE | `Engine::initDisplay` | game/scene/startup.cpp:51 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
 | 0x80050A0C | LIVE | `Engine::initFrameState` | game/scene/startup.cpp:30 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
 | 0x80050A80 | LIVE | `Engine::initCamera` | game/scene/startup.cpp:82 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
-| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:596 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
+| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:600 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2543 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2618 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:261 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
@@ -351,6 +356,7 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x8007B3F4 | LIVE | `Engine::reloadEntityPool` | game/scene/startup.cpp:138 |  | re-copy the staged per-area entity-pool control bytes onto the live he… |
 | 0x8007C0D0 | LIVE | `DialogTextStream::advanceByte` | game/ui/dialog_text_stream.cpp:62 |  | (obj a0, mode a1) -> v0. Guest frame MIRRORED per gen_func_8007C0D0: `… |
 | 0x8007D0D0 | LIVE | `DialogTextStream::applyRenderMode` | game/ui/dialog_text_stream.cpp:43 |  | (obj a0) -- LEAF (gen_func_8007D0D0 has no `sp` descent). Cross-checke… |
+| 0x8007D594 | LIVE | `GpuState::ui_span_add` | runtime/recomp/gpu_native.cpp:181 |  | UI-span registry (bug #34, gpu_native_internal.h) — presence-only prov… |
 | 0x8007DC38 | LIVE | `beh_variant_overlay_lifecycle` | game/ai/beh_variant_overlay_lifecycle.cpp:45 |  |  |
 | 0x8007E038 | LIVE | `Spawn::spawnOverlayVariantBody` | game/world/spawn.cpp:639 |  | VARIANT-OVERLAY SPAWN primitive. RE'd from disas 0x8007E038..0x8007E10… |
 | 0x8007E038 | LIVE | `Spawn::spawnOverlayVariant` | game/world/spawn.cpp:672 |  |  |
@@ -361,9 +367,9 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x8007E9C8 | LIVE | `BgSceneTransitionSm::fadeRect` | game/scene/bg_scene_transition_sm.cpp:51 |  | Screen fade — same shape as the guest's FUN_8007e9c8(color, P[3], 4) l… |
 | 0x80080F6C | LIVE | `Render::drawSync` | game/render/wide_re_libgpu_leaves.cpp:87 |  | func_80080F6C (0x80080F6C) — DrawSync(mode). VERIFIED & WIRED 2026-07-… |
 | 0x80081218 | LIVE | `Asset::uploadImage` | game/core/asset.cpp:246 |  | PC-native CPU->VRAM upload — replaces the game's libgs-style upload li… |
-| 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:552 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
+| 0x80081218 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:588 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x80081458 | LIVE | `Render::clearOTagR` | game/render/wide_re_libgpu_leaves.cpp:151 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). VERIFIED & WIRED… |
-| 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:144 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
+| 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:139 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
 | 0x800815D0 | LIVE | `func_800815D0` | game/render/wide_re_gpu_putdrawenv.cpp:250 |  | func_800815D0 (0x800815D0) — libgpu PutDrawEnv(drawEnvPtr). DRAFT. RE'… |
 | 0x80082220 | LIVE | `func_80082220` | game/render/wide_re_gpu_putdrawenv.cpp:176 |  | func_80082220 (0x80082220) — DR_TPAGE mode-word builder. DRAFT. RE'd f… |
 | 0x80082240 | LIVE | `func_80082240` | game/render/wide_re_gpu_putdrawenv.cpp:104 |  | func_80082240 (0x80082240) — SetDrawAreaTopLeft(x,y) word builder. DRA… |
@@ -430,12 +436,12 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x80099450 | LIVE | `bav_lock_ready` | game/ui/bav_loader.cpp:79 |  | -- lock helpers (FUN_80099478 / FUN_80099450), inlined --- |
 | 0x80099450 | LIVE | `bav_lock_set` | game/ui/bav_loader.cpp:82 |  |  |
 | 0x80099478 | LIVE | `bav_lock_ready` | game/ui/bav_loader.cpp:79 |  | -- lock helpers (FUN_80099478 / FUN_80099450), inlined --- |
-| 0x8009A420 | ORPHAN | `Core::guestMemset` | runtime/recomp/mem.cpp:364 |  | psyq libc `memset`, statically linked into MAIN.EXE (confirmed by |
+| 0x8009A420 | ORPHAN | `Core::guestMemset` | runtime/recomp/mem.cpp:367 |  | psyq libc `memset`, statically linked into MAIN.EXE (confirmed by |
 | 0x8009A450 | LIVE | `prng` | game/ai/beh_typed_variant_router.cpp:46 |  |  |
 | 0x8009CAEC | ORPHAN | `sync_ok` | runtime/recomp/sync_overrides.cpp:27 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
 | 0x8009CB80 | ORPHAN | `sync_ok` | runtime/recomp/sync_overrides.cpp:27 |  | DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bo… |
 | 0x800A33C8 | LIVE | `tbl_strp` | game/ai/beh_cube_text_spawn.cpp:44 |  | string-table entry pointer: mem32(0x800a33c8 + (node[0x60]*3 << 2) + 4… |
-| 0x800A5AC8 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:552 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
+| 0x800A5AC8 | LIVE | `GpuState::gpu_native_load_vram` | runtime/recomp/gpu_native.cpp:588 |  | PC-native CPU->VRAM upload. The game's libgs-style upload library (FUN… |
 | 0x800BE0D4 | LIVE | `Engine::startBinStageSkip` | game/core/engine.cpp:3219 |  | ── STARTBINSTAGE — pc_skip (default ./run.sh) ────────────────────────… |
 | 0x800BE224 | LIVE | `MusicCoord::musicFadeIn` | game/audio/music_coord.cpp:42 |  | PC-added helper (NOT a port of any FUN_XXXX): snap the game's CD-volum… |
 | 0x800BED80 | LIVE | `MusicCoord::dialogToneActive` | game/audio/music_coord.cpp:28 |  |  |
@@ -444,7 +450,8 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x800BF842 | LIVE | `Engine::postRenderTick` | game/core/engine.cpp:2713 |  | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
 | 0x800ED058 | LIVE | `Engine::sceneEventFifoFaithful` | game/core/engine.cpp:612 |  | pc_faithful field EVENT/COMMAND-QUEUE state machine — mirror of gen_fu… |
 | 0x800EE489 | LIVE | `Cull::cullFarMult` | game/render/cull.cpp:82 |  | pc_faithful/pc_skip split (2026-07-03): pc_faithful (pc_skip=false) us… |
-| 0x800F2624 | LIVE | `RenderQueue::objidOverlay` | game/render/render_queue.cpp:128 |  | Box + label every live GAME OBJECT, identified by ENUMERATING the rend… |
+| 0x800F2624 | LIVE | `RenderQueue::objidOverlay` | game/render/render_queue.cpp:129 |  | Box + label every live GAME OBJECT, identified by ENUMERATING the rend… |
+| 0x800F2624 | LIVE | `Render::terrainRenderAll` | game/render/submit.cpp:450 |  | terrainRenderAll: the terrain-node enumeration (moved from render_walk… |
 | 0x80104368 | LIVE | `cdlibcd_read_into_scratch` | game/core/engine.cpp:3093 |  | Read one 2048 B disc sector into a local buffer AND into the guest-RAM… |
 | 0x801062E4 | LIVE | `PcScheduler::runDemoBody` | game/core/pc_scheduler.cpp:274 |  | DEMO 0x801062E4 — native per-frame dispatcher (both pc_skip modes; see… |
 | 0x801062E4 | LIVE | `Demo::stageMain` | game/scene/demo.cpp:499 | 0x800810F0 | DEMO stage entry (0x801062E4) — own the prologue PC-native, then hand … |
@@ -490,9 +497,9 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x80109164 | LIVE | `PcScheduler::runSopAreaLoadStanza` | game/core/pc_scheduler.cpp:325 |  | SOP area-load 0x80109164 — SOP.BIN's cooperative slot-1 loader run syn… |
 | 0x80109164 | LIVE | `Sop::areaLoad` | game/scene/sop.cpp:64 | 0x8001DC40 | Owned synchronous area-DATA load (replaces the body of LAB_80109164 0x… |
 | 0x801092B4 | LIVE | `Sop::fieldUpdate` | game/scene/sop.cpp:380 |  | SOP per-frame FIELD UPDATE — native ownership of FUN_801092b4 (decomp … |
-| 0x80109450 | LIVE | `Sop::fieldMode` | game/scene/sop.cpp:469 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
+| 0x80109450 | LIVE | `Sop::fieldMode` | game/scene/sop.cpp:473 |  | SOP FIELD-MODE MACHINE — native ownership of FUN_80109450 (decomp scra… |
 | 0x8010957C | LIVE | `ScreenFade::sequence` | game/render/screen_fade.cpp:74 | 0x8010CC68 0x8010D030 |  |
-| 0x80109FE0 | LIVE | `Render::fieldEntityRender` | game/render/submit.cpp:353 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
+| 0x80109FE0 | LIVE | `Render::fieldEntityRender` | game/render/submit.cpp:385 |  | FIELD ENTITY RENDER LOOP — PC-native ownership of the SOP field-overla… |
 | 0x8010A0E0 | LIVE | `Sop::scenePrepass` | game/scene/sop.cpp:317 |  | SOP scene cam-frustum prepass — native ownership of FUN_8010A0E0 (Ghid… |
 | 0x8010A3AC | LIVE | `Sop::sceneGridGather` | game/scene/sop.cpp:225 |  | sceneGridGather — native port of guest FUN_8010A3AC (Ghidra decomp scr… |
 | 0x8010AB38 | LIVE | `beh_sop_overlay_shadow` | game/ai/sop_overlay_shadow.cpp:74 |  | (node) — per-frame tick, dispatched via node+0x1C. |
@@ -515,6 +522,7 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x801130C4 | LIVE | `ActorTomba::postInteractWalk` | game/player/actor_tomba.cpp:183 |  | ======================================================================… |
 | 0x80113C5C | LIVE | `Behaviors::areaSeasidePerframe` | game/ai/area_seaside_perframe.cpp:90 |  |  |
 | 0x80114E74 | LIVE | `ActorTomba::type4GuardedCheck` | game/player/actor_tomba.cpp:129 |  | type-4 guarded proximity. |
+| 0x80115598 | LIVE | `Render::backdropRender` | game/render/render_walk.cpp:134 |  | ======================================================================… |
 | 0x80117658 | LIVE | `beh_prng_velocity_machine` | game/ai/beh_prng_velocity_machine.cpp:50 |  |  |
 | 0x801178A4 | LIVE | `whiteFlashPhaseRamp` | game/ai/beh_a06_multi_actor.cpp:58 |  | the 5-phase white-flash phase ramp SM. See the file header for the pha… |
 | 0x80117AAC | LIVE | `whiteFadeHold` | game/ai/beh_a06_multi_actor.cpp:115 |  | 3-state fade-hold-fade-back companion to whiteFlashPhaseRamp. |
@@ -611,6 +619,7 @@ Totals: 646 native fns, 535 owned addresses, 617 LIVE / 29 ORPHAN.
 | 0x8013C3F4 | LIVE | `beh_area_threshold_ptr_swap` | game/ai/beh_area_threshold_ptr_swap.cpp:42 |  |  |
 | 0x8013C538 | LIVE | `beh_scatter_record_dither` | game/ai/beh_scatter_record_dither.cpp:47 |  |  |
 | 0x8013C9C0 | LIVE | `beh_scatter_ramp_machine` | game/ai/beh_scatter_ramp_machine.cpp:46 |  |  |
+| 0x8013CDD4 | LIVE | `WidescreenMarginQuad::emit` | game/render/widescreen_margin_quad.cpp:123 |  |  |
 | 0x8013DD48 | ORPHAN | `sub8013DD48` | game/ai/beh_a08_scene_actor.cpp:148 | 0x80072DDC | (objAnim, subId) — allocate a spawner obj and hook its handler. |
 | 0x8013FB88 | LIVE | `OverlayGroundGt3Gt4::gt3` | game/render/overlay_ground_gt3gt4.cpp:138 |  | ground/scene POLY_GT3 emit. Record = 36 bytes, SAME field layout as th… |
 | 0x8013FE58 | LIVE | `OverlayGroundGt3Gt4::gt4` | game/render/overlay_ground_gt3gt4.cpp:254 |  | ground/scene POLY_GT4 emit. Record = 44 bytes: {+0 rgb0(rgb1=rgb0<<4)\|… |
