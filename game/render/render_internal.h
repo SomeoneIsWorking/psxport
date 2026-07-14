@@ -52,6 +52,13 @@ static inline bool render_field_native_active(Core* c) {
   if (c->game->oracle || c->mRender->mode.psxRender()) return false;
   if (c->mem_r32(0x801FE00Cu) != 0x8010637Cu) return false;         // GAME stage resident
   if (c->mem_r32(0x80109450u) == 0x3C021F80u) return false;         // SOP intro narration overlay active
+  // #51: an AUTHORED OT sub-scene (hut/door interior, sm[0x4c]==3 — the game's own fieldRunX/frameX
+  // selector; see game_tomba2.cpp) is drawn ENTIRELY by the full guest-OT walk (#49), NOT the native
+  // field pass — so the native pass does NOT own the picture here. If this returned true, the #48
+  // native-cover + the cmdListDispatch REDIRECT would drop owned objects (Tomba, NPCs) from the OT walk
+  // while their native draw never runs (sceneNative is gated off) -> the objects vanish (Tomba invisible).
+  uint32_t task_sm = c->mem_r32(0x1F800138u);
+  if (task_sm && c->mem_r16(task_sm + 0x4Cu) == 3) return false;
   return true;
 }
 
