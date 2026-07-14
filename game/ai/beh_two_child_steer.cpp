@@ -27,20 +27,13 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80131D08u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
-static inline uint32_t leafr2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn); return c->r[2];
-}
 
 }  // namespace
 
@@ -79,8 +72,8 @@ void beh_two_child_steer(Core* c) {
      c->mem_w32(rec + 12, 0);
      s0 += 4;
    } while (s2 < 2);
-   leaf3(c, c->mem_r32(nd + 0xc0), 12, 2, 0x80051b04u);   // FUN_80051B04(rec0, 12, 2)
-   leaf3(c, c->mem_r32(nd + 0xc4), 12, 3, 0x80051b04u);   // FUN_80051B04(rec1, 12, 3)
+   guest_leaf(c, 0x80051b04u, c->mem_r32(nd + 0xc0), 12, 2);   // FUN_80051B04(rec0, 12, 2)
+   guest_leaf(c, 0x80051b04u, c->mem_r32(nd + 0xc4), 12, 3);   // FUN_80051B04(rec1, 12, 3)
    uint32_t rc1 = c->mem_r32(nd + 0xc4);
    c->mem_w16(rc1 + 0, 6);
    c->mem_w16(rc1 + 2, (uint16_t)(int16_t)-1400);
@@ -109,14 +102,14 @@ void beh_two_child_steer(Core* c) {
    goto Lec;                                         // n5 >= 2
  }
  L_eb8: {
-   leaf1(c, nd, 0x80131840u);                        // FUN_80131840(node)
+   guest_leaf(c, 0x80131840u, nd);                    // FUN_80131840(node)
    goto Lec;
  }
  Lec: {
    uint16_t a = c->mem_r16(0x1f800162u);
    uint16_t b = c->mem_r16(nd + 0x32);
    uint32_t a1 = (uint32_t)(int32_t)(int16_t)(uint16_t)(a - b);
-   if (leafr2(c, nd, a1, 0x800778e4u) == 0) goto Lret;   // FUN_800778E4(node, a1)
+   if (guest_leaf(c, 0x800778e4u, nd, a1) == 0) goto Lret;   // FUN_800778E4(node, a1)
    uint32_t rc1 = c->mem_r32(nd + 0xc4);
    c->mem_w16(rc1 + 10, (uint16_t)((c->mem_r16(rc1 + 10) - 32) & 0x0fff));
    c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                        // FUN_800517F8(node)

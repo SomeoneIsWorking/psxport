@@ -29,20 +29,13 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80133D6Cu;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline uint32_t leafr1(Core* c, uint32_t a0, uint32_t fn) {
-  c->r[4] = a0; rec_dispatch(c, fn); return c->r[2];
-}
-static inline uint32_t leafr2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn); return c->r[2];
-}
 
 // Step `cur` (sext16 current value) toward target `snap` by `step`, snapping on overshoot. Returns
 // whether to store (false = cur already at target16, guest skips the sh) + the value to store.
@@ -113,7 +106,7 @@ void beh_twin_record_steer(Core* c) {
      uint32_t rec0 = c->mem_r32(nd + 0xc0);
      int32_t aa = c->mem_r16s(0x1f800160u) - (int32_t)c->mem_r32(rec0 + 0x2c);
      int32_t bb = c->mem_r16s(0x1f800164u) - (int32_t)c->mem_r32(rec0 + 0x34);
-     int32_t v1 = (int32_t)leafr2(c, (uint32_t)aa, (uint32_t)bb, 0x800781e0u);   // FUN_800781E0
+     int32_t v1 = (int32_t)guest_leaf(c, 0x800781e0u, (uint32_t)aa, (uint32_t)bb);   // FUN_800781E0
      if (v1 < 60)        { a1v = 0; a3v = 0; }
      else if (v1 < 140)  { a1v = ((uint32_t)(-v1)) >> 1; a3v = 0; }
      else                { a1v = (uint32_t)(int32_t)-70; a3v = ((uint32_t)(140 - v1)) >> 1; }

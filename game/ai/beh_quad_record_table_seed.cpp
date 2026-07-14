@@ -30,18 +30,13 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80135D64u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
-static inline uint32_t leafr(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); return c->r[2]; }
 
 }  // namespace
 
@@ -81,7 +76,7 @@ void beh_quad_record_table_seed(Core* c) {
        c->mem_w32(rec + 8, 0);
        c->mem_w32(rec + 12, 0);
        uint32_t a2 = (uint32_t)c->mem_r16s(s4 + 6);
-       leaf3(c, rec, 12, a2, 0x80051b04u);          // FUN_80051B04(rec, 12, (int16)src[6])
+       guest_leaf(c, 0x80051b04u, rec, 12, a2);      // FUN_80051B04(rec, 12, (int16)src[6])
        s4 += 8;
        s0 += 4;
      } while ((int32_t)s3 < (int32_t)c->mem_r8(nd + 8));
@@ -149,13 +144,13 @@ void beh_quad_record_table_seed(Core* c) {
    if (sp == 23) { if (c->mem_r16s(0x1f8000dau) < 11000) goto Lret; }
    // L608c:
    if (!(c->mem_r8(0x800e7eaau) < 32)) goto Lret;
-   if (leafr(c, nd, 0x8007778cu) == 0) goto Lret;
+   if (guest_leaf(c, 0x8007778cu, nd) == 0) goto Lret;
    goto L60b4;
  }
 
  // ================= shared tail (state 0 & 1) =================
  L60b4:
-  leaf1(c, nd, 0x80135414u);                         // FUN_80135414(node)
+  guest_leaf(c, 0x80135414u, nd);                    // FUN_80135414(node)
   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                          // FUN_800517F8(node)
  Lret:
   return;

@@ -29,6 +29,7 @@
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
 #include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -38,28 +39,14 @@ constexpr uint32_t BEH_FN  = 0x80118240u;
 constexpr uint32_t A1_M0   = 0x8014C808u;   // FUN_80077B38 arg (lui 0x8015 + addiu -14328)
 constexpr uint32_t A1_M2   = 0x80017334u;   // FUN_80077B38 arg for node[3]==2 (lui 0x8001 + addiu 29492)
 
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
-}
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
-static inline void leaf5(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
-                         uint32_t arg5, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3;
-  c->mem_w32(c->r[29] + 16, arg5);
-  rec_dispatch(c, fn);
-}
-
 // Shared block @0x80118690: FUN_80051D90(node[0x10], a1_buf, 0x1F8000C0) writes the scratchpad work
 // area, then node[0x2E]/0x32/0x36 are copied from 0x1F8000C0/C2/C4 and FUN_8004B374(node,0) is called.
 static void shared_8690(Core* c, uint32_t nd, uint32_t a1_buf) {
-  leaf3(c, c->mem_r32(nd + 0x10), a1_buf, 0x1F8000C0u, 0x80051D90u);
+  guest_leaf(c, 0x80051D90u, c->mem_r32(nd + 0x10), a1_buf, 0x1F8000C0u);
   c->mem_w16(nd + 0x2E, c->mem_r16(0x1F8000C0u));
   c->mem_w16(nd + 0x32, c->mem_r16(0x1F8000C2u));
   c->mem_w16(nd + 0x36, c->mem_r16(0x1F8000C4u));
-  leaf2(c, nd, 0, 0x8004B374u);
+  guest_leaf(c, 0x8004B374u, nd, 0);
 }
 
 }  // namespace
@@ -143,7 +130,7 @@ void beh_typed_init_exit_poker(Core* c) {
   c->mem_w16(nd + 0x86, 32);
   goto L8458;
  L8450:
-  leaf2(c, nd, 0, 0x8004B354u);                       // FUN_8004B354(node, 0)
+  guest_leaf(c, 0x8004B354u, nd, 0);                   // FUN_8004B354(node, 0)
  L8458:
   c->mem_w8(nd + 4, (uint8_t)(c->mem_r8(nd + 4) + 1)); // node[4] += 1
   goto Lret;
@@ -169,7 +156,7 @@ void beh_typed_init_exit_poker(Core* c) {
     } else if (n5 != 1) goto Lret;                   // n5 >= 2
     // 0x801184e4 (n5==0 fall-through, or n5==1)
     if (c->mem_r8(c->mem_r32(nd + 0x10) + 0x3F) == 0) goto Lret;
-    leaf1(c, nd, 0x80077EFCu);                       // FUN_80077EFC(node)
+    guest_leaf(c, 0x80077EFCu, nd);                   // FUN_80077EFC(node)
     c->mem_w8(nd + 1, 1);                            // node[1] = s1
     {
       int16_t v = c->mem_r16s(c->mem_r32(nd + 0x10) + 0x16);
@@ -210,8 +197,8 @@ void beh_typed_init_exit_poker(Core* c) {
     goto Lret;                                       // n5e >= 2
   }
  L185e8:
-  leaf1(c, nd, 0x8007778Cu);                          // FUN_8007778C(node)
-  leaf1(c, nd, 0x80077B5Cu);                          // FUN_80077B5C(node)
+  guest_leaf(c, 0x8007778Cu, nd);                      // FUN_8007778C(node)
+  guest_leaf(c, 0x80077B5Cu, nd);                      // FUN_80077B5C(node)
   goto Lret;
 
  S1_2: {                                             // node[3]==2 @0x80118600
@@ -221,12 +208,12 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w8 (nd + 5, 1);
       c->mem_w16(nd + 0x66, 80);
       c->mem_w16(nd + 0x68, 0);                       // delay-slot store: runs BEFORE the call
-      leaf2(c, nd, 0, 0x8004B354u);                   // FUN_8004B354(node, 0)
+      guest_leaf(c, 0x8004B354u, nd, 0);               // FUN_8004B354(node, 0)
       goto Lret;
     }
     if (n5 == 1) {                                   // 0x80118648
       if (c->mem_r8(c->mem_r32(nd + 0x10) + 0x3F) == 0) goto Lret;
-      leaf1(c, nd, 0x80077EFCu);                      // FUN_80077EFC(node)
+      guest_leaf(c, 0x80077EFCu, nd);                  // FUN_80077EFC(node)
       c->mem_w8(nd + 1, 1);                           // node[1] = s1
       {
         int16_t v = c->mem_r16s(c->mem_r32(nd + 0x10) + 0x16);
@@ -240,9 +227,9 @@ void beh_typed_init_exit_poker(Core* c) {
   }
 
  S1_3:                                               // node[3]==3 @0x801186c8
-  leaf1(c, nd, 0x8007778Cu);                          // FUN_8007778C(node)
+  guest_leaf(c, 0x8007778Cu, nd);                      // FUN_8007778C(node)
   if (c->r[2] == 0) goto Lret;                        // return value
-  leaf2(c, nd, 0, 0x8004B374u);                       // FUN_8004B374(node, 0)
+  guest_leaf(c, 0x8004B374u, nd, 0);                   // FUN_8004B374(node, 0)
   goto Lret;
 
  // ================= STATE 2 =================
@@ -253,32 +240,32 @@ void beh_typed_init_exit_poker(Core* c) {
       // FUN_80040B48 = SceneEvents::arm; caller advances only when events are enabled (r[2] >= 0).
       if (c->engine.sceneEvents.arm(5) >= 0) {
         c->inventory.giveAndFlag(36, 1);              // FUN_8004D4C4(36, 1) [native]
-        leaf1(c, nd, 0x8004B0D8u);                    // FUN_8004B0D8(node)
+        guest_leaf(c, 0x8004B0D8u, nd);                // FUN_8004B0D8(node)
       }
       c->mem_w8(nd + 4, 3);                           // node[4] = 3
       goto Lret;
     case 1:                                          // st2sub1 @0x8011875c
       c->inventory.giveAndFlag(69, 1);                // FUN_8004D4C4(69, 1) [native]
-      leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
+      guest_leaf(c, 0x8004B0D8u, nd);                  // FUN_8004B0D8(node)
       c->mem_w8(nd + 4, 3);
       c->mem_w8(0x800BF9DFu, (uint8_t)(c->mem_r8(0x800BF9DFu) | 0x20));
       goto Lret;
     case 2: {                                        // st2sub_v1 @0x80118794
       c->inventory.giveAndFlag(120, 1);               // FUN_8004D4C4(120, 1) [native]
       c->mem_w8(nd + 4, 3);                           // node[4] = 3 (delay slot)
-      leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
+      guest_leaf(c, 0x8004B0D8u, nd);                  // FUN_8004B0D8(node)
       uint8_t flg = c->mem_r8(0x800BF9EAu);
       int16_t p   = c->mem_r16s(nd + 0x60);
       flg = (uint8_t)(flg & ~(1u << ((uint32_t)p & 31)));
       c->mem_w8(0x800BF9EAu, flg);
       flg = (uint8_t)(flg & ~(1u << (((uint32_t)p + 4) & 31)));
       c->mem_w8(0x800BF9EAu, flg);
-      leaf1(c, 78, 0x80040C00u);                      // FUN_80040C00(78)
+      guest_leaf(c, 0x80040C00u, 78);                  // FUN_80040C00(78)
       goto Lret;
     }
     case 3:                                          // st2sub3 @0x801187f8
       c->inventory.giveAndFlag(83, 1);                // FUN_8004D4C4(83, 1) [native]
-      leaf1(c, nd, 0x8004B0D8u);                      // FUN_8004B0D8(node)
+      guest_leaf(c, 0x8004B0D8u, nd);                  // FUN_8004B0D8(node)
       c->mem_w8(nd + 4, 3);                           // node[4] = s0 (==3)
       c->mem_w8(0x800BF9EEu, (uint8_t)(c->mem_r8(0x800BF9EEu) | 2));
       goto Lret;

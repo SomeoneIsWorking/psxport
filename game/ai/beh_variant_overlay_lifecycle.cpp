@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -38,16 +39,6 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x8007DC38u;
 constexpr uint32_t OVL_FLAG = 0x800BF822u;   // DAT_800bf822 — global overlay-flag byte; this owns bit 0x04
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) {
-  c->r[4] = a0; rec_dispatch(c, fn);
-}
-static inline void leaf2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
-}
-static inline void leaf4(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; rec_dispatch(c, fn);
-}
 
 }  // namespace
 
@@ -60,10 +51,10 @@ void beh_variant_overlay_lifecycle(Core* c) {
     if (c->mem_r8(nd + 3) == 0 && (c->mem_r8(OVL_FLAG) & 0xfb) != 0) {
       c->mem_w8(nd + 4, 2);
     }
-    leaf1(c, nd, 0x8007c940u);                              // FUN_8007C940
-    leaf1(c, nd, 0x8007cc00u);                              // FUN_8007CC00
+    guest_leaf(c, 0x8007c940u, nd);                          // FUN_8007C940
+    guest_leaf(c, 0x8007cc00u, nd);                          // FUN_8007CC00
     if (c->mem_r8(nd + 3) != 1) {
-      leaf4(c, nd + 0x54, c->mem_r8(nd + 0x18), 1, 2, 0x8005019cu);  // FUN_8005019C(node+0x54,node[0x18],1,2)
+      guest_leaf(c, 0x8005019cu, nd + 0x54, c->mem_r8(nd + 0x18), 1, 2);  // FUN_8005019C(node+0x54,node[0x18],1,2)
     }
   } else if (st < 2) {
     // ---------- STATE 0 (spawn/init) ----------  (st == 0)
@@ -73,7 +64,7 @@ void beh_variant_overlay_lifecycle(Core* c) {
     int32_t  pos  = (int32_t)c->mem_r32(nd + 0x50) + (int32_t)(uint32_t)tv;
     c->mem_w32(nd + 0x10, (uint32_t)pos);
     c->mem_w32(nd + 0x14, (uint32_t)pos);
-    leaf2(c, nd, 0, 0x8007c0d0u);                           // FUN_8007C0D0(node,0)
+    guest_leaf(c, 0x8007c0d0u, nd, 0);                       // FUN_8007C0D0(node,0)
     uint8_t n3 = c->mem_r8(nd + 3);
     c->mem_w8(nd + 0x46, 1);
     c->mem_w8(nd + 4, (uint8_t)(c->mem_r8(nd + 4) + 1));     // node[4] += 1  (-> 1)

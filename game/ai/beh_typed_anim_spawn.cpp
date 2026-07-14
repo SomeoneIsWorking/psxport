@@ -30,6 +30,7 @@
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
 #include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -37,21 +38,6 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x8012DA04u;
 constexpr uint32_t A1_MODEL = 0x8014C808u;   // FUN_80077B38 arg (lui 0x8015 + addiu -14328)
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
-}
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
-// 5-arg: a0..a3 in regs, arg5 on the guest stack at sp+16 (sp = our mirrored frame = entry-40).
-static inline void leaf5(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
-                         uint32_t arg5, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3;
-  c->mem_w32(c->r[29] + 16, arg5);
-  rec_dispatch(c, fn);
-}
 
 }  // namespace
 
@@ -131,7 +117,7 @@ void beh_typed_anim_spawn(Core* c) {
       goto Lret;                                    // s1 >= 2
     }
     case 1:                                         // jt1 -> 0x8012dc10
-      leaf1(c, s0, 0x8018C574u);                    // FUN_8018C574(node)
+      guest_leaf(c, 0x8018C574u, s0);                // FUN_8018C574(node)
       goto Lret;
     case 2: {                                       // jt1 -> 0x8012dc20
       s1 = c->mem_r8(s0 + 5);                       // node[5]
@@ -151,7 +137,7 @@ void beh_typed_anim_spawn(Core* c) {
       goto Lret;
     }
     case 3: case 4: case 5:                         // jt1 -> 0x8012dca0
-      leaf1(c, s0, 0x8007778Cu);                    // FUN_8007778C(node)
+      guest_leaf(c, 0x8007778Cu, s0);                // FUN_8007778C(node)
       goto Lret;
     case 6: {                                       // jt1 -> 0x8012dcb0
       s1 = c->mem_r8(s0 + 5);
@@ -206,7 +192,7 @@ void beh_typed_anim_spawn(Core* c) {
   c->inventory.giveAndFlag(35, 1);                  // FUN_8004D4C4(35, 1) [native]
   goto Ltail_after;
  Ltail_after:
-  leaf1(c, s0, 0x8004B0D8u);                        // FUN_8004B0D8(node)
+  guest_leaf(c, 0x8004B0D8u, s0);                    // FUN_8004B0D8(node)
   c->mem_w8(s0 + 4, 3);                             // node[4] = 3
   goto Lret;
 

@@ -25,20 +25,13 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80132400u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline uint32_t leafr1(Core* c, uint32_t a0, uint32_t fn) {
-  c->r[4] = a0; rec_dispatch(c, fn); return c->r[2];
-}
-static inline uint32_t leafr3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn); return c->r[2];
-}
 
 }  // namespace
 
@@ -71,7 +64,7 @@ void beh_single_child_cull(Core* c) {
    c->mem_w8(nd + 4, (uint8_t)(s + 1));            // node[4]++
    c->mem_w16(nd + 0x32, (uint16_t)(h + 128));     // node[0x32] += 128
    c->mem_w8(nd + 3, 0);
-   c->mem_w32(nd + 0x10, leafr1(c, nd, 0x8013a730u));   // node[0x10] = FUN_8013A730(node)
+   c->mem_w32(nd + 0x10, guest_leaf(c, 0x8013a730u, nd));   // node[0x10] = FUN_8013A730(node)
    goto Lret;
  }
 
@@ -81,8 +74,8 @@ void beh_single_child_cull(Core* c) {
    if (c->mem_r8(0x800bf89cu) == 2) work = true;
    else work = (c->mem_r8(0x800e7eaau) != st);     // st = original node[4] byte
    if (work) {
-     if (leafr1(c, nd, 0x8007778cu) != 0) {        // FUN_8007778C(node)
-       leaf1(c, nd, 0x80132020u);                  // FUN_80132020(node)
+     if (guest_leaf(c, 0x8007778cu, nd) != 0) {     // FUN_8007778C(node)
+       guest_leaf(c, 0x80132020u, nd);              // FUN_80132020(node)
        c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                  // FUN_800517F8(node)
      }
    }

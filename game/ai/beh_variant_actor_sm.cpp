@@ -31,26 +31,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x8011D578u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
-}
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
-static inline uint32_t leafr1(Core* c, uint32_t a0, uint32_t fn) {
-  c->r[4] = a0; rec_dispatch(c, fn); return c->r[2];
-}
-static inline uint32_t leafr4(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; rec_dispatch(c, fn); return c->r[2];
-}
 
 }  // namespace
 
@@ -67,7 +54,7 @@ void beh_variant_actor_sm(Core* c) {
     }
     if (st != 0) return;
     // STATE 0 (INIT)
-    if (leafr4(c, nd, 0xd, c->mem_r32(0x800ecfb8u), 0x8014c0bcu, 0x800519e0u) != 0) return;  // FUN_800519E0
+    if (guest_leaf(c, 0x800519e0u, nd, 0xd, c->mem_r32(0x800ecfb8u), 0x8014c0bcu) != 0) return;  // FUN_800519E0
     c->mem_w32(nd + 0x7c, 0x8014de54u);
     c->mem_w32(nd + 0x3c, c->mem_r32(0x800ecfbcu));
     c->mem_w8(nd + 0x0b, 0x40);
@@ -89,7 +76,7 @@ void beh_variant_actor_sm(Core* c) {
       if (n3 == 0) { c->mem_w16(nd + 0x56, 0xc00); c->mem_w8(nd + 0x7b, 7); }
       else if (n3 == 1) { c->mem_w16(nd + 0x56, 0x400); c->mem_w8(nd + 0x7b, 0); }
     }
-    leaf3(c, nd, c->mem_r8(nd + 0x7b), 0, 0x80041718u);   // FUN_80041718(node, node[0x7B], 0)
+    guest_leaf(c, 0x80041718u, nd, c->mem_r8(nd + 0x7b), 0);   // FUN_80041718(node, node[0x7B], 0)
     c->mem_w8(nd + 4, (uint8_t)(c->mem_r8(nd + 4) + 1));
     return;
   }
@@ -97,18 +84,18 @@ void beh_variant_actor_sm(Core* c) {
   // STATE 1
   {
     uint8_t n3 = c->mem_r8(nd + 3);
-    if (n3 == 0) { leaf1(c, nd, 0x8011d108u); goto Ltail; }   // FUN_8011D108
+    if (n3 == 0) { guest_leaf(c, 0x8011d108u, nd); goto Ltail; }   // FUN_8011D108
     if (n3 != 1) goto Ltail;
 
     uint8_t n5 = c->mem_r8(nd + 5);
     if (n5 == 0) {
       if (c->mem_r8(0x1f800207u) != 10 || c->mem_r16s(0x1f800160u) >= 8000) {
-        if (leafr1(c, nd, 0x8007778cu) == 0) {              // FUN_8007778C
+        if (guest_leaf(c, 0x8007778cu, nd) == 0) {           // FUN_8007778C
           if (c->mem_r8(0x800bf8bcu) == 255) c->mem_w8(nd + 4, 3);
         } else if (c->mem_r8(nd + 0x2b) == 3) {
           c->mem_w8(nd + 0x7a, 0x14);
-          leaf2(c, 1, 1, 0x80042354u);                      // FUN_80042354(1,1)
-          leaf2(c, nd, 0x80148d2cu, 0x80040d68u);           // FUN_80040D68(node, 0x80148D2C)
+          guest_leaf(c, 0x80042354u, 1, 1);                  // FUN_80042354(1,1)
+          guest_leaf(c, 0x80040d68u, nd, 0x80148d2cu);       // FUN_80040D68(node, 0x80148D2C)
           c->mem_w8(nd + 0x70, 2);
           c->mem_w8(nd + 5, (uint8_t)(c->mem_r8(nd + 5) + 1));   // LAB_d7d4
         }
@@ -119,14 +106,14 @@ void beh_variant_actor_sm(Core* c) {
       if (c->mem_r8(nd + 0x70) == 255)
         c->mem_w8(nd + 5, (uint8_t)(c->mem_r8(nd + 5) - 1)); // LAB_d7d4
     }
-    leaf1(c, nd, 0x80041098u);                              // FUN_80041098
-    leaf1(c, nd, 0x8004190cu);                              // FUN_8004190C
+    guest_leaf(c, 0x80041098u, nd);                          // FUN_80041098
+    guest_leaf(c, 0x8004190cu, nd);                          // FUN_8004190C
   }
 
  Ltail:
   if (c->mem_r8(nd + 1) != 0) {
-    leaf1(c, nd, 0x800518fcu);                              // FUN_800518FC
-    leaf1(c, nd, 0x8011d82cu);                              // FUN_8011D82C
+    guest_leaf(c, 0x800518fcu, nd);                          // FUN_800518FC
+    guest_leaf(c, 0x8011d82cu, nd);                          // FUN_8011D82C
   }
   c->mem_w8(nd + 0x2b, 0);
 }
