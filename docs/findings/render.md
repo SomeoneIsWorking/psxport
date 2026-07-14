@@ -1803,6 +1803,42 @@ draft was already byte-faithful.
 - Fix = design unit: a separate ires-scaled 3D target (recreated on live toggle) receiving the opaque+semi
   passes, composited/downsampled back over the pixel-exact VRAM-space 2D; redesign the ires_cap clamp.
   Full analysis in the diagnosis report (session 2026-07-14).
+- **FIXED (2026-07-15).** `GpuGpuState::s_ires_color/s_ires_depth/s_ires_rgba` (gpu_gpu_internal.h) — a
+  `VRAM_W*i x VRAM_H*i` target set, lazily built + torn-down/rebuilt on scale change by
+  `ensure_ires_targets()` — receives Pass A (opaque)/decode/Pass B (semi)/encode at `i>1` (gpu_gpu.cpp
+  render_geom); same shaders/vertex data, only the viewport is `i`× bigger (tri.vert's NDC divisors are
+  fixed to the 1024x512 canvas, so a bigger viewport is a literal "scale by i"). A box-filter downsample
+  shader (`ires_downsample.frag`, NOT a plain `SDL_BlitGPUTexture` LINEAR blit) composites ONLY the
+  display sub-rect back into the fixed `s_vram_tex`. `i==1` takes the original direct-to-`s_vram_tex` path
+  unconditionally (colorTgt/depthTgt/rgbaTgt alias the plain fields, no extra blit/pass) — byte-identical
+  to pre-fix (verified: ires=1 shot md5 stays `8c4e6a32...`).
+  - **Two real bugs found + fixed during bring-up, both worth remembering:** (1) `tritex.frag`/
+    `trisemi_hw.frag`'s draw-area clip (`v_da`) and `tritex.frag`'s manual semi destination sample
+    (`vram_at(px,py)`) both used raw `gl_FragCoord` — native-VRAM-unit thresholds compared against an
+    ires-scaled fragment coordinate discarded almost everything past `VRAM_W,VRAM_H` regardless of
+    scissor/viewport (symptom: only the top-left 1/i×1/i corner of the scene rendered). Fixed by dividing
+    `gl_FragCoord` by a new `PC.scale` fragment uniform before either use. `decode.frag`/`encode.frag` had
+    the same class of bug via a hardcoded `vec2(1024.0,512.0)` texel-space constant — fixed with
+    `textureSize(sampler,0)`. (2) A plain `SDL_BlitGPUTexture` LINEAR-filter downsample for the final
+    composite is a single bilinear tap per destination texel — correct for the upsample/seed blit
+    (magnify) but aliases badly on a >1:1 minify (confetti noise on grass/leaf detail, confirmed via
+    `iresdump`/`gpu_gpu_ires_rawdump`: the raw ires target was clean, only the blitted-down composite
+    wasn't). Replaced with a proper NxN box-filter fragment shader.
+  - ires_cap redesigned around a real GPU-memory budget (128 MiB/Game, 14 bytes/px across the three
+    ires-scale textures) instead of `VRAM_W / native_w` (that clamp existed to keep a scaled FB inside the
+    1024-wide VRAM canvas — moot now that the scaled render is a standalone target, not squeezed into it).
+  - Live toggle: REPL `setires <0..4>` (new; previously only the RmlUi overlay could flip `mods.ires`,
+    windowed-only) exercises the same `mods.ires` mutation and drove `ensure_ires_targets` through several
+    teardown/rebuild cycles headless with no crash.
+  - Known caveat: 2D content (HUD/menu text, sprites) is submitted through the SAME tri/tex geometry
+    pipeline as the 3D world (no separate 2D draw path exists in this renderer), so it technically renders
+    through the ires-scaled target too when `i>1`. Empirically this is harmless for OPAQUE 2D (axial,
+    integer-positioned glyphs/sprites box-filter back to the identical value — verified: isolating
+    glyph-ink pixels in the pause-menu "Select Options" text gave 1 differing pixel out of ~500 opaque ink
+    pixels checked, vs ~490 differing pixels in the SAME crop's translucent-panel background, which
+    legitimately shows the differently-anti-aliased 3D world through the panel — expected, not a bug). A
+    true architectural fix (tag+split 2D-band prims into an unscaled sub-batch) is future work if an
+    opaque-2D case is ever found to actually shift.
 
 ## Z-fight sweep 2026-07-14 — barrel fix HOLDS; new double-submission class; 2 zfight tooling defects
 

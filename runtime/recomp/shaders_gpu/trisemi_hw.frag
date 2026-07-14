@@ -28,13 +28,16 @@ layout(location = 3) flat in ivec4 v_clut;   // clutx, cluty, semi, blend
 layout(location = 4) flat in ivec4 v_tw;     // texture window
 layout(location = 5) flat in ivec4 v_da;     // draw-area clip
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
+// ires (internal-resolution) scale — see tritex.frag's identical comment: v_da is native-unit, gl_FragCoord
+// is ires-scaled, divide back down before the clip test. 1 at i==1 (no-op, byte-identical to pre-ires).
+layout(set = 3, binding = 0) uniform PC { int scale; } pc;
 layout(location = 0) out vec4 o_col;
 
 uint vram_at(int x, int y) { vec2 rg = texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).rg;
                              return uint(rg.r * 255.0 + 0.5) | (uint(rg.g * 255.0 + 0.5) << 8); }
 
 void main() {
-    int px = int(gl_FragCoord.x), py = int(gl_FragCoord.y);
+    int px = int(gl_FragCoord.x) / pc.scale, py = int(gl_FragCoord.y) / pc.scale;
     if (px < v_da.x || px > v_da.z || py < v_da.y || py > v_da.w) discard;
     int mode = v_tp.z;
     vec3 F; uint stp = 1u;

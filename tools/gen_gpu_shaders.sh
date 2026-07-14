@@ -46,5 +46,6 @@ PY
   emit decode.frag    spv_g_decode_frag     # 1555 VRAM -> float RGBA (before the semi pass)
   emit encode.frag    spv_g_encode_frag     # float RGBA -> 1555 VRAM (after the semi pass)
   emit trisemi_hw.frag spv_g_trisemi_hw_frag # real HW-blend textured semi (reuses tritex.vert)
+  emit ires_downsample.frag spv_g_ires_downsample_frag # ires composite: box-filter downsample (reuses fsq.vert)
 } > "$OUT"
 echo "[gen_gpu_shaders] wrote $OUT"

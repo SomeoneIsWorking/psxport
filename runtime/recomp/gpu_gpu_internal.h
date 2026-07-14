@@ -64,6 +64,21 @@ struct GpuGpuState {
   int s_have_3d = 0;                              // THIS Game's targets created
   void ensure_targets();                          // lazy target creation (device must be inited)
 
+  // ---- ires (internal resolution) scaled 3D target — Pass 2, gpu_gpu.cpp render_geom -----------------
+  // A SEPARATE, larger color+depth(+semi-blend-intermediate) target that the opaque/semi geometry passes
+  // render into at `i`x the fixed VRAM canvas (1024*i x 512*i) when the live ires scale is >1, so 3D edges
+  // rasterize at higher internal resolution; render_geom then downsamples ONLY the display sub-rect back
+  // into s_vram_tex (linear-filtered SDL_BlitGPUTexture) so every 2D-space consumer (texture pages, CLUTs,
+  // sprite blits, readback, SBS) stays on the fixed, pixel-exact VRAM texture untouched. i==1 never touches
+  // these fields (render_geom stays on the direct s_vram_tex path — no extra blit). Lazily created; torn
+  // down + rebuilt by ensure_ires_targets() whenever the live scale changes (RmlUi overlay can flip
+  // mods.ires mid-run).
+  SDL_GPUTexture* s_ires_color = nullptr;   // RG8 (packed 1555), VRAM_W*i x VRAM_H*i
+  SDL_GPUTexture* s_ires_depth = nullptr;   // D32
+  SDL_GPUTexture* s_ires_rgba  = nullptr;   // float RGBA semi-blend intermediate, ires-scaled
+  int s_ires_scale = 1;                     // scale these targets are built for (1 = none built/needed)
+  void ensure_ires_targets(int i);          // i<=1: tear down (no targets held); i>1: (re)build if changed
+
   // M2/M3 batch state (counters + the three host vertex buffers + the semi-overlap grouping + the dirty-
   // VRAM list) moved OUT of GpuGpuState into the file-scope GeomBatch s_gb[2] in gpu_gpu.cpp, so the renderer
   // holds TWO independent batches and draws each into its own panel image (dual-view native-vs-PSX

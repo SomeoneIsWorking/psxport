@@ -30,12 +30,20 @@ The two video selectors:
   it is forced OFF under `PSXPORT_ORACLE` and in the SBS legs (they run 4:3), so the byte-exact reference
   is untouched. Overlay row: "Aspect Ratio".
 - **`ires`** — internal-resolution scale, ONE merged selector: `0`=Auto (derive from window height),
-  `1`=Vanilla (1x), `2`=X2, `3`=X3, `4`=X4. Capped by `VRAM_W(1024) / native_w` in `gpu_gpu_video_status`.
-  Overlay row: "Internal Resolution". (Replaced the old two-row `ires` 1..3 + `ires_auto` bool; a legacy
-  file carrying `ires_auto=1` is migrated to `ires=0` on load.) NOTE: the Pass-1 SDL_GPU renderer does not
-  yet render to a supersampled scratch FB (`GpuGpuState::frame_via_fb()==0`), so `ires` currently persists
-  and reports but is not yet consumed by the raster — X2..X4 do not visibly sharpen until the scaled-FB pass
-  lands. The selector + cap are in place for that pass.
+  `1`=Vanilla (1x), `2`=X2, `3`=X3, `4`=X4 (cap is dynamic — see below). Overlay row: "Internal
+  Resolution". (Replaced the old two-row `ires` 1..3 + `ires_auto` bool; a legacy file carrying
+  `ires_auto=1` is migrated to `ires=0` on load.) **Consumed by the raster** (gpu_gpu.cpp render_geom):
+  at `i>1` the opaque+semi 3D passes render into a SEPARATE `VRAM_W*i x VRAM_H*i` target
+  (`GpuGpuState::s_ires_color/s_ires_depth/s_ires_rgba`, lazily built + torn-down/rebuilt on a live
+  toggle by `ensure_ires_targets`), then a linear-filtered `SDL_BlitGPUTexture` downsamples ONLY the
+  display sub-rect back into the fixed 1024x512 VRAM texture — every VRAM-space 2D op (texture pages,
+  CLUTs, sprite blits, readback, SBS) stays on that fixed texture, untouched. At `i==1` render_geom takes
+  the original direct-to-`s_vram_tex` path with no extra blit (byte-identical to pre-ires code). Cap is a
+  real GPU-memory budget (128 MiB/Game @ 14 bytes/px across the three ires-scale textures), not
+  `VRAM_W / native_w` (that clamp predated the scaled target ever being built — see
+  `docs/findings/render.md` "ires modifier is a NO-OP"). `PSXPORT_DEBUG=ires` traces the resolved scale +
+  composite-blit rects; REPL `iresdump <path.ppm>` dumps the full (non-downsampled) scaled target for
+  bring-up debugging.
 
 ## The rule: don't call `getenv` — use `cfg` (`runtime/recomp/cfg.h`)
 ```c

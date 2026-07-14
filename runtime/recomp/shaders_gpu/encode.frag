@@ -8,7 +8,9 @@ layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_color;
 void main() {
-    ivec2 t = ivec2(v_uv * vec2(1024.0, 512.0));
+    // textureSize(), not a hardcoded 1024x512 — see decode.frag's comment (same ires-scale reasoning).
+    ivec2 sz = textureSize(u_color, 0);
+    ivec2 t = ivec2(v_uv * vec2(sz));
     vec3 rgb = clamp(texelFetch(u_color, t, 0).rgb, 0.0, 1.0);
     uint r = uint(rgb.r * 31.0 + 0.5), g = uint(rgb.g * 31.0 + 0.5), b = uint(rgb.b * 31.0 + 0.5);
     uint w = r | (g << 5) | (b << 10);

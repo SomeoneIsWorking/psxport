@@ -46,6 +46,7 @@ public:
   SDL_GPUGraphicsPipeline* s_semi_pipe[GGS_NUM_BLEND_MODES] = {};  // textured semi, real HW blend
   SDL_GPUGraphicsPipeline* s_decode_pipe = nullptr;  // fullscreen: packed 1555 -> float RGBA
   SDL_GPUGraphicsPipeline* s_encode_pipe = nullptr;  // fullscreen: float RGBA -> packed 1555
+  SDL_GPUGraphicsPipeline* s_ires_downsample_pipe = nullptr;  // ires composite: box-filter downsample
   int s_pipes_3d = 0;                                // 3D pipelines created (once per process)
 
   // ---- SBS two-pane composite textures ----

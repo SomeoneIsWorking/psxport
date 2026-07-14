@@ -202,6 +202,17 @@ long Repl::read(Core* c, uint32_t f) {
         else                   { gpu_native_shot(c, path); fprintf(stderr, "[repl] shot (SW) -> %s\n", path); }
       }
     }
+    else if (!strcmp(cmd, "setires")) {   // live ires toggle (same mods.ires mutation the RmlUi overlay's
+      // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuGpuState::ensure_ires_targets' teardown+
+      // rebuild path headless, without needing a windowed run to reach the overlay.
+      unsigned n = 0;
+      if (sscanf(line, "%*s %u", &n) == 1) { c->game->mods.ires = (int)n; fprintf(stderr, "[repl] mods.ires = %d\n", c->game->mods.ires); }
+      else fprintf(stderr, "[repl] setires <0..4> — live ires toggle (0=Auto)\n");
+    }
+    else if (!strcmp(cmd, "iresdump")) {   // DEBUG ONLY (ires bring-up): raw dump of the ires-scaled target
+      char path[200] = {0};
+      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_gpu_ires_rawdump(Core*, const char*); gpu_gpu_ires_rawdump(c, path); }
+    }
     else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
       if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
         void gpu_gpu_vram_region(Core*, const char*, int, int, int, int); gpu_gpu_vram_region(c, path, (int)x,(int)y,(int)w,(int)h); } }

@@ -17,13 +17,19 @@ layout(location = 4) flat in ivec4 v_tw;     // texture window
 layout(location = 5) flat in ivec4 v_da;     // draw-area clip
 // VRAM is R8G8_UNORM (R=low byte, G=high byte of the 1555 word — SDL_GPU forbids integer SAMPLER formats).
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
+// ires (internal-resolution) scale: v_da (draw-area clip) is in NATIVE VRAM pixel units, and the manual
+// destination sample below (vram_at(px,py)) must index the SNAPSHOT atlas (always fixed VRAM_W x VRAM_H —
+// see gpu_gpu.cpp render_geom, this pass never touches a scaled snapshot), so gl_FragCoord — which spans
+// the ires-scaled render target's OWN (bigger) pixel range — must be divided back down to native units
+// before either use. 1 at i==1 (a no-op divide, byte-identical to the pre-ires shader).
+layout(set = 3, binding = 0) uniform PC { int scale; } pc;
 layout(location = 0) out vec4 o_col;
 
 uint vram_at(int x, int y) { vec2 rg = texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).rg;
                              return uint(rg.r * 255.0 + 0.5) | (uint(rg.g * 255.0 + 0.5) << 8); }
 
 void main() {
-    int px = int(gl_FragCoord.x), py = int(gl_FragCoord.y);
+    int px = int(gl_FragCoord.x) / pc.scale, py = int(gl_FragCoord.y) / pc.scale;
     if (px < v_da.x || px > v_da.z || py < v_da.y || py > v_da.w) discard;
     int mode = v_tp.z;
     uint texel; uint stp = 1u;
