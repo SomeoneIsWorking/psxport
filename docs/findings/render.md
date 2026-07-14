@@ -1769,9 +1769,6 @@ draft was already byte-faithful.
 - Decomps: scratch/decomp/otattr_subs.c, otattr_leaf{,2}.c, otattr_f698.c; Ghidra project
   scratch/ghidra/otattr_census.
 
-<<<<<<< ours
-## 0x8013CDD4 port — ambiguity SETTLED (2026-07-14): load-bearing field reuse, port unblocked
-=======
 ### RESOLVED — 4 walkers OWNED native (2026-07-15, game/render/objlist_walk.cpp)
 
 - **status:** all 4 walkers (+ the FUN_8003BED8 shared-tail split of BCF4) ported as `Render::
@@ -1809,8 +1806,7 @@ draft was already byte-faithful.
   objListWalk2's frame-close lives in the split-off objListWalk2Continue. Same known limitation as
   perobj_dispatch.cpp::cmdListDispatch. SBS-full 0-diff is the authoritative equivalence gate.
 
-## 0x8013CDD4 port attempt — STOPPED at a real field-semantics ambiguity (2026-07-14, correct stop)
->>>>>>> theirs
+## 0x8013CDD4 port — ambiguity SETTLED (2026-07-14): load-bearing field reuse, port unblocked
 
 - Hookable cleanly: a00 overlay rec_dispatch leaf (ov_a00_disp.c case 0x0013CDD4, override slot 451,
   engine_set_override_a00) — no higher dispatcher needed. Packet = 13-word GT4, pool 0x800BF544,
