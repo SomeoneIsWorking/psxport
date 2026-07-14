@@ -94,3 +94,30 @@ its own beyond the shared cursor-index global `DAT_800bf808`):
   are RE'd precisely enough to reproduce their draw-list output — not attempted this session (risk
   of drafting against a misunderstood shared-helper contract outweighed the value of an untested
   draft; RE the 3 shared helpers FIRST in a follow-up pass).
+
+## Dialog text-box PANEL emitter chain — RE'd (2026-07-14, for bug #34)
+
+- **symptom driving the RE:** pc_render's 2D-only field OT walk drops the dialog PANEL (dark
+  semi-transparent box behind text) while keeping the glyphs — the panel fill is POLYGONS (FT4) and
+  the twoDOnly poly branch (runtime/recomp/gpu_native.cpp:885) drops all non-billboard polys
+  categorically; the panel's border/corner SPRITES survive via the sprite branch's layer rule.
+- **emitter chain (from generated/ shards, byte-verified against the f1413 packet capture):**
+  `FUN_8007DA50` (dialog-box object per-frame update; phase>=4) → `FUN_8007D594` (box text SM,
+  ~13 states, NO packet writes in the states) → shared tail L_8007DA1C unconditionally calls
+  `FUN_8007CC00` (border tiles, op 0x65, walks the glyph-position table `FUN_8007C940` builds) then
+  `FUN_8005019C` (2 corner sprites op 0x74/0x76|1, then 5× `FUN_8004FFB4` = the FT4 fill quads,
+  op 0x2C/0x2E|1 → the observed 0x2F). All OT bucket 2. Glyphs (op 0x7C, `FUN_80078CA8` =
+  native Font::glyphEmit) come from a DIFFERENT path (FUN_8007C940's control-code handlers, called
+  earlier from FUN_8007DA50) — so a PktSpanSession wrap of `FUN_8007D594` tags EXACTLY the panel
+  packets (span-clean, per-frame re-emit in steady state). Dispatch thunk exists:
+  generated/shard_disp.c func_8007D594.
+- **correction to docs/engine_re.md wide-RE survey:** the panel packets do NOT come from
+  `FUN_8007C940` (it only builds the intermediate glyph-position list that FUN_8007CC00's border
+  loop consumes); the emitters are FUN_8007D594's tail calls above.
+- **ownership status:** none of 0x8007DA50/0x8007D594/0x8007CC00/0x8005019C/0x8004FFB4 ported yet.
+- **fix plan (#34):** guest-transparent observer wrap on 0x8007D594 (oracle-pure like
+  render_observer.cpp obs_body) → register the emitted span in a per-frame UI-span registry →
+  twoDOnly poly branch keeps UI-tagged spans as RQ_HUD/RQ_OM_2D_FG.
+- **refs:** generated/shard_5.c:13091 (8007DA50), shard_4.c:12027 (8007D594) + :11855 (8007CC00),
+  shard_3.c:12991 (8005019C), shard_2.c:6001 (8004FFB4); scratch/logs/bug44_ot_decode.log (packet
+  capture); game/ui/dialog_text_stream.{h,cpp} (adjacent RE'd text cluster, distinct).
