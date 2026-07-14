@@ -848,6 +848,13 @@
   `game/core/engine.cpp` (`Engine::fieldRunFaithful`/`fieldRun` case 0, the existing
   `field_area_init` guard). Capture tool: `scratch/loadtrans_capture.py` (debug-server
   pause/step/shot driver for a deterministic frame window, GATE vs ORACLE).
+- **re-verify 2026-07-14 (full-narration path, scene-checklist row 5)**: fix holds — no garbage. On a
+  full `newgame` playthrough (narration NOT auto-skipped; beat-reset→scene-flip gap at f1124-1128
+  default / f1136-1142 GATE) BOTH default and the oracle hold the frozen last-narration frame through
+  the 2-6 frame gap and roll straight into the fisherman scene — no black-hold and no "Loading....."
+  card appears on THIS path in either config (the card in the original capture belongs to the
+  AUTO_SKIP/debug-server window timing above). Default matches oracle ⇒ no bug on this path.
+  Shots: scratch/screenshots/row5_{default,gate}_f11*.png.
 
 ## 0x800C0000-0x800C8FFF "massive divergence" — FALSE POSITIVE; it's the GPU packet pool (2026-07-08)
 
