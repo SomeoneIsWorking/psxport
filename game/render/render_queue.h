@@ -27,12 +27,19 @@ enum RqOrderMode { RQ_OM_DEPTH = 0, RQ_OM_2D_BG = 1, RQ_OM_2D_FG = 2 };
 
 // Reserved dbg_node sentinel for TERRAIN prims (native_terrain.cpp, tagged via Render::diag.beginObject/
 // endObject around the quad-draw loop). Distinguishes them from the OTHER dbg_node==0 RQ_WORLD producer,
-// Render::fieldEntityRender (grass/props/"terrain props" — the SOP field-overlay SCENE TABLE walk, which
-// does NOT scope a beginObject and so is genuinely un-owned/dbg_node==0) — a real guest node pointer is
-// always inside the 2 MB main-RAM window (< 0x80200000), so this value can never collide with one.
-// Fps60::tier1Render (docs/fps60-rework.md "Object-tier attempt") re-renders ONLY literal terrain, not
-// the scene table, so its queue-lerp exclusion must key on THIS sentinel, not "dbg_node==0" generally.
+// Render::fieldEntityRender (grass/props/"terrain props" — the SOP field-overlay SCENE TABLE walk) — a
+// real guest node pointer is always inside the 2 MB main-RAM window (< 0x80200000), so this value can
+// never collide with one. Fps60::tier1Render (docs/fps60-rework.md "Object-tier attempt") re-renders
+// terrain under this sentinel, so its queue-lerp exclusion keys on it, not "dbg_node==0" generally.
 static constexpr uint32_t kTerrainDbgNode = 0xFFFF0001u;
+
+// Reserved dbg_node sentinel for SCENE-TABLE (grass/terrain-prop) prims: Render::fieldEntityRender now
+// scopes its own diag.beginObject/endObject (submit.cpp) the same way native_terrain.cpp scopes terrain,
+// so Fps60::tier1Render — extended to re-run fieldEntityRender (camera-only, same projComposeCamera path
+// terrainRenderAll uses) — can exclude exactly its own prims from the queue-lerp, symmetric with
+// kTerrainDbgNode. Distinct value so the two tier-1-owned producers never collide with each other or with
+// a real guest node pointer.
+static constexpr uint32_t kSceneTableDbgNode = 0xFFFF0002u;
 
 // One resolved drawable: a quad (two triangles) with its decoded material + real per-vertex depth. All
 // values are captured at enqueue time (after texpage/clut resolution + draw-offset/rounding) so flush is

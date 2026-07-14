@@ -132,6 +132,16 @@ void Fps60::tier1Render(Core* core, float t) {
   {
     DisplayPassGuard displayPass(c->mRender->mode);   // FAIL-FAST: abort on any guest write, real-path discipline
     c->mRender->terrainRenderAll();
+    // SCENE TABLE (grass/terrain props, kSceneTableDbgNode): camera-only, same as terrain — fieldEntityRender
+    // composes ONLY the scene camera (projComposeCamera -> sceneCam, honors mCamOverrideOn above), never a
+    // per-object transform, and its geometry (SCENE_ENT_TABLE records) is static per-area data, not per-frame
+    // mutable state — verified by reading submitPolyGt3Native/Gt4Native (submit.cpp): the only per-frame
+    // guest reads left in that path were the record array itself (unchanging while the object lives) and the
+    // two bugs fixed alongside this change (a raw CR26 H read bypassing the camera-lerp override, and a
+    // direct `game->rq` write bypassing rqRedirect) — both now route through the same choke terrain uses.
+    // Gated the same way the real call is (render_walk.cpp sceneNative): mSceneTableTrusted is computed once
+    // per real frame and unchanged since (present-time invariant — no tick has run since).
+    if (c->mRender->mSceneTableTrusted) c->mRender->fieldEntityRender(0x800F2418u);
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
@@ -139,6 +149,27 @@ void Fps60::tier1Render(Core* core, float t) {
 
   mSink->sortQueue();
   mTier1PrimsThisFrame = mSink->n;
+  // DIAG (debug channel "tier1sc"): the aggregate screen bbox tier1Render actually re-rendered this
+  // present, split by producer — used once to data-derive the scene-table's on-screen footprint for the
+  // exactness gate (docs/fps60-rework.md), not load-bearing.
+  if (cfg_dbg("tier1sc")) {
+    float tminx=1e9f,tmaxx=-1e9f,tminy=1e9f,tmaxy=-1e9f, sminx=1e9f,smaxx=-1e9f,sminy=1e9f,smaxy=-1e9f;
+    int tn=0, sn=0;
+    for (int i = 0; i < mSink->n; i++) {
+      const RqItem& it = mSink->items[i];
+      float *mnx,*mxx,*mny,*mxy; int* cnt;
+      if (it.dbg_node == kTerrainDbgNode)          { mnx=&tminx; mxx=&tmaxx; mny=&tminy; mxy=&tmaxy; cnt=&tn; }
+      else if (it.dbg_node == kSceneTableDbgNode)  { mnx=&sminx; mxx=&smaxx; mny=&sminy; mxy=&smaxy; cnt=&sn; }
+      else continue;
+      (*cnt)++;
+      for (int k = 0; k < 4; k++) {
+        if (it.xsf[k] < *mnx) *mnx = it.xsf[k]; if (it.xsf[k] > *mxx) *mxx = it.xsf[k];
+        if (it.ysf[k] < *mny) *mny = it.ysf[k]; if (it.ysf[k] > *mxy) *mxy = it.ysf[k];
+      }
+    }
+    fprintf(stderr, "[tier1sc] terrain n=%d bbox=[%.0f,%.0f,%.0f,%.0f] sceneTable n=%d bbox=[%.0f,%.0f,%.0f,%.0f]\n",
+            tn, tn?tminx:0, tn?tminy:0, tn?tmaxx:0, tn?tmaxy:0, sn, sn?sminx:0, sn?sminy:0, sn?smaxx:0, sn?smaxy:0);
+  }
 }
 
 // ---- STAGE 2: prim matching + lerp (docs/fps60-rework.md "Match+lerp stage") ---------------------------
@@ -207,23 +238,37 @@ static RqItem lerpItem(const RqItem& a, const RqItem& b, float t) {
 // provenance: terrain/static/background prims, or a billboard the OT walk couldn't stamp) gets the "no
 // node" sentinel — those are matched separately, by fingerprint + order-of-appearance (key strength 3).
 static constexpr uint32_t kNoNode = 0xFFFFFFFFu;
-// TIER 1 EXCLUSION RULE (fps60.h "Object-tier attempt"): RQ_WORLD prims tagged kTerrainDbgNode
-// (render_queue.h) are EXACTLY the prims Fps60::tier1Render re-renders (native_terrain.cpp tags them via
-// Render::diag.beginObject(kTerrainDbgNode)/endObject around its quad loop — BOTH the real per-logic-frame
-// call and tier1Render's present-time re-invocation go through the same terrain() body, so both tag
-// identically). NOT the same set as "dbg_node==0" — Render::fieldEntityRender (the SOP field-overlay
-// SCENE TABLE walk: grass/terrain props) is the OTHER dbg_node==0 RQ_WORLD producer and is genuinely
-// un-owned by any tier yet (still queue-lerped); conflating the two was tried and produced a visible bug
-// (grass vanishing from slot A, verified via scratch/check_tier1.py before this fix — every terrain-bbox
-// pixel differed from the real neighbor because the ground behind the semi terrain quad had been excluded
-// along with it). Give kTerrainDbgNode items their own sentinel so they never enter the queue-lerp
-// match/replay at all — tier1Render's mSink draws them once, instead of matchAndLerp drawing them again.
+// TIER 1 EXCLUSION RULE (fps60.h "Object-tier attempt", extended to fieldEntityRender): RQ_WORLD prims
+// tagged kTerrainDbgNode OR kSceneTableDbgNode (render_queue.h) are EXACTLY the prims Fps60::tier1Render
+// re-renders — native_terrain.cpp and Render::fieldEntityRender each scope their own
+// diag.beginObject(...)/endObject() around their quad loop, and BOTH the real per-logic-frame call and
+// tier1Render's present-time re-invocation go through the same function body, so both tag identically.
+// NOT the same set as "dbg_node==0" generally — conflating "terrain" with "any dbg_node==0 RQ_WORLD prim"
+// was tried and produced a visible bug (grass vanishing from slot A, verified via
+// scratch/check_tier1.py before that fix — every terrain-bbox pixel differed from the real neighbor
+// because the ground behind the semi terrain quad had been excluded along with it). Explicit per-emitter
+// sentinels are what let the exclusion target ONLY what tier1Render actually re-renders, emitter by
+// emitter, as each one gets RE'd+ported per docs/fps60-rework.md's "REDIRECT" doctrine.
 static constexpr uint32_t kTier1Sink = 0xFFFFFFFEu;
-static inline bool isTier1Owned(const RqItem& it) { return it.layer == RQ_WORLD && it.dbg_node == kTerrainDbgNode; }
+static inline bool isTier1Owned(const RqItem& it) {
+  return it.layer == RQ_WORLD && (it.dbg_node == kTerrainDbgNode || it.dbg_node == kSceneTableDbgNode);
+}
+// BACKDROP EXCLUSION RULE: the scrolling sky/parallax tilemap (render_walk.cpp render_bg_tilemap_native)
+// is screen-space, GAME-LOGIC-DRIVEN scroll — not camera-projected geometry, so per the fps60-rework
+// principle ("world-static geometry has no motion of its own; the camera moves it — screen-space scroll
+// layers are driven by game logic and must never be interpolated") it is excluded from the queue-lerp
+// ENTIRELY: never matched, never lerped, drawn verbatim from Q[N-1] every interp present (same as any
+// other unmatched prim's fallback — see the emit loop in matchAndLerp below). Its identity is the RQ
+// layer itself: RQ_BACKGROUND has exactly one producer (render_bg_tilemap_native — grep-verified, the
+// only push2dQuad(RQ_BACKGROUND, ...) call site in the tree), so layer IS its real engine identity here;
+// no separate dbg_node sentinel is needed (RQ_BACKGROUND items get dbg_node==0 from emitOrQueue regardless
+// — layer already disambiguates them from every dbg_node==0 RQ_WORLD producer, which is layer RQ_WORLD).
+static constexpr uint32_t kBackdropVerbatim = 0xFFFFFFFDu;
 void Fps60::buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out) {
   out.resize((size_t)n);
   mNodeIdxScratch.clear();
   for (int i = 0; i < n; i++) {
+    if (items[i].layer == RQ_BACKGROUND) { out[i] = kBackdropVerbatim; continue; }
     if (isTier1Owned(items[i])) { out[i] = kTier1Sink; continue; }
     uint32_t node = items[i].dbg_node;
     if (!node) { out[i] = kNoNode; continue; }
@@ -247,11 +292,13 @@ void Fps60::matchAndLerp(Core*) {
   buildProvenanceIdx(B, nB, mIdxCurBuf);
 
   // Q[N] provenance lookup: (dbg_node, emission-index) -> item index. dbg_node==0 items are excluded here
-  // (handled by the fingerprint/order-of-appearance pass below); tier1-owned (kTier1Sink) items are
-  // excluded from the queue-lerp entirely (tier1Render draws them).
+  // (handled by the fingerprint/order-of-appearance pass below); tier1-owned (kTier1Sink) and backdrop
+  // (kBackdropVerbatim) items are excluded from the queue-lerp entirely — tier1Render draws the former,
+  // the latter draws verbatim from Q[N-1] every present (never matched, never lerped — see buildProvenanceIdx).
   mMatchMap.clear();
   for (int j = 0; j < nB; j++)
-    if (mIdxCurBuf[j] != kNoNode && mIdxCurBuf[j] != kTier1Sink) mMatchMap[((uint64_t)B[j].dbg_node << 32) | mIdxCurBuf[j]] = j;
+    if (mIdxCurBuf[j] != kNoNode && mIdxCurBuf[j] != kTier1Sink && mIdxCurBuf[j] != kBackdropVerbatim)
+      mMatchMap[((uint64_t)B[j].dbg_node << 32) | mIdxCurBuf[j]] = j;
 
   // dbg_node==0 groups, in each frame's own emission order, keyed by shape fingerprint.
   mZeroGroupsPrev.clear(); mZeroGroupsCur.clear();
@@ -263,7 +310,7 @@ void Fps60::matchAndLerp(Core*) {
 
   // Pass 1 (key strength 1+2): provenance-keyed prims, validated by fingerprint + color on every hit.
   for (int i = 0; i < nA; i++) {
-    if (mIdxPrevBuf[i] == kNoNode || mIdxPrevBuf[i] == kTier1Sink) continue;
+    if (mIdxPrevBuf[i] == kNoNode || mIdxPrevBuf[i] == kTier1Sink || mIdxPrevBuf[i] == kBackdropVerbatim) continue;
     auto it = mMatchMap.find(((uint64_t)A[i].dbg_node << 32) | mIdxPrevBuf[i]);
     if (it == mMatchMap.end()) continue;                          // unmatched — draws as-is
     int j = it->second;
@@ -291,11 +338,14 @@ void Fps60::matchAndLerp(Core*) {
   // exempt (Pass 2 above already gated them on a whole-group count match).
   enforceNodeAtomicity(nA);
 
-  // Emit: walk Q[N-1] in its captured paint order. Tier1-owned -> skip (mSink draws it); matched ->
-  // lerp(A,B,t); unmatched -> A as-is.
-  mNLerp = 0;
+  // Emit: walk Q[N-1] in its captured paint order. Tier1-owned -> skip (mSink draws it); backdrop -> draw
+  // verbatim (never matched, counted separately from "unmatched" so the telemetry distinguishes "never
+  // eligible for a match" from "eligible but no confident pair this frame"); matched -> lerp(A,B,t);
+  // unmatched -> A as-is.
+  mNLerp = 0; mBackdropPrimsThisFrame = 0;
   for (int i = 0; i < nA && mNLerp < FPS60_RQ_MAX; i++) {
     if (mIdxPrevBuf[i] == kTier1Sink) continue;
+    if (mIdxPrevBuf[i] == kBackdropVerbatim) { mRqLerp[mNLerp++] = A[i]; mBackdropPrimsThisFrame++; continue; }
     if (mMatchOfA[i] >= 0) { mRqLerp[mNLerp++] = lerpItem(A[i], B[mMatchOfA[i]], mT); mMatchedThisFrame++; }
     else                   { mRqLerp[mNLerp++] = A[i];                              mUnmatchedThisFrame++; }
   }
@@ -303,9 +353,10 @@ void Fps60::matchAndLerp(Core*) {
   // Match-rate telemetry: once/sec (logic runs ~30fps -> every 30 fences) under PSXPORT_DEBUG=fps60.
   if (mDbg && (mFence % 30) == 0) {
     long tot = mMatchedTotal + mUnmatchedTotal;
-    fprintf(stderr, "[fps60] f%ld match-rate: this-frame matched=%ld/%d (%.0f%%) unmatched=%ld | "
+    fprintf(stderr, "[fps60] f%ld match-rate: this-frame matched=%ld/%d (%.0f%%) unmatched=%ld backdrop=%ld tier1=%ld | "
                      "running matched=%ld/%ld (%.0f%%)\n",
             mFence, mMatchedThisFrame, nA, nA ? 100.0 * mMatchedThisFrame / nA : 0.0, mUnmatchedThisFrame,
+            mBackdropPrimsThisFrame, mTier1PrimsThisFrame,
             mMatchedTotal, tot, tot ? 100.0 * mMatchedTotal / tot : 0.0);
   }
 }
@@ -438,8 +489,9 @@ void Fps60::present_vk(Core* core) {
   }
   gpu_fps60_present_pass(c);
   dumpPresent(c, /*interp=*/true);
-  if (mDbg) fprintf(stderr, "[fps60] f%ld slotA: replay prev=%s n=%d tier1=%ld t=%.3f\n",
-                    mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA, mTier1PrimsThisFrame, mT);
+  if (mDbg) fprintf(stderr, "[fps60] f%ld slotA: replay prev=%s n=%d tier1=%ld backdrop=%ld t=%.3f\n",
+                    mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA, mTier1PrimsThisFrame,
+                    mBackdropPrimsThisFrame, mT);
   gpu_pace_subframe(c, 2);
 
   // ---- PASS 2 (slot B): the real frame (the captured queue, exactly as drawOTag built it) ---------------

@@ -207,3 +207,84 @@ cross-contamination as the tier1 gate's residual, since both point at the terrai
 Coverage this session: TERRAIN ONLY. `fieldEntityRender` (grass/props) and the object/entity walk
 (`perObjFlush`) remain fully on the queue-lerp heuristic — Tier 2 (object-transform lerp) is the next step
 per this document's existing "Why Tier 2 isn't built" writeup, unchanged by this session.
+
+## Tier 1 extended to fieldEntityRender + backdrop excluded verbatim (2026-07-14, follow-up session)
+
+Extended Tier 1 to cover ALL camera-only world-static geometry, per the standing principle (USER):
+world-static geometry has no motion of its own — its screen motion is purely the camera's, so it must
+never be per-prim lerped; camera-projected static geometry renders through the lerped camera (Tier 1),
+while screen-space GAME-LOGIC-DRIVEN layers (the backdrop tilemap scroll) get NO interpolation at all —
+drawn verbatim from Q[N-1].
+
+**fieldEntityRender invariant check (required before wiring it into tier1Render):** read
+`Render::fieldEntityRender` (submit.cpp) + its two submitters (`submitPolyGt3Native`/`submitPolyGt4Native`)
+end to end. It composes ONLY the scene camera (`projComposeCamera` → `sceneCam`, camera-only, no
+per-object transform — same class as terrain) and projects the SCENE_ENT_TABLE (0x800F2418) record
+array, which is static per-area data, not per-frame mutable state. Found and fixed TWO real bugs in the
+shared submitters along the way (not approximated around):
+1. **Raw present-time guest read bypassing the camera-lerp override**: both submitters called
+   `proj_set_H((uint16_t)gte_read_ctrl(26))` — a direct GTE control-register read — to feed depth
+   normalization (`proj_pz_to_ord`), independent of the camera H already composed into the active xform
+   (`mActiveXform.H`, which DOES honor `sceneCam`'s `mCamOverrideOn` lerp). This was (a) a present-time
+   GUEST READ (forbidden by the fps60 present-time invariant) and (b) a desync between XY (lerped H, via
+   `EObjXform::project`) and depth (live current-frame H, via the raw register read) at any t other than
+   1. Fixed: both now read `c->mRender->mActiveXform.H` — safe because every call site sets an active
+   xform first (no GTE fallback, documented invariant in render.h).
+2. **Direct `c->game->rq.drawWorldQuad` write bypassing `Game::rqRedirect`**: unlike native_terrain.cpp,
+   the submitters wrote straight to the live queue, so re-invoking them at present time would have
+   corrupted the NEXT real frame's queue. Fixed: both now route through
+   `c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq`, matching native_terrain.cpp's pattern.
+
+With those two fixed, fieldEntityRender reads nothing beyond camera + static geometry — eligible for
+Tier 1 without approximation. `Render::fieldEntityRender` now scopes its OWN
+`diag.beginObject(kSceneTableDbgNode)/endObject()` (submit.cpp) around its loop, so both the real
+per-logic-frame call and Tier-1's present-time re-render tag identically. `render_queue.h` adds
+`kSceneTableDbgNode` (0xFFFF0002) alongside `kTerrainDbgNode`; `fps60.cpp`'s `isTier1Owned` now excludes
+both from the queue-lerp. `Fps60::tier1Render` calls `Render::fieldEntityRender(0x800F2418u)` right after
+`terrainRenderAll()`, inside the same redirect/override/`DisplayPassGuard` scope, gated on
+`mSceneTableTrusted` (same trust-latch the real call uses — unchanged since last real frame, per the
+present-time invariant).
+
+**Backdrop (screen-space scroll, excluded from the queue-lerp entirely):** `render_bg_tilemap_native`
+(render_walk.cpp) is the sole `RQ_BACKGROUND` producer (grep-verified) — layer alone is its real identity,
+no separate dbg_node sentinel needed. `fps60.cpp` adds `kBackdropVerbatim`: `buildProvenanceIdx` tags any
+`RQ_BACKGROUND` item with it, `matchAndLerp` never attempts to match such items (excluded from the
+provenance map and the dbg_node==0 fingerprint groups), so they always fall through to the
+"unmatched → draw A[i] as-is" path — verbatim replay of Q[N-1], counted separately in telemetry
+(`mBackdropPrimsThisFrame`) so "never eligible" isn't conflated with "eligible, no match this frame".
+
+**Gates (tree/windmill repro, `scratch/cfg/psxport_settings.ini`, PSXPORT_AUTO_SKIP, run 380 + dump 20,
+`PSXPORT_FPS60_TFORCE`):**
+- **A. Build**: clean.
+- **B. t-forced exactness — SCENE-TABLE bbox included this time** (data-derived: `tier1sc` debug channel
+  printed the aggregate re-rendered bbox — scene-table spans nearly the full visible field, ~[-357,403]×
+  [-82,423] pre-clamp — so a small sub-region provably scene-table-only and free of any dynamic object
+  was picked by inspecting a dumped frame: x=[0,60) y=[150,230), pure grass, left of Tomba/left of the
+  hut): **t=1: 0/96000 diff (100.0000%, PASS, bit-identical). t=0: 0/91200 diff (100.0000%, PASS,
+  bit-identical).** Terrain bbox (regression check, same as the Tier-1-landed gate): t=1 866/22500
+  (96.15%, was 96.14%) — unchanged within noise; t=0 46/21375 (99.78%, was 99.78%) — unchanged. No
+  regression on the existing Tier-1 claim; the scene-table extension is a clean, exact win at both
+  endpoints, unlike terrain (whose small residual predates this session and is unrelated — see above).
+- **C. Telemetry** (same repro, run 340 then +60, `PSXPORT_DEBUG=fps60`, default t=0.5): tier1 settled at
+  294 prims/frame (1 terrain + 293 scene-table), backdrop settled at 352 prims/frame (both constant once
+  the field scene is loaded — expected, static per-area content), queue-lerp match-rate on the REMAINING
+  pool (objects: windmill/hut/Tomba/etc. — the only thing still on the heuristic) ranged 20-48%
+  this-frame / down to 64-97% running (lower than the pre-session 85-97% baseline because the easy
+  static prims that used to inflate the ratio moved to Tier 1 — the remaining pool is now dominated by
+  genuinely-hard-to-match dynamic objects, not a regression in matching quality itself).
+- **D. `scratch/check_stage2.py`, same repro window, git-stash baseline vs after**: static-identity
+  violations 136/1446530 (0.0094%) baseline → 172/1446530 (0.0119%) after — a small, measurable
+  regression, same order of magnitude as the prior Tier-1-terrain landing's own regression (253→385 at a
+  different pixel-count baseline); windmill region stayed 0/145920 both. Gate B (soft, moving-pixel
+  midpoint compliance): 96.0% both (12166→12164/12670 — noise). Root cause not further isolated this
+  session (time-boxed, same as the precedent) — a new violation cluster appeared near (211,69), plausibly
+  a terrain/scene-table/hut-roof boundary seam; flagged for whoever picks up Tier 2.
+- **E. SBS-full smoke**: combat leg 0-diff through f7500 (100s bound), watch-cut leg 0-diff through f9840
+  (120s bound) — both host-only render change, no guest-memory write, as expected.
+- **F. fps60-off**: screenshot-verified normal (`scratch/cfg/psxport_settings_fps60off.ini`, run 400,
+  `shot`) — unaffected, as expected (none of this arms when `game->mods.fps60` is off).
+
+Coverage after this session: terrain + scene-table (grass/props) are both Tier 1 (camera-lerp
+re-render); backdrop is excluded entirely (verbatim). The object/entity walk (`perObjFlush`) is the ONLY
+remaining queue-lerp-heuristic geometry — Tier 2 (object-transform lerp) is the next step, unchanged
+target from the prior session's "Why Tier 2 isn't built" writeup.

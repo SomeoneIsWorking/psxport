@@ -6,19 +6,27 @@
 // vertex lerp, slot B draws Q[N] verbatim. ONE draw path — both slots drain an RqItem list through the same
 // `RenderQueue::emitItem` the 30fps path uses.
 //
-// TIER 1 (docs/fps60-rework.md "Object-tier attempt 2026-07-14"): the QUEUE-LERP heuristic above does not
-// own the terrain — it is replaced there by a REAL re-render. At the interp present, `tier1Render` re-runs
-// `Render::terrainRenderAll()` (the exact same call sequence the real per-logic-frame walk uses) under a
-// LERPED camera (mCamCur/mCamPrev, captured every real frame from the same source terrainRender reads —
-// `sceneCam`), with its output redirected into an ISOLATED sink (`mSink`, a second RenderQueue) via
+// TIER 1 (docs/fps60-rework.md "Object-tier attempt 2026-07-14", extended to fieldEntityRender): the
+// QUEUE-LERP heuristic above does not own CAMERA-ONLY world-static geometry — it is replaced there by a
+// REAL re-render. At the interp present, `tier1Render` re-runs `Render::terrainRenderAll()` AND
+// `Render::fieldEntityRender()` (the SAME two call sequences the real per-logic-frame walk uses — both
+// project through `projComposeCamera`/the terrain camera compose, camera-only, no per-object transform)
+// under a LERPED camera (mCamCur/mCamPrev, captured every real frame from the same source both readers use
+// — `sceneCam`), with their output redirected into an ISOLATED sink (`mSink`, a second RenderQueue) via
 // `Game::rqRedirect` so the live queue the next real frame is about to build is never touched. INVARIANT:
 // present_vk (hence this re-render) runs from `Engine::frameUpdate`, which native_boot.cpp calls BEFORE
 // this iteration's `pcSched.step()` (game logic) and `drawOTag` (which builds the NEXT real queue) — so at
-// present time no logic tick for "this" iteration has run yet, and terrainRenderAll() re-reads the exact
-// same guest state the real terrain call already read this interval. Host-computed matrices only (the
-// lerped camera); no guest writes — same `DisplayPassGuard` discipline the real terrain call uses. World
-// prims tier-1 now owns (RQ_WORLD, dbg_node==0 — terrain/static/background; see render_diag.h) are excluded
-// from matchAndLerp's queue-lerp entirely (see kTier1Sink in fps60.cpp) so they are drawn exactly once.
+// present time no logic tick for "this" iteration has run yet, and re-running either pass re-reads the
+// exact same guest state the real call already read this interval (record arrays: static per-area data,
+// not per-frame mutable state). Host-computed matrices only (the lerped camera); no guest writes — same
+// `DisplayPassGuard` discipline the real terrain call uses. World prims tier-1 now owns (RQ_WORLD,
+// dbg_node==kTerrainDbgNode or kSceneTableDbgNode — see render_queue.h) are excluded from matchAndLerp's
+// queue-lerp entirely (see kTier1Sink in fps60.cpp) so they are drawn exactly once.
+//
+// SCREEN-SPACE BACKDROP (the scrolling sky/parallax tilemap, render_walk.cpp render_bg_tilemap_native) is
+// the OPPOSITE case: its motion is game-logic scroll, not camera projection, so it must NEVER be lerped
+// OR re-rendered — it is excluded from the queue-lerp and drawn VERBATIM from Q[N-1] every interp present
+// (fps60.cpp kBackdropVerbatim).
 //
 // The match heuristic (matchAndLerp) remains for everything tier-1/2 don't yet own (objects, HUD, 2D):
 // docs/fps60-rework.md's "REDIRECT" flags it as hack debt to be replaced, emitter by emitter, by real
@@ -113,6 +121,10 @@ struct Fps60 {
   std::unordered_map<uint32_t, int> mNodeTotalA, mNodeMatchedA;
   long mMatchedThisFrame = 0, mUnmatchedThisFrame = 0;        // this-frame telemetry
   long mMatchedTotal = 0, mUnmatchedTotal = 0;                // running totals (periodic log, PSXPORT_DEBUG=fps60)
+  // BACKDROP EXCLUSION (fps60.cpp kBackdropVerbatim): screen-space scroll layer prims, drawn verbatim from
+  // Q[N-1] every interp present — never matched, never lerped. Counted separately from matched/unmatched
+  // so telemetry distinguishes "never eligible" from "eligible, no confident pair this frame".
+  long mBackdropPrimsThisFrame = 0;
   void buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out);
   void matchAndLerp(Core* core);   // fills mRqLerp/mNLerp by matching mRqPrev (Q[N-1]) against mRqCur (Q[N])
   void enforceNodeAtomicity(int nA);   // Tier-3: demote a partially-matched dbg_node's prims back to unmatched

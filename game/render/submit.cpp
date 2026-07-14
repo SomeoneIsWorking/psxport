@@ -194,7 +194,14 @@ static inline void engine_shade_face(Core* c, const ProjVtx* p, int nv, uint8_t 
 void Render::submitPolyGt3Native(Core* c) {
   if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt3_native %ld\n", n); }
   uint32_t rec = c->r[4], count = c->r[6];
-  proj_set_H((uint16_t)gte_read_ctrl(26));
+  // H for depth normalization comes from the ACTIVE xform (mActiveXform.H), not a raw CR26 read: every
+  // caller sets an active xform before reaching here (projSetActive — no GTE fallback, see render.h), and
+  // that xform's H is the SAME camera H projVertexActive already used for this vertex's screen XY (real
+  // frame: read via sceneCam; Tier-1 present-time re-render: the LERPED camera, sceneCam's mCamOverrideOn
+  // branch). A raw gte_read_ctrl(26) read here would (a) be a present-time GUEST READ — the fps60
+  // present-time invariant forbids that — and (b) desync depth normalization from the lerped H used for
+  // XY at any t other than 1 (found while extending Tier 1 to fieldEntityRender, docs/fps60-rework.md).
+  proj_set_H((uint16_t)c->mRender->mActiveXform.H);
   for (uint32_t i = 0; i < count; i++, rec += 36) {
     uint32_t vz01 = c->mem_r32(rec + 20);
     uint32_t xy0 = c->mem_r32(rec + 16), xy1 = c->mem_r32(rec + 24), xy2 = c->mem_r32(rec + 28);
@@ -238,7 +245,12 @@ void Render::submitPolyGt3Native(Core* c) {
     }
     { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
-      c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
+      // Tier-1 capture-target redirect (game.h Game::rqRedirect), same as native_terrain.cpp: the ISOLATED
+      // sink while Fps60::tier1Render re-runs fieldEntityRender under a lerped camera; the live queue
+      // otherwise. Without this, a present-time re-render would corrupt the live queue the NEXT real frame
+      // is about to build — the exact bug class the "one draw path" design forbids.
+      RenderQueue& rqOut = c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq;
+      rqOut.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
   }
   c->r[2] = rec;
 }
@@ -254,7 +266,8 @@ void Render::submitPolyGt3Native(Core* c) {
 void Render::submitPolyGt4Native(Core* c) {
   if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt4_native %ld\n", n); }
   uint32_t rec = c->r[4], count = c->r[6];
-  proj_set_H((uint16_t)gte_read_ctrl(26));
+  // See submitPolyGt3Native above: H comes from the active xform, not a raw present-time CR26 read.
+  proj_set_H((uint16_t)c->mRender->mActiveXform.H);
   for (uint32_t i = 0; i < count; i++, rec += 44) {
     // model verts: V0=rec+20(XY)|rec+24.lo(Z), V1=rec+28|rec+24.hi, V2=rec+32|rec+36.lo, V3=rec+40|rec+36.hi
     uint32_t vz01 = c->mem_r32(rec + 24), vz23 = c->mem_r32(rec + 36);
@@ -297,7 +310,9 @@ void Render::submitPolyGt4Native(Core* c) {
     }
     { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
-      c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
+      // Tier-1 capture-target redirect — see submitPolyGt3Native above.
+      RenderQueue& rqOut = c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq;
+      rqOut.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
   }
   c->r[2] = rec;                                              // return: record pointer advanced past the array
 }
@@ -374,6 +389,13 @@ void Render::fieldEntityRender(uint32_t es) {
   uint32_t otbase = c->mem_r32(0x800ED8C8u);              // *this = the active ordering-table base
   uint32_t base   = c->mem_r32(es + 0xC);
   EObjXform w; c->mRender->projComposeCamera(&w); c->mRender->projSetActive(&w);
+  // Tag every scene-table prim with the reserved kSceneTableDbgNode sentinel (render_queue.h), the same
+  // way native_terrain.cpp tags terrain with kTerrainDbgNode: this pass is camera-only (projComposeCamera
+  // above — no per-object transform), so it is Tier-1-eligible (docs/fps60-rework.md "Tier 1 landed" +
+  // its extension to fieldEntityRender). Both the real per-logic-frame call (render_walk.cpp sceneNative)
+  // and Fps60::tier1Render's present-time re-render go through THIS function, so both tag identically —
+  // scoped here (not at each call site) so the tag can never be forgotten at one of the two call sites.
+  c->mRender->diag.beginObject(kSceneTableDbgNode);
   // DIAG groundproj: log the camera xform + first GT4 record's model verts and their eproj projection, so we
   // can see whether the world-space scene-table geometry projects on-screen with sane depth. (later-231b)
   if (cfg_dbg("groundproj")) { static int n=0; if (n++ < 3) {
@@ -397,6 +419,7 @@ void Render::fieldEntityRender(uint32_t es) {
     c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submitPolyGt3Native(c);
     c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submitPolyGt4Native(c);
   }
+  c->mRender->diag.endObject();
   c->mRender->projClearActive();
 }
 
