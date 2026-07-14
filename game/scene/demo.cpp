@@ -41,6 +41,7 @@
 #include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C) + siblings
 #include "world/placement.h"     // ov_place_objects (FUN_80072A78)
 #include "core/asset.h"          // class Asset — preloadTexgroup (static, area-load sync)
+#include "sbs.h"                 // skipRendezvousReached — s5 DEMO->GAME frame alignment
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -749,6 +750,18 @@ static void demo_frame_s3(Core* c) {
 // GAME). Native: call the stage transition; the scheduler detects the DEMO->GAME entry change and hands
 // off to GAME next frame (native_boot.cpp). No tail render (we are leaving the front-end).
 static void demo_frame_s5(Core* c) {
+  // FRAME ALIGNMENT (compare-mode only, same shape as engine.cpp "start_bin_load"): the oracle
+  // spends ~12 frames of CD-paced overlay load between choosing New Game and rewriting task-0's
+  // entry to GAME; startStage(2) collapses that into this one call, which put the skip pane a
+  // constant 12 frames AHEAD through the whole narration cutscene (every SOP beat fired 12 frames
+  // early — [sbs-skiptick] evidence, docs/findings/scene.md). Hold s5 (no state advance) until the
+  // sibling core's task-0 entry has flipped to GAME (entry low-half 0x62E4 DEMO -> 0x637C GAME,
+  // monotonic for this transition). No-op outside SBS MODE=skip (game->sbs null / mode gate).
+  if (c->game->sbs) {
+    uint32_t task = c->mem_r32(0x1f800138u);
+    if (!c->game->sbs->skipRendezvousReached(c, task + 0xcu, 0x637Cu, "demo_start_game"))
+      return;                                  // idle this frame — sm stays 5, retry next tick
+  }
   c->engine.startStage(2);                     // = FUN_80052078(2): load GAME overlay, restart task 0
 }
 

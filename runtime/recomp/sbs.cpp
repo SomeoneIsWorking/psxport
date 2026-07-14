@@ -888,6 +888,44 @@ void Sbs::Impl::dumpRendezvousSites(FILE* out) {
 }
 
 void Sbs::Impl::checkObservables() {
+  // ---- Progression probe (PSXPORT_SBS_SKIPTICK=1): name WHY the two panes drift out of sync.
+  // Per frame, compare the guest progression counters + scene latches A vs B and log whenever an
+  // OFFSET CHANGES. Interpretation: if the VSync tick counters stay equal while the pictures skew,
+  // the skip leg isn't dropping frames — it's making MORE per-frame progress (event pacing, e.g.
+  // instant CD vs sector-paced CD), which a counter-drag can't fix; the fork needs a rendezvous.
+  {
+    static const int tick_on = []{ const char* e = getenv("PSXPORT_SBS_SKIPTICK");
+      return e && *e && e[0] != '0' ? 1 : 0; }();
+    if (tick_on) {
+      struct Probe { const char* name; uint32_t addr; int w; };
+      static const Probe kP[] = {
+        { "vsync",  0x800ABDE0u, 4 },   // libetc VSync tick counter
+        { "sptick", 0x1F80017Cu, 4 },   // scratchpad tick (pc_skip collapse must bump both)
+        { "stage",  0x801FE00Cu, 4 },   // task-0 stage word
+        { "scene",  0x800BE258u, 1 },   // scene-active latch
+        { "beat",   0x800BF9B4u, 1 },   // SOP scene/backdrop identity byte
+      };
+      static int64_t prevDelta[5] = {0, 0, 0, 0, 0};
+      for (int i = 0; i < 5; i++) {
+        auto rd = [&](Core& c) -> int64_t {
+          if (kP[i].addr >= 0x1F800000u && kP[i].addr < 0x1F800400u) {
+            uint32_t off = kP[i].addr - 0x1F800000u;
+            return kP[i].w == 4 ? (int64_t)(uint32_t)(c.scratch[off] | c.scratch[off+1]<<8 |
+                                   c.scratch[off+2]<<16 | (uint32_t)c.scratch[off+3]<<24)
+                                : (int64_t)c.scratch[off];
+          }
+          return kP[i].w == 4 ? (int64_t)c.mem_r32(kP[i].addr) : (int64_t)c.mem_r8(kP[i].addr);
+        };
+        int64_t d = rd(mA->core) - rd(mB->core);
+        if (d != prevDelta[i]) {
+          fprintf(stderr, "[sbs-skiptick] f%u %s A-B delta %lld -> %lld (A=%lld B=%lld)\n",
+                  mFrame, kP[i].name, (long long)prevDelta[i], (long long)d,
+                  (long long)rd(mA->core), (long long)rd(mB->core));
+          prevDelta[i] = d;
+        }
+      }
+    }
+  }
   // Positive list of observable regions (label, lo, hi) — guest RAM unless noted. Grow this list
   // as observable-output bugs surface; it is the OPPOSITE of an allowlist (what MUST match).
   struct Obs { const char* label; uint32_t lo, hi; };
@@ -1195,8 +1233,13 @@ void Sbs::Impl::checkPaneDiff() {
   if (pct >= mRdiffThreshPct) {
     fprintf(stderr, "[renderdiff] f%u %.2f%% pixels differ (port vs oracle) bbox x[%d..%d] y[%d..%d] of %dx%d\n",
             mFrame, pct, minx, maxx, miny, maxy, W, H);
+    // PSXPORT_SBS_RENDERDIFF_FROM=<frame> — don't spend the 40-dump budget on boot/phase-skew
+    // noise: dumps start at <frame> (reports still print from f0). Lets a run target a SCENE.
+    static const uint32_t dump_from = []{
+      const char* e = getenv("PSXPORT_SBS_RENDERDIFF_FROM");
+      return e && *e ? (uint32_t)strtoul(e, 0, 0) : 0u; }();
     static int dumped = 0;
-    if (dumped < 40) {                              // cap the dump flood
+    if (mFrame >= dump_from && dumped < 40) {       // cap the dump flood
       char path[256];
       snprintf(path, sizeof path, "scratch/screenshots/renderdiff/f%05u_%02d.ppm", mFrame, (int)pct);
       dumpPpm(path);
@@ -2174,10 +2217,21 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
     spu_log_reset(mA->spu.writeLog);
     spu_log_reset(mB->spu.writeLog);
+    // Step order: MODE=skip steps the ORACLE (B) first so core A's skipRendezvousReached() checks
+    // read B's SAME-frame state — with A-first, every rendezvous fork lagged one extra frame behind
+    // the milestone it waits on (measured on 'demo_start_game': 2-frame residual skew, halved by
+    // this reorder). Other modes keep A-first (wwatch/ww_log transcripts are ordered around it).
+    if (mMode == M_SKIP) {
+      stepCore(mB, 1);              ww_log("post-stepB");
+      grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
+      stepCore(mA, 0);              ww_log("post-stepA");
+      grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
+    } else {
     stepCore(mA, 0);              ww_log("post-stepA");
     grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
     stepCore(mB, 1);              ww_log("post-stepB");
     grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
+    }
     checkPaneDiff();              // PICTURE compare: port pane (A) vs oracle pane (B) — render bugs
     // PSXPORT_SBS_SHOT=<frame>:<prefix> — dump each pane SEPARATELY at one lockstep frame, as
     // <prefix>_A.ppm / <prefix>_B.ppm. Mechanical pane-vs-standalone-`shot` comparison (the

@@ -118,6 +118,22 @@ inline uint32_t guest_fn(Core* c, uint32_t target, uint32_t ra_const, Args... ar
 }
 
 // ---------------------------------------------------------------------------------------------
+// 4b. guest_leaf — guest_fn WITHOUT a jal-site ra constant: args land in a0..a3 and the call
+//     dispatches with r31 left as-is. This is the exact semantics of the per-file `leaf1/leaf2/
+//     leaf3/leaf4` helpers it replaces (converged 2026-07-14) — kept as its own named shape, NOT
+//     a guest_fn overload, so (a) the two can't be confused by argument count and (b) the missing
+//     jal-site is greppable debt: when a handler gets fidelity-audited (abi_extract names the
+//     call-site r31 constants), upgrade each guest_leaf to guest_fn. New ports use guest_fn.
+template <typename... Args>
+inline uint32_t guest_leaf(Core* c, uint32_t target, Args... args) {
+  static_assert(sizeof...(Args) <= 4, "a0..a3 only — stack args go through the GuestFrame");
+  const uint32_t a[] = {static_cast<uint32_t>(args)..., 0u};
+  for (size_t i = 0; i < sizeof...(Args); i++) c->r[4 + i] = a[i];
+  rec_dispatch(c, target);
+  return c->r[2];
+}
+
+// ---------------------------------------------------------------------------------------------
 // 5. guest_mult / guest_div — MIPS mult/div with the hi/lo side-effect. hi/lo are GUEST-VISIBLE
 //    state (SBS compares them transitively through later spills); a faithful body that multiplies
 //    where gen emits `mult` MUST go through these, never a bare C `*` (the gpuLoadImageStream

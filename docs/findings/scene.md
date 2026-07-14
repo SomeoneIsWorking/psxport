@@ -533,3 +533,28 @@
   `PSXPORT_SBS=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_WATCH_CUT=1`.
 - **tooling added**: `PSXPORT_SPUBT=<hex SPU reg off>` host backtrace per SPU write; `debug spu`
   logs per-voice pitch/start; wwatch prints exact gpu frame (see config.md).
+
+## Narration cutscene out of sync in MODE=skip: DEMO→GAME handoff 12 frames early on the skip pane (2026-07-14, RESOLVED)
+
+- **symptom (USER):** MODE=skip WATCH_CUT renderdiff panes visibly out of sync through the whole
+  narration cutscene — port pane's text pages / character walk-ins run ahead of the oracle
+  (13-20% pixel diff band, growing per beat).
+- **cause:** `[sbs-skiptick]` probe (docs/config.md) showed vsync/scratch tick counters EQUAL
+  (no frame drift) but the task-0 stage word flipping DEMO(0x801062E4)→GAME(0x8010637C) at f26 on
+  A vs f38 on B, and every SOP beat (0x800BF9B4) firing exactly 12 frames early on A thereafter.
+  `demo_frame_s5` → `Engine::startStage(2)` loads the GAME overlay in ONE native call where the
+  oracle spends ~12 frames of CD-paced sectors — an un-gated pc_skip fork (only `start_bin_load`
+  had a rendezvous).
+- **fix (two parts):** (1) `demo_frame_s5` (game/scene/demo.cpp) holds s5 via
+  `skipRendezvousReached(task+0xc, 0x637C, "demo_start_game")` until the sibling's task entry
+  flips — compare-mode-only, no-op in every other config; (2) MODE=skip now steps core B (oracle)
+  FIRST in the lockstep loop (sbs.cpp) so rendezvous reads see B's same-frame state — with A-first
+  every gated fork lagged 2 residual frames (measured), B-first makes it 0. Verified: skiptick
+  shows stage + beat deltas never change post-boot; narration panes pixel-near-identical (~4%
+  residual = real render diffs, text edges/dither), down from 13-20% skew.
+- **NEXT (open):** the diff ramps to 40%+ at ~f588 — the narration→next-scene transition is
+  another un-gated fork of the same class. Same recipe: SKIPTICK probe, name the transition,
+  gate it with a rendezvous label. Repeat until the whole watch-cut leg is beat-aligned.
+- **refs:** scratch/logs/skiptick*.log, scratch/logs/renderdiff_aligned.log,
+  scratch/screenshots/renderdiff-* (pane dumps pre/post alignment), docs/config.md
+  (SKIPTICK / RENDERDIFF_FROM / step-order note).

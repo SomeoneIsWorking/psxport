@@ -407,6 +407,13 @@ or level — they can't be a bare channel:
     dumped at exit with a settled-state PHASE/SOFT/REAL classification.
   - `PSXPORT_SBS_NOPAUSE=1` — log every diverging byte-run per frame and keep running (no rewind/
     pause); `PSXPORT_SBS_ONLY_LABEL=<prefix>` filters the flood by category label.
+  - `PSXPORT_SBS_RENDERDIFF_FROM=<frame>` — RENDERDIFF pane dumps start at <frame> (reports still
+    print from f0), so the 40-dump budget targets a SCENE instead of burning on boot noise.
+  - `PSXPORT_SBS_SKIPTICK=1` (MODE=skip) — per-frame A-vs-B progression probe (vsync/scratch tick
+    counters, task-0 stage word, scene latch, SOP beat); logs when an OFFSET changes. Reads: if the
+    tick counters stay equal while pictures skew, the skip pane isn't dropping frames — it's making
+    MORE per-frame progress (instant CD vs sector-paced CD) and the responsible fork needs a
+    `skipRendezvousReached` gate (found + fixed 'demo_start_game', the DEMO→GAME 12-frame lead).
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the
