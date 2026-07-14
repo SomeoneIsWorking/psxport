@@ -325,12 +325,16 @@ native world go?": `PSXPORT_ONLYWORLD=1` (emit ONLY RQ_WORLD), `PSXPORT_NOBG=1` 
 z-fight shows as two prims with near-equal interpolated D32.
 
 Z-FIGHT diagnostics + fix knob (coplanar barrel/decoration surfaces; see docs/findings/render.md):
-- `PSXPORT_ZFIGHT[=eps]` — auto z-fight FINDER (default eps 6e-5). SW-rasterizes opaque 3D-depth prims into
-  a per-pixel top-2 D32 buffer and per frame reports fighting-pixel count, worst contesting prim pairs
+- `PSXPORT_ZFIGHT[=eps]` — auto z-fight FINDER (default eps 6e-5). Bare/empty (`=1` or unset value, the
+  repo-wide "enable" idiom) means "on at the default eps" — it is NOT parsed as an explicit eps=1.0; give
+  any other positive float (e.g. `=0.0002`) to override eps explicitly. SW-rasterizes opaque 3D-depth prims
+  into a per-pixel top-2 D32 buffer and per frame reports fighting-pixel count, worst contesting prim pairs
   (node/color/depths/emit-order), paint-order stability raw-vs-biased (a U-sweep), and a heatmap PPM to
   `scratch/screenshots/zfight/heat_f<N>.ppm`. `PSXPORT_ZFIGHT_FRAME=<N>` gates it to frame ≥ N;
-  `PSXPORT_ZFIGHT_BOX="x0,y0,x1,y1"` restricts the report to a display-coord region. (render_queue.cpp
-  `RenderQueue::zfightScan`.) Pure host diagnostic, no guest write.
+  `PSXPORT_ZFIGHT_BOX="x0,y0,x1,y1"` restricts the report to a display-coord region. Runs once per real
+  frame from `RenderQueue::flush` right after `sortQueue()` (before the `mods.fps60` capture short-circuit),
+  so it fires under fps60 too — it scans the sorted item array only, independent of emission.
+  (render_queue.cpp `RenderQueue::zfightScan`.) Pure host diagnostic, no guest write.
 - `PSXPORT_ZBIAS=<f>` — tunes the SHIPPED paint-order depth-tiebreak unit (default 4e-7; 0 disables the
   tiebreak). The fix is ON by default (this is a magnitude knob, not a behavior A/B gate); larger values
   resolve more coplanar ties but risk overrunning genuine world depth separations (span = unit × prim

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <execinfo.h>
 
 // Debug object-ID overlay: split into QUAD (billboard) and 3D-OBJECT (mesh) highlighting so the user can
@@ -241,7 +242,6 @@ void RenderQueue::emitQueue(Core* core) {
               n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
   }
   for (int i = 0; i < n; i++) emitItem(core, &items[i]);
-  zfightScan(core);
   mark_consumed();
 }
 
@@ -254,7 +254,11 @@ void RenderQueue::emitQueue(Core* core) {
 void RenderQueue::zfightScan(Core* core) {
   static float eps = -1.f; static int scan_from = -1;
   if (eps < 0.f) { const char* e = cfg_str("PSXPORT_ZFIGHT"); if (!e) { eps = -2.f; }
-                   else { eps = (float)atof(e); if (eps <= 0.f) eps = 6e-5f;
+                   else { // PSXPORT_ZFIGHT=1 (and the bare/empty form) is the repo-wide "enable" idiom, NOT
+                          // an explicit eps=1.0 request — atof("1") is a legitimate (if absurd) eps value,
+                          // so "1"/"" must be special-cased to the default rather than inferred from atof<=0.
+                          eps = (!*e || !strcmp(e, "1")) ? 6e-5f : (float)atof(e);
+                          if (eps <= 0.f) eps = 6e-5f;
                           const char* f = cfg_str("PSXPORT_ZFIGHT_FRAME"); scan_from = f ? atoi(f) : 0; } }
   if (eps < 0.f) return;   // -2 = disabled
   float gpu_zbias_unit();   // gpu_gpu.cpp — the shipped paint-order bias unit (PSXPORT_ZBIAS), modeled here
@@ -352,6 +356,15 @@ void RenderQueue::zfightScan(Core* core) {
 void RenderQueue::flush(Core* core) {
   if (n && objid_on(core)) objidOverlay(core);   // debug: label each object with its engine ID
   sortQueue();
+  // zfightScan reads only the sorted item array (depth/xy/order_mode set at submission time) — it does not
+  // depend on emitItem having run — so it belongs HERE, right after sortQueue, not inside emitQueue. This is
+  // the one placement that scans the exact same (sorted, real-frame) item set under BOTH the fps60 capture
+  // branch below and the plain emitQueue() path: fps60 double-buffers this REAL queue and later re-derives an
+  // INTERPOLATED queue from it (Fps60::rq_capture / present_vk) — the interp frame is a lerp of two already-
+  // scanned real frames, so it doesn't need (or want) its own scan. Previously this call lived at the tail of
+  // emitQueue(), which the fps60 branch below skips entirely (it returns before emitQueue) — under the user's
+  // real mods.fps60=1 config the instrument never ran at all.
+  zfightScan(core);
   // fps60: the interpolated-60fps tier OWNS presentation — it double-buffers this sorted queue (Q[N]) and
   // presents ONE FRAME BEHIND (slot A = lerp(Q[N-1],Q[N]), slot B = Q[N] verbatim; Fps60::present_vk). So
   // it must HOLD the sorted queue rather than have flush emit it now. Only when this core actually presents
