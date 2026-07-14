@@ -12,6 +12,11 @@
 
 // --- per-object depth helpers (the engine owns object depth from the object's real world placement) ---
 void  gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
+// --- UI-span registry (bug #34, docs/findings/ui.md "Dialog text-box PANEL emitter chain") ---
+// Presence-only provenance: a dialog-box panel poly's packet-pool span, so the field's 2D-only OT walk
+// keeps it as RQ_HUD instead of dropping it with the redundant native-owned world polys. No depth/ord —
+// distinct from gpu_obj_depth_add's world-position billboard occlusion.
+void  gpu_ui_span_add(Core*, uint32_t lo, uint32_t hi);
 float proj_obj_center_ord(void);
 // class ProjParams (game/render/proj_params.h) — per-Core; brings in camview_valid/proj_camview_world_ord etc.
 #include "proj_params.h"

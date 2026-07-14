@@ -78,6 +78,20 @@ struct GpuState {
   void obj_depth_add(uint32_t lo, uint32_t hi, float ord);  // record an object's pool span + world depth
   int  obj_depth_lookup(uint32_t node, float* ord);         // depth ord for the OT node, if in an object span
 
+  // UI-SPAN registry (bug #34, docs/findings/ui.md "Dialog text-box PANEL emitter chain"). The dialog
+  // text-box's shared packet-emitter tail (guest 0x8007D594, observer-wrapped in render_observer.cpp)
+  // draws its dark panel fill as real POLY geometry (FT4) — the field's 2D-only OT walk otherwise drops
+  // ALL non-billboard polys as redundant native-owned world geometry, which silently ate the panel.
+  // Presence-only registry (unlike obj_depth_add/lookup above): a UI span carries no world depth and is
+  // not an object-anchored fps60 billboard, so it needs its own provenance channel, not obj_depth's.
+  // Same per-frame s_frame idiom as s_od_lo/hi/frame.
+  static const int UI_SPAN_MAX = 64;
+  uint32_t s_ui_lo[UI_SPAN_MAX] = {}, s_ui_hi[UI_SPAN_MAX] = {};
+  int s_ui_n = 0;
+  int s_ui_frame = -1;
+  void ui_span_add(uint32_t lo, uint32_t hi);   // record a UI-panel emitter's packet-pool span
+  int  ui_span_lookup(uint32_t addr);           // is this OT node inside a UI span this frame?
+
   // VRAM (textures + framebuffers)
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};
   uint16_t* vram(int x, int y) { return &s_vram[(y & 511) * VRAM_W + (x & 1023)]; }

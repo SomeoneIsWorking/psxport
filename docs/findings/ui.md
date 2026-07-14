@@ -121,3 +121,13 @@ its own beyond the shared cursor-index global `DAT_800bf808`):
 - **refs:** generated/shard_5.c:13091 (8007DA50), shard_4.c:12027 (8007D594) + :11855 (8007CC00),
   shard_3.c:12991 (8005019C), shard_2.c:6001 (8004FFB4); scratch/logs/bug44_ot_decode.log (packet
   capture); game/ui/dialog_text_stream.{h,cpp} (adjacent RE'd text cluster, distinct).
+- **FIX LANDED (2026-07-14, same day):** UI-span registry on GpuState (ui_span_add/lookup, per-frame
+  reset, presence-only — no depth, no fps60 stamp) + guest-transparent observer wrap on 0x8007D594
+  (render_observer.cpp obs_8007D594, oracle-pure via the c->game->oracle gate) + third keep-category
+  in the twoDOnly poly branch (gpu_native.cpp ~900: UI-tagged polys → RQ_HUD/RQ_OM_2D_FG). NB the
+  wrap installs via raw shard_set_override like its obs_body siblings, NOT engine_set_override_main —
+  the thunk's oracle branch keys on psx_fallback, which standalone GATE=1 also sets, and the wrap
+  must fire under GATE (verified: panel missing under the thunk install, ovhit native=0). Verified:
+  panel renders GATE+pc_render f1413 + default f1401 (bug34fix_*.png); free-roam no world-poly leak;
+  SBS-full autonav 0-diff f67860. Signpost dialog (row 9) uses the same emitter chain — expected
+  fixed, awaiting user eyeball.
