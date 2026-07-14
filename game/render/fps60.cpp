@@ -29,7 +29,7 @@ void gpu_pace_subframe(Core* core, int n);
 
 #define FPS60_RQ_MAX RQ_MAX
 
-Fps60::~Fps60() { delete[] mRqCur; delete[] mRqPrev; }
+Fps60::~Fps60() { delete[] mRqCur; delete[] mRqPrev; delete[] mRqLerp; }
 
 // ---- logic-rate detector (validated lrate_proto) -----------------------------------------------------
 void Fps60::fold(uint32_t v) {
@@ -284,6 +284,155 @@ void Fps60::stampBillboard(Core* c, uint32_t node) {
   if (ident >= 0x80000000u && ident < 0x80200000u) it->dbg_node = ident;
 }
 
+// ---- STAGE 2: prim matching + lerp (docs/fps60-rework.md "Match+lerp stage") ---------------------------
+// Shape fingerprint: the fields that identify "the same kind of prim" — layer/order_mode/nv (what it is
+// and how it's ordered/depth-tested), the resolved texture material (mode/tp_x/tp_y/clut_x/clut_y/
+// tw_mx/tw_my/tw_ox/tw_oy — "texture page/clut/texwin fields"), raw/semi/tp_blend (the "op-ish identity" —
+// untextured-vs-textured, blended-vs-opaque, and which blend mode), and has_xyf (sub-pixel float path vs
+// integer-snap path — drawn differently by emitItem, so a mismatch here is a different kind of prim too).
+// A provenance match (same dbg_node + same emission index) whose fingerprint differs is an animation-frame
+// swap (e.g. a texture-atlas cell flip) — draw at the nearest real frame, don't lerp across textures.
+static bool fpEqual(const RqItem& a, const RqItem& b) {
+  return a.layer == b.layer && a.order_mode == b.order_mode && a.nv == b.nv && a.raw == b.raw &&
+         a.semi == b.semi && a.tp_blend == b.tp_blend && a.has_xyf == b.has_xyf &&
+         a.mode == b.mode && a.tp_x == b.tp_x && a.tp_y == b.tp_y &&
+         a.clut_x == b.clut_x && a.clut_y == b.clut_y &&
+         a.tw_mx == b.tw_mx && a.tw_my == b.tw_my && a.tw_ox == b.tw_ox && a.tw_oy == b.tw_oy;
+}
+// Colors/UVs are NOT lerped (the fingerprint match guarantees they're the "same" prim) — but a prim whose
+// per-vertex color DOES differ frame-to-frame despite matching (e.g. a fade multiplier baked into rs/gs/bs)
+// would lerp-freeze at the wrong tint if drawn with either endpoint's color. Compare and demote to
+// unmatched on any difference — draws at its own real frame's color instead of a wrong blend.
+static bool colorsEqual(const RqItem& a, const RqItem& b) {
+  int nv = a.nv ? a.nv : 4;
+  for (int k = 0; k < nv; k++)
+    if (a.rs[k] != b.rs[k] || a.gs[k] != b.gs[k] || a.bs[k] != b.bs[k]) return false;
+  return true;
+}
+// FNV-1a fold of the fingerprint fields — the key strength-3 (dbg_node==0) grouping key.
+static uint64_t fpHash(const RqItem& a) {
+  uint64_t h = 1469598103934665603ull;
+  auto fold = [&](uint32_t v) { h ^= v; h *= 1099511628211ull; };
+  fold(a.layer); fold(a.order_mode); fold(a.nv); fold(a.raw); fold(a.semi); fold(a.tp_blend); fold(a.has_xyf);
+  fold((uint32_t)a.mode); fold((uint32_t)a.tp_x); fold((uint32_t)a.tp_y);
+  fold((uint32_t)a.clut_x); fold((uint32_t)a.clut_y);
+  fold((uint32_t)a.tw_mx); fold((uint32_t)a.tw_my); fold((uint32_t)a.tw_ox); fold((uint32_t)a.tw_oy);
+  return h;
+}
+// Lerp a matched pair at t: screen-space vertex XY (float — xsf/ysf when has_xyf, else xs/ys promoted to
+// float) and per-vertex depth. Everything else (material, UVs, colors) is validated equal by fpEqual/
+// colorsEqual above and copied from b. Shadow-cast verts stay b's un-interpolated view-space verts (the
+// shadow map is never interpolated — render_queue.h sh_cast contract). Base on b (the newer real frame) so
+// residual fields (fps_scene/fps_anchor/fps_key, now unused by stage-2 matching, retired in stage 3) read
+// as this frame's, not stale data from two frames back.
+static RqItem lerpItem(const RqItem& a, const RqItem& b, float t) {
+  RqItem it = b;
+  int nv = a.nv ? a.nv : 4;
+  for (int k = 0; k < nv; k++) {
+    float axf = a.has_xyf ? a.xsf[k] : (float)a.xs[k];
+    float ayf = a.has_xyf ? a.ysf[k] : (float)a.ys[k];
+    float bxf = b.has_xyf ? b.xsf[k] : (float)b.xs[k];
+    float byf = b.has_xyf ? b.ysf[k] : (float)b.ys[k];
+    it.xsf[k] = axf + (bxf - axf) * t;
+    it.ysf[k] = ayf + (byf - ayf) * t;
+    it.xs[k]  = (int)lroundf(it.xsf[k]);
+    it.ys[k]  = (int)lroundf(it.ysf[k]);
+    it.depth[k] = a.depth[k] + (b.depth[k] - a.depth[k]) * t;
+  }
+  it.has_xyf = 1;   // promote every matched prim (even 2D/HUD ones) to the sub-pixel path — t=0.5 rarely
+                     // lands on an integer, so slot A always carries the lerped float position.
+  it.seq = a.seq;    // preserve Q[N-1]'s paint-order tiebreak — slot A keeps A's submission order
+  it.dbg_node = a.dbg_node;
+  return it;
+}
+
+// Per-frame node-emission-index: walk items in their captured (already paint-ordered) sequence, counting
+// per dbg_node — objects emit their prims in stable order frame-to-frame (submit.cpp's per-object render
+// walk), so (dbg_node, running count) is a stable identity while the object lives. dbg_node==0 (no
+// provenance: terrain/static/background prims, or a billboard the OT walk couldn't stamp) gets the "no
+// node" sentinel — those are matched separately, by fingerprint + order-of-appearance (key strength 3).
+static constexpr uint32_t kNoNode = 0xFFFFFFFFu;
+void Fps60::buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out) {
+  out.resize((size_t)n);
+  mNodeIdxScratch.clear();
+  for (int i = 0; i < n; i++) {
+    uint32_t node = items[i].dbg_node;
+    if (!node) { out[i] = kNoNode; continue; }
+    out[i] = mNodeIdxScratch[node]++;
+  }
+}
+
+// Match Q[N-1] (mRqPrev) against Q[N] (mRqCur) and record, per Q[N-1] item, which Q[N] item (if any) it
+// pairs with (mMatchOfA). present_vk walks Q[N-1] in its own paint order and either lerps the matched pair
+// or draws the Q[N-1] item as-is — so slot A's draw order is exactly Q[N-1]'s order (matches stage 1's
+// "verbatim replay" ordering for anything that doesn't get a match). An unmatched Q[N] item simply has no
+// Q[N-1] item pointing at it, so it never appears in slot A — it pops in at slot B, same 30fps cadence as
+// the pre-fps60 path (per docs/fps60-rework.md "Prim matching").
+void Fps60::matchAndLerp(Core*) {
+  const RqItem* A = mRqPrev; int nA = mNPrev;   // Q[N-1]
+  const RqItem* B = mRqCur;  int nB = mNCur;    // Q[N]
+  if (!mRqLerp) mRqLerp = new RqItem[FPS60_RQ_MAX];
+  mMatchedThisFrame = 0; mUnmatchedThisFrame = 0;
+
+  buildProvenanceIdx(A, nA, mIdxPrevBuf);
+  buildProvenanceIdx(B, nB, mIdxCurBuf);
+
+  // Q[N] provenance lookup: (dbg_node, emission-index) -> item index. dbg_node==0 items are excluded here
+  // (handled by the fingerprint/order-of-appearance pass below).
+  mMatchMap.clear();
+  for (int j = 0; j < nB; j++)
+    if (mIdxCurBuf[j] != kNoNode) mMatchMap[((uint64_t)B[j].dbg_node << 32) | mIdxCurBuf[j]] = j;
+
+  // dbg_node==0 groups, in each frame's own emission order, keyed by shape fingerprint.
+  mZeroGroupsPrev.clear(); mZeroGroupsCur.clear();
+  for (int i = 0; i < nA; i++) if (mIdxPrevBuf[i] == kNoNode) mZeroGroupsPrev[fpHash(A[i])].push_back(i);
+  for (int j = 0; j < nB; j++) if (mIdxCurBuf[j]  == kNoNode) mZeroGroupsCur[fpHash(B[j])].push_back(j);
+
+  mMatchOfA.assign((size_t)nA, -1);
+  mUsedB.assign((size_t)nB, 0);
+
+  // Pass 1 (key strength 1+2): provenance-keyed prims, validated by fingerprint + color on every hit.
+  for (int i = 0; i < nA; i++) {
+    if (mIdxPrevBuf[i] == kNoNode) continue;
+    auto it = mMatchMap.find(((uint64_t)A[i].dbg_node << 32) | mIdxPrevBuf[i]);
+    if (it == mMatchMap.end()) continue;                          // unmatched — draws as-is
+    int j = it->second;
+    if (mUsedB[j] || !fpEqual(A[i], B[j]) || !colorsEqual(A[i], B[j])) continue;   // demoted — draws as-is
+    mMatchOfA[i] = j; mUsedB[j] = 1;
+  }
+
+  // Pass 2 (key strength 3): dbg_node==0 prims, matched by (fingerprint, order-of-appearance), ONLY when
+  // the two frames agree on how many prims share that fingerprint — otherwise the whole group is left
+  // unmatched (an ambiguous count means order-of-appearance isn't a trustworthy identity this frame).
+  for (auto& kv : mZeroGroupsPrev) {
+    auto cit = mZeroGroupsCur.find(kv.first);
+    const std::vector<int>& prevIdx = kv.second;
+    if (cit == mZeroGroupsCur.end() || cit->second.size() != prevIdx.size()) continue;
+    const std::vector<int>& curIdx = cit->second;
+    for (size_t k = 0; k < prevIdx.size(); k++) {
+      int i = prevIdx[k], j = curIdx[k];
+      if (mUsedB[j] || !fpEqual(A[i], B[j]) || !colorsEqual(A[i], B[j])) continue;
+      mMatchOfA[i] = j; mUsedB[j] = 1;
+    }
+  }
+
+  // Emit: walk Q[N-1] in its captured paint order. Matched -> lerp(A,B,t); unmatched -> A as-is.
+  mNLerp = 0;
+  for (int i = 0; i < nA && mNLerp < FPS60_RQ_MAX; i++) {
+    if (mMatchOfA[i] >= 0) { mRqLerp[mNLerp++] = lerpItem(A[i], B[mMatchOfA[i]], mT); mMatchedThisFrame++; }
+    else                   { mRqLerp[mNLerp++] = A[i];                              mUnmatchedThisFrame++; }
+  }
+  mMatchedTotal += mMatchedThisFrame; mUnmatchedTotal += mUnmatchedThisFrame;
+  // Match-rate telemetry: once/sec (logic runs ~30fps -> every 30 fences) under PSXPORT_DEBUG=fps60.
+  if (mDbg && (mFence % 30) == 0) {
+    long tot = mMatchedTotal + mUnmatchedTotal;
+    fprintf(stderr, "[fps60] f%ld match-rate: this-frame matched=%ld/%d (%.0f%%) unmatched=%ld | "
+                     "running matched=%ld/%ld (%.0f%%)\n",
+            mFence, mMatchedThisFrame, nA, nA ? 100.0 * mMatchedThisFrame / nA : 0.0, mUnmatchedThisFrame,
+            mMatchedTotal, tot, tot ? 100.0 * mMatchedTotal / tot : 0.0);
+  }
+}
+
 // ---- per-present frame dump (debug channel `fps60dump`) ----------------------------------------------
 // Writes what THIS present pass just put in s_vram_tex, exactly like REPL `shot` — same VRAM-readback
 // writer (gpu_gpu_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
@@ -326,25 +475,27 @@ void Fps60::frame_commit(Core* core) {
   mFrameGeom = 0;
 }
 
-// STAGE 1 (docs/fps60-rework.md "delay stage"): slot A no longer re-runs sceneNative or reprojects
-// billboard anchors — it replays the PREVIOUS logic frame's captured queue Q[N-1] verbatim, through the
-// exact same per-item draw call (`q.emitItem`) slot B uses for Q[N]. No guest reads at present time, no
-// second render path — an interpolated frame literally cannot show a game state neither real frame had,
-// because slot A now IS a real frame's content (just delayed by one). The anchor/mid-present-rebuild
-// machinery above (sceneCam/objXform/bgScroll midpoint providers, billboard stamping, projWorld/
-// unprojectQuadAnchor) is intentionally left in place per the design doc's staging — it simply isn't
-// consulted from this path anymore; stage 2 repurposes it for match+lerp, stage 3 deletes what's unused.
+// STAGE 2 (docs/fps60-rework.md "Match+lerp stage"): slot A draws lerp(Q[N-1], Q[N], t=0.5) — matched
+// prim pairs (see matchAndLerp) interpolate their screen-space verts + depth; prims with no confident
+// cross-frame match draw at Q[N-1] as-is (stage 1's "verbatim replay" behavior, now the fallback for the
+// unmatched case rather than the whole frame). No guest reads at present time, no second render path — an
+// interpolated frame is built ENTIRELY from the two real queues' own captured data, through the exact same
+// per-item draw call (`q.emitItem`) slot B uses for Q[N]; it cannot show a game state neither real frame
+// had. The anchor/mid-present-rebuild machinery above (sceneCam/objXform/bgScroll midpoint providers,
+// billboard stamping, projWorld/unprojectQuadAnchor) is intentionally left in place per the design doc's
+// staging — it isn't consulted from this path; stage 3 deletes what's unused.
 void Fps60::present_vk(Core* core) {
   Core* c = core;
   RenderQueue& q = c->game->rq;
   if (mDbg < 0) mDbg = cfg_dbg("fps60") ? 1 : 0;
 
-  // ---- PASS 1 (slot A): replay the previous real frame's queue verbatim ---------------------------------
+  // ---- PASS 1 (slot A): lerp(Q[N-1], Q[N]) by matched prim, Q[N-1] as-is otherwise -----------------------
   // First frame after enabling fps60 (no Q[N-1] captured yet, mHavePrev==0): degenerate to replaying THIS
-  // frame's own queue (Q[N] twice) rather than presenting an empty/garbage buffer — 30fps content at 60Hz
-  // pacing for exactly one frame, per the design doc's stage-1 first-frame case.
-  const RqItem* slotA = mHavePrev ? mRqPrev : mRqCur;
-  int nSlotA           = mHavePrev ? mNPrev : mNCur;
+  // frame's own queue (Q[N] twice) rather than matching against an empty/garbage buffer — 30fps content at
+  // 60Hz pacing for exactly one frame, per the design doc's stage-1 first-frame case (still applies).
+  const RqItem* slotA; int nSlotA;
+  if (mHavePrev) { matchAndLerp(c); slotA = mRqLerp; nSlotA = mNLerp; }
+  else           { slotA = mRqCur;  nSlotA = mNCur; }
   for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
   gpu_fps60_present_pass(c);
   dumpPresent(c, /*interp=*/true);

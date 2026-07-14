@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 
 struct Core;
 struct RqItem;
@@ -121,6 +122,25 @@ struct Fps60 {
   void rq_capture(const RqItem* items, int n);      // copy the sorted queue snapshot
   void present_vk(Core* core);                      // build+present the in-between, then the real frame
   int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
+
+  // ---- STAGE 2: prim matching + lerp (docs/fps60-rework.md "Match+lerp stage") -----------------------
+  // Slot A no longer replays Q[N-1] verbatim — it draws lerp(Q[N-1], Q[N], t=mT) per matched prim pair.
+  // Match key: primary = (dbg_node, emission-index-within-that-node) provenance, validated on every hit
+  // by a shape-fingerprint + per-vertex-color equality check; dbg_node==0 prims (no provenance) fall back
+  // to (fingerprint, order-of-appearance) ONLY when the per-fingerprint counts agree between the two
+  // frames. All scratch buffers are Fps60 members, cleared/reused every frame — no per-frame `new`.
+  RqItem* mRqLerp = nullptr;      // output buffer for the matched/lerped slot-A queue
+  int     mNLerp  = 0;
+  std::vector<uint32_t> mIdxPrevBuf, mIdxCurBuf;             // per-item emission-index-within-node (or "no node")
+  std::unordered_map<uint32_t, uint32_t> mNodeIdxScratch;    // node -> running emission counter (buildProvenanceIdx scratch)
+  std::unordered_map<uint64_t, int> mMatchMap;               // Q[N] provenance key -> item index
+  std::unordered_map<uint64_t, std::vector<int>> mZeroGroupsPrev, mZeroGroupsCur;   // dbg_node==0: fingerprint -> ordered indices
+  std::vector<int>     mMatchOfA;   // per Q[N-1] item: matched Q[N] index, or -1
+  std::vector<uint8_t> mUsedB;      // per Q[N] item: already claimed by a match
+  long mMatchedThisFrame = 0, mUnmatchedThisFrame = 0;        // this-frame telemetry
+  long mMatchedTotal = 0, mUnmatchedTotal = 0;                // running totals (periodic log, PSXPORT_DEBUG=fps60)
+  void buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out);
+  void matchAndLerp(Core* core);   // fills mRqLerp/mNLerp by matching mRqPrev (Q[N-1]) against mRqCur (Q[N])
 
   // ---- per-present frame dump (debug channel `fps60dump`, REPL `debug fps60dump`) ---------------------
   // Writes one PNG per PRESENTED frame (real AND interp) to scratch/framedump/, so a Python script can
