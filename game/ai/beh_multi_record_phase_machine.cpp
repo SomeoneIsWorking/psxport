@@ -38,23 +38,13 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80134FD8u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline uint32_t leafr2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn); return c->r[2];
-}
-static inline uint32_t leafr3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn); return c->r[2];
-}
-static inline void leaf4(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; rec_dispatch(c, fn);
-}
 
 // COMMON TAIL (0x801353C8): node[8]++ / FUN_800517F8(node) / node[8]--.
 static inline void common_tail(Core* c, uint32_t nd) {
@@ -156,23 +146,23 @@ void beh_multi_record_phase_machine(Core* c) {
    c->r[4] = nd; c->engine.graphicsBind.renderUpdate();
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
    uint32_t a3;
-   a3 = leafr3(c, nd, 1, 0, 0x801252c0u);
+   a3 = guest_leaf(c, 0x801252c0u, nd, 1, 0);
    c->mem_w32(a3 + 20, nd); c->mem_w32(a3 + 16, c->mem_r32(nd + 0xc8));
-   a3 = leafr3(c, nd, 1, 1, 0x801252c0u);
+   a3 = guest_leaf(c, 0x801252c0u, nd, 1, 1);
    c->mem_w32(a3 + 20, nd); c->mem_w32(a3 + 16, c->mem_r32(nd + 0xd8));
-   a3 = leafr3(c, nd, 4, 2, 0x801252c0u);
+   a3 = guest_leaf(c, 0x801252c0u, nd, 4, 2);
    c->mem_w32(a3 + 20, nd); c->mem_w32(a3 + 16, c->mem_r32(nd + 0xc4));
-   a3 = leafr3(c, nd, 4, 3, 0x801252c0u);
+   a3 = guest_leaf(c, 0x801252c0u, nd, 4, 3);
    c->mem_w32(a3 + 20, nd); c->mem_w32(a3 + 16, c->mem_r32(nd + 0xcc));
-   a3 = leafr3(c, nd, 4, 4, 0x801252c0u);
+   a3 = guest_leaf(c, 0x801252c0u, nd, 4, 4);
    c->mem_w32(a3 + 20, nd); c->mem_w32(a3 + 16, c->mem_r32(nd + 0xd0));
-   leafr2(c, c->mem_r32(nd + 0xd4), 12, 0x8004cc64u);   // FUN_8004CC64(node[0xD4], 12)
+   guest_leaf(c, 0x8004cc64u, c->mem_r32(nd + 0xd4), 12);   // FUN_8004CC64(node[0xD4], 12)
    goto Lret;
  }
 
  // -------- inner N5==1 --------
  N5_1: {
-   leaf1(c, nd, 0x801344acu);                      // FUN_801344AC(node)
+   guest_leaf(c, 0x801344acu, nd);                 // FUN_801344AC(node)
    bool to354 = (c->mem_r8(nd + 6) != 0);
    if (!to354) {
      uint32_t m = c->mem_r8(0x800e7eaau);
@@ -182,7 +172,7 @@ void beh_multi_record_phase_machine(Core* c) {
      c->mem_w8(nd + 1, (uint8_t)st);               // node[1] = s0 = 1
      c->engine.cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
    } else {
-     leaf4(c, nd, 0, (uint32_t)(int32_t)-400, 600, 0x800779d0u);  // FUN_800779D0(node,0,-400,600)
+     guest_leaf(c, 0x800779d0u, nd, 0, (uint32_t)(int32_t)-400, 600);  // FUN_800779D0(node,0,-400,600)
    }
    if (c->mem_r8(nd + 1) == 0) goto Lret;
    common_tail(c, nd);
@@ -197,10 +187,10 @@ void beh_multi_record_phase_machine(Core* c) {
      c->mem_w8(nd + 1, (uint8_t)st);               // node[1] = 1
      c->engine.cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
    } else {
-     leaf1(c, nd, 0x8007778cu);                    // FUN_8007778C(node)
+     guest_leaf(c, 0x8007778cu, nd);                // FUN_8007778C(node)
    }
    if (c->mem_r8(nd + 1) == 0) goto Lret;
-   leaf1(c, nd, 0x801347e4u);                      // FUN_801347E4(node)
+   guest_leaf(c, 0x801347e4u, nd);                  // FUN_801347E4(node)
    common_tail(c, nd);
    goto Lret;
  }

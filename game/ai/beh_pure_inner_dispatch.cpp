@@ -21,14 +21,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80136D9Cu;
-
-static inline void leaf(Core* c, uint32_t obj, uint32_t fn) { c->r[4] = obj; rec_dispatch(c, fn); }
 
 }  // namespace
 
@@ -43,7 +42,7 @@ void beh_pure_inner_dispatch(Core* c) {
   goto Lret;                                       // st >= 4 default
 
  Lef0:  c->engine.spawn.despawn(obj); goto Lret;      // STATE 3
- Ldf0:  leaf(c, obj, 0x80136F08u); goto Lret;      // STATE 0
+ Ldf0:  guest_leaf(c, 0x80136F08u, obj); goto Lret;   // STATE 0
 
  Le00:                                             // STATE 1
   // call FUN_8007778C unless (0x800BF89C != 2 && node[3]==2 && 0x800E7EAA==1)
@@ -56,18 +55,18 @@ void beh_pure_inner_dispatch(Core* c) {
     if (n5 == 1) goto Lea4;
     if (n5 >= 2) { if (n5 == 2) goto Lec8; goto Led0; }
     // n5 == 0
-    if (c->mem_r8(obj + 3) == 3) leaf(c, obj, 0x8018CDC4u);
-    else                         leaf(c, obj, 0x80138A64u);
+    if (c->mem_r8(obj + 3) == 3) guest_leaf(c, 0x8018CDC4u, obj);
+    else                         guest_leaf(c, 0x80138A64u, obj);
     goto Led0;
   }
  Lea4:                                             // n5 == 1
-  if (c->mem_r8(0x800BF809u) == 0) leaf(c, obj, 0x80137198u);
+  if (c->mem_r8(0x800BF809u) == 0) guest_leaf(c, 0x80137198u, obj);
   goto Led0;
  Lec8:                                             // n5 == 2
-  leaf(c, obj, 0x8018CA1Cu);
+  guest_leaf(c, 0x8018CA1Cu, obj);
   // fall into Led0
  Led0:
-  if (c->mem_r8(obj + 1) != 0) leaf(c, obj, 0x801389C8u);
+  if (c->mem_r8(obj + 1) != 0) guest_leaf(c, 0x801389C8u, obj);
  Lret:
   return;
 }

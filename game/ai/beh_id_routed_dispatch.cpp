@@ -23,20 +23,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80121978u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
-static inline void leaf4(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; rec_dispatch(c, fn);
-}
 
 }  // namespace
 
@@ -52,10 +45,10 @@ void beh_id_routed_dispatch(Core* c) {
 
  // ---------------- STATE 0 (INIT) ----------------
  S0:
-  leaf4(c, s0, 18, c->mem_r32(0x800ECFCCu), 0x8014C02Cu, 0x800519E0u);  // FUN_800519E0
+  guest_leaf(c, 0x800519E0u, s0, 18, c->mem_r32(0x800ECFCCu), 0x8014C02Cu);  // FUN_800519E0
   if (c->r[2] != 0) goto Lret;
   c->mem_w32(s0 + 0x3C, c->mem_r32(0x800ECFD0u));   // node[0x3C] = *0x800ECFD0 (delay-slot store)
-  leaf3(c, s0, 0x8014E4ECu, 0, 0x80077C40u);        // FUN_80077C40(node, 0x8014E4EC, 0)
+  guest_leaf(c, 0x80077C40u, s0, 0x8014E4ECu, 0);   // FUN_80077C40(node, 0x8014E4EC, 0)
   c->mem_w16(s0 + 0x80, 140);
   c->mem_w16(s0 + 0x82, 280);
   c->mem_w16(s0 + 0x84, 128);
@@ -70,16 +63,16 @@ void beh_id_routed_dispatch(Core* c) {
  // ---------------- STATE 1 ----------------
  S1:
   switch (c->mem_r8(s0 + 3)) {                       // node[3]
-    case 0:  leaf1(c, s0, 0x801225BCu); break;
-    case 1:  leaf1(c, s0, 0x80122D58u); break;
-    case 95: leaf1(c, s0, 0x801220FCu); break;
-    case 96: leaf1(c, s0, 0x80121B44u); break;
-    case 97: leaf1(c, s0, 0x80121CF8u); break;
-    case 98: leaf1(c, s0, 0x80122CA4u); break;
-    case 99: leaf1(c, s0, 0x8018BF08u); break;
+    case 0:  guest_leaf(c, 0x801225BCu, s0); break;
+    case 1:  guest_leaf(c, 0x80122D58u, s0); break;
+    case 95: guest_leaf(c, 0x801220FCu, s0); break;
+    case 96: guest_leaf(c, 0x80121B44u, s0); break;
+    case 97: guest_leaf(c, 0x80121CF8u, s0); break;
+    case 98: guest_leaf(c, 0x80122CA4u, s0); break;
+    case 99: guest_leaf(c, 0x8018BF08u, s0); break;
     default: break;                                  // 2..94, 100..255: no sub-behavior
   }
-  leaf1(c, s0, 0x80122BF4u);                          // common tail FUN_80122BF4(node)
+  guest_leaf(c, 0x80122BF4u, s0);                     // common tail FUN_80122BF4(node)
   c->mem_w8(s0 + 0x2B, 0);                            // node[0x2B] = 0 (delay-slot store)
   goto Lret;
 

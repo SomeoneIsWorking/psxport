@@ -20,14 +20,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x8011CBD0u;
-
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
 
 }  // namespace
 
@@ -37,11 +36,11 @@ void beh_node3_router(Core* c) {
 
   if (st == 1) {
     uint8_t n3 = c->mem_r8(nd + 3);
-    if (n3 == 0) leaf1(c, nd, 0x8011c674u);              // FUN_8011C674
-    else if (n3 == 1) leaf1(c, nd, 0x8011ca04u);         // FUN_8011CA04
-    if (c->mem_r8(nd + 1) != 0) leaf1(c, nd, 0x800518fcu);   // FUN_800518FC
+    if (n3 == 0) guest_leaf(c, 0x8011c674u, nd);              // FUN_8011C674
+    else if (n3 == 1) guest_leaf(c, 0x8011ca04u, nd);         // FUN_8011CA04
+    if (c->mem_r8(nd + 1) != 0) guest_leaf(c, 0x800518fcu, nd);   // FUN_800518FC
     c->mem_w8(nd + 0x2b, 0);
-    leaf1(c, nd, 0x8011cd14u);                           // FUN_8011CD14
+    guest_leaf(c, 0x8011cd14u, nd);                           // FUN_8011CD14
   } else if (st < 2) {
     if (st == 0 && c->mem_r8(0x800bf89cu) > 3) {
       c->mem_w8(nd + 0x0b, 0x40);

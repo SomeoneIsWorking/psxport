@@ -22,14 +22,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80125E0Cu;
-
-static inline void leaf(Core* c, uint32_t obj, uint32_t fn) { c->r[4] = obj; rec_dispatch(c, fn); }
 
 }  // namespace
 
@@ -38,34 +37,34 @@ void beh_pure_substate_dispatch(Core* c) {
   uint32_t s0 = c->mem_r8(s1 + 4);                  // s0 = node[4] = outer state
 
   if (s0 == 1) goto S1;
-  if ((int32_t)s0 < 2) { if (s0 == 0) { leaf(c, s1, 0x801253E8u); } goto Lret; }  // STATE 0
+  if ((int32_t)s0 < 2) { if (s0 == 0) { guest_leaf(c, 0x801253E8u, s1); } goto Lret; }  // STATE 0
   if (s0 == 2) goto S2;
   if (s0 == 3) { c->engine.spawn.despawn(s1); goto Lret; }   // STATE 3
   goto Lret;                                        // s0 >= 4
 
  S1: {
-    leaf(c, s1, 0x8007778Cu);                       // FUN_8007778C(node)
+    guest_leaf(c, 0x8007778Cu, s1);                 // FUN_8007778C(node)
     uint8_t n5 = c->mem_r8(s1 + 5);                 // node[5]
     switch (n5) {
-      case 0: leaf(c, s1, 0x80125FE0u); break;
-      case 1: leaf(c, s1, 0x801255CCu); break;
-      case 2: leaf(c, s1, 0x80125800u); break;
+      case 0: guest_leaf(c, 0x80125FE0u, s1); break;
+      case 1: guest_leaf(c, 0x801255CCu, s1); break;
+      case 2: guest_leaf(c, 0x80125800u, s1); break;
       default: break;                               // node[5] >= 3: none
     }
     goto Ltail;
   }
 
  S2: {
-    leaf(c, s1, 0x8007778Cu);                       // FUN_8007778C(node)
+    guest_leaf(c, 0x8007778Cu, s1);                 // FUN_8007778C(node)
     int32_t n5 = (int32_t)c->mem_r8(s1 + 5);        // node[5] (bltz test, always >= 0 for an lbu)
     if (n5 >= 0 && n5 >= 2 && n5 < 4)               // node[5] in {2,3}
-      leaf(c, s1, 0x801261FCu);                     // FUN_801261FC(node)
+      guest_leaf(c, 0x801261FCu, s1);               // FUN_801261FC(node)
     goto Ltail;
   }
 
  Ltail:                                             // common tail @0x80125f14
   if (c->mem_r8(s1 + 1) != 0)                       // node[1]
-    leaf(c, s1, 0x800518FCu);                       // FUN_800518FC(node)
+    guest_leaf(c, 0x800518FCu, s1);                 // FUN_800518FC(node)
  Lret:
   return;
 }

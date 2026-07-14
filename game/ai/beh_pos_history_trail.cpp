@@ -47,8 +47,6 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x80029B40u;
 
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-
 // Shift the 6-slot ring at node+0x38 forward by one slot: slot[i] <- slot[i-1] for i=5..1 (each slot is
 // two 32-bit words, copied high-to-low exactly as the decompile's iVar7=5..1 loop).
 static inline void ring_shift_forward(Core* c, uint32_t nd) {

@@ -22,14 +22,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80128760u;
-
-static inline void leaf(Core* c, uint32_t obj, uint32_t fn) { c->r[4] = obj; rec_dispatch(c, fn); }
 
 }  // namespace
 
@@ -40,7 +39,7 @@ void beh_linked_advance_branch(Core* c) {
   uint32_t rec;
 
   if (v1 == 1) goto S1;
-  if ((int32_t)v1 < 2) { if (v1 == 0) { leaf(c, s0, 0x80128308u); } goto Lret; }  // STATE 0
+  if ((int32_t)v1 < 2) { if (v1 == 0) { guest_leaf(c, 0x80128308u, s0); } goto Lret; }  // STATE 0
   if (v1 == 2) goto Lret;                           // STATE 2 nothing
   if (v1 == 3) { c->engine.spawn.despawn(s0); goto Lret; }  // STATE 3
   goto Lret;                                        // v1 >= 4
@@ -80,13 +79,13 @@ void beh_linked_advance_branch(Core* c) {
   c->mem_w8 (s0 + 5, (uint8_t)(n5 + 1));
  L88884:
   if (c->mem_r8(0x1F800207u) < 6) {                  // scratchpad byte
-    leaf(c, s0, 0x801281B8u);
-    leaf(c, s0, 0x801285ECu);
+    guest_leaf(c, 0x801281B8u, s0);
+    guest_leaf(c, 0x801285ECu, s0);
   }
   goto Lret;
 
  Ltail88b0:
-  leaf(c, s0, 0x801281B8u);                          // FUN_801281B8(node)
+  guest_leaf(c, 0x801281B8u, s0);                    // FUN_801281B8(node)
  Lret:
   return;
 }
