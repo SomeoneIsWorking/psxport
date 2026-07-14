@@ -21,9 +21,20 @@ pkg_check_modules(SDL3 sdl3)
 pkg_check_modules(SDL3_IMAGE sdl3-image)
 pkg_check_modules(FREETYPE freetype2)
 if(NOT (SDL3_FOUND AND SDL3_IMAGE_FOUND AND FREETYPE_FOUND))
-  message(WARNING "tomba2_port skipped: needs pkg-config sdl3 + sdl3-image + freetype2 "
-                  "(found sdl3=${SDL3_FOUND} sdl3-image=${SDL3_IMAGE_FOUND} freetype2=${FREETYPE_FOUND})")
-  return()
+  # Hard stop with the fix, not a skip: a skipped target surfaces later as make's baffling
+  # "No rule to make target 'tomba2_port'" instead of naming the missing library.
+  set(_missing "")
+  if(NOT SDL3_FOUND)
+    string(APPEND _missing "  sdl3        — Fedora: SDL3-devel | Debian/Ubuntu: libsdl3-dev | macOS: brew install sdl3\n")
+  endif()
+  if(NOT SDL3_IMAGE_FOUND)
+    string(APPEND _missing "  sdl3-image  — Fedora: SDL3_image-devel | Debian/Ubuntu: libsdl3-image-dev | macOS: brew install sdl3_image\n")
+  endif()
+  if(NOT FREETYPE_FOUND)
+    string(APPEND _missing "  freetype2   — Fedora: freetype-devel | Debian/Ubuntu: libfreetype-dev | macOS: brew install freetype\n")
+  endif()
+  message(FATAL_ERROR "tomba2_port: missing pkg-config dependencies:\n${_missing}"
+                      "Install the package(s) above and re-run ./run.sh")
 endif()
 
 set(RT runtime/recomp)
