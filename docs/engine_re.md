@@ -2137,8 +2137,14 @@ confidence, most self-contained cluster in the region:
   for the full trace, including a recompiler-limitation finding (an 0xF8/0xF9 table read looks like
   a real indirect call but is actually a local jump table, same shape as `FUN_8007D0D0`'s). The
   surrounding cluster (`FUN_8007D14C`/`FUN_8007D208`/`FUN_8007D594`/`FUN_8007C940` -- the box's own
-  state machine, position/size layout, and the actual glyph-blit walker) remains mapped-not-drafted;
+  state machine, position/size layout, and the glyph-POSITION-list builder) remains mapped-not-drafted;
   see docs/findings/ui.md for per-function notes and the recommended next-pass order.
+  **CORRECTION (2026-07-14, bug #34 RE):** `FUN_8007C940` is NOT "the actual glyph-blit walker" --
+  it builds the intermediate glyph-position list (scratchpad counter 0x1F800000+382); the glyph blits
+  go through `FUN_80078CA8` (native Font::glyphEmit), and the PANEL packets are emitted by
+  `FUN_8007D594`'s shared tail -> `FUN_8007CC00` (border tiles 0x65, consuming that position list) +
+  `FUN_8005019C` (corner sprites + 5x `FUN_8004FFB4` FT4 fills). Full chain: docs/findings/ui.md
+  "Dialog text-box PANEL emitter chain".
 - **0x8007EAE4-0x8007FDB0 -- PAUSE/QUIT MENU construction.** Confirmed via literal string pointers:
   `FUN_8007EAE4` builds the in-game pause menu ("Options"/"Load data"/"Quit game" via
   `PTR_s_Options_800a2854` etc.), `FUN_8007EE74`/`FUN_8007EF60` build "Continue"/"Load data"/
