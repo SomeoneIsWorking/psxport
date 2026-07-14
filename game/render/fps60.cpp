@@ -17,6 +17,7 @@
 #include <string.h>
 #include <math.h>
 #include <unordered_map>
+#include <utility>   // std::swap (pointer-swap double buffer rotation, stage 1)
 
 extern "C" { uint32_t GTE_ReadDR(unsigned); }   // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
 uint32_t gte_read_ctrl(uint32_t reg);            // GTE control-reg read (projection consts)
@@ -303,8 +304,13 @@ void Fps60::dumpPresent(Core* core, bool interp) {
 }
 
 // ---- per-logic-frame fence + present -----------------------------------------------------------------
+// rq_capture always writes the newly-flushed queue into `mRqCur` — the buffer that, after the PREVIOUS
+// present_vk's end-of-frame pointer swap, holds the now-stale two-frames-ago content (never needed again,
+// safe to overwrite). `mRqPrev` is left untouched here — it still holds last frame's real queue, which
+// present_vk's slot A is about to replay verbatim. See the swap at the end of present_vk.
 void Fps60::rq_capture(const RqItem* items, int n) {
-  if (!mRqCur) mRqCur = new RqItem[FPS60_RQ_MAX];
+  if (!mRqCur)  mRqCur  = new RqItem[FPS60_RQ_MAX];
+  if (!mRqPrev) mRqPrev = new RqItem[FPS60_RQ_MAX];
   if (n > FPS60_RQ_MAX) n = FPS60_RQ_MAX;
   if (n > 0) memcpy(mRqCur, items, (size_t)n * sizeof(RqItem));
   mNCur = n;
@@ -320,79 +326,44 @@ void Fps60::frame_commit(Core* core) {
   mFrameGeom = 0;
 }
 
+// STAGE 1 (docs/fps60-rework.md "delay stage"): slot A no longer re-runs sceneNative or reprojects
+// billboard anchors — it replays the PREVIOUS logic frame's captured queue Q[N-1] verbatim, through the
+// exact same per-item draw call (`q.emitItem`) slot B uses for Q[N]. No guest reads at present time, no
+// second render path — an interpolated frame literally cannot show a game state neither real frame had,
+// because slot A now IS a real frame's content (just delayed by one). The anchor/mid-present-rebuild
+// machinery above (sceneCam/objXform/bgScroll midpoint providers, billboard stamping, projWorld/
+// unprojectQuadAnchor) is intentionally left in place per the design doc's staging — it simply isn't
+// consulted from this path anymore; stage 2 repurposes it for match+lerp, stage 3 deletes what's unused.
 void Fps60::present_vk(Core* core) {
   Core* c = core;
   RenderQueue& q = c->game->rq;
   if (mDbg < 0) mDbg = cfg_dbg("fps60") ? 1 : 0;
-  bool didInterp = false;
 
-  // ---- PASS 1: the interpolated in-between (rebuild the scene at the midpoint) ------------------------
-  // Only when we have a previous frame AND this frame is a native-scene (field) frame with a valid camera.
-  // sceneNative is re-run READ-ONLY (DisplayPassGuard) with the midpoint provider armed: terrain, the scene
-  // table, and every object re-project through the (prev,cur) t=0.5 camera + object transform. Then the
-  // non-scene prims (2D/HUD + billboards) from this frame's captured queue are re-emitted, with billboards
-  // re-anchored through the real projection at the interpolated world anchor.
-  if (mHavePrev && mSceneRan && mCamCur.valid && mCamPrev.valid && mNCur > 0) {
-    mInterp = true;
-    { DisplayPassGuard displayPass(c->mRender->mode); c->mRender->sceneNative(); }
-    mInterp = false;
-    Cam mid = camMidOf(mCamPrev, mCamCur, mT);
+  // ---- PASS 1 (slot A): replay the previous real frame's queue verbatim ---------------------------------
+  // First frame after enabling fps60 (no Q[N-1] captured yet, mHavePrev==0): degenerate to replaying THIS
+  // frame's own queue (Q[N] twice) rather than presenting an empty/garbage buffer — 30fps content at 60Hz
+  // pacing for exactly one frame, per the design doc's stage-1 first-frame case.
+  const RqItem* slotA = mHavePrev ? mRqPrev : mRqCur;
+  int nSlotA           = mHavePrev ? mNPrev : mNCur;
+  for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
+  gpu_fps60_present_pass(c);
+  dumpPresent(c, /*interp=*/true);
+  if (mDbg) fprintf(stderr, "[fps60] f%ld slotA: replay prev=%s n=%d\n",
+                    mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA);
+  gpu_pace_subframe(c, 2);
 
-    // prev-frame billboard world anchors, keyed by billboard identity (fps_key).
-    std::unordered_map<uint32_t, const float*> prevW;
-    prevW.reserve((size_t)mNPrev + 16);
-    for (int j = 0; j < mNPrev; j++) { const RqItem* P = &mRqPrev[j];
-      if (P->fps_anchor && P->fps_key) prevW.emplace(P->fps_key, P->fps_wpos); }
-
-    long moved = 0, snapped = 0, kept = 0;
-    for (int i = 0; i < mNCur; i++) {
-      const RqItem* C = &mRqCur[i];
-      if (C->fps_scene) continue;                       // scene geometry: rebuilt fresh above (skip)
-      RqItem* it = q.push(); if (!it) break;
-      uint32_t sq = it->seq; *it = *C; it->seq = sq;    // fresh seq so it sorts after the scene items
-      if (C->fps_anchor && C->fps_key) {
-        // Re-project the sprite's WORLD anchor through the real projection: at the interpolated camera +
-        // interpolated world position vs. this frame's, translate the whole 2D quad by the anchor delta.
-        float wcx = C->fps_wpos[0], wcy = C->fps_wpos[1], wcz = C->fps_wpos[2];
-        float wpx = wcx, wpy = wcy, wpz = wcz;
-        auto pv = prevW.find(C->fps_key);
-        if (pv != prevW.end()) { wpx = pv->second[0]; wpy = pv->second[1]; wpz = pv->second[2]; }
-        float wmx = wpx + (wcx - wpx) * mT, wmy = wpy + (wcy - wpy) * mT, wmz = wpz + (wcz - wpz) * mT;
-        float scx, scy, smx, smy;
-        projWorld(mCamCur, wcx, wcy, wcz, scx, scy);    // this frame's anchor (≈ the guest sprite position)
-        projWorld(mid,     wmx, wmy, wmz, smx, smy);    // interpolated anchor
-        float dxf = smx - scx, dyf = smy - scy;
-        if (fabsf(dxf) + fabsf(dyf) <= 256.0f) {        // gate teleports/cuts — snap those (no smear)
-          int dxi = (int)(dxf < 0 ? dxf - 0.5f : dxf + 0.5f);
-          int dyi = (int)(dyf < 0 ? dyf - 0.5f : dyf + 0.5f);
-          for (int k = 0; k < 4; k++) { it->xs[k] += dxi; it->ys[k] += dyi;
-                                        it->xsf[k] += (float)dxi; it->ysf[k] += (float)dyi; }
-          if (dxi || dyi) moved++; else kept++;
-        } else snapped++;
-      } else kept++;
-    }
-    q.sortQueue();
-    q.emitQueue(c);
-    gpu_fps60_present_pass(c);
-    dumpPresent(c, /*interp=*/true);
-    if (mDbg) fprintf(stderr, "[fps60] f%ld interp: scene-rebuilt + non-scene(bb moved=%ld kept=%ld snapped=%ld) objs=%zu\n",
-                      mFence, moved, kept, snapped, mObjCur.size());
-    gpu_pace_subframe(c, 2);
-    didInterp = true;
-  }
-
-  // ---- PASS 2: the real frame (the captured queue, exactly as drawOTag built it) ---------------------
+  // ---- PASS 2 (slot B): the real frame (the captured queue, exactly as drawOTag built it) ---------------
   for (int i = 0; i < mNCur; i++) q.emitItem(c, &mRqCur[i]);
   gpu_present_ex(c, 1);
   dumpPresent(c, /*interp=*/false);
-  gpu_pace_subframe(c, didInterp ? 2 : 1);
+  gpu_pace_subframe(c, 2);
 
-  // ---- rotate captures: this frame becomes the previous frame -----------------------------------------
-  if (!mRqPrev) mRqPrev = new RqItem[FPS60_RQ_MAX];
-  if (mNCur > 0) memcpy(mRqPrev, mRqCur, (size_t)mNCur * sizeof(RqItem));
-  mNPrev = mNCur;
-  if (mSceneRan) { mObjPrev.swap(mObjCur); mCamPrev = mCamCur; mScrollPrev = mScrollCur; mHavePrev = 1; }
-  else           { mHavePrev = 0; }   // non-field frame: drop the interp chain (no motion to tween)
+  // ---- rotate captures: POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) -------
+  // mRqCur (just-drawn Q[N]) becomes next frame's mRqPrev; the buffer mRqPrev used to point at (now-stale,
+  // two-frames-old content that's never read again) becomes rq_capture's next overwrite target.
+  std::swap(mRqCur, mRqPrev);
+  std::swap(mNCur, mNPrev);
+  mHavePrev = 1;
   // (mBbCur is reset at the top of Engine::frameUpdate — the frame boundary before fieldFrame records.)
 }
 
