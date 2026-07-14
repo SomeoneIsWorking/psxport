@@ -365,7 +365,10 @@ quality, complementing `preseqobj`'s per-object oscillation gate above (this one
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:
 - **Renderer / mode:** `VK` (default on), `SW_GPU`, `VK_NODEPTH`, `VK_TRITEST`, `VK_HEADLESS`,
-  `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `FPS60`, `FPS60_GATE`, `FPS60_SYNTH`, `NATIVE_DEPTH`,
+  `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `FPS60`, `FPS60_GATE`, `FPS60_SYNTH`, `FPS60_TFORCE`
+  (TEMPORARY gate-B test knob, docs/fps60-rework.md Tier 1: 0 pins the whole interp present — camera lerp
+  AND queue-prim lerp share `mT` — to Q[N-1]'s endpoint, 1 to Q[N]'s, so a run can be pixel-diffed against
+  the adjacent real frame; unset = the shipped t=0.5 midpoint), `NATIVE_DEPTH`,
   `SSAO` (+ `SSAO_STRENGTH`/`SSAO_RADIUS`/`SSAO_BIAS`/`SSAO_RANGE`/`SSAO_VIZ`), `LIGHT`
   (+ `LIGHT_DIR`="x,y,z"/`LIGHT_AMBIENT`/`LIGHT_DIFFUSE`; SSAO+LIGHT share one deferred pass, `SSAO_VIZ`
   =2 shows normals, =3 shows the lit factor), `UI` (Dear ImGui mod-toggle overlay, windowed only —

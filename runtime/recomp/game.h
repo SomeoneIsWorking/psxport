@@ -76,6 +76,12 @@ public:
   GpuGpuState  gpu_gpu;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_gpu.cpp)
   GpuDevice   gpu_dev; // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
+  // Tier-1 capture-target redirect (docs/fps60-rework.md "Object-tier attempt ... Why Tier 1 isn't
+  // built"): non-null ONLY while Fps60::present_vk re-invokes Render::terrainRenderAll() at the interp
+  // present under a lerped camera. native_terrain.cpp's drawWorldQuad call checks this and, when set,
+  // writes into the ISOLATED sink instead of the live `rq` — the live queue (about to be reused by the
+  // next real drawOTag) is never touched by the present-time re-render. Always null outside that window.
+  RenderQueue* rqRedirect = nullptr;
   Fps60  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   SpuAudio    spu_audio;    // host audio output sink (SDL3 device + optional WAV capture)
   NativeMusic native_music; // real-time SEP/VAB synth mixed into the SPU sink each audio frame

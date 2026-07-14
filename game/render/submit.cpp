@@ -418,3 +418,18 @@ void Render::terrain() {
   // executes underneath via the render orchestrator and owns all guest writes (sway bytes, IR0, GTE).
   mNativeScene.terrainRender();
 }
+
+// terrainRenderAll: the terrain-node enumeration (moved from render_walk.cpp's sceneNative so Fps60's
+// Tier-1 present-time re-render — docs/fps60-rework.md — can run the EXACT same scan+call sequence, not
+// a hand-duplicated copy). Pure reads: the node scan is the same enumeration the substrate walk performs
+// (see terrain()'s own header comment); `cfg_dbg("noterr")` stays honored so the existing debug knob keeps
+// working from both call sites.
+void Render::terrainRenderAll() {
+  Core* c = mCore;
+  for (uint32_t n = c->mem_r32(0x800F2624u), g = 0; n && g < 400; g++, n = c->mem_r32(n + 36)) {
+    if (c->mem_r8(n + 1) == 0) continue;
+    if (c->mem_r32(n + 24) == 0x8002AB5Cu && !cfg_dbg("noterr")) {
+      c->game->ffspan.begin(); c->r[4] = n; terrain(); c->game->ffspan.end("rwT_terrain");
+    }
+  }
+}

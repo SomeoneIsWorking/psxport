@@ -43,6 +43,26 @@ public:
   // non-static method so a caller with `Core* c` in scope can just do `c->mRender->projParams.pzToOrd(pz)`.
   float pzToOrd(float pz) const;
 
+  // Snapshot / restore (fps60.cpp Tier-1: the present-time camera-lerp terrain re-render calls
+  // camview_publish/proj_set_H with the LERPED camera, same as the real path does with the real one —
+  // this state is per-Core shared render state, not sink-local, so Tier-1 saves it before and restores
+  // it after so the re-render leaves no observable trace for anything reading ProjParams later (the
+  // READ-ONLY OVERLAY invariant: writes stay confined to the isolated capture, host state that outlives
+  // the call must come back exactly as it was).
+  struct Snapshot { float R[3][3]; float T[3]; float H, OFX, OFY; bool valid; uint16_t projH; float projCx, projCy; };
+  Snapshot snapshot() const {
+    Snapshot s;
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) s.R[i][j] = mCamR[i][j]; s.T[i] = mCamT[i]; }
+    s.H = mCamH; s.OFX = mCamOFX; s.OFY = mCamOFY; s.valid = mCamValid;
+    s.projH = mProjH; s.projCx = mProjCx; s.projCy = mProjCy;
+    return s;
+  }
+  void restore(const Snapshot& s) {
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamR[i][j] = s.R[i][j]; mCamT[i] = s.T[i]; }
+    mCamH = s.H; mCamOFX = s.OFX; mCamOFY = s.OFY; mCamValid = s.valid;
+    mProjH = s.projH; mProjCx = s.projCx; mProjCy = s.projCy;
+  }
+
 private:
   static ProjParams* sCurrent;
 

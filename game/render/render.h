@@ -117,6 +117,14 @@ public:
   // PC-native float terrain render. Taxi-parameter c->r[4] = node. Was ov_terrain.
   void terrain();
 
+  // terrainRenderAll: scan the field's render-list (0x800F2624) for terrain nodes (render fn ==
+  // 0x8002AB5C) and call terrain() on each — the ENUMERATION half of sceneNative's terrain block. ONE
+  // call sequence used by both: the real per-logic-frame walk (render_walk.cpp sceneNative) and Fps60's
+  // Tier-1 present-time camera-lerp re-render (fps60.cpp present_vk) — see docs/fps60-rework.md
+  // "Object-tier attempt ... Why Tier 1 isn't built" for why re-invoking the SAME sequence (not a
+  // parallel one) is what makes the lerped-camera re-render provably the same render path.
+  void terrainRenderAll();
+
   // shadeSelect: pick this area's light config once per world frame (cheap guest-RAM fingerprint via
   // Lighting::areaKeyFrom); caches the result in mShadeCfg for the per-face shading routine.
   void shadeSelect();

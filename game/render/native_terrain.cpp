@@ -91,9 +91,10 @@ void NativeScenePass::terrainRender() {
     for (int col = 0; col < 3; col++)
       Robj[row][col] = (float)mobj[row*3+col] / 4096.0f;
   // camera rotation (CR-packed int16 rows) + translation (int32 view units) + projection constants, read
-  // through the fps60 provider: byte-identical to the old inline scratchpad/CR read when fps60 is off, and
-  // the (prev,cur) MIDPOINT camera during the 60fps mid-present, so the terrain pans through the same
-  // interpolated camera the objects do (no separate backdrop/terrain judder). Also captures this camera.
+  // through the fps60 provider: byte-identical to the plain scratchpad/CR read when fps60 is off or this
+  // is the real per-logic-frame call (which also captures the result into Fps60::mCamCur). During Tier-1's
+  // present-time terrain re-render (Fps60::present_vk / Render::terrainRenderAll under mCamOverrideOn), it
+  // instead returns the LERPED camera with no guest read — see fps60.cpp.
   float Rc_i16[3][3], camT[3], cam_ofx, cam_ofy, cam_H;
   c->game->fps60.sceneCam(c, Rc_i16, camT, cam_ofx, cam_ofy, cam_H);
   float Rcam[3][3];
@@ -133,6 +134,12 @@ void NativeScenePass::terrainRender() {
                         ZO[4] = {0x0F,0x13,0x17,0x1B}, CO[4] = {0x0C,0x10,0x14,0x18};
   int s_dbg = cfg_dbg("terrpc");
   int drawn = 0;
+  // Tag every terrain quad with the reserved kTerrainDbgNode sentinel (render_queue.h) — NOT node==0 the
+  // way un-owned prims default. fieldEntityRender (the SOP field-overlay SCENE TABLE walk: grass/props)
+  // is the OTHER dbg_node==0 RQ_WORLD producer and is genuinely un-owned (still queue-lerped); tagging
+  // terrain distinctly is what lets Fps60::tier1Render's queue-lerp exclusion (fps60.cpp isTier1Owned)
+  // target ONLY the prims it actually re-renders.
+  c->mRender->diag.beginObject(kTerrainDbgNode);
   for (uint32_t rec = TERRAIN_GEOMBLK; ; rec += 36) {
     int32_t ctl = (int32_t)c->mem_r32(rec + 4);
     float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4]; float wv[4][3];
@@ -195,10 +202,14 @@ void NativeScenePass::terrainRender() {
       cast = sv;
     }
     sil_bbox_log_verts("terrain", px, py, depth, 4, node, rec, r, g, b);
-    c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, cast);
+    // Tier-1 capture-target redirect (game.h Game::rqRedirect): the ISOLATED sink while Fps60::present_vk
+    // re-runs this pass under a lerped camera at the interp present; the live queue otherwise.
+    RenderQueue& rqOut = c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq;
+    rqOut.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, cast);
     drawn++;
     if (ctl <= 0) break;                                   // control sign marks the last record
   }
+  c->mRender->diag.endObject();
   if (s_dbg) fprintf(stderr, "[terrpc] node=%08x drew %d quads (H=%u ofx=%.1f ofy=%.1f)\n",
                      node, drawn, (unsigned)H, ofx, ofy);
 }

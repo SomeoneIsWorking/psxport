@@ -228,12 +228,9 @@ void Render::sceneNative() { Core* c = mCore;
     // (a) TERRAIN — the field's render-list node whose render fn (node+24) is 0x8002AB5C, drawn by the
     // READ-ONLY float pass (real per-pixel depth). Pure reads: the node scan is the same enumeration the
     // substrate walk performs; the draw computes its matrices in host memory (native_terrain.cpp).
-    for (uint32_t n = c->mem_r32(0x800F2624u), g = 0; n && g < 400; g++, n = c->mem_r32(n + 36)) {
-      if (c->mem_r8(n + 1) == 0) continue;
-      if (c->mem_r32(n + 24) == 0x8002AB5Cu && !cfg_dbg("noterr")) {
-        c->game->ffspan.begin(); c->r[4] = n; c->mRender->terrain(); c->game->ffspan.end("rwT_terrain");
-      }
-    }
+    // Enumeration+call moved to Render::terrainRenderAll() (submit.cpp) so Fps60's Tier-1 present-time
+    // camera-lerp re-render (fps60.cpp) runs the identical sequence, not a hand-duplicated copy.
+    terrainRenderAll();
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
     // Gated on mSceneTableTrusted (computed once, top of this function — see render.h for the writeup).
     if (mSceneTableTrusted) fieldEntityRender(0x800F2418u);

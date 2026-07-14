@@ -25,6 +25,15 @@ enum RqLayer { RQ_BACKGROUND = 0, RQ_WORLD = 1, RQ_OVERLAY = 2, RQ_HUD = 3 };
 // preserving the existing 2D depth semantics — the queue changes only the draw ORDER, not depth.
 enum RqOrderMode { RQ_OM_DEPTH = 0, RQ_OM_2D_BG = 1, RQ_OM_2D_FG = 2 };
 
+// Reserved dbg_node sentinel for TERRAIN prims (native_terrain.cpp, tagged via Render::diag.beginObject/
+// endObject around the quad-draw loop). Distinguishes them from the OTHER dbg_node==0 RQ_WORLD producer,
+// Render::fieldEntityRender (grass/props/"terrain props" — the SOP field-overlay SCENE TABLE walk, which
+// does NOT scope a beginObject and so is genuinely un-owned/dbg_node==0) — a real guest node pointer is
+// always inside the 2 MB main-RAM window (< 0x80200000), so this value can never collide with one.
+// Fps60::tier1Render (docs/fps60-rework.md "Object-tier attempt") re-renders ONLY literal terrain, not
+// the scene table, so its queue-lerp exclusion must key on THIS sentinel, not "dbg_node==0" generally.
+static constexpr uint32_t kTerrainDbgNode = 0xFFFF0001u;
+
 // One resolved drawable: a quad (two triangles) with its decoded material + real per-vertex depth. All
 // values are captured at enqueue time (after texpage/clut resolution + draw-offset/rounding) so flush is
 // independent of any GpuState mutated between enqueue and flush.

@@ -6,8 +6,9 @@
 // gated g_mods.fps60.
 #include "core.h"
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
-#include "render.h"   // class Render — sceneNative(); DisplayPassGuard (via render_mode.h)
+#include "render.h"   // class Render — sceneNative()/terrainRenderAll(); DisplayPassGuard (render_mode.h)
 #include "render_queue.h"
+#include "proj_params.h"   // ProjParams::Snapshot — save/restore around tier1Render's re-render
 #include "cfg.h"
 #include "mods.h"     // Mods (game->mods.fps60)
 #include "fs_util.h"  // Fs::ensureParentDirs — no hand-rolled mkdir
@@ -29,7 +30,7 @@ void gpu_pace_subframe(Core* core, int n);
 
 #define FPS60_RQ_MAX RQ_MAX
 
-Fps60::~Fps60() { delete[] mRqCur; delete[] mRqPrev; delete[] mRqLerp; }
+Fps60::~Fps60() { delete[] mRqCur; delete[] mRqPrev; delete[] mRqLerp; delete mSink; }
 
 // ---- logic-rate detector (validated lrate_proto) -----------------------------------------------------
 void Fps60::fold(uint32_t v) {
@@ -57,6 +58,14 @@ static void rate_tick(RateDet* d, uint64_t set_hash) {
 
 // ---- shared camera reader -------------------------------------------------------------------------------
 void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy, float& H) {
+  // TIER 1 override (fps60.h "Object-tier attempt 2026-07-14"): while present_vk's tier1Render() is
+  // re-invoking terrainRenderAll() at the interp present, hand back the LERPED camera instead of a guest
+  // read — no guest reads at present time, matching the fps60 present-time invariant.
+  if (mCamOverrideOn) {
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) R[i][j] = mCamOverride.R[i][j]; T[i] = mCamOverride.T[i]; }
+    ofx = mCamOverride.ofx; ofy = mCamOverride.ofy; H = mCamOverride.H;
+    return;
+  }
   // Read the scene camera from the scratchpad view matrix (CR0-4 halfword packing @ SCR+0xF8; translation
   // @ SCR+0x10C) + the projection constants (CR24 OFX / CR25 OFY 16.16 / CR26 H). R is the RAW int16 rows
   // (undivided — the convention projComposeCore/projComposeCamera consume). This is the ONE camera reader
@@ -74,6 +83,62 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
   ofy = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
   H   = (float)(uint16_t)gte_read_ctrl(26);
+  // TIER 1 capture: this is a REAL-frame call (mCamOverrideOn is false) — mirror it into mCamCur, the slot
+  // that present_vk's end-of-frame swap rotates in lockstep with mRqCur/mRqPrev. Every sceneCam() call this
+  // logic frame reads the same unchanged guest camera, so overwriting on every call is idempotent.
+  if (game->mods.fps60) {
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamCur.R[i][j] = R[i][j]; mCamCur.T[i] = T[i]; }
+    mCamCur.ofx = ofx; mCamCur.ofy = ofy; mCamCur.H = H;
+  }
+}
+
+// ---- TIER 1: camera-lerp native world (terrain) re-render (docs/fps60-rework.md "Object-tier attempt") -
+// Re-runs Render::terrainRenderAll() — the SAME enumeration+draw sequence the real per-logic-frame walk
+// uses (submit.cpp/render_walk.cpp) — under lerp(mCamPrev, mCamCur, t) instead of a guest camera read
+// (sceneCam's mCamOverrideOn branch), with its drawWorldQuad output redirected into the isolated `mSink`
+// (Game::rqRedirect; native_terrain.cpp checks it) instead of the live `game->rq`.
+//
+// INVARIANT (load-bearing, see fps60.h): present_vk runs from Engine::frameUpdate, which native_boot.cpp
+// calls BEFORE this iteration's pcSched.step() and drawOTag — so no logic tick for "this" iteration has
+// run yet, and terrainRenderAll() re-reads the exact guest state the real terrain call already read this
+// interval. Host-computed matrices only (the lerped camera above); DisplayPassGuard aborts on any guest
+// write, exactly like the real display pass. Per-Core shared render state incidentally touched by the
+// re-render (ProjParams' published camview + H/OFX/OFY) is snapshotted and restored so nothing else ever
+// observes the lerped camera.
+void Fps60::tier1Render(Core* core, float t) {
+  Core* c = core;
+  if (!mSink) mSink = new RenderQueue();
+  mSink->reset();
+
+  Fps60Cam lerp;
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) lerp.R[i][j] = mCamPrev.R[i][j] + (mCamCur.R[i][j] - mCamPrev.R[i][j]) * t;
+    lerp.T[i] = mCamPrev.T[i] + (mCamCur.T[i] - mCamPrev.T[i]) * t;
+  }
+  lerp.ofx = mCamPrev.ofx + (mCamCur.ofx - mCamPrev.ofx) * t;
+  lerp.ofy = mCamPrev.ofy + (mCamCur.ofy - mCamPrev.ofy) * t;
+  lerp.H   = mCamPrev.H   + (mCamCur.H   - mCamPrev.H)   * t;
+  mCamOverride = lerp;
+  if (cfg_dbg("terrpc"))
+    fprintf(stderr, "[tier1dbg] t=%.3f cur.T=(%.1f,%.1f,%.1f) prev.T=(%.1f,%.1f,%.1f) lerp.T=(%.1f,%.1f,%.1f) "
+                     "cur.H=%.1f prev.H=%.1f lerp.H=%.1f ofx=%.1f ofy=%.1f\n",
+            t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
+            lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
+
+  ProjParams::Snapshot projSaved = c->mRender->projParams.snapshot();
+  RenderQueue* prevRedirect = c->game->rqRedirect;
+  c->game->rqRedirect = mSink;
+  mCamOverrideOn = true;
+  {
+    DisplayPassGuard displayPass(c->mRender->mode);   // FAIL-FAST: abort on any guest write, real-path discipline
+    c->mRender->terrainRenderAll();
+  }
+  mCamOverrideOn = false;
+  c->game->rqRedirect = prevRedirect;
+  c->mRender->projParams.restore(projSaved);
+
+  mSink->sortQueue();
+  mTier1PrimsThisFrame = mSink->n;
 }
 
 // ---- STAGE 2: prim matching + lerp (docs/fps60-rework.md "Match+lerp stage") ---------------------------
@@ -142,10 +207,24 @@ static RqItem lerpItem(const RqItem& a, const RqItem& b, float t) {
 // provenance: terrain/static/background prims, or a billboard the OT walk couldn't stamp) gets the "no
 // node" sentinel — those are matched separately, by fingerprint + order-of-appearance (key strength 3).
 static constexpr uint32_t kNoNode = 0xFFFFFFFFu;
+// TIER 1 EXCLUSION RULE (fps60.h "Object-tier attempt"): RQ_WORLD prims tagged kTerrainDbgNode
+// (render_queue.h) are EXACTLY the prims Fps60::tier1Render re-renders (native_terrain.cpp tags them via
+// Render::diag.beginObject(kTerrainDbgNode)/endObject around its quad loop — BOTH the real per-logic-frame
+// call and tier1Render's present-time re-invocation go through the same terrain() body, so both tag
+// identically). NOT the same set as "dbg_node==0" — Render::fieldEntityRender (the SOP field-overlay
+// SCENE TABLE walk: grass/terrain props) is the OTHER dbg_node==0 RQ_WORLD producer and is genuinely
+// un-owned by any tier yet (still queue-lerped); conflating the two was tried and produced a visible bug
+// (grass vanishing from slot A, verified via scratch/check_tier1.py before this fix — every terrain-bbox
+// pixel differed from the real neighbor because the ground behind the semi terrain quad had been excluded
+// along with it). Give kTerrainDbgNode items their own sentinel so they never enter the queue-lerp
+// match/replay at all — tier1Render's mSink draws them once, instead of matchAndLerp drawing them again.
+static constexpr uint32_t kTier1Sink = 0xFFFFFFFEu;
+static inline bool isTier1Owned(const RqItem& it) { return it.layer == RQ_WORLD && it.dbg_node == kTerrainDbgNode; }
 void Fps60::buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out) {
   out.resize((size_t)n);
   mNodeIdxScratch.clear();
   for (int i = 0; i < n; i++) {
+    if (isTier1Owned(items[i])) { out[i] = kTier1Sink; continue; }
     uint32_t node = items[i].dbg_node;
     if (!node) { out[i] = kNoNode; continue; }
     out[i] = mNodeIdxScratch[node]++;
@@ -168,10 +247,11 @@ void Fps60::matchAndLerp(Core*) {
   buildProvenanceIdx(B, nB, mIdxCurBuf);
 
   // Q[N] provenance lookup: (dbg_node, emission-index) -> item index. dbg_node==0 items are excluded here
-  // (handled by the fingerprint/order-of-appearance pass below).
+  // (handled by the fingerprint/order-of-appearance pass below); tier1-owned (kTier1Sink) items are
+  // excluded from the queue-lerp entirely (tier1Render draws them).
   mMatchMap.clear();
   for (int j = 0; j < nB; j++)
-    if (mIdxCurBuf[j] != kNoNode) mMatchMap[((uint64_t)B[j].dbg_node << 32) | mIdxCurBuf[j]] = j;
+    if (mIdxCurBuf[j] != kNoNode && mIdxCurBuf[j] != kTier1Sink) mMatchMap[((uint64_t)B[j].dbg_node << 32) | mIdxCurBuf[j]] = j;
 
   // dbg_node==0 groups, in each frame's own emission order, keyed by shape fingerprint.
   mZeroGroupsPrev.clear(); mZeroGroupsCur.clear();
@@ -183,7 +263,7 @@ void Fps60::matchAndLerp(Core*) {
 
   // Pass 1 (key strength 1+2): provenance-keyed prims, validated by fingerprint + color on every hit.
   for (int i = 0; i < nA; i++) {
-    if (mIdxPrevBuf[i] == kNoNode) continue;
+    if (mIdxPrevBuf[i] == kNoNode || mIdxPrevBuf[i] == kTier1Sink) continue;
     auto it = mMatchMap.find(((uint64_t)A[i].dbg_node << 32) | mIdxPrevBuf[i]);
     if (it == mMatchMap.end()) continue;                          // unmatched — draws as-is
     int j = it->second;
@@ -211,9 +291,11 @@ void Fps60::matchAndLerp(Core*) {
   // exempt (Pass 2 above already gated them on a whole-group count match).
   enforceNodeAtomicity(nA);
 
-  // Emit: walk Q[N-1] in its captured paint order. Matched -> lerp(A,B,t); unmatched -> A as-is.
+  // Emit: walk Q[N-1] in its captured paint order. Tier1-owned -> skip (mSink draws it); matched ->
+  // lerp(A,B,t); unmatched -> A as-is.
   mNLerp = 0;
   for (int i = 0; i < nA && mNLerp < FPS60_RQ_MAX; i++) {
+    if (mIdxPrevBuf[i] == kTier1Sink) continue;
     if (mMatchOfA[i] >= 0) { mRqLerp[mNLerp++] = lerpItem(A[i], B[mMatchOfA[i]], mT); mMatchedThisFrame++; }
     else                   { mRqLerp[mNLerp++] = A[i];                              mUnmatchedThisFrame++; }
   }
@@ -311,18 +393,53 @@ void Fps60::present_vk(Core* core) {
   RenderQueue& q = c->game->rq;
   if (mDbg < 0) mDbg = cfg_dbg("fps60") ? 1 : 0;
 
-  // ---- PASS 1 (slot A): lerp(Q[N-1], Q[N]) by matched prim, Q[N-1] as-is otherwise -----------------------
-  // First frame after enabling fps60 (no Q[N-1] captured yet, mHavePrev==0): degenerate to replaying THIS
-  // frame's own queue (Q[N] twice) rather than matching against an empty/garbage buffer — 30fps content at
-  // 60Hz pacing for exactly one frame, per the design doc's stage-1 first-frame case (still applies).
+  // Gate-B test knob (TEMPORARY, internal — see docs/config.md): PSXPORT_FPS60_TFORCE=0 pins the whole
+  // present (camera lerp + queue-prim lerp share mT) to Q[N-1]'s endpoint, =1 to Q[N]'s, so a run can be
+  // pixel-diffed against the adjacent real frame to prove tier1Render/matchAndLerp ARE the real path at
+  // the endpoints, not an approximation. Unset -> default 0.5 (the shipped midpoint).
+  int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
+  if (tforce == 0) mT = 0.0f; else if (tforce == 1) mT = 1.0f; else if (tforce < 0) mT = 0.5f;
+
+  // ---- PASS 1 (slot A): TIER 1 (terrain, camera-lerped, into mSink) + lerp(Q[N-1], Q[N]) by matched prim
+  // for everything tier1 doesn't own, Q[N-1] as-is otherwise -----------------------------------------------
+  // First frame after enabling fps60 (no Q[N-1]/mCamPrev captured yet, mHavePrev==0): degenerate to
+  // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than matching/lerping against
+  // an empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame (stage-1 first-frame case).
   const RqItem* slotA; int nSlotA;
-  if (mHavePrev) { matchAndLerp(c); slotA = mRqLerp; nSlotA = mNLerp; }
-  else           { slotA = mRqCur;  nSlotA = mNCur; }
-  for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
+  mTier1PrimsThisFrame = 0;
+  if (mHavePrev) {
+    tier1Render(c, mT);                 // fills mSink with the camera-lerped terrain re-render
+    matchAndLerp(c);                    // fills mRqLerp with everything else (tier1-owned prims excluded)
+    slotA = mRqLerp; nSlotA = mNLerp;
+    // Merge-emit mSink with mRqLerp by (layer, seq) — NOT sink-then-slotA. mSink is all RQ_WORLD, its own
+    // push()-assigned seq starting at 0 (terrain draws first among world items in the real per-logic-frame
+    // walk too — render_walk.cpp's sceneNative order is (a) TERRAIN, (b) SCENE TABLE, (c) OBJECTS, (d)
+    // TOMBA — so mSink's seq range is already the lowest within RQ_WORLD, same relative position as the
+    // real frame). mRqLerp is already (layer,seq)-sorted (matchAndLerp walks Q[N-1] in ITS captured paint
+    // order, which flush() sorted before capture). A naive sink-first-then-slotA emit order draws the
+    // (semi, submission-order-composited) terrain quad against an EMPTY framebuffer instead of behind the
+    // background it belongs behind — verified wrong via scratch/check_tier1.py before this fix (every
+    // terrain-bbox pixel differed at t=1 from the real neighbor).
+    int ia = 0, ib = 0;
+    while (ia < mSink->n || ib < nSlotA) {
+      bool takeSink;
+      if (ia >= mSink->n) takeSink = false;
+      else if (ib >= nSlotA) takeSink = true;
+      else {
+        const RqItem& sa = mSink->items[ia]; const RqItem& sb = slotA[ib];
+        takeSink = (sa.layer != sb.layer) ? (sa.layer < sb.layer) : (sa.seq <= sb.seq);
+      }
+      if (takeSink) q.emitItem(c, &mSink->items[ia++]);
+      else          q.emitItem(c, &slotA[ib++]);
+    }
+  } else {
+    slotA = mRqCur;  nSlotA = mNCur;
+    for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
+  }
   gpu_fps60_present_pass(c);
   dumpPresent(c, /*interp=*/true);
-  if (mDbg) fprintf(stderr, "[fps60] f%ld slotA: replay prev=%s n=%d\n",
-                    mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA);
+  if (mDbg) fprintf(stderr, "[fps60] f%ld slotA: replay prev=%s n=%d tier1=%ld t=%.3f\n",
+                    mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA, mTier1PrimsThisFrame, mT);
   gpu_pace_subframe(c, 2);
 
   // ---- PASS 2 (slot B): the real frame (the captured queue, exactly as drawOTag built it) ---------------
@@ -333,9 +450,13 @@ void Fps60::present_vk(Core* core) {
 
   // ---- rotate captures: POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) -------
   // mRqCur (just-drawn Q[N]) becomes next frame's mRqPrev; the buffer mRqPrev used to point at (now-stale,
-  // two-frames-old content that's never read again) becomes rq_capture's next overwrite target.
+  // two-frames-old content that's never read again) becomes rq_capture's next overwrite target. mCamCur/
+  // mCamPrev rotate in lockstep — mCamCur was written by THIS frame's own terrainRenderAll() calls (via
+  // sceneCam, during drawOTag, before this present_vk call — see the invariant in fps60.h) so it holds the
+  // SAME frame's camera mRqCur's terrain content came from.
   std::swap(mRqCur, mRqPrev);
   std::swap(mNCur, mNPrev);
+  std::swap(mCamCur, mCamPrev);
   mHavePrev = 1;
 }
 

@@ -162,3 +162,48 @@ here is why, and the concrete path for whoever picks this up:
   identity case rather than a generic transform capture.
 - Gate B (t=0/t=1 pixel-identical to the real neighbor) and the tier-1/2 coverage counts in gate C are
   UNVERIFIED — they require Tier 1/2 to exist. Do not claim them until built.
+
+## Tier 1 landed 2026-07-14 (terrain-only; Tier 2/object-transform still NOT built)
+
+Built the camera store + isolated sink + present-time re-render this attempt describes. `Fps60::mCamCur`/
+`mCamPrev` (fps60.h) capture every real `sceneCam()` call, rotated in lockstep with `mRqCur`/`mRqPrev`.
+`Fps60::tier1Render` (fps60.cpp) re-runs `Render::terrainRenderAll()` (submit.cpp — the terrain-node scan
+extracted from render_walk.cpp's `sceneNative` so both the real call and this re-render use the identical
+sequence) under `lerp(mCamPrev, mCamCur, t)`, output redirected via `Game::rqRedirect` (game.h) into an
+isolated `RenderQueue* Fps60::mSink`, under `DisplayPassGuard` (aborts on any guest write — held clean in
+every test run). `native_terrain.cpp`'s draw call checks `rqRedirect` and targets it instead of the live
+`game->rq`. `ProjParams::Snapshot` (proj_params.h) saves/restores the per-Core published camview so nothing
+else observes the lerped camera.
+
+Two real bugs found and fixed during verification (both via `scratch/check_tier1.py`, the t-forced pixel
+gate — not by inspection):
+1. **Draw-order corruption**: emitting `mSink` before `slotA` drew the SEMI terrain quad against an empty
+   framebuffer instead of behind the background. Fixed with a proper `(layer,seq)` two-way merge before
+   emission (fps60.cpp present_vk) — `mSink`'s own seq range is naturally lowest within RQ_WORLD (terrain
+   draws first in the real walk too), so a straight merge reproduces the real paint order.
+2. **Over-broad exclusion**: `RQ_WORLD && dbg_node==0` is NOT "terrain" — `Render::fieldEntityRender` (the
+   SOP field-overlay SCENE TABLE walk: grass/terrain props) is the OTHER dbg_node==0 producer and is NOT
+   re-rendered by Tier 1. Excluding it from the queue-lerp alongside terrain made the ground vanish from
+   slot A. Fixed by tagging terrain with a reserved sentinel (`kTerrainDbgNode`, render_queue.h) via
+   `Render::diag.beginObject/endObject` around its quad loop, so the exclusion targets exactly what Tier 1
+   re-renders.
+
+Gate B (t-forced exactness, terrain bbox only — the full frame is not expected bit-identical at any t
+because unmatched queue-lerp prims draw from Q[N-1] regardless of t, by the pre-existing "Prim matching"
+design): t=1 vs the same present's real pass — 96.14% pixel-exact (868/22500 diff px over 20 pairs); t=0
+vs the previous real pass — 99.78% (46/21375). Residual is at the terrain/scene-table boundary (a few
+color units per channel, not full-scale) — cross-contamination from queue-lerp's own known ~85-90% match
+rate on the STILL-un-tiered scene-table/object geometry adjacent to the terrain edge, not a Tier-1 defect;
+confirmed independent of shadows (identical residual with `shadows=0`). NOT literally 100% — reported
+honestly, not rounded up.
+
+Gate D (`scratch/check_stage2.py`, same tree/windmill repro window, git-stash baseline vs after): static-
+identity violations 253/4489090 (0.0056%) baseline -> 385/4489090 (0.0086%) after Tier 1 — a small,
+measurable regression (still both classes "stage-2/3 grade", same order of magnitude; windmill region
+stayed 0/453120 both). Gate B (soft, moving-pixel midpoint compliance) unchanged: 95.6% both. Root cause
+of the small regression not further isolated this session (time-boxed) — plausibly the same boundary
+cross-contamination as the tier1 gate's residual, since both point at the terrain/scene-table seam.
+
+Coverage this session: TERRAIN ONLY. `fieldEntityRender` (grass/props) and the object/entity walk
+(`perObjFlush`) remain fully on the queue-lerp heuristic — Tier 2 (object-transform lerp) is the next step
+per this document's existing "Why Tier 2 isn't built" writeup, unchanged by this session.
