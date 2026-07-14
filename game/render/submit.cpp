@@ -225,6 +225,19 @@ void Render::submitPolyGt3Native(Core* c) {
     u[3] = u[2]; v[3] = v[2]; r[3] = r[2]; g[3] = g[2]; b[3] = b[2];
     int semi = (code & 0x02000000) ? 1 : 0;
     if (!semi) engine_shade_face(c, p, 3, r, g, b);             // engine-native lighting (opaque only)
+    if (cfg_dbg("eprojv")) {
+      static long objn = -1; uint32_t geomblk = c->mRender->diag.currentGeomblk();
+      if ((long)geomblk != objn) { objn = (long)geomblk;
+        const EObjXform& x = c->mRender->mActiveXform;
+        fprintf(stderr, "[eprojv] cmd=%08x R=[%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f] T=(%.2f,%.2f,%.2f) H=%.0f\n",
+          geomblk, (double)x.R[0][0],(double)x.R[0][1],(double)x.R[0][2],
+                   (double)x.R[1][0],(double)x.R[1][1],(double)x.R[1][2],
+                   (double)x.R[2][0],(double)x.R[2][1],(double)x.R[2][2],
+                   (double)x.T[0],(double)x.T[1],(double)x.T[2],(double)x.H); }
+      fprintf(stderr, "[eprojv] cmd=%08x gt3 idx=%u v0=(%.2f,%.2f,%.2f) v1=(%.2f,%.2f,%.2f) v2=(%.2f,%.2f,%.2f)\n",
+        geomblk, i, (double)px[0],(double)py[0],(double)depth[0], (double)px[1],(double)py[1],(double)depth[1],
+        (double)px[2],(double)py[2],(double)depth[2]);
+    }
     { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
       c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }
@@ -278,6 +291,12 @@ void Render::submitPolyGt4Native(Core* c) {
     }
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
     if (!semi) engine_shade_face(c, p, 4, r, g, b);             // engine-native lighting (opaque only)
+    if (cfg_dbg("eprojv")) {
+      uint32_t geomblk = c->mRender->diag.currentGeomblk();
+      fprintf(stderr, "[eprojv] cmd=%08x gt4 idx=%u v0=(%.2f,%.2f,%.2f) v1=(%.2f,%.2f,%.2f) v2=(%.2f,%.2f,%.2f) v3=(%.2f,%.2f,%.2f)\n",
+        geomblk, i, (double)px[0],(double)py[0],(double)depth[0], (double)px[1],(double)py[1],(double)depth[1],
+        (double)px[2],(double)py[2],(double)depth[2], (double)px[3],(double)py[3],(double)depth[3]);
+    }
     { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
       c->game->rq.drawWorldQuad(c, px, py, depth, u, v, r, g, b, tp, clut, semi, sv); }

@@ -96,7 +96,13 @@ engine_re.md "GAME stage state machine" · `silbbox` (dark-outline render-bug di
 `[vmt]`/`[gain2]` traces of `MusicCoord::voiceMixTick`'s ramp/smoother state (cur/tgt/g2cur/g2tgt) and
 every `setGain2` call, tagged `A(skip)`/`B(oracle)` + `Timing::logicFrame`; the tool for correlating the
 two SBS cores' CD-volume-ramp state directly instead of re-deriving it from the SPU-register write log —
-see docs/findings/audio.md "pc_skip vs oracle: SPU register stream divergences").
+see docs/findings/audio.md "pc_skip vs oracle: SPU register stream divergences") · `eprojv` (submit.cpp
+submitPolyGt3Native/Gt4Native — per-primitive FINAL screen-space vertex diag: once per changed geomblk
+logs the composed `EObjXform` R/T/H, then per GT3/GT4 primitive logs `[eprojv] cmd=<geomblk> gtN idx=<i>
+v0=(sx,sy,pz) v1=... v2=... [v3=...]` — the numeric vertex-level ground truth for bisecting a native
+pc_render mesh-orientation bug (bug #44) against the GTE-computed guest OT packet SXY for the same
+geomblk under `PSXPORT_GATE=1`, where the substrate still populates the OT/packet pool alongside
+pc_render's own float projection).
 
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames

@@ -1703,3 +1703,22 @@ draft was already byte-faithful.
   crossing between the PSX render path and pc_render — the historical class of leaks), with
   abcompare (docs/abcompare-design.md) as the instrument: same run, flip ONLY the renderer, diff.
 - The pc_skip-fork hypothesis in the entry above is FALSIFIED for this bug; kept for the record.
+
+## "Upside-down Tomba" in hooked-fish beat — FALSE ALARM + eprojv tool (2026-07-14, bug #44 closed)
+
+- **symptom (reported then falsified):** row-6 evidence pass flagged Tomba's caught-fish sprite as
+  upside-down under pc_render at ~f1370 vs the oracle's "upright" rendering.
+- **dead end / lesson:** the comparison was RAW-FRAME-matched across configs with a 12-14 frame exec
+  lag (GATE lags default); Tomba swings on the fishing hook, so shots a dozen frames apart show
+  opposite orientations. Exec-aligned same-frame A/B (single deterministic GATE run per renderer,
+  `newgame; run 1373`) shows an IDENTICAL pose: scratch/screenshots/bug44_ab_{pc,psx}.png. The only
+  real diff in the pair is bug #34's missing dialog panel. **Cross-config visual comparisons must be
+  state/beat-aligned, never raw-frame-matched** (same rule as MODE=skip pane alignment).
+- **positive by-product — `eprojv` diag channel (game/render/submit.cpp, docs/config.md):** dumps the
+  composed EObjXform R/T/H per object + final screen-space verts per GT3/GT4 primitive. Fitted against
+  the same-run guest OT packet SXY (GATE=1 + pc_render: substrate populates the OT with GTE-computed
+  packets while pc_render computes its own floats — one run yields both vertex sets): all 13 rig
+  primitives matched under IDENTITY at shift 0 with 0.46-0.94 px RMS. **The native mesh projection
+  pipeline (projComposeObject → EObjXform::project → submitPolyGt3/Gt4Native) is pixel-exact vs the
+  GTE for this scene — do not re-investigate it for orientation/position symptoms.** Decoder scripts:
+  scratch/bug44_decode_ot.py, scratch/bug44_fit_transform.py.
