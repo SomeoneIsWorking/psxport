@@ -258,6 +258,8 @@ void games_tomba2_init(void) {
   render_walk_dispatch_install();  // FUN_8003C048 render-walk loop ownership (band 0x8003xxxx)
   void overlay_type_dispatch_install();
   overlay_type_dispatch_install();  // FUN_8003D0BC per-area-type overlay dispatch (band 0x8003xxxx)
+  void objlist_walk_install();
+  objlist_walk_install();      // FUN_8003BB50/BCF4/BED8/BF00/EEC0 object-list walkers (band 0x8003xxxx)
   void gpu_dma_queue_install();
   gpu_dma_queue_install();     // FUN_80082D04/FB4/83364/82424 GPU-DMA completion-queue cluster
   void gpu_libgpu_leaves_install();

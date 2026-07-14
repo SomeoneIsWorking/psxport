@@ -265,6 +265,20 @@ public:
   // control flow, dead-code note). Guest ABI: a0(r4)=rectPtr, a1(r5)=srcPtr; ret v0.
   void gpuLoadImageStream();  // FUN_80082734(rectPtr,srcPtr) -> -1 timeout/empty, else 0
 
+  // ---- SUBSTRATE MIRROR: the 4 still-substrate OBJECT-LIST WALKERS reached from FUN_8003F9A8's
+  // field-frame draw dispatcher (docs/findings/render.md "0x8003F9A8 474-prim attribution resolved") --
+  // no args (guest ABI: none read), each walks a fixed object-pointer list/array, dispatching each live
+  // entry's TYPE byte through a table to one of: the already-owned perObjRenderDispatch/
+  // billboardCompose1/billboardCompose2 (this file's siblings), a handful of still-substrate leaves
+  // (called as plain func_XXXX(c), matching gen), or a per-object vtable slot (rec_dispatch, per
+  // CLAUDE.md — never dropped). See game/render/objlist_walk.cpp for the full RE (per-function
+  // scratchpad cursor layout, jump-table addresses, case-label maps).
+  void objListWalk1();          // FUN_8003BB50 — list @0x800F2410, cursor 0x1F80013C/146
+  void objListWalk2();          // FUN_8003BCF4 — list @0x800F26C8, cursor 0x1F800148/152 (1st entry only)
+  void objListWalk2Continue();  // FUN_8003BED8 — shared tail: continues objListWalk2's SAME guest frame
+  void objListWalk3();          // FUN_8003BF00 — list @0x800F2738 (positional array), cursor 0x1F800154/15E
+  void objListWalk4();          // FUN_8003EEC0 — list head *0x800F2738 (linked via node+0x24 "next")
+
 private:
   // Native POLY_GT3/GT4 submitters (guest-ABI bodies: rec/otbase/count in r4/r5/r6).
   static void submitPolyGt3Native(Core* c);   // gen_func_8007FDB0

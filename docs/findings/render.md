@@ -1769,7 +1769,48 @@ draft was already byte-faithful.
 - Decomps: scratch/decomp/otattr_subs.c, otattr_leaf{,2}.c, otattr_f698.c; Ghidra project
   scratch/ghidra/otattr_census.
 
+<<<<<<< ours
 ## 0x8013CDD4 port — ambiguity SETTLED (2026-07-14): load-bearing field reuse, port unblocked
+=======
+### RESOLVED — 4 walkers OWNED native (2026-07-15, game/render/objlist_walk.cpp)
+
+- **status:** all 4 walkers (+ the FUN_8003BED8 shared-tail split of BCF4) ported as `Render::
+  objListWalk1..4` + `objListWalk2Continue`, wired via `engine_set_override_main` (oracle-gated; core B
+  stays pure gen). SBS-full AUTONAV 300s = **0-diff through f21390** (0 sbs-div, 0 differ checkpoints).
+- **walker map:** BB50=objListWalk1 (-40 frame, spills r16/17/18/19/ra; list@0x800F2410, cursor
+  0x1F80013C/146, table 0x80014A70, 144-entry); BCF4=objListWalk2 (-40, r16..r20/ra; @0x800F26C8,
+  0x1F800148/152, table 0x80014CB0, 33-entry) — MANUAL frame push, pop deferred to objListWalk2Continue
+  (=FUN_8003BED8, an independently guest-reachable "continue the walk" trampoline that OTHER substrate
+  leaves tail-call, so owned at its own address); BF00=objListWalk3 (-32, r16/17/18/ra; @0x800F2738,
+  0x1F800154/15E, table 0x80014D38, 32-entry); EEC0=objListWalk4 (-32, r16/17/18/ra; node+0x24-linked
+  chain head *0x800F2738, table 0x80015000, 33-entry). Case-0/0xF → perObjRenderDispatch; per-object
+  vtable slots (cmd+0x7C / cmd+0x18 / cmd+0x24 / cmd+0x7C) → rec_dispatch (never dropped).
+- **two real bugs found + fixed (both via bisected SBS, baseline forced-gen = 0-diff):** (1) BB50's
+  case-value 0x8003BCB4 (Ghidra case 0x16, vtable+0x7C without the preceding billboardCompose1) is a
+  SEPARATE directly-reachable switch target, not merely 0x8003BCAC's fallthrough tail — omitting it sent
+  those objects to the `default:` early-return, aborting the walk (massive packet_pool divergence from
+  f180). (2) register-faithfulness: BCF4/BED8's rec_dispatch targets read the object ptr from **r16**
+  (gen never sets r4 for them, unlike BB50/BF00/EEC0 whose cases do) AND every walker keeps its loop
+  state (cursor/count/table-base) LIVE in the real callee-saved regs — a downstream substrate leaf
+  spills gen's r19=0x80014A70 (BB50 table base) that native left as stale 0 (SBS diff 0x801FE8C4/E4,
+  f119..f156). Fix = mirror the live registers in c->r[] (r16=obj, r17=count, r18=cursor, r19=table for
+  BB50; analogous for BF00/EEC0/BCF4), not C++ locals.
+- **otattr proof (field f405):** attribution byte-IDENTICAL native-owned vs forced-gen baseline (caller
+  counts 621×0x8003F9A8 / 161×0x8003BDAC / 129×0 / 18×0x8003CCA4 — exact match). The walker-chain
+  per-object provenance (caller=0x8003BDAC = the BCF4-table's perObjRenderDispatch case
+  `gen_func_8003BDAC → func_8003CCA4 → func_8003BED8`; caller=0x8003CCA4) is REPRODUCED exactly; emitter
+  leaves fn=0x80146478 (227, OverlayGt3Gt4), fn=0x801401B8 (221, OverlayGroundGt3Gt4::entityLoop),
+  fn=0x80115598 (353, backdrop). No hidden emitter — confirmed. Residual fn=0x8003F9A8 spans = the
+  backdrop / overlayTypeDispatch path (reached as a plain call from 0x8003F9A8, not the walkers).
+- **render:** default free-roam + fps60=1 shot PIXEL-IDENTICAL to forced-gen baseline (md5 match, 0/230415
+  byte diffs) — no visual regression (expected: walkers write only guest RAM, mirrored byte-exact).
+- **port_check caveat:** reports FAIL on all 4 (coarse call-sequence normalizer) — owned sibling methods
+  (perObjRenderDispatch/billboardCompose1/2) appear as unmappable `None` targets not `func_XXXX`, and
+  objListWalk2's frame-close lives in the split-off objListWalk2Continue. Same known limitation as
+  perobj_dispatch.cpp::cmdListDispatch. SBS-full 0-diff is the authoritative equivalence gate.
+
+## 0x8013CDD4 port attempt — STOPPED at a real field-semantics ambiguity (2026-07-14, correct stop)
+>>>>>>> theirs
 
 - Hookable cleanly: a00 overlay rec_dispatch leaf (ov_a00_disp.c case 0x0013CDD4, override slot 451,
   engine_set_override_a00) — no higher dispatcher needed. Packet = 13-word GT4, pool 0x800BF544,
