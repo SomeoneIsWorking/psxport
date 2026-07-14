@@ -1770,3 +1770,17 @@ draft was already byte-faithful.
   later-129/131), reached via the walkers' per-object vtable slots — NOT part of the gt3/gt4 chain.
 - Decomps: scratch/decomp/otattr_subs.c, otattr_leaf{,2}.c, otattr_f698.c; Ghidra project
   scratch/ghidra/otattr_census.
+
+## 0x8013CDD4 port attempt — STOPPED at a real field-semantics ambiguity (2026-07-14, correct stop)
+
+- Hookable cleanly: a00 overlay rec_dispatch leaf (ov_a00_disp.c case 0x0013CDD4, override slot 451,
+  engine_set_override_a00) — no higher dispatcher needed. Packet = 13-word GT4, pool 0x800BF544,
+  same layout as OverlayGt3Gt4::gt4. Vertices = signed bytes at record offsets (pb-2/0, pb-15, ...)
+  <<8 through RTPT + RTPS(V3) + AVSZ4 (generated/ov_a00_shard_1.c:25528-25899, ground truth).
+- **STOP CONDITION (unresolved, do NOT guess):** all four per-vertex fog-clamp blocks read their fog
+  input from the SAME byte mem_r8(r8+0) — the byte also used as V0.y. Either a load-bearing
+  field-reuse the port must replicate, or pb+0 isn't V0.y at all. Settle by fresh targeted Ghidra
+  pass + live watch of pb+0 and param_1+0x56 (otattr watch/who works for this) BEFORE writing the
+  native color math. No code was written — correct per no-bandaids.
+- Priority per the 0x8003F9A8 resolution above: the 4 substrate list-walkers port FIRST; 8013CDD4
+  stays under the widescreen-margin debt (journal later-129/131).
