@@ -1563,3 +1563,19 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   pane B @f500 vs standalone ORACLE @f502 = 0.00%; pane A at the known 1.35% pc_render floor.
   Windowed wide panes = USER eyeball (headless AUTO resolves 4:3, so the wide leg can't be
   machine-checked headless).
+
+## SBS self-surfacing sweep 2026-07-15 — pc_faithful CLEAN; pc_skip audio-init fork diverges
+- **MODE=full (pc_faithful byte-exact): 0-diff on every route tried** — all 6 committed replays,
+  PSXPORT_SBS_AUTONAV=combat (f23340), and extended AUTO_SKIP to f57390 (2x the prior ~f30k baseline).
+  Job #1's faithful path has no low-hanging divergence on drivable routes.
+- **MODE=skip (pc_skip vs oracle — the DEFAULT config the user plays) diverges early, all AUDIO:**
+  (1) f2 SPU RAM @0x1020 (VAB banks): oracle has bank data by f2, pc_skip still zero — the pc_skip
+  one-shot audio/VAB load lands SPU RAM on a different frame than the faithful multi-step load
+  (also the f0 527-byte RAM diff 0x801FE7C0.. is the same boot-order gap). (2) f462 area-FX audio
+  pointer @0x800A4F7E / @0x8014C124 — per-area SFX state disagrees. Both = the pc_skip AUDIO-init /
+  area-SFX fork, not pc_faithful, not render. (The 80-88% MODE=skip renderdiff is pc_render vs
+  psx_render by design, not a state bug.)
+- **STRATEGIC:** the f2 gap is what forces PSXPORT_SBS_SKIP_CONTINUE=1 to run MODE=skip at all —
+  fixing the pc_skip audio-init fork UNBLOCKS MODE=skip as a clean self-surfacing oracle for the
+  user-facing (pc_skip) bugs. Next high-value thread. Root-cause f2 first (upstream of f462).
+- Logs: scratch/logs/sbs{1..9}*.log.
