@@ -6,7 +6,7 @@
 // generic GT3/GT4 submit the per-object flush calls).
 #pragma once
 #include "core.h"
-#include "mods.h"   // g_mods (objid/debug-ids gate for the fps60 billboard recorder)
+#include "mods.h"   // g_mods
 #include "cfg.h"    // cfg_dbg
 #include <stdio.h>  // sil_bbox_log diag fprintf
 
@@ -26,7 +26,7 @@ float proj_obj_center_ord(void);
 // dispatch in the native render walk; PER-INSTANCE identity for every prim an object emits, incl.
 // billboards rasterized later at the OT walk).
 #include "render.h"    // Render (needed for cur_render_node below)
-#include "game.h"      // c->game->fps60 (billboard-span recorder), c->game->oracle
+#include "game.h"      // c->game->oracle
 #include "pkt_span.h"  // PktSpanSession (withDepthTag below)
 
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
@@ -48,12 +48,6 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
   return proj_obj_center_ord();
 }
 
-// fps60: record the billboard entry (span + identity + world anchor position) mirroring a just-published
-// gpu_obj_depth_add(span, node-depth). Reads node+46/50/54 for the world anchor — needs Core*.
-static inline void fps60_bb_node(Core* c, uint32_t lo, uint32_t hi, uint32_t node) {
-  if (c->game->mods.fps60 || c->game->mods.debug_ids || cfg_dbg("objid")) c->game->fps60.recordBillboardSpan(c, lo, hi, node);
-}
-
 // Guest-transparent depth-tag wrap (RenderObserver's obs_body, folded in): PSXPORT_ORACLE runs `body`
 // pure (core B / psx_fallback stays the untouched reference), everyone else opens a nested
 // PktSpanSession around `body` and tags the packet span it emits with the object's PC-native world
@@ -70,7 +64,6 @@ static inline void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
   if (sess.close(&slo, &shi)) {
     float od = obj_world_ord(c, node);
     gpu_obj_depth_add(c, slo, shi, od);
-    fps60_bb_node(c, slo, shi, node);
   }
   c->mRender->diag.endObject();
 }

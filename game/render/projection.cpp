@@ -37,10 +37,8 @@ static inline int16_t r16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 // (projComposeObjectHost). Camera state (Rcam/Tcam/ofx/ofy/H) is always read from scratchpad/GTE ctrl —
 // the camera itself is never stale.
 static void projComposeCore(Core* c, const float Robj[3][3], const float Tobj[3], EObjXform* out) {
-  // Scene camera (Rcam int16 rows, Tcam raw view units, OFX/OFY/H) read through the fps60 provider. When
-  // fps60 is off this is a plain read of the scratchpad view matrix + CR24-26 (byte-identical to the old
-  // inline read); during the 60fps mid-present it returns the (prev,cur) MIDPOINT camera so the object
-  // pans through the interpolated camera. It also CAPTURES this frame's camera host-side.
+  // Scene camera (Rcam int16 rows, Tcam raw view units, OFX/OFY/H): a plain read of the scratchpad view
+  // matrix + CR24-26 through the shared Fps60::sceneCam choke (see fps60.cpp).
   float Rcam[3][3], Tcam[3], ofx, ofy, H;
   c->game->fps60.sceneCam(c, Rcam, Tcam, ofx, ofy, H);
 
@@ -68,10 +66,6 @@ void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
   // object world position Tobj from cmd+0x2C/0x30/0x34.
   float Tobj[3] = { (float)r16(c, cmd + 0x2C), (float)r16(c, cmd + 0x30), (float)r16(c, cmd + 0x34) };
 
-  // fps60 TRUE per-object tier: capture this object's world transform (keyed by cmd) and, during the 60fps
-  // mid-present, replace Robj/Tobj with the (prev,cur) midpoint so the object tweens through the real
-  // projection. No-op / no capture when fps60 is off — Robj/Tobj pass through unchanged.
-  c->game->fps60.objXform(cmd, Robj, Tobj);
   projComposeCore(c, Robj, Tobj, out);
   if (cfg_dbg("eproj")) { static long n = 0; if (n++ % 240 == 0)
     fprintf(stderr, "[eproj] native compose #%ld cmd=%08x Tview=(%.0f,%.0f,%.0f) H=%.0f\n",
@@ -85,15 +79,12 @@ void Render::projComposeObjectHost(const float Robj[3][3], const float Tobj[3], 
 void Render::projComposeCamera(EObjXform* out) {
   Core* c = mCore;
   // The field's entity (scene-table) verts are already world-space, so view = Rcam·world + Tcam and the
-  // composed rotation IS the camera rotation. Read it through the fps60 provider (Rcam int16 rows) so the
-  // scene table pans through the interpolated camera during the 60fps mid-present. Identical to the old
-  // inline scratchpad read when fps60 is off.
+  // composed rotation IS the camera rotation. Read through the shared Fps60::sceneCam choke.
   c->game->fps60.sceneCam(c, out->R, out->T, out->ofx, out->ofy, out->H);
 }
 
 void EObjXform::project(int vx, int vy, int vz, ProjVtx* out) const {
   const float V0 = (float)(int16_t)vx, V1 = (float)(int16_t)vy, V2 = (float)(int16_t)vz;
-  out->mx = (int16_t)vx; out->my = (int16_t)vy; out->mz = (int16_t)vz;   // model coords (fps60 reproj input)
   // view = R·V + T  (R in 1.3.12 scale, so divide the rotate product by 4096; T is raw view units).
   double view[3], vz_raw = 0;
   for (int i = 0; i < 3; i++) {

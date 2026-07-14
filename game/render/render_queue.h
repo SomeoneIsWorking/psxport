@@ -49,23 +49,10 @@ struct RqItem {
   int      da_x0, da_y0, da_x1, da_y1;                // draw-area clip
   int      tp_blend;                                  // semi blend mode
 
-  // ---- fps60 TRUE per-object interpolation (host-only; never guest RAM, no lockstep-diff effect) ----
-  // fps_scene: 1 = this prim was produced by the READ-ONLY native scene render (Render::sceneNative:
-  //   terrain / per-object meshes / backdrop), armed via Fps60::mSceneTag around the sceneNative() call in
-  //   Engine::drawOTag. 0 = an OT-walk prim (2D / HUD / billboard). The mid-present REBUILDS the fps_scene
-  //   prims fresh at the interpolated transform (re-running sceneNative) and RE-EMITS the fps_scene=0 prims.
-  uint8_t  fps_scene;
-  // 3D-POSITIONED 2D QUAD (billboard): a screen-aligned sprite anchored at a 3D WORLD point, emitted by the
-  // guest into the OT and picked up at the deferred OT walk (gpu_native.cpp) as an RQ_WORLD/RQ_OM_DEPTH
-  // item. It is NOT a projection of model verts, so it cannot be per-vertex re-projected like a mesh; the
-  // OT walk stamps it (Fps60::stampBillboard) with its object IDENTITY (fps_key) + captured WORLD anchor
-  // position (fps_wpos, from node+46/50/54). The mid-present re-projects that anchor through the real
-  // projection at the interpolated (prev,cur) world position + interpolated camera and translates the quad.
-  uint8_t  fps_anchor;     // 1 = 3D-positioned 2D quad (billboard): re-project the world anchor at midpoint
-  uint32_t fps_key;        // cross-frame billboard identity (object node ptr; 0 = not a tracked billboard)
-  float    fps_wpos[3];    // billboard object WORLD position (node+46/50/54) — the anchor to project
-  uint32_t dbg_node;       // DEBUG (objid overlay): the per-instance ENTITY NODE ptr this prim belongs to
-                           // (0 = unknown). Its model id (node+0xe & 0x3fff) is the GAME object id we display.
+  // dbg_node: the per-instance ENTITY NODE ptr this prim belongs to (0 = unknown/un-owned). Doubles as the
+  // objid overlay's display identity AND Fps60::matchAndLerp's primary provenance-match key (paired with
+  // the prim's emission index within that node) — docs/fps60-rework.md "Prim matching".
+  uint32_t dbg_node;
 
   // ---- dynamic-shadow capture (host-only) ----------------------------------------------------------
   // Opaque world prims cast into the shadow map. The shadow GEOMETRY is part of THE FRAME (the queue),

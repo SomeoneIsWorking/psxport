@@ -22,7 +22,7 @@
 #include "render.h"
 #include "cfg.h"                // oracle_mode() — the observer is inert in the pure PSX oracle
 #include "pkt_span.h"
-#include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add / fps60_bb_node
+#include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add
 
 // OverrideFn is typedef'd in core.h. shard_set_override (generated/shard_disp.c) has C++ linkage.
 void shard_set_override(uint32_t addr, OverrideFn fn);
@@ -48,7 +48,6 @@ static void obs_body(Core* c, void (*gen)(Core*)) {
   if (sess.close(&slo, &shi)) {
     float od = obj_world_ord(c, node);
     gpu_obj_depth_add(c, slo, shi, od);
-    fps60_bb_node(c, slo, shi, node);
   }
   c->mRender->diag.endObject();
 }

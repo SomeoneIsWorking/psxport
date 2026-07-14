@@ -771,8 +771,6 @@ void GpuState::gp0_exec(Core* core) {
         if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
       fade_note(mr, mg, mb, s_off_y, semi); fade_note_size(xmx-xmn, ymx-ymn, semi);
       if (semi) semi_dump("poly", s_tp_blend, mr, mg, mb, xmn, ymn, xmx, ymx, s_off_y); }
-    // fps60 object-join GTE-grid tap removed (2026-07-08): fed only the never-read mJoinHit/Miss
-    // metric; the 60fps reproject matches natively on fps_key + the node-span billboard registry.
     // VK backend (M5): tee polys to the GPU rasterizer in absolute VRAM coords. Opaque textured/
     // untextured -> opaque batch; semi -> semi batch (mode 3 = untextured flat). VK owns these now.
     if (vk_path()) {
@@ -786,7 +784,7 @@ void GpuState::gp0_exec(Core* core) {
       // 3D world geometry -> carries real per-vertex view-Z (D32 occlusion); otherwise it is a 2D element
       // -> a backdrop (FAR band) or HUD (near band) by screen coverage.
       int use_rq = rq_active();                  // engine render queue owns ordering (PSXPORT_RQ)
-      float dep[4]; int is3d = 0, bg = 0, billboard = 0;   // billboard = a 2D prim that got obj_depth (fps60 anchor)
+      float dep[4]; int is3d = 0, bg = 0, billboard = 0;   // billboard = a 2D prim that got obj_depth (world-position occlusion)
       int fade_full = 0;                         // full-screen SEMI overlay (fade/dim) -> stretch-to-fill, stay on top (#21)
       {
         float proj_pz_to_ord(float);
@@ -913,10 +911,6 @@ void GpuState::gp0_exec(Core* core) {
         core->game->rq.emitOrQueue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        // fps60: a 2D billboard prim (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
-        // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
-        // UI-span polys are screen-space, not object-anchored, so they never stamp a billboard.
-        if (billboard && !ui) core->game->fps60.stampBillboard(core, s_cur_node);
         }
       } else {
       gpu_gpu_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
@@ -1094,9 +1088,6 @@ void GpuState::gp0_exec(Core* core) {
         core->game->rq.emitOrQueue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        // fps60: a 2D billboard sprite (obj_depth-tagged) gets stamped here, at queue time, as an anchor-
-        // reproject billboard keyed on its object's identity (node→span lookup) — no build_lerp pre-pass.
-        if (objz) core->game->fps60.stampBillboard(core, s_cur_node);
         }
       } else {
       gpu_gpu_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)

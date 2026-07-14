@@ -93,10 +93,6 @@ static void render_bg_tilemap_native(Core* c, uint32_t t4) {
   int mapbytes  = rowstride * H;                  // s3 — total map bytes (wrap modulus)
   int scrollX = c->mem_r16s(t4 + 0x28);
   int scrollY = c->mem_r16s(t4 + 0x2a);
-  // fps60 TRUE per-object tier: capture the backdrop scroll and, during the 60fps mid-present, use the
-  // (prev,cur) MIDPOINT so the parallax backdrop pans smoothly WITH the interpolated camera/world instead
-  // of snapping to frame B. No-op / no capture when fps60 is off (byte-identical 30fps backdrop).
-  c->game->fps60.bgScroll(scrollX, scrollY);
   uint32_t map      = c->mem_r32(t4 + 0x14);
   uint16_t tpage    = c->mem_r16(t4 + 0x04);
   uint16_t clutbase = c->mem_r16(t4 + 0x06);
@@ -159,10 +155,6 @@ void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
   c->mRender->stats.snObjs = c->mRender->stats.snCmds = 0;
-  // fps60 TRUE per-object tier: begin this frame's transform capture (clears the per-frame object/camera/
-  // scroll maps). No-op when fps60 is off. sceneNative is re-run once more by the 60fps mid-present with
-  // the interp provider armed — beginCapture re-clears there too (re-capture is idempotent this frame).
-  c->game->fps60.beginCapture();
   // AREA-SCOPED CACHE trust latches (see render.h mSceneTableTrusted/mBackdropTrusted) — shared edge
   // detector, computed once per frame. Both SCENE_ENT_TABLE (0x800F2418) and PARALLAX_BG_SM
   // (0x800ED018, the backdrop tilemap struct below) go stale for a few ticks right when SOP narration
@@ -181,10 +173,9 @@ void Render::sceneNative() { Core* c = mCore;
   // that ends the whole cutscene — not per-beat), so `sm4a==0 && sm4c==0` is "SOP genuinely still
   // owns this tick" without false-negatives across the narration's own beats.
   // The trust-latch EDGE DETECTOR is a once-per-frame state machine (mAreaCacheWasNarration is toggled by
-  // the narration→field handoff edge). The fps60 mid-present re-runs sceneNative a second time on the SAME
-  // guest state — re-running the edge detector would double-toggle it and corrupt the latch. So mutate the
-  // latches only on the REAL pass; the mid-present just READS the latch values the real pass already set.
-  if (!c->game->fps60.mInterp) {
+  // the narration→field handoff edge). sceneNative runs exactly once per real logic frame (fps60 no longer
+  // re-runs it for the in-between — docs/fps60-rework.md), so this always mutates the REAL frame's latches.
+  {
     uint16_t sm4a = c->mem_r16(0x801fe04au), sm4c = c->mem_r16(0x801fe04cu);
     bool sop_narration_now = (sm4a == 0) && (sm4c == 0);
     if (sop_narration_now) {

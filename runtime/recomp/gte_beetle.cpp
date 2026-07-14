@@ -190,7 +190,6 @@ void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
     { (int16_t)c3,        (int16_t)(c3 >> 16), (int16_t)c4 } };
   const int64_t TR[3] = { (int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7) };
   const int32_t V[3] = { (int16_t)vx, (int16_t)vy, (int16_t)vz };
-  out->mx = V[0]; out->my = V[1]; out->mz = V[2];          // model coords (fps60 reprojection input)
   int32_t mac[3]; int64_t tmp2_unshifted = 0;
   for (int i = 0; i < 3; i++) {
     int64_t t = TR[i] << 12;
@@ -246,28 +245,6 @@ float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); ret
 // free-function bridges (camview_publish/valid, proj_camview_world_ord/screen) live in proj_params.cpp;
 // this side keeps only the one that has to consult the GTE control regs (which are per-instance too but
 // reached via gte_read_ctrl below, not through ProjParams).
-
-// fps60 midpoint reprojection (engine/fps60.cpp): project up to 4 MODEL verts through an EXPLICIT composed
-// transform `cr` (CR0-4 rotation, CR5-7 translation — the A/B-midpoint of an actor's transform), returning
-// float screen px/py + view-Z pz per vertex. The live CR0-7 are saved and restored, so this is a pure host
-// query (no guest state, no GTE side effects) usable mid-frame at present time. CR24-26 (OFX/OFY/H, the
-// projection constants) are left live — they are frame-constant and shared by every actor.
-// cr layout: [0..7] = composed CR0-7; [8] = CR24 (OFX), [9] = CR25 (OFY), [10] = CR26 (H). proj_native_xform
-// reads ALL of these, so the in-between MUST restore the per-prim projection constants (they can change
-// between the prim's draw and present time), not just CR0-7 — else the projection scale/offset is wrong.
-void proj_native_xform_cr(const uint32_t cr[11], const int16_t mv[4][3], int nv,
-                          float px[4], float py[4], float pz[4]) {
-  uint32_t save[11];
-  for (int i = 0; i < 8; i++) { save[i] = gte_read_ctrl(i); gte_write_ctrl(i, cr[i]); }
-  save[8] = gte_read_ctrl(24); save[9] = gte_read_ctrl(25); save[10] = gte_read_ctrl(26);
-  gte_write_ctrl(24, cr[8]); gte_write_ctrl(25, cr[9]); gte_write_ctrl(26, cr[10]);
-  for (int k = 0; k < nv; k++) {
-    ProjVtx p; proj_native_xform(mv[k][0], mv[k][1], mv[k][2], &p);
-    px[k] = p.px; py[k] = p.py; pz[k] = p.pz;
-  }
-  for (int i = 0; i < 8; i++) gte_write_ctrl(i, save[i]);
-  gte_write_ctrl(24, save[8]); gte_write_ctrl(25, save[9]); gte_write_ctrl(26, save[10]);
-}
 
 // Recompute one vertex's projection from a snapshot of the GTE control/data regs (read post-instruction;
 // neither matrix CR0-7 nor the input V regs DR0-5 are touched by RTP, so reading after is exact).
@@ -415,12 +392,10 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
                                                      c->mRender->otAttr.trackGte(c);   // self-gated (`debug otattr`)
-                                                     // interp60 no longer taps the GTE op stream (2026-07-08):
-                                                     // build_lerp reprojects from the NATIVE capture
-                                                     // (stampWorldCr fps_cr/fps_mv + the observer's node-span
-                                                     // billboard registry), keyed on fps_key. The old
-                                                     // rtp()/xobj/mObjGrid GTE fingerprint fed only never-read
-                                                     // metrics (verified dead) — tap removed.
+                                                     // fps60 (docs/fps60-rework.md) does not tap the GTE op
+                                                     // stream for interpolation — it matches/lerps already-
+                                                     // resolved render-queue prims at present time (Fps60::
+                                                     // matchAndLerp), not GTE-composed transforms.
                                                      if (gd.projprobe < 0) gd.projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                      if (gd.projprobe > 0) {
                                                        // Compare native projection to Beetle's outputs. After RTPS the single vertex

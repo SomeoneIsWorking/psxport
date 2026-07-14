@@ -82,6 +82,20 @@ differ, the pair is demoted to unmatched (fingerprint rule).
 3. **Retire stage**: delete the anchor machinery + mid-present re-run (list above), update
    docs/config.md and findings. Gate: build + fps60dump re-run + SBS-full smoke (host-only change;
    0-diff required) + USER eyeball on the tree/windmill scene.
+   **Stage 3 done 2026-07-14.** Deleted: the billboard registry (`stampBillboard`/`recordBillboardSpan`/
+   `recordBillboardParticle`/`billboardForNode`/`unprojectQuadAnchor`/`projWorld`/`camMidOf`, mBbCur/
+   mBbPart tables, `fps60_bb_node`), the object/camera/scroll midpoint-capture machinery (`objXform`/
+   `bgScroll`/`beginCapture`, mObjCur/mObjPrev/mCamCur/mCamPrev/mScrollCur/mScrollPrev, the Cam/ObjX/Scroll
+   structs), the `mSceneTag`/`mInterp`/`mSceneRan`/`SceneTagArm` plumbing (game_tomba2.cpp), the
+   `fps_scene`/`fps_anchor`/`fps_key`/`fps_wpos` RqItem fields, the dead `proj_native_xform_cr` +
+   `ProjVtx::mx/my/mz` reprojection-input remnants, and the `bbanchor` debug channel. `Fps60::sceneCam`
+   kept (stripped to the plain camera read every projection caller already used unconditionally).
+   `preseqobj`'s `key=` field switched from the retired `fps_key` to `dbg_node` (the field
+   `Fps60::matchAndLerp` itself keys on). Gate: full rebuild clean; fps60dump re-run (tree-scene repro,
+   340+60 frames) — static-identity 99.9944% (252/4488592 px, same known hair-tip class stage 2 accepted),
+   moving-pixel midpoint compliance 95.2% (windmill region 100%, 0 static violations), match rate 85-97%
+   this-frame / ~89-90% running — all within stage-2's landed numbers; fps60-OFF run unaffected (screenshot
+   verified); SBS-full smoke 0-diff.
 
 ## Verification protocol (standing, USER directive)
 

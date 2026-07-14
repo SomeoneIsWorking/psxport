@@ -128,11 +128,9 @@ static inline const float (*shadow_verts(const ProjVtx* p, int nv, int semi, flo
     vv[k][0] = p[s].vx; vv[k][1] = p[s].vy; vv[k][2] = p[s].pz; }   // view space (x=ir1, y=ir2, z=pz)
   return vv;
 }
-// fps60 TRUE per-object tier (redesign 2026-07-10): meshes are NO LONGER captured as reprojectable screen
-// prims here. The 60fps in-between is built by RE-RUNNING the native scene render at the interpolated
-// OBJECT transform (captured in projComposeObject) — so there is no per-quad model-vertex/transform stamp.
-// Billboards (guest OT 2D quads) are still tagged at the OT walk (Fps60::stampBillboard, keyed on identity
-// + captured world anchor) since they don't flow through this submit path. See game/render/fps60.cpp.
+// fps60 (docs/fps60-rework.md, redesign 2026-07-14): the 60fps in-between is built from the resolved
+// render-queue prims (RqItem, matched + lerped by Fps60::matchAndLerp), not from a per-quad model-vertex/
+// transform stamp here — nothing in this submit path needs to tag for fps60. See game/render/fps60.cpp.
 
 // ENGINE-NATIVE directional lighting (user directive 2026-06-21: lighting must be engine-native, NOT a
 // screen-space deferred pass). Compute a real per-FACE normal from the prim's own view-space geometry

@@ -6,7 +6,7 @@
 //
 // WHY these two and not the whole 0x8003CCA4 family: 0x8003CCA4 (submit_perobj_render) already has a
 // TRANSPARENT observer wrapper installed (render_observer.cpp, g_override slot 845) that runs the
-// LITERAL gen body then tags host-side depth (obj_world_ord/gpu_obj_depth_add/fps60_bb_node) for the
+// LITERAL gen body then tags host-side depth (obj_world_ord/gpu_obj_depth_add) for the
 // billboard-occlusion fix (issue #4 class). Replacing CCA4 wholesale would have to reproduce its 5
 // special-effect sub-cases (FUN_8003F4C4/F3F4/D584/F594/F344, none of which fire at seaside) AND fold
 // in the observer's host bookkeeping to avoid regressing that landed fix — out of scope for a focused

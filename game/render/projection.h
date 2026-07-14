@@ -12,7 +12,7 @@
 
 // Projected vertex: float screen px/py, view depth pz, plus the integer SX/SY/SZ and view-space IR the
 // rasterizer/cull/lighting consume. (Same layout the submitters already use.)
-typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; int mx, my, mz; } ProjVtx;
+typedef struct { int ir1, ir2, ir3, sz, sx, sy; float px, py, pz, vx, vy, vz; } ProjVtx;
 
 // A PC-native object render transform: composed camera × object, in float. R is the composed rotation in
 // 1.3.12 scale (≈±4096, the units the RTPT expects), T the composed view translation, and ofx/ofy/H the

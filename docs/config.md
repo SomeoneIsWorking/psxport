@@ -317,12 +317,11 @@ Z-FIGHT diagnostics + fix knob (coplanar barrel/decoration surfaces; see docs/fi
 `preseqobj` (per-object fps60 motion tracker, `RenderQueue::emitItem` in game/render/render_queue.cpp) —
 when this channel is on AND a REPL `preseq <N>` present-sequence capture is armed, every render-queue emit
 pass ALSO logs one line PER emitted RqItem to stderr:
-`[preseqobj] p<presentIdx> key=<fps_key> layer=<layer> x=<xs0> y=<ys0> scene=<0|1>`. `presentIdx` is the
+`[preseqobj] p<presentIdx> key=<dbg_node> layer=<layer> x=<xs0> y=<ys0>`. `presentIdx` is the
 present frame the pass will dump (`gpu_gpu_preseq_present_index`), so lines are keyed to the exact present
 (both fps60 present passes — the interpolated in-between AND the real frame — emit through here and log
-under their own index). `key` is the object identity (fps_key: per-particle billboard address / node; 0 =
-un-keyed 2D/HUD prim), `scene=1` marks a prim REBUILT by sceneNative at the interpolated midpoint (dense,
-correct-by-construction terrain/mesh/backdrop the tracker does not per-object judge). Cost is zero outside
+under their own index). `key` is the object identity (dbg_node — the same field `Fps60::matchAndLerp`
+keys its provenance match on; 0 = un-keyed 2D/HUD prim). Cost is zero outside
 an armed capture (the present index is −1 → the `cfg_dbg` scan is skipped). Feed the log to
 `tools/preseqobj_check.py` (the acceptance gate): it groups by object identity and flags any object present
 in ≥6 consecutive presents that OSCILLATES (sign-alternating jitter) or STALL-STEPS (snaps every 2nd
@@ -334,20 +333,11 @@ the instrument the operator runs to verify the fps60 per-object work; see docs/f
 interpolated in-between AND the real frame) to `scratch/framedump/f<logicframe>_<seq>_<real|interp>.png`,
 via the same VRAM-readback writer REPL `shot` uses (`gpu_gpu_shot`/`gpu_native_shot` — no new pixel path).
 Capped at `Fps60::kDumpMax` (600) files so a long headless run can't fill disk; toggling the channel off
-then back on (REPL `debug fps60dump`) resets the cap. Feed the sequence to a Python centroid/pixel-diff
-script to check whether interp frames sit BETWEEN their real neighbors (correct) or teleport (bug) — this
-is the harness for verifying stampBillboard's per-quad anchor fix, complementing `preseqobj`'s per-object
-oscillation gate above (this one is pixel-ground-truth, `preseqobj` is queue-position ground-truth).
-
-`bbanchor` (billboard node-span anchor diagnostic, `Fps60::stampBillboard` in game/render/fps60.cpp +
-`Render::billboardEmit` in game/render/perobj_billboard.cpp) — logs one `[bbanchor]` line per emitted
-per-particle billboard packet (billboardEmit) and one `[bbanchor][stamp]` line per OT-walk billboard quad
-(stampBillboard), reporting which anchor table matched (PARTICLE / NODE-SPAN / MISS) and, for a node-span
-hit, `anchorProjSXY` (the stored world anchor reprojected through this frame's camera) vs `quadRealSXY0`
-(the quad's actual un-interpolated base screen vert) with the pixel delta between them — the instrument
-used to diagnose + verify the #45 node-span teleport fix (many quads in one manager span used to share a
-single rigid node anchor; each quad's anchor is now unprojected from its own screen centroid, so the delta
-is ~0 by construction). Pure host diagnostic, no guest write.
+then back on (REPL `debug fps60dump`) resets the cap. Feed the sequence to `scratch/check_stage2.py` (or
+a similar centroid/pixel-diff script) to check whether interp frames sit BETWEEN their real neighbors
+(correct) or teleport (bug) — this is the harness for verifying `Fps60::matchAndLerp`'s match+lerp
+quality, complementing `preseqobj`'s per-object oscillation gate above (this one is pixel-ground-truth,
+`preseqobj` is queue-position ground-truth).
 
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,

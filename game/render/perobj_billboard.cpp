@@ -6,7 +6,7 @@
 //
 // PRIOR STATE: all 4 addresses carried a TRANSPARENT RenderObserver wrapper (render_observer.cpp) that
 // ran the literal gen_func_* body then host-side depth-tagged the packet span it wrote
-// (obj_world_ord/gpu_obj_depth_add/fps60_bb_node — the billboard-occlusion fix, issue #4 class). Owning
+// (obj_world_ord/gpu_obj_depth_add — the billboard-occlusion fix, issue #4 class). Owning
 // these natively must preserve that: each of the 4 methods below opens its own PktSpanSession and tags
 // on exit, exactly mirroring render_observer.cpp's obs_body. RenderObserver itself no longer installs
 // wrappers for these 4 addresses (render_observer.cpp trimmed accordingly); it still wraps the 2
@@ -72,9 +72,8 @@
 #include "core.h"
 #include "game.h"
 #include "render.h"
-#include "cfg.h"
 #include "pkt_span.h"
-#include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add / fps60_bb_node
+#include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add / withDepthTag
 
 void rec_dispatch(Core*, uint32_t);
 void shard_set_override(uint32_t addr, OverrideFn fn);   // generated/shard_disp.c (C++ linkage)
@@ -495,8 +494,7 @@ void Render::billboardEmit() {
       }
 
       // 5) Emit the 10-word packet (tag + 9 data words) at the pool tail, prepended into the OT bucket.
-      uint32_t pktStart = c->mem_r32(PKT_POOL_PTR);
-      uint32_t tail = pktStart;
+      uint32_t tail = c->mem_r32(PKT_POOL_PTR);
       uint32_t otbase = c->mem_r32(OTBASE_PTR);
       uint32_t otslot = otbase + (c->mem_r32(FR(56)) << 2);
       uint32_t oldHead = c->mem_r32(otslot);
@@ -508,35 +506,6 @@ void Render::billboardEmit() {
         tail += 4;
       }
       c->mem_w32(PKT_POOL_PTR, tail);
-
-      // fps60 PER-PARTICLE anchor (host-only read; no guest write). Identity = this particle's guest
-      // address (stable while the sprite lives). World anchor = the manager node's world position
-      // (node+46/50/54) + the node rotation (MAT_OUT rotation rows, /4096) applied to the particle's own
-      // 5×(p[14],p[15]) planar offset — the SAME 5×offset func_8003B220 builds the quad corners around, so
-      // the anchor moves with each sprite's per-frame bobbing. The mid-present re-projects this through the
-      // interpolated camera, so every gem interpolates on its OWN motion instead of the shared node anchor.
-      if (c->game->mods.fps60 || c->game->mods.debug_ids || cfg_dbg("objid")) {
-        const int sx5 = 5 * (int)(int8_t)c->mem_r8(particle + 14);
-        const int sy5 = 5 * (int)(int8_t)c->mem_r8(particle + 15);
-        auto R = [c](uint32_t off) { return (float)c->mem_r16s(MAT_OUT + off); };   // /4096 int16 rows
-        const float nx = (float)c->mem_r16s(node + 46);
-        const float ny = (float)c->mem_r16s(node + 50);
-        const float nz = (float)c->mem_r16s(node + 54);
-        const float ox = (R(0) * sx5 + R(2) * sy5) / 4096.0f;
-        const float oy = (R(6) * sx5 + R(8) * sy5) / 4096.0f;
-        const float oz = (R(12) * sx5 + R(14) * sy5) / 4096.0f;
-        c->game->fps60.recordBillboardParticle(pktStart, tail, particle, nx + ox, ny + oy, nz + oz);
-        if (cfg_dbg("bbanchor")) {
-          const int16_t sx0 = (int16_t)c->mem_r16(BUF + 8);
-          const int16_t sy0 = (int16_t)c->mem_r16(BUF + 10);
-          const uint8_t p10 = c->mem_r8(particle + 10), p11 = c->mem_r8(particle + 11);
-          fprintf(stderr,
-            "[bbanchor] node=%08X part=%08X pktLo=%08X pktHi=%08X sx=%d sy=%d p10=%u p11=%u "
-            "nx=%.2f ny=%.2f nz=%.2f ox=%.2f oy=%.2f oz=%.2f anchor=(%.2f,%.2f,%.2f) baseSXY0=(%d,%d)\n",
-            node, particle, pktStart, tail, sx5 / 5, sy5 / 5, p10, p11,
-            nx, ny, nz, ox, oy, oz, nx + ox, ny + oy, nz + oz, sx0, sy0);
-        }
-      }
     }
   });
 }

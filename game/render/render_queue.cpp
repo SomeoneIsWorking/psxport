@@ -26,10 +26,10 @@ int  gpu_gpu_enabled(void);        // gpu_gpu.cpp — Core*-less device-singleto
 // ---- Debug OBJECT-ID overlay (REPL `debug objid`) -------------------------------------------------
 // Draw each rendered object's engine identity ON the object, in the live game, so the user can point at
 // any object ("the flame at A3F2 flickers") and we share a stable name for it. The ID is the engine's own
-// per-object key (RqItem::fps_key) — for a mesh the persistent render-command ptr (stable across frames),
-// for a billboard the render-object node. This is a pure HOST overlay: it appends extra HUD quads to the
-// render queue (so it flows through WHICHEVER present path is active — the inline emit OR the fps60
-// double-emit — with no separate draw path), and touches no guest RAM. Gated by `debug objid`; zero cost
+// per-object key (RqItem::dbg_node) — the render-object node, for both meshes and billboards. This is a
+// pure HOST overlay: it appends extra HUD quads to the render queue (so it flows through WHICHEVER present
+// path is active — the inline emit OR the fps60 double-emit — with no separate draw path), and touches no
+// guest RAM. Gated by `debug objid`; zero cost
 // otherwise. It is injected at the TOP of flush(), before the sort + before the fps60 capture, so the
 // labels sort into the HUD layer (drawn on top) and ride along on both 60fps present passes.
 //
@@ -122,8 +122,8 @@ void RenderQueue::objidBox(Core* core, const RqItem* ref, int x0, int y0, int x1
 // ownership). Each per-object node carries its real WORLD position at node+0x2E/0x32/0x36; we project that
 // through the stable scene camera (proj_camview_world_screen) and draw a box + the object's id + WORLD
 // coordinates in readable PC-native text. A node is classified a QUAD (2D sprite at a 3D position =
-// billboard) if any prim it emitted this frame is an fps_anchor billboard; else a 3D-MESH object. The two
-// classes have independent toggles (debug_quads / debug_objects) so the user can highlight ONLY quads.
+// billboard) vs a 3D-MESH object by its intrinsic render type (node+0xB, see below). The two classes have
+// independent toggles (debug_quads / debug_objects) so the user can highlight ONLY quads.
 // Pure host overlay (reads guest RAM, writes only the queue).
 void RenderQueue::objidOverlay(Core* core) {
   RenderQueue* q = this;
@@ -167,7 +167,7 @@ void RenderQueue::objidOverlay(Core* core) {
       // QUAD (billboard) vs 3D-MESH classification by INTRINSIC render type (node+0xb): the per-object
       // render dispatcher (gen_func_8003C048) routes render types 0x10..0x14 to the SPRITE/BILLBOARD
       // submitters (single object-center RTPS -> screen quad: e.g. the AP-crystal pickup), while 0/0xf are
-      // mesh. (The old fps_anchor signal is dead — its feeder ov_render_cmd is orphaned post override-removal.)
+      // mesh.
       uint8_t rtype = core->mem_r8(n + 0xB);
       int quad = (rtype >= 0x10 && rtype <= 0x14) ? 1 : 0;
       if (quad ? !objid_quads_on(core) : !objid_objects_on(core)) continue;  // class toggled off
@@ -199,10 +199,6 @@ void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
 
 RqItem* RenderQueue::push() {
   if (consumed) reset();
-  // NOTE: the fps60/objid billboard registry (Fps60::mBbCur) is NOT reset here. It is populated during
-  // fieldFrame's substrate render (recordBillboardSpan, in pcSched.step) which runs BEFORE drawOTag's
-  // first push — resetting it here wiped that frame's billboards before the OT walk could stamp them. It
-  // is now reset once per frame at the top of Engine::frameUpdate (before fieldFrame records).
   if (n >= RQ_MAX) {
     // FAIL-FAST (user 2026-06-30): never silently drop prims. RQ_MAX already covers the real worst-case
     // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
@@ -341,11 +337,11 @@ void RenderQueue::zfightScan(Core* core) {
     const RqItem&A=items[pairs[i].a]; const RqItem&B=items[pairs[i].b];
     int an=A.nv?A.nv:4, bn=B.nv?B.nv:4;
     fprintf(stderr,"[zfight]   pair px=%d gap>=%.7f\n", pairs[i].cnt, pairs[i].gap);
-    fprintf(stderr,"[zfight]     A node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d anch=%d key=%08X vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
-      A.dbg_node,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf,A.fps_anchor,A.fps_key, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
+    fprintf(stderr,"[zfight]     A node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
+      A.dbg_node,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
       A.xs[0],A.ys[0],A.xs[1],A.ys[1],A.xs[2],A.ys[2],an==4?A.xs[3]:0,an==4?A.ys[3]:0);
-    fprintf(stderr,"[zfight]     B node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d anch=%d key=%08X vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
-      B.dbg_node,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf,B.fps_anchor,B.fps_key, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
+    fprintf(stderr,"[zfight]     B node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
+      B.dbg_node,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
       B.xs[0],B.ys[0],B.xs[1],B.ys[1],B.xs[2],B.ys[2],bn==4?B.xs[3]:0,bn==4?B.ys[3]:0);
   }
   if (nfight>0) { char path[128]; snprintf(path,sizeof path,"scratch/screenshots/zfight/heat_f%d.ppm",s.s_frame);
@@ -356,9 +352,9 @@ void RenderQueue::zfightScan(Core* core) {
 void RenderQueue::flush(Core* core) {
   if (n && objid_on(core)) objidOverlay(core);   // debug: label each object with its engine ID
   sortQueue();
-  // fps60: the interpolated-60fps tier OWNS presentation — it re-runs the scene render for the in-between
-  // and re-emits the captured non-scene prims, then presents this frame (Fps60::present_vk). So it must
-  // HOLD the sorted queue rather than have flush emit it now. Only when this core actually presents
+  // fps60: the interpolated-60fps tier OWNS presentation — it double-buffers this sorted queue (Q[N]) and
+  // presents ONE FRAME BEHIND (slot A = lerp(Q[N-1],Q[N]), slot B = Q[N] verbatim; Fps60::present_vk). So
+  // it must HOLD the sorted queue rather than have flush emit it now. Only when this core actually presents
   // per-frame: under diff_mode (SBS dual-core compare) per-core present is suppressed, so present_vk never
   // runs — capturing would leave the geometry batch empty (black SBS panes). In diff_mode the SBS composite
   // reads the geometry batch directly, so flush MUST inline-emit. Gate the fps60 capture on !diff_mode.
@@ -388,17 +384,16 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   // preseqobj (per-object motion tracker, tools/preseqobj_check.py): when a `preseq` capture is armed AND
   // the `preseqobj` channel is on, log one line per emitted RqItem keyed to the present index this pass
   // will dump. present index >= 0 only while armed, so the cfg_dbg scan is skipped entirely otherwise —
-  // zero cost in a normal run. The tracker groups by `key` (fps_key = billboard/object identity; 0 = an
-  // un-keyed 2D/HUD prim) and follows each object's screen x/y across consecutive presents to flag
-  // sign-alternating (oscillation) or stall-step (snapping) motion. Both 60fps present passes (interp +
-  // real) emit through here, so their prims are logged under their own present index.
+  // zero cost in a normal run. The tracker groups by `key` (dbg_node = object identity — the same field
+  // Fps60::matchAndLerp keys its provenance match on; 0 = an un-keyed 2D/HUD prim) and follows each
+  // object's screen x/y across consecutive presents to flag sign-alternating (oscillation) or stall-step
+  // (snapping) motion. Both 60fps present passes (interp + real) emit through here, so their prims are
+  // logged under their own present index — the interp pass is exactly what matchAndLerp's match quality
+  // determines, so this instrument doubles as its match-quality debugger (docs/fps60-rework.md REDIRECT).
   { int pi = gpu_gpu_preseq_present_index(core);
     if (pi >= 0 && cfg_dbg("preseqobj"))
-      // scene=1 marks a prim REBUILT by sceneNative at the interpolated midpoint (terrain/mesh/backdrop) —
-      // dense, correct-by-construction geometry the tracker does NOT judge per-object; scene=0 is an OT-walk
-      // prim (billboard/2D/HUD), the object class this instrument actually verifies.
-      fprintf(stderr, "[preseqobj] p%04d key=%08X layer=%d x=%d y=%d scene=%d\n",
-              pi, it->fps_key, it->layer, it->xs[0], it->ys[0], it->fps_scene); }
+      fprintf(stderr, "[preseqobj] p%04d key=%08X layer=%d x=%d y=%d\n",
+              pi, it->dbg_node, it->layer, it->xs[0], it->ys[0]); }
   GpuState& s = core->game->gpu;
   // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
   // exactly where the native 3D world geometry rasterizes (vs the backdrop). Answers the recurring "the
@@ -525,13 +520,6 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
-  // fps60 TRUE per-object tier: tag prims produced by the read-only native scene render (armed around
-  // sceneNative() in Engine::drawOTag) so the mid-present can rebuild them at the interpolated transform
-  // and re-emit only the OT-walk (2D/HUD/billboard) prims. Billboard identity/anchor set later by
-  // Fps60::stampBillboard. When fps60 is off mSceneTag is always false — pure host state, no diff effect.
-  it.fps_scene = core->game->fps60.mSceneTag ? 1 : 0;
-  it.fps_anchor = 0; it.fps_key = 0;
-  it.fps_wpos[0] = it.fps_wpos[1] = it.fps_wpos[2] = 0.0f;
   // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
