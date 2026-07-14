@@ -232,12 +232,22 @@ void Render::cmdListDispatch() {
     // Invariant (c): dbg_node = the real owning node (perObjRenderDispatch's `node` — beginObject
     // brackets ONLY this native draw, mirroring withDepthTag's own discipline) so matchAndLerp covers
     // these prims with no matcher changes.
+    // COVERAGE (bug #48, docs/findings/render.md "Z-fight sweep 2026-07-14"; render.h banner):
+    // independent of which per-mode target this cmd resolves to, if Render::perObjFlush (render_walk.
+    // cpp) has ALREADY drawn this SAME node's cmd list natively this frame, the perModeDispatch call
+    // below is a redundant guest-OT copy for EVERY target (func_800803DC's generic emitter and every
+    // owned per-mode leaf alike all draw the identical geomblk this cmd already carries) — not just
+    // the generic-overlay REDIRECT case. PROVENANCE via Render::nativeObjDrawn (perObjFlush is the
+    // only writer): nodes on OTHER walk lists perObjFlush never visits (e.g. the Bcf4 aux list the
+    // REDIRECT below exists for) are simply absent, so they stay uncovered unless redirectGeneric's
+    // own inline native draw covers them.
+    bool nodeNativeCovered = render_field_native_active(c) && c->mRender->nativeObjDrawn(c, node);
     bool redirectGeneric = false;
     if (render_field_native_active(c)) {
       const uint32_t modeByte = c->mem_r8(MODE_BYTE);
       redirectGeneric = c->mem_r8(MODE_FORCE) == 0 && (flag & 1u) == 0 && modeByte < 22 &&
                         perModeCaseTarget(c->mem_r32(MODE_TABLE + modeByte * 4u)) == 0x80146478u;
-      if (redirectGeneric) {
+      if (redirectGeneric && !nodeNativeCovered) {
         if (cfg_dbg("redirect")) { static long n=0; if (n++%256==0)
           fprintf(stderr, "[redirect] cmdListDispatch node=%08X cmd=%08X geomblk=%08X otbase=%08X\n", node, cmd, geomblk, otbase); }
         // FAIL-FAST (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): this native draw is a
@@ -279,14 +289,15 @@ void Render::cmdListDispatch() {
     c->r[22] = flag;
     c->r[23] = SCR;
     c->r[31] = 0x8003D07Cu;   // RE'd return-address constant (gen_func_8003CDD8, right before func_8003F698)
-    if (redirectGeneric) {
-      // NO DOUBLE-DRAW (invariant b): capture the substrate's own packet-pool span (bracketing ONLY
-      // this call, so terrain/other cmds on the SAME node aren't mis-attributed) and register it as
-      // native-covered — gpu_native.cpp's field OT walk drops it unconditionally instead of
-      // billboard-promoting it via obj_depth (checked first in gp0_exec; see the NATIVE-COVER banner
-      // in gpu_native_internal.h). This nested session's range still merges into perObjRenderDispatch's
-      // outer withDepthTag session (pkt_span.h: nesting always merges) — harmless, since native-cover
-      // wins over obj_depth regardless of which registry also holds the span.
+    if (redirectGeneric || nodeNativeCovered) {
+      // NO DOUBLE-DRAW (invariant b, extended to the broader nodeNativeCovered case above): capture
+      // the substrate's own packet-pool span (bracketing ONLY this call, so terrain/other cmds on the
+      // SAME node aren't mis-attributed) and register it as native-covered — gpu_native.cpp's field OT
+      // walk drops it unconditionally instead of billboard-promoting it via obj_depth (checked first
+      // in gp0_exec; see the NATIVE-COVER banner in gpu_native_internal.h). This nested session's
+      // range still merges into perObjRenderDispatch's outer withDepthTag session (pkt_span.h: nesting
+      // always merges) — harmless, since native-cover wins over obj_depth regardless of which registry
+      // also holds the span.
       PktSpanSession nativeCoverSess(c);
       perModeDispatch();
       uint32_t nlo, nhi;

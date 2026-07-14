@@ -34,11 +34,49 @@ int  rec_addr_has_entry(Core*, uint32_t);   // overlay_router.cpp — is fn a re
 // ran interpreted per-scene submitter variants for non-generic modes) is no longer consulted — every
 // per-object geomblk is submitted as generic GT3/GT4 through the native, world-coord projection.
 
+// NATIVE-DRAWN-NODE provenance (bug #48, render.h banner). ORDERING: the substrate walk cluster
+// (Render::frame -> ... -> perObjRenderDispatch -> cmdListDispatch, the reader below) runs from
+// Engine::fieldFrame EARLIER in the SAME logic frame than Engine::drawOTag -> sceneNative ->
+// perObjFlush (the native draw, engine.cpp fieldFrame calls mRender->frame() at the render-submit
+// step; drawOTag runs later, from native_boot's own post-scheduler walk) — so a registry perObjFlush
+// WRITES cannot be read by cmdListDispatch in the same frame; it would always see last frame's (or an
+// empty) set. Rather than accept that one-frame lag (which would transiently mis-cover or
+// mis-duplicate on the exact frame an object's cull/render-list state changes), this queries the
+// GUEST DATA directly with the IDENTICAL inclusion test Render::sceneNative's own object loop applies
+// before calling perObjFlush (render_walk.cpp, HEADS[3] walk: live marker node+1, render-command
+// counts node+8/+9) — so the set this computes is EXACTLY the set perObjFlush will visit this frame,
+// derived from the same already-stable guest state (game logic for this frame has already run by the
+// time either pass reads it), not a heuristic. Cached per s_frame (computed once, lazily, on first
+// query) so repeated per-cmd queries in cmdListDispatch's loop are O(1) after the first.
+bool Render::nativeObjDrawn(Core* c, uint32_t node) {
+  const int frame = c->game->gpu.s_frame;
+  if (mNativeDrawnFrame != frame) {
+    mNativeDrawnNodes.clear();
+    mNativeDrawnFrame = frame;
+    static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
+    for (int h = 0; h < 3; h++) {
+      uint32_t n = c->mem_r32(HEADS[h]);
+      for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
+        if (c->mem_r8(n + 1) == 0) continue;                            // dead / not-live this frame
+        if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
+        mNativeDrawnNodes.insert(n);
+      }
+    }
+  }
+  return mNativeDrawnNodes.count(node) != 0;
+}
+
 void Render::perObjFlush() {
   Core* c = mCore;
   uint32_t node = c->r[4];
   if (c->mem_r8(node + 8) == 0) return;
   if (c->mem_r8(node + 9) == 0) return;
+  // NOTE (bug #48): this node's cmd list (node+8 count, node+0xC0 array, geomblk=cmd+0x40) is drawn
+  // natively below via gt3gt4 — the SAME array cmdListDispatch's substrate mirror walks for whichever
+  // walker (perObjRenderDispatch) reaches this node. cmdListDispatch's coverage decision does NOT
+  // depend on this call having run (the substrate walk runs BEFORE this display pass in the same
+  // logic frame) — it queries Render::nativeObjDrawn, which re-derives this same node set straight
+  // from guest state instead. See nativeObjDrawn's banner above.
   uint32_t otbase_ptr = c->mem_r32(OTBASE_PTR);              // *0x800ED8C8
   int i = 0;
   while (i < (int)c->mem_r8(node + 8)) {

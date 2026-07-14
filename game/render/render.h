@@ -22,6 +22,7 @@
 #include "render_native.h"      // class NativeScenePass — the decoupled native render subsystem
 #include "margin_render.h"    // class MarginRenderer — widescreen margin collect-and-flush
 #include "lighting.h"           // class Lighting — per-area light registry (sun / lava+torch)
+#include <unordered_set>
 class Core;
 
 class Render {
@@ -77,6 +78,24 @@ public:
   bool mSceneTableTrusted  = false;   // may fieldEntityRender(SCENE_ENT_TABLE) run this frame?
   bool mBackdropTrusted    = false;   // may render_bg_tilemap_native(PARALLAX_BG_SM) run this frame?
   bool mAreaCacheWasNarration = false;   // previous frame's sop_narration value (shared edge detector)
+
+  // NATIVE-DRAWN-NODE provenance (bug #48, docs/findings/render.md "Z-fight sweep 2026-07-14"):
+  // node addresses Render::sceneNative's object loop WILL draw this frame via perObjFlush (the real
+  // per-object float path — real identity + real per-vertex depth). cmdListDispatch
+  // (perobj_dispatch.cpp) walks the SAME per-node cmd list (node+8 count, node+0xC0 cmd array,
+  // geomblk=cmd+0x40) from the substrate walk cluster (perObjRenderDispatch's cases), so any node
+  // present here has its substrate guest-OT emission made fully redundant — register it into the
+  // native-cover span registry instead of letting it fall through to obj_depth's billboard
+  // promotion (which produced the observed exact-duplicate class: the SAME mesh painted twice, once
+  // by perObjFlush with real identity/depth, once by the guest-OT copy at a flat billboard depth
+  // with dbg_node==0). PROVENANCE-DRIVEN: nativeObjDrawn re-derives this set straight from guest
+  // state using perObjFlush's OWN inclusion test (see render_walk.cpp's banner for why it can't just
+  // be a registry perObjFlush writes — call ordering), never a heuristic address-range/list-
+  // membership guess — objects on OTHER walk lists (e.g. the Bcf4 aux list) that this test never
+  // visits are simply absent from the set and stay uncovered, exactly as before. Cached per s_frame.
+  std::unordered_set<uint32_t> mNativeDrawnNodes;
+  int mNativeDrawnFrame = -1;
+  bool nativeObjDrawn(Core* c, uint32_t node);   // cmdListDispatch: will perObjFlush draw this node this frame?
 
   // ---- object-render projection ops (impl in projection.cpp) ----------
   // Compose an EObjXform from the object's REAL WORLD coordinates: its world rotation matrix (cmd+0x18)

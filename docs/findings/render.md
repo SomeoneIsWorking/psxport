@@ -1846,3 +1846,15 @@ draft was already byte-faithful.
   sm[0x4c]==3, walk the FULL guest OT with no native field render — same treatment as the void beat.
   Verified: interior room renders (matches oracle, no exterior leak); free-roam field (sm[4c]==2)
   unaffected; SBS-full 0-diff f23940. Shots scratch/screenshots/hut_FIXED_*.png.
+
+## Double-submission (#48) FIXED (2026-07-15) — scene-native-owned meshes dropped from the OT walk
+- Owned per-object meshes (perObjFlush over the 3 entity-list heads) were ALSO leaking through the
+  twoDOnly OT walk as node=0 world polys → exact-duplicate geometry (gap=0.0), overdraw + latent
+  flicker. Fix: Render::nativeObjDrawn (render_walk.cpp) re-derives per-frame (read-only guest mirror
+  of perObjFlush's own inclusion test — HEADS[3] walk + node+1 marker + node+8/9 counts; a WRITE-side
+  registry failed because Render::frame runs before perObjFlush in the same logic frame) the set of
+  nodes perObjFlush draws; cmdListDispatch extends the PktSpanSession/gpu_native_cover_add wrap to
+  those nodes so gp0_exec drops their guest-OT copies. Uncovered by design: objects on other walk
+  lists perObjFlush never visits (Bcf4 aux) keep the redirect's own inline draw.
+- Verified (integrated build): owned-vs-node0 exact-dup tie class → 0; free-roam no lost geometry;
+  SBS-full 0-diff f21810. Registration-driven (guest state), never address-range/heuristic.
