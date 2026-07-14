@@ -379,10 +379,33 @@ void Pad::serviceFrame() {
       // scratch/bin/pad_session.pad, overwritten each run. Override the path with PSXPORT_PAD_RECORD=<path>;
       // disable with PSXPORT_PAD_RECORD=0. Skipped while REPLAYING (no point re-capturing the replayed input).
       const char* rpath = cfg_str("PSXPORT_PAD_RECORD");
+      bool default_sink = false;
       if (rpath && !strcmp(rpath, "0")) rpath = nullptr;                 // explicit disable
-      else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY")) rpath = "scratch/bin/pad_session.pad";  // default-on
-      if (rpath) { rec_fp = fopen(rpath, "wb");
-        fprintf(stderr, "[padrec] recording -> %s\n", rec_fp ? rpath : "(open FAILED)"); }
+      // Default-on recording is WINDOWED-ONLY (#56/#57): headless runs (SBS/AUTO_SKIP smoke, agent probes)
+      // have no play-session worth capturing AND were silently truncating the user's real captures every
+      // time — that is what clobbered the bucket + flame repros. Headless auto-record is OFF; an explicit
+      // PSXPORT_PAD_RECORD=<path> still records anywhere (windowed or headless).
+      else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY") && gpu_windowed()) { rpath = "scratch/bin/pad_session.pad"; default_sink = true; }  // default-on (windowed)
+      if (rpath) {
+        // WORKFLOW FIX (#57): the default sink used to be truncated every windowed run, so a bug-repro
+        // session (real input) was silently destroyed by the next launch (idle or otherwise) — that is
+        // exactly how the bucket-cutscene repro was lost. Rotate the default sink 5 deep before opening
+        // (pad_session.pad -> .1 -> ... -> .5) so a clobbered capture is recoverable. An explicit
+        // PSXPORT_PAD_RECORD=<path> is not rotated (the caller chose the name). For a repro you want to
+        // keep, still record straight into replays/<cat>/<name>.pad (immutable, committed).
+        if (default_sink) {
+          char oldp[128], newp[128];
+          for (int k = 4; k >= 1; k--) {
+            snprintf(oldp, sizeof oldp, "scratch/bin/pad_session.%d.pad", k);
+            snprintf(newp, sizeof newp, "scratch/bin/pad_session.%d.pad", k + 1);
+            rename(oldp, newp);   // no-op if source absent
+          }
+          rename("scratch/bin/pad_session.pad", "scratch/bin/pad_session.1.pad");
+        }
+        rec_fp = fopen(rpath, "wb");
+        fprintf(stderr, "[padrec] recording -> %s%s\n", rec_fp ? rpath : "(open FAILED)",
+                default_sink ? " (prev rotated to pad_session.1..5.pad; use replays/<cat>/<name>.pad to keep a repro)" : "");
+      }
       const char* ppath = cfg_str("PSXPORT_PAD_REPLAY");
       if (ppath) {
         FILE* f = fopen(ppath, "rb");
