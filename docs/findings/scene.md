@@ -558,3 +558,19 @@
 - **refs:** scratch/logs/skiptick*.log, scratch/logs/renderdiff_aligned.log,
   scratch/screenshots/renderdiff-* (pane dumps pre/post alignment), docs/config.md
   (SKIPTICK / RENDERDIFF_FROM / step-order note).
+
+## Vortex void beat black on pc_skip AGAIN — regression, isolated, OPEN (2026-07-14, bug #43)
+
+- **symptom:** default config (pc_skip + pc_render), `newgame; run 600`: black + narration text
+  (scratch/screenshots/vortex_default_f600.png). MODE=skip pane A black from ~f588.
+- **isolated:** GATE=1 + pc_render draws vortex + Tabby + coin correctly at the same state
+  (vortex_gate_f600.png) → pc_render fine, **pc_skip EXEC fails to build the vortex scene state**.
+  Same isolation shape as the 2026-07-10 finding above, but the old cause is EXCLUDED: op05WaitFrames
+  returns 1 on expiry (verified in source), and SCENE_BEAT advances identically to the oracle
+  (SKIPTICK, A==B through f900). The failure is the beat==5 CONSUMER: beh_sop_intro_narration
+  (0x8010B990) / the vortex void-prop spawn not firing, or its spawned object not built, on pc_skip.
+- **next:** at f600 compare the object table A (pc_skip) vs GATE run — is the void prop node present?
+  If absent, trace BehaviorDispatch::dispatchObj's pc_skip route for 0x8010B990's beat==5 arm; if
+  present, the render-bind (node+0x1C/+0x18 content-interface values) is wrong.
+- **refs:** bug #43, scratch/screenshots/vortex_{default,gate}_f600.png, sop_overlay_shadow.cpp
+  header (beat gate map), beh_sop_intro_narration.cpp.

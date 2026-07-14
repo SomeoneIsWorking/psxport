@@ -19,7 +19,7 @@ under `PSXPORT_ORACLE=1`.
 | 1 | SCEA license screen | boot (automatic) | UNCHECKED | native splash (native_scea_splash), baked asset |
 | 2 | OP.FMV opening movie | boot, wait past SCEA | UNCHECKED | recomp+psx_render SKIPS it (deferred); check pc path plays it |
 | 3 | Title / main menu + attract demo | boot, wait | UNCHECKED | Demo stage; cursor sub-machine native (0x80106AC4) |
-| 4 | **Narration cutscene** (story slides after New Game) | `newgame`, watch | UNCHECKED | START HERE. History: void=sea/banded-cliff + freeze bugs RESOLVED (findings/render.md); re-verify current state. Cutscene-wide: #35 scene-darkening missing, #27 fadeouts stick dark |
+| 4 | **Narration cutscene** (story slides after New Game) | `newgame`, watch | PARTIAL | 2026-07-14: MODE=skip pane sync FIXED (demo_start_game rendezvous + B-first stepping, 2acc746); field-slide beats pixel-near-identical (~4% text-edge residual). **BUG #43**: vortex void beat (~f588+) renders BLACK on pc_skip (oracle + GATE=1 both draw vortex+Tabby) — pc_skip exec doesn't build the vortex scene state; regression of the 2026-07-10 finding, op05 fix intact, beat chain advances. Cutscene-wide: #35 darkening, #27 fadeouts |
 | 5 | Narration-end loading screen (black hold + "Loading.....") | after 4 | PARTIAL | was garbage instead of black-hold (findings/render.md 2026-07-08) — re-verify |
 | 6 | Fisherman intro cutscene | after 5 | UNCHECKED | #35 dusk/darkening applies here (washed-out night look) |
 | 7 | Prologue interactive (pig bag, first field) | after 6, or `newgame` + AUTO_SKIP free-roam | UNCHECKED | |
