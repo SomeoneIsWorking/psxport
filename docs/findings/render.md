@@ -1793,3 +1793,16 @@ draft was already byte-faithful.
 - Fix = design unit: a separate ires-scaled 3D target (recreated on live toggle) receiving the opaque+semi
   passes, composited/downsampled back over the pixel-exact VRAM-space 2D; redesign the ires_cap clamp.
   Full analysis in the diagnosis report (session 2026-07-14).
+
+## Z-fight sweep 2026-07-14 — barrel fix HOLDS; new double-submission class; 2 zfight tooling defects
+
+- Barrel/faceted epsilon fix verified live (7-leg field sweep, 1475 frames scanned, eps=6e-5): no
+  coherent contested patch; residual = the documented mesh-seam true-tie tail (99.6% paint-stable
+  at shipped ZBIAS; contests are terrain-sentinel adjacent-quad seams).
+- NEW: exact-duplicate double-submission (owned node=800FB858 vs node=0 guest-OT leak) — filed as
+  a bug; not an epsilon problem, an ownership/one-picture-source problem.
+- Tooling defects (fix same session): (1) PSXPORT_ZFIGHT=1 sets eps=1.0 (atof("1")>0 skips the
+  6e-5 default) — every overlap counts as a fight; (2) zfightScan never runs under mods.fps60=1
+  (flush short-circuits to rq_capture before emitQueue) — the instrument is dead under the user's
+  real config.
+- Artifacts: scratch/logs/zfight_sweep_*.log, scratch/screenshots/zfight_sweep*/, heat_f*.ppm.
