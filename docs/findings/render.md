@@ -1806,3 +1806,15 @@ draft was already byte-faithful.
   (flush short-circuits to rq_capture before emitQueue) — the instrument is dead under the user's
   real config.
 - Artifacts: scratch/logs/zfight_sweep_*.log, scratch/screenshots/zfight_sweep*/, heat_f*.ppm.
+
+## Hut interior RESOLVED to a precise render gap (2026-07-14) — supersedes the entries above
+
+- Replay-verified (hut-entry-door-freeze.pad): entry = SUB-SCENE swap, sm[4c]==3, area id UNCHANGED
+  (the "separate area / mode table" hypothesis above is WRONG for this door). Transition COMPLETES
+  (scene.md's FUN_80073328-case-3 permanent-freeze does not reproduce on this replay); SBS-full
+  0-diff f44580 through entry + idle inside (the old f389 diverge = voiceMixTick, fixed).
+- Symptom = pc_render only: while sm[4c]==3 the picture is Render::frameX's reduced pass driving
+  overlay emitter 0x80146478 (room node 0x800FD850 beh 0x8012C910; NPCs via beh_id_routed_dispatch)
+  — no native rebuild exists, so pc_render keeps presenting the exterior field pass. GATE+pc_render
+  reproduces; GATE+RENDER_PSX draws the interior. Fix = RE+native ownership of the frameX/state-3
+  interior pass. Filed as a bug; evidence scratch/screenshots/hut_verify/ + hut_otattr_out.log.
