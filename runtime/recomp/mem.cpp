@@ -261,6 +261,9 @@ uint32_t Core::mem_r32(uint32_t a) {
 // armed by a PktSpanSession or ffspan span.
 static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
   c->mRender->pktSpan.track(a, bytes);
+  // OT/GTE submission attribution (`debug otattr`, game/render/ot_attr.h): attribute this pool store
+  // to the current otattr-shadow-stack fn + render-walk node. No-op unless the channel is on.
+  c->mRender->otAttr.trackStore(c, a, bytes);
 }
 
 // Mirror-verify write journal (game/core/verify_harness.h): while a strictCheck invocation is

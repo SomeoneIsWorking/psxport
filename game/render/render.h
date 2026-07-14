@@ -12,6 +12,7 @@
 #include "render_mode.h"
 #include "render_diag.h"
 #include "pkt_span.h"
+#include "ot_attr.h"
 #include "dualview_snapshot.h"
 #include "render_stats.h"
 #include "proj_prim.h"
@@ -31,6 +32,7 @@ public:
   RenderMode        mode;              // compare-mode toggles (psxRender / dualview)
   RenderDiag        diag;              // per-object walk-scope tags (currentNode, currentGeomblk)
   PktSpan           pktSpan;           // packet-pool store-address-span tracker (Core::mem_w* -> track)
+  OtAttr            otAttr;            // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
   DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
   RenderStats       stats;             // per-frame render diag counters (ndepth / obj-depth / projprim)
   ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)

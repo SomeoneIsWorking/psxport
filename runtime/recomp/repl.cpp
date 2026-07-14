@@ -10,6 +10,7 @@
 #include "asset.h"
 #include "audio/music_list.h"
 #include "render/render.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
+#include "render/ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
 #include "guest_call.h"
 #include "repl.h"
 #include <stdio.h>
@@ -285,6 +286,50 @@ long Repl::read(Core* c, uint32_t f) {
       void interp_trace_open(Core*, const char*); char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) { interp_trace_open(c, path); fprintf(stderr, "[repl] trace -> %s\n", path); }
       else { interp_trace_open(c, 0); fprintf(stderr, "[repl] trace closed\n"); }
+    }
+    // otattr — dump the OT/GTE submission-attribution tables (game/render/ot_attr.h, `debug otattr`).
+    // Re-walks the LAST OT this Core drew (GpuState::s_ot_madr) READ-ONLY (header/first-word peeks
+    // only — no gpu_gp0() call, so no draw/state side effects), and for each non-empty node looks up
+    // the packet-pool store span attribution recorded during that frame's submission: {emitter fn = the
+    // otattr shadow-stack top, caller fn = one frame below it, node = the render-walk object scope open
+    // at store time}. Only produces attribution if `debug otattr` was ALREADY ON while the frame that
+    // built this OT ran — turn the channel on BEFORE the frame you want to inspect, then run this after.
+    // Pipe stderr through tools/symres.py to resolve the raw hex fn/node addresses to FUN_/native names.
+    else if (!strcmp(cmd, "otattr")) {
+      OtAttr& oa = c->mRender->otAttr;
+      fprintf(stderr, "[otattr] frame=%u spans=%d(overflow=%d) gteBuckets=%d(overflow=%d)\n",
+              oa.frame(), oa.spanCount(), oa.spanOverflow(), oa.gteCount(), oa.gteOverflow());
+      uint32_t madr = c->game->gpu.s_ot_madr;
+      if (!madr) {
+        fprintf(stderr, "[otattr] GpuState::s_ot_madr == 0 — no OT walked yet this run\n");
+      } else {
+        uint32_t a = madr & 0x1FFFFC;
+        for (int idx = 0; idx < 0x10000; idx++) {
+          uint32_t hdr = c->mem_r32(a);
+          unsigned n = hdr >> 24;   // prim GP0-word count (tag high byte) — 0 == link-only sentinel node
+          if (n > 0) {
+            uint32_t w0 = c->mem_r32(a + 4);
+            uint8_t  op = (uint8_t)(w0 >> 24);
+            int vx = 0, vy = 0;
+            if (n >= 2) { uint32_t w1 = c->mem_r32(a + 8); vx = (int16_t)(w1 & 0xFFFF); vy = (int16_t)(w1 >> 16); }
+            OtAttr::Span sp{};
+            bool found = oa.lookupStore(a, &sp);
+            uint32_t node = found ? sp.node : 0;
+            uint32_t beh = node ? c->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0;
+            fprintf(stderr, "  [%4d] pool=0x%08X op=0x%02X n=%u v0=(%d,%d)  fn=0x%08X caller=0x%08X node=0x%08X beh@node+1C=0x%08X\n",
+                    idx, 0x80000000u | a, op, n, vx, vy,
+                    found ? sp.fn : 0, found ? sp.caller : 0, node, beh);
+          }
+          uint32_t next = hdr & 0xFFFFFF;
+          if (next == 0xFFFFFF || next == 0) break;
+          a = next & 0x1FFFFC;
+        }
+      }
+      fprintf(stderr, "[otattr] GTE RTPS/RTPT per-(fn,node) call counts this frame:\n");
+      for (int i = 0; i < oa.gteCount(); i++) {
+        const OtAttr::GteBucket* g = oa.gteAt(i);
+        fprintf(stderr, "  fn=0x%08X node=0x%08X count=%u\n", g->fn, g->node, g->count);
+      }
     }
     else if (!strcmp(cmd, "stage")) fprintf(stderr, "[repl] stage=%08X sm48=%d\n", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }

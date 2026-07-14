@@ -56,4 +56,21 @@ struct InterpDiag {
   // PSXPORT_DISPWATCH=0xADDR[:ra=0xRA] cache.
   uint32_t dispwatch = 0xFFFFFFFFu;          // 0xFFFFFFFF = env not read yet; 0 = off
   uint32_t dispwatch_ra = 0;
+
+  // `debug otattr` — OT/GTE submission-attribution shadow stack (overlay_router.cpp rec_dispatch).
+  // Pushed/popped ONLY around the two real dispatch-body call sites in rec_dispatch (main_dispatch /
+  // resident-overlay disp) — i.e. only guest fns entered via an INDIRECT (jalr/r2) dispatch, which is
+  // exactly the shape of a data-driven per-object handler call (node+0x1C behavior ptr, render-command
+  // tables, …). Direct recompiler-emitted `func_XXXX(c)` calls do NOT push — they're plain nested C
+  // calls, invisible here — so the stack top is "the last INDIRECTLY-dispatched handler still on the
+  // C call stack", which is the useful "who is this GP0/GTE submission attributed to" answer, not a
+  // full instruction-level call trace. depth can exceed the array cap (only the top 64 are kept); pop
+  // still tracks it symmetrically so push/pop never desyncs.
+  static constexpr int OTATTR_CAP = 64;
+  uint32_t otattr_stack[OTATTR_CAP] = {};
+  int      otattr_depth = 0;
+  void     otattrPush(uint32_t addr) { if (otattr_depth < OTATTR_CAP) otattr_stack[otattr_depth] = addr; otattr_depth++; }
+  void     otattrPop()               { if (otattr_depth > 0) otattr_depth--; }
+  uint32_t otattrTop()    const      { int d = otattr_depth; return (d > 0 && d <= OTATTR_CAP) ? otattr_stack[d - 1] : 0; }
+  uint32_t otattrCaller() const      { int d = otattr_depth; return (d > 1 && d - 1 <= OTATTR_CAP) ? otattr_stack[d - 2] : 0; }
 };

@@ -414,6 +414,7 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
+                                                     c->mRender->otAttr.trackGte(c);   // self-gated (`debug otattr`)
                                                      // interp60 no longer taps the GTE op stream (2026-07-08):
                                                      // build_lerp reprojects from the NATIVE capture
                                                      // (stampWorldCr fps_cr/fps_mv + the observer's node-span

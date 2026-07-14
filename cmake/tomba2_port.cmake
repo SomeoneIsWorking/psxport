@@ -247,6 +247,7 @@ set(PORT_SRC
   runtime/recomp/engine_overrides.cpp
   runtime/recomp/engine_override_thunk.cpp
   game/render/pkt_span.cpp
+  game/render/ot_attr.cpp
   game/render/render_observer.cpp
   game/render/overlay_gt3gt4.cpp
   game/render/overlay_ground_gt3gt4.cpp

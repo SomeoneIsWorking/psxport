@@ -104,6 +104,23 @@ pc_render mesh-orientation bug (bug #44) against the GTE-computed guest OT packe
 geomblk under `PSXPORT_GATE=1`, where the substrate still populates the OT/packet pool alongside
 pc_render's own float projection).
 
+`otattr` (OT/GTE SUBMISSION ATTRIBUTION, `game/render/ot_attr.{h,cpp}`, USER 2026-07-14 — serves bug #45
+"multi-quad batching" + bug #34 dialog-panel emitter): traces every guest-submitted packet-pool store
+[0x800BFE68,0x800E7E68) and every GTE RTPS/RTPT back to (a) the emitting guest FN — a per-Core shadow
+stack of guest addrs pushed/popped ONLY around rec_dispatch's two real dispatch-body calls
+(`InterpDiag::otattr*`, overlay_router.cpp), so it sees INDIRECT/jalr-dispatched handlers (e.g. a
+node+0x1C behavior ptr) but is BLIND to plain nested `func_XXXX(c)` C calls and to fully-NATIVE (never
+dispatched) draw paths — and (b) the world-object NODE, via the SAME `cur_render_node` fallback
+(render_internal.h: walk's beginObject() node, else guest scratch 0x1F80028C) the native GT3/GT4 submit
+path itself uses. Turn the channel on BEFORE the frame to inspect, then run the REPL `otattr` command: it
+re-walks the LAST OT (`GpuState::s_ot_madr`) READ-ONLY (header/first-word peeks only, no `gpu_gp0()`
+call — zero draw/state side effects) and prints `pool= op= n= v0=(x,y) fn= caller= node= beh@node+1C=`
+per non-empty node, plus the frame's per-(fn,node) GTE call-count histogram. Diagnostic only — zero
+behavior change when off (every entry point is gated by a single `cfg_dbg("otattr")` check, same idiom
+as `recdep`/`ovhit`), no guest-memory writes. Tables are per-Core, sized statically (spans 65536,
+GTE buckets 512), reset lazily on the frame's first touch; overflow is counted, never silently dropped.
+Pipe stderr through `tools/symres.py` to resolve the raw hex fn/node/beh addresses to FUN_/native names.
+
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames
 `waitloop` heuristic — prefer btyield) · `btyield` (at each coro yield: guest-stack scan AND a PRECISE

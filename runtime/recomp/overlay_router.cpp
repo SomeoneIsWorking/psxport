@@ -227,13 +227,29 @@ void rec_dispatch(Core* c, uint32_t addr) {
     // resolve addresses to FUN_/native names automatically.
     guest_backtrace_to(c, stderr);
   }
+  // `debug otattr` — OT/GTE submission-attribution shadow stack (docs/config.md, docs/gfx-debug.md):
+  // push the guest fn addr around the two real dispatch-body calls below (main_dispatch / resident-
+  // overlay disp), pop on return. Diagnostic only — zero behavior change, no guest-memory writes.
+  // cfg_dbg() is a cheap linear scan over the (usually empty) enabled-channel set, same idiom as the
+  // `recdep`/`ovhit` checks above in this same hot function — a single predicted-false check when off.
+  const bool otattr_on = cfg_dbg("otattr");
   uint32_t a = addr & 0x1FFFFFFF;
-  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) { main_dispatch(c, addr); return; }
+  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) {
+    if (otattr_on) c->idiag.otattrPush(addr);
+    main_dispatch(c, addr);
+    if (otattr_on) c->idiag.otattrPop();
+    return;
+  }
   for (int i = 0; i < g_rec_overlay_count; i++) {
     const RecOverlay* o = &g_rec_overlays[i];
     if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
       const RecOverlay* res = resident_overlay(c, o->base);
-      if (res) { res->disp(c, addr); return; }
+      if (res) {
+        if (otattr_on) c->idiag.otattrPush(addr);
+        res->disp(c, addr);
+        if (otattr_on) c->idiag.otattrPop();
+        return;
+      }
       // overlay slot but NO resident overlay signature matches -> fail fast. Dump what IS resident so a
       // miss-loop can see whether the slot holds an unexpected overlay or a relocated/clobbered image.
       const unsigned char* ram = c->ram + (o->base & 0x1FFFFFFF);
