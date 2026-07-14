@@ -95,7 +95,7 @@
   G_psx_* same-exec pairs, wrist_*, csg_*). Diagnostics used (all reverted): PSXPORT_DEBUG chaintrace/
   chainshow/poolwatch/cw7/odlk/obswrap.
 
-## Fisherman's-hut interior "much different than oracle" — repro BLOCKED (quest-gate + cross-area warp overlay gap) (2026-07-10, OPEN)
+## Fisherman's-hut interior "much different than oracle" (2026-07-10, OPEN — repro UNBLOCKED 2026-07-14)
 
 - **symptom (USER):** entering the fisherman's hut (fish-painted door, first field) shows something much
   different under the default config (`./run.sh`, pc_skip + pc_render) vs the oracle. Given entry position
@@ -105,13 +105,11 @@
   1. **The hut EXTERIOR renders byte-identically** default vs oracle (evidence:
      `scratch/screenshots/hut/cmp_grid.png` — 3 matched points, pixel-identical). So the divergence is
      inside/after entry, not the field render at that spot.
-  2. **The hut entry is quest-GATED and not available in a fresh headless newgame.** Nav lands Tomba on the
-     front lane (Z=3968); the user's Z=2352 is a different lane. A definitive 28-spot sweep of the whole lane
-     (idle + `tap up` + `up+Circle` at each, watchpoint on the area id `0x800bf870`) produced **0 area-id
-     writes** — no up/up+Circle interaction anywhere loads a new area. The in-game prompts reachable in this
-     state are "Use ↑+O to read signs" (a signpost) and "Use ↑ to jump to the back" (the hut's back-yard,
-     not the interior). So the interior is a separate area whose door is closed until quest progress the
-     fresh newgame lacks.
+  2. ~~quest-gated~~ **FALSIFIED (USER 2026-07-14): the hut interior IS reachable in a fresh game — a pad
+     recording enters it** (`replays/scene-transitions/` hut-entry captures; play back with
+     `PSXPORT_PAD_REPLAY=<file>` under SBS to verify). The earlier 28-spot sweep's 0 area-id writes only
+     proved the sweep's spots/inputs never triggered the door, not that a gate exists. Use the replay as
+     the repro.
 - **why this matters / render-arch hypothesis (unverified):** if the interior is a separate area, its field
   code runs a per-mode renderer selected by the area's mode byte `0x800BF870` through the 22-entry table at
   `0x80015268` (`game/render/perobj_dispatch.cpp`). Several table entries are per-scene OVERLAY submitter
@@ -1784,3 +1782,14 @@ draft was already byte-faithful.
   native color math. No code was written — correct per no-bandaids.
 - Priority per the 0x8003F9A8 resolution above: the 4 substrate list-walkers port FIRST; 8013CDD4
   stays under the widescreen-margin debt (journal later-129/131).
+
+## ires (internal resolution) modifier is a NO-OP — never wired past the readout (2026-07-14)
+
+- Proven: ires=1 vs ires=4 frames byte-identical (md5 8c4e6a32..., scratch/screenshots/ires{1,4}_before.ppm).
+- Chain: mods.ires is read only by gpu_gpu_video_status() (a text readout for the RmlUi overlay). The 3D
+  passes rasterize into the fixed 1024x512 VRAM-space texture (gpu_gpu.cpp ensure_targets + hardcoded
+  viewport gpu_gpu.cpp:488); frame_via_fb() is a permanent stub — the "Pass 2 scaled scratch FB" its
+  comment references was never built. Not a deglobalization regression; never finished.
+- Fix = design unit: a separate ires-scaled 3D target (recreated on live toggle) receiving the opaque+semi
+  passes, composited/downsampled back over the pixel-exact VRAM-space 2D; redesign the ires_cap clamp.
+  Full analysis in the diagnosis report (session 2026-07-14).
