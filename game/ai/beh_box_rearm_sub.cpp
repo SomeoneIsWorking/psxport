@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -32,7 +33,6 @@ constexpr uint32_t BEH_FN = 0x8013ADBCu;
 static inline uint32_t leafr1(Core* c, uint32_t a0, uint32_t fn) {
   c->r[4] = a0; rec_dispatch(c, fn); return c->r[2];
 }
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
 
 }  // namespace
 
@@ -41,7 +41,7 @@ void beh_box_rearm_sub(Core* c) {
   uint8_t st = c->mem_r8(nd + 4);
 
   if (st == 1) {
-    if (Actor(c, nd).boundsCull() != 0) leaf1(c, nd, 0x8013ac98u);   // FUN_8007778C native / FUN_8013AC98
+    if (Actor(c, nd).boundsCull() != 0) guest_leaf(c, 0x8013ac98u, nd);   // FUN_8007778C native / FUN_8013AC98
     c->mem_w8(nd + 0x29, 0);
     c->mem_w8(nd + 0x2b, 0);
   } else if (st < 2) {
@@ -65,7 +65,7 @@ void beh_box_rearm_sub(Core* c) {
       c->mem_w8(nd + 0x29, 1);
       c->mem_w8(nd + 5, c->mem_r8(nd + 0x5e));
     }
-    leaf1(c, nd, 0x8013ac98u);                                        // FUN_8013AC98
+    guest_leaf(c, 0x8013ac98u, nd);                                        // FUN_8013AC98
   } else if (st == 3) {
     c->engine.spawn.despawn(nd);                                        // FUN_8007A624
   }

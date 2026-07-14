@@ -27,6 +27,7 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "animation.h" // Animation::step (FUN_80076D68)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -34,13 +35,6 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x8013B2E4u;
 
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
-}
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
 static inline uint32_t leafr(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); return c->r[2]; }
 static inline uint32_t leaf4r(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t fn) {
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; c->r[7] = a3; rec_dispatch(c, fn); return c->r[2];
@@ -73,8 +67,8 @@ void beh_flagbit_timer_machine(Core* c) {
    uint32_t bit = (c->mem_r8(0x800bfa13u) >> (c->mem_r8(nd + 3) & 31)) & 1u;
    uint32_t a2c;
    if (bit != 0) { c->mem_w8(nd + 0x5e, 0); a2c = 0; }
-   else { leaf3(c, nd, 1, 31, 0x8013af18u); a2c = 1; }                     // FUN_8013AF18(node,1,31)
-   leaf3(c, nd, 0x8001b7b0u, a2c, 0x80077c40u);                            // FUN_80077C40(node,0x8001B7B0,a2)
+   else { guest_leaf(c, 0x8013af18u, nd, 1, 31); a2c = 1; }                     // FUN_8013AF18(node,1,31)
+   guest_leaf(c, 0x80077c40u, nd, 0x8001b7b0u, a2c);                            // FUN_80077C40(node,0x8001B7B0,a2)
    c->mem_w8(nd + 0, 1);
    c->mem_w16(nd + 0x80, 400);
    c->mem_w16(nd + 0x82, 800);
@@ -111,7 +105,7 @@ void beh_flagbit_timer_machine(Core* c) {
    uint8_t n5e = c->mem_r8(nd + 0x5e);
    c->mem_w8(nd + 6, (uint8_t)(n6 + 1));
    uint32_t a0 = (n5e != 0) ? 97u : 98u;
-   leaf2(c, a0, 65, 0x8004ed94u);                     // FUN_8004ED94(97|98, 65)
+   guest_leaf(c, 0x8004ed94u, a0, 65);                     // FUN_8004ED94(97|98, 65)
    c->mem_w8(0x800bf809u, 1);
    goto L4f8;
  }
@@ -125,8 +119,8 @@ void beh_flagbit_timer_machine(Core* c) {
    goto L4f8;
  }
  L4f8: {
-   leaf2(c, nd, 31, 0x8013b024u);                     // FUN_8013B024(node, 31)
-   leaf1(c, nd, 0x800518fcu);                          // FUN_800518FC(node)
+   guest_leaf(c, 0x8013b024u, nd, 31);                     // FUN_8013B024(node, 31)
+   guest_leaf(c, 0x800518fcu, nd);                          // FUN_800518FC(node)
    goto L50c;
  }
  L50c: {

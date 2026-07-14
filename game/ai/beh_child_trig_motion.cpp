@@ -27,6 +27,7 @@
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "trig.h"    // class Trig — libgte rsin/rcos
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -34,10 +35,6 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x8013A900u;
 
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn);
-}
 static inline uint32_t leafr(Core* c, uint32_t a0, uint32_t fn) {  // returns v0
   c->r[4] = a0; rec_dispatch(c, fn); return c->r[2];
 }
@@ -90,7 +87,7 @@ void beh_child_trig_motion(Core* c) {
         src += 2;
         c->mem_w32(rec + 12, 0);
         uint32_t a2 = (uint32_t)c->mem_r16s(src);
-        leaf3(c, rec, 12, a2, 0x80051B04u);          // FUN_80051B04(rec, 12, (int16)*src)
+        guest_leaf(c, 0x80051B04u, rec, 12, a2);          // FUN_80051B04(rec, 12, (int16)*src)
         src += 2;
         s2 += 1;
         s1 += 4;
@@ -101,8 +98,8 @@ void beh_child_trig_motion(Core* c) {
     uint8_t n3 = c->mem_r8(nd + 3);
     if (n3 == 0) {                                   // 0x8013aa84
       if (c->mem_r8(0x800BF8F7u) == 0) goto Lret;
-      leaf3(c, nd, 5, 2, 0x801252C0u);              // FUN_801252C0(node, 5, 2)
-      leaf3(c, nd, 5, 3, 0x801252C0u);              // FUN_801252C0(node, 5, 3)
+      guest_leaf(c, 0x801252C0u, nd, 5, 2);              // FUN_801252C0(node, 5, 2)
+      guest_leaf(c, 0x801252C0u, nd, 5, 3);              // FUN_801252C0(node, 5, 3)
       goto Lret;
     }
     if (n3 == 2) {                                   // 0x8013aabc
@@ -130,7 +127,7 @@ void beh_child_trig_motion(Core* c) {
       if ((int32_t)(int8_t)n3 < 0) goto L8c00;       // bltz (never true for lbu)
       if (n3 >= 3) goto L8c00;
       // n3 in {1,2}: FUN_80135414
-      leaf1(c, nd, 0x80135414u);
+      guest_leaf(c, 0x80135414u, nd);
       goto L8c00;
     }
     // n3 == 0: trig block @0x8013ab44

@@ -31,6 +31,7 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "animation.h" // Animation::step (FUN_80076D68)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -38,7 +39,6 @@ namespace {
 
 constexpr uint32_t BEH_FN = 0x8011D988u;
 
-static inline void leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
 static inline uint32_t leafr3(Core* c, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t fn) {
   c->r[4] = a0; c->r[5] = a1; c->r[6] = a2; rec_dispatch(c, fn); return c->r[2];
 }
@@ -51,7 +51,7 @@ void beh_actor_move_sm(Core* c) {
 
   if (st != 1) {
     if (st < 2) {
-      if (st == 0) leaf1(c, nd, 0x8011dcacu);            // FUN_8011DCAC (init)
+      if (st == 0) guest_leaf(c, 0x8011dcacu, nd);            // FUN_8011DCAC (init)
       return;
     }
     if (st != 2) {
@@ -71,18 +71,18 @@ void beh_actor_move_sm(Core* c) {
       uint8_t s137 = c->mem_r8(0x1f800137u);
       switch (n5) {
         case 0: case 4: case 5: case 6:
-          if (bf809 == 0 && s137 == 0) leaf1(c, nd, 0x801206f4u);   // FUN_801206F4
+          if (bf809 == 0 && s137 == 0) guest_leaf(c, 0x801206f4u, nd);   // FUN_801206F4
           break;
         case 1:
-          leaf1(c, nd, 0x8012175cu);                      // FUN_8012175C
+          guest_leaf(c, 0x8012175cu, nd);                      // FUN_8012175C
           break;
         case 0xb:
-          leaf1(c, nd, 0x801217f4u);                      // FUN_801217F4
+          guest_leaf(c, 0x801217f4u, nd);                      // FUN_801217F4
           if (leafr3(c, nd, 0, 0, 0x80080750u) != 0) { c->mem_w8(nd + 4, 3); return; }  // FUN_80080750
           c->mem_w8(nd + 5, 2);
           /* fallthrough */
         case 2: case 7: case 8:
-          leaf1(c, nd, 0x80120a64u);                      // FUN_80120A64
+          guest_leaf(c, 0x80120a64u, nd);                      // FUN_80120A64
           break;
         default: break;
       }
@@ -105,35 +105,35 @@ void beh_actor_move_sm(Core* c) {
       case 0:
         c->engine.animation.step(nd);                 // FUN_80076D68 (native)
         if (n3 != 3 && (bf809 != 0 || s137 != 0)) break;
-        if ((n3 & 1) == 0) leaf1(c, nd, 0x8011dfc0u);     // FUN_8011DFC0
-        else               leaf1(c, nd, 0x8011e340u);     // FUN_8011E340
+        if ((n3 & 1) == 0) guest_leaf(c, 0x8011dfc0u, nd);     // FUN_8011DFC0
+        else               guest_leaf(c, 0x8011e340u, nd);     // FUN_8011E340
         goto Ldb74;
       case 1:
-        if (n3 == 3) leaf1(c, nd, 0x8011f088u);           // FUN_8011F088
+        if (n3 == 3) guest_leaf(c, 0x8011f088u, nd);           // FUN_8011F088
         else {
           if (bf809 != 0 || s137 != 0) break;
-          leaf1(c, nd, 0x8011ead0u);                      // FUN_8011EAD0
+          guest_leaf(c, 0x8011ead0u, nd);                      // FUN_8011EAD0
         }
         goto Ldb74;
       case 2:
-        if (bf809 == 0) leaf1(c, nd, 0x8011f278u);        // FUN_8011F278
+        if (bf809 == 0) guest_leaf(c, 0x8011f278u, nd);        // FUN_8011F278
         break;
       case 3:
         if (n3 == 3 || (bf809 == 0 && s137 == 0)) {
-          leaf1(c, nd, 0x8011f998u);                      // FUN_8011F998
+          guest_leaf(c, 0x8011f998u, nd);                      // FUN_8011F998
           c->engine.animation.step(nd);               // FUN_80076D68 (native)
           c->engine.animation.step(nd);
           c->engine.animation.step(nd);
         }
         break;
       case 4:
-        leaf1(c, nd, 0x8011fc78u);                        // FUN_8011FC78
+        guest_leaf(c, 0x8011fc78u, nd);                        // FUN_8011FC78
        Ldb74:
-        leaf1(c, nd, 0x8012185cu);                        // FUN_8012185C
+        guest_leaf(c, 0x8012185cu, nd);                        // FUN_8012185C
         break;
       case 5:
         c->engine.animation.step(nd);                 // FUN_80076D68 (native)
-        leaf1(c, nd, 0x80120c50u);                        // FUN_80120C50
+        guest_leaf(c, 0x80120c50u, nd);                        // FUN_80120C50
         break;
       default: break;
     }

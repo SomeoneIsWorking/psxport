@@ -27,14 +27,13 @@
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x80129C00u;
-
-static inline void leaf(Core* c, uint32_t obj, uint32_t fn) { c->r[4] = obj; rec_dispatch(c, fn); }
 
 }  // namespace
 
@@ -59,9 +58,9 @@ void beh_anim_trigger_gates(Core* c) {
                                                   // producing +8 extra allocations at 0x800ED098 vs the
                                                   // recomp path. Corrected: n3==3 dispatches 0x8012982C.
   v1 = c->mem_r8(obj + 3);
-  if (v1 == 3) { leaf(c, obj, 0x8012982Cu); goto Lret; }
-  if (v1 < 4) { if ((int8_t)v1 < 0) goto Lret; leaf(c, obj, 0x801296E0u); goto Lret; }  // 0,1,2
-  if (v1 == 4) { leaf(c, obj, 0x80129984u); goto Lret; }
+  if (v1 == 3) { guest_leaf(c, 0x8012982Cu, obj); goto Lret; }
+  if (v1 < 4) { if ((int8_t)v1 < 0) goto Lret; guest_leaf(c, 0x801296E0u, obj); goto Lret; }  // 0,1,2
+  if (v1 == 4) { guest_leaf(c, 0x80129984u, obj); goto Lret; }
   goto Lret;                                       // node[3] >= 5
 
  Lcb0:                                            // STATE 1 — jump table on node[3]
@@ -70,8 +69,8 @@ void beh_anim_trigger_gates(Core* c) {
   switch (v1) {
     case 0: goto Lce0;
     case 1: goto Ld60;
-    case 2: leaf(c, obj, 0x80129160u); goto Lret;   // case 2 @ db4
-    case 3: leaf(c, obj, 0x801292E4u); goto Lret;   // case 3 @ dc4
+    case 2: guest_leaf(c, 0x80129160u, obj); goto Lret;   // case 2 @ db4
+    case 3: guest_leaf(c, 0x801292E4u, obj); goto Lret;   // case 3 @ dc4
     default: goto Ldd4;                              // case 4
   }
 
@@ -88,7 +87,7 @@ void beh_anim_trigger_gates(Core* c) {
     }
   }
  Ld3c:
-  leaf(c, obj, 0x8007778Cu);
+  guest_leaf(c, 0x8007778Cu, obj);
  Ld44:
   if (c->mem_r8(obj + 1) == 0) goto Lret;
   goto Ld98;
@@ -122,7 +121,7 @@ void beh_anim_trigger_gates(Core* c) {
     } while (a0i < (int)c->mem_r8(obj + 8));
   }
   c->mem_w8(obj + 1, 1);
-  leaf(c, obj, 0x80051C8Cu);
+  guest_leaf(c, 0x80051C8Cu, obj);
  Lret:
   return;
 }

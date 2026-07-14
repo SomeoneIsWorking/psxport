@@ -28,17 +28,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
 
 constexpr uint32_t BEH_FN = 0x8012A0B8u;
-
-static inline void leaf(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
-static inline void leaf2(Core* c, uint32_t a0, uint32_t a1, uint32_t fn) {
-  c->r[4] = a0; c->r[5] = a1; rec_dispatch(c, fn);
-}
 
 }  // namespace
 
@@ -61,11 +57,11 @@ void beh_box_seed_phase_gate(Core* c) {
     c->mem_w32(s1 + 0x18, 0x8013EA64u);             // node[0x18] = 0x8013EA64 (branch-delay store)
 
     if (n3 < 2) {
-      leaf2(c, s1, n3, 0x801360F4u);                // FUN_801360F4(node, node[3])
+      guest_leaf(c, 0x801360F4u, s1, n3);                // FUN_801360F4(node, node[3])
       for (int i = 0; i < 2; i++)
-        leaf2(c, s1, (uint32_t)i, 0x80139838u);     // FUN_80139838(node, 0), (node, 1)
+        guest_leaf(c, 0x80139838u, s1, (uint32_t)i);     // FUN_80139838(node, 0), (node, 1)
     } else {
-      leaf2(c, s1, n3, 0x8013AC34u);                // FUN_8013AC34(node, node[3])
+      guest_leaf(c, 0x8013AC34u, s1, n3);                // FUN_8013AC34(node, node[3])
     }
 
     // per-node[3] record copy: table @0x80149EC4, stride 10 bytes, element = base + node[3]*10
@@ -89,7 +85,7 @@ void beh_box_seed_phase_gate(Core* c) {
     c->mem_w16(s1 + 0x36, (uint16_t)avg2);
     c->mem_w16(s1 + 0x50, v32);                     // node[0x50] = node[0x32]
     c->mem_w16(s1 + 0x52, v32);                     // node[0x52] = node[0x32]  (delay slot store)
-    leaf2(c, s1, (uint32_t)v32, 0x80129E8Cu);       // FUN_80129E8C(node, node[0x32])
+    guest_leaf(c, 0x80129E8Cu, s1, (uint32_t)v32);       // FUN_80129E8C(node, node[0x32])
   }
   goto Lret;
 
@@ -98,7 +94,7 @@ void beh_box_seed_phase_gate(Core* c) {
     uint8_t b = c->mem_r8(0x1F800207u);             // scratchpad byte 0x1F800207
     if (b >= 32) goto Lret;
     if (b < 25) goto Lret;
-    leaf(c, s1, 0x80129E8Cu);                       // FUN_80129E8C(node)  (a1 = leftover, untouched)
+    guest_leaf(c, 0x80129E8Cu, s1);                       // FUN_80129E8C(node)  (a1 = leftover, untouched)
     c->mem_w8(s1 + 1, (uint8_t)s0);                 // node[1] = s0 (=1, delay-slot store)
   }
   goto Lret;
