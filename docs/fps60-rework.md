@@ -288,3 +288,53 @@ Coverage after this session: terrain + scene-table (grass/props) are both Tier 1
 re-render); backdrop is excluded entirely (verbatim). The object/entity walk (`perObjFlush`) is the ONLY
 remaining queue-lerp-heuristic geometry — Tier 2 (object-transform lerp) is the next step, unchanged
 target from the prior session's "Why Tier 2 isn't built" writeup.
+
+## Backdrop promoted from verbatim to a LAYER-TRANSFORM tier (2026-07-14, follow-up session)
+
+The backdrop tilemap is ONE layer whose only per-frame motion is its scroll offset (game-logic-driven,
+ParallaxBg::step) — so it is interpolated as ONE transform, replacing the previous "draw verbatim from
+Q[N-1]" exclusion (`kBackdropVerbatim`, deleted): `Fps60::tier1Render` re-runs the SAME native backdrop
+pass with the scroll offset overridden to a WRAP-AWARE lerp of the two real frames' captured offsets.
+
+**Scroll-field inventory (read of the pass + ParallaxBg RE):** `Render::backdropRender` (render_walk.cpp
+— was the file-local `render_bg_tilemap_native`, promoted to a method so tier1Render can call it) reads
+from PARALLAX_BG_SM (0x800ED018): per-frame-VARYING = scrollX/scrollY (+0x28/+0x2A, recomputed every
+RUNNING tick by ParallaxBg::step from camera yaw/pitch, wrapped mod +0x30/+0x32); STATIC per-area config
+= tpage(+0x04), clutbase(+0x06), W/H(+0x10/+0x11), tilemap ptr(+0x14), wrap moduli(+0x30/+0x32, INIT-
+stamped). The tilemap CONTENT (u16[H][W] grid) is static area data. No per-tile animation state — the
+capture-or-stop audit found nothing beyond the two scroll shorts.
+
+**Mechanism:** `Fps60::bgScroll` (fps60.cpp) is the scroll-read choke backdropRender calls instead of a
+raw struct read — real call: guest read + capture into `mBgCur` (rotated with mCamCur/mRqCur in
+present_vk's swap); present-time: returns `mBgOverride` (no guest read). tier1Render computes
+`mBgOverride = wrapLerp(mBgPrev, mBgCur, mod, t)` per axis (shortest modular path: diff folded into
+[-mod/2, mod/2] before lerp, result re-wrapped into [0,mod)) and re-invokes backdropRender(0x800ED018)
+inside the same rqRedirect/mSink + DisplayPassGuard scope as terrain/scene-table, gated exactly like the
+real call (mBackdropTrusted && *0x800bf873==0 && bgstate==0). backdropRender's push2dQuad now routes
+through rqRedirect (was a direct `game->rq` write — same bug class fixed in the submitters last session).
+`isTier1Owned` now returns true for any RQ_BACKGROUND item, so the queue-lerp never sees the layer.
+
+**Gates (tree/windmill repro, scratch/cfg/psxport_settings.ini, AUTO_SKIP; exactness window = f401-440
+with a held-left camera pan so the scroll actually moves — the static window has Δscroll=0 and proves
+nothing):**
+- A. Build clean.
+- B. t-forced exactness, backdrop-only bbox x=[0,90) y=[0,20) (data-derived: zero green/world pixels
+  across the whole pan): **t=1: 0/72000 diff px over 40 pairs (100%, bit-identical). t=0: 0/70200 over
+  39 pairs (100%, bit-identical).** A real WRAP EVENT sat inside the window (REPL poll: scrollX
+  0x0003→0x0235 across f420-425, modX=0x0240) — endpoints stayed 0-diff through it, and the t=0.5
+  cloud-centroid check over f417-422 shows every interp position between its real neighbors (naive
+  long-way lerp = ~288px displacement).
+- C. Telemetry (run 340+60, PSXPORT_DEBUG=fps60): tier1 (world) 294 prims/frame, backdrop-lerped 352
+  prims/frame (both stable), queue-lerp pool = dynamic objects only (this-frame matched 31% of 1218 at
+  the f390 sample — pool unchanged from last session, as expected).
+- D. check_stage2.py, same window, git-stash baseline vs after: static-identity 500/4489090 (0.0111%)
+  BOTH, midpoint compliance 95.6% BOTH — bit-identical gate output (the static window has no scroll
+  motion, so verbatim-replay and lerp-of-equal-endpoints coincide; the change is exercised by gate B's
+  pan window instead).
+- E. SBS-full smoke: combat leg 0 diverges through f23820 (320s), watch-cut leg 0 diverges through
+  f21900 (300s) — host-only change, as expected.
+- F. fps60-off (psxport_settings_fps60off.ini, run 400, shot): normal field frame, no fps60 log lines.
+
+Coverage after this session: terrain + scene-table (camera-lerp) + backdrop (layer-transform scroll
+lerp) are all Tier 1. The object/entity walk (`perObjFlush`) remains the only queue-lerp-heuristic
+geometry — Tier 2 (object-transform lerp) unchanged as the next step.

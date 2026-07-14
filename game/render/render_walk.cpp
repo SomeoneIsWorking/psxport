@@ -86,13 +86,21 @@ void Render::perObjFlush() {
 // Tile entry bits: [0:3]=atlas col, [4:7]=atlas row, [8:11]=clut sub-index. U=(t&0xF)<<4, V=(t&0xF0)+8 (the
 // half-tile V bias is in the source data layout — faithful), clut=clutbase+((t&0xF00)>>2). Texpage 0x0E =
 // 4bpp @ VRAM(896,0) (set once via a GP0(0xE1) prim in the PSX body; applied per-quad here).
-static void render_bg_tilemap_native(Core* c, uint32_t t4) {
+// TIER 1 BACKDROP (docs/fps60-rework.md): scrollX/scrollY are the ONLY per-frame-varying fields this fn
+// reads (PARALLAX_BG_SM+0x28/+0x2A, computed by ParallaxBg::step from camera yaw/pitch every RUNNING
+// tick) — everything else (W/H/tilemap ptr/tpage/clutbase/wrap-moduli) is static per-area config, set
+// once at INIT and unchanged while running. The scroll read goes through the fps60 provider (mirrors
+// sceneCam): byte-identical to the plain struct read when fps60 is off or this is the real per-logic-
+// frame call (which also captures the result into Fps60::mBgCur); during Tier-1's present-time backdrop
+// re-render (Fps60::tier1Render, fps60.cpp) it instead returns wrapLerp(mBgPrev,mBgCur,t), no guest read.
+void Render::backdropRender(uint32_t t4) {
+  Core* c = mCore;
   int W = c->mem_r8(t4 + 0x10), H = c->mem_r8(t4 + 0x11);
   if (W == 0 || H == 0) return;
   int rowstride = W * 2;                          // s0 — bytes per map row
   int mapbytes  = rowstride * H;                  // s3 — total map bytes (wrap modulus)
-  int scrollX = c->mem_r16s(t4 + 0x28);
-  int scrollY = c->mem_r16s(t4 + 0x2a);
+  int scrollX, scrollY;
+  c->game->fps60.bgScroll(c, t4, scrollX, scrollY);
   uint32_t map      = c->mem_r32(t4 + 0x14);
   uint16_t tpage    = c->mem_r16(t4 + 0x04);
   uint16_t clutbase = c->mem_r16(t4 + 0x06);
@@ -138,7 +146,11 @@ static void render_bg_tilemap_native(Core* c, uint32_t t4) {
       int xs[4] = { X, X + 16, X, X + 16 }, ys[4] = { Y, Y, Y + 16, Y + 16 };
       int us[4] = { u, u + 16, u, u + 16 }, vs[4] = { v, v, v + 16, v + 16 };
       sil_bbox_log_i("bg_tilemap", xs, ys, 4);
-      c->game->rq.push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, col, col, col,
+      // Tier-1 redirect (mirrors native_terrain.cpp / fieldEntityRender's fix — see fps60-rework.md
+      // "Tier 1 extended"): route through rqRedirect so re-invoking this fn at present time (Fps60::
+      // tier1Render) lands in the isolated mSink, never the live queue the next real frame will build.
+      (c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq)
+          .push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, col, col, col,
                              tp_x, tp_y, mode, /*raw=*/1, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
       c->mRender->stats.snCmds++;
       t0 += 2; if (t0 >= rowstride) t0 = 0;        // column wrap
@@ -197,7 +209,7 @@ void Render::sceneNative() { Core* c = mCore;
   // screen bug) where the oracle (pure PSX render) shows the expected black load-hold instead.
   if (mBackdropTrusted && c->mem_r8(0x800bf873u) == 0) {
     uint32_t bgstate = c->mem_r8(0x800bf870u);
-    if (bgstate == 0) render_bg_tilemap_native(c, 0x800ed018u);
+    if (bgstate == 0) backdropRender(0x800ed018u);
   }
   if (cfg_dbg("bgonly")) { c->r[4] = saved; return; }  // PROBE: backdrop only (test if ov_render_frame already drew the world)
   // AREA-INIT SUPPRESSION: on the GAME field-area-machine OBJECT-PLACEMENT init frame (stage GAME, sm[0x48]==2

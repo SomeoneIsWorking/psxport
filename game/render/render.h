@@ -147,6 +147,15 @@ public:
   // ov_field_entity_render (taxi-parameter c->r[4]).
   void fieldEntityRender(uint32_t es);
 
+  // backdropRender (guest overlay FUN_80115598, the seaside field's state-0 background drawer): draws
+  // the scrolling sky/parallax tilemap as native RQ_BACKGROUND quads. Reads the PARALLAX_BG_SM struct at
+  // `t4`; its only per-frame-varying inputs are the scroll offsets at t4+0x28/+0x2A (game-logic-driven —
+  // ParallaxBg::step, not camera projection), read through Fps60::bgScroll so Fps60's Tier-1 present-time
+  // re-render (fps60.cpp tier1Render) can feed it a wrap-aware lerped scroll instead of a guest read. Was
+  // the file-local `render_bg_tilemap_native` (render_walk.cpp); promoted to a method so tier1Render can
+  // call the SAME pass, mirroring terrainRenderAll/fieldEntityRender.
+  void backdropRender(uint32_t t4);
+
   // ---- SUBSTRATE MIRROR: per-object cmd-list dispatch (guest FUN_8003CDD8 / FUN_8003F698) --------
   // These run UNDER the render-underneath architecture (issue #32): the substrate walk cluster calls
   // them as PLAIN intra-shard C calls (func_8003CDD8/func_8003F698), never through rec_dispatch, so

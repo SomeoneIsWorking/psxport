@@ -23,10 +23,14 @@
 // dbg_node==kTerrainDbgNode or kSceneTableDbgNode — see render_queue.h) are excluded from matchAndLerp's
 // queue-lerp entirely (see kTier1Sink in fps60.cpp) so they are drawn exactly once.
 //
-// SCREEN-SPACE BACKDROP (the scrolling sky/parallax tilemap, render_walk.cpp render_bg_tilemap_native) is
-// the OPPOSITE case: its motion is game-logic scroll, not camera projection, so it must NEVER be lerped
-// OR re-rendered — it is excluded from the queue-lerp and drawn VERBATIM from Q[N-1] every interp present
-// (fps60.cpp kBackdropVerbatim).
+// SCREEN-SPACE BACKDROP (the scrolling sky/parallax tilemap, Render::backdropRender — was the file-local
+// render_bg_tilemap_native) is a LAYER-TRANSFORM tier, not a camera tier: the whole layer's only per-frame
+// motion is its scroll offset (game-logic-driven — ParallaxBg::step, not camera projection), so it is
+// interpolated as ONE transform, not per-prim: `tier1Render` re-runs `Render::backdropRender()` (the SAME
+// native pass the real per-logic-frame call uses) with the scroll offset overridden to a WRAP-AWARE lerp
+// of the two real frames' captured offsets (mBgCur/mBgPrev, `bgScroll()`), output redirected into `mSink`
+// alongside terrain/scene-table. It is excluded from the queue-lerp entirely (RQ_BACKGROUND has exactly
+// one producer — layer alone is its identity, see isTier1Owned in fps60.cpp).
 //
 // The match heuristic (matchAndLerp) remains for everything tier-1/2 don't yet own (objects, HUD, 2D):
 // docs/fps60-rework.md's "REDIRECT" flags it as hack debt to be replaced, emitter by emitter, by real
@@ -88,8 +92,22 @@ struct Fps60 {
                                       // re-render) — never the live `game->rq` the next real frame builds.
                                       // Heap-allocated lazily (RQ_MAX items is ~16MB — same reason mRqCur/
                                       // mRqPrev/mRqLerp below are `new[]`, not embedded arrays).
-  long mTier1PrimsThisFrame = 0;     // telemetry: prims tier1Render drew into mSink this present
+  long mTier1PrimsThisFrame = 0;     // telemetry: WORLD (terrain+scene-table) prims tier1Render drew into mSink
   void tier1Render(Core* core, float t);   // re-run terrainRenderAll() under lerp(mCamPrev,mCamCur,t) into mSink
+
+  // ---- TIER 1 BACKDROP: game-logic-scroll LAYER-TRANSFORM lerp (docs/fps60-rework.md) -----------------
+  // Two-slot host capture of PARALLAX_BG_SM's per-frame-varying scroll offset (0x800ED018+0x28/+0x2A),
+  // captured by bgScroll() on every REAL (non-override) Render::backdropRender() call — mirrors sceneCam's
+  // self-capture. Everything else backdropRender reads (W/H/tilemap ptr/tpage/clutbase/wrap-moduli) is
+  // static per-area config, unchanged while the layer runs, so it is safe to re-read directly at present
+  // time (same invariant as terrain/scene-table's static geometry) without a capture slot.
+  struct Fps60Bg { int scrollX = 0, scrollY = 0; };
+  Fps60Bg mBgCur, mBgPrev;
+  bool    mBgOverrideOn = false;   // set only while tier1Render() is re-invoking backdropRender()
+  Fps60Bg mBgOverride;             // the wrap-lerped scroll offset backdropRender() reads while mBgOverrideOn
+  // bgScroll: the scroll-offset read choke Render::backdropRender() calls instead of reading t4+0x28/+0x2A
+  // directly — real call: reads + captures into mBgCur; present-time override: returns mBgOverride.
+  void bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY);
 
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
@@ -121,9 +139,10 @@ struct Fps60 {
   std::unordered_map<uint32_t, int> mNodeTotalA, mNodeMatchedA;
   long mMatchedThisFrame = 0, mUnmatchedThisFrame = 0;        // this-frame telemetry
   long mMatchedTotal = 0, mUnmatchedTotal = 0;                // running totals (periodic log, PSXPORT_DEBUG=fps60)
-  // BACKDROP EXCLUSION (fps60.cpp kBackdropVerbatim): screen-space scroll layer prims, drawn verbatim from
-  // Q[N-1] every interp present — never matched, never lerped. Counted separately from matched/unmatched
-  // so telemetry distinguishes "never eligible" from "eligible, no confident pair this frame".
+  // BACKDROP TELEMETRY: prims tier1Render drew into mSink for the backdrop layer (RQ_BACKGROUND) this
+  // present, counted separately from mTier1PrimsThisFrame (terrain+scene-table, RQ_WORLD) so telemetry
+  // distinguishes the two producers sharing the sink. Set in tier1Render, not matchAndLerp — the backdrop
+  // is tier1-owned (isTier1Owned), never matched/lerped by the queue heuristic below.
   long mBackdropPrimsThisFrame = 0;
   void buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out);
   void matchAndLerp(Core* core);   // fills mRqLerp/mNLerp by matching mRqPrev (Q[N-1]) against mRqCur (Q[N])

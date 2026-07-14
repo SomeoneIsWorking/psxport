@@ -92,6 +92,31 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   }
 }
 
+// ---- TIER 1 BACKDROP: game-logic-scroll layer-transform lerp (docs/fps60-rework.md) --------------------
+void Fps60::bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY) {
+  if (mBgOverrideOn) { scrollX = mBgOverride.scrollX; scrollY = mBgOverride.scrollY; return; }
+  scrollX = c->mem_r16s(t4 + 0x28u);
+  scrollY = c->mem_r16s(t4 + 0x2au);
+  // TIER 1 capture: this is a REAL-frame call — mirror it into mBgCur, rotated in lockstep with mRqCur/
+  // mRqPrev / mCamCur/mCamPrev by present_vk's end-of-frame swap.
+  if (game->mods.fps60) { mBgCur.scrollX = scrollX; mBgCur.scrollY = scrollY; }
+}
+
+// Shortest-signed-path lerp for a value the guest wraps into [0, mod) every tick (ParallaxBg::step's
+// wrapMod). A naive `prev + (cur-prev)*t` sweeps the LONG way around a wrap boundary — e.g. prev=254,
+// cur=2, mod=256: naive t=0.5 gives 128 (all the way across the map); the actual motion was 254->255->0->
+// ->1->2, whose midpoint is 0. Exact at t=0/t=1 by construction (integer diff, lroundf(diff*0)=0 and
+// lroundf(diff*1)=diff are both exact for integer diff).
+static int wrapLerp(int prev, int cur, int mod, float t) {
+  if (mod <= 0) return prev + (int)lroundf((float)(cur - prev) * t);
+  int diff = cur - prev;
+  if (diff >  mod / 2) diff -= mod;
+  if (diff < -mod / 2) diff += mod;
+  int v = prev + (int)lroundf((float)diff * t);
+  v %= mod; if (v < 0) v += mod;
+  return v;
+}
+
 // ---- TIER 1: camera-lerp native world (terrain) re-render (docs/fps60-rework.md "Object-tier attempt") -
 // Re-runs Render::terrainRenderAll() — the SAME enumeration+draw sequence the real per-logic-frame walk
 // uses (submit.cpp/render_walk.cpp) — under lerp(mCamPrev, mCamCur, t) instead of a guest camera read
@@ -142,13 +167,33 @@ void Fps60::tier1Render(Core* core, float t) {
     // Gated the same way the real call is (render_walk.cpp sceneNative): mSceneTableTrusted is computed once
     // per real frame and unchanged since (present-time invariant — no tick has run since).
     if (c->mRender->mSceneTableTrusted) c->mRender->fieldEntityRender(0x800F2418u);
+
+    // BACKDROP (game-logic scroll, LAYER-TRANSFORM lerp — not camera-projected, so NOT part of the camera
+    // override above): mirrors sceneNative's own gate (render_walk.cpp) exactly — mBackdropTrusted (the
+    // same trust latch the real call uses, computed once per real frame and unchanged since, per the
+    // present-time invariant) && the field-drawer-selector byte == 0 && bgstate == 0 (only the tilemap
+    // drawer, state 0, is natively owned). The wrap moduli (t4+0x30/+0x32) are static per-area config
+    // (ParallaxBg INIT), safe to re-read directly here — same as W/H/tilemap-ptr/tpage/clutbase, which
+    // backdropRender() itself re-reads directly below (unchanged guest state this interval).
+    if (c->mRender->mBackdropTrusted && c->mem_r8(0x800bf873u) == 0 && c->mem_r8(0x800bf870u) == 0) {
+      int modX = c->mem_r16(0x800ed018u + 0x30u), modY = c->mem_r16(0x800ed018u + 0x32u);
+      mBgOverride.scrollX = wrapLerp(mBgPrev.scrollX, mBgCur.scrollX, modX, t);
+      mBgOverride.scrollY = wrapLerp(mBgPrev.scrollY, mBgCur.scrollY, modY, t);
+      mBgOverrideOn = true;
+      c->mRender->backdropRender(0x800ed018u);
+      mBgOverrideOn = false;
+    }
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
   c->mRender->projParams.restore(projSaved);
 
   mSink->sortQueue();
-  mTier1PrimsThisFrame = mSink->n;
+  // Split mSink's telemetry by producer: RQ_BACKGROUND (backdrop) vs RQ_WORLD (terrain+scene-table) — the
+  // two producers sharing the sink, distinguished the same way the debug print already reported them.
+  mBackdropPrimsThisFrame = 0;
+  for (int i = 0; i < mSink->n; i++) if (mSink->items[i].layer == RQ_BACKGROUND) mBackdropPrimsThisFrame++;
+  mTier1PrimsThisFrame = mSink->n - mBackdropPrimsThisFrame;
   // DIAG (debug channel "tier1sc"): the aggregate screen bbox tier1Render actually re-rendered this
   // present, split by producer — used once to data-derive the scene-table's on-screen footprint for the
   // exactness gate (docs/fps60-rework.md), not load-bearing.
@@ -250,25 +295,23 @@ static constexpr uint32_t kNoNode = 0xFFFFFFFFu;
 // sentinels are what let the exclusion target ONLY what tier1Render actually re-renders, emitter by
 // emitter, as each one gets RE'd+ported per docs/fps60-rework.md's "REDIRECT" doctrine.
 static constexpr uint32_t kTier1Sink = 0xFFFFFFFEu;
+// BACKDROP = TIER 1 (LAYER-TRANSFORM lerp, docs/fps60-rework.md): the scrolling sky/parallax tilemap
+// (Render::backdropRender) is screen-space, GAME-LOGIC-DRIVEN scroll — not camera-projected geometry — so
+// it is never matched/lerped per-prim by the queue-lerp heuristic below; it is re-rendered as ONE layer
+// through the SAME native pass with the scroll offset overridden to a lerp of the two real frames'
+// captured offsets (Fps60::tier1Render), output landing in the same mSink as terrain/scene-table. Its
+// identity is the RQ layer itself: RQ_BACKGROUND has exactly one producer (backdropRender — grep-verified,
+// the only push2dQuad(RQ_BACKGROUND, ...) call site in the tree), so layer IS its real engine identity
+// here; no separate dbg_node sentinel is needed (RQ_BACKGROUND items get dbg_node==0 from emitOrQueue
+// regardless — layer already disambiguates them from every dbg_node==0 RQ_WORLD producer).
 static inline bool isTier1Owned(const RqItem& it) {
+  if (it.layer == RQ_BACKGROUND) return true;
   return it.layer == RQ_WORLD && (it.dbg_node == kTerrainDbgNode || it.dbg_node == kSceneTableDbgNode);
 }
-// BACKDROP EXCLUSION RULE: the scrolling sky/parallax tilemap (render_walk.cpp render_bg_tilemap_native)
-// is screen-space, GAME-LOGIC-DRIVEN scroll — not camera-projected geometry, so per the fps60-rework
-// principle ("world-static geometry has no motion of its own; the camera moves it — screen-space scroll
-// layers are driven by game logic and must never be interpolated") it is excluded from the queue-lerp
-// ENTIRELY: never matched, never lerped, drawn verbatim from Q[N-1] every interp present (same as any
-// other unmatched prim's fallback — see the emit loop in matchAndLerp below). Its identity is the RQ
-// layer itself: RQ_BACKGROUND has exactly one producer (render_bg_tilemap_native — grep-verified, the
-// only push2dQuad(RQ_BACKGROUND, ...) call site in the tree), so layer IS its real engine identity here;
-// no separate dbg_node sentinel is needed (RQ_BACKGROUND items get dbg_node==0 from emitOrQueue regardless
-// — layer already disambiguates them from every dbg_node==0 RQ_WORLD producer, which is layer RQ_WORLD).
-static constexpr uint32_t kBackdropVerbatim = 0xFFFFFFFDu;
 void Fps60::buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out) {
   out.resize((size_t)n);
   mNodeIdxScratch.clear();
   for (int i = 0; i < n; i++) {
-    if (items[i].layer == RQ_BACKGROUND) { out[i] = kBackdropVerbatim; continue; }
     if (isTier1Owned(items[i])) { out[i] = kTier1Sink; continue; }
     uint32_t node = items[i].dbg_node;
     if (!node) { out[i] = kNoNode; continue; }
@@ -292,12 +335,12 @@ void Fps60::matchAndLerp(Core*) {
   buildProvenanceIdx(B, nB, mIdxCurBuf);
 
   // Q[N] provenance lookup: (dbg_node, emission-index) -> item index. dbg_node==0 items are excluded here
-  // (handled by the fingerprint/order-of-appearance pass below); tier1-owned (kTier1Sink) and backdrop
-  // (kBackdropVerbatim) items are excluded from the queue-lerp entirely — tier1Render draws the former,
-  // the latter draws verbatim from Q[N-1] every present (never matched, never lerped — see buildProvenanceIdx).
+  // (handled by the fingerprint/order-of-appearance pass below); tier1-owned (kTier1Sink — terrain,
+  // scene-table, AND backdrop, see isTier1Owned) items are excluded from the queue-lerp entirely —
+  // tier1Render draws them (see buildProvenanceIdx).
   mMatchMap.clear();
   for (int j = 0; j < nB; j++)
-    if (mIdxCurBuf[j] != kNoNode && mIdxCurBuf[j] != kTier1Sink && mIdxCurBuf[j] != kBackdropVerbatim)
+    if (mIdxCurBuf[j] != kNoNode && mIdxCurBuf[j] != kTier1Sink)
       mMatchMap[((uint64_t)B[j].dbg_node << 32) | mIdxCurBuf[j]] = j;
 
   // dbg_node==0 groups, in each frame's own emission order, keyed by shape fingerprint.
@@ -310,7 +353,7 @@ void Fps60::matchAndLerp(Core*) {
 
   // Pass 1 (key strength 1+2): provenance-keyed prims, validated by fingerprint + color on every hit.
   for (int i = 0; i < nA; i++) {
-    if (mIdxPrevBuf[i] == kNoNode || mIdxPrevBuf[i] == kTier1Sink || mIdxPrevBuf[i] == kBackdropVerbatim) continue;
+    if (mIdxPrevBuf[i] == kNoNode || mIdxPrevBuf[i] == kTier1Sink) continue;
     auto it = mMatchMap.find(((uint64_t)A[i].dbg_node << 32) | mIdxPrevBuf[i]);
     if (it == mMatchMap.end()) continue;                          // unmatched — draws as-is
     int j = it->second;
@@ -338,14 +381,11 @@ void Fps60::matchAndLerp(Core*) {
   // exempt (Pass 2 above already gated them on a whole-group count match).
   enforceNodeAtomicity(nA);
 
-  // Emit: walk Q[N-1] in its captured paint order. Tier1-owned -> skip (mSink draws it); backdrop -> draw
-  // verbatim (never matched, counted separately from "unmatched" so the telemetry distinguishes "never
-  // eligible for a match" from "eligible but no confident pair this frame"); matched -> lerp(A,B,t);
-  // unmatched -> A as-is.
-  mNLerp = 0; mBackdropPrimsThisFrame = 0;
+  // Emit: walk Q[N-1] in its captured paint order. Tier1-owned (terrain/scene-table/backdrop) -> skip
+  // (mSink already drew it, see tier1Render); matched -> lerp(A,B,t); unmatched -> A as-is.
+  mNLerp = 0;
   for (int i = 0; i < nA && mNLerp < FPS60_RQ_MAX; i++) {
     if (mIdxPrevBuf[i] == kTier1Sink) continue;
-    if (mIdxPrevBuf[i] == kBackdropVerbatim) { mRqLerp[mNLerp++] = A[i]; mBackdropPrimsThisFrame++; continue; }
     if (mMatchOfA[i] >= 0) { mRqLerp[mNLerp++] = lerpItem(A[i], B[mMatchOfA[i]], mT); mMatchedThisFrame++; }
     else                   { mRqLerp[mNLerp++] = A[i];                              mUnmatchedThisFrame++; }
   }
@@ -503,12 +543,14 @@ void Fps60::present_vk(Core* core) {
   // ---- rotate captures: POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) -------
   // mRqCur (just-drawn Q[N]) becomes next frame's mRqPrev; the buffer mRqPrev used to point at (now-stale,
   // two-frames-old content that's never read again) becomes rq_capture's next overwrite target. mCamCur/
-  // mCamPrev rotate in lockstep — mCamCur was written by THIS frame's own terrainRenderAll() calls (via
-  // sceneCam, during drawOTag, before this present_vk call — see the invariant in fps60.h) so it holds the
-  // SAME frame's camera mRqCur's terrain content came from.
+  // mCamPrev and mBgCur/mBgPrev rotate in lockstep — both were written by THIS frame's own
+  // terrainRenderAll()/backdropRender() calls (via sceneCam/bgScroll, during drawOTag, before this
+  // present_vk call — see the invariant in fps60.h) so they hold the SAME frame's state mRqCur's content
+  // came from.
   std::swap(mRqCur, mRqPrev);
   std::swap(mNCur, mNPrev);
   std::swap(mCamCur, mCamPrev);
+  std::swap(mBgCur, mBgPrev);
   mHavePrev = 1;
 }
 
