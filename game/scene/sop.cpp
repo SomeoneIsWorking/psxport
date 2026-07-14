@@ -431,13 +431,17 @@ void Sop::fieldUpdate() { Core* c = core;
       c->engine.parallaxBg.step();
       c->game->ffspan.end("parallaxBG");
     }
-    // NOTE: no entity-render / object-walk call here. ov_scene_native (render_walk.cpp) is the
-    // SOLE owner of both the scene-table render (ov_field_entity_render, 0x800f2418) and the object
-    // render-list walk (ov_render_walk, 0x8003c048); it runs every field-stage frame from
-    // game_tomba2.cpp's ov_draw_otag regardless of SOP mode, SOP-mode frames included. This function
-    // owns only SOP gameplay/state logic (BG transition SM, entity update, Tomba update, BG layer SM,
-    // parallax/scroll) — a second render-walk call here duplicated ov_scene_native's submission
-    // (fixed alongside the equivalent duplicate in ov_render_frame, step 1 of this pass).
+    // SCENE-TABLE RENDER + OBJECT RENDER-LIST WALK — the substrate per-frame body (generated/
+    // ov_sop_shard_1.c, FUN_801092xx) dispatches BOTH of these UNCONDITIONALLY, between the two
+    // beat-gated BG calls: 0x80109FE0(a0=0x800F2418) submits the scene-table entities and
+    // 0x8003C048 walks the object render list (routed to the native ov_renderWalk mirror). These
+    // populate the guest OT/packet pool — part of the faithful byte-exact state the render path
+    // "executes underneath" — and during the narration VOID beat they are the ONLY source of the
+    // cutscene's picture (the swirl-effect quads + falling-Tabby sprite the narration prop emits;
+    // ov_scene_native is gated off for beat 5 in game_tomba2.cpp). Omitting them left the void
+    // beat BLACK on pc_skip and the OT/pool diverged ~10x from the recomp (bug #43).
+    d1(c, 0x80109FE0u, 0x800F2418u);
+    d0(c, 0x8003C048u);
     if (bgVisible) {
       // BG tile scroller (substrate — emits GP0 packets; belongs to the PC-native BG renderer
       // rewrite, not a mechanical port). See "REBUILD, don't transcribe" in CLAUDE.md.

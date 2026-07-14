@@ -559,7 +559,7 @@
   scratch/screenshots/renderdiff-* (pane dumps pre/post alignment), docs/config.md
   (SKIPTICK / RENDERDIFF_FROM / step-order note).
 
-## Vortex void beat black on pc_skip AGAIN — regression, isolated, OPEN (2026-07-14, bug #43)
+## Vortex void beat black on pc_skip — RESOLVED (2026-07-14, bug #43)
 
 - **symptom:** default config (pc_skip + pc_render), `newgame; run 600`: black + narration text
   (scratch/screenshots/vortex_default_f600.png). MODE=skip pane A black from ~f588.
@@ -567,10 +567,21 @@
   (vortex_gate_f600.png) → pc_render fine, **pc_skip EXEC fails to build the vortex scene state**.
   Same isolation shape as the 2026-07-10 finding above, but the old cause is EXCLUDED: op05WaitFrames
   returns 1 on expiry (verified in source), and SCENE_BEAT advances identically to the oracle
-  (SKIPTICK, A==B through f900). The failure is the beat==5 CONSUMER: beh_sop_intro_narration
-  (0x8010B990) / the vortex void-prop spawn not firing, or its spawned object not built, on pc_skip.
-- **next:** at f600 compare the object table A (pc_skip) vs GATE run — is the void prop node present?
-  If absent, trace BehaviorDispatch::dispatchObj's pc_skip route for 0x8010B990's beat==5 arm; if
-  present, the render-bind (node+0x1C/+0x18 content-interface values) is wrong.
+  (SKIPTICK, A==B through f900). NB the initial "beat==5 consumer not firing" suspicion was WRONG —
+  beat-aligned full-RAM diff showed the entity lists byte-identical (incl. scene-2 node 0x800FBA68);
+  what differed was packet pool (0x4D4 vs 0x2F70 bytes emitted) and OT bins (empty chains vs threaded).
+- **cause:** the native `Sop::fieldUpdate` (game/scene/sop.cpp) had DELETED the substrate per-frame
+  body's two UNCONDITIONAL render dispatches — scene-table render `0x80109FE0(a0=0x800F2418)` and
+  object render-list walk `0x8003C048` (generated/ov_sop_shard_1.c, between the two beat-gated BG
+  calls) — on the theory that ov_scene_native solely owned rendering. But sceneNative is gated OFF
+  for the void beat (game_tomba2.cpp beat==5 skip, the old sea-in-void fix), so on pc_skip NOTHING
+  emitted the narration prop's swirl quads, and the full-OT walk that IS the narration picture drew
+  an empty OT. (The 2026-07-10 spawn-coordinates fix above was a different, real bug.)
+- **fix:** restore both dispatches in Sop::fieldUpdate at the substrate's exact call positions. Also
+  repairs a guest-state divergence — OT/packet-pool bytes are faithful state pc_skip must reproduce.
+- **verify (5/5):** default beat-5 shots show vortex+Tabby+coin; pool cursor 0x800C2F70 == GATE band;
+  OT bins threaded; beat-3 A/B no double-draw; SBS-full 0-diff hut-replay f70620 + autonav f117540.
+- **lesson:** a "sole render owner" refactor must account for every beat-gate on the native side;
+  the substrate's unconditional dispatches are faithful state even when a native pass draws the picture.
 - **refs:** bug #43, scratch/screenshots/vortex_{default,gate}_f600.png, sop_overlay_shadow.cpp
   header (beat gate map), beh_sop_intro_narration.cpp.

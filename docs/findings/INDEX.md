@@ -164,7 +164,7 @@ already solved or ruled out. 155 findings across 10 subsystems.
 - **SOP intro-cutscene cluster (0x8010AF60-0x8010BEAC) + Demo::s3SubMachine (0x80106AC4) — §9 promote pass (2026-07-10)** [SOP cluster now 6/6 promoted VERIFIED+WIRED (sopBeatAdvanceWalk 0x8010AF60,] —   ↪ docs/findings/scene.md
 - **ScriptInterp opcode cluster — §9 re-verify + frontier-tier wiring (2026-07-10)** [RESOLVED (5 opcode handlers + advanceStep + PcScheduler::tickSleepCountdown promoted] —   ↪ docs/findings/scene.md
 - **Un-owned entity-behavior cluster (0x801244E8/0x8012866C/0x8012E168/0x8013DD48) — 1 ported, 3 blocked** [?] —   ↪ docs/findings/scene.md
-- **Vortex void beat black on pc_skip AGAIN — regression, isolated, OPEN (2026-07-14, bug #43)** [?] — default config (pc_skip + pc_render), `newgame; run 600`: black + narration text  ↪ docs/findings/scene.md
+- **Vortex void beat black on pc_skip — RESOLVED (2026-07-14, bug #43)** [?] — default config (pc_skip + pc_render), `newgame; run 600`: black + narration text  ↪ docs/findings/scene.md
 - **pc_skip exec: prologue vortex backdrop missing + scene SM stalls before area load (2026-07-10, RESOLVED)** [?] —   ↪ docs/findings/scene.md
 
 ## tooling
