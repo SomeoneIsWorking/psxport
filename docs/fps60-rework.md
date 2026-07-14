@@ -88,3 +88,19 @@ differ, the pair is demoted to unmatched (fingerprint rule).
 Any fps60 change: run the tree/windmill scene with `fps60dump`, and (when a user screencast is
 supplied) ffmpeg-dump its frames; compare real-vs-interp pairs. A fix claim requires the paired
 comparison, not only a log metric.
+
+## REDIRECT (USER 2026-07-14): identity comes from RE+PORT, not stamping/matching
+
+The stage-2 provenance/fingerprint matching is a queue-level HEURISTIC — an after-the-fact guess at
+identity the engine should own. USER: "you need to RE and port quads, not stamp them." Standing
+doctrine agrees (full native ownership is always the answer).
+
+- The one-frame-behind single-draw-path architecture (stages 1-2) STANDS.
+- The matching heuristic is ⛔ TRANSITIONAL HACK DEBT: as each quad emitter is RE'd and ported
+  native, its prims carry REAL engine identity (the owning object + element), the exact-lookup
+  match replaces the heuristic for that emitter, and the heuristic's coverage shrinks to zero —
+  then it is DELETED.
+- THE WORK: enumerate every quad-emitting guest fn (otattr census), RE each (Ghidra,
+  docs/port-framework.md), port native with per-element identity + world state. Priority: the
+  emitters visible in field free-roam (windmill contraption, tree props/fruit, 0x80039F4C score
+  strip), then the rest of the census.
