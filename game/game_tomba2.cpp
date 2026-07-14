@@ -187,6 +187,9 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // game's OWN selector for this pass (not a magic render constant), read from the live task-sm block.
   uint32_t task_sm = c->mem_r32(0x1F800138u);
   bool authored_subscene = field && task_sm && c->mem_r16(task_sm + 0x4Cu) == 3;
+  // #50: default the fps60 tier-1 field re-render to INELIGIBLE; only the native-field branch below sets it
+  // true. Narration/authored/non-field frames have no native field for the interp pass to re-render.
+  c->game->fps60.mTier1EligibleCur = false;
   // FAIL-FAST guard (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): arm DisplayPassGuard around
   // pc_render's OWN picture-producing calls only — sceneNative() + the native OT/queue draw below —
   // never around the substrate orchestrator (Render::frame/frameX are called elsewhere and legitimately
@@ -210,8 +213,12 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   } else if (authored_subscene && !c->mRender->mode.psxRender()) {
     // #49 hut/door interior: the authored sub-scene lives entirely in the guest OT (built by the
     // substrate frameX pass). No native field render — walk the FULL OT, exactly like the void beat.
+    // #50: mark the fps60 tier-1 field re-render INELIGIBLE this frame — there is no native field to
+    // re-render on the interp frame, so tier1Render must not draw the exterior over the interior.
+    c->game->fps60.mTier1EligibleCur = false;
     gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
   } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
+    c->game->fps60.mTier1EligibleCur = true;   // native field render runs -> tier-1 may re-render it (#50)
     DisplayPassGuard displayPass(c->mRender->mode);
     c->mRender->sceneNative();
     // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY

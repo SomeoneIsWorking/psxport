@@ -93,6 +93,12 @@ struct Fps60 {
                                       // Heap-allocated lazily (RQ_MAX items is ~16MB — same reason mRqCur/
                                       // mRqPrev/mRqLerp below are `new[]`, not embedded arrays).
   long mTier1PrimsThisFrame = 0;     // telemetry: WORLD (terrain+scene-table) prims tier1Render drew into mSink
+  // #50: tier1Render re-renders the native FIELD passes (terrain/scene-table) on the interp frame. During an
+  // authored OT sub-scene (hut interior, #49) or any beat where the real frame did NOT run sceneNative, there
+  // is no native field to re-render — running it anyway draws the exterior field on interp frames only
+  // (every-other-frame flicker to the exterior). Set true per real frame from the render dispatch
+  // (game_tomba2.cpp) IFF the native field render ran this frame; tier1Render is skipped otherwise.
+  bool mTier1EligibleCur = true;
   void tier1Render(Core* core, float t);   // re-run terrainRenderAll() under lerp(mCamPrev,mCamCur,t) into mSink
 
   // ---- TIER 1 BACKDROP: game-logic-scroll LAYER-TRANSFORM lerp (docs/fps60-rework.md) -----------------

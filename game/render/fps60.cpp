@@ -499,7 +499,12 @@ void Fps60::present_vk(Core* core) {
   const RqItem* slotA; int nSlotA;
   mTier1PrimsThisFrame = 0;
   if (mHavePrev) {
-    tier1Render(c, mT);                 // fills mSink with the camera-lerped terrain re-render
+    // #50: only re-render the native field passes if the real frame actually ran them. During an authored
+    // OT sub-scene (hut interior) the real frame did a full OT walk (no sceneNative), so the interior is
+    // already in the captured queue (Q[N-1]/Q[N]) and matchAndLerp handles it — re-rendering the field here
+    // would draw the exterior on interp frames only (the flicker). mSink stays empty; the merge below emits
+    // just the lerped queue.
+    if (mTier1EligibleCur) tier1Render(c, mT);   // fills mSink with the camera-lerped terrain re-render
     matchAndLerp(c);                    // fills mRqLerp with everything else (tier1-owned prims excluded)
     slotA = mRqLerp; nSlotA = mNLerp;
     // Merge-emit mSink with mRqLerp by (layer, seq) — NOT sink-then-slotA. mSink is all RQ_WORLD, its own
@@ -511,10 +516,13 @@ void Fps60::present_vk(Core* core) {
     // (semi, submission-order-composited) terrain quad against an EMPTY framebuffer instead of behind the
     // background it belongs behind — verified wrong via scratch/check_tier1.py before this fix (every
     // terrain-bbox pixel differed at t=1 from the real neighbor).
+    // #50: mSink is nullptr when tier1Render was skipped (ineligible frame — authored sub-scene); treat as
+    // empty so the merge just emits the lerped queue (mSink is lazily allocated only inside tier1Render).
+    const int sinkN = mSink ? mSink->n : 0;
     int ia = 0, ib = 0;
-    while (ia < mSink->n || ib < nSlotA) {
+    while (ia < sinkN || ib < nSlotA) {
       bool takeSink;
-      if (ia >= mSink->n) takeSink = false;
+      if (ia >= sinkN) takeSink = false;
       else if (ib >= nSlotA) takeSink = true;
       else {
         const RqItem& sa = mSink->items[ia]; const RqItem& sb = slotA[ib];
