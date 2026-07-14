@@ -78,6 +78,7 @@ set(PORT_SRC
   vendor/beetle-psx/mednafen/psx/spu.c
   runtime/recomp/spu_beetle.c
   runtime/recomp/disc.c
+  runtime/recomp/disc_provision.cpp
   runtime/recomp/cd_override.cpp
   runtime/recomp/cdc_native.c
   runtime/recomp/xa_stream.c
@@ -89,6 +90,7 @@ set(PORT_SRC
   game/game_tomba2.cpp
   game/cd/libcd_native.cpp
   game/core/asset.cpp
+  game/core/fs_util.cpp
   game/core/str.cpp
   game/core/pc_scheduler.cpp
   game/core/verify_harness.cpp

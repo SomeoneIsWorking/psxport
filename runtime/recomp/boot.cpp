@@ -5,6 +5,7 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include "fs_util.h"       // Fs::exists — MAIN.EXE presence probe for self-provisioning below
 #include "sbs.h"           // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
 #include "platform_hle.h"  // class PlatformHle — HW-sync HLE table (VSync/CdSync/MDEC/ChangeThread)
 #include "dualcore.h"      // class DualCore — NATIVE-render vs PSX-render RAM divergence harness
@@ -121,6 +122,18 @@ int main(int argc, char** argv) {
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
   Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)
+  // Self-provision MAIN.EXE: anyone with just a CHD (drop-in *.chd in the repo root, or
+  // PSXPORT_TOMBA2_DISC / .env) can run the binary directly — no prior ./run.sh extraction step.
+  // The disc backend resolves the CHD itself (disc.c resolve_disc_path); overlays and all other
+  // content are read from the disc at runtime, so MAIN.EXE is the only file to materialize.
+  if (!Fs::exists(path)) {
+    fprintf(stderr, "[boot] %s missing — extracting from disc\n", path);
+    if (!disc_extract_file(&game->disc, "\\MAIN.EXE", path)) {
+      fprintf(stderr, "[boot] extraction failed: provide a disc (PSXPORT_TOMBA2_DISC, .env, or a "
+                      "*.chd in the working directory) or run ./run.sh\n");
+      return 1;
+    }
+  }
   // Default: pc_skip=true — the native shortcut path that ./run.sh has always used. Set
   // PSXPORT_PC_SKIP=0 to route everything through the fiber substrate (slow; audit mode).
   { const char* e = getenv("PSXPORT_PC_SKIP");

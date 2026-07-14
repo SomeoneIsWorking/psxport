@@ -23,6 +23,9 @@ This is the map. Keep it current when the layout changes.
   (run.sh / build_port.sh) stays canonical (run.sh also extracts MAIN.EXE + launches). The CMake
   port target is `-DPSXPORT_BUILD_PORT=ON` by default; it self-skips (warns) if SDL2/Vulkan/FreeType
   dev libs are absent, so the discdump-only configure run.sh uses still works.
+- **Self-provisioning:** running `scratch/bin/tomba2_port` directly (no prior `./run.sh`) self-extracts
+  `MAIN.EXE` from the disc if missing, resolving the CHD the same way `disc.c` always has (CLI arg >
+  `PSXPORT_TOMBA2_DISC`/`PSXPORT_DISC` env > `.env` > a `*.chd` dropped into the working directory).
 - **Drive the game with the REPL** (`PSXPORT_REPL=1`, commands piped on stdin), not env vars:
   `run N`, `newgame` (pulse to the GAME prologue), `skip N` (pulse Start N frames into the field),
   `press`/`release`/`tap <btn>`, `r`/`rw`/`w` (memory), `dumpram <path>` (+ `.spad` scratchpad

@@ -21,6 +21,8 @@ int  disc_open(DiscState* d);
 int  disc_read_sector(DiscState* d, uint32_t lba, uint8_t* out);           // 2048-byte data sector
 int  disc_read_raw(DiscState* d, uint32_t lba, uint8_t* out, uint32_t n);  // raw 2352-byte sector
 int  disc_find_file(DiscState* d, const char* path, uint32_t* out_lba, uint32_t* out_size);
+int  disc_extract_file(DiscState* d, const char* iso_path, const char* out_path);  // self-provisioning: ISO9660 file -> host file (disc_provision.cpp)
+int  disc_dropin_scan(char* out, unsigned out_cap);  // first *.chd in cwd, NUL-terminated into out (disc_provision.cpp)
 
 #ifdef __cplusplus
 }

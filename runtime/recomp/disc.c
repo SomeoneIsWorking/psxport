@@ -41,6 +41,9 @@ static char* env_from_dotenv(const char* key) {
   fclose(f);
   return found;
 }
+// Last-resort resolution order: CLI arg (run.sh) > PSXPORT_TOMBA2_DISC/PSXPORT_DISC env > .env >
+// a *.chd dropped into the working directory (repo root). The drop-in scan itself is implemented
+// in disc_provision.cpp (Fs::findFirstWithExtension, std::filesystem — no hand-rolled dirent).
 static char* resolve_disc_path(void) {
   const char* e = cfg_str("PSXPORT_TOMBA2_DISC");
   if (e && *e) return dup_trim(e);
@@ -48,7 +51,11 @@ static char* resolve_disc_path(void) {
   if (e && *e) return dup_trim(e);
   char* d = env_from_dotenv("PSXPORT_TOMBA2_DISC");
   if (d) return d;
-  return env_from_dotenv("PSXPORT_DISC");
+  d = env_from_dotenv("PSXPORT_DISC");
+  if (d) return d;
+  char buf[512];
+  if (disc_dropin_scan(buf, sizeof buf)) return dup_trim(buf);
+  return 0;
 }
 
 int disc_open(DiscState* d) {
@@ -172,3 +179,4 @@ int disc_find_file(DiscState* d, const char* path, uint32_t* out_lba, uint32_t* 
   }
   return 0;                                       // path ended on a directory, not a file
 }
+
