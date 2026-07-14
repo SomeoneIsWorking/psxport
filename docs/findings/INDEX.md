@@ -50,7 +50,7 @@ already solved or ruled out. 163 findings across 10 subsystems.
 - **"Upside-down Tomba" in hooked-fish beat — FALSE ALARM + eprojv tool (2026-07-14, bug #44 closed)** [?] —   ↪ docs/findings/render.md
 - **0x8003F9A8 474-prim attribution resolved — 4 substrate list-walkers, no hidden emitter (2026-07-14)** [?] —   ↪ docs/findings/render.md
 - **0x800C0000-0x800C8FFF "massive divergence" — FALSE POSITIVE; it's the GPU packet pool (2026-07-08)** [?] —   ↪ docs/findings/render.md
-- **0x8013CDD4 port attempt — STOPPED at a real field-semantics ambiguity (2026-07-14, correct stop)** [?] —   ↪ docs/findings/render.md
+- **0x8013CDD4 port — ambiguity SETTLED (2026-07-14): load-bearing field reuse, port unblocked** [?] —   ↪ docs/findings/render.md
 - **0x8013DD48 is a GTE cull/midpoint leaf (sibling of the already-excluded 0x8013DD34) — LEAVE PSX** [RE'd, then EXCLUDED — this is a render/GTE hardware leaf, not game logic. Do not port.] —   ↪ docs/findings/render.md
 - **2D-poly overlays and world-billboard sprites on the field 2D-only walk (open frontier)** [known-issue (frontier)] — in-field gradient/fade PANELS (polys) or world-billboard sprites may be missing or flat in the 2D-only field overlay pass.  ↪ docs/findings/render.md
 - **Billboard OBJECT MODEL — manager node + per-particle records (RE 2026-07-10, operator)** [?] — gems "react poorly" at 60fps; historic objid rectangle covered ALL visible billboards  ↪ docs/findings/render.md

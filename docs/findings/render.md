@@ -1769,13 +1769,23 @@ draft was already byte-faithful.
 - Decomps: scratch/decomp/otattr_subs.c, otattr_leaf{,2}.c, otattr_f698.c; Ghidra project
   scratch/ghidra/otattr_census.
 
-## 0x8013CDD4 port attempt — STOPPED at a real field-semantics ambiguity (2026-07-14, correct stop)
+## 0x8013CDD4 port — ambiguity SETTLED (2026-07-14): load-bearing field reuse, port unblocked
 
 - Hookable cleanly: a00 overlay rec_dispatch leaf (ov_a00_disp.c case 0x0013CDD4, override slot 451,
   engine_set_override_a00) — no higher dispatcher needed. Packet = 13-word GT4, pool 0x800BF544,
   same layout as OverlayGt3Gt4::gt4. Vertices = signed bytes at record offsets (pb-2/0, pb-15, ...)
   <<8 through RTPT + RTPS(V3) + AVSZ4 (generated/ov_a00_shard_1.c:25528-25899, ground truth).
-- **STOP CONDITION (unresolved, do NOT guess):** all four per-vertex fog-clamp blocks read their fog
+- **SETTLED (same day, static ground truth from generated/ov_a00_shard_1.c:25528-25899 — no live run
+  needed):** verdict (a) — record+30 IS V0.y (GTE wiring proof: gte_write_data(0) high half → RTPT →
+  SXY0) AND, read a second time sign-extended (no <<8), the SINGLE shared fog delta for ALL FOUR
+  vertices' colors: delta = max(0, s8(rec+30) - mem16(obj+86)); R/G = clamp0_255(base - delta);
+  B = clamped only when R didn't underflow (branch-delay artifact — replicate as-is). mem8(obj+3)
+  is a DEAD load (recompiled scheduling artifact — not live). Full record layout table in the agent
+  report (session 2026-07-14): +4 count/plane, +8/+12/+16 packed color/code words, +15/19/23/27
+  V0-3.z, +28..+35 packed {X0,X1,Y0,Y1,X2,X3,Y2,Y3}. A native port must extract rec+30 ONCE and use
+  it twice with the two treatments; never split into per-vertex fog inputs; never "fix" the B-channel
+  asymmetry.
+- **superseded stop condition (for the record):** all four per-vertex fog-clamp blocks read their fog
   input from the SAME byte mem_r8(r8+0) — the byte also used as V0.y. Either a load-bearing
   field-reuse the port must replicate, or pb+0 isn't V0.y at all. Settle by fresh targeted Ghidra
   pass + live watch of pb+0 and param_1+0x56 (otattr watch/who works for this) BEFORE writing the
