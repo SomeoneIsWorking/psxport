@@ -1747,3 +1747,12 @@ draft was already byte-faithful.
   collect a pickup; the evidence agent's jump-traversal never collected one). Confirm before landing.
 - **refs:** issue #45; scratch/decomp/bug45.c; game/render/perobj_billboard.cpp:388,512-529;
   game/render/fps60.cpp:142-196; game/render/render_observer.cpp; ot_attr.cpp:44-49 (coalescing key).
+- **FIX LANDED (2026-07-14, 0f78384) — the node-span teleport class:** stampBillboard now
+  unprojects each quad's own screen centroid through the base camera at the node's view depth
+  (exact inverse of projWorld; R orthonormal → transpose) and stores THAT as the per-quad anchor;
+  node-span hits only. Measured with the new `bbanchor` channel: mean anchor error 672px → 5.3px
+  (n=115k stamps), centroid round-trip 0.45px mean / 7.45px max; particle-table path unchanged;
+  SBS-full smoke 0-diff f29190. USER repro (tree fruit alternating ~150px every frame) awaiting
+  eyeball. Residual: per-quad anchor captures camera motion only (object's own motion within the
+  span is not interpolated — correct next step remains per-element RE/ownership of the emitters,
+  0x80039F4C first).
