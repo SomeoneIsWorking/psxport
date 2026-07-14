@@ -118,3 +118,47 @@ doctrine agrees (full native ownership is always the answer).
   docs/port-framework.md), port native with per-element identity + world state. Priority: the
   emitters visible in field free-roam (windmill contraption, tree props/fruit, 0x80039F4C score
   strip), then the rest of the census.
+
+## Object-tier attempt 2026-07-14 — Tier 3 (queue-lerp atomicity) landed; Tiers 1-2 SPEC'D, NOT BUILT
+
+Attempted the full CAMERA/OBJECT/QUEUE three-tier structure this session. Landed the queue-tier
+(matchAndLerp is now object-atomic — `Fps60::enforceNodeAtomicity`: if any prim of a `dbg_node` fails
+to match, the WHOLE node draws unlerped from Q[N-1] rather than a torn lerped/frozen mix). Tiers 1-2
+(camera-lerp native world re-render, per-object transform-lerp re-projection) are NOT implemented —
+here is why, and the concrete path for whoever picks this up:
+
+- **Real finding, load-bearing:** `Fps60::frame_commit` (hence `present_vk`) is called from
+  `Engine::frameUpdate`, which `native_boot.cpp` calls BEFORE this iteration's `pcSched.step()` (game
+  logic) and BEFORE this iteration's `drawOTag` (which is what pushes fresh geometry into `mRqCur` via
+  `RenderQueue::flush`/`fps60.rq_capture`). So at present time, no game-logic tick for "this" iteration
+  has run yet — guest object/terrain state is unchanged since last iteration's `drawOTag` read it. This
+  is what makes Tier 1/2's "re-render through the native path at present time" invariant achievable in
+  principle: a re-invocation of `NativeScenePass::terrainRender()` at present time would read the SAME
+  guest state its real call already read, not a mutated future state (the exact bug class stage-3 killed
+  — the old mid-present ran AFTER a tick, reading state the real render never saw).
+- **Stale comment found + NOT yet fixed:** `game/render/native_terrain.cpp:94-96` still describes
+  `sceneCam` as providing "the (prev,cur) MIDPOINT camera during the 60fps mid-present" — that capture/
+  midpoint machinery was deleted in stage 3 (`Fps60::sceneCam` is now a plain unconditional scratchpad
+  read). The comment is dead-design residue; fix it when Tier 1 lands (whichever way it lands — either
+  by making the comment true again, or by deleting the claim).
+- **Why Tier 1 (camera) isn't built:** `terrainRender()` always draws through the LIVE `c->game->rq`
+  (`push()`/`flush()`/sort/capture cycle owned by `drawOTag`). Calling it again at present time — the
+  only way to get "the native world render through a lerped camera, same path" — needs its output routed
+  to an ISOLATED capture (drain via `RenderQueue::emitItem` directly, matching item 4's "one draw path"
+  requirement) instead of `rq.push()`, which would otherwise corrupt next iteration's real queue build.
+  That means either a capture-target redirect on `RenderQueue`/`emitOrQueue`/`drawWorldQuad`, or a
+  second lightweight `RqItem[]` sink `terrainRender` can be pointed at. Needs a 2-slot camera struct
+  (R[3][3]/T[3]/ofx/ofy/H, captured once per real frame in `sceneCam`'s normal call site) + a lerp of
+  that struct + a way to feed the LERPED camera into `terrainRender` instead of its own `sceneCam` call
+  (an override slot on Fps60, consulted only while a re-render-for-interp flag is set).
+- **Why Tier 2 (object) isn't built:** needs the equivalent per-object treatment for
+  `game/render/perobj_dispatch.cpp`'s `cmdListDispatch`/`Render::perObjFlush` path — capturing each
+  object's COMPOSED transform (not just camera) per real frame keyed by `dbg_node`, lerping it
+  (component lerp + cheap re-orthonormalization — not yet designed/justified), and re-invoking the
+  per-object native submit through the same redirect-capture mechanism Tier 1 needs. This is materially
+  more RE/design work than Tier 1 (per-object transform composition varies by emitter) and was not
+  attempted this session — start from Tier 1's redirect-capture plumbing once it lands, then RE one
+  concrete emitter (the windmill contraption per the REDIRECT priority list) as the first Tier-2 native
+  identity case rather than a generic transform capture.
+- Gate B (t=0/t=1 pixel-identical to the real neighbor) and the tier-1/2 coverage counts in gate C are
+  UNVERIFIED — they require Tier 1/2 to exist. Do not claim them until built.

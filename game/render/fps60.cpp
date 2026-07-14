@@ -206,6 +206,11 @@ void Fps60::matchAndLerp(Core*) {
     }
   }
 
+  // Pass 3 — Tier-3 object-atomicity (docs/fps60-rework.md "QUEUE-LERP remains only for prims outside
+  // tiers 1-2 ... Make its matching OBJECT-ATOMIC"). dbg_node==0 items have no object identity and are
+  // exempt (Pass 2 above already gated them on a whole-group count match).
+  enforceNodeAtomicity(nA);
+
   // Emit: walk Q[N-1] in its captured paint order. Matched -> lerp(A,B,t); unmatched -> A as-is.
   mNLerp = 0;
   for (int i = 0; i < nA && mNLerp < FPS60_RQ_MAX; i++) {
@@ -220,6 +225,35 @@ void Fps60::matchAndLerp(Core*) {
                      "running matched=%ld/%ld (%.0f%%)\n",
             mFence, mMatchedThisFrame, nA, nA ? 100.0 * mMatchedThisFrame / nA : 0.0, mUnmatchedThisFrame,
             mMatchedTotal, tot, tot ? 100.0 * mMatchedTotal / tot : 0.0);
+  }
+}
+
+// ⛔ TRANSITIONAL HACK DEBT (docs/fps60-rework.md "REDIRECT"): this whole file's match+lerp path is a
+// queue-level HEURISTIC standing in for real per-element engine identity. As each quad-emitting guest fn
+// is RE'd and ported native (camera/object transform tiers), its prims carry real identity and are
+// interpolated by their OWNING tier instead — they are excluded from matchAndLerp entirely, and this
+// heuristic's coverage (and this comment) shrinks toward zero, then deletes.
+//
+// Tier-3 object-atomicity: a dbg_node identifies one engine object's prims. A torn match — some of an
+// object's prims lerp while a sibling prim (same object, same frame) fails to match — reads as the object
+// partially "melting" into its neighbor's shape for one in-between frame. Demote the WHOLE node back to
+// unmatched (draws Q[N-1] verbatim, like today's pop-in) rather than draw a torn mix.
+void Fps60::enforceNodeAtomicity(int nA) {
+  const RqItem* A = mRqPrev;
+  mNodeTotalA.clear(); mNodeMatchedA.clear();
+  for (int i = 0; i < nA; i++) {
+    uint32_t node = A[i].dbg_node;
+    if (!node) continue;                          // no provenance — not this tier's concern (Pass 2 above)
+    mNodeTotalA[node]++;
+    if (mMatchOfA[i] >= 0) mNodeMatchedA[node]++;
+  }
+  for (int i = 0; i < nA; i++) {
+    uint32_t node = A[i].dbg_node;
+    if (!node || mMatchOfA[i] < 0) continue;
+    if (mNodeMatchedA[node] != mNodeTotalA[node]) {   // this node had at least one unmatched sibling prim
+      mUsedB[(size_t)mMatchOfA[i]] = 0;
+      mMatchOfA[i] = -1;
+    }
   }
 }
 

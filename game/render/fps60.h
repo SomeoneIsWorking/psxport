@@ -74,10 +74,16 @@ struct Fps60 {
   std::unordered_map<uint64_t, std::vector<int>> mZeroGroupsPrev, mZeroGroupsCur;   // dbg_node==0: fingerprint -> ordered indices
   std::vector<int>     mMatchOfA;   // per Q[N-1] item: matched Q[N] index, or -1
   std::vector<uint8_t> mUsedB;      // per Q[N] item: already claimed by a match
+  // Tier-3 object-atomicity scratch (docs/fps60-rework.md "QUEUE-LERP ... object-atomic"): per dbg_node,
+  // how many Q[N-1] prims that node has vs. how many of them got a Pass-1 match. A node where the two
+  // counts disagree is demoted whole — every one of its prims draws unlerped from Q[N-1] — instead of a
+  // torn mix of lerped + frozen prims from the same object.
+  std::unordered_map<uint32_t, int> mNodeTotalA, mNodeMatchedA;
   long mMatchedThisFrame = 0, mUnmatchedThisFrame = 0;        // this-frame telemetry
   long mMatchedTotal = 0, mUnmatchedTotal = 0;                // running totals (periodic log, PSXPORT_DEBUG=fps60)
   void buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out);
   void matchAndLerp(Core* core);   // fills mRqLerp/mNLerp by matching mRqPrev (Q[N-1]) against mRqCur (Q[N])
+  void enforceNodeAtomicity(int nA);   // Tier-3: demote a partially-matched dbg_node's prims back to unmatched
 
   // ---- per-present frame dump (debug channel `fps60dump`, REPL `debug fps60dump`) ---------------------
   // Writes one PNG per PRESENTED frame (real AND interp) to scratch/framedump/, so a Python script can
