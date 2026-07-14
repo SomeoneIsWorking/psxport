@@ -18,6 +18,7 @@
 #include "music_coord.h"
 #include "native_gate.h"   // fieldBgmDirector's `music` gate
 #include "engine_overrides.h"
+#include "guest_abi.h"     // GuestFrame — voiceMixTick mirrors FUN_80075824's 32-byte frame
 #include <stdio.h>
 #include <string.h>        // memcmp (fieldBgmDirector bundle validation)
 #include <stdlib.h>        // atoi (PSXPORT_FIELD_SONG)
@@ -54,6 +55,44 @@ void MusicCoord::cutIfDialog() {
   if (dialogToneActive() && xa_stream_is_looping(&core->game->xa)) xa_stream_stop(&core->game->xa);
 }
 
+namespace {
+
+// Typed lens over the guest voice-channel control block (the ambient/XA channel @0x800BE1F8).
+// Reads/writes go straight through to guest RAM — named fields instead of raw `V + 0xNN` offsets.
+// Paired stores (volume/pan land on L and R halves) keep the substrate's store order.
+struct VoiceChannel {
+  Core* c;
+  uint32_t base;
+  uint32_t flags() const          { return c->mem_r32(base); }
+  void     setFlags(uint32_t v)   { c->mem_w32(base, v); }
+  void     setPan(uint16_t v)     { c->mem_w16(base + 0x06u, v); c->mem_w16(base + 0x04u, v); }
+  void     setVolume(uint16_t v)  { c->mem_w16(base + 0x12u, v); c->mem_w16(base + 0x10u, v); }
+  int16_t  baseVol() const        { return (int16_t)c->mem_r16(base + 0x28u); }
+  int16_t  fadeTarget() const     { return (int16_t)c->mem_r16(base + 0x2Au); }
+  int16_t  fadeCur() const        { return (int16_t)c->mem_r16(base + 0x2Cu); }
+  void     setFadeCur(int32_t v)  { c->mem_w16(base + 0x2Cu, (uint16_t)v); }
+  int16_t  gain2Target() const    { return (int16_t)c->mem_r16(base + 0x2Eu); }
+  uint16_t gain2Cur() const       { return (uint16_t)c->mem_r16(base + 0x30u); }
+  void     setGain2Cur(int32_t v) { c->mem_w16(base + 0x30u, (uint16_t)v); }
+  bool     lowVolArmed() const    { return c->mem_r8(base + 0x33u) != 0; }
+  void     disarmLowVol()         { c->mem_w8(base + 0x33u, 0); }
+};
+
+// Audio-global guest state read by the mixer (scratchpad bytes + dialog control words).
+constexpr uint32_t kSpAudioState = 0x1F80019Au;  // 2 = audio engine active
+constexpr uint32_t kSpCutMode    = 0x1F800137u;  // 0 normal / 1 dialog / 2 fast-cut
+constexpr uint32_t kSpBoost      = 0x1F80027Eu;  // nonzero = +25% volume boost
+constexpr uint32_t kSpQueueGate  = 0x1F80027Au;  // must be 0 for the low-volume SPU ping
+constexpr uint32_t kSpQueueIdx   = 0x1F80023Bu;  // SPU queue slot for the ping
+constexpr uint32_t kDialogFlags  = 0x800BE0E4u;  // dialog volume-source select bits
+constexpr uint32_t kDialogLevel  = 0x800FB165u;  // dialog table level (0..9)
+
+// Guest leaves the mixer calls (jal-site ra constants from abi_extract 0x80075824):
+constexpr uint32_t kFnSetFadeTarget = 0x80075CECu;  // FUN_80075CEC(target)
+constexpr uint32_t kFnSpuQueuePing  = 0x800750D8u;  // FUN_800750D8(idx, 1)
+
+}  // namespace
+
 // Per-frame VOICE-CHANNEL VOLUME MIXER — port of FUN_80075824 (RE'd via ghidra 2026-07-03). Called
 // from AreaSlots::updateTail (game/world/area_slots.cpp) with voice_base = 0x800BE1F8 (the
 // ambient/XA channel). Was previously — INCORRECTLY — wired to musicFadeIn() there, which merely
@@ -64,11 +103,22 @@ void MusicCoord::cutIfDialog() {
 // diverges downstream.
 void MusicCoord::voiceMixTick(uint32_t voice_base) {
   Core* c = this->core;
-  const uint32_t V = voice_base;
-  const uint8_t  boost_flag = c->mem_r8(0x1F80027Eu);         // scratchpad boost byte
-  const uint8_t  state      = c->mem_r8(0x1F80019Au);         // scratchpad "active audio" state
-  const uint8_t  cutMode    = c->mem_r8(0x1F800137u);         // 0/1/2 — dialog/cut mode
-  int32_t vol;                                                // computed 16-bit volume result
+  // FUN_80075824's guest frame (abi_extract --contract): 32 B; r17@sp+20, r31@sp+24, r16@sp+16.
+  // The spills are guest-visible bytes — the hut-entry SBS diverge @f389 (0x801FE918..923) was
+  // exactly these three words missing on the native path. r17 carries the channel base and r16
+  // the running volume; both stay live in the register file so dispatched leaves spill the true
+  // values (see guest_abi.h).
+  static constexpr GuestFrameSpill kSpills[] = {{17, 20}, {31, 24}, {16, 16}};
+  GuestFrame<32, 3> frameGuard(c, kSpills);
+  GuestReg<17> chanReg(c);
+  GuestReg<16> volReg(c);
+  chanReg = voice_base;
+
+  VoiceChannel voice{c, voice_base};
+  const uint8_t state   = c->mem_r8(kSpAudioState);
+  const uint8_t cutMode = c->mem_r8(kSpCutMode);
+  const uint8_t boost   = c->mem_r8(kSpBoost);
+  int32_t vol;                                     // computed 16-bit volume result
   // PSXPORT_DEBUG=vmt — voiceMixTick trace (RE/SBS diagnostic: docs/findings/audio.md "pc_skip vs
   // oracle: SPU register stream divergences"). Under SBS the two Games are separate Core/RAM
   // instances; this + the paired [gain2] trace in setGain2() below let a session correlate each
@@ -77,70 +127,69 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
   if (cfg_dbg("vmt")) {
     fprintf(stderr, "[vmt] f%u %s state=%u cut=%u boost=%u cur=%d tgt=%d g2cur=%u g2tgt=%d base=%d\n",
             c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", state, cutMode,
-            boost_flag, (int16_t)c->mem_r16(V+0x2Cu), (int16_t)c->mem_r16(V+0x2Au),
-            (uint16_t)c->mem_r16(V+0x30u), (int16_t)c->mem_r16(V+0x2Eu),
-            (int16_t)c->mem_r16(V+0x28u));
+            boost, voice.fadeCur(), voice.fadeTarget(), voice.gain2Cur(), voice.gain2Target(),
+            voice.baseVol());
   }
 
   if (state != 2) {
-    // Boot / silence path: scale base by a fixed 0x47FF / 0x7FFF ratio (~89%), no ramp.
-    int16_t base = (int16_t)c->mem_r16(V + 0x28u);
-    vol = ((int32_t)base * 0x47FFu) >> 15;
+    // Boot / silence: ~89% of base (0x47FF/0x7FFF), no ramp. (gen computes this with shifts —
+    // no hi/lo side-effect, so plain arithmetic is faithful here.)
+    vol = (voice.baseVol() * 0x47FF) >> 15;
   } else if (cutMode == 1) {
-    // Dialog mode: pick full-blast (0x7FFF), a base-scaled 0x7FFF, or a table-derived value
-    // depending on which bit is set in DAT_800BE0E4. Then OR extra flags into voice[+0x00].
-    vol = 0x7FFF;
-    const uint8_t flags = c->mem_r8(0x800BE0E4u);
-    if ((flags & 0x02u) == 0) {
-      if ((flags & 0x08u) == 0) {
-        int16_t base = (int16_t)c->mem_r16(V + 0x28u);
-        vol = ((int32_t)base * 0x7FFFu) >> 15;
-      } else {
-        uint32_t x = (uint32_t)c->mem_r8(0x800FB165u);
-        vol = (int32_t)((x * 0x7FFFu) / 9u);
-      }
+    // Dialog: full blast, a scaled table level, or scaled base — selected by the dialog flags.
+    const uint8_t flags = c->mem_r8(kDialogFlags);
+    if (flags & 0x02u) {
+      vol = 0x7FFF;
+    } else if (flags & 0x08u) {
+      // Table level / 9 — the game divides via the 0x38E38E39 magic multiply (hi/lo visible).
+      int32_t level = (int32_t)c->mem_r8(kDialogLevel) * 0x7FFF;
+      guest_mult(c, level, (int32_t)0x38E38E39);
+      vol = ((int32_t)c->hi >> 1) - (level >> 31);
+    } else {
+      vol = (int32_t)(guest_mult(c, voice.baseVol(), 0x7FFF) >> 15);
     }
-    c->mem_w32(V + 0u, c->mem_r32(V + 0u) | 0x3u);
+    voice.setFlags(voice.flags() | 0x3u);
   } else {
-    // Normal ramp: cur (+0x2C) chases target (+0x2A) by ±step (0x100 or 0x400 in fast-cut mode).
-    int32_t cur    = (int16_t)c->mem_r16(V + 0x2Cu);
-    int32_t target = (int16_t)c->mem_r16(V + 0x2Au);
+    // Normal ramp: fadeCur chases fadeTarget by ±step (0x400 in fast-cut mode, else 0x100).
+    int32_t cur    = voice.fadeCur();
+    int32_t target = voice.fadeTarget();
     int32_t step   = (cutMode == 2) ? 0x400 : 0x100;
     if (cur < target) {
       cur += step; if (target < cur) cur = target;
     } else if (target < cur) {
       cur -= step; if (cur < target) cur = target;
     }
-    c->mem_w16(V + 0x2Cu, (uint16_t)cur);
+    voice.setFadeCur(cur);
 
-    int16_t base = (int16_t)c->mem_r16(V + 0x28u);
-    vol = ((int32_t)base * cur) >> 15;
-    if (boost_flag != 0) {
+    vol = (int32_t)(guest_mult(c, voice.baseVol(), cur) >> 15);
+    if (boost != 0) {
       vol = (vol * 5) >> 2;
       if (vol > 0x7FFE) vol = 0x7FFF;
     }
-    // Low-volume + armed(+0x33) + scratchpad[+0x27A]==0 → drop fade target to 0x47FF and ping the
-    // SPU queue helper 0x800750D8. Clears the arm flag.
-    if (vol < 0x11 && c->mem_r8(V + 0x33u) != 0 && c->mem_r8(0x1F80027Au) == 0) {
-      c->mem_w16(0x800BE222u, 0x47FFu);                      // FUN_80075CEC(0x47FF): fade target
-      c->r[4] = c->mem_r8(0x1F80023Bu); c->r[5] = 1;
-      rec_dispatch(c, 0x800750D8u);                          // SPU queue helper (still substrate)
-      c->mem_w8(V + 0x33u, 0);                                // disarm
+    // Faded out while armed (and the SPU queue gate open): reset the fade target to 0x47FF and
+    // ping the SPU queue, then disarm.
+    if (vol < 0x11 && voice.lowVolArmed() && c->mem_r8(kSpQueueGate) == 0) {
+      volReg = (uint32_t)vol;                      // live across the guest calls
+      guest_fn(c, kFnSetFadeTarget, 0x800759B4u, 0x47FF);
+      guest_fn(c, kFnSpuQueuePing, 0x800759C4u, c->mem_r8(kSpQueueIdx), 1);
+      voice.disarmLowVol();
     }
-    // Smoother pass on the second-stage gain (+0x30 chases +0x2E by delta>>3).
-    int32_t g2_cur    = (uint16_t)c->mem_r16(V + 0x30u);
-    int32_t g2_target = (int16_t)c->mem_r16(V + 0x2Eu);
-    int32_t g2 = g2_cur + ((g2_target - g2_cur) >> 3);
-    c->mem_w16(V + 0x30u, (uint16_t)g2);
-    vol = (vol * (int16_t)g2) >> 13;
+    // Second-stage gain smoother: gain2Cur chases gain2Target by delta>>3. The game reads the
+    // current gain SIGNED for the delta but UNSIGNED for the accumulate — mirrored.
+    int32_t g2 = voice.gain2Cur() + (((int32_t)voice.gain2Target() - (int16_t)voice.gain2Cur()) >> 3);
+    voice.setGain2Cur(g2);
+    vol = (int32_t)(guest_mult(c, vol, (int16_t)g2) >> 13);
   }
 
-  // Common tail: write packed vol to both +0x10/+0x12, pan to 0x3FFF at +0x04/+0x06, dirty bit.
-  c->mem_w16(V + 0x10u, (uint16_t)vol);
-  c->mem_w16(V + 0x12u, (uint16_t)vol);
-  c->mem_w16(V + 0x04u, 0x3FFFu);
-  c->mem_w16(V + 0x06u, 0x3FFFu);
-  c->mem_w32(V + 0u, c->mem_r32(V + 0u) | 0xC0u);
+  // Publish: packed volume to both channel halves, pan centered, dirty bits. v0/v1 mirror gen's
+  // register outputs (the flags word and the pan constant).
+  volReg = (uint32_t)vol;
+  const uint32_t flags = voice.flags() | 0xC0u;
+  voice.setVolume((uint16_t)vol);
+  voice.setPan(0x3FFFu);
+  voice.setFlags(flags);
+  c->r[2] = flags;
+  c->r[3] = 0x3FFFu;
 }
 
 // MusicCoord::setGain2 — FUN_80075D24 body. See music_coord.h for the RE contract. Always targets

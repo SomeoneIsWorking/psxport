@@ -5,7 +5,41 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
-## spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11, OPEN)
+## spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11, RESOLVED 2026-07-14)
+
+- **RESOLVED (2026-07-14): the diverging 9 bytes are `FUN_80075824` (voiceMixTick)'s guest-frame
+  spills, and the fix is the frame mirror in `MusicCoord::voiceMixTick`** (game/audio/
+  music_coord.cpp). gen_func_80075824 descends 32 B from sp=0x801FE928 → 0x801FE908 and spills
+  r16@+16=0x801FE918, r17@+20=0x801FE91C, r31@+24=0x801FE920 — exactly the diverging words. The
+  native body (called from native `AreaSlots::updateTail`, which only runs on the sm[0x4c]==3
+  transition path — hence first firing at f389, the door-transition frame of the hut-entry replay)
+  had NO frame, so core A's slots kept earlier scratch (render-chain leftovers: 0x8003CD08 =
+  cmdListDispatch jal-site) while core B wrote updateTail-context values (r16=0x800C0000,
+  r17=0x800BE358 slot cursor, ra=0x80075C58 voiceMixTick jal-site). Fix: GuestFrame<32,3>
+  {r17@20, r31@24, r16@16} + r17=channel base and r16=running vol kept live + hi/lo written at
+  every gen `mult` + the low-volume leaves dispatched for real (FUN_80075CEC was INLINED as a bare
+  store — now `guest_fn(kFnSetFadeTarget, 0x800759B4, 0x47FF)`) + g2 smoother signed/unsigned read
+  mirrored + v0/v1 outputs. **Gates: hut-entry replay SBS-full 0-diff through f47850 (was diverge
+  @f389 persisting 23k+ frames); AUTONAV SBS-full 0-diff @f2000; default-config boot renders
+  field.** (commit this block lands in)
+- **Attribution corrections (why 3 prior diagnoses in this finding were wrong):**
+  - "spawn-leaf (FUN_80092660) frame spills of r22/r23/r30" — WRONG function. Same address range,
+    but the SETTLE values come from the LAST writer of the frame, voiceMixTick's prologue
+    (sp=0x801FE908, spills at +16/20/24), not the spawn leaf (sp=0x801FE8E8, spills at +48/52/56 —
+    same absolute addresses, different function). PREWATCH with the new s-regs line named it: A
+    wrote the slot 16× vs B 17× in f389; B's missing 17th write was voiceMixTick's spill.
+  - "render-walk recursion-depth divergence" — red herring (last-writer map of an earlier probe).
+  - "beh_id_routed_dispatch runs 554× on A, 0× on B — the A-only gap IS the bug" (FRAMEPROF,
+    f302ad5) — FALSE ALARM, same attribution class as gpuDmaSend: B runs the handler's whole chain
+    (pc=800519E0/80075FF8 with ra=801219EC/80121A0C on B), but B's stores attribute to callee pcs
+    while A's native body attributes to the entry pc. Totals match (e.g. pc=80075FF8: A=733,
+    B=733 split across ras). FRAMEPROF one-sided entries need a paired-total check before being
+    believed (now documented in docs/config.md).
+- **New tooling from this hunt:** `PSXPORT_SBS_REGDIFF=1` (per-frame register-file compare — showed
+  frame-boundary regs EQUAL, proving the gap opens+closes intra-frame) and the PREWATCH per-store
+  `s:`-regs line (s0..s7+fp). Both in docs/config.md.
+
+### (original investigation log below — attributions corrected above)
 
 - **Symptom:** SBS-full, normal AUTO-NAV area-0 free-roam (no forcing), diverged @f491 at
   `0x801FE91A..0x801FE923` (9 B) and the residual **persisted/wandered** through f1380+ (never

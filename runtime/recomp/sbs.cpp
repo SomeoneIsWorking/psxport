@@ -242,6 +242,14 @@ public:
   bool     mFpArmed = false;
   bool     mFpDumped = false;
 
+  // ---- REGDIFF: per-lockstep-frame register-file compare (PSXPORT_SBS_REGDIFF=1) ----
+  // RAM divergence is the SPILL of a register divergence that happened earlier; this names the
+  // first frame (and register) where the two cores' register files split. Report-only: logs one
+  // line whenever the set of differing registers CHANGES (not every frame it persists).
+  bool     mRegDiffOn = false;
+  char     mRegDiffSig[768] = {0};
+  void compareRegs();
+
   // ---- per-pane RGBA readback ----
   uint8_t  mRgbaA[1024 * 512 * 4];
   uint8_t  mRgbaB[1024 * 512 * 4];
@@ -967,6 +975,31 @@ void Sbs::Impl::checkObservables() {
   }
 }
 
+void Sbs::Impl::compareRegs() {
+  if (!mRegDiffOn) return;
+  char sig[768];
+  size_t off = 0;
+  auto add = [&](const char* name, uint32_t va, uint32_t vb) {
+    if (va == vb) return;
+    int n = snprintf(sig + off, sizeof(sig) - off, " %s A=%08X B=%08X", name, va, vb);
+    if (n > 0 && off + (size_t)n < sizeof(sig)) off += (size_t)n;
+  };
+  for (int i = 1; i < 32; i++) {
+    char nm[8];
+    snprintf(nm, sizeof nm, "r%d", i);
+    add(nm, mA->core.r[i], mB->core.r[i]);
+  }
+  add("hi", mA->core.hi, mB->core.hi);
+  add("lo", mA->core.lo, mB->core.lo);
+  add("pc", mA->core.pc, mB->core.pc);
+  sig[off] = 0;
+  if (strcmp(sig, mRegDiffSig) != 0) {
+    if (off == 0) fprintf(stderr, "[sbs-regdiff] f%u: register files CONVERGED (all equal)\n", mFrame);
+    else          fprintf(stderr, "[sbs-regdiff] f%u:%s\n", mFrame, sig);
+    snprintf(mRegDiffSig, sizeof mRegDiffSig, "%s", sig);
+  }
+}
+
 void Sbs::Impl::checkDivergence() {
   if (mMode == M_SKIP) { checkObservables(); return; }
   // PSXPORT_SBS_NOPAUSE=1 keeps SBS running past a divergence: each frame we log EVERY diverging
@@ -1379,6 +1412,8 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     fprintf(stderr, "[sbs-ww]     t: v0=%08X v1=%08X t0=%08X t1=%08X t2=%08X t3=%08X t4=%08X t5=%08X t6=%08X t7=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
             c->r[2], c->r[3], c->r[8], c->r[9], c->r[10], c->r[11], c->r[12], c->r[13], c->r[14], c->r[15],
             c->r[4], c->r[5], c->r[6], c->r[7]);
+    fprintf(stderr, "[sbs-ww]     s: s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X fp=%08X\n",
+            c->r[16], c->r[17], c->r[18], c->r[19], c->r[20], c->r[21], c->r[22], c->r[23], c->r[30]);
     // GTE control regs at the store — the packet emitters are pure functions of (prim data, CR
     // rotation+translation, CR projection). When RAM matches but the emit diverges, this is the
     // input that differs. CR0-7 = composed rotation+translation, CR24-30 = OFX/OFY/H/DQA/DQB/ZSF3/ZSF4.
@@ -1766,6 +1801,12 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       mFpFrame = (uint32_t)f;
       mFpArmed = true;
       fprintf(stderr, "[sbs] FRAMEPROF on — per-(pc,ra) store-count A-vs-B diff at frame %u\n", mFpFrame);
+    }
+  }
+  { const char* e = getenv("PSXPORT_SBS_REGDIFF");
+    if (e && *e && strcmp(e, "0") != 0) {
+      mRegDiffOn = true;
+      fprintf(stderr, "[sbs] REGDIFF on — per-frame A-vs-B register-file compare (logs on diff-set change)\n");
     }
   }
   {
@@ -2341,6 +2382,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
     if (nav_done || prenav) {
       summarizeDivergence(30);
+      compareRegs();
       checkDivergence();
     }
     // the store counts differ. Sorted by |countA - countB| descending so the biggest cadence gap

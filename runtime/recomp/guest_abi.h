@@ -94,3 +94,44 @@ inline void guest_dispatch(Core* c, uint32_t ra_const, uint32_t target) {
   c->r[31] = ra_const;
   rec_dispatch(c, target);
 }
+
+// ---------------------------------------------------------------------------------------------
+// 4. guest_fn — call a guest function the way PC code calls a function. Register args land in
+//    a0..a3, the RE'd jal-site constant lands in r31, the call routes through rec_dispatch, and
+//    the guest's return value (v0) comes back as the C++ return value:
+//
+//        if (guest_fn(c, kRecordArrayInit, 0x801219EC, node, 18, tabA, tabB) != 0) return;
+//
+//    This is THE call shape for faithful bodies — it replaces every per-file `leaf1/leaf2/leaf3/
+//    leaf4` helper and bare `c->r[4]=..; c->r[31]=..; rec_dispatch(..)` run (converged 2026-07-14,
+//    USER directive: faithful ports must READ like PC game code; the ABI mechanics live here, not
+//    in every port file). Args are register args only — a call that needs guest STACK args must
+//    fill them via its GuestFrame (see abi_extract's call-site report).
+template <typename... Args>
+inline uint32_t guest_fn(Core* c, uint32_t target, uint32_t ra_const, Args... args) {
+  static_assert(sizeof...(Args) <= 4, "a0..a3 only — stack args go through the GuestFrame");
+  const uint32_t a[] = {static_cast<uint32_t>(args)..., 0u};   // +0 sentinel so empty packs compile
+  for (size_t i = 0; i < sizeof...(Args); i++) c->r[4 + i] = a[i];
+  c->r[31] = ra_const;
+  rec_dispatch(c, target);
+  return c->r[2];
+}
+
+// ---------------------------------------------------------------------------------------------
+// 5. guest_mult / guest_div — MIPS mult/div with the hi/lo side-effect. hi/lo are GUEST-VISIBLE
+//    state (SBS compares them transitively through later spills); a faithful body that multiplies
+//    where gen emits `mult` MUST go through these, never a bare C `*` (the gpuLoadImageStream
+//    lesson, docs/findings/sbs.md). Returns the full product so call sites read like arithmetic:
+//        vol = (int32_t)(guest_mult(c, base, cur) >> 15);
+inline int64_t guest_mult(Core* c, int32_t a, int32_t b) {
+  int64_t p = (int64_t)a * (int64_t)b;
+  c->lo = (uint32_t)p;
+  c->hi = (uint32_t)((uint64_t)p >> 32);
+  return p;
+}
+
+inline void guest_div(Core* c, int32_t num, int32_t den) {   // gen `div`: lo=quot, hi=rem
+  if (den == 0) return;                                       // gen guards with rec_break first
+  c->lo = (uint32_t)(num / den);
+  c->hi = (uint32_t)(num % den);
+}

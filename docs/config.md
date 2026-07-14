@@ -384,6 +384,29 @@ or level — they can't be a bare channel:
   - Pair with `PSXPORT_DEBUG=asent` (updateTail ENTER: counter/loopEntered/area/r22/r23/r30 on entry)
     and `as37` (per action-arm spawn: slot/r16/r19) — ALWAYS require `[asent]` count>0 before trusting
     any 0-diff on a field-frame native port.
+- **SBS divergence diagnostics** (raw `getenv`, sbs.cpp; report-only unless noted). Escalation order
+  for a RAM diverge: REGDIFF (which register split first) → FRAMEPROF (which (pc,ra) store cadence
+  differs at the frame) → PREWATCH (per-store attribution + registers at the diverging address) →
+  BYTETRACE (per-byte value/ra histograms).
+  - `PSXPORT_SBS_REGDIFF=1` — per-lockstep-frame A-vs-B register-file compare (r1..r31 + hi/lo/pc);
+    logs `[sbs-regdiff]` whenever the diff-set CHANGES. A RAM diverge is the SPILL of a register
+    diverge that happened earlier — this names the first frame/register. Frame-boundary only; equal
+    boundary regs with a mid-frame diverge (the f389 voiceMixTick case) means the gap opens and
+    closes inside one frame — go to FRAMEPROF/PREWATCH.
+  - `PSXPORT_SBS_FRAMEPROF=<frame>` — count every store per (pc,ra) per core during `frame`, dump
+    A-vs-B count mismatches sorted by |delta|. CAVEAT: native call sites set different pc/ra than
+    substrate jal-sites, so one-sided entries with a paired opposite entry (same totals, split ra)
+    are ATTRIBUTION artifacts, not bugs (gpuDmaSend + beh_id_routed_dispatch false alarms,
+    docs/findings/sbs.md).
+  - `PSXPORT_SBS_PREWATCH=<hex-addr>` — arm the write-watch from boot; with
+    `PSXPORT_SBS_WW_FROMFRAME=<n>` logs every store to the watched word from frame n: value,
+    pc/ra/sp, t-regs, s-regs (s0..s7+fp), GTE CRs, guest+host backtrace. The definitive "who wrote
+    this byte with what register state" probe. `PSXPORT_SBS_WW_ONVALUEDIVERGE=1` defers the pause
+    to the first store that leaves the cores' byte values different.
+  - `PSXPORT_SBS_BYTETRACE=<lo>,<hi>` — per-byte per-core value+ra histograms over the range,
+    dumped at exit with a settled-state PHASE/SOFT/REAL classification.
+  - `PSXPORT_SBS_NOPAUSE=1` — log every diverging byte-run per frame and keep running (no rewind/
+    pause); `PSXPORT_SBS_ONLY_LABEL=<prefix>` filters the flood by category label.
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the
