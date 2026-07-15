@@ -917,7 +917,6 @@ static void demo_frame_s7(Core* c) {
     c->mem_w8(0x801fe0deu, entry);
     c->mem_w8(0x801fe0ddu, 1);
     c->mem_w8(0x1f80019bu, 0);
-    (void)c->rng.next();                                       // Slip #5: PRNG draw, a side effect of func_80051F14's task-1 registration (not a replacement for the whole callee — see the tail below).
     // FUN_80044bd4's a3==2 TAIL — shared helper PcScheduler::bd4Tail (game/core/pc_scheduler.cpp;
     // see its doc comment + docs/findings/scene.md "pc_skip FUN_80044BD4-collapse INCOMPLETENESS
     // class"): stores the RNG stamp (FUN_8009A450's RETURN VALUE, not a literal — the earlier fix

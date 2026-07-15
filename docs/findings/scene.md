@@ -625,3 +625,19 @@
   stayed 0-diff).
 - NOTE: PSXPORT_GATE=1 is NOT a pc_skip=false oracle (only changes exec substrate); use PSXPORT_PC_SKIP=0
   or SBS-full to force the faithful Engine::pc_skip branch (boot.cpp:141-144).
+- REGRESSION FOLLOW-UP (2026-07-15) — bd4Tail DOUBLE-DRAW, fixed same day. The 11b3205 fix inserted
+  `bd4Tail(...)` (which draws the RNG stamp as its FIRST action, pc_scheduler.cpp:150) right after
+  pre-existing standalone `(void)c->rng.next()` "Slip #5" lines at demo.cpp:920 and engine.cpp:2279 —
+  so those 2 sites drew the RNG TWICE per invocation where the guest draws it ONCE. Those stray lines
+  were written under a FALSE belief (documented in their own comments) that `func_80051F14` (spawnPrim,
+  the task-1 registration) itself draws RNG. It does NOT: `gen_func_80051F14` (generated/shard_2.c:6253)
+  and its callees (func_80080930/890/860/8A0…) make ZERO func_8009A450 calls; the ONE draw in the whole
+  FUN_80044BD4 body is at gen line 11809, AFTER the `if (r19==1) goto epilogue` check — i.e. only flag!=1.
+  Also `native_area_load_bd4` (engine.cpp:1661, the flag=1 door/sub-scene load) drew 1 RNG where the
+  guest draws 0 (flag=1 jumps to the epilogue before func_8009A450). FIX: deleted all three stray draws;
+  bd4Tail is now the SOLE RNG draw for flag!=1 sites, and flag=1 draws none. This is a pc_skip=true-ONLY
+  bug — invisible to SBS-full (which forces pc_skip=false), only visible via PSXPORT_RNG_CALLTRACE=1.
+  VERIFIED: post-fix RNG_CALLTRACE (AUTO_SKIP headless) shows the stray `submode1Case0Skip+0x2c` draw
+  GONE and only `bd4Tail+0x18` firing (matching gen's 1-draw-per-flag!=1-load); SBS-full 0-diff to f30720.
+  LESSON: when extracting a shared helper that performs a side effect, AUDIT every call site for a
+  pre-existing standalone copy of that same side effect — the helper insertion doesn't remove it.

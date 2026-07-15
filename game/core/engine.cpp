@@ -1663,7 +1663,9 @@ static void native_area_load_bd4(Core* c, uint32_t area, uint32_t mode) {
   c->mem_w8(sm + 0x6e, (uint8_t)area);     // DAT_801fe0de = arg2 (area) == sm[0x6e]
   c->mem_w8(sm + 0x6d, (uint8_t)mode);     // DAT_801fe0dd = arg3 (mode) == sm[0x6d]
   c->mem_w8(0x1f80019bu, 0);               // DAT_1f80019b = 0 (load-done flag, set back to 1 by the load)
-  (void)c->rng.next();                // Slip #5: this replaces a rec_dispatch(0x80044BD4).
+  // NO RNG draw here: this is the FUN_80044bd4(...,flag=1) call. In gen_func_80044BD4 the flag==1
+  // branch jumps to the epilogue (`if (r19==1) goto L_80044CB8`) BEFORE func_8009A450 — zero RNG
+  // draws. Only flag!=1 (see bd4Tail) draws the stamp. func_80051F14 (spawnPrim) draws no RNG either.
   SV_CHECK(c, 0x800452C0u, c->engine.sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // skip leg vs the slot-1 task body oracle (observable compare)
 }
 
@@ -2276,7 +2278,6 @@ void Engine::submode1Faithful() { Core* c = core;
 // substrate parity demands cadence match, live gameplay does not.
 bool Engine::submode1Case0Skip() { Core* c = core;
   rec_dispatch(c, 0x8005245cu);
-  (void)c->rng.next();                     // Slip #5: substrate makes a RNG call inside FUN_80051F14's task-1 registration (not the tail's own draw — see bd4Tail below).
   // FUN_80044bd4's a3==2 TAIL — shared helper PcScheduler::bd4Tail (game/core/pc_scheduler.cpp;
   // docs/findings/scene.md "pc_skip FUN_80044BD4-collapse INCOMPLETENESS class", bug #58 — this
   // was the HIGHEST-reachability site, missing the WHOLE tail: the current task's RNG stamp at
