@@ -76,13 +76,34 @@ OP.STR movie frame-decode states) left the title without the background/camera i
 genuinely needs the movie's last frame. Under the reference renderer (`PSXPORT_RENDER_PSX=1`) the title
 DOES render (logo + New/Load menu). Under pc_render it now aborts (native-or-crash).
 
-Correct next steps (work FROM the maps, per docs/gfx-debug.md):
-1. Resolve the tracked frontier's suspects on the LIVE port (scene/submit/vkvram probes) — is the title's
-   draw content even being produced in the native path, or is it the FMV-teardown/background gap?
-2. Own the remaining 2D builders so pc_render produces the title without the OT walk: `FUN_80092660`
-   (slot-sprite), `FUN_8005019C`+`FUN_8004FFB4` (UI corner sprites + FT4 fills), and the art `MoveImage`.
-   Font/menu/dialog are already (partly) native. RE each via codemap.py --addr FIRST, then own it to emit
-   into the native queue (submit.cpp pattern), NOT via a new "spriteNative reads a state table".
+### VERIFIED plan (live otattr trace of the title, 2026-07-15) — read-only `titleNative()` producer
+
+CORRECTIONS confirmed live: the title is NOT a MoveImage art-blit (the only vramcopy is a degenerate 2×1
+no-op). `FUN_80092660` is a SOUND/SFX slot leaf (not a sprite builder). The panel family
+(FUN_8005019C/4FFB4/7CC00, docs/native-render-2d-panel.md) is HUD/dialog, NOT the title. The title art is
+in VRAM by s2 (uploaded by Demo::s0PreYield); the OP.STR movie is NOT a blocker (port-progress suspects
+b/c falsified). The title picture = black fill + 2 logo sprites + 3 menu FT4 quads + native font text.
+
+`titleNative()` (read-only producer, sibling of sceneNative; reads guest state, emits to RenderQueue only):
+- **Backdrop**: full-screen black (gpu_blank_display or a black RQ_BACKGROUND quad).
+- **2 logo sprites** (op 0x65, fn 0x8010696C — decoded packet constants, fixed layout):
+  · sprite A: xy=(0,-8) wh=256×240 uv=(0,0) tpage 0x9A → tp=(640,256) mode=1(8bpp) clut=(640,511)
+  · sprite B: xy=(256,-8) wh=64×240 uv=(0,0) tpage 0x9C → tp=(768,256) mode=1 clut=(640,511)
+  → 2× push2dQuad(RQ_BACKGROUND, order_2d_fg=1, …), raw (op 0x65 = textured+raw, color ignored).
+- **3 menu FT4 quads** (op 0x2C/0x2D, fn 0x8007E2F8 / callers 0x8007E1B8+0x8007E998) — e.g. quad0 xy0=(186,172)
+  88×16, uv=(80,1)-(168,17), tpage 0x1D → tp=(832,256) mode=0(4bpp), clut=(880,510), color (0x50,0x50,0x50),
+  opaque. quad2 xy0=(32,168) tpage samples clut=(480,247). Cursor-keyed color/selection: RE by agent (task).
+  → push2dQuad(RQ_OVERLAY, …) opaque / emitOrQueue(semi) for op 0x2D. Reads menu cursor state (sm[0x68] /
+  DAT_800bf808).
+- **Font text** ("New Game"/"Load Game"/copyright): ALREADY native (Font::glyphEmit); confirm it emits in
+  the title path (open Q: do the 3 FT4 quads carry the text, or just box/cursor — agent resolving).
+
+RE gaps to close before/while building: (1) 0x8007E2F8 menu builder → exact quad geometry + cursor keying +
+text-vs-box (dispatched). (2) 0x8010696C/0x80106690/0x80106824 logo overlay leaves — constants already
+decoded from packets above; RE only if the layout is dynamic (it reads as fixed).
+
+drawOTag wiring: `demo = stage==0x801062E4; title = demo && sm[0x48]==2`; `if (title) titleNative(); else
+abortUnimplemented(...)` (s1 loading-ramp keeps the s48<2 blank guard; s3/s7 attract stay crashing = #2a).
 
 ## Next
 Build native producers down the backlog. Each removes one `abortUnimplemented`. Gate: the scene renders
