@@ -2087,3 +2087,16 @@ draft was already byte-faithful.
   the fps60 buffers (or fps60 must present the sub-scene layer on interp frames too).
 - WIDE (aspect=2) hut interior: CLEAN — sub-scene in a centered frame, clean black margins, no VRAM
   artifacts (scratch/screenshots/hut/wide_interior.png 560x240). No wide bug here.
+
+## GATING STANDARD — MIRROR_VERIFY is NOT SBS-full (2026-07-15, regression lesson)
+- A fallthrough native-ization (registering a native as a guest-address override) gated ONLY with
+  PSXPORT_MIRROR_VERIFY can still break SBS-full. MV compares the fn's guest-RAM writes but NOT the
+  dead guest-STACK region the substrate body descends into; SBS-full compares ALL RAM. The Trig::rsin
+  override (c29e6696) passed MV 102k× yet diverged AUTO_SKIP SBS-full at f560 — substrate rsin descends
+  sp-=24 + spills ra@+16 + calls func_80083EBC (own frame); native rsin mirrors none of it, so the
+  stack bytes differed. Fixed by unregistering (85233941); the frame-mirrored overrides (animTick/
+  walkStart via GuestFrame, buildWithOffset) held clean (AUTO_SKIP f21540, dark-screen f15180).
+- RULE: gate every override native-ization with **SBS-full on a path where the address FIRES**, not
+  just MIRROR_VERIFY. A native is only a safe override if it reproduces the substrate's full guest-stack
+  frame (CLAUDE.md "MIRROR THE GUEST STACK") — a pure-function port (Trig) can't be an override without
+  it; it stays native for DIRECT callers only (those run native on both SBS cores → no split).
