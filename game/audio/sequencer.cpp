@@ -1,8 +1,24 @@
 // game/audio/sequencer.cpp — Sequencer method bodies. See sequencer.h for the RE contract.
+//
+// READABILITY PASS (2026-07-15, code-quality pilot, see game/render/node_xform.cpp for the
+// recipe): guest-stack frame boilerplate -> GuestFrame<Size,N> (guest_abi.h), the per-channel
+// record layout -> a named typed lens (ChannelRecord, same guest addresses), the repeated
+// seq/chan index-arithmetic idioms -> named helpers (sext16/chStride/seqPtrSlot). Applied to the
+// structured (non-goto) functions where it's a straightforward substitution; kept OUT of the dense
+// goto-heavy leaves per below. Behavior-preserving — SBS-full 0-diff + MIRROR_VERIFY gate this file
+// exactly as before (see git log for numbers; the channelNoteInit MIRROR_VERIFY v0/v1 mismatch is a
+// PRE-EXISTING artifact unrelated to this pass — SBS-full 0-diff is ground truth, see docs/findings).
+// channelPitchSlideTick/channelEnvelopeRampTick/channelVoiceRegisterWrite/channelVoiceSelectPrep
+// are DELIBERATELY LEFT register-literal internally (only their frame prologue/epilogue was
+// converted to GuestFrame) — see each function's own comment for why: dense fixed-point pipelines
+// with branches that re-converge from multiple sites, where a hand restructure risks a silent
+// operand-order/shift error only an SBS run would catch. That judgment predates this pass and
+// this pass does not second-guess it.
 
 #include "audio/sequencer.h"
 #include "core.h"
 #include "game.h"           // MV_CHECK / VerifyHarness (frameTick trampoline strict gate)
+#include "guest_abi.h"      // GuestFrame/GuestReg/guest_fn/guest_dispatch — ABI vocabulary
 #include <cstdio>
 
 #define SEQ_USER_CB    0x800AC430u   // DAT_800ac430 — optional user callback fn-ptr
@@ -39,6 +55,53 @@
 void rec_dispatch(Core*, uint32_t);
 // cpu_div / rec_break already declared in core.h (included above).
 
+namespace {
+
+// Sign-extend a raw register/arg value the way the gen body's `sll rX,16 / sra rX,16` idiom does
+// at every seq/chan-index use — replaces the repeated `(int32_t)(int16_t)(uint16_t)v` cast chain.
+inline int32_t sext16(uint32_t v) { return (int32_t)(int16_t)(uint16_t)v; }
+
+// Per-channel record byte stride is 176 (CH_STRIDE) — gen computes it via the shift-mul idiom
+// `(chan*11)<<4`, which is bit-identical to `chan*176` under mod-2^32 arithmetic (11*16==176,
+// multiplication is associative mod 2^32) for every chan value this file ever sees (0..14 live).
+// Named so call sites read "channel N's byte offset", not a mystery `*11 <<4`.
+inline uint32_t chStride(int32_t chan) { return (uint32_t)(chan * 11) << 4; }
+
+// SEQ_PTR_ARRAY[seq] slot address. Gen computes the 4-byte-stride index via `(seq<<16)>>14`,
+// which nets out to `sext16(seq) * 4` (shift by 16 sign-extends the low half; shifting right by
+// 14 instead of 16 supplies the implicit *4 stride in one instruction) — named per that meaning.
+inline uint32_t seqPtrSlot(uint32_t seqRaw) { return SEQ_PTR_ARRAY + (uint32_t)(sext16(seqRaw) << 2); }
+
+// Typed lens over a per-channel record (base = *SEQ_PTR_ARRAY[seq] + chStride(chan), stride
+// CH_STRIDE=176). Same guest addresses as the raw `channelBase + 0xNN` reads/writes this file used
+// before — named per the field's confirmed role (see sequencer.h header for the RE writeup each
+// field's offset traces back to). Fields used by exactly one function stay inline `mem_rXX` calls
+// with their own comment, per this file's existing convention — this lens only names fields
+// multiple functions share, so the SAME field reads the SAME name everywhere it appears.
+// Only the fields the STRUCTURED (non-goto) functions below actually use get a named accessor.
+// channelPitchSlideTick/channelEnvelopeRampTick/channelVoiceRegisterWrite read/write several more
+// channel-record fields (rate/base/scale/counters/target/…, all documented in this file's header
+// comments and each function's own comment) but stay raw `mem_rXX(base+N)` — those 3 functions are
+// deliberately kept register-literal (see top-of-file note), so adding lens methods only they'd
+// call would be speculative surface with no reader.
+struct ChannelRecord {
+  Core* c;
+  uint32_t base;
+
+  uint32_t flags() const           { return c->mem_r32(base + CH_FLAGS); }
+  void     setFlags(uint32_t v)    { c->mem_w32(base + CH_FLAGS, v); }
+  void     clearFlagBits(uint32_t mask) { setFlags(flags() & ~mask); }
+
+  void     setBusy(uint8_t v)      { c->mem_w8(base + 20u, v); }   // release/note-init status byte
+
+  uint16_t volL() const            { return c->mem_r16(base + 88u); }   // clamped snapshot L
+  uint16_t volR() const            { return c->mem_r16(base + 90u); }   // clamped snapshot R
+  uint32_t snapshotTargetLPtr() const { return base + 92u; }   // channelVolumeSnapshot()'s outL arg
+  uint32_t snapshotTargetRPtr() const { return base + 94u; }   // channelVolumeSnapshot()'s outR arg
+};
+
+}  // namespace
+
 // 0x800909C0 FUN_800909c0 — libsnd per-VBlank tick wrapper. WIDE-RE DRAFT, UNWIRED (see header).
 // FIX (re-verify pass): gen_func_800909C0 descends sp by 24 and spills s0(r16)/ra BEFORE either
 // dispatch, and sets ra to the real return-site constant before each call (0x800909EC /
@@ -47,22 +110,17 @@ void rec_dispatch(Core*, uint32_t);
 // to the oracle. Mirrored per CLAUDE.md's "MIRROR THE GUEST STACK" rule.
 void Sequencer::frameTick() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 24u;
-  c->mem_w32(c->r[29] + 16u, c->r[16]);
+  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {31, 20}};   // -24 (abi_extract-verified)
+  GuestFrame<24, 2> frame(c, kSpills);
   // FIX (re-verify pass, same class as channelNoteInit's r16 bug): gen loads r16 = 0x800AC430 (the
   // libsnd cb-slot base it reads +0/-4 from) and keeps it LIVE across both dispatches -- callees
   // that spill r16 must see that value, not the caller's stale one.
-  c->r[16] = SEQ_USER_CB;
-  c->mem_w32(c->r[29] + 20u, c->r[31]);
+  GuestReg<16> r16(c);
+  r16 = SEQ_USER_CB;
   uint32_t cb = c->mem_r32(SEQ_USER_CB);
-  if (cb != 0u) { c->r[31] = 0x800909ECu; rec_dispatch(c, cb); }
+  if (cb != 0u) guest_dispatch(c, 0x800909ECu, cb);
   uint32_t seq = c->mem_r32(SEQ_TICK_FN);
-  c->r[31] = 0x800909FCu;
-  rec_dispatch(c, seq);
-  c->r[31] = c->mem_r32(c->r[29] + 20u);
-  c->r[16] = c->mem_r32(c->r[29] + 16u);
-  c->r[29] = sp0;
+  guest_dispatch(c, 0x800909FCu, seq);
 }
 
 // 0x800910F0 — thin arg-repacking wrapper: sign-extend (seq,chan) to 32-bit and tail-dispatch the
@@ -70,15 +128,11 @@ void Sequencer::frameTick() {
 // (generated/shard_6.c:15995). Guest-stack frame mirrored (sp-24, ra spilled at +16).
 void Sequencer::channelPitchSelectDispatch() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 24u;
-  c->mem_w32(c->r[29] + 16u, c->r[31]);
-  c->r[4] = (uint32_t)(int32_t)(int16_t)(uint16_t)c->r[4];
-  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)c->r[5];
-  c->r[31] = 0x8009110Cu;   // FIX: gen sets the real return-site const before the jal
-  rec_dispatch(c, 0x80091120u);
-  c->r[31] = c->mem_r32(c->r[29] + 16u);
-  c->r[29] = sp0;
+  static constexpr GuestFrameSpill kSpills[] = {{31, 16}};   // -24 (abi_extract-verified)
+  GuestFrame<24, 1> frame(c, kSpills);
+  c->r[4] = (uint32_t)sext16(c->r[4]);
+  c->r[5] = (uint32_t)sext16(c->r[5]);
+  guest_dispatch(c, 0x8009110Cu, 0x80091120u);   // FIX: gen sets the real return-site const before the jal
 }
 
 // 0x80091050 — "release"/note-off housekeeping: zeroes the per-channel status byte at +20, clears
@@ -88,41 +142,31 @@ void Sequencer::channelPitchSelectDispatch() {
 // mirrored (sp-32, spill ra/s16/s17/s18 at their RE'd offsets).
 void Sequencer::channelReleaseClear() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 32u;
-  c->mem_w32(c->r[29] + 24u, c->r[18]);
+  static constexpr GuestFrameSpill kSpills[] = {{18, 24}, {16, 16}, {31, 28}, {17, 20}};   // -32
+  GuestFrame<32, 4> frame(c, kSpills);
   uint32_t seqRaw = c->r[4];
   uint32_t chanRaw = c->r[5];
-  int32_t  chan = (int32_t)(int16_t)(uint16_t)chanRaw;
-  uint32_t chanStride = (uint32_t)(chan * 11) << 4;   // == chan*176, gen's shift-mul idiom
-  c->mem_w32(c->r[29] + 16u, c->r[16]);
+  int32_t  chan = sext16(chanRaw);
   // gen: a0 = seqRaw | (chanRaw<<8), sign-extended 16 — the combine uses the RAW incoming a0/a1
   // registers (not the sign-extended chan local), matching gen_func_80091050 exactly.
-  uint32_t combined = (uint32_t)(int32_t)(int16_t)(uint16_t)(seqRaw | (chanRaw << 8));
-  c->mem_w32(c->r[29] + 28u, c->r[31]);
-  c->mem_w32(c->r[29] + 20u, c->r[17]);
-  uint32_t seqPtrSlot = SEQ_PTR_ARRAY + (uint32_t)(((int32_t)(seqRaw << 16)) >> 14);  // seq*4
-  uint32_t channelBase = c->mem_r32(seqPtrSlot) + chanStride;
+  uint32_t combined = (uint32_t)sext16(seqRaw | (chanRaw << 8));
+  uint32_t slot = seqPtrSlot(seqRaw);
+  ChannelRecord ch{c, c->mem_r32(slot) + chStride(chan)};
   // FIX (re-verify pass, same class as channelNoteInit's r16 bug): gen keeps r18=seqPtrSlot,
   // r16=chanStride, r17=channelBase LIVE across the 0x80095B90 call, and channelKeyEventScan spills
   // r16/r17/r18 into its frame -- mirror the register lifetimes so the spilled bytes match.
-  c->r[18] = seqPtrSlot;
-  c->r[16] = chanStride;
-  c->r[17] = channelBase;
+  GuestReg<18> r18(c); GuestReg<16> r16(c); GuestReg<17> r17(c);
+  r18 = slot;
+  r16 = chStride(chan);
+  r17 = ch.base;
   c->r[4] = combined;
   c->r[31] = 0x800910B0u;   // FIX: gen sets the real return-site const before the jal
   channelKeyEventScan();    // FIX: 0x80095B90 is now owned -- direct native call, not rec_dispatch
-  c->mem_w8(channelBase + 20u, 0u);
+  ch.setBusy(0);
   // gen re-derefs seqArrayPtr fresh here (redundant unless the callee above mutated it) — mirror
   // that re-read for strict register/memory faithfulness rather than reusing the cached pointer.
-  channelBase = c->mem_r32(seqPtrSlot) + chanStride;
-  uint32_t flags = c->mem_r32(channelBase + CH_FLAGS) & ~2u;
-  c->mem_w32(channelBase + CH_FLAGS, flags);
-  c->r[31] = c->mem_r32(c->r[29] + 28u);
-  c->r[18] = c->mem_r32(c->r[29] + 24u);
-  c->r[17] = c->mem_r32(c->r[29] + 20u);
-  c->r[16] = c->mem_r32(c->r[29] + 16u);
-  c->r[29] = sp0;
+  ch.base = c->mem_r32(slot) + chStride(chan);
+  ch.clearFlagBits(2u);
 }
 
 // 0x80091910 — sets the per-channel status byte at +20 to 1, clears flags bit3 (value 8). A true
@@ -131,15 +175,11 @@ void Sequencer::channelReleaseClear() {
 void Sequencer::channelStopFlagSet() {
   Core* c = core;
   uint32_t seqRaw = c->r[4];
-  uint32_t chanRaw = c->r[5];
-  int32_t  chan = (int32_t)(int16_t)(uint16_t)chanRaw;
-  uint32_t chanStride = (uint32_t)(chan * 11) << 4;
-  uint32_t seqPtrSlot = SEQ_PTR_ARRAY + (uint32_t)(((int32_t)(seqRaw << 16)) >> 14);
-  uint32_t seqBasePtr = c->mem_r32(seqPtrSlot);
-  c->mem_w8(seqBasePtr + chanStride + 20u, 1u);
-  uint32_t channelBase = c->mem_r32(seqPtrSlot) + chanStride;  // re-derefed, mirrors gen
-  uint32_t flags = c->mem_r32(channelBase + CH_FLAGS) & ~8u;
-  c->mem_w32(channelBase + CH_FLAGS, flags);
+  int32_t  chan = sext16(c->r[5]);
+  uint32_t slot = seqPtrSlot(seqRaw);
+  ChannelRecord{c, c->mem_r32(slot) + chStride(chan)}.setBusy(1u);
+  ChannelRecord ch{c, c->mem_r32(slot) + chStride(chan)};   // re-derefed, mirrors gen
+  ch.clearFlagBits(8u);
 }
 
 // 0x80090BD0 SsSeqCalled — the per-VBlank sequence/channel scheduler. Faithful to
@@ -160,24 +200,17 @@ void Sequencer::channelStopFlagSet() {
 // ORACLE: gen_func_80090BD0 (tools/port_check.py equivalence-gate marker; see docs/port-framework.md)
 void Sequencer::seqChannelDispatch() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 56u;
+  // Frame descent + spills are UNCONDITIONAL in the gen prologue (they execute before the
+  // reentrancy-guard test), so GuestFrame's ctor runs before the guard check below, exactly
+  // matching gen — including on the early-exit path (CLAUDE.md "mirror the guest stack" applies
+  // even to the do-nothing path). Internal control flow/register usage kept LITERAL below (see
+  // this function's own header comment: a prior restructure introduced two real bugs).
+  static constexpr GuestFrameSpill kSpills[] =
+      {{31, 52}, {30, 48}, {23, 44}, {22, 40}, {21, 36}, {20, 32}, {19, 28}, {18, 24}, {17, 20}, {16, 16}};
+  GuestFrame<56, 10> frame(c, kSpills);
   c->r[2] = c->mem_r32(SEQ_REENTRY_FLAG);
   c->r[3] = 1u;
-  c->mem_w32(c->r[29] + 52u, c->r[31]);
-  c->mem_w32(c->r[29] + 48u, c->r[30]);
-  c->mem_w32(c->r[29] + 44u, c->r[23]);
-  c->mem_w32(c->r[29] + 40u, c->r[22]);
-  c->mem_w32(c->r[29] + 36u, c->r[21]);
-  c->mem_w32(c->r[29] + 32u, c->r[20]);
-  c->mem_w32(c->r[29] + 28u, c->r[19]);
-  c->mem_w32(c->r[29] + 24u, c->r[18]);
-  c->mem_w32(c->r[29] + 20u, c->r[17]);
-  {
-    int _t = (c->r[2] == c->r[3]);
-    c->mem_w32(c->r[29] + 16u, c->r[16]);
-    if (_t) goto L_80090E10;
-  }
+  if (c->r[2] == c->r[3]) goto L_80090E10;
   c->mem_w32(SEQ_REENTRY_FLAG, c->r[3]);
   c->r[31] = 0x80090C1Cu;
   c->r[23] = 0u;
@@ -288,17 +321,7 @@ L_80090DF0:
 L_80090E08:
   c->mem_w32(SEQ_REENTRY_FLAG, 0u);
 L_80090E10:
-  c->r[31] = c->mem_r32(c->r[29] + 52u);
-  c->r[30] = c->mem_r32(c->r[29] + 48u);
-  c->r[23] = c->mem_r32(c->r[29] + 44u);
-  c->r[22] = c->mem_r32(c->r[29] + 40u);
-  c->r[21] = c->mem_r32(c->r[29] + 36u);
-  c->r[20] = c->mem_r32(c->r[29] + 32u);
-  c->r[19] = c->mem_r32(c->r[29] + 28u);
-  c->r[18] = c->mem_r32(c->r[29] + 24u);
-  c->r[17] = c->mem_r32(c->r[29] + 20u);
-  c->r[16] = c->mem_r32(c->r[29] + 16u);
-  c->r[29] = sp0;
+  ;   // GuestFrame's destructor restores r16..r23/r30/r31 + ascends sp here, both exit paths.
 }
 
 // ============================================================================
@@ -319,18 +342,19 @@ void Sequencer::channelVolumeSnapshot() {
   uint32_t outLPtr = c->r[5];
   uint32_t outRPtr = c->r[6];
 
+  // NOTE: this combined-arg addressing is byte-packed (seq in bits0..7, chan in bits8..15) with NO
+  // sign-extension on the seq half — unlike seqPtrSlot()'s sext16(seqRaw), which is for the plain
+  // s16 seq arg other leaves take. Different packing, kept separate rather than force-fit one helper.
   uint32_t seqLow = combined & 0xFFu;
-  uint32_t seqPtrSlot = SEQ_PTR_ARRAY + (seqLow << 2);
-  uint32_t seqBasePtr = c->mem_r32(seqPtrSlot);
+  uint32_t seqBasePtr = c->mem_r32(SEQ_PTR_ARRAY + (seqLow << 2));
 
   c->mem_w16(SEQ_VOLSNAP_SCRATCH, (uint16_t)combined);   // dead write, mirrored for fidelity
 
   int32_t chan = (int32_t)((int32_t)(combined & 0xFF00u) >> 8);
-  uint32_t chanStride = (uint32_t)(chan * 11) << 4;       // chan*176
-  uint32_t channelBase = seqBasePtr + chanStride;
+  ChannelRecord ch{c, seqBasePtr + chStride(chan)};
 
-  c->mem_w16(outLPtr, c->mem_r16(channelBase + 88u));
-  c->mem_w16(outRPtr, c->mem_r16(channelBase + 90u));
+  c->mem_w16(outLPtr, ch.volL());
+  c->mem_w16(outRPtr, ch.volR());
 }
 
 // 0x80094B50 channelKeyRegisterMerge — true leaf (no stack frame). Faithful to gen_func_80094B50
@@ -382,16 +406,14 @@ void Sequencer::channelKeyRegisterMerge() {
 // SEQ_KEYSCAN_MATCH and call channelKeyRegisterMerge().
 void Sequencer::channelKeyEventScan() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
   int8_t count = (int8_t)c->mem_r8(SEQ_KEYSCAN_COUNT);
-  c->r[29] = sp0 - 32u;
-  c->mem_w32(c->r[29] + 16u, c->r[16]);   // FIX: gen spills s0(r16) here -- prior draft omitted it entirely
-  c->r[16] = 0u;
-  c->mem_w32(c->r[29] + 28u, c->r[31]);
-  c->mem_w32(c->r[29] + 24u, c->r[18]);
-  c->mem_w32(c->r[29] + 20u, c->r[17]);
+  // FIX: gen spills s0(r16) here -- prior draft omitted it entirely.
+  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {31, 28}, {18, 24}, {17, 20}};   // -32
+  GuestFrame<32, 4> frame(c, kSpills);
+  GuestReg<16> r16(c);
+  r16 = 0u;
   if (count > 0) {
-    int32_t target = (int32_t)(int16_t)(uint16_t)c->r[4];
+    int32_t target = sext16(c->r[4]);
     for (int32_t i = 0; i < (int32_t)(int8_t)c->mem_r8(SEQ_KEYSCAN_COUNT); i++) {
       uint32_t voiceBit = 1u << (uint32_t)(i & 31);
       if ((c->mem_r32(SEQ_KEYSCAN_VOICE_MASK) & voiceBit) != 0u) continue;   // voice busy, skip
@@ -410,11 +432,6 @@ void Sequencer::channelKeyEventScan() {
       channelKeyRegisterMerge();
     }
   }
-  c->r[31] = c->mem_r32(c->r[29] + 28u);
-  c->r[18] = c->mem_r32(c->r[29] + 24u);
-  c->r[17] = c->mem_r32(c->r[29] + 20u);
-  c->r[16] = c->mem_r32(c->r[29] + 16u);   // FIX: restore s0(r16), matching the now-mirrored spill above
-  c->r[29] = sp0;
 }
 
 // 0x80090E40 channelPitchSlideTick — pitch-slide/portamento per-tick interpolator (SsSeqCalled
@@ -439,8 +456,14 @@ void Sequencer::channelKeyEventScan() {
 // clears bit4 early too if BOTH clamped values saturated at the SAME extreme (0 or 127).
 void Sequencer::channelPitchSlideTick() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 56u;
+  // GuestFrame declared BEFORE any of r16..r21/ra are touched below (same point the gen prologue's
+  // spills logically capture — the interleaved r2/r3/r7/r8 scratch math above them in the original
+  // transcription never read/wrote a callee-saved register, so hoisting the frame here captures the
+  // identical pre-call values gen's own spill sequence did). Internal control flow/register usage
+  // kept LITERAL past this point — see this function's header comment for why.
+  static constexpr GuestFrameSpill kSpills[] =
+      {{21, 44}, {31, 48}, {20, 40}, {19, 36}, {18, 32}, {17, 28}, {16, 24}};   // -56
+  GuestFrame<56, 7> frame(c, kSpills);
   c->r[2] = c->r[4] << 16;
   c->r[3] = SEQ_PTR_ARRAY;
   c->r[2] = (uint32_t)((int32_t)c->r[2] >> 14);
@@ -452,14 +475,7 @@ void Sequencer::channelPitchSlideTick() {
   c->r[2] = c->r[2] << 2;
   c->r[2] = c->r[2] - c->r[3];
   c->r[7] = c->r[2] << 4;
-  c->mem_w32(c->r[29] + 44u, c->r[21]);
   c->r[21] = c->r[4];
-  c->mem_w32(c->r[29] + 48u, c->r[31]);
-  c->mem_w32(c->r[29] + 40u, c->r[20]);
-  c->mem_w32(c->r[29] + 36u, c->r[19]);
-  c->mem_w32(c->r[29] + 32u, c->r[18]);
-  c->mem_w32(c->r[29] + 28u, c->r[17]);
-  c->mem_w32(c->r[29] + 24u, c->r[16]);
   c->r[3] = c->mem_r32(c->r[8] + 0u);
   c->r[20] = c->r[5];
   c->r[18] = c->r[3] + c->r[7];
@@ -560,14 +576,7 @@ L_80091010:
   c->r[31] = 0x80091024u;   // FIX: gen sets the real return-site const before the jal
   c->r[6] = c->r[18] + 94u;
   channelVolumeSnapshot();
-  c->r[31] = c->mem_r32(c->r[29] + 48u);
-  c->r[21] = c->mem_r32(c->r[29] + 44u);
-  c->r[20] = c->mem_r32(c->r[29] + 40u);
-  c->r[19] = c->mem_r32(c->r[29] + 36u);
-  c->r[18] = c->mem_r32(c->r[29] + 32u);
-  c->r[17] = c->mem_r32(c->r[29] + 28u);
-  c->r[16] = c->mem_r32(c->r[29] + 24u);
-  c->r[29] = sp0;
+  // GuestFrame's destructor restores r16..r21/r31 + ascends sp here.
 }
 
 // 0x80092080 channelEnvelopeRampTick — ADSR/envelope ramp (SsSeqCalled flags bit6 AND bit7 route
@@ -750,29 +759,24 @@ L_80092284:
 // pair (+39../+55..) plus a 16x u16 array (+96..+126, all set to 127).
 void Sequencer::channelNoteInit() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 24u;
-  uint32_t seqPtrSlot = SEQ_PTR_ARRAY + (uint32_t)(((int32_t)(c->r[4] << 16)) >> 14);
-  int32_t chan = (int32_t)(int16_t)(uint16_t)c->r[5];
-  uint32_t chanStride = (uint32_t)(chan * 11) << 4;   // chan*176
-  c->mem_w32(c->r[29] + 20u, c->r[31]);
-  c->mem_w32(c->r[29] + 16u, c->r[16]);
-
-  uint32_t seqBasePtr = c->mem_r32(seqPtrSlot);
-  uint32_t channelBase = seqBasePtr + chanStride;   // r16 -- the target channel record
+  static constexpr GuestFrameSpill kSpills[] = {{31, 20}, {16, 16}};   // -24 (abi_extract-verified)
+  GuestFrame<24, 2> frame(c, kSpills);
+  int32_t chan = sext16(c->r[5]);
+  ChannelRecord ch{c, c->mem_r32(seqPtrSlot(c->r[4])) + chStride(chan)};
   // FIX (re-verify pass, root-caused via SBS bisect to f154 0x801FE928): gen holds channelBase in
   // LIVE r16 (callee-save) across both calls below, and channelKeyEventScan spills r16 into its own
   // frame -- the guest-stack bytes only match if c->r[16] actually carries channelBase at call time.
   // Keeping it solely in a C++ local made the callee spill a stale r16 (A=0x1F800000 vs B=0x800BE698).
-  c->r[16] = channelBase;
+  GuestReg<16> r16(c);
+  r16 = ch.base;
 
-  c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) & ~1u);      // clear bit0
-  c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) & ~2u);      // clear bit1
-  c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) & ~8u);      // clear bit3
-  c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) & ~1025u);   // clear bits{0,10}
+  ch.clearFlagBits(1u);      // bit0
+  ch.clearFlagBits(2u);      // bit1
+  ch.clearFlagBits(8u);      // bit3
+  ch.clearFlagBits(1025u);   // bits{0,10}
 
-  uint32_t combined = (uint32_t)(int32_t)(int16_t)(uint16_t)(c->r[4] | (c->r[5] << 8));
-  c->mem_w32(channelBase + CH_FLAGS, c->mem_r32(channelBase + CH_FLAGS) | 4u);       // set bit2
+  uint32_t combined = (uint32_t)sext16(c->r[4] | (c->r[5] << 8));
+  ch.setFlags(ch.flags() | 4u);   // set bit2
 
   c->r[4] = combined;
   c->r[31] = 0x80091A38u;   // FIX: gen sets the real return-site const before the jal
@@ -780,43 +784,43 @@ void Sequencer::channelNoteInit() {
   c->r[31] = 0x80091A40u;   // FIX: gen sets the real return-site const before the jal
   rec_dispatch(c, 0x800931A0u);   // input_dispatch_931c0's neighbor, not this wave's target (MAPPED)
 
-  uint32_t f132 = c->mem_r32(channelBase + 132u);
-  uint32_t f140 = c->mem_r32(channelBase + 140u);
-  uint32_t f86  = c->mem_r16(channelBase + 86u);
-  uint32_t f4   = c->mem_r32(channelBase + 4u);
+  uint32_t f132 = c->mem_r32(ch.base + 132u);
+  uint32_t f140 = c->mem_r32(ch.base + 140u);
+  uint32_t f86  = c->mem_r16(ch.base + 86u);
+  uint32_t f4   = c->mem_r32(ch.base + 4u);
 
-  c->mem_w8(channelBase + 20u, 0u);
-  c->mem_w32(channelBase + 136u, 0u);
-  c->mem_w8(channelBase + 28u, 0u);
-  c->mem_w8(channelBase + 24u, 0u);
-  c->mem_w8(channelBase + 25u, 0u);
-  c->mem_w8(channelBase + 30u, 0u);
-  c->mem_w8(channelBase + 26u, 0u);
-  c->mem_w8(channelBase + 27u, 0u);
-  c->mem_w8(channelBase + 31u, 0u);
-  c->mem_w8(channelBase + 23u, 0u);
-  c->mem_w8(channelBase + 33u, 0u);
-  c->mem_w8(channelBase + 28u, 0u);
-  c->mem_w8(channelBase + 29u, 0u);
-  c->mem_w8(channelBase + 21u, 0u);
-  c->mem_w8(channelBase + 22u, 0u);
-  c->mem_w32(channelBase + 144u, f132);
-  c->mem_w32(channelBase + 148u, f140);
-  c->mem_w16(channelBase + 84u, (uint16_t)f86);
-  c->mem_w32(channelBase + 0u, f4);
-  c->mem_w32(channelBase + 8u, f4);
+  // ~14 per-channel status bytes cleared, in the gen body's own (redundant, re-clears +28) order —
+  // not renamed to a loop or a named struct field: none of these bytes has a confirmed semantic
+  // role beyond "cleared on note retrigger" (see header comment), so a name here would be invented,
+  // not RE'd. Kept as the flat sequence gen emits, byte-for-byte and store-for-store.
+  ch.setBusy(0);
+  c->mem_w32(ch.base + 136u, 0u);
+  c->mem_w8(ch.base + 28u, 0u);
+  c->mem_w8(ch.base + 24u, 0u);
+  c->mem_w8(ch.base + 25u, 0u);
+  c->mem_w8(ch.base + 30u, 0u);
+  c->mem_w8(ch.base + 26u, 0u);
+  c->mem_w8(ch.base + 27u, 0u);
+  c->mem_w8(ch.base + 31u, 0u);
+  c->mem_w8(ch.base + 23u, 0u);
+  c->mem_w8(ch.base + 33u, 0u);
+  c->mem_w8(ch.base + 28u, 0u);
+  c->mem_w8(ch.base + 29u, 0u);
+  c->mem_w8(ch.base + 21u, 0u);
+  c->mem_w8(ch.base + 22u, 0u);
+  c->mem_w32(ch.base + 144u, f132);
+  c->mem_w32(ch.base + 148u, f140);
+  c->mem_w16(ch.base + 84u, (uint16_t)f86);
+  c->mem_w32(ch.base + 0u, f4);
+  c->mem_w32(ch.base + 8u, f4);
 
   for (int32_t i = 0; i < 16; i++) {
-    c->mem_w8(channelBase + 55u + (uint32_t)i, (uint8_t)i);
-    c->mem_w8(channelBase + 39u + (uint32_t)i, 64u);
-    c->mem_w16(channelBase + 96u + (uint32_t)i * 2u, 127u);
+    c->mem_w8(ch.base + 55u + (uint32_t)i, (uint8_t)i);
+    c->mem_w8(ch.base + 39u + (uint32_t)i, 64u);
+    c->mem_w16(ch.base + 96u + (uint32_t)i * 2u, 127u);
   }
-  c->mem_w16(channelBase + 92u, 127u);
-  c->mem_w16(channelBase + 94u, 127u);
-
-  c->r[31] = c->mem_r32(c->r[29] + 20u);
-  c->r[16] = c->mem_r32(c->r[29] + 16u);
-  c->r[29] = sp0;
+  c->mem_w16(ch.snapshotTargetLPtr(), 127u);
+  c->mem_w16(ch.snapshotTargetRPtr(), 127u);
 }
 
 // 0x800962B0 channelVoiceSelectPrep — called mid-loop by channelVoiceRegisterWrite() (see below).
@@ -899,8 +903,14 @@ L_80096368:
 // docs/fleet-workflow.md §9 requires before registering this as an override.
 void Sequencer::channelVoiceRegisterWrite() {
   Core* c = core;
-  uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 64u;
+  // GuestFrame declared BEFORE any of r16..r23/r30/ra are touched below — the r7/r3/r2 scratch
+  // math above them never reads/writes a callee-saved register, so hoisting the frame here captures
+  // the identical pre-call values gen's own spill sequence did (same reasoning as
+  // channelPitchSlideTick's frame comment). Internal control flow/register usage kept LITERAL past
+  // this point — see this function's header comment for why.
+  static constexpr GuestFrameSpill kSpills[] =
+      {{31, 60}, {30, 56}, {23, 52}, {22, 48}, {21, 44}, {20, 40}, {19, 36}, {18, 32}, {17, 28}, {16, 24}};
+  GuestFrame<64, 10> frame(c, kSpills);
   c->r[7] = c->r[4] & 255u;
   c->r[7] = c->r[7] << 2;
   c->r[3] = c->r[4] & 65280u;
@@ -909,16 +919,6 @@ void Sequencer::channelVoiceRegisterWrite() {
   c->r[2] = c->r[2] + c->r[3];
   c->r[2] = c->r[2] << 2;
   c->r[2] = c->r[2] - c->r[3];
-  c->mem_w32(c->r[29] + 60u, c->r[31]);
-  c->mem_w32(c->r[29] + 56u, c->r[30]);
-  c->mem_w32(c->r[29] + 52u, c->r[23]);
-  c->mem_w32(c->r[29] + 48u, c->r[22]);
-  c->mem_w32(c->r[29] + 44u, c->r[21]);
-  c->mem_w32(c->r[29] + 40u, c->r[20]);
-  c->mem_w32(c->r[29] + 36u, c->r[19]);
-  c->mem_w32(c->r[29] + 32u, c->r[18]);
-  c->mem_w32(c->r[29] + 28u, c->r[17]);
-  c->mem_w32(c->r[29] + 24u, c->r[16]);
   c->r[3] = 0x80100000u + c->r[7];
   c->r[3] = c->mem_r32(c->r[3] + 19504u);   // SEQ_PTR_ARRAY-relative, matches chBase() convention
   c->r[2] = c->r[2] << 4;
@@ -1305,19 +1305,11 @@ L_80095A44:
     if (_t) goto L_80095604;
   }
 L_80095A64:
+  // v0 = sext16(chan) — gen's return-value setup; must read r22 BEFORE GuestFrame's destructor
+  // (below, at the closing brace) restores it to the caller's pre-call value.
   c->r[2] = c->r[22] << 16;
   c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
-  c->r[31] = c->mem_r32(c->r[29] + 60u);
-  c->r[30] = c->mem_r32(c->r[29] + 56u);
-  c->r[23] = c->mem_r32(c->r[29] + 52u);
-  c->r[22] = c->mem_r32(c->r[29] + 48u);
-  c->r[21] = c->mem_r32(c->r[29] + 44u);
-  c->r[20] = c->mem_r32(c->r[29] + 40u);
-  c->r[19] = c->mem_r32(c->r[29] + 36u);
-  c->r[18] = c->mem_r32(c->r[29] + 32u);
-  c->r[17] = c->mem_r32(c->r[29] + 28u);
-  c->r[16] = c->mem_r32(c->r[29] + 24u);
-  c->r[29] = sp0;
+  // GuestFrame's destructor restores r16..r23/r30/r31 + ascends sp here.
 }
 
 // ============================================================================
