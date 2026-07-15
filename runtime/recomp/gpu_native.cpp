@@ -935,7 +935,15 @@ void GpuState::gp0_exec(Core* core) {
         if (ui) { layer = RQ_HUD; om = RQ_OM_2D_FG; is3d = 0; }   // force screen-space HUD, no depth tag
         if (s_ot_2d_only && !billboard && !ui) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
         else {
-        if (s_ot_2d_only) s_ot_2d_drawn++;   // genuine 2D-overlay poly (dialog panel / UI span) — unimplemented natively
+        // Count only GENUINE unimplemented 2D (a ui-span panel poly), NOT obj_depth-promoted world
+        // billboards: a `billboard` poly is a 2D prim that got obj_depth (:848) → is3d=1, drawn as world
+        // overlay with real depth (the accepted #28/#39 obj_depth transcription). Counting it was a false
+        // positive that crashed field free-roam (~60 flame/gem/pickup billboards). Mirrors the sprite
+        // path, which already excludes its `objz` billboard analog from the count (:1118). (Diagnosis
+        // 2026-07-15: docs/native-render-rebuild.md #3b-A.) NOTE: do NOT also drop `native_covered` from
+        // the count here yet — the hut authored sub-scene has native-cover OFF, so that restructure would
+        // crash it; it needs the object-cover gate broadened first (follow-up).
+        if (s_ot_2d_only && !billboard) s_ot_2d_drawn++;   // genuine 2D-overlay poly (ui panel) — unimplemented natively
         core->game->activeRq().emitOrQueue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
