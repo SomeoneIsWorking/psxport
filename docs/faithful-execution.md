@@ -84,3 +84,15 @@ a named `constexpr GuestFrameSpill kSpills[]` table (the type guest_abi.h define
 restore loops — the ABI contract is spelled out once, without the lifetime model the control flow
 violates. Check the abi_extract `--contract` epilogue-restore list: if it names >1 return site OR the fn
 has rec_dispatch-return tail-jumps, do NOT use GuestFrame RAII. Reference: beh_actor_tomba_proximity_combat.cpp.
+
+## REFACTOR TARGETING: only refactor EXERCISED files (gatable) — defer unexercised ones (2026-07-15)
+A readability refactor is only landable if its byte-exactness can be proven by a NON-ARGUABLE gate —
+SBS-full 0-diff that actually EXERCISES the changed code, or MIRROR_VERIFY with the override FIRING.
+Some native files' overrides NEVER FIRE in any reachable headless scenario (autonav/replays), e.g.
+game/object/actor_sm_reward.cpp (fires only on item-pickup/reward-tally scenes — no replay covers it).
+Refactoring those is UNVERIFIABLE BY EXECUTION: a subtle offset/spill/signedness slip in a 500-line
+transform would be invisible until the user hits that scene (gameplay-relevant = user-facing bug).
+RULE: prefer refactoring files exercised by autonav/combat/replays (node_xform, sequencer — SBS-gated).
+For an unexercised file, DEFER the refactor until a repro that fires it exists (then execution-gate).
+The actor_sm_reward refactor (513->205 pokes, structurally 1:1-verified but NOT execution-exercised) is
+held at docs/deferred/actor_sm_reward-refactor.patch — apply + gate when a reward-tally repro exists.
