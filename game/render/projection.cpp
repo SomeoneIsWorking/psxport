@@ -58,13 +58,12 @@ static void projComposeCore(Core* c, const float Robj[3][3], const float Tobj[3]
 
 void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
   Core* c = mCore;
-  // object world rotation matrix Robj from cmd+0x18: Robj[row][col] = halfword at cmd+0x18 + col*2 + row*6.
-  float Robj[3][3];
-  for (int col = 0; col < 3; col++)
-    for (int row = 0; row < 3; row++)
-      Robj[row][col] = (float)r16(c, cmd + 0x18 + col * 2 + row * 6);
-  // object world position Tobj from cmd+0x2C/0x30/0x34.
-  float Tobj[3] = { (float)r16(c, cmd + 0x2C), (float)r16(c, cmd + 0x30), (float)r16(c, cmd + 0x34) };
+  // Object world rotation Robj (cmd+0x18) / position Tobj (cmd+0x2C) go through the Fps60::projObj choke
+  // (docs/fps60-rework.md unified-path redesign): real frame reads them live from guest RAM and captures
+  // them keyed by cmd (byte-identical to the old inline read); the interp present re-run returns the
+  // lerp(prev,cur,t) so the object interpolates through THIS same render path instead of matchAndLerp.
+  float Robj[3][3], Tobj[3];
+  c->game->fps60.projObj(c, cmd, Robj, Tobj);
 
   projComposeCore(c, Robj, Tobj, out);
   if (cfg_dbg("eproj")) { static long n = 0; if (n++ % 240 == 0)

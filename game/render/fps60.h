@@ -115,6 +115,18 @@ struct Fps60 {
   // directly — real call: reads + captures into mBgCur; present-time override: returns mBgOverride.
   void bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY);
 
+  // ---- PER-OBJECT TRANSFORM choke (UNIFIED-PATH redesign 2026-07-15, docs/fps60-rework.md) ------------
+  // The object's world rotation/position (Robj cmd+0x18, Tobj cmd+0x2C), the last INPUT still read live
+  // by the render (projComposeObject). Given the SAME capture/override shape as sceneCam so the interp
+  // present can re-run the real object walk with lerped transforms instead of the matchAndLerp output
+  // heuristic. Real projComposeObject call: read live + capture into mObjCur[cmd]. Interp present
+  // (mObjOverrideOn): return lerp(mObjPrev[cmd], mObjCur[cmd], mT). `cmd` = the object's stable render-
+  // command block (node+0xC0[i]) = its per-object identity across frames.
+  struct Fps60Obj { float R[3][3]; float T[3]; };
+  std::unordered_map<uint32_t, Fps60Obj> mObjCur, mObjPrev;
+  bool mObjOverrideOn = false;   // set only while the interp present re-runs the object walk
+  void projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]);
+
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
   RqItem* mRqPrev = nullptr;    // previous frame's snapshot (matchAndLerp's Q[N-1])

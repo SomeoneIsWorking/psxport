@@ -571,6 +571,48 @@ void Fps60::present_vk(Core* core) {
   std::swap(mNCur, mNPrev);
   std::swap(mCamCur, mCamPrev);
   std::swap(mBgCur, mBgPrev);
+  std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
+  mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
   mHavePrev = 1;
+}
+
+// PER-OBJECT TRANSFORM choke (docs/fps60-rework.md unified-path redesign). Real projComposeObject call
+// (mObjOverrideOn false): read Robj (cmd+0x18) / Tobj (cmd+0x2C) live from guest RAM and CAPTURE them
+// keyed by cmd — byte-identical to the old direct read (this is the read the old code did inline), plus
+// the host-memory capture. Interp present (mObjOverrideOn true, set by the interp re-run): return
+// lerp(mObjPrev[cmd], mObjCur[cmd], mT) — the object interpolated through the SAME render path. A newly
+// appeared object (in cur, no prev) uses cur as-is (no lerp) for its first frame; a stale key (in prev,
+// not cur) is simply not re-rendered (the object walk only visits live cmds). When fps60 is off, the
+// override is never armed and the capture map churn is the only cost.
+void Fps60::projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
+  if (mObjOverrideOn) {
+    auto pc = mObjCur.find(cmd);
+    if (pc != mObjCur.end()) {
+      auto pp = mObjPrev.find(cmd);
+      const Fps60Obj& C = pc->second;
+      if (pp != mObjPrev.end()) {
+        const Fps60Obj& P = pp->second;
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) Robj[i][j] = P.R[i][j] + (C.R[i][j] - P.R[i][j]) * mT;
+          Tobj[i] = P.T[i] + (C.T[i] - P.T[i]) * mT;
+        }
+      } else {  // new object this frame — no prev to lerp from, use cur
+        for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) Robj[i][j] = C.R[i][j]; Tobj[i] = C.T[i]; }
+      }
+      return;
+    }
+    // cmd not captured this frame (shouldn't happen for a live-walked object) — fall through to a live read.
+  }
+  // Real frame: read live from guest RAM (the exact read projComposeObject used to do inline).
+  for (int col = 0; col < 3; col++)
+    for (int row = 0; row < 3; row++)
+      Robj[row][col] = (float)c->mem_r16s(cmd + 0x18u + (uint32_t)col * 2u + (uint32_t)row * 6u);
+  Tobj[0] = (float)c->mem_r16s(cmd + 0x2Cu);
+  Tobj[1] = (float)c->mem_r16s(cmd + 0x30u);
+  Tobj[2] = (float)c->mem_r16s(cmd + 0x34u);
+  // Capture keyed by cmd (host memory only — the READ-ONLY OVERLAY invariant holds).
+  Fps60Obj o;
+  for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) o.R[i][j] = Robj[i][j]; o.T[i] = Tobj[i]; }
+  mObjCur[cmd] = o;
 }
 
