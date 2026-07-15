@@ -207,6 +207,86 @@ void Render::backdropRender(uint32_t t4) {
   c->mRender->diag.endObject();
 }
 
+// ---- pc_render scene DISPATCH (see render.h) --------------------------------------------------------
+// Classify the current scene from the resident stage (0x801FE00C) + its sub-state selectors.
+Render::SceneKind Render::classifyScene() {
+  Core* c = mCore;
+  const uint32_t stage = c->mem_r32(0x801FE00Cu);
+  if (stage == 0x8010649Cu) return SceneKind::StartBoot;     // START.BIN loader
+  if (stage == 0x801062E4u) return SceneKind::Title;         // DEMO/title front-end (title + substates)
+  if (stage == 0x8010637Cu) {                                // GAME field stage
+    const uint32_t task_sm = c->mem_r32(0x1F800138u);
+    if (task_sm && c->mem_r16(task_sm + 0x4Cu) == 3) return SceneKind::HutInterior;   // authored sub-scene
+    if (c->mem_r32(0x80109450u) == 0x3C021F80u)      return SceneKind::SopNarration;  // SOP overlay loaded
+    return SceneKind::Field;                                                          // walkable free-roam
+  }
+  return SceneKind::Unknown;
+}
+
+// renderScene — the ONE native-renderer dispatch. No guest-OT transcription; each producer builds the
+// picture from game state and emits to the render queue. A stage with no producer aborts with its identity.
+void Render::renderScene() {
+  switch (classifyScene()) {
+    case SceneKind::StartBoot:    renderStartBoot();    break;
+    case SceneKind::Title:        renderTitle();        break;
+    case SceneKind::Field:        renderField();        break;
+    case SceneKind::HutInterior:  renderHutInterior();  break;
+    case SceneKind::SopNarration: renderSopNarration(); break;
+    case SceneKind::Unknown:
+    default:
+      mCore->game->fps60.mTier1EligibleCur = false;
+      abortUnimplemented("stage with no native producer");
+  }
+}
+
+// #1 START.BIN boot (0x8010649C): the loader shows a black screen (empty OT, FB mean 0) for ~5 frames while
+// it builds the file table / preloads. Native producer = a black loading frame (the observable result).
+void Render::renderStartBoot() {
+  mCore->game->fps60.mTier1EligibleCur = false;
+  mCore->game->gpu.gpu_blank_display();     // zero the display FB -> present shows black
+}
+
+// #2 DEMO/TITLE front-end (stage 0x801062E4). Substate s2 (sm[0x48]==2) = the static title (logo + New/Load
+// menu + copyright) via titleNative (emits from source state). Other substates = the loading ramp / OP.STR
+// movie / attract, FMV/CD states shown black headless (the movie is skipped) — the honest result.
+void Render::renderTitle() {
+  Core* c = mCore;
+  c->game->fps60.mTier1EligibleCur = false;
+  if (c->mem_r16(0x801FE048u) == 2) {
+    DisplayPassGuard displayPass(c->mRender->mode);   // read-only: reads source state, emits host-only
+    titleNative();
+  } else {
+    c->game->gpu.gpu_blank_display();                 // loading ramp / FMV-skipped movie/attract -> black
+  }
+}
+
+// #3 WALKABLE FIELD — native WORLD: terrain + entity/scene tables + objects + backdrop, real per-pixel
+// depth. The 2D layer (HUD/text/dialog/billboards) comes from its own native producers, not the OT.
+void Render::renderField() {
+  mCore->game->fps60.mTier1EligibleCur = true;   // native field render runs -> fps60 tier-1 may re-render it
+  DisplayPassGuard displayPass(mCore->mRender->mode);   // read-only invariant: aborts on any guest write
+  sceneNative();
+}
+
+// #4 HUT/DOOR INTERIOR (task-sm[0x4c]==3): OBJECTS-ONLY. The room is entity-list object 0x800FD850
+// (HEADS[1]); NPCs/props are HEADS[0..1]; Tomba is the G block — fieldObjectsRender walks them all via
+// perObjFlush -> gt3gt4 with real depth + the live interior camera. Skips the exterior terrain/scene-table/
+// backdrop (village data) — the substrate's reduced frameX pass. 2D bubble = native producer when rebuilt.
+void Render::renderHutInterior() {
+  mCore->game->fps60.mTier1EligibleCur = false;
+  DisplayPassGuard displayPass(mCore->mRender->mode);
+  fieldObjectsRender();
+}
+
+// #5 SOP INTRO NARRATION (overlay-sig 0x3C021F80 @ 0x80109450): the WORLD is native via sceneNative exactly
+// like the field (3D beats). The VOID beat (0x800BF9B4==5) has no 3D world/BG — the beat==5 guard inside
+// sceneNative drops terrain/scene-table/backdrop and draws the vortex over black. Caption text = 2D producer.
+void Render::renderSopNarration() {
+  mCore->game->fps60.mTier1EligibleCur = true;
+  DisplayPassGuard displayPass(mCore->mRender->mode);
+  sceneNative();
+}
+
 // FAIL-FAST for the one native renderer (USER 2026-07-15): no OT/GP0 fallback — a scene/layer lacking a
 // native producer crashes with its identity, so the crash list is the rebuild backlog. See render.h.
 void Render::abortUnimplemented(const char* scene) {

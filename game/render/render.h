@@ -166,6 +166,20 @@ public:
   // widescreen re-include pass). Was ov_scene_native.
   void sceneNative();
 
+  // ---- pc_render scene DISPATCH: classify the current scene, then run its native producer -------------
+  // The picture for every pc_render frame comes from ONE of these per-scene producers (no guest-OT
+  // transcription). drawOTag (game_tomba2.cpp) calls renderScene() after the psx_render reference guard;
+  // renderScene classifies by stage/sub-state and dispatches. Each producer owns its DisplayPassGuard +
+  // fps60 eligibility. A stage with no producer aborts (abortUnimplemented) — the crash IS the backlog.
+  enum class SceneKind { StartBoot, Title, Field, HutInterior, SopNarration, Unknown };
+  SceneKind classifyScene();     // stage 0x801FE00C + sub-state selectors -> which scene this frame is
+  void renderScene();            // classify + dispatch to the producer below
+  void renderStartBoot();        // #1 START.BIN loader — black frame
+  void renderTitle();            // #2 DEMO/title front-end (s2 = titleNative; other substates = black)
+  void renderField();            // #3 walkable field — native world (sceneNative)
+  void renderHutInterior();      // #4 hut/door authored sub-scene — objects-only (fieldObjectsRender)
+  void renderSopNarration();     // #5 SOP intro narration — native world (sceneNative + void-beat guard)
+
   // titleNative: the DEMO/title (stage 0x801062E4, substate sm[0x48]==2) read-only native producer.
   // The title = a black backdrop + 2 logo sprites (op 0x65, fixed layout, fn 0x8010696C) + 3 menu FT4
   // quads (fn 0x8007E2F8) + native font text. Its builders write GUEST packets (byte-exact) which

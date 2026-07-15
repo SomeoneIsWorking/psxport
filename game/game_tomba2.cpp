@@ -160,85 +160,15 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   }
 
   // ============================================================================================
-  // THE ONE NATIVE RENDERER (pc_render) — the picture comes from GAME STATE with real depth, NEVER
-  // from transcribing the guest OT/GP0. There is NO fallback (USER 2026-07-15): a scene, or a scene
-  // LAYER, without a native producer aborts via Render::abortUnimplemented — the crash sequence is
-  // the native-renderer rebuild backlog. The substrate render orchestrator (Render::frame/frameX)
-  // still executes underneath every frame on the faithful task's own call path; it builds the guest
-  // OT/packet pool (part of the byte-exact state) — we simply do not read it for the picture here.
+  // THE ONE NATIVE RENDERER (pc_render) — the picture comes from GAME STATE with real depth, NEVER from
+  // transcribing the guest OT/GP0 (USER 2026-07-15 "break and rebuild"). Render::renderScene() classifies
+  // the scene and dispatches to its per-scene native producer (renderField/renderHutInterior/… in
+  // render_walk.cpp); a stage with no producer aborts. The 2D layer comes from its own native producers
+  // emitting to the queue during execution — until each is rebuilt, that 2D is visibly ABSENT (the honest
+  // break), never transcribed. The substrate render orchestrator (Render::frame/frameX) still runs
+  // underneath (guest OT/packet pool = part of the byte-exact state); we simply do not read it here.
   // ============================================================================================
-  // #1 START.BIN boot (0x8010649C): the loader shows a BLACK screen (empty OT — verified: no prims,
-  // FB mean 0) for ~5 frames while it builds the file table / preloads assets. Native producer = a black
-  // loading frame (the observable result, rebuilt from the boot stage's identity, not the OT).
-  if (c->mem_r32(0x801FE00Cu) == 0x8010649Cu) {
-    c->game->fps60.mTier1EligibleCur = false;
-    c->game->gpu.gpu_blank_display();     // zero the display FB -> present shows black
-    c->game->rq.flush(c);
-    return;
-  }
-
-  bool field = (c->mem_r32(0x801FE00Cu) == 0x8010637Cu);
-  // AUTHORED OT SUB-SCENE (hut/door interior, #49): field-stage but NOT the walkable field — the game's
-  // own 9-state area machine (task-sm[0x4c]==3) dispatches fieldRunX→frameX, compositing an authored
-  // interior (the fisherman's hut + its NPCs). Its objects live in the SAME entity lists sceneNative
-  // walks (TransitionState3 iterates T2_OBJLIST_HEAD_1/2 == HEADS[0..1]); the room geometry + interior
-  // camera still need a native producer. Until that lands, it aborts (no OT-walk shortcut).
-  uint32_t task_sm = c->mem_r32(0x1F800138u);
-  bool authored_subscene = field && task_sm && c->mem_r16(task_sm + 0x4Cu) == 3;
-  // SOP INTRO NARRATION (GAME stage, SOP overlay signature 0x3C021F80 @ 0x80109450): a 2D-composited
-  // cutscene (full-screen fills + semi EFFECT quads + sprites + text) with some 3D world beats. The 2D
-  // composite has no native producer -> aborts (the void beat 0x800bf9b4==5 has no 3D world at all).
-  bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
-
-  // ONE NATIVE RENDERER — no guest-OT transcription anywhere in pc_render. The 3D WORLD comes from the
-  // native scene producers (sceneNative / fieldObjectsRender). The 2D LAYER (HUD, text, billboards,
-  // dialog) comes from its OWN native producers that emit to the render queue during game execution
-  // (e.g. Font::glyphEmit → queue) — NOT from walking the guest OT. The 2d_only OT walk (transcription)
-  // and its s_ot_2d_drawn gate + cover-reconciliation registries are RETIRED (USER 2026-07-15: "break
-  // and rebuild — stop bandaiding"). A 2D producer that isn't rebuilt yet means that 2D is visibly
-  // ABSENT (the honest break), rebuilt one producer at a time — never transcribed.
-  if (field && !sop_narration && !authored_subscene) {
-    // WALKABLE FIELD — native WORLD: terrain + entity/scene tables + objects + backdrop, real depth.
-    c->game->fps60.mTier1EligibleCur = true;   // native field render runs -> fps60 tier-1 may re-render it
-    DisplayPassGuard displayPass(c->mRender->mode);   // read-only invariant: aborts on any guest write
-    c->mRender->sceneNative();
-  } else if (authored_subscene) {
-    // #4 HUT/DOOR INTERIOR (task-sm[0x4c]==3): OBJECTS-ONLY native render. The room is entity-list object
-    // 0x800FD850 (HEADS[1]); NPCs/props are HEADS[0..1]; Tomba is the G block — fieldObjectsRender() walks
-    // them all via perObjFlush → gt3gt4 with real depth + the live interior camera (scratchpad, written by
-    // fieldFrameX's CutsceneCamera). Skips the exterior terrain/scene-table/backdrop (village data), the
-    // substrate's reduced frameX pass. 2D (dialog bubble) comes from native producers when rebuilt.
-    c->game->fps60.mTier1EligibleCur = false;
-    DisplayPassGuard displayPass(c->mRender->mode);
-    c->mRender->fieldObjectsRender();
-  } else if (sop_narration) {
-    // #5 SOP INTRO NARRATION (overlay-sig 0x3C021F80 @ 0x80109450): the WORLD is native via sceneNative
-    // exactly like the walkable field (3D beats: terrain + scene-table + backdrop + narration-prop
-    // objects incl. the vortex node 0x800FBA68). The VOID beat (0x800BF9B4==5) has no 3D world/BG — the
-    // beat==5 guard inside sceneNative drops terrain/scene-table/backdrop and draws the vortex over black.
-    // Caption text comes from the native text producer when rebuilt (currently absent).
-    c->game->fps60.mTier1EligibleCur = true;
-    DisplayPassGuard displayPass(c->mRender->mode);
-    c->mRender->sceneNative();
-  } else if (c->mem_r32(0x801FE00Cu) == 0x801062E4u) {
-    // #2 DEMO/TITLE front-end (stage 0x801062E4). Substate s2 (sm[0x48]==2) = the static title (logo +
-    // New/Load menu + copyright): native producer titleNative() emits the picture to the queue from
-    // source state (guest OT not walked). All other substates are the loading ramp / OP.STR movie /
-    // attract, which are FMV or CD-load states shown as black headless (the movie is skipped) — a black
-    // frame is the honest result, not a masked scene. (A real native DEMO-attract render = backlog #2a.)
-    c->game->fps60.mTier1EligibleCur = false;
-    if (c->mem_r16(0x801FE048u) == 2) {
-      DisplayPassGuard displayPass(c->mRender->mode);   // read-only: reads source state, emits host-only
-      c->mRender->titleNative();
-    } else {
-      c->game->gpu.gpu_blank_display();                 // loading ramp / FMV-skipped movie/attract -> black
-    }
-  } else {
-    // Field/SOP/hut/title/DEMO all handled above. Anything else = a stage with no native producer.
-    c->game->fps60.mTier1EligibleCur = false;
-    c->mRender->abortUnimplemented(field ? "field stage in an unclassified render mode"
-                                         : "non-field stage (unclassified) with no native producer");
-  }
+  c->mRender->renderScene();
   // ADDITIVE native render subsystem (game/render/mNativeScene) — the decoupled "native experience" pass,
   // gated behind the `rendernative` DIAGNOSTIC channel (off by default). Builds from native scene data.
   if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
