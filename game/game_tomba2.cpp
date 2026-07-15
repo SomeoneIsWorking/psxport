@@ -205,13 +205,26 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
       gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/true);
     }
     if (c->game->gpu.s_ot_2d_drawn > 0) c->mRender->abortUnimplemented("field 2D overlay (HUD / dialog / item-bubble / menu / text)");
+  } else if (c->mem_r32(0x801FE00Cu) == 0x801062E4u) {
+    // #2 DEMO/TITLE front-end (stage 0x801062E4). Substate s2 (sm[0x48]==2) = the static title (logo +
+    // New/Load menu + copyright): native producer titleNative() emits the picture to the queue from
+    // source state (guest OT not walked). All other substates are the loading ramp / OP.STR movie /
+    // attract, which are FMV or CD-load states shown as black headless (the movie is skipped) — a black
+    // frame is the honest result, not a masked scene. (A real native DEMO-attract render = backlog #2a.)
+    c->game->fps60.mTier1EligibleCur = false;
+    if (c->mem_r16(0x801FE048u) == 2) {
+      DisplayPassGuard displayPass(c->mRender->mode);   // read-only: reads source state, emits host-only
+      c->mRender->titleNative();
+    } else {
+      c->game->gpu.gpu_blank_display();                 // loading ramp / FMV-skipped movie/attract -> black
+    }
   } else {
     c->game->fps60.mTier1EligibleCur = false;
     c->mRender->abortUnimplemented(
       sop_narration     ? "SOP intro narration cutscene (2D composite + 3D beats)" :
       authored_subscene ? "hut/door interior authored sub-scene (task-sm[0x4c]==3): room geometry + interior camera" :
       field             ? "field stage in an unclassified render mode" :
-                          "non-field stage (title screen / DEMO attract / menu / FMV)");
+                          "non-field stage: DEMO attract (s3/s7) / menu / FMV (title s2 is native)");
   }
   // ADDITIVE native render subsystem (game/render/mNativeScene) — the decoupled "native experience" pass,
   // gated behind the `rendernative` DIAGNOSTIC channel (off by default). Builds from native scene data.

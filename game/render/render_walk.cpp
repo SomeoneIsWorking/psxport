@@ -227,6 +227,36 @@ void Render::abortUnimplemented(const char* scene) {
   abort();
 }
 
+// titleNative — see render.h. Read-only producer for the DEMO/title front-end (stage 0x801062E4 s2).
+// Emits the title picture to the native render queue from source state (host-only), so pc_render renders
+// it WITHOUT walking the guest OT. Increment 1: the black backdrop + the 2 logo sprites (exact geometry
+// decoded from the guest op-0x65 packets — fixed title layout). Menu FT4 quads + font text land next as
+// the menu builder (0x8007E2F8) is owned and the font glyph emitter gains a queue dual-emit.
+void Render::titleNative() { Core* c = mCore;
+  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  // one textured 2D quad (screen rect x,y,w,h ; texel u,v same w,h ; texpage/mode ; clut) into a band.
+  auto quad = [&](int layer, int x, int y, int w, int h, int u, int v,
+                  int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y) {
+    int xs[4] = { x + ox, x + w + ox, x + ox,     x + w + ox };
+    int ys[4] = { y + oy, y + oy,     y + h + oy, y + h + oy };
+    int us[4] = { u, u + w, u, u + w };
+    int vs[4] = { v, v, v + h, v + h };
+    unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };   // raw sprites ignore color
+    c->game->activeRq().push2dQuad(layer, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+                                   tp_x, tp_y, mode, raw, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
+  };
+  // (0) black backdrop behind the art (RQ_BACKGROUND far band). Solid black, mode 3 = untextured.
+  {
+    int xs[4] = { 0, 320, 0, 320 }, ys[4] = { 0, 0, 240, 240 }, z[4] = { 0, 0, 0, 0 };
+    unsigned char k[4] = { 0, 0, 0, 0 };
+    c->game->activeRq().push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, z, z, k, k, k,
+                                   0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
+  }
+  // (1) the title art = 2 op-0x65 textured sprites (raw), fixed layout (decoded packet constants).
+  quad(RQ_BACKGROUND, 0,   -8, 256, 240, 0, 0, 640, 256, /*mode=*/1, /*raw=*/1, 640, 511);  // tpage 0x9A
+  quad(RQ_BACKGROUND, 256, -8,  64, 240, 0, 0, 768, 256, /*mode=*/1, /*raw=*/1, 640, 511);  // tpage 0x9C
+}
+
 void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];

@@ -166,6 +166,14 @@ public:
   // widescreen re-include pass). Was ov_scene_native.
   void sceneNative();
 
+  // titleNative: the DEMO/title (stage 0x801062E4, substate sm[0x48]==2) read-only native producer.
+  // The title = a black backdrop + 2 logo sprites (op 0x65, fixed layout, fn 0x8010696C) + 3 menu FT4
+  // quads (fn 0x8007E2F8) + native font text. Its builders write GUEST packets (byte-exact) which
+  // pc_render does not walk; titleNative re-emits the same picture to the native queue from source state
+  // (constants / menu-cursor state), host-only. See docs/native-render-rebuild.md #2. Font/menu emit
+  // lands incrementally (font-glyph dual-emit + owning 0x8007E2F8); logo is exact from decoded packets.
+  void titleNative();
+
   // fieldObjectsRender: the field's OBJECT pass — walk the 3 entity lists + Tomba's G-block and flush each
   // live object's geomblk (perObjFlush → projComposeObject → gt3gt4). Factored OUT of sceneNative (which
   // mutates per-frame trust latches and can't be re-run) so Fps60's interp present can RE-RUN it under the
