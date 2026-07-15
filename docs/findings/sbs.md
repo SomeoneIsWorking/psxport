@@ -1598,3 +1598,16 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   for a per-THIS-invocation monotonic marker (a spawn generation/sequence counter, or a demo/transition-
   specific sm field like sm[0x6d]/[0x6e] if written monotonically not reused). Do NOT gate until confirmed.
 - Logs: scratch/logs/skip_area_fx_repro.log, pw_800A4F7E.log, bytetrace_fxarea_all.log.
+
+## Job #1 replay sweep — pc_faithful byte-exact across the full replay library (2026-07-15)
+- STATUS: VERIFIED CLEAN. SBS-full (PSXPORT_SBS_MODE=full SBS_AUTONAV NOWINDOW NOAUDIO) over EVERY
+  replay in replays/ is 0-diff — no divergence, "A/B identical" at every 30-frame checkpoint:
+    - scene-transitions/hut-entry-door-freeze.pad → 0-diff to f22020 (timeout, not a diff)
+    - scene-transitions/hut-entry-alt.pad → 0-diff to f16080
+    - bugs/dark-screen-repro.pad (122KB, ~30k input frames of real gameplay) → 0-diff to f52500
+    - + AUTO_SKIP boot/attract/free-roam idle → 0-diff to f30720 (this session's bd4 gate)
+- IMPLICATION: the faithful path (pc_skip=false) is byte-exact for boot, attract-DEMO, hut entry (both
+  variants), and a long gameplay session. No SBS divergence remains to root-cause with the CURRENT
+  replay set. Surfacing new Job#1 bugs now requires NEW replays reaching NEW territory (deeper areas /
+  more mechanics) — the USER flagged this as later work ("SBS-specific recording ... for a later time").
+- Logs: scratch/logs/sbs_replay_{hut-entry-door-freeze,hut-entry-alt,darkscreen}.log, sbs_postfix.log.
