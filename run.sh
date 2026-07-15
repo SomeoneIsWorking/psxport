@@ -96,9 +96,11 @@ cmake --build build -j "$JOBS" --target tomba2_port || die "port build failed"
 
 # ---- 5. run ------------------------------------------------------------------------
 say "launching Tomba! 2 (native PC port)…"
-# Windowed by default; PSXPORT_NOWINDOW selects offscreen-headless (the single mode discriminator is
-# PSXPORT_VK_HEADLESS, read by the renderer — there is no PSXPORT_GPU_WINDOW behavior gate any more).
-[ -n "${PSXPORT_NOWINDOW:-}" ] && export PSXPORT_VK_HEADLESS=1
+# run.sh is the user's WINDOWED entry point, so it explicitly opts into a window (PSXPORT_VK_WINDOW=1).
+# The binary itself is HEADLESS by default (gpu_gpu.cpp) so agent/CI runs that forget the flag fail safe
+# (no intrusive window, no pad_session.pad clobber) instead of popping a window. PSXPORT_NOWINDOW keeps
+# run.sh headless.
+if [ -n "${PSXPORT_NOWINDOW:-}" ]; then export PSXPORT_VK_HEADLESS=1; else export PSXPORT_VK_WINDOW=1; fi
 # Debug server ON by default so a windowed session can be inspected/driven live (tools/dbgclient.py);
 # opt out with PSXPORT_DEBUG_SERVER=0. Window is windowed by default now (PSXPORT_FULLSCREEN=1 to override).
 #

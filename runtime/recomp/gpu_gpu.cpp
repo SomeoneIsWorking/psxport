@@ -120,7 +120,13 @@ static void poll_quit(Game* game);
 // ---- enable / windowed gates (mirror gpu_gpu.cpp) ----------------------------------------------------
 int gpu_gpu_enabled(void) {
   if (s_gpu_on < 0) {
-    s_headless = cfg_on("PSXPORT_VK_HEADLESS") ? 1 : 0;   // keep the env name stable across the backend swap
+    // HEADLESS BY DEFAULT (2026-07-15): a window opens ONLY on an explicit PSXPORT_VK_WINDOW=1 (set by
+    // run.sh, the user's interactive entry point). Every other invocation — agent gates, SBS smoke, probes,
+    // CI — is headless without needing to remember PSXPORT_VK_HEADLESS. Rationale: agents kept forgetting the
+    // flag and popping an intrusive window on the user's screen (and a windowed run auto-records over the
+    // user's pad_session.pad). A forgotten flag now fails SAFE (headless), not intrusive. PSXPORT_VK_HEADLESS
+    // still forces headless (back-compat) and wins over PSXPORT_VK_WINDOW.
+    s_headless = (cfg_on("PSXPORT_VK_WINDOW") && !cfg_on("PSXPORT_VK_HEADLESS")) ? 0 : 1;
     s_gpu_on = 1;
   }
   return s_gpu_on;
