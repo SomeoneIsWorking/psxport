@@ -134,9 +134,10 @@ struct Fps60 {
   // frame was an authored sub-scene + its OT head; at present time, if the presented frame was a sub-
   // scene, build slot A by RE-RUNNING gpu_dma2_linked_list(otHead) into mSink (camera-lerped) — the same
   // OT-walk logic the real frame used. Captured like the camera; cur rotates to prev at the present swap.
-  bool     mSubsceneCur = false, mSubscenePrev = false;
-  uint32_t mOtHeadCur = 0, mOtHeadPrev = 0;
-  void captureSubscene(bool authored, uint32_t otHead) { mSubsceneCur = authored; mOtHeadCur = otHead; }
+  // Set every real drawOTag (captureSubscene); present_vk runs BEFORE the next drawOTag, so this always
+  // holds the flag of the frame being presented (no prev/swap needed — drawOTag overwrites it each frame).
+  bool     mSubsceneCur = false;
+  void captureSubscene(bool authored) { mSubsceneCur = authored; }
 
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)

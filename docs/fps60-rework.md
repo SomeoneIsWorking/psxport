@@ -410,3 +410,17 @@ Two hard constraints found while designing the interp re-run:
     picture-only method; the interp present re-runs it with mObjOverrideOn (step-1's lerped transforms)
     into mSink alongside tier1Render's terrain. Then DELETE matchAndLerp/buildProvenanceIdx/
     enforceNodeAtomicity (step 3).
+
+## Step 2a LANDED (2026-07-15) — hut-interior flicker FIXED
+The authored sub-scene (sm[0x4c]==3) interp frame went through tier1Render+matchAndLerp, which drew the
+stale field (the flicker). Fix: present_vk detects the presented frame is a sub-scene (mSubsceneCur,
+captured at drawOTag) and builds slot A from the CAPTURED interior queue (mRqCur) directly — the interior
+the real frame drew — instead of the field re-render/queue-match. Interp == interior, no flicker.
+Degenerate lerp (a guest OT has no native per-object transform to interpolate; that needs the sub-scene
+emitters RE'd — the object-RE frontier). NOTE: re-walking the OT at present time does NOT work (the guest
+OT is transient/cleared between frames → empty/black interp) — mRqCur (the flush snapshot) is the source.
+VERIFIED: hut preseq no longer alternates (interp==real interior); SBS-full AUTO_SKIP 0-diff f13020
+(field byte-identical); no field regression. Frames: scratch/screenshots/hut/final/.
+Kept: Game::activeRq() (byte-identical redirect unification, useful for 2b). NEXT 2b: field objects —
+factor the object entity-walk out of sceneNative, re-run it with mObjOverrideOn (step-1 lerped transforms)
+to replace matchAndLerp for field objects; then step 3 deletes matchAndLerp.

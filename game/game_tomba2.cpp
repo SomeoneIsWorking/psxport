@@ -190,7 +190,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // fps60 unified-path step 2a: capture whether this real frame is an authored OT sub-scene (hut interior)
   // + its OT head, so present_vk can re-run the OT-walk into mSink for the interp frame (fixes the flicker)
   // instead of matchAndLerp'ing its unprovenanced prims. Host-memory capture; gated on fps60.
-  if (c->game->mods.fps60) c->game->fps60.captureSubscene(authored_subscene, otHead);
+  if (c->game->mods.fps60) c->game->fps60.captureSubscene(authored_subscene);
   // #50: default the fps60 tier-1 field re-render to INELIGIBLE; only the native-field branch below sets it
   // true. Narration/authored/non-field frames have no native field for the interp pass to re-render.
   c->game->fps60.mTier1EligibleCur = false;

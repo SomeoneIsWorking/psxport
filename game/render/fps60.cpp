@@ -510,7 +510,16 @@ void Fps60::present_vk(Core* core) {
   // an empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame (stage-1 first-frame case).
   const RqItem* slotA; int nSlotA;
   mTier1PrimsThisFrame = 0;
-  if (mHavePrev) {
+  if (mHavePrev && mSubsceneCur) {
+    // fps60 step 2a — AUTHORED SUB-SCENE (hut/door interior, sm[0x4c]==3): the real frame drew the interior
+    // via the guest-OT walk (drawOTag's authored_subscene branch), captured into mRqCur. The tier1+
+    // matchAndLerp slot-A build drew the stale field instead (the flicker). Present the captured interior
+    // (mRqCur) as slot A: interp == the interior, no flicker. Degenerate lerp — a guest OT has no native
+    // per-object transform to interpolate (that needs the emitters RE'd/ported), so the sub-scene interp
+    // frame is the real interior content, which is exactly right (no motion to lerp = interp == real).
+    slotA = mRqCur; nSlotA = mNCur;
+    for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
+  } else if (mHavePrev) {
     // #50: only re-render the native field passes if the real frame actually ran them. During an authored
     // OT sub-scene (hut interior) the real frame did a full OT walk (no sceneNative), so the interior is
     // already in the captured queue (Q[N-1]/Q[N]) and matchAndLerp handles it — re-rendering the field here
@@ -573,8 +582,6 @@ void Fps60::present_vk(Core* core) {
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
   mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
-  std::swap(mSubsceneCur, mSubscenePrev);   // authored-sub-scene flag + OT head rotate cur->prev too
-  std::swap(mOtHeadCur, mOtHeadPrev);
   mHavePrev = 1;
 }
 
