@@ -27,6 +27,7 @@
 #include "cfg.h"
 #include "core/engine.h"          // c->engine.script / c->engine.spawn
 #include "object/actor.h"          // Actor::boundsCull (FUN_8007778C, native)
+#include "render/render.h"        // c->mRender->mNodeXform.buildWithOffset (FUN_800518FC)
 #include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);
 uint32_t native_sop_overlay_shadow_spawn(Core* c, uint32_t parent);   // FUN_8010AE30, native (sop_overlay_shadow.cpp)
@@ -58,7 +59,7 @@ inline void anim_env_setup   (Core* c, uint32_t obj) { c->engine.script.init(obj
 inline void walk_start       (Core* c, uint32_t obj) { c->engine.walkStart   (obj, 8, 0); }                        // native FUN_80054D14
 inline void overlay_oneshot  (Core* c, uint32_t obj)  { (void)native_sop_overlay_shadow_spawn(c, obj); }
 inline int  bounds_cull      (Core* c, uint32_t obj) { c->r[4] = obj;             rec_dispatch(c, 0x8007778Cu); return (int)c->r[2]; }
-inline void post_cull_update (Core* c, uint32_t obj) { c->engine.objMatrixCompose(obj); }                          // native FUN_800518FC
+inline void post_cull_update (Core* c, uint32_t obj) { c->mRender->mNodeXform.buildWithOffset(obj); }              // native FUN_800518FC (NodeXform::buildWithOffset)
 inline void anim_graphics_tick(Core* c, uint32_t obj){ (void)c->engine.animTick(obj); }                            // native FUN_8004190C
 
 // -- State bodies ------------------------------------------------------------------------------

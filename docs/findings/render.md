@@ -2007,3 +2007,32 @@ draft was already byte-faithful.
   lists perObjFlush never visits (Bcf4 aux) keep the redirect's own inline draw.
 - Verified (integrated build): owned-vs-node0 exact-dup tie class → 0; free-roam no lost geometry;
   SBS-full 0-diff f21810. Registration-driven (guest state), never address-range/heuristic.
+
+## FUN_800518FC three-way split → NodeXform::buildWithOffset sole owner (2026-07-15)
+- DEFECT (3rd dual-ownership from codemap --conflicts): FUN_800518FC (object matrix-compose-with-offset:
+  svec-scale build → rotmat/setvec → matMul → applyMatrixLV → world-pos accumulate → propagate) was
+  reached THREE ways: (a) direct native NodeXform::buildWithOffset (5 AI behaviors, fully native math),
+  (b) direct native Engine::objMatrixCompose (4 SOP-intro callers, same fn via SUBSTRATE leaves
+  0x80085480/84110/84470/51128), (c) rec_dispatch(0x800518FC)/guest_leaf + 8 direct substrate
+  func_800518FC(c) sites — ALL falling through to the SUBSTRATE because NO override was registered.
+- FIX: NodeXform::buildWithOffset is now the SOLE owner. Registered as the 0x800518FC override
+  (EngineOverrides + psx_fallback-gated shard_set_override, bare trampoline — buildWithOffset mirrors
+  its own 32-byte frame internally, like buildAxis) so (c)'s callers go native. Deleted
+  Engine::objMatrixCompose + its engine.h decl; redirected its 4 SOP-intro callers to
+  c->mRender->mNodeXform.buildWithOffset (added render/render.h includes).
+- GATE (strong): PSXPORT_MIRROR_VERIFY=0x800518FC over the dark-screen replay = 23,937 passes, ZERO
+  mismatch — buildWithOffset is byte-exact to substrate gen_func_800518FC. objMatrixCompose was also
+  byte-exact (substrate leaves == gen by construction), so all three were equal; the redirect + delete
+  is provably equivalent. SBS-full 0-diff to f17370 post-consolidation. Logs: scratch/logs/
+  mv_518fc_darkscreen.log, sbs_518fc_final.log.
+- BONUS: this ALSO advanced native ownership — the (c) callers that were silently running the substrate
+  body now run native (4 substrate-leaf deps removed from the path), MIRROR_VERIFY-proven equivalent.
+
+## codemap --conflicts FALSE POSITIVE — FUN_8002AB5C (terrain display pass) (2026-07-15)
+- NOT a duplication bug. Render::terrain (submit.cpp) + NativeScenePass::terrainRender (native_terrain.cpp)
+  both attribute to 0x8002AB5C, but per issue #32 (2026-07-07) they are the READ-ONLY pc_render display
+  pass (matrices computed in host memory, terrain_obj_matrix_host) — the SUBSTRATE 0x8002AB5C runs
+  underneath and owns ALL guest writes (sway/IR0/GTE) by design. Neither native fn is a faithful
+  guest-write owner; the authoritative flag comes from a stale pre-#32 override tsv entry. Leave as-is
+  (a pc_render read-only overlay legitimately sharing the address with the substrate owner). Documented
+  so the next --conflicts triage doesn't re-chase it.

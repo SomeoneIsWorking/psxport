@@ -961,45 +961,11 @@ void Engine::announcerCue(uint32_t id, uint8_t flag) { Core* c = core;
   rec_dispatch(c, 0x8004FA38u);                                       // announcer-cue queue push (substrate)
 }
 
-// Engine::objMatrixCompose — FUN_800518FC.
-void Engine::objMatrixCompose(uint32_t obj) { Core* c = core;
-  // Scratchpad addresses used as scratch by the setvec/matrix-mul call pair below.
-  constexpr uint32_t kScratchSVec = 0x1F800000u;   // SVECTOR-like scale-and-zero staging area
-  constexpr uint32_t kScratchMtx  = 0x1F800020u;   // rotation matrix built by the setvec leaf
-
-  // GUEST FRAME MIRROR (abi_extract --contract, single epilogue label -> RAII safe): sp-32;
-  // spills r17@+20, r18@+24, ra@+28, r16@+16 (incoming values); live regs r17=obj,
-  // r18=kScratchMtx, r16=kScratchSVec then obj+152, and the gen's r31 return constants at each
-  // leaf call. The substrate leaves spill THESE registers relative to THIS sp — unframed, all of
-  // it landed 32 bytes high vs core B.
-  static constexpr GuestFrameSpill kSpills[] = {{17, 20}, {18, 24}, {31, 28}, {16, 16}};
-  GuestFrame<32, 4> frame(c, kSpills);
-  c->r[17] = obj;
-  c->r[18] = kScratchMtx;
-  c->r[16] = kScratchSVec;
-  // scratchpad kScratchSVec..+0x1F: SVECTOR-like scale + zeros (rotation identity + zero translation)
-  c->mem_w32(kScratchSVec + 0x00u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xB8u));
-  c->mem_w32(kScratchSVec + 0x04u, 0);
-  c->mem_w32(kScratchSVec + 0x08u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xBAu));
-  c->mem_w32(kScratchSVec + 0x0Cu, 0);
-  c->mem_w32(kScratchSVec + 0x10u, (uint32_t)(int32_t)c->mem_r16s(obj + 0xBCu));
-  c->mem_w32(kScratchSVec + 0x14u, 0);
-  c->mem_w32(kScratchSVec + 0x18u, 0);
-  c->mem_w32(kScratchSVec + 0x1Cu, 0);
-  guest_fn(c, 0x80085480u, 0x8005196Cu, obj + 0x54u, kScratchMtx);              // setvec (substrate)
-  c->r[16] = obj + 0x98u;                                                        // gen: r16 = r17+152 before the mul
-  guest_fn(c, 0x80084110u, 0x80051980u, kScratchMtx, kScratchSVec, obj + 0x98u); // matrix-mul (substrate)
-  guest_fn(c, 0x80084470u, 0x80051990u, obj + 0x98u, obj + 0x88u, obj + 0xACu);  // matrix-apply (substrate)
-  // Bake world position into the translation columns (sign-extended s16 → s32 add).
-  c->mem_w32(obj + 0xACu, c->mem_r32(obj + 0xACu) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x2Eu));
-  c->mem_w32(obj + 0xB0u, c->mem_r32(obj + 0xB0u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x32u));
-  c->mem_w32(obj + 0xB4u, c->mem_r32(obj + 0xB4u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x36u));
-  // gen_func_800518FC re-arms a0 = obj (`r4 = r17`) before this call; leaving r4 at the previous
-  // dispatch's obj+0x98 made FUN_80051128 walk a fake skeleton (obj+0x98 as the object base) whose
-  // "bone pointer" slots land in the NEIGHBOR node — matMul then zeroed SOP script data at
-  // 0x8010CAD8 (prologue-vortex cause #3, 2026-07-10).
-  guest_fn(c, 0x80051128u, 0x800519C8u, obj);                                   // finalize (substrate)
-}
+// FUN_800518FC is NOT owned here — it is NodeXform::buildWithOffset (game/render/node_xform.cpp),
+// now the SOLE owner (registered as the 0x800518FC override, MIRROR_VERIFY byte-exact to substrate
+// across 23k+ passes). A duplicate lived here as Engine::objMatrixCompose (same guest fn via substrate
+// leaves 0x80085480/84110/84470/51128); it + its 4 SOP-intro callers were retired onto buildWithOffset
+// after `codemap.py --conflicts` surfaced the dual-ownership (see docs/findings/render.md).
 
 // Engine::walkStart — FUN_80054D14.
 uint32_t Engine::walkStart(uint32_t obj, uint32_t mode, int16_t subMode) { Core* c = core;

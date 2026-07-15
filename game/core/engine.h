@@ -375,9 +375,8 @@ public:
   //   the substrate FUN_8004FA38 leaf — table lookup at DAT_800BF7FC then DAT_800BF800 base.
   void announcerCue(uint32_t id, uint8_t flag);
 
-  // objMatrixCompose(obj): guest FUN_800518FC. Post-cull matrix composition; every math leaf
-  //   (FUN_80085480 / FUN_80084110 / FUN_80084470 / FUN_80051128) stays substrate.
-  void objMatrixCompose(uint32_t obj);
+  // (FUN_800518FC is NodeXform::buildWithOffset, not an Engine leaf — a dead duplicate
+  //  Engine::objMatrixCompose was removed here; see engine.cpp + docs/findings/render.md.)
 
   // walkStart(obj, mode, subMode): guest FUN_80054D14. Transitions the object into anim `mode`.
   //   Returns 0 if already in that mode; else 1 (and delegates to FUN_80077C40 / FUN_80077CFC).

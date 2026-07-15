@@ -28,6 +28,7 @@
 #include "cfg.h"
 #include "game.h"                  // Game::engine_overrides
 #include "core/engine.h"          // c->engine.spawn / c->engine.placement / c->engine.script
+#include "render/render.h"        // c->mRender->mNodeXform.buildWithOffset (FUN_800518FC)
 #include "spawn.h"                 // Spawn::dispatch/despawn (native)
 #include "world/placement.h"       // Placement::spawnWithParent (native, FUN_80072DDC)
 #include "sop_intro_events.h"
@@ -343,7 +344,7 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
       }
     }
     (void)c->engine.animTick(node);                                // FUN_8004190C
-    c->engine.objMatrixCompose(node);                              // FUN_800518FC
+    c->mRender->mNodeXform.buildWithOffset(node);                  // FUN_800518FC (NodeXform::buildWithOffset)
   } else if (state == 0) {
     c->r[16] = 0x800ECF58u;                                         // gen L_8010B32C: r16 = reloc base (live at the call)
     c->r[4] = node; c->r[5] = 0xCu; c->r[6] = c->mem_r32(0x800ECF98u); c->r[7] = 0x800A4BC8u;

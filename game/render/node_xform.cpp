@@ -559,6 +559,23 @@ static void gov_buildFromChild(Core* c) {
   c->game->engine_overrides.traceHit(c, 0x80051614u); eov_buildFromChild(c);
 }
 
+// buildWithOffset (0x800518FC) — the object matrix-compose-with-offset (svec scale + rotmat + matMul +
+// applyMatrixLV + world-pos accumulate + propagate). Dual-wired: 8 direct substrate func_800518FC(c)
+// call sites across the shards + many rec_dispatch/guest_leaf AI callers were ALL falling through to the
+// substrate (no override registered); wiring here makes them native and lets MIRROR_VERIFY gate it. The
+// native body mirrors its own 32-byte frame internally (kBuildSpills) — bare trampoline, like buildAxis
+// (a GuestFrame here would double the frame). v0 unset (void guest leaf; matches build()/propagate()).
+// This also RETIRES engine.cpp's Engine::objMatrixCompose — a duplicate of the SAME guest fn via
+// substrate leaves (found by codemap --conflicts); its lone caller now routes through here.
+extern void gen_func_800518FC(Core*);
+static void eov_buildWithOffset(Core* c) {
+  c->mRender->mNodeXform.buildWithOffset(c->r[4]);
+}
+static void gov_buildWithOffset(Core* c) {
+  if (c->game->psx_fallback) { gen_func_800518FC(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x800518FCu); eov_buildWithOffset(c);
+}
+
 void NodeXform::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x800517BCu, "NodeXform::seedBlock",        eov_seedBlock);
@@ -569,12 +586,14 @@ void NodeXform::registerOverrides(Game* game) {
   ov.register_(0x80051614u, "NodeXform::buildFromChild",   eov_buildFromChild);
   ov.register_(0x80051D90u, "NodeXform::worldPosFromLocal",    eov_worldPosFromLocal);
   ov.register_(0x80051D20u, "NodeXform::worldPosFromComposed", eov_worldPosFromComposed);
+  ov.register_(0x800518FCu, "NodeXform::buildWithOffset",      eov_buildWithOffset);
 
   shard_set_override(0x800517BCu, gov_seedBlock);
   shard_set_override(0x80051300u, gov_propagateRotmat);
   shard_set_override(0x80051464u, gov_propagateAxis);
   shard_set_override(0x80051B34u, gov_copyMatrixBlock);
   shard_set_override(0x80051614u, gov_buildFromChild);
+  shard_set_override(0x800518FCu, gov_buildWithOffset);
   // 0x80051C8C / 0x80051D90 / 0x80051D20 have no direct same-module (func_<addr>(c)) caller — every
   // reference is rec_dispatch(c, addr) from an overlay, so EngineOverrides alone covers them.
 }
