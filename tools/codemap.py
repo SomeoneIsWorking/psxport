@@ -198,9 +198,32 @@ def scan_decl_tags(files):
     return tags
 
 
+def load_engine_overrides():
+    """Authoritative addr->symbol map recovered from LIVE EngineOverrides registrations in the
+    CURRENT sources: `ov.register_(0xADDR, "Class::method", fn)` (runtime/recomp/engine_overrides.h).
+    The quoted second argument IS the owning symbol — the same qualified name METHOD_RE captures at
+    the DEFINITION — so a native wired ONLY via register_ (no `// FUN_xxxx` tag on its def line, and
+    absent from the faeb436^ snapshot tsv that load_override_table reads) is still attributed to its
+    guest address. Without this pass such a native reports 'NO native owner found' AND, worse, stays
+    invisible as a SECOND owner of an address some other file already claims — which is exactly how
+    cube_text_ledger.cpp's CubeTextLedger::activateSlot silently duplicated scene_events.cpp's
+    SceneEvents::armBody on FUN_80040B48 (the --conflicts dual-ownership detector depends on this)."""
+    sym2addrs = {}
+    reg = re.compile(r'\.register_\s*\(\s*0x([0-9A-Fa-f]{8})u?\s*,\s*"([^"]+)"')
+    for path in collect_files():
+        try:
+            txt = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for m in reg.finditer(txt):
+            sym2addrs.setdefault(m.group(2), []).append(m.group(1).upper())
+    return sym2addrs
+
+
 OVR = load_override_table()
 OVR.update(load_behavior_table())
 OVR.update(scan_decl_tags(collect_files()))
+OVR.update(load_engine_overrides())
 
 
 def parse_file(path, natives):
@@ -527,6 +550,26 @@ def main():
         dep_users = [n for n in natives if a in n["deps"]]
         if dep_users:
             print(f"  depended-on by: {', '.join(sorted(set(n['sym'] for n in dep_users)))}")
+        cf = sorted(set(n["file"] for n in owners))
+        if len(cf) >= 2:
+            print(f"  ⚠ DUAL-OWNERSHIP: 0x{a} is implemented in {len(cf)} DIFFERENT files "
+                  f"({', '.join(cf)}). Two natives claiming one guest address is a DUPLICATION bug "
+                  f"unless it is a deliberate same-class pc_skip doSkip()/doFaithful() fork — "
+                  f"consolidate to one owner (delegate one body to the other).")
+        return
+
+    if "--conflicts" in args:
+        rows = []
+        for a, ns in idx.items():
+            cf = sorted(set(n["file"] for n in ns))
+            if len(cf) >= 2:
+                rows.append((a, cf, sorted(set(n["sym"] for n in ns))))
+        for a, cf, syms in sorted(rows):
+            print(f"0x{a}: {len(cf)} files — {', '.join(syms)}")
+            for f in cf:
+                print(f"    {f}")
+        print(f"\n{len(rows)} guest address(es) with CROSS-FILE multi-ownership (duplication smell "
+              f"unless a deliberate pc_skip fork — those live in ONE file). Run `--addr <hex>` on each.")
         return
 
     if "--orphans" in args:
