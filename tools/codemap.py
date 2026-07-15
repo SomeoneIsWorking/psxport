@@ -282,10 +282,17 @@ def parse_file(path, natives):
         # "implemented here"). New top-down natives absent from the table fall back to name-hex + the
         # header-comment address(es) before the first em-dash/colon.
         impl = list(OVR.get(sym, []))
+        # AUTHORITATIVE attribution = a real ownership source (override tsv / behavior table / decl-tag /
+        # live EngineOverrides register_) or a name-for-address (ov_<hex>/gen_func_<hex>). SOFT = the
+        # comment/header-prose fallbacks below, which also fire on a fn that merely MENTIONS an address
+        # it traces or reads (a diagnostic tracer, a data-list head) — those must NOT count toward the
+        # --conflicts dual-ownership signal, or it drowns in false positives.
+        impl_auth = bool(impl)
         if not impl:
             nh = NAMEHEX.match(sym)
             if nh:
                 impl.append(nh.group(1).upper())
+                impl_auth = True
             # def-line trailing comment (class-method FUN tag) takes precedence for the owned address.
             # Only scan the tag portion (left of any separator) — addresses in description prose don't own.
             dtag = tag_portion(defcomment)
@@ -336,7 +343,7 @@ def parse_file(path, natives):
             # first comment line, stripped of the leading address tokens, as a one-line summary
             desc = re.sub(r'^[/\s]*((0x8[0-9A-Fa-f]{7}|FUN_8[0-9a-fA-F]{7}|/)\s*)+[—:-]?\s*', '', comment[0]).strip()
         natives.append(dict(sym=sym, file=rel, line=i + 1, impl=impl, deps=deps, desc=desc, body=bodytext,
-                             bstart=i, bend=j, is_freefn=is_freefn))
+                             bstart=i, bend=j, is_freefn=is_freefn, authoritative=impl_auth))
         i = j + 1
 
     # File-header fallback (Fix for hitbox.cpp-style files): a file's own leading doc-comment names
@@ -351,6 +358,7 @@ def parse_file(path, natives):
         if addr and not any(addr in n["impl"] for n in natives if n["file"] == rel):
             best = max(pending_freefn, key=lambda n: n["bend"] - n["bstart"])
             best["impl"] = [addr]
+            best["authoritative"] = True   # explicit "ownership of FUN_xxxx" file-header claim
             natives.append(best)
 
 
@@ -550,26 +558,31 @@ def main():
         dep_users = [n for n in natives if a in n["deps"]]
         if dep_users:
             print(f"  depended-on by: {', '.join(sorted(set(n['sym'] for n in dep_users)))}")
-        cf = sorted(set(n["file"] for n in owners))
+        cf = sorted(set(n["file"] for n in owners if n.get("authoritative")))
         if len(cf) >= 2:
-            print(f"  ⚠ DUAL-OWNERSHIP: 0x{a} is implemented in {len(cf)} DIFFERENT files "
+            print(f"  ⚠ DUAL-OWNERSHIP: 0x{a} is authoritatively implemented in {len(cf)} DIFFERENT files "
                   f"({', '.join(cf)}). Two natives claiming one guest address is a DUPLICATION bug "
                   f"unless it is a deliberate same-class pc_skip doSkip()/doFaithful() fork — "
                   f"consolidate to one owner (delegate one body to the other).")
         return
 
     if "--conflicts" in args:
+        # Only AUTHORITATIVE owners (real registration / name-for-address / explicit ownership claim)
+        # count — soft comment-scan attributions (a tracer/data-head that merely mentions the address)
+        # are excluded so this is a low-false-positive signal.
         rows = []
         for a, ns in idx.items():
-            cf = sorted(set(n["file"] for n in ns))
+            auth = [n for n in ns if n.get("authoritative")]
+            cf = sorted(set(n["file"] for n in auth))
             if len(cf) >= 2:
-                rows.append((a, cf, sorted(set(n["sym"] for n in ns))))
+                rows.append((a, cf, sorted(set(n["sym"] for n in auth))))
         for a, cf, syms in sorted(rows):
             print(f"0x{a}: {len(cf)} files — {', '.join(syms)}")
             for f in cf:
                 print(f"    {f}")
-        print(f"\n{len(rows)} guest address(es) with CROSS-FILE multi-ownership (duplication smell "
-              f"unless a deliberate pc_skip fork — those live in ONE file). Run `--addr <hex>` on each.")
+        print(f"\n{len(rows)} guest address(es) with CROSS-FILE authoritative multi-ownership "
+              f"(duplication smell unless a deliberate pc_skip fork — those live in ONE file). "
+              f"Run `--addr <hex>` on each.")
         return
 
     if "--orphans" in args:
