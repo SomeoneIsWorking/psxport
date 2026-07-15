@@ -122,6 +122,63 @@ struct TombaState {
   // posAddr(): +0x2C — Tomba's position triple, passed BY ADDRESS to the stop-motion spawn call
   // (guest FUN_800312D4 takes a dest pointer, not a value).
   uint32_t posAddr() const             { return base + 0x2Cu; }
+
+  // -- Extended 2026-07-15 (2nd code-quality pass): interactWalk/proximityCheck/subHitboxCheck/
+  // postInteractWalk/postFrameWaterCheck/type8Interact/type7Interact cluster. TombaState is
+  // constructed over G_ADDR for Tomba himself, but proximityCheck/subHitboxCheck/stepModeInteract/
+  // type8Interact all read an ITEM node at the SAME field offsets (0x2E/0x32/0x36/0x80/0x84/0x86)
+  // — items share Tomba's node layout, so this lens doubles as a generic actor-node view: wrap it
+  // over `item` too (`TombaState other{c, item}`) rather than reading item+0xNN raw.
+
+  // posX/posY/posZ (+0x2E/+0x32/+0x36, s16): world position triple interactWalk's proximity math
+  // and postFrameWaterCheck's off-map check read/write. NOT the same triple as posAddr() (+0x2C) —
+  // RE unresolved why the two don't coincide; posAddr() is only ever used as a spawn dest pointer.
+  int16_t posX() const                 { return (int16_t)c->mem_r16(base + 0x2Eu); }
+  void setPosX(int16_t v)              { c->mem_w16(base + 0x2Eu, (uint16_t)v); }
+  int16_t posY() const                 { return (int16_t)c->mem_r16(base + 0x32u); }
+  void setPosY(int16_t v)              { c->mem_w16(base + 0x32u, (uint16_t)v); }
+  int16_t posZ() const                 { return (int16_t)c->mem_r16(base + 0x36u); }
+  void setPosZ(int16_t v)              { c->mem_w16(base + 0x36u, (uint16_t)v); }
+
+  // boundXZ (+0x80, s16): horizontal (X/Z) cylinder-proximity radius. boundYUp (+0x84, READ
+  // UNSIGNED — ground truth never sign-extends this field) / boundYDown (+0x86, s16): the two
+  // halves of the vertical proximity band, summed between two nodes in proximityCheck/
+  // subHitboxCheck's Y-band test.
+  int16_t boundXZ() const              { return (int16_t)c->mem_r16s(base + 0x80u); }
+  uint16_t boundYUp() const            { return c->mem_r16(base + 0x84u); }
+  int16_t boundYDown() const           { return (int16_t)c->mem_r16s(base + 0x86u); }
+
+  // growthFlags (+0x17E, u16): bit 0x200 = "paused/frozen" (interactWalk/stepModeInteract/
+  // type8Interact all early-out or branch on it), bit 0x8000 = "grown" (growthStep toggles it;
+  // stepModeInteract/type8Interact branch on it to route to the grown-state delegate leaves).
+  uint16_t growthFlags() const         { return c->mem_r16(base + 0x17Eu); }
+
+  // justTransitioned (+0x144, u8): "just entered this interaction state" latch — stepModeInteract/
+  // type8Interact both special-case `==1 && v0<2` as the just-triggered transition frame.
+  uint8_t justTransitioned() const     { return c->mem_r8(base + 0x144u); }
+
+  // groundedGate (+0x145, u8) bit 0: postFrameWaterCheck/type8Interact/growthYSnap check bit 0
+  // clear before snapping the position to a water/growth-offset target.
+  uint8_t groundedGate() const         { return c->mem_r8(base + 0x145u); }
+  void setGroundedGate(uint8_t v)      { c->mem_w8(base + 0x145u, v); }
+
+  // frozenFlag (+0x78, u8): "not frozen" gate type8Interact/growthYSnap check before a niladic
+  // cue / a growth-offset re-snap.
+  uint8_t frozenFlag() const           { return c->mem_r8(base + 0x78u); }
+
+  // flag95 (+0x5F, u8) / groundContactFlag (+0x60, u8): the header's own names (see actor_tomba.h
+  // "settleStep"/"type8Interact" doc comments) for the ground-probe response pair type8Interact's
+  // proximity-hit branch stamps.
+  void setFlag95(uint8_t v)            { c->mem_w8(base + 0x5Fu, v); }
+  void setGroundContactFlag(uint8_t v) { c->mem_w8(base + 0x60u, v); }
+
+  // physOffsetY (+0x62, s16): the "physics constant" growthStep rescales (header: "G+0x62/64/66/
+  // 68 (physics constants)") — postFrameWaterCheck reuses it as the water-surface-to-feet offset.
+  int16_t physOffsetY() const          { return (int16_t)c->mem_r16s(base + 0x62u); }
+
+  // committing (+0x17B, u8): frameTick case-2 (COMMITTING) latch — see setCommitting() above;
+  // postFrameWaterCheck's off-map trigger gates on it being clear.
+  uint8_t committing() const           { return c->mem_r8(base + 0x17Bu); }
 };
 
 }  // namespace
@@ -132,11 +189,12 @@ struct TombaState {
 void ActorTomba::interactWalk() {
   Core* c = core;
   const uint32_t G = G_ADDR;
+  TombaState tomba{c, G};
 
   // Early-outs.
-  if (c->mem_r16(G + 0x16Eu) == 0)                       return;
+  if (tomba.turnCurrent() == 0)                          return;
   if (c->mem_r8 (GATE_BF80C_hi) != 0)                    return;
-  if (c->mem_r16(G + 0x17Eu) & 0x200)                    return;
+  if (tomba.growthFlags() & 0x200u)                      return;
 
   const uint32_t listBase = c->mem_r32(AUX_LIST_HEAD_SPAD);
   const uint8_t  count0   = c->mem_r8 (AUX_LIST_COUNT_SPAD);
@@ -174,19 +232,21 @@ void ActorTomba::proximityCheck(uint32_t item) {
   const uint32_t G = G_ADDR;
   if (c->mem_r8(0x1F80027Au) != 0) return;
 
-  const int32_t dx = (int32_t)(int16_t)(c->mem_r16(G + 0x2Eu) - c->mem_r16(item + 0x2Eu));
-  const int32_t dz = (int32_t)(int16_t)(c->mem_r16(G + 0x36u) - c->mem_r16(item + 0x36u));
+  TombaState tomba{c, G};
+  TombaState other{c, item};
+
+  const int32_t dx = (int32_t)(int16_t)(tomba.posX() - other.posX());
+  const int32_t dz = (int32_t)(int16_t)(tomba.posZ() - other.posZ());
   c->r[4] = (uint32_t)(dx * dx + dz * dz);
   rec_dispatch(c, LEAF_ISQRT);
   const int32_t dist = (int32_t)(int16_t)(uint16_t)c->r[2];
 
-  const int32_t rxz = (int32_t)c->mem_r16s(G + 0x80u) + (int32_t)c->mem_r16s(item + 0x80u);
+  const int32_t rxz = (int32_t)tomba.boundXZ() + (int32_t)other.boundXZ();
   if (dist > rxz) return;
 
   const int32_t vbandRaw = (int32_t)(int16_t)(uint16_t)(
-      (c->mem_r16(G + 0x32u) - c->mem_r16(item + 0x32u))
-      + c->mem_r16(G + 0x84u) + c->mem_r16(item + 0x84u));
-  const int32_t vbandLim = (int32_t)c->mem_r16s(G + 0x86u) + (int32_t)c->mem_r16s(item + 0x86u);
+      (tomba.posY() - other.posY()) + tomba.boundYUp() + other.boundYUp());
+  const int32_t vbandLim = (int32_t)tomba.boundYDown() + (int32_t)other.boundYDown();
   if (vbandRaw > vbandLim) return;
 
   c->mem_w32(OUT_DIST_SPAD, (uint32_t)dist);
@@ -215,6 +275,7 @@ void ActorTomba::type4GuardedCheck(uint32_t item) {
 void ActorTomba::subHitboxCheck(uint32_t item) {
   Core* c = core;
   const uint32_t G = G_ADDR;
+  TombaState tomba{c, G};
   const int16_t hitboxCount = (int16_t)c->mem_r16(item + 0x6Au);
   if (hitboxCount <= 0) return;
   uint32_t hitboxArr = c->mem_r32(item + 0x6Cu);
@@ -224,20 +285,20 @@ void ActorTomba::subHitboxCheck(uint32_t item) {
     if ((c->mem_r32(item + 0x70u) & mask) == 0) continue;
 
     const uint32_t typeParam = (uint32_t)c->mem_r8(hitboxArr + 3u) * 8u;
-    const int32_t dx = (int32_t)(int16_t)(c->mem_r16(G + 0x2Eu) - c->mem_r16(hitboxArr + 4u));
-    const int32_t dz = (int32_t)(int16_t)(c->mem_r16(G + 0x36u) - c->mem_r16(hitboxArr + 8u));
+    const int32_t dx = (int32_t)(int16_t)(tomba.posX() - c->mem_r16(hitboxArr + 4u));
+    const int32_t dz = (int32_t)(int16_t)(tomba.posZ() - c->mem_r16(hitboxArr + 8u));
     c->r[4] = (uint32_t)(dx * dx + dz * dz);
     rec_dispatch(c, LEAF_ISQRT);
     const int32_t dist = (int32_t)(uint32_t)(c->r[2] & 0xFFFFu);
 
-    const int32_t rxz = (int32_t)c->mem_r16s(G + 0x80u)
+    const int32_t rxz = (int32_t)tomba.boundXZ()
                        + (int32_t)c->mem_r8(SUB_HITBOX_PARAMS + typeParam + 0u);
     if (dist > rxz) continue;
 
     const uint32_t vbandRaw = (uint32_t)(
-        (c->mem_r16(G + 0x32u) - c->mem_r16(hitboxArr + 6u))
-        + c->mem_r16(G + 0x84u) + c->mem_r8(SUB_HITBOX_PARAMS + typeParam + 1u));
-    const int32_t vbandLim = (int32_t)c->mem_r16s(G + 0x86u)
+        (tomba.posY() - c->mem_r16(hitboxArr + 6u))
+        + tomba.boundYUp() + c->mem_r8(SUB_HITBOX_PARAMS + typeParam + 1u));
+    const int32_t vbandLim = (int32_t)tomba.boundYDown()
                             + (int32_t)c->mem_r8(SUB_HITBOX_PARAMS + typeParam + 1u) * 2;
     if ((int32_t)(uint16_t)vbandRaw > vbandLim) continue;
 
@@ -255,13 +316,16 @@ void ActorTomba::subHitboxCheck(uint32_t item) {
 void ActorTomba::postInteractWalk() {
   Core* c = core;
   const uint32_t G = G_ADDR;
+  TombaState tomba{c, G};
 
   // This walker uses a DIFFERENT aux list than interactWalk: the render/interaction queue at
   // *0x1F80013C with count *0x1F800144 (vs 0x1F800154 / 0x1F80015C for interactWalk).
   constexpr uint32_t LIST_HEAD_SPAD  = 0x1F80013Cu;
   constexpr uint32_t LIST_COUNT_SPAD = 0x1F800144u;
 
-  // Sub-handler leaves (all substrate — the type-dispatch tree is its own future frontier).
+  // Sub-handler leaves (all substrate — the type-dispatch tree is its own future frontier). No
+  // jal-site r31 constants: gen never assigns r31 before these calls (postInteractWalk is itself a
+  // frameless leaf, so r31 here is whatever its own caller left) — guest_leaf, not guest_fn.
   constexpr uint32_t LEAF_TYPE_9_SPECIAL   = 0x80111304u;   // item[0xC]==9 guarded handler
   constexpr uint32_t LEAF_TYPE_3           = 0x8010E258u;
   constexpr uint32_t LEAF_TYPE_4_PROX_STEP = 0x8001F40Cu;   // case-4 proximity + return code
@@ -280,15 +344,15 @@ void ActorTomba::postInteractWalk() {
     cursor += 4;
     if ((c->mem_r8(item) & 1) == 0) continue;                    // active-flag gate
     if (c->mem_r8(item + 0xCu) == 9) {                           // special-type items
-      if ((c->mem_r16(G + 0x17Eu) & 0x8200u) == 0) {
-        c->r[4] = G; c->r[5] = item; rec_dispatch(c, LEAF_TYPE_9_SPECIAL);
+      if ((tomba.growthFlags() & 0x8200u) == 0) {
+        guest_leaf(c, LEAF_TYPE_9_SPECIAL, G, item);
       }
       continue;                                                   // keep walking
     }
     const uint8_t typ = c->mem_r8(item + 2u);
     switch (typ) {
       case 3:
-        c->r[4] = G; c->r[5] = item; rec_dispatch(c, LEAF_TYPE_3);
+        guest_leaf(c, LEAF_TYPE_3, G, item);
         break;
       case 4: {
         // Detailed guarded state-transition (case 4). Faithful to the recomp:
@@ -299,29 +363,26 @@ void ActorTomba::postInteractWalk() {
         //   * silence path: skip if 0x1F800137 != 0 OR G[0] & 6 OR G+0x144 > 1 OR G+0x164 != 0.
         //   * else: DAT_800BF9E5 != 6 → announcer cue 0x2A/0x41; stamp G/item state as the
         //     "type-4 hit" transition (see writes below).
-        c->r[4] = G; c->r[5] = item; c->r[6] = 1;
-        rec_dispatch(c, LEAF_TYPE_4_PROX_STEP);
-        const int32_t v0 = (int32_t)c->r[2];
+        const int32_t v0 = (int32_t)guest_leaf(c, LEAF_TYPE_4_PROX_STEP, G, item, 1u);
         if (v0 < 0) break;                                        // no hit
         c->mem_w8(AUX_WALK_COUNTER, 0);                           // stop the walk
         const uint8_t bf9e5 = c->mem_r8(0x800BF9E5u);
-        const uint8_t g144  = c->mem_r8(G + 0x144u);
+        const uint8_t g144  = tomba.justTransitioned();
         if (bf9e5 == 6 && g144 == 1 && v0 < 2) {
-          c->r[4] = item; c->r[5] = 0xFFFF8001u; c->r[6] = 0x10u; c->r[7] = 0x20u;
-          rec_dispatch(c, LEAF_TYPE_4_TAG_SET);
+          guest_leaf(c, LEAF_TYPE_4_TAG_SET, item, 0xFFFF8001u, 0x10u, 0x20u);
           break;                                                  // continue at loop top (via while)
         }
         if (c->mem_r8(0x1F800137u) != 0)                          break;
-        if ((c->mem_r8(G) & 6) != 0)                              break;
+        if ((tomba.statusFlags() & 6) != 0)                       break;
         if (g144 > 1)                                             break;
-        if (c->mem_r8(G + 0x164u) != 0)                           break;
+        if (tomba.transitionSlot() != 0)                          break;
         if (bf9e5 != 6) {
           c->engine.announcerCue(0x2A, 0x41);                     // native FUN_8004ED94
         }
         // Type-4 hit state transition on G + item.
         c->mem_w8(G + 4, 2);
         c->mem_w8(G + 5, 2);
-        c->mem_w8(G + 0, 3);
+        tomba.setStatusFlags(3);
         c->mem_w8(G + 6, 0);
         c->mem_w8(G + 0x172u, 0x78);
         c->mem_w8(G + 0x173u, 0);
@@ -329,21 +390,19 @@ void ActorTomba::postInteractWalk() {
         break;
       }
       case 7:
-        c->r[4] = G; c->r[5] = item; rec_dispatch(c, LEAF_TYPE_7);
+        guest_leaf(c, LEAF_TYPE_7, G, item);
         break;
       case 8:
-        c->r[4] = G; c->r[5] = item; rec_dispatch(c, LEAF_TYPE_8);
+        guest_leaf(c, LEAF_TYPE_8, G, item);
         break;
       case 0x0F: case 0x14: case 0x56:
-        c->r[4] = G; c->r[5] = item; c->r[6] = 0;
-        rec_dispatch(c, LEAF_TYPE_0F_14_56);
+        guest_leaf(c, LEAF_TYPE_0F_14_56, G, item, 0u);
         break;
       case 0x13:
-        c->r[4] = G; c->r[5] = item; rec_dispatch(c, LEAF_TYPE_13);
+        guest_leaf(c, LEAF_TYPE_13, G, item);
         break;
       case 0x2F:
-        c->r[4] = G; c->r[5] = item; c->r[6] = 2;
-        rec_dispatch(c, LEAF_TYPE_0F_14_56);
+        guest_leaf(c, LEAF_TYPE_0F_14_56, G, item, 2u);
         break;
       default:
         break;                                                    // no interaction for other types
@@ -398,6 +457,7 @@ void ActorTomba::growthStep(int32_t mode) {
 void ActorTomba::postFrameWaterCheck() {
   Core* c = core;
   const uint32_t G = G_ADDR;
+  TombaState tomba{c, G};
 
   constexpr uint32_t WATER_MODE_BYTE   = 0x800BF816u;
   constexpr uint32_t WATER_LEVEL_S16   = 0x800BF812u;   // water surface Y (s16)
@@ -413,7 +473,7 @@ void ActorTomba::postFrameWaterCheck() {
   if (waterMode == 0) {
     // Dry land: run the per-frame Tomba tick if not paused.
     if (c->mem_r8(PAUSE_FLAG_SPAD) == 0) {
-      c->r[4] = G; rec_dispatch(c, LEAF_DRY_TICK);
+      guest_leaf(c, LEAF_DRY_TICK, G);
     }
   } else {
     // Water/sea mode. When water-state is 2 with a specific 800E7FEB (== 8) config, clamp
@@ -421,28 +481,28 @@ void ActorTomba::postFrameWaterCheck() {
     bool skipYSnap = false;
     if (waterState > 1) {
       if (waterState == 2 && c->mem_r8(0x800E7FEBu) == 8) {
-        if ((int16_t)c->mem_r16(G + 0x36u) < 0x1A05) c->mem_w16(G + 0x36u, 0x1A04);
+        if (tomba.posZ() < 0x1A05) tomba.setPosZ(0x1A04);
       } else {
         skipYSnap = true;                                 // recomp: `goto LAB_8010E9D4;` skips the Y block
       }
     }
     if (!skipYSnap) {
-      if ((c->mem_r8(G + 0x145u) & 1) == 0 &&
-          (int32_t)waterLevel - (int32_t)c->mem_r16s(G + 0x62u) <= (int32_t)c->mem_r16s(G + 0x32u)) {
-        c->mem_w16(G + 0x32u, (uint16_t)(waterLevel - c->mem_r16(G + 0x62u)));   // Y = waterLevel - G+0x62
-        c->r[4] = G; rec_dispatch(c, LEAF_WATER_SPLASH);
+      if ((tomba.groundedGate() & 1) == 0 &&
+          (int32_t)waterLevel - (int32_t)tomba.physOffsetY() <= (int32_t)tomba.posY()) {
+        tomba.setPosY((int16_t)(waterLevel - tomba.physOffsetY()));   // Y = waterLevel - G+0x62
+        guest_leaf(c, LEAF_WATER_SPLASH, G);
       }
     }
   }
 
   // Area-exit trigger — fires only in water-mode 2 when Tomba is off-map.
-  if (c->mem_r8(G + 0x17Bu) != 0) return;
+  if (tomba.committing() != 0) return;
   if (c->mem_r8(0x800BF80Du) != 0) return;
   if (c->mem_r8(0x800BF839u) != 0) return;
   if (waterMode == 0) return;
   if (waterState != 2) return;
-  if ((int16_t)c->mem_r16(G + 0x32u) >= -0xE74) return;
-  if ((int16_t)c->mem_r16(G + 0x36u) >= 0x1451) return;
+  if (tomba.posY() >= -0xE74) return;
+  if (tomba.posZ() >= 0x1451) return;
 
   c->mem_w8 (PAUSE_FLAG_SPAD,   waterState);
   c->mem_w8 (0x800BF80Fu,       waterState);
@@ -584,93 +644,66 @@ done:
 void ActorTomba::type8Interact(uint32_t item) {
   Core* c = core;
   const uint32_t G = G_ADDR;
-
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 32;
-  c->mem_w32(c->r[29] + 20, c->r[17]);
-  c->mem_w32(c->r[29] + 24, c->r[18]);
-  c->mem_w32(c->r[29] + 28, c->r[31]);
-  c->mem_w32(c->r[29] + 16, c->r[16]);
-  c->r[17] = G; c->r[18] = item;
+  // Guest frame per abi_extract --contract 0x800205CC: single epilogue label -> RAII is safe.
+  static constexpr GuestFrameSpill kSpills[] = {{17, 20}, {18, 24}, {31, 28}, {16, 16}};
+  GuestFrame<32, 4> frameGuard(c, kSpills);
+  TombaState tomba{c, G};
+  TombaState other{c, item};
 
   if (c->mem_r8(item) == 5) {
-    if ((c->mem_r16(G + 0x17Eu) & 0x200u) == 0 && c->mem_r8(G + 0x78u) == 0) {
-      c->r[31] = 0x80020620u;
-      rec_dispatch(c, LEAF_NILADIC_CUE);
+    if ((tomba.growthFlags() & 0x200u) == 0 && tomba.frozenFlag() == 0) {
+      guest_fn(c, LEAF_NILADIC_CUE, 0x80020620u);
     }
-  } else if (c->mem_r16(G + 0x17Eu) & 0x8000u) {
-    c->r[4] = G; c->r[5] = item;
-    c->r[31] = 0x80020644u;
-    rec_dispatch(c, LEAF_GROWN_DELEGATE);
+  } else if (tomba.growthFlags() & 0x8000u) {
+    guest_fn(c, LEAF_GROWN_DELEGATE, 0x80020644u, G, item);
   } else {
-    c->r[4] = G; c->r[5] = item; c->r[6] = 0;
-    c->r[31] = 0x80020658u;
-    rec_dispatch(c, LEAF_PROX_STEP);
-    const int32_t v0 = (int32_t)c->r[2];
+    const int32_t v0 = (int32_t)guest_fn(c, LEAF_PROX_STEP, 0x80020658u, G, item, 0u);
     if (v0 >= 0) {
       if (c->mem_r8(item) == 1) {
-        if (c->mem_r8(G + 0x144u) == 1 && v0 < 2) {
-          c->r[4] = item; c->r[5] = (uint32_t)-32766; c->r[6] = 3; c->r[7] = 30;
-          c->r[31] = 0x8002069Cu;
-          rec_dispatch(c, LEAF_ALT_TAG_SET);
-        } else if ((c->mem_r16(G + 0x17Eu) & 0x200u) == 0) {
+        if (tomba.justTransitioned() == 1 && v0 < 2) {
+          guest_fn(c, LEAF_ALT_TAG_SET, 0x8002069Cu, item, (uint32_t)-32766, 3u, 30u);
+        } else if ((tomba.growthFlags() & 0x200u) == 0) {
           if ((v0 & 1) == 0) {
-            if ((c->mem_r8(G) & 4u) == 0) {
+            if ((tomba.statusFlags() & 4u) == 0) {
               const int32_t heading = (int32_t)c->mem_r32(0x1F80009Cu);   // full 32-bit word
               const int32_t cosv = c->trig.rcos(heading);
               const int32_t sinv = c->trig.rsin(heading);
-              const int32_t sum80 = (int32_t)c->mem_r16s(G + 0x80u) + (int32_t)c->mem_r16s(item + 0x80u);
-              c->mem_w16(G + 0x2Eu, (uint16_t)((int16_t)c->mem_r16(item + 0x2Eu) + (int16_t)((cosv * sum80) >> 12)));
-              c->mem_w16(G + 0x36u, (uint16_t)((int16_t)c->mem_r16(item + 0x36u) - (int16_t)((sinv * sum80) >> 12)));
+              const int32_t sum80 = (int32_t)tomba.boundXZ() + (int32_t)other.boundXZ();
+              tomba.setPosX((int16_t)(other.posX() + (int16_t)((cosv * sum80) >> 12)));
+              tomba.setPosZ((int16_t)(other.posZ() - (int16_t)((sinv * sum80) >> 12)));
             }
-            c->mem_w8(G + 0x60u, 1);
+            tomba.setGroundContactFlag(1);
             // Heading arg is the full 32-bit OUT_HEADING_SPAD word (Ghidra: `iVar7 = (int)_DAT_1f80009c`
             // — a straight int cast, no 16-bit truncation, matching stepModeInteract's bVar6 fix).
-            const int32_t cmp = Trig::angleCmp((int32_t)c->mem_r32(0x1F80009Cu),
-                                                (int32_t)(int16_t)c->mem_r16(G + 0x140u), 1);
-            c->mem_w8(G + 0x5Fu, (uint8_t)(cmp + 2));
-          } else if (v0 == 1 && (c->mem_r8(G + 0x145u) & 1u) == 0) {
+            const int32_t cmp = Trig::angleCmp((int32_t)c->mem_r32(0x1F80009Cu), (int32_t)tomba.facing(), 1);
+            tomba.setFlag95((uint8_t)(cmp + 2));
+          } else if (v0 == 1 && (tomba.groundedGate() & 1u) == 0) {
             // G+0x32 = item[0x32] - (G[0x84] + item[0x84]) (all u16, unsigned per gen), THEN
             // growthYSnap()'s own reset+gated-Y-resnap tail — this branch's G+0x29/0x145/0x4A/
             // 0x50/0x148 reset (v0==1 here) plus the G+0x78/DAT_800BF816-gated const-140/70 snap
             // on G+0x32 are BYTE-IDENTICAL to guest FUN_80022C78 (growthYSnap), reused rather than
             // duplicated (generated/shard_0.c:1112 lines 1-19 == generated/shard_0.c:1466 lines 1-16).
-            const uint32_t gOff84   = c->mem_r16(G + 0x84u);
-            const uint32_t itOff84  = c->mem_r16(item + 0x84u);
-            const uint32_t itemY    = c->mem_r16(item + 0x32u);
-            c->mem_w16(G + 0x32u, (uint16_t)(itemY - (gOff84 + itOff84)));
+            tomba.setPosY((int16_t)(other.posY() - (tomba.boundYUp() + other.boundYUp())));
             growthYSnap();
           }
         }
-      } else if ((c->mem_r16(G + 0x17Eu) & 0x200u) == 0 && (c->mem_r8(G + 0x145u) & 1u) == 0) {
+      } else if ((tomba.growthFlags() & 0x200u) == 0 && (tomba.groundedGate() & 1u) == 0) {
         c->mem_w8(item + 0x29u, 1);
       }
     }
   }
-
-  c->r[31] = c->mem_r32(c->r[29] + 28);
-  c->r[18] = c->mem_r32(c->r[29] + 24);
-  c->r[17] = c->mem_r32(c->r[29] + 20);
-  c->r[16] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
 }
 
 // FUN_800235A0 — postInteractWalk case 7.
 uint8_t ActorTomba::type7Interact(uint32_t item) {
   Core* c = core;
   const uint32_t G = G_ADDR;
+  // Guest frame per abi_extract --contract 0x800235A0: single epilogue label -> RAII is safe.
+  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {17, 20}, {31, 24}};
+  GuestFrame<32, 3> frameGuard(c, kSpills);
+  TombaState tomba{c, G};
 
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 32;
-  c->mem_w32(c->r[29] + 16, c->r[16]);
-  c->mem_w32(c->r[29] + 20, c->r[17]);
-  c->mem_w32(c->r[29] + 24, c->r[31]);
-  c->r[16] = G; c->r[17] = item;
-
-  c->r[4] = G; c->r[5] = item; c->r[6] = 1;
-  c->r[31] = 0x800235C0u;
-  rec_dispatch(c, LEAF_PROX_STEP);
-  const int32_t v0 = (int32_t)c->r[2];
+  const int32_t v0 = (int32_t)guest_fn(c, LEAF_PROX_STEP, 0x800235C0u, G, item, 1u);
   uint8_t result = 0;
   if (v0 >= 0) {
     // BUG FIX (RE cross-check against generated/shard_4.c:1267 gen_func_800235A0): the ground
@@ -680,18 +713,13 @@ uint8_t ActorTomba::type7Interact(uint32_t item) {
     // but it's a REAL, deterministic value since LEAF_PROX_STEP is the same substrate body on
     // both SBS cores). The original draft clobbered it with `item`, which is byte-exact ONLY if
     // it happens to equal what LEAF_PROX_STEP leaves behind — a latent SBS divergence. Leave r6
-    // untouched here so it carries through exactly like the recompiled body.
-    const uint32_t flag = (c->mem_r8(G + 0x164u) == 0x0Cu) ? 4u : 1u;
+    // untouched here so it carries through exactly like the recompiled body (guest_fn would
+    // clobber it — set r4/r5/r7 manually and dispatch without touching r6).
+    const uint32_t flag = (tomba.transitionSlot() == 0x0Cu) ? 4u : 1u;
     c->r[4] = G; c->r[5] = item; c->r[7] = flag;
-    c->r[31] = 0x80023600u;
-    rec_dispatch(c, LEAF_STEP_MODE_FLAG);
+    guest_dispatch(c, 0x80023600u, LEAF_STEP_MODE_FLAG);
     result = 1;
   }
-
-  c->r[31] = c->mem_r32(c->r[29] + 24);
-  c->r[17] = c->mem_r32(c->r[29] + 20);
-  c->r[16] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
   return result;
 }
 
