@@ -424,3 +424,15 @@ VERIFIED: hut preseq no longer alternates (interp==real interior); SBS-full AUTO
 Kept: Game::activeRq() (byte-identical redirect unification, useful for 2b). NEXT 2b: field objects —
 factor the object entity-walk out of sceneNative, re-run it with mObjOverrideOn (step-1 lerped transforms)
 to replace matchAndLerp for field objects; then step 3 deletes matchAndLerp.
+
+## Step 2b LANDED (2026-07-15) — field objects interpolate through the unified path
+2b.1: factored sceneNative's object walk into Render::fieldObjectsRender (byte-identical, caf0a64c).
+2b.2: tier1Render now re-runs fieldObjectsRender under mObjOverrideOn (step-1's lerped Robj/Tobj) +
+the lerped camera into mSink; isTier1Owned excludes ALL RQ_WORLD (terrain+scene-table+objects now
+tier1-rendered) so matchAndLerp handles only 2D. Field actors interpolate through the SAME object
+walk the real frame ran, with lerp in the INPUTS (transforms) — replacing matchAndLerp's per-prim
+output-matching (which caused the gem/quad "different position every frame" artifacts USER reported).
+VERIFIED: SBS-full AUTO_SKIP 0-diff f11970 (guest byte-identical, fps60 core-A-only); field renders;
+hut still fixed. USER-EYEBALL: moving field actors interpolate smoothly (no gem/quad teleport), no
+dropped world geometry. NEXT step 3: matchAndLerp now only touches 2D (HUD/overlay) — present that
+verbatim from mRqCur and DELETE matchAndLerp/buildProvenanceIdx/enforceNodeAtomicity/mRqLerp.

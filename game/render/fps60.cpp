@@ -190,6 +190,13 @@ void Fps60::tier1Render(Core* core, float t) {
       c->mRender->backdropRender(0x800ed018u);
       mBgOverrideOn = false;
     }
+    // fps60 step 2b: re-run the field OBJECT walk under lerped per-object transforms (mObjOverrideOn +
+    // step-1's projObj) AND the still-armed lerped camera (mCamOverrideOn) into mSink — the objects
+    // interpolate through the SAME object walk the real frame ran, replacing matchAndLerp's output-
+    // matching for field actors. Only the field runs this (tier1Render is mTier1EligibleCur-gated).
+    mObjOverrideOn = true;
+    c->mRender->fieldObjectsRender();
+    mObjOverrideOn = false;
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
@@ -317,8 +324,12 @@ static constexpr uint32_t kTier1Sink = 0xFFFFFFFEu;
 // RQ_BACKGROUND item keeps dbg_node==0 and falls through to the normal per-prim match+lerp/verbatim-
 // fallback path below, same as any other un-owned 2D content.
 static inline bool isTier1Owned(const RqItem& it) {
+  // fps60 step 2b: tier1Render now re-renders ALL of RQ_WORLD (terrain + scene-table + OBJECTS via
+  // fieldObjectsRender) under lerped inputs, so the whole world layer is tier1-owned and excluded from
+  // matchAndLerp — objects come from the re-run's lerped transforms, not the output-match heuristic.
+  // (Backdrop: only backdropRender's own prims; other RQ_BACKGROUND 2D keeps the per-prim path, #54.)
   if (it.layer == RQ_BACKGROUND) return it.dbg_node == kBackdropDbgNode;
-  return it.layer == RQ_WORLD && (it.dbg_node == kTerrainDbgNode || it.dbg_node == kSceneTableDbgNode);
+  return it.layer == RQ_WORLD;
 }
 void Fps60::buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out) {
   out.resize((size_t)n);
