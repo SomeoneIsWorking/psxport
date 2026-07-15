@@ -39,9 +39,15 @@ it with the psx_render reference (and SBS core B).
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b| Walkable field — 2D OVERLAY (HUD/dialog/item-bubble/menu/text) | same, `s_ot_2d_drawn>0` | none | ⛔ crashes when any overlay prim present |
 | 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | none (objects share HEADS[0..1] via TransitionState3; room geo + interior camera unbuilt) | ⛔ |
-| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | partial (`sceneNative` for 3D beats) — 2D composite unbuilt | ⛔ |
+| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | MOSTLY native (backdrop+terrain+entities+objects+swirl all via `sceneNative`/native submitters) | ⬜ wiring: route `sceneNative` for sop_narration + beat-5(void) backdrop guard + font-to-queue (shared #3b) |
 
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
+
+**Shared foundation — font→queue producer.** #3b (field HUD/dialog text), #5 (SOP narration text), and
+#2a text all use `Font::glyphEmit` (0x80078CA8, LIVE) which writes GUEST packets, not the queue. Add ONE
+queue producer (dual-emit or a read glyph-run→push2dQuad, op-0x65 sprites, RQ_HUD) and it unblocks all
+three. (The TITLE does NOT use glyphEmit — its labels are FT4 quads — so titleNative didn't need it.)
+Build it from the field-2D scout's plan, verify on the field HUD, reuse for SOP + attract.
 
 ## The 2D-composite path — OWN THE BUILDERS (per the existing RE map, not a new subsystem)
 
