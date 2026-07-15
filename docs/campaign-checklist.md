@@ -29,7 +29,12 @@ run the EMULATED substrate while direct callers run the port (a split). Register
       reach (e.g. NodeXform::build fires in NONE of dark-screen/hut-entry — its callers are seaside/
       visibility-gate). Those are BLOCKED on Phase 5 coverage — can't MV-gate without the scene. Only
       combat/movement-path fallthroughs (like animTick/walkStart) are gate-able now. Do those; defer rest.
+- [x] Trig::rsin (0x80083E80) + Trig::ratan2 (0x80085690) — MV 102593/79617 passes, 0-diff. Native-ized
+      (Trig::registerOverrides). Table-based (read guest SIN_TAB/ATAN_TAB), byte-exact to substrate GTE leaves.
+- [ ] Trig::angleCmp (0x80077768) — DEFERRED: cutscene-camera caller, not exercised by current replays.
 - Skip: Sequencer channel* leaves (0x80090E40/91050/91910/92080) — intentionally-unwired never-fire leaves.
+- Phase-3 gate-able-now progress: buildWithOffset ✅ animTick ✅ walkStart ✅ rsin ✅ ratan2 ✅.
+  Remaining candidates are mostly scene-gated (need Phase 5) or deferred (angleCmp, build → cutscene/seaside).
 
 ## Phase 4 — SBS bug-hunt over the replay library  ☐
 Run SBS-full over every replay; every divergence is a Job#1 bug → root-cause + fix. (Currently all

@@ -38,4 +38,11 @@ public:
   //   scripted-camera path (CutsceneCamera::snapFollowA). Pure computation over int32 inputs — no
   //   Core access, kept static.
   static int32_t angleCmp(int32_t a, int32_t b, int32_t mode);
+
+  // Wire rsin/ratan2 as the guest-address overrides (0x80083E80/80085690) so the rec_dispatch/
+  // guest_leaf + direct substrate func_<addr>(c) callers run these ports instead of the emulated GTE
+  // leaves. These read the SAME guest tables (SIN_TAB/ATAN_TAB) as the substrate, so byte-exact;
+  // MIRROR_VERIFY-gated (102593/79617 passes). angleCmp (0x80077768) deferred — not exercised by
+  // current replays (cutscene-camera caller). Found by codemap --substrate-fallthrough.
+  static void registerOverrides(class Game* game);
 };

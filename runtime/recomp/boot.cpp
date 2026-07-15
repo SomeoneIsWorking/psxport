@@ -20,6 +20,7 @@
 #include "graphics_bind.h"         // class GraphicsBind — object render-bind subsystem (recordArrayInit)
 #include "cube_text_ledger.h"      // class CubeTextLedger — cube-text popup ledger (deactivate/spawn)
 #include "scene/scene_events.h"    // class SceneEvents — scene-event ARM (FUN_80040B48 sole owner)
+#include "math/trig.h"             // class Trig — rsin/ratan2/angleCmp override wiring
 #include "actor_tomba.h"           // class ActorTomba — Tomba's postInteractWalk sub-handler leaves
 #include "actor_melee_engage.h"    // class ActorMeleeEngage — A00-overlay melee-engage/reposition/arm leaf
 #include "melee_proximity.h"       // class MeleeProximity — melee-proximity/approach-anchor leaf
@@ -113,6 +114,7 @@ void register_engine_overrides(Game* game) {
   CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
   RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)
   RegisterEngineAnimLeafOverrides(game);             // Engine::animTick/walkStart fallthrough native-ize (0x8004190C/80054D14)
+  Trig::registerOverrides(game);                     // Trig::rsin/ratan2/angleCmp fallthrough native-ize (0x80083E80/80085690/80077768)
   RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
   c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
   c->engine.script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)

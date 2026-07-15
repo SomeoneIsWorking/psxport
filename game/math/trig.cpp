@@ -81,3 +81,31 @@ int32_t Trig::rcos(int32_t angle) const {
     return lh((uint32_t)(angle - 3072) * 2u);            // Q4: cos(a) = tab[a-3072]
   }
 }
+
+// ── Override wiring (phase-3 fallthrough native-ize, 2026-07-15) ────────────────────────────────────
+#include "game.h"
+#include "engine_overrides.h"
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_80083E80(Core*);
+extern void gen_func_80085690(Core*);
+namespace {
+void ov_trigRsin(Core* c) {
+  if (c->game->psx_fallback) { gen_func_80083E80(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80083E80u);
+  c->r[2] = (uint32_t)c->trig.rsin((int32_t)c->r[4]);
+}
+void ov_trigRatan2(Core* c) {
+  if (c->game->psx_fallback) { gen_func_80085690(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80085690u);
+  c->r[2] = (uint32_t)c->trig.ratan2((int32_t)c->r[4], (int32_t)c->r[5]);
+}
+}  // namespace
+
+// angleCmp (0x80077768) is NOT wired here — it fired in NONE of the current replays (its dispatch
+// caller is CutsceneCamera::snapFollowA), so MIRROR_VERIFY couldn't gate it. Deferred to Phase 5
+// (cutscene-camera scene coverage). rsin/ratan2 fire constantly (MV 102593/79617 passes, byte-exact).
+void Trig::registerOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x80083E80u, "Trig::rsin",   ov_trigRsin);   shard_set_override(0x80083E80u, ov_trigRsin);
+  ov.register_(0x80085690u, "Trig::ratan2", ov_trigRatan2); shard_set_override(0x80085690u, ov_trigRatan2);
+}
