@@ -436,3 +436,15 @@ VERIFIED: SBS-full AUTO_SKIP 0-diff f11970 (guest byte-identical, fps60 core-A-o
 hut still fixed. USER-EYEBALL: moving field actors interpolate smoothly (no gem/quad teleport), no
 dropped world geometry. NEXT step 3: matchAndLerp now only touches 2D (HUD/overlay) — present that
 verbatim from mRqCur and DELETE matchAndLerp/buildProvenanceIdx/enforceNodeAtomicity/mRqLerp.
+
+## Step 3 LANDED (2026-07-15) — matchAndLerp DELETED, unification COMPLETE
+present_vk's field branch now: slot A = mSink (tier1's lerped world: terrain+scene-table+objects+
+backdrop) merged with mRqCur's 2D (HUD/overlay) VERBATIM by (layer,seq) — no prim matching. Deleted
+matchAndLerp/buildProvenanceIdx/enforceNodeAtomicity + helpers (fpEqual/colorsEqual/fpHash/lerpItem) +
+kNoNode/kTier1Sink + all match scratch members (mRqLerp/mNLerp/mMatchMap/mZeroGroups*/mMatchOfA/mUsedB/
+mNodeTotalA/MatchedA/mIdxPrev/CurBuf/mNodeIdxScratch/mMatched*/mUnmatched*) — 180 lines. Kept isTier1Owned
+(the mSink-vs-2D filter) + mT + mBackdropPrimsThisFrame. Updated fps60.h/.cpp banners to the unified path.
+VERIFIED: SBS-full AUTO_SKIP 0-diff f10200 (guest byte-identical); wide+fps60 hut interior no flicker
+(interp==real interior, sm[0x4c]==3, 560x240 clean margins); field objects render + interpolate.
+UNIFICATION COMPLETE: camera + per-object transforms + backdrop all lerp through the ONE render re-run;
+2D verbatim; sub-scene presents captured interior. USER principle achieved — "no difference aside from lerp."

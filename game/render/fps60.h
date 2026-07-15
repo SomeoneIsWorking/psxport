@@ -1,10 +1,18 @@
 // game/render/fps60.h — the interpolated-60fps tier's per-instance state (fps60.cpp).
 //
-// RENDERER-INTERNAL, one-frame-behind interpolation (docs/fps60-rework.md, redesign 2026-07-14). The
-// renderer holds the last TWO real frames' resolved render-queue prims (double-buffered by rq_capture) and
-// presents one frame behind: slot A draws lerp(Q[N-1], Q[N], t=0.5) via matchAndLerp's provenance-matched
-// vertex lerp, slot B draws Q[N] verbatim. ONE draw path — both slots drain an RqItem list through the same
-// `RenderQueue::emitItem` the 30fps path uses.
+// RENDERER-INTERNAL, one-frame-behind interpolation (docs/fps60-rework.md; UNIFIED-PATH redesign
+// 2026-07-15). PRINCIPLE (USER): there is no difference between how a real frame and an interpolated frame
+// are drawn EXCEPT the lerp — all drawing flows through the same logic, and the lerp lives in the INPUTS.
+// The interp present RE-RUNS the real render one frame behind, with every input served a lerp(prev,cur,t)
+// through its capture/override choke: CAMERA (sceneCam / mCamCur/mCamPrev), PER-OBJECT TRANSFORM (projObj /
+// mObjCur/mObjPrev, keyed by cmd), BACKDROP scroll (bgScroll / mBgCur/mBgPrev). tier1Render re-runs the
+// field WORLD passes (terrainRenderAll + fieldEntityRender + fieldObjectsRender + backdropRender — the SAME
+// calls the real sceneNative makes) under those lerped inputs into the isolated mSink; present_vk merges
+// mSink with mRqCur's remaining 2D (HUD/overlay — screen-space, verbatim, no lerp needed) by (layer,seq).
+// The authored sub-scene (hut interior, sm[0x4c]==3) is a guest-OT walk with no native per-object transform,
+// so its interp frame presents the captured interior queue (mRqCur) — degenerate lerp, correct (nothing to
+// interpolate). Both frames drain an RqItem list through the same RenderQueue::emitItem the 30fps path uses.
+// matchAndLerp (the old provenance/fingerprint output-matching heuristic) is DELETED.
 //
 // TIER 1 (docs/fps60-rework.md "Object-tier attempt 2026-07-14", extended to fieldEntityRender): the
 // QUEUE-LERP heuristic above does not own CAMERA-ONLY world-static geometry — it is replaced there by a
@@ -147,36 +155,14 @@ struct Fps60 {
   void present_vk(Core* core);                      // build+present the in-between, then the real frame
   int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
 
-  // ---- STAGE 2: prim matching + lerp (docs/fps60-rework.md "Match+lerp stage") -----------------------
-  // Slot A no longer replays Q[N-1] verbatim — it draws lerp(Q[N-1], Q[N], t=mT) per matched prim pair.
-  // Match key: primary = (dbg_node, emission-index-within-that-node) provenance, validated on every hit
-  // by a shape-fingerprint + per-vertex-color equality check; dbg_node==0 prims (no provenance) fall back
-  // to (fingerprint, order-of-appearance) ONLY when the per-fingerprint counts agree between the two
-  // frames. All scratch buffers are Fps60 members, cleared/reused every frame — no per-frame `new`.
-  float   mT      = 0.5f;         // in-between parameter (t=0.5 for one midpoint at 30->60fps)
-  RqItem* mRqLerp = nullptr;      // output buffer for the matched/lerped slot-A queue
-  int     mNLerp  = 0;
-  std::vector<uint32_t> mIdxPrevBuf, mIdxCurBuf;             // per-item emission-index-within-node (or "no node")
-  std::unordered_map<uint32_t, uint32_t> mNodeIdxScratch;    // node -> running emission counter (buildProvenanceIdx scratch)
-  std::unordered_map<uint64_t, int> mMatchMap;               // Q[N] provenance key -> item index
-  std::unordered_map<uint64_t, std::vector<int>> mZeroGroupsPrev, mZeroGroupsCur;   // dbg_node==0: fingerprint -> ordered indices
-  std::vector<int>     mMatchOfA;   // per Q[N-1] item: matched Q[N] index, or -1
-  std::vector<uint8_t> mUsedB;      // per Q[N] item: already claimed by a match
-  // Tier-3 object-atomicity scratch (docs/fps60-rework.md "QUEUE-LERP ... object-atomic"): per dbg_node,
-  // how many Q[N-1] prims that node has vs. how many of them got a Pass-1 match. A node where the two
-  // counts disagree is demoted whole — every one of its prims draws unlerped from Q[N-1] — instead of a
-  // torn mix of lerped + frozen prims from the same object.
-  std::unordered_map<uint32_t, int> mNodeTotalA, mNodeMatchedA;
-  long mMatchedThisFrame = 0, mUnmatchedThisFrame = 0;        // this-frame telemetry
-  long mMatchedTotal = 0, mUnmatchedTotal = 0;                // running totals (periodic log, PSXPORT_DEBUG=fps60)
-  // BACKDROP TELEMETRY: prims tier1Render drew into mSink for the backdrop layer (RQ_BACKGROUND) this
-  // present, counted separately from mTier1PrimsThisFrame (terrain+scene-table, RQ_WORLD) so telemetry
-  // distinguishes the two producers sharing the sink. Set in tier1Render, not matchAndLerp — the backdrop
-  // is tier1-owned (isTier1Owned), never matched/lerped by the queue heuristic below.
+  // ---- interp parameter + telemetry (UNIFIED PATH — matchAndLerp deleted 2026-07-15) -----------------
+  // The interp present is now the SAME render re-run under lerped inputs (camera + per-object transforms +
+  // backdrop scroll) into mSink, merged with mRqCur's 2D verbatim — no prim matching. mT is the in-between
+  // parameter both the camera lerp (tier1Render) and projObj's per-object lerp share.
+  float mT = 0.5f;                    // in-between parameter (t=0.5 for one midpoint at 30->60fps)
+  // BACKDROP telemetry: prims tier1Render drew into mSink for the backdrop layer (RQ_BACKGROUND) this
+  // present, counted separately from mTier1PrimsThisFrame (terrain+scene-table+objects, RQ_WORLD).
   long mBackdropPrimsThisFrame = 0;
-  void buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out);
-  void matchAndLerp(Core* core);   // fills mRqLerp/mNLerp by matching mRqPrev (Q[N-1]) against mRqCur (Q[N])
-  void enforceNodeAtomicity(int nA);   // Tier-3: demote a partially-matched dbg_node's prims back to unmatched
 
   // ---- per-present frame dump (debug channel `fps60dump`, REPL `debug fps60dump`) ---------------------
   // Writes one PNG per PRESENTED frame (real AND interp) to scratch/framedump/, so a Python script can
