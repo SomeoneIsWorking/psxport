@@ -55,6 +55,21 @@ producer. The TITLE screen (#2) is the first and establishes this subsystem.
 - fps60 `captureSubscene`/`mSubsceneCur` present-captured-queue shortcut (the hut-interior flicker hack).
 - Every OT-walk fallback branch in `drawOTag`'s pc_render path (hut, SOP, field-2D, non-field else).
 
+## #2 TITLE — investigation state (2026-07-15)
+
+- Stage `0x801062E4` (labelled DEMO): frames 0-4 black (START handoff), then the TITLE screen: TOMBA! 2
+  logo + "New Game"/"Load Game" menu + copyright over an animated character/castle background.
+- Drawn as **textured quads** (gp0 op 0x2c/0x2d, tp=(832,256)/(384,0)), NOT SPRT sprites — the logo/bg/
+  menu are POLY_FT4s sampling VRAM sprite patterns that `Engine::uploadModeSprites` (FUN_80067DA8) uploads
+  each frame. So the native 2D subsystem is a **textured-quad + font compositor**, keyed by texpage/uv.
+- The Demo class (game/scene/demo.h) owns the SUBSTATE machine only; the RENDER stays substrate — the
+  quad-builder lives inside the rec_dispatch'd sub-machines (menu input 0x80106f80, cursor 0x80106ac4,
+  page 0x8007b45c, …). NEXT RE STEP: Ghidra (tools/decomp.sh) those to find the shared 2D-quad submit
+  primitive, then OWN it natively (record screen-quad + texpage + uv + color -> RQ_HUD), the 2D twin of
+  submit.cpp's 3D packet ownership. Owning the shared primitive makes every 2D scene (title, menus, HUD,
+  dialog) render natively at once — do NOT hand-transcribe the title's specific quad list.
+
 ## Next
 Build native producers down the backlog. Each removes one `abortUnimplemented`. Gate: the scene renders
 in pc_render without crashing AND SBS-render (pane A pc_render vs pane B psx_render) reaches it.
+Current frontier: #2 title — RE the shared 2D-quad submit primitive, own it natively.
