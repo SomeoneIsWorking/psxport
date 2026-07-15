@@ -50,9 +50,13 @@ more freely, test different scenes, try to trigger a dialogue").
       (Tomba X 0x800E7EAE moved 0x0F64→0x1770 holding right). Recipe in docs/findings/sbs.md "Phase 5".
 - [x] First exploration: blind 4-direction walk of START field under SBS-full = 0-diff (byte-exact,
       no divergence there; stayed in start field — blind walk hits walls).
-- [ ] DIRECTED routes to new scenes: (a) chain hut-entry replay → explore hut interior; (b) RE start-
-      field exit locations; (c) trigger fisherman dialogue. Each: SBS-full + MV on scene-gated fallthroughs.
-- [ ] Root-cause any divergence found in new territory (Phase 4 bug-hunt, now with new coverage).
+- [x] ⭐ DRIVING SOLVED (USER "figure out how to drive the game"): tools/pad_decode.py (decode replay →
+      button timeline / SBS_KEYS, or build .pad from spec) + position-feedback method. Movement calibrated
+      (left/right=±X ~22/f @0x800E7EAE; up/down=±Z near doors @0x800E7EB6). VERIFIED: drove into the hut via
+      own scripted input (right34→up180 → sm[0x4c]=3), SBS-full 0-diff f9480. docs/driving-the-game.md.
+- [ ] APPLY the method to reach a GENUINELY new area (not the hut): find the start-field MAIN exit (walk
+      to each edge/door, probe X/Z for a trigger zone that latches sm[0x4c]/area-load), script it, SBS-full.
+- [ ] For each new area: root-cause any divergence (Phase 4) + MV the scene-gated fallthroughs that fire.
 
 ## Working rules
 - Oracle IS the gate: MIRROR_VERIFY=<addr> (byte-compare vs substrate) for a wired override; SBS-full
