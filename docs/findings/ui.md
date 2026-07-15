@@ -105,7 +105,8 @@ its own beyond the shared cursor-index global `DAT_800bf808`):
   `FUN_8007DA50` (dialog-box object per-frame update; phase>=4) → `FUN_8007D594` (box text SM,
   ~13 states, NO packet writes in the states) → shared tail L_8007DA1C unconditionally calls
   `FUN_8007CC00` (border tiles, op 0x65, walks the glyph-position table `FUN_8007C940` builds) then
-  `FUN_8005019C` (2 corner sprites op 0x74/0x76|1, then 5× `FUN_8004FFB4` = the FT4 fill quads,
+  `FUN_8005019C` (4 corner sprites — TL/TR/BL/BR, SPRT_8 8×8, op 0x74/0x76, u=184/200/232/248 v=136;
+  CORRECTED 2026-07-15 from "2 corner sprites"; port spec docs/native-render-2d-panel.md — then 5× `FUN_8004FFB4` = the FT4 fill quads,
   op 0x2C/0x2E|1 → the observed 0x2F). All OT bucket 2. Glyphs (op 0x7C, `FUN_80078CA8` =
   native Font::glyphEmit) come from a DIFFERENT path (FUN_8007C940's control-code handlers, called
   earlier from FUN_8007DA50) — so a PktSpanSession wrap of `FUN_8007D594` tags EXACTLY the panel
