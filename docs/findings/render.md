@@ -2036,3 +2036,22 @@ draft was already byte-faithful.
   guest-write owner; the authoritative flag comes from a stale pre-#32 override tsv entry. Leave as-is
   (a pc_render read-only overlay legitimately sharing the address with the substrate owner). Documented
   so the next --conflicts triage doesn't re-chase it.
+
+## Native-but-UNREGISTERED leaves → substrate fallthrough (2026-07-15) — native-ization candidates
+- Found while auditing the engine.cpp anim-cluster (after deduping animEnvInit + objMatrixCompose).
+  Engine::animTick (FUN_8004190C) and Engine::walkStart (FUN_80054D14) are native-implemented and
+  called DIRECTLY by some behaviors (c->engine.animTick / c->engine.walkStart, e.g. beh_sop_intro_pilot)
+  — BUT they are NOT registered as overrides. So their rec_dispatch(0x80054D14)/callObj1(0x8004190C)
+  callers (beh_actor_tomba_proximity_combat ×4, beh_a06_scripted_actor) fall through to the SUBSTRATE
+  gen_func_*. Same gap FUN_800518FC had before it was wired this session — a split where direct callers
+  run native and dispatch callers run emulated.
+- CANDIDATE FIX (next unit, NOT done — new behavior-changing unit, deferred for review): register both
+  as EngineOverrides + psx_fallback-gated shard_set_override (guest ABI: obj in r4; animTick returns 1
+  in r2, walkStart returns 0/… per gen), then gate with PSXPORT_MIRROR_VERIFY=0x8004190C / 0x80054D14
+  over a combat-exercising replay (dark-screen). If MV byte-exact → keep (dispatch callers native-ized,
+  substrate dep removed); if MV mismatches → the native body has a latent divergence vs substrate for
+  those callers' objects → investigate, do NOT register. walkStart has an early-exit (cur==mode → ret 0
+  no frame) — confirm the override thunk reproduces it.
+- TOOL IDEA (future): codemap could grow a `--substrate-fallthrough` mode — flag any address that HAS a
+  native owner AND is rec_dispatch/guest_leaf-called but is NOT in the override/shard_set tables. That's
+  the machine-detectable version of this gap (it's how FUN_800518FC's fallthrough hid). Not built yet.
