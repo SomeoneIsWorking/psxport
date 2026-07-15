@@ -44,6 +44,14 @@ struct GpuState {
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
   int bg_2d(int bx0, int by0, int bx1, int by1);   // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)
   int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
+  // #54: a pure-2D screen (title/menu) never sets s_seen3d, so s_prev_had3d alone left the widen mechanism
+  // permanently OFF there — nothing ever painted the wide-margin VRAM columns, so present() sampled raw
+  // adjacent VRAM (texture-atlas garbage) instead of a clean widened/blanked margin. A full-screen 2D
+  // BACKDROP (fill==1 in the widen sites below: node_is_bg / sprite_is_bg_texpage / bg_2d coverage, or a
+  // full-screen fade) is exactly as legitimate a "this frame owns and redraws the whole width" signal as
+  // 3D world geometry — track it the same lagged way so the title backdrop widens like the field backdrop.
+  int s_seen_bg2d = 0;        // did a full-screen 2D backdrop prim get classified fill=1 this frame?
+  int s_prev_had_bg2d = 0;    // did LAST frame draw one? (wide-widen gate, mirrors s_prev_had3d)
 
   // M3 provenance — own the 2D layer by WHO submitted it, not per-prim size. The engine's screen-space
   // BACKGROUND drawer(s) (e.g. the field's scrolling-tilemap backdrop FUN_80115598) are bracketed by a

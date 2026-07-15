@@ -41,6 +41,18 @@ static constexpr uint32_t kTerrainDbgNode = 0xFFFF0001u;
 // a real guest node pointer.
 static constexpr uint32_t kSceneTableDbgNode = 0xFFFF0002u;
 
+// Reserved dbg_node sentinel for the NATIVE SCROLLING-BACKDROP prims: Render::backdropRender (the field's
+// sky/parallax tilemap, render_walk.cpp) scopes its own diag.beginObject/endObject around its push2dQuad
+// loop, the same way terrain/scene-table do. #54 (main-menu widescreen+fps60): RQ_BACKGROUND is NOT a
+// single-producer layer — the generic guest-OT walk (runtime/recomp/gpu_native.cpp) ALSO classifies any
+// full-screen 2D poly/sprite/FillRect (menu backdrop art, hut-interior clear, SOP-narration fills, #52's
+// FillRect widen) as RQ_BACKGROUND by SCREEN COVERAGE, with no relation to backdropRender. Those OT-walk
+// items keep dbg_node==0 (no beginObject scope wraps the OT walk) — this sentinel is what lets
+// Fps60::isTier1Owned key on "backdropRender's OWN prims" specifically, instead of the whole layer, so
+// non-field 2D backdrops fall through to the normal per-prim match+lerp path instead of being silently
+// dropped from every interpolated frame (found via the title-menu screen going backdrop-less at 60fps).
+static constexpr uint32_t kBackdropDbgNode = 0xFFFF0003u;
+
 // One resolved drawable: a quad (two triangles) with its decoded material + real per-vertex depth. All
 // values are captured at enqueue time (after texpage/clut resolution + draw-offset/rounding) so flush is
 // independent of any GpuState mutated between enqueue and flush.

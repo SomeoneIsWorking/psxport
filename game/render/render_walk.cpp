@@ -171,6 +171,11 @@ void Render::backdropRender(uint32_t t4) {
   unsigned char col[4] = { 0x80, 0x80, 0x80, 0x80 };  // 0x7d is raw-texture: color ignored
   int outer_bound = (int16_t)(scrollY - 120) + 0x100; // 16 rows
   int t5 = (int16_t)(scrollX - cx) + winw;            // wide-covering column window (4:3: ~22 cols)
+  // Tag every backdrop tile with the reserved kBackdropDbgNode sentinel (render_queue.h) — NOT the
+  // dbg_node==0 a generic OT-walk-classified RQ_BACKGROUND item gets (menu backdrop art, hut-interior
+  // clear, SOP fills). This is what lets Fps60::tier1Render's queue-lerp exclusion (fps60.cpp
+  // isTier1Owned) target ONLY the prims it actually re-renders, same pattern as terrain/scene-table (#54).
+  c->mRender->diag.beginObject(kBackdropDbgNode);
   for (int t8 = scrollY - 120;;) {
     int Y = (int16_t)((t8 & 0xFFF0) + yoff);
     int t6 = (int16_t)t2;                          // row byte offset (sign-extended)
@@ -199,6 +204,7 @@ void Render::backdropRender(uint32_t t4) {
     t8 += 16;
     if (!((int16_t)t8 < outer_bound)) break;
   }
+  c->mRender->diag.endObject();
 }
 
 void Render::sceneNative() { Core* c = mCore;

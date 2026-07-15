@@ -536,7 +536,11 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
-  it.dbg_node = (layer == RQ_WORLD) ? core->mRender->diag.currentNode() : 0;
+  // RQ_BACKGROUND also carries currentNode() (#54): Render::backdropRender scopes itself with
+  // kBackdropDbgNode (render_queue.h) the same way world producers do, so Fps60::isTier1Owned can key on
+  // ITS prims specifically. Any RQ_BACKGROUND item from OUTSIDE that scope (the generic guest-OT-walk bg
+  // classification in gpu_native.cpp — no beginObject wraps it) still gets dbg_node==0, unchanged.
+  it.dbg_node = (layer == RQ_WORLD || layer == RQ_BACKGROUND) ? core->mRender->diag.currentNode() : 0;
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
   // item so emitItem re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;

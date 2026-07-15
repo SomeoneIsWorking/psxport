@@ -885,15 +885,17 @@ void GpuState::gp0_exec(Core* core) {
       // 2D polys would stay left-anchored at 320 (the banner gets cut). Widen them like the 2D sprites:
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
       { int gpu_gpu_wide_engine(Core*);
-        if (!is3d && gpu_gpu_wide_engine(core) && s_prev_had3d) {  // 2D widen only on gameplay frames
-          // HUD: identity (shader centers it). Backdrop AND full-screen fade/dim: stretch-to-fill so the fade
-          // covers the whole wide FB (no undimmed margins, #21). See ws_2d_local_x.
-          // #38: stretch-fill uses PROVENANCE only (node_is_bg), not `bg`'s coverage heuristic — a
-          // large screen-space panel (weapon carousel) can exceed bg_2d's >=3/4-screen threshold and get
-          // mis-tagged backdrop, bleeding it to the wide-screen edges. `bg` itself (RQ_BACKGROUND depth
-          // band) is left untouched.
-          int fill = node_is_bg(s_cur_node) || fade_full;
-          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(core, xs[i], fill); } }   // engine-owned 2D layout
+        // #38: stretch-fill uses PROVENANCE only (node_is_bg), not `bg`'s coverage heuristic — a
+        // large screen-space panel (weapon carousel) can exceed bg_2d's >=3/4-screen threshold and get
+        // mis-tagged backdrop, bleeding it to the wide-screen edges. `bg` itself (RQ_BACKGROUND depth
+        // band) is left untouched.
+        int fill = !is3d && (node_is_bg(s_cur_node) || fade_full);
+        if (fill) s_seen_bg2d = 1;   // #54: this frame owns a full-screen 2D backdrop redraw (menu/title)
+        // 2D widen on gameplay frames (3D last frame) OR a full-screen 2D backdrop redraw last frame (#54:
+        // a pure-2D screen like the title menu never sets s_prev_had3d, but its own backdrop is just as
+        // legitimate a "this frame repaints the whole width" signal).
+        if (!is3d && gpu_gpu_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d))
+          for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(core, xs[i], fill); }   // engine-owned 2D layout
       // DIAG PSXPORT_PAINTER=1: force PURE PSX OT painter order (is3d=0 / no bg split) for EVERY prim, so the
       // frame composites exactly as the PSX ordering table would. Render the field with and without this and
       // diff: the differing pixels are precisely where native per-pixel depth changes the picture (the
@@ -1087,11 +1089,13 @@ void GpuState::gp0_exec(Core* core) {
       // sprites bypass the GTE, so they are mapped here. A backdrop (sky/water) STRETCHES to fill the wide
       // FB; HUD/UI is identity (the relocation shader's +margin already centers it). See ws_2d_local_x.
       { int gpu_gpu_wide_engine(Core*);
-        if (gpu_gpu_wide_engine(core) && s_prev_had3d) {       // only widen 2D on gameplay frames (else pillarbox)
-          // #38: PROVENANCE-only backdrop test for stretch-fill (node_is_bg / sprite_is_bg_texpage), not
-          // `bg`'s coverage heuristic — pins the weapon carousel panel to the centered/HUD branch instead
-          // of stretch-filling it to the screen edges. `bg` (RQ_BACKGROUND band) is unchanged.
-          int fill = (node_is_bg(s_cur_node) || sprite_is_bg_texpage(core, s_tp_x, s_tp_y)) || fade_full;  // backdrop AND full-screen fade/dim stretch-to-fill (#21)
+        // #38: PROVENANCE-only backdrop test for stretch-fill (node_is_bg / sprite_is_bg_texpage), not
+        // `bg`'s coverage heuristic — pins the weapon carousel panel to the centered/HUD branch instead
+        // of stretch-filling it to the screen edges. `bg` (RQ_BACKGROUND band) is unchanged.
+        int fill = (node_is_bg(s_cur_node) || sprite_is_bg_texpage(core, s_tp_x, s_tp_y)) || fade_full;  // backdrop AND full-screen fade/dim stretch-to-fill (#21)
+        if (fill) s_seen_bg2d = 1;   // #54: this frame owns a full-screen 2D backdrop redraw (menu/title)
+        // widen on gameplay frames (3D last frame) OR a full-screen 2D backdrop redraw last frame (#54).
+        if (gpu_gpu_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
           XL = ws_2d_local_x(core, XL, fill);                   // engine-owned 2D layout (HUD centered, bg/fade fills)
           XR = ws_2d_local_x(core, XR, fill);
         } }
@@ -1154,10 +1158,14 @@ void GpuState::gp0_exec(Core* core) {
     // backdrop clear exactly like a full-screen backdrop poly, so queue an equivalent flat quad
     // through the SAME 2D render-queue path (RQ_BACKGROUND / RQ_OM_2D_BG), pre-stretched by
     // ws_2d_local_x's backdrop rule (x*ww/320) so it fills [0,ww) instead of just [0,320). Gated the
-    // same way the poly/sprite widen is (gpu_gpu_wide_engine + s_prev_had3d, "gameplay frames only").
+    // same way the poly/sprite widen is (gpu_gpu_wide_engine + (s_prev_had3d || s_prev_had_bg2d), #54: a
+    // full-screen FillRect backdrop is just as legitimate a "this frame repaints the whole width" signal
+    // as 3D world geometry — e.g. the title-menu screen, which is pure 2D and never sets s_prev_had3d).
     {
       int gpu_gpu_wide_engine(Core*);
-      if (bg_2d(x, y, x + w, y + h) && gpu_gpu_wide_engine(core) && s_prev_had3d) {
+      int full = bg_2d(x, y, x + w, y + h);
+      if (full) s_seen_bg2d = 1;
+      if (full && gpu_gpu_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
         int ww = gpu_gpu_wide_engine_w(core);
         if (ww > 320) {
           int x0 = ws_2d_local_x(core, x, /*is_bg=*/1), x1 = ws_2d_local_x(core, x + w, /*is_bg=*/1);
@@ -1580,6 +1588,8 @@ void GpuState::frame_finalize(Core* core) {
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
+  s_prev_had_bg2d = s_seen_bg2d;   // #54: remember whether this frame drew a full-screen 2D backdrop
+  s_seen_bg2d = 0;
   { void prim_dump_close_if_done(Core*, int); prim_dump_close_if_done(core, s_frame); }   // PSXPORT_PRIMDUMP: flush the file
 }
 void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
@@ -1589,6 +1599,14 @@ void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 // blacking the DISPLAY region is what removes the visible artifact. Wrap-safe per-pixel (any disp config).
 void GpuState::gpu_blank_display() {            // zero the display FB rect (NO present) — caller presents later
   int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
+  // #54: the display FB IS the wide width once widescreen is active (present() samples [sx,sx+wide_w) —
+  // see GpuGpuState::present's disp_w comment) — clamping this clear to the native 320 left the wide
+  // margin columns unblanked during the title/loading ramp (Engine::drawOTag's `s48<2` blank-display
+  // call), so a transition frame between "blanked" and "backdrop widened" could still show a sliver of
+  // stale VRAM-atlas content in the margin. Blank the FULL wide width so this call is a genuine clear of
+  // everything present() will sample, matching the same width present()/the widen sites already use.
+  { int gpu_gpu_wide_engine(Core*); int gpu_gpu_wide_engine_w(Core*);
+    if (game && gpu_gpu_wide_engine(&game->core)) { int ww = gpu_gpu_wide_engine_w(&game->core); if (ww > dw) dw = ww; } }
   for (int y = 0; y < dh; y++)
     for (int x = 0; x < dw; x++) *vram(s_disp_x + x, s_disp_y + y) = 0;   // opaque black (555, bit15=0)
 }

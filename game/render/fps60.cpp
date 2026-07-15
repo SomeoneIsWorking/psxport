@@ -132,7 +132,14 @@ static int wrapLerp(int prev, int cur, int mod, float t) {
 // observes the lerped camera.
 void Fps60::tier1Render(Core* core, float t) {
   Core* c = core;
-  if (!mSink) mSink = new RenderQueue();
+  // mSink is a bare capture sink (not one of Game's constructor-wired RenderQueue members — see
+  // Game::Game's `rq.game = this` — so its own `game` back-pointer is null unless wired here). #54:
+  // that was harmless while every push2dQuad(RQ_BACKGROUND, ...) call unconditionally forced
+  // dbg_node=0 (never dereferencing `game`) — extending that to also stamp kBackdropDbgNode via
+  // `core->mRender->diag.currentNode()` (render_queue.cpp emitOrQueue) exposed it: push2dQuad resolves
+  // its OWN Core internally as `&game->core` (it takes no Core* param), so a null `game` there crashed
+  // on the very next real-frame backdrop re-render. Wire it once, same as every other Game-owned queue.
+  if (!mSink) { mSink = new RenderQueue(); mSink->game = game; }
   mSink->reset();
 
   Fps60Cam lerp;
@@ -299,13 +306,18 @@ static constexpr uint32_t kTier1Sink = 0xFFFFFFFEu;
 // (Render::backdropRender) is screen-space, GAME-LOGIC-DRIVEN scroll — not camera-projected geometry — so
 // it is never matched/lerped per-prim by the queue-lerp heuristic below; it is re-rendered as ONE layer
 // through the SAME native pass with the scroll offset overridden to a lerp of the two real frames'
-// captured offsets (Fps60::tier1Render), output landing in the same mSink as terrain/scene-table. Its
-// identity is the RQ layer itself: RQ_BACKGROUND has exactly one producer (backdropRender — grep-verified,
-// the only push2dQuad(RQ_BACKGROUND, ...) call site in the tree), so layer IS its real engine identity
-// here; no separate dbg_node sentinel is needed (RQ_BACKGROUND items get dbg_node==0 from emitOrQueue
-// regardless — layer already disambiguates them from every dbg_node==0 RQ_WORLD producer).
+// captured offsets (Fps60::tier1Render), output landing in the same mSink as terrain/scene-table.
+// #54 CORRECTION: "RQ_BACKGROUND has exactly one producer" was FALSE — the generic guest-OT walk
+// (runtime/recomp/gpu_native.cpp) also classifies any full-screen 2D poly/sprite/FillRect as RQ_BACKGROUND
+// by screen coverage (menu backdrop art, hut-interior clear, SOP-narration fills, #52's FillRect widen),
+// completely unrelated to backdropRender. Blanket-excluding the whole layer dropped THOSE prims from every
+// interpolated frame with no fallback (tier1Render never re-renders them — mTier1EligibleCur is field-
+// only) — the title-menu screen went backdrop-less at 60fps, only its HUD text surviving. Fixed: only
+// backdropRender's OWN prims (tagged kBackdropDbgNode, render_walk.cpp) are tier1-owned; every other
+// RQ_BACKGROUND item keeps dbg_node==0 and falls through to the normal per-prim match+lerp/verbatim-
+// fallback path below, same as any other un-owned 2D content.
 static inline bool isTier1Owned(const RqItem& it) {
-  if (it.layer == RQ_BACKGROUND) return true;
+  if (it.layer == RQ_BACKGROUND) return it.dbg_node == kBackdropDbgNode;
   return it.layer == RQ_WORLD && (it.dbg_node == kTerrainDbgNode || it.dbg_node == kSceneTableDbgNode);
 }
 void Fps60::buildProvenanceIdx(const RqItem* items, int n, std::vector<uint32_t>& out) {
