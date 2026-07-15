@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 2 verified · 1 n/a
+**Status:** 3 verified · 1 n/a
 
 ## DEMO/title front-end (whole-scene)
 - **scope:** stage 0x801062E4 boot->title menu (s48 handoff + menu hold + cursor)
@@ -22,6 +22,15 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **evidence:** f2d1b8af 2026-07-15 — 10890 frames 0-diff incl. cursor input; dispatch confirms override fires
 - **owner:** game/scene/demo.cpp (Demo::s2SubMachine)
 - **notes:** byte-exact frame 32 per abi_extract; twin of s3SubMachine
+
+## field entry + scripted hold (logic)
+- **scope:** stage 0x8010637C GAME field entry via hut-entry replay; guest RAM+scratchpad
+- **status:** verified
+- **frames:** 8220
+- **gate:** PSXPORT_NOWINDOW=1 PSXPORT_VK_HEADLESS=1 PSXPORT_NOAUDIO=1 PSXPORT_SBS_MODE=gameplay PSXPORT_SBS_AUTONAV=1 PSXPORT_PAD_REPLAY=replays/scene-transitions/hut-entry-alt.pad ./scratch/bin/tomba2_port
+- **evidence:** ffec2399 2026-07-15 — 8220 frames 0-diff; both cores field-rendering @f216
+- **owner:** game/render/render_walk.cpp (sceneNative reads this state)
+- **notes:** covers field ENTRY + scripted-caught hold (autonav did NOT reach free-roam control); free-roam + sceneNative RENDER correctness (eyeball) still uncovered — see portmap field-world
 
 ## Render::dialogTextNative
 - **scope:** field/hut dialog TEXT producer (pc_render overlay)
