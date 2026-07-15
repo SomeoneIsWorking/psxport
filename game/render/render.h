@@ -196,6 +196,27 @@ public:
   // lands incrementally (font-glyph dual-emit + owning 0x8007E2F8); logo is exact from decoded packets.
   void titleNative();
 
+  // s3MenuNative: the DEMO/title front-end SECOND menu page (sm[0x48]==3, reached from the title by
+  // confirming New Game). RE'd (docs/findings/render.md '#2b'): Demo::s3 unconditionally draws the SAME
+  // chrome + a page-1 menu (FUN_80106824(param1=1) -> item templates 0x90/0x91) — NOT the SOP narration.
+  // Read-only producer; built from the shared data-driven menu emitter below.
+  void s3MenuNative();
+
+  // --- shared DATA-DRIVEN menu emitter (reproduces the guest menu builders, read-only) --------------
+  // menuChrome: black backdrop + the 2 logo sprites (FUN_80106690) shared by every front-end menu page.
+  void menuChrome();
+  // menuItemsAndCursor: reproduces FUN_80106824(param1, param2) — the cursor (template 0x98) + the two
+  // item text-images (templates {0x8e,0x8f} for page 0 / {0x90,0x91} for page 1), with the selected item
+  // RAW (bright) and the other modulated 0x50 (dim), per the live selection. param2 selects which item is
+  // bright AND indexes the cursor-X table @0x80107704.
+  void menuItemsAndCursor(int param1, int param2);
+  // emitMenuFt4: reproduces FUN_8007e1b8 (POLY_FT4 case) — resolve a menu template (idx -> table
+  // @0x80017334 -> header @base 0x80158000 -> `count` 16-byte entries) and emit each as a native FT4 quad,
+  // reading the game's OWN geometry (position/uv/clut/tpage) from guest RAM. attr high-nibble 0 -> RAW,
+  // else modulated by (attr,attr,attr). Decoder validated field-for-field against the title's known-good
+  // quads (templates 0x8e/0x8f/0x98). Retires the hand-decoded per-item constants titleNative used.
+  void emitMenuFt4(int anchorX, int anchorY, uint32_t templateIdx, uint32_t attr, int layer);
+
   // fieldObjectsRender: the field's OBJECT pass — walk the 3 entity lists + Tomba's G-block and flush each
   // live object's geomblk (perObjFlush → projComposeObject → gt3gt4). Factored OUT of sceneNative (which
   // mutates per-frame trust latches and can't be re-run) so Fps60's interp present can RE-RUN it under the

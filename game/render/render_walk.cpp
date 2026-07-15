@@ -271,19 +271,20 @@ void Render::renderTitle() {
   Core* c = mCore;
   c->game->fps60.mTier1EligibleCur = false;
   const uint16_t s48 = c->mem_r16(0x801FE048u);
-  if (s48 == 2) {
+  if (s48 == 2 || s48 == 3) {
     DisplayPassGuard displayPass(c->mRender->mode);   // read-only: reads source state, emits host-only
-    titleNative();
+    if (s48 == 2) titleNative();     // page 0 — New/Load title menu
+    else          s3MenuNative();    // page 1 — the post-New-Game menu (Demo::s3)
     return;
   }
   // s48 < 2: the OP.FMV/SCEA boot ramp. The movie is skipped (accepted deferral, see docs/tomba2-fmv-skip.md)
   // so the only honest picture is a black hold while the front-end loads its menu assets. This is the ONE
   // black substate that is NOT "missing rendering" — it is the deliberately-skipped movie.
   if (s48 < 2) { c->game->gpu.gpu_blank_display(); return; }
-  // Any other front-end substate (attract demo s7, the post-New-Game sub-menus, etc.) has NO native
-  // producer. Per USER (2026-07-15, restated): missing rendering CRASHES — it does not silently black-fill.
+  // Any other front-end substate (attract demo s7, the load-game browser s4, etc.) has NO native producer.
+  // Per USER (2026-07-15, restated): missing rendering CRASHES — it does not silently black-fill.
   // The crash names the substate so it becomes the next rebuild item.
-  abortUnimplemented("DEMO/title front-end substate (sm[0x48]>2) — no native producer");
+  abortUnimplemented("DEMO/title front-end substate (sm[0x48]>3) — no native producer");
 }
 
 // #3 WALKABLE FIELD — native WORLD: terrain + entity/scene tables + objects + backdrop, real per-pixel
@@ -374,63 +375,89 @@ void Render::abortUnimplemented(const char* scene) {
   abort();
 }
 
-// titleNative — see render.h. Read-only producer for the DEMO/title front-end (stage 0x801062E4 s2).
-// Emits the title picture to the native render queue from source state (host-only), so pc_render renders
-// it WITHOUT walking the guest OT. Increment 1: the black backdrop + the 2 logo sprites (exact geometry
-// decoded from the guest op-0x65 packets — fixed title layout). Menu FT4 quads + font text land next as
-// the menu builder (0x8007E2F8) is owned and the font glyph emitter gains a queue dual-emit.
-void Render::titleNative() { Core* c = mCore;
+// emitMenuFt4 — see render.h. Reproduces FUN_8007e1b8's POLY_FT4 path: resolve the template, decode each
+// 16-byte entry, emit a native FT4 quad from the game's OWN geometry (guest RAM). Decoder validated
+// field-for-field against the title's known-good quads (docs/findings/render.md '#2b').
+void Render::emitMenuFt4(int anchorX, int anchorY, uint32_t templateIdx, uint32_t attr, int layer) {
+  Core* c = mCore;
   const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
-  // one textured 2D quad (screen rect x,y,w,h ; texel u,v of size w,h ; texpage/mode ; clut ; color).
-  auto quad = [&](int layer, int x, int y, int w, int h, int u, int v, int tp_x, int tp_y, int mode,
-                  int raw, int clut_x, int clut_y, int r, int g, int b) {
-    int xs[4] = { x + ox, x + w + ox, x + ox,     x + w + ox };
-    int ys[4] = { y + oy, y + oy,     y + h + oy, y + h + oy };
-    int us[4] = { u, u + w, u, u + w };
-    int vs[4] = { v, v, v + h, v + h };
-    unsigned char rr[4] = { (unsigned char)r, (unsigned char)r, (unsigned char)r, (unsigned char)r };
-    unsigned char gg[4] = { (unsigned char)g, (unsigned char)g, (unsigned char)g, (unsigned char)g };
-    unsigned char bb[4] = { (unsigned char)b, (unsigned char)b, (unsigned char)b, (unsigned char)b };
-    c->game->activeRq().push2dQuad(layer, /*order_2d_fg=*/1, xs, ys, us, vs, rr, gg, bb,
+  const uint32_t tptr = c->mem_r32(0x80017334u + templateIdx * 4u);   // (&PTR_DAT_80017334)[idx]
+  const int      hdr  = (int16_t)c->mem_r16(tptr);                    // *param_2 -> header index
+  const uint32_t psv  = 0x80158000u + (uint32_t)hdr * 4u;             // base + hdr*4
+  const int      cnt  = (int16_t)c->mem_r16(psv);                     // entry count
+  const uint32_t data = 0x80158000u + c->mem_r16(psv + 2u);           // base + data offset
+  const int raw = ((attr & 0xF0u) == 0) ? 1 : 0;                      // high nibble 0 -> RAW, else modulated
+  const unsigned char col = raw ? 0x80 : (unsigned char)attr;
+  for (int k = 0; k < cnt && k < 16; k++) {
+    const uint32_t e = data + (uint32_t)k * 16u;                      // 16-byte FT4 template entry
+    const int x0 = anchorX + (int8_t)c->mem_r8(e + 14u);             // v0 = anchor + entry[14,15]
+    const int y0 = anchorY + (int8_t)c->mem_r8(e + 15u);
+    const int w  = c->mem_r8(e + 10u), h = c->mem_r8(e + 11u);       // width @10, height @11
+    const uint16_t clut = c->mem_r16(e + 2u), tpage = c->mem_r16(e + 6u);
+    int xs[4] = { x0 + ox, x0 + w + ox, x0 + ox,     x0 + w + ox };
+    int ys[4] = { y0 + oy, y0 + oy,     y0 + h + oy, y0 + h + oy };
+    // per-vertex UVs straight from the entry (TL,TR,BL,BR = entry[0,1]/[4,5]/[8,9]/[12,13]).
+    int us[4] = { c->mem_r8(e+0u), c->mem_r8(e+4u), c->mem_r8(e+8u),  c->mem_r8(e+12u) };
+    int vs[4] = { c->mem_r8(e+1u), c->mem_r8(e+5u), c->mem_r8(e+9u),  c->mem_r8(e+13u) };
+    unsigned char cc[4] = { col, col, col, col };
+    const int tp_x = (tpage & 0xF) * 64, tp_y = ((tpage >> 4) & 1) * 256, mode = (tpage >> 7) & 3;
+    const int clut_x = (clut & 0x3F) * 16, clut_y = (clut >> 6) & 0x1FF;
+    c->game->activeRq().push2dQuad(layer, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
                                    tp_x, tp_y, mode, raw, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
-  };
-  // (0) black backdrop behind the art (RQ_BACKGROUND far band). Solid black, mode 3 = untextured.
-  {
-    int xs[4] = { 0, 320, 0, 320 }, ys[4] = { 0, 0, 240, 240 }, z[4] = { 0, 0, 0, 0 };
-    unsigned char k[4] = { 0, 0, 0, 0 };
-    c->game->activeRq().push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, z, z, k, k, k,
-                                   0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
   }
-  // (1) the title art = 2 op-0x65 raw textured sprites, fixed layout (decoded packet constants). Includes
-  //     the baked TOMBA!2 logo + character art + the "(C) 1997-2000 WHOOPEE CAMP" copyright line.
-  quad(RQ_BACKGROUND, 0,   -8, 256, 240, 0, 0, 640, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9A
-  quad(RQ_BACKGROUND, 256, -8,  64, 240, 0, 0, 768, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9C
-  // (2) the New Game / Load Game menu = 2 FT4 text-image quads + a cursor icon. RE-VERIFIED (2026-07-15)
-  //     against the substrate emitter FUN_80106824 + template emitter FUN_8007e1b8 (dumped at the live menu;
-  //     the input side is owned as Demo::s2SubMachine, game/scene/demo.cpp; docs/native-render-2d-panel.md):
-  //       · items are FT4 templates 0x8e/0x8f at anchors (90,180)/(230,180); FUN_8007e1b8 adds the template
-  //         vertex offset (-40,-8)/(-44,-8) -> final top-left (50,172)/(186,172).
-  //       · the SELECTED item draws attr 0 -> RAW (full-bright, RGB ignored); the unselected draws attr 0x50
-  //         -> modulated by (0x50,0x50,0x50) (dimmed). That is the selection highlight.
-  //       · the cursor is template 0x98 at anchor (cursorAnchorX[sel], 176); template offset (-8,-8) ->
-  //         (cursorAnchorX[sel]-8, 168). cursorAnchorX = the game's own 2-entry table {40,180} @0x80107704
-  //         (read live below — not a fitted constant). sel 0 -> cursor x 32, sel 1 -> 172.
-  //     Selection sel = sm[0x68] (sm = *(u32*)0x1F800138) — the byte Demo::s2SubMachine writes. Read-only.
-  uint32_t sm  = c->mem_r32(0x1F800138u);
-  int      sel = sm ? c->mem_r8(sm + 0x68u) : 0;
-  if (sel != 0 && sel != 1) sel = 0;        // s2SubMachine keeps sm[0x68] in {0,1}; guard stale transients
-  // one menu item: selected -> RAW (bright, RGB ignored); unselected -> modulated by 0x50 (FUN_80106824 attr).
-  auto menuItem = [&](int item, int x, int y, int w, int h, int u, int clut_y) {
-    bool seld = (sel == item);
-    int  raw  = seld ? 1 : 0;
-    int  col  = seld ? 0x80 : 0x50;
-    quad(RQ_OVERLAY, x, y, w, h, u, 1, 832, 256, /*mode=*/0, raw, 880, clut_y, col, col, col);
-  };
-  menuItem(0, 50,  172, 80, 16, 0,  509);   // "New Game"
-  menuItem(1, 186, 172, 88, 16, 80, 510);   // "Load Game"
-  // cursor: real anchor from the game's table @0x80107704, minus the RE'd template-0x98 vertex offset (8,8).
-  int cursor_x = (int16_t)c->mem_r16(0x80107704u + (uint32_t)sel * 2u) - 8;
-  quad(RQ_OVERLAY, cursor_x, 168, 16, 16, 80, 112, 384, 0, /*mode=*/0, /*raw=*/1, 480, 247, 0x80,0x80,0x80); // cursor icon
+}
+
+// menuChrome — see render.h. The black backdrop + the 2 logo sprites (FUN_80106690), shared by every
+// front-end menu page. The logos are op-0x65 raw sprites (fixed layout, decoded packet constants).
+void Render::menuChrome() { Core* c = mCore;
+  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  { int xs[4] = { 0, 320, 0, 320 }, ys[4] = { 0, 0, 240, 240 }, z[4] = { 0, 0, 0, 0 };
+    unsigned char k[4] = { 0, 0, 0, 0 };
+    c->game->activeRq().push2dQuad(RQ_BACKGROUND, 0, xs, ys, z, z, k, k, k,
+                                   0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511); }
+  auto logo = [&](int x, int w, int tp_x) {                          // tpage 0x9A(640)/0x9C(768), 8bpp
+    int xs[4] = { x+ox, x+w+ox, x+ox, x+w+ox }, ys[4] = { -8+oy, -8+oy, 232+oy, 232+oy };
+    int us[4] = { 0, w, 0, w }, vs[4] = { 0, 0, 240, 240 };
+    unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };
+    c->game->activeRq().push2dQuad(RQ_BACKGROUND, 1, xs, ys, us, vs, cc, cc, cc,
+                                   tp_x, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0, 0, 0, 0, 0, 0, 1023, 511); };
+  logo(0, 256, 640); logo(256, 64, 768);
+}
+
+// menuItemsAndCursor — see render.h. Reproduces FUN_80106824(param1, param2): the cursor (template 0x98
+// at the game's cursor-X table @0x80107704) then the two item text-images (page-0 {0x8e,0x8f} title, or
+// page-1 {0x90,0x91} s3), the param2-selected item RAW/bright and the other modulated 0x50/dim.
+void Render::menuItemsAndCursor(int param1, int param2) { Core* c = mCore;
+  static const uint32_t TMPL[2][2] = { { 0x8Eu, 0x8Fu }, { 0x90u, 0x91u } };
+  const uint32_t t0 = TMPL[param1 & 1][0], t1 = TMPL[param1 & 1][1];
+  const uint32_t a0 = (param2 == 0) ? 0u : 0x50u, a1 = (param2 == 0) ? 0x50u : 0u;
+  const int cx = (int16_t)c->mem_r16(0x80107704u + (uint32_t)(param2 * 2 + param1 * 4));  // cursor anchor X
+  // Draw items first, cursor last: where a wide item (page-1 item0 at x43) overlaps the cursor (x32..48),
+  // the reference draws the cursor ON TOP (verified by pixel-diff: cursor-last -> RMSE ~0; cursor-first
+  // left a 15px seam at the overlap). The guest OT links cursor after the items but is walked cursor-first.
+  emitMenuFt4(90,  180, t0, a0, RQ_OVERLAY);      // item 0 anchor (90,180)
+  emitMenuFt4(230, 180, t1, a1, RQ_OVERLAY);      // item 1 anchor (230,180)
+  emitMenuFt4(cx, 0xB0, 0x98u, 0u, RQ_OVERLAY);   // cursor (template 0x98, raw), y anchor 176
+}
+
+// titleNative — see render.h. Read-only producer for the DEMO/title front-end page 0 (sm[0x48]==2, the
+// New/Load menu). Chrome (backdrop + logos) + the page-0 menu, entirely data-driven off the guest menu
+// templates (no hand-decoded constants). Selection sel = sm[0x68] (Demo::s2SubMachine writes it); the
+// guest calls FUN_80106824(0, sm[0x68]!=0).
+void Render::titleNative() { Core* c = mCore;
+  menuChrome();
+  uint32_t sm = c->mem_r32(0x1F800138u);
+  int sel = sm ? c->mem_r8(sm + 0x68u) : 0;
+  menuItemsAndCursor(0, (sel != 0) ? 1 : 0);
+}
+
+// s3MenuNative — see render.h. The page-1 menu (sm[0x48]==3, reached by confirming New Game). Same chrome,
+// page-1 templates; the guest (Demo::s3 -> s3SubMachine) calls FUN_80106824(1, sm[0x68]!=2).
+void Render::s3MenuNative() { Core* c = mCore;
+  menuChrome();
+  uint32_t sm = c->mem_r32(0x1F800138u);
+  int s68 = sm ? c->mem_r8(sm + 0x68u) : 2;
+  menuItemsAndCursor(1, (s68 != 2) ? 1 : 0);
 }
 
 void Render::sceneNative() { Core* c = mCore;

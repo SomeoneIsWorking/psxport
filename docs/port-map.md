@@ -3,7 +3,7 @@
 The RE dependency chain. `## ` block per step. Work `portmap.py next`; kill `portmap.py hacks`.
 Detail lives in docs/port-progress.md; this is the queryable real-vs-hack frontier.
 
-**Status:** 2 verified · 1 ported-unverified · 2 todo
+**Status:** 3 verified · 1 ported-unverified · 1 todo
 
 ## title-frontend — DEMO stage s0..s7 + menu logic
 - **scope:** 0x801062E4 stage; Demo::s0..s7; sub-machines 0x8010696C/0x80106AC4
@@ -13,20 +13,20 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **notes:** s2SubMachine owned this session (last unowned title sub-machine); SBS 0-diff (see parity.py)
 
 ## title-render — logo+menu+cursor geometry
-- **scope:** titleNative: FUN_80106690 logos + FUN_80106824 items/cursor via FUN_8007e1b8 templates
+- **scope:** titleNative + shared data-driven menu emitter (menuChrome/menuItemsAndCursor/emitMenuFt4)
 - **status:** verified
 - **order:** 11
 - **deps:** title-frontend — DEMO stage s0..s7 + menu logic
-- **owner:** game/render/render_walk.cpp (titleNative)
-- **notes:** geometry RE-verified against dumped emitters (items templates 0x8e/0x8f, cursor 0x98 + table 0x80107704); prior 'empirical' constants proven exact
+- **owner:** game/render/render_walk.cpp
+- **notes:** now DATA-DRIVEN (reads guest FT4 templates via FUN_8007e1b8 reproduction) — hand-decoded constants retired; title pc-vs-psx RMSE 0.000 (no regression). Shared with s3MenuNative (#2b).
 
 ## newgame-sop-intro (#2b)
-- **scope:** DEMO sm[0x48]==3 = Demo::s3 MENU (logos + FT4 templates 0x90/0x91 + cursor), NOT the SOP narration
-- **status:** todo
+- **scope:** DEMO sm[0x48]==3 = the s3 MENU page (logos + FT4 items 0x90/0x91 + cursor). NOT SOP narration.
+- **status:** verified
 - **order:** 20
 - **deps:** title-render — logo+menu+cursor geometry
-- **owner:** -
-- **notes:** RE DONE (findings/render.md '#2b'): it's a 2nd menu page structurally identical to titleNative; positions/widths validated, ground truth captured (ram_s3menu.bin, s3menu_ref.ppm). REMAINING: decode FUN_8007e1b8 UV/clut (calibrate on 0x8e), build s3-menu producer, verify by pc-vs-psx pixel-diff. Do NOT route to sceneNative/renderSopNarration.
+- **owner:** game/render/render_walk.cpp (s3MenuNative + shared menuChrome/menuItemsAndCursor/emitMenuFt4)
+- **notes:** BUILT + VERIFIED: data-driven menu emitter reproduces FUN_8007e1b8/FUN_80106824 reading guest templates; s3 menu pc-vs-psx RMSE 0.000, no crash at s48=3. Draw order: items then cursor (cursor on top in overlap).
 
 ## field-world (sceneNative)
 - **scope:** 0x8010637C GAME field: terrain+entities+objects+backdrop, real depth

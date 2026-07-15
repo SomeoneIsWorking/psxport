@@ -2103,7 +2103,7 @@ draft was already byte-faithful.
 
 ## #2b New Game -> DEMO s48=3 is the s3 MENU (not the SOP narration) — build-ready
 - **symptom:** selecting New Game on the title crashes pc_render `unimplemented native rendering ... stage=0x801062E4 sm[0x48]=3 overlay_sig=0x3C021F80`; user "cursor after New Game doesn't work / Circle goes back"
-- **status:** RE done, producer not yet built (2026-07-16)
+- **status:** fixed 2026-07-16 (s3MenuNative, data-driven; s3 pc-vs-psx RMSE 0.000)
 - **cause:** DEMO sm[0x48]==3 is `Demo::s3` (0x801064E8), which UNCONDITIONALLY dispatches the s3 cursor
   sub-machine (0x80106AC4 = Demo::s3SubMachine) — that draws logos (FUN_80106690) + a 2-item menu
   (FUN_80106824(**param1=1**)) + cursor, exactly like the title (s2), just a second page. It is NOT the SOP
