@@ -190,39 +190,36 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // composite has no native producer -> aborts (the void beat 0x800bf9b4==5 has no 3D world at all).
   bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
 
+  // ONE NATIVE RENDERER — no guest-OT transcription anywhere in pc_render. The 3D WORLD comes from the
+  // native scene producers (sceneNative / fieldObjectsRender). The 2D LAYER (HUD, text, billboards,
+  // dialog) comes from its OWN native producers that emit to the render queue during game execution
+  // (e.g. Font::glyphEmit → queue) — NOT from walking the guest OT. The 2d_only OT walk (transcription)
+  // and its s_ot_2d_drawn gate + cover-reconciliation registries are RETIRED (USER 2026-07-15: "break
+  // and rebuild — stop bandaiding"). A 2D producer that isn't rebuilt yet means that 2D is visibly
+  // ABSENT (the honest break), rebuilt one producer at a time — never transcribed.
   if (field && !sop_narration && !authored_subscene) {
-    // WALKABLE FIELD — the native WORLD producer: terrain + entity/scene tables + objects + backdrop,
-    // built from game data with real per-pixel depth (render_walk.cpp). This is fully native.
+    // WALKABLE FIELD — native WORLD: terrain + entity/scene tables + objects + backdrop, real depth.
     c->game->fps60.mTier1EligibleCur = true;   // native field render runs -> fps60 tier-1 may re-render it
-    {
-      DisplayPassGuard displayPass(c->mRender->mode);   // read-only invariant: aborts on any guest write
-      c->mRender->sceneNative();
-      // The field's 2D OVERLAY — HUD, in-game dialog, item bubbles, menus, text — has NO native producer
-      // yet. Probe whether THIS frame needs it: the 2D-only walk classifies the OT, dropping the native-
-      // owned world/backdrop and counting only genuine overlay prims into s_ot_2d_drawn. If any is present,
-      // crash below: rendering the native world WITHOUT its UI would MASK the missing overlay — the fallback
-      // the directive bans. A genuinely UI-free frame (count 0) presents the native world alone.
-      gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/true);
-    }
-    if (c->game->gpu.s_ot_2d_drawn > 0) c->mRender->abortUnimplemented("field 2D overlay (HUD / dialog / item-bubble / menu / text)");
+    DisplayPassGuard displayPass(c->mRender->mode);   // read-only invariant: aborts on any guest write
+    c->mRender->sceneNative();
   } else if (authored_subscene) {
-    // #4 HUT/DOOR INTERIOR (task-sm[0x4c]==3): an OBJECTS-ONLY authored sub-scene. The room is a single
-    // entity-list OBJECT (node 0x800FD850 in HEADS[1]); the NPCs/props are HEADS[0..1] nodes; Tomba is the
-    // G block. fieldObjectsRender() already walks all of them and submits each geomblk via perObjFlush →
-    // gt3gt4 with real depth and the LIVE interior camera (scratchpad, written each frame by fieldFrameX's
-    // CutsceneCamera). We SKIP the exterior world passes (terrain/scene-table/backdrop are VILLAGE data —
-    // running them would draw the wrong thing): this mirrors the substrate's reduced frameX pass, which is
-    // itself objects-only. No new RE — the room object's geomblk is data-driven through the native submit.
+    // #4 HUT/DOOR INTERIOR (task-sm[0x4c]==3): OBJECTS-ONLY native render. The room is entity-list object
+    // 0x800FD850 (HEADS[1]); NPCs/props are HEADS[0..1]; Tomba is the G block — fieldObjectsRender() walks
+    // them all via perObjFlush → gt3gt4 with real depth + the live interior camera (scratchpad, written by
+    // fieldFrameX's CutsceneCamera). Skips the exterior terrain/scene-table/backdrop (village data), the
+    // substrate's reduced frameX pass. 2D (dialog bubble) comes from native producers when rebuilt.
     c->game->fps60.mTier1EligibleCur = false;
-    {
-      DisplayPassGuard displayPass(c->mRender->mode);
-      c->mRender->fieldObjectsRender();
-      // The interior's 2D overlay (dialog bubble / HUD) has no native producer — same gap as the field
-      // (#3b). Probe: a UI-free interior frame presents the native room alone; if an overlay prim is
-      // present, crash rather than mask it.
-      gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/true);
-    }
-    if (c->game->gpu.s_ot_2d_drawn > 0) c->mRender->abortUnimplemented("hut interior 2D overlay (dialog bubble / HUD)");
+    DisplayPassGuard displayPass(c->mRender->mode);
+    c->mRender->fieldObjectsRender();
+  } else if (sop_narration) {
+    // #5 SOP INTRO NARRATION (overlay-sig 0x3C021F80 @ 0x80109450): the WORLD is native via sceneNative
+    // exactly like the walkable field (3D beats: terrain + scene-table + backdrop + narration-prop
+    // objects incl. the vortex node 0x800FBA68). The VOID beat (0x800BF9B4==5) has no 3D world/BG — the
+    // beat==5 guard inside sceneNative drops terrain/scene-table/backdrop and draws the vortex over black.
+    // Caption text comes from the native text producer when rebuilt (currently absent).
+    c->game->fps60.mTier1EligibleCur = true;
+    DisplayPassGuard displayPass(c->mRender->mode);
+    c->mRender->sceneNative();
   } else if (c->mem_r32(0x801FE00Cu) == 0x801062E4u) {
     // #2 DEMO/TITLE front-end (stage 0x801062E4). Substate s2 (sm[0x48]==2) = the static title (logo +
     // New/Load menu + copyright): native producer titleNative() emits the picture to the queue from
@@ -237,12 +234,10 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
       c->game->gpu.gpu_blank_display();                 // loading ramp / FMV-skipped movie/attract -> black
     }
   } else {
+    // Field/SOP/hut/title/DEMO all handled above. Anything else = a stage with no native producer.
     c->game->fps60.mTier1EligibleCur = false;
-    c->mRender->abortUnimplemented(
-      sop_narration     ? "SOP intro narration cutscene (2D composite + 3D beats)" :
-      authored_subscene ? "hut/door interior authored sub-scene (task-sm[0x4c]==3): room geometry + interior camera" :
-      field             ? "field stage in an unclassified render mode" :
-                          "non-field stage (unclassified) — title/DEMO handled above, field handled above");
+    c->mRender->abortUnimplemented(field ? "field stage in an unclassified render mode"
+                                         : "non-field stage (unclassified) with no native producer");
   }
   // ADDITIVE native render subsystem (game/render/mNativeScene) — the decoupled "native experience" pass,
   // gated behind the `rendernative` DIAGNOSTIC channel (off by default). Builds from native scene data.

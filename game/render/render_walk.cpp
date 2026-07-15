@@ -328,7 +328,19 @@ void Render::sceneNative() { Core* c = mCore;
   // ended narration's leftover, now aliasing the just-loaded field overlay's raw bytes — drawing it
   // produced a tiled noise/atlas-grid garbage frame (the narration-end -> fisherman-cutscene loading-
   // screen bug) where the oracle (pure PSX render) shows the expected black load-hold instead.
-  if (mBackdropTrusted && c->mem_r8(0x800bf873u) == 0) {
+  // SOP VOID BEAT (narration *(u8*)0x800bf9b4 == 5): no 3D world, no BG — a pure vortex-over-black beat.
+  // The backdrop struct (0x800ED018) and scene-table (0x800F2418) still hold the PRIOR beat's field data,
+  // so terrain/scene-table/backdrop would paint a stale field/sea behind the swirl (later-281). Skip those
+  // three passes for the void and draw an explicit black background; only the object pass runs (the vortex
+  // node 0x800FBA68). beat!=5 everywhere else, so these guards are no-ops for the walkable field.
+  const bool voidBeat = (c->mem_r8(0x800bf9b4u) == 5);
+  if (voidBeat) {
+    int xs[4] = { 0, 320, 0, 320 }, ys[4] = { 0, 0, 240, 240 }, z[4] = { 0, 0, 0, 0 };
+    unsigned char k[4] = { 0, 0, 0, 0 };
+    c->game->activeRq().push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, z, z, k, k, k,
+                                   0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
+  }
+  if (!voidBeat && mBackdropTrusted && c->mem_r8(0x800bf873u) == 0) {
     uint32_t bgstate = c->mem_r8(0x800bf870u);
     if (bgstate == 0) backdropRender(0x800ed018u);
   }
@@ -363,10 +375,11 @@ void Render::sceneNative() { Core* c = mCore;
     // substrate walk performs; the draw computes its matrices in host memory (native_terrain.cpp).
     // Enumeration+call moved to Render::terrainRenderAll() (submit.cpp) so Fps60's Tier-1 present-time
     // camera-lerp re-render (fps60.cpp) runs the identical sequence, not a hand-duplicated copy.
-    terrainRenderAll();
+    if (!voidBeat) terrainRenderAll();
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
     // Gated on mSceneTableTrusted (computed once, top of this function — see render.h for the writeup).
-    if (mSceneTableTrusted) fieldEntityRender(0x800F2418u);
+    // Also skipped on the SOP void beat (stale field data — see the voidBeat guard above).
+    if (mSceneTableTrusted && !voidBeat) fieldEntityRender(0x800F2418u);
     // (c)+(d) the field's OBJECTS + Tomba — factored into fieldObjectsRender() so Fps60's interp present
     // can re-run the SAME walk under lerped per-object transforms (docs/fps60-rework.md step 2b).
     fieldObjectsRender();
