@@ -252,12 +252,20 @@ void Render::renderStartBoot() {
 void Render::renderTitle() {
   Core* c = mCore;
   c->game->fps60.mTier1EligibleCur = false;
-  if (c->mem_r16(0x801FE048u) == 2) {
+  const uint16_t s48 = c->mem_r16(0x801FE048u);
+  if (s48 == 2) {
     DisplayPassGuard displayPass(c->mRender->mode);   // read-only: reads source state, emits host-only
     titleNative();
-  } else {
-    c->game->gpu.gpu_blank_display();                 // loading ramp / FMV-skipped movie/attract -> black
+    return;
   }
+  // s48 < 2: the OP.FMV/SCEA boot ramp. The movie is skipped (accepted deferral, see docs/tomba2-fmv-skip.md)
+  // so the only honest picture is a black hold while the front-end loads its menu assets. This is the ONE
+  // black substate that is NOT "missing rendering" — it is the deliberately-skipped movie.
+  if (s48 < 2) { c->game->gpu.gpu_blank_display(); return; }
+  // Any other front-end substate (attract demo s7, the post-New-Game sub-menus, etc.) has NO native
+  // producer. Per USER (2026-07-15, restated): missing rendering CRASHES — it does not silently black-fill.
+  // The crash names the substate so it becomes the next rebuild item.
+  abortUnimplemented("DEMO/title front-end substate (sm[0x48]>2) — no native producer");
 }
 
 // #3 WALKABLE FIELD — native WORLD: terrain + entity/scene tables + objects + backdrop, real per-pixel
@@ -336,13 +344,14 @@ void Render::abortUnimplemented(const char* scene) {
   uint16_t sm4a    = c->mem_r16(0x801FE04Au);
   uint16_t sm4c    = c->mem_r16(0x801FE04Cu);
   uint32_t ovsig   = c->mem_r32(0x80109450u);   // loaded MODE overlay's first instruction (scene signature)
+  uint16_t sm48    = c->mem_r16(0x801FE048u);    // DEMO/front-end substate selector
   uint16_t subm4c  = sm ? c->mem_r16(sm + 0x4Cu) : 0xFFFFu;
   fprintf(stderr,
     "\n[FATAL] unimplemented native rendering: %s\n"
-    "        stage=0x%08X sm[0x4a]=%u sm[0x4c]=%u (task-sm[0x4c]=%u) overlay_sig=0x%08X\n"
+    "        stage=0x%08X sm[0x48]=%u sm[0x4a]=%u sm[0x4c]=%u (task-sm[0x4c]=%u) overlay_sig=0x%08X\n"
     "        pc_render has no native producer for this scene/layer. Build it (native scene render) or\n"
     "        drive with PSXPORT_RENDER_PSX=1 (the reference renderer) to reach it. No OT-walk fallback.\n\n",
-    scene, stage, sm4a, sm4c, subm4c, ovsig);
+    scene, stage, sm48, sm4a, sm4c, subm4c, ovsig);
   fflush(stderr);
   abort();
 }
