@@ -2100,3 +2100,26 @@ draft was already byte-faithful.
   just MIRROR_VERIFY. A native is only a safe override if it reproduces the substrate's full guest-stack
   frame (CLAUDE.md "MIRROR THE GUEST STACK") — a pure-function port (Trig) can't be an override without
   it; it stays native for DIRECT callers only (those run native on both SBS cores → no split).
+
+## #2b New Game -> DEMO s48=3 is the s3 MENU (not the SOP narration) — build-ready
+- **symptom:** selecting New Game on the title crashes pc_render `unimplemented native rendering ... stage=0x801062E4 sm[0x48]=3 overlay_sig=0x3C021F80`; user "cursor after New Game doesn't work / Circle goes back"
+- **status:** RE done, producer not yet built (2026-07-16)
+- **cause:** DEMO sm[0x48]==3 is `Demo::s3` (0x801064E8), which UNCONDITIONALLY dispatches the s3 cursor
+  sub-machine (0x80106AC4 = Demo::s3SubMachine) — that draws logos (FUN_80106690) + a 2-item menu
+  (FUN_80106824(**param1=1**)) + cursor, exactly like the title (s2), just a second page. It is NOT the SOP
+  intro narration (the SOP overlay 0x3C021F80 is merely resident from f6, even during the title menu; the
+  actual narration plays LATER at GAME stage, handled by renderSopNarration). So #2b's producer is a MENU
+  renderer, structurally identical to titleNative — do NOT route it to sceneNative/renderSopNarration.
+- **fix:** build a native s3-menu producer (classifyScene: DEMO stage + sm[0x48]==3 -> new SceneKind).
+  Geometry RE'd + validated against the reference (RAM dump scratch/bin/ram_s3menu.bin, ground-truth shot
+  scratch/screenshots/s3menu_ref.ppm): logos = FUN_80106690 (same 2 sprites as title). Items = FT4 templates
+  **0x90/0x91** at anchors (90,180)/(230,180); FUN_8007e1b8 vertex offset -> final top-left **(43,172)/(194,172)**,
+  width=entry[10], height=entry[11] (position decoder VALIDATED: template 0x8e reproduces the title's known
+  (50,172) w80 h16). Cursor = template 0x98 at table 0x80107704[param1=1] = {40,180} - 8 -> (32,172)/(172,172? verify), y=168.
+  Selected item attr 0 (raw/bright), unselected 0x50 (dim). REMAINING PRECISE-RE STEP: the FT4 **UV/clut/tpage**
+  fields of FUN_8007e1b8 (entry[4..7]=uv+clut, entry[0..3]) — decode carefully + calibrate on template 0x8e
+  (must reproduce title item0 u=0,clut_y=509,tpage 0x1D) before trusting 0x90/0x91. VERIFY the built producer
+  by pixel-diff pc_render-shot vs psx_render-shot at s48=3 (tools/perceptual.py / render_cmp.py) + SBS logic
+  0-diff + no-crash. Best structure: own FUN_8007e1b8 + FUN_80106824 natively (data-driven), shared by title
+  + s3 + s6, retiring titleNative's decoded constants.
+- **refs:** game/scene/demo.cpp Demo::s2/s3/s2SubMachine/s3SubMachine; docs/native-render-2d-panel.md; portmap `newgame-sop-intro (#2b)`

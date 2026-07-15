@@ -21,12 +21,12 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **notes:** geometry RE-verified against dumped emitters (items templates 0x8e/0x8f, cursor 0x98 + table 0x80107704); prior 'empirical' constants proven exact
 
 ## newgame-sop-intro (#2b)
-- **scope:** select New Game -> DEMO s48=3, SOP overlay 0x3C021F80 (sustained scene)
+- **scope:** DEMO sm[0x48]==3 = Demo::s3 MENU (logos + FT4 templates 0x90/0x91 + cursor), NOT the SOP narration
 - **status:** todo
 - **order:** 20
-- **deps:** title-frontend — DEMO stage s0..s7 + menu logic
+- **deps:** title-render — logo+menu+cursor geometry
 - **owner:** -
-- **notes:** correctly CRASHES now (fail-fast, no producer). Route DEMO+SOP-overlay to a narration producer; verify per-beat vs reference — do NOT blind-route to renderSopNarration (has pending 2D)
+- **notes:** RE DONE (findings/render.md '#2b'): it's a 2nd menu page structurally identical to titleNative; positions/widths validated, ground truth captured (ram_s3menu.bin, s3menu_ref.ppm). REMAINING: decode FUN_8007e1b8 UV/clut (calibrate on 0x8e), build s3-menu producer, verify by pc-vs-psx pixel-diff. Do NOT route to sceneNative/renderSopNarration.
 
 ## field-world (sceneNative)
 - **scope:** 0x8010637C GAME field: terrain+entities+objects+backdrop, real depth
