@@ -20,7 +20,7 @@
 #include "engine_overrides.h"   // class EngineOverrides — global dispatch table
 #include "render.h"             // full Render definition — c->mRender->mNodeXform
 #include "actor_tomba.h"        // ActorTomba::G_ADDR — buildFromChild's parent-table base (UNWIRED draft)
-
+#include "guest_abi.h"          // GuestFrame/GuestReg/guest_fn — ABI vocabulary (2026-07-14 readability pass)
 
 // Dual-wiring plumbing (same pattern as Math::registerOverrides / ActorReward::registerOverrides):
 // (1) EngineOverrides for callers reaching these via an explicit rec_dispatch(c, addr) (overlay
@@ -35,260 +35,234 @@ extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_80051300(Core*);
 extern void gen_func_80051464(Core*);
 extern void gen_func_800517BC(Core*);
+void rec_dispatch(Core*, uint32_t);
 
-// Guest-stack frame mirrors — RE'd from the generated prologues (gen_func_<addr>, see each
-// function's own comment block above for the exact `sw` sequence). None of these 6 functions
+namespace {
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Node — typed lens over a scene-node record. Same guest addresses as before (this is a faithful
+// port: SBS byte-compares the underlying RAM), just named field accessors instead of scattered
+// `c->mem_rXX(node + 0xNN)`. A "node" plays THREE roles at different call sites, each with its own
+// field group at the SAME struct base — this lens exposes all three under one type since a caller
+// passes whichever record (self/child/parent) is relevant and the offsets are identical either way:
+//   SELF  — a node building its OWN world transform (build/buildWithOffset/buildAxis/buildFromChild):
+//           localEuler(0x54), localScale(0xB8), localPos16(0x2E), anchorLocal(0x88),
+//           worldMatrix(0x98), worldPos(0xAC).
+//   CHILD — an entry in a parent's node+0xC0 child-pointer array, being positioned by the parent's
+//           transform loop (propagate/propagateRotmat/propagateAxis): sentinel(0x06),
+//           childEuler(0x08), childScale(0x38), frameMatrix(0x18), framePos(0x2C).
+//   PARENT/CONTAINER — a node addressing its own children: childCount(0x08)/childCountGuard(0x09)
+//           (yes, same bytes as childEuler's low half when that SAME node is later walked as
+//           someone else's child — that's the guest struct's own field reuse, not a naming choice
+//           here), childPtr(i) (0xC0 + 4*i).
+// frameMatrix(0x18)/framePos(0x2C) are also what worldPosFromLocal/worldPosFromComposed read — see
+// their own comments for the int16-vs-int32 width note.
+struct Node {
+  Core* c;
+  uint32_t base;
+
+  // --- SELF: this node's own world-build fields ---
+  uint32_t localEulerPtr() const   { return base + 0x54u; }   // 3x s16, rotmat/rotX/Y/Z input
+  int16_t  localEulerX() const     { return c->mem_r16s(base + 0x54u); }
+  int16_t  localEulerY() const     { return c->mem_r16s(base + 0x56u); }
+  int16_t  localEulerZ() const     { return c->mem_r16s(base + 0x58u); }
+  int16_t  localScaleX() const     { return c->mem_r16s(base + 0xB8u); }
+  int16_t  localScaleY() const     { return c->mem_r16s(base + 0xBAu); }
+  int16_t  localScaleZ() const     { return c->mem_r16s(base + 0xBCu); }
+  int16_t  localPosX16() const     { return c->mem_r16s(base + 0x2Eu); }
+  int16_t  localPosY16() const     { return c->mem_r16s(base + 0x32u); }
+  int16_t  localPosZ16() const     { return c->mem_r16s(base + 0x36u); }
+  void     setLocalPosX16(int16_t v) { c->mem_w16(base + 0x2Eu, (uint16_t)v); }
+  void     setLocalPosY16(int16_t v) { c->mem_w16(base + 0x32u, (uint16_t)v); }
+  void     setLocalPosZ16(int16_t v) { c->mem_w16(base + 0x36u, (uint16_t)v); }
+  uint32_t anchorLocalPtr() const  { return base + 0x88u; }   // svec, buildWithOffset's local anchor
+  uint32_t worldMatrixPtr() const  { return base + 0x98u; }   // composed world matrix (5-word GTE layout)
+  uint32_t worldPosPtr() const     { return base + 0xACu; }
+  int32_t  worldPosX() const       { return (int32_t)c->mem_r32(base + 0xACu); }
+  int32_t  worldPosY() const       { return (int32_t)c->mem_r32(base + 0xB0u); }
+  int32_t  worldPosZ() const       { return (int32_t)c->mem_r32(base + 0xB4u); }
+  void     setWorldPosX(int32_t v) { c->mem_w32(base + 0xACu, (uint32_t)v); }
+  void     setWorldPosY(int32_t v) { c->mem_w32(base + 0xB0u, (uint32_t)v); }
+  void     setWorldPosZ(int32_t v) { c->mem_w32(base + 0xB4u, (uint32_t)v); }
+
+  // --- CHILD: fields written/read when this node is positioned via a parent's node+0xC0 array ---
+  int16_t  sentinel() const        { return c->mem_r16s(base + 0x06u); }  // -1=root, else sibling idx
+  int16_t  childEulerX() const     { return c->mem_r16s(base + 0x08u); }
+  int16_t  childEulerY() const     { return c->mem_r16s(base + 0x0Au); }
+  int16_t  childEulerZ() const     { return c->mem_r16s(base + 0x0Cu); }
+  int16_t  childScaleX() const     { return c->mem_r16s(base + 0x38u); }
+  int16_t  childScaleY() const     { return c->mem_r16s(base + 0x3Au); }
+  int16_t  childScaleZ() const     { return c->mem_r16s(base + 0x3Cu); }
+  uint32_t frameMatrixPtr() const  { return base + 0x18u; }   // this node's own local/frame matrix
+  uint32_t childEulerPtr() const   { return base + 0x08u; }   // 3x s16 euler triple (rotmat input)
+  uint32_t framePosPtr() const     { return base + 0x2Cu; }
+  int32_t  framePosX32() const     { return (int32_t)c->mem_r32(base + 0x2Cu); }
+  int32_t  framePosY32() const     { return (int32_t)c->mem_r32(base + 0x30u); }
+  int32_t  framePosZ32() const     { return (int32_t)c->mem_r32(base + 0x34u); }
+  void     setFramePosX32(int32_t v) { c->mem_w32(base + 0x2Cu, (uint32_t)v); }
+  void     setFramePosY32(int32_t v) { c->mem_w32(base + 0x30u, (uint32_t)v); }
+  void     setFramePosZ32(int32_t v) { c->mem_w32(base + 0x34u, (uint32_t)v); }
+  void     addFramePos32(int32_t dx, int32_t dy, int32_t dz) {
+    setFramePosX32(framePosX32() + dx); setFramePosY32(framePosY32() + dy); setFramePosZ32(framePosZ32() + dz);
+  }
+  // Low-16 view of the SAME bytes as framePosX32/Y32/Z32 — worldPosFromLocal/worldPosFromComposed
+  // read only the low half (see their own comments; this is a genuine RE'd narrow read, not a bug).
+  int16_t  framePosX16() const     { return c->mem_r16s(base + 0x2Cu); }
+  int16_t  framePosY16() const     { return c->mem_r16s(base + 0x30u); }
+  int16_t  framePosZ16() const     { return c->mem_r16s(base + 0x34u); }
+
+  // --- PARENT/CONTAINER: this node addressing its own children ---
+  uint8_t  childCount() const      { return c->mem_r8(base + 0x08u); }   // loop count node[8]
+  uint8_t  childCountGuard() const { return c->mem_r8(base + 0x09u); }   // continue-bound node[9]
+  uint32_t childPtr(int i) const   { return c->mem_r32(base + 0xC0u + 4u * (uint32_t)i); }
+};
+
+// Scratchpad work areas — one fixed set, reused (with the same meaning) by build/buildWithOffset/
+// propagate/buildFromChild. Named per role, not per call site.
+constexpr uint32_t kScrSrcMatrix = 0x1F800000u;   // 8-word source (diagonal-seeded) matrix
+constexpr uint32_t kScrRot       = 0x1F800020u;   // rotmat/rotX-Y-Z output
+constexpr uint32_t kScrCompose   = 0x1F800040u;   // matMul(rot, srcMatrix) intermediate
+
+// Seed an 8-word scratch block { x,0, y,0, z,0, 0,0 } — the diagonal-matrix shape build()/
+// buildWithOffset()/propagate() all use as their rotmat "scale" input. `x`/`y`/`z` already sign-
+// extended to s32 by the caller (matches the guest's sx16 reads at each field).
+void seedDiagScratch(Core* c, uint32_t scr, int32_t x, int32_t y, int32_t z) {
+  c->mem_w32(scr +  0, (uint32_t)x); c->mem_w32(scr +  4, 0);
+  c->mem_w32(scr +  8, (uint32_t)y); c->mem_w32(scr + 12, 0);
+  c->mem_w32(scr + 16, (uint32_t)z); c->mem_w32(scr + 20, 0);
+  c->mem_w32(scr + 24, 0);           c->mem_w32(scr + 28, 0);
+}
+
+// Guest-stack frame mirrors — RE'd from the generated prologues (gen_func_<addr>), contracts
+// confirmed against `tools/abi_extract.py <addr> --contract` (2026-07-14). None of these functions
 // read/write r29 in their own C++ body (all locals are named C++ variables, not register-mapped
 // stack slots), but the RECOMP side descends a real frame and spills whatever the CALLER currently
 // has in r16../ra at the RE'd offsets, then restores those exact values on return — a net-zero r29
 // move that nonetheless writes real, comparable bytes into guest RAM for the frame's lifetime.
-// Omitting this (as this file did until now) leaves that stack region untouched on the native side
-// while the recomp side's spills/restores run, so whatever OTHER call last wrote there shows through
-// instead — a real, reproducible SBS residual (see docs/findings/render.md / the f117-class
-// NodeXform residual). Mirrored here per the "MIRROR THE GUEST STACK" directive
-// (docs/faithful-execution.md; same pattern as Cull::wrapFrame/performBaseCullFramed and
-// Render::perObjRenderDispatch's GuestFrame): spill the LIVE c->r[..] values (whatever they happen
-// to hold — that's what the substrate's own callee-save spill captures too, since it has no idea
-// what those registers "mean" to the caller) into the RE'd offsets, run the body, then restore.
-//
+// Omitting this leaves that stack region untouched on the native side while the recomp side's
+// spills/restores run, so whatever OTHER call last wrote there shows through instead — a real,
+// reproducible SBS residual (see docs/findings/render.md, the f117-class NodeXform residual).
+// Mirrored per "MIRROR THE GUEST STACK" (docs/faithful-execution.md; same pattern as
+// Cull::wrapFrame/performBaseCullFramed, Render::perObjRenderDispatch's GuestFrame): spill the LIVE
+// c->r[..] values (whatever they happen to hold — that's what the substrate's own callee-save spill
+// captures too, since it has no idea what those registers "mean" to the caller) into the RE'd
+// offsets, run the body, then restore.
+constexpr GuestFrameSpill kBuildSpills[] = {{16, 16}, {17, 20}, {18, 24}, {31, 28}};      // -32
+constexpr GuestFrameSpill kBuildAxisSpills[] = {{16, 16}, {17, 20}, {31, 24}};            // -32
+constexpr GuestFrameSpill kPropagateRotmatSpills[] =                                      // -40
+    {{16, 16}, {17, 20}, {18, 24}, {19, 28}, {20, 32}, {31, 36}};
+constexpr GuestFrameSpill kPropagateAxisSpills[] =                                        // -48
+    {{16, 16}, {17, 20}, {18, 24}, {19, 28}, {20, 32}, {21, 36}, {22, 40}, {31, 44}};
+constexpr GuestFrameSpill kPropagateSpills[] =                                            // -56
+    {{16, 16}, {17, 20}, {18, 24}, {19, 28}, {20, 32}, {21, 36}, {22, 40}, {23, 44}, {31, 48}};
+constexpr GuestFrameSpill kBuildFromChildSpills[] =                                       // -48
+    {{16, 16}, {17, 20}, {18, 24}, {19, 28}, {20, 32}, {21, 36}, {31, 40}};
+constexpr GuestFrameSpill kWorldPosSpills[] = {{16, 16}, {17, 20}, {31, 24}};              // -32
+
+}  // namespace
+
 // REGISTER FAITHFULNESS (2026-07-08, the f117 residual root cause): frame-descent alone is NOT
 // enough. These functions load `node` (and scratch-base pointers) into CALLEE-SAVED registers
 // (`r16=r4`, `r17=r16+152`, …) and then TAIL-CALL a nested NodeXform function (build/buildWithOffset
 // -> propagate, buildAxis -> propagateAxis) whose OWN prologue spills the caller's live r16..r23 into
 // ITS frame. For those spilled bytes to byte-match the substrate, the caller's c->r[16..] must hold
-// the SAME values the recomp computed — but the native C++ body uses local variables and never
-// touches c->r[16..], leaving them stale (a real reproducible SBS diff at 0x801FE8E8: the recomp
+// the SAME values the recomp computed — the native C++ body would otherwise use local variables and
+// never touch c->r[16..], leaving them stale (a real reproducible SBS diff at 0x801FE8E8: the recomp
 // spilled r16=node=0x800FD010 while the native spilled a stale 0x1000). So each OUTER function that
 // makes a nested NodeXform call sets its callee-saved node/scratch registers to the RE'd recomp
-// values after the frame descent (the nested callee then spills the right bytes; the frame RAII
-// still restores the caller's own incoming values on exit). The Math leaves (rotmat/matMul/rotX/…,
-// game/math/gte_math.cpp) are FRAMELESS and touch only r2..r15/r24/r25, so they never spill a
-// callee-saved register — the ONLY nested spills that matter are the NodeXform->NodeXform tail calls.
-namespace {
-// -32: +16 r16, +20 r17, +24 ra   (build 0x80051844, buildWithOffset 0x800518FC, buildAxis 0x80051C8C
-// share this shape except buildAxis's own offsets — see BuildAxisFrame below for its distinct layout)
-struct BuildFrame {
-  Core* c; uint32_t s16, s17, s18, sra;
-  explicit BuildFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]), sra(c_->r[31]) {
-    c->r[29] -= 32;
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 24, s18);
-    c->mem_w32(c->r[29] + 28, sra);
-    c->mem_w32(c->r[29] + 16, s16);
-  }
-  ~BuildFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 28);
-    c->r[18] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 32;
-  }
-};
-// -32: +16 r16, +20 r17, +24 ra   (buildAxis 0x80051C8C)
-struct BuildAxisFrame {
-  Core* c; uint32_t s16, s17, sra;
-  explicit BuildAxisFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), sra(c_->r[31]) {
-    c->r[29] -= 32;
-    c->mem_w32(c->r[29] + 16, s16);
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 24, sra);
-  }
-  ~BuildAxisFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 32;
-  }
-};
-// -40: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 ra   (propagateRotmat 0x80051300)
-struct PropagateRotmatFrame {
-  Core* c; uint32_t s16, s17, s18, s19, s20, sra;
-  explicit PropagateRotmatFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
-      s19(c_->r[19]), s20(c_->r[20]), sra(c_->r[31]) {
-    c->r[29] -= 40;
-    c->mem_w32(c->r[29] + 28, s19);
-    c->mem_w32(c->r[29] + 36, sra);
-    c->mem_w32(c->r[29] + 32, s20);
-    c->mem_w32(c->r[29] + 24, s18);
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 16, s16);
-  }
-  ~PropagateRotmatFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 36);
-    c->r[20] = c->mem_r32(c->r[29] + 32);
-    c->r[19] = c->mem_r32(c->r[29] + 28);
-    c->r[18] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 40;
-  }
-};
-// -48: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 r22, +44 ra   (propagateAxis 0x80051464)
-struct PropagateAxisFrame {
-  Core* c; uint32_t s16, s17, s18, s19, s20, s21, s22, sra;
-  explicit PropagateAxisFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
-      s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), s22(c_->r[22]), sra(c_->r[31]) {
-    c->r[29] -= 48;
-    c->mem_w32(c->r[29] + 32, s20);
-    c->mem_w32(c->r[29] + 44, sra);
-    c->mem_w32(c->r[29] + 40, s22);
-    c->mem_w32(c->r[29] + 36, s21);
-    c->mem_w32(c->r[29] + 28, s19);
-    c->mem_w32(c->r[29] + 24, s18);
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 16, s16);
-  }
-  ~PropagateAxisFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 44);
-    c->r[22] = c->mem_r32(c->r[29] + 40);
-    c->r[21] = c->mem_r32(c->r[29] + 36);
-    c->r[20] = c->mem_r32(c->r[29] + 32);
-    c->r[19] = c->mem_r32(c->r[29] + 28);
-    c->r[18] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 48;
-  }
-};
-// -56: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 r22, +44 r23, +48 ra (propagate 0x80051128)
-struct PropagateFrame {
-  Core* c; uint32_t s16, s17, s18, s19, s20, s21, s22, s23, sra;
-  explicit PropagateFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
-      s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), s22(c_->r[22]), s23(c_->r[23]), sra(c_->r[31]) {
-    c->r[29] -= 56;
-    c->mem_w32(c->r[29] + 28, s19);
-    c->mem_w32(c->r[29] + 48, sra);
-    c->mem_w32(c->r[29] + 44, s23);
-    c->mem_w32(c->r[29] + 40, s22);
-    c->mem_w32(c->r[29] + 36, s21);
-    c->mem_w32(c->r[29] + 32, s20);
-    c->mem_w32(c->r[29] + 24, s18);
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 16, s16);
-  }
-  ~PropagateFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 48);
-    c->r[23] = c->mem_r32(c->r[29] + 44);
-    c->r[22] = c->mem_r32(c->r[29] + 40);
-    c->r[21] = c->mem_r32(c->r[29] + 36);
-    c->r[20] = c->mem_r32(c->r[29] + 32);
-    c->r[19] = c->mem_r32(c->r[29] + 28);
-    c->r[18] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 56;
-  }
-};
-}  // namespace
-
-void NodeXform::build(uint32_t node) {
+// values (via GuestReg<N>, below) after the frame descent — the nested callee then spills the right
+// bytes; the frame RAII still restores the caller's own incoming values on exit. The Math leaves
+// (rotmat/matMul/rotX/…, game/math/gte_math.cpp) are FRAMELESS and touch only r2..r15/r24/r25, so
+// they never spill a callee-saved register — the ONLY nested spills that matter are the
+// NodeXform->NodeXform tail calls.
+void NodeXform::build(uint32_t nodeAddr) {
   Core* c = core;
-  BuildFrame frame(c);
-  const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
-  const uint32_t SCR_R = 0x1F800020u;   // rot output
-  // register faithfulness for the nested propagate() spill (gen_func_80051844: r16=SCR_M, r17=node,
-  // r18=SCR_R at the func_80051128 tail call).
-  c->r[16] = SCR_M; c->r[17] = node; c->r[18] = SCR_R;
-  c->mem_w32(SCR_M +  4, 0);
-  c->mem_w32(SCR_M + 12, 0);
-  c->mem_w32(SCR_M + 20, 0);
-  c->mem_w32(SCR_M + 24, 0);
-  c->mem_w32(SCR_M + 28, 0);
-  c->mem_w32(SCR_M +  0, (uint32_t)c->mem_r16s(node + 184));
-  c->mem_w32(SCR_M +  8, (uint32_t)c->mem_r16s(node + 186));
-  c->mem_w32(SCR_M + 16, (uint32_t)c->mem_r16s(node + 188));
-  c->math.rotmat(node + 84, SCR_R);                            // libgte RotMatrix at 0x80085480
-  c->math.matMul(SCR_R, SCR_M, node + 152);                    // node.mat152 = rot × mat 0x80084110
-  c->mem_w32(node + 172, (uint32_t)c->mem_r16s(node + 46));
-  c->mem_w32(node + 176, (uint32_t)c->mem_r16s(node + 50));
-  c->mem_w32(node + 180, (uint32_t)c->mem_r16s(node + 54));
-  propagate(node);
+  GuestFrame<32, 4> frame(c, kBuildSpills);
+  Node node{c, nodeAddr};
+  // register faithfulness for the nested propagate() spill (gen_func_80051844: r16=scratch source
+  // matrix, r17=node, r18=scratch rot output, at the func_80051128 tail call).
+  GuestReg<16> r16(c); GuestReg<17> r17(c); GuestReg<18> r18(c);
+  r16 = kScrSrcMatrix; r17 = nodeAddr; r18 = kScrRot;
+
+  seedDiagScratch(c, kScrSrcMatrix, node.localScaleX(), node.localScaleY(), node.localScaleZ());
+  c->math.rotmat(node.localEulerPtr(), kScrRot);                  // libgte RotMatrix at 0x80085480
+  c->math.matMul(kScrRot, kScrSrcMatrix, node.worldMatrixPtr());  // world matrix = rot × scale (0x80084110)
+  node.setWorldPosX(node.localPosX16());                          // world-space position copy
+  node.setWorldPosY(node.localPosY16());
+  node.setWorldPosZ(node.localPosZ16());
+  propagate(nodeAddr);
 }
 
 // NodeXform::buildWithOffset — PC-native reimpl of guest FUN_800518FC.
 //
 // RE'd from disas 0x800518FC. Sibling of NodeXform::build (FUN_80051844): identical scratchpad
-// seeding + rotmat + matMul (node+0x98 = rot(node+0x54 euler) × M(sx16(node+0xB8/BA/BC) on the
-// diagonal of an 8-word source matrix)). The two diverge at the world-position step:
-//   - build():           node[+0xAC/B0/B4] = sx16(node[+0x2E/32/36])                       [direct]
-//   - buildWithOffset(): node[+0xAC/B0/B4] = ApplyMatrixLV(node+0x98, node+0x88)
-//                                            + sx16(node[+0x2E/32/36])                    [rotated]
-// i.e. the local anchor svec at node+0x88 is rotated by the composed matrix and the node's own
-// world position (node+0x2E/32/36) is then added on top. Ends with propagate(node) — same as
-// build(). All callees already native (Math::rotmat/matMul/applyMatrixLV, NodeXform::propagate).
+// seeding + rotmat + matMul (world matrix = rot(local euler) × scale(local scale diag)). The two
+// diverge at the world-position step:
+//   - build():           worldPos = sx16(localPos16)                                    [direct]
+//   - buildWithOffset(): worldPos = ApplyMatrixLV(worldMatrix, anchorLocal) + sx16(localPos16)
+//                                                                                       [rotated]
+// i.e. the local anchor svec is rotated by the composed matrix and the node's own local position is
+// then added on top. Ends with propagate(node) — same as build(). All callees already native
+// (Math::rotmat/matMul/applyMatrixLV, NodeXform::propagate).
 //
 // Callsites (5, all AI behaviour handlers): beh_cull_substate_orchestrator, beh_area_event_dispatch,
 // beh_id_compare_motion_dispatch (×3).
-void NodeXform::buildWithOffset(uint32_t node) {
+void NodeXform::buildWithOffset(uint32_t nodeAddr) {
   Core* c = core;
-  BuildFrame frame(c);
-  // register faithfulness for the nested propagate() spill (gen_func_800518FC: same r16/r17/r18 shape
-  // as build — r16=SCR_M, r17=node, r18=SCR_R at the func_80051128 tail call).
-  c->r[16] = 0x1F800000u; c->r[17] = node; c->r[18] = 0x1F800020u;
-  const uint32_t SCR_M = 0x1F800000u;   // 8-word source matrix
-  const uint32_t SCR_R = 0x1F800020u;   // rot output
-  c->mem_w32(SCR_M +  4, 0);
-  c->mem_w32(SCR_M + 12, 0);
-  c->mem_w32(SCR_M + 20, 0);
-  c->mem_w32(SCR_M + 24, 0);
-  c->mem_w32(SCR_M + 28, 0);
-  c->mem_w32(SCR_M +  0, (uint32_t)c->mem_r16s(node + 0xB8));
-  c->mem_w32(SCR_M +  8, (uint32_t)c->mem_r16s(node + 0xBA));
-  c->mem_w32(SCR_M + 16, (uint32_t)c->mem_r16s(node + 0xBC));
-  c->math.rotmat(node + 0x54, SCR_R);
-  c->math.matMul(SCR_R, SCR_M, node + 0x98);
-  c->math.applyMatrixLV(node + 0x98, node + 0x88, node + 0xAC);
-  // pos += own world position (int16 sign-extended). Order matches disas (X, then Y+Z paired).
-  c->mem_w32(node + 0xAC, c->mem_r32(node + 0xAC) + (uint32_t)(int32_t)c->mem_r16s(node + 0x2E));
-  c->mem_w32(node + 0xB0, c->mem_r32(node + 0xB0) + (uint32_t)(int32_t)c->mem_r16s(node + 0x32));
-  c->mem_w32(node + 0xB4, c->mem_r32(node + 0xB4) + (uint32_t)(int32_t)c->mem_r16s(node + 0x36));
-  propagate(node);
+  GuestFrame<32, 4> frame(c, kBuildSpills);
+  Node node{c, nodeAddr};
+  // register faithfulness for the nested propagate() spill — same r16/r17/r18 shape as build().
+  GuestReg<16> r16(c); GuestReg<17> r17(c); GuestReg<18> r18(c);
+  r16 = kScrSrcMatrix; r17 = nodeAddr; r18 = kScrRot;
+
+  seedDiagScratch(c, kScrSrcMatrix, node.localScaleX(), node.localScaleY(), node.localScaleZ());
+  c->math.rotmat(node.localEulerPtr(), kScrRot);
+  c->math.matMul(kScrRot, kScrSrcMatrix, node.worldMatrixPtr());
+  c->math.applyMatrixLV(node.worldMatrixPtr(), node.anchorLocalPtr(), node.worldPosPtr());
+  // pos += own local position (int16 sign-extended). Order matches disas (X, then Y+Z paired).
+  node.setWorldPosX(node.worldPosX() + node.localPosX16());
+  node.setWorldPosY(node.worldPosY() + node.localPosY16());
+  node.setWorldPosZ(node.worldPosZ() + node.localPosZ16());
+  propagate(nodeAddr);
 }
 
 // FUN_80051128 — per-object CHILD-NODE TRANSFORM loop. RE'd from disas:
-//   guard: if node[9]==0 -> return
-//   loop s2 in [0, node[8]) with continue-bound node[9] (dual-bound idiom):
-//     child = node[0xC0 + 4*s2]
-//     seed scratchpad @0x1F800000: diagonal { child[56], 0, child[58], 0, child[60], 0, 0, 0 }
-//     rotmat(child+8 euler → 0x1F800020) ; matMul(rot, work → 0x1F800040)
-//     sentinel = child+6 (s16)
-//     ROOT (sentinel==-1): matMul(node+152, 0x1F800040 → child+24); applyMatlv(child → child+44);
-//       child[0x2C/0x30/0x34] += node[0xAC/0xB0/0xB4]
-//     SIBLING: p = node[0xC0 + 4*sentinel]; matMul(p+24, 0x1F800040 → child+24); applyMatlv(...)
-//       child[0x2C/0x30/0x34] += p[0x2C/0x30/0x34]
-// (GOTCHAS: +56/58/60 are sign-extended lhu+sll16+sra16; sentinel is sll'd by 2 before the branch
-// so in the sibling path it's already a byte offset. NO render packets, NO GTE ops.)
-void NodeXform::propagate(uint32_t node) {
+//   guard: if node.childCountGuard()==0 -> return
+//   loop i in [0, node.childCount()) with continue-bound childCountGuard() (dual-bound idiom):
+//     child = node.childPtr(i)
+//     seed scratchpad @kScrSrcMatrix: diagonal { child.childScale, 0,0,0 }
+//     rotmat(child.childEuler → kScrRot) ; matMul(rot, srcMatrix → kScrCompose)
+//     ROOT (child.sentinel()==-1): matMul(node.worldMatrix, kScrCompose → child.frameMatrix);
+//       applyMatlv(child → child.framePos); child.framePos += node.worldPos
+//     SIBLING: p = node.childPtr(sentinel); matMul(p.frameMatrix, kScrCompose → child.frameMatrix);
+//       applyMatlv(...); child.framePos += p.framePos
+// (GOTCHAS: childScale fields are sign-extended lhu+sll16+sra16; sentinel is sll'd by 2 before the
+// branch so in the sibling path it's already a byte offset — childPtr(i) does that shift itself, so
+// passing the raw sentinel value works unchanged. NO render packets, NO GTE ops.)
+void NodeXform::propagate(uint32_t nodeAddr) {
   Core* c = core;
-  PropagateFrame frame(c);
-  if (c->mem_r8(node + 9) == 0) return;
+  GuestFrame<56, 9> frame(c, kPropagateSpills);
+  Node node{c, nodeAddr};
+  if (node.childCountGuard() == 0) return;
   int i = 0;
-  while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
-    uint32_t child = c->mem_r32(node + 0xC0 + 4u * (uint32_t)i);
-    c->mem_w32(0x1F800004u, 0); c->mem_w32(0x1F80000Cu, 0); c->mem_w32(0x1F800014u, 0);
-    c->mem_w32(0x1F800018u, 0); c->mem_w32(0x1F80001Cu, 0);
-    c->mem_w32(0x1F800000u, (uint32_t)c->mem_r16s(child + 56));
-    c->mem_w32(0x1F800008u, (uint32_t)c->mem_r16s(child + 58));
-    c->mem_w32(0x1F800010u, (uint32_t)c->mem_r16s(child + 60));
-    int16_t sentinel = c->mem_r16s(child + 6);
-    c->math.rotmat(child + 8, 0x1F800020u);
-    c->math.matMul(0x1F800020u, 0x1F800000u, 0x1F800040u);
+  while (i < (int)node.childCount()) {
+    Node child{c, node.childPtr(i)};
+    seedDiagScratch(c, kScrSrcMatrix, child.childScaleX(), child.childScaleY(), child.childScaleZ());
+    int16_t sentinel = child.sentinel();
+    c->math.rotmat(child.childEulerPtr(), kScrRot);
+    c->math.matMul(kScrRot, kScrSrcMatrix, kScrCompose);
     if (sentinel == -1) {
-      c->math.matMul(node + 152, 0x1F800040u, child + 24);
-      c->math.applyMatlv(child, child + 44);
-      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
-      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
-      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
+      c->math.matMul(node.worldMatrixPtr(), kScrCompose, child.frameMatrixPtr());
+      c->math.applyMatlv(child.base, child.framePosPtr());
+      child.addFramePos32(node.worldPosX(), node.worldPosY(), node.worldPosZ());
     } else {
-      uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      c->math.matMul(p + 24, 0x1F800040u, child + 24);
-      c->math.applyMatlv(child, child + 44);
-      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
-      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
-      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
+      Node p{c, node.childPtr((int)sentinel)};
+      c->math.matMul(p.frameMatrixPtr(), kScrCompose, child.frameMatrixPtr());
+      c->math.applyMatlv(child.base, child.framePosPtr());
+      child.addFramePos32(p.framePosX32(), p.framePosY32(), p.framePosZ32());
     }
     i++;
-    if (!(i < (int)(uint8_t)c->mem_r8(node + 9))) break;
+    if (!(i < (int)node.childCountGuard())) break;
   }
 }
 
@@ -296,125 +270,107 @@ void NodeXform::propagate(uint32_t node) {
 // against generated/shard_5.c gen_func_800517BC (sign-extends a1-a3 from int16 first).
 void NodeXform::seedBlock(uint32_t ptr, int16_t x, int16_t y, int16_t z) {
   Core* c = core;
-  c->mem_w32(ptr +  0, (uint32_t)(int32_t)x);
-  c->mem_w32(ptr +  4, 0);
-  c->mem_w32(ptr +  8, (uint32_t)(int32_t)y);
-  c->mem_w32(ptr + 12, 0);
-  c->mem_w32(ptr + 16, (uint32_t)(int32_t)z);
-  c->mem_w32(ptr + 20, 0);
-  c->mem_w32(ptr + 24, 0);
-  c->mem_w32(ptr + 28, 0);
+  seedDiagScratch(c, ptr, x, y, z);
 }
 
 // FUN_80051300 — per-object CHILD-NODE TRANSFORM loop, rotmat-single-call variant. RE'd +
 // cross-checked verbatim against generated/shard_1.c gen_func_80051300 (ground truth for the
 // register-level shape; this port keeps the same control flow, using the already-native
 // Math::rotmat/matMul/applyMatlv leaves in place of func_80085480/80084110/80084220):
-//   guard: if node[9]==0 -> return
-//   loop i in [0, node[8]) with continue-bound node[9] (dual-bound idiom, same as propagate()):
-//     child = node[0xC0 + 4*i]
-//     Math::rotmat(child+8 euler-triple -> scratch 0x1F800000)
-//     sentinel = (s16)child[6]
-//     ROOT (sentinel==-1): Math::matMul(node+0x98, scratch, child+0x18)
-//     SIBLING:             p = node[0xC0 + 4*sentinel]; Math::matMul(p+0x18, scratch, child+0x18)
-//     Math::applyMatlv(child, child+0x2C)                  // reads the matrix matMul just loaded
-//                                                            // into GTE CR via its CTC2 side effect
-//     child[0x2C/0x30/0x34] += (ROOT: node[0xAC/B0/B4]) or (SIBLING: p[0x2C/0x30/0x34])
+//   guard: if node.childCountGuard()==0 -> return
+//   loop i in [0, node.childCount()) with continue-bound childCountGuard() (dual-bound idiom, same
+//   as propagate()):
+//     child = node.childPtr(i)
+//     Math::rotmat(child.childEuler -> scratch kScrSrcMatrix)
+//     ROOT (child.sentinel()==-1): Math::matMul(node.worldMatrix, scratch, child.frameMatrix)
+//     SIBLING:                     p = node.childPtr(sentinel); Math::matMul(p.frameMatrix, scratch,
+//                                  child.frameMatrix)
+//     Math::applyMatlv(child, child.framePos)      // reads the matrix matMul just loaded into GTE
+//                                                    // CR via its CTC2 side effect
+//     child.framePos += (ROOT: node.worldPos) or (SIBLING: p.framePos)
 // Called directly (native C++ call, no rec_dispatch) by GraphicsBind::renderUpdateBody
 // (FUN_800517F8) — its "downstream render setup" step.
-void NodeXform::propagateRotmat(uint32_t node) {
+void NodeXform::propagateRotmat(uint32_t nodeAddr) {
   Core* c = core;
-  PropagateRotmatFrame frame(c);
-  if (c->mem_r8(node + 9) == 0) return;
+  GuestFrame<40, 6> frame(c, kPropagateRotmatSpills);
+  Node node{c, nodeAddr};
+  if (node.childCountGuard() == 0) return;
   int i = 0;
-  while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
-    uint32_t child = c->mem_r32(node + 0xC0 + 4u * (uint32_t)i);
-    int16_t sentinel = c->mem_r16s(child + 6);
-    c->math.rotmat(child + 8, 0x1F800000u);
+  while (i < (int)node.childCount()) {
+    Node child{c, node.childPtr(i)};
+    int16_t sentinel = child.sentinel();
+    c->math.rotmat(child.childEulerPtr(), kScrSrcMatrix);
     if (sentinel == -1) {
-      c->math.matMul(node + 0x98, 0x1F800000u, child + 0x18);
-      c->math.applyMatlv(child, child + 0x2C);
-      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
-      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
-      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
+      c->math.matMul(node.worldMatrixPtr(), kScrSrcMatrix, child.frameMatrixPtr());
+      c->math.applyMatlv(child.base, child.framePosPtr());
+      child.addFramePos32(node.worldPosX(), node.worldPosY(), node.worldPosZ());
     } else {
-      uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      c->math.matMul(p + 0x18, 0x1F800000u, child + 0x18);
-      c->math.applyMatlv(child, child + 0x2C);
-      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
-      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
-      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
+      Node p{c, node.childPtr((int)sentinel)};
+      c->math.matMul(p.frameMatrixPtr(), kScrSrcMatrix, child.frameMatrixPtr());
+      c->math.applyMatlv(child.base, child.framePosPtr());
+      child.addFramePos32(p.framePosX32(), p.framePosY32(), p.framePosZ32());
     }
     i++;
-    if (!(i < (int)(uint8_t)c->mem_r8(node + 9))) break;
+    if (!(i < (int)node.childCountGuard())) break;
   }
 }
 
 // FUN_80051464 — sibling of propagateRotmat(): identical control flow, but the child's rotation is
-// built by an EXPLICIT identity + rotX(child+8)/rotY(child+0xA)/rotZ(child+0xC) composition instead
-// of a single Math::rotmat() call. RE'd + cross-checked verbatim against generated/shard_2.c
-// gen_func_80051464. Tail call of buildAxis(); also reached directly from AI behaviour handlers
-// (beh_anim_trigger_gates.cpp, via rec_dispatch — that caller is an overlay, so rec_dispatch is the
-// only way to reach MAIN from it).
-void NodeXform::propagateAxis(uint32_t node) {
+// built by an EXPLICIT identity + rotX(child.childEulerX)/rotY(child.childEulerY)/
+// rotZ(child.childEulerZ) composition instead of a single Math::rotmat() call. RE'd + cross-checked
+// verbatim against generated/shard_2.c gen_func_80051464. Tail call of buildAxis(); also reached
+// directly from AI behaviour handlers (beh_anim_trigger_gates.cpp, via rec_dispatch — that caller is
+// an overlay, so rec_dispatch is the only way to reach MAIN from it).
+void NodeXform::propagateAxis(uint32_t nodeAddr) {
   Core* c = core;
-  PropagateAxisFrame frame(c);
-  if (c->mem_r8(node + 9) == 0) return;
+  GuestFrame<48, 8> frame(c, kPropagateAxisSpills);
+  Node node{c, nodeAddr};
+  if (node.childCountGuard() == 0) return;
   int i = 0;
-  while (i < (int)(uint8_t)c->mem_r8(node + 8)) {
-    uint32_t child = c->mem_r32(node + 0xC0 + 4u * (uint32_t)i);
-    const uint32_t SCR = 0x1F800000u;
-    c->mem_w32(SCR +  0, 0x1000); c->mem_w32(SCR +  4, 0);
-    c->mem_w32(SCR +  8, 0x1000); c->mem_w32(SCR + 12, 0);
-    c->mem_w32(SCR + 16, 0x1000); c->mem_w32(SCR + 20, 0);
-    c->mem_w32(SCR + 24, 0);      c->mem_w32(SCR + 28, 0);
-    c->math.rotX((int16_t)c->mem_r16s(child + 0x8), SCR);
-    c->math.rotY((int16_t)c->mem_r16s(child + 0xA), SCR);
-    c->math.rotZ((int16_t)c->mem_r16s(child + 0xC), SCR);
-    int16_t sentinel = c->mem_r16s(child + 6);
+  while (i < (int)node.childCount()) {
+    Node child{c, node.childPtr(i)};
+    seedDiagScratch(c, kScrSrcMatrix, 0x1000, 0x1000, 0x1000);   // identity (1.0 in GTE 4.12 fixed)
+    c->math.rotX(child.childEulerX(), kScrSrcMatrix);
+    c->math.rotY(child.childEulerY(), kScrSrcMatrix);
+    c->math.rotZ(child.childEulerZ(), kScrSrcMatrix);
+    int16_t sentinel = child.sentinel();
     if (sentinel == -1) {
-      c->math.matMul(node + 0x98, SCR, child + 0x18);
-      c->math.applyMatlv(child, child + 0x2C);
-      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(node + 0xAC));
-      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(node + 0xB0));
-      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(node + 0xB4));
+      c->math.matMul(node.worldMatrixPtr(), kScrSrcMatrix, child.frameMatrixPtr());
+      c->math.applyMatlv(child.base, child.framePosPtr());
+      child.addFramePos32(node.worldPosX(), node.worldPosY(), node.worldPosZ());
     } else {
-      uint32_t p = c->mem_r32(node + 0xC0 + 4u * (uint32_t)(int)sentinel);
-      c->math.matMul(p + 0x18, SCR, child + 0x18);
-      c->math.applyMatlv(child, child + 0x2C);
-      c->mem_w32(child + 0x2C, c->mem_r32(child + 0x2C) + c->mem_r32(p + 0x2C));
-      c->mem_w32(child + 0x30, c->mem_r32(child + 0x30) + c->mem_r32(p + 0x30));
-      c->mem_w32(child + 0x34, c->mem_r32(child + 0x34) + c->mem_r32(p + 0x34));
+      Node p{c, node.childPtr((int)sentinel)};
+      c->math.matMul(p.frameMatrixPtr(), kScrSrcMatrix, child.frameMatrixPtr());
+      c->math.applyMatlv(child.base, child.framePosPtr());
+      child.addFramePos32(p.framePosX32(), p.framePosY32(), p.framePosZ32());
     }
     i++;
-    if (!(i < (int)(uint8_t)c->mem_r8(node + 9))) break;
+    if (!(i < (int)node.childCountGuard())) break;
   }
 }
 
-// FUN_80051C8C — node-level sibling of build(): composes THIS node's own world matrix at node+0x98
-// via identity + rotX(node+0x54)/rotY(node+0x56)/rotZ(node+0x58) (explicit per-axis, matching
-// propagateAxis's convention — NOT a single rotmat() call), copies the raw local position
-// (node+0x2E/32/36) straight into the world-pos triple (node+0xAC/B0/B4, NO rotation applied,
-// unlike buildWithOffset), then tail-calls propagateAxis(node). RE'd + cross-checked verbatim
-// against generated/shard_5.c gen_func_80051C8C.
-void NodeXform::buildAxis(uint32_t node) {
+// FUN_80051C8C — node-level sibling of build(): composes THIS node's own world matrix via
+// identity + rotX(localEulerX)/rotY(localEulerY)/rotZ(localEulerZ) (explicit per-axis, matching
+// propagateAxis's convention — NOT a single rotmat() call), copies the raw local position straight
+// into the world-pos triple (NO rotation applied, unlike buildWithOffset), then tail-calls
+// propagateAxis(node). RE'd + cross-checked verbatim against generated/shard_5.c gen_func_80051C8C.
+void NodeXform::buildAxis(uint32_t nodeAddr) {
   Core* c = core;
-  BuildAxisFrame frame(c);
+  GuestFrame<32, 3> frame(c, kBuildAxisSpills);
+  Node node{c, nodeAddr};
   // register faithfulness for the nested propagateAxis() spill (gen_func_80051C8C: r16=node,
-  // r17=node+152 at the func_80051464 tail call — the exact f117 residual writer).
-  c->r[16] = node; c->r[17] = node + 152u;
-  const uint32_t M = node + 0x98;
-  c->mem_w32(M +  0, 0x1000); c->mem_w32(M +  4, 0);
-  c->mem_w32(M +  8, 0x1000); c->mem_w32(M + 12, 0);
-  c->mem_w32(M + 16, 0x1000); c->mem_w32(M + 20, 0);
-  c->mem_w32(M + 24, 0);      c->mem_w32(M + 28, 0);
-  c->math.rotX((int16_t)c->mem_r16s(node + 0x54), M);
-  c->math.rotY((int16_t)c->mem_r16s(node + 0x56), M);
-  c->math.rotZ((int16_t)c->mem_r16s(node + 0x58), M);
-  c->mem_w32(node + 0xAC, (uint32_t)(int32_t)c->mem_r16s(node + 0x2E));
-  c->mem_w32(node + 0xB0, (uint32_t)(int32_t)c->mem_r16s(node + 0x32));
-  c->mem_w32(node + 0xB4, (uint32_t)(int32_t)c->mem_r16s(node + 0x36));
-  propagateAxis(node);
+  // r17=node.worldMatrix at the func_80051464 tail call — the exact f117 residual writer).
+  GuestReg<16> r16(c); GuestReg<17> r17(c);
+  r16 = nodeAddr; r17 = node.worldMatrixPtr();
+
+  seedDiagScratch(c, node.worldMatrixPtr(), 0x1000, 0x1000, 0x1000);   // identity
+  c->math.rotX(node.localEulerX(), node.worldMatrixPtr());
+  c->math.rotY(node.localEulerY(), node.worldMatrixPtr());
+  c->math.rotZ(node.localEulerZ(), node.worldMatrixPtr());
+  node.setWorldPosX(node.localPosX16());
+  node.setWorldPosY(node.localPosY16());
+  node.setWorldPosZ(node.localPosZ16());
+  propagateAxis(nodeAddr);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -430,151 +386,101 @@ void NodeXform::copyMatrixBlock(uint32_t src, uint32_t dst) {
   for (int i = 0; i < 5; i++) c->mem_w32(dst + (uint32_t)i * 4, c->mem_r32(src + (uint32_t)i * 4));
 }
 
-namespace {
-// -48: +16 r16, +20 r17, +24 r18, +28 r19, +32 r20, +36 r21, +40 ra. Confirmed verbatim against
-// generated/shard_3.c gen_func_80051614 lines 13334-13425 (2026-07-08 frontier wiring pass — the
-// prior draft had every register shifted +4 off these real offsets).
-struct BuildFromChildFrame {
-  Core* c; uint32_t s16, s17, s18, s19, s20, s21, sra;
-  explicit BuildFromChildFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), s18(c_->r[18]),
-      s19(c_->r[19]), s20(c_->r[20]), s21(c_->r[21]), sra(c_->r[31]) {
-    c->r[29] -= 48;
-    c->mem_w32(c->r[29] + 36, s21);
-    c->mem_w32(c->r[29] + 32, s20);
-    c->mem_w32(c->r[29] + 28, s19);
-    c->mem_w32(c->r[29] + 24, s18);
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 16, s16);
-    c->mem_w32(c->r[29] + 40, sra);
-  }
-  ~BuildFromChildFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 40);
-    c->r[21] = c->mem_r32(c->r[29] + 36);
-    c->r[20] = c->mem_r32(c->r[29] + 32);
-    c->r[19] = c->mem_r32(c->r[29] + 28);
-    c->r[18] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 48;
-  }
-};
-}  // namespace
-
 // FUN_80051614 — RE'd from generated/shard_3.c gen_func_80051614 (ground truth; Ghidra's decompile
 // mislabeled the parent-table read as "(&DAT_800e7f40)[tableIdx]" — the generated C computes the
 // base as literal 0x800E7E80, which IS ActorTomba::G_ADDR, so this reads *(G_ADDR + tableIdx*4 +
 // 0xC0): one of Tomba's own child-record slots, not a separate global table):
 //   parent = *(u32*)(G_ADDR + tableIdx*4 + 0xC0)
-//   mode==0:  M = rotmat(node+0x54)                                    [scratch 0x1F800000]
-//   mode!=0:  Mscale = diag(sx16(node+0xB8/BA/BC)); Mrot = rotmat(node+0x54);
-//             M = Mrot × Mscale                                        [0x1F800020, 0x1F800040 -> 0x1F800000]
-//   node+0x98 = parent[+0x18] × M
-//   node+0xAC/B0/B4 = ApplyMatlv(inVec) via the CR loaded by the matMul above (reads parent[+0x18]
-//     as the effective rotation — same CR-coupling idiom as NodeXform::propagate), THEN += parent's
-//     own world translation (parent+0x2C/30/34, 32-bit add) — same accumulate-parent-translation
-//     idiom as NodeXform::propagate/propagateRotmat's root-child case. (2026-07-08 fix: this draft
-//     was missing the += entirely — a real bug, not just an unwired leaf.)
-//   node+0x2E/32/36 = (int16)node+0xAC/B0/B4                            (mirror down, AFTER the add)
+//   mode==0:  M = rotmat(node.localEuler)                              [scratch kScrSrcMatrix]
+//   mode!=0:  scale = diag(node.localScale); rot = rotmat(node.localEuler);
+//             M = rot × scale                             [kScrRot, kScrCompose -> kScrSrcMatrix]
+//   node.worldMatrix = parent.frameMatrix × M
+//   node.worldPos = ApplyMatlv(inVec) via the CR loaded by the matMul above (reads parent.frameMatrix
+//     as the effective rotation — same CR-coupling idiom as NodeXform::propagate), THEN +=
+//     parent.framePos (32-bit add) — same accumulate-parent-translation idiom as
+//     NodeXform::propagate/propagateRotmat's root-child case. (2026-07-08 fix: this draft was
+//     missing the += entirely — a real bug, not just an unwired leaf.)
+//   node.localPos16 = (int16)node.worldPos                              (mirror down, AFTER the add)
 //   mode==0: propagateRotmat(node)     mode!=0: propagate(node)
 // REGISTER FAITHFULNESS (traced against generated/shard_3.c lines 13334-13425 — the callee-saved
 // registers propagate()/propagateRotmat()'s OWN frame will spill at the tail-call site): r16 is
-// ALWAYS 0x1F800000 (the scratch M) on both paths; r17 is 0x1F800020 ONLY on the mode!=0 path — on
-// mode==0 the recomp NEVER touches r17, so it carries whatever buildFromChild's OWN caller left
-// there (this port matches that by simply not writing c->r[17] on the mode==0 path); r18=node,
-// r19=parent, r20=mode, r21=inVec on BOTH paths (propagateRotmat's own frame only spills r16-r20;
-// propagate's spills r16-r23, so r22/r23 are never touched here either way — same "leave alone"
-// argument applies to them). The tail-call ra (0x80051760 for propagate / 0x80051770 for
-// propagateRotmat) IS mirrored into c->r[31] here — every `jal` overwrites $ra unconditionally, so
-// (unlike the OUTER-caller case where a still-substrate caller's own compiled body already sets
-// c->r[31] before reaching an EngineOverrides-intercepted rec_dispatch) an internal tail-call inside
-// an already-native function must set it itself, or the nested frame's ra spill diverges.
-void NodeXform::buildFromChild(uint32_t node, uint32_t inVec, uint32_t tableIdx, uint32_t mode) {
+// ALWAYS kScrSrcMatrix on both paths; r17 is kScrRot ONLY on the mode!=0 path — on mode==0 the
+// recomp NEVER touches r17, so it carries whatever buildFromChild's OWN caller left there (this port
+// matches that by simply not writing c->r[17] on the mode==0 path); r18=node, r19=parent, r20=mode,
+// r21=inVec on BOTH paths (propagateRotmat's own frame only spills r16-r20; propagate's spills
+// r16-r23, so r22/r23 are never touched here either way — same "leave alone" argument applies to
+// them). The tail-call ra (0x80051760 for propagate / 0x80051770 for propagateRotmat) IS mirrored
+// into c->r[31] here — every `jal` overwrites $ra unconditionally, so (unlike the OUTER-caller case
+// where a still-substrate caller's own compiled body already sets c->r[31] before reaching an
+// EngineOverrides-intercepted rec_dispatch) an internal tail-call inside an already-native function
+// must set it itself, or the nested frame's ra spill diverges.
+void NodeXform::buildFromChild(uint32_t nodeAddr, uint32_t inVec, uint32_t tableIdx, uint32_t mode) {
   Core* c = core;
-  BuildFromChildFrame frame(c);
-  const uint32_t SCR_M = 0x1F800000u, SCR_ROT = 0x1F800020u, SCR_SCALE = 0x1F800040u;
-  uint32_t parent = c->mem_r32(ActorTomba::G_ADDR + tableIdx * 4u + 0xC0u);
-  c->r[18] = node; c->r[19] = parent; c->r[20] = mode; c->r[21] = inVec;
+  GuestFrame<48, 7> frame(c, kBuildFromChildSpills);
+  Node node{c, nodeAddr};
+  Node parent{c, c->mem_r32(ActorTomba::G_ADDR + tableIdx * 4u + 0xC0u)};
+  GuestReg<16> r16(c); GuestReg<17> r17(c); GuestReg<18> r18(c);
+  GuestReg<19> r19(c); GuestReg<20> r20(c); GuestReg<21> r21(c); GuestReg<31> ra(c);
+  r18 = nodeAddr; r19 = parent.base; r20 = mode; r21 = inVec;
   if (mode == 0) {
-    c->r[16] = SCR_M;
-    c->math.rotmat(node + 0x54, SCR_M);
+    r16 = kScrSrcMatrix;
+    c->math.rotmat(node.localEulerPtr(), kScrSrcMatrix);
   } else {
-    c->r[16] = SCR_M; c->r[17] = SCR_ROT;
-    c->mem_w32(SCR_SCALE +  4, 0); c->mem_w32(SCR_SCALE + 12, 0); c->mem_w32(SCR_SCALE + 20, 0);
-    c->mem_w32(SCR_SCALE + 24, 0); c->mem_w32(SCR_SCALE + 28, 0);
-    c->mem_w32(SCR_SCALE +  0, (uint32_t)(int32_t)c->mem_r16s(node + 0xB8));
-    c->mem_w32(SCR_SCALE +  8, (uint32_t)(int32_t)c->mem_r16s(node + 0xBA));
-    c->mem_w32(SCR_SCALE + 16, (uint32_t)(int32_t)c->mem_r16s(node + 0xBC));
-    c->math.rotmat(node + 0x54, SCR_ROT);
-    c->math.matMul(SCR_ROT, SCR_SCALE, SCR_M);
+    r16 = kScrSrcMatrix;
+    r17 = kScrRot;
+    seedDiagScratch(c, kScrCompose, node.localScaleX(), node.localScaleY(), node.localScaleZ());
+    c->math.rotmat(node.localEulerPtr(), kScrRot);
+    c->math.matMul(kScrRot, kScrCompose, kScrSrcMatrix);
   }
-  c->math.matMul(parent + 0x18, SCR_M, node + 0x98);
-  c->math.applyMatlv(inVec, node + 0xAC);
-  c->mem_w32(node + 0xAC, c->mem_r32(node + 0xAC) + c->mem_r32(parent + 0x2C));
-  c->mem_w32(node + 0xB0, c->mem_r32(node + 0xB0) + c->mem_r32(parent + 0x30));
-  c->mem_w32(node + 0xB4, c->mem_r32(node + 0xB4) + c->mem_r32(parent + 0x34));
-  c->mem_w16(node + 0x2E, c->mem_r16(node + 0xAC));
-  c->mem_w16(node + 0x32, c->mem_r16(node + 0xB0));
-  c->mem_w16(node + 0x36, c->mem_r16(node + 0xB4));
-  if (mode == 0) { c->r[31] = 0x80051770u; propagateRotmat(node); }
-  else            { c->r[31] = 0x80051760u; propagate(node); }
+  c->math.matMul(parent.frameMatrixPtr(), kScrSrcMatrix, node.worldMatrixPtr());
+  c->math.applyMatlv(inVec, node.worldPosPtr());
+  node.setWorldPosX(node.worldPosX() + parent.framePosX32());
+  node.setWorldPosY(node.worldPosY() + parent.framePosY32());
+  node.setWorldPosZ(node.worldPosZ() + parent.framePosZ32());
+  node.setLocalPosX16((int16_t)node.worldPosX());
+  node.setLocalPosY16((int16_t)node.worldPosY());
+  node.setLocalPosZ16((int16_t)node.worldPosZ());
+  if (mode == 0) { ra = 0x80051770u; propagateRotmat(nodeAddr); }
+  else           { ra = 0x80051760u; propagate(nodeAddr); }
 }
-
-namespace {
-// -32: +16 r16, +20 r17, +24 ra (worldPosFromLocal 0x80051D90, worldPosFromComposed 0x80051D20 --
-// both confirmed against generated/shard_7.c gen_func_80051D90 / generated/shard_6.c gen_func_80051D20:
-// identical frame shape, r17=node, r16=outVec).
-struct WorldPosFrame {
-  Core* c; uint32_t s16, s17, sra;
-  explicit WorldPosFrame(Core* c_) : c(c_), s16(c_->r[16]), s17(c_->r[17]), sra(c_->r[31]) {
-    c->r[29] -= 32;
-    c->mem_w32(c->r[29] + 20, s17);
-    c->mem_w32(c->r[29] + 16, s16);
-    c->mem_w32(c->r[29] + 24, sra);
-  }
-  ~WorldPosFrame() {
-    c->r[31] = c->mem_r32(c->r[29] + 24);
-    c->r[17] = c->mem_r32(c->r[29] + 20);
-    c->r[16] = c->mem_r32(c->r[29] + 16);
-    c->r[29] += 32;
-  }
-};
-}  // namespace
 
 // FUN_80051D90 — RE'd from generated/shard_7.c gen_func_80051D90 (frame: addiu sp,-0x20; spill
-// r17(node)=sp+20, r16(outVec)=sp+16, ra=sp+24 -- was missing here, added 2026-07-08). The recomp
-// calls FUN_800844C0 with ONLY r4 (=node+0x18) explicitly loaded — r5/r6 pass through UNCHANGED from
-// this function's OWN incoming r5 (inVec)/r6 (outVec), i.e. FUN_800844C0(matrix=node+0x18, in=inVec,
-// out=outVec) is a 3-arg libgte "ApplyMatrixLV, packed-SVECTOR-out" leaf distinct from the already-
-// native Math::applyMatrixLV (which writes unclamped 32-bit MACs, not a packed int16 triple — see
-// gen_func_800844C0 vs gen_func_80084470). FUN_800844C0 is OUTSIDE this region (0x800844C0) and
-// UNOWNED (frameless, confirmed via generated/shard_3.c — no register-faithfulness consequence, but
-// ra=0x80051DB0u mirrored anyway per ground truth). After that call, outVec holds the transformed
-// local-space vector; this function adds node's LOCAL position (node+0x2C/30/34) on top.
-void NodeXform::worldPosFromLocal(uint32_t node, uint32_t inVec, uint32_t outVec) {
+// r17(node)=sp+20, r16(outVec)=sp+16, ra=sp+24). The recomp calls FUN_800844C0 with ONLY r4 (=node's
+// frameMatrix, 0x18) explicitly loaded — r5/r6 pass through UNCHANGED from this function's OWN
+// incoming r5 (inVec)/r6 (outVec), i.e. FUN_800844C0(matrix, in=inVec, out=outVec) is a 3-arg libgte
+// "ApplyMatrixLV, packed-SVECTOR-out" leaf distinct from the already-native Math::applyMatrixLV
+// (which writes unclamped 32-bit MACs, not a packed int16 triple — see gen_func_800844C0 vs
+// gen_func_80084470). FUN_800844C0 is OUTSIDE this region (0x800844C0) and UNOWNED (frameless,
+// confirmed via generated/shard_3.c — no register-faithfulness consequence, but ra=0x80051DB0u
+// mirrored anyway per ground truth, via guest_fn's ra_const argument). After that call, outVec holds
+// the transformed local-space vector; this function adds node's LOCAL-frame position (framePos16,
+// the low-16 view of the same bytes propagate's family accumulates as a full 32-bit world position)
+// on top.
+void NodeXform::worldPosFromLocal(uint32_t nodeAddr, uint32_t inVec, uint32_t outVec) {
   Core* c = core;
-  WorldPosFrame frame(c);
-  c->r[17] = node; c->r[16] = outVec;
-  c->r[4] = node + 0x18; c->r[5] = inVec; c->r[6] = outVec;
-  c->r[31] = 0x80051DB0u;
-  rec_dispatch(c, 0x800844C0u);
-  c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)c->mem_r16s(node + 0x2C)));
-  c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)c->mem_r16s(node + 0x30)));
-  c->mem_w16(outVec + 4, (uint16_t)(c->mem_r16(outVec + 4) + (uint16_t)c->mem_r16s(node + 0x34)));
+  GuestFrame<32, 3> frame(c, kWorldPosSpills);
+  Node node{c, nodeAddr};
+  GuestReg<17> r17(c); GuestReg<16> r16(c);
+  r17 = nodeAddr; r16 = outVec;
+  guest_fn(c, 0x800844C0u, 0x80051DB0u, node.frameMatrixPtr(), inVec, outVec);
+  c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)node.framePosX16()));
+  c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)node.framePosY16()));
+  c->mem_w16(outVec + 4, (uint16_t)(c->mem_r16(outVec + 4) + (uint16_t)node.framePosZ16()));
 }
 
-// FUN_80051D20 — sibling of worldPosFromLocal() using node's COMPOSED world matrix (node+0x98) and
-// world-space position (node+0xAC/B0/B4). RE'd from generated/shard_6.c gen_func_80051D20 (same
-// frame shape as worldPosFromLocal, ra=0x80051D40u before the FUN_800844C0 call).
-void NodeXform::worldPosFromComposed(uint32_t node, uint32_t inVec, uint32_t outVec) {
+// FUN_80051D20 — sibling of worldPosFromLocal() using node's COMPOSED world matrix and world-space
+// position instead of the local ones. RE'd from generated/shard_6.c gen_func_80051D20 (same frame
+// shape as worldPosFromLocal, ra=0x80051D40u before the FUN_800844C0 call).
+void NodeXform::worldPosFromComposed(uint32_t nodeAddr, uint32_t inVec, uint32_t outVec) {
   Core* c = core;
-  WorldPosFrame frame(c);
-  c->r[17] = node; c->r[16] = outVec;
-  c->r[4] = node + 0x98; c->r[5] = inVec; c->r[6] = outVec;
-  c->r[31] = 0x80051D40u;
-  rec_dispatch(c, 0x800844C0u);
-  c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)c->mem_r16s(node + 0xAC)));
-  c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)c->mem_r16s(node + 0xB0)));
-  c->mem_w16(outVec + 4, (uint16_t)(c->mem_r16(outVec + 4) + (uint16_t)c->mem_r16s(node + 0xB4)));
+  GuestFrame<32, 3> frame(c, kWorldPosSpills);
+  Node node{c, nodeAddr};
+  GuestReg<17> r17(c); GuestReg<16> r16(c);
+  r17 = nodeAddr; r16 = outVec;
+  guest_fn(c, 0x800844C0u, 0x80051D40u, node.worldMatrixPtr(), inVec, outVec);
+  c->mem_w16(outVec + 0, (uint16_t)(c->mem_r16(outVec + 0) + (uint16_t)node.worldPosX()));
+  c->mem_w16(outVec + 2, (uint16_t)(c->mem_r16(outVec + 2) + (uint16_t)node.worldPosY()));
+  c->mem_w16(outVec + 4, (uint16_t)(c->mem_r16(outVec + 4) + (uint16_t)node.worldPosZ()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -602,7 +508,7 @@ static void eov_propagateAxis(Core* c) {
   c->r[2] = 0;
 }
 // buildAxis (0x80051C8C): the native NodeXform::buildAxis body already mirrors the substrate's
-// 32-byte frame internally (BuildAxisFrame above, verified matching the abi_extract contract).
+// 32-byte frame internally (kBuildAxisSpills above, verified matching the abi_extract contract).
 // Adding a trampoline-level GuestFrame here would create a DOUBLE frame (pushing sp 32 bytes too
 // deep), which shifts all downstream callee spills to wrong addresses — confirmed: it moved the
 // SBS diverge from f389 to f117. The MIRROR_VERIFY failure on 0x80051C8C is from the internal
