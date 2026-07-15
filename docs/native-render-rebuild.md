@@ -35,7 +35,7 @@ it with the psx_render reference (and SBS core B).
 |---|-------|------------------|------------------------|--------|
 | 1 | START.BIN boot (black loader) | `0x801FE00C == 0x8010649C` | black frame (gpu_blank_display) | ✅ native |
 | 2 | TITLE screen (logo + New/Load menu + copyright) | `0x801FE00C == 0x801062E4` s2 | `titleNative()` (logo sprites + menu FT4 quads, decoded) | ✅ native — RMSE 0 vs reference |
-| 2a| DEMO attract (gameplay footage after idle) | `0x801062E4`, attract sub-state | none | ⛔ |
+| 2a| DEMO attract (real field-engine demo, s7 after idle) | `0x801062E4` sm[0x48]==7 | reuse `sceneNative()` — it's the REAL field (Sop::fieldMode + AreaSlots::updateTail); NOT FMV | ⬜ blanks black now; wire s7→field producer once #3b lands |
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b| Walkable field — 2D OVERLAY (HUD/dialog/item-bubble/menu/text) | same, `s_ot_2d_drawn>0` | none | ⛔ crashes when any overlay prim present |
 | 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | none (objects share HEADS[0..1] via TransitionState3; room geo + interior camera unbuilt) | ⛔ |
@@ -105,8 +105,11 @@ DONE: titleNative() implemented from the decoded packet constants — pixel-iden
 modulated-0x50/dim); live cursor keying via sm[0x68] is the refinement (the exact s2 row-layout caller
 lives in the DEMO overlay 0x80106xxx and was not traced — confirm on a live dump before wiring dynamics).
 
-drawOTag wiring: `demo = stage==0x801062E4; title = demo && sm[0x48]==2`; `if (title) titleNative(); else
-abortUnimplemented(...)` (s1 loading-ramp keeps the s48<2 blank guard; s3/s7 attract stay crashing = #2a).
+drawOTag wiring: `demo = stage==0x801062E4`; `sm[0x48]==2 → titleNative()`, else → `gpu_blank_display()`
+(black) — the DEMO loading ramp / OP.STR movie (s1) / attract (s7) all currently blank. s3 is a transient
+title-menu cursor state that draws the TITLE family (logo+menu), NOT gameplay footage. #2a: the attract is
+s7 = a REAL field scene (Sop::fieldMode + AreaSlots::updateTail, area-loaded); wire s7 → sceneNative (the
+field producer) + field-2D once #3b lands — it's NOT the OP.STR FMV (that's s1, correctly black headless).
 
 ## Next
 Build native producers down the backlog. Each removes one `abortUnimplemented`. Gate: the scene renders

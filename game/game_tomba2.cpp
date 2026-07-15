@@ -224,7 +224,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
       sop_narration     ? "SOP intro narration cutscene (2D composite + 3D beats)" :
       authored_subscene ? "hut/door interior authored sub-scene (task-sm[0x4c]==3): room geometry + interior camera" :
       field             ? "field stage in an unclassified render mode" :
-                          "non-field stage: DEMO attract (s3/s7) / menu / FMV (title s2 is native)");
+                          "non-field stage (unclassified) — title/DEMO handled above, field handled above");
   }
   // ADDITIVE native render subsystem (game/render/mNativeScene) — the decoupled "native experience" pass,
   // gated behind the `rendernative` DIAGNOSTIC channel (off by default). Builds from native scene data.
