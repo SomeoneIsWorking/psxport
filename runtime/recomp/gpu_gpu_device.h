@@ -47,6 +47,11 @@ public:
   SDL_GPUGraphicsPipeline* s_decode_pipe = nullptr;  // fullscreen: packed 1555 -> float RGBA
   SDL_GPUGraphicsPipeline* s_encode_pipe = nullptr;  // fullscreen: float RGBA -> packed 1555
   SDL_GPUGraphicsPipeline* s_ires_downsample_pipe = nullptr;  // ires composite: box-filter downsample
+  // bug #55 (part 3): depth-only re-rasterization of the semi buckets so translucent-only 3D coverage
+  // (no opaque backing) still marks the depth buffer the composite-back's coverage gate reads. One
+  // pipeline shared across all 4 blend-mode buckets (semi_cover.frag ignores blend mode — depth marking
+  // only). See render_geom's 3D band, right after Pass B.
+  SDL_GPUGraphicsPipeline* s_semi_cover_pipe = nullptr;
   int s_pipes_3d = 0;                                // 3D pipelines created (once per process)
 
   // ---- SBS two-pane composite textures ----

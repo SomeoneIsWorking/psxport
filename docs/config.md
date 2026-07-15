@@ -33,15 +33,21 @@ The two video selectors:
   `1`=Vanilla (1x), `2`=X2, `3`=X3, `4`=X4 (cap is dynamic — see below). Overlay row: "Internal
   Resolution". (Replaced the old two-row `ires` 1..3 + `ires_auto` bool; a legacy file carrying
   `ires_auto=1` is migrated to `ires=0` on load.) **Consumed by the raster** (gpu_gpu.cpp render_geom):
-  at `i>1` the opaque+semi 3D passes render into a SEPARATE `VRAM_W*i x VRAM_H*i` target
-  (`GpuGpuState::s_ires_color/s_ires_depth/s_ires_rgba`, lazily built + torn-down/rebuilt on a live
-  toggle by `ensure_ires_targets`), then a linear-filtered `SDL_BlitGPUTexture` downsamples ONLY the
-  display sub-rect back into the fixed 1024x512 VRAM texture — every VRAM-space 2D op (texture pages,
-  CLUTs, sprite blits, readback, SBS) stays on that fixed texture, untouched. At `i==1` render_geom takes
-  the original direct-to-`s_vram_tex` path with no extra blit (byte-identical to pre-ires code). Cap is a
-  real GPU-memory budget (128 MiB/Game @ 14 bytes/px across the three ires-scale textures), not
-  `VRAM_W / native_w` (that clamp predated the scaled target ever being built — see
-  `docs/findings/render.md` "ires modifier is a NO-OP"). `PSXPORT_DEBUG=ires` traces the resolved scale +
+  at `i>1` ONLY the 3D-WORLD band (`RQ_OM_DEPTH` content) renders into a SEPARATE `VRAM_W*i x VRAM_H*i`
+  target (`GpuGpuState::s_ires_color/s_ires_depth/s_ires_rgba`, lazily built + torn-down/rebuilt on a live
+  toggle by `ensure_ires_targets`), then a box-filter shader (`ires_downsample.frag`, NxN texel average,
+  NOT a plain linear blit — that aliased into confetti noise on grass/foliage) downsamples ONLY the
+  display sub-rect back into the fixed 1024x512 VRAM texture, per-sub-texel coverage-gated (bug #55) so
+  destination pixels the 3D pass never touched fall back to a native-res pre-3D snapshot instead of the
+  lossy upsampled seed. 2D content (`RQ_OM_2D_BG`/`RQ_OM_2D_FG` — HUD, menus, dialog panels) is batched
+  SEPARATELY and always renders at NATIVE resolution (before/after the 3D band respectively), never
+  touching the scaled target — every VRAM-space 2D op (texture pages, CLUTs, sprite blits, readback, SBS)
+  stays on the fixed texture, untouched. At `i==1` render_geom takes the original direct-to-`s_vram_tex`
+  path with no extra blit (byte-identical to pre-ires code). Cap is a real GPU-memory budget (128 MiB/Game
+  @ 14 bytes/px across the three ires-scale textures), not `VRAM_W / native_w` (that clamp predated the
+  scaled target ever being built — see `docs/findings/render.md` "ires modifier is a NO-OP"). Known open
+  gap: `RQ_OM_2D_BG` content overlapping dense/translucent 3D coverage can still blur at ires>1 — see
+  `docs/findings/render.md` "ires 2D/HUD blur (bug #55)". `PSXPORT_DEBUG=ires` traces the resolved scale +
   composite-blit rects; REPL `iresdump <path.ppm>` dumps the full (non-downsampled) scaled target for
   bring-up debugging.
 

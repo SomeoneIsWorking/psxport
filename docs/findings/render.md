@@ -1,5 +1,47 @@
 # Findings — render / engine submit
 
+## ires (internal resolution) 2D/HUD blur (bug #55) — band split + coverage gate (2026-07-15, PARTIAL FIX)
+
+- **symptom (USER):** at ires>1 the whole picture, including HUD/menu TEXT that should be pixel-identical
+  regardless of the 3D scale, looks visibly blurrier — not the expected "sharper 3D edges, unchanged 2D".
+- **root cause #1 (2D shares the 3D-scaled target):** `RQ_OM_2D_BG`/`RQ_OM_2D_FG` content (HUD, menus,
+  dialog/fade panels) was batched into the SAME tri/tex/semi vertex buffers as the 3D world (gpu_gpu.cpp
+  `render_geom`, pre-fix), so at ires>1 it rasterized into the ires-scaled target and suffered the seed-
+  blit's LINEAR-upsample (lossy for sharp pixel art/text) + box-filter downsample round trip, even though
+  2D has nothing to do with the ires scale. Confirmed with pixel evidence: a pause-menu capture (Options/
+  Load data/Quit game) diffed non-zero between ires=1 and ires=4 despite unchanging content.
+- **fix #1:** 2D content batched SEPARATELY per band (`GpuGpuState::s_tri2d_buf/s_tex2d_buf/s_semi2d_buf`,
+  indexed `GGS_2D_BG`/`GGS_2D_FG`) and rendered in 3 ordered passes: 2D_BG native-res → 3D world (scaled +
+  composited back, unchanged) → 2D_FG native-res, AFTER the 3D composite-back so it's NEVER touched by the
+  round trip. **Provably pixel-exact for RQ_OM_2D_FG** (nothing runs after it) — verified via a HUD-region
+  crop pixel-diff and a `PSXPORT_ONLYWORLD=1`/pure-2D-frame check.
+- **root cause #2 (composite-back has no coverage test):** even with the band split, `RQ_OM_2D_BG` content
+  is drawn BEFORE the 3D world, so band 2's composite-back — which unconditionally overwrote the WHOLE
+  display sub-rect — still clobbered band 1's own pixels wherever this frame's 3D geometry didn't
+  rasterize a fragment there. The ORIGINAL single-pass code got per-pixel occlusion for free from one
+  shared real depth test; splitting into sequential passes across different render targets lost it.
+- **fix #2 (narrowed, not closed):** `ires_downsample.frag` now samples the ires depth target per
+  destination sub-texel and, where no OPAQUE 3D fragment landed, substitutes a native-res snapshot of
+  `s_vram_tex` taken right after band 1 (`GpuGpuState::s_ires_bg_snap`) instead of the lossy upsampled
+  seed. A second depth-only pass (`semi_cover.frag`/`s_semi_cover_pipe`) re-rasterizes the semi buckets so
+  TRANSLUCENT 3D coverage also registers (Pass B itself never writes depth by design).
+- **PARTIAL / open — the verification pause-menu capture itself is NOT fully fixed:** its text is
+  classified `RQ_OM_2D_BG` (node_is_bg/sprite_is_bg_texpage provenance, not `RQ_OM_2D_FG` as first
+  assumed), and the "ghosted" 3D world visible behind the paused menu still measurably blurs it at ires>1
+  even with BOTH coverage gates active. `PSXPORT_DEBUG=ires` depth-visualization (temporarily rendering
+  `u_depth` as grayscale instead of compositing) showed near-zero coverage across most of that region from
+  BOTH the opaque and semi-stamp tests, yet the real (correct, ires=1) picture is unmistakably drawn there
+  — meaning some draw path is painting that content without the depth signal my coverage gates rely on.
+  NOT root-caused within this change's scope; needs further RE into which draw path paints it (the
+  `tri`/`tex`/`semi` counts logged for the frame don't obviously account for the full picture) before the
+  coverage gate can close it fully. Do not re-attempt the SAME depth-based coverage angle without new
+  evidence — it was tried twice (opaque-only, then opaque+semi) and both left this specific scene
+  unchanged.
+- **verified clean:** ires=1 byte-identical to pre-fix baseline (`md5sum` match); 3D edges visibly
+  smoother/AA'd (not blurrier) at ires=4 (character silhouette + grass crop); SBS-full 0-diff (host-only
+  render change, `PSXPORT_SBS_AUTONAV=combat`, f18300+, 190s bound); fps60=1 + ires=4 renders clean, no
+  crash/corruption.
+
 ## Coplanar z-FIGHTING on barrel/decoration surfaces (black chunks flicker) — paint-order depth tiebreak (2026-07-10, PARTIAL FIX)
 
 - **symptom (USER):** on the waterpump/seesaw barrel a black chunk flickers through the red basket top

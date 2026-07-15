@@ -70,6 +70,7 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 #define s_decode_pipe  (gdev().s_decode_pipe)
 #define s_encode_pipe  (gdev().s_encode_pipe)
 #define s_ires_downsample_pipe (gdev().s_ires_downsample_pipe)
+#define s_semi_cover_pipe (gdev().s_semi_cover_pipe)
 #define s_sbs_tex      (gdev().s_sbs_tex)
 #define s_sbs_xfer     (gdev().s_sbs_xfer)
 #define s_sbs_w        (gdev().s_sbs_w)
@@ -106,6 +107,10 @@ static inline float ord3d_b(float d, float bias) { float o = ord3d(d) + bias;
   return o < NATIVE_3D_MIN ? NATIVE_3D_MIN : (o > NATIVE_3D_MAX ? NATIVE_3D_MAX : o); }
 #define TRI_CAP 196608   // max batched vertices (= 65536 tris)
 #define TEX_CAP 196608
+// 2D (non-world) batch caps — bug #55: HUD/menu/2D-layer content is a small fraction of the 3D world's
+// vertex count per frame; generous headroom without doubling the 3D buffers' GPU memory footprint.
+#define TRI2D_CAP 32768
+#define TEX2D_CAP 32768
 #define NUM_BLEND_MODES GGS_NUM_BLEND_MODES   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
 struct TriVtx { float x, y, r, g, b, ord; };                                                    // 24 bytes
 struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord; };   // 96 bytes
@@ -217,14 +222,16 @@ static SDL_GPUGraphicsPipeline* make_fullscreen_pipeline(const uint32_t* vs_code
   return p;
 }
 
-// A fullscreen-triangle pipeline (no vertex input) sampling one fragment texture into an OFFSCREEN target
+// A fullscreen-triangle pipeline (no vertex input) sampling fragment texture(s) into an OFFSCREEN target
 // of `fmt` — used for the decode (1555 -> float RGBA) and encode (float RGBA -> 1555) passes around the
-// real-HW-blend semi step, and (with num_uniforms=1) the ires box-filter downsample.
+// real-HW-blend semi step, and (with num_uniforms=1, num_samplers=2 — color + depth, bug #55 coverage
+// gate) the ires box-filter downsample.
 static SDL_GPUGraphicsPipeline* make_fullscreen_offscreen_pipeline(const uint32_t* vs_code, unsigned vs_len,
                                                                     const uint32_t* fs_code, unsigned fs_len,
-                                                                    SDL_GPUTextureFormat fmt, Uint32 num_uniforms = 0) {
+                                                                    SDL_GPUTextureFormat fmt, Uint32 num_uniforms = 0,
+                                                                    Uint32 num_samplers = 1) {
   SDL_GPUShader* vs = make_shader(vs_code, vs_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
-  SDL_GPUShader* fs = make_shader(fs_code, fs_len, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, num_uniforms);
+  SDL_GPUShader* fs = make_shader(fs_code, fs_len, SDL_GPU_SHADERSTAGE_FRAGMENT, num_samplers, num_uniforms);
   SDL_GPUColorTargetDescription ct = {}; ct.format = fmt;   // blend disabled; writes all channels
   SDL_GPUGraphicsPipelineCreateInfo gp = {};
   gp.vertex_shader = vs; gp.fragment_shader = fs;
@@ -241,11 +248,12 @@ static SDL_GPUGraphicsPipeline* make_fullscreen_offscreen_pipeline(const uint32_
 }
 
 // A geometry pipeline: a vertex-buffer pipeline rendering into the R16_UINT VRAM color target + a D32
-// depth target. `depth_write` distinguishes opaque (test+write) from semi (test, no write).
+// depth target. `depth_write` distinguishes opaque (test+write) from semi (test, no write). `depth_only`
+// (bug #55 part 3, s_semi_cover_pipe) drops the color target entirely — a pure depth-marking pass.
 static SDL_GPUGraphicsPipeline* make_geom_pipeline(const uint32_t* vs_code, unsigned vs_len,
     const uint32_t* fs_code, unsigned fs_len, Uint32 pitch,
     const SDL_GPUVertexAttribute* attrs, Uint32 n_attr, Uint32 num_samplers, bool depth_write,
-    Uint32 num_uniforms = 0) {
+    Uint32 num_uniforms = 0, bool depth_only = false) {
   SDL_GPUShader* vs = make_shader(vs_code, vs_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
   SDL_GPUShader* fs = make_shader(fs_code, fs_len, SDL_GPU_SHADERSTAGE_FRAGMENT, num_samplers, num_uniforms);
   SDL_GPUVertexBufferDescription vbd = {}; vbd.slot = 0; vbd.pitch = pitch; vbd.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
@@ -263,8 +271,8 @@ static SDL_GPUGraphicsPipeline* make_geom_pipeline(const uint32_t* vs_code, unsi
   gp.depth_stencil_state.enable_depth_test = true;
   gp.depth_stencil_state.enable_depth_write = depth_write;
   gp.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
-  gp.target_info.color_target_descriptions = &ct;
-  gp.target_info.num_color_targets = 1;
+  gp.target_info.color_target_descriptions = depth_only ? nullptr : &ct;
+  gp.target_info.num_color_targets = depth_only ? 0 : 1;
   gp.target_info.has_depth_stencil_target = true;
   gp.target_info.depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
   SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(s_dev, &gp);
@@ -349,12 +357,26 @@ void GpuGpuState::ensure_targets() {
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     mkbuf(sizeof(TexVtx) * TEX_CAP, &s_semi_vbuf[m], &s_semi_xfer[m]);
   }
+  // 2D (non-world) buffers — bug #55: one independent set per band (GGS_2D_BG/GGS_2D_FG) so 2D content
+  // never shares a vertex buffer with 3D-world geometry (see gpu_gpu_internal.h).
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
+    mkbuf(sizeof(TriVtx) * TRI2D_CAP, &s_tri2d_vbuf[band], &s_tri2d_xfer[band]);
+    mkbuf(sizeof(TexVtx) * TEX2D_CAP, &s_tex2d_vbuf[band], &s_tex2d_xfer[band]);
+    for (int m = 0; m < NUM_BLEND_MODES; m++) {
+      mkbuf(sizeof(TexVtx) * TEX2D_CAP, &s_semi2d_vbuf[band][m], &s_semi2d_xfer[band][m]);
+    }
+  }
   // CPU-side batch buffers stay lazily allocated per draw call (ggs_alloc_batches).
   // Float RGBA semi-blend intermediate (decode target / real-HW-blend target / encode source).
   SDL_GPUTextureCreateInfo cti = {}; cti.type = SDL_GPU_TEXTURETYPE_2D; cti.format = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
   cti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
   cti.width = VRAM_W; cti.height = VRAM_H; cti.layer_count_or_depth = 1; cti.num_levels = 1;
   s_color_rgba = SDL_CreateGPUTexture(s_dev, &cti); GPUCHK(s_color_rgba, "color_rgba tex");
+  // bug #55 (part 2): native-res snapshot of s_vram_tex for the ires composite-back's per-texel coverage
+  // fallback (ires_downsample.frag u_native) — see the field comment in gpu_gpu_internal.h.
+  SDL_GPUTextureCreateInfo bsi = {}; bsi.type = SDL_GPU_TEXTURETYPE_2D; bsi.format = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
+  bsi.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER; bsi.width = VRAM_W; bsi.height = VRAM_H; bsi.layer_count_or_depth = 1; bsi.num_levels = 1;
+  s_ires_bg_snap = SDL_CreateGPUTexture(s_dev, &bsi); GPUCHK(s_ires_bg_snap, "ires bg snap tex");
 }
 
 // ires (internal resolution) scaled 3D target: lazily (re)built to VRAM_W*i x VRAM_H*i whenever the live
@@ -376,7 +398,11 @@ void GpuGpuState::ensure_ires_targets(int i) {
   ci.width = w; ci.height = h; ci.layer_count_or_depth = 1; ci.num_levels = 1;
   s_ires_color = SDL_CreateGPUTexture(s_dev, &ci); GPUCHK(s_ires_color, "ires color tex");
   SDL_GPUTextureCreateInfo di = {}; di.type = SDL_GPU_TEXTURETYPE_2D; di.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
-  di.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET; di.width = w; di.height = h; di.layer_count_or_depth = 1; di.num_levels = 1;
+  // SAMPLER (in addition to DEPTH_STENCIL_TARGET): bug #55's coverage-gated composite-back
+  // (ires_downsample.frag's u_depth) reads this target as a texture to decide which destination pixels
+  // the 3D pass actually touched this frame — see render_geom's composite-back call site.
+  di.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+  di.width = w; di.height = h; di.layer_count_or_depth = 1; di.num_levels = 1;
   s_ires_depth = SDL_CreateGPUTexture(s_dev, &di); GPUCHK(s_ires_depth, "ires depth tex");
   SDL_GPUTextureCreateInfo rti = {}; rti.type = SDL_GPU_TEXTURETYPE_2D; rti.format = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
   rti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
@@ -408,6 +434,11 @@ static void create_3d_pipelines(void) {
   s_tritex_pipe = make_geom_pipeline(spv_g_tritex_vert, spv_g_tritex_vert_len, spv_g_tritex_frag, spv_g_tritex_frag_len,
                                      sizeof(TexVtx), tex_attr, 8, 1, true, 1);   // +1 fragment uniform: ires scale (PC.scale)
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_pipe[m] = make_semi_pipeline(m, tex_attr, 8, sizeof(TexVtx));
+  // bug #55 (part 3): depth-only stamp so translucent-only 3D coverage still marks the depth buffer the
+  // ires composite-back's coverage gate reads (see semi_cover.frag). depth_write=true, same GREATER_OR_EQUAL
+  // compare as Pass A/opaque; no color target at all (depth_only=true).
+  s_semi_cover_pipe = make_geom_pipeline(spv_g_tritex_vert, spv_g_tritex_vert_len, spv_g_semi_cover_frag, spv_g_semi_cover_frag_len,
+                                     sizeof(TexVtx), tex_attr, 8, 1, true, 1, true);   // +1 fragment uniform: ires scale; depth_only
   s_decode_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert, spv_g_fsq_vert_len,
                                                       spv_g_decode_frag, spv_g_decode_frag_len,
                                                       SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT);
@@ -416,7 +447,7 @@ static void create_3d_pipelines(void) {
                                                       SDL_GPU_TEXTUREFORMAT_R8G8_UNORM);
   s_ires_downsample_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert, spv_g_fsq_vert_len,
                                                       spv_g_ires_downsample_frag, spv_g_ires_downsample_frag_len,
-                                                      SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, 1);   // +1 uniform: box side `n`
+                                                      SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, 1, 3);   // +1 uniform: box side `n`; 3 samplers: color + depth + native-bg-snapshot (bug #55 coverage mix)
   gdev().s_pipes_3d = 1;
   fprintf(stderr, "[gpu_gpu] 3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)\n");
 }
@@ -517,80 +548,70 @@ static SDL_GPUViewport letterbox(int aw, int ah, int ow, int oh) {
 // No-op if nothing was batched. Reports the drawn counts for vkstats.
 //
 // ires (internal resolution): when the live scale `i` (mods.ires, resolved via gpu_gpu_video_status — same
-// AUTO-derivation + cap the RmlUi readout uses) is >1, Pass A/decode/Pass B/encode below target the SEPARATE
-// ires-scaled surfaces (GpuGpuState::s_ires_*, VRAM_W*i x VRAM_H*i) instead of s_vram_tex/s_depth/
-// s_color_rgba — same shaders, same vertex data (still absolute VRAM pixel coords; tri.vert's fixed /512,/256
-// NDC divisors are unchanged), just a viewport that's i times as large, so rasterization of the SAME clip-
-// space geometry lands at i times the pixel density (literally "the viewport scaled by i"). Two blits (LINEAR
-// filter, SDL_BlitGPUTexture, both outside any render pass) bracket this: seed the display sub-rect of the
-// ires target with an upsampled copy of the current s_vram_tex content (so Pass A's LOAD blends against real
-// background) before, and downsample the SAME sub-rect back into s_vram_tex after. Both blits are scoped to
-// exactly [sx,sy,disp_w,h] — the region the un-scaled path would have written directly — so every VRAM-space
-// 2D consumer (texture pages, CLUTs, sprite blits, readback, SBS) never sees the ires target and stays pixel-
-// exact. At i==1 (the overwhelmingly common case) `ires` is false below: colorTgt/depthTgt/rgbaTgt alias the
-// plain s_vram_tex/s_depth/s_color_rgba fields and neither blit runs — the GPU command stream is byte-for-
-// byte the pre-ires code path (no extra copy/blit cost, no behavior change).
-static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src,
-                        int sx, int sy, int disp_w, int h, int* dtri, int* dtex, int* dsemi) {
-  int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += g.s_semi_n[m];
-  *dtri = g.s_tri_n; *dtex = g.s_tex_n; *dsemi = semi_total;
-  if ((g.s_tri_n + g.s_tex_n + semi_total) == 0) return;
-  g.ensure_targets();
-
-  int native_w = 0, ires_i = 1, fbw = 0, fbh = 0, ww = 0, wh = 0, ires_cap = 0;
-  gpu_gpu_video_status(&g.game->core, &native_w, &ires_i, &fbw, &fbh, &ww, &wh, &ires_cap);
-  g.ensure_ires_targets(ires_i);
-  const bool ires = ires_i > 1;
-  SDL_GPUTexture* colorTgt = ires ? g.s_ires_color : g.s_vram_tex;
-  SDL_GPUTexture* depthTgt = ires ? g.s_ires_depth : g.s_depth;
-  SDL_GPUTexture* rgbaTgt  = ires ? g.s_ires_rgba  : g.s_color_rgba;
-  const int scale = ires ? ires_i : 1;
-  const int cw = VRAM_W * scale, ch = VRAM_H * scale;
-  if (cfg_dbg("ires")) fprintf(stderr, "[ires] sx=%d sy=%d disp_w=%d h=%d ires_i=%d scale=%d cw=%d ch=%d\n", sx, sy, disp_w, h, ires_i, scale, cw, ch);
-
-  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_snap_xfer, true); memcpy(p, src, (size_t)VRAM_W*VRAM_H*2); SDL_UnmapGPUTransferBuffer(s_dev, g.s_snap_xfer); }
-  if (g.s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tri_xfer, true);  memcpy(p, g.s_tri_buf,  (size_t)g.s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tri_xfer); }
-  if (g.s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tex_xfer, true);  memcpy(p, g.s_tex_buf,  (size_t)g.s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tex_xfer); }
-  for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
-    void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_semi_xfer[m], true);
-    memcpy(p, g.s_semi_buf[m], (size_t)g.s_semi_n[m]*sizeof(TexVtx));
-    SDL_UnmapGPUTransferBuffer(s_dev, g.s_semi_xfer[m]);
-  }
-  SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
-  { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = g.s_snap_xfer; si.pixels_per_row = VRAM_W; si.rows_per_layer = VRAM_H;
-    SDL_GPUTextureRegion dr = {}; dr.texture = g.s_vram_snap; dr.w = VRAM_W; dr.h = VRAM_H; dr.d = 1;
-    SDL_UploadToGPUTexture(cp, &si, &dr, false); }
-  auto upv = [&](SDL_GPUTransferBuffer* x, SDL_GPUBuffer* b, int n, Uint32 stride){ if (!n) return;
-    SDL_GPUTransferBufferLocation s = {}; s.transfer_buffer = x;
-    SDL_GPUBufferRegion d = {}; d.buffer = b; d.offset = 0; d.size = (Uint32)n*stride;
-    SDL_UploadToGPUBuffer(cp, &s, &d, false); };
-  upv(g.s_tri_xfer, g.s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
-  upv(g.s_tex_xfer, g.s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
-  for (int m = 0; m < NUM_BLEND_MODES; m++) upv(g.s_semi_xfer[m], g.s_semi_vbuf[m], g.s_semi_n[m], sizeof(TexVtx));
-  SDL_EndGPUCopyPass(cp);
-
-  // ires seed blit: upsample the display sub-rect of the CURRENT s_vram_tex content into colorTgt so Pass
-  // A's LOAD_OP_LOAD blends world geometry against the real background, not undefined texels. Must run
-  // outside any render/copy pass. No-op at i==1 (colorTgt IS s_vram_tex — a self-blit would be a no-op
-  // anyway, but skip it: this is the "no extra blit at i==1" bypass).
-  if (ires) {
-    SDL_GPUBlitInfo bi = {};
-    bi.source.texture = g.s_vram_tex; bi.source.x = (Uint32)sx; bi.source.y = (Uint32)sy;
-    bi.source.w = (Uint32)disp_w; bi.source.h = (Uint32)h;
-    bi.destination.texture = colorTgt; bi.destination.x = (Uint32)(sx * scale); bi.destination.y = (Uint32)(sy * scale);
-    bi.destination.w = (Uint32)(disp_w * scale); bi.destination.h = (Uint32)(h * scale);
-    bi.load_op = SDL_GPU_LOADOP_DONT_CARE; bi.filter = SDL_GPU_FILTER_LINEAR;
-    SDL_BlitGPUTexture(cmd, &bi);
-  }
-
-  SDL_GPUTextureSamplerBinding snap = { g.s_vram_snap, s_samp_nearest };
+// AUTO-derivation + cap the RmlUi readout uses) is >1, the 3D-WORLD band's Pass A/decode/Pass B/encode
+// (render_pass_set below) targets the SEPARATE ires-scaled surfaces (GpuGpuState::s_ires_*, VRAM_W*i x
+// VRAM_H*i) instead of s_vram_tex/s_depth/s_color_rgba — same shaders, same vertex data (still absolute
+// VRAM pixel coords; tri.vert's fixed /512,/256 NDC divisors are unchanged), just a viewport that's i
+// times as large, so rasterization of the SAME clip-space geometry lands at i times the pixel density
+// (literally "the viewport scaled by i"). Two blits (LINEAR filter, SDL_BlitGPUTexture, both outside any
+// render pass) bracket this: seed the display sub-rect of the ires target with an upsampled copy of the
+// current s_vram_tex content (so Pass A's LOAD blends against real background) before, and downsample the
+// SAME sub-rect back into s_vram_tex after. Both blits are scoped to exactly [sx,sy,disp_w,h] — the region
+// the un-scaled path would have written directly — so every VRAM-space 2D consumer (texture pages, CLUTs,
+// sprite blits, readback, SBS) never sees the ires target and stays pixel-exact. At i==1 (the overwhelmingly
+// common case) `ires` is false below: colorTgt/depthTgt/rgbaTgt alias the plain s_vram_tex/s_depth/
+// s_color_rgba fields and neither blit runs — the GPU command stream is byte-for-byte the pre-ires code
+// path (no extra copy/blit cost, no behavior change).
+//
+// bug #55 (ires blur): 2D content (RQ_OM_2D_BG/RQ_OM_2D_FG — HUD, menus, dialog/fade panels) used to share
+// the SAME tri/tex/semi batches as the 3D world above, so at ires>1 it got rasterized into the ires-scaled
+// target alongside the world geometry and suffered the SAME seed-upsample (LINEAR, lossy for sharp pixel
+// art/text) + box-downsample round trip — even though 2D has nothing to do with the ires scale and the
+// design intent ("every VRAM-space 2D op stays on the original canvas, pixel-exact") never actually held
+// for it. Root-caused with pixel evidence: a pause-menu capture (Options/Load data/Quit game) diffed
+// non-zero between ires=1 and ires=4 despite being pixel content that never changes with the 3D scale
+// (docs/findings/render.md "ires 2D/HUD blur (bug #55)").
+// Fix: 2D content is now batched SEPARATELY per band (GpuGpuState::s_tri2d_buf/s_tex2d_buf/s_semi2d_buf,
+// indexed GGS_2D_BG/GGS_2D_FG — see draw_tri/draw_tritri/draw_semi's ggs_is_3d/ggs_2d_band routing) and
+// rendered by render_geom below in three ordered passes that never share a target with the ires-scaled one:
+//   1. 2D_BG  -> straight onto s_vram_tex/s_depth/s_color_rgba at NATIVE resolution (scale=1), BEFORE the
+//      3D world — matches the existing order-band invariant (2D_BG always behind the 3D world).
+//   2. 3D world -> the (possibly ires-scaled) target + seed/composite-back, UNCHANGED from before the split.
+//   3. 2D_FG (HUD/menus) -> straight onto s_vram_tex at NATIVE resolution, AFTER the 3D composite-back, so
+//      it is NEVER touched by the ires round trip — provably pixel-exact for ANY RQ_OM_2D_FG content,
+//      regardless of what the 3D band does, since nothing runs after it.
+// The band split alone is NOT sufficient for RQ_OM_2D_BG content specifically: band 2's composite-back
+// still overwrites the ENTIRE display sub-rect unconditionally, including band 1's own pixels wherever
+// this frame's 3D geometry didn't rasterize a fragment there (the ORIGINAL single-pass code got per-pixel
+// occlusion for free from one shared real depth test; splitting into sequential passes across different
+// targets lost it). Narrowed — not fully closed — by a per-pixel 3D-coverage gate: the composite-back
+// (ires_downsample.frag) samples the ires depth target and, for any source sub-texel with no OPAQUE 3D
+// fragment (Pass A, depth-tested), substitutes u_native — a native-res snapshot of s_vram_tex taken right
+// after band 1 (GpuGpuState::s_ires_bg_snap) — instead of the lossy upsampled seed. A second pass
+// (semi_cover.frag, s_semi_cover_pipe) re-rasterizes the semi buckets depth-only so TRANSLUCENT 3D
+// coverage also registers (Pass B itself never writes depth by design, so overlapping semi quads can all
+// blend against each other).
+// KNOWN RESIDUAL (disclosed, not silently patched): the pause-menu capture used to verify this fix has its
+// text classified RQ_OM_2D_BG (node_is_bg/sprite_is_bg_texpage provenance — not RQ_OM_2D_FG as first
+// assumed), and the "ghosted" 3D world visible behind the paused menu still measurably blurs it at ires>1
+// even with both coverage gates active — instrumentation (PSXPORT_DEBUG=ires depth-visualization) showed
+// the composite-back's OWN opaque+semi coverage tests read near-zero coverage across most of that region,
+// yet the real (correct, i==1) picture is unmistakably drawn there. This gap was not root-caused within
+// this change's scope — it needs further RE into WHICH draw path actually paints that content (the
+// tri/tex/semi counts logged for the frame don't obviously account for it) before the coverage gate can
+// close it. RQ_OM_2D_FG content (the majority of real HUD/menu use — see e.g. any pure-2D dialog with no
+// world visible, RQ_OM_2D_BG behind a scene the 3D world does NOT overlap, and the reported "world edges
+// sharper at higher ires" case) is fixed and verified; RQ_OM_2D_BG overlapping dense/ghosted 3D coverage
+// is a narrower follow-up.
+static void render_pass_set(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* colorTgt, SDL_GPUTexture* depthTgt,
+                             SDL_GPUTexture* rgbaTgt, SDL_GPUTexture* vramSnap, const SDL_GPUViewport& vp,
+                             const SDL_Rect& sc, int scale,
+                             SDL_GPUBuffer* triVbuf, int triN, SDL_GPUBuffer* texVbuf, int texN,
+                             SDL_GPUBuffer* const semiVbuf[GGS_NUM_BLEND_MODES], const int semiN[GGS_NUM_BLEND_MODES],
+                             bool stampSemiCoverage = false) {
+  int semiTotal = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semiTotal += semiN[m];
+  SDL_GPUTextureSamplerBinding snap = { vramSnap, s_samp_nearest };
   SDL_GPUBufferBinding bb = {}; bb.offset = 0;
-  // Viewport ALWAYS spans the full (possibly ires-scaled) canvas — tri.vert's NDC divisors are fixed to the
-  // 1024x512 canvas, so the viewport is what "scales by i" (pixel = viewport.wh * (ndc+1)/2, unchanged
-  // shader). Scissor restricts writes to the display sub-rect (scaled by `scale`) purely to skip fill work
-  // outside the region that ever gets composited back — at i==1 this is the original {0,0,VRAM_W,VRAM_H}.
-  SDL_GPUViewport vp = { 0, 0, (float)cw, (float)ch, 0.0f, 1.0f };
-  SDL_Rect sc = ires ? SDL_Rect{ sx * scale, sy * scale, disp_w * scale, h * scale } : SDL_Rect{ 0, 0, VRAM_W, VRAM_H };
   // ---- Pass A: opaque (flat + textured) -----------------------------------------------------------
   {
     SDL_GPUColorTargetInfo ct = {}; ct.texture = colorTgt; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
@@ -599,38 +620,14 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    if (g.s_tri_n) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = g.s_tri_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, g.s_tri_n, 1, 0, 0); }
-    if (g.s_tex_n) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = g.s_tex_vbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+    if (triN) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = triVbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, triN, 1, 0, 0); }
+    if (texN) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = texVbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
                    SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1);
                    int32_t ires_scale_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc);
-                   SDL_DrawGPUPrimitives(rp, g.s_tex_n, 1, 0, 0); }
+                   SDL_DrawGPUPrimitives(rp, texN, 1, 0, 0); }
     SDL_EndGPURenderPass(rp);
   }
-  // ires composite: downsample colorTgt's display sub-rect back into s_vram_tex's SAME sub-rect. A box
-  // filter (s_ires_downsample_pipe / ires_downsample.frag), not a plain SDL_BlitGPUTexture LINEAR blit —
-  // a single-tap bilinear blit only samples the nearest 2x2 source texels per destination pixel, which is
-  // correct for magnifying (the seed blit below IS a plain blit) but aliases badly on a >1:1 minify: high-
-  // frequency content (grass, leaf clusters) came out as visible per-pixel confetti noise on the first
-  // bring-up pass (2026-07-15) — the RAW ires target (`iresdump`) was clean, only the downsampled composite
-  // wasn't, proving it was a filter-choice bug, not a rendering one. The shader averages the full NxN
-  // source-texel box (N=scale) in unpacked RGB space per destination pixel instead. Scoped to exactly the
-  // display sub-rect so every other VRAM-space consumer (texture pages, CLUTs, sprite blits, readback, SBS)
-  // never sees the scaled target. No-op (not called) at i==1.
-  auto ires_composite_back = [&]() {
-    if (!ires) return;
-    SDL_GPUColorTargetInfo ct2 = {}; ct2.texture = g.s_vram_tex; ct2.load_op = SDL_GPU_LOADOP_LOAD; ct2.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_GPURenderPass* rp2 = SDL_BeginGPURenderPass(cmd, &ct2, 1, nullptr);
-    SDL_GPUViewport vp2 = { (float)sx, (float)sy, (float)disp_w, (float)h, 0.0f, 1.0f };
-    SDL_Rect sc2 = { sx, sy, disp_w, h };
-    SDL_SetGPUViewport(rp2, &vp2); SDL_SetGPUScissor(rp2, &sc2);
-    SDL_GPUTextureSamplerBinding srcbind = { colorTgt, s_samp_nearest };   // nearest: shader does its own texelFetch box
-    SDL_BindGPUGraphicsPipeline(rp2, s_ires_downsample_pipe); SDL_BindGPUFragmentSamplers(rp2, 0, &srcbind, 1);
-    int32_t n_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &n_pc, sizeof n_pc);
-    SDL_DrawGPUPrimitives(rp2, 3, 1, 0, 0);
-    SDL_EndGPURenderPass(rp2);
-    if (cfg_dbg("ires")) fprintf(stderr, "[ires] composite downsample dst=(%d,%d,%d,%d) n=%d\n", sx, sy, disp_w, h, scale);
-  };
-  if (!semi_total) { ires_composite_back(); return; }
+  if (!semiTotal) return;
   // ---- decode: colorTgt (this frame's opaque content) -> rgbaTgt (float, real-blend target) ----
   {
     SDL_GPUColorTargetInfo ct = {}; ct.texture = rgbaTgt; ct.load_op = SDL_GPU_LOADOP_DONT_CARE; ct.store_op = SDL_GPU_STOREOP_STORE;
@@ -646,14 +643,38 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   {
     SDL_GPUColorTargetInfo ct = {}; ct.texture = rgbaTgt; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
     SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = depthTgt;
-    dt.load_op = SDL_GPU_LOADOP_LOAD; dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+    // STORE (not DONT_CARE): Pass B itself never writes depth (depth_write=false, test-only), but the
+    // bug #55 part-3 coverage stamp right after this pass DOES need to read Pass A's already-written
+    // opaque depth via the SAME GREATER_OR_EQUAL test — DONT_CARE would let the driver discard it.
+    dt.load_op = SDL_GPU_LOADOP_LOAD; dt.store_op = SDL_GPU_STOREOP_STORE;
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
     { int32_t ires_scale_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc); }
-    for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
-      SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]); bb.buffer = g.s_semi_vbuf[m]; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
-      SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, g.s_semi_n[m], 1, 0, 0);
+    for (int m = 0; m < NUM_BLEND_MODES; m++) if (semiN[m]) {
+      SDL_BindGPUGraphicsPipeline(rp, s_semi_pipe[m]); bb.buffer = semiVbuf[m]; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+      SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, semiN[m], 1, 0, 0);
+    }
+    SDL_EndGPURenderPass(rp);
+  }
+  // ---- bug #55 (part 3): depth-only re-rasterization of the semi buckets, marking depth wherever a real
+  // (non-discarded) TRANSLUCENT fragment landed — see semi_cover.frag's header comment. Pass B above never
+  // writes depth by design (so overlapping semi quads all blend), so without this a scene whose visible 3D
+  // content is mostly/entirely semi (e.g. the "ghosted" paused-game world behind the pause menu) would
+  // register as fully uncovered to the ires composite-back's coverage gate, discarding the correct blended
+  // picture in favor of the native pre-3D snapshot. Only meaningful when the composite-back will actually
+  // run (stampSemiCoverage is passed true only for the 3D band, only when ires>1 — see render_geom).
+  if (stampSemiCoverage) {
+    SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = depthTgt;
+    dt.load_op = SDL_GPU_LOADOP_LOAD; dt.store_op = SDL_GPU_STOREOP_STORE;
+    dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+    SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, nullptr, 0, &dt);
+    SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
+    SDL_BindGPUGraphicsPipeline(rp, s_semi_cover_pipe);
+    { int32_t ires_scale_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc); }
+    for (int m = 0; m < NUM_BLEND_MODES; m++) if (semiN[m]) {
+      bb.buffer = semiVbuf[m]; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+      SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1); SDL_DrawGPUPrimitives(rp, semiN[m], 1, 0, 0);
     }
     SDL_EndGPURenderPass(rp);
   }
@@ -667,7 +688,151 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
     SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
     SDL_EndGPURenderPass(rp);
   }
-  ires_composite_back();
+}
+static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src,
+                        int sx, int sy, int disp_w, int h, int* dtri, int* dtex, int* dsemi) {
+  int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += g.s_semi_n[m];
+  int semi2d_total[GGS_NUM_2D_BANDS] = {};
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
+    for (int m = 0; m < NUM_BLEND_MODES; m++) semi2d_total[band] += g.s_semi2d_n[band][m];
+  *dtri = g.s_tri_n; *dtex = g.s_tex_n; *dsemi = semi_total;   // 3D-world-only counts, as before the split
+  const bool has3d = (g.s_tri_n + g.s_tex_n + semi_total) > 0;
+  int total = g.s_tri_n + g.s_tex_n + semi_total;
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
+    total += g.s_tri2d_n[band] + g.s_tex2d_n[band] + semi2d_total[band];
+  if (total == 0) return;
+  g.ensure_targets();
+
+  int native_w = 0, ires_i = 1, fbw = 0, fbh = 0, ww = 0, wh = 0, ires_cap = 0;
+  gpu_gpu_video_status(&g.game->core, &native_w, &ires_i, &fbw, &fbh, &ww, &wh, &ires_cap);
+  g.ensure_ires_targets(ires_i);
+  const bool ires = ires_i > 1;
+  SDL_GPUTexture* colorTgt = ires ? g.s_ires_color : g.s_vram_tex;
+  SDL_GPUTexture* depthTgt = ires ? g.s_ires_depth : g.s_depth;
+  SDL_GPUTexture* rgbaTgt  = ires ? g.s_ires_rgba  : g.s_color_rgba;
+  const int scale = ires ? ires_i : 1;
+  const int cw = VRAM_W * scale, ch = VRAM_H * scale;
+  if (cfg_dbg("ires")) fprintf(stderr, "[ires] sx=%d sy=%d disp_w=%d h=%d ires_i=%d scale=%d cw=%d ch=%d | tri=%d tex=%d semi=%d | bg tri=%d tex=%d semi=%d | fg tri=%d tex=%d semi=%d\n",
+    sx, sy, disp_w, h, ires_i, scale, cw, ch, g.s_tri_n, g.s_tex_n, semi_total,
+    g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG], semi2d_total[GGS_2D_BG],
+    g.s_tri2d_n[GGS_2D_FG], g.s_tex2d_n[GGS_2D_FG], semi2d_total[GGS_2D_FG]);
+
+  // ---- upload: snapshot + ALL vertex batches (3D world + both 2D bands) in ONE copy pass -----------
+  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_snap_xfer, true); memcpy(p, src, (size_t)VRAM_W*VRAM_H*2); SDL_UnmapGPUTransferBuffer(s_dev, g.s_snap_xfer); }
+  if (g.s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tri_xfer, true);  memcpy(p, g.s_tri_buf,  (size_t)g.s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tri_xfer); }
+  if (g.s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tex_xfer, true);  memcpy(p, g.s_tex_buf,  (size_t)g.s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tex_xfer); }
+  for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
+    void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_semi_xfer[m], true);
+    memcpy(p, g.s_semi_buf[m], (size_t)g.s_semi_n[m]*sizeof(TexVtx));
+    SDL_UnmapGPUTransferBuffer(s_dev, g.s_semi_xfer[m]);
+  }
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
+    if (g.s_tri2d_n[band]) { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tri2d_xfer[band], true); memcpy(p, g.s_tri2d_buf[band], (size_t)g.s_tri2d_n[band]*sizeof(TriVtx)); SDL_UnmapGPUTransferBuffer(s_dev, g.s_tri2d_xfer[band]); }
+    if (g.s_tex2d_n[band]) { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tex2d_xfer[band], true); memcpy(p, g.s_tex2d_buf[band], (size_t)g.s_tex2d_n[band]*sizeof(TexVtx)); SDL_UnmapGPUTransferBuffer(s_dev, g.s_tex2d_xfer[band]); }
+    for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi2d_n[band][m]) {
+      void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_semi2d_xfer[band][m], true);
+      memcpy(p, g.s_semi2d_buf[band][m], (size_t)g.s_semi2d_n[band][m]*sizeof(TexVtx));
+      SDL_UnmapGPUTransferBuffer(s_dev, g.s_semi2d_xfer[band][m]);
+    }
+  }
+  SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
+  { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = g.s_snap_xfer; si.pixels_per_row = VRAM_W; si.rows_per_layer = VRAM_H;
+    SDL_GPUTextureRegion dr = {}; dr.texture = g.s_vram_snap; dr.w = VRAM_W; dr.h = VRAM_H; dr.d = 1;
+    SDL_UploadToGPUTexture(cp, &si, &dr, false); }
+  auto upv = [&](SDL_GPUTransferBuffer* x, SDL_GPUBuffer* b, int n, Uint32 stride){ if (!n) return;
+    SDL_GPUTransferBufferLocation s = {}; s.transfer_buffer = x;
+    SDL_GPUBufferRegion d = {}; d.buffer = b; d.offset = 0; d.size = (Uint32)n*stride;
+    SDL_UploadToGPUBuffer(cp, &s, &d, false); };
+  upv(g.s_tri_xfer, g.s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
+  upv(g.s_tex_xfer, g.s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
+  for (int m = 0; m < NUM_BLEND_MODES; m++) upv(g.s_semi_xfer[m], g.s_semi_vbuf[m], g.s_semi_n[m], sizeof(TexVtx));
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
+    upv(g.s_tri2d_xfer[band], g.s_tri2d_vbuf[band], g.s_tri2d_n[band], sizeof(TriVtx));
+    upv(g.s_tex2d_xfer[band], g.s_tex2d_vbuf[band], g.s_tex2d_n[band], sizeof(TexVtx));
+    for (int m = 0; m < NUM_BLEND_MODES; m++) upv(g.s_semi2d_xfer[band][m], g.s_semi2d_vbuf[band][m], g.s_semi2d_n[band][m], sizeof(TexVtx));
+  }
+  SDL_EndGPUCopyPass(cp);
+
+  // Native (unscaled) viewport/scissor shared by both 2D bands — the ORIGINAL i==1 full-canvas scissor
+  // (never restricted to the display sub-rect), since 2D content isn't bounded by the ires display region.
+  SDL_GPUViewport vpNative = { 0, 0, (float)VRAM_W, (float)VRAM_H, 0.0f, 1.0f };
+  SDL_Rect scNative = { 0, 0, VRAM_W, VRAM_H };
+
+  // ---- band 1/3: 2D_BG — native resolution, drawn BEFORE the 3D world (see the bug #55 note above) ----
+  if (g.s_tri2d_n[GGS_2D_BG] || g.s_tex2d_n[GGS_2D_BG] || semi2d_total[GGS_2D_BG])
+    render_pass_set(cmd, g.s_vram_tex, g.s_depth, g.s_color_rgba, g.s_vram_snap, vpNative, scNative, 1,
+                     g.s_tri2d_vbuf[GGS_2D_BG], g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_vbuf[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG],
+                     g.s_semi2d_vbuf[GGS_2D_BG], g.s_semi2d_n[GGS_2D_BG]);
+
+  // ---- band 2/3: the 3D world — possibly ires-scaled + box-downsampled back. Skipped entirely when this
+  // frame has no 3D geometry (has3d==false): a pure-2D frame (menu/cutscene panel) never touches the ires
+  // target or the seed/composite-back round trip, so it stays exactly as pixel-exact as the two 2D bands.
+  if (has3d) {
+    if (ires) {
+      // bug #55 (part 2): snapshot s_vram_tex (which now holds band 1's fresh draw) into s_ires_bg_snap
+      // BEFORE the seed blit touches anything — this is the native-resolution fallback the composite-back
+      // (ires_downsample.frag u_native) uses for sub-texels the 3D pass doesn't cover. Must run in its own
+      // copy pass (texture-to-texture), before the seed blit / Pass A run.
+      { SDL_GPUCopyPass* bgcp = SDL_BeginGPUCopyPass(cmd);
+        SDL_GPUTextureLocation srcl = {}; srcl.texture = g.s_vram_tex;
+        SDL_GPUTextureLocation dstl = {}; dstl.texture = g.s_ires_bg_snap;
+        SDL_CopyGPUTextureToTexture(bgcp, &srcl, &dstl, VRAM_W, VRAM_H, 1, false);
+        SDL_EndGPUCopyPass(bgcp); }
+      // ires seed blit: upsample the display sub-rect of the CURRENT s_vram_tex content (now including
+      // whatever band 1 just drew) into colorTgt so Pass A's LOAD_OP_LOAD blends world geometry against the
+      // real background, not undefined texels. Must run outside any render/copy pass.
+      SDL_GPUBlitInfo bi = {};
+      bi.source.texture = g.s_vram_tex; bi.source.x = (Uint32)sx; bi.source.y = (Uint32)sy;
+      bi.source.w = (Uint32)disp_w; bi.source.h = (Uint32)h;
+      bi.destination.texture = colorTgt; bi.destination.x = (Uint32)(sx * scale); bi.destination.y = (Uint32)(sy * scale);
+      bi.destination.w = (Uint32)(disp_w * scale); bi.destination.h = (Uint32)(h * scale);
+      bi.load_op = SDL_GPU_LOADOP_DONT_CARE; bi.filter = SDL_GPU_FILTER_LINEAR;
+      SDL_BlitGPUTexture(cmd, &bi);
+    }
+    // Viewport ALWAYS spans the full (possibly ires-scaled) canvas — tri.vert's NDC divisors are fixed to
+    // the 1024x512 canvas, so the viewport is what "scales by i" (pixel = viewport.wh * (ndc+1)/2, unchanged
+    // shader). Scissor restricts writes to the display sub-rect (scaled by `scale`) purely to skip fill work
+    // outside the region that ever gets composited back — at i==1 this is the original {0,0,VRAM_W,VRAM_H}.
+    SDL_GPUViewport vp = { 0, 0, (float)cw, (float)ch, 0.0f, 1.0f };
+    SDL_Rect sc = ires ? SDL_Rect{ sx * scale, sy * scale, disp_w * scale, h * scale } : SDL_Rect{ 0, 0, VRAM_W, VRAM_H };
+    render_pass_set(cmd, colorTgt, depthTgt, rgbaTgt, g.s_vram_snap, vp, sc, scale,
+                     g.s_tri_vbuf, g.s_tri_n, g.s_tex_vbuf, g.s_tex_n, g.s_semi_vbuf, g.s_semi_n,
+                     ires);   // bug #55 part 3: stamp semi coverage only when the composite-back will run
+    // ires composite: downsample colorTgt's display sub-rect back into s_vram_tex's SAME sub-rect. A box
+    // filter (s_ires_downsample_pipe / ires_downsample.frag), not a plain SDL_BlitGPUTexture LINEAR blit —
+    // a single-tap bilinear blit only samples the nearest 2x2 source texels per destination pixel, which is
+    // correct for magnifying (the seed blit above IS a plain blit) but aliases badly on a >1:1 minify: high-
+    // frequency content (grass, leaf clusters) came out as visible per-pixel confetti noise on the first
+    // bring-up pass (2026-07-15) — the RAW ires target (`iresdump`) was clean, only the downsampled composite
+    // wasn't, proving it was a filter-choice bug, not a rendering one. The shader averages the full NxN
+    // source-texel box (N=scale) in unpacked RGB space per destination pixel instead. Scoped to exactly the
+    // display sub-rect so every other VRAM-space consumer (texture pages, CLUTs, sprite blits, readback,
+    // SBS) never sees the scaled target. No-op (not called) at i==1.
+    if (ires) {
+      SDL_GPUColorTargetInfo ct2 = {}; ct2.texture = g.s_vram_tex; ct2.load_op = SDL_GPU_LOADOP_LOAD; ct2.store_op = SDL_GPU_STOREOP_STORE;
+      SDL_GPURenderPass* rp2 = SDL_BeginGPURenderPass(cmd, &ct2, 1, nullptr);
+      SDL_GPUViewport vp2 = { (float)sx, (float)sy, (float)disp_w, (float)h, 0.0f, 1.0f };
+      SDL_Rect sc2 = { sx, sy, disp_w, h };
+      SDL_SetGPUViewport(rp2, &vp2); SDL_SetGPUScissor(rp2, &sc2);
+      // nearest: the shader does its own texelFetch box. Three bindings: [0]=color, [1]=depth, [2]=native
+      // bg snapshot (bug #55 coverage mix — texelFetch(u_depth,...) decides per-sub-texel whether the 3D
+      // pass touched it; uncovered sub-texels fall back to u_native's sharp native pixel instead of the
+      // lossy upsampled seed; see ires_downsample.frag).
+      SDL_GPUTextureSamplerBinding srcbind[3] = { { colorTgt, s_samp_nearest }, { depthTgt, s_samp_nearest }, { g.s_ires_bg_snap, s_samp_nearest } };
+      SDL_BindGPUGraphicsPipeline(rp2, s_ires_downsample_pipe); SDL_BindGPUFragmentSamplers(rp2, 0, srcbind, 3);
+      int32_t n_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &n_pc, sizeof n_pc);
+      SDL_DrawGPUPrimitives(rp2, 3, 1, 0, 0);
+      SDL_EndGPURenderPass(rp2);
+      if (cfg_dbg("ires")) fprintf(stderr, "[ires] composite downsample dst=(%d,%d,%d,%d) n=%d\n", sx, sy, disp_w, h, scale);
+    }
+  }
+
+  // ---- band 3/3: 2D_FG (HUD/menus) — native resolution, drawn AFTER the 3D composite-back so it is NEVER
+  // touched by the ires round trip. This is the fix for bug #55's reported symptom.
+  if (g.s_tri2d_n[GGS_2D_FG] || g.s_tex2d_n[GGS_2D_FG] || semi2d_total[GGS_2D_FG])
+    render_pass_set(cmd, g.s_vram_tex, g.s_depth, g.s_color_rgba, g.s_vram_snap, vpNative, scNative, 1,
+                     g.s_tri2d_vbuf[GGS_2D_FG], g.s_tri2d_n[GGS_2D_FG], g.s_tex2d_vbuf[GGS_2D_FG], g.s_tex2d_n[GGS_2D_FG],
+                     g.s_semi2d_vbuf[GGS_2D_FG], g.s_semi2d_n[GGS_2D_FG]);
 }
 
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
@@ -958,7 +1123,12 @@ void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (vo
     if (--s_preseq_left == 0) fprintf(stderr, "[preseq] done: %d frames -> %s\n", s_preseq_idx, s_preseq_dir);
   }
   s_tri_n = s_tex_n = 0;
-  for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_n[m] = 0; }
+  for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_n[m] = 0;
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
+    s_tri2d_n[band] = s_tex2d_n[band] = 0;
+    for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi2d_n[band][m] = 0;
+  }
+}
 
 // ---- native 3D / textured raster: accumulate the tee'd geometry into the host batch (Pass 2) ---------
 // Append one flat triangle (VRAM coords + per-vertex RGB 0..255); depth = per-vertex native (s_vd) or the
@@ -970,16 +1140,44 @@ static inline void ggs_alloc_batches(GpuGpuState& g) {
   if (!g.s_tex_buf)  g.s_tex_buf  = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
   for (int m = 0; m < NUM_BLEND_MODES; m++)
     if (!g.s_semi_buf[m]) g.s_semi_buf[m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
+    if (!g.s_tri2d_buf[band]) g.s_tri2d_buf[band] = (TriVtx*)malloc(sizeof(TriVtx) * TRI2D_CAP);
+    if (!g.s_tex2d_buf[band]) g.s_tex2d_buf[band] = (TexVtx*)malloc(sizeof(TexVtx) * TEX2D_CAP);
+    for (int m = 0; m < NUM_BLEND_MODES; m++)
+      if (!g.s_semi2d_buf[band][m]) g.s_semi2d_buf[band][m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX2D_CAP);
+  }
 }
+
+// bug #55 classifier: is the CURRENT prim (about to be appended by draw_tri/draw_tritri/draw_semi) 3D
+// world geometry, or which 2D band does it belong to? s_vd (per-vertex native depth) is set ONLY for
+// RQ_OM_DEPTH world prims (render_queue.cpp RQ_SETVD) and freshly cleared by set_order()/set_order_2d*
+// before every draw (see those bodies below) — so it is a reliable, always-current per-draw signal.
+// Non-3D prims are banded by their already-assigned order value: RQ_OM_2D_BG's set_order_2d_bg() writes
+// s_cur_ord in (0, NATIVE_3D_MIN], RQ_OM_2D_FG's set_order_2d() writes it in (NATIVE_3D_MAX, 1] — the
+// SAME non-overlapping bands render_geom's 3D-band clamp (ord3d_b) already relies on.
+static inline bool ggs_is_3d(const GpuGpuState& g) { return g.s_vd != nullptr; }
+static inline int  ggs_2d_band(const GpuGpuState& g) { return g.s_cur_ord <= NATIVE_3D_MIN ? GGS_2D_BG : GGS_2D_FG; }
 
 void GpuGpuState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                           int x2,int y2,int r2,int g2,int b2) {
-  if (s_tri_n + 3 > TRI_CAP) return;
   ggs_alloc_batches(*this);
+  // bug #55: route 2D (non-world) flat tris into the native-resolution 2D bands instead of the 3D-world
+  // batch — see ggs_is_3d/ggs_2d_band above and render_geom's band split below.
+  if (!ggs_is_3d(*this)) {
+    int band = ggs_2d_band(*this);
+    if (s_tri2d_n[band] + 3 > TRI2D_CAP) return;
+    TriVtx* v = ((TriVtx*)s_tri2d_buf[band]) + s_tri2d_n[band];
+    v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_cur_ord };
+    v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_cur_ord };
+    v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_cur_ord };
+    s_tri2d_n[band] += 3;
+    return;
+  }
+  if (s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = ((TriVtx*)s_tri_buf) + s_tri_n;
-  v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_vd ? ord3d_b(s_vd[0], s_depth_bias) : s_cur_ord };
-  v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_vd ? ord3d_b(s_vd[1], s_depth_bias) : s_cur_ord };
-  v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_vd ? ord3d_b(s_vd[2], s_depth_bias) : s_cur_ord };
+  v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, ord3d_b(s_vd[0], s_depth_bias) };
+  v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, ord3d_b(s_vd[1], s_depth_bias) };
+  v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, ord3d_b(s_vd[2], s_depth_bias) };
   s_tri_n += 3;
 }
 // Fill 3 textured vertices: per-vertex pos/uv/color + shared page/CLUT/window/clip/semi/blend state. Uses
@@ -1005,8 +1203,17 @@ void GpuGpuState::draw_tritri(const int* xs, const int* ys, const int* us, const
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                              int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) {
-  if (s_tex_n + 3 > TEX_CAP) return;
   ggs_alloc_batches(*this);
+  // bug #55: 2D (non-world) textured tris render at native resolution, never through the ires target.
+  if (!ggs_is_3d(*this)) {
+    int band = ggs_2d_band(*this);
+    if (s_tex2d_n[band] + 3 > TEX2D_CAP) return;
+    tex_emit(((TexVtx*)s_tex2d_buf[band]) + s_tex2d_n[band], xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+             twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
+    s_tex2d_n[band] += 3;
+    return;
+  }
+  if (s_tex_n + 3 > TEX_CAP) return;
   tex_emit(((TexVtx*)s_tex_buf) + s_tex_n, xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 0, 0);
   s_tex_n += 3;
@@ -1016,8 +1223,17 @@ void GpuGpuState::draw_semi(const int* xs, const int* ys, const int* us, const i
                            int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                            int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) {
   int m = blend & 3;   // bucket by PSX blend mode: one HW-blend pipeline/vertex-buffer per mode (see render_geom)
-  if (s_semi_n[m] + 3 > TEX_CAP) return;
   ggs_alloc_batches(*this);
+  // bug #55: 2D (non-world) semi/translucent tris render at native resolution, never through the ires target.
+  if (!ggs_is_3d(*this)) {
+    int band = ggs_2d_band(*this);
+    if (s_semi2d_n[band][m] + 3 > TEX2D_CAP) return;
+    tex_emit(((TexVtx*)s_semi2d_buf[band][m]) + s_semi2d_n[band][m], xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
+             twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
+    s_semi2d_n[band][m] += 3;
+    return;
+  }
+  if (s_semi_n[m] + 3 > TEX_CAP) return;
   tex_emit(((TexVtx*)s_semi_buf[m]) + s_semi_n[m], xs, ys, us, vs, rs, gs, bs, tpx, tpy, mode, raw, clutx, cluty,
            twmx, twmy, twox, twoy, dax0, day0, dax1, day1, 1, blend);
   s_semi_n[m] += 3;

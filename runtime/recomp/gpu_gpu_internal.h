@@ -38,6 +38,16 @@ struct VkRect { int x, y, w, h; };
 // batches themselves can be per-Core (SBS's two cores keep separate per-frame geometry).
 #define GGS_NUM_BLEND_MODES 4                   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
 
+// 2D order bands (bug #55 fix): content submitted via RQ_OM_2D_BG / RQ_OM_2D_FG (render_queue.cpp) is NOT
+// part of the 3D world — it must render at NATIVE VRAM resolution regardless of the live ires scale (see
+// gpu_gpu.cpp render_geom's band split). Kept as two bands, not one, because the engine's existing order
+// scheme (NATIVE_3D_MIN/MAX in gpu_gpu.cpp) already draws 2D_BG strictly BEHIND the 3D world and 2D_FG
+// strictly IN FRONT of it — the render_geom band order (2D_BG -> 3D -> 2D_FG) reproduces that without a
+// depth test shared across targets.
+#define GGS_2D_BG 0
+#define GGS_2D_FG 1
+#define GGS_NUM_2D_BANDS 2
+
 // ---- GpuGpuState — the VK backend's per-instance, per-frame render machine state + its methods --------
 struct GpuGpuState {
   Game* game = nullptr;   // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
@@ -64,6 +74,19 @@ struct GpuGpuState {
   int s_have_3d = 0;                              // THIS Game's targets created
   void ensure_targets();                          // lazy target creation (device must be inited)
 
+  // ---- 2D (non-world) GPU vertex buffers — bug #55 fix ------------------------------------------------
+  // A SEPARATE vertex-buffer set per 2D band (GGS_2D_BG / GGS_2D_FG), so 2D content never shares the
+  // 3D-world buffers above and never gets bound to the ires-scaled target: render_geom draws these bands
+  // directly onto s_vram_tex/s_depth/s_color_rgba at native VRAM resolution, regardless of the live ires
+  // scale. Smaller capacity than the 3D buffers (TRI2D_CAP/TEX2D_CAP in gpu_gpu.cpp) — HUD/menu/2D-layer
+  // geometry per frame is a small fraction of the 3D world's.
+  SDL_GPUBuffer*          s_tri2d_vbuf[GGS_NUM_2D_BANDS] = {};
+  SDL_GPUBuffer*          s_tex2d_vbuf[GGS_NUM_2D_BANDS] = {};
+  SDL_GPUBuffer*          s_semi2d_vbuf[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES] = {};
+  SDL_GPUTransferBuffer*  s_tri2d_xfer[GGS_NUM_2D_BANDS] = {};
+  SDL_GPUTransferBuffer*  s_tex2d_xfer[GGS_NUM_2D_BANDS] = {};
+  SDL_GPUTransferBuffer*  s_semi2d_xfer[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES] = {};
+
   // ---- ires (internal resolution) scaled 3D target — Pass 2, gpu_gpu.cpp render_geom -----------------
   // A SEPARATE, larger color+depth(+semi-blend-intermediate) target that the opaque/semi geometry passes
   // render into at `i`x the fixed VRAM canvas (1024*i x 512*i) when the live ires scale is >1, so 3D edges
@@ -76,6 +99,13 @@ struct GpuGpuState {
   SDL_GPUTexture* s_ires_color = nullptr;   // RG8 (packed 1555), VRAM_W*i x VRAM_H*i
   SDL_GPUTexture* s_ires_depth = nullptr;   // D32
   SDL_GPUTexture* s_ires_rgba  = nullptr;   // float RGBA semi-blend intermediate, ires-scaled
+  // bug #55 (part 2): a native-resolution (VRAM_W x VRAM_H) snapshot of s_vram_tex taken right after the
+  // 2D_BG band draws and before the ires seed blit — render_geom's composite-back (ires_downsample.frag's
+  // u_native) uses it to fall back to the EXACT native pixel for any sub-texel the 3D pass's own opaque
+  // depth shows as uncovered, instead of a lossy LINEAR-upsampled copy. Native-res regardless of the live
+  // ires scale, so it lives alongside s_ires_color/depth/rgba but is NOT torn down/rebuilt on scale change
+  // (created once by ensure_targets, like s_vram_tex itself).
+  SDL_GPUTexture* s_ires_bg_snap = nullptr;
   int s_ires_scale = 1;                     // scale these targets are built for (1 = none built/needed)
   void ensure_ires_targets(int i);          // i<=1: tear down (no targets held); i>1: (re)build if changed
 
@@ -133,6 +163,16 @@ struct GpuGpuState {
   int   s_tex_n   = 0;
   void* s_semi_buf[GGS_NUM_BLEND_MODES] = {nullptr, nullptr, nullptr, nullptr};
   int   s_semi_n[GGS_NUM_BLEND_MODES]   = {0, 0, 0, 0};
+  // 2D (non-world) CPU-side batches — bug #55 fix. Same lifetime/reset contract as the 3D ones above
+  // (lazily allocated, reset every frame_end); routed here instead of s_tri_buf/s_tex_buf/s_semi_buf
+  // whenever the emitting draw call is NOT tagged world-3D (s_vd unset) — see draw_tri/draw_tritri/
+  // draw_semi + the ggs_2d_band() classifier in gpu_gpu.cpp.
+  void* s_tri2d_buf[GGS_NUM_2D_BANDS] = {};
+  int   s_tri2d_n[GGS_NUM_2D_BANDS]   = {};
+  void* s_tex2d_buf[GGS_NUM_2D_BANDS] = {};
+  int   s_tex2d_n[GGS_NUM_2D_BANDS]   = {};
+  void* s_semi2d_buf[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES] = {};
+  int   s_semi2d_n[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES]   = {};
   // Last-frame draw counts (for the `vkstats` debug-server probe). Written by render_geom, read by
   // `stats` — per-Core so `@a vkstats` / `@b vkstats` return each core's independent counts.
   int   s_dbg_tri_c  = 0;
