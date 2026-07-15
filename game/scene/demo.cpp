@@ -858,6 +858,48 @@ static void demo_frame_s7(Core* c) {
   if (cfg_dbg("demo")) fprintf(stderr, "[demo] s7 attract phase=%u sm[0x6e]=%u sm[0x5a]=%u bf870=%u\n",
                                phase, c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->mem_r8(0x800bf870u));
   if (phase == 0) {
+    // FRAME ALIGNMENT (SBS-harness-only, same shape as demo_frame_s5's "demo_start_game" barrier
+    // above and engine.cpp's "start_bin_load"/"seqvab_build"): this collapses FUN_80044bd4(
+    // 0x800452c0, entry, 1, 2)'s cooperative multi-frame spawn-and-wait into one synchronous call
+    // (transitionAreaLoad below) — on the oracle sibling (SBS core B, the pure recomp substrate)
+    // the equivalent load runs on task SLOT 1 across (usually) 1-2 real scheduler ticks, and its
+    // completion only becomes visible on this core's OWN clock. Hold phase0 (no state advance —
+    // gate BEFORE the phase0 body's first write) until the sibling core's OWN load-done flag lands.
+    //
+    // Key: *0x1F80019A, NOT the task-slot done_flag 0x1F80019B FUN_80044bd4 itself owns. done_flag
+    // is REUSED by every cooperative slot-1 spawn (texgroup preload, the SEQ/VAB build, this area
+    // load) and is never cleared back to 0 between them on the timescale this fork runs at — a
+    // `skipRendezvousReached(0x1F80019B, 1, …)` gate would false-pass instantly on the VAB build's
+    // stale 1 (confirmed live: PSXPORT_DEBUG=f465probe traced core B's 0x1F80019B sitting at 1
+    // continuously from f0 through past f1500, never observably 0 at frame granularity — the
+    // clear+reload+reset all land inside one scheduler tick). 0x1F80019A is DEMO-EXCLUSIVE: RE'd
+    // (Ghidra decomp of a LIVE title-screen RAM capture, since this code lives in the DEMO overlay
+    // and isn't resident in a mid-game dump) FUN_80106c24 phase0's tail write `sb s1(=1),0x1f80019a`
+    // (0x80106d1c, mirrored at line ~890 below) is the ONLY writer of a nonzero value anywhere in the
+    // call graph reachable from this fork; it is zeroed only by THIS SAME phase machine's phase2
+    // teardown (0x80106dfc) and by DEMO's own init (s0/s0PostYield) — never by texgroup/VAB. Traced
+    // live over 2 full attract cycles (PSXPORT_DEBUG=f465probe, f0..f1500): 0x1F80019A cleanly
+    // toggles 0 (before each spawn) -> 1 (right after that spawn's own tail completes) -> 0 (that
+    // item's teardown), with no unrelated writer observed. (Residual theoretical risk: if core A
+    // ever ran a FULL ~900-frame attract cycle ahead of core B, B's flag could still read stale-1
+    // from the PRIOR cycle; the observed cross-core skew on this fork is low single-digit frames,
+    // nowhere near that, and the 3600-frame rendezvous deadlock-abort is the fail-fast backstop if
+    // it ever were.) No-op outside SBS MODE=skip (game->sbs null / mode gate).
+    //
+    // width8=true is REQUIRED here, not cosmetic: skipRendezvousReached defaults to a 16-bit
+    // (mem_r16) read, and 0x1F80019A's adjacent byte is 0x1F80019B — the globally-reused
+    // cooperative-spawn done_flag, which sits near 1 almost permanently (see above). A 16-bit read
+    // at 0x1F80019A folds that neighbor in (value = 19A | (19B<<8) on this little-endian host), so
+    // it always reads >=256 and the gate would false-pass on frame one — caught live: the FIRST cut
+    // of this fix (plain skipRendezvousReached, no width8) showed the fork-site audit's
+    // 'demo_area_load' label at checks=17 stalls=0 maxWait=0 for an entire AUTO_SKIP run (never once
+    // actually waited), and the f465 [AUDIO fx_area_ptrs] divergence was UNCHANGED — proof the
+    // barrier was a no-op, not that the fork was already aligned. Fixed by adding the width8 param
+    // to skipRendezvousReached itself (sbs.h/sbs.cpp) rather than picking a different, less-precise
+    // key — the byte IS the correct signal, the API's fixed read-width was the actual bug.
+    if (c->game->sbs &&
+        !c->game->sbs->skipRendezvousReached(c, 0x1F80019Au, 1u, "demo_area_load", /*width8=*/true))
+      return;                                    // idle this frame — sm[0x4a] stays 0, retry next tick
     // PHASE0 0x80106c74 — launch: advance to phase1, set the item timer, select+load the attract area.
     c->mem_w16(sm + 0x4a, 1);                                       // sh s1(=1),0x4a -> phase1
     // sm[0x5a] = 900: the phase-machine prologue loads v0=900 in the `beq v1,zero,phase0` DELAY SLOT

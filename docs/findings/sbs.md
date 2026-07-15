@@ -1580,7 +1580,7 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   user-facing (pc_skip) bugs. Next high-value thread. Root-cause f2 first (upstream of f462).
 - Logs: scratch/logs/sbs{1..9}*.log.
 
-## MODE=skip f465 area-FX divergence — root-caused, fix BLOCKED on rendezvous-key RE (2026-07-15)
+## MODE=skip f465 area-FX divergence — RESOLVED (2026-07-15): rendezvous on 0x1F80019A
 - Repro: MODE=skip AUTO_SKIP SKIP_CONTINUE — f465 [AUDIO fx_area_ptrs] @0x800A4F7E A=02 B=FF +
   @0x8014C124 A=04 B=00. Same FORK PATTERN as the f2 VAB fix (7eced30): a collapsed SYNCHRONOUS
   native load racing ahead of the oracle's cooperative multi-frame task — here the ATTRACT-DEMO area

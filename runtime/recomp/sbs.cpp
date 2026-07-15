@@ -320,7 +320,7 @@ public:
   bool mRvDumped = false;
   void dumpRendezvousSites(FILE* out);
   bool skipCompareMode() const { return mMode == M_SKIP; }
-  bool skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label);
+  bool skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8 = false);
 
   // ---- write-watchpoint record (exact corrupting-write site) ----
   bool     mWwArmed = false;
@@ -844,14 +844,26 @@ static const char* addrLabel(uint32_t a) {
 // garbage into the compared value and report "reached" the moment EITHER half went nonzero — found
 // live during the first MODE=skip smoke run (start_bin_load "reached" after a single check, 0
 // stalls, when the substrate oracle should still have been many frames from done). mem_r16 is the
-// correct width for every current caller; widen this (and its callers' minVal range) the day a
-// fork's shared completion field is genuinely a full word.
-bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label) {
+// default width — correct for every current 16-bit-field caller — but the SAME class of bug bites
+// one level down: `demo_area_load` (0x1F80019A) is a single BYTE next to another independently-live
+// byte (0x1F80019B, the reused cooperative-spawn done_flag), so a 16-bit read there folds the
+// neighbor's near-permanent 1 in and silently false-passes (found live 2026-07-15, docs/findings/
+// sbs.md "MODE=skip f465 area-FX divergence"). `width8=true` selects an 8-bit read for that shape;
+// widen further (a 32-bit variant + minVal range) the day a fork's shared completion field is
+// genuinely a full word.
+bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8) {
   RvSite& site = mRvSites[label];
   site.checks++;
   if (mMode != M_SKIP) return true;
   Core* other = (coreId(c) == 0) ? &mB->core : &mA->core;
-  uint32_t v = other->mem_r16(addr);
+  // width8: the gated field is a single guest BYTE whose adjacent byte is a DIFFERENT, independently
+  // (and often more freely) written field — e.g. a demo-exclusive load-done flag sitting right next to
+  // the globally-reused cooperative-spawn done_flag 0x1F80019B. mem_r16 would silently fold that
+  // neighbor's value into the compare (a false-pass trap found live 2026-07-15, docs/findings/sbs.md
+  // "MODE=skip f465 area-FX divergence" — the neighbor byte was stuck near 1, so a 16-bit read always
+  // read >=256 and the barrier never actually waited). Every EXISTING call site gates a real 16-bit SM
+  // hword field (task+0x48 etc.) and is unaffected (width8 defaults false).
+  uint32_t v = width8 ? (uint32_t)other->mem_r8(addr) : (uint32_t)other->mem_r16(addr);
   bool ok = v >= minVal;
   if (ok) {
     if (site.waiting) {
@@ -2818,6 +2830,6 @@ void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val, uint32_t width) {
 Core*    Sbs::coreByLetter(char which) const                { return mImpl->coreByLetter(which); }
 Core*    Sbs::shownCore() const                             { return mImpl->shownCore(); }
 bool     Sbs::skipCompareMode() const                       { return mImpl->skipCompareMode(); }
-bool     Sbs::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label) {
-  return mImpl->skipRendezvousReached(c, addr, minVal, label);
+bool     Sbs::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8) {
+  return mImpl->skipRendezvousReached(c, addr, minVal, label, width8);
 }

@@ -64,7 +64,14 @@ public:
   // end-of-run rendezvous-site report. On a wait that never resolves within the timeout window this
   // ABORTS with both sides' state dumped — a silent hang would be worse than a loud, diagnosable
   // failure (CLAUDE.md fail-fast).
-  bool skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label);
+  // `width8`: gate an 8-bit field instead of the default 16-bit hword read. Needed whenever the
+  // gated byte's ADJACENT byte is a DIFFERENT, independently-driven field — mem_r16 would silently
+  // fold that neighbor's value into the compare (found live 2026-07-15: 0x1F80019A's neighbor
+  // 0x1F80019B is the globally-reused cooperative-spawn done_flag, stuck near 1, so a 16-bit read
+  // always satisfied >=1 and the barrier never actually waited — docs/findings/sbs.md "MODE=skip
+  // f465 area-FX divergence"). Every pre-existing call site gates a real 16-bit SM field and is
+  // unaffected by the default.
+  bool skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8 = false);
 
 private:
   class Impl;
