@@ -82,6 +82,12 @@ public:
   // writes into the ISOLATED sink instead of the live `rq` — the live queue (about to be reused by the
   // next real drawOTag) is never touched by the present-time re-render. Always null outside that window.
   RenderQueue* rqRedirect = nullptr;
+  // The ACTIVE render queue every emit choke should target: the isolated sink while a present-time
+  // re-render is in flight (rqRedirect set), else the live `rq`. Unifies the redirect so the OT-walk's
+  // own emits (gpu_native.cpp emitOrQueue) can be captured into mSink too (fps60 unified-path step 2a) —
+  // native_terrain already checked rqRedirect; this makes it the ONE mechanism. Byte-identical when
+  // rqRedirect==null (every non-present-re-run path).
+  RenderQueue& activeRq() { return rqRedirect ? *rqRedirect : rq; }
   Fps60  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   SpuAudio    spu_audio;    // host audio output sink (SDL3 device + optional WAV capture)
   NativeMusic native_music; // real-time SEP/VAB synth mixed into the SPU sink each audio frame

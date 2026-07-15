@@ -573,6 +573,8 @@ void Fps60::present_vk(Core* core) {
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
   mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
+  std::swap(mSubsceneCur, mSubscenePrev);   // authored-sub-scene flag + OT head rotate cur->prev too
+  std::swap(mOtHeadCur, mOtHeadPrev);
   mHavePrev = 1;
 }
 
