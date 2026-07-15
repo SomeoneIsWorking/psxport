@@ -18,6 +18,7 @@
 #include "core/engine.h"
 #include "engine_overrides.h"
 #include "game.h"
+#include "guest_abi.h"    // GuestFrame/GuestReg/guest_fn — frameTick + the outer-transition cluster
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
@@ -51,6 +52,77 @@ inline void mark_item_consumed(Core* c, uint32_t item) {
   c->mem_w8(item + 5, 0);
   c->mem_w8(item + 6, 0);
 }
+
+// TombaState — named-field lens over Tomba's G block (ActorTomba::G_ADDR / a `G` local passed in
+// by the per-frame driver). Guest addresses are UNCHANGED from the raw c->mem_r/w8/16 pokes this
+// replaces (see actor_tomba.h's per-function doc comments for the RE of each field); this is a
+// readability lens, not a state migration — every accessor is still a direct guest-RAM access.
+// Scoped to the fields the frameTick / outer-transition-gate / outer-transition-commit cluster
+// touches; a wider pass can grow this lens as more of the file gets ported.
+struct TombaState {
+  Core* c;
+  uint32_t base;
+
+  // outerState (+0x4): frameTick's own top-level FSM selector (0=INIT..7=LOAD-WAIT). Also used,
+  // within LOAD-WAIT, as the settle target frameTick's case-7 sub-machine writes back to (=1).
+  uint8_t outerState() const           { return c->mem_r8(base + 0x4u); }
+  void setOuterState(uint8_t v)        { c->mem_w8(base + 0x4u, v); }
+
+  // loadStep/loadSub/loadSub2 (+0x5/+0x6/+0x7): the 3-state LOAD-WAIT sub-machine counter
+  // (frameTick case 7) — also the "G+5=1,G+6=0" pair outerTransitionGate/Commit write when they
+  // commit a fresh walk-state.
+  uint8_t loadStep() const             { return c->mem_r8(base + 0x5u); }
+  void setLoadStep(uint8_t v)          { c->mem_w8(base + 0x5u, v); }
+  void setLoadSub(uint8_t v)           { c->mem_w8(base + 0x6u, v); }
+  void setLoadSub2(uint8_t v)          { c->mem_w8(base + 0x7u, v); }
+
+  // statusFlags (+0x0): walk-state / cutscene-lock byte. Bit 4 and the 0xC mask gate the
+  // outer-transition commit path; literal 3 is the "reset to walk" stamp.
+  uint8_t statusFlags() const          { return c->mem_r8(base + 0x0u); }
+  void setStatusFlags(uint8_t v)       { c->mem_w8(base + 0x0u, v); }
+
+  // latchFlags (+0xD): stop-motion / facing-lock bitfield (0x80 busy, 0x50 lock mask, 0x82 armed).
+  uint8_t latchFlags() const           { return c->mem_r8(base + 0xDu); }
+  void setLatchFlags(uint8_t v)        { c->mem_w8(base + 0xDu, v); }
+
+  // stopMotionAux (+0x61): companion byte cleared alongside latchFlags on a walk-state reset.
+  void setStopMotionAux(uint8_t v)     { c->mem_w8(base + 0x61u, v); }
+
+  // facing (+0x140, s16): Tomba's current heading — turnBiasCompute's `facing` arg source.
+  int16_t facing() const               { return (int16_t)c->mem_r16(base + 0x140u); }
+
+  // turnSuppressGate (+0x146): "already turn-suppressed" flag frameTick checks post-turnBias.
+  uint8_t turnSuppressGate() const     { return c->mem_r8(base + 0x146u); }
+  void setTurnSuppressGate(uint8_t v)  { c->mem_w8(base + 0x146u, v); }
+
+  // transitionSlot (+0x164): the interaction-slot state outerTransitionGate branches on (1 = a
+  // specific slot -> a stop-motion spawn without the busy-latch check; else gated by 0x800BF80D).
+  uint8_t transitionSlot() const       { return c->mem_r8(base + 0x164u); }
+
+  // extraClear (+0x16A): cleared only on outerTransitionGate's busy-latch branch (verified vs
+  // ground truth shard — not present on the transitionSlot==1 branch).
+  void setExtraClear(uint8_t v)        { c->mem_w8(base + 0x16Au, v); }
+
+  // turnCurrent/turnTarget (+0x16E/+0x170, s16): the pending-frame turn counter and its commit
+  // target. outerTransitionGate bails while turnCurrent is still positive; outerTransitionCommit
+  // arms turnTarget = turnCurrent when they differ.
+  int16_t turnCurrent() const          { return (int16_t)c->mem_r16(base + 0x16Eu); }
+  void setTurnCurrent(uint16_t v)      { c->mem_w16(base + 0x16Eu, v); }
+  int16_t turnTarget() const           { return (int16_t)c->mem_r16(base + 0x170u); }
+  void setTurnTarget(uint16_t v)       { c->mem_w16(base + 0x170u, v); }
+
+  // settleCounter (+0x172, s16): outerTransitionCommit's decrement-and-settle counter; reaching 0
+  // either commits walk-state 1 or re-arms to 1 depending on statusFlags.
+  int16_t settleCounter() const        { return (int16_t)c->mem_r16(base + 0x172u); }
+  void setSettleCounter(uint16_t v)    { c->mem_w16(base + 0x172u, v); }
+
+  // committing (+0x17B): frameTick case-2 (COMMITTING) latch, set on entry to that state.
+  void setCommitting(uint8_t v)        { c->mem_w8(base + 0x17Bu, v); }
+
+  // posAddr(): +0x2C — Tomba's position triple, passed BY ADDRESS to the stop-motion spawn call
+  // (guest FUN_800312D4 takes a dest pointer, not a value).
+  uint32_t posAddr() const             { return base + 0x2Cu; }
+};
 
 }  // namespace
 
@@ -829,12 +901,21 @@ void ActorTomba::registerOverrides(Game* game) {
 // Ghidra decompiler error (see outerTransitionCommit's banner).
 // =================================================================================
 
-// turnBiasCompute — guest FUN_80055C9C. See actor_tomba.h for the full RE writeup.
+// turnBiasCompute — guest FUN_80055C9C. See actor_tomba.h for the full RE writeup. Frameless leaf
+// (frame_size=0 per abi_extract) — no stack, purely fixed-address reads + a bias-pair write.
+namespace {
+constexpr uint32_t UI_MODE_BYTE       = 0x800E806Cu;   // ==5 selects the wide/menu delta formula
+constexpr uint32_t VIEW_HEADING_SPAD  = 0x1F8000F2u;   // cached view heading, subtracted from facing
+constexpr uint32_t CLOSE_MASK_WORD    = 0x800E805Au;   // bit 0x800 widens the "close" threshold
+constexpr uint32_t TURN_BIAS_IN_SPAD  = 0x1F80016Cu;
+constexpr uint32_t TURN_BIAS_OUT_SPAD = 0x1F80016Eu;
+}  // namespace
 void ActorTomba::turnBiasCompute(Core* c, int16_t facing) {
   bool closeIn;
-  if (c->mem_r8(0x800E806Cu) == 5) {
-    // Wide/menu variant: delta from a fixed 0xC00(3072) reference minus DAT_1F8000F2 and facing.
-    const uint32_t d = (3072u - c->mem_r16(0x1F8000F2u) - (uint32_t)(int32_t)facing) & 4095u;
+  if (c->mem_r8(UI_MODE_BYTE) == 5) {
+    // Wide/menu variant: delta from a fixed 0xC00(3072) reference minus the cached view heading
+    // and facing.
+    const uint32_t d = (3072u - c->mem_r16(VIEW_HEADING_SPAD) - (uint32_t)(int32_t)facing) & 4095u;
     closeIn = (int32_t)d < 2048;
   } else {
     // §9 re-verify 2026-07-10 (real bug found): gen_func_80055C9C's non-wide path does NOT use
@@ -850,227 +931,179 @@ void ActorTomba::turnBiasCompute(Core* c, int16_t facing) {
     // swapped-looking thresholds still needed the mask==0->1536/mask!=0->2560 fix independently
     // confirmed against gen above — that part of the earlier fix was correct and stays).
     uint32_t r3 = (3072u - (uint32_t)(int32_t)facing) & 4095u;
-    const uint32_t r2m = c->mem_r16(0x1F8000F2u) & 4095u;
+    const uint32_t r2m = c->mem_r16(VIEW_HEADING_SPAD) & 4095u;
     r3 = r3 - r2m;
     const uint32_t r4 = ((int16_t)r3 < 0) ? r3 : (r3 - 512u);
     const uint32_t d = r4 & 4095u;
-    if (c->mem_r16(0x800E805Au) & 0x800u) closeIn = (int32_t)d < 2560;
-    else                                  closeIn = (int32_t)d < 1536;
+    if (c->mem_r16(CLOSE_MASK_WORD) & 0x800u) closeIn = (int32_t)d < 2560;
+    else                                      closeIn = (int32_t)d < 1536;
   }
-  if (closeIn) { c->mem_w16(0x1F80016Cu, 128); c->mem_w16(0x1F80016Eu, 32); }
-  else         { c->mem_w16(0x1F80016Cu, 32);  c->mem_w16(0x1F80016Eu, 128); }
+  if (closeIn) { c->mem_w16(TURN_BIAS_IN_SPAD, 128); c->mem_w16(TURN_BIAS_OUT_SPAD, 32); }
+  else         { c->mem_w16(TURN_BIAS_IN_SPAD, 32);  c->mem_w16(TURN_BIAS_OUT_SPAD, 128); }
 }
 
-// resetLoadGate — guest FUN_80042310. See actor_tomba.h for the full RE writeup.
+// resetLoadGate — guest FUN_80042310. See actor_tomba.h for the full RE writeup. Guest frame
+// (abi_extract --contract): 24 B, ra@sp+16 only.
 void ActorTomba::resetLoadGate(Core* c) {
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 24;
-  c->mem_w32(c->r[29] + 16, c->r[31]);
+  static constexpr GuestFrameSpill kSpills[] = {{31, 16}};
+  GuestFrame<24, 1> frameGuard(c, kSpills);
 
-  rec_dispatch(c, 0x8001CF78u);                    // niladic substrate cue
-  c->r[4] = 0x7Fu; c->r[5] = 0; c->r[6] = 0;
-  rec_dispatch(c, 0x80074590u);                     // FUN_80074590(0x7F, 0, 0)
-  const uint8_t mode = c->mem_r8(0x800BF870u);      // area/mode byte, read before the unpause write
-  c->mem_w8(0x1F800137u, 0);                        // unpause
-  c->r[4] = mode;
-  rec_dispatch(c, 0x80074F24u);                     // FUN_80074F24(DAT_800BF870)
-
-  c->r[31] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
+  guest_leaf(c, 0x8001CF78u);                              // niladic substrate cue
+  guest_fn(c, 0x80074590u, 0x80042320u, 0x7Fu, 0u, 0u);     // FUN_80074590(0x7F, 0, 0)
+  const uint8_t areaMode = c->mem_r8(0x800BF870u);          // read before the unpause write below
+  c->mem_w8(0x1F800137u, 0);                                // unpause
+  guest_fn(c, 0x80074F24u, 0x80042320u, areaMode);          // FUN_80074F24(DAT_800BF870)
 }
 
-// assetReady — guest FUN_80045580. See actor_tomba.h for the full RE writeup.
+// assetReady — guest FUN_80045580. See actor_tomba.h for the full RE writeup. Guest frame: 24 B,
+// ra@sp+16 only.
 bool ActorTomba::assetReady(Core* c, int32_t slot) {
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 24;
-  c->mem_w32(c->r[29] + 16, c->r[31]);
+  static constexpr GuestFrameSpill kSpills[] = {{31, 16}};
+  GuestFrame<24, 1> frameGuard(c, kSpills);
 
   constexpr uint32_t TABLE_8018A000 = 0x8018A000u;
   constexpr uint32_t DAT_800A3EC8   = 0x800A3EC8u;
   constexpr uint32_t SLOT_TABLE     = 0x800BE118u;   // &DAT_800be11c - 4 (slot*8 + 4 == +0xC)
   const uint32_t rec = c->mem_r32(SLOT_TABLE + (uint32_t)slot * 8u + 4u);
-  c->r[4] = TABLE_8018A000;
-  c->r[5] = c->mem_r32(DAT_800A3EC8);
-  c->r[6] = rec;
-  c->r[31] = 0x800455B0u;              // §9: missing r31 mirror (gen jal-site) — fixed 2026-07-10
-  rec_dispatch(c, 0x80044CD4u);
-  const bool ready = (int32_t)c->r[2] > 0;
-
-  c->r[31] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
+  const bool ready = guest_fn(c, 0x80044CD4u, 0x800455B0u, TABLE_8018A000, c->mem_r32(DAT_800A3EC8), rec) > 0;
   return ready;
 }
 
-// outerTransitionGate — guest FUN_80053E50(G). See actor_tomba.h for the full RE writeup.
+// outerTransitionGate — guest FUN_80053E50(G). See actor_tomba.h for the full RE writeup. Guest
+// frame (abi_extract --contract): 32 B; s0/s1/s2/ra spilled but never written by this body — pure
+// passthrough preservation of the caller's values, which GuestFrame reproduces for free.
+namespace {
+constexpr uint32_t BUSY_LATCH_HI       = 0x800BF81Eu;
+constexpr uint32_t BUSY_LATCH          = 0x800BF80Du;   // global "outer transition busy" latch
+constexpr uint32_t LEAF_CUE_800521F4   = 0x800521F4u;    // transition-cue dispatch (4 call sites)
+constexpr uint32_t LEAF_WALK_RESET     = 0x80053D90u;    // walk-state reset leaf
+constexpr uint32_t LEAF_STOPMOTION     = 0x800312D4u;    // stop-motion task spawn (dest ptr, magnitude)
+}  // namespace
 bool ActorTomba::outerTransitionGate() {
   Core* c = core;
   const uint32_t G = G_ADDR;
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 32;
-  c->mem_w32(c->r[29] + 16, c->r[16]);
-  c->mem_w32(c->r[29] + 20, c->r[17]);
-  c->mem_w32(c->r[29] + 24, c->r[18]);
-  c->mem_w32(c->r[29] + 28, c->r[31]);
+  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {17, 20}, {18, 24}, {31, 28}};
+  GuestFrame<32, 4> frameGuard(c, kSpills);
+  TombaState tomba{c, G};
 
-  bool result = true;
-  if (c->mem_r16s(G + 0x16Eu) > 0) {
-    result = false;
-    goto done;
-  }
+  if (tomba.turnCurrent() > 0) return false;   // still mid-turn — nothing to do yet
 
-  c->mem_w8(0x800BF81Eu, 0);
+  c->mem_w8(BUSY_LATCH_HI, 0);
   c->engine.gStateMutate(G, 0xB);
 
-  if (c->mem_r8(G + 0x164u) == 1) {
-    if ((c->mem_r8(G + 0u) & 4u) == 0) {
-      if ((c->mem_r8(G + 0xDu) & 0x80u) == 0) {
-        c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
-        c->r[31] = 0x80053F14u;          // §9: missing r31 mirror — fixed 2026-07-10
-        rec_dispatch(c, 0x800521F4u);
+  if (tomba.transitionSlot() == 1) {
+    if ((tomba.statusFlags() & 4u) == 0) {
+      if ((tomba.latchFlags() & 0x80u) == 0) {
+        guest_fn(c, LEAF_CUE_800521F4, 0x80053F14u, 0u, 0x81u, 0x81u, 0x0Fu);
       }
-      c->mem_w8(G + 0xDu, 0);
-      c->mem_w8(G + 0x61u, 0);
-      c->r[4] = G;
-      c->r[31] = 0x80053F24u;            // §9: missing r31 mirror — fixed 2026-07-10
-      rec_dispatch(c, 0x80053D90u);
-      c->mem_w8(G + 0u, 3);
-      c->mem_w16(G + 0x16Eu, 0);
-      c->mem_w16(G + 0x170u, 0);
-      c->mem_w8(G + 0x146u, 0);
-      c->mem_w8(G + 0x4u, 2);
-      c->mem_w8(G + 0x5u, 1);
-      c->mem_w8(G + 0x6u, 0);
-      c->mem_w8(0x800BF80Du, 1);
-      c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
-      c->r[31] = 0x80053FC0u;            // §9: missing r31 mirror — fixed 2026-07-10
-      rec_dispatch(c, 0x800312D4u);
-      goto done;
+      tomba.setLatchFlags(0);
+      tomba.setStopMotionAux(0);
+      guest_fn(c, LEAF_WALK_RESET, 0x80053F24u, G);
+      tomba.setStatusFlags(3);
+      tomba.setTurnCurrent(0);
+      tomba.setTurnTarget(0);
+      tomba.setTurnSuppressGate(0);
+      tomba.setOuterState(2);
+      tomba.setLoadStep(1);
+      tomba.setLoadSub(0);
+      c->mem_w8(BUSY_LATCH, 1);
+      guest_fn(c, LEAF_STOPMOTION, 0x80053FC0u, 6u, tomba.posAddr(), (uint32_t)-80);
+      return true;
     }
-    if ((c->mem_r8(G + 0xDu) & 0x80u) != 0) goto done;
-    c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
-    c->r[31] = 0x80053ED8u;              // §9: missing r31 mirror — fixed 2026-07-10
-    rec_dispatch(c, 0x800521F4u);
-    c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) | 0x82u));
-    goto done;
+    if ((tomba.latchFlags() & 0x80u) != 0) return true;
+    guest_fn(c, LEAF_CUE_800521F4, 0x80053ED8u, 0u, 0x81u, 0x81u, 0x0Fu);
+    tomba.setLatchFlags((uint8_t)(tomba.latchFlags() | 0x82u));
+    return true;
   }
 
-  if (c->mem_r8s(0x800BF80Du) < 1) {
-    c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
-    c->r[31] = 0x80053F74u;              // §9: missing r31 mirror — fixed 2026-07-10
-    rec_dispatch(c, 0x800521F4u);
-    c->mem_w8(G + 0xDu, 0);
-    c->mem_w8(G + 0x61u, 0);
-    c->r[4] = G;
-    c->r[31] = 0x80053F84u;              // §9: missing r31 mirror — fixed 2026-07-10
-    rec_dispatch(c, 0x80053D90u);
-    c->mem_w8(G + 0u, 3);
-    c->mem_w16(G + 0x16Eu, 0);
-    c->mem_w16(G + 0x170u, 0);
-    c->mem_w8(G + 0x146u, 0);
-    c->mem_w8(G + 0x16Au, 0);            // extra clear only on this path (verified vs shard)
-    c->mem_w8(G + 0x4u, 2);
-    c->mem_w8(G + 0x5u, 1);
-    c->mem_w8(G + 0x6u, 0);
-    c->mem_w8(0x800BF80Du, 1);
-    c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
-    c->r[31] = 0x80053FC0u;              // §9: missing r31 mirror — fixed 2026-07-10
-    rec_dispatch(c, 0x800312D4u);
+  if (c->mem_r8s(BUSY_LATCH) < 1) {
+    guest_fn(c, LEAF_CUE_800521F4, 0x80053F74u, 0u, 0x81u, 0x81u, 0x0Fu);
+    tomba.setLatchFlags(0);
+    tomba.setStopMotionAux(0);
+    guest_fn(c, LEAF_WALK_RESET, 0x80053F84u, G);
+    tomba.setStatusFlags(3);
+    tomba.setTurnCurrent(0);
+    tomba.setTurnTarget(0);
+    tomba.setTurnSuppressGate(0);
+    tomba.setExtraClear(0);            // extra clear only on this path (verified vs shard)
+    tomba.setOuterState(2);
+    tomba.setLoadStep(1);
+    tomba.setLoadSub(0);
+    c->mem_w8(BUSY_LATCH, 1);
+    guest_fn(c, LEAF_STOPMOTION, 0x80053FC0u, 6u, tomba.posAddr(), (uint32_t)-80);
   }
-  // else (busy latch already set): result stays true, nothing to do.
-
-done:
-  c->r[31] = c->mem_r32(c->r[29] + 28);
-  c->r[18] = c->mem_r32(c->r[29] + 24);
-  c->r[17] = c->mem_r32(c->r[29] + 20);
-  c->r[16] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
-  return result;
+  // else (busy latch already set): nothing to do.
+  return true;
 }
 
 // outerTransitionCommit — guest FUN_80053FDC(G, mode). See actor_tomba.h for the full RE writeup
-// (incl. the Ghidra-vs-ground-truth correction in the decrement/settle tail below).
+// (incl. the Ghidra-vs-ground-truth correction in the decrement/settle tail below). Guest frame:
+// 32 B; s0(r16)/s1(r17)/ra spilled but, like outerTransitionGate, never written by this body —
+// pure passthrough (no s2 slot here, a smaller frame than outerTransitionGate's).
 void ActorTomba::outerTransitionCommit(int32_t mode) {
   Core* c = core;
   const uint32_t G = G_ADDR;
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 32;
-  c->mem_w32(c->r[29] + 16, c->r[16]);
-  c->mem_w32(c->r[29] + 20, c->r[17]);
-  c->mem_w32(c->r[29] + 24, c->r[31]);
+  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {17, 20}, {31, 24}};
+  GuestFrame<32, 3> frameGuard(c, kSpills);
+  TombaState tomba{c, G};
 
-  c->r[31] = 0x80053FF8u;               // §9: missing r31 mirror — fixed 2026-07-10 (outerTransitionGate
-                                          // spills/restores ra to ITS OWN guest frame, so the caller's r31
-                                          // at call time is a live guest-RAM byte and must match gen).
-  if (outerTransitionGate()) goto done;
+  // outerTransitionGate spills/restores ra to ITS OWN guest frame, so the caller's r31 at call
+  // time is a live guest-RAM byte (spilled into that frame) and must match gen's jal-site constant.
+  c->r[31] = 0x80053FF8u;
+  if (outerTransitionGate()) return;
 
-  if (c->mem_r16s(G + 0x16Eu) != c->mem_r16s(G + 0x170u)) {
+  if (tomba.turnCurrent() != tomba.turnTarget()) {
     // "reset to new target" — cue + gStateMutate(0xB) + conditional stop-motion clear.
-    c->r[4] = 0; c->r[5] = 0x81; c->r[6] = 0x81; c->r[7] = 0x0F;
-    c->r[31] = 0x80054024u;              // §9: missing r31 mirror — fixed 2026-07-10
-    rec_dispatch(c, 0x800521F4u);
+    guest_fn(c, LEAF_CUE_800521F4, 0x80054024u, 0u, 0x81u, 0x81u, 0x0Fu);
     c->engine.gStateMutate(G, 0xB);
-    c->mem_w8(0x800BF81Eu, 0);
-    if ((c->mem_r8(G + 0u) & 4u) == 0) {
-      c->r[4] = G;
-      c->r[31] = 0x80054054u;            // §9: missing r31 mirror — fixed 2026-07-10
-      rec_dispatch(c, 0x80053D90u);
-      c->mem_w8(G + 0x61u, 0);
+    c->mem_w8(BUSY_LATCH_HI, 0);
+    if ((tomba.statusFlags() & 4u) == 0) {
+      guest_fn(c, LEAF_WALK_RESET, 0x80054054u, G);
+      tomba.setStopMotionAux(0);
     }
-    if (mode != 1 && c->mem_r8(G + 0x4u) == 2) goto done;   // already committing — nothing to do
+    if (mode != 1 && tomba.outerState() == 2) return;   // already committing — nothing to do
     // Commit a new target (shared by mode==1 and the mode!=1-but-not-yet-committing path).
-    c->mem_w16(G + 0x172u, 0x5A);
-    c->mem_w16(G + 0x170u, c->mem_r16(G + 0x16Eu));
-    c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) | 0x82u));
-    if ((c->mem_r8(G + 0u) & 0xCu) != 0) {
-      c->r[4] = 0x23; c->r[5] = 0; c->r[6] = 0;
-      c->r[31] = 0x80054108u;            // §9: missing r31 mirror — fixed 2026-07-10
-      rec_dispatch(c, 0x80074590u);
-      c->r[4] = 6; c->r[5] = G + 0x2Cu; c->r[6] = (uint32_t)-80;
-      c->r[31] = 0x80054118u;            // §9: missing r31 mirror — fixed 2026-07-10
-      rec_dispatch(c, 0x800312D4u);
-      goto done;
+    tomba.setSettleCounter(0x5A);
+    tomba.setTurnTarget((uint16_t)tomba.turnCurrent());
+    tomba.setLatchFlags((uint8_t)(tomba.latchFlags() | 0x82u));
+    if ((tomba.statusFlags() & 0xCu) != 0) {
+      guest_fn(c, 0x80074590u, 0x80054108u, 0x23u, 0u, 0u);
+      guest_fn(c, LEAF_STOPMOTION, 0x80054118u, 6u, tomba.posAddr(), (uint32_t)-80);
+      return;
     }
-    c->mem_w8(G + 0u, 3);
-    c->mem_w8(G + 0x146u, 0);
+    tomba.setStatusFlags(3);
+    tomba.setTurnSuppressGate(0);
     c->mem_w8(G + 0x145u, 0);
-    c->mem_w8(G + 0x4u, 2);
-    c->mem_w8(G + 0x5u, 0);
-    c->mem_w8(G + 0x6u, 0);
-    goto done;
+    tomba.setOuterState(2);
+    tomba.setLoadStep(0);
+    tomba.setLoadSub(0);
+    return;
   }
 
   // Pending counter already at target — decrement-and-settle path.
-  {
-    const int16_t remaining = (int16_t)c->mem_r16(G + 0x172u);
-    if (remaining == 0) goto done;
-    const int16_t newRemaining = (int16_t)(remaining - 1);
-    c->mem_w16(G + 0x172u, (uint16_t)newRemaining);
-    if (newRemaining != 0) goto done;
+  const int16_t remaining = tomba.settleCounter();
+  if (remaining == 0) return;
+  const int16_t newRemaining = (int16_t)(remaining - 1);
+  tomba.setSettleCounter((uint16_t)newRemaining);
+  if (newRemaining != 0) return;
 
-    const uint8_t g0 = c->mem_r8(G + 0u);
-    // §9 re-verify 2026-07-10: gen_func_80053FDC's gate compares g0 against the LITERAL 2, not 0
-    // (`r3=g0; if(r3==2) goto rearm;` — a genuinely distinct constant, not a stand-in for "g0!=0").
-    // The wide-RE draft had `g0 != 0`, which flips behavior at g0==0 (gen commits) and g0==2 (gen
-    // re-arms) — fixed to match gen exactly.
-    if (g0 != 2 && (g0 & 4u) == 0) {
-      // "unobstructed" — commit to walk-state 1, clearing/masking the stop-motion latch bits.
-      c->mem_w8(G + 0u, 1);
-      if ((c->mem_r8(G + 0xDu) & 0x50u) != 0) {
-        c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) & 0x7Fu));
-      } else {
-        c->mem_w8(G + 0xDu, 0);
-      }
+  const uint8_t g0 = tomba.statusFlags();
+  // §9 re-verify 2026-07-10: gen_func_80053FDC's gate compares g0 against the LITERAL 2, not 0
+  // (`r3=g0; if(r3==2) goto rearm;` — a genuinely distinct constant, not a stand-in for "g0!=0").
+  // The wide-RE draft had `g0 != 0`, which flips behavior at g0==0 (gen commits) and g0==2 (gen
+  // re-arms) — fixed to match gen exactly.
+  if (g0 != 2 && (g0 & 4u) == 0) {
+    // "unobstructed" — commit to walk-state 1, clearing/masking the stop-motion latch bits.
+    tomba.setStatusFlags(1);
+    if ((tomba.latchFlags() & 0x50u) != 0) {
+      tomba.setLatchFlags((uint8_t)(tomba.latchFlags() & 0x7Fu));
     } else {
-      // g0==2 OR (g0&4)!=0 — re-arm the settle counter instead of committing.
-      c->mem_w16(G + 0x172u, 1);
+      tomba.setLatchFlags(0);
     }
+  } else {
+    // g0==2 OR (g0&4)!=0 — re-arm the settle counter instead of committing.
+    tomba.setSettleCounter(1);
   }
-
-done:
-  c->r[31] = c->mem_r32(c->r[29] + 24);
-  c->r[17] = c->mem_r32(c->r[29] + 20);
-  c->r[16] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
 }
 
 // frameTick — guest FUN_8005950C. See actor_tomba.h for the full RE writeup.
@@ -1093,165 +1126,144 @@ done:
 // SBS-VERIFIED 2026-07-09: PSXPORT_SBS_MODE=full autonav, 0 sbs-div / 0 VIOLATION through f15600+.
 // The first attempt diverged at f158 (A=0x1F80, B=0x0000 at an Animation::step r17 spill) — root
 // caused to register-faithfulness: gen holds r17/r18 live across the case-1/4/7 callees (see the
-// c->r[17]/c->r[18] writes in each case below), but the first draft used C++ locals alone, leaving
+// r17Reg/r18Reg writes in each case below), but the first draft used C++ locals alone, leaving
 // stale caller values in those registers for the substrate callees (func_800597AC spills r18,
 // func_80053FDC spills r17, func_80076D68 spills both) to spill. Mirroring gen's register
-// assignments fixed it.
+// assignments fixed it. GuestReg<17>/<18> below make that bug class impossible to reintroduce —
+// they ARE c->r[17]/c->r[18], not shadow locals.
+namespace {
+constexpr uint32_t TURN_SUPPRESS_A         = 0x800E7E68u;   // "turn-suppress mask" pair, also
+constexpr uint32_t TURN_SUPPRESS_B         = 0x800ECF54u;   // written by the enemy-engage tables
+constexpr uint32_t TURN_SUPPRESS_CLEAR_GATE= 0x1F800230u;
+constexpr uint32_t TURN_SUPPRESS_MASK_SPAD = 0x1F800174u;
+constexpr uint32_t CUTSCENE_FLAG           = 0x800BF80Fu;
+constexpr uint32_t FRAME_PAUSE_FLAG        = 0x1F800137u;
+constexpr uint32_t CASE4_MASK_SRC_A        = 0x1F800166u;    // case-4's alt source for TURN_SUPPRESS_A
+constexpr uint32_t CASE4_MASK_SRC_B        = 0x1F800190u;    // case-4's alt source for TURN_SUPPRESS_B
+constexpr uint32_t TURN_SUPPRESS_ACTIVE_OUT= 0x1F800232u;
+constexpr uint32_t LOAD_KICK_GATE_SPAD     = 0x1F80019Bu;
+constexpr uint32_t LOAD_KICK_MODE_BYTE     = 0x800BF89Cu;
+constexpr uint32_t ANIM_PTR_SPAD           = 0x1F800138u;
+}  // namespace
 void ActorTomba::frameTick() {
   Core* c = core;
   const uint32_t G = c->r[4];                // a0 (== G_ADDR from both callers; matches gen's r16=r4+r0)
-  const uint32_t sp0 = c->r[29];
-  c->r[29] = sp0 - 32;
-  c->mem_w32(c->r[29] + 16, c->r[16]);
-  c->r[16] = G;
-  c->mem_w32(c->r[29] + 28, c->r[31]);
-  c->mem_w32(c->r[29] + 24, c->r[18]);
-  c->mem_w32(c->r[29] + 20, c->r[17]);
+  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {31, 28}, {18, 24}, {17, 20}};
+  GuestFrame<32, 4> frameGuard(c, kSpills);
+  GuestReg<16> gReg(c);
+  gReg = G;
+  TombaState tomba{c, G};
 
-  const uint8_t outerState = c->mem_r8(G + 0x4u);
+  const uint8_t outerState = tomba.outerState();
   if (outerState < 8) {
     switch (outerState) {
       case 0: {
-        c->r[4] = G; c->r[5] = 0;
-        c->r[31] = 0x80059560u;
-        rec_dispatch(c, 0x80058648u);                 // enterOuterState0 (substrate)
+        guest_fn(c, 0x80058648u, 0x80059560u, G, 0u);        // enterOuterState0 (substrate)
         break;
       }
       case 1: {
-        const uint16_t savedE7E68 = c->mem_r16(0x800E7E68u);
-        const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
+        const uint16_t savedA = c->mem_r16(TURN_SUPPRESS_A);
+        const uint16_t savedB = c->mem_r16(TURN_SUPPRESS_B);
         // Register-faithfulness (gen 7648/7650): r18/r17 hold the saved pair live across the
         // case-1 callees. func_800597AC spills r18, func_80053FDC spills r17 — without these
         // assignments the substrate callees spill stale caller values on core A and diverge.
-        c->r[18] = savedE7E68;
-        c->r[17] = savedCF54;
-        if (c->mem_r8(0x1F800230u) != 0) {
-          const uint16_t mask = c->mem_r16(0x1F800174u);
-          c->mem_w16(0x800ECF54u, (uint16_t)(savedCF54  & ~mask));
-          c->mem_w16(0x800E7E68u, (uint16_t)(savedE7E68 & ~mask));
+        GuestReg<18> r18Reg(c); r18Reg = savedA;
+        GuestReg<17> r17Reg(c); r17Reg = savedB;
+        if (c->mem_r8(TURN_SUPPRESS_CLEAR_GATE) != 0) {
+          const uint16_t mask = c->mem_r16(TURN_SUPPRESS_MASK_SPAD);
+          c->mem_w16(TURN_SUPPRESS_B, (uint16_t)(savedB & ~mask));
+          c->mem_w16(TURN_SUPPRESS_A, (uint16_t)(savedA & ~mask));
         }
-        // GT clears the turn-suppress pair unless BOTH 0x800BF80F==0 AND 0x1F800137==0
-        // (the wide-RE draft inverted the 0x800BF80F condition — fixed).
-        const bool skipClear = (c->mem_r8(0x800BF80Fu) == 0) && (c->mem_r8(0x1F800137u) == 0);
-        if (!skipClear) { c->mem_w16(0x800E7E68u, 0); c->mem_w16(0x800ECF54u, 0); }
+        // GT clears the turn-suppress pair unless BOTH CUTSCENE_FLAG==0 AND FRAME_PAUSE_FLAG==0
+        // (the wide-RE draft inverted the CUTSCENE_FLAG condition — fixed).
+        const bool skipClear = (c->mem_r8(CUTSCENE_FLAG) == 0) && (c->mem_r8(FRAME_PAUSE_FLAG) == 0);
+        if (!skipClear) { c->mem_w16(TURN_SUPPRESS_A, 0); c->mem_w16(TURN_SUPPRESS_B, 0); }
 
-        c->r[5] = (uint32_t)(int16_t)c->mem_r16(G + 0x140u);
-        c->r[31] = 0x800595DCu; c->r[4] = G;
-        rec_dispatch(c, 0x80055C9Cu);                  // turnBiasCompute (substrate)
-        c->r[31] = 0x800595E4u; c->r[4] = G;
-        rec_dispatch(c, 0x80058918u);                   // mode-N dispatch table A (substrate)
-        if (c->mem_r8(G + 0x146u) == 0) c->mem_w8(0x1F800232u, 1);
-        c->r[31] = 0x80059604u; c->r[4] = G;
-        rec_dispatch(c, 0x800597ACu);                   // matrix-compose (substrate)
-        c->r[4] = G; c->r[5] = 0;
-        c->r[31] = 0x80059610u;
-        rec_dispatch(c, 0x80053FDCu);                   // outerTransitionCommit (substrate, mode=0)
+        guest_fn(c, 0x80055C9Cu, 0x800595DCu, G, (uint32_t)(int32_t)tomba.facing());  // turnBiasCompute
+        guest_fn(c, 0x80058918u, 0x800595E4u, G);            // mode-N dispatch table A (substrate)
+        if (tomba.turnSuppressGate() == 0) c->mem_w8(TURN_SUPPRESS_ACTIVE_OUT, 1);
+        guest_fn(c, 0x800597ACu, 0x80059604u, G);            // matrix-compose (substrate)
+        guest_fn(c, 0x80053FDCu, 0x80059610u, G, 0u);        // outerTransitionCommit (mode=0)
 
-        c->mem_w16(0x800E7E68u, savedE7E68);
-        c->mem_w16(0x800ECF54u, savedCF54);
+        c->mem_w16(TURN_SUPPRESS_A, savedA);
+        c->mem_w16(TURN_SUPPRESS_B, savedB);
         break;
       }
       case 2: {
-        c->mem_w8(G + 0x17Bu, 1);
-        c->r[31] = 0x80059628u; c->r[4] = G;
-        rec_dispatch(c, 0x80067CA4u);
-        c->r[31] = 0x800596D8u; c->r[4] = G;
-        rec_dispatch(c, 0x800597ACu);
+        tomba.setCommitting(1);
+        guest_fn(c, 0x80067CA4u, 0x80059628u, G);
+        guest_fn(c, 0x800597ACu, 0x800596D8u, G);
         break;
       }
       case 3:
         break;   // unused jump-table slot (jump target = epilogue) — no-op
       case 4: {
-        const uint16_t savedE7E68 = c->mem_r16(0x800E7E68u);
-        const uint16_t savedCF54  = c->mem_r16(0x800ECF54u);
+        const uint16_t savedA = c->mem_r16(TURN_SUPPRESS_A);
+        const uint16_t savedB = c->mem_r16(TURN_SUPPRESS_B);
         // Register-faithfulness (gen 7693/7695): same live-across-callees pair as case 1.
-        c->r[18] = savedE7E68;
-        c->r[17] = savedCF54;
-        c->mem_w8(G + 0xDu, (uint8_t)(c->mem_r8(G + 0xDu) & 0x7Fu));
-        if (c->mem_r8(0x1F800137u) != 0) {
-          c->mem_w16(0x800E7E68u, c->mem_r16(0x1F800166u));
-          c->mem_w16(0x800ECF54u, c->mem_r16(0x1F800190u));
+        GuestReg<18> r18Reg(c); r18Reg = savedA;
+        GuestReg<17> r17Reg(c); r17Reg = savedB;
+        tomba.setLatchFlags((uint8_t)(tomba.latchFlags() & 0x7Fu));
+        if (c->mem_r8(FRAME_PAUSE_FLAG) != 0) {
+          c->mem_w16(TURN_SUPPRESS_A, c->mem_r16(CASE4_MASK_SRC_A));
+          c->mem_w16(TURN_SUPPRESS_B, c->mem_r16(CASE4_MASK_SRC_B));
         } else {
-          c->mem_w16(0x800E7E68u, 0);
-          c->mem_w16(0x800ECF54u, 0);
+          c->mem_w16(TURN_SUPPRESS_A, 0);
+          c->mem_w16(TURN_SUPPRESS_B, 0);
         }
-        c->r[5] = (uint32_t)(int16_t)c->mem_r16(G + 0x140u);
-        c->r[31] = 0x8005968Cu; c->r[4] = G;
-        rec_dispatch(c, 0x80055C9Cu);                  // turnBiasCompute (substrate)
-        c->r[31] = 0x80059694u; c->r[4] = G;
-        rec_dispatch(c, 0x80058F5Cu);                   // mode-N dispatch table B (substrate)
-        c->r[31] = 0x8005969Cu; c->r[4] = G;
-        rec_dispatch(c, 0x800597ACu);                   // matrix-compose (substrate)
-        c->r[31] = 0x800596A4u; c->r[4] = G;
-        rec_dispatch(c, 0x80053E50u);                   // outerTransitionGate (substrate, bare tick)
+        guest_fn(c, 0x80055C9Cu, 0x8005968Cu, G, (uint32_t)(int32_t)tomba.facing());  // turnBiasCompute
+        guest_fn(c, 0x80058F5Cu, 0x80059694u, G);            // mode-N dispatch table B (substrate)
+        guest_fn(c, 0x800597ACu, 0x8005969Cu, G);            // matrix-compose (substrate)
+        guest_fn(c, 0x80053E50u, 0x800596A4u, G);            // outerTransitionGate (bare tick)
 
-        c->mem_w16(0x800E7E68u, savedE7E68);
-        c->mem_w16(0x800ECF54u, savedCF54);
+        c->mem_w16(TURN_SUPPRESS_A, savedA);
+        c->mem_w16(TURN_SUPPRESS_B, savedB);
         break;
       }
       case 5: {
-        c->r[31] = 0x800596C0u; c->r[4] = G;
-        rec_dispatch(c, 0x8018BD30u);                   // scripted leaf (overlay)
-        c->r[31] = 0x800596D8u; c->r[4] = G;
-        rec_dispatch(c, 0x800597ACu);
+        guest_fn(c, 0x8018BD30u, 0x800596C0u, G);            // scripted leaf (overlay)
+        guest_fn(c, 0x800597ACu, 0x800596D8u, G);
         break;
       }
       case 6: {
-        c->r[31] = 0x800596D0u; c->r[4] = G;
-        rec_dispatch(c, 0x8018BE40u);                   // scripted leaf (overlay)
-        c->r[31] = 0x800596D8u; c->r[4] = G;
-        rec_dispatch(c, 0x800597ACu);
+        guest_fn(c, 0x8018BE40u, 0x800596D0u, G);            // scripted leaf (overlay)
+        guest_fn(c, 0x800597ACu, 0x800596D8u, G);
         break;
       }
       case 7: {
-        const uint8_t sub = c->mem_r8(G + 0x5u);
+        const uint8_t sub = tomba.loadStep();
         // Register-faithfulness (gen 7736/7737): r17=sub, r18=1 held live across the sub-dispatch
         // and into the tail Animation::step call (which spills r17@+20, r18@+24). The sub==2 path
         // also stores r17/r18 verbatim into anim+0x4C/0x4E — but those are covered by the local
         // `sub` / literal 1 below; these register writes are purely for the callee spills.
-        c->r[17] = sub;
-        c->r[18] = 1;
+        GuestReg<17> r17Reg(c); r17Reg = sub;
+        GuestReg<18> r18Reg(c); r18Reg = 1u;
         bool advance = false;
         if (sub == 0) {
-          c->r[4] = G;
-          c->r[31] = 0x80059720u;
-          rec_dispatch(c, 0x8001CF2Cu);                 // engine tick cue (substrate)
+          guest_fn(c, 0x8001CF2Cu, 0x80059720u, G);          // engine tick cue (substrate)
           advance = true;
         } else if (sub == 1) {
-          c->r[4] = 1;
-          c->r[31] = 0x80059730u;
-          rec_dispatch(c, 0x80045580u);                 // assetReady (substrate)
-          if (c->r[2] != 0) advance = true;
+          advance = guest_fn(c, 0x80045580u, 0x80059730u, 1u) != 0;  // assetReady
         } else if (sub == 2) {
-          if (c->mem_r8(0x1F80019Bu) != 0) {
-            c->mem_w8(0x800BF89Cu, 4);
-            c->r[4] = G;
-            c->r[31] = 0x80059768u;
-            rec_dispatch(c, 0x80042310u);               // resetLoadGate (substrate)
-            c->mem_w8(G + 0x4u, 1);
-            c->mem_w8(G + 0x5u, 0);
-            c->mem_w8(G + 0x6u, 0);
-            c->mem_w8(G + 0x7u, 0);
-            const uint32_t anim = c->mem_r32(0x1F800138u);
+          if (c->mem_r8(LOAD_KICK_GATE_SPAD) != 0) {
+            c->mem_w8(LOAD_KICK_MODE_BYTE, 4);
+            guest_fn(c, 0x80042310u, 0x80059768u, G);        // resetLoadGate (substrate)
+            tomba.setOuterState(1);
+            tomba.setLoadStep(0);
+            tomba.setLoadSub(0);
+            tomba.setLoadSub2(0);
+            const uint32_t anim = c->mem_r32(ANIM_PTR_SPAD);
             c->mem_w16(anim + 0x4Cu, (uint16_t)sub);   // sub==2 — matches gen's r17 trace
             c->mem_w16(anim + 0x4Eu, 1);
           }
         }
         // sub > 2: no advance, straight to tail — matches gen (no case, no-op).
-        if (advance) c->mem_w8(G + 0x5u, (uint8_t)(c->mem_r8(G + 0x5u) + 1));
-        c->r[4] = G;
-        c->r[31] = 0x80059794u;
-        rec_dispatch(c, 0x80076D68u);                   // Animation::step (substrate)
+        if (advance) tomba.setLoadStep((uint8_t)(tomba.loadStep() + 1));
+        guest_fn(c, 0x80076D68u, 0x80059794u, G);            // Animation::step (substrate)
         break;
       }
     }
   }
-
-  c->r[31] = c->mem_r32(c->r[29] + 28);
-  c->r[18] = c->mem_r32(c->r[29] + 24);
-  c->r[17] = c->mem_r32(c->r[29] + 20);
-  c->r[16] = c->mem_r32(c->r[29] + 16);
-  c->r[29] = sp0;
 }
 
 // =================================================================================
