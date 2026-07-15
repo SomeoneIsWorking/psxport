@@ -3405,6 +3405,30 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
       !c->game->sbs->skipRendezvousReached(c, task + 0x48u, 1u, "start_bin_load")) {
     return 1;   // idle this frame — retry next frame, no step advance
   }
+  // FRAME ALIGNMENT #2 (SBS-harness-only, no gameplay change — same pattern as the step==0 gate
+  // above): case2 below is the SEQ/VAB build (asset.preloadStage1(), the native mirror of the
+  // substrate leaf 0x800754F4 that lands sample data at SPU RAM 0x1020). On the oracle sibling
+  // (SBS core B, always the PURE recomp substrate — never this native path, see
+  // startBinStageFaithful vs. the raw generated ov_start_gen_8010649C), the equivalent work is
+  // FUN_8010678C's case-1 spawnAndWait(0x8004514Cu,...): it bumps task+0x48 to 2 BEFORE the wait
+  // and only advances it to 3 once the spawned task-1 fiber's own done_flag write (0x1F80019B,
+  // asset.cpp:383/gen_func_8004514C) lets spawnAndWait return. task+0x48==3 is therefore the first
+  // point after which the oracle's SPU 0x1020 write has already landed.
+  //
+  // done_flag (0x1F80019B) itself is NOT usable as the gate: it's a REUSED single scratchpad byte
+  // — every spawnAndWait call (including case0's texgroup preload, which finishes and sets it back
+  // to 1 as early as f0, well before the VAB build even starts) writes the same address. A
+  // `skipRendezvousReached(0x1F80019B, 1, …)` gate would false-pass immediately on the STALE value
+  // left by case0, never actually waiting for the VAB build. Traced live via
+  // PSXPORT_SBS_PREWATCH=0x1F80019B (docs/config.md): the first divergent store the harness catches
+  // is gen_func_80044F58 (case0's texgroup task) writing done_flag=1 at f0 — confirming the reuse.
+  // task+0x48 has no such ambiguity: it's the SM's own step counter, monotonic 0->1->2->3 across
+  // this boot sequence, and is the SAME field (same mem_w16 halfword width) the step==0 gate above
+  // already keys on — proven safe to read from the sibling core.
+  if (step == 2 && c->game->sbs &&
+      !c->game->sbs->skipRendezvousReached(c, task + 0x48u, 3u, "seqvab_build")) {
+    return 1;   // idle this frame — retry next frame, no step advance
+  }
   switch (step) {
     case 0: break;
     case 1: (void)c->rng.next();                                     break;

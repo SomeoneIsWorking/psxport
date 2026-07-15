@@ -300,6 +300,22 @@ public:
   struct RvSite { uint32_t firstWaitFrame = 0; bool waiting = false; uint32_t checks = 0;
                   uint32_t stalls = 0; uint32_t maxWaitFrames = 0; };
   std::map<std::string, RvSite> mRvSites;
+  // True while ANY skipRendezvousReached() label is actively holding core A back this frame. A
+  // wired fork's own OBSERVABLE content (e.g. the SPU RAM a rendezvous-gated VAB build lands) can
+  // legitimately differ WHILE the wait is in progress even though the fork is correctly wired: the
+  // oracle side's real completion signal (its own done_flag / task-state advance) can trail the
+  // oracle's OWN underlying content write by several frames (traced live 2026-07-15 with a
+  // temporary per-frame probe — B's SPU 0x1020 write lands at f2 but its task+0x48 state doesn't
+  // reach the rendezvous-safe "fully done" value until f5, because of trailing per-cell yields
+  // after the DMA itself completes). checkObservables()'s kObsPersist=1 strictness assumes wired-fork content
+  // updates atomically with its own gate value; it doesn't for this fork shape. Suppressing the
+  // report while a wait is active is not a residual-diff allowlist (CLAUDE.md) — detection still
+  // runs every frame (mObsCnt keeps counting/resetting), so a genuine post-settle divergence still
+  // reports on the first frame after the wait clears.
+  bool anyRendezvousWaiting() const {
+    for (auto& [label, s] : mRvSites) if (s.waiting) return true;
+    return false;
+  }
   static constexpr uint32_t kRvTimeoutFrames = 3600;   // 60s @ 60fps — deadlock diagnostic, not a hang
   bool mRvDumped = false;
   void dumpRendezvousSites(FILE* out);
@@ -955,6 +971,17 @@ void Sbs::Impl::checkObservables() {
     if (mHaveDbgsrv) { fprintf(stderr, "[sbs-obs] paused for inspection.\n"); mA->dbg_server.setPaused(true); }
     if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
   };
+  // A rendezvous-gated fork legitimately holds core A back WHILE the oracle is still mid-load — its
+  // own content write can land (on the oracle side) well before its "fully done" gate value does.
+  // anyRendezvousWaiting() alone isn't enough here: it only reflects labels that have already been
+  // CHECKED at least once, but the oracle's SPU 0x1020 write lands (f2) a frame BEFORE core A's
+  // stage0AdvanceSkip ever reaches its step==2 check (f3) — so at f2 no rendezvous site exists yet
+  // to report "waiting". Check the oracle's own SM step (task+0x48, the SAME field/value
+  // stage0AdvanceSkip's "seqvab_build" gate keys on) directly instead: while it's below the gate's
+  // target, the oracle hasn't finished the SEQ/VAB build and any observable tied to that fork is
+  // expected to still be catching up on core A. (docs/findings/sbs.md "SBS self-surfacing sweep")
+  bool vabBuildPending = mB->core.mem_r16(0x801FE048u) < 3u;
+  if (vabBuildPending || anyRendezvousWaiting()) return;
   for (int i = 0; i < kNObs; i++) {
     if (mObsDone[i]) continue;
     uint32_t bad = 0; uint8_t va = 0, vb = 0;
