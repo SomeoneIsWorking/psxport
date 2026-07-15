@@ -73,12 +73,26 @@ producer. The TITLE screen (#2) is the first and establishes this subsystem.
   env=2). So the title picture = a **pre-rendered VRAM art image blitted by a vramcopy** into the FB +
   a fill + ~5 menu/logo overlay prims — NOT dozens of per-frame sprite quads. The sprite engine drives
   only the few overlay/animated bits.
-- NATIVE TITLE PRODUCER (approach, not GP0 replay): (1) draw the title ART as a texture — it's loaded
-  into VRAM by the title load; sample that VRAM region as a full-screen quad. (2) draw the menu overlay
-  (highlight + text) from MENU STATE (cursor/selection), via the native 2D quad path (RQ_HUD). RE TODO:
-  the vramcopy src/dst rect (title-art VRAM location) + the 3-poly/2-rect overlay's source (FUN_80075824/
-  FUN_80099490 tail of FUN_80075a80). This establishes the native 2D-quad compositor every later 2D
-  scene (HUD, dialog, menus) reuses — own the SHARED 2D-quad submit, do NOT hand-transcribe per screen.
+### Architecture decision: `spriteNative()` reads sprite STATE, draws natively (the sceneNative pattern)
+
+Do NOT port the whole sprite engine. Let the substrate sprite engine keep running (it computes sprite
+state into guest tables — part of the byte-exact state), and write a READ-ONLY `Render::spriteNative()`
+that walks the sprite state table and draws each active sprite as a native textured quad (RQ_HUD) — the
+2D twin of how `sceneNative()` reads the 3D entity lists. No OT read, no GP0 replay; reads guest sprite
+state, writes host VK only. This one producer renders title/menus/HUD/dialog (all use this engine).
+
+Sprite state = an array of structs, base ≈ `0x801054c8`, **stride 0x1c**, 24 slots. Fields derived from
+FUN_80092660's setup writes (SoA accessors, base+i*0x1c):
+- `+0x00` = 0x21 packet tag (active marker)      · `+0x02` = pose/flip (DAT_80105cff)
+- `+0x04` = pattern/pose index (param_3)          · `+0x06` = frame (DAT_80105d04)
+- `+0x08` = screen Y (param_2, short)             · `+0x0e` (0x801054c8+i*1c-0x10 → +0x00? recheck)
+- `+0x26` = brightness/scale (DAT_80105cfc)
+Pattern-def table `PTR_80105cdc` (uv/size, stride 0x10), pose/frame table `PTR_80105ce8` (stride 0x20,
+holds tpage @+0x10, clut/flags @+0x12) — the emit (FUN_80092fd0) reads these to build the final quad's
+tex-rect. RE TODO before coding spriteNative: (1) confirm the full field map incl. screen X + W/H +
+u/v + tp + clut + color, from the emit/flush geometry (FUN_80092fd0 + the per-frame flush that walks the
+table into the OT); (2) find that flush (the POLY_FT4 builder) — its geometry math is what spriteNative
+reproduces natively from the state. Then spriteNative walks slots, active (`+0x00==0x21`), draws quads.
 
 ## Next
 Build native producers down the backlog. Each removes one `abortUnimplemented`. Gate: the scene renders
