@@ -33,14 +33,23 @@ it with the psx_render reference (and SBS core B).
 
 | # | Scene | stage / selector | native producer today | status |
 |---|-------|------------------|------------------------|--------|
-| 1 | START.BIN boot | `0x801FE00C == 0x8010649C` | none | ⛔ crashes first |
-| 2 | Title / DEMO attract / SCEA / FMV | `0x801FE00C == 0x801062E4` | none | ⛔ |
+| 1 | START.BIN boot (black loader) | `0x801FE00C == 0x8010649C` | black frame (gpu_blank_display) | ✅ native |
+| 2 | TITLE screen (logo + New/Load menu + copyright, animated bg) | `0x801FE00C == 0x801062E4` | none | ⛔ crashes here now |
+| 2a| DEMO attract (gameplay footage after idle) | `0x801062E4`, attract sub-state | none | ⛔ |
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b| Walkable field — 2D OVERLAY (HUD/dialog/item-bubble/menu/text) | same, `s_ot_2d_drawn>0` | none | ⛔ crashes when any overlay prim present |
 | 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | none (objects share HEADS[0..1] via TransitionState3; room geo + interior camera unbuilt) | ⛔ |
 | 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | partial (`sceneNative` for 3D beats) — 2D composite unbuilt | ⛔ |
 
-Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO load · `0x8010637C` GAME field.
+Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
+
+## The 2D-composite pattern (title, menus, HUD, dialog, text)
+
+Most non-field scenes are 2D composites (sprites + text over a background). "Native" for these = rebuild
+from the overlay's OWN sprite/text DATA (its sprite table, string list, menu cursor state) drawn through a
+native 2D sprite+font+menu subsystem — NOT reading the guest OT/GP0 packet stream. This is the 2D twin of
+sceneNative reading entity lists. Each such scene needs its draw-data RE'd first (Ghidra), then a native
+producer. The TITLE screen (#2) is the first and establishes this subsystem.
 
 ## Removed in this milestone
 - fps60 `captureSubscene`/`mSubsceneCur` present-captured-queue shortcut (the hut-interior flicker hack).
