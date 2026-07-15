@@ -171,9 +171,10 @@ public:
   // transcription). drawOTag (game_tomba2.cpp) calls renderScene() after the psx_render reference guard;
   // renderScene classifies by stage/sub-state and dispatches. Each producer owns its DisplayPassGuard +
   // fps60 eligibility. A stage with no producer aborts (abortUnimplemented) — the crash IS the backlog.
-  enum class SceneKind { StartBoot, Title, Field, HutInterior, SopNarration, Unknown };
+  enum class SceneKind { Loading, StartBoot, Title, Field, HutInterior, SopNarration, Unknown };
   SceneKind classifyScene();     // stage 0x801FE00C + sub-state selectors -> which scene this frame is
   void renderScene();            // classify + dispatch to the producer below
+  void renderLoading();          // #0 task-switch handoff — black loader (task not yet initialized)
   void renderStartBoot();        // #1 START.BIN loader — black frame
   void renderTitle();            // #2 DEMO/title front-end (s2 = titleNative; other substates = black)
   void renderField();            // #3 walkable field — native world (sceneNative)

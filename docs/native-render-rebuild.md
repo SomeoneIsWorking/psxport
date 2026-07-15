@@ -35,7 +35,9 @@ it with the psx_render reference (and SBS core B).
 |---|-------|------------------|------------------------|--------|
 | 1 | START.BIN boot (black loader) | `0x801FE00C == 0x8010649C` | black frame (gpu_blank_display) | ✅ native |
 | 2 | TITLE screen (logo + New/Load menu + copyright) | `0x801FE00C == 0x801062E4` s2 | `titleNative()` (logo sprites + menu FT4 quads, decoded) | ✅ native — RMSE 0 vs reference |
+| 0 | Task-switch handoff (scheduler state 3) | task0 `*(u16*)0x801FE000==3` | `renderLoading()` — black loader | ✅ native — RE'd from scheduler FUN_80051e60 (state 3 = entry reassigned, code not run → substate stale). Guards classifyScene from misreading the START→DEMO handoff's leftover sm[0x48] |
 | 2a| DEMO attract (real field-engine demo, s7 after idle) | `0x801062E4` sm[0x48]==7 | reuse `sceneNative()` — it's the REAL field (Sop::fieldMode + AreaSlots::updateTail); NOT FMV | ⬜ blanks black now; wire s7→field producer once #3b lands |
+| 2b| NEW GAME → SOP intro (from title menu, still DEMO task) | `0x801062E4` sm[0x48]==3, overlay-sig `0x3C021F80` | none yet — likely reuse `renderSopNarration()`/`sceneNative()` but classifyScene routes DEMO-entry to Title | ⛔ CRASHES (correct fail-fast). Selecting New Game loads the SOP overlay under the DEMO front-end task; classifyScene must recognise DEMO+SOP-overlay and route to the narration producer |
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b-A| Field free-roam blocker — UNTAGGED WORLD OBJECTS (not HUD) | same, `s_ot_2d_drawn>0` | own the object emit leaves so they register obj_depth / native-cover | ⛔ CRITICAL — blocks all gameplay in pc_render |
 | 3b-B| Field genuine 2D HUD/dialog/text (interaction-triggered) | same | font glyphEmit dual-emit + panel.cpp (specs ready) | ⛔ (not in free-roam) |
