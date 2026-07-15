@@ -1462,13 +1462,13 @@ thunk-wired addresses previously compared native-vs-native).
 **SESSION 2026-07-08 (wide-RE-ahead-of-frontier, isolated worktree) — 0x80040000-0x8004FFFF band:
 cube-text popup ledger RE'd + DRAFTED (UNWIRED, not gated); collision-walk cluster RE'd + MAPPED
 (NOT drafted — too risky to fold blind); ~180 addresses in-band still untouched.**
-- RE'd/DRAFTED (game/object/cube_text_ledger.{h,cpp}, added to cmake, compiles+links clean):
-  `FUN_80040A58` (cost-table lookup), `FUN_80040AA4` (popup spawn), `FUN_80040B48` (ledger
-  activate), `FUN_80040C00` (ledger deactivate) — the two leaves `actor_sm_reward.cpp` already
-  calls through `rec_dispatch` under "not independently RE'd" (`FN_40B48`/`FN_40C00`), plus their
-  siblings. Full derivation + layout in `docs/engine_re.md` ("Region 0x80040000-0x8004FFFF sweep").
-  **UNWIRED**: no `shard_set_override`/`EngineOverrides` registration, SBS gate NOT run. A follow-
-  up wave wires (dual-registration, matching `actor_sm_reward.cpp`'s pattern) + gates it.
+- WIRED + gated (this note was stale — the cluster was wired later, contra "UNWIRED" below):
+  `FUN_80040AA4` (popup spawn) + `FUN_80040C00` (deactivate) live in game/object/cube_text_ledger.cpp
+  (EngineOverrides + psx_fallback-gated shard_set_override). `FUN_80040A58` = SceneEvents::classSize
+  and `FUN_80040B48` = SceneEvents::armBody (game/scene/scene_events.cpp) — NOT cube_text_ledger's:
+  both were duplicate-RE'd here first, then deduped onto SceneEvents (A58 in 2026-07-08, B48 in
+  2026-07-15 after `codemap.py --conflicts` surfaced the dual-ownership — see docs/findings/scene.md
+  "FUN_80040B48 dual-ownership"). Full derivation in `docs/engine_re.md`.
 - RE'd/MAPPED, NOT drafted: the collision-walk / room-cell-graph cluster (`FUN_8004720C` +14
   siblings) — dense scratchpad-resident (0x1F8001A8-0x1F8001EC) fixed-point slope/edge-code
   traversal with `trap()` div-by-zero paths. Deliberately left unported pending a cross-check
