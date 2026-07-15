@@ -585,3 +585,21 @@
   the substrate's unconditional dispatches are faithful state even when a native pass draws the picture.
 - **refs:** bug #43, scratch/screenshots/vortex_{default,gate}_f600.png, sop_overlay_shadow.cpp
   header (beat gate map), beh_sop_intro_narration.cpp.
+
+## pc_skip FUN_80044BD4-collapse INCOMPLETENESS class (2026-07-15) — audit of the #53 bug family
+- ROOT CAUSE (workflow): FUN_80044BD4's tail was hand-re-derived at 3 pc_skip collapse sites instead of
+  shared. The COMPLETE byte-exact port is PcScheduler::spawnAndWait (pc_scheduler.cpp:142-187) — all sites
+  should route through a shared helper of its tail side-effects, not re-author.
+- FUN_80044BD4 (gen_func_80044BD4, generated/shard_3.c:11775): spawns slot-1 task, then if a3!=1:
+  draws RNG (FUN_8009A450) and UNCONDITIONALLY stores its RETURN VALUE (v0) as a HALFWORD at task+0x56
+  (the earlier RE misread this as literal 1 — v0 is the RNG result, the `1` was clobbered by the RNG call);
+  then if a3==2 the wait loop bumps u16 0x1F800198 + dispatches FUN_8007FD54 (icon/label placement).
+- INCOMPLETE sites (ranked by reachability):
+  1. Engine::submode1Case0Skip (engine.cpp:2277, a3=2) — HIGHEST, every field area load. Missing the WHOLE
+     tail (task+0x56 stamp + 0x1F800198 bump + FUN_8007FD54). Probe CONFIRMED: 0x801FE056 stale (73 3A) on
+     default vs written (25 7E -> 23 10) on faithful (PSXPORT_PC_SKIP=0) across submode1 case0->2 (~f112-116).
+  2. Sop::fieldMode case 0 (sop.cpp:493, a3=3) — missing task+0x56 RNG stamp (no counter/FD54 for a3!=2).
+  3. demo.cpp:938 (#53 fix, a3=2) — VALUE bug: writes literal 1 to sm+0x56, should be the RNG stamp.
+- NOTE: PSXPORT_GATE=1 is NOT a pc_skip=false oracle (only changes exec substrate); use PSXPORT_PC_SKIP=0
+  or SBS-full to force the faithful Engine::pc_skip branch (boot.cpp:141-144).
+- FIX: extract a shared bd4 tail helper from spawnAndWait; route all 3 sites through it.
