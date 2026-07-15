@@ -696,3 +696,18 @@
 - LESSON (same as FUN_80040B48): before RE'ing any FUN_xxxx, `codemap.py --addr <hex>` — a canonical
   owner may already exist under a different subsystem's name. The --conflicts detector now catches the
   slip after the fact; checking --addr up front prevents it.
+
+## Remaining codemap --conflicts candidates (2026-07-15) — TO TRIAGE next iteration
+After deduping FUN_80040B48 + FUN_80040CDC, `codemap.py --conflicts` (authoritative filter) leaves 3:
+- **0x80044BD4** — Demo::s0PreYield / PcScheduler::bd4Tail / PcScheduler::spawnAndWait. INTENTIONAL,
+  NOT a bug: the documented pc_skip FUN_80044BD4-collapse family (bd4Tail is the shared tail helper,
+  spawnAndWait the full port, s0PreYield the demo collapse). Leave as-is.
+- **0x800518FC** — Engine::objMatrixCompose (engine.cpp anim-cluster) vs NodeXform::buildWithOffset
+  (node_xform.cpp). LIKELY a real dup (same cluster pattern as the animEnvInit slip), BUT unlike
+  animEnvInit this is NOT a trivial field-write dup: objMatrixCompose does GTE-ish matrix work via
+  SUBSTRATE leaves (setvec 0x80085480 + mul) while buildWithOffset uses NodeXform native math — need
+  to RE both vs gen_func_800518FC and confirm byte-equivalence BEFORE consolidating. NodeXform is the
+  semantic home; objMatrixCompose (LIVE via beh_sop_intro_pilot post_cull_update) would redirect there.
+- **0x8002AB5C** — NativeScenePass::terrainRender (native_terrain.cpp) vs Render::terrain (submit.cpp,
+  desc starts "RETIRED 2026-07-07 #32"). AMBIGUOUS: Render::terrain may be a stale-tagged retired
+  method (remove the tag) or a real second owner. Investigate which.
