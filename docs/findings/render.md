@@ -2070,3 +2070,20 @@ draft was already byte-faithful.
   0-diff, but MV never fired, so I REVERTED it (can't oracle-verify → don't ship, per USER's oracle-gate
   standard). Most of the 97 --substrate-fallthrough candidates are like this: blocked on Phase 5 scene
   coverage. Phase 3 proceeds only for combat/movement-path fallthroughs until Phase 5 extends reach.
+
+## fps60 HUT-INTERIOR FLICKER — interpolated frames show the field exterior (2026-07-15, USER inspect)
+- SYMPTOM: in the hut interior (sm[0x4c]=3) with the user config (wide + fps60), the picture FLICKERS
+  between the correct hut interior and the field EXTERIOR every frame. Confirmed via `preseq` (dumps
+  presented frames incl. fps60 interp): presented sequence alternates exterior (even frames, ~30k PNG)
+  / interior (odd, ~20k). With fps60 OFF, the interior is stable (all frames ~52k interior). So fps60
+  is the cause. Repro: AUTO_SKIP → right34 → up185 (enter hut, sm[0x4c]=3) → `preseq 14 <dir>`; view
+  even vs odd frames. Frames: scratch/screenshots/hut/seq/p0000.png (ext) vs p0001.png (int).
+- ROOT-CAUSE HYPOTHESIS: the fps60 double-buffer (mCur/mPrev in game/render/fps60.cpp) captures the
+  FIELD render pass, but the hut sub-scene overlay (sm[0x4c]==3, drawn via the full OT walk added in
+  #49 for the authored sub-scene) is NOT folded into the fps60 tier — so interpolated presents render
+  the stale field (exterior). This is the "fps60 must be object-level inside the renderer" gap the USER
+  flagged; the sub-scene path bypasses the fps60 capture. NEXT: trace how the sub-scene (sm[0x4c]==3)
+  render integrates with Fps60::mCur/mPrev capture + tier1Render; the sub-scene OT walk needs to feed
+  the fps60 buffers (or fps60 must present the sub-scene layer on interp frames too).
+- WIDE (aspect=2) hut interior: CLEAN — sub-scene in a centered frame, clean black margins, no VRAM
+  artifacts (scratch/screenshots/hut/wide_interior.png 560x240). No wide bug here.
