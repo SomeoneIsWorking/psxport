@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 660 native fns, 543 owned addresses, 631 LIVE / 29 ORPHAN.
+Totals: 665 native fns, 547 owned addresses, 636 LIVE / 29 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -69,10 +69,10 @@ Totals: 660 native fns, 543 owned addresses, 631 LIVE / 29 ORPHAN.
 | 0x8003BED8 | LIVE | `Render::objListWalk2Continue` | game/render/objlist_walk.cpp:265 |  | (Render::objListWalk2Continue) — the walk's shared "process the rest o… |
 | 0x8003BF00 | LIVE | `Render::objListWalk3` | game/render/objlist_walk.cpp:290 | 0x8010FC70 | ======================================================================… |
 | 0x8003C048 | LIVE | `Render::renderWalk` | game/render/render_walk_dispatch.cpp:153 | 0x80129114 0x801295B4 0x8012A43C 0x8013DD58 |  |
-| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:295 |  |  |
-| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:330 |  |  |
-| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:366 |  | ======================================================================… |
-| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:173 |  | ======================================================================… |
+| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:325 |  |  |
+| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:360 |  |  |
+| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:396 |  | ======================================================================… |
+| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:203 |  | ======================================================================… |
 | 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:132 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
 | 0x8003D0BC | LIVE | `Render::overlayTypeDispatch` | game/render/overlay_type_dispatch.cpp:70 | 0x8010AA20 0x8010B0B8 0x8010B5BC 0x8010BA40 0x8010C2A4 0x8011024C … |  |
 | 0x8003EEC0 | LIVE | `Render::objListWalk4` | game/render/objlist_walk.cpp:354 |  | ======================================================================… |
@@ -157,10 +157,13 @@ Totals: 660 native fns, 543 owned addresses, 631 LIVE / 29 ORPHAN.
 | 0x8004D4F4 | LIVE | `Inventory::give` | game/items/inventory.cpp:180 |  |  |
 | 0x8004D7EC | LIVE | `Bit::test7EC` | game/math/mathlib.cpp:25 | 0x8004D7EC | pure bitmap bit-test (~2%, 6.8k calls): byte = bitmap[(int16)(idx/8)] … |
 | 0x8004D868 | LIVE | `Bit::test868` | game/math/mathlib.cpp:49 | 0x8004D868 | sibling of FUN_8004D7EC (bit-test) against a fixed third bitmap @0x800… |
+| 0x8004EB94 | LIVE | `emitSegmentLayout` | game/render/hud_gauge_emitter.cpp:158 |  | (descAddr, sign_extend16(spanBase + spanBias + bias)) call shape, shar… |
 | 0x8004ED0C | LIVE | `Inventory::abGate` | game/items/inventory.cpp:119 |  | Full RAM+scratchpad A/B vs rec_super_call. The pure-leaf core touches … |
 | 0x8004ED94 | LIVE | `Engine::announcerCue` | game/core/engine.cpp:947 | 0x8004FA38 | Engine::announcerCue — FUN_8004ED94. `id` sign-extended s16, then time… |
 | 0x8004FA38 | LIVE | `Inventory::abGate` | game/items/inventory.cpp:119 |  | Full RAM+scratchpad A/B vs rec_super_call. The pure-leaf core touches … |
 | 0x8004FB20 | LIVE | `Pool::clearBf548Region` | game/world/pool.cpp:50 |  | zero 700 bytes at 0x800BF548. Trivial memset wrapper. Every field of t… |
+| 0x8004FB4C | LIVE | `HudGaugeEmitter::emitItem` | game/render/hud_gauge_emitter.cpp:214 |  |  |
+| 0x8004FD30 | LIVE | `HudGaugeEmitter::emitFrame` | game/render/hud_gauge_emitter.cpp:166 |  |  |
 | 0x8004FE84 | LIVE | `Engine::sceneRenderListBuilder` | game/core/engine.cpp:693 |  | Native FUN_8004FE84 — a 2-phase scene/render-list builder driver (stru… |
 | 0x800506D0 | LIVE | `PcScheduler::tickSleepCountdown` | game/core/pc_scheduler.cpp:597 |  | VERIFIED + WIRED (frontier tier, 2026-07-10). See pc_scheduler.h for t… |
 | 0x8005082C | LIVE | `ModeStateArm::arm` | game/scene/mode_state_arm.cpp:10 |  | ModeStateArm::arm — native ownership of FUN_8005082C (Ghidra decomp sc… |
@@ -371,6 +374,8 @@ Totals: 660 native fns, 543 owned addresses, 631 LIVE / 29 ORPHAN.
 | 0x80081458 | LIVE | `Render::clearOTagR` | game/render/wide_re_libgpu_leaves.cpp:151 |  | func_80081458 (0x80081458) — ClearOTagR(OT, entries). VERIFIED & WIRED… |
 | 0x80081560 | LIVE | `Engine::drawOTag` | game/game_tomba2.cpp:139 |  | Native ownership of DrawOTag (libgpu FUN_80081560, the per-frame draw … |
 | 0x800815D0 | LIVE | `func_800815D0` | game/render/wide_re_gpu_putdrawenv.cpp:250 |  | func_800815D0 (0x800815D0) — libgpu PutDrawEnv(drawEnvPtr). DRAFT. RE'… |
+| 0x80081CF8 | LIVE | `buildDrawAreaRect` | game/render/hud_gauge_emitter.cpp:121 |  | ----------------------------------------------------------------------… |
+| 0x80081CF8 | LIVE | `emitDrawAreaAndLink` | game/render/hud_gauge_emitter.cpp:133 |  | Emit the DR_AREA packet built from the sp+rectOff rect into the packet… |
 | 0x80082220 | LIVE | `func_80082220` | game/render/wide_re_gpu_putdrawenv.cpp:176 |  | func_80082220 (0x80082220) — DR_TPAGE mode-word builder. DRAFT. RE'd f… |
 | 0x80082240 | LIVE | `func_80082240` | game/render/wide_re_gpu_putdrawenv.cpp:104 |  | func_80082240 (0x80082240) — SetDrawAreaTopLeft(x,y) word builder. DRA… |
 | 0x800822D8 | LIVE | `func_800822D8` | game/render/wide_re_gpu_putdrawenv.cpp:133 |  | func_800822D8 (0x800822D8) — SetDrawAreaBottomRight(x,y) word builder.… |

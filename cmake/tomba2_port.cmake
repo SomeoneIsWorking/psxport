@@ -263,6 +263,7 @@ set(PORT_SRC
   game/render/overlay_gt3gt4.cpp
   game/render/overlay_ground_gt3gt4.cpp
   game/render/widescreen_margin_quad.cpp
+  game/render/hud_gauge_emitter.cpp
   game/render/perobj_dispatch.cpp
   game/render/perobj_billboard.cpp
   game/render/render_walk_dispatch.cpp
