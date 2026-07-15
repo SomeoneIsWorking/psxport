@@ -405,20 +405,21 @@ void Render::titleNative() { Core* c = mCore;
   //     the baked TOMBA!2 logo + character art + the "(C) 1997-2000 WHOOPEE CAMP" copyright line.
   quad(RQ_BACKGROUND, 0,   -8, 256, 240, 0, 0, 640, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9A
   quad(RQ_BACKGROUND, 256, -8,  64, 240, 0, 0, 768, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9C
-  // (2) the New Game / Load Game menu = 2 op-0x2C/0x2D FT4 text-image quads + a cursor icon (fn 0x8007E2F8
-  //     family, docs/native-render-2d-panel.md). A HORIZONTAL 2-item menu (both rows at y=172). The SELECTED
-  //     item is op 0x2D (raw, full-bright, color 0x80); the unselected is op 0x2C modulated by color 0x50
-  //     (dimmed) — that IS the selection highlight. The cursor icon sits left of the selected item.
-  //  LIVE selection (read-only, no guest write): sel = u8 at sm+0x68, sm = *(u32*)0x1F800138. Derived
-  //  EMPIRICALLY from the reference renderer (PSXPORT_RENDER_PSX + otattr; Right/Left move the cursor):
-  //    sel==0 -> New Game raw @(50,172), Load Game dim @(186,172), cursor @(32,168)
-  //    sel==1 -> New Game dim,           Load Game raw,            cursor @(172,168)
-  //  Cursor X = 32 + 140*sel (2-point fit for the 2-item menu; the xSel caller in the DEMO overlay
-  //  0x80106xxx is not traced). Per-item rect/uv/clut are the item's own baked glyph strip — invariant to
-  //  selection; only raw-vs-modulated (and the cursor row) flip. sel==0 byte-matches the old boot snapshot.
+  // (2) the New Game / Load Game menu = 2 FT4 text-image quads + a cursor icon. RE-VERIFIED (2026-07-15)
+  //     against the substrate emitter FUN_80106824 + template emitter FUN_8007e1b8 (dumped at the live menu;
+  //     the input side is owned as Demo::s2SubMachine, game/scene/demo.cpp; docs/native-render-2d-panel.md):
+  //       · items are FT4 templates 0x8e/0x8f at anchors (90,180)/(230,180); FUN_8007e1b8 adds the template
+  //         vertex offset (-40,-8)/(-44,-8) -> final top-left (50,172)/(186,172).
+  //       · the SELECTED item draws attr 0 -> RAW (full-bright, RGB ignored); the unselected draws attr 0x50
+  //         -> modulated by (0x50,0x50,0x50) (dimmed). That is the selection highlight.
+  //       · the cursor is template 0x98 at anchor (cursorAnchorX[sel], 176); template offset (-8,-8) ->
+  //         (cursorAnchorX[sel]-8, 168). cursorAnchorX = the game's own 2-entry table {40,180} @0x80107704
+  //         (read live below — not a fitted constant). sel 0 -> cursor x 32, sel 1 -> 172.
+  //     Selection sel = sm[0x68] (sm = *(u32*)0x1F800138) — the byte Demo::s2SubMachine writes. Read-only.
   uint32_t sm  = c->mem_r32(0x1F800138u);
   int      sel = sm ? c->mem_r8(sm + 0x68u) : 0;
-  // one menu item: selected -> op 0x2D raw (bright, RGB ignored); unselected -> op 0x2C modulated by 0x50.
+  if (sel != 0 && sel != 1) sel = 0;        // s2SubMachine keeps sm[0x68] in {0,1}; guard stale transients
+  // one menu item: selected -> RAW (bright, RGB ignored); unselected -> modulated by 0x50 (FUN_80106824 attr).
   auto menuItem = [&](int item, int x, int y, int w, int h, int u, int clut_y) {
     bool seld = (sel == item);
     int  raw  = seld ? 1 : 0;
@@ -427,7 +428,8 @@ void Render::titleNative() { Core* c = mCore;
   };
   menuItem(0, 50,  172, 80, 16, 0,  509);   // "New Game"
   menuItem(1, 186, 172, 88, 16, 80, 510);   // "Load Game"
-  int cursor_x = 32 + 140 * sel;            // sel 0 -> 32, sel 1 -> 172 (empirical 2-point fit)
+  // cursor: real anchor from the game's table @0x80107704, minus the RE'd template-0x98 vertex offset (8,8).
+  int cursor_x = (int16_t)c->mem_r16(0x80107704u + (uint32_t)sel * 2u) - 8;
   quad(RQ_OVERLAY, cursor_x, 168, 16, 16, 80, 112, 384, 0, /*mode=*/0, /*raw=*/1, 480, 247, 0x80,0x80,0x80); // cursor icon
 }
 

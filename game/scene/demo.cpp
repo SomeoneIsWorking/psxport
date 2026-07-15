@@ -259,6 +259,78 @@ uint32_t Demo::s3SubMachine() { Core* c = core;                 // FUN_80106AC4
   return result;
 }
 
+// FUN_8010696C — the TITLE main-menu cursor sub-machine (s2's rec_dispatch target). The s3SubMachine
+// twin without the Circle/back (v0=3) outcome — the title menu can't cancel. sm = *0x1F800138 (SM_PTR).
+// Byte-exact frame (32; r31/r17/r16 @ sp+24/20/16, per tools/abi_extract): the two render leaves
+// 0x80106690/0x80106824 + the 3 Sfx::trigger (0x80074590) calls all spill the shared callee-saved file,
+// so the frame AND the per-call callee-saved reg prep are required for SBS byte-exactness —
+//   r16 = 0x1F800000 before the item/cursor draw (0x80106824 spills the incoming r16), and
+//   r17 = 1 before the SFX calls (Sfx::trigger spills the incoming r17). ra constants are the RE'd
+//   guest return addresses so the callees' spilled ra matches the oracle.
+//
+// Logic (identical to FUN_8010696c): fresh entry (sm[0x4a]==0) arms sm[0x4a]=1 + the attract hold-timer
+// sm[0x5a]=0x1C2 (450); a stray re-entry with sm[0x4a] not in {0,1} returns 0. Then it redraws the logos
+// (0x80106690) and the 2 menu items + cursor (0x80106824(0, sel!=0)), decrements the hold-timer, and on
+// expiry (timer==1) returns 1 (attract launch -> s7). Otherwise it reads the pad edges (0x800E7E68):
+// Right(0x20) selects item 1, Left(0x80) selects item 0 (each blips SFX 0x15 on an actual change and
+// clears sm[0x4a]); with neither held, Confirm(0x4008) plays SFX 0x11 and returns 2 (launch selected);
+// no relevant edge returns 0 (staying, sm[0x4a] left set).
+uint32_t Demo::s2SubMachine() { Core* c = core;
+  const uint32_t savedSp = c->r[29];
+  const uint32_t savedR16 = c->r[16];
+  const uint32_t savedR17 = c->r[17];
+  const uint32_t savedR31 = c->r[31];
+  c->r[29] -= 32u;
+  c->mem_w32(c->r[29] + 16u, savedR16);
+  c->mem_w32(c->r[29] + 20u, savedR17);
+  c->mem_w32(c->r[29] + 24u, savedR31);
+
+  uint32_t result = 0;
+  uint32_t sm = c->mem_r32(SM_PTR);
+  bool proceed = true;
+  if (c->mem_r16(sm + 0x4a) == 0) {
+    c->mem_w16(sm + 0x4a, 1);
+    c->mem_w16(sm + 0x5a, 0x1C2);
+  } else if (c->mem_r16(sm + 0x4a) != 1) {
+    proceed = false;
+  }
+
+  if (proceed) {
+    c->r[4] = 0;                               c->r[31] = 0x801069B8u; rec_dispatch(c, 0x80106690u);  // logos
+    c->r[4] = 0; c->r[5] = (c->mem_r8(sm + 0x68) != 0) ? 1u : 0u;
+    c->r[16] = 0x1F800000u;                    c->r[31] = 0x801069E8u; rec_dispatch(c, 0x80106824u);  // items+cursor
+
+    sm = c->mem_r32(SM_PTR);                                            // reload (matches recomp re-read)
+    int16_t timer = (int16_t)c->mem_r16(sm + 0x5a);
+    c->mem_w16(sm + 0x5a, (uint16_t)(timer - 1));
+    if (timer == 1) {
+      result = 1;                                                      // attract launch
+    } else {
+      uint16_t edges = c->mem_r16(0x800e7e68u);
+      c->r[17] = c->r[0] + 1u;                                         // s1 = 1 (SFX callee spills it)
+      if (edges & 0x20u) {                                             // Right -> select item 1 (Load Game)
+        if (c->mem_r8(sm + 0x68) != 1) { c->r[31] = 0x80106AA4u; c->engine.sfx.trigger(0x15, 0, 0); }
+        c->mem_w8 (sm + 0x68, 1);
+        c->mem_w16(sm + 0x4a, 0);
+      } else if (edges & 0x80u) {                                      // Left -> select item 0 (New Game)
+        if (c->mem_r8(sm + 0x68) != 0) { c->r[31] = 0x80106A78u; c->engine.sfx.trigger(0x15, 0, 0); }
+        c->mem_w8 (sm + 0x68, 0);
+        c->mem_w16(sm + 0x4a, 0);
+      } else if (edges & 0x4008u) {                                    // Confirm -> launch selected
+        c->r[31] = 0x80106A44u; c->engine.sfx.trigger(0x11, 0, 0);
+        result = 2;
+      }
+      // else: no relevant edge -> result stays 0, sm[0x4a] left set (re-enter next frame)
+    }
+  }
+
+  c->r[31] = savedR31;
+  c->r[17] = savedR17;
+  c->r[16] = savedR16;
+  c->r[29] = savedSp;
+  return result;
+}
+
 // ===================================================================================================
 // Wiring (2026-07-10). ov_demo_gen_80106AC4 DOES have a direct intra-shard call site
 // (ov_demo_shard_0.c:126, inside FUN_801064E8 = the substrate's OWN s3 body) — same shape as
@@ -280,11 +352,17 @@ namespace {
 void ov_demoS3SubMachine(Core* c) {
   c->r[2] = c->engine.demo.s3SubMachine();
 }
+void ov_demoS2SubMachine(Core* c) {
+  c->r[2] = c->engine.demo.s2SubMachine();
+}
 }  // namespace
 
 void Demo::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x80106AC4u, "Demo::s3SubMachine", ov_demoS3SubMachine);
+  // s2's title-menu sub-machine: register_() only (same cadence argument as s3SubMachine above — s2()'s
+  // rec_dispatch(0x8010696c) is the single call site; the guest root coroutine reaches it identically).
+  ov.register_(0x8010696Cu, "Demo::s2SubMachine", ov_demoS2SubMachine);
 }
 
 // s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the commit pair 0x80106824(1,1)

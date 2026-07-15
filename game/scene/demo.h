@@ -69,6 +69,11 @@ public:
   // keep rec_dispatch(c, 0x80106ac4u) until this is SBS-verified.
   uint32_t s3SubMachine();   // FUN_80106AC4
 
+  // Native port of the TITLE main-menu cursor sub-machine 0x8010696C that s2() rec_dispatches — the
+  // s3SubMachine twin, minus the Circle/back outcome (the title menu can't cancel). Returns v0 (0/1/2);
+  // does not write sm[0x48] (s2() owns the transition). Byte-exact frame (32; r31/r17/r16 @ sp+24/20/16).
+  uint32_t s2SubMachine();   // FUN_8010696C
+
 private:
   void s0Body();         // shared s0 case-0 body (see s0Skip/s0Faithful above)
 };

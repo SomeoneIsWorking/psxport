@@ -34,7 +34,7 @@ it with the psx_render reference (and SBS core B).
 | # | Scene | stage / selector | native producer today | status |
 |---|-------|------------------|------------------------|--------|
 | 1 | START.BIN boot (black loader) | `0x801FE00C == 0x8010649C` | black frame (gpu_blank_display) | ✅ native |
-| 2 | TITLE screen (logo + New/Load menu + copyright) | `0x801FE00C == 0x801062E4` s2 | `titleNative()` (logo sprites + menu FT4 quads, decoded) | ✅ native — RMSE 0 vs reference |
+| 2 | TITLE screen (logo + New/Load menu + copyright) | `0x801FE00C == 0x801062E4` s2 | `titleNative()` (logo sprites + menu FT4 quads, decoded) | ✅ native — RMSE 0; geometry now RE-VERIFIED (see below) + input owned (`Demo::s2SubMachine`) |
 | 0 | Task-switch handoff (scheduler state 3) | task0 `*(u16*)0x801FE000==3` | `renderLoading()` — black loader | ✅ native — RE'd from scheduler FUN_80051e60 (state 3 = entry reassigned, code not run → substate stale). Guards classifyScene from misreading the START→DEMO handoff's leftover sm[0x48] |
 | 2a| DEMO attract (real field-engine demo, s7 after idle) | `0x801062E4` sm[0x48]==7 | reuse `sceneNative()` — it's the REAL field (Sop::fieldMode + AreaSlots::updateTail); NOT FMV | ⬜ blanks black now; wire s7→field producer once #3b lands |
 | 2b| NEW GAME → SOP intro (from title menu, still DEMO task) | `0x801062E4` sm[0x48]==3, overlay-sig `0x3C021F80` | none yet — likely reuse `renderSopNarration()`/`sceneNative()` but classifyScene routes DEMO-entry to Title | ⛔ CRASHES (correct fail-fast). Selecting New Game loads the SOP overlay under the DEMO front-end task; classifyScene must recognise DEMO+SOP-overlay and route to the narration producer |
