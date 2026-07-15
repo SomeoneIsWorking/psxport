@@ -384,3 +384,29 @@ per-object motion lerp immediately.
    eligibility gate, mSink-as-tier1-only. Keep rq_capture only if still needed for rate detection.
 4. Verify: fps60dump/preseq — interp frames sit BETWEEN their real neighbors (no teleport), hut interior
    no flicker, moving field actors interpolate smoothly. SBS-full 0-diff (fps60 is core-A-only overlay).
+
+## Step-2 implementation constraints (discovered 2026-07-15 — the plan's "re-run drawOTag" needs refining)
+Two hard constraints found while designing the interp re-run:
+1. sceneNative CANNOT be re-run wholesale at present time — it mutates per-frame state (mSceneTableTrusted/
+   mBackdropTrusted/mAreaCacheWasNarration trust latches, render_walk.cpp:210-245) and is documented to
+   "run exactly once per real logic frame." Re-running it double-toggles the latches. So the interp re-run
+   must call the PICTURE-ONLY producers (terrainRenderAll/fieldEntityRender/backdropRender — what
+   tier1Render already does — PLUS the object entity-walk, factored out of sceneNative's state mutation).
+2. The OT-walk (gpu_dma2_linked_list) emits to core->game->rq DIRECTLY (gpu_native.cpp:938/1117/1175), NOT
+   via rqRedirect — so redirecting the sub-scene OT-walk into mSink needs an activeRq() choke:
+   `RenderQueue& Game::activeRq(){ return rqRedirect ? *rqRedirect : rq; }`, and those 3 emit sites route
+   through it (byte-identical when rqRedirect==null, which is every non-present-re-run path).
+
+### Refined step 2 (two independent sub-steps, each SBS-full + hut-preseq gated):
+2a. SUB-SCENE (fixes the hut flicker, contained): add Game::activeRq() + route the 3 OT-walk emit sites
+    through it (byte-identical). Capture {authored_subscene, otHead} per real frame into Fps60
+    (captureSubscene, like the camera capture). In present_vk, when the presented frame is a sub-scene,
+    build slot A by re-running gpu_dma2_linked_list(otHead) with rqRedirect=mSink + mCamOverrideOn (lerped
+    camera) instead of tier1Render+matchAndLerp → the interp frame re-walks the SAME interior OT. Present
+    mSink. This is the sub-scene flowing through the same OT-walk logic (camera-lerped; object motion frozen
+    — guest OT, no native transform, no flicker).
+2b. FIELD OBJECTS (replaces matchAndLerp): factor the object entity-walk (render_walk.cpp per-object
+    geomblk loop, projComposeObject→gt3gt4) out of sceneNative's state mutation into a re-runnable
+    picture-only method; the interp present re-runs it with mObjOverrideOn (step-1's lerped transforms)
+    into mSink alongside tier1Render's terrain. Then DELETE matchAndLerp/buildProvenanceIdx/
+    enforceNodeAtomicity (step 3).
