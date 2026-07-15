@@ -338,3 +338,49 @@ nothing):**
 Coverage after this session: terrain + scene-table (camera-lerp) + backdrop (layer-transform scroll
 lerp) are all Tier 1. The object/entity walk (`perObjFlush`) remains the only queue-lerp-heuristic
 geometry — Tier 2 (object-transform lerp) unchanged as the next step.
+
+# ═══ UNIFIED PATH REDESIGN (USER 2026-07-15) — "no difference between real and interp aside from lerp" ═══
+DIRECTIVE (verbatim): "There shouldn't be any difference between how real and interpolated frames are
+made aside from lerp, all drawing should flow through the same logic, the only difference in the
+interpolated frames should be the lerp done." USER chose the FULL landing (unify path + per-object
+transform lerp together; no intermediate object judder, no flicker, one verified landing).
+
+## The defect this fixes
+The interp frame is built by a SEPARATE path (tier1Render re-renders terrain + matchAndLerp
+fingerprint-matches captured queue prims), NOT the real render dispatch (drawOTag → sceneNative /
+authored-subscene OT walk). Symptom: the hut interior (sm[0x4c]==3) flickers to the field exterior
+every interp frame — neither tier1Render nor matchAndLerp covers the guest-OT sub-scene, so the interp
+frame draws the stale field. matchAndLerp is acknowledged debt (this doc's "REDIRECT").
+
+## Target architecture — ONE render, lerp lives in the INPUTS
+The interp present RE-RUNS the real render dispatch (drawOTag: sceneNative for field, OT walk for the
+sub-scene) into the isolated sink (mSink via rqRedirect, DisplayPassGuard read-only, present-time
+invariant — no tick since the real frame, so re-reads are the same guest state). The ONLY difference
+from the real frame is that every INPUT is served lerped through a capture/override choke:
+  - CAMERA  — `Fps60::sceneCam` choke. DONE (mCamCur/mCamPrev; override returns lerp at present).
+  - BACKDROP scroll — `Fps60::bgScroll` choke. DONE (mBgCur/mBgPrev, wrap-lerp).
+  - PER-OBJECT transform — `Render::projComposeObject` (reads Robj cmd+0x18, Tobj cmd+0x2c). TODO: give
+    it the SAME choke shape as sceneCam — at a real frame capture {Robj,Tobj} keyed by `cmd` into
+    mObjCur[cmd]; at present return lerp(mObjPrev[cmd], mObjCur[cmd], t). New object appearing (no prev)
+    → use cur (no lerp) that frame. `cmd` is the object's stable render-command identity (node+0xC0[i]).
+Then: DELETE matchAndLerp + tier1Render's separate terrain re-render + the provenance/fingerprint/
+node-atomicity machinery. The interp present becomes: set overrides on → re-run drawOTag into mSink →
+present mSink → overrides off. terrain/objects/backdrop/sub-scene all flow through the one dispatch.
+
+## Boundary (honest)
+The guest-OT sub-scene (hut) has NO native per-object transform (its prims are guest-built OT packets),
+so its objects can't get per-object motion lerp until those emitters are RE'd/ported native (the
+object-RE frontier). Until then the sub-scene interp frame re-runs the OT walk with the lerped CAMERA
+only — object motion frozen between real frames, but NO flicker (interp == real content). This is the
+degenerate lerp, consistent with the principle. Field objects (native, projComposeObject) get full
+per-object motion lerp immediately.
+
+## Build order (each step oracle-gated: SBS-full 0-diff on the faithful path + user eyeball fps60)
+1. projComposeObject capture/override choke (mObjCur/mObjPrev keyed by cmd + lerp override), captured on
+   every real projComposeObject call — byte-identical when fps60 off / real frame (like sceneCam).
+2. present_vk: interp present re-runs drawOTag (via a present-time render entry) into mSink with camera
+   + object + backdrop overrides ON; present mSink. Replaces the tier1Render+matchAndLerp slot-A build.
+3. Delete matchAndLerp, buildProvenanceIdx, enforceNodeAtomicity, mRqLerp/mMatch*/mZeroGroups*/tier1
+   eligibility gate, mSink-as-tier1-only. Keep rq_capture only if still needed for rate detection.
+4. Verify: fps60dump/preseq — interp frames sit BETWEEN their real neighbors (no teleport), hut interior
+   no flicker, moving field actors interpolate smoothly. SBS-full 0-diff (fps60 is core-A-only overlay).
