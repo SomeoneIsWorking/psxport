@@ -531,38 +531,32 @@ void Fps60::present_vk(Core* core) {
     slotA = mRqCur; nSlotA = mNCur;
     for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
   } else if (mHavePrev) {
-    // #50: only re-render the native field passes if the real frame actually ran them. During an authored
-    // OT sub-scene (hut interior) the real frame did a full OT walk (no sceneNative), so the interior is
-    // already in the captured queue (Q[N-1]/Q[N]) and matchAndLerp handles it — re-rendering the field here
-    // would draw the exterior on interp frames only (the flicker). mSink stays empty; the merge below emits
-    // just the lerped queue.
-    if (mTier1EligibleCur) tier1Render(c, mT);   // fills mSink with the camera-lerped terrain re-render
-    matchAndLerp(c);                    // fills mRqLerp with everything else (tier1-owned prims excluded)
-    slotA = mRqLerp; nSlotA = mNLerp;
-    // Merge-emit mSink with mRqLerp by (layer, seq) — NOT sink-then-slotA. mSink is all RQ_WORLD, its own
-    // push()-assigned seq starting at 0 (terrain draws first among world items in the real per-logic-frame
-    // walk too — render_walk.cpp's sceneNative order is (a) TERRAIN, (b) SCENE TABLE, (c) OBJECTS, (d)
-    // TOMBA — so mSink's seq range is already the lowest within RQ_WORLD, same relative position as the
-    // real frame). mRqLerp is already (layer,seq)-sorted (matchAndLerp walks Q[N-1] in ITS captured paint
-    // order, which flush() sorted before capture). A naive sink-first-then-slotA emit order draws the
-    // (semi, submission-order-composited) terrain quad against an EMPTY framebuffer instead of behind the
-    // background it belongs behind — verified wrong via scratch/check_tier1.py before this fix (every
-    // terrain-bbox pixel differed at t=1 from the real neighbor).
-    // #50: mSink is nullptr when tier1Render was skipped (ineligible frame — authored sub-scene); treat as
-    // empty so the merge just emits the lerped queue (mSink is lazily allocated only inside tier1Render).
+    // fps60 UNIFIED PATH (docs/fps60-rework.md): the field frame's WORLD — terrain + scene-table + OBJECTS
+    // + backdrop — is re-run by tier1Render into mSink under the lerped camera + per-object transforms, ALL
+    // interpolated through the SAME render path the real frame used (lerp lives in the INPUTS, not a per-
+    // prim output match). Slot A = mSink (that lerped world) merged with mRqCur's REMAINING prims — the 2D
+    // HUD/overlay, which are screen-space and presented VERBATIM (no lerp needed) — in (layer, seq) paint
+    // order. isTier1Owned marks the world prims that come from mSink so we skip them in mRqCur. No
+    // matchAndLerp: nothing is fingerprint-matched anymore. (mTier1EligibleCur gates the field re-render;
+    // when false — narration — mSink stays empty and only the 2D prims emit.)
+    if (mTier1EligibleCur) tier1Render(c, mT);
     const int sinkN = mSink ? mSink->n : 0;
     int ia = 0, ib = 0;
-    while (ia < sinkN || ib < nSlotA) {
+    for (;;) {
+      while (ib < mNCur && isTier1Owned(mRqCur[ib])) ib++;   // world prims come from mSink — skip in mRqCur
+      const bool haveA = ia < sinkN, haveB = ib < mNCur;
+      if (!haveA && !haveB) break;
       bool takeSink;
-      if (ia >= sinkN) takeSink = false;
-      else if (ib >= nSlotA) takeSink = true;
+      if (!haveB)      takeSink = true;
+      else if (!haveA) takeSink = false;
       else {
-        const RqItem& sa = mSink->items[ia]; const RqItem& sb = slotA[ib];
+        const RqItem& sa = mSink->items[ia]; const RqItem& sb = mRqCur[ib];
         takeSink = (sa.layer != sb.layer) ? (sa.layer < sb.layer) : (sa.seq <= sb.seq);
       }
       if (takeSink) q.emitItem(c, &mSink->items[ia++]);
-      else          q.emitItem(c, &slotA[ib++]);
+      else          q.emitItem(c, &mRqCur[ib++]);
     }
+    slotA = mRqCur; nSlotA = mNCur;   // telemetry only
   } else {
     slotA = mRqCur;  nSlotA = mNCur;
     for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
