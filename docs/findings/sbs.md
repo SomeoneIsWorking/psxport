@@ -1632,3 +1632,17 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   no new divergence there). NEXT: DIRECTED routes to reach area EXITS / dialogue (blind walk hits
   walls, stays in start field). Options: (a) chain off hut-entry replay then explore the hut interior;
   (b) RE the start-field exit locations for a scripted route; (c) trigger the fisherman dialogue.
+
+## Phase 5 exploration — composition works, all reachable scenes 0-diff (2026-07-15)
+- PAD_REPLAY + SBS_KEYS COMPOSE: a replay reaches an area, then SBS_KEYS explores inside it (both cores,
+  lockstep). Verified: hut-entry-door-freeze.pad → hut, then scripted walk = SBS-full 0-diff f15450.
+- Coverage exercised this session under SBS-full, ALL 0-diff (no divergence, no Job#1 bug):
+  start-field free-roam (blind + long directed walks), hut interior, combat (dark-screen), the two
+  hut-entry routes, the 122KB dark-screen gameplay session. The pc_faithful path is byte-exact
+  everywhere currently reachable.
+- LIMITATION: blind directional walking does NOT cross area boundaries (start field is bounded; the
+  only exits reached are via the recorded replays' routes). To reach GENUINELY new areas (village,
+  deeper zones) + trigger the scene-gated fallthroughs (build/angleCmp/CutsceneCamera) + surface new
+  divergences, need RE'd routes: find the start-field exit-zone trigger (position → SceneTransition/
+  fieldMode area load) and script SBS_KEYS to it, OR record new replays (USER, windowed). This is the
+  Phase-3/4/5 rate-limiter now — the easy oracle-gate-able work is done; the rest needs new scene reach.
