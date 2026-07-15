@@ -75,8 +75,21 @@ workflow defects. Stop and fix them, then resume.
   by guest address (`docs/code-map.md`; warns ⚠ DUAL-OWNERSHIP if already owned in another file).
   Regenerate on add/move. `tools/codemap.py --conflicts` lists every duplicate-owned address — a native
   RE'ing a `FUN_xxxx` some other subsystem already owns (how FUN_80040B48/80040CDC got duplicated).
+- **The TRACKING STACK — three orthogonal maps, one question each (consult at task start, update in the
+  SAME commit as the work):**
+  - **codemap** (`tools/codemap.py` → `docs/code-map.md`) — WHERE is it: guest addr → native owner,
+    LIVE/ORPHAN, `--addr`/`--conflicts`. Auto-scanned from source.
+  - **port-map** (`tools/portmap.py` → `docs/port-map.md`) — IS it ported, and REAL not a HACK: the RE
+    dependency chain with a `verified | ported-unverified | hack | todo | blocked` axis. `portmap.py next`
+    = the next RE-ready step (work THAT, not a downstream one); `portmap.py hacks` = the debt list (keep
+    it shrinking — a hack is a stopgap standing in for the real mechanism, and MUST name its real fix +
+    death condition); `portmap.py check` flags jumped-ahead work. The focused frontier over port-progress.md.
+  - **parity-map** (`tools/parity.py` → `docs/parity-map.md`) — IS it SBS byte-exact (Job #1): per unit,
+    `verified` (cite frames+gate+evidence) | `diverges` (a live Job#1 bug — `check` FAILS) | `partial` |
+    `untested` | `n/a` (pc_render overlays are n/a — they never write guest RAM). Record every SBS 0-diff
+    here so the proof is durable: `parity.py set <unit> --status verified --frames N --gate '<cmd>' --evidence <commit>`.
 - **Status & spine:** `docs/port-progress.md` — boot→gameplay execution spine, per-function status,
-  current frontier. Port top-to-bottom. Update in the same commit as the work.
+  current frontier (the DETAIL behind port-map). Port top-to-bottom. Update in the same commit as the work.
 - **Fleet workflow (operator + subagents):** `docs/fleet-workflow.md` — how to drive ownership at scale
   (one operator orchestrates isolated sonnet subagents; dispatch → integrate → honest SBS gate → push).
   Read it before running a fleet.
