@@ -2123,3 +2123,19 @@ draft was already byte-faithful.
   0-diff + no-crash. Best structure: own FUN_8007e1b8 + FUN_80106824 natively (data-driven), shared by title
   + s3 + s6, retiring titleNative's decoded constants.
 - **refs:** game/scene/demo.cpp Demo::s2/s3/s2SubMachine/s3SubMachine; docs/native-render-2d-panel.md; portmap `newgame-sop-intro (#2b)`
+
+## #5 SOP narration void beat renders ~black under pc_render — vortex object not drawing
+- **symptom:** after New Game, the SOP intro (GAME stage, overlay 0x3C021F80) shows a mostly-black screen
+  under pc_render; reference shows a large swirling vortex. pixel-diff at the void beat: pc 2.7% non-black
+  vs psx 58.9%, RMSE 45.
+- **status:** known-issue, localized 2026-07-16 (render-completeness, deferred; NOT a crash)
+- **cause:** the frame is the SOP VOID BEAT (*(u8*)0x800BF9B4 == 5, sm4a==0 sm4c==0). renderSopNarration's
+  void-beat guard is correct (black bg + object-pass only, terrain/scene-table/backdrop dropped), BUT the
+  vortex object (node 0x800FBA68) does not render through sceneNative's object pass under pc_render — so the
+  screen stays ~black. The prior #5 note ("caption text 2D pending") UNDER-STATED this: the whole vortex is
+  missing, not just text.
+- **fix:** (not done) RE why the vortex node 0x800FBA68 isn't emitted by the object walk during the void
+  beat (culled? not in the walked entity lists? special geomblk?). Verify a fix by pixel-diff pc-vs-psx at
+  the void beat (animated — match a fixed frame). Reaching true free-roam field (#3b) is BEHIND this
+  narration in the newgame path.
+- **refs:** render_walk.cpp renderSopNarration/sceneNative void-beat guard; docs/native-render-rebuild.md #5

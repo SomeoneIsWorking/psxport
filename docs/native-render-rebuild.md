@@ -42,7 +42,7 @@ it with the psx_render reference (and SBS core B).
 | 3b-A| Field free-roam blocker — UNTAGGED WORLD OBJECTS (not HUD) | same, `s_ot_2d_drawn>0` | own the object emit leaves so they register obj_depth / native-cover | ⛔ CRITICAL — blocks all gameplay in pc_render |
 | 3b-B| Field genuine 2D HUD/dialog/text (interaction-triggered) | same | font glyphEmit dual-emit + panel.cpp (specs ready) | ⛔ (not in free-roam) |
 | 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | `fieldObjectsRender()` + `dialogTextNative()` (room obj 0x800FD850 + NPCs + Tomba + dialog text) | ✅ native — matches reference; dialog TEXT now native (panel bg still 2D pending) |
-| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | `sceneNative()` + void-beat(0x800bf9b4==5) guard (vortex over black) | ✅ wired native — no crash; caption text = 2D pending (wire `dialogTextNative` if narration uses the glyph list) |
+| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | `sceneNative()` + void-beat(0x800bf9b4==5) guard | ◐ no crash, but void beat renders ~BLACK (pc 2.7% vs psx 58.9%): the vortex object 0x800FBA68 isn't emitted by the object walk (findings/render.md #5). Render-completeness, deferred |
 
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
 
