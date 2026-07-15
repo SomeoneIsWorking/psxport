@@ -917,27 +917,18 @@ static void demo_frame_s7(Core* c) {
     c->mem_w8(0x801fe0deu, entry);
     c->mem_w8(0x801fe0ddu, 1);
     c->mem_w8(0x1f80019bu, 0);
-    (void)c->rng.next();                                       // Slip #5: PRNG draw, a side effect of func_80051F14's task-1 registration (not a replacement for the whole callee — see the tail below, #53).
-    // FUN_80044bd4's a3==2 TAIL (RE'd via Ghidra decomp of the recompiled body, gen_func_80044BD4 @
-    // generated/shard_3.c:11775, confirmed against 0x80044bd4 disasm): after registering task 1's
-    // callback (func_80051F14), since a3(=2)!=1 the guest unconditionally stores a HALFWORD 1 at
-    // sm+0x56 (0x80044c7c `sh v0,0x56(v1)` — v0=1; a `sh`, not `sb`, so the neighbour byte sm+0x57
-    // is also cleared to 0 — the probed-stale address #53 names, 0x801FE056, IS sm+0x56 since sm
-    // resolves to 0x801FE000 here). It then checks byte 0x1f80019b (the done_flag we just cleared to
-    // 0 above): since that read observes 0, the guest falls through into the wait-loop body
-    // (0x80044c84) and runs it exactly once before its own spin naturally collapses into whatever this
-    // synchronous fork represents as transitionAreaLoad() below — bumping the 16-bit counter at
-    // 0x1f800198 and dispatching FUN_8007fd54 (0x80044c98, the item-launch icon/label placement
-    // primitive; it takes NO incoming a0..a3 — it derives x=160/y=180/cell purely from 0x1f800198 and
-    // calls 0x80079374, the same primitive phase1 already refreshes every active frame — see
-    // gen_func_8007FD54 @ generated/shard_3.c:19292). Ordering is load-bearing: this tail must run
-    // BEFORE SV_CHECK(...transitionAreaLoad()) below, not after — running it after would observe
-    // 0x1f80019b already ==1 (the callback we just finished) and take the guest's OTHER branch (the
-    // unconditional sm+0x56 store still fires, but the counter-bump + FUN_8007fd54 dispatch is
-    // skipped entirely), reproducing the exact stale-sm+0x56 / missing-HUD-sprite bug this fix closes.
-    c->mem_w16(sm + 0x56u, 1);
-    c->mem_w16(0x1f800198u, (uint16_t)(c->mem_r16(0x1f800198u) + 1));
-    rec_dispatch(c, 0x8007fd54u);                                     // item-launch icon/label placement (0x80044c98)
+    (void)c->rng.next();                                       // Slip #5: PRNG draw, a side effect of func_80051F14's task-1 registration (not a replacement for the whole callee — see the tail below).
+    // FUN_80044bd4's a3==2 TAIL — shared helper PcScheduler::bd4Tail (game/core/pc_scheduler.cpp;
+    // see its doc comment + docs/findings/scene.md "pc_skip FUN_80044BD4-collapse INCOMPLETENESS
+    // class"): stores the RNG stamp (FUN_8009A450's RETURN VALUE, not a literal — the earlier fix
+    // here wrote a literal 1, which is the #53 value bug) as a HALFWORD at sm+0x56, then since
+    // a3==2 bumps the 16-bit wait counter at 0x1f800198 and dispatches FUN_8007fd54 (item-launch
+    // icon/label placement; takes no incoming a0..a3, derives x/y/cell from 0x1f800198). Ordering
+    // is load-bearing: this tail must run BEFORE SV_CHECK(...transitionAreaLoad()) below, not
+    // after — running it after would observe 0x1f80019b already ==1 (the callback we just
+    // finished) and take the guest's OTHER branch (the stamp store still fires, but the
+    // counter-bump + FUN_8007fd54 dispatch is skipped entirely).
+    c->game->pcSched.bd4Tail(sm, /*flag=*/2);
     SV_CHECK(c, 0x800452C0u, c->engine.sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // = sync 0x800452c0; sets 1f80019b=1 (observable-gated)
     // reinit subsystems (all SYNC; no incoming args / self-args)
     c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)

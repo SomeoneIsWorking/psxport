@@ -486,11 +486,18 @@ void Sop::fieldMode() { Core* c = core;
       // Slot 0 is task-0 (the ONLY task that runs SOP fieldMode); array indexed for consistency.
       if (c->game && c->game->pcSched.sop_field_step[0] == 0) {
         c->game->pcSched.sop_field_step[0] = 1;
-        // Slip #5: match the FUN_80044BD4 RNG advance BEFORE the defer — the recomp fires the RNG
-        // early in FUN_80044BD4's body, BEFORE the wait-loop yield that our defer models. Firing
-        // rng.next() on the deferred re-entry (previously) put A's RNG advance one tick after
-        // B's, opening the divergence at f29. Fire before the break so tick N aligns with B's tick N.
-        (void)c->rng.next();
+        // FUN_80044bd4's a3==3 TAIL — shared helper PcScheduler::bd4Tail (game/core/pc_scheduler.cpp;
+        // docs/findings/scene.md "pc_skip FUN_80044BD4-collapse INCOMPLETENESS class", bug #59):
+        // draws the RNG (FUN_8009A450) and stores its RETURN VALUE as a HALFWORD at the current
+        // task's +0x56 — this call site (a3=3, not 2) has NO wait-counter bump / FUN_8007fd54
+        // dispatch (that's flag==2 only). Previously the draw was fired but its result discarded
+        // (only the RNG-advance timing mattered for the Slip #5 fix below); now the stamp write is
+        // reproduced too, matching gen instead of leaving sm+0x56 stale. Timing note carried over:
+        // fire BEFORE the defer — the recomp fires the RNG early in FUN_80044BD4's body, BEFORE the
+        // wait-loop yield that our defer models. Firing on the deferred re-entry (previously) put
+        // A's RNG advance one tick after B's, opening the divergence at f29. Fire before the break
+        // so tick N aligns with B's tick N.
+        c->game->pcSched.bd4Tail(sm, /*flag=*/3);
         break;   // defer — sm[0x50] stays 0; next tick re-enters this case
       }
       c->game->pcSched.sop_field_step[0] = 0;   // completing now; arm again for the next area

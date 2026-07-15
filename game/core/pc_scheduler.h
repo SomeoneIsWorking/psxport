@@ -70,6 +70,15 @@ public:
   void spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag); // FUN_80044BD4
   void forceClose(uint32_t slot);                // FUN_80052010: close another slot
   void selfClose();                              // FUN_80051FB4: current task ends itself
+
+  // bd4Tail — the SHARED FUN_80044BD4 a3!=1 tail side-effects (docs/findings/scene.md "pc_skip
+  // FUN_80044BD4-collapse INCOMPLETENESS class"): draws the RNG stamp (FUN_8009A450) and stores
+  // its RETURN VALUE as a halfword at taskBase+0x56 (NOT a literal — the earlier hand-derivations
+  // at the pc_skip collapse sites got this wrong), then if flag==2 bumps the wait-frame counter
+  // (0x1F800198) and dispatches FUN_8007FD54 (icon/label placement) once. This is the ONE
+  // authoritative copy of that tail — spawnAndWait's own tail and every pc_skip collapse site
+  // that reproduces FUN_80044BD4's a3!=1 branch route through it instead of re-deriving it.
+  void bd4Tail(uint32_t taskBase, uint32_t flag);
   // Wire the five primitives into game->engine_overrides at their guest addresses so substrate
   // callers on core A (via rec_dispatch) reach the same implementations. Core B (psx_fallback)
   // never consults the table.

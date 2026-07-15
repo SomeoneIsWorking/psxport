@@ -2276,7 +2276,15 @@ void Engine::submode1Faithful() { Core* c = core;
 // substrate parity demands cadence match, live gameplay does not.
 bool Engine::submode1Case0Skip() { Core* c = core;
   rec_dispatch(c, 0x8005245cu);
-  (void)c->rng.next();                     // Slip #5: substrate makes 1 RNG call inside FUN_80044BD4
+  (void)c->rng.next();                     // Slip #5: substrate makes a RNG call inside FUN_80051F14's task-1 registration (not the tail's own draw — see bd4Tail below).
+  // FUN_80044bd4's a3==2 TAIL — shared helper PcScheduler::bd4Tail (game/core/pc_scheduler.cpp;
+  // docs/findings/scene.md "pc_skip FUN_80044BD4-collapse INCOMPLETENESS class", bug #58 — this
+  // was the HIGHEST-reachability site, missing the WHOLE tail: the current task's RNG stamp at
+  // +0x56 AND the flag==2 wait-counter bump + FUN_8007fd54 dispatch). Ordering is load-bearing
+  // (matches demo.cpp/gen): the tail must run BEFORE SV_CHECK(...transitionAreaLoad()) below —
+  // running it after would observe the done_flag already ==1 (the load we just finished) and take
+  // the guest's OTHER branch, skipping the counter-bump + FUN_8007fd54 dispatch entirely.
+  c->game->pcSched.bd4Tail(c->mem_r32(0x1f800138u), /*flag=*/2);
   SV_CHECK(c, 0x800452C0u, sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // observable gate vs the 0x800452C0 oracle
   // pc_skip counter-bump ([[pc-skip-frame-counter-bump]]): substrate would consume 2 field-
   // frame ticks in this case-0 body (Slip #3 in docs/findings/sbs.md — FUN_80044BD4 yields

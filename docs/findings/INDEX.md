@@ -176,7 +176,7 @@ already solved or ruled out. 168 findings across 10 subsystems.
 - **ScriptInterp opcode cluster — §9 re-verify + frontier-tier wiring (2026-07-10)** [RESOLVED (5 opcode handlers + advanceStep + PcScheduler::tickSleepCountdown promoted] —   ↪ docs/findings/scene.md
 - **Un-owned entity-behavior cluster (0x801244E8/0x8012866C/0x8012E168/0x8013DD48) — 1 ported, 3 blocked** [?] —   ↪ docs/findings/scene.md
 - **Vortex void beat black on pc_skip — RESOLVED (2026-07-14, bug #43)** [?] — default config (pc_skip + pc_render), `newgame; run 600`: black + narration text  ↪ docs/findings/scene.md
-- **pc_skip FUN_80044BD4-collapse INCOMPLETENESS class (2026-07-15) — audit of the #53 bug family** [?] —   ↪ docs/findings/scene.md
+- **pc_skip FUN_80044BD4-collapse INCOMPLETENESS class (2026-07-15) — audit of the #53 bug family — FIXED** [?] —   ↪ docs/findings/scene.md
 - **pc_skip exec: prologue vortex backdrop missing + scene SM stalls before area load (2026-07-10, RESOLVED)** [?] —   ↪ docs/findings/scene.md
 
 ## tooling

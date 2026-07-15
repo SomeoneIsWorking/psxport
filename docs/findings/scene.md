@@ -586,7 +586,7 @@
 - **refs:** bug #43, scratch/screenshots/vortex_{default,gate}_f600.png, sop_overlay_shadow.cpp
   header (beat gate map), beh_sop_intro_narration.cpp.
 
-## pc_skip FUN_80044BD4-collapse INCOMPLETENESS class (2026-07-15) — audit of the #53 bug family
+## pc_skip FUN_80044BD4-collapse INCOMPLETENESS class (2026-07-15) — audit of the #53 bug family — FIXED
 - ROOT CAUSE (workflow): FUN_80044BD4's tail was hand-re-derived at 3 pc_skip collapse sites instead of
   shared. The COMPLETE byte-exact port is PcScheduler::spawnAndWait (pc_scheduler.cpp:142-187) — all sites
   should route through a shared helper of its tail side-effects, not re-author.
@@ -594,12 +594,34 @@
   draws RNG (FUN_8009A450) and UNCONDITIONALLY stores its RETURN VALUE (v0) as a HALFWORD at task+0x56
   (the earlier RE misread this as literal 1 — v0 is the RNG result, the `1` was clobbered by the RNG call);
   then if a3==2 the wait loop bumps u16 0x1F800198 + dispatches FUN_8007FD54 (icon/label placement).
-- INCOMPLETE sites (ranked by reachability):
-  1. Engine::submode1Case0Skip (engine.cpp:2277, a3=2) — HIGHEST, every field area load. Missing the WHOLE
-     tail (task+0x56 stamp + 0x1F800198 bump + FUN_8007FD54). Probe CONFIRMED: 0x801FE056 stale (73 3A) on
-     default vs written (25 7E -> 23 10) on faithful (PSXPORT_PC_SKIP=0) across submode1 case0->2 (~f112-116).
-  2. Sop::fieldMode case 0 (sop.cpp:493, a3=3) — missing task+0x56 RNG stamp (no counter/FD54 for a3!=2).
-  3. demo.cpp:938 (#53 fix, a3=2) — VALUE bug: writes literal 1 to sm+0x56, should be the RNG stamp.
+- INCOMPLETE sites (ranked by reachability), all now fixed:
+  1. Engine::submode1Case0Skip (engine.cpp:2277, a3=2) — HIGHEST, every field area load. Was missing the
+     WHOLE tail (task+0x56 stamp + 0x1F800198 bump + FUN_8007FD54). Probe CONFIRMED: 0x801FE056 stale
+     (73 3A) on default vs written (25 7E -> 23 10) on faithful (PSXPORT_PC_SKIP=0) across submode1
+     case0->2 (~f112-116). FIXED: `c->game->pcSched.bd4Tail(c->mem_r32(0x1f800138u), 2)` inserted BEFORE
+     `SV_CHECK(...transitionAreaLoad())`.
+  2. Sop::fieldMode case 0 (sop.cpp:493, a3=3) — was missing the task+0x56 RNG stamp (the RNG draw
+     already existed for cadence timing but its result was discarded). FIXED: `(void)c->rng.next()`
+     replaced with `c->game->pcSched.bd4Tail(sm, 3)` — same single draw, now stored (no counter/FD54,
+     a3!=2). Draw count unchanged (1).
+  3. demo.cpp:938 (#53 fix, a3=2) — VALUE bug: wrote literal 1 to sm+0x56 instead of the RNG stamp.
+     FIXED: `c->mem_w16(sm + 0x56u, 1)` + the separate counter-bump/FD54 lines replaced with
+     `c->game->pcSched.bd4Tail(sm, 2)`.
+- FIX: extracted `PcScheduler::bd4Tail(uint32_t taskBase, uint32_t flag)` (game/core/pc_scheduler.h/.cpp) —
+  the ONE authoritative copy of the a3!=1 tail (RNG stamp store + flag==2 counter/FD54). All 3 collapse
+  sites now call it instead of re-deriving. spawnAndWait itself was NOT routed through it — its flag==2
+  counter/FD54 repeats per wait-loop iteration gated on done==0, a shape the single-shot helper doesn't
+  model; spawnAndWait keeps its own inline tail (see pc_scheduler.cpp comment above bd4Tail).
+- VERIFIED: build clean; SBS-full (PSXPORT_SBS_MODE=full AUTO_SKIP) 0-diff through 30390+ frames (helper
+  only touches pc_skip branches, which core B doesn't run); MODE=skip AUTO_SKIP SKIP_CONTINUE shows zero
+  task+0x56/field-load-related divergence (only pre-existing unrelated AUDIO spu_reg timing jitter, a
+  separate known class); default free-roam boot + attract-DEMO boot both unaffected (AUTO_SKIP reaches
+  free-roam at f216 as before). Per-site probe of 0x801FE056 (task+0x56): default now writes a real drawn
+  stamp instead of staying stale/literal at every site (demo default f500: `23 10`, was literal `01 00`;
+  engine.cpp default f200+: `82 5C`, was stale/missing). The exact byte value differs from the faithful
+  run's own draw (`23 10` at the same probe) — expected: pc_skip and faithful accumulate different total
+  frame counts before reaching this point (documented "SBS two compare modes" — MODE=skip does NOT require
+  byte-exact RNG-stream alignment, only the fixed observable list + SBS-full on the faithful path, which
+  stayed 0-diff).
 - NOTE: PSXPORT_GATE=1 is NOT a pc_skip=false oracle (only changes exec substrate); use PSXPORT_PC_SKIP=0
   or SBS-full to force the faithful Engine::pc_skip branch (boot.cpp:141-144).
-- FIX: extract a shared bd4 tail helper from spawnAndWait; route all 3 sites through it.

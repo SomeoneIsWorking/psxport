@@ -136,6 +136,25 @@ void PcScheduler::selfClose() {
   c->r[29] += 24;
 }
 
+// bd4Tail — shared FUN_80044BD4 a3!=1 tail: RNG stamp store at taskBase+0x56, and (flag==2 only)
+// one wait-frame-counter bump + FUN_8007FD54 dispatch. See pc_scheduler.h for the full rationale
+// (docs/findings/scene.md "pc_skip FUN_80044BD4-collapse INCOMPLETENESS class"). Every pc_skip
+// collapse site that reproduces FUN_80044BD4's a3!=1 branch AS A SINGLE SYNCHRONOUS TICK (demo.cpp,
+// engine.cpp Engine::submode1Case0Skip, sop.cpp Sop::fieldMode case 0) calls this instead of
+// re-deriving the tail per site. spawnAndWait below keeps its own inline tail: its flag==2 bump+
+// dispatch is gated by done==0 and repeats once per yielded wait-loop iteration (not a single shot),
+// a shape this single-shot helper doesn't model — factoring it in would risk the wait loop's
+// byte-exactness for no benefit (the ONE call site, the reference this helper was extracted from).
+void PcScheduler::bd4Tail(uint32_t taskBase, uint32_t flag) {
+  Core* c = &game->core;
+  const uint16_t stamp = (uint16_t)c->rng.next();          // FUN_8009A450 (guest seed 0x80105EE8)
+  c->mem_w16(taskBase + 0x56, stamp);                       // RNG stamp on the waiting task
+  if (flag == 2) {
+    c->mem_w16(kWaitFrameCtr, (uint16_t)(c->mem_r16(kWaitFrameCtr) + 1));
+    rec_dispatch(c, 0x8007FD54u);                           // flag==2 per-wait-frame service
+  }
+}
+
 // FUN_80044BD4 — spawn a slot-1 task and wait for its done_flag. Frame: sp-=40, spills at
 // +16..+32 hold the caller's LIVE s0..s3 + ra; the body then keeps fn/flag/p2/p3 in s-regs
 // (r18/r19/r17/r16) so nested callee spills (spawnPrim's s0 etc.) hold live values too.
