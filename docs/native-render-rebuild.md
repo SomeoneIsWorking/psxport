@@ -62,12 +62,23 @@ producer. The TITLE screen (#2) is the first and establishes this subsystem.
 - Drawn as **textured quads** (gp0 op 0x2c/0x2d, tp=(832,256)/(384,0)), NOT SPRT sprites — the logo/bg/
   menu are POLY_FT4s sampling VRAM sprite patterns that `Engine::uploadModeSprites` (FUN_80067DA8) uploads
   each frame. So the native 2D subsystem is a **textured-quad + font compositor**, keyed by texpage/uv.
-- The Demo class (game/scene/demo.h) owns the SUBSTATE machine only; the RENDER stays substrate — the
-  quad-builder lives inside the rec_dispatch'd sub-machines (menu input 0x80106f80, cursor 0x80106ac4,
-  page 0x8007b45c, …). NEXT RE STEP: Ghidra (tools/decomp.sh) those to find the shared 2D-quad submit
-  primitive, then OWN it natively (record screen-quad + texpage + uv + color -> RQ_HUD), the 2D twin of
-  submit.cpp's 3D packet ownership. Owning the shared primitive makes every 2D scene (title, menus, HUD,
-  dialog) render natively at once — do NOT hand-transcribe the title's specific quad list.
+- The Demo class (game/scene/demo.h) owns the SUBSTATE machine only; the RENDER stays substrate. The
+  render tail is `TAIL_REND = 0x80106658` → **`FUN_80075a80`** (title/attract render, Ghidra-decompiled).
+- **FUN_80075a80** iterates a 24-entry display list at `0x800be238` (stride 0xc) and calls the game's
+  2D SPRITE ENGINE per active entry: **`FUN_80092660`** (activate/pose a sprite → fills a prototype
+  POLY packet `DAT_80105cf8..d10` [tag 0x21, color, uv, tpage, clut, xy] + a sprite state table at
+  `0x801054d8` [stride 0x1c]) → `FUN_80092fd0` (pattern/pose state) → `FUN_8009440c`/`FUN_80094c10`.
+  Pattern def table `PTR_80105cdc`, pose/frame table `PTR_80105ce8` (stride 0x20).
+- BUT the live title OT is MINIMAL (scene dump f130: OT1 fill=1 env=6; OT2 poly=3 rect=2 **vramcopy=1**
+  env=2). So the title picture = a **pre-rendered VRAM art image blitted by a vramcopy** into the FB +
+  a fill + ~5 menu/logo overlay prims — NOT dozens of per-frame sprite quads. The sprite engine drives
+  only the few overlay/animated bits.
+- NATIVE TITLE PRODUCER (approach, not GP0 replay): (1) draw the title ART as a texture — it's loaded
+  into VRAM by the title load; sample that VRAM region as a full-screen quad. (2) draw the menu overlay
+  (highlight + text) from MENU STATE (cursor/selection), via the native 2D quad path (RQ_HUD). RE TODO:
+  the vramcopy src/dst rect (title-art VRAM location) + the 3-poly/2-rect overlay's source (FUN_80075824/
+  FUN_80099490 tail of FUN_80075a80). This establishes the native 2D-quad compositor every later 2D
+  scene (HUD, dialog, menus) reuses — own the SHARED 2D-quad submit, do NOT hand-transcribe per screen.
 
 ## Next
 Build native producers down the backlog. Each removes one `abortUnimplemented`. Gate: the scene renders
