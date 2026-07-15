@@ -39,8 +39,8 @@ it with the psx_render reference (and SBS core B).
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b-A| Field free-roam blocker — UNTAGGED WORLD OBJECTS (not HUD) | same, `s_ot_2d_drawn>0` | own the object emit leaves so they register obj_depth / native-cover | ⛔ CRITICAL — blocks all gameplay in pc_render |
 | 3b-B| Field genuine 2D HUD/dialog/text (interaction-triggered) | same | font glyphEmit dual-emit + panel.cpp (specs ready) | ⛔ (not in free-roam) |
-| 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | none (objects share HEADS[0..1] via TransitionState3; room geo + interior camera unbuilt) | ⛔ |
-| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | MOSTLY native (backdrop+terrain+entities+objects+swirl all via `sceneNative`/native submitters) | ⬜ wiring: route `sceneNative` for sop_narration + beat-5(void) backdrop guard + font-to-queue (shared #3b) |
+| 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | `fieldObjectsRender()` (room obj 0x800FD850 + NPCs + Tomba, interior camera) | ✅ native — matches reference (only dialog bubble = 2D pending) |
+| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | `sceneNative()` + void-beat(0x800bf9b4==5) guard (vortex over black) | ✅ wired native — no crash; caption text = 2D pending |
 
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
 
