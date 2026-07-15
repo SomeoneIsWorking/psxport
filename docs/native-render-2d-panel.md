@@ -46,6 +46,32 @@ Per-glyph text-background SPRT (op 0x65). ABI: frame 32; r31→sp+28,r16→sp+24
 SPRT tpage 0x1F (tp_x=960,tp_y=256,mode=0), pos(x,y), w=(char&0x80?16:8), h=16, uv=(u,v),
 clut=((char+0x1F0)<<6)|0x3F when char≠0x12. DEP: needs FUN_8007C940's glyph list owned/readable.
 
+## Title/menu box-quad emitter — FUN_8007e1b8 family (RE'd 2026-07-15, separate from the 9-slice panel)
+
+The DEMO/title menu box + cursor-highlight (the 3 op-0x2C/0x2D FT4 quads the otattr attributed to
+`0x8007E2F8`/`0x8007E620`). DEFINITIVE: the menu TEXT ("New Game"/"Load Game") is the native Font path
+(`Font::drawText`); this family draws ONLY box/cursor quads. `0x8007E2F8`/`0x8007E620` are jump-table
+labels INSIDE `FUN_8007e1b8` (the FT4 emitter, frame 0), reached via `@0x8001728c`. `FUN_8007e6dc` = SPRT
+variant. `FUN_8007e998(x,y,bucket=1) = FUN_8007e8dc(x,y,1,templIdx=0x98)` = the cursor-highlight quad.
+
+DATA-DRIVEN — a read-only `titleMenuNative()` reads the SAME guest tables (do not hardcode texels):
+- `PTR_DAT_80017334[idx]` (u32 selector) · template DATA base `PTR_DAT_800ecf58`. selector word at
+  `base+sel*4`: `count=*(s16*)(base+sel*4)`, `dataPtr=base+*(u16*)(base+sel*4+2)`; emits `count` quads,
+  stride 0x10 entries at dataPtr.
+- 16-byte template entry: +0x00 u32=(CLUT<<16)|u0v0 · +0x04 u32=(TPAGE<<16)|u1v1 · +0x08 u16 u2v2 ·
+  +0x0A u8 W, +0x0B u8 H · +0x0C u16 u3v3 · +0x0E s8 xoff, +0x0F s8 yoff.
+- geometry (op-class 0, axis-aligned): W=wOverride>0?wOverride:(wOverride==0?templW:templW+wOverride);
+  H likewise; vx=x+xoff, vy=y+yoff; v0(vx,vy) v1(vx+W,vy) v2(vx,vy+H) v3(vx+W,vy+H).
+- code 0x2C; |0x02 if desc_u16@2&0x8000 (semi); |0x01 if (descByte0&0xF0)==0 (RAW, RGB ignored) else RGB=descByte0.
+  clut = (desc_u16@2&0x7FFF) ? that : template entry+0x00 high half. tpage = entry+0x04 high half.
+  Title's 3 quads = descByte0=0, flags=0 → code 0x2D raw opaque, baked CLUT.
+- cursor: templIdx 0x98 at (xSel,ySel) derived from selected-index = **sm[0x68]** (sm=*(u32*)0x1F800138)
+  for the title s2 (pause menu uses DAT_800bf808). Row pitch/base: verify on a live title dump (the exact
+  xSel/ySel caller lives in the DEMO overlay 0x80106xxx, not traced — pattern from pause-menu FUN_8007eae4).
+- emit: push2dQuad(RQ_OVERLAY, order_2d_fg=1, …) opaque / emitOrQueue(semi). tp_x=(tpage&0xF)*64,
+  tp_y=((tpage>>4)&1)*256, mode=(tpage>>7)&3; clut_x=(clut&0x3F)*16, clut_y=(clut>>6)&0x1FF.
+- ABI: FUN_8007e1b8 frame 0 (no mirror needed for a read-only producer). Emitter is unowned; no game/ui draft.
+
 ## Notes
 - These are geometry builders (rect/list → quads); the reusable native primitive is `uiEmitFT4(rect,uvIndex,attr,tp)`
   / `uiEmitSprite8(pos,uv,attr,tp)`. WIRING (who calls panelBuild in pc_render — a native UI pass vs override)

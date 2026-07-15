@@ -34,7 +34,7 @@ it with the psx_render reference (and SBS core B).
 | # | Scene | stage / selector | native producer today | status |
 |---|-------|------------------|------------------------|--------|
 | 1 | START.BIN boot (black loader) | `0x801FE00C == 0x8010649C` | black frame (gpu_blank_display) | ✅ native |
-| 2 | TITLE screen (logo + New/Load menu + copyright, animated bg) | `0x801FE00C == 0x801062E4` | none | ⛔ crashes here now |
+| 2 | TITLE screen (logo + New/Load menu + copyright) | `0x801FE00C == 0x801062E4` s2 | `titleNative()` (logo sprites + menu FT4 quads, decoded) | ✅ native — RMSE 0 vs reference |
 | 2a| DEMO attract (gameplay footage after idle) | `0x801062E4`, attract sub-state | none | ⛔ |
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b| Walkable field — 2D OVERLAY (HUD/dialog/item-bubble/menu/text) | same, `s_ot_2d_drawn>0` | none | ⛔ crashes when any overlay prim present |

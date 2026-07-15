@@ -234,15 +234,17 @@ void Render::abortUnimplemented(const char* scene) {
 // the menu builder (0x8007E2F8) is owned and the font glyph emitter gains a queue dual-emit.
 void Render::titleNative() { Core* c = mCore;
   const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
-  // one textured 2D quad (screen rect x,y,w,h ; texel u,v same w,h ; texpage/mode ; clut) into a band.
-  auto quad = [&](int layer, int x, int y, int w, int h, int u, int v,
-                  int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y) {
+  // one textured 2D quad (screen rect x,y,w,h ; texel u,v of size w,h ; texpage/mode ; clut ; color).
+  auto quad = [&](int layer, int x, int y, int w, int h, int u, int v, int tp_x, int tp_y, int mode,
+                  int raw, int clut_x, int clut_y, int r, int g, int b) {
     int xs[4] = { x + ox, x + w + ox, x + ox,     x + w + ox };
     int ys[4] = { y + oy, y + oy,     y + h + oy, y + h + oy };
     int us[4] = { u, u + w, u, u + w };
     int vs[4] = { v, v, v + h, v + h };
-    unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };   // raw sprites ignore color
-    c->game->activeRq().push2dQuad(layer, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+    unsigned char rr[4] = { (unsigned char)r, (unsigned char)r, (unsigned char)r, (unsigned char)r };
+    unsigned char gg[4] = { (unsigned char)g, (unsigned char)g, (unsigned char)g, (unsigned char)g };
+    unsigned char bb[4] = { (unsigned char)b, (unsigned char)b, (unsigned char)b, (unsigned char)b };
+    c->game->activeRq().push2dQuad(layer, /*order_2d_fg=*/1, xs, ys, us, vs, rr, gg, bb,
                                    tp_x, tp_y, mode, raw, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
   };
   // (0) black backdrop behind the art (RQ_BACKGROUND far band). Solid black, mode 3 = untextured.
@@ -252,9 +254,19 @@ void Render::titleNative() { Core* c = mCore;
     c->game->activeRq().push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, z, z, k, k, k,
                                    0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
   }
-  // (1) the title art = 2 op-0x65 textured sprites (raw), fixed layout (decoded packet constants).
-  quad(RQ_BACKGROUND, 0,   -8, 256, 240, 0, 0, 640, 256, /*mode=*/1, /*raw=*/1, 640, 511);  // tpage 0x9A
-  quad(RQ_BACKGROUND, 256, -8,  64, 240, 0, 0, 768, 256, /*mode=*/1, /*raw=*/1, 640, 511);  // tpage 0x9C
+  // (1) the title art = 2 op-0x65 raw textured sprites, fixed layout (decoded packet constants). Includes
+  //     the baked TOMBA!2 logo + character art + the "(C) 1997-2000 WHOOPEE CAMP" copyright line.
+  quad(RQ_BACKGROUND, 0,   -8, 256, 240, 0, 0, 640, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9A
+  quad(RQ_BACKGROUND, 256, -8,  64, 240, 0, 0, 768, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9C
+  // (2) the New Game / Load Game menu = 2 op-0x2C/0x2D FT4 text-image quads + a cursor icon (fn 0x8007E2F8,
+  //     decoded packets). The SELECTED item is op 0x2D (raw, full-bright); the unselected is op 0x2C
+  //     modulated by color 0x50 (dimmed) — that IS the selection highlight. Cursor icon points at the row.
+  // STOPGAP: default-selection snapshot (New Game selected). The live selection + cursor row come from the
+  // menu cursor state sm[0x68] (docs/native-render-2d-panel.md) — read it here once the s2 row layout is
+  // confirmed on a live dump; until then this shows the boot-default (New Game highlighted).
+  quad(RQ_OVERLAY, 50,  172, 80, 16,  0,   1,   832, 256, /*mode=*/0, /*raw=*/1, 880, 509, 0x80,0x80,0x80); // "New Game" (selected, raw)
+  quad(RQ_OVERLAY, 186, 172, 88, 16,  80,  1,   832, 256, /*mode=*/0, /*raw=*/0, 880, 510, 0x50,0x50,0x50); // "Load Game" (unselected, dimmed)
+  quad(RQ_OVERLAY, 32,  168, 16, 16,  80,  112, 384, 0,   /*mode=*/0, /*raw=*/1, 480, 247, 0x80,0x80,0x80); // cursor icon
 }
 
 void Render::sceneNative() { Core* c = mCore;
