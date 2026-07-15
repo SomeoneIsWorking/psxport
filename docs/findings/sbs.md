@@ -1611,3 +1611,24 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   replay set. Surfacing new Job#1 bugs now requires NEW replays reaching NEW territory (deeper areas /
   more mechanics) — the USER flagged this as later work ("SBS-specific recording ... for a later time").
 - Logs: scratch/logs/sbs_replay_{hut-entry-door-freeze,hut-entry-alt,darkscreen}.log, sbs_postfix.log.
+
+## Phase 5 — autonomous headless SCENE EXPLORATION under SBS: VALIDATED recipe (2026-07-15)
+- GOAL (USER): drive into new scenes/dialogue headlessly to (a) unblock scene-gated fallthroughs
+  (native fns whose dispatch callers only fire in specific areas — codemap --substrate-fallthrough)
+  and (b) surface new SBS divergences beyond the 3 recorded replays.
+- MECHANISM (already existed, now validated): `PSXPORT_SBS_AUTONAV=1` drives title→NewGame→GAME→skip
+  intro cutscene→**real player control @~f246** (nav phase machine REACH_GAME→AWAIT_CUT→SKIP_CUT→
+  AWAIT_CONTROL→DONE; "player-controllable @f246 (s4e settled at 1)"). Then `PSXPORT_SBS_KEYS=
+  "FROM-TO:BTN,..."` (btn = up/down/left/right/cross/circle/square/triangle/start/select) injects
+  timed input to BOTH cores in lockstep (sbs.cpp feedInput). Movement CONFIRMED: holding right moved
+  Tomba's X (G_ADDR+0x2E = 0x800E7EAE) 0x0F64→0x1770. Standalone equivalent: AUTO_SKIP=1 + REPL
+  press/release (or FORCE_HOLD), position at 0x800E7EAE.
+- RECIPE:
+    PSXPORT_NOWINDOW=1 PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_NOAUDIO=1 \
+      PSXPORT_SBS_KEYS="300-1200:right,1300-2200:up" ./scratch/bin/tomba2_port <MAIN.EXE>
+  (keys must start AFTER f246 = control handoff.) Add PSXPORT_MIRROR_VERIFY=<addr> to gate a
+  scene-gated fallthrough once the route reaches its area.
+- STATUS: mechanism validated + 0-diff on a blind 4-direction walk of the START field (byte-exact,
+  no new divergence there). NEXT: DIRECTED routes to reach area EXITS / dialogue (blind walk hits
+  walls, stays in start field). Options: (a) chain off hut-entry replay then explore the hut interior;
+  (b) RE the start-field exit locations for a scripted route; (c) trigger the fisherman dialogue.

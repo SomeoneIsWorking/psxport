@@ -45,9 +45,14 @@ replays 0-diff to deep frames — see docs/findings/sbs.md "Job #1 replay sweep"
 When SBS finds nothing on existing replays, the frontier is COVERAGE: reach scenes the replays don't.
 Build the capability to drive into new territory headlessly (USER: "extend the debugging to move around
 more freely, test different scenes, try to trigger a dialogue").
-- [ ] Audit current driving tools (REPL press/tap, PSXPORT_AUTO_SKIP, replays/) for gaps.
-- [ ] Add scripted free-movement / scene-warp / dialogue-trigger drivers (deterministic, headless).
-- [ ] Run SBS-full across the new scenarios; root-cause any divergence.
+- [x] Audit driving tools: SBS_AUTONAV=1 (→ player control @f246) + SBS_KEYS="FROM-TO:BTN,..." (timed
+      input, both cores) IS the scripted-movement tool — no new mechanism needed. Movement CONFIRMED
+      (Tomba X 0x800E7EAE moved 0x0F64→0x1770 holding right). Recipe in docs/findings/sbs.md "Phase 5".
+- [x] First exploration: blind 4-direction walk of START field under SBS-full = 0-diff (byte-exact,
+      no divergence there; stayed in start field — blind walk hits walls).
+- [ ] DIRECTED routes to new scenes: (a) chain hut-entry replay → explore hut interior; (b) RE start-
+      field exit locations; (c) trigger fisherman dialogue. Each: SBS-full + MV on scene-gated fallthroughs.
+- [ ] Root-cause any divergence found in new territory (Phase 4 bug-hunt, now with new coverage).
 
 ## Working rules
 - Oracle IS the gate: MIRROR_VERIFY=<addr> (byte-compare vs substrate) for a wired override; SBS-full
