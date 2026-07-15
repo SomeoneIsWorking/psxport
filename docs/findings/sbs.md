@@ -1579,3 +1579,22 @@ The old "both panes identical" symptom is not reproducible on the current tip (e
   fixing the pc_skip audio-init fork UNBLOCKS MODE=skip as a clean self-surfacing oracle for the
   user-facing (pc_skip) bugs. Next high-value thread. Root-cause f2 first (upstream of f462).
 - Logs: scratch/logs/sbs{1..9}*.log.
+
+## MODE=skip f465 area-FX divergence — root-caused, fix BLOCKED on rendezvous-key RE (2026-07-15)
+- Repro: MODE=skip AUTO_SKIP SKIP_CONTINUE — f465 [AUDIO fx_area_ptrs] @0x800A4F7E A=02 B=FF +
+  @0x8014C124 A=04 B=00. Same FORK PATTERN as the f2 VAB fix (7eced30): a collapsed SYNCHRONOUS
+  native load racing ahead of the oracle's cooperative multi-frame task — here the ATTRACT-DEMO area
+  load (demo.cpp:878 demo_frame_s7 phase0 -> Sop::transitionAreaLoad, the native inline transcription
+  of the 0x800452C0 task body; oracle spawns task slot 1 via FUN_80044BD4 + yield-waits many frames).
+- Classification: TIMING (phase-skew), NOT value — both cores converge to 0x02 by f3000 (BYTETRACE
+  settled = CLEAN). Writer core A: Sop::transitionAreaLoad -> gen_func_8007566C -> 800753D4 -> mem_w16
+  at f464.
+- Fix SHAPE: a skipRendezvousReached barrier before the SV_CHECK(...transitionAreaLoad...) at
+  demo.cpp:878 (+ engine.cpp:1666/2279 siblings), SBS-harness-only, like 7eced30.
+- BLOCKED: the safe monotonic key is NOT identified. The oracle's completion signal is in task SLOT 1
+  (0x801FE070, stride 0x70) which FUN_80044BD4/FUN_80051FB4 REUSE for every cooperative spawn (texgroup
+  preload @f2, VAB build, this attract load) — so slot-1 entry/done-mark or 0x1F80019B FALSE-PASSES on
+  stale state (the exact trap 7eced30 flagged). NEXT: RE FUN_80044BD4 (Ghidra, not dynamic inference)
+  for a per-THIS-invocation monotonic marker (a spawn generation/sequence counter, or a demo/transition-
+  specific sm field like sm[0x6d]/[0x6e] if written monotonically not reused). Do NOT gate until confirmed.
+- Logs: scratch/logs/skip_area_fx_repro.log, pw_800A4F7E.log, bytetrace_fxarea_all.log.
