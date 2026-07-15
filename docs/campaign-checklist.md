@@ -22,10 +22,14 @@ Only EXERCISED functions; SBS-full is the gate. (node_xform, sequencer, actor_to
 ## Phase 3 — fallthrough-for-already-native  ☐ NEXT
 A native exists but the guest address is NOT override-registered, so rec_dispatch/guest_leaf callers
 run the EMULATED substrate while direct callers run the port (a split). Register + MIRROR_VERIFY gate.
-- [ ] `codemap.py --substrate-fallthrough` — precise detector (dispatch-target only, not any addr on line).
-- [ ] Engine::animTick (0x8004190C) — dispatched from combat behaviors → substrate. Register + MV.
-- [ ] Engine::walkStart (0x80054D14) — same. (Watch the early-exit-before-frame path.)
-- [ ] Triage the rest of the detector output; native-ize the real leaf cases, skip boot-dispatched FPs.
+- [x] `codemap.py --substrate-fallthrough` — precise detector (dispatch-target only). 97 authoritative candidates.
+- [x] Engine::animTick (0x8004190C) — MV 27969 passes, 0-diff. Native-ized (RegisterEngineAnimLeafOverrides).
+- [x] Engine::walkStart (0x80054D14) — MV 1 pass, 0-diff. Native-ized. (Thin coverage — early-exit is write-free.)
+- [ ] Triage the rest. KEY FINDING: most of the 97 dispatch from behaviors in scenes the 3 replays never
+      reach (e.g. NodeXform::build fires in NONE of dark-screen/hut-entry — its callers are seaside/
+      visibility-gate). Those are BLOCKED on Phase 5 coverage — can't MV-gate without the scene. Only
+      combat/movement-path fallthroughs (like animTick/walkStart) are gate-able now. Do those; defer rest.
+- Skip: Sequencer channel* leaves (0x80090E40/91050/91910/92080) — intentionally-unwired never-fire leaves.
 
 ## Phase 4 — SBS bug-hunt over the replay library  ☐
 Run SBS-full over every replay; every divergence is a Job#1 bug → root-cause + fix. (Currently all

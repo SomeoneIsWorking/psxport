@@ -31,6 +31,7 @@
 // Free-function beh_* wide-RE clusters (verified+wired this pass) — same "class-ifying is a
 // separate axis" acceptance behavior_dispatch.cpp's own table already uses for this family.
 void RegisterBehToySpawnFamilyOverrides(Game* game);              // game/ai/beh_toy_spawn_family.cpp (0x80127420/801274BC/80127720/8012763C/80127510)
+void RegisterEngineAnimLeafOverrides(Game* game);                 // game/core/engine.cpp (0x8004190C animTick / 0x80054D14 walkStart)
 void RegisterBehActorTombaProximityCombatOverride(Game* game);    // game/ai/beh_actor_tomba_proximity_combat.cpp (0x800527C8)
 #include <stdlib.h>
 #include <string.h>
@@ -111,6 +112,7 @@ void register_engine_overrides(Game* game) {
   MeleeProximity::registerOverrides(game);           // melee-proximity/approach-anchor leaf (0x8001F9DC)
   CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
   RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)
+  RegisterEngineAnimLeafOverrides(game);             // Engine::animTick/walkStart fallthrough native-ize (0x8004190C/80054D14)
   RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
   c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
   c->engine.script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)

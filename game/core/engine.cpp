@@ -3396,3 +3396,34 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
   return 1;
 }
 
+
+// ── Engine anim-leaf overrides (phase-3 fallthrough-for-already-native, 2026-07-15) ─────────────────
+// animTick (FUN_8004190C) and walkStart (FUN_80054D14) are native Engine methods, but the guest
+// addresses were registered NOWHERE — so their rec_dispatch/callObj callers (beh_actor_tomba_proximity_
+// combat, beh_a06_scripted_actor) + the 5/9 direct substrate func_<addr>(c) shard sites all ran the
+// EMULATED body while direct native callers (beh_sop_intro_pilot) ran the port (a split). Found by
+// `codemap.py --substrate-fallthrough`. Single psx_fallback-gated thunk covers both EngineOverrides
+// (rec_dispatch) and shard_set_override (g_override[]); core B stays pure substrate. MIRROR_VERIFY-gated.
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_8004190C(Core*);
+extern void gen_func_80054D14(Core*);
+namespace {
+void ov_engineAnimTick(Core* c) {
+  if (c->game->psx_fallback) { gen_func_8004190C(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x8004190Cu);
+  c->r[2] = c->engine.animTick(c->r[4]);
+}
+void ov_engineWalkStart(Core* c) {
+  if (c->game->psx_fallback) { gen_func_80054D14(c); return; }
+  c->game->engine_overrides.traceHit(c, 0x80054D14u);
+  c->r[2] = c->engine.walkStart(c->r[4], c->r[5], (int16_t)c->r[6]);
+}
+}  // namespace
+
+void RegisterEngineAnimLeafOverrides(Game* game) {
+  EngineOverrides& ov = game->engine_overrides;
+  ov.register_(0x8004190Cu, "Engine::animTick",  ov_engineAnimTick);
+  shard_set_override(0x8004190Cu, ov_engineAnimTick);
+  ov.register_(0x80054D14u, "Engine::walkStart", ov_engineWalkStart);
+  shard_set_override(0x80054D14u, ov_engineWalkStart);
+}

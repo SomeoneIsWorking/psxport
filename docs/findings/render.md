@@ -2055,3 +2055,18 @@ draft was already byte-faithful.
 - TOOL IDEA (future): codemap could grow a `--substrate-fallthrough` mode — flag any address that HAS a
   native owner AND is rec_dispatch/guest_leaf-called but is NOT in the override/shard_set tables. That's
   the machine-detectable version of this gap (it's how FUN_800518FC's fallthrough hid). Not built yet.
+
+## Phase-3 fallthrough native-ization — animTick/walkStart wired + gated (2026-07-15)
+- Engine::animTick (0x8004190C) + Engine::walkStart (0x80054D14): native Engine methods registered
+  NOWHERE, so rec_dispatch callers (beh_actor_tomba_proximity_combat, beh_a06_scripted_actor) + 5/9
+  direct substrate func_<addr>(c) shard sites ran the emulated body while direct native callers ran the
+  port. Wired via RegisterEngineAnimLeafOverrides (engine.cpp; single psx_fallback-gated thunk covers
+  EngineOverrides + shard_set_override, boot.cpp:114).
+- GATE: PSXPORT_MIRROR_VERIFY=0x8004190C,0x80054D14 over dark-screen — animTick 27969 passes, walkStart
+  1 pass, ZERO mismatch; SBS-full 0-diff f14130. Both byte-exact to substrate. Log: scratch/logs/mv_anim_leaves.log.
+- METHOD FINDING (reshapes Phase 3): a fallthrough is only MV-gate-able when its dispatch path is
+  EXERCISED by an available replay. NodeXform::build (0x80051844) fires in NONE of dark-screen/hut-entry
+  (its callers are beh_seaside_prox_substate / beh_visibility_gate_dispatch) — I registered it, SBS was
+  0-diff, but MV never fired, so I REVERTED it (can't oracle-verify → don't ship, per USER's oracle-gate
+  standard). Most of the 97 --substrate-fallthrough candidates are like this: blocked on Phase 5 scene
+  coverage. Phase 3 proceeds only for combat/movement-path fallthroughs until Phase 5 extends reach.
