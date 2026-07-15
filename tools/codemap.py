@@ -25,6 +25,10 @@ USAGE:
   tools/codemap.py --conflicts          # list every guest addr with cross-file authoritative multi-
                                         #   ownership — the duplicate-RE smell (a 2nd native owning a
                                         #   FUN_xxxx some other file already owns; run --addr on each)
+  tools/codemap.py --substrate-fallthrough  # native-owned addrs that are a DISPATCH TARGET but NOT
+                                        #   override-registered — callers silently hit the emulated
+                                        #   substrate (register + MIRROR_VERIFY to native-ize; --all
+                                        #   includes soft-attributed owners)
   tools/codemap.py --orphans            # list owned addresses whose native is currently ORPHANED
   tools/codemap.py --stdout             # print the full markdown to stdout instead of writing the file
 """
@@ -222,6 +226,53 @@ def load_engine_overrides():
         for m in reg.finditer(txt):
             sym2addrs.setdefault(m.group(2), []).append(m.group(1).upper())
     return sym2addrs
+
+
+def load_registered_addrs():
+    """Set of guest addresses CURRENTLY wired to a native override at runtime: EngineOverrides
+    `register_(0xADDR, ...)`, any `*set_override(...)` family (shard_set_override / engine_set_override_* /
+    rec_set_override / ov_sop_set_override), and BehaviorDispatch::kTable {0xADDR, beh_*} entries. The
+    faeb436^ tsv snapshot is historical (pre-removal) and is NOT counted — it does not reflect current
+    runtime wiring. Used by --substrate-fallthrough to separate a dispatched-and-wired address from one
+    that still falls through to substrate."""
+    addrs = set()
+    reg = re.compile(r'(?:\.register_\w*|[A-Za-z_]*set_override)\s*\(\s*(?:c\s*,\s*)?0x([0-9A-Fa-f]{8})')
+    for path in collect_files():
+        try:
+            txt = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for m in reg.finditer(txt):
+            addrs.add(m.group(1).upper())
+    for a_list in load_behavior_table().values():
+        addrs.update(a.upper() for a in a_list)
+    return addrs
+
+
+# Dispatch idioms that route through the override table (→ substrate when the target is UNREGISTERED).
+# PRECISE capture of the TARGET address only (not any 0x8 on the line): the target is the first address
+# argument. Two arg shapes: `idiom(c, 0xADDR...)` (rec_dispatch/guest_leaf/…) and `callObj/call(c, arg,
+# …, 0xADDR)` (address is a later arg). guest_fn is DELIBERATELY EXCLUDED — it is an explicit "run the
+# substrate leaf" call (a native that intends the emulated body), not a fallthrough.
+DISPATCH_TARGET_RES = [
+    re.compile(r'\b(?:rec_dispatch|rec_super_call|super_call|guest_leaf|guest_dispatch|call_fn|rc[0-4])\s*\(\s*c\s*,\s*0x([0-9A-Fa-f]{8})'),
+    re.compile(r'\b(?:callObj\d|call\d)\s*\(\s*c\s*,[^;{}]*?0x([0-9A-Fa-f]{8})'),
+]
+
+
+def scan_dispatched_addrs():
+    """Set of guest addresses reached as the TARGET of a dispatch idiom with a literal address. Dynamic
+    dispatches (rec_dispatch(c, handler) with a variable) carry no literal and are correctly ignored."""
+    addrs = set()
+    for path in collect_files():
+        try:
+            txt = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for rx in DISPATCH_TARGET_RES:
+            for m in rx.finditer(txt):
+                addrs.add(m.group(1).upper())
+    return addrs
 
 
 OVR = load_override_table()
@@ -587,6 +638,32 @@ def main():
         print(f"\n{len(rows)} guest address(es) with CROSS-FILE authoritative multi-ownership "
               f"(duplication smell unless a deliberate pc_skip fork — those live in ONE file). "
               f"Run `--addr <hex>` on each.")
+        return
+
+    if "--substrate-fallthrough" in args:
+        # An address that HAS a native owner AND is the TARGET of a dispatch idiom (rec_dispatch/
+        # guest_leaf/…) but is NOT override-registered → those callers silently run the EMULATED body
+        # while any direct-native callers run the port. That split is how FUN_800518FC hid (fixed
+        # 2026-07-15). Register + MIRROR_VERIFY to native-ize. Boot/stage handlers reached only by a
+        # direct native_boot call (never a dispatch target) do NOT appear — the precise target capture
+        # excludes them. Still a candidate list: a few may be intentionally direct-call-only. `authOnly`
+        # (default) restricts to authoritative owners; pass `--all` to include soft-attributed owners.
+        auth_only = "--all" not in args
+        registered = load_registered_addrs()
+        dispatched = scan_dispatched_addrs()
+        rows = []
+        for a in sorted(set(idx) & dispatched - registered):
+            ns = [n for n in idx[a] if n.get("authoritative")] if auth_only else idx[a]
+            if ns:
+                rows.append((a, ns))
+        for a, ns in rows:
+            syms = ", ".join(sorted(set(n["sym"] for n in ns)))
+            print(f"0x{a}: native owner {syms} — dispatch target, NOT override-registered → callers hit SUBSTRATE")
+            for n in ns:
+                print(f"    {n['file']}:{n['line']}")
+        print(f"\n{len(rows)} native-owned address(es) dispatched but not override-registered — dispatch/"
+              f"guest_leaf callers fall through to the emulated substrate. Register + MIRROR_VERIFY to "
+              f"native-ize (review each; a few may be intentionally direct-call-only).")
         return
 
     if "--orphans" in args:
