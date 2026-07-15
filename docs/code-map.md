@@ -81,12 +81,13 @@ Totals: 669 native fns, 549 owned addresses, 640 LIVE / 29 ORPHAN.
 | 0x8003FD10 | ORPHAN | `osc_fd10` | game/world/entity.cpp:323 |  | per-object OSCILLATE / FRAME-TOGGLE sub-behavior (one of sm40558 STATE… |
 | 0x80040410 | ORPHAN | `child_spawn_40410` | game/world/entity.cpp:45 |  | per-object CHILD-NODE SPAWN / sub-object builder (a callee of the per-… |
 | 0x80040558 | ORPHAN | `sm40558` | game/world/entity.cpp:135 | 0x8003FBC4 0x8003FC00 0x8003FC78 0x8003FC8C 0x8003FE00 0x8003FED8 … | per-object STATE-MACHINE HEAD (the dispatcher whose state-0 handler ca… |
-| 0x80040A58 | LIVE | `SceneEvents::classSize` | game/scene/scene_events.cpp:28 |  |  |
-| 0x80040AA4 | LIVE | `CubeTextLedger::spawnPopup` | game/object/cube_text_ledger.cpp:81 |  |  |
-| 0x80040B48 | LIVE | `CubeTextLedger::activateSlot` | game/object/cube_text_ledger.cpp:46 |  |  |
-| 0x80040B48 | LIVE | `SceneEvents::armBody` | game/scene/scene_events.cpp:44 |  | The arm primitive body. Wrapped by SceneEvents::arm below so it can be… |
-| 0x80040B48 | LIVE | `SceneEvents::arm` | game/scene/scene_events.cpp:79 |  |  |
-| 0x80040C00 | LIVE | `CubeTextLedger::deactivateSlot` | game/object/cube_text_ledger.cpp:60 |  |  |
+| 0x80040A58 | LIVE | `SceneEvents::classSize` | game/scene/scene_events.cpp:29 |  |  |
+| 0x80040AA4 | LIVE | `CubeTextLedger::spawnPopup` | game/object/cube_text_ledger.cpp:72 |  |  |
+| 0x80040B48 | LIVE | `SceneEvents::armBody` | game/scene/scene_events.cpp:45 |  | The arm primitive body. Wrapped by SceneEvents::arm below so it can be… |
+| 0x80040B48 | LIVE | `SceneEvents::arm` | game/scene/scene_events.cpp:84 |  |  |
+| 0x80040B48 | LIVE | `SceneEvents::armOverride` | game/scene/scene_events.cpp:95 |  | override entry (guest ABI: slot in r4, ret in r2). Single canonical bo… |
+| 0x80040C00 | LIVE | `CubeTextLedger::deactivateSlot` | game/object/cube_text_ledger.cpp:51 |  |  |
+| 0x80040C00 | LIVE | `ov_sceneEventArm` | game/scene/scene_events.cpp:103 |  | psx_fallback-gated so SBS core B (the pure reference) keeps running th… |
 | 0x80040CDC | LIVE | `Engine::animEnvInit` | game/core/engine.cpp:932 |  | Engine::animEnvInit — FUN_80040CDC. |
 | 0x80040CDC | LIVE | `ScriptInterp::init` | game/scene/script_interp.cpp:107 |  |  |
 | 0x80040DE0 | LIVE | `ScriptInterp::loadCurrentEntry` | game/scene/script_interp.cpp:129 |  |  |

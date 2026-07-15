@@ -18,7 +18,8 @@
 #include "quad_rtpt_submit.h"      // class QuadRtptSubmit — 0x8003xxxx rope/flame quad rotate+RTPT submit
 #include "node_xform.h"            // class NodeXform — per-object child-transform-propagate family
 #include "graphics_bind.h"         // class GraphicsBind — object render-bind subsystem (recordArrayInit)
-#include "cube_text_ledger.h"      // class CubeTextLedger — cube-text popup ledger (activate/deactivate/spawn)
+#include "cube_text_ledger.h"      // class CubeTextLedger — cube-text popup ledger (deactivate/spawn)
+#include "scene/scene_events.h"    // class SceneEvents — scene-event ARM (FUN_80040B48 sole owner)
 #include "actor_tomba.h"           // class ActorTomba — Tomba's postInteractWalk sub-handler leaves
 #include "actor_melee_engage.h"    // class ActorMeleeEngage — A00-overlay melee-engage/reposition/arm leaf
 #include "melee_proximity.h"       // class MeleeProximity — melee-proximity/approach-anchor leaf
@@ -103,7 +104,8 @@ void register_engine_overrides(Game* game) {
   NodeXform::registerOverrides(game);                // seedBlock/propagateRotmat/propagateAxis/buildAxis/copyMatrixBlock/buildFromChild/worldPosFromLocal/worldPosFromComposed (0x800517BC/80051300/80051464/80051C8C/80051B34/80051614/80051D90/80051D20)
   GraphicsBind::registerOverrides(game);             // recordArrayInit (0x800519E0)
   c->engine.cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
-  CubeTextLedger::registerOverrides(game);           // cube-text popup ledger activate/deactivate/spawn (0x80040B48/80040C00/80040AA4)
+  SceneEvents::registerOverrides(game);              // scene-event ARM FUN_80040B48 (sole owner; deduped from cube_text_ledger)
+  CubeTextLedger::registerOverrides(game);           // cube-text popup ledger deactivate/spawn (0x80040C00/80040AA4)
   ActorTomba::registerOverrides(game);               // postInteractWalk sub-handlers (0x80020364/800205CC/800235A0/80022C78)
   ActorMeleeEngage::registerOverrides(game);         // A00-overlay melee-engage/reposition/arm leaf (0x80112188)
   MeleeProximity::registerOverrides(game);           // melee-proximity/approach-anchor leaf (0x8001F9DC)

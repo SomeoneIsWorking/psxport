@@ -641,3 +641,33 @@
   GONE and only `bd4Tail+0x18` firing (matching gen's 1-draw-per-flag!=1-load); SBS-full 0-diff to f30720.
   LESSON: when extracting a shared helper that performs a side effect, AUDIT every call site for a
   pre-existing standalone copy of that same side effect — the helper insertion doesn't remove it.
+
+## FUN_80040B48 dual-ownership (scene-event ARM) — DEDUPED (2026-07-15)
+- SYMPTOM/DEFECT: two independent native bodies for ONE guest fn. game/scene/scene_events.cpp owned
+  FUN_80040B48 as SceneEvents::armBody (called via the native `arm(eventId)` API by entity.cpp,
+  beh_pickup_collect_trigger, etc.), while game/object/cube_text_ledger.cpp ALSO owned it as
+  CubeTextLedger::activateSlot (registered in the EngineOverrides + g_override[] tables, so
+  substrate func_80040B48 + ActorReward's rec_dispatch(0x80040B48) hit THAT copy). Native-API callers
+  and address-reaching callers ran DIFFERENT native bodies for the same function.
+- WHY IT SLIPPED: the two authors (scene_events arc-12, cube_text_ledger 2026-07-08 wide-RE) each
+  RE'd the address independently under different names ("scene-event arm" vs "cube-text popup ledger
+  activate") — the SAME mechanism (per-slot flag + counter + cost accumulate + ring log at 0x800BF870/
+  0x800BF8A8/0x800BF874/0x800ED058). codemap couldn't warn because it never parsed live
+  `ov.register_(0x…, "…", fn)` calls, so cube_text_ledger's ownership was invisible.
+- GROUND TRUTH: gen_func_80044B48... (gen_func_80040B48, generated/shard_4.c:4944) — gate s16@0x800E7FEE
+  ==0 → -1; SLOT_STATE (0x800BF870+r4+68, r4 UNMASKED) !=0 → 0; else set=1, ACTIVE_COUNT(0x800BF8A8)++,
+  RUNNING_COST(0x800BF874) += classSize(r4, hi-nibble), ring-log (slot@0x800ED06E+idx, event=0@
+  0x800ED074+idx, LOG_INDEX@0x800ED06D++), return 1. Both native copies matched this EXCEPT armBody
+  masked the slot index to a byte (`r4 & 0xFF`) — a latent deviation, unreachable while event IDs < 256.
+- FIX: SceneEvents is the sole owner. armBody's byte-mask dropped (now full-width r4, matches gen +
+  the former activateSlot). Added SceneEvents::armOverride (guest-ABI thunk) + registerOverrides
+  (EngineOverrides + psx_fallback-gated shard_set_override), moved the 0x80040B48 wiring off
+  CubeTextLedger; deleted CubeTextLedger::activateSlot. cube_text_ledger.cpp now owns only
+  FUN_80040C00 (deactivate) + FUN_80040AA4 (spawn). Same dedup shape FUN_80040A58→classSize got.
+- TOOL FIX (the real root cause — see docs/findings/tooling.md): codemap.py now parses live
+  EngineOverrides registrations (load_engine_overrides) and has a `--conflicts` mode + `--addr`
+  ⚠ DUAL-OWNERSHIP warning that flags any guest address implemented across ≥2 files. This would have
+  caught the duplicate at authoring time.
+- VERIFIED: build clean; codemap --addr 0x80040B48 = single-file owner, gone from --conflicts;
+  SBS-full (SBS_AUTONAV, dark-screen replay which exercises the arm path) 0-diff to f23100 with
+  PSXPORT_MIRROR_VERIFY=0x80040B48 "OK (pass #1)". Logs: scratch/logs/sbs_b48_dedup.log.

@@ -9,6 +9,7 @@
 #include "scene/scene_events.h"
 #include "core/engine.h"
 #include "game.h"              // c->game->verify — the shared A/B verify scaffold
+#include "engine_overrides.h"  // EngineOverrides::register_ (FUN_80040B48 override wiring)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -42,7 +43,11 @@ uint32_t SceneEvents::classSize(uint8_t argKey, bool nibbleLo) {
 //     1 if fresh arm (recomp's `addiu v0, zero, 1` seq at the tail — the +1 constant that also bumps
 //                     the ring write head).
 uint32_t SceneEvents::armBody(Core* c) {
-  const uint32_t eventId = c->r[4] & 0xFFu;
+  // Full 32-bit slot index — gen_func_80040B48 indexes SLOT_STATE with r4 UNMASKED (`r3 = r17 + base;
+  // lbu r3+68`). Masking to a byte here was a latent deviation, observable only if an event ID ever
+  // reached >= 256 (it never does in-game, but the verify gate would have caught it). Matches the
+  // ground truth and the former CubeTextLedger::activateSlot copy now deduped onto this body.
+  const uint32_t eventId = c->r[4];
 
   // (a) Global events gate — 0 disables the whole system.
   if ((int16_t)c->mem_r16(EVENTS_GATE_HW) == 0) return (uint32_t)(int32_t)-1;
@@ -82,4 +87,26 @@ int32_t SceneEvents::arm(uint8_t eventId) {
   c->game->verify.run(&SceneEvents::armBody, 0x80040B48u, "sceneeventsarmverify",
                       c->game->verify.on("sceneeventsarmverify"));
   return (int32_t)c->r[2];
+}
+
+// FUN_80040B48 override entry (guest ABI: slot in r4, ret in r2). Single canonical body for every
+// caller that reaches the guest ADDRESS (substrate func_80040B48, and rec_dispatch(0x80040B48) from
+// ActorReward) — as opposed to the native `arm(eventId)` API used by ordinary engine code.
+void SceneEvents::armOverride(Core* c) { c->r[2] = armBody(c); }
+
+extern void gen_func_80040B48(Core*);
+extern void shard_set_override(uint32_t, void (*)(Core*));
+namespace {
+// psx_fallback-gated so SBS core B (the pure reference) keeps running the exact recompiled body —
+// g_override[] is a single table shared by every Core/Game (same pattern the deduped cube_text_ledger
+// entries follow for FUN_80040C00/80040AA4).
+void ov_sceneEventArm(Core* c) {
+  if (c->game->psx_fallback) { gen_func_80040B48(c); return; }
+  SceneEvents::armOverride(c);
+}
+}  // namespace
+
+void SceneEvents::registerOverrides(Game* game) {
+  game->engine_overrides.register_(0x80040B48u, "SceneEvents::armBody", SceneEvents::armOverride);
+  shard_set_override(0x80040B48u, ov_sceneEventArm);
 }

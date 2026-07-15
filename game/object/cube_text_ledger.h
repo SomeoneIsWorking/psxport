@@ -71,13 +71,10 @@ class  Game;
 
 class CubeTextLedger {
 public:
-  // FUN_80040B48(slot) -> v0. a0 = slot.
-  //   v0 = -1  if G_LEDGER_GATE == 0 (ledger disabled — no tally in flight)
-  //   v0 =  0  if SLOT_STATE[slot] != 0 (already active or already-deactivated-terminal)
-  //   v0 =  1  on success: SLOT_STATE[slot]=1; ACTIVE_COUNT++; RUNNING_COST +=
-  //            SceneEvents::classSize(slot, /*nibbleLo=*/false) (FUN_80040A58, high nibble = "start"
-  //            cost index); append (slot, event=0) to the ring log; LOG_INDEX++.
-  static void activateSlot(Core* c);   // a0 = slot; sets v0 (r2)
+  // FUN_80040B48 (activate / scene-event ARM) is NOT owned here — it is SceneEvents::armBody
+  // (game/scene/scene_events.cpp), wired by SceneEvents::registerOverrides. An earlier duplicate copy
+  // (CubeTextLedger::activateSlot) was deduped onto that single owner (found via `codemap.py
+  // --conflicts`; same treatment FUN_80040A58 got when it was folded onto SceneEvents::classSize).
 
   // FUN_80040C00(slot) -> v0. a0 = slot.
   //   v0 = -1  if G_LEDGER_GATE == 0

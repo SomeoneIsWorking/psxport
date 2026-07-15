@@ -43,19 +43,10 @@ void appendLog(Core* c, uint32_t slot, uint8_t event) {
 
 } // namespace
 
-void CubeTextLedger::activateSlot(Core* c) {
-  const uint32_t slot = c->r[4];
-  if (c->mem_r16s(G_LEDGER_GATE) == 0) { c->r[2] = 0xFFFFFFFFu; return; }
-
-  if (c->mem_r8(SLOT_STATE_BASE + slot) != 0) { c->r[2] = 0; return; }
-
-  c->mem_w8(SLOT_STATE_BASE + slot, 1);
-  c->mem_w16(ACTIVE_COUNT, (uint16_t)(c->mem_r16(ACTIVE_COUNT) + 1));
-  const uint32_t cost = c->engine.sceneEvents.classSize((uint8_t)slot, /*nibbleLo=*/false);
-  c->mem_w32(RUNNING_COST, c->mem_r32(RUNNING_COST) + cost);
-  appendLog(c, slot, 0);
-  c->r[2] = 1;
-}
+// FUN_80040B48 (activate / scene-event ARM) is NOT owned here — it is SceneEvents::armBody
+// (game/scene/scene_events.cpp), wired by SceneEvents::registerOverrides. This file used to carry
+// an independent second copy (CubeTextLedger::activateSlot), found via `codemap.py --conflicts` and
+// deduped onto the single canonical body (mirrors how FUN_80040A58 was deduped onto classSize).
 
 void CubeTextLedger::deactivateSlot(Core* c) {
   const uint32_t slot = c->r[4];
@@ -109,23 +100,19 @@ void CubeTextLedger::spawnPopup(Core* c) {
 // so core B (the pure SBS reference) keeps running the exact recompiled body — g_override[] is a
 // single table shared by every Core/Game, unlike EngineOverrides which is per-Game and already
 // skips psx_fallback cores inside run().
-extern void gen_func_80040B48(Core*);
 extern void gen_func_80040C00(Core*);
 extern void gen_func_80040AA4(Core*);
 
 namespace {
-void ov_activateSlot(Core* c)   { if (c->game->psx_fallback) { gen_func_80040B48(c); return; } CubeTextLedger::activateSlot(c); }
 void ov_deactivateSlot(Core* c) { if (c->game->psx_fallback) { gen_func_80040C00(c); return; } CubeTextLedger::deactivateSlot(c); }
 void ov_spawnPopup(Core* c)     { if (c->game->psx_fallback) { gen_func_80040AA4(c); return; } CubeTextLedger::spawnPopup(c); }
 }  // namespace
 
 void CubeTextLedger::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80040B48u, "CubeTextLedger::activateSlot",   CubeTextLedger::activateSlot);
   ov.register_(0x80040C00u, "CubeTextLedger::deactivateSlot", CubeTextLedger::deactivateSlot);
   ov.register_(0x80040AA4u, "CubeTextLedger::spawnPopup",     CubeTextLedger::spawnPopup);
 
-  shard_set_override(0x80040B48u, ov_activateSlot);
   shard_set_override(0x80040C00u, ov_deactivateSlot);
   shard_set_override(0x80040AA4u, ov_spawnPopup);
 }

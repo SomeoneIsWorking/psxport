@@ -38,6 +38,15 @@ public:
   //   public so other subsystems that consult the same size class can share this path.
   uint32_t classSize(uint8_t argKey, bool nibbleLo);
 
+  // FUN_80040B48 override thunk (guest ABI: slot in r4, ret in r2). SceneEvents is the SOLE owner of
+  // FUN_80040B48 — registerOverrides wires it into both EngineOverrides (rec_dispatch callers, e.g.
+  // ActorReward) and the recompiler's g_override[] (substrate func_80040B48 sites, psx_fallback-gated).
+  // cube_text_ledger.cpp's CubeTextLedger::activateSlot used to be an independent second copy of this
+  // exact body (found via `codemap.py --conflicts`); it was deduped onto this owner, the same way
+  // FUN_80040A58 was deduped onto classSize.
+  static void armOverride(Core* c);
+  static void registerOverrides(class Game* game);
+
 private:
   // Guest-ABI arm body (plain fn-pointer shape for the verify gate).
   static uint32_t armBody(Core* c);   // FUN_80040B48
