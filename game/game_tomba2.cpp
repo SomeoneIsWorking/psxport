@@ -205,6 +205,24 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
       gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/true);
     }
     if (c->game->gpu.s_ot_2d_drawn > 0) c->mRender->abortUnimplemented("field 2D overlay (HUD / dialog / item-bubble / menu / text)");
+  } else if (authored_subscene) {
+    // #4 HUT/DOOR INTERIOR (task-sm[0x4c]==3): an OBJECTS-ONLY authored sub-scene. The room is a single
+    // entity-list OBJECT (node 0x800FD850 in HEADS[1]); the NPCs/props are HEADS[0..1] nodes; Tomba is the
+    // G block. fieldObjectsRender() already walks all of them and submits each geomblk via perObjFlush →
+    // gt3gt4 with real depth and the LIVE interior camera (scratchpad, written each frame by fieldFrameX's
+    // CutsceneCamera). We SKIP the exterior world passes (terrain/scene-table/backdrop are VILLAGE data —
+    // running them would draw the wrong thing): this mirrors the substrate's reduced frameX pass, which is
+    // itself objects-only. No new RE — the room object's geomblk is data-driven through the native submit.
+    c->game->fps60.mTier1EligibleCur = false;
+    {
+      DisplayPassGuard displayPass(c->mRender->mode);
+      c->mRender->fieldObjectsRender();
+      // The interior's 2D overlay (dialog bubble / HUD) has no native producer — same gap as the field
+      // (#3b). Probe: a UI-free interior frame presents the native room alone; if an overlay prim is
+      // present, crash rather than mask it.
+      gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/true);
+    }
+    if (c->game->gpu.s_ot_2d_drawn > 0) c->mRender->abortUnimplemented("hut interior 2D overlay (dialog bubble / HUD)");
   } else if (c->mem_r32(0x801FE00Cu) == 0x801062E4u) {
     // #2 DEMO/TITLE front-end (stage 0x801062E4). Substate s2 (sm[0x48]==2) = the static title (logo +
     // New/Load menu + copyright): native producer titleNative() emits the picture to the queue from
