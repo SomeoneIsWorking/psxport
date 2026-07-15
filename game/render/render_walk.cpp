@@ -277,14 +277,15 @@ void Render::renderTitle() {
     else          s3MenuNative();    // page 1 — the post-New-Game menu (Demo::s3)
     return;
   }
-  // s48 < 2: the OP.FMV/SCEA boot ramp. The movie is skipped (accepted deferral, see docs/tomba2-fmv-skip.md)
-  // so the only honest picture is a black hold while the front-end loads its menu assets. This is the ONE
-  // black substate that is NOT "missing rendering" — it is the deliberately-skipped movie.
-  if (s48 < 2) { c->game->gpu.gpu_blank_display(); return; }
-  // Any other front-end substate (attract demo s7, the load-game browser s4, etc.) has NO native producer.
-  // Per USER (2026-07-15, restated): missing rendering CRASHES — it does not silently black-fill.
-  // The crash names the substate so it becomes the next rebuild item.
-  abortUnimplemented("DEMO/title front-end substate (sm[0x48]>3) — no native producer");
+  // Black LOADING/TEARDOWN substates (verified black on the reference — NOT "missing rendering"):
+  //  · s48 < 2 : the OP.FMV/SCEA boot ramp (movie skipped, accepted deferral — docs/tomba2-fmv-skip.md).
+  //  · s48 == 5: `demo_frame_s5` LEAVE-DEMO — a ~2-frame task teardown (jal 0x80052078(2)) that kills the
+  //    demo task and kicks the GAME load; the OT is empty, the screen holds black until GAME s48=2 (field).
+  if (s48 < 2 || s48 == 5) { c->game->gpu.gpu_blank_display(); return; }
+  // Any other front-end substate (load-game browser s4, page s6, attract s7) is REAL content with NO native
+  // producer yet. Per USER (2026-07-15, restated): missing rendering CRASHES — no silent black-fill. The
+  // crash names the substate so it becomes the next rebuild item.
+  abortUnimplemented("DEMO/title front-end substate (sm[0x48] in {4,6,7,...}) — no native producer");
 }
 
 // #3 WALKABLE FIELD — native WORLD: terrain + entity/scene tables + objects + backdrop, real per-pixel
