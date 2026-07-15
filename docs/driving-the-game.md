@@ -176,3 +176,26 @@ idle field — static, A==B — cannot exercise).
   entered on the field NOR during the boot area-load (`PSXPORT_DEBUG=stage` ENTER log, 0 hits) — sm[0x4c]
   there is driven by the steady handler 0x801088d8, not 0x80106478. So verifying `ov_game_s4c` needs either
   visual steering of Tomba to the exit, or RE of the exit trigger inside 0x801088d8 (GAME.BIN overlay).
+
+## ⭐ DRIVING BY POSITION FEEDBACK — figure out ANY route (2026-07-15)
+The replays are working input sequences; `tools/pad_decode.py <file.pad>` decodes one into its button
+timeline (e.g. hut-entry = boot cross/start taps, then **right to the door, then hold up to enter**),
+and `--keys` emits an SBS_KEYS string. `--keys-from "220-254:right,..." --out r.pad` builds a .pad from
+a spec. So you can READ a route and AUTHOR your own — no live capture needed.
+
+**Movement calibration** (post-control, standalone REPL `press/release` or SBS_KEYS):
+- Tomba world pos: **X = *(s16)0x800E7EAE**, **Z = *(s16)0x800E7EB6** (actor base G_ADDR 0x800E7E80 +0x2E/+0x36).
+- **left/right = ∓/±X**, ~0x16 (22) units/frame. **up/down = ±Z but ONLY near a door/path** (in the open
+  field up/down is walled — Z stays put); near a door, up walks INTO the screen toward it.
+- Stage-machine base **sm = *(0x1f800138) = 0x801FE000**; **sm[0x4c] (0x801FE04C) = sub-scene** (==3 = HUT
+  interior, per docs/findings/scene.md #49); area-load flag 0x1f80019b (0=loading).
+
+**Worked route — drive into the hut from free-roam (own scripted input, verified):**
+1. `PSXPORT_AUTO_SKIP=1` (standalone) or `PSXPORT_SBS_AUTONAV=1` (SBS) → player control (~f216 / ~f246).
+2. Walk **right ~34 frames** → the hut door at X≈0x1240 (from start X≈0x0F64).
+3. **Hold up ~180 frames** → Z climbs 0x0F80→0x1200, **sm[0x4c] latches 3 (hut entered)**.
+   REPL proof: sm[0x4c]=0x03 after right34/up180. SBS recipe (both cores, 0-diff f9480):
+     PSXPORT_SBS_MODE=full PSXPORT_SBS_AUTONAV=1 PSXPORT_SBS_KEYS="250-284:right,285-470:up"
+(The `hut-entry-door-freeze.pad` holds up 300f and hits the freeze bug; the clean `hut-entry-alt.pad`
+taps up briefly then walks right through — decode both with pad_decode to compare.) To reach OTHER
+areas: same method — walk to the exit, probe X/Z to find the trigger zone, script it.
