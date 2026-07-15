@@ -162,9 +162,9 @@ def main():
         if extra:
             cmd_search(extra)
         else:
-            # default: regen the doc (normalizes ordering/summary) + print summary
-            entries = load()
-            save(entries)
+            # default: read-only summary + gate. A bare read must NEVER rewrite the doc — save() re-emits
+            # only the known FIELDS, so writing here would silently drop any hand-added prose/extra field.
+            # Only `set` writes (an explicit mutation); ordering/summary normalize on the next set.
             sys.exit(cmd_check(argparse.Namespace()))
     else:
         args.func(args)

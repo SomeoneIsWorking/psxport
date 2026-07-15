@@ -205,8 +205,9 @@ def main():
         if extra:
             cmd_search(extra)
         else:
-            entries = load()
-            save(entries)  # normalize
+            # default: read-only — next RE-ready step(s). A bare read must NEVER rewrite the doc: save()
+            # re-emits only the known FIELDS, so writing here would silently drop hand-added prose. Only
+            # `set` writes (an explicit mutation); ordering/summary normalize on the next set.
             cmd_next(argparse.Namespace())
     else:
         args.func(args)
