@@ -126,6 +126,14 @@ public:
   void frame();
   void frameX();
 
+  // abortUnimplemented (USER 2026-07-15): FAIL-FAST for the ONE native renderer. pc_render produces the
+  // picture ONLY from native scene producers (sceneNative for the field world, …). A scene — or a scene
+  // LAYER (e.g. the field's 2D HUD/dialog/menu overlay) — with no native producer must NOT fall back to
+  // transcribing the guest OT/GP0: it aborts here with a precise identity (stage / sm[0x4a] / sm[0x4c] /
+  // overlay signature) so the crash sequence IS the native-renderer work queue. There is no fallback and
+  // no env escape hatch; the guest-OT walk survives ONLY under psx_render (the reference renderer).
+  [[noreturn]] void abortUnimplemented(const char* scene);
+
   // perObjFlush: per-object native GT3/GT4 flush — composes the float camera×object transform from
   // the object's real world coords and submits every geomblk cmd on node+0xC0 through gt3gt4.
   // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).

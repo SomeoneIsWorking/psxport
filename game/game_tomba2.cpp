@@ -145,104 +145,66 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // partial 2D layer always sits on opaque black. Once loaded (s48>=2) the title owns a full background and
   // this is a no-op-equivalent (its bg overwrites the black). Engine-owned, keyed on the stage's own signal.
   if (c->mem_r32(0x801FE00Cu) == 0x801062E4u && c->mem_r8(0x801FE048u) < 2) c->game->gpu.gpu_blank_display();
-  // Engine-owned ordering (the one render path): owned world geometry was queued during submit; the OT
-  // walk queues the guest 2D / un-owned submit variants (instead of drawing them inline); then the queue
-  // drains in ENGINE order (layer: background < world < overlay < hud; depth within world). The guest OT
-  // is read here ONLY to enumerate the leftover guest prims — its draw ORDER is discarded. M3 captures
-  // those at submit time and retires this read. (PSXPORT_SBS debug compare keeps an inline path; its
-  // queue stays empty so the flush is a no-op.)
-  // DECOUPLED native scene render (one-native-render-path-decoupled). For the FIELD (GAME stage,
-  // 0x801FE00C == 0x8010637C) the native path OWNS the render: it builds the world from GAME DATA (terrain +
-  // entity lists + backdrop tilemap) with real depth, and the PSX OT walk is SKIPPED — this is what makes
-  // dynamic objects (Tomba, NPCs, props) render at correct depth instead of the flat is3d=0 PSX prims that
-  // the OT walk drops behind the terrain (the "invisible Tomba" regression). Other stages (DEMO/title/menus)
-  // still walk the PSX OT (no native path yet). `renderpsx on` (g_render_psx) forces the PSX walk for A/B.
-  // NOTE (frontier): scenenative skips ALL the PSX 2D for the field — once in-gameplay dialog/menus/item
-  // bubbles appear they need native 2D (RQ_HUD/OVERLAY) or they'll be missing. Free-roam is correct now.
+
+  // ============================================================================================
+  // REFERENCE RENDERER (psx_render) — the substrate guest-OT walk. This is now the ONLY caller of
+  // gpu_dma2_linked_list. It is not a shipped render behavior: it is the byte-exact PSX reference
+  // used by SBS core B, the `renderpsx` REPL toggle, and to DRIVE into scenes whose native producer
+  // isn't built yet (PSXPORT_RENDER_PSX=1). The pc_render path below never walks the guest OT.
+  // ============================================================================================
+  if (c->mRender->mode.psxRender()) {
+    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
+    if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
+    c->game->rq.flush(c);
+    return;
+  }
+
+  // ============================================================================================
+  // THE ONE NATIVE RENDERER (pc_render) — the picture comes from GAME STATE with real depth, NEVER
+  // from transcribing the guest OT/GP0. There is NO fallback (USER 2026-07-15): a scene, or a scene
+  // LAYER, without a native producer aborts via Render::abortUnimplemented — the crash sequence is
+  // the native-renderer rebuild backlog. The substrate render orchestrator (Render::frame/frameX)
+  // still executes underneath every frame on the faithful task's own call path; it builds the guest
+  // OT/packet pool (part of the byte-exact state) — we simply do not read it for the picture here.
+  // ============================================================================================
   bool field = (c->mem_r32(0x801FE00Cu) == 0x8010637Cu);
-  // SOP INTRO NARRATION (GAME stage, SOP field mode sm[0x4a]==0; free-roam is sm[0x4a]>=1): this is NOT the
-  // walkable 3D field — it is a 2D-composited cutscene (full-screen black/colour fills, semi-transparent
-  // textured EFFECT quads, character sprites, and text) built entirely by the dispatched PSX SOP code into
-  // the guest OT. The native field path (ov_scene_native) wrongly draws the walkable field's terrain/entity
-  // world here (e.g. the SEA + characters during the dark "void" beat scene 0x800bf9b4==5) AND the 2D-only OT
-  // filter DROPS the cutscene's own fills/effect quads (classified as backdrop/world) — so the void rendered
-  // as the sea instead of black+effect, and the cliff water banded. The oracle (interpreter + software GPU,
-  // docs/oracle.md) PROVES the PSX renders the whole cutscene from its GP0 stream. So for the narration we
-  // walk the FULL guest OT (no native field render, no 2D-only filter) — reproducing the PSX cutscene exactly.
-  // The SOP intro narration is active exactly when the loaded MODE overlay is the SOP one — the SAME check
-  // the GAME submode-0 dispatcher uses to run ov_sop_field_mode (engine.cpp: *(0x80109450) is the
-  // overlay's first instruction; the SOP overlay starts `lui v0,0x1f80` == 0x3C021F80). The walkable field
-  // loads a different overlay (e.g. 0x801138A4), so this cleanly separates the cutscene from free-roam
-  // (sm[0x4a] does NOT — free-roam settles back to sm[0x4a]==0 like the narration).
-  bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
-  // AUTHORED OT SUB-SCENE (hut/door interior, #49): the field running submode dispatches its per-frame
-  // handler by sm[0x4c] through the game's own 9-state jump table (Engine::s4c, engine.cpp) — state 2 is
-  // the walkable field (full Render::frame orchestrator), state 3 is fieldRunX → Render::frameX, the
-  // REDUCED pass that composites an AUTHORED scene (the fisherman's-hut interior + its NPCs) into the
-  // guest OT via the substrate state-3 walker (0x8007B04C builds the render list). It is field-stage but
-  // NOT a walkable field, so the native field reconstruction (sceneNative: terrain + entity lists through
-  // the sub-scene camera) draws the wrong thing — the stale exterior field, zoomed by the interior
-  // camera — and the 2D-only OT filter DROPS the interior room's 3D geometry that IS in the OT. Same
-  // class as the SOP void beat: walk the FULL guest OT, no native field render. sm[0x4c]==3 is the
-  // game's OWN selector for this pass (not a magic render constant), read from the live task-sm block.
+  // AUTHORED OT SUB-SCENE (hut/door interior, #49): field-stage but NOT the walkable field — the game's
+  // own 9-state area machine (task-sm[0x4c]==3) dispatches fieldRunX→frameX, compositing an authored
+  // interior (the fisherman's hut + its NPCs). Its objects live in the SAME entity lists sceneNative
+  // walks (TransitionState3 iterates T2_OBJLIST_HEAD_1/2 == HEADS[0..1]); the room geometry + interior
+  // camera still need a native producer. Until that lands, it aborts (no OT-walk shortcut).
   uint32_t task_sm = c->mem_r32(0x1F800138u);
   bool authored_subscene = field && task_sm && c->mem_r16(task_sm + 0x4Cu) == 3;
-  // fps60 unified-path step 2a: capture whether this real frame is an authored OT sub-scene (hut interior)
-  // + its OT head, so present_vk can re-run the OT-walk into mSink for the interp frame (fixes the flicker)
-  // instead of matchAndLerp'ing its unprovenanced prims. Host-memory capture; gated on fps60.
-  if (c->game->mods.fps60) c->game->fps60.captureSubscene(authored_subscene);
-  // #50: default the fps60 tier-1 field re-render to INELIGIBLE; only the native-field branch below sets it
-  // true. Narration/authored/non-field frames have no native field for the interp pass to re-render.
-  c->game->fps60.mTier1EligibleCur = false;
-  // FAIL-FAST guard (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): arm DisplayPassGuard around
-  // pc_render's OWN picture-producing calls only — sceneNative() + the native OT/queue draw below —
-  // never around the substrate orchestrator (Render::frame/frameX are called elsewhere and legitimately
-  // write the guest OT/packet-pool). Core::mem_w8/16/32 abort on any guest write while armed.
-  if (sop_narration && !c->mRender->mode.psxRender()) {
-    DisplayPassGuard displayPass(c->mRender->mode);
-    // SOP narration render (oracle-derived, docs/oracle.md). The cutscene's full picture is built by the PSX
-    // SOP code into the guest OT — full-screen fills, the semi-transparent textured EFFECT quads, character
-    // sprites, the sea tiles, and text — so we walk the FULL OT (g_ot_2d_only=0), NOT the 2D-only filter that
-    // dropped the fills/effect (which left the void's stale sea showing).
-    // The 3D WORLD beats (village/letter == scene 0-3, the void->cliff transition == 6, cliff == 7) need the
-    // native entity-list scene render (ov_scene_native: terrain + characters with real depth) — on the native
-    // port this is the ONLY source of that 3D geometry (the native SOP submit tees to VK, it does not build
-    // the geometry into the guest OT the way the real PSX does). The dark "VOID" swirl beat (SOP scene byte
-    // 0x800bf9b4==5) is the one beat with NO 3D world (the oracle draws pure black + swirl effect + text);
-    // running ov_scene_native there draws a stale field/sea behind the swirl (the original bug-2). Gate the
-    // native 3D render off only for the void — the SOP scene byte is the game's per-beat state, not a magic
-    // render constant. (Scene 6 IS a 3D beat: the cliff fading in — gating it off loses the cliff geometry.)
-    if (c->mem_r8(0x800BF9B4u) != 5) c->mRender->sceneNative();
-    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);   // full walk incl. cutscene fills/effect quads
-  } else if (authored_subscene && !c->mRender->mode.psxRender()) {
-    // #49 hut/door interior: the authored sub-scene lives entirely in the guest OT (built by the
-    // substrate frameX pass). No native field render — walk the FULL OT, exactly like the void beat.
-    // #50: mark the fps60 tier-1 field re-render INELIGIBLE this frame — there is no native field to
-    // re-render on the interp frame, so tier1Render must not draw the exterior over the interior.
-    c->game->fps60.mTier1EligibleCur = false;
-    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
-  } else if (!c->mRender->mode.psxRender() && (field || cfg_dbg("scenenative"))) {
-    c->game->fps60.mTier1EligibleCur = true;   // native field render runs -> tier-1 may re-render it (#50)
-    DisplayPassGuard displayPass(c->mRender->mode);
-    c->mRender->sceneNative();
-    // The native field path owns the 3D world + backdrop, but the field still submits its 2D OVERLAY
-    // through the PSX OT: the opening-cutscene narration glyphs, in-game dialog / item bubbles, menus,
-    // HUD. Enumerate the OT in 2D-overlay-only mode so those 2D prims are queued as RQ_HUD on top of
-    // the native world while the OT's 3D-world / backdrop prims are dropped (owned natively —
-    // keeping them would double-draw the world). This is THE behavior, not a debug channel: without
-    // it the opening story cutscene rendered nothing and the prior menu's stale VRAM showed through.
-    // (scenenativehud kept as a DIAGNOSTIC: full walk incl. world, to A/B the native world render
-    // against the PSX 2D-on-top composite.)
-    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/!cfg_dbg("scenenativehud"));
+  // SOP INTRO NARRATION (GAME stage, SOP overlay signature 0x3C021F80 @ 0x80109450): a 2D-composited
+  // cutscene (full-screen fills + semi EFFECT quads + sprites + text) with some 3D world beats. The 2D
+  // composite has no native producer -> aborts (the void beat 0x800bf9b4==5 has no 3D world at all).
+  bool sop_narration = field && c->mem_r32(0x80109450u) == 0x3C021F80u;
+
+  if (field && !sop_narration && !authored_subscene) {
+    // WALKABLE FIELD — the native WORLD producer: terrain + entity/scene tables + objects + backdrop,
+    // built from game data with real per-pixel depth (render_walk.cpp). This is fully native.
+    c->game->fps60.mTier1EligibleCur = true;   // native field render runs -> fps60 tier-1 may re-render it
+    {
+      DisplayPassGuard displayPass(c->mRender->mode);   // read-only invariant: aborts on any guest write
+      c->mRender->sceneNative();
+      // The field's 2D OVERLAY — HUD, in-game dialog, item bubbles, menus, text — has NO native producer
+      // yet. Probe whether THIS frame needs it: the 2D-only walk classifies the OT, dropping the native-
+      // owned world/backdrop and counting only genuine overlay prims into s_ot_2d_drawn. If any is present,
+      // crash below: rendering the native world WITHOUT its UI would MASK the missing overlay — the fallback
+      // the directive bans. A genuinely UI-free frame (count 0) presents the native world alone.
+      gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/true);
+    }
+    if (c->game->gpu.s_ot_2d_drawn > 0) c->mRender->abortUnimplemented("field 2D overlay (HUD / dialog / item-bubble / menu / text)");
   } else {
-    gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
+    c->game->fps60.mTier1EligibleCur = false;
+    c->mRender->abortUnimplemented(
+      sop_narration     ? "SOP intro narration cutscene (2D composite + 3D beats)" :
+      authored_subscene ? "hut/door interior authored sub-scene (task-sm[0x4c]==3): room geometry + interior camera" :
+      field             ? "field stage in an unclassified render mode" :
+                          "non-field stage (title screen / DEMO attract / menu / FMV)");
   }
-  // ADDITIVE native render subsystem (game/render/) — the decoupled "native experience" pass. Fully
-  // separate from the PSX path above: it builds the frame from native SCENE DATA (entity lists + camera)
-  // with float transforms and real depth (NO OT/GP0/GTE). Gated behind the `rendernative` DIAGNOSTIC
-  // channel (NOT an A/B behavior flag) so we can inspect it before it becomes the default; when off, the
-  // pass is never invoked and the PSX-vanilla path is the only renderer. Emitted before rq_flush so its
-  // world quads drain with this frame.
+  // ADDITIVE native render subsystem (game/render/mNativeScene) — the decoupled "native experience" pass,
+  // gated behind the `rendernative` DIAGNOSTIC channel (off by default). Builds from native scene data.
   if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
   c->game->rq.flush(c);
 }

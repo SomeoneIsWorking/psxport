@@ -207,6 +207,26 @@ void Render::backdropRender(uint32_t t4) {
   c->mRender->diag.endObject();
 }
 
+// FAIL-FAST for the one native renderer (USER 2026-07-15): no OT/GP0 fallback — a scene/layer lacking a
+// native producer crashes with its identity, so the crash list is the rebuild backlog. See render.h.
+void Render::abortUnimplemented(const char* scene) {
+  Core* c = mCore;
+  uint32_t stage   = c->mem_r32(0x801FE00Cu);
+  uint32_t sm      = c->mem_r32(0x1F800138u);
+  uint16_t sm4a    = c->mem_r16(0x801FE04Au);
+  uint16_t sm4c    = c->mem_r16(0x801FE04Cu);
+  uint32_t ovsig   = c->mem_r32(0x80109450u);   // loaded MODE overlay's first instruction (scene signature)
+  uint16_t subm4c  = sm ? c->mem_r16(sm + 0x4Cu) : 0xFFFFu;
+  fprintf(stderr,
+    "\n[FATAL] unimplemented native rendering: %s\n"
+    "        stage=0x%08X sm[0x4a]=%u sm[0x4c]=%u (task-sm[0x4c]=%u) overlay_sig=0x%08X\n"
+    "        pc_render has no native producer for this scene/layer. Build it (native scene render) or\n"
+    "        drive with PSXPORT_RENDER_PSX=1 (the reference renderer) to reach it. No OT-walk fallback.\n\n",
+    scene, stage, sm4a, sm4c, subm4c, ovsig);
+  fflush(stderr);
+  abort();
+}
+
 void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];

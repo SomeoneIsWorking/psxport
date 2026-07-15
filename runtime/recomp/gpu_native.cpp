@@ -935,6 +935,7 @@ void GpuState::gp0_exec(Core* core) {
         if (ui) { layer = RQ_HUD; om = RQ_OM_2D_FG; is3d = 0; }   // force screen-space HUD, no depth tag
         if (s_ot_2d_only && !billboard && !ui) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
         else {
+        if (s_ot_2d_only) s_ot_2d_drawn++;   // genuine 2D-overlay poly (dialog panel / UI span) — unimplemented natively
         core->game->activeRq().emitOrQueue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
@@ -1114,6 +1115,7 @@ void GpuState::gp0_exec(Core* core) {
         // them like the poly path's `billboard` prims; only the native-owned world/bg is redundant.
         if (s_ot_2d_only && layer != RQ_HUD && !objz) { /* world/bg owned by ov_scene_native — skip */ }
         else {
+        if (s_ot_2d_only && layer == RQ_HUD) s_ot_2d_drawn++;   // genuine 2D-overlay sprite (HUD icon / font glyph) — unimplemented natively
         core->game->activeRq().emitOrQueue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
@@ -1695,6 +1697,7 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
   s_dma2++;
   s_ot_madr = madr & 0x1FFFFC;
   s_ot_2d_only = twoDOnly;
+  if (twoDOnly) s_ot_2d_drawn = 0;   // count genuine 2D-overlay prims this walk (drawOTag's native-2D fail-fast)
   // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
   // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.
   // (Empty OTs are ~0x800 link-only nodes that DO terminate at the sentinel; a true cycle never terminates.)

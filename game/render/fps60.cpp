@@ -343,16 +343,7 @@ void Fps60::present_vk(Core* core) {
   // an empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame (stage-1 first-frame case).
   const RqItem* slotA; int nSlotA;
   mTier1PrimsThisFrame = 0;
-  if (mHavePrev && mSubsceneCur) {
-    // fps60 step 2a — AUTHORED SUB-SCENE (hut/door interior, sm[0x4c]==3): the real frame drew the interior
-    // via the guest-OT walk (drawOTag's authored_subscene branch), captured into mRqCur. The tier1+
-    // matchAndLerp slot-A build drew the stale field instead (the flicker). Present the captured interior
-    // (mRqCur) as slot A: interp == the interior, no flicker. Degenerate lerp — a guest OT has no native
-    // per-object transform to interpolate (that needs the emitters RE'd/ported), so the sub-scene interp
-    // frame is the real interior content, which is exactly right (no motion to lerp = interp == real).
-    slotA = mRqCur; nSlotA = mNCur;
-    for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
-  } else if (mHavePrev) {
+  if (mHavePrev) {
     // fps60 UNIFIED PATH (docs/fps60-rework.md): the field frame's WORLD — terrain + scene-table + OBJECTS
     // + backdrop — is re-run by tier1Render into mSink under the lerped camera + per-object transforms, ALL
     // interpolated through the SAME render path the real frame used (lerp lives in the INPUTS, not a per-

@@ -135,18 +135,6 @@ struct Fps60 {
   bool mObjOverrideOn = false;   // set only while the interp present re-runs the object walk
   void projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]);
 
-  // ---- AUTHORED SUB-SCENE capture (unified-path step 2a — the hut-interior flicker fix) --------------
-  // The hut/door interior (sm[0x4c]==3) is drawn by the guest-OT walk (drawOTag's authored_subscene
-  // branch), NOT sceneNative — matchAndLerp can't interpolate its unprovenanced OT prims, so the current
-  // interp frame shows the stale field (the flicker). Fix: at each real drawOTag capture whether this
-  // frame was an authored sub-scene + its OT head; at present time, if the presented frame was a sub-
-  // scene, build slot A by RE-RUNNING gpu_dma2_linked_list(otHead) into mSink (camera-lerped) — the same
-  // OT-walk logic the real frame used. Captured like the camera; cur rotates to prev at the present swap.
-  // Set every real drawOTag (captureSubscene); present_vk runs BEFORE the next drawOTag, so this always
-  // holds the flag of the frame being presented (no prev/swap needed — drawOTag overwrites it each frame).
-  bool     mSubsceneCur = false;
-  void captureSubscene(bool authored) { mSubsceneCur = authored; }
-
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
   RqItem* mRqPrev = nullptr;    // previous frame's snapshot (matchAndLerp's Q[N-1])

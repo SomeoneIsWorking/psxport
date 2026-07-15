@@ -42,6 +42,9 @@ struct GpuState {
 
   // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_gpu present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
+  int s_ot_2d_drawn = 0;  // # of genuine 2D-overlay prims drawn during a twoDOnly walk (reset at walk start).
+                          // drawOTag reads it: >0 in pc_render => the field needs unimplemented native 2D UI
+                          // -> abortUnimplemented (rendering the world alone would MASK the missing overlay).
   int bg_2d(int bx0, int by0, int bx1, int by1);   // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)
   int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
   // #54: a pure-2D screen (title/menu) never sets s_seen3d, so s_prev_had3d alone left the widen mechanism
