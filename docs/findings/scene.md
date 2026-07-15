@@ -671,3 +671,28 @@
 - VERIFIED: build clean; codemap --addr 0x80040B48 = single-file owner, gone from --conflicts;
   SBS-full (SBS_AUTONAV, dark-screen replay which exercises the arm path) 0-diff to f23100 with
   PSXPORT_MIRROR_VERIFY=0x80040B48 "OK (pass #1)". Logs: scratch/logs/sbs_b48_dedup.log.
+
+## FUN_80040CDC dual-ownership (script init mis-named "animEnvInit") — DEDUPED (2026-07-15)
+- SYMPTOM/DEFECT: second dual-ownership found by the improved `codemap.py --conflicts` (authoritative
+  filter). game/scene/script_interp.cpp owned FUN_80040CDC as ScriptInterp::init (the cutscene-script
+  bytecode init — documented, wired, gated, 8+ live callers via c->engine.script.init). game/core/
+  engine.cpp ALSO carried Engine::animEnvInit "FUN_80040CDC" — a mis-named duplicate written in the
+  engine.cpp anim-leaf-cluster refactor under the wrong belief that FUN_80040CDC is an animation-env
+  init. It is not: gen_func_80040CDC writes obj[0x7C]=arg1, obj[0x46]=0xFF, obj[0x10/0x70/0x78]=0,
+  calls func_80040DE0 (=loadCurrentEntry), derives obj[0x71] from op0's 0x1000/0x4000 bits — the
+  SCRIPT machine's fields, byte-for-byte ScriptInterp::init.
+- FIX: deleted Engine::animEnvInit + its engine.h decl + its now-orphaned ObjAnimField constants
+  (kEnvPtr/kFlags10/kFlag70/kFlag78/kFlags71). Redirected its 3 callers (beh_sop_intro_pilot.cpp
+  anim_env_setup, sop_intro_events.cpp:341/482) to c->engine.script.init(obj, tableA, scriptPtr) —
+  a direct arg-order match (envArg→tableA, animData→scriptPtr). ScriptInterp::init is strictly the
+  better body: fully native (native loadCurrentEntry, no guest-frame descent) vs the duplicate's
+  framed + substrate-loadCurrentEntry path; both produce identical object writes, the only difference
+  being dead guest-stack scratch neither the game nor SBS reads.
+- VERIFIED: build clean; codemap --addr 0x80040CDC single-owner, gone from --conflicts; SBS-full
+  AUTO_SKIP 0-diff to f14130. NOTE: these call sites are DIRECT native calls (not rec_dispatch), so
+  both SBS cores run the identical native body — the redirect is equivalent by construction, not
+  oracle-gated. The new-game SOP-intro path that exercises them live is not in the current SBS replay
+  set (AUTO_SKIP skips the new-game intro) — disclosed, like other replay-coverage gaps.
+- LESSON (same as FUN_80040B48): before RE'ing any FUN_xxxx, `codemap.py --addr <hex>` — a canonical
+  owner may already exist under a different subsystem's name. The --conflicts detector now catches the
+  slip after the fact; checking --addr up front prevents it.

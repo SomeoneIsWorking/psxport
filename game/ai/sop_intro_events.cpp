@@ -298,7 +298,7 @@ uint32_t sopIntroEffectSpawn(Core* c) {                          // FUN_8010B44C
 //   state 1 = RUNNING: Cull::wrapFrame(node) (result unused, matches recomp); sub-state @node+5:
 //     sub 1 -> ScriptInterp::step(node); if node+0x70 == 0xFF (-1 as u8) sub-state++;
 //     sub 0 -> sopOrbitPathStep(node); once it signals done (returns 1): sub-state++, install the
-//       ALTERNATE anim env (node, env=0x8001B860, data=0x8010CAB8) via Engine::animEnvInit, node+0x70=1.
+//       ALTERNATE anim env (node, env=0x8001B860, data=0x8010CAB8) via ScriptInterp::init, node+0x70=1.
 //     Always then: Engine::animTick(node); Engine::objMatrixCompose(node).
 //   state 3 = DESPAWN: Spawn::despawn(node).
 //   anything else: no-op (matches the recomp's `bVar1 != 2 && bVar1 == 3` guard shape).
@@ -338,7 +338,7 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
       c->r[4] = node;
       if (sopOrbitPathStep(c) != 0) {
         c->mem_w8(node + 5, (uint8_t)(sub + 1));
-        c->engine.animEnvInit(node, 0x8001B860u, 0x8010CAB8u);     // FUN_80040CDC
+        c->engine.script.init(node, 0x8001B860u, 0x8010CAB8u);     // FUN_80040CDC = ScriptInterp::init
         c->mem_w8(node + 0x70, 1);
       }
     }
@@ -395,7 +395,7 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
 //     node+0x36=0x4EB5, node+0x56=0x800; falls into the SHARED TAIL (install anim env, data=0x8010CBD0).
 //   default (state > 5): no-op.
 //
-//   SHARED TAIL (states 0 and 5 only): state = state+1; Engine::animEnvInit(node, 0x80017FE8, data);
+//   SHARED TAIL (states 0 and 5 only): state = state+1; ScriptInterp::init(node, 0x80017FE8, data);
 //   node+0x70 = 1.
 namespace {
 // Body-only implementation (early-return-heavy switch) — wrapped below by sopLiftedSubtick's guest
@@ -479,7 +479,7 @@ void sopLiftedSubtickBody(Core* c) {
   if (runTail) {
     c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
     c->r[31] = 0x8010B754u;                                          // gen call-site ra (see state 3)
-    c->engine.animEnvInit(node, 0x80017FE8u, animData);              // FUN_80040CDC
+    c->engine.script.init(node, 0x80017FE8u, animData);              // FUN_80040CDC = ScriptInterp::init
     c->mem_w8(node + 0x70u, 1);
   }
 }

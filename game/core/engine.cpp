@@ -914,41 +914,21 @@ void Engine::fieldFrame() { Core* c = core;
 // -- Small per-object leaves shared across many behavior handlers. Ghidra decomp:
 //    scratch/decomp/batch_leaves.c ----------------------------------------------------------
 
-// Object fields touched by the animEnvInit/animTick/objMatrixCompose/walkStart leaf cluster below.
+// Object fields touched by the animTick/objMatrixCompose/walkStart leaf cluster below.
 // Named locally rather than added to game/object/actor.h: several offsets are overloaded with a
 // DIFFERENT meaning elsewhere (e.g. obj+0x46 is Actor::retryDelay() in another sub-behavior's
 // state — see actor.h) so a shared accessor would misname one caller or the other.
 namespace ObjAnimField {
   constexpr uint32_t kAnimMode   = 0x46u;   // u8:  current anim mode (walkStart's dedupe/set field)
-  constexpr uint32_t kEnvPtr     = 0x7Cu;   // u32: anim-env pointer (animEnvInit's envArg)
-  constexpr uint32_t kFlags10    = 0x10u;   // u32: cleared on env (re)init
-  constexpr uint32_t kFlag70     = 0x70u;   // u8:  cleared on env (re)init
-  constexpr uint32_t kFlag78     = 0x78u;   // u8:  cleared on env (re)init
-  constexpr uint32_t kFlags71    = 0x71u;   // u8:  bits 2/4 derived from *animData
   constexpr uint32_t kAnimResult = 0x79u;   // u8:  animTick's stashed VM return byte
 }
 
-// Engine::animEnvInit — FUN_80040CDC.
-void Engine::animEnvInit(uint32_t obj, uint32_t envArg, uint32_t animData) { Core* c = core;
-  using namespace ObjAnimField;
-  // GUEST FRAME MIRROR (abi_extract --contract, single epilogue label -> RAII safe): sp-32;
-  // r16@+16, r17@+20, ra@+24; live r16=obj, r17=animData; r31=0x80040D14 at the FUN_80040DE0 dispatch.
-  static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {17, 20}, {31, 24}};
-  GuestFrame<32, 3> frame(c, kSpills);
-  c->r[16] = obj;
-  c->r[17] = animData;
-  c->mem_w32(obj + kEnvPtr, envArg);
-  c->mem_w8 (obj + kAnimMode, 0xFF);
-  c->mem_w32(obj + kFlags10, 0);
-  c->mem_w8 (obj + kFlag70, 0);
-  c->mem_w8 (obj + kFlag78, 0);
-  guest_fn(c, 0x80040DE0u, 0x80040D14u, obj, animData);               // anim sub-setup (substrate)
-  const uint16_t bits = c->mem_r16(animData);                        // *animData (u16)
-  uint8_t f71 = 0;
-  if (bits & 0x1000) f71 |= 2;
-  if (bits & 0x4000) f71 |= 4;
-  c->mem_w8(obj + kFlags71, f71);
-}
+// FUN_80040CDC is NOT owned here — it is ScriptInterp::init (game/scene/script_interp.cpp), the
+// cutscene-script bytecode init (sets obj[0x7C]=tableA / obj[0x46]=0xFF, clears 0x10/0x70/0x78,
+// loads the first entry, derives obj[0x71] from the op flags). A dead, mis-named duplicate lived
+// here as Engine::animEnvInit ("animation-env init") — the fields it wrote were the SCRIPT machine's,
+// not an anim env's. It had no callers and was registered nowhere; deleted after `codemap.py
+// --conflicts` surfaced the dual-ownership (see docs/findings/scene.md).
 
 // Engine::animTick — FUN_8004190C. Ticks the animation VM (native Animation::step, which is the
 // full port of FUN_80076D68 — its 3 frame sub-leaves stay substrate) and stashes its return byte

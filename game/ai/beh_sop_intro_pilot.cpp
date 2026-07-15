@@ -54,7 +54,7 @@ inline int  try_model_attach(Core* c, uint32_t obj) {
   rec_dispatch(c, 0x800519E0u);
   return (int)c->r[2];               // 0 = success, non-zero = retry
 }
-inline void anim_env_setup   (Core* c, uint32_t obj) { c->engine.animEnvInit(obj, ANIM_ENV_PTR, ANIM_DATA_PTR); }   // native FUN_80040CDC
+inline void anim_env_setup   (Core* c, uint32_t obj) { c->engine.script.init(obj, ANIM_ENV_PTR, ANIM_DATA_PTR); }    // FUN_80040CDC = ScriptInterp::init (init obj as script-driven: tableA=ANIM_ENV_PTR, script=ANIM_DATA_PTR)
 inline void walk_start       (Core* c, uint32_t obj) { c->engine.walkStart   (obj, 8, 0); }                        // native FUN_80054D14
 inline void overlay_oneshot  (Core* c, uint32_t obj)  { (void)native_sop_overlay_shadow_spawn(c, obj); }
 inline int  bounds_cull      (Core* c, uint32_t obj) { c->r[4] = obj;             rec_dispatch(c, 0x8007778Cu); return (int)c->r[2]; }

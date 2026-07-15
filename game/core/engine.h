@@ -364,11 +364,8 @@ public:
   // scratch/decomp/batch_leaves.c — see each method's body for the full RE. Kept as Engine
   // methods (not a new class) since they're each self-contained and only-recently-owned.
 
-  // animEnvInit(obj, envArg, animData): guest FUN_80040CDC. Seed the anim-env fields on an
-  //   object (obj+0x7C = envArg, obj+0x46 = 0xFF marker, obj+0x10/70/78 = 0), then delegate to
-  //   FUN_80040DE0 for the actual anim setup, and stamp obj+0x71 flag byte from *animData bits
-  //   0x1000/0x4000. Substrate leaf FUN_80040DE0 kept dispatched.
-  void animEnvInit(uint32_t obj, uint32_t envArg, uint32_t animData);
+  // (FUN_80040CDC is ScriptInterp::init, not an anim leaf — a dead mis-named duplicate
+  //  Engine::animEnvInit was removed here; see engine.cpp + docs/findings/scene.md.)
 
   // animTick(obj): guest FUN_8004190C. Ticks the animation VM (substrate FUN_80076D68) and
   //   stashes its returned byte into obj+0x79. Returns 1 (matches recomp v0).
