@@ -166,6 +166,36 @@ struct CCA4Frame {
 
 // withDepthTag moved to render_internal.h (#39) so renderWalk's 0x8003C29C RCASE_DEFAULT dispatch can
 // share the exact same depth-tag discipline — see render_internal.h.
+
+// Per-particle world anchor + view-ord (render.md#56 — flame-over-wall). withDepthTag tags the WHOLE
+// billboardEmit packet span with ONE node-level ord (obj_world_ord(node): the manager node's single
+// world point), so every particle in a manager's sub-list (all flame/torch licks, all AP-gem sparkles)
+// shares one depth — when that's nearer than a real occluder's per-pixel depth, the WHOLE batch draws
+// in front of it. Each particle actually sits at its OWN world position: the node's world pos (node+
+// 46/50/54) offset by the node's own rotation applied to the particle's own planar offset
+// (particle+14/+15, s8, scaled x5 — the IDENTICAL 5x(p14,p15,0) scale func_8003B220's quad-corner
+// builder uses to place the same particle's on-screen quad, and the same anchor math the retired
+// fps60 recordBillboardParticle registry used, docs/findings/render.md "fps60 billboard anchor must be
+// PER-PARTICLE"). MAT_OUT (BUF+0x40, the composed rotation billboardComposeTail already loaded into
+// GTE CR0-7 for this node) is the node's rotation; it does not change across this loop's particles.
+// Projects through the SAME stable scene camera obj_world_ord uses, so per-particle occlusion never
+// re-derives PSX OT order — it's the engine's own world-position depth, just resolved at the correct
+// granularity.
+static float billboardParticleOrd(Core* c, uint32_t node, uint32_t particle) {
+  const float wx = (float)c->mem_r16s(node + 46);
+  const float wy = (float)c->mem_r16s(node + 50);
+  const float wz = (float)c->mem_r16s(node + 54);
+  const float ox = (float)(5 * c->mem_r8s(particle + 14));
+  const float oy = (float)(5 * c->mem_r8s(particle + 15));
+  // MAT_OUT rotation: libgte MATRIX, m[row][col] int16 4.12 fixed, row-major (row stride 6 bytes).
+  auto rot = [c](int row, int col) { return (float)(int16_t)c->mem_r16(MAT_OUT + row * 6 + col * 2); };
+  constexpr float FX = 1.0f / 4096.0f;
+  const float rx = (rot(0, 0) * ox + rot(0, 1) * oy) * FX;
+  const float ry = (rot(1, 0) * ox + rot(1, 1) * oy) * FX;
+  const float rz = (rot(2, 0) * ox + rot(2, 1) * oy) * FX;
+  if (camview_valid()) return proj_camview_world_ord(wx + rx, wy + ry, wz + rz);
+  return proj_obj_center_ord();   // same pre-scene-camera fallback obj_world_ord uses
+}
 } // namespace
 
 // ==================================================================================================
@@ -394,7 +424,8 @@ void Render::billboardEmit() {
     const int16_t byteOff = (int16_t)c->mem_r16(entry + 2);
     int count = (int16_t)c->mem_r16(entry + 0);
     uint32_t particle = listBase + (uint32_t)(int32_t)byteOff;
-    for (; count != 0; count--, particle += 16u) {
+    int bbIt = 0;   // particle index within THIS billboardEmit call (bbord diag: same-call grouping)
+    for (; count != 0; count--, particle += 16u, bbIt++) {
       // 1) Build the quad's 4 corner vectors (still-substrate; writes real guest stack memory).
       c->r[4] = FR(16); c->r[5] = 0; c->r[6] = particle;
       func_8003B220(c);
@@ -494,7 +525,8 @@ void Render::billboardEmit() {
       }
 
       // 5) Emit the 10-word packet (tag + 9 data words) at the pool tail, prepended into the OT bucket.
-      uint32_t tail = c->mem_r32(PKT_POOL_PTR);
+      const uint32_t packetLo = c->mem_r32(PKT_POOL_PTR);
+      uint32_t tail = packetLo;
       uint32_t otbase = c->mem_r32(OTBASE_PTR);
       uint32_t otslot = otbase + (c->mem_r32(FR(56)) << 2);
       uint32_t oldHead = c->mem_r32(otslot);
@@ -506,6 +538,31 @@ void Render::billboardEmit() {
         tail += 4;
       }
       c->mem_w32(PKT_POOL_PTR, tail);
+
+      // Per-particle depth registration (render.md#56): tag THIS particle's own packet span with its
+      // own world-view ord, instead of relying solely on withDepthTag's single whole-span registration
+      // (which only fires on function exit, from `sess.close()` AFTER this loop finishes). obj_depth_
+      // lookup scans registered spans in REGISTRATION ORDER and returns the FIRST containing match, so
+      // — since every per-particle span here is registered strictly BEFORE withDepthTag's own coarse
+      // whole-node span — a lookup for one of these packet's bytes always resolves to this particle's
+      // OWN ord, never the coarse fallback. No suppression of the outer span needed; it stays the
+      // fallback for anything this loop doesn't cover (skipped/off-screen particles emit no packet).
+      // Host-only: GpuState::obj_depth_add stores into per-Core host arrays, no guest write. Skipped on
+      // the SBS oracle core exactly like withDepthTag skips its own registration there (core B/
+      // psx_fallback must stay the untouched reference).
+      if (!c->game->oracle) {
+        const float pord = billboardParticleOrd(c, node, particle);
+        gpu_obj_depth_add(c, packetLo, tail, pord);
+        // Diagnostic (PSXPORT_DEBUG=bbord): prove the per-particle registration carries DISTINCT ords
+        // (before this change every particle of a manager node shared obj_world_ord(node)'s single ord).
+        if (cfg_dbg("bbord")) {
+          int gpu_gpu_preseq_present_index(Core*);
+          fprintf(stderr, "[bbord] pf=%d call=%08X it=%d part=%08X off=%d,%d nodeOrd=%.6f partOrd=%.6f span=[%08X,%08X)\n",
+                  gpu_gpu_preseq_present_index(c), node, bbIt, particle,
+                  c->mem_r8s(particle + 14), c->mem_r8s(particle + 15),
+                  obj_world_ord(c, node), pord, packetLo, tail);
+        }
+      }
     }
   });
 }
