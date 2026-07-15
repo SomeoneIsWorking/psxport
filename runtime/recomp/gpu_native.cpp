@@ -1140,6 +1140,36 @@ void GpuState::gp0_exec(Core* core) {
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
     { if (s_oracle_prim_log && soft_gpu)
         fprintf(stderr, "[oraprim] FILL at=(%d,%d) %dx%d col=(%d,%d,%d)\n", x, y, w, h, cr, cg, cb); }
+    // WIDESCREEN BACKDROP FILL (#52): FillRect ignores clip/offset by design (PSX hardware behavior,
+    // see the comment above) and writes only the native 320x240 VRAM rect — it has no notion of the
+    // wide margins at all. The field's sky/sea backdrop never hits this problem because it is an
+    // OWNED native drawer that paints the full wide FB directly; but an AUTHORED OT sub-scene (the
+    // hut/door interior, #49 authored_subscene) still clears its black backdrop the PSX way, via this
+    // very op, once per frame (RE'd: `debug bug52fill` traced a FILL at=(0,0) 320x240 col=(0,0,0) on
+    // every interior frame). Because the wide margin columns of the VK render target are LOAD_OP_LOAD
+    // (persistent across frames, gpu_gpu.cpp render_geom), those columns keep whatever a PRIOR frame's
+    // draw left there -> the VRAM-atlas garbage in the widescreen margins.
+    // Fix (host-side, read-only, engine-owned — mirrors the existing bg_2d/node_is_bg 2D-widen
+    // classification used for polys/sprites): a FillRect that covers the WHOLE base display is a
+    // backdrop clear exactly like a full-screen backdrop poly, so queue an equivalent flat quad
+    // through the SAME 2D render-queue path (RQ_BACKGROUND / RQ_OM_2D_BG), pre-stretched by
+    // ws_2d_local_x's backdrop rule (x*ww/320) so it fills [0,ww) instead of just [0,320). Gated the
+    // same way the poly/sprite widen is (gpu_gpu_wide_engine + s_prev_had3d, "gameplay frames only").
+    {
+      int gpu_gpu_wide_engine(Core*);
+      if (bg_2d(x, y, x + w, y + h) && gpu_gpu_wide_engine(core) && s_prev_had3d) {
+        int ww = gpu_gpu_wide_engine_w(core);
+        if (ww > 320) {
+          int x0 = ws_2d_local_x(core, x, /*is_bg=*/1), x1 = ws_2d_local_x(core, x + w, /*is_bg=*/1);
+          int xs[4] = { x0, x1, x0, x1 }, ys[4] = { y, y, y + h, y + h };
+          int us[4] = { 0, 0, 0, 0 }, vs[4] = { 0, 0, 0, 0 };
+          unsigned char rs[4] = { cr, cr, cr, cr }, gs[4] = { cg, cg, cg, cg }, bs[4] = { cb, cb, cb, cb };
+          core->game->rq.push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, rs, gs, bs,
+                                     0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0,
+                                     s_da_x0, s_da_y0, s_da_x1, s_da_y1);
+        }
+      }
+    }
     if (vk_path()) gpu_gpu_dirty(core, x, y, w, h);   // mirror fill to VK
   } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
     int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
