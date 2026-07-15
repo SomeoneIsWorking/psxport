@@ -39,7 +39,14 @@ tpage 0x5F. Verts = rect corners v0(x,y) v1(x+w,y) v2(x,y+h) v3(x+w,y+h). UV by 
 |3 right|224|232|137|143|
 |4 center|216|223|136|143|
 
-## Spec 3 — FUN_8007CC00 `borderTiles(DialogBox* box r4)`
+## Spec 3 — FUN_8007CC00 `borderTiles(DialogBox* box r4)` — ✅ glyph-text producer LANDED (`Render::dialogTextNative`)
+NOTE: this emitter draws the per-glyph textured SPRTs (op 0x65, font atlas tpage 0x1F) — i.e. the visible
+dialog TEXT. `Render::dialogTextNative` (game/render/render_walk.cpp) reproduces it as a read-only native
+producer reading the flat glyph list directly (no DialogBox pointer). Confirmed field widths from the live
+decompile: y@2 is UNSIGNED u8 (emitter reads `(ushort)pbVar4[-1]`); CLUT uses `char & 0x7f`. Highlight path
+(box+0x47==1 && box+3==1 → CLUT 0x7CBE) is DEFERRED to the panel/box owner (needs the box pointer). Below
+is the original RE spec:
+
 Per-glyph text-background SPRT (op 0x65). ABI: frame 32; r31→sp+28,r16→sp+24; mirror. Reads box+0x47 & box+3
 (both==1 → highlight palette 0x12/clut 0x7CBE). Glyph list @0x800ECB88, 8B/entry: x@0(u16) y@2(u8) char@3(u8;
 0x80=double-width) u@4(u8) v@6(u8); count=(s16)*0x1F80017E (built by FUN_8007C940 — must be readable). Per glyph:

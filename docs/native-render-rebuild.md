@@ -39,8 +39,8 @@ it with the psx_render reference (and SBS core B).
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
 | 3b-A| Field free-roam blocker — UNTAGGED WORLD OBJECTS (not HUD) | same, `s_ot_2d_drawn>0` | own the object emit leaves so they register obj_depth / native-cover | ⛔ CRITICAL — blocks all gameplay in pc_render |
 | 3b-B| Field genuine 2D HUD/dialog/text (interaction-triggered) | same | font glyphEmit dual-emit + panel.cpp (specs ready) | ⛔ (not in free-roam) |
-| 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | `fieldObjectsRender()` (room obj 0x800FD850 + NPCs + Tomba, interior camera) | ✅ native — matches reference (only dialog bubble = 2D pending) |
-| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | `sceneNative()` + void-beat(0x800bf9b4==5) guard (vortex over black) | ✅ wired native — no crash; caption text = 2D pending |
+| 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | `fieldObjectsRender()` + `dialogTextNative()` (room obj 0x800FD850 + NPCs + Tomba + dialog text) | ✅ native — matches reference; dialog TEXT now native (panel bg still 2D pending) |
+| 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | `sceneNative()` + void-beat(0x800bf9b4==5) guard (vortex over black) | ✅ wired native — no crash; caption text = 2D pending (wire `dialogTextNative` if narration uses the glyph list) |
 
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
 
@@ -66,6 +66,12 @@ Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637
   producer below), dialog panel (`panelBuild`/`panelFill`/`borderTiles` → `game/ui/panel.cpp`, spec in
   docs/native-render-2d-panel.md), `HudGaugeEmitter` (0x8004FD30, LIVE — confirm it dual-emits when a gauge
   is up). Retires the transitional `ui_span` observer hack on 0x8007D594.
+  - **Dialog TEXT — LANDED (`Render::dialogTextNative`, render_walk.cpp).** Native producer mirroring the
+    guest glyph emitter FUN_8007CC00 (Spec 3): reads the glyph list @0x800ECB88 (count=(s16)*0x1F80017E),
+    emits op-0x65 font sprites (tpage 0x1F), CLUT=((char&0x7f)+0x1F0)<<6|0x3F. Wired into `renderField` +
+    `renderHutInterior`; verified read-only (no DisplayPass guest-write, no crash) on hut-entry dialog
+    (17-glyph bubble). DEFERRED: the highlight path (selected menu option → CLUT 0x7CBE) needs the
+    DialogBox pointer the flat-list read lacks — lands with the panel/box native owner.
 - **Completeness gate (self-completing).** Every owned 2D builder must (a) push its host quad to the queue
   AND (b) register its guest packet-pool span in a covered registry (`gpu_ui_span_add`). twoDOnly counts a
   prim iff RQ_HUD/OVERLAY AND not covered (obj_depth OR ui_span OR native_cover). Tighten the POLY path
