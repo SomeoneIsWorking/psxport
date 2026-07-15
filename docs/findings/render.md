@@ -2134,8 +2134,15 @@ draft was already byte-faithful.
   vortex object (node 0x800FBA68) does not render through sceneNative's object pass under pc_render — so the
   screen stays ~black. The prior #5 note ("caption text 2D pending") UNDER-STATED this: the whole vortex is
   missing, not just text.
-- **fix:** (not done) RE why the vortex node 0x800FBA68 isn't emitted by the object walk during the void
-  beat (culled? not in the walked entity lists? special geomblk?). Verify a fix by pixel-diff pc-vs-psx at
-  the void beat (animated — match a fixed frame). Reaching true free-roam field (#3b) is BEHIND this
-  narration in the newgame path.
+- **narrowed (2026-07-16):** the vortex node IS walked — it's in HEADS[1]'s chain (5 nodes) and its gates
+  pass (n+1=1 visible, n+8/n+9=0x0F = 15 render commands). fieldObjectsRender -> perObjFlush IS called on
+  it and submits all 15 geomblks (cmd+0x40) through the native gt3gt4 path. So the walk/emit is NOT the
+  problem — the vortex's geomblks go through gt3gt4 but produce ~no visible output. The bug is in the PRIM
+  EMISSION: gt3gt4's handling of the vortex's specific prims (likely a semi-transparent / special prim type
+  or a projection issue — the swirl is a large blended effect). Node +0x0c reads 0x00030003 (packed, not a
+  geomblk pointer), consistent with a non-standard render-command layout.
+- **fix:** (not done, DEFERRED — render fix behind Job #1 per CLAUDE.md) inspect the 15 geomblks' prim
+  opcodes + blend flags; find why gt3gt4 emits them invisibly (transparency not blended? projected
+  off-screen? unhandled prim). Verify by pixel-diff pc-vs-psx at a fixed void-beat frame. Reaching true
+  free-roam (#3b) is BEHIND this narration in the newgame path. Needs USER eyeball for the animated result.
 - **refs:** render_walk.cpp renderSopNarration/sceneNative void-beat guard; docs/native-render-rebuild.md #5

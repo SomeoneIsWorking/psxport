@@ -34,7 +34,7 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **order:** 22
 - **deps:** newgame->field transition (s5 leave-demo)
 - **owner:** game/render/render_walk.cpp (renderSopNarration/sceneNative)
-- **notes:** pc 2.7% vs psx 58.9% non-black. RE why the vortex node isn't emitted by the object walk at the void beat. This scene is BEFORE free-roam in the newgame path (blocks reaching #3b via newgame).
+- **notes:** NARROWED: vortex IS walked + perObjFlush submits its 15 geomblks via gt3gt4, but they render invisible (prim-emission bug: transparency/projection/unhandled prim). NOT a walk/cull issue. Deep render-RE + animated pixel-diff + USER eyeball; DEFERRED behind Job #1 per CLAUDE.md.
 
 ## newgame->field transition (s5 leave-demo)
 - **scope:** DEMO sm[0x48]==5 (demo_frame_s5, LEAVE-DEMO teardown) + GAME s48=5 stale-handoff
