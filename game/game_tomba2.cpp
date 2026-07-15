@@ -167,6 +167,16 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // still executes underneath every frame on the faithful task's own call path; it builds the guest
   // OT/packet pool (part of the byte-exact state) — we simply do not read it for the picture here.
   // ============================================================================================
+  // #1 START.BIN boot (0x8010649C): the loader shows a BLACK screen (empty OT — verified: no prims,
+  // FB mean 0) for ~5 frames while it builds the file table / preloads assets. Native producer = a black
+  // loading frame (the observable result, rebuilt from the boot stage's identity, not the OT).
+  if (c->mem_r32(0x801FE00Cu) == 0x8010649Cu) {
+    c->game->fps60.mTier1EligibleCur = false;
+    c->game->gpu.gpu_blank_display();     // zero the display FB -> present shows black
+    c->game->rq.flush(c);
+    return;
+  }
+
   bool field = (c->mem_r32(0x801FE00Cu) == 0x8010637Cu);
   // AUTHORED OT SUB-SCENE (hut/door interior, #49): field-stage but NOT the walkable field — the game's
   // own 9-state area machine (task-sm[0x4c]==3) dispatches fieldRunX→frameX, compositing an authored
