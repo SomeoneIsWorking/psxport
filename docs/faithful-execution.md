@@ -72,3 +72,15 @@ every caller — user 2026-07-07 global-dispatch directive):
 
 Strict gate unchanged: `PSXPORT_SBS_MODE=full PSXPORT_SBS_PCFAITHFUL=1` must hold zero-diff,
 frame by frame, no masks. Every port lands with the SBS run that proves its bytes.
+
+## RECIPE GOTCHA: GuestFrame RAII is UNSAFE for functions with tail-jump returns (2026-07-15)
+A `GuestFrame<Size,N>` RAII guard restores sp + spills in its DESTRUCTOR, which fires on EVERY scope
+exit. That is WRONG for a guest fn that has early `default: rec_dispatch(target); return;` branches
+which in ground truth are MIPS `jr` TAIL-JUMPS that skip the frame restore entirely (the gen epilogue-
+restore list from `tools/abi_extract.py <addr> --contract` names only the ONE real return label). Using
+RAII there restores/ascends sp on a path gen never does -> a subtle, rarely-triggered byte-exactness bug.
+FIX: for such functions use a MANUAL (non-RAII) spill/restore, but keep it readable + documented-once via
+a named `constexpr GuestFrameSpill kSpills[]` table (the type guest_abi.h defines) driving the spill/
+restore loops — the ABI contract is spelled out once, without the lifetime model the control flow
+violates. Check the abi_extract `--contract` epilogue-restore list: if it names >1 return site OR the fn
+has rec_dispatch-return tail-jumps, do NOT use GuestFrame RAII. Reference: beh_actor_tomba_proximity_combat.cpp.

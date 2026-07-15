@@ -21,30 +21,38 @@
 #include "core.h"
 #include "game.h"
 #include "beh_actor_tomba_proximity_combat.h"
+#include "guest_abi.h"   // GuestFrameSpill — named spill-table vocabulary only, see below
 void rec_dispatch(Core*, uint32_t);
 
+// READABILITY PASS (2026-07-15, code-quality pilot — see game/render/node_xform.cpp /
+// game/audio/sequencer.cpp for the recipe): this file's own banner (top of file) already flags the
+// body as a dense MIPS transliteration with ~30 conditional edges across 2 jump tables and "high
+// transcription risk for a manual restructure" — the same class of risk sequencer.cpp's dense SPU
+// pipelines document (a prior hand-restructure there introduced 2 real re-converging-branch bugs).
+// Left fully register-literal per the task's own escape hatch for exactly this shape.
+//
+// NOT converted to GuestFrame<72,9> RAII despite matching its (size, spill-table) contract exactly
+// (see kSpills below, verified against `tools/abi_extract.py 0x800527C8 --contract`): this function
+// has TWO early `return;` statements (the jump-table `default: rec_dispatch(...); return;` cases,
+// see L_800529AC's and L_80052D70's switches below) that in GROUND TRUTH skip the frame restore
+// entirely — a real MIPS `jr` tail-jump out of the function, not a call-return through this
+// function's own epilogue (confirmed: abi_extract's epilogue-restores report lists ONLY
+// L_80053060, nowhere else). GuestFrame's destructor fires on EVERY scope exit including those two
+// `return;`s, which would restore+ascend sp on a path ground truth does NOT — a real behavior
+// divergence RAII can't represent here. Kept as manual spill/restore instead; kSpills documents the
+// contract for the record without invoking a lifetime model this function's control flow violates.
+static constexpr GuestFrameSpill kSpills[] = {
+    {22, 56}, {23, 60}, {31, 64}, {21, 52}, {20, 48}, {19, 44}, {18, 40}, {17, 36}, {16, 32}};
+
 void beh_actor_tomba_proximity_combat(Core* c) {  // FUN_800527C8
-  // VERIFY FIX: ground truth (generated/shard_3.c:13494 gen_func_800527C8) descends its OWN -72
-  // guest frame and spills r16-r23+ra before doing anything else, restoring on the way out. The
-  // original draft omitted this entirely (no c->r[29] touch at all) — a real fidelity bug: those
-  // spill/restore writes land at c->r[29]+32..+64, which is part of the byte-exact guest-stack
-  // contract (fleet-workflow.md #1.4 "guest-stack frames: MIRROR, never revert/exclude"; pattern
-  // reference: Cull::performBaseCullFramed in game/render/cull.cpp). Captured live BEFORE self/G
-  // overwrite r22/r23, mirrored into the Core register file (not just local aliases) so the
-  // restore reads back the correct values.
-  const uint32_t save16 = c->r[16], save17 = c->r[17], save18 = c->r[18], save19 = c->r[19];
-  const uint32_t save20 = c->r[20], save21 = c->r[21], save22 = c->r[22], save23 = c->r[23];
-  const uint32_t saveRa = c->r[31];
+  // Prologue: descend the guest frame (-72) and spill r16-r23+ra to kSpills' offsets, captured
+  // BEFORE self/G below overwrite r22/r23 (i.e. these are the CALLER's live values, matching the
+  // real callee-save contract). Restored manually at L_80053060 below — NOT at the two early
+  // `default:` returns inside the switches, matching ground truth exactly (see banner above).
+  uint32_t saved[9];
+  for (int i = 0; i < 9; i++) saved[i] = c->r[kSpills[i].reg];
   c->r[29] -= 72;
-  c->mem_w32(c->r[29] + 56, save22);
-  c->mem_w32(c->r[29] + 60, save23);
-  c->mem_w32(c->r[29] + 64, saveRa);
-  c->mem_w32(c->r[29] + 52, save21);
-  c->mem_w32(c->r[29] + 48, save20);
-  c->mem_w32(c->r[29] + 44, save19);
-  c->mem_w32(c->r[29] + 40, save18);
-  c->mem_w32(c->r[29] + 36, save17);
-  c->mem_w32(c->r[29] + 32, save16);
+  for (int i = 0; i < 9; i++) c->mem_w32(c->r[29] + (uint32_t)kSpills[i].offset, saved[i]);
 
   uint32_t self = 0, G = 0;
 
@@ -519,19 +527,11 @@ L_80053040:;
 L_80053058:;
   c->r[4] = self + (uint32_t)0; rec_dispatch(c, 0x8007A624u);
 L_80053060:;
-  // Epilogue mirrors the prologue descent above (ground truth 13985-13998). NOTE: the two
-  // jump-table `default: rec_dispatch(...); return;` cases earlier in this function do NOT reach
-  // here — that matches ground truth exactly (a real MIPS `jr` tail-jump out of the function, not
-  // a call-return, so no restore happens on that path either in the substrate).
-  c->r[31] = c->mem_r32(c->r[29] + 64);
-  c->r[23] = c->mem_r32(c->r[29] + 60);
-  c->r[22] = c->mem_r32(c->r[29] + 56);
-  c->r[21] = c->mem_r32(c->r[29] + 52);
-  c->r[20] = c->mem_r32(c->r[29] + 48);
-  c->r[19] = c->mem_r32(c->r[29] + 44);
-  c->r[18] = c->mem_r32(c->r[29] + 40);
-  c->r[17] = c->mem_r32(c->r[29] + 36);
-  c->r[16] = c->mem_r32(c->r[29] + 32);
+  // Epilogue: restore r16-r23+ra from kSpills' offsets and ascend sp — the mirror of the manual
+  // prologue above. NOTE: the two jump-table `default: rec_dispatch(...); return;` cases earlier in
+  // this function do NOT reach here — that matches ground truth exactly (see the file banner's
+  // explanation of why this is manual spill/restore rather than GuestFrame RAII).
+  for (int i = 0; i < 9; i++) c->r[kSpills[i].reg] = c->mem_r32(c->r[29] + (uint32_t)kSpills[i].offset);
   c->r[29] += 72;
   return;
 }
