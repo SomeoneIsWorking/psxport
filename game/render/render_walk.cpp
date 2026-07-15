@@ -258,15 +258,30 @@ void Render::titleNative() { Core* c = mCore;
   //     the baked TOMBA!2 logo + character art + the "(C) 1997-2000 WHOOPEE CAMP" copyright line.
   quad(RQ_BACKGROUND, 0,   -8, 256, 240, 0, 0, 640, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9A
   quad(RQ_BACKGROUND, 256, -8,  64, 240, 0, 0, 768, 256, /*mode=*/1, /*raw=*/1, 640, 511, 0x80,0x80,0x80);  // tpage 0x9C
-  // (2) the New Game / Load Game menu = 2 op-0x2C/0x2D FT4 text-image quads + a cursor icon (fn 0x8007E2F8,
-  //     decoded packets). The SELECTED item is op 0x2D (raw, full-bright); the unselected is op 0x2C
-  //     modulated by color 0x50 (dimmed) — that IS the selection highlight. Cursor icon points at the row.
-  // STOPGAP: default-selection snapshot (New Game selected). The live selection + cursor row come from the
-  // menu cursor state sm[0x68] (docs/native-render-2d-panel.md) — read it here once the s2 row layout is
-  // confirmed on a live dump; until then this shows the boot-default (New Game highlighted).
-  quad(RQ_OVERLAY, 50,  172, 80, 16,  0,   1,   832, 256, /*mode=*/0, /*raw=*/1, 880, 509, 0x80,0x80,0x80); // "New Game" (selected, raw)
-  quad(RQ_OVERLAY, 186, 172, 88, 16,  80,  1,   832, 256, /*mode=*/0, /*raw=*/0, 880, 510, 0x50,0x50,0x50); // "Load Game" (unselected, dimmed)
-  quad(RQ_OVERLAY, 32,  168, 16, 16,  80,  112, 384, 0,   /*mode=*/0, /*raw=*/1, 480, 247, 0x80,0x80,0x80); // cursor icon
+  // (2) the New Game / Load Game menu = 2 op-0x2C/0x2D FT4 text-image quads + a cursor icon (fn 0x8007E2F8
+  //     family, docs/native-render-2d-panel.md). A HORIZONTAL 2-item menu (both rows at y=172). The SELECTED
+  //     item is op 0x2D (raw, full-bright, color 0x80); the unselected is op 0x2C modulated by color 0x50
+  //     (dimmed) — that IS the selection highlight. The cursor icon sits left of the selected item.
+  //  LIVE selection (read-only, no guest write): sel = u8 at sm+0x68, sm = *(u32*)0x1F800138. Derived
+  //  EMPIRICALLY from the reference renderer (PSXPORT_RENDER_PSX + otattr; Right/Left move the cursor):
+  //    sel==0 -> New Game raw @(50,172), Load Game dim @(186,172), cursor @(32,168)
+  //    sel==1 -> New Game dim,           Load Game raw,            cursor @(172,168)
+  //  Cursor X = 32 + 140*sel (2-point fit for the 2-item menu; the xSel caller in the DEMO overlay
+  //  0x80106xxx is not traced). Per-item rect/uv/clut are the item's own baked glyph strip — invariant to
+  //  selection; only raw-vs-modulated (and the cursor row) flip. sel==0 byte-matches the old boot snapshot.
+  uint32_t sm  = c->mem_r32(0x1F800138u);
+  int      sel = sm ? c->mem_r8(sm + 0x68u) : 0;
+  // one menu item: selected -> op 0x2D raw (bright, RGB ignored); unselected -> op 0x2C modulated by 0x50.
+  auto menuItem = [&](int item, int x, int y, int w, int h, int u, int clut_y) {
+    bool seld = (sel == item);
+    int  raw  = seld ? 1 : 0;
+    int  col  = seld ? 0x80 : 0x50;
+    quad(RQ_OVERLAY, x, y, w, h, u, 1, 832, 256, /*mode=*/0, raw, 880, clut_y, col, col, col);
+  };
+  menuItem(0, 50,  172, 80, 16, 0,  509);   // "New Game"
+  menuItem(1, 186, 172, 88, 16, 80, 510);   // "Load Game"
+  int cursor_x = 32 + 140 * sel;            // sel 0 -> 32, sel 1 -> 172 (empirical 2-point fit)
+  quad(RQ_OVERLAY, cursor_x, 168, 16, 16, 80, 112, 384, 0, /*mode=*/0, /*raw=*/1, 480, 247, 0x80,0x80,0x80); // cursor icon
 }
 
 void Render::sceneNative() { Core* c = mCore;
