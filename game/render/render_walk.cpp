@@ -290,38 +290,44 @@ void Render::sceneNative() { Core* c = mCore;
     // (b) SCENE TABLE (grass / props / sky-sea backdrop) — native world-coord render of 0x800F2418.
     // Gated on mSceneTableTrusted (computed once, top of this function — see render.h for the writeup).
     if (mSceneTableTrusted) fieldEntityRender(0x800F2418u);
-    // (c) the field's OBJECTS — walk the 3 entity lists, render each object's geomblk natively (real depth).
-    for (int h = 0; h < 3; h++) {
-      uint32_t n = c->mem_r32(HEADS[h]);
-      for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
-        if (c->mem_r8(n + 1) == 0) continue;   // per-frame visibility marker (guest cull chain, cull.cpp)
-        if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;   // no render commands
-        c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
-        c->r[4] = n;
-        perObjFlush();
-      }
-    }
-    // (d) TOMBA (the master "G" block, ActorTomba::G_ADDR = 0x800E7E80) — verified RE (docs/port-
-    // progress.md "KEY FINDING", game/player/actor_tomba.h): the player is NOT a member of any of the
-    // 3 doubly-linked entity lists above (he is excluded from walkAll/walkList2/walkAux by design — his
-    // per-frame tick runs off the per-area callback table instead, see area_seaside_perframe.cpp). The
-    // generic entity-list walk above therefore never visits him and his geomblk render commands (the
-    // SAME node+0xC0 array / node+8 count shape every other object uses — live-verified at the seaside
-    // free-roam checkpoint: G+8=G+9=0x11, cmd ptrs 0x800F2740.. all valid) were never flushed — this was
-    // the pc_render "Tomba invisible" bug. Submit him the same way as any HEADS-list node: read-only,
-    // same generic perObjFlush path, no guest writes.
-    {
-      uint32_t g = ActorTomba::G_ADDR;
-      if (c->mem_r8(g + 8) != 0 && c->mem_r8(g + 9) != 0) {
-        c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(g + 8);
-        c->r[4] = g;
-        perObjFlush();
-      }
-    }
+    // (c)+(d) the field's OBJECTS + Tomba — factored into fieldObjectsRender() so Fps60's interp present
+    // can re-run the SAME walk under lerped per-object transforms (docs/fps60-rework.md step 2b).
+    fieldObjectsRender();
   }
   c->r[4] = saved;
   if (cfg_dbg("scenenative")) { int gpu_seen3d_this_frame(Core*); static int f = 0; if ((f++ % 60) == 0)
     fprintf(stderr, "[scenenative] objs=%ld cmds=%ld seen3d=%d\n", c->mRender->stats.snObjs, c->mRender->stats.snCmds, gpu_seen3d_this_frame(c)); }
+}
+
+// The field OBJECT pass — the (c)+(d) walk factored out of sceneNative (above) so it can be re-run at the
+// fps60 interp present under lerped per-object transforms (mObjOverrideOn). Pure reads (entity lists,
+// object nodes) + queue emits via perObjFlush → projComposeObject (→ Fps60::projObj) → gt3gt4. No trust-
+// latch / per-frame-state mutation (those stay in sceneNative), so re-running it is safe under the
+// present-time invariant. (d) Tomba: the player is not in the 3 entity lists (per-area callback tick);
+// flushed the same generic way — this was the "Tomba invisible" fix.
+void Render::fieldObjectsRender() {
+  Core* c = mCore;
+  static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
+  uint32_t saved = c->r[4];
+  for (int h = 0; h < 3; h++) {
+    uint32_t n = c->mem_r32(HEADS[h]);
+    for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
+      if (c->mem_r8(n + 1) == 0) continue;                             // per-frame visibility marker
+      if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;    // no render commands
+      c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
+      c->r[4] = n;
+      perObjFlush();
+    }
+  }
+  {
+    uint32_t g = ActorTomba::G_ADDR;
+    if (c->mem_r8(g + 8) != 0 && c->mem_r8(g + 9) != 0) {
+      c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(g + 8);
+      c->r[4] = g;
+      perObjFlush();
+    }
+  }
+  c->r[4] = saved;
 }
 // ===================================================================================================
 // RETIRED 2026-07-07 (issue #32, USER: "PSX render path always active underneath; PC renderer

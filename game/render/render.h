@@ -158,6 +158,13 @@ public:
   // widescreen re-include pass). Was ov_scene_native.
   void sceneNative();
 
+  // fieldObjectsRender: the field's OBJECT pass — walk the 3 entity lists + Tomba's G-block and flush each
+  // live object's geomblk (perObjFlush → projComposeObject → gt3gt4). Factored OUT of sceneNative (which
+  // mutates per-frame trust latches and can't be re-run) so Fps60's interp present can RE-RUN it under the
+  // lerped per-object transforms (mObjOverrideOn) — the SAME object walk the real frame ran, replacing the
+  // matchAndLerp output heuristic (docs/fps60-rework.md step 2b). Pure reads + queue emits, no state mutation.
+  void fieldObjectsRender();
+
   // fieldEntityRender: world-space GT3/GT4 scene-table renderer. Walks the entity-list struct at
   // `es` (per-list ptr headers at es+0x10..; packed geometry base at es+0xC; count at es+6),
   // dispatches each entry through submit_poly_gt3_native / submit_poly_gt4_native under the
