@@ -37,11 +37,33 @@ it with the psx_render reference (and SBS core B).
 | 2 | TITLE screen (logo + New/Load menu + copyright) | `0x801FE00C == 0x801062E4` s2 | `titleNative()` (logo sprites + menu FT4 quads, decoded) | ✅ native — RMSE 0 vs reference |
 | 2a| DEMO attract (real field-engine demo, s7 after idle) | `0x801062E4` sm[0x48]==7 | reuse `sceneNative()` — it's the REAL field (Sop::fieldMode + AreaSlots::updateTail); NOT FMV | ⬜ blanks black now; wire s7→field producer once #3b lands |
 | 3 | Walkable field — WORLD | `0x801FE00C == 0x8010637C` | `sceneNative()` (terrain+entities+objects+backdrop, real depth) | ✅ native |
-| 3b| Walkable field — 2D OVERLAY (HUD/dialog/item-bubble/menu/text) | same, `s_ot_2d_drawn>0` | none | ⛔ crashes when any overlay prim present |
+| 3b-A| Field free-roam blocker — UNTAGGED WORLD OBJECTS (not HUD) | same, `s_ot_2d_drawn>0` | own the object emit leaves so they register obj_depth / native-cover | ⛔ CRITICAL — blocks all gameplay in pc_render |
+| 3b-B| Field genuine 2D HUD/dialog/text (interaction-triggered) | same | font glyphEmit dual-emit + panel.cpp (specs ready) | ⛔ (not in free-roam) |
 | 4 | Hut/door interior authored sub-scene | field + `task-sm[0x4c]==3` | none (objects share HEADS[0..1] via TransitionState3; room geo + interior camera unbuilt) | ⛔ |
 | 5 | SOP intro narration cutscene | field + overlay-sig `0x3C021F80` @ `0x80109450` | MOSTLY native (backdrop+terrain+entities+objects+swirl all via `sceneNative`/native submitters) | ⬜ wiring: route `sceneNative` for sop_narration + beat-5(void) backdrop guard + font-to-queue (shared #3b) |
 
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
+
+**#3b is TWO tracks (field-2D RE scout, 2026-07-15) — the free-roam blocker is NOT HUD:**
+- **Track A (CRITICAL, blocks all gameplay in pc_render).** Free-roam has ZERO HUD/dialog. The prims that
+  trip `s_ot_2d_drawn` (op 0x2D/0x65/0x5E) are GTE-projected WORLD objects whose substrate emit leaves
+  (`func_8003C5F8`/`func_8003C788`, `rec_dispatch` vtables e.g. 0x80122974, unowned walkers 0x80025D98/
+  0x8003B588, op-0x5E emitter 0x8013E9D8) DON'T register an `obj_depth` span — so the twoDOnly walk
+  mis-classifies them RQ_HUD and counts them. FIX: own those leaves like the billboard family
+  (`withDepthTag`→`gpu_obj_depth_add`, render_internal.h:85) so they carry obj_depth → RQ_WORLD → not
+  counted. Map-first; grow from `game/render/objlist_walk.cpp` (already RE'd). This is "identity from
+  NATIVE OWNERSHIP of the emitter, not span-stamping." The hut (#4) shares this — its probe hits the same
+  untagged prims.
+- **Track B (interaction-triggered HUD/dialog/text).** Font glyphs (glyphEmit dual-emit — the shared
+  producer below), dialog panel (`panelBuild`/`panelFill`/`borderTiles` → `game/ui/panel.cpp`, spec in
+  docs/native-render-2d-panel.md), `HudGaugeEmitter` (0x8004FD30, LIVE — confirm it dual-emits when a gauge
+  is up). Retires the transitional `ui_span` observer hack on 0x8007D594.
+- **Completeness gate (self-completing).** Every owned 2D builder must (a) push its host quad to the queue
+  AND (b) register its guest packet-pool span in a covered registry (`gpu_ui_span_add`). twoDOnly counts a
+  prim iff RQ_HUD/OVERLAY AND not covered (obj_depth OR ui_span OR native_cover). Tighten the POLY path
+  (gpu_native.cpp:938) to the sprite-path shape (:1118). `s_ot_2d_drawn>0 → abort` stays: an un-owned
+  builder (or one that forgot span registration) keeps count>0 and crashes with the scene identity. No
+  allowlist. guest-count − covered-count must reach 0, lowered only by genuine ownership.
 
 **Shared foundation — font→queue producer.** #3b (field HUD/dialog text), #5 (SOP narration text), and
 #2a text all use `Font::glyphEmit` (0x80078CA8, LIVE) which writes GUEST packets, not the queue. Add ONE
