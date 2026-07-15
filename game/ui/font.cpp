@@ -18,63 +18,104 @@
 // (sb/sh/sw) — they are the engine-interface state the rest of the engine + retained PSX content read.
 #include "core.h"
 #include "ui/font.h"
+#include "guest_abi.h"   // GuestFrame/guest_fn — ABI vocabulary (2026-07-15 readability pass)
 #include <stdint.h>
 
 void rec_dispatch(Core*, uint32_t);   // run a kept (libgpu/sound) callee in-context
 
+namespace {
+// Font-bank engine-state bytes (own leaves FUN_800963a0/FUN_80096370).
+constexpr uint32_t kFontBankAddr  = 0x80105CECu;
+constexpr uint32_t kFontBank2Addr = 0x80105D28u;
+
+// Glyph-class table (FUN_800752b4): 24 entries, stride 12, class byte at entry+8.
+constexpr uint32_t kGlyphClassTableBase   = 0x800BE238u;
+constexpr uint32_t kGlyphClassStride      = 12u;
+constexpr uint32_t kGlyphClassFieldOffset = 8u;
+constexpr int32_t  kGlyphClassCount       = 24;
+
+// Direct engine-state fields FUN_80075130 seeds around the libgpu FntOpen block.
+constexpr uint32_t kTextCursorFlagAddr = 0x800BED78u;   // sw 0                     [800751a0/9c]
+constexpr uint32_t kTextUnusedFlagAddr = 0x800BED80u;   // sh -1 (jal #9 delay slot)
+constexpr uint32_t kLineTableHeadAddr  = 0x800BE358u;   // sw 0 (once)
+constexpr uint32_t kLineTableRowsAddr  = 0x800BE3D6u;   // 14x sh 0, stepping -8
+constexpr uint32_t kLineTableRowCount  = 14u;
+constexpr uint32_t kLineTableRowStride = 8u;
+constexpr uint32_t kTextStateByteA     = 0x800BE22Au;   // sb 0
+constexpr uint32_t kTextStateByteB     = 0x800BE22Bu;   // sb 0
+
+// FntOpenParams — typed lens over the local FntOpen-call struct FUN_80075130 builds on its OWN
+// stack frame at sp+16 (12 bytes: count u32@0, flags u32@4, size u16@8 == u16@10). The two
+// dispatched libgpu callees (0x80098330/0x80098d30) read this struct by address (a0 = sp+16), so
+// the frame must be real guest-stack bytes, not a native local.
+struct FntOpenParams {
+  Core* c;
+  uint32_t base;   // == fsp + 16
+  void setCount(int32_t v) { c->mem_w32(base + 0u, (uint32_t)v); }
+  void setFlags(int32_t v) { c->mem_w32(base + 4u, (uint32_t)v); }
+  // Both halves store the SAME value — sp+26 is NOT a computed return, the original `sh v0,26(sp)`
+  // runs in the #10 call's delay slot with v0 still holding the size assigned just above.
+  void setSize(uint16_t v) { c->mem_w16(base + 8u, v); c->mem_w16(base + 10u, v); }
+};
+
+// Font::init's own guest-stack frame (sp-=48; sw ra,40(sp)) — confirmed via
+// `tools/abi_extract.py 0x80075130 --contract`: the ONLY prologue spill is ra at sp+40.
+constexpr GuestFrameSpill kInitSpills[] = {{31, 40}};
+}  // namespace
+
 // FUN_800963a0 — font-bank selector. If ((bank-1)&0xff) < 24, store the bank byte at
-// 0x80105cec and return the sign-extended low byte; otherwise return -1. (At the init call bank=24 →
-// (24-1)&0xff = 23 < 24 → store 24, return 24.) Leaf, no sub-calls.
+// kFontBankAddr and return the sign-extended low byte; otherwise return -1. (At the init call
+// bank=24 → (24-1)&0xff = 23 < 24 → store 24, return 24.) Leaf, no sub-calls (frame_size=0).
 void Font::bankSelect(uint32_t bank) {
   Core* c = this->core;
   uint32_t v = (bank - 1) & 0xff;
   if (v < 24) {
-    c->mem_w8(0x80105cecu, (uint8_t)bank);
+    c->mem_w8(kFontBankAddr, (uint8_t)bank);
     c->r[2] = (uint32_t)(int32_t)(int8_t)(uint8_t)bank;   // (bank<<24)>>24 : sign-extend low byte
   } else {
     c->r[2] = (uint32_t)-1;
   }
 }
 
-// FUN_80096370 — font-bank2 store. `*0x80105d28(sb) = bank; jr ra`. Leaf; does NOT set v0
+// FUN_80096370 — font-bank2 store. `*kFontBank2Addr(sb) = bank; jr ra`. Leaf; does NOT set v0
 // (recomp body left v0 untouched — the caller ignores it). At the init call bank=0.
 void Font::bank2Store(uint32_t bank) {
-  this->core->mem_w8(0x80105d28u, (uint8_t)bank);
+  this->core->mem_w8(kFontBank2Addr, (uint8_t)bank);
 }
 
-// FUN_800752b4 — glyph-class table fill. Iterates i = 0..23 over a 24-entry table at base
-// 0x800be238 (stride 12, write byte at entry+8). Thresholds from cls: t1=24-cls, t0=16-cls, a3=12-cls,
-// a4=8-cls. The slt/bne tests branch AWAY when (i<thr) is true, so the fall-through (i>=thr) assigns:
+// FUN_800752b4 — glyph-class table fill. Iterates i = 0..23 over the 24-entry table. Thresholds
+// from cls: t1=24-cls, t0=16-cls, a3=12-cls, a4=8-cls. The slt/bne tests branch AWAY when (i<thr)
+// is true, so the fall-through (i>=thr) assigns:
 //   i>=t1 ->4 ; i>=t0 ->1 ; i>=a3 ->3 ; i>=a4 ->2 ; else ->0   (exclusive cascade, first match wins).
-// Returns the count in v0 but the caller IGNORES it. Only writes 0x800be238 + i*12 + 8 (sb).
+// Returns the count in v0 but the caller IGNORES it.
 void Font::glyphClassFill(int32_t cls) {
   Core* c = this->core;
-  const uint32_t base = 0x800be238u;
   int32_t t1 = 24 - cls, t0 = 16 - cls, a3 = 12 - cls, a4 = 8 - cls;
-  for (int i = 0; i < 24; i++) {
+  for (int i = 0; i < kGlyphClassCount; i++) {
     uint8_t val;
     if      (i >= t1) val = 4;
     else if (i >= t0) val = 1;
     else if (i >= a3) val = 3;
     else if (i >= a4) val = 2;
     else              val = 0;
-    c->mem_w8(base + (uint32_t)i * 12 + 8, val);
+    c->mem_w8(kGlyphClassTableBase + (uint32_t)i * kGlyphClassStride + kGlyphClassFieldOffset, val);
   }
-  c->r[2] = 24;   // loop-exit count (caller ignores)
+  c->r[2] = (uint32_t)kGlyphClassCount;   // loop-exit count (caller ignores)
 }
 
 // FUN_80075130 — font / text system init orchestrator. No args, no return. Mirrors the recomp frame
 // (sp -= 48; sw ra,40(sp)) because dispatched callees #11/#13 read a struct at sp+16. Owns the direct
-// writes + the 3 engine callees; rec_dispatches the 8 libgpu/sound callees IN ORDER, IN-CONTEXT.
+// writes + the 3 engine callees; guest_fn-dispatches the 8 libgpu/sound callees IN ORDER, IN-CONTEXT,
+// using the jal-site ra constants `tools/abi_extract.py 0x80075130 --contract` reports per call site
+// (single exit point — safe for GuestFrame RAII per the tail-jump gotcha in docs/faithful-execution.md).
 void Font::init() {
   Core* c = this->core;
-  uint32_t ra = c->r[31], sp = c->r[29];
-  c->r[29] = sp - 48;
+  GuestFrame<48, 1> frame(c, kInitSpills);
   uint32_t fsp = c->r[29];
-  c->mem_w32(fsp + 40, ra);                 // sw ra,40(sp)
+  FntOpenParams fntOpen{c, fsp + 16u};
 
   // #1 sound/libgs/lib init — dispatched
-  rec_dispatch(c, 0x8008e040u);
+  guest_fn(c, 0x8008e040u, 0x80075140u);
 
   // #2 FUN_800963a0(24) — own
   bankSelect(24);
@@ -82,53 +123,50 @@ void Font::init() {
   bank2Store(0);
 
   // #4 FUN_80098f90(0, 0xffffff) — dispatched
-  c->r[4] = 0; c->r[5] = 0x00ffffffu; rec_dispatch(c, 0x80098f90u);
+  guest_fn(c, 0x80098f90u, 0x80075160u, 0u, 0x00ffffffu);
   // #5 FUN_80091d70(1) — dispatched
-  c->r[4] = 1; rec_dispatch(c, 0x80091d70u);
+  guest_fn(c, 0x80091d70u, 0x80075168u, 1u);
   // #6 FUN_80091b50(0x800be3d8, 14, 1) — dispatched
-  c->r[4] = 0x800be3d8u; c->r[5] = 14; c->r[6] = 1; rec_dispatch(c, 0x80091b50u);
+  guest_fn(c, 0x80091b50u, 0x8007517Cu, 0x800be3d8u, 14u, 1u);
   // #7 FUN_80090700(127, 127)  (a1 = a0 in the original delay slot) — dispatched
-  c->r[4] = 127; c->r[5] = 127; rec_dispatch(c, 0x80090700u);
+  guest_fn(c, 0x80090700u, 0x80075188u, 127u, 127u);
   // #8 FUN_80090980() — dispatched
-  rec_dispatch(c, 0x80090980u);
+  guest_fn(c, 0x80090980u, 0x80075190u);
 
-  // direct: *0x800bed78 = 0 (sw)  [800751a0/9c]
-  c->mem_w32(0x800bed78u, 0);
-  // *0x800bed80 = -1 (sh)  — original is the DELAY SLOT of the #9 jal (v0=-1), runs before #9 body.
-  c->mem_w16(0x800bed80u, 0xffff);
+  // direct: *kTextCursorFlagAddr = 0 (sw)  [800751a0/9c]
+  c->mem_w32(kTextCursorFlagAddr, 0);
+  // *kTextUnusedFlagAddr = -1 (sh) — original is the DELAY SLOT of the #9 jal (v0=-1), runs before
+  // #9's body.
+  c->mem_w16(kTextUnusedFlagAddr, 0xffff);
   // #9 FUN_800752b4(2) — own
   glyphClassFill(2);
 
-  // direct: *0x800be358 = 0 (sw)  [once], then 14× sh 0 at 0x800be3d6 stepping -8.
-  c->mem_w32(0x800be358u, 0);
-  for (uint32_t addr = 0x800be3d6u, n = 0; n < 14; n++, addr -= 8)
+  // direct: kLineTableHeadAddr = 0 (sw, once), then kLineTableRowCount x sh 0 stepping backward.
+  c->mem_w32(kLineTableHeadAddr, 0);
+  for (uint32_t addr = kLineTableRowsAddr, n = 0; n < kLineTableRowCount; n++, addr -= kLineTableRowStride)
     c->mem_w16(addr, 0);
 
-  // stack struct consumed by the dispatched #11/#13 (FntOpen): note sp+26 stores the SAME 16384, not a
-  // return value (the original `sh v0,26(sp)` runs in #10's delay slot with v0 still = 16384).
-  c->mem_w32(fsp + 16, 7);
-  c->mem_w32(fsp + 20, 258);
-  c->mem_w16(fsp + 24, 16384);
-  c->mem_w16(fsp + 26, 16384);
+  // FntOpen params consumed by the dispatched #11/#13 (they read the struct by address, a0=fsp+16).
+  fntOpen.setCount(7);
+  fntOpen.setFlags(258);
+  fntOpen.setSize(16384);
 
   // #10 FUN_80098ce0(1) — dispatched
-  c->r[4] = 1; rec_dispatch(c, 0x80098ce0u);
-  // #11 FUN_80098330(sp+16) — dispatched (reads the struct above)
-  c->r[4] = fsp + 16; rec_dispatch(c, 0x80098330u);
+  guest_fn(c, 0x80098ce0u, 0x800751F8u, 1u);
+  // #11 FUN_80098330(fsp+16) — dispatched (reads the FntOpen struct above)
+  guest_fn(c, 0x80098330u, 0x80075200u, fntOpen.base);
   // #12 FUN_80098150(1) — dispatched
-  c->r[4] = 1; rec_dispatch(c, 0x80098150u);
-  // #13 FUN_80098d30(sp+16) — dispatched (reads *(sp+16))
-  c->r[4] = fsp + 16; rec_dispatch(c, 0x80098d30u);
+  guest_fn(c, 0x80098150u, 0x80075208u, 1u);
+  // #13 FUN_80098d30(fsp+16) — dispatched (reads the FntOpen struct)
+  guest_fn(c, 0x80098d30u, 0x80075210u, fntOpen.base);
   // #14 FUN_80098db0(1, 0xffffff) — dispatched
-  c->r[4] = 1; c->r[5] = 0x00ffffffu; rec_dispatch(c, 0x80098db0u);
+  guest_fn(c, 0x80098db0u, 0x80075220u, 1u, 0x00ffffffu);
 
-  // direct: *0x800be22a = 0 (sb), *0x800be22b = 0 (sb)
-  c->mem_w8(0x800be22au, 0);
-  c->mem_w8(0x800be22bu, 0);
+  // direct: kTextStateByteA/B = 0 (sb each)
+  c->mem_w8(kTextStateByteA, 0);
+  c->mem_w8(kTextStateByteB, 0);
 
-  // mirror epilogue: lw ra,40(sp); addiu sp,48; jr ra
-  c->r[29] = sp;
-  c->r[31] = ra;
+  // frame's destructor: lw ra,40(sp); addiu sp,48; jr ra
 }
 
 // FUN_80073750 — pure string measurer (disas 0x80073750..0x80073798, no sub-calls):
@@ -161,39 +199,38 @@ int32_t Font::measureLineWidth(Core* c, uint32_t strAddr) {
   return prefix;
 }
 
-// FUN_80079374 — WIDE-RE TIER DRAFT (2026-07-09), UNWIRED/UNVERIFIED. See header doc for the
-// full RE. Mirrors the guest frame (sp -= 32, ra spilled at +24 — the recomp body's ONLY spill;
-// the function otherwise reads args straight out of registers) because the callee it tail-calls
-// (still-unowned FUN_80078CA8) is reached via rec_dispatch and expects the caller's stack-arg
-// convention (5th arg at sp+16 of ITS caller's frame, i.e. THIS frame after the sp-=32 descent).
-void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color) {
-  uint32_t saved_sp = c->r[29];
-  uint32_t saved_ra = c->r[31];
+namespace {
+// Font::drawText's guest-stack frame (sp-=32; sw ra,24(sp)) — confirmed via
+// `tools/abi_extract.py 0x80079374 --contract`: the only real register spill is ra at sp+24 (the
+// contract's other sp+16/sp+48 "r8" entries are the incoming/outgoing `color` stack argument, not
+// a callee-save spill — handled explicitly below, same as the recomp body does).
+constexpr GuestFrameSpill kDrawTextSpills[] = {{31, 24}};
 
-  c->r[29] = saved_sp - 32;                 // addiu sp,sp,-32
-  c->mem_w32(c->r[29] + 24, saved_ra);      // sw ra,24(sp)  (LIVE incoming ra)
+constexpr uint32_t kScrGlyphAdvance = 0x1F800180u;   // per-call horizontal-advance scratch (role
+                                                      // unconfirmed; glyphEmit reads it back)
+}  // namespace
+
+// FUN_80079374 — WIDE-RE TIER DRAFT (2026-07-09), UNWIRED/UNVERIFIED. See header doc for the
+// full RE. Mirrors the guest frame because the callee it tail-calls (still-unowned FUN_80078CA8)
+// is reached via rec_dispatch and expects the caller's stack-arg convention (5th arg at sp+16 of
+// ITS caller's frame, i.e. THIS frame after the sp-=32 descent) — single exit point, safe for
+// GuestFrame RAII per the tail-jump gotcha in docs/faithful-execution.md.
+void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color) {
+  GuestFrame<32, 1> frame(c, kDrawTextSpills);
 
   // a0' = (int16)x | (y << 16) — packed vertex {x: lo16 sign-extended, y: hi16}
-  uint32_t a0p = (uint32_t)(int32_t)(int16_t)(uint16_t)x | ((uint32_t)y << 16);
+  uint32_t vertex = (uint32_t)(int32_t)(int16_t)(uint16_t)x | ((uint32_t)y << 16);
   // a1' = constant 0x00100008 (original a1/w argument is discarded — confirmed from the gen body)
-  uint32_t a1p = 0x00100008u;
+  constexpr uint32_t kA1Const = 0x00100008u;
   // a2' = (int16)w — sign-extended low16(w) ONLY. BUG FIX (verify pass): the prior draft OR'd a
   // fabricated "h" arg into the upper 16 bits (see font.h header for the call-site trace proving
   // there is no h parameter in the real 5-arg guest ABI: x,y,w,str,color).
-  uint32_t a2p = (uint32_t)(int32_t)(int16_t)(uint16_t)w;
+  uint32_t size = (uint32_t)(int32_t)(int16_t)(uint16_t)w;
 
-  c->mem_w16(0x1F800180u, 32);              // sh v0(32),384(v1) — scratchpad write, role unconfirmed
+  c->mem_w16(kScrGlyphAdvance, 32);         // sh v0(32),384(v1) — scratchpad write, role unconfirmed
 
-  c->r[31] = 0x800793B4u;                   // jal-site ra (matches gen exactly)
-  c->r[4]  = a0p;
-  c->r[5]  = a1p;
-  c->r[6]  = a2p;
-  c->r[7]  = str;
   c->mem_w32(c->r[29] + 16, color);         // 5th arg on stack, at the callee's expected slot
-  rec_dispatch(c, 0x80078CA8u);             // FUN_80078CA8 — font/glyph emitter (still unowned)
-
-  c->r[31] = c->mem_r32(c->r[29] + 24);     // lw ra,24(sp)
-  c->r[29] = saved_sp;                      // addiu sp,sp,32
+  guest_fn(c, 0x80078CA8u, 0x800793B4u, vertex, kA1Const, size, str);   // FUN_80078CA8 (still unowned)
 }
 
 // FUN_80078CA8 — the font/glyph emitter drawText() tail-calls. WIDE-RE TIER DRAFT (2026-07-10,
