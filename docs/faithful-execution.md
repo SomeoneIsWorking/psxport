@@ -96,3 +96,14 @@ RULE: prefer refactoring files exercised by autonav/combat/replays (node_xform, 
 For an unexercised file, DEFER the refactor until a repro that fires it exists (then execution-gate).
 The actor_sm_reward refactor (513->205 pokes, structurally 1:1-verified but NOT execution-exercised) is
 held at docs/deferred/actor_sm_reward-refactor.patch — apply + gate when a reward-tally repro exists.
+
+## PRE-EXISTING GAP found during engine.cpp readability pass (2026-07-15, NOT fixed — out of scope)
+Two engine.cpp natives that DO descend a guest frame in gen never mirror it: `Engine::areaLoadState`
+(FUN_80106478, abi_extract --contract: frame_size=24, ra@+20 r16@+16) and `Engine::uploadModeSprites`
+(FUN_80067DA8, frame_size=48, ra@+40 r19@+36 r18@+32 r17@+28 r16@+24) — both run with sp/registers
+untouched relative to what gen spills. Under the "MIRROR THE GUEST STACK" rule this is debt: if SBS
+ever compares those stack windows (currently 0-diff — likely because nothing downstream reads that
+scratch before the frame is overwritten, or the compared range doesn't reach it), it will fatal-diff.
+Left AS-IS in the 2026-07-15 readability pass (b7a8c52-recipe cluster: s48_0/s48_1/s48_2_frame/
+submode0/areaLoadState) because adding the frame is a BEHAVIOR change (new guest-stack bytes), not a
+readability one — record here so a future pass fixes it deliberately rather than rediscovering it.
