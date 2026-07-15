@@ -21,6 +21,10 @@ WHAT IT DOES: scans the native sources, extracts for each native function:
 USAGE:
   tools/codemap.py                      # write docs/code-map.md (the committed index)
   tools/codemap.py --addr 800753d4      # look up one address: who implements it + who depends on it
+                                        #   (warns ⚠ DUAL-OWNERSHIP if authoritatively owned in >=2 files)
+  tools/codemap.py --conflicts          # list every guest addr with cross-file authoritative multi-
+                                        #   ownership — the duplicate-RE smell (a 2nd native owning a
+                                        #   FUN_xxxx some other file already owns; run --addr on each)
   tools/codemap.py --orphans            # list owned addresses whose native is currently ORPHANED
   tools/codemap.py --stdout             # print the full markdown to stdout instead of writing the file
 """

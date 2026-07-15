@@ -72,7 +72,9 @@ workflow defects. Stop and fix them, then resume.
 - **Live bug list** — `tools/bugs.py` (skill `bug-tracker`) is GitHub Issues. Add a bug when the USER
   reports a symptom; flip `ported-unverified` on a plausible fix; promote to findings on confirm.
 - **CHECK before reimplementing any `FUN_xxxx`:** `tools/codemap.py --addr <hex>` — ~350 natives indexed
-  by guest address (`docs/code-map.md`). Regenerate on add/move.
+  by guest address (`docs/code-map.md`; warns ⚠ DUAL-OWNERSHIP if already owned in another file).
+  Regenerate on add/move. `tools/codemap.py --conflicts` lists every duplicate-owned address — a native
+  RE'ing a `FUN_xxxx` some other subsystem already owns (how FUN_80040B48/80040CDC got duplicated).
 - **Status & spine:** `docs/port-progress.md` — boot→gameplay execution spine, per-function status,
   current frontier. Port top-to-bottom. Update in the same commit as the work.
 - **Fleet workflow (operator + subagents):** `docs/fleet-workflow.md` — how to drive ownership at scale
