@@ -43,58 +43,49 @@ it with the psx_render reference (and SBS core B).
 
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
 
-## The 2D-composite pattern (title, menus, HUD, dialog, text)
+## The 2D-composite path — OWN THE BUILDERS (per the existing RE map, not a new subsystem)
 
-Most non-field scenes are 2D composites (sprites + text over a background). "Native" for these = rebuild
-from the overlay's OWN sprite/text DATA (its sprite table, string list, menu cursor state) drawn through a
-native 2D sprite+font+menu subsystem — NOT reading the guest OT/GP0 packet stream. This is the 2D twin of
-sceneNative reading entity lists. Each such scene needs its draw-data RE'd first (Ghidra), then a native
-producer. The TITLE screen (#2) is the first and establishes this subsystem.
+CONSULT FIRST every time (this section replaces an earlier from-scratch RE that mislabeled owned functions):
+`tools/codemap.py --addr <hex>`, `docs/port-progress.md` (CURRENT FRONTIER), `docs/engine_re.md`.
+
+Non-field scenes draw 2D via the game's own builders (sprite/tile/rect/flat/line + font glyphs). The
+established native plan (engine_re.md "Native ownership plan"; NOTE its `NativePrim`/`native_dl` naming is
+RETIRED — the live infra is submit.cpp + projprim depth + gp0_exec tee) is to OWN each builder so it emits
+into the native render queue, exactly like the 3D geometry submit. Already native: `Font::glyphEmit`
+(0x80078CA8), `Font::glyphClassFill` (0x800752b4), `GpuState::ui_span_add` (0x8007D594), the pause/options
+menu (`game/ui/menu.cpp`), dialog text drafted (`DialogTextStream`). Unowned 2D builders remaining:
+`FUN_80092660` (slot-sprite), `FUN_8005019C`+`FUN_8004FFB4` (UI corner sprites + FT4 fills), `FUN_8007CC00`
+(dialog border tiles), and the `MoveImage`/vramcopy that blits pre-rendered art (engine_re.md plan #3).
 
 ## Removed in this milestone
 - fps60 `captureSubscene`/`mSubsceneCur` present-captured-queue shortcut (the hut-interior flicker hack).
 - Every OT-walk fallback branch in `drawOTag`'s pc_render path (hut, SOP, field-2D, non-field else).
 
-## #2 TITLE — investigation state (2026-07-15)
+## #2 TITLE — CORRECTED state (2026-07-15, after consulting codemap + RE map)
 
-- Stage `0x801062E4` (labelled DEMO): frames 0-4 black (START handoff), then the TITLE screen: TOMBA! 2
-  logo + "New Game"/"Load Game" menu + copyright over an animated character/castle background.
-- Drawn as **textured quads** (gp0 op 0x2c/0x2d, tp=(832,256)/(384,0)), NOT SPRT sprites — the logo/bg/
-  menu are POLY_FT4s sampling VRAM sprite patterns that `Engine::uploadModeSprites` (FUN_80067DA8) uploads
-  each frame. So the native 2D subsystem is a **textured-quad + font compositor**, keyed by texpage/uv.
-- The Demo class (game/scene/demo.h) owns the SUBSTATE machine only; the RENDER stays substrate. The
-  render tail is `TAIL_REND = 0x80106658` → **`FUN_80075a80`** (title/attract render, Ghidra-decompiled).
-- **FUN_80075a80** iterates a 24-entry display list at `0x800be238` (stride 0xc) and calls the game's
-  2D SPRITE ENGINE per active entry: **`FUN_80092660`** (activate/pose a sprite → fills a prototype
-  POLY packet `DAT_80105cf8..d10` [tag 0x21, color, uv, tpage, clut, xy] + a sprite state table at
-  `0x801054d8` [stride 0x1c]) → `FUN_80092fd0` (pattern/pose state) → `FUN_8009440c`/`FUN_80094c10`.
-  Pattern def table `PTR_80105cdc`, pose/frame table `PTR_80105ce8` (stride 0x20).
-- BUT the live title OT is MINIMAL (scene dump f130: OT1 fill=1 env=6; OT2 poly=3 rect=2 **vramcopy=1**
-  env=2). So the title picture = a **pre-rendered VRAM art image blitted by a vramcopy** into the FB +
-  a fill + ~5 menu/logo overlay prims — NOT dozens of per-frame sprite quads. The sprite engine drives
-  only the few overlay/animated bits.
-### Architecture decision: `spriteNative()` reads sprite STATE, draws natively (the sceneNative pattern)
+CORRECTION of an earlier from-scratch RE in this doc: `0x80075a80` is `AreaSlots::updateTail` (a FIELD-
+frame child, also the demo tail — the RE map labels `0x80106658→0x80075A80` "attract render"), NOT a
+bespoke "title sprite engine". `0x80075824` is `MusicCoord::voiceMixTick` (AUDIO voice-volume mixer);
+`0x800BE1F8` is a VOICE channel, not a sprite — the "sprite fade" reading was wrong. Both were already
+LIVE/owned; I mislabeled them by skipping `codemap.py --addr`.
 
-Do NOT port the whole sprite engine. Let the substrate sprite engine keep running (it computes sprite
-state into guest tables — part of the byte-exact state), and write a READ-ONLY `Render::spriteNative()`
-that walks the sprite state table and draws each active sprite as a native textured quad (RQ_HUD) — the
-2D twin of how `sceneNative()` reads the 3D entity lists. No OT read, no GP0 replay; reads guest sprite
-state, writes host VK only. This one producer renders title/menus/HUD/dialog (all use this engine).
+This is a TRACKED FRONTIER: **port-progress.md "NEW FRONTIER (1) — the title/front-end renders BLACK"**.
+s2 runs the attract render (`0x80075A80`) every frame; the documented suspects are (a) the attract
+render's display list isn't reaching the native VK present, (b) the FMV-teardown shortcut (skipping the
+OP.STR movie frame-decode states) left the title without the background/camera it expects, (c) the title
+genuinely needs the movie's last frame. Under the reference renderer (`PSXPORT_RENDER_PSX=1`) the title
+DOES render (logo + New/Load menu). Under pc_render it now aborts (native-or-crash).
 
-Sprite state = an array of structs, base ≈ `0x801054c8`, **stride 0x1c**, 24 slots. Fields derived from
-FUN_80092660's setup writes (SoA accessors, base+i*0x1c):
-- `+0x00` = 0x21 packet tag (active marker)      · `+0x02` = pose/flip (DAT_80105cff)
-- `+0x04` = pattern/pose index (param_3)          · `+0x06` = frame (DAT_80105d04)
-- `+0x08` = screen Y (param_2, short)             · `+0x0e` (0x801054c8+i*1c-0x10 → +0x00? recheck)
-- `+0x26` = brightness/scale (DAT_80105cfc)
-Pattern-def table `PTR_80105cdc` (uv/size, stride 0x10), pose/frame table `PTR_80105ce8` (stride 0x20,
-holds tpage @+0x10, clut/flags @+0x12) — the emit (FUN_80092fd0) reads these to build the final quad's
-tex-rect. RE TODO before coding spriteNative: (1) confirm the full field map incl. screen X + W/H +
-u/v + tp + clut + color, from the emit/flush geometry (FUN_80092fd0 + the per-frame flush that walks the
-table into the OT); (2) find that flush (the POLY_FT4 builder) — its geometry math is what spriteNative
-reproduces natively from the state. Then spriteNative walks slots, active (`+0x00==0x21`), draws quads.
+Correct next steps (work FROM the maps, per docs/gfx-debug.md):
+1. Resolve the tracked frontier's suspects on the LIVE port (scene/submit/vkvram probes) — is the title's
+   draw content even being produced in the native path, or is it the FMV-teardown/background gap?
+2. Own the remaining 2D builders so pc_render produces the title without the OT walk: `FUN_80092660`
+   (slot-sprite), `FUN_8005019C`+`FUN_8004FFB4` (UI corner sprites + FT4 fills), and the art `MoveImage`.
+   Font/menu/dialog are already (partly) native. RE each via codemap.py --addr FIRST, then own it to emit
+   into the native queue (submit.cpp pattern), NOT via a new "spriteNative reads a state table".
 
 ## Next
 Build native producers down the backlog. Each removes one `abortUnimplemented`. Gate: the scene renders
 in pc_render without crashing AND SBS-render (pane A pc_render vs pane B psx_render) reaches it.
-Current frontier: #2 title — RE the shared 2D-quad submit primitive, own it natively.
+Current frontier: #2 title — resolve port-progress.md "title renders BLACK" + own FUN_80092660 / UI-fill /
+MoveImage builders. ALWAYS `codemap.py --addr` + grep port-progress.md/engine_re.md before any FUN RE.

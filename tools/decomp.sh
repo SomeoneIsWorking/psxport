@@ -23,6 +23,34 @@ PROJDIR="scratch/ghidra"
 PROC="MIPS:LE:32:default"
 mkdir -p "$PROJDIR" scratch/decomp scratch/logs
 
+# WORKFLOW GUARD (2026-07-15): before any from-scratch decompile, cross-reference each requested address
+# against the CODEMAP + RE MAP and shout if it is already owned/documented. A from-scratch Ghidra RE of an
+# already-ported FUN_xxxx (or one on a RAM dump whose overlay/state differs) silently MISLABELS it — this
+# happened (0x80075824 read as a "sprite fade" when the codemap has it as MusicCoord::voiceMixTick, audio).
+# CLAUDE.md already mandates `codemap.py --addr` first; this makes decomp.sh enforce it, not just advise.
+codemap_crossref() {
+  local any_owned=0 a low
+  for a in "$@"; do
+    case "$a" in 0x[0-9A-Fa-f]*|[0-9A-Fa-f][0-9A-Fa-f]*) : ;; *) continue ;; esac
+    low="$(python3 tools/codemap.py --addr "$a" 2>/dev/null | head -1)"
+    [ -z "$low" ] && continue
+    if printf '%s' "$low" | grep -qiE '\[LIVE\]|native owner'; then
+      if printf '%s' "$low" | grep -qi '\[LIVE\]'; then
+        echo "  ⚠ OWNED   $low" >&2; any_owned=1
+      else
+        echo "    unowned $low" >&2
+      fi
+    fi
+    grep -niE "$(printf '%s' "$a" | sed 's/^0x//I')" docs/port-progress.md docs/engine_re.md 2>/dev/null \
+      | grep -iE 'frontier|own|LIVE|=|render|native' | head -1 | sed 's/^/    map: /' >&2 || true
+  done
+  if [ "$any_owned" = 1 ]; then
+    echo "  ⚠⚠ One or more addresses are ALREADY OWNED natively. READ THE PORT (codemap path above)" >&2
+    echo "     instead of trusting a fresh decompile — the dump may hold different/overlay code, and" >&2
+    echo "     re-deriving an owned fn risks mislabeling it. Ctrl-C now if you skipped the codemap." >&2
+  fi
+}
+
 cmd="${1:?import|decomp|all}"; shift
 case "$cmd" in
   import)
@@ -33,6 +61,8 @@ case "$cmd" in
     ;;
   decomp)
     proj="${1:?projname}"; out="${2:?out.c}"; shift 2
+    echo "[decomp] codemap/RE-map cross-reference (WORKFLOW GUARD):" >&2
+    codemap_crossref "$@"
     "$HEADLESS_BIN" "${HEADLESS_ARGS[@]}" "$PROJDIR" "$proj" -process -noanalysis \
       -scriptPath "$repo/tools" -postScript ghidra_decomp.py "$out" "$@" \
       -scriptlog scratch/logs/ghidra.log
@@ -40,6 +70,8 @@ case "$cmd" in
   all)
     dump="${1:?dump.bin}"; out="${2:?out.c}"; shift 2
     proj="$(basename "$dump" .bin)"
+    echo "[decomp] codemap/RE-map cross-reference (WORKFLOW GUARD):" >&2
+    codemap_crossref "$@"
     "$HEADLESS_BIN" "${HEADLESS_ARGS[@]}" "$PROJDIR" "$proj" -overwrite \
       -import "$dump" -loader BinaryLoader -loader-baseAddr 0x80000000 \
       -processor "$PROC" \
