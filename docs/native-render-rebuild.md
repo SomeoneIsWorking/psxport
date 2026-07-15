@@ -45,15 +45,23 @@ it with the psx_render reference (and SBS core B).
 Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637C` GAME field.
 
 **#3b is TWO tracks (field-2D RE scout, 2026-07-15) — the free-roam blocker is NOT HUD:**
-- **Track A (CRITICAL, blocks all gameplay in pc_render).** Free-roam has ZERO HUD/dialog. The prims that
-  trip `s_ot_2d_drawn` (op 0x2D/0x65/0x5E) are GTE-projected WORLD objects whose substrate emit leaves
-  (`func_8003C5F8`/`func_8003C788`, `rec_dispatch` vtables e.g. 0x80122974, unowned walkers 0x80025D98/
-  0x8003B588, op-0x5E emitter 0x8013E9D8) DON'T register an `obj_depth` span — so the twoDOnly walk
-  mis-classifies them RQ_HUD and counts them. FIX: own those leaves like the billboard family
-  (`withDepthTag`→`gpu_obj_depth_add`, render_internal.h:85) so they carry obj_depth → RQ_WORLD → not
-  counted. Map-first; grow from `game/render/objlist_walk.cpp` (already RE'd). This is "identity from
-  NATIVE OWNERSHIP of the emitter, not span-stamping." The hut (#4) shares this — its probe hits the same
-  untagged prims.
+- **Track A (CRITICAL, blocks all gameplay in pc_render).** GROUND TRUTH (live probe of s_ot_2d_drawn++
+  at true free-roam, overlay 0x801138A4 sm[0x4a]=1, 2026-07-15) — the counted prims are TWO groups, and
+  op-0x5E is NOT among them (the line handler gpu_native.cpp:1184 has no counter):
+  1. **~60 BILLBOARD polys** (op 0x34/0x3c/0x3e/0x2d, `is3d=1 billboard=1`, pool 0x800BFExx–0x800C0xxx).
+     Counted at gpu_native.cpp:938 because the skip guard :936 (`!billboard && !ui`) doesn't skip
+     billboards. But these are WORLD billboards WITH obj_depth that ARE emitted (:939) — a **poly-count
+     FALSE POSITIVE** (or: they're only drawn via the 2d_only-walk TRANSCRIPTION, not natively — open Q:
+     does billboardEmit 0x8003C8F4 push to the queue, or only guest packets + obj_depth?).
+  2. **60 op-0x7C SPRITES** (RQ_HUD, objz=0, bg=0; contiguous pool run 0x800C5FF8 +0x10·n). Unidentified
+     builder — world decorations needing a native producer, or genuine 2D. Under RE (diagnosis agent).
+  So the free-roam blocker is NOT "own the 5 named substrate leaves" (the emit-leaf scout proved 4/5 are
+  already obj_depth-covered by the installed billboardEmit/perObjRenderDispatch overrides). It is (1) a
+  gate FALSE POSITIVE to fix (exclude covered billboards from :938) + (2) the 60 op-0x7C sprites to own.
+  KEY architectural question this exposes: the field 2D layer is currently TRANSCRIBED via the 2d_only OT
+  walk (emitOrQueue at :939/:1119 reads guest packets) — that IS the banned fallback. True nativeness
+  needs native producers for the billboards + op-0x7C sprites + HUD/dialog, with the guest copies dropped
+  by native-cover. The hut (#4) shares this. Fix design pending the diagnosis agent (fed this ground truth).
 - **Track B (interaction-triggered HUD/dialog/text).** Font glyphs (glyphEmit dual-emit — the shared
   producer below), dialog panel (`panelBuild`/`panelFill`/`borderTiles` → `game/ui/panel.cpp`, spec in
   docs/native-render-2d-panel.md), `HudGaugeEmitter` (0x8004FD30, LIVE — confirm it dual-emits when a gauge
