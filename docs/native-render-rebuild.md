@@ -95,12 +95,15 @@ b/c falsified). The title picture = black fill + 2 logo sprites + 3 menu FT4 qua
   opaque. quad2 xy0=(32,168) tpage samples clut=(480,247). Cursor-keyed color/selection: RE by agent (task).
   → push2dQuad(RQ_OVERLAY, …) opaque / emitOrQueue(semi) for op 0x2D. Reads menu cursor state (sm[0x68] /
   DAT_800bf808).
-- **Font text** ("New Game"/"Load Game"/copyright): ALREADY native (Font::glyphEmit); confirm it emits in
-  the title path (open Q: do the 3 FT4 quads carry the text, or just box/cursor — agent resolving).
+- **Text**: RESOLVED (verified live) — the title uses NO glyph-font path. `Font::glyphEmit` is called ZERO
+  times during the title (both render modes). The "New Game"/"Load Game" labels ARE the 3 FT4 quads (pre-
+  rendered menu-item text-images); the copyright line is baked into the logo sprite art. So titleNative =
+  logo sprites + menu FT4 quads only — no separate font. (Font-to-queue is a FIELD-HUD/dialog concern, #3b.)
 
-RE gaps to close before/while building: (1) 0x8007E2F8 menu builder → exact quad geometry + cursor keying +
-text-vs-box (dispatched). (2) 0x8010696C/0x80106690/0x80106824 logo overlay leaves — constants already
-decoded from packets above; RE only if the layout is dynamic (it reads as fixed).
+DONE: titleNative() implemented from the decoded packet constants — pixel-identical to the reference
+(RMSE 0). STOPGAP: the menu selection is the boot-default snapshot (New Game raw/bright, Load Game
+modulated-0x50/dim); live cursor keying via sm[0x68] is the refinement (the exact s2 row-layout caller
+lives in the DEMO overlay 0x80106xxx and was not traced — confirm on a live dump before wiring dynamics).
 
 drawOTag wiring: `demo = stage==0x801062E4; title = demo && sm[0x48]==2`; `if (title) titleNative(); else
 abortUnimplemented(...)` (s1 loading-ramp keeps the s48<2 blank guard; s3/s7 attract stay crashing = #2a).
