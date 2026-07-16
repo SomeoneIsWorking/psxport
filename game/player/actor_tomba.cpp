@@ -939,14 +939,18 @@ void ActorTomba::registerOverrides(Game* game) {
   //   4. missing `r5 = r20` delay slot at the chained-item (r16>=0) branch — matMul a1 got
   //      0x1F800000 instead of 0x1F800040 on that path,
   //   5. the G+325 arming condition INVERTED (gen arms attach-B iff G+325 == 0 && (G+326&3) != 0).
-  // Verifier: MIRROR_VERIFY. STATUS 2026-07-16: the 5-defect repair took it from immediate-reject
-  // to 196 clean MV passes (+ eos0 v0 fixed), but invocation #197 STILL diverges — RAM 0x800E7F18
-  // (= G+0x98, native B3 vs substrate 00) at a DIFFERENT caller than eos0 (entry ra 0x80059604 =
-  // frameTick's own matrix-compose tail; a1=0x800BF870, a3=0x1F800000). G+0x98 is inside the
-  // G+152 SRT matrix block (rotmat/matMul output), so one more transcription slip lives on a
-  // branch the first 196 calls don't reach (likely the attach-item loop actually iterating with
-  // G+9!=0, or the chained-item r16>=0 path). NOT wired until that path is MV-clean — the repaired
-  // body stays for the next diff pass. enterOuterState0 (0x80058648) IS wired + verified above.
+  // matrixComposeAttached (0x800597AC) — WIRED + verified 2026-07-16 after a SIX-defect repair of
+  // the 2026-07-10 wide-RE draft (all delay-slot/branch-structure/inverted-gate classes; the
+  // MIRROR_VERIFY-driven bisection found them one path at a time): #1 missing r23=0 delay-slot
+  // init, #2 missing r4=G+152 / r4=r16 delay slots at the in-loop r22 and G+356==5 branches,
+  // #3 the three-way per-item branch collapsed to two with conflated ra constants, #4 missing
+  // r5=r20 delay slot on the chained-item path, #5 the G+325 arming gate inverted, #6 the
+  // G+375&1 pan-patch gate inverted (r3=0 vs r3=G+334 — surfaced only at MV invocation #197, the
+  // first call with the bit set, corrupting the whole G+152 SRT matrix). Plus the loop-exit v0
+  // (gen leaves r2=(r19<count)=0). Verifier: 11713 MIRROR_VERIFY passes + 0 sbs-div over 6000
+  // frames, both this and enterOuterState0 wired.
+  extern void gen_func_800597AC(Core*);
+  engine_set_override_main(0x800597ACu, gov_matrixComposeAttached, gen_func_800597AC);
 }
 
 // =================================================================================
@@ -1413,10 +1417,14 @@ void ActorTomba::matrixComposeAttached() {
 
   c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 375u);
   c->r[2] = c->r[2] & 1u;
+  // gen L_80059874: (G+375 & 1) == 0 → r3 = 0 ; else → r3 = G+334. The 2026-07-10 draft had this
+  // INVERTED (defect #6 — same class as the G+325 gate) — invisible until the first call with the
+  // bit SET (MV invocation #197), where it corrupted the whole G+152 SRT matrix (pan-patch feeds
+  // func_800851F0 → matMul → G+152).
   if (c->r[2] == 0) {
-    c->r[3] = (uint32_t)c->mem_r16(c->r[18] + 334u);
-  } else {
     c->r[3] = 0;
+  } else {
+    c->r[3] = (uint32_t)c->mem_r16(c->r[18] + 334u);
   }
   c->r[4] = c->r[17];
   c->r[2] = 0x1F800000u;
