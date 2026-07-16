@@ -33,7 +33,8 @@ private:
   // Guest-ABI SM body + verify harness + the tiny native sub-leaves it calls (see .cpp for RE).
   static void body(Core* c);                            // FUN_8002655C
   static void verifyBody(Core* c);                      // bgscenesmverify A/B wrapper
-  static void fadeRect(Core* c, uint32_t color);        // FUN_8007E9C8-shaped fade leaf
+  static void fadeRect(Core* c, uint32_t color);        // host-side fade delivery (same arg shape as
+                                                        // the guest fade leaf; owner = ScreenFade tap)
   static void audioFadeTarget(Core* c, int32_t v);      // FUN_80075CEC
   static bool midTransitionGate(Core* c);               // shared 26470/26510/264BC guard
   static void audioStub26470(Core* c);                  // FUN_80026470
