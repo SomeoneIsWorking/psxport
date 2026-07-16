@@ -358,18 +358,40 @@ void Core::mem_swr(uint32_t a, uint32_t v) {
 
 // 0x8009A420 FUN_8009A420 — psyq libc `memset`, statically linked into MAIN.EXE (confirmed by
 // its position immediately below `rand` at 0x8009A450 in the psyq libc block, per
-// docs/engine_re.md). WIDE-RE DRAFT, UNWIRED (see core.h): a callsite exists today
-// (game/world/pool.cpp Pool::resetControlBlock/init, via `call_fn(c, 0x8009A420u)` == rec_dispatch,
-// still substrate) but this native body is not yet wired to replace it. Faithful to
-// gen_func_8009A420 (generated/shard_1.c:19508): dst NULL -> return 0 immediately; n<=0 -> return
-// dst as-is (no write); else byte-fill [dst, dst+n) and return the ORIGINAL dst (the guest loop
-// advances a copy of a0, never the value it returns).
+// docs/engine_re.md). WIRED 2026-07-16 (guest_memset_install below; the pool.cpp callsite's
+// rec_dispatch routes here). §9 re-verify against gen_func_8009A420 (generated/shard_1.c:19508)
+// found ONE draft bug, fixed: dst NULL -> return 0; **n<=0 -> ALSO return 0** (the gen delay slot
+// loads r2=dst but the fall-through overwrites it with 0 — the earlier draft note claiming
+// "return dst as-is" was wrong); else byte-fill [dst, dst+n) and return the ORIGINAL dst (the
+// guest loop advances a copy of a0, never the value it returns). Leaf, no stack frame; a0/a2 are
+// caller-saved so their gen-side advance needs no mirror.
 uint32_t Core::guestMemset(uint32_t dst, uint8_t val, int32_t n) {
   if (dst == 0u) return 0u;
-  if (n <= 0) return dst;
+  if (n <= 0) return 0u;
   uint32_t cur = dst;
   for (int32_t i = 0; i < n; i++, cur++) mem_w8(cur, val);
   return dst;
+}
+
+// Override wrapper + install for the memset leaf (guest ABI: a0=dst, a1=val, a2=n, v0=return).
+namespace {
+void ov_guestMemset(Core* c) {
+  const uint32_t dst = c->r[4];
+  const int32_t  n   = (int32_t)c->r[6];
+  c->r[2] = c->guestMemset(dst, (uint8_t)c->r[5], n);
+  // Mirror gen's exit clobbers of the (caller-saved) a0/a2: the fill loop leaves r4 = dst+n and
+  // r6 = 0. Callers may spill them before reassigning — a stale value there is a guest-stack
+  // divergence (wave-3 lesson: live registers at call/return boundaries are part of the state).
+  if (dst != 0u && n > 0) { c->r[4] = dst + (uint32_t)n; c->r[6] = 0u; }
+}
+}
+extern void gen_func_8009A420(Core*);
+void guest_memset_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x8009A420u, ov_guestMemset, gen_func_8009A420);
 }
 
 // R3000 integer division semantics (no traps; defined results for /0 and overflow).

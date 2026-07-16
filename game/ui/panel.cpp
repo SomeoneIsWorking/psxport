@@ -40,15 +40,19 @@ AttrDecode decodeAttr(uint16_t attr) {
 // One native quad push, shared by the fill and each corner sprite — opaque via push2dQuad, semi
 // via emitOrQueue (same split as every other native 2D producer in this codebase, e.g.
 // Font::glyphQueuePush / Render::dialogTextNative).
+// Layer: RQ_OVERLAY, one band BELOW the glyph text's RQ_HUD — the queue sorts (layer, seq), so the
+// box (fill/border/corners) always composites UNDER its text regardless of guest emit order. With
+// both on RQ_HUD the fill drew over the glyphs whenever the panel emitter ran after the text
+// emitter (USER screenshots 2026-07-16, bug #64: dimmed text behind the fill / fully empty boxes).
 void pushQuad(Core* c, const int* xs, const int* ys, const int* us, const int* vs,
               const AttrDecode& pa, const TpageDecode& tp) {
   const unsigned char cc[4] = { pa.rgb, pa.rgb, pa.rgb, pa.rgb };
   if (!pa.semi) {
-    c->game->activeRq().push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+    c->game->activeRq().push2dQuad(RQ_OVERLAY, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
                                    tp.x, tp.y, tp.mode, pa.raw, pa.clut_x, pa.clut_y,
                                    0, 0, 0, 0, 0, 0, 1023, 511);
   } else {
-    c->game->activeRq().emitOrQueue(c, /*capture=*/1, RQ_HUD, RQ_OM_2D_FG, /*nv=*/4, /*semi=*/1, pa.raw,
+    c->game->activeRq().emitOrQueue(c, /*capture=*/1, RQ_OVERLAY, RQ_OM_2D_FG, /*nv=*/4, /*semi=*/1, pa.raw,
                                     xs, ys, nullptr, nullptr, us, vs, cc, cc, cc, /*depth=*/nullptr,
                                     tp.mode, tp.x, tp.y, pa.clut_x, pa.clut_y,
                                     0, 0, 0, 0, 0, 0, 1023, 511, tp.blend);

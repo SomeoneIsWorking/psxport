@@ -1,9 +1,11 @@
-// game/input/pad_edge_fence.cpp — Engine::padEdgeFenceDraft, the port of FUN_800788AC.
+// game/input/pad_edge_fence.cpp — Engine::padEdgeFence, the port of FUN_800788AC.
 //
-// WIDE-RE TIER DRAFT (2026-07-09) — UNWIRED / UNVERIFIED (docs/fleet-workflow.md §6/§9). No
-// override registration; `Engine::frameUpdate()` (game/game_tomba2.cpp) still reaches the
-// substrate body via `rec_dispatch(c, 0x800788ACu)`. This is a faithful hand-transcription that
-// must be diffed line-by-line against the gen body again before it is trusted/wired.
+// WIRED 2026-07-16 (pad_edge_fence_install below): §9 line-by-line re-verify against
+// gen_func_800788AC (generated/shard_3.c:17840) passed with ZERO diffs — every address constant
+// (0x800ECF54/56 cur/prev, 0x1F80019A poll flag, 0x800BED88/8C queue cursor/countdown,
+// 0x800E7E68 pressed, 0x800F23A4 released), the branch structure, both jal-site ra constants
+// (0x80078940/0x80078978), the store order, and the a0=released tail-call argument all match.
+// `Engine::frameUpdate()`'s `rec_dispatch(c, 0x800788ACu)` now routes here via the override.
 //
 // ROLE (already partly documented, see docs/engine_re.md "Per-frame fence FUN_800788ac"):
 // the top-level engine loop's per-frame fence, called exactly once per logic frame
@@ -44,14 +46,18 @@ void rec_dispatch(Core*, uint32_t);
 #define FN_CD_SM        0x8005229Cu   // FUN_8005229C — un-owned CD/load sub-state-machine
 
 // FUN_800788AC — per-frame input-edge fence. See the file header above for the full RE + confidence
-// notes. WIDE-RE TIER DRAFT — unwired, unverified.
-void Engine::padEdgeFenceDraft() {
+// notes.
+void Engine::padEdgeFence() {
   Core* c = this->core;
   uint32_t saved_sp = c->r[29];
   uint32_t saved_ra = c->r[31];
   c->r[29] = saved_sp - 24;                 // addiu sp,sp,-24
   c->mem_w32(c->r[29] + 16, c->r[16]);      // sw s0,16(sp)  (LIVE incoming s0)
   c->mem_w32(c->r[29] + 20, saved_ra);      // sw ra,20(sp)
+  c->r[16] = 0x800F0000u;                   // gen: s0 = 32783<<16, live across BOTH dispatches —
+                                            // callees spill s0, so a stale native r16 diverges the
+                                            // guest stack (wave-3 f12 lesson; restored from sp+16
+                                            // in the epilogue below like gen)
 
   // prev := cur (BEFORE this frame's sample is written)
   uint16_t cur0 = c->mem_r16(CUR_PREV_BASE);
@@ -62,6 +68,8 @@ void Engine::padEdgeFenceDraft() {
     // Not in queue-poll mode: call FUN_800524B4(0), store its return into "cur".
     c->r[31] = 0x80078940u;
     c->r[4] = 0;
+    c->r[2] = 1u;                           // live at the jal (the ==1 compare literal)
+    c->r[3] = pollFlag;                     // live at the jal (the loaded poll byte)
     rec_dispatch(c, FN_PAD_SAMPLE);
     c->mem_w16(CUR_PREV_BASE, (uint16_t)c->r[2]);
   } else {
@@ -95,9 +103,32 @@ void Engine::padEdgeFenceDraft() {
   c->r[4]  = released;                      // a0 leftover from the release-mask compute — the gen
                                              // body calls FUN_8005229C with a0 still holding this
                                              // value (not explicitly reset), so it IS the argument.
+  // LIVE caller-saved registers at the tail call — the callee's frame SPILLS these to the guest
+  // stack, so leaving them stale diverges SBS even though no conforming code reads them (found at
+  // wave-3 wiring: f12 two 2-byte diffs at 0x801FFFAA/CA, B=0x800F upper halves = gen's r2). Gen
+  // values at the jal: r2 = 0x800F0000 (the released-store address base literal), r3 = ~cur32
+  // (the released-mask scratch), r5 = 0x800E0000 (the pressed-store base, set on every path).
+  c->r[2] = 0x800F0000u;
+  c->r[3] = ~(uint32_t)cur;
+  c->r[5] = 0x800E0000u;
   rec_dispatch(c, FN_CD_SM);                // FUN_8005229C — CD/load sub-state-machine tail-call
 
   c->r[31] = c->mem_r32(c->r[29] + 20);     // lw ra,20(sp)
   c->r[16] = c->mem_r32(c->r[29] + 16);     // lw s0,16(sp)
   c->r[29] = saved_sp;                      // addiu sp,sp,24
+}
+
+// Override wrapper + install (guest ABI is all-implicit — the fence takes no args, returns
+// FUN_8005229C's v0 which the gen leaves in r2; the native body preserves that by not touching
+// r2 after the tail dispatch).
+namespace {
+void ov_padEdgeFence(Core* c) { c->engine.padEdgeFence(); }
+}
+extern void gen_func_800788AC(Core*);
+void pad_edge_fence_install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+  engine_set_override_main(0x800788ACu, ov_padEdgeFence, gen_func_800788AC);
 }
