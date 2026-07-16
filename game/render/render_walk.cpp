@@ -346,10 +346,15 @@ void Render::renderField() {
 // perObjFlush -> gt3gt4 with real depth + the live interior camera. Skips the exterior terrain/scene-table/
 // backdrop (village data) — the substrate's reduced frameX pass. 2D bubble = native producer when rebuilt.
 void Render::renderHutInterior() {
+  // BREAK-FIRST (USER 2026-07-16): the authored hut interior (GAME sm[0x4c]==3) has NO native WORLD
+  // producer — only objects (fieldObjectsRender) were drawn, the room itself was never built natively,
+  // and the scene is not tier1-eligible, so fps60 could not interpolate it (it re-presented the captured
+  // queue verbatim → 30fps). Per the standing rule this file already applies to renderTitle's unported
+  // substates: an unported render path does NOT fall back to a partial/30fps draw — it crashes with its
+  // identity so the interior becomes the next native rebuild item (a real per-object interior WORLD
+  // producer that is tier1-eligible → 60fps like the field, at which point restore the object render).
   mCore->game->fps60.mTier1EligibleCur = false;
-  DisplayPassGuard displayPass(mCore->mRender->mode);
-  fieldObjectsRender();
-  // dialog/prompt text arrives via the FUN_8007CC00 tap (Panel::pushDialogGlyphs) at emit time
+  abortUnimplemented("hut interior (GAME sm[0x4c]==3) — no native world producer (objects-only 30fps render removed)");
 }
 
 // #5 SOP INTRO NARRATION (overlay-sig 0x3C021F80 @ 0x80109450): the WORLD is native via sceneNative exactly

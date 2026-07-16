@@ -4,8 +4,10 @@
 // living entirely in the INPUTS — camera (sceneCam), per-object transforms (projObj), and backdrop scroll
 // (bgScroll) each served a lerp(prev,cur,t) at present time; tier1Render re-runs the field world
 // (terrain+scene-table+objects+backdrop) into mSink under those lerped inputs, and present_vk merges it
-// with mRqCur's 2D (HUD/overlay, screen-space, verbatim). The authored sub-scene (hut) presents its
-// captured interior (mRqCur). No prim matching (matchAndLerp deleted). Host-only, gated g_mods.fps60.
+// with mRqCur's 2D (HUD/overlay, screen-space, verbatim). The authored sub-scene (hut interior) has no
+// native world producer and now aborts-with-identity (renderHutInterior, break-first) rather than
+// presenting a non-interpolatable 30fps render. No prim matching (matchAndLerp deleted). Host-only,
+// gated g_mods.fps60.
 #include "core.h"
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
 #include "render.h"   // class Render — sceneNative()/terrainRenderAll(); DisplayPassGuard (render_mode.h)

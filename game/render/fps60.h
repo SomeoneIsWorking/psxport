@@ -13,9 +13,10 @@
 // dual-emit records — RQ_WORLD but has_xyf==0, no display-pass producer to re-run, so they draw verbatim
 // on BOTH presents; they step at 30Hz until each emitter is ported into the display pass per the
 // REDIRECT doctrine, but they can no longer flicker).
-// The authored sub-scene (hut interior, sm[0x4c]==3) is a guest-OT walk with no native per-object transform,
-// so its interp frame presents the captured interior queue (mRqCur) — degenerate lerp, correct (nothing to
-// interpolate). Both frames drain an RqItem list through the same RenderQueue::emitItem the 30fps path uses.
+// The authored sub-scene (hut interior, sm[0x4c]==3) has NO native world producer and is not tier1-
+// eligible, so it could never be interpolated — it used to present the captured queue verbatim (30fps).
+// Per BREAK-FIRST (USER 2026-07-16) renderHutInterior now aborts-with-identity instead of that partial
+// render; the interior is a rebuild-frontier item, not a 30fps fallback.
 // matchAndLerp (the old provenance/fingerprint output-matching heuristic) is DELETED.
 //
 // TIER 1 (docs/fps60-rework.md "Object-tier attempt 2026-07-14", extended to fieldEntityRender): the
