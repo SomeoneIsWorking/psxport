@@ -22,15 +22,11 @@
 #include "actor_tomba.h"        // ActorTomba::G_ADDR — buildFromChild's parent-table base (UNWIRED draft)
 #include "guest_abi.h"          // GuestFrame/GuestReg/guest_fn — ABI vocabulary (2026-07-14 readability pass)
 
-// Dual-wiring plumbing (same pattern as Math::registerOverrides / ActorReward::registerOverrides):
-// (1) EngineOverrides for callers reaching these via an explicit rec_dispatch(c, addr) (overlay
-// cross-module calls always route this way), and (2) shard_set_override for the recompiler's OWN
-// g_override[] table, which is what MAIN's direct intra-shard `func_<addr>(c)` call sites consult
-// (confirmed via generated/shard_1.c, shard_2.c, shard_0.c, shard_3.c, shard_5.c, shard_6.c —
-// 0x80051300/0x80051464/0x800517BC each have a direct same-module caller). 0x80051C8C has NO direct
-// same-module caller (every reference found is `rec_dispatch(c, 0x80051C8Cu)` from an overlay), so
-// it only needs the EngineOverrides registration — but is still safe to leave un-dual-wired since
-// no g_override[] slot would ever be consulted for it.
+// Override wiring (see registerOverrides below): 0x80051300/0x80051464/0x800517BC (+ copyMatrixBlock/
+// buildFromChild/buildWithOffset) have a direct same-module `func_<addr>(c)` caller (confirmed via
+// generated/shard_0/1/2/3/5/6.c), so they install with the shard_set_override thunk to intercept those
+// too. 0x80051C8C/0x80051D90/0x80051D20 are only reached via rec_dispatch(c, addr) from an overlay, so
+// they wire rec_dispatch-only (install's setter omitted).
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_80051300(Core*);
 extern void gen_func_80051464(Core*);
