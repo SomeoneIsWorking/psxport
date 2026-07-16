@@ -84,7 +84,7 @@ workflow defects. Stop and fix them, then resume.
   by guest address (`docs/code-map.md`; warns ⚠ DUAL-OWNERSHIP if already owned in another file).
   Regenerate on add/move. `tools/codemap.py --conflicts` lists every duplicate-owned address — a native
   RE'ing a `FUN_xxxx` some other subsystem already owns (how FUN_80040B48/80040CDC got duplicated).
-- **The TRACKING STACK — three orthogonal maps, one question each (consult at task start, update in the
+- **The TRACKING STACK — four orthogonal maps, one question each (consult at task start, update in the
   SAME commit as the work):**
   - **codemap** (`tools/codemap.py` → `docs/code-map.md`) — WHERE is it: guest addr → native owner,
     LIVE/ORPHAN, `--addr`/`--conflicts`. Auto-scanned from source.
@@ -97,6 +97,12 @@ workflow defects. Stop and fix them, then resume.
     `verified` (cite frames+gate+evidence) | `diverges` (a live Job#1 bug — `check` FAILS) | `partial` |
     `untested` | `n/a` (pc_render overlays are n/a — they never write guest RAM). Record every SBS 0-diff
     here so the proof is durable: `parity.py set <unit> --status verified --frames N --gate '<cmd>' --evidence <commit>`.
+  - **behavior-map** (`tools/behavior.py` → `docs/behavior-map.md`) — WHAT it DELIBERATELY changes vs
+    recomp_path: the ledger of SANCTIONED divergences (pc_render, fps60, widescreen, ires, pc_skip,
+    pc_enh), so a byte diff triages instantly as bug-or-intended. Primary axis = GUEST-MEMORY AFFECT:
+    `none` (host-only overlay — a guest write is a BUG) | `non-canon` (writes guest RAM but byte-matches
+    at the rendezvous — pc_skip) | `full` (deliberately changes canon state — pc_enh; MUST be
+    force-suppressed under ORACLE/SBS or `behavior.py check` FAILS). Register every enhancement here.
 - **Status & spine:** `docs/port-progress.md` — boot→gameplay execution spine, per-function status,
   current frontier (the DETAIL behind port-map). Port top-to-bottom. Update in the same commit as the work.
 - **Fleet workflow (operator + subagents):** `docs/fleet-workflow.md` — how to drive ownership at scale

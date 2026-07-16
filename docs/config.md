@@ -77,11 +77,20 @@ top of the faithful engine — unlike pc_render (host-only picture) and pc_skip 
 no meaningful end-state change). Gated per-name via `cfg_enh("name")`; `all` is the umbrella.
 `cfg_enh` is force-suppressed (one-time `[cfg]` notice) whenever `PSXPORT_ORACLE` or SBS is active,
 so an oracle/SBS byte-compare can never be clobbered by a stray `.env` — the suppression lives in
-`cfg.c`, not in per-call-site discipline. Registered enhancement names:
+`cfg.c`, not in per-call-site discipline.
 
-| name | effect |
-|---|---|
-| _(none yet — planned: expanded object load/unload window, faster fades/transitions)_ | |
+**Registered enhancement names live in the BEHAVIOR-DIFFERENCE MAP** (`docs/behavior-map.md`,
+managed by `tools/behavior.py`) — the fourth tracking-stack axis, which records every intentional
+divergence from recomp_path (not just pc_enh) keyed by guest-memory affect. pc_enh entries are the
+`affect: full` group (they change canon guest state and are the ONLY class that must be
+force-suppressed under ORACLE/SBS). When you land an enhancement, register it there
+(`behavior.py set <name> --class pc_enh --affect full --flag 'cfg_enh("<name>")' ...`) and add its
+`PSXPORT_ENH` token to the list below.
+
+| name | effect | status |
+|---|---|---|
+| `expanded-load-range` | expanded object load/unload range window | planned |
+| `faster-transitions` | faster fade / area-transition ramps | planned |
 
 ## Debug output is REPL-driven: `debug chanA,chanB` (or `debug all`, `debug` to clear)
 ~31 boolean `*_DBG` / `*LOG` / `*WATCH` / `VERBOSE` flags were collapsed into named channels, enabled at

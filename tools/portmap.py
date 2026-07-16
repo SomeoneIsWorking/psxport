@@ -8,9 +8,10 @@
 # boot->gameplay spine; THIS tool is the focused, queryable frontier: for each RE+port step, is it REAL
 # (re-verified from the binary/asset) or a HACK (debt that MUST be removed as the real mechanism lands),
 # and what is the next RE-ready step. It is the second axis of the tracking stack:
-#     codemap.py  = WHERE the code is (guest addr -> native owner)
-#     portmap.py  = IS it ported, and REAL not a hack  <-- this tool
-#     parity.py   = IS it SBS byte-exact
+#     codemap.py   = WHERE the code is (guest addr -> native owner)
+#     portmap.py   = IS it ported, and REAL not a hack  <-- this tool
+#     parity.py    = IS it SBS byte-exact
+#     behavior.py  = WHAT it deliberately changes (sanctioned pc_render/skip/enh divergences)
 #
 # THE LOOP:
 #   tools/portmap.py next                 # what's the next RE-ready step? work THAT, not a downstream one.
@@ -187,6 +188,13 @@ def cmd_search(words):
 
 
 def main():
+    # Bare-word search: `portmap.py <words>`. argparse subparsers reject an unknown first positional as
+    # an "invalid choice" before any fallback runs, so intercept it here — a first arg that is neither a
+    # known subcommand nor a flag means "search". Flags / real subcommands fall through to argparse.
+    argv = sys.argv[1:]
+    if argv and not argv[0].startswith("-") and argv[0] not in ("set", "next", "hacks", "check", "list"):
+        cmd_search(argv)
+        return
     ap = argparse.ArgumentParser(description="RE+port frontier registry (real-vs-hack ledger).")
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("set", help="upsert a step")
@@ -200,15 +208,12 @@ def main():
     l = sub.add_parser("list", help="one line per step")
     l.add_argument("status", nargs="?")
     l.set_defaults(func=cmd_list)
-    args, extra = ap.parse_known_args()
+    args = ap.parse_args()
     if args.cmd is None:
-        if extra:
-            cmd_search(extra)
-        else:
-            # default: read-only — next RE-ready step(s). A bare read must NEVER rewrite the doc: save()
-            # re-emits only the known FIELDS, so writing here would silently drop hand-added prose. Only
-            # `set` writes (an explicit mutation); ordering/summary normalize on the next set.
-            cmd_next(argparse.Namespace())
+        # default: read-only — next RE-ready step(s). A bare read must NEVER rewrite the doc: save()
+        # re-emits only the known FIELDS, so writing here would silently drop hand-added prose. Only
+        # `set` writes (an explicit mutation); ordering/summary normalize on the next set.
+        cmd_next(argparse.Namespace())
     else:
         args.func(args)
 

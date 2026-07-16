@@ -6,9 +6,10 @@
 # and that proof evaporates. This registry is the durable ledger: for each ported unit, IS it SBS
 # byte-exact, HOW do I re-verify it (the exact gate command), and what's the evidence (frames/commit).
 # It answers "is it verified correct", the third axis of the tracking stack:
-#     codemap.py  = WHERE the code is (guest addr -> native owner)
-#     portmap.py  = IS it ported, and REAL not a hack (RE+port frontier)
-#     parity.py   = IS it SBS byte-exact  <-- this tool
+#     codemap.py   = WHERE the code is (guest addr -> native owner)
+#     portmap.py   = IS it ported, and REAL not a hack (RE+port frontier)
+#     parity.py    = IS it SBS byte-exact  <-- this tool
+#     behavior.py  = WHAT it deliberately changes (sanctioned pc_render/skip/enh divergences)
 #
 # THE LOOP:
 #   tools/parity.py                       # session start: what's verified / diverging / untested
@@ -145,6 +146,13 @@ def cmd_search(words):
 
 
 def main():
+    # Bare-word search: `parity.py <words>`. argparse subparsers reject an unknown first positional as an
+    # "invalid choice" before any fallback runs, so intercept it here — a first arg that is neither a
+    # known subcommand nor a flag means "search". Flags / real subcommands fall through to argparse.
+    argv = sys.argv[1:]
+    if argv and not argv[0].startswith("-") and argv[0] not in ("set", "check", "list"):
+        cmd_search(argv)
+        return
     ap = argparse.ArgumentParser(description="SBS parity registry (Job #1 byte-exact ledger).")
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("set", help="upsert a unit's parity status")
@@ -157,15 +165,12 @@ def main():
     l = sub.add_parser("list", help="one line per unit")
     l.add_argument("status", nargs="?")
     l.set_defaults(func=cmd_list)
-    args, extra = ap.parse_known_args()
+    args = ap.parse_args()
     if args.cmd is None:
-        if extra:
-            cmd_search(extra)
-        else:
-            # default: read-only summary + gate. A bare read must NEVER rewrite the doc — save() re-emits
-            # only the known FIELDS, so writing here would silently drop any hand-added prose/extra field.
-            # Only `set` writes (an explicit mutation); ordering/summary normalize on the next set.
-            sys.exit(cmd_check(argparse.Namespace()))
+        # default: read-only summary + gate. A bare read must NEVER rewrite the doc — save() re-emits
+        # only the known FIELDS, so writing here would silently drop any hand-added prose/extra field.
+        # Only `set` writes (an explicit mutation); ordering/summary normalize on the next set.
+        sys.exit(cmd_check(argparse.Namespace()))
     else:
         args.func(args)
 
