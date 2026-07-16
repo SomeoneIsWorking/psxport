@@ -405,8 +405,12 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   // determines, so this instrument doubles as its match-quality debugger (docs/fps60-rework.md REDIRECT).
   { int pi = gpu_gpu_preseq_present_index(core);
     if (pi >= 0 && cfg_dbg("preseqobj"))
-      cfg_logf("preseqobj", "p%04d key=%08X layer=%d x=%d y=%d",
-              pi, it->dbg_node, it->layer, it->xs[0], it->ys[0]); }
+      // scene=1 (== has_xyf): a float-projected display-pass world prim — rebuilt at the interp present
+      // by tier1Render, correct-by-construction; the tracker counts but does not judge these (its NN/
+      // emit-index identity is meaningless over dense mesh triangles). scene=0 = a guest-time drawable
+      // (OT-walk billboard / #65 dual-emit / 2D / HUD) — the class the per-object gate actually verifies.
+      cfg_logf("preseqobj", "p%04d key=%08X layer=%d x=%d y=%d scene=%d",
+              pi, it->dbg_node, it->layer, it->xs[0], it->ys[0], it->has_xyf ? 1 : 0); }
   GpuState& s = core->game->gpu;
   // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
   // exactly where the native 3D world geometry rasterizes (vs the backdrop). Answers the recurring "the

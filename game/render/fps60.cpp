@@ -158,13 +158,21 @@ void Fps60::tier1Render(Core* core, float t) {
            t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
            lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
 
+  // #67 GATE PARITY: mirror the REAL frame's world-pass gates (Render::worldVoidBeat / fieldAreaInit —
+  // the same reads sceneNative made this interval, unchanged since per the present-time invariant). The
+  // re-run bypassing a gate the real frame honored paints that pass on interp presents only (30Hz flicker
+  // of the whole layer): the SOP void beat draws no terrain/scene-table/backdrop; the field-area init
+  // frame draws no world at all (unattached geomblks — the later-275 garbage/overflow class).
+  const bool voidBeat = c->mRender->worldVoidBeat();
+  const bool areaInit = c->mRender->fieldAreaInit();
+
   ProjParams::Snapshot projSaved = c->mRender->projParams.snapshot();
   RenderQueue* prevRedirect = c->game->rqRedirect;
   c->game->rqRedirect = mSink;
   mCamOverrideOn = true;
   {
     DisplayPassGuard displayPass(c->mRender->mode);   // FAIL-FAST: abort on any guest write, real-path discipline
-    c->mRender->terrainRenderAll();
+    if (!voidBeat && !areaInit) c->mRender->terrainRenderAll();
     // SCENE TABLE (grass/terrain props, kSceneTableDbgNode): camera-only, same as terrain — fieldEntityRender
     // composes ONLY the scene camera (projComposeCamera -> sceneCam, honors mCamOverrideOn above), never a
     // per-object transform, and its geometry (SCENE_ENT_TABLE records) is static per-area data, not per-frame
@@ -174,7 +182,7 @@ void Fps60::tier1Render(Core* core, float t) {
     // direct `game->rq` write bypassing rqRedirect) — both now route through the same choke terrain uses.
     // Gated the same way the real call is (render_walk.cpp sceneNative): mSceneTableTrusted is computed once
     // per real frame and unchanged since (present-time invariant — no tick has run since).
-    if (c->mRender->mSceneTableTrusted) c->mRender->fieldEntityRender(0x800F2418u);
+    if (!voidBeat && !areaInit && c->mRender->mSceneTableTrusted) c->mRender->fieldEntityRender(0x800F2418u);
 
     // BACKDROP (game-logic scroll, LAYER-TRANSFORM lerp — not camera-projected, so NOT part of the camera
     // override above): mirrors sceneNative's own gate (render_walk.cpp) exactly — mBackdropTrusted (the
@@ -183,7 +191,7 @@ void Fps60::tier1Render(Core* core, float t) {
     // drawer, state 0, is natively owned). The wrap moduli (t4+0x30/+0x32) are static per-area config
     // (ParallaxBg INIT), safe to re-read directly here — same as W/H/tilemap-ptr/tpage/clutbase, which
     // backdropRender() itself re-reads directly below (unchanged guest state this interval).
-    if (c->mRender->mBackdropTrusted && c->mem_r8(0x800bf873u) == 0 && c->mem_r8(0x800bf870u) == 0) {
+    if (!voidBeat && c->mRender->mBackdropTrusted && c->mem_r8(0x800bf873u) == 0 && c->mem_r8(0x800bf870u) == 0) {
       int modX = c->mem_r16(0x800ed018u + 0x30u), modY = c->mem_r16(0x800ed018u + 0x32u);
       mBgOverride.scrollX = wrapLerp(mBgPrev.scrollX, mBgCur.scrollX, modX, t);
       mBgOverride.scrollY = wrapLerp(mBgPrev.scrollY, mBgCur.scrollY, modY, t);
@@ -195,9 +203,13 @@ void Fps60::tier1Render(Core* core, float t) {
     // step-1's projObj) AND the still-armed lerped camera (mCamOverrideOn) into mSink — the objects
     // interpolate through the SAME object walk the real frame ran, replacing matchAndLerp's output-
     // matching for field actors. Only the field runs this (tier1Render is mTier1EligibleCur-gated).
-    mObjOverrideOn = true;
-    c->mRender->fieldObjectsRender();
-    mObjOverrideOn = false;
+    // (Objects run on the void beat — the vortex node — exactly like the real frame; only areaInit
+    // suppresses them, mirroring sceneNative's field_area_init block.)
+    if (!areaInit) {
+      mObjOverrideOn = true;
+      c->mRender->fieldObjectsRender();
+      mObjOverrideOn = false;
+    }
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
@@ -264,12 +276,21 @@ void Fps60::tier1Render(Core* core, float t) {
 // RQ_BACKGROUND item keeps dbg_node==0 and falls through to the normal per-prim match+lerp/verbatim-
 // fallback path below, same as any other un-owned 2D content.
 static inline bool isTier1Owned(const RqItem& it) {
-  // fps60 step 2b: tier1Render now re-renders ALL of RQ_WORLD (terrain + scene-table + OBJECTS via
-  // fieldObjectsRender) under lerped inputs, so the whole world layer is tier1-owned and excluded from
-  // matchAndLerp — objects come from the re-run's lerped transforms, not the output-match heuristic.
+  // fps60 step 2b: tier1Render re-renders the native display-pass world (terrain + scene-table + OBJECTS
+  // via fieldObjectsRender) under lerped inputs, so those prims are tier1-owned and come from mSink.
   // (Backdrop: only backdropRender's own prims; other RQ_BACKGROUND 2D keeps the per-prim path, #54.)
   if (it.layer == RQ_BACKGROUND) return it.dbg_node == kBackdropDbgNode;
-  return it.layer == RQ_WORLD;
+  // #67 CORRECTION ("2D things flicker at fps60"): "tier1 owns ALL of RQ_WORLD" was FALSE — the #54 bug
+  // class again, on the world layer. RQ_WORLD has GUEST-EXECUTION-TIME producers the display-pass re-run
+  // never re-emits: the guest-OT obj-depth billboard walk (gpu_native.cpp is3d/objz classification) and
+  // the #65 dual-emit records (rq_push_ft4_record from billboardEmit + quad_rtpt_submit — AP gems,
+  // flames, apples, splash, weapon quads). Blanket-excluding the layer dropped those prims from every
+  // interp present with nothing re-rendering them → 30Hz flicker of exactly the 2D objects. The exact
+  // discriminator is has_xyf: every prim tier1Render's re-run reproduces goes through drawWorldQuad
+  // (float-projected native world → has_xyf=1); every guest-time world prim is a resolved screen-space
+  // integer record (emitOrQueue with xsf==nullptr → has_xyf=0) and is presented VERBATIM from mRqCur,
+  // like HUD, until its emitter is owned per docs/fps60-rework.md's REDIRECT doctrine.
+  return it.layer == RQ_WORLD && it.has_xyf;
 }
 
 
@@ -350,12 +371,17 @@ void Fps60::present_vk(Core* core) {
     // HUD/overlay, which are screen-space and presented VERBATIM (no lerp needed) — in (layer, seq) paint
     // order. isTier1Owned marks the world prims that come from mSink so we skip them in mRqCur. No
     // matchAndLerp: nothing is fingerprint-matched anymore. (mTier1EligibleCur gates the field re-render;
-    // when false — narration — mSink stays empty and only the 2D prims emit.)
-    if (mTier1EligibleCur) tier1Render(c, mT);
-    const int sinkN = mSink ? mSink->n : 0;
+    // when false — hut interior / narration / title — there is NO re-run, so nothing is tier1-owned:
+    // consult no sink (mSink still holds the LAST eligible frame's world — merging it painted the stale
+    // field exterior into non-field interp frames, the #50 bug class) and skip nothing from mRqCur (the
+    // hut's own perObjFlush world prims must present verbatim, or the interior vanishes every other
+    // frame). The whole captured queue replays as-is — the documented degenerate lerp.)
+    const bool tier1 = mTier1EligibleCur;
+    if (tier1) tier1Render(c, mT);
+    const int sinkN = (tier1 && mSink) ? mSink->n : 0;
     int ia = 0, ib = 0;
     for (;;) {
-      while (ib < mNCur && isTier1Owned(mRqCur[ib])) ib++;   // world prims come from mSink — skip in mRqCur
+      while (ib < mNCur && tier1 && isTier1Owned(mRqCur[ib])) ib++;   // world prims come from mSink — skip in mRqCur
       const bool haveA = ia < sinkN, haveB = ib < mNCur;
       if (!haveA && !haveB) break;
       bool takeSink;

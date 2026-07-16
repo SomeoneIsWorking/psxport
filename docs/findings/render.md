@@ -2181,3 +2181,27 @@ draft was already byte-faithful.
   ires>1). See [[oracle-not-ground-truth-for-render]].
 - **refs:** runtime/recomp/gpu_gpu.cpp render_geom (band 1/2/3, ires downsample ~L826) + present (~L840);
   shaders_gpu/ires_downsample.frag, present.frag
+
+## fps60 2D flicker (#67) — blanket "tier1 owns RQ_WORLD" dropped guest-time drawables from interp presents (2026-07-16, RESOLVED)
+
+- **symptom (USER)**: "2D things flicker at fps60" — gems/flames/pickups/weapon quads strobe at 30Hz.
+- **cause**: unified-path step 2b made `Fps60::isTier1Owned` own ALL of `RQ_WORLD`, so the interp present
+  skipped every world prim in mRqCur assuming tier1Render's re-run reproduces them. But RQ_WORLD has
+  GUEST-EXECUTION-TIME producers the display-pass re-run never re-emits: the guest-OT obj-depth billboard
+  walk (gpu_native.cpp is3d/objz) and the #65 dual-emit records (rq_push_ft4_record from billboardEmit +
+  quad_rtpt_submit). They drew on real presents only → 30Hz flicker. Same class as the #54 RQ_BACKGROUND
+  blanket exclusion.
+- **fix** (game/render/fps60.cpp): tier1-own only what the re-run reproduces — exact discriminator is
+  `has_xyf` (every re-run prim goes through drawWorldQuad → has_xyf=1; every guest-time record is
+  screen-space → has_xyf=0, presented VERBATIM from mRqCur on both presents). Also: ineligible frames
+  (hut) no longer consult the stale mSink nor skip owned prims (the #50 class); tier1Render mirrors the
+  real frame's world gates (Render::worldVoidBeat / fieldAreaInit — factored to one definition each in
+  render_walk.cpp). preseqobj log emits `scene=` (has_xyf) again so preseqobj_check.py skips rebuilt mesh.
+- **verify**: headless field walk (fps60=1, `preseq 24` + `debug preseqobj`): key=0 RQ_WORLD prims on ALL
+  24 presents (interp included; pre-fix absent on interp); preseq_flicker.py PASS 0/4 bands under camera
+  pan; preseqobj_check 402→7 flags — the 7 are STALL-STEP on the #65 dual-emit billboards (drawn on both
+  presents at frame-N position: 30Hz stepping, no flicker). Residual by design until each guest-time
+  emitter becomes a display-pass producer deriving from game state (the REDIRECT doctrine / USER
+  principle: real and interp frames identical derivation, lerp only in the inputs).
+- **refs**: game/render/fps60.{h,cpp} isTier1Owned/present_vk/tier1Render, render_walk.cpp
+  worldVoidBeat/fieldAreaInit, render_queue.cpp preseqobj scene=, bug #67, scratch/logs/bug67_gate_s.log

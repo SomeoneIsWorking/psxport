@@ -434,6 +434,26 @@ void Render::s3MenuNative() { Core* c = mCore;
   menuItemsAndCursor(1, (s68 != 2) ? 1 : 0);
 }
 
+// Per-frame WORLD-pass gates (render.h): one definition each, read by BOTH the real sceneNative pass and
+// Fps60::tier1Render's interp re-render, so the two frames of a 60fps pair agree on which passes run.
+// SOP VOID BEAT (narration *(u8*)0x800bf9b4 == 5): no 3D world, no BG — a pure vortex-over-black beat.
+// The backdrop struct (0x800ED018) and scene-table (0x800F2418) still hold the PRIOR beat's field data,
+// so terrain/scene-table/backdrop would paint a stale field/sea behind the swirl (later-281). beat!=5
+// everywhere else, so this is a no-op for the walkable field.
+bool Render::worldVoidBeat() const { return mCore->mem_r8(0x800bf9b4u) == 5; }
+// AREA-INIT SUPPRESSION: on the GAME field-area-machine OBJECT-PLACEMENT init frame (sm[0x48]==2 RUNNING,
+// sm[0x4a]==1 field-area-machine, sm[0x4e]==0 init), the new area's objects are spawned but their MODELS
+// are NOT yet attached — each cmd's geomblk (cmd+0x40) still holds an unrelocated area-data pointer. The
+// real game holds the screen faded black here; drawing feeds garbage prim counts into gt3gt4 and
+// overflows the render queue (later-275). Read from task0's GAME state machine (persistent guest RAM).
+bool Render::fieldAreaInit() const {
+  Core* c = mCore;
+  return c->mem_r32(0x801fe00cu) == 0x8010637Cu   // GAME stage resident
+      && c->mem_r16(0x801fe048u) == 2             // sm[0x48] == RUNNING
+      && c->mem_r16(0x801fe04au) == 1             // sm[0x4a] == field area machine
+      && c->mem_r16(0x801fe04eu) == 0;            // sm[0x4e] == object-placement init (pre-attach)
+}
+
 void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
@@ -478,12 +498,9 @@ void Render::sceneNative() { Core* c = mCore;
   // ended narration's leftover, now aliasing the just-loaded field overlay's raw bytes — drawing it
   // produced a tiled noise/atlas-grid garbage frame (the narration-end -> fisherman-cutscene loading-
   // screen bug) where the oracle (pure PSX render) shows the expected black load-hold instead.
-  // SOP VOID BEAT (narration *(u8*)0x800bf9b4 == 5): no 3D world, no BG — a pure vortex-over-black beat.
-  // The backdrop struct (0x800ED018) and scene-table (0x800F2418) still hold the PRIOR beat's field data,
-  // so terrain/scene-table/backdrop would paint a stale field/sea behind the swirl (later-281). Skip those
-  // three passes for the void and draw an explicit black background; only the object pass runs (the vortex
-  // node 0x800FBA68). beat!=5 everywhere else, so these guards are no-ops for the walkable field.
-  const bool voidBeat = (c->mem_r8(0x800bf9b4u) == 5);
+  // SOP VOID BEAT (worldVoidBeat above): skip terrain/scene-table/backdrop and draw an explicit black
+  // background; only the object pass runs (the vortex node 0x800FBA68).
+  const bool voidBeat = worldVoidBeat();
   if (voidBeat) {
     int xs[4] = { 0, 320, 0, 320 }, ys[4] = { 0, 0, 240, 240 }, z[4] = { 0, 0, 0, 0 };
     unsigned char k[4] = { 0, 0, 0, 0 };
@@ -495,20 +512,9 @@ void Render::sceneNative() { Core* c = mCore;
     if (bgstate == 0) backdropRender(0x800ed018u);
   }
   if (cfg_dbg("bgonly")) { c->r[4] = saved; return; }  // PROBE: backdrop only (test if ov_render_frame already drew the world)
-  // AREA-INIT SUPPRESSION: on the GAME field-area-machine OBJECT-PLACEMENT init frame (stage GAME, sm[0x48]==2
-  // RUNNING, sm[0x4a]==1 field-area-machine, sm[0x4e]==0 = the ov_field_run case-0 init), the new area's
-  // objects have just been spawned but their MODELS are NOT yet attached — attach runs from per-object
-  // behaviours on the following running frames (sm[0x4e]>=1), so each object's render-command geomblk
-  // (cmd+0x40) still holds an unrelocated area-data pointer (0x8018Axxx). The real game does not draw the
-  // field during this init (the area transition holds the screen faded black); drawing it here feeds garbage
-  // prim counts into Render::gt3gt4 and overflows the render queue (later-275). Skip the field scene for that
-  // frame; the backdrop above still draws. Read from task0's GAME state machine (persistent guest RAM, so it
-  // is robust to the GAME loop's coroutine scheduling — a per-frame "did the field render run" latch is not,
-  // because the field update and this display pass need not fall in the same native_step_frame).
-  bool field_area_init = c->mem_r32(0x801fe00cu) == 0x8010637Cu   // GAME stage resident
-                      && c->mem_r16(0x801fe048u) == 2             // sm[0x48] == RUNNING
-                      && c->mem_r16(0x801fe04au) == 1             // sm[0x4a] == field area machine
-                      && c->mem_r16(0x801fe04eu) == 0;            // sm[0x4e] == object-placement init (pre-attach)
+  // AREA-INIT SUPPRESSION (fieldAreaInit above): skip the field scene for the object-placement init frame
+  // (models not yet attached — drawing overflows the queue, later-275); the backdrop above still draws.
+  bool field_area_init = fieldAreaInit();
   if (!field_area_init) {
     // (a) The render WALK CLUSTER (0x8003bf00/eec0/b588/bb50/bcf4/c048) is NO LONGER run from here
     // (USER 2026-07-07, issue #32): the substrate orchestrator executes it underneath every frame

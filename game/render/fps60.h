@@ -8,7 +8,11 @@
 // mObjCur/mObjPrev, keyed by cmd), BACKDROP scroll (bgScroll / mBgCur/mBgPrev). tier1Render re-runs the
 // field WORLD passes (terrainRenderAll + fieldEntityRender + fieldObjectsRender + backdropRender — the SAME
 // calls the real sceneNative makes) under those lerped inputs into the isolated mSink; present_vk merges
-// mSink with mRqCur's remaining 2D (HUD/overlay — screen-space, verbatim, no lerp needed) by (layer,seq).
+// mSink with mRqCur's remaining prims by (layer,seq): 2D HUD/overlay (screen-space, verbatim, no lerp
+// needed) AND every GUEST-EXECUTION-TIME drawable (#67: the guest-OT obj-depth billboards + the #65
+// dual-emit records — RQ_WORLD but has_xyf==0, no display-pass producer to re-run, so they draw verbatim
+// on BOTH presents; they step at 30Hz until each emitter is ported into the display pass per the
+// REDIRECT doctrine, but they can no longer flicker).
 // The authored sub-scene (hut interior, sm[0x4c]==3) is a guest-OT walk with no native per-object transform,
 // so its interp frame presents the captured interior queue (mRqCur) — degenerate lerp, correct (nothing to
 // interpolate). Both frames drain an RqItem list through the same RenderQueue::emitItem the 30fps path uses.

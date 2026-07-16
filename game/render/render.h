@@ -152,6 +152,13 @@ public:
   // parallel one) is what makes the lerped-camera re-render provably the same render path.
   void terrainRenderAll();
 
+  // Per-frame WORLD-pass gates, shared by the real render (sceneNative) and the fps60 interp re-render
+  // (Fps60::tier1Render) so the in-between can never draw a pass the real frame skipped (#67 bug class:
+  // the interp re-run bypassing a real-frame gate paints content only every other present). Pure guest
+  // READS of state unchanged since the real frame (fps60's present-time invariant).
+  bool worldVoidBeat() const;   // SOP narration VOID beat (0x800bf9b4==5): no terrain/scene-table/backdrop
+  bool fieldAreaInit() const;   // GAME field-area object-placement init frame: models unattached, no world
+
   // shadeSelect: pick this area's light config once per world frame (cheap guest-RAM fingerprint via
   // Lighting::areaKeyFrom); caches the result in mShadeCfg for the per-face shading routine.
   void shadeSelect();
