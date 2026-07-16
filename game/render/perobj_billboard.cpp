@@ -553,6 +553,11 @@ void Render::billboardEmit() {
       if (!c->game->oracle) {
         const float pord = billboardParticleOrd(c, node, particle);
         gpu_obj_depth_add(c, packetLo, tail, pord);
+        // DUAL-EMIT (#65): the particle quad's native picture — the BUF record this loop just
+        // finished (our own GTE-computed SXYs + case-selected code/clut) pushed as a WORLD prim at
+        // this particle's own depth. Without this, gems/flames/apples had NO pc_render picture
+        // (their packets only ever drew via the removed OT transcription). Gated inside the helper.
+        rq_push_ft4_record(c, BUF, pord);
         // Diagnostic (PSXPORT_DEBUG=bbord): prove the per-particle registration carries DISTINCT ords
         // (before this change every particle of a manager node shared obj_world_ord(node)'s single ord).
         if (cfg_dbg("bbord")) {

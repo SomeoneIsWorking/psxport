@@ -23,6 +23,8 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include "render_internal.h"   // cur_render_node / obj_world_ord — the #65 dual-emit push
+#include "render_queue.h"      // RenderQueue::emitOrQueue + RQ_WORLD/RQ_OM_DEPTH
 #include <cstdint>
 #include <cstdio>
 
@@ -195,6 +197,18 @@ void QuadRtptSubmit::submitQuad(Core* c) {
   for (uint32_t off = 4; off <= 36; off += 4, dstw += 4)
     c->mem_w32(dstw, c->mem_r32(out + off));
   c->mem_w32(POOL_PTR, pool + 40);
+
+  // DUAL-EMIT (bug #65 — AP gems/flames/apples/splash had NO pc_render picture once the OT
+  // transcription was removed): every quad that SURVIVES the substrate's own gates above is also
+  // pushed to the native render queue, from OUR OWN record — the 4 SXY words this leaf's GTE
+  // mirror just computed plus the caller-filled FT4 fields (+4 rgb|code, +12 clut|v0u0,
+  // +20 tpage|v1u1, +28/+36 v2u2/v3u3). World-positioned 2D: RQ_WORLD with the object's PC-native
+  // flat depth (obj_world_ord of the CURRENT walk node — the same #28 convention obj_depth used).
+  // Host-only; the guest packet-pool copy above is untouched. No push under psx_render/oracle
+  // (the OT walk draws the packets there — double-draw) — same gate as every 2D producer.
+  { static long np = 0; if ((np++ & 255) == 0)
+      cfg_logf("quadrtpt", "push #%ld node=%08X xy0=%08X", np, cur_render_node(c), c->mem_r32(out + 8)); }
+  rq_push_ft4_record(c, out, obj_world_ord(c, cur_render_node(c)));
   pop();                                       // ascend the real 16-byte frame
 }
 

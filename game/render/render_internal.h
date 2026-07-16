@@ -32,6 +32,7 @@ float proj_obj_center_ord(void);
 #include "render.h"    // Render (needed for cur_render_node below)
 #include "game.h"      // c->game->oracle
 #include "pkt_span.h"  // PktSpanSession (withDepthTag below)
+#include "render_queue.h"  // RenderQueue::emitOrQueue + RQ_WORLD (rq_push_ft4_record below)
 
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
@@ -72,6 +73,44 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
     return proj_camview_world_ord(wx, wy, wz);
   }
   return proj_obj_center_ord();
+}
+
+// rq_push_ft4_record — the shared #65 dual-emit: push one 10-word FT4 billboard record (the layout
+// QuadRtptSubmit::submitQuad and Render::billboardEmit both build: +4 rgb|code, +8/+16/+24/+32 SXY,
+// +12 clut|v0u0, +20 tpage|v1u1, +28/+36 v2u2/v3u3) to the native render queue as a WORLD prim with
+// a flat per-quad depth ord (the #28 billboard convention, natively). Reads the record the native
+// emitter just built — its OWN values, not a packet transcription. No-op under psx_render/oracle
+// (the guest OT walk draws the packets there). Host-only.
+static inline void rq_push_ft4_record(Core* c, uint32_t rec, float ord) {
+  if (c->game->oracle || c->mRender->mode.psxRender()) return;
+  int xs[4], ys[4], us[4], vs[4];
+  static const uint32_t sxyOff[4] = { 8, 16, 24, 32 }, uvOff[4] = { 12, 20, 28, 36 };
+  for (int i = 0; i < 4; i++) {
+    const uint32_t w = c->mem_r32(rec + sxyOff[i]);
+    xs[i] = (int16_t)(w & 0xFFFFu);
+    ys[i] = (int16_t)(w >> 16);
+    const uint32_t uvw = c->mem_r32(rec + uvOff[i]);
+    us[i] = uvw & 0xFFu;
+    vs[i] = (uvw >> 8) & 0xFFu;
+  }
+  const uint32_t colorWord = c->mem_r32(rec + 4);
+  const uint8_t  op   = (uint8_t)(colorWord >> 24);
+  const uint32_t clut = c->mem_r32(rec + 12) >> 16;
+  const uint32_t tp   = c->mem_r32(rec + 20) >> 16;
+  unsigned char rs[4], gs[4], bs[4];
+  for (int i = 0; i < 4; i++) {
+    rs[i] = (unsigned char)(colorWord & 0xFF);
+    gs[i] = (unsigned char)((colorWord >> 8) & 0xFF);
+    bs[i] = (unsigned char)((colorWord >> 16) & 0xFF);
+  }
+  float dep[4] = { ord, ord, ord, ord };
+  c->game->activeRq().emitOrQueue(c, /*capture=*/1, RQ_WORLD, RQ_OM_DEPTH, /*nv=*/4,
+                                  /*semi=*/(op & 2) ? 1 : 0, /*raw=*/(op & 1) ? 1 : 0,
+                                  xs, ys, nullptr, nullptr, us, vs, rs, gs, bs, dep,
+                                  /*mode=*/(int)((tp >> 7) & 3u),
+                                  (int)(tp & 0xFu) * 64, (int)((tp >> 4) & 1u) * 256,
+                                  (int)(clut & 0x3Fu) * 16, (int)((clut >> 6) & 0x1FFu),
+                                  0, 0, 0, 0, 0, 0, 1023, 511, (int)((tp >> 5) & 3u));
 }
 
 // Guest-transparent depth-tag wrap (RenderObserver's obs_body, folded in): PSXPORT_ORACLE runs `body`
