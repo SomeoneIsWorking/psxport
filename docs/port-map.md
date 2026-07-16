@@ -66,4 +66,4 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **order:** 31
 - **deps:** field-world (sceneNative)
 - **owner:** -
-- **notes:** Track B LANDED (cae40db7): font->queue dual-emit + panel taps + dialogTextNative — captions/dialog bubbles/gauge digits native under pc_render, SBS 2-leg 0-diff. Track A: op-0x7C = ONE scrolling 16x16 tile-grid bg layer, RE COMPLETE (docs/native-render-2d-tilegrid.md): helper 0x8011534C + emitter 0x80115598, dispatch case 0x8003D1C4; remaining RE gap = 0x801158E0 driver states; then dual-emit port. (Earlier 0x801401B8 attribution was WRONG — that's owned entityLoop sharing the bump pool.) Gauge segment bars (FUN_8004EB94) still todo. USER eyeball pending.
+- **notes:** Track B LANDED: font->queue + panel taps + dialogTextNative + gauge text-row tap (FUN_8004EB94, parity=partial — needs gauge-popping drive). Track A LANDED: tile-grid layer owned (TileGridLayer, parity=verified f20820); backdropRender owns its picture. Remaining: gauge firing drive + USER eyeball of the whole 2D layer; special-char icon glyphs (FUN_80078988) still substrate.
