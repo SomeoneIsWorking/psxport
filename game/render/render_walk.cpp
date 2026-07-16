@@ -135,6 +135,15 @@ void Render::backdropRender(uint32_t t4) {
   Core* c = mCore;
   int W = c->mem_r8(t4 + 0x10), H = c->mem_r8(t4 + 0x11);
   if (W == 0 || H == 0) return;
+  // TILE V-OFFSET — the FIELD backdrop drawer (FUN_80115598) samples each tile at v = (tile&0xF0)+8, but
+  // the SOP NARRATION backdrop drawer (FUN_8010C26C, the seaside/cutscene beats) samples at v = (tile&0xF0)
+  // with NO +8 (RE'd from ram_sea.bin, issue #60). Applying the field's +8 to the SOP backdrop shifts the
+  // atlas sample half a tile -> tile seams (verified: sea beat RMSE 40.2 -> 18.5 with vAdd=0). Pick the
+  // variant from the resident overlay (data-derived, not a magic constant): the SOP narration overlay's
+  // first-instruction signature @0x80109450 == 0x3C021F80. backdropRender is never called on the title, and
+  // the field overlay evicts SOP, so this reads correctly in both the field and narration contexts, and at
+  // both call sites (sceneNative real frame + Fps60 tier-1 interp re-render).
+  const int vAdd = (c->mem_r32(0x80109450u) == 0x3C021F80u) ? 0 : 8;
   int rowstride = W * 2;                          // s0 — bytes per map row
   int mapbytes  = rowstride * H;                  // s3 — total map bytes (wrap modulus)
   int scrollX, scrollY;
@@ -183,7 +192,7 @@ void Render::backdropRender(uint32_t t4) {
     for (int t1 = scrollX - cx;;) {
       int X = (int16_t)((t1 & 0xFFF0) + xoff);
       uint16_t tile = c->mem_r16(map + (uint32_t)(t6 + t0));
-      int u = (tile & 0xF) << 4, v = (tile & 0xF0) + 8;
+      int u = (tile & 0xF) << 4, v = (tile & 0xF0) + vAdd;   // field +8 / SOP narration +0 (see top of fn)
       uint16_t clut = (uint16_t)(clutbase + ((tile & 0xF00) >> 2));
       int clut_x = (clut & 0x3F) * 16, clut_y = (clut >> 6) & 0x1FF;
       int xs[4] = { X, X + 16, X, X + 16 }, ys[4] = { Y, Y, Y + 16, Y + 16 };
