@@ -75,17 +75,20 @@ and reports a **false 0-div** — masking every real bug in that cluster (the 20
 `perobj_billboard`/`overlay_gt3gt4` regression hid 19 real packet-pool divergences behind a clean
 gate for a day).
 
-Two override mechanisms, two gate points — both must hold:
+ONE override registry, one gate point (the `g_<mod>_override[]` tables are process-global, shared by
+both SBS cores):
 
-- **`rec_dispatch` → `EngineOverrides`**: ALREADY gated at `overlay_router.cpp` (`!psx_fallback`
-  before `engine_overrides.run`). Don't re-gate per-cluster.
-- **`g_override[]` / `g_ov_*_override[]`** (direct substrate calls bypass rec_dispatch): these are
-  PROCESS-GLOBAL tables shared by both cores. Engine/game installs MUST go through
-  `engine_set_override_main` / `engine_set_override_a00` (`runtime/recomp/engine_override_thunk.cpp`),
-  which installs ONE shared thunk keyed by `c->pc` that runs the gen body on the oracle. Do NOT add
-  per-trampoline `psx_fallback` gates (they get forgotten) and do NOT call the raw
-  `shard_set_override` / `ov_*_set_override` for engine/game natives. PlatformHle + the native
-  scheduler primitives use the RAW installers directly (they must fire on both cores).
+- **`overrides::install(addr, name, native, gen[, setter])`** (`runtime/recomp/override_registry.h`)
+  is the ONLY way to wire an engine/game native. It records `{ native, gen }` and installs ONE shared
+  oracle-gated thunk. Both call paths reach it: the `g_<mod>_override[]` thunk (direct `func_X(c)`
+  calls) and `rec_dispatch` (`overrides::dispatch`, `overlay_router.cpp`). The single dispatch runs the
+  `gen` body on the oracle leg (core B / `psx_fallback` / `verify.inSubstrateLeg`) and `native`
+  elsewhere — the gate is in ONE place, it can't be forgotten per-cluster.
+- Do NOT add a per-trampoline `psx_fallback` guard and do NOT call the raw `shard_set_override` /
+  `ov_<tag>_set_override` for an engine/game native — that reintroduces the fake-0-diff-on-core-B bug.
+  Pass the module setter as `install`'s `setter` arg to intercept direct callers, or `nullptr` for
+  rec_dispatch-only. PlatformHle + native scheduler BIOS leaves use the RAW installers directly (they
+  must fire on both cores).
 
 If SBS suddenly shows 0-div where it used to diverge, SUSPECT THE ORACLE first (a new cluster
 installed ungated), not a miraculous fix.

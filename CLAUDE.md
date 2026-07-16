@@ -139,17 +139,23 @@ spot-check AFTER Ghidra only.
 - **REBUILD, don't transcribe.** A native fn that reproduces PSX instructions/packets byte-for-byte is
   PSX-simulation. Match the observable RESULT (world it builds, picture it draws, interface state
   content reads back), not the PSX mechanism.
-- **One global dispatch point; engine overrides allowed (USER 2026-07-07).** `rec_dispatch(c, addr)`
-  is THE choke point. A native engine class may be wired by guest address in `EngineOverrides`
-  (runtime/recomp/engine_overrides.h, registered on Game) — then EVERY caller, substrate included,
-  reaches the native method. This retires the old "PSX never calls PC / contiguity required / only
-  hardware-sync HLE" rule: a leaf engine (e.g. the fade engine) can be owned globally on its own.
-  Rules: handlers use guest ABI (args in r4..r7, ret in r2) and must byte-match the substrate body
-  (SBS gates it — core B / `psx_fallback` never consults the table, staying the pure reference);
-  native call sites prefer routing wired addresses through `rec_dispatch` so calls stay uniform and
-  traceable (`PSXPORT_DEBUG=dispatch` logs every override hit with frame/core/ra/args). PlatformHle
-  remains the separate BIOS/hardware-sync HLE table. **No interpreter fallback**: a `rec_dispatch`
-  miss aborts with a backtrace. Fix a miss by seeding the recompiler, porting, or wiring an override.
+- **One override registry, one dispatch point (USER 2026-07-16).** A native engine class is wired by
+  guest address in THE registry — `overrides::install(addr, name, native, gen[, setter])`
+  (runtime/recomp/override_registry.h) — then EVERY caller, substrate included, reaches the native
+  method. This retires the old "PSX never calls PC / contiguity required / only hardware-sync HLE"
+  rule: a leaf engine (e.g. the fade engine) can be owned globally on its own. ONE entry per address
+  holds `{ native, gen }`; one dispatch decision runs `gen` on the oracle leg (core B / `psx_fallback`
+  / `verify.inSubstrateLeg`) and `native` everywhere else, shared by the two interception points — the
+  `g_<mod>_override[]` thunk (direct `func_X(c)` calls) and `rec_dispatch`. `gen` is the recompiled
+  body (`gen_func_`/`ov_<tag>_gen_`); `gen == native` expresses an oracle-allowed primitive (scheduler
+  leaves that must fire on both cores). `setter` = the module's `shard_set_override`/`ov_<tag>_set_override`
+  to intercept direct callers too, or `nullptr` for rec_dispatch-only wiring (keeps a direct call the
+  port deliberately leaves on the substrate). Handlers use guest ABI (args in r4..r7, ret in r2) and
+  must byte-match the substrate body — SBS gates it. There is NO separate register_/traceHit table and
+  NO hand-rolled `psx_fallback` guard: the gate lives in ONE place (`PSXPORT_DEBUG=dispatch`/`ovhit`).
+  PlatformHle remains the separate BIOS/hardware-sync HLE table (raw `shard_set_override`, fires on
+  both cores). **No interpreter fallback**: a `rec_dispatch` miss aborts with a backtrace. Fix a miss
+  by seeding the recompiler, porting, or wiring an override.
 - **FAIL-FAST.** All I/O and timing PC-native + synchronous. Any PSX async/wait (VSync waits, CD
   command-waits, async CD reader, GPU/MDEC DMA timeouts, IRQ loops) must be done inline or ABORT with a
   diagnostic. Do NOT re-introduce instant-VSync / fake-CD bandaids or env escape hatches.
@@ -204,9 +210,11 @@ you find yourself wanting to write guest RAM from render code, you're building t
 - **Bug-hunt loop + oracle integrity: `docs/bug-hunt-workflow.md` (read first).** Find bugs by oracle
   compare across the PC SKIP × RENDERER matrix; NEVER debug a divergence before the divergent call
   chain is FULLY OWNED end-to-end (grow ownership first). The SBS oracle (core B) must stay pure —
-  only PlatformHle + the `gen_func_*` body; engine/game natives on the process-global `g_override[]`/
-  `g_ov_*` tables MUST install via `engine_set_override_*` (runtime/recomp/engine_override_thunk.cpp),
-  never the raw `shard_set_override`. A sudden 0-div where SBS used to diverge = suspect the oracle.
+  only PlatformHle + the `gen_func_*` body. Engine/game natives MUST install via
+  `overrides::install(addr, name, native, gen[, setter])` (runtime/recomp/override_registry.h), which
+  carries the `gen` body the oracle leg runs and installs the shared oracle-gated thunk; NEVER call the
+  raw `shard_set_override`/`ov_<tag>_set_override` directly for an engine/game native (that reintroduces
+  the fake-0-diff-on-core-B bug). A sudden 0-div where SBS used to diverge = suspect the oracle.
 - **Job #1 — SBS byte-exact.** `PSXPORT_SBS_MODE=full ./run.sh`. Every diff is fatal. Root-cause + fix.
 - **Rendering (once byte-exact) — observable result.** Agent builds, USER eyeballs. Non-visual RAM/
   state probes fine. Don't gate render on reproducing PSX packets — that forces transcription.
