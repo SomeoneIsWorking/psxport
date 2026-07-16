@@ -174,25 +174,8 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
 
-// UI-span registry (bug #34, gpu_native_internal.h) — presence-only provenance for the dialog-box
-// PANEL emitter's packet-pool span (registered by the 0x8007D594 observer wrap, render_observer.cpp).
-// No depth/ord: the field's 2D-only OT walk just needs to know "this poly belongs to a UI panel, keep
-// it as RQ_HUD", not where it sits in the 3D world.
-void GpuState::ui_span_add(uint32_t lo, uint32_t hi) {
-  if (hi <= lo) return;
-  if (s_ui_frame != s_frame) { s_ui_n = 0; s_ui_frame = s_frame; }   // new frame -> clear prior spans
-  if (s_ui_n < UI_SPAN_MAX) { s_ui_lo[s_ui_n] = lo; s_ui_hi[s_ui_n] = hi; s_ui_n++; }
-}
-int GpuState::ui_span_lookup(uint32_t addr) {
-  if (s_ui_frame != s_frame) return 0;
-  uint32_t n = addr | 0x80000000u;
-  for (int i = 0; i < s_ui_n; i++) if (n >= s_ui_lo[i] && n < s_ui_hi[i]) return 1;
-  return 0;
-}
-void gpu_ui_span_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.ui_span_add(lo, hi); }
-
 // NATIVE-COVER registry (docs/fps60-rework.md REDIRECT, gpu_native_internal.h). Presence-only, same
-// shape as ui_span_add/lookup: a packet-pool span whose geometry Render::cmdListDispatch ALSO drew
+// shape (presence-only span registry): a packet-pool span whose geometry Render::cmdListDispatch ALSO drew
 // through the real per-object float path this frame (real identity + real per-vertex depth) — the
 // gp0_exec classifier below drops a covered span's guest-OT polys unconditionally, before even
 // considering the obj_depth billboard fallback (see the `!is3d && !bg` block).
@@ -924,15 +907,11 @@ void GpuState::gp0_exec(Core* core) {
         // which works on the native field path because the owned billboardEmit registers its packet
         // span through withDepthTag/gpu_obj_depth_add. Dropping these with the world polys is what
         // made the whole class invisible under pc_render.
-        // ... AND a third category — UI-SPAN polys (issue #34, docs/findings/ui.md "Dialog text-box
-        // PANEL emitter chain"): the dialog box's dark panel fill is real POLY geometry (FT4), drawn by
-        // guest 0x8007D594's shared tail (observer-wrapped in render_observer.cpp, which registers the
-        // emitted packet-pool span via gpu_ui_span_add). It is screen-space UI, not native-owned world
-        // geometry, but unlike a billboard it has no world depth and is not object-anchored — its own
-        // presence-only registry (ui_span_lookup) is checked here so it survives the 2D-only drop too.
-        int ui = ui_span_lookup(s_cur_node);
-        if (ui) { layer = RQ_HUD; om = RQ_OM_2D_FG; is3d = 0; }   // force screen-space HUD, no depth tag
-        if (s_ot_2d_only && !billboard && !ui) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
+        // (The ui_span registry that used to force dialog-panel FT4 polys to RQ_HUD here was removed
+        // 2026-07-16, break-first-then-rebuild: an untagged 2D panel poly classifies is3d=0/bg=0 →
+        // RQ_HUD by the line above anyway, and the panel's pc_render picture is the native
+        // Panel::pushFill/pushCorners taps, not this walk.)
+        if (s_ot_2d_only && !billboard) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
         else {
         // Count only GENUINE unimplemented 2D (a ui-span panel poly), NOT obj_depth-promoted world
         // billboards: a `billboard` poly is a 2D prim that got obj_depth (:848) → is3d=1, drawn as world

@@ -172,6 +172,15 @@ spot-check AFTER Ghidra only.
   `runtime/recomp/guest_abi.h` (opt-in register/frame proxies) + `tools/port_check.py` (equivalence
   gate) — see `docs/port-framework.md`.
 
+## BREAK FIRST, THEN REBUILD (USER 2026-07-16; generalizes the 2026-07-15 render directive)
+
+When replacing a transcription/fallback/transitional mechanism with a native producer, the ORDER is:
+**delete the old mechanism FIRST** — let the gap be honestly visible (missing layer, crash-with-
+identity) — **then rebuild it natively**. Never keep a stopgap alive because removal is inconvenient,
+and never build the replacement alongside the hack "to be safe": the hack's presence hides whether
+the rebuild actually works. Applies to render fallbacks, observer/registry shims, compare
+relaxations, and any "transitional" machinery a plan doc promises to retire.
+
 ## Render — reimplement, don't transcribe
 
 `pc_render` reads scene data (camera/view, per-object transform, geomblk prims) and draws with float

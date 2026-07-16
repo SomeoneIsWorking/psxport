@@ -30,11 +30,6 @@ void shard_set_override(uint32_t addr, OverrideFn fn);
 extern void gen_func_8003C5F8(Core*);   // special-effect leaf renderers (walk types 16..19) — still substrate
 extern void gen_func_8003C788(Core*);
 extern void gen_func_80039F4C(Core*);   // type-4 multi-element object renderer
-extern void gen_func_8007D594(Core*);   // generated/shard_4.c — dialog text-box state machine (its shared
-                                        // tail unconditionally emits the PANEL: border tiles via
-                                        // FUN_8007CC00, corner sprites + FT4 fills via FUN_8005019C/
-                                        // FUN_8004FFB4 — docs/findings/ui.md "Dialog text-box PANEL
-                                        // emitter chain", bug #34)
 
 static void obs_body(Core* c, void (*gen)(Core*)) {
   // PSXPORT_ORACLE: the oracle is PURE PSX — run the literal substrate body untouched, add NO host depth
@@ -58,33 +53,9 @@ OBS_WRAP(gen_func_8003C788)
 OBS_WRAP(gen_func_80039F4C)
 #undef OBS_WRAP
 
-// UI-span observer wrap (bug #34): guest-transparent, SAME shape as obs_body above, but tags the
-// captured span in the UI-span registry (gpu_ui_span_add) instead of obj_depth — the dialog panel is
-// screen-space UI with no world depth and no fps60 billboard identity, so it needs its own
-// presence-only provenance channel (gpu_native_internal.h ui_span_add/lookup) rather than
-// obj_depth_add's world-position tag.
-//
-// DEVIATION from the original spec (which asked for engine_set_override_main, "like
-// render_walk_dispatch.cpp:252"): engine_override_thunk.cpp gates its oracle branch on
-// `c->game->psx_fallback || c->game->verify.inSubstrateLeg` — and per game.h ("recomp_path
-// (psx_fallback=1, pc_skip ignored)"), a STANDALONE `PSXPORT_GATE=1` run (no SBS peer) also sets
-// psx_fallback=1. Wiring through engine_set_override_main would therefore skip span registration on
-// EVERY GATE run, not just true oracle/SBS-core-B — verified empirically: with that install, the
-// panel stayed missing under `PSXPORT_GATE=1` (scratch/screenshots/bug34fix_gate_pc.png before this
-// fix, identical to the broken bug44_ab_pc.png baseline; `PSXPORT_DEBUG=ovhit` showed native=0
-// oracle=34 on 0x8007D594 in that standalone run). That breaks verification target A, which requires
-// the panel to render under GATE+pc_render. obs_body's own gate — `c->game->oracle` — is narrower: it
-// is 0 on a standalone GATE run and only set to 1 by Game::setOracle() (true oracle boots / SBS-full
-// core B, sbs.cpp:1921), which is exactly the purity boundary this wrap needs. This is the SAME gate
-// the 3 sibling wraps above already use in production for pc_render depth-tagging under GATE, so this
-// wrap follows that proven, already-installed pattern instead.
-static void obs_8007D594(Core* c) {
-  if (c->game->oracle) { gen_func_8007D594(c); return; }   // true oracle / SBS core B: pure gen, no tag
-  PktSpanSession sess(c);
-  gen_func_8007D594(c);                               // the substrate body, untouched
-  uint32_t slo, shi;
-  if (sess.close(&slo, &shi)) gpu_ui_span_add(c, slo, shi);
-}
+// (The ui_span observer wrap that used to sit here on 0x8007D594 was removed 2026-07-16,
+// break-first-then-rebuild: the dialog panel's pc_render picture is now the native
+// Panel::pushFill/pushCorners/pushDialogGlyphs taps, so the span-provenance shim had no consumer.)
 
 // Install once per process (the override table is shared by both cores; the wrapper is guest-
 // transparent, so SBS strictness is unaffected — MV_CHECK substrate legs run through it too).
@@ -95,5 +66,4 @@ void render_observer_install() {
   shard_set_override(0x8003C5F8u, obs_gen_func_8003C5F8);
   shard_set_override(0x8003C788u, obs_gen_func_8003C788);
   shard_set_override(0x80039F4Cu, obs_gen_func_80039F4C);
-  shard_set_override(0x8007D594u, obs_8007D594);
 }

@@ -16,7 +16,6 @@ void  gpu_obj_depth_add(Core*, uint32_t lo, uint32_t hi, float ord);
 // Presence-only provenance: a dialog-box panel poly's packet-pool span, so the field's 2D-only OT walk
 // keeps it as RQ_HUD instead of dropping it with the redundant native-owned world polys. No depth/ord —
 // distinct from gpu_obj_depth_add's world-position billboard occlusion.
-void  gpu_ui_span_add(Core*, uint32_t lo, uint32_t hi);
 // --- NATIVE-COVER registry (docs/fps60-rework.md REDIRECT) --- see gpu_native_internal.h for the
 // full rationale: marks a packet-pool span whose geometry was ALSO drawn through the real per-object
 // float path this frame, so the field's 2D-only OT walk drops the substrate's redundant copy instead

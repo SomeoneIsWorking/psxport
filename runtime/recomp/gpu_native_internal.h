@@ -89,26 +89,12 @@ struct GpuState {
   void obj_depth_add(uint32_t lo, uint32_t hi, float ord);  // record an object's pool span + world depth
   int  obj_depth_lookup(uint32_t node, float* ord);         // depth ord for the OT node, if in an object span
 
-  // UI-SPAN registry (bug #34, docs/findings/ui.md "Dialog text-box PANEL emitter chain"). The dialog
-  // text-box's shared packet-emitter tail (guest 0x8007D594, observer-wrapped in render_observer.cpp)
-  // draws its dark panel fill as real POLY geometry (FT4) — the field's 2D-only OT walk otherwise drops
-  // ALL non-billboard polys as redundant native-owned world geometry, which silently ate the panel.
-  // Presence-only registry (unlike obj_depth_add/lookup above): a UI span carries no world depth and is
-  // not an object-anchored fps60 billboard, so it needs its own provenance channel, not obj_depth's.
-  // Same per-frame s_frame idiom as s_od_lo/hi/frame.
-  static const int UI_SPAN_MAX = 64;
-  uint32_t s_ui_lo[UI_SPAN_MAX] = {}, s_ui_hi[UI_SPAN_MAX] = {};
-  int s_ui_n = 0;
-  int s_ui_frame = -1;
-  void ui_span_add(uint32_t lo, uint32_t hi);   // record a UI-panel emitter's packet-pool span
-  int  ui_span_lookup(uint32_t addr);           // is this OT node inside a UI span this frame?
-
   // NATIVE-COVER registry (docs/fps60-rework.md REDIRECT — windmill-family GT3/GT4 objects). When
   // Render::cmdListDispatch (perobj_dispatch.cpp) ALSO draws a cmd's geometry through the real
   // per-object float path (Render::gt3gt4, real identity + real per-vertex depth) because
   // perModeDispatch would otherwise route it to the byte-exact substrate mirror
   // (OverlayGt3Gt4::gt3/gt4), the substrate's OWN guest-OT copy of that same geometry becomes
-  // redundant. Presence-only span registry (same shape as ui_span_add/lookup): the field's 2D-only OT
+  // redundant. Presence-only span registry: the field's 2D-only OT
   // walk checks this FIRST and unconditionally drops a covered span's guest polys — NOT via
   // obj_depth's billboard promotion (that would draw the coarse GTE-positioned copy AGAIN with a flat
   // per-object depth, i.e. a double draw with a worse picture). The substrate GTE math that produced
