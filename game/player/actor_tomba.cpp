@@ -926,6 +926,7 @@ void ActorTomba::gov_matrixComposeAttached(Core* c) { c->engine.actorTomba.matri
 void ActorTomba::gov_enterOuterState0(Core* c)      { c->engine.actorTomba.enterOuterState0((int32_t)c->r[5]); }
 void ActorTomba::gov_mode0ActionGate(Core* c)       { c->engine.actorTomba.mode0ActionGate(); }
 void ActorTomba::gov_mode0WalkHandler(Core* c)      { c->engine.actorTomba.mode0WalkHandler(); }
+void ActorTomba::gov_actionHandler8005ACC8(Core* c) { c->engine.actorTomba.actionHandler8005ACC8(); }
 
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
@@ -982,6 +983,8 @@ void ActorTomba::registerOverrides(Game* game) {
   // (verbatim PORT_GEN, port_check-equivalent, game/player/actor_tomba_actions.cpp).
   extern void gen_func_8005A970(Core*);
   engine_set_override_main(0x8005A970u, gov_mode0WalkHandler, gen_func_8005A970);
+  extern void gen_func_8005ACC8(Core*);
+  engine_set_override_main(0x8005ACC8u, gov_actionHandler8005ACC8, gen_func_8005ACC8);
 }
 
 // =================================================================================

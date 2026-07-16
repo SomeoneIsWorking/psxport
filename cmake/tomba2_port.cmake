@@ -202,6 +202,7 @@ set(PORT_SRC
   game/ai/beh_cull_substate_leaves.cpp
   game/player/actor_tomba.cpp
   game/player/actor_tomba_actions.cpp
+  game/player/actor_tomba_action_8005accc.cpp
   game/scene/bg_scene_transition_sm.cpp
   game/scene/parallax_bg.cpp
   game/scene/scene_transition.cpp

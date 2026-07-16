@@ -121,6 +121,7 @@ private:
   static void gov_enterOuterState0(Core* c);
   static void gov_mode0ActionGate(Core* c);
   static void gov_mode0WalkHandler(Core* c);
+  static void gov_actionHandler8005ACC8(Core* c);
 
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
@@ -335,6 +336,7 @@ private:
   void matrixComposeAttached();
   void mode0ActionGate();            // FUN_8005A910 — mode-0 (walk) action gate; picks FUN_8005A970 vs swim 0x80112B50
   void mode0WalkHandler();            // FUN_8005A970 — mode-0 normal walk handler (PORT_GEN verbatim, wired via 8005A910)
+  void actionHandler8005ACC8();       // FUN_8005ACC8 — mode-N action handler (PORT_GEN verbatim)
 
   // ----------------------------------------------------------------------------
   // 2026-07-10 wide-RE pass — mode-N dispatch table A/B (FUN_80058918/FUN_80058F5C) case-target
