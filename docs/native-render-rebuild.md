@@ -56,14 +56,16 @@ Stage constants: `0x8010649C` START.BIN · `0x801062E4` TITLE/DEMO · `0x8010637
      FALSE POSITIVE** (or: they're only drawn via the 2d_only-walk TRANSCRIPTION, not natively — open Q:
      does billboardEmit 0x8003C8F4 push to the queue, or only guest packets + obj_depth?).
   2. **60 op-0x7C SPRITES** (RQ_HUD, objz=0, bg=0; contiguous pool run 0x800C5FF8 +0x10·n).
-     **BUILDERS IDENTIFIED (WWATCH 0x800C5FF8..6008 at free-roam, 2026-07-16):** the per-AREA-TYPE
-     overlay drawers dispatched by `Render::overlayTypeDispatch` (0x8003D0BC) — this area's hits are
-     store-pc 0x801401B8 (ra=0x8003D0FC, 12.6k stores/90s, a direct leaf of the dispatch) and store-pc
-     0x80115598 (ra=0x8003DF80, 6.5k, inside the 0x80115364 leaf). Each type-drawer emits its object
-     type's sprites INLINE (no shared sprite-emit leaf to tap), so native ownership = RE each drawer
-     into a producer that reads its object state and dual-emits (guest packets byte-exact + queue
-     quads), the glyphEmit/panel pattern. ~20 leaves total (codemap --addr 8003D0BC lists them);
-     grind them by area coverage, this area's two first.
+     **BUILDER RE'd (2026-07-16, docs/native-render-2d-tilegrid.md):** ONE scrolling 16×16
+     TILE-GRID background layer — scroll-wrap helper 0x8011534C (dispatch label 0x80115364,
+     case 0x8003D1C4 of overlayTypeDispatch) + tile-grid packet emitter 0x80115598 (nested W×H
+     loop, 16-byte op-0x7C packets, atlas UV/CLUT from a tile-ID table at node+20, whole grid
+     spliced into ONE background OT bucket). Native ownership = dual-emit port per the plan in
+     that doc; the 0x801158E0 4-state driver is the remaining RE gap. CAVEAT: an earlier note
+     here attributed the pool stores to 0x801401B8 — WRONG; that is OverlayGroundGt3Gt4::entityLoop
+     (3D GT3/GT4, already owned) whose packets merely land in the same shared bump pool. A WWATCH
+     on a pool ADDRESS RANGE names every emitter whose packets rotate through it, not "the" 2D
+     builder — match on the packet's command byte, not the address, next time.
   So the free-roam blocker is NOT "own the 5 named substrate leaves" (the emit-leaf scout proved 4/5 are
   already obj_depth-covered by the installed billboardEmit/perObjRenderDispatch overrides). It is (1) a
   gate FALSE POSITIVE to fix (exclude covered billboards from :938) + (2) the 60 op-0x7C sprites to own.
