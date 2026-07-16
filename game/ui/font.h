@@ -157,4 +157,9 @@ public:
   //   struct+18 "line height", which is never WRITTEN anywhere in this function — it must be
   //   initialized by a caller-adjacent leaf this wave did not trace) are inferred, not confirmed.
   static void glyphEmit(Core* c);
+
+  // Host half of glyphEmit's dual-emit: push the just-built glyph SPRT to the native render queue
+  // (RQ_HUD) so pc_render draws text without transcribing the guest OT. Reads the completed scratch
+  // struct at 0x800C0000; writes no guest byte; no-op under psx_render/oracle.
+  static void glyphQueuePush(Core* c);
 };

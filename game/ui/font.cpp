@@ -18,6 +18,10 @@
 // (sb/sh/sw) — they are the engine-interface state the rest of the engine + retained PSX content read.
 #include "core.h"
 #include "ui/font.h"
+#include "game.h"           // Game::activeRq — glyphQueuePush's dual-emit target
+#include "render.h"         // Render::mode.psxRender() gate
+#include "render_queue.h"   // RenderQueue::push2dQuad + RQ_HUD
+#include "cfg.h"            // cfg_logf fontq probe
 #include "guest_abi.h"   // GuestFrame/guest_fn — ABI vocabulary (2026-07-15 readability pass)
 #include <stdint.h>
 
@@ -240,6 +244,34 @@ void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint
 // dead-tail note). Guest-stack frame mirrored (sp-56, spill ra/s0-s5 at their RE'd offsets: r16..
 // r21 = s0..s5). Kept register-literal with goto/labels named after the guest addresses (dense
 // character-class branching with a shared tail reached from 5 different arms).
+// Font::glyphQueuePush — the host half of glyphEmit's dual-emit (see the call site in the packet
+// arm below). Reads the per-glyph scratch struct at 0x800C0000 AFTER all fields for this glyph are
+// final and pushes one 2D quad to the render queue (RQ_HUD, near band), matching the guest SPRT
+// byte-for-byte in placement/UV/palette: pos=+8/+10 (u16 cursor x/y), uv=+12/+13, clut=+14,
+// wh=+16/+18 (drawText passes {8,16}; read live for other callers), tpage 0x1F → tp=(960,256)
+// 4bpp, op 0x65 = raw (color ignored). Read-only on guest state. The struct is the SCRATCHPAD
+// block at 0x1F800000 (glyphEmit's r18 = 8064<<16), not main RAM.
+void Font::glyphQueuePush(Core* c) {
+  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // guest OT walk owns the picture
+  const uint32_t st = 0x1F800000u;
+  const int gx = (int16_t)c->mem_r16(st + 8u), gy = (int16_t)c->mem_r16(st + 10u);
+  const int gu = c->mem_r8(st + 12u),          gv = c->mem_r8(st + 13u);
+  const int gw = (int16_t)c->mem_r16(st + 16u), gh = (int16_t)c->mem_r16(st + 18u);
+  const uint32_t clut = c->mem_r16(st + 14u);
+  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  int xs[4] = { gx + ox, gx + gw + ox, gx + ox, gx + gw + ox };
+  int ys[4] = { gy + oy, gy + oy, gy + gh + oy, gy + gh + oy };
+  int us[4] = { gu, gu + gw, gu, gu + gw };
+  int vs[4] = { gv, gv, gv + gh, gv + gh };
+  unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };
+  { static long np = 0; if ((np++ & 127) == 0)
+      cfg_logf("fontq", "push #%ld xy=(%d,%d) wh=(%d,%d) uv=(%d,%d) clut=%04X", np, gx, gy, gw, gh, gu, gv, clut); }
+  c->game->activeRq().push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+                                 /*tp_x=*/960, /*tp_y=*/256, /*mode=*/0, /*raw=*/1,
+                                 (int)(clut & 0x3F) * 16, (int)(clut >> 6) & 0x1FF,
+                                 0, 0, 0, 0, 0, 0, 1023, 511);
+}
+
 void Font::glyphEmit(Core* c) {
   uint32_t sp0 = c->r[29];
   c->r[29] = sp0 - 56u;
@@ -248,7 +280,8 @@ void Font::glyphEmit(Core* c) {
   c->mem_w32(c->r[29] + 24u, c->r[16]);
   c->r[16] = c->r[7] + c->r[0];             // r16 = str cursor (a3)
   c->mem_w32(c->r[29] + 32u, c->r[18]);
-  c->r[18] = ((uint32_t)8064u << 16);       // 0x800C0000 -- fixed scratch struct base (NOT scratchpad)
+  c->r[18] = ((uint32_t)8064u << 16);       // 0x1F800000 -- glyph scratch struct base (SCRATCHPAD;
+                                            // an earlier note here said 0x800C0000 — wrong, 8064=0x1F80)
   c->r[3] = c->r[6] + c->r[0];              // r3 = size arg {w:lo16, h:hi16} (a2)
   c->r[2] = c->r[6] << 16;
   c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);   // sign-extended low16(size) = w
@@ -480,6 +513,15 @@ L_80078F04:
   c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 8u);
   c->r[4] = c->r[4] + 4u;
   c->mem_w32(c->r[6] + 0u, c->r[4]);        // advance PKT_POOL_PTR
+  // DUAL-EMIT (native-render-rebuild "shared foundation — font→queue producer"): the glyph SPRT just
+  // prepended as a guest packet is ALSO pushed to the native render queue, so pc_render draws text
+  // (field HUD, SOP captions, attract) without transcribing the OT. Host-only: reads the completed
+  // scratch struct (+8 xy, +12 uv, +14 clut, +16 wh; op 0x65 = raw textured sprite, tpage 0x1F fixed
+  // by the tail's func_80083DE0 header), writes NO guest byte and NO register — the faithful body
+  // above is unaffected. Gated off under psx_render/oracle where the guest OT walk draws the packet
+  // itself (a push there would double-draw). Special-char icon arms (FUN_80078988) stay substrate —
+  // their icons are a follow-up producer.
+  glyphQueuePush(c);
 L_80078F70:
   c->r[2] = c->r[2] + 8u;
   c->mem_w16(c->r[18] + 8u, (uint16_t)c->r[2]);
