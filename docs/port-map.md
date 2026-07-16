@@ -3,7 +3,7 @@
 The RE dependency chain. `## ` block per step. Work `portmap.py next`; kill `portmap.py hacks`.
 Detail lives in docs/port-progress.md; this is the queryable real-vs-hack frontier.
 
-**Status:** 6 verified · 1 ported-unverified · 1 todo
+**Status:** 6 verified · 2 ported-unverified
 
 ## title-frontend — DEMO stage s0..s7 + menu logic
 - **scope:** 0x801062E4 stage; Demo::s0..s7; sub-machines 0x8010696C/0x80106AC4
@@ -62,8 +62,8 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 
 ## field-2D layer (#3b)
 - **scope:** field HUD/dialog/billboards/op-0x7C sprites — the free-roam blocker
-- **status:** todo
+- **status:** ported-unverified
 - **order:** 31
 - **deps:** field-world (sceneNative)
 - **owner:** -
-- **notes:** Track A: 60 op-0x7C sprites need a native producer + billboard poly-count false-positive; Track B: font->queue producer (dialogTextNative landed the dialog-text slice)
+- **notes:** Track B LANDED (cae40db7): font->queue dual-emit (glyphQueuePush) + panel taps (game/ui/panel.cpp) + dialogTextNative — SOP captions, dialog bubbles (panel+border+corners+text), HUD gauge digits all native under pc_render; SBS 2-leg 0-diff. Track A remaining: op-0x7C per-area-type overlay drawers (builders identified: 0x801401B8 + 0x80115364-leaf; RE in progress) + gauge segment bars (FUN_8004EB94). USER eyeball pending.
