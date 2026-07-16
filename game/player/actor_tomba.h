@@ -125,6 +125,9 @@ private:
   static void gov_actionHandler8005AEE4(Core* c);
   static void gov_actionHandler8005F1B0(Core* c);
   static void gov_actionHandler800588BC(Core* c);
+  static void gov_actionHandler800531DC(Core* c);
+  static void gov_actionHandler800660AC(Core* c);
+  static void gov_actionHandler8005EF48(Core* c);
 
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
@@ -343,6 +346,9 @@ private:
   void actionHandler8005AEE4();       // FUN_8005AEE4 — mode-N action handler (PORT_GEN verbatim)
   void actionHandler8005F1B0();       // FUN_8005F1B0 — mode-N action handler (PORT_GEN verbatim)
   void actionHandler800588BC();       // FUN_800588BC — mode-N action leaf (PORT_GEN verbatim)
+  void actionHandler800531DC();       // FUN_800531DC — mode-N action leaf (PORT_GEN verbatim)
+  void actionHandler800660AC();       // FUN_800660AC — mode-N action leaf (PORT_GEN verbatim)
+  void actionHandler8005EF48();       // FUN_8005EF48 — mode-N action handler (PORT_GEN verbatim)
 
   // ----------------------------------------------------------------------------
   // 2026-07-10 wide-RE pass — mode-N dispatch table A/B (FUN_80058918/FUN_80058F5C) case-target

@@ -206,6 +206,9 @@ set(PORT_SRC
   game/player/actor_tomba_action_8005aee4.cpp
   game/player/actor_tomba_action_8005f1b0.cpp
   game/player/actor_tomba_action_800588bc.cpp
+  game/player/actor_tomba_action_800531dc.cpp
+  game/player/actor_tomba_action_800660ac.cpp
+  game/player/actor_tomba_action_8005ef48.cpp
   game/scene/bg_scene_transition_sm.cpp
   game/scene/parallax_bg.cpp
   game/scene/scene_transition.cpp
