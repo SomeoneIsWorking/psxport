@@ -2316,3 +2316,23 @@ draft was already byte-faithful.
   force 4:3: combat f6360 + watch_cut f20760 both 0-diff). Object-level cull already has the
   engine margin (cull.cpp CULL_FAR_MULT / fov margin). Remaining #61 candidates: left band comes
   free (never 320-gated); guest-side per-list visibility byte for objects only partially re-included.
+
+## fieldObjectsRender TYPE-CORRECT routing — pre-composed-matrix classes no longer double-camera'd (2026-07-16)
+
+- **cause**: perObjFlush composed camera∘(cmd+0x18) for EVERY cmd-bearing node, but cmd+0x18's MEANING
+  is class-specific: the perObjRenderDispatch family stores an OBJECT rotation; the F174 family
+  (renderWalk table 0x80014DB8 — the render_walk_dispatch banner's 0x800104B8 was a stale wrong
+  constant, corrected there long ago at :74 — types 1 and 4=text-label) stores a PRE-COMPOSED
+  camera∘object MATRIX. perObjFlush applied the camera twice to those; other types (billboard
+  composers, unowned overlay renderers) got a guessed-transform mesh draw.
+- **tables RE'd from the live RAM dump** (scratch/decomp/census_ram.bin):
+  0x800F2624/renderWalk@0x80014DB8: mesh {0,15} · pre-composed {1 (F174), 4 (39F4C label)} ·
+  billboards {16..20} · overlay customs {3,5,6,7} · vtable {32} · no-op rest.
+  0x800F2738/objListWalk4@0x80015000: mesh {0,15, 1(+B704 beams)} · billboard {16} · vtable {32}.
+  0x800FB168: table not yet RE'd — flush-all behavior kept there.
+- **fix**: fieldObjectsRender routes by (list, type): mesh types → perObjFlush; pre-composed types →
+  new perObjFlushPreComposed (factor cmd+0x18 via wq_read_matrix/wq_factor_world, re-compose through
+  projComposeObjectHost — camera exactly once, fps60-lerped via the sceneCam choke); all other types
+  draw NOTHING natively (USER: "don't render any unowned things") instead of a wrong-transform mesh.
+- **verify**: field shot identical (typeroute_field.png — nothing visible lost at seaside); SBS-full
+  0-diff both legs (combat f6180, watch_cut f20040).

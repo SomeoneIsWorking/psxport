@@ -102,6 +102,40 @@ void Render::perObjFlush() {
   }
 }
 
+// perObjFlushPreComposed — render.h banner. Same walk shape as perObjFlush; the transform comes from
+// FACTORING the cmd's pre-composed MATRIX against the scene camera (wq_read_matrix/wq_factor_world,
+// render_internal.h) and re-composing through projComposeObjectHost — camera applied exactly once,
+// through the sceneCam choke (fps60-lerped at the interp re-run).
+void Render::perObjFlushPreComposed() {
+  Core* c = mCore;
+  uint32_t node = c->r[4];
+  if (c->mem_r8(node + 8) == 0) return;
+  if (c->mem_r8(node + 9) == 0) return;
+  uint32_t otbase_ptr = c->mem_r32(OTBASE_PTR);
+  int i = 0;
+  while (i < (int)c->mem_r8(node + 8)) {
+    uint32_t cmd = c->mem_r32(node + 0xC0 + i * 4);
+    uint32_t geomblk = c->mem_r32(cmd + 0x40);
+    if (geomblk != 0) {
+      float crF[3][3], tr[3], objR[3][3], objT[3];
+      wq_read_matrix(c, cmd + 0x18u, crF, tr);
+      wq_factor_world(c, crF, tr, objR, objT);
+      // projComposeCore expects Robj in raw int16 scale (4096 = 1.0); the factored objR is unit-scale.
+      float Rraw[3][3];
+      for (int r = 0; r < 3; r++) for (int cc = 0; cc < 3; cc++) Rraw[r][cc] = objR[r][cc] * 4096.0f;
+      EObjXform w; c->mRender->projComposeObjectHost(Rraw, objT, &w);
+      c->mRender->projSetActive(&w);
+      uint32_t otbase = otbase_ptr;
+      if ((c->mem_r8(node + 0xD) & 0xF) == 4)
+        otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
+      c->mRender->gt3gt4(geomblk, otbase);
+      c->mRender->projClearActive();
+    }
+    i++;
+    if (i >= (int)c->mem_r8(node + 9)) break;
+  }
+}
+
 // ===================================================================================================
 // ONE NATIVE RENDER PATH — world-data-driven scene render (Phase 1, user 2026-06-24 architecture:
 // [[one-native-render-path-decoupled]]). Driven from the GAME's WORLD DATA, NOT from PSX GP0 packets:
@@ -559,12 +593,13 @@ void Render::fieldObjectsRender() {
     uint32_t n = c->mem_r32(HEADS[h]);
     for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
       if (c->mem_r8(n + 1) == 0) continue;                             // per-frame visibility marker
+      const uint32_t type = c->mem_r8(n + 0xB);
       // CUSTOM-RENDER-FN node (type 0x20): the node draws via a render fn at n+0x18 (substrate default-
       // case dispatch), NOT the cmd array. Known: the SOP narration SWIRL (0x8010BF54) — draw it natively
       // (narration_swirl.cpp). Guard on the SOP overlay being resident (sig @0x80109450): a stale node
       // whose fn points into an EVICTED overlay is normal (later-275 dangling-pointer case) — skip it.
       // Other type-0x20 fns stay skipped like before (tracked by #3b's completeness gate, not a crash).
-      if (c->mem_r8(n + 0xB) == 0x20) {
+      if (type == 0x20) {
         if (c->mem_r32(n + 0x18) == 0x8010BF54u && c->mem_r32(0x80109450u) == 0x3C021F80u) {
           c->mRender->stats.snObjs++;
           c->mRender->narrationSwirlRender(n);
@@ -572,9 +607,26 @@ void Render::fieldObjectsRender() {
         continue;
       }
       if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;    // no render commands
+      // TYPE-CORRECT ROUTING (#67 cont.; tables RE'd from the LIVE walk jump tables — the substrate
+      // routes each node TYPE to a class-specific renderer, and the cmd+0x18 field's MEANING differs
+      // by class). Only the perObjRenderDispatch family stores an OBJECT rotation there (camera∘object
+      // compose = perObjFlush). The F174 family (renderWalk table 0x80014DB8 types 1 and 4 — type 4 is
+      // the text-label node, whose glyphs textLabelEmit already covers) stores a PRE-COMPOSED
+      // camera∘object MATRIX — perObjFlush's compose applied the camera TWICE for those. Route them
+      // through the factored-matrix flush instead. Every other type (billboard composers — covered by
+      // billboardsRender; still-unowned overlay custom renderers) draws NOTHING here (USER 2026-07-16:
+      // "don't render any unowned things"), rather than a guessed-transform mesh.
+      //   HEADS[1] 0x800F2624 (renderWalk 0x80014DB8): mesh {0,15} · pre-composed {1,4}
+      //   HEADS[2] 0x800F2738 (objListWalk4 0x80015000): mesh {0,1,15} (1 = EF30 mesh + B704 beams)
+      //   HEADS[0] 0x800FB168: table not yet RE'd — keep the flush-all behavior (existing).
+      bool mesh = true, pre = false;
+      if (h == 1) { mesh = (type == 0 || type == 15); pre = (type == 1 || type == 4); }
+      else if (h == 2) { mesh = (type == 0 || type == 1 || type == 15); }
+      if (!mesh && !pre) continue;
       c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
       c->r[4] = n;
-      perObjFlush();
+      if (pre) perObjFlushPreComposed();
+      else     perObjFlush();
     }
   }
   {

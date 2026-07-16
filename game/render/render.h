@@ -139,6 +139,11 @@ public:
   // the object's real world coords and submits every geomblk cmd on node+0xC0 through gt3gt4.
   // Taxi-parameter c->r[4] = node (recomp-shaped body, mirrors the guest ABI).
   void perObjFlush();
+  // perObjFlushPreComposed: perObjFlush for the F174-class node types whose cmd+0x18 holds a
+  // PRE-COMPOSED camera∘object MATRIX (renderWalk table types 1/4 — text labels etc.), factored
+  // against the scene camera (wq_factor_world) back to a world transform so the native compose
+  // (and the fps60 interp re-run's lerped camera) applies the camera exactly once.
+  void perObjFlushPreComposed();
 
   // terrain (guest 0x8002AB5C): the field terrain render entry. Picks the area's light config for
   // the frame, then either super-calls the recomp body (dual-core diff neutralize path) or runs the
