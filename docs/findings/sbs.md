@@ -5,6 +5,25 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## LIVE-REGISTER LAW: callees spill the caller's caller-saved regs — mirror the full register file at every dispatch boundary (2026-07-16)
+
+- **The class (3rd instance; treat as LAW when porting):** a native port that calls a still-substrate
+  fn (rec_dispatch/guest_fn) must reproduce EVERY register gen holds live at that jal — not just the
+  documented args — because the callee's prologue/body SPILLS caller-saved registers to the guest
+  stack, and SBS full-RAM compare sees the spilled bytes. Instances: MusicCoord::voiceMixTick (the
+  original frame-mirror finding below), Engine::walkStart's early-exit ra (above), and
+  Engine::padEdgeFence (wave-3: f12 two 2-byte diffs at 0x801FFFAA/CA = spilled upper halves of
+  gen's r2=0x800F0000 at the FUN_8005229C tail call; also gen's s0=0x800F0000 held across both
+  dispatches, {r2=1, r3=pollFlag} at the sample call).
+- **How to derive the live set:** read the gen body at each jal — every register assigned since the
+  last call that isn't dead by the jal is live; delay-slot literals count. `abi_extract.py --contract`
+  gives the callee-saved frame; the CALLER-saved live set is hand-read (tooling gap — a
+  `--live-at-call <addr>` mode would mechanize this).
+- **Return side too:** mirror gen's exit clobbers of arg registers (guestMemset: r4=dst+n, r6=0) —
+  callers may spill them before reassigning.
+- **refs:** game/input/pad_edge_fence.cpp (the annotated fix), runtime/recomp/mem.cpp ov_guestMemset,
+  commit 7db286a8.
+
 ## walkStart early-exit spill gap @0x801FE8CC — watch-cut f747 divergence (2026-07-16, RESOLVED same day)
 
 - **Symptom**: watch-cut SBS-full leg diverged f747–f779 on ONE word, guest stack 0x801FE8CC:
