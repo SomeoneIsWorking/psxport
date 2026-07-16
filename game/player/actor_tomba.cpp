@@ -836,6 +836,27 @@ void ActorTomba::velocityIntegrate(bool suppressY) {
 }
 
 // =================================================================================
+// mode0ActionGate() — guest FUN_8005A910(G). Tomba's mode-0 (default/walk) action-mode handler,
+// reached from the mode-N dispatch table A (gen_func_80058918 case L_80058998). Picks between the
+// normal sub-handler FUN_8005A970 (direct same-shard call) and the special sub-handler 0x80112B50
+// (swim/water-interaction) based on the seaside water flag + Tomba's action-suppress bits:
+//   A (FUN_8005A970): water mode ON (0x800BF816 != 0), OR G+0x17C == 0, OR (G+0x17E & 0x640) != 0
+//   B (0x80112B50):   water OFF AND G+0x17C != 0 AND (G+0x17E & 0x640) == 0
+// (G+0x17C = 380, an action-enable byte; G+0x17E = 382 = the growthFlags word — 0x640 = the
+// 0x400|0x200|0x40 suppress bits.) Both sub-handlers stay substrate (guest_fn/rec_dispatch); this
+// leaf owns only the branch. Faithful frame: sp-24, spill ra@+16 (mirrored via GuestFrame).
+void ActorTomba::mode0ActionGate() {
+  Core* c = core;
+  const uint32_t G = G_ADDR;
+  static constexpr GuestFrameSpill kSpills[] = {{31, 16}};
+  GuestFrame<24, 1> frame(c, kSpills);
+  bool pathA = c->mem_r8(0x800BF816u) != 0           // water mode on
+            || c->mem_r8(G + 0x17Cu) == 0            // action-enable byte clear
+            || (c->mem_r16(G + 0x17Eu) & 0x640u) != 0;  // a suppress bit set
+  if (pathA) guest_fn(c, 0x8005A970u, 0x8005A950u);  // normal handler (direct same-shard in gen)
+  else       guest_fn(c, 0x80112B50u, 0x8005A960u);  // swim/water-interaction handler
+}
+
 // registerOverrides — wire the 4 postInteractWalk sub-handlers into EngineOverrides. Guest ABI:
 // a0=G (implicit/unused — G is always ActorTomba::G_ADDR), a1=item, a2=mode where applicable;
 // return via r[2] for the two that produce a v0. See actor_tomba.h for why EngineOverrides alone
@@ -903,6 +924,7 @@ void ActorTomba::gov_assetReady(Core* c)           { ov_assetReady(c); }
 // takes (G=a0 implicit via c->engine.actorTomba's G, mode=a1).
 void ActorTomba::gov_matrixComposeAttached(Core* c) { c->engine.actorTomba.matrixComposeAttached(); }
 void ActorTomba::gov_enterOuterState0(Core* c)      { c->engine.actorTomba.enterOuterState0((int32_t)c->r[5]); }
+void ActorTomba::gov_mode0ActionGate(Core* c)       { c->engine.actorTomba.mode0ActionGate(); }
 
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
@@ -951,6 +973,10 @@ void ActorTomba::registerOverrides(Game* game) {
   // frames, both this and enterOuterState0 wired.
   extern void gen_func_800597AC(Core*);
   engine_set_override_main(0x800597ACu, gov_matrixComposeAttached, gen_func_800597AC);
+  // mode0ActionGate (0x8005A910) — reached via the still-substrate mode-N table (gen_func_80058918
+  // case 0); it calls func_8005A970 DIRECTLY, so it needs the shard wire too, not just EngineOverrides.
+  extern void gen_func_8005A910(Core*);
+  engine_set_override_main(0x8005A910u, gov_mode0ActionGate, gen_func_8005A910);
 }
 
 // =================================================================================
