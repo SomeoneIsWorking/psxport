@@ -2158,3 +2158,26 @@ draft was already byte-faithful.
   reads for psx_render. Hypothesis: a vortex texture-upload path (MoveImage/DMA during the narration) is
   not mirrored into the VK VRAM image. NEXT: dump+compare VK VRAM vs guest VRAM at tpage 0x19 (~576,256);
   if the texture is absent/stale in the snapshot, fix the upload mirror. Deep GPU-backend/VRAM-sync work.
+
+## High-res (ires) looks blurry — it's supersample-to-native, not present-at-high-res
+- **symptom:** enabling high-res (internal-resolution / ires mod) makes the image look BLURRIER/softer than
+  native, not sharper. USER report 2026-07-16.
+- **status:** fixed 2026-07-16 (unified present-at-high-res; verify on-window by USER eyeball)
+- **cause:** the ires path renders the 3D world into a scaled target (s_ires_color, e.g. 4x) but
+  render_geom (gpu_gpu.cpp) BOX-DOWNSAMPLES it back to the native 320x240 VRAM (s_vram_tex) via
+  ires_downsample.frag, and the present pass samples that NATIVE VRAM up to the window (present.frag,
+  s_samp_nearest). So ires is SSAA-to-native: the high-res detail is averaged away before present, and the
+  box-average softens edges — so more ires = softer output at the SAME ~240-line screen resolution. The
+  scaled target itself is sharp (prior `iresdump` proof); it's discarded at the downsample.
+- **fix (done):** ONE unified render path (USER 2026-07-16: "just one render path, behavior shouldn't
+  differ between ires levels"). render_geom now renders EVERY band (2D_BG/3D/2D_FG) into a single composite
+  C at the current scale (C = s_vram_tex @1x, s_ires_color @>1x) and present() samples C directly to the
+  window — high-res is genuinely crisp, no downsample-to-native for present. Deleted the whole SSAA
+  apparatus (seed blit, s_ires_bg_snap, the bug#55 coverage-mixing downsample); ires_downsample.frag is now
+  a plain box used ONLY for the headless `shot`/VRAM readback. The ires level changes only the target SIZE.
+  VERIFIED headless: @1x title RMSE 0.000 + void-3D RMSE 20.24 (identical to pre-rework = no regression);
+  @4x renders into the 4096x2048 composite, shot box-downsamples to match (void 19.07, title 0.00), no
+  crash; SBS gameplay still 0-diff (render is host-only). On-window crispness = USER eyeball (windowed,
+  ires>1). See [[oracle-not-ground-truth-for-render]].
+- **refs:** runtime/recomp/gpu_gpu.cpp render_geom (band 1/2/3, ires downsample ~L826) + present (~L840);
+  shaders_gpu/ires_downsample.frag, present.frag

@@ -372,11 +372,6 @@ void GpuGpuState::ensure_targets() {
   cti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
   cti.width = VRAM_W; cti.height = VRAM_H; cti.layer_count_or_depth = 1; cti.num_levels = 1;
   s_color_rgba = SDL_CreateGPUTexture(s_dev, &cti); GPUCHK(s_color_rgba, "color_rgba tex");
-  // bug #55 (part 2): native-res snapshot of s_vram_tex for the ires composite-back's per-texel coverage
-  // fallback (ires_downsample.frag u_native) — see the field comment in gpu_gpu_internal.h.
-  SDL_GPUTextureCreateInfo bsi = {}; bsi.type = SDL_GPU_TEXTURETYPE_2D; bsi.format = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-  bsi.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER; bsi.width = VRAM_W; bsi.height = VRAM_H; bsi.layer_count_or_depth = 1; bsi.num_levels = 1;
-  s_ires_bg_snap = SDL_CreateGPUTexture(s_dev, &bsi); GPUCHK(s_ires_bg_snap, "ires bg snap tex");
 }
 
 // ires (internal resolution) scaled 3D target: lazily (re)built to VRAM_W*i x VRAM_H*i whenever the live
@@ -447,7 +442,7 @@ static void create_3d_pipelines(void) {
                                                       SDL_GPU_TEXTUREFORMAT_R8G8_UNORM);
   s_ires_downsample_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert, spv_g_fsq_vert_len,
                                                       spv_g_ires_downsample_frag, spv_g_ires_downsample_frag_len,
-                                                      SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, 1, 3);   // +1 uniform: box side `n`; 3 samplers: color + depth + native-bg-snapshot (bug #55 coverage mix)
+                                                      SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, 1, 1);   // +1 uniform: box side `n`; 1 sampler: the composite C (plain box downsample for the headless shot)
   gdev().s_pipes_3d = 1;
   fprintf(stderr, "[gpu_gpu] 3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)\n");
 }
@@ -700,16 +695,14 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   int total = g.s_tri_n + g.s_tex_n + semi_total;
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
     total += g.s_tri2d_n[band] + g.s_tex2d_n[band] + semi2d_total[band];
-  if (total == 0) return;
+  g.s_present_ires = 0;   // default: present from native s_vram_tex; the unified path below raises it to `scale`
+  if (total == 0) return; // empty frame -> nothing composited -> present the uploaded native VRAM as-is
   g.ensure_targets();
 
   int native_w = 0, ires_i = 1, fbw = 0, fbh = 0, ww = 0, wh = 0, ires_cap = 0;
   gpu_gpu_video_status(&g.game->core, &native_w, &ires_i, &fbw, &fbh, &ww, &wh, &ires_cap);
   g.ensure_ires_targets(ires_i);
   const bool ires = ires_i > 1;
-  SDL_GPUTexture* colorTgt = ires ? g.s_ires_color : g.s_vram_tex;
-  SDL_GPUTexture* depthTgt = ires ? g.s_ires_depth : g.s_depth;
-  SDL_GPUTexture* rgbaTgt  = ires ? g.s_ires_rgba  : g.s_color_rgba;
   const int scale = ires ? ires_i : 1;
   const int cw = VRAM_W * scale, ch = VRAM_H * scale;
   if (cfg_dbg("ires")) fprintf(stderr, "[ires] sx=%d sy=%d disp_w=%d h=%d ires_i=%d scale=%d cw=%d ch=%d | tri=%d tex=%d semi=%d | bg tri=%d tex=%d semi=%d | fg tri=%d tex=%d semi=%d\n",
@@ -753,86 +746,54 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   }
   SDL_EndGPUCopyPass(cp);
 
-  // Native (unscaled) viewport/scissor shared by both 2D bands — the ORIGINAL i==1 full-canvas scissor
-  // (never restricted to the display sub-rect), since 2D content isn't bounded by the ires display region.
-  SDL_GPUViewport vpNative = { 0, 0, (float)VRAM_W, (float)VRAM_H, 0.0f, 1.0f };
-  SDL_Rect scNative = { 0, 0, VRAM_W, VRAM_H };
-
-  // ---- band 1/3: 2D_BG — native resolution, drawn BEFORE the 3D world (see the bug #55 note above) ----
-  if (g.s_tri2d_n[GGS_2D_BG] || g.s_tex2d_n[GGS_2D_BG] || semi2d_total[GGS_2D_BG])
-    render_pass_set(cmd, g.s_vram_tex, g.s_depth, g.s_color_rgba, g.s_vram_snap, vpNative, scNative, 1,
-                     g.s_tri2d_vbuf[GGS_2D_BG], g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_vbuf[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG],
-                     g.s_semi2d_vbuf[GGS_2D_BG], g.s_semi2d_n[GGS_2D_BG]);
-
-  // ---- band 2/3: the 3D world — possibly ires-scaled + box-downsampled back. Skipped entirely when this
-  // frame has no 3D geometry (has3d==false): a pure-2D frame (menu/cutscene panel) never touches the ires
-  // target or the seed/composite-back round trip, so it stays exactly as pixel-exact as the two 2D bands.
-  if (has3d) {
-    if (ires) {
-      // bug #55 (part 2): snapshot s_vram_tex (which now holds band 1's fresh draw) into s_ires_bg_snap
-      // BEFORE the seed blit touches anything — this is the native-resolution fallback the composite-back
-      // (ires_downsample.frag u_native) uses for sub-texels the 3D pass doesn't cover. Must run in its own
-      // copy pass (texture-to-texture), before the seed blit / Pass A run.
-      { SDL_GPUCopyPass* bgcp = SDL_BeginGPUCopyPass(cmd);
-        SDL_GPUTextureLocation srcl = {}; srcl.texture = g.s_vram_tex;
-        SDL_GPUTextureLocation dstl = {}; dstl.texture = g.s_ires_bg_snap;
-        SDL_CopyGPUTextureToTexture(bgcp, &srcl, &dstl, VRAM_W, VRAM_H, 1, false);
-        SDL_EndGPUCopyPass(bgcp); }
-      // ires seed blit: upsample the display sub-rect of the CURRENT s_vram_tex content (now including
-      // whatever band 1 just drew) into colorTgt so Pass A's LOAD_OP_LOAD blends world geometry against the
-      // real background, not undefined texels. Must run outside any render/copy pass.
-      SDL_GPUBlitInfo bi = {};
-      bi.source.texture = g.s_vram_tex; bi.source.x = (Uint32)sx; bi.source.y = (Uint32)sy;
-      bi.source.w = (Uint32)disp_w; bi.source.h = (Uint32)h;
-      bi.destination.texture = colorTgt; bi.destination.x = (Uint32)(sx * scale); bi.destination.y = (Uint32)(sy * scale);
-      bi.destination.w = (Uint32)(disp_w * scale); bi.destination.h = (Uint32)(h * scale);
-      bi.load_op = SDL_GPU_LOADOP_DONT_CARE; bi.filter = SDL_GPU_FILTER_LINEAR;
-      SDL_BlitGPUTexture(cmd, &bi);
-    }
-    // Viewport ALWAYS spans the full (possibly ires-scaled) canvas — tri.vert's NDC divisors are fixed to
-    // the 1024x512 canvas, so the viewport is what "scales by i" (pixel = viewport.wh * (ndc+1)/2, unchanged
-    // shader). Scissor restricts writes to the display sub-rect (scaled by `scale`) purely to skip fill work
-    // outside the region that ever gets composited back — at i==1 this is the original {0,0,VRAM_W,VRAM_H}.
-    SDL_GPUViewport vp = { 0, 0, (float)cw, (float)ch, 0.0f, 1.0f };
-    SDL_Rect sc = ires ? SDL_Rect{ sx * scale, sy * scale, disp_w * scale, h * scale } : SDL_Rect{ 0, 0, VRAM_W, VRAM_H };
-    render_pass_set(cmd, colorTgt, depthTgt, rgbaTgt, g.s_vram_snap, vp, sc, scale,
-                     g.s_tri_vbuf, g.s_tri_n, g.s_tex_vbuf, g.s_tex_n, g.s_semi_vbuf, g.s_semi_n,
-                     ires);   // bug #55 part 3: stamp semi coverage only when the composite-back will run
-    // ires composite: downsample colorTgt's display sub-rect back into s_vram_tex's SAME sub-rect. A box
-    // filter (s_ires_downsample_pipe / ires_downsample.frag), not a plain SDL_BlitGPUTexture LINEAR blit —
-    // a single-tap bilinear blit only samples the nearest 2x2 source texels per destination pixel, which is
-    // correct for magnifying (the seed blit above IS a plain blit) but aliases badly on a >1:1 minify: high-
-    // frequency content (grass, leaf clusters) came out as visible per-pixel confetti noise on the first
-    // bring-up pass (2026-07-15) — the RAW ires target (`iresdump`) was clean, only the downsampled composite
-    // wasn't, proving it was a filter-choice bug, not a rendering one. The shader averages the full NxN
-    // source-texel box (N=scale) in unpacked RGB space per destination pixel instead. Scoped to exactly the
-    // display sub-rect so every other VRAM-space consumer (texture pages, CLUTs, sprite blits, readback,
-    // SBS) never sees the scaled target. No-op (not called) at i==1.
-    if (ires) {
-      SDL_GPUColorTargetInfo ct2 = {}; ct2.texture = g.s_vram_tex; ct2.load_op = SDL_GPU_LOADOP_LOAD; ct2.store_op = SDL_GPU_STOREOP_STORE;
-      SDL_GPURenderPass* rp2 = SDL_BeginGPURenderPass(cmd, &ct2, 1, nullptr);
-      SDL_GPUViewport vp2 = { (float)sx, (float)sy, (float)disp_w, (float)h, 0.0f, 1.0f };
-      SDL_Rect sc2 = { sx, sy, disp_w, h };
-      SDL_SetGPUViewport(rp2, &vp2); SDL_SetGPUScissor(rp2, &sc2);
-      // nearest: the shader does its own texelFetch box. Three bindings: [0]=color, [1]=depth, [2]=native
-      // bg snapshot (bug #55 coverage mix — texelFetch(u_depth,...) decides per-sub-texel whether the 3D
-      // pass touched it; uncovered sub-texels fall back to u_native's sharp native pixel instead of the
-      // lossy upsampled seed; see ires_downsample.frag).
-      SDL_GPUTextureSamplerBinding srcbind[3] = { { colorTgt, s_samp_nearest }, { depthTgt, s_samp_nearest }, { g.s_ires_bg_snap, s_samp_nearest } };
-      SDL_BindGPUGraphicsPipeline(rp2, s_ires_downsample_pipe); SDL_BindGPUFragmentSamplers(rp2, 0, srcbind, 3);
-      int32_t n_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &n_pc, sizeof n_pc);
-      SDL_DrawGPUPrimitives(rp2, 3, 1, 0, 0);
-      SDL_EndGPURenderPass(rp2);
-      if (cfg_dbg("ires")) fprintf(stderr, "[ires] composite downsample dst=(%d,%d,%d,%d) n=%d\n", sx, sy, disp_w, h, scale);
-    }
+  // ---- ONE UNIFIED RENDER PATH (USER 2026-07-16): render EVERY band into the composite C at THIS scale,
+  // then present from C. The ires level changes only the target SIZE, never the behaviour — no content
+  // gates (has3d/have_2dfg), no per-level branches. C = s_vram_tex at 1x (already holds the uploaded VRAM),
+  // s_ires_color at >1x (its legacy-2D base seeded once from the native upload). The old SSAA apparatus —
+  // seed blit, bg-snapshot, coverage-mixing downsample (bug #55) — is DELETED: it only existed to
+  // downsample-to-native BEFORE present; now the WINDOW presents from C directly at full res, so the only
+  // downsample left is a plain box C -> s_vram_tex, purely so the headless `shot` / VRAM readback still work.
+  (void)has3d;
+  SDL_GPUTexture* C  = ires ? g.s_ires_color : g.s_vram_tex;
+  SDL_GPUTexture* Cd = ires ? g.s_ires_depth : g.s_depth;
+  SDL_GPUTexture* Cr = ires ? g.s_ires_rgba  : g.s_color_rgba;
+  if (ires) {   // seed C's legacy-2D base = this frame's native VRAM upload, scaled up (usually empty)
+    SDL_GPUBlitInfo bi = {};
+    bi.source.texture = g.s_vram_tex; bi.source.w = (Uint32)VRAM_W; bi.source.h = (Uint32)VRAM_H;
+    bi.destination.texture = C; bi.destination.w = (Uint32)cw; bi.destination.h = (Uint32)ch;
+    bi.load_op = SDL_GPU_LOADOP_DONT_CARE; bi.filter = SDL_GPU_FILTER_LINEAR;
+    SDL_BlitGPUTexture(cmd, &bi);
   }
+  // Viewport spans the full (scaled) canvas — tri.vert's NDC divisors are fixed to the 1024x512 canvas, so
+  // the viewport is what scales. 2D bands cover the whole canvas; the 3D band restricts to the display rect.
+  SDL_GPUViewport vp = { 0, 0, (float)cw, (float)ch, 0.0f, 1.0f };
+  SDL_Rect sc2d = { 0, 0, cw, ch };
+  SDL_Rect sc3d = { sx * scale, sy * scale, disp_w * scale, h * scale };
+  render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc2d, scale,          // band 1: 2D_BG (backdrop)
+                   g.s_tri2d_vbuf[GGS_2D_BG], g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_vbuf[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG],
+                   g.s_semi2d_vbuf[GGS_2D_BG], g.s_semi2d_n[GGS_2D_BG]);
+  render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc3d, scale,          // band 2: the 3D world
+                   g.s_tri_vbuf, g.s_tri_n, g.s_tex_vbuf, g.s_tex_n, g.s_semi_vbuf, g.s_semi_n);
+  render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc2d, scale,          // band 3: 2D_FG (HUD / menus)
+                   g.s_tri2d_vbuf[GGS_2D_FG], g.s_tri2d_n[GGS_2D_FG], g.s_tex2d_vbuf[GGS_2D_FG], g.s_tex2d_n[GGS_2D_FG],
+                   g.s_semi2d_vbuf[GGS_2D_FG], g.s_semi2d_n[GGS_2D_FG]);
+  g.s_present_ires = scale;   // present() samples C (native s_vram_tex at 1x, s_ires_color at >1x)
 
-  // ---- band 3/3: 2D_FG (HUD/menus) — native resolution, drawn AFTER the 3D composite-back so it is NEVER
-  // touched by the ires round trip. This is the fix for bug #55's reported symptom.
-  if (g.s_tri2d_n[GGS_2D_FG] || g.s_tex2d_n[GGS_2D_FG] || semi2d_total[GGS_2D_FG])
-    render_pass_set(cmd, g.s_vram_tex, g.s_depth, g.s_color_rgba, g.s_vram_snap, vpNative, scNative, 1,
-                     g.s_tri2d_vbuf[GGS_2D_FG], g.s_tri2d_n[GGS_2D_FG], g.s_tex2d_vbuf[GGS_2D_FG], g.s_tex2d_n[GGS_2D_FG],
-                     g.s_semi2d_vbuf[GGS_2D_FG], g.s_semi2d_n[GGS_2D_FG]);
+  // Headless `shot` / VRAM-space readback: plain box-downsample C's display sub-rect -> s_vram_tex. No-op
+  // at 1x (C IS s_vram_tex). The WINDOW never uses this — it presents from C directly (present()).
+  if (ires) {
+    SDL_GPUColorTargetInfo ct2 = {}; ct2.texture = g.s_vram_tex; ct2.load_op = SDL_GPU_LOADOP_LOAD; ct2.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass* rp2 = SDL_BeginGPURenderPass(cmd, &ct2, 1, nullptr);
+    SDL_GPUViewport vp2 = { (float)sx, (float)sy, (float)disp_w, (float)h, 0.0f, 1.0f };
+    SDL_Rect sc2r = { sx, sy, disp_w, h };
+    SDL_SetGPUViewport(rp2, &vp2); SDL_SetGPUScissor(rp2, &sc2r);
+    SDL_GPUTextureSamplerBinding srcbind = { C, s_samp_nearest };
+    SDL_BindGPUGraphicsPipeline(rp2, s_ires_downsample_pipe); SDL_BindGPUFragmentSamplers(rp2, 0, &srcbind, 1);
+    int32_t n_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &n_pc, sizeof n_pc);
+    SDL_DrawGPUPrimitives(rp2, 3, 1, 0, 0);
+    SDL_EndGPURenderPass(rp2);
+    if (cfg_dbg("ires")) fprintf(stderr, "[ires] shot downsample dst=(%d,%d,%d,%d) n=%d\n", sx, sy, disp_w, h, scale);
+  }
 }
 
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
@@ -885,7 +846,14 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
 
   // Widescreen present (disp_w computed above): SAMPLE the wide FB region [sx, sx+nw) and letterbox to the
   // aspect's display shape (nw:240), else the wide FB is squeezed into a 4:3 box. At 4:3 nw==320 = old path.
-  PresentPC pc; pc.disp[0] = sx; pc.disp[1] = sy; pc.disp[2] = disp_w; pc.disp[3] = h;
+  // HIGH-RES PRESENT: when render_geom built a valid ires composite this frame (s_present_ires>1), sample
+  // the SCALED s_ires_color over the scaled display sub-rect — a genuinely high-res picture — instead of
+  // the native s_vram_tex downsample. Pure-2D frames / ires=1 keep the native path (s_present_ires==0).
+  const int pscale = s_present_ires;                       // 0 = native, >1 = present from s_ires_color
+  SDL_GPUTexture* present_src = pscale > 1 ? s_ires_color : s_vram_tex;
+  PresentPC pc;
+  pc.disp[0] = sx * (pscale > 1 ? pscale : 1); pc.disp[1] = sy * (pscale > 1 ? pscale : 1);
+  pc.disp[2] = disp_w * (pscale > 1 ? pscale : 1); pc.disp[3] = h * (pscale > 1 ? pscale : 1);
   pc.fade[0] = fade.mode; pc.fade[1] = fade.r; pc.fade[2] = fade.g; pc.fade[3] = fade.b;
   SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
 
@@ -893,7 +861,7 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
   SDL_BindGPUGraphicsPipeline(rp, s_present_pipe);
   SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-  SDL_GPUTextureSamplerBinding tsb = { s_vram_tex, s_samp_nearest };
+  SDL_GPUTextureSamplerBinding tsb = { present_src, s_samp_nearest };
   SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
   SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
   // RmlUi mod/debug overlay (ESC) composites ON TOP of the game frame, into the same present pass over

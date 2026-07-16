@@ -99,13 +99,6 @@ struct GpuGpuState {
   SDL_GPUTexture* s_ires_color = nullptr;   // RG8 (packed 1555), VRAM_W*i x VRAM_H*i
   SDL_GPUTexture* s_ires_depth = nullptr;   // D32
   SDL_GPUTexture* s_ires_rgba  = nullptr;   // float RGBA semi-blend intermediate, ires-scaled
-  // bug #55 (part 2): a native-resolution (VRAM_W x VRAM_H) snapshot of s_vram_tex taken right after the
-  // 2D_BG band draws and before the ires seed blit — render_geom's composite-back (ires_downsample.frag's
-  // u_native) uses it to fall back to the EXACT native pixel for any sub-texel the 3D pass's own opaque
-  // depth shows as uncovered, instead of a lossy LINEAR-upsampled copy. Native-res regardless of the live
-  // ires scale, so it lives alongside s_ires_color/depth/rgba but is NOT torn down/rebuilt on scale change
-  // (created once by ensure_targets, like s_vram_tex itself).
-  SDL_GPUTexture* s_ires_bg_snap = nullptr;
   int s_ires_scale = 1;                     // scale these targets are built for (1 = none built/needed)
   void ensure_ires_targets(int i);          // i<=1: tear down (no targets held); i>1: (re)build if changed
 
@@ -143,6 +136,10 @@ struct GpuGpuState {
   // This frame's faithful display origin (for the LIGHT screen map) and the last-presented region
   // (on-demand gpu_gpu_shot) + last frame's batched vertex counts (vkstats probe).
   int s_present_sx = 0, s_present_sy = 0;
+  // HIGH-RES PRESENT (ires>1): scale of the ires composite built THIS frame (render_geom sets it when
+  // ires && has3d — the s_ires_color high-res composite is valid). 0 = present from native s_vram_tex
+  // (pure-2D frames / ires=1). Read by present() to pick the present source. See gpu_gpu.cpp.
+  int s_present_ires = 0;
   int s_last_sx = 0, s_last_sy = 0, s_last_w = 320, s_last_h = 240;
   int s_dbg_tri = 0, s_dbg_tex = 0, s_dbg_semi = 0;
   // PRESENT-SEQUENCE capture (REPL `preseq <N> [dir]`): dump the next N PRESENTED frames — every
