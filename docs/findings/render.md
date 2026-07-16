@@ -2287,3 +2287,15 @@ draft was already byte-faithful.
 - **refs**: text_label.cpp, render_internal.h (wq_read_matrix/wq_factor_world), quad_rtpt_submit.cpp
   (refactored to the shared helpers), perobj_billboard.cpp, render_observer.cpp (39F4C wrap removed),
   game_tomba2.cpp (text_label_install), render.h.
+
+## BbRec capture sources = live CRs, not fixed scratch (C788-class rotation bug) (2026-07-16)
+
+- FUN_8003C5F8/C788 RE'd (scratch/decomp/fx_leaves.c): both are billboardCompose VARIANTS ending in
+  the owned billboardEmit — C5F8 composes into BUF+0x40, **C788 into BUF+0x20** — so the BbRec capture
+  reading rotation from the fixed MAT_OUT (BUF+0x40) address grabbed the WRONG matrix for C788-class
+  particles. Fixed: rotation = live GTE CR0-4, anchor = camᵀ·(CR5-7 − camT) (exact for every compose
+  variant; billboardEmit's RTPT/RTPS never touch the CRs). C5F8/C788 particles are thereby fully
+  display-pass covered WITHOUT owning the compose bodies (their func_8003C8F4 call dispatches to the
+  native billboardEmit). 8011BE5C (render-mode-4 particle leaf) is overlay code not resident in the
+  ram_sea dump — still unowned, invisible under pc_render if mode 4 ever fires (census remainder).
+- gates: SBS-full 0-diff both legs (combat f8070, watch_cut f26910); fps60 field gate PASS.

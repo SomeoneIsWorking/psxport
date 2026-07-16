@@ -573,10 +573,25 @@ void Render::billboardEmit() {
           rb.cx[1] = c->mem_r16s(vbase + 8);  rb.cy[1] = c->mem_r16s(vbase + 10);
           rb.cx[2] = c->mem_r16s(vbase + 16); rb.cy[2] = c->mem_r16s(vbase + 18);
           rb.cx[3] = c->mem_r16s(vbase + 24); rb.cy[3] = c->mem_r16s(vbase + 26);
-          for (int rr = 0; rr < 3; rr++)
-            for (int cc = 0; cc < 3; cc++)
-              rb.rotR[rr][cc] = (int16_t)c->mem_r16(MAT_OUT + (uint32_t)rr * 6u + (uint32_t)cc * 2u);
-          rb.wx = c->mem_r16s(node + 46); rb.wy = c->mem_r16s(node + 50); rb.wz = c->mem_r16s(node + 54);
+          // Rotation = the LIVE GTE CR0-4 — whatever matrix this node's compose variant loaded
+          // (compose1/2 → MAT_OUT @BUF+0x40, but FUN_8003C5F8 composes into BUF+0x40 via a
+          // different chain and FUN_8003C788 into BUF+0x20 — reading a fixed scratch address
+          // captured the WRONG rotation for the C788 class; the CRs are always the truth).
+          // billboardEmit's own RTPT/RTPS ops never modify the control regs.
+          { uint32_t g0 = gte_read_ctrl(0), g1 = gte_read_ctrl(1), g2 = gte_read_ctrl(2),
+                     g3 = gte_read_ctrl(3), g4 = gte_read_ctrl(4);
+            rb.rotR[0][0] = (int16_t)g0;         rb.rotR[0][1] = (int16_t)(g0 >> 16); rb.rotR[0][2] = (int16_t)g1;
+            rb.rotR[1][0] = (int16_t)(g1 >> 16); rb.rotR[1][1] = (int16_t)g2;         rb.rotR[1][2] = (int16_t)(g2 >> 16);
+            rb.rotR[2][0] = (int16_t)g3;         rb.rotR[2][1] = (int16_t)(g3 >> 16); rb.rotR[2][2] = (int16_t)g4; }
+          // World anchor factored from the LIVE CR5-7 view translation (tr = cam·pos + cam.t for
+          // every compose variant ⇒ camᵀ·(tr − camT) = pos exactly) — not a node-field assumption.
+          { float camR[3][3], camT[3];
+            wq_read_matrix(c, 0x1F8000F8u, camR, camT);
+            float tr[3];
+            for (int i = 0; i < 3; i++) tr[i] = (float)(int32_t)gte_read_ctrl(5u + (unsigned)i);
+            rb.wx = camR[0][0]*(tr[0]-camT[0]) + camR[1][0]*(tr[1]-camT[1]) + camR[2][0]*(tr[2]-camT[2]);
+            rb.wy = camR[0][1]*(tr[0]-camT[0]) + camR[1][1]*(tr[1]-camT[1]) + camR[2][1]*(tr[2]-camT[2]);
+            rb.wz = camR[0][2]*(tr[0]-camT[0]) + camR[1][2]*(tr[1]-camT[1]) + camR[2][2]*(tr[2]-camT[2]); }
           rb.wColor = c->mem_r32(BUF + 4);
           rb.wUv0 = c->mem_r32(BUF + 12); rb.wUv1 = c->mem_r32(BUF + 20);
           rb.wUv2 = c->mem_r32(BUF + 28); rb.wUv3 = c->mem_r32(BUF + 36);

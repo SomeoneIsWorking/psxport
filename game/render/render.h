@@ -256,8 +256,8 @@ public:
   struct BbRec {
     uint32_t node, particle;              // identity (node = dbg_node; particle addr = stable key)
     int16_t  cx[4], cy[4];                // local corner ints (already ×5; z=0 in local space)
-    int16_t  rotR[3][3];                  // MAT_OUT rotation, 4.12 fixed (row-major)
-    int16_t  wx, wy, wz;                  // world anchor (node+46/50/54 at emit time)
+    int16_t  rotR[3][3];                  // live CR0-4 rotation at emit, 4.12 fixed (row-major)
+    float    wx, wy, wz;                  // world anchor, factored from live CR5-7 (camᵀ·(tr−camT))
     uint32_t wColor, wUv0, wUv1, wUv2, wUv3;   // resolved record words BUF+4/+12/+20/+28/+36
   };
   std::vector<BbRec> mBbRecs;             // this logic frame's records, guest-walk emit order
