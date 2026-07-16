@@ -896,6 +896,14 @@ void ActorTomba::gov_outerTransitionGate(Core* c)  { ov_outerTransitionGate(c); 
 void ActorTomba::gov_outerTransitionCommit(Core* c){ ov_outerTransitionCommit(c); }
 void ActorTomba::gov_assetReady(Core* c)           { ov_assetReady(c); }
 
+// Wiring of the two 2026-07-10 wide-RE drafts (2026-07-16): both are dense literal transcriptions,
+// so the verifier is MECHANICAL, not eyeball — wired through the same thunk and byte-gated per
+// invocation with PSXPORT_MIRROR_VERIFY=0x800597AC,0x80058648 (native-vs-gen strict compare) plus
+// the standard 2-leg SBS gate. matrixComposeAttached reads G from a0 per its banner; enterOuterState0
+// takes (G=a0 implicit via c->engine.actorTomba's G, mode=a1).
+void ActorTomba::gov_matrixComposeAttached(Core* c) { c->engine.actorTomba.matrixComposeAttached(); }
+void ActorTomba::gov_enterOuterState0(Core* c)      { c->engine.actorTomba.enterOuterState0((int32_t)c->r[5]); }
+
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
   ov.register_(0x80020364u, "ActorTomba::stepModeInteract",     ov_stepModeInteract);
@@ -917,6 +925,13 @@ void ActorTomba::registerOverrides(Game* game) {
   engine_set_override_main(0x80053E50u, gov_outerTransitionGate,   gen_func_80053E50);
   engine_set_override_main(0x80053FDCu, gov_outerTransitionCommit, gen_func_80053FDC);
   engine_set_override_main(0x80045580u, gov_assetReady,            gen_func_80045580);
+  // enterOuterState0 (0x80058648) + matrixComposeAttached (0x800597AC) are NOT wired: the 2026-07-16
+  // wiring attempt was REJECTED by PSXPORT_MIRROR_VERIFY at invocation #1 — the enterOuterState0
+  // subtree diverges at 0x800F2758 (native 21 F0 00 vs substrate 01 01 08, entry a0=G a1=0 a3=3)
+  // and the run then faults; matrixComposeAttached never fired in the leg (unverifiable). The
+  // draft's own register transcription matches gen at the recordArrayInit call, so the lead is a
+  // subtree difference INSIDE the native rec_dispatch chain (a recordArrayInit corner case these
+  // args surface, or a later callee). Re-wire only behind a fresh MIRROR_VERIFY pass on that trace.
 }
 
 // =================================================================================

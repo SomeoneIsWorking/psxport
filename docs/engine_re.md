@@ -1018,7 +1018,7 @@ computes the projection and can carry the real per-vertex view-Z straight to the
 Ghidra decomp: `scratch/ghidra/main_ram` project, va range 0x80060000-0x80070000 (163 fns, one shot). These
 5 addresses write the SAME cam_/S/G state as the already-owned orchestrators above and call already-owned
 methods, so they were added as new `CutsceneCamera` methods (game/camera/cutscene_camera.{h,cpp}) rather
-than a new class. NOT registered in EngineOverrides/shard_set_override; NOT run through SBS — drafts only.
+than a new class. WIRED since (CutsceneCamera::registerOverrides — all 5 on EngineOverrides, pushMode dual-wired via a psx_fallback-gated shard trampoline); this "NOT registered" note was stale.
 - **`resetFollowAccum()`** — `FUN_8006E8F8`. Zeros cam[0x24]/cam[0x28], seeds scratchpad `S+0x1E` (the radius
   used by `initPlace`'s look-angle build) to -1750, resets cam[0x56] (heading) to 256. Ghidra's auto-analysis
   did NOT surface this address as a function (no static jal reaches it in the resident code — only

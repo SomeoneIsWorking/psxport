@@ -117,6 +117,8 @@ private:
   static void gov_outerTransitionGate(Core* c);
   static void gov_outerTransitionCommit(Core* c);
   static void gov_assetReady(Core* c);
+  static void gov_matrixComposeAttached(Core* c);
+  static void gov_enterOuterState0(Core* c);
 
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
