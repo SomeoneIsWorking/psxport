@@ -25,6 +25,7 @@
 #include "mathlib.h"    // PC-native math/PRNG leaf primitives (rand, trig LUTs, bit-test)
 #include "cull.h"       // PC-native visibility cull / LOD subsystem
 #include "screen_fade.h"   // ScreenFade::installLeafTap — FUN_8007E9C8 global fade-leaf ownership
+#include "ui/panel.h"      // Panel::install — FUN_8004FFB4/8005019C global panel-leaf ownership
 #include "collision.h"  // PC-native collision-grid subsystem
 #include "entity.h"     // PC-native per-object entity state-machine subsystem
 #include "script_vm.h"     // PC-native per-object script-VM subsystem
@@ -213,5 +214,6 @@ void games_tomba2_init(void) {
   void str_wide_re_install();
   str_wide_re_install();       // FUN_80079528 Str::length (generic strlen, hottest unowned leaf)
   ScreenFade::installLeafTap();   // FUN_8007E9C8 fade leaf: gen body + host-state mirror (fixes #63)
+  Panel::install();               // FUN_8004FFB4/8005019C panel leaves: gen body + native quad push
   cfg_logf("engine", "native object-list walk active (FUN_8007a904)");
 }

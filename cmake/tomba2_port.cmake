@@ -223,6 +223,7 @@ set(PORT_SRC
   game/audio/music_coord.cpp
   game/scene/startup.cpp
   game/ui/font.cpp
+  game/ui/panel.cpp
   game/scene/level_load.cpp
   game/render/fps60.cpp
   game/object/behavior_dispatch.cpp
