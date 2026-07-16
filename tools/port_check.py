@@ -319,7 +319,13 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None):
         if pending_ra is not None and OPAQUE_CALL_RE.match(stmt):
             head = re.match(r'^\s*([\w:.>-]+)\s*\(', stmt)
             word = head.group(1).split('.')[-1].split(':')[-1].split('>')[-1] if head else ''
-            if word and word not in KNOWN_NONCALL_KEYWORDS:
+            # A guest MEMORY primitive (c->mem_w8/16/32, c->mem_r*) is NEVER a sub-function call — but
+            # a non-sp-relative store (e.g. c->mem_w16((c->r[16]+50), ...)) isn't consumed by the width
+            # matcher above, so it reaches this opaque-call fallback and, sitting between a `c->r[31]=..`
+            # ra-const and the real func_X(c) call on the next statement, was mis-counted as a phantom
+            # target=None call. This made port_check FALSE-FAIL verbatim port_gen output (24 real calls
+            # read as 26) — a workflow defect since port_gen/port_check are one framework. Skip mem_*.
+            if word and word not in KNOWN_NONCALL_KEYWORDS and not word.startswith('mem_'):
                 calls.append(abi.OpSeqCall(ra_const=pending_ra, target=None))  # opaque target
                 pending_ra = None
 

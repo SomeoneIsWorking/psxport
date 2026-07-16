@@ -925,6 +925,7 @@ void ActorTomba::gov_assetReady(Core* c)           { ov_assetReady(c); }
 void ActorTomba::gov_matrixComposeAttached(Core* c) { c->engine.actorTomba.matrixComposeAttached(); }
 void ActorTomba::gov_enterOuterState0(Core* c)      { c->engine.actorTomba.enterOuterState0((int32_t)c->r[5]); }
 void ActorTomba::gov_mode0ActionGate(Core* c)       { c->engine.actorTomba.mode0ActionGate(); }
+void ActorTomba::gov_mode0WalkHandler(Core* c)      { c->engine.actorTomba.mode0WalkHandler(); }
 
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
@@ -977,6 +978,10 @@ void ActorTomba::registerOverrides(Game* game) {
   // case 0); it calls func_8005A970 DIRECTLY, so it needs the shard wire too, not just EngineOverrides.
   extern void gen_func_8005A910(Core*);
   engine_set_override_main(0x8005A910u, gov_mode0ActionGate, gen_func_8005A910);
+  // mode0WalkHandler (0x8005A970) — the mode-0 normal walk handler mode0ActionGate's path A calls
+  // (verbatim PORT_GEN, port_check-equivalent, game/player/actor_tomba_actions.cpp).
+  extern void gen_func_8005A970(Core*);
+  engine_set_override_main(0x8005A970u, gov_mode0WalkHandler, gen_func_8005A970);
 }
 
 // =================================================================================
