@@ -48,10 +48,11 @@
 // FUN_80084360 scratchpad-anim helpers, FUN_80123C94/FUN_8012400C/FUN_80124328 sibling sub-states)
 // stays reachable by address via rec_dispatch, same as every other beh_* handler.
 //
-// Wired via EngineOverrides (runtime/recomp/engine_overrides.h) at these six guest addresses —
-// NOT the BehaviorDispatch per-object table (that table is for the OUTER per-object handler;
-// these are internal CALL TARGETS the outer handler and each other reach through rec_dispatch, so
-// they must intercept at the rec_dispatch choke point for every caller, substrate included).
+// Wired via the shared override registry (runtime/recomp/override_registry.h, `overrides::install`)
+// at these six guest addresses — NOT the BehaviorDispatch per-object table (that table is for the
+// OUTER per-object handler; these are internal CALL TARGETS the outer handler and each other reach
+// through rec_dispatch, so they must intercept at the rec_dispatch choke point for every caller,
+// substrate included).
 #ifndef GAME_AI_RELEASE_TRIGGER_MOTION_H
 #define GAME_AI_RELEASE_TRIGGER_MOTION_H
 #include <cstdint>
@@ -68,7 +69,7 @@ public:
   void doubleArcMotion(uint32_t obj);                      // FUN_801249D4
   void circleOrbitMotion(uint32_t obj);                    // FUN_80124C6C
 
-  // Register the six addresses above with Core::engine_overrides (called once at boot).
+  // Install the six addresses above in the shared override registry (called once at boot).
   void registerOverrides();
 };
 #endif

@@ -2790,7 +2790,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
     mFrame++;
     // PSXPORT_SBS_EXIT_FRAME=<n>: CLEAN exit(0) once frame n is reached, so atexit dumps
-    // (engine_override_thunk per-address hit counts, EngineOverrides ovhit) actually print.
+    // (the override registry's per-address hit counts, `ovhit`) actually print.
     // A `timeout`-killed gate dies via the watchdog's SIGTERM _exit(130), which skips atexit —
     // wiring passes need the hit counts to prove every registered address FIRED (docs/config.md).
     { static int s_exitFrame = -2;

@@ -620,9 +620,10 @@ void Render::billboardEmit() {
 // ==================================================================================================
 namespace {
 // Engine/game natives installed into the process-global g_override[] table. These are NOT gated
-// here — the gate lives in ONE place (engine_override_thunk, runtime/recomp/engine_override_thunk.cpp)
-// so it can't be forgotten cluster-by-cluster. engine_set_override_main() installs the shared thunk,
-// which runs the real gen_func_* body on the oracle (psx_fallback) and the native everywhere else.
+// here — the gate lives in ONE place (the override registry, runtime/recomp/override_registry.h)
+// so it can't be forgotten cluster-by-cluster. engine_set_override_main() installs into that
+// registry, which runs the real gen_func_* body on the oracle (psx_fallback) and the native
+// everywhere else.
 void ov_perObjRenderDispatch(Core* c) { c->mRender->perObjRenderDispatch(); }
 void ov_billboardCompose1(Core* c)    { c->mRender->billboardCompose1(); }
 void ov_billboardCompose2(Core* c)    { c->mRender->billboardCompose2(); }
@@ -786,9 +787,10 @@ void perobj_billboard_install() {
   static bool done = false;
   if (done) return;
   done = true;
-  // engine_set_override_main installs the shared oracle-gated thunk (runs gen_func_* on core B),
-  // NOT a raw shard_set_override — these are engine/game natives, and the oracle must run the pure
-  // recompiled body for them. See runtime/recomp/engine_override_thunk.cpp.
+  // engine_set_override_main (runtime/recomp/override_registry.h) installs into the ONE
+  // process-global override registry, which runs gen_func_* on the oracle leg (core B) and the
+  // native handler everywhere else — NOT a raw shard_set_override, since these are engine/game
+  // natives and the oracle must run the pure recompiled body for them.
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
   engine_set_override_main(0x8003CCA4u, ov_perObjRenderDispatch, gen_func_8003CCA4);
   engine_set_override_main(0x8003C2D4u, ov_billboardCompose1,    gen_func_8003C2D4);

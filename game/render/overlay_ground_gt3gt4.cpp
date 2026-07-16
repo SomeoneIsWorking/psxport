@@ -424,8 +424,9 @@ void OverlayGroundGt3Gt4::entityLoop(Core* c) {
 // Wiring (frontier, 2026-07-08): all three leaves are reached only by a direct C call the
 // recompiler generates inside the ov_a00 shard (never rec_dispatch), so wired via the overlay's
 // own process-global g_ov_a00_override[] table — same discipline as OverlayGt3Gt4's twin cluster.
-// engine_set_override_a00 installs the shared oracle-gated thunk (runs ov_a00_gen_* on core B), NOT
-// a raw ov_a00_set_override — see runtime/recomp/engine_override_thunk.cpp.
+// engine_set_override_a00 (runtime/recomp/override_registry.h) installs into the ONE process-global
+// override registry, which runs ov_a00_gen_* on the oracle leg (core B) and the native handler
+// everywhere else — NOT a raw ov_a00_set_override.
 void OverlayGroundGt3Gt4::registerOverrides(Game*) {
   extern void ov_a00_gen_8013FB88(Core*);
   extern void ov_a00_gen_8013FE58(Core*);

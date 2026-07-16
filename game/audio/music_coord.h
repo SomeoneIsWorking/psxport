@@ -77,7 +77,8 @@ public:
   //   FUN_80075d24).
   void setGain2(int32_t val);
 
-  // registerOverrides(): wires FUN_80075D24 into EngineOverrides (no static `func_<addr>(c)` call
-  // site exists in the recompiled output — only reached via indirect rec_dispatch).
+  // registerOverrides(): wires FUN_80075D24 into the global override registry (no static
+  // `func_<addr>(c)` call site exists in the recompiled output — only reached via indirect
+  // rec_dispatch).
   void registerOverrides();
 };

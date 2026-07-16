@@ -4,8 +4,8 @@
 // STATUS: UNWIRED / UNVERIFIED (wide-RE tier, docs/fleet-workflow.md §6). These are hand-
 // transliterated 1:1 from generated/ov_a00_shard_{0,1}.c ground truth (ov_a00_gen_<addr>) — NOT
 // mechanically diffed against it yet. Per §9, a wiring pass MUST re-diff every line against the
-// generated C before registering + SBS-gating. Nothing here is called from anywhere (no
-// EngineOverrides registration, no shard_set_override) — dead code that only needs to COMPILE.
+// generated C before registering + SBS-gating. Nothing here is called from anywhere (not installed
+// in the override registry, no shard_set_override) — dead code that only needs to COMPILE.
 //
 // Drafted 2026-07-08: 0x8012E8A8 (162 gen-C ln), 0x8012F494 (64 ln), 0x80130524 (133 ln).
 // Drafted 2026-07-10 (dedicated wide-RE pass, near-mechanical goto-preserving transliteration —
@@ -359,7 +359,7 @@ void func_80130524(Core* c) {
 //     same child-pointer table 0x8012E8A8/NodeXform::propagate walk, but this is the first site in
 //     the cluster that WRITES into a slot's record[62] rather than just reading the table.
 //
-// UNVERIFIED: UNWIRED (no EngineOverrides registration, no shard_set_override, no SBS run) per
+// UNVERIFIED: UNWIRED (not installed in the override registry, no shard_set_override, no SBS run) per
 // docs/fleet-workflow.md §6/§9. A wiring pass MUST re-diff line-by-line against
 // generated/ov_a00_shard_1.c:18777-19125 before registering + SBS-gating (per §9, drafts in this
 // cluster have historically needed such a re-diff to catch bugs even after careful hand-tracing).

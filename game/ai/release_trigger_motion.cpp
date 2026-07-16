@@ -433,7 +433,7 @@ void ReleaseTriggerMotion::circleOrbitMotion(uint32_t obj) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// EngineOverrides wiring — guest ABI trampolines (a0 in r4, a1 in r5), same idiom as
+// Override registry wiring — guest ABI trampolines (a0 in r4, a1 in r5), same idiom as
 // PcScheduler::registerOverrides (game/core/pc_scheduler.cpp).
 // ---------------------------------------------------------------------------------------------
 static void eov_hoverBobCycle(Core* c)    { c->engine.releaseTriggerMotion.hoverBobCycle(c->r[4]); }

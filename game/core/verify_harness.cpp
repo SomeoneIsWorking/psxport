@@ -139,7 +139,7 @@ void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
   memcpy(c->scratch, preSpad, 0x400);
   memcpy(c->r, preRegs, 32 * 4); c->hi = preRegs[32]; c->lo = preRegs[33];
 
-  inSubstrateLeg = true;                            // leg 2: pure substrate (EngineOverrides off)
+  inSubstrateLeg = true;                            // leg 2: pure substrate (override registry's native dispatch off)
   mJournalArmed = true;                              // journal continues into the SAME touched-set
   rec_dispatch(c, addr);
   mJournalArmed = false;
@@ -224,7 +224,7 @@ void VerifyHarness::strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx)
   mStrictNatRegs[14] = c->hi; mStrictNatRegs[15] = c->lo;
   memcpy(c->ram, mStrictPreRam, 0x200000); memcpy(c->scratch, preSpad, 0x400);
   memcpy(c->r, preRegs, 32 * 4); c->hi = preRegs[32]; c->lo = preRegs[33];
-  inSubstrateLeg = true;                            // leg 2: pure substrate (EngineOverrides off)
+  inSubstrateLeg = true;                            // leg 2: pure substrate (override registry's native dispatch off)
   rec_dispatch(c, addr);
   inSubstrateLeg = false;
   int bad = 0;
@@ -280,9 +280,10 @@ void VerifyHarness::strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx)
   }
 }
 
-// mirrorSampleGate: the generalized "verify ALL wired overrides" entry point. Central injection
-// points (engine_override_thunk.cpp, EngineOverrides::run) call this instead of strictArmed(addr)
-// directly, so PSXPORT_MIRROR_VERIFY=all covers every wired address with no per-call-site MV_CHECK.
+// mirrorSampleGate: the generalized "verify ALL wired overrides" entry point. The override
+// registry's shared dispatch thunk (runtime/recomp/override_registry.h) calls this instead of
+// strictArmed(addr) directly, so PSXPORT_MIRROR_VERIFY=all covers every wired address with no
+// per-call-site MV_CHECK.
 bool VerifyHarness::mirrorSampleGate(uint32_t addr) {
   if (!strictArmed(addr)) return false;   // handles mode parsing + inCheck no-nesting guard
   if (mMirrorEvery < 0) {
@@ -348,8 +349,9 @@ void VerifyHarness::skipCheck(uint32_t addr, void (*skipFn)(void*), void* skipCt
   memcpy(c->r, preRegs, 32 * 4); c->hi = preRegs[32]; c->lo = preRegs[33];
   c->game->spu.bind(); SPU_PokeRAM(mSkipSpuPre);
   // leg 2: the substrate ORACLE arc, inline+synchronous — in_stage=0 makes the scheduler yield
-  // prims (FUN_80051F80/FB4 via EngineOverrides... which are SUPPRESSED, so the SUBSTRATE prims
-  // run and funnel into scheduler_yield) no-ops; EngineOverrides off = pure core-B behavior.
+  // prims (FUN_80051F80/FB4, normally reached via the override registry's native dispatch — which
+  // is SUPPRESSED here, so the SUBSTRATE prims run and funnel into scheduler_yield) no-ops; the
+  // override registry's native dispatch off = pure core-B behavior.
   int in_stage_save = c->game->pcSched.in_stage;
   c->game->pcSched.in_stage = 0;
   // Pre-deliver the sound-DMA-complete event: SPU-upload polls inside the oracle arc (e.g.

@@ -4,12 +4,12 @@
 // fleet-workflow.md §9): every function's guest-stack frame (all six push one — the original draft
 // omitted the mirror entirely) was cross-checked instruction-by-instruction against
 // generated/ov_sop_shard_*.c and found otherwise byte-exact; the ONLY defect was the missing
-// r16/r17/r31 spill/restore, now fixed per-function above. Wired via EngineOverrides
-// (RegisterSopIntroEventOverrides, bottom of this file) — sopBeatAdvanceWalk/Narration and
-// sopIntroEffectTick/beh_orbit_spark_effect are reached only via rec_dispatch (register_ alone is
-// enough); sopOrbitPathStep/sopIntroEffectSpawn/sopLiftedSubtick have DIRECT intra-shard call sites
-// in ov_sop_shard_*.c that bypass rec_dispatch, so those three also need the ov_sop_set_override
-// dual-wire (same shape as game/ai/actor_melee_engage.cpp).
+// r16/r17/r31 spill/restore, now fixed per-function above. Wired via the shared override registry
+// (RegisterSopIntroEventOverrides, bottom of this file, `overrides::install`) — sopBeatAdvanceWalk/
+// Narration and sopIntroEffectTick/beh_orbit_spark_effect are reached only via rec_dispatch (no
+// setter needed); sopOrbitPathStep/sopIntroEffectSpawn/sopLiftedSubtick have DIRECT intra-shard call
+// sites in ov_sop_shard_*.c that bypass rec_dispatch, so those three also pass the ov_sop_set_override
+// setter (same shape as game/ai/actor_melee_engage.cpp).
 //
 // Ghidra decomp source: `scratch/decomp/band_sop.c` (FUN_8010AF60/8010B078/8010B2D4/8010B588/8010BEAC),
 // `scratch/decomp/band_sop2.c` (FUN_8010B44C), `scratch/decomp/band_sop4.c` (FUN_8010B11C) — imported
@@ -574,9 +574,10 @@ void beh_orbit_spark_effect(Core* c) {                            // FUN_8010BEA
 }
 
 // ===================================================================================================
-// Wiring (2026-07-10). psx_fallback-gated trampolines keep SBS core B / MV_CHECK's substrate-replay
+// Wiring (2026-07-10). `overrides::install` keeps SBS core B / MV_CHECK's substrate-replay
 // leg running the literal ov_sop_gen_* body (the pure reference the native port is byte-compared
-// against) — same shape as game/ai/actor_melee_engage.cpp / game/ai/beh_actor_tomba_proximity_combat.cpp.
+// against) via oracle-gated dispatch — same shape as game/ai/actor_melee_engage.cpp /
+// game/ai/beh_actor_tomba_proximity_combat.cpp.
 extern void ov_sop_gen_8010AF60(Core*);
 extern void ov_sop_gen_8010B078(Core*);
 extern void ov_sop_gen_8010B11C(Core*);
@@ -584,9 +585,10 @@ extern void ov_sop_gen_8010B2D4(Core*);
 extern void ov_sop_gen_8010B44C(Core*);
 extern void ov_sop_gen_8010B588(Core*);
 extern void ov_sop_gen_8010BEAC(Core*);
-// ov_sop_set_override: the SECOND wire-up needed for addresses with a DIRECT ov_sop_func_XXXX(c)
-// call site inside ov_sop_shard_*.c (bypasses rec_dispatch, so EngineOverrides::register_ alone is
-// invisible to that call shape) — sopOrbitPathStep/sopIntroEffectSpawn/sopLiftedSubtick only.
+// ov_sop_set_override: the setter passed to `overrides::install` for addresses with a DIRECT
+// ov_sop_func_XXXX(c) call site inside ov_sop_shard_*.c (bypasses rec_dispatch, so installing
+// without a setter would be invisible to that call shape) — sopOrbitPathStep/sopIntroEffectSpawn/
+// sopLiftedSubtick only.
 extern void ov_sop_set_override(uint32_t, void (*)(Core*));
 
 namespace {

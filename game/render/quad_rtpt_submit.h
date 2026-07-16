@@ -52,9 +52,10 @@ public:
   static void submitQuad(Core* c);          // FUN_8003B320: a0=out, a1=composedXform(6 words), a2=otzBias
 
   // Wire both leaf addresses into the recompiler's OWN process-global override table
-  // (shard_set_override -> g_override[], generated/shard_disp.c). Both leaves are reached by a
+  // (shard_set_override -> g_override[], generated/shard_disp.c) via overrides::install
+  // (engine_set_override_main, runtime/recomp/override_registry.h). Both leaves are reached by a
   // direct C call the recompiler generates (`func_8003B054(c)`/`func_8003B320(c)`), never
-  // rec_dispatch, so this ONE registration (called once per Game — see runtime/recomp/boot.cpp's
-  // register_engine_overrides) covers every call site, including both SBS cores.
+  // rec_dispatch, so this ONE registration (called once per Game) covers every call site,
+  // including both SBS cores.
   static void registerOverrides(Game* game);
 };

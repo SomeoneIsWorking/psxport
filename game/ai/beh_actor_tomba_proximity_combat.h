@@ -2,12 +2,13 @@
 // (MAIN.EXE, generated/shard_3.c:13494 `gen_func_800527C8`, ground truth).
 //
 // STATUS: VERIFIED (line-by-line vs generated/shard_3.c ground truth — body logic had NO bugs; the
-// one real bug was a missing guest-stack frame, fixed) + WIRED via EngineOverrides
-// (RegisterBehActorTombaProximityCombatOverride, called from register_engine_overrides()). Reached
-// ONLY via rec_dispatch (an indirect function-pointer table read from a per-object "think" slot) —
-// no static `func_800527C8(c)` call site exists in any generated shard (confirmed by grep), so
-// EngineOverrides intercepts it regardless of which object's spawn stamped the pointer; no
-// shard_set_override dual-wire needed (no direct intra-shard call bypasses rec_dispatch). NOT YET
+// one real bug was a missing guest-stack frame, fixed) + WIRED via the shared override registry
+// (RegisterBehActorTombaProximityCombatOverride, called from register_engine_overrides(),
+// `overrides::install`). Reached ONLY via rec_dispatch (an indirect function-pointer table read
+// from a per-object "think" slot) — no static `func_800527C8(c)` call site exists in any generated
+// shard (confirmed by grep), so the registry's oracle-gated dispatch intercepts it regardless of
+// which object's spawn stamped the pointer; no setter needed (no direct intra-shard call bypasses
+// rec_dispatch). NOT YET
 // SBS-gated to a confirmed FIRE — autonav on the intro-area build may not reach an enemy encounter
 // that exercises this leaf; if `ovhit` shows zero hits, the 0-diff gate proves no regression to the
 // frames reached, not correctness of this handler (that rests on the RE verification above).
@@ -107,8 +108,8 @@
 // convention as actor_melee_engage.h/melee_proximity.h) — no hex/decimal transcription step.
 //
 // Callees already NATIVE (routed via rec_dispatch anyway, per the "uniform dispatch" override
-// convention — calling rec_dispatch on an address EngineOverrides registers reaches the native
-// automatically once wired; this draft does not itself call the C++ methods directly):
+// convention — calling rec_dispatch on an address installed in the override registry reaches the
+// native automatically once wired; this draft does not itself call the C++ methods directly):
 //   FUN_800519E0 -> GraphicsBind::recordArrayInit (game/world/graphics_bind.h)
 //   FUN_80054D14 -> Engine::walkStart            (game/core/engine.h)
 //   FUN_8004190C -> Engine::animTick             (game/core/engine.h)

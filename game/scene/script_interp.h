@@ -106,7 +106,7 @@ public:
   //   these ARE opcode handlers, called as handler(obj) with ABI a0=obj / ret=v0, exactly the shape
   //   step()'s non-0x3E dispatch already uses via rec_dispatch(handler). WIRED (frontier tier,
   //   2026-07-10) via registerOverrides() below — step()'s rec_dispatch(handler) call needed no
-  //   change since EngineOverrides is already the interception point on that call path. The
+  //   change since the override registry is already the interception point on that call path. The
   //   remaining 58 opcode handlers stay substrate.
 
   // op05 — FUN_80042090: "wait N frames". Decrements argA each call; returns 0 (RET_PAUSE) while
@@ -227,10 +227,11 @@ public:
   int stepEventPulse(uint32_t obj, uint32_t flagsPtr, uint32_t packedArg);
   void stepEventPulseFramed();  // guest-ABI twin: obj/flagsPtr/packedArg from c->r[4..6]
 
-  // Wire the §9-verified opcode handlers onto game->engine_overrides at their guest addresses
-  // (0x80042090/0x800420AC/0x80042E10/0x80043108/0x80041468) — frontier-tier promotion, 2026-07-10.
-  // step()'s rec_dispatch(handler) call already routes through EngineOverrides (oracle-gated: core B
-  // / psx_fallback never consults the table), so registering here is sufficient — no change needed
+  // Wire the §9-verified opcode handlers into the override registry (overrides::install) at their
+  // guest addresses (0x80042090/0x800420AC/0x80042E10/0x80043108/0x80041468) — frontier-tier
+  // promotion, 2026-07-10. step()'s rec_dispatch(handler) call already routes through the override
+  // registry (oracle-gated: core B / psx_fallback never consults the table), so registering here is
+  // sufficient — no change needed
   // in step()'s dispatch loop itself. The other draft leaves (turnFacing/stepAngleToward/
   // stepEventPulse/advanceStep) are reached only as C++ callees of the two opcode handlers, not
   // separately dispatched, so they need no table entry of their own.

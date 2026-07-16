@@ -19,8 +19,8 @@ public:
   Core* core = nullptr;
 
   // registerOverrides — dual-wire seedBlock/propagateRotmat/propagateAxis/buildAxis onto `game`
-  // (EngineOverrides + shard_set_override). Called once per Game from register_engine_overrides()
-  // (runtime/recomp/boot.cpp) — including SBS's own separately-constructed Games.
+  // via the process-global override registry (overrides::install + shard_set_override). Called
+  // once per Game — including SBS's own separately-constructed Games.
   static void registerOverrides(Game* game);
 
   // build (guest FUN_80051844): compose this node's world matrix at node+0x98 from its local
@@ -76,7 +76,7 @@ public:
   // UNWIRED DRAFTS (2026-07-08 wide-RE wave, region 0x80050000-0x8005FFFF). RE'd from
   // generated/shard_*.c ground truth (Ghidra's decompile mis-resolved a table base on one of
   // these — see buildFromChild — so the generated C, not Ghidra, is the source of truth per
-  // CLAUDE.md). NOT registered anywhere (no EngineOverrides, no shard_set_override) and NOT
+  // CLAUDE.md). NOT registered anywhere (no overrides::install, no shard_set_override) and NOT
   // SBS-gated — dead code until a frontier pass wires + verifies them.
   // ------------------------------------------------------------------------------------------
 

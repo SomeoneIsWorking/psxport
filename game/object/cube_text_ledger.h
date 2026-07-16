@@ -6,10 +6,11 @@
 //
 // WIRED 2026-07-08 (frontier pass): activateSlot (FN_40B48) and deactivateSlot (FN_40C00) have
 // BOTH substrate callers (direct `func_<addr>(c)` from several shards) and a native caller
-// (actor_sm_reward.cpp's ActorReward::smEventDispatch, via rec_dispatch) — dual-wired
-// (shard_set_override + EngineOverrides), same pattern as ActorReward. spawnPopup (FN_40AA4) has
-// only a substrate caller today but is dual-wired anyway for future-proofing/tracing consistency,
-// matching ActorReward's precedent of dual-wiring even currently-substrate-only leaves.
+// (actor_sm_reward.cpp's ActorReward::smEventDispatch, via rec_dispatch) — installed into the
+// override registry with a shard_set_override setter, same pattern as ActorReward, so both call
+// paths reach the native body. spawnPopup (FN_40AA4) has only a substrate caller today but is
+// installed with a setter anyway for future-proofing/tracing consistency, matching ActorReward's
+// precedent.
 // FN_40A58 (the size-class/cost table lookup) has NO owner of its own in this file: it is the
 // SAME leaf as game/scene/scene_events.cpp's `SceneEvents::classSize` (identical two-level table
 // walk over the same STR_TABLE_BASE/COST_TABLE addresses — see scene_events.h). This file used to
@@ -98,9 +99,9 @@ public:
   // Returns the node pointer (0 if the allocator returned null).
   static void spawnPopup(Core* c);     // a0 = value, a1 = variant; sets v0 (r2)
 
-  // Wire activateSlot/deactivateSlot/spawnPopup into both the recompiler's g_override[] table
-  // (substrate's direct func_<addr>(c) calls redirect here) and `game`'s EngineOverrides (so
-  // ActorReward's rec_dispatch(c, FN_40B48/FN_40C00) calls also land here). lookupCost is
-  // deliberately NOT registered — see the file header "WIRED 2026-07-08" note.
+  // Wire activateSlot/deactivateSlot/spawnPopup into the override registry (overrides::install),
+  // each with a shard_set_override setter so the substrate's direct func_<addr>(c) calls redirect
+  // here too, in addition to ActorReward's rec_dispatch(c, FN_40B48/FN_40C00) calls landing here.
+  // lookupCost is deliberately NOT registered — see the file header "WIRED 2026-07-08" note.
   static void registerOverrides(Game* game);
 };

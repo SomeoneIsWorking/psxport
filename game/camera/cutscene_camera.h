@@ -29,9 +29,9 @@ class Game;
 class CutsceneCamera {
 public:
   // Wire the 2026-07-08 RE-ahead drafts (resetFollowAccum/pushMode/restoreMode/
-  // snapToMasterOffsetY200/orbitTick) onto the global EngineOverrides dispatch table (+ a
-  // shard_set_override dual-wire for pushMode, which also has direct same-module substrate
-  // callers). See cutscene_camera.cpp for the wiring + guest-stack-frame notes.
+  // snapToMasterOffsetY200/orbitTick) into the global override registry (+ a shard_set_override
+  // setter for pushMode, which also has direct same-module substrate callers). See
+  // cutscene_camera.cpp for the wiring + guest-stack-frame notes.
   static void registerOverrides(Game* game);
   // Note: pending-teleport state (mCamTpPending / mCamTpX/Y/Z) lives on `Engine` instead — CutsceneCamera
   // is instantiated per-call, so its own members can't persist across the REPL set → next-frame consume
@@ -76,7 +76,7 @@ public:
   // orchestrators above; all read/write the SAME cam_/S/G state and call already-owned methods, so they
   // belong on this class rather than a new one. Faithfulness reproduces the RE'd guest arithmetic exactly
   // (including reading fields whose low/high half may hold stale data from a prior write — never "fixed").
-  // Not registered in EngineOverrides/shard_set_override and not gated by any SBS run yet.
+  // Not registered in the override registry and not gated by any SBS run yet.
   void resetFollowAccum();        // FUN_8006E8F8 — zero cam[0x24]/cam[0x28], seed S+0x1E, reset cam[0x56].
   void pushMode(uint8_t mode);    // FUN_8006E1C0 — save cam[0x64] to cam[0x67], set new mode, zero cam[4..6].
   void restoreMode();             // FUN_8006E1E4 — on G+2==1: mode=0 + camY=MASTER_Y; else restore cam[0x67].

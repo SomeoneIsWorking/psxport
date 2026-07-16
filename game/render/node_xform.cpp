@@ -408,7 +408,7 @@ void NodeXform::copyMatrixBlock(uint32_t src, uint32_t dst) {
 // them). The tail-call ra (0x80051760 for propagate / 0x80051770 for propagateRotmat) IS mirrored
 // into c->r[31] here — every `jal` overwrites $ra unconditionally, so (unlike the OUTER-caller case
 // where a still-substrate caller's own compiled body already sets c->r[31] before reaching an
-// EngineOverrides-intercepted rec_dispatch) an internal tail-call inside an already-native function
+// overrides::dispatch-intercepted rec_dispatch) an internal tail-call inside an already-native function
 // must set it itself, or the nested frame's ra spill diverges.
 void NodeXform::buildFromChild(uint32_t nodeAddr, uint32_t inVec, uint32_t tableIdx, uint32_t mode) {
   Core* c = core;
@@ -518,7 +518,7 @@ static void eov_buildAxis(Core* c) {
 // (0x80051614) have direct same-module callers (confirmed via generated/shard_6.c, shard_5.c,
 // shard_1.c) -> dual-wired. worldPosFromLocal (0x80051D90) / worldPosFromComposed (0x80051D20)
 // have NO direct same-module caller (every reference is rec_dispatch from an AI overlay) ->
-// EngineOverrides only, same as buildAxis above.
+// registered rec_dispatch-only (nullptr setter), same as buildAxis above.
 extern void gen_func_80051B34(Core*);
 extern void gen_func_80051614(Core*);
 static void eov_copyMatrixBlock(Core* c) {

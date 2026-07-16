@@ -824,8 +824,8 @@ void CutsceneCamera::initSeedGrp(uint32_t src) {   // FUN_8006CBA8 (writes the F
 // object at 0x800E8008. So this leaf is a generic "reset follow accumulator" applied to whatever
 // object shares this field shape (0x24/0x28/0x56) — the camera is just ONE caller (of many). The
 // method itself is unaffected (it already takes its base from the instance's `cam_`, which reads
-// as "cam" only by naming convention); the fix lives entirely in the EngineOverrides wiring below,
-// which constructs the instance from the LIVE a0 rather than hardcoding CAM_OBJ.
+// as "cam" only by naming convention); the fix lives entirely in the override-registry wiring
+// below, which constructs the instance from the LIVE a0 rather than hardcoding CAM_OBJ.
 void CutsceneCamera::resetFollowAccum() {   // FUN_8006E8F8
   camW32(0x24, 0);
   camW32(0x28, 0);
@@ -924,7 +924,7 @@ void CutsceneCamera::update() {   // FUN_8006EC44 (resident per-frame camera dri
 // which skip shakeTail exactly like the gen's direct goto to the restore tail). Every callee gets r31 set
 // to the exact gen jal-site constant first, matching the reference-mirror style (Engine::fieldFrameFaithful
 // / Sop::fieldModeFaithful). init/mainFollow/rotBuild/trackFollow/snapFollow*/pitchFollow/simpleFollow/
-// shakeTail are dispatched via rec_dispatch(c, addr) to their guest address — since no EngineOverrides
+// shakeTail are dispatched via rec_dispatch(c, addr) to their guest address — since no override-registry
 // entry exists for any of them, this falls straight through to the substrate gen_func body (same code the
 // oracle runs), NOT a call to the native sibling *methods* on this class (those exist for the pc_skip
 // path only). Calling convention for the two-arg follow leaves (trackFollow/snapFollowA/pitchFollow/
@@ -1069,16 +1069,16 @@ void CutsceneCamera::init() {   // FUN_8006EA7C (first-frame field reset + rende
   }
 }
 
-// ── EngineOverrides wiring (2026-07-08 frontier follow-up) ──────────────────────────────────────
+// ── Override-registry wiring (2026-07-08 frontier follow-up) ────────────────────────────────────
 // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick reach the substrate
 // EXCLUSIVELY via rec_dispatch(c, addr) from cross-module (overlay) call sites — confirmed by
 // grepping every generated/*.c reference to these 5 addresses: none appear as a direct same-module
 // `func_<addr>(c)` call EXCEPT pushMode (0x8006E1C0), which generated/shard_3.c, shard_4.c and
 // shard_6.c also call directly (MAIN calling its own resident code — the recompiler emits that as
 // a plain C call, bypassing rec_dispatch entirely and consulting the recompiler's OWN g_override[]
-// table instead). So pushMode needs the dual-wire (EngineOverrides + shard_set_override, same
-// pattern as PcScheduler's primitives in game/core/pc_scheduler.cpp); the other 4 only need
-// EngineOverrides.
+// table instead). So pushMode needs the dual-wire (shard_set_override setter passed to install(),
+// same pattern as PcScheduler's primitives in game/core/pc_scheduler.cpp); the other 4 only need
+// the rec_dispatch-only registration (setter omitted).
 extern void gen_func_8006E1C0(Core*);
 
 static void eov_resetFollowAccum(Core* c) {

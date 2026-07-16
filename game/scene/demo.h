@@ -22,7 +22,7 @@ class Demo {
 public:
   Core* core = nullptr;
 
-  // Wire s3SubMachine (0x80106AC4) into EngineOverrides — called from
+  // Wire s3SubMachine (0x80106AC4) into the override registry (overrides::install) — called from
   // runtime/recomp/boot.cpp's register_engine_overrides(). §9-verified 2026-07-10 (docs/
   // fleet-workflow.md §9): re-checked instruction-by-instruction against generated/ov_demo_shard_0.c;
   // only defect found was the missing guest-stack-frame mirror (now fixed in demo.cpp).
@@ -36,7 +36,7 @@ public:
   // PcScheduler fiber (faithful-execution model): prologue with guest frame -48 and live spills,
   // then the substate loop ending each iteration in the substrate tail (frame counter +
   // FUN_80051F80 yield). s0's texgroup spawn goes through rec_dispatch(0x80044BD4) -> the
-  // EngineOverrides spawn-and-wait; s5's stage swap through rec_dispatch(0x80052078) (parks the
+  // registered spawn-and-wait override; s5's stage swap through rec_dispatch(0x80052078) (parks the
   // fiber; the stanza tears it down on the entry rewrite). pc_skip keeps stageMain()/frame().
   void stageBodyFaithful();
 

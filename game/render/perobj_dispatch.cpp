@@ -15,11 +15,12 @@
 // of the SAME dispatch chain: CCA4's cases 0/4 (the only ones seaside objects hit) call `FUN_8003cdd8`
 // unconditionally as their entire body.
 //
-// CALL-SITE MECHANISM: unlike the walk-cluster addresses EngineOverrides targets (rec_dispatch-only),
-// CDD8 and F698 are reached from CCA4's generated body as PLAIN INTRA-SHARD C CALLS
-// (`func_8003CDD8(c)` / `func_8003F698(c)` — see generated/shard_5.c gen_func_8003CCA4 and
-// generated/shard_6.c gen_func_8003CDD8). EngineOverrides only intercepts inside rec_dispatch, so it
-// cannot see these calls; the ONLY interception point is the g_override[] slot each func_XXXX wrapper
+// CALL-SITE MECHANISM: unlike the walk-cluster addresses the override registry's rec_dispatch
+// interception targets (rec_dispatch-only, nullptr setter), CDD8 and F698 are reached from CCA4's
+// generated body as PLAIN INTRA-SHARD C CALLS (`func_8003CDD8(c)` / `func_8003F698(c)` — see
+// generated/shard_5.c gen_func_8003CCA4 and generated/shard_6.c gen_func_8003CDD8).
+// overrides::dispatch only intercepts inside rec_dispatch, so it cannot see these calls; the ONLY
+// interception point is the g_override[] slot each func_XXXX wrapper
 // in shard_disp.c already checks (`if (g_override[N]) { g_override[N](c); return; }`) — the exact
 // mechanism render_observer.cpp uses. shard_set_override() is that installer.
 //
@@ -375,12 +376,13 @@ void ov_perModeDispatch(Core* c) { c->mRender->perModeDispatch(); }
 // wrappers consult on BOTH cores, with no oracle gate. That means SBS core B (supposed to be the pure
 // gen_func_* substrate) was ALSO running this native code whenever gen_func_8003CCA4 (correctly running
 // pure on B via its own engine_set_override_main registration) called func_8003CDD8(c) — exactly the
-// failure mode engine_override_thunk.cpp's own banner documents ("clusters that forget it... silently
-// broke the oracle"). Concretely: native Render::perObjRenderDispatch never mirrors gen_func_8003CCA4's
+// failure mode override_registry.h's own banner documents ("a trampoline that omitted its
+// psx_fallback guard silently ran native on core B and turned SBS into a native-vs-native fake
+// 0-diff"). Concretely: native Render::perObjRenderDispatch never mirrors gen_func_8003CCA4's
 // `c->r[18] = node` prologue assignment (r18 is plain scratch to the native C++ body), so when B's PURE
 // gen_func_8003CCA4 called into this SAME native cmdListDispatch, the CmdListFrame RAII spilled A's
 // stale r18 instead of B's real node pointer — a genuine cross-core state leak, not just a byte diff.
-// Fixed by routing through the shared oracle-gated thunk (engine_set_override_main) like every other
+// Fixed by routing through the shared override registry (engine_set_override_main) like every other
 // engine/game native in this call chain (perobj_billboard.cpp, overlay_gt3gt4.cpp,
 // overlay_ground_gt3gt4.cpp, quad_rtpt_submit.cpp) — B now always runs the real gen_func_8003CDD8/
 // gen_func_8003F698 bodies, closing the leak at its source.

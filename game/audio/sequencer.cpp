@@ -1314,11 +1314,11 @@ L_80095A64:
 
 // ============================================================================
 // Wiring (frontier, 2026-07-10): every method above installed into the process-global
-// g_override[] table via engine_set_override_main (runtime/recomp/engine_override_thunk.cpp) —
+// g_override[] table via engine_set_override_main (runtime/recomp/override_registry.cpp) —
 // oracle-gated (core B / psx_fallback always runs gen_func_<addr>; core A runs native). This is
 // the mechanism BOTH rec_dispatch's main_dispatch() AND direct in-body calls like
 // `func_800910F0(c)` inside gen_func_80090BD0 ultimately reach for MAIN-shard addresses, so one
-// registration covers both call paths — no separate EngineOverrides::register_ needed.
+// registration covers both call paths.
 // ============================================================================
 static void nat_channelPitchSelectDispatch(Core* c) { c->engine.sequencer.channelPitchSelectDispatch(); }
 static void nat_channelReleaseClear(Core* c)        { c->engine.sequencer.channelReleaseClear(); }

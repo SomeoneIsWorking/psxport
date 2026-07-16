@@ -11,7 +11,7 @@
 // with every branch polarity checked twice against the gen-C before being transcribed.
 //
 // Wide-RE tier (docs/fleet-workflow.md §6): UNWIRED / UNVERIFIED. Nothing here is called from
-// anywhere (no EngineOverrides registration, no shard_set_override) — dead code that only needs to
+// anywhere (no overrides::install registration, no shard_set_override) — dead code that only needs to
 // COMPILE. A wiring pass MUST re-diff every line against the generated C (and run SBS) before
 // registering + gating.
 //
@@ -610,9 +610,10 @@ void Render::gpuDmaSend() {
 // ITS OWN frame, so r31 must carry the live gen return-address constant at each such call site or the
 // spilled byte diverges from gen; func_80085C9C (int-mask set) and the GPU-DMA timeout arm/chk HLE
 // no-ops are true leaves and don't need it). All 4 addresses are reached as plain intra-shard C calls
-// from the substrate (func_80082D04 etc. in generated/shard_disp.c), NOT via rec_dispatch — the
-// oracle-gated engine_set_override_main thunk is the correct install path (see
-// runtime/recomp/engine_override_thunk.cpp): it keeps SBS core B running the pure gen_func_* body.
+// from the substrate (func_80082D04 etc. in generated/shard_disp.c), NOT via rec_dispatch —
+// engine_set_override_main (runtime/recomp/override_registry.h, a thin forwarder over
+// overrides::install) is the correct install path: it keeps SBS core B running the pure gen_func_*
+// body via the registry's oracle-gated dispatch.
 namespace {
 void ov_gpuDmaQueueEnqueue(Core* c) { c->mRender->gpuDmaQueueEnqueue(); }
 void ov_gpuDmaQueueDrain(Core* c)   { c->mRender->gpuDmaQueueDrain(); }

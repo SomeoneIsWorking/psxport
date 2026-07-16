@@ -285,10 +285,9 @@ void ActorMeleeEngage::doItFramed() {
 // ---------------------------------------------------------------------------------------------
 // Wiring: the only real callers found for 0x80112188 are DIRECT `ov_a00_func_80112188(c)` sites
 // inside ov_a00_shard_1.c itself (lines ~4262/5255) — i.e. calls through the recompiler's OWN
-// per-overlay g_ov_a00_override[] table, never through rec_dispatch. Per engine_overrides.h's
-// documented gap, EngineOverrides::register_ alone is invisible to that call shape; this needs
-// the SECOND wire-up (ov_a00_set_override), same pattern as game/core/pc_scheduler.cpp /
-// game/object/actor_sm_reward.cpp.
+// per-overlay g_ov_a00_override[] table, never through rec_dispatch. Installing without a setter
+// would be invisible to that call shape, so `overrides::install` is passed ov_a00_set_override
+// as the setter, same pattern as game/core/pc_scheduler.cpp / game/object/actor_sm_reward.cpp.
 // ---------------------------------------------------------------------------------------------
 extern void ov_a00_set_override(uint32_t, void (*)(Core*));
 extern void ov_a00_gen_80112188(Core*);   // substrate body — kept alive for psx_fallback (core B)

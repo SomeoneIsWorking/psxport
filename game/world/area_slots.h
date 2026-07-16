@@ -56,8 +56,8 @@ public:
   // (scratch/decomp/cluster1.c: FUN_8007496c).
   bool updateCell(uint32_t sigArg, int32_t dx, int32_t dy);
 
-  // registerOverrides(): wires FUN_80074A38 / FUN_8007496C into EngineOverrides — both are ONLY
-  // ever reached via an indirect rec_dispatch (no static `func_<addr>(c)` call site in the
-  // recompiled output), so EngineOverrides alone is sufficient (no shard_set_override needed).
+  // registerOverrides(): wires FUN_80074A38 / FUN_8007496C into the override registry
+  // (overrides::install) — both are ONLY ever reached via an indirect rec_dispatch (no static
+  // `func_<addr>(c)` call site in the recompiled output), so no shard_set_override is needed.
   void registerOverrides();
 };

@@ -591,8 +591,8 @@ void Sop::fieldMode() { Core* c = core;
 
 // pc_faithful SOP field-mode — mirror of ov_sop_gen_80109450 (see sop.h). Every leaf is the
 // substrate dispatch at its RE'd jal site; the stage structure (state switch, sm writes, the
-// fade-ramp arithmetic) is native. The 0x80044BD4 dispatch reaches the EngineOverrides
-// spawn-and-wait, whose wait loop parks the stage fiber while task-1 (0x80109164 SOP area
+// fade-ramp arithmetic) is native. The 0x80044BD4 dispatch reaches the registered
+// spawn-and-wait override, whose wait loop parks the stage fiber while task-1 (0x80109164 SOP area
 // load) runs — organic cadence, no defer-step machinery.
 void Sop::fieldModeFaithful() { Core* c = core;
   c->r[29] -= 32;

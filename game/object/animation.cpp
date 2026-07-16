@@ -165,7 +165,7 @@ static void anim_vm_76d68(Core* c) {
 // sw s2,24(sp); sw s1,20(sp)`. Each spill writes the CALLER's LIVE incoming r16/r17/r18/r19/ra
 // BEFORE the body repurposes r16 as its own `node` local, mirroring the real frame descent/spill/
 // ascent so a caller that reached this function through the GUEST CALL GRAPH (c->r[29] is a real
-// guest sp at a real guest call site — the shard_set_override/EngineOverrides trampolines below)
+// guest sp at a real guest call site — the shard_set_override/override-registry trampolines below)
 // gets byte-exact guest-stack bytes.
 //
 // NOT used by step() below: step() is also called directly by NATIVE C++ beh_ handlers
@@ -535,7 +535,7 @@ static void eov_animApplyFrame(Core* c)     { c->engine.animation.applyFrame(c->
 // sentinel entry, or is this call site's argument computed wrong upstream). Out of scope for a
 // frame-mirror fix: reverted to unwired rather than special-casing one address as a bandaid.
 // step() stays reachable only via DIRECT native C++ callers (beh_actor_move_sm etc — see step()'s
-// own header comment) and via EngineOverrides (ActorZonedAttacker's call1() leaf-dispatch
+// own header comment) and via the override registry (ActorZonedAttacker's call1() leaf-dispatch
 // convenience), which never cross the guest ABI/stack boundary in the first place.
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_80076904(Core*);

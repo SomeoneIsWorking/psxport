@@ -773,16 +773,18 @@ void ActorReward::approachTargetX(Core* c) {
   }
 }
 
-// ActorReward::registerOverrides() — wire all five guest addresses into BOTH the recompiler's own
-// call table (shard_set_override — reaches the substrate's DIRECT func_<addr>(c) calls from
-// FUN_8004AAC4) and EngineOverrides (reaches any NATIVE caller going through rec_dispatch, and gets
-// traced by the `dispatch` debug channel). See actor_sm_reward.h "WIRING" for why both are needed.
+// ActorReward::registerOverrides() — install all five guest addresses into the override registry
+// (overrides::install), each with a shard_set_override setter (reaches the substrate's DIRECT
+// func_<addr>(c) calls from FUN_8004AAC4) that shares the same entry any NATIVE caller reaches
+// going through rec_dispatch, traced by the `dispatch` debug channel. See actor_sm_reward.h
+// "WIRING" for why the setter is needed here.
 // ----------------------------------------------------------------------------------------------
 
 // --- WIDE-RE DRAFT wiring (2026-07-08 frontier pass) --- update/resolvePosition/approachTargetX.
 // update (0x80070018) has NO direct same-shard caller (grepped generated/*.c) -- it's reached only
 // via the DYNAMIC per-object dispatch in ObjectTable::dispatchFaithful (rec_dispatch(c, fn) with fn
-// read from the object's own type table at runtime), so EngineOverrides alone is the reach path.
+// read from the object's own type table at runtime), so the rec_dispatch-side registry entry alone
+// is the reach path (the shard_set_override setter below is installed anyway, defensively).
 // resolvePosition (0x800702C0) / approachTargetX (0x80070650) DO have a direct same-shard caller
 // (gen_func_80070018's own func_800702C0(c)/func_80070650(c) calls) -- but that caller is FULLY
 // SUPERSEDED once update() is registered (ObjectTable::dispatchFaithful never falls through to

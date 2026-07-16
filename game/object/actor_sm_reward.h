@@ -20,11 +20,10 @@
 //
 // WIRING: the sole caller (FUN_8004AAC4) is SUBSTRATE, which calls each of these by a DIRECT C call
 // (`func_<addr>(c)`, emitted by the recompiler) — that path checks the recompiler's OWN g_override[]
-// table, NOT EngineOverrides (EngineOverrides.run() only fires inside rec_dispatch(), which substrate
-// code never calls for a direct jal target). So registerOverrides() below wires BOTH tables: shard_set_
-// override so the substrate's direct call redirects here, and EngineOverrides so any native caller
-// reaching these via rec_dispatch(c, addr) also lands here and gets traced by the `dispatch` channel.
-// (This dual-registration need is a latent gap in EngineOverrides — see docs/findings/engine-overrides.md.)
+// table, not rec_dispatch. So registerOverrides() below installs each address into the single
+// override registry (overrides::install) WITH a shard_set_override setter: the setter redirects the
+// substrate's direct call, while the same registry entry also serves any native caller reaching
+// these via rec_dispatch(c, addr) — both paths land here and get traced by the `dispatch` channel.
 #pragma once
 struct Core;
 class  Game;
@@ -48,8 +47,9 @@ public:
   static void resolvePosition(Core* c);  // FUN_800702C0(obj a0) -- position-source switch (obj+0x5e)
   static void approachTargetX(Core* c);  // FUN_80070650(obj a0) -- ease obj+0x2e toward obj+0x60
 
-  // Wire all five guest addresses into both the recompiler's g_override[] table (so the substrate's
-  // direct func_<addr>(c) calls from FUN_8004AAC4 redirect here) and `game`'s EngineOverrides (so a
-  // native caller reaching these via rec_dispatch also lands here and gets `dispatch`-channel traced).
+  // Wire all five guest addresses into the override registry (overrides::install), each with a
+  // shard_set_override setter so the substrate's direct func_<addr>(c) calls from FUN_8004AAC4
+  // redirect here too — a native caller reaching these via rec_dispatch also lands here and gets
+  // `dispatch`-channel traced.
   static void registerOverrides(Game* game);
 };

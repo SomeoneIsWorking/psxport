@@ -197,7 +197,8 @@ public:
   // *Faithful: pc_faithful mirrors of ov_game_gen_80108A60 + the 4 ov_game_gen_80107xxx workers —
   // guest frame + jal-site ra discipline per worker, and (the one real behavior fix) the state-0
   // loader call in every worker now routes through rec_dispatch(c, 0x80044BD4u) — the literal guest
-  // scheduler primitive, wired via EngineOverrides to PcScheduler::spawnAndWait — instead of the
+  // scheduler primitive, wired via the global override registry to PcScheduler::spawnAndWait —
+  // instead of the
   // native_area_load_bd4() sync bypass the pc_skip bodies use. THESE MIRRORS CAN YIELD (spawnAndWait
   // parks the fiber), so the fork below calls them directly rather than through MV_CHECK.
   void fieldTransitionFaithful();

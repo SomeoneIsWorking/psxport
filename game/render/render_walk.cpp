@@ -559,7 +559,7 @@ void Render::sceneNative() { Core* c = mCore;
     // (renderWalk/renderWalkSnapshot/rwalkAux*/rwalkB588/perObjRender/bgRender) are retired; this
     // display pass is READ-ONLY — it may not write guest memory or dispatch guest code. Per-object
     // depth tags for the guest-emitted billboard prims are lost until a read-only observer (e.g. an
-    // EngineOverrides wrap teeing span info) is built — a KNOWN deferred render regression.
+    // override-registry entry teeing span info) is built — a KNOWN deferred render regression.
     // (a) TERRAIN — the field's render-list node whose render fn (node+24) is 0x8002AB5C, drawn by the
     // READ-ONLY float pass (real per-pixel depth). Pure reads: the node scan is the same enumeration the
     // substrate walk performs; the draw computes its matrices in host memory (native_terrain.cpp).

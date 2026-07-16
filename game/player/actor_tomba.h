@@ -92,12 +92,12 @@ public:
   //   water-mode 2. NO SFX. Ghidra decomp scratch/decomp/tomba_postframe_10e904.c.
   void postFrameWaterCheck();
 
-  // Wire stepModeInteract/type8Interact/type7Interact/growthYSnap/frameTick into `game`'s
-  // EngineOverrides — postInteractWalk's own rec_dispatch(c, LEAF_TYPE_*) call sites are the ONLY
-  // reachers of the 4 interactWalk addresses, and the native frameStartTickFaithful's
+  // Wire stepModeInteract/type8Interact/type7Interact/growthYSnap/frameTick into the global
+  // override registry — postInteractWalk's own rec_dispatch(c, LEAF_TYPE_*) call sites are the
+  // ONLY reachers of the 4 interactWalk addresses, and the native frameStartTickFaithful's
   // rec_dispatch(c, 0x8005950C) is the only core-A reacher of frameTick (the sole direct
   // func_8005950C caller is gen_func_80059D28 = the substrate frameStartTickFaithful, core-B only),
-  // so EngineOverrides alone is sufficient for all 5; no shard_set_override dual-wire is needed.
+  // so a rec_dispatch-only registration (no shard_set_override setter) is sufficient for all 5.
   static void registerOverrides(Game* game);
 
 private:
@@ -112,7 +112,7 @@ private:
   static void ov_outerTransitionGate(Core* c);
   static void ov_outerTransitionCommit(Core* c);
   static void ov_assetReady(Core* c);
-  // shard_set_override trampolines (psx_fallback-gated — see .cpp banner).
+  // shard_set_override setter trampolines (psx_fallback-gated — see .cpp banner).
   static void gov_turnBiasCompute(Core* c);
   static void gov_outerTransitionGate(Core* c);
   static void gov_outerTransitionCommit(Core* c);
@@ -137,7 +137,7 @@ private:
   // ----------------------------------------------------------------------------
   // Sub-handlers of postInteractWalk (band 0x80020000-0x8002FFFF; RE'd + drafted 2026-07-08,
   // UNWIRED — postInteractWalk's rec_dispatch call sites for these 4 leaves are left in place;
-  // wiring is a future EngineOverrides/shard_set_override step, not done by this draft).
+  // wiring is a future override-registry step, not done by this draft).
   // ----------------------------------------------------------------------------
 
   // stepModeInteract(item, mode) — guest FUN_80020364. postInteractWalk case 0xF/0x14/0x56
@@ -232,14 +232,14 @@ public:
   //   gen_func_8005950C (generated/shard_4.c:7624 — ground truth; Ghidra's own decompile of
   //   this function matched it exactly, cross-checked line-by-line against the recompiled C).
   //   Guest frame: addiu sp,-32; spill s0(<-a0=G),s1,s2,ra. WIRED + SBS-VERIFIED 2026-07-09
-  //   (EngineOverrides; frameStartTickFaithful's `default: rec_dispatch(c, 0x8005950Cu)` now hits
+  //   (override registry; frameStartTickFaithful's `default: rec_dispatch(c, 0x8005950Cu)` now hits
   //   the native). frameTick's OWN logic is byte-exact: PSXPORT_SBS_MODE=full autonav ran 0
   //   sbs-div / 0 VIOLATION through f15600+ (was diverging at f158 before the register-faithfulness
   //   fix — see below). Of the 5 drafted sub-callees below, 4 (turnBiasCompute/outerTransitionGate/
   //   outerTransitionCommit/assetReady) are now ALSO wired+verified (2026-07-10 §9 promotion pass —
   //   see docs/findings/animation.md for the bugs that pass found: a MIPS branch-delay-slot misread
   //   in turnBiasCompute, a wrong gate constant in outerTransitionCommit, 7 missing r31 mirrors)
-  //   and reached through their own EngineOverrides + engine_set_override_main registrations —
+  //   and reached through their own overrides::install + engine_set_override_main registrations —
   //   frameTick's `rec_dispatch(c, addr)` call sites below are unchanged and pick them up
   //   automatically. resetLoadGate remains UNWIRED (dispatched to substrate, out of that pass's
   //   scope). Every dispatch sets the gen jal-site r31 constant first so substrate/native callees

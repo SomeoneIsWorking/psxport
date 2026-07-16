@@ -344,8 +344,8 @@ uint32_t Demo::s2SubMachine() { Core* c = core;
 // (demo_frame_s3() below), redundantly re-entering FUN_801064E8 a second time. Core B (psx_fallback,
 // pure substrate — never runs any of this file's C++) reaches 0x80106AC4 via ONLY that same guest
 // root-coroutine path, so its call COUNT is whatever the real PSX code does — comparing against it
-// requires A's call sites to line up 1:1 with B's, not fire twice for B's once. register_() alone
-// (the route demo_frame_s3()'s rec_dispatch actually uses) matches B's cadence; the direct call site
+// requires A's call sites to line up 1:1 with B's, not fire twice for B's once. registerOverrides()
+// alone (the route demo_frame_s3()'s rec_dispatch actually uses) matches B's cadence; the direct call site
 // inside FUN_801064E8 stays UNHOOKED so it falls through to the plain substrate ov_demo_gen_80106AC4
 // body when the guest root coroutine's own redundant pass reaches it — identical to what ran there
 // before this wiring pass (harmless, pre-existing, unrelated to this cluster). See docs/findings/ai.md.
@@ -1119,7 +1119,7 @@ void Demo::stageBodyFaithful() { Core* c = core;
         rec_dispatch(c, 0x80045080u);           // indexed file load (platform-sync)
         c->r[4] = 0x80044F58u; c->r[5] = 2; c->r[6] = 0; c->r[7] = 0;
         c->r[31] = 0x80106404u;
-        rec_dispatch(c, 0x80044BD4u);           // spawn-and-wait (EngineOverrides -> native prim)
+        rec_dispatch(c, 0x80044BD4u);           // spawn-and-wait (registered override -> native prim)
         c->r[31] = 0x8010640Cu; rec_dispatch(c, 0x8007982Cu);
         c->r[31] = 0x80106414u; rec_dispatch(c, 0x80075240u);
         c->r[4] = 1;
@@ -1144,7 +1144,7 @@ void Demo::stageBodyFaithful() { Core* c = core;
     c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // L_80106674 frame counter
     c->r[4] = 1;
     c->r[31] = 0x80106688u;
-    rec_dispatch(c, 0x80051F80u);               // loop-tail yield (EngineOverrides -> yieldPrim)
+    rec_dispatch(c, 0x80051F80u);               // loop-tail yield (registered override -> yieldPrim)
   }
 }
 

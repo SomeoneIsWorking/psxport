@@ -90,16 +90,15 @@ void CubeTextLedger::spawnPopup(Core* c) {
   c->r[2] = node;
 }
 
-// CubeTextLedger::registerOverrides() — dual-wire activateSlot/deactivateSlot/spawnPopup, same
-// shape as ActorReward::registerOverrides (see actor_sm_reward.cpp): EngineOverrides for any
-// native caller reaching these via rec_dispatch(c, addr) (ActorReward::smEventDispatch does, for
-// FN_40B48/FN_40C00), and shard_set_override for the recompiler's own g_override[] table (which is
-// what the substrate's direct `func_<addr>(c)` call sites consult — confirmed via
-// generated/shard_0.c, shard_1.c, shard_2.c, shard_4.c, shard_5.c for FN_40B48/FN_40C00, and
-// generated/shard_3.c:8421 for FN_40AA4). Each shard_set_override trampoline is psx_fallback-gated
-// so core B (the pure SBS reference) keeps running the exact recompiled body — g_override[] is a
-// single table shared by every Core/Game, unlike EngineOverrides which is per-Game and already
-// skips psx_fallback cores inside run().
+// CubeTextLedger::registerOverrides() — install activateSlot/deactivateSlot/spawnPopup into the
+// override registry, same shape as ActorReward::registerOverrides (see actor_sm_reward.cpp): one
+// overrides::install() per address, with a shard_set_override setter so the shared thunk lands in
+// the recompiler's own g_override[] table (what the substrate's direct `func_<addr>(c)` call sites
+// consult — confirmed via generated/shard_0.c, shard_1.c, shard_2.c, shard_4.c, shard_5.c for
+// FN_40B48/FN_40C00, and generated/shard_3.c:8421 for FN_40AA4), while any native caller reaching
+// these via rec_dispatch(c, addr) (ActorReward::smEventDispatch does, for FN_40B48/FN_40C00) hits
+// the same registry entry. The oracle-leg gate (core B / psx_fallback keeps running the exact
+// recompiled body) lives once inside the registry, not per-trampoline.
 extern void gen_func_80040C00(Core*);
 extern void gen_func_80040AA4(Core*);
 

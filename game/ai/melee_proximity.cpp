@@ -87,9 +87,9 @@ void MeleeProximity::isAtApproachAnchorFramed() {  // guest-ABI twin, mirrors ge
 // ---------------------------------------------------------------------------------------------
 // Wiring: the only real callers found for 0x8001F9DC are DIRECT `func_8001F9DC(c)` sites in
 // shard_1.c/shard_5.c — calls through the recompiler's OWN global g_override[] table, never
-// through rec_dispatch. Per engine_overrides.h's documented gap, EngineOverrides::register_ alone
-// is invisible to that call shape; this needs the SECOND wire-up (shard_set_override), same
-// pattern as game/core/pc_scheduler.cpp / game/object/actor_sm_reward.cpp.
+// through rec_dispatch. Installing without a setter would be invisible to that call shape, so
+// `overrides::install` is passed shard_set_override as the setter, same pattern as
+// game/core/pc_scheduler.cpp / game/object/actor_sm_reward.cpp.
 // ---------------------------------------------------------------------------------------------
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8001F9DC(Core*);   // substrate body — kept alive for psx_fallback (core B)

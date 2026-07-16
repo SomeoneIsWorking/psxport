@@ -516,7 +516,7 @@ void ActorTomba::postFrameWaterCheck() {
 // Ghidra headless (scratch/decomp/region_8002.c) cross-checked against generated/shard_*.c
 // (ground truth for the guest-stack frame + jal-site `ra` constants). UNWIRED: postInteractWalk
 // above still reaches these via rec_dispatch(c, LEAF_TYPE_*) — wiring these methods in requires
-// adding EngineOverrides/shard_set_override entries, deliberately left for the next frontier
+// adding override-registry entries, deliberately left for the next frontier
 // pass so this draft compiles as dead code only.
 // =================================================================================
 namespace {
@@ -857,10 +857,11 @@ void ActorTomba::mode0ActionGate() {
   else       guest_fn(c, 0x80112B50u, 0x8005A960u);  // swim/water-interaction handler
 }
 
-// registerOverrides — wire the 4 postInteractWalk sub-handlers into EngineOverrides. Guest ABI:
-// a0=G (implicit/unused — G is always ActorTomba::G_ADDR), a1=item, a2=mode where applicable;
-// return via r[2] for the two that produce a v0. See actor_tomba.h for why EngineOverrides alone
-// (no shard_set_override) is correct here — no substrate shard calls these 4 addresses directly.
+// registerOverrides — wire the 4 postInteractWalk sub-handlers into the global override registry.
+// Guest ABI: a0=G (implicit/unused — G is always ActorTomba::G_ADDR), a1=item, a2=mode where
+// applicable; return via r[2] for the two that produce a v0. See actor_tomba.h for why a
+// rec_dispatch-only registration (no shard_set_override setter) is correct here — no substrate
+// shard calls these 4 addresses directly.
 // =================================================================================
 void ActorTomba::ov_stepModeInteract(Core* c) {
   const uint32_t item = c->r[5];
@@ -906,10 +907,10 @@ void ActorTomba::ov_assetReady(Core* c) {
 // Dual-wire (§9 + fleet-workflow.md "most leaves are substrate-called"): all 4 addresses have
 // direct substrate func_<addr>(c) callers (generated/shard_2.c, shard_4.c, shard_5.c — the
 // still-substrate mode-N dispatch tables 0x80058918/0x80058F5C and enterOuterState0's own body)
-// that do NOT go through rec_dispatch, so EngineOverrides alone misses them. Per CLAUDE.md ("engine/
-// game natives on the process-global g_override[]/g_ov_* tables MUST install via
+// that do NOT go through rec_dispatch, so a rec_dispatch-only registration alone misses them. Per
+// CLAUDE.md ("engine/game natives on the process-global g_override[]/g_ov_* tables MUST install via
 // engine_set_override_* ... never the raw shard_set_override"), route through
-// engine_set_override_main (runtime/recomp/engine_override_thunk.cpp) — the ONE oracle-gated choke
+// engine_set_override_main (runtime/recomp/override_registry.cpp) — the ONE oracle-gated choke
 // point for this table (core B/psx_fallback always runs the passed gen_func_<addr>, core A always
 // runs the native trampoline; no per-cluster hand-rolled psx_fallback gate to forget).
 void ActorTomba::gov_turnBiasCompute(Core* c)      { ov_turnBiasCompute(c); }
@@ -986,7 +987,8 @@ void ActorTomba::registerOverrides(Game* /*game*/) {
   extern void gen_func_800597AC(Core*);
   engine_set_override_main(0x800597ACu, gov_matrixComposeAttached, gen_func_800597AC);
   // mode0ActionGate (0x8005A910) — reached via the still-substrate mode-N table (gen_func_80058918
-  // case 0); it calls func_8005A970 DIRECTLY, so it needs the shard wire too, not just EngineOverrides.
+  // case 0); it calls func_8005A970 DIRECTLY, so it needs the shard_set_override setter too, not
+  // just a rec_dispatch-only registration.
   extern void gen_func_8005A910(Core*);
   engine_set_override_main(0x8005A910u, gov_mode0ActionGate, gen_func_8005A910);
   // mode0WalkHandler (0x8005A970) — the mode-0 normal walk handler mode0ActionGate's path A calls
@@ -1007,7 +1009,7 @@ void ActorTomba::registerOverrides(Game* /*game*/) {
 // Per-frame G-block driver cascade (0x8005950C region) — RE'd + drafted 2026-07-08 wide-RE pass.
 // UNWIRED: Engine::frameStartTick's `default: target = 0x8005950Cu` dispatch site still reaches
 // the substrate func_8005950C directly (game/core/engine.cpp); wiring these in is a future
-// frontier-tier step (EngineOverrides + shard_set_override, then SBS-gate). All 6 functions below
+// frontier-tier step (an override-registry entry, then SBS-gate). All 6 functions below
 // are faithful 1:1 ports from generated/shard_*.c ground truth (cited per-function), cross-checked
 // against the Ghidra headless decompile in scratch/decomp/g_8005950C.c — which caught ONE real
 // Ghidra decompiler error (see outerTransitionCommit's banner).
@@ -1220,19 +1222,19 @@ void ActorTomba::outerTransitionCommit(int32_t mode) {
 
 // frameTick — guest FUN_8005950C. See actor_tomba.h for the full RE writeup.
 //
-// Wired 2026-07-09: EngineOverrides-only (no shard_set_override — the only direct caller of
-// func_8005950C is gen_func_80059D28 = the SUBSTRATE frameStartTickFaithful, which runs on core B
-// only; core A reaches 0x8005950C via the native frameStartTickFaithful's rec_dispatch, which
-// consults EngineOverrides). Of the 5 drafted native sub-callees, 4 (turnBiasCompute /
+// Wired 2026-07-09: rec_dispatch-only registration (no shard_set_override setter — the only direct
+// caller of func_8005950C is gen_func_80059D28 = the SUBSTRATE frameStartTickFaithful, which runs
+// on core B only; core A reaches 0x8005950C via the native frameStartTickFaithful's rec_dispatch,
+// which consults the override registry). Of the 5 drafted native sub-callees, 4 (turnBiasCompute /
 // outerTransitionGate / outerTransitionCommit / assetReady) are now ALSO wired+verified as of
-// 2026-07-10 (own EngineOverrides + engine_set_override_main registrations in registerOverrides()
+// 2026-07-10 (own overrides::install + engine_set_override_main registrations in registerOverrides()
 // below — see docs/findings/animation.md "turnBiasCompute/outerTransitionGate/
 // outerTransitionCommit/assetReady — §9 promotion" for the bugs that pass found and fixed:
 // a MIPS branch-delay-slot misread in turnBiasCompute, a wrong gate constant in
 // outerTransitionCommit, and 7 missing r31 mirrors). resetLoadGate is still UNWIRED (out of this
 // pass's scope) and still dispatched to the SUBSTRATE below. The call sites below are UNCHANGED
 // (still `rec_dispatch(c, addr)`, same r31-mirror-then-dispatch shape) — per CLAUDE.md, a wired
-// leaf reached via `rec_dispatch` automatically routes through the new EngineOverrides
+// leaf reached via `rec_dispatch` automatically routes through the new override-registry
 // registration, so frameTick's own body needed no edits to pick up the 4 newly-wired callees.
 //
 // SBS-VERIFIED 2026-07-09: PSXPORT_SBS_MODE=full autonav, 0 sbs-div / 0 VIOLATION through f15600+.

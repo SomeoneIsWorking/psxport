@@ -79,9 +79,9 @@ public:
   // authoritative copy of that tail — spawnAndWait's own tail and every pc_skip collapse site
   // that reproduces FUN_80044BD4's a3!=1 branch route through it instead of re-deriving it.
   void bd4Tail(uint32_t taskBase, uint32_t flag);
-  // Wire the five primitives into game->engine_overrides at their guest addresses so substrate
-  // callers on core A (via rec_dispatch) reach the same implementations. Core B (psx_fallback)
-  // never consults the table.
+  // Wire the five primitives into the global override registry (overrides::install) at their
+  // guest addresses so substrate callers on core A (via rec_dispatch or a direct shard call)
+  // reach the same implementations. Core B (psx_fallback) always runs the passed gen_func_<addr>.
   void registerOverrides();
 
   // ---- Native START.BIN (0x8010649C) step-spread (attack (a), docs/findings/sbs.md Slip #1) ----

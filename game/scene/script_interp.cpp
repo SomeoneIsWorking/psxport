@@ -833,11 +833,11 @@ int ScriptInterp::op31TurnTowardTarget(uint32_t obj) {
 
 // =================================================================================================
 // Frontier-tier wiring (2026-07-10) — promote the §9-verified opcode drafts to VERIFIED ownership.
-// Guest ABI per EngineOverrides' contract: obj in c->r[4], ret in c->r[2]. step()'s dispatch loop
-// already calls rec_dispatch(c, handler) for every non-0x3E opcode (with sp/ra saved+restored
-// around the call), and rec_dispatch consults c->game->engine_overrides BEFORE falling to the
-// gen_func_* body — oracle-gated (core B / psx_fallback never consults the table) — so registering
-// these 5 addresses here is the entire wiring step; step()'s loop itself is untouched.
+// Guest ABI per the override registry's contract: obj in c->r[4], ret in c->r[2]. step()'s dispatch
+// loop already calls rec_dispatch(c, handler) for every non-0x3E opcode (with sp/ra saved+restored
+// around the call), and rec_dispatch consults the override registry (overrides::dispatch) BEFORE
+// falling to the gen_func_* body — oracle-gated (core B / psx_fallback never consults the table) —
+// so registering these 5 addresses here is the entire wiring step; step()'s loop itself is untouched.
 namespace {
 void eov_op05WaitFrames(Core* c)               { c->r[2] = (uint32_t)c->engine.script.op05WaitFrames(c->r[4]); }
 void eov_op06TestSceneFlag(Core* c)            { c->r[2] = (uint32_t)c->engine.script.op06TestSceneFlag(c->r[4]); }

@@ -205,7 +205,7 @@ public:
   void channelVoiceSelectPrep();      // 0x800962B0 — LOW-MEDIUM confidence, true leaf
 
   // 2026-07-10 wiring pass (frontier): registers every method above into the process-global
-  // g_override[] table via engine_set_override_main (runtime/recomp/engine_override_thunk.cpp) —
+  // g_override[] table via engine_set_override_main (runtime/recomp/override_registry.cpp) —
   // oracle-gated (core B / psx_fallback always runs the gen_func_* body; core A runs native). This
   // is the SAME mechanism rec_dispatch's main_dispatch() ultimately reaches for MAIN-shard
   // addresses, and ALSO the mechanism direct in-body calls like `func_800910F0(c)` inside

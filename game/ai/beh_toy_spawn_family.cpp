@@ -10,11 +10,12 @@
 // wrong function address with the wrong argument (a residual-register case — ground truth reuses
 // whatever the prior FUN_80072DDC dispatch left in a0, not `child`), and
 // beh_spawn_toy_child_type2_80127510 had a wrong "boost gate" constant (should read GBASE+0x183,
-// the SAME byte the OR below writes — not a separate field). Wired via `ov_a00_set_override` (the
-// only real callers are DIRECT `ov_a00_func_<addr>(c)` sites inside ov_a00_shard_1.c) +
-// EngineOverrides (rec_dispatch/native-caller tracing), same dual-wiring shape as
-// game/ai/actor_melee_engage.cpp. Field-role names beyond what's RE'd here (e.g. exact semantics
-// of GBASE's individual bytes) still await a live RAM dump — see docs/engine_re.md.
+// the SAME byte the OR below writes — not a separate field). Wired via `overrides::install` passing
+// `ov_a00_set_override` as the setter (the only real callers are DIRECT `ov_a00_func_<addr>(c)`
+// sites inside ov_a00_shard_1.c), which also makes it reachable via rec_dispatch (native-caller
+// tracing) — same shape as game/ai/actor_melee_engage.cpp. Field-role names beyond what's RE'd
+// here (e.g. exact semantics of GBASE's individual bytes) still await a live RAM dump — see
+// docs/engine_re.md.
 //
 // This file covers 5 of the ~19 functions in the surrounding cluster (a per-object "toy" behavior
 // family that spawns companion/effect child objects via the LEGACY allocator FUN_80072DDC —
@@ -210,9 +211,9 @@ uint32_t beh_spawn_toy_child_type2_80127510(Core* c, uint32_t owner, uint32_t su
 // Wiring: the only real callers found for all 5 addresses are DIRECT `ov_a00_func_<addr>(c)` sites
 // inside ov_a00_shard_1.c (the surrounding cluster's top-level state dispatcher, not yet drafted —
 // see the file banner). That call shape goes through the recompiler's OWN per-overlay
-// g_ov_a00_override[] table, never rec_dispatch — so EngineOverrides::register_ alone is blind to
-// it (engine_overrides.h's documented gap). Dual-wire via ov_a00_set_override, psx_fallback-gated,
-// same pattern as game/ai/actor_melee_engage.cpp.
+// g_ov_a00_override[] table, never rec_dispatch — so installing without a setter would be blind to
+// it. `overrides::install` is passed ov_a00_set_override as the setter, oracle-gated same as
+// gen/native everywhere else, same pattern as game/ai/actor_melee_engage.cpp.
 // ---------------------------------------------------------------------------------------------
 extern void ov_a00_set_override(uint32_t, void (*)(Core*));
 extern void ov_a00_gen_80127420(Core*);

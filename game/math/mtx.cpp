@@ -17,6 +17,6 @@ void Mtx::identity(uint32_t addr) {
 
 // FUN_800517BC (diagonal-scale matrix write) is owned by `NodeXform::seedBlock`
 // (game/render/node_xform.cpp), which is the real wired dispatch target for that address
-// (registered via NodeXform::registerOverrides / EngineOverrides). This class used to carry an
+// (registered via NodeXform::registerOverrides into the global override registry). This class used to carry an
 // unused, uncalled duplicate implementation (`Mtx::diagonal`) — deleted 2026-07-08 (dual-ownership
 // found via codemap; dead code, zero callers).

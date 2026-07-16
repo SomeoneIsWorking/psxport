@@ -85,8 +85,8 @@ void Engine::fieldTransitionCase5() {
 
 
 // ---- Wiring: the field/stage GAME-overlay transition handlers (ov_game band) ------------------
-// Installed on the ov_game override table via the oracle-gated thunk (engine_set_override_game,
-// added to engine_override_thunk.cpp) so core B / psx_fallback stays pure gen. submode1's
+// Installed on the ov_game override table via the oracle-gated setter (engine_set_override_game,
+// runtime/recomp/override_registry.cpp) so core B / psx_fallback stays pure gen. submode1's
 // `case N: rec_dispatch(c, 0x8010766Cu)` reaches ov_game_func_8010766C → the thunk → this method.
 extern void ov_game_gen_8010766C(Core*);
 extern void engine_set_override_game(uint32_t, OverrideFn, OverrideFn);

@@ -3,7 +3,7 @@
 // lives at guest 0x800A5998 (32778<<16 + 22936); the per-frame loop FUN_80050b08 already names two
 // of this file's addresses from that doc. Wide-RE tier (docs/fleet-workflow.md §6): UNWIRED /
 // UNVERIFIED, hand-transliterated 1:1 from generated/shard_*.c gen_func_<addr> (ground truth — NOT
-// mechanically diffed yet). Nothing here is called from anywhere (no EngineOverrides registration,
+// mechanically diffed yet). Nothing here is called from anywhere (no overrides::install registration,
 // no shard_set_override) — dead code that only needs to COMPILE. A wiring pass MUST re-diff every
 // line against the generated C before registering + SBS-gating (per §9).
 //

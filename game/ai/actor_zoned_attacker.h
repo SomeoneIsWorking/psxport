@@ -4,10 +4,10 @@
 //
 // These six functions are SUB-BEHAVIOR callees of the already-native
 // game/ai/beh_id_compare_motion_dispatch.cpp (FUN_80145230, guest 0x8014xxxx OVERLAY area). That
-// caller reaches them all via `rec_dispatch(c, addr)` (never a direct substrate jal), so wiring
-// each guest address into `Game::engine_overrides` is sufficient — no `shard_set_override` /
-// g_override[] dual-registration is needed here (unlike ActorReward, whose sole caller is
-// substrate and calls by a direct C function pointer).
+// caller reaches them all via `rec_dispatch(c, addr)` (never a direct substrate jal), so installing
+// each guest address in the shared override registry with no setter is sufficient — no
+// `shard_set_override` / g_override[] dual-registration is needed here (unlike ActorReward, whose
+// sole caller is substrate and calls by a direct C function pointer).
 #pragma once
 struct Core;
 class  Game;
@@ -21,7 +21,7 @@ public:
   static void approachAndFace(Core* c);           // FUN_80144928(node) -> v0
   static void idleTick(Core* c);                  // FUN_80144B50(node)
 
-  // Wire all six guest addresses into `game`'s EngineOverrides so rec_dispatch(c, addr) from the
-  // (native) caller lands here, traced via the `dispatch` debug channel.
+  // Install all six guest addresses in the shared override registry so rec_dispatch(c, addr) from
+  // the (native) caller lands here, traced via the `dispatch` debug channel.
   static void registerOverrides(Game* game);
 };

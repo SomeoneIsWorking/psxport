@@ -9,9 +9,10 @@
 // polarity inversion on the kind-based Z-bias, a condition-polarity inversion on the Y-band test, a
 // dx/dz argument swap in the ratan2 call, an rsin/rcos swap feeding the Z/X reposition update, a
 // register (r21 vs r23) conflation in the bandWidth formula, and a missing register-lifetime setup
-// (c->r[4]=angle) before the FUN_80055844 dispatch. WIRED via ov_a00_set_override (the only real
-// callers are DIRECT `ov_a00_func_80112188(c)` sites inside ov_a00_shard_1.c itself — see .cpp) +
-// EngineOverrides (rec_dispatch/native-caller tracing). SBS-gated 0-diff; see registerOverrides().
+// (c->r[4]=angle) before the FUN_80055844 dispatch. WIRED via `overrides::install` passing
+// ov_a00_set_override as the setter (the only real callers are DIRECT `ov_a00_func_80112188(c)`
+// sites inside ov_a00_shard_1.c itself — see .cpp), which also makes it reachable via rec_dispatch
+// (native-caller tracing). SBS-gated 0-diff; see registerOverrides().
 //
 // Guest ABI: a0 = self (the AI actor evaluating the engage), a1 = target (the actor it might attack),
 // a2 = anchor (a position record — read-only, e.g. the patrol anchor or camera-follow point; NOT a
@@ -93,9 +94,10 @@ public:
   // per the CLAUDE.md "mirror the guest stack, never revert/exclude" directive.
   void doItFramed();
 
-  // Wire doIt onto the guest address 0x80112188: BOTH ov_a00_set_override (the recompiler's own
-  // per-overlay call table — the only real callers found are direct `ov_a00_func_80112188(c)`
-  // sites) and EngineOverrides (rec_dispatch/native-caller tracing). See .cpp.
+  // Wire doIt onto the guest address 0x80112188 via `overrides::install`, passing ov_a00_set_override
+  // (the recompiler's own per-overlay call table — the only real callers found are direct
+  // `ov_a00_func_80112188(c)` sites) as the setter so both that call shape and rec_dispatch
+  // (native-caller tracing) reach the native. See .cpp.
   static void registerOverrides(Game* game);
 };
 #endif

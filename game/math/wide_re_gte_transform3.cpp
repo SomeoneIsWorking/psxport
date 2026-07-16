@@ -4,7 +4,7 @@
 // 0x80084470) — the "family resemblance" the task brief called out. Wide-RE tier (docs/
 // fleet-workflow.md §6): UNWIRED / UNVERIFIED, hand-transliterated 1:1 from generated/shard_0.c
 // gen_func_80084250 (66 gen-C ln) — ground truth, NOT mechanically diffed yet. Not called from
-// anywhere (no EngineOverrides registration, no shard_set_override) — dead code that only needs to
+// anywhere (no override-registry registration, no shard_set_override) — dead code that only needs to
 // COMPILE. A wiring pass MUST re-diff every line against the generated C before registering +
 // SBS-gating (per §9).
 //

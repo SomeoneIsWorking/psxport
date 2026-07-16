@@ -15,8 +15,8 @@
 // below stays an un-owned PSX leaf, reached uniformly via `rec_dispatch(c, addr)` (guest ABI: args
 // in c->r[4..7], return in c->r[2]) — same discipline as game/object/actor_sm_reward.cpp. Two
 // leaves (FUN_800777FC / FUN_800518FC) already have a native PC class (Cull::cullWrapperFlag2 /
-// Engine::objMatrixCompose) but are NOT wired through EngineOverrides (only their sole other caller
-// invokes them directly) — dispatching to their guest address still reaches the exact same
+// Engine::objMatrixCompose) but are NOT installed in the override registry (only their sole other
+// caller invokes them directly) — dispatching to their guest address still reaches the exact same
 // byte-identical substrate body, so this file keeps everything uniform via rec_dispatch rather than
 // special-casing those two.
 //

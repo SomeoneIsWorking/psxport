@@ -11,8 +11,9 @@
 // melee_proximity.cpp's inline "BUG FIX" comments): the +96/+100 anchor-offset fields were swapped
 // between X and Z, a condition-polarity inversion on the Y-band test (same class of bug as its
 // ActorMeleeEngage sibling), and a dx/dz argument swap in the ratan2 call. WIRED via
-// shard_set_override (the only real callers are direct `func_8001F9DC(c)` sites in shard_1.c/
-// shard_5.c) + EngineOverrides. SBS-gated 0-diff; see registerOverrides().
+// `overrides::install` passing shard_set_override as the setter (the only real callers are direct
+// `func_8001F9DC(c)` sites in shard_1.c/shard_5.c), which also makes it reachable via rec_dispatch.
+// SBS-gated 0-diff; see registerOverrides().
 //
 // Guest ABI: a0 = self (r19 in the recomp — the actor being tested), a1 = other (r16 — the actor
 // whose approach-anchor offset is the target point). Returns v0: 1 = self is within combined-radius
@@ -71,9 +72,10 @@ public:
   // writes result to c->r[2] (v0), matching gen_func_8001F9DC's own entry/exit convention.
   void isAtApproachAnchorFramed();
 
-  // Wire isAtApproachAnchor onto guest address 0x8001F9DC: BOTH shard_set_override (the
-  // recompiler's own global call table — the only real callers found are direct
-  // `func_8001F9DC(c)` sites) and EngineOverrides (rec_dispatch/native-caller tracing). See .cpp.
+  // Wire isAtApproachAnchor onto guest address 0x8001F9DC via `overrides::install`, passing
+  // shard_set_override (the recompiler's own global call table — the only real callers found are
+  // direct `func_8001F9DC(c)` sites) as the setter so both that call shape and rec_dispatch
+  // (native-caller tracing) reach the native. See .cpp.
   static void registerOverrides(Game* game);
 };
 #endif

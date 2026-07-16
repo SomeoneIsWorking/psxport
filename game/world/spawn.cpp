@@ -394,8 +394,8 @@ uint32_t Spawn::spawnLiftPlatformChild(uint32_t owner) {   // FUN_8013A730
   return spawnTypedChild(owner, /*cls=*/3, 0x8013A330u, /*type=*/16, /*hasSub=*/false, 0);
 }
 
-// Guest-ABI trampolines (EngineOverrides): substrate/native rec_dispatch callers reach the 4 native
-// bodies above exactly like the recomp bodies — args in r4/r5, return in r2.
+// Guest-ABI trampolines (registered via overrides::install): substrate/native rec_dispatch callers
+// reach the 4 native bodies above exactly like the recomp bodies — args in r4/r5, return in r2.
 //
 // REGISTER-FAITHFULNESS (2026-07-11, the f389 diverge root cause): the native C++ spawnTypedChild
 // above takes a SHORTCUT — it calls the native Spawn::dispatch which remaps args and calls native

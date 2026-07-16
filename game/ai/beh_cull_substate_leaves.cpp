@@ -4,7 +4,7 @@
 // STATUS: UNWIRED / UNVERIFIED (wide-RE tier, docs/fleet-workflow.md §6). Hand-transliterated 1:1
 // from generated/ov_a00_shard_0.c ground truth (ov_a00_gen_<addr>) — NOT mechanically diffed
 // against it yet. Per §9, a wiring pass MUST re-diff every line before registering + SBS-gating.
-// Nothing here is called from anywhere (no EngineOverrides registration, no shard_set_override) —
+// Nothing here is called from anywhere (not installed in the override registry, no shard_set_override) —
 // dead code that only needs to COMPILE. All sub-calls to OTHER substrate leaves are routed via
 // `rec_dispatch(c, addr)` (guest ABI, args in r4..r7, ret in r2) per CLAUDE.md's "native call sites
 // prefer routing wired addresses through rec_dispatch" — this reaches the native override where one

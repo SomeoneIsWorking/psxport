@@ -50,9 +50,9 @@ public:
   // ---- STRICT mirror TDD gate (USER 2026-07-08: verification must be RUN, not asserted) ----------
   // MV_CHECK at a pc_faithful fork site: when armed for `addr` (PSXPORT_MIRROR_VERIFY=all or
   // =0xADDR[,..]), snapshot guest state, run the NATIVE mirror, rewind, replay the PURE substrate
-  // body (EngineOverrides suppressed — exactly SBS core B), byte-compare RAM + scratchpad + the
-  // ABI register set (v0/v1, s0-s7, gp/sp/fp/ra, hi/lo) with NO exemptions (no dead-stack window),
-  // and ABORT on any diff. On a match, execution continues from the native result.
+  // body (the override registry's native dispatch suppressed — exactly SBS core B), byte-compare
+  // RAM + scratchpad + the ABI register set (v0/v1, s0-s7, gp/sp/fp/ra, hi/lo) with NO exemptions
+  // (no dead-stack window), and ABORT on any diff. On a match, execution continues from the native result.
   // Limits: yield-free mirrors only (scheduler_yield aborts while inCheck); host hw side effects
   // run twice while armed (do not arm CD-advancing leaves — SBS covers those); no nesting.
   bool strictArmed(uint32_t addr);      // also false while inCheck (no nesting)
@@ -79,11 +79,11 @@ public:
   void journalTrack(uint32_t ramOff, uint8_t origByte);
 
   // ---- Generalized "verify ALL wired overrides" gate (2026-07-10) --------------------------------
-  // The two CENTRAL native-dispatch injection points — runtime/recomp/engine_override_thunk.cpp
-  // (the engine_set_override_main/_a00 g_tab[] table) and EngineOverrides::run (rec_dispatch's
-  // registration table) — call mirrorSampleGate(addr) instead of strictArmed(addr) directly before
-  // invoking the native handler. This makes `PSXPORT_MIRROR_VERIFY=all` cover EVERY address wired
-  // through either mechanism automatically, with no per-call-site MV_CHECK needed: strictArmed's
+  // The CENTRAL native-dispatch injection point — the override registry's shared thunk (both the
+  // `g_<mod>_override[]` direct-call path and `rec_dispatch`/`overrides::dispatch`, runtime/recomp/
+  // override_registry.h) — calls mirrorSampleGate(addr) instead of strictArmed(addr) directly before
+  // invoking the native handler. This makes `PSXPORT_MIRROR_VERIFY=all` cover EVERY wired address
+  // automatically, with no per-call-site MV_CHECK needed: strictArmed's
   // mode/list parsing + inCheck no-nesting guard apply unchanged, PLUS per-address sampling
   // (PSXPORT_MIRROR_VERIFY_EVERY=N, default 1 = check every invocation — correctness over speed by
   // default; raise N to trade coverage for FPS on a hot address). A call site that already wraps
@@ -96,14 +96,14 @@ public:
   // SV_CHECK at a pc_skip fork: when armed (PSXPORT_SKIP_VERIFY=all or =0xADDR[,..]), run the SKIP
   // leg, snapshot the OBSERVABLE set (game/core/observables.h positive list + 512 KB SPU RAM),
   // rewind guest+SPU state, run the ORACLE leg — the substrate arc the skip leg replaces, inline
-  // and synchronous (in_stage forced 0 so yield/selfClose prims are no-ops; EngineOverrides
-  // suppressed) — then compare the observables and ABORT on any diff. Execution continues from
+  // and synchronous (in_stage forced 0 so yield/selfClose prims are no-ops; the override registry's
+  // native dispatch suppressed) — then compare the observables and ABORT on any diff. Execution continues from
   // the SKIP result. Everything OUTSIDE the observable list (stack scratch, cadence counters) is
   // legitimately different between the paths and is NOT compared.
   bool skipArmed(uint32_t addr);
   void skipCheck(uint32_t addr, void (*skipFn)(void*), void* skipCtx,
                  void (*oracleFn)(void*), void* oracleCtx);
-  bool inSubstrateLeg = false;          // rec_dispatch: suppress EngineOverrides (pure-B leg)
+  bool inSubstrateLeg = false;          // rec_dispatch: suppress the override registry's native dispatch (pure-B leg)
   bool inCheck = false;                 // no-nesting + scheduler_yield guard
 
 private:

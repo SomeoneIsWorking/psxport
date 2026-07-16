@@ -59,7 +59,7 @@ inline void overlay_oneshot   (Core* c, uint32_t obj) {                        (
 // divergence (obj+0x71 flags byte, RET_PAUSE mask mistranscribed as 0x02 instead of 0x01) on THIS
 // specific SOP intro script content — now fixed in game/scene/script_interp.cpp. This call site
 // stays on rec_dispatch(c, ...) per CLAUDE.md's dispatch-routing preference; it now transparently
-// runs the native body since sopLiftedSubtick is registered in EngineOverrides.
+// runs the native body since sopLiftedSubtick is installed in the shared override registry.
 inline void overlay_subtick   (Core* c, uint32_t o) { c->r[4] = o;           rec_dispatch(c, 0x8010B588u); }
 inline void bounds_cull       (Core* c, uint32_t o) { c->r[4] = o;           rec_dispatch(c, 0x8007778Cu); }
 inline void anim_graphics_tick(Core* c, uint32_t o) { (void)c->engine.animTick(o); }                              // native FUN_8004190C

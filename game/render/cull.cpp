@@ -575,7 +575,7 @@ void Cull::cullWrapperOffsetY() { Core* c = core;
 
 // ---- Wiring (RESOLVED 2026-07-08): shard_set_override for all 6 camera-relative wrappers -------
 // The substrate reaches these via DIRECT `func_<addr>(c)` call sites (jal, not jalr), so
-// EngineOverrides (rec_dispatch-gated) is blind to them; shard_set_override intercepts the
+// the override registry's rec_dispatch interception is blind to them; shard_set_override intercepts the
 // recompiler's OWN g_override[] table, the same dual-registration pattern as game/math/gte_math.cpp
 // and game/object/animation.cpp's applyFrame. psx_fallback-gated: core B (the pure substrate
 // reference) always runs the real gen_func_* body.

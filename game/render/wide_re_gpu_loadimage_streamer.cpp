@@ -257,9 +257,10 @@ void Render::gpuLoadImageStream() {
 // ==================================================================================================
 // Wiring (2026-07-10): promoted from wide-RE draft to verified ownership per docs/fleet-workflow.md
 // §9. Reached as a plain intra-shard C call (func_80082D04's fast-path `rec_dispatch(c, fn)` where fn
-// resolves here — NOT via a jump table), so the oracle-gated `engine_set_override_main` thunk is the
-// correct install path (see runtime/recomp/engine_override_thunk.cpp): it keeps SBS core B running the
-// pure gen_func_80082734 body while core A dispatches to Render::gpuLoadImageStream().
+// resolves here — NOT via a jump table), so `engine_set_override_main` (runtime/recomp/
+// override_registry.h, a thin forwarder over overrides::install) is the correct install path: its
+// oracle-gated dispatch keeps SBS core B running the pure gen_func_80082734 body while core A
+// dispatches to Render::gpuLoadImageStream().
 namespace {
 void ov_gpuLoadImageStream(Core* c) { c->mRender->gpuLoadImageStream(); }
 }  // namespace

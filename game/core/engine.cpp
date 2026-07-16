@@ -2181,7 +2181,7 @@ void Engine::fieldRunX() { Core* c = core;
 // pc_faithful walkable-field area machine — mirror of ov_game_gen_801088D8 (7 states on sm[0x4c]).
 // Same recipe as Sop::fieldModeFaithful: guest frame + jal-site ras; every un-owned leaf is the
 // substrate dispatch at its RE'd jal site; owned states run the native Engine methods. Case 0
-// dispatches the REAL 0x80044BD4 spawn-and-wait (EngineOverrides -> PcScheduler::spawnAndWait) of
+// dispatches the REAL 0x80044BD4 spawn-and-wait (override registry -> PcScheduler::spawnAndWait) of
 // the area-DATA loader 0x800452C0 (Asset::areaDataLoadAsTask, task-1 fiber) — the stage fiber
 // parks inside the wait loop and falls through to case 1 on completion, organically reproducing
 // the substrate's multi-tick cadence (retires the Slip #3 two-tick defer + Slip #5 RNG
@@ -2377,7 +2377,7 @@ void Engine::stageBodyFaithful() { Core* c = core;
     }
     c->r[4] = 1;
     c->r[31] = 0x80106470u;
-    rec_dispatch(c, 0x80051F80u);          // loop-tail yield (EngineOverrides -> yieldPrim)
+    rec_dispatch(c, 0x80051F80u);          // loop-tail yield (override registry -> yieldPrim)
   }
 }
 
@@ -2691,7 +2691,7 @@ void Engine::postRenderTick() {
 // 24-byte guest frame, spills s0 (r16, the 0x800BF808 struct base) at sp+16 and the caller's ra at
 // sp+20 exactly like the reference-mirror shape (Engine::submode1Faithful), sets r31 to the gen's
 // jal-site constant before the FX-trigger leaf, and dispatches that leaf via rec_dispatch so it runs
-// the literal substrate body gen_func_80074590 (no EngineOverrides entry exists for 0x80074590, so
+// the literal substrate body gen_func_80074590 (no override-registry entry exists for 0x80074590, so
 // this is guaranteed byte-identical -- including gen_func_80074590's own ra-to-stack spill, which the
 // native Sfx::trigger port does not reproduce and must not be used here). v0/v1 (r2/r3) are dead to
 // every known caller but gen_func_80077D8C leaves them holding whatever value each branch happened to
@@ -3404,8 +3404,8 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
 // addresses were registered NOWHERE — so their rec_dispatch/callObj callers (beh_actor_tomba_proximity_
 // combat, beh_a06_scripted_actor) + the 5/9 direct substrate func_<addr>(c) shard sites all ran the
 // EMULATED body while direct native callers (beh_sop_intro_pilot) ran the port (a split). Found by
-// `codemap.py --substrate-fallthrough`. Single psx_fallback-gated thunk covers both EngineOverrides
-// (rec_dispatch) and shard_set_override (g_override[]); core B stays pure substrate. MIRROR_VERIFY-gated.
+// `codemap.py --substrate-fallthrough`. One `overrides::install` entry covers both the registry's
+// rec_dispatch path and shard_set_override (g_override[]); core B stays pure substrate. MIRROR_VERIFY-gated.
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8004190C(Core*);
 extern void gen_func_80054D14(Core*);

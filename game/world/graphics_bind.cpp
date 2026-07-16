@@ -213,7 +213,7 @@ void GraphicsBind::posCompose() { Core* c = core;
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
 // UNWIRED DRAFT (2026-07-08 wide-RE wave, region 0x80050000-0x8005FFFF). Not registered anywhere
-// (no EngineOverrides, no shard_set_override), not SBS-gated — dead code until a frontier pass
+// (no overrides::install, no shard_set_override), not SBS-gated — dead code until a frontier pass
 // wires + verifies it.
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -300,7 +300,7 @@ uint32_t GraphicsBind::recordArrayInit(uint32_t obj, uint32_t count, uint32_t sc
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Wiring — recordArrayInit only (see graphics_bind.h for why this one leaf uses the standard
-// EngineOverrides/shard_set_override dual-wire instead of the c->game->verify.run() A/B gate the
+// overrides::install + shard_set_override wiring instead of the c->game->verify.run() A/B gate the
 // rest of this class uses). Direct same-shard callers confirmed via generated/shard_0.c,
 // generated/shard_3.c, generated/shard_7.c; overlay rec_dispatch callers confirmed via
 // game/ai/beh_a06_scripted_actor.cpp, beh_sop_intro_lifted.cpp, beh_sop_intro_pilot.cpp,

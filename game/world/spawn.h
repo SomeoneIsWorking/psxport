@@ -97,9 +97,10 @@ public:
   uint32_t spawnChildTrigChild(uint32_t owner, uint32_t sub);     // FUN_8013AC34
   uint32_t spawnLiftPlatformChild(uint32_t owner);                // FUN_8013A730
 
-  // Wire the 4 typed-child spawners above into game->engine_overrides at their guest addresses so
-  // substrate/native rec_dispatch callers (beh_box_seed_phase_gate, beh_single_child_cull) reach the
-  // native bodies instead of the recompiled ones. Called once at boot (boot.cpp).
+  // Wire the 4 typed-child spawners above into the override registry (overrides::install) at their
+  // guest addresses so substrate/native rec_dispatch callers (beh_box_seed_phase_gate,
+  // beh_single_child_cull) reach the native bodies instead of the recompiled ones. Called once at
+  // boot (boot.cpp).
   void registerTypedChildOverrides();
 
 private:

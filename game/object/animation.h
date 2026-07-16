@@ -70,7 +70,8 @@ public:
   void applyFrame(uint32_t node, int32_t snapCursor);
 
   // registerOverrides(): wires FUN_80076904 / FUN_80077B5C / FUN_80077C40 / FUN_80075F0C into
-  // EngineOverrides at their guest addresses, so every existing rec_dispatch call site (native
+  // the override registry (overrides::install) at their guest addresses, so every existing
+  // rec_dispatch call site (native
   // beh_ handlers AND any substrate-internal caller) reaches these native methods uniformly.
   // FUN_80075F0C (applyFrame) is ALSO dual-wired via shard_set_override (see .cpp) because the
   // substrate reaches it through direct `func_<addr>(c)` call sites, not just rec_dispatch.

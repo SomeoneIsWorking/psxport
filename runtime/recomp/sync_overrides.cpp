@@ -7,9 +7,9 @@
 //   (d) the guest-backtrace utility used by the traps (also called by the SBS divergence debugger).
 //
 // HARD RULE: every entry MUST be a PSX LIBRARY/BIOS function (libcd/libetc/libmdec/libgpu). Game and
-// engine FUN_xxxx addresses are wired in EngineOverrides instead (engine_overrides.h, consulted at
-// rec_dispatch top for every caller — user 2026-07-07). The registrar asserts each address here lies
-// in the resident BIOS-library code window.
+// engine FUN_xxxx addresses are wired through the override registry instead (override_registry.h,
+// overrides::install/overrides::dispatch, consulted at rec_dispatch top for every caller — user
+// 2026-07-07). The registrar asserts each address here lies in the resident BIOS-library code window.
 
 #include "platform_hle.h"
 #include "core.h"

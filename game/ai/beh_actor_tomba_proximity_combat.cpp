@@ -12,12 +12,12 @@
 // `(uint32_t)0+X`) is normalized out — NO logic bugs found. The one REAL bug was structural: the
 // draft never reproduced the guest frame at all (ground truth descends -72, spills r16-r23+ra at
 // c->r[29]+32..+64, restores on exit) — fixed below (see the prologue/epilogue comments). Wired via
-// EngineOverrides only (no shard_set_override/ov_a00_set_override dual-wire): no static
-// `func_800527C8(c)` call site exists anywhere in generated/ (only the generic rec_dispatch switch-
-// case, which is EngineOverrides-visible) — same "EngineOverrides alone is correct here" shape as
-// game/player/actor_tomba.cpp's 4 postInteractWalk handlers. The real caller is presumably a per-
-// object "think" function-pointer slot (see .h banner) reached dynamically through rec_dispatch, so
-// EngineOverrides intercepts it regardless of which object stamped the pointer.
+// `overrides::install` with no setter (no shard_set_override/ov_a00_set_override dual-wire): no
+// static `func_800527C8(c)` call site exists anywhere in generated/ (only the generic rec_dispatch
+// switch-case, which the registry's dispatch always checks) — same "install with no setter is
+// correct here" shape as game/player/actor_tomba.cpp's 4 postInteractWalk handlers. The real caller
+// is presumably a per-object "think" function-pointer slot (see .h banner) reached dynamically
+// through rec_dispatch, so the registry intercepts it regardless of which object stamped the pointer.
 #include "core.h"
 #include "game.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
@@ -539,12 +539,11 @@ L_80053060:;
 
 // ---------------------------------------------------------------------------------------------
 // Wiring: no static `func_800527C8(c)` call site found anywhere in generated/ — only the generic
-// rec_dispatch switch-case (shard_disp.c), which every recompiled address gets and which IS
-// EngineOverrides-visible (rec_dispatch checks EngineOverrides before ever reaching func_800527C8).
-// No shard_set_override dual-wire needed: unlike the ov_a00 toy-spawn cluster, there is no direct
-// intra-shard `jal`/call site bypassing rec_dispatch for this address. Same shape as
-// game/player/actor_tomba.cpp's registerOverrides() comment: "no substrate shard calls this address
-// directly."
+// rec_dispatch switch-case (shard_disp.c), which every recompiled address gets and which the
+// registry's dispatch always checks before ever reaching gen_func_800527C8. No setter needed:
+// unlike the ov_a00 toy-spawn cluster, there is no direct intra-shard `jal`/call site bypassing
+// rec_dispatch for this address. Same shape as game/player/actor_tomba.cpp's registerOverrides()
+// comment: "no substrate shard calls this address directly."
 // ---------------------------------------------------------------------------------------------
 extern void gen_func_800527C8(Core*);  // substrate body — the oracle/substrate leg
 

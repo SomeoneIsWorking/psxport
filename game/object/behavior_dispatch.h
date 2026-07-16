@@ -30,7 +30,8 @@ public:
   //   — MV_CHECK's strict-mirror replay, game/core/verify_harness.h) OR under pc_faithful itself
   //   (!c->game->pc_skip) the native table is skipped entirely and every handler routes through
   //   rec_dispatch to the literal gen body — the same suppression rec_dispatch itself applies to
-  //   EngineOverrides (runtime/recomp/overlay_router.cpp), PLUS the pc_skip fork: the native beh_*
+  //   the override registry (runtime/recomp/overlay_router.cpp, overrides::dispatch), PLUS the
+  //   pc_skip fork: the native beh_*
   //   table is a pc_skip=true REBUILD shortcut (matches the RESULT, not the PSX bytes), so
   //   pc_faithful (which must be byte-exact to recomp_path) can't take it either.
   //   Called directly by native *Faithful() C++ methods (bypassing rec_dispatch), so it must carry

@@ -20,8 +20,9 @@ class GraphicsBind {
 public:
   Core* core = nullptr;
 
-  // registerOverrides — dual-wire recordArrayInit (EngineOverrides + shard_set_override) onto
-  // `game`. Unlike this class's OTHER 6 methods (recordAlloc/recordInit/renderUpdate/setGeom/
+  // registerOverrides — wires recordArrayInit into the override registry (overrides::install,
+  // with shard_set_override so direct substrate callers redirect too). Unlike this class's OTHER
+  // 6 methods (recordAlloc/recordInit/renderUpdate/setGeom/
   // setXformBlk/posCompose, wired via the verify-harness c->game->verify.run() A/B gate because
   // their callers have ALREADY been converted to direct native calls), recordArrayInit's callers
   // are still guest-ABI rec_dispatch(c, 0x800519E0u) sites in several un-ported AI beh_ handlers,

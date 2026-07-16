@@ -66,28 +66,28 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
 
 // rec_dispatch_miss now lives in hle.c (routes A0/B0/C0 to the HLE BIOS).
 
-// register_engine_overrides — wire every EngineOverrides-based native handler onto ONE Game
-// instance's OWN table (per-Game; NOT the process-global g_override[]/g_ov_<mod>_override[]
-// tables some of these ALSO dual-wire via shard_set_override).
+// register_engine_overrides — call each subsystem's registerOverrides(), which installs its native
+// handlers into the ONE process-global override registry (overrides::install, override_registry.h:
+// one { native, gen } entry per address, oracle-leg-gated dispatch shared by the g_<mod>_override[]
+// thunks and rec_dispatch). Installing is idempotent — re-registering the same address just
+// overwrites the same global slot — so it's safe to call once per harness-owned Game (main(),
+// dc_boot_init) and twice under SBS full (mA + mB).
 //
-// CRITICAL GAP found + fixed here (2026-07-08, docs/findings/tooling.md "SBS/DualCore/Selftest
-// never populate their own Game's EngineOverrides table"): this call used to live ONLY inline in
-// main() below, run once against a single THROWAWAY Game before main() decided which harness to
-// hand off to. That throwaway Game's side effects on the PROCESS-GLOBAL g_override[] tables (via
-// shard_set_override — PlatformHle sync HLEs, ActorReward, and PcScheduler after today's fix)
-// persist for every Game created afterward, so those specific overrides happened to still work
-// under SBS/DualCore/Selftest. But `rec_dispatch`'s EngineOverrides check
-// (`c->game->engine_overrides.run(c, addr)`) reads the CALLING Core's OWN Game — and SBS/
-// DualCore/Selftest construct their own Game instances (sbs.cpp mA/mB, dualcore.cpp, selftest.cpp)
-// and NEVER called this registration block on them. Their `engine_overrides` table was completely
-// EMPTY. Result: every override wired ONLY via EngineOverrides::register_ (Animation,
-// ActorZonedAttacker, Spawn, ReleaseTriggerMotion — anything without its own shard_set_override
-// dual-registration) was COMPLETELY INERT in SBS/DualCore/Selftest: `run()` always returned false
-// on both sides, so BOTH SBS cores silently ran the identical SUBSTRATE body for those addresses
-// — a byte-exact "pass" that proved nothing (native vs itself would have been the same shape had
-// it fired; native never fired at all). Fix: call this once per Game, right after each harness's
-// own Game/Core is constructed (see sbs.cpp, dualcore.cpp, selftest.cpp), not just on main()'s
-// single throwaway instance.
+// HISTORICAL GAP found + fixed here (2026-07-08, docs/findings/tooling.md "SBS/DualCore/Selftest
+// never populate their own Game's override table"): before the registry was unified, this call used
+// to live ONLY inline in main() below, run once against a single THROWAWAY Game before main()
+// decided which harness to hand off to. That throwaway Game's side effects on the PROCESS-GLOBAL
+// g_override[] tables (via shard_set_override — PlatformHle sync HLEs, ActorReward, and PcScheduler
+// after that fix) persisted for every Game created afterward, so those specific overrides happened
+// to still work under SBS/DualCore/Selftest. But SBS/DualCore/Selftest construct their own Game
+// instances (sbs.cpp mA/mB, dualcore.cpp, selftest.cpp) and NEVER called this registration block on
+// them, so any override wired ONLY through this path (Animation, ActorZonedAttacker, Spawn,
+// ReleaseTriggerMotion — anything without its own shard_set_override dual-registration) was
+// COMPLETELY INERT there: dispatch always missed, so BOTH SBS cores silently ran the identical
+// SUBSTRATE body for those addresses — a byte-exact "pass" that proved nothing (native vs itself
+// would have been the same shape had it fired; native never fired at all). Fix: call this once per
+// Game, right after each harness's own Game/Core is constructed (see sbs.cpp, dualcore.cpp,
+// selftest.cpp), not just on main()'s single throwaway instance.
 void register_engine_overrides(Game* game) {
   Core* c = &game->core;
   game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
@@ -179,7 +179,9 @@ int main(int argc, char** argv) {
   // (before any harness-owned Game exists) and is psx_fallback=0, so a "first non-fallback
   // registrant wins" pick — or any other order-based heuristic — always lands on this inert Game
   // instead of the real SBS core A. Registering it only when it's actually the Game that ends up
-  // driven removes the ambiguity at the source instead of working around it downstream.
+  // driven removes the ambiguity at the source instead of working around it downstream. (The
+  // registry itself is idempotent — see the comment on register_engine_overrides above — this
+  // ordering concern is about `ovhit`'s heuristic, not about clobbering the registry.)
   c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
   card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
   threads_init(c);          // native BIOS threads (ucontext); main = slot 0
@@ -218,8 +220,9 @@ int main(int argc, char** argv) {
     return 0;
   }
   // Plain (no-harness) path: THIS `game` is the one actually driven, so register its
-  // EngineOverrides table here (see the comment above where this used to run unconditionally).
-  register_engine_overrides(game);     // ALL EngineOverrides clusters (PcScheduler/Animation/
+  // overrides into the registry here (see the comment above where this used to run
+  // unconditionally).
+  register_engine_overrides(game);     // ALL override clusters (PcScheduler/Animation/
                                         // ActorReward/ActorZonedAttacker/Spawn/ReleaseTriggerMotion/
                                         // GT3GT4/Math)
   game->stub.run(path);                  // stub draws SCEA, then hands off to native MAIN boot

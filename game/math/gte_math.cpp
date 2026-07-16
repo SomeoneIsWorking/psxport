@@ -18,9 +18,10 @@
 
 // The recompiler's own PROCESS-GLOBAL call table (generated/shard_disp.c: g_override[]/
 // shard_set_override) — the substrate's OWN func_<addr>(c) call sites (e.g. `func_80084110(c);`
-// inline in shard_0.c/shard_6.c/…, 55k+/frame for matMul alone) check THIS table first, not
-// EngineOverrides (which only fires on an explicit rec_dispatch(c, addr) call — a small minority
-// of call sites for this cluster). Same dual-wiring pattern as ActorReward::registerOverrides.
+// inline in shard_0.c/shard_6.c/…, 55k+/frame for matMul alone) check THIS table first, not the
+// registry's rec_dispatch path (which only fires on an explicit rec_dispatch(c, addr) call — a
+// small minority of call sites for this cluster). Same dual-wiring pattern as
+// ActorReward::registerOverrides — both setters passed to the same `install()` call.
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_80084110(Core*);
 extern void gen_func_80084220(Core*);
@@ -327,11 +328,12 @@ uint32_t Math::applyMatlv(uint32_t inPtr, uint32_t out) {   // FUN_80084220
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Wiring — BOTH tables, same dual pattern as ActorReward::registerOverrides (game/object/
-// actor_sm_reward.cpp): (1) EngineOverrides for callers reaching these via an explicit
-// rec_dispatch(c, addr) (Engine::objMatrixCompose etc — traced by the `dispatch` debug channel),
-// and (2) shard_set_override for the recompiler's OWN g_override[] table, which is what the
-// substrate's inline `func_<addr>(c)` call sites actually consult (the 55k+/frame majority for
-// matMul). g_override[] is a single PROCESS-GLOBAL table shared by every Core — including SBS's
+// actor_sm_reward.cpp): each `install()` call below registers (1) the registry's own rec_dispatch
+// entry, for callers reaching these via an explicit rec_dispatch(c, addr) (Engine::
+// objMatrixCompose etc — traced by the `dispatch` debug channel), and (2) shard_set_override for
+// the recompiler's OWN g_override[] table, which is what the substrate's inline `func_<addr>(c)`
+// call sites actually consult (the 55k+/frame majority for matMul). g_override[] is a single
+// PROCESS-GLOBAL table shared by every Core — including SBS's
 // two separately-constructed cores — so the gate must live IN the installed function itself:
 // core B (psx_fallback, the pure substrate reference) must keep running the exact recompiled
 // gen_func_* body, or SBS would just be comparing this port against itself (a fake 0-diff).

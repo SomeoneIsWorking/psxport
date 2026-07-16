@@ -207,30 +207,31 @@ void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t f
 }
 
 // Guest-ABI trampolines: substrate callers reach the ported primitives through rec_dispatch
-// (EngineOverrides), args in r4..r7 exactly like the recomp bodies read them.
+// (overrides::dispatch, backed by the global override registry), args in r4..r7 exactly like
+// the recomp bodies read them.
 static void eov_yield(Core* c)      { c->game->pcSched.yieldPrim((uint16_t)c->r[4]); }
 static void eov_spawn(Core* c)      { c->game->pcSched.spawnPrim(c->r[4], c->r[5]); }
 static void eov_spawnwait(Core* c)  { c->game->pcSched.spawnAndWait(c->r[4], c->r[5], c->r[6], c->r[7]); }
 static void eov_forceclose(Core* c) { c->game->pcSched.forceClose(c->r[4]); }
 static void eov_selfclose(Core* c)  { c->game->pcSched.selfClose(); }
 
-// shard_set_override wires the RECOMPILER's OWN g_override[] table (generated/shard_disp.c).
+// The `shard_set_override` argument to `install()` below wires the RECOMPILER's OWN g_override[]
+// table (generated/shard_disp.c), in addition to the registry's own rec_dispatch entry.
 // FOUND (2026-07-08, dispatch-blind-spot verification): all five of these guest addresses are
 // reached from MANY still-substrate call sites as a DIRECT C call `func_<addr>(c)` (grep across
 // generated/shard_*.c: 15/7/2/7/8 direct call sites for yield/spawn/spawnAndWait/forceClose/
 // selfClose respectively) — a MIPS jal the recompiler emits as an intra-module call, which NEVER
-// goes through rec_dispatch. EngineOverrides::register_ (above) only wires the EngineOverrides
-// table, which rec_dispatch consults; it does NOT populate g_override[]. So every one of those
-// direct-call sites fell through the wrapper's `if (g_override[i]) {...}` to `gen_func_<addr>(c)`
-// — running the OLD SUBSTRATE body — even though a byte-exact native port existed and was
-// "registered". A live run confirmed the gap empirically: PSXPORT_DEBUG=dispatch,recdep over a
-// real autonav session showed exactly ONE `[dispatch]` hit total for these five addresses
-// (PcScheduler::spawnPrim, called once from the native boot driver at ra=DEAD0000) and ZERO for
-// yieldPrim/spawnAndWait/forceClose/selfClose, despite the game visibly scheduling tasks every
-// frame — i.e. every REAL in-game yield/close ran the substrate body, not this port. See
-// docs/findings/tooling.md "EngineOverrides::register_ is BLIND to a direct substrate call" (the
-// gap was documented but left unfixed pending a concrete victim; this is that victim) and
-// game/object/actor_sm_reward.cpp (the existing precedent this copies).
+// goes through rec_dispatch. A rec_dispatch-only registration does NOT populate g_override[].
+// So every one of those direct-call sites fell through the wrapper's `if (g_override[i]) {...}`
+// to `gen_func_<addr>(c)` — running the OLD SUBSTRATE body — even though a byte-exact native port
+// existed and was registered for rec_dispatch. A live run confirmed the gap empirically:
+// PSXPORT_DEBUG=dispatch,recdep over a real autonav session showed exactly ONE `[dispatch]` hit
+// total for these five addresses (PcScheduler::spawnPrim, called once from the native boot driver
+// at ra=DEAD0000) and ZERO for yieldPrim/spawnAndWait/forceClose/selfClose, despite the game
+// visibly scheduling tasks every frame — i.e. every REAL in-game yield/close ran the substrate
+// body, not this port. See docs/findings/tooling.md "rec_dispatch-only registration is BLIND to
+// a direct substrate call" (the gap was documented but left unfixed pending a concrete victim;
+// this is that victim) and game/object/actor_sm_reward.cpp (the existing precedent this copies).
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_80051F80(Core*);   // yieldPrim substrate body
 extern void gen_func_80051F14(Core*);   // spawnPrim substrate body
