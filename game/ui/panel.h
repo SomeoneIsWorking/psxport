@@ -33,6 +33,11 @@ public:
   // rect (4 s16 at guest ptr: x,y,w,h), UV selected by `uvIndex` (0..4, the spec's texel table).
   static void pushFill(Core* c, uint32_t rectPtr, int32_t uvIndex, uint16_t attr, int32_t otBucket);
 
+  // pushDialogGlyphs: native half of the FUN_8007CC00 tap (Spec 3) — the dialog box's per-glyph
+  // text row, including the selected-option HIGHLIGHT palette (box+0x47/box+3 -> clut 0x7CBE) the
+  // retired flat-list producer (Render::dialogTextNative) couldn't see. See panel.cpp.
+  static void pushDialogGlyphs(Core* c, uint32_t box);
+
   // pushCorners: native half of the panelBuild tap (Spec 1) — the 4 corner 8x8 SPRT_8 sprites
   // (TL/TR/BL/BR). Does NOT push the 5 fills — those arrive via panelFill's own tap (see NESTING
   // note above).

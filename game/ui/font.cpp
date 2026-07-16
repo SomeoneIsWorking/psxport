@@ -581,6 +581,7 @@ L_80078F88:
 // the live body's `return` at gen-C line 210 has no label past it). Both are PLAIN intra-shard C
 // calls at their call sites (func_X(c), not rec_dispatch), so they wire via the oracle-gated
 // engine_set_override_main thunk -- SBS core B keeps running the pure gen_func_* body.
+extern void gen_func_80078988(Core*);   // icon/SJIS glyph-string leaf (iconGlyphTap runs it)
 namespace {
 // ov_drawText: extracts drawText's typed args from the guest ABI registers at function entry
 // (a0..a2 = x,y,w; a3 = str; caller's stack[+16] = color -- matches gen_func_80079374's own read of
@@ -593,10 +594,75 @@ void ov_drawText(Core* c) {
   uint32_t color = c->mem_r32(c->r[29] + 16u);
   Font::drawText(c, x, y, w, str, color);
 }
+
+// iconGlyphTap — FUN_80078988, the SJIS/token ICON-GLYPH string emitter glyphEmit's 0x01..0x04
+// special-char arms call (a0=x, a1=y, a2=size-class w, a3=2-byte-token string; 5th stack arg =
+// OT bucket). RE from gen_func_80078988 (generated/shard_4.c:11216): second scratchpad glyph
+// struct at 0x1F800020, op-0x75 8x8 sprites, clut from the size class (w<16 → row w+496 x-nibble
+// 0x3F, else w+480/0x3E). Token decode per 2-byte big-endian pair:
+//   0x0A0A                         -> newline (x = arg x, y += 8)
+//   pair+32160 &FFFF < 26          -> code = pair+32193   (SJIS fullwidth A-Z block)
+//   pair+32127 &FFFF < 26          -> code = pair+32192   (second letter block)
+//   pair+32177 &FFFF < 10          -> code = pair+32193   (SJIS fullwidth digits)
+//   else: token table @0x800A55E0 ({strPtr,u16 code} stride 8, 2-byte compare, NULL-terminated)
+//         -> matched code, miss -> 0xFF02 (advance-only)
+// Emit: glyph quad at (x,y) uv=((code&31)<<3, ((code&0xFFF)>>5)<<3), x += 8; if code&0x8000 a
+// combining-mark quad at the advanced x (u = code&0x1000 ? 64 : 56, v=64) then x += 5 more.
+// The tap runs gen (guest packets byte-exact) then mirrors this walk host-side into RQ_HUD quads,
+// so button icons / SJIS labels render under pc_render. Same tap shape as game/ui/panel.cpp.
+void iconGlyphTap(Core* c) {
+  const int x0 = (int32_t)(int16_t)(uint16_t)c->r[4];
+  const int y0 = (int32_t)(int16_t)(uint16_t)c->r[5];
+  const int32_t wsz = (int32_t)c->r[6];
+  const uint32_t str0 = c->r[7];
+  gen_func_80078988(c);
+  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // guest OT walk owns the picture
+
+  const uint32_t clut = (wsz < 16) ? (((uint32_t)(wsz + 496) << 6) | 63u)
+                                   : (((uint32_t)(wsz + 480) << 6) | 62u);
+  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  auto push8 = [&](int px, int py, int u, int v) {
+    int xs[4] = { px + ox, px + 8 + ox, px + ox, px + 8 + ox };
+    int ys[4] = { py + oy, py + oy, py + 8 + oy, py + 8 + oy };
+    int us[4] = { u, u + 8, u, u + 8 };
+    int vs[4] = { v, v, v + 8, v + 8 };
+    unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };
+    c->game->activeRq().push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+                                   960, 256, 0, /*raw=*/1,
+                                   (int)(clut & 0x3F) * 16, (int)(clut >> 6) & 0x1FF,
+                                   0, 0, 0, 0, 0, 0, 1023, 511);
+  };
+  int x = x0, y = y0;
+  for (uint32_t s = str0; c->mem_r8(s) != 0; ) {
+    const uint32_t pair = ((uint32_t)c->mem_r8(s) << 8) | c->mem_r8(s + 1u);
+    uint32_t code;
+    if (pair == 0x0A0Au)                          { s += 2; x = x0; y += 8; continue; }
+    else if (((pair + 32160u) & 0xFFFFu) < 26u)   { code = (pair + 32193u) & 0xFFFFu; s += 2; }
+    else if (((pair + 32127u) & 0xFFFFu) < 26u)   { code = (pair + 32192u) & 0xFFFFu; s += 2; }
+    else if (((pair + 32177u) & 0xFFFFu) < 10u)   { code = (pair + 32193u) & 0xFFFFu; s += 2; }
+    else {
+      code = 0xFF02u;
+      for (uint32_t e = 0x800A55E0u; c->mem_r32(e) != 0; e += 8u) {
+        const uint32_t ts = c->mem_r32(e);
+        if (c->mem_r8(ts) == c->mem_r8(s) && c->mem_r8(ts + 1u) == c->mem_r8(s + 1u)) {
+          code = c->mem_r16(e + 4u);
+          break;
+        }
+      }
+      s += 2;
+    }
+    if (code == 0xFF02u) { x += 8; continue; }
+    if (code == 0x0A0Au) { x = x0; y += 8; continue; }   // a table token can map to newline too
+    push8(x, y, (code & 31u) << 3, ((code & 0xFFFu) >> 5) << 3);
+    x += 8;
+    if (code & 0x8000u) { push8(x, y, (code & 0x1000u) ? 64 : 56, 64); x += 5; }
+  }
+}
 }  // namespace
 
 extern void gen_func_80079374(Core*);
 extern void gen_func_80078CA8(Core*);
+extern void gen_func_80078988(Core*);
 
 void font_wide_re_install() {
   static bool done = false;
@@ -605,4 +671,5 @@ void font_wide_re_install() {
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
   engine_set_override_main(0x80079374u, ov_drawText,    gen_func_80079374);
   engine_set_override_main(0x80078CA8u, Font::glyphEmit, gen_func_80078CA8);
+  engine_set_override_main(0x80078988u, iconGlyphTap,   gen_func_80078988);   // icon/SJIS glyph strings
 }

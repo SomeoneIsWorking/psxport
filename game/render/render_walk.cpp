@@ -303,7 +303,7 @@ void Render::renderField() {
   mCore->game->fps60.mTier1EligibleCur = true;   // native field render runs -> fps60 tier-1 may re-render it
   DisplayPassGuard displayPass(mCore->mRender->mode);   // read-only invariant: aborts on any guest write
   sceneNative();
-  dialogTextNative();   // in-game dialog / prompt text (emits nothing when no dialog is up)
+  // dialog/prompt text arrives via the FUN_8007CC00 tap (Panel::pushDialogGlyphs) at emit time
   cineBarsRender();     // cinematic letterbox bars (emits nothing when no cutscene bars are active)
 }
 
@@ -315,7 +315,7 @@ void Render::renderHutInterior() {
   mCore->game->fps60.mTier1EligibleCur = false;
   DisplayPassGuard displayPass(mCore->mRender->mode);
   fieldObjectsRender();
-  dialogTextNative();   // interior dialog / prompt text (e.g. the "Use + to talk" bubble text)
+  // dialog/prompt text arrives via the FUN_8007CC00 tap (Panel::pushDialogGlyphs) at emit time
 }
 
 // #5 SOP INTRO NARRATION (overlay-sig 0x3C021F80 @ 0x80109450): the WORLD is native via sceneNative exactly
@@ -326,44 +326,6 @@ void Render::renderSopNarration() {
   DisplayPassGuard displayPass(mCore->mRender->mode);
   sceneNative();
   cineBarsRender();     // cinematic letterbox bars (the SOP narration is a cutscene)
-}
-
-// dialogTextNative — see render.h. Native producer for in-game dialog/prompt TEXT. Mirrors the guest
-// glyph emitter FUN_8007CC00 (RE'd: docs/native-render-2d-panel.md Spec 3): reads the persistent glyph
-// list @0x800ECB88 the dialog layout builds (FUN_8007C940; 8 B/entry, count=(s16)*0x1F80017E) and emits
-// each glyph as a native op-0x65 font sprite (atlas tpage 0x1F). Read-only; emits nothing when count==0.
-//
-// Field widths per the real emitter's reads: x@0 = u16; y@2 = u8 (UNSIGNED — read as (ushort)); char@3
-// (bit7 = double-width, low 7 bits select the CLUT); u@4 = u8; v@6 = u8. CLUT = ((char&0x7f)+0x1F0)<<6|0x3F.
-//
-// DEFERRED (labeled, not a bandaid): the emitter's highlight path (DialogBox+0x47==1 && +3==1 → forced
-// CLUT 0x7CBE for the selected menu option) is not reproduced here — the flat-list read has no DialogBox
-// pointer. Selected dialog options render in the normal per-glyph palette until the panel/box native owner
-// (panelBuild family, Spec 1-3) lands and can pass the box highlight state. Non-highlight dialog is exact.
-void Render::dialogTextNative() {
-  Core* c = mCore;
-  const int count = (int16_t)c->mem_r16(0x1F80017Eu);   // glyph count (FUN_8007C940 output)
-  if (count <= 0 || count > 256) return;                 // no dialog / bogus
-  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
-  for (int i = 0; i < count; i++) {
-    const uint32_t e = 0x800ECB88u + (uint32_t)i * 8u;   // 8-byte glyph entry
-    const int gx = (int16_t)c->mem_r16(e + 0u);
-    const int gy = c->mem_r8(e + 2u);                    // u8 (emitter reads (ushort)pbVar4[-1])
-    const uint8_t ch = c->mem_r8(e + 3u);
-    const int gu = c->mem_r8(e + 4u);
-    const int gv = c->mem_r8(e + 6u);
-    const int gw = (ch & 0x80) ? 16 : 8;                 // bit7 = double-width glyph
-    const int gh = 16;
-    const int clut = (((ch & 0x7F) + 0x1F0) << 6) | 0x3F;   // palette selected by glyph code (char&0x7f)
-    int xs[4] = { gx + ox, gx + gw + ox, gx + ox, gx + gw + ox };
-    int ys[4] = { gy + oy, gy + oy, gy + gh + oy, gy + gh + oy };
-    int us[4] = { gu, gu + gw, gu, gu + gw };
-    int vs[4] = { gv, gv, gv + gh, gv + gh };
-    unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };
-    c->game->activeRq().push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
-                                   /*tp_x=*/960, /*tp_y=*/256, /*mode=*/0, /*raw=*/1,
-                                   (clut & 0x3F) * 16, (clut >> 6) & 0x1FF, 0, 0, 0, 0, 0, 0, 1023, 511);
-  }
 }
 
 // FAIL-FAST for the one native renderer (USER 2026-07-15): no OT/GP0 fallback — a scene/layer lacking a

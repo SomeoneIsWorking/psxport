@@ -181,12 +181,9 @@ public:
   void renderHutInterior();      // #4 hut/door authored sub-scene — objects-only (fieldObjectsRender)
   void renderSopNarration();     // #5 SOP intro narration — native world (sceneNative + void-beat guard)
 
-  // dialogTextNative: native producer for in-game dialog/prompt TEXT (the "Use ⬆+● to talk" bubble,
-  // NPC dialog captions). Reads the persistent glyph-position list the dialog layout builds in guest RAM
-  // (FUN_8007C940 → list @0x800ECB88, 8 B/entry {x,y,char,u,v}; count = (s16)*0x1F80017E) and emits each
-  // glyph as a native op-0x65 sprite (font atlas texpage 0x1F). Read-only; emits nothing when no dialog is
-  // up (count 0). The dialog PANEL background (panelBuild) is a separate producer. See docs/native-render-2d-panel.md.
-  void dialogTextNative();
+  // Dialog/prompt TEXT is produced by the FUN_8007CC00 tap (Panel::pushDialogGlyphs, game/ui/
+  // panel.cpp) — fires whenever the guest dialog emitter draws, with the highlight palette the
+  // earlier flat-list producer here couldn't see (it lacked the DialogBox pointer).
 
   // titleNative: the DEMO/title (stage 0x801062E4, substate sm[0x48]==2) read-only native producer.
   // The title = a black backdrop + 2 logo sprites (op 0x65, fixed layout, fn 0x8010696C) + 3 menu FT4

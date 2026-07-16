@@ -130,10 +130,47 @@ void Panel::pushCorners(Core* c, uint32_t rectPtr, uint16_t style, uint32_t shad
   }
 }
 
-// ---- Panel taps: own FUN_8004FFB4 (panelFill) and FUN_8005019C (panelBuild) globally -----------
-// See panel.h for the full architecture note (mirrors ScreenFade::installLeafTap).
+// pushDialogGlyphs — Spec 3, FUN_8007CC00 (gen shard_4.c:11855): the dialog-box per-glyph text
+// emitter. Walks the flat glyph list @0x800ECB88 (count = s16 @0x1F80017E; 8B entries x@0 u16,
+// y@2 u8, char@3 u8 [0x80 = double-width], u@4, v@6) emitting op-0x65 sprites, tpage 0x1F, h=16,
+// w = char&0x80 ? 16 : 8. Palette follows the glyph: clut = ((char&0x7F)+0x1F0)<<6 | 0x3F — EXCEPT
+// highlight mode (box+0x47==1 && box+3==1, the selected menu option): clut pinned to 0x7CBE for the
+// whole row. This tap replaces the flat-list producer Render::dialogTextNative (which could not see
+// the box pointer, so the highlight path was deferred — now it isn't).
+void Panel::pushDialogGlyphs(Core* c, uint32_t box) {
+  const int count = (int16_t)c->mem_r16(0x1F80017Eu);
+  if (count <= 0 || count > 256) return;
+  const bool highlight = c->mem_r8(box + 71u) == 1u && c->mem_r8(box + 3u) == 1u;
+  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  { static long np = 0; if ((np++ & 127) == 0)
+      cfg_logf("panelq", "dialog glyphs box=%08X count=%d hl=%d", box, count, (int)highlight); }
+  for (int i = 0; i < count; i++) {
+    const uint32_t e = 0x800ECB88u + (uint32_t)i * 8u;
+    const int gx = (int16_t)c->mem_r16(e + 0u);
+    const int gy = c->mem_r8(e + 2u);
+    const uint8_t ch = c->mem_r8(e + 3u);
+    const int gu = c->mem_r8(e + 4u);
+    const int gv = c->mem_r8(e + 6u);
+    const int gw = (ch & 0x80) ? 16 : 8, gh = 16;
+    const uint32_t clut = highlight ? 0x7CBEu : ((((uint32_t)(ch & 0x7F) + 0x1F0u) << 6) | 0x3Fu);
+    int xs[4] = { gx + ox, gx + gw + ox, gx + ox, gx + gw + ox };
+    int ys[4] = { gy + oy, gy + oy, gy + gh + oy, gy + gh + oy };
+    int us[4] = { gu, gu + gw, gu, gu + gw };
+    int vs[4] = { gv, gv, gv + gh, gv + gh };
+    unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };
+    c->game->activeRq().push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+                                   960, 256, 0, /*raw=*/1,
+                                   (int)(clut & 0x3F) * 16, (int)(clut >> 6) & 0x1FF,
+                                   0, 0, 0, 0, 0, 0, 1023, 511);
+  }
+}
+
+// ---- Panel taps: own FUN_8004FFB4 (panelFill), FUN_8005019C (panelBuild) and FUN_8007CC00
+// (dialog glyph row) globally — see panel.h for the architecture note (mirrors
+// ScreenFade::installLeafTap).
 extern void gen_func_8004FFB4(Core*);
 extern void gen_func_8005019C(Core*);
+extern void gen_func_8007CC00(Core*);
 extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
 namespace {
 void panelFillTap(Core* c) {
@@ -157,10 +194,20 @@ void panelBuildTap(Core* c) {
 }
 } // namespace
 
+namespace {
+void dialogGlyphsTap(Core* c) {
+  const uint32_t box = c->r[4];
+  gen_func_8007CC00(c);   // byte-exact guest packet pool / OT / stack
+  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // read-only overlay gate
+  Panel::pushDialogGlyphs(c, box);
+}
+} // namespace
+
 void Panel::install() {
   static bool done = false;
   if (done) return;
   done = true;
   engine_set_override_main(0x8004FFB4u, panelFillTap, gen_func_8004FFB4);
   engine_set_override_main(0x8005019Cu, panelBuildTap, gen_func_8005019C);
+  engine_set_override_main(0x8007CC00u, dialogGlyphsTap, gen_func_8007CC00);
 }
