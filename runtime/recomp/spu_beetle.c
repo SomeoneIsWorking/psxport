@@ -145,18 +145,18 @@ void spu_write(uint32_t addr, uint32_t val)
       // what pitch, when" stream for A/B sequence diffs (docs/config.md `spu` channel).
       if (off < 0x180) {
          uint32_t vreg = off & 0xF, vno = off >> 4;
-         if (vreg == 0x4)      fprintf(stderr, "[spudbg] V%02u pitch=%04X\n", vno, val & 0xFFFF);
-         else if (vreg == 0x6) fprintf(stderr, "[spudbg] V%02u start=%04X\n", vno, val & 0xFFFF);
+         if (vreg == 0x4)      cfg_logf("spu", "[spudbg] V%02u pitch=%04X", vno, val & 0xFFFF);
+         else if (vreg == 0x6) cfg_logf("spu", "[spudbg] V%02u start=%04X", vno, val & 0xFFFF);
       }
-      if (off == 0x188 || off == 0x18A) fprintf(stderr, "[spudbg] KON off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
-      else if (off == 0x18C || off == 0x18E) fprintf(stderr, "[spudbg] KOFF off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
-      else if (off == 0x1AA) fprintf(stderr, "[spudbg] SPUCNT=%04X enable=%d cdaudio=%d xfermode=%d (writes=%ld)\n", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
-      else if (off == 0x1B0 || off == 0x1B2) fprintf(stderr, "[spudbg] CDVOL off=%03X val=%04X (writes=%ld)\n", off, val & 0xFFFF, n);
-      else if (off == 0x1A6) { sd.lastaddr = (val & 0xFFFF) << 3; fprintf(stderr, "[spudbg] SPU xfer ADDR=0x%05X\n", sd.lastaddr); }
-      else if (off == 0x1A8) { sd.datacnt++; if ((sd.datacnt % 1000) == 1) fprintf(stderr, "[spudbg] SPU DATA-port write #%ld (val=%04X)\n", sd.datacnt, val & 0xFFFF); }
+      if (off == 0x188 || off == 0x18A) cfg_logf("spu", "[spudbg] KON off=%03X val=%04X (writes=%ld)", off, val & 0xFFFF, n);
+      else if (off == 0x18C || off == 0x18E) cfg_logf("spu", "[spudbg] KOFF off=%03X val=%04X (writes=%ld)", off, val & 0xFFFF, n);
+      else if (off == 0x1AA) cfg_logf("spu", "[spudbg] SPUCNT=%04X enable=%d cdaudio=%d xfermode=%d (writes=%ld)", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
+      else if (off == 0x1B0 || off == 0x1B2) cfg_logf("spu", "[spudbg] CDVOL off=%03X val=%04X (writes=%ld)", off, val & 0xFFFF, n);
+      else if (off == 0x1A6) { sd.lastaddr = (val & 0xFFFF) << 3; cfg_logf("spu", "[spudbg] SPU xfer ADDR=0x%05X", sd.lastaddr); }
+      else if (off == 0x1A8) { sd.datacnt++; if ((sd.datacnt % 1000) == 1) cfg_logf("spu", "[spudbg] SPU DATA-port write #%ld (val=%04X)", sd.datacnt, val & 0xFFFF); }
       if ((n % 20000) == 0)
-         fprintf(stderr, "[spudbg] SUMMARY writes=%ld voice=%ld koff=%ld mainvol=%ld cdvol=%ld\n",
-                 n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
+         cfg_logf("spu", "[spudbg] SUMMARY writes=%ld voice=%ld koff=%ld mainvol=%ld cdvol=%ld",
+                  n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
    }
    // PSXPORT_SPUBT=<hex reg offset> — host backtrace on every write to that SPU register (e.g.
    // 156 = voice 21 start-addr). Guest-side attribution for SPU writes: wwatch can't see MMIO and
@@ -187,7 +187,7 @@ void spu_dma_write(const uint32_t *words, int count)
    if (cfg_dbg("spu")) {
       static struct { long calls, total; } sd;   // process-wide `debug spu` print counters (see spu_write)
       sd.calls++; sd.total += count;
-      fprintf(stderr, "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)\n", count, sd.calls, sd.total);
+      cfg_logf("spu", "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)", count, sd.calls, sd.total);
    }
    int i;
    for (i = 0; i < count; i++)
@@ -226,7 +226,7 @@ int spu_render(int16_t *out, int max_frames)
       static long fr; int peak = 0;   // process-wide `debug spu` print counter (see spu_write)
       for (uint32_t i = 0; i < n * 2; i++) { int v = out[i]; if (v < 0) v = -v; if (v > peak) peak = v; }
       if ((++fr % 60) == 0 || peak > 0)
-         fprintf(stderr, "[spudbg] spu_render frame %ld: %u stereo samples, peak=%d\n", fr, n, peak);
+         cfg_logf("spu", "[spudbg] spu_render frame %ld: %u stereo samples, peak=%d", fr, n, peak);
    }
 
    if (n < avail)

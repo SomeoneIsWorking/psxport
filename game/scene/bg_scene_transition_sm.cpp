@@ -49,8 +49,8 @@ constexpr uint32_t G_req  = 0x1F800236u;   // DAT_1f800236 — scene-transition 
 // Screen fade — same shape as the guest's FUN_8007e9c8(color, P[3], 4) leaf. P[3]!=0 => additive/white,
 // P[3]==0 => subtractive/black. Delivered via c->screenFade instead of a PSX OT rect.
 void BgSceneTransitionSm::fadeRect(Core* c, uint32_t color) {
-  if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] BgSm-state%u color=%06x dir=%u\n",
-                                    c->mem_r8(P + 4), color, c->mem_r8(P + 3));
+  cfg_logf("fadesites", "[fadesite] BgSm-state%u color=%06x dir=%u",
+           c->mem_r8(P + 4), color, c->mem_r8(P + 3));
   c->screenFade.applyLeafCall(color, c->mem_r8(P + 3));
 }
 

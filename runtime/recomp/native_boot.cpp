@@ -474,7 +474,7 @@ static void game_main(Core* c) {
     if (cfg_dbg("seq")) {
       uint32_t st = (c->mem_r16(0x801054B0) << 16) | (c->mem_r32(0x80104C28) & 0xFFFF);
       if (st != seq_last) {
-        fprintf(stderr, "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X\n",
+        cfg_logf("seq", "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X",
                 f, c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
                 c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
         seq_last = st;
@@ -488,8 +488,7 @@ static void game_main(Core* c) {
     // Logged only on change of the (slot-state/entry + page) signature to stay quiet.
     // PSXPORT_DEBUG=cam — per-frame camera pos (tracks Tomba). Used to determine controls empirically:
     // hold one button and watch for a vertical (Y) excursion = a JUMP, vs a planar (X/Z) shift = walking.
-    if (cfg_dbg("cam"))
-      fprintf(stderr, "[cam] f%u (%d,%d,%d)\n", f, c->mem_r16s(0x1f8000d2u),
+    cfg_logf("cam", "f%u (%d,%d,%d)", f, c->mem_r16s(0x1f8000d2u),
               c->mem_r16s(0x1f8000d6u), c->mem_r16s(0x1f8000dau));
     if (cfg_dbg("state")) {
       uint64_t sig = 0; int menu_slot = -1; uint8_t menu_page = 0;
@@ -553,13 +552,13 @@ static void game_main(Core* c) {
     // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals
     // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
     if (cfg_dbg("stream") && t0e == 0x8010637Cu && f == 75) {
-      fprintf(stderr, "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X\n",
+      cfg_logf("stream", "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X",
               c->mem_r16(0x801fe0e0), c->mem_r32(0x801fe0ec));
-      fprintf(stderr, "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "
-              "chan(801fe146)=%u be0e4=0x%02X\n",
+      cfg_logf("stream", "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "
+              "chan(801fe146)=%u be0e4=0x%02X",
               c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146), c->mem_r8(0x800be0e4));
-      fprintf(stderr, "[streamdbg] dest(_DAT_1f8001f8)=0x%08X words(_DAT_1f8001f4)=%u "
-              "f0=%u f1f800224=0x%08X\n",
+      cfg_logf("stream", "[streamdbg] dest(_DAT_1f8001f8)=0x%08X words(_DAT_1f8001f4)=%u "
+              "f0=%u f1f800224=0x%08X",
               c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0), c->mem_r32(0x1f800224));
     }
     // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
@@ -573,7 +572,7 @@ static void game_main(Core* c) {
                   fprintf(stderr, "[native_boot] mid-run RAM dump @frame %u -> %s\n", f, rd); }
       } }
     if (cfg_dbg("schedf"))
-      fprintf(stderr, "[schedf] f%u t0[st=%u e=%08X s48=%u s4a=%u s4c=%u s5c=%u] t1[st=%u] t2[st=%u]\n",
+      cfg_logf("schedf", "f%u t0[st=%u e=%08X s48=%u s4a=%u s4c=%u s5c=%u] t1[st=%u] t2[st=%u]",
               f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48),
               c->mem_r16(TASKBASE + 0x4a), c->mem_r16(TASKBASE + 0x4c), c->mem_r16(TASKBASE + 0x5c),
               c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0));

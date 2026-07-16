@@ -323,8 +323,8 @@ PcScheduler::StanzaResult PcScheduler::runDemoStanza(Core* c, int i, uint32_t ba
   if (setjmp(yield_jmp) == 0) {
     runDemoBody(c, i, demo_fresh);
   } else if (cfg_dbg("demo")) {
-    if (!warned_demo_yield++) fprintf(stderr, "[demo] caught a substate yield (async CD not yet "
-                                              "owned native+sync) — frontier\n");
+    if (!warned_demo_yield++) cfg_logf("demo", "caught a substate yield (async CD not yet "
+                                              "owned native+sync) — frontier");
   }
   in_stage = 0;
   if (c->mem_r32(base + 0xc) != 0x801062E4u) {                  // s5 -> GAME rewrote entry
@@ -357,8 +357,8 @@ PcScheduler::StanzaResult PcScheduler::runSopAreaLoadStanza(Core* c, int i, uint
   in_stage = 1;
   if (setjmp(yield_jmp) == 0) {
     c->engine.sop.areaLoad();
-  } else if (cfg_dbg("sched")) {
-    fprintf(stderr, "[sched] SOP area-load yielded unexpectedly — a leaf isn't sync yet\n");
+  } else {
+    cfg_logf("sched", "SOP area-load yielded unexpectedly — a leaf isn't sync yet");
   }
   in_stage = 0;
   c->mem_w16(base, 0);
@@ -399,8 +399,8 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
     if (game_fresh) c->engine.stagePrologue();
     c->game->ffspan.begin(); handled = c->engine.frame(); c->game->ffspan.end("gameframe");
   } else if (cfg_dbg("sched")) {
-    if (!warned_game_yield++) fprintf(stderr, "[sched] caught a GAME substate yield (a leaf not "
-                                              "yet sync) — frontier\n");
+    if (!warned_game_yield++) cfg_logf("sched", "caught a GAME substate yield (a leaf not "
+                                              "yet sync) — frontier");
   }
   in_stage = 0;
   if (c->mem_r32(base + 0xc) != 0x8010637Cu) {                  // area transition rewrote entry
@@ -415,8 +415,8 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
     game_native[i] = 0;
     game_coop[i] = 1;
     c->mem_w16(base, 2);
-    if (cfg_dbg("sched")) fprintf(stderr, "[sched] GAME -> cooperative guest loop (state not yet "
-                                           "owned native; field reachable)\n");
+    cfg_logf("sched", "GAME -> cooperative guest loop (state not yet "
+                                           "owned native; field reachable)");
     return STANZA_HANDLED;
   }
   task_ctx[i] = static_cast<R3000&>(*c);
@@ -467,8 +467,7 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
   in_stage = 1;
   cur_is_coro = 1;
   static_cast<R3000&>(*c) = task_ctx[i];
-  if (cfg_dbg("sched"))
-    fprintf(stderr, "[sched] slot %d native-fiber %s st=%u sp=0x%08X\n", i,
+  cfg_logf("sched", "slot %d native-fiber %s st=%u sp=0x%08X", i,
             fresh ? "start" : "resume", st, task_ctx[i].r[29]);
   co->resume();
   cur_is_coro = 0;
@@ -522,8 +521,7 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
   in_stage = 1;
   cur_is_coro = 1;
   static_cast<R3000&>(*c) = task_ctx[i];
-  if (cfg_dbg("sched"))
-    fprintf(stderr, "[sched] slot %d native-fiber %s st=%u sp=0x%08X\n", i,
+  cfg_logf("sched", "slot %d native-fiber %s st=%u sp=0x%08X", i,
             fresh ? "start" : "resume", st, task_ctx[i].r[29]);
   co->resume();
   cur_is_coro = 0;

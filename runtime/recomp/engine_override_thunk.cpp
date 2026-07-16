@@ -63,7 +63,7 @@ uint64_t g_oracleHits[kCap];
 // override fire", regardless of which of the two override tables it's wired through.
 void dump_atexit() {
   if (!cfg_dbg("ovhit") || g_n == 0) return;
-  fprintf(stderr, "[ovhit] engine_override_thunk (g_tab) hit counts (native=coreA / oracle=coreB):\n");
+  cfg_logf("ovhit", "engine_override_thunk (g_tab) hit counts (native=coreA / oracle=coreB):");
   for (int i = 0; i < g_n; i++) {
     fprintf(stderr, "  0x%08X : native=%llu  oracle=%llu%s%s\n",
             g_tab[i].addr, (unsigned long long)g_nativeHits[i], (unsigned long long)g_oracleHits[i],

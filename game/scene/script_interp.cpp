@@ -407,8 +407,7 @@ void ScriptInterp::step(uint32_t obj) {
 
     // PSXPORT_DEBUG=script — one line per opcode dispatch (both exec configs run this native loop
     // for natively-dispatched parents, so the two logs diff directly).
-    if (cfg_dbg("script"))
-      fprintf(stderr, "[script] obj=%08X ptr=%08X op=%04X ret=%u\n", obj, scriptPtr, opWord, ret);
+    cfg_logf("script", "obj=%08X ptr=%08X op=%04X ret=%u", obj, scriptPtr, opWord, ret);
 
     // ret-code switch (VERBATIM disas 0x80041100..0x80041168). The recomp calls advanceEntry with
     // a kind byte selected by the ret code, THEN checks its return: only if FA0 returns exactly 1

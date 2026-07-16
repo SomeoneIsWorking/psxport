@@ -137,7 +137,7 @@ static int32_t sz4_minmax(bool want_max, int32_t a, int32_t b, int32_t e, int32_
 // ORACLE: ov_a00_gen_8013FB88 (tools/port_check.py equivalence-gate marker; see docs/port-framework.md)
 void OverlayGroundGt3Gt4::gt3(Core* c) {
   uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
-  if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) fprintf(stderr, "[ovgtgnd] gt3 call#%ld count=%u\n", n, count); }
+  if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) cfg_logf("ovgt", "[ovgtgnd] gt3 call#%ld count=%u", n, count); }
   if (count == 0) { c->r[2] = rec; return; }
 
   uint32_t pool = c->mem_r32(PKT_POOL_PTR);
@@ -362,7 +362,7 @@ void OverlayGroundGt3Gt4::gt4(Core* c) {
 // "*0x800ED8C8 OTbase" note documents for queued commands).
 void OverlayGroundGt3Gt4::entityLoop(Core* c) {
   uint32_t list = c->r[4];
-  if (cfg_dbg("ovgtgnd")) { static long n = 0; if (n++ % 128 == 0) fprintf(stderr, "[ovgtgnd] entityLoop call#%ld\n", n); }
+  if (cfg_dbg("ovgtgnd")) { static long n = 0; if (n++ % 128 == 0) cfg_logf("ovgtgnd", "entityLoop call#%ld", n); }
 
   // Real 40-byte guest stack frame (RE: generated/ov_a00_shard_0.c ov_a00_gen_801401B8:
   // `addiu sp,-40; sw ra,36(sp); sw r20,32(sp); sw r19,28(sp); sw r18,24(sp); sw r17,20(sp);

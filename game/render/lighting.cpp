@@ -85,14 +85,13 @@ static const int s_registry_n = (int)(sizeof(s_registry) / sizeof(s_registry[0])
 const LightConfig* Lighting::select(unsigned area_key) {
   for (int i = 0; i < s_registry_n; i++)
     if (s_registry[i].key == area_key) {
-      if (cfg_dbg("lighting"))
-        fprintf(stderr, "[lighting] area key=%08x -> %s\n", area_key, s_registry[i].name);
+      cfg_logf("lighting", "area key=%08x -> %s", area_key, s_registry[i].name);
       return s_registry[i].cfg;
     }
   // Diagnostic: log the unrecognised key ONCE per distinct key so you can register a new area's lighting.
   if (cfg_dbg("lighting")) {
     if (area_key != mLastUnknownKey) {
-      fprintf(stderr, "[lighting] area key=%08x -> DEFAULT (sun); register it in s_registry for per-area light\n", area_key);
+      cfg_logf("lighting", "area key=%08x -> DEFAULT (sun); register it in s_registry for per-area light", area_key);
       mLastUnknownKey = area_key;
     }
   }

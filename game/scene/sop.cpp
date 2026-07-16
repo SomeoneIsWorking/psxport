@@ -108,9 +108,8 @@ void Sop::areaLoad() {
   // LOAD DONE — *0x1f80019b = 1  (0x80109290). NB: the recomp's FUN_80051fb4 task-complete/yield is
   // intentionally DROPPED — the native scheduler marks the slot done after this returns.
   c->mem_w8(0x1f80019bu, 1);
-  if (cfg_dbg("stage"))
-    fprintf(stderr, "[sop] native area-load done: 1f80019b=1, ecf58 patched %d entries (area&0xf=%u)\n",
-            count, (unsigned)(area & 0xf));
+  cfg_logf("stage", "[sop] native area-load done: 1f80019b=1, ecf58 patched %d entries (area&0xf=%u)",
+           count, (unsigned)(area & 0xf));
 }
 
 // Synchronous TRANSITION area-DATA load — replaces the cooperative spawn-and-wait of
@@ -127,12 +126,11 @@ void Sop::areaLoad() {
 void Sop::transitionAreaLoad() {
   Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
-  if (cfg_dbg("stage"))
-    fprintf(stderr, "[sop] XLOAD enter: sm6d=%u sm6e=%u bf870=%u bf872=%u bf838=%u bf839=%u bf83a=0x%04X "
-            "1f8001ff=%u bfe56=0x%04X 1f800278=0x%04X\n",
-            c->mem_r8(sm+0x6d), c->mem_r8(sm+0x6e), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf872u),
-            c->mem_r8(0x800bf838u), c->mem_r8(0x800bf839u), c->mem_r16(0x800bf83au),
-            c->mem_r8(0x1f8001ffu), c->mem_r16(0x800bfe56u), c->mem_r16(0x1f800278u));
+  cfg_logf("stage", "[sop] XLOAD enter: sm6d=%u sm6e=%u bf870=%u bf872=%u bf838=%u bf839=%u bf83a=0x%04X "
+           "1f8001ff=%u bfe56=0x%04X 1f800278=0x%04X",
+           c->mem_r8(sm+0x6d), c->mem_r8(sm+0x6e), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf872u),
+           c->mem_r8(0x800bf838u), c->mem_r8(0x800bf839u), c->mem_r16(0x800bf83au),
+           c->mem_r8(0x1f8001ffu), c->mem_r16(0x800bfe56u), c->mem_r16(0x1f800278u));
   // --- early/quick path test (0x800452d8-0x8004531c): sm[0x6d]==0 AND *1f8001ff==sm[0x6e] AND
   //     (*0x800bfe56 & (1<<sm[0x6e])) == (*0x1f800278 & (1<<sm[0x6e])) ---
   uint8_t s6d = c->mem_r8(sm + 0x6d);
@@ -147,7 +145,7 @@ void Sop::transitionAreaLoad() {
       c->engine.asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
       c->mem_w8(0x1f800206u, 0);
       c->mem_w8(0x1f80019bu, 1);
-      if (cfg_dbg("stage")) fprintf(stderr, "[sop] native transition area-load (quick path) done\n");
+      cfg_logf("stage", "[sop] native transition area-load (quick path) done");
       return;
     }
   }
@@ -194,9 +192,8 @@ void Sop::transitionAreaLoad() {
   }
   c->mem_w8(0x1f800206u, 1);
   c->mem_w8(0x1f80019bu, 1);
-  if (cfg_dbg("stage"))
-    fprintf(stderr, "[sop] native transition area-load (main path) done: 1f80019b=1, ecf58 patched %d, "
-            "bf870=%u\n", count, (unsigned)c->mem_r8(0x800bf870u));
+  cfg_logf("stage", "[sop] native transition area-load (main path) done: 1f80019b=1, ecf58 patched %d, "
+           "bf870=%u", count, (unsigned)c->mem_r8(0x800bf870u));
 }
 
 static void d0(Core* c, uint32_t fn) { rec_dispatch(c, fn); }
@@ -548,7 +545,7 @@ void Sop::fieldMode() { Core* c = core;
       } else {
         uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
         uint8_t v = (uint8_t)((u << 3) & 0xff);
-        if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] Sop-case1 v=%02x sm6c=%u\n", v, c->mem_r8(sm+0x6c));
+        cfg_logf("fadesites", "[fadesite] Sop-case1 v=%02x sm6c=%u", v, c->mem_r8(sm+0x6c));
         c->screenFade.set(ScreenFade::SUBTRACTIVE, v, v, v);            // subtractive fade-in ramp (matches guest FUN_8007e9c8(...,0,4))
       }
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
@@ -568,7 +565,7 @@ void Sop::fieldMode() { Core* c = core;
     }
     case 3: {  // FADE-OUT — subtractive ramp (guest FUN_8007e9c8(...,0,4) per-frame equivalent)
       uint8_t u = (uint8_t)(((uint32_t)c->mem_r8(sm + 0x6c) * (uint32_t)-8) & 0xff);
-      if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] Sop-case3 u=%02x sm6c=%u\n", u, c->mem_r8(sm+0x6c));
+      cfg_logf("fadesites", "[fadesite] Sop-case3 u=%02x sm6c=%u", u, c->mem_r8(sm+0x6c));
       c->screenFade.set(ScreenFade::SUBTRACTIVE, u, u, u);
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, nv);

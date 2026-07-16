@@ -52,14 +52,14 @@ void overlay_note_load(Core* c, uint32_t dest) {
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
       c->game->pcSched.resident_ov[s] = o;
-      if (dbg) fprintf(stderr, "[ovload] core %c slot %d <- %s (frame %u)\n",
-                       cid < 0 ? '?' : cid ? 'B' : 'A', s, o->name, fr);
+      if (dbg) cfg_logf("ovload", "core %c slot %d <- %s (frame %u)",
+                        cid < 0 ? '?' : cid ? 'B' : 'A', s, o->name, fr);
       return;
     }
   }
   c->game->pcSched.resident_ov[s] = 0;   // unknown content in this slot -> fall back to signature scan
-  if (dbg) fprintf(stderr, "[ovload] core %c slot %d <- (none/unmatched, dest=0x%08X, frame %u)\n",
-                   cid < 0 ? '?' : cid ? 'B' : 'A', s, dest, fr);
+  if (dbg) cfg_logf("ovload", "core %c slot %d <- (none/unmatched, dest=0x%08X, frame %u)",
+                    cid < 0 ? '?' : cid ? 'B' : 'A', s, dest, fr);
 }
 
 // Which overlay currently occupies `base`? The overlays overlap, so we identify the resident one by
@@ -156,9 +156,9 @@ extern "C" void recdep_dump() {
   // PSXPORT_DEBUG=recdep-all dumps the FULL histogram instead of the top-40 — needed to see rare
   // (low-call-count) dispatch targets in a specific address band that the top-40 truncation hides.
   size_t cap = cfg_dbg("recdep-all") ? v.size() : 40;
-  fprintf(stderr, "[recdep] top substrate dispatch targets (addr: calls), %zu unique:\n", v.size());
+  cfg_logf("recdep", "top substrate dispatch targets (addr: calls), %zu unique:", v.size());
   for (size_t i = 0; i < v.size() && i < cap; i++)
-    fprintf(stderr, "  0x%08X : %llu\n", v[i].second, (unsigned long long)v[i].first);
+    cfg_logf("recdep", "  0x%08X : %llu", v[i].second, (unsigned long long)v[i].first);
 }
 void rec_dispatch(Core* c, uint32_t addr) {
   // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
@@ -177,8 +177,8 @@ void rec_dispatch(Core* c, uint32_t addr) {
   if ((addr & 0x1FFFFFFFu) == 0x00077C40u && cfg_dbg("animstack")) {
     Sbs* sbs = c->game ? c->game->sbs : nullptr;
     int cid = sbs ? sbs->coreId(c) : -1;
-    fprintf(stderr, "[animstack] f%u core=%c r29=%08X ra=%08X a0=%08X\n",
-            sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), c->r[29], c->r[31], c->r[4]);
+    cfg_logf("animstack", "f%u core=%c r29=%08X ra=%08X a0=%08X",
+             sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), c->r[29], c->r[31], c->r[4]);
   }
   if (c->game && !c->game->psx_fallback && !c->game->verify.inSubstrateLeg
       && c->game->engine_overrides.run(c, addr)) return;

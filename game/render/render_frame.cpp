@@ -57,7 +57,7 @@ static inline void d1(Core* c, uint32_t fn, uint32_t a0) { c->r[4] = a0; rec_dis
 // the walk cluster to native re-implementations in the display phase (sceneNative) — a different call
 // context than the recomp's, which is exactly what diverged (f26, guest-stack spills at a foreign sp).
 void Render::frame() { Core* c = mCore;
-  if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) fprintf(::stderr,"[rfprobe] ov_render_frame run #%d\n", n); }
+  if (cfg_dbg("rfprobe")) { static int n=0; if ((n++ % 60)==0) cfg_logf("rfprobe", "ov_render_frame run #%d", n); }
   d0(c, 0x8003f9a8u);
 }
 

@@ -161,7 +161,7 @@ void Engine::s48_2() { Core* c = core;
   if (cfg_dbg("stage")) {
     uint16_t s4c = c->mem_r16(sm + 0x4c);
     if (s4a != mLast4a || s4c != mLast4c) {
-      fprintf(stderr, "[stage] running: sm[0x4a]=%u sm[0x4c]=%u\n", s4a, s4c);
+      cfg_logf("stage", "running: sm[0x4a]=%u sm[0x4c]=%u", s4a, s4c);
       mLast4a = s4a; mLast4c = s4c;
     }
   }
@@ -197,8 +197,8 @@ void Engine::s4c() { Core* c = core;
   uint32_t ra = c->r[31];
   if (cfg_dbg("stage")) {
     uint32_t sm0 = c->mem_r32(0x1f800138);
-    fprintf(stderr, "[stage] ov_game_s4c ENTER sm[0x4c]=%u (caller ra=0x%08X)\n",
-            c->mem_r16(sm0 + 0x4c), ra);
+    cfg_logf("stage", "ov_game_s4c ENTER sm[0x4c]=%u (caller ra=0x%08X)",
+             c->mem_r16(sm0 + 0x4c), ra);
   }
   c->r[29] -= 0x18;
   c->mem_w32(c->r[29] + 0x14, ra);              // sw ra,0x14(sp)
@@ -498,7 +498,7 @@ void Engine::s48_2_frame() { Core* c = core;
   TaskSm sm(c);
   uint16_t s4a = sm.subMode();
   if (cfg_dbg("stage") && s4a != mLast4a) {
-    fprintf(stderr, "[stage] s48_2_frame: sm[0x4a]=%u sm[0x4c]=%u\n", s4a, sm.stage4c());
+    cfg_logf("stage", "s48_2_frame: sm[0x4a]=%u sm[0x4c]=%u", s4a, sm.stage4c());
     mLast4a = s4a;
   }
   if (s4a < 6) {
@@ -659,8 +659,8 @@ void Engine::sceneEventFifoFaithful() { Core* c = core;
   if (cfg_dbg("sefprobe")) {
     Sbs* sbs = c->game ? c->game->sbs : nullptr;
     int cid = sbs ? sbs->coreId(c) : -1;
-    fprintf(stderr, "[sefprobe] f%u core=%c ENTRY st=%u\n",
-            sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), (unsigned)st);
+    cfg_logf("sefprobe", "f%u core=%c ENTRY st=%u",
+             sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), (unsigned)st);
   }
   if (st == 0) {
     c->mem_w8(B + 2, 1);
@@ -1514,7 +1514,7 @@ void Engine::fieldRun() { Core* c = core;
       c->engine.fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
-      if (cfg_dbg("fadesites")) fprintf(stderr, "[fadesite] fieldRun-case10 u=%02x sm6e=%u\n", u, c->mem_r8(sm+0x6e));
+      cfg_logf("fadesites", "[fadesite] fieldRun-case10 u=%02x sm6e=%u", u, c->mem_r8(sm+0x6e));
       c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 0);   // = guest FUN_8007e9c8(color, 0, 4): area-transition subtractive fade-out ramp
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6e) - 1);
       c->mem_w8(sm + 0x6e, nv);
@@ -2250,9 +2250,9 @@ void Engine::submode1() { Core* c = core;
   if (c->game && !c->game->pc_skip) { submode1Faithful(); return; }   // faithful: gen mirror on the stage fiber
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
-  if (cfg_dbg("stage") && s4c <= 1)
-    fprintf(stderr, "[stage] submode1 case %u: bf870=%u nexttab[bf870]=%u\n",
-            s4c, c->mem_r8(0x800bf870u), c->mem_r8(0x80108f60u + c->mem_r8(0x800bf870u)));
+  if (s4c <= 1)
+    cfg_logf("stage", "submode1 case %u: bf870=%u nexttab[bf870]=%u",
+             s4c, c->mem_r8(0x800bf870u), c->mem_r8(0x80108f60u + c->mem_r8(0x800bf870u)));
   switch (s4c) {
     case 0:
       if (!submode1Case0Skip())
@@ -2295,9 +2295,9 @@ int Engine::frame() { Core* c = core;
     // (0x801088d8, the walkable field — its load is sync via native_transition_area_load, its running
     // states are yield-free). Other sub-modes (2..5, the area-machine variants) aren't owned yet.
     if (s4a == 0) {
-      if (c->mem_r32(0x80109450u) != 0x3C021F80u) { if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 s48=2 s4a=0 SOP-not-loaded ov=%08X sm@%08X\n", c->mem_r32(0x80109450u), sm); return 0; } // SOP not loaded -> cooperative
+      if (c->mem_r32(0x80109450u) != 0x3C021F80u) { cfg_logf("gframe", "ret0 s48=2 s4a=0 SOP-not-loaded ov=%08X sm@%08X", c->mem_r32(0x80109450u), sm); return 0; } // SOP not loaded -> cooperative
     } else if (s4a != 1) {
-      if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 s48=2 s4a=%u unowned-submode sm@%08X\n", s4a, sm); return 0; // unowned running sub-mode
+      cfg_logf("gframe", "ret0 s48=2 s4a=%u unowned-submode sm@%08X", s4a, sm); return 0; // unowned running sub-mode
     }
     c->r[31] = 0x8010645Cu;                    // guest loop jal site (L_80106454)
     c->engine.s48_2_frame();
@@ -2308,7 +2308,7 @@ int Engine::frame() { Core* c = core;
     c->r[31] = 0x8010644Cu;                    // guest loop jal site (L_80106444)
     c->game->ffspan.begin(); c->engine.s48_1(); c->game->ffspan.end("s48_1");
   } else {
-    if (cfg_dbg("gframe")) fprintf(stderr, "[gframe] ret0 unknown s48=%u sm@%08X\n", s48, sm); return 0; // unknown top state -> cooperative
+    cfg_logf("gframe", "ret0 unknown s48=%u sm@%08X", s48, sm); return 0; // unknown top state -> cooperative
   }
   c->mem_w16(0x1f800198u, (uint16_t)(c->mem_r16(0x1f800198u) + 1));   // loop tail 0x8010645c
   return 1;
@@ -2352,7 +2352,7 @@ void Engine::stagePrologue() { Core* c = core;
   c->mem_w16(task + 0x4c, 0);
   c->mem_w16(task + 0x4e, 0);
   c->mem_w16(task + 0x50, 0);
-  if (cfg_dbg("stage")) fprintf(stderr, "[stage] ov_game_stage_prologue run, sm[0x48]=%u\n", init48);
+  cfg_logf("stage", "ov_game_stage_prologue run, sm[0x48]=%u", init48);
 }
 
 // pc_faithful GAME stage body (fiber task; see engine.h). Byte shape: ov_game_gen_8010637C +

@@ -166,8 +166,7 @@ void Render::renderWalk() {
       const uint32_t idxByte = c->mem_r8(node + 11u);
       if (idxByte < 33u) {
         const uint32_t target = c->mem_r32(c->r[19] + idxByte * 4u);
-        if (cfg_dbg("walk"))
-          fprintf(stderr, "[walk] node=%08x idx=%u table=%08x target=%08x\n", node, idxByte, c->r[19], target);
+        cfg_logf("walk", "node=%08x idx=%u table=%08x target=%08x", node, idxByte, c->r[19], target);
         switch (target) {
           case 0x8003C0B4u:
             c->r[4] = c->r[16]; c->r[31] = 0x8003C0BCu; perObjRenderDispatch();

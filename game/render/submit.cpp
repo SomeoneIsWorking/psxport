@@ -192,7 +192,7 @@ static inline void engine_shade_face(Core* c, const ProjVtx* p, int nv, uint8_t 
 // (proj_native_xform, no gte_op) and tee a degenerate quad (v2 repeated) to the VK rasterizer with real
 // per-pixel depth. No GP0 packet, no OT, no guest write.
 void Render::submitPolyGt3Native(Core* c) {
-  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt3_native %ld\n", n); }
+  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) cfg_logf("subc", "gt3_native %ld", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   // H for depth normalization comes from the ACTIVE xform (mActiveXform.H), not a raw CR26 read: every
   // caller sets an active xform before reaching here (projSetActive — no GTE fallback, see render.h), and
@@ -234,7 +234,7 @@ void Render::submitPolyGt3Native(Core* c) {
       static long objn = -1; uint32_t geomblk = c->mRender->diag.currentGeomblk();
       if ((long)geomblk != objn) { objn = (long)geomblk;
         const EObjXform& x = c->mRender->mActiveXform;
-        fprintf(stderr, "[eprojv] cmd=%08x R=[%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f] T=(%.2f,%.2f,%.2f) H=%.0f\n",
+        cfg_logf("eprojv", "cmd=%08x R=[%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f] T=(%.2f,%.2f,%.2f) H=%.0f",
           geomblk, (double)x.R[0][0],(double)x.R[0][1],(double)x.R[0][2],
                    (double)x.R[1][0],(double)x.R[1][1],(double)x.R[1][2],
                    (double)x.R[2][0],(double)x.R[2][1],(double)x.R[2][2],
@@ -264,7 +264,7 @@ void Render::submitPolyGt3Native(Core* c) {
 // reproduced on the native projection so we drop the same prims the engine would. Returns the advanced
 // record pointer (the engine reads it back).
 void Render::submitPolyGt4Native(Core* c) {
-  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) fprintf(stderr,"[subc] gt4_native %ld\n", n); }
+  if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) cfg_logf("subc", "gt4_native %ld", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   // See submitPolyGt3Native above: H comes from the active xform, not a raw present-time CR26 read.
   proj_set_H((uint16_t)c->mRender->mActiveXform.H);
@@ -304,7 +304,7 @@ void Render::submitPolyGt4Native(Core* c) {
     if (!semi) engine_shade_face(c, p, 4, r, g, b);             // engine-native lighting (opaque only)
     if (cfg_dbg("eprojv")) {
       uint32_t geomblk = c->mRender->diag.currentGeomblk();
-      fprintf(stderr, "[eprojv] cmd=%08x gt4 idx=%u v0=(%.2f,%.2f,%.2f) v1=(%.2f,%.2f,%.2f) v2=(%.2f,%.2f,%.2f) v3=(%.2f,%.2f,%.2f)\n",
+      cfg_logf("eprojv", "cmd=%08x gt4 idx=%u v0=(%.2f,%.2f,%.2f) v1=(%.2f,%.2f,%.2f) v2=(%.2f,%.2f,%.2f) v3=(%.2f,%.2f,%.2f)",
         geomblk, i, (double)px[0],(double)py[0],(double)depth[0], (double)px[1],(double)py[1],(double)depth[1],
         (double)px[2],(double)py[2],(double)depth[2], (double)px[3],(double)py[3],(double)depth[3]);
     }
@@ -399,7 +399,7 @@ void Render::fieldEntityRender(uint32_t es) {
   // DIAG groundproj: log the camera xform + first GT4 record's model verts and their eproj projection, so we
   // can see whether the world-space scene-table geometry projects on-screen with sane depth. (later-231b)
   if (cfg_dbg("groundproj")) { static int n=0; if (n++ < 3) {
-    fprintf(stderr, "[groundproj] es=%08x count=%u base=%08x T=(%.0f,%.0f,%.0f) H=%.0f R0=(%.3f,%.3f,%.3f)\n",
+    cfg_logf("groundproj", "es=%08x count=%u base=%08x T=(%.0f,%.0f,%.0f) H=%.0f R0=(%.3f,%.3f,%.3f)",
       es, count, base, (double)w.T[0],(double)w.T[1],(double)w.T[2],(double)w.H,
       (double)w.R[0][0]/4096,(double)w.R[0][1]/4096,(double)w.R[0][2]/4096);
     uint32_t cmd0 = base + (uint32_t)c->mem_r16(es+0x10)*4; uint32_t s0d=c->mem_r32(cmd0);
@@ -407,7 +407,7 @@ void Render::fieldEntityRender(uint32_t es) {
     for (int k=0;k<2;k++){ uint32_t r2=rec+k*44;
       int16_t vx=c->mem_r16s(r2+20), vy=(int16_t)(c->mem_r32(r2+20)>>16), vz=c->mem_r16s(r2+24);
       ProjVtx pv; c->mRender->projVertexActive( vx,vy,vz,&pv);
-      fprintf(stderr,"   gt4[%d] model=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f sx=%d sy=%d\n",
+      cfg_logf("groundproj", "   gt4[%d] model=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f sx=%d sy=%d",
         k, vx,vy,vz, (double)pv.px,(double)pv.py,(double)pv.pz, pv.sx, pv.sy); } } }
   uint32_t p = es + 0x10, end = es + 0x10 + (uint32_t)count * 2;
   for (; p < end; p += 2) {
@@ -432,7 +432,7 @@ void Render::fieldEntityRender(uint32_t es) {
 // (native_terrain.cpp terrain_obj_matrix_host). History: this file @ commit 7989159.
 void Render::terrain() {
   Core* c = mCore;
-  if (cfg_dbg("terrgte")) fprintf(stderr, "[Render::terrain] node(a0=r4)=%08X\n", c->r[4]);
+  cfg_logf("terrgte", "[Render::terrain] node(a0=r4)=%08X", c->r[4]);
   // Pick this area's light config ONCE per world frame (terrain renders first); the per-face shader reads
   // the cached pointer. Cheap guest-RAM fingerprint read; unknown area -> village SUN default.
   if (c->game->mods.light) shadeSelect();

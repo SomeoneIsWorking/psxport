@@ -545,9 +545,9 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     if (pc == 0x8007E998 && cfg_dbg("text")) {
       static int n = 0;
       if (n++ < 30)
-        fprintf(stderr, "[textdbg] 8007E998(x=%d y=%d a2=%08X a3=%08X) ra=%08X stage=%08X\n",
-                (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
-                c->mem_r32(0x801fe00c));
+        cfg_logf("text", "[textdbg] 8007E998(x=%d y=%d a2=%08X a3=%08X) ra=%08X stage=%08X",
+                 (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
+                 c->mem_r32(0x801fe00c));
     }
     uint32_t in = c->mem_r32(pc);
     uint32_t op = in >> 26;
@@ -555,11 +555,11 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // interp on garbage (insn 0xFFFFFFFF). Report the exact PC + regs ONCE and stop the run (instead of
     // spinning 12M "bad opcode" lines), so the offending function's broken return can be identified.
     if (op == 0x3F && cfg_dbg("derail")) {
-      fprintf(stderr, "[derail] pc=%08X in=%08X  ra=%08X sp=%08X gp=%08X  stop_ra=%08X\n",
-              pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
-      for (int k = 0; k < 16; k++) fprintf(stderr, "  stk[%2d] @%08X = %08X\n", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
-      fprintf(stderr, "[derail] last compiled entries (newest last):\n");
-      for (int k = 24; k >= 1; k--) { uint32_t a = d.callring[(d.callring_pos - k) & 63]; if (a) fprintf(stderr, "  %08X\n", a); }
+      cfg_logf("derail", "pc=%08X in=%08X  ra=%08X sp=%08X gp=%08X  stop_ra=%08X",
+               pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
+      for (int k = 0; k < 16; k++) cfg_logf("derail", "  stk[%2d] @%08X = %08X", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
+      cfg_logf("derail", "last compiled entries (newest last):");
+      for (int k = 24; k >= 1; k--) { uint32_t a = d.callring[(d.callring_pos - k) & 63]; if (a) cfg_logf("derail", "  %08X", a); }
       fflush(stderr); abort();
     }
     ldhaz_step(d, in, pc);                           // load-delay hazard detector (execution order)

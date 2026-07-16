@@ -127,7 +127,7 @@ void QuadRtptSubmit::submitQuad(Core* c) {
   const uint32_t out = c->r[4];              // a0
   const uint32_t xf  = c->r[5];               // a1: composedXform
   const int32_t  otzBias = (int32_t)c->r[6];  // a2
-  if (cfg_dbg("quadrtpt")) { static long n = 0; if (n++ % 512 == 0) fprintf(stderr, "[quadrtpt] submitQuad call#%ld\n", n); }
+  if (cfg_dbg("quadrtpt")) { static long n = 0; if (n++ % 512 == 0) cfg_logf("quadrtpt", "submitQuad call#%ld", n); }
 
   c->r[29] -= 16;
   const uint32_t sp = c->r[29];

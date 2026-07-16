@@ -286,7 +286,7 @@ int Fmv::bsDecodeFrame(const uint8_t* payload, uint32_t payload_size,
     uint16_t magic = (uint16_t)(payload[2] | (payload[3] << 8));
     uint16_t ver   = (uint16_t)(payload[6] | (payload[7] << 8));
     if (!bs_hdr_logged) { bs_hdr_logged = 1;
-      fprintf(stderr, "[fmv] BS hdr: nwords=%u magic=%04x qscale=%d version=%u\n",
+      cfg_logf("fmv", "BS hdr: nwords=%u magic=%04x qscale=%d version=%u",
               (unsigned)(payload[0] | (payload[1] << 8)), magic, qscale, ver); }
   }
 
@@ -491,8 +491,7 @@ int Fmv::mdecDecodeToRgb555(const uint16_t* codes, int ncodes,
   int got_before_tail = got;
   int tail = mdec_dma_out_rest(outbuf + got, total_words - got);
   got += tail;
-  if (cfg_dbg("fmv"))
-    fprintf(stderr, "[fmv]   drain: %d scattered + %d tail-scatter = %d/%d total\n",
+  cfg_logf("fmv", "  drain: %d scattered + %d tail-scatter = %d/%d total",
             got_before_tail, tail, got, total_words);
 
   // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
@@ -501,8 +500,7 @@ int Fmv::mdecDecodeToRgb555(const uint16_t* codes, int ncodes,
   int mbx = (width + 15) / 16;
   int mby = (height + 15) / 16;
   int produced = got;                            // words actually drained
-  if (cfg_dbg("fmv"))
-    fprintf(stderr, "[fmv]   drained %d/%d words (%d macroblocks)\n", got, total_words, got/128);
+  cfg_logf("fmv", "  drained %d/%d words (%d macroblocks)", got, total_words, got/128);
   int blocks_avail = produced / 128;             // 128 (32-bit) words per 16x16 MB
   // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
   // sub-blocks and mdec_dma_out's voffs scatter (RAMOffsetWWS=4) lays them out as a 16x16
@@ -759,8 +757,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     if (expected_chunks > 0 && got_chunks >= expected_chunks) {
       int ncodes = bsDecodeFrame(payload, paylen, fwidth, fheight, codes,
                                  (int)FMV_CODES_MAX);
-      if (cfg_dbg("fmv"))
-        fprintf(stderr, "[fmv] frame %d: %dx%d, %u payload bytes, %d codes\n",
+      cfg_logf("fmv", "frame %d: %dx%d, %u payload bytes, %d codes",
                 framenum, fwidth, fheight, paylen, ncodes);
       if (ncodes > 0) {
         int np = mdecDecodeToRgb555(codes, ncodes, fwidth, fheight, pixels);
@@ -775,8 +772,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     }
   }
   if (skipped) fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames);
-  if (cfg_dbg("fmv"))
-    fprintf(stderr, "[fmv] done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)\n",
+  cfg_logf("fmv", "done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)",
             frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
   audioClose();
   // FMV teardown (issues #7/#11): EVERY exit (normal end AND Start-skip break) leaves the FMV's last

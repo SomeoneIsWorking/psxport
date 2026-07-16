@@ -557,7 +557,7 @@ void Render::billboardEmit() {
         // (before this change every particle of a manager node shared obj_world_ord(node)'s single ord).
         if (cfg_dbg("bbord")) {
           int gpu_gpu_preseq_present_index(Core*);
-          fprintf(stderr, "[bbord] pf=%d call=%08X it=%d part=%08X off=%d,%d nodeOrd=%.6f partOrd=%.6f span=[%08X,%08X)\n",
+          cfg_logf("bbord", "pf=%d call=%08X it=%d part=%08X off=%d,%d nodeOrd=%.6f partOrd=%.6f span=[%08X,%08X)",
                   gpu_gpu_preseq_present_index(c), node, bbIt, particle,
                   c->mem_r8s(particle + 14), c->mem_r8s(particle + 15),
                   obj_world_ord(c, node), pord, packetLo, tail);

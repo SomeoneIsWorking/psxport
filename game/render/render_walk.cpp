@@ -574,7 +574,7 @@ void Render::sceneNative() { Core* c = mCore;
   }
   c->r[4] = saved;
   if (cfg_dbg("scenenative")) { int gpu_seen3d_this_frame(Core*); static int f = 0; if ((f++ % 60) == 0)
-    fprintf(stderr, "[scenenative] objs=%ld cmds=%ld seen3d=%d\n", c->mRender->stats.snObjs, c->mRender->stats.snCmds, gpu_seen3d_this_frame(c)); }
+    cfg_logf("scenenative", "objs=%ld cmds=%ld seen3d=%d", c->mRender->stats.snObjs, c->mRender->stats.snCmds, gpu_seen3d_this_frame(c)); }
 }
 
 // The field OBJECT pass — the (c)+(d) walk factored out of sceneNative (above) so it can be re-run at the

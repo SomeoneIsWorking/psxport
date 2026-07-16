@@ -204,8 +204,7 @@ void SpuAudio::frameEx(bool output) {
 
   SDL_PutAudioStreamData(mStream, buf, (int)(frames * 2 * sizeof(int16_t)));
 
-  if (cfg_dbg("audio"))
-    fprintf(stderr, "[spu_audio] rendered %d frames, queued=%d bytes\n",
-            frames, SDL_GetAudioStreamQueued(mStream));
+  cfg_logf("audio", "[spu_audio] rendered %d frames, queued=%d bytes",
+           frames, SDL_GetAudioStreamQueued(mStream));
 #endif
 }

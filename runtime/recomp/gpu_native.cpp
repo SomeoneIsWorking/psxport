@@ -609,8 +609,7 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
   // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
   if (gpu_gpu_enabled()) gpu_gpu_dirty(core, x, y, w, h);
-  if (cfg_dbg("upload"))
-    fprintf(stderr, "[upload] f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X\n", s_frame, x, y, w, h, src);
+  cfg_logf("upload", "f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X", s_frame, x, y, w, h, src);
 }
 
 // GP0 command-word color packs as 0x00BBGGRR — R in the low byte, B in the high byte.
@@ -850,8 +849,8 @@ void GpuState::gp0_exec(Core* core) {
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           s_nd2d_hist[op]++; }
         if (!is3d && !bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
-          fprintf(stderr, "[polynode] id=%u op=%02x bbox=(%d,%d)-(%d,%d) node=%08x\n",
-                  ord_idx, op, bx0, by0, bx1, by1, s_cur_node);
+          cfg_logf("objz", "[polynode] id=%u op=%02x bbox=(%d,%d)-(%d,%d) node=%08x",
+                   ord_idx, op, bx0, by0, bx1, by1, s_cur_node);
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
         // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
         { void prim_dump_poly(Core*, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
@@ -1088,8 +1087,8 @@ void GpuState::gp0_exec(Core* core) {
       // covers the margins too, while staying in the topmost (HUD) band (not a backdrop). See ws_2d_local_x.
       int fade_full = (!bg && semi && fade_full_2d(s_disp_w, s_disp_h, x, y, x + w, y + h));
       if (!bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
-        fprintf(stderr, "[sprnode] op=%02x at(%d,%d %dx%d) rgb=(%d,%d,%d) node=%08x\n",
-                op, x, y, w, h, cr, cg, cb, s_cur_node);
+        cfg_logf("objz", "[sprnode] op=%02x at(%d,%d %dx%d) rgb=(%d,%d,%d) node=%08x",
+                 op, x, y, w, h, cr, cg, cb, s_cur_node);
       { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
         prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
       int X = x + s_off_x, Y = y + s_off_y;
@@ -1267,7 +1266,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       case 0xE1: set_texpage(w & 0xFFFF); return;
       case 0xE2: s_tw_mx = w & 31; s_tw_my = (w >> 5) & 31; s_tw_ox = (w >> 10) & 31; s_tw_oy = (w >> 15) & 31; return;
       case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF;
-        if (cfg_dbg("env")) fprintf(stderr, "[env] E3 clip_tl=(%d,%d)\n", s_da_x0, s_da_y0); return;
+        cfg_logf("env", "E3 clip_tl=(%d,%d)", s_da_x0, s_da_y0); return;
       case 0xE4: s_da_x1 = w & 0x3FF; s_da_y1 = (w >> 10) & 0x1FF;
         // Widescreen: the guest clips the draw area to the 4:3 FB right edge (s_disp_x+319). The engine
         // renders a wider FOV (OFX shifted to nw/2) into VRAM columns up to s_disp_x+nw, so extend the
@@ -1276,9 +1275,9 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         // render-clip widen consumed by the GPU batch (i_da); it never widens where guest logic reads.
         { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
           if (gpu_gpu_wide_engine(core)) s_da_x1 += (gpu_gpu_wide_engine_w(core) - 320); }
-        if (cfg_dbg("env")) fprintf(stderr, "[env] E4 clip_br=(%d,%d)\n", s_da_x1, s_da_y1); return;
+        cfg_logf("env", "E4 clip_br=(%d,%d)", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
-        if (cfg_dbg("env")) fprintf(stderr, "[env] E5 offset=(%d,%d)\n", s_off_x, s_off_y); return;
+        cfg_logf("env", "E5 offset=(%d,%d)", s_off_x, s_off_y); return;
       case 0xE6: return;                         // mask settings (mask-test not modeled)
       default: break;
     }
@@ -1318,10 +1317,8 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       if (vk_path()) gpu_gpu_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
-      if (cfg_dbg("upload")) {
-        fprintf(stderr, "[upload] f%d A0 dest=(%d,%d) %dx%d src=0x%08X\n",
-                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
-      }
+      cfg_logf("upload", "f%d A0 dest=(%d,%d) %dx%d src=0x%08X",
+               s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
         uint32_t src = 0x80000000u | s_dma_src;
         fprintf(stderr, "[texwatch] f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
@@ -1364,8 +1361,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
 // GP1 display/control commands.
 void GpuState::gpu_gp1(uint32_t w) {
   uint8_t op = w >> 24;
-  if (cfg_dbg("gp1"))
-    fprintf(stderr, "[gp1] f%d %02X %06X\n", s_frame, op, w & 0xFFFFFF);
+  cfg_logf("gp1", "f%d %02X %06X", s_frame, op, w & 0xFFFFFF);
   switch (op) {
     case 0x05: s_disp_x = w & 0x3FF; s_disp_y = (w >> 10) & 0x1FF; break;          // display area start
     case 0x07:  // vertical display range (scanlines). In 480i the field is shown twice (two VRAM
@@ -1483,8 +1479,8 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
     for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
       nz++; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-    fprintf(stderr, "[vramscan] f%d disp@(%d,%d) %dx%d  nonblack=%ld bbox=(%d,%d)-(%d,%d)\n",
-            s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
+    cfg_logf("vramscan", "f%d disp@(%d,%d) %dx%d  nonblack=%ld bbox=(%d,%d)-(%d,%d)",
+             s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
   }
   if (do_blit) present_window();
   { void ws_sx_dump(const char*);   // widescreen RE (later-55): dump GTE screen-X histogram
@@ -1502,23 +1498,23 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     {
 
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-        fprintf(stderr, "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f\n",
-                s_frame, core->mRender->stats.nd3d, core->mRender->stats.nd2d, (core->mRender->stats.nd3d+core->mRender->stats.nd2d) ? 100.0*core->mRender->stats.nd3d/(core->mRender->stats.nd3d+core->mRender->stats.nd2d) : 0.0);
+        cfg_logf("ndepth", "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f",
+                 s_frame, core->mRender->stats.nd3d, core->mRender->stats.nd2d, (core->mRender->stats.nd3d+core->mRender->stats.nd2d) ? 100.0*core->mRender->stats.nd3d/(core->mRender->stats.nd3d+core->mRender->stats.nd2d) : 0.0);
       { auto s = core->mRender->projprim.stats();
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          fprintf(stderr, "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld\n", s.set, s.hit, s.miss);
+          cfg_logf("ndepth", "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld", s.set, s.hit, s.miss);
         core->mRender->projprim.statsReset(); }
       { RenderStats& st = core->mRender->stats;
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          fprintf(stderr, "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld\n", st.odAdd, st.odHit, st.odMiss);
+          cfg_logf("ndepth", "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld", st.odAdd, st.odHit, st.odMiss);
         st.odAdd = st.odHit = st.odMiss = 0; }
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
         for (int o = 0; o < 256; o++) if (s_nd2d_hist[o]) {
           int gour=o&0x10, quad=o&0x08, tex=o&0x04, semi=o&0x02;
           const char* k = (o>=0x60&&o<0x80) ? "SPRITE" : (o>=0x40&&o<0x60) ? "LINE" :
                           (o>=0x20&&o<0x40) ? "POLY" : (o>=0x80) ? "BLIT" : "misc";
-          fprintf(stderr, "    2D-band op 0x%02X x%ld  [%s%s%s%s %s]\n", o, s_nd2d_hist[o],
-                  gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
+          cfg_logf("ndepth", "    2D-band op 0x%02X x%ld  [%s%s%s%s %s]", o, s_nd2d_hist[o],
+                   gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
         for (int o = 0; o < 256; o++) s_nd2d_hist[o] = 0;
       }
       core->mRender->stats.nd3d = core->mRender->stats.nd2d = 0;
@@ -1540,7 +1536,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
         if (vf) { fwrite(s_vram, 2, VRAM_W * VRAM_H, vf); fclose(vf);
                   fprintf(stderr, "[gpu] VRAM dump f%d -> %s\n", s_frame, col + 1); } } } }
   if (cfg_dbg("stage") && (s_frame % 200) == 0)
-    fprintf(stderr, "[stagetl] gpu f%d task0entry=%08X\n", s_frame, core->mem_r32(0x801fe00c));
+    cfg_logf("stage", "[stagetl] gpu f%d task0entry=%08X", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
   if (s_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
                      s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
@@ -1719,11 +1715,11 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
     }
     if (!term && !dumped++) {
       a = madr & 0x1FFFFC;
-      fprintf(stderr, "[otdbg] MALFORMED OT from madr=0x%08X:\n", 0x80000000u | (madr & 0x1FFFFC));
+      cfg_logf("ot", "[otdbg] MALFORMED OT from madr=0x%08X:", 0x80000000u | (madr & 0x1FFFFC));
       for (int k = 0; k < 40; k++) {
         uint32_t hdr = core->mem_r32(a); uint32_t next = hdr & 0xFFFFFF; int n = hdr >> 24;
-        fprintf(stderr, "  [%2d] @0x%08X hdr=0x%08X (n=%d) -> 0x%08X\n",
-                k, 0x80000000u | a, hdr, n, 0x80000000u | (next & 0x1FFFFC));
+        cfg_logf("ot", "  [%2d] @0x%08X hdr=0x%08X (n=%d) -> 0x%08X",
+                 k, 0x80000000u | a, hdr, n, 0x80000000u | (next & 0x1FFFFC));
         if (next == 0xFFFFFF || next == 0) break;
         a = next & 0x1FFFFC;
       }
@@ -1763,8 +1759,8 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
     static int mx = 0; int nodes = guard + 1;
     uint32_t pool = core->mem_r32(0x800BF544u);
     if ((int)pool > mx) mx = (int)pool;
-    fprintf(stderr, "[pool] f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X\n",
-            s_frame, 0x80000000u | s_ot_madr, nodes, pool, (uint32_t)mx);
+    cfg_logf("pool", "f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X",
+             s_frame, 0x80000000u | s_ot_madr, nodes, pool, (uint32_t)mx);
   }
   if (guard >= 0x10000) {
     static int warned = 0;

@@ -44,8 +44,8 @@ static void cd_command(Core* c) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0,0,0,0};
     if (param) for (int i = 0; i < 4; i++) p[i] = (uint8_t)c->mem_r8(param + i);
-    fprintf(stderr, "[cdcmd] cmd=0x%02X param=[%02X %02X %02X %02X] mode=%u ra=0x%08X\n",
-            cmd, p[0], p[1], p[2], p[3], c->r[7], c->r[31]);
+    cfg_logf("cdcmd", "cmd=0x%02X param=[%02X %02X %02X %02X] mode=%u ra=0x%08X",
+             cmd, p[0], p[1], p[2], p[3], c->r[7], c->r[31]);
   }
   // In-game XA-ADPCM streaming: the game drives cutscene BGM / voice through these controller
   // commands. We don't model the controller (data is read natively elsewhere), so route the
@@ -86,8 +86,8 @@ static void cd_cmd_stream(Core* c) {
   if (cfg_dbg("cdcmd")) {
     uint32_t pp = c->r[A1]; uint8_t p[4] = {0,0,0,0};
     if (pp) for (int i = 0; i < 4; i++) p[i] = (uint8_t)c->mem_r8(pp + i);
-    fprintf(stderr, "[cdstream] cmd=0x%02X param=[%02X %02X %02X %02X] ra=0x%08X\n",
-            cmd, p[0], p[1], p[2], p[3], c->r[31]);
+    cfg_logf("cdcmd", "[cdstream] cmd=0x%02X param=[%02X %02X %02X %02X] ra=0x%08X",
+             cmd, p[0], p[1], p[2], p[3], c->r[31]);
   }
   { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)c->mem_r8(pp) : 0;
     switch (cmd) {

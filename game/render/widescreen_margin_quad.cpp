@@ -170,8 +170,8 @@ void WidescreenMarginQuad::emit(Core* c) {
   uint32_t poolBase = (uint32_t)pool + 48; // tracks (current-packet-base + 48); advances on commit
   uint32_t recAddr = c->mem_r32((uint32_t)recArrayField); // dereference: the actual record array ptr
 
-  if (cfg_dbg("wmq")) fprintf(stderr, "[wmq] obj=%08X pool=%08X recArrayPtr=%08X node=%08X\n",
-                               (uint32_t)obj, (uint32_t)pool, recAddr, (uint32_t)node);
+  cfg_logf("wmq", "obj=%08X pool=%08X recArrayPtr=%08X node=%08X",
+           (uint32_t)obj, (uint32_t)pool, recAddr, (uint32_t)node);
 
   for (;;) {
     MarginQuadRecord rec{c, recAddr};

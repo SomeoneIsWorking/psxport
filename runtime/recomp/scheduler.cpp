@@ -110,8 +110,8 @@ void scheduler_yield(Core* c) {
     abort();
   }
   if (!c->game->pcSched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  if (cfg_dbg("yieldpc")) fprintf(stderr, "[yieldpc] switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X\n",
-                                  c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
+  cfg_logf("yieldpc", "switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X",
+           c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
   int slot = c->game->pcSched.cur_slot;
   c->game->pcSched.task_ctx[slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
   if (c->game->pcSched.cur_is_coro) {
@@ -120,18 +120,18 @@ void scheduler_yield(Core* c) {
     // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
     // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
     if (c->mem_r16(TASKBASE + (uint32_t)slot * TASKSTRIDE) == 0) {
-      if (cfg_dbg("sched")) fprintf(stderr, "[sched]   switch EXIT slot %d (base.state==0) ra=0x%08X\n",
-                                    slot, c->r[31]);
+      cfg_logf("sched", "   switch EXIT slot %d (base.state==0) ra=0x%08X",
+               slot, c->r[31]);
       c->game->pcSched.coro[slot]->exit_now();
     }
-    if (cfg_dbg("yieldpc")) fprintf(stderr, "[sched]   switch YIELD slot %d ra=0x%08X\n", slot, c->r[31]);
+    cfg_logf("yieldpc", "[sched]   switch YIELD slot %d ra=0x%08X", slot, c->r[31]);
     // btyield: dump the coro's guest call chain at the yield point (the live regs ARE the yielding
     // field-mode frame). Diagnoses WHERE a full-PSX task is parked (e.g. the deep field-mode sub-wait).
     if (cfg_dbg("btyield")) {
-      fprintf(stderr, "[btyield] slot %d ra=0x%08X r16=0x%08X r17=0x%08X r18=0x%08X r19=0x%08X r29=0x%08X\n",
-              slot, c->r[31], c->r[16], c->r[17], c->r[18], c->r[19], c->r[29]);
+      cfg_logf("btyield", "slot %d ra=0x%08X r16=0x%08X r17=0x%08X r18=0x%08X r19=0x%08X r29=0x%08X",
+               slot, c->r[31], c->r[16], c->r[17], c->r[18], c->r[19], c->r[29]);
       guest_backtrace_to(c, stderr);
-      { void* bt[40]; int n = backtrace(bt, 40); fprintf(stderr, "[btyield] C-stack (recomp func chain):\n");
+      { void* bt[40]; int n = backtrace(bt, 40); cfg_logf("btyield", "C-stack (recomp func chain):");
         backtrace_symbols_fd(bt, n, 2); }
     }
     c->game->pcSched.coro[slot]->yield();
@@ -188,15 +188,13 @@ int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
   c->game->pcSched.in_stage = 1;
   c->game->pcSched.cur_is_coro = 1;
   static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];
-  if (cfg_dbg("sched"))
-    fprintf(stderr, "[sched] slot %d coro %s st=%u entry=0x%08X sp=0x%08X\n", i,
-            co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->pcSched.task_ctx[i].r[29]);
+  cfg_logf("sched", "slot %d coro %s st=%u entry=0x%08X sp=0x%08X", i,
+           co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->pcSched.task_ctx[i].r[29]);
   co->resume();
   c->game->pcSched.cur_is_coro = 0;
   c->game->pcSched.in_stage = 0;
-  if (cfg_dbg("sched"))
-    fprintf(stderr, "[sched]   slot %d coro out: done=%d base.state=%u entry=0x%08X\n",
-            i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
+  cfg_logf("sched", "   slot %d coro out: done=%d base.state=%u entry=0x%08X",
+           i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
   if (co->done() || c->mem_r16(base) == 0) {
     c->mem_w16(base, 0);
     c->game->pcSched.task_started[i] = 0;
@@ -241,9 +239,8 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
     return 1;                                                    // sleeping this frame (state==1)
   }
   c->mem_w16(base, 4);
-  if (cfg_dbg("sched"))
-    fprintf(stderr, "[sched] slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X\n",
-            i, st, resume_pc, c->game->pcSched.task_ctx[i].r[31], c->game->pcSched.task_ctx[i].r[29]);
+  cfg_logf("sched", "slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X",
+           i, st, resume_pc, c->game->pcSched.task_ctx[i].r[31], c->game->pcSched.task_ctx[i].r[29]);
   c->mem_w32(CUR_TASK, base);
   c->game->pcSched.cur_slot = i;
   static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];

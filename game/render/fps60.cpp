@@ -153,11 +153,10 @@ void Fps60::tier1Render(Core* core, float t) {
   lerp.ofy = mCamPrev.ofy + (mCamCur.ofy - mCamPrev.ofy) * t;
   lerp.H   = mCamPrev.H   + (mCamCur.H   - mCamPrev.H)   * t;
   mCamOverride = lerp;
-  if (cfg_dbg("terrpc"))
-    fprintf(stderr, "[tier1dbg] t=%.3f cur.T=(%.1f,%.1f,%.1f) prev.T=(%.1f,%.1f,%.1f) lerp.T=(%.1f,%.1f,%.1f) "
-                     "cur.H=%.1f prev.H=%.1f lerp.H=%.1f ofx=%.1f ofy=%.1f\n",
-            t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
-            lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
+  cfg_logf("terrpc", "[tier1dbg] t=%.3f cur.T=(%.1f,%.1f,%.1f) prev.T=(%.1f,%.1f,%.1f) lerp.T=(%.1f,%.1f,%.1f) "
+                      "cur.H=%.1f prev.H=%.1f lerp.H=%.1f ofx=%.1f ofy=%.1f",
+           t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
+           lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
 
   ProjParams::Snapshot projSaved = c->mRender->projParams.snapshot();
   RenderQueue* prevRedirect = c->game->rqRedirect;
@@ -228,8 +227,8 @@ void Fps60::tier1Render(Core* core, float t) {
         if (it.ysf[k] < *mny) *mny = it.ysf[k]; if (it.ysf[k] > *mxy) *mxy = it.ysf[k];
       }
     }
-    fprintf(stderr, "[tier1sc] terrain n=%d bbox=[%.0f,%.0f,%.0f,%.0f] sceneTable n=%d bbox=[%.0f,%.0f,%.0f,%.0f]\n",
-            tn, tn?tminx:0, tn?tminy:0, tn?tmaxx:0, tn?tmaxy:0, sn, sn?sminx:0, sn?sminy:0, sn?smaxx:0, sn?smaxy:0);
+    cfg_logf("tier1sc", "terrain n=%d bbox=[%.0f,%.0f,%.0f,%.0f] sceneTable n=%d bbox=[%.0f,%.0f,%.0f,%.0f]",
+             tn, tn?tminx:0, tn?tminy:0, tn?tmaxx:0, tn?tmaxy:0, sn, sn?sminx:0, sn?sminy:0, sn?smaxx:0, sn?smaxy:0);
   }
 }
 

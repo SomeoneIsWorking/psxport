@@ -249,7 +249,7 @@ void Render::cmdListDispatch() {
                         perModeCaseTarget(c->mem_r32(MODE_TABLE + modeByte * 4u)) == 0x80146478u;
       if (redirectGeneric && !nodeNativeCovered) {
         if (cfg_dbg("redirect")) { static long n=0; if (n++%256==0)
-          fprintf(stderr, "[redirect] cmdListDispatch node=%08X cmd=%08X geomblk=%08X otbase=%08X\n", node, cmd, geomblk, otbase); }
+          cfg_logf("redirect", "cmdListDispatch node=%08X cmd=%08X geomblk=%08X otbase=%08X", node, cmd, geomblk, otbase); }
         // FAIL-FAST (CLAUDE.md pc_render READ-ONLY OVERLAY invariant): this native draw is a
         // display-pass addition living INSIDE cmdListDispatch, whose surrounding substrate body
         // legitimately writes guest RAM (GTE CR/OT/packet-pool) — so the guard is scoped tightly to

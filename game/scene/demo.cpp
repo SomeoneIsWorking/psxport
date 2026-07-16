@@ -53,9 +53,9 @@ static const uint32_t TAIL_NONE = 0x80106670u;  // frame-ctr++ -> yield (no rend
 static void demo_log(const char* who, Core* c) {
   if (!cfg_dbg("demo")) return;
   uint32_t sm = c->mem_r32(SM_PTR);
-  fprintf(stderr, "[demo] %s sm[0x48]=%u 0x4a=%u 0x68=%u 0x6b=%u 0x50=%u\n", who,
-          c->mem_r16(sm + 0x48), c->mem_r16(sm + 0x4a), c->mem_r8(sm + 0x68),
-          c->mem_r8(sm + 0x6b), c->mem_r16(sm + 0x50));
+  cfg_logf("demo", "%s sm[0x48]=%u 0x4a=%u 0x68=%u 0x6b=%u 0x50=%u", who,
+           c->mem_r16(sm + 0x48), c->mem_r16(sm + 0x4a), c->mem_r8(sm + 0x68),
+           c->mem_r8(sm + 0x6b), c->mem_r16(sm + 0x50));
 }
 
 // s1 0x8010641C — wait/advance: v0 = inner menu input machine 0x80106f80(0). If v0 != 0 the page is
@@ -525,9 +525,8 @@ static const uint32_t S7_PHASE1_BODY = 0x80106d4cu;
 void Demo::s7Phase() { Core* c = core;
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t phase = c->mem_r16(sm + 0x4a);
-  if (cfg_dbg("demo"))
-    fprintf(stderr, "[demo] s7_phase sm[0x4a]=%u sm[0x48]=%u sm[0x6e]=%u sm[0x5a]=%u (ra=0x%08X)\n",
-            phase, c->mem_r16(sm + 0x48), c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->r[31]);
+  cfg_logf("demo", "s7_phase sm[0x4a]=%u sm[0x48]=%u sm[0x6e]=%u sm[0x5a]=%u (ra=0x%08X)",
+           phase, c->mem_r16(sm + 0x48), c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->r[31]);
 
   if (phase == 2) {
     // PHASE2 teardown — fully native, all SYNC. No s7 frame entered -> redirect to the trampoline TAIL.
@@ -649,8 +648,8 @@ static uint32_t demo_menu_machine(Core* c) {
     const char* nf = cfg_str("PSXPORT_NO_FMV");
     if (nf && atoi(nf) == 0 && *nf) skip = 0;                     // explicit PSXPORT_NO_FMV=0 forces FMV on
     if (!skip) c->game->fmv.play("MOVIE/OP.STR");
-    else if (cfg_dbg("demo")) { static int w=0; if(!w++) fprintf(stderr,
-      "[demo] OP.STR opening movie skipped (NO_FMV/headless); running teardown -> s2\n"); }
+    else if (cfg_dbg("demo")) { static int w=0; if(!w++) cfg_logf("demo",
+      "OP.STR opening movie skipped (NO_FMV/headless); running teardown -> s2"); }
     // state 7 (0x80107280) teardown, faithful — the CdControlB(CdlPause) busy-loop becomes a native no-op
     // (no async CD read is running in our model). The other callees are synchronous libgs/SPU/cleanup.
     c->r[4] = 0; rec_dispatch(c, 0x8001cf00u);                    // SPU CD->mix off
@@ -711,8 +710,8 @@ void Demo::s0PostYield() { Core* c = core;
   rec_dispatch(c, 0x8007982Cu);
   c->engine.pool.reset75240();
   c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);
-  if (cfg_dbg("demo")) fprintf(stderr, "[demo] s0 post-yield: sm[0x48]=1, task-1 preload done "
-                               "(texgroup meta[0x800FB170]=%08X)\n", c->mem_r32(0x800fb170u));
+  cfg_logf("demo", "s0 post-yield: sm[0x48]=1, task-1 preload done "
+           "(texgroup meta[0x800FB170]=%08X)", c->mem_r32(0x800fb170u));
 }
 
 // Inline s0 body: task-1 wouldn't run via fiber under normal PC play, so the preload runs
@@ -933,9 +932,9 @@ static void demo_frame_s6(Core* c) {
 static void demo_frame_s7(Core* c) {
   uint32_t sm = c->mem_r32(SM_PTR);
   uint16_t phase = c->mem_r16(sm + 0x4a);
-  if (cfg_dbg("demo")) fprintf(stderr, "[demo] s7 attract phase=%u sm[0x6e]=%u sm[0x5a]=%u bf870=%u sm56=%02x\n",
-                               phase, c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->mem_r8(0x800bf870u),
-                               c->mem_r8(sm + 0x56u));
+  cfg_logf("demo", "s7 attract phase=%u sm[0x6e]=%u sm[0x5a]=%u bf870=%u sm56=%02x",
+           phase, c->mem_r8(sm + 0x6e), c->mem_r16(sm + 0x5a), c->mem_r8(0x800bf870u),
+           c->mem_r8(sm + 0x56u));
   if (phase == 0) {
     // FRAME ALIGNMENT (SBS-harness-only, same shape as demo_frame_s5's "demo_start_game" barrier
     // above and engine.cpp's "start_bin_load"/"seqvab_build"): this collapses FUN_80044bd4(
@@ -1042,7 +1041,7 @@ static void demo_frame_s7(Core* c) {
     c->mem_w16(sm + 0x48, 0);                                       // sm[0x48]=0 (restart)
   } else {
     // phase index out of range — match the guest epilogue (no-op) and don't spin.
-    if (cfg_dbg("demo")) fprintf(stderr, "[demo] s7 attract: phase=%u out of range (no-op)\n", phase);
+    cfg_logf("demo", "s7 attract: phase=%u out of range (no-op)", phase);
   }
 }
 
@@ -1060,8 +1059,8 @@ void Demo::frame() { Core* c = core;
     case 6: demo_frame_s6(c); break;
     case 7: demo_frame_s7(c); break;    // attract demo (idle timeout)
     default:
-      if (cfg_dbg("demo")) { static int w = 0; if (!w++) fprintf(stderr,
-        "[demo] ov_demo_frame: sm[0x48]=%u not yet native (frontier — s4 needs conversion)\n", s48); }
+      if (cfg_dbg("demo")) { static int w = 0; if (!w++) cfg_logf("demo",
+        "ov_demo_frame: sm[0x48]=%u not yet native (frontier — s4 needs conversion)", s48); }
       break;
   }
   c->mem_w16(0x1f800198u, c->mem_r16(0x1f800198u) + 1);   // per-frame counter (every guest tail bumps it)

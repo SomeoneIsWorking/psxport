@@ -104,7 +104,7 @@ bool EngineOverrides::run(Core* c, uint32_t addr) {
     if (cfg_dbg("dispatch")) {
       Sbs* sbs = game ? game->sbs : nullptr;
       int cid = sbs ? sbs->coreId(c) : -1;
-      fprintf(stderr, "[dispatch] f%u core=%c 0x%08X %s ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
+      cfg_logf("dispatch", "f%u core=%c 0x%08X %s ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X",
               sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'),
               addr, mName[i], c->r[31], c->r[4], c->r[5], c->r[6], c->r[7]);
     }

@@ -77,7 +77,7 @@ static int32_t overlay_gt_otz_index(int32_t z) {
 //   +12 uv0|clut, +16 rgb1&MASK, +20 SXY1, +24 uv1|tpage, +28 rgb2&MASK, +32 SXY2, +36 uv2hi}.
 void OverlayGt3Gt4::gt3(Core* c) {
   uint32_t rec = c->r[4], ot_base = c->r[5], count = c->r[6];
-  if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) fprintf(stderr, "[ovgt] gt3 call#%ld count=%u\n", n, count); }
+  if (cfg_dbg("ovgt")) { static long n=0; if (n++%512==0) cfg_logf("ovgt", "gt3 call#%ld count=%u", n, count); }
   if (count == 0) { c->r[2] = rec; return; }
   uint32_t pool = c->mem_r32(PKT_POOL_PTR);
   for (; count != 0; count--, rec += 36) {

@@ -61,8 +61,8 @@ void GpuState::vram_register_atlas(int x, int y, int w, int h, const char* tag) 
       return;
     }
   }
-  if (cfg_dbg("vramguard")) fprintf(stderr, "[vramguard] register %s (%d,%d %dx%d) [%d protected]\n",
-                                    tag ? tag : "tex", x, y, w, h, s_vg_n + 1);
+  cfg_logf("vramguard", "register %s (%d,%d %dx%d) [%d protected]",
+           tag ? tag : "tex", x, y, w, h, s_vg_n + 1);
   if (s_vg_n >= VG_MAX) {
     // Full: recycle the oldest slot (the registry is a moving window of currently-resident pages).
     int oldest = 0; for (int i = 1; i < s_vg_n; i++) if (s_vg[i].frame < s_vg[oldest].frame) oldest = i;

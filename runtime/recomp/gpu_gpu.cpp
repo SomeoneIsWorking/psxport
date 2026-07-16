@@ -705,7 +705,7 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   const bool ires = ires_i > 1;
   const int scale = ires ? ires_i : 1;
   const int cw = VRAM_W * scale, ch = VRAM_H * scale;
-  if (cfg_dbg("ires")) fprintf(stderr, "[ires] sx=%d sy=%d disp_w=%d h=%d ires_i=%d scale=%d cw=%d ch=%d | tri=%d tex=%d semi=%d | bg tri=%d tex=%d semi=%d | fg tri=%d tex=%d semi=%d\n",
+  cfg_logf("ires", "sx=%d sy=%d disp_w=%d h=%d ires_i=%d scale=%d cw=%d ch=%d | tri=%d tex=%d semi=%d | bg tri=%d tex=%d semi=%d | fg tri=%d tex=%d semi=%d",
     sx, sy, disp_w, h, ires_i, scale, cw, ch, g.s_tri_n, g.s_tex_n, semi_total,
     g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG], semi2d_total[GGS_2D_BG],
     g.s_tri2d_n[GGS_2D_FG], g.s_tex2d_n[GGS_2D_FG], semi2d_total[GGS_2D_FG]);
@@ -792,7 +792,7 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
     int32_t n_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &n_pc, sizeof n_pc);
     SDL_DrawGPUPrimitives(rp2, 3, 1, 0, 0);
     SDL_EndGPURenderPass(rp2);
-    if (cfg_dbg("ires")) fprintf(stderr, "[ires] shot downsample dst=(%d,%d,%d,%d) n=%d\n", sx, sy, disp_w, h, scale);
+    cfg_logf("ires", "shot downsample dst=(%d,%d,%d,%d) n=%d", sx, sy, disp_w, h, scale);
   }
 }
 
@@ -822,7 +822,7 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
     int& lsx = gd.s_fw_lsx; int& lsy = gd.s_fw_lsy; int& lw = gd.s_fw_lw; int& lh = gd.s_fw_lh;
     if (fade.mode != lastmode || fade.r != lr || fade.g != lg || fade.b != lb ||
         sx != lsx || sy != lsy || w != lw || h != lh) {
-      fprintf(stderr, "[fadewatch] present disp=%d,%d %dx%d fade mode=%d rgb=(%d,%d,%d)\n",
+      cfg_logf("fadewatch", "present disp=%d,%d %dx%d fade mode=%d rgb=(%d,%d,%d)",
               sx, sy, w, h, fade.mode, fade.r, fade.g, fade.b);
       lastmode = fade.mode; lr = fade.r; lg = fade.g; lb = fade.b;
       lsx = sx; lsy = sy; lw = w; lh = h;
@@ -1404,7 +1404,7 @@ void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int
     int m = f.mode; uint8_t r = f.r, g = f.g, b = f.b;
     if (m != lm || r != lr || g != lg || b != lb || sx != lsx || sy != lsy || w != lw || h != lh) {
       uint32_t sm = core->mem_r32(0x1f800138u);
-      fprintf(stderr, "[fadewatch-state] P.st=%u P8=%u P0xA=%u P3=%u | sm50=%u sm6c=%u\n",
+      cfg_logf("fadewatch", "[fadewatch-state] P.st=%u P8=%u P0xA=%u P3=%u | sm50=%u sm6c=%u",
               core->mem_r8(0x80100400u + 4), core->mem_r16(0x80100400u + 8), core->mem_r16(0x80100400u + 0xa),
               core->mem_r8(0x80100400u + 3), core->mem_r16(sm + 0x50), core->mem_r8(sm + 0x6c));
       lm=m; lr=r; lg=g; lb=b; lsx=sx; lsy=sy; lw=w; lh=h;

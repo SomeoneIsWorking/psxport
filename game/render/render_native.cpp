@@ -24,7 +24,7 @@ void NativeScenePass::run() {
   if (cfg_dbg("rendernative")) {
     static long fr = 0;
     if ((fr++ % 60) == 0)
-      fprintf(stderr, "[rendernative] drew %d objects, %d prims (native decoupled pass)\n",
-              mScene.count, prims);
+      cfg_logf("rendernative", "drew %d objects, %d prims (native decoupled pass)",
+               mScene.count, prims);
   }
 }

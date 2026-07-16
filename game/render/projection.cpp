@@ -67,7 +67,7 @@ void Render::projComposeObject(uint32_t cmd, EObjXform* out) {
 
   projComposeCore(c, Robj, Tobj, out);
   if (cfg_dbg("eproj")) { static long n = 0; if (n++ % 240 == 0)
-    fprintf(stderr, "[eproj] native compose #%ld cmd=%08x Tview=(%.0f,%.0f,%.0f) H=%.0f\n",
+    cfg_logf("eproj", "native compose #%ld cmd=%08x Tview=(%.0f,%.0f,%.0f) H=%.0f",
             n, cmd, (double)out->T[0], (double)out->T[1], (double)out->T[2], (double)out->H); }
 }
 

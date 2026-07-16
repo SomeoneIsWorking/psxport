@@ -238,7 +238,7 @@ void RenderQueue::emitQueue(Core* core) {
     int c[4][2] = {{0,0},{0,0},{0,0},{0,0}};
     for (int i = 0; i < n; i++) { int L = items[i].layer & 3, sm = items[i].semi ? 1 : 0; c[L][sm]++; }
     static int lf = 0; if ((lf++ % 30) == 0)
-      fprintf(stderr, "[rqhist] n=%d  bg(op/semi)=%d/%d  WORLD=%d/%d  ovl=%d/%d  hud=%d/%d\n",
+      cfg_logf("rqhist", "n=%d  bg(op/semi)=%d/%d  WORLD=%d/%d  ovl=%d/%d  hud=%d/%d",
               n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
   }
   for (int i = 0; i < n; i++) emitItem(core, &items[i]);
@@ -405,7 +405,7 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   // determines, so this instrument doubles as its match-quality debugger (docs/fps60-rework.md REDIRECT).
   { int pi = gpu_gpu_preseq_present_index(core);
     if (pi >= 0 && cfg_dbg("preseqobj"))
-      fprintf(stderr, "[preseqobj] p%04d key=%08X layer=%d x=%d y=%d\n",
+      cfg_logf("preseqobj", "p%04d key=%08X layer=%d x=%d y=%d",
               pi, it->dbg_node, it->layer, it->xs[0], it->ys[0]); }
   GpuState& s = core->game->gpu;
   // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
@@ -569,7 +569,7 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
                                 const float (*sv)[3]) {
   if (!gpu_gpu_enabled()) return;
   core->mRender->stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
-  if (cfg_dbg("silbbox")) { static int once=0; if (!once++) fprintf(stderr, "[silbbox] s_off=(%d,%d)\n", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
+  if (cfg_dbg("silbbox")) { static int once=0; if (!once++) cfg_logf("silbbox", "s_off=(%d,%d)", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);
   s.set_clut(clut);

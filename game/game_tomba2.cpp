@@ -213,6 +213,5 @@ void games_tomba2_init(void) {
   void str_wide_re_install();
   str_wide_re_install();       // FUN_80079528 Str::length (generic strlen, hottest unowned leaf)
   ScreenFade::installLeafTap();   // FUN_8007E9C8 fade leaf: gen body + host-state mirror (fixes #63)
-  if (cfg_dbg("engine"))
-    fprintf(stderr, "[engine] native object-list walk active (FUN_8007a904)\n");
+  cfg_logf("engine", "native object-list walk active (FUN_8007a904)");
 }

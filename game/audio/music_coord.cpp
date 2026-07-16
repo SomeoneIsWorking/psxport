@@ -124,12 +124,10 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
   // instances; this + the paired [gain2] trace in setGain2() below let a session correlate each
   // core's ramp/smoother state and setGain2 call cadence directly, instead of re-deriving it by
   // hand every time this bug class resurfaces.
-  if (cfg_dbg("vmt")) {
-    fprintf(stderr, "[vmt] f%u %s state=%u cut=%u boost=%u cur=%d tgt=%d g2cur=%u g2tgt=%d base=%d\n",
-            c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", state, cutMode,
-            boost, voice.fadeCur(), voice.fadeTarget(), voice.gain2Cur(), voice.gain2Target(),
-            voice.baseVol());
-  }
+  cfg_logf("vmt", "f%u %s state=%u cut=%u boost=%u cur=%d tgt=%d g2cur=%u g2tgt=%d base=%d",
+           c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", state, cutMode,
+           boost, voice.fadeCur(), voice.fadeTarget(), voice.gain2Cur(), voice.gain2Target(),
+           voice.baseVol());
 
   if (state != 2) {
     // Boot / silence: ~89% of base (0x47FF/0x7FFF), no ramp. (gen computes this with shifts —
@@ -197,10 +195,8 @@ void MusicCoord::voiceMixTick(uint32_t voice_base) {
 void MusicCoord::setGain2(int32_t val) {
   Core* c = this->core;
   const uint32_t V = 0x800BE1F8u;
-  if (cfg_dbg("vmt")) {
-    fprintf(stderr, "[gain2] f%u %s val=%d\n",
-            c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", val);
-  }
+  cfg_logf("vmt", "[gain2] f%u %s val=%d",
+           c->game->timing.logicFrame, c->game->pc_skip ? "A(skip)" : "B(oracle)", val);
   if (val < 0) {
     uint16_t snap = (uint16_t)(-(int16_t)val);
     c->mem_w16(V + 0x2Eu, snap);   // target

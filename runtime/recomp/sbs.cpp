@@ -616,10 +616,10 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
         // reaches the ActorMeleeEngage/MeleeProximity encounter zone in future sessions.
         if (cfg_dbg("combatnav") && (nv.postFrame % 100) == 1) {
           constexpr uint32_t G_ADDR = 0x800E7E80u;
-          fprintf(stderr, "[combatnav] %s pf=%d f=%u pos(Z,Y,X)=(%d,%d,%d) repl_on=%d hold=%04X tap_n=%d\n",
-                  tag, nv.postFrame, f,
-                  (int16_t)c->mem_r16(G_ADDR+46), (int16_t)c->mem_r16(G_ADDR+50), (int16_t)c->mem_r16(G_ADDR+54),
-                  c->game->pad.repl_on, c->game->pad.repl_hold, c->game->pad.repl_tap_n);
+          cfg_logf("combatnav", "%s pf=%d f=%u pos(Z,Y,X)=(%d,%d,%d) repl_on=%d hold=%04X tap_n=%d",
+                   tag, nv.postFrame, f,
+                   (int16_t)c->mem_r16(G_ADDR+46), (int16_t)c->mem_r16(G_ADDR+50), (int16_t)c->mem_r16(G_ADDR+54),
+                   c->game->pad.repl_on, c->game->pad.repl_hold, c->game->pad.repl_tap_n);
         }
       } else if (sbsPostdriveOn()) {
         nv.postFrame++;
@@ -868,9 +868,8 @@ bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, c
   if (ok) {
     if (site.waiting) {
       uint32_t waited = mFrame - site.firstWaitFrame;
-      if (cfg_dbg("skiprv"))
-        fprintf(stderr, "[sbs][rendezvous] f%u '%s' SETTLED after %u frame(s) — 0x%08X now %u (wanted >=%u)\n",
-                mFrame, label, waited, addr, v, minVal);
+      cfg_logf("skiprv", "[sbs][rendezvous] f%u '%s' SETTLED after %u frame(s) — 0x%08X now %u (wanted >=%u)",
+               mFrame, label, waited, addr, v, minVal);
       site.waiting = false;
     }
     return true;
@@ -880,8 +879,8 @@ bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, c
   uint32_t waited = mFrame - site.firstWaitFrame;
   if (waited > site.maxWaitFrames) site.maxWaitFrames = waited;
   if (cfg_dbg("skiprv") && (waited % 60) == 0)
-    fprintf(stderr, "[sbs][rendezvous] f%u waiting on '%s': 0x%08X=%u want>=%u (%u frame(s) so far)\n",
-            mFrame, label, addr, v, minVal, waited);
+    cfg_logf("skiprv", "[sbs][rendezvous] f%u waiting on '%s': 0x%08X=%u want>=%u (%u frame(s) so far)",
+             mFrame, label, addr, v, minVal, waited);
   if (waited >= kRvTimeoutFrames) {
     // Deadlock diagnostic, not a hang (CLAUDE.md fail-fast): the shortcut side has been idling on
     // this milestone for a full minute of frames with no sign the oracle side is ever going to
