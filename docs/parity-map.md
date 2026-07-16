@@ -3,13 +3,25 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 15 verified · 2 partial · 3 n/a
+**Status:** 17 verified · 3 partial · 3 n/a
+
+## ActorTomba::actionHandler800588BC (FUN_800588BC)
+- **status:** verified
+- **frames:** 21390
+- **gate:** port_check PASS + MIRROR_VERIFY OK + 0 sbs-div; combat + watch-cut f21390
+- **evidence:** 71b5d764
 
 ## ActorTomba::actionHandler8005ACC8 (FUN_8005ACC8)
 - **status:** verified
 - **frames:** 20040
 - **gate:** port_check PASS + MIRROR_VERIFY OK (469 hits) + 0 sbs-div; combat f5700 + watch-cut f20040
 - **evidence:** 2a94898c
+
+## ActorTomba::actionHandler8005AEE4 (FUN_8005AEE4)
+- **status:** verified
+- **frames:** 21390
+- **gate:** port_check PASS + MIRROR_VERIFY OK + 0 sbs-div; combat + watch-cut f21390
+- **evidence:** 71b5d764
 
 ## ActorTomba::enterOuterState0 (FUN_80058648)
 - **status:** verified
@@ -103,6 +115,11 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **frames:** 20820
 - **gate:** SBS-full combat 0-diff f5850 + watch-cut 0-diff f20820; ovhit native=oracle=3878 both addrs
 - **evidence:** cd278ce4
+
+## ActorTomba::actionHandler8005F1B0 (FUN_8005F1B0)
+- **status:** partial
+- **gate:** port_check equivalence (verbatim) + wired 0-diff, but mode unreached by combat/field/cutscene autonav — runtime-unexercised
+- **evidence:** 71b5d764
 
 ## Gauge text-row tap FUN_8004EB94
 - **status:** partial
