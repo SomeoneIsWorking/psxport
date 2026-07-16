@@ -925,17 +925,17 @@ void ActorTomba::registerOverrides(Game* game) {
   engine_set_override_main(0x80053E50u, gov_outerTransitionGate,   gen_func_80053E50);
   engine_set_override_main(0x80053FDCu, gov_outerTransitionCommit, gen_func_80053FDC);
   engine_set_override_main(0x80045580u, gov_assetReady,            gen_func_80045580);
-  // enterOuterState0 (0x80058648) + matrixComposeAttached (0x800597AC) are NOT wired: the 2026-07-16
-  // wiring attempt was REJECTED by PSXPORT_MIRROR_VERIFY at invocation #1 — the enterOuterState0
-  // subtree diverges at 0x800F2758 (native 21 F0 00 vs substrate 01 01 08, entry a0=G a1=0 a3=3)
-  // and the run then faults; matrixComposeAttached never fired in the leg (unverifiable).
-  // NARROWED (same day): direct MV runs on every native child in the subtree came back byte-clean
-  // over a full combat leg — recordArrayInit 0x800519E0, growthStep 0x80057DC0, recordInit
-  // 0x80051B70, guestMemset 0x8009A420 all 0 mismatches — so the fault is a TRANSCRIPTION SLIP in
-  // the enterOuterState0 DRAFT BODY itself. The divergent bytes are obj+8/+9 of pool object
-  // 0x800F2750 (a record-init the substrate leg performs that the native leg's control flow
-  // missed) → look for a wrong branch/condition in the draft, not a wrong store. Line-diff the
-  // draft against gen_func_80058648 (generated/shard_7.c:7739) before any re-wire.
+  extern void gen_func_80058648(Core*);
+  engine_set_override_main(0x80058648u, gov_enterOuterState0, gen_func_80058648);
+  // matrixComposeAttached (0x800597AC) is NOT wired — ISOLATED as the faulty draft (2026-07-16):
+  // the joint wiring attempt was rejected by MIRROR_VERIFY (subtree diverged at 0x800F2758 =
+  // obj+8/+9 of pool object 0x800F2750, then faulted). Bisection: every native CHILD MV'd clean
+  // (recordArrayInit/growthStep/recordInit/guestMemset), the enterOuterState0 line-diff against
+  // gen_func_80058648 is 1:1, and eos0 wired ALONE passes MIRROR_VERIFY (pass #1 OK + 0-diff leg) —
+  // leaving only the NESTED 0x800597AC dispatch (which MV's no-nesting guard hid from its own
+  // hook) as the divergence source. The matrixComposeAttached draft (a dense 9-target literal
+  // transcription below) has a transcription slip — line-diff IT against gen_func_800597AC
+  // (generated/shard_5.c:8654) before wiring.
 }
 
 // =================================================================================
