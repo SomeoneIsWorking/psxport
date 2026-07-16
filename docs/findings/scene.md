@@ -742,3 +742,22 @@ After deduping FUN_80040B48 + FUN_80040CDC, `codemap.py --conflicts` (authoritat
   (renderHutInterior currently abortUnimplemented()s by design, break-first 2026-07-16).
 - **refs:** engine.cpp `submode1Faithful`/`Sop::transitionAreaLoad`/`fieldRunFaithful` case 6; Ghidra dumps
   this session; `warp <id>` REPL + `PSXPORT_DEBUG=ovload,stage`.
+
+### UPDATE (2026-07-17, same session) — load PATH proven functional; gap is routing + NO REPRO
+
+- **The MODE-slot load path WORKS for nexttab==0 areas.** `warp 22`/`warp 23` (`0x80108f60[22]=[23]=0`)
+  hit submode1 case 0 → `Sop::transitionAreaLoad` (bf870=dest, sm6d=2, full DMA path) → **zero recomp-miss**.
+  So `FUN_800452c0`/`FUN_80045080(0x80108f9c,area+3)` correctly load the code overlay when case 0 runs.
+- **Corrected table read (final):** `0x80108f60[0..0x17]` = `02 02 04 05 | 02 02 02 04 | 02×8 | 04 02 00 00`
+  → nexttab[3]=5, [21]=2, [22]=[23]=0. Only 22/23 route through the load (case 0); 0..21 go straight to a
+  running state (2/4/5) that dispatches the area's code — a MISS if that code is a non-resident A0X overlay
+  (warp 3 → ov_a03 0x8010B37C; warp 21 → ov_a0l 0x8010D030 — both confirmed A0X, not A00 → true residency gap).
+- **NO WORKING REPRO of a cross-overlay area entry.** `hut-entry-door-freeze.pad` runs to completion on BOTH
+  pc_faithful AND the ORACLE (`PSXPORT_GATE=1`) without ever loading an A0X into the MODE slot — it never
+  reaches the hut interior. Forced `warp <id>` (trig==3) for nexttab≠0 areas reproduces the miss but is an
+  ARTIFICIAL transition (a real door to an overlay-swap area may set state that routes through case 0 / a
+  different trig). **This is the current blocker: no way to observe/verify the real overlay-swap door path.**
+- **NEXT STEP (unblock):** RE the actual hut/world door OBJECT that triggers an overlay swap (what trig /
+  sm[0x6d] / bf89c it writes) to (a) build a real repro and (b) see whether it routes through submode1 case 0.
+  Ruled out as loaders this session: FUN_80074f24 (audio), FUN_80106a24/sm[0x4a]==3 (FMV poll). Until a repro
+  exists, further static tracing is unproductive — the interior is repro-blocked, not RE-blocked.
