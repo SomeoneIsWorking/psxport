@@ -3,7 +3,13 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 8 verified · 2 partial · 2 n/a
+**Status:** 10 verified · 2 partial · 2 n/a
+
+## Core::guestMemset (FUN_8009A420)
+- **status:** verified
+- **frames:** 18120
+- **gate:** same wave gate; ovhit 2247/2247; §9 n<=0 return-0 fix
+- **evidence:** 7db286a8
 
 ## DEMO/title front-end (whole-scene)
 - **scope:** stage 0x801062E4 boot->title menu (s48 handoff + menu hold + cursor)
@@ -28,6 +34,12 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **frames:** 19590
 - **gate:** SBS-full combat f5460 + watch-cut f19590 0-diff; hut replay bubble identical via tap (panelq box=800EEA60 count=17)
 - **evidence:** 916ddfc0
+
+## Engine::padEdgeFence (FUN_800788AC)
+- **status:** verified
+- **frames:** 18120
+- **gate:** combat clean-exit 0-diff f4500 + ovhit 4500/4500; watch-cut 0-diff f18120
+- **evidence:** 7db286a8
 
 ## Engine::walkStart (early-exit frame mirror)
 - **status:** verified
