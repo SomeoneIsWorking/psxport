@@ -761,3 +761,22 @@ After deduping FUN_80040B48 + FUN_80040CDC, `codemap.py --conflicts` (authoritat
   sm[0x6d] / bf89c it writes) to (a) build a real repro and (b) see whether it routes through submode1 case 0.
   Ruled out as loaders this session: FUN_80074f24 (audio), FUN_80106a24/sm[0x4a]==3 (FMV poll). Until a repro
   exists, further static tracing is unproductive — the interior is repro-blocked, not RE-blocked.
+
+### UPDATE 2 (2026-07-17) — the warp is an INVALID repro; a0l is preloaded; needs a real driven entry
+
+- **`warp <id>` to a cross-overlay area is INVALID — it crashes even the ORACLE.** `PSXPORT_GATE=1` +
+  `warp 21` → EXIT 139 at `sm[0x4e]=0xb`: fieldRun case 0 SPECIAL-CASES `bf870==0x15` (area 21) →
+  `sm[0x4e]=0xb` → `FUN_8010957c` (an a0l-overlay fn) — but a0l is NOT resident, so the substrate itself
+  derails. Warping jumps to area 21 without its overlay preloaded; it is not a valid transition.
+- **The hut door-fade sequence IS a0l code.** `game/render/screen_fade.cpp` (the case-5 writer of
+  `bf839=3 / bf83a=0x1501`) calls `helperCC68` = `rec_dispatch(0x8010CC68)` = **`ov_a0l_func_8010CC68`** at
+  every fade step. So a0l is ALREADY resident when the hut door arms — the door transitions WITHIN the a0l
+  region; a0l is loaded EARLIER (when the hut's outer area is first entered from A00), not at door-cross.
+- **CONCLUSION: the interior cross-overlay load cannot be warp-reproduced headless.** Reaching it requires
+  DRIVING the real game from the seaside into the hut's a0l area (interactive, or a genuine pad-capture that
+  actually reaches it — the existing `hut-entry-door-freeze.pad` does NOT, on either path). This is a
+  reproduction-infrastructure blocker, outside headless static RE. **The RE understanding is complete; the
+  work is blocked on a real driven repro** (user-captured hut-entry replay, or the A00→a0l region-entry path
+  RE'd from the specific seaside door object that first loads a0l — a separate, larger effort).
+- **Recommendation:** pause interior work pending a real repro; the ledger of established facts above is the
+  handoff. Do NOT re-attempt warp-based interior repro (proven invalid).
