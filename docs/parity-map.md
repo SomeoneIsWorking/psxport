@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 7 verified · 1 partial · 2 n/a
+**Status:** 8 verified · 2 partial · 2 n/a
 
 ## DEMO/title front-end (whole-scene)
 - **scope:** stage 0x801062E4 boot->title menu (s48 handoff + menu hold + cursor)
@@ -22,6 +22,12 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **evidence:** f2d1b8af 2026-07-15 — 10890 frames 0-diff incl. cursor input; dispatch confirms override fires
 - **owner:** game/scene/demo.cpp (Demo::s2SubMachine)
 - **notes:** byte-exact frame 32 per abi_extract; twin of s3SubMachine
+
+## Dialog glyph tap FUN_8007CC00 (Panel::pushDialogGlyphs)
+- **status:** verified
+- **frames:** 19590
+- **gate:** SBS-full combat f5460 + watch-cut f19590 0-diff; hut replay bubble identical via tap (panelq box=800EEA60 count=17)
+- **evidence:** 916ddfc0
 
 ## Engine::walkStart (early-exit frame mirror)
 - **status:** verified
@@ -61,6 +67,11 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **gate:** registered, 2-leg 0-diff, but ovhit 0/0 (no gauge item in autonav) — host push math unexercised; needs gauge-popping drive + USER eyeball
 - **evidence:** 7a48eb15
 
+## Icon glyph tap FUN_80078988
+- **status:** partial
+- **gate:** 2-leg 0-diff with tap registered; icon strings not exercised in autonav legs — needs an icon-showing drive + USER eyeball
+- **evidence:** 916ddfc0
+
 ## Font::glyphQueuePush (glyphEmit dual-emit host half)
 - **status:** n/a
 - **gate:** host-only queue push, zero guest writes; glyphEmit faithful body previously verified
@@ -69,5 +80,7 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 ## Render::dialogTextNative
 - **scope:** field/hut dialog TEXT producer (pc_render overlay)
 - **status:** n/a
+- **gate:** RETIRED 916ddfc0 — superseded by the FUN_8007CC00 tap
+- **evidence:** 916ddfc0
 - **owner:** game/render/render_walk.cpp
 - **notes:** read-only pc_render producer — writes ONLY host memory, never guest RAM; parity N/A by construction (DisplayPassGuard enforces). Correctness = USER eyeball, not SBS.
