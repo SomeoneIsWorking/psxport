@@ -5,6 +5,35 @@ recomp_path (substrate). Both cores get `pc_skip=false` (faithful branch of ever
 Divergences are FATAL — no residual allowlist. Older notes below refer to the pre-rename
 `mIsFaithful` flag; that's `!pc_skip`.
 
+## walkStart early-exit spill gap @0x801FE8CC — watch-cut f747 divergence (2026-07-16, RESOLVED same day)
+
+- **Symptom**: watch-cut SBS-full leg diverged f747–f779 on ONE word, guest stack 0x801FE8CC:
+  A=0x00000040 (stale) vs B=0x8010A990 (an SOP-overlay return address). Self-healed at f780 (slot
+  overwritten identically), so a short gate window could MISS it. Combat leg never showed it (the
+  triggering call chain is the SOP intro cutscene: Engine::s48_2 → … → ScriptInterp::callFnptr →
+  substrate ov_sop 0x8010A900 → FUN_80054D14 with ra=0x8010A990).
+- **Root cause**: `Engine::walkStart` (FUN_80054D14, game/core/engine.cpp) placed its
+  `GuestFrame<32,4>` mirror AFTER the `cur == mode` early-exit test, with a comment claiming the
+  early exit "performs no calls" so skipping the mirror is unobservable. WRONG for full-RAM
+  compare: `gen_func_80054D14` descends sp and spills r16@+16/r17@+20/r18@+24/ra@+28 BEFORE the
+  compare, so B's early-exit path still writes the caller's ra at sp+28. Only the ra word surfaced
+  because A's stale bytes at +16/+20/+24 happened to match B's spills at that sp. Same class as
+  the voiceMixTick finding below: a native body that doesn't mirror the frame the gen body pushes.
+- **NOT the cause (ruled out)**: the ScreenFade FUN_8007E9C8 leaf tap installed the same day —
+  proven via `PSXPORT_THUNK_FORCE_GEN=0x8007E9C8` (divergence persisted with the tap forced to
+  pure gen, same f747–f779 window). Divergence pre-existed at HEAD 80d02145; the watch-cut leg
+  simply hadn't been re-run across the SOP-touching commits.
+- **Fix**: hoist the GuestFrame construction + r16/r17/r18 loads ABOVE the early-exit test,
+  matching gen spill order. Early exit now returns through the RAII epilogue like the gen path.
+- **Diagnosis tooling path (worked exactly as designed)**: `PSXPORT_SBS_PREWATCH=0x801FE8CC` on
+  the watch-cut leg → asymmetric-store class + core-B host backtrace naming the full substrate
+  chain + `tools/codemap.py --addr` on each chain node → the one native owner with a frame
+  (walkStart) → gen prologue read confirmed unconditional spills.
+- **Verification**: watch-cut leg (`PSXPORT_SBS_WATCH_CUT=1`) 0-diff through f16560+ (old
+  divergence window f747 passed clean); combat leg 0-diff. (commit this block lands in)
+- **refs**: game/core/engine.cpp `Engine::walkStart`; oracle generated/shard_7.c
+  `gen_func_80054D14` (L7290); scratch/logs/sbs_cut_prewatch.log (write-site capture).
+
 ## spawn-leaf frame residual @0x801FE918 — natural free-roam divergence (2026-07-11, RESOLVED 2026-07-14)
 
 - **RESOLVED (2026-07-14): the diverging 9 bytes are `FUN_80075824` (voiceMixTick)'s guest-frame

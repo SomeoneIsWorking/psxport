@@ -970,15 +970,16 @@ void Engine::announcerCue(uint32_t id, uint8_t flag) { Core* c = core;
 // Engine::walkStart — FUN_80054D14.
 uint32_t Engine::walkStart(uint32_t obj, uint32_t mode, int16_t subMode) { Core* c = core;
   using namespace ObjAnimField;
-  const uint8_t cur = c->mem_r8(obj + kAnimMode);
-  if ((uint32_t)cur == (mode & 0xFFu)) { c->r[2] = 0; return 0; }
   // GUEST FRAME MIRROR (abi_extract --contract, single epilogue label -> RAII safe): sp-32;
   // spills r16@+16, r17@+20, r18@+24, ra@+28; live r16=obj, r17=mode, r18=subMode; r31 constants
-  // per call site. The gen spills BEFORE the early-exit test too, but the early exit above
-  // performs no calls, so mirroring from here keeps every observable spill byte identical.
+  // per call site. The gen spills BEFORE the early-exit test, so the mirror must too: the
+  // early-exit path still leaves the caller's ra at sp+28 (SBS watch-cut f747 diverged on exactly
+  // that slot when the mirror sat below the test — stale byte vs B's spilled 0x8010A990).
   static constexpr GuestFrameSpill kSpills[] = {{16, 16}, {17, 20}, {18, 24}, {31, 28}};
   GuestFrame<32, 4> frame(c, kSpills);
   c->r[16] = obj; c->r[17] = mode; c->r[18] = (uint32_t)(int32_t)subMode;
+  const uint8_t cur = c->mem_r8(obj + kAnimMode);
+  if ((uint32_t)cur == (mode & 0xFFu)) { c->r[2] = 0; return 0; }
   c->mem_w8(obj + kAnimMode, (uint8_t)mode);
   guest_fn(c, 0x80054790u, 0x80054D58u, obj, mode);                   // pre-hook (substrate)
   // gen_func_80054D14 passes FOUR args: a3 = subMode (sext16). gen_func_80077CFC consumes it as
