@@ -931,11 +931,20 @@ void ActorTomba::registerOverrides(Game* game) {
   // the joint wiring attempt was rejected by MIRROR_VERIFY (subtree diverged at 0x800F2758 =
   // obj+8/+9 of pool object 0x800F2750, then faulted). Bisection: every native CHILD MV'd clean
   // (recordArrayInit/growthStep/recordInit/guestMemset), the enterOuterState0 line-diff against
-  // gen_func_80058648 is 1:1, and eos0 wired ALONE passes MIRROR_VERIFY (pass #1 OK + 0-diff leg) —
-  // leaving only the NESTED 0x800597AC dispatch (which MV's no-nesting guard hid from its own
-  // hook) as the divergence source. The matrixComposeAttached draft (a dense 9-target literal
-  // transcription below) has a transcription slip — line-diff IT against gen_func_800597AC
-  // (generated/shard_5.c:8654) before wiring.
+  // gen_func_80058648 is 1:1, and eos0 wired ALONE passes MIRROR_VERIFY (pass #1 OK + 0-diff leg).
+  // LINE-DIFF RESULT (same day) — the draft's per-item loop restructure is garbled 3 ways vs
+  // gen_func_800597AC (shard_5.c:8654):
+  //   1. gen's `r23 = 0` DELAY-SLOT init at the attach-B gate (L_80059914 branch) is MISSING —
+  //      the loop's L_80059AC8 `if (r23 != 0)` latch then branches on the caller's stale s7.
+  //   2. gen's `r4 = G+152` delay slot at the in-loop r22 branch is MISSING (the G-compose path's
+  //      matMul first arg), and the `r4 = r16` delay slot at the G+356==5 test was moved inside
+  //      the conditional.
+  //   3. the loop's THREE-way branch (r22==0 → G-compose ra 0x80059A78/84; r23==0 → alt-build
+  //      ra 0x80059AE4/F0, sets r23=1; r23!=0 → alt-reuse ra 0x80059B44/50) was collapsed into a
+  //      two-way `else if (r22 == 0)` whose "G-compose" body carries the ALT-REUSE path's ra
+  //      constants — conflated bodies.
+  // FIX = re-transcribe the loop's branch head 1:1 (goto/labels like the rest of the draft),
+  // restoring the delay-slot assignments and the three distinct bodies, then MIRROR_VERIFY.
 }
 
 // =================================================================================
