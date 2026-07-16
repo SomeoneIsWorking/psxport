@@ -711,3 +711,34 @@ After deduping FUN_80040B48 + FUN_80040CDC, `codemap.py --conflicts` (authoritat
 - **0x8002AB5C** — NativeScenePass::terrainRender (native_terrain.cpp) vs Render::terrain (submit.cpp,
   desc starts "RETIRED 2026-07-07 #32"). AMBIGUOUS: Render::terrain may be a stale-tagged retired
   method (remove the tag) or a real second owner. Investigate which.
+
+## Cross-area interior code-overlay never loads — RE chain to the sole MODE-slot loader (2026-07-17, OPEN, RE-frontier)
+
+- **symptom (USER):** interiors (fisherman's hut, sm[0x4c]==3) don't render as their own area; earlier finding
+  "hut interior much different / still shows outside" + fps60 30fps. Cross-area warps recomp-MISS on the
+  destination area's code (e.g. `warp 21` → miss `0x8010D030`; `warp 3` → miss `0x8010B37C`) with **A00
+  still resident** in the MODE slot — the per-area CODE overlay `ov_a0<id>` never loads.
+- **RE'd chain (Ghidra ram_sea, this session — supersedes the 2026-07-10/11 finding which mis-blamed
+  "case 6 skips case 0" and mis-read the next-state table endianness):**
+  - **The sole MODE-slot (0x80108f9c) code-overlay loader is `FUN_800452c0` line ~162:**
+    `FUN_80045080(0x80108f9c, area+3)` → `FUN_8001dc40(0x80108f9c, tbl[area+3].lba, .size)` where
+    `tbl = 0x800be118` (stride-8 LBA/size). `FUN_80045558` (the only OTHER `FUN_80045080` caller) targets
+    `0x8020A000` (bonus/secondary data), NOT the MODE slot.
+  - `FUN_800452c0` is spawned ONLY by `FUN_80044bd4(FUN_800452c0, area, 0, 2)` = **submode1 (`FUN_801088d8`,
+    the sm[0x4a]==1 field area machine) case 0** — which FALLS THROUGH to case1 (`sm[0x4c] = *(u8*)(0x80108f60+area)`).
+    Native mirror: `Engine::submode1Faithful`/`submode1` + `Sop::transitionAreaLoad` (which DOES reproduce the
+    `FUN_80045080(0x80108f9c, area+3)` load at sop.cpp:164).
+  - **next-state table `0x80108f60[0..0x17]` (LE-corrected):** `02 02 04 05 02 02 02 04 02×… 00(22) 00(23)`
+    i.e. area0=2, area21=2, only areas 22/23 = 0. So the door path (`fieldRun`/`FUN_80106b98` case 6, trig==3
+    → sm[0x4a]=1/4c=1/4e=0 → submode1 case1 → `sm[0x4c]=nexttab[dest]`) routes MOST dests (incl. 21) straight
+    to a RUNNING state (2/4/5), **never entering submode1 case 0**, so the code overlay never loads.
+- **the open contradiction (next RE step):** the guest ALSO routes case6→sm[0x4c]=1→case1 and skips submode1
+  case 0 for nexttab≠0 areas, yet on real HW the overlay IS resident. So the load for those areas fires from
+  a path not yet found — candidates: (a) one of `fieldRun` case 0's other 6 setup leaves (`FUN_8007b18c/
+  800796dc/800263e8/80072a78/80075240/800783dc/80078610` — only `FUN_80074f24` checked = audio, not a loader);
+  (b) another `FUN_800452c0` spawn site inside the **ov_game overlay** (not searched — the main-shard grep for
+  `FUN_80044bd4(0x800452c0,…)` only sees the submode1 one); (c) the initial field-entry load path. RE those,
+  find the real per-area code-overlay-load trigger, port it. Downstream: native interior WORLD render producer
+  (renderHutInterior currently abortUnimplemented()s by design, break-first 2026-07-16).
+- **refs:** engine.cpp `submode1Faithful`/`Sop::transitionAreaLoad`/`fieldRunFaithful` case 6; Ghidra dumps
+  this session; `warp <id>` REPL + `PSXPORT_DEBUG=ovload,stage`.
