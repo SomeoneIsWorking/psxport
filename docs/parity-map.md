@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 5 verified · 1 n/a
+**Status:** 6 verified · 2 n/a
 
 ## DEMO/title front-end (whole-scene)
 - **scope:** stage 0x801062E4 boot->title menu (s48 handoff + menu hold + cursor)
@@ -38,11 +38,22 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **owner:** game/render/render_walk.cpp (sceneNative reads this state)
 - **notes:** covers field ENTRY + scripted-caught hold (autonav did NOT reach free-roam control); free-roam + sceneNative RENDER correctness (eyeball) still uncovered — see portmap field-world
 
+## Panel taps FUN_8004FFB4/8005019C (gen + native quad push)
+- **status:** verified
+- **frames:** 20970
+- **gate:** SBS-full watch-cut 0-diff f20970 + combat f5970 (taps run gen bodies; push half host-only)
+- **evidence:** 77b7bcdb
+
 ## ScreenFade leaf tap FUN_8007E9C8
 - **status:** verified
 - **frames:** 23850
 - **gate:** same two legs; THUNK_FORCE_GEN A/B exonerated tap; ovhit native=32 newgame->narration
 - **evidence:** 7a282422
+
+## Font::glyphQueuePush (glyphEmit dual-emit host half)
+- **status:** n/a
+- **gate:** host-only queue push, zero guest writes; glyphEmit faithful body previously verified
+- **evidence:** 0c711055
 
 ## Render::dialogTextNative
 - **scope:** field/hut dialog TEXT producer (pc_render overlay)
