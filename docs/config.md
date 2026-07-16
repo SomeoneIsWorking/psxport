@@ -311,6 +311,15 @@ host half): glyph xy/wh/uv/clut every 128th push. Silent = no native text pushes
 `panelq` (game/ui/panel.cpp) — rate-limited probe of the panel taps (`Panel::pushFill`/`pushCorners`,
 FUN_8004FFB4/FUN_8005019C): rect/style/attr/semi/raw every 128th push. Silent = no panel drawn.
 
+`gaugeq` (game/render/hud_gauge_emitter.cpp) — rate-limited probe of the FUN_8004EB94 text-row tap
+(the gauge's centered 8x8-glyph label/digits row): desc ptr/y/width every 64th row. Silent = no
+gauge text drawn this run.
+
+`tileq` (game/render/tile_grid_layer.cpp) — rate-limited probe of `TileGridLayer::emit`
+(FUN_80115598, the field's scrolling 16x16 tile-grid background sprite emitter): xy/tile id/uv/clut
+every 512th guest-packet emit. This port has NO host queue push — the pc_render picture for the
+layer is owned by `Render::backdropRender`; the tap owns the guest half only.
+
 `fadesites` — one line per native fade call site each time it fires (`Sop::fieldMode` case 1/3,
 `Engine::fieldRun` case 10, `BgSceneTransitionSm::fadeRect`), tagged by site name + the raw ramp
 counter. Use when `fadetrace` shows the RGB value oscillating/stuck and you need to know WHICH of the

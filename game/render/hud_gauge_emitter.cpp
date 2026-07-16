@@ -27,7 +27,12 @@
 #include "game.h"
 #include "guest_abi.h"
 #include "hud_gauge_emitter.h"
+#include "render.h"          // Render::mode.psxRender() — gaugeTextRowTap's read-only overlay gate
+#include "render_queue.h"    // RenderQueue::push2dQuad + RQ_HUD — the tap's host half
+#include "cfg.h"             // cfg_logf gaugeq probe
 #include <cstdint>
+
+extern void gen_func_8004EB94(Core*);   // guest text-row leaf body (see gaugeTextRowTap below)
 
 namespace {
 
@@ -275,10 +280,69 @@ void HudGaugeEmitter::emitItem(Core* c) {
   guest_fn(c, kFunLabelOrDigits, kRaItemFinal, sp + kWord0Off, item.labelByte(), 0u, 3u);
 }
 
+// ---- FUN_8004EB94 tap — the gauge's CENTERED 8x8-GLYPH TEXT ROW (RE 2026-07-16, gen_func_8004EB94
+// shard_3.c:12762 + measure leaf gen_func_8004EA4C shard_1.c:8382) --------------------------------
+// Despite the old kFunSegmentLayout name, this leaf draws a TEXT ROW: it walks a byte string at a0
+// until 0xFF, emitting one op-0x75 SPRT_8x8 per glyph byte into the packet pool (each spliced
+// individually into OT bucket 3), then a trailing DR_TPAGE(0x1F) header via func_80083DE0.
+//   byte 0xF0..0xF7  -> palette-row select ((b+16)&0xFF = row 0..7), no emit, NO x advance
+//   byte 0xFB        -> space: no emit, x += 8
+//   other (until FF) -> glyph: uv = ((b&31)<<3, (b>>5)<<3), clut = ((row+496)<<6)|63, x += 8
+// Start x = 160 - width/2, width from the measure leaf FUN_8004EA4C (8 per byte<192 or ==0xFB,
+// zero for 0xC0..0xF9, terminates on 0xFA/0xFF). y = a1 (s16). Color bytes at pkt+4..+6 are left
+// UNWRITTEN by the guest (op 0x75 = raw texture ignores them) — the tap writes no guest byte at all.
+// The tap runs the gen body (guest state byte-exact) then re-derives the same glyph walk host-side
+// and pushes RQ_HUD quads — same tap shape as game/ui/panel.cpp. This gives the gauge text/digits
+// row its pc_render picture (the 9-slice box comes via the panelBuild tap).
+namespace {
+void gaugeTextRowTap(Core* c) {
+  const uint32_t desc = c->r[4];
+  const int y = (int32_t)(int16_t)(uint16_t)c->r[5];
+  gen_func_8004EB94(c);
+  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // guest OT walk owns the picture
+  if (c->mem_r8(desc) == 0xFFu) return;                          // empty row (gen early-exit)
+
+  // Width per the measure leaf's rules (NOT the emit loop's — the guest centers on THIS number).
+  int width = 0;
+  for (uint32_t p = desc;; p++) {
+    const uint8_t b = c->mem_r8(p);
+    if (b == 0xFAu || b == 0xFFu) break;
+    if (b < 192u || b == 0xFBu) width += 8;
+  }
+  int x = 160 - (width >> 1);
+
+  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  unsigned paletteRow = 0;
+  static long rows = 0;
+  if ((rows++ & 63) == 0)
+    cfg_logf("gaugeq", "text row desc=%08X y=%d width=%d first=%02X", desc, y, width, c->mem_r8(desc));
+  for (uint32_t p = desc;; p++) {
+    const uint8_t b = c->mem_r8(p);
+    if (b == 0xFFu) break;
+    if (((unsigned)(b + 16) & 0xFFu) < 8u) { paletteRow = (unsigned)(b + 16) & 0xFFu; continue; }
+    if (b != 0xFBu) {
+      const int u = (b & 31) << 3, v = (b >> 5) << 3;
+      const uint32_t clut = ((paletteRow + 496u) << 6) | 63u;
+      int xs[4] = { x + ox, x + 8 + ox, x + ox, x + 8 + ox };
+      int ys[4] = { y + oy, y + oy, y + 8 + oy, y + 8 + oy };
+      int us[4] = { u, u + 8, u, u + 8 };
+      int vs[4] = { v, v, v + 8, v + 8 };
+      unsigned char cc[4] = { 0x80, 0x80, 0x80, 0x80 };
+      c->game->activeRq().push2dQuad(RQ_HUD, /*order_2d_fg=*/1, xs, ys, us, vs, cc, cc, cc,
+                                     /*tp_x=*/960, /*tp_y=*/256, /*mode=*/0, /*raw=*/1,
+                                     (int)(clut & 0x3F) * 16, (int)(clut >> 6) & 0x1FF,
+                                     0, 0, 0, 0, 0, 0, 1023, 511);
+    }
+    x += 8;
+  }
+}
+} // namespace
+
 void HudGaugeEmitter::registerOverrides(Game*) {
   extern void gen_func_8004FD30(Core*);
   extern void gen_func_8004FB4C(Core*);
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
   engine_set_override_main(0x8004FD30u, &HudGaugeEmitter::emitFrame, gen_func_8004FD30);
   engine_set_override_main(0x8004FB4Cu, &HudGaugeEmitter::emitItem,  gen_func_8004FB4C);
+  engine_set_override_main(0x8004EB94u, gaugeTextRowTap,             gen_func_8004EB94);
 }
