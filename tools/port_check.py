@@ -50,7 +50,12 @@ METHOD_DEF_RE = re.compile(r'^[\w:\*&<>,\s]+?\b(\w+)::(\w+)\s*\([^;{]*\)\s*(?:co
 
 GUEST_CALL_RE = re.compile(r'\bguest_call\(\s*c\s*,\s*0x([0-9A-Fa-f]+)u?\s*,\s*(\w+)\s*\)')
 GUEST_DISPATCH_RE = re.compile(r'\bguest_dispatch\(\s*c\s*,\s*0x([0-9A-Fa-f]+)u?\s*,\s*([^)]+)\)')
-GUESTFRAME_RE = re.compile(r'\bGuestFrame<\s*(\d+)\s*,')
+# Capture BOTH template args: <FrameSize, NumSpills>. FrameSize drives the frame open/close; NumSpills
+# is the count of callee-save register spills the ctor performs as `c->mem_w32` stores (guest_abi.h
+# GuestFrame ctor: `for i in NumSpills: c->mem_w32(sp+off, r[reg])`) — those N word stores must be
+# synthesized on the native side or the store-width sequence under-counts by exactly N vs the oracle
+# gen body, whose prologue spills them inline. Every in-tree GuestFrame<> uses two integer literals.
+GUESTFRAME_RE = re.compile(r'\bGuestFrame<\s*(\d+)\s*,\s*(\d+)\s*>')
 
 
 MAX_MARKER_TO_DEF_GAP = 60  # lines — banner comment blocks can be long; cap so a malformed/stray
@@ -254,8 +259,14 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None):
     for stmt in substmts:
         for gf in GUESTFRAME_RE.finditer(stmt):
             n = int(gf.group(1))
+            num_spills = int(gf.group(2))
             frame_opens.append(n)
             frame_closes.append(n)
+            # The ctor spills NumSpills callee-save registers as word (32-bit) stores right after the
+            # sp descent (guest_abi.h GuestFrame ctor), matching the oracle gen prologue's inline
+            # `sw ra/s0.../` spills. Synthesize them here at the declaration point (the prologue), so
+            # the native store-width sequence includes them — otherwise it under-counts by NumSpills.
+            widths.extend([32] * num_spills)
         # Accept both native's `-=`/`+=` idiom and the raw gen dialect's
         # `c->r[29] = c->r[29] + (uint32_t)-N;` (abi_extract's FRAME_CLOSE_RE additionally requires a
         # trailing `return;` on the SAME statement, which a port_gen-emitted method has verbatim but
