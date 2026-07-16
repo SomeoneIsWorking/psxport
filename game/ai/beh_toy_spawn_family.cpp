@@ -33,6 +33,7 @@
 
 #include "core.h"
 #include "game.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include <cstdint>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
@@ -221,43 +222,18 @@ extern void ov_a00_gen_8012763C(Core*);
 extern void ov_a00_gen_80127510(Core*);
 
 namespace {
-void ov_behArmCountdown80127420(Core* c) {
-  if (c->game->psx_fallback) { ov_a00_gen_80127420(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80127420u);
-  c->r[2] = beh_arm_countdown_if_linked_ready_80127420(c, c->r[4]);
-}
-void ov_behDistanceBand801274bc(Core* c) {
-  if (c->game->psx_fallback) { ov_a00_gen_801274BC(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x801274BCu);
-  c->r[2] = (uint32_t)beh_distance_band_predicate_801274bc(c, c->r[4]);
-}
-void ov_behSpawnToyType5_80127720(Core* c) {
-  if (c->game->psx_fallback) { ov_a00_gen_80127720(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80127720u);
-  c->r[2] = beh_spawn_toy_child_type5_80127720(c, c->r[4]);
-}
-void ov_behSpawnToyType4_8012763c(Core* c) {
-  if (c->game->psx_fallback) { ov_a00_gen_8012763C(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8012763Cu);
-  c->r[2] = beh_spawn_toy_child_type4_8012763c(c, c->r[4]);
-}
-void ov_behSpawnToyType2_80127510(Core* c) {
-  if (c->game->psx_fallback) { ov_a00_gen_80127510(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80127510u);
-  c->r[2] = beh_spawn_toy_child_type2_80127510(c, c->r[4], c->r[5]);
-}
+void ov_behArmCountdown80127420(Core* c)  { c->r[2] = beh_arm_countdown_if_linked_ready_80127420(c, c->r[4]); }
+void ov_behDistanceBand801274bc(Core* c)  { c->r[2] = (uint32_t)beh_distance_band_predicate_801274bc(c, c->r[4]); }
+void ov_behSpawnToyType5_80127720(Core* c){ c->r[2] = beh_spawn_toy_child_type5_80127720(c, c->r[4]); }
+void ov_behSpawnToyType4_8012763c(Core* c){ c->r[2] = beh_spawn_toy_child_type4_8012763c(c, c->r[4]); }
+void ov_behSpawnToyType2_80127510(Core* c){ c->r[2] = beh_spawn_toy_child_type2_80127510(c, c->r[4], c->r[5]); }
 }  // namespace
 
-void RegisterBehToySpawnFamilyOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80127420u, "beh_arm_countdown_if_linked_ready", ov_behArmCountdown80127420);
-  ov_a00_set_override(0x80127420u, ov_behArmCountdown80127420);
-  ov.register_(0x801274BCu, "beh_distance_band_predicate",       ov_behDistanceBand801274bc);
-  ov_a00_set_override(0x801274BCu, ov_behDistanceBand801274bc);
-  ov.register_(0x80127720u, "beh_spawn_toy_child_type5",         ov_behSpawnToyType5_80127720);
-  ov_a00_set_override(0x80127720u, ov_behSpawnToyType5_80127720);
-  ov.register_(0x8012763Cu, "beh_spawn_toy_child_type4",         ov_behSpawnToyType4_8012763c);
-  ov_a00_set_override(0x8012763Cu, ov_behSpawnToyType4_8012763c);
-  ov.register_(0x80127510u, "beh_spawn_toy_child_type2",         ov_behSpawnToyType2_80127510);
-  ov_a00_set_override(0x80127510u, ov_behSpawnToyType2_80127510);
+void RegisterBehToySpawnFamilyOverrides(Game* /*game*/) {
+  using overrides::install;
+  install(0x80127420u, "beh_arm_countdown_if_linked_ready", ov_behArmCountdown80127420,  ov_a00_gen_80127420, ov_a00_set_override);
+  install(0x801274BCu, "beh_distance_band_predicate",       ov_behDistanceBand801274bc,  ov_a00_gen_801274BC, ov_a00_set_override);
+  install(0x80127720u, "beh_spawn_toy_child_type5",         ov_behSpawnToyType5_80127720,ov_a00_gen_80127720, ov_a00_set_override);
+  install(0x8012763Cu, "beh_spawn_toy_child_type4",         ov_behSpawnToyType4_8012763c,ov_a00_gen_8012763C, ov_a00_set_override);
+  install(0x80127510u, "beh_spawn_toy_child_type2",         ov_behSpawnToyType2_80127510,ov_a00_gen_80127510, ov_a00_set_override);
 }

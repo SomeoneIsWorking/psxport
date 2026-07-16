@@ -17,7 +17,7 @@
 #include "core.h"
 #include "gte_math.h"     // Math::rotmat, Math::matMul (static)
 #include "game.h"
-#include "engine_overrides.h"   // class EngineOverrides — global dispatch table
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "render.h"             // full Render definition — c->mRender->mNodeXform
 #include "actor_tomba.h"        // ActorTomba::G_ADDR — buildFromChild's parent-table base (UNWIRED draft)
 #include "guest_abi.h"          // GuestFrame/GuestReg/guest_fn — ABI vocabulary (2026-07-14 readability pass)
@@ -517,17 +517,6 @@ static void eov_buildAxis(Core* c) {
   c->mRender->mNodeXform.buildAxis(c->r[4]);
 }
 
-// psx_fallback-gated trampolines for shard_set_override (core B must stay pure substrate).
-static void gov_seedBlock(Core* c) {
-  if (c->game->psx_fallback) { gen_func_800517BC(c); return; } eov_seedBlock(c);
-}
-static void gov_propagateRotmat(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80051300(c); return; } eov_propagateRotmat(c);
-}
-static void gov_propagateAxis(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80051464(c); return; } eov_propagateAxis(c);
-}
-
 // --- WIDE-RE DRAFT wiring (2026-07-08 frontier pass) --- copyMatrixBlock / buildFromChild /
 // worldPosFromLocal / worldPosFromComposed. copyMatrixBlock (0x80051B34) and buildFromChild
 // (0x80051614) have direct same-module callers (confirmed via generated/shard_6.c, shard_5.c,
@@ -550,15 +539,6 @@ static void eov_worldPosFromLocal(Core* c) {
 static void eov_worldPosFromComposed(Core* c) {
   c->mRender->mNodeXform.worldPosFromComposed(c->r[4], c->r[5], c->r[6]);
 }
-static void gov_copyMatrixBlock(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80051B34(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80051B34u); eov_copyMatrixBlock(c);
-}
-static void gov_buildFromChild(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80051614(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80051614u); eov_buildFromChild(c);
-}
-
 // buildWithOffset (0x800518FC) — the object matrix-compose-with-offset (svec scale + rotmat + matMul +
 // applyMatrixLV + world-pos accumulate + propagate). Dual-wired: 8 direct substrate func_800518FC(c)
 // call sites across the shards + many rec_dispatch/guest_leaf AI callers were ALL falling through to the
@@ -571,29 +551,23 @@ extern void gen_func_800518FC(Core*);
 static void eov_buildWithOffset(Core* c) {
   c->mRender->mNodeXform.buildWithOffset(c->r[4]);
 }
-static void gov_buildWithOffset(Core* c) {
-  if (c->game->psx_fallback) { gen_func_800518FC(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x800518FCu); eov_buildWithOffset(c);
-}
 
-void NodeXform::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x800517BCu, "NodeXform::seedBlock",        eov_seedBlock);
-  ov.register_(0x80051300u, "NodeXform::propagateRotmat",  eov_propagateRotmat);
-  ov.register_(0x80051464u, "NodeXform::propagateAxis",    eov_propagateAxis);
-  ov.register_(0x80051C8Cu, "NodeXform::buildAxis",        eov_buildAxis);
-  ov.register_(0x80051B34u, "NodeXform::copyMatrixBlock",  eov_copyMatrixBlock);
-  ov.register_(0x80051614u, "NodeXform::buildFromChild",   eov_buildFromChild);
-  ov.register_(0x80051D90u, "NodeXform::worldPosFromLocal",    eov_worldPosFromLocal);
-  ov.register_(0x80051D20u, "NodeXform::worldPosFromComposed", eov_worldPosFromComposed);
-  ov.register_(0x800518FCu, "NodeXform::buildWithOffset",      eov_buildWithOffset);
+extern void gen_func_80051C8C(Core*);   // buildAxis — rec_dispatch-only (no direct caller)
+extern void gen_func_80051D90(Core*);   // worldPosFromLocal — rec_dispatch-only
+extern void gen_func_80051D20(Core*);   // worldPosFromComposed — rec_dispatch-only
 
-  shard_set_override(0x800517BCu, gov_seedBlock);
-  shard_set_override(0x80051300u, gov_propagateRotmat);
-  shard_set_override(0x80051464u, gov_propagateAxis);
-  shard_set_override(0x80051B34u, gov_copyMatrixBlock);
-  shard_set_override(0x80051614u, gov_buildFromChild);
-  shard_set_override(0x800518FCu, gov_buildWithOffset);
-  // 0x80051C8C / 0x80051D90 / 0x80051D20 have no direct same-module (func_<addr>(c)) caller — every
-  // reference is rec_dispatch(c, addr) from an overlay, so EngineOverrides alone covers them.
+void NodeXform::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  // Dual-wired (direct same-module func_<addr>(c) callers exist) -> shard_set_override installs the thunk.
+  install(0x800517BCu, "NodeXform::seedBlock",       eov_seedBlock,       gen_func_800517BC, shard_set_override);
+  install(0x80051300u, "NodeXform::propagateRotmat", eov_propagateRotmat, gen_func_80051300, shard_set_override);
+  install(0x80051464u, "NodeXform::propagateAxis",   eov_propagateAxis,   gen_func_80051464, shard_set_override);
+  install(0x80051B34u, "NodeXform::copyMatrixBlock", eov_copyMatrixBlock, gen_func_80051B34, shard_set_override);
+  install(0x80051614u, "NodeXform::buildFromChild",  eov_buildFromChild,  gen_func_80051614, shard_set_override);
+  install(0x800518FCu, "NodeXform::buildWithOffset", eov_buildWithOffset, gen_func_800518FC, shard_set_override);
+  // 0x80051C8C / 0x80051D90 / 0x80051D20 have no direct same-module caller — every reference is
+  // rec_dispatch(c, addr) from an overlay, so no thunk (setter omitted); rec_dispatch covers them.
+  install(0x80051C8Cu, "NodeXform::buildAxis",            eov_buildAxis,            gen_func_80051C8C);
+  install(0x80051D90u, "NodeXform::worldPosFromLocal",    eov_worldPosFromLocal,    gen_func_80051D90);
+  install(0x80051D20u, "NodeXform::worldPosFromComposed", eov_worldPosFromComposed, gen_func_80051D20);
 }

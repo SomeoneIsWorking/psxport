@@ -20,6 +20,7 @@
 // EngineOverrides intercepts it regardless of which object stamped the pointer.
 #include "core.h"
 #include "game.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "beh_actor_tomba_proximity_combat.h"
 #include "guest_abi.h"   // GuestFrameSpill — named spill-table vocabulary only, see below
 void rec_dispatch(Core*, uint32_t);
@@ -545,16 +546,9 @@ L_80053060:;
 // game/player/actor_tomba.cpp's registerOverrides() comment: "no substrate shard calls this address
 // directly."
 // ---------------------------------------------------------------------------------------------
-extern void gen_func_800527C8(Core*);  // substrate body — kept alive for psx_fallback (core B)
+extern void gen_func_800527C8(Core*);  // substrate body — the oracle/substrate leg
 
-namespace {
-void ov_behActorTombaProximityCombat(Core* c) {
-  if (c->game->psx_fallback) { gen_func_800527C8(c); return; }
-  beh_actor_tomba_proximity_combat(c);
-}
-}  // namespace
-
-void RegisterBehActorTombaProximityCombatOverride(Game* game) {
-  game->engine_overrides.register_(0x800527C8u, "beh_actor_tomba_proximity_combat",
-                                    ov_behActorTombaProximityCombat);
+void RegisterBehActorTombaProximityCombatOverride(Game* /*game*/) {
+  overrides::install(0x800527C8u, "beh_actor_tomba_proximity_combat",
+                     beh_actor_tomba_proximity_combat, gen_func_800527C8);
 }

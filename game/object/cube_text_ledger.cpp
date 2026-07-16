@@ -3,7 +3,7 @@
 // deliberately left unwired).
 #include "core.h"
 #include "cube_text_ledger.h"
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "core/engine.h"
 #include "game.h"
 #include <cstdint>
@@ -103,16 +103,8 @@ void CubeTextLedger::spawnPopup(Core* c) {
 extern void gen_func_80040C00(Core*);
 extern void gen_func_80040AA4(Core*);
 
-namespace {
-void ov_deactivateSlot(Core* c) { if (c->game->psx_fallback) { gen_func_80040C00(c); return; } CubeTextLedger::deactivateSlot(c); }
-void ov_spawnPopup(Core* c)     { if (c->game->psx_fallback) { gen_func_80040AA4(c); return; } CubeTextLedger::spawnPopup(c); }
-}  // namespace
-
-void CubeTextLedger::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80040C00u, "CubeTextLedger::deactivateSlot", CubeTextLedger::deactivateSlot);
-  ov.register_(0x80040AA4u, "CubeTextLedger::spawnPopup",     CubeTextLedger::spawnPopup);
-
-  shard_set_override(0x80040C00u, ov_deactivateSlot);
-  shard_set_override(0x80040AA4u, ov_spawnPopup);
+void CubeTextLedger::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  install(0x80040C00u, "CubeTextLedger::deactivateSlot", CubeTextLedger::deactivateSlot, gen_func_80040C00, shard_set_override);
+  install(0x80040AA4u, "CubeTextLedger::spawnPopup",     CubeTextLedger::spawnPopup,     gen_func_80040AA4, shard_set_override);
 }

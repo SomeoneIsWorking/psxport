@@ -16,7 +16,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "core/engine.h"
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "game.h"
 #include "guest_abi.h"    // GuestFrame/GuestReg/guest_fn — frameTick + the outer-transition cluster
 void rec_dispatch(Core*, uint32_t);
@@ -934,17 +934,21 @@ void ActorTomba::gov_actionHandler800531DC(Core* c) { c->engine.actorTomba.actio
 void ActorTomba::gov_actionHandler800660AC(Core* c) { c->engine.actorTomba.actionHandler800660AC(); }
 void ActorTomba::gov_actionHandler8005EF48(Core* c) { c->engine.actorTomba.actionHandler8005EF48(); }
 
-void ActorTomba::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80020364u, "ActorTomba::stepModeInteract",     ov_stepModeInteract);
-  ov.register_(0x800205CCu, "ActorTomba::type8Interact",        ov_type8Interact);
-  ov.register_(0x800235A0u, "ActorTomba::type7Interact",        ov_type7Interact);
-  ov.register_(0x80022C78u, "ActorTomba::growthYSnap",          ov_growthYSnap);
-  ov.register_(0x8005950Cu, "ActorTomba::frameTick",            ov_frameTick);
-  ov.register_(0x80055C9Cu, "ActorTomba::turnBiasCompute",      ov_turnBiasCompute);
-  ov.register_(0x80053E50u, "ActorTomba::outerTransitionGate",  ov_outerTransitionGate);
-  ov.register_(0x80053FDCu, "ActorTomba::outerTransitionCommit",ov_outerTransitionCommit);
-  ov.register_(0x80045580u, "ActorTomba::assetReady",           ov_assetReady);
+void ActorTomba::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  extern void gen_func_80020364(Core*);
+  extern void gen_func_800205CC(Core*);
+  extern void gen_func_800235A0(Core*);
+  extern void gen_func_80022C78(Core*);
+  extern void gen_func_8005950C(Core*);
+  // rec_dispatch-only postInteractWalk sub-handlers + frameTick (no direct same-module caller ->
+  // setter omitted). turnBiasCompute/outerTransitionGate/outerTransitionCommit/assetReady are
+  // dual-wired via engine_set_override_main below (direct callers exist).
+  install(0x80020364u, "ActorTomba::stepModeInteract", ov_stepModeInteract, gen_func_80020364);
+  install(0x800205CCu, "ActorTomba::type8Interact",    ov_type8Interact,    gen_func_800205CC);
+  install(0x800235A0u, "ActorTomba::type7Interact",    ov_type7Interact,    gen_func_800235A0);
+  install(0x80022C78u, "ActorTomba::growthYSnap",      ov_growthYSnap,      gen_func_80022C78);
+  install(0x8005950Cu, "ActorTomba::frameTick",        ov_frameTick,        gen_func_8005950C);
 
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
   extern void gen_func_80055C9C(Core*);

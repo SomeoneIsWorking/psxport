@@ -84,22 +84,6 @@ int32_t Trig::rcos(int32_t angle) const {
 
 // ── Override wiring (phase-3 fallthrough native-ize, 2026-07-15) ────────────────────────────────────
 #include "game.h"
-#include "engine_overrides.h"
-extern void shard_set_override(uint32_t, void (*)(Core*));
-extern void gen_func_80083E80(Core*);
-extern void gen_func_80085690(Core*);
-namespace {
-void ov_trigRsin(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80083E80(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80083E80u);
-  c->r[2] = (uint32_t)c->trig.rsin((int32_t)c->r[4]);
-}
-void ov_trigRatan2(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80085690(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80085690u);
-  c->r[2] = (uint32_t)c->trig.ratan2((int32_t)c->r[4], (int32_t)c->r[5]);
-}
-}  // namespace
 
 // UNREGISTERED (2026-07-15): rsin/ratan2 are NOT safe as overrides. Their substrate bodies
 // (gen_func_80083E80 / 80085690) descend a guest STACK FRAME (rsin: sp-=24, spill ra@+16, then call
@@ -111,7 +95,4 @@ void ov_trigRatan2(Core* c) {
 // chain (its own + func_80083EBC's), defeating the point. So the overrides stay OFF: dispatch/substrate
 // callers keep running substrate (correct), and the Trig methods remain for DIRECT callers (which run
 // native on both SBS cores → no split). Do NOT re-register without full guest-stack-frame mirroring.
-// (void the thunks so they don't warn-unused; kept for a future frame-mirrored wiring.)
-void Trig::registerOverrides(Game* /*game*/) {
-  (void)&ov_trigRsin; (void)&ov_trigRatan2;
-}
+void Trig::registerOverrides(Game* /*game*/) {}

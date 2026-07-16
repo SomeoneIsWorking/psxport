@@ -10,6 +10,7 @@
 #include "cfg.h"
 #include "render.h"   // c->mRender->margin (widescreen margin collect)
 #include "cull.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -594,18 +595,12 @@ extern void gen_func_800779D0(Core*);
 extern void gen_func_80077A4C(Core*);
 extern void gen_func_800778E4(Core*);
 
-static void gov_cullWrapper(Core* c)             { if (c->game->psx_fallback) { gen_func_8007778C(c); return; } eov_cullWrapper(c); }
-static void gov_cullWrapperFlag2(Core* c)        { if (c->game->psx_fallback) { gen_func_800777FC(c); return; } eov_cullWrapperFlag2(c); }
-static void gov_cullWrap77acc(Core* c)           { if (c->game->psx_fallback) { gen_func_80077ACC(c); return; } eov_cullWrap77acc(c); }
-static void gov_cullWrapperOffset(Core* c)       { if (c->game->psx_fallback) { gen_func_800779D0(c); return; } eov_cullWrapperOffset(c); }
-static void gov_cullWrapperOffsetFlag1(Core* c)  { if (c->game->psx_fallback) { gen_func_80077A4C(c); return; } eov_cullWrapperOffsetFlag1(c); }
-static void gov_cullWrapperOffsetY(Core* c)      { if (c->game->psx_fallback) { gen_func_800778E4(c); return; } eov_cullWrapperOffsetY(c); }
-
 void Cull::registerOverrides() {
-  shard_set_override(0x8007778Cu, gov_cullWrapper);
-  shard_set_override(0x800777FCu, gov_cullWrapperFlag2);
-  shard_set_override(0x80077ACCu, gov_cullWrap77acc);
-  shard_set_override(0x800779D0u, gov_cullWrapperOffset);
-  shard_set_override(0x80077A4Cu, gov_cullWrapperOffsetFlag1);
-  shard_set_override(0x800778E4u, gov_cullWrapperOffsetY);
+  using overrides::install;
+  install(0x8007778Cu, "Cull::cullWrapper",            eov_cullWrapper,            gen_func_8007778C, shard_set_override);
+  install(0x800777FCu, "Cull::cullWrapperFlag2",       eov_cullWrapperFlag2,       gen_func_800777FC, shard_set_override);
+  install(0x80077ACCu, "Cull::cullWrap77acc",          eov_cullWrap77acc,          gen_func_80077ACC, shard_set_override);
+  install(0x800779D0u, "Cull::cullWrapperOffset",      eov_cullWrapperOffset,      gen_func_800779D0, shard_set_override);
+  install(0x80077A4Cu, "Cull::cullWrapperOffsetFlag1", eov_cullWrapperOffsetFlag1, gen_func_80077A4C, shard_set_override);
+  install(0x800778E4u, "Cull::cullWrapperOffsetY",     eov_cullWrapperOffsetY,     gen_func_800778E4, shard_set_override);
 }

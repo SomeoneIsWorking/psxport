@@ -9,7 +9,7 @@
 #include "scene/scene_events.h"
 #include "core/engine.h"
 #include "game.h"              // c->game->verify — the shared A/B verify scaffold
-#include "engine_overrides.h"  // EngineOverrides::register_ (FUN_80040B48 override wiring)
+#include "override_registry.h"   // overrides::install — the one native-override registry
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -96,17 +96,8 @@ void SceneEvents::armOverride(Core* c) { c->r[2] = armBody(c); }
 
 extern void gen_func_80040B48(Core*);
 extern void shard_set_override(uint32_t, void (*)(Core*));
-namespace {
-// psx_fallback-gated so SBS core B (the pure reference) keeps running the exact recompiled body —
-// g_override[] is a single table shared by every Core/Game (same pattern the deduped cube_text_ledger
-// entries follow for FUN_80040C00/80040AA4).
-void ov_sceneEventArm(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80040B48(c); return; }
-  SceneEvents::armOverride(c);
-}
-}  // namespace
 
-void SceneEvents::registerOverrides(Game* game) {
-  game->engine_overrides.register_(0x80040B48u, "SceneEvents::armBody", SceneEvents::armOverride);
-  shard_set_override(0x80040B48u, ov_sceneEventArm);
+void SceneEvents::registerOverrides(Game* /*game*/) {
+  overrides::install(0x80040B48u, "SceneEvents::armBody",
+                     SceneEvents::armOverride, gen_func_80040B48, shard_set_override);
 }

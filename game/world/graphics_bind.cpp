@@ -7,7 +7,7 @@
 #include "graphics_bind.h"
 #include "game.h"              // c->game->verify — the shared A/B verify scaffold
 #include "gte_math.h"       // Math::rotmat — libgte RotMatrix (native, static)
-#include "engine_overrides.h"  // class EngineOverrides — global dispatch table (recordArrayInit wiring)
+#include "override_registry.h"   // overrides::install — the one native-override registry
 
 // Forward native scene-data record the decoupled native renderer will consume (geometry + float
 // transform + texture). Populated in a later pass; the object subsystem will fill one of these per
@@ -312,14 +312,9 @@ namespace {
 void eov_recordArrayInit(Core* c) {
   c->r[2] = c->engine.graphicsBind.recordArrayInit(c->r[4], c->r[5], c->r[6], c->r[7]);
 }
-void gov_recordArrayInit(Core* c) {
-  if (c->game->psx_fallback) { gen_func_800519E0(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x800519E0u); eov_recordArrayInit(c);
-}
 }  // namespace
 
-void GraphicsBind::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x800519E0u, "GraphicsBind::recordArrayInit", eov_recordArrayInit);
-  shard_set_override(0x800519E0u, gov_recordArrayInit);
+void GraphicsBind::registerOverrides(Game* /*game*/) {
+  overrides::install(0x800519E0u, "GraphicsBind::recordArrayInit",
+                     eov_recordArrayInit, gen_func_800519E0, shard_set_override);
 }

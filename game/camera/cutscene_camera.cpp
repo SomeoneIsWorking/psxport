@@ -7,7 +7,7 @@
 #include "cutscene_camera.h"
 #include "cfg.h"
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold (camverify)
-#include "engine_overrides.h"   // class EngineOverrides — global dispatch table
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "mtx.h"
 #include "trig.h"
 #include <stdint.h>
@@ -1099,25 +1099,20 @@ static void eov_orbitTick(Core* c) {
   CutsceneCamera(c, CutsceneCamera::CAM_OBJ).orbitTick();
 }
 
-// psx_fallback-gated trampoline for shard_set_override (core B must stay pure substrate). Must
-// call traceHit() itself — the recompiler's OWN g_override[] path never goes through
-// EngineOverrides::run(), so it would otherwise be invisible to the ovhit/dispatch channels (same
-// gap documented in engine_overrides.h / game/core/pc_scheduler.cpp).
-static void gov_pushMode(Core* c) {
-  if (c->game->psx_fallback) { gen_func_8006E1C0(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8006E1C0u);
-  eov_pushMode(c);
-}
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_8006E8F8(Core*);
+extern void gen_func_8006E1E4(Core*);
+extern void gen_func_8006EA00(Core*);
+extern void gen_func_8006EF38(Core*);
 
-void CutsceneCamera::registerOverrides(Game* game) {
-  extern void shard_set_override(uint32_t, void (*)(Core*));
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x8006E8F8u, "CutsceneCamera::resetFollowAccum",       eov_resetFollowAccum);
-  ov.register_(0x8006E1C0u, "CutsceneCamera::pushMode",               eov_pushMode);
-  ov.register_(0x8006E1E4u, "CutsceneCamera::restoreMode",            eov_restoreMode);
-  ov.register_(0x8006EA00u, "CutsceneCamera::snapToMasterOffsetY200", eov_snapToMasterOffsetY200);
-  ov.register_(0x8006EF38u, "CutsceneCamera::orbitTick",              eov_orbitTick);
-
-  shard_set_override(0x8006E1C0u, gov_pushMode);
+void CutsceneCamera::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  // pushMode (0x8006E1C0) has direct same-module callers -> shard_set_override installs the thunk;
+  // the other four are rec_dispatch-only (setter omitted).
+  install(0x8006E1C0u, "CutsceneCamera::pushMode",               eov_pushMode,               gen_func_8006E1C0, shard_set_override);
+  install(0x8006E8F8u, "CutsceneCamera::resetFollowAccum",       eov_resetFollowAccum,       gen_func_8006E8F8);
+  install(0x8006E1E4u, "CutsceneCamera::restoreMode",            eov_restoreMode,            gen_func_8006E1E4);
+  install(0x8006EA00u, "CutsceneCamera::snapToMasterOffsetY200", eov_snapToMasterOffsetY200, gen_func_8006EA00);
+  install(0x8006EF38u, "CutsceneCamera::orbitTick",              eov_orbitTick,              gen_func_8006EF38);
 }
 

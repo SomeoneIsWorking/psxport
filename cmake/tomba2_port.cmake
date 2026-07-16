@@ -267,8 +267,7 @@ set(PORT_SRC
   game/audio/native_music.cpp
   game/audio/music_list.cpp
   runtime/recomp/sync_overrides.cpp
-  runtime/recomp/engine_overrides.cpp
-  runtime/recomp/engine_override_thunk.cpp
+  runtime/recomp/override_registry.cpp
   game/render/pkt_span.cpp
   game/render/ot_attr.cpp
   game/render/render_observer.cpp

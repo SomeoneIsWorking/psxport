@@ -24,7 +24,7 @@
 #include "world/graphics_bind.h"  // GraphicsBind::setGeom (FUN_80077B38)
 #include "audio/sfx.h"        // Sfx::trigger (FUN_80074590)
 #include "math/rng.h"         // Rng::next (FUN_8009A450)
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include <cstdint>
 
 extern "C" void rec_dispatch(Core*, uint32_t);
@@ -443,12 +443,19 @@ static void eov_arcSwoopMotion(Core* c)   { c->engine.releaseTriggerMotion.arcSw
 static void eov_doubleArcMotion(Core* c)  { c->engine.releaseTriggerMotion.doubleArcMotion(c->r[4]); }
 static void eov_circleOrbitMotion(Core* c){ c->engine.releaseTriggerMotion.circleOrbitMotion(c->r[4]); }
 
+extern void ov_a00_gen_80123E9C(Core*);
+extern void ov_a00_gen_801241BC(Core*);
+extern void ov_a00_gen_801244E8(Core*);
+extern void ov_a00_gen_801246B4(Core*);
+extern void ov_a00_gen_801249D4(Core*);
+extern void ov_a00_gen_80124C6C(Core*);
+
 void ReleaseTriggerMotion::registerOverrides() {
-  EngineOverrides& ov = core->game->engine_overrides;
-  ov.register_(0x80123E9Cu, "ReleaseTriggerMotion::hoverBobCycle",    eov_hoverBobCycle);
-  ov.register_(0x801241BCu, "ReleaseTriggerMotion::leaderFollowSync", eov_leaderFollowSync);
-  ov.register_(0x801244E8u, "ReleaseTriggerMotion::driftReposition",  eov_driftReposition);
-  ov.register_(0x801246B4u, "ReleaseTriggerMotion::arcSwoopMotion",   eov_arcSwoopMotion);
-  ov.register_(0x801249D4u, "ReleaseTriggerMotion::doubleArcMotion",  eov_doubleArcMotion);
-  ov.register_(0x80124C6Cu, "ReleaseTriggerMotion::circleOrbitMotion",eov_circleOrbitMotion);
+  using overrides::install;   // rec_dispatch-only (A00 overlay leaves) — setter omitted
+  install(0x80123E9Cu, "ReleaseTriggerMotion::hoverBobCycle",    eov_hoverBobCycle,     ov_a00_gen_80123E9C);
+  install(0x801241BCu, "ReleaseTriggerMotion::leaderFollowSync", eov_leaderFollowSync,  ov_a00_gen_801241BC);
+  install(0x801244E8u, "ReleaseTriggerMotion::driftReposition",  eov_driftReposition,   ov_a00_gen_801244E8);
+  install(0x801246B4u, "ReleaseTriggerMotion::arcSwoopMotion",   eov_arcSwoopMotion,    ov_a00_gen_801246B4);
+  install(0x801249D4u, "ReleaseTriggerMotion::doubleArcMotion",  eov_doubleArcMotion,   ov_a00_gen_801249D4);
+  install(0x80124C6Cu, "ReleaseTriggerMotion::circleOrbitMotion",eov_circleOrbitMotion, ov_a00_gen_80124C6C);
 }

@@ -26,7 +26,8 @@
 
 #include "core.h"
 #include "cfg.h"
-#include "game.h"                  // Game::engine_overrides
+#include "game.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "core/engine.h"          // c->engine.spawn / c->engine.placement / c->engine.script
 #include "render/render.h"        // c->mRender->mNodeXform.buildWithOffset (FUN_800518FC)
 #include "spawn.h"                 // Spawn::dispatch/despawn (native)
@@ -590,65 +591,29 @@ extern void ov_sop_set_override(uint32_t, void (*)(Core*));
 
 namespace {
 void ov_sopBeatAdvanceWalk(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010AF60(c); return; }
   // op-0x3E fnptr callee: ScriptInterp::callFnptr consumes v0 as the script pause/advance code —
   // the wrapper MUST publish the return in r[2] like the gen tail does (0 running / 1 done).
   c->r[2] = sopBeatAdvanceWalk(c);
 }
-void ov_sopBeatAdvanceNarration(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010B078(c); return; }
-  c->r[2] = sopBeatAdvanceNarration(c);
-}
-void ov_sopOrbitPathStep(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010B11C(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8010B11Cu);
-  c->r[2] = sopOrbitPathStep(c);
-}
-void ov_sopIntroEffectTick(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010B2D4(c); return; }
-  sopIntroEffectTick(c);
-}
-void ov_sopIntroEffectSpawn(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010B44C(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8010B44Cu);
-  c->r[2] = sopIntroEffectSpawn(c);
-}
-// ov_sopLiftedSubtick: kept compiled (not dead code — a future pass wires it once the
-// ScriptInterp::step finding below is fixed) but INTENTIONALLY not passed to register_()/
-// ov_sop_set_override in RegisterSopIntroEventOverrides. See the finding note there.
-void ov_sopLiftedSubtick(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010B588(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8010B588u);
-  sopLiftedSubtick(c);
-}
-void ov_behOrbitSparkEffect(Core* c) {
-  if (c->game->psx_fallback) { ov_sop_gen_8010BEAC(c); return; }
-  beh_orbit_spark_effect(c);
-}
+void ov_sopBeatAdvanceNarration(Core* c) { c->r[2] = sopBeatAdvanceNarration(c); }
+void ov_sopOrbitPathStep(Core* c)        { c->r[2] = sopOrbitPathStep(c); }
+void ov_sopIntroEffectTick(Core* c)      { sopIntroEffectTick(c); }
+void ov_sopIntroEffectSpawn(Core* c)     { c->r[2] = sopIntroEffectSpawn(c); }
+void ov_sopLiftedSubtick(Core* c)        { sopLiftedSubtick(c); }
+void ov_behOrbitSparkEffect(Core* c)     { beh_orbit_spark_effect(c); }
 }  // namespace
 
-void RegisterSopIntroEventOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
+void RegisterSopIntroEventOverrides(Game* /*game*/) {
+  using overrides::install;
   // Reached only via rec_dispatch (animation-event fn-ptr table / node+0x1C dispatch) — no direct
-  // intra-shard call site found, so register_() alone is sufficient.
-  ov.register_(0x8010AF60u, "sopBeatAdvanceWalk",       ov_sopBeatAdvanceWalk);
-  ov.register_(0x8010B078u, "sopBeatAdvanceNarration",  ov_sopBeatAdvanceNarration);
-  ov.register_(0x8010B2D4u, "sopIntroEffectTick",       ov_sopIntroEffectTick);
-  ov.register_(0x8010BEACu, "beh_orbit_spark_effect",   ov_behOrbitSparkEffect);
-  // Direct intra-shard call sites (ov_sop_func_XXXX(c), bypassing rec_dispatch) — need the dual wire.
-  ov.register_(0x8010B11Cu, "sopOrbitPathStep",         ov_sopOrbitPathStep);
-  ov_sop_set_override(0x8010B11Cu, ov_sopOrbitPathStep);
-  ov.register_(0x8010B44Cu, "sopIntroEffectSpawn",      ov_sopIntroEffectSpawn);
-  ov_sop_set_override(0x8010B44Cu, ov_sopIntroEffectSpawn);
-  // sopLiftedSubtick (0x8010B588) — WIRED (2026-07-10, frontier convergence pass). Was deliberately
-  // left unregistered because wiring it exposed a pre-existing ScriptInterp::step divergence at
-  // obj+0x71 (docs/findings/scene.md "ScriptInterp opcode cluster" / ai.md cross-ref): the RET_PAUSE
-  // handler ORed the wrong mask (0x02 instead of the ground-truth 0x01, re-derived from
-  // generated/shard_3.c:11302 gen_func_80041098's own delay-slot chain) — fixed in
-  // game/scene/script_interp.cpp. sopLiftedSubtick itself was already byte-exact; only the
-  // registration was gated on the ScriptInterp fix. beh_sop_intro_lifted.cpp's overlay_subtick stays
-  // on rec_dispatch(c, 0x8010B588u) — now transparently routed native since rec_dispatch consults
-  // EngineOverrides before falling to the substrate body.
-  ov.register_(0x8010B588u, "sopLiftedSubtick",         ov_sopLiftedSubtick);
-  ov_sop_set_override(0x8010B588u, ov_sopLiftedSubtick);
+  // intra-shard call site, so setter omitted.
+  install(0x8010AF60u, "sopBeatAdvanceWalk",      ov_sopBeatAdvanceWalk,      ov_sop_gen_8010AF60);
+  install(0x8010B078u, "sopBeatAdvanceNarration", ov_sopBeatAdvanceNarration, ov_sop_gen_8010B078);
+  install(0x8010B2D4u, "sopIntroEffectTick",      ov_sopIntroEffectTick,      ov_sop_gen_8010B2D4);
+  install(0x8010BEACu, "beh_orbit_spark_effect",  ov_behOrbitSparkEffect,     ov_sop_gen_8010BEAC);
+  // Direct intra-shard call sites (ov_sop_func_XXXX(c), bypass rec_dispatch) -> ov_sop_set_override
+  // installs the thunk so those callers reach native too.
+  install(0x8010B11Cu, "sopOrbitPathStep",        ov_sopOrbitPathStep,        ov_sop_gen_8010B11C, ov_sop_set_override);
+  install(0x8010B44Cu, "sopIntroEffectSpawn",     ov_sopIntroEffectSpawn,     ov_sop_gen_8010B44C, ov_sop_set_override);
+  install(0x8010B588u, "sopLiftedSubtick",        ov_sopLiftedSubtick,        ov_sop_gen_8010B588, ov_sop_set_override);
 }

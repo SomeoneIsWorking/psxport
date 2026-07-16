@@ -9,7 +9,7 @@
 #include "melee_proximity.h"
 #include "core.h"
 #include "game.h"
-#include "engine_overrides.h"
+#include "override_registry.h"
 #include "math/trig.h"
 
 int32_t MeleeProximity::isAtApproachAnchor(uint32_t self, uint32_t other) {  // FUN_8001F9DC — UNWIRED draft
@@ -95,18 +95,10 @@ extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8001F9DC(Core*);   // substrate body — kept alive for psx_fallback (core B)
 
 namespace {
-// psx_fallback-GATED trampoline: g_override[] is shared by every Core, so core B (the pure SBS
-// substrate reference) must keep running the exact recompiled body. traceHit() before the native
-// call keeps the dispatch/ovhit debug channels able to see this hit.
-void ov_meleeProximity(Core* c) {
-  if (c->game->psx_fallback) { gen_func_8001F9DC(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8001F9DCu);
-  c->engine.meleeProximity.isAtApproachAnchorFramed();
-}
+void ov_meleeProximity(Core* c) { c->engine.meleeProximity.isAtApproachAnchorFramed(); }
 }  // namespace
 
-void MeleeProximity::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x8001F9DCu, "MeleeProximity::isAtApproachAnchor", ov_meleeProximity);
-  shard_set_override(0x8001F9DCu, ov_meleeProximity);
+void MeleeProximity::registerOverrides(Game* /*game*/) {
+  overrides::install(0x8001F9DCu, "MeleeProximity::isAtApproachAnchor",
+                     ov_meleeProximity, gen_func_8001F9DC, shard_set_override);
 }

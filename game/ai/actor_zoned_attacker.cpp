@@ -30,7 +30,7 @@
 // convention already used throughout game/ai/ and game/object/).
 #include "core.h"
 #include "actor_zoned_attacker.h"
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "game.h"
 #include "guest_abi.h"  // GuestFrame — guest-stack frame discipline for the override trampolines
 #include "spawn.h"   // Spawn::spawnAndInit (FUN_8003116C, already native)
@@ -1192,12 +1192,19 @@ switchD_caseD_7:;
   goto switchD_caseD_2;
 }
 
-void ActorZonedAttacker::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(FN_8014047C, "ActorZonedAttacker::gateCheck",             ActorZonedAttacker::gateCheck);
-  ov.register_(0x80140544u, "ActorZonedAttacker::typeInit",              ActorZonedAttacker::typeInit);
-  ov.register_(FN_801409C0, "ActorZonedAttacker::pickAttackByRange",     ActorZonedAttacker::pickAttackByRange);
-  ov.register_(0x80143A00u, "ActorZonedAttacker::defaultSubStateMachine",ActorZonedAttacker::defaultSubStateMachine);
-  ov.register_(0x80144928u, "ActorZonedAttacker::approachAndFace",       ActorZonedAttacker::approachAndFace);
-  ov.register_(0x80144B50u, "ActorZonedAttacker::idleTick",              ActorZonedAttacker::idleTick);
+extern void ov_a00_gen_8014047C(Core*);
+extern void ov_a00_gen_80140544(Core*);
+extern void ov_a00_gen_801409C0(Core*);
+extern void ov_a00_gen_80143A00(Core*);
+extern void ov_a00_gen_80144928(Core*);
+extern void ov_a00_gen_80144B50(Core*);
+
+void ActorZonedAttacker::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  install(FN_8014047C, "ActorZonedAttacker::gateCheck",              ActorZonedAttacker::gateCheck,              ov_a00_gen_8014047C);
+  install(0x80140544u, "ActorZonedAttacker::typeInit",               ActorZonedAttacker::typeInit,               ov_a00_gen_80140544);
+  install(FN_801409C0, "ActorZonedAttacker::pickAttackByRange",      ActorZonedAttacker::pickAttackByRange,      ov_a00_gen_801409C0);
+  install(0x80143A00u, "ActorZonedAttacker::defaultSubStateMachine", ActorZonedAttacker::defaultSubStateMachine, ov_a00_gen_80143A00);
+  install(0x80144928u, "ActorZonedAttacker::approachAndFace",        ActorZonedAttacker::approachAndFace,        ov_a00_gen_80144928);
+  install(0x80144B50u, "ActorZonedAttacker::idleTick",               ActorZonedAttacker::idleTick,               ov_a00_gen_80144B50);
 }

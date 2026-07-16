@@ -47,7 +47,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "spawn.h"
-#include "game.h"       // c->game->verify — the shared A/B verify scaffold
+#include "game.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry       // c->game->verify — the shared A/B verify scaffold
 void rec_super_call(Core*, uint32_t);
 
 // Pool addresses.
@@ -514,12 +515,17 @@ static void eov_spawnChildTrigChild(Core* c) {
   c->r[16] = c->mem_r32(c->r[29] + 16);
   c->r[29] += 32;
 }
+extern void ov_a00_gen_801360F4(Core*);
+extern void ov_a00_gen_80139838(Core*);
+extern void ov_a00_gen_8013AC34(Core*);
+extern void ov_a00_gen_8013A730(Core*);
+
 void Spawn::registerTypedChildOverrides() {
-  EngineOverrides& ov = core->game->engine_overrides;
-  ov.register_(0x801360F4u, "Spawn::spawnQuadRecordChild",   eov_spawnQuadRecordChild);
-  ov.register_(0x80139838u, "Spawn::spawnSiblingAngleChild", eov_spawnSiblingAngleChild);
-  ov.register_(0x8013AC34u, "Spawn::spawnChildTrigChild",    eov_spawnChildTrigChild);
-  ov.register_(0x8013A730u, "Spawn::spawnLiftPlatformChild", eov_spawnLiftPlatformChild);
+  using overrides::install;
+  install(0x801360F4u, "Spawn::spawnQuadRecordChild",   eov_spawnQuadRecordChild,   ov_a00_gen_801360F4);
+  install(0x80139838u, "Spawn::spawnSiblingAngleChild", eov_spawnSiblingAngleChild, ov_a00_gen_80139838);
+  install(0x8013AC34u, "Spawn::spawnChildTrigChild",    eov_spawnChildTrigChild,    ov_a00_gen_8013AC34);
+  install(0x8013A730u, "Spawn::spawnLiftPlatformChild", eov_spawnLiftPlatformChild, ov_a00_gen_8013A730);
 }
 
 // FUN_8007E110 — SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4.

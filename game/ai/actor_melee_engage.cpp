@@ -18,7 +18,7 @@
 #include "actor_melee_engage.h"
 #include "core.h"
 #include "game.h"
-#include "engine_overrides.h"
+#include "override_registry.h"
 #include "math/trig.h"
 
 // Still-substrate leaves this session did not chase (see .h banner). rec_dispatch already declared
@@ -294,19 +294,10 @@ extern void ov_a00_set_override(uint32_t, void (*)(Core*));
 extern void ov_a00_gen_80112188(Core*);   // substrate body — kept alive for psx_fallback (core B)
 
 namespace {
-// psx_fallback-GATED trampoline: g_ov_a00_override[] is shared by every Core, so core B (the pure
-// SBS substrate reference) must keep running the exact recompiled body, or SBS would compare our
-// native port against itself. traceHit() before the native call keeps the dispatch/ovhit debug
-// channels able to see this hit (a direct g_ov_a00_override[] call never reaches rec_dispatch).
-void ov_actorMeleeEngage(Core* c) {
-  if (c->game->psx_fallback) { ov_a00_gen_80112188(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80112188u);
-  c->engine.actorMeleeEngage.doItFramed();
-}
+void ov_actorMeleeEngage(Core* c) { c->engine.actorMeleeEngage.doItFramed(); }
 }  // namespace
 
-void ActorMeleeEngage::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80112188u, "ActorMeleeEngage::doIt", ov_actorMeleeEngage);
-  ov_a00_set_override(0x80112188u, ov_actorMeleeEngage);
+void ActorMeleeEngage::registerOverrides(Game* /*game*/) {
+  overrides::install(0x80112188u, "ActorMeleeEngage::doIt",
+                     ov_actorMeleeEngage, ov_a00_gen_80112188, ov_a00_set_override);
 }

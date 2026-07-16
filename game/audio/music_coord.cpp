@@ -17,7 +17,7 @@
 #include "cfg.h"
 #include "music_coord.h"
 #include "native_gate.h"   // fieldBgmDirector's `music` gate
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "guest_abi.h"     // GuestFrame — voiceMixTick mirrors FUN_80075824's 32-byte frame
 #include <stdio.h>
 #include <string.h>        // memcmp (fieldBgmDirector bundle validation)
@@ -218,8 +218,10 @@ static void eov_musicCoordSetGain2(Core* c) {
   else         c->r[2] = (val < 8192) ? 1u : 0u;
 }
 
+extern void gen_func_80075D24(Core*);
+
 void MusicCoord::registerOverrides() {
-  core->game->engine_overrides.register_(0x80075D24u, "MusicCoord::setGain2", eov_musicCoordSetGain2);
+  overrides::install(0x80075D24u, "MusicCoord::setGain2", eov_musicCoordSetGain2, gen_func_80075D24);
 }
 
 // Called once per frame (native_step_frame). Enforces "dialogs stop the ingame music":

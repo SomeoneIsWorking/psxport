@@ -35,7 +35,8 @@
 // (Disasm: 0x8010633c addiu s2,zero,1 · 0x80106340 addiu s1,zero,2 · 0x80106344 addiu s3,zero,3.)
 
 #include "core.h"
-#include "game.h"                         // Game::pc_skip — frame() case-0 fork
+#include "game.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry                         // Game::pc_skip — frame() case-0 fork
 #include "cfg.h"
 #include "scheduler.h"                    // native_task_spawn (FUN_80051F14 port) — Slip #4 s0 spawn
 #include "world/pool.h"          // ov_pool_init_run (FUN_8007B18C) + siblings
@@ -357,12 +358,16 @@ void ov_demoS2SubMachine(Core* c) {
 }
 }  // namespace
 
-void Demo::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80106AC4u, "Demo::s3SubMachine", ov_demoS3SubMachine);
-  // s2's title-menu sub-machine: register_() only (same cadence argument as s3SubMachine above — s2()'s
-  // rec_dispatch(0x8010696c) is the single call site; the guest root coroutine reaches it identically).
-  ov.register_(0x8010696Cu, "Demo::s2SubMachine", ov_demoS2SubMachine);
+extern void ov_demo_gen_80106AC4(Core*);
+extern void ov_demo_gen_8010696C(Core*);
+
+void Demo::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  // rec_dispatch-only (setter omitted): s3SubMachine's ONLY caller is rec_dispatch(0x80106AC4). Its
+  // direct intra-shard call site (inside FUN_801064E8) is DELIBERATELY left on the substrate — a
+  // g_override thunk here would intercept it too (see the wiring note above), so no setter. Same for s2.
+  install(0x80106AC4u, "Demo::s3SubMachine", ov_demoS3SubMachine, ov_demo_gen_80106AC4);
+  install(0x8010696Cu, "Demo::s2SubMachine", ov_demoS2SubMachine, ov_demo_gen_8010696C);
 }
 
 // s6 0x801065EC — page sub-machine 0x8007b45c(); if sm[0x50]==3 fire the commit pair 0x80106824(1,1)

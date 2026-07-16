@@ -12,7 +12,7 @@
 #include "cfg.h"
 #include "gte_math.h"   // class Math — static entry surface + ov_* free-fn decls for internal reuse
 #include "game.h"
-#include "engine_overrides.h"   // class EngineOverrides — global dispatch table (registerOverrides wires into it)
+#include "override_registry.h"  // overrides::install — the one native-override registry
 #include <stdio.h>
 #include <string.h>
 
@@ -343,39 +343,19 @@ static void eov_rotX(Core* c)          { c->r[2] = c->math.rotX((int16_t)c->r[4]
 static void eov_rotY(Core* c)          { c->r[2] = c->math.rotY((int16_t)c->r[4], c->r[5]); }
 static void eov_rotZ(Core* c)          { c->r[2] = c->math.rotZ((int16_t)c->r[4], c->r[5]); }
 
-// psx_fallback-gated trampolines for shard_set_override (core B must stay pure substrate).
-static void gov_matMul(Core* c)        { if (c->game->psx_fallback) { gen_func_80084110(c); return; } eov_matMul(c); }
-static void gov_applyMatlv(Core* c)    { if (c->game->psx_fallback) { gen_func_80084220(c); return; } eov_applyMatlv(c); }
-static void gov_applyMatrixLV(Core* c) { if (c->game->psx_fallback) { gen_func_80084470(c); return; } eov_applyMatrixLV(c); }
-static void gov_rotmat(Core* c)        { if (c->game->psx_fallback) { gen_func_80085480(c); return; } eov_rotmat(c); }
-static void gov_rotX(Core* c)          { if (c->game->psx_fallback) { gen_func_80084D10(c); return; } eov_rotX(c); }
-static void gov_rotY(Core* c)          { if (c->game->psx_fallback) { gen_func_80084EB0(c); return; } eov_rotY(c); }
-static void gov_rotZ(Core* c)          { if (c->game->psx_fallback) { gen_func_80085050(c); return; } eov_rotZ(c); }
 static void eov_isqrt16(Core* c)       { c->r[2] = eng_isqrt16(c->r[4]); }
 static void eov_approxDist3(Core* c)   { c->r[2] = eng_approxDist3((int32_t)c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]); }
-static void gov_isqrt16(Core* c)       { if (c->game->psx_fallback) { gen_func_80077FB0(c); return; } eov_isqrt16(c); }
-static void gov_approxDist3(Core* c)   { if (c->game->psx_fallback) { gen_func_80078240(c); return; } eov_approxDist3(c); }
 
 void Math::registerOverrides() {
-  EngineOverrides& ov = core->game->engine_overrides;
-  ov.register_(0x80084110u, "Math::matMul",        eov_matMul);
-  ov.register_(0x80084220u, "Math::applyMatlv",    eov_applyMatlv);
-  ov.register_(0x80084470u, "Math::applyMatrixLV", eov_applyMatrixLV);
-  ov.register_(0x80085480u, "Math::rotmat",        eov_rotmat);
-  ov.register_(0x80084D10u, "Math::rotX",          eov_rotX);
-  ov.register_(0x80084EB0u, "Math::rotY",          eov_rotY);
-  ov.register_(0x80085050u, "Math::rotZ",          eov_rotZ);
-  ov.register_(0x80077FB0u, "Math::isqrt16",       eov_isqrt16);
-  ov.register_(0x80078240u, "Math::approxDist3",   eov_approxDist3);
-
-  shard_set_override(0x80084110u, gov_matMul);
-  shard_set_override(0x80084220u, gov_applyMatlv);
-  shard_set_override(0x80084470u, gov_applyMatrixLV);
-  shard_set_override(0x80085480u, gov_rotmat);
-  shard_set_override(0x80084D10u, gov_rotX);
-  shard_set_override(0x80084EB0u, gov_rotY);
-  shard_set_override(0x80085050u, gov_rotZ);
-  shard_set_override(0x80077FB0u, gov_isqrt16);
-  shard_set_override(0x80078240u, gov_approxDist3);
+  using overrides::install;
+  install(0x80084110u, "Math::matMul",        eov_matMul,        gen_func_80084110, shard_set_override);
+  install(0x80084220u, "Math::applyMatlv",    eov_applyMatlv,    gen_func_80084220, shard_set_override);
+  install(0x80084470u, "Math::applyMatrixLV", eov_applyMatrixLV, gen_func_80084470, shard_set_override);
+  install(0x80085480u, "Math::rotmat",        eov_rotmat,        gen_func_80085480, shard_set_override);
+  install(0x80084D10u, "Math::rotX",          eov_rotX,          gen_func_80084D10, shard_set_override);
+  install(0x80084EB0u, "Math::rotY",          eov_rotY,          gen_func_80084EB0, shard_set_override);
+  install(0x80085050u, "Math::rotZ",          eov_rotZ,          gen_func_80085050, shard_set_override);
+  install(0x80077FB0u, "Math::isqrt16",       eov_isqrt16,       gen_func_80077FB0, shard_set_override);
+  install(0x80078240u, "Math::approxDist3",   eov_approxDist3,   gen_func_80078240, shard_set_override);
 }
 

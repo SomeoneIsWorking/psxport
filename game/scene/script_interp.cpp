@@ -22,7 +22,7 @@
 #include "cfg.h"
 #include "core/engine.h"
 #include "game.h"
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "object/behavior_dispatch.h"
 #include <cstdint>
 #include <cstdio>
@@ -846,11 +846,17 @@ void eov_op36MoveTowardScriptTarget(Core* c)   { c->r[2] = (uint32_t)c->engine.s
 void eov_op31TurnTowardTarget(Core* c)         { c->r[2] = (uint32_t)c->engine.script.op31TurnTowardTarget(c->r[4]); }
 }  // namespace
 
+extern void gen_func_80042090(Core*);
+extern void gen_func_800420AC(Core*);
+extern void gen_func_80042E10(Core*);
+extern void gen_func_80043108(Core*);
+extern void gen_func_80041468(Core*);
+
 void ScriptInterp::registerOverrides() {
-  EngineOverrides& ov = core->game->engine_overrides;
-  ov.register_(kOp05Addr, "ScriptInterp::op05WaitFrames",             eov_op05WaitFrames);
-  ov.register_(kOp06Addr, "ScriptInterp::op06TestSceneFlag",          eov_op06TestSceneFlag);
-  ov.register_(kOp34Addr, "ScriptInterp::op34ClaimGate",              eov_op34ClaimGate);
-  ov.register_(kOp36Addr, "ScriptInterp::op36MoveTowardScriptTarget", eov_op36MoveTowardScriptTarget);
-  ov.register_(kOp31Addr, "ScriptInterp::op31TurnTowardTarget",       eov_op31TurnTowardTarget);
+  using overrides::install;   // opcode leaves reached only via ScriptInterp::step rec_dispatch — setter omitted
+  install(kOp05Addr, "ScriptInterp::op05WaitFrames",             eov_op05WaitFrames,             gen_func_80042090);
+  install(kOp06Addr, "ScriptInterp::op06TestSceneFlag",          eov_op06TestSceneFlag,          gen_func_800420AC);
+  install(kOp34Addr, "ScriptInterp::op34ClaimGate",              eov_op34ClaimGate,              gen_func_80042E10);
+  install(kOp36Addr, "ScriptInterp::op36MoveTowardScriptTarget", eov_op36MoveTowardScriptTarget, gen_func_80043108);
+  install(kOp31Addr, "ScriptInterp::op31TurnTowardTarget",       eov_op31TurnTowardTarget,       gen_func_80041468);
 }

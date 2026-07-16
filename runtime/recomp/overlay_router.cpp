@@ -17,6 +17,7 @@
 #include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
 #include "overlay_table.h"     // generated: REC_MAIN_LO/HI, main_dispatch, g_rec_overlays[]
 #include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
+#include "override_registry.h" // overrides::dispatch — native engine/game override interception
 #include <string.h>
 #include <stdio.h>
 
@@ -165,12 +166,6 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // interpreter handles overlay/non-recompiled code natively (no fail-fast miss), which is exactly why
   // the oracle uses it. The native port Core (use_interp==0) takes the substrate route below.
   if (c->use_interp) { interp_run(c, addr); return; }
-  // ENGINE OVERRIDES (user 2026-07-07): a native engine wired by guest address intercepts here —
-  // the single global dispatch point — for EVERY caller, substrate included. psx_fallback cores
-  // (SBS core B, PSXPORT_GATE) never consult the table: they are the pure substrate reference the
-  // override is byte-compared against.
-  // verify.inSubstrateLeg: MV_CHECK's substrate replay leg must behave exactly like SBS core B —
-  // no EngineOverrides (game/core/verify_harness.h strict mirror TDD gate).
   // TEMP PROBE (Job 2 investigation, docs/findings/animation.md): r29-at-entry for Animation::attach
   // on both SBS cores, to determine whether the isDeadStackScratch residual is caused by an upstream
   // native caller failing to descend r29 like the substrate (vs. attach's own frame needing a mirror).
@@ -180,15 +175,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
     cfg_logf("animstack", "f%u core=%c r29=%08X ra=%08X a0=%08X",
              sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), c->r[29], c->r[31], c->r[4]);
   }
-  if (c->game && !c->game->psx_fallback && !c->game->verify.inSubstrateLeg
-      && c->game->engine_overrides.run(c, addr)) return;
-  // `ovhit` substrate-parity counter (engine_overrides.h noteSubstrateDispatch): reached whenever
-  // dispatch lands on an address THIS Game's own EngineOverrides table has registered but did NOT
-  // run natively (SBS core B — psx_fallback — never takes the run() branch above, so every one of
-  // its registered addresses funnels through here). Cheap early-reject inside the call; no-op for
-  // the vast majority of addresses that aren't registered at all. Gated on the ovhit channel so it
-  // costs nothing when the channel is off.
-  if (cfg_dbg("ovhit") && c->game) c->game->engine_overrides.noteSubstrateDispatch(addr);
+  // Intercepting HERE (not only at the g_<mod>_override[] wrapper) makes an override fire even when
+  // its overlay image is not resident in guest RAM — the gen bodies are always linked. dispatch()
+  // owns the oracle gate: the psx_fallback / inSubstrateLeg leg runs the gen body, so SBS core B stays
+  // the pure substrate reference. Hit counting + `dispatch`/`ovhit` tracing live inside the registry.
+  if (overrides::dispatch(c, addr)) return;
   if (cfg_dbg("recdep")) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
   // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this

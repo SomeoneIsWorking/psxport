@@ -11,6 +11,7 @@
 #include "c_subsys.h"   // xa_stream_owns_slot2/xa_stream_voice_busy/xa_stream_voice_release
 #include "coro.h"       // native task bodies park on the same Coro fiber the substrate bodies use
 #include "guest_call.h" // rec_dispatch — BIOS leaves + still-substrate leaves from the primitives
+#include "override_registry.h" // overrides::install — the one native-override registry
 #include "rng.h"        // Rng (c->rng) — FUN_8009A450, shared guest seed 0x80105EE8
 #include <setjmp.h>
 #include <stdio.h>
@@ -237,34 +238,13 @@ extern void gen_func_80044BD4(Core*);   // spawnAndWait substrate body
 extern void gen_func_80052010(Core*);   // forceClose substrate body
 extern void gen_func_80051FB4(Core*);   // selfClose substrate body
 
-namespace {
-// psx_fallback-GATED trampolines: g_override[] is a single table shared by EVERY Core (both SBS
-// cores read the SAME array — unlike EngineOverrides, which is per-Game). Core B (the pure
-// substrate SBS reference) must keep running the exact recompiled body, or SBS would compare our
-// native port against itself (a fake 0-diff) instead of against the real substrate.
-// traceHit() BEFORE the native call: this is the ONLY path (dispatch/ovhit channels) that can see
-// these hits at all — rec_dispatch/recdep never run for a direct g_override[] call, so without
-// this the fix above would be invisible again (see engine_overrides.h "KNOWN GAP").
-void ov_yield(Core* c)      { if (c->game->psx_fallback) { gen_func_80051F80(c); return; } c->game->engine_overrides.traceHit(c, 0x80051F80u); eov_yield(c); }
-void ov_spawn(Core* c)      { if (c->game->psx_fallback) { gen_func_80051F14(c); return; } c->game->engine_overrides.traceHit(c, 0x80051F14u); eov_spawn(c); }
-void ov_spawnwait(Core* c)  { if (c->game->psx_fallback) { gen_func_80044BD4(c); return; } c->game->engine_overrides.traceHit(c, 0x80044BD4u); eov_spawnwait(c); }
-void ov_forceclose(Core* c) { if (c->game->psx_fallback) { gen_func_80052010(c); return; } c->game->engine_overrides.traceHit(c, 0x80052010u); eov_forceclose(c); }
-void ov_selfclose(Core* c)  { if (c->game->psx_fallback) { gen_func_80051FB4(c); return; } c->game->engine_overrides.traceHit(c, 0x80051FB4u); eov_selfclose(c); }
-}  // namespace
-
 void PcScheduler::registerOverrides() {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80051F80u, "PcScheduler::yieldPrim",    eov_yield);
-  ov.register_(0x80051F14u, "PcScheduler::spawnPrim",    eov_spawn);
-  ov.register_(0x80044BD4u, "PcScheduler::spawnAndWait", eov_spawnwait);
-  ov.register_(0x80052010u, "PcScheduler::forceClose",   eov_forceclose);
-  ov.register_(0x80051FB4u, "PcScheduler::selfClose",    eov_selfclose);
-
-  shard_set_override(0x80051F80u, ov_yield);
-  shard_set_override(0x80051F14u, ov_spawn);
-  shard_set_override(0x80044BD4u, ov_spawnwait);
-  shard_set_override(0x80052010u, ov_forceclose);
-  shard_set_override(0x80051FB4u, ov_selfclose);
+  using overrides::install;
+  install(0x80051F80u, "PcScheduler::yieldPrim",    eov_yield,      gen_func_80051F80, shard_set_override);
+  install(0x80051F14u, "PcScheduler::spawnPrim",    eov_spawn,      gen_func_80051F14, shard_set_override);
+  install(0x80044BD4u, "PcScheduler::spawnAndWait", eov_spawnwait,  gen_func_80044BD4, shard_set_override);
+  install(0x80052010u, "PcScheduler::forceClose",   eov_forceclose, gen_func_80052010, shard_set_override);
+  install(0x80051FB4u, "PcScheduler::selfClose",    eov_selfclose,  gen_func_80051FB4, shard_set_override);
 }
 
 

@@ -10,7 +10,7 @@
 // collide section for the shared grid-probe leaves (FUN_8004766C etc.) this family calls.
 #include "core.h"
 #include "actor_sm_reward.h"
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "game.h"
 #include <cstdint>
 
@@ -778,18 +778,6 @@ void ActorReward::approachTargetX(Core* c) {
 // FUN_8004AAC4) and EngineOverrides (reaches any NATIVE caller going through rec_dispatch, and gets
 // traced by the `dispatch` debug channel). See actor_sm_reward.h "WIRING" for why both are needed.
 // ----------------------------------------------------------------------------------------------
-namespace {
-// psx_fallback-GATED trampolines for shard_set_override: g_override[] is a single table shared by
-// EVERY Core (both SBS cores read the SAME array — unlike EngineOverrides, which is per-Game and
-// whose rec_dispatch call site already skips psx_fallback cores). So the gate has to live IN the
-// installed function itself: core B (the pure substrate reference) must keep running the exact
-// recompiled body, or SBS would just be comparing our native port against itself (a fake 0-diff).
-void ov_smWindowScroll(Core* c)  { if (c->game->psx_fallback) { gen_func_80049A60(c); return; } ActorReward::smWindowScroll(c); }
-void ov_smTallyTick(Core* c)     { if (c->game->psx_fallback) { gen_func_80049E54(c); return; } ActorReward::smTallyTick(c); }
-void ov_smEventDispatch(Core* c) { if (c->game->psx_fallback) { gen_func_8004A3D4(c); return; } ActorReward::smEventDispatch(c); }
-void ov_smBlinkA(Core* c)        { if (c->game->psx_fallback) { gen_func_8004B150(c); return; } ActorReward::smBlinkA(c); }
-void ov_smBlinkB(Core* c)        { if (c->game->psx_fallback) { gen_func_8004B208(c); return; } ActorReward::smBlinkB(c); }
-}  // namespace
 
 // --- WIDE-RE DRAFT wiring (2026-07-08 frontier pass) --- update/resolvePosition/approachTargetX.
 // update (0x80070018) has NO direct same-shard caller (grepped generated/*.c) -- it's reached only
@@ -802,32 +790,18 @@ void ov_smBlinkB(Core* c)        { if (c->game->psx_fallback) { gen_func_8004B20
 // anyway for defensive completeness / consistency with the other 5 ActorReward leaves, and because
 // core B (psx_fallback) must still be able to reach the real substrate body via g_override[] if
 // anything ever calls func_800702C0/80070650 directly outside update()'s own reach.
+extern void gen_func_80070018(Core*);
 extern void gen_func_800702C0(Core*);
 extern void gen_func_80070650(Core*);
-namespace {
-void ov_resolvePosition(Core* c)  { if (c->game->psx_fallback) { gen_func_800702C0(c); return; } c->game->engine_overrides.traceHit(c, 0x800702C0u); ActorReward::resolvePosition(c); }
-void ov_approachTargetX(Core* c)  { if (c->game->psx_fallback) { gen_func_80070650(c); return; } c->game->engine_overrides.traceHit(c, 0x80070650u); ActorReward::approachTargetX(c); }
-}  // namespace
 
-void ActorReward::registerOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x80049A60u, "ActorReward::smWindowScroll",  ActorReward::smWindowScroll);
-  ov.register_(0x80049E54u, "ActorReward::smTallyTick",     ActorReward::smTallyTick);
-  ov.register_(0x8004A3D4u, "ActorReward::smEventDispatch", ActorReward::smEventDispatch);
-  ov.register_(0x80070018u, "ActorReward::update",          ActorReward::update);
-  ov.register_(0x800702C0u, "ActorReward::resolvePosition", ActorReward::resolvePosition);
-  ov.register_(0x80070650u, "ActorReward::approachTargetX", ActorReward::approachTargetX);
-  ov.register_(0x8004B150u, "ActorReward::smBlinkA",        ActorReward::smBlinkA);
-  ov.register_(0x8004B208u, "ActorReward::smBlinkB",        ActorReward::smBlinkB);
-
-  shard_set_override(0x80049A60u, ov_smWindowScroll);
-  shard_set_override(0x80049E54u, ov_smTallyTick);
-  shard_set_override(0x8004A3D4u, ov_smEventDispatch);
-  shard_set_override(0x8004B150u, ov_smBlinkA);
-  shard_set_override(0x8004B208u, ov_smBlinkB);
-  // update has no direct same-shard caller (only reached via ObjectTable::dispatchFaithful's
-  // rec_dispatch), so no shard_set_override entry for it; resolvePosition/approachTargetX DO have
-  // one (gen_func_80070018's own body), wired defensively per the header note above.
-  shard_set_override(0x800702C0u, ov_resolvePosition);
-  shard_set_override(0x80070650u, ov_approachTargetX);
+void ActorReward::registerOverrides(Game* /*game*/) {
+  using overrides::install;
+  install(0x80049A60u, "ActorReward::smWindowScroll",  ActorReward::smWindowScroll,  gen_func_80049A60, shard_set_override);
+  install(0x80049E54u, "ActorReward::smTallyTick",     ActorReward::smTallyTick,     gen_func_80049E54, shard_set_override);
+  install(0x8004A3D4u, "ActorReward::smEventDispatch", ActorReward::smEventDispatch, gen_func_8004A3D4, shard_set_override);
+  install(0x80070018u, "ActorReward::update",          ActorReward::update,          gen_func_80070018, shard_set_override);
+  install(0x800702C0u, "ActorReward::resolvePosition", ActorReward::resolvePosition, gen_func_800702C0, shard_set_override);
+  install(0x80070650u, "ActorReward::approachTargetX", ActorReward::approachTargetX, gen_func_80070650, shard_set_override);
+  install(0x8004B150u, "ActorReward::smBlinkA",        ActorReward::smBlinkA,        gen_func_8004B150, shard_set_override);
+  install(0x8004B208u, "ActorReward::smBlinkB",        ActorReward::smBlinkB,        gen_func_8004B208, shard_set_override);
 }

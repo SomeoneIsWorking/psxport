@@ -46,7 +46,8 @@
 // g_pkt_track/lo/hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi (reached below).
 #include "dualview_snapshot.h"    // c->mRender->dualviewSnapshot.capturePre/restorePre
 // (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->mode.psxRender() / dualview())
-#include "game.h"                    // class Game — c->game->ffspan (FfSpan) + Game::sbs
+#include "game.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry                    // class Game — c->game->ffspan (FfSpan) + Game::sbs
 #include "sbs.h"                     // `sefprobe` probe below — Sbs::coreId/frame
 // FFS: nested span tracker. c must be a Core* in scope. Same shape as FfSpan::begin/end inlined.
 #define FFS(nm, call) do { \
@@ -3409,22 +3410,12 @@ extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8004190C(Core*);
 extern void gen_func_80054D14(Core*);
 namespace {
-void ov_engineAnimTick(Core* c) {
-  if (c->game->psx_fallback) { gen_func_8004190C(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x8004190Cu);
-  c->r[2] = c->engine.animTick(c->r[4]);
-}
-void ov_engineWalkStart(Core* c) {
-  if (c->game->psx_fallback) { gen_func_80054D14(c); return; }
-  c->game->engine_overrides.traceHit(c, 0x80054D14u);
-  c->r[2] = c->engine.walkStart(c->r[4], c->r[5], (int16_t)c->r[6]);
-}
+void ov_engineAnimTick(Core* c)  { c->r[2] = c->engine.animTick(c->r[4]); }
+void ov_engineWalkStart(Core* c) { c->r[2] = c->engine.walkStart(c->r[4], c->r[5], (int16_t)c->r[6]); }
 }  // namespace
 
-void RegisterEngineAnimLeafOverrides(Game* game) {
-  EngineOverrides& ov = game->engine_overrides;
-  ov.register_(0x8004190Cu, "Engine::animTick",  ov_engineAnimTick);
-  shard_set_override(0x8004190Cu, ov_engineAnimTick);
-  ov.register_(0x80054D14u, "Engine::walkStart", ov_engineWalkStart);
-  shard_set_override(0x80054D14u, ov_engineWalkStart);
+void RegisterEngineAnimLeafOverrides(Game* /*game*/) {
+  using overrides::install;
+  install(0x8004190Cu, "Engine::animTick",  ov_engineAnimTick,  gen_func_8004190C, shard_set_override);
+  install(0x80054D14u, "Engine::walkStart", ov_engineWalkStart, gen_func_80054D14, shard_set_override);
 }

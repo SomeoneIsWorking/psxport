@@ -11,7 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "animation.h"
-#include "game.h"      // c->game->verify — the shared A/B verify scaffold; c->game->engine_overrides
+#include "game.h"      // c->game->verify — the shared A/B verify scaffold
+#include "override_registry.h"   // overrides::install — the one native-override registry
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -510,10 +511,6 @@ static void eov_animAdvanceLink(Core* c)    { c->r[2] = c->engine.animation.adva
 static void eov_animAttach(Core* c)         { c->engine.animation.attach(c->r[4], c->r[5], c->r[6]); }
 static void eov_animApplyFrame(Core* c)     { c->engine.animation.applyFrame(c->r[4], (int32_t)c->r[5]); }
 
-// psx_fallback-gated trampoline for shard_set_override (dual-registration pattern per
-// game/math/gte_math.cpp — core B / the pure substrate reference must keep running the exact
-// recompiled gen_func_* body, or SBS would just be comparing this port against itself).
-//
 // FUN_80076D68 (Animation::step) is DELIBERATELY LEFT UNWIRED here — investigated + reverted
 // 2026-07-08 (docs/findings/animation.md has the full trace). stepFramed() (above) DOES mirror
 // FUN_80076D68's real 40-byte guest-stack frame byte-exact — that part of the RE is correct and
@@ -540,20 +537,19 @@ static void eov_animApplyFrame(Core* c)     { c->engine.animation.applyFrame(c->
 // step() stays reachable only via DIRECT native C++ callers (beh_actor_move_sm etc — see step()'s
 // own header comment) and via EngineOverrides (ActorZonedAttacker's call1() leaf-dispatch
 // convenience), which never cross the guest ABI/stack boundary in the first place.
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_80076904(Core*);
+extern void gen_func_80077B5C(Core*);
+extern void gen_func_80077C40(Core*);
 extern void gen_func_80075F0C(Core*);
-static void gov_animApplyFrame(Core* c)     { if (c->game->psx_fallback) { gen_func_80075F0C(c); return; } eov_animApplyFrame(c); }
 
 void Animation::registerOverrides() {
-  EngineOverrides& ov = core->game->engine_overrides;
-  ov.register_(0x80076904u, "Animation::loadFrame",      eov_animLoadFrame);
-  ov.register_(0x80077B5Cu, "Animation::advanceLinkChain", eov_animAdvanceLink);
-  ov.register_(0x80077C40u, "Animation::attach",          eov_animAttach);
-  ov.register_(0x80075F0Cu, "Animation::applyFrame",     eov_animApplyFrame);
-
-  // 0x80075F0C is ALSO reached by direct substrate `func_<addr>(c)` call sites (jal, not jalr) that
-  // bypass rec_dispatch/EngineOverrides entirely — those must go through the recompiler's OWN
-  // g_override[] table (shard_set_override) to be intercepted. Safe here: FUN_80075F0C's guest body
-  // has NO stack-frame adjustment (verified in generated/shard_4.c — never touches r[29]).
-  extern void shard_set_override(uint32_t, void (*)(Core*));
-  shard_set_override(0x80075F0Cu, gov_animApplyFrame);
+  // 0x80075F0C is ALSO reached by DIRECT substrate `func_<addr>(c)` calls (jal), not only via
+  // rec_dispatch; install() puts the shared thunk into g_override[] so both paths are intercepted
+  // uniformly (FUN_80075F0C's guest body has no stack-frame adjustment — generated/shard_4.c).
+  using overrides::install;
+  install(0x80076904u, "Animation::loadFrame",        eov_animLoadFrame,   gen_func_80076904, shard_set_override);
+  install(0x80077B5Cu, "Animation::advanceLinkChain", eov_animAdvanceLink, gen_func_80077B5C, shard_set_override);
+  install(0x80077C40u, "Animation::attach",           eov_animAttach,      gen_func_80077C40, shard_set_override);
+  install(0x80075F0Cu, "Animation::applyFrame",       eov_animApplyFrame,  gen_func_80075F0C, shard_set_override);
 }

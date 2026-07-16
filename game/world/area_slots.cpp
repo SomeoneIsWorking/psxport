@@ -4,7 +4,7 @@
 #include "world/area_slots.h"
 #include "core.h"
 #include "game.h"
-#include "engine_overrides.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 #include "cfg.h"
 #include <cstdio>
 
@@ -272,8 +272,11 @@ static void eov_areaSlotsUpdateCell(Core* c) {
   c->r[29] += 24;
 }
 
+extern void gen_func_80074A38(Core*);
+extern void gen_func_8007496C(Core*);
+
 void AreaSlots::registerOverrides() {
-  EngineOverrides& ov = core->game->engine_overrides;
-  ov.register_(0x80074A38u, "AreaSlots::primeCountdown", eov_areaSlotsPrime);
-  ov.register_(0x8007496Cu, "AreaSlots::updateCell",     eov_areaSlotsUpdateCell);
+  using overrides::install;
+  install(0x80074A38u, "AreaSlots::primeCountdown", eov_areaSlotsPrime,      gen_func_80074A38);
+  install(0x8007496Cu, "AreaSlots::updateCell",     eov_areaSlotsUpdateCell, gen_func_8007496C);
 }
