@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 6 verified · 2 n/a
+**Status:** 7 verified · 1 partial · 2 n/a
 
 ## DEMO/title front-end (whole-scene)
 - **scope:** stage 0x801062E4 boot->title menu (s48 handoff + menu hold + cursor)
@@ -49,6 +49,17 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **frames:** 23850
 - **gate:** same two legs; THUNK_FORCE_GEN A/B exonerated tap; ovhit native=32 newgame->narration
 - **evidence:** 7a282422
+
+## TileGridLayer scrollStep+emit (0x8011534C/0x80115598)
+- **status:** verified
+- **frames:** 20820
+- **gate:** SBS-full combat 0-diff f5850 + watch-cut 0-diff f20820; ovhit native=oracle=3878 both addrs
+- **evidence:** cd278ce4
+
+## Gauge text-row tap FUN_8004EB94
+- **status:** partial
+- **gate:** registered, 2-leg 0-diff, but ovhit 0/0 (no gauge item in autonav) — host push math unexercised; needs gauge-popping drive + USER eyeball
+- **evidence:** 7a48eb15
 
 ## Font::glyphQueuePush (glyphEmit dual-emit host half)
 - **status:** n/a
