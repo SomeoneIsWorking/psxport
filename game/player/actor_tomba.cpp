@@ -928,10 +928,14 @@ void ActorTomba::registerOverrides(Game* game) {
   // enterOuterState0 (0x80058648) + matrixComposeAttached (0x800597AC) are NOT wired: the 2026-07-16
   // wiring attempt was REJECTED by PSXPORT_MIRROR_VERIFY at invocation #1 — the enterOuterState0
   // subtree diverges at 0x800F2758 (native 21 F0 00 vs substrate 01 01 08, entry a0=G a1=0 a3=3)
-  // and the run then faults; matrixComposeAttached never fired in the leg (unverifiable). The
-  // draft's own register transcription matches gen at the recordArrayInit call, so the lead is a
-  // subtree difference INSIDE the native rec_dispatch chain (a recordArrayInit corner case these
-  // args surface, or a later callee). Re-wire only behind a fresh MIRROR_VERIFY pass on that trace.
+  // and the run then faults; matrixComposeAttached never fired in the leg (unverifiable).
+  // NARROWED (same day): direct MV runs on every native child in the subtree came back byte-clean
+  // over a full combat leg — recordArrayInit 0x800519E0, growthStep 0x80057DC0, recordInit
+  // 0x80051B70, guestMemset 0x8009A420 all 0 mismatches — so the fault is a TRANSCRIPTION SLIP in
+  // the enterOuterState0 DRAFT BODY itself. The divergent bytes are obj+8/+9 of pool object
+  // 0x800F2750 (a record-init the substrate leg performs that the native leg's control flow
+  // missed) → look for a wrong branch/condition in the draft, not a wrong store. Line-diff the
+  // draft against gen_func_80058648 (generated/shard_7.c:7739) before any re-wire.
 }
 
 // =================================================================================
