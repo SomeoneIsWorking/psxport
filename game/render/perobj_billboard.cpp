@@ -623,9 +623,49 @@ void ov_billboardEmit(Core* c)        { c->mRender->billboardEmit(); }
 // same particle (anchor + corners + rotation), so particle animation interpolates too — the
 // per-particle motion the retired screen-space anchor machinery approximated, now derived from state.
 // Read-only over guest memory (reads nothing but the camera via sceneCam); host writes only.
+// emitRecQuad — shared record-quad emit for billboardsRender's two record kinds. Decodes the FT4
+// record's material words RAW (mode/tp_x/tp_y/blend from the tpage half, clut x/y from the clut
+// half; neutral texture-window, full draw-area) — NOT from GpuState's live s_tp_*/s_da_* fields,
+// which hold unrelated stale state at display time. Float verts + real per-vertex depth + the
+// drawWorldQuad draw-offset convention; dbg_node = the owning node (real identity).
+static void emitRecQuad(Core* c, uint32_t node, uint32_t wColor,
+                        uint32_t wUv0, uint32_t wUv1, uint32_t wUv2, uint32_t wUv3,
+                        const float* px, const float* py, const float* dep) {
+  const uint8_t  op   = (uint8_t)(wColor >> 24);
+  const uint32_t clut = wUv0 >> 16;
+  const uint32_t tp   = wUv1 >> 16;
+  int us[4] = { (int)(wUv0 & 0xFFu), (int)(wUv1 & 0xFFu), (int)(wUv2 & 0xFFu), (int)(wUv3 & 0xFFu) };
+  int vs[4] = { (int)((wUv0 >> 8) & 0xFFu), (int)((wUv1 >> 8) & 0xFFu),
+                (int)((wUv2 >> 8) & 0xFFu), (int)((wUv3 >> 8) & 0xFFu) };
+  unsigned char rs[4], gsv[4], bs[4];
+  for (int i = 0; i < 4; i++) {
+    rs[i]  = (unsigned char)(wColor & 0xFF);
+    gsv[i] = (unsigned char)((wColor >> 8) & 0xFF);
+    bs[i]  = (unsigned char)((wColor >> 16) & 0xFF);
+  }
+  GpuState& gs = c->game->gpu;
+  gs.s_seen3d = 1;
+  int xs[4], ys[4]; float xsf[4], ysf[4];
+  for (int i = 0; i < 4; i++) {
+    xsf[i] = px[i] + (float)gs.s_off_x;
+    ysf[i] = py[i] + (float)gs.s_off_y;
+    xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + gs.s_off_x;
+    ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + gs.s_off_y;
+  }
+  c->mRender->diag.beginObject(node);
+  c->game->activeRq().emitOrQueue(c, 1, RQ_WORLD, RQ_OM_DEPTH, 4,
+                   (op & 2) ? 1 : 0, (op & 1) ? 1 : 0,
+                   xs, ys, xsf, ysf, us, vs, rs, gsv, bs, dep,
+                   (int)((tp >> 7) & 3u),
+                   (int)(tp & 0xFu) * 64, (int)((tp >> 4) & 1u) * 256,
+                   (int)(clut & 0x3Fu) * 16, (int)((clut >> 6) & 0x1FFu),
+                   0, 0, 0, 0, 0, 0, 1023, 511, (int)((tp >> 5) & 3u));
+  c->mRender->diag.endObject();
+}
+
 void Render::billboardsRender() {
   Core* c = mCore;
-  if (mBbRecs.empty()) return;
+  if (mBbRecs.empty() && mWqRecs.empty()) return;
 
   float Ri[3][3], T[3], ofx, ofy, H;
   c->game->fps60.sceneCam(c, Ri, T, ofx, ofy, H);   // raw int16-unit rows, the sceneCam convention
@@ -640,7 +680,6 @@ void Render::billboardsRender() {
   std::unordered_map<uint32_t, const BbRec*> prev;
   if (interp) for (const BbRec& p : mBbRecsPrev) prev.emplace(p.particle, &p);
 
-  GpuState& gs = c->game->gpu;
   for (const BbRec& rc : mBbRecs) {
     // Interpolated inputs (anchor, corners, rotation) — cur when no prev exists (new particle).
     float wx = rc.wx, wy = rc.wy, wz = rc.wz;
@@ -679,40 +718,53 @@ void Render::billboardsRender() {
     }
     if (behind) continue;
 
-    // Material decode — the same FT4 record fields rq_push_ft4_record reads.
-    const uint32_t colorWord = rc.wColor;
-    const uint8_t  op   = (uint8_t)(colorWord >> 24);
-    const uint32_t clut = rc.wUv0 >> 16;
-    const uint32_t tp   = rc.wUv1 >> 16;
-    int us[4] = { (int)(rc.wUv0 & 0xFFu), (int)(rc.wUv1 & 0xFFu), (int)(rc.wUv2 & 0xFFu), (int)(rc.wUv3 & 0xFFu) };
-    int vs[4] = { (int)((rc.wUv0 >> 8) & 0xFFu), (int)((rc.wUv1 >> 8) & 0xFFu),
-                  (int)((rc.wUv2 >> 8) & 0xFFu), (int)((rc.wUv3 >> 8) & 0xFFu) };
-    unsigned char rs[4], gsv[4], bs[4];
-    for (int i = 0; i < 4; i++) {
-      rs[i]  = (unsigned char)(colorWord & 0xFF);
-      gsv[i] = (unsigned char)((colorWord >> 8) & 0xFF);
-      bs[i]  = (unsigned char)((colorWord >> 16) & 0xFF);
-    }
+    emitRecQuad(c, rc.node, rc.wColor, rc.wUv0, rc.wUv1, rc.wUv2, rc.wUv3, px, py, dep);
+  }
 
-    // Emit with real identity, mirroring drawWorldQuad's body (needed here for the raw-texel bit).
-    diag.beginObject(rc.node);
-    gs.set_texpage((uint16_t)tp);
-    gs.set_clut((uint16_t)clut);
-    gs.s_seen3d = 1;
-    int xs[4], ys[4]; float xsf[4], ysf[4];
-    for (int i = 0; i < 4; i++) {
-      xsf[i] = px[i] + (float)gs.s_off_x;
-      ysf[i] = py[i] + (float)gs.s_off_y;
-      xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + gs.s_off_x;
-      ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + gs.s_off_y;
+  // ---- WqRecs: the generic composed-CR quad classes (submitQuad callers — render.h WqRec banner).
+  // Re-compose each record's FACTORED world transform with the (fps60-lerped) camera and project:
+  // corner_view = Rcam·(objR·corner + objT) + Tcam — identical derivation on real and interp frames.
+  std::unordered_map<uint64_t, const WqRec*> wprev;
+  if (interp) for (const WqRec& p : mWqRecsPrev)
+    wprev.emplace(((uint64_t)p.node << 8) | p.seq, &p);
+  for (const WqRec& rc : mWqRecs) {
+    float objR[3][3], objT[3];
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) objR[i][j] = rc.objR[i][j]; objT[i] = rc.objT[i]; }
+    float vxl[4][3];
+    for (int i = 0; i < 4; i++) { vxl[i][0] = rc.vx[i]; vxl[i][1] = rc.vy[i]; vxl[i][2] = rc.vz[i]; }
+    if (interp) {
+      auto it = wprev.find(((uint64_t)rc.node << 8) | rc.seq);
+      if (it != wprev.end()) {
+        const WqRec& pv = *it->second;
+        auto L = [t](float a, float b) { return a + (b - a) * t; };
+        for (int i = 0; i < 3; i++) {
+          for (int j = 0; j < 3; j++) objR[i][j] = L(pv.objR[i][j], rc.objR[i][j]);
+          objT[i] = L(pv.objT[i], rc.objT[i]);
+        }
+        for (int i = 0; i < 4; i++) {
+          vxl[i][0] = L(pv.vx[i], rc.vx[i]); vxl[i][1] = L(pv.vy[i], rc.vy[i]); vxl[i][2] = L(pv.vz[i], rc.vz[i]);
+        }
+      }
     }
-    c->game->activeRq().emitOrQueue(c, 1, RQ_WORLD, RQ_OM_DEPTH, 4,
-                     (op & 2) ? 1 : 0, (op & 1) ? 1 : 0,
-                     xs, ys, xsf, ysf, us, vs, rs, gsv, bs, dep, gs.s_tp_mode,
-                     gs.s_tp_x, gs.s_tp_y, gs.s_clut_x, gs.s_clut_y,
-                     gs.s_tw_mx, gs.s_tw_my, gs.s_tw_ox, gs.s_tw_oy,
-                     gs.s_da_x0, gs.s_da_y0, gs.s_da_x1, gs.s_da_y1, gs.s_tp_blend);
-    diag.endObject();
+    float px[4], py[4], dep[4];
+    bool behind = false;
+    for (int i = 0; i < 4; i++) {
+      const float wxp = objR[0][0]*vxl[i][0] + objR[0][1]*vxl[i][1] + objR[0][2]*vxl[i][2] + objT[0];
+      const float wyp = objR[1][0]*vxl[i][0] + objR[1][1]*vxl[i][1] + objR[1][2]*vxl[i][2] + objT[1];
+      const float wzp = objR[2][0]*vxl[i][0] + objR[2][1]*vxl[i][1] + objR[2][2]*vxl[i][2] + objT[2];
+      const float vx = R[0][0]*wxp + R[0][1]*wyp + R[0][2]*wzp + T[0];
+      const float vy = R[1][0]*wxp + R[1][1]*wyp + R[1][2]*wzp + T[1];
+      const float vz = R[2][0]*wxp + R[2][1]*wyp + R[2][2]*wzp + T[2];
+      if (vz <= 0.0f) { behind = true; break; }
+      float pz = H * 0.5f; if (vz > pz) pz = vz;
+      const float ph = H / pz;
+      px[i] = ofx + vx * ph;
+      py[i] = ofy + vy * ph;
+      dep[i] = projParams.pzToOrd(vz);
+    }
+    if (behind) continue;
+
+    emitRecQuad(c, rc.node, rc.wColor, rc.wUv0, rc.wUv1, rc.wUv2, rc.wUv3, px, py, dep);
   }
 }
 

@@ -623,3 +623,9 @@ or level — they can't be a bare channel:
   Do NOT add a new `PSXPORT_*_DBG` var.
 - A new **config/feature** toggle → `cfg_on("PSXPORT_YOUR_FLAG")`; a valued one → `cfg_int`/`cfg_str`.
 - Then list it here. The goal is to keep the count down — prefer a channel over a new variable.
+
+`quadcr` (quad_rtpt_submit.cpp) — CR-contract probe for the REDIRECT census: at every ~64th
+`QuadRtptSubmit::submitQuad` call, compares GTE CR0-4/CR5-7 against the scratchpad scene camera
+(0x1F8000F8/0x1F80010C) and logs `ra=` (caller class) + `rotEq/trEq` + the current walk node. Used to
+decide whether a submitQuad caller class projects under the pure camera or a composed per-object
+transform (2026-07-16: the live field class is the A00-overlay emitter ra=0x801341xx, composed).

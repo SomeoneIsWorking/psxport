@@ -23,7 +23,7 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
-#include "render_internal.h"   // cur_render_node / obj_world_ord — the #65 dual-emit push
+#include "render_internal.h"   // cur_render_node — WqRec identity
 #include "render_queue.h"      // RenderQueue::emitOrQueue + RQ_WORLD/RQ_OM_DEPTH
 #include <cstdint>
 #include <cstdio>
@@ -130,6 +130,17 @@ void QuadRtptSubmit::submitQuad(Core* c) {
   const uint32_t xf  = c->r[5];               // a1: composedXform
   const int32_t  otzBias = (int32_t)c->r[6];  // a2
   if (cfg_dbg("quadrtpt")) { static long n = 0; if (n++ % 512 == 0) cfg_logf("quadrtpt", "submitQuad call#%ld", n); }
+  // CR-CONTRACT PROBE (temporary, cfg-gated — REDIRECT census, docs/fps60-rework.md): is the GTE
+  // transform this quad projects under the PURE SCENE CAMERA (CR0-4 == scratchpad CAM_ROT 0x1F8000F8,
+  // CR5-7 == CAM_TRANS 0x1F80010C) or a composed per-object transform? Decides whether this caller
+  // class can be display-pass re-projected through the float camera (like billboardsRender).
+  if (cfg_dbg("quadcr")) {
+    bool rotEq = true, trEq = true;
+    for (unsigned i = 0; i < 5; i++) if (gte_read_ctrl(i) != c->mem_r32(0x1F8000F8u + i * 4u)) { rotEq = false; break; }
+    for (unsigned i = 0; i < 3; i++) if (gte_read_ctrl(5 + i) != c->mem_r32(0x1F80010Cu + i * 4u)) { trEq = false; break; }
+    static long np = 0; if ((np++ & 63) == 0)
+      cfg_logf("quadcr", "#%ld ra=%08X rotEq=%d trEq=%d node=%08X", np, c->r[31], rotEq, trEq, cur_render_node(c));
+  }
 
   c->r[29] -= 16;
   const uint32_t sp = c->r[29];
@@ -198,17 +209,61 @@ void QuadRtptSubmit::submitQuad(Core* c) {
     c->mem_w32(dstw, c->mem_r32(out + off));
   c->mem_w32(POOL_PTR, pool + 40);
 
-  // DUAL-EMIT (bug #65 — AP gems/flames/apples/splash had NO pc_render picture once the OT
-  // transcription was removed): every quad that SURVIVES the substrate's own gates above is also
-  // pushed to the native render queue, from OUR OWN record — the 4 SXY words this leaf's GTE
-  // mirror just computed plus the caller-filled FT4 fields (+4 rgb|code, +12 clut|v0u0,
-  // +20 tpage|v1u1, +28/+36 v2u2/v3u3). World-positioned 2D: RQ_WORLD with the object's PC-native
-  // flat depth (obj_world_ord of the CURRENT walk node — the same #28 convention obj_depth used).
-  // Host-only; the guest packet-pool copy above is untouched. No push under psx_render/oracle
-  // (the OT walk draws the packets there — double-draw) — same gate as every 2D producer.
-  { static long np = 0; if ((np++ & 255) == 0)
-      cfg_logf("quadrtpt", "push #%ld node=%08X xy0=%08X", np, cur_render_node(c), c->mem_r32(out + 8)); }
-  rq_push_ft4_record(c, out, obj_world_ord(c, cur_render_node(c)));
+  // #67 (replaces the #65 DUAL-EMIT, deleted break-first): RECORD this surviving quad for the
+  // display-pass producer Render::billboardsRender instead of pushing the GTE SXYs verbatim. The
+  // MODEL corners are the xf words this leaf just projected; the composed GTE transform is FACTORED
+  // against the scratchpad scene camera (pure at this point — per-object composes touch only the GTE
+  // CRs) into a WORLD transform, so the display pass re-composes it with the (fps60-lerped) camera:
+  // real and interpolated frames derive the quad identically from state (render.h WqRec banner).
+  // Host memory only; the guest packet-pool copy above is untouched.
+  if (!c->game->oracle) {
+    Render::WqRec w;
+    w.node = cur_render_node(c);
+    // Per-node emission index this frame = stable lerp identity (emit order is deterministic).
+    // Derived from the frame's own record list — no per-Core static state (SBS-safe).
+    w.seq = 0;
+    for (const Render::WqRec& p : c->mRender->mWqRecs) if (p.node == w.node) w.seq++;
+    for (int i = 0; i < 4; i++) {
+      const uint32_t vxy = c->mem_r32(xf + (uint32_t)(i < 3 ? i * 8 : 24));
+      const uint32_t vzw = c->mem_r32(xf + (uint32_t)(i < 3 ? i * 8 + 4 : 28));
+      w.vx[i] = (int16_t)vxy; w.vy[i] = (int16_t)(vxy >> 16); w.vz[i] = (int16_t)vzw;
+    }
+    // Factor CR against the scratchpad camera: objR = camᵀ·CR/4096, objT = camᵀ·(tr − camT).
+    float camR[3][3];
+    { const uint32_t SCR = 0x1F800000u;
+      uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
+               w3 = c->mem_r32(SCR + 0x104), w4 = c->mem_r32(SCR + 0x108);
+      constexpr float FX = 1.0f / 4096.0f;
+      camR[0][0] = (int16_t)w0 * FX;         camR[0][1] = (int16_t)(w0 >> 16) * FX; camR[0][2] = (int16_t)w1 * FX;
+      camR[1][0] = (int16_t)(w1 >> 16) * FX; camR[1][1] = (int16_t)w2 * FX;         camR[1][2] = (int16_t)(w2 >> 16) * FX;
+      camR[2][0] = (int16_t)w3 * FX;         camR[2][1] = (int16_t)(w3 >> 16) * FX; camR[2][2] = (int16_t)w4 * FX;
+      float crF[3][3], tr[3], camT[3];
+      for (int i = 0; i < 3; i++) {
+        // CR0-4 packing: same halfword layout as the camera block above, read from the GTE.
+        camT[i] = (float)(int32_t)c->mem_r32(SCR + 0x10C + (uint32_t)i * 4u);
+        tr[i]   = (float)(int32_t)gte_read_ctrl(5u + (unsigned)i);
+      }
+      uint32_t g0 = gte_read_ctrl(0), g1 = gte_read_ctrl(1), g2 = gte_read_ctrl(2),
+               g3 = gte_read_ctrl(3), g4 = gte_read_ctrl(4);
+      crF[0][0] = (int16_t)g0 * FX;         crF[0][1] = (int16_t)(g0 >> 16) * FX; crF[0][2] = (int16_t)g1 * FX;
+      crF[1][0] = (int16_t)(g1 >> 16) * FX; crF[1][1] = (int16_t)g2 * FX;         crF[1][2] = (int16_t)(g2 >> 16) * FX;
+      crF[2][0] = (int16_t)g3 * FX;         crF[2][1] = (int16_t)(g3 >> 16) * FX; crF[2][2] = (int16_t)g4 * FX;
+      for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+          float s = 0; for (int k = 0; k < 3; k++) s += camR[k][i] * crF[k][j];   // camᵀ·CR
+          w.objR[i][j] = s;
+        }
+        float s = 0; for (int k = 0; k < 3; k++) s += camR[k][i] * (tr[k] - camT[k]);
+        w.objT[i] = s;
+      }
+    }
+    w.wColor = c->mem_r32(out + 4);
+    w.wUv0 = c->mem_r32(out + 12); w.wUv1 = c->mem_r32(out + 20);
+    w.wUv2 = c->mem_r32(out + 28); w.wUv3 = c->mem_r32(out + 36);
+    c->mRender->mWqRecs.push_back(w);
+    { static long np = 0; if ((np++ & 255) == 0)
+        cfg_logf("quadrtpt", "rec #%ld node=%08X seq=%u", np, w.node, w.seq); }
+  }
   pop();                                       // ascend the real 16-byte frame
 }
 

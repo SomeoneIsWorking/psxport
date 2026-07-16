@@ -2237,3 +2237,24 @@ draft was already byte-faithful.
   0x80039F4C score strip + the otattr census remainder (docs/fps60-rework.md REDIRECT list).
 - **refs**: game/render/perobj_billboard.cpp (BbRec capture + billboardsRender), render.h,
   render_walk.cpp (fieldObjectsRender tail), fps60.cpp (bbSwapPrev), native_boot.cpp (bbFrameReset).
+
+## submitQuad quads (flame/rope classes) now display-pass — composed-CR camera factorization (2026-07-16, #67 RE work cont.)
+
+- **probe first (`debug quadcr`)**: at the seaside field the live submitQuad caller is the A00-overlay
+  emitter (ra=0x80134168/0x801341CC, node 0x800F1008) under COMPOSED CRs (≠ scene camera) — B704 and
+  case188 do not fire there. So a camera-only float re-projection was not enough.
+- **mechanism — factor the composed CR against the scratchpad camera** (pure at emit time; per-object
+  composes touch only the GTE regs): CR = cam∘obj, tr = cam·pos + cam.t ⇒ objR = camᵀ·CR/4096,
+  objT = camᵀ·(tr − camT). `Render::WqRec` captures node + per-node seq + model corners (the xf words)
+  + factored world transform + resolved material words. `billboardsRender` re-composes with the
+  (fps60-lerped) camera: corner_view = Rcam·(objR·corner + objT) + Tcam — exact at the endpoints for
+  ANY CR content, world-glued in between, ONE mechanism for every submitQuad caller class (no
+  per-emitter RE needed for the picture). Per-record prev/cur lerp keyed (node, seq).
+- **break-first**: `rq_push_ft4_record` DELETED entirely (render_internal.h — submitQuad was its last
+  caller). Both record kinds emit via a shared `emitRecQuad` that decodes texpage/clut RAW from the
+  record words with neutral tw/da (GpuState's live s_tp_*/s_da_* are stale at display time — latent
+  hazard in the first BbRec emit, fixed here).
+- **verify**: SBS-full 0-diff both legs (combat f8220, watch_cut f27840); fps60 field gate PASS
+  (preseqobj 0 flagged, preseq_flicker 0/4); default-config 30fps shot renders identically.
+- **refs**: quad_rtpt_submit.cpp (quadcr probe + WqRec capture), perobj_billboard.cpp
+  (emitRecQuad + WqRec loop), render.h (WqRec), render_internal.h (helper deleted), docs/config.md quadcr.

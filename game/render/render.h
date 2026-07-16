@@ -262,9 +262,28 @@ public:
   };
   std::vector<BbRec> mBbRecs;             // this logic frame's records, guest-walk emit order
   std::vector<BbRec> mBbRecsPrev;         // previous frame's (fps60 per-particle lerp source)
-  void bbFrameReset() { mBbRecs.clear(); }             // once per logic frame, before the guest walk
-  void bbSwapPrev()   { mBbRecs.swap(mBbRecsPrev); }   // fps60 present_vk rotation (cur -> prev)
-  void billboardsRender();                // display-pass producer: project + emit every BbRec
+
+  // WqRec — the GENERIC composed-CR quad record (QuadRtptSubmit::submitQuad's classes: the A00-overlay
+  // flame/rope emitter 0x801341xx, case188 particles, B704 beams). At capture the composed GTE
+  // transform is FACTORED against the scratchpad scene camera (which stays pure while only the GTE
+  // CRs get per-object composes): CR = cam∘obj, tr = cam·pos + cam.t  ⇒  objR = camᵀ·CR/4096,
+  // objT = camᵀ·(tr − camT). The display pass re-composes with the (fps60-lerped) camera:
+  // corner_view = cam'·(objR·corner + objT) + camT' — exact at the endpoints for ANY CR content,
+  // world-glued in between. One mechanism for every submitQuad caller, no per-emitter RE needed.
+  struct WqRec {
+    uint32_t node;                        // identity (dbg_node)
+    uint32_t seq;                         // per-node emission index this frame (lerp identity key)
+    float    objR[3][3];                  // factored world rotation (unit scale)
+    float    objT[3];                     // factored world position
+    int16_t  vx[4], vy[4], vz[4];         // model-space corners (the xf words submitQuad projected)
+    uint32_t wColor, wUv0, wUv1, wUv2, wUv3;   // caller-filled record words +4/+12/+20/+28/+36
+  };
+  std::vector<WqRec> mWqRecs;
+  std::vector<WqRec> mWqRecsPrev;
+
+  void bbFrameReset() { mBbRecs.clear(); mWqRecs.clear(); }          // per logic frame, pre-walk
+  void bbSwapPrev()   { mBbRecs.swap(mBbRecsPrev); mWqRecs.swap(mWqRecsPrev); }   // fps60 rotation
+  void billboardsRender();                // display-pass producer: project + emit every BbRec + WqRec
 
   // fieldEntityRender: world-space GT3/GT4 scene-table renderer. Walks the entity-list struct at
   // `es` (per-list ptr headers at es+0x10..; packed geometry base at es+0xC; count at es+6),
