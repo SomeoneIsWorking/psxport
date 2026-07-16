@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 13 verified · 2 partial · 3 n/a
+**Status:** 14 verified · 2 partial · 3 n/a
 
 ## ActorTomba::enterOuterState0 (FUN_80058648)
 - **status:** verified
@@ -22,6 +22,12 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **frames:** 20580
 - **gate:** MIRROR_VERIFY OK all invocations + 0 sbs-div; combat 0-diff + watch-cut f20580
 - **evidence:** 0bb8cb9d
+
+## ActorTomba::mode0WalkHandler (FUN_8005A970)
+- **status:** verified
+- **frames:** 20040
+- **gate:** port_check PASS + MIRROR_VERIFY OK + 0 sbs-div; combat 0-diff f5400 + watch-cut f20040
+- **evidence:** d4ace056
 
 ## Core::guestMemset (FUN_8009A420)
 - **status:** verified
