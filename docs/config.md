@@ -305,6 +305,12 @@ the failing fade caller is a substrate SM handler that needs porting native. Iss
 `ScreenFade` has no cross-frame hold — see docs/findings/render.md "ScreenFade held-latch permanent
 black" for the removed heuristic and why.
 
+`fontq` (game/ui/font.cpp) — rate-limited probe of `Font::glyphQueuePush` (the glyphEmit dual-emit's
+host half): glyph xy/wh/uv/clut every 128th push. Silent = no native text pushes this run.
+
+`panelq` (game/ui/panel.cpp) — rate-limited probe of the panel taps (`Panel::pushFill`/`pushCorners`,
+FUN_8004FFB4/FUN_8005019C): rect/style/attr/semi/raw every 128th push. Silent = no panel drawn.
+
 `fadesites` — one line per native fade call site each time it fires (`Sop::fieldMode` case 1/3,
 `Engine::fieldRun` case 10, `BgSceneTransitionSm::fadeRect`), tagged by site name + the raw ramp
 counter. Use when `fadetrace` shows the RGB value oscillating/stuck and you need to know WHICH of the
