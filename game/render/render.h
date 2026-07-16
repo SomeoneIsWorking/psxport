@@ -217,6 +217,13 @@ public:
   // quads (templates 0x8e/0x8f/0x98). Retires the hand-decoded per-item constants titleNative used.
   void emitMenuFt4(int anchorX, int anchorY, uint32_t templateIdx, uint32_t attr, int layer);
 
+  // narrationSwirlRender: native producer for the SOP intro-narration full-screen SWIRL — the type-0x20
+  // render node (0x800ED9E8) whose CUSTOM render fn (node+0x18 = 0x8010BF54, SOP overlay) the substrate
+  // walk dispatches via its default case. Draws the 36-byte quad-record mesh @0x8010CC08 twice (two
+  // blades, +0x800 yaw apart) with the RE'd transform chain in host float. Read-only; real depth.
+  // See game/render/narration_swirl.cpp for the full RE. Dispatched from fieldObjectsRender's walk.
+  void narrationSwirlRender(uint32_t node);
+
   // fieldObjectsRender: the field's OBJECT pass — walk the 3 entity lists + Tomba's G-block and flush each
   // live object's geomblk (perObjFlush → projComposeObject → gt3gt4). Factored OUT of sceneNative (which
   // mutates per-frame trust latches and can't be re-run) so Fps60's interp present can RE-RUN it under the

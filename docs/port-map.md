@@ -3,7 +3,7 @@
 The RE dependency chain. `## ` block per step. Work `portmap.py next`; kill `portmap.py hacks`.
 Detail lives in docs/port-progress.md; this is the queryable real-vs-hack frontier.
 
-**Status:** 4 verified · 1 ported-unverified · 2 todo
+**Status:** 5 verified · 1 ported-unverified · 1 todo
 
 ## title-frontend — DEMO stage s0..s7 + menu logic
 - **scope:** 0x801062E4 stage; Demo::s0..s7; sub-machines 0x8010696C/0x80106AC4
@@ -30,11 +30,11 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 
 ## sop-narration-void-vortex (#5)
 - **scope:** SOP void beat (0x800BF9B4==5): vortex object 0x800FBA68 not rendering under pc_render
-- **status:** todo
+- **status:** verified
 - **order:** 22
 - **deps:** newgame->field transition (s5 leave-demo)
-- **owner:** game/render/render_walk.cpp (renderSopNarration/sceneNative)
-- **notes:** DEEP-DIAGNOSED (findings #5): NOT walk/cull/backface/semi/shading/shader — ruled out each. Prims cover the screen but pc samples texel-0(transparent) at edges where psx samples dim-purple texture -> VK VRAM SNAPSHOT differs from guest VRAM (vortex texture-upload not mirrored to VK image, hypothesis). Next: vram diff at tpage 0x19. Deep GPU-backend.
+- **owner:** game/render/narration_swirl.cpp (Render::narrationSwirlRender)
+- **notes:** FIXED: the swirl is a type-0x20 CUSTOM-RENDER-FN node (0x8010BF54, SOP overlay) the native walk skipped. Full RE'd native producer (mesh 0x8010CC08 36B quad records, rotmat*rotY*colScale transform via projComposeObjectHost, 2 blades, U-scroll anim). Verified: coverage 59.1% vs ref 58.9%, RMSE 20 (accepted-3D band; field=61), read-only (DisplayPassGuard silent 600+ frames), title RMSE 0 + hut replay regressions clean. USER eyeball for animated result pending.
 
 ## newgame->field transition (s5 leave-demo)
 - **scope:** DEMO sm[0x48]==5 (demo_frame_s5, LEAVE-DEMO teardown) + GAME s48=5 stale-handoff

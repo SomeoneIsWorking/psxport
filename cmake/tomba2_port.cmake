@@ -233,6 +233,7 @@ set(PORT_SRC
   game/render/proj_params.cpp
   game/render/projection.cpp
   game/render/render_frame.cpp
+  game/render/narration_swirl.cpp
   game/render/render_walk.cpp
   game/core/engine.cpp
   game/scene/sop.cpp

@@ -2128,7 +2128,7 @@ draft was already byte-faithful.
 - **symptom:** after New Game, the SOP intro (GAME stage, overlay 0x3C021F80) shows a mostly-black screen
   under pc_render; reference shows a large swirling vortex. pixel-diff at the void beat: pc 2.7% non-black
   vs psx 58.9%, RMSE 45.
-- **status:** known-issue, localized 2026-07-16 (render-completeness, deferred; NOT a crash)
+- **status:** fixed 2026-07-16 (Render::narrationSwirlRender — native swirl producer; void beat 2.7%->59.1% coverage vs ref 58.9%, RMSE 45->20 = within the accepted native-3D band (field itself shows 61))
 - **cause:** the frame is the SOP VOID BEAT (*(u8*)0x800BF9B4 == 5, sm4a==0 sm4c==0). renderSopNarration's
   void-beat guard is correct (black bg + object-pass only, terrain/scene-table/backdrop dropped), BUT the
   vortex object (node 0x800FBA68) does not render through sceneNative's object pass under pc_render — so the

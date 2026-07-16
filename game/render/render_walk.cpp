@@ -580,6 +580,18 @@ void Render::fieldObjectsRender() {
     uint32_t n = c->mem_r32(HEADS[h]);
     for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
       if (c->mem_r8(n + 1) == 0) continue;                             // per-frame visibility marker
+      // CUSTOM-RENDER-FN node (type 0x20): the node draws via a render fn at n+0x18 (substrate default-
+      // case dispatch), NOT the cmd array. Known: the SOP narration SWIRL (0x8010BF54) — draw it natively
+      // (narration_swirl.cpp). Guard on the SOP overlay being resident (sig @0x80109450): a stale node
+      // whose fn points into an EVICTED overlay is normal (later-275 dangling-pointer case) — skip it.
+      // Other type-0x20 fns stay skipped like before (tracked by #3b's completeness gate, not a crash).
+      if (c->mem_r8(n + 0xB) == 0x20) {
+        if (c->mem_r32(n + 0x18) == 0x8010BF54u && c->mem_r32(0x80109450u) == 0x3C021F80u) {
+          c->mRender->stats.snObjs++;
+          c->mRender->narrationSwirlRender(n);
+        }
+        continue;
+      }
       if (c->mem_r8(n + 8) == 0 || c->mem_r8(n + 9) == 0) continue;    // no render commands
       c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
       c->r[4] = n;
