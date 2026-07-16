@@ -37,6 +37,7 @@
 typedef void (*OverrideFn)(Core*);
 extern void shard_set_override(uint32_t, OverrideFn);    // generated/shard_disp.c
 extern void ov_a00_set_override(uint32_t, OverrideFn);   // generated/ov_a00_disp.c
+extern void ov_game_set_override(uint32_t, OverrideFn);  // generated/ov_game_disp.c
 
 namespace {
 struct Entry { uint32_t addr; OverrideFn native; OverrideFn gen; };
@@ -146,4 +147,11 @@ void engine_set_override_main(uint32_t addr, OverrideFn native, OverrideFn gen) 
 void engine_set_override_a00(uint32_t addr, OverrideFn native, OverrideFn gen) {
   put(addr, native, gen);
   ov_a00_set_override(addr, engine_override_thunk);
+}
+// The GAME overlay (generated/ov_game_disp.c) — the field/stage state machine band (0x8010637C..
+// 0x80108F24). Same oracle-gated shared thunk so core B / psx_fallback keeps running the pure gen
+// body while every native/substrate caller reaches the port on core A.
+void engine_set_override_game(uint32_t addr, OverrideFn native, OverrideFn gen) {
+  put(addr, native, gen);
+  ov_game_set_override(addr, engine_override_thunk);
 }

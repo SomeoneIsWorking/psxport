@@ -129,6 +129,8 @@ public:
   // Formerly `ov_game_submode0` / `ov_game_submode1` free functions in engine.cpp.
   void submode0();
   void submode1();
+  void fieldTransitionCase5();        // FUN_8010766C (ov_game) — field-transition sub-machine case (PORT_GEN)
+  void installFieldTransitions();     // wire the ov_game field-transition handlers on the override table
   // submode1Faithful: pc_faithful mirror of ov_game_gen_801088D8 — guest frame + jal-site ras;
   // case 0 dispatches the REAL 0x80044BD4 spawn-and-wait of the area-DATA loader 0x800452C0
   // (Asset::areaDataLoadAsTask on the task-1 fiber), parking the stage fiber organically. This
