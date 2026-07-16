@@ -127,6 +127,10 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->game->ffspan.begin();
   c->engine.frameUpdate();                                    // tick + per-vblank audio + present + pace
   c->game->ffspan.end("frameupd");
+  // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step below) is
+  // about to capture belong to the NEW logic frame; the presents above (fps60's interp re-run included)
+  // consumed last frame's. Reset here — after present, before the walk — mirroring the mObjCur rotation.
+  c->mRender->bbFrameReset();
   c->game->cd.audioTrace("post");                                  // CD-vol fade state AFTER tick+mix
   c->game->perf.phaseBegin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/

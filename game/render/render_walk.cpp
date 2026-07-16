@@ -585,6 +585,10 @@ void Render::fieldObjectsRender() {
       perObjFlush();
     }
   }
+  // BILLBOARDS (#67): the display-pass particle-quad producer — projects the records billboardEmit
+  // captured this logic frame through the float camera (fps60-lerped at the interp re-run). Lives in
+  // this walk so field, hut interior and Fps60::tier1Render all derive it the same way.
+  billboardsRender();
   c->r[4] = saved;
 }
 // ===================================================================================================

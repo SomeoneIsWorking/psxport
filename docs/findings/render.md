@@ -2205,3 +2205,35 @@ draft was already byte-faithful.
   principle: real and interp frames identical derivation, lerp only in the inputs).
 - **refs**: game/render/fps60.{h,cpp} isTier1Owned/present_vk/tier1Render, render_walk.cpp
   worldVoidBeat/fieldAreaInit, render_queue.cpp preseqobj scene=, bug #67, scratch/logs/bug67_gate_s.log
+
+## billboardEmit particles now a DISPLAY-PASS producer — dual-emit deleted, true fps60 interpolation (2026-07-16, #67 RE work)
+
+- **why**: USER principle — real and interpolated frames must be MADE identically, both derived from
+  game state. The #65 dual-emit pushed billboardEmit's GTE-computed SXYs verbatim (guest-execution-time
+  picture), so the fps60 interp present could only replay them → 30Hz stepping (7 stall-step tracks on
+  the windmill/contraption nodes 800EDF38/800EDE28/800EDDA0/800EDD18 after the #67 flicker fix).
+- **RE basis (all already native/RE'd — no new Ghidra needed)**: corners = rect from particle p+14/15
+  (s8 offsets) × p+10/11 (w,h), all ×5, z=0 (func_8003B220 = hitbox.cpp's mislabeled
+  `hitbox_build_3b220`); rotation = MAT_OUT (scratch BUF+0x40: rotZ(node+90), compose2 ∘
+  seedBlock(node+122/124/126)); anchor = node+46/50/54; **CAM2 = scratchpad 0x1F8000F8 = EXACTLY the
+  view matrix Fps60::sceneCam reads** (the perobj_billboard header's "main-RAM 0x800C0000" note was
+  stale — corrected); GTE compose: CR rot = MAT_OUT.R, CR trans = CAM2·anchor + CAM2.t; material =
+  particle uv words + node+92/node+13 patches (already mirrored natively in billboardEmit).
+- **change**: billboardEmit records one host-side `Render::BbRec` per emitted particle (corners,
+  MAT_OUT rotation, anchor, RESOLVED material words) — `rq_push_ft4_record` dual-emit DELETED
+  (break-first). New `Render::billboardsRender` (perobj_billboard.cpp), called at the end of
+  fieldObjectsRender (field + hut + tier1 interp re-run all reach it): float-projects each record
+  through the sceneCam choke (fps60-lerped) and emits drawWorldQuad-convention RQ_WORLD prims
+  (has_xyf=1 → tier1-owned, dbg_node=node = real identity). At the interp re-run (mObjOverrideOn)
+  each record component-lerps against the previous frame's record keyed by particle addr
+  (mBbRecsPrev, rotated in present_vk like mObjCur) — anchors AND per-particle animation interpolate.
+  Records reset per logic frame in native_boot after frameUpdate (present consumed them).
+- **verify**: SBS-full 0-diff BOTH legs (combat f7620, watch_cut f27600 — capture is host-only, guest
+  packet emission untouched); headless field walk fps60=1: preseqobj gate PASS 0 flagged (was 7
+  stall-step), preseq_flicker 0/4 bands; screenshot bug67_native_bb.png — gems/sprites/contraption
+  render correctly via the new producer.
+- **residual / next emitters**: QuadRtptSubmit::submitQuad (weapon-class quads) still dual-emits its
+  GTE SXYs (rq_push_ft4_record's remaining caller) — same display-pass treatment applies; then the
+  0x80039F4C score strip + the otattr census remainder (docs/fps60-rework.md REDIRECT list).
+- **refs**: game/render/perobj_billboard.cpp (BbRec capture + billboardsRender), render.h,
+  render_walk.cpp (fieldObjectsRender tail), fps60.cpp (bbSwapPrev), native_boot.cpp (bbFrameReset).

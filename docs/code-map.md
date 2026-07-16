@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 702 native fns, 567 owned addresses, 673 LIVE / 29 ORPHAN.
+Totals: 704 native fns, 569 owned addresses, 675 LIVE / 29 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -69,10 +69,10 @@ Totals: 702 native fns, 567 owned addresses, 673 LIVE / 29 ORPHAN.
 | 0x8003BED8 | LIVE | `Render::objListWalk2Continue` | game/render/objlist_walk.cpp:265 |  | (Render::objListWalk2Continue) — the walk's shared "process the rest o… |
 | 0x8003BF00 | LIVE | `Render::objListWalk3` | game/render/objlist_walk.cpp:290 | 0x8010FC70 | ======================================================================… |
 | 0x8003C048 | LIVE | `Render::renderWalk` | game/render/render_walk_dispatch.cpp:153 | 0x80129114 0x801295B4 0x8012A43C 0x8013DD58 |  |
-| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:325 |  |  |
-| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:360 |  |  |
-| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:396 |  | ======================================================================… |
-| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:203 |  | ======================================================================… |
+| 0x8003C2D4 | LIVE | `Render::billboardCompose1` | game/render/perobj_billboard.cpp:329 |  |  |
+| 0x8003C464 | LIVE | `Render::billboardCompose2` | game/render/perobj_billboard.cpp:364 |  |  |
+| 0x8003C8F4 | LIVE | `Render::billboardEmit` | game/render/perobj_billboard.cpp:400 |  | ======================================================================… |
+| 0x8003CCA4 | LIVE | `Render::perObjRenderDispatch` | game/render/perobj_billboard.cpp:207 |  | ======================================================================… |
 | 0x8003CDD8 | LIVE | `Render::cmdListDispatch` | game/render/perobj_dispatch.cpp:132 |  | per-object cmd-list dispatch: composes the WORLD object transform (cam… |
 | 0x8003D0BC | LIVE | `Render::overlayTypeDispatch` | game/render/overlay_type_dispatch.cpp:70 | 0x8010AA20 0x8010B0B8 0x8010B5BC 0x8010BA40 0x8010C2A4 0x8011024C … |  |
 | 0x8003EEC0 | LIVE | `Render::objListWalk4` | game/render/objlist_walk.cpp:354 |  | ======================================================================… |
@@ -176,7 +176,7 @@ Totals: 702 native fns, 567 owned addresses, 673 LIVE / 29 ORPHAN.
 | 0x800509B4 | LIVE | `Engine::initDisplay` | game/scene/startup.cpp:51 | 0x80050738 | engine DISPLAY + GTE-projection init, PC-native. Sets the GTE projecti… |
 | 0x80050A0C | LIVE | `Engine::initFrameState` | game/scene/startup.cpp:30 |  | engine frame-state init: zero the vblank counter and the double-buffer… |
 | 0x80050A80 | LIVE | `Engine::initCamera` | game/scene/startup.cpp:82 |  | engine CAMERA init: identity camera-rotation matrix at scratchpad 0x1F… |
-| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:599 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
+| 0x80050B08 | LIVE | `native_boot_run` | runtime/recomp/native_boot.cpp:603 |  | Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main … |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStepFaithful` | game/core/engine.cpp:2500 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80050DE4 | LIVE | `Engine::sceneStateStep` | game/core/engine.cpp:2575 |  | Engine::sceneStateStep — the SCENE-INIT / SCENE-RUN state machine at g… |
 | 0x80051128 | LIVE | `NodeXform::propagate` | game/render/node_xform.cpp:242 |  | per-object CHILD-NODE TRANSFORM loop. RE'd from disas: |
@@ -426,7 +426,7 @@ Totals: 702 native fns, 567 owned addresses, 673 LIVE / 29 ORPHAN.
 | 0x80086620 | LIVE | `eng_init_mode_ctrl` | game/scene/startup.cpp:154 |  | engine MODE control: file-local helper (only called from Engine::initS… |
 | 0x80087A60 | LIVE | `Engine::initInput` | game/scene/startup.cpp:173 | 0x80080890 0x800808A0 0x80085B10 0x800873F0 0x80087400 | a thin wrapper that just calls FUN_80086970; owned as initInput(). |
 | 0x80088B00 | LIVE | `Engine::initAlloc` | game/scene/startup.cpp:198 | 0x80086738 0x80089160 0x8009A340 | engine ALLOCATOR / dispatch-table init. `s1` / `s2` are the struct-spa… |
-| 0x800896E0 | LIVE | `crt0_setup` | runtime/recomp/native_boot.cpp:201 | 0x80089860 | PC-native crt0 (faithful reimplementation of FUN_800896E0): BSS-zero, … |
+| 0x800896E0 | LIVE | `crt0_setup` | runtime/recomp/native_boot.cpp:205 | 0x80089860 | PC-native crt0 (faithful reimplementation of FUN_800896E0): BSS-zero, … |
 | 0x800898A0 | LIVE | `Cd::hleInit` | runtime/recomp/cd_override.cpp:325 |  | ======================================================================… |
 | 0x8008A110 | LIVE | `LibcdNative::posToInt` | game/cd/libcd_native.cpp:29 |  |  |
 | 0x8008A6EC | ORPHAN | `cd_sync` | runtime/recomp/cd_override.cpp:67 |  | (noblock, result) CdSync -> 2 (status: complete/ready). |
@@ -472,6 +472,7 @@ Totals: 702 native fns, 567 owned addresses, 673 LIVE / 29 ORPHAN.
 | 0x800BF808 | LIVE | `Engine::postRenderTickFaithful` | game/core/engine.cpp:2699 | 0x80074590 | Engine::postRenderTickFaithful -- byte-exact mirror of gen_func_80077D… |
 | 0x800BF81E | LIVE | `Engine::submitPage810cFaithful` | game/core/engine.cpp:453 | 0x8007E9C8 | pc_faithful mirror of ov_game_gen_8010810C's page-1 (pause-menu dim) b… |
 | 0x800BF842 | LIVE | `Engine::postRenderTick` | game/core/engine.cpp:2670 |  | Engine::postRenderTick — 3-state fx-trigger + countdown on byte 0x800B… |
+| 0x800BF9B4 | LIVE | `Render::worldVoidBeat` | game/render/render_walk.cpp:443 |  | Per-frame WORLD-pass gates (render.h): one definition each, read by BO… |
 | 0x800ED058 | LIVE | `Engine::sceneEventFifoFaithful` | game/core/engine.cpp:641 |  | pc_faithful field EVENT/COMMAND-QUEUE state machine — mirror of gen_fu… |
 | 0x800EE489 | LIVE | `Cull::cullFarMult` | game/render/cull.cpp:82 |  | pc_faithful/pc_skip split (2026-07-03): pc_faithful (pc_skip=false) us… |
 | 0x800F2624 | LIVE | `RenderQueue::objidOverlay` | game/render/render_queue.cpp:129 |  | Box + label every live GAME OBJECT, identified by ENUMERATING the rend… |
@@ -510,6 +511,7 @@ Totals: 702 native fns, 567 owned addresses, 673 LIVE / 29 ORPHAN.
 | 0x80106C24 | LIVE | `demo_frame_s7` | game/scene/demo.cpp:932 | 0x800452C0 0x800524B4 0x80074BC4 0x80079374 0x80079464 0x8007A8E0 … | Substate s7 (trampoline 0x80106668 -> phase machine 0x80106C24) — the … |
 | 0x80106F80 | LIVE | `demo_menu_machine` | game/scene/demo.cpp:630 | 0x8001CF00 0x8008CCE0 0x8008CD40 0x8009C820 0x8009C8BC 0x80106F80 | s1's inner menu input machine (0x80106F80): an 8-way state machine on … |
 | 0x801070B4 | LIVE | `Engine::fieldRunXFaithful` | game/core/engine.cpp:2068 | 0x8005082C 0x80050894 0x8006C77C | FIELD RUNNING sub-machine VARIANT 0x801070b4 (sm[0x4c]==3, the mid-tra… |
+| 0x8010766C | LIVE | `Engine::fieldTransitionCase5` | game/core/engine_field_transition.cpp:17 | 0x800263E8 0x80074F24 0x80075240 0x800783DC 0x80078610 0x800796DC … |  |
 | 0x80107AFC | LIVE | `Engine::transitionMain` | game/core/engine.cpp:1622 |  | the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teard… |
 | 0x80107D3C | LIVE | `Engine::transitionD3c` | game/core/engine.cpp:1674 |  | transition variant (sm[0x4c]==5/6). sm[0x4e]: 0 load, 1 effect 0x8003f… |
 | 0x80107E20 | LIVE | `Engine::transitionE20` | game/core/engine.cpp:1695 |  | transition variant (sm[0x4c]==7). sm[0x4e]: 0 setup+load, 1 effect 0x8… |

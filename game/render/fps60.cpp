@@ -425,6 +425,8 @@ void Fps60::present_vk(Core* core) {
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
   mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
+  c->mRender->bbSwapPrev();       // billboard records rotate in lockstep (#67 per-particle lerp source);
+                                  // native_boot's bbFrameReset clears the new cur before the next walk
   mHavePrev = 1;
 }
 

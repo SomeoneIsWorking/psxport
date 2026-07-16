@@ -23,6 +23,7 @@
 #include "margin_render.h"    // class MarginRenderer — widescreen margin collect-and-flush
 #include "lighting.h"           // class Lighting — per-area light registry (sun / lava+torch)
 #include <unordered_set>
+#include <vector>
 class Core;
 
 class Render {
@@ -239,6 +240,31 @@ public:
   // lerped per-object transforms (mObjOverrideOn) — the SAME object walk the real frame ran, replacing the
   // matchAndLerp output heuristic (docs/fps60-rework.md step 2b). Pure reads + queue emits, no state mutation.
   void fieldObjectsRender();
+
+  // ---- BILLBOARD display-pass producer (#67 RE work — REDIRECT doctrine, USER: both frame kinds
+  // derive from game state) ---------------------------------------------------------------------
+  // The billboardEmit particle system (perobj_billboard.cpp — AP gems / flames / apples / splash /
+  // windmill sprites) runs at GUEST-EXECUTION time inside the substrate render walk; its packets are
+  // guest state, but its PICTURE must come from the display pass so the fps60 interp re-run derives
+  // it under lerped inputs like every other world prim. Each real frame, billboardEmit RECORDS one
+  // BbRec per emitted particle (host memory only): the particle's local quad corners (the ×5 ints
+  // func_8003B220 built), the node's composed MAT_OUT rotation + world anchor, and the RESOLVED
+  // material words (post node+92 override + node+13 case patches). billboardsRender (called from
+  // fieldObjectsRender, so field + hut + tier1Render's interp re-run all reach it) projects each
+  // record through the SAME float camera path the world uses (sceneCam choke — fps60-lerped at the
+  // interp present) and emits an RQ_WORLD quad with real per-particle identity (dbg_node=node).
+  struct BbRec {
+    uint32_t node, particle;              // identity (node = dbg_node; particle addr = stable key)
+    int16_t  cx[4], cy[4];                // local corner ints (already ×5; z=0 in local space)
+    int16_t  rotR[3][3];                  // MAT_OUT rotation, 4.12 fixed (row-major)
+    int16_t  wx, wy, wz;                  // world anchor (node+46/50/54 at emit time)
+    uint32_t wColor, wUv0, wUv1, wUv2, wUv3;   // resolved record words BUF+4/+12/+20/+28/+36
+  };
+  std::vector<BbRec> mBbRecs;             // this logic frame's records, guest-walk emit order
+  std::vector<BbRec> mBbRecsPrev;         // previous frame's (fps60 per-particle lerp source)
+  void bbFrameReset() { mBbRecs.clear(); }             // once per logic frame, before the guest walk
+  void bbSwapPrev()   { mBbRecs.swap(mBbRecsPrev); }   // fps60 present_vk rotation (cur -> prev)
+  void billboardsRender();                // display-pass producer: project + emit every BbRec
 
   // fieldEntityRender: world-space GT3/GT4 scene-table renderer. Walks the entity-list struct at
   // `es` (per-list ptr headers at es+0x10..; packed geometry base at es+0xC; count at es+6),

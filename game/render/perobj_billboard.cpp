@@ -30,7 +30,7 @@
 //
 // FUN_8003C2D4 / FUN_8003C464 (billboardCompose1/2, a0=node r4): each builds a "local" transform for a
 // billboard-type node and composes it with a persistent camera MATRIX before handing off to
-// billboardEmit. Both use a shared, non-scratchpad per-instance scratch region at main-RAM 0x800C0000
+// billboardEmit. Both use a shared per-instance SCRATCHPAD region at 0x1F800000
 // (BUF below) that holds ordinary libgte MATRIX structs (m[3][3] int16 row-major + 2 pad bytes + t[3]
 // int32 — exactly what Mtx::identity's 8-word write pattern and Math::rotZ/matMul's byte
 // reads agree on):
@@ -40,8 +40,10 @@
 //   BUF+0x40 MAT_OUT   — Math::matMul(MAT_ROTZ, MAT_A, MAT_OUT) (= MAT_ROTZ for C2D4, since MAT_A is
 //                         identity there); .t (=MAT_OUT+0x14) becomes the composed WORLD translation.
 //   BUF+0xC0 WORLD_POS — object's world position triple (s16 x3, from node+46/50/54).
-//   BUF+0xF8 CAM2      — a PERSISTENT camera MATRIX mirror in main RAM (not the scratchpad SCR/CAM_ROT
-//                         perobj_dispatch.cpp already owns) — read-only here, set up elsewhere.
+//   BUF+0xF8 CAM2      — the SCENE CAMERA view MATRIX at scratchpad 0x1F8000F8 — the EXACT bytes
+//                         Fps60::sceneCam reads (m rows @+0xF8..0x109, t @+0x10C..0x117). Read-only
+//                         here. (#67 correction: an earlier note called this "main-RAM 0x800C0000";
+//                         that was the same mis-base the f117 fix corrected for BUF itself.)
 // Both then: load CAM2.m into CR0-4, MVMVA-transform WORLD_POS by it (same opcode as cmdListDispatch's
 // world-translate), add CAM2.t into MAT_OUT.t, reload CR0-7 from MAT_OUT (rotation + composed
 // translation), and call billboardEmit(node, mem8(node+71)&1).
@@ -74,6 +76,8 @@
 #include "render.h"
 #include "pkt_span.h"
 #include "render_internal.h"   // obj_world_ord / gpu_obj_depth_add / withDepthTag
+#include "proj_params.h"       // ProjParams::pzToOrd — billboardsRender depth normalize
+#include <unordered_map>
 
 void rec_dispatch(Core*, uint32_t);
 void shard_set_override(uint32_t addr, OverrideFn fn);   // generated/shard_disp.c (C++ linkage)
@@ -553,11 +557,31 @@ void Render::billboardEmit() {
       if (!c->game->oracle) {
         const float pord = billboardParticleOrd(c, node, particle);
         gpu_obj_depth_add(c, packetLo, tail, pord);
-        // DUAL-EMIT (#65): the particle quad's native picture — the BUF record this loop just
-        // finished (our own GTE-computed SXYs + case-selected code/clut) pushed as a WORLD prim at
-        // this particle's own depth. Without this, gems/flames/apples had NO pc_render picture
-        // (their packets only ever drew via the removed OT transcription). Gated inside the helper.
-        rq_push_ft4_record(c, BUF, pord);
+        // #67 (replaces the #65 DUAL-EMIT, deleted break-first): RECORD this particle for the
+        // display-pass producer Render::billboardsRender instead of pushing the GTE-computed SXYs
+        // verbatim. The record is pure game state resolved this tick — local corners (the ×5 ints
+        // func_8003B220 just built into the guest-stack scratch), the node's composed MAT_OUT
+        // rotation + world anchor, and the RESOLVED material words (post node+92 override +
+        // node+13 case patches). billboardsRender projects it through the SAME float camera path
+        // the world uses, so the fps60 interp re-run derives the quad under lerped inputs — real
+        // and interpolated frames are made identically (USER principle). Host memory only.
+        {
+          Render::BbRec rb;
+          rb.node = node; rb.particle = particle;
+          const uint32_t vbase = FR(16);
+          rb.cx[0] = c->mem_r16s(vbase + 0);  rb.cy[0] = c->mem_r16s(vbase + 2);
+          rb.cx[1] = c->mem_r16s(vbase + 8);  rb.cy[1] = c->mem_r16s(vbase + 10);
+          rb.cx[2] = c->mem_r16s(vbase + 16); rb.cy[2] = c->mem_r16s(vbase + 18);
+          rb.cx[3] = c->mem_r16s(vbase + 24); rb.cy[3] = c->mem_r16s(vbase + 26);
+          for (int rr = 0; rr < 3; rr++)
+            for (int cc = 0; cc < 3; cc++)
+              rb.rotR[rr][cc] = (int16_t)c->mem_r16(MAT_OUT + (uint32_t)rr * 6u + (uint32_t)cc * 2u);
+          rb.wx = c->mem_r16s(node + 46); rb.wy = c->mem_r16s(node + 50); rb.wz = c->mem_r16s(node + 54);
+          rb.wColor = c->mem_r32(BUF + 4);
+          rb.wUv0 = c->mem_r32(BUF + 12); rb.wUv1 = c->mem_r32(BUF + 20);
+          rb.wUv2 = c->mem_r32(BUF + 28); rb.wUv3 = c->mem_r32(BUF + 36);
+          c->mRender->mBbRecs.push_back(rb);
+        }
         // Diagnostic (PSXPORT_DEBUG=bbord): prove the per-particle registration carries DISTINCT ords
         // (before this change every particle of a manager node shared obj_world_ord(node)'s single ord).
         if (cfg_dbg("bbord")) {
@@ -582,6 +606,114 @@ void ov_perObjRenderDispatch(Core* c) { c->mRender->perObjRenderDispatch(); }
 void ov_billboardCompose1(Core* c)    { c->mRender->billboardCompose1(); }
 void ov_billboardCompose2(Core* c)    { c->mRender->billboardCompose2(); }
 void ov_billboardEmit(Core* c)        { c->mRender->billboardEmit(); }
+}
+
+// ==================================================================================================
+// billboardsRender — the DISPLAY-PASS billboard producer (#67; REDIRECT doctrine: RE+port, not
+// stamping). Projects every BbRec billboardEmit captured this logic frame through the SAME float
+// camera path the rest of the world uses (Fps60::sceneCam — the choke the fps60 interp present serves
+// a lerp(prev,cur) camera through), reproducing the GTE compose exactly in float:
+//   CR rotation  = MAT_OUT.R                      -> corner_view = MAT_OUT.R·corner/4096 + t
+//   CR translate = CAM2.R·WORLD_POS + CAM2.t      -> t = Rcam·anchor/4096 + Tcam  (CAM2 == sceneCam's
+//                                                    scratchpad view matrix, see the header banner)
+//   sx = OFX + vx·H/pz, pz = max(H/2, vz)          -> the same projection camWorldScreen/terrain use.
+// Emits RQ_WORLD float quads (has_xyf=1 → tier1-owned, rebuilt on the interp present) with real
+// per-particle identity (dbg_node = node, records in guest emit order). At the interp re-run
+// (Fps60::mObjOverrideOn) each record is component-lerped against the PREVIOUS frame's record for the
+// same particle (anchor + corners + rotation), so particle animation interpolates too — the
+// per-particle motion the retired screen-space anchor machinery approximated, now derived from state.
+// Read-only over guest memory (reads nothing but the camera via sceneCam); host writes only.
+void Render::billboardsRender() {
+  Core* c = mCore;
+  if (mBbRecs.empty()) return;
+
+  float Ri[3][3], T[3], ofx, ofy, H;
+  c->game->fps60.sceneCam(c, Ri, T, ofx, ofy, H);   // raw int16-unit rows, the sceneCam convention
+  if (H <= 0.0f) return;
+  constexpr float FX = 1.0f / 4096.0f;
+  float R[3][3];
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = Ri[i][j] * FX;
+
+  // fps60 interp re-run: lerp each record against the previous frame's record for the same particle.
+  const bool interp = c->game->fps60.mObjOverrideOn;
+  const float t = c->game->fps60.mT;
+  std::unordered_map<uint32_t, const BbRec*> prev;
+  if (interp) for (const BbRec& p : mBbRecsPrev) prev.emplace(p.particle, &p);
+
+  GpuState& gs = c->game->gpu;
+  for (const BbRec& rc : mBbRecs) {
+    // Interpolated inputs (anchor, corners, rotation) — cur when no prev exists (new particle).
+    float wx = rc.wx, wy = rc.wy, wz = rc.wz;
+    float cxf[4], cyf[4], rot[3][3];
+    for (int i = 0; i < 4; i++) { cxf[i] = rc.cx[i]; cyf[i] = rc.cy[i]; }
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) rot[i][j] = rc.rotR[i][j] * FX;
+    if (interp) {
+      auto it = prev.find(rc.particle);
+      if (it != prev.end() && it->second->node == rc.node) {
+        const BbRec& pv = *it->second;
+        auto L = [t](float a, float b) { return a + (b - a) * t; };
+        wx = L(pv.wx, rc.wx); wy = L(pv.wy, rc.wy); wz = L(pv.wz, rc.wz);
+        for (int i = 0; i < 4; i++) { cxf[i] = L(pv.cx[i], rc.cx[i]); cyf[i] = L(pv.cy[i], rc.cy[i]); }
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++)
+          rot[i][j] = L(pv.rotR[i][j] * FX, rc.rotR[i][j] * FX);
+      }
+    }
+
+    // t = Rcam·anchor + Tcam (the MVMVA CAM2 compose, in float).
+    const float ax = R[0][0]*wx + R[0][1]*wy + R[0][2]*wz + T[0];
+    const float ay = R[1][0]*wx + R[1][1]*wy + R[1][2]*wz + T[1];
+    const float az = R[2][0]*wx + R[2][1]*wy + R[2][2]*wz + T[2];
+
+    float px[4], py[4], dep[4];
+    bool behind = false;
+    for (int i = 0; i < 4; i++) {
+      const float vx = rot[0][0]*cxf[i] + rot[0][1]*cyf[i] + ax;   // corner z==0 in local space
+      const float vy = rot[1][0]*cxf[i] + rot[1][1]*cyf[i] + ay;
+      const float vz = rot[2][0]*cxf[i] + rot[2][1]*cyf[i] + az;
+      if (vz <= 0.0f) { behind = true; break; }
+      float pz = H * 0.5f; if (vz > pz) pz = vz;                   // near-plane clamp (world convention)
+      const float ph = H / pz;
+      px[i] = ofx + vx * ph;
+      py[i] = ofy + vy * ph;
+      dep[i] = projParams.pzToOrd(vz);
+    }
+    if (behind) continue;
+
+    // Material decode — the same FT4 record fields rq_push_ft4_record reads.
+    const uint32_t colorWord = rc.wColor;
+    const uint8_t  op   = (uint8_t)(colorWord >> 24);
+    const uint32_t clut = rc.wUv0 >> 16;
+    const uint32_t tp   = rc.wUv1 >> 16;
+    int us[4] = { (int)(rc.wUv0 & 0xFFu), (int)(rc.wUv1 & 0xFFu), (int)(rc.wUv2 & 0xFFu), (int)(rc.wUv3 & 0xFFu) };
+    int vs[4] = { (int)((rc.wUv0 >> 8) & 0xFFu), (int)((rc.wUv1 >> 8) & 0xFFu),
+                  (int)((rc.wUv2 >> 8) & 0xFFu), (int)((rc.wUv3 >> 8) & 0xFFu) };
+    unsigned char rs[4], gsv[4], bs[4];
+    for (int i = 0; i < 4; i++) {
+      rs[i]  = (unsigned char)(colorWord & 0xFF);
+      gsv[i] = (unsigned char)((colorWord >> 8) & 0xFF);
+      bs[i]  = (unsigned char)((colorWord >> 16) & 0xFF);
+    }
+
+    // Emit with real identity, mirroring drawWorldQuad's body (needed here for the raw-texel bit).
+    diag.beginObject(rc.node);
+    gs.set_texpage((uint16_t)tp);
+    gs.set_clut((uint16_t)clut);
+    gs.s_seen3d = 1;
+    int xs[4], ys[4]; float xsf[4], ysf[4];
+    for (int i = 0; i < 4; i++) {
+      xsf[i] = px[i] + (float)gs.s_off_x;
+      ysf[i] = py[i] + (float)gs.s_off_y;
+      xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + gs.s_off_x;
+      ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + gs.s_off_y;
+    }
+    c->game->activeRq().emitOrQueue(c, 1, RQ_WORLD, RQ_OM_DEPTH, 4,
+                     (op & 2) ? 1 : 0, (op & 1) ? 1 : 0,
+                     xs, ys, xsf, ysf, us, vs, rs, gsv, bs, dep, gs.s_tp_mode,
+                     gs.s_tp_x, gs.s_tp_y, gs.s_clut_x, gs.s_clut_y,
+                     gs.s_tw_mx, gs.s_tw_my, gs.s_tw_ox, gs.s_tw_oy,
+                     gs.s_da_x0, gs.s_da_y0, gs.s_da_x1, gs.s_da_y1, gs.s_tp_blend);
+    diag.endObject();
+  }
 }
 
 void perobj_billboard_install() {
