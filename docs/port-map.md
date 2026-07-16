@@ -3,7 +3,7 @@
 The RE dependency chain. `## ` block per step. Work `portmap.py next`; kill `portmap.py hacks`.
 Detail lives in docs/port-progress.md; this is the queryable real-vs-hack frontier.
 
-**Status:** 5 verified · 1 ported-unverified · 1 todo
+**Status:** 6 verified · 1 ported-unverified · 1 todo
 
 ## title-frontend — DEMO stage s0..s7 + menu logic
 - **scope:** 0x801062E4 stage; Demo::s0..s7; sub-machines 0x8010696C/0x80106AC4
@@ -43,6 +43,14 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **deps:** newgame-sop-intro (#2b)
 - **owner:** game/render/render_walk.cpp (renderTitle s48==5 -> renderLoading)
 - **notes:** s5 = ~2-frame task teardown (jal 0x80052078(2)), OT empty -> black on the reference. Routed to black loading; s4 load-browser/s6/s7 still crash (real content). VERIFIED: pc_render now boots title->New Game->walkable field (GAME 0x8010637C) with NO crash, stable 300+ field frames; title unchanged.
+
+## cinematic-letterbox-bars
+- **scope:** UI-effect manager 0x80100400 slot type 1 (FUN_80026864) — cutscene top/bottom black bars
+- **status:** verified
+- **order:** 26
+- **deps:** field-world (sceneNative)
+- **owner:** game/render/cine_bars.cpp (Render::cineBarsRender)
+- **notes:** RE'd the UI-effect slot manager; native producer reads slot table read-only, emits (0,0,320,h)+(0,224-h,320,h). Verified: cutscene RMSE 61.6->24.1, top+bottom bands RMSE 0.0; title/void/hut no regression. Wired into renderField + renderSopNarration.
 
 ## field-world (sceneNative)
 - **scope:** 0x8010637C GAME field: terrain+entities+objects+backdrop, real depth

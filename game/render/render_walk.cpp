@@ -295,6 +295,7 @@ void Render::renderField() {
   DisplayPassGuard displayPass(mCore->mRender->mode);   // read-only invariant: aborts on any guest write
   sceneNative();
   dialogTextNative();   // in-game dialog / prompt text (emits nothing when no dialog is up)
+  cineBarsRender();     // cinematic letterbox bars (emits nothing when no cutscene bars are active)
 }
 
 // #4 HUT/DOOR INTERIOR (task-sm[0x4c]==3): OBJECTS-ONLY. The room is entity-list object 0x800FD850
@@ -315,6 +316,7 @@ void Render::renderSopNarration() {
   mCore->game->fps60.mTier1EligibleCur = true;
   DisplayPassGuard displayPass(mCore->mRender->mode);
   sceneNative();
+  cineBarsRender();     // cinematic letterbox bars (the SOP narration is a cutscene)
 }
 
 // dialogTextNative — see render.h. Native producer for in-game dialog/prompt TEXT. Mirrors the guest

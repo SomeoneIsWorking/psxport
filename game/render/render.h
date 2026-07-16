@@ -224,6 +224,11 @@ public:
   // See game/render/narration_swirl.cpp for the full RE. Dispatched from fieldObjectsRender's walk.
   void narrationSwirlRender(uint32_t node);
 
+  // cineBarsRender: native producer for the cinematic LETTERBOX bars (UI-effect manager slot type 1,
+  // base 0x80100400). Reads the slot table read-only and emits the top/bottom black bars. Emits nothing
+  // when disarmed. See game/render/cine_bars.cpp. Call from cutscene-capable scenes.
+  void cineBarsRender();
+
   // fieldObjectsRender: the field's OBJECT pass — walk the 3 entity lists + Tomba's G-block and flush each
   // live object's geomblk (perObjFlush → projComposeObject → gt3gt4). Factored OUT of sceneNative (which
   // mutates per-frame trust latches and can't be re-run) so Fps60's interp present can RE-RUN it under the
