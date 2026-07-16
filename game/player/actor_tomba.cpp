@@ -927,24 +927,26 @@ void ActorTomba::registerOverrides(Game* game) {
   engine_set_override_main(0x80045580u, gov_assetReady,            gen_func_80045580);
   extern void gen_func_80058648(Core*);
   engine_set_override_main(0x80058648u, gov_enterOuterState0, gen_func_80058648);
-  // matrixComposeAttached (0x800597AC) is NOT wired — ISOLATED as the faulty draft (2026-07-16):
-  // the joint wiring attempt was rejected by MIRROR_VERIFY (subtree diverged at 0x800F2758 =
-  // obj+8/+9 of pool object 0x800F2750, then faulted). Bisection: every native CHILD MV'd clean
-  // (recordArrayInit/growthStep/recordInit/guestMemset), the enterOuterState0 line-diff against
-  // gen_func_80058648 is 1:1, and eos0 wired ALONE passes MIRROR_VERIFY (pass #1 OK + 0-diff leg).
-  // LINE-DIFF RESULT (same day) — the draft's per-item loop restructure is garbled 3 ways vs
-  // gen_func_800597AC (shard_5.c:8654):
-  //   1. gen's `r23 = 0` DELAY-SLOT init at the attach-B gate (L_80059914 branch) is MISSING —
-  //      the loop's L_80059AC8 `if (r23 != 0)` latch then branches on the caller's stale s7.
-  //   2. gen's `r4 = G+152` delay slot at the in-loop r22 branch is MISSING (the G-compose path's
-  //      matMul first arg), and the `r4 = r16` delay slot at the G+356==5 test was moved inside
-  //      the conditional.
-  //   3. the loop's THREE-way branch (r22==0 → G-compose ra 0x80059A78/84; r23==0 → alt-build
-  //      ra 0x80059AE4/F0, sets r23=1; r23!=0 → alt-reuse ra 0x80059B44/50) was collapsed into a
-  //      two-way `else if (r22 == 0)` whose "G-compose" body carries the ALT-REUSE path's ra
-  //      constants — conflated bodies.
-  // FIX = re-transcribe the loop's branch head 1:1 (goto/labels like the rest of the draft),
-  // restoring the delay-slot assignments and the three distinct bodies, then MIRROR_VERIFY.
+  // matrixComposeAttached (0x800597AC) — wired 2026-07-16 after the line-diff found and fixed FIVE
+  // restructure defects in the 2026-07-10 draft (all delay-slot/branch-structure classes; the
+  // original joint wiring was MV-rejected at 0x800F2758 because of them):
+  //   1. missing `r23 = 0` delay-slot init at the attach-B gate — the loop's alt-matrix latch
+  //      branched on the caller's stale s7 (the control-flow slip behind the record-init diff),
+  //   2. missing `r4 = G+152` delay slot at the in-loop r22 branch + `r4 = r16` moved inside the
+  //      G+356==5 test,
+  //   3. the loop's THREE-way branch collapsed to two with the G-compose body carrying the
+  //      alt-reuse path's ra constants (0x80059B44/50 vs the real 0x80059A78/84),
+  //   4. missing `r5 = r20` delay slot at the chained-item (r16>=0) branch — matMul a1 got
+  //      0x1F800000 instead of 0x1F800040 on that path,
+  //   5. the G+325 arming condition INVERTED (gen arms attach-B iff G+325 == 0 && (G+326&3) != 0).
+  // Verifier: MIRROR_VERIFY. STATUS 2026-07-16: the 5-defect repair took it from immediate-reject
+  // to 196 clean MV passes (+ eos0 v0 fixed), but invocation #197 STILL diverges — RAM 0x800E7F18
+  // (= G+0x98, native B3 vs substrate 00) at a DIFFERENT caller than eos0 (entry ra 0x80059604 =
+  // frameTick's own matrix-compose tail; a1=0x800BF870, a3=0x1F800000). G+0x98 is inside the
+  // G+152 SRT matrix block (rotmat/matMul output), so one more transcription slip lives on a
+  // branch the first 196 calls don't reach (likely the attach-item loop actually iterating with
+  // G+9!=0, or the chained-item r16>=0 path). NOT wired until that path is MV-clean — the repaired
+  // body stays for the next diff pass. enterOuterState0 (0x80058648) IS wired + verified above.
 }
 
 // =================================================================================
@@ -1458,21 +1460,26 @@ void ActorTomba::matrixComposeAttached() {
   c->r[3] = (uint32_t)c->mem_r8(c->r[18] + 356u);
   c->r[2] = c->r[2] + c->r[4];
   c->mem_w32(c->r[18] + 176u, c->r[2]);
+  c->r[4] = c->r[16];                                     // gen delay slot at the ==5 test — executes on BOTH paths
   if (c->r[3] == 5u) {
-    c->r[4] = c->r[16];
     c->r[5] = c->mem_r32(c->r[18] + 16u);
     c->r[31] = 0x80059914u;
     c->r[5] = c->r[5] + 24u;
     rec_dispatch(c, 0x80084250u);                         // FUN_80084250 (see game/math/wide_re_gte_transform3.cpp — drafted, ORPHAN)
   }
 
+  // Attach-B arming gate — 1:1 with gen L_80059914: armed iff G+325 == 0 AND (G+326 & 3) != 0
+  // (the original draft had the G+325 condition INVERTED — defect #5 of the 2026-07-16 line-diff),
+  // with gen's two delay slots preserved: r23 = 0 (the loop's alt-matrix latch init — defect #1)
+  // and r4 = r17 at the second test.
   bool haveAttachB = false;
   c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 325u);
-  if (c->r[2] != 0) {
+  c->r[23] = 0;                                           // gen delay slot — executes on BOTH paths
+  if (c->r[2] == 0) {
     c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 326u);
     c->r[2] = c->r[2] & 3u;
+    c->r[4] = c->r[17];                                   // gen delay slot — executes on BOTH paths
     if (c->r[2] != 0) {
-      c->r[4] = c->r[17];
       c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 84u);
       c->mem_w16(c->r[19] + 192u, (uint16_t)c->r[2]);
       c->r[2] = (uint32_t)c->mem_r16(c->r[18] + 86u);
@@ -1522,6 +1529,7 @@ void ActorTomba::matrixComposeAttached() {
   // (G+0x146&3)!=0, the alt "attach B" matrix at 0x1F800060 computed above) onto item's own local
   // rotation and accumulate the translate into item+0x2C/30/34.
   c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 9u);
+  c->r[19] = 0;                                           // gen delay slot at the loop pre-gate — both paths
   if (c->r[2] != 0) {
     c->r[2] = 0x1F800000u;
     c->r[30] = c->r[2] + 32u;
@@ -1530,7 +1538,6 @@ void ActorTomba::matrixComposeAttached() {
     c->r[2] = 0x1F800000u;
     c->r[21] = c->r[2] + 96u;
     c->r[17] = c->r[18];
-    c->r[19] = 0;
     while (true) {
       c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 8u);
       if (!((int32_t)c->r[19] < (int32_t)c->r[2])) break;
@@ -1556,107 +1563,143 @@ void ActorTomba::matrixComposeAttached() {
       c->r[6] = c->r[20];
       rec_dispatch(c, 0x80084110u);                       // matMul(0x1F800020, 0x1F800000, 0x1F800040)
 
-      uint32_t dstPtr;
-      if ((int32_t)c->r[16] >= 0) {
-        c->r[16] = c->r[16] << 2;
-        c->r[16] = c->r[18] + c->r[16];
-        c->r[4] = c->mem_r32(c->r[16] + 192u);
-        c->r[6] = c->mem_r32(c->r[17] + 192u);
-        c->r[4] = c->r[4] + 24u;
-        c->r[31] = 0x80059BB0u;
-        c->r[6] = c->r[6] + 24u;
-        rec_dispatch(c, 0x80084110u);                     // matMul(prevItem+24, thisItem+24, ...)
-
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[31] = 0x80059BBCu;
-        c->r[5] = c->r[4] + 44u;
-        rec_dispatch(c, 0x80084220u);                     // applyMatlv(item+44)
-
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[16] + 192u);
-        c->r[2] = c->mem_r32(c->r[4] + 44u);
-        c->r[3] = c->mem_r32(c->r[3] + 44u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->mem_w32(c->r[4] + 44u, c->r[2]);
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[16] + 192u);
-        c->r[2] = c->mem_r32(c->r[4] + 48u);
-        c->r[3] = c->mem_r32(c->r[3] + 48u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->mem_w32(c->r[4] + 48u, c->r[2]);
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[16] + 192u);
-        c->r[2] = c->mem_r32(c->r[4] + 52u);
-        c->r[3] = c->mem_r32(c->r[3] + 52u);
-        c->r[2] = c->r[2] + c->r[3];
-        dstPtr = c->r[4];
-      } else if (c->r[22] == 0) {
-        // "attach B" branch never armed this frame — compose against G's own matrix (G+152).
-        c->r[6] = c->mem_r32(c->r[17] + 192u);
-        c->r[5] = c->r[20];
-        c->r[31] = 0x80059B44u;
-        c->r[6] = c->r[6] + 24u;
-        rec_dispatch(c, 0x80084110u);                     // matMul(0x1F800040, item+24, ...)
-
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[31] = 0x80059B50u;
-        c->r[5] = c->r[4] + 44u;
-        rec_dispatch(c, 0x80084220u);                     // applyMatlv(item+44)
-
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[18] + 172u);
-        c->r[2] = c->mem_r32(c->r[4] + 44u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->mem_w32(c->r[4] + 44u, c->r[2]);
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[18] + 176u);
-        c->r[2] = c->mem_r32(c->r[4] + 48u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->mem_w32(c->r[4] + 48u, c->r[2]);
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[18] + 180u);
-        c->r[2] = c->mem_r32(c->r[4] + 52u);
-        c->r[2] = c->r[2] + c->r[3];
-        dstPtr = c->r[4];
-      } else {
-        // "attach B" branch armed — compose against the alt matrix at 0x1F800060.
-        c->r[4] = c->r[21];
-        c->r[6] = c->mem_r32(c->r[17] + 192u);
-        c->r[5] = c->r[20];
-        c->r[31] = 0x80059AE4u;
-        c->r[6] = c->r[6] + 24u;
-        rec_dispatch(c, 0x80084110u);                     // matMul(0x1F800040, item+24, 0x1F800060)
-
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[31] = 0x80059AF0u;
-        c->r[5] = c->r[4] + 44u;
-        rec_dispatch(c, 0x80084220u);                     // applyMatlv(item+44)
-
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[21] + 20u);
-        c->r[2] = c->mem_r32(c->r[4] + 44u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->mem_w32(c->r[4] + 44u, c->r[2]);
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[21] + 24u);
-        c->r[2] = c->mem_r32(c->r[4] + 48u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->mem_w32(c->r[4] + 48u, c->r[2]);
-        c->r[4] = c->mem_r32(c->r[17] + 192u);
-        c->r[3] = c->mem_r32(c->r[21] + 28u);
-        c->r[2] = c->mem_r32(c->r[4] + 52u);
-        c->r[2] = c->r[2] + c->r[3];
-        c->r[23] = 1u;
-        dstPtr = c->r[4];
+      // Three-way per-item compose branch — 1:1 with gen (2026-07-16 re-transcription; the prior
+      // restructure conflated these bodies and their ra constants, see the wiring banner):
+      //   r16 >= 0            -> L_80059B94: chain onto the PREVIOUS item (index r16) matrices
+      //   r22 != 0, r23 == 0  -> L_80059AC8: build the alt attach-B matrix at 0x1F800060 once (r23 latch)
+      //   r22 != 0, r23 != 0  -> L_80059B34: reuse the alt matrix (adds G+172/176/180)
+      //   r22 == 0            -> fallthrough: compose against G's own matrix (ra 0x80059A78/84)
+      {
+        const bool chainPrev = ((int32_t)c->r[16] >= 0);
+        c->r[5] = c->r[20];                               // gen delay slot — matMul a1 for EVERY path
+        if (chainPrev) goto L_80059B94;
       }
-      c->mem_w32(dstPtr + 52u, c->r[2]);
+      {
+        const bool armed = (c->r[22] != 0);
+        c->r[4] = c->r[18] + 152u;                        // gen delay slot — matMul a0 for the G-compose and alt-reuse paths
+        if (armed) goto L_80059AC8;
+      }
+      c->r[6] = c->mem_r32(c->r[17] + 192u);
+      c->r[5] = c->r[20];
+      c->r[31] = 0x80059A78u;
+      c->r[6] = c->r[6] + 24u;
+      rec_dispatch(c, 0x80084110u);                       // matMul(G+152, 0x1F800040, item+24)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[31] = 0x80059A84u;
+      c->r[5] = c->r[4] + 44u;
+      rec_dispatch(c, 0x80084220u);                       // applyMatlv(item+44)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[18] + 172u);
+      c->r[2] = c->mem_r32(c->r[4] + 44u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 44u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[18] + 176u);
+      c->r[2] = c->mem_r32(c->r[4] + 48u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 48u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[18] + 180u);
+      c->r[2] = c->mem_r32(c->r[4] + 52u);
+      c->r[2] = c->r[2] + c->r[3];
+      goto L_80059C0C;
+L_80059AC8:
+      if (c->r[23] != 0) goto L_80059B34;
+      c->r[4] = c->r[21];
+      c->r[6] = c->mem_r32(c->r[17] + 192u);
+      c->r[5] = c->r[20];
+      c->r[31] = 0x80059AE4u;
+      c->r[6] = c->r[6] + 24u;
+      rec_dispatch(c, 0x80084110u);                       // matMul(0x1F800060, 0x1F800040, item+24)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[31] = 0x80059AF0u;
+      c->r[5] = c->r[4] + 44u;
+      rec_dispatch(c, 0x80084220u);                       // applyMatlv(item+44)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[21] + 20u);
+      c->r[2] = c->mem_r32(c->r[4] + 44u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 44u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[21] + 24u);
+      c->r[2] = c->mem_r32(c->r[4] + 48u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 48u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[21] + 28u);
+      c->r[2] = c->mem_r32(c->r[4] + 52u);
+      c->r[23] = 1u;
+      goto L_80059C04;
+L_80059B34:
+      c->r[6] = c->mem_r32(c->r[17] + 192u);
+      c->r[5] = c->r[20];
+      c->r[31] = 0x80059B44u;
+      c->r[6] = c->r[6] + 24u;
+      rec_dispatch(c, 0x80084110u);                       // matMul(G+152, 0x1F800040, item+24) — alt-reuse
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[31] = 0x80059B50u;
+      c->r[5] = c->r[4] + 44u;
+      rec_dispatch(c, 0x80084220u);                       // applyMatlv(item+44)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[18] + 172u);
+      c->r[2] = c->mem_r32(c->r[4] + 44u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 44u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[18] + 176u);
+      c->r[2] = c->mem_r32(c->r[4] + 48u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 48u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[18] + 180u);
+      c->r[2] = c->mem_r32(c->r[4] + 52u);
+      c->r[2] = c->r[2] + c->r[3];
+      goto L_80059C0C;
+L_80059B94:
+      c->r[16] = c->r[16] << 2;
+      c->r[16] = c->r[18] + c->r[16];
+      c->r[4] = c->mem_r32(c->r[16] + 192u);
+      c->r[6] = c->mem_r32(c->r[17] + 192u);
+      c->r[4] = c->r[4] + 24u;
+      c->r[31] = 0x80059BB0u;
+      c->r[6] = c->r[6] + 24u;
+      rec_dispatch(c, 0x80084110u);                       // matMul(prevItem+24, 0x1F800040, thisItem+24)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[31] = 0x80059BBCu;
+      c->r[5] = c->r[4] + 44u;
+      rec_dispatch(c, 0x80084220u);                       // applyMatlv(item+44)
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[16] + 192u);
+      c->r[2] = c->mem_r32(c->r[4] + 44u);
+      c->r[3] = c->mem_r32(c->r[3] + 44u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 44u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[16] + 192u);
+      c->r[2] = c->mem_r32(c->r[4] + 48u);
+      c->r[3] = c->mem_r32(c->r[3] + 48u);
+      c->r[2] = c->r[2] + c->r[3];
+      c->mem_w32(c->r[4] + 48u, c->r[2]);
+      c->r[4] = c->mem_r32(c->r[17] + 192u);
+      c->r[3] = c->mem_r32(c->r[16] + 192u);
+      c->r[2] = c->mem_r32(c->r[4] + 52u);
+      c->r[3] = c->mem_r32(c->r[3] + 52u);
+L_80059C04:
+      c->r[2] = c->r[2] + c->r[3];
+L_80059C0C:
+      c->mem_w32(c->r[4] + 52u, c->r[2]);
 
       c->r[2] = (uint32_t)c->mem_r8(c->r[18] + 9u);
       c->r[19] = c->r[19] + 1u;
-      if (!((int32_t)c->r[19] < (int32_t)c->r[2])) break;
+      c->r[2] = (uint32_t)((int32_t)c->r[19] < (int32_t)c->r[2]);   // gen: r2 = (r19 < count) — LIVE at exit
+      if (c->r[2] == 0) break;
       c->r[17] = c->r[17] + 4u;
     }
   }
+  // gen exits 800597AC with r2 = the final (r19 < count) comparison = 0 (loop-run path) OR the
+  // G+9==0 gate's 0 (loop-skipped path). enterOuterState0 returns this as its own v0, so a stale
+  // r2 here (the old draft left r2 = count) surfaced as eos0 v0=0x11 vs 0 under MIRROR_VERIFY.
+  c->r[2] = 0;
 
   c->r[8] = (uint32_t)c->mem_r8(c->r[29] + 16u);
   c->mem_w8(c->r[18] + 8u, (uint8_t)c->r[8]);
@@ -1675,9 +1718,9 @@ void ActorTomba::matrixComposeAttached() {
 
 // =================================================================================
 // enterOuterState0(mode) — guest FUN_80058648(G, mode). 2026-07-10 wide-RE dedicated pass,
-// UNWIRED (frameTick's case-0 branch still rec_dispatch(c, 0x80058648u)s to the substrate).
+// WIRED 2026-07-16 (registerOverrides; MIRROR_VERIFY pass-OK + 2-leg 0-diff — see parity map).
 //
-// Tomba's OUTER-STATE-0 (INIT) driver. Calls GraphicsBind::recordArrayInit(G, 17, *(0x800ED054),
+// Tomba's OUTER-STATE-0 (INIT) driver. Calls GraphicsBind::recordArrayInit(G, 17, *(0x800ED014),
 // 0x800A3FA8) (already-native) to (re)allocate Tomba's 17-record attach array (the SAME array
 // matrixComposeAttached's per-item loop walks at G+0xC0); on a bail (insufficient growth budget —
 // recordArrayInit's own `mem_r16s(0x800ED098) < count` early-return path, see graphics_bind.cpp)
@@ -1735,7 +1778,7 @@ void ActorTomba::enterOuterState0(int32_t mode) {
   c->r[6] = c->mem_r32(c->r[17] + 188u);
   c->r[31] = 0x80058680u;
   c->r[7] = c->r[7] + 16296u;
-  rec_dispatch(c, 0x800519E0u);          // GraphicsBind::recordArrayInit(G,17,*(0x800ED054),0x800A3FA8)
+  rec_dispatch(c, 0x800519E0u);          // GraphicsBind::recordArrayInit(G,17,*(0x800ED014),0x800A3FA8) — a2 = [r17+188], r17=0x800ECF58
   {
     const bool bail = (c->r[2] != c->r[0]);
     c->r[3] = (uint32_t)8064u << 16;
