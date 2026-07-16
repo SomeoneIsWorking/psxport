@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 10 verified · 2 partial · 2 n/a
+**Status:** 10 verified · 2 partial · 3 n/a
 
 ## Core::guestMemset (FUN_8009A420)
 - **status:** verified
@@ -83,6 +83,11 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **status:** partial
 - **gate:** 2-leg 0-diff with tap registered; icon strings not exercised in autonav legs — needs an icon-showing drive + USER eyeball
 - **evidence:** 916ddfc0
+
+## Billboard picture dual-emit (rq_push_ft4_record @ billboardEmit/submitQuad)
+- **status:** n/a
+- **gate:** host-only queue push (zero guest writes); 2-leg 0-diff f5520/f20610 with pushes live; USER play-test pending (#65)
+- **evidence:** 8988b389
 
 ## Font::glyphQueuePush (glyphEmit dual-emit host half)
 - **status:** n/a
