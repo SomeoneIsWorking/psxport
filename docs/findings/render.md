@@ -2299,3 +2299,20 @@ draft was already byte-faithful.
   native billboardEmit). 8011BE5C (render-mode-4 particle leaf) is overlay code not resident in the
   ram_sea dump — still unowned, invisible under pc_render if mode 4 ever fires (census remainder).
 - gates: SBS-full 0-diff both legs (combat f8070, watch_cut f26910); fps60 field gate PASS.
+
+## Widescreen: native 2D centered via ONE queue layout authority + emitter culls widened (2026-07-16, USER request)
+
+- **centering**: native UI producers (Panel, Font/dialog, gauges, menus) pushed 4:3 coords and sat
+  left-anchored in wide. The layout now lives in RenderQueue::emitOrQueue (the one funnel): for
+  non-DEPTH prims under gpu_gpu_wide_engine, HUD/overlay shift +margin (centered, native size),
+  dbg_node==0 RQ_BACKGROUND stretches to [0,ww). EXEMPT: the guest-OT walk (s_ot_2d_only —
+  its sites still apply ws_2d_local_x with the #38/#52 fill rules) and backdropRender's REAL wide
+  tiles (kBackdropDbgNode). 4:3 margin==0 → no-op. Verified: prompt panel + pause menu centered
+  at aspect=1 (scratch/screenshots/wide_field/menu/cull.png).
+- **cull widening** (bug #61 partial): billboardEmit / QuadRtptSubmit::submitQuad / textLabelEmit
+  ran the stock all-corners-X>=320 drop, culling their content out of the RIGHT wide band (under the
+  wide FOV OFX=nw/2, SX spans [0,nw)). Widened to the wide width under gpu_gpu_wide_engine — the
+  submit.cpp submit_xmax precedent (later-119); a sanctioned wide-mode guest deviation (SBS legs
+  force 4:3: combat f6360 + watch_cut f20760 both 0-diff). Object-level cull already has the
+  engine margin (cull.cpp CULL_FAR_MULT / fov margin). Remaining #61 candidates: left band comes
+  free (never 320-gated); guest-side per-list visibility byte for objects only partially re-included.

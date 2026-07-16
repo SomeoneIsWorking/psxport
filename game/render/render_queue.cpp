@@ -534,6 +534,31 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
                               const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                               int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
                               int tp_blend, const float (*sv)[3]) {
+  // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
+  // 2026-07-16: dialog/prompt panels sat left-anchored in wide). Native UI producers (Panel, Font/
+  // dialog text, gauges, menus) push 4:3 coords (x∈[0,320)); the wide FB spans [0,ww) with the world
+  // centered at ww/2, so un-shifted 2D hugs the left edge. Rule (mirrors gpu_native's ws_2d_local_x):
+  //   HUD/overlay -> +margin (centered, native size — matches 4:3 exactly, just registered with the
+  //                  centered world);
+  //   RQ_BACKGROUND (dbg_node==0 full-screen art/fades) -> STRETCH to fill [0,ww).
+  // EXEMPT (already wide-final coords): the guest-OT walk (s_ot_2d_only in flight — its call sites
+  // apply ws_2d_local_x with the #38/#52 fill subtleties) and backdropRender's REAL wide tiles
+  // (kBackdropDbgNode via the diag scope). 3D (RQ_OM_DEPTH) never enters. 4:3: margin==0, no-op.
+  int wxs[4]; float wxsf[4];
+  { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
+    if (order_mode != RQ_OM_DEPTH && gpu_gpu_wide_engine(core) && !core->game->gpu.s_ot_2d_only &&
+        core->mRender->diag.currentNode() != kBackdropDbgNode) {
+      const int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
+      if (margin > 0) {
+        const bool stretch = (layer == RQ_BACKGROUND);
+        for (int i = 0; i < nv; i++) {
+          wxs[i] = stretch ? xs[i] * ww / 320 : xs[i] + margin;
+          if (xsf) wxsf[i] = stretch ? xsf[i] * (float)ww / 320.0f : xsf[i] + (float)margin;
+        }
+        xs = wxs;
+        if (xsf) xsf = wxsf;
+      }
+    } }
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;

@@ -468,12 +468,18 @@ void Render::billboardEmit() {
       }
       c->mem_w32(FR(56), (uint32_t)depth);
 
-      // 2) Off-screen cull: skip if all 4 corners' X>=320 or all 4 corners' Y>=240 (unsigned compares —
-      // matches the recomp's zero-extended 16-bit reads).
-      bool onX = (uint32_t)c->mem_r16(BUF + 8)  < 320u ||
-                 (uint32_t)c->mem_r16(BUF + 16) < 320u ||
-                 (uint32_t)c->mem_r16(BUF + 24) < 320u ||
-                 (uint32_t)c->mem_r16(BUF + 32) < 320u;
+      // 2) Off-screen cull: skip if all 4 corners' X>=xmax or all 4 corners' Y>=240 (unsigned compares —
+      // matches the recomp's zero-extended 16-bit reads). xmax follows submit.cpp's submit_xmax
+      // precedent (later-119 / USER 2026-07-16 "extend widescreen render culling area"): under the
+      // genuine engine-wide FOV (OFX=nw/2, already a sanctioned wide-mode guest deviation; SBS legs
+      // run 4:3 so byte-exactness is untouched) the screen extends to the wide width — the stock 320
+      // gate was culling this class out of the right wide band.
+      int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
+      const uint32_t xmax = gpu_gpu_wide_engine(c) ? (uint32_t)gpu_gpu_wide_engine_w(c) : 320u;
+      bool onX = (uint32_t)c->mem_r16(BUF + 8)  < xmax ||
+                 (uint32_t)c->mem_r16(BUF + 16) < xmax ||
+                 (uint32_t)c->mem_r16(BUF + 24) < xmax ||
+                 (uint32_t)c->mem_r16(BUF + 32) < xmax;
       if (!onX) continue;
       bool onY = (uint32_t)c->mem_r16(BUF + 10) < 240u ||
                  (uint32_t)c->mem_r16(BUF + 18) < 240u ||
