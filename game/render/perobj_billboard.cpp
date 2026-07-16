@@ -674,29 +674,21 @@ void Render::billboardsRender() {
   float R[3][3];
   for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = Ri[i][j] * FX;
 
-  // fps60 interp re-run: lerp each record against the previous frame's record for the same particle.
+  // fps60 interp re-run: WqRecs lerp against the previous frame (stable node/seq identity). BbRec
+  // PARTICLES do NOT lerp — the effect sub-lists reuse/walk particle addresses every frame, so no
+  // stable cross-frame identity exists; a particle-addr-keyed lerp blended DIFFERENT sprites'
+  // positions (USER: "gems rendered at two different places between real and interpolated frames").
+  // A particle draws at its own frame's state under the LERPED camera: world-glued, no ghosting;
+  // its animation steps at the logic rate, which is what the state actually says.
   const bool interp = c->game->fps60.mObjOverrideOn;
   const float t = c->game->fps60.mT;
-  std::unordered_map<uint32_t, const BbRec*> prev;
-  if (interp) for (const BbRec& p : mBbRecsPrev) prev.emplace(p.particle, &p);
 
   for (const BbRec& rc : mBbRecs) {
-    // Interpolated inputs (anchor, corners, rotation) — cur when no prev exists (new particle).
-    float wx = rc.wx, wy = rc.wy, wz = rc.wz;
+    // This frame's own state (no per-particle lerp — see banner above); camera lerp comes via R/T.
+    const float wx = rc.wx, wy = rc.wy, wz = rc.wz;
     float cxf[4], cyf[4], rot[3][3];
     for (int i = 0; i < 4; i++) { cxf[i] = rc.cx[i]; cyf[i] = rc.cy[i]; }
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) rot[i][j] = rc.rotR[i][j] * FX;
-    if (interp) {
-      auto it = prev.find(rc.particle);
-      if (it != prev.end() && it->second->node == rc.node) {
-        const BbRec& pv = *it->second;
-        auto L = [t](float a, float b) { return a + (b - a) * t; };
-        wx = L(pv.wx, rc.wx); wy = L(pv.wy, rc.wy); wz = L(pv.wz, rc.wz);
-        for (int i = 0; i < 4; i++) { cxf[i] = L(pv.cx[i], rc.cx[i]); cyf[i] = L(pv.cy[i], rc.cy[i]); }
-        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++)
-          rot[i][j] = L(pv.rotR[i][j] * FX, rc.rotR[i][j] * FX);
-      }
-    }
 
     // t = Rcam·anchor + Tcam (the MVMVA CAM2 compose, in float).
     const float ax = R[0][0]*wx + R[0][1]*wy + R[0][2]*wz + T[0];

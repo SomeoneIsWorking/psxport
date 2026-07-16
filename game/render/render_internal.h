@@ -95,6 +95,36 @@ static inline void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
   c->mRender->diag.endObject();
 }
 
+// ---- WqRec factorization helpers (#67 display-pass quads — render.h WqRec banner) ------------------
+// wq_read_matrix: read a libgte MATRIX (m 9×s16 CR-packed in 5 words @+0, t 3×s32 @+0x14) from guest
+// memory into unit-scale float form — the same packing SetRotMatrix/SetTransMatrix load into CR0-7.
+static inline void wq_read_matrix(Core* c, uint32_t m, float crF[3][3], float tr[3]) {
+  constexpr float FX = 1.0f / 4096.0f;
+  uint32_t w0 = c->mem_r32(m + 0), w1 = c->mem_r32(m + 4), w2 = c->mem_r32(m + 8),
+           w3 = c->mem_r32(m + 12), w4 = c->mem_r32(m + 16);
+  crF[0][0] = (int16_t)w0 * FX;         crF[0][1] = (int16_t)(w0 >> 16) * FX; crF[0][2] = (int16_t)w1 * FX;
+  crF[1][0] = (int16_t)(w1 >> 16) * FX; crF[1][1] = (int16_t)w2 * FX;         crF[1][2] = (int16_t)(w2 >> 16) * FX;
+  crF[2][0] = (int16_t)w3 * FX;         crF[2][1] = (int16_t)(w3 >> 16) * FX; crF[2][2] = (int16_t)w4 * FX;
+  for (int i = 0; i < 3; i++) tr[i] = (float)(int32_t)c->mem_r32(m + 0x14u + (uint32_t)i * 4u);
+}
+// wq_factor_world: factor a composed transform against the SCRATCHPAD scene camera (pure at guest
+// emit time — per-object composes touch only the GTE regs): CR = cam∘obj, tr = cam·pos + cam.t ⇒
+// objR = camᵀ·CR, objT = camᵀ·(tr − camT). Exact at the endpoints for ANY CR content (orthonormal
+// camera ⇒ inverse = transpose); the display pass re-composes with the (fps60-lerped) camera.
+static inline void wq_factor_world(Core* c, const float crF[3][3], const float tr[3],
+                                   float objR[3][3], float objT[3]) {
+  float camR[3][3], camT[3];
+  wq_read_matrix(c, 0x1F8000F8u, camR, camT);   // the scene camera MATRIX (same bytes sceneCam reads)
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      float s = 0; for (int k = 0; k < 3; k++) s += camR[k][i] * crF[k][j];   // camᵀ·CR
+      objR[i][j] = s;
+    }
+    float s = 0; for (int k = 0; k < 3; k++) s += camR[k][i] * (tr[k] - camT[k]);
+    objT[i] = s;
+  }
+}
+
 // PktSpan (per-Core packet-pool store-address-span tracker) + PktSpanSession (RAII object scope) live
 // in pkt_span.h — reached as c->mRender->pktSpan. PktSpanSession is defined there; its ctor/close
 // implementation is in pkt_span.cpp.

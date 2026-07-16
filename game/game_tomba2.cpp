@@ -195,6 +195,8 @@ void games_tomba2_init(void) {
   perobj_dispatch_install();   // FUN_8003CDD8/FUN_8003F698 substrate-mirror ownership (band 0x8003xxxx)
   void perobj_billboard_install();
   perobj_billboard_install();  // FUN_8003CCA4/C2D4/C464/C8F4 substrate-mirror ownership (band 0x8003xxxx)
+  void text_label_install();
+  text_label_install();        // FUN_80039F4C text-label renderer (Render::textLabelEmit + WqRec capture)
   void render_walk_dispatch_install();
   render_walk_dispatch_install();  // FUN_8003C048 render-walk loop ownership (band 0x8003xxxx)
   void overlay_type_dispatch_install();

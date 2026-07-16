@@ -261,7 +261,9 @@ public:
     uint32_t wColor, wUv0, wUv1, wUv2, wUv3;   // resolved record words BUF+4/+12/+20/+28/+36
   };
   std::vector<BbRec> mBbRecs;             // this logic frame's records, guest-walk emit order
-  std::vector<BbRec> mBbRecsPrev;         // previous frame's (fps60 per-particle lerp source)
+  // (No BbRec prev buffer: effect particles have no stable cross-frame identity — the sub-lists
+  // reuse/walk particle addresses — so they never lerp; they draw at their own frame's state under
+  // the lerped camera. WqRecs below DO lerp, keyed by stable (node, per-node seq).)
 
   // WqRec — the GENERIC composed-CR quad record (QuadRtptSubmit::submitQuad's classes: the A00-overlay
   // flame/rope emitter 0x801341xx, case188 particles, B704 beams). At capture the composed GTE
@@ -282,8 +284,13 @@ public:
   std::vector<WqRec> mWqRecsPrev;
 
   void bbFrameReset() { mBbRecs.clear(); mWqRecs.clear(); }          // per logic frame, pre-walk
-  void bbSwapPrev()   { mBbRecs.swap(mBbRecsPrev); mWqRecs.swap(mWqRecsPrev); }   // fps60 rotation
+  void bbSwapPrev()   { mWqRecs.swap(mWqRecsPrev); }                 // fps60 rotation (WqRec lerp source)
   void billboardsRender();                // display-pass producer: project + emit every BbRec + WqRec
+
+  // textLabelEmit (FUN_80039F4C, text_label.cpp): the per-character 3D text-label renderer —
+  // faithful substrate-mirror orchestrator (mesh pass + per-char glyph packets, all callees still
+  // substrate) + WqRec display-pass capture per surviving glyph. Replaces the RenderObserver wrap.
+  void textLabelEmit();
 
   // fieldEntityRender: world-space GT3/GT4 scene-table renderer. Walks the entity-list struct at
   // `es` (per-list ptr headers at es+0x10..; packed geometry base at es+0xC; count at es+6),

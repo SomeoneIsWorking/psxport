@@ -2258,3 +2258,32 @@ draft was already byte-faithful.
   (preseqobj 0 flagged, preseq_flicker 0/4); default-config 30fps shot renders identically.
 - **refs**: quad_rtpt_submit.cpp (quadcr probe + WqRec capture), perobj_billboard.cpp
   (emitRecQuad + WqRec loop), render.h (WqRec), render_internal.h (helper deleted), docs/config.md quadcr.
+
+## FUN_80039F4C text-label renderer OWNED (Render::textLabelEmit) + BbRec lerp removed (2026-07-16, #67 RE work cont.)
+
+- **RE** (scratch/decomp/quad_emitters.c + textlabel.c; ground truth generated/shard_1.c): 39F4C = the
+  per-character 3D TEXT-LABEL renderer (renderWalk case 0x8003C0E8). FUN_8003F174 first (mesh pass —
+  loads CR0-7 DIRECTLY from the PRE-COMPOSED matrix at cmd+0x18, a different cmd layout from
+  cmdListDispatch's camera∘object compose), then per char: glyph template V(-3,-7,-1)(5,-7)(-3,9)(5,9)
+  z=-1 in the guest stack, UV from FUN_80039E80 (u=char*8, v=((char+32)>>5)*16+8; space skips),
+  projected by FUN_8003F7D8 under SetRotMatrix/SetTransMatrix(cmd+0x18) — **FUN_80084660/84690 ARE
+  libgte SetRotMatrix/SetTransMatrix** (the render_walk_dispatch.cpp "pool-span markers" note was a
+  mis-RE; also proves case188 + B704 load the PURE CAMERA at 0x1F8000F8 before projecting). Text =
+  "Clear"+suffix (node+3==2, clut 0x7C7F) or string table 0x800A33C8[idx*12]+4 (clut 0x7DFF); code
+  0x2D, tpage half 0x1F; packet pool-bumped 40B + OT-linked at otz-1.
+- **port** (game/render/text_label.cpp): faithful orchestrator (GuestFrame<120,7> from abi_extract,
+  register-faithful r16-r21, all callees substrate) + WqRec capture per surviving glyph (corners =
+  template, transform = cmd+0x18 matrix factored via the shared wq_read_matrix/wq_factor_world
+  helpers, render_internal.h). Replaces the RenderObserver wrap. **SBS caught a real draft bug**: the
+  string-table read was mis-based at 0x800A33CC (+4 double-applied) → wrong string → one extra packet
+  → pool-ptr diff at f190. Fixed → combat f6810 + watch_cut f25260 both 0-diff.
+- **BbRec per-particle lerp REMOVED** (USER: "gems rendered at two different places between real and
+  interpolated frames"): effect sub-lists reuse/walk particle addresses every frame, so a
+  particle-addr-keyed lerp blends DIFFERENT sprites' positions — no stable cross-frame identity
+  exists for these. Particles now draw at their own frame's state under the LERPED camera
+  (world-glued, no ghosting; animation steps at logic rate — what the state says). WqRec lerp stays
+  (stable node/seq keys — USER: "the weapon and the rope looks spectacular").
+- **verify**: SBS-full 0-diff both legs; fps60 field gate PASS (preseqobj 0 flagged, bands 0/4).
+- **refs**: text_label.cpp, render_internal.h (wq_read_matrix/wq_factor_world), quad_rtpt_submit.cpp
+  (refactored to the shared helpers), perobj_billboard.cpp, render_observer.cpp (39F4C wrap removed),
+  game_tomba2.cpp (text_label_install), render.h.

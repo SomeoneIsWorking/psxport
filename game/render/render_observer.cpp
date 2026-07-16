@@ -15,7 +15,7 @@
 // walks call with a0=node. 2026-07-08: CCA4/C2D4/C464/C8F4 are now OWNED natively
 // (game/render/perobj_billboard.cpp, Render::perObjRenderDispatch/billboardCompose1/2/billboardEmit) —
 // each folds this SAME depth-tag wrap in directly, so they are no longer installed here. This file
-// still wraps the remaining unowned siblings (C5F8, C788, 80039F4C).
+// still wraps the remaining unowned siblings (C5F8, C788); 0x80039F4C is owned by Render::textLabelEmit (text_label.cpp).
 // Extend the table below when a new billboard source shows up untagged (PSXPORT_DEBUG=objid).
 #include "core.h"
 #include "game.h"
@@ -29,7 +29,6 @@ void shard_set_override(uint32_t addr, OverrideFn fn);
 
 extern void gen_func_8003C5F8(Core*);   // special-effect leaf renderers (walk types 16..19) — still substrate
 extern void gen_func_8003C788(Core*);
-extern void gen_func_80039F4C(Core*);   // type-4 multi-element object renderer
 
 static void obs_body(Core* c, void (*gen)(Core*)) {
   // PSXPORT_ORACLE: the oracle is PURE PSX — run the literal substrate body untouched, add NO host depth
@@ -50,7 +49,6 @@ static void obs_body(Core* c, void (*gen)(Core*)) {
 #define OBS_WRAP(genfn) static void obs_##genfn(Core* c) { obs_body(c, genfn); }
 OBS_WRAP(gen_func_8003C5F8)
 OBS_WRAP(gen_func_8003C788)
-OBS_WRAP(gen_func_80039F4C)
 #undef OBS_WRAP
 
 // (The ui_span observer wrap that used to sit here on 0x8007D594 was removed 2026-07-16,
@@ -65,5 +63,4 @@ void render_observer_install() {
   done = true;
   shard_set_override(0x8003C5F8u, obs_gen_func_8003C5F8);
   shard_set_override(0x8003C788u, obs_gen_func_8003C788);
-  shard_set_override(0x80039F4Cu, obs_gen_func_80039F4C);
 }

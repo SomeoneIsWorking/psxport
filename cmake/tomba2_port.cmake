@@ -209,6 +209,7 @@ set(PORT_SRC
   game/player/actor_tomba_action_800531dc.cpp
   game/player/actor_tomba_action_800660ac.cpp
   game/player/actor_tomba_action_8005ef48.cpp
+  game/core/engine_field_transition.cpp
   game/scene/bg_scene_transition_sm.cpp
   game/scene/parallax_bg.cpp
   game/scene/scene_transition.cpp
@@ -278,6 +279,7 @@ set(PORT_SRC
   game/render/hud_gauge_emitter.cpp
   game/render/perobj_dispatch.cpp
   game/render/perobj_billboard.cpp
+  game/render/text_label.cpp
   game/render/render_walk_dispatch.cpp
   game/render/overlay_type_dispatch.cpp
   game/render/objlist_walk.cpp

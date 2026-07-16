@@ -228,34 +228,16 @@ void QuadRtptSubmit::submitQuad(Core* c) {
       const uint32_t vzw = c->mem_r32(xf + (uint32_t)(i < 3 ? i * 8 + 4 : 28));
       w.vx[i] = (int16_t)vxy; w.vy[i] = (int16_t)(vxy >> 16); w.vz[i] = (int16_t)vzw;
     }
-    // Factor CR against the scratchpad camera: objR = camᵀ·CR/4096, objT = camᵀ·(tr − camT).
-    float camR[3][3];
-    { const uint32_t SCR = 0x1F800000u;
-      uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
-               w3 = c->mem_r32(SCR + 0x104), w4 = c->mem_r32(SCR + 0x108);
-      constexpr float FX = 1.0f / 4096.0f;
-      camR[0][0] = (int16_t)w0 * FX;         camR[0][1] = (int16_t)(w0 >> 16) * FX; camR[0][2] = (int16_t)w1 * FX;
-      camR[1][0] = (int16_t)(w1 >> 16) * FX; camR[1][1] = (int16_t)w2 * FX;         camR[1][2] = (int16_t)(w2 >> 16) * FX;
-      camR[2][0] = (int16_t)w3 * FX;         camR[2][1] = (int16_t)(w3 >> 16) * FX; camR[2][2] = (int16_t)w4 * FX;
-      float crF[3][3], tr[3], camT[3];
-      for (int i = 0; i < 3; i++) {
-        // CR0-4 packing: same halfword layout as the camera block above, read from the GTE.
-        camT[i] = (float)(int32_t)c->mem_r32(SCR + 0x10C + (uint32_t)i * 4u);
-        tr[i]   = (float)(int32_t)gte_read_ctrl(5u + (unsigned)i);
-      }
+    // Factor the live GTE CR0-7 against the scratchpad camera (render_internal.h helpers).
+    { constexpr float FX = 1.0f / 4096.0f;
+      float crF[3][3], tr[3];
       uint32_t g0 = gte_read_ctrl(0), g1 = gte_read_ctrl(1), g2 = gte_read_ctrl(2),
                g3 = gte_read_ctrl(3), g4 = gte_read_ctrl(4);
       crF[0][0] = (int16_t)g0 * FX;         crF[0][1] = (int16_t)(g0 >> 16) * FX; crF[0][2] = (int16_t)g1 * FX;
       crF[1][0] = (int16_t)(g1 >> 16) * FX; crF[1][1] = (int16_t)g2 * FX;         crF[1][2] = (int16_t)(g2 >> 16) * FX;
       crF[2][0] = (int16_t)g3 * FX;         crF[2][1] = (int16_t)(g3 >> 16) * FX; crF[2][2] = (int16_t)g4 * FX;
-      for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-          float s = 0; for (int k = 0; k < 3; k++) s += camR[k][i] * crF[k][j];   // camᵀ·CR
-          w.objR[i][j] = s;
-        }
-        float s = 0; for (int k = 0; k < 3; k++) s += camR[k][i] * (tr[k] - camT[k]);
-        w.objT[i] = s;
-      }
+      for (int i = 0; i < 3; i++) tr[i] = (float)(int32_t)gte_read_ctrl(5u + (unsigned)i);
+      wq_factor_world(c, crF, tr, w.objR, w.objT);
     }
     w.wColor = c->mem_r32(out + 4);
     w.wUv0 = c->mem_r32(out + 12); w.wUv1 = c->mem_r32(out + 20);
