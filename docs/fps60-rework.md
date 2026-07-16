@@ -448,3 +448,35 @@ VERIFIED: SBS-full AUTO_SKIP 0-diff f10200 (guest byte-identical); wide+fps60 hu
 (interp==real interior, sm[0x4c]==3, 560x240 clean margins); field objects render + interpolate.
 UNIFICATION COMPLETE: camera + per-object transforms + backdrop all lerp through the ONE render re-run;
 2D verbatim; sub-scene presents captured interior. USER principle achieved — "no difference aside from lerp."
+
+## REDIRECT census progress (2026-07-16, #67 session)
+
+DONE: billboardEmit particle system = display-pass producer (Render::billboardsRender,
+perobj_billboard.cpp) — per-particle BbRec capture + float re-projection through the sceneCam choke,
+per-particle prev/cur lerp at the interp present; #65 dual-emit deleted. See
+docs/findings/render.md "billboardEmit particles now a DISPLAY-PASS producer".
+
+REMAINING guest-time quad emitters (decompiled 2026-07-16, scratch/decomp/quad_emitters.c —
+Ghidra ram_sea; re-derive from there, not from scratch):
+- **FUN_8003B704 — see-saw/beam quad emitter** (dispatched from objListWalk4/EEC0 cases 0x8003EF30
+  (after perObjRenderDispatch) and 0x8003EF40 (after billboardCompose1, gated node+2==1)). Builds TWO
+  quads spanning DAT_800e7f5c's +0x2c/30/34 position and node+0x2E/32/36, half-widths from
+  rcos/rsin(node+0x68, node+0x6A [+0x400 when DAT_800e7fc6<4]) ×0x14, color from
+  DAT_800a3b04[node+0x66*2], code 0x2D, clut 0x3E9F; emits via func_8003B320 (submitQuad, native)
+  with otzBias=0; pool-span markers on 0x1F8000F8. **OPEN before display-pass port: the CR contract**
+  — its verts look world-space but the CRs at call time are whatever perObjRenderDispatch /
+  billboardCompose1 left (camera∘object or MAT_OUT compose). Pin down whether DAT_800e7f5c/node
+  positions are world or node-relative and what CR state each dispatch case guarantees.
+- **FUN_80039F4C — per-character 3D text-label renderer** (renderWalk case 0x8003C0E8). Text = "Clear"
+  (+DAT_80014a1c suffix) when node+3==2, else string table PTR_DAT_800a33cc[node+0x60*3]. Per char:
+  glyph template quad {(-3,-7),(5,-7),(-3,9),(5,9)} z=-1, FUN_80039e80(char, pool) fills the packet
+  (returns OT depth or -1), per-char cmd at node+0xC0[i] (span markers on cmd+0x18), projected by
+  FUN_8003F7D8 (same RTPT/RTPS/AVSZ4 shape as submitQuad), code 0x2D, tpage-word 0x1F, clut
+  0x7DFF/0x7C7F. **OPEN: FUN_8003F174(node,1) prep + FUN_80039e80 (per-char transform/UV source) —
+  decompile these two before porting.**
+- **case188 generic-particle quads** (renderWalkCase188, render_walk_dispatch.cpp): corners from
+  node+96..118 through func_8003B054/B320 under per-node CRs composed earlier — same CR-contract
+  question as B704.
+- These three still draw via QuadRtptSubmit's dual-emit (rq_push_ft4_record — the last caller);
+  at fps60 they present verbatim (30Hz stepping, no flicker). Delete that dual-emit only as each
+  class gains its display-pass producer.
