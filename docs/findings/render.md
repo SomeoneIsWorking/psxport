@@ -2146,3 +2146,15 @@ draft was already byte-faithful.
   off-screen? unhandled prim). Verify by pixel-diff pc-vs-psx at a fixed void-beat frame. Reaching true
   free-roam (#3b) is BEHIND this narration in the newgame path. Needs USER eyeball for the animated result.
 - **refs:** render_walk.cpp renderSopNarration/sceneNative void-beat guard; docs/native-render-rebuild.md #5
+- **DEEP DIAGNOSIS (2026-07-16, autonomous):** ruled out, in order — (1) walk/cull: vortex IS walked +
+  perObjFlush submits all geomblks; (2) projection-size: prims project x[-766..465] y[-442..273], they
+  COVER the whole screen + beyond; (3) backface cull: disabling `area<=0` in submitPolyGt3Native → no
+  change; (4) semi-transparency: prims are OPAQUE (code 0x34, semi bit clear); (5) engine_shade_face:
+  disabling it → no change; (6) shader texel-0: tritex.frag already `discard`s texel==0 correctly.
+  REMAINING ROOT CAUSE: pc draws a bright CENTRAL core + BLACK edges; psx draws bright core + dim-purple
+  VARYING (textured, mean~18 stdev~20) edges. Same prims, same tpage 0x19/CLUT. So pc SAMPLES texel-0
+  (transparent→discard→black bg shows) at the edges where psx samples dim-purple — i.e. the vortex texture
+  content in the VK VRAM SNAPSHOT (u_vram, sampled by tritex.frag) differs from the guest VRAM gpu_native
+  reads for psx_render. Hypothesis: a vortex texture-upload path (MoveImage/DMA during the narration) is
+  not mirrored into the VK VRAM image. NEXT: dump+compare VK VRAM vs guest VRAM at tpage 0x19 (~576,256);
+  if the texture is absent/stale in the snapshot, fix the upload mirror. Deep GPU-backend/VRAM-sync work.

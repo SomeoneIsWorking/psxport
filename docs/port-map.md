@@ -34,7 +34,7 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **order:** 22
 - **deps:** newgame->field transition (s5 leave-demo)
 - **owner:** game/render/render_walk.cpp (renderSopNarration/sceneNative)
-- **notes:** NARROWED: vortex IS walked + perObjFlush submits its 15 geomblks via gt3gt4, but they render invisible (prim-emission bug: transparency/projection/unhandled prim). NOT a walk/cull issue. Deep render-RE + animated pixel-diff + USER eyeball; DEFERRED behind Job #1 per CLAUDE.md.
+- **notes:** DEEP-DIAGNOSED (findings #5): NOT walk/cull/backface/semi/shading/shader — ruled out each. Prims cover the screen but pc samples texel-0(transparent) at edges where psx samples dim-purple texture -> VK VRAM SNAPSHOT differs from guest VRAM (vortex texture-upload not mirrored to VK image, hypothesis). Next: vram diff at tpage 0x19. Deep GPU-backend.
 
 ## newgame->field transition (s5 leave-demo)
 - **scope:** DEMO sm[0x48]==5 (demo_frame_s5, LEAVE-DEMO teardown) + GAME s48=5 stale-handoff
