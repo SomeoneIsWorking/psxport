@@ -58,6 +58,11 @@ cfg_on("PSXPORT_FOO")     // boolean config/feature flag: env present and != "0"
 cfg_int("PSXPORT_FOO", d) // integer-valued flag (frame number, scale, port…), default d (cached)
 cfg_str("PSXPORT_FOO")    // string-valued flag (paths, "x,y" coords); NULL if unset    (cached)
 cfg_dbg("chan")           // is debug CHANNEL `chan` on? set at runtime via the REPL `debug chan,chan…`
+cfg_enh("name")           // is PC ENHANCEMENT `name` on? PSXPORT_ENH=<name,name|all>; force-suppressed
+                          // under PSXPORT_ORACLE / SBS so byte-compares stay enhancement-free
+cfg_logf("chan", fmt, …)  // THE diagnostic print: no-op unless chan enabled; "[chan] msg\n" to stderr
+                          // or PSXPORT_LOG_FILE=<path> (append, line-buffered). One line per site —
+                          // never write `if (cfg_dbg(chan)) fprintf(stderr, …)` two-steps.
 ```
 - Every lookup reads the environment **once** and caches. In hot paths (per-prim / per-GTE-op /
   per-store) still keep a local `static int x=-1; if(x<0) x=cfg_*(…)` so there is no per-call scan.
@@ -65,6 +70,18 @@ cfg_dbg("chan")           // is debug CHANNEL `chan` on? set at runtime via the 
   warned — but `-Wint-conversion` is still an **error**, so the compiler catches that specific mistake.
   Still: classify before you wire (boolean → `cfg_on`/`cfg_dbg`; anything whose value is read → `cfg_str`/`cfg_int`).
 - `cfg_dump()` logs every active `PSXPORT_*` var once (boot-time visibility).
+
+## PC enhancements: `PSXPORT_ENH=<name,name|all>` (USER 2026-07-16)
+The third behavior class (see CLAUDE.md vocabulary): deliberate, MEANINGFUL guest-state changes on
+top of the faithful engine — unlike pc_render (host-only picture) and pc_skip (multi-step collapse,
+no meaningful end-state change). Gated per-name via `cfg_enh("name")`; `all` is the umbrella.
+`cfg_enh` is force-suppressed (one-time `[cfg]` notice) whenever `PSXPORT_ORACLE` or SBS is active,
+so an oracle/SBS byte-compare can never be clobbered by a stray `.env` — the suppression lives in
+`cfg.c`, not in per-call-site discipline. Registered enhancement names:
+
+| name | effect |
+|---|---|
+| _(none yet — planned: expanded object load/unload window, faster fades/transitions)_ | |
 
 ## Debug output is REPL-driven: `debug chanA,chanB` (or `debug all`, `debug` to clear)
 ~31 boolean `*_DBG` / `*LOG` / `*WATCH` / `VERBOSE` flags were collapsed into named channels, enabled at
@@ -388,6 +405,8 @@ quality, complementing `preseqobj`'s per-object oscillation gate above (this one
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:
+- **Logging:** `LOG_FILE`=<path> — redirect ALL `cfg_logf` channel output from stderr to a file
+  (append, line-buffered, opened once).
 - **Renderer / mode:** `VK` (default on), `SW_GPU`, `VK_NODEPTH`, `VK_TRITEST`, `VK_HEADLESS`,
   `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `FPS60`, `FPS60_GATE`, `FPS60_SYNTH`, `FPS60_TFORCE`
   (TEMPORARY gate-B test knob, docs/fps60-rework.md Tier 1: 0 pins the whole interp present — camera lerp

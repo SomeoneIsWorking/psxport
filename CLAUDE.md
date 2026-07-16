@@ -41,6 +41,15 @@ Two execution paths and two rendering paths. Any run is one exec × one render.
 - `PSXPORT_GATE=1` — recomp_path + pc_render. Works, has known rendering issues (deferred).
 - `./run.sh` — pc_faithful + pc_render. Currently broken. Target: byte-exact to recomp_path.
 
+### Enhancements (third behavior class, USER 2026-07-16)
+
+- **pc_enh** = `PSXPORT_ENH=<name,name|all>` — deliberate, MEANINGFUL guest-state changes on top of
+  the faithful engine (planned: expanded object load/unload, faster fades/transitions). One name per
+  enhancement + `all` umbrella, gated via `cfg_enh("name")` and registered in `docs/config.md`.
+  Force-suppressed under `PSXPORT_ORACLE`/SBS inside `cfg.c`, so byte-compares stay enhancement-free
+  by construction. Contrast: pc_render never writes guest memory; pc_skip changes no meaningful
+  end-state; pc_enh is the only class allowed to change what the game does.
+
 ### SBS
 
 - `PSXPORT_SBS_MODE=full` — two `Game`s in one process. Core A = pc_faithful, Core B = recomp_path. Byte-
