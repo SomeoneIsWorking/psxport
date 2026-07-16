@@ -160,7 +160,9 @@ def build_parser():
     ap.set_defaults(fn=cmd_add)
 
     for status in STATUS_LABELS + ("open",):
-        stp = sub.add_parser(status, help=f"set status to `{status}`")
+        # `ported` = the documented short alias for `ported-unverified` (header line 18).
+        aliases = ["ported"] if status == "ported-unverified" else []
+        stp = sub.add_parser(status, help=f"set status to `{status}`", aliases=aliases)
         stp.add_argument("number", type=int)
         stp.set_defaults(fn=cmd_set_status, status=status)
 
@@ -185,7 +187,7 @@ def build_parser():
 def main(argv):
     parser = build_parser()
     # Legacy shim: `bugs.py <words>` (no subcommand) = `list <words>`.
-    if argv and argv[0] not in {"list","show","add","comment","close","reopen","-h","--help"} \
+    if argv and argv[0] not in {"list","show","add","comment","close","reopen","ported","-h","--help"} \
              and argv[0] not in STATUS_LABELS and argv[0] != "open":
         argv = ["list", *argv]
     args = parser.parse_args(argv)
