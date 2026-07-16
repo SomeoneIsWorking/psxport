@@ -927,6 +927,9 @@ void ActorTomba::gov_enterOuterState0(Core* c)      { c->engine.actorTomba.enter
 void ActorTomba::gov_mode0ActionGate(Core* c)       { c->engine.actorTomba.mode0ActionGate(); }
 void ActorTomba::gov_mode0WalkHandler(Core* c)      { c->engine.actorTomba.mode0WalkHandler(); }
 void ActorTomba::gov_actionHandler8005ACC8(Core* c) { c->engine.actorTomba.actionHandler8005ACC8(); }
+void ActorTomba::gov_actionHandler8005AEE4(Core* c) { c->engine.actorTomba.actionHandler8005AEE4(); }
+void ActorTomba::gov_actionHandler8005F1B0(Core* c) { c->engine.actorTomba.actionHandler8005F1B0(); }
+void ActorTomba::gov_actionHandler800588BC(Core* c) { c->engine.actorTomba.actionHandler800588BC(); }
 
 void ActorTomba::registerOverrides(Game* game) {
   EngineOverrides& ov = game->engine_overrides;
@@ -985,6 +988,9 @@ void ActorTomba::registerOverrides(Game* game) {
   engine_set_override_main(0x8005A970u, gov_mode0WalkHandler, gen_func_8005A970);
   extern void gen_func_8005ACC8(Core*);
   engine_set_override_main(0x8005ACC8u, gov_actionHandler8005ACC8, gen_func_8005ACC8);
+  extern void gen_func_8005AEE4(Core*); engine_set_override_main(0x8005AEE4u, gov_actionHandler8005AEE4, gen_func_8005AEE4);
+  extern void gen_func_8005F1B0(Core*); engine_set_override_main(0x8005F1B0u, gov_actionHandler8005F1B0, gen_func_8005F1B0);
+  extern void gen_func_800588BC(Core*); engine_set_override_main(0x800588BCu, gov_actionHandler800588BC, gen_func_800588BC);
 }
 
 // =================================================================================
