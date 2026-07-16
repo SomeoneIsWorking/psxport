@@ -243,7 +243,8 @@ void QuadRtptSubmit::submitQuad(Core* c) {
       for (int i = 0; i < 3; i++) tr[i] = (float)(int32_t)gte_read_ctrl(5u + (unsigned)i);
       wq_factor_world(c, crF, tr, w.objR, w.objT);
     }
-    w.wColor = c->mem_r32(out + 4);
+    { const uint32_t col = c->mem_r32(out + 4);
+      for (int i = 0; i < 4; i++) w.wCol[i] = col; }
     w.wUv0 = c->mem_r32(out + 12); w.wUv1 = c->mem_r32(out + 20);
     w.wUv2 = c->mem_r32(out + 28); w.wUv3 = c->mem_r32(out + 36);
     c->mRender->mWqRecs.push_back(w);

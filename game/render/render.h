@@ -283,7 +283,10 @@ public:
     float    objR[3][3];                  // factored world rotation (unit scale)
     float    objT[3];                     // factored world position
     int16_t  vx[4], vy[4], vz[4];         // model-space corners (the xf words submitQuad projected)
-    uint32_t wColor, wUv0, wUv1, wUv2, wUv3;   // caller-filled record words +4/+12/+20/+28/+36
+    // Material record words. wCol[0] carries the code byte (>>24: semi/raw bits); FT4 emitters fill
+    // all four with the same flat word, the GT4 emitter (widescreen_margin_quad) per-vertex colors.
+    uint32_t wCol[4];
+    uint32_t wUv0, wUv1, wUv2, wUv3;      // uv words (clut in wUv0>>16, tpage in wUv1>>16)
   };
   std::vector<WqRec> mWqRecs;
   std::vector<WqRec> mWqRecsPrev;

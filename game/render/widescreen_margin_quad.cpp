@@ -15,6 +15,8 @@
 #include "game.h"
 #include "guest_abi.h"
 #include "widescreen_margin_quad.h"
+#include "render.h"            // Render::WqRec — display-pass capture (#67/#66)
+#include "render_internal.h"   // wq_factor_world
 #include "cfg.h"
 #include <cstdint>
 
@@ -285,6 +287,40 @@ void WidescreenMarginQuad::emit(Core* c) {
       c->r[3] = kPktTag;                                 // v1 = tag constant (gen leaves this live)
       c->mem_w32((uint32_t)pool + 0, oldHead | c->r[3]); // tag | old head
       c->mem_w32(slotAddr, (uint32_t)pool);
+      // #67/#66 display-pass capture: this GT4's picture from state — model corners (the staged
+      // stack scratch, already delta×256 ints), the composed GTE transform factored against the
+      // camera (render.h WqRec banner), and the FINAL packet material (post fog-shade + clut-bias:
+      // per-vertex colors +4/16/28/40, uv words +12/24/36/48). These prop quads (drum/windmill caps
+      // etc.) previously had NO pc_render picture at all — the guest packets were their only output.
+      if (!c->game->oracle) {
+        Render::WqRec w;
+        w.node = (uint32_t)node;
+        w.seq = 0;
+        for (const Render::WqRec& p : c->mRender->mWqRecs) if (p.node == w.node) w.seq++;
+        static constexpr uint32_t kVX[4] = { kVtxScratch_X0, kVtxScratch_X1, kVtxScratch_X2, kVtxScratch_X3 };
+        static constexpr uint32_t kVY[4] = { kVtxScratch_Y0, kVtxScratch_Y1, kVtxScratch_Y2, kVtxScratch_Y3 };
+        static constexpr uint32_t kVZ[4] = { kVtxScratch_Z0, kVtxScratch_Z1, kVtxScratch_Z2, kVtxScratch_Z3 };
+        for (int i = 0; i < 4; i++) {
+          w.vx[i] = c->mem_r16s(sp + kVX[i]);
+          w.vy[i] = c->mem_r16s(sp + kVY[i]);
+          w.vz[i] = c->mem_r16s(sp + kVZ[i]);
+        }
+        { constexpr float FX = 1.0f / 4096.0f;
+          float crF[3][3], tr[3];
+          uint32_t g0 = gte_read_ctrl(0), g1 = gte_read_ctrl(1), g2 = gte_read_ctrl(2),
+                   g3 = gte_read_ctrl(3), g4 = gte_read_ctrl(4);
+          crF[0][0] = (int16_t)g0 * FX;         crF[0][1] = (int16_t)(g0 >> 16) * FX; crF[0][2] = (int16_t)g1 * FX;
+          crF[1][0] = (int16_t)(g1 >> 16) * FX; crF[1][1] = (int16_t)g2 * FX;         crF[1][2] = (int16_t)(g2 >> 16) * FX;
+          crF[2][0] = (int16_t)g3 * FX;         crF[2][1] = (int16_t)(g3 >> 16) * FX; crF[2][2] = (int16_t)g4 * FX;
+          for (int i = 0; i < 3; i++) tr[i] = (float)(int32_t)gte_read_ctrl(5u + (unsigned)i);
+          wq_factor_world(c, crF, tr, w.objR, w.objT);
+        }
+        static constexpr uint32_t kColOff[4] = { 4, 16, 28, 40 };
+        for (int i = 0; i < 4; i++) w.wCol[i] = c->mem_r32((uint32_t)pool + kColOff[i]);
+        w.wUv0 = c->mem_r32((uint32_t)pool + 12); w.wUv1 = c->mem_r32((uint32_t)pool + 24);
+        w.wUv2 = c->mem_r32((uint32_t)pool + 36); w.wUv3 = c->mem_r32((uint32_t)pool + 48);
+        c->mRender->mWqRecs.push_back(w);
+      }
       pool = (uint32_t)pool + 52;
       poolBase += 52;
     }

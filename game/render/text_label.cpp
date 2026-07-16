@@ -140,7 +140,8 @@ void textLabelBody(Core* c) {
             float crF[3][3], tr[3];
             wq_read_matrix(c, cmd + 24u, crF, tr);
             wq_factor_world(c, crF, tr, w.objR, w.objT);
-            w.wColor = c->mem_r32(pk + 4u);
+            { const uint32_t col = c->mem_r32(pk + 4u);
+              for (int i = 0; i < 4; i++) w.wCol[i] = col; }
             w.wUv0 = c->mem_r32(pk + 12u); w.wUv1 = c->mem_r32(pk + 20u);
             w.wUv2 = c->mem_r32(pk + 28u); w.wUv3 = c->mem_r32(pk + 36u);
             c->mRender->mWqRecs.push_back(w);

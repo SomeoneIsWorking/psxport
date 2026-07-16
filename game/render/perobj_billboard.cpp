@@ -649,10 +649,10 @@ void ov_billboardEmit(Core* c)        { c->mRender->billboardEmit(); }
 // half; neutral texture-window, full draw-area) — NOT from GpuState's live s_tp_*/s_da_* fields,
 // which hold unrelated stale state at display time. Float verts + real per-vertex depth + the
 // drawWorldQuad draw-offset convention; dbg_node = the owning node (real identity).
-static void emitRecQuad(Core* c, uint32_t node, uint32_t wColor,
+static void emitRecQuad(Core* c, uint32_t node, const uint32_t wCol[4],
                         uint32_t wUv0, uint32_t wUv1, uint32_t wUv2, uint32_t wUv3,
                         const float* px, const float* py, const float* dep) {
-  const uint8_t  op   = (uint8_t)(wColor >> 24);
+  const uint8_t  op   = (uint8_t)(wCol[0] >> 24);
   const uint32_t clut = wUv0 >> 16;
   const uint32_t tp   = wUv1 >> 16;
   int us[4] = { (int)(wUv0 & 0xFFu), (int)(wUv1 & 0xFFu), (int)(wUv2 & 0xFFu), (int)(wUv3 & 0xFFu) };
@@ -660,9 +660,9 @@ static void emitRecQuad(Core* c, uint32_t node, uint32_t wColor,
                 (int)((wUv2 >> 8) & 0xFFu), (int)((wUv3 >> 8) & 0xFFu) };
   unsigned char rs[4], gsv[4], bs[4];
   for (int i = 0; i < 4; i++) {
-    rs[i]  = (unsigned char)(wColor & 0xFF);
-    gsv[i] = (unsigned char)((wColor >> 8) & 0xFF);
-    bs[i]  = (unsigned char)((wColor >> 16) & 0xFF);
+    rs[i]  = (unsigned char)(wCol[i] & 0xFF);
+    gsv[i] = (unsigned char)((wCol[i] >> 8) & 0xFF);
+    bs[i]  = (unsigned char)((wCol[i] >> 16) & 0xFF);
   }
   GpuState& gs = c->game->gpu;
   gs.s_seen3d = 1;
@@ -731,7 +731,8 @@ void Render::billboardsRender() {
     }
     if (behind) continue;
 
-    emitRecQuad(c, rc.node, rc.wColor, rc.wUv0, rc.wUv1, rc.wUv2, rc.wUv3, px, py, dep);
+    { const uint32_t wc[4] = { rc.wColor, rc.wColor, rc.wColor, rc.wColor };
+      emitRecQuad(c, rc.node, wc, rc.wUv0, rc.wUv1, rc.wUv2, rc.wUv3, px, py, dep); }
   }
 
   // ---- WqRecs: the generic composed-CR quad classes (submitQuad callers — render.h WqRec banner).
@@ -777,7 +778,7 @@ void Render::billboardsRender() {
     }
     if (behind) continue;
 
-    emitRecQuad(c, rc.node, rc.wColor, rc.wUv0, rc.wUv1, rc.wUv2, rc.wUv3, px, py, dep);
+    emitRecQuad(c, rc.node, rc.wCol, rc.wUv0, rc.wUv1, rc.wUv2, rc.wUv3, px, py, dep);
   }
 }
 
