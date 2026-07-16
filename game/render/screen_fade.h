@@ -30,9 +30,12 @@
 //   to guest RAM, in BOTH pc_skip modes. The guest packet-pool + scratchpad writes of FUN_8007e9c8
 //   fire only where a still-substrate caller runs the recomp body directly.
 //
-//   Still-recomp fade callers do NOT reach this class; they run the substrate FUN_8007e9c8 body
-//   directly. Each substrate caller is a top-down port task tracked in docs/port-progress.md.
-//   Overrides are NOT the answer (violates top-down ownership).
+//   Still-recomp fade callers reach this class through installLeafTap() — a shard-level override on
+//   FUN_8007e9c8 (sanctioned leaf-engine global ownership, CLAUDE.md engine-overrides directive) that
+//   runs the original gen body for byte-exact guest state and mirrors the args into the host frame
+//   state. Before the tap (pre-2026-07-16), substrate callers ran gen directly and the class never
+//   saw them — the fisherman-cutscene fade-in (#63) presented at full brightness because its ramp
+//   only existed as guest OT packets.
 //
 //   NO cross-frame "held fully-faded" latch. An earlier revision inferred a persistent black/white HOLD
 //   from the last fade value's magnitude (a magic-threshold heuristic — banned by the no-magic-constant
@@ -94,6 +97,12 @@ public:
   // Read this frame's effective state (native renderer's present prologue). Returns the frame-scoped
   // state set by a caller this frame, otherwise NONE (matches PSX: nobody wrote OT slot 4 this frame).
   State get() const;
+
+  // Global ownership of the FUN_8007e9c8 leaf (engine-overrides directive): installs an oracle-gated
+  // shard override that runs the original gen body (guest state byte-exact) and mirrors the args into
+  // this class — so STATIC gen-to-gen fade callers (invisible to rec_dispatch) also feed get().
+  // Idempotent; called from Game setup alongside the other *_install() wirings.
+  static void installLeafTap();
 
 private:
   // Host-owned state (was previously shadowed at guest 0x800E7DE0..7, an invented BSS address that

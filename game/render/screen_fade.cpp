@@ -65,6 +65,32 @@ ScreenFade::State ScreenFade::get() const {
   return State{ mFrameMode, mFrameR, mFrameG, mFrameB };
 }
 
+// ---- Fade-leaf tap: own FUN_8007e9c8 GLOBALLY (engine-overrides directive) -------------------
+// Every still-substrate fade caller reaches gen_func_8007E9C8 via a STATIC gen-to-gen jal — a call
+// path that never passes rec_dispatch, so neither PSXPORT_DISPWATCH nor this class ever saw it.
+// Concretely (#63): the fisherman-cutscene fade-in ramps the guest OT rect every frame while the
+// native present read mFrameMode==NONE and showed the scene at full brightness. The fix is the
+// sanctioned leaf-engine global ownership: install on the shard g_override[] table via the
+// oracle-gated thunk (engine_set_override_main), run the ORIGINAL gen body so guest packet-pool/
+// OT/scratchpad state stays byte-exact for SBS, then mirror the guest-ABI args {a0=color,
+// a1=blend, a2=slot} into the host frame state. SBS core B keeps running pure gen (thunk gates on
+// psx_fallback), and pc_render still writes zero guest bytes — the tap is logic-side, not render.
+extern void gen_func_8007E9C8(Core*);
+extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
+namespace {
+void fadeLeafTap(Core* c) {
+  const uint32_t color = c->r[4], blend = c->r[5], slot = c->r[6];
+  gen_func_8007E9C8(c);
+  c->screenFade.applyLeafCall(color, blend, slot);
+}
+}
+void ScreenFade::installLeafTap() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  engine_set_override_main(0x8007E9C8u, fadeLeafTap, gen_func_8007E9C8);
+}
+
 // ScreenFade::sequence — the GAME-overlay a0l per-node fade sequencer (guest FUN_8010957C).
 // Multi-step ramp SM driven by node+2 (outer state) / node+3 (running-substep) / node+106
 // (fade LEVEL 0..31) / node+104 (step-2 delay counter). Two still-substrate leaves: the
