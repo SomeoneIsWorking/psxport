@@ -50,7 +50,7 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **order:** 26
 - **deps:** field-world (sceneNative)
 - **owner:** game/render/cine_bars.cpp (Render::cineBarsRender)
-- **notes:** RE'd the UI-effect slot manager; native producer reads slot table read-only, emits (0,0,320,h)+(0,224-h,320,h). Verified: cutscene RMSE 61.6->24.1, top+bottom bands RMSE 0.0; title/void/hut no regression. Wired into renderField + renderSopNarration.
+- **notes:** Native producer reads the UI-effect slot table read-only, emits top/bottom bars. VISUAL (not oracle-matched, per USER: oracle letterbox is itself buggy): inner edges kept at the game's content frame (top h, bottom 224-h), outer edges extended flush to the frame edges (0 / 240) so no 16px content gap shows below the bar. Screenshot sent for eyeball.
 
 ## field-world (sceneNative)
 - **scope:** 0x8010637C GAME field: terrain+entities+objects+backdrop, real depth

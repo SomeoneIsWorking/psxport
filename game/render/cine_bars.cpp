@@ -35,14 +35,23 @@ void Render::cineBarsRender() {
     if (state < 1 || state > 3) continue;                // states 1/2/3 draw; 0 = armed-not-drawing
     const int h = (int16_t)c->mem_r16(slot + 8);
     if (h <= 0) continue;
-    auto bar = [&](int y) {
+    // VISUAL FIX (USER 2026-07-16: "problems with letterbox even in the oracle — just make them look
+    // similar, don't rely on the oracle"). The guest math frames the bars for a 224-line display (top
+    // inner edge at h, bottom inner edge at 224-h), but we present the full 240-line framebuffer — so the
+    // oracle's bar leaves a visible 16px strip of CONTENT below the bottom bar (rows 224..239). Keep the
+    // INNER edges exactly where the game frames the content (top=h, bottom=224-h — the cinematic frame),
+    // but extend each bar's OUTER edge flush to the real frame edge (top->0, bottom->FB_H) so the bars sit
+    // against the screen edges with no floating gap. FB_H = the presented framebuffer height.
+    const int FB_H = 240;
+    auto bar = [&](int yTop, int yBot) {                     // filled [yTop, yBot) in screen rows
+      const int bh = yBot - yTop; if (bh <= 0) return;
       int xs[4] = { 0 + ox, 320 + ox, 0 + ox, 320 + ox };
-      int ys[4] = { y + oy, y + oy, y + h + oy, y + h + oy };
+      int ys[4] = { yTop + oy, yTop + oy, yBot + oy, yBot + oy };
       int z[4] = { 0, 0, 0, 0 }; unsigned char k[4] = { 0, 0, 0, 0 };
       c->game->activeRq().push2dQuad(RQ_OVERLAY, /*order_2d_fg=*/1, xs, ys, z, z, k, k, k,
                                      0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
     };
-    bar(0);           // top bar (0,0,320,h)
-    bar(224 - h);     // bottom bar (0,224-h,320,h)
+    bar(0, h);              // top:    outer edge 0 (flush) .. inner edge h (game's content frame)
+    bar(224 - h, FB_H);     // bottom: inner edge 224-h (game's content frame) .. outer edge FB_H (flush)
   }
 }
