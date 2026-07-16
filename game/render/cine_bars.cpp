@@ -1,57 +1,75 @@
-// game/render/cine_bars.cpp — native producer for the CINEMATIC LETTERBOX bars.
+// game/render/cine_bars.cpp — CUSTOM PC-NATIVE cinematic LETTERBOX bars.
 //
-// Cutscenes draw top+bottom black letterbox bars via a UI-effect MANAGER: FUN_80026368 walks 8 effect
-// slots (base 0x80100400, stride 0x4C), dispatching each active slot by its type byte (+2) through the
-// table @0x8009D314. Slot type 1 = LETTERBOX (handler FUN_80026864): it grows/holds/shrinks a bar height
-// h (slot+8) and each frame draws two op-0x60 FLAT black rects — top (0,0,320,h) and bottom (0,224-h,
-// 320,h) — into the near OT bucket. The native object walk never drew these (the slots aren't render
-// nodes), so cutscenes under pc_render were missing their bars (the field showed through top/bottom).
+// Cutscenes flag a letterbox via a UI-effect MANAGER: FUN_80026368 walks 8 effect slots (base
+// 0x80100400, stride 0x4C); slot type 1 = LETTERBOX (handler FUN_80026864). The guest handler grows/
+// holds/shrinks a bar-height h (slot+8) and draws two op-0x60 flat black rects sized for a 320x224 PSX
+// display. The slots aren't render nodes, so the native object walk never drew them.
 //
-// RE (2026-07-16, Ghidra on the cutscene dump scratch/bin/ram_cut.bin):
-//   FUN_80026864(slot): if scratchpad *(u8*)0x1F80019A != 2 -> return (manager not armed).
-//     state = slot+4: 0 -> arm (no draw); 1 -> h++ (until >11) then draw; 2 -> hold, draw;
-//     3 -> h-- then draw. States 1/2/3 draw; 0 doesn't. h = *(s16*)(slot+8).
-//     draw = FUN_8007fcc8(0,0,320,h,1) + FUN_8007fcc8(0,224-h,320,h,1) — op-0x60 flat rects, colour 0,
-//     opaque, near bucket. Verified: h=12 -> bars rows 0..11 + 212..223, byte-matching psx.
-//
-// READ-ONLY: the substrate manager still runs underneath (it owns the h tick + the guest packets); this
-// producer only READS the slot table and re-emits the bars to the native queue.
+// This producer does NOT transcribe the PSX draw (USER 2026-07-16: "I don't really care about the
+// letterbox — we should have it but it should be custom PC-native so it can be adjusted for wide and 60").
+// It uses the guest slot ONLY as the SIGNAL: is a letterbox active, and how far grown (progress fraction).
+// The bars themselves are a native overlay sized to the ACTUAL display, so they adapt to any aspect and
+// present rate:
+//   - WIDE: bars span the full render-target width (drawn far past any aspect's extent; the target/draw-
+//     area clip trims the overdraw), so 16:9 / 21:9 margins are covered — a 320-wide bar would leak the
+//     side content at top/bottom.
+//   - 60fps: RQ_OVERLAY re-emits every presented frame; the progress fraction is read live, so an fps60
+//     tier that lerps the guest h would animate the bars smoothly with no extra work here (the one knob
+//     is `progress`).
+// The bar THICKNESS keeps the game's cinematic framing (so the cutscene composition isn't cropped): the
+// full-grown bar matches the guest's — h/kGuestFullH of the frame at each edge. READ-ONLY (the substrate
+// manager still runs underneath and owns the guest packets; this only reads the slot table).
 #include "core.h"
 #include "game.h"
 #include "render.h"
 #include "render_queue.h"
 
-// cineBarsRender — emit any active cinematic letterbox bars. Emits nothing when the manager is disarmed
-// (scratchpad 0x1F80019A != 2) or no letterbox slot is active. Call from any scene that can be a cutscene.
+// Wide-render-target width (428 @16:9, 560 @21:9, 320 @4:3); ofx used elsewhere. Declared in gpu_gpu.cpp.
+int gpu_gpu_wide_engine(Core* c);
+int gpu_gpu_wide_engine_w(Core* c);
+
+// cineBarsRender — emit the cinematic letterbox as a native full-width overlay. Emits nothing when no
+// letterbox is armed. Call from any cutscene-capable scene.
 void Render::cineBarsRender() {
   Core* c = mCore;
-  if (c->mem_r8(0x1F80019Au) != 2) return;               // manager not armed -> no bars
-  const int ox = c->game->gpu.s_off_x, oy = c->game->gpu.s_off_y;
+  if (c->mem_r8(0x1F80019Au) != 2) return;               // UI-effect manager not armed -> no bars
+
+  // Find the active letterbox slot's progress (0..1). The guest grows h to kGuestFullH over its intro.
+  constexpr int kGuestFullH = 12;                        // guest bar height at full (FUN_80026864 caps h>11)
+  float progress = 0.0f;
   for (int i = 0; i < 8; i++) {
     const uint32_t slot = 0x80100400u + (uint32_t)i * 0x4Cu;
-    if (c->mem_r8(slot) == 0) continue;                  // inactive slot
-    if (c->mem_r8(slot + 2) != 1) continue;              // type 1 == letterbox
+    if (c->mem_r8(slot) == 0 || c->mem_r8(slot + 2) != 1) continue;   // active + type-1 (letterbox)
     const uint8_t state = c->mem_r8(slot + 4);
-    if (state < 1 || state > 3) continue;                // states 1/2/3 draw; 0 = armed-not-drawing
+    if (state < 1 || state > 3) continue;                            // 1/2/3 draw; 0 armed-not-drawing
     const int h = (int16_t)c->mem_r16(slot + 8);
-    if (h <= 0) continue;
-    // VISUAL FIX (USER 2026-07-16: "problems with letterbox even in the oracle — just make them look
-    // similar, don't rely on the oracle"). The guest math frames the bars for a 224-line display (top
-    // inner edge at h, bottom inner edge at 224-h), but we present the full 240-line framebuffer — so the
-    // oracle's bar leaves a visible 16px strip of CONTENT below the bottom bar (rows 224..239). Keep the
-    // INNER edges exactly where the game frames the content (top=h, bottom=224-h — the cinematic frame),
-    // but extend each bar's OUTER edge flush to the real frame edge (top->0, bottom->FB_H) so the bars sit
-    // against the screen edges with no floating gap. FB_H = the presented framebuffer height.
-    const int FB_H = 240;
-    auto bar = [&](int yTop, int yBot) {                     // filled [yTop, yBot) in screen rows
-      const int bh = yBot - yTop; if (bh <= 0) return;
-      int xs[4] = { 0 + ox, 320 + ox, 0 + ox, 320 + ox };
-      int ys[4] = { yTop + oy, yTop + oy, yBot + oy, yBot + oy };
-      int z[4] = { 0, 0, 0, 0 }; unsigned char k[4] = { 0, 0, 0, 0 };
-      c->game->activeRq().push2dQuad(RQ_OVERLAY, /*order_2d_fg=*/1, xs, ys, z, z, k, k, k,
-                                     0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
-    };
-    bar(0, h);              // top:    outer edge 0 (flush) .. inner edge h (game's content frame)
-    bar(224 - h, FB_H);     // bottom: inner edge 224-h (game's content frame) .. outer edge FB_H (flush)
+    if (h > 0) { float p = (float)h / (float)kGuestFullH; progress = p > progress ? p : progress; }
   }
+  if (progress <= 0.0f) return;
+  if (progress > 1.0f) progress = 1.0f;
+
+  // Native bar geometry, sized to the DISPLAY (not the PSX 320x224). Thickness = the guest's cinematic
+  // frame fraction (kGuestFullH of 240) scaled by progress, applied symmetrically at top and bottom.
+  const int H = 240;                                     // present framebuffer height (native draw units)
+  const int barPx = (int)(progress * (float)kGuestFullH + 0.5f);
+  if (barPx <= 0) return;
+
+  // Full-width span: draw far beyond any aspect's extent and let the target/draw-area clip trim it. The
+  // 2D origin sits at the 4:3 left edge with the wide content extending both ways, so cover -X..+X wide
+  // enough for the widest target (wide_w up to VRAM_W). ±((wide_w-320)/2 + 320) always spans it.
+  const int wide_w = gpu_gpu_wide_engine(c) ? gpu_gpu_wide_engine_w(c) : 320;
+  const int margin = (wide_w - 320) / 2;
+  const int xL = -margin - 320, xR = 320 + margin + 320; // generous overdraw; clipped to the target
+  const int oy = c->game->gpu.s_off_y;
+
+  auto bar = [&](int yTop, int yBot) {
+    if (yBot <= yTop) return;
+    int xs[4] = { xL, xR, xL, xR };
+    int ys[4] = { yTop + oy, yTop + oy, yBot + oy, yBot + oy };
+    int z[4] = { 0, 0, 0, 0 }; unsigned char k[4] = { 0, 0, 0, 0 };
+    c->game->activeRq().push2dQuad(RQ_OVERLAY, /*order_2d_fg=*/1, xs, ys, z, z, k, k, k,
+                                   0, 0, /*mode=*/3, /*raw=*/0, 0, 0, 0, 0, 0, 0, 0, 0, 1023, 511);
+  };
+  bar(0, barPx);             // top bar, flush to the top edge
+  bar(H - barPx, H);         // bottom bar, flush to the bottom edge (symmetric — no floating gap)
 }

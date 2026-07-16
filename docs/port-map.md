@@ -50,7 +50,7 @@ Detail lives in docs/port-progress.md; this is the queryable real-vs-hack fronti
 - **order:** 26
 - **deps:** field-world (sceneNative)
 - **owner:** game/render/cine_bars.cpp (Render::cineBarsRender)
-- **notes:** Native producer reads the UI-effect slot table read-only, emits top/bottom bars. VISUAL (not oracle-matched, per USER: oracle letterbox is itself buggy): inner edges kept at the game's content frame (top h, bottom 224-h), outer edges extended flush to the frame edges (0 / 240) so no 16px content gap shows below the bar. Screenshot sent for eyeball.
+- **notes:** CUSTOM PC-NATIVE (USER: don't transcribe PSX, make it wide/60-adjustable). Reads guest slot only as signal (active + progress 0..1); bars are a native overlay sized to the DISPLAY: full-width overdrew for any aspect (wide margins covered), symmetric flush bars, re-emitted every present (progress is the one live knob an fps60 tier can lerp). Not oracle-matched (oracle letterbox is itself buggy). Screenshot sent.
 
 ## field-world (sceneNative)
 - **scope:** 0x8010637C GAME field: terrain+entities+objects+backdrop, real depth
