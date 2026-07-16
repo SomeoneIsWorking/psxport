@@ -207,3 +207,75 @@ its own bespoke packet shape, own math, and (for the GT3/GT4 pair) its own GTE u
 common "sprite-emit" template to factor out between these two; each of the ~20 dispatch leaves is
 its own bespoke emitter, consistent with `overlay_type_dispatch.cpp`'s own note ("Each type-drawer
 emits its object type's sprites INLINE — no shared sprite-emit leaf to tap").
+
+---
+
+# 2026-07-16 addendum — entry resolution, driver RE, native port (implemented)
+
+Ported to `game/render/tile_grid_layer.{h,cpp}` (full RE trace + rationale in that .cpp's banner —
+this section is a summary; treat the .cpp as the source of truth where the two disagree).
+
+## Entry resolution (STEP 0) — 0x80115364 is dead for this feature; real entry is 0x8011534C
+
+Ground-truth checked three ways (live disas of the resident overlay, the recompiler's own A00
+function-splitter tables, and `generated/` cross-referencing):
+- 0x80115364 is the delay-slot instruction (`addiu sp,sp,-8`) of a branch INSIDE 0x8011534C, not a
+  separate function. `generated/ov_a00_disp.c` has real dispatch cases for 0x8011534C/0x80115598/
+  0x801158E0 and **no case anywhere for 0x80115364** — `rec_dispatch(c, 0x80115364u)` while A00 is
+  resident would fail-fast.
+- `Render::overlayTypeDispatch`'s case 0x8003D1C4 really does contain that literal call
+  (`generated/shard_7.c:4639`, confirmed) — a genuine ROM artifact — but this AREA_TYPE case is
+  unrelated to the field's own AREA_TYPE (0): `Engine::areaModeDispatch`'s mode-idx-0 handler (the
+  SAME 0x800BF870 selector byte) is the REAL, different, literal address 0x8011534Cu
+  (`game/core/engine.cpp:2419`). This call path was never chased further — it doesn't matter for the
+  field tile-grid, and per CLAUDE.md ("own it only if reachable") isn't worth force-fixing here.
+- The REAL live callers (found by grepping for existing native call sites, not by walking the
+  dispatch tree): `Engine::areaModeDispatch`/`areaModeDispatchFaithful` (mode idx 0 -> rec_dispatch
+  0x8011534C, a0=0x800ED018, per-frame STEP) and the still-unowned `FUN_8003DF04` render-state
+  dispatcher (state 0 -> rec_dispatch 0x80115598, a0=0x800ED018, per-frame EMIT) — both already
+  independently referenced by the EXISTING native host-side producer `Render::backdropRender`
+  (`game/render/render_walk.cpp`), which this session did not need to re-derive.
+
+## Driver 0x801158E0 (STEP 1) — RE'd, but NOT the caller of the scroll/emit pair; not owned
+
+4-way dispatch on node+4: ==1 -> 0x80115aa4 (not traced), ==0 -> an entity/particle SPAWN block
+(gated on a global style byte @0x800BF9E0, walks a 28-entry area-record table @0x80146f0c, calls
+`jal 0x8003116c` per matching record), ==2/3 -> 0x80115b68, >=4 -> 0x80115b70 (continues into an
+unrelated per-frame animation-countdown block touching a DIFFERENT table @0x80147d84). Its body
+contains **no call to 0x8011534C or 0x80115598 anywhere**, and grepping every generated shard (MAIN
++ A00's own) finds **no caller of 0x801158E0 at all** while A00 is resident. The original doc's
+guess that this is "the driver that decides when the emitter runs" is wrong — it's a separate
+object-type's per-frame state machine that happens to sit adjacent in the A00 code layout. Left
+unowned/unwired; not part of this feature.
+
+## Packet-pool tail — CORRECTED: 0x80083DE0 is not an OT-splice helper
+
+Section (c)/(f) above guessed `jal 0x80083de0` performs the OT bucket link. Ground truth (cross-
+checked against the leaf's own independent RE in `wide_re_libgpu_leaves.cpp`): 0x80083DE0 only fills
+in a trailing packet's DR_TPAGE mode word + texture-window word (called here with rgbBitsSrc=0,
+modeFlag=0, texWinSrc=0 -> a plain 0xE1000000 reset, no texwin). The REAL OT[0x7FF] splice is
+separate inline code immediately around that call: every tile's own tag chains forward to the very
+next tile's address (not "one iteration late" — each tile sets its own tag using the
+already-bumped pool pointer); after the loop the LAST tile's stray forward pointer is patched to the
+pre-existing OT[0x7FF] head; then a new trailing header packet is built (tag = first-tile address |
+0x02000000) and OT[0x7FF] is overwritten to point at that header — i.e. one mode-reset packet +
+the whole tile batch is prepended onto whatever was already queued in that bucket.
+
+## Native port
+
+`TileGridLayer::scrollStep` (FUN_8011534C) and `TileGridLayer::emit` (FUN_80115598), wired via
+`engine_set_override_a00` (same mechanism as `OverlayGroundGt3Gt4`'s A00-local leaves), installed
+from `runtime/recomp/boot.cpp`. Guest half reproduces every write (node fields, 16-byte op-0x7C
+packets, OT splice, trailing DR_TPAGE packet via the already-RE'd but still-substrate 0x80083DE0,
+called through `rec_dispatch` exactly like `Font::glyphEmit`'s own tail). Host half
+(`TileGridLayer::emit`'s inline `push2dQuad(RQ_BACKGROUND, ...)`) is gated
+`oracle || mRender->mode.psxRender()` — OFF during normal pc_render, since
+`Render::backdropRender` already owns that picture unconditionally; this leaf's host push exists
+only so the psx_render/oracle legs see a consistent picture. Row/col wrap-window math is reused
+verbatim from `backdropRender` (already RE'd + battle-tested there) rather than re-derived.
+`tileq` debug channel added (docs/config.md), rate-limited every 512th host push.
+
+Verified live: `PSXPORT_DEBUG=tileq` under `PSXPORT_RENDER_PSX=1` shows the guest override firing
+continuously during free-roam (>1000 emits/run); silent under default `pc_render` by design (the
+host-half gate). Screenshots at `scratch/screenshots/tilegrid_pc.png` /
+`tilegrid_ref.png` (pc_render vs psx_render, free-roam) show a consistent scrolling backdrop.

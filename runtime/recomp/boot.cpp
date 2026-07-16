@@ -13,6 +13,7 @@
 #include "actor_zoned_attacker.h"  // class ActorZonedAttacker — 0x8014xxxx zoned-attacker sub-behavior cluster
 #include "overlay_gt3gt4.h"        // class OverlayGt3Gt4 — A00-overlay GT3/GT4 packet-emitter cluster
 #include "overlay_ground_gt3gt4.h" // class OverlayGroundGt3Gt4 — A00-overlay GROUND/SCENE GT3/GT4 cluster
+#include "tile_grid_layer.h"       // class TileGridLayer — A00-overlay field scroll-wrap + tile-grid sprite emitter (0x8011534C/0x80115598)
 #include "widescreen_margin_quad.h" // class WidescreenMarginQuad — A00-overlay widescreen-margin OT.GT4 emitter (0x8013CDD4)
 #include "hud_gauge_emitter.h"     // class HudGaugeEmitter — self-contained HUD gauge emitter (0x8004FD30/0x8004FB4C)
 #include "quad_rtpt_submit.h"      // class QuadRtptSubmit — 0x8003xxxx rope/flame quad rotate+RTPT submit
@@ -100,6 +101,7 @@ void register_engine_overrides(Game* game) {
   c->engine.releaseTriggerMotion.registerOverrides(); // release-trigger sub-motion cluster
   OverlayGt3Gt4::registerOverrides(game);            // A00-overlay GT3/GT4 packet emitters (0x801465EC/801467BC)
   OverlayGroundGt3Gt4::registerOverrides(game);      // A00-overlay GROUND/SCENE GT3/GT4 + entity loop (0x8013FB88/8013FE58/801401B8)
+  TileGridLayer::registerOverrides(game);            // A00-overlay field scroll-wrap + tile-grid sprite emitter (0x8011534C/0x80115598)
   WidescreenMarginQuad::registerOverrides(game);     // A00-overlay widescreen-margin OT.GT4 quad emitter (0x8013CDD4)
   HudGaugeEmitter::registerOverrides(game);          // self-contained HUD gauge emitter (0x8004FD30/0x8004FB4C)
   QuadRtptSubmit::registerOverrides(game);           // rope/flame quad rotate+RTPT submit (0x8003B054/8003B320)
