@@ -1244,7 +1244,12 @@ def main(argv=None):
     ap.add_argument('--repo', default=None, help='repo root (default: dir containing this script\'s parent)')
     args = ap.parse_args(argv)
 
-    repo = args.repo or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Resolve the recomp corpus root. Order: --repo > $PSXPORT_GAME_ROOT > cwd (if it has generated/) >
+    # this framework tool's own repo. Lets the framework porting tools run straight from a consuming game
+    # repo (e.g. Tomba2Engine), whose generated/ is game-side after the framework/game repo split.
+    repo = (args.repo or os.environ.get('PSXPORT_GAME_ROOT')
+            or (os.getcwd() if os.path.isdir(os.path.join(os.getcwd(), 'generated')) else None)
+            or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     try:
         fn = locate_function(repo, args.addr)
