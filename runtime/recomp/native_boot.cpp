@@ -446,12 +446,29 @@ static void game_main(Core* c) {
     if (c->game->repl.warpArmed) {
       c->game->repl.warpArmed = 0;
       const uint32_t dest = c->game->repl.warpDest & 0x1fu;
-      const uint32_t sub  = c->game->repl.warpSub  & 0x3fu;
-      const uint16_t rec  = (uint16_t)((dest << 8) | sub);   // 0x800BF83A packed door record
-      fprintf(stderr, "[repl] warp: dest=%u sub=%u at f%u (cur area=%u) -> write door record 0x800BF83A=%04X, trig=3\n",
-              dest, sub, f, c->mem_r8(0x800bf870u), rec);
-      c->mem_w16(0x800bf83au, rec);
-      c->mem_w8 (0x800bf839u, 3);   // trigger type 3 = normal cross-area door
+      // DEV-WARP CROSS-OVERLAY FULL LOAD (2026-07-17): warping to an area whose field CODE overlay is a
+      // SEPARATE ov_a0<id> (not the resident A00 — e.g. area 3 = ov_a03, hut interior area 21 = ov_a0l)
+      // crashes even the ORACLE with the old door-record warp, because a real walk-in LOADS that overlay
+      // + its area DATA/tables when entering the region, while a warp jumps in cold and the door record
+      // routes through nexttab -> a running state that never runs the load. So reproduce the FULL per-area
+      // load directly: prime the load-task slot fields (sm[0x6e]=dest, sm[0x6d]=2 -> main DMA path) and run
+      // the native area loader (= guest FUN_800452c0 body: FUN_80045080(0x80108f9c, dest+3) code overlay +
+      // area DATA + reloc tables + bf870=dest), then force the field area machine into its running state
+      // (sm[0x4a]=1, sm[0x4c]=nexttab[dest]). VERIFIED: warp 3 (ov_a03) now loads clean, 0 miss (was a
+      // miss-crash). DEV-ONLY reachability aid on the debug warp path; normal gameplay loads it through the
+      // area machine's own case-0 on region entry. (Old teardown via the door record is skipped — a warp is
+      // a cold jump, not an in-game door; some stale prior-area object state may linger, acceptable for a
+      // debug warp.)
+      uint32_t wsm = c->mem_r32(0x1f800138u);
+      c->mem_w8(wsm + 0x6e, (uint8_t)dest);
+      c->mem_w8(wsm + 0x6d, 2);
+      c->engine.sop.transitionAreaLoad();     // full native area load for `dest` (sets bf870=dest, loads a0<id>)
+      c->mem_w16(wsm + 0x48, 2);
+      c->mem_w16(wsm + 0x4a, 1);
+      c->mem_w16(wsm + 0x4c, c->mem_r8(0x80108f60u + dest));
+      c->mem_w16(wsm + 0x4e, 0);
+      fprintf(stderr, "[repl] warp: full area load for area %u done (f%u), bf870=%u, sm[0x4c]=%u\n",
+              dest, f, c->mem_r8(0x800bf870u), c->mem_r8(wsm + 0x4c));
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs

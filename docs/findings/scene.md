@@ -780,3 +780,21 @@ After deduping FUN_80040B48 + FUN_80040CDC, `codemap.py --conflicts` (authoritat
   RE'd from the specific seaside door object that first loads a0l — a separate, larger effort).
 - **Recommendation:** pause interior work pending a real repro; the ledger of established facts above is the
   handoff. Do NOT re-attempt warp-based interior repro (proven invalid).
+
+### UPDATE 3 (2026-07-17) — dev-warp made cross-overlay-VALID; area 21 now blocked on a recompiler-seeding gap
+
+- **The old door-record `warp` was INVALID for cross-overlay areas** (it never loaded the dest overlay).
+  FIXED in `runtime/recomp/native_boot.cpp`: the warp now runs the FULL native area load directly —
+  `sm[0x6e]=dest, sm[0x6d]=2 → Sop::transitionAreaLoad()` (code overlay `FUN_80045080(0x80108f9c,dest+3)` +
+  area DATA + reloc tables + `bf870=dest`) then forces the running state (`sm[0x4a]=1, sm[0x4c]=nexttab[dest]`).
+  **VERIFIED: `warp 3` (ov_a03) now loads clean, 0 miss (was a miss-crash on 0x8010B37C); `warp 0` clean.**
+  So cross-overlay areas are now reachable via warp — the "be able to reach it" tooling gap is closed for
+  areas whose overlay functions are all recompiled.
+- **Area 21 (hut interior, ov_a0l) now gets MUCH further** — a0l loads, `bf870=21`, runs `sm[0x4c]=2` — but
+  still crashes on a **recompiler-SEEDING gap**: dispatch to `0x80109200` (from sceneEventFifo's `FUN_800251F0`)
+  misses because a0l's first recompiled fn is `0x80109208` — `0x80109200` (8 bytes earlier, reached via a
+  runtime fn-ptr, not a static call) was never DISCOVERED by the recompiler, so `ov_a0l` has no entry for it.
+- **NEXT STEP:** seed `0x80109200` (+ any sibling runtime-dispatched a0l fns surfaced by re-running
+  `warp 21`) into the a0l overlay's recompiler function list and regenerate ov_a0l, then re-test `warp 21`.
+  This is recompiler-seeding work (tools/ recompiler), distinct from the RE now complete. The dev-warp is
+  the reachability vehicle.
