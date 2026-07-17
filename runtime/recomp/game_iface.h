@@ -78,6 +78,10 @@ struct GameHooks {
   void (*musicCoordTick)(Core* c);            // per-frame music coord (was c->engine.musicCoord.tick())
   bool (*cdDialogToneActive)(Core* c);        // dialog-tone gate (was c->engine.musicCoord.dialogToneActive())
   void (*cdMusicFadeIn)(Core* c);             // ingame-music fade-in (was c->engine.musicCoord.musicFadeIn())
+  void (*registerOverrides)(Game* g);         // install ALL game override clusters into the process-global
+                                              // registry (was boot.cpp register_engine_overrides(game)).
+                                              // Takes Game* (not Core*): the clusters register per-Game.
+                                              // MUST run before crt0_setup/game_init on every harness Game.
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

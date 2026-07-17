@@ -104,6 +104,7 @@ set(PORT_SRC
   game/core/asset.cpp
   game/core/game_config.cpp
   game/core/game_hooks.cpp
+  game/core/register_overrides.cpp
   game/core/fs_util.cpp
   game/core/str.cpp
   game/core/pc_scheduler.cpp

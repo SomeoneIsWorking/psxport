@@ -15,6 +15,11 @@ static void tomba_musicCoordTick(Core* c)             { c->engine.musicCoord.tic
 static bool tomba_cdDialogToneActive(Core* c)         { return c->engine.musicCoord.dialogToneActive(); }
 static void tomba_cdMusicFadeIn(Core* c)              { c->engine.musicCoord.musicFadeIn(); }
 
+// registerOverrides installs ALL the game's override clusters into the process-global registry.
+// Body lives in register_overrides.cpp (moved out of framework boot.cpp); declared here so the hook
+// table names it. Takes Game* (not Core*): the clusters register per-Game.
+extern void register_engine_overrides(Game*);
+
 // extern-visible: game_config.cpp names it in the install call. A namespace-scope `const` object
 // has INTERNAL linkage by default in C++, so `extern` is required to export the symbol. One
 // process-global instance; both SBS cores snapshot the same pointer.
@@ -24,4 +29,5 @@ extern const GameHooks g_tomba_hooks = {
   /* musicCoordTick     */ tomba_musicCoordTick,
   /* cdDialogToneActive */ tomba_cdDialogToneActive,
   /* cdMusicFadeIn      */ tomba_cdMusicFadeIn,
+  /* registerOverrides  */ register_engine_overrides,
 };

@@ -291,7 +291,7 @@ static void game_init(Core* c) {
 // frame loop, then step it one frame at a time. dc_boot_init = crt0 setup + the init prefix/bootstrap;
 // dc_step_frame = one frame.
 //
-// register_engine_overrides(c->game) HAS to run here (2026-07-08 fix, docs/findings/tooling.md
+// c->hooks->registerOverrides(c->game) HAS to run here (2026-07-08 fix, docs/findings/tooling.md
 // "SBS/DualCore/Selftest never populate their own Game's override table"): every harness that boots
 // via dc_boot_init constructs its OWN Game, and the registration previously lived ONLY inline in
 // boot.cpp's main(), against a single throwaway Game these harnesses never touch. Without calling it
@@ -305,8 +305,7 @@ static void game_init(Core* c) {
 // the registry must already carry these entries before any guest code runs, or a call through an
 // unregistered thunk aborts on "unregistered" (found live: SBS core A crashed here before this line
 // was moved above the init calls).
-void register_engine_overrides(Game* game);
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); register_engine_overrides(c->game); crt0_setup(c); game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); c->hooks->registerOverrides(c->game); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
