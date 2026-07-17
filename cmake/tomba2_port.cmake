@@ -1,104 +1,29 @@
 # cmake/tomba2_port.cmake — build the native PC port binary `tomba2_port` (SDL3 / SDL_GPU).
 #
-# THE build for the port (the old hand-rolled run.sh g++ link is the fallback). Produces
-# scratch/bin/tomba2_port (where the REPL/driver tooling + docs expect it). The source list below is the
-# same set run.sh compiles — KEEP IN SYNC with run.sh / tools/build_port.sh.
+# THE build for the port. Produces scratch/bin/tomba2_port (where the REPL/driver tooling + docs
+# expect it). As of the P1.7 framework-split gate (2026-07-17) this target is now just the GAME:
+#   * ALL PSX-generic framework code lives in the STATIC library `psxport` (cmake/psxport.cmake) —
+#     runtime/recomp/** + the vendored Beetle GTE/MDEC/SPU backends + the RmlUi SDL backend + the
+#     generated SDL_GPU shader header.
+#   * This target compiles ONLY game/* + generated/* (the substrate shards) and links libpsxport.a.
 #
 #   cmake -S . -B build && cmake --build build --target tomba2_port
 #   ./scratch/bin/tomba2_port scratch/bin/tomba2/MAIN.EXE      # (after run.sh has extracted MAIN.EXE)
 #
-# The renderer is SDL_GPU (gpu_gpu.cpp) — SDL3 owns window+input+audio+GPU; no Vulkan/SDL2 dev needed.
-# The RmlUi mod/debug overlay (ESC) links the vendored static librmlui(_debugger) + system freetype.
+# The renderer is SDL_GPU (gpu_gpu.cpp, framework side) — SDL3 owns window+input+audio+GPU.
 
 option(PSXPORT_BUILD_PORT "Build the Tomba!2 native port binary (tomba2_port)" ON)
+
+# The framework static library (psxport) + its option(PSXPORT_BUILD_SMOKE) + the standalone smoke.
+# Always included so `psxport` / `psxport_smoke` are buildable even when the game target is off.
+include(${CMAKE_SOURCE_DIR}/cmake/psxport.cmake)
 
 if(NOT PSXPORT_BUILD_PORT)
   return()
 endif()
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL3 sdl3)
-pkg_check_modules(SDL3_IMAGE sdl3-image)
-pkg_check_modules(FREETYPE freetype2)
-if(NOT (SDL3_FOUND AND SDL3_IMAGE_FOUND AND FREETYPE_FOUND))
-  # Hard stop with the fix, not a skip: a skipped target surfaces later as make's baffling
-  # "No rule to make target 'tomba2_port'" instead of naming the missing library.
-  set(_missing "")
-  if(NOT SDL3_FOUND)
-    string(APPEND _missing "  sdl3        — Fedora: SDL3-devel | Debian/Ubuntu: libsdl3-dev | macOS: brew install sdl3\n")
-  endif()
-  if(NOT SDL3_IMAGE_FOUND)
-    string(APPEND _missing "  sdl3-image  — Fedora: SDL3_image-devel | Debian/Ubuntu: libsdl3-image-dev | macOS: brew install sdl3_image\n")
-  endif()
-  if(NOT FREETYPE_FOUND)
-    string(APPEND _missing "  freetype2   — Fedora: freetype-devel | Debian/Ubuntu: libfreetype-dev | macOS: brew install freetype\n")
-  endif()
-  message(FATAL_ERROR "tomba2_port: missing pkg-config dependencies:\n${_missing}"
-                      "Install the package(s) above and re-run ./run.sh")
-endif()
-
-set(RT runtime/recomp)
-set(MED vendor/beetle-psx/mednafen)
-
-# ---- vendored RmlUi (HTML/CSS mod overlay), static, Core + Debugger only ----------------------
-set(BUILD_SHARED_LIBS OFF)
-set(RMLUI_SAMPLES        OFF CACHE BOOL   "" FORCE)
-set(RMLUI_LUA_BINDINGS   OFF CACHE BOOL   "" FORCE)
-set(RMLUI_SVG_PLUGIN     OFF CACHE BOOL   "" FORCE)
-set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
-set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
-add_subdirectory(vendor/rmlui EXCLUDE_FROM_ALL)
-
-# ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_gpu_shaders.h) ------------------------
-# tools/gen_gpu_shaders.sh compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
-# embeds the SPIR-V into the source tree. Re-run when a shader source changes.
-file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
-  ${CMAKE_SOURCE_DIR}/${RT}/shaders_gpu/*.vert ${CMAKE_SOURCE_DIR}/${RT}/shaders_gpu/*.frag)
-set(SHADERS_H ${CMAKE_SOURCE_DIR}/${RT}/gpu_gpu_shaders.h)
-add_custom_command(OUTPUT ${SHADERS_H}
-  COMMAND bash ${CMAKE_SOURCE_DIR}/tools/gen_gpu_shaders.sh
-  DEPENDS ${SHADER_SRCS} ${CMAKE_SOURCE_DIR}/tools/gen_gpu_shaders.sh
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Generating SDL_GPU SPIR-V header (gpu_gpu_shaders.h)"
-  VERBATIM)
-add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
-
-# ---- source list (KEEP IN SYNC with run.sh / tools/build_port.sh) -----------------------------
-set(PORT_SRC
-  runtime/recomp/core.cpp
-  runtime/recomp/game_iface.cpp       # framework↔game seam storage (GameConfig/GameHooks install)
-  runtime/recomp/dispatch.cpp
-  runtime/recomp/interp.cpp          # ORACLE engine (later-278): pure-MIPS interpreter for the oracle Core
-  runtime/recomp/coro.cpp
-  runtime/recomp/overlay_router.cpp
-  runtime/recomp/cfg.c
-  runtime/recomp/mem.cpp
-  runtime/recomp/stubs.cpp
-  runtime/recomp/hle.cpp
-  runtime/recomp/threads.cpp
-  runtime/recomp/gpu_native.cpp
-  runtime/recomp/gpu_debug.cpp
-  runtime/recomp/vram_xfer.cpp
-  runtime/recomp/spu_audio.cpp
-  runtime/recomp/pad_input.cpp
-  runtime/recomp/memcard.cpp
-  runtime/recomp/native_fmv.cpp
-  vendor/beetle-psx/mednafen/psx/gte.c
-  runtime/recomp/gte_beetle.cpp
-  vendor/beetle-psx/mednafen/psx/mdec.c
-  runtime/recomp/mdec_beetle.c
-  vendor/beetle-psx/mednafen/psx/spu.c
-  runtime/recomp/spu_beetle.c
-  runtime/recomp/disc.c
-  runtime/recomp/disc_provision.cpp
-  runtime/recomp/cd_override.cpp
-  runtime/recomp/cdc_native.c
-  runtime/recomp/xa_stream.c
-  runtime/recomp/timing.cpp
-  runtime/recomp/gpu_gpu.cpp
-  runtime/recomp/gpu_perf.cpp
-  runtime/recomp/mods.cpp
-  runtime/recomp/native_gate.cpp
+# ---- game source list (game/* only — the framework moved to cmake/psxport.cmake) --------------
+set(GAME_SRC
   game/game_tomba2.cpp
   game/cd/libcd_native.cpp
   game/core/asset.cpp
@@ -274,8 +199,6 @@ set(PORT_SRC
   game/audio/native_audio.c
   game/audio/native_music.cpp
   game/audio/music_list.cpp
-  runtime/recomp/sync_overrides.cpp
-  runtime/recomp/override_registry.cpp
   game/render/render_observer.cpp
   game/render/overlay_gt3gt4.cpp
   game/render/overlay_ground_gt3gt4.cpp
@@ -287,35 +210,11 @@ set(PORT_SRC
   game/render/text_label.cpp
   game/render/render_walk_dispatch.cpp
   game/render/overlay_type_dispatch.cpp
-  game/render/objlist_walk.cpp
-  runtime/recomp/scheduler.cpp
-  runtime/recomp/native_boot.cpp
-  runtime/recomp/dualview_snapshot.cpp
-  runtime/recomp/proj_prim.cpp
-  runtime/recomp/pgxp.cpp
-  runtime/recomp/proj_params.cpp
-  runtime/recomp/pkt_span.cpp
-  runtime/recomp/ot_attr.cpp
-  runtime/recomp/hw_bind.cpp
-  runtime/recomp/repl.cpp
-  runtime/recomp/dbg_server.cpp
-  runtime/recomp/native_stub.cpp
-  runtime/recomp/watchdog.c
-  runtime/recomp/dualcore.cpp
-  runtime/recomp/sbs.cpp
-  runtime/recomp/sbs_present_sdl.cpp
-  runtime/recomp/selftest.cpp
-  runtime/recomp/boot.cpp
-  runtime/recomp/rmlui_overlay.cpp
-  runtime/recomp/rmlui_render_gpu.cpp
-  runtime/recomp/overlay_glue.cpp
-  vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
+  game/render/objlist_walk.cpp)
 
-# The recompiler substrate: link the statically-recompiled shards (C++ content in .c files). The
-# interpreter was removed (2026-06-30) — these shards ARE the execution substrate for every
-# non-native guest function. The MAIN module + each OVERLAY module (overlapping \BIN\*.BIN stage
-# overlays) emit a dynamic set of TUs, so emit.py writes the exact list to generated/rec_sources.cmake
-# (GEN_REC_SRCS, basenames). Compiled as C++.
+# The recompiler substrate: the statically-recompiled shards (C++ content in .c files) = the game
+# binary MAIN.EXE + each OVERLAY module. emit.py writes the exact TU list to
+# generated/rec_sources.cmake (GEN_REC_SRCS, basenames). Compiled as C++.
 #
 # -foptimize-sibling-calls IS REQUIRED, NOT an optimization nicety: a guest TAIL JUMP (a computed `jr`
 # routed to rec_dispatch, or a `j`/branch to a framed sibling) is emitted as `dispatch(c,x); return;` /
@@ -327,42 +226,30 @@ set(PORT_SRC
 # and survives an -O level change.
 include(${CMAKE_SOURCE_DIR}/generated/rec_sources.cmake)
 list(TRANSFORM GEN_REC_SRCS PREPEND generated/)
-list(APPEND PORT_SRC ${GEN_REC_SRCS})
 set_source_files_properties(${GEN_REC_SRCS}
   PROPERTIES LANGUAGE CXX
   COMPILE_OPTIONS "-O1;-foptimize-sibling-calls;-fno-strict-aliasing;-fwrapv")
 
-add_executable(tomba2_port ${PORT_SRC} ${SHADERS_H})
+add_executable(tomba2_port ${GAME_SRC} ${GEN_REC_SRCS})
+# The framework's shader header is generated by the psxport library's custom target; the game exe
+# (via gpu_gpu.cpp in libpsxport) transitively needs it present before its own compile ordering.
 add_dependencies(tomba2_port gen_gpu_shaders)
 
-# C++17 for this target (mednafen/engine), overriding the project-wide C++20.
+# C++17 for this target (engine), matching the framework library.
 set_target_properties(tomba2_port PROPERTIES
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
   ENABLE_EXPORTS ON                                   # -rdynamic: watchdog backtrace symbol names
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/scratch/bin)
 
+# GAME include dirs. The framework include dirs (RT, generated, vendored backends, SDL/freetype) are
+# inherited PUBLICly from the psxport link below — only the game/* subfolders are added here.
 target_include_directories(tomba2_port PRIVATE
-  ${RT} ${CMAKE_SOURCE_DIR}/generated
   game  game/ai  game/audio  game/camera  game/cd  game/core  game/input  game/items  game/math  game/object  game/player  game/render  game/scene  game/ui
-  game/world
-  ${MED} ${MED}/psx
-  vendor/beetle-psx/libretro-common/include vendor/beetle-psx
-  vendor/beetle-psx/deps/libchdr/include
-  vendor/rmlui/Include vendor/rmlui/Backends
-  ${SDL3_INCLUDE_DIRS} ${SDL3_IMAGE_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
+  game/world)
 
-target_compile_definitions(tomba2_port PRIVATE
-  PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
-
-# -w (warnings off) and -O2 -g, matching the shell build. -fpermissive removed 2026-07-02 so
-# narrowing / invalid-conversion / missing-typename stay as normal diagnostics — no bandaid, but
-# also no artificial promotion of narrowing to a hard error on top.
 target_compile_options(tomba2_port PRIVATE -w -O2 -g
   ${SDL3_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
 
-target_link_libraries(tomba2_port PRIVATE
-  rmlui_debugger rmlui_core chdr-static
-  ${SDL3_LIBRARIES} ${SDL3_IMAGE_LIBRARIES} ${FREETYPE_LIBRARIES}
-  Threads::Threads m)
-target_link_directories(tomba2_port PRIVATE
-  ${SDL3_LIBRARY_DIRS} ${SDL3_IMAGE_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
+# The framework library carries all system/vendored link deps + compile defs as PUBLIC, so linking it
+# is all the game exe needs.
+target_link_libraries(tomba2_port PRIVATE psxport)
