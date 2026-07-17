@@ -47,7 +47,13 @@ void register_field_owned_leaves();                               // BYTE-FAITHF
 
 void register_engine_overrides(Game* game) {
   Core* c = &game->core;
-  game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
+  // PcScheduler primitives: the framework class supplies the native handlers; the game passes the
+  // generated substrate bodies + override setter (linked here, game-side) — P1.7c decoupling.
+  extern void shard_set_override(uint32_t, void (*)(Core*));
+  extern void gen_func_80051F80(Core*), gen_func_80051F14(Core*), gen_func_80044BD4(Core*),
+              gen_func_80052010(Core*), gen_func_80051FB4(Core*);
+  game->pcSched.registerOverrides({ shard_set_override, gen_func_80051F80, gen_func_80051F14,
+                                    gen_func_80044BD4, gen_func_80052010, gen_func_80051FB4 });
   mathOf(c).registerOverrides();                // GTE matMul/applyMatlv/applyMatrixLV/rotmat/rotX/Y/Z (0x80084110 etc.)
   eng(c).animation.registerOverrides();   // loadFrame/advanceLinkChain/attach/applyFrame (0x80076904 etc.)
   eng(c).areaSlots.registerOverrides();   // primeCountdown/updateCell (0x80074A38/0x8007496C)

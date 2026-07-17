@@ -502,7 +502,7 @@ int selftest_run(const char* path) {
   if (which && !strcmp(which, "narration")) return run_narration(path);
   if (which && !strcmp(which, "oracle"))    return run_oracle(path);
   if (which && !strcmp(which, "oraclediff")) return run_oraclediff(path);
-  if (which && !strcmp(which, "camera"))    { int run_camera_oracle(const char*); return run_camera_oracle(path); }
+  if (which && !strcmp(which, "camera"))    { return psxport_game_hooks()->selftestCameraOracle(path); }
   fprintf(stderr, "[selftest] unknown PSXPORT_SELFTEST='%s' (known: startgame, narration, oracle, oraclediff, camera)\n", which ? which : "");
   return 2;
 }

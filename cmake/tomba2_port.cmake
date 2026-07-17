@@ -30,12 +30,13 @@ set(GAME_SRC
   game/core/game_config.cpp
   game/core/game_ctx.cpp
   game/core/game_hooks.cpp
+  game/core/main.cpp                # process entry point (P1.7c: main() is game-side)
+  game/core/verify_skip.cpp         # VerifyHarness pc_skip/observable half (P1.7c split)
+  game/render/fps60_worldpass.cpp   # TRANSITIONAL fps60 world-pass hook body (P1.7c)
   game/core/recomp_register.cpp
   game/core/repl_commands.cpp
   game/core/register_overrides.cpp
   game/core/str.cpp
-  game/core/pc_scheduler.cpp
-  game/core/verify_harness.cpp
   game/math/mathlib.cpp
   game/math/rng.cpp
   game/math/mtx.cpp
@@ -165,7 +166,6 @@ set(GAME_SRC
   game/ui/font.cpp
   game/ui/panel.cpp
   game/scene/level_load.cpp
-  game/render/fps60.cpp
   game/object/behavior_dispatch.cpp
   game/render/submit.cpp
   game/render/node_xform.cpp
@@ -191,10 +191,8 @@ set(GAME_SRC
   game/render/wide_re_gpu_loadimage_streamer.cpp
   game/render/wide_re_gpu_putdrawenv.cpp
   game/render/native_terrain.cpp
-  game/render/render_queue.cpp
   game/render/screen_fade.cpp
   game/render/margin_render.cpp
-  game/render/ffspan.cpp
   game/render/quad_rtpt_submit.cpp
   game/audio/native_audio.c
   game/audio/native_music.cpp

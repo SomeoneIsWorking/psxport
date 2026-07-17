@@ -128,6 +128,11 @@ set(PSXPORT_FRAMEWORK_SRC
   runtime/recomp/rmlui_overlay.cpp
   runtime/recomp/rmlui_render_gpu.cpp
   runtime/recomp/overlay_glue.cpp
+  runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
+  runtime/recomp/ffspan.cpp           # PSXPORT_BDTAG builder-span attribution (P1.7c)
+  runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
+  runtime/recomp/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
+  runtime/recomp/verify_harness.cpp   # A/B verify scaffold (skip/observable half split to game verify_skip.cpp) (P1.7c)
   vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC} ${SHADERS_H})
@@ -150,11 +155,9 @@ target_include_directories(psxport PUBLIC
   vendor/beetle-psx/deps/libchdr/include
   vendor/rmlui/Include vendor/rmlui/Backends
   ${SDL3_INCLUDE_DIRS} ${SDL3_IMAGE_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
-# PRIVATE game include dirs — FORCED by the header leak documented at the top of this file (game.h
-# embeds Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan by value). ONLY these two dirs, and ONLY
-# because the framework does not yet own those five classes. Removing these two lines is the litmus for
-# "framework is header-clean"; today it fails to compile without them.
-target_include_directories(psxport PRIVATE game/core game/render)
+# NO game include dirs: as of P1.7c the framework owns Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan
+# (their headers moved to runtime/recomp/; the game reaches into them only through the GameHooks seam). The
+# framework #includes no game/ header — the psxport_smoke link proves it (no game/** symbol resolves).
 
 target_compile_definitions(psxport PUBLIC
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)

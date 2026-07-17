@@ -1,22 +1,11 @@
-// S2 boot driver: allocate ONE Core instance, load MAIN.EXE into its RAM, and run the boot stub
-// (which draws SCEA then hands off to the native MAIN boot). The runtime is now object-oriented —
-// the machine state lives in a `Core` (core.h), reached explicitly (no global). main() owns the
-// instance; everything it calls receives `c`.
+// runtime/recomp/boot.cpp (framework) — the MAIN.EXE loader. The process entry point main() is GAME-side
+// (game/core/main.cpp): it installs the game seam then constructs+drives the framework machine. This file
+// keeps only load_exe (the PS-EXE loader), which the game main AND the harnesses (DualCore/Sbs) all call.
+// The framework provides no main(): the standalone psxport_smoke supplies its own.
 #include "core.h"
-#include "game.h"
-#include "cfg.h"
-#include "fs_util.h"       // Fs::exists — MAIN.EXE presence probe for self-provisioning below
-#include "sbs.h"           // class Sbs — the PSXPORT_SBS live-two-core divergence debugger
-#include "platform_hle.h"  // class PlatformHle — HW-sync HLE table (VSync/CdSync/MDEC/ChangeThread)
-#include "dualcore.h"      // class DualCore — NATIVE-render vs PSX-render RAM divergence harness
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-// C subsystems (compiled as C) reached across the boundary — declare with C linkage.
-extern "C" {
-  void watchdog_init(void); void mdec_init(void); void spu_init(void);
-}
 
 static uint32_t rd32(const uint8_t* p) { return p[0] | p[1]<<8 | p[2]<<16 | (uint32_t)p[3]<<24; }
 
@@ -40,117 +29,3 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
 }
 
 // rec_dispatch_miss now lives in hle.c (routes A0/B0/C0 to the HLE BIOS).
-
-// register_engine_overrides — the ~40 override-cluster registration calls — MOVED to
-// game/core/register_overrides.cpp (2026-07-17 framework/game decoupling) and reached via the
-// GameHooks::registerOverrides callback (c->hooks->registerOverrides(game)), so this framework boot
-// file no longer #includes any game type. Idempotent + must run before crt0_setup/game_init on every
-// harness-owned Game — see native_boot.cpp dc_boot_init for the ordering guard.
-
-extern void tomba_install_game_config();   // game/core/game_config.cpp — installs the Tomba GameConfig
-extern void tomba_install_recomp();         // game/core/recomp_register.cpp — installs the RecompRegistry
-
-int main(int argc, char** argv) {
-  // Install the game seam (GameConfig) BEFORE the first Core is constructed: Core's ctor snapshots
-  // psxport_game_config() into c->cfg, and every subsystem reads c->cfg->field for its guest-address
-  // literals — so this must run before `new Game()` below (which constructs the Core).
-  tomba_install_game_config();
-  tomba_install_recomp();   // install the generated-substrate seam (main_dispatch/overlay table/setters)
-  const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
-  Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
-  Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)
-  // Self-provision MAIN.EXE: anyone with just a CHD (drop-in *.chd in the repo root, or
-  // PSXPORT_TOMBA2_DISC / .env) can run the binary directly — no prior ./run.sh extraction step.
-  // The disc backend resolves the CHD itself (disc.c resolve_disc_path); overlays and all other
-  // content are read from the disc at runtime, so MAIN.EXE is the only file to materialize.
-  if (!Fs::exists(path)) {
-    fprintf(stderr, "[boot] %s missing — extracting from disc\n", path);
-    if (!disc_extract_file(&game->disc, "\\MAIN.EXE", path)) {
-      fprintf(stderr, "[boot] extraction failed: provide a disc (PSXPORT_TOMBA2_DISC, .env, or a "
-                      "*.chd in the working directory) or run ./run.sh\n");
-      return 1;
-    }
-  }
-  // Default: pc_skip=true — the native shortcut path that ./run.sh has always used. Set
-  // PSXPORT_PC_SKIP=0 to route everything through the fiber substrate (slow; audit mode).
-  { const char* e = getenv("PSXPORT_PC_SKIP");
-    if (e && *e && strcmp(e, "0") == 0) game->pc_skip = false; }
-  c->game->gpu_gpu.tritest();                  // PSXPORT_VK_TRITEST=1: GPU triangle-rasterizer self-test, then exit (needs the GpuGpuState)
-  void watchdog_init(void);
-  watchdog_init();            // PSXPORT_WATCHDOG=<sec>: abort+backtrace if a frame stalls
-  load_exe(path, c);
-  void games_tomba2_init(void);
-  void card_overrides_init(Game*);
-  void threads_init(Core*);
-  void threads_register_overrides(void);
-  void gte_init(void);
-  void mdec_init(void);
-  void spu_init(void);
-  gte_init();               // GTE (COP2) coprocessor, lifted from Beetle
-  mdec_init();              // MDEC video decoder (FMV), lifted from Beetle
-  spu_init();               // SPU audio core, lifted from Beetle
-  game->spu_audio.init();   // SDL audio output sink (PSXPORT_NOAUDIO to disable)
-  game->gpu.gpu_native_init();   // native GPU renderer (parses the game's GP0 stream)
-  game->cd.overridesInit(); // native CD: drive-ready + by-LBA read (S3)
-  games_tomba2_init();      // Tomba2 per-game overrides (vblank pacing)
-  game->platform_hle.initBuiltins();   // HW sync/wait stalls -> native non-stall (VSync/CdSync/MDEC)
-  // register_engine_overrides(game) is called further down, ONLY on the plain (no-harness) path —
-  // NOT here. It used to run unconditionally on this `game`, even though PSXPORT_DUALCORE/
-  // SELFTEST/SBS below construct and drive their OWN separate Game instances (dc_boot_init calls
-  // register_engine_overrides on those), leaving THIS registration a dead throwaway whenever one of
-  // those harnesses is selected. That throwaway registration corrupted `ovhit`'s target selection
-  // (docs/findings/animation.md "ovhit tooling caveat", 2026-07-10 fix): it always registers FIRST
-  // (before any harness-owned Game exists) and is psx_fallback=0, so a "first non-fallback
-  // registrant wins" pick — or any other order-based heuristic — always lands on this inert Game
-  // instead of the real SBS core A. Registering it only when it's actually the Game that ends up
-  // driven removes the ambiguity at the source instead of working around it downstream. (The
-  // registry itself is idempotent — see the comment on register_engine_overrides above — this
-  // ordering concern is about `ovhit`'s heuristic, not about clobbering the registry.)
-  c->game->pad.overridesInit();    // native controller input (per-VBlank pad read override)
-  card_overrides_init(game);// native memory card (synchronous file-backed libcard I/O)
-  threads_init(c);          // native BIOS threads (ucontext); main = slot 0
-  threads_register_overrides();
-  c->r[4] = 1; c->r[5] = 0;  // a0=argc-ish, a1=argv (BIOS sets these; minimal)
-
-  // Replicate the REAL PSX boot path. The disc's boot executable is the SCUS_944.54 *stub* (not
-  // MAIN.EXE): it draws the SCEA "…America Presents" screen itself, then BIOS-LoadExec's
-  // cdrom:\MAIN.EXE;1 and jumps to MAIN's entry. We run the stub as the real entry (interpreted —
-  // it isn't recompiled) and intercept its LoadExec to hand off to the native MAIN boot
-  // (native_boot.c, later 33/34). See docs/journal.md "later 34" + [[psxport-scea-boot-stub]].
-  // PSXPORT_DUALCORE: NATIVE-render vs PSX-render guest-RAM divergence harness (dualcore.cpp). Diagnostic
-  // (user 2026-06-24): the native renderer corrupts guest RAM the gameplay reads — this runs the same
-  // native-gameplay game twice (native render vs PSX render) and diffs guest RAM per frame to find the
-  // corrupting write. It creates its own Game instances, so the primary `c`/`game` here is left unused.
-  if (cfg_on("PSXPORT_DUALCORE")) {
-    DualCore dc;
-    dc.run(path);
-    return 0;
-  }
-  // PSXPORT_SELFTEST: headless TDD regression (selftest.cpp) — boots a single full-PSX (psx_fallback) core,
-  // drives it like a player, and asserts a behavior (e.g. mash-Start reaches field free-roam). Exit code is
-  // the pass/fail (0/1), so CI/`./run.sh` can gate on it. Owns its own Game instance.
-  if (cfg_str("PSXPORT_SELFTEST")) {
-    int selftest_run(const char* exe_path);
-    return selftest_run(path);
-  }
-  // PSXPORT_SBS: LIVE side-by-side two-core divergence debugger (sbs.cpp). Two native-boot cores in
-  // lockstep with identical input, differing only by mode (render / gameplay / both); auto-pauses on the
-  // first guest-RAM divergence and serves the divergence + guest backtraces over the debug server. Like
-  // DUALCORE it owns its own Game instances, so the primary `c`/`game` above is left unused.
-  // Setting PSXPORT_SBS_MODE is enough to enable the harness (no need to ALSO set PSXPORT_SBS=1) —
-  // a mode selection with the harness off was just a foot-gun. PSXPORT_SBS=1 alone still works (default mode).
-  if (cfg_on("PSXPORT_SBS") || cfg_str("PSXPORT_SBS_MODE")) {
-    Sbs::run(path);
-    return 0;
-  }
-  // Plain (no-harness) path: THIS `game` is the one actually driven, so register its
-  // overrides into the registry here (see the comment above where this used to run
-  // unconditionally).
-  c->hooks->registerOverrides(game);   // ALL override clusters (PcScheduler/Animation/
-                                        // ActorReward/ActorZonedAttacker/Spawn/ReleaseTriggerMotion/
-                                        // GT3GT4/Math) — game/core/register_overrides.cpp via the hook
-                                        // seam (c->hooks non-null: tomba_install_game_config() ran above)
-  game->stub.run(path);                  // stub draws SCEA, then hands off to native MAIN boot
-  fprintf(stderr, "[boot] boot stub returned\n");
-  return 0;
-}

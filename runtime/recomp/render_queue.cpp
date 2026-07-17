@@ -1,7 +1,6 @@
 // Engine-owned render queue — see render_queue.h. Per-instance state lives on Game (game.h);
 // the free rq_* API forwards to core->game->rq.
 #include "render_queue.h"
-#include "render.h"        // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "proj_params.h"   // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include "game.h"
 #include "cfg.h"

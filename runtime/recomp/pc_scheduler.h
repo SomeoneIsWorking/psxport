@@ -82,7 +82,15 @@ public:
   // Wire the five primitives into the global override registry (overrides::install) at their
   // guest addresses so substrate callers on core A (via rec_dispatch or a direct shard call)
   // reach the same implementations. Core B (psx_fallback) always runs the passed gen_func_<addr>.
-  void registerOverrides();
+  // PrimGen — the generated substrate bodies + override setter the GAME supplies for the five scheduler
+  // primitives (framework names no generated symbol; the game passes gen_func_<addr> + shard_set_override
+  // from register_overrides.cpp, where the generated substrate is linked). Core B (psx_fallback) runs the
+  // gen body; the shared thunk installs the native handler on core A + direct callers.
+  struct PrimGen {
+    void (*setter)(uint32_t, void (*)(Core*));
+    void (*yield)(Core*), (*spawn)(Core*), (*spawnwait)(Core*), (*forceclose)(Core*), (*selfclose)(Core*);
+  };
+  void registerOverrides(const PrimGen& gen);
 
   // ---- Native START.BIN (0x8010649C) step-spread (attack (a), docs/findings/sbs.md Slip #1) ----
   // The recomp body of 0x8010649C is a per-iteration yield loop over 4 sm[0x48] states; each state's

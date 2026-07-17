@@ -157,6 +157,40 @@ static bool tomba_hasNativeHandlerForEntry(Core* c, uint32_t entryPc) {
   return c->game->pcSched.hasNativeHandlerForEntry(entryPc);
 }
 
+// tomba_schedStageBody — run the SchedBody-selected game stage body. PcScheduler (framework) owns the
+// task/coro/yield machinery and calls this for the actual Engine::* stage body, so the framework names no
+// Engine method. Returns the body's int result (Engine::frame's `handled`; 0 for the void bodies).
+static int tomba_schedStageBody(Core* c, int which, void* arg) {
+  switch (which) {
+    case SCHED_DEMO_STAGEMAIN:          eng(c).demo.stageMain();            return 0;
+    case SCHED_DEMO_FRAME:              eng(c).demo.frame();                return 0;
+    case SCHED_GAME_PROLOGUE:           eng(c).stagePrologue();             return 0;
+    case SCHED_GAME_FRAME:              return eng(c).frame();
+    case SCHED_SOP_AREALOAD:            eng(c).sop.areaLoad();              return 0;
+    case SCHED_CORO_TEXGROUP:           eng(c).asset.loadTexgroup();        return 0;
+    case SCHED_CORO_PRELOAD1:           eng(c).asset.preloadStage1AsTask(); return 0;
+    case SCHED_CORO_AREADATA:           eng(c).asset.areaDataLoadAsTask();  return 0;
+    case SCHED_CORO_AREALOAD_FAITHFUL:  eng(c).sop.areaLoadFaithful();      return 0;
+    case SCHED_FIBER_STARTBIN:          eng(c).startBinStageFaithful();     return 0;
+    case SCHED_FIBER_DEMO_BODY:         eng(c).demo.stageBodyFaithful();    return 0;
+    case SCHED_FIBER_STAGE_BODY:        eng(c).stageBodyFaithful();         return 0;
+    case SCHED_STAGE0_ADVANCE_SKIP:     return eng(c).stage0AdvanceSkip(*(uint8_t*)arg);
+    default:                                                               return 0;
+  }
+}
+static uint32_t tomba_schedRng(Core* c) { return rngOf(c).next(); }  // FUN_8009A450 (guest seed 0x80105EE8)
+
+// tomba_fps60WorldPass / tomba_fps60BbSwapPrev — TRANSITIONAL fps60 seam (see game_iface.h). The interp
+// present's world-pass re-render lives in the framework Fps60::tier1Render; these hooks carry the two
+// reaches into game Render. Body in game/render/fps60_worldpass.cpp (needs Render + the Fps60 bg-override).
+extern void tomba_fps60_world_pass(Core* c, float t);
+extern void tomba_fps60_bb_swap_prev(Core* c);
+
+// tomba_selftestCameraOracle — the camera-oracle selftest branch (game/camera/cutscene_camera_selftest.cpp),
+// called by the framework selftest harness through the hook so selftest.cpp names no game function.
+extern int run_camera_oracle(const char* exe_path);
+static int tomba_selftestCameraOracle(const char* exePath) { return run_camera_oracle(exePath); }
+
 // registerOverrides installs ALL the game's override clusters into the process-global registry.
 // Body lives in register_overrides.cpp (moved out of framework boot.cpp); declared here so the hook
 // table names it. Takes Game* (not Core*): the clusters register per-Game.
@@ -192,4 +226,9 @@ extern const GameHooks g_tomba_hooks = {
   /* renderBbFrameReset */ tomba_renderBbFrameReset,
   /* replCommand        */ tomba_repl_command,
   /* devWarpAreaLoad    */ tomba_devWarpAreaLoad,
+  /* schedStageBody     */ tomba_schedStageBody,
+  /* schedRng           */ tomba_schedRng,
+  /* fps60WorldPass     */ tomba_fps60_world_pass,
+  /* fps60BbSwapPrev    */ tomba_fps60_bb_swap_prev,
+  /* selftestCameraOracle */ tomba_selftestCameraOracle,
 };

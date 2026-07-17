@@ -25,6 +25,26 @@ class Game;   // runtime/recomp/game.h  (the framework machine owner; stays fram
 // Mode enum is uint8_t-backed; all present-path consumers already read it as int).
 struct FadeState { int mode; unsigned char r, g, b; };
 
+// SchedBody — which game stage body the framework scheduler (PcScheduler, now framework) is asking the
+// game to run. PcScheduler owns the framework-side task/coro/yield machinery; the actual stage bodies are
+// game code (Engine::*), reached through the single schedStageBody hook so the framework names no Engine
+// method. Values are the game's dispatch cases (see game/core/game_hooks.cpp tomba_schedStageBody).
+enum SchedBody {
+  SCHED_DEMO_STAGEMAIN = 0,   // eng(c).demo.stageMain()          (fresh DEMO prologue)
+  SCHED_DEMO_FRAME,           // eng(c).demo.frame()
+  SCHED_GAME_PROLOGUE,        // eng(c).stagePrologue()           (fresh GAME prologue)
+  SCHED_GAME_FRAME,           // eng(c).frame()                   → returns handled (0/1)
+  SCHED_SOP_AREALOAD,         // eng(c).sop.areaLoad()
+  SCHED_CORO_TEXGROUP,        // eng(c).asset.loadTexgroup()
+  SCHED_CORO_PRELOAD1,        // eng(c).asset.preloadStage1AsTask()
+  SCHED_CORO_AREADATA,        // eng(c).asset.areaDataLoadAsTask()
+  SCHED_CORO_AREALOAD_FAITHFUL, // eng(c).sop.areaLoadFaithful()
+  SCHED_FIBER_STARTBIN,       // eng(c).startBinStageFaithful()
+  SCHED_FIBER_DEMO_BODY,      // eng(c).demo.stageBodyFaithful()
+  SCHED_FIBER_STAGE_BODY,     // eng(c).stageBodyFaithful()
+  SCHED_STAGE0_ADVANCE_SKIP,  // eng(c).stage0AdvanceSkip(arg)   (arg = stage0_step)
+};
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // GameConfig — the game-specific guest ADDRESSES/tables. A game fills one static instance; the
 // framework substrate reads `c->cfg->field` in place of the hardcoded MAIN.EXE literals it used to bake
@@ -137,6 +157,29 @@ struct GameHooks {
                                               // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
   void (*devWarpAreaLoad)(Core* c);           // dev-warp full area load (was native_boot.cpp's
                                               // eng(c).sop.transitionAreaLoad()).
+
+  // --- scheduler stage bodies (PcScheduler is framework; the stage bodies are game Engine methods) ---
+  int      (*schedStageBody)(Core* c, int which, void* arg);  // run the SchedBody-selected game stage
+                                              // body (arg used only by SCHED_STAGE0_ADVANCE_SKIP); returns the
+                                              // body's int result (Engine::frame's `handled`; 0 for void bodies)
+  uint32_t (*schedRng)(Core* c);              // rngOf(c).next() — FUN_8009A450, guest seed 0x80105EE8
+
+  // --- fps60 tier-1 (Fps60 is framework render-infra: the interpolated-60fps lerp tier is a GENERIC
+  // renderer feature and stays framework). TARGET ARCHITECTURE (USER 2026-07-17): the game SUBMITS its
+  // objects/geometry to the framework once, and the framework lerp-renders them between logic frames —
+  // NO callback into game render. The two hooks below are a TRANSITIONAL SEAM standing in for that submit
+  // model: today Fps60's interp present RE-RUNS the game's world passes (Render::terrain/scene/backdrop/
+  // objects) one frame behind under lerped inputs, so the framework still calls back into game render.
+  // DEATH CONDITION: delete both hooks once the game submits drawables through the render queue and the
+  // framework interpolates them directly (the fps60 submit-model render-frontier redesign). ---
+  void (*fps60WorldPass)(Core* c, float t);   // TRANSITIONAL: interp world-pass re-render (gates + terrain/
+                                              // scene-table/backdrop/objects Render::* calls) under lerped
+                                              // inputs. Reads/writes the framework Fps60 bg-override on
+                                              // c->game->fps60 (game writing a framework member).
+  void (*fps60BbSwapPrev)(Core* c);           // TRANSITIONAL: rend(c)->bbSwapPrev() — billboard record rotate
+
+  // --- diagnostics harness: camera-oracle selftest (game/camera/cutscene_camera_selftest.cpp) ---
+  int (*selftestCameraOracle)(const char* exePath);  // was selftest.cpp's direct run_camera_oracle()
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

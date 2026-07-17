@@ -4,7 +4,6 @@
 // branches. Un-ported tasks fall through to the substrate coro-fiber / generic-dispatch stanzas
 // (runtime/recomp/scheduler.cpp), which also owns the yield/spawn primitives.
 #include "pc_scheduler.h"
-#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
@@ -13,7 +12,6 @@
 #include "coro.h"       // native task bodies park on the same Coro fiber the substrate bodies use
 #include "guest_call.h" // rec_dispatch — BIOS leaves + still-substrate leaves from the primitives
 #include "override_registry.h" // overrides::install — the one native-override registry
-#include "rng.h"        // Rng (rngOf(c)) — FUN_8009A450, shared guest seed 0x80105EE8
 #include <setjmp.h>
 #include <stdio.h>
 
@@ -149,7 +147,7 @@ void PcScheduler::selfClose() {
 // byte-exactness for no benefit (the ONE call site, the reference this helper was extracted from).
 void PcScheduler::bd4Tail(uint32_t taskBase, uint32_t flag) {
   Core* c = &game->core;
-  const uint16_t stamp = (uint16_t)rngOf(c).next();          // FUN_8009A450 (guest seed 0x80105EE8)
+  const uint16_t stamp = (uint16_t)c->hooks->schedRng(c);    // FUN_8009A450 (guest seed 0x80105EE8)
   c->mem_w16(taskBase + 0x56, stamp);                       // RNG stamp on the waiting task
   if (flag == 2) {
     c->mem_w16(kWaitFrameCtr, (uint16_t)(c->mem_r16(kWaitFrameCtr) + 1));
@@ -182,7 +180,7 @@ void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t f
   spawnPrim(1, c->r[18]);
   if (c->r[19] != 1) {
     c->r[31] = 0x80044C64u;
-    const uint16_t stamp = (uint16_t)rngOf(c).next();        // FUN_8009A450 (guest seed 0x80105EE8)
+    const uint16_t stamp = (uint16_t)c->hooks->schedRng(c);  // FUN_8009A450 (guest seed 0x80105EE8)
     const uint32_t task = c->mem_r32(kCurTaskPtr);
     const uint8_t done = c->mem_r8(kDoneFlag);
     c->mem_w16(task + 0x56, stamp);                        // RNG stamp on the waiting task
@@ -233,20 +231,15 @@ static void eov_selfclose(Core* c)  { c->game->pcSched.selfClose(); }
 // body, not this port. See docs/findings/tooling.md "rec_dispatch-only registration is BLIND to
 // a direct substrate call" (the gap was documented but left unfixed pending a concrete victim;
 // this is that victim) and game/object/actor_sm_reward.cpp (the existing precedent this copies).
-extern void shard_set_override(uint32_t, void (*)(Core*));
-extern void gen_func_80051F80(Core*);   // yieldPrim substrate body
-extern void gen_func_80051F14(Core*);   // spawnPrim substrate body
-extern void gen_func_80044BD4(Core*);   // spawnAndWait substrate body
-extern void gen_func_80052010(Core*);   // forceClose substrate body
-extern void gen_func_80051FB4(Core*);   // selfClose substrate body
-
-void PcScheduler::registerOverrides() {
+// The generated substrate bodies (gen_func_<addr>) + override setter are supplied by the GAME via PrimGen
+// (register_overrides.cpp), so this framework file names no generated symbol — the psxport_smoke link proves it.
+void PcScheduler::registerOverrides(const PrimGen& gen) {
   using overrides::install;
-  install(0x80051F80u, "PcScheduler::yieldPrim",    eov_yield,      gen_func_80051F80, shard_set_override);
-  install(0x80051F14u, "PcScheduler::spawnPrim",    eov_spawn,      gen_func_80051F14, shard_set_override);
-  install(0x80044BD4u, "PcScheduler::spawnAndWait", eov_spawnwait,  gen_func_80044BD4, shard_set_override);
-  install(0x80052010u, "PcScheduler::forceClose",   eov_forceclose, gen_func_80052010, shard_set_override);
-  install(0x80051FB4u, "PcScheduler::selfClose",    eov_selfclose,  gen_func_80051FB4, shard_set_override);
+  install(0x80051F80u, "PcScheduler::yieldPrim",    eov_yield,      gen.yield,      gen.setter);
+  install(0x80051F14u, "PcScheduler::spawnPrim",    eov_spawn,      gen.spawn,      gen.setter);
+  install(0x80044BD4u, "PcScheduler::spawnAndWait", eov_spawnwait,  gen.spawnwait,  gen.setter);
+  install(0x80052010u, "PcScheduler::forceClose",   eov_forceclose, gen.forceclose, gen.setter);
+  install(0x80051FB4u, "PcScheduler::selfClose",    eov_selfclose,  gen.selfclose,  gen.setter);
 }
 
 
@@ -273,12 +266,12 @@ bool PcScheduler::hasNativeHandlerForEntry(uint32_t entry_pc) const {
 // rewrite (LEAVE-DEMO -> GAME): drop demo_native, task_started=0, state=3 stands so the next
 // tick enters the generic path with the new entry.
 void PcScheduler::runDemoBody(Core* c, int i, bool demo_fresh) {
-  if (demo_fresh) eng(c).demo.stageMain();
+  if (demo_fresh) c->hooks->schedStageBody(c, SCHED_DEMO_STAGEMAIN, nullptr);
   uint16_t sm48v = c->mem_r16(c->mem_r32(0x1f800138u) + 0x48);
   bool defer_leave = (sm48v == 5 && !demo_fresh
                       && demo_leave_step[i] == 0);
   if (defer_leave) { demo_leave_step[i] = 1; return; }
-  eng(c).demo.frame();
+  c->hooks->schedStageBody(c, SCHED_DEMO_FRAME, nullptr);
   if (sm48v == 5) demo_leave_step[i] = 0;
 }
 
@@ -338,7 +331,7 @@ PcScheduler::StanzaResult PcScheduler::runSopAreaLoadStanza(Core* c, int i, uint
   static_cast<R3000&>(*c) = task_ctx[i];
   in_stage = 1;
   if (setjmp(yield_jmp) == 0) {
-    eng(c).sop.areaLoad();
+    c->hooks->schedStageBody(c, SCHED_SOP_AREALOAD, nullptr);
   } else {
     cfg_logf("sched", "SOP area-load yielded unexpectedly — a leaf isn't sync yet");
   }
@@ -378,8 +371,8 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
   in_stage = 1;
   int handled = 1;
   if (setjmp(yield_jmp) == 0) {
-    if (game_fresh) eng(c).stagePrologue();
-    c->game->ffspan.begin(); handled = eng(c).frame(); c->game->ffspan.end("gameframe");
+    if (game_fresh) c->hooks->schedStageBody(c, SCHED_GAME_PROLOGUE, nullptr);
+    c->game->ffspan.begin(); handled = c->hooks->schedStageBody(c, SCHED_GAME_FRAME, nullptr); c->game->ffspan.end("gameframe");
   } else if (cfg_dbg("sched")) {
     if (!warned_game_yield++) cfg_logf("sched", "caught a GAME substate yield (a leaf not "
                                               "yet sync) — frontier");
@@ -433,10 +426,10 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
     native_fiber[i] = 1;
     Core* cc = c;
     co = new Coro();
-    if (is_preload_body)         co->start([cc] { eng(cc).asset.loadTexgroup(); });
-    else if (is_stage1_callback) co->start([cc] { eng(cc).asset.preloadStage1AsTask(); });
-    else if (is_area_data_load)  co->start([cc] { eng(cc).asset.areaDataLoadAsTask(); });
-    else                         co->start([cc] { eng(cc).sop.areaLoadFaithful(); });
+    if (is_preload_body)         co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_TEXGROUP, nullptr); });
+    else if (is_stage1_callback) co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_PRELOAD1, nullptr); });
+    else if (is_area_data_load)  co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_AREADATA, nullptr); });
+    else                         co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_AREALOAD_FAITHFUL, nullptr); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;
   } else if (st != 2 || !co || co->done()) {
@@ -488,9 +481,9 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
     demo_native[i] = 0; game_native[i] = 0; game_coop[i] = 0;
     Core* cc = c;
     co = new Coro();
-    if (entry == 0x8010649Cu)      co->start([cc] { eng(cc).startBinStageFaithful(); });
-    else if (entry == 0x801062E4u) co->start([cc] { eng(cc).demo.stageBodyFaithful(); });
-    else                           co->start([cc] { eng(cc).stageBodyFaithful(); });
+    if (entry == 0x8010649Cu)      co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_FIBER_STARTBIN, nullptr); });
+    else if (entry == 0x801062E4u) co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_FIBER_DEMO_BODY, nullptr); });
+    else                           co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_FIBER_STAGE_BODY, nullptr); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;
   } else if (st != 2 || !co || co->done()) {
@@ -538,7 +531,7 @@ PcScheduler::StanzaResult PcScheduler::runStage0StepStanza(Core* c, int i, uint3
   static_cast<R3000&>(*c) = task_ctx[i];
   in_stage = 1;
   if (setjmp(yield_jmp) == 0) {                   // final step yields via longjmp
-    eng(c).stage0AdvanceSkip(stage0_step[i]);
+    c->hooks->schedStageBody(c, SCHED_STAGE0_ADVANCE_SKIP, &stage0_step[i]);
   }
   in_stage = 0;
   task_ctx[i] = static_cast<R3000&>(*c);

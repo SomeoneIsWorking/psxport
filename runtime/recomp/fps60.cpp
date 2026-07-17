@@ -9,9 +9,8 @@
 // presenting a non-interpolatable 30fps render. No prim matching (matchAndLerp deleted). Host-only,
 // gated g_mods.fps60.
 #include "core.h"
-#include "game_ctx.h"
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
-#include "render.h"   // class Render — sceneNative()/terrainRenderAll(); DisplayPassGuard (render_mode.h)
+#include "render_mode.h"   // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
 #include "render_queue.h"
 #include "proj_params.h"   // ProjParams::Snapshot — save/restore around tier1Render's re-render
 #include "cfg.h"
@@ -166,53 +165,17 @@ void Fps60::tier1Render(Core* core, float t) {
   // re-run bypassing a gate the real frame honored paints that pass on interp presents only (30Hz flicker
   // of the whole layer): the SOP void beat draws no terrain/scene-table/backdrop; the field-area init
   // frame draws no world at all (unattached geomblks — the later-275 garbage/overflow class).
-  const bool voidBeat = rend(c)->worldVoidBeat();
-  const bool areaInit = rend(c)->fieldAreaInit();
-
+  // Framework scaffold for the interp world-pass re-render: snapshot the shared render state, redirect
+  // captures into the isolated sink, arm the camera-lerp override + the display-pass FAIL-FAST guard, then
+  // call the game to re-run its world passes under those lerped inputs. TRANSITIONAL (game_iface.h): the
+  // target is a submit model (game submits drawables, framework lerps — no callback into game render).
   ProjParams::Snapshot projSaved = c->rsub.projParams.snapshot();
   RenderQueue* prevRedirect = c->game->rqRedirect;
   c->game->rqRedirect = mSink;
   mCamOverrideOn = true;
   {
     DisplayPassGuard displayPass(c->rsub.mode);   // FAIL-FAST: abort on any guest write, real-path discipline
-    if (!voidBeat && !areaInit) rend(c)->terrainRenderAll();
-    // SCENE TABLE (grass/terrain props, kSceneTableDbgNode): camera-only, same as terrain — fieldEntityRender
-    // composes ONLY the scene camera (projComposeCamera -> sceneCam, honors mCamOverrideOn above), never a
-    // per-object transform, and its geometry (SCENE_ENT_TABLE records) is static per-area data, not per-frame
-    // mutable state — verified by reading submitPolyGt3Native/Gt4Native (submit.cpp): the only per-frame
-    // guest reads left in that path were the record array itself (unchanging while the object lives) and the
-    // two bugs fixed alongside this change (a raw CR26 H read bypassing the camera-lerp override, and a
-    // direct `game->rq` write bypassing rqRedirect) — both now route through the same choke terrain uses.
-    // Gated the same way the real call is (render_walk.cpp sceneNative): mSceneTableTrusted is computed once
-    // per real frame and unchanged since (present-time invariant — no tick has run since).
-    if (!voidBeat && !areaInit && rend(c)->mSceneTableTrusted) rend(c)->fieldEntityRender(0x800F2418u);
-
-    // BACKDROP (game-logic scroll, LAYER-TRANSFORM lerp — not camera-projected, so NOT part of the camera
-    // override above): mirrors sceneNative's own gate (render_walk.cpp) exactly — mBackdropTrusted (the
-    // same trust latch the real call uses, computed once per real frame and unchanged since, per the
-    // present-time invariant) && the field-drawer-selector byte == 0 && bgstate == 0 (only the tilemap
-    // drawer, state 0, is natively owned). The wrap moduli (t4+0x30/+0x32) are static per-area config
-    // (ParallaxBg INIT), safe to re-read directly here — same as W/H/tilemap-ptr/tpage/clutbase, which
-    // backdropRender() itself re-reads directly below (unchanged guest state this interval).
-    if (!voidBeat && rend(c)->mBackdropTrusted && c->mem_r8(0x800bf873u) == 0 && c->mem_r8(0x800bf870u) == 0) {
-      int modX = c->mem_r16(0x800ed018u + 0x30u), modY = c->mem_r16(0x800ed018u + 0x32u);
-      mBgOverride.scrollX = wrapLerp(mBgPrev.scrollX, mBgCur.scrollX, modX, t);
-      mBgOverride.scrollY = wrapLerp(mBgPrev.scrollY, mBgCur.scrollY, modY, t);
-      mBgOverrideOn = true;
-      rend(c)->backdropRender(0x800ed018u);
-      mBgOverrideOn = false;
-    }
-    // fps60 step 2b: re-run the field OBJECT walk under lerped per-object transforms (mObjOverrideOn +
-    // step-1's projObj) AND the still-armed lerped camera (mCamOverrideOn) into mSink — the objects
-    // interpolate through the SAME object walk the real frame ran, replacing matchAndLerp's output-
-    // matching for field actors. Only the field runs this (tier1Render is mTier1EligibleCur-gated).
-    // (Objects run on the void beat — the vortex node — exactly like the real frame; only areaInit
-    // suppresses them, mirroring sceneNative's field_area_init block.)
-    if (!areaInit) {
-      mObjOverrideOn = true;
-      rend(c)->fieldObjectsRender();
-      mObjOverrideOn = false;
-    }
+    c->hooks->fps60WorldPass(c, t);               // gates + terrain/scene-table/backdrop/objects (game Render)
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
@@ -428,7 +391,7 @@ void Fps60::present_vk(Core* core) {
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
   mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
-  rend(c)->bbSwapPrev();       // billboard records rotate in lockstep (#67 per-particle lerp source);
+  c->hooks->fps60BbSwapPrev(c); // billboard records rotate in lockstep (#67 per-particle lerp source);
                                   // native_boot's bbFrameReset clears the new cur before the next walk
   mHavePrev = 1;
 }

@@ -1,7 +1,6 @@
 // class FfSpan impl — see ffspan.h for the attribution model.
 #include "core.h"
 #include "cfg.h"
-#include "render.h"
 #include "ffspan.h"
 #include <stdio.h>
 
