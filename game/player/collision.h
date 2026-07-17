@@ -42,4 +42,26 @@ public:
   // gridStep(obj): FUN_8004798C — per-step grid-origin/index setup. Reloads the grid for the
   //   probe object's recorded id if needed, then clamps + recomputes probe coords.
   void gridStep(uint32_t obj);
+
+  // --- field-collision leaf cluster (installed by address via registerOverrides) ---
+
+  // lineCross(flag): FUN_80045810 — per-line WALL intersection; writes crossing GR_CROSS (0x1A4).
+  void lineCross(uint32_t flag);
+
+  // floorPick(): FUN_80048034 — find the lowest floor line above the probe; writes GR_BEST_LINE.
+  void floorPick();
+
+  // slopeLocalB(): FUN_80048134 — slope-local delta (variant B) folded through map orientation.
+  void slopeLocalB();
+
+  // slopeLocalAdvance(): FUN_80048360 — same orientation fold, then advance the probe by the step.
+  void slopeLocalAdvance();
+
+  // flatNormal(obj): FUN_80049760 — GR_NORMAL_ANGLE = ratan2(segment endpoints); stores
+  //   rcos/rsin>>4 into obj+0x48/+0x4C. Ready-FRAME leaf (mirrors the 32-byte guest stack frame).
+  void flatNormal(uint32_t obj);
+
+  // registerOverrides(): install the five field-collision leaves by guest address into the ONE
+  //   override registry (overrides::install), so every caller — substrate included — reaches native.
+  void registerOverrides();
 };

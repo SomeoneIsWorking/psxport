@@ -110,6 +110,7 @@ void register_engine_overrides(Game* game) {
   NodeXform::registerOverrides(game);                // seedBlock/propagateRotmat/propagateAxis/buildAxis/copyMatrixBlock/buildFromChild/worldPosFromLocal/worldPosFromComposed (0x800517BC/80051300/80051464/80051C8C/80051B34/80051614/80051D90/80051D20)
   GraphicsBind::registerOverrides(game);             // recordArrayInit (0x800519E0)
   c->engine.cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
+  c->engine.collision.registerOverrides();           // field-collision leaf cluster (0x80045810/80048034/80048134/80048360/80049760)
   SceneEvents::registerOverrides(game);              // scene-event ARM FUN_80040B48 (sole owner; deduped from cube_text_ledger)
   CubeTextLedger::registerOverrides(game);           // cube-text popup ledger deactivate/spawn (0x80040C00/80040AA4)
   ActorTomba::registerOverrides(game);               // postInteractWalk sub-handlers (0x80020364/800205CC/800235A0/80022C78)

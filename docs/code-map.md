@@ -10,7 +10,7 @@ syntax (`obj.method(...)`, `ptr->method(...)`, bare in-class `method(...)`). **O
 native exists but no call site of any of those forms was found anywhere in the tree — it
 is genuinely dead code until something calls it.
 
-Totals: 691 native fns, 571 owned addresses, 662 LIVE / 29 ORPHAN.
+Totals: 696 native fns, 576 owned addresses, 667 LIVE / 29 ORPHAN.
 
 | addr | status | symbol | file:line | depends-on (still-PSX) | summary |
 |------|--------|--------|-----------|------------------------|---------|
@@ -58,7 +58,7 @@ Totals: 691 native fns, 571 owned addresses, 662 LIVE / 29 ORPHAN.
 | 0x800310F4 | LIVE | `Engine::spawnType6Node` | game/core/spawn_type6_node.cpp:19 |  |  |
 | 0x8003116C | LIVE | `Spawn::spawnAndInitBody` | game/world/spawn.cpp:231 | 0x80028E10 | SPAWN-AND-INIT helper: spawn a type-6 object on list 1 (via the owned … |
 | 0x8003116C | LIVE | `Spawn::spawnAndInit` | game/world/spawn.cpp:344 |  |  |
-| 0x80031780 | LIVE | `Collision::listScan` | game/player/collision.cpp:24 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
+| 0x80031780 | LIVE | `Collision::listScan` | game/player/collision.cpp:75 | 0x80031780 | list-tail resolver / reset. Walks the 8-byte-stride linked list rooted… |
 | 0x80032A44 | LIVE | `Rng::inRange` | game/math/rng.cpp:105 |  | scaled random. Disas 0x80032A44..0x80032A84 verbatim: `sra v0, 15` on … |
 | 0x80036DFC | LIVE | `SaveMenu::runHandler` | game/ui/save_menu.cpp:104 |  | ----------------------------------------------------------------------… |
 | 0x80036DFC | LIVE | `SaveMenu::dispatchBody` | game/ui/save_menu.cpp:136 |  | ----------------------------------------------------------------------… |
@@ -132,10 +132,15 @@ Totals: 691 native fns, 571 owned addresses, 662 LIVE / 29 ORPHAN.
 | 0x800452C0 | LIVE | `Asset::areaDataLoadAsTask` | game/core/asset.cpp:399 | 0x8001CF2C 0x8001DC40 0x80045080 0x80045558 0x80051F80 0x80051FB4 … | Task-1 body — FAITHFUL FUN_800452C0 (the walkable-field AREA-DATA load… |
 | 0x800452C0 | LIVE | `native_area_load_bd4` | game/core/engine.cpp:1609 | 0x800452C0 | Native replacement for FUN_80044bd4(0x800452c0, area, mode, 1): seed t… |
 | 0x80045580 | LIVE | `ActorTomba::assetReady` | game/player/actor_tomba.cpp:1074 |  | assetReady — guest FUN_80045580. See actor_tomba.h for the full RE wri… |
-| 0x8004798C | LIVE | `Collision::gridStep` | game/player/collision.cpp:335 | 0x8004798C |  |
-| 0x80047CBC | LIVE | `Collision::gridQuery` | game/player/collision.cpp:175 | 0x80047CBC |  |
-| 0x800498C8 | LIVE | `Collision::gridResolve` | game/player/collision.cpp:227 | 0x800498C8 |  |
-| 0x80049968 | LIVE | `Collision::gridSetup` | game/player/collision.cpp:53 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
+| 0x80045810 | LIVE | `Collision::lineCross` | game/player/collision.cpp:421 |  | Collision::lineCross. Per-line WALL intersection: computes the crossin… |
+| 0x8004798C | LIVE | `Collision::gridStep` | game/player/collision.cpp:386 | 0x8004798C |  |
+| 0x80047CBC | LIVE | `Collision::gridQuery` | game/player/collision.cpp:226 | 0x80047CBC |  |
+| 0x80048034 | LIVE | `Collision::floorPick` | game/player/collision.cpp:538 |  | Collision::floorPick. Finds the lowest floor line above the probe: ite… |
+| 0x80048134 | LIVE | `Collision::slopeLocalB` | game/player/collision.cpp:605 |  | Collision::slopeLocalB. Slope-local delta (variant B): folds the probe |
+| 0x80048360 | LIVE | `Collision::slopeLocalAdvance` | game/player/collision.cpp:739 |  | Collision::slopeLocalAdvance. Same orientation fold as slopeLocalB, th… |
+| 0x80049760 | LIVE | `Collision::flatNormal` | game/player/collision.cpp:928 |  | Collision::flatNormal. GR_NORMAL_ANGLE (0x1A0) = ratan2 of the segment… |
+| 0x800498C8 | LIVE | `Collision::gridResolve` | game/player/collision.cpp:278 | 0x800498C8 |  |
+| 0x80049968 | LIVE | `Collision::gridSetup` | game/player/collision.cpp:104 | 0x80049968 | collision-grid ROW-POINTER setup. a0 = grid/layer index (&0xff). Reads… |
 | 0x800499E8 | LIVE | `Engine::task0Bootstrap` | game/core/engine.cpp:2954 |  | resolve \BIN\START.BIN natively, record its {LBA,size}, switch task 0 … |
 | 0x800499E8 | ORPHAN | `eng_task0_boot` | game/scene/level_load.cpp:94 | 0x8008A110 0x8008B8F0 0x8009A730 | task-0 INITIAL ENTRY (the engine's first-level bootstrap, registered a… |
 | 0x80049A60 | LIVE | `ActorReward::smWindowScroll` | game/object/actor_sm_reward.cpp:158 |  | ActorReward::smWindowScroll(c) — FUN_80049A60(obj a0, side a1). Scroll… |

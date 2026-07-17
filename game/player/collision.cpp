@@ -12,8 +12,59 @@
 #include <stdlib.h>
 #include <string.h>
 #include "collision.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
+
+// --- field-collision leaf cluster wiring (FUN_80045810/48034/48134/48360/49760) ---
+// The five leaves read/write the shared GridRay scratchpad struct at base 0x1F800000; they are
+// installed by guest address into the ONE override registry so every caller (substrate included)
+// reaches the native method. gen bodies are the oracle leg (SBS core B).
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_80045810(Core*);
+extern void gen_func_80048034(Core*);
+extern void gen_func_80048134(Core*);
+extern void gen_func_80048360(Core*);
+extern void gen_func_80049760(Core*);
+// flatNormal's guest sub-calls: ratan2 / rcos / rsin trig leaves (generated/shard_disp.c).
+// 0x80085690 (ratan2) and 0x80083E80 (rsin) are themselves owned by Trig via the same registry, so
+// these func_X(c) sites route to native on the port leg and gen on the oracle leg automatically.
+void func_80085690(Core*);
+void func_80083F50(Core*);
+void func_80083E80(Core*);
+
+// GridRay — the shared collision scratchpad struct (base 0x1F800000). Byte offsets of the fields the
+// field-collision leaves touch. Substituting these named constants for the raw gen offset literals is
+// a value-identical rename: it changes only the address expression text, never a store's width/order,
+// so the port stays byte-faithful (tools/port_check.py gates it).
+namespace {
+constexpr uint32_t GR = 0x1F800000u;        // GridRay scratchpad base (gen spells it `8064u << 16`)
+enum : uint32_t {
+  GR_NORMAL_ANGLE = 416,   // 0x1A0  flat-normal angle = ratan2(segment endpoints)
+  GR_NORMAL_HI    = 418,   // 0x1A2  (cleared by flatNormal)
+  GR_CROSS        = 420,   // 0x1A4  wall/line crossing coordinate (lineCross output)
+  GR_CROSS_Z      = 422,   // 0x1A6
+  GR_CELL_ORG_X   = 426,   // 0x1AA  cell origin X
+  GR_CELL_ORG_Z   = 428,   // 0x1AC  cell origin Z
+  GR_SEG_X0       = 434,   // 0x1B2  segment endpoint 0 X
+  GR_SEG_Z0       = 436,   // 0x1B4  segment endpoint 0 Z
+  GR_SEG_X1       = 438,   // 0x1B6  segment endpoint 1 X
+  GR_SEG_Z1       = 440,   // 0x1B8  segment endpoint 1 Z
+  GR_PROBE_X      = 444,   // 0x1BC  working probe X
+  GR_EXTENT       = 446,   // 0x1BE  grid extent / probe-hi bound
+  GR_PROBE_Z      = 448,   // 0x1C0  working probe Z
+  GR_LOCAL_X      = 450,   // 0x1C2  slope-local X delta
+  GR_SPAN         = 452,   // 0x1C4  cross-span scratch (cross - extent)
+  GR_LOCAL_Z      = 454,   // 0x1C6  slope-local Z delta
+  GR_LINE_TABLE   = 472,   // 0x1D8  line-record table base
+  GR_LINE_ARRAY   = 476,   // 0x1DC  line-record array base
+  GR_CELL_REC     = 480,   // 0x1E0  current cell record (line-list idx@+2, count@+4)
+  GR_BEST_LINE    = 488,   // 0x1E8  chosen floor/wall line record (output)
+  GR_LINE_CUR     = 492,   // 0x1EC  working line-record cursor
+};
+constexpr uint32_t ACT_NORMAL_COS = 72;     // probe object + 0x48  <- rcos(angle) >> 4
+constexpr uint32_t ACT_NORMAL_SIN = 76;     // probe object + 0x4C  <- rsin(angle) >> 4
+}
 
 // FUN_80031780 — list-tail resolver / reset. Walks the 8-byte-stride linked list rooted at
 // a0[52] (off 0x34), reading the tag word at entry+4 each step, until a tag has bit30|bit31
@@ -353,4 +404,583 @@ void Collision::gridStep(uint32_t obj) {
   if (ro >= 0 || so >= 0) {
     if (nb++ < 40) fprintf(stderr, "[gridstep] MISMATCH obj=%08x ram@%x spad@%x sp=%x\n", obj, ro, so, sp);
   } else if (++ng % 2000 == 0) fprintf(stderr, "[gridstep] %ld matches\n", ng);
+}
+
+// ============================================================================================
+// FIELD-COLLISION LEAF CLUSTER — five leaves over the shared GridRay scratchpad struct.
+// Each body is a byte-faithful transcription of its gen oracle (same register machine, same
+// statement order, same store widths), with the scratchpad base + field offsets renamed to the
+// GR* constants above. tools/port_check.py gates equivalence; SBS gates byte-parity on core B.
+// ============================================================================================
+
+// FUN_80045810 — Collision::lineCross. Per-line WALL intersection: computes the crossing
+// coordinate GR_CROSS (0x1A4) from the current line record (GR_LINE_CUR = 0x1EC) fields [1..3]
+// scaled by the slope-local X (GR_LOCAL_X). The upper half updates the crossing/span bookkeeping
+// (GR_CROSS_Z, GR_SPAN) and latches the chosen line record into GR_BEST_LINE. Leaf; no frame.
+// ORACLE: gen_func_80045810
+void Collision::lineCross(uint32_t flag) {
+  Core* c = this->core;
+  c->r[4] = flag;
+  c->r[6] = c->r[4] + c->r[0];
+  c->r[2] = GR;
+  c->r[2] = c->mem_r32((c->r[2] + GR_CELL_REC));
+  c->r[7] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + (uint32_t)0));
+  c->r[9] = (uint32_t)c->mem_r16((c->r[7] + GR_CROSS));
+  c->r[2] = c->r[2] & 8u;
+  { int _t = (c->r[2] == c->r[0]); c->r[10] = c->r[5] + c->r[0]; if (_t) goto L_80045868; }
+  c->r[2] = GR;
+  c->r[4] = c->mem_r32((c->r[2] + GR_LINE_CUR));
+  c->r[2] = GR;
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16((c->r[2] + GR_LOCAL_X));
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16((c->r[4] + (uint32_t)4));
+  { int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2]; c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32); }
+  c->r[2] = (uint32_t)c->mem_r16((c->r[4] + (uint32_t)2));
+  c->r[11] = c->lo;
+  c->r[3] = (uint32_t)((int32_t)c->r[11] >> 6);
+  c->r[2] = c->r[2] + c->r[3];
+  c->mem_w16((c->r[7] + GR_CROSS), (uint16_t)c->r[2]); goto L_800458D8;
+L_80045868:;
+  c->r[2] = GR;
+  c->r[4] = GR;
+  c->r[3] = c->r[6] << 16;
+  c->r[3] = (uint32_t)((int32_t)c->r[3] >> 16);
+  c->r[5] = c->mem_r32((c->r[2] + GR_LINE_CUR));
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16((c->r[5] + (uint32_t)4));
+  c->r[2] = c->r[2] - c->r[3];
+  { int64_t _p = (int64_t)(int32_t)c->r[4] * (int64_t)(int32_t)c->r[2]; c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32); }
+  c->r[2] = c->r[6] ^ 63u;
+  c->r[3] = c->lo;
+  c->r[2] = c->r[2] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  cpu_div(c, c->r[3], c->r[2]);
+  { int _t = (c->r[2] != c->r[0]);  if (_t) goto L_800458AC; }
+  rec_break(c, 7168u);
+L_800458AC:;
+  c->r[1] = c->r[0] + (uint32_t)-1;
+  { int _t = (c->r[2] != c->r[1]); c->r[1] = (uint32_t)32768u << 16; if (_t) goto L_800458C4; }
+  { int _t = (c->r[3] != c->r[1]);  if (_t) goto L_800458C4; }
+  rec_break(c, 6144u);
+L_800458C4:;
+  c->r[2] = c->lo;
+  c->r[3] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)2));
+  c->r[3] = c->r[3] + c->r[2];
+  c->mem_w16((c->r[7] + GR_CROSS), (uint16_t)c->r[3]);
+L_800458D8:;
+  c->r[3] = GR;
+  c->r[8] = GR;
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16((c->r[8] + GR_CROSS));
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16((c->r[3] + GR_EXTENT));
+  c->r[7] = (uint32_t)c->mem_r16((c->r[3] + GR_EXTENT));
+  c->r[6] = (uint32_t)c->mem_r16((c->r[8] + GR_CROSS));
+  c->r[2] = c->r[5] + (uint32_t)128;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < (int32_t)c->r[4]);
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = (uint32_t)((int32_t)c->r[4] < (int32_t)c->r[5]); if (_t) goto L_80045960; }
+  { int _t = (c->r[10] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_8004594C; }
+  c->r[4] = GR;
+  c->r[3] = GR;
+  c->r[5] = c->mem_r32((c->r[3] + GR_LINE_CUR));
+  c->r[3] = c->r[6] - c->r[7];
+  c->mem_w16((c->r[4] + GR_SPAN), (uint16_t)c->r[3]);
+  c->r[3] = GR;
+  c->r[4] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)0));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)6));
+  c->r[6] = GR;
+  c->mem_w16((c->r[3] + GR_CROSS_Z), (uint16_t)c->r[4]);
+  c->r[4] = GR;
+  c->r[3] = c->r[5] << (c->r[2] & 31);
+  c->r[4] = c->mem_r32((c->r[4] + GR_LINE_ARRAY));
+L_8004593C:;
+  c->r[3] = c->r[3] + c->r[5];
+  c->r[4] = c->r[4] + c->r[3];
+  c->mem_w32((c->r[6] + GR_BEST_LINE), c->r[4]); return;
+L_8004594C:;
+  c->r[2] = c->r[0] + c->r[0];
+  c->r[3] = GR;
+  c->mem_w16((c->r[8] + GR_CROSS), (uint16_t)c->r[9]);
+  c->mem_w16((c->r[3] + GR_CROSS_Z), (uint16_t)c->r[0]); return;
+L_80045960:;
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)-1; if (_t) goto L_80045988; }
+  c->r[3] = GR;
+  c->r[6] = GR;
+  c->r[3] = c->mem_r32((c->r[3] + GR_LINE_CUR));
+  c->r[4] = GR;
+  c->r[5] = (uint32_t)c->mem_r16((c->r[3] + (uint32_t)6));
+  c->r[4] = c->mem_r32((c->r[4] + GR_LINE_ARRAY));
+  c->r[3] = c->r[5] << 1; goto L_8004593C;
+L_80045988:;
+  c->r[2] = c->r[0] + (uint32_t)1;
+  c->r[4] = GR;
+  c->r[3] = GR;
+  c->r[5] = c->mem_r32((c->r[3] + GR_LINE_CUR));
+  c->r[3] = c->r[6] - c->r[7];
+  c->mem_w16((c->r[4] + GR_SPAN), (uint16_t)c->r[3]);
+  c->r[3] = GR;
+  c->r[4] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)0));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)6));
+  c->r[6] = GR;
+  c->mem_w16((c->r[3] + GR_CROSS_Z), (uint16_t)c->r[4]);
+  c->r[4] = GR;
+  c->r[3] = c->r[5] << (c->r[2] & 31);
+  c->r[4] = c->mem_r32((c->r[4] + GR_LINE_ARRAY));
+  c->r[3] = c->r[3] + c->r[5];
+  c->r[4] = c->r[4] + c->r[3];
+  c->mem_w32((c->r[6] + GR_BEST_LINE), c->r[4]); return;
+}
+
+// FUN_80048034 — Collision::floorPick. Finds the lowest floor line above the probe: iterates the
+// current cell's line list (cursor GR_LINE_CUR built from the cell record GR_CELL_REC over the line
+// table GR_LINE_TABLE), tracking the line whose top edge (record fields [1]+[2]) sits just below the
+// probe, and latches its record address into GR_BEST_LINE (via the line array GR_LINE_ARRAY).
+// Leaf; no frame.
+// ORACLE: gen_func_80048034
+void Collision::floorPick() {
+  Core* c = this->core;
+  c->r[8] = c->r[0] + (uint32_t)1;
+  c->r[2] = GR;
+  c->r[5] = GR;
+  c->r[4] = c->mem_r32((c->r[2] + GR_CELL_REC));
+  c->r[2] = GR;
+  c->r[2] = c->mem_r32((c->r[2] + GR_LINE_TABLE));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[4] + (uint32_t)2));
+  c->r[10] = (uint32_t)c->mem_r16((c->r[4] + (uint32_t)4));
+  c->r[3] = c->r[3] << 3;
+  c->r[2] = c->r[2] + c->r[3];
+  c->mem_w32((c->r[5] + GR_LINE_CUR), c->r[2]);
+  c->r[2] = c->r[10] & 65535u;
+  { int _t = (c->r[2] == c->r[0]); c->r[6] = c->r[0] + c->r[0]; if (_t) goto L_8004812C; }
+  c->r[9] = c->r[5] + c->r[0];
+  c->r[11] = GR;
+  c->r[2] = GR;
+  c->r[12] = (uint32_t)(int16_t)c->mem_r16((c->r[2] + GR_EXTENT));
+  c->r[2] = GR;
+  c->r[7] = c->mem_r32((c->r[2] + GR_LINE_ARRAY));
+L_80048084:;
+  c->r[5] = c->mem_r32((c->r[9] + GR_LINE_CUR));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)0));
+  c->r[2] = c->r[2] & 1u;
+  { int _t = (c->r[2] == c->r[0]);  if (_t) goto L_8004810C; }
+  c->r[3] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)2));
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16((c->r[5] + (uint32_t)4));
+  c->r[4] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)4));
+  { int _t = ((int32_t)c->r[2] <= 0); c->r[2] = c->r[3] << 16; if (_t) goto L_800480BC; }
+  c->r[3] = c->r[3] + c->r[4];
+  c->r[2] = c->r[3] << 16;
+L_800480BC:;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[2] = c->r[2] + (uint32_t)128;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < (int32_t)c->r[12]);
+  { int _t = (c->r[2] == c->r[0]);  if (_t) goto L_800480F4; }
+  { int _t = (c->r[8] == c->r[0]);  if (_t) goto L_8004812C; }
+  c->r[3] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)6));
+  c->r[2] = c->r[3] << 1;
+  c->r[2] = c->r[2] + c->r[3];
+  c->r[2] = c->r[7] + c->r[2];
+  c->mem_w32((c->r[11] + GR_BEST_LINE), c->r[2]); return;
+L_800480F4:;
+  c->r[3] = (uint32_t)c->mem_r16((c->r[5] + (uint32_t)6));
+  c->r[8] = c->r[0] + c->r[0];
+  c->r[2] = c->r[3] << 1;
+  c->r[2] = c->r[2] + c->r[3];
+  c->r[2] = c->r[7] + c->r[2];
+  c->mem_w32((c->r[11] + GR_BEST_LINE), c->r[2]);
+L_8004810C:;
+  c->r[2] = c->mem_r32((c->r[9] + GR_LINE_CUR));
+  c->r[6] = c->r[6] + (uint32_t)1;
+  c->r[2] = c->r[2] + (uint32_t)8;
+  c->mem_w32((c->r[9] + GR_LINE_CUR), c->r[2]);
+  c->r[2] = c->r[10] & 65535u;
+  c->r[2] = (uint32_t)((int32_t)c->r[6] < (int32_t)c->r[2]);
+  { int _t = (c->r[2] != c->r[0]);  if (_t) goto L_80048084; }
+L_8004812C:;
+   return;
+}
+
+// FUN_80048134 — Collision::slopeLocalB. Slope-local delta (variant B): folds the probe
+// (GR_PROBE_X/GR_PROBE_Z minus cell origin GR_CELL_ORG_X/GR_CELL_ORG_Z, & 0x3F) through the map
+// cell's orientation code (record field [0] low bits) into the slope-local coords GR_LOCAL_X /
+// GR_LOCAL_Z. Leaf; no frame.
+// ORACLE: gen_func_80048134
+void Collision::slopeLocalB() {
+  Core* c = this->core;
+  c->r[2] = GR;
+  c->r[3] = GR;
+  c->r[6] = GR;
+  c->r[4] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + GR_PROBE_X));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[3] + GR_CELL_ORG_X));
+  c->r[4] = c->mem_r32((c->r[4] + GR_CELL_REC));
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[5] = c->r[2] & 63u;
+  c->r[2] = GR;
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + GR_PROBE_Z));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[3] + GR_CELL_ORG_Z));
+  c->r[10] = (uint32_t)c->mem_r16((c->r[4] + (uint32_t)0));
+  c->r[7] = GR;
+  c->mem_w16((c->r[6] + GR_LOCAL_X), (uint16_t)c->r[5]);
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[4] = c->r[2] & 63u;
+  c->r[3] = c->r[10] & 3u;
+  c->r[2] = c->r[0] + (uint32_t)2;
+  { int _t = (c->r[3] == c->r[2]); c->mem_w16((c->r[7] + GR_LOCAL_Z), (uint16_t)c->r[4]); if (_t) goto L_800481BC; }
+  c->r[2] = (uint32_t)((int32_t)c->r[3] < 3);
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_800481A8; }
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[10] & 4u; if (_t) goto L_800481D0; }
+   goto L_800481DC;
+L_800481A8:;
+  c->r[2] = c->r[0] + (uint32_t)3;
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[10] & 4u; if (_t) goto L_800481C8; }
+   goto L_800481DC;
+L_800481BC:;
+  c->r[2] = c->r[5] ^ 63u;
+  c->mem_w16((c->r[6] + GR_LOCAL_X), (uint16_t)c->r[2]); goto L_800481D8;
+L_800481C8:;
+  c->r[2] = c->r[5] ^ 63u;
+  c->mem_w16((c->r[6] + GR_LOCAL_X), (uint16_t)c->r[2]);
+L_800481D0:;
+  c->r[2] = c->r[4] ^ 63u;
+  c->mem_w16((c->r[7] + GR_LOCAL_Z), (uint16_t)c->r[2]);
+L_800481D8:;
+  c->r[2] = c->r[10] & 4u;
+L_800481DC:;
+  { int _t = (c->r[2] == c->r[0]); c->r[4] = GR; if (_t) goto L_800481F8; }
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[5]);
+L_800481F8:;
+  c->r[2] = GR;
+  c->r[2] = c->mem_r32((c->r[2] + GR_CELL_REC));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + (uint32_t)6));
+  c->r[6] = c->r[2] >> 8;
+  c->r[7] = c->r[2] & 255u;
+  c->r[2] = c->r[10] & 8u;
+  { int _t = (c->r[2] == c->r[0]); c->r[8] = c->r[7] + c->r[0]; if (_t) goto L_80048254; }
+  c->r[4] = GR;
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->r[2] = c->r[6] - c->r[8];
+  { int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[3]; c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32); }
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[0]);
+  c->r[4] = GR;
+  c->r[3] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_Z));
+  c->r[11] = c->lo;
+  c->r[2] = (uint32_t)((int32_t)c->r[11] >> 6);
+  c->r[2] = c->r[7] + c->r[2];
+  c->r[3] = c->r[3] - c->r[2];
+  c->mem_w16((c->r[4] + GR_LOCAL_Z), (uint16_t)c->r[3]); goto L_800482B8;
+L_80048254:;
+  c->r[9] = GR;
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16((c->r[9] + GR_LOCAL_X));
+  c->r[4] = c->r[8] & 65535u;
+  c->r[3] = c->r[6] & 65535u;
+  c->r[2] = c->r[5] - c->r[4];
+  { int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2]; c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32); }
+  c->r[2] = c->lo;
+  c->r[3] = c->r[7] ^ 63u;
+  cpu_div(c, c->r[2], c->r[3]);
+  { int _t = (c->r[3] != c->r[0]);  if (_t) goto L_80048288; }
+  rec_break(c, 7168u);
+L_80048288:;
+  c->r[1] = c->r[0] + (uint32_t)-1;
+  { int _t = (c->r[3] != c->r[1]); c->r[1] = (uint32_t)32768u << 16; if (_t) goto L_800482A0; }
+  { int _t = (c->r[2] != c->r[1]);  if (_t) goto L_800482A0; }
+  rec_break(c, 6144u);
+L_800482A0:;
+  c->r[3] = c->lo;
+  c->r[4] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_Z));
+  c->mem_w16((c->r[9] + GR_LOCAL_X), (uint16_t)c->r[0]);
+  c->r[2] = c->r[2] - c->r[3];
+  c->mem_w16((c->r[4] + GR_LOCAL_Z), (uint16_t)c->r[2]);
+L_800482B8:;
+  c->r[2] = c->r[10] & 4u;
+  { int _t = (c->r[2] == c->r[0]); c->r[4] = GR; if (_t) goto L_800482D8; }
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[5]);
+L_800482D8:;
+  c->r[4] = c->r[10] & 3u;
+  c->r[2] = c->r[0] + (uint32_t)1;
+  { int _t = (c->r[4] == c->r[2]); c->r[2] = (uint32_t)((int32_t)c->r[4] < 2); if (_t) goto L_80048334; }
+  { int _t = (c->r[2] == c->r[0]);  if (_t) goto L_80048300; }
+  { int _t = (c->r[4] == c->r[0]); c->r[4] = GR; if (_t) goto L_80048314; }
+   return;
+L_80048300:;
+  c->r[2] = c->r[0] + (uint32_t)2;
+  { int _t = (c->r[4] == c->r[2]); c->r[3] = GR; if (_t) goto L_8004834C; }
+   return;
+L_80048314:;
+  c->r[5] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[5] + GR_LOCAL_Z));
+  c->r[2] = c->r[0] - c->r[2];
+  c->r[3] = c->r[0] - c->r[3];
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[5] + GR_LOCAL_Z), (uint16_t)c->r[3]); return;
+L_80048334:;
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_X));
+  c->r[2] = c->r[0] - c->r[2];
+  c->mem_w16((c->r[3] + GR_LOCAL_X), (uint16_t)c->r[2]); return;
+L_8004834C:;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[2] = c->r[0] - c->r[2];
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[2]); return;
+}
+
+// FUN_80048360 — Collision::slopeLocalAdvance. Same orientation fold as slopeLocalB, then ADVANCES
+// the probe (GR_PROBE_X/GR_PROBE_Z) by the local step and re-folds. Leaf; no frame.
+// ORACLE: gen_func_80048360
+void Collision::slopeLocalAdvance() {
+  Core* c = this->core;
+  c->r[2] = GR;
+  c->r[3] = GR;
+  c->r[7] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + GR_PROBE_X));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[3] + GR_CELL_ORG_X));
+  c->r[6] = GR;
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[5] = c->r[2] & 63u;
+  c->r[2] = GR;
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + GR_PROBE_Z));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[3] + GR_CELL_ORG_Z));
+  c->r[12] = c->r[5] + c->r[0];
+  c->mem_w16((c->r[7] + GR_LOCAL_X), (uint16_t)c->r[5]);
+  c->r[2] = c->r[2] - c->r[3];
+  c->r[4] = c->r[2] & 63u;
+  c->r[2] = GR;
+  c->r[2] = c->mem_r32((c->r[2] + GR_CELL_REC));
+  c->mem_w16((c->r[6] + GR_LOCAL_Z), (uint16_t)c->r[4]);
+  c->r[10] = (uint32_t)c->mem_r16((c->r[2] + (uint32_t)0));
+  c->r[2] = c->r[0] + (uint32_t)2;
+  c->r[3] = c->r[10] & 3u;
+  { int _t = (c->r[3] == c->r[2]); c->r[13] = c->r[4] + c->r[0]; if (_t) goto L_800483F0; }
+  c->r[2] = (uint32_t)((int32_t)c->r[3] < 3);
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_800483DC; }
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[10] & 4u; if (_t) goto L_80048404; }
+   goto L_80048410;
+L_800483DC:;
+  c->r[2] = c->r[0] + (uint32_t)3;
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[10] & 4u; if (_t) goto L_800483FC; }
+   goto L_80048410;
+L_800483F0:;
+  c->r[2] = c->r[5] ^ 63u;
+  c->mem_w16((c->r[7] + GR_LOCAL_X), (uint16_t)c->r[2]); goto L_8004840C;
+L_800483FC:;
+  c->r[2] = c->r[5] ^ 63u;
+  c->mem_w16((c->r[7] + GR_LOCAL_X), (uint16_t)c->r[2]);
+L_80048404:;
+  c->r[2] = c->r[4] ^ 63u;
+  c->mem_w16((c->r[6] + GR_LOCAL_Z), (uint16_t)c->r[2]);
+L_8004840C:;
+  c->r[2] = c->r[10] & 4u;
+L_80048410:;
+  { int _t = (c->r[2] == c->r[0]); c->r[4] = GR; if (_t) goto L_8004842C; }
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[5]);
+L_8004842C:;
+  c->r[2] = GR;
+  c->r[2] = c->mem_r32((c->r[2] + GR_CELL_REC));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[2] + (uint32_t)6));
+  c->r[6] = c->r[2] >> 8;
+  c->r[7] = c->r[2] & 255u;
+  c->r[2] = c->r[10] & 8u;
+  { int _t = (c->r[2] == c->r[0]); c->r[11] = c->r[7] + c->r[0]; if (_t) goto L_80048488; }
+  c->r[4] = GR;
+  c->r[3] = (uint32_t)(int16_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->r[2] = c->r[6] - c->r[11];
+  { int64_t _p = (int64_t)(int32_t)c->r[2] * (int64_t)(int32_t)c->r[3]; c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32); }
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[0]);
+  c->r[4] = GR;
+  c->r[3] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_Z));
+  c->r[14] = c->lo;
+  c->r[2] = (uint32_t)((int32_t)c->r[14] >> 6);
+  c->r[2] = c->r[7] + c->r[2];
+  c->r[3] = c->r[3] - c->r[2];
+  c->mem_w16((c->r[4] + GR_LOCAL_Z), (uint16_t)c->r[3]); goto L_800484EC;
+L_80048488:;
+  c->r[8] = GR;
+  c->r[5] = (uint32_t)(int16_t)c->mem_r16((c->r[8] + GR_LOCAL_X));
+  c->r[4] = c->r[11] & 65535u;
+  c->r[3] = c->r[6] & 65535u;
+  c->r[2] = c->r[5] - c->r[4];
+  { int64_t _p = (int64_t)(int32_t)c->r[3] * (int64_t)(int32_t)c->r[2]; c->lo = (uint32_t)_p; c->hi = (uint32_t)((uint64_t)_p >> 32); }
+  c->r[4] = c->lo;
+  c->r[3] = c->r[7] ^ 63u;
+  cpu_div(c, c->r[4], c->r[3]);
+  { int _t = (c->r[3] != c->r[0]);  if (_t) goto L_800484BC; }
+  rec_break(c, 7168u);
+L_800484BC:;
+  c->r[1] = c->r[0] + (uint32_t)-1;
+  { int _t = (c->r[3] != c->r[1]); c->r[1] = (uint32_t)32768u << 16; if (_t) goto L_800484D4; }
+  { int _t = (c->r[4] != c->r[1]);  if (_t) goto L_800484D4; }
+  rec_break(c, 6144u);
+L_800484D4:;
+  c->r[3] = c->lo;
+  c->r[4] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_Z));
+  c->mem_w16((c->r[8] + GR_LOCAL_X), (uint16_t)c->r[0]);
+  c->r[2] = c->r[2] - c->r[3];
+  c->mem_w16((c->r[4] + GR_LOCAL_Z), (uint16_t)c->r[2]);
+L_800484EC:;
+  c->r[2] = c->r[10] & 4u;
+  { int _t = (c->r[2] == c->r[0]); c->r[4] = GR; if (_t) goto L_8004850C; }
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[5]);
+L_8004850C:;
+  c->r[3] = c->r[10] & 3u;
+  c->r[2] = c->r[0] + (uint32_t)1;
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = (uint32_t)((int32_t)c->r[3] < 2); if (_t) goto L_80048568; }
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)2; if (_t) goto L_80048534; }
+  { int _t = (c->r[3] == c->r[0]); c->r[6] = GR; if (_t) goto L_80048544; }
+  c->r[8] = GR; goto L_8004859C;
+L_80048534:;
+  { int _t = (c->r[3] == c->r[2]); c->r[6] = GR; if (_t) goto L_80048580; }
+  c->r[8] = GR; goto L_8004859C;
+L_80048544:;
+  c->r[4] = GR;
+  c->r[5] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[5] + GR_LOCAL_Z));
+  c->r[2] = c->r[0] - c->r[2];
+  c->r[3] = c->r[0] - c->r[3];
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[5] + GR_LOCAL_Z), (uint16_t)c->r[3]); goto L_80048594;
+L_80048568:;
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_X));
+  c->r[2] = c->r[0] - c->r[2];
+  c->mem_w16((c->r[3] + GR_LOCAL_X), (uint16_t)c->r[2]); goto L_80048594;
+L_80048580:;
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[2] = c->r[0] - c->r[2];
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[2]);
+L_80048594:;
+  c->r[6] = GR;
+  c->r[8] = GR;
+L_8004859C:;
+  c->r[7] = GR;
+  c->r[9] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[6] + GR_PROBE_X));
+  c->r[4] = (uint32_t)c->mem_r16((c->r[8] + GR_LOCAL_X));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[7] + GR_PROBE_Z));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[9] + GR_LOCAL_Z));
+  c->r[2] = c->r[2] + c->r[4];
+  c->r[3] = c->r[3] + c->r[5];
+  c->r[4] = c->r[12] + c->r[4];
+  c->r[5] = c->r[13] + c->r[5];
+  c->mem_w16((c->r[7] + GR_PROBE_Z), (uint16_t)c->r[3]);
+  c->r[3] = c->r[10] & 3u;
+  c->mem_w16((c->r[6] + GR_PROBE_X), (uint16_t)c->r[2]);
+  c->r[2] = c->r[0] + (uint32_t)2;
+  c->mem_w16((c->r[8] + GR_LOCAL_X), (uint16_t)c->r[4]);
+  { int _t = (c->r[3] == c->r[2]); c->mem_w16((c->r[9] + GR_LOCAL_Z), (uint16_t)c->r[5]); if (_t) goto L_80048610; }
+  c->r[2] = (uint32_t)((int32_t)c->r[3] < 3);
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_800485FC; }
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[10] & 4u; if (_t) goto L_80048624; }
+   goto L_80048630;
+L_800485FC:;
+  c->r[2] = c->r[0] + (uint32_t)3;
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[10] & 4u; if (_t) goto L_8004861C; }
+   goto L_80048630;
+L_80048610:;
+  c->r[2] = c->r[4] ^ 63u;
+  c->mem_w16((c->r[8] + GR_LOCAL_X), (uint16_t)c->r[2]); goto L_8004862C;
+L_8004861C:;
+  c->r[2] = c->r[4] ^ 63u;
+  c->mem_w16((c->r[8] + GR_LOCAL_X), (uint16_t)c->r[2]);
+L_80048624:;
+  c->r[2] = c->r[5] ^ 63u;
+  c->mem_w16((c->r[9] + GR_LOCAL_Z), (uint16_t)c->r[2]);
+L_8004862C:;
+  c->r[2] = c->r[10] & 4u;
+L_80048630:;
+  { int _t = (c->r[2] == c->r[0]); c->r[4] = GR; if (_t) goto L_8004864C; }
+  c->r[3] = GR;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + GR_LOCAL_Z));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[4] + GR_LOCAL_X));
+  c->mem_w16((c->r[4] + GR_LOCAL_X), (uint16_t)c->r[2]);
+  c->mem_w16((c->r[3] + GR_LOCAL_Z), (uint16_t)c->r[5]);
+L_8004864C:;
+  c->r[2] = c->r[11] + c->r[0]; return;
+}
+
+// FUN_80049760 — Collision::flatNormal. GR_NORMAL_ANGLE (0x1A0) = ratan2 of the segment endpoints
+// (GR_SEG_X1-GR_SEG_X0, GR_SEG_Z1-GR_SEG_Z0); then stores rcos(angle)>>4 / rsin(angle)>>4 into the
+// probe object at +0x48 / +0x4C. READY-FRAME leaf: the gen body descends sp by 32 and spills the
+// callee-saved regs ra/s2/s1/s0 (r31/r18/r17/r16) at sp+28/+24/+20/+16 with their LIVE incoming
+// values, restoring them before return — the native port mirrors that guest stack frame exactly
+// (see docs/faithful-execution.md, game/world/object_table.cpp dispatchFaithful).
+// ORACLE: gen_func_80049760
+void Collision::flatNormal(uint32_t obj) {
+  Core* c = this->core;
+  c->r[4] = obj;
+  c->r[29] = c->r[29] + (uint32_t)-32;              // addiu sp,-0x20 — descend the guest frame
+  c->mem_w32((c->r[29] + (uint32_t)24), c->r[18]);  // sw s2,0x18(sp) — LIVE incoming s2
+  c->r[18] = c->r[4] + c->r[0];
+  c->r[2] = GR;
+  c->r[3] = GR;
+  c->r[5] = GR;
+  c->r[6] = GR;
+  c->r[7] = (uint32_t)c->mem_r16((c->r[2] + GR_SEG_Z1));
+  c->r[4] = (uint32_t)c->mem_r16((c->r[3] + GR_SEG_Z0));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[5] + GR_SEG_X1));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[6] + GR_SEG_X0));
+  c->mem_w32((c->r[29] + (uint32_t)28), c->r[31]);  // sw ra,0x1c(sp)
+  c->mem_w32((c->r[29] + (uint32_t)20), c->r[17]);  // sw s1,0x14(sp) — LIVE incoming s1
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[16]);  // sw s0,0x10(sp) — LIVE incoming s0
+  c->r[4] = c->r[7] - c->r[4];
+  c->r[31] = 0x800497A4u;
+  c->r[5] = c->r[2] - c->r[5]; func_80085690(c);    // ratan2(dz, dx)
+  c->r[4] = c->r[2] & 4095u;
+  c->r[17] = GR;
+  c->r[31] = 0x800497B4u;
+  c->mem_w16((c->r[17] + GR_NORMAL_ANGLE), (uint16_t)c->r[4]); func_80083F50(c);  // rcos(angle)
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16((c->r[17] + GR_NORMAL_ANGLE));
+  c->r[31] = 0x800497C0u;
+  c->r[16] = c->r[2] + c->r[0]; func_80083E80(c);    // rsin(angle)
+  c->r[3] = GR;
+  c->r[16] = (uint32_t)((int32_t)c->r[16] >> 4);
+  c->mem_w16((c->r[3] + GR_NORMAL_HI), (uint16_t)c->r[0]);
+  c->r[3] = (uint32_t)c->mem_r16((c->r[17] + GR_NORMAL_ANGLE));
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 4);
+  c->mem_w16((c->r[18] + ACT_NORMAL_COS), (uint16_t)c->r[16]);
+  c->mem_w16((c->r[18] + ACT_NORMAL_SIN), (uint16_t)c->r[2]);
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)28));  // lw ra,0x1c(sp)
+  c->r[18] = c->mem_r32((c->r[29] + (uint32_t)24));  // lw s2,0x18(sp)
+  c->r[16] = c->mem_r32((c->r[29] + (uint32_t)16));  // lw s0,0x10(sp)
+  c->r[3] = c->r[0] - c->r[3];
+  c->r[3] = c->r[3] & 4095u;
+  c->mem_w16((c->r[17] + GR_NORMAL_ANGLE), (uint16_t)c->r[3]);
+  c->r[17] = c->mem_r32((c->r[29] + (uint32_t)20));  // lw s1,0x14(sp)
+  c->r[29] = c->r[29] + (uint32_t)32; return;        // addiu sp,0x20 — ascend the guest frame
+}
+
+// eov_* wrappers — guest-ABI adapters (args in c->r[4..], return in c->r[2]). One per leaf.
+static void eov_collisionLineCross(Core* c)           { c->engine.collision.lineCross(c->r[4]); }
+static void eov_collisionFloorPick(Core* c)           { c->engine.collision.floorPick(); }
+static void eov_collisionSlopeLocalB(Core* c)         { c->engine.collision.slopeLocalB(); }
+static void eov_collisionSlopeLocalAdvance(Core* c)   { c->engine.collision.slopeLocalAdvance(); }
+static void eov_collisionFlatNormal(Core* c)          { c->engine.collision.flatNormal(c->r[4]); }
+
+void Collision::registerOverrides() {
+  using overrides::install;
+  install(0x80045810u, "Collision::lineCross",          eov_collisionLineCross,         gen_func_80045810, shard_set_override);
+  install(0x80048034u, "Collision::floorPick",          eov_collisionFloorPick,         gen_func_80048034, shard_set_override);
+  install(0x80048134u, "Collision::slopeLocalB",        eov_collisionSlopeLocalB,       gen_func_80048134, shard_set_override);
+  install(0x80048360u, "Collision::slopeLocalAdvance",  eov_collisionSlopeLocalAdvance, gen_func_80048360, shard_set_override);
+  install(0x80049760u, "Collision::flatNormal",         eov_collisionFlatNormal,        gen_func_80049760, shard_set_override);
 }
