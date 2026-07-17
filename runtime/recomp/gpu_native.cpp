@@ -1590,8 +1590,13 @@ void GpuState::gpu_blank_display() {            // zero the display FB rect (NO 
   // call), so a transition frame between "blanked" and "backdrop widened" could still show a sliver of
   // stale VRAM-atlas content in the margin. Blank the FULL wide width so this call is a genuine clear of
   // everything present() will sample, matching the same width present()/the widen sites already use.
-  { int gpu_gpu_wide_engine(Core*); int gpu_gpu_wide_engine_w(Core*);
-    if (game && gpu_gpu_wide_engine(&game->core)) { int ww = gpu_gpu_wide_engine_w(&game->core); if (ww > dw) dw = ww; } }
+  // Blank ONLY the native 320-wide framebuffer — NEVER the wide margin. VRAM columns [320,nw) at the
+  // display Y are NOT framebuffer, they are the TEXTURE ATLAS (object textures/CLUTs). The earlier #54
+  // change widened this clear to cover the whole present-sampled width, but that ZEROED the atlas —
+  // corrupting every object whose texture lives there — but ONLY when the game STARTED widescreen (the
+  // loader/black-out ran wide while the atlas was resident); starting 4:3 blanked 320 and spared it.
+  // The wide margin is the RENDERER's job (native backdrop / pillarbox fills [320,nw) at present), not a
+  // guest-VRAM clear, so it must never touch the atlas here.
   for (int y = 0; y < dh; y++)
     for (int x = 0; x < dw; x++) *vram(s_disp_x + x, s_disp_y + y) = 0;   // opaque black (555, bit15=0)
 }
