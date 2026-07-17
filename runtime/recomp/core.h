@@ -24,6 +24,7 @@
 #include "items/inventory.h"                  // Core owns an Inventory instance
 #include "ui/save_menu.h"                       // Core owns a SaveMenu instance
 #include "interp_diag.h"                      // Core owns an InterpDiag (interp.cpp trace/profile state)
+#include "game_iface.h"                       // THE framework↔game seam: GameConfig / GameHooks / gameCtx
 
 #ifdef __cplusplus
 
@@ -39,6 +40,15 @@ public:
   uint8_t scratch[0x400];
 
   Game* game = nullptr;   // back-pointer to the owning Game (set by Game's constructor)
+
+  // ---- The framework↔game seam (game_iface.h). The generic runtime reaches the game ONLY through
+  // these: `c->cfg->addr` for game guest-address literals, `c->hooks->fn(c)` for game callbacks, and
+  // `c->gameCtx` for the game's opaque per-Core subsystem aggregate. Set at init by the game; process-
+  // global (both SBS cores point at the same game config/hooks). During the in-repo decoupling the
+  // game subsystems below are progressively migrated into gameCtx. ----
+  const GameConfig* cfg     = nullptr;
+  const GameHooks*  hooks   = nullptr;
+  void*             gameCtx = nullptr;
 
   // ---- Per-Core PC-native subsystems (OOP: methods called as `c->screenFade.method(args)`) ----
   // Back-pointers to `this` are wired by Core's constructor (below).

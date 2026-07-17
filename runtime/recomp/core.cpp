@@ -16,6 +16,10 @@ Core::Core() {
   memset((R3000*)this, 0, sizeof(R3000));
   memset(ram, 0, sizeof(ram));
   memset(scratch, 0, sizeof(scratch));
+  // Snapshot the game seam the game installed at startup (game_iface.h). nullptr until installed —
+  // harmless while no framework literal/call-site has been converted to read cfg/hooks yet.
+  cfg   = psxport_game_config();
+  hooks = psxport_game_hooks();
   // Wire up owned subsystems' back-pointers so their methods can reach this Core's guest memory.
   screenFade.core = this;
   engine.core     = this;
