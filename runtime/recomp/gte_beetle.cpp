@@ -10,7 +10,7 @@
 #include "render_substrate.h"       // rsub.pgxp / rsub.projParams / rsub.otAttr — per-Core substrate
 #include "pgxp.h"          // class Pgxp — subpixel-cache currently-bound accessor
 #include "proj_params.h"   // class ProjParams — camview + per-frame projection constants
-#include "projection.h"    // ProjVtx — proj_native_vertex's POD out-struct (was reached via render.h)
+#include "proj_vtx.h"    // ProjVtx — proj_native_vertex's POD out-struct (was reached via render.h)
 #include <stdint.h>
 #include <stdbool.h>
 

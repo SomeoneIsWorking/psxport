@@ -32,7 +32,6 @@ set(GAME_SRC
   game/core/game_hooks.cpp
   game/core/repl_commands.cpp
   game/core/register_overrides.cpp
-  game/core/fs_util.cpp
   game/core/str.cpp
   game/core/pc_scheduler.cpp
   game/core/verify_harness.cpp

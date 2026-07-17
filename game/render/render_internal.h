@@ -34,11 +34,9 @@ float proj_obj_center_ord(void);
 #include "pkt_span.h"  // PktSpanSession (withDepthTag below)
 #include "render_queue.h"  // RenderQueue::emitOrQueue + RQ_WORLD
 
-// The real per-instance render object: the walk's node when set, else the guest "current render object"
-// scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
-static inline uint32_t cur_render_node(Core* c) {
-  return c->rsub.diag.currentNode() ? c->rsub.diag.currentNode() : c->mem_r32(0x1F80028Cu);
-}
+// cur_render_node moved to the framework header runtime/recomp/render_node.h (ot_attr.cpp, framework,
+// needs it without the rest of this game header). Included here so the game render path is unchanged.
+#include "render_node.h"
 
 // render_field_native_active: true iff pc_render's native field pass (Render::sceneNative + the
 // twoDOnly OT walk, game_tomba2.cpp Engine::drawOTag) owns THIS frame's picture — GAME stage,
