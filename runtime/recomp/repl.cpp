@@ -132,7 +132,7 @@ long Repl::read(Core* c, uint32_t f) {
         for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
           uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
           uint32_t hh = c->mem_r32(n + 0x1c);
-          const char* bn = c->engine.behaviors.nativeName(hh);
+          const char* bn = c->hooks->replBehaviorName(c, hh);
           int16_t nx = c->mem_r16s(n + 0x2e), nz = c->mem_r16s(n + 0x36);
           int is_player = (c->mem_r32(n + 0x38) == 0) && (nx == px) && (nz == pz);
           if (bn) owned++;
@@ -147,8 +147,8 @@ long Repl::read(Core* c, uint32_t f) {
       fprintf(stderr, "[ents] (%d nodes; %d native-owned, %d still-PSX)\n", total, owned, total - owned);
     }
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
-      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { c->engine.camTeleport(x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
-      else { c->engine.camTeleportOff(); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
+      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { c->hooks->replCamTeleport(c, x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
+      else { c->hooks->replCamTeleportOff(c); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
     else if (!strcmp(cmd, "invtest")) {   // diagnostic: exercise the inventory subsystem with a test vector
       // invtest [type] [amt] — fire FUN_8004D338/D4C4/D4F4(type,amt) through the override path (with the
       // `invverify` gate enabled this runs the full RAM+scratchpad A/B vs the recomp body). With no args,

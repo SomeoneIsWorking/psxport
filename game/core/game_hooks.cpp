@@ -10,7 +10,23 @@
 #include "engine.h"
 #include "game.h"        // c->game->cd / c->game->timing / c->game->pcSched reached by the boot + sched hooks
 #include "guest_call.h"  // rc0/rc1/rc2 — rec_dispatch of the guest boot-prologue leaves (bootInit)
+#include "render/screen_fade.h"  // ScreenFade — tomba_renderFadeState mirrors get() into a framework FadeState
+#include "render.h"      // Render umbrella — tomba_renderBbFrameReset calls c->mRender->bbFrameReset()
 #include <stdio.h>
+
+// tomba_renderFadeState — mirror the game's per-frame ScreenFade into the framework FadeState POD, so the
+// present path reads fade without naming ScreenFade. Same read the present path did directly (screenFade.get()).
+static void tomba_renderFadeState(Core* c, FadeState* out) {
+  ScreenFade::State s = c->screenFade.get();
+  out->mode = (int)s.mode;
+  out->r = s.r; out->g = s.g; out->b = s.b;
+}
+// REPL diagnostics — reach the game's engine subsystems (was direct c->engine.* calls in repl.cpp).
+static const char* tomba_replBehaviorName(Core* c, unsigned int handle) { return c->engine.behaviors.nativeName(handle); }
+static void        tomba_replCamTeleport(Core* c, int x, int y, int z)  { c->engine.camTeleport(x, y, z); }
+static void        tomba_replCamTeleportOff(Core* c)                    { c->engine.camTeleportOff(); }
+// Per-frame billboard/bb reset (was native_step_frame's direct c->mRender->bbFrameReset()).
+static void        tomba_renderBbFrameReset(Core* c)                    { c->mRender->bbFrameReset(); }
 
 static void tomba_frameUpdate(Core* c)                { c->engine.frameUpdate(); }
 static void tomba_drawOTag(Core* c, uint32_t otHead)  { c->engine.drawOTag(otHead); }
@@ -128,4 +144,9 @@ extern const GameHooks g_tomba_hooks = {
   /* schedFreshEntry    */ tomba_schedFreshEntry,
   /* hasNativeHandlerForEntry */ tomba_hasNativeHandlerForEntry,
   /* registerOverrides  */ register_engine_overrides,
+  /* renderFadeState    */ tomba_renderFadeState,
+  /* replBehaviorName   */ tomba_replBehaviorName,
+  /* replCamTeleport    */ tomba_replCamTeleport,
+  /* replCamTeleportOff */ tomba_replCamTeleportOff,
+  /* renderBbFrameReset */ tomba_renderBbFrameReset,
 };

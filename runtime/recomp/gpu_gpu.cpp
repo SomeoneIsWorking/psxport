@@ -1,7 +1,6 @@
 #include "core.h"
 #include "game.h"    // Game / GpuGpuState (per-instance render state)
 #include "gpu_gpu.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_gpu)
-#include "render/screen_fade.h"   // class ScreenFade — the single fade driver (present reads its state)
 #include "render_substrate.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
 // gpu_gpu.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
@@ -816,7 +815,7 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
     fprintf(stderr, "[gpu_gpu] present #%d src nonzero=%ld/%d disp=%d,%d %dx%d | batch tri=%d tex=%d semi=%d\n",
             n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total); } }
   // `debug fadewatch`: per-present log of the ScreenFade state (the PC-native subsystem that owns fade).
-  ScreenFade::State fade = game->core.screenFade.get();
+  FadeState fade; game->core.hooks->renderFadeState(&game->core, &fade);
   if (cfg_dbg("fadewatch")) { GpuDevice& gd = gdev();
     int& lastmode = gd.s_fw_lastmode; uint8_t& lr = gd.s_fw_lr; uint8_t& lg = gd.s_fw_lg; uint8_t& lb = gd.s_fw_lb;
     int& lsx = gd.s_fw_lsx; int& lsy = gd.s_fw_lsy; int& lw = gd.s_fw_lw; int& lh = gd.s_fw_lh;
@@ -982,14 +981,14 @@ static void dump_to(GpuGpuState& g, const char* path, int sx, int sy, int w, int
 }
 void GpuGpuState::shot(const char* path) {
   if (!gpu_gpu_enabled() || !s_inited) { fprintf(stderr, "[gpu_shot] GPU not active\n"); return; }
-  ScreenFade::State f = game->core.screenFade.get();
+  FadeState f; game->core.hooks->renderFadeState(&game->core, &f);
   dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuGpuState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
 void gpu_gpu_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
   if (!gpu_gpu_enabled() || !s_inited) return;
-  ScreenFade::State f = core->screenFade.get();
+  FadeState f; core->hooks->renderFadeState(core, &f);
   dump_to(core->game->gpu_gpu, path, sx, sy, w, h, f.mode, f.r, f.g, f.b);
   fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
 }
@@ -1086,7 +1085,7 @@ void GpuGpuState::frame_end(const uint16_t* svram, int frame) { (void)svram; (vo
   // tools/preseq_flicker.py's 30Hz-oscillation detection.
   if (s_preseq_left > 0) {
     char p[192]; snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
-    ScreenFade::State f = game->core.screenFade.get();
+    FadeState f; game->core.hooks->renderFadeState(&game->core, &f);
     dump_to(*this, p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
     if (--s_preseq_left == 0) fprintf(stderr, "[preseq] done: %d frames -> %s\n", s_preseq_idx, s_preseq_dir);
   }
@@ -1299,7 +1298,7 @@ void gpu_gpu_rawdump_arm(const char* path, int frame) { (void)path; (void)frame;
 // two returned panes via gpu_gpu_present_sbs2. Reuses the proven upload+geom+readback path; the engine
 // screen-fade is applied (same math as dump_to / present.frag).
 void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
-  ScreenFade::State f = core->screenFade.get();       // THIS core's fade (guest-backed, SBS-clean)
+  FadeState f; core->hooks->renderFadeState(core, &f);  // THIS core's fade (guest-backed, SBS-clean)
   const int s_fade_mode = f.mode;
   const uint8_t s_fade_r = f.r, s_fade_g = f.g, s_fade_b = f.b;
   if (!gpu_gpu_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
@@ -1400,7 +1399,7 @@ void gpu_gpu_present(Core* core, const uint16_t* src, int sx, int sy, int w, int
     GpuDevice& gd = gdev();
     int& lm = gd.s_fws_lastmode; uint8_t& lr = gd.s_fws_lr; uint8_t& lg = gd.s_fws_lg; uint8_t& lb = gd.s_fws_lb;
     int& lsx = gd.s_fws_lsx; int& lsy = gd.s_fws_lsy; int& lw = gd.s_fws_lw; int& lh = gd.s_fws_lh;
-    ScreenFade::State f = core->screenFade.get();
+    FadeState f; core->hooks->renderFadeState(core, &f);
     int m = f.mode; uint8_t r = f.r, g = f.g, b = f.b;
     if (m != lm || r != lr || g != lg || b != lb || sx != lsx || sy != lsy || w != lw || h != lh) {
       uint32_t sm = core->mem_r32(0x1f800138u);

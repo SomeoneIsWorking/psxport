@@ -22,7 +22,6 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
-#include "render.h"  // full game Render umbrella — native_step_frame calls the game method c->mRender->bbFrameReset()
                      // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
 #include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
@@ -132,7 +131,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step below) is
   // about to capture belong to the NEW logic frame; the presents above (fps60's interp re-run included)
   // consumed last frame's. Reset here — after present, before the walk — mirroring the mObjCur rotation.
-  c->mRender->bbFrameReset();
+  c->hooks->renderBbFrameReset(c);
   c->game->cd.audioTrace("post");                                  // CD-vol fade state AFTER tick+mix
   c->game->perf.phaseBegin(3);   // perf: SCHED-LOGIC = the cooperative scheduler step (the real per-frame GAME logic)
   // The native scheduler is the frame-loop's task-stepping HARNESS (no BIOS threads — yields are setjmp/

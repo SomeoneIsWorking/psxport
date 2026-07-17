@@ -19,6 +19,12 @@
 class Core;   // runtime/recomp/core.h
 class Game;   // runtime/recomp/game.h  (the framework machine owner; stays framework-side)
 
+// FadeState — the framework-side POD mirror of the game's ScreenFade::State {Mode mode; uint8_t r,g,b}.
+// The present path (gpu_gpu.cpp) reads the game's per-frame fade through renderFadeState() into one of
+// these, so the framework never names the game's ScreenFade type. `mode` widened to int (the ScreenFade
+// Mode enum is uint8_t-backed; all present-path consumers already read it as int).
+struct FadeState { int mode; unsigned char r, g, b; };
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // GameConfig — the game-specific guest ADDRESSES/tables. A game fills one static instance; the
 // framework substrate reads `c->cfg->field` in place of the hardcoded MAIN.EXE literals it used to bake
@@ -98,6 +104,13 @@ struct GameHooks {
                                               // registry (was boot.cpp register_engine_overrides(game)).
                                               // Takes Game* (not Core*): the clusters register per-Game.
                                               // MUST run before crt0_setup/game_init on every harness Game.
+
+  // --- present-path + diagnostics + boot-frame reset (last framework→game member refs) ---
+  void (*renderFadeState)(Core* c, FadeState* out);       // present fade read (was core->screenFade.get())
+  const char* (*replBehaviorName)(Core* c, unsigned int handle); // REPL `ents` (was c->engine.behaviors.nativeName)
+  void (*replCamTeleport)(Core* c, int x, int y, int z);  // REPL `tp` (was c->engine.camTeleport)
+  void (*replCamTeleportOff)(Core* c);                    // REPL `tp off` (was c->engine.camTeleportOff)
+  void (*renderBbFrameReset)(Core* c);                    // per-frame bb reset (was c->mRender->bbFrameReset())
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
