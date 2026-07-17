@@ -88,6 +88,7 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
 // would have been the same shape had it fired; native never fired at all). Fix: call this once per
 // Game, right after each harness's own Game/Core is constructed (see sbs.cpp, dualcore.cpp,
 // selftest.cpp), not just on main()'s single throwaway instance.
+void register_field_owned_leaves();
 void register_engine_overrides(Game* game) {
   Core* c = &game->core;
   game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
@@ -117,6 +118,7 @@ void register_engine_overrides(Game* game) {
   Engine::registerFieldSeqSchedulerTick();           // per-frame field sequence scheduler (0x80075A80)
   Engine::registerAnnouncerCuePush();                // announcer/message cue queue push (0x8004FA38)
   Engine::registerSpawnType6Node();                  // type-6 pool-node spawn helper (0x800310F4)
+  register_field_owned_leaves();                      // BYTE-FAITHFUL batch of 94 field-spine leaves
   Engine::registerFieldTargetCursor();               // field target-select cursor (0x800251F0)
   CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
   RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)

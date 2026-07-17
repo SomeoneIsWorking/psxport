@@ -247,6 +247,7 @@ set(PORT_SRC
   game/render/narration_swirl.cpp
   game/render/render_walk.cpp
   game/core/engine.cpp
+  game/core/field_owned_leaves.cpp
   game/core/field_seq_scheduler.cpp
   game/core/announcer_cue_push.cpp
   game/core/spawn_type6_node.cpp
