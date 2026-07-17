@@ -115,6 +115,7 @@ void register_engine_overrides(Game* game) {
   ActorMeleeEngage::registerOverrides(game);         // A00-overlay melee-engage/reposition/arm leaf (0x80112188)
   MeleeProximity::registerOverrides(game);           // melee-proximity/approach-anchor leaf (0x8001F9DC)
   Engine::registerFieldSeqSchedulerTick();           // per-frame field sequence scheduler (0x80075A80)
+  Engine::registerAnnouncerCuePush();                // announcer/message cue queue push (0x8004FA38)
   Engine::registerFieldTargetCursor();               // field target-select cursor (0x800251F0)
   CutsceneCamera::registerOverrides(game);           // resetFollowAccum/pushMode/restoreMode/snapToMasterOffsetY200/orbitTick (0x8006E8F8/8006E1C0/8006E1E4/8006EA00/8006EF38)
   RegisterBehToySpawnFamilyOverrides(game);          // toy/child spawner leaves (0x80127420/801274BC/80127720/8012763C/80127510)

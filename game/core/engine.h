@@ -322,6 +322,8 @@ public:
   //   flow/store shape as sceneEventFifo(), just with the missing frame/ra discipline restored.
   void sceneEventFifoFaithful();
   void fieldSeqSchedulerTick();        // FUN_80075A80 — per-frame field sequence-scheduler tick
+  void announcerCuePush();             // FUN_8004FA38 — announcer/message cue queue push
+  static void registerAnnouncerCuePush();
   static void registerFieldSeqSchedulerTick();
 
   // fieldTargetCursor: guest FUN_800251F0 — the field TARGET-SELECT cursor state machine (operates on
