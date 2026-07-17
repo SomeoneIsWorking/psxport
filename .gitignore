@@ -50,3 +50,4 @@ runtime/recomp/gpu_gpu_shaders.h
 tools/xa_wavdump
 psxport_settings.ini
 docs/reference/issues/shot_*.png
+*.log
