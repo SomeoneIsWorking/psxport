@@ -117,7 +117,7 @@ struct RenderQueue {
   void     mark_consumed();
 
   // push2dQuad: enqueue a 2D textured quad (HUD / overlay / background) into the render queue so it is
-  // part of THE FRAME and gets re-emitted on both 60fps present passes (no direct gpu_gpu_draw_tritri
+  // part of THE FRAME and gets re-emitted on both 60fps present passes (no direct gpu_vk_draw_tritri
   // bypass that lands on one pass). layer = RQ_BACKGROUND/RQ_OVERLAY/RQ_HUD; order_2d_fg picks the 2D
   // far/near band. Body in render_queue.cpp.
   void push2dQuad(int layer, int order_2d_fg,

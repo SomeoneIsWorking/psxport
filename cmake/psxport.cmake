@@ -57,17 +57,17 @@ set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
 set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
 add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EXCLUDE_FROM_ALL)
 
-# ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_gpu_shaders.h) ------------------------
+# ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_vk_shaders.h) ------------------------
 # tools/gen_gpu_shaders.sh compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
 # embeds the SPIR-V into the source tree. Re-run when a shader source changes.
 file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
   ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.vert ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.frag)
-set(SHADERS_H ${PSXPORT_ROOT}/${RT}/gpu_gpu_shaders.h)
+set(SHADERS_H ${PSXPORT_ROOT}/${RT}/gpu_vk_shaders.h)
 add_custom_command(OUTPUT ${SHADERS_H}
   COMMAND bash ${PSXPORT_ROOT}/tools/gen_gpu_shaders.sh
   DEPENDS ${SHADER_SRCS} ${PSXPORT_ROOT}/tools/gen_gpu_shaders.sh
   WORKING_DIRECTORY ${PSXPORT_ROOT}
-  COMMENT "Generating SDL_GPU SPIR-V header (gpu_gpu_shaders.h)"
+  COMMENT "Generating SDL_GPU SPIR-V header (gpu_vk_shaders.h)"
   VERBATIM)
 add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
 
@@ -106,7 +106,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/cdc_native.c
   ${PSXPORT_ROOT}/runtime/recomp/xa_stream.c
   ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
-  ${PSXPORT_ROOT}/runtime/recomp/gpu_gpu.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/recomp/mods.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_gate.cpp
@@ -149,7 +149,7 @@ set_target_properties(psxport PROPERTIES
 
 # Framework include dirs. RT + generated + the vendored backends are PUBLIC so consumers inherit them.
 # generated/ is PUBLIC because framework sources include generated headers (overlay_router.cpp ->
-# overlay_table.h; gpu_gpu.cpp/rmlui_render_gpu.cpp -> gpu_gpu_shaders.h which is in RT). The symbols
+# overlay_table.h; gpu_vk.cpp/rmlui_render_gpu.cpp -> gpu_vk_shaders.h which is in RT). The symbols
 # those generated headers declare (main_dispatch, g_rec_overlays, rec_func_index) are DEFINED in
 # generated/ sources (the game substrate) — so the archive carries them as UNDEFINED, resolved only at
 # the final game-exe link. That is expected for a static archive.

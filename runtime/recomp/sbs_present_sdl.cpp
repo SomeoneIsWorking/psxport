@@ -1,23 +1,23 @@
 // sbs_present_sdl.cpp — the SBS two-pane presenter on SDL_GPU (replaces the dropped raylib presenter).
 //
-// The SDL_GPU renderer (gpu_gpu.cpp) owns the single window. The SBS harness (sbs.cpp) renders each core's
-// frame headless-style into the VRAM image and reads it back to a CPU RGBA pane (gpu_gpu_render_readback),
-// then this presents the two panes side by side in one window frame (gpu_gpu_present_sbs2). Window I/O —
+// The SDL_GPU renderer (gpu_vk.cpp) owns the single window. The SBS harness (sbs.cpp) renders each core's
+// frame headless-style into the VRAM image and reads it back to a CPU RGBA pane (gpu_vk_render_readback),
+// then this presents the two panes side by side in one window frame (gpu_vk_present_sbs2). Window I/O —
 // the quit poll and host-keyboard -> PSX pad mask — is driven here off SDL3 directly. No second window
 // (the old raylib path opened its own, hence the SBS forced VK headless; that is no longer needed).
 #include <SDL3/SDL.h>
 #include <stdint.h>
 
 class Game;
-// gpu_gpu.cpp: composite two CPU RGBA8 panes (A left, B right) to the swapchain in one window frame.
+// gpu_vk.cpp: composite two CPU RGBA8 panes (A left, B right) to the swapchain in one window frame.
 // `game` is the Game used to reach the RmlOverlay in the shared present path (init_gpu/poll_quit).
-void gpu_gpu_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB);
+void gpu_vk_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const uint8_t* rgbaB, int wB, int hB);
 
 extern "C" {
 void sbs_rl_init(void) {}        // the SDL_GPU renderer creates the window lazily on the first present
 void sbs_rl_shutdown(void) {}
 
-// Return 1 if the window was closed (SDL quit). gpu_gpu_present_sbs2 also exits(0) on quit, so this is a
+// Return 1 if the window was closed (SDL quit). gpu_vk_present_sbs2 also exits(0) on quit, so this is a
 // belt-and-suspenders check for frames where no present ran (e.g. paused).
 int sbs_rl_should_close(void) {
   SDL_Event e;
@@ -52,5 +52,5 @@ unsigned short sbs_rl_poll_input(void) {
 }   // extern "C"
 
 void sbs_rl_present(Game* game, const unsigned char* a, int wA, int hA, const unsigned char* b, int wB, int hB) {
-  gpu_gpu_present_sbs2(game, a, wA, hA, b, wB, hB);
+  gpu_vk_present_sbs2(game, a, wA, hA, b, wB, hB);
 }

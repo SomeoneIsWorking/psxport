@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Renderer regression test (TDD) for the SDL_GPU backend (gpu_gpu.cpp).
+# Renderer regression test (TDD) for the SDL_GPU backend (gpu_vk.cpp).
 #
-# Runs the headless self-test (PSXPORT_GPU_SELFTEST=1, GpuGpuState::tritest) which renders a known VRAM
+# Runs the headless self-test (PSXPORT_GPU_SELFTEST=1, GpuVkState::tritest) which renders a known VRAM
 # pattern through the REAL present pipeline into an offscreen RGBA8 target and asserts:
 #   - ORIENTATION: VRAM row 0 (top) lands at the TOP of the output (guards the swapchain Y-flip — the
 #     "rendering upside down" regression).
 #   - 1555 UNPACK: present.frag decodes PSX 1555 → RGB correctly (red marker → red, blue → blue).
 # No disc/game is loaded (the test runs at boot before load_exe, then exits 0=PASS / 1=FAIL).
 #
-# Usage: tools/test_gpu_render.sh   (builds gpu_gpu.cpp first, then runs the self-test)
+# Usage: tools/test_gpu_render.sh   (builds gpu_vk.cpp first, then runs the self-test)
 set -eu
 cd "$(dirname "$0")/.."
 

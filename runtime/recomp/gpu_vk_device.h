@@ -1,17 +1,17 @@
-// gpu_gpu_device.h — class GpuDevice: the SDL3 GPU present backend's HOST-DEVICE state
+// gpu_vk_device.h — class GpuDevice: the SDL3 GPU present backend's HOST-DEVICE state
 // (window, GPU device, pipelines, textures, transfer buffers) that used to be ~25 file-scope
-// statics in gpu_gpu.cpp. Owned by Game (`game->gpu_dev`).
+// statics in gpu_vk.cpp. Owned by Game (`game->gpu_dev`).
 //
 // ONE window/device per process: the FIRST Game constructed claims the process device via
 // `sInstance` (same first-wins pattern as DbgServer) — in SBS both cores render through it by
 // design (the harness composes both panes into the one window). Per-frame BATCH state is separate
-// and per-Core (GpuGpuState, gpu_gpu_internal.h). Field names keep their historical `s_` spelling
-// so the gpu_gpu.cpp bodies are unchanged by the move (accessed via shadow macros there).
+// and per-Core (GpuVkState, gpu_vk_internal.h). Field names keep their historical `s_` spelling
+// so the gpu_vk.cpp bodies are unchanged by the move (accessed via shadow macros there).
 #pragma once
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <stdint.h>
-#include "gpu_gpu_internal.h"   // GGS_NUM_BLEND_MODES
+#include "gpu_vk_internal.h"   // GGS_NUM_BLEND_MODES
 
 class GpuDevice {
 public:
@@ -29,7 +29,7 @@ public:
   SDL_GPUTextureFormat s_swap_fmt = SDL_GPU_TEXTUREFORMAT_INVALID;
 
   // (per-Game render TARGETS — the guest-VRAM image, snapshot, depth, color intermediate and vertex
-  //  buffers — moved to GpuGpuState 2026-07-10: two Games must not share mutable GPU surfaces.)
+  //  buffers — moved to GpuVkState 2026-07-10: two Games must not share mutable GPU surfaces.)
   SDL_GPUSampler*         s_samp_nearest = nullptr; // integer VRAM sampler (nearest)
   SDL_GPUSampler*         s_samp_linear = nullptr;  // RGBA image sampler (linear)
   SDL_GPUGraphicsPipeline* s_present_pipe = nullptr;
@@ -40,7 +40,7 @@ public:
   SDL_GPUTransferBuffer* s_img_xfer = nullptr;
   int                    s_img_w = 0, s_img_h = 0;
 
-  // ---- Pass 2: native 3D / textured raster PIPELINES (shared; per-Game targets on GpuGpuState) ----
+  // ---- Pass 2: native 3D / textured raster PIPELINES (shared; per-Game targets on GpuVkState) ----
   SDL_GPUGraphicsPipeline* s_tri_pipe = nullptr;     // flat opaque (depth test + write)
   SDL_GPUGraphicsPipeline* s_tritex_pipe = nullptr;  // textured opaque (depth test + write)
   SDL_GPUGraphicsPipeline* s_semi_pipe[GGS_NUM_BLEND_MODES] = {};  // textured semi, real HW blend
@@ -67,5 +67,5 @@ public:
   int s_fws_lastmode = -999;                          // fadewatch-state tap (wrapper) change detector
   uint8_t s_fws_lr = 0, s_fws_lg = 0, s_fws_lb = 0;
   int s_fws_lsx = -999, s_fws_lsy = -999, s_fws_lw = -999, s_fws_lh = -999;
-  uint16_t s_selftest_pat[1024 * 512] = {};           // gpu_gpu_selftest VRAM test pattern scratch
+  uint16_t s_selftest_pat[1024 * 512] = {};           // gpu_vk_selftest VRAM test pattern scratch
 };

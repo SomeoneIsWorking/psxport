@@ -171,21 +171,21 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "preseq")) {   // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
       unsigned n = 0; char dir[120] = "scratch/screenshots/preseq";
       if (sscanf(line, "%*s %u %119s", &n, dir) >= 1 && n > 0) {
-        extern void gpu_gpu_preseq_arm(Core*, int, const char*);
-        gpu_gpu_preseq_arm(c, (int)n, dir);
+        extern void gpu_vk_preseq_arm(Core*, int, const char*);
+        gpu_vk_preseq_arm(c, (int)n, dir);
         fprintf(stderr, "[repl] preseq armed: next %u presents -> %s/p%%04d.ppm\n", n, dir);
       } else fprintf(stderr, "[repl] preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)\n");
     }
     else if (!strcmp(cmd, "shot")) {   // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
-        int gpu_gpu_enabled(void); void gpu_gpu_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
-        if (gpu_gpu_enabled()) { gpu_gpu_shot(c, path); fprintf(stderr, "[repl] shot (VK) -> %s\n", path); }
+        int gpu_vk_enabled(void); void gpu_vk_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
+        if (gpu_vk_enabled()) { gpu_vk_shot(c, path); fprintf(stderr, "[repl] shot (VK) -> %s\n", path); }
         else                   { gpu_native_shot(c, path); fprintf(stderr, "[repl] shot (SW) -> %s\n", path); }
       }
     }
     else if (!strcmp(cmd, "setires")) {   // live ires toggle (same mods.ires mutation the RmlUi overlay's
-      // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuGpuState::ensure_ires_targets' teardown+
+      // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuVkState::ensure_ires_targets' teardown+
       // rebuild path headless, without needing a windowed run to reach the overlay.
       unsigned n = 0;
       if (sscanf(line, "%*s %u", &n) == 1) { c->game->mods.ires = (int)n; fprintf(stderr, "[repl] mods.ires = %d\n", c->game->mods.ires); }
@@ -193,13 +193,13 @@ long Repl::read(Core* c, uint32_t f) {
     }
     else if (!strcmp(cmd, "iresdump")) {   // DEBUG ONLY (ires bring-up): raw dump of the ires-scaled target
       char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_gpu_ires_rawdump(Core*, const char*); gpu_gpu_ires_rawdump(c, path); }
+      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_vk_ires_rawdump(Core*, const char*); gpu_vk_ires_rawdump(c, path); }
     }
     else if (!strcmp(cmd, "vram")) { char path[200] = {0}; unsigned x=0,y=0,w=1024,h=512;
       if (sscanf(line, "%*s %199s %u %u %u %u", path, &x,&y,&w,&h) >= 1) {
-        void gpu_gpu_vram_region(Core*, const char*, int, int, int, int); gpu_gpu_vram_region(c, path, (int)x,(int)y,(int)w,(int)h); } }
+        void gpu_vk_vram_region(Core*, const char*, int, int, int, int); gpu_vk_vram_region(c, path, (int)x,(int)y,(int)w,(int)h); } }
     else if (!strcmp(cmd, "vramraw")) { char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_gpu_vram_raw(Core*, const char*); gpu_gpu_vram_raw(c, path); } }
+      if (sscanf(line, "%*s %199s", path) == 1) { void gpu_vk_vram_raw(Core*, const char*); gpu_vk_vram_raw(c, path); } }
     else if (!strcmp(cmd, "dumpram")) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {

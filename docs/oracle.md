@@ -143,12 +143,12 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   `PSXPORT_SBS_MODE=full` and eyeballing a native-render silhouette-crack bug (a 1px black line tracing
   terrain-against-sky edges — docs/findings/render.md "Screen-fade transitions"... no, see the dark-outline
   entry) showed the artifact on BOTH panes — but `both`'s B pane is `psx_fallback` (recomp substrate), which
-  shares A's SAME native gpu_native.cpp/gpu_gpu.cpp rasterizer (only the SCENE-WALK differs); it is not an
+  shares A's SAME native gpu_native.cpp/gpu_vk.cpp rasterizer (only the SCENE-WALK differs); it is not an
   independent pixel oracle, so seeing the bug on both panes proved nothing about whether it's PSX-authentic.
   Added `sbs.cpp` mode `M_ORACLE`: boots core B with `use_interp=1` + `gpu.soft_gpu=1` (the exact recipe
   `run_oracle`/`run_oraclediff` already use) instead of `psx_fallback` — B never touches the native
   rasterizer at all; its pixels come 100% from the software rasterizer into its own `s_vram`. `grab_pane`/
-  `gpu_gpu_render_readback` needed NO changes — they already just upload a core's CPU `s_vram` + an (empty,
+  `gpu_vk_render_readback` needed NO changes — they already just upload a core's CPU `s_vram` + an (empty,
   for the oracle) native geometry batch, so re-using them for the oracle core is a degenerate case of the
   same path. Verified live (headless, `PSXPORT_SBS=1 PSXPORT_SBS_MODE=oracle PSXPORT_SBS_AUTONAV=1`): both
   cores reach free-roam at the SAME lockstep frame (f216) via the existing per-core `nav_step`; `sbs dump`

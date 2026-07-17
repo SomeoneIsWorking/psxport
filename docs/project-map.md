@@ -64,8 +64,8 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
 REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
-**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_gpu.cpp` (Vulkan backend + present —
-1746 ln) + `gpu_gpu_shaders.h`/`gpu_gpu_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
+**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present —
+1746 ln) + `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
@@ -87,7 +87,7 @@ NOT a reference emulator), `vendor/imgui`.
   general-purpose grab-bag file, NEVER cram unrelated subsystems into one file (the old flat `engine/` and
   `native_path*.cpp` are GONE — do not recreate them).
 - **Keep files focused; ~400–500 lines is the soft cap for a mixed-responsibility file.** Cohesive
-  single-responsibility backends (gpu_gpu, gpu_native) may be larger.
+  single-responsibility backends (gpu_vk, gpu_native) may be larger.
 - **No grab-bag files** (verified: no `*misc*`/`*util*`/`*common*`/`native_path*`/`native_dl*` anywhere). The
   two dead `*misc*` grab-bags were deleted (later-288, proven 100% dead + 0-diff), and the REPL driver was
   extracted from `native_boot.cpp` into `runtime/recomp/repl.cpp` (+ `repl.h`, and shared `guest_call.h` for
@@ -95,7 +95,7 @@ NOT a reference emulator), `vendor/imgui`.
   native in its subsystem file.
 - **Remaining size debt (not grab-bags, just large cohesive files — split only when next touched):**
   `native_boot.cpp` still holds boot + the native per-frame scheduler (cohesive; a boot/scheduler split is
-  optional). `gpu_native.cpp`/`gpu_gpu.cpp`/`game/render/submit.cpp` are large single-responsibility backends.
+  optional). `gpu_native.cpp`/`gpu_vk.cpp`/`game/render/submit.cpp` are large single-responsibility backends.
 
 ## CD path — the part that's easy to get wrong
 The port does NOT emulate the CD controller for the game; `cd_override.c` replaces libcd/engine
@@ -141,7 +141,7 @@ oracle. To verify:
 
 ## Rendering, present, and config — see the dedicated docs
 - **`docs/render-arch.md`** — the GP0→screen path, the VK rasterizer + present dispatch
-  (`blit_src`→`gpu_gpu_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), and the depth model.
+  (`blit_src`→`gpu_vk_present`), headless **offscreen VK** (`PSXPORT_VK_HEADLESS`), and the depth model.
   Render is ONE PC-native behavior: native per-pixel depth is ALWAYS on (no faithful/OT-order toggle),
   single VK panel, the render queue owns ordering. Read before touching graphics/VK.
 - **`docs/config.md`** — the `cfg` module (`cfg_on/cfg_int/cfg_str/cfg_dbg`). Diagnostics are REPL-driven:

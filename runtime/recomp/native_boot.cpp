@@ -76,8 +76,8 @@ static void native_step_frame(Core* c, uint32_t f) {
   // wide view then expanded only to the RIGHT. Re-asserting nw/2 each frame centers it symmetrically
   // (the middle 4:3 band stays pixel-identical). CR24 is a GTE control reg, not guest RAM -> read-only-
   // overlay compliant; gated on wide_engine so 4:3 (OFX=160, margin==0) and the oracle are untouched.
-  { int gpu_gpu_wide_engine(Core*); int gpu_gpu_wide_engine_ofx(Core*);
-    if (gpu_gpu_wide_engine(c)) gte_write_ctrl(24u, (uint32_t)gpu_gpu_wide_engine_ofx(c) << 16); }
+  { int gpu_vk_wide_engine(Core*); int gpu_vk_wide_engine_ofx(Core*);
+    if (gpu_vk_wide_engine(c)) gte_write_ctrl(24u, (uint32_t)gpu_vk_wide_engine_ofx(c) << 16); }
   c->rsub.projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
@@ -170,7 +170,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
     // the native render ran), not from the post-native-render state. We then restore the POST-FRAME state
     // so the canonical game (which includes the post-render per-frame area update) is undisturbed.
-    extern void gpu_gpu_select_target(int);
+    extern void gpu_vk_select_target(int);
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
     DualviewSnapshot& dv = c->rsub.dualviewSnapshot;
@@ -182,11 +182,11 @@ static void native_step_frame(Core* c, uint32_t f) {
       c->mem_w16(cfg->dwellCounter, 0);                         // dwell counter
       c->mem_w32(cfg->poolPtrLast, c->mem_r32(cfg->poolPtrCur));
       c->mem_w32(cfg->poolPtrCur, (cfg->packetPoolBase) & 0xffffff);  // reset packet pool ptr
-      gpu_gpu_select_target(1);
+      gpu_vk_select_target(1);
       rec_dispatch(c, cfg->dualviewRenderOrch);                 // PSX field render orchestrator (full OT build)
       rec_dispatch(c, cfg->dualviewSubmit);                     // render submit (faithful to ov_field_frame)
       c->hooks->drawOTag(c, envp + 0x1ffcu);                    // walk PSX OT -> target-1 batch
-      gpu_gpu_select_target(0);
+      gpu_vk_select_target(0);
       dv.restorePost(c);             // restore the real canonical state (PSX pass fully undone)
       dv.clearPre();
     }

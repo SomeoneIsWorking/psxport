@@ -1,7 +1,7 @@
 #ifndef PSXPORT_OVERLAY_GLUE_H
 #define PSXPORT_OVERLAY_GLUE_H
-// Thin integration layer between the SDL_GPU present path (gpu_gpu.cpp) and the RmlUi mod/debug
-// overlay (rmlui_overlay.cpp). gpu_gpu.cpp calls these four hooks and nothing more — all
+// Thin integration layer between the SDL_GPU present path (gpu_vk.cpp) and the RmlUi mod/debug
+// overlay (rmlui_overlay.cpp). gpu_vk.cpp calls these four hooks and nothing more — all
 // overlay-specific logic (full-window record, the live world-position latch read from guest RAM,
 // the per-frame CPU update) lives HERE, not crammed into the renderer.
 //

@@ -49,10 +49,10 @@ void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
 void gpu_native_shot(Core* core, const char* path);
 int  gpu_frame_no(Core* core);
-int  gpu_gpu_enabled(void);
-void gpu_gpu_shot(Core* core, const char* path);
-void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
-void gpu_gpu_vram_region(Core* core, const char* path, int x, int y, int w, int h);
+int  gpu_vk_enabled(void);
+void gpu_vk_shot(Core* core, const char* path);
+void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
+void gpu_vk_vram_region(Core* core, const char* path, int x, int y, int w, int h);
 // pad input (pad_input.c) — lets the debug server DRIVE the game (press/release/tap/hold)
 
 // PSX pad: name -> active-HIGH bit (mirrors the REPL mapping in native_boot.c).
@@ -241,7 +241,7 @@ static void dbg_exec(FILE* out, const char* line) {
     // display region. (Under VK the SW s_vram has only uploads, not the rasterized geometry.)
     char path[256] = "scratch/screenshots/dbg.png";
     sscanf(line, "%*s %255s", path);
-    if (gpu_gpu_enabled()) { gpu_gpu_shot(s_ctx, path); fprintf(out, "shot (VK) -> %s\n", path); }
+    if (gpu_vk_enabled()) { gpu_vk_shot(s_ctx, path); fprintf(out, "shot (VK) -> %s\n", path); }
     else                  { gpu_native_shot(s_ctx, path); fprintf(out, "shot (SW) -> %s\n", path); }
   } else if (!strcmp(cmd, "dumpram")) {
     // Full 2MB guest-RAM dump (+ .spad scratchpad sidecar), mirroring the REPL `dumpram`. Lets an
@@ -259,27 +259,27 @@ static void dbg_exec(FILE* out, const char* line) {
     // SBS only: capture render TARGET 1 (core B / right pane). Plain `shot` reads target 0 (core A).
     char path[256] = "scratch/screenshots/dbg_b.png";
     sscanf(line, "%*s %255s", path);
-    void gpu_gpu_shot_b(Core*, const char*); gpu_gpu_shot_b(s_ctx, path);
+    void gpu_vk_shot_b(Core*, const char*); gpu_vk_shot_b(s_ctx, path);
     fprintf(out, "shotb (VK target B) -> %s\n", path);
   } else if (!strcmp(cmd, "vkshot")) {
     char path[256] = "scratch/screenshots/dbg_vk.png";
     sscanf(line, "%*s %255s", path);
-    gpu_gpu_shot(s_ctx, path);
+    gpu_vk_shot(s_ctx, path);
     fprintf(out, "vkshot -> %s\n", path);
   } else if (!strcmp(cmd, "vkstats")) {
-    int tri = 0, tex = 0, semi = 0; gpu_gpu_stats(s_ctx, &tri, &tex, &semi);
+    int tri = 0, tex = 0, semi = 0; gpu_vk_stats(s_ctx, &tri, &tex, &semi);
     fprintf(out, "vk last-frame verts: flat-tri=%d (%d tris) textured=%d (%d tris) semi=%d (%d tris)\n",
             tri, tri/3, tex, tex/3, semi, semi/3);
   } else if (!strcmp(cmd, "vkvram")) {
     unsigned x = 0, y = 0, w = 64, h = 64; char path[256] = "scratch/screenshots/dbg_vkvram.ppm";
     sscanf(line, "%*s %u %u %u %u %255s", &x, &y, &w, &h, path);
-    gpu_gpu_vram_region(s_ctx, path, (int)x, (int)y, (int)w, (int)h);
+    gpu_vk_vram_region(s_ctx, path, (int)x, (int)y, (int)w, (int)h);
     fprintf(out, "vkvram (%u,%u %ux%u) -> %s\n", x, y, w, h, path);
   } else if (!strcmp(cmd, "vkpix")) {          // raw 16-bit VRAM word(s) at x,y (dark-outline STP diag)
     unsigned x = 0, y = 0, n = 1; sscanf(line, "%*s %u %u %u", &x, &y, &n);
     uint16_t words[64]; if (n > 64) n = 64;
-    void gpu_gpu_vram_words(Core*, int, int, int, uint16_t*);
-    gpu_gpu_vram_words(s_ctx, (int)x, (int)y, (int)n, words);
+    void gpu_vk_vram_words(Core*, int, int, int, uint16_t*);
+    gpu_vk_vram_words(s_ctx, (int)x, (int)y, (int)n, words);
     fprintf(out, "vkpix (%u,%u x%u):", x, y, n);
     for (unsigned i = 0; i < n; i++) fprintf(out, " %04X", words[i]);
     fprintf(out, "\n");

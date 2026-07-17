@@ -466,9 +466,9 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // and log color+ra, to see the intro menu->cutscene transition's "two fade-ins" render state deterministically.
     if (pc == 0x8007E9C8u) {
       static int fs = -2; if (fs == -2) fs = cfg_dbg("fadeshot") ? 1 : 0;
-      if (fs) { void gpu_gpu_shot(Core*, const char*); static int fn = 0;
+      if (fs) { void gpu_vk_shot(Core*, const char*); static int fn = 0;
         fprintf(stderr, "[fadeshot] call=%d color=0x%06X ra=0x%08X\n", fn, c->r[4] & 0xffffff, c->r[31]);
-        if (fn < 120) { char p[128]; snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn); gpu_gpu_shot(c, p); }
+        if (fn < 120) { char p[128]; snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn); gpu_vk_shot(c, p); }
         fn++; }
     }
     // PSXPORT_DEBUG=keyon (oracle, temporary): trace every libsnd voice keyon 0x800939A0

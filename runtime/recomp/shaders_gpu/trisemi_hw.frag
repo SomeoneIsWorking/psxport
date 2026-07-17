@@ -1,7 +1,7 @@
 #version 450
 // REAL HARDWARE blend for PSX semi-transparent world quads (2026-07-01 dark-outline fix, replaces the old
 // in-shader "sample a VRAM snapshot as the destination" approach in tritex.frag, which read a STALE
-// pre-frame buffer for the native render path — see gpu_gpu.cpp render_geom's header comment for the full
+// pre-frame buffer for the native render path — see gpu_vk.cpp render_geom's header comment for the full
 // root-cause). This shader still samples its OWN texture/CLUT exactly like tritex.frag (u_vram = the
 // ordinary packed atlas snapshot, unaffected by this pass), but instead of manually blending against a
 // second sampled "destination", it emits a colour PRE-SHAPED for the GPU's fixed-function blend unit to
@@ -12,7 +12,7 @@
 // can't vary the blend equation per-fragment in fixed-function hardware, so we fold the STP decision into
 // the shader's OWN alpha output and pick blend factors that make "STP=0 -> opaque" and "STP=1 -> the real
 // PSX equation" both true from ONE static per-pipeline blend state (one pipeline per PSX blend mode, see
-// gpu_gpu.cpp's 4 s_semi_pipe_* pipelines):
+// gpu_vk.cpp's 4 s_semi_pipe_* pipelines):
 //   pipeline state: src_color_factor=ONE, dst_color_factor=SRC_ALPHA, op = ADD (avg/add/add4) or
 //                   REVERSE_SUBTRACT (sub); alpha output below = the per-fragment STP (0 or 1).
 //   avg  (B+F)/2: colour = stp ? F*0.5 : F                  -> dst*stp*0.5 + F        = stp? .5F+.5B : F

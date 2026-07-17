@@ -20,7 +20,7 @@ class Core;   // runtime/recomp/core.h
 class Game;   // runtime/recomp/game.h  (the framework machine owner; stays framework-side)
 
 // FadeState — the framework-side POD mirror of the game's ScreenFade::State {Mode mode; uint8_t r,g,b}.
-// The present path (gpu_gpu.cpp) reads the game's per-frame fade through renderFadeState() into one of
+// The present path (gpu_vk.cpp) reads the game's per-frame fade through renderFadeState() into one of
 // these, so the framework never names the game's ScreenFade type. `mode` widened to int (the ScreenFade
 // Mode enum is uint8_t-backed; all present-path consumers already read it as int).
 struct FadeState { int mode; unsigned char r, g, b; };

@@ -19,7 +19,7 @@ layout(location = 5) flat in ivec4 v_da;     // draw-area clip
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
 // ires (internal-resolution) scale: v_da (draw-area clip) is in NATIVE VRAM pixel units, and the manual
 // destination sample below (vram_at(px,py)) must index the SNAPSHOT atlas (always fixed VRAM_W x VRAM_H —
-// see gpu_gpu.cpp render_geom, this pass never touches a scaled snapshot), so gl_FragCoord — which spans
+// see gpu_vk.cpp render_geom, this pass never touches a scaled snapshot), so gl_FragCoord — which spans
 // the ires-scaled render target's OWN (bigger) pixel range — must be divided back down to native units
 // before either use. 1 at i==1 (a no-op divide, byte-identical to the pre-ires shader).
 layout(set = 3, binding = 0) uniform PC { int scale; } pc;

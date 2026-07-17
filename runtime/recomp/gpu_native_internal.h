@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 struct Core;             // CPU/RAM handle (core.h); methods below take Core* but only by pointer
-struct Game;             // back-pointer target (game.h); blit_src reaches gpu_gpu via game->core
+struct Game;             // back-pointer target (game.h); blit_src reaches gpu_vk via game->core
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -29,18 +29,18 @@ typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;   // rasterizer ver
 // Owned by Game (game.h has `GpuState gpu;`). Field names keep their historical `s_`/`g_` spelling so
 // the rasterizer bodies are unchanged by the move (they now read members via implicit `this`).
 struct GpuState {
-  Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_gpu present wrapper
+  Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_vk present wrapper
 
   // ORACLE soft-GPU (docs/oracle.md Phase 2): when set, this GpuState rasterizes its GP0 stream into
   // s_vram in SOFTWARE (the existing tri()/raster_sprite()/raster_line() path) and NEVER touches the VK
-  // backend — even though the native port Core keeps the VK backend up (gpu_gpu_enabled()==1 is global).
+  // backend — even though the native port Core keeps the VK backend up (gpu_vk_enabled()==1 is global).
   // The diff harness sets it on the interpreter oracle Core so we get the REAL PSX cutscene framebuffer
   // (s_vram) to dump/diff, fully decoupled from the native render path. Default 0 = the shipping VK path.
   int soft_gpu = 0;
-  inline bool vk_path() const { extern int gpu_gpu_enabled(void); return gpu_gpu_enabled() && !soft_gpu; }
-  inline bool sw_path() const { extern int gpu_gpu_enabled(void); return soft_gpu || !gpu_gpu_enabled(); }
+  inline bool vk_path() const { extern int gpu_vk_enabled(void); return gpu_vk_enabled() && !soft_gpu; }
+  inline bool sw_path() const { extern int gpu_vk_enabled(void); return soft_gpu || !gpu_vk_enabled(); }
 
-  // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_gpu present path via Core).
+  // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
   int s_ot_2d_drawn = 0;  // # of genuine 2D-overlay prims drawn during a twoDOnly walk (reset at walk start).
                           // drawOTag reads it: >0 in pc_render => the field needs unimplemented native 2D UI
@@ -267,7 +267,7 @@ void gpu_native_shot(Core* core, const char* path);
 int  gpu_frame_no(Core* core);
 uint16_t gpu_vram_peek(Core* core, int x, int y);
 // PC-native SCEA decode: baked 4bpp+CLUT asset -> flat RGBA8 at the 640x468 screen positions (text =
-// CLUT color, else transparent black). PSX-free source for gpu_gpu_present_image. `out` = 640*468*4 bytes.
+// CLUT color, else transparent black). PSX-free source for gpu_vk_present_image. `out` = 640*468*4 bytes.
 void gpu_scea_decode_rgba(uint8_t* out);
 void gpu_vram_load(Core* core, const uint16_t* src);
 void gpu_vram_save(Core* core, uint16_t* dst);

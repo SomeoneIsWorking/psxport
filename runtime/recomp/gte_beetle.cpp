@@ -435,7 +435,7 @@ void     gte_bind(Core* c)                       {
 }
 void     gte_init(void)                          { GTE_Init(); GTE_Power();
   // PSXPORT_WIDE is PC-native widescreen now: the GTE keeps its NATIVE projection (NO squish) and the
-  // renderer (gpu_gpu) re-centers the geometry into a wider scratch framebuffer at a true wider FOV.
+  // renderer (gpu_vk) re-centers the geometry into a wider scratch framebuffer at a true wider FOV.
   // The old emulator squish-X + display-stretch hack (widescreen_hack=1) is intentionally NOT used —
   // it loses horizontal resolution and stretches the 2D HUD (user rejected it). Keep the hack OFF. }
   widescreen_hack = 0; }

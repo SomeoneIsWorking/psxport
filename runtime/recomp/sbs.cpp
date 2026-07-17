@@ -58,9 +58,9 @@ void dc_step_frame(Core* c, uint32_t f);
 extern "C" int cfg_on(const char*);
 extern "C" void watchdog_disable(void);
 extern "C" void guest_backtrace_to(Core* c, FILE* out);
-void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
-void gpu_gpu_select_target(int t);
-void gpu_gpu_frame_end(Core* core, const uint16_t* svram, int frame);
+void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba);
+void gpu_vk_select_target(int t);
+void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);
 void gpu_present_finalize(Core* core);   // per-frame reset/bookkeeping standalone does in gpu_present (SBS skips present)
 const uint16_t* gpu_vram_ptr(Core* core);
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h);
@@ -1192,7 +1192,7 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
 // (the SBS loop owns the single window present); sbs_render=1 re-enables the render-submit so it EMITS its
-// geometry into VK batch `which` (gpu_gpu_select_target). Neither core presents; the SBS composite does.
+// geometry into VK batch `which` (gpu_vk_select_target). Neither core presents; the SBS composite does.
 void Sbs::Impl::stepCore(Game* g, int which) {
   g->core.game->diff_mode  = 1;
   g->core.game->sbs_render = 1;
@@ -1204,7 +1204,7 @@ void Sbs::Impl::stepCore(Game* g, int which) {
   //  is slower in wall-clock but keeps frame-for-frame parity with the standalone timeline, which is
   //  the whole point of the panes.)
   applyMode(g, which);
-  gpu_gpu_select_target(which);
+  gpu_vk_select_target(which);
   dc_step_frame(&g->core, mFrame);
 }
 
@@ -1291,11 +1291,11 @@ void Sbs::Impl::grabPane(Game* g, uint8_t* rgba, int* ow, int* oh) {
   int sx, sy, w, h; gpu_disp_region(&g->core, &sx, &sy, &w, &h);
   // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw) — sample the wide
   // width like the standalone present does (else the wide pane is cropped back to 4:3).
-  { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
-    if (gpu_gpu_wide_engine(&g->core)) w = gpu_gpu_wide_engine_w(&g->core); }
+  { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
+    if (gpu_vk_wide_engine(&g->core)) w = gpu_vk_wide_engine_w(&g->core); }
   if (w < 1) w = 1; if (h < 1) h = 1;
   if (w > 1024) w = 1024; if (h > 512) h = 512;
-  gpu_gpu_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
+  gpu_vk_render_readback(&g->core, gpu_vram_ptr(&g->core), sx, sy, w, h, rgba);
   // Same per-frame finalize standalone runs in gpu_present (which SBS skips via diff_mode): resets the
   // batch AND this core's s_prim_order / s_seen3d / native depth table / s_frame. Without it those
   // accumulate across frames and corrupt cross-frame draw ordering (semi sea over the fisherman sprite).

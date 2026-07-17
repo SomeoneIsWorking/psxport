@@ -263,7 +263,7 @@ static inline bool isTier1Owned(const RqItem& it) {
 
 // ---- per-present frame dump (debug channel `fps60dump`) ----------------------------------------------
 // Writes what THIS present pass just put in s_vram_tex, exactly like REPL `shot` — same VRAM-readback
-// writer (gpu_gpu_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
+// writer (gpu_vk_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
 // filled the target (present_vk's PASS 1 for interp, PASS 2 for real) so the readback sees that pass's
 // content, not the next one's.
 void Fps60::dumpPresent(Core* core, bool interp) {
@@ -275,8 +275,8 @@ void Fps60::dumpPresent(Core* core, bool interp) {
   char path[192];
   snprintf(path, sizeof path, "scratch/framedump/f%06ld_%04d_%s.png", mFence, mDumpSeq, interp ? "interp" : "real");
   if (!Fs::ensureParentDirs(path)) return;
-  int gpu_gpu_enabled(void); void gpu_gpu_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
-  if (gpu_gpu_enabled()) gpu_gpu_shot(core, path); else gpu_native_shot(core, path);
+  int gpu_vk_enabled(void); void gpu_vk_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
+  if (gpu_vk_enabled()) gpu_vk_shot(core, path); else gpu_native_shot(core, path);
   mDumpSeq++;
 }
 

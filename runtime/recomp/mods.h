@@ -1,6 +1,6 @@
 #pragma once
 // class Mods — live PC-native mod toggles + params, PER-GAME state (member `Game::mods`).
-// The single source of truth shared by the renderer (gpu_gpu.cpp) and the RmlUi overlay
+// The single source of truth shared by the renderer (gpu_vk.cpp) and the RmlUi overlay
 // (rmlui_overlay.cpp): seeded by init() in the Game ctor (factory defaults, then the settings
 // file), mutated LIVE by the overlay, read every frame by the renderer. Per-instance so two
 // Games in one process (SBS) keep independent enhancement state — the harness pins both cores
@@ -15,7 +15,7 @@ public:
   int   ui = 0;        // overlay system enabled (always on): keeps the deferred SSAO/light infra built
   int   aspect = 0;    // ASPECT_4_3 / _16_9 / _21_9 / _AUTO (widescreen = wider FOV; not a present stretch)
   int   ires = 1;      // internal resolution scale: 0 = AUTO (derive from window height), 1..4 = fixed
-                       // Vanilla(1x)/X2/X3/X4. Capped by VRAM_W=1024 / current FB width (gpu_gpu_video_status).
+                       // Vanilla(1x)/X2/X3/X4. Capped by VRAM_W=1024 / current FB width (gpu_vk_video_status).
   int   ssao = 0;      // ambient occlusion
   int   light = 0;     // directional light
   int   shadows = 0;   // dynamic shadow mapping cast by the directional light (needs light on)

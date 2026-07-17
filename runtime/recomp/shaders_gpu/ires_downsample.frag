@@ -1,6 +1,6 @@
 #version 450
 // Plain NxN box downsample of the ires composite C -> native VRAM. USED ONLY for the headless `shot` /
-// VRAM-space readback (the WINDOW presents from C directly at high res — see gpu_gpu.cpp render_geom /
+// VRAM-space readback (the WINDOW presents from C directly at high res — see gpu_vk.cpp render_geom /
 // present, the present-at-high-res unification, USER 2026-07-16). Averages the full pc.n x pc.n source
 // box per destination native pixel in UNPACKED RGB (packed-1555 bytes can't be linearly averaged as raw
 // bytes — same reasoning as decode.frag/encode.frag), then re-packs. Viewport is set to the native

@@ -1,14 +1,14 @@
-// gpu_gpu_internal.h — the Vulkan present backend's per-instance render machine state.
+// gpu_vk_internal.h — the Vulkan present backend's per-instance render machine state.
 //
-// De-globalization R2 (2026-06-19): gpu_gpu.cpp's PER-FRAME mutable render state (batch counters, the
+// De-globalization R2 (2026-06-19): gpu_vk.cpp's PER-FRAME mutable render state (batch counters, the
 // current prim's depth/order, the semi-transparency overlap grouping, the dirty-VRAM region list, this
-// frame's present origin and the last-frame diag snapshots) now lives on a `GpuGpuState` instance owned
+// frame's present origin and the last-frame diag snapshots) now lives on a `GpuVkState` instance owned
 // by `Game` (game.h), not in file-scope globals — so two cores can render independently and be diffed.
-// The touching gpu_gpu functions are methods of GpuGpuState (field names keep their historical `s_`
+// The touching gpu_vk functions are methods of GpuVkState (field names keep their historical `s_`
 // spelling so the bodies are unchanged by the move); the public C-style API stays stable via thin
-// free-function wrappers reached through `core->game->gpu_gpu`.
+// free-function wrappers reached through `core->game->gpu_vk`.
 //
-// What STAYS file-scope SHARED in gpu_gpu.cpp (NOT here): the Vulkan device/swapchain/pipeline/buffer
+// What STAYS file-scope SHARED in gpu_vk.cpp (NOT here): the Vulkan device/swapchain/pipeline/buffer
 // HANDLES (one VK device per process — host-output singletons, not machine state) and config-caches.
 // NOT a public API; internal to the GPU TUs.
 #ifndef GPU_GPU_INTERNAL_H
@@ -16,8 +16,8 @@
 #include <stdint.h>
 
 struct Game;     // back-pointer target (game.h); only frame_via_fb() uses it (to reach s_seen3d via Core)
-struct Panel;    // gpu_gpu.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
-struct TexVtx;   // gpu_gpu.cpp: a textured vertex (defined there; pointer-only in the tex_emit signature)
+struct Panel;    // gpu_vk.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
+struct TexVtx;   // gpu_vk.cpp: a textured vertex (defined there; pointer-only in the tex_emit signature)
 struct Core;     // CPU/RAM handle (core.h)
 // SDL_GPU opaque handle types (per-Game render TARGETS live here now — see below). Forward decls only,
 // so this header still pulls no SDL headers.
@@ -25,31 +25,31 @@ struct SDL_GPUTexture;
 struct SDL_GPUBuffer;
 struct SDL_GPUTransferBuffer;
 
-// Capacities for the moved array members (also used by the gpu_gpu.cpp bodies via this header).
+// Capacities for the moved array members (also used by the gpu_vk.cpp bodies via this header).
 #define SEMI_GRP_CAP 2048
 #define DIRTY_CAP    4096
 
-// A SW-written VRAM region to mirror into the persistent VK image (gpu_gpu_dirty). Plain int rect — NOT
-// Vulkan's VkRect2D; named VkRect to keep the gpu_gpu.cpp bodies byte-unchanged.
+// A SW-written VRAM region to mirror into the persistent VK image (gpu_vk_dirty). Plain int rect — NOT
+// Vulkan's VkRect2D; named VkRect to keep the gpu_vk.cpp bodies byte-unchanged.
 struct VkRect { int x, y, w, h; };
 
-// Per-instance vertex-batch descriptor. The concrete TriVtx / TexVtx structs live in gpu_gpu.cpp;
+// Per-instance vertex-batch descriptor. The concrete TriVtx / TexVtx structs live in gpu_vk.cpp;
 // this header exposes only the count fields + opaque `void*` pointers to the CPU-side batches so the
 // batches themselves can be per-Core (SBS's two cores keep separate per-frame geometry).
 #define GGS_NUM_BLEND_MODES 4                   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
 
 // 2D order bands (bug #55 fix): content submitted via RQ_OM_2D_BG / RQ_OM_2D_FG (render_queue.cpp) is NOT
 // part of the 3D world — it must render at NATIVE VRAM resolution regardless of the live ires scale (see
-// gpu_gpu.cpp render_geom's band split). Kept as two bands, not one, because the engine's existing order
-// scheme (NATIVE_3D_MIN/MAX in gpu_gpu.cpp) already draws 2D_BG strictly BEHIND the 3D world and 2D_FG
+// gpu_vk.cpp render_geom's band split). Kept as two bands, not one, because the engine's existing order
+// scheme (NATIVE_3D_MIN/MAX in gpu_vk.cpp) already draws 2D_BG strictly BEHIND the 3D world and 2D_FG
 // strictly IN FRONT of it — the render_geom band order (2D_BG -> 3D -> 2D_FG) reproduces that without a
 // depth test shared across targets.
 #define GGS_2D_BG 0
 #define GGS_2D_FG 1
 #define GGS_NUM_2D_BANDS 2
 
-// ---- GpuGpuState — the VK backend's per-instance, per-frame render machine state + its methods --------
-struct GpuGpuState {
+// ---- GpuVkState — the VK backend's per-instance, per-frame render machine state + its methods --------
+struct GpuVkState {
   Game* game = nullptr;   // set by Game(); reached only by frame_via_fb() for s_seen3d (via game->core)
 
   // ---- per-Game GPU render TARGETS (deglobalized off GpuDevice 2026-07-10) --------------------------
@@ -78,7 +78,7 @@ struct GpuGpuState {
   // A SEPARATE vertex-buffer set per 2D band (GGS_2D_BG / GGS_2D_FG), so 2D content never shares the
   // 3D-world buffers above and never gets bound to the ires-scaled target: render_geom draws these bands
   // directly onto s_vram_tex/s_depth/s_color_rgba at native VRAM resolution, regardless of the live ires
-  // scale. Smaller capacity than the 3D buffers (TRI2D_CAP/TEX2D_CAP in gpu_gpu.cpp) — HUD/menu/2D-layer
+  // scale. Smaller capacity than the 3D buffers (TRI2D_CAP/TEX2D_CAP in gpu_vk.cpp) — HUD/menu/2D-layer
   // geometry per frame is a small fraction of the 3D world's.
   SDL_GPUBuffer*          s_tri2d_vbuf[GGS_NUM_2D_BANDS] = {};
   SDL_GPUBuffer*          s_tex2d_vbuf[GGS_NUM_2D_BANDS] = {};
@@ -87,7 +87,7 @@ struct GpuGpuState {
   SDL_GPUTransferBuffer*  s_tex2d_xfer[GGS_NUM_2D_BANDS] = {};
   SDL_GPUTransferBuffer*  s_semi2d_xfer[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES] = {};
 
-  // ---- ires (internal resolution) scaled 3D target — Pass 2, gpu_gpu.cpp render_geom -----------------
+  // ---- ires (internal resolution) scaled 3D target — Pass 2, gpu_vk.cpp render_geom -----------------
   // A SEPARATE, larger color+depth(+semi-blend-intermediate) target that the opaque/semi geometry passes
   // render into at `i`x the fixed VRAM canvas (1024*i x 512*i) when the live ires scale is >1, so 3D edges
   // rasterize at higher internal resolution; render_geom then downsamples ONLY the display sub-rect back
@@ -103,9 +103,9 @@ struct GpuGpuState {
   void ensure_ires_targets(int i);          // i<=1: tear down (no targets held); i>1: (re)build if changed
 
   // M2/M3 batch state (counters + the three host vertex buffers + the semi-overlap grouping + the dirty-
-  // VRAM list) moved OUT of GpuGpuState into the file-scope GeomBatch s_gb[2] in gpu_gpu.cpp, so the renderer
+  // VRAM list) moved OUT of GpuVkState into the file-scope GeomBatch s_gb[2] in gpu_vk.cpp, so the renderer
   // holds TWO independent batches and draws each into its own panel image (dual-view native-vs-PSX
-  // side-by-side, 2026-06-24). The touching methods bind them via BIND_BATCH() — see gpu_gpu.cpp.
+  // side-by-side, 2026-06-24). The touching methods bind them via BIND_BATCH() — see gpu_vk.cpp.
 
   // Current prim's depth/order (set by the gp0 tee before each draw). s_vd/s_vdn = per-vertex native depth
   // (NULL = fall back to the per-prim OT-order s_cur_ord/s_cur_ordn). ordn = the PSXPORT_SBS native channel.
@@ -134,11 +134,11 @@ struct GpuGpuState {
   // memory so per-Core / SBS isolation comes for free. Native present path reads ScreenFade::get(core).)
 
   // This frame's faithful display origin (for the LIGHT screen map) and the last-presented region
-  // (on-demand gpu_gpu_shot) + last frame's batched vertex counts (vkstats probe).
+  // (on-demand gpu_vk_shot) + last frame's batched vertex counts (vkstats probe).
   int s_present_sx = 0, s_present_sy = 0;
   // HIGH-RES PRESENT (ires>1): scale of the ires composite built THIS frame (render_geom sets it when
   // ires && has3d — the s_ires_color high-res composite is valid). 0 = present from native s_vram_tex
-  // (pure-2D frames / ires=1). Read by present() to pick the present source. See gpu_gpu.cpp.
+  // (pure-2D frames / ires=1). Read by present() to pick the present source. See gpu_vk.cpp.
   int s_present_ires = 0;
   int s_last_sx = 0, s_last_sy = 0, s_last_w = 320, s_last_h = 240;
   int s_dbg_tri = 0, s_dbg_tex = 0, s_dbg_semi = 0;
@@ -152,7 +152,7 @@ struct GpuGpuState {
   // Per-Core CPU vertex batches — filled during gp0_exec (draw_tri/draw_tritri/draw_semi below), read
   // by render_geom at grab_pane/present time, and RESET by frame_end. Two SBS cores each keep their
   // own batches so one core's per-frame geometry can't leak into the other's render (2026-07-03).
-  // Opaque void*: the concrete TriVtx/TexVtx layouts live in gpu_gpu.cpp — the touching methods cast
+  // Opaque void*: the concrete TriVtx/TexVtx layouts live in gpu_vk.cpp — the touching methods cast
   // internally. Buffers are heap-allocated on first use (create_3d) and freed at process exit.
   void* s_tri_buf = nullptr;
   int   s_tri_n   = 0;
@@ -163,7 +163,7 @@ struct GpuGpuState {
   // 2D (non-world) CPU-side batches — bug #55 fix. Same lifetime/reset contract as the 3D ones above
   // (lazily allocated, reset every frame_end); routed here instead of s_tri_buf/s_tex_buf/s_semi_buf
   // whenever the emitting draw call is NOT tagged world-3D (s_vd unset) — see draw_tri/draw_tritri/
-  // draw_semi + the ggs_2d_band() classifier in gpu_gpu.cpp.
+  // draw_semi + the ggs_2d_band() classifier in gpu_vk.cpp.
   void* s_tri2d_buf[GGS_NUM_2D_BANDS] = {};
   int   s_tri2d_n[GGS_NUM_2D_BANDS]   = {};
   void* s_tex2d_buf[GGS_NUM_2D_BANDS] = {};
@@ -176,7 +176,7 @@ struct GpuGpuState {
   int   s_dbg_tex_c  = 0;
   int   s_dbg_semi_c = 0;
 
-  // ---- methods (bodies in gpu_gpu.cpp; reached via core->game->gpu_gpu from the wrappers) ----
+  // ---- methods (bodies in gpu_vk.cpp; reached via core->game->gpu_vk from the wrappers) ----
   // public-API methods
   void set_vd(const float* d3);
   void set_vd_n(const float* d3);

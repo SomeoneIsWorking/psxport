@@ -51,7 +51,7 @@ static std::string rml_asset(const char* rel) {
 #include "mods.h"
 // g_fps60_on retired — read game->mods.fps60 (mods.h; #included above)
 extern "C" int cfg_on(const char* name);    // cfg.c
-void gpu_gpu_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
+void gpu_vk_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
 
 // ---- typed accessors for the void* handles stored on the class ----------------------------------
 // The header keeps RmlUi types out (so C callers can include it). Impl-side helpers cast back.
@@ -182,7 +182,7 @@ void RmlOverlay::refreshReadouts() {
     Rml::ElementDocument* d = doc_(mDoc);
     if (!d) return;
     int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 4;
-    gpu_gpu_video_status(game ? &game->core : nullptr, &nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
+    gpu_vk_video_status(game ? &game->core : nullptr, &nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
     char buf[192];
     if (Rml::Element* e = d->GetElementById("video_readout")) {
         snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
@@ -387,7 +387,7 @@ void RmlOverlay::shutdown() {
 void RmlOverlay::event(const SDL_Event* e) {
     if (!mInited || !e) return;
     Rml::Context* c = ctx_(mCtx);
-    // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_gpu.cpp). In options-mode the
+    // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_vk.cpp). In options-mode the
     // game owns visibility (Circle/Triangle), so don't fight it. (SDL3 event/key field names.)
     if (!mOptionsMode && e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat &&
         e->key.scancode == SDL_SCANCODE_ESCAPE) {

@@ -1,6 +1,6 @@
 #version 450
 // Pack the semi-blend intermediate's float RGBA back into the PSX 1555 VRAM word (2026-07-01 dark-outline
-// fix, gpu_gpu.cpp render_geom). Runs once after the real-HW-blend semi pass, so downstream consumers
+// fix, gpu_vk.cpp render_geom). Runs once after the real-HW-blend semi pass, so downstream consumers
 // (present, shot/vkvram readback, provat, SBS) keep seeing the ordinary packed VRAM they always have.
 // STP is written 0 (opaque) — nothing this same frame re-reads this region as a semi TEXTURE source (the
 // semi pass samples the ORIGINAL packed atlas via its own `u_vram`, never this encoded output).

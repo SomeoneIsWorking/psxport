@@ -1,7 +1,7 @@
 #ifndef PSXPORT_RMLUI_RENDER_GPU_H
 #define PSXPORT_RMLUI_RENDER_GPU_H
 // RmlUi render interface on SDL_GPU (replaces the former Vulkan RmlRenderInterfaceVk). Draws the menu's
-// 2D textured/coloured geometry into the port's existing SDL_GPU present render pass: gpu_gpu.cpp's
+// 2D textured/coloured geometry into the port's existing SDL_GPU present render pass: gpu_vk.cpp's
 // present() hands BeginFrame() the live command buffer + render pass + window size, RmlUi's
 // Context::Render() then calls RenderGeometry which records indexed draws into that pass. Geometry and
 // font textures upload through one-shot SDL_GPU copy command buffers (fence-waited) so they are ready

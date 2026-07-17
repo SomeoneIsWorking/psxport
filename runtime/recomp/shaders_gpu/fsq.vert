@@ -1,6 +1,6 @@
 #version 450
 // SDL_GPU fullscreen triangle targeting an OFFSCREEN VRAM-space render target (decode/encode passes for
-// the real-HW-blend semi path, 2026-07-01 dark-outline fix — see gpu_gpu.cpp render_geom). Shared by
+// the real-HW-blend semi path, 2026-07-01 dark-outline fix — see gpu_vk.cpp render_geom). Shared by
 // decode.frag (1555 -> float RGBA) and encode.frag (float RGBA -> 1555): both read/write the SAME
 // VRAM_W x VRAM_H space as tri.vert/tritex.vert, so v_uv.y=0 must land at NDC+1 (row 0), matching those
 // shaders' "offscreen targets are Y-up" convention — NOT the present/image vert's swapchain flip.

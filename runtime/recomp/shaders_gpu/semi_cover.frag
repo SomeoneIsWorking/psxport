@@ -2,7 +2,7 @@
 // bug #55 (part 3 — semi coverage stamp): a DEPTH-ONLY pass (no color target) that re-rasterizes the SAME
 // semi/translucent vertex buckets Pass B (trisemi_hw.frag) just blended, purely to WRITE depth wherever a
 // real (non-discarded) semi fragment lands. Pass B itself is test-only / depth_write=false (so multiple
-// overlapping semi quads can all blend against each other, gpu_gpu.cpp's make_semi_pipeline) — real-HW-
+// overlapping semi quads can all blend against each other, gpu_vk.cpp's make_semi_pipeline) — real-HW-
 // blend semi content therefore leaves NO trace in the depth buffer, which is exactly the signal
 // ires_downsample.frag's coverage gate (u_depth) uses to decide "did the 3D pass touch this pixel". A
 // scene whose visible 3D content is mostly/entirely semi (e.g. the paused-game "ghosted" world behind the
@@ -12,7 +12,7 @@
 // discard conditions from trisemi_hw.frag (draw-area clip + fully-transparent texel) — never SHOULD emit a
 // wrong color since it emits none; depth_write=true with the SAME GREATER_OR_EQUAL compare as Pass A marks
 // the depth buffer's max ord at any pixel a real semi fragment covers, which downstream composite-back
-// reads exactly like an opaque hit. Run in gpu_gpu.cpp's render_geom right after Pass B, one draw call per
+// reads exactly like an opaque hit. Run in gpu_vk.cpp's render_geom right after Pass B, one draw call per
 // non-empty blend-mode bucket, sharing the SAME depth target Pass A cleared (so an opaque write already
 // there is preserved — GREATER_OR_EQUAL only overwrites with an equal-or-larger ord, and this pass's ord is
 // the SAME per-vertex value Pass B used, so ties simply re-write the identical value).

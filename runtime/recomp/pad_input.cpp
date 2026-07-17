@@ -76,7 +76,7 @@ void Pad::fillBuffer(uint8_t* buf) {
 // Up to PAD_MAX_GC simultaneously-open controllers (Pad members); hotswap-aware (DEVICEADDED/REMOVED
 // handled by a per-frame rescan in rescanControllers() so NO other file needs editing — see pollSdl).
 
-// Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_gpu.cpp
+// Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens in gpu_vk.cpp
 // (not owned here); the gamepad subsystem is independent, so we add it on first use. Idempotent.
 void Pad::ensureGcSubsystem() {
   if (mGcSubInit) return;
@@ -87,7 +87,7 @@ void Pad::ensureGcSubsystem() {
 
 // HOTSWAP: open any newly-connected controllers and drop any that vanished. Self-contained per-frame
 // rescan so we don't depend on SDL_CONTROLLERDEVICEADDED/REMOVED events reaching us through an event
-// pump we don't own (the pump lives in gpu_gpu.cpp). Cheap: SDL_NumJoysticks is a count, and we only
+// pump we don't own (the pump lives in gpu_vk.cpp). Cheap: SDL_NumJoysticks is a count, and we only
 // call SDL_GameControllerOpen for indices we haven't already opened.
 void Pad::rescanControllers() {
   // ESCAPE HATCH (Linux WASD-dead): PSXPORT_PAD_NOPAD=1 ignores ALL game controllers and uses the
@@ -216,7 +216,7 @@ void Pad::pollSdl() {
   // mask (additive with the keyboard, so both work simultaneously). Self-contained — no dependency on
   // SDL_CONTROLLERDEVICE* events from the (unowned) event pump.
   //
-  // SDL_GameControllerUpdate() FIRST: the joystick/controller event pump lives in another TU (gpu_gpu's
+  // SDL_GameControllerUpdate() FIRST: the joystick/controller event pump lives in another TU (gpu_vk's
   // poll_quit) and our SDL_PumpEvents() above only refreshes controller state if the GC subsystem was
   // already up at pump time. The subsystem is lazily initialized inside pad_rescan_controllers(), so on
   // the frames right after a controller is opened the button/axis reads could be stale (Linux: stale
@@ -316,7 +316,7 @@ void Pad::driveRelease() { repl_on = 0; repl_hold = PAD_NONE; repl_tap = PAD_NON
 
 void Pad::serviceFrame() {
   Core* c = &game->core;
-  int have_window = gpu_windowed();              // a live on-screen window is up (gpu_gpu.cpp)
+  int have_window = gpu_windowed();              // a live on-screen window is up (gpu_vk.cpp)
 #ifdef PSXPORT_SDL
   // Under SBS, the harness polls SDL ONCE per frame and feeds the SAME mask into both cores'
   // Pad::buttons via feedInput() (sbs.cpp). Skipping our own pollSdl here keeps the two cores'
@@ -433,9 +433,9 @@ void Pad::serviceFrame() {
           shot_at[shot_n++] = (uint32_t)strtoul(t, 0, 0); }
     }
     for (int i = 0; i < shot_n; i++) if (shot_at[i] == rec_fc) {
-      void gpu_gpu_shot(Core*, const char*); char p[96];
+      void gpu_vk_shot(Core*, const char*); char p[96];
       snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
-      gpu_gpu_shot(c, p);
+      gpu_vk_shot(c, p);
       fprintf(stderr, "[padrec] shot at replay-frame %u -> %s\n", rec_fc, p);
     }
     // PSXPORT_PAD_DUMP_AT=f0,f1,... : dump 2MB guest RAM (+.spad) at these REPLAY frames to

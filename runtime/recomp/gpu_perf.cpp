@@ -1,6 +1,6 @@
 // gpu_perf.cpp — PORTABLE per-frame CPU phase / frame-time profiler for the native port.
 // ----------------------------------------------------------------------------------------------------
-// Companion to the `vkprof` channel in gpu_gpu.cpp (which times the GPU present side: VRAM upload, the
+// Companion to the `vkprof` channel in gpu_vk.cpp (which times the GPU present side: VRAM upload, the
 // VK render pass via timestamp queries, and prim counts). This module fills the gap vkprof can't see:
 // the per-frame CPU phase breakdown of the GUEST-LOGIC half of the frame, plus the overall
 // present-to-present frame time, so "CPU-bound vs GPU-bound" is answerable directly.

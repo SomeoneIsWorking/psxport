@@ -39,9 +39,9 @@ The two video selectors:
 - **`ires`** — internal-resolution scale, ONE merged selector: `0`=Auto (derive from window height),
   `1`=Vanilla (1x), `2`=X2, `3`=X3, `4`=X4 (cap is dynamic — see below). Overlay row: "Internal
   Resolution". (Replaced the old two-row `ires` 1..3 + `ires_auto` bool; a legacy file carrying
-  `ires_auto=1` is migrated to `ires=0` on load.) **Consumed by the raster** (gpu_gpu.cpp render_geom):
+  `ires_auto=1` is migrated to `ires=0` on load.) **Consumed by the raster** (gpu_vk.cpp render_geom):
   at `i>1` ONLY the 3D-WORLD band (`RQ_OM_DEPTH` content) renders into a SEPARATE `VRAM_W*i x VRAM_H*i`
-  target (`GpuGpuState::s_ires_color/s_ires_depth/s_ires_rgba`, lazily built + torn-down/rebuilt on a live
+  target (`GpuVkState::s_ires_color/s_ires_depth/s_ires_rgba`, lazily built + torn-down/rebuilt on a live
   toggle by `ensure_ires_targets`), then a box-filter shader (`ires_downsample.frag`, NxN texel average,
   NOT a plain linear blit — that aliased into confetti noise on grass/foliage) downsamples ONLY the
   display sub-rect back into the fixed 1024x512 VRAM texture, per-sub-texel coverage-gated (bug #55) so
@@ -406,13 +406,13 @@ Z-FIGHT diagnostics + fix knob (coplanar barrel/decoration surfaces; see docs/fi
 - `PSXPORT_ZBIAS=<f>` — tunes the SHIPPED paint-order depth-tiebreak unit (default 4e-7; 0 disables the
   tiebreak). The fix is ON by default (this is a magnitude knob, not a behavior A/B gate); larger values
   resolve more coplanar ties but risk overrunning genuine world depth separations (span = unit × prim
-  count, capped at 1.5e-3). (gpu_gpu.cpp `gpu_zbias_unit`.)
+  count, capped at 1.5e-3). (gpu_vk.cpp `gpu_zbias_unit`.)
 
 `preseqobj` (per-object fps60 motion tracker, `RenderQueue::emitItem` in game/render/render_queue.cpp) —
 when this channel is on AND a REPL `preseq <N>` present-sequence capture is armed, every render-queue emit
 pass ALSO logs one line PER emitted RqItem to stderr:
 `[preseqobj] p<presentIdx> key=<dbg_node> layer=<layer> x=<xs0> y=<ys0>`. `presentIdx` is the
-present frame the pass will dump (`gpu_gpu_preseq_present_index`), so lines are keyed to the exact present
+present frame the pass will dump (`gpu_vk_preseq_present_index`), so lines are keyed to the exact present
 (both fps60 present passes — the interpolated in-between AND the real frame — emit through here and log
 under their own index). `key` is the object identity (dbg_node — the same field `Fps60::matchAndLerp`
 keys its provenance match on; 0 = un-keyed 2D/HUD prim). Cost is zero outside
@@ -425,7 +425,7 @@ the instrument the operator runs to verify the fps60 per-object work; see docs/f
 `fps60dump` (per-present frame dump, `Fps60::dumpPresent` in game/render/fps60.cpp, called from
 `Fps60::present_vk` right after each present pass) — when on, writes EVERY presented frame (the
 interpolated in-between AND the real frame) to `scratch/framedump/f<logicframe>_<seq>_<real|interp>.png`,
-via the same VRAM-readback writer REPL `shot` uses (`gpu_gpu_shot`/`gpu_native_shot` — no new pixel path).
+via the same VRAM-readback writer REPL `shot` uses (`gpu_vk_shot`/`gpu_native_shot` — no new pixel path).
 Capped at `Fps60::kDumpMax` (600) files so a long headless run can't fill disk; toggling the channel off
 then back on (REPL `debug fps60dump`) resets the cap. Feed the sequence to `scratch/check_stage2.py` (or
 a similar centroid/pixel-diff script) to check whether interp frames sit BETWEEN their real neighbors
@@ -449,7 +449,7 @@ or level — they can't be a bare channel:
   toggle live: wide/ires/fps60/ssao/light; ` or F1 to hide; forces native-depth + deferred infra on so
   the toggles work live; seeds g_mods in mods.c), `ATTACH`, `PROJPROBE`,
   `CULL`/`CULL_FAR`/`CULL_FOV`, `*_RECOMP` (`OT_/LZ_/GEOM_/RECOMP_OBJWALK`), `TRANSPLANT`.
-- **SDL_GPU renderer (gpu_gpu.cpp):** `GPU_TRACE` (per-present src-VRAM occupancy + sampled disp region +
+- **SDL_GPU renderer (gpu_vk.cpp):** `GPU_TRACE` (per-present src-VRAM occupancy + sampled disp region +
   readback nonzero count), `GPU_DEBUG` (enable the SDL_GPU device validation layer — slows pipeline
   compile, can trip the boot watchdog; raise `WATCHDOG_BOOT` when using it), `GPU_SELFTEST` (headless
   renderer regression test: render a known VRAM pattern through the present pipeline into an offscreen

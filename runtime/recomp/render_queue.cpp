@@ -5,7 +5,7 @@
 #include "game.h"
 #include "cfg.h"
 #include "mods.h"
-#include "gpu_gpu.h"
+#include "gpu_vk.h"
 #include <algorithm>
 #include <unordered_map>
 #include <vector>
@@ -21,7 +21,7 @@ static inline int objid_quads_on(Core* c)   { const Mods& m = c->game->mods; ret
 static inline int objid_objects_on(Core* c) { const Mods& m = c->game->mods; return m.debug_objects || m.debug_ids || cfg_dbg("objid"); }
 static inline int objid_on(Core* c) { return objid_quads_on(c) || objid_objects_on(c); }
 
-int  gpu_gpu_enabled(void);        // gpu_gpu.cpp — Core*-less device-singleton query (declared at use)
+int  gpu_vk_enabled(void);        // gpu_vk.cpp — Core*-less device-singleton query (declared at use)
 
 // ---- Debug OBJECT-ID overlay (REPL `debug objid`) -------------------------------------------------
 // Draw each rendered object's engine identity ON the object, in the live game, so the user can point at
@@ -260,7 +260,7 @@ void RenderQueue::zfightScan(Core* core) {
                           if (eps <= 0.f) eps = 6e-5f;
                           const char* f = cfg_str("PSXPORT_ZFIGHT_FRAME"); scan_from = f ? atoi(f) : 0; } }
   if (eps < 0.f) return;   // -2 = disabled
-  float gpu_zbias_unit();   // gpu_gpu.cpp — the shipped paint-order bias unit (PSXPORT_ZBIAS), modeled here
+  float gpu_zbias_unit();   // gpu_vk.cpp — the shipped paint-order bias unit (PSXPORT_ZBIAS), modeled here
   GpuState& s = core->game->gpu;
   if ((int)s.s_frame < scan_from) return;
   const int W = s.s_disp_w, H = s.s_disp_h, DX = s.s_disp_x, DY = s.s_disp_y;
@@ -390,9 +390,9 @@ void RenderQueue::flush(Core* core) {
 // lives ONLY here; both the inline draw and the engine render-queue flush funnel through it. set_order
 // uses the live GpuState counter so the order value reflects actual emit sequence (the 2D-fallback/
 // faithful-depth band); real per-vertex depth (set_vd) drives true occlusion for world prims.
-int gpu_gpu_enabled(void);   // gpu_gpu.cpp — Core*-less device-singleton query (declared at use; see gpu_gpu.h)
+int gpu_vk_enabled(void);   // gpu_vk.cpp — Core*-less device-singleton query (declared at use; see gpu_vk.h)
 void RenderQueue::emitItem(Core* core, const RqItem* it) {
-  if (!gpu_gpu_enabled()) return;
+  if (!gpu_vk_enabled()) return;
   // preseqobj (per-object motion tracker, tools/preseqobj_check.py): when a `preseq` capture is armed AND
   // the `preseqobj` channel is on, log one line per emitted RqItem keyed to the present index this pass
   // will dump. present index >= 0 only while armed, so the cfg_dbg scan is skipped entirely otherwise —
@@ -402,7 +402,7 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   // (snapping) motion. Both 60fps present passes (interp + real) emit through here, so their prims are
   // logged under their own present index — the interp pass is exactly what matchAndLerp's match quality
   // determines, so this instrument doubles as its match-quality debugger (docs/fps60-rework.md REDIRECT).
-  { int pi = gpu_gpu_preseq_present_index(core);
+  { int pi = gpu_vk_preseq_present_index(core);
     if (pi >= 0 && cfg_dbg("preseqobj"))
       // scene=1 (== has_xyf): a float-projected display-pass world prim — rebuilt at the interp present
       // by tier1Render, correct-by-construction; the tracker counts but does not judge these (its NN/
@@ -435,11 +435,11 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
     if (nh && it->layer == RQ_HUD) return; }
   // Shadow geometry is part of the frame: re-push this prim's view-space verts to the shadow VBO on EVERY
   // emit, so the shadow map rebuilds identically on each 60fps present pass (no keep_shadow side-channel).
-  // gpu_gpu_shadow_push_tri no-ops when shadows are off; verts are the B (un-interpolated) positions.
+  // gpu_vk_shadow_push_tri no-ops when shadows are off; verts are the B (un-interpolated) positions.
   if (it->sh_cast) {
     float v[4][3]; for (int k = 0; k < 4; k++) { v[k][0]=it->sh_vx[k]; v[k][1]=it->sh_vy[k]; v[k][2]=it->sh_vz[k]; }
-    gpu_gpu_shadow_push_tri(core, v[0], v[1], v[2]);
-    if ((it->nv ? it->nv : 4) == 4) gpu_gpu_shadow_push_tri(core, v[1], v[2], v[3]);
+    gpu_vk_shadow_push_tri(core, v[0], v[1], v[2]);
+    if ((it->nv ? it->nv : 4) == 4) gpu_vk_shadow_push_tri(core, v[1], v[2], v[3]);
   }
   const int* xs = it->xs; const int* ys = it->ys; const int* us = it->us; const int* vs = it->vs;
   const unsigned char* rs = it->rs; const unsigned char* gs = it->gs; const unsigned char* bs = it->bs;
@@ -479,43 +479,43 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
           d0, d1, d2, interp_ord, d32,
           rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } } }
   unsigned ord = s.s_prim_order++;
-  gpu_gpu_set_order(core, ord);
+  gpu_vk_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
   // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).
   int om = it->order_mode;
-  if      (om == RQ_OM_2D_BG) gpu_gpu_set_order_2d_bg(core, ord);
-  else if (om == RQ_OM_2D_FG) gpu_gpu_set_order_2d(core, ord);
-  #define RQ_SETVD(p) do { if (om == RQ_OM_DEPTH) gpu_gpu_set_vd(core, (p)); } while (0)
+  if      (om == RQ_OM_2D_BG) gpu_vk_set_order_2d_bg(core, ord);
+  else if (om == RQ_OM_2D_FG) gpu_vk_set_order_2d(core, ord);
+  #define RQ_SETVD(p) do { if (om == RQ_OM_DEPTH) gpu_vk_set_vd(core, (p)); } while (0)
   // Vertex smoothing (#15): for the world path, hand the rasterizer the sub-pixel float screen XY. The base
   // pointer maps to vertex [0]; the second triangle of a quad is emitted from &xs[1], so it gets &xsf[1].
-  // gpu_gpu_set_order (inside set_order, fired per draw via the *_set_vd/order path) clears s_xf, so a NULL
+  // gpu_vk_set_order (inside set_order, fired per draw via the *_set_vd/order path) clears s_xf, so a NULL
   // here for non-world prims leaves them snapping to the integer xs/ys. set after set_order, before draw.
   const float* xsf = it->has_xyf ? it->xsf : nullptr;
   const float* ysf = it->has_xyf ? it->ysf : nullptr;
-  #define RQ_SETXYF(o) do { gpu_gpu_set_xyf(core, xsf ? xsf+(o) : nullptr, ysf ? ysf+(o) : nullptr); } while (0)
+  #define RQ_SETXYF(o) do { gpu_vk_set_xyf(core, xsf ? xsf+(o) : nullptr, ysf ? ysf+(o) : nullptr); } while (0)
   if (it->semi) {
     int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
     for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-    gpu_gpu_semi_group(core, bx0, by0, bx1, by1);
+    gpu_vk_semi_group(core, bx0, by0, bx1, by1);
     RQ_SETVD(depth); RQ_SETXYF(0);
-    gpu_gpu_draw_semi(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
+    gpu_vk_draw_semi(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
                      it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                      it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend);
     if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
-      gpu_gpu_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+      gpu_vk_draw_semi(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
                        it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend); }
   } else {
     RQ_SETVD(depth); RQ_SETXYF(0);
-    gpu_gpu_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
+    gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
                        it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
     if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
-      gpu_gpu_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+      gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
                          it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                          it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1); }
   }
-  gpu_gpu_set_xyf(core, nullptr, nullptr);   // clear so the next prim (if not world) snaps to integer xs/ys
+  gpu_vk_set_xyf(core, nullptr, nullptr);   // clear so the next prim (if not world) snaps to integer xs/ys
   #undef RQ_SETVD
   #undef RQ_SETXYF
 }
@@ -544,10 +544,10 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // apply ws_2d_local_x with the #38/#52 fill subtleties) and backdropRender's REAL wide tiles
   // (kBackdropDbgNode via the diag scope). 3D (RQ_OM_DEPTH) never enters. 4:3: margin==0, no-op.
   int wxs[4]; float wxsf[4];
-  { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
-    if (order_mode != RQ_OM_DEPTH && gpu_gpu_wide_engine(core) && !core->game->gpu.s_ot_2d_only &&
+  { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
+    if (order_mode != RQ_OM_DEPTH && gpu_vk_wide_engine(core) && !core->game->gpu.s_ot_2d_only &&
         core->rsub.diag.currentNode() != kBackdropDbgNode) {
-      const int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
+      const int ww = gpu_vk_wide_engine_w(core), margin = (ww - 320) / 2;
       if (margin > 0) {
         // RQ_BACKGROUND art on widescreen: only a UNIFORM SOLID FILL — flat vertex colour AND
         // untextured (all-zero UVs) — STRETCHES to fill the wide FB (stretching a flat colour is
@@ -607,7 +607,7 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
                                 const int* u, const int* v, const unsigned char* r, const unsigned char* g,
                                 const unsigned char* b, uint16_t tp, uint16_t clut, int semi,
                                 const float (*sv)[3]) {
-  if (!gpu_gpu_enabled()) return;
+  if (!gpu_vk_enabled()) return;
   core->rsub.stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
   if (cfg_dbg("silbbox")) { static int once=0; if (!once++) cfg_logf("silbbox", "s_off=(%d,%d)", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
@@ -635,13 +635,13 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
 }
 
 // 2D quad enqueue (HUD / overlay / background) — funnels through emitOrQueue so a 2D drawable is a
-// queued RqItem (part of THE FRAME), not a direct gpu_gpu_draw_tritri that lands on only one 60fps pass.
+// queued RqItem (part of THE FRAME), not a direct gpu_vk_draw_tritri that lands on only one 60fps pass.
 void RenderQueue::push2dQuad(int layer, int order_2d_fg,
                              const int* xs, const int* ys, const int* us, const int* vs,
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
                              int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1) {
-  if (!gpu_gpu_enabled()) return;
+  if (!gpu_vk_enabled()) return;
   Core* core = &game->core;
   int om = order_2d_fg ? RQ_OM_2D_FG : RQ_OM_2D_BG;
   emitOrQueue(core, 1, layer, om, 4, 0, raw,

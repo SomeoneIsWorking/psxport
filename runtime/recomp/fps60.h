@@ -161,7 +161,7 @@ struct Fps60 {
   // Writes one PNG per PRESENTED frame (real AND interp) to scratch/framedump/, so a Python script can
   // walk the sequence and check whether interpolated frames sit between their neighboring real frames
   // (fps60 correctness) instead of teleporting. Reuses the same VRAM-readback writer as REPL `shot`
-  // (gpu_gpu_shot / gpu_native_shot) — no new pixel-readback path. Capped at kDumpMax files so an
+  // (gpu_vk_shot / gpu_native_shot) — no new pixel-readback path. Capped at kDumpMax files so an
   // unbounded run can't fill disk; toggling the channel back on resets the cap.
   static constexpr int kDumpMax = 600;
   int mDumpSeq = 0;

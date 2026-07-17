@@ -6,7 +6,7 @@
 #include <cstring>
 #include <cstdio>
 
-#include "gpu_gpu_shaders.h"   // generated SPIR-V: spv_g_rml_vert / spv_g_rml_frag
+#include "gpu_vk_shaders.h"   // generated SPIR-V: spv_g_rml_vert / spv_g_rml_frag
 
 namespace {
 struct RmlUbo { float uTranslate[2]; float uViewport[2]; };

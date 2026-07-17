@@ -25,8 +25,8 @@
 #include "native_fmv.h"            // class Fmv — native .STR movie player
 #include "native_stub.h"           // class BootStub — SCEA splash + MAIN.EXE LoadExec hand-off
 #include "gpu_native_internal.h"   // GpuState — the native GPU's per-instance render machine state
-#include "gpu_gpu_internal.h"       // GpuGpuState — the Vulkan present backend's per-instance render state
-#include "gpu_gpu_device.h"        // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
+#include "gpu_vk_internal.h"       // GpuVkState — the Vulkan present backend's per-instance render state
+#include "gpu_vk_device.h"        // class GpuDevice — the SDL3 GPU host window/device (first Game claims it)
 #include "fps60.h"        // Fps60 — the interpolated-60fps tier's per-instance state
 #include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
 #include "repl.h"                  // class Repl — REPL driver + auto-drive request state
@@ -70,7 +70,7 @@ public:
   BootStub    stub;  // SCEA splash + MAIN.EXE LoadExec hand-off (native_stub.cpp)
   PcScheduler pcSched;   // native cooperative task scheduler (game/core/pc_scheduler.cpp)
   GpuState    gpu;   // native GPU: VRAM + draw/display state + the rasterizer (gpu_native.cpp)
-  GpuGpuState  gpu_gpu;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_gpu.cpp)
+  GpuVkState  gpu_vk;// Vulkan present backend: per-frame batch/depth/dirty/present state (gpu_vk.cpp)
   GpuDevice   gpu_dev; // SDL3 GPU host device/window/pipelines (ONE per process; first Game claims it)
   RenderQueue rq;    // engine-owned render queue: the single draw-ORDER authority (render_queue.cpp)
   // Tier-1 capture-target redirect (docs/fps60-rework.md "Object-tier attempt ... Why Tier 1 isn't
@@ -172,10 +172,10 @@ public:
   // the `b` core (terrain -> recomp super-call) so an a-vs-b core.ram diff isolates submit_terrain.
   int neutralize_terrain = 0;
 
-  // core.game / gpu.game / gpu_gpu.game are back-pointers so a subsystem holding one of those handles can
-  // reach the rest of the machine (e.g. blit_src -> gpu_gpu via gpu.game; frame_via_fb -> s_seen3d via
-  // gpu_gpu.game->core). Set once here so no file-scope global is needed.
-  Game() { core.game = this; gpu.game = this; gpu_gpu.game = this; timing.game = this; pad.game = this;
+  // core.game / gpu.game / gpu_vk.game are back-pointers so a subsystem holding one of those handles can
+  // reach the rest of the machine (e.g. blit_src -> gpu_vk via gpu.game; frame_via_fb -> s_seen3d via
+  // gpu_vk.game->core). Set once here so no file-scope global is needed.
+  Game() { core.game = this; gpu.game = this; gpu_vk.game = this; timing.game = this; pad.game = this;
            fps60.game = this;
            hle.game = this; rq.game = this; pcSched.game = this; cd.game = this; fmv.game = this;
            stub.game = this;

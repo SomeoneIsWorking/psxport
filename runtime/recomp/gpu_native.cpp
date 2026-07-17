@@ -1,6 +1,6 @@
 #include "core.h"
 #include "game.h"
-#include "gpu_gpu.h"   // Core*-threaded VK present API (de-globalized R2)
+#include "gpu_vk.h"   // Core*-threaded VK present API (de-globalized R2)
 #include "c_subsys.h"
 // Native GPU — PC rendering of the game's own draw primitives (NOT PSX-GPU emulation).
 //
@@ -30,7 +30,7 @@
 // VRAM_W/VRAM_H and vram() now live in gpu_native_internal.h
 
 // ---- Draw state (set by GP0 env commands E1..E6) ------------------------------------
-int gpu_gpu_enabled(void);                                    // gpu_gpu.c (declared early for the gp0 tee)
+int gpu_vk_enabled(void);                                    // gpu_vk.c (declared early for the gp0 tee)
 
 // ---- Display control (GP1) ----------------------------------------------------------
 
@@ -222,7 +222,7 @@ void gpu_native_cover_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gp
 // is stable (no straddle flip) and matches real HUD intent: corner/edge HUD hugs its side, a centered
 // prompt/meter stays centered with the world. The whole element shifts by one offset (its size and
 // internal layout are preserved exactly — no stretch), so multi-vertex prims stay rigid.
-int gpu_gpu_wide_engine_w(Core*);
+int gpu_vk_wide_engine_w(Core*);
 // 2D X mapping for widescreen. Unlike the old VK renderer, the SDL_GPU tritex.vert does NOT add a
 // per-vertex fb_x0=margin (there is no scaled scratch FB in Pass 1 — geometry is in absolute VRAM px).
 // So this mapping must place 2D prims into the wide [0,ww) band itself:
@@ -232,7 +232,7 @@ int gpu_gpu_wide_engine_w(Core*);
 //              margin+320] band (matches 4:3, just centered). (Was identity, which left HUD left-anchored.)
 // In 4:3 margin==0 -> backdrop x*320/320=x, HUD x+0=x — byte-identical.
 static int ws_2d_local_x(Core* core, int x, int is_bg) {
-  int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
+  int ww = gpu_vk_wide_engine_w(core), margin = (ww - 320) / 2;
   if (margin <= 0) return x;                          // 4:3 -> no-op
   if (is_bg) return x * ww / 320;                     // backdrop: stretch to fill [0,ww)
   return x + margin;                                  // HUD: center the native-320 element in the wide FB
@@ -591,7 +591,7 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   // SW s_vram. The VK opaque pass samples a full s_vram snapshot so it still saw them, but the VK
   // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
   // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
-  if (gpu_gpu_enabled()) gpu_gpu_dirty(core, x, y, w, h);
+  if (gpu_vk_enabled()) gpu_vk_dirty(core, x, y, w, h);
   cfg_logf("upload", "f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X", s_frame, x, y, w, h, src);
 }
 
@@ -866,7 +866,7 @@ void GpuState::gp0_exec(Core* core) {
       // overlay) drawn as polys rather than sprites. The 3D world widens via the projection (OFX); these
       // 2D polys would stay left-anchored at 320 (the banner gets cut). Widen them like the 2D sprites:
       // scale the 2D plane uniformly to the wide width about the framebuffer origin so they fill the frame.
-      { int gpu_gpu_wide_engine(Core*);
+      { int gpu_vk_wide_engine(Core*);
         // #38: stretch-fill uses PROVENANCE only (node_is_bg), not `bg`'s coverage heuristic — a
         // large screen-space panel (weapon carousel) can exceed bg_2d's >=3/4-screen threshold and get
         // mis-tagged backdrop, bleeding it to the wide-screen edges. `bg` itself (RQ_BACKGROUND depth
@@ -876,7 +876,7 @@ void GpuState::gp0_exec(Core* core) {
         // 2D widen on gameplay frames (3D last frame) OR a full-screen 2D backdrop redraw last frame (#54:
         // a pure-2D screen like the title menu never sets s_prev_had3d, but its own backdrop is just as
         // legitimate a "this frame repaints the whole width" signal).
-        if (!is3d && gpu_gpu_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d))
+        if (!is3d && gpu_vk_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d))
           for (int i = 0; i < nv; i++) xs[i] = ws_2d_local_x(core, xs[i], fill); }   // engine-owned 2D layout
       // DIAG PSXPORT_PAINTER=1: force PURE PSX OT painter order (is3d=0 / no bg split) for EVERY prim, so the
       // frame composites exactly as the PSX ordering table would. Render the field with and without this and
@@ -927,28 +927,28 @@ void GpuState::gp0_exec(Core* core) {
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         }
       } else {
-      gpu_gpu_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
+      gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       if (!is3d) {                               // 2D band select
-        if (bg) gpu_gpu_set_order_2d_bg(core, ord_idx); else gpu_gpu_set_order_2d(core, ord_idx);
+        if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);
       }
-      #define SBS_OR_ND_SETVD(p) do { if (is3d) gpu_gpu_set_vd(core, p); } while (0)
+      #define SBS_OR_ND_SETVD(p) do { if (is3d) gpu_vk_set_vd(core, p); } while (0)
       if (semi) {
         {   // OT-order grouping (overlap -> fresh fb snapshot)
           int bx0=xs[0],by0=ys[0],bx1=xs[0],by1=ys[0];
           for (int i=1;i<nv;i++){ if(xs[i]<bx0)bx0=xs[i]; if(xs[i]>bx1)bx1=xs[i]; if(ys[i]<by0)by0=ys[i]; if(ys[i]>by1)by1=ys[i]; }
-          gpu_gpu_semi_group(core, bx0, by0, bx1, by1); }
+          gpu_vk_semi_group(core, bx0, by0, bx1, by1); }
         SBS_OR_ND_SETVD(dep);
-        gpu_gpu_draw_semi(core, xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_semi(core, xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
-          gpu_gpu_draw_semi(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+          gpu_vk_draw_semi(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend); }
       } else {
         SBS_OR_ND_SETVD(dep);
-        gpu_gpu_draw_tritri(core, xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri(core, xs, ys, us, vs, rs, gs, bs, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
         if (nv == 4) { SBS_OR_ND_SETVD(&dep[1]);
-          gpu_gpu_draw_tritri(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
+          gpu_vk_draw_tritri(core, &xs[1], &ys[1], &us[1], &vs[1], &rs[1], &gs[1], &bs[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1); }
       }
       #undef SBS_OR_ND_SETVD
@@ -1075,14 +1075,14 @@ void GpuState::gp0_exec(Core* core) {
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
       // sprites bypass the GTE, so they are mapped here. A backdrop (sky/water) STRETCHES to fill the wide
       // FB; HUD/UI is identity (the relocation shader's +margin already centers it). See ws_2d_local_x.
-      { int gpu_gpu_wide_engine(Core*);
+      { int gpu_vk_wide_engine(Core*);
         // #38: PROVENANCE-only backdrop test for stretch-fill (node_is_bg / sprite_is_bg_texpage), not
         // `bg`'s coverage heuristic — pins the weapon carousel panel to the centered/HUD branch instead
         // of stretch-filling it to the screen edges. `bg` (RQ_BACKGROUND band) is unchanged.
         int fill = (node_is_bg(s_cur_node) || sprite_is_bg_texpage(core, s_tp_x, s_tp_y)) || fade_full;  // backdrop AND full-screen fade/dim stretch-to-fill (#21)
         if (fill) s_seen_bg2d = 1;   // #54: this frame owns a full-screen 2D backdrop redraw (menu/title)
         // widen on gameplay frames (3D last frame) OR a full-screen 2D backdrop redraw last frame (#54).
-        if (gpu_gpu_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
+        if (gpu_vk_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
           XL = ws_2d_local_x(core, XL, fill);                   // engine-owned 2D layout (HUD centered, bg/fade fills)
           XR = ws_2d_local_x(core, XR, fill);
         } }
@@ -1107,18 +1107,18 @@ void GpuState::gp0_exec(Core* core) {
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
         }
       } else {
-      gpu_gpu_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
-      if (bg) gpu_gpu_set_order_2d_bg(core, ord_idx); else gpu_gpu_set_order_2d(core, ord_idx);
+      gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
+      if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);
       if (semi) {
-        { gpu_gpu_semi_group(core, X, Y, X+w, Y+h); }  // OT-order grouping
-        gpu_gpu_draw_semi(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        { gpu_vk_semi_group(core, X, Y, X+w, Y+h); }  // OT-order grouping
+        gpu_vk_draw_semi(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        gpu_gpu_draw_semi(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
+        gpu_vk_draw_semi(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
                          s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
       } else {
-        gpu_gpu_draw_tritri(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
+        gpu_vk_draw_tritri(core, qx, qy, qu, qv, qr, qg, qb, s_tp_x, s_tp_y, mode, rw, s_clut_x, s_clut_y,
                            s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
-        gpu_gpu_draw_tritri(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
+        gpu_vk_draw_tritri(core, &qx[1], &qy[1], &qu[1], &qv[1], &qr[1], &qg[1], &qb[1], s_tp_x, s_tp_y, mode, rw,
                            s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1);
       }
       }
@@ -1139,22 +1139,22 @@ void GpuState::gp0_exec(Core* core) {
     // hut/door interior, #49 authored_subscene) still clears its black backdrop the PSX way, via this
     // very op, once per frame (RE'd: `debug bug52fill` traced a FILL at=(0,0) 320x240 col=(0,0,0) on
     // every interior frame). Because the wide margin columns of the VK render target are LOAD_OP_LOAD
-    // (persistent across frames, gpu_gpu.cpp render_geom), those columns keep whatever a PRIOR frame's
+    // (persistent across frames, gpu_vk.cpp render_geom), those columns keep whatever a PRIOR frame's
     // draw left there -> the VRAM-atlas garbage in the widescreen margins.
     // Fix (host-side, read-only, engine-owned — mirrors the existing bg_2d/node_is_bg 2D-widen
     // classification used for polys/sprites): a FillRect that covers the WHOLE base display is a
     // backdrop clear exactly like a full-screen backdrop poly, so queue an equivalent flat quad
     // through the SAME 2D render-queue path (RQ_BACKGROUND / RQ_OM_2D_BG), pre-stretched by
     // ws_2d_local_x's backdrop rule (x*ww/320) so it fills [0,ww) instead of just [0,320). Gated the
-    // same way the poly/sprite widen is (gpu_gpu_wide_engine + (s_prev_had3d || s_prev_had_bg2d), #54: a
+    // same way the poly/sprite widen is (gpu_vk_wide_engine + (s_prev_had3d || s_prev_had_bg2d), #54: a
     // full-screen FillRect backdrop is just as legitimate a "this frame repaints the whole width" signal
     // as 3D world geometry — e.g. the title-menu screen, which is pure 2D and never sets s_prev_had3d).
     {
-      int gpu_gpu_wide_engine(Core*);
+      int gpu_vk_wide_engine(Core*);
       int full = bg_2d(x, y, x + w, y + h);
       if (full) s_seen_bg2d = 1;
-      if (full && gpu_gpu_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
-        int ww = gpu_gpu_wide_engine_w(core);
+      if (full && gpu_vk_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
+        int ww = gpu_vk_wide_engine_w(core);
         if (ww > 320) {
           int x0 = ws_2d_local_x(core, x, /*is_bg=*/1), x1 = ws_2d_local_x(core, x + w, /*is_bg=*/1);
           int xs[4] = { x0, x1, x0, x1 }, ys[4] = { y, y, y + h, y + h };
@@ -1166,7 +1166,7 @@ void GpuState::gp0_exec(Core* core) {
         }
       }
     }
-    if (vk_path()) gpu_gpu_dirty(core, x, y, w, h);   // mirror fill to VK
+    if (vk_path()) gpu_vk_dirty(core, x, y, w, h);   // mirror fill to VK
   } else if (op >= 0x40 && op <= 0x5F) {     // line / poly-line (flat or gouraud)
     int semi = (op & 0x02) ? 1 : 0, gouraud = (op & 0x10) ? 1 : 0;
     // Collect the vertex list from s_fifo (cmd carries v0's colour). Single lines have 2 verts;
@@ -1191,12 +1191,12 @@ void GpuState::gp0_exec(Core* core) {
         int o1[3]={0,1,2}, o2[3]={1,2,3};      // tris (p0,p1,p0') and (p1,p0',p1')
         if (semi) {   // OT-order grouping for the segment quad
           int bx0=x0<x1?x0:x1, bx1=x0<x1?x1:x0, by0=y0<y1?y0:y1, by1=y0<y1?y1:y0;
-          gpu_gpu_semi_group(core, bx0, by0, bx1+ox, by1+oy); }
+          gpu_vk_semi_group(core, bx0, by0, bx1+ox, by1+oy); }
         for (int t = 0; t < 2; t++) { int* o = t ? o2 : o1;
           int X[3]={xa[o[0]],xa[o[1]],xa[o[2]]}, Y[3]={ya[o[0]],ya[o[1]],ya[o[2]]};
           unsigned char R[3]={rr[o[0]],rr[o[1]],rr[o[2]]}, G[3]={gg[o[0]],gg[o[1]],gg[o[2]]}, B[3]={bb[o[0]],bb[o[1]],bb[o[2]]};
-          if (semi) gpu_gpu_draw_semi(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_tp_blend);
-          else      gpu_gpu_draw_tritri(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1);
+          if (semi) gpu_vk_draw_semi(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_tp_blend);
+          else      gpu_vk_draw_tritri(core, X,Y,zu,zu,R,G,B, 0,0,3,0,0,0, 0,0,0,0, s_da_x0,s_da_y0,s_da_x1,s_da_y1);
         }
       }
     }
@@ -1252,8 +1252,8 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         // right clip by (nw-320) — else the wide-side world fragments are clipped and the present shows
         // raw VRAM texture-atlas garbage in the [320,nw) band. Off at 4:3 (wide_engine()==0). This is a
         // render-clip widen consumed by the GPU batch (i_da); it never widens where guest logic reads.
-        { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
-          if (gpu_gpu_wide_engine(core)) s_da_x1 += (gpu_gpu_wide_engine_w(core) - 320); }
+        { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
+          if (gpu_vk_wide_engine(core)) s_da_x1 += (gpu_vk_wide_engine_w(core) - 320); }
         cfg_logf("env", "E4 clip_br=(%d,%d)", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
         cfg_logf("env", "E5 offset=(%d,%d)", s_off_x, s_off_y); return;
@@ -1293,7 +1293,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       s_xfer_w = ((s_fifo[2] & 0x3FF) ? (s_fifo[2] & 0x3FF) : 1024);
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
-      if (vk_path()) gpu_gpu_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
+      if (vk_path()) gpu_vk_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       cfg_logf("upload", "f%d A0 dest=(%d,%d) %dx%d src=0x%08X",
@@ -1314,7 +1314,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       // clobber even though the copy still proceeds (diagnostic, non-mutating; the catch is the point).
       vram_guard_check(core, "80copy", dx, dy, w2, h2, 0x80000000u | ((uint32_t)(sy * VRAM_W + sx) * 2));
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
-      if (vk_path()) gpu_gpu_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
+      if (vk_path()) gpu_vk_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2)) {
         fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
@@ -1365,14 +1365,14 @@ void GpuState::gpu_gp1(uint32_t w) {
 // pixel aspect and keeps 2D art / FMVs un-stretched regardless of window size. (This is the display
 // scaler, independent of the — currently blocked — widescreen GEOMETRY tier; we do not widen here.)
 #ifdef PSXPORT_SDL
-// The legacy SDL_Renderer software-present window is RETIRED: the SDL_GPU renderer (gpu_gpu.cpp) is THE
-// present path (gpu_gpu_enabled() is always 1), windowed or headless. blit_src forwards the display region
+// The legacy SDL_Renderer software-present window is RETIRED: the SDL_GPU renderer (gpu_vk.cpp) is THE
+// present path (gpu_vk_enabled() is always 1), windowed or headless. blit_src forwards the display region
 // to it; ensure_window is a no-op (the GPU backend owns the window). This drops the SDL2 SDL_Renderer /
 // SDL_Texture code that SDL3 doesn't carry verbatim.
-int  gpu_gpu_enabled(void);                                   // gpu_gpu.cpp — SDL_GPU present backend
+int  gpu_vk_enabled(void);                                   // gpu_vk.cpp — SDL_GPU present backend
 void GpuState::ensure_window() {}
 void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
-  gpu_gpu_present(&game->core, src, sx, sy, s_disp_w, s_disp_h);   // SDL_GPU present (incl. headless upload)
+  gpu_vk_present(&game->core, src, sx, sy, s_disp_w, s_disp_h);   // SDL_GPU present (incl. headless upload)
 }
 void GpuState::present_window() { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
 // Re-present the CURRENT frame without advancing game logic — used by the debug-server pause loop so
@@ -1397,7 +1397,7 @@ void GpuState::gpu_repaint() {}
 extern "C" int gpu_has_window(void);
 void gpu_pace_subframe(Core* core, int parts) {
   // PC-OWNED frame pacing (user 2026-06-22: the game loop paces itself). Gate on a RUNTIME check for an
-  // on-screen window — NOT a compile-time macro and NOT gpu_gpu_enabled() — so it always paces a live
+  // on-screen window — NOT a compile-time macro and NOT gpu_vk_enabled() — so it always paces a live
   // windowed run and never paces headless (tests stay fast). Portable monotonic clock + nanosleep (no
   // SDL dependency), so it works identically on Linux and macOS.
   if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;
@@ -1427,16 +1427,16 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
   // VK render lives in the GPU image, not s_vram — read it back over the current display region.
   // (soft_gpu oracle: VK is off for this Core, so fall through to the s_vram PPM dump below.)
   if (vk_path()) {
-    void gpu_gpu_shot_region(Core*, const char*, int, int, int, int);
-    int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
+    void gpu_vk_shot_region(Core*, const char*, int, int, int, int);
+    int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
     int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
     // Widescreen: crop the wider FB the engine rendered (nw@aspect), matching the windowed present's
     // wide sample region — otherwise a headless wide shot silently crops back to the 4:3 s_disp_w.
-    if (gpu_gpu_wide_engine(core)) dw = gpu_gpu_wide_engine_w(core);
-    gpu_gpu_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
+    if (gpu_vk_wide_engine(core)) dw = gpu_vk_wide_engine_w(core);
+    gpu_vk_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;
   }
-  void image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_gpu.cpp — PNG by default
+  void image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_vk.cpp — PNG by default
   unsigned char* buf = (unsigned char*)malloc((size_t)s_disp_w * s_disp_h * 3);
   if (!buf) { fprintf(stderr, "[shot] alloc failed for %s\n", path); return; }
   for (int y = 0; y < s_disp_h; y++)
@@ -1568,7 +1568,7 @@ void GpuState::frame_finalize(Core* core) {
   { int attach_enabled(void);
     if (attach_enabled()) core->rsub.projprim.reset(); }
   s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
-  gpu_gpu_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
+  gpu_vk_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
@@ -1585,7 +1585,7 @@ void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 void GpuState::gpu_blank_display() {            // zero the display FB rect (NO present) — caller presents later
   int dw = s_disp_w > 0 ? s_disp_w : 320, dh = s_disp_h > 0 ? s_disp_h : 240;
   // #54: the display FB IS the wide width once widescreen is active (present() samples [sx,sx+wide_w) —
-  // see GpuGpuState::present's disp_w comment) — clamping this clear to the native 320 left the wide
+  // see GpuVkState::present's disp_w comment) — clamping this clear to the native 320 left the wide
   // margin columns unblanked during the title/loading ramp (Engine::drawOTag's `s48<2` blank-display
   // call), so a transition frame between "blanked" and "backdrop widened" could still show a sliver of
   // stale VRAM-atlas content in the margin. Blank the FULL wide width so this call is a genuine clear of
@@ -1606,13 +1606,13 @@ void GpuState::gpu_clear_display(Core* core) { gpu_blank_display(); gpu_present(
 // No s_frame++/diagnostics (that bookkeeping happens once per LOGIC frame in gpu_present_ex for the real
 // pass). fps60 emits the interpolated RqItems, calls this to show them, then emits the real frame.
 void GpuState::gpu_fps60_present_pass(Core* core) {
-  present_window();                          // blit_src(s_vram) -> gpu_gpu_present renders the batch + shows
+  present_window();                          // blit_src(s_vram) -> gpu_vk_present renders the batch + shows
   // Plain per-present reset: this pass emitted the WHOLE queue (color prims AND the shadow tris carried on
   // each opaque world item, via RenderQueue::emitItem) and presented through the full pipeline (panel_render ->
   // shadow_pass + ssao_pass). frame_end resets BOTH the draw batch and the shadow stream; the REAL pass
   // that follows re-emits the same queue, rebuilding an identical shadow map. No keep_shadow side-channel —
   // both 60fps presents are the same full pipeline by construction, so the shadow/HUD/2D are correct on both.
-  gpu_gpu_frame_end(core, s_vram, s_frame);   // submit/diff + reset the VK draw + shadow batch
+  gpu_vk_frame_end(core, s_vram, s_frame);   // submit/diff + reset the VK draw + shadow batch
   s_prim_order = 0;                          // restart per-frame OT submission order for the next pass
 }
 
@@ -1630,7 +1630,7 @@ uint16_t GpuState::gpu_vram_peek(int x, int y) { return *vram(x, y); }
 // PC-native SCEA decode: turn the baked 4bpp+CLUT asset (scea_asset.h) into a flat RGBA8 buffer laid out
 // at the 640x468 SCEA SCREEN positions (the same 3 rects / texpage / CLUT / UV the PSX boot stub used,
 // mirroring scea_splash_composite). Text pixels = the CLUT color (a=255); everywhere else = (0,0,0,0).
-// This is the PSX-FREE source for gpu_gpu_present_image (no s_vram poke, no VRAM mirror) — `out` must be
+// This is the PSX-FREE source for gpu_vk_present_image (no s_vram poke, no VRAM mirror) — `out` must be
 // SCEA_DISP_W * SCEA_DISP_H * 4 bytes. The 5-bit PSX color channels are expanded to 8-bit (<<3 | >>2).
 void gpu_scea_decode_rgba(uint8_t* out) {
   memset(out, 0, (size_t)SCEA_DISP_W * SCEA_DISP_H * 4);   // transparent/black background
@@ -1776,10 +1776,10 @@ void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
 // SBS per-core frame finalize: the readback grab renders + reads this core's frame but skips gpu_present,
 // so it must run the same per-frame reset/bookkeeping standalone's present does (else s_prim_order etc.
-// never reset — see GpuState::frame_finalize). Replaces the bare gpu_gpu_frame_end grabPane used to call.
+// never reset — see GpuState::frame_finalize). Replaces the bare gpu_vk_frame_end grabPane used to call.
 void gpu_present_finalize(Core* core) { core->game->gpu.frame_finalize(core); }
 // PSXPORT_SBS accessors: each core's CPU front-buffer (s_vram) + its current display region, so the SBS
-// composite can present each core's frame into its own pane (gpu_gpu_present_sbs). GpuState is a plain
+// composite can present each core's frame into its own pane (gpu_vk_present_sbs). GpuState is a plain
 // struct (all-public), so these reach the members directly.
 const uint16_t* gpu_vram_ptr(Core* core) { return core->game->gpu.s_vram; }
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h) {

@@ -1,4 +1,4 @@
-// Integration glue between the SDL_GPU present path (gpu_gpu.cpp) and the RmlUi overlay owned by
+// Integration glue between the SDL_GPU present path (gpu_vk.cpp) and the RmlUi overlay owned by
 // Game (rmlui_overlay.cpp). Keeps all overlay-specific orchestration out of the renderer.
 #include "overlay_glue.h"
 #include "rmlui_overlay.h"
@@ -17,7 +17,7 @@ void overlay_glue_event(Game* game, const SDL_Event* e) {
 void overlay_glue_frame_begin(Core* core) {
     // Live world-position HUD: camera/Tomba position (int16 world units in scratchpad) + the
     // current stage entry pointer. These guest addresses are the same ones the engine RE
-    // established for the coordinate readout; reading them here keeps gpu_gpu.cpp free of overlay
+    // established for the coordinate readout; reading them here keeps gpu_vk.cpp free of overlay
     // concerns.
     //
     // In SBS mode both cores hit this per frame; the overlay is one host UI, so we push the world
