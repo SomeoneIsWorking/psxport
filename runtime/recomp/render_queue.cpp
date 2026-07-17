@@ -549,7 +549,16 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
         core->rsub.diag.currentNode() != kBackdropDbgNode) {
       const int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
       if (margin > 0) {
-        const bool stretch = (layer == RQ_BACKGROUND);
+        // RQ_BACKGROUND art on widescreen: a FLAT fill (all 4 vertex colours equal — the black
+        // menu/void/loader clears) STRETCHES to fill the wide FB (stretching a flat colour is
+        // uniform, and this is what backs the pillarbox bars). A NON-flat background (a gradient or
+        // textured menu backdrop) must NOT stretch — that visibly spreads the gradient — so it gets
+        // the same centering +margin as every other 2D layer (pillarbox on the flat wide fill).
+        const bool flat = rs && gs && bs &&
+                          rs[0]==rs[1] && rs[1]==rs[2] && rs[2]==rs[3] &&
+                          gs[0]==gs[1] && gs[1]==gs[2] && gs[2]==gs[3] &&
+                          bs[0]==bs[1] && bs[1]==bs[2] && bs[2]==bs[3];
+        const bool stretch = (layer == RQ_BACKGROUND) && flat;
         for (int i = 0; i < nv; i++) {
           wxs[i] = stretch ? xs[i] * ww / 320 : xs[i] + margin;
           if (xsf) wxsf[i] = stretch ? xsf[i] * (float)ww / 320.0f : xsf[i] + (float)margin;
