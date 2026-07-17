@@ -602,13 +602,17 @@ static void render_pass_set(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* colorTgt,
                              const SDL_Rect& sc, int scale,
                              SDL_GPUBuffer* triVbuf, int triN, SDL_GPUBuffer* texVbuf, int texN,
                              SDL_GPUBuffer* const semiVbuf[GGS_NUM_BLEND_MODES], const int semiN[GGS_NUM_BLEND_MODES],
-                             bool stampSemiCoverage = false) {
+                             bool stampSemiCoverage = false, bool clearColorBlack = false) {
   int semiTotal = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semiTotal += semiN[m];
   SDL_GPUTextureSamplerBinding snap = { vramSnap, s_samp_nearest };
   SDL_GPUBufferBinding bb = {}; bb.offset = 0;
   // ---- Pass A: opaque (flat + textured) -----------------------------------------------------------
   {
-    SDL_GPUColorTargetInfo ct = {}; ct.texture = colorTgt; ct.load_op = SDL_GPU_LOADOP_LOAD; ct.store_op = SDL_GPU_STOREOP_STORE;
+    // clearColorBlack (first band): composite native submits over BLACK, not over the uploaded PSX VRAM
+    // — the PC renderer shows ONLY what a native producer submitted; anything else is black.
+    SDL_GPUColorTargetInfo ct = {}; ct.texture = colorTgt; ct.store_op = SDL_GPU_STOREOP_STORE;
+    ct.load_op = clearColorBlack ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+    ct.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
     SDL_GPUDepthStencilTargetInfo dt = {}; dt.texture = depthTgt; dt.clear_depth = 0.0f;
     dt.load_op = SDL_GPU_LOADOP_CLEAR; dt.store_op = SDL_GPU_STOREOP_STORE;   // STORE: the semi pass reuses this depth
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
@@ -695,7 +699,15 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
     total += g.s_tri2d_n[band] + g.s_tex2d_n[band] + semi2d_total[band];
   g.s_present_ires = 0;   // default: present from native s_vram_tex; the unified path below raises it to `scale`
-  if (total == 0) return; // empty frame -> nothing composited -> present the uploaded native VRAM as-is
+  if (total == 0) {
+    // No native submit this frame → the PC renderer shows BLACK, never the raw PSX VRAM. (A native FMV
+    // or splash draws via gpu_gpu_present_image, a separate native RGBA path — not this VRAM present.)
+    SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_vram_tex; ct.store_op = SDL_GPU_STOREOP_STORE;
+    ct.load_op = SDL_GPU_LOADOP_CLEAR; ct.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
+    SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, NULL);
+    SDL_EndGPURenderPass(rp);
+    return;
+  }
   g.ensure_targets();
 
   int native_w = 0, ires_i = 1, fbw = 0, fbh = 0, ww = 0, wh = 0, ires_cap = 0;
@@ -770,7 +782,8 @@ static void render_geom(GpuGpuState& g, SDL_GPUCommandBuffer* cmd, const uint16_
   SDL_Rect sc3d = { sx * scale, sy * scale, disp_w * scale, h * scale };
   render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc2d, scale,          // band 1: 2D_BG (backdrop)
                    g.s_tri2d_vbuf[GGS_2D_BG], g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_vbuf[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG],
-                   g.s_semi2d_vbuf[GGS_2D_BG], g.s_semi2d_n[GGS_2D_BG]);
+                   g.s_semi2d_vbuf[GGS_2D_BG], g.s_semi2d_n[GGS_2D_BG],
+                   /*stampSemiCoverage=*/false, /*clearColorBlack=*/true);   // native submits over BLACK, not VRAM
   render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc3d, scale,          // band 2: the 3D world
                    g.s_tri_vbuf, g.s_tri_n, g.s_tex_vbuf, g.s_tex_n, g.s_semi_vbuf, g.s_semi_n);
   render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc2d, scale,          // band 3: 2D_FG (HUD / menus)
@@ -803,15 +816,11 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw). Everything downstream (the
   // windowed present sample region AND the `shot`/vkshot readback, which use s_last_w) must span that wide
   // width, else the wide FB is cropped back to the 4:3 s_disp_w. At 4:3 nw==320 so w is unchanged.
-  // Only widen the present for frames that rendered wide NATIVE geometry — a 3D world OR a full-screen
-  // 2D backdrop (field, title/menu). A raw-framebuffer frame — an FMV/MDEC movie — drew NEITHER, so
-  // widening it to nw would sample the texture ATLAS in [320,nw) (the garbage margin the user saw) and
-  // leave the 4:3 movie left-aligned. Keep those at native 320 → they letterbox as a CENTERED 4:3 image
-  // with black pillarbox bars, same gate as the poly/sprite/backdrop widen (gpu_native.cpp).
+  // The PC renderer composites native submits over BLACK (render_geom), so a frame with no native
+  // content is already black here — sampling the wide width just shows black, never the atlas. So the
+  // present can unconditionally span the wide FB when widescreen; no frame-type heuristic needed.
   int disp_w = w;
-  const bool wide_native_frame = gpu_had3d_last_frame(&game->core) || gpu_had_bg2d_last_frame(&game->core);
-  if (gpu_gpu_wide_engine(&game->core) && wide_native_frame)
-    disp_w = gpu_gpu_wide_engine_w(&game->core);
+  if (gpu_gpu_wide_engine(&game->core)) disp_w = gpu_gpu_wide_engine_w(&game->core);
   s_present_sx = sx; s_present_sy = sy;
   s_last_sx = sx; s_last_sy = sy; s_last_w = disp_w; s_last_h = h;
 

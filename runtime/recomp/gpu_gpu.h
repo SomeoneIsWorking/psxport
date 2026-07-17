@@ -64,6 +64,5 @@ void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
 // — now per-instance. A frame with neither 3D nor a full-screen 2D backdrop is a raw framebuffer (FMV).
 int gpu_seen3d_this_frame(Core* core);
 int gpu_had3d_last_frame(Core* core);
-int gpu_had_bg2d_last_frame(Core* core);
 
 #endif // GPU_GPU_H
