@@ -1,6 +1,8 @@
 #include "core.h"
 #include "game.h"   // class Fmv lives on Game (game->fmv); this TU implements its methods
 #include "c_subsys.h"
+#include "gpu_vk.h"  // gpu_vk_present_image — present the decoded frame as a NATIVE RGBA image
+#include <vector>
 // Native FMV player for the Tomba!2 PC port.
 //
 // Plays PSX .STR movies (MOVIE/LOGO.STR, MOVIE/OP.STR) entirely with our own code,
@@ -529,23 +531,23 @@ int Fmv::mdecDecodeToRgb555(const uint16_t* codes, int ncodes,
   return width * height;   // pixel count
 }
 
-// Upload an RGB555 frame to VRAM(0,0) and present it.
+// Present the decoded movie frame as a NATIVE RGBA image, letterboxed 4:3 with black bars
+// (gpu_vk_present_image) — NOT a VRAM upload. The PC renderer composites only native submits over
+// black; a CPU->VRAM upload + gpu_present would be blacked out by that. Presenting the frame directly
+// is also the centering fix — it pillarboxes 4:3 on widescreen instead of left-aligning in the wide FB.
 static void present_rgb555(Core* core, const uint16_t* pixels, int width, int height) {
-  gpu_gp0(core, 0xA0000000u);                              // CPU->VRAM
-  gpu_gp0(core, 0);                                         // dest (y<<16)|x = (0,0)
-  gpu_gp0(core, ((uint32_t)height << 16) | (uint32_t)width);
-  int npix = width * height;
-  for (int i = 0; i < npix; i += 2) {
-    uint32_t lo = pixels[i];
-    uint32_t hi = (i + 1 < npix) ? pixels[i + 1] : 0;
-    gpu_gp0(core, lo | (hi << 16));
+  static std::vector<uint8_t> rgba;
+  const int npix = width * height;
+  rgba.resize((size_t)npix * 4);
+  for (int i = 0; i < npix; i++) {
+    const uint16_t p = pixels[i];                                  // PSX 555: bit0-4 R, 5-9 G, 10-14 B
+    const uint8_t r5 = p & 0x1f, g5 = (p >> 5) & 0x1f, b5 = (p >> 10) & 0x1f;
+    rgba[i * 4 + 0] = (uint8_t)((r5 << 3) | (r5 >> 2));            // 5 -> 8 bit expand
+    rgba[i * 4 + 1] = (uint8_t)((g5 << 3) | (g5 >> 2));
+    rgba[i * 4 + 2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+    rgba[i * 4 + 3] = 255;
   }
-  // Display this region: start (0,0), hres, vrange (handler takes y1-y0 as height).
-  gpu_gp1(core, 0x05000000u);
-  uint32_t hcode = (width == 256) ? 0 : (width == 320) ? 1 : (width == 512) ? 2 : 3;
-  gpu_gp1(core, 0x08000000u | hcode);
-  gpu_gp1(core, 0x07000000u | (((uint32_t)(16 + height) & 0x3FF) << 10) | 16u);
-  gpu_present(core);
+  gpu_vk_present_image(core, rgba.data(), width, height, 1.0f);
 }
 
 // ====================================================================================
