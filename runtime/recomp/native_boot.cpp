@@ -229,62 +229,14 @@ static void native_crt0(Core* c) {
 // Init prefix + task-0 bootstrap (everything FUN_80050b08 does before its scheduler loop). Factored out
 // of game_main so the dual-core harness can init two cores then drive the frame loop itself.
 static void game_init(Core* c) {
-  fprintf(stderr, "[native_boot] FUN_80050b08 override: running init prefix\n");
-
-  // --- init prefix, transcribed from FUN_80050b08 (no scheduler loop) ---
-  rc0(c, 0x80089788);
-  rc0(c, 0x80085b20);
-  // CD init: native HLE, NOT the recomp libcd (FUN_800898a0). The recomp CdInit busy-waits on the
-  // CD-controller reset handshake (no IRQ ever acks → 5 retries → "CD timeout" → "Init failed").
-  // We model no CD controller; all CD ops are native synchronous (cd_override.cpp). (was rc0 0x800898a0)
-  c->game->cd.hleInit();
-  rc1(c, 0x80080bf0, 3);
-  rc1(c, 0x80080d64, 0);
-  rc1(c, 0x80080ed4, 1);
-  rc1(c, 0x800865f0, 0);
-  // Engine frame-state + camera init reimplemented PC-native (game/scene/startup.cpp), replacing the
-  // 1:1 rec_dispatch transcription. FUN_800509b4 (display/GTE projection + PSX draw/disp double-buffer
-  // env) stays dispatched for now — it sets DAT_801003f8 = H that eng_init_camera reads, and entangles
-  // the PSX-GPU env, so it is the next target. (later-159, top-down engine port from main.)
-  c->engine.initFrameState();      // was rc0(c, 0x80050a0c)
-  c->engine.initDisplay();         // was rc0(c, 0x800509b4) — GTE projection + display (sets H=DAT_801003f8)
-  c->engine.initCamera();          // was rc0(c, 0x80050a80)
-  rc0(c, 0x80096a70);
-  rc1(c, 0x80099310, 0x1010);
-  rc1(c, 0x800991b0, 0x20000);
-  rc1(c, 0x800993a0, 1);
-  // FUN_80089bac(cmd=0xe Setmode, &mode=0x80, 0) — CdControlB. The recomp body busy-waits in CD_cw
-  // on the controller ack (no IRQ -> "CdlSetmode timeout"). We model no CD drive mode (every read is
-  // by LBA, served natively), so Setmode is a native no-op. (was rc3 0x80089bac)
-  // (removed: VSync(3) display-settle wait — the PC-native frame loop owns ALL timing; boot does not
-  // call libetc VSync. Any code that reaches VSync now TRAPS (sync_overrides.cpp vsync_trap).)
-  // FUN_80075130 font/text init reimplemented PC-native (game/ui/font.cpp): owns the orchestration +
-  // direct writes + the 3 engine-state callees (FUN_800963a0/80096370/800752b4); the 8 libgpu/sound callees
-  // stay rec_dispatched in-context (later-182b nested-dispatch risk). Replaces the rc0 transcription.
-  c->engine.font.init();                       // was rc0(c, 0x80075130)
-  rc1(c, 0x8009c620, 0);
-  rc0(c, 0x8001cc00);
-  c->engine.initSubsystems();               // was rc0(c, 0x800520e0) — own orchestration native
-  // (removed: VSync(1) — see above; PC owns timing, boot never calls VSync.)
-  rc0(c, 0x80051e00);                       // scheduler-table init (task objs @0x801fe000)
-  rc2(c, 0x80051f14, 0, 0x800499e8);        // register task 0, entry FUN_800499e8
-  // VSyncCallback(LAB_800506b4): native no-op — we deliver no preemptive VBlank IRQ (the per-vblank
-  // callback's unmodeled interrupt-vector deref is skipped). (was rc1 0x80085bb0)
-  c->game->timing.vsyncCallback();          // callback ptr arg unused (no preemptive vblank IRQ delivered)
-
-  fprintf(stderr, "[native_boot] init prefix complete\n");
-
-  // --- task 0 initial entry: FUN_800499e8 resolves \BIN\START.BIN and FUN_80052078(0) loads
-  // the stage-0 overlay to 0x80106228 + restarts task 0 at stage 0 (0x8010649c). It yields once
-  // (FUN_80051f80, a no-op with threads stubbed) so it runs straight to completion here. The
-  // scheduler's "current task" ptr DAT_1f800138 is normally set by FUN_80051e60; set it to task0
-  // so FUN_80052078/FUN_800450bc operate on task 0. ---
-  c->mem_w32(0x1f800138, 0x801fe000);
-  c->engine.task0Bootstrap();   // PC-native: was rc0(c, 0x800499e8) — CD subtree owned top-down
-  // START.BIN loaded raw to 0x80106228: [0]=manifest count (6); entry word @0x8010649c.
-  fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
-                  "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",
-          c->mem_r32(0x80106228), c->mem_r32(0x8010649c), c->mem_r16(0x801fe000), c->mem_r32(0x801fe00c));
+  // The game's boot-init prologue (FUN_80050b08 init prefix + task-0 bootstrap) is GAME behaviour: it
+  // moved WHOLE to the game side (game/core/game_hooks.cpp tomba_bootInit) via the bootInit hook, so
+  // this framework file no longer bakes in the game's guest boot-prologue addresses or c->engine.* init
+  // calls. It moves as ONE unit (not just the engine calls) because the engine calls are interleaved
+  // with the rc-dispatched guest leaves and task0Bootstrap depends on the scheduler-table init between
+  // them — the order is load-bearing and cannot be split. crt0_setup + the per-core binds (this file)
+  // stay framework scaffolding.
+  c->hooks->bootInit(c);
 }
 
 // Dual-core harness hooks (dualcore.cpp / selftest.cpp / sbs.cpp): boot a core to the start of the

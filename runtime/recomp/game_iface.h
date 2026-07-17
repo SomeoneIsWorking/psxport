@@ -78,6 +78,22 @@ struct GameHooks {
   void (*musicCoordTick)(Core* c);            // per-frame music coord (was c->engine.musicCoord.tick())
   bool (*cdDialogToneActive)(Core* c);        // dialog-tone gate (was c->engine.musicCoord.dialogToneActive())
   void (*cdMusicFadeIn)(Core* c);             // ingame-music fade-in (was c->engine.musicCoord.musicFadeIn())
+  void (*bootInit)(Core* c);                  // the game's boot-init prologue (was the whole init-prefix body of
+                                              // native_boot.cpp game_init: the guest boot-prologue transcription —
+                                              // rc-dispatched guest leaves interleaved with the c->engine.* init
+                                              // calls initFrameState/initDisplay/initCamera/font.init/initSubsystems/
+                                              // task0Bootstrap. Moved WHOLE because the engine calls are interleaved
+                                              // with the rc leaves and task0Bootstrap depends on the scheduler-table
+                                              // init between them — order is load-bearing, so it cannot be split).
+  bool (*schedFreshEntry)(Core* c, int slot, uint32_t base, uint32_t entryPc); // fresh task-entry native stage body:
+                                              // dispatches the GAME stagePrologue (was c->engine.stageMain(), which
+                                              // sets coro_redirect_pc) or STAGE-0 startBinStage (was
+                                              // c->engine.startBinStage()) by entryPc. Returns true when it ran the
+                                              // TERMINAL startBinStage body (caller finalizes + early-returns the
+                                              // tick); false to continue to rec_coro_run (stageMain leaves the redirect
+                                              // start in c->coro_redirect_pc; a non-stage fresh entry leaves it 0).
+  bool (*hasNativeHandlerForEntry)(Core* c, uint32_t entryPc); // does this task entry PC have a native stage handler
+                                              // (was c->game->pcSched.hasNativeHandlerForEntry(entryPc)).
   void (*registerOverrides)(Game* g);         // install ALL game override clusters into the process-global
                                               // registry (was boot.cpp register_engine_overrides(game)).
                                               // Takes Game* (not Core*): the clusters register per-Game.

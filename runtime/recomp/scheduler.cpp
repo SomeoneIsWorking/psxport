@@ -157,7 +157,7 @@ int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                  int native_content, const R3000& loop) {
   if (native_content) {
     if (c->game->pc_skip) return 0;
-    if (c->game->pcSched.hasNativeHandlerForEntry(c->mem_r32(base + 0xc))) return 0;
+    if (c->hooks->hasNativeHandlerForEntry(c, c->mem_r32(base + 0xc))) return 0;
   }
   Coro*& co = c->game->pcSched.coro[i];
   int co_fresh = (st == 3 || (st == 2 && !c->game->pcSched.task_started[i]));
@@ -245,19 +245,25 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
   c->game->pcSched.in_stage = 1;
   if (setjmp(c->game->pcSched.yield_jmp) == 0) {
     uint32_t start = resume_pc;
-    // Remaining fresh-entry native dispatches (DEMO's 0x801062E4 was handled by the DEMO stanza).
-    if (native_content && fresh && resume_pc == 0x8010637Cu) {
-      c->override_tgt = resume_pc;                               // GAME stageMain: coro-redirect
-      c->engine.stageMain();
-      start = c->coro_redirect_pc ? c->coro_redirect_pc : c->r[31];
-      c->coro_redirect_pc = 0;
-    } else if (native_content && fresh && resume_pc == 0x8010649Cu) {
-      c->engine.startBinStage();                                 // STAGE-0 fresh; skip rec_coro_run
-      c->game->pcSched.stage0_step[i] = 0;
-      c->game->pcSched.task_ctx[i] = static_cast<R3000&>(*c);
-      c->mem_w16(base, 2);
-      c->game->pcSched.in_stage = 0;
-      return 1;
+    // Remaining fresh-entry native stage dispatches (DEMO's 0x801062E4 was handled by the DEMO stanza)
+    // route through the game's schedFreshEntry hook (game_hooks.cpp): it runs the GAME stagePrologue
+    // (stageMain, which leaves c->coro_redirect_pc = 0x801063F4) or the TERMINAL STAGE-0 startBinStage
+    // by entryPc. The start/in_stage dance + the stage-0 finalize stay HERE (scheduler bookkeeping); only
+    // the engine stage BODY and its entry-PC constants moved into the hook.
+    if (native_content && fresh) {
+      c->coro_redirect_pc = 0;   // clear before: only the hook's stageMain path sets it (safety vs a stale value)
+      if (c->hooks->schedFreshEntry(c, i, base, resume_pc)) {
+        // TERMINAL startBinStage: finalize the fresh stage-0 slot and end the tick (skip rec_coro_run).
+        c->game->pcSched.stage0_step[i] = 0;
+        c->game->pcSched.task_ctx[i] = static_cast<R3000&>(*c);
+        c->mem_w16(base, 2);
+        c->game->pcSched.in_stage = 0;
+        return 1;
+      }
+      // stageMain left the redirect start in c->coro_redirect_pc; a non-stage fresh entry left it 0 (start
+      // stays resume_pc). Reproduces `start = coro_redirect_pc ? coro_redirect_pc : r[31]` — stageMain
+      // ALWAYS sets coro_redirect_pc (= 0x801063F4), so the original r[31] fallback branch was dead.
+      if (c->coro_redirect_pc) { start = c->coro_redirect_pc; c->coro_redirect_pc = 0; }
     }
     c->game->ffspan.begin(); rec_coro_run(c, start); c->game->ffspan.end("coro");
     c->mem_w16(base, 0);                                          // task returned (jr ra sentinel)
