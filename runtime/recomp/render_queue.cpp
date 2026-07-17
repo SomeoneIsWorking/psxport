@@ -549,16 +549,19 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
         core->rsub.diag.currentNode() != kBackdropDbgNode) {
       const int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
       if (margin > 0) {
-        // RQ_BACKGROUND art on widescreen: a FLAT fill (all 4 vertex colours equal — the black
-        // menu/void/loader clears) STRETCHES to fill the wide FB (stretching a flat colour is
-        // uniform, and this is what backs the pillarbox bars). A NON-flat background (a gradient or
-        // textured menu backdrop) must NOT stretch — that visibly spreads the gradient — so it gets
-        // the same centering +margin as every other 2D layer (pillarbox on the flat wide fill).
+        // RQ_BACKGROUND art on widescreen: only a UNIFORM SOLID FILL — flat vertex colour AND
+        // untextured (all-zero UVs) — STRETCHES to fill the wide FB (stretching a flat colour is
+        // uniform, and this is what backs the pillarbox bars). ANYTHING with visible content — a
+        // GRADIENT (non-flat colour) or a TEXTURED backdrop (title art, menu image; flat colour but
+        // real UVs) — must NOT stretch (that spreads/squishes it), so it gets the same centering
+        // +margin as every other 2D layer, pillarboxed on the flat wide fill.
         const bool flat = rs && gs && bs &&
                           rs[0]==rs[1] && rs[1]==rs[2] && rs[2]==rs[3] &&
                           gs[0]==gs[1] && gs[1]==gs[2] && gs[2]==gs[3] &&
                           bs[0]==bs[1] && bs[1]==bs[2] && bs[2]==bs[3];
-        const bool stretch = (layer == RQ_BACKGROUND) && flat;
+        const bool untextured = (!us || (us[0]==0 && us[1]==0 && us[2]==0 && us[3]==0)) &&
+                                (!vs || (vs[0]==0 && vs[1]==0 && vs[2]==0 && vs[3]==0));
+        const bool stretch = (layer == RQ_BACKGROUND) && flat && untextured;
         for (int i = 0; i < nv; i++) {
           wxs[i] = stretch ? xs[i] * ww / 320 : xs[i] + margin;
           if (xsf) wxsf[i] = stretch ? xsf[i] * (float)ww / 320.0f : xsf[i] + (float)margin;

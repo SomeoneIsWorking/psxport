@@ -803,8 +803,15 @@ void GpuGpuState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // Widescreen: the engine renders a wider FOV into VRAM columns [sx, sx+nw). Everything downstream (the
   // windowed present sample region AND the `shot`/vkshot readback, which use s_last_w) must span that wide
   // width, else the wide FB is cropped back to the 4:3 s_disp_w. At 4:3 nw==320 so w is unchanged.
+  // Only widen the present for frames that rendered wide NATIVE geometry — a 3D world OR a full-screen
+  // 2D backdrop (field, title/menu). A raw-framebuffer frame — an FMV/MDEC movie — drew NEITHER, so
+  // widening it to nw would sample the texture ATLAS in [320,nw) (the garbage margin the user saw) and
+  // leave the 4:3 movie left-aligned. Keep those at native 320 → they letterbox as a CENTERED 4:3 image
+  // with black pillarbox bars, same gate as the poly/sprite/backdrop widen (gpu_native.cpp).
   int disp_w = w;
-  if (gpu_gpu_wide_engine(&game->core)) disp_w = gpu_gpu_wide_engine_w(&game->core);
+  const bool wide_native_frame = gpu_had3d_last_frame(&game->core) || gpu_had_bg2d_last_frame(&game->core);
+  if (gpu_gpu_wide_engine(&game->core) && wide_native_frame)
+    disp_w = gpu_gpu_wide_engine_w(&game->core);
   s_present_sx = sx; s_present_sy = sy;
   s_last_sx = sx; s_last_sy = sy; s_last_w = disp_w; s_last_h = h;
 

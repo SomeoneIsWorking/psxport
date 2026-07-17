@@ -60,8 +60,10 @@ void gpu_gpu_stats(Core* core, int* tri, int* tex, int* semi);
 // game/render/screen_fade.h. The old gpu_set_fade / gpu_clear_fade / engine_fade_set entries
 // lived here — deleted; native present path reads ScreenFade::get(core).)
 
-// this-/last-frame 3D status (defined in gpu_native.cpp; read by the gpu_gpu present path) — now per-instance
+// this-/last-frame native-geometry status (defined in gpu_native.cpp; read by the gpu_gpu present path)
+// — now per-instance. A frame with neither 3D nor a full-screen 2D backdrop is a raw framebuffer (FMV).
 int gpu_seen3d_this_frame(Core* core);
 int gpu_had3d_last_frame(Core* core);
+int gpu_had_bg2d_last_frame(Core* core);
 
 #endif // GPU_GPU_H

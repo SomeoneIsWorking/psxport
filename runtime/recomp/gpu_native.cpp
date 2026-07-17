@@ -40,6 +40,7 @@ int gpu_gpu_enabled(void);                                    // gpu_gpu.c (decl
 // tees geometry before present, so s_seen3d is final by the time the present/compose path queries it.
 // A frame with no tee'd 3D is a VRAM-resident 2D screen (SCEA/FMV/title/menu) — nothing in the scratch FB.
 int gpu_had3d_last_frame(Core* core) { return core->game->gpu.s_prev_had3d; }
+int gpu_had_bg2d_last_frame(Core* core) { return core->game->gpu.s_prev_had_bg2d; }
 int gpu_seen3d_this_frame(Core* core) { return core->game->gpu.s_seen3d; }
 // Backdrop-vs-HUD for a screen-space 2D prim — by SCREEN COVERAGE, which is order-independent. The water/
 // sky backdrop is a FULL-SCREEN 2D layer (it tiles the whole display); HUD/text/icons cover a small part.
