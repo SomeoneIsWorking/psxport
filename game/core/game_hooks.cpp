@@ -35,6 +35,32 @@ static void tomba_musicCoordTick(Core* c)             { eng(c).musicCoord.tick()
 static bool tomba_cdDialogToneActive(Core* c)         { return eng(c).musicCoord.dialogToneActive(); }
 static void tomba_cdMusicFadeIn(Core* c)              { eng(c).musicCoord.musicFadeIn(); }
 
+// tomba_audioMixFrame — mix the game's native music engine on top of the SPU's drained PCM. Was the
+// direct native_music mix in spu_audio.cpp::frameEx: render into a per-frame scratch, saturating-add.
+// `frames` is the SPU sink's per-video-frame count, capped at SPU_FRAMES_PER_VIDEO_FRAME(735)+64.
+static void tomba_audioMixFrame(Core* c, int16_t* buf, int frames) {
+  NativeMusic& nm = gctx(c)->native_music;
+  if (!nm.active()) return;
+  const int kMaxFrames = 735 + 64;         // mirrors the SPU host-sink per-frame cap (spu_audio.cpp)
+  if (frames > kMaxFrames) frames = kMaxFrames;
+  int16_t mbuf[2 * (735 + 64)];            // one video frame of interleaved stereo scratch
+  nm.render(mbuf, frames);
+  for (int i = 0; i < frames * 2; i++) {
+    int v = buf[i] + mbuf[i];
+    if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+    buf[i] = (int16_t)v;
+  }
+}
+// Sound-Test / HUD music readout — reach the game's MusicList (was rmlui_overlay's direct game->music_list.*).
+static const char* tomba_audioNowPlayingName(Core* c) {
+  int np = gctx(c)->music_list.nowPlaying();
+  return (np >= 0) ? gctx(c)->music_list.name(np) : nullptr;
+}
+static void tomba_audioSoundTestPlay(Core* c, int track) {
+  if (track < 0) gctx(c)->music_list.stop();
+  else           gctx(c)->music_list.play(track);
+}
+
 // tomba_bootInit — the game's boot-init prologue, moved VERBATIM out of native_boot.cpp game_init.
 // This is the transcription of FUN_80050b08's init prefix (no scheduler loop): rc-dispatched guest
 // leaves interleaved with the native eng(c).* init calls, in the exact guest order. It moves WHOLE
@@ -148,6 +174,9 @@ extern const GameHooks g_tomba_hooks = {
   /* musicCoordTick     */ tomba_musicCoordTick,
   /* cdDialogToneActive */ tomba_cdDialogToneActive,
   /* cdMusicFadeIn      */ tomba_cdMusicFadeIn,
+  /* audioMixFrame      */ tomba_audioMixFrame,
+  /* audioNowPlayingName*/ tomba_audioNowPlayingName,
+  /* audioSoundTestPlay */ tomba_audioSoundTestPlay,
   /* bootInit           */ tomba_bootInit,
   /* schedFreshEntry    */ tomba_schedFreshEntry,
   /* hasNativeHandlerForEntry */ tomba_hasNativeHandlerForEntry,

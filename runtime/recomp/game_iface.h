@@ -90,6 +90,18 @@ struct GameHooks {
   void (*musicCoordTick)(Core* c);            // per-frame music coord (was c->engine.musicCoord.tick())
   bool (*cdDialogToneActive)(Core* c);        // dialog-tone gate (was c->engine.musicCoord.dialogToneActive())
   void (*cdMusicFadeIn)(Core* c);             // ingame-music fade-in (was c->engine.musicCoord.musicFadeIn())
+
+  // --- game audio: the framework SPU host-sink + mod-UI HUD reach the game's native music engine
+  // (NativeMusic/MusicList, now game-side on TombaCtx) through these, so the framework names no game
+  // audio type. ---
+  void (*audioMixFrame)(Core* c, int16_t* buf, int frames);  // mix the game's in-game music on top of the
+                                              // drained SPU PCM each audio frame (was spu_audio.cpp's direct
+                                              // active()/render() + saturating add on the game player).
+                                              // `buf` = frames*2 interleaved int16 stereo; no-op when silent.
+  const char* (*audioNowPlayingName)(Core* c);// currently-playing Sound-Test track name, or nullptr when
+                                              // stopped (was rmlui_overlay's direct catalogue nowPlaying()/name()).
+  void (*audioSoundTestPlay)(Core* c, int track); // Sound-Test action: play catalogued track (>=0) or stop
+                                              // (<0) (was rmlui_overlay's direct catalogue play()/stop()).
   void (*bootInit)(Core* c);                  // the game's boot-init prologue (was the whole init-prefix body of
                                               // native_boot.cpp game_init: the guest boot-prologue transcription —
                                               // rc-dispatched guest leaves interleaved with the c->engine.* init

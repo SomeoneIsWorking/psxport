@@ -3,21 +3,22 @@
 // The Sound Test's catalogue. v1 = the 10 SEP sequences in the global container TOMBA2.SND with
 // the documented song->VAB mapping (spec §6 S2SV: songs 0-3,7-9 -> vab idx 13; songs 4-6 -> vab
 // idx 7). The container is loaded once from \CD\TOMBA2.SND at first use. Each entry resolves to
-// a (seqOff, vabOff) byte pair into that buffer, fed straight to `Game::native_music.play()`.
+// a (seqOff, vabOff) byte pair into that buffer, fed straight to native_music.play().
 //
-// One `class MusicList` per Game (`c->game->music_list.method()`). Audio is one host output
-// stream so per-Game each has its own catalogue (only the Game that owns the SDL device
-// via SpuAudio is actually audible).
+// One `class MusicList` per Core, on the game-side TombaCtx aggregate (gctx(c)->music_list). Audio
+// is one host output stream so per-Core each has its own catalogue (only the Core whose Game owns
+// the SDL device via SpuAudio is actually audible). Holds a Core* and reaches the disc backend
+// (core->game->disc) + its sibling native_music (gctx(core)->native_music) at call time.
 #ifndef MUSIC_LIST_H
 #define MUSIC_LIST_H
 #include <stdint.h>
 
 #ifdef __cplusplus
-class Game;
+class Core;
 
 class MusicList {
 public:
-  Game* game = nullptr;   // back-pointer wired by Game()
+  Core* core = nullptr;   // back-pointer wired by tomba_ctx_create (game_ctx.cpp)
   ~MusicList();
 
   int         count() const { return 10; }

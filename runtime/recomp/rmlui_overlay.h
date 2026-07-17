@@ -2,7 +2,7 @@
 //
 // One per Game (`c->game->rml_overlay.method()`). Owns the SDL/Rml handles, tab selection,
 // visibility, world-readout cache, and per-element event listeners. The back-pointer to Game is
-// wired in Game(); the overlay reaches `game->music_list` for the Sound Test rows.
+// wired in Game(); the Sound Test rows reach the game's MusicList through the audio GameHooks.
 //
 // In SBS with two Games only one Game's overlay wins the SDL window; the other's `mInited` stays
 // false and all methods no-op. In standalone the sole Game owns the UI.

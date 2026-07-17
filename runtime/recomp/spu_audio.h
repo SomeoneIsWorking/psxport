@@ -52,10 +52,10 @@ private:
   FILE*    mWav      = nullptr;         // open WAV file, or NULL
   uint32_t mWavBytes = 0;               // PCM bytes written so far
 
-  // Per-frame mix buffers (735 stereo frames + slack). Per-instance so two SBS Games never mix
-  // through the same scratch.
-  int16_t  mMixBuf [2 * (735 + 64)] = {};   // SPU render target (+ native-music mixdown)
-  int16_t  mMonoBuf[2 * (735 + 64)] = {};   // native-music render scratch
+  // Per-frame mix buffer (735 stereo frames + slack). Per-instance so two SBS Games never mix
+  // through the same scratch. The native-music render scratch moved game-side into the audioMixFrame
+  // GameHooks impl (game_hooks.cpp), which owns its own per-call buffer.
+  int16_t  mMixBuf [2 * (735 + 64)] = {};   // SPU render target (+ native-music mixdown via the hook)
 
   // `debug spuprof` diagnostics (average spu_update() wall time every 60 frames).
   int      mProfOn = -1;                // -1 = unknown, 0/1 cached

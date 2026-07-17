@@ -168,16 +168,10 @@ void SpuAudio::frameEx(bool output) {
     memset(buf, 0, (size_t)frames * 2 * sizeof(int16_t));
   }
 
-  // Mix the native music engine on top of the SPU's output. Silent when nothing playing.
-  if (game && game->native_music.active()) {
-    int16_t* mbuf = mMonoBuf;
-    game->native_music.render(mbuf, frames);
-    for (int i = 0; i < frames * 2; i++) {
-      int v = buf[i] + mbuf[i];
-      if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
-      buf[i] = (int16_t)v;
-    }
-  }
+  // Mix the game's native music engine on top of the SPU's output (game-owned; the framework names
+  // no game audio type). The hook renders the game's NativeMusic into its own scratch and saturating-
+  // adds it into `buf`; it's a no-op when nothing is playing. Silent when no game is bound.
+  if (game) game->core.hooks->audioMixFrame(&game->core, buf, frames);
 
   // WAV capture: append the drained PCM. Capped.
   if (wav_on && mWavBytes < WAV_MAX_BYTES) {

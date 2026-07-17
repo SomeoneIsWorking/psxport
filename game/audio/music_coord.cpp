@@ -258,17 +258,17 @@ void MusicCoord::fieldBgmDirector() {
   int in_field = (stage == 0x8010637Cu);
   int& started = c->game->field_bgm_started;
   if (!in_field) {
-    if (started) { c->game->music_list.stop(); started = 0; }
+    if (started) { gctx(c)->music_list.stop(); started = 0; }
     return;
   }
   if (started) {
     // Restart if the song fully drained (one-shot tail) so the field stays scored.
-    if (c->game->music_list.nowPlaying() < 0) started = 0; else return;
+    if (gctx(c)->music_list.nowPlaying() < 0) started = 0; else return;
   }
   // Validate the bundle is loaded before starting (area data may not be in yet right after a load).
   const uint8_t* b = c->ram + 0x182000u;             // guest 0x80182000 (area bundle)
   if (memcmp(b + 0x30, "pQES", 4) || memcmp(b + 0x26b4, "pBAV", 4)) return;
   int song = 8;                                   // default field theme (longest area seq)
   if (const char* s = cfg_str("PSXPORT_FIELD_SONG")) { int v = atoi(s); if (v >= 0 && v < 10) song = v; }
-  if (c->game->music_list.playArea(b, 0x50000, song) == 0) started = 1;
+  if (gctx(c)->music_list.playArea(b, 0x50000, song) == 0) started = 1;
 }

@@ -31,8 +31,6 @@
 #include "render_queue.h"          // RenderQueue — the engine-owned draw-order authority
 #include "repl.h"                  // class Repl — REPL driver + auto-drive request state
 #include "spu_audio.h"             // class SpuAudio — host audio output sink (SDL3 + WAV capture)
-#include "audio/native_music.h"    // class NativeMusic — in-game real-time SEP/VAB music player
-#include "audio/music_list.h"      // class MusicList — Sound Test catalogue + area BGM driver
 #include "rmlui_overlay.h"         // class RmlOverlay — mod/debug HTML UI + world readout HUD
 #include "native_gate.h"           // class NativeGates — PC-native-layer A/B GATE registry (REPL diag)
 #include "platform_hle.h"          // class PlatformHle — HW-sync HLE table (VSync/CdSync/…)
@@ -89,8 +87,9 @@ public:
   RenderQueue& activeRq() { return rqRedirect ? *rqRedirect : rq; }
   Fps60  fps60; // interpolated-60fps tier: capture buffers + matcher + remap (fps60.cpp)
   SpuAudio    spu_audio;    // host audio output sink (SDL3 device + optional WAV capture)
-  NativeMusic native_music; // real-time SEP/VAB synth mixed into the SPU sink each audio frame
-  MusicList   music_list;   // Sound Test catalogue + in-game area BGM driver (uses native_music)
+  // The game's SEP/VAB in-game music player + Sound Test catalogue live game-side on TombaCtx now;
+  // the framework SPU sink + mod-UI HUD reach them through the audioMixFrame / audioNowPlayingName /
+  // audioSoundTestPlay GameHooks (game_iface.h), so no framework member names a game audio type.
   RmlOverlay  rml_overlay;  // in-app mod/debug HTML UI + live world-position HUD
   NativeGates native_gates; // A/B gate registry: `native <name> on|off` diag (music/seqtick/…)
   PlatformHle platform_hle; // HW-sync HLE dispatch table (VSync/CdSync/MDEC/ChangeThread)
@@ -180,7 +179,7 @@ public:
            fps60.game = this;
            hle.game = this; rq.game = this; pcSched.game = this; cd.game = this; fmv.game = this;
            stub.game = this;
-           spu_audio.game = this; native_music.game = this; music_list.game = this;
+           spu_audio.game = this;
            rml_overlay.game = this; platform_hle.game = this;
            memcard.game = this;
            dbg_server.game = this; verify.core = &core; ffspan.core = &core;

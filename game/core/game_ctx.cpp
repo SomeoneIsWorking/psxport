@@ -51,6 +51,11 @@ void* tomba_ctx_create(Core* c) {
   ctx->mtx.core        = c;
   ctx->inventory.core  = c;
   ctx->saveMenu.core   = c;
+  // Game-owned audio: MusicList reaches the disc backend (c->game->disc) + its sibling native_music
+  // (gctx(c)->native_music) through this Core at call time. It holds a Core* (not a Game*) because
+  // c->game is not yet wired when ctxCreate runs (Core's ctor precedes Game's ctor body); c->game is
+  // valid by the time any MusicList method is called. NativeMusic needs no back-pointer (self-contained).
+  ctx->music_list.core = c;
   // Render umbrella (owned by pointer): allocate, wire its back-pointer + each embedded sub-subsystem.
   ctx->mRender = new Render();
   ctx->mRender->mCore = c;

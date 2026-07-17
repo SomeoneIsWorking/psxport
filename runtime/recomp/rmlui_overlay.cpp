@@ -8,12 +8,13 @@
 // Brought up on the port's existing SDL_GPU device via RmlRenderInterfaceGpu (records into the present
 // render pass the present path hands it). ESC toggles the menu; quit lives in the menu's "Quit Game"
 // row. All UI state lives on `class RmlOverlay`, embedded on Game as `game->rml_overlay` — the
-// back-pointer to Game is wired in Game() so this reaches `game->music_list` for the Sound Test.
+// back-pointer to Game is wired in Game(). The Sound Test / music HUD reach the game's MusicList
+// through the audioNowPlayingName / audioSoundTestPlay GameHooks (the overlay names no game type).
 // One overlay per Game (one host window per process in practice).
 
 #include "rmlui_overlay.h"
 #include "rmlui_render_gpu.h"
-#include "game.h"                // Game — owns music_list; overlay reaches game->music_list
+#include "game.h"                // Game — the overlay reaches game->core / game->mods / game->core.hooks
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Input.h>
@@ -177,9 +178,8 @@ void RmlOverlay::refreshReadouts() {
     if (Rml::Element* e = d->GetElementById("music_readout")) {
         std::string txt = "stopped";
         if (game) {
-            int np = game->music_list.nowPlaying();
-            if (np >= 0 && game->music_list.name(np))
-                txt = std::string("playing: ") + game->music_list.name(np);
+            const char* nm = game->core.hooks->audioNowPlayingName(&game->core);
+            if (nm) txt = std::string("playing: ") + nm;
         }
         if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
     }
@@ -262,8 +262,8 @@ void RmlOverlay::activateFocused(int dir) {
         if (id == "close") { mVisible = false; applyVisibility(); }
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
         if (id.rfind("music_", 0) == 0 && game) {
-            if (id == "music_stop") game->music_list.stop();
-            else                    game->music_list.play(atoi(id.c_str() + 6));
+            if (id == "music_stop") game->core.hooks->audioSoundTestPlay(&game->core, -1);
+            else                    game->core.hooks->audioSoundTestPlay(&game->core, atoi(id.c_str() + 6));
             refreshReadouts();
         }
         return;

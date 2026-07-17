@@ -273,7 +273,7 @@ long Repl::read(Core* c, uint32_t f) {
     // musictest <n> — play catalogued music track <n> through the NATIVE audio engine (sound test).
     // 'musictest stop' (or n<0) stops. Bypasses the broken libsnd path entirely (engine/audio/).
     else if (!strcmp(cmd, "musictest")) {
-      MusicList& ml = c->game->music_list;
+      MusicList& ml = gctx(c)->music_list;   // music_list moved off Game onto the game-side TombaCtx
       char sub[32] = {0}; int n = -1;
       if (sscanf(line, "%*s %31s", sub) == 1 && !strcmp(sub, "stop")) { ml.stop(); fprintf(stderr, "[repl] musictest stop\n"); }
       else if (sscanf(line, "%*s %d", &n) == 1 && n >= 0) {

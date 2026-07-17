@@ -6,7 +6,8 @@
 // synth from those offsets.
 #include "music_list.h"
 #include "native_music.h"
-#include "game.h"
+#include "game.h"       // core->game->disc — the native disc backend lives on the framework Game
+#include "game_ctx.h"   // gctx(core)->native_music — the sibling player on the game aggregate
 
 #include <cstdint>
 #include <cstdio>
@@ -51,14 +52,14 @@ const char* MusicList::name(int i) const {
 int MusicList::loadContainer() {
     if (mBuf) return 0;
     uint32_t lba = 0, size = 0;
-    if (!disc_find_file(&game->disc, "\\CD\\TOMBA2.SND", &lba, &size) || size == 0) {
+    if (!disc_find_file(&core->game->disc, "\\CD\\TOMBA2.SND", &lba, &size) || size == 0) {
         fprintf(stderr, "[music_list] disc_find_file \\CD\\TOMBA2.SND failed\n"); return -1;
     }
     uint32_t nsec = (size + 2047) / 2048;
     mBuf = (uint8_t*)malloc((size_t)nsec * 2048);
     if (!mBuf) return -1;
     for (uint32_t i = 0; i < nsec; i++) {
-        if (!disc_read_sector(&game->disc, lba + i, mBuf + (size_t)i * 2048)) {
+        if (!disc_read_sector(&core->game->disc, lba + i, mBuf + (size_t)i * 2048)) {
             fprintf(stderr, "[music_list] disc read failed at sector %u\n", i);
             free(mBuf); mBuf = nullptr; return -1;
         }
@@ -79,11 +80,11 @@ long MusicList::seqOff(int si) const {
 }
 
 int MusicList::play(int i) {
-    if (i < 0 || i >= 10 || !game) return -1;
+    if (i < 0 || i >= 10 || !core) return -1;
     if (loadContainer()) return -1;
     long so = seqOff(S2SV[i].seq), vo = vabOff(S2SV[i].vab);
     if (so < 0) { fprintf(stderr, "[music_list] song %d: seq not found\n", i); return -1; }
-    if (game->native_music.play(mBuf, so, vo)) { fprintf(stderr, "[music_list] song %d: play failed\n", i); return -1; }
+    if (gctx(core)->native_music.play(mBuf, so, vo)) { fprintf(stderr, "[music_list] song %d: play failed\n", i); return -1; }
     mNow = i;
     fprintf(stderr, "[music_list] playing song %d (seq@0x%lx vab@0x%lx)\n", i, so, vo);
     return 0;
@@ -100,7 +101,7 @@ long MusicList::areaSeqOff(int si) const {
 }
 
 int MusicList::playArea(const uint8_t* bundle, long bundle_len, int song) {
-    if (!bundle || bundle_len < 0x4000 || song < 0 || song >= 10 || !game) return -1;
+    if (!bundle || bundle_len < 0x4000 || song < 0 || song >= 10 || !core) return -1;
     // Validate this really is the bundle (SEP at 0x30, area VAB at 0x26b4) before committing.
     if (memcmp(bundle + 0x30, "pQES", 4) || memcmp(bundle + AREA_VAB_OFF, "pBAV", 4)) {
         fprintf(stderr, "[music_list] area bundle invalid (no pQES@0x30 / pBAV@0x26b4)\n");
@@ -110,22 +111,22 @@ int MusicList::playArea(const uint8_t* bundle, long bundle_len, int song) {
     uint8_t* nb = (uint8_t*)malloc(need);
     if (!nb) return -1;
     memcpy(nb, bundle, need);
-    game->native_music.stop();
+    gctx(core)->native_music.stop();
     free(mArea); mArea = nb; mAreaLen = need;
     long so = areaSeqOff(song);
     if (so < 0) { fprintf(stderr, "[music_list] area song %d: seq not found\n", song); return -1; }
-    if (game->native_music.play(mArea, so, AREA_VAB_OFF)) { fprintf(stderr, "[music_list] area song %d: play failed\n", song); return -1; }
+    if (gctx(core)->native_music.play(mArea, so, AREA_VAB_OFF)) { fprintf(stderr, "[music_list] area song %d: play failed\n", song); return -1; }
     mNow = song;
     fprintf(stderr, "[music_list] area BGM song %d (seq@0x%lx vab@0x%lx)\n", song, so, (long)AREA_VAB_OFF);
     return 0;
 }
 
 void MusicList::stop() {
-    if (game) game->native_music.stop();
+    if (core) gctx(core)->native_music.stop();
     mNow = -1;
 }
 
 int MusicList::nowPlaying() {
-    if (mNow >= 0 && game && !game->native_music.active()) mNow = -1;
+    if (mNow >= 0 && core && !gctx(core)->native_music.active()) mNow = -1;
     return mNow;
 }

@@ -26,6 +26,8 @@
 #include "items/inventory.h"
 #include "ui/save_menu.h"
 #include "render.h"
+#include "audio/native_music.h"   // NativeMusic — in-game real-time SEP/VAB music player (game-owned)
+#include "audio/music_list.h"     // MusicList — Sound Test catalogue + area BGM driver (game-owned)
 
 // TombaCtx — the game's opaque per-Core subsystem aggregate. Allocated/wired by tomba_ctx_create
 // (game_ctx.cpp) and reached from the framework only as Core::gameCtx (void*). Holds the 9 subsystems
@@ -39,6 +41,8 @@ struct TombaCtx {
   Mtx        mtx;
   Inventory  inventory;
   SaveMenu   saveMenu;
+  NativeMusic native_music;   // real-time SEP/VAB synth mixed into the SPU sink via the audioMixFrame hook
+  MusicList   music_list;     // Sound Test catalogue + in-game area BGM driver (uses native_music)
   Render*    mRender = nullptr;
 };
 
