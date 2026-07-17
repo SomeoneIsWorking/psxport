@@ -322,6 +322,12 @@ public:
   //   flow/store shape as sceneEventFifo(), just with the missing frame/ra discipline restored.
   void sceneEventFifoFaithful();
 
+  // fieldTargetCursor: guest FUN_800251F0 — the field TARGET-SELECT cursor state machine (operates on
+  // the scene-event struct at a0). Called every field frame from sceneEventFifo's 0x800251F0 "default"
+  // branch. Byte-faithful (gen_func_800251F0). registerFieldTargetCursor() installs it on the registry.
+  void fieldTargetCursor();
+  static void registerFieldTargetCursor();
+
   // sceneRenderListBuilder: 2-phase scene/render-list builder driver at guest 0x8004FE84 (struct
   //   @0x800bf548). Phase 0 arms it (snapshot list ptr 0x800ecf64 into base+0x2b0..0x2b8, advance
   //   phase to 1); phase 1 dispatches a sub-state handler (base[1] 0..3 -> distinct overlays);

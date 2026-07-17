@@ -247,6 +247,7 @@ set(PORT_SRC
   game/render/narration_swirl.cpp
   game/render/render_walk.cpp
   game/core/engine.cpp
+  game/core/field_target_cursor.cpp
   game/scene/sop.cpp
   game/scene/demo.cpp
   game/camera/cutscene_camera.cpp
