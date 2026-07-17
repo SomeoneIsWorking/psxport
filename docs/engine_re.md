@@ -3851,3 +3851,289 @@ A follow-up pass should finish RE'ing + drafting these 7 (especially `0x80061010
 only one of the whole `60064-65374`+nested cluster observed calling an ALREADY-NATIVE method —
 `matrixComposeAttached()` — a concrete signal this cluster genuinely is Tomba's per-frame FSM
 update, not enemy/AI content) before this table can be considered done.
+
+<!-- ===== wider-RE frontier28 dossier (workflow wf_91c4686b-227, 2026-07-17) ===== -->
+# Field-spine RE dossier
+
+Synthesis of a 28-function RE frontier batch (frontier28). Readiness axis: `ready-leaf` (portable
+now, no frame) / `ready-frame` (portable now, mirror the guest frame) / `blocked-deps` (port an
+in/out-of-batch callee first) / `needs-more-re`. Three functions are ALREADY OWNED (RE-confirm only),
+four are DO-NOT-PORT (data / epilogue artifact / continuation / kept-substrate).
+
+## Shared guest structs (consolidated)
+
+- **ObjectNode (active-object / actor node)** — the object/actor/collision spine, touched by
+  `0x80022554`, `0x80023870`, `0x80040390`, and read (position triple only) by `0x80027144`.
+  Key offsets: `+0x00` flags(bit0x01 active), `+0x02` collision type, `+0x04` SM state byte,
+  `+0x0c` actor mode(==2), `+0x10` partner ptr, `+0x24` next ptr, `+0x29` SM gate byte,
+  `+0x2b` collision-handled state, `+0x2c` pos/transform sub-struct base (→ `+0x2e/+0x32/+0x36`
+  s16 X/Y/Z), `+0x46` flag(bit0), `+0x5e` dispatcher case-selector byte, `+0x5f` status
+  byte(bit0x40 eligible; 23870 WRITES facing here), `+0x60` facing angle, `+0x68` ptr arg,
+  `+0x80` XZ collision radius, `+0x84/+0x86` Y-band lo/hi, `+0xC0` child-node ptr (child+0x40 =
+  emitter template handle). The 40-slot 64-byte effect pool @0x800EC188 (27144) is a SEPARATE
+  struct.
+- **AssetDescriptorTable @0x800BE118** (stride 8) — `0x80045080`, `0x80045558`. `+0x0` u32 LBA,
+  `+0x4` u32 size; consumed by Cd::dc40Sync(0x8001DC40).
+- **Packed PSX 3x3 MATRIX** (5 words / 9 int16) — `0x80084360`, `0x80084520`. word0=[m00|m01] …
+  word4=[m22].
+- **SPU voice shadow register image (*0x800AC604)** — `0x80099490`, `0x80099970`. +0/+384 Lvol,
+  +2/+386 Rvol, +4 pitch, +8/+10 packed ADSR, +0x1aa(426) control halfword. FntOpen(0x80098330)
+  reads an overlapping font-stream interpretation at +0x1aa — treat as UNCERTAIN shared/aliased
+  global, do not merge blindly.
+
+## Per-function
+
+- **0x80017930** — DO-NOT-PORT. Data misdecoded as code inside the 0x80017930-0x8001CAC0 BIOS
+  jump-table/string span. Leave as substrate. Leaf, no frame. Deps: none (fake fall-through to
+  0x8001795C).
+- **0x80022554** — `ObjectCollision::interactionPass` (game/world/object_collision.cpp).
+  ready-frame. Per-frame object-vs-candidate collision/interaction sweep over the 0x800F2738
+  active-object list × the scratchpad candidate array (*0x1F800154, count *0x1F80015C); the ONLY
+  SFX 0x2f (bonk) source. 48-byte frame, spills ra@40/s5@36/s4@32/s3@28/s2@24/s1@20/s0@16; ra
+  constants 0x80022678/0x800226F0/0x80022704/0x80022718. WRITES scratchpad 0x1F800182 countdown.
+  Deps (stay substrate): 80020C34, 80031470, 80022330 UNOWNED; 80074590 owned.
+- **0x80023870** — `ActorProximityPush::resolve` (game/ai/actor_proximity_push.cpp). ready-frame.
+  Proximity hit-test + push-apart: if self within summed radii & Y-band of ref, snap to
+  touching-distance along ratan2 heading, return 1. WRITES scratchpad 0x1F80009C (heading — main-RAM
+  A/B is blind to it, MUST mirror). 40-byte frame, spills r16-r20+ra@16..36. **Blocking dep:
+  0x80084080 (Math::sqrtLzcs) — port that first.** Older "tail-jump into script VM" note FALSIFIED.
+  Twin FUN_800240FC (reads deltas off a1) — co-own.
+- **0x80026368** — `Array8Dispatch::tick` (game/object/array8_dispatch.cpp). ALREADY PORTED.
+  8-slot object-array dispatcher over 0x80100400 (0x4C stride), handler table 0x8009D314. 32-byte
+  frame, r31=0x800263C0 at dispatch.
+- **0x80027144** — `EffectNodePool::spawnBurst` (game/object/effect_spawn.cpp). ready-frame. Burst-
+  spawns up to N (param_4&0xf) effect nodes from the 40-slot 64-byte pool (FUN_8007B26C), budget =
+  FUN_800270F8(param_1); stamps type/index/subtype/pos, distributes via FUN_80027058. 56-byte frame
+  (ra@48…s0@16). Deps (substrate): 800270F8, 8007B26C, 27058 UNOWNED. Port before 0x80040390.
+- **0x80040390** — `ActorSm40558` (game/object/actor_sm_40558.cpp). ready-frame. One-shot burst SM
+  handler (gated on obj+0x29): 8-particle spawn via 0x80027144, SFX #12, obj+0x04:=3, and if
+  obj+0x5e==5 decrement global 0x800BF850. 24-byte frame (s0@16, ra@20). **Epilogue tail-jumps to
+  0x80040400 — fold that into the C++ return.** Never SBS-fires in seaside (obj[5]==0). Deps:
+  80027144 UNOWNED (batch), 80074590 owned, 80040400 (epilogue).
+- **0x80040400** — DO-NOT-PORT. Shared epilogue artifact of the 0x8004xxxx family (restore s0@sp+16,
+  ra@sp+20, sp+=24). Subsumed by each parent's normal C++ return. Not independently callable.
+- **0x80045080** — `Asset::loadFixedAssetByIndex` (game/scene/asset.cpp). ready-frame → READY NOW.
+  Indexes 0x800BE118 by (r5&0xff)*8 → {LBA,size} → Cd::dc40Sync. 24-byte frame, ra@16
+  (ra=0x800450AC). Dep 0x8001DC40 OWNED. Precedes 0x80045558.
+- **0x80045558** — `Asset::loadMenuOverlay` (game/scene/asset.cpp). blocked-deps. Wrapper:
+  FUN_80045080(dest=0x8018A000, slot=param_1&0xff) for the load-menu overlay. 24-byte frame, ra@16
+  (0x80045570). **Dep 0x80045080 in-batch — port immediately after.** (findings/scene.md ~725
+  claiming 0x8020A000 dest is STALE; ground truth = 0x8018A000.)
+- **0x80048034** — `CollisionWalk::selectSpanNode` (game/world/collision_walk.cpp). ready-leaf →
+  READY NOW. Pure-scratchpad grid-cell walker (WalkCtx 0x1F8001A8..0x1F8001EC): picks the boundary
+  span node vs threshold @0x1F8001BE, publishes descriptor ptr to 0x1F8001E8. 8-byte span-nodes
+  (+0 flags, +2 base, +4 ext, +6 idx). Leaf, no frame. No callees.
+- **0x80052144** — `PadVibration::selectDutyCycle` (game/input/pad_vibration.cpp). ready-leaf →
+  READY NOW. Rumble duty classifier: mode picks (base,alt) pair, pad byte bucketed by 0x58/0xa8
+  thresholds. Leaf, no memory/callees.
+- **0x80078240** — `Math::approxDist3` (game/math/gte_math.cpp). ready-leaf → READY NOW. Octagonal
+  3-value magnitude estimate max*(15/16)+(losers)*(3/8). Leaf, result in v0. No deps.
+- **0x80078824** — `Engine::setAreaStartPos` (game/core/engine.cpp). ready-leaf → READY NOW. Writes
+  spawn pos globals 0x800BF890/94/98 (<<16 fixed) + facing byte 0x800BFE38 from per-area table
+  0x800A54A8[area][sub*8]. Leaf, no frame/callees. Called from area-machine state 3.
+- **0x80080000** — DO-NOT-PORT (continuation). Second half (OT-insert/loop-advance) of POLY_GT3
+  submit whose entry is 0x8007FDB0; shares its 24-byte frame. pc_render overlay already exists;
+  faithful port = co-own with 0x8007FDB0. Touches packet heap ptr 0x800BF544, scratchpad
+  0x1F800080/84.
+- **0x80080880** — `scheduler_yield` (runtime/recomp/scheduler.cpp). ALREADY OWNED. BIOS ChangeThread
+  (B0 fn 0x10) — cooperative yield/task-end funnel, wired via PlatformHle. Leaf.
+- **0x80080890** — EnterCriticalSection (runtime/recomp; PcScheduler::enterCritical). ready-leaf →
+  READY NOW. `a0=1; syscall op1`. Wire via overrides::install(0x80080890,…). Dep rec_syscall
+  (owned). Not a game/ class.
+- **0x80084080** — `Math::sqrtLzcs` (game/math/gte_math.cpp). ready-leaf → READY NOW. isqrt via GTE
+  LZCS normalize + guest LUT 0x800A6310. Distinct from isqrt16/matMul (later-186 mis-attribution
+  fixed). Deps owned (gte data r/w, 0x80084110). **Upstream of 0x80023870.**
+- **0x80084360** — `Math::compMatrixLV` (game/math/gte_math.cpp). ready-leaf → READY NOW. GTE
+  CompMatrixLV P=R×M in-place into a1, returns a1. Tail func_80084470 is a decompiler artifact, NOT
+  a callee. No deps.
+- **0x80084520** — `Math::matScaleColumns` (game/math/matrix.cpp). ready-leaf → READY NOW. Non-uniform
+  column-scale of packed 3x3 by {sx,sy,sz} 1.12-fixed, in-place, returns a0. Leaf, no callees.
+- **0x80086970** — `Engine::initInput` (game/scene/startup.cpp:173). ALREADY OWNED. Input-subsystem
+  bring-up (7-call init, pad descriptor poke, engine-ready gate 0x800abe70). 24-byte frame — existing
+  port does NOT reproduce it (dead scratch, boot RAM verified identical, later-184). **codemap GAP:
+  register in tools/codemap.py.**
+- **0x80089160** — `Engine::installHandlerTable` (game/core/engine.cpp). ready-leaf → READY NOW.
+  Three fn-ptr stores into 0x800ABE50 table (80089194/800895E8/800892A4). Leaf, no callees. Called
+  from Engine::initAlloc.
+- **0x80091120** — `SsSeq::sepTrackStep` (game/audio/libsnd_seq.cpp). blocked-deps. Per-track SEQ
+  clock advance (0xB0-byte track block: +0x52 rest counter, +0x54 step len, +0x90 delta accum),
+  drains delta via SEP dispatcher. 40-byte frame (ra@32…s0@16), loop ra 0x800911D8. **Blocking dep:
+  0x80091460 (UNOWNED, out-of-batch) — port first.**
+- **0x80092660** — `Sequencer::seNoteRequestSpawn` (game/audio/sequencer.cpp). ready-frame.
+  Positional SFX/note trigger: reentrancy lock 0x80104C24, voice validate, pan compute, fill voice-
+  scratch 0x80105CF8.., commit to per-slot tables, key on. 64-byte frame; **r22@48/r23@52/r30@56 are
+  the flagged SBS divergence spills (findings/sbs.md) — reproduce faithfully.** Deps: 800962B0 owned;
+  92FD0/945A0/9440C/94C10 substrate.
+- **0x80096480** — `CelLoader::preloadCel` (game/scene/cel_loader.cpp). ready-frame → effectively
+  READY NOW. Wrapper into worker FUN_80096590 (a2=0x800964B4 callback, a3=0), sign-extends slot in/
+  ret. 24-byte frame, ra@16 (0x800964A0). **Dep 0x80096590 ALREADY OWNED**; 800964B4 forwarded as
+  data.
+- **0x80096590** — `ov_bav_load` (game/ui/bav_loader.cpp). ALREADY OWNED, 0-diff verified. Per-area
+  CEL loader (16 slots @0x80105D18, VRAM tpage/clut patch). 1072-byte frame. RE-confirm only.
+- **0x80098330** — DO-NOT-PORT (kept substrate). libgs FntOpen. Deliberately rec_dispatch'd
+  (engine_re.md, nested-dispatch risk); FUN_80075130 dispatches in-context. 136-byte frame if ever
+  owned → game/ui/font.cpp::Font::fntOpen.
+- **0x80099490** — `AreaAudio::applyVoiceAttr` (game/audio/area_audio.cpp). ready-leaf → READY NOW.
+  libspu voice-attr packer into *0x800AC604 image (mask==0 = apply-all). Tail rec_dispatch is a ROM
+  jump-table data lookup, no game callee. Leaf. Port before 0x80099970 for the struct lens.
+- **0x80099970** — `SpuVoiceEngine::applyVoiceParams` (game/audio/spu_voice_params.cpp). ready-frame.
+  Walks 24 SPU voices, composes shadow slots (*0x800AC604, voice*0x10) + note table 0x800AC5C0. 56-
+  byte frame (ra@48…s0@24); sp+16/+20 are dead-loop scratch (mirror anyway). Deps 80099F70/80097540
+  substrate.
+
+## Port order (frontier)
+
+Port the math/util leaves first (0x80078240, 0x80084080, 0x80084360, 0x80084520, 0x80052144,
+0x80089160, 0x80078824, 0x80048034, 0x80080890, 0x80099490, 0x80045080, 0x80096480 — all zero
+unowned deps). Then chains: 0x80045080→0x80045558; 0x80084080→0x80023870; 0x80027144→0x80040390
+(fold 0x80040400); 0x80099490→0x80099970. 0x80022554/0x80092660 port with their callees left on
+substrate. 0x80091120 waits on out-of-batch 0x80091460. Skip: 0x80017930, 0x80040400, 0x80080000,
+0x80098330 (and confirm-only 0x80026368/0x80086970/0x80096590/0x80080880).
+<!-- ===== subsystem RE sweep (workflow wf_7dd640ad-46f, 2026-07-17): 318 unowned MAIN fns, 12 subsystems ===== -->
+# Subsystem RE sweep
+
+Consolidated RE dossier across 12 subsystems (~316 unique unowned functions). The dominant
+finding: eight of the twelve subsystems operate on ONE guest struct — the universal
+`TombaObject` actor/object-table node — under subsystem-specific field overlays. A second
+shared page (`GameStateGlobals` @ 0x800bf8xx) carries world/menu state read by nearly
+everything. Two mis-filings were found and are called out below.
+
+## Cross-subsystem shared structs
+
+### TombaObject — universal actor / object-table node (~0x1C0+ bytes)
+Taken in r4 by every per-object handler in player/core/object/scene/world/ai/math/render.
+The `ThrownObject`, `ScriptActor`, `EffectActor`/`ProjectileActor`/`HookActor`, `FieldObject`,
+`ObjectNode`, and `ActorObj` dossier structs are all VIEWS of this single layout. Canonical
+offsets: +0x04 PHASE state-machine (0 init/1 run/2 end/3 despawn — the universal step var),
++0x2c..+0x36 position (fixed accum + rounded shorts), +0x1c/+0x18 per-frame cb ptrs, +0x28
+active flags, +0x46 facing byte, +0x56 heading angle (0..0xfff), +0x140 base angle, +0x174
+lock flags, +0x17e signed mode word. Script-VM subsystems overlay opcode args at +0x72/74/76
+and step at +0x78; AI/effect overlay script ptr at +0x3c/+0x40; render overlays update-fn at
++0x1c. See the crossStructs field map for the full consolidated table. **Port implication:**
+model this ONCE as a `TombaObject` class in `game/object/` (or a shared header); every
+subsystem method operates on it — do not re-derive the layout per subsystem.
+
+### GameStateGlobals @ 0x800bf8xx
+The shared .bss game-state page. 0x800bf870 is the primary context-dependent state selector
+(current-area id in input, menu curPage in ui, mode-dispatch idx in core/scene). Also money
+(0x800bf874), ability mask (0x800bf880), gauge (0x800bf87e/7f), equipped slots (0x800bf88c..8f),
+pig bag (0x800bf883/884[]), area start pos (0x800bf890/894/898), per-item counts
+(0x800bfab4[0x100]). Read+written by core/ui/render/input/object/ai/player/scene.
+
+### SPU voice-request table @ 0x801054C8 (stride 0x1C / 0x38) — MIS-FILED
+**Verified in scratch/decomp/subsystems.c**: the `input` dossier's `InputSlotRecord` and the
+`audio` dossier's `VoiceNoteRequest table` are the SAME memory. This is the SPU voice/note
+allocation table, not input. Functions **0x80093650** (voice-table init) and **0x80094150**
+(LRU voice-steal alloc) belong to AUDIO. The input dossier's other 4 functions
+(0x80078770/78798/78824/78894, AreaPlacementRecord) are genuinely input. Correct the codemap
+subsystem tag when porting.
+
+### Scratchpad mirror @ 0x1F800xxx
+Single shared HW/scratch page (blind to main-RAM dumps). Disjoint per-subsystem regions:
+GTE compose 0x1F800000-1c, camera origin 0x1F8000d2/d6/da + center 0x1F800160-168 (ai/render),
+pad masks 0x1F800172/174, frame counter 0x1F80017c, GridRay terrain-query 0x1F8001a0-c8
+(player), grab-broadcast 0x1F800200-208 + ControlBlock ptr 0x1F800214 + thrown refcount
+0x1F800251 (object). Used by core/player/object/ai/render/world.
+
+### PacketPool/OT render substrate (DAT_800bf544, PTR_DAT_800ed8c8)
+Written by world (0x80027768 quad emitter) and ai (0x80029664 hook render). SUBSTRATE-ONLY —
+pc_render bypasses; part of the faithful byte-exact set, drawing not reproduced.
+
+## Per-subsystem models
+
+### math (14 fns, 10 ready)
+Structs: PackedMatrix (5-word GTE 3x3), SqrtInput (scalar isqrt), ObjectNode (= TombaObject
+view for the 0x8003xxxx tick cluster). Pure leaves; port FIRST — no actor-state deps.
+| addr | role | readiness | owner |
+|---|---|---|---|
+| 0x80084080 | isqrt (GTE LZCS + LUT 0x800A6310) | ready-now | Math::isqrt |
+| 0x80084360 | load MATRIX->GTE ctrl, transform cols | ready-now | Math::matLoadTransform |
+| 0x80084520 | column-scale MATRIX by {sx,sy,sz} | ready-now | Math::matColScale |
+| 0x80032918/33278/33380/33450/33560/33630/34634 | ObjectNode tick leaves | ready-now | ObjTick::* |
+| 0x80034670/33080/34548/34338 | tick drivers | blocked (need leaves) | ObjTick::driver |
+Order: 84080 -> 84360 -> 84520 -> 34634 -> 32918 -> 33278 -> 33380 -> 33450 -> 33560 -> 33630 -> 34670 -> 33080 -> 34548 -> 34338
+
+### player (55 fns, 16 ready)
+Structs: Actor (= TombaObject), GridRay (terrain-collision scratchpad 0x1F8001xx), EventFlag
+command record. GridRay terrain leaves + actor FSM leaves are the frontier; collision drivers
+(0x80022554/20868/22330) are blocked on them.
+Ready: GridRay 48360/48134/48034/45810/49760; FSM 54790/60268/63098/53968/31558/31708/31744;
+guards 23528/23290; EventFlag 42258/42448.
+Order: 48360 -> 48134 -> 48034 -> 45810 -> 49760 -> 45724 -> 49800 -> 49418 -> 47468 -> 47778 ->
+48750 -> ... -> 22330 -> 22554 -> 20868 -> ... (collision drivers last).
+
+### scene (37 fns, 18 ready)
+Structs: ScriptActor (= TombaObject + opcode overlay +0x72/74/76/78), CurtainObj (wipe effect),
+SaveXfer/MemcardDescriptor, TaskEventEngine globals (0x800abeXX + dispatch table 0x80102440).
+Ready: script opcode leaves 52144/52198/50894/78240/42170/42884/44090/42758/45080/73194;
+TaskEvent 86604/86738/86764; SaveXfer 88210/88248/88824/88840/88908.
+Order (leaves-first): the 18 ready, then curtain 26604/26660/26768/26864, then script drivers
+41378/43964/43720/43858/43634/44308/44144, then TaskEvent drivers 87410/87530/87458/86970.
+
+### core (25 fns, 8 ready)
+Structs: TombaActor/GameObject (= TombaObject), Scratchpad HW/input mirror, Engine BSS globals
+(= GameStateGlobals + display), Dual DRAWENV/DISPENV pair. Ready: angle leaves
+55824/55844/55864/55284, mode gate 24794, sub-angle 68610, HUD dispatch 25744, display init
+50738. Blocked drivers: 24448/24548 (actor step), 55390/55634/55704 (lock-target FSM), 68698/68214.
+Order: 55824 -> 55844 -> 55864 -> 55284 -> 24794 -> 68610 -> 25744 -> 50738 -> 41718 -> 41768 ->
+25934 -> 55634 -> 55704 -> 55390 -> 41938 -> 68698 -> 68214 -> 24448 -> 24548 -> 79464 -> 30264
+
+### object (13 fns, 7 ready)
+Structs: ThrownObject (= TombaObject view, physics overlay +0x44/48/4c/68), ControlBlockSingleton
+(ptr @ 0x1F800214), Array8Slot (screen-effect array 0x80100400), GaugeGlobals (0x800BF87E/7F),
+GrabBroadcastScratch. Ready: ControlBlock 70870/70724/70798/70698; ThrownObject setters
+69634/69688; Gauge 26100. Blocked: ThrownObject tick 69300 (needs 69634/69688/69858),
+69858/69948, ControlBlock 70830/70888.
+Order: 70870 -> 70724 -> 70798 -> 69634 -> 69688 -> 26100 -> 70698 -> 69858 -> 69948 -> 69300 -> 70830 -> 70888
+
+### world (12 fns, 2 ready)
+Structs: FieldObject (= TombaObject, ~208B pool node from Spawn free-head 0x800E8098),
+BillboardParticleNode (from FUN_8007b26c), GteQuadRecord+PacketPool/OT (substrate).
+Ready: 79634, 74810. Blocked: 31220/31470/72898/72308/72520/27058/27144/40390. Keep-substrate:
+27768 (GTE quad emitter -> OT, pc_render bypasses).
+Order: 79634 -> 74810 -> 31220 -> 31470 -> 72898 -> 72308 -> 72520 -> 27058 -> 27144 -> 40390 -> 27768
+
+### ai (8 fns, 3 ready)
+Structs: EffectActor/ProjectileActor/HookActor (all = TombaObject views), HookStateGlobals
+(DAT_800bf8xx singleton — model as HookState class). Ready: 52694 (projectile decay), 72114
+(hook subtype), 31744 (shared w/ player). Blocked: 29530, 52720, 71260, 71768, 29664.
+Order: 52694 -> 31744 -> 29530 -> 72114 -> 52720 -> 71260 -> 71768 -> 29664
+
+### render (31 fns, 6 ready)
+Structs: MapMenuTask (map/pause widget), ActorObj (= TombaObject effect variant),
+GpuDriverDispatch (libgpu — DO NOT model, substrate). Ready: gauge sub-block
+38708/38758/38794, scroll 39978, screen-xform 77870, effect spawn 80750. Blocked: 39034/80424/39110.
+Order: 38708 -> 38758 -> 38794 -> 39978 -> 77870 -> 80750 -> 39034 -> 80424 -> 39110
+
+### ui (34 fns, 2 ready)
+Structs: MenuEventGlobals (= GameStateGlobals view), MenuWidget (r4 base), ItemTables (rodata),
+SpuEnv (SDK — completeness only). Ready: 79324, 36560. Most blocked on GameStateGlobals +
+MenuWidget draw ctx. Order: 79324 -> 36560 -> 35640 -> 35338 -> 35424 -> 35528 -> 35088 -> 35218 -> 36708 -> 36240 -> 37894 -> 35738
+
+### audio (17 fns, 8+ ready)
+Structs: SeqTrackBlock (0xB0/track @ 0x80104C30 base array), VoiceNoteRequest table (=
+0x801054C8, shared w/ input's InputSlotRecord — see cross-structs), NoteRequest staging globals.
+Ready: seq 94474/90160/91810/92310/92420, audio 75024/75070, voice-steal 94150. **Reclaim from
+input**: 0x80093650 (voice-table init) belongs here. Keep-substrate: 98810 + VAB/SPU SDK cluster.
+Order: 94474 -> 90160 -> 94150 -> 91810 -> 90210 -> 92310 -> 92420 -> 75024 -> 75070 -> 91460 -> 91120 -> 90010 -> 90560 -> 90700 -> 92660 -> 90750 -> 90980
+
+### input (5 fns, 4 genuinely-ready + 1 mis-filed)
+Structs: AreaPlacementRecord (stride 8 @ PTR_DAT_800a54a8[area]), AreaGlobalTables,
+InputSlotRecord (= SPU voice table, MIS-FILED), InputSubsystemGlobals. Genuinely input:
+78770 (attr), 78798 (name-variant), 78824 (seed start pos), 78894 (flag test). **0x80093650 is
+SPU voice-table init — move to audio.**
+Order: 78824 -> 78770 -> 78798 -> 78894 -> [80093650 -> audio]
+
+### runtime (67 fns, 0 ready)
+Structs: CdCtrlBlock (libcd), SysStateBlock (stub library globals, not reachable from MAIN
+shard), GpuDmaPrim (libgpu), RcntTimeout (HW timer). ENTIRE subsystem is keep-substrate:
+libcd command-control (89194/89508), libgpu (83618), HW RCNT timer (89620/89640), and the
+stub-library working set. None to port — BIOS/SDK/hardware primitives.
+
+## Counts
+- total unowned (12 dossiers): ~316 unique (318 raw; 0x80031744 double-listed player+ai)
+- ready-now: 84 unique (leaves with deps satisfied)
+- keep-substrate/artifact: ~85 (runtime 67, render libgpu ~10, audio/ui SPU+VAB SDK ~8)
+- blocked (deps upstream): ~147
+- corrections to codemap tags: 0x80093650 + 0x80094150 input->audio (SPU voice alloc);
+  0x80031744 is genuinely shared player+ai (single port, both subsystems reach it)
