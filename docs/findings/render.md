@@ -2336,3 +2336,16 @@ draft was already byte-faithful.
   draw NOTHING natively (USER: "don't render any unowned things") instead of a wrong-transform mesh.
 - **verify**: field shot identical (typeroute_field.png — nothing visible lost at seaside); SBS-full
   0-diff both legs (combat f6180, watch_cut f20040).
+
+## Pre-existing render-port port_check FAILs (byte-divergence, deferred) [2026-07-17]
+
+- **Status:** KNOWN, deferred (render path). Surfaced by `tools/port_check.py --all`.
+- **FAILs (guest mem-store-width divergence vs gen body):** `Render::objListWalk1` (0x8003BB50),
+  `objListWalk2` (0x8003BCF4), `objListWalk3` (0x8003BF00), `objListWalk4` (0x8003EEC0) in
+  objlist_walk.cpp; `OverlayGroundGt3Gt4::gt3` (0x8013FB88); `Render::cmdListDispatch` (0x8003CDD8).
+- **Triage needed (when owning render nodes):** decide per-port whether it is an EXECUTION-path port
+  that MUST byte-match guest RAM (then the store-width mismatch is a REAL SBS divergence to fix) or a
+  pc_render REBUILD that legitimately diverges from the GP0-packet gen body (then port_check FAIL is
+  expected and the ORACLE marker should be dropped/relaxed for it). Do NOT mass-fix — assess intent first.
+- **Not caused by** the 2026-07-17 abi_extract dead-code/sibling-latch fixes (those only affect post-
+  return code; these FAIL mid-body).
