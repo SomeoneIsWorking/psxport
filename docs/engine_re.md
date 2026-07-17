@@ -4137,3 +4137,70 @@ stub-library working set. None to port — BIOS/SDK/hardware primitives.
 - blocked (deps upstream): ~147
 - corrections to codemap tags: 0x80093650 + 0x80094150 input->audio (SPU voice alloc);
   0x80031744 is genuinely shared player+ai (single port, both subsystems reach it)
+<!-- ===== render frontier RE (workflow wf_821489cd-4b1, 2026-07-17) ===== -->
+# Render frontier RE — renderWalk / perObjRenderDispatch handler batch
+
+Two owned dispatch roots reach every handler below, so each is a next-ready render node (no jump-ahead):
+- **Render::renderWalk 0x8003C048** (render_walk_dispatch.cpp) — node+11 → JUMP_TABLE 0x80014DB8 → per-type handlers (F174/EF9C/C5F8/C788/726D4, all still `func_` substrate).
+- **Render::perObjRenderDispatch 0x8003CCA4** → cmdListDispatch 0x8003CDD8 → node+0x0d&11 → JUMP_TABLE 0x80014EC8 → one secondary-effect pass (D584/F344/F3F4/F4C4/F594).
+
+RE goal per handler = name the RESULT primitive + the node/scene data it comes from, then REBUILD PC-native (float verts, real depth, render-queue flags). Never transcribe GP0 packets / OT / GTE compose.
+
+## Cluster A — render-type handlers (renderWalk jump-table)
+
+### FAMILY A — render-command-list / scene node (later-133/134 struct)
+Shared offsets: +0x01 visible gate · +0x08/+0x09 cmd cap/count · +0x0b style flag (==0x0f → billboard-flag down) · +0x0d low nibble flush sub-mode (0 plain / 2 +RGB color-add) · +0x11 TYPE selector (renderWalk jump table) · +0x18/0x19/0x1a R/G/B brightness-add (0x80-pivot signed) · +0x24 material word · +0x2e/0x32/0x36 s16 pos X/Y/Z · +0x38 model/geom present gate · +0x47 bit0 billboard flag · +0x54 base matrix (C5F8) · +0x98 composed camera-space matrix (C788, built by FUN_80051C8C) · +0xc0 cmd-ptr array base (each cmd: +0x18..+0x34 GTE transform, +0x40 geomblk).
+Context: 0x1F8000F8.. live camera CR0-7 · 0x800BF544 pool ptr · 0x800ED8C8 OT base · 0x800BF870 render-mode byte.
+
+#### 0x8003F174 — minor per-object mesh flush  [needs-effect-plumbing / PARTIAL]
+- **Role/primitive:** drains node+0xC0[i] (count node+8/9), draws each sub-mesh with its own pre-composed cmd+0x18 transform + cmd+0x40 geomblk. Result = the object's GT3/GT4 polygon geometry via the per-mode renderer. No effect of its own. Sibling of the major world flush (submit_perobj_flush / 0x8003CDD8). renderWalk calls with flag=0 (case 0x8003C0C4).
+- **Node data:** node+8 cap, node+9 count, node+0xC0 cmd array; per cmd +0x18..+0x34 transform, +0x40 geomblk.
+- **Rebuild:** factor the per-cmd loop into a shared submit.cpp helper; per cmd call Render::gt3gt4(geomblk, otbase) → native_gt3gt4 (float model×camera via eproj_compose_object, real depth). Mirror frame_size=80/6 spills. GENERIC modes owned now; overlay-mode geomblks (0x8013xxxx/0x8012xxxx) stay routed through perModeDispatch — the next-tier seam.
+
+#### 0x8003EF9C — camera-space mesh flush + brightness post-pass  [needs-effect-plumbing / PARTIAL]
+- **Role/primitive:** wrapper over camera-space flush FUN_8003F07C (loads live camera 0x1F8000F8 once). node+0x0d&0x0f: mode 0 = flush; mode 2 = flush THEN FUN_8003D584 color-add (node+0x18..0x1a, 0x80-pivot). Passes flag=(node+0x0b==0x0f) down. Result = same GT3/GT4 geometry as F174 + global brightness/tint modulation of vertex colors.
+- **Node data:** node+0x0d mode, node+0x0b flag, node+8/9 count, node+0xC0 cmd array, node+0x18..0x1a add amounts.
+- **Rebuild:** own the mode select as a small Render method calling the SAME shared camera-space flush helper as F174; express the D584 color-add as a render-queue tint (chanAdd from node+0x18..0x1a through drawWorldQuad), NOT a packet rewrite. Mirror frame_size=32/4 spills. Same overlay seam as F174 + depends on the D584 chanAdd helper.
+
+#### 0x8003C5F8 — billboard-particle emitter (node+0x54 chain)  [ready-to-own after 0x800847F0]
+- **Role/primitive:** billboardCompose1/2 sibling. Composes Mtx::identity→scratch, matMul node+0x54 (via FUN_800847F0), RTPT view-rotation (copFunction 2,0x486012), +light/pos offset, loads CRs, tail-calls owned billboardEmit(node, node+0x47&1). Gated node+0x38!=0. Result = camera-facing textured particle quads; composes into BUF+0x40 via a chain distinct from C788.
+- **Node data:** +0x38 gate, +0x2e/0x32/0x36 pos, +0x54 base matrix, +0x47 flag; billboardEmit then consumes the particle table + material fields.
+- **Rebuild:** new Render::billboardComposeC5F8() in perobj_billboard.cpp; reproduce compose with guest-stack fidelity (frame_size=40/5 spills) so CRs match gen, then owned billboardEmit → BbRec → billboardsRender (float+real-depth). ONE unowned callee: FUN_800847F0 (node+0x54 matrix-load, small math leaf) — own it first. BbRec capture already accounts for the C5F8 BUF+0x40 chain by reading live CRs.
+
+#### 0x8003C788 — billboard-particle emitter (node+0x98 chain)  [ready-to-own]
+- **Role/primitive:** other billboard variant; matMul node+0x98 (already camera-space, built by FUN_80051C8C)→scratch, RTPT, +offset, loads CRs, tail-calls owned billboardEmit(node, node+0x47&1). Gated node+0x38!=0. Composes into BUF+0x20.
+- **Node data:** +0x38 gate, +0x2e/0x32/0x36 pos, +0x98 composed matrix, +0x47 flag.
+- **Rebuild:** Render::billboardComposeC788() beside compose1/2/C5F8; mirror frame_size=32/4 spills. **ALL callees owned** (Mtx::identity, Math::matMul, billboardEmit) → the most immediately ownable of the two variants, zero new abstraction. BbRec capture reads live CR0-4 specifically so the C788 (BUF+0x20) rotation is captured correctly.
+
+### FAMILY B — full-screen overlay node (0x8007xxxx)
+
+#### 0x800726D4 — full-screen flat-colour overlay (fade/flash tile)  [ready-to-own]
+- **Role/primitive:** reads *(s16*)(node+0x10) = brightness LEVEL; builds a 320x240 tile at (0,0) with flat R=G=B=level low byte, opaque (GP0 0x60) if level==0xff else semi (0x62), preceded by a draw-mode packet (FUN_80083DE0, owned). Same mechanism as the ScreenFade leaf 0x8007E9C8, invoked by a scene/overlay node. Result = one full-screen colored blend at intensity=level (grayscale).
+- **Node data:** node+0x10 → s16 level (low byte → RGB; !=0xff → semi). No geometry/transform.
+- **Rebuild:** install a leaf tap on 0x800726D4 (exact ScreenFade::installLeafTap model): run gen for byte-exact pool/OT state, then read *(s16*)(node+0x10) and call ScreenFade::set(mode = level==0xff?opaque:blend-per-0x62, r=g=b=level) — host-only, zero guest writes. Native renderer already draws ScreenFade::get() as a full-screen overlay quad.
+
+## Cluster B — secondary-effect passes (perObjRenderDispatch CCA4, node+0x0d&11 → 0x80014EC8)
+
+**Shared arch note:** all five walk the object's just-emitted GP0 packets in [pre,post) (pool-ptr snapshots around cmdListDispatch), classify each prim by (cmd byte @prim+7)&0xfc — 0x20/0x28/0x30/0x38 UNTEXTURED (ALL passes SKIP), 0x24 FT3 (stride 0x20), 0x2c FT4 (0x28), 0x34 GT3 (0x28), 0x3c GT4 (0x34). cmd bit1 (0x02) = ABE semi = word bit25 = submit.cpp's `code & 0x02000000`. **They patch the GP0 POOL, which native submit.cpp does NOT read (it reads the 36/44-byte geomblk RECORD) — so the rebuild MUST re-apply each effect at native submit time from node data.** All five are leaves (frame_size=0, no unowned callees). Plumbing = a `mActiveEffect` EffectMod latch (sibling to the existing `mActiveXform` in render.h) resolved in perobj_dispatch.cpp, consumed in submit.cpp submitGt3/Gt4.
+
+#### 0x8003F3F4 — force SEMI-ON  [ready-to-own]
+CD60 when node+0x27!=0. Textured prims → semi-transparent (blend eq from tpage ABR). Rebuild: mActiveEffect==SemiOn → force `semi=1` in submit before drawWorldQuad (Item.semi + tp_blend already exist, no new RQ field).
+
+#### 0x8003F4C4 — force OPAQUE  [ready-to-own]
+CD60 when node+0x27==0. Inverse of F3F4: clear ABE. Rebuild: mActiveEffect==SemiOff → force `semi=0`. Land with F3F4 as one CD60 EffectMod case (node+0x27 → SemiOn/SemiOff).
+
+#### 0x8003F344 — CLUT-swap  [ready-to-own]
+CD38. Re-palette every textured prim (writes u16 node+0x5c into prim+0xe = vtx0 clut; GPU uses vtx0 clut for whole prim). Rebuild: mActiveEffect==ClutSwap carrying clut=node+0x5c; substitute in submit before drawWorldQuad (already takes a `clut` param; VK sampler honors it). Zero new plumbing beyond the latch.
+
+#### 0x8003F594 — uniform-tint + semi  [needs-effect-plumbing]
+CDA0. Overwrite ALL vertex colors with one flat word (node+0x18) AND set semi. Rebuild: mActiveEffect==TintSemi carrying u32 tint=node+0x18; in submit set every vtx r/g/b to the tint BEFORE the loop, SKIP engine_shade_face (guest overwrote colors — matches the existing `if(!semi) shade` guard since semi=1), force semi=1. Reuses Item.semi.
+
+#### 0x8003D584 — per-channel COLOR-ADD  [needs-effect-plumbing]
+CD10 (also EF9C mode-2 post-pass). Add node+0x18/0x19/0x1a to every vertex color, two modes per channel: m<=0x80 → clamp(c+m-0x7f, 0..) (m=0x7f identity, bipolar brighten/darken); m>0x80 → min(c+m,0xff) saturate. Rebuild: mActiveEffect==ColorAdd carrying the 3 bytes; factor `chanAdd(c,m)` as a static submit.cpp helper applied to r/g/b BEFORE engine_shade_face (guest brightness composes with native lighting for opaque prims). Port chanAdd EXACTLY — 0x7f is the signed-center pivot from the RE, not a magic constant. Shared by the EF9C post-pass.
+
+## Readiness summary
+- **ready-to-own now (clean, all callees owned / infra exists):** 0x8003C788, 0x800726D4, 0x8003F3F4, 0x8003F4C4, 0x8003F344.
+- **ready-to-own after one leaf:** 0x800847F0 (math leaf) → then 0x8003C5F8.
+- **ready but needs submit-time effect plumbing (no unowned callees):** 0x8003F594, 0x8003D584.
+- **PARTIAL — own generic-mode flush only, overlay-mode geomblks stay substrate (the next-tier seam):** 0x8003F174, 0x8003EF9C.
+- **DO NOT jump to (next tier — unowned overlay dispatch):** 0x80132DC0, 0x8012555C, 0x8013DAFC, 0x801362CC, 0x8013D568, 0x8012E1A0, 0x8012A9DC, 0x80146478, 0x80116B14, 0x8010B1B8, and FUN_8003F07C (fold into the shared flush helper, don't own standalone).
