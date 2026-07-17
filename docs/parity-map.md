@@ -3,7 +3,7 @@
 Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported unit.
 `tools/parity.py` = summary · `tools/parity.py <words>` = search · `tools/parity.py check` = gate.
 
-**Status:** 18 verified · 5 partial · 3 n/a
+**Status:** 19 verified · 5 partial · 3 n/a
 
 ## ActorTomba::actionHandler800531DC (FUN_800531DC)
 - **status:** verified
@@ -103,6 +103,12 @@ Durable ledger for Job #1 (byte-exact pc_faithful). One `## ` block per ported u
 - **evidence:** ffec2399 2026-07-15 — 8220 frames 0-diff; both cores field-rendering @f216
 - **owner:** game/render/render_walk.cpp (sceneNative reads this state)
 - **notes:** covers field ENTRY + scripted-caught hold (autonav did NOT reach free-roam control); free-roam + sceneNative RENDER correctness (eyeball) still uncovered — see portmap field-world
+
+## framework-agnostic-p1.7c
+- **status:** verified
+- **frames:** 450
+- **gate:** PSXPORT_SBS_MODE=full PSXPORT_VK_HEADLESS=1 PSXPORT_AUTO_SKIP=1 ./scratch/bin/tomba2_port
+- **evidence:** 58fc5f76
 
 ## Panel taps FUN_8004FFB4/8005019C (gen + native quad push)
 - **status:** verified
