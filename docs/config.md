@@ -22,6 +22,13 @@ the F1 overlay + `psxport_settings.ini` (`runtime/recomp/mods.c`), not env. Diag
 `debug <chan>` command (below), not env. `cfg_*` remains only for genuine launch config (disc path,
 window/headless run mode).
 
+### `PSXPORT_ASSET_DIR` (framework disk assets, `cfg_str`)
+The RmlUi debug/mod overlay disk-loads its fonts + `menu.rml` from `<PSXPORT_ASSET_DIR>/assets/rml/`
+(the SPIR-V shaders are embedded, but these are not). Default (unset) = cwd-relative `assets/rml/…`,
+which works when the runtime cwd IS the framework root. A consumer whose cwd is its own repo root sets
+this to the dir CONTAINING `assets/` — for a submodule vendoring, `external/psxport` (run.sh does this).
+Unset + no `./assets/rml/` ⇒ `[rmlui] LoadDocument … FAILED` / no fonts, and the overlay is blank.
+
 ### Video settings file (`psxport_settings.ini`, path overridable with `PSXPORT_SETTINGS`)
 The F1 overlay writes `key=value` lines; `mods_load()` restores them at launch (`runtime/recomp/mods.{h,c}`).
 The two video selectors:

@@ -21,10 +21,23 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Debugger.h>
+#include "cfg.h"                  // cfg_str — PSXPORT_ASSET_DIR asset-base resolution
+#include <string>
 
 // SDL platform helpers (system interface + SDL->Rml input translation) from the vendored RmlUi
 // backend. RMLUI_SDL_VERSION_MAJOR is set in this TU's build flags.
 #include "RmlUi_Platform_SDL.h"
+
+// Resolve a framework asset path (fonts + menu.rml, which ship in <framework>/assets/rml/) against
+// PSXPORT_ASSET_DIR. These are DISK-loaded (unlike the SPIR-V shaders, which are embedded), so the
+// consumer must tell the framework where its assets live: after the repo split they moved into the
+// psxport submodule, so a game whose runtime cwd is its own root sets PSXPORT_ASSET_DIR to the dir
+// containing assets/ (e.g. `external/psxport`). Unset (default) keeps the historical cwd-relative
+// behaviour, so a framework-root launch still works with no config.
+static std::string rml_asset(const char* rel) {
+    const char* base = cfg_str("PSXPORT_ASSET_DIR");
+    return (base && *base) ? std::string(base) + "/" + rel : std::string(rel);
+}
 
 #include <cstdio>
 #include <cstring>
@@ -332,8 +345,9 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
         "assets/rml/FiraSansCondensed-Bold.ttf",
     };
     int loaded = 0;
-    for (const char* f : fonts) if (Rml::LoadFontFace(f)) loaded++;
-    if (!loaded) fprintf(stderr, "[rmlui] WARNING: no fonts loaded (assets/rml/*.ttf missing)\n");
+    for (const char* f : fonts) if (Rml::LoadFontFace(rml_asset(f).c_str())) loaded++;
+    if (!loaded) fprintf(stderr, "[rmlui] WARNING: no fonts loaded (assets/rml/*.ttf missing; "
+                                 "set PSXPORT_ASSET_DIR to the dir containing assets/)\n");
 
     int ww = 0, wh = 0; SDL_GetWindowSize(win, &ww, &wh);
     if (ww <= 0) ww = 1280; if (wh <= 0) wh = 720;
@@ -342,9 +356,11 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     mCtx = c;
     Rml::Debugger::Initialise(c);
 
-    Rml::ElementDocument* d = c->LoadDocument("assets/rml/menu.rml");
+    Rml::ElementDocument* d = c->LoadDocument(rml_asset("assets/rml/menu.rml").c_str());
     if (!d) {
-        fprintf(stderr, "[rmlui] LoadDocument(assets/rml/menu.rml) FAILED — menu unavailable\n");
+        fprintf(stderr, "[rmlui] LoadDocument(%s) FAILED — menu unavailable "
+                        "(set PSXPORT_ASSET_DIR to the dir containing assets/)\n",
+                rml_asset("assets/rml/menu.rml").c_str());
     } else {
         mDoc = d;
         attachHandlers();
