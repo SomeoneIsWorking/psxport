@@ -6,7 +6,7 @@ pure PSX render). This is the burndown order for visual bugs: work TOP-DOWN, fir
 first (USER 2026-07-14: "start from the narration cutscene"). Update the status column in the
 same commit as a fix; a scene is `OK` only after the USER eyeballs it (no visual self-verify).
 
-Statuses: `OK` (user-verified) · `BUG #N` (tracked on the bug board, tools/bugs.py) ·
+Statuses: `OK` (user-verified) · `BUG #N` (tracked on the kanban, tools/kanban.py) ·
 `UNCHECKED` (nobody has compared it yet) · `PARTIAL` (some elements wrong, see notes).
 
 Reach recipes assume the REPL (`PSXPORT_REPL=1`, headless add `PSXPORT_VK_HEADLESS=1

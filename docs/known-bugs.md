@@ -1,27 +1,23 @@
-# Bug board — see GitHub Issues
+# Bug board — see the local kanban
 
-The live bug board is now GitHub Issues at
-[**github.com/SomeoneIsWorking/psxport/issues**](https://github.com/SomeoneIsWorking/psxport/issues).
+The live bug board is a **local, in-repo kanban** at [`docs/kanban/board.md`](kanban/board.md)
+(cards under `docs/kanban/cards/`). No GitHub Issues, no network — it travels with the repo.
 
-Use the `bug-tracker` skill / `tools/bugs.py` CLI to interact from a session:
+Use the `bug-tracker` skill / `tools/kanban.py` CLI to interact from a session:
 
 ```
-tools/bugs.py                         # board view (open bug-labelled issues)
-tools/bugs.py <words>                 # search across title/body/comments
-tools/bugs.py show <n>                # full issue + comments
-tools/bugs.py add "<title>" --body "<md>" --label render   # new bug
-tools/bugs.py investigating <n>       # mark under active investigation
-tools/bugs.py ported <n>              # mark ported-unverified (post-port, awaiting user)
-tools/bugs.py comment <n> "<note>"    # append investigation-note
-tools/bugs.py close <n> "<note>"      # close with a farewell comment
-tools/bugs.py reopen <n> "<note>"     # reopen (e.g. after a port regressed)
+tools/kanban.py list                          # board contents (all columns)
+tools/kanban.py search <words>                # search titles + bodies
+tools/kanban.py show <id>                     # full card
+tools/kanban.py add "<title>" --label bug --label <area> --body "<md>"   # new bug (col defaults to todo)
+tools/kanban.py move <id> doing               # start a deep chase
+tools/kanban.py note <id> "<investigation note>"   # append a dated trail note
+tools/kanban.py evidence <id> docs/reference/issues/<file>.png   # attach a screenshot
+tools/kanban.py move <id> done                # confirmed fixed (also promote to docs/findings/)
 ```
 
-Status is expressed via labels: `investigating` / `ported-unverified` (mutually
-exclusive; absence = OPEN). Area via `bug` / `render` / `audio` / `render-arch` / etc.
-The investigation trail lives in the issue's comments; findings get promoted to
-`docs/findings/*.md` on close.
+Columns: `backlog` | `todo` | `doing` | `done`. Kind/area via labels (`bug` / `render` /
+`audio` / `pc-skip` / …). Evidence screenshots live in `docs/reference/issues/` (committed).
 
-Do NOT hand-edit this file with a per-bug list — that pattern was retired 2026-07-03
-(user directive: use the tooling, not a duplicate markdown board). This file is only
-the pointer.
+Fixed bugs get PROMOTED to `docs/findings/*.md` (root cause + fix) via `tools/findings.py` when
+moved to `done`.

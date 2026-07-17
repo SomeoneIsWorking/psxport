@@ -78,8 +78,9 @@ workflow defects. Stop and fix them, then resume.
   session start. Promote useful journal hits.
 - **AFTER a durable fix**, record it in `docs/findings/<subsystem>.md` (symptom / status / cause / fix /
   refs — record DEAD ENDS too), then run `tools/findings.py` to regen the index.
-- **Live bug list** — `tools/bugs.py` (skill `bug-tracker`) is GitHub Issues. Add a bug when the USER
-  reports a symptom; flip `ported-unverified` on a plausible fix; promote to findings on confirm.
+- **Live bug list** — `tools/kanban.py` (skill `bug-tracker`) is a LOCAL in-repo kanban (`docs/kanban/`
+  cards; columns backlog|todo|doing|done). Add a card when the USER reports a symptom; `move <id> doing`
+  when chasing; promote to findings + `move <id> done` on confirm. Evidence images in `docs/reference/issues/`.
 - **CHECK before reimplementing any `FUN_xxxx`:** `tools/codemap.py --addr <hex>` — ~350 natives indexed
   by guest address (`docs/code-map.md`; warns ⚠ DUAL-OWNERSHIP if already owned in another file).
   Regenerate on add/move. `tools/codemap.py --conflicts` lists every duplicate-owned address — a native
