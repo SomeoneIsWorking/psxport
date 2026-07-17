@@ -19,6 +19,7 @@
 #include "game.h"            // c->game->platform_hle
 #include "cfg.h"
 #include "platform_hle.h"    // class PlatformHle — sync-primitive HLE lookup on an interpreted call target
+#include "recomp_iface.h"    // seam: psxport_recomp()->rec_func_index (generated MAIN entry index)
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -396,7 +397,7 @@ static int coro_native_call(Core* c, uint32_t tgt) {
   // recompiled body (that is the thing under test, and freezes in the cutscene). Skip the substrate route
   // for use_interp cores; only is_bios + platform_hle (above) run native. Non-oracle (hybrid) cores keep
   // the recomp-body fast path.
-  if (!c->use_interp && rec_func_index(tgt) >= 0 && (!(d.sg_lo | d.sg_hi) || (tgt >= d.sg_lo && tgt < d.sg_hi))) {
+  if (!c->use_interp && psxport_recomp()->rec_func_index(tgt) >= 0 && (!(d.sg_lo | d.sg_hi) || (tgt >= d.sg_lo && tgt < d.sg_hi))) {
     d.callring[d.callring_pos++ & 63] = tgt;   // derail diagnostics: last compiled entries
     rec_dispatch(c, tgt); return 1;            // recompiled target -> run its COMPILED body
   }

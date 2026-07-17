@@ -48,12 +48,14 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
 // harness-owned Game — see native_boot.cpp dc_boot_init for the ordering guard.
 
 extern void tomba_install_game_config();   // game/core/game_config.cpp — installs the Tomba GameConfig
+extern void tomba_install_recomp();         // game/core/recomp_register.cpp — installs the RecompRegistry
 
 int main(int argc, char** argv) {
   // Install the game seam (GameConfig) BEFORE the first Core is constructed: Core's ctor snapshots
   // psxport_game_config() into c->cfg, and every subsystem reads c->cfg->field for its guest-address
   // literals — so this must run before `new Game()` below (which constructs the Core).
   tomba_install_game_config();
+  tomba_install_recomp();   // install the generated-substrate seam (main_dispatch/overlay table/setters)
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
   Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)

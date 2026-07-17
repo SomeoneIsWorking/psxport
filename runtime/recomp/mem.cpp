@@ -4,6 +4,7 @@
 // peripheral modules. Host is little-endian (PSX is LE), so word access is a memcpy.
 #include "core.h"
 #include "game.h"
+#include "recomp_iface.h"   // seam: psxport_recomp()->guestMemset_gen (generated gen_func_8009A420)
 #include "cfg.h"
 #include "render_substrate.h"     // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
 #include <stdio.h>
@@ -385,13 +386,14 @@ void ov_guestMemset(Core* c) {
   if (dst != 0u && n > 0) { c->r[4] = dst + (uint32_t)n; c->r[6] = 0u; }
 }
 }
-extern void gen_func_8009A420(Core*);
 void guest_memset_install() {
   static bool done = false;
   if (done) return;
   done = true;
+  // The guest-memset gen body (generated gen_func_8009A420) is reached through the RecompRegistry seam
+  // (recomp_iface.h), so the framework names no generated symbol.
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
-  engine_set_override_main(0x8009A420u, ov_guestMemset, gen_func_8009A420);
+  engine_set_override_main(0x8009A420u, ov_guestMemset, psxport_recomp()->guestMemset_gen);
 }
 
 // R3000 integer division semantics (no traps; defined results for /0 and overflow).

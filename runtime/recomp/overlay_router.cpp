@@ -15,7 +15,8 @@
 // overlay, or an address no module recompiled, still FAILS FAST in rec_dispatch_miss by design.
 #include "core.h"
 #include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
-#include "overlay_table.h"     // generated: REC_MAIN_LO/HI, main_dispatch, g_rec_overlays[]
+#include "overlay_table.h"     // generated: REC_MAIN_LO/HI (compile-time text-range macros only)
+#include "recomp_iface.h"      // seam: psxport_recomp() -> main_dispatch / rec_func_index / overlay table
 #include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
 #include "override_registry.h" // overrides::dispatch — native engine/game override interception
 #include <string.h>
@@ -45,8 +46,9 @@ void overlay_note_load(Core* c, uint32_t dest) {
   Sbs*     sbs = c->game->sbs;
   int      cid = (dbg && sbs) ? sbs->coreId(c) : -1;
   uint32_t fr  = (dbg && sbs) ? sbs->frame()   :  0;
-  for (int i = 0; i < g_rec_overlay_count; i++) {
-    const RecOverlay* o = &g_rec_overlays[i];
+  const RecompRegistry* R = psxport_recomp();
+  for (int i = 0; i < R->overlay_count; i++) {
+    const RecOverlay* o = &R->overlays[i];
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
       c->game->pcSched.resident_ov[s] = o;
@@ -66,6 +68,7 @@ void overlay_note_load(Core* c, uint32_t dest) {
 // the hot path (per-frame overlay dispatch) is a single memcmp; the cache self-corrects when the
 // resident overlay (or the running core's RAM) changes.
 static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
+  const RecompRegistry* R = psxport_recomp();
   const unsigned char* ram = c->ram + (base & 0x1FFFFFFF);
   int s = slot_index(c, base);
   const RecOverlay* cached = (s >= 0) ? c->game->pcSched.resident_ov[s] : 0;
@@ -83,8 +86,8 @@ static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
   // Signature scan: find the overlay whose image is in the slot right now (the overlays overlap at a base,
   // so they are distinguished only by content). On a hit, refresh the per-core load-time identity so the
   // common path (cached match above) stays a single memcmp.
-  for (int i = 0; i < g_rec_overlay_count; i++) {
-    const RecOverlay* o = &g_rec_overlays[i];
+  for (int i = 0; i < R->overlay_count; i++) {
+    const RecOverlay* o = &R->overlays[i];
     if (o->base != base || o->siglen > 32)
       continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
@@ -102,8 +105,9 @@ static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
 // Returns the overlay name, or "none" (slot empty / unmatched), or 0 if addr is not in any slot range.
 const char* overlay_router_resident_name(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
-  for (int i = 0; i < g_rec_overlay_count; i++) {
-    const RecOverlay* o = &g_rec_overlays[i];
+  const RecompRegistry* R = psxport_recomp();
+  for (int i = 0; i < R->overlay_count; i++) {
+    const RecOverlay* o = &R->overlays[i];
     if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
       const RecOverlay* res = resident_overlay(c, o->base);
       return res ? res->name : "none";
@@ -120,13 +124,13 @@ const char* overlay_router_resident_name(Core* c, uint32_t addr) {
 // fail-fast. The engine owns its render visibility, so it skips such stale content rather than run it.
 // (later-275.) Returns 0 only when addr falls in a recompiled module range but is not an entry there;
 // addresses outside every recompiled range return 1 (let rec_dispatch route them — native/HLE leaves).
-extern "C" int rec_func_index(uint32_t);
 extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — heuristic guest stack walk
 int rec_addr_has_entry(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
-  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) return rec_func_index(addr) >= 0;
-  for (int i = 0; i < g_rec_overlay_count; i++) {
-    const RecOverlay* o = &g_rec_overlays[i];
+  const RecompRegistry* R = psxport_recomp();
+  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) return R->rec_func_index(addr) >= 0;
+  for (int i = 0; i < R->overlay_count; i++) {
+    const RecOverlay* o = &R->overlays[i];
     if (a < (o->base & 0x1FFFFFFF) || a >= (o->end & 0x1FFFFFFF)) continue;
     const RecOverlay* res = resident_overlay(c, o->base);
     return res && res->idx && res->idx(addr) >= 0;
@@ -222,14 +226,15 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // `recdep`/`ovhit` checks above in this same hot function — a single predicted-false check when off.
   const bool otattr_on = cfg_dbg("otattr");
   uint32_t a = addr & 0x1FFFFFFF;
+  const RecompRegistry* R = psxport_recomp();
   if (a >= REC_MAIN_LO && a < REC_MAIN_HI) {
     if (otattr_on) c->idiag.otattrPush(addr);
-    main_dispatch(c, addr);
+    R->main_dispatch(c, addr);
     if (otattr_on) c->idiag.otattrPop();
     return;
   }
-  for (int i = 0; i < g_rec_overlay_count; i++) {
-    const RecOverlay* o = &g_rec_overlays[i];
+  for (int i = 0; i < R->overlay_count; i++) {
+    const RecOverlay* o = &R->overlays[i];
     if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
       const RecOverlay* res = resident_overlay(c, o->base);
       if (res) {
@@ -245,8 +250,8 @@ void rec_dispatch(Core* c, uint32_t addr) {
                       "  resident[0..16] =", addr, o->base);
       for (int k = 0; k < 16; k++) fprintf(stderr, " %02X", ram[k]);
       fprintf(stderr, "\n");
-      for (int j = 0; j < g_rec_overlay_count; j++) {
-        const RecOverlay* q = &g_rec_overlays[j];
+      for (int j = 0; j < R->overlay_count; j++) {
+        const RecOverlay* q = &R->overlays[j];
         if (q->base != o->base) continue;
         int nmatch = 0; for (unsigned k = 0; k < q->siglen && k < 16; k++) nmatch += (q->sig[k] == ram[k]);
         fprintf(stderr, "  cand %-6s sig[0..16] =", q->name);

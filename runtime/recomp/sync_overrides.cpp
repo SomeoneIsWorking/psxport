@@ -14,6 +14,7 @@
 #include "platform_hle.h"
 #include "core.h"
 #include "scheduler.h"
+#include "recomp_iface.h"   // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
 #include <cstdio>
 #include <cstdlib>
 
@@ -106,9 +107,9 @@ void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   // never reaches rec_dispatch_miss (where lookup used to intercept). That spins on an IRQ/status bit
   // our no-IRQ runtime never sets -> "CD timeout" / "VSync: timeout". Wire the HLE into the recomp
   // OVERRIDE table too (func_<addr>'s wrapper checks g_override[idx] FIRST), so the native sync
-  // resolves it before the recompiled wait ever runs. No-op if `addr` isn't recompiled.
-  extern void shard_set_override(uint32_t, OverrideFn);
-  shard_set_override(addr, fn);
+  // resolves it before the recompiled wait ever runs. No-op if `addr` isn't recompiled. The MAIN
+  // module setter is a generated symbol reached through the RecompRegistry seam (recomp_iface.h).
+  psxport_recomp()->shard_set_override(addr, fn);
 }
 
 OverrideFn PlatformHle::lookup(uint32_t addr) const {

@@ -7,14 +7,10 @@
 #include "sbs.h"
 #include "cfg.h"
 #include "verify_harness.h"
+#include "recomp_iface.h"   // seam: the generated per-module override setters (shard/ov_a00/ov_game)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-
-// The recompiler's per-module raw installers — each writes the process-global g_<mod>_override[] slot.
-extern void shard_set_override(uint32_t, OverrideFn);     // generated/shard_disp.c    (main)
-extern void ov_a00_set_override(uint32_t, OverrideFn);    // generated/ov_a00_disp.c   (A00 overlay)
-extern void ov_game_set_override(uint32_t, OverrideFn);   // generated/ov_game_disp.c  (GAME overlay)
 
 namespace {
 
@@ -145,12 +141,17 @@ bool dispatch(Core* c, uint32_t addr) {
 
 }  // namespace overrides
 
+// These thin forwarders pick the recompiler module whose g_<mod>_override[] table the shared thunk is
+// installed into. The module setters are generated symbols reached through the RecompRegistry seam
+// (recomp_iface.h), so the framework itself names no generated symbol. `overrides::Setter` and the
+// registry's RecOverrideFn are both void(*)(uint32_t, void(*)(Core*)) — the same type — so the seam's
+// setter pointer is passed straight through.
 void engine_set_override_main(uint32_t addr, OverrideFn native, OverrideFn gen) {
-  overrides::install(addr, nullptr, native, gen, shard_set_override);
+  overrides::install(addr, nullptr, native, gen, psxport_recomp()->shard_set_override);
 }
 void engine_set_override_a00(uint32_t addr, OverrideFn native, OverrideFn gen) {
-  overrides::install(addr, nullptr, native, gen, ov_a00_set_override);
+  overrides::install(addr, nullptr, native, gen, psxport_recomp()->ov_a00_set_override);
 }
 void engine_set_override_game(uint32_t addr, OverrideFn native, OverrideFn gen) {
-  overrides::install(addr, nullptr, native, gen, ov_game_set_override);
+  overrides::install(addr, nullptr, native, gen, psxport_recomp()->ov_game_set_override);
 }

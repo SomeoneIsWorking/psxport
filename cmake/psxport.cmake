@@ -72,6 +72,7 @@ set(PSXPORT_FRAMEWORK_SRC
   runtime/recomp/core.cpp
   runtime/recomp/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
   runtime/recomp/game_iface.cpp       # framework↔game seam storage (GameConfig/GameHooks install)
+  runtime/recomp/recomp_iface.cpp     # framework↔generated seam storage (RecompRegistry install)
   runtime/recomp/dispatch.cpp
   runtime/recomp/interp.cpp           # ORACLE engine: pure-MIPS interpreter for the oracle Core
   runtime/recomp/coro.cpp
