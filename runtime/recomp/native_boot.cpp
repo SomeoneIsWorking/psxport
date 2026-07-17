@@ -127,7 +127,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
   // frame, exactly as the override-era ordering did.
   c->game->ffspan.begin();
-  c->engine.frameUpdate();                                    // tick + per-vblank audio + present + pace
+  c->hooks->frameUpdate(c);                                   // tick + per-vblank audio + present + pace
   c->game->ffspan.end("frameupd");
   // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step below) is
   // about to capture belong to the NEW logic frame; the presents above (fps60's interp re-run included)
@@ -143,7 +143,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->game->pcSched.step();                                    // <- replaces FUN_80051e60 (BIOS scheduler)
   c->game->ffspan.end("scheduler");
   c->game->perf.phaseEnd(3);
-  c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
+  c->hooks->musicCoordTick(c);                                // dialogs stop/restore ingame music
   c->game->cd.audioTrace("coord");                                 // CD-vol fade state AFTER coord
   rc1(c, cfg->drawSync, 0);                                   // draw sync
   c->game->pcSched.tickSleepCountdown();                      // was rc0(c, 0x800506d0) — task sleep-countdown (re-arm 1->2)
@@ -166,7 +166,7 @@ static void native_step_frame(Core* c, uint32_t f) {
     // order. The interpreted PSX DrawOTag did the walk+queue but NOT the flush (rq_flush only lives in
     // Engine::drawOTag, orphaned by the override-table removal) — so the queue filled every frame and never
     // drained, and NOTHING 2D reached the VK renderer (the whole front-end rendered black). OT head arg.
-    c->engine.drawOTag(envp + 0x1ffcu);
+    c->hooks->drawOTag(c, envp + 0x1ffcu);
     // ---- DUAL-VIEW second render pass: render the SAME game state via the PSX recomp path into render
     // target 1 (right panel). The engine render is NOT idempotent (its per-frame queues/OT get consumed),
     // so the PSX pass must run from the PRE-render state captured in ov_field_frame (dv_snapshot, before
@@ -187,7 +187,7 @@ static void native_step_frame(Core* c, uint32_t f) {
       gpu_gpu_select_target(1);
       rec_dispatch(c, cfg->dualviewRenderOrch);                 // PSX field render orchestrator (full OT build)
       rec_dispatch(c, cfg->dualviewSubmit);                     // render submit (faithful to ov_field_frame)
-      c->engine.drawOTag(envp + 0x1ffcu);                       // walk PSX OT -> target-1 batch
+      c->hooks->drawOTag(c, envp + 0x1ffcu);                    // walk PSX OT -> target-1 batch
       gpu_gpu_select_target(0);
       dv.restorePost(c);             // restore the real canonical state (PSX pass fully undone)
       dv.clearPre();

@@ -67,10 +67,18 @@ struct GameConfig {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// GameHooks — the callback vtable the framework calls to reach game behaviour. Defined fully in a
-// later staging step (P1.4); forward-declared here so Core can hold a `const GameHooks*` now.
+// GameHooks — the callback vtable the framework calls to reach game behaviour. Each member is a
+// function pointer taking `Core* c` (the game reaches its own subsystems via `c->engine.*` inside the
+// impl); the framework substrate calls `c->hooks->fn(c)` in place of the direct `c->engine.X()` calls
+// it used to bake in. More hooks (bootInit, schedFreshEntry, diagnostics) land in later staging steps.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-struct GameHooks;
+struct GameHooks {
+  void (*frameUpdate)(Core* c);               // per-frame guest body (was c->engine.frameUpdate())
+  void (*drawOTag)(Core* c, uint32_t otHead); // per-frame draw kick (was c->engine.drawOTag(otHead))
+  void (*musicCoordTick)(Core* c);            // per-frame music coord (was c->engine.musicCoord.tick())
+  bool (*cdDialogToneActive)(Core* c);        // dialog-tone gate (was c->engine.musicCoord.dialogToneActive())
+  void (*cdMusicFadeIn)(Core* c);             // ingame-music fade-in (was c->engine.musicCoord.musicFadeIn())
+};
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Install — the game registers its config+hooks ONCE at startup, before any Game/Core is constructed

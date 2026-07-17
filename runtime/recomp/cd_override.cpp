@@ -281,12 +281,12 @@ static void voice_play(Core* c) {
     fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
-    if (c->engine.musicCoord.dialogToneActive()) return;   // suppress during a dialog; resumed by MusicCoord::tick
+    if (c->hooks->cdDialogToneActive(c)) return;   // suppress during a dialog; resumed by MusicCoord::tick
   }
   xa_stream_play(&c->game->xa, chan, start, end, loop);
   c->mem_w16(0x801fe0e0, 2);                            // task-2 state = running (cutscene wait gate)
   c->game->cd.toSpuMix(1);
-  if (loop) c->engine.musicCoord.musicFadeIn();       // ingame music fades in from 0 (instant-CD mod)
+  if (loop) c->hooks->cdMusicFadeIn(c);               // ingame music fades in from 0 (instant-CD mod)
 }
 
 // MusicCoord::cutIfDialog / MusicCoord::tick moved to game/audio/music_coord.cpp (see the header
@@ -303,7 +303,7 @@ static void voice_stop(Core* c) {
   // this fn) and keeps pending_music, so its resume is unaffected. Guard on !dialog: during an
   // in-game dialog the area music is suppressed+pending, and a mid-dialog 0x8001cf2c (line change)
   // must NOT forget it, or it wouldn't resume when the dialog ends.
-  if (!c->engine.musicCoord.dialogToneActive()) c->game->cd.pending_music = 0;
+  if (!c->hooks->cdDialogToneActive(c)) c->game->cd.pending_music = 0;
   c->r[A0] = 0; rec_dispatch(c, 0x8001cf00u);        // CD->SPU mix off
 }
 

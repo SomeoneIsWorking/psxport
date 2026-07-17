@@ -77,4 +77,7 @@ static const GameConfig g_tomba_config = {
   /* padSlotPtrTable */ 0x0000aec8u,
 };
 
-void tomba_install_game_config() { psxport_install_game(&g_tomba_config, nullptr); }
+// The game's callback vtable — defined in game_hooks.cpp (thin impls reaching c->engine.*).
+extern const GameHooks g_tomba_hooks;
+
+void tomba_install_game_config() { psxport_install_game(&g_tomba_config, &g_tomba_hooks); }
