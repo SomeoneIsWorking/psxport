@@ -12,6 +12,7 @@
 // clips are unaffected (they ARE the dialog audio). Deferred-music state lives on the instance:
 // c->game->cd.{pending_music,pm_chan,pm_start,pm_end}.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "c_subsys.h"
 #include "cfg.h"
@@ -209,7 +210,7 @@ void MusicCoord::setGain2(int32_t val) {
 
 static void eov_musicCoordSetGain2(Core* c) {
   int32_t val = (int32_t)c->r[4];
-  c->engine.musicCoord.setGain2(val);
+  eng(c).musicCoord.setGain2(val);
   // Mirror gen_func_80075D24's register outputs (shard_1.c): r3 = 0x800BE1F8 (the voice block addr,
   // computed as 32780<<16 + (-7688)); r2 = the last value the substrate's branch leaves in r2:
   //   negative val: r2 = -val;  positive <8192: r2 = 1;  positive >=8192: r2 = 0.

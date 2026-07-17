@@ -9,6 +9,7 @@
 // them DAT_<addr> without a declared type in the decompiled text). See docs/engine_re.md's move-and-
 // collide section for the shared grid-probe leaves (FUN_8004766C etc.) this family calls.
 #include "core.h"
+#include "game_ctx.h"
 #include "actor_sm_reward.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
 #include "game.h"
@@ -707,10 +708,10 @@ void ActorReward::resolvePosition(Core* c) {
         uint32_t e = c->mem_r32(owner + 0xc0);
         int32_t ownerAngle = c->mem_r16s(owner + 0x56);
         int32_t ownerRadius = c->mem_r16s(owner + 0x80);
-        int32_t px = c->trig.rcos(ownerAngle) * ownerRadius;
+        int32_t px = trigOf(c).rcos(ownerAngle) * ownerRadius;
         c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(e + 0x2c) - (int16_t)roundShiftR13(px)));
         c->mem_w16(obj + 0x32, c->mem_r16(e + 0x30));
-        int32_t pz = c->trig.rsin(ownerAngle) * ownerRadius;
+        int32_t pz = trigOf(c).rsin(ownerAngle) * ownerRadius;
         c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(obj + 0x32) + c->mem_r16s(obj + 0x60)));
         c->mem_w16(obj + 0x36, (uint16_t)(c->mem_r16s(e + 0x34) + (int16_t)roundShiftR13(pz)));
         break;
@@ -746,9 +747,9 @@ void ActorReward::resolvePosition(Core* c) {
     }
   }
   // Shared tail (every case, including sel>=8/default, falls here): radial offset by (angle,radius).
-  int32_t xOff = c->trig.rcos(angle) * radius;
+  int32_t xOff = trigOf(c).rcos(angle) * radius;
   c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(obj + 0x2e) + (int16_t)(xOff >> 12)));
-  int32_t zOff = c->trig.rsin(angle) * radius;
+  int32_t zOff = trigOf(c).rsin(angle) * radius;
   c->mem_w16(obj + 0x36, (uint16_t)(c->mem_r16s(obj + 0x36) + (int16_t)(-zOff >> 12)));
 
   resolvePositionEpilogue(c);

@@ -106,6 +106,7 @@
 // alone. A wiring pass should grep for other readers of GPU_DMA_ARG0/ARG1/STATE before trusting the
 // async path is fully understood.
 #include "core.h"
+#include "game_ctx.h"
 #include "render.h"
 #include <stdint.h>
 
@@ -262,7 +263,7 @@ void Render::gpuLoadImageStream() {
 // oracle-gated dispatch keeps SBS core B running the pure gen_func_80082734 body while core A
 // dispatches to Render::gpuLoadImageStream().
 namespace {
-void ov_gpuLoadImageStream(Core* c) { c->mRender->gpuLoadImageStream(); }
+void ov_gpuLoadImageStream(Core* c) { rend(c)->gpuLoadImageStream(); }
 }  // namespace
 
 extern void gen_func_80082734(Core*);

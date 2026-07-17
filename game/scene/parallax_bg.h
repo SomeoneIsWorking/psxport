@@ -3,7 +3,7 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::parallaxBg`. Back-pointer wired
 // once by Core's constructor. Callers reach it via the object graph:
 //
-//     c->engine.parallaxBg.step();     // was FUN_8010BFFC (called from Sop::fieldUpdate)
+//     eng(c).parallaxBg.step();     // was FUN_8010BFFC (called from Sop::fieldUpdate)
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as
 // BgSceneTransitionSm, ObjectList, Sop.

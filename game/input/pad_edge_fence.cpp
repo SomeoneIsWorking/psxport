@@ -32,6 +32,7 @@
 // the one-frame-delayed "previous sample" — that structural role is solid regardless of what
 // produces the sample. FUN_800524B4 and FUN_8005229C themselves stay un-owned (rec_dispatch).
 #include "core.h"
+#include "game_ctx.h"
 #include "core/engine.h"
 
 void rec_dispatch(Core*, uint32_t);
@@ -122,7 +123,7 @@ void Engine::padEdgeFence() {
 // FUN_8005229C's v0 which the gen leaves in r2; the native body preserves that by not touching
 // r2 after the tail dispatch).
 namespace {
-void ov_padEdgeFence(Core* c) { c->engine.padEdgeFence(); }
+void ov_padEdgeFence(Core* c) { eng(c).padEdgeFence(); }
 }
 extern void gen_func_800788AC(Core*);
 void pad_edge_fence_install() {

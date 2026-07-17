@@ -25,12 +25,13 @@
 // doesn't. Byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::cullWrap77acc / installSceneRecord
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "ui/font.h"   // Font::measureLineWidth (FUN_80073750)
 void rec_super_call(Core*, uint32_t);
@@ -60,7 +61,7 @@ void beh_cube_text_spawn(Core* c) {
     else if (type == 0) { c->r[4] = nd; rec_dispatch(c, 0x8003A790u); }
     else if (type == 2) { c->r[4] = nd; rec_dispatch(c, 0x8003ABE4u); }
     c->mem_w8(nd + 1, 1);
-    c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                 // FUN_800517f8
+    c->r[4] = nd; eng(c).graphicsBind.renderUpdate();                 // FUN_800517f8
     return;
   }
   if (st >= 2) {
@@ -70,7 +71,7 @@ void beh_cube_text_spawn(Core* c) {
       c->mem_w8(0x800ED06Cu, (uint8_t)(c->mem_r8(0x800ED06Cu) - 1));
       return;
     }
-    if (st == 3) { c->engine.spawn.despawn(nd); }  // STATE 3
+    if (st == 3) { eng(c).spawn.despawn(nd); }  // STATE 3
     return;
   }
   if (st != 0) return;
@@ -113,7 +114,7 @@ void beh_cube_text_spawn(Core* c) {
   if (n != 0) {
     uint32_t s0 = nd; int i6 = 0;
     do {
-      c->engine.graphicsBind.recordAlloc();                            // FUN_8007aae8() — DO NOT set a0 (leftover)
+      eng(c).graphicsBind.recordAlloc();                            // FUN_8007aae8() — DO NOT set a0 (leftover)
       uint32_t rec = c->r[2];
       c->mem_w32(s0 + 0xc0, rec);
       c->mem_w16(rec + 6, 0xffff);
@@ -123,7 +124,7 @@ void beh_cube_text_spawn(Core* c) {
       c->mem_w16(c->mem_r32(s0 + 0xc0) + 8, 0);
       c->mem_w16(c->mem_r32(s0 + 0xc0) + 0xa, 0);
       c->mem_w16(c->mem_r32(s0 + 0xc0) + 0xc, 0);
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(s0 + 0xc0), 1, uVar7);   // FUN_80051B04 (native)
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(s0 + 0xc0), 1, uVar7);   // FUN_80051B04 (native)
       c->mem_w8(c->mem_r32(s0 + 0xc0) + 0x3e, 0);
       c->mem_w8(c->mem_r32(s0 + 0xc0) + 0x3f, (uint8_t)i6);
       i6++;

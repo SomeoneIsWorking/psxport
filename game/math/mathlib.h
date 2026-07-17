@@ -1,6 +1,6 @@
 // game/math/mathlib.h — game bitmap-flag bit-test subsystem.
 // The trig LUTs live on `class Trig` (game/math/trig.h); the PRNG lives on `class Rng`
-// (`c->rng.next()`). This header exposes the remaining bitmap-bit-test primitives as
+// (`rngOf(c).next()`). This header exposes the remaining bitmap-bit-test primitives as
 // `class Bit`, an INSTANCE subsystem owned by Engine — the ops read specific per-run game
 // progress bitmaps at fixed guest RAM addresses, so this is a subsystem (game flag state),
 // not a stateless math/computation library.
@@ -9,7 +9,7 @@
 #include <cstdint>
 struct Core;
 
-// PROPER OOP: one instance per Core, reached as `c->engine.bit.method(idx, …)`. Back-pointer
+// PROPER OOP: one instance per Core, reached as `eng(c).bit.method(idx, …)`. Back-pointer
 // `core` wired once at Core construction time (same pattern as Animation / Collision / Font).
 // Was the free functions `ov_bittest_4d7ec` / `ov_bittest_4d868`, taking their MIPS args via
 // c->r[4]/r[5] taxi. Now real instance methods with explicit typed arguments; the surface

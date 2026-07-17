@@ -46,8 +46,9 @@
 // affect the byte-exact gate.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
-#include "core/engine.h"   // c->engine.spawn
+#include "core/engine.h"   // eng(c).spawn
 #include "spawn.h"          // Spawn::dispatch / despawn (FUN_8007A980 / FUN_8007A624, native)
 
 namespace {
@@ -59,7 +60,7 @@ constexpr uint8_t  BEAT_LIMIT     = 5;             // ramp updates run while bea
 
 // FUN_8010AE30(parent) -> node ptr (0 on pool exhaustion).
 uint32_t native_sop_overlay_shadow_spawn(Core* c, uint32_t parent) {   // FUN_8010AE30
-  uint32_t node = c->engine.spawn.dispatch(/*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980
+  uint32_t node = eng(c).spawn.dispatch(/*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980
   if (node == 0) return 0;
 
   c->mem_w32(node + 0x1Cu, SHADOW_HANDLER);
@@ -124,6 +125,6 @@ void beh_sop_overlay_shadow(Core* c) {
   } else if (state == 2) {
     c->mem_w8(node + 4u, 3);
   } else if (state == 3) {
-    c->engine.spawn.despawn(node);
+    eng(c).spawn.despawn(node);
   }
 }

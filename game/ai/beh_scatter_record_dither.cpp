@@ -27,13 +27,14 @@
 // reproduced (the per-object dispatcher ignores it; the gate compares only RAM+scratchpad).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::coneCull2b278 (FUN_8002B278)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
-#include "rng.h"       // class Rng (via c->rng.next())
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
+#include "rng.h"       // class Rng (via rngOf(c).next())
 #include "collision.h"  // Collision::listScan (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -59,7 +60,7 @@ void beh_scatter_record_dither(Core* c) {
   goto L7d4;                                          // st >= 4 default
 
  L7cc:                                           // STATE 2/3 — FUN_8007A624(node)
-  c->engine.spawn.despawn(obj);
+  eng(c).spawn.despawn(obj);
   goto L7d4;
 
  L590:                                           // STATE 0 — seed the scatter record list
@@ -72,18 +73,18 @@ void beh_scatter_record_dither(Core* c) {
   s0 = (int)(obj + 0x56);
  L5cc:
   // FUN_80032A44 = Rng::inRange (native). Each call scales the shared PSX rand() into a range.
-  v0 = c->rng.inRange(0, 128);
+  v0 = rngOf(c).inRange(0, 128);
   s1 -= 1;
   v1 = (uint16_t)(c->mem_r16(obj + 0x2c) + v0);
   c->mem_w16((uint32_t)s2 + 0, v1);
-  v0 = c->rng.inRange(-128, 0);
+  v0 = rngOf(c).inRange(-128, 0);
   v1 = (uint16_t)(c->mem_r16(obj + 0x2e) + v0);
   s2 += 8;
   c->mem_w16((uint32_t)s0 - 4, v1);
-  v0 = c->rng.inRange(0, 32);
+  v0 = rngOf(c).inRange(0, 32);
   v1 = (uint16_t)(c->mem_r16(obj + 0x30) + v0);
   c->mem_w16((uint32_t)s0 - 2, v1);
-  v0 = c->rng.inRange(224, 288);
+  v0 = rngOf(c).inRange(224, 288);
   c->mem_w16((uint32_t)s0 + 0, (uint16_t)v0);
   s0 += 8;                                       // c630 delay slot (always executes)
   if (s1 > 0) goto L5cc;
@@ -113,14 +114,14 @@ void beh_scatter_record_dither(Core* c) {
   s1 = 0;
   s0 = (int)(obj + 0x54);
  L6b0:
-  v0 = (uint32_t)c->rng.next();
+  v0 = (uint32_t)rngOf(c).next();
   s1 += 1;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s2 + 0) - 1 + (uint32_t)(((int32_t)v0 >> 7) & 3));
   c->mem_w16((uint32_t)s2 + 0, v1);
-  v0 = (uint32_t)c->rng.next();
+  v0 = (uint32_t)rngOf(c).next();
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 - 2) - 14 - (uint32_t)(((int32_t)v0 >> 8) & 0xf));
   c->mem_w16((uint32_t)s0 - 2, v1);
-  v0 = (uint32_t)c->rng.next();
+  v0 = (uint32_t)rngOf(c).next();
   s2 += 8;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 2 + (uint32_t)(((int32_t)v0 >> 7) & 3));
   c->mem_w16((uint32_t)s0 + 0, v1);
@@ -132,23 +133,23 @@ void beh_scatter_record_dither(Core* c) {
   s1 = 0;
   s0 = (int)(obj + 0x54);
  L73c:
-  v0 = (uint32_t)c->rng.next();
+  v0 = (uint32_t)rngOf(c).next();
   s1 += 1;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s2 + 0) - 3 + (uint32_t)(((int32_t)v0 >> 7) & 7));
   c->mem_w16((uint32_t)s2 + 0, v1);
-  v0 = (uint32_t)c->rng.next();
+  v0 = (uint32_t)rngOf(c).next();
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 - 2) - 14 - (uint32_t)(((int32_t)v0 >> 8) & 0xf));
   c->mem_w16((uint32_t)s0 - 2, v1);
-  v0 = (uint32_t)c->rng.next();
+  v0 = (uint32_t)rngOf(c).next();
   s2 += 8;
   v1 = (uint16_t)(c->mem_r16((uint32_t)s0 + 0) - 4 + (uint32_t)(((int32_t)v0 >> 7) & 7));
   c->mem_w16((uint32_t)s0 + 0, v1);
   s0 += 8;                                       // c7a8 delay slot
   if (s1 < c->mem_r16s(obj + 0x4e)) goto L73c;
  L7ac:
-  c->r[4] = obj; c->engine.cull.coneCull2b278();   // FUN_8002B278 (native)
+  c->r[4] = obj; eng(c).cull.coneCull2b278();   // FUN_8002B278 (native)
   if (c->r[2] != 0) goto L7d4;
-  c->engine.collision.listScan(obj);
+  eng(c).collision.listScan(obj);
  L7d4:
   return;
 }

@@ -12,6 +12,7 @@
 //   * `debug scene_transitionverify` — A/Bs areaMaskTrigger vs rec_super_call(0x800782F0).
 //   * `debug subswapverify`          — A/Bs stepSwapWaiter vs rec_super_call(0x80073328).
 #include "scene_transition.h"
+#include "game_ctx.h"
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold
 #include "core.h"
 #include "cfg.h"
@@ -82,7 +83,7 @@ void SceneTransition::resetSwap(uint32_t node) {
   Core* c = core;
   c->mem_w8(node + 0, 2);
   if (c->mem_r8(node + 0xBF) != 0) {
-    c->engine.sfx.trigger(0x17, 0, 0x0F);           // FUN_80074590 (native)
+    eng(c).sfx.trigger(0x17, 0, 0x0F);           // FUN_80074590 (native)
   }
   c->mem_w8(E7FC5_FLAG, 0);
   clearSwapBlock(SCENE_BLOCK);          // FUN_80054198 (native)
@@ -237,7 +238,7 @@ int SceneTransition::stepSwapWaiter(uint32_t node) {
         }
         // ZERO-CROSS SFX: only when clampHit && obj[+0xBF] != 0
         if (clampHit != 0 && c->mem_r8(n + 0xBF) != 0) {
-          c->engine.sfx.trigger(24, 0, 15);                 // FUN_80074590 (native)
+          eng(c).sfx.trigger(24, 0, 15);                 // FUN_80074590 (native)
         }
         // TAIL: obj[+0x56] = obj[+0x5A] - obj[+0x50]  (SUB form; matches FUN_80072EFC)
         c->mem_w16(n + 0x56, (uint16_t)(c->mem_r16(n + 0x5A) - c->mem_r16(n + 0x50)));

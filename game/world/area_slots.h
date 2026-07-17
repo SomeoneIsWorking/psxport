@@ -1,7 +1,7 @@
 // game/world/area_slots.h — PC-native AREA-SLOT state machine.
 //
 // PROPER OOP: one instance per Core, embedded on Engine, reached as
-// `c->engine.areaSlots.method(args)`. Back-pointer wired at Core construction (same pattern as
+// `eng(c).areaSlots.method(args)`. Back-pointer wired at Core construction (same pattern as
 // Spawn / SceneEvents).
 //
 // SCOPE: the 24-entry × 12-byte area-slot table at 0x800BE238 + its armed-mask at 0x800BE358 —

@@ -9,6 +9,7 @@
 // UNWIRED — dead code. Do not wire into any dispatch table before running port_check.py
 // and the mandatory line-by-line verify pass (docs/fleet-workflow.md §9).
 #include "engine.h"
+#include "game_ctx.h"
 #include "override_registry.h"
 #include "core.h"
 
@@ -55,7 +56,7 @@ void Engine::spawnType6Node() {
 // Engine::fieldFrame (engine.cpp:1063) + ActorTomba. Byte-faithful; spawn/init leaves stay substrate. ----
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_800310F4(Core*);
-namespace { void ov_spawnType6Node(Core* c) { c->engine.spawnType6Node(); } }
+namespace { void ov_spawnType6Node(Core* c) { eng(c).spawnType6Node(); } }
 void Engine::registerSpawnType6Node() {
   overrides::install(0x800310F4u, "Engine::spawnType6Node", ov_spawnType6Node,
                      gen_func_800310F4, shard_set_override);

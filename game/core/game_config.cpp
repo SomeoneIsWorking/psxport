@@ -8,6 +8,7 @@
 // Installed once at the very top of main() (boot.cpp) via tomba_install_game_config(), before any
 // Game/Core is constructed, so Core's ctor snapshots a non-null c->cfg.
 #include "game_iface.h"
+#include "game_ctx.h"
 
 static const GameConfig g_tomba_config = {
   // --- crt0 / boot (native_boot.cpp crt0_setup, game_init) ---
@@ -77,7 +78,7 @@ static const GameConfig g_tomba_config = {
   /* padSlotPtrTable */ 0x0000aec8u,
 };
 
-// The game's callback vtable — defined in game_hooks.cpp (thin impls reaching c->engine.*).
+// The game's callback vtable — defined in game_hooks.cpp (thin impls reaching eng(c).*).
 extern const GameHooks g_tomba_hooks;
 
 void tomba_install_game_config() { psxport_install_game(&g_tomba_config, &g_tomba_hooks); }

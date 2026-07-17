@@ -7,16 +7,17 @@
 // from game_tomba2.cpp (one behavior, byte-identical) into its own module for PC-game code structure.
 // Diagnostic A/B gates (child40410/disp26c88/sm40558/fd10) are REPL channels, unchanged.
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "entity.h"
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update
-#include "rng.h"       // class Rng (via c->rng.next())
-#include "render/cull.h"     // class Cull (c->engine.cull.enqueueQueueA — FUN_80077E7C)
+#include "rng.h"       // class Rng (via rngOf(c).next())
+#include "render/cull.h"     // class Cull (eng(c).cull.enqueueQueueA — FUN_80077E7C)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -59,7 +60,7 @@ static uint32_t child_spawn_40410(Core* c) {
   uint32_t s3 = a1 << 2;             // tblB byte offset = (a1&0xff)*4, +2 per iter
   const uint32_t s5 = 0x800a3b28u;   // tblB base
   for (uint32_t i = 0; i < count; i++) {
-    c->r[4] = 0; c->engine.graphicsBind.recordAlloc();     // allocate child node
+    c->r[4] = 0; eng(c).graphicsBind.recordAlloc();     // allocate child node
     uint32_t node = c->r[2];
     c->mem_w32(s0 + 0xC0, node);
     c->mem_w16(node + 6, (uint16_t)(i - 1));        // node[6] = (i-1) as s16
@@ -70,7 +71,7 @@ static uint32_t child_spawn_40410(Core* c) {
     c->mem_w16(node + 0xA, 0);
     c->mem_w16(node + 0xC, 0);
     uint32_t a2 = (uint32_t)c->mem_r16s(s5 + s3);
-    c->engine.graphicsBind.installSceneRecord(node, 1, a2);   // FUN_80051B04 (native)
+    eng(c).graphicsBind.installSceneRecord(node, 1, a2);   // FUN_80051B04 (native)
     s1 += 6; s3 += 2; s0 += 4;
   }
   return 1;
@@ -137,7 +138,7 @@ static void sm40558(Core* c) {
   const uint32_t G = 0x800BF870u;                 // global block base (0x800bf870 = mode byte)
   uint32_t st = c->mem_r8(obj + 4);
 
-  if (st == 3) { c->engine.spawn.despawn(obj); return; }
+  if (st == 3) { eng(c).spawn.despawn(obj); return; }
 
   if (st == 0) {
     uint32_t s5 = c->mem_r8(obj + 5);
@@ -209,7 +210,7 @@ static void sm40558(Core* c) {
       c->mem_w8(obj + 1, (uint8_t)v0);
       if ((v0 & 0xff) == 0) { c->mem_w8(obj + 41, 0); return; }        // @8c8
       c->r[4]=obj; rec_dispatch(c, 0x8012866Cu);
-      c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
+      eng(c).cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
       c->mem_w8(obj + 41, 0);
       return;
     }
@@ -224,9 +225,9 @@ static void sm40558(Core* c) {
         && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)c->mem_r16s(obj + 106)) {
       if (c->mem_r8(obj + 40) & 0x80) {
         c->mem_w8(obj + 1, 1);
-        c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
+        eng(c).cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
         // @878
-        c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
+        c->r[4]=obj; eng(c).graphicsBind.renderUpdate();
         c->mem_w8(obj + 41, 0);
         return;
       }
@@ -242,7 +243,7 @@ static void sm40558(Core* c) {
       else                        { v0 = Actor(c, obj).boundsCull(); }  // FUN_8007778C (native)
       if (v0 == 0) { c->mem_w8(obj + 41, 0); return; }                    // @8c8
       // @878
-      c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
+      c->r[4]=obj; eng(c).graphicsBind.renderUpdate();
       c->mem_w8(obj + 41, 0);
       return;
     }
@@ -254,7 +255,7 @@ static void sm40558(Core* c) {
       // jt 0x80015338: [0]/[4]=@964, [1]=@904, [2]=@94c, [3]=@95c
       if (s5 == 1) {
         // @904
-        if (c->mem_r8(obj + 3) == 0 && c->mem_r8(0x800BFAD1u) == 0) c->engine.sceneEvents.arm(56);   // FUN_80040B48 (native)
+        if (c->mem_r8(obj + 3) == 0 && c->mem_r8(0x800BFAD1u) == 0) eng(c).sceneEvents.arm(56);   // FUN_80040B48 (native)
         // @92c
         if (c->mem_r8(obj + 94) == 2) {
           uint32_t v1b = c->mem_r32(obj + 16);
@@ -274,7 +275,7 @@ static void sm40558(Core* c) {
       uint32_t v0 = c->mem_r8(p + 1);
       c->mem_w8(obj + 1, (uint8_t)v0);
       c->r[4]=obj; rec_dispatch(c, 0x8012866Cu);
-      c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
+      eng(c).cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
       return;
     }
     // @99c: mirror of state-1 @7e0..tail (global checks + cull/transform), with obj fields
@@ -282,9 +283,9 @@ static void sm40558(Core* c) {
         && c->mem_r8(0x800BF817u) == (uint32_t)(uint16_t)c->mem_r16s(obj + 106)) {
       if (c->mem_r8(obj + 40) & 0x80) {
         c->mem_w8(obj + 1, 1);
-        c->engine.cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
+        eng(c).cull.enqueueQueueA(obj);              // FUN_80077E7C (native)
         // @a30
-        c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
+        c->r[4]=obj; eng(c).graphicsBind.renderUpdate();
         return;
       }
       return;                                         // (obj[40]&0x80)==0 -> @a48
@@ -297,7 +298,7 @@ static void sm40558(Core* c) {
       else                        { v0 = Actor(c, obj).boundsCull(); }  // FUN_8007778C (native)
       if (v0 == 0) return;                            // @a48
       // @a30
-      c->r[4]=obj; c->engine.graphicsBind.renderUpdate();
+      c->r[4]=obj; eng(c).graphicsBind.renderUpdate();
       return;
     }
   }
@@ -347,7 +348,7 @@ static void osc_fd10(Core* c) {
   uint32_t r = c->mem_r16(0x1F80017Cu) & 1u;      // scratchpad halfword & 1
   uint32_t node = c->mem_r32(obj + 0xC0);
   c->mem_w16(node + 2, (uint16_t)(r * 6u));       // sh in the ov_rand delay slot (pre-call node/value)
-  uint32_t rr = (uint32_t)c->rng.next() & 3u;   // FUN_8009A450 -> native class Rng
+  uint32_t rr = (uint32_t)rngOf(c).next() & 3u;   // FUN_8009A450 -> native class Rng
   uint32_t v0 = (uint32_t)((int32_t)rr - 2);
   c->mem_w16(node + 0, (uint16_t)(v0 * 6u));
 }

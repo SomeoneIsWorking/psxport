@@ -1,4 +1,5 @@
 #include "rng.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "sbs.h"
@@ -35,7 +36,7 @@ struct Tracer {
     Sbs* sbs = c->game ? c->game->sbs : nullptr;
     int side = sbs ? sbs->coreId(c) : 0;
     if (side < 0) side = 0;
-    // Bucket by HOST caller (the C fn calling c->rng.next()). Guest r[31] is stale DEAD0000 in
+    // Bucket by HOST caller (the C fn calling rngOf(c).next()). Guest r[31] is stale DEAD0000 in
     // native handlers, so it doesn't distinguish callers. backtrace() at depth 3 skips the bump
     // frame, Rng::next frame, and lands at the caller — the native beh/handler that consumed the
     // RNG. This names the specific `beh_*` fn or `Cull::*` method that over- or under-advances.

@@ -7,6 +7,7 @@
 // verbatim from generated/shard_2.c's own decimal literals (e.g. `mem_r16(self + 46u)`) — same
 // convention as game/ai/actor_melee_engage.cpp, to avoid a hex/decimal transcription mismatch.
 #include "melee_proximity.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "override_registry.h"
@@ -55,7 +56,7 @@ int32_t MeleeProximity::isAtApproachAnchor(uint32_t self, uint32_t other) {  // 
   // branch's delay slot), a1=dz (r18=dz, NOT negated) before the FUN_80085690 dispatch — i.e.
   // ratan2(-dx, dz). The original draft swapped dx/dz (ratan2(-dz, dx)); ActorMeleeEngage's sibling
   // function has the identical convention (ratan2(-dxS, dzS)), confirming this argument order.
-  const int32_t angle = c->trig.ratan2(-dx, dz);
+  const int32_t angle = trigOf(c).ratan2(-dx, dz);
   c->mem_w32(0x1F80009Cu, (uint32_t)angle);
   return 1;
 }
@@ -95,7 +96,7 @@ extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8001F9DC(Core*);   // substrate body — kept alive for psx_fallback (core B)
 
 namespace {
-void ov_meleeProximity(Core* c) { c->engine.meleeProximity.isAtApproachAnchorFramed(); }
+void ov_meleeProximity(Core* c) { eng(c).meleeProximity.isAtApproachAnchorFramed(); }
 }  // namespace
 
 void MeleeProximity::registerOverrides(Game* /*game*/) {

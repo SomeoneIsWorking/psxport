@@ -16,6 +16,7 @@
 // this pass does not second-guess it.
 
 #include "audio/sequencer.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"           // MV_CHECK / VerifyHarness (frameTick trampoline strict gate)
 #include "guest_abi.h"      // GuestFrame/GuestReg/guest_fn/guest_dispatch — ABI vocabulary
@@ -1858,18 +1859,18 @@ L_8009458C:
 // `func_800910F0(c)` inside gen_func_80090BD0 ultimately reach for MAIN-shard addresses, so one
 // registration covers both call paths.
 // ============================================================================
-static void nat_channelPitchSelectDispatch(Core* c) { c->engine.sequencer.channelPitchSelectDispatch(); }
-static void nat_channelReleaseClear(Core* c)        { c->engine.sequencer.channelReleaseClear(); }
-static void nat_channelStopFlagSet(Core* c)         { c->engine.sequencer.channelStopFlagSet(); }
-static void nat_channelPitchSlideTick(Core* c)      { c->engine.sequencer.channelPitchSlideTick(); }
-static void nat_channelEnvelopeRampTick(Core* c)    { c->engine.sequencer.channelEnvelopeRampTick(); }
-static void nat_channelNoteInit(Core* c)            { c->engine.sequencer.channelNoteInit(); }
-static void nat_channelVolumeSnapshot(Core* c)      { c->engine.sequencer.channelVolumeSnapshot(); }
-static void nat_channelKeyEventScan(Core* c)        { c->engine.sequencer.channelKeyEventScan(); }
-static void nat_channelKeyRegisterMerge(Core* c)    { c->engine.sequencer.channelKeyRegisterMerge(); }
-static void nat_channelVoiceRegisterWrite(Core* c)  { c->engine.sequencer.channelVoiceRegisterWrite(); }
-static void nat_channelVoiceSelectPrep(Core* c)     { c->engine.sequencer.channelVoiceSelectPrep(); }
-static void nat_seqChannelDispatch(Core* c)         { c->engine.sequencer.seqChannelDispatch(); }
+static void nat_channelPitchSelectDispatch(Core* c) { eng(c).sequencer.channelPitchSelectDispatch(); }
+static void nat_channelReleaseClear(Core* c)        { eng(c).sequencer.channelReleaseClear(); }
+static void nat_channelStopFlagSet(Core* c)         { eng(c).sequencer.channelStopFlagSet(); }
+static void nat_channelPitchSlideTick(Core* c)      { eng(c).sequencer.channelPitchSlideTick(); }
+static void nat_channelEnvelopeRampTick(Core* c)    { eng(c).sequencer.channelEnvelopeRampTick(); }
+static void nat_channelNoteInit(Core* c)            { eng(c).sequencer.channelNoteInit(); }
+static void nat_channelVolumeSnapshot(Core* c)      { eng(c).sequencer.channelVolumeSnapshot(); }
+static void nat_channelKeyEventScan(Core* c)        { eng(c).sequencer.channelKeyEventScan(); }
+static void nat_channelKeyRegisterMerge(Core* c)    { eng(c).sequencer.channelKeyRegisterMerge(); }
+static void nat_channelVoiceRegisterWrite(Core* c)  { eng(c).sequencer.channelVoiceRegisterWrite(); }
+static void nat_channelVoiceSelectPrep(Core* c)     { eng(c).sequencer.channelVoiceSelectPrep(); }
+static void nat_seqChannelDispatch(Core* c)         { eng(c).sequencer.seqChannelDispatch(); }
 // frameTick's trampoline is MV_CHECK-able: SBS diff_mode skips the whole per-vblank audio block on
 // both cores (game_tomba2.cpp), so NO SBS config can exercise the tick path -- the strict
 // mirror-verify gate (PSXPORT_MIRROR_VERIFY=0x800909C0, normal single-core run with the sequencer
@@ -1877,14 +1878,14 @@ static void nat_seqChannelDispatch(Core* c)         { c->engine.sequencer.seqCha
 // FULL native subtree (frameTick -> seqChannelDispatch -> all leaves), rewinds, replays the pure
 // substrate subtree (the thunk consults verify.inSubstrateLeg), and byte-compares RAM + scratchpad
 // + ABI regs. See docs/findings/audio.md.
-static void nat_frameTick(Core* c)                  { MV_CHECK(c, 0x800909C0u, c->engine.sequencer.frameTick()); }
+static void nat_frameTick(Core* c)                  { MV_CHECK(c, 0x800909C0u, eng(c).sequencer.frameTick()); }
 // 2026-07-17 wave trampolines.
-static void nat_channelStreamAccumulate(Core* c)    { c->engine.sequencer.channelStreamAccumulate(); }
-static void nat_channelVoiceKeyOn(Core* c)          { c->engine.sequencer.channelVoiceKeyOn(); }
-static void nat_channelToneRecordCopy(Core* c)      { c->engine.sequencer.channelToneRecordCopy(); }
-static void nat_channelToneRecordCopyWide(Core* c)  { c->engine.sequencer.channelToneRecordCopyWide(); }
-static void nat_voiceAllocateOrSteal(Core* c)       { c->engine.sequencer.voiceAllocateOrSteal(); }
-static void nat_channelNotePeriodCompute(Core* c)   { c->engine.sequencer.channelNotePeriodCompute(); }
+static void nat_channelStreamAccumulate(Core* c)    { eng(c).sequencer.channelStreamAccumulate(); }
+static void nat_channelVoiceKeyOn(Core* c)          { eng(c).sequencer.channelVoiceKeyOn(); }
+static void nat_channelToneRecordCopy(Core* c)      { eng(c).sequencer.channelToneRecordCopy(); }
+static void nat_channelToneRecordCopyWide(Core* c)  { eng(c).sequencer.channelToneRecordCopyWide(); }
+static void nat_voiceAllocateOrSteal(Core* c)       { eng(c).sequencer.voiceAllocateOrSteal(); }
+static void nat_channelNotePeriodCompute(Core* c)   { eng(c).sequencer.channelNotePeriodCompute(); }
 
 void Sequencer::registerOverrides() {
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);

@@ -18,6 +18,7 @@
 // remaining 58 opcode handlers stay substrate.
 
 #include "scene/script_interp.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "cfg.h"
 #include "core/engine.h"
@@ -332,7 +333,7 @@ int ScriptInterp::callFnptr(uint32_t obj) {
   const uint16_t hi = c->mem_r16(obj + OBJ_FNPTR_HI_76);
   const uint32_t fnptr = ((uint32_t)hi << 16) | (uint32_t)lo;
   c->r[31] = 0x800412E4u;                 // the trampoline's own post-jalr constant, set AFTER the descent
-  c->engine.behaviors.dispatchObj(obj, fnptr);
+  eng(c).behaviors.dispatchObj(obj, fnptr);
   return (int)c->r[2];
 }
 
@@ -340,7 +341,7 @@ int ScriptInterp::callFnptr(uint32_t obj) {
 // the recomp's calling convention so a native ancestor that already used dispatchObj lands here
 // transparently. The wrapper is deliberately trivial: pull obj out of a0 and forward to step().
 void beh_script_interp_step(Core* c) {
-  c->engine.script.step(c->r[4]);
+  eng(c).script.step(c->r[4]);
 }
 
 void ScriptInterp::step(uint32_t obj) {
@@ -518,13 +519,13 @@ int ScriptInterp::stepEventPulse(uint32_t obj, uint32_t flagsPtr, uint32_t packe
     }
     if ((flagsWord & 0x40u) != 0) return 0;  // already latched — wait for the consumer to clear it
     c->mem_w16(flagsPtr, (uint16_t)(flagsWord | 0x40u));
-    c->engine.sfx.trigger(argLo, 0, argHi);
+    eng(c).sfx.trigger(argLo, 0, argHi);
     return 1;
   }
   // low 6 bits nonzero: fire every call the shared scratchpad mask has none of flagsWord's bits set.
   const uint16_t scratchMask = c->mem_r16(SCRATCH_EVENT_MASK_17C);
   if ((scratchMask & flagsWord) == 0) {
-    c->engine.sfx.trigger(argLo, 0, argHi);
+    eng(c).sfx.trigger(argLo, 0, argHi);
   }
   return 0;
 }
@@ -991,18 +992,18 @@ int ScriptInterp::advanceGauge(uint32_t obj, uint32_t rec) {
 // falling to the gen_func_* body — oracle-gated (core B / psx_fallback never consults the table) —
 // so registering these 5 addresses here is the entire wiring step; step()'s loop itself is untouched.
 namespace {
-void eov_op05WaitFrames(Core* c)               { c->r[2] = (uint32_t)c->engine.script.op05WaitFrames(c->r[4]); }
-void eov_op06TestSceneFlag(Core* c)            { c->r[2] = (uint32_t)c->engine.script.op06TestSceneFlag(c->r[4]); }
-void eov_op34ClaimGate(Core* c)                { c->r[2] = (uint32_t)c->engine.script.op34ClaimGate(c->r[4]); }
-void eov_op36MoveTowardScriptTarget(Core* c)   { c->r[2] = (uint32_t)c->engine.script.op36MoveTowardScriptTarget(c->r[4]); }
-void eov_op31TurnTowardTarget(Core* c)         { c->r[2] = (uint32_t)c->engine.script.op31TurnTowardTarget(c->r[4]); }
+void eov_op05WaitFrames(Core* c)               { c->r[2] = (uint32_t)eng(c).script.op05WaitFrames(c->r[4]); }
+void eov_op06TestSceneFlag(Core* c)            { c->r[2] = (uint32_t)eng(c).script.op06TestSceneFlag(c->r[4]); }
+void eov_op34ClaimGate(Core* c)                { c->r[2] = (uint32_t)eng(c).script.op34ClaimGate(c->r[4]); }
+void eov_op36MoveTowardScriptTarget(Core* c)   { c->r[2] = (uint32_t)eng(c).script.op36MoveTowardScriptTarget(c->r[4]); }
+void eov_op31TurnTowardTarget(Core* c)         { c->r[2] = (uint32_t)eng(c).script.op31TurnTowardTarget(c->r[4]); }
 
 // Resident-leaf sweep (2026-07-17) — guest ABI: args in c->r[4..5], ret in c->r[2].
-void eov_refreshCachedTailHi(Core* c) { c->engine.script.refreshCachedTailHi(c->r[4]); }
-void eov_refreshCachedTailLo(Core* c) { c->engine.script.refreshCachedTailLo(c->r[4]); }
-void eov_matchesActiveByKind(Core* c) { c->r[2] = (uint32_t)c->engine.script.matchesActiveByKind(c->r[4]); }
-void eov_mirrorGlobalStatusByte(Core* c) { c->r[2] = (uint32_t)c->engine.script.mirrorGlobalStatusByte(); }
-void eov_advanceGauge(Core* c) { c->r[2] = (uint32_t)c->engine.script.advanceGauge(c->r[4], c->r[5]); }
+void eov_refreshCachedTailHi(Core* c) { eng(c).script.refreshCachedTailHi(c->r[4]); }
+void eov_refreshCachedTailLo(Core* c) { eng(c).script.refreshCachedTailLo(c->r[4]); }
+void eov_matchesActiveByKind(Core* c) { c->r[2] = (uint32_t)eng(c).script.matchesActiveByKind(c->r[4]); }
+void eov_mirrorGlobalStatusByte(Core* c) { c->r[2] = (uint32_t)eng(c).script.mirrorGlobalStatusByte(); }
+void eov_advanceGauge(Core* c) { c->r[2] = (uint32_t)eng(c).script.advanceGauge(c->r[4], c->r[5]); }
 }  // namespace
 
 extern void gen_func_80042090(Core*);

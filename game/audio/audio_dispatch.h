@@ -1,7 +1,7 @@
 // game/audio/audio_dispatch.h — PC-native audio DISPATCH / SETTLE cluster.
 //
 // PROPER OOP: one instance per Core, embedded on Engine, reached as
-// `c->engine.audioDispatch.method(args)`. Back-pointer wired at Core construction (same pattern
+// `eng(c).audioDispatch.method(args)`. Back-pointer wired at Core construction (same pattern
 // as Sfx / MusicCoord).
 //
 // SCOPE: the four field-audio control-flow primitives — the 3-way dispatcher (FUN_800750D8), the

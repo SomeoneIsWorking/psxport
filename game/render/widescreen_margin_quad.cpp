@@ -12,6 +12,7 @@
 // the SUBSTRATE's own GTE + OT + packet-pool writer, not pc_render. Every guest write below is
 // part of the byte-exact state SBS compares — no write here is optional or "residual".
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "guest_abi.h"
 #include "widescreen_margin_quad.h"
@@ -296,7 +297,7 @@ void WidescreenMarginQuad::emit(Core* c) {
         Render::WqRec w;
         w.node = (uint32_t)node;
         w.seq = 0;
-        for (const Render::WqRec& p : c->mRender->mWqRecs) if (p.node == w.node) w.seq++;
+        for (const Render::WqRec& p : rend(c)->mWqRecs) if (p.node == w.node) w.seq++;
         static constexpr uint32_t kVX[4] = { kVtxScratch_X0, kVtxScratch_X1, kVtxScratch_X2, kVtxScratch_X3 };
         static constexpr uint32_t kVY[4] = { kVtxScratch_Y0, kVtxScratch_Y1, kVtxScratch_Y2, kVtxScratch_Y3 };
         static constexpr uint32_t kVZ[4] = { kVtxScratch_Z0, kVtxScratch_Z1, kVtxScratch_Z2, kVtxScratch_Z3 };
@@ -319,7 +320,7 @@ void WidescreenMarginQuad::emit(Core* c) {
         for (int i = 0; i < 4; i++) w.wCol[i] = c->mem_r32((uint32_t)pool + kColOff[i]);
         w.wUv0 = c->mem_r32((uint32_t)pool + 12); w.wUv1 = c->mem_r32((uint32_t)pool + 24);
         w.wUv2 = c->mem_r32((uint32_t)pool + 36); w.wUv3 = c->mem_r32((uint32_t)pool + 48);
-        c->mRender->mWqRecs.push_back(w);
+        rend(c)->mWqRecs.push_back(w);
       }
       pool = (uint32_t)pool + 52;
       poolBase += 52;

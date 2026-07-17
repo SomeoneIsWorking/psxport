@@ -6,7 +6,7 @@
 // relative wrappers (FUN_8007778C / FUN_80077ACC), and the standalone view-cone cull (FUN_8002B278).
 //
 // Currently ORPHANED — the top-down PC path hasn't reached the cull site yet. The class shape is here
-// so callers can hook in as `c->engine.cull.method()` once wired; the algorithmic body preserves the
+// so callers can hook in as `eng(c).cull.method()` once wired; the algorithmic body preserves the
 // RE'd cull-decide + widescreen margin re-include logic.
 #pragma once
 #include <cstdint>

@@ -25,15 +25,16 @@
 //   0x800BF870 (base; +0x177 -> 0x800BF9E7, +0x178 -> 0x800BF9E8 bit-set tables in despawn tail)
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::enqueueQueueA (FUN_80077E7C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
-#include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
+#include "inventory.h"       // class Inventory — inv(c).giveAndFlag (FUN_8004D4C4)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -80,13 +81,13 @@ static void release_position_801244e8(Core* c, uint32_t obj, uint32_t mode) {
     c->mem_w8(obj + 0xb, 0x13);
     c->mem_w16(obj + 0x54, 0x100);
     c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 3;
-    c->engine.graphicsBind.setGeom();                   // FUN_80077B38 (native)
+    eng(c).graphicsBind.setGeom();                   // FUN_80077B38 (native)
     return;
   }
   if (st != 1) return;
   if (Actor(c, obj).boundsCull() != 0) {                // FUN_8007778C (native)
     const uint32_t xf = obj + 0x98;
-    c->mtx.identity(xf);                                 // FUN_80051794 (native)
+    mtxOf(c).identity(xf);                                 // FUN_80051794 (native)
     c->r[4] = obj + 0x54; c->r[5] = xf;
     rec_dispatch(c, 0x800847F0u);
     c->r[4] = 0x1F8000F8u; c->r[5] = xf;
@@ -98,7 +99,7 @@ static void release_position_801244e8(Core* c, uint32_t obj, uint32_t mode) {
   if (phase == 0xe) {
     rec_dispatch(c, 0x8009A450u);                        // FUN_8009A450 (rand, still-PSX leaf)
     if ((c->r[2] & 0x3f) == 0) {
-      c->engine.spawn.spawnAndInit(0x107u, obj + 0x2c, (uint32_t)-10);   // FUN_8003116C (native)
+      eng(c).spawn.spawnAndInit(0x107u, obj + 0x2c, (uint32_t)-10);   // FUN_8003116C (native)
     }
     rec_dispatch(c, 0x8009A450u);
     const uint32_t r2 = c->r[2] & 3u;
@@ -130,7 +131,7 @@ void beh_jumptable_release_trigger(Core* c) {
       }
       if (st == 3) {
         // ---- STATE 3 (0x8012529c): despawn ----
-        c->engine.spawn.despawn(obj);   // 8012529C jal 0x8007a624 (a0=s2)
+        eng(c).spawn.despawn(obj);   // 8012529C jal 0x8007a624 (a0=s2)
         return;                                        // 801252A4 epilogue
       }
       return;                                          // 80124EC8 j 0x801252a4 (epilogue, no-op)
@@ -202,7 +203,7 @@ void beh_jumptable_release_trigger(Core* c) {
         c->r[4] = obj;                                  // 80124FD0 move a0,s2
         c->r[5] = 0x8015C808u;                          // 80124FD4 lui a1,0x8015 ; 80124FD8 addiu a1,-0x37f8
         c->r[6] = 4;                                    // 80124FDC addiu a2,zero,4
-        c->engine.graphicsBind.setGeom();                   // 80124FE4 jal 0x80077b38
+        eng(c).graphicsBind.setGeom();                   // 80124FE4 jal 0x80077b38
         c->mem_w8 (obj + 6, (uint8_t)c->r[2]);          // 80124FE8 sb v0, 6(s2)  (delay slot; v0=ret)
         c->mem_w8 (obj + 0xb, 0x10);                    // 80124FF0 sb 0x10, 0xb(s2)
         c->mem_w16(obj + 0x5a, 0xa00);                  // 80124FF8 sh 0xa00, 0x5a(s2)
@@ -220,7 +221,7 @@ void beh_jumptable_release_trigger(Core* c) {
       (void)fall_into_1;
       if (c->mem_r8(s0 + 0x3f) == 0) goto epi_done;     // 8012501C lbu v0,0x3f(s0) ; 80125024 beqz -> 0x801251e8
       // FUN_80077E7C → Cull::enqueueQueueA (native). Returns 0 on cap-hit, new count on push.
-      c->mem_w8(obj + 1, (uint8_t)c->engine.cull.enqueueQueueA(obj));  // sb v0, 1(s3) (was rec_dispatch)
+      c->mem_w8(obj + 1, (uint8_t)eng(c).cull.enqueueQueueA(obj));  // sb v0, 1(s3) (was rec_dispatch)
       // jal 0x80051d90(a0=s0, a1=s3+0x88, a2=0x1f8000c0)
       c->r[4] = s0;                                     // 80125038 move a0,s0
       c->r[5] = obj + 0x88;                             // 8012503C addiu a1,s3,0x88
@@ -249,7 +250,7 @@ void beh_jumptable_release_trigger(Core* c) {
         c->r[4] = obj;                                  // 801250A4 move a0,s2
         c->r[5] = 0x8015C808u;                          // 801250A8 lui/addiu a1
         c->r[6] = 4;                                    // 801250B4 addiu a2,zero,4 (delay slot)
-        c->engine.graphicsBind.setGeom();                   // 801250B0 jal 0x80077b38
+        eng(c).graphicsBind.setGeom();                   // 801250B0 jal 0x80077b38
         c->mem_w8(obj + 0x29, 0);                       // 801250BC sb zero, 0x29(s2)  (delay slot)
         goto epilogue;                                  // 801250B8 j 0x801252a4
       }
@@ -350,9 +351,9 @@ state2:
     // 8012520C slti v0,v1,4 ; 80125210 beqz -> epilogue (v1>=4)   => active only when 2<=v1<4
     if (sub < 0 || sub < 2 || sub >= 4) return;        // 801252A4 epilogue
     // 2 <= node[5] < 4:
-    c->inventory.giveAndFlag(0x77, 1);                  // 8012521C jal 0x8004d4c4 [native]
+    inv(c).giveAndFlag(0x77, 1);                  // 8012521C jal 0x8004d4c4 [native]
     c->r[4] = obj; rec_dispatch(c, 0x8004B0D8u);        // 80125224 jal 0x8004b0d8 (a0=s2)
-    c->engine.sfx.trigger(0x11, 0, 0);                  // 80125234 jal 0x80074590 (native)
+    eng(c).sfx.trigger(0x11, 0, 0);                  // 80125234 jal 0x80074590 (native)
     uint8_t n3 = c->mem_r8(obj + 3);                   // 8012523C lbu v1, 3(s2)
     c->mem_w8(obj + 4, 3);                              // 80125248 sb v0(=3), 4(s2)  -> state 3  (delay slot)
     // 80125244 bnez v1 -> 0x8012526c

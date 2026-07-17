@@ -3,8 +3,8 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::objectList`. Back-pointer wired
 // once by Core's constructor. Callers reach the walkers via the object graph:
 //
-//     c->engine.objectList.walkAll();     // main per-frame walk (was ov_objwalk / FUN_8007A904)
-//     c->engine.objectList.walkAux();     // aux list walk       (was ov_list_walk_69b28 / FUN_80069B28)
+//     eng(c).objectList.walkAll();     // main per-frame walk (was ov_objwalk / FUN_8007A904)
+//     eng(c).objectList.walkAux();     // aux list walk       (was ov_list_walk_69b28 / FUN_80069B28)
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as
 // SceneTransition, TransitionState3, NodeXform, ScreenFade.

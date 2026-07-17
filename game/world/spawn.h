@@ -1,6 +1,6 @@
 // class Spawn — PC-native ENTITY SPAWN / DESPAWN subsystem, owned by Engine.
 //
-// PROPER OOP: one instance per Core, reached as `c->engine.spawn.method(args)`. Back-pointer
+// PROPER OOP: one instance per Core, reached as `eng(c).spawn.method(args)`. Back-pointer
 // `core` wired once at Core construction time (same pattern as Placement / Animation / Collision).
 //
 // SCOPE: the engine path that instantiates and retires objects in the active object pool — pool-pop +

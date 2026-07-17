@@ -16,11 +16,12 @@
 // produced (the cb at 0x800506B4 only increments that counter), computed directly.
 // (When a host present loop exists it will pace frames; this just removes the busy-wait.)
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "mods.h"      // g_mods (fps60 persisted with the other user settings)
 #include "margin_render.h"
-#include "render.h"           // class Render — c->mRender->sceneNative()
+#include "render.h"           // class Render — rend(c)->sceneNative()
 #include "asset.h"      // PC-native asset-loading subsystem (extracted from this file)
 #include "mathlib.h"    // PC-native math/PRNG leaf primitives (rand, trig LUTs, bit-test)
 #include "cull.h"       // PC-native visibility cull / LOD subsystem
@@ -156,7 +157,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // ============================================================================================
   if (c->rsub.mode.psxRender()) {
     gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
-    if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
+    if (cfg_dbg("rendernative")) rend(c)->mNativeScene.run();
     c->game->rq.flush(c);
     return;
   }
@@ -170,10 +171,10 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // break), never transcribed. The substrate render orchestrator (Render::frame/frameX) still runs
   // underneath (guest OT/packet pool = part of the byte-exact state); we simply do not read it here.
   // ============================================================================================
-  c->mRender->renderScene();
+  rend(c)->renderScene();
   // ADDITIVE native render subsystem (game/render/mNativeScene) — the decoupled "native experience" pass,
   // gated behind the `rendernative` DIAGNOSTIC channel (off by default). Builds from native scene data.
-  if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
+  if (cfg_dbg("rendernative")) rend(c)->mNativeScene.run();
   c->game->rq.flush(c);
 }
 

@@ -3,7 +3,7 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::array8Dispatch`. Back-pointer wired
 // once by Core's constructor. Callers reach the dispatcher through the object graph:
 //
-//     c->engine.array8Dispatch.tick();
+//     eng(c).array8Dispatch.tick();
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as
 // ObjectList, TransitionState3, SceneTransition.

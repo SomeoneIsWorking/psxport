@@ -17,6 +17,7 @@
 // of 0x80109164 (faithful below, addresses annotated).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"    // PcScheduler::sop_field_step (Slip #2 fix — docs/findings/sbs.md)
 #include "cfg.h"
 #include "sop.h"
@@ -25,14 +26,14 @@
 
 // dispatch a still-recomp leaf with up to 3 args set (helpers for the SOP/transition machines).
 static void d0(Core* c, uint32_t fn);
-// (ov_bg_scene_transition_sm moved to BgSceneTransitionSm::step — c->engine.bgSceneTransitionSm.step())
+// (ov_bg_scene_transition_sm moved to BgSceneTransitionSm::step — eng(c).bgSceneTransitionSm.step())
 #include "render/screen_fade.h"   // class ScreenFade — the single fade driver
 static void d1(Core* c, uint32_t fn, uint32_t a0);
 static void d2(Core* c, uint32_t fn, uint32_t a0, uint32_t a1);
 #include "camera/cutscene_camera.h"   // class CutsceneCamera — SOP/BG cutscene camera (0x8006E3B0)
 #include "world/graphics_bind.h"  // ov_obj_set_xformblk (FUN_8006CBD0)
 #include "core/asset.h"           // class Asset — unpackGroup / loadTexgroup (static)
-#include "world/spawn.h"          // class Spawn (c->engine.spawn.dispatch)
+#include "world/spawn.h"          // class Spawn (eng(c).spawn.dispatch)
 #include "world/pool.h"           // ov_pool_init_run (FUN_8007B18C)
 static void d3(Core* c, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2);
 
@@ -81,7 +82,7 @@ void Sop::areaLoad() {
   rec_dispatch(c, 0x8001dc40u);
 
   // UNPACK — FUN_80044e84(0x8018a000, 0x1f8000)  (0x801091e4)
-  c->engine.asset.unpackGroup(0x8018a000u, 0x001f8000u);
+  eng(c).asset.unpackGroup(0x8018a000u, 0x001f8000u);
 
   // LOAD 4 — FUN_8001dc40(0x8018a000, *0x800be100 + (*0x800ef480>>11), *0x800ef484 - *0x800ef480);
   //          *0x800a3ec8 = *0x800ef480>>11  (0x80109210/0x80109214)
@@ -94,7 +95,7 @@ void Sop::areaLoad() {
 
   // COLLISION GRID — FUN_80045258((area&0xf)<<1, 0x2f)  (0x80109228)
   uint16_t area = c->mem_r16(0x800bf89eu);
-  c->engine.asset.loadDescriptorChunk((uint32_t)((area & 0xf) << 1), 0x2f);
+  eng(c).asset.loadDescriptorChunk((uint32_t)((area & 0xf) << 1), 0x2f);
 
   // RELOC PATCH — for i in 0..*0x800ef488: ecf58[w>>24] = 0x8018a000 + (w & 0xffffff), w=*0x800ef48c[i]
   int32_t count = (int32_t)c->mem_r32(0x800ef488u);    // (0x80109234; blez skip if <=0)
@@ -142,7 +143,7 @@ void Sop::transitionAreaLoad() {
     uint32_t v0   = (uint32_t)c->mem_r16(0x1f800278u) & mask;
     if (s1ff == s6e && a2 == v0) {
       // QUICK PATH (0x80045320-0x80045344): collision grid + done, no DMA load.
-      c->engine.asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
+      eng(c).asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
       c->mem_w8(0x1f800206u, 0);
       c->mem_w8(0x1f80019bu, 1);
       cfg_logf("stage", "[sop] native transition area-load (quick path) done");
@@ -164,7 +165,7 @@ void Sop::transitionAreaLoad() {
   d2(c, 0x80045080u, 0x80108f9cu, (uint32_t)((s6e + 3) & 0xff));
   // FUN_8007566c(*0x800bf870, *0x1f80022c)   — area BGM/asset trigger
   d2(c, 0x8007566cu, c->mem_r8(0x800bf870u), c->mem_r32(0x1f80022cu));
-  c->engine.asset.loadTexgroup();                      // 0x80044F58 — native (sync texgroup load)
+  eng(c).asset.loadTexgroup();                      // 0x80044F58 — native (sync texgroup load)
   // FUN_8001dc40(0x8018a000, *0x800be100 + (*0x800ef480>>11), *0x800ef484 - *0x800ef480);
   //   *0x800a3ec8 = *0x800ef480>>11    (the area-asset overlay DMA load)
   uint32_t l = c->mem_r32(0x800ef480u);
@@ -173,7 +174,7 @@ void Sop::transitionAreaLoad() {
   // if (*0x800bf89c == 2) FUN_80045558(0)
   if (c->mem_r8(0x800bf89cu) == 2) d1(c, 0x80045558u, 0);
   // FUN_80045258((*0x800bf89e & 0xf)<<1, 47)   — collision grid
-  c->engine.asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
+  eng(c).asset.loadDescriptorChunk((uint32_t)((c->mem_r16(0x800bf89eu) & 0xf) << 1), 47);
   // RELOC PATCH (0x80045468-0x800454b0): for i in 0..*0x800ef488:
   //   w=*(0x800ef48c + i*4); ecf58[w>>24] = 0x8018a000 + (w & 0xffffff)
   int32_t count = (int32_t)c->mem_r32(0x800ef488u);
@@ -187,7 +188,7 @@ void Sop::transitionAreaLoad() {
     c->mem_w32(0x800ecf94u, c->mem_r32(0x800ecf94u) + 0x1000);
     uint8_t b = c->mem_r8(0x800bf871u);
     uint32_t idx = (b < 9) ? 34 : (b < 16) ? 38 : (b < 21) ? 40 : 36;
-    c->engine.asset.loadDescriptorChunk(idx, 8);
+    eng(c).asset.loadDescriptorChunk(idx, 8);
     c->mem_w8(0x800bfe60u, (uint8_t)idx);
   }
   c->mem_w8(0x1f800206u, 1);
@@ -383,7 +384,7 @@ void Sop::fieldUpdate() { Core* c = core;
   } else {
     // BG scene transition SM (native, FUN_8002655c) — the intro-cutscene fade manager.
     c->game->ffspan.begin();
-    c->engine.bgSceneTransitionSm.step();
+    eng(c).bgSceneTransitionSm.step();
     c->game->ffspan.end("bgscene");
 
     // Scene cam-frustum prepass (guest FUN_8010A0E0): builds the per-frame 2D frustum triangle in
@@ -396,7 +397,7 @@ void Sop::fieldUpdate() { Core* c = core;
     // Tomba/list-2 walk (guest FUN_8007B008): dispatches each list-2 node's +0x1c handler; Tomba
     // is one of those nodes, so this is the top-down layer immediately above Tomba's per-frame
     // tick. Enable `debug behhist` to enumerate the handler addrs firing here (Tomba included).
-    c->engine.objectList.walkList2();
+    eng(c).objectList.walkList2();
 
     c->mem_w8(IN_FIELD_UPDATE, 1);
 
@@ -415,7 +416,7 @@ void Sop::fieldUpdate() { Core* c = core;
       }
     }
 
-    c->engine.areaSlots.updateTail();                            // 0x80075a80 NATIVE
+    eng(c).areaSlots.updateTail();                            // 0x80075a80 NATIVE
 
     // BG DRAW GATE — SOP scene-beat byte SCENE_BEAT selects the current beat within the SOP
     // intro cutscene. Beat 5 is the narration VOID (pure 2D swirl effect + text over black; no 3D
@@ -425,7 +426,7 @@ void Sop::fieldUpdate() { Core* c = core;
     if (bgVisible) {
       // Parallax BG state machine (native, FUN_8010BFFC) — class ParallaxBg on Engine.
       c->game->ffspan.begin();
-      c->engine.parallaxBg.step();
+      eng(c).parallaxBg.step();
       c->game->ffspan.end("parallaxBG");
     }
     // SCENE-TABLE RENDER + OBJECT RENDER-LIST WALK — the substrate per-frame body (generated/
@@ -457,7 +458,7 @@ void Sop::fieldUpdate() { Core* c = core;
   } else {
     if (s52 != 0) return;                                  // s52 >= 2: done
     c->mem_w16(sm + 0x62, 0);
-    c->engine.audioDispatch.zoneTransitionSetup(0xE);                    // native, FUN_8001D71C — zone/area transition setup
+    eng(c).audioDispatch.zoneTransitionSetup(0xE);                    // native, FUN_8001D71C — zone/area transition setup
   }
   c->mem_w16(sm + 0x52, (uint16_t)(c->mem_r16(sm + 0x52) + 1));
 }
@@ -473,7 +474,7 @@ void Sop::fieldMode() { Core* c = core;
   switch (st) {
     case 0: {  // LOAD — screen held fully black for this one-frame state (state 1 next frame keeps holding
       //                 during startup delay, then ramps in). Matches PSX FUN_8007e9c8(0xffffff,0,4) per-frame.
-      c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
+      fade(c).set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);
       // SLIP #2 FIX (docs/findings/sbs.md attack (a)): defer case 0 completion by one tick to match
       // coro's cost. The recomp body of 0x80109450 calls FUN_80044BD4 which does a
       // `while (DAT_1f80019b == 0) FUN_80051f80(1)` wait-loop (scratch/decomp/bd4.c) — yields at least
@@ -498,14 +499,14 @@ void Sop::fieldMode() { Core* c = core;
         break;   // defer — sm[0x50] stays 0; next tick re-enters this case
       }
       c->game->pcSched.sop_field_step[0] = 0;   // completing now; arm again for the next area
-      c->engine.sop.areaLoad();                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
-      c->engine.pool.init();   // 0x8007B18C — native (via LIVE gated entry)
-      c->engine.pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)
-      c->engine.pool.finalViewInit();       // 0x80078610 — native (via LIVE gated entry)
+      eng(c).sop.areaLoad();                 // INLINE sync load (replaces FUN_80044bd4) -> 1f80019b=1
+      eng(c).pool.init();   // 0x8007B18C — native (via LIVE gated entry)
+      eng(c).pool.resetControlBlock();       // 0x800796DC — native (via LIVE gated entry)
+      eng(c).pool.finalViewInit();       // 0x80078610 — native (via LIVE gated entry)
       d1(c, 0x8010a8d4u, 0x800f2418u);         // SOP bg-ptr setup
       // 3 scene objects: spawn + stamp fields from the SOP overlay tables @0x8010c98c (stride 12).
       for (int i = 0; i < 3; i++) {
-        c->engine.spawn.dispatch(/*cls=*/3, /*type=*/3, /*list=*/1);       // FUN_8007A980 — native
+        eng(c).spawn.dispatch(/*cls=*/3, /*type=*/3, /*list=*/1);       // FUN_8007A980 — native
 
         uint32_t node = c->r[2];
         uint32_t t = 0x8010c98cu + (uint32_t)i * 12;
@@ -514,11 +515,11 @@ void Sop::fieldMode() { Core* c = core;
         c->mem_w16(node + 0x36, c->mem_r16(t + 4));
         c->mem_w32(node + 0x1c, c->mem_r32(t + 8));   // per-scene handler (content)
       }
-      c->r[4] = 0x800e8008u; c->r[5] = 0x8010c95cu; c->engine.graphicsBind.setXformBlk();   // BG xform setup — native (was 0x8006cbd0)
+      c->r[4] = 0x800e8008u; c->r[5] = 0x8010c95cu; eng(c).graphicsBind.setXformBlk();   // BG xform setup — native (was 0x8006cbd0)
       CutsceneCamera(c, 0x800e8008u).snapFollow(0x800e8040u);   // BG init (native class CutsceneCamera; was 0x8006e3b0)
       sm = c->mem_r32(0x1f800138u);                   // (callees don't move sm, but reload defensively)
       c->mem_w16(sm + 0x50, 1);
-      c->engine.pool.reset75240();   // 0x80075240 — native (via LIVE gated entry)
+      eng(c).pool.reset75240();   // 0x80075240 — native (via LIVE gated entry)
       c->mem_w16(sm + 0x60, 0x1e);
       c->mem_w16(sm + 0x52, 0);
       c->mem_w16(sm + 0x54, 0);
@@ -541,12 +542,12 @@ void Sop::fieldMode() { Core* c = core;
       // Shared with every SOP area (free-roam too) — correct there as well (same delay-then-bg-fade entry).
       bool startup_delay = c->mem_r16s(sm + 0x60) != 0;
       if (startup_delay) {
-        c->screenFade.set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);   // hold black through the startup-delay window
+        fade(c).set(ScreenFade::SUBTRACTIVE, 0xff, 0xff, 0xff);   // hold black through the startup-delay window
       } else {
         uint32_t u = (uint32_t)c->mem_r8(sm + 0x6c) & 0x1f;
         uint8_t v = (uint8_t)((u << 3) & 0xff);
         cfg_logf("fadesites", "[fadesite] Sop-case1 v=%02x sm6c=%u", v, c->mem_r8(sm+0x6c));
-        c->screenFade.set(ScreenFade::SUBTRACTIVE, v, v, v);            // subtractive fade-in ramp (matches guest FUN_8007e9c8(...,0,4))
+        fade(c).set(ScreenFade::SUBTRACTIVE, v, v, v);            // subtractive fade-in ramp (matches guest FUN_8007e9c8(...,0,4))
       }
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, nv);
@@ -566,7 +567,7 @@ void Sop::fieldMode() { Core* c = core;
     case 3: {  // FADE-OUT — subtractive ramp (guest FUN_8007e9c8(...,0,4) per-frame equivalent)
       uint8_t u = (uint8_t)(((uint32_t)c->mem_r8(sm + 0x6c) * (uint32_t)-8) & 0xff);
       cfg_logf("fadesites", "[fadesite] Sop-case3 u=%02x sm6c=%u", u, c->mem_r8(sm+0x6c));
-      c->screenFade.set(ScreenFade::SUBTRACTIVE, u, u, u);
+      fade(c).set(ScreenFade::SUBTRACTIVE, u, u, u);
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6c) - 1);
       c->mem_w8(sm + 0x6c, nv);
       if (nv == 0) c->mem_w16(sm + 0x50, (uint16_t)(c->mem_r16(sm + 0x50) + 1));
@@ -746,7 +747,7 @@ void Sop::areaLoadFaithful() { Core* c = core;
   c->r[31] = 0x80109218u;
   rec_dispatch(c, 0x8001DC40u);
   c->r[31] = 0x80109230u;
-  c->engine.asset.loadDescriptorChunk(((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1, 47);  // 5. per-area table stamp
+  eng(c).asset.loadDescriptorChunk(((uint32_t)c->mem_r16(0x800BF89Eu) & 15u) << 1, 47);  // 5. per-area table stamp
   const int32_t n = (int32_t)c->mem_r32(0x800EF488u);         // 6. relocation table
   c->r[4] = 0;
   for (int32_t i = 0; i < n; i++) {

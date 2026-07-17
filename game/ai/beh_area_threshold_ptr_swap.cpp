@@ -23,12 +23,13 @@
 // is NOT reproduced; the gate compares only RAM+scratchpad vs rec_super_call.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::coneCull2b278 (FUN_8002B278)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "collision.h"  // Collision::listScan (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -50,7 +51,7 @@ void beh_area_threshold_ptr_swap(Core* c) {
   goto L528;                                          // st >= 4 default
 
  L520:                                           // STATE 2/3 — FUN_8007A624(node)
-  c->engine.spawn.despawn(obj);
+  eng(c).spawn.despawn(obj);
   goto L528;
 
  L440:                                           // STATE 0
@@ -82,9 +83,9 @@ void beh_area_threshold_ptr_swap(Core* c) {
   }
  L4e0:
   if (!(c->mem_r8(0x800E7EAAu) < 12)) goto L518; // >= 12 -> node[4]=3
-  c->r[4] = obj; c->engine.cull.coneCull2b278();   // FUN_8002B278 (native)
+  c->r[4] = obj; eng(c).cull.coneCull2b278();   // FUN_8002B278 (native)
   if (c->r[2] != 0) goto L528;
-  c->engine.collision.listScan(obj);
+  eng(c).collision.listScan(obj);
   goto L528;
  L518:
   c->mem_w8(obj + 4, 3);

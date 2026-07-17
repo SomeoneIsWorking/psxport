@@ -27,13 +27,14 @@
 //   0x1F800160 (lh  scratchpad, state-1 cull gate; signed < 0x4651 => cull)
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/render.h"       // Core::mRender (NodeXform)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -56,7 +57,7 @@ void beh_cull_substate_orchestrator(Core* c) {
         return;                                        // 0x80132708  j 0x8013271C (epilogue)
       }
       if (st == 3) {                                   // 0x801325E0  beq a0,3 -> 0x80132714
-        c->engine.spawn.despawn(obj);   // 0x80132714  jal FUN_8007a624 (a0=s0)  (despawn)
+        eng(c).spawn.despawn(obj);   // 0x80132714  jal FUN_8007a624 (a0=s0)  (despawn)
         return;                                        // 0x80132718  falls into epilogue
       }
       return;                                          // 0x801325E8  j 0x8013271C (other >=2 -> epilogue)
@@ -127,7 +128,7 @@ void beh_cull_substate_orchestrator(Core* c) {
   uint8_t n1 = c->mem_r8(obj + 1);                     // 0x801326E4  lbu v0, 1(s0)
   c->mem_w8(obj + 0x29, 0);                            // 0x801326F0  sb zero, 0x29(s0)  (delay slot @ED-style; ALWAYS runs)
   if (n1 != 0) {                                       // 0x801326EC  beqz v0 -> 0x8013271C (epilogue)
-    c->mRender->mNodeXform.buildWithOffset(obj);                  // FUN_800518FC (native)         [0x801326F4]
+    rend(c)->mNodeXform.buildWithOffset(obj);                  // FUN_800518FC (native)         [0x801326F4]
   }
   // 0x801326FC  j 0x8013271C (epilogue)
 }

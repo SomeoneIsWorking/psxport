@@ -5,13 +5,14 @@
 // behavior, byte-identical) into its own module for PC-game code structure. The `scriptvm` diagnostic
 // A/B gate (full RAM+scratchpad vs rec_super_call) is a REPL channel, unchanged.
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::cullWrap77acc / installSceneRecord
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "script_vm.h"
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "mathlib.h"  // Bit::test7EC / test868 (FUN_8004D7EC / FUN_8004D868)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -35,7 +36,7 @@ static void script_vm_4ce14(Core* c) {
   const uint32_t s5  = obj + 96;
   uint8_t state = c->mem_r8(obj + 4);
   if (state == 2) { c->r[2] = 2; return; }
-  if (state == 3) { c->engine.spawn.despawn(obj); return; }   // v0 = sub return
+  if (state == 3) { eng(c).spawn.despawn(obj); return; }   // v0 = sub return
   if (state > 3)  { c->r[2] = 3; return; }
   if (state == 0) {
     if (c->mem_r8(0x800BF873u) != 0) { c->mem_w8(obj + 4, 3); c->r[2] = 3; return; }  // global not enabled yet
@@ -71,7 +72,7 @@ static void script_vm_4ce14(Core* c) {
       c->mem_w16(s5 + 10, (uint16_t)s3);   // obj[106] = slot count
       c->mem_w8(obj + 11, 31);
       c->mem_w8(obj + 1, 1);
-      v0_ret = c->engine.cull.enqueueQueueC(obj);           // FUN_80077EFC (native)
+      v0_ret = eng(c).cull.enqueueQueueC(obj);           // FUN_80077EFC (native)
       break;
     }
     uint32_t mask = 1u << (s3 & 31);
@@ -79,11 +80,11 @@ static void script_vm_4ce14(Core* c) {
     bool s2set = (flag & 0x80) != 0;
     bool skip = false;
     if (!s2set) {                                        // bit7 clear -> predicate 0x8004D7EC
-      if (c->engine.bit.test7EC(c->mem_r16s(s4 + 10), 0) != 0) skip = true;
+      if (eng(c).bit.test7EC(c->mem_r16s(s4 + 10), 0) != 0) skip = true;
     }
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // slot already done
     if (!skip && s2set) {                                // bit7 set -> predicate 0x8004D868
-      if (c->engine.bit.test868(c->mem_r16s(s4 + 10)) != 0) skip = true;
+      if (eng(c).bit.test868(c->mem_r16s(s4 + 10)) != 0) skip = true;
     }
     if (!skip && (c->mem_r32(s5 + 20) & mask)) skip = true;   // re-check (predicate may have set it)
     if (!skip) {
@@ -97,7 +98,7 @@ static void script_vm_4ce14(Core* c) {
         c->r[5] = (uint32_t)c->mem_r16s(s4 + 4);
         c->r[6] = (uint32_t)c->mem_r16s(s4 + 6);
         c->r[7] = (uint32_t)c->mem_r16s(s4 + 8);
-        c->engine.cull.cullWrap77acc();          // FUN_80077ACC (native)
+        eng(c).cull.cullWrap77acc();          // FUN_80077ACC (native)
         ret = c->r[2];
       }
       if (ret != 0) c->mem_w32(s5 + 16, c->mem_r32(s5 + 16) | mask);

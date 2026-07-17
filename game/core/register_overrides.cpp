@@ -14,6 +14,7 @@
 // dc_boot_init) and twice under SBS full (mA + mB). See the ordering note in native_boot.cpp: this
 // MUST run before crt0_setup/game_init so the init prefix can reach a registered thunk.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "engine.h"
 #include "actor_sm_reward.h"       // class ActorReward — reward/tally window actor SM family
@@ -47,15 +48,15 @@ void register_field_owned_leaves();                               // BYTE-FAITHF
 void register_engine_overrides(Game* game) {
   Core* c = &game->core;
   game->pcSched.registerOverrides();         // yield/spawn/spawn-and-wait/close (0x80051F80 etc.)
-  c->math.registerOverrides();                // GTE matMul/applyMatlv/applyMatrixLV/rotmat/rotX/Y/Z (0x80084110 etc.)
-  c->engine.animation.registerOverrides();   // loadFrame/advanceLinkChain/attach/applyFrame (0x80076904 etc.)
-  c->engine.areaSlots.registerOverrides();   // primeCountdown/updateCell (0x80074A38/0x8007496C)
-  c->engine.musicCoord.registerOverrides();  // setGain2 (0x80075D24)
+  mathOf(c).registerOverrides();                // GTE matMul/applyMatlv/applyMatrixLV/rotmat/rotX/Y/Z (0x80084110 etc.)
+  eng(c).animation.registerOverrides();   // loadFrame/advanceLinkChain/attach/applyFrame (0x80076904 etc.)
+  eng(c).areaSlots.registerOverrides();   // primeCountdown/updateCell (0x80074A38/0x8007496C)
+  eng(c).musicCoord.registerOverrides();  // setGain2 (0x80075D24)
   ActorReward::registerOverrides(game);      // reward/tally window actor SM family
-  game->core.engine.installFieldTransitions();  // ov_game field-transition sub-machine handlers
+  eng(&game->core).installFieldTransitions();  // ov_game field-transition sub-machine handlers
   ActorZonedAttacker::registerOverrides(game); // 0x8014xxxx zoned-attacker sub-behavior cluster
-  c->engine.spawn.registerTypedChildOverrides();     // A00-overlay typed-child spawners
-  c->engine.releaseTriggerMotion.registerOverrides(); // release-trigger sub-motion cluster
+  eng(c).spawn.registerTypedChildOverrides();     // A00-overlay typed-child spawners
+  eng(c).releaseTriggerMotion.registerOverrides(); // release-trigger sub-motion cluster
   OverlayGt3Gt4::registerOverrides(game);            // A00-overlay GT3/GT4 packet emitters (0x801465EC/801467BC)
   OverlayGroundGt3Gt4::registerOverrides(game);      // A00-overlay GROUND/SCENE GT3/GT4 + entity loop (0x8013FB88/8013FE58/801401B8)
   TileGridLayer::registerOverrides(game);            // A00-overlay field scroll-wrap + tile-grid sprite emitter (0x8011534C/0x80115598)
@@ -64,11 +65,11 @@ void register_engine_overrides(Game* game) {
   QuadRtptSubmit::registerOverrides(game);           // rope/flame quad rotate+RTPT submit (0x8003B054/8003B320)
   NodeXform::registerOverrides(game);                // seedBlock/propagateRotmat/propagateAxis/buildAxis/copyMatrixBlock/buildFromChild/worldPosFromLocal/worldPosFromComposed (0x800517BC/80051300/80051464/80051C8C/80051B34/80051614/80051D90/80051D20)
   GraphicsBind::registerOverrides(game);             // recordArrayInit (0x800519E0)
-  c->engine.cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
-  c->engine.collision.registerOverrides();           // field-collision leaf cluster (0x80045810/80048034/80048134/80048360/80049760)
-  c->engine.bgSceneTransitionSm.registerOverrides(); // BG scene-transition opcode leaves (0x80042758/80042884)
-  c->engine.audioDispatch.registerOverrides();       // field-audio BGM start/override leaves (0x80075024/80075070)
-  c->engine.sfx.registerOverrides();                 // SFX trigger wrapper (0x80074810)
+  eng(c).cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
+  eng(c).collision.registerOverrides();           // field-collision leaf cluster (0x80045810/80048034/80048134/80048360/80049760)
+  eng(c).bgSceneTransitionSm.registerOverrides(); // BG scene-transition opcode leaves (0x80042758/80042884)
+  eng(c).audioDispatch.registerOverrides();       // field-audio BGM start/override leaves (0x80075024/80075070)
+  eng(c).sfx.registerOverrides();                 // SFX trigger wrapper (0x80074810)
   Input::registerOverrides(game);                    // SPU voice-table init leaf (0x80093650)
   SceneEvents::registerOverrides(game);              // scene-event ARM FUN_80040B48 (sole owner; deduped from cube_text_ledger)
   CubeTextLedger::registerOverrides(game);           // cube-text popup ledger deactivate/spawn (0x80040C00/80040AA4)
@@ -85,8 +86,8 @@ void register_engine_overrides(Game* game) {
   RegisterEngineAnimLeafOverrides(game);             // Engine::animTick/walkStart fallthrough native-ize (0x8004190C/80054D14)
   Trig::registerOverrides(game);                     // Trig::rsin/ratan2/angleCmp fallthrough native-ize (0x80083E80/80085690/80077768)
   RegisterBehActorTombaProximityCombatOverride(game);// enemy-vs-Tomba proximity-combat FSM (0x800527C8)
-  c->engine.sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
-  c->engine.script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)
+  eng(c).sequencer.registerOverrides();           // libsnd SsSeqCalled cluster (0x80090BD0 etc.)
+  eng(c).script.registerOverrides();              // cutscene-script opcodes 05/06/34/36/31 (0x80042090/800420AC/80042E10/80043108/80041468)
   RegisterSopIntroEventOverrides(game);               // SOP intro-cutscene sub-tick/sub-motion/timer cluster (0x8010AF60/8010B078/8010B11C/8010B2D4/8010B44C/8010BEAC — sopLiftedSubtick 0x8010B588 deliberately unwired, docs/findings/ai.md)
   Demo::registerOverrides(game);      // main-menu title cursor sub-machine (0x80106AC4) — the r16/r17
   // register-liveness gap that blocked this wire (docs/findings/ai.md "Demo::s3SubMachine r16

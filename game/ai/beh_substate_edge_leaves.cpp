@@ -23,9 +23,10 @@
 //   table NodeXform::propagate walks) — obj[0x60] here is 0x1F800137 (fixed CD/controller-state
 //   scratchpad byte guarded by case 1 of the orchestrator, unrelated to this file's obj fields).
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
-#include "math/gte_math.h"   // Math::rotmat/matMul/applyMatlv/applyMatrixLV/rotY/rotZ (c->math)
-#include "math/mtx.h"        // Mtx::identity (c->mtx)
+#include "math/gte_math.h"   // Math::rotmat/matMul/applyMatlv/applyMatrixLV/rotY/rotZ (mathOf(c))
+#include "math/mtx.h"        // Mtx::identity (mtxOf(c))
 #include <stdint.h>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
@@ -88,9 +89,9 @@ void func_8012E8A8(Core* c) {
     const uint16_t sentinelRaw = c->mem_r16(child + 6);   // raw (unsigned) index for the table lookup
 
     if (sentinel == -1) {
-      c->math.rotmat(child + 8, SCR_A);
-      c->math.matMul(obj + 0x98u, SCR_A, child + 0x18u);
-      c->math.applyMatlv(child, child + 0x2Cu);
+      mathOf(c).rotmat(child + 8, SCR_A);
+      mathOf(c).matMul(obj + 0x98u, SCR_A, child + 0x18u);
+      mathOf(c).applyMatlv(child, child + 0x2Cu);
       c->mem_w32(child + 0x2Cu, c->mem_r32(child + 0x2Cu) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x2Eu));
       c->mem_w32(child + 0x30u, c->mem_r32(child + 0x30u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x32u));
       c->mem_w32(child + 0x34u, c->mem_r32(child + 0x34u) + (uint32_t)(int32_t)c->mem_r16s(obj + 0x36u));
@@ -100,20 +101,20 @@ void func_8012E8A8(Core* c) {
     uint32_t rPtr;
     const bool attachSlot = (i == 2) || (i == 3 && (c->mem_r16(obj + 0x60u) & 2) != 0);
     if (attachSlot) {
-      c->math.rotmat(child + 8, SCR_A);
-      c->mtx.identity(SCR_B);
+      mathOf(c).rotmat(child + 8, SCR_A);
+      mtxOf(c).identity(SCR_B);
       const uint32_t base = (c->mem_r16(obj + 0x60u) & 1) ? c->mem_r32(obj + 0xC4u) : c->mem_r32(obj + 0xC0u);
-      c->math.rotZ(c->mem_r16s(base + 12), SCR_B);
-      c->math.rotY(c->mem_r16s(obj + 0x56u), SCR_B);
-      c->math.matMul(SCR_B, SCR_A, child + 0x18u);
+      mathOf(c).rotZ(c->mem_r16s(base + 12), SCR_B);
+      mathOf(c).rotY(c->mem_r16s(obj + 0x56u), SCR_B);
+      mathOf(c).matMul(SCR_B, SCR_A, child + 0x18u);
       rPtr = SCR_A;  // unused past this point; matMul above already produced child+0x18
     } else {
       if (c->mem_r16(obj + 0x60u) & 1) {
-        c->mtx.identity(SCR_A);
+        mtxOf(c).identity(SCR_A);
         c->r[4] = child + 8; c->r[5] = SCR_A;
         rec_dispatch(c, 0x80084A80u);   // UNOWNED leaf — no native owner found (tools/codemap.py)
       } else {
-        c->math.rotmat(child + 8, SCR_A);
+        mathOf(c).rotmat(child + 8, SCR_A);
       }
       rPtr = SCR_A;
     }
@@ -121,9 +122,9 @@ void func_8012E8A8(Core* c) {
 
     const uint32_t p = c->mem_r32(obj + 0xC0u + 4u * (uint32_t)sentinelRaw);
     if (!attachSlot) {
-      c->math.matMul(p + 0x18u, SCR_A, child + 0x18u);
+      mathOf(c).matMul(p + 0x18u, SCR_A, child + 0x18u);
     }
-    c->math.applyMatlv(child, child + 0x2Cu);
+    mathOf(c).applyMatlv(child, child + 0x2Cu);
     c->mem_w32(child + 0x2Cu, c->mem_r32(child + 0x2Cu) + c->mem_r32(p + 0x2Cu));
     c->mem_w32(child + 0x30u, c->mem_r32(child + 0x30u) + c->mem_r32(p + 0x30u));
     c->mem_w32(child + 0x34u, c->mem_r32(child + 0x34u) + c->mem_r32(p + 0x34u));

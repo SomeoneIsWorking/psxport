@@ -27,6 +27,7 @@
 // states 0-3 but = 1 (absolute) in state 4. Byte-exact A/B gate (full RAM+scratchpad vs rec_super_call).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold
 #include <stdio.h>
@@ -63,11 +64,11 @@ constexpr uint32_t NODE_SUBSTATE = 120;    // node+0x78 — u8 opcode sub-state
 }  // namespace
 
 // Screen fade — same shape as the guest's FUN_8007e9c8(color, P[3], 4) leaf. P[3]!=0 => additive/white,
-// P[3]==0 => subtractive/black. Delivered via c->screenFade instead of a PSX OT rect.
+// P[3]==0 => subtractive/black. Delivered via fade(c) instead of a PSX OT rect.
 void BgSceneTransitionSm::fadeRect(Core* c, uint32_t color) {
   cfg_logf("fadesites", "[fadesite] BgSm-state%u color=%06x dir=%u",
            c->mem_r8(P + 4), color, c->mem_r8(P + 3));
-  c->screenFade.applyLeafCall(color, c->mem_r8(P + 3));
+  fade(c).applyLeafCall(color, c->mem_r8(P + 3));
 }
 
 // -- Native ports of the tiny sub-leaves this SM calls -------------------------------------------
@@ -103,8 +104,8 @@ void BgSceneTransitionSm::audioStub264BC(Core* c) {
 // FUN_80050970 — tiny dispatcher on the 800BF816 mode byte: 0 = ModeStateArm::armFromAreaTable ; else =
 // ModeStateArm::arm(0,0,0). Both native now.
 void BgSceneTransitionSm::bf816Dispatch(Core* c) {
-  if (c->mem_r8(0x800BF816u) == 0) c->engine.modeStateArm.armFromAreaTable();
-  else                             c->engine.modeStateArm.arm();
+  if (c->mem_r8(0x800BF816u) == 0) eng(c).modeStateArm.armFromAreaTable();
+  else                             eng(c).modeStateArm.arm();
 }
 
 void BgSceneTransitionSm::body(Core* c) {

@@ -1,7 +1,7 @@
 // game/scene/scene_events.h — PC-native SCENE-EVENT ARM subsystem, owned by Engine.
 //
 // PROPER OOP: one instance per Core, embedded on Engine, reached as
-// `c->engine.sceneEvents.method(args)`. Back-pointer wired at Core construction.
+// `eng(c).sceneEvents.method(args)`. Back-pointer wired at Core construction.
 //
 // SCOPE: the field-wide EVENT ARM primitive FUN_80040B48 (idempotent per-slot arm) and its size-class
 // helper FUN_80040A58 (two-level table lookup: table A @0x800A33C8, stride 12; table B @0x800A3B38,

@@ -11,7 +11,7 @@
 //
 // The two lower fns are inlined here as static helpers (variant4Sm / variant4Phase3) so the WHOLE
 // chain runs native — every `jal 0x80041098` / `jal 0x80040cdc` in the chain becomes a direct
-// `c->engine.script.step / init` call. This is the caller-chain hookup that finally makes
+// `eng(c).script.step / init` call. This is the caller-chain hookup that finally makes
 // ScriptInterp::step actually FIRE at runtime under BehaviorDispatch (previously it was landed
 // but dark). It also enables op-0x03E native fnptr routing for every script-driven fade fn
 // registered as its own beh_* (script tables at 0x80149A20 / F18 / F38 / F68 / F98 / 958 / 6E8 /
@@ -39,6 +39,7 @@
 //   0x801398E4 — sub-check inside variant4Sm case 2 (returns 2/3 to drive state advance)
 
 #include "core.h"
+#include "game_ctx.h"
 #include "core/engine.h"
 #include "object/behavior_dispatch.h"
 #include "scene/script_interp.h"
@@ -139,12 +140,12 @@ void variant4Phase3(Core* c, uint32_t obj) {
 
   auto initAndArm = [&](uint32_t scriptPtr) {
     c->mem_w8(obj + O_SUB_07, 1u);
-    c->engine.script.init(obj, TABLE_A, scriptPtr);
+    eng(c).script.init(obj, TABLE_A, scriptPtr);
     c->mem_w8(obj + O_PROG_70, 1u);
   };
 
   auto stepAndCheckDone = [&](bool advanceOuterToDespawn) {
-    c->engine.script.step(obj);
+    eng(c).script.step(obj);
     if ((int8_t)c->mem_r8(obj + O_PROG_70) == -1) {
       c->mem_w8(obj + O_SUB_07, 0u);
       wrapUp = true;
@@ -184,7 +185,7 @@ void variant4Phase3(Core* c, uint32_t obj) {
     if (s7 == 0) {
       // Phase-2 init: uses script F38.
       c->mem_w8(obj + O_SUB_07, 1u);
-      c->engine.script.init(obj, TABLE_A, SCRIPT_80149F38);
+      eng(c).script.init(obj, TABLE_A, SCRIPT_80149F38);
       c->mem_w8(obj + O_PROG_70, 1u);
     } else if (s7 == 1) {
       stepAndCheckDone(/*advanceOuterToDespawn=*/true);
@@ -192,11 +193,11 @@ void variant4Phase3(Core* c, uint32_t obj) {
         // Phase-2 done → advance to phase 3 (using script A20).
         c->mem_w8(obj + O_SUB_07, (uint8_t)(c->mem_r8(obj + O_SUB_07) + 1u));  // = 1
         // (Re-init immediately in the same tick — decomp's LAB_80139c1c fallthrough.)
-        c->engine.script.init(obj, TABLE_A, SCRIPT_80149A20);
+        eng(c).script.init(obj, TABLE_A, SCRIPT_80149A20);
         c->mem_w8(obj + O_PROG_70, 1u);
       }
     } else if (s7 == 2) {
-      c->engine.script.step(obj);
+      eng(c).script.step(obj);
       if ((int8_t)c->mem_r8(obj + O_PROG_70) == -1) {
         c->mem_w8(obj + O_SUB_07, 0u);
         callObj1(c, obj, 0x80042310u);
@@ -210,10 +211,10 @@ void variant4Phase3(Core* c, uint32_t obj) {
     const uint8_t s7 = c->mem_r8(obj + O_SUB_07);
     if (s7 == 0) {
       c->mem_w8(obj + O_SUB_07, 1u);
-      c->engine.script.init(obj, TABLE_A, SCRIPT_80149A20);
+      eng(c).script.init(obj, TABLE_A, SCRIPT_80149A20);
       c->mem_w8(obj + O_PROG_70, 1u);
     } else if (s7 == 1) {
-      c->engine.script.step(obj);
+      eng(c).script.step(obj);
       if ((int8_t)c->mem_r8(obj + O_PROG_70) == -1) {
         c->mem_w8(obj + O_SUB_07, 0u);
         callObj1(c, obj, 0x80042310u);
@@ -235,7 +236,7 @@ void variant4Sm(Core* c, uint32_t obj) {
   const uint8_t s5 = c->mem_r8(obj + O_SUB_05);
 
   auto initScript = [&](uint32_t scriptPtr) {
-    c->engine.script.init(obj, TABLE_A, scriptPtr);
+    eng(c).script.init(obj, TABLE_A, scriptPtr);
     c->mem_w8(obj + O_PROG_70, 1u);
   };
 
@@ -261,7 +262,7 @@ void variant4Sm(Core* c, uint32_t obj) {
         return;
       }
       if (s6 != 1) return;
-      c->engine.script.step(obj);
+      eng(c).script.step(obj);
       if ((int8_t)c->mem_r8(obj + O_PROG_70) != -1) return;
       callObj1(c, obj, 0x80042310u);
       const uint8_t s5cur = c->mem_r8(obj + O_SUB_05);
@@ -307,7 +308,7 @@ void variant4Sm(Core* c, uint32_t obj) {
         return;
       }
       if (s6 > 1 && s6 == 2) {
-        c->engine.script.step(obj);
+        eng(c).script.step(obj);
         if ((int8_t)c->mem_r8(obj + O_PROG_70) != -1) return;
         c->mem_w8(obj + O_SUB_06, 0u);
         callObj1(c, obj, 0x80042310u);
@@ -414,7 +415,7 @@ void state1Run(Core* c, uint32_t obj) {
       if (s6 == 1) {
         c->mem_w8(obj + O_SUB_06, 2u);
         const uint32_t scriptPtr = (c->mem_r8(G_BF90C) == 0) ? SCRIPT_801496E8 : SCRIPT_80149788;
-        c->engine.script.init(obj, TABLE_A, scriptPtr);
+        eng(c).script.init(obj, TABLE_A, scriptPtr);
         c->mem_w8(obj + O_PROG_70, 1u);
       } else if (s6 == 0) {
         if (c->mem_r8(obj + O_READY_2B) == 3u) {
@@ -422,7 +423,7 @@ void state1Run(Core* c, uint32_t obj) {
           call2(c, 1u, 2u, 0x80042354u);
         }
       } else if (s6 == 2) {
-        c->engine.script.step(obj);
+        eng(c).script.step(obj);
         if ((int8_t)c->mem_r8(obj + O_PROG_70) == -1) {
           c->mem_w8(obj + O_SUB_06, 0u);
           callObj1(c, obj, 0x80042310u);
@@ -436,7 +437,7 @@ void state1Run(Core* c, uint32_t obj) {
       if (s6 == 1) {
         c->mem_w8(obj + O_SUB_06, 2u);
         const uint32_t scriptPtr = (c->mem_r8(G_BF90D) == 0) ? SCRIPT_801497B8 : SCRIPT_80149838;
-        c->engine.script.init(obj, TABLE_A, scriptPtr);
+        eng(c).script.init(obj, TABLE_A, scriptPtr);
         c->mem_w8(obj + O_PROG_70, 1u);
       } else if (s6 == 0) {
         if (c->mem_r8(obj + O_READY_2B) == 3u) {
@@ -444,7 +445,7 @@ void state1Run(Core* c, uint32_t obj) {
           call2(c, 1u, 2u, 0x80042354u);
         }
       } else if (s6 == 2) {
-        c->engine.script.step(obj);
+        eng(c).script.step(obj);
         if ((int8_t)c->mem_r8(obj + O_PROG_70) == -1) {
           c->mem_w8(obj + O_SUB_06, 0u);
           callObj1(c, obj, 0x80042310u);

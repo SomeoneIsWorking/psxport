@@ -22,13 +22,14 @@
 // vs rec_super_call) is the safety net. NO GTE/render.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
-#include "inventory.h"       // class Inventory — c->inventory.giveAndFlag (FUN_8004D4C4)
+#include "inventory.h"       // class Inventory — inv(c).giveAndFlag (FUN_8004D4C4)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -62,7 +63,7 @@ void beh_typed_init_exit_poker(Core* c) {
   if (st == 1) goto S1;
   if ((int32_t)st < 2) { if (st == 0) goto S0; goto Lret; }
   if (st == 2) goto S2;
-  if (st == 3) { c->engine.spawn.despawn(nd); goto Lret; }   // STATE 3
+  if (st == 3) { eng(c).spawn.despawn(nd); goto Lret; }   // STATE 3
   goto Lret;                                         // st >= 4
 
  // ================= STATE 0 (INIT) =================
@@ -76,7 +77,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=15, c->engine.graphicsBind.setGeom());
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=15, eng(c).graphicsBind.setGeom());
       c->mem_w16(nd + 0x80, 20);
       c->mem_w16(nd + 0x82, 40);
       c->mem_w16(nd + 0x84, 20);
@@ -89,7 +90,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=0, c->engine.graphicsBind.setGeom());
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=0, eng(c).graphicsBind.setGeom());
       c->mem_w16(nd + 0x2E, 17260);
       c->mem_w16(nd + 0x32, (uint16_t)(int16_t)-1900);
       c->mem_w16(nd + 0x36, 11200);
@@ -103,7 +104,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF58u));
-      (c->r[4]=nd, c->r[5]=A1_M2, c->r[6]=2, c->engine.graphicsBind.setGeom());
+      (c->r[4]=nd, c->r[5]=A1_M2, c->r[6]=2, eng(c).graphicsBind.setGeom());
       goto L83d0;                                    // shared size block -> node[4]+=1
     case 3:                                          // sub3 @0x801183f4
       c->mem_w8 (nd + 11, 16);
@@ -112,7 +113,7 @@ void beh_typed_init_exit_poker(Core* c) {
       c->mem_w16(nd + 0x5C, 0);
       c->mem_w8 (nd + 13, 0);
       c->mem_w32(nd + 0x3C, c->mem_r32(0x800ECF80u));
-      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=26, c->engine.graphicsBind.setGeom());
+      (c->r[4]=nd, c->r[5]=A1_M0, c->r[6]=26, eng(c).graphicsBind.setGeom());
       c->mem_w16(nd + 0x80, 32);
       c->mem_w16(nd + 0x82, 64);
       c->mem_w16(nd + 0x84, 20);
@@ -189,7 +190,7 @@ void beh_typed_init_exit_poker(Core* c) {
       if (v == 1) {                                  // 0x801185c0
         if (c->mem_r8(0x800BFAF9u) == 0) { c->mem_w8(nd + 4, 3); goto Lret; }  // 0x80118750
         c->r[4]=nd; c->r[5]=1; c->r[6]=c->mem_r32(0x800E7F5Cu); c->r[7]=0;
-        c->mem_w32(c->r[29] + 16, nd + 0x60); c->engine.graphicsBind.posCompose();   // FUN_8004BD64 — native
+        c->mem_w32(c->r[29] + 16, nd + 0x60); eng(c).graphicsBind.posCompose();   // FUN_8004BD64 — native
         goto L185e8;
       }
       goto Lret;                                     // v >= 2
@@ -238,20 +239,20 @@ void beh_typed_init_exit_poker(Core* c) {
   switch (n3) {
     case 0:                                          // st2sub0 @0x8011872c
       // FUN_80040B48 = SceneEvents::arm; caller advances only when events are enabled (r[2] >= 0).
-      if (c->engine.sceneEvents.arm(5) >= 0) {
-        c->inventory.giveAndFlag(36, 1);              // FUN_8004D4C4(36, 1) [native]
+      if (eng(c).sceneEvents.arm(5) >= 0) {
+        inv(c).giveAndFlag(36, 1);              // FUN_8004D4C4(36, 1) [native]
         guest_leaf(c, 0x8004B0D8u, nd);                // FUN_8004B0D8(node)
       }
       c->mem_w8(nd + 4, 3);                           // node[4] = 3
       goto Lret;
     case 1:                                          // st2sub1 @0x8011875c
-      c->inventory.giveAndFlag(69, 1);                // FUN_8004D4C4(69, 1) [native]
+      inv(c).giveAndFlag(69, 1);                // FUN_8004D4C4(69, 1) [native]
       guest_leaf(c, 0x8004B0D8u, nd);                  // FUN_8004B0D8(node)
       c->mem_w8(nd + 4, 3);
       c->mem_w8(0x800BF9DFu, (uint8_t)(c->mem_r8(0x800BF9DFu) | 0x20));
       goto Lret;
     case 2: {                                        // st2sub_v1 @0x80118794
-      c->inventory.giveAndFlag(120, 1);               // FUN_8004D4C4(120, 1) [native]
+      inv(c).giveAndFlag(120, 1);               // FUN_8004D4C4(120, 1) [native]
       c->mem_w8(nd + 4, 3);                           // node[4] = 3 (delay slot)
       guest_leaf(c, 0x8004B0D8u, nd);                  // FUN_8004B0D8(node)
       uint8_t flg = c->mem_r8(0x800BF9EAu);
@@ -264,7 +265,7 @@ void beh_typed_init_exit_poker(Core* c) {
       goto Lret;
     }
     case 3:                                          // st2sub3 @0x801187f8
-      c->inventory.giveAndFlag(83, 1);                // FUN_8004D4C4(83, 1) [native]
+      inv(c).giveAndFlag(83, 1);                // FUN_8004D4C4(83, 1) [native]
       guest_leaf(c, 0x8004B0D8u, nd);                  // FUN_8004B0D8(node)
       c->mem_w8(nd + 4, 3);                           // node[4] = s0 (==3)
       c->mem_w8(0x800BF9EEu, (uint8_t)(c->mem_r8(0x800BF9EEu) | 2));

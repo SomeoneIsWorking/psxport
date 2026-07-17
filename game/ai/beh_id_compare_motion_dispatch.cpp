@@ -8,7 +8,7 @@
 //   state 1  -> a despawn-gate (node[0x32]/node[0x66]/DAT_800e7eaa), an animation/tick gate
 //               (FUN_8014047c, node[0x2b] dec + node[0x56] +/-0x80 by pad bit), then a node[3]
 //               compare-dispatch — 1..5 -> motion (FUN_80144928/800781e0/801409c0); 0x80/0x81 ->
-//               native c->engine.attackOrbit.{aimAtTargetAnchor,orbitTargetMotion}() (was
+//               native eng(c).attackOrbit.{aimAtTargetAnchor,orbitTargetMotion}() (was
 //               FUN_80145af0/FUN_801458e0 — see game/ai/attack_orbit_substate.{h,cpp}); 0 OR any
 //               other (>=6) -> FUN_80143a00 default — then a common tail:
 //               cull FUN_800777fc, an SFX edge (node[0x67]==1 -> FUN_8009a450/FUN_80074590), a
@@ -30,15 +30,16 @@
 // s3 = 1 (const); s2 = lui 0x8015 (DAT_8014bf5e = s2-0x40a2). a0 stays 2 from 0x8014527c into state 3.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/render.h"       // Core::mRender (NodeXform)
 #include "render/cull.h"    // Cull::cullWrapperFlag2 (FUN_800777FC)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "animation.h" // Animation::step (FUN_80076D68)
-#include "rng.h"       // class Rng (via c->rng.next())
+#include "rng.h"       // class Rng (via rngOf(c).next())
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -69,7 +70,7 @@ void beh_id_compare_motion_dispatch(Core* c) {
           c->mem_w8(obj + 0x1b, (uint8_t)(n1b & 0xbf));// sb v0,0x1b(s0)  [delay slot @0x80145648]
           return;                                      // j 0x80145654 (NO despawn)
         }
-        c->engine.spawn.despawn(obj);   // FUN_8007a624 (despawn)      [0x8014564C]
+        eng(c).spawn.despawn(obj);   // FUN_8007a624 (despawn)      [0x8014564C]
         return;                                        // j 0x80145654 (epilogue)
       }
       return;                                          // other (>=2) -> epilogue     [0x80145290]
@@ -131,9 +132,9 @@ void beh_id_compare_motion_dispatch(Core* c) {
         }
         // sh node[0x56] [0x80145384]; then fall to cull tail 0x80145388
         // ---- cull tail (n2b!=0 path) [0x80145388] ----
-        c->r[4] = obj; c->engine.cull.cullWrapperFlag2();     // FUN_800777FC (native)
+        c->r[4] = obj; eng(c).cull.cullWrapperFlag2();     // FUN_800777FC (native)
         if (c->r[2] == 0) return;                       // beqz v0 -> epilogue          [0x80145390]
-        c->mRender->mNodeXform.buildWithOffset(obj);              // FUN_800518FC (native)        [0x80145398]
+        rend(c)->mNodeXform.buildWithOffset(obj);              // FUN_800518FC (native)        [0x80145398]
         return;                                         // j 0x80145654 (epilogue)
       }
       // n2b==0 -> fall to 0x801453a8 (node[3] dispatch). The jal at 0x801453A8 below runs in BOTH the
@@ -143,9 +144,9 @@ void beh_id_compare_motion_dispatch(Core* c) {
       c->r[4] = obj; rec_dispatch(c, 0x8014047Cu);      // FUN_8014047c                [0x80145328]
       if (c->r[2] != 0) return;                         // bnez v0 -> epilogue          [0x80145330]
       // v0==0 -> 0x80145388 cull tail (NOT the node[3] dispatch). Distinct from the n2b==0 fallthrough.
-      c->r[4] = obj; c->engine.cull.cullWrapperFlag2();     // FUN_800777FC (native)
+      c->r[4] = obj; eng(c).cull.cullWrapperFlag2();     // FUN_800777FC (native)
       if (c->r[2] == 0) return;                         // beqz v0 -> epilogue          [0x80145390]
-      c->mRender->mNodeXform.buildWithOffset(obj);                // FUN_800518FC (native)        [0x80145398]
+      rend(c)->mNodeXform.buildWithOffset(obj);                // FUN_800518FC (native)        [0x80145398]
       return;                                           // j 0x80145654 (epilogue)
     }
   }
@@ -164,11 +165,11 @@ void beh_id_compare_motion_dispatch(Core* c) {
       goto n3_motion;
     }
     if (n3 == 0x80) {                                   // beq 0x80 -> 0x801454f8       [0x801453DC]
-      c->r[4] = obj; c->engine.attackOrbit.aimAtTargetAnchor();  // FUN_80145af0 (native)  [0x801454F8]
+      c->r[4] = obj; eng(c).attackOrbit.aimAtTargetAnchor();  // FUN_80145af0 (native)  [0x801454F8]
       goto second_cull;                                 // j 0x80145510
     }
     if (n3 == 0x81) {                                   // beq 0x81 -> 0x80145508       [0x801453E4]
-      c->r[4] = obj; c->engine.attackOrbit.orbitTargetMotion();  // FUN_801458e0 (native)  [0x80145508]
+      c->r[4] = obj; eng(c).attackOrbit.orbitTargetMotion();  // FUN_801458e0 (native)  [0x80145508]
       goto second_cull;                                 // j 0x80145510
     }
     // n3==0 OR (n3>=6 && !=0x80 && !=0x81) -> 0x801453EC
@@ -234,12 +235,12 @@ n3_motion:;
 
 second_cull:;
   // ---- common tail: cull, SFX edge, countdown spawn, render [0x80145510..0x8014560C] ----
-  c->r[4] = obj; c->engine.cull.cullWrapperFlag2();     // FUN_800777FC (native)
+  c->r[4] = obj; eng(c).cull.cullWrapperFlag2();     // FUN_800777FC (native)
   if (c->r[2] == 0) goto after_no_cull;                 // beqz v0 -> 0x8014560c        [0x80145518]
   {
     if (c->mem_r8(s4 + 7) == 1) {                       // lbu node[0x67]; bne 1 -> 0x80145548 [0x80145528]
-      uint32_t rr = (uint32_t)c->rng.next();                 // FUN_8009A450 -> native class Rng    [0x80145530]
-      c->engine.sfx.trigger(0x87, (int)(rr & 3), 0);   // FUN_80074590 (native) — id 0x87 hits path A (per-area)
+      uint32_t rr = (uint32_t)rngOf(c).next();                 // FUN_8009A450 -> native class Rng    [0x80145530]
+      eng(c).sfx.trigger(0x87, (int)(rr & 3), 0);   // FUN_80074590 (native) — id 0x87 hits path A (per-area)
     }
     // ---- DAT_8014bf5e countdown [0x80145548..0x801455C4] ----
     uint8_t cd = c->mem_r8(0x8014BF5Eu);                // lbu v0,DAT_8014bf5e         [0x80145548]
@@ -262,14 +263,14 @@ second_cull:;
         c->mem_w16(gsp + 0x12, (uint16_t)c->mem_r16(obj + 0x2e));  // sh node[0x2e],0x12(sp) [0x8014559C]
         c->mem_w16(gsp + 0x16, (uint16_t)c->mem_r16(s4 + 0xa));    // sh node[0x6a],0x16(sp) [0x801455A8]
         c->mem_w16(gsp + 0x1a, (uint16_t)c->mem_r16(obj + 0x36));  // sh node[0x36],0x1a(sp) [0x801455B8]
-        c->engine.spawn.spawnAndInit(8, gsp + 0x10, (uint32_t)(int32_t)-0x50);   // FUN_8003116c (spawn) [0x801455B4]
+        eng(c).spawn.spawnAndInit(8, gsp + 0x10, (uint32_t)(int32_t)-0x50);   // FUN_8003116c (spawn) [0x801455B4]
         c->mem_w8(0x8014BF5Eu, 0xa);                    // sb 0xa,DAT_8014bf5e          [0x801455C0]
       }
       c->mem_w16(s4 + 8, 0);                            // sh zero,8(s1)=node[0x68]     [0x801455C4]
     }
     // ---- render + flag fold [0x801455C8..0x80145608] ----
-    c->engine.animation.step(obj);                       // FUN_80076D68 (native)       [0x801455C8]
-    c->mRender->mNodeXform.buildWithOffset(obj);                  // FUN_800518FC (native)       [0x801455D0]
+    eng(c).animation.step(obj);                       // FUN_80076D68 (native)       [0x801455C8]
+    rend(c)->mNodeXform.buildWithOffset(obj);                  // FUN_800518FC (native)       [0x801455D0]
     if (c->mem_r8(obj + 0x29) != 0) {                   // lbu node[0x29]; beqz -> 0x801455fc [0x801455E0]
       c->mem_w8(obj + 0xb, (uint8_t)((c->mem_r8(obj + 0xb) & 0xc0) | 0x80));  // node[0xb]&0xc0|0x80 [0x801455E8..F8]
     } else {

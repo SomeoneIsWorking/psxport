@@ -1,6 +1,6 @@
 // game/scene/script_interp.h — PC-native CUTSCENE SCRIPT INTERPRETER.
 //
-// PROPER OOP: one instance per Core, embedded on Engine (`c->engine.script`). Back-pointer wired
+// PROPER OOP: one instance per Core, embedded on Engine (`eng(c).script`). Back-pointer wired
 // at Core construction (same pattern as Sfx / SceneEvents / Cull). No `extern "C"` shims.
 //
 // SCOPE — the resident cutscene-script bytecode machine at guest 0x80040CDC / DE0 / E54 / 41098
@@ -21,7 +21,7 @@
 // script-driven cutscene fade dispatch rides — it does `lw v0, 0x74(a0); jalr v0` where obj[+0x74]
 // is the 32-bit fnptr the previous entry loaded from the script.
 //
-// NATIVE-ROUTING FOR OP 0x03E — step()'s op-0x03E path calls `c->engine.behaviors.dispatchObj(obj,
+// NATIVE-ROUTING FOR OP 0x03E — step()'s op-0x03E path calls `eng(c).behaviors.dispatchObj(obj,
 // fnptr)` instead of doing a raw jalr; that routes the fnptr through the standard native-vs-
 // substrate registry (BehaviorDispatch::kTable). Any script-driven fade fn REGISTERED as a native
 // `beh_*` in that table runs native; unregistered addresses fall through to `rec_dispatch` (the

@@ -21,11 +21,12 @@
 // RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -48,7 +49,7 @@ void beh_anim_trigger_gates(Core* c) {
   if (st == 1) goto Lcb0;
   if (st < 2) { if (st == 0) goto Lc50; goto Lret; }   // st<2 -> only st==0
   if (st == 2) goto Lret;
-  if (st == 3) { c->engine.spawn.despawn(obj); goto Lret; }
+  if (st == 3) { eng(c).spawn.despawn(obj); goto Lret; }
   goto Lret;                                       // st >= 4 default
 
  Lc50:                                            // STATE 0 — node[3] dispatch (per decomp FUN_80129c00
@@ -104,7 +105,7 @@ void beh_anim_trigger_gates(Core* c) {
   {
     uint32_t rec = c->mem_r32(obj + 0xC0);
     c->mem_w16(rec + 12, (uint16_t)(c->mem_r16(rec + 12) + 16));
-    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();
+    c->r[4] = obj; eng(c).graphicsBind.renderUpdate();
   }
   goto Lret;
 

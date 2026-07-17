@@ -1,6 +1,6 @@
 // class Collision — PC-native COLLISION-GRID subsystem owned by Engine.
 //
-// PROPER OOP: one instance per Core, reached as `c->engine.collision.method(obj, …)`. Back-pointer
+// PROPER OOP: one instance per Core, reached as `eng(c).collision.method(obj, …)`. Back-pointer
 // `core` wired once at Core construction time (same pattern as Animation / Placement / Asset).
 //
 // SCOPE: the collision-grid family that resolves an object's position against the level's spatial

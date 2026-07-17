@@ -1,5 +1,6 @@
 // game/world/graphics_bind.cpp — PC-native OBJECT RENDER-BIND subsystem. See graphics_bind.h.
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +64,7 @@ uint32_t GraphicsBind::recordInitBody(Core* c) {
   c->mem_w16(rec + 0, 0);  c->mem_w16(rec + 2, 0);  c->mem_w16(rec + 4, 0);
   c->mem_w16(rec + 8, 0);  c->mem_w16(rec + 0xa, 0); c->mem_w16(rec + 0xc, 0);
   c->mem_w16(rec + 0x38, 0x1000); c->mem_w16(rec + 0x3a, 0x1000); c->mem_w16(rec + 0x3c, 0x1000);
-  c->engine.graphicsBind.installSceneRecord(rec, a1, a2);   // FUN_80051B04 inlined here in the recomp
+  eng(c).graphicsBind.installSceneRecord(rec, a1, a2);   // FUN_80051B04 inlined here in the recomp
   return 0;
 }
 void GraphicsBind::recordAlloc() { Core* c = core;
@@ -119,7 +120,7 @@ uint32_t GraphicsBind::renderUpdateBody(Core* c) {
   c->mem_w32(c->r[29] + 20, sra);
 
   c->r[31] = 0x80051814u;
-  c->math.rotmat(obj + 0x54, obj + 0x98);
+  mathOf(c).rotmat(obj + 0x54, obj + 0x98);
   c->mem_w32(obj + 0xac, (uint32_t)c->mem_r16s(obj + 0x2e));
   c->mem_w32(obj + 0xb0, (uint32_t)c->mem_r16s(obj + 0x32));
   c->mem_w32(obj + 0xb4, (uint32_t)c->mem_r16s(obj + 0x36));
@@ -202,7 +203,7 @@ uint32_t GraphicsBind::posComposeBody(Core* c) {
   }
   if ((c->mem_r8(obj + 0x28) & 0x7fu) != 0) {
     c->r[4] = obj;
-    c->engine.graphicsBind.renderUpdate();
+    eng(c).graphicsBind.renderUpdate();
     return c->r[2];
   }
   return last;
@@ -310,7 +311,7 @@ extern void gen_func_800519E0(Core*);
 extern void shard_set_override(uint32_t, void (*)(Core*));
 namespace {
 void eov_recordArrayInit(Core* c) {
-  c->r[2] = c->engine.graphicsBind.recordArrayInit(c->r[4], c->r[5], c->r[6], c->r[7]);
+  c->r[2] = eng(c).graphicsBind.recordArrayInit(c->r[4], c->r[5], c->r[6], c->r[7]);
 }
 }  // namespace
 

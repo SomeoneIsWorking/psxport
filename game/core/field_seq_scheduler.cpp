@@ -9,6 +9,7 @@
 // UNWIRED — dead code. Do not wire into any dispatch table before running port_check.py
 // and the mandatory line-by-line verify pass (docs/fleet-workflow.md §9).
 #include "engine.h"
+#include "game_ctx.h"
 #include "override_registry.h"
 #include "core.h"
 
@@ -173,7 +174,7 @@ void Engine::fieldSeqSchedulerTick() {
 // Engine::fieldFrame. Byte-faithful (gen_func_80075A80 = oracle leg); audio leaves stay substrate. ----
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_80075A80(Core*);
-namespace { void ov_fieldSeqSchedulerTick(Core* c) { c->engine.fieldSeqSchedulerTick(); } }
+namespace { void ov_fieldSeqSchedulerTick(Core* c) { eng(c).fieldSeqSchedulerTick(); } }
 void Engine::registerFieldSeqSchedulerTick() {
   overrides::install(0x80075A80u, "Engine::fieldSeqSchedulerTick", ov_fieldSeqSchedulerTick,
                      gen_func_80075A80, shard_set_override);

@@ -7,6 +7,7 @@
 // content-interface reads see the same value.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "pool.h"
 #include "mtx.h"          // class Mtx — libgte helpers (identity)
 #include "placement.h"    // Placement::spawnWithParent (FUN_80072DDC)
@@ -36,11 +37,11 @@ void Pool::resetControlBlock() {
   c->mem_w32(S + 388, 0); c->mem_w32(S + 532, 0); c->mem_w32(S + 520, 0); c->mem_w32(S + 640, 0);
   c->mem_w8 (S + 561, 0); c->mem_w8 (S + 593, 0); c->mem_w8 (S + 562, 0);
   c->mem_w8 (S + 595, 0); c->mem_w8 (S + 563, 0); c->mem_w8 (S + 571, 0);
-  c->engine.sceneTransition.areaMaskTrigger((uint8_t)a4, (uint8_t)a5);   // was rec_dispatch 0x800782F0
-  c->engine.modeStateArm.armFromAreaTable();                                  // was rec_dispatch 0x800508A8
+  eng(c).sceneTransition.areaMaskTrigger((uint8_t)a4, (uint8_t)a5);   // was rec_dispatch 0x800782F0
+  eng(c).modeStateArm.armFromAreaTable();                                  // was rec_dispatch 0x800508A8
   uint32_t v = c->mem_r8(S + 566);
   uint8_t arg = (v == 0u || (uint32_t)(v - 7u) < 2u) ? 0u : 0xFFu;
-  c->engine.modeStateArm.arm(arg, arg, arg);                                  // was rec_dispatch 0x8005082C
+  eng(c).modeStateArm.arm(arg, arg, arg);                                  // was rec_dispatch 0x8005082C
   c->mem_w8(0x800BF9D4u, 0);
   c->r[2] = 0x800C0000u;   // incidental v0
 }
@@ -200,7 +201,7 @@ void Pool::setupViewScroll() {
   uint32_t mode = c->mem_r8(A);
   if (mode == 3) {
     c->r[4] = 0; c->r[5] = 3; c->r[6] = 4; c->r[7] = 27;
-    c->engine.placement.spawnWithParent();
+    eng(c).placement.spawnWithParent();
     uint32_t v0 = c->r[2];
     c->mem_w32(v0 + 28, 0x8010B37Cu);
     c->mem_w32(S0 + 16, v0);
@@ -252,8 +253,8 @@ void Pool::finalViewInit() {
   const uint32_t V = 0x800E7E80u;
   const uint32_t P = 0x1F8000D0u;
 
-  c->mtx.identity(0x1F8000F8u);   // MR_init(s2)
-  c->mtx.identity(0x1F800118u);   // MR_init(s2+32)
+  mtxOf(c).identity(0x1F8000F8u);   // MR_init(s2)
+  mtxOf(c).identity(0x1F800118u);   // MR_init(s2+32)
 
   c->mem_w16(P + 30, (uint16_t)-1750);
   c->mem_w16(P + 28, 4096);
@@ -310,7 +311,7 @@ void Pool::selectStateIndex(uint8_t area) {
     s0 = c->mem_r8(tbl + q);
   }
 
-  c->engine.audioDispatch.dispatch3Way(s0, 1);   // native — was rec_dispatch 0x800750D8
+  eng(c).audioDispatch.dispatch3Way(s0, 1);   // native — was rec_dispatch 0x800750D8
   c->mem_w8(0x1F80023Bu, (uint8_t)s0);
   c->mem_w8(0x800BE22Bu, 0);
   c->r[2] = 0x800C0000u;   // incidental v0

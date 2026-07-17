@@ -17,6 +17,7 @@
 // it). Do NOT define fields speculatively — only when a handler's RE actually resolved the semantic.
 #pragma once
 #include <cstdint>
+#include "game_ctx.h"
 #include "core.h"
 
 class Actor {
@@ -27,7 +28,7 @@ public:
   // fields, and for `rec_dispatch` sub-behavior calls that take the node in c->r[4]). Prefer named
   // accessors — this is the escape hatch for the not-yet-RE'd offsets.
   uint32_t addr() const { return obj; }
-  // Core back-pointer for helper ports that need to reach c->rng.next() / c->trig.rcos / rec_dispatch —
+  // Core back-pointer for helper ports that need to reach rngOf(c).next() / trigOf(c).rcos / rec_dispatch —
   // any per-actor tick natively porting one of the beh_ handlers' sub-behaviors.
   Core* core() const { return c; }
 
@@ -152,7 +153,7 @@ public:
 
   // ── Bounds-cull check (was FUN_8007778C thin wrapper) ────────────────────────────────────────────
   // FULL NATIVE CHAIN as of this arc: FUN_8007778C's delta-math + flag reset happens here inline,
-  // then dispatches the 5-way cull body via c->engine.cull.performBaseCull (game/render/cull.cpp —
+  // then dispatches the 5-way cull body via eng(c).cull.performBaseCull (game/render/cull.cpp —
   // FUN_8007712C reimplemented byte-exact, was previously the file-scope `cull_native_body`, now the
   // public entry). Result is the visibility flag returned by the cull body in c->r[2] (1 = visible,
   // 0 = culled) — same value the guest recomp would return.
@@ -166,7 +167,7 @@ public:
     c->r[5] = (uint32_t)(int32_t)dx;
     c->r[6] = (uint32_t)(int32_t)dy;
     c->r[7] = (uint32_t)(int32_t)dz;
-    c->engine.cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch)
+    eng(c).cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch)
     return c->r[2];
   }
   // boundsCullYOffset — the Y-offset variant of boundsCull (was FUN_800778E4). Identical to
@@ -184,7 +185,7 @@ public:
     c->r[5] = (uint32_t)(int32_t)dx;
     c->r[6] = (uint32_t)(int32_t)dy;
     c->r[7] = (uint32_t)(int32_t)dz;
-    c->engine.cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch(0x800778E4))
+    eng(c).cull.performBaseCull();                    // FUN_8007712C body — native (was rec_dispatch(0x800778E4))
     return c->r[2];
   }
 

@@ -21,7 +21,7 @@
 // docs/findings/sbs.md ("FUN_801337E4 RE'd semantic model") — a 5-way sub-state machine on subState
 // (jumptable at 0x80109E58: INIT / MAIN OSCILLATOR / POST-COUNTER-A / TURN-DIRECTION / TURN-EXECUTE)
 // driving a background-actor oscillate + occasionally-turn animation using Trig::rcos(oscPhase) and the
-// PC-native class Rng (c->rng.next() implements FUN_8009A450 with seed at 0x80105EE8).
+// PC-native class Rng (rngOf(c).next() implements FUN_8009A450 with seed at 0x80105EE8).
 //
 // STILL OPAQUE (recorded so a future RE arc closes them):
 //   - FUN_8004766C   PER-OBJECT TILE-BASED MOVEMENT STEP. RE'd shape (disas 0x8004766C..0x80047774):
@@ -70,11 +70,12 @@
 // channel "typed_table_seed_gateverify".
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
-#include "spawn.h"            // class Spawn (c->engine.spawn.despawn)
+#include "spawn.h"            // class Spawn (eng(c).spawn.despawn)
 #include "graphics_bind.h"    // GraphicsBind::recordInit / renderUpdate
-#include "rng.h"              // class Rng (c->rng.next()) — FUN_8009A450 (seed 0x80105EE8)
-#include "trig.h"             // class Trig (c->trig.rcos)  — FUN_80083F50 (Q12 cos LUT)
+#include "rng.h"              // class Rng (rngOf(c).next()) — FUN_8009A450 (seed 0x80105EE8)
+#include "trig.h"             // class Trig (trigOf(c).rcos)  — FUN_80083F50 (Q12 cos LUT)
 #include "object/actor.h"     // class Actor + scene_phase / osc_base_table
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -165,9 +166,9 @@ void state_one_tick(Actor& a) {
         return;
       }
       // THE OSCILLATOR TICK — target-#4 hot path.
-      int32_t cos_q12 = c->trig.rcos((int32_t)a.oscPhase());   // Trig::rcos(oscPhase) → Q12 signed
+      int32_t cos_q12 = trigOf(c).rcos((int32_t)a.oscPhase());   // Trig::rcos(oscPhase) → Q12 signed
       c->mem_w16(a.renderRec() + 0xC, (uint16_t)((uint32_t)cos_q12 >> 5));   // guest srl (unsigned)
-      int32_t r = c->rng.next();                               // Rng::next() → [0, 0x7FFF]
+      int32_t r = rngOf(c).next();                               // Rng::next() → [0, 0x7FFF]
       uint16_t newPhase = (uint16_t)(a.oscPhase_u() + 68 + ((uint32_t)r >> 8));
       a.setOscPhase(newPhase);
       return;
@@ -296,14 +297,14 @@ void beh_typed_table_seed_gate(Core* c) {
   if (st != Sta::Active) {
     if ((uint8_t)st >= (uint8_t)Sta::DespawnA) {
       if ((uint8_t)st >= 4) return;                                // state>=4: no-op epilogue
-      c->engine.spawn.despawn(a.addr());                           // 2 or 3: despawn
+      eng(c).spawn.despawn(a.addr());                           // 2 or 3: despawn
       return;
     }
     if (st != Sta::Init) return;                                   // impossible slot: no-op
 
     // ---- STATE 0 (INIT): allocate cull record + seed trigger box + oscillation params ------------
     c->r[4] = a.addr(); c->r[5] = 0xc; c->r[6] = 0x14;             // cls=0xc, sub=0x14
-    c->engine.graphicsBind.recordInit();
+    eng(c).graphicsBind.recordInit();
     if (c->r[2] != 0) return;                                      // record pool busy — retry next tick
 
     a.setSceneMode(0x22);                                          // participates when scene_phase()==0x22
@@ -331,7 +332,7 @@ void beh_typed_table_seed_gate(Core* c) {
 
   if (phase == 0x22) {
     a.setRenderMode((uint8_t)st);                                  // "this actor's phase" branch
-    c->engine.cull.enqueueVisibleClass4(a.addr());                  // FUN_80077EBC — Cull::enqueueVisibleClass4 (was rec_dispatch)
+    eng(c).cull.enqueueVisibleClass4(a.addr());                  // FUN_80077EBC — Cull::enqueueVisibleClass4 (was rec_dispatch)
     // fall through to render tail
   } else {
     if (a.boundsCullYOffset(a.triggerParam()) == 0) {              // FUN_800778E4 — Actor::boundsCullYOffset (native)
@@ -343,5 +344,5 @@ void beh_typed_table_seed_gate(Core* c) {
 
   // ---- render tail: per-frame tile move (integrates posX/posZ) + render-state update ---------------
   c->r[4] = a.addr(); rec_dispatch(c, SUB_TILE_MOVE_STEP);
-  c->r[4] = a.addr(); c->engine.graphicsBind.renderUpdate();
+  c->r[4] = a.addr(); eng(c).graphicsBind.renderUpdate();
 }

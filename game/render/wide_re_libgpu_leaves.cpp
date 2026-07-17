@@ -45,6 +45,7 @@
 //     graph. 0x80082734 turned out NOT to be part of this cluster (a separate, larger LoadImage-style
 //     FIFO streamer) — still MAPPED only, see the new file's header.
 #include "core.h"
+#include "game_ctx.h"
 #include "render.h"
 #include <stdint.h>
 
@@ -216,8 +217,8 @@ void Render::clearOTagR() {
 // The other 3 functions in this file (func_80082C68/80083DE0/800847B0) are OUT OF SCOPE for this
 // wiring pass — left as unwired wide-RE drafts.
 namespace {
-void ov_drawSync(Core* c)    { c->mRender->drawSync(); }
-void ov_clearOTagR(Core* c)  { c->mRender->clearOTagR(); }
+void ov_drawSync(Core* c)    { rend(c)->drawSync(); }
+void ov_clearOTagR(Core* c)  { rend(c)->clearOTagR(); }
 }  // namespace
 
 extern void gen_func_80080F6C(Core*);

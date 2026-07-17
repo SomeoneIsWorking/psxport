@@ -21,11 +21,12 @@
 // scratchpad vs rec_super_call) is the safety net. NO GTE/render.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "animation.h" // Animation::step (FUN_80076D68)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -52,7 +53,7 @@ void beh_flagbit_timer_machine(Core* c) {
   if (s0 == 1) goto L42c;
   if ((int32_t)s0 < 2) { if (s0 == 0) goto S0; goto Lret; }
   if (s0 == 2) goto Lret;
-  if (s0 == 3) { c->engine.spawn.despawn(nd); goto Lret; }
+  if (s0 == 3) { eng(c).spawn.despawn(nd); goto Lret; }
   goto Lret;
 
  // ================= STATE 0 (INIT) =================
@@ -87,7 +88,7 @@ void beh_flagbit_timer_machine(Core* c) {
  // ================= STATE 1 =================
  L42c: {
    if (leafr(c, nd, 0x8007778cu) == 0) goto L50c;   // FUN_8007778C
-   c->engine.animation.step(nd);                       // FUN_80076D68 (native)
+   eng(c).animation.step(nd);                       // FUN_80076D68 (native)
    uint8_t n6 = c->mem_r8(nd + 6);
    if (n6 == s0) goto L4cc;                            // s0 == 1
    if ((int32_t)n6 < 2) { if (n6 == 0) goto L484; goto L4f8; }

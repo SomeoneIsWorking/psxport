@@ -1,7 +1,7 @@
 // class Mtx — PC-native libgte matrix helpers (tiny leaves the game calls all over).
 //
 // PROPER OOP: instance subsystem, one per Core (embedded as `Core::mtx`). Back-pointer wired in
-// Core::Core(). Callers reach the methods as `c->mtx.identity(addr)` — no Core* on the surface;
+// Core::Core(). Callers reach the methods as `mtxOf(c).identity(addr)` — no Core* on the surface;
 // the class reads/writes guest memory via `this->core`. Was previously `Mtx::identity(Core*, addr)`
 // (static-with-Core); promoted to match the standard subsystem shape (same as Rng / Trig / Math).
 //
@@ -24,6 +24,6 @@ public:
   // NOTE: the diagonal-scale matrix write (guest FUN_800517BC) is owned by
   // `NodeXform::seedBlock` (game/render/node_xform.h) — that is the wired dispatch target for
   // this address. A duplicate `Mtx::diagonal` (dead code, zero callers) lived here until
-  // 2026-07-08's dual-ownership dedup; do not re-add it — call `c->mRender->mNodeXform.seedBlock(...)`
+  // 2026-07-08's dual-ownership dedup; do not re-add it — call `rend(c)->mNodeXform.seedBlock(...)`
   // instead.
 };

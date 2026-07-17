@@ -4,5 +4,5 @@
 // into its own module (PC-game code structure); registered in game_tomba2.cpp's init block by these names.
 #ifndef ENGINE_ENTITY_H
 #define ENGINE_ENTITY_H
-// FUN_80026C88 moved to ObjectTable::dispatch — reach via c->engine.objectTable.dispatch()
+// FUN_80026C88 moved to ObjectTable::dispatch — reach via eng(c).objectTable.dispatch()
 #endif

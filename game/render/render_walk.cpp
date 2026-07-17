@@ -11,6 +11,7 @@
 // Split out of submit.cpp (the geometry-SUBMIT subsystem) so the scene renderer is its own PC-game
 // file. Shared helpers (PktSpanSession, obj_world_ord/cur_render_node) live in render_internal.h.
 #include "core.h"
+#include "game_ctx.h"
 #include "render.h"
 #include "game.h"
 #include "cfg.h"
@@ -86,16 +87,16 @@ void Render::perObjFlush() {
       // PC-NATIVE: compose the camera × object transform in FLOAT from the object's REAL WORLD coordinates
       // (its world matrix cmd+0x18 + world position cmd+0x2c, transformed by the scene camera) and make it
       // the ACTIVE projection. The submitters project every vertex through it — NO gte_op, NO CR0-7.
-      EObjXform w; c->mRender->projComposeObject(cmd, &w);
-      c->mRender->projSetActive(&w);
+      EObjXform w; rend(c)->projComposeObject(cmd, &w);
+      rend(c)->projSetActive(&w);
       // OT base: node[0xd]&0xf == 4 selects a per-command sub-bucket (cmd[0x3f]*4 offset), else the base.
       uint32_t otbase = otbase_ptr;
       if ((c->mem_r8(node + 0xD) & 0xF) == 4)
         otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
       // fps60 TRUE per-object tier: the object's world transform was captured (keyed by cmd) inside
       // projComposeObject above; the GT3/GT4 submit projects it. No per-prim key needed anymore.
-      c->mRender->gt3gt4(geomblk, otbase);              // fully-native generic GT3/GT4 submit (no PSX fallback)
-      c->mRender->projClearActive();
+      rend(c)->gt3gt4(geomblk, otbase);              // fully-native generic GT3/GT4 submit (no PSX fallback)
+      rend(c)->projClearActive();
     }
     i++;
     if (i >= (int)c->mem_r8(node + 9)) break;
@@ -123,13 +124,13 @@ void Render::perObjFlushPreComposed() {
       // projComposeCore expects Robj in raw int16 scale (4096 = 1.0); the factored objR is unit-scale.
       float Rraw[3][3];
       for (int r = 0; r < 3; r++) for (int cc = 0; cc < 3; cc++) Rraw[r][cc] = objR[r][cc] * 4096.0f;
-      EObjXform w; c->mRender->projComposeObjectHost(Rraw, objT, &w);
-      c->mRender->projSetActive(&w);
+      EObjXform w; rend(c)->projComposeObjectHost(Rraw, objT, &w);
+      rend(c)->projSetActive(&w);
       uint32_t otbase = otbase_ptr;
       if ((c->mem_r8(node + 0xD) & 0xF) == 4)
         otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
-      c->mRender->gt3gt4(geomblk, otbase);
-      c->mRender->projClearActive();
+      rend(c)->gt3gt4(geomblk, otbase);
+      rend(c)->projClearActive();
     }
     i++;
     if (i >= (int)c->mem_r8(node + 9)) break;
@@ -607,7 +608,7 @@ void Render::fieldObjectsRender() {
       if (type == 0x20) {
         if (c->mem_r32(n + 0x18) == 0x8010BF54u && c->mem_r32(0x80109450u) == 0x3C021F80u) {
           c->rsub.stats.snObjs++;
-          c->mRender->narrationSwirlRender(n);
+          rend(c)->narrationSwirlRender(n);
         }
         continue;
       }

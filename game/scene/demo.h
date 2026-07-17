@@ -3,8 +3,8 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::demo`. Back-pointer wired once by
 // Core's constructor. Callers reach the demo stage through the object graph:
 //
-//     c->engine.demo.stageMain();   // one-time entry (prologue + s0)
-//     c->engine.demo.frame();       // one per-frame call (sm[0x48] substate dispatch + tail)
+//     eng(c).demo.stageMain();   // one-time entry (prologue + s0)
+//     eng(c).demo.frame();       // one per-frame call (sm[0x48] substate dispatch + tail)
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as
 // ObjectList, SceneTransition, TransitionState3.

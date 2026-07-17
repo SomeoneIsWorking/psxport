@@ -16,6 +16,7 @@
 // COMPARE sites below use the WORD read (mem_r32/mem_r16... as Ghidra typed at that exact site) since
 // that is where the extra high bits could change the branch outcome.
 #include "release_trigger_motion.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "core/engine.h"
@@ -40,7 +41,7 @@ void ReleaseTriggerMotion::hoverBobCycle(uint32_t obj) {
     case 0:
       c->mem_w8(obj + 5, (uint8_t)(st + 1));
       c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 3;
-      c->engine.graphicsBind.setGeom();                      // FUN_80077B38
+      eng(c).graphicsBind.setGeom();                      // FUN_80077B38
       c->mem_w16(obj + 0x40, 0x5a);
       c->mem_w16(obj + 0x48, 0x10);
       c->mem_w16(obj + 0x4e, 0xfffe);
@@ -103,7 +104,7 @@ void ReleaseTriggerMotion::leaderFollowSync(uint32_t obj) {
       c->mem_w8(obj + 1, cVar1);
       if (cVar1 != 0) {
         c->r[4] = obj;
-        c->engine.cull.enqueueQueueA(obj);                // FUN_80077E7C (return ignored)
+        eng(c).cull.enqueueQueueA(obj);                // FUN_80077E7C (return ignored)
         c->r[4] = obj; rec_dispatch(c, 0x80123C94u);       // FUN_80123C94 — still-substrate predicate
         if (c->r[2] == 0) {
           int32_t shifted = (int32_t)((uint32_t)c->mem_r16(leader + 0x84) << 16);
@@ -162,7 +163,7 @@ void ReleaseTriggerMotion::driftReposition(uint32_t obj, uint32_t variant) {
     c->mem_w8(obj + 0xb, 0x13);
     c->mem_w16(obj + 0x54, 0x100);
     c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 3;
-    c->engine.graphicsBind.setGeom();                       // FUN_80077B38
+    eng(c).graphicsBind.setGeom();                       // FUN_80077B38
   } else if (c->mem_r8(obj + 5) == 1) {
     if (Actor(c, obj).boundsCull() != 0) {                  // FUN_8007778C
       uint32_t rec98 = obj + 0x98;
@@ -172,11 +173,11 @@ void ReleaseTriggerMotion::driftReposition(uint32_t obj, uint32_t variant) {
       c->r[4] = obj; rec_dispatch(c, 0x80077B5Cu);          // still-substrate
     }
     if (c->mem_r8(0x800BF9DDu) == 0xe) {
-      uint32_t uVar4 = (uint32_t)c->rng.next();             // FUN_8009A450 (draw 1)
+      uint32_t uVar4 = (uint32_t)rngOf(c).next();             // FUN_8009A450 (draw 1)
       if ((uVar4 & 0x3f) == 0) {
-        c->engine.spawn.spawnAndInit(0x107, obj + 0x2c, 0xFFFFFFF6u);   // FUN_8003116C
+        eng(c).spawn.spawnAndInit(0x107, obj + 0x2c, 0xFFFFFFF6u);   // FUN_8003116C
       }
-      uint32_t uVar2 = (uint32_t)c->rng.next();              // FUN_8009A450 (draw 2)
+      uint32_t uVar2 = (uint32_t)rngOf(c).next();              // FUN_8009A450 (draw 2)
       c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(anchor + 0x2c) + (int32_t)((uVar2 & 3) - 1) * 0x28));
       c->mem_w16(obj + 0x32, c->mem_r16(anchor + 0x30));
       uint16_t uVar1 = c->mem_r16(anchor + 0x34);
@@ -209,7 +210,7 @@ void ReleaseTriggerMotion::arcSwoopMotion(uint32_t obj) {
     c->mem_w16(obj + 0x5a, 0);
     c->mem_w8(obj + 0x47, 0);
     c->mem_w8(obj + 0x46, (uint8_t)(c->mem_r8(obj + 0x60) & 3));
-    c->engine.spawn.spawnAndInit(0x107, obj + 0x2c, 0xFFFFFFF6u);      // FUN_8003116C
+    eng(c).spawn.spawnAndInit(0x107, obj + 0x2c, 0xFFFFFFF6u);      // FUN_8003116C
     {
       int32_t idx = c->mem_r16s(obj + 0x60);
       int16_t tv  = c->mem_r16s(TBL + (uint32_t)idx * 2);
@@ -218,7 +219,7 @@ void ReleaseTriggerMotion::arcSwoopMotion(uint32_t obj) {
     c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(anchor + 0x30) - 0x20));
     c->mem_w16(obj + 0x36, c->mem_r16(anchor + 0x34));
     c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 4;
-    c->engine.graphicsBind.setGeom();                                  // FUN_80077B38
+    eng(c).graphicsBind.setGeom();                                  // FUN_80077B38
     goto resume;
   }
   if (st == 2) {
@@ -261,14 +262,14 @@ tail:
   c->mem_w8(obj + 0x47, (uint8_t)(1 - c->mem_r8(obj + 0x47)));
   c->mem_w8(obj + 0x46, (uint8_t)(c->mem_r8(obj + 0x46) + 1));
   c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(obj + 0x32) - 8));
-  c->engine.sfx.trigger(0x8f, 0, 0);
+  eng(c).sfx.trigger(0x8f, 0, 0);
   return;
 
 resume:
   if (c->mem_r8(0x800BF9DDu) < 0xf) {
     if ((int32_t)c->mem_r32(anchor + 0x30) <= c->mem_r16s(obj + 0x32)) {
-      uint32_t r = (uint32_t)c->rng.next();
-      if ((r & 0xf) == 0) c->engine.spawn.spawnAndInit(8, obj + 0x2c, 0xFFFFFFB0u);
+      uint32_t r = (uint32_t)rngOf(c).next();
+      if ((r & 0xf) == 0) eng(c).spawn.spawnAndInit(8, obj + 0x2c, 0xFFFFFFB0u);
       int32_t idx = c->mem_r16s(obj + 0x60);
       int16_t tv  = c->mem_r16s(TBL + (uint32_t)idx * 2);
       c->mem_w16(obj + 0x2e, (uint16_t)(c->mem_r16s(anchor + 0x2c) + tv));
@@ -305,7 +306,7 @@ void ReleaseTriggerMotion::doubleArcMotion(uint32_t obj) {
         c->mem_w8(obj + 0x46, (uint8_t)(c->mem_r8(obj + 0x60) & 1));
         c->mem_w16(obj + 0x40, tv);
         c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 4;
-        c->engine.graphicsBind.setGeom();                                // FUN_80077B38
+        eng(c).graphicsBind.setGeom();                                // FUN_80077B38
       }
       break;
     case 1:
@@ -336,7 +337,7 @@ void ReleaseTriggerMotion::doubleArcMotion(uint32_t obj) {
           c->mem_w8(obj + 5, (uint8_t)(cur2 - 1));
         }
         c->mem_w8(obj + 0x47, (uint8_t)(1 - c->mem_r8(obj + 0x47)));
-        c->engine.sfx.trigger(0x8f, 0, 0);
+        eng(c).sfx.trigger(0x8f, 0, 0);
       }
       break;
     }
@@ -359,9 +360,9 @@ void ReleaseTriggerMotion::doubleArcMotion(uint32_t obj) {
     default: break;
   }
 
-  uint32_t uVar5 = (uint32_t)c->rng.next();               // FUN_8009A450
+  uint32_t uVar5 = (uint32_t)rngOf(c).next();               // FUN_8009A450
   if ((uVar5 & 0x3f) == 0) {
-    c->engine.spawn.spawnAndInit(8, obj + 0x2c, 0xFFFFFFB0u);     // FUN_8003116C
+    eng(c).spawn.spawnAndInit(8, obj + 0x2c, 0xFFFFFFB0u);     // FUN_8003116C
   }
   Actor(c, obj).boundsCull();                              // FUN_8007778C, return ignored
   c->r[4] = obj; rec_dispatch(c, 0x80077B5Cu);
@@ -404,7 +405,7 @@ void ReleaseTriggerMotion::circleOrbitMotion(uint32_t obj) {
       c->mem_w16(obj + 0x32, (uint16_t)tblY);
       c->mem_w16(obj + 0x36, (uint16_t)tblZ);
       c->r[4] = obj; c->r[5] = 0x8014C808u; c->r[6] = 4;
-      c->engine.graphicsBind.setGeom();                                 // FUN_80077B38
+      eng(c).graphicsBind.setGeom();                                 // FUN_80077B38
       return;
     }
     if (st != 2) return;
@@ -427,7 +428,7 @@ void ReleaseTriggerMotion::circleOrbitMotion(uint32_t obj) {
       c->mem_w8(obj + 0x46, (uint8_t)(1 - cur46));
       c->mem_w8(obj + 0x47, (uint8_t)(1 - cur46));
       c->mem_w16(obj + 0x32, (uint16_t)(c->mem_r16s(obj + 0x32) - 8));
-      c->engine.sfx.trigger(0x8f, 0, 0);
+      eng(c).sfx.trigger(0x8f, 0, 0);
     }
   }
 }
@@ -436,12 +437,12 @@ void ReleaseTriggerMotion::circleOrbitMotion(uint32_t obj) {
 // Override registry wiring — guest ABI trampolines (a0 in r4, a1 in r5), same idiom as
 // PcScheduler::registerOverrides (game/core/pc_scheduler.cpp).
 // ---------------------------------------------------------------------------------------------
-static void eov_hoverBobCycle(Core* c)    { c->engine.releaseTriggerMotion.hoverBobCycle(c->r[4]); }
-static void eov_leaderFollowSync(Core* c) { c->engine.releaseTriggerMotion.leaderFollowSync(c->r[4]); }
-static void eov_driftReposition(Core* c)  { c->engine.releaseTriggerMotion.driftReposition(c->r[4], c->r[5]); }
-static void eov_arcSwoopMotion(Core* c)   { c->engine.releaseTriggerMotion.arcSwoopMotion(c->r[4]); }
-static void eov_doubleArcMotion(Core* c)  { c->engine.releaseTriggerMotion.doubleArcMotion(c->r[4]); }
-static void eov_circleOrbitMotion(Core* c){ c->engine.releaseTriggerMotion.circleOrbitMotion(c->r[4]); }
+static void eov_hoverBobCycle(Core* c)    { eng(c).releaseTriggerMotion.hoverBobCycle(c->r[4]); }
+static void eov_leaderFollowSync(Core* c) { eng(c).releaseTriggerMotion.leaderFollowSync(c->r[4]); }
+static void eov_driftReposition(Core* c)  { eng(c).releaseTriggerMotion.driftReposition(c->r[4], c->r[5]); }
+static void eov_arcSwoopMotion(Core* c)   { eng(c).releaseTriggerMotion.arcSwoopMotion(c->r[4]); }
+static void eov_doubleArcMotion(Core* c)  { eng(c).releaseTriggerMotion.doubleArcMotion(c->r[4]); }
+static void eov_circleOrbitMotion(Core* c){ eng(c).releaseTriggerMotion.circleOrbitMotion(c->r[4]); }
 
 extern void ov_a00_gen_80123E9C(Core*);
 extern void ov_a00_gen_801241BC(Core*);

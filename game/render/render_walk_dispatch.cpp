@@ -45,6 +45,7 @@
 //   - advance: r16 = r17; loop while r16 != 0.
 //   - epilogue: restore r31/r19/r18/r17/r16 from their spill slots, sp += 112, return.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "render.h"
 #include "render_internal.h"   // withDepthTag (#39: depth-tag the RCASE_DEFAULT custom renderer)
@@ -240,7 +241,7 @@ void Render::renderWalk() {
 }
 
 namespace {
-void ov_renderWalk(Core* c) { c->mRender->renderWalk(); }
+void ov_renderWalk(Core* c) { rend(c)->renderWalk(); }
 }
 
 void render_walk_dispatch_install() {

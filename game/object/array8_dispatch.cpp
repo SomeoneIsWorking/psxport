@@ -1,5 +1,6 @@
 // Array8Dispatch::tick — see array8_dispatch.h. Faithful port of guest FUN_80026368.
 #include "array8_dispatch.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"   // c->game->pc_skip fork
 
@@ -11,7 +12,7 @@ void Array8Dispatch::tick() {
     if (c->mem_r8(slot) == 0) continue;
     uint32_t type = c->mem_r8(slot + 2);
     uint32_t h    = c->mem_r32(METHOD_TABLE + type * 4u);
-    c->engine.behaviors.dispatchObj(slot, h);
+    eng(c).behaviors.dispatchObj(slot, h);
   }
 }
 
@@ -38,7 +39,7 @@ void Array8Dispatch::tickFaithful() {
       uint32_t h    = c->mem_r32(c->r[18] + type * 4u);
       c->r[31] = 0x800263C0u;                  // gen's jal-site ra for this call, every iteration
       c->r[4]  = slot;
-      c->engine.behaviors.dispatchObj(slot, h); // r31 already set for the callee's own prologue spill
+      eng(c).behaviors.dispatchObj(slot, h); // r31 already set for the callee's own prologue spill
     }
     c->r[17] += 1;
     c->r[16] += SLOT_STRIDE;

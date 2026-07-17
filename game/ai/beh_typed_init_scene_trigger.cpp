@@ -48,9 +48,10 @@
 // channel "typed_init_scene_triggerverify".
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "graphics_bind.h"    // GraphicsBind::recordInit / renderUpdate
-#include "spawn.h"            // class Spawn (c->engine.spawn.despawn)
+#include "spawn.h"            // class Spawn (eng(c).spawn.despawn)
 #include "bg_scene_transition_sm.h"   // BgSceneTransitionSm::readyForProgress (FUN_80042728 native)
 #include "object/actor.h"     // class Actor + named fields
 void rec_super_call(Core*, uint32_t);
@@ -64,8 +65,8 @@ enum class Sta : uint8_t { Init = 0, Active = 1, Idle = 2, Despawn = 3 };
 // Un-RE'd sub-behaviors still called via rec_dispatch.
 // (FUN_8007778C bounds-cull wrapper is NATIVE now via Actor::boundsCull; the 5-way FUN_8007712C
 //  body it dispatches remains opaque and stays a rec_dispatch inside boundsCull.)
-// (FUN_80040B48 = SceneEvents::arm — NOW NATIVE, callsites use c->engine.sceneEvents.arm.)
-// (FUN_8007E110 = Spawn::sceneEntity — NOW NATIVE, callsites use c->engine.spawn.sceneEntity.)
+// (FUN_80040B48 = SceneEvents::arm — NOW NATIVE, callsites use eng(c).sceneEvents.arm.)
+// (FUN_8007E110 = Spawn::sceneEntity — NOW NATIVE, callsites use eng(c).spawn.sceneEntity.)
 
 // Data-table addresses (halfword strides, indexed by area/type).
 constexpr uint32_t TBL_AREA_SIZE  = 0x800A4C94u;   // per-area cull-record size (state-0 recordInit cls)
@@ -85,7 +86,7 @@ constexpr uint32_t SPECIAL_AREA_TAG = 0x800E7E85u;   // guard on the special-are
 // (fresh arm = 1, or events gate off = -1 → both nonzero), skip to triggerSub=5. Already-armed = 0
 // means retry next tick.
 inline void confirm_or_advance(Actor& a, uint32_t arg) {
-  if (a.core()->engine.sceneEvents.arm((uint8_t)arg) != 0) a.setTriggerSub(5);
+  if (eng(a.core()).sceneEvents.arm((uint8_t)arg) != 0) a.setTriggerSub(5);
 }
 
 // Special-area set for two paths (state-0 alive() + box override, tail sceneHandle release):
@@ -100,7 +101,7 @@ void beh_typed_init_scene_trigger(Core* c) {
     if ((uint8_t)st >= (uint8_t)Sta::Idle) {
       if (st == Sta::Idle) return;                               // state 2: idle no-op
       if (st != Sta::Despawn) return;                            // state >=4: no-op
-      c->engine.spawn.despawn(a.addr());                         // state 3: despawn
+      eng(c).spawn.despawn(a.addr());                         // state 3: despawn
       return;
     }
     if (st != Sta::Init) return;
@@ -109,7 +110,7 @@ void beh_typed_init_scene_trigger(Core* c) {
     uint8_t area = c->mem_r8(CUR_AREA);
     int16_t sz   = (int16_t)c->mem_r16(TBL_AREA_SIZE + (uint32_t)area * 2);
     c->r[4] = a.addr(); c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)sz;
-    c->engine.graphicsBind.recordInit();
+    eng(c).graphicsBind.recordInit();
     if (c->r[2] != 0) return;                                    // init busy/failed
 
     a.setSubFlag(0);
@@ -210,7 +211,7 @@ void beh_typed_init_scene_trigger(Core* c) {
         }
         if (use_table) sv4 = (int16_t)c->mem_r16(TBL_SCENE_ID + (uint32_t)n3 * 2);
         // Spawn::sceneEntity — was rec_dispatch(0x8007E110); now native (spawn.cpp).
-        uint32_t node = c->engine.spawn.sceneEntity((uint16_t)(int16_t)sv4, /*subtype=*/0);
+        uint32_t node = eng(c).spawn.sceneEntity((uint16_t)(int16_t)sv4, /*subtype=*/0);
         a.setSceneHandle(node);
         if (node != 0) a.setTriggerSub((uint8_t)(a.triggerSub() + 1));
         break;
@@ -231,7 +232,7 @@ void beh_typed_init_scene_trigger(Core* c) {
         break;
       }
       case 6: {                                                  // completion → triggerSub = 2
-        if (c->engine.bgSceneTransitionSm.readyForProgress()) a.setTriggerSub(2);   // FUN_80042728 (native)
+        if (eng(c).bgSceneTransitionSm.readyForProgress()) a.setTriggerSub(2);   // FUN_80042728 (native)
         break;
       }
     }
@@ -251,5 +252,5 @@ void beh_typed_init_scene_trigger(Core* c) {
     }
   }
   a.setSubFlag(0);
-  c->r[4] = a.addr(); c->engine.graphicsBind.renderUpdate();
+  c->r[4] = a.addr(); eng(c).graphicsBind.renderUpdate();
 }

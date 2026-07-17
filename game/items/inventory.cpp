@@ -40,6 +40,7 @@
 // in BOTH passes (same A/B artifact as the player/grid families), so the wrapper gate excludes the
 // top-of-RAM stack window [sp-0x800, sp) — far above all game data.
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "inventory.h"
 #include "game.h"      // c->game->verify — the shared A/B verify scaffold
@@ -123,11 +124,11 @@ void Inventory::abGate(Core* c, uint32_t addr, void (*native)(Core*), int exclud
   uint32_t regs0[32]; memcpy(regs0, c->r, sizeof regs0);
   uint32_t a0 = c->r[4], a1 = c->r[5];
   memcpy(ram0, c->ram, 0x200000); memcpy(spad0, c->scratch, 0x400);
-  c->inventory.inGate++; native(c); c->inventory.inGate--;
+  inv(c).inGate++; native(c); inv(c).inGate--;
   uint32_t v0_n = c->r[2];
   memcpy(ramN, c->ram, 0x200000); memcpy(spadN, c->scratch, 0x400);
   memcpy(c->ram, ram0, 0x200000); memcpy(c->scratch, spad0, 0x400); memcpy(c->r, regs0, sizeof regs0);
-  c->inventory.inGate++; rec_super_call(c, addr); c->inventory.inGate--;    // inner jal 0x8004D338 re-enters native-only (guard)
+  inv(c).inGate++; rec_super_call(c, addr); inv(c).inGate--;    // inner jal 0x8004D338 re-enters native-only (guard)
   uint32_t v0_o = c->r[2];
   uint32_t sp = regs0[29] & 0x1FFFFFu, flo = (sp >= 0x800) ? sp - 0x800 : 0;
   int ro = -1;
@@ -145,7 +146,7 @@ void Inventory::abGate(Core* c, uint32_t addr, void (*native)(Core*), int exclud
 
 
 void Inventory::addEntry(Core* c) {       // FUN_8004D338
-  if (c->game->verify.on("invverify") && !c->inventory.inGate) { abGate(c, 0x8004D338u, &Inventory::addBody, 0, "invverify"); return; }
+  if (c->game->verify.on("invverify") && !inv(c).inGate) { abGate(c, 0x8004D338u, &Inventory::addBody, 0, "invverify"); return; }
   addBody(c);
 }
 
@@ -158,7 +159,7 @@ void Inventory::giveAndFlagBody(Core* c) {
   rec_dispatch(c, 0x8004ED0Cu);
 }
 void Inventory::giveAndFlagEntry(Core* c) {    // FUN_8004D4C4
-  if (c->game->verify.on("invverify") && !c->inventory.inGate) { abGate(c, 0x8004D4C4u, &Inventory::giveAndFlagBody, 1, "invverify"); return; }
+  if (c->game->verify.on("invverify") && !inv(c).inGate) { abGate(c, 0x8004D4C4u, &Inventory::giveAndFlagBody, 1, "invverify"); return; }
   giveAndFlagBody(c);
 }
 
@@ -167,7 +168,7 @@ void Inventory::giveBody(Core* c) {
   addNative(c, c->r[4], c->r[5]);
 }
 void Inventory::giveEntry(Core* c) {           // FUN_8004D4F4
-  if (c->game->verify.on("invverify") && !c->inventory.inGate) { abGate(c, 0x8004D4F4u, &Inventory::giveBody, 1, "invverify"); return; }
+  if (c->game->verify.on("invverify") && !inv(c).inGate) { abGate(c, 0x8004D4F4u, &Inventory::giveBody, 1, "invverify"); return; }
   giveBody(c);
 }
 

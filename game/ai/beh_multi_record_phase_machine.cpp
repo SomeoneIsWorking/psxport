@@ -32,11 +32,12 @@
 // rec_super_call) is the safety net. NO GTE.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -49,7 +50,7 @@ constexpr uint32_t BEH_FN = 0x80134FD8u;
 // COMMON TAIL (0x801353C8): node[8]++ / FUN_800517F8(node) / node[8]--.
 static inline void common_tail(Core* c, uint32_t nd) {
   c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) + 1));
-  c->r[4] = nd; c->engine.graphicsBind.renderUpdate();
+  c->r[4] = nd; eng(c).graphicsBind.renderUpdate();
   c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
 }
 
@@ -62,7 +63,7 @@ void beh_multi_record_phase_machine(Core* c) {
   if (st == 1) goto S1;
   if ((int32_t)st < 2) { if (st == 0) goto S0; goto Lret; }
   if (st == 2) goto Lret;
-  if (st == 3) { c->engine.spawn.despawn(nd); goto Lret; }
+  if (st == 3) { eng(c).spawn.despawn(nd); goto Lret; }
   goto Lret;
 
  // ================= OUTER STATE 0 (INIT) =================
@@ -79,7 +80,7 @@ void beh_multi_record_phase_machine(Core* c) {
      uint32_t s3 = 0x8014a758u;                             // tbl base
      int i = 0;
      do {
-       c->engine.graphicsBind.recordAlloc();                        // FUN_8007AAE8() -> v0 (a0 carried)
+       eng(c).graphicsBind.recordAlloc();                        // FUN_8007AAE8() -> v0 (a0 carried)
        uint32_t rec = c->r[2];
        c->mem_w32(s0 + 0xc0, rec);
        c->mem_w16(rec + 6, (uint16_t)(int16_t)(i - 1));
@@ -89,7 +90,7 @@ void beh_multi_record_phase_machine(Core* c) {
        c->mem_w16(rec + 10, 0);
        c->mem_w16(rec + 12, 0);
        s3 += 2;
-       c->engine.graphicsBind.installSceneRecord(rec, 12, (uint32_t)(i + 52));         // FUN_80051B04 (native)
+       eng(c).graphicsBind.installSceneRecord(rec, 12, (uint32_t)(i + 52));         // FUN_80051B04 (native)
        i += 1;
        s0 += 4;
      } while ((int32_t)i < (int32_t)c->mem_r8(nd + 8));
@@ -143,7 +144,7 @@ void beh_multi_record_phase_machine(Core* c) {
    }
    // common cascade (0x80135238): node[8]++/FUN_800517F8/node[8]--, then 6x FUN_801252C0 + FUN_8004CC64
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) + 1));
-   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();
+   c->r[4] = nd; eng(c).graphicsBind.renderUpdate();
    c->mem_w8(nd + 8, (uint8_t)(c->mem_r8(nd + 8) - 1));
    uint32_t a3;
    a3 = guest_leaf(c, 0x801252c0u, nd, 1, 0);
@@ -170,7 +171,7 @@ void beh_multi_record_phase_machine(Core* c) {
    }
    if (to354) {
      c->mem_w8(nd + 1, (uint8_t)st);               // node[1] = s0 = 1
-     c->engine.cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
+     eng(c).cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
    } else {
      guest_leaf(c, 0x800779d0u, nd, 0, (uint32_t)(int32_t)-400, 600);  // FUN_800779D0(node,0,-400,600)
    }
@@ -185,7 +186,7 @@ void beh_multi_record_phase_machine(Core* c) {
    bool to394 = (m == 37) || ((uint32_t)(m - 14) < 6);
    if (to394) {
      c->mem_w8(nd + 1, (uint8_t)st);               // node[1] = 1
-     c->engine.cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
+     eng(c).cull.enqueueVisibleClass4(nd);         // FUN_80077EBC — Cull::enqueueVisibleClass4
    } else {
      guest_leaf(c, 0x8007778cu, nd);                // FUN_8007778C(node)
    }

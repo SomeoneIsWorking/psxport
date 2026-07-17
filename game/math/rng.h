@@ -1,7 +1,7 @@
 // class Rng — the PC-native LFSR pseudo-random number generator (guest FUN_8009A450).
 //
 // PROPER OOP: one instance per Core (embedded as `Core::rng`), back-pointer to Core wired in
-// Core::Core(). Callers use it as `c->rng.next()`. No `extern "C"` shim.
+// Core::Core(). Callers use it as `rngOf(c).next()`. No `extern "C"` shim.
 //
 // The seed lives in guest memory at 0x80105EE8 (MAIN.EXE .bss, same location the substrate uses)
 // so the RNG stream is SHARED with any still-substrate caller — no divergence between the two

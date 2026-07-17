@@ -27,13 +27,14 @@
 // RAM+scratchpad A/B vs rec_super_call).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::enqueueQueueC (FUN_80077EFC)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -67,7 +68,7 @@ void state1_gate(Core* c, uint32_t obj) {
   } else {
     submit = (Actor(c, obj).boundsCull() == 0);       // 0x8004c368 cull; skip submit if VISIBLE — Actor::boundsCull (native)
   }
-  if (submit) c->engine.cull.enqueueQueueC(obj);   // 0x8004c378 — FUN_80077EFC (native)
+  if (submit) eng(c).cull.enqueueQueueC(obj);   // 0x8004c378 — FUN_80077EFC (native)
 }
 
 }  // namespace
@@ -82,7 +83,7 @@ void beh_visibility_gate_dispatch(Core* c) {
     if (st == 2) goto state2;                          // 0x8004c274
     if (st == 3) {                                     // 0x8004c27c
       // ---- STATE 3 (despawn) @0x8004c918 ----
-      c->engine.spawn.despawn(obj);
+      eng(c).spawn.despawn(obj);
       return;                                          // -> EPI
     }
     return;                                            // 0x8004c284: default -> EPI
@@ -225,14 +226,14 @@ state2:
       switch (n3) {                                    // JT-C
         case 0:  c->r[4]=obj; c->r[5]=1;      rec_dispatch(c, 0x80049E54u); check_ret=true;  break; // c7a8
         case 1:  c->r[4]=obj; c->r[5]=2;      rec_dispatch(c, 0x80049E54u); check_ret=true;  break; // c7bc
-        case 4:  c->engine.spawn.dropScoreGem(obj, 100);    check_ret=false; break; // c7d0 FUN_8004B3F4 (native)
-        case 5:  c->engine.spawn.dropScoreGem(obj, 200);    check_ret=false; break; // c7e4
-        case 6:  c->engine.spawn.dropScoreGem(obj, 500);    check_ret=false; break; // c7f8
-        case 7:  c->engine.spawn.dropScoreGem(obj, 1000);   check_ret=false; break; // c80c
-        case 8:  c->engine.spawn.dropScoreGem(obj, 5000);   check_ret=false; break; // c820
-        case 9:  c->engine.spawn.dropScoreGem(obj, 10000);  check_ret=false; break; // c834
-        case 10: c->engine.spawn.dropScoreGem(obj, 20000);  check_ret=false; break; // c848
-        case 11: c->engine.spawn.dropScoreGem(obj, 100000); check_ret=false; break; // c85c FUN_8004B3F4 (native)
+        case 4:  eng(c).spawn.dropScoreGem(obj, 100);    check_ret=false; break; // c7d0 FUN_8004B3F4 (native)
+        case 5:  eng(c).spawn.dropScoreGem(obj, 200);    check_ret=false; break; // c7e4
+        case 6:  eng(c).spawn.dropScoreGem(obj, 500);    check_ret=false; break; // c7f8
+        case 7:  eng(c).spawn.dropScoreGem(obj, 1000);   check_ret=false; break; // c80c
+        case 8:  eng(c).spawn.dropScoreGem(obj, 5000);   check_ret=false; break; // c820
+        case 9:  eng(c).spawn.dropScoreGem(obj, 10000);  check_ret=false; break; // c834
+        case 10: eng(c).spawn.dropScoreGem(obj, 20000);  check_ret=false; break; // c848
+        case 11: eng(c).spawn.dropScoreGem(obj, 100000); check_ret=false; break; // c85c FUN_8004B3F4 (native)
         case 15: c->r[4]=obj;                 rec_dispatch(c, 0x8004A118u); check_ret=true;  break; // c874
         case 16: c->r[4]=obj;                 rec_dispatch(c, 0x8004A2A0u); check_ret=true;  break; // c884
         case 17: c->r[4]=obj;                 rec_dispatch(c, 0x8004B428u); check_ret=true;  break; // c894

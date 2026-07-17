@@ -29,10 +29,11 @@
 // (leaves).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
-#include "core/engine.h"          // c->engine.spawn
-#include "render/render.h"        // c->mRender->mNodeXform.buildWithOffset (FUN_800518FC)
-#include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
+#include "core/engine.h"          // eng(c).spawn
+#include "render/render.h"        // rend(c)->mNodeXform.buildWithOffset (FUN_800518FC)
+#include "spawn.h"                 // eng(c).spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
@@ -63,8 +64,8 @@ inline void anim_env_setup(Core* c, uint32_t obj) {
   c->r[4] = obj; c->r[5] = ANIM_ENV_PTR; c->r[6] = 0;
   rec_dispatch(c, 0x80077C40u);
 }
-inline void anim_graphics_tick(Core* c, uint32_t o) { (void)c->engine.animTick(o); }                              // native FUN_8004190C
-inline void post_cull_update  (Core* c, uint32_t o) { c->mRender->mNodeXform.buildWithOffset(o); }                // native FUN_800518FC (NodeXform::buildWithOffset)
+inline void anim_graphics_tick(Core* c, uint32_t o) { (void)eng(c).animTick(o); }                              // native FUN_8004190C
+inline void post_cull_update  (Core* c, uint32_t o) { rend(c)->mNodeXform.buildWithOffset(o); }                // native FUN_800518FC (NodeXform::buildWithOffset)
 inline void bounds_cull       (Core* c, uint32_t o) { c->r[4] = o; rec_dispatch(c, 0x8007778Cu); }
 
 // Spawn a narration prop at (X, Y, Z+0x76C). FUN_8003116C(a0=type, a1=spawn-arg-block-ptr, a2=0) —
@@ -134,6 +135,6 @@ void beh_sop_intro_narration(Core* c) {
   const uint8_t  st  = c->mem_r8(obj + 4);
   if (st == 1)      state_running(c, obj);
   else if (st == 0) state_init   (c, obj);
-  else if (st == 2 || st == 3) c->engine.spawn.despawn(obj);   // recomp: bVar1 < 4
+  else if (st == 2 || st == 3) eng(c).spawn.despawn(obj);   // recomp: bVar1 < 4
   // else: no-op
 }

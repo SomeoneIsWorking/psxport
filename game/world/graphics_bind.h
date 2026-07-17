@@ -3,12 +3,12 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::graphicsBind`. Back-pointer
 // wired once by Core's constructor. Callers reach the bind cluster through the object graph:
 //
-//     c->engine.graphicsBind.recordAlloc();       // FUN_8007AAE8 — record bump allocator
-//     c->engine.graphicsBind.recordInit();        // FUN_80051B70 — per-object record init
-//     c->engine.graphicsBind.renderUpdate();      // FUN_800517F8 — per-object render-state update
-//     c->engine.graphicsBind.setGeom();           // FUN_80077B38 — set geom-block ptr
-//     c->engine.graphicsBind.setXformBlk();       // FUN_8006CBD0 — copy xform block to scratchpad
-//     c->engine.graphicsBind.posCompose();        // FUN_8004BD64 — position-compose + refresh
+//     eng(c).graphicsBind.recordAlloc();       // FUN_8007AAE8 — record bump allocator
+//     eng(c).graphicsBind.recordInit();        // FUN_80051B70 — per-object record init
+//     eng(c).graphicsBind.renderUpdate();      // FUN_800517F8 — per-object render-state update
+//     eng(c).graphicsBind.setGeom();           // FUN_80077B38 — set geom-block ptr
+//     eng(c).graphicsBind.setXformBlk();       // FUN_8006CBD0 — copy xform block to scratchpad
+//     eng(c).graphicsBind.posCompose();        // FUN_8004BD64 — position-compose + refresh
 //
 // The bridge between a world entity and the data the renderer consumes. Underlying guest bodies
 // stay as reference / super-call for the byte-A/B verify gates.

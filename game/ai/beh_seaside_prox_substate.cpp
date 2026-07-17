@@ -49,11 +49,12 @@
 // Ghidra decomp: scratch/decomp/beh_seaside_cluster.c, scratch/decomp/beh_seaside_helpers.c.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
-#include "core/engine.h"          // c->engine.spawn
-#include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
+#include "core/engine.h"          // eng(c).spawn
+#include "spawn.h"                 // eng(c).spawn.despawn (FUN_8007A624, native)
 #include "math/trig.h"             // Trig::ratan2 / Trig::angleCmp (FUN_80085690 / FUN_80077768, native)
-#include "audio/sfx.h"             // c->engine.sfx.trigger (FUN_80074590, native)
+#include "audio/sfx.h"             // eng(c).sfx.trigger (FUN_80074590, native)
 void rec_dispatch(Core*, uint32_t);
 
 namespace {
@@ -219,10 +220,10 @@ void subA(Core* c, uint32_t obj) {
       c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
       int32_t dy = -(int32_t)(int16_t)(c->mem_r16(obj + 0x36) - c->mem_r16(G_eb4 + 2));
       int32_t dx =  (int32_t)(int16_t)(c->mem_r16(obj + 0x2E) - c->mem_r16(G_eac + 2));
-      int32_t ang = c->trig.ratan2(dy, dx);
+      int32_t ang = trigOf(c).ratan2(dy, dx);
       int32_t face = Trig::angleCmp((int16_t)ang, c->mem_r16s(obj + 0x60), 0);
       c->mem_w8(obj + 0x46, (uint8_t)face);
-      c->engine.sfx.trigger(0x17, -0x12, 0x1e);
+      eng(c).sfx.trigger(0x17, -0x12, 0x1e);
       return;   // matches the disas: this case returns, not break-to-common-tail
     }
     case 2: {
@@ -296,7 +297,7 @@ void subB(Core* c, uint32_t obj) {
       c->mem_w8(obj + 5, 1);
       int32_t dy = -(int32_t)(int16_t)(c->mem_r16(obj + 0x36) - (int16_t)(c->mem_r32(G_eb4) >> 16));
       int32_t dx =  (int32_t)(int16_t)(c->mem_r16(obj + 0x2E) - (int16_t)(c->mem_r32(G_eac) >> 16));
-      int32_t ang = c->trig.ratan2(dy, dx);
+      int32_t ang = trigOf(c).ratan2(dy, dx);
       int32_t face = Trig::angleCmp((int16_t)ang, c->mem_r16s(obj + 0x60), 0);
       c->mem_w8(obj + 0x46, (uint8_t)face);
       c->mem_w16(obj + 0x44, (face != 0) ? 0xf800 : 0x0800);
@@ -375,26 +376,26 @@ void subC(Core* c, uint32_t obj, uint32_t data) {
         uint32_t link1 = c->mem_r32(obj + 0xC0);
         c->r[4] = c->mem_r32(link1 + 0x40); c->r[5] = obj + 0x2C; c->r[6] = 0x800; c->r[7] = 8;
         rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);
+        eng(c).sfx.trigger(0xc, 0, 0);
         c->r[4] = c->mem_r32(link1 + 0x40); c->r[5] = obj + 0x2C; c->r[6] = 0x600; c->r[7] = 0x18;
         rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);
+        eng(c).sfx.trigger(0xc, 0, 0);
 
         uint32_t link2 = c->mem_r32(obj + 0xC4);
         c->r[4] = c->mem_r32(link2 + 0x40); c->r[5] = obj + 0x2C; c->r[6] = 0x800; c->r[7] = 8;
         rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);
+        eng(c).sfx.trigger(0xc, 0, 0);
         c->r[4] = c->mem_r32(link2 + 0x40); c->r[5] = obj + 0x2C; c->r[6] = 0x600; c->r[7] = 0x18;
         rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);
+        eng(c).sfx.trigger(0xc, 0, 0);
 
         uint32_t link3 = c->mem_r32(obj + 0xC8);
         c->r[4] = c->mem_r32(link3 + 0x40); c->r[5] = obj + 0x2C; c->r[6] = 0x800; c->r[7] = 8;
         rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);
+        eng(c).sfx.trigger(0xc, 0, 0);
         c->r[4] = c->mem_r32(link3 + 0x40); c->r[5] = obj + 0x2C; c->r[6] = 0x600; c->r[7] = 0x18;
         rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);
+        eng(c).sfx.trigger(0xc, 0, 0);
       } else {
         uint32_t link1 = c->mem_r32(obj + 0xC0);
         c->mem_w16(link1 + 2, (uint16_t)((c->mem_r8(0x1F80017Cu) & 1) * 6));
@@ -469,7 +470,7 @@ void beh_seaside_prox_substate_body(Core* c) {
   const uint8_t  st  = c->mem_r8(obj + 4);
   if (st == 1)      state_running(c, obj);
   else if (st == 0) state_init   (c, obj);
-  else if (st == 3) c->engine.spawn.despawn(obj);
+  else if (st == 3) eng(c).spawn.despawn(obj);
   // else: no-op (matches recomp's `bVar1 != 2 && bVar1 == 3` guard)
 }
 

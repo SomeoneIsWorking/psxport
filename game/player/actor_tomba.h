@@ -10,9 +10,9 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::actorTomba`. Back-pointer wired
 // once by Core's constructor. Callers reach Tomba's methods through the object graph:
 //
-//     c->engine.actorTomba.interactWalk();          // per-frame aux-item interaction loop
-//     c->engine.actorTomba.growthStep(mode);        // grow (1) / shrink (0) transformation
-//     c->engine.actorTomba.velocityIntegrate(suppressY);  // move via dir*speed at G+0x44/48/4A/4C
+//     eng(c).actorTomba.interactWalk();          // per-frame aux-item interaction loop
+//     eng(c).actorTomba.growthStep(mode);        // grow (1) / shrink (0) transformation
+//     eng(c).actorTomba.velocityIntegrate(suppressY);  // move via dir*speed at G+0x44/48/4A/4C
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as
 // SceneTransition, Sop, ObjectList, ParallaxBg, ScreenFade.

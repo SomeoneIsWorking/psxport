@@ -35,17 +35,18 @@
 // + verifiable via the A/B gate the moment a transition is triggered. Byte-exact gate is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::enqueueQueueA (FUN_80077E7C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"    // class Trig — libgte ratan2
 #include "camera/cutscene_camera.h"   // CutsceneCamera::runInitSeedGrp (was rec_dispatch 0x8006CBA8)
-#include "render/render.h"   // c->mRender->mNodeXform (was rec_dispatch 0x80051844)
+#include "render/render.h"   // rend(c)->mNodeXform (was rec_dispatch 0x80051844)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -65,9 +66,9 @@ constexpr uint32_t G_806c = 0x800E806Cu, G_8074 = 0x800E8074u, G_8076 = 0x800E80
 static inline int16_t s16(Core* c, uint32_t a) { return c->mem_r16s(a); }
 
 static void cd0_tail(Core* c, uint32_t nd) {           // @0x80127cd0
-  c->mRender->mNodeXform.build(nd);                              // was rec_dispatch 0x80051844
+  rend(c)->mNodeXform.build(nd);                              // was rec_dispatch 0x80051844
   c->mem_w8(nd + 1, 1);
-  c->engine.cull.enqueueQueueA(nd);                    // FUN_80077E7C (native; return ignored)
+  eng(c).cull.enqueueQueueA(nd);                    // FUN_80077E7C (native; return ignored)
 }
 
 static void dat_tail(Core* c, uint32_t nd) {           // @0x80127c9c (sub==3 only)
@@ -79,7 +80,7 @@ static void dat_tail(Core* c, uint32_t nd) {           // @0x80127c9c (sub==3 on
   c->mem_w32(fsp + 0x10, 0x1F8000C0u);                 // FUN_8004bd64's 5th arg, stacked at sp+0x10
   c->r[4] = nd; c->r[5] = 0; c->r[6] = a2; c->r[7] = a2;
   uint32_t save = c->r[29]; c->r[29] = fsp;
-  c->engine.graphicsBind.posCompose();                               // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
+  eng(c).graphicsBind.posCompose();                               // FUN_8004bd64(node,0,*0x800e7f5c,same,&0x1f8000c0)
   c->r[29] = save;
   CutsceneCamera(c, CutsceneCamera::CAM_OBJ).initSeedGrp(G_eac);   // FUN_8006cba8(&DAT_800e7eac) — native
 }
@@ -91,7 +92,7 @@ static void node6_phase(Core* c, uint32_t nd) {
     case 0:                                            // @0x801279b8 — start fade
       c->r[4] = 1; c->r[5] = 1; rec_dispatch(c, 0x80042354u);   // FUN_80042354(1,1)
       c->mem_w8(0x800BF9B5u, 3);                       // (v0=3 from the call's delay-slot store)
-      c->engine.sceneEvents.arm(0x42);                 // area-transition event; FUN_80040B48 (native)
+      eng(c).sceneEvents.arm(0x42);                 // area-transition event; FUN_80040B48 (native)
       c->mem_w8(nd + 6, (uint8_t)(c->mem_r8(nd + 6) + 1));
       break;
     case 1:                                            // @0x801279e4 — wait for DAT_800e7ea9
@@ -109,14 +110,14 @@ static void node6_phase(Core* c, uint32_t nd) {
       c->mem_w8(G_e86, 0);
       c->mem_w8(G_ea9, 0);
       c->mem_w8(G_fc7, 1);
-      c->engine.sceneTransition.clearSwapBlock(G);     // FUN_80054198 (native)
+      eng(c).sceneTransition.clearSwapBlock(G);     // FUN_80054198 (native)
       c->r[4] = G; c->r[5] = 0x71; c->r[6] = 8; rec_dispatch(c, 0x80054D14u);  // FUN_80054d14(&DAT_800e7e80,0x71,8)
       // --- camera-transition setup (reachable; Ghidra's "noreturn" on FUN_80054d14 was wrong) ---
       c->mem_w8(nd + 6, (uint8_t)(c->mem_r8(nd + 6) + 1));
       int s2 = (int16_t)(8268  - c->mem_r16(G_eb6));   // (int16)(0x204c - hi(eb4))
       int s0 = (int16_t)(18867 - c->mem_r16(G_eae));   // (int16)(0x49b3 - hi(eac))
       int s1 = (int)(-1388 - (int)c->mem_r16(G_eb2));  // -1388 - mem16(eb2) (NOT yet 16-bit-clamped)
-      uint32_t ang = (uint32_t)c->trig.ratan2(-s2, s0);   // FUN_80085690(-s2, s0) -> angle
+      uint32_t ang = (uint32_t)trigOf(c).ratan2(-s2, s0);   // FUN_80085690(-s2, s0) -> angle
       int s0d = (s0 << 8) / 64;                         // <<8 then signed /64 (truncate toward 0)
       int s1d = ((int16_t)s1 << 8) / 64;               // (s1<<16>>8)/64 == ((int16)s1<<8)/64
       int s2d = (s2 << 8) / 64;
@@ -130,7 +131,7 @@ static void node6_phase(Core* c, uint32_t nd) {
       c->mem_w8 (G_806c, 1);                            // s3 = 1
       c->mem_w16(G_8078, 0);
       c->mem_w16(G_8074, (uint16_t)(int16_t)-1400);
-      c->engine.sfx.trigger(0x25, 0, 0);       // FUN_80074590 (native)
+      eng(c).sfx.trigger(0x25, 0, 0);       // FUN_80074590 (native)
       break;
     }
     case 3: {                                          // @0x80127ba0 — integrate camera deltas
@@ -176,7 +177,7 @@ void beh_area_transition_machine(Core* c) {
     uint32_t d = (uint32_t)(c->mem_r8(0x1F800207u) - 29);          // scratchpad[0x207]
     if (d >= 3 && c->mem_r8(0x800BF9B5u) != 1) return;             // !((v-29)<3) && mem8(0x800bf9b5)!=1
     if (Actor(c, nd).boundsCull() == 0) return;                    // FUN_8007778C gate — Actor::boundsCull (native)
-    c->mRender->mNodeXform.build(nd);                                        // was rec_dispatch 0x80051844
+    rend(c)->mNodeXform.build(nd);                                        // was rec_dispatch 0x80051844
     return;
   }
   if (st >= 2) {
@@ -203,14 +204,14 @@ void beh_area_transition_machine(Core* c) {
       cd0_tail(c, nd);
       return;
     }
-    if (st == 3) { c->engine.spawn.despawn(nd); }   // STATE 3
+    if (st == 3) { eng(c).spawn.despawn(nd); }   // STATE 3
     return;
   }
   if (st != 0) return;
 
   // ---------- STATE 0 (init) ----------
   c->r[4] = nd; c->r[5] = 0xc; c->r[6] = 0x52;
-  c->engine.graphicsBind.recordInit();                        // FUN_80051b70(node, 0xc, 0x52)
+  eng(c).graphicsBind.recordInit();                        // FUN_80051b70(node, 0xc, 0x52)
   if (c->r[2] != 0) return;
   c->mem_w16(nd + 0x2e, 0x4f00);
   c->mem_w16(nd + 0x32, 0xed5e);

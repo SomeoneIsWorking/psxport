@@ -22,12 +22,13 @@
 // behavior gate (below) compares only RAM+scratchpad — matching the sibling objbeh gates.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/render.h"       // Core::mRender (NodeXform)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -51,10 +52,10 @@ void beh_area_event_dispatch(Core* c) {
       break;
     case 1:
       c->r[4] = obj; rec_dispatch(c, 0x80071768u);
-      if (c->mem_r8(obj + 1) != 0) c->mRender->mNodeXform.buildWithOffset(obj);   // FUN_800518FC (native)
+      if (c->mem_r8(obj + 1) != 0) rend(c)->mNodeXform.buildWithOffset(obj);   // FUN_800518FC (native)
       break;
     case 3:
-      c->engine.spawn.despawn(obj);
+      eng(c).spawn.despawn(obj);
       break;
     default:  // state 2 and any other: no-op
       break;

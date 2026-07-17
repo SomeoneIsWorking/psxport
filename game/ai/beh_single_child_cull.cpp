@@ -19,11 +19,12 @@
 // rec_super_call) is the safety net. NO GTE.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -42,12 +43,12 @@ void beh_single_child_cull(Core* c) {
   if (st == 1) goto S1;
   if ((int32_t)st < 2) { if (st == 0) goto S0; goto Lret; }
   if (st == 2) goto Lret;
-  if (st == 3) { c->engine.spawn.despawn(nd); goto Lret; }
+  if (st == 3) { eng(c).spawn.despawn(nd); goto Lret; }
   goto Lret;
 
  // ================= STATE 0 (INIT) =================
  S0: {
-   c->r[4] = nd; c->r[5] = 12; c->r[6] = 37; c->engine.graphicsBind.recordInit();   // FUN_80051B70(node,12,37) -> bail if !=0
+   c->r[4] = nd; c->r[5] = 12; c->r[6] = 37; eng(c).graphicsBind.recordInit();   // FUN_80051B70(node,12,37) -> bail if !=0
    if (c->r[2] != 0) goto Lret;
    c->mem_w16(nd + 0x80, 30);
    c->mem_w16(nd + 0x82, 60);
@@ -76,7 +77,7 @@ void beh_single_child_cull(Core* c) {
    if (work) {
      if (guest_leaf(c, 0x8007778cu, nd) != 0) {     // FUN_8007778C(node)
        guest_leaf(c, 0x80132020u, nd);              // FUN_80132020(node)
-       c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                  // FUN_800517F8(node)
+       c->r[4] = nd; eng(c).graphicsBind.renderUpdate();                  // FUN_800517F8(node)
      }
    }
    c->mem_w8(nd + 0x2b, 0);                         // node[0x2B] = 0 (every STATE-1 path)

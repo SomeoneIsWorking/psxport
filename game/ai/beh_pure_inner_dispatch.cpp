@@ -15,12 +15,13 @@
 // rec_super_call) only confirms the routing chose the same leaves in the same order.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -41,7 +42,7 @@ void beh_pure_inner_dispatch(Core* c) {
   if (st == 3) goto Lef0;
   goto Lret;                                       // st >= 4 default
 
- Lef0:  c->engine.spawn.despawn(obj); goto Lret;      // STATE 3
+ Lef0:  eng(c).spawn.despawn(obj); goto Lret;      // STATE 3
  Ldf0:  guest_leaf(c, 0x80136F08u, obj); goto Lret;   // STATE 0
 
  Le00:                                             // STATE 1

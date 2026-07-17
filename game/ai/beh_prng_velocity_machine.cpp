@@ -22,13 +22,14 @@
 // byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net. NO GTE/render.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
-#include "inventory.h"       // class Inventory — c->inventory.give (FUN_8004D4F4)
+#include "inventory.h"       // class Inventory — inv(c).give (FUN_8004D4F4)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -73,7 +74,7 @@ void beh_prng_velocity_machine(Core* c) {
    c->mem_w8(s1 + 0x0d, 0);
    uint32_t t = c->mem_r32(0x800ecf80u);
    c->mem_w32(s1 + 0x3c, t);                      // node[0x3c] = mem[0x800ecf80] (jal delay slot)
-   c->r[4] = s1; c->r[5] = 0x8014c808u; c->r[6] = 1; c->engine.graphicsBind.setGeom();   // FUN_80077B38(node, 0x8014C808, 1) — native (recomp: lui 0x8015 + addiu -14328 = 0x8014C808)
+   c->r[4] = s1; c->r[5] = 0x8014c808u; c->r[6] = 1; eng(c).graphicsBind.setGeom();   // FUN_80077B38(node, 0x8014C808, 1) — native (recomp: lui 0x8015 + addiu -14328 = 0x8014C808)
    c->mem_w32(s1 + 0x2c, 0x13d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
    c->mem_w32(s1 + 0x30, 0xf7e00000u);
@@ -95,7 +96,7 @@ void beh_prng_velocity_machine(Core* c) {
  L7788: {                                         // node[3]==1
    c->mem_w8(s1 + 0, 4);
    c->mem_w8(s1 + 0x5e, 0);                       // node[0x5e]=0 (jal delay slot, before callee)
-   c->r[4] = s1; c->r[5] = 1; c->r[6] = 0; c->engine.graphicsBind.recordInit(); uint32_t r = c->r[2];  // FUN_80051B70(node, 1, 0)
+   c->r[4] = s1; c->r[5] = 1; c->r[6] = 0; eng(c).graphicsBind.recordInit(); uint32_t r = c->r[2];  // FUN_80051B70(node, 1, 0)
    if (r != 0) goto Lret;
    c->mem_w32(s1 + 0x2c, 0x28d20000u);
    uint16_t v1 = c->mem_r16(s1 + 0x2e);
@@ -278,7 +279,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto L7b84;
  }
  L7b84: {
-   c->r[4] = s1; c->engine.graphicsBind.renderUpdate();            // FUN_800517F8(node) — native
+   c->r[4] = s1; eng(c).graphicsBind.renderUpdate();            // FUN_800517F8(node) — native
    call2(c, s1, 1, 0x8004b374u);                     // FUN_8004B374(node, 1)
    goto Lret;
  }
@@ -291,7 +292,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto Lret;
  }
  L7bc0: {                                          // node[3]==0
-   c->inventory.giveAndFlag(58, 1);                  // FUN_8004D4C4(58, 1) [native]
+   inv(c).giveAndFlag(58, 1);                  // FUN_8004D4C4(58, 1) [native]
    call1(c, s1, 0x8004b0d8u);                        // FUN_8004B0D8(node)
    c->mem_w8(s1 + 4, 3);                             // node[4]=3
    goto Lret;
@@ -318,7 +319,7 @@ void beh_prng_velocity_machine(Core* c) {
    goto Lret;
  }
  L7c10: {                                          // node[5]==0
-   c->inventory.give(40, 1);                         // FUN_8004D4F4(40, 1) [native]
+   inv(c).give(40, 1);                         // FUN_8004D4F4(40, 1) [native]
    call2(c, 45, 66, 0x8004ed94u);                    // FUN_8004ED94(45, 66)
    call1(c, s1, 0x8004b0d8u);                        // FUN_8004B0D8(node)
    uint32_t r = call3(c, s1, 0, 0, 0x8004bd04u);     // FUN_8004BD04(node, 0, 0)
@@ -346,7 +347,7 @@ void beh_prng_velocity_machine(Core* c) {
 
  // ---------------------------------------------------------------- STATE 3
  L7cd8: {
-   c->engine.spawn.despawn(s1);                             // FUN_8007A624(node) — native
+   eng(c).spawn.despawn(s1);                             // FUN_8007A624(node) — native
    goto Lret;
  }
 

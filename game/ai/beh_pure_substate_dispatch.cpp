@@ -17,11 +17,12 @@
 // rec_super_call) is the safety net. NO GTE/render.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -39,7 +40,7 @@ void beh_pure_substate_dispatch(Core* c) {
   if (s0 == 1) goto S1;
   if ((int32_t)s0 < 2) { if (s0 == 0) { guest_leaf(c, 0x801253E8u, s1); } goto Lret; }  // STATE 0
   if (s0 == 2) goto S2;
-  if (s0 == 3) { c->engine.spawn.despawn(s1); goto Lret; }   // STATE 3
+  if (s0 == 3) { eng(c).spawn.despawn(s1); goto Lret; }   // STATE 3
   goto Lret;                                        // s0 >= 4
 
  S1: {

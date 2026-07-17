@@ -23,11 +23,12 @@
 // are faithfully transcribed and verify when a scene drives them.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -46,7 +47,7 @@ void beh_substate_edge_orchestrator(Core* c) {
     if (st >= 2) {                                    // slti s0,2 / beqz [0x8012EB74..78]
       if (st == 2) return;                            // beq s0,2 -> epilogue   [0x8012EB94]
       if (st == 3) {                                  // beq s0,3 -> despawn     [0x8012EB9C]
-        c->engine.spawn.despawn(obj);  // FUN_8007a624           [0x8012ED68]
+        eng(c).spawn.despawn(obj);  // FUN_8007a624           [0x8012ED68]
       }
       return;                                         // other (>=2) -> epilogue [0x8012EBA4]
     }
@@ -60,7 +61,7 @@ void beh_substate_edge_orchestrator(Core* c) {
   c->r[4] = obj; rec_dispatch(c, 0x80130AC4u);        // FUN_80130ac4
   if (c->r[2] != 0) {                                 // beqz v0 -> 0x8012EBD8 [0x8012EBC4]
     c->mem_w8(obj + 1, st);                           // sb s0,1(s1): node[1] = state (==1) [0x8012EBCC]
-    c->engine.cull.enqueueVisibleClass4(obj);         // FUN_80077EBC — Cull::enqueueVisibleClass4  [0x8012EBD0]
+    eng(c).cull.enqueueVisibleClass4(obj);         // FUN_80077EBC — Cull::enqueueVisibleClass4  [0x8012EBD0]
   }
 
   uint8_t sub = c->mem_r8(obj + 5);                   // lbu v1,5(s1): node[5] [0x8012EBD8]

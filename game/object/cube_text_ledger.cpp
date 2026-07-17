@@ -2,6 +2,7 @@
 // and the WIRING note (2026-07-08: activateSlot/deactivateSlot/spawnPopup dual-wired, lookupCost
 // deliberately left unwired).
 #include "core.h"
+#include "game_ctx.h"
 #include "cube_text_ledger.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
 #include "core/engine.h"
@@ -63,7 +64,7 @@ void CubeTextLedger::deactivateSlot(Core* c) {
 
   c->mem_w8(SLOT_STATE_BASE + slot, 0xFF);
   c->mem_w16(DEACTIVATE_COUNT, (uint16_t)(c->mem_r16(DEACTIVATE_COUNT) + 1));
-  const uint32_t cost = c->engine.sceneEvents.classSize((uint8_t)slot, /*nibbleLo=*/true);
+  const uint32_t cost = eng(c).sceneEvents.classSize((uint8_t)slot, /*nibbleLo=*/true);
   c->mem_w32(RUNNING_COST, c->mem_r32(RUNNING_COST) + cost);
   appendLog(c, slot, 1);
   c->r[2] = 1;

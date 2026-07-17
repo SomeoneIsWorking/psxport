@@ -33,11 +33,12 @@
 // Ghidra decomp scratch/decomp/seaside_perframe_113c5c.c.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "behaviors.h"
 #include "core/engine.h"
 void rec_dispatch(Core*, uint32_t);
-#include "player/actor_tomba.h"                // c->engine.actorTomba.interactWalk (FUN_80022760)
+#include "player/actor_tomba.h"                // eng(c).actorTomba.interactWalk (FUN_80022760)
 
 namespace {
 
@@ -95,8 +96,8 @@ void Behaviors::areaSeasidePerframe(Core* c) {
   bool runMode2Tick = (mode == 2);
 
   if (defaultMode) {
-    c->engine.actorTomba.interactWalk();                   // native FUN_80022760 (Tomba interaction walk)
-    c->engine.actorTomba.postInteractWalk();               // native FUN_801130C4 (default-mode post-tick)
+    eng(c).actorTomba.interactWalk();                   // native FUN_80022760 (Tomba interaction walk)
+    eng(c).actorTomba.postInteractWalk();               // native FUN_801130C4 (default-mode post-tick)
     runMode2Tick = true;                                   // recomp falls through into `case 2`
   }
   if (runMode2Tick && c->mem_r16s(0x800E7FD8u) < 2) {
@@ -113,5 +114,5 @@ void Behaviors::areaSeasidePerframe(Core* c) {
   // Fixed post-update pair + Tomba post-frame tick.
   rec_dispatch(c, LEAF_POST_112C0C);
   rec_dispatch(c, LEAF_POST_112F14);
-  c->engine.actorTomba.postFrameWaterCheck();                        // native FUN_8010E904 (Tomba post-frame water/sea)
+  eng(c).actorTomba.postFrameWaterCheck();                        // native FUN_8010E904 (Tomba post-frame water/sea)
 }

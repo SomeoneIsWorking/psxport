@@ -27,13 +27,14 @@
 // Byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_set_geom
-#include "rng.h"       // class Rng (via c->rng.next())
+#include "rng.h"       // class Rng (via rngOf(c).next())
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -43,11 +44,11 @@ constexpr uint32_t BEH_FN = 0x8011C164u;
 
 static inline void     leaf1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); }
 static inline uint32_t leafr1(Core* c, uint32_t a0, uint32_t fn) { c->r[4] = a0; rec_dispatch(c, fn); return c->r[2]; }
-static inline uint32_t prng(Core* c) { return (uint32_t)c->rng.next(); }   // FUN_8009A450 -> class Rng
+static inline uint32_t prng(Core* c) { return (uint32_t)rngOf(c).next(); }   // FUN_8009A450 -> class Rng
 
 // FUN_80077b38(node, 0x8014c808, n)
 static inline void call_77b38(Core* c, uint32_t nd, uint32_t n) {
-  c->r[4] = nd; c->r[5] = 0x8014C808u; c->r[6] = n; c->engine.graphicsBind.setGeom();
+  c->r[4] = nd; c->r[5] = 0x8014C808u; c->r[6] = n; eng(c).graphicsBind.setGeom();
 }
 
 // STATE 1, cases 0 & 1 (identical): PRNG-driven substate machine on node[6]. Always ends node[0x29]=0.
@@ -108,7 +109,7 @@ void beh_typed_variant_router(Core* c) {
         uint32_t a2 = c->mem_r32(v1 + 0xdc);
         c->r[4] = nd; c->r[5] = 1; c->r[6] = a2; c->r[7] = a2;
         uint32_t save_sp = c->r[29]; c->r[29] = fsp;
-        c->engine.graphicsBind.posCompose();                                           // FUN_8004bd64
+        eng(c).graphicsBind.posCompose();                                           // FUN_8004bd64
         c->r[29] = save_sp;
         leaf1(c, nd, 0x80077B5Cu);                                       // FUN_80077b5c
         c->mem_w8(nd + 1, 1);
@@ -190,6 +191,6 @@ void beh_typed_variant_router(Core* c) {
   }
 
   if (st == 3) {
-    c->engine.spawn.despawn(nd);                                           // FUN_8007a624
+    eng(c).spawn.despawn(nd);                                           // FUN_8007a624
   }
 }

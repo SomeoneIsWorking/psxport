@@ -17,6 +17,7 @@
 //        above it, so FUN_8001cf2c itself is now just a 2-line hardware-retry wrapper.)
 
 #include "audio/audio_dispatch.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "core/engine.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
@@ -176,8 +177,8 @@ void AudioDispatch::publishStateFade(uint8_t idx) {
 }
 
 // eov_* wrappers — guest-ABI adapters (args in c->r[4], return in c->r[2]). One per leaf.
-static void eov_audioSelectStateRemap(Core* c) { c->engine.audioDispatch.selectStateRemap((uint8_t)c->r[4]); }
-static void eov_audioPublishStateFade(Core* c) { c->engine.audioDispatch.publishStateFade((uint8_t)c->r[4]); }
+static void eov_audioSelectStateRemap(Core* c) { eng(c).audioDispatch.selectStateRemap((uint8_t)c->r[4]); }
+static void eov_audioPublishStateFade(Core* c) { eng(c).audioDispatch.publishStateFade((uint8_t)c->r[4]); }
 
 void AudioDispatch::registerOverrides() {
   using overrides::install;

@@ -22,12 +22,13 @@
 // A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net. NO GTE.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -65,7 +66,7 @@ void beh_twin_record_steer(Core* c) {
   if (st == 1) goto S1;
   if ((int32_t)st < 2) { if (st == 0) goto S0; goto Lret; }
   if (st == 2) goto Lret;
-  if (st == 3) { c->engine.spawn.despawn(nd); goto Lret; }
+  if (st == 3) { eng(c).spawn.despawn(nd); goto Lret; }
   goto Lret;
 
  // ================= STATE 0 (INIT) =================
@@ -83,7 +84,7 @@ void beh_twin_record_steer(Core* c) {
    c->mem_w16(nd + 0x86, 70);
    c->r[4] = 2;                                     // mirror guest a0 for the first FUN_8007AAE8
    for (int iter = 0; iter < 2; iter++) {
-     c->engine.graphicsBind.recordAlloc();                  // FUN_8007AAE8() -> v0 (alloc); a0 carried from prior
+     eng(c).graphicsBind.recordAlloc();                  // FUN_8007AAE8() -> v0 (alloc); a0 carried from prior
      uint32_t rec = c->r[2];
      c->mem_w32(nd + 0xc0 + 4 * iter, rec);
      c->mem_w16(rec + 6, (uint16_t)(int16_t)(iter - 1));   // rec[6] = s1-1 (-1, then 0)
@@ -93,7 +94,7 @@ void beh_twin_record_steer(Core* c) {
      c->mem_w32(rec + 8, 0);
      c->mem_w32(rec + 12, 0);
      // FUN_80051B04(rec, 12, iter); leaves a0=rec for the next FUN_8007AAE8
-     c->engine.graphicsBind.installSceneRecord(rec, 12, (uint32_t)iter);                // FUN_80051B04 (native)
+     eng(c).graphicsBind.installSceneRecord(rec, 12, (uint32_t)iter);                // FUN_80051B04 (native)
    }
    goto Lret;
  }
@@ -124,7 +125,7 @@ void beh_twin_record_steer(Core* c) {
 
    if (c->mem_r8(0x800e7eaau) < 22) {
      if (Actor(c, nd).boundsCull() != 0) {             // FUN_8007778C — Actor::boundsCull
-       c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                   // FUN_800517F8(node)
+       c->r[4] = nd; eng(c).graphicsBind.renderUpdate();                   // FUN_800517F8(node)
      }
    }
    goto Lret;

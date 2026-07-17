@@ -26,6 +26,7 @@
 // fps60-lerped like every other world prim. Replaces the RenderObserver wrapper this address
 // carried (whose depth-tag behavior is preserved via withDepthTag below).
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "render.h"
 #include "render_internal.h"   // withDepthTag / cur_render_node
@@ -135,7 +136,7 @@ void textLabelBody(Core* c) {
             Render::WqRec w;
             w.node = node;
             w.seq = 0;
-            for (const Render::WqRec& p : c->mRender->mWqRecs) if (p.node == w.node) w.seq++;
+            for (const Render::WqRec& p : rend(c)->mWqRecs) if (p.node == w.node) w.seq++;
             for (int i = 0; i < 4; i++) { w.vx[i] = kGlyphX[i]; w.vy[i] = kGlyphY[i]; w.vz[i] = kGlyphZ; }
             float crF[3][3], tr[3];
             wq_read_matrix(c, cmd + 24u, crF, tr);
@@ -144,7 +145,7 @@ void textLabelBody(Core* c) {
               for (int i = 0; i < 4; i++) w.wCol[i] = col; }
             w.wUv0 = c->mem_r32(pk + 12u); w.wUv1 = c->mem_r32(pk + 20u);
             w.wUv2 = c->mem_r32(pk + 28u); w.wUv3 = c->mem_r32(pk + 36u);
-            c->mRender->mWqRecs.push_back(w);
+            rend(c)->mWqRecs.push_back(w);
           }
         }
       }
@@ -155,7 +156,7 @@ void textLabelBody(Core* c) {
   }
 }
 
-void ov_textLabelEmit(Core* c) { c->mRender->textLabelEmit(); }
+void ov_textLabelEmit(Core* c) { rend(c)->textLabelEmit(); }
 } // namespace
 
 void Render::textLabelEmit() {

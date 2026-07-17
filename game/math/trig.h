@@ -1,7 +1,7 @@
 // class Trig — PC-native libgte trig helpers (rsin, rcos, ratan2, angleCmp).
 //
 // PROPER OOP: instance subsystem, one per Core (embedded as `Core::trig`). Back-pointer wired in
-// Core::Core(). Callers reach the methods as `c->trig.rsin(angle)` — no Core* on the method
+// Core::Core(). Callers reach the methods as `trigOf(c).rsin(angle)` — no Core* on the method
 // surface; the class reads the guest sin/atan LUTs via `this->core`. Same shape as `Rng`. Was
 // previously a static-methods "library" (Trig::rsin(c, angle)); promoted per the class-instance
 // arc — instance-with-back-pointer replaces the `A::B(core, ...)` shape.

@@ -42,6 +42,7 @@
 // far above all pool/game data; a real divergence alters persistent state). v0 (the node ptr) is compared.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -231,7 +232,7 @@ uint32_t Spawn::spawnVariantNative(Core* c, uint32_t cls) {
 uint32_t Spawn::spawnAndInitBody(Core* c) {
   uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6];
   if (c->mem_r8(0x800E7E7Cu) < 7) return 0;
-  uint32_t node = c->engine.spawn.dispatch(/*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980 — native
+  uint32_t node = eng(c).spawn.dispatch(/*cls=*/0, /*type=*/6, /*list=*/1);   // FUN_8007A980 — native
   if (node == 0) return 0;
   if (a1 != 0) {
     c->mem_w16(node + 0x2c, c->mem_r16(a1 + 2));
@@ -573,7 +574,7 @@ extern void ov_a00_gen_8013A730(Core*);
 // FUN_80031558 — guest-ABI adapter (args in c->r[4]/c->r[5], return in c->r[2]).
 extern void gen_func_80031558(Core*);
 extern void shard_set_override(uint32_t, void (*)(Core*));
-static void eov_spawnEffectChild(Core* c) { c->r[2] = c->engine.spawn.spawnEffectChild(c->r[4], c->r[5]); }
+static void eov_spawnEffectChild(Core* c) { c->r[2] = eng(c).spawn.spawnEffectChild(c->r[4], c->r[5]); }
 
 void Spawn::registerTypedChildOverrides() {
   using overrides::install;

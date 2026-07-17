@@ -35,6 +35,7 @@
 // (Disasm: 0x8010633c addiu s2,zero,1 · 0x80106340 addiu s1,zero,2 · 0x80106344 addiu s3,zero,3.)
 
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry                         // Game::pc_skip — frame() case-0 fork
 #include "cfg.h"
@@ -234,11 +235,11 @@ uint32_t Demo::s3SubMachine() { Core* c = core;                 // FUN_80106AC4
         if (edges & 0x80u) {                                                // Up
           cmp = c->mem_r8(sm + 0x68);
         } else if (edges & 0x4008u) {                                       // Confirm
-          c->engine.sfx.trigger(0x11, 0, 0);
+          eng(c).sfx.trigger(0x11, 0, 0);
           result = 2;
           haveCmp = false;
         } else if (edges & 0x2000u) {                                       // Circle / back
-          c->engine.sfx.trigger(0x14, -9, 0);
+          eng(c).sfx.trigger(0x14, -9, 0);
           result = 3;
           haveCmp = false;
         } else {
@@ -246,7 +247,7 @@ uint32_t Demo::s3SubMachine() { Core* c = core;                 // FUN_80106AC4
         }
       }
       if (haveCmp) {
-        if (cmp != cursor) c->engine.sfx.trigger(0x15, 0, 0);               // cursor-move blip
+        if (cmp != cursor) eng(c).sfx.trigger(0x15, 0, 0);               // cursor-move blip
         c->mem_w8 (sm + 0x68, cursor);
         c->mem_w16(sm + 0x4a, 0);
       }
@@ -310,15 +311,15 @@ uint32_t Demo::s2SubMachine() { Core* c = core;
       uint16_t edges = c->mem_r16(0x800e7e68u);
       c->r[17] = c->r[0] + 1u;                                         // s1 = 1 (SFX callee spills it)
       if (edges & 0x20u) {                                             // Right -> select item 1 (Load Game)
-        if (c->mem_r8(sm + 0x68) != 1) { c->r[31] = 0x80106AA4u; c->engine.sfx.trigger(0x15, 0, 0); }
+        if (c->mem_r8(sm + 0x68) != 1) { c->r[31] = 0x80106AA4u; eng(c).sfx.trigger(0x15, 0, 0); }
         c->mem_w8 (sm + 0x68, 1);
         c->mem_w16(sm + 0x4a, 0);
       } else if (edges & 0x80u) {                                      // Left -> select item 0 (New Game)
-        if (c->mem_r8(sm + 0x68) != 0) { c->r[31] = 0x80106A78u; c->engine.sfx.trigger(0x15, 0, 0); }
+        if (c->mem_r8(sm + 0x68) != 0) { c->r[31] = 0x80106A78u; eng(c).sfx.trigger(0x15, 0, 0); }
         c->mem_w8 (sm + 0x68, 0);
         c->mem_w16(sm + 0x4a, 0);
       } else if (edges & 0x4008u) {                                    // Confirm -> launch selected
-        c->r[31] = 0x80106A44u; c->engine.sfx.trigger(0x11, 0, 0);
+        c->r[31] = 0x80106A44u; eng(c).sfx.trigger(0x11, 0, 0);
         result = 2;
       }
       // else: no relevant edge -> result stays 0, sm[0x4a] left set (re-enter next frame)
@@ -351,10 +352,10 @@ uint32_t Demo::s2SubMachine() { Core* c = core;
 // before this wiring pass (harmless, pre-existing, unrelated to this cluster). See docs/findings/ai.md.
 namespace {
 void ov_demoS3SubMachine(Core* c) {
-  c->r[2] = c->engine.demo.s3SubMachine();
+  c->r[2] = eng(c).demo.s3SubMachine();
 }
 void ov_demoS2SubMachine(Core* c) {
-  c->r[2] = c->engine.demo.s2SubMachine();
+  c->r[2] = eng(c).demo.s2SubMachine();
 }
 }  // namespace
 
@@ -602,12 +603,12 @@ void Demo::stageMain() { Core* c = core;
   uint32_t sm = c->mem_r32(0x1f800138u);
   c->mem_w16(sm + 0x48, 0);                    // sm[0x48] = 0 (start at substate 0)
   c->mem_w8 (sm + 0x6e, 0);                    // sm[0x6e] = 0
-  c->engine.modeStateArm.arm();                    // native — was rec_dispatch 0x8005082C(0,0,0)
+  eng(c).modeStateArm.arm();                    // native — was rec_dispatch 0x8005082C(0,0,0)
   // Slip #5: the DEMO loop body (recomp ov_demo_gen_801062E4:73) dispatches FUN_80044BD4 to spawn
   // the front-end task at 0x800CF858. Native replaces this by directly running Demo::stageMain +
   // per-frame substate dispatch instead of task-spawning — so the RNG advance from FUN_80044BD4
   // is skipped. Match it here.
-  (void)c->rng.next();
+  (void)rngOf(c).next();
 
   // SLIP #1 residual fix (docs/findings/sbs.md attack (a)): do NOT dispatch s0 here. The recomp coro
   // of 0x801062E4 spends its FRESH iteration running the prologue only (sets sm[0x48]=0), then yields
@@ -713,7 +714,7 @@ void Demo::s0PreYield() { Core* c = core;
 // Then the substrate falls through into state 1's body; native's normal frame() resumes with s1.
 void Demo::s0PostYield() { Core* c = core;
   rec_dispatch(c, 0x8007982Cu);
-  c->engine.pool.reset75240();
+  eng(c).pool.reset75240();
   c->r[4] = 1; rec_dispatch(c, 0x8001CF00u);
   cfg_logf("demo", "s0 post-yield: sm[0x48]=1, task-1 preload done "
            "(texgroup meta[0x800FB170]=%08X)", c->mem_r32(0x800fb170u));
@@ -724,7 +725,7 @@ void Demo::s0PostYield() { Core* c = core;
 // faithful pre-yield/post-yield task-1 split is a pending SBS-verified logic change (see demo.h).
 void Demo::s0Body() { Core* c = core;
   s0PreYield();
-  c->engine.asset.preloadTexgroup(0, 2);       // synchronous FUN_80044F58 (task-1 callback body)
+  eng(c).asset.preloadTexgroup(0, 2);       // synchronous FUN_80044F58 (task-1 callback body)
   c->mem_w8(0x1f80019bu, 1);                    // done_flag = 1 (as if task-1 signalled)
   s0PostYield();
 }
@@ -795,7 +796,7 @@ static void demo_tail_75a80_faithful(Core* c) {
   rec_dispatch(c, 0x80075a80u);
 }
 static void demo_tail_75a80(Core* c) {
-  (c->game && !c->game->pc_skip) ? demo_tail_75a80_faithful(c) : c->engine.areaSlots.updateTail();
+  (c->game && !c->game->pc_skip) ? demo_tail_75a80_faithful(c) : eng(c).areaSlots.updateTail();
 }
 static void demo_tail_rend(Core* c) { demo_tail_75a80(c); }
 static void demo_tail_cf2c(Core* c) {
@@ -844,7 +845,7 @@ static void demo_frame_s5(Core* c) {
     if (!c->game->sbs->skipRendezvousReached(c, task + 0xcu, 0x637Cu, "demo_start_game"))
       return;                                  // idle this frame — sm stays 5, retry next tick
   }
-  c->engine.startStage(2);                     // = FUN_80052078(2): load GAME overlay, restart task 0
+  eng(c).startStage(2);                     // = FUN_80052078(2): load GAME overlay, restart task 0
 }
 
 // Substate s4 (0x80106580) — LOAD GAME. The body runs the load sub-machine 0x8007bf20(0,0) then routes
@@ -1010,15 +1011,15 @@ static void demo_frame_s7(Core* c) {
     // finished) and take the guest's OTHER branch (the stamp store still fires, but the
     // counter-bump + FUN_8007fd54 dispatch is skipped entirely).
     c->game->pcSched.bd4Tail(sm, /*flag=*/2);
-    SV_CHECK(c, 0x800452C0u, c->engine.sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // = sync 0x800452c0; sets 1f80019b=1 (observable-gated)
+    SV_CHECK(c, 0x800452C0u, eng(c).sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // = sync 0x800452c0; sets 1f80019b=1 (observable-gated)
     // reinit subsystems (all SYNC; no incoming args / self-args)
-    c->engine.pool.init();       // 0x8007B18C — native (via LIVE gated entry)
-    c->engine.pool.resetControlBlock();           // 0x800796DC — native
-    c->engine.pool.seedAreaObjects();           // 0x800263E8 — native
-    c->engine.placement.placeAreaObjects();       // 0x80072A78 — native (field object-placement driver)
-    c->engine.pool.reset75240();           // 0x80075240 — native
-    c->engine.pool.setupViewScroll();           // 0x800783DC — native
-    c->engine.pool.finalViewInit();           // 0x80078610 — native
+    eng(c).pool.init();       // 0x8007B18C — native (via LIVE gated entry)
+    eng(c).pool.resetControlBlock();           // 0x800796DC — native
+    eng(c).pool.seedAreaObjects();           // 0x800263E8 — native
+    eng(c).placement.placeAreaObjects();       // 0x80072A78 — native (field object-placement driver)
+    eng(c).pool.reset75240();           // 0x80075240 — native
+    eng(c).pool.setupViewScroll();           // 0x800783DC — native
+    eng(c).pool.finalViewInit();           // 0x80078610 — native
     sm = c->mem_r32(SM_PTR);
     c->r[4] = c->mem_r8(sm + 0x6e); rec_dispatch(c, 0x80079464u);   // jal 0x80079464(sm[0x6e])
     c->mem_w8(0x1f80019au, 1);                                      // sb s1(=1),0x1f80019a

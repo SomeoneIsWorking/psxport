@@ -3,8 +3,8 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::sop`. Back-pointer wired once by
 // Core's constructor. Callers reach the SOP stage through the object graph:
 //
-//     c->engine.sop.fieldMode();     // per-frame outer state dispatcher (was ov_sop_field_mode)
-//     c->engine.sop.fieldUpdate();   // per-frame gameplay body        (was ov_sop_field_update)
+//     eng(c).sop.fieldMode();     // per-frame outer state dispatcher (was ov_sop_field_mode)
+//     eng(c).sop.fieldUpdate();   // per-frame gameplay body        (was ov_sop_field_update)
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as Demo,
 // ObjectList, SceneTransition, TransitionState3.

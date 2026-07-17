@@ -1,6 +1,6 @@
 // class MusicCoord — DIALOG ↔ INGAME-MUSIC coordination subsystem owned by Engine.
 //
-// PROPER OOP: one instance per Core, embedded on Engine (`c->engine.musicCoord`). Back-pointer
+// PROPER OOP: one instance per Core, embedded on Engine (`eng(c).musicCoord`). Back-pointer
 // `core` wired at Core construction time (same pattern as Font / Asset / Placement). Subsystem,
 // not a math library — MusicCoord owns the dialog-vs-music coordination behavior (which song-
 // index range means "a dialog is playing", how the looping area BGM ducks under it, the fade-in

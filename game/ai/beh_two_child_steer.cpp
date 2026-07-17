@@ -21,11 +21,12 @@
 // preserved. The byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net. NO GTE.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -44,7 +45,7 @@ void beh_two_child_steer(Core* c) {
   if (st == 1) goto L_e74;
   if ((int32_t)st < 2) { if (st == 0) goto S0; goto Lret; }
   if (st == 2) goto Lret;
-  if (st == 3) { c->engine.spawn.despawn(nd); goto Lret; }
+  if (st == 3) { eng(c).spawn.despawn(nd); goto Lret; }
   goto Lret;
 
  // ================= STATE 0 (INIT) =================
@@ -61,7 +62,7 @@ void beh_two_child_steer(Core* c) {
    uint32_t s0 = nd;
    int s2 = 0;
    do {
-     c->engine.graphicsBind.recordAlloc();                  // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
+     eng(c).graphicsBind.recordAlloc();                  // FUN_8007AAE8() -> v0 (alloc); a0 = guest a0
      uint32_t rec = c->r[2];
      s2 += 1;
      c->mem_w32(s0 + 0xc0, rec);
@@ -112,7 +113,7 @@ void beh_two_child_steer(Core* c) {
    if (guest_leaf(c, 0x800778e4u, nd, a1) == 0) goto Lret;   // FUN_800778E4(node, a1)
    uint32_t rc1 = c->mem_r32(nd + 0xc4);
    c->mem_w16(rc1 + 10, (uint16_t)((c->mem_r16(rc1 + 10) - 32) & 0x0fff));
-   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                        // FUN_800517F8(node)
+   c->r[4] = nd; eng(c).graphicsBind.renderUpdate();                        // FUN_800517F8(node)
    goto Lret;
  }
 

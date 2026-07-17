@@ -33,13 +33,14 @@
 // PC calls PC directly for both (no rec_dispatch indirection) now that they're native.
 
 #include "core.h"
-#include "mathlib.h"    // class Bit (c->engine.bit.testFE48 / setFE34)
+#include "game_ctx.h"
+#include "mathlib.h"    // class Bit (eng(c).bit.testFE48 / setFE34)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "graphics_bind.h"   // ov_record_alloc_g (FUN_8007AAE8)
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -64,7 +65,7 @@ void beh_pad_child_linker(Core* c) {
   goto L9ac;                                           // default (state > 3)
 
  L9a4:                                          // STATE 3 — FUN_8007A624(node)
-  c->engine.spawn.despawn(obj);
+  eng(c).spawn.despawn(obj);
   goto L9ac;
 
  L334:                                          // STATE 0 — build the record list
@@ -89,7 +90,7 @@ void beh_pad_child_linker(Core* c) {
   s1 = 0x800A4BA8u;
   s0 = obj;
  L3b0:
-  c->engine.graphicsBind.recordAlloc();                 // a0 left as-is (matches the guest, which never reloads it)
+  eng(c).graphicsBind.recordAlloc();                 // a0 left as-is (matches the guest, which never reloads it)
   s3 += 1;
   v0 = c->r[2];                                 // returned record ptr
   c->mem_w32(s0 + 0xC0, v0);
@@ -122,7 +123,7 @@ void beh_pad_child_linker(Core* c) {
   if (v0 != 0) { if (c->mem_r8(v0 + 4) < 2) c->mem_w8(v0 + 4, 3); c->mem_w32(obj + 0x14, 0); }
   v0 = c->mem_r32(obj + 0x10);
   if (v0 != 0) { if (c->mem_r8(v0 + 4) < 2) c->mem_w8(v0 + 4, 3); c->mem_w32(obj + 0x10, 0); }
-  c->engine.bit.processLinkRequest();           // FUN_8006F04C (native)
+  eng(c).bit.processLinkRequest();           // FUN_8006F04C (native)
   goto L9ac;
  L4ec:
   s1 = 0x800E7E80u;                             // input/area block base
@@ -240,7 +241,7 @@ void beh_pad_child_linker(Core* c) {
   { uint32_t a = c->mem_r32(obj + 0xC4); c->mem_w16(a + 2, c->mem_r16(v1 + 2)); }
  L784:
   c->r[4] = obj; rec_dispatch(c, 0x8006F138u);
-  v0 = c->engine.bit.testFE48((int32_t)c->mem_r8(obj + 1) - 1);   // FUN_8006EFF4 (native)
+  v0 = eng(c).bit.testFE48((int32_t)c->mem_r8(obj + 1) - 1);   // FUN_8006EFF4 (native)
   if (v0 == 0) goto L7cc;
   v0 = c->mem_r32(obj + 0x14);
   if (v0 == 0) goto L87c;
@@ -249,10 +250,10 @@ void beh_pad_child_linker(Core* c) {
  L7cc:
   v0 = c->mem_r32(obj + 0x14);
   if (v0 != 0) goto L800;
-  v0 = c->engine.spawn.spawnOverlayVariant(
+  v0 = eng(c).spawn.spawnOverlayVariant(
       (uint16_t)(uint32_t)((int32_t)c->mem_r8(obj + 1) - 1), 0);   // FUN_8007E038 (native)
   c->mem_w32(obj + 0x14, v0);
-  c->engine.bit.setFE34((int32_t)c->mem_r8(obj + 1) - 1);         // FUN_8006F02C (native)
+  eng(c).bit.setFE34((int32_t)c->mem_r8(obj + 1) - 1);         // FUN_8006F02C (native)
   goto L87c;
  L800:
   if (c->mem_r8(v0 + 4) < 2) goto L87c;
@@ -272,7 +273,7 @@ void beh_pad_child_linker(Core* c) {
  L878:
   c->mem_w8(obj + 1, 0);
  L87c:
-  c->engine.bit.processLinkRequest();           // FUN_8006F04C (native)
+  eng(c).bit.processLinkRequest();           // FUN_8006F04C (native)
   v0 = c->mem_r8(s1 + 41);
   if (v0 != 0) { v1 = 1; goto L8ac; }
   v1 = c->mem_r8(0x800BF840u);
@@ -285,14 +286,14 @@ void beh_pad_child_linker(Core* c) {
   { uint32_t a = c->mem_r8(0x800BF840u);
     if ((a & 0x40) == 0) goto L970;
     s0 = a & 0x0F; }
-  v0 = c->engine.bit.testFE48((int32_t)s0);                        // FUN_8006EFF4 (native)
+  v0 = eng(c).bit.testFE48((int32_t)s0);                        // FUN_8006EFF4 (native)
   if (v0 != 0) goto L970;
   if ((c->mem_r8(s1 + 97) & 1) != 0) goto L970;
   v0 = c->mem_r32(obj + 0x10);
   if (v0 != 0) goto L93c;
-  v0 = c->engine.spawn.spawnOverlayVariant((uint16_t)s0, 0);   // FUN_8007E038 (native)
+  v0 = eng(c).spawn.spawnOverlayVariant((uint16_t)s0, 0);   // FUN_8007E038 (native)
   c->mem_w32(obj + 0x10, v0);
-  c->engine.bit.setFE34((int32_t)s0);                              // FUN_8006F02C (native)
+  eng(c).bit.setFE34((int32_t)s0);                              // FUN_8006F02C (native)
   c->mem_w8(obj + 0x46, (uint8_t)s0);
   goto L9ac;
  L93c:

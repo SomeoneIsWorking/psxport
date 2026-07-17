@@ -1,6 +1,6 @@
 // game/audio/sfx.h — PC-native SOUND-FX TRIGGER dispatcher.
 //
-// PROPER OOP: one instance per Core, embedded on Engine, reached as `c->engine.sfx.method(args)`.
+// PROPER OOP: one instance per Core, embedded on Engine, reached as `eng(c).sfx.method(args)`.
 // Back-pointer wired at Core construction (same pattern as Spawn / SceneEvents / Cull).
 //
 // SCOPE: FUN_80074590 — the field-wide SFX firing primitive. Two id spaces, both indexed into

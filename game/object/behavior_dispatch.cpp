@@ -8,9 +8,10 @@
 //
 // Was three free functions in engine_tomba2.cpp — dispatch_obj_method / dispatch_native_behavior /
 // behavior_native_name. Promoted here as `class BehaviorDispatch` on Engine so callers reach the
-// dispatcher through the object graph (`c->engine.behaviors.dispatchObj(obj, h)`), matching the
+// dispatcher through the object graph (`eng(c).behaviors.dispatchObj(obj, h)`), matching the
 // Collision / Bit / Spawn class-instance pattern.
 #include "behavior_dispatch.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"                 // Fps60::current_object (was g_current_object)
 #include "core/engine.h"         // class Engine (for Core::engine)

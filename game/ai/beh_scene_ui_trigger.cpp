@@ -18,13 +18,14 @@
 // transcribed and verify when a scene drives them (same caveat as the camera alt-mode orchestrators).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include "graphics_bind.h"   // ov_obj_record_init — native graphics-bind (game/world)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -38,14 +39,14 @@ constexpr uint32_t S1     = 0x800E7E80u;   // the prologue's s1 base (0x800e0000
 inline void render_and_return(Core* c, uint32_t obj) {
   c->mem_w8(obj + 0x2b, 0);
   c->r[4] = obj;
-  c->engine.graphicsBind.renderUpdate();
+  eng(c).graphicsBind.renderUpdate();
 }
 
 // LAB_80073be0 — shared "SFX + advance" tail of cases 1/2: node[5]++, FUN_80074590(0x11, 0, 0).
 inline void sfx_advance(Core* c, uint32_t obj) {
   uint8_t v0 = c->mem_r8(obj + 5);
   c->mem_w8(obj + 5, (uint8_t)(v0 + 1));
-  c->engine.sfx.trigger(0x11, 0, 0);              // FUN_80074590 (native)
+  eng(c).sfx.trigger(0x11, 0, 0);              // FUN_80074590 (native)
 }
 
 }  // namespace
@@ -56,7 +57,7 @@ void beh_scene_ui_trigger(Core* c) {
 
   if (st != 1) {
     if (st >= 2) {                                   // state 2 (idle) / 3 (despawn) / other
-      if (st == 3) { c->engine.spawn.despawn(obj); }  // despawn
+      if (st == 3) { eng(c).spawn.despawn(obj); }  // despawn
       return;                                        // EPI
     }
     if (st != 0) return;                             // (dead path; only 0 left here)
@@ -64,7 +65,7 @@ void beh_scene_ui_trigger(Core* c) {
     uint8_t area = c->mem_r8(0x800BF870u);
     int16_t tv = c->mem_r16s(0x800A4C80u + (uint32_t)area * 2);
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)(int32_t)tv;
-    c->engine.graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
+    eng(c).graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return;                        // init busy/failed -> EPI
     c->mem_w8(obj + 0, 1);
     c->mem_w8(obj + 4, (uint8_t)(c->mem_r8(obj + 4) + 1));  // -> state 1
@@ -95,7 +96,7 @@ void beh_scene_ui_trigger(Core* c) {
         uint8_t v0 = c->mem_r8(obj + 5), v1 = c->mem_r8(obj + 3);
         c->mem_w8(obj + 5, (uint8_t)(v0 + 1));
         c->mem_w8(0x800BF871u, v1);
-        c->engine.sceneTransition.areaMaskTrigger(c->mem_r8(0x800BF870u), (uint8_t)v1);   // was rec_dispatch 0x800782F0
+        eng(c).sceneTransition.areaMaskTrigger(c->mem_r8(0x800BF870u), (uint8_t)v1);   // was rec_dispatch 0x800782F0
       }
       break;
     case 1:                                          // jt[1]=0x80073b60
@@ -130,7 +131,7 @@ void beh_scene_ui_trigger(Core* c) {
         c->mem_w8 (taskp + 0x6b, 8);
         uint8_t v0 = c->mem_r8(obj + 5);
         c->mem_w8(obj + 5, (uint8_t)(v0 + 1));
-        c->engine.modeStateArm.arm();                  // native — was rec_dispatch 0x8005082C(0,0,0)
+        eng(c).modeStateArm.arm();                  // native — was rec_dispatch 0x8005082C(0,0,0)
       }
       break;
     case 4:                                          // jt[4]=0x80073c90: -> state 2, advance sub

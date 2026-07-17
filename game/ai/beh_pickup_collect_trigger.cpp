@@ -20,13 +20,14 @@
 // pad/scene-driven sub-states (incl. case 4) are faithfully transcribed and verify when a scene drives them.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include "graphics_bind.h"   // ov_obj_record_init — native graphics-bind (game/world)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "bg_scene_transition_sm.h"   // BgSceneTransitionSm::readyForProgress (FUN_80042728 native)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -40,12 +41,12 @@ inline void do_case0(Core* c, uint32_t obj) {
   if (c->mem_r8(obj + 0x2b) != 3) return;
   int16_t sid = c->mem_r16s(0x800A4CF8u + (uint32_t)c->mem_r8(obj + 3) * 2);
   // Spawn::sceneEntity — was rec_dispatch(0x8007E110); now native (spawn.cpp).
-  uint32_t sceneNode = c->engine.spawn.sceneEntity((uint16_t)sid, /*subtype=*/0);
+  uint32_t sceneNode = eng(c).spawn.sceneEntity((uint16_t)sid, /*subtype=*/0);
   c->mem_w32(obj + 0x14, sceneNode);
   if (sceneNode != 0) {
     if (c->mem_r8(0x800BF8EDu) == 0) {
       c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));
-      c->engine.sceneEvents.arm(0x39);                          // SFX event; FUN_80040B48 (native)
+      eng(c).sceneEvents.arm(0x39);                          // SFX event; FUN_80040B48 (native)
     } else {
       c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 2));
     }
@@ -62,14 +63,14 @@ bool beh_pickup_collect_trigger_body(Core* c) {
     if (st >= 2) {                                   // 2 idle / 3 despawn / other
       if (st == 2) return true;
       if (st != 3) return true;
-      c->engine.spawn.despawn(obj);   // despawn
+      eng(c).spawn.despawn(obj);   // despawn
       return true;
     }
     if (st != 0) return true;
     // ---- STATE 0 ----
     if (c->mem_r8(0x800BF873u) != 0) { c->mem_w8(obj + 4, 3); return true; }
     c->r[4] = obj; c->r[5] = 1; c->r[6] = 0x18;
-    c->engine.graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
+    eng(c).graphicsBind.recordInit();   // OWNED native graphics-bind (render-record alloc + geomblk resolve into node+0xC0)
     if (c->r[2] != 0) return true;
     c->mem_w16(obj + 0x80, 0x140);
     c->mem_w16(obj + 0x82, 0x280);
@@ -82,7 +83,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
     uint16_t sid = c->mem_r16(0x800A4CECu + (uint32_t)c->mem_r8(obj + 3) * 2);
     c->mem_w16(obj + 0x58, 0);
     c->mem_w16(obj + 0x56, sid);
-    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();
+    c->r[4] = obj; eng(c).graphicsBind.renderUpdate();
     return true;
   }
 
@@ -96,7 +97,7 @@ bool beh_pickup_collect_trigger_body(Core* c) {
   } else if (sub < 3) {
     if (sub == 0) { do_case0(c, obj); }
     else if (sub != 1) { c->mem_w8(obj + 0x2b, 0); return true; }
-    else { iVar3 = c->engine.bgSceneTransitionSm.readyForProgress() ? 1 : 0; do_inc = true; }   // FUN_80042728 native
+    else { iVar3 = eng(c).bgSceneTransitionSm.readyForProgress() ? 1 : 0; do_inc = true; }   // FUN_80042728 native
   } else {
     if (sub == 4) {
       // ---- case 4: emit packets + collected-bit/reward ----
@@ -114,16 +115,16 @@ bool beh_pickup_collect_trigger_body(Core* c) {
         c->mem_w8(obj + 4, 3);
         uint32_t src = c->mem_r32(c->mem_r32(obj + 0xc0) + 0x40);
         c->r[4] = src; c->r[5] = buf; c->r[6] = 0x800; c->r[7] = 0x18; rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);   // FUN_80074590 (native)
+        eng(c).sfx.trigger(0xc, 0, 0);   // FUN_80074590 (native)
         src = c->mem_r32(c->mem_r32(obj + 0xc0) + 0x40);
         c->r[4] = src; c->r[5] = buf; c->r[6] = 0x800; c->r[7] = 8; rec_dispatch(c, 0x80027144u);
-        c->engine.sfx.trigger(0xc, 0, 0);   // FUN_80074590 (native)
+        eng(c).sfx.trigger(0xc, 0, 0);   // FUN_80074590 (native)
         c->r[4] = 0x39; rec_dispatch(c, 0x80040C00u);
         uint8_t prev = c->mem_r8(0x800BFA23u);
         uint32_t bit = 1u << (c->mem_r8(obj + 3) & 0x1f);
         c->mem_w8(0x800BFA23u, (uint8_t)(prev | (uint8_t)bit));
         if (c->mem_r8(0x800BF8EEu) == 0) {
-          c->engine.sceneEvents.arm(0x3a);                        // SFX event; FUN_80040B48 (native)
+          eng(c).sceneEvents.arm(0x3a);                        // SFX event; FUN_80040B48 (native)
           c->mem_w8(obj + 0x2b, 0);
           return true;                               // early return (LAB at 0x8007454c)
         }

@@ -29,6 +29,7 @@
 // structural transcription, not a semantic rebuild (matches the "not independently RE'd" leaves
 // convention already used throughout game/ai/ and game/object/).
 #include "core.h"
+#include "game_ctx.h"
 #include "actor_zoned_attacker.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
 #include "game.h"
@@ -44,7 +45,7 @@ enum { R_A0 = 4, R_A1 = 5, R_A2 = 6, R_A3 = 7, R_V0 = 2 };
 
 // Callee leaf addresses (all un-owned PSX leaves reached via rec_dispatch).
 constexpr uint32_t FN_80145C78 = 0x80145C78u;
-constexpr uint32_t FN_8009A450 = 0x8009A450u;   // RNG read (same leaf the sibling caller reaches via c->rng.next())
+constexpr uint32_t FN_8009A450 = 0x8009A450u;   // RNG read (same leaf the sibling caller reaches via rngOf(c).next())
 constexpr uint32_t FN_800781E0 = 0x800781E0u;   // 2D distance
 constexpr uint32_t FN_80078240 = 0x80078240u;   // 3D distance
 constexpr uint32_t FN_801402B8 = 0x801402B8u;   // anim/state-cue setter
@@ -1067,7 +1068,7 @@ LAB_80144d20:
                 c->mem_w16(gsp + 0x12, (uint16_t)c->mem_r16(node + 0x2e));
                 c->mem_w16(gsp + 0x16, (uint16_t)c->mem_r16(node + 0x6a));
                 c->mem_w16(gsp + 0x1a, (uint16_t)c->mem_r16(node + 0x36));
-                c->engine.spawn.spawnAndInit(8u, gsp + 0x10, (uint32_t)(int32_t)-0x50);
+                eng(c).spawn.spawnAndInit(8u, gsp + 0x10, (uint32_t)(int32_t)-0x50);
                 c->mem_w8(G_8014BF5E, 10);
               }
               c->mem_w16(node + 0x68, 0);

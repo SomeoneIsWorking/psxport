@@ -1,7 +1,7 @@
 // game/audio/sequencer.h — class Sequencer — libsnd per-vblank sequencer TICK wrapper +
 // the SsSeqCalled channel-flag dispatcher and its high-confidence leaves.
 //
-// PROPER OOP: one instance per Core, embedded on Engine (`c->engine.sequencer`). Back-pointer
+// PROPER OOP: one instance per Core, embedded on Engine (`eng(c).sequencer`). Back-pointer
 // `core` wired at Core construction time (same pattern as MusicCoord / AudioDispatch).
 //
 // SCOPE (WIDE-RE DRAFT — see docs/engine_re.md libsnd section, docs/journal.md 2026-06-15

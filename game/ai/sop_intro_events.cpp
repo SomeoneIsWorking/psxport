@@ -25,11 +25,12 @@
 // three actors (mostly the "lifted" one) call into, which stayed substrate when those files landed.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "game.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
-#include "core/engine.h"          // c->engine.spawn / c->engine.placement / c->engine.script
-#include "render/render.h"        // c->mRender->mNodeXform.buildWithOffset (FUN_800518FC)
+#include "core/engine.h"          // eng(c).spawn / eng(c).placement / eng(c).script
+#include "render/render.h"        // rend(c)->mNodeXform.buildWithOffset (FUN_800518FC)
 #include "spawn.h"                 // Spawn::dispatch/despawn (native)
 #include "world/placement.h"       // Placement::spawnWithParent (native, FUN_80072DDC)
 #include "sop_intro_events.h"
@@ -84,7 +85,7 @@ uint32_t sopBeatAdvanceWalk(Core* c) {                          // FUN_8010AF60
     c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
     if (timer == 1) {
       c->mem_w8(SCENE_BEAT, 3);
-      c->engine.walkStart(node, 0xB4u, 4);                      // FUN_80054D14
+      eng(c).walkStart(node, 0xB4u, 4);                      // FUN_80054D14
       c->mem_w16(node + 0x42, 0x28);
       c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
     }
@@ -95,7 +96,7 @@ uint32_t sopBeatAdvanceWalk(Core* c) {                          // FUN_8010AF60
     int16_t timer = (int16_t)c->mem_r16(node + 0x42);
     c->mem_w16(node + 0x42, (uint16_t)(timer - 1));
     if (timer == 1) {
-      c->engine.walkStart(node, 2u, 6);                         // FUN_80054D14
+      eng(c).walkStart(node, 2u, 6);                         // FUN_80054D14
       c->mem_w16(node + 0x42, 0x1E);
       c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
     }
@@ -144,7 +145,7 @@ uint32_t sopBeatAdvanceNarration(Core* c) {                     // FUN_8010B078
   if (state == 0) {
     c->mem_w8(SCENE_BEAT, 5);
     c->r[4] = 0x800E8008u; c->r[5] = 0x8010C974u;
-    c->engine.graphicsBind.setXformBlk();                       // FUN_8006CBD0 (fixed globals, not `node`)
+    eng(c).graphicsBind.setXformBlk();                       // FUN_8006CBD0 (fixed globals, not `node`)
     c->mem_w16(node + 0x42, 10);
     c->mem_w8 (node + 0x78, (uint8_t)(c->mem_r8(node + 0x78) + 1));
   } else if (state == 1) {
@@ -225,8 +226,8 @@ uint32_t sopOrbitPathStep(Core* c) {                            // FUN_8010B11C
     c->mem_w16(node + 0x36, c->mem_r16(node + 0x94));
 
     int32_t phase = (int16_t)c->mem_r16(node + 0x4E);
-    c->mem_w32(node + 0x2C, c->mem_r32(node + 0x2C) + c->trig.rcos(phase) * 0xA00);
-    int32_t sinv = c->trig.rsin(phase);
+    c->mem_w32(node + 0x2C, c->mem_r32(node + 0x2C) + trigOf(c).rcos(phase) * 0xA00);
+    int32_t sinv = trigOf(c).rsin(phase);
     c->mem_w16(node + 0x32, (uint16_t)((int16_t)c->mem_r16(node + 0x32) - 2));
     c->mem_w32(node + 0x34, c->mem_r32(node + 0x34) + sinv * 0xA00);
 
@@ -237,7 +238,7 @@ uint32_t sopOrbitPathStep(Core* c) {                            // FUN_8010B11C
 
     int32_t y = (int32_t)s36 - (int32_t)s94;
     int32_t x = (int32_t)(int16_t)c->mem_r16(node + 0x90) - (int32_t)(int16_t)c->mem_r16(node + 0x2E);
-    c->mem_w16(node + 0x56, (uint16_t)c->trig.ratan2(y, x));
+    c->mem_w16(node + 0x56, (uint16_t)trigOf(c).ratan2(y, x));
 
     int16_t phaseNext = (int16_t)(c->mem_r16(node + 0x4E) + 0x80);
     c->mem_w16(node + 0x4E, (uint16_t)phaseNext);
@@ -275,7 +276,7 @@ uint32_t sopIntroEffectSpawn(Core* c) {                          // FUN_8010B44C
 
   const uint32_t parent = c->r[4];
   c->r[4] = parent; c->r[5] = 3; c->r[6] = 3; c->r[7] = 0x1Au;
-  c->engine.placement.spawnWithParent();
+  eng(c).placement.spawnWithParent();
   const uint32_t node = c->r[2];
   if (node != 0) {
     c->mem_w32(node + 0x1Cu, /*sopIntroEffectTick*/ 0x8010B2D4u);
@@ -332,7 +333,7 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
 
     uint8_t sub = c->mem_r8(node + 5);
     if (sub == 1) {
-      c->engine.script.step(node);                                // FUN_80041098
+      eng(c).script.step(node);                                // FUN_80041098
       if ((int8_t)c->mem_r8(node + 0x70) == -1) {
         c->mem_w8(node + 5, (uint8_t)(sub + 1));
       }
@@ -340,12 +341,12 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
       c->r[4] = node;
       if (sopOrbitPathStep(c) != 0) {
         c->mem_w8(node + 5, (uint8_t)(sub + 1));
-        c->engine.script.init(node, 0x8001B860u, 0x8010CAB8u);     // FUN_80040CDC = ScriptInterp::init
+        eng(c).script.init(node, 0x8001B860u, 0x8010CAB8u);     // FUN_80040CDC = ScriptInterp::init
         c->mem_w8(node + 0x70, 1);
       }
     }
-    (void)c->engine.animTick(node);                                // FUN_8004190C
-    c->mRender->mNodeXform.buildWithOffset(node);                  // FUN_800518FC (NodeXform::buildWithOffset)
+    (void)eng(c).animTick(node);                                // FUN_8004190C
+    rend(c)->mNodeXform.buildWithOffset(node);                  // FUN_800518FC (NodeXform::buildWithOffset)
   } else if (state == 0) {
     c->r[16] = 0x800ECF58u;                                         // gen L_8010B32C: r16 = reloc base (live at the call)
     c->r[4] = node; c->r[5] = 0xCu; c->r[6] = c->mem_r32(0x800ECF98u); c->r[7] = 0x800A4BC8u;
@@ -362,7 +363,7 @@ void sopIntroEffectTick(Core* c) {                               // FUN_8010B2D4
       c->mem_w16(node + 0x32u, (uint16_t)((int16_t)c->mem_r16(node + 0x32u) - 0x8C));
     }
   } else if (state == 3) {
-    c->engine.spawn.despawn(node);                                  // FUN_8007A624
+    eng(c).spawn.despawn(node);                                  // FUN_8007A624
   }
   // else: no-op
 
@@ -417,7 +418,7 @@ void sopLiftedSubtickBody(Core* c) {
     case 1:
     case 6: {
       c->r[31] = 0x8010B768u;                                      // gen call-site ra (see state 3)
-      c->engine.script.step(node);                                 // FUN_80041098
+      eng(c).script.step(node);                                 // FUN_80041098
       if ((int8_t)c->mem_r8(node + 0x70) != -1) return;
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));      // advance only, no anim-install
       return;
@@ -440,11 +441,11 @@ void sopLiftedSubtickBody(Core* c) {
       c->r[31] = 0x8010B644u;
       rec_dispatch(c, 0x80077C40u);                                 // Animation::attach (still substrate here)
       c->r[31] = 0x8010B654u;
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xC4u), 0x12u, 0x0Fu);   // FUN_80051B04
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(node + 0xC4u), 0x12u, 0x0Fu);   // FUN_80051B04
       c->r[31] = 0x8010B664u;
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xD0u), 0x12u, 0x10u);
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(node + 0xD0u), 0x12u, 0x10u);
       c->r[31] = 0x8010B674u;
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xDCu), 0x12u, 0x11u);
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(node + 0xDCu), 0x12u, 0x11u);
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));      // advance only, no anim-install
       return;
     }
@@ -452,17 +453,17 @@ void sopLiftedSubtickBody(Core* c) {
       if (c->mem_r8(node + 0x79u) != 1) return;
       c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
       c->r[31] = 0x8010B6A4u;                                        // gen call-site ra (see state 3)
-      c->engine.sfx.trigger(3, 0, 0);                                // FUN_80074590
+      eng(c).sfx.trigger(3, 0, 0);                                // FUN_80074590
       c->mem_w32(node + 0x3Cu, c->mem_r32(0x800ECF68u));
       c->r[4] = node; c->r[5] = 0x80017FE8u; c->r[6] = 2; c->r[7] = 6;
       c->r[31] = 0x8010B6C8u;
       rec_dispatch(c, 0x80077CFCu);                                 // still substrate (no native owner)
       c->r[31] = 0x8010B6D8u;
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xC4u), 0x12u, 1u);
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(node + 0xC4u), 0x12u, 1u);
       c->r[31] = 0x8010B6E8u;
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xD0u), 0x12u, 4u);
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(node + 0xD0u), 0x12u, 4u);
       c->r[31] = 0x8010B6F8u;
-      c->engine.graphicsBind.installSceneRecord(c->mem_r32(node + 0xDCu), 0x12u, 7u);
+      eng(c).graphicsBind.installSceneRecord(c->mem_r32(node + 0xDCu), 0x12u, 7u);
       return;
     }
     case 5:
@@ -481,7 +482,7 @@ void sopLiftedSubtickBody(Core* c) {
   if (runTail) {
     c->mem_w8(node + 6, (uint8_t)(c->mem_r8(node + 6) + 1));
     c->r[31] = 0x8010B754u;                                          // gen call-site ra (see state 3)
-    c->engine.script.init(node, 0x80017FE8u, animData);              // FUN_80040CDC = ScriptInterp::init
+    eng(c).script.init(node, 0x80017FE8u, animData);              // FUN_80040CDC = ScriptInterp::init
     c->mem_w8(node + 0x70u, 1);
   }
 }
@@ -525,7 +526,7 @@ void sopLiftedSubtick(Core* c) {                                  // FUN_8010B58
 //     node+0x50: v=old value, v2=v-9; store v2; if v2 is NEGATIVE as signed 16-bit, overwrite with
 //     v+0x4B instead (wraparound — NOT v2+0x4B) — a bounded angular counter.
 //   states 2/3: Spawn::despawn(node) (recomp shows the call with no visible arg — the real ABI is a0 =
-//     node like every other despawn call in this codebase; matches c->engine.spawn.despawn(node)).
+//     node like every other despawn call in this codebase; matches eng(c).spawn.despawn(node)).
 //   state > 3: no-op.
 // GUEST FRAME (2026-07-10 §9 fix): ov_sop_gen_8010BEAC pushes `addiu sp,-24` + ra(r31) ONLY at
 // sp+16 — unlike its five siblings above, this leaf never reuses r16 as a scratch/base register
@@ -544,7 +545,7 @@ void beh_orbit_spark_effect(Core* c) {                            // FUN_8010BEA
 
   if (state != 1) {
     if (state > 1) {
-      if (state <= 3) c->engine.spawn.despawn(node);                 // FUN_8007A624
+      if (state <= 3) eng(c).spawn.despawn(node);                 // FUN_8007A624
       active = false;
     } else if (state != 0) {
       active = false;

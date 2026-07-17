@@ -112,6 +112,7 @@
 // against a live VRAM-transfer dump). Left for a dedicated follow-up pass — do not fold it into this
 // cluster's wiring without RE'ing it on its own terms first.
 #include "core.h"
+#include "game_ctx.h"
 #include "render.h"
 #include <stdint.h>
 
@@ -615,10 +616,10 @@ void Render::gpuDmaSend() {
 // overrides::install) is the correct install path: it keeps SBS core B running the pure gen_func_*
 // body via the registry's oracle-gated dispatch.
 namespace {
-void ov_gpuDmaQueueEnqueue(Core* c) { c->mRender->gpuDmaQueueEnqueue(); }
-void ov_gpuDmaQueueDrain(Core* c)   { c->mRender->gpuDmaQueueDrain(); }
-void ov_gpuDmaQueueSync(Core* c)    { c->mRender->gpuDmaQueueSync(); }
-void ov_gpuDmaSend(Core* c)         { c->mRender->gpuDmaSend(); }
+void ov_gpuDmaQueueEnqueue(Core* c) { rend(c)->gpuDmaQueueEnqueue(); }
+void ov_gpuDmaQueueDrain(Core* c)   { rend(c)->gpuDmaQueueDrain(); }
+void ov_gpuDmaQueueSync(Core* c)    { rend(c)->gpuDmaQueueSync(); }
+void ov_gpuDmaSend(Core* c)         { rend(c)->gpuDmaSend(); }
 }  // namespace
 
 extern void gen_func_80082D04(Core*);

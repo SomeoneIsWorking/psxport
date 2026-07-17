@@ -3,7 +3,7 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::transitionState3`. Back-pointer
 // `core` is wired once by Core's constructor. Callers reach the walker through the object graph:
 //
-//     c->engine.transitionState3.walkOnce();
+//     eng(c).transitionState3.walkOnce();
 //
 // No `extern "C"` shim, no static method, no Core-as-first-arg. Same shape as SceneTransition,
 // NodeXform, ScreenFade.

@@ -10,7 +10,7 @@
 // bytes). So: COLLECT the re-include-eligible nodes during the cull (no +1 poke), then after the
 // entity walk call the per-node flush directly -> margin renders, gameplay untouched.
 //
-// One instance per Core, owned by Render (`c->mRender->margin`).
+// One instance per Core, owned by Render (`rend(c)->margin`).
 #ifndef PSXPORT_MARGIN_RENDER_HPP
 #define PSXPORT_MARGIN_RENDER_HPP
 #include <stdint.h>

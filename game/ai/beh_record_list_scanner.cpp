@@ -25,12 +25,13 @@
 // only RAM+scratchpad — matching the sibling objbeh gates.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::cullWrap77acc / installSceneRecord
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "mathlib.h"  // Bit::test7EC / test868 (FUN_8004D7EC / FUN_8004D868)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -49,7 +50,7 @@ void beh_record_list_scanner(Core* c) {
   uint8_t state = c->mem_r8(obj + 4);
 
   if (state == 2) return;                                       // no-op
-  if (state == 3) { c->engine.spawn.despawn(obj); return; }
+  if (state == 3) { eng(c).spawn.despawn(obj); return; }
   if (state > 3) return;                                        // default
 
   if (state == 0) {
@@ -84,7 +85,7 @@ void beh_record_list_scanner(Core* c) {
     if (c->mem_r8(s4) == 0xFFu) {                               // terminator
       c->mem_w16(s5 + 10, (uint16_t)s3);                        // node[0x6a] = count
       c->mem_w8(obj + 11, 31);
-      c->engine.cull.enqueueQueueC(obj);                    // FUN_80077EFC (native; return ignored)
+      eng(c).cull.enqueueQueueC(obj);                    // FUN_80077EFC (native; return ignored)
       c->mem_w8(obj + 1, 1);
       return;
     }
@@ -92,11 +93,11 @@ void beh_record_list_scanner(Core* c) {
     uint32_t s1 = 1u << (s3 & 31);
     int verdict = -2;                                           // -2 = undecided, 0 = skip, 1 = act
     if (s2 == 0) {
-      if (c->engine.bit.test7EC((int32_t)lh(c, s4 + 10), 0) != 0) verdict = 0;
+      if (eng(c).bit.test7EC((int32_t)lh(c, s4 + 10), 0) != 0) verdict = 0;
     }
     if (verdict == -2 && (c->mem_r32(obj + 0x74) & s1) != 0) verdict = 0;
     if (verdict == -2 && s2 != 0) {
-      if (c->engine.bit.test868((int32_t)lh(c, s4 + 10)) != 0) verdict = 0;
+      if (eng(c).bit.test868((int32_t)lh(c, s4 + 10)) != 0) verdict = 0;
     }
     if (verdict == -2) verdict = ((c->mem_r32(obj + 0x74) & s1) != 0) ? 0 : 1;
 
@@ -107,7 +108,7 @@ void beh_record_list_scanner(Core* c) {
         ret = c->r[2];
       } else {
         c->r[4] = obj; c->r[5] = lh(c, s4 + 4); c->r[6] = lh(c, s4 + 6); c->r[7] = lh(c, s4 + 8);
-        c->engine.cull.cullWrap77acc();          // FUN_80077ACC (native)
+        eng(c).cull.cullWrap77acc();          // FUN_80077ACC (native)
         ret = c->r[2];
       }
       if (ret != 0) c->mem_w32(s5 + 16, c->mem_r32(s5 + 16) | s1);

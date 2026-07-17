@@ -21,6 +21,7 @@
 // NOTE (2026-07 restructure): game/render/render_native.cpp (+ render/scene_build.cpp +
 // render/mesh_draw.cpp) is the CLAUDE.md-mandated eventual replacement for this file.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"   // Fps60::current_object (was g_current_object)
 #include "cfg.h"
 #include "mods.h"   // Mods (game->mods) — live PC-native lighting params (engine-native shading, not a deferred pass)
@@ -149,7 +150,7 @@ void Render::shadeSelect() {                 // called once per world frame befo
 }
 static inline void engine_shade_face(Core* c, const ProjVtx* p, int nv, uint8_t r[4], uint8_t g[4], uint8_t b[4]) {
   if (!c->game->mods.light) return;
-  Render* rr = c->mRender;
+  Render* rr = rend(c);
   const LightConfig* cfg = rr->mShadeCfg ? rr->mShadeCfg : rr->lighting.defaultConfig();
   float e1x = p[1].vx - p[0].vx, e1y = p[1].vy - p[0].vy, e1z = p[1].vz - p[0].vz;
   float e2x = p[2].vx - p[0].vx, e2y = p[2].vy - p[0].vy, e2z = p[2].vz - p[0].vz;
@@ -201,14 +202,14 @@ void Render::submitPolyGt3Native(Core* c) {
   // branch). A raw gte_read_ctrl(26) read here would (a) be a present-time GUEST READ — the fps60
   // present-time invariant forbids that — and (b) desync depth normalization from the lerped H used for
   // XY at any t other than 1 (found while extending Tier 1 to fieldEntityRender, docs/fps60-rework.md).
-  proj_set_H((uint16_t)c->mRender->mActiveXform.H);
+  proj_set_H((uint16_t)rend(c)->mActiveXform.H);
   for (uint32_t i = 0; i < count; i++, rec += 36) {
     uint32_t vz01 = c->mem_r32(rec + 20);
     uint32_t xy0 = c->mem_r32(rec + 16), xy1 = c->mem_r32(rec + 24), xy2 = c->mem_r32(rec + 28);
     ProjVtx p[3];
-    c->mRender->projVertexActive( (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
-    c->mRender->projVertexActive( (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
-    c->mRender->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
+    rend(c)->projVertexActive( (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,         &p[0]);
+    rend(c)->projVertexActive( (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16), &p[1]);
+    rend(c)->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)c->mem_r32(rec + 32), &p[2]);
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface
     int xmax = submit_xmax(c);
@@ -233,7 +234,7 @@ void Render::submitPolyGt3Native(Core* c) {
     if (cfg_dbg("eprojv")) {
       static long objn = -1; uint32_t geomblk = c->rsub.diag.currentGeomblk();
       if ((long)geomblk != objn) { objn = (long)geomblk;
-        const EObjXform& x = c->mRender->mActiveXform;
+        const EObjXform& x = rend(c)->mActiveXform;
         cfg_logf("eprojv", "cmd=%08x R=[%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f] T=(%.2f,%.2f,%.2f) H=%.0f",
           geomblk, (double)x.R[0][0],(double)x.R[0][1],(double)x.R[0][2],
                    (double)x.R[1][0],(double)x.R[1][1],(double)x.R[1][2],
@@ -267,17 +268,17 @@ void Render::submitPolyGt4Native(Core* c) {
   if (cfg_dbg("subc")) { static long n=0; if(n++%240==0) cfg_logf("subc", "gt4_native %ld", n); }
   uint32_t rec = c->r[4], count = c->r[6];
   // See submitPolyGt3Native above: H comes from the active xform, not a raw present-time CR26 read.
-  proj_set_H((uint16_t)c->mRender->mActiveXform.H);
+  proj_set_H((uint16_t)rend(c)->mActiveXform.H);
   for (uint32_t i = 0; i < count; i++, rec += 44) {
     // model verts: V0=rec+20(XY)|rec+24.lo(Z), V1=rec+28|rec+24.hi, V2=rec+32|rec+36.lo, V3=rec+40|rec+36.hi
     uint32_t vz01 = c->mem_r32(rec + 24), vz23 = c->mem_r32(rec + 36);
     uint32_t xy0 = c->mem_r32(rec + 20), xy1 = c->mem_r32(rec + 28),
              xy2 = c->mem_r32(rec + 32), xy3 = c->mem_r32(rec + 40);
     ProjVtx p[4];
-    c->mRender->projVertexActive( (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
-    c->mRender->projVertexActive( (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
-    c->mRender->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
-    c->mRender->projVertexActive( (int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
+    rend(c)->projVertexActive( (int16_t)xy0, (int16_t)(xy0 >> 16), (int16_t)vz01,          &p[0]);
+    rend(c)->projVertexActive( (int16_t)xy1, (int16_t)(xy1 >> 16), (int16_t)(vz01 >> 16),  &p[1]);
+    rend(c)->projVertexActive( (int16_t)xy2, (int16_t)(xy2 >> 16), (int16_t)vz23,          &p[2]);
+    rend(c)->projVertexActive( (int16_t)xy3, (int16_t)(xy3 >> 16), (int16_t)(vz23 >> 16),  &p[3]);
     // backface cull on the FRONT triangle's signed screen area (NCLIP: (SX1-SX0)*(SY2-SY0)-(SX2-SX0)*(SY1-SY0)).
     float area = (p[1].px - p[0].px) * (p[2].py - p[0].py) - (p[2].px - p[0].px) * (p[1].py - p[0].py);
     if (area <= 0) continue;                                  // backface (matches MAC0<=0 drop)
@@ -388,7 +389,7 @@ void Render::fieldEntityRender(uint32_t es) {
   if (count == 0) return;
   uint32_t otbase = c->mem_r32(0x800ED8C8u);              // *this = the active ordering-table base
   uint32_t base   = c->mem_r32(es + 0xC);
-  EObjXform w; c->mRender->projComposeCamera(&w); c->mRender->projSetActive(&w);
+  EObjXform w; rend(c)->projComposeCamera(&w); rend(c)->projSetActive(&w);
   // Tag every scene-table prim with the reserved kSceneTableDbgNode sentinel (render_queue.h), the same
   // way native_terrain.cpp tags terrain with kTerrainDbgNode: this pass is camera-only (projComposeCamera
   // above — no per-object transform), so it is Tier-1-eligible (docs/fps60-rework.md "Tier 1 landed" +
@@ -406,7 +407,7 @@ void Render::fieldEntityRender(uint32_t es) {
     uint32_t rec = cmd0+4 + ((s0d&0xFF)*36);   // skip GT3s to first GT4 record (44B)
     for (int k=0;k<2;k++){ uint32_t r2=rec+k*44;
       int16_t vx=c->mem_r16s(r2+20), vy=(int16_t)(c->mem_r32(r2+20)>>16), vz=c->mem_r16s(r2+24);
-      ProjVtx pv; c->mRender->projVertexActive( vx,vy,vz,&pv);
+      ProjVtx pv; rend(c)->projVertexActive( vx,vy,vz,&pv);
       cfg_logf("groundproj", "   gt4[%d] model=(%d,%d,%d) -> px=%.1f py=%.1f pz=%.1f sx=%d sy=%d",
         k, vx,vy,vz, (double)pv.px,(double)pv.py,(double)pv.pz, pv.sx, pv.sy); } } }
   uint32_t p = es + 0x10, end = es + 0x10 + (uint32_t)count * 2;
@@ -420,7 +421,7 @@ void Render::fieldEntityRender(uint32_t es) {
     c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submitPolyGt4Native(c);
   }
   c->rsub.diag.endObject();
-  c->mRender->projClearActive();
+  rend(c)->projClearActive();
 }
 
 // ov_ground_probe (diagnostic, `debug groundprobe`) moved to render_debug_probes.cpp (2026-07 restructure).

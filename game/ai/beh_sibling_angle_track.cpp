@@ -33,11 +33,12 @@
 // faithfully transcribed and verify when a scene drives them (same caveat as the sibling orchestrators).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 #include "trig.h"            // class Trig — libgte rsin/rcos
 #include "object/actor.h"    // class Actor — Actor::boundsCull (FUN_8007778C native)
@@ -64,7 +65,7 @@ void beh_sibling_angle_track(Core* c) {
       // 80139608 beq v1,2 -> epilogue (0x80139820) ; 80139610 beq v1,3 -> despawn (0x80139818)
       if (st == 2) return;                              // idle
       if (st == 3) {                                    // 0x80139818: despawn
-        c->engine.spawn.despawn(obj);    // 80139818 jal 0x8007a624 (a0=s2)
+        eng(c).spawn.despawn(obj);    // 80139818 jal 0x8007a624 (a0=s2)
       }
       return;                                           // 80139618 j 0x80139820 (epilogue, no-op)
     }
@@ -74,7 +75,7 @@ void beh_sibling_angle_track(Core* c) {
     // STATE 0 (0x80139620): cull-record init + per-type field seed from TD
     // ============================================================================================
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = 0x16;       // 80139620 a1=0xc ; 80139628 a2=0x16 (delay) ; a0=s2
-    c->engine.graphicsBind.recordInit();                       // 80139624 jal 0x80051b70
+    eng(c).graphicsBind.recordInit();                       // 80139624 jal 0x80051b70
     if (c->r[2] != 0) return;                           // 8013962C bnez v0 -> 0x80139820 (init busy)
 
     c->mem_w8(obj + 4, (uint8_t)(c->mem_r8(obj + 4) + 1));  // 80139638/40/44 lbu v0,4 ; +1 ; sb -> state 1
@@ -156,7 +157,7 @@ void beh_sibling_angle_track(Core* c) {
   int32_t quot = (den != 0) ? (num / den) : 0;          // 801397B4 mflo a0 (quotient)
 
   int16_t s0 = (int16_t)(uint16_t)(c->mem_r16(s1 + 0x50) - c->mem_r16(s1 + 0x32));  // 801397B8/BC/C4 s0 = s1[0x50]-s1[0x32]
-  int32_t trig = c->trig.rsin((int32_t)(int16_t)quot);  // 801397CC jal 0x80083e80 -> native class Trig::rsin
+  int32_t trig = trigOf(c).rsin((int32_t)(int16_t)quot);  // 801397CC jal 0x80083e80 -> native class Trig::rsin
 
   int64_t prod = (int64_t)(int32_t)s0 * (int32_t)trig; // 801397DC mult s0,v0 (s0 sign-extended @801397D4/D8)
   int32_t v1 = (int32_t)(prod >> 12);                   // 801397EC sra v1,0xc  (mflo >> 12)
@@ -167,6 +168,6 @@ void beh_sibling_angle_track(Core* c) {
   // posY (obj+0x32) so the write must land first.
   c->mem_w16(obj + 0x32, (uint16_t)newv);              // 801397FC sh v0, 0x32(s2)  (delay slot)
   if (Actor(c, obj).boundsCull() == 0) return;         // FUN_8007778C native (was rec_dispatch)
-  c->r[4] = obj; c->engine.graphicsBind.renderUpdate();          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
+  c->r[4] = obj; eng(c).graphicsBind.renderUpdate();          // 80139808 jal 0x800517f8 (render; a0=s2 delay)
   // 80139810 j 0x80139820 (epilogue)
 }

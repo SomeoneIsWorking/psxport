@@ -28,12 +28,13 @@
 // writes there). v0 (handler return) is NOT reproduced.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::coneCull2b278 (FUN_8002B278)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -55,7 +56,7 @@ void beh_scatter_ramp_machine(Core* c) {
   goto Lret;                                           // st >= 4 default
 
  Lcdbc:                                          // STATE 2/3 — FUN_8007A624(node)
-  c->engine.spawn.despawn(obj);
+  eng(c).spawn.despawn(obj);
   goto Lret;
 
  Lca10:                                          // STATE 0 — seed from the overlay tables
@@ -170,8 +171,8 @@ void beh_scatter_ramp_machine(Core* c) {
   c->mem_w8(a3 + 4, 30);                          // node[0x54] = 30
   // fall into Lccc4
  Lccc4:
-  c->engine.sfx.trigger(7, 0, 0);     // FUN_80074590 (native)
-  c->engine.sfx.trigger(148, 0, 0);   // FUN_80074590 (native; id 148 → path A per-area)
+  eng(c).sfx.trigger(7, 0, 0);     // FUN_80074590 (native)
+  eng(c).sfx.trigger(148, 0, 0);   // FUN_80074590 (native; id 148 → path A per-area)
   goto Lcd60;
 
  Lcce4:                                          // sub-state 8
@@ -214,7 +215,7 @@ void beh_scatter_ramp_machine(Core* c) {
     }
   }
  Lcdac:
-  c->r[4] = obj; c->engine.cull.coneCull2b278();     // FUN_8002B278 (native)
+  c->r[4] = obj; eng(c).cull.coneCull2b278();     // FUN_8002B278 (native)
  Lret:
   return;
 }

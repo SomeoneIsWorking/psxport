@@ -72,6 +72,7 @@
 //      (*0x800ED8C8 + depth*4) — the identical packet-chain mechanism perobj_dispatch.cpp's
 //      cmdListDispatch/perModeDispatch already documents.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "render.h"
 #include "pkt_span.h"
@@ -244,26 +245,26 @@ void Render::perObjRenderDispatch() {
     // register-faithfulness"), same discipline as billboardCompose1/2's own fix (commit bef7769).
     switch (target) {
       case 0x8003CD00u: {
-        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD08u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD08u; rend(c)->cmdListDispatch();
         break;
       }
       case 0x8003CD10u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD20u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD20u; rend(c)->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CD30u; func_8003D584(c);
         break;
       }
       case 0x8003CD38u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD48u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD48u; rend(c)->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CD58u; func_8003F344(c);
         break;
       }
       case 0x8003CD60u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD70u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CD70u; rend(c)->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post;
         // Branch polarity (2026-07-09, found during the same audit): gen_func_8003CCA4 L_8003CD60
@@ -276,7 +277,7 @@ void Render::perObjRenderDispatch() {
       }
       case 0x8003CDA0u: {
         const uint32_t pre = c->mem_r32(PKT_POOL_PTR);
-        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CDB0u; c->mRender->cmdListDispatch();
+        c->r[4] = node; c->r[5] = flag; c->r[31] = 0x8003CDB0u; rend(c)->cmdListDispatch();
         const uint32_t post = c->mem_r32(PKT_POOL_PTR);
         c->r[4] = node; c->r[5] = pre; c->r[6] = post; c->r[31] = 0x8003CDC0u; func_8003F594(c);
         break;
@@ -322,7 +323,7 @@ static void billboardComposeTail(Core* c, uint32_t node, uint32_t flag) {
   gte_write_ctrl(6, c->mem_r32(MAT_OUT + 0x18));
   gte_write_ctrl(7, c->mem_r32(MAT_OUT + 0x1C));
   c->r[4] = node; c->r[5] = flag;
-  c->mRender->billboardEmit();
+  rend(c)->billboardEmit();
 }
 
 // FUN_8003C2D4
@@ -340,11 +341,11 @@ void Render::billboardCompose1() {
     c->mem_w32(sp + 24, c->r[18]); c->mem_w32(sp + 28, c->r[19]);
     c->mem_w32(sp + 32, c->r[31]);
     const uint32_t node = c->r[4];
-    c->mtx.identity(MAT_A);
-    c->mtx.identity(MAT_ROTZ);
-    c->math.rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
+    mtxOf(c).identity(MAT_A);
+    mtxOf(c).identity(MAT_ROTZ);
+    mathOf(c).rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
     const uint32_t flag = c->mem_r8(node + 71) & 1u;
-    c->math.matMul(MAT_ROTZ, MAT_A, MAT_OUT);
+    mathOf(c).matMul(MAT_ROTZ, MAT_A, MAT_OUT);
     // gen's live callee-saved state at the func_8003C8F4 call site (L4593-4595): billboardEmit
     // spills these as its "caller" registers, so they must hold gen's values here.
     c->r[16] = MAT_OUT; c->r[17] = MAT_A; c->r[18] = flag; c->r[19] = node;
@@ -378,10 +379,10 @@ void Render::billboardCompose2() {
     c->r[6] = (uint32_t)c->mem_r16s(node + 124);
     c->r[7] = (uint32_t)c->mem_r16s(node + 126);
     func_800517BC(c);
-    c->mtx.identity(MAT_ROTZ);
-    c->math.rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
+    mtxOf(c).identity(MAT_ROTZ);
+    mathOf(c).rotZ((int16_t)c->mem_r16(node + 90), MAT_ROTZ);
     const uint32_t flag = c->mem_r8(node + 71) & 1u;
-    c->math.matMul(MAT_ROTZ, MAT_A, MAT_OUT);
+    mathOf(c).matMul(MAT_ROTZ, MAT_A, MAT_OUT);
     // gen's live callee-saved state at the func_8003C8F4 call site (L5993-5995) — NOTE C464 differs
     // from C2D4: r17=flag (not MAT_A) and r18=node (gen reassigns r17 to flag at L5931 and keeps
     // r18=node from the prologue). billboardEmit spills these, so match gen exactly.
@@ -601,7 +602,7 @@ void Render::billboardEmit() {
           rb.wColor = c->mem_r32(BUF + 4);
           rb.wUv0 = c->mem_r32(BUF + 12); rb.wUv1 = c->mem_r32(BUF + 20);
           rb.wUv2 = c->mem_r32(BUF + 28); rb.wUv3 = c->mem_r32(BUF + 36);
-          c->mRender->mBbRecs.push_back(rb);
+          rend(c)->mBbRecs.push_back(rb);
         }
         // Diagnostic (PSXPORT_DEBUG=bbord): prove the per-particle registration carries DISTINCT ords
         // (before this change every particle of a manager node shared obj_world_ord(node)'s single ord).
@@ -624,10 +625,10 @@ namespace {
 // so it can't be forgotten cluster-by-cluster. engine_set_override_main() installs into that
 // registry, which runs the real gen_func_* body on the oracle (psx_fallback) and the native
 // everywhere else.
-void ov_perObjRenderDispatch(Core* c) { c->mRender->perObjRenderDispatch(); }
-void ov_billboardCompose1(Core* c)    { c->mRender->billboardCompose1(); }
-void ov_billboardCompose2(Core* c)    { c->mRender->billboardCompose2(); }
-void ov_billboardEmit(Core* c)        { c->mRender->billboardEmit(); }
+void ov_perObjRenderDispatch(Core* c) { rend(c)->perObjRenderDispatch(); }
+void ov_billboardCompose1(Core* c)    { rend(c)->billboardCompose1(); }
+void ov_billboardCompose2(Core* c)    { rend(c)->billboardCompose2(); }
+void ov_billboardEmit(Core* c)        { rend(c)->billboardEmit(); }
 }
 
 // ==================================================================================================

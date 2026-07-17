@@ -4,6 +4,7 @@
 // verbatim from game_tomba2.cpp (one behavior, byte-identical) into its own module for PC-game code
 // structure. Diagnostic A/B gates (randverify / trigverify / bitverify) are REPL channels, unchanged.
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include "mathlib.h"
@@ -11,7 +12,7 @@
 void rec_super_call(Core*, uint32_t);
 
 // FUN_8009A450 (the platform PRNG) is owned by `Rng::next` (game/math/rng.cpp) — same LCG
-// (state*0x41C64E6D + 12345 at 0x80105EE8, returns (state>>16)&0x7FFF), called as `c->rng.next()`.
+// (state*0x41C64E6D + 12345 at 0x80105EE8, returns (state>>16)&0x7FFF), called as `rngOf(c).next()`.
 // This file used to carry an unused, uncalled duplicate (`rand_lcg`, ORPHAN) — deleted 2026-07-08
 // (dual-ownership found via codemap; dead code, zero callers).
 // Trig LUTs (FUN_80083E80 sin / FUN_80083F50 cos) are OWNED by class Trig (game/math/trig.h),

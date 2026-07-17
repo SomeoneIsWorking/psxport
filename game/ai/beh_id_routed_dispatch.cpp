@@ -18,11 +18,12 @@
 // rec_super_call) is the safety net. NO GTE/render.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -78,7 +79,7 @@ void beh_id_routed_dispatch(Core* c) {
 
  // ---------------- STATE 3 ----------------
  S3:
-  c->engine.spawn.despawn(s0);                          // FUN_8007A624(node)
+  eng(c).spawn.despawn(s0);                          // FUN_8007A624(node)
  Lret:
   return;
 }

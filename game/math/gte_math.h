@@ -1,7 +1,7 @@
 // game/math/gte_math.h — the hot per-frame GTE-transform CLUSTER (rotation-matrix compose + apply).
 //
 // class Math — instance subsystem owned by Core (`Core::math`), back-pointer wired in Core::Core().
-// Callers reach it as `c->math.matMul(rPtr, mPtr, outPtr)` — no Core* on the method surface. Was
+// Callers reach it as `mathOf(c).matMul(rPtr, mPtr, outPtr)` — no Core* on the method surface. Was
 // previously the `A::B(core, …)` static-with-Core shape; promoted to instance-with-back-pointer to
 // match the standard OOP shape (same as Rng / Trig on Core, Collision / Bit / Spawn on Engine).
 //
@@ -63,7 +63,7 @@ public:
 
   // Wire all 7 addresses above into the global override registry (guest-ABI trampolines: args in
   // r4..r6, return in r2) so EVERY caller reaching them via rec_dispatch or a direct shard call —
-  // substrate included, not just the direct c->math.* call sites in node_xform.cpp/
+  // substrate included, not just the direct mathOf(c).* call sites in node_xform.cpp/
   // cutscene_camera.cpp/graphics_bind.cpp — runs this native bit-exact math instead of
   // interpreting GTE ops. Called once from boot.cpp.
   void registerOverrides();

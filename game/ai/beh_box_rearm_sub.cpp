@@ -16,12 +16,13 @@
 // is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -67,6 +68,6 @@ void beh_box_rearm_sub(Core* c) {
     }
     guest_leaf(c, 0x8013ac98u, nd);                                        // FUN_8013AC98
   } else if (st == 3) {
-    c->engine.spawn.despawn(nd);                                        // FUN_8007A624
+    eng(c).spawn.despawn(nd);                                        // FUN_8007A624
   }
 }

@@ -2,7 +2,7 @@
 //
 // PROPER OOP: one instance per Core, embedded as `Core::engine::behaviors`. Back-pointer wired
 // once by Core's constructor (same pattern as Collision / Bit / Spawn). Callers reach it as
-// `c->engine.behaviors.method(args)`.
+// `eng(c).behaviors.method(args)`.
 //
 // SCOPE: the single registry that maps a per-object HANDLER address to its native implementation
 // (each `beh_*.cpp` behavior file exposes a `beh_*(Core*)` entry that's registered in the

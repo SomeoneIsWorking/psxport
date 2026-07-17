@@ -9,6 +9,7 @@
 // presenting a non-interpolatable 30fps render. No prim matching (matchAndLerp deleted). Host-only,
 // gated g_mods.fps60.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
 #include "render.h"   // class Render — sceneNative()/terrainRenderAll(); DisplayPassGuard (render_mode.h)
 #include "render_queue.h"
@@ -165,8 +166,8 @@ void Fps60::tier1Render(Core* core, float t) {
   // re-run bypassing a gate the real frame honored paints that pass on interp presents only (30Hz flicker
   // of the whole layer): the SOP void beat draws no terrain/scene-table/backdrop; the field-area init
   // frame draws no world at all (unattached geomblks — the later-275 garbage/overflow class).
-  const bool voidBeat = c->mRender->worldVoidBeat();
-  const bool areaInit = c->mRender->fieldAreaInit();
+  const bool voidBeat = rend(c)->worldVoidBeat();
+  const bool areaInit = rend(c)->fieldAreaInit();
 
   ProjParams::Snapshot projSaved = c->rsub.projParams.snapshot();
   RenderQueue* prevRedirect = c->game->rqRedirect;
@@ -174,7 +175,7 @@ void Fps60::tier1Render(Core* core, float t) {
   mCamOverrideOn = true;
   {
     DisplayPassGuard displayPass(c->rsub.mode);   // FAIL-FAST: abort on any guest write, real-path discipline
-    if (!voidBeat && !areaInit) c->mRender->terrainRenderAll();
+    if (!voidBeat && !areaInit) rend(c)->terrainRenderAll();
     // SCENE TABLE (grass/terrain props, kSceneTableDbgNode): camera-only, same as terrain — fieldEntityRender
     // composes ONLY the scene camera (projComposeCamera -> sceneCam, honors mCamOverrideOn above), never a
     // per-object transform, and its geometry (SCENE_ENT_TABLE records) is static per-area data, not per-frame
@@ -184,7 +185,7 @@ void Fps60::tier1Render(Core* core, float t) {
     // direct `game->rq` write bypassing rqRedirect) — both now route through the same choke terrain uses.
     // Gated the same way the real call is (render_walk.cpp sceneNative): mSceneTableTrusted is computed once
     // per real frame and unchanged since (present-time invariant — no tick has run since).
-    if (!voidBeat && !areaInit && c->mRender->mSceneTableTrusted) c->mRender->fieldEntityRender(0x800F2418u);
+    if (!voidBeat && !areaInit && rend(c)->mSceneTableTrusted) rend(c)->fieldEntityRender(0x800F2418u);
 
     // BACKDROP (game-logic scroll, LAYER-TRANSFORM lerp — not camera-projected, so NOT part of the camera
     // override above): mirrors sceneNative's own gate (render_walk.cpp) exactly — mBackdropTrusted (the
@@ -193,12 +194,12 @@ void Fps60::tier1Render(Core* core, float t) {
     // drawer, state 0, is natively owned). The wrap moduli (t4+0x30/+0x32) are static per-area config
     // (ParallaxBg INIT), safe to re-read directly here — same as W/H/tilemap-ptr/tpage/clutbase, which
     // backdropRender() itself re-reads directly below (unchanged guest state this interval).
-    if (!voidBeat && c->mRender->mBackdropTrusted && c->mem_r8(0x800bf873u) == 0 && c->mem_r8(0x800bf870u) == 0) {
+    if (!voidBeat && rend(c)->mBackdropTrusted && c->mem_r8(0x800bf873u) == 0 && c->mem_r8(0x800bf870u) == 0) {
       int modX = c->mem_r16(0x800ed018u + 0x30u), modY = c->mem_r16(0x800ed018u + 0x32u);
       mBgOverride.scrollX = wrapLerp(mBgPrev.scrollX, mBgCur.scrollX, modX, t);
       mBgOverride.scrollY = wrapLerp(mBgPrev.scrollY, mBgCur.scrollY, modY, t);
       mBgOverrideOn = true;
-      c->mRender->backdropRender(0x800ed018u);
+      rend(c)->backdropRender(0x800ed018u);
       mBgOverrideOn = false;
     }
     // fps60 step 2b: re-run the field OBJECT walk under lerped per-object transforms (mObjOverrideOn +
@@ -209,7 +210,7 @@ void Fps60::tier1Render(Core* core, float t) {
     // suppresses them, mirroring sceneNative's field_area_init block.)
     if (!areaInit) {
       mObjOverrideOn = true;
-      c->mRender->fieldObjectsRender();
+      rend(c)->fieldObjectsRender();
       mObjOverrideOn = false;
     }
   }
@@ -427,7 +428,7 @@ void Fps60::present_vk(Core* core) {
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
   mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
-  c->mRender->bbSwapPrev();       // billboard records rotate in lockstep (#67 per-particle lerp source);
+  rend(c)->bbSwapPrev();       // billboard records rotate in lockstep (#67 per-particle lerp source);
                                   // native_boot's bbFrameReset clears the new cur before the next walk
   mHavePrev = 1;
 }

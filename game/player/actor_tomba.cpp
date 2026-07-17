@@ -13,6 +13,7 @@
 //   disas.py 0x80056B48                    (velocityIntegrate)
 
 #include "actor_tomba.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "cfg.h"
 #include "core/engine.h"
@@ -377,7 +378,7 @@ void ActorTomba::postInteractWalk() {
         if (g144 > 1)                                             break;
         if (tomba.transitionSlot() != 0)                          break;
         if (bf9e5 != 6) {
-          c->engine.announcerCue(0x2A, 0x41);                     // native FUN_8004ED94
+          eng(c).announcerCue(0x2A, 0x41);                     // native FUN_8004ED94
         }
         // Type-4 hit state transition on G + item.
         c->mem_w8(G + 4, 2);
@@ -577,8 +578,8 @@ uint8_t ActorTomba::stepModeInteract(uint32_t item, uint32_t mode) {
       // Trig::ratan2 result register width, not a 16-bit angle) — read as mem_r32 throughout.
       if (mode & 0x3Fu) {
         const int32_t heading = (int32_t)c->mem_r32(0x1F80009Cu);   // OUT_HEADING_SPAD
-        const int32_t cosv = c->trig.rcos(heading);
-        const int32_t sinv = c->trig.rsin(heading);
+        const int32_t cosv = trigOf(c).rcos(heading);
+        const int32_t sinv = trigOf(c).rsin(heading);
         const int32_t sum80 = (int32_t)c->mem_r16s(G + 0x80u) + (int32_t)c->mem_r16s(item + 0x80u);
         const int16_t dx = (int16_t)((cosv * sum80) >> 12);
         const int16_t dz = (int16_t)((sinv * sum80) >> 12);
@@ -666,8 +667,8 @@ void ActorTomba::type8Interact(uint32_t item) {
           if ((v0 & 1) == 0) {
             if ((tomba.statusFlags() & 4u) == 0) {
               const int32_t heading = (int32_t)c->mem_r32(0x1F80009Cu);   // full 32-bit word
-              const int32_t cosv = c->trig.rcos(heading);
-              const int32_t sinv = c->trig.rsin(heading);
+              const int32_t cosv = trigOf(c).rcos(heading);
+              const int32_t sinv = trigOf(c).rsin(heading);
               const int32_t sum80 = (int32_t)tomba.boundXZ() + (int32_t)other.boundXZ();
               tomba.setPosX((int16_t)(other.posX() + (int16_t)((cosv * sum80) >> 12)));
               tomba.setPosZ((int16_t)(other.posZ() - (int16_t)((sinv * sum80) >> 12)));
@@ -1218,10 +1219,10 @@ L_80063148:;
 
 // gov_ trampolines for the four leaves above (guest ABI: a0..a2 in r4..r6, return in r2 — the
 // method bodies read/write c->r[] directly, so the wrapper just forwards c).
-void ActorTomba::gov_proximityAngleWalk(Core* c)     { c->engine.actorTomba.proximityAngleWalk(c); }
-void ActorTomba::gov_limbFrameLoad(Core* c)          { c->engine.actorTomba.limbFrameLoad(c); }
-void ActorTomba::gov_invincibilityFlashStep(Core* c) { c->engine.actorTomba.invincibilityFlashStep(c); }
-void ActorTomba::gov_rampOffsetStep(Core* c)         { c->engine.actorTomba.rampOffsetStep(c); }
+void ActorTomba::gov_proximityAngleWalk(Core* c)     { eng(c).actorTomba.proximityAngleWalk(c); }
+void ActorTomba::gov_limbFrameLoad(Core* c)          { eng(c).actorTomba.limbFrameLoad(c); }
+void ActorTomba::gov_invincibilityFlashStep(Core* c) { eng(c).actorTomba.invincibilityFlashStep(c); }
+void ActorTomba::gov_rampOffsetStep(Core* c)         { eng(c).actorTomba.rampOffsetStep(c); }
 
 // registerOverrides — wire the 4 postInteractWalk sub-handlers into the global override registry.
 // Guest ABI: a0=G (implicit/unused — G is always ActorTomba::G_ADDR), a1=item, a2=mode where
@@ -1232,22 +1233,22 @@ void ActorTomba::gov_rampOffsetStep(Core* c)         { c->engine.actorTomba.ramp
 void ActorTomba::ov_stepModeInteract(Core* c) {
   const uint32_t item = c->r[5];
   const uint32_t mode = c->r[6];
-  c->r[2] = c->engine.actorTomba.stepModeInteract(item, mode);
+  c->r[2] = eng(c).actorTomba.stepModeInteract(item, mode);
 }
 void ActorTomba::ov_type8Interact(Core* c) {
   const uint32_t item = c->r[5];
-  c->engine.actorTomba.type8Interact(item);
+  eng(c).actorTomba.type8Interact(item);
 }
 void ActorTomba::ov_type7Interact(Core* c) {
   const uint32_t item = c->r[5];
-  c->r[2] = c->engine.actorTomba.type7Interact(item);
+  c->r[2] = eng(c).actorTomba.type7Interact(item);
 }
 void ActorTomba::ov_growthYSnap(Core* c) {
-  c->engine.actorTomba.growthYSnap();
+  eng(c).actorTomba.growthYSnap();
 }
 
 void ActorTomba::ov_frameTick(Core* c) {
-  c->engine.actorTomba.frameTick();
+  eng(c).actorTomba.frameTick();
 }
 
 // ov_turnBiasCompute/ov_outerTransitionGate/ov_outerTransitionCommit/ov_assetReady — guest ABI
@@ -1261,10 +1262,10 @@ void ActorTomba::ov_turnBiasCompute(Core* c) {
   turnBiasCompute(c, (int16_t)c->r[5]);
 }
 void ActorTomba::ov_outerTransitionGate(Core* c) {
-  c->r[2] = c->engine.actorTomba.outerTransitionGate() ? 1u : 0u;
+  c->r[2] = eng(c).actorTomba.outerTransitionGate() ? 1u : 0u;
 }
 void ActorTomba::ov_outerTransitionCommit(Core* c) {
-  c->engine.actorTomba.outerTransitionCommit((int32_t)c->r[5]);
+  eng(c).actorTomba.outerTransitionCommit((int32_t)c->r[5]);
 }
 void ActorTomba::ov_assetReady(Core* c) {
   c->r[2] = assetReady(c, (int32_t)c->r[4]) ? 1u : 0u;
@@ -1288,18 +1289,18 @@ void ActorTomba::gov_assetReady(Core* c)           { ov_assetReady(c); }
 // so the verifier is MECHANICAL, not eyeball — wired through the same thunk and byte-gated per
 // invocation with PSXPORT_MIRROR_VERIFY=0x800597AC,0x80058648 (native-vs-gen strict compare) plus
 // the standard 2-leg SBS gate. matrixComposeAttached reads G from a0 per its banner; enterOuterState0
-// takes (G=a0 implicit via c->engine.actorTomba's G, mode=a1).
-void ActorTomba::gov_matrixComposeAttached(Core* c) { c->engine.actorTomba.matrixComposeAttached(); }
-void ActorTomba::gov_enterOuterState0(Core* c)      { c->engine.actorTomba.enterOuterState0((int32_t)c->r[5]); }
-void ActorTomba::gov_mode0ActionGate(Core* c)       { c->engine.actorTomba.mode0ActionGate(); }
-void ActorTomba::gov_mode0WalkHandler(Core* c)      { c->engine.actorTomba.mode0WalkHandler(); }
-void ActorTomba::gov_actionHandler8005ACC8(Core* c) { c->engine.actorTomba.actionHandler8005ACC8(); }
-void ActorTomba::gov_actionHandler8005AEE4(Core* c) { c->engine.actorTomba.actionHandler8005AEE4(); }
-void ActorTomba::gov_actionHandler8005F1B0(Core* c) { c->engine.actorTomba.actionHandler8005F1B0(); }
-void ActorTomba::gov_actionHandler800588BC(Core* c) { c->engine.actorTomba.actionHandler800588BC(); }
-void ActorTomba::gov_actionHandler800531DC(Core* c) { c->engine.actorTomba.actionHandler800531DC(); }
-void ActorTomba::gov_actionHandler800660AC(Core* c) { c->engine.actorTomba.actionHandler800660AC(); }
-void ActorTomba::gov_actionHandler8005EF48(Core* c) { c->engine.actorTomba.actionHandler8005EF48(); }
+// takes (G=a0 implicit via eng(c).actorTomba's G, mode=a1).
+void ActorTomba::gov_matrixComposeAttached(Core* c) { eng(c).actorTomba.matrixComposeAttached(); }
+void ActorTomba::gov_enterOuterState0(Core* c)      { eng(c).actorTomba.enterOuterState0((int32_t)c->r[5]); }
+void ActorTomba::gov_mode0ActionGate(Core* c)       { eng(c).actorTomba.mode0ActionGate(); }
+void ActorTomba::gov_mode0WalkHandler(Core* c)      { eng(c).actorTomba.mode0WalkHandler(); }
+void ActorTomba::gov_actionHandler8005ACC8(Core* c) { eng(c).actorTomba.actionHandler8005ACC8(); }
+void ActorTomba::gov_actionHandler8005AEE4(Core* c) { eng(c).actorTomba.actionHandler8005AEE4(); }
+void ActorTomba::gov_actionHandler8005F1B0(Core* c) { eng(c).actorTomba.actionHandler8005F1B0(); }
+void ActorTomba::gov_actionHandler800588BC(Core* c) { eng(c).actorTomba.actionHandler800588BC(); }
+void ActorTomba::gov_actionHandler800531DC(Core* c) { eng(c).actorTomba.actionHandler800531DC(); }
+void ActorTomba::gov_actionHandler800660AC(Core* c) { eng(c).actorTomba.actionHandler800660AC(); }
+void ActorTomba::gov_actionHandler8005EF48(Core* c) { eng(c).actorTomba.actionHandler8005EF48(); }
 
 void ActorTomba::registerOverrides(Game* /*game*/) {
   using overrides::install;
@@ -1481,7 +1482,7 @@ bool ActorTomba::outerTransitionGate() {
   if (tomba.turnCurrent() > 0) return false;   // still mid-turn — nothing to do yet
 
   c->mem_w8(BUSY_LATCH_HI, 0);
-  c->engine.gStateMutate(G, 0xB);
+  eng(c).gStateMutate(G, 0xB);
 
   if (tomba.transitionSlot() == 1) {
     if ((tomba.statusFlags() & 4u) == 0) {
@@ -1547,7 +1548,7 @@ void ActorTomba::outerTransitionCommit(int32_t mode) {
   if (tomba.turnCurrent() != tomba.turnTarget()) {
     // "reset to new target" — cue + gStateMutate(0xB) + conditional stop-motion clear.
     guest_fn(c, LEAF_CUE_800521F4, 0x80054024u, 0u, 0x81u, 0x81u, 0x0Fu);
-    c->engine.gStateMutate(G, 0xB);
+    eng(c).gStateMutate(G, 0xB);
     c->mem_w8(BUSY_LATCH_HI, 0);
     if ((tomba.statusFlags() & 4u) == 0) {
       guest_fn(c, LEAF_WALK_RESET, 0x80054054u, G);
@@ -1791,7 +1792,7 @@ void ActorTomba::frameTick() {
 // the shape of Math::matMul's own "load result into CR0-4" side effect noted in gte_math.h;
 // NOT yet triaged). Both are dispatched via rec_dispatch so this draft compiles without inventing
 // their semantics. Already-native callees (matMul/rotmat/applyMatrixLV/applyMatlv/seedBlock) are
-// ALSO reached via rec_dispatch here (not direct c->math.*/c->engine.nodeXform.* calls) to keep
+// ALSO reached via rec_dispatch here (not direct mathOf(c).*/eng(c).nodeXform.* calls) to keep
 // this pass a pure mechanical transcription — a follow-up pass can fold those into direct native
 // calls once the whole function is line-verified.
 void ActorTomba::matrixComposeAttached() {

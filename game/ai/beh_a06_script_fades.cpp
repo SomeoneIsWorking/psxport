@@ -15,7 +15,7 @@
 //
 // RE'd from Ghidra decomp (scratch/decomp/a06_fade_fns.c + hand-disas 0x8013B29C) + spot-check of
 // raw MIPS. Substrate leaves kept reachable via rec_dispatch (each a small standalone leaf):
-//   0x8007E9C8  = ScreenFade set — native as `c->screenFade.applyLeafCall(color, mode)`
+//   0x8007E9C8  = ScreenFade set — native as `fade(c).applyLeafCall(color, mode)`
 //   0x8006CBD0  = geomblk / cmd-list attach (used by FUN_80139728 state 5)
 //   0x8006CBA8  = same family (used by FUN_8013B074)
 //   0x8003116C  = obj spawner (used by FUN_8013B074)
@@ -26,6 +26,7 @@
 //   0x800708B4  = sound-command mode (used by FUN_8013AFD8)
 
 #include "core.h"
+#include "game_ctx.h"
 #include "core/engine.h"
 #include "render/screen_fade.h"
 #include <cstdint>
@@ -143,7 +144,7 @@ void beh_a06_fade_flash_ramp_80139728(Core* c) {
   // Tail: apply the current gray level as an ADDITIVE fade rect + return 0 (pause the step loop
   // so the next tick re-enters).
   const uint32_t u = c->mem_r8(obj + O_LEVEL_40);
-  c->engine.core->screenFade.applyLeafCall(grayRGB(u), /*ADDITIVE*/ 1u);
+  fade(eng(c).core).applyLeafCall(grayRGB(u), /*ADDITIVE*/ 1u);
   setV0(c, 0u);
 }
 
@@ -264,7 +265,7 @@ void beh_a06_fade_ramp_8013B178(Core* c) {
   }
   if (goAdvance) c->mem_w8(obj + O_STATE_78, (uint8_t)(st + 1u));
   const uint32_t u = c->mem_r8(obj + O_LEVEL_40);
-  c->engine.core->screenFade.applyLeafCall(grayRGB(u), /*ADDITIVE*/ 1u);
+  fade(eng(c).core).applyLeafCall(grayRGB(u), /*ADDITIVE*/ 1u);
   setV0(c, 0u);
 }
 

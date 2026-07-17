@@ -1,7 +1,7 @@
 // class ScreenFade — the screen-fade subsystem, class-shaped port of the PSX FUN_8007e9c8 leaf.
 //
 // PROPER OOP: an instance per Core (embedded as `Core::screenFade`). Callers use it as
-// `c->screenFade.method(args)`. Back-pointer to Core stored once at Game construction time.
+// `fade(c).method(args)`. Back-pointer to Core stored once at Game construction time.
 //
 // PSX behaviour (RE'd from FUN_8007e9c8, MAIN.EXE 0x8007e9c8..0x8007eadc):
 //   fade is TWO chained GP0 packets appended to OT slot `a2` (typically 4). The builder:

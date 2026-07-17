@@ -17,11 +17,12 @@
 // A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net. NO GTE/render.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -41,7 +42,7 @@ void beh_linked_advance_branch(Core* c) {
   if (v1 == 1) goto S1;
   if ((int32_t)v1 < 2) { if (v1 == 0) { guest_leaf(c, 0x80128308u, s0); } goto Lret; }  // STATE 0
   if (v1 == 2) goto Lret;                           // STATE 2 nothing
-  if (v1 == 3) { c->engine.spawn.despawn(s0); goto Lret; }  // STATE 3
+  if (v1 == 3) { eng(c).spawn.despawn(s0); goto Lret; }  // STATE 3
   goto Lret;                                        // v1 >= 4
 
  // ---------------- STATE 1 ----------------

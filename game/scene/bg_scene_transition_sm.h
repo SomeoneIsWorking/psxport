@@ -3,7 +3,7 @@
 // PROPER OOP: one instance per Core, embedded as `Core::engine::bgSceneTransitionSm`. Back-pointer
 // wired once by Core's constructor. Callers reach it through the object graph:
 //
-//     c->engine.bgSceneTransitionSm.step();
+//     eng(c).bgSceneTransitionSm.step();
 //
 // No `extern "C"` shim, no free function, no static, no Core-as-first-arg. Same shape as Demo,
 // Sop, SceneTransition.

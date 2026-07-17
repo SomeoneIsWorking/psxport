@@ -26,11 +26,12 @@
 // short (lh). The byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "collision.h"  // Collision::listScan (FUN_80031780)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -52,7 +53,7 @@ void beh_rand_phase_cull(Core* c) {
   if (st != 1) {
     if (st > 1) {                                // 1 < bVar1
       if (st > 3) return;                        // 3 < bVar1 -> nothing
-      c->engine.spawn.despawn(nd);                 // STATE 2/3: FUN_8007A624(node)
+      eng(c).spawn.despawn(nd);                 // STATE 2/3: FUN_8007A624(node)
       return;
     }
     if (st != 0) return;                         // st < 2, not 1, not 0 -> nothing
@@ -80,7 +81,7 @@ void beh_rand_phase_cull(Core* c) {
     if (c->mem_r32(nd + 0x38) == 0) {
       c->mem_w8(nd + 4, 2);
     } else if (cull == 0) {
-      c->engine.collision.listScan(nd);                     // FUN_80031780(node) — native
+      eng(c).collision.listScan(nd);                     // FUN_80031780(node) — native
     }
   }
 }

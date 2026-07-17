@@ -7,7 +7,7 @@
 // leaf FUN_8007E9C8, which the still-recomp path routes to a substrate body that writes guest OT
 // data our renderer no longer draws — so every fade rect from this handler is silently dropped
 // and the ScreenFade HOLD latch at full-black never releases. Porting the parent behaviour +
-// the two sub-machines native lands the fades on `c->screenFade.applyLeafCall(...)` where the
+// the two sub-machines native lands the fades on `fade(c).applyLeafCall(...)` where the
 // present pipeline actually reads them.
 //
 // RE'd from Ghidra decomp of A06.BIN (scratch/ghidra/A06 project, base 0x80108F9C, imported
@@ -33,6 +33,7 @@
 // via a PSX OT.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "spawn.h"
 #include "render/screen_fade.h"
 #include "guest_abi.h"
@@ -67,7 +68,7 @@ static void whiteFlashPhaseRamp(Core* c, uint32_t node) {
     case 1: {
       uint16_t idx = c->mem_r16(node + 0x40);
       uint32_t color = c->mem_r32(LUT_80144D58 + (uint32_t)(int32_t)(int16_t)idx * 4u);
-      c->screenFade.applyLeafCall(color, /*a1=ADDITIVE*/ 1);
+      fade(c).applyLeafCall(color, /*a1=ADDITIVE*/ 1);
       if ((c->mem_r32(0x1F80017Cu) & 1u) != 0) {
         c->mem_w16(node + 0x40, (uint16_t)((idx + 1u) & 7u));
       }
@@ -79,7 +80,7 @@ static void whiteFlashPhaseRamp(Core* c, uint32_t node) {
     }
     case 2: {
       uint32_t u = (uint32_t)c->mem_r8(node + 0x40);
-      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
+      fade(c).applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
       int16_t v = (int16_t)c->mem_r16(node + 0x40);
       if (v < 0x40) { c->mem_w16(node + 0x40, (uint16_t)(v + 8)); return; }
       if (c->mem_r8(0x800BFA20u) < 4) return;
@@ -88,7 +89,7 @@ static void whiteFlashPhaseRamp(Core* c, uint32_t node) {
     }
     case 3: {
       uint32_t u = (uint32_t)c->mem_r8(node + 0x40);
-      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
+      fade(c).applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
       int16_t v = (int16_t)c->mem_r16(node + 0x40);
       if (v < 0x80) { c->mem_w16(node + 0x40, (uint16_t)(v + 8)); return; }
       if (c->mem_r8(0x800BFA20u) < 5) return;
@@ -97,7 +98,7 @@ static void whiteFlashPhaseRamp(Core* c, uint32_t node) {
     }
     case 4: {
       uint32_t u = (uint32_t)c->mem_r8(node + 0x40);
-      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
+      fade(c).applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
       int16_t v = (int16_t)c->mem_r16(node + 0x40);
       if (v < 0xF8) { c->mem_w16(node + 0x40, (uint16_t)(v + 8)); return; }
       if (c->mem_r8(0x800BFA20u) < 6) return;
@@ -115,7 +116,7 @@ static void whiteFlashPhaseRamp(Core* c, uint32_t node) {
 static void whiteFadeHold(Core* c, uint32_t node) {
   uint8_t st = c->mem_r8(node + 6);
   if (st == 1) {
-    c->screenFade.applyLeafCall(0x00FFFFFFu, /*ADDITIVE*/ 1);
+    fade(c).applyLeafCall(0x00FFFFFFu, /*ADDITIVE*/ 1);
     int16_t v = (int16_t)(c->mem_r16(node + 0x40) - 1);
     c->mem_w16(node + 0x40, (uint16_t)v);
     if (v == -1) {
@@ -133,7 +134,7 @@ static void whiteFadeHold(Core* c, uint32_t node) {
   }
   if (st == 2) {
     uint32_t u = (uint32_t)c->mem_r8(node + 0x40);
-    c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
+    fade(c).applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1);
     if ((int16_t)c->mem_r16(node + 0x40) < 0x21) {
       guest_leaf(c, 0x80051B04u, c->mem_r32(node + 0xC0), 0xC, 0x48);
       c->mem_w8(0x800BFA20u, 9);
@@ -549,7 +550,7 @@ void beh_a06_multi_actor(Core* c) {
   if (st == 1)      state1_run(c, nd);
   else if (st == 0) state0_init(c, nd);
   else if (st == 2) state2_transition(c, nd);
-  else if (st == 3) c->engine.spawn.despawn(nd);       // FUN_8007A624
+  else if (st == 3) eng(c).spawn.despawn(nd);       // FUN_8007A624
   // st >= 4: no-op
   (void)BEH_FN;
 }

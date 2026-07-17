@@ -22,12 +22,13 @@
 // The byte-exact A/B gate is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -54,7 +55,7 @@ void beh_event_record_machine(Core* c) {
     if (st >= 2) {
       if (st == 2) return;
       if (st != 3) return;
-      c->engine.spawn.despawn(nd);                           // FUN_8007A624
+      eng(c).spawn.despawn(nd);                           // FUN_8007A624
       return;
     }
     if (st != 0) return;
@@ -71,7 +72,7 @@ void beh_event_record_machine(Core* c) {
       int i = 0;
       do {
         i++;
-        c->engine.graphicsBind.recordAlloc();                      // FUN_8007AAE8 -> rec (a0 carried)
+        eng(c).graphicsBind.recordAlloc();                      // FUN_8007AAE8 -> rec (a0 carried)
         uint32_t rec = c->r[2];
         c->mem_w32(base + 0xc0, rec);
         c->mem_w16(rec + 6, c->mem_r16(tbl + 0));
@@ -82,7 +83,7 @@ void beh_event_record_machine(Core* c) {
         c->mem_w32(rec + 0xc, 0);
         int16_t t4 = c->mem_r16s(tbl + 8);
         tbl += 10;
-        c->engine.graphicsBind.installSceneRecord(rec, 0xc, (uint32_t)(int32_t)t4);   // FUN_80051B04 (native)
+        eng(c).graphicsBind.installSceneRecord(rec, 0xc, (uint32_t)(int32_t)t4);   // FUN_80051B04 (native)
         base += 4;
       } while (i < (int)c->mem_r8(nd + 8));
     }
@@ -173,6 +174,6 @@ void beh_event_record_machine(Core* c) {
     }
     default: break;
   }
-  c->r[4] = nd; c->engine.graphicsBind.renderUpdate();                               // FUN_800517F8
+  c->r[4] = nd; eng(c).graphicsBind.renderUpdate();                               // FUN_800517F8
   c->mem_w8(nd + 0x2b, 0);
 }

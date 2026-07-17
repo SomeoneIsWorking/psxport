@@ -15,7 +15,7 @@
 // SAME leaf as game/scene/scene_events.cpp's `SceneEvents::classSize` (identical two-level table
 // walk over the same STR_TABLE_BASE/COST_TABLE addresses — see scene_events.h). This file used to
 // carry a redundant copy (`CubeTextLedger::lookupCost`, deduped 2026-07-08 — dual-ownership found
-// via codemap); activateSlot/deactivateSlot now call `c->engine.sceneEvents.classSize(slot, mode)`
+// via codemap); activateSlot/deactivateSlot now call `eng(c).sceneEvents.classSize(slot, mode)`
 // directly (mode 0 == nibbleLo=false / "start" cost, mode 1 == nibbleLo=true / "stop" cost). No
 // dispatch wiring needed for it here either way — see registerOverrides().
 //

@@ -1,7 +1,7 @@
 // game/core/asset.h — class Asset — PC-native ASSET LOADING subsystem owned by Engine
 // (LZ decompress + texture-group unpack + CPU→VRAM upload + stage-0/1 preload chain).
 //
-// PROPER OOP: one instance per Core, embedded on Engine (`c->engine.asset`). Back-pointer `core`
+// PROPER OOP: one instance per Core, embedded on Engine (`eng(c).asset`). Back-pointer `core`
 // wired at Core construction time (same pattern as Font / Placement / Pool / GraphicsBind).
 // Subsystem, not a math library — Asset owns the engine's loading domain (staging buffers, VRAM
 // upload, the boot preload chain) even though the class has no fields today. See CLAUDE.md

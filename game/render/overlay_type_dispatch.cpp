@@ -35,6 +35,7 @@
 //     shared epilogue.
 //   - epilogue (L_8003D22C): restore r31 from sp+16, sp += 24, return.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "render.h"
 #include <cstdint>
@@ -108,7 +109,7 @@ void Render::overlayTypeDispatch() {
 }
 
 namespace {
-void ov_overlayTypeDispatch(Core* c) { c->mRender->overlayTypeDispatch(); }
+void ov_overlayTypeDispatch(Core* c) { rend(c)->overlayTypeDispatch(); }
 }
 
 void overlay_type_dispatch_install() {

@@ -51,6 +51,7 @@
 //   depends on (same class of bug as perobj_dispatch.cpp's CmdListFrame banner / f62 residual) survives
 //   the native<->substrate boundary in either direction.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "render.h"
 #include <cstdint>
@@ -415,11 +416,11 @@ void Render::objListWalk4() {
 
 // ===================================================================================================
 namespace {
-void ov_objListWalk1(Core* c)         { c->mRender->objListWalk1(); }
-void ov_objListWalk2(Core* c)         { c->mRender->objListWalk2(); }
-void ov_objListWalk2Continue(Core* c) { c->mRender->objListWalk2Continue(); }
-void ov_objListWalk3(Core* c)         { c->mRender->objListWalk3(); }
-void ov_objListWalk4(Core* c)         { c->mRender->objListWalk4(); }
+void ov_objListWalk1(Core* c)         { rend(c)->objListWalk1(); }
+void ov_objListWalk2(Core* c)         { rend(c)->objListWalk2(); }
+void ov_objListWalk2Continue(Core* c) { rend(c)->objListWalk2Continue(); }
+void ov_objListWalk3(Core* c)         { rend(c)->objListWalk3(); }
+void ov_objListWalk4(Core* c)         { rend(c)->objListWalk4(); }
 }
 
 // ORACLE-PURITY: installed via engine_set_override_main (never the raw shard_set_override), so SBS

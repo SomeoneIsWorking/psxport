@@ -16,6 +16,7 @@
 // wired) before anyone trusts it as byte-exact. Do not promote to "verified" on the strength of this
 // comment alone.
 #include "actor_melee_engage.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "override_registry.h"
@@ -89,7 +90,7 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
   // negated) before the ratan2 dispatch — i.e. ratan2(-dxS, dzS). The original draft swapped dx/dz
   // (ratan2(-dzS, dxS)); MeleeProximity's sibling function has the identical convention
   // (ratan2(-dx, dz)), confirming this is the real argument order, not a mislabeling on my part.
-  const int32_t angle = c->trig.ratan2(-dxS, dzS);
+  const int32_t angle = trigOf(c).ratan2(-dxS, dzS);
   const int32_t radiusSum2 = (int16_t)c->mem_r16(self + 128u) + (int16_t)c->mem_r16(target + 128u);
   const int32_t margin = radiusSum2 - (int16_t)dist16;
   const int32_t bandWidth = (int16_t)reachHi - (int16_t)absDy;
@@ -111,9 +112,9 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
     // feeds ITS result into the Z update; FUN_80083E80(=Trig::rsin) is called SECOND and feeds the
     // X update. The original draft had these swapped (rsin->Z, rcos->X).
     const int32_t radiusSum3 = (int16_t)c->mem_r16(self + 128u) + (int16_t)c->mem_r16(target + 128u);
-    const int32_t cosV = c->trig.rcos(angle);
+    const int32_t cosV = trigOf(c).rcos(angle);
     const int32_t cosScaled = (int32_t)(((int64_t)cosV * (int64_t)radiusSum3) >> 12);
-    const int32_t sinV = c->trig.rsin(angle);
+    const int32_t sinV = trigOf(c).rsin(angle);
     const int32_t sinScaled = (int32_t)(((int64_t)sinV * (int64_t)radiusSum3) >> 12);
 
     const int32_t self320 = c->mem_r16s(self + 320u);  // angleCmp call1's a1 (NOT a dead read)
@@ -127,12 +128,12 @@ int32_t ActorMeleeEngage::doIt(uint32_t self, uint32_t target, uint32_t anchor) 
 
     const int32_t angleS16 = (int16_t)c->mem_r32(0x1F80009Cu);
     // CALL1: angleCmp(angle, self+320, mode=1) -> turnA; stamped (+2) into self+95.
-    const int32_t turnA = c->trig.angleCmp(angleS16, self320, 1);
+    const int32_t turnA = trigOf(c).angleCmp(angleS16, self320, 1);
     c->mem_w8(self + 95u, (uint8_t)(turnA + 2));
 
     // CALL2: angleCmp(self+86, angle, mode=0) -> turnB. turnB==0 is a plain early return (no state
     // stamp on this path — only the two branches below the target[+95] check ever write state 19).
-    const int32_t turnB = c->trig.angleCmp((int16_t)c->mem_r16s(self + 86u), angleS16, 0);
+    const int32_t turnB = trigOf(c).angleCmp((int16_t)c->mem_r16s(self + 86u), angleS16, 0);
     if (turnB == 0) return 1;
 
     // target[+95]==1 branch vs self's own "lock owner" (+357) branch
@@ -293,7 +294,7 @@ extern void ov_a00_set_override(uint32_t, void (*)(Core*));
 extern void ov_a00_gen_80112188(Core*);   // substrate body — kept alive for psx_fallback (core B)
 
 namespace {
-void ov_actorMeleeEngage(Core* c) { c->engine.actorMeleeEngage.doItFramed(); }
+void ov_actorMeleeEngage(Core* c) { eng(c).actorMeleeEngage.doItFramed(); }
 }  // namespace
 
 void ActorMeleeEngage::registerOverrides(Game* /*game*/) {

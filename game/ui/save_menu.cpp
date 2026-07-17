@@ -71,6 +71,7 @@
 // dispatcher/state-machine family gates do (disp26c88 / sm40558). See docs/port-progress.md §SAVE.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "save_menu.h"
 #include <stdint.h>
@@ -134,6 +135,6 @@ void SaveMenu::runHandler(uint32_t task) {
 // SaveMenu::dispatchBody(c) — native entry replacing FUN_80036DFC. a0 = the save-menu task struct.
 // ------------------------------------------------------------------------------------------------
 void SaveMenu::dispatchBody(Core* c) {
-  c->saveMenu.runHandler(c->r[R_A0]);
+  saveMenuOf(c).runHandler(c->r[R_A0]);
 }
 

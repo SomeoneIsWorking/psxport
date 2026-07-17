@@ -35,11 +35,12 @@
 // byte-exact A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 
@@ -90,7 +91,7 @@ void beh_pos_history_trail(Core* c) {
     if (st != 2) {
       if (st != 3) return;
       // ---- STATE 3 ----
-      c->engine.spawn.despawn(nd);                 // FUN_8007A624 (still-PSX leaf)
+      eng(c).spawn.despawn(nd);                 // FUN_8007A624 (still-PSX leaf)
       return;
     }
     // ---- STATE 2 : RETIRE-WALK ----

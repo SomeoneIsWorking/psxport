@@ -5,6 +5,7 @@
 // all state lives in guest RAM at the addresses named in scene_events.h.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "scene/scene_events.h"
 #include "core/engine.h"
@@ -77,7 +78,7 @@ uint32_t SceneEvents::armBody(Core* c) {
   // (d) Advance stream cursor by classSize(arg, high nibble) — reuses the public method so
   //     substrate callers of FUN_80040A58 still see identical semantics.
   c->r[4] = eventId; c->r[5] = 0;
-  uint32_t size = c->engine.sceneEvents.classSize((uint8_t)eventId, /*nibbleLo=*/false);
+  uint32_t size = eng(c).sceneEvents.classSize((uint8_t)eventId, /*nibbleLo=*/false);
   c->mem_w32(STREAM_CURSOR, c->mem_r32(STREAM_CURSOR) + size);
 
   // (e) Append to the ring. record[idx]+0x16 = arg, record[idx]+0x1C = 0. Head byte holds `idx`

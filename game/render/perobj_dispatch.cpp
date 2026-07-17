@@ -58,6 +58,7 @@
 // band — untouched, reached transparently via rec_dispatch exactly as the recomp body reaches them).
 // Otherwise (or mode>=22) fall back to func_800803DC (the substrate's generic GT3/GT4 packet emitter).
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"
 #include "render.h"
 #include "cfg.h"
@@ -242,7 +243,7 @@ void Render::cmdListDispatch() {
     // only writer): nodes on OTHER walk lists perObjFlush never visits (e.g. the Bcf4 aux list the
     // REDIRECT below exists for) are simply absent, so they stay uncovered unless redirectGeneric's
     // own inline native draw covers them.
-    bool nodeNativeCovered = render_field_native_active(c) && c->mRender->nativeObjDrawn(c, node);
+    bool nodeNativeCovered = render_field_native_active(c) && rend(c)->nativeObjDrawn(c, node);
     bool redirectGeneric = false;
     if (render_field_native_active(c)) {
       const uint32_t modeByte = c->mem_r8(MODE_BYTE);
@@ -258,9 +259,9 @@ void Render::cmdListDispatch() {
         // Engine::drawOTag uses around sceneNative().
         DisplayPassGuard displayPass(c->rsub.mode);
         c->rsub.diag.beginObject(node);           // real dbg_node identity for this cmd's RqItems
-        EObjXform w; c->mRender->projComposeObject(cmd, &w); c->mRender->projSetActive(&w);
-        c->mRender->gt3gt4(geomblk, otbase);           // the real picture: native float, real per-vertex depth
-        c->mRender->projClearActive();
+        EObjXform w; rend(c)->projComposeObject(cmd, &w); rend(c)->projSetActive(&w);
+        rend(c)->gt3gt4(geomblk, otbase);           // the real picture: native float, real per-vertex depth
+        rend(c)->projClearActive();
         c->rsub.diag.endObject();
       }
     }
@@ -367,8 +368,8 @@ void Render::perModeDispatch() {
 }
 
 namespace {
-void ov_cmdListDispatch(Core* c) { c->mRender->cmdListDispatch(); }
-void ov_perModeDispatch(Core* c) { c->mRender->perModeDispatch(); }
+void ov_cmdListDispatch(Core* c) { rend(c)->cmdListDispatch(); }
+void ov_perModeDispatch(Core* c) { rend(c)->perModeDispatch(); }
 }
 
 // ORACLE-PURITY FIX (2026-07-09, the f118 residual root cause): these two were installed via the RAW

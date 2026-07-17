@@ -22,6 +22,7 @@
 // reproduce this in plain float (real sin/cos of angle*2*pi/4096) rather than bit-exact PSX fixed-point:
 // the picture is what matters here, not a byte match.
 #include "margin_render.h"
+#include "game_ctx.h"
 #include "render.h"
 #include "projection.h"
 #include "game.h"
@@ -162,12 +163,12 @@ void MarginRenderer::flush(Core* c) {
       float Robj4096[3][3];
       for (int r = 0; r < 3; r++) for (int col = 0; col < 3; col++) Robj4096[r][col] = xf[i].Robj[r][col] * 4096.0f;
       EObjXform w;
-      c->mRender->projComposeObjectHost(Robj4096, xf[i].Tobj, &w);
-      c->mRender->projSetActive(&w);
+      rend(c)->projComposeObjectHost(Robj4096, xf[i].Tobj, &w);
+      rend(c)->projSetActive(&w);
       uint32_t otbase = otbase_ptr;
       if ((c->mem_r8(node + 0xD) & 0xF) == 4) otbase = otbase_ptr + ((c->mem_r8s(cmd + 0x3F)) << 2);
-      c->mRender->gt3gt4(geomblk, otbase);           // fully-native GT3/GT4 submit — no guest writes
-      c->mRender->projClearActive();
+      rend(c)->gt3gt4(geomblk, otbase);           // fully-native GT3/GT4 submit — no guest writes
+      rend(c)->projClearActive();
     }
   }
   if (dbg_ && !nodes_.empty())

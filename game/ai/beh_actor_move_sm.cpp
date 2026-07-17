@@ -23,13 +23,14 @@
 // A/B gate (full RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/render.h"       // Core::mRender (NodeXform)
 #include "object/actor.h"     // Actor::boundsCull (FUN_8007778C — thin wrapper native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "animation.h" // Animation::step (FUN_80076D68)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
@@ -60,7 +61,7 @@ void beh_actor_move_sm(Core* c) {
       uint8_t f = c->mem_r8(nd + 0x1b);
       if (f & 0x40) { c->mem_w8(nd + 0x1b, (uint8_t)(f & 0xbf)); return; }
       c->mem_w32(c->mem_r32(nd + 0x10) + 0xc, 0);
-      c->engine.spawn.despawn(nd);                          // FUN_8007A624
+      eng(c).spawn.despawn(nd);                          // FUN_8007A624
       return;
     }
     // STATE 2
@@ -103,7 +104,7 @@ void beh_actor_move_sm(Core* c) {
     uint8_t n3 = c->mem_r8(nd + 3);
     switch (n5) {
       case 0:
-        c->engine.animation.step(nd);                 // FUN_80076D68 (native)
+        eng(c).animation.step(nd);                 // FUN_80076D68 (native)
         if (n3 != 3 && (bf809 != 0 || s137 != 0)) break;
         if ((n3 & 1) == 0) guest_leaf(c, 0x8011dfc0u, nd);     // FUN_8011DFC0
         else               guest_leaf(c, 0x8011e340u, nd);     // FUN_8011E340
@@ -121,9 +122,9 @@ void beh_actor_move_sm(Core* c) {
       case 3:
         if (n3 == 3 || (bf809 == 0 && s137 == 0)) {
           guest_leaf(c, 0x8011f998u, nd);                      // FUN_8011F998
-          c->engine.animation.step(nd);               // FUN_80076D68 (native)
-          c->engine.animation.step(nd);
-          c->engine.animation.step(nd);
+          eng(c).animation.step(nd);               // FUN_80076D68 (native)
+          eng(c).animation.step(nd);
+          eng(c).animation.step(nd);
         }
         break;
       case 4:
@@ -132,7 +133,7 @@ void beh_actor_move_sm(Core* c) {
         guest_leaf(c, 0x8012185cu, nd);                        // FUN_8012185C
         break;
       case 5:
-        c->engine.animation.step(nd);                 // FUN_80076D68 (native)
+        eng(c).animation.step(nd);                 // FUN_80076D68 (native)
         guest_leaf(c, 0x80120c50u, nd);                        // FUN_80120C50
         break;
       default: break;
@@ -141,5 +142,5 @@ void beh_actor_move_sm(Core* c) {
 
  Lcommon:
   c->mem_w8(nd + 0x29, 0);
-  if (c->mem_r8(nd + 1) != 0) c->mRender->mNodeXform.buildWithOffset(nd);   // FUN_800518FC (native)
+  if (c->mem_r8(nd + 1) != 0) rend(c)->mNodeXform.buildWithOffset(nd);   // FUN_800518FC (native)
 }

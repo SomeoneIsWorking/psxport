@@ -1,7 +1,7 @@
 // class Engine — the PC-native GAME/STAGE driver of Tomba! 2.
 //
 // PROPER OOP: one instance per Core (embedded as `Core::engine`). Callers use it as
-// `c->engine.method()` — non-static instance methods, back-pointer to Core stored once at Core
+// `eng(c).method()` — non-static instance methods, back-pointer to Core stored once at Core
 // construction time (same pattern as `Core::screenFade`). No `extern "C"` shims.
 //
 // SCOPE: the GAME-stage state machine (sm[0x48] handlers) and its per-frame field driver — the
@@ -70,7 +70,7 @@ public:
   uint16_t mLast4a = 0xffff, mLast4c = 0xffff;
 
   // ── Scene subsystem instances owned by Engine ─────────────────────────────────────
-  // Callers reach them as `c->engine.sceneTransition.method(args)`.
+  // Callers reach them as `eng(c).sceneTransition.method(args)`.
   SceneTransition sceneTransition;   // area-mask trigger + sub-scene swap handshake
   TransitionState3 transitionState3;  // mid-transition entity walker (guest FUN_8007B04C)
   ObjectList       objectList;        // per-frame entity-list walkers (guest FUN_8007A904 / FUN_80069B28)
@@ -239,7 +239,7 @@ public:
   void submitPage810cFaithful();
 
   // (fadeSequencer moved to ScreenFade::sequence — see game/render/screen_fade.h;
-  // callers reach it as `c->screenFade.sequence(node)`.)
+  // callers reach it as `fade(c).sequence(node)`.)
 
   // frameUpdate: per-frame engine tick — the PC-driven game loop's frame body called directly
   //   from native_step_frame (native_boot.cpp). Runs the still-PSX per-frame update leaf, then
@@ -394,7 +394,7 @@ public:
   uint32_t walkStart(uint32_t obj, uint32_t mode, int16_t subMode);
 
   // (playerGrowthStep moved to ActorTomba::growthStep — see game/player/actor_tomba.h; callers
-  //  reach it as `c->engine.actorTomba.growthStep(mode)` since obj is always G.)
+  //  reach it as `eng(c).actorTomba.growthStep(mode)` since obj is always G.)
 
   // uploadModeSprites(): guest FUN_80067DA8. Uploads 5 sprite patterns (each a 16×1 BGR555 strip)
   //   to VRAM at fixed (X=0x1F0, Y=0x1E2/0x1E5/0x1C9/0x1D0/0x1B3) rects. The 5 source pointers
@@ -448,12 +448,12 @@ public:
   // The engine's own PC-native init prefix (was the free functions `eng_init_*` in startup.cpp).
   // Each method reimplements the corresponding guest init leaf: frame/display/camera state, the
   // entity pool control block, the allocator + dispatch table, mode ctrl, input, and the orchestrator
-  // that sequences them. Called via c->engine.initX() from native_boot.
+  // that sequences them. Called via eng(c).initX() from native_boot.
   void initFrameState();               // FUN_80050A0C — vblank + double-buffer pacing state
   void initDisplay();                  // FUN_800509B4 — GTE projection CRs + display H
   void initCamera();                   // FUN_80050A80 — camera scratchpad matrices + state
   // FUN_80051794 (identity 3x3 rot + zero translation) is owned by `Mtx::identity` (game/math/mtx.h)
-  // — call `c->mtx.identity(p)` directly (deduped 2026-07-08: this used to carry a redundant copy).
+  // — call `mtxOf(c).identity(p)` directly (deduped 2026-07-08: this used to carry a redundant copy).
   void initEntityPool();               // FUN_8007B328 — entity-pool control block + fixed-pt scales
   void initAlloc(uint32_t s1, uint32_t s2);  // FUN_80088B00 — allocator + 6-entry dispatch table
   void initInput();                    // FUN_80087A60 → 80086970 — input subsystem

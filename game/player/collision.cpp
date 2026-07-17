@@ -6,6 +6,7 @@
 // Diagnostic A/B gates (listscan/gridsetup/gridquery/gridresolve/gridstep) are REPL channels,
 // unchanged. The dispatched grid callees stay reachable by address (rec_dispatch).
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "core/engine.h"
 #include <stdio.h>
@@ -260,7 +261,7 @@ int Collision::gridQuery() {
 // packets. The three callees stay PSX via rec_dispatch (the two grid leaves honor their own owned
 // override identically in the dispatched path). Return: 0 only when the query returns 0; otherwise 1.
 static uint32_t grid_resolve_498c8(Core* c, uint32_t obj) {
-  Collision& col = c->engine.collision;
+  Collision& col = eng(c).collision;
   for (;;) {
     col.gridStep(obj);                                           // per-step grid-origin/index setup — native
     col.gridSetup((uint32_t)c->mem_r8(0x1F8001FEu));             // row-ptr setup — native
@@ -970,11 +971,11 @@ void Collision::flatNormal(uint32_t obj) {
 }
 
 // eov_* wrappers — guest-ABI adapters (args in c->r[4..], return in c->r[2]). One per leaf.
-static void eov_collisionLineCross(Core* c)           { c->engine.collision.lineCross(c->r[4]); }
-static void eov_collisionFloorPick(Core* c)           { c->engine.collision.floorPick(); }
-static void eov_collisionSlopeLocalB(Core* c)         { c->engine.collision.slopeLocalB(); }
-static void eov_collisionSlopeLocalAdvance(Core* c)   { c->engine.collision.slopeLocalAdvance(); }
-static void eov_collisionFlatNormal(Core* c)          { c->engine.collision.flatNormal(c->r[4]); }
+static void eov_collisionLineCross(Core* c)           { eng(c).collision.lineCross(c->r[4]); }
+static void eov_collisionFloorPick(Core* c)           { eng(c).collision.floorPick(); }
+static void eov_collisionSlopeLocalB(Core* c)         { eng(c).collision.slopeLocalB(); }
+static void eov_collisionSlopeLocalAdvance(Core* c)   { eng(c).collision.slopeLocalAdvance(); }
+static void eov_collisionFlatNormal(Core* c)          { eng(c).collision.flatNormal(c->r[4]); }
 
 void Collision::registerOverrides() {
   using overrides::install;

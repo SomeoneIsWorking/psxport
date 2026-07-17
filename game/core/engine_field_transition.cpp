@@ -9,6 +9,7 @@
 // WIRED 2026-07-16 via Engine::installFieldTransitions (engine_set_override_game); port_check PASS +
 // MIRROR_VERIFY-gated. Verbatim PORT_GEN body (ov_game overlay).
 #include "engine.h"
+#include "game_ctx.h"
 #include "core.h"
 
 void rec_dispatch(Core*, uint32_t);  // overlay_router.cpp — shared dispatch choke point
@@ -91,7 +92,7 @@ void Engine::fieldTransitionCase5() {
 extern void ov_game_gen_8010766C(Core*);
 extern void engine_set_override_game(uint32_t, OverrideFn, OverrideFn);
 namespace {
-void gov_fieldTransitionCase5(Core* c) { c->engine.fieldTransitionCase5(); }
+void gov_fieldTransitionCase5(Core* c) { eng(c).fieldTransitionCase5(); }
 }
 void Engine::installFieldTransitions() {
   static bool done = false;

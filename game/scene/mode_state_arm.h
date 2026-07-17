@@ -1,7 +1,7 @@
 // game/scene/mode_state_arm.h — PC-native MODE-STATE ARM primitive pair.
 //
 // PROPER OOP: one instance per Core, embedded on Engine, reached as
-// `c->engine.modeStateArm.method(args)`. Back-pointer wired at Core construction (same pattern
+// `eng(c).modeStateArm.method(args)`. Back-pointer wired at Core construction (same pattern
 // as SceneEvents / Sfx).
 //
 // SCOPE: the twin mode-state arm writes — the direct 3-byte payload arm (FUN_8005082C) and the

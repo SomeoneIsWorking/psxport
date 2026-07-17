@@ -1,7 +1,7 @@
 // class Inventory — the PC-native item / inventory-collection subsystem.
 //
 // PROPER OOP: an instance per Core (embedded as `Core::inventory`). Callers use it as
-// `c->inventory.give(type, amount)` — the natural PC-game shape. The FUN_xxx entry-shape
+// `inv(c).give(type, amount)` — the natural PC-game shape. The FUN_xxx entry-shape
 // wrappers (Core*, args in r[4]/r[5]) remain as static class entrypoints for the
 // `invverify` A/B gate and any still-recomp-shaped caller (repl.cpp `give_only` etc.).
 //

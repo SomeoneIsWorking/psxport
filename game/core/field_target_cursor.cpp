@@ -9,6 +9,7 @@
 // UNWIRED — dead code. Do not wire into any dispatch table before running port_check.py
 // and the mandatory line-by-line verify pass (docs/fleet-workflow.md §9).
 #include "engine.h"
+#include "game_ctx.h"
 #include "override_registry.h"
 #include "core.h"
 
@@ -208,7 +209,7 @@ void Engine::fieldTargetCursor() {
 // func_800251F0(c) caller reaches the native body too, not only rec_dispatch. ----
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_800251F0(Core*);
-namespace { void ov_fieldTargetCursor(Core* c) { c->engine.fieldTargetCursor(); } }
+namespace { void ov_fieldTargetCursor(Core* c) { eng(c).fieldTargetCursor(); } }
 void Engine::registerFieldTargetCursor() {
   overrides::install(0x800251F0u, "Engine::fieldTargetCursor", ov_fieldTargetCursor,
                      gen_func_800251F0, shard_set_override);

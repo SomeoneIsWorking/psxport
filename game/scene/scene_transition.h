@@ -4,8 +4,8 @@
 // scene subsystem umbrella). Back-pointer `core` is wired once by Core's constructor. Callers
 // reach methods via the object graph:
 //
-//     c->engine.sceneTransition.areaMaskTrigger(area, sub);
-//     c->engine.sceneTransition.stepSwapWaiter(node);
+//     eng(c).sceneTransition.areaMaskTrigger(area, sub);
+//     eng(c).sceneTransition.stepSwapWaiter(node);
 //
 // No `extern "C"` shims, no static methods, no Core-as-a-first-arg. Same shape as `NodeXform`,
 // `Inventory`, `ScreenFade`, `Rng`.

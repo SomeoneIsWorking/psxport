@@ -5,11 +5,12 @@
 // TransitionState3::walkOnce. The `behhist` diagnostic (from the pre-restructure call_handler)
 // is preserved in the main walk since it feeds top-down ownership decisions.
 #include "object_list.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "cfg.h"
 #include "game.h"                 // Fps60::current_object
 #include "tomba2_types.h"         // T2_OBJLIST_HEAD_1/2, T2OBJ_HANDLER/NEXT/RENDER_FLAG
-#include "render.h"               // c->mRender->margin.flush (native widescreen margin pass)
+#include "render.h"               // rend(c)->margin.flush (native widescreen margin pass)
 #include <stdint.h>
 #include <stdio.h>
 
@@ -23,7 +24,7 @@ namespace {
 inline void call_handler(Core* c, uint32_t node) {
   uint32_t h = c->mem_r32(node + T2OBJ_HANDLER);
   if (cfg_dbg("behhist")) {
-    ObjectList& ol = c->engine.objectList;
+    ObjectList& ol = eng(c).objectList;
     uint32_t* addr = ol.mBehAddr; long* cnt = ol.mBehCnt; int& nh = ol.mBehN; long& w = ol.mBehW;
     int i=0; for(; i<nh; i++) if(addr[i]==h) break;
     if(i==nh && nh<64){ addr[nh]=h; cnt[nh]=0; nh++; }
@@ -31,7 +32,7 @@ inline void call_handler(Core* c, uint32_t node) {
     if((++w % 300)==0){ fprintf(stderr,"[behhist] distinct=%d handlers:\n", nh);
       for(int j=0;j<nh;j++) fprintf(stderr,"   %08X  x%ld\n", addr[j], cnt[j]); }
   }
-  c->engine.behaviors.dispatchObj(node, h);
+  eng(c).behaviors.dispatchObj(node, h);
 }
 
 inline void walk_list(Core* c, uint32_t head, long* count) {
@@ -51,7 +52,7 @@ void ObjectList::walkAll() {
   long nodes = 0;
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_1), &nodes);
   walk_list(c, c->mem_r32(T2_OBJLIST_HEAD_2), &nodes);
-  c->mRender->margin.flush(c);
+  rend(c)->margin.flush(c);
 
   if (mDbg < 0) mDbg = cfg_dbg("engine") ? 1 : 0;
   if (mDbg && (mWalksAll % 300) == 0)
@@ -116,7 +117,7 @@ void ObjectList::walkAux() {
   for (uint32_t n = c->mem_r32(AUX_LIST_HEAD); n; ) {
     uint32_t h    = c->mem_r32(n + 0x1Cu);
     uint32_t next = c->mem_r32(n + 0x24u);
-    c->engine.behaviors.dispatchObj(n, h);
+    eng(c).behaviors.dispatchObj(n, h);
     n = next;
   }
 }
@@ -146,7 +147,7 @@ void ObjectList::walkAuxFaithful() {
     uint32_t h = c->mem_r32(node + 0x1Cu);
     c->r[16] = c->mem_r32(node + 0x24u);   // next — carried in s0 across the call, matches gen
     c->r[31] = 0x80069B50u;                // jal-site ra — matches gen's spill target for callees
-    c->engine.behaviors.dispatchObj(node, h);
+    eng(c).behaviors.dispatchObj(node, h);
     node = c->r[16];
   }
   c->r[31] = c->mem_r32(sp + 20);

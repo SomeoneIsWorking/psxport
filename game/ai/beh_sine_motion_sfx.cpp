@@ -26,13 +26,14 @@
 // safety net. NO GTE (the sin is a table lookup, not gte_op).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::enqueueByClass (FUN_8007703C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_render_update (FUN_800517F8)
 #include "math/trig.h"   // class Trig — rsin (FUN_80083E80)
 void rec_super_call(Core*, uint32_t);
@@ -65,7 +66,7 @@ void beh_sine_motion_sfx(Core* c) {
 
  L1b0:                                   // ===== STATE 0 (INIT) =====
   // FUN_80051B70(node,12,6)
-  c->r[4] = nd; c->r[5] = 12; c->r[6] = 6; c->engine.graphicsBind.recordInit(); v0 = (int32_t)c->r[2];
+  c->r[4] = nd; c->r[5] = 12; c->r[6] = 6; eng(c).graphicsBind.recordInit(); v0 = (int32_t)c->r[2];
   if (v0 != 0) goto Lret;                // bne v0,zero,0x801365a8 ; delay v0=576
   v0 = 576;
   a0 = (int32_t)nd;
@@ -213,7 +214,7 @@ void beh_sine_motion_sfx(Core* c) {
    s3 = (int32_t)c->mem_r16(nd + 0x36);  // lhu node[0x36]
    a0 = (int32_t)((uint32_t)s2 << 16) >> 16;  // delay sra a0,a0,16 = sext16(s2)
    {
-     int32_t sn = c->trig.rsin(a0);                        // FUN_80083E80(sin) [native]
+     int32_t sn = trigOf(c).rsin(a0);                        // FUN_80083E80(sin) [native]
      int32_t t = sn << 1; t = t + sn; t = t << 2; t = t + sn;
      t = (int32_t)((uint32_t)t << 6);   // *832
      v0 = (int32_t)c->mem_r16(nd + 0x94);  // lhu node[0x94]
@@ -263,7 +264,7 @@ void beh_sine_motion_sfx(Core* c) {
      bool e31 = (v1 != 31);
      v0 = 34;                            // delay
      if (e31) goto L4ec;
-     c->engine.cull.enqueueByClass(nd);            // FUN_8007703C (native)
+     eng(c).cull.enqueueByClass(nd);            // FUN_8007703C (native)
      goto L4fc;
    }
   L4ec:
@@ -272,7 +273,7 @@ void beh_sine_motion_sfx(Core* c) {
   L4fc:
    v0 = (int32_t)c->mem_r8(nd + 1);      // lbu node[1]
    if (v0 == 0) goto L598;
-   c->r[4] = nd; c->engine.graphicsBind.renderUpdate();     // FUN_800517F8(node)
+   c->r[4] = nd; eng(c).graphicsBind.renderUpdate();     // FUN_800517F8(node)
    v0 = (int32_t)c->mem_r8(0x800bf809u);
    if (v0 != 0) goto L598;
    v0 = (int16_t)(uint16_t)s1;           // sext16(s1)
@@ -281,7 +282,7 @@ void beh_sine_motion_sfx(Core* c) {
   L538:
    if (v0 < 256) {                       // slti 256 ; beq -> >=256 goto L558
      a0 = (int32_t)c->mem_r32(nd + 0x68);// lw 104
-     c->engine.areaSlots.ackIfMatch((uint32_t)a0);   // FUN_80074AF0 (native)
+     eng(c).areaSlots.ackIfMatch((uint32_t)a0);   // FUN_80074AF0 (native)
      c->mem_w32(nd + 0x68, 0);
      goto L598;
    }
@@ -292,8 +293,8 @@ void beh_sine_motion_sfx(Core* c) {
   L56c:
    if (v0 >= 256) goto L598;
    a0 = (int32_t)c->mem_r32(nd + 0x68);
-   c->engine.areaSlots.ackIfMatch((uint32_t)a0);   // FUN_80074AF0 (native)
-   c->engine.sfx.trigger(129, 0, 0);   // FUN_80074590 (native; id 129 → path A per-area)
+   eng(c).areaSlots.ackIfMatch((uint32_t)a0);   // FUN_80074AF0 (native)
+   eng(c).sfx.trigger(129, 0, 0);   // FUN_80074590 (native; id 129 → path A per-area)
    v0 = (int32_t)c->r[2];
    c->mem_w32(nd + 0x68, (uint32_t)v0);
    // fall to L598
@@ -304,7 +305,7 @@ void beh_sine_motion_sfx(Core* c) {
   goto Lret;
 
  L5a0:
-  c->engine.spawn.despawn(nd);                        // FUN_8007A624(node) — native
+  eng(c).spawn.despawn(nd);                        // FUN_8007A624(node) — native
 
  Lret:
   return;

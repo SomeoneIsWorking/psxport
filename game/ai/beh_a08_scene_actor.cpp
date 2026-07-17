@@ -10,7 +10,7 @@
 //                 the additive-gray fade-out that ends with `DAT_800BFA50=0x16` + node[+4]=3
 //                 despawn. Ported inline as `cutsceneDirector` — reached via a PLAIN C CALL from
 //                 the native state1Run's case 0x1A, so the fade fires natively via
-//                 c->screenFade.applyLeafCall.
+//                 fade(c).applyLeafCall.
 //
 // RE'd from Ghidra 12.0.4 A08 project + hand-disas spot-verify (scratch/decomp/a08_cutscene_
 // director.c). Substrate leaves kept reachable via rec_dispatch (each a small standalone leaf):
@@ -36,6 +36,7 @@
 //   0x8013DD48  = sub-obj dispatcher (called from cutsceneDirector state 4/5/6)
 
 #include "core.h"
+#include "game_ctx.h"
 #include "core/engine.h"
 #include "render/screen_fade.h"
 #include <cstdint>
@@ -280,7 +281,7 @@ void cutsceneDirector(Core* c, uint32_t obj) {
       }
       if (!doneFinish) {
         const uint32_t u = c->mem_r8(obj + O_H_40);
-        c->engine.core->screenFade.applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1u);
+        fade(eng(c).core).applyLeafCall((u << 16) | (u << 8) | u, /*ADDITIVE*/ 1u);
         return;
       }
       c->mem_w8(G_800BFA50, 0x16u);

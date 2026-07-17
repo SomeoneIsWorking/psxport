@@ -1,6 +1,6 @@
 // class Animation — PC-native per-object ANIMATION-VM subsystem owned by Engine.
 //
-// PROPER OOP: one instance per Core, reached as `c->engine.animation.step(node)`. Back-pointer
+// PROPER OOP: one instance per Core, reached as `eng(c).animation.step(node)`. Back-pointer
 // `core` wired once at Core construction time (same pattern as GraphicsBind / Font).
 //
 // SCOPE: the per-object animation-sequence VM stepper (guest FUN_80076D68). Given a node

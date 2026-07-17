@@ -2,6 +2,7 @@
 // contracts; the 8 leaf callees stay substrate.
 
 #include "world/area_slots.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
@@ -144,13 +145,13 @@ void AreaSlots::updateTail() {
   }
 
   // (4) Common tail leaves — both take a0 = 0x800BE1F8.
-  // Was: c->engine.musicCoord.musicFadeIn() — WRONG. FUN_80075824 was misnamed as musicFadeIn;
+  // Was: eng(c).musicCoord.musicFadeIn() — WRONG. FUN_80075824 was misnamed as musicFadeIn;
   // the RE (2026-07-03, ghidra) shows it is the per-voice VOLUME MIXER tick, not a fade snap.
   // SBS gameplay mode surfaced the divergence at 0x800BE208/A the moment we replaced the recomp
   // dispatch with musicFadeIn; the proper port is voiceMixTick(0x800BE1F8).
   c->r[4] = S5;
   c->r[31] = 0x80075C58u;                           // jal-site const, kept even for the native call
-  c->engine.musicCoord.voiceMixTick(S5);            // FUN_80075824 (native)
+  eng(c).musicCoord.voiceMixTick(S5);            // FUN_80075824 (native)
   c->r[4] = S5;
   c->r[31] = 0x80075C60u;
   rec_dispatch(c, 0x80099490u);
@@ -256,7 +257,7 @@ bool AreaSlots::updateCell(uint32_t sigArg, int32_t dx, int32_t dy) {
 }
 
 static void eov_areaSlotsPrime(Core* c) {
-  c->engine.areaSlots.primeCountdown(c->r[4]);
+  eng(c).areaSlots.primeCountdown(c->r[4]);
   // Mirror gen_func_80074A38's register outputs (shard_0.c): r2=10 (the kind byte), r3=entry addr.
   // The native C++ body only writes the guest byte; the substrate leaves these in v0/v1 at return.
   c->r[2] = 10;
@@ -267,7 +268,7 @@ static void eov_areaSlotsUpdateCell(Core* c) {
   // dispatches a still-substrate leaf (FUN_80092E3C) which spills caller r31 — needs the frame.
   c->r[29] -= 24;
   c->mem_w32(c->r[29] + 16, c->r[31]);
-  c->r[2] = c->engine.areaSlots.updateCell(c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]) ? 1 : 0;
+  c->r[2] = eng(c).areaSlots.updateCell(c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]) ? 1 : 0;
   c->r[31] = c->mem_r32(c->r[29] + 16);
   c->r[29] += 24;
 }

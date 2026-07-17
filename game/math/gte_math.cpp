@@ -9,6 +9,7 @@
 // Profiled hot-list (field, later-186, docs/port-progress.md §F): FUN_80077FB0 isqrt = 8.41% of all
 // interpreter instructions (and a frequency leader). First port here.
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "gte_math.h"   // class Math — static entry surface + ov_* free-fn decls for internal reuse
 #include "game.h"
@@ -439,20 +440,20 @@ uint32_t Math::matColScale(uint32_t dstPtr, uint32_t facPtr) {
 // two separately-constructed cores — so the gate must live IN the installed function itself:
 // core B (psx_fallback, the pure substrate reference) must keep running the exact recompiled
 // gen_func_* body, or SBS would just be comparing this port against itself (a fake 0-diff).
-static void eov_matMul(Core* c)        { c->r[2] = c->math.matMul(c->r[4], c->r[5], c->r[6]); }
-static void eov_applyMatlv(Core* c)    { c->r[2] = c->math.applyMatlv(c->r[4], c->r[5]); }
-static void eov_applyMatrixLV(Core* c) { c->r[2] = c->math.applyMatrixLV(c->r[4], c->r[5], c->r[6]); }
-static void eov_rotmat(Core* c)        { c->r[2] = c->math.rotmat(c->r[4], c->r[5]); }
-static void eov_rotX(Core* c)          { c->r[2] = c->math.rotX((int16_t)c->r[4], c->r[5]); }
-static void eov_rotY(Core* c)          { c->r[2] = c->math.rotY((int16_t)c->r[4], c->r[5]); }
-static void eov_rotZ(Core* c)          { c->r[2] = c->math.rotZ((int16_t)c->r[4], c->r[5]); }
+static void eov_matMul(Core* c)        { c->r[2] = mathOf(c).matMul(c->r[4], c->r[5], c->r[6]); }
+static void eov_applyMatlv(Core* c)    { c->r[2] = mathOf(c).applyMatlv(c->r[4], c->r[5]); }
+static void eov_applyMatrixLV(Core* c) { c->r[2] = mathOf(c).applyMatrixLV(c->r[4], c->r[5], c->r[6]); }
+static void eov_rotmat(Core* c)        { c->r[2] = mathOf(c).rotmat(c->r[4], c->r[5]); }
+static void eov_rotX(Core* c)          { c->r[2] = mathOf(c).rotX((int16_t)c->r[4], c->r[5]); }
+static void eov_rotY(Core* c)          { c->r[2] = mathOf(c).rotY((int16_t)c->r[4], c->r[5]); }
+static void eov_rotZ(Core* c)          { c->r[2] = mathOf(c).rotZ((int16_t)c->r[4], c->r[5]); }
 
 static void eov_isqrt16(Core* c)       { c->r[2] = eng_isqrt16(c->r[4]); }
 static void eov_approxDist3(Core* c)   { c->r[2] = eng_approxDist3((int32_t)c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]); }
 
-static void eov_sqrtLzc(Core* c)       { c->r[2] = c->math.sqrtLzc(c->r[4]); }
-static void eov_matLoadLV(Core* c)     { c->r[2] = c->math.matLoadLV(c->r[4], c->r[5]); }
-static void eov_matColScale(Core* c)   { c->r[2] = c->math.matColScale(c->r[4], c->r[5]); }
+static void eov_sqrtLzc(Core* c)       { c->r[2] = mathOf(c).sqrtLzc(c->r[4]); }
+static void eov_matLoadLV(Core* c)     { c->r[2] = mathOf(c).matLoadLV(c->r[4], c->r[5]); }
+static void eov_matColScale(Core* c)   { c->r[2] = mathOf(c).matColScale(c->r[4], c->r[5]); }
 
 void Math::registerOverrides() {
   using overrides::install;

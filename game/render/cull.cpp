@@ -6,9 +6,10 @@
 // (FUN_8007778C / FUN_80077ACC), and the standalone view-cone cull (FUN_8002B278). Extracted verbatim
 // from game_tomba2.cpp (one behavior, byte-identical) into its own module for PC-game code structure.
 #include "core.h"
+#include "game_ctx.h"
 #include "game.h"   // Fps60::current_object
 #include "cfg.h"
-#include "render.h"   // c->mRender->margin (widescreen margin collect)
+#include "render.h"   // rend(c)->margin (widescreen margin collect)
 #include "cull.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
 #include <stdlib.h>
@@ -337,7 +338,7 @@ void Cull::objectCull() { Core* c = core;
         // render-only concern (wider visual reach), served by this same read-only path; it must NEVER
         // poke guest state (the old wide +1 poke perturbed 5638 B of object state and forced an SBS
         // special-case — both removed). PSXPORT_MARGIN_POKE=1 keeps the old +1 re-include for A/B diffing.
-        if (c->mRender->margin.nativeEnabled())   { c->mRender->margin.collect(c, o); }   // read-only margin, all aspects
+        if (rend(c)->margin.nativeEnabled())   { rend(c)->margin.collect(c, o); }   // read-only margin, all aspects
         else                                      { c->mem_w8(o + 1, 1); c->r[2] = 1; }   // POKE fallback (A/B diffing only)
         // MEASUREMENT (PSXPORT_DEBUG=cullobj): identify WHAT the margin re-include renders — obj addr,
         // type, model id (+0xe & 0x3fff), model-data ptr (+0x38), pos. Decides static-world vs per-object
@@ -619,13 +620,13 @@ void Cull::cullWrapperOffsetY() { Core* c = core;
 // reference) always runs the real gen_func_* body.
 extern void shard_set_override(uint32_t, void (*)(Core*));
 
-static void eov_cullWrapper(Core* c)             { c->engine.cull.cullWrapper(); }
-static void eov_cullWrapperFlag1(Core* c)        { c->engine.cull.cullWrapperFlag1(); }
-static void eov_cullWrapperFlag2(Core* c)        { c->engine.cull.cullWrapperFlag2Framed(); }
-static void eov_cullWrap77acc(Core* c)           { c->engine.cull.cullWrap77accFramed(); }
-static void eov_cullWrapperOffset(Core* c)       { c->engine.cull.cullWrapperOffset(); }
-static void eov_cullWrapperOffsetFlag1(Core* c)  { c->engine.cull.cullWrapperOffsetFlag1(); }
-static void eov_cullWrapperOffsetY(Core* c)      { c->engine.cull.cullWrapperOffsetY(); }
+static void eov_cullWrapper(Core* c)             { eng(c).cull.cullWrapper(); }
+static void eov_cullWrapperFlag1(Core* c)        { eng(c).cull.cullWrapperFlag1(); }
+static void eov_cullWrapperFlag2(Core* c)        { eng(c).cull.cullWrapperFlag2Framed(); }
+static void eov_cullWrap77acc(Core* c)           { eng(c).cull.cullWrap77accFramed(); }
+static void eov_cullWrapperOffset(Core* c)       { eng(c).cull.cullWrapperOffset(); }
+static void eov_cullWrapperOffsetFlag1(Core* c)  { eng(c).cull.cullWrapperOffsetFlag1(); }
+static void eov_cullWrapperOffsetY(Core* c)      { eng(c).cull.cullWrapperOffsetY(); }
 
 extern void gen_func_80077870(Core*);
 extern void gen_func_8007778C(Core*);

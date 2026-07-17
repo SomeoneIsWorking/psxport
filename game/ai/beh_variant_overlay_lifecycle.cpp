@@ -26,11 +26,12 @@
 // RAM+scratchpad vs rec_super_call) is the safety net.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "guest_abi.h"
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -86,6 +87,6 @@ void beh_variant_overlay_lifecycle(Core* c) {
     if (c->mem_r8(nd + 3) == 0) {
       c->mem_w8(OVL_FLAG, (uint8_t)(c->mem_r8(OVL_FLAG) & 0xfb));
     }
-    c->engine.spawn.despawn(nd);                              // FUN_8007A624 (despawn)
+    eng(c).spawn.despawn(nd);                              // FUN_8007A624 (despawn)
   }
 }

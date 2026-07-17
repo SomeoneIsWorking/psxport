@@ -20,6 +20,7 @@
 // leaf's contract is op-exact transcription, not "rebuild for observable result" (that pc_render
 // rule does not apply to this render-UNDERNEATH substrate mirror).
 #include "quad_rtpt_submit.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
@@ -226,7 +227,7 @@ void QuadRtptSubmit::submitQuad(Core* c) {
     // Per-node emission index this frame = stable lerp identity (emit order is deterministic).
     // Derived from the frame's own record list — no per-Core static state (SBS-safe).
     w.seq = 0;
-    for (const Render::WqRec& p : c->mRender->mWqRecs) if (p.node == w.node) w.seq++;
+    for (const Render::WqRec& p : rend(c)->mWqRecs) if (p.node == w.node) w.seq++;
     for (int i = 0; i < 4; i++) {
       const uint32_t vxy = c->mem_r32(xf + (uint32_t)(i < 3 ? i * 8 : 24));
       const uint32_t vzw = c->mem_r32(xf + (uint32_t)(i < 3 ? i * 8 + 4 : 28));
@@ -247,7 +248,7 @@ void QuadRtptSubmit::submitQuad(Core* c) {
       for (int i = 0; i < 4; i++) w.wCol[i] = col; }
     w.wUv0 = c->mem_r32(out + 12); w.wUv1 = c->mem_r32(out + 20);
     w.wUv2 = c->mem_r32(out + 28); w.wUv3 = c->mem_r32(out + 36);
-    c->mRender->mWqRecs.push_back(w);
+    rend(c)->mWqRecs.push_back(w);
     { static long np = 0; if ((np++ & 255) == 0)
         cfg_logf("quadrtpt", "rec #%ld node=%08X seq=%u", np, w.node, w.seq); }
   }

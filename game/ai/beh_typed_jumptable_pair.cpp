@@ -38,13 +38,14 @@
 // when a scene drives them (same caveat as the sibling orchestrators) — see Report.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "render/cull.h"    // Cull::enqueueByClass (FUN_8007703C)
 #include "object/actor.h"    // Actor::boundsCull (FUN_8007778C native)
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -71,7 +72,7 @@ void beh_typed_jumptable_pair(Core* c) {
       // 80139008 beq v1,2 -> epilogue (0x801395ac) ; 80139010 beq v1,3 -> despawn (0x801395a4)
       if (st == 2) return;                            // idle
       if (st == 3) {                                  // 0x801395A4: despawn
-        c->engine.spawn.despawn(obj);  // 801395A4 jal 0x8007a624 (a0=s0)
+        eng(c).spawn.despawn(obj);  // 801395A4 jal 0x8007a624 (a0=s0)
       }
       return;                                         // 80139018 j 0x801395ac (epilogue, no-op)
     }
@@ -83,7 +84,7 @@ void beh_typed_jumptable_pair(Core* c) {
     // 80139020 lui v0,0x8015 ; 80139028 addiu v0,-0x5658 -> TA ; addu v1,node3,TA ; lbu a2,(v1)
     uint8_t a2 = c->mem_r8(TA + c->mem_r8(obj + 3));  // 80139030 lbu a2, (TA + node3)
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = a2;       // 80139038 a1=0xc ; a2 (delay) ; a0=s0
-    c->engine.graphicsBind.recordInit();                     // 80139034 jal 0x80051b70
+    eng(c).graphicsBind.recordInit();                     // 80139034 jal 0x80051b70
     if (c->r[2] != 0) return;                         // 8013903C bnez v0 -> 0x801395ac (init busy)
 
     uint16_t v56 = c->mem_r16(obj + 0x56);            // 80139048 lhu v1, 0x56(s0)
@@ -184,7 +185,7 @@ void beh_typed_jumptable_pair(Core* c) {
   if (c->mem_r8(0x800BF816u) != 0) {                  // 8013927C lbu v0, 0xe(base) ; 80139284 beqz -> 0x801392b0
     // 0x80139274 branch taken: gate byte 0x800BF816 != 0
     if (c->mem_r8(0x800BF817u) == c->mem_r8(obj + 3)) {  // 8013928C lbu v1,0xf(base) ; 80139290 lbu v0,3(s0) ; 80139298 bne -> 0x801392ec
-      c->engine.cull.enqueueVisibleClass4(obj);       // FUN_80077EBC — Cull::enqueueVisibleClass4  (801392A0 jal 0x80077ebc)
+      eng(c).cull.enqueueVisibleClass4(obj);       // FUN_80077EBC — Cull::enqueueVisibleClass4  (801392A0 jal 0x80077ebc)
     }
     // else j 0x801392ec
   } else {                                            // ---- 0x801392B0: gate byte == 0 ----
@@ -194,7 +195,7 @@ void beh_typed_jumptable_pair(Core* c) {
     // (An earlier version had this inverted, which mis-dispatched the leaf for obj node[3]==2 and
     //  diverged at node+1 / scratch 0x148.)
     if (c->mem_r8(obj + 3) == 2 && c->mem_r8(0x1F800207u) >= 0x1d) {  // 801392B0 bne v1,2 ; 801392C0..CC val>=0x1d
-      c->engine.cull.enqueueByClass(obj);             // 801392D4 jal 0x8007703c — Cull::enqueueByClass (native)
+      eng(c).cull.enqueueByClass(obj);             // 801392D4 jal 0x8007703c — Cull::enqueueByClass (native)
     } else {
       Actor(c, obj).boundsCull();                     // 801392E4 jal 0x8007778c — Actor::boundsCull (native)
     }
@@ -227,7 +228,7 @@ void beh_typed_jumptable_pair(Core* c) {
         if (s5 == 2) {
         jt1_0_eq2:
           // ---- 0x801393b8: node[5] == 2 ----
-          c->r[2] = (uint32_t)c->engine.sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328
+          c->r[2] = (uint32_t)eng(c).sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328
           if (c->r[2] == 0) break;                    // 801393C0 beqz v0 -> 0x80139580 (tail)
           c->mem_w8(obj + 5, (uint8_t)(c->mem_r8(obj + 5) + 1));  // 801393C8/D0/D8 lbu ; +1 ; sb 5(s0)
           break;                                      // 801393D4 j 0x80139580
@@ -249,14 +250,14 @@ void beh_typed_jumptable_pair(Core* c) {
     }
 
     case 1: {                                         // jt1[1] = 0x801393f8
-      (void)c->engine.sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328 (v0 discarded)
-      c->engine.spawn.tickLinkedOverlay(obj, 0x45);   // 80139400/04/08 was rec_dispatch(0x800735F4u, a1=0x45)
+      (void)eng(c).sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328 (v0 discarded)
+      eng(c).spawn.tickLinkedOverlay(obj, 0x45);   // 80139400/04/08 was rec_dispatch(0x800735F4u, a1=0x45)
       break;                                          // 8013940C j 0x80139580
     }
 
     case 2: {                                         // jt1[2] = 0x80139414
-      (void)c->engine.sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328 (v0 discarded)
-      c->engine.spawn.tickLinkedOverlay(obj, 0x46);   // 8013941C/20/24 was rec_dispatch(0x800735F4u, a1=0x46)
+      (void)eng(c).sceneTransition.stepSwapWaiter(obj);   // was rec_dispatch 0x80073328 (v0 discarded)
+      eng(c).spawn.tickLinkedOverlay(obj, 0x46);   // 8013941C/20/24 was rec_dispatch(0x800735F4u, a1=0x46)
       // 0x800c0000 - 0x7ec = 0x800BF814 ; v0 = lw & 0xffff0000 ; compare to 0x02010000
       uint32_t g = c->mem_r32(0x800BF814u) & 0xFFFF0000u;  // 8013942C lw v0 ; 80139434 and v0,v1(0xffff0000)
       if (g != 0x02010000u) {                         // 80139438 lui v1,0x201 ; 8013943C bne -> 0x80139470
@@ -286,10 +287,10 @@ void beh_typed_jumptable_pair(Core* c) {
           if (c->mem_r8(obj + 0x29) == 0) break;     // 801394F8 lbu v0,0x29(s0) ; 80139500 beqz -> tail
           c->mem_w8(obj + 6, (uint8_t)s5);           // 80139508 sb v1(=node[5]==1), 6(s0)
           // FUN_80054198(0x800E7E80) — SceneTransition::clearSwapBlock (native)
-          c->engine.sceneTransition.clearSwapBlock(0x800E7E80u);
+          eng(c).sceneTransition.clearSwapBlock(0x800E7E80u);
           c->r[4] = 0x6d; c->r[5] = 0x41;            // 80139518 a0=0x6d ; 80139520 a1=0x41
           rec_dispatch(c, 0x8004ED94u);              // 8013951C jal 0x8004ed94
-          c->engine.sfx.trigger(0x19, 0, 0xF);       // 8013952C jal 0x80074590 (native)
+          eng(c).sfx.trigger(0x19, 0, 0xF);       // 8013952C jal 0x80074590 (native)
           break;                                     // 80139534 j 0x80139580
         }
         if (n6 == s5) {                              // 801394E8 beq v0,v1 (v1==node[5]==1) -> 0x8013953c
@@ -332,7 +333,7 @@ void beh_typed_jumptable_pair(Core* c) {
 
   // ---- common tail (0x80139580) ----
   if (c->mem_r8(obj + 1) != 0) {                      // 80139580 lbu v0,1(s0) ; 80139588 beqz -> 0x80139598
-    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();      // 80139590 jal 0x800517f8 (a0=s0)
+    c->r[4] = obj; eng(c).graphicsBind.renderUpdate();      // 80139590 jal 0x800517f8 (a0=s0)
   }
   c->mem_w8(obj + 0x29, 0);                           // 80139598 sb zero, 0x29(s0)
   c->mem_w8(obj + 0x2b, 0);                           // 801395A0 sb zero, 0x2b(s0)  (delay slot of j epilogue)

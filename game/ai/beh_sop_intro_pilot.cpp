@@ -24,11 +24,12 @@
 // scratch/decomp/sop_scene_actors.c (FUN_8010ACFC) + scratch/decomp/sop_intro_helpers.c (leaves).
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
-#include "core/engine.h"          // c->engine.script / c->engine.spawn
+#include "core/engine.h"          // eng(c).script / eng(c).spawn
 #include "object/actor.h"          // Actor::boundsCull (FUN_8007778C, native)
-#include "render/render.h"        // c->mRender->mNodeXform.buildWithOffset (FUN_800518FC)
-#include "spawn.h"                 // c->engine.spawn.despawn (FUN_8007A624, native)
+#include "render/render.h"        // rend(c)->mNodeXform.buildWithOffset (FUN_800518FC)
+#include "spawn.h"                 // eng(c).spawn.despawn (FUN_8007A624, native)
 void rec_dispatch(Core*, uint32_t);
 uint32_t native_sop_overlay_shadow_spawn(Core* c, uint32_t parent);   // FUN_8010AE30, native (sop_overlay_shadow.cpp)
 
@@ -47,7 +48,7 @@ constexpr uint32_t ANIM_DATA_PTR  = 0x8010CA28u;   // SOP-overlay anim data (arg
 // -- Substrate helpers kept dispatched (their leaves are their own future frontier) -------------
 // FUN_80067DA8 = Engine::uploadModeSprites (mode-selected VRAM upload; ignores the a0 the guest
 // caller passes — MASTER_G stays as documentation of the recomp call site).
-inline void master_g_tick   (Core* c) { c->engine.uploadModeSprites(); (void)MASTER_G; }
+inline void master_g_tick   (Core* c) { eng(c).uploadModeSprites(); (void)MASTER_G; }
 inline int  try_model_attach(Core* c, uint32_t obj) {
   c->r[4] = obj; c->r[5] = MODEL_ID;
   c->r[6] = c->mem_r32(G_MODEL_TABLE);
@@ -55,12 +56,12 @@ inline int  try_model_attach(Core* c, uint32_t obj) {
   rec_dispatch(c, 0x800519E0u);
   return (int)c->r[2];               // 0 = success, non-zero = retry
 }
-inline void anim_env_setup   (Core* c, uint32_t obj) { c->engine.script.init(obj, ANIM_ENV_PTR, ANIM_DATA_PTR); }    // FUN_80040CDC = ScriptInterp::init (init obj as script-driven: tableA=ANIM_ENV_PTR, script=ANIM_DATA_PTR)
-inline void walk_start       (Core* c, uint32_t obj) { c->engine.walkStart   (obj, 8, 0); }                        // native FUN_80054D14
+inline void anim_env_setup   (Core* c, uint32_t obj) { eng(c).script.init(obj, ANIM_ENV_PTR, ANIM_DATA_PTR); }    // FUN_80040CDC = ScriptInterp::init (init obj as script-driven: tableA=ANIM_ENV_PTR, script=ANIM_DATA_PTR)
+inline void walk_start       (Core* c, uint32_t obj) { eng(c).walkStart   (obj, 8, 0); }                        // native FUN_80054D14
 inline void overlay_oneshot  (Core* c, uint32_t obj)  { (void)native_sop_overlay_shadow_spawn(c, obj); }
 inline int  bounds_cull      (Core* c, uint32_t obj) { c->r[4] = obj;             rec_dispatch(c, 0x8007778Cu); return (int)c->r[2]; }
-inline void post_cull_update (Core* c, uint32_t obj) { c->mRender->mNodeXform.buildWithOffset(obj); }              // native FUN_800518FC (NodeXform::buildWithOffset)
-inline void anim_graphics_tick(Core* c, uint32_t obj){ (void)c->engine.animTick(obj); }                            // native FUN_8004190C
+inline void post_cull_update (Core* c, uint32_t obj) { rend(c)->mNodeXform.buildWithOffset(obj); }              // native FUN_800518FC (NodeXform::buildWithOffset)
+inline void anim_graphics_tick(Core* c, uint32_t obj){ (void)eng(c).animTick(obj); }                            // native FUN_8004190C
 
 // -- State bodies ------------------------------------------------------------------------------
 void state_init(Core* c, uint32_t obj) {
@@ -82,7 +83,7 @@ void state_init(Core* c, uint32_t obj) {
 
 void state_running(Core* c, uint32_t obj) {
   if (bounds_cull(c, obj) != 0) post_cull_update(c, obj);
-  c->engine.script.step(obj);                                  // native (was rec_dispatch 0x80041098)
+  eng(c).script.step(obj);                                  // native (was rec_dispatch 0x80041098)
   anim_graphics_tick(c, obj);
 }
 
@@ -93,6 +94,6 @@ void beh_sop_intro_pilot(Core* c) {
   const uint8_t  st  = c->mem_r8(obj + 4);
   if (st == 1)      state_running(c, obj);
   else if (st == 0) state_init   (c, obj);
-  else if (st == 3) c->engine.spawn.despawn(obj);
+  else if (st == 3) eng(c).spawn.despawn(obj);
   // else: no-op
 }

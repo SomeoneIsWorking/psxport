@@ -1,7 +1,7 @@
 #ifndef TOMBA2_LIGHTING_H
 #define TOMBA2_LIGHTING_H
 // class Lighting — PC-native PER-AREA lighting registry (engine-owned enhancement; active only when
-// g_mods.light). One instance per Core, owned by Render (`c->mRender->lighting`).
+// g_mods.light). One instance per Core, owned by Render (`rend(c)->lighting`).
 //
 // WHY: the GAME bakes its colors and has NO dynamic GTE lighting (NC*/CC/CDP=0 — see docs/engine_re.md
 // "lighting model"). The PC-native deferred pass (ssao.frag) reconstructs each 3D pixel's view-space

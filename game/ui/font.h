@@ -1,7 +1,7 @@
 // class Font — PC-native engine FONT / TEXT init subsystem.
 //
-// PROPER OOP: one instance per Core, owned by Engine (`c->engine.font`). Callers reach the
-// init entry as `c->engine.font.init()`. Back-pointer `core` wired at Core construction time
+// PROPER OOP: one instance per Core, owned by Engine (`eng(c).font`). Callers reach the
+// init entry as `eng(c).font.init()`. Back-pointer `core` wired at Core construction time
 // (same pattern as ScreenFade / GraphicsBind / etc.).
 //
 // SCOPE: the FUN_80075130 boot-time font/text init orchestrator + its three engine-state

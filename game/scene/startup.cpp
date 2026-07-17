@@ -12,9 +12,10 @@
 // MAIN.EXE disasm (tools/recomp decode). later-159.
 //
 // Structure: methods on `class Engine` (game/core/engine.h). Callers reach the init entry points as
-// `c->engine.initFrameState()` etc. Was the free functions eng_init_* — promoted with the class-instance
+// `eng(c).initFrameState()` etc. Was the free functions eng_init_* — promoted with the class-instance
 // arc (no Core arg on the method surface; reach Core via `this->core`).
 #include "engine.h"
+#include "game_ctx.h"
 #include "core.h"
 #include <stdint.h>
 
@@ -22,7 +23,7 @@ void rec_dispatch(Core*, uint32_t);   // run a guest fn (for the few sub-bits no
 
 // FUN_80051794 (identity 3x3 rotation matrix + zero translation) is owned by `Mtx::identity`
 // (game/math/mtx.cpp) — the same leaf; deduped 2026-07-08 (this file used to carry a redundant
-// copy as `Engine::identityMatrixAt`). Callers use `c->mtx.identity(p)` directly.
+// copy as `Engine::identityMatrixAt`). Callers use `mtxOf(c).identity(p)` directly.
 
 // FUN_80050a0c — engine frame-state init: zero the vblank counter and the double-buffer / frame-pacing
 // flags the main loop reads (DAT_1f800235 = frame-rate divisor, DAT_1f800135 = buffer parity,
@@ -81,8 +82,8 @@ void Engine::initDisplay() {
 // H*-0x50000 where H = DAT_801003f8 (the projection plane, signed halfword = 350, set by FUN_800509b4).
 void Engine::initCamera() {
   Core* c = this->core;
-  c->mtx.identity(0x1F8000F8);
-  c->mtx.identity(0x1F800118);
+  mtxOf(c).identity(0x1F8000F8);
+  mtxOf(c).identity(0x1F800118);
   int32_t h = c->mem_r16s(0x801003F8);   // projection plane H (set earlier; signed lh)
   c->mem_w32(0x1F8000DC, 0); c->mem_w32(0x1F8000E0, 0); c->mem_w32(0x1F8000E4, 0);
   c->mem_w32(0x1F8000D0, 0); c->mem_w32(0x1F8000D4, 0);

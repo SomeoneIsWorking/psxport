@@ -9,6 +9,7 @@
 // UNWIRED — dead code. Do not wire into any dispatch table before running port_check.py
 // and the mandatory line-by-line verify pass (docs/fleet-workflow.md §9).
 #include "engine.h"
+#include "game_ctx.h"
 #include "override_registry.h"
 #include "core.h"
 
@@ -80,7 +81,7 @@ void Engine::announcerCuePush() {
 // substrate. ----
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8004FA38(Core*);
-namespace { void ov_announcerCuePush(Core* c) { c->engine.announcerCuePush(); } }
+namespace { void ov_announcerCuePush(Core* c) { eng(c).announcerCuePush(); } }
 void Engine::registerAnnouncerCuePush() {
   overrides::install(0x8004FA38u, "Engine::announcerCuePush", ov_announcerCuePush,
                      gen_func_8004FA38, shard_set_override);

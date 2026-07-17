@@ -1,42 +1,43 @@
 // game_hooks.cpp — the Tomba!2 GameHooks instance (game_iface.h seam).
 //
 // Each hook is a thin function-pointer impl that reaches the game's per-Core Engine aggregate
-// (`c->engine.*`). The framework substrate (runtime/recomp/*) calls these as `c->hooks->fn(c)` in
-// place of the direct `c->engine.X()` calls it used to bake in, so the framework no longer names any
+// (`eng(c).*`). The framework substrate (runtime/recomp/*) calls these as `c->hooks->fn(c)` in
+// place of the direct `eng(c).X()` calls it used to bake in, so the framework no longer names any
 // game type. Installed alongside the GameConfig via tomba_install_game_config() (game_config.cpp),
 // before any Game/Core is constructed, so Core's ctor snapshots a non-null c->hooks.
 #include "game_iface.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "engine.h"
 #include "game.h"        // c->game->cd / c->game->timing / c->game->pcSched reached by the boot + sched hooks
 #include "guest_call.h"  // rc0/rc1/rc2 — rec_dispatch of the guest boot-prologue leaves (bootInit)
 #include "render/screen_fade.h"  // ScreenFade — tomba_renderFadeState mirrors get() into a framework FadeState
-#include "render.h"      // Render umbrella — tomba_renderBbFrameReset calls c->mRender->bbFrameReset()
+#include "render.h"      // Render umbrella — tomba_renderBbFrameReset calls rend(c)->bbFrameReset()
 #include <stdio.h>
 
 // tomba_renderFadeState — mirror the game's per-frame ScreenFade into the framework FadeState POD, so the
 // present path reads fade without naming ScreenFade. Same read the present path did directly (screenFade.get()).
 static void tomba_renderFadeState(Core* c, FadeState* out) {
-  ScreenFade::State s = c->screenFade.get();
+  ScreenFade::State s = fade(c).get();
   out->mode = (int)s.mode;
   out->r = s.r; out->g = s.g; out->b = s.b;
 }
-// REPL diagnostics — reach the game's engine subsystems (was direct c->engine.* calls in repl.cpp).
-static const char* tomba_replBehaviorName(Core* c, unsigned int handle) { return c->engine.behaviors.nativeName(handle); }
-static void        tomba_replCamTeleport(Core* c, int x, int y, int z)  { c->engine.camTeleport(x, y, z); }
-static void        tomba_replCamTeleportOff(Core* c)                    { c->engine.camTeleportOff(); }
-// Per-frame billboard/bb reset (was native_step_frame's direct c->mRender->bbFrameReset()).
-static void        tomba_renderBbFrameReset(Core* c)                    { c->mRender->bbFrameReset(); }
+// REPL diagnostics — reach the game's engine subsystems (was direct eng(c).* calls in repl.cpp).
+static const char* tomba_replBehaviorName(Core* c, unsigned int handle) { return eng(c).behaviors.nativeName(handle); }
+static void        tomba_replCamTeleport(Core* c, int x, int y, int z)  { eng(c).camTeleport(x, y, z); }
+static void        tomba_replCamTeleportOff(Core* c)                    { eng(c).camTeleportOff(); }
+// Per-frame billboard/bb reset (was native_step_frame's direct rend(c)->bbFrameReset()).
+static void        tomba_renderBbFrameReset(Core* c)                    { rend(c)->bbFrameReset(); }
 
-static void tomba_frameUpdate(Core* c)                { c->engine.frameUpdate(); }
-static void tomba_drawOTag(Core* c, uint32_t otHead)  { c->engine.drawOTag(otHead); }
-static void tomba_musicCoordTick(Core* c)             { c->engine.musicCoord.tick(); }
-static bool tomba_cdDialogToneActive(Core* c)         { return c->engine.musicCoord.dialogToneActive(); }
-static void tomba_cdMusicFadeIn(Core* c)              { c->engine.musicCoord.musicFadeIn(); }
+static void tomba_frameUpdate(Core* c)                { eng(c).frameUpdate(); }
+static void tomba_drawOTag(Core* c, uint32_t otHead)  { eng(c).drawOTag(otHead); }
+static void tomba_musicCoordTick(Core* c)             { eng(c).musicCoord.tick(); }
+static bool tomba_cdDialogToneActive(Core* c)         { return eng(c).musicCoord.dialogToneActive(); }
+static void tomba_cdMusicFadeIn(Core* c)              { eng(c).musicCoord.musicFadeIn(); }
 
 // tomba_bootInit — the game's boot-init prologue, moved VERBATIM out of native_boot.cpp game_init.
 // This is the transcription of FUN_80050b08's init prefix (no scheduler loop): rc-dispatched guest
-// leaves interleaved with the native c->engine.* init calls, in the exact guest order. It moves WHOLE
+// leaves interleaved with the native eng(c).* init calls, in the exact guest order. It moves WHOLE
 // (not just the engine calls) because the engine calls are interleaved with the rc leaves and the
 // trailing task0Bootstrap depends on the scheduler-table init (0x80051e00 / 0x80051f14) + the
 // 0x1f800138 cur-task write that sit between them — the order is load-bearing.
@@ -58,9 +59,9 @@ static void tomba_bootInit(Core* c) {
   // 1:1 rec_dispatch transcription. FUN_800509b4 (display/GTE projection + PSX draw/disp double-buffer
   // env) stays dispatched for now — it sets DAT_801003f8 = H that eng_init_camera reads, and entangles
   // the PSX-GPU env, so it is the next target. (later-159, top-down engine port from main.)
-  c->engine.initFrameState();      // was rc0(c, 0x80050a0c)
-  c->engine.initDisplay();         // was rc0(c, 0x800509b4) — GTE projection + display (sets H=DAT_801003f8)
-  c->engine.initCamera();          // was rc0(c, 0x80050a80)
+  eng(c).initFrameState();      // was rc0(c, 0x80050a0c)
+  eng(c).initDisplay();         // was rc0(c, 0x800509b4) — GTE projection + display (sets H=DAT_801003f8)
+  eng(c).initCamera();          // was rc0(c, 0x80050a80)
   rc0(c, 0x80096a70);
   rc1(c, 0x80099310, 0x1010);
   rc1(c, 0x800991b0, 0x20000);
@@ -73,10 +74,10 @@ static void tomba_bootInit(Core* c) {
   // FUN_80075130 font/text init reimplemented PC-native (game/ui/font.cpp): owns the orchestration +
   // direct writes + the 3 engine-state callees (FUN_800963a0/80096370/800752b4); the 8 libgpu/sound callees
   // stay rec_dispatched in-context (later-182b nested-dispatch risk). Replaces the rc0 transcription.
-  c->engine.font.init();                       // was rc0(c, 0x80075130)
+  eng(c).font.init();                       // was rc0(c, 0x80075130)
   rc1(c, 0x8009c620, 0);
   rc0(c, 0x8001cc00);
-  c->engine.initSubsystems();               // was rc0(c, 0x800520e0) — own orchestration native
+  eng(c).initSubsystems();               // was rc0(c, 0x800520e0) — own orchestration native
   // (removed: VSync(1) — see above; PC owns timing, boot never calls VSync.)
   rc0(c, 0x80051e00);                       // scheduler-table init (task objs @0x801fe000)
   rc2(c, 0x80051f14, 0, 0x800499e8);        // register task 0, entry FUN_800499e8
@@ -92,7 +93,7 @@ static void tomba_bootInit(Core* c) {
   // scheduler's "current task" ptr DAT_1f800138 is normally set by FUN_80051e60; set it to task0
   // so FUN_80052078/FUN_800450bc operate on task 0. ---
   c->mem_w32(0x1f800138, 0x801fe000);
-  c->engine.task0Bootstrap();   // PC-native: was rc0(c, 0x800499e8) — CD subtree owned top-down
+  eng(c).task0Bootstrap();   // PC-native: was rc0(c, 0x800499e8) — CD subtree owned top-down
   // START.BIN loaded raw to 0x80106228: [0]=manifest count (6); entry word @0x8010649c.
   fprintf(stderr, "[native_boot] after FUN_800499e8: START.BIN count@0x80106228=%u "
                   "entry-word@0x8010649c=0x%08X (expect 0x27BDFE38); task0 state=%u entry=0x%08X\n",
@@ -112,11 +113,11 @@ static void tomba_bootInit(Core* c) {
 static bool tomba_schedFreshEntry(Core* c, int /*slot*/, uint32_t /*base*/, uint32_t entryPc) {
   if (entryPc == c->cfg->stageGame) {
     c->override_tgt = entryPc;                 // GAME stageMain: coro-redirect target
-    c->engine.stageMain();                     // stagePrologue + rec_coro_redirect(0x801063F4)
+    eng(c).stageMain();                     // stagePrologue + rec_coro_redirect(0x801063F4)
     return false;                              // continue to rec_coro_run with the redirect start
   }
   if (entryPc == c->cfg->stageStart) {
-    c->engine.startBinStage();                 // STAGE-0 fresh; terminal — skip rec_coro_run
+    eng(c).startBinStage();                 // STAGE-0 fresh; terminal — skip rec_coro_run
     return true;
   }
   return false;                                // not a native stage: plain rec_coro_run at resume_pc

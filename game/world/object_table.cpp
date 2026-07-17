@@ -1,10 +1,11 @@
 // ObjectTable::dispatch — see object_table.h. Faithful port of guest FUN_80026C88 with the
 // existing `disp26c88verify` A/B gate preserved.
 #include "object_table.h"
+#include "game_ctx.h"
 #include "game.h"        // c->game->verify — the shared A/B verify scaffold
 #include "core.h"
 #include "cfg.h"
-#include "core/engine.h"           // c->engine.animation etc (not needed here but consistent)
+#include "core/engine.h"           // eng(c).animation etc (not needed here but consistent)
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +39,7 @@ constexpr uint32_t DAMPEN_TBL_2      = 0x8009D56Cu;   // vert-dampen   (16 s16 e
 constexpr uint32_t GRAVITY_TBL       = 0x8009D57Cu;   // gravity scale (16 s16 entries)
 constexpr uint32_t LEAF_POOL_RETURN  = 0x8007B2ACu;   // FUN_8007B2AC — pool free (substrate)
 
-inline uint32_t prng(Core* c) { return c->rng.next(); }
+inline uint32_t prng(Core* c) { return rngOf(c).next(); }
 
 }  // namespace
 
@@ -212,7 +213,7 @@ void ObjectTable::dispatchFaithful() {
       // pc_faithful (this mirror) MUST reach the literal gen body for EVERY handler, including
       // H_27254 — same fix as BehaviorDispatch::dispatchObj (game/object/behavior_dispatch.cpp):
       // handler27254()'s native port reproduces the RESULT, not the PSX bytes (its INIT state
-      // calls prng(c) -> c->rng.next(), which does not reproduce gen_func_8009A450's ABI
+      // calls prng(c) -> rngOf(c).next(), which does not reproduce gen_func_8009A450's ABI
       // end-state — v0/v1/hi-lo — the way rec_dispatch to the real LCG body does). Taking the
       // native shortcut here (as the pc_skip=true `body()` lambda above intentionally does) is
       // what caused the 0x80106B98 strict-mirror-verify FAILURE (12+ diffs at 0x801FE8xx / v0 /

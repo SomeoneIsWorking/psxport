@@ -6,6 +6,7 @@
 // PC-game code structure. The `animvm` diagnostic A/B gate (full RAM+scratchpad vs rec_super_call) is a
 // REPL channel, unchanged.
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,7 +65,7 @@ static void anim_vm_76d68(Core* c) {
     }
     // 0x80075f0c takes a1 = cnt (the counter, s1 at the jal) — it uses (int16_t)a1==1 to decide whether
     // to set the KSEG0 bit on the cursor (s0+56). The entry register a1 was `addu a1,s1,zero` (=cnt).
-    c->engine.animation.applyFrame(s0, (int32_t)(int16_t)cnt);   // apply current frame (native FUN_80075F0C)
+    eng(c).animation.applyFrame(s0, (int32_t)(int16_t)cnt);   // apply current frame (native FUN_80075F0C)
     // s0+14 is RE-READ here (the applier 0x80075f0c may have modified it); only bit 0x1000 is kept.
     uint32_t fz = c->mem_r16(s0 + 14) & 0x1000u;
     c->mem_w16(s0 + 14, (uint16_t)(cnt + fz));           // (low12-1) | (post-call s0[14] & 0x1000)
@@ -94,7 +95,7 @@ static void anim_vm_76d68(Core* c) {
     cur = c->mem_r32(s0 + 56);
     uint32_t dur = c->mem_r16(cur + 6) & 0x0fffu;        // duration low12
     c->mem_w16(s0 + 14, (uint16_t)dur);                  // sh BEFORE the call (delay slot)
-    c->engine.animation.loadFrame(s0);                   // load frame (native FUN_80076904)
+    eng(c).animation.loadFrame(s0);                   // load frame (native FUN_80076904)
     uint32_t a1c = c->mem_r32(s0 + 56);
     uint32_t v1  = c->mem_r16(a1c + 6);
     if ((v1 & 0x2000u) == 0) { c->r[2] = 0; return; }    // no exec flag
@@ -115,7 +116,7 @@ static void anim_vm_76d68(Core* c) {
     cur = c->mem_r32(s0 + 56);
     uint32_t dur = c->mem_r16(cur + 6) & 0x0fffu;
     c->mem_w16(s0 + 14, (uint16_t)dur);                  // sh in jal delay slot
-    c->engine.animation.loadFrame(s0);                   // load frame (native FUN_80076904)
+    eng(c).animation.loadFrame(s0);                   // load frame (native FUN_80076904)
     uint32_t a1c = c->mem_r32(s0 + 56);
     uint32_t v1  = c->mem_r16(a1c + 6);
     if ((v1 & 0x2000u) == 0) { c->r[2] = 0; return; }
@@ -142,7 +143,7 @@ static void anim_vm_76d68(Core* c) {
     cur = c->mem_r32(s0 + 56);
     uint32_t dur = c->mem_r16(cur + 6) & 0x0fffu;
     c->mem_w16(s0 + 14, (uint16_t)dur);
-    c->engine.animation.loadFrame(s0);                   // load frame (native FUN_80076904)
+    eng(c).animation.loadFrame(s0);                   // load frame (native FUN_80076904)
     uint32_t a1c = c->mem_r32(s0 + 56);
     uint32_t v1  = c->mem_r16(a1c + 6);
     if ((v1 & 0x2000u) == 0) {                                    // beq -> 0x80076f5c (hold-store + return 1)
@@ -506,10 +507,10 @@ void Animation::applyFrame(uint32_t node, int32_t snapCursor) {
   }
 }
 
-static void eov_animLoadFrame(Core* c)      { c->engine.animation.loadFrame(c->r[4]); c->r[2] = 0; }
-static void eov_animAdvanceLink(Core* c)    { c->r[2] = c->engine.animation.advanceLinkChain(c->r[4]); }
-static void eov_animAttach(Core* c)         { c->engine.animation.attach(c->r[4], c->r[5], c->r[6]); }
-static void eov_animApplyFrame(Core* c)     { c->engine.animation.applyFrame(c->r[4], (int32_t)c->r[5]); }
+static void eov_animLoadFrame(Core* c)      { eng(c).animation.loadFrame(c->r[4]); c->r[2] = 0; }
+static void eov_animAdvanceLink(Core* c)    { c->r[2] = eng(c).animation.advanceLinkChain(c->r[4]); }
+static void eov_animAttach(Core* c)         { eng(c).animation.attach(c->r[4], c->r[5], c->r[6]); }
+static void eov_animApplyFrame(Core* c)     { eng(c).animation.applyFrame(c->r[4], (int32_t)c->r[5]); }
 
 // FUN_80076D68 (Animation::step) is DELIBERATELY LEFT UNWIRED here — investigated + reverted
 // 2026-07-08 (docs/findings/animation.md has the full trace). stepFramed() (above) DOES mirror

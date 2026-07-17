@@ -8,6 +8,7 @@
 // tail — the actual note-on into the audio driver).
 
 #include "audio/sfx.h"
+#include "game_ctx.h"
 #include "core.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry
 
@@ -179,7 +180,7 @@ void Sfx::triggerPanned(int id, int pan) {
 }
 
 static void eov_triggerPanned(Core* c) {
-  c->engine.sfx.triggerPanned((int)c->r[4], (int)c->r[5]);
+  eng(c).sfx.triggerPanned((int)c->r[4], (int)c->r[5]);
   // gen_func_80074810's first body writes no return value (r2 dead); nothing to mirror.
 }
 

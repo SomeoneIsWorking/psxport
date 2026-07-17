@@ -24,10 +24,11 @@
 // scheduler returning, not a nested sentinel. Same mechanism unlocks owning FUN_80052078/FUN_800499e8.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include "guest_abi.h"               // GuestFrame/GuestFrameSpill/guest_dispatch — ABI vocabulary
 #include "engine.h"                 // class Engine — GAME/STAGE driver + per-frame method impls below
-#include "render.h"                 // class Render — c->mRender->frame() / frameX() (per-frame render driver)
+#include "render.h"                 // class Render — rend(c)->frame() / frameX() (per-frame render driver)
 #include "placement.h"              // ov_place_objects — native field object-placement driver (game/world)
 #include "pool.h"                    // ov_pool_init_run — native object-pool init (game/world)
 #include "c_subsys.h"                // disc_find_file — native ISO9660 resolver (native_task0_bootstrap/ov_start_bin_stage)
@@ -204,7 +205,7 @@ void Engine::s4c() { Core* c = core;
   c->r[29] -= 0x18;
   c->mem_w32(c->r[29] + 0x14, ra);              // sw ra,0x14(sp)
   c->mem_w32(c->r[29] + 0x10, c->r[16]);        // sw s0,0x10(sp)
-  c->engine.areaSlots.updateTail();                  // 0x80075a80 NATIVE (synchronous — verified yield-free)
+  eng(c).areaSlots.updateTail();                  // 0x80075a80 NATIVE (synchronous — verified yield-free)
   uint32_t sm = c->mem_r32(0x1f800138);
   uint16_t s4c = c->mem_r16(sm + 0x4c);
   if (s4c >= 9) { rec_coro_redirect(c, 0x80106a14u); return; }   // out of range -> shared epilogue
@@ -225,7 +226,7 @@ void Engine::s4c() { Core* c = core;
 // helper (FUN_8007E8DC); state 2 selects state-index 4 (AudioDispatch::selectState) and advances;
 // states 3-5 are per-frame SAVE-prompt / CONTINUE-prompt renders (FUN_8007ED5C/EE74/EF60 — text
 // widgets, own the "Save"/"Continue"/"Load data"/"Quit game" strings) gated entirely on pad-edge
-// bits (0x4000 confirm, 0x10/0x40/0x2000 cursor/cancel) with SFX cues via c->engine.sfx.trigger;
+// bits (0x4000 confirm, 0x10/0x40/0x2000 cursor/cancel) with SFX cues via eng(c).sfx.trigger;
 // state 6 just advances sm[0x4a] to 4 (hands off to the next running sub-mode, itself substrate);
 // states 7/8 are the QUIT-CONFIRM Y/N dialog (FUN_8007BF20, its own DAT_800bf84a-keyed SM) —
 // on accept, state 7 calls reloadEntityPool() (was FUN_8007B3F4) and returns to sm[0x4a]==1
@@ -247,7 +248,7 @@ void Engine::areaLoadState() { Core* c = core;   // FUN_80106478
                                                                // see BgSceneTransitionSm::audioFadeTarget)
       sm.setIntroTimer(0x14A);
       sm.setStage4c((uint16_t)(sm.stage4c() + 1));
-      c->engine.audioDispatch.dispatch3Way(0x2C, 0);         // native — was FUN_800750D8(0x2c,0)
+      eng(c).audioDispatch.dispatch3Way(0x2C, 0);         // native — was FUN_800750D8(0x2c,0)
       rec_dispatch(c, 0x8004D8B0u);                          // 128-byte zero-init (substrate; un-owned this pass)
       c->mem_w8(0x1F800206u, 0);
       break;
@@ -264,7 +265,7 @@ void Engine::areaLoadState() { Core* c = core;   // FUN_80106478
     }
     case 2:
       rec_dispatch(c, 0x8001CF2Cu);                          // engine tick (substrate)
-      c->engine.audioDispatch.selectState(4);                // native — was FUN_800750A4(4)
+      eng(c).audioDispatch.selectState(4);                // native — was FUN_800750A4(4)
       sm.setS4e(1);
       sm.setF6b(0);
       sm.setStage4c((uint16_t)(sm.stage4c() + 1));
@@ -285,7 +286,7 @@ void Engine::areaLoadState() { Core* c = core;   // FUN_80106478
         sm.setF6b(0);
         sm.setS4e(0);
         sm.setS50(0);
-        c->engine.sfx.trigger(0x11, 0, 0);                   // native — was FUN_80074590(0x11,0,0)
+        eng(c).sfx.trigger(0x11, 0, 0);                   // native — was FUN_80074590(0x11,0,0)
       }
       if ((c->mem_r16(0x800E7E68u) & 0x10u) == 0) {
 areaload_joined_68f4:
@@ -297,7 +298,7 @@ areaload_joined_68f4:
         sm.setS4e((uint16_t)(sm.s4e() - 1));
       }
 areaload_lab_106918:
-      c->engine.sfx.trigger(0x15, 0, 0);                     // native — was FUN_80074590(0x15,0,0)
+      eng(c).sfx.trigger(0x15, 0, 0);                     // native — was FUN_80074590(0x15,0,0)
       break;
     }
     case 4: {
@@ -309,7 +310,7 @@ areaload_lab_106918:
           sm.setS4e(0);
           sm.setF6b(0);
           sm.setStage4c((uint16_t)s);
-          c->engine.sfx.trigger(0x14, -9, 0);                // native — was FUN_80074590(0x14,-9,0)
+          eng(c).sfx.trigger(0x14, -9, 0);                // native — was FUN_80074590(0x14,-9,0)
           goto areaload_case4_edge;
         }
       } else {
@@ -329,7 +330,7 @@ areaload_lab_106918:
         sm.setF6b(0);
         sm.setS4e(0);
         sm.setS50(0);
-        c->engine.sfx.trigger(0x11, 0, 0);                   // native — was FUN_80074590(0x11,0,0)
+        eng(c).sfx.trigger(0x11, 0, 0);                   // native — was FUN_80074590(0x11,0,0)
       }
 areaload_case4_edge:
       if ((c->mem_r16(0x800E7E68u) & 0x10u) == 0) {
@@ -357,7 +358,7 @@ areaload_case4_edge:
         sm.setS4e(0);
         sm.setF6b(0);
         sm.setStage4c((uint16_t)s);
-        c->engine.sfx.trigger(0x14, -9, 0);                  // native — was FUN_80074590(0x14,-9,0)
+        eng(c).sfx.trigger(0x14, -9, 0);                  // native — was FUN_80074590(0x14,-9,0)
         return;
       }
       if (c->mem_r16(0x800E7E68u) & 0x10u) {
@@ -416,7 +417,7 @@ areaload_case4_edge:
 // handlers and descends ownership into gameplay (the SOP field-mode machine). Prereq landed (later-217b):
 // the SOP area load is native+synchronous, so SOP state-0 never yields.
 
-// (ov_sop_field_mode moved to Sop::fieldMode — c->engine.sop.fieldMode())
+// (ov_sop_field_mode moved to Sop::fieldMode — eng(c).sop.fieldMode())
 #include "sop.h"                              // class Sop — transitionAreaLoad (sync FIELD transition load)
 #include "render/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "camera/cutscene_camera.h"           // class CutsceneCamera — resident driver 0x8006EC44 (native)
@@ -435,7 +436,7 @@ void Engine::submitPage810c() { Core* c = core;
   if (c->game && !c->game->pc_skip) { MV_CHECK(c, 0x8010810Cu, submitPage810cFaithful()); return; }
   uint32_t task = c->mem_r32(0x1F800138u);
   if (task && c->mem_r8(task + 0x6Bu) == 1) {
-    c->screenFade.set(ScreenFade::SUBTRACTIVE, 0x80, 0x80, 0x80);   // pause-menu dim: flat gray, held each frame page-1 handler runs
+    fade(c).set(ScreenFade::SUBTRACTIVE, 0x80, 0x80, 0x80);   // pause-menu dim: flat gray, held each frame page-1 handler runs
     ov_game_func_801084F8(c);              // still recomp: menu draw + cursor/page transitions
     return;
   }
@@ -475,10 +476,10 @@ void Engine::submitPage810cFaithful() { Core* c = core;
   }
   d0(c, 0x8010810cu);                                        // other pages: full substrate re-derive (own frame + dispatch)
 }
-// (ov_objwalk moved to ObjectList::walkAll — c->engine.objectList.walkAll())
-// (ov_disp_26c88 moved to ObjectTable::dispatch — c->engine.objectTable.dispatch())
-// (ov_list_walk_69b28 moved to ObjectList::walkAux — c->engine.objectList.walkAux())
-// (ov_arr8_dispatch_26368 moved to Array8Dispatch::tick — c->engine.array8Dispatch.tick())
+// (ov_objwalk moved to ObjectList::walkAll — eng(c).objectList.walkAll())
+// (ov_disp_26c88 moved to ObjectTable::dispatch — eng(c).objectTable.dispatch())
+// (ov_list_walk_69b28 moved to ObjectList::walkAux — eng(c).objectList.walkAux())
+// (ov_arr8_dispatch_26368 moved to Array8Dispatch::tick — eng(c).array8Dispatch.tick())
 // (submode0 / submode1 are now Engine methods — Engine::submode0() / Engine::submode1())
 // (Engine::fieldTransition + workers are defined in this TU; forward declared via engine.h.)
 
@@ -504,10 +505,10 @@ void Engine::s48_2_frame() { Core* c = core;
   }
   if (s4a < 6) {
     c->r[31] = jal_ra[s4a];
-    if (s4a == 0)      { c->game->ffspan.begin(); c->engine.submode0(); c->game->ffspan.end("submode0"); }
-    else if (s4a == 1) { c->game->ffspan.begin(); c->engine.submode1(); c->game->ffspan.end("submode1"); }
-    else if (s4a == 5) { c->game->ffspan.begin(); c->engine.fieldTransition(); c->game->ffspan.end("transition"); }  // native FUN_80108a60
-    else if (s4a == 2) { c->game->ffspan.begin(); c->engine.areaLoadState(); c->game->ffspan.end("areaload"); }      // native FUN_80106478
+    if (s4a == 0)      { c->game->ffspan.begin(); eng(c).submode0(); c->game->ffspan.end("submode0"); }
+    else if (s4a == 1) { c->game->ffspan.begin(); eng(c).submode1(); c->game->ffspan.end("submode1"); }
+    else if (s4a == 5) { c->game->ffspan.begin(); eng(c).fieldTransition(); c->game->ffspan.end("transition"); }  // native FUN_80108a60
+    else if (s4a == 2) { c->game->ffspan.begin(); eng(c).areaLoadState(); c->game->ffspan.end("areaload"); }      // native FUN_80106478
     else               { c->game->ffspan.begin(); rec_dispatch(c, handler[s4a]); c->game->ffspan.end("s48_2_handler"); }
   }
 }
@@ -534,8 +535,8 @@ void Engine::submode0() { Core* c = core;
       // only use it when SOP is actually loaded (signature = its first insn `lui v0,0x1f80` = 0x3C021F80);
       // for any other mode/field overlay, dispatch the guest fn (until that overlay is owned natively too).
       if (c->mem_r32(0x80109450u) == 0x3C021F80u)
-        (c->game && c->game->pc_skip) ? c->engine.sop.fieldMode()          // native SOP (pc_skip)
-                                      : c->engine.sop.fieldModeFaithful(); // byte-mirror (faithful)
+        (c->game && c->game->pc_skip) ? eng(c).sop.fieldMode()          // native SOP (pc_skip)
+                                      : eng(c).sop.fieldModeFaithful(); // byte-mirror (faithful)
       else rec_dispatch(c, 0x80109450u);                                   // other overlay -> guest
     }
   } else if (sm.stage4c() == 1) {
@@ -830,21 +831,21 @@ void Engine::fieldFrameFaithful() { Core* c = core;
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
-    c->r[31] = 0x80108B50u; FFS("ff_59d28", c->engine.frameStartTick());
-    c->r[31] = 0x80108B58u; FFS("ff_69b28", c->engine.objectList.walkAux());
-    c->r[31] = 0x80108B60u; FFS("ff_26368", c->engine.array8Dispatch.tick());
-    c->r[31] = 0x80108B68u; FFS("ff_objwalk", c->engine.objectList.walkAll());
-    c->r[31] = 0x80108B70u; FFS("ff_25588", c->engine.sceneEventFifo());
-    c->r[31] = 0x80108B78u; FFS("ff_4fe84", c->engine.sceneRenderListBuilder());
-    c->r[31] = 0x80108B80u; FFS("ff_disp26c88", c->engine.objectTable.dispatch());
-    c->r[31] = 0x80108B88u; FFS("ff_22a80", c->engine.modePerFrameDispatch());
+    c->r[31] = 0x80108B50u; FFS("ff_59d28", eng(c).frameStartTick());
+    c->r[31] = 0x80108B58u; FFS("ff_69b28", eng(c).objectList.walkAux());
+    c->r[31] = 0x80108B60u; FFS("ff_26368", eng(c).array8Dispatch.tick());
+    c->r[31] = 0x80108B68u; FFS("ff_objwalk", eng(c).objectList.walkAll());
+    c->r[31] = 0x80108B70u; FFS("ff_25588", eng(c).sceneEventFifo());
+    c->r[31] = 0x80108B78u; FFS("ff_4fe84", eng(c).sceneRenderListBuilder());
+    c->r[31] = 0x80108B80u; FFS("ff_disp26c88", eng(c).objectTable.dispatch());
+    c->r[31] = 0x80108B88u; FFS("ff_22a80", eng(c).modePerFrameDispatch());
     c->r[31] = 0x80108B90u; FFS("ff_6ec44", CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update());
-    c->r[31] = 0x80108B98u; FFS("ff_50de4", c->engine.sceneStateStep());
-    c->r[31] = 0x80108BA0u; FFS("ff_1cac0", c->engine.areaModeDispatch());
+    c->r[31] = 0x80108B98u; FFS("ff_50de4", eng(c).sceneStateStep());
+    c->r[31] = 0x80108BA0u; FFS("ff_1cac0", eng(c).areaModeDispatch());
   }
-  if (c->mem_r8(0x1f800136u) < 2) { c->r[31] = 0x80108BBCu; c->mRender->frame(); }   // 0x8003F9A8 underneath
-  c->r[31] = 0x80108BC4u; FFS("ff_submit810c", c->engine.submitPage810c());
-  c->r[31] = 0x80108BCCu; FFS("ff_77d8c", c->engine.postRenderTick());
+  if (c->mem_r8(0x1f800136u) < 2) { c->r[31] = 0x80108BBCu; rend(c)->frame(); }   // 0x8003F9A8 underneath
+  c->r[31] = 0x80108BC4u; FFS("ff_submit810c", eng(c).submitPage810c());
+  c->r[31] = 0x80108BCCu; FFS("ff_77d8c", eng(c).postRenderTick());
   c->r[31] = 0x80108BD4u; rec_dispatch(c, 0x80075A80u);   // audio-cmd queue tail — substrate (lib fallback)
   c->r[31] = c->mem_r32(sp + 20);
   c->r[16] = c->mem_r32(sp + 16);
@@ -862,14 +863,14 @@ void Engine::fieldFrame() { Core* c = core;
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: full gameplay update
-    FFS("ff_59d28", c->engine.frameStartTick()); FFS("ff_69b28", c->engine.objectList.walkAux());    // 0x80059d28/0x80069b28 NATIVE
-    FFS("ff_26368", c->engine.array8Dispatch.tick()); FFS("ff_objwalk", c->engine.objectList.walkAll());     // 0x80026368/0x8007a904 NATIVE
-    FFS("ff_25588", c->engine.sceneEventFifo()); FFS("ff_4fe84", c->engine.sceneRenderListBuilder());   // 0x80025588/0x8004fe84 NATIVE (Engine methods)
-    FFS("ff_disp26c88", c->engine.objectTable.dispatch());                                            // 0x80026c88 NATIVE
-    FFS("ff_22a80", c->engine.modePerFrameDispatch());                                // 0x80022a80 NATIVE (Engine::modePerFrameDispatch)
+    FFS("ff_59d28", eng(c).frameStartTick()); FFS("ff_69b28", eng(c).objectList.walkAux());    // 0x80059d28/0x80069b28 NATIVE
+    FFS("ff_26368", eng(c).array8Dispatch.tick()); FFS("ff_objwalk", eng(c).objectList.walkAll());     // 0x80026368/0x8007a904 NATIVE
+    FFS("ff_25588", eng(c).sceneEventFifo()); FFS("ff_4fe84", eng(c).sceneRenderListBuilder());   // 0x80025588/0x8004fe84 NATIVE (Engine methods)
+    FFS("ff_disp26c88", eng(c).objectTable.dispatch());                                            // 0x80026c88 NATIVE
+    FFS("ff_22a80", eng(c).modePerFrameDispatch());                                // 0x80022a80 NATIVE (Engine::modePerFrameDispatch)
     FFS("ff_6ec44", CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update());         // 0x8006ec44 NATIVE (CutsceneCamera::update)
-    FFS("ff_50de4", c->engine.sceneStateStep());                 // 0x80050de4 NATIVE (Engine::sceneStateStep)
-    FFS("ff_1cac0", c->engine.areaModeDispatch());               // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
+    FFS("ff_50de4", eng(c).sceneStateStep());                 // 0x80050de4 NATIVE (Engine::sceneStateStep)
+    FFS("ff_1cac0", eng(c).areaModeDispatch());               // 0x8001cac0 NATIVE (Engine::areaModeDispatch)
   }
   // DUAL-VIEW: snapshot the post-gameplay / pre-render state so the side-by-side PSX render pass (the
   // ACTUAL dualview feature, native_boot.cpp's mode.dualview() branch) can re-run the substrate render
@@ -877,13 +878,13 @@ void Engine::fieldFrame() { Core* c = core;
   // below no longer rewinds (see comment there) because the dualview feature still needs a pre-render
   // snapshot to make its second pass re-runnable.
   c->rsub.dualviewSnapshot.capturePre(c);
-  if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — substrate render orchestrator (ALWAYS runs, both render modes)
+  if (c->mem_r8(0x1f800136u) < 2) rend(c)->frame();   // 0x8003f9a8 — substrate render orchestrator (ALWAYS runs, both render modes)
   // NO restorePre HERE (fixed 2026-07-08, issue: default ./run.sh renders BLACK — poly=0/rect=0 at
   // free-roam). Render::frame() (game/render/render_frame.cpp) was repointed 2026-07-07 (commit 9d436e3,
   // issue #32: "PSX render path ALWAYS executes underneath") to unconditionally dispatch the FULL substrate
   // orchestrator 0x8003f9a8 in BOTH render modes — its guest writes (OT links, packet pool, walk cursors,
   // scratchpad GTE workspace) are now BYTE-IDENTICAL to the recomp reference by construction, exactly like
-  // fieldFrameFaithful()'s call to the same c->mRender->frame() (which has never rewound them, is the
+  // fieldFrameFaithful()'s call to the same rend(c)->frame() (which has never rewound them, is the
   // fieldFrame the whole pc_faithful/SBS-full byte-exact proof is built on).
   //
   // The restore this replaces predates that pivot: back when Render::frame() ran a PARTIAL, pc_render-only
@@ -898,7 +899,7 @@ void Engine::fieldFrame() { Core* c = core;
   // frame loop, before c->game->pcSched.step() (which is what reaches this function) even starts; capturePre
   // above snapshots that CLEARED OT. mRender->frame() above then fills it. rec_dispatch(c,0x8003f9a8u)
   // returns, this fork used to call restorePre() and wipe the OT straight back to the pre-render (i.e.
-  // EMPTY) snapshot — so by the time native_boot.cpp's own post-scheduler c->engine.drawOTag(...) walk ran
+  // EMPTY) snapshot — so by the time native_boot.cpp's own post-scheduler eng(c).drawOTag(...) walk ran
   // (the pc_render picture draw, a read-only pass over guest RAM), the OT had nothing in it: poly=0, rect=0,
   // black screen, every frame, forever. fieldFrameFaithful() never had this rewind, so its OT survives to
   // drawOTag() intact — which is why GATE=1 (pc_faithful/pc_render) and PSXPORT_ORACLE=1 both rendered fine
@@ -907,9 +908,9 @@ void Engine::fieldFrame() { Core* c = core;
   // pc_render stays a read-only overlay: it never itself writes guest memory (drawOTag only reads OT/scene
   // data and writes host VK batches); the substrate writes above are gameplay-side (same call path
   // fieldFrameFaithful takes), not a pc_render violation.
-  FFS("ff_submit810c", c->engine.submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
-  FFS("ff_77d8c", c->engine.postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)
-  FFS("ff_area75a80", c->engine.areaSlots.updateTail());   // 0x80075a80 NATIVE (AreaSlots::updateTail)
+  FFS("ff_submit810c", eng(c).submitPage810c()); // render submit (page-1 dim-fade owned; other pages recomp)
+  FFS("ff_77d8c", eng(c).postRenderTick());   // 0x80077d8c NATIVE (Engine::postRenderTick)
+  FFS("ff_area75a80", eng(c).areaSlots.updateTail());   // 0x80075a80 NATIVE (AreaSlots::updateTail)
 }
 
 // -- Small per-object leaves shared across many behavior handlers. Ghidra decomp:
@@ -944,7 +945,7 @@ uint32_t Engine::animTick(uint32_t obj) { Core* c = core;
   GuestFrame<24, 2> frame(c, kSpills);
   c->r[16] = obj;
   c->r[31] = 0x80041920u;
-  c->engine.animation.stepFramed(obj);                               // native, mirrors 76D68's frame
+  eng(c).animation.stepFramed(obj);                               // native, mirrors 76D68's frame
   c->mem_w8(obj + kAnimResult, (uint8_t)c->r[2]);
   c->r[2] = 1;
   return 1;
@@ -1099,7 +1100,7 @@ void Engine::gStateMutate(uint32_t G, uint8_t op) { Core* c = core;
       if (op == 6) n174 = f174 | 0x04;
       else         n174 = f174 & 0xFB;
       c->mem_w8(G + 0x174u, n174);
-      c->engine.actorTomba.growthStep((op == 6) ? 1 : 0);              // native ActorTomba::growthStep (FUN_80057DC0)
+      eng(c).actorTomba.growthStep((op == 6) ? 1 : 0);              // native ActorTomba::growthStep (FUN_80057DC0)
       c->mem_w16(0x800BF89Eu, c->mem_r16(G + 0x17Eu));
       cue(op == 6 ? 0x49u : 0x4Au);
       break;
@@ -1112,7 +1113,7 @@ void Engine::gStateMutate(uint32_t G, uint8_t op) { Core* c = core;
       c->mem_w8(G + 0x174u, n174);
       cue(0x45);
       if (op == 0xD) {
-        c->engine.sfx.trigger(0x39, 0, 0);           // Sfx::trigger — native (FUN_80074590 alt-cue path)
+        eng(c).sfx.trigger(0x39, 0, 0);           // Sfx::trigger — native (FUN_80074590 alt-cue path)
       } else {
         c->mem_w8(G + 5, 0x38);
         c->mem_w8(G + 6, 2);
@@ -1127,7 +1128,7 @@ void Engine::gStateMutate(uint32_t G, uint8_t op) { Core* c = core;
       c->mem_w8(G + 0x174u, n174);
       cue(0x47);
       if (op == 0xE) {
-        c->engine.sfx.trigger(0x3A, 0, 0);
+        eng(c).sfx.trigger(0x3A, 0, 0);
       } else {
         c->mem_w8(G + 5, 0x39);
         c->mem_w8(G + 6, 2);
@@ -1254,7 +1255,7 @@ void Engine::fieldRunFaithful() { Core* c = core;
       /* fallthrough */
     case 1: {                                  // L_80106D00 — the RUNNING field frame
       c->r[31] = 0x80106D08u;
-      c->game->ffspan.begin(); c->engine.fieldFrame(); c->game->ffspan.end("fieldframe");
+      c->game->ffspan.begin(); eng(c).fieldFrame(); c->game->ffspan.end("fieldframe");
       if ((int8_t)c->mem_r8(0x800BF80Du) == 3) {
         if (c->mem_r8(0x800BF80Fu) != 0) break;
         c->r[31] = 0x80106D38u; rec_dispatch(c, 0x80074BC4u);
@@ -1299,7 +1300,7 @@ void Engine::fieldRunFaithful() { Core* c = core;
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, 1);
       c->r[31] = 0x80106CD8u;
-      c->engine.fieldFrame();
+      eng(c).fieldFrame();
       break;
     case 6: {                                  // L_80106E5C — zone-change settle + next-area select
       int16_t ev = c->mem_r16s(0x800E7FEEu);
@@ -1355,7 +1356,7 @@ void Engine::fieldRunFaithful() { Core* c = core;
       break;
     case 9:                                    // L_80106FC4 — field frame + gate on pad bit 3
       c->r[31] = 0x80106FCCu;
-      c->engine.fieldFrame();
+      eng(c).fieldFrame();
       if (c->mem_r8(0x800BF89Cu) == 2 && (c->mem_r16(0x800E7E68u) & 8u) != 0) {
         sm = c->mem_r32(0x1f800138u);
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
@@ -1366,7 +1367,7 @@ void Engine::fieldRunFaithful() { Core* c = core;
     case 10: {                                 // L_80107020 — fade-out ramp then CD settle
       c->r[31] = 0x80107028u;
       c->r[16] = 0x1F800000u;
-      c->engine.fieldFrame();
+      eng(c).fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xFFu;
       c->r[4] = (u << 16) | (u << 8) | u; c->r[5] = 0; c->r[6] = 0;
@@ -1402,45 +1403,45 @@ void Engine::fieldRun() { Core* c = core;
   uint16_t s4e = c->mem_r16(sm + 0x4e);
   switch (s4e) {
     case 0:
-      c->engine.pool.init();   // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x8007b18c)
-      c->engine.pool.resetControlBlock();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800796dc)
-      c->engine.pool.seedAreaObjects();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800263e8)
-      c->engine.placement.placeAreaObjects();   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
-      c->engine.pool.reset75240();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80075240)
-      c->engine.pool.setupViewScroll();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800783dc)
-      c->engine.pool.finalViewInit();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80078610)
+      eng(c).pool.init();   // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x8007b18c)
+      eng(c).pool.resetControlBlock();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800796dc)
+      eng(c).pool.seedAreaObjects();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800263e8)
+      eng(c).placement.placeAreaObjects();   // OWNED native (game/world/placement.cpp) — replaces rec_dispatch(0x80072a78)
+      eng(c).pool.reset75240();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80075240)
+      eng(c).pool.setupViewScroll();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x800783dc)
+      eng(c).pool.finalViewInit();       // OWNED native (game/world/pool.cpp) — replaces rec_dispatch(0x80078610)
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, 1);
       c->mem_w8(sm + 0x6b, 0);
       if (c->mem_r8(0x800bf89cu) == 2) { c->mem_w16(sm + 0x4e, 9); }
       else if (c->mem_r8(0x800bf870u) == 8) { d0(c, 0x80114b90u); }
       else if (c->mem_r32(0x800bf870u) == 0x15) { c->mem_w16(sm + 0x4e, 0xb); return; }
-      c->engine.pool.selectStateIndex(c->mem_r8(0x800bf870u));   // OWNED native — replaces d1(0x80074f24, area)
+      eng(c).pool.selectStateIndex(c->mem_r8(0x800bf870u));   // OWNED native — replaces d1(0x80074f24, area)
       break;
     case 2:
-      c->engine.gStateMutate(0x800E7E80u, 0xC);   // native — was rec_dispatch 0x80058304(G, 0xC)
+      eng(c).gStateMutate(0x800E7E80u, 0xC);   // native — was rec_dispatch 0x80058304(G, 0xC)
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
       /* fallthrough */
     case 3:
-      c->engine.audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
+      eng(c).audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
       if (c->mem_r8(0x800bf870u) == 8) d0(c, 0x80114b90u);
       sm = c->mem_r32(0x1f800138u);
       c->mem_w16(sm + 0x4a, 2);
       c->mem_w16(sm + 0x4c, 0);
       c->mem_w16(sm + 0x4e, 0);
-      c->engine.modeStateArm.arm();                  // native — was rec_dispatch 0x8005082C(0,0,0)
+      eng(c).modeStateArm.arm();                  // native — was rec_dispatch 0x8005082C(0,0,0)
       break;
     case 4:
-      d0(c, 0x8006c7c4u); c->engine.modeStateArm.armFromAreaTable();   // native — was rec_dispatch 0x800508A8
+      d0(c, 0x8006c7c4u); eng(c).modeStateArm.armFromAreaTable();   // native — was rec_dispatch 0x800508A8
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
       /* fallthrough */
     case 1: {
-      c->game->ffspan.begin(); c->engine.fieldFrame(); c->game->ffspan.end("fieldframe");   // native field per-frame update (0x80108b0c)
+      c->game->ffspan.begin(); eng(c).fieldFrame(); c->game->ffspan.end("fieldframe");   // native field per-frame update (0x80108b0c)
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf80du) == 3) {        // (signed byte) special mode 3
         if (c->mem_r8(0x800bf80fu) == 0) {
-          c->engine.audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
+          eng(c).audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
           sm = c->mem_r32(0x1f800138u);
           if (c->mem_r32(0x800e7feeu) == 0) {   // _DAT_800e7fee (read as int per decomp)
             c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));    // LAB_80106f48
@@ -1462,13 +1463,13 @@ void Engine::fieldRun() { Core* c = core;
       break;
     }
     case 5:
-      if (c->mem_r8(0x800bf870u) == 7) { d0(c, 0x801128bcu); c->engine.modeStateArm.armFromAreaTable(); }
+      if (c->mem_r8(0x800bf870u) == 7) { d0(c, 0x801128bcu); eng(c).modeStateArm.armFromAreaTable(); }
       c->mem_w16(c->mem_r32(0x1f800138u) + 0x4e, 1);
-      c->engine.fieldFrame();
+      eng(c).fieldFrame();
       break;
     case 6: {
       if (c->mem_r32(0x800e7feeu) != 0) { c->mem_w8(0x800bf880u, 1); c->mem_w32(0x1f800194u, c->mem_r32(0x800e7feeu)); }
-      c->engine.audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
+      eng(c).audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
       // _DAT_800bf870 = CONCAT11(...) & 0x3f1f  — the decomp's byte-swap-and-mask of *0x800bf83a into bf870
       uint16_t b83a = c->mem_r16(0x800bf83au);
       uint32_t v = (((uint32_t)(b83a & 0xff) << 8) | (b83a >> 8)) & 0x3f1f;
@@ -1503,7 +1504,7 @@ void Engine::fieldRun() { Core* c = core;
       c->mem_w16(sm + 0x4a, 1); c->mem_w16(sm + 0x4c, 2); c->mem_w16(sm + 0x4e, 6);   // LAB_80106fac
       break;
     case 9:
-      c->engine.fieldFrame();
+      eng(c).fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       if (c->mem_r8(0x800bf89cu) == 2 && (c->mem_r32(0x800e7e68u) & 8) != 0) {
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
@@ -1512,11 +1513,11 @@ void Engine::fieldRun() { Core* c = core;
       }
       break;
     case 10: {
-      c->engine.fieldFrame();
+      eng(c).fieldFrame();
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6e) * (uint32_t)-8) & 0xff;
       cfg_logf("fadesites", "[fadesite] fieldRun-case10 u=%02x sm6e=%u", u, c->mem_r8(sm+0x6e));
-      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 0);   // = guest FUN_8007e9c8(color, 0, 4): area-transition subtractive fade-out ramp
+      fade(c).applyLeafCall((u << 16) | (u << 8) | u, 0);   // = guest FUN_8007e9c8(color, 0, 4): area-transition subtractive fade-out ramp
       uint8_t nv = (uint8_t)(c->mem_r8(sm + 0x6e) - 1);
       c->mem_w8(sm + 0x6e, nv);
       if (nv == 0) {
@@ -1527,7 +1528,7 @@ void Engine::fieldRun() { Core* c = core;
       break;
     }
     case 0xb:
-      c->screenFade.sequence(0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
+      fade(c).sequence(0x800e8008u);   // OWNED native — replaces d1(0x8010957c, node) (a0l fade sequencer)
       break;
     default: break;
   }
@@ -1556,20 +1557,20 @@ void Engine::fieldFrameXFaithful() { Core* c = core;
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
-    c->r[31] = 0x80108C28u; FFS("ffx_59d28",    c->engine.frameStartTick());
-    c->r[31] = 0x80108C30u; FFS("ffx_69b28",    c->engine.objectList.walkAux());
-    c->r[31] = 0x80108C38u; FFS("ffx_26368",    c->engine.array8Dispatch.tick());
-    c->r[31] = 0x80108C40u; FFS("ffx_7b04c",    c->engine.transitionState3.walkOnce());
-    c->r[31] = 0x80108C48u; FFS("ffx_25588",    c->engine.sceneEventFifo());
-    c->r[31] = 0x80108C50u; FFS("ffx_4fe84",    c->engine.sceneRenderListBuilder());
-    c->r[31] = 0x80108C58u; FFS("ffx_disp26c88",c->engine.objectTable.dispatch());
-    c->r[31] = 0x80108C60u; FFS("ffx_22a80",    c->engine.modePerFrameDispatch());
+    c->r[31] = 0x80108C28u; FFS("ffx_59d28",    eng(c).frameStartTick());
+    c->r[31] = 0x80108C30u; FFS("ffx_69b28",    eng(c).objectList.walkAux());
+    c->r[31] = 0x80108C38u; FFS("ffx_26368",    eng(c).array8Dispatch.tick());
+    c->r[31] = 0x80108C40u; FFS("ffx_7b04c",    eng(c).transitionState3.walkOnce());
+    c->r[31] = 0x80108C48u; FFS("ffx_25588",    eng(c).sceneEventFifo());
+    c->r[31] = 0x80108C50u; FFS("ffx_4fe84",    eng(c).sceneRenderListBuilder());
+    c->r[31] = 0x80108C58u; FFS("ffx_disp26c88",eng(c).objectTable.dispatch());
+    c->r[31] = 0x80108C60u; FFS("ffx_22a80",    eng(c).modePerFrameDispatch());
     c->r[31] = 0x80108C68u; FFS("ffx_6ec44",    CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update());
   }
-  if (c->mem_r8(0x1f800136u) < 2) { c->r[31] = 0x80108C84u; c->mRender->frameX(); }   // 0x8003FA44 underneath
-  c->r[31] = 0x80108C8Cu; FFS("ffx_submit810c", c->engine.submitPage810c());
-  c->r[31] = 0x80108C94u; FFS("ffx_77d8c",      c->engine.postRenderTick());
-  c->r[31] = 0x80108C9Cu; FFS("ffx_75a80",      c->engine.areaSlots.updateTail());
+  if (c->mem_r8(0x1f800136u) < 2) { c->r[31] = 0x80108C84u; rend(c)->frameX(); }   // 0x8003FA44 underneath
+  c->r[31] = 0x80108C8Cu; FFS("ffx_submit810c", eng(c).submitPage810c());
+  c->r[31] = 0x80108C94u; FFS("ffx_77d8c",      eng(c).postRenderTick());
+  c->r[31] = 0x80108C9Cu; FFS("ffx_75a80",      eng(c).areaSlots.updateTail());
   c->r[31] = c->mem_r32(sp + 20);
   c->r[16] = c->mem_r32(sp + 16);
   c->r[29] += 24;
@@ -1580,14 +1581,14 @@ void Engine::fieldFrameX() { Core* c = core;
   c->mem_w16(0x1f80017cu, (uint16_t)(c->mem_r16(0x1f80017cu) + 1));   // frame counter
   c->mem_w32(0x800bf878u, c->mem_r32(0x800bf878u) + 1);
   if (c->mem_r8(0x1f800136u) == 0) {            // not paused: reduced gameplay update
-    c->engine.frameStartTick(); c->engine.objectList.walkAux(); d0(c, 0x80026368u); c->engine.transitionState3.walkOnce();   // 0x80059d28/0x80069b28/0x8007b04c NATIVE
-    c->engine.sceneEventFifo(); c->engine.sceneRenderListBuilder(); c->engine.objectTable.dispatch(); c->engine.modePerFrameDispatch();   // 25588/4fe84/26c88/22a80 NATIVE
+    eng(c).frameStartTick(); eng(c).objectList.walkAux(); d0(c, 0x80026368u); eng(c).transitionState3.walkOnce();   // 0x80059d28/0x80069b28/0x8007b04c NATIVE
+    eng(c).sceneEventFifo(); eng(c).sceneRenderListBuilder(); eng(c).objectTable.dispatch(); eng(c).modePerFrameDispatch();   // 25588/4fe84/26c88/22a80 NATIVE
     CutsceneCamera(c, CutsceneCamera::CAM_OBJ).update();   // 0x8006ec44 NATIVE (CutsceneCamera::update)
   }
-  if (c->mem_r8(0x1f800136u) < 2) c->mRender->frameX(); // 0x8003fa44 — NATIVE render orchestrator twin
-  c->engine.submitPage810c();                      // render submit (page-1 dim-fade owned; other pages recomp)
-  c->engine.postRenderTick();                   // 0x80077D8C NATIVE (was d0)
-  c->engine.areaSlots.updateTail();                   // 0x80075a80 NATIVE
+  if (c->mem_r8(0x1f800136u) < 2) rend(c)->frameX(); // 0x8003fa44 — NATIVE render orchestrator twin
+  eng(c).submitPage810c();                      // render submit (page-1 dim-fade owned; other pages recomp)
+  eng(c).postRenderTick();                   // 0x80077D8C NATIVE (was d0)
+  eng(c).areaSlots.updateTail();                   // 0x80075a80 NATIVE
 }
 
 // ---- NATIVE SUB-SCENE / DOOR TRANSITION (FUN_80108a60 + its 4 workers) -----------------------------
@@ -1614,7 +1615,7 @@ static void native_area_load_bd4(Core* c, uint32_t area, uint32_t mode) {
   // NO RNG draw here: this is the FUN_80044bd4(...,flag=1) call. In gen_func_80044BD4 the flag==1
   // branch jumps to the epilogue (`if (r19==1) goto L_80044CB8`) BEFORE func_8009A450 — zero RNG
   // draws. Only flag!=1 (see bd4Tail) draws the stamp. func_80051F14 (spawnPrim) draws no RNG either.
-  SV_CHECK(c, 0x800452C0u, c->engine.sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // skip leg vs the slot-1 task body oracle (observable compare)
+  SV_CHECK(c, 0x800452C0u, eng(c).sop.transitionAreaLoad(), rec_dispatch(c, 0x800452C0u));   // skip leg vs the slot-1 task body oracle (observable compare)
 }
 
 // FUN_80107afc — the MAIN door/sub-scene transition (sm[0x4c]==1..4). sm[0x4e]: 0 teardown+fade-clear+load,
@@ -1630,12 +1631,12 @@ void Engine::transitionMain() { Core* c = core;
       sm = c->mem_r32(0x1f800138u);
       c->mem_w8(sm + 0x6b, 0x1f);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
-      c->screenFade.applyLeafCall(0xffffffu, 0);                 // = guest FUN_8007e9c8(0xffffff, 0, 4): full black held (one-frame state)
+      fade(c).applyLeafCall(0xffffffu, 0);                 // = guest FUN_8007e9c8(0xffffff, 0, 4): full black held (one-frame state)
       native_area_load_bd4(c, c->mem_r8(0x800bf870u), 0);        // FUN_80044bd4(0x800452c0,bf870,0,1)
       return;
     case 1: {                                                    // FADE-OUT — subtractive ramp
       uint32_t u = (uint32_t)c->mem_r8(sm + 0x6b) & 0x1f;
-      c->screenFade.applyLeafCall((u << 19) | (u << 11) | (u << 3), 0);
+      fade(c).applyLeafCall((u << 19) | (u << 11) | (u << 3), 0);
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
       c->mem_w8(sm + 0x6b, v);
       if (v == 0) c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
@@ -1651,7 +1652,7 @@ void Engine::transitionMain() { Core* c = core;
       break;
     case 3: {                                                    // FADE-IN — additive ramp
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6b) * (uint32_t)-8) & 0xff;
-      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 1);
+      fade(c).applyLeafCall((u << 16) | (u << 8) | u, 1);
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
       c->mem_w8(sm + 0x6b, v);
       if (v == 0) {
@@ -1743,7 +1744,7 @@ void Engine::transitionF3c() { Core* c = core;
       if (c->mem_r8(0x1f80019bu) != 0) {
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
         d0(c, 0x80074e48u);
-        c->engine.audioDispatch.zoneTransitionSetup(9);         // native, FUN_8001D71C
+        eng(c).audioDispatch.zoneTransitionSetup(9);         // native, FUN_8001D71C
         d0(c, 0x8003fb94u);
       }
       break;
@@ -1782,10 +1783,10 @@ void Engine::fieldTransition() { Core* c = core;
       c->mem_w16(sm + 0x48, 2); c->mem_w16(sm + 0x4a, 1);
       c->mem_w16(sm + 0x4c, 0); c->mem_w16(sm + 0x4e, 0);
       break;
-    case 1: case 2: case 3: case 4: c->engine.transitionMain(); break;
-    case 5: case 6:                 c->engine.transitionD3c();  break;
-    case 7:                         c->engine.transitionE20();  break;
-    case 8:                         c->engine.transitionF3c();  break;
+    case 1: case 2: case 3: case 4: eng(c).transitionMain(); break;
+    case 5: case 6:                 eng(c).transitionD3c();  break;
+    case 7:                         eng(c).transitionE20();  break;
+    case 8:                         eng(c).transitionF3c();  break;
     default: break;
   }
 }
@@ -1806,13 +1807,13 @@ void Engine::fieldTransitionFaithful() { Core* c = core;
       c->mem_w16(sm + 0x4c, 0); c->mem_w16(sm + 0x4e, 0);
       break;
     case 1: case 2: case 3: case 4:
-      c->r[31] = 0x80108ACCu; c->engine.transitionMainFaithful(); break;
+      c->r[31] = 0x80108ACCu; eng(c).transitionMainFaithful(); break;
     case 5: case 6:
-      c->r[31] = 0x80108AECu; c->engine.transitionD3cFaithful(); break;
+      c->r[31] = 0x80108AECu; eng(c).transitionD3cFaithful(); break;
     case 7:
-      c->r[31] = 0x80108ADCu; c->engine.transitionE20Faithful(); break;
+      c->r[31] = 0x80108ADCu; eng(c).transitionE20Faithful(); break;
     case 8:
-      c->r[31] = 0x80108AFCu; c->engine.transitionF3cFaithful(); break;
+      c->r[31] = 0x80108AFCu; eng(c).transitionF3cFaithful(); break;
     default: break;
   }
   c->r[31] = c->mem_r32(sp + 16);
@@ -1838,7 +1839,7 @@ void Engine::transitionMainFaithful() { Core* c = core;
       sm = c->mem_r32(0x1f800138u);
       c->mem_w8(sm + 0x6b, 0x1f);
       c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
-      c->screenFade.applyLeafCall(0xffffffu, 0);          // = guest FUN_8007e9c8(0xffffff,0,4); jal-site was 0x80107B98u
+      fade(c).applyLeafCall(0xffffffu, 0);          // = guest FUN_8007e9c8(0xffffff,0,4); jal-site was 0x80107B98u
       sm = c->mem_r32(0x1f800138u);
       c->r[4] = 0x800452C0u;
       c->r[5] = c->mem_r8(0x800bf870u);
@@ -1850,7 +1851,7 @@ void Engine::transitionMainFaithful() { Core* c = core;
     case 1: {
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = (uint32_t)c->mem_r8(sm + 0x6b) & 0x1fu;
-      c->screenFade.applyLeafCall((u << 19) | (u << 11) | (u << 3), 0);   // jal-site was 0x80107BECu
+      fade(c).applyLeafCall((u << 19) | (u << 11) | (u << 3), 0);   // jal-site was 0x80107BECu
       sm = c->mem_r32(0x1f800138u);
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
       c->mem_w8(sm + 0x6b, v);
@@ -1870,7 +1871,7 @@ void Engine::transitionMainFaithful() { Core* c = core;
     case 3: {
       sm = c->mem_r32(0x1f800138u);
       uint32_t u = ((uint32_t)c->mem_r8(sm + 0x6b) * (uint32_t)-8) & 0xffu;
-      c->screenFade.applyLeafCall((u << 16) | (u << 8) | u, 1);          // jal-site was 0x80107C98u
+      fade(c).applyLeafCall((u << 16) | (u << 8) | u, 1);          // jal-site was 0x80107C98u
       sm = c->mem_r32(0x1f800138u);
       uint8_t v = (uint8_t)(c->mem_r8(sm + 0x6b) - 1);
       c->mem_w8(sm + 0x6b, v);
@@ -2017,7 +2018,7 @@ void Engine::transitionF3cFaithful() { Core* c = core;
         sm = c->mem_r32(0x1f800138u);
         c->mem_w16(sm + 0x4e, (uint16_t)(c->mem_r16(sm + 0x4e) + 1));
         c->r[31] = 0x80108010u; rec_dispatch(c, 0x80074E48u);
-        c->r[31] = 0x80108018u; c->engine.audioDispatch.zoneTransitionSetup(9);   // native, FUN_8001D71C
+        c->r[31] = 0x80108018u; eng(c).audioDispatch.zoneTransitionSetup(9);   // native, FUN_8001D71C
         c->r[31] = 0x80108020u; rec_dispatch(c, 0x8003FB94u);
       }
       break;
@@ -2088,12 +2089,12 @@ void Engine::fieldRunXFaithful() { Core* c = core;
     }
 
     c->r[31] = 0x80107120u;
-    c->engine.fieldFrameX();                        // ov_game_func_80108BE4 -- native owner
+    eng(c).fieldFrameX();                        // ov_game_func_80108BE4 -- native owner
 
     if (c->mem_r8(0x800bf80du) == 3) {               // mode-3 exit (0x80107138)
       if (c->mem_r8(0x800bf80fu) == 0) {
         c->r[31] = 0x80107150u;
-        c->engine.audioDispatch.settleField();       // native owner -- was rec_dispatch 0x80074BC4
+        eng(c).audioDispatch.settleField();       // native owner -- was rec_dispatch 0x80074BC4
         sm = c->mem_r32(0x1f800138u);
         c->mem_w16(sm + 0x4c, 2);                    // back to normal running handler
         int16_t  e_s = c->mem_r16s(0x800e7feeu);
@@ -2147,10 +2148,10 @@ void Engine::fieldRunX() { Core* c = core;
     d3(c, 0x8005082cu, 0, 0, 0);                 // input reset
     // fall through to state 1
   }
-  c->engine.fieldFrameX();                           // 0x80108be4 per-frame (state 1, 0x80107118)
+  eng(c).fieldFrameX();                           // 0x80108be4 per-frame (state 1, 0x80107118)
   if (c->mem_r8(0x800bf80du) == 3) {             // mode-3 exit (0x80107138)
     if (c->mem_r8(0x800bf80fu) != 0) return;
-    c->engine.audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
+    eng(c).audioDispatch.settleField();     // native — was rec_dispatch 0x80074BC4
     sm = c->mem_r32(0x1f800138u);
     c->mem_w16(sm + 0x4c, 2);                     // back to normal running handler
     int16_t  e_s = c->mem_r16s(0x800e7feeu);
@@ -2211,8 +2212,8 @@ void Engine::submode1Faithful() { Core* c = core;
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: c->r[31] = 0x80108974u; c->game->ffspan.begin(); c->engine.fieldRun(); c->game->ffspan.end("fieldrun"); break;
-    case 3: c->r[31] = 0x80108984u; c->engine.fieldRunX(); break;
+    case 2: c->r[31] = 0x80108974u; c->game->ffspan.begin(); eng(c).fieldRun(); c->game->ffspan.end("fieldrun"); break;
+    case 3: c->r[31] = 0x80108984u; eng(c).fieldRunX(); break;
     case 4: c->r[31] = 0x80108994u; rec_dispatch(c, 0x80107230u); break;
     case 5: c->r[31] = 0x801089A4u; rec_dispatch(c, 0x8010766Cu); break;
     case 6: c->r[31] = 0x801089B4u; rec_dispatch(c, 0x80107790u); break;
@@ -2266,8 +2267,8 @@ void Engine::submode1() { Core* c = core;
       c->mem_w16(sm + 0x4c, next);
       break;
     }
-    case 2: c->game->ffspan.begin(); c->engine.fieldRun(); c->game->ffspan.end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
-    case 3: c->engine.fieldRunX(); break;              // mid-transition running sub-machine 0x801070b4 — native
+    case 2: c->game->ffspan.begin(); eng(c).fieldRun(); c->game->ffspan.end("fieldrun"); break;   // field RUNNING sub-machine (sm[0x4e]) — native
+    case 3: eng(c).fieldRunX(); break;              // mid-transition running sub-machine 0x801070b4 — native
     case 4: rec_dispatch(c, 0x80107230u); break;
     case 5: rec_dispatch(c, 0x8010766cu); break;
     case 6: rec_dispatch(c, 0x80107790u); break;
@@ -2285,9 +2286,9 @@ void Engine::submode1() { Core* c = core;
 int Engine::frame() { Core* c = core;
   // Screen fade: reset at the top of every logic frame (PSX-faithful — OT slot 4 empties each frame,
   // so a frame with no NATIVE fade caller = no fade rect. Native SMs push after this via
-  // c->screenFade.applyLeafCall / set. Still-recomp SMs' fade calls don't reach the class yet — those
+  // fade(c).applyLeafCall / set. Still-recomp SMs' fade calls don't reach the class yet — those
   // are the top-down port frontier for closing coverage.
-  c->screenFade.frameStart();
+  fade(c).frameStart();
   uint32_t sm = c->mem_r32(0x1f800138u);
   uint16_t s48 = c->mem_r16(sm + 0x48);
   if (s48 == 2) {
@@ -2301,13 +2302,13 @@ int Engine::frame() { Core* c = core;
       cfg_logf("gframe", "ret0 s48=2 s4a=%u unowned-submode sm@%08X", s4a, sm); return 0; // unowned running sub-mode
     }
     c->r[31] = 0x8010645Cu;                    // guest loop jal site (L_80106454)
-    c->engine.s48_2_frame();
+    eng(c).s48_2_frame();
   } else if (s48 == 0) {
     c->r[31] = 0x8010643Cu;                    // guest loop jal site (L_80106434)
-    c->game->ffspan.begin(); c->engine.s48_0(); c->game->ffspan.end("s48_0");
+    c->game->ffspan.begin(); eng(c).s48_0(); c->game->ffspan.end("s48_0");
   } else if (s48 == 1) {
     c->r[31] = 0x8010644Cu;                    // guest loop jal site (L_80106444)
-    c->game->ffspan.begin(); c->engine.s48_1(); c->game->ffspan.end("s48_1");
+    c->game->ffspan.begin(); eng(c).s48_1(); c->game->ffspan.end("s48_1");
   } else {
     cfg_logf("gframe", "ret0 unknown s48=%u sm@%08X", s48, sm); return 0; // unknown top state -> cooperative
   }
@@ -2382,8 +2383,8 @@ void Engine::stageBodyFaithful() { Core* c = core;
 }
 
 // OLD guest-loop entry (prologue + coro-redirect into the guest loop 0x801063F4). SUPERSEDED by the
-// native per-frame path (game_native in PcScheduler::step calls c->engine.stagePrologue +
-// c->engine.frame). Retained as a reference / fallback; not on the live path.
+// native per-frame path (game_native in PcScheduler::step calls eng(c).stagePrologue +
+// eng(c).frame). Retained as a reference / fallback; not on the live path.
 void Engine::stageMain() { Core* c = core;
   stagePrologue();
   rec_coro_redirect(c, 0x801063F4u);
@@ -2675,12 +2676,12 @@ void Engine::postRenderTick() {
   if (b == 0) return;
   uint8_t low = (uint8_t)(b & 0x7F);
   if (low == 1) {
-    c->engine.sfx.trigger(41, 2, -65);      // FUN_80074590 (native; pitchBend -65)
+    eng(c).sfx.trigger(41, 2, -65);      // FUN_80074590 (native; pitchBend -65)
     c->mem_w8(0x800BF842u, 0x87);
     return;
   }
   if (low == 2) {
-    c->engine.sfx.trigger(42, 2, -65);      // FUN_80074590 (native; pitchBend -65)
+    eng(c).sfx.trigger(42, 2, -65);      // FUN_80074590 (native; pitchBend -65)
     c->mem_w8(0x800BF842u, 0);
     return;
   }
@@ -2800,7 +2801,7 @@ void Engine::frameStartTick() {
     if (v != 0) c->mem_w8(G + 0x180u, (uint8_t)(v - 1));
   }
   // (h) advance rand LFSR (native class Rng — shared seed at 0x80105EE8 with substrate callers).
-  (void)c->rng.next();
+  (void)rngOf(c).next();
 }
 
 // Engine::frameStartTickFaithful — byte-exact mirror of gen_func_80059D28 (guest 0x80059D28), the
@@ -2874,7 +2875,7 @@ void Engine::frameStartTickFaithful() {
   // (h) advance rand LFSR. gen_func_8009A450 is the LAST statement in the guest body before the
   // epilogue, so its v0/v1/hi/lo side effects (masked value in v0, the 0x41C64E6D multiplier
   // loaded into v1, MULT's hi/lo product) are still live in those registers when this function
-  // returns — the strict ABI-register gate compares them unconditionally. c->rng.next() only
+  // returns — the strict ABI-register gate compares them unconditionally. rngOf(c).next() only
   // performs the guest-memory seed update (mem_r32/mem_w32 on 0x80105EE8, matching the shared
   // stream with substrate callers) but is a plain C++ call with no register-level side effects,
   // so it silently dropped v0/v1/hi/lo. Dispatch the real gen leaf instead so those registers
@@ -2990,9 +2991,9 @@ static void native_stage0_sm(Core* c) {
   uint32_t task = c->mem_r32(CUR_TASK);
   c->mem_w16(task + 0x48, 0);
   c->mem_w16(task + 0x4a, 0);
-  c->engine.asset.preloadTexgroup(0, 0);
-  c->engine.asset.preloadStage1();
-  c->engine.startStage(1);
+  eng(c).asset.preloadTexgroup(0, 0);
+  eng(c).asset.preloadStage1();
+  eng(c).startStage(1);
   scheduler_yield(c);
 }
 
@@ -3202,7 +3203,7 @@ void Engine::startBinStageSkip() {
     c->mem_w32(X.lba_dest, lba);
   }
 
-  startBinCommonAdvance(c, asset, c->rng);   // inline preload + rng stamp + sm[0x48]:=1
+  startBinCommonAdvance(c, asset, rngOf(c));   // inline preload + rng stamp + sm[0x48]:=1
 
   const uint32_t saved_gp = c->r[28];
   c->r[28] = 0x800BE0D4u;
@@ -3389,7 +3390,7 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
   }
   switch (step) {
     case 0: break;
-    case 1: (void)c->rng.next();                                     break;
+    case 1: (void)rngOf(c).next();                                     break;
     case 2: asset.preloadStage1(); c->mem_w16(task + 0x48, 2);        break;
     case 3: c->mem_w16(task + 0x48, 3);                              break;
     case 4: startStage(1); scheduler_yield(c); return 0;             // unreachable
@@ -3433,12 +3434,12 @@ extern void gen_func_80086604(Core*);   // Engine::activeModeCtx     (startup.cp
 extern void gen_func_80086738(Core*);   // Engine::installModeHandlers (startup.cpp)
 extern void gen_func_80086764(Core*);   // Engine::runModeEnter      (startup.cpp)
 namespace {
-void ov_engineAnimTick(Core* c)  { c->r[2] = c->engine.animTick(c->r[4]); }
-void ov_engineWalkStart(Core* c) { c->r[2] = c->engine.walkStart(c->r[4], c->r[5], (int16_t)c->r[6]); }
-void ov_engineSetAreaStartPos(Core* c)   { c->engine.setAreaStartPos(); }
-void ov_engineActiveModeCtx(Core* c)     { c->r[2] = c->engine.activeModeCtx(); }
-void ov_engineInstallModeHandlers(Core* c) { c->engine.installModeHandlers(); }
-void ov_engineRunModeEnter(Core* c)      { c->r[2] = c->engine.runModeEnter(); }
+void ov_engineAnimTick(Core* c)  { c->r[2] = eng(c).animTick(c->r[4]); }
+void ov_engineWalkStart(Core* c) { c->r[2] = eng(c).walkStart(c->r[4], c->r[5], (int16_t)c->r[6]); }
+void ov_engineSetAreaStartPos(Core* c)   { eng(c).setAreaStartPos(); }
+void ov_engineActiveModeCtx(Core* c)     { c->r[2] = eng(c).activeModeCtx(); }
+void ov_engineInstallModeHandlers(Core* c) { eng(c).installModeHandlers(); }
+void ov_engineRunModeEnter(Core* c)      { c->r[2] = eng(c).runModeEnter(); }
 }  // namespace
 
 void RegisterEngineAnimLeafOverrides(Game* /*game*/) {

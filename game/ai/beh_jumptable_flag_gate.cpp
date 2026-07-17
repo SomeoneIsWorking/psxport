@@ -28,11 +28,12 @@
 // and only exercise when a scene drives them (same caveat as the sibling orchestrators) — see Report.
 
 #include "core.h"
+#include "game_ctx.h"
 #include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "spawn.h"     // class Spawn (c->engine.spawn.despawn / dispatch / spawnAndInit)
+#include "spawn.h"     // class Spawn (eng(c).spawn.despawn / dispatch / spawnAndInit)
 #include "graphics_bind.h"   // ov_obj_record_init
 void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
@@ -47,7 +48,7 @@ constexpr uint32_t BEH_FN = 0x8012D4ECu;
 // LAB_8012d848: node[1]=v0; jal 0x800517f8(a0=obj); j epilogue.  (caller supplies v0; here always 1)
 inline void tail_set1_and_render(Core* c, uint32_t obj) {  // 0x8012d844 / 0x8012d848 / 0x8012d84c
   c->mem_w8(obj + 1, 1);                                    // 8012D848 sb v0(=1),1(s0)
-  c->r[4] = obj; c->engine.graphicsBind.renderUpdate();             // 8012D84C jal 0x800517f8 ; 8012D850 move a0,s0
+  c->r[4] = obj; eng(c).graphicsBind.renderUpdate();             // 8012D84C jal 0x800517f8 ; 8012D850 move a0,s0
 }
 
 // LAB_8012d82c..8012d840: set bit (4 if node[3]==0 else 8) in DAT_800bf9df; node[0x18..0x1a]=0; node[4]=3.
@@ -117,7 +118,7 @@ void beh_jumptable_flag_gate(Core* c) {
     if (st >= 2) {                                          // 8012D514 slti v0,v1,2 ; 8012D518 beqz -> 0x8012d530
       if (st == 2) return;                                  // 8012D534 beq v1,2 -> 0x8012d8f4 (epilogue)
       if (st == 3) {                                        // 8012D53C beq v1,3 -> 0x8012d8ec (despawn)
-        c->engine.spawn.despawn(obj);        // 8012D8EC jal 0x8007a624 ; 8012D8F0 move a0,s0
+        eng(c).spawn.despawn(obj);        // 8012D8EC jal 0x8007a624 ; 8012D8F0 move a0,s0
       }
       return;                                               // 8012D544 j 0x8012d8f4 (epilogue; other >=2 = no-op)
     }
@@ -126,7 +127,7 @@ void beh_jumptable_flag_gate(Core* c) {
     // ---- STATE 0 [0x8012D54C]: box/size init ----
     uint8_t n3 = c->mem_r8(obj + 3);                        // 8012D54C lbu a2,3(s0)
     c->r[4] = obj; c->r[5] = 0xc; c->r[6] = (uint32_t)n3 + 0x48;  // 8012D550 a1=0xc ; 8012D558 a2=node[3]+0x48
-    c->engine.graphicsBind.recordInit();                           // 8012D554 jal 0x80051b70
+    eng(c).graphicsBind.recordInit();                           // 8012D554 jal 0x80051b70
     if (c->r[2] != 0) return;                               // 8012D55C bnez v0 -> 0x8012d8f4 (init busy -> epilogue)
     n3 = c->mem_r8(obj + 3);                                // 8012D568 lbu v1,3(s0)
     c->mem_w8(obj + 0, 1);                                  // 8012D56C sb s1(=1),0(s0)  node[0]=1
@@ -134,7 +135,7 @@ void beh_jumptable_flag_gate(Core* c) {
     // sltiu v1,node[3],2 ; beqz v1 -> 0x8012d5a4  (taken when node[3] >= 2)
     if (n3 >= 2) {                                          // 8012D578 beqz -> 0x8012d5a4
       c->mem_w8(obj + 0xb, 2);                              // 8012D5AC sb v0(=2),0xb(s0)
-      c->r[4] = obj; c->engine.graphicsBind.renderUpdate();          // 8012D84C jal 0x800517f8 (via j 0x8012d84c)
+      c->r[4] = obj; eng(c).graphicsBind.renderUpdate();          // 8012D84C jal 0x800517f8 (via j 0x8012d84c)
       return;                                               // 8012D854 j epilogue
     }
     // node[3] < 2:
@@ -143,7 +144,7 @@ void beh_jumptable_flag_gate(Core* c) {
       return;                                               // 8012D594 j 0x8012d8f4 (epilogue)
     }
     c->mem_w8(obj + 0xb, 0);                                // 8012D5A0 sb zero,0xb(s0)  (delay slot of j 0x8012d84c)
-    c->r[4] = obj; c->engine.graphicsBind.renderUpdate();            // 8012D84C jal 0x800517f8
+    c->r[4] = obj; eng(c).graphicsBind.renderUpdate();            // 8012D84C jal 0x800517f8
     return;                                                 // 8012D854 j epilogue
   }
 
