@@ -321,6 +321,8 @@ public:
   //   onto their own guest stack frame) spill the WRONG byte under pc_faithful. Same control
   //   flow/store shape as sceneEventFifo(), just with the missing frame/ra discipline restored.
   void sceneEventFifoFaithful();
+  void fieldSeqSchedulerTick();        // FUN_80075A80 — per-frame field sequence-scheduler tick
+  static void registerFieldSeqSchedulerTick();
 
   // fieldTargetCursor: guest FUN_800251F0 — the field TARGET-SELECT cursor state machine (operates on
   // the scene-event struct at a0). Called every field frame from sceneEventFifo's 0x800251F0 "default"
