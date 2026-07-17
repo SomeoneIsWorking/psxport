@@ -40,8 +40,13 @@ if(NOT (SDL3_FOUND AND SDL3_IMAGE_FOUND AND FREETYPE_FOUND))
                       "Install the package(s) above and re-run ./run.sh")
 endif()
 
+if(TARGET psxport)
+  return()  # already built (idempotent include from both the root and the game cmake)
+endif()
+set(PSXPORT_CMAKE_INCLUDED ON)
+get_filename_component(PSXPORT_ROOT ${CMAKE_CURRENT_LIST_DIR} DIRECTORY)  # <psxport> repo root
 set(RT runtime/recomp)
-set(MED vendor/beetle-psx/mednafen)
+set(MED ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen)
 
 # ---- vendored RmlUi (HTML/CSS mod overlay), static, Core + Debugger only ----------------------
 set(BUILD_SHARED_LIBS OFF)
@@ -50,18 +55,18 @@ set(RMLUI_LUA_BINDINGS   OFF CACHE BOOL   "" FORCE)
 set(RMLUI_SVG_PLUGIN     OFF CACHE BOOL   "" FORCE)
 set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
 set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
-add_subdirectory(vendor/rmlui EXCLUDE_FROM_ALL)
+add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EXCLUDE_FROM_ALL)
 
 # ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_gpu_shaders.h) ------------------------
 # tools/gen_gpu_shaders.sh compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
 # embeds the SPIR-V into the source tree. Re-run when a shader source changes.
 file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
-  ${CMAKE_SOURCE_DIR}/${RT}/shaders_gpu/*.vert ${CMAKE_SOURCE_DIR}/${RT}/shaders_gpu/*.frag)
-set(SHADERS_H ${CMAKE_SOURCE_DIR}/${RT}/gpu_gpu_shaders.h)
+  ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.vert ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.frag)
+set(SHADERS_H ${PSXPORT_ROOT}/${RT}/gpu_gpu_shaders.h)
 add_custom_command(OUTPUT ${SHADERS_H}
-  COMMAND bash ${CMAKE_SOURCE_DIR}/tools/gen_gpu_shaders.sh
-  DEPENDS ${SHADER_SRCS} ${CMAKE_SOURCE_DIR}/tools/gen_gpu_shaders.sh
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMAND bash ${PSXPORT_ROOT}/tools/gen_gpu_shaders.sh
+  DEPENDS ${SHADER_SRCS} ${PSXPORT_ROOT}/tools/gen_gpu_shaders.sh
+  WORKING_DIRECTORY ${PSXPORT_ROOT}
   COMMENT "Generating SDL_GPU SPIR-V header (gpu_gpu_shaders.h)"
   VERBATIM)
 add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
@@ -69,71 +74,71 @@ add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
 # ---- framework source list (PSX-generic; NO game/*, NO generated/*) ---------------------------
 # All of runtime/recomp/** + the vendored Beetle GTE/MDEC/SPU C backends + the RmlUi SDL backend.
 set(PSXPORT_FRAMEWORK_SRC
-  runtime/recomp/core.cpp
-  runtime/recomp/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
-  runtime/recomp/game_iface.cpp       # framework↔game seam storage (GameConfig/GameHooks install)
-  runtime/recomp/recomp_iface.cpp     # framework↔generated seam storage (RecompRegistry install)
-  runtime/recomp/dispatch.cpp
-  runtime/recomp/interp.cpp           # ORACLE engine: pure-MIPS interpreter for the oracle Core
-  runtime/recomp/coro.cpp
-  runtime/recomp/overlay_router.cpp
-  runtime/recomp/cfg.c
-  runtime/recomp/mem.cpp
-  runtime/recomp/stubs.cpp
-  runtime/recomp/hle.cpp
-  runtime/recomp/threads.cpp
-  runtime/recomp/gpu_native.cpp
-  runtime/recomp/gpu_debug.cpp
-  runtime/recomp/vram_xfer.cpp
-  runtime/recomp/spu_audio.cpp
-  runtime/recomp/pad_input.cpp
-  runtime/recomp/memcard.cpp
-  runtime/recomp/native_fmv.cpp
-  vendor/beetle-psx/mednafen/psx/gte.c
-  runtime/recomp/gte_beetle.cpp
-  vendor/beetle-psx/mednafen/psx/mdec.c
-  runtime/recomp/mdec_beetle.c
-  vendor/beetle-psx/mednafen/psx/spu.c
-  runtime/recomp/spu_beetle.c
-  runtime/recomp/disc.c
-  runtime/recomp/disc_provision.cpp
-  runtime/recomp/cd_override.cpp
-  runtime/recomp/cdc_native.c
-  runtime/recomp/xa_stream.c
-  runtime/recomp/timing.cpp
-  runtime/recomp/gpu_gpu.cpp
-  runtime/recomp/gpu_perf.cpp
-  runtime/recomp/mods.cpp
-  runtime/recomp/native_gate.cpp
-  runtime/recomp/sync_overrides.cpp
-  runtime/recomp/override_registry.cpp
-  runtime/recomp/scheduler.cpp
-  runtime/recomp/native_boot.cpp
-  runtime/recomp/dualview_snapshot.cpp
-  runtime/recomp/proj_prim.cpp
-  runtime/recomp/pgxp.cpp
-  runtime/recomp/proj_params.cpp
-  runtime/recomp/pkt_span.cpp
-  runtime/recomp/ot_attr.cpp
-  runtime/recomp/hw_bind.cpp
-  runtime/recomp/repl.cpp
-  runtime/recomp/dbg_server.cpp
-  runtime/recomp/native_stub.cpp
-  runtime/recomp/watchdog.c
-  runtime/recomp/dualcore.cpp
-  runtime/recomp/sbs.cpp
-  runtime/recomp/sbs_present_sdl.cpp
-  runtime/recomp/selftest.cpp
-  runtime/recomp/boot.cpp
-  runtime/recomp/rmlui_overlay.cpp
-  runtime/recomp/rmlui_render_gpu.cpp
-  runtime/recomp/overlay_glue.cpp
-  runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
-  runtime/recomp/ffspan.cpp           # PSXPORT_BDTAG builder-span attribution (P1.7c)
-  runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
-  runtime/recomp/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
-  runtime/recomp/verify_harness.cpp   # A/B verify scaffold (skip/observable half split to game verify_skip.cpp) (P1.7c)
-  vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
+  ${PSXPORT_ROOT}/runtime/recomp/core.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
+  ${PSXPORT_ROOT}/runtime/recomp/game_iface.cpp       # framework↔game seam storage (GameConfig/GameHooks install)
+  ${PSXPORT_ROOT}/runtime/recomp/recomp_iface.cpp     # framework↔generated seam storage (RecompRegistry install)
+  ${PSXPORT_ROOT}/runtime/recomp/dispatch.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/interp.cpp           # ORACLE engine: pure-MIPS interpreter for the oracle Core
+  ${PSXPORT_ROOT}/runtime/recomp/coro.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/overlay_router.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/cfg.c
+  ${PSXPORT_ROOT}/runtime/recomp/mem.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/stubs.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/hle.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/threads.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_native.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_debug.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/vram_xfer.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/spu_audio.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/pad_input.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/memcard.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/native_fmv.cpp
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
+  ${PSXPORT_ROOT}/runtime/recomp/gte_beetle.cpp
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
+  ${PSXPORT_ROOT}/runtime/recomp/mdec_beetle.c
+  ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
+  ${PSXPORT_ROOT}/runtime/recomp/spu_beetle.c
+  ${PSXPORT_ROOT}/runtime/recomp/disc.c
+  ${PSXPORT_ROOT}/runtime/recomp/disc_provision.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/cd_override.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/cdc_native.c
+  ${PSXPORT_ROOT}/runtime/recomp/xa_stream.c
+  ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_gpu.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/mods.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/native_gate.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/sync_overrides.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/override_registry.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/scheduler.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/native_boot.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/dualview_snapshot.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/proj_prim.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/pgxp.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/proj_params.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/pkt_span.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/ot_attr.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/hw_bind.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/repl.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/dbg_server.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/native_stub.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/watchdog.c
+  ${PSXPORT_ROOT}/runtime/recomp/dualcore.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/sbs.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/sbs_present_sdl.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/selftest.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/boot.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/rmlui_overlay.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/rmlui_render_gpu.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/overlay_glue.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
+  ${PSXPORT_ROOT}/runtime/recomp/ffspan.cpp           # PSXPORT_BDTAG builder-span attribution (P1.7c)
+  ${PSXPORT_ROOT}/runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
+  ${PSXPORT_ROOT}/runtime/recomp/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
+  ${PSXPORT_ROOT}/runtime/recomp/verify_harness.cpp   # A/B verify scaffold (skip/observable half split to game verify_skip.cpp) (P1.7c)
+  ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC} ${SHADERS_H})
 add_dependencies(psxport gen_gpu_shaders)
@@ -149,11 +154,11 @@ set_target_properties(psxport PROPERTIES
 # generated/ sources (the game substrate) — so the archive carries them as UNDEFINED, resolved only at
 # the final game-exe link. That is expected for a static archive.
 target_include_directories(psxport PUBLIC
-  ${RT} ${CMAKE_SOURCE_DIR}/generated
+  ${PSXPORT_ROOT}/${RT} ${CMAKE_SOURCE_DIR}/generated
   ${MED} ${MED}/psx
-  vendor/beetle-psx/libretro-common/include vendor/beetle-psx
-  vendor/beetle-psx/deps/libchdr/include
-  vendor/rmlui/Include vendor/rmlui/Backends
+  ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
+  ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include
+  ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends
   ${SDL3_INCLUDE_DIRS} ${SDL3_IMAGE_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIRS})
 # NO game include dirs: as of P1.7c the framework owns Fps60/RenderQueue/PcScheduler/VerifyHarness/FfSpan
 # (their headers moved to runtime/recomp/; the game reaches into them only through the GameHooks seam). The
