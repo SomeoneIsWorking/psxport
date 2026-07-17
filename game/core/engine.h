@@ -323,6 +323,8 @@ public:
   void sceneEventFifoFaithful();
   void fieldSeqSchedulerTick();        // FUN_80075A80 — per-frame field sequence-scheduler tick
   void announcerCuePush();             // FUN_8004FA38 — announcer/message cue queue push
+  void spawnType6Node();               // FUN_800310F4 — spawn a type-6 pool node with a param
+  static void registerSpawnType6Node();
   static void registerAnnouncerCuePush();
   static void registerFieldSeqSchedulerTick();
 

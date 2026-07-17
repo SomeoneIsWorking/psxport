@@ -249,6 +249,7 @@ set(PORT_SRC
   game/core/engine.cpp
   game/core/field_seq_scheduler.cpp
   game/core/announcer_cue_push.cpp
+  game/core/spawn_type6_node.cpp
   game/core/field_target_cursor.cpp
   game/scene/sop.cpp
   game/scene/demo.cpp
