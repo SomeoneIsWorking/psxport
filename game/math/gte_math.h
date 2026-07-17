@@ -49,6 +49,18 @@ public:
   uint32_t rotY(int16_t angle, uint32_t matPtr);
   uint32_t rotZ(int16_t angle, uint32_t matPtr);
 
+  // sqrtLzc(v): FUN_80084080 — GTE-LZC fixed-point square root (leading-sign-bit normalize + a
+  //   16-bit ROM recip-sqrt table lookup @0x800a6310). Returns the isqrt-like result via v0.
+  uint32_t sqrtLzc(uint32_t v);
+
+  // matLoadLV(rPtr, vPtr): FUN_80084360 — in-place 3x3 matrix multiply P = R x M (R at rPtr,
+  //   M at vPtr, result written back to vPtr in CR-packed layout). Same math as matMul. Returns vPtr.
+  uint32_t matLoadLV(uint32_t rPtr, uint32_t vPtr);
+
+  // matColScale(dstPtr, facPtr): FUN_80084520 — per-column fixed-point scale of the CR-packed 3x3
+  //   matrix at dstPtr by the 3 column factors at facPtr (element * f[col] >> 12). Returns dstPtr.
+  uint32_t matColScale(uint32_t dstPtr, uint32_t facPtr);
+
   // Wire all 7 addresses above into the global override registry (guest-ABI trampolines: args in
   // r4..r6, return in r2) so EVERY caller reaching them via rec_dispatch or a direct shard call —
   // substrate included, not just the direct c->math.* call sites in node_xform.cpp/

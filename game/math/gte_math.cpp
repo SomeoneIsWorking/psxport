@@ -32,6 +32,9 @@ extern void gen_func_80084EB0(Core*);
 extern void gen_func_80085050(Core*);
 extern void gen_func_80077FB0(Core*);
 extern void gen_func_80078240(Core*);
+extern void gen_func_80084080(Core*);
+extern void gen_func_80084360(Core*);
+extern void gen_func_80084520(Core*);
 
 void rec_interp(Core* c, uint32_t pc);
 
@@ -327,6 +330,105 @@ uint32_t Math::applyMatlv(uint32_t inPtr, uint32_t out) {   // FUN_80084220
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084080 — GTE-LZC fixed-point square root. a0 = value; returns an isqrt-like result via a
+// leading-sign-bit normalize + a 16-bit ROM reciprocal-sqrt table lookup (@0x800a6310), scaled back
+// by half of the removed exponent. The recomp body drives the GTE LZCS/LZCR unit (data regs 30/31)
+// to count leading sign bits; we compute that count in C (perf — no Beetle GTE round-trip) and then
+// replicate the two LZC data-reg leftovers so a downstream still-PSX reader sees identical GTE state.
+// ORACLE: gen_func_80084080
+uint32_t Math::sqrtLzc(uint32_t v) {
+  Core* c = this->core;
+  uint32_t sign = (v >> 31) & 1u;                 // LZCS sign bit
+  uint32_t lzcr = 1;                              // count of leading bits equal to the sign bit (1..32)
+  for (int b = 30; b >= 0; --b) { if (((v >> b) & 1u) != sign) break; lzcr++; }
+  gte_write_data(30, v);                          // LZCS leftover (= a0)
+  gte_write_data(31, lzcr);                       // LZCR leftover (= the count)
+  if (lzcr == 32) return 0;                       // v == 0 or v == 0xffffffff → result 0
+  uint32_t evenLz  = lzcr & ~1u;                  // round the leading-bit count down to even
+  int32_t  normSh  = (int32_t)evenLz - 24;        // shift that lands the mantissa in the table window
+  uint32_t mant    = normSh >= 0 ? (v << (uint32_t)(normSh & 31))
+                                 : (uint32_t)((int32_t)v >> (uint32_t)((-normSh) & 31));
+  uint32_t outSh   = (uint32_t)((31 - (int32_t)evenLz) >> 1);   // half of the removed exponent
+  int16_t  tab     = (int16_t)c->mem_r16(0x800a6310u + (((mant - 64u) << 1) & 0xffffffffu));
+  uint32_t acc     = (uint32_t)(int32_t)tab << (outSh & 31);
+  return acc >> 12;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084360 — in-place 3x3 matrix multiply P = R × M. a0 = R (CR-packed 5 words), a1 = M (same
+// packing, ALSO the destination + returned in v0). Identical math to matMul (FUN_80084110) — CTC2
+// R into the GTE rotation regs, then one MVMVA (sf=1→>>12, mx=ROT, v=Vj, cv=Null, lm=0) per column
+// of M, packing the clamped IR outputs back into M's storage. All reads happen before any store so
+// the in-place overwrite is safe. Leaves the same GTE data-reg leftovers a downstream reader consumes.
+// ORACLE: gen_func_80084360
+uint32_t Math::matLoadLV(uint32_t rPtr, uint32_t vPtr) {
+  Core* c = this->core;
+  int16_t R[3][3], M[3][3], P[3][3];
+  load_mat3(c, rPtr, R);
+  load_mat3(c, vPtr, M);
+  for (int i = 0; i < 5; i++) gte_write_ctrl(i, c->mem_r32(rPtr + i*4));   // faithful CTC2 of R
+  uint32_t vw4 = c->mem_r32(vPtr + 16);      // raw M22 word — the GTE VZ0 leftover keeps its full bits
+  int32_t mac1 = 0, mac2 = 0, mac3 = 0;      // last column's pre-clamp MACs (GTE leftover)
+  for (int j = 0; j < 3; j++) {              // column j of M = MVMVA input vector Vj
+    for (int i = 0; i < 3; i++) {            // matrix row i
+      int64_t t = 0;
+      t = sign44(t + (int32_t)R[i][0]*M[0][j]);
+      t = sign44(t + (int32_t)R[i][1]*M[1][j]);
+      t = sign44(t + (int32_t)R[i][2]*M[2][j]);
+      int32_t mac = (int32_t)(t >> 12);
+      P[i][j] = clamp16s(mac);
+      if (j == 2) { if (i==0) mac1=mac; else if (i==1) mac2=mac; else mac3=mac; }
+    }
+  }
+  c->mem_w32(vPtr+0,  (uint16_t)P[0][0] | ((uint32_t)(uint16_t)P[0][1] << 16));
+  c->mem_w32(vPtr+4,  (uint16_t)P[0][2] | ((uint32_t)(uint16_t)P[1][0] << 16));
+  c->mem_w32(vPtr+8,  (uint16_t)P[1][1] | ((uint32_t)(uint16_t)P[1][2] << 16));
+  c->mem_w32(vPtr+12, (uint16_t)P[2][0] | ((uint32_t)(uint16_t)P[2][1] << 16));
+  c->mem_w32(vPtr+16, (uint32_t)(int32_t)P[2][2]);   // SWC2 IR3: sign-extended s32
+  // GTE leftover (pass 3 = column 2): VXY0/VZ0 = the MTC2'd col-2 vector, IR1-3/MAC1-3 = its result.
+  gte_write_data(0, (uint32_t)(uint16_t)M[0][2] | ((uint32_t)(uint16_t)M[1][2] << 16));  // VXY0
+  gte_write_data(1, vw4);                                                                // VZ0 (full word)
+  gte_write_data(9,  (uint32_t)(int32_t)P[0][2]);    // IR1
+  gte_write_data(10, (uint32_t)(int32_t)P[1][2]);    // IR2
+  gte_write_data(11, (uint32_t)(int32_t)P[2][2]);    // IR3
+  gte_write_data(25, (uint32_t)mac1);                // MAC1
+  gte_write_data(26, (uint32_t)mac2);                // MAC2
+  gte_write_data(27, (uint32_t)mac3);                // MAC3
+  return vPtr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// FUN_80084520 — per-COLUMN fixed-point scale of the CR-packed 3x3 matrix at r4 by the 3 factors at
+// r5. Each element M[i][j] (int16 lo/hi halves across 5 words) is multiplied by column factor f[j]
+// and shifted right 12 (12.12 fixed-point). The MIPS `multu` is used but only MFLO (low 32) is read,
+// which equals the signed product's low 32 for these operands. Pure integer leaf — no GTE. Returns dstPtr.
+static inline int32_t colScale(int32_t half, uint32_t fac) {   // (half*fac) low32, then arithmetic >>12
+  return (int32_t)((uint32_t)half * fac) >> 12;
+}
+// ORACLE: gen_func_80084520
+uint32_t Math::matColScale(uint32_t dstPtr, uint32_t facPtr) {
+  Core* c = this->core;
+  uint32_t f0 = c->mem_r32(facPtr + 0);   // column-0 scale
+  uint32_t f1 = c->mem_r32(facPtr + 4);   // column-1 scale
+  uint32_t f2 = c->mem_r32(facPtr + 8);   // column-2 scale
+  uint32_t w0 = c->mem_r32(dstPtr + 0);   // M00 | M01<<16  → cols 0,1
+  c->mem_w32(dstPtr + 0,  ((uint32_t)colScale((int16_t)w0, f0) & 0xffffu)
+                          | ((uint32_t)colScale((int32_t)w0 >> 16, f1) << 16));
+  uint32_t w1 = c->mem_r32(dstPtr + 4);   // M02 | M10<<16  → cols 2,0
+  c->mem_w32(dstPtr + 4,  ((uint32_t)colScale((int16_t)w1, f2) & 0xffffu)
+                          | ((uint32_t)colScale((int32_t)w1 >> 16, f0) << 16));
+  uint32_t w2 = c->mem_r32(dstPtr + 8);   // M11 | M12<<16  → cols 1,2
+  c->mem_w32(dstPtr + 8,  ((uint32_t)colScale((int16_t)w2, f1) & 0xffffu)
+                          | ((uint32_t)colScale((int32_t)w2 >> 16, f2) << 16));
+  uint32_t w3 = c->mem_r32(dstPtr + 12);  // M20 | M21<<16  → cols 0,1
+  c->mem_w32(dstPtr + 12, ((uint32_t)colScale((int16_t)w3, f0) & 0xffffu)
+                          | ((uint32_t)colScale((int32_t)w3 >> 16, f1) << 16));
+  uint32_t w4 = c->mem_r32(dstPtr + 16);  // M22 (lo only)  → col 2, stored as sign-extended s32
+  c->mem_w32(dstPtr + 16, (uint32_t)colScale((int16_t)w4, f2));
+  return dstPtr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Wiring — BOTH tables, same dual pattern as ActorReward::registerOverrides (game/object/
 // actor_sm_reward.cpp): each `install()` call below registers (1) the registry's own rec_dispatch
 // entry, for callers reaching these via an explicit rec_dispatch(c, addr) (Engine::
@@ -348,6 +450,10 @@ static void eov_rotZ(Core* c)          { c->r[2] = c->math.rotZ((int16_t)c->r[4]
 static void eov_isqrt16(Core* c)       { c->r[2] = eng_isqrt16(c->r[4]); }
 static void eov_approxDist3(Core* c)   { c->r[2] = eng_approxDist3((int32_t)c->r[4], (int32_t)c->r[5], (int32_t)c->r[6]); }
 
+static void eov_sqrtLzc(Core* c)       { c->r[2] = c->math.sqrtLzc(c->r[4]); }
+static void eov_matLoadLV(Core* c)     { c->r[2] = c->math.matLoadLV(c->r[4], c->r[5]); }
+static void eov_matColScale(Core* c)   { c->r[2] = c->math.matColScale(c->r[4], c->r[5]); }
+
 void Math::registerOverrides() {
   using overrides::install;
   install(0x80084110u, "Math::matMul",        eov_matMul,        gen_func_80084110, shard_set_override);
@@ -359,5 +465,8 @@ void Math::registerOverrides() {
   install(0x80085050u, "Math::rotZ",          eov_rotZ,          gen_func_80085050, shard_set_override);
   install(0x80077FB0u, "Math::isqrt16",       eov_isqrt16,       gen_func_80077FB0, shard_set_override);
   install(0x80078240u, "Math::approxDist3",   eov_approxDist3,   gen_func_80078240, shard_set_override);
+  install(0x80084080u, "Math::sqrtLzc",       eov_sqrtLzc,       gen_func_80084080, shard_set_override);
+  install(0x80084360u, "Math::matLoadLV",     eov_matLoadLV,     gen_func_80084360, shard_set_override);
+  install(0x80084520u, "Math::matColScale",   eov_matColScale,   gen_func_80084520, shard_set_override);
 }
 

@@ -867,7 +867,26 @@ def extract_op_sequence(body_lines) -> "OpSequence":
         for stmt in _decompound_line(raw.strip()):
             stream.append((i, stmt))
 
+    # Dead-code exclusion. Every `return;` in a recompiled gen body is UNCONDITIONAL (it is a `jr ra`;
+    # conditional flow is always a branch/`goto`), so any statement after a `return;` is reachable ONLY
+    # via a label (a goto target). Recompiled bodies routinely carry an unreachable trailing fall-through
+    # into the NEXT sibling function after their real `return;` (e.g. `...; return; func_<next>(c); return;`
+    # — the shared-epilogue / dead-sibling artifact, same class as 0x80040400). The authoritative
+    # Contract/CFG path already excludes these (unreachable_block_count); this coarser linear pass must
+    # match it, else a hand-rebuilt LEAF (real body has 0 calls) spuriously FAILs port_check on a phantom
+    # trailing call. Track a dead region: entered by an unconditional `return;`, left by the next label.
+    label_re = re.compile(r'^[A-Za-z_]\w*:\s*;?')
+    dead = False
+
     for _line_no, stmt in stream:
+        lm = label_re.match(stmt)
+        if lm:                       # a label target re-enters reachable code
+            dead = False
+            stmt = stmt[lm.end():].strip()
+            if not stmt:
+                continue
+        if dead:                     # unreachable statement after an unconditional return — skip
+            continue
         # frame open (descent) / close (ascent) — checked before generic +=/-= to avoid double count
         fo = frame_dec_re.search(stmt)
         fc = frame_inc_re.search(stmt) if not fo else None
@@ -894,6 +913,9 @@ def extract_op_sequence(body_lines) -> "OpSequence":
             target = ('0x' + lit.group(1).upper()) if lit else None  # None = unresolved (symbolic expr)
             calls.append(OpSeqCall(ra_const=pending_ra, target=target))
             pending_ra = None
+
+        if re.search(r'\breturn\s*;', stmt):   # unconditional return -> following stmts are dead until a label
+            dead = True
 
     return OpSequence(frame_opens=frame_opens, frame_closes=frame_closes, calls=calls,
                        mem_write_widths=widths)
