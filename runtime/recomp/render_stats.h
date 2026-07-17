@@ -10,7 +10,7 @@
 // they emit should be independent too. Was a scatter of process-globals (g_od_add/hit/miss,
 // g_pp_set/hit/miss, g_nd_3d/nd_2d, g_sn_objs/cmds, g_dbg_world_quads); deglobalize-game 2026-07-03.
 //
-// Reached as `core->mRender->stats`. All fields are public counters — increments are `stats.odAdd++`
+// Reached as `core->rsub.stats`. All fields are public counters — increments are `stats.odAdd++`
 // (thin OOP for what really is just a numeric accumulator); the class earns its keep by grouping the
 // related counters and owning the dump() format the render path prints per-frame.
 #pragma once
@@ -30,7 +30,7 @@ public:
   long odMiss = 0;
 
   // (ProjPrim / depth-cache diag now lives on `class ProjPrim` (game/render/proj_prim.h), embedded on
-  // Render as `c->mRender->projprim` — bound via `ProjPrim::bind(c)` alongside gte_bind. Two SBS cores
+  // Render as `c->rsub.projprim` — bound via `ProjPrim::bind(c)` alongside gte_bind. Two SBS cores
   // keep separate caches + counters. Read via `.stats()` / `.statsReset()`.)
 
   // Scene-native walk counters (game/render/render_walk.cpp).

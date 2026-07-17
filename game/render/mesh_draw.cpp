@@ -24,7 +24,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "scene_data.h"
-#include "render.h"          // class Render — reach `c->mRender->projParams` for depth-normalize
+#include "render.h"          // class Render — reach `c->rsub.projParams` for depth-normalize
 #include "proj_params.h"     // class ProjParams — setProjH + proj_pz_to_ord (kept as free fn, per-Core state)
 #include "render_native.h"   // class NativeScenePass — drawObject is a method here
 #include <stdint.h>
@@ -58,7 +58,7 @@ int NativeScenePass::drawObject(const SceneObject* o, const SceneCamera* cam) {
   if (n3 > 4096 || n4 > 4096) return 0;                  // sanity: not a geomblk
 
   float H = cam->H; if (H < 1.0f) H = 1.0f;
-  c->mRender->projParams.setProjH((uint16_t)H);
+  c->rsub.projParams.setProjH((uint16_t)H);
   float nearp = H * 0.5f; if (nearp < 1.0f) nearp = 1.0f;
 
   uint32_t rec = o->geomblk + 16;

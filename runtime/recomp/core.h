@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include "r3000.h"
 #include "render/screen_fade.h"   // Core owns a ScreenFade instance directly
+#include "render_substrate.h"     // Core owns a RenderSubstrate (host-only per-Core render substrate)
 #include "core/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
 #include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
 #include "math/trig.h"                        // Core owns a Trig instance (libgte sin/cos/atan2)
@@ -60,6 +61,7 @@ public:
   Mtx        mtx;
   Inventory  inventory;
   SaveMenu   saveMenu;
+  RenderSubstrate rsub;           // host-only per-Core render substrate (by value; binds lazily, no ctor wiring)
   Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state

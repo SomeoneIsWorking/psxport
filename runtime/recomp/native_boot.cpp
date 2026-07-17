@@ -22,7 +22,8 @@
 #include "c_subsys.h"
 #include "cfg.h"
 #include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
-#include "render/render.h"  // Render::setPsxRender/psxRender (per-Core render-path switch)
+#include "render.h"  // full game Render umbrella — native_step_frame calls the game method c->mRender->bbFrameReset()
+                     // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
 #include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
 #include <stdio.h>
@@ -79,7 +80,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // overlay compliant; gated on wide_engine so 4:3 (OFX=160, margin==0) and the oracle are untouched.
   { int gpu_gpu_wide_engine(Core*); int gpu_gpu_wide_engine_ofx(Core*);
     if (gpu_gpu_wide_engine(c)) gte_write_ctrl(24u, (uint32_t)gpu_gpu_wide_engine_ofx(c) << 16); }
-  c->mRender->projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
+  c->rsub.projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
   xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
@@ -174,8 +175,8 @@ static void native_step_frame(Core* c, uint32_t f) {
     extern void gpu_gpu_select_target(int);
     // SBS owns BOTH panes (core A | core B); its target-1 batch is core B's render, NOT a PSX re-render of
     // THIS core — so skip the in-engine dualview second pass. g_sbs declared at file scope below.
-    DualviewSnapshot& dv = c->mRender->dualviewSnapshot;
-    if (c->mRender->mode.dualview() && dv.havePre() && !c->game->sbs) {
+    DualviewSnapshot& dv = c->rsub.dualviewSnapshot;
+    if (c->rsub.mode.dualview() && dv.havePre() && !c->game->sbs) {
       dv.capturePost(c);             // save the real post-frame canonical state
       dv.restorePre(c);              // rewind to the pre-render (post-gameplay) state the PSX pass needs
       rc2(c, cfg->clearOtagR, envp, 0x800);                     // ClearOTagR(ot, 0x800)
@@ -305,12 +306,12 @@ static void game_init(Core* c) {
 // unregistered thunk aborts on "unregistered" (found live: SBS core A crashed here before this line
 // was moved above the init calls).
 void register_engine_overrides(Game* game);
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->mRender->projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); register_engine_overrides(c->game); crt0_setup(c); game_init(c); }
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); register_engine_overrides(c->game); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
   void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
-  c->mRender->projprim.bind(c);         // and this core's native depth-cache (class ProjPrim on Render)
+  c->rsub.projprim.bind(c);         // and this core's native depth-cache (class ProjPrim on Render)
   spu_bind(c);                          // and this core's SPU
   mdec_bind(c);                         // and this core's MDEC
   xa_bind(c);                           // and this core's XA streamer
@@ -630,7 +631,7 @@ void native_boot_run(Core* c) {
   // blocks so their log lines report the final state.
   if (oracle_mode()) {
     c->game->setOracle();                        // per-Game: recomp gameplay + mods forced neutral
-    c->mRender->mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
+    c->rsub.mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
     fprintf(stderr, "[native_boot] PSXPORT_ORACLE=1 — pure recomp + pure PSX render "
                     "(no fps60 / wide / native-depth / observer)\n");
   }
@@ -643,13 +644,13 @@ void native_boot_run(Core* c) {
   // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
   // Per-Core now (Render::mPsxRender) — was the process-global g_render_psx.
   { const char* r = cfg_str("PSXPORT_RENDER_PSX");
-    if (r && *r) c->mRender->mode.setPsxRender(atoi(r) != 0);
-    if (c->mRender->mode.psxRender()) fprintf(stderr, "[native_boot] Render::psxRender=1 (field render via PSX recomp path)\n"); }
+    if (r && *r) c->rsub.mode.setPsxRender(atoi(r) != 0);
+    if (c->rsub.mode.psxRender()) fprintf(stderr, "[native_boot] Render::psxRender=1 (field render via PSX recomp path)\n"); }
   // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
   // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
   { const char* r = cfg_str("PSXPORT_DUALVIEW");
-    if (r && *r) c->mRender->mode.setDualview(atoi(r) != 0);
-    if (c->mRender->mode.dualview()) fprintf(stderr, "[native_boot] Render::dualview=1 (side-by-side native | PSX render)\n"); }
+    if (r && *r) c->rsub.mode.setDualview(atoi(r) != 0);
+    if (c->rsub.mode.dualview()) fprintf(stderr, "[native_boot] Render::dualview=1 (side-by-side native | PSX render)\n"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the

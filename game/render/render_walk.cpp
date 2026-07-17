@@ -218,7 +218,7 @@ void Render::backdropRender(uint32_t t4) {
   // dbg_node==0 a generic OT-walk-classified RQ_BACKGROUND item gets (menu backdrop art, hut-interior
   // clear, SOP fills). This is what lets Fps60::tier1Render's queue-lerp exclusion (fps60.cpp
   // isTier1Owned) target ONLY the prims it actually re-renders, same pattern as terrain/scene-table (#54).
-  c->mRender->diag.beginObject(kBackdropDbgNode);
+  c->rsub.diag.beginObject(kBackdropDbgNode);
   for (int t8 = scrollY - 120;;) {
     int Y = (int16_t)((t8 & 0xFFF0) + yoff);
     int t6 = (int16_t)t2;                          // row byte offset (sign-extended)
@@ -238,7 +238,7 @@ void Render::backdropRender(uint32_t t4) {
       (c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq)
           .push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, col, col, col,
                              tp_x, tp_y, mode, /*raw=*/1, clut_x, clut_y, 0, 0, 0, 0, 0, 0, 1023, 511);
-      c->mRender->stats.snCmds++;
+      c->rsub.stats.snCmds++;
       t0 += 2; if (t0 >= rowstride) t0 = 0;        // column wrap
       t1 += 16;
       if (!((int16_t)t1 < t5)) break;
@@ -247,7 +247,7 @@ void Render::backdropRender(uint32_t t4) {
     t8 += 16;
     if (!((int16_t)t8 < outer_bound)) break;
   }
-  c->mRender->diag.endObject();
+  c->rsub.diag.endObject();
 }
 
 // ---- pc_render scene DISPATCH (see render.h) --------------------------------------------------------
@@ -315,7 +315,7 @@ void Render::renderTitle() {
   c->game->fps60.mTier1EligibleCur = false;
   const uint16_t s48 = c->mem_r16(0x801FE048u);
   if (s48 == 2 || s48 == 3) {
-    DisplayPassGuard displayPass(c->mRender->mode);   // read-only: reads source state, emits host-only
+    DisplayPassGuard displayPass(c->rsub.mode);   // read-only: reads source state, emits host-only
     if (s48 == 2) titleNative();     // page 0 — New/Load title menu
     else          s3MenuNative();    // page 1 — the post-New-Game menu (Demo::s3)
     return;
@@ -335,7 +335,7 @@ void Render::renderTitle() {
 // depth. The 2D layer (HUD/text/dialog/billboards) comes from its own native producers, not the OT.
 void Render::renderField() {
   mCore->game->fps60.mTier1EligibleCur = true;   // native field render runs -> fps60 tier-1 may re-render it
-  DisplayPassGuard displayPass(mCore->mRender->mode);   // read-only invariant: aborts on any guest write
+  DisplayPassGuard displayPass(mCore->rsub.mode);   // read-only invariant: aborts on any guest write
   sceneNative();
   // dialog/prompt text arrives via the FUN_8007CC00 tap (Panel::pushDialogGlyphs) at emit time
   cineBarsRender();     // cinematic letterbox bars (emits nothing when no cutscene bars are active)
@@ -362,7 +362,7 @@ void Render::renderHutInterior() {
 // sceneNative drops terrain/scene-table/backdrop and draws the vortex over black. Caption text = 2D producer.
 void Render::renderSopNarration() {
   mCore->game->fps60.mTier1EligibleCur = true;
-  DisplayPassGuard displayPass(mCore->mRender->mode);
+  DisplayPassGuard displayPass(mCore->rsub.mode);
   sceneNative();
   cineBarsRender();     // cinematic letterbox bars (the SOP narration is a cutscene)
 }
@@ -496,7 +496,7 @@ bool Render::fieldAreaInit() const {
 void Render::sceneNative() { Core* c = mCore;
   static const uint32_t HEADS[3] = { 0x800FB168u, 0x800F2624u, 0x800F2738u };
   uint32_t saved = c->r[4];
-  c->mRender->stats.snObjs = c->mRender->stats.snCmds = 0;
+  c->rsub.stats.snObjs = c->rsub.stats.snCmds = 0;
   // AREA-SCOPED CACHE trust latches (see render.h mSceneTableTrusted/mBackdropTrusted) — shared edge
   // detector, computed once per frame. Both SCENE_ENT_TABLE (0x800F2418) and PARALLAX_BG_SM
   // (0x800ED018, the backdrop tilemap struct below) go stale for a few ticks right when SOP narration
@@ -581,7 +581,7 @@ void Render::sceneNative() { Core* c = mCore;
   }
   c->r[4] = saved;
   if (cfg_dbg("scenenative")) { int gpu_seen3d_this_frame(Core*); static int f = 0; if ((f++ % 60) == 0)
-    cfg_logf("scenenative", "objs=%ld cmds=%ld seen3d=%d", c->mRender->stats.snObjs, c->mRender->stats.snCmds, gpu_seen3d_this_frame(c)); }
+    cfg_logf("scenenative", "objs=%ld cmds=%ld seen3d=%d", c->rsub.stats.snObjs, c->rsub.stats.snCmds, gpu_seen3d_this_frame(c)); }
 }
 
 // The field OBJECT pass — the (c)+(d) walk factored out of sceneNative (above) so it can be re-run at the
@@ -606,7 +606,7 @@ void Render::fieldObjectsRender() {
       // Other type-0x20 fns stay skipped like before (tracked by #3b's completeness gate, not a crash).
       if (type == 0x20) {
         if (c->mem_r32(n + 0x18) == 0x8010BF54u && c->mem_r32(0x80109450u) == 0x3C021F80u) {
-          c->mRender->stats.snObjs++;
+          c->rsub.stats.snObjs++;
           c->mRender->narrationSwirlRender(n);
         }
         continue;
@@ -628,7 +628,7 @@ void Render::fieldObjectsRender() {
       if (h == 1) { mesh = (type == 0 || type == 15); pre = (type == 1 || type == 4); }
       else if (h == 2) { mesh = (type == 0 || type == 1 || type == 15); }
       if (!mesh && !pre) continue;
-      c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(n + 8);
+      c->rsub.stats.snObjs++; c->rsub.stats.snCmds += c->mem_r8(n + 8);
       c->r[4] = n;
       if (pre) perObjFlushPreComposed();
       else     perObjFlush();
@@ -637,7 +637,7 @@ void Render::fieldObjectsRender() {
   {
     uint32_t g = ActorTomba::G_ADDR;
     if (c->mem_r8(g + 8) != 0 && c->mem_r8(g + 9) != 0) {
-      c->mRender->stats.snObjs++; c->mRender->stats.snCmds += c->mem_r8(g + 8);
+      c->rsub.stats.snObjs++; c->rsub.stats.snCmds += c->mem_r8(g + 8);
       c->r[4] = g;
       perObjFlush();
     }

@@ -35,7 +35,7 @@ static void obs_body(Core* c, void (*gen)(Core*)) {
   // tag (obj_depth would only feed the native compositor, which oracle mode bypasses via painter order).
   if (c->game->oracle) { gen(c); return; }
   const uint32_t node = c->r[4];
-  c->mRender->diag.beginObject(node);
+  c->rsub.diag.beginObject(node);
   uint32_t slo, shi;
   PktSpanSession sess(c);
   gen(c);                                             // the substrate body, untouched
@@ -43,7 +43,7 @@ static void obs_body(Core* c, void (*gen)(Core*)) {
     float od = obj_world_ord(c, node);
     gpu_obj_depth_add(c, slo, shi, od);
   }
-  c->mRender->diag.endObject();
+  c->rsub.diag.endObject();
 }
 
 #define OBS_WRAP(genfn) static void obs_##genfn(Core* c) { obs_body(c, genfn); }

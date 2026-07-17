@@ -44,15 +44,15 @@
 // the TOP of the next ov_field_frame. `FfSpan::lookup(addr)` returns the builder name (latest-span-wins).
 // The span table + bracket stack live on `c->game->ffspan` (class FfSpan, game/render/ffspan.h).
 // g_pkt_track/lo/hi retired 2026-07-02 — per-Core Render::mPktTrack/mPktLo/mPktHi (reached below).
-#include "dualview_snapshot.h"    // c->mRender->dualviewSnapshot.capturePre/restorePre
-// (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->mRender->mode.psxRender() / dualview())
+#include "dualview_snapshot.h"    // c->rsub.dualviewSnapshot.capturePre/restorePre
+// (g_render_psx + g_dualview both retired 2026-07-02 — reach as c->rsub.mode.psxRender() / dualview())
 #include "game.h"
 #include "override_registry.h"   // overrides::install — the one native-override registry                    // class Game — c->game->ffspan (FfSpan) + Game::sbs
 #include "sbs.h"                     // `sefprobe` probe below — Sbs::coreId/frame
 // FFS: nested span tracker. c must be a Core* in scope. Same shape as FfSpan::begin/end inlined.
 #define FFS(nm, call) do { \
   FfSpan& _ff = c->game->ffspan; \
-  if (_ff.bdtagOn()) { PktSpan& _ps = c->mRender->pktSpan; \
+  if (_ff.bdtagOn()) { PktSpan& _ps = c->rsub.pktSpan; \
     PktSpan::Snapshot _outer = _ps.save(); _ps.open(); call; \
     uint32_t _mlo, _mhi; bool _captured = _ps.current(&_mlo, &_mhi); \
     if (_captured) _ff.record(nm, _mlo, _mhi); \
@@ -876,7 +876,7 @@ void Engine::fieldFrame() { Core* c = core;
   // into the right-hand pane. No-op unless dualview is on; kept even though the plain pc_render fork
   // below no longer rewinds (see comment there) because the dualview feature still needs a pre-render
   // snapshot to make its second pass re-runnable.
-  c->mRender->dualviewSnapshot.capturePre(c);
+  c->rsub.dualviewSnapshot.capturePre(c);
   if (c->mem_r8(0x1f800136u) < 2) c->mRender->frame();   // 0x8003f9a8 — substrate render orchestrator (ALWAYS runs, both render modes)
   // NO restorePre HERE (fixed 2026-07-08, issue: default ./run.sh renders BLACK — poly=0/rect=0 at
   // free-roam). Render::frame() (game/render/render_frame.cpp) was repointed 2026-07-07 (commit 9d436e3,

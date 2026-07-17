@@ -1,7 +1,6 @@
 // OtAttr implementation — see ot_attr.h for the design. Separated from the header so the header can
 // stay a forward-declared-Core, dependency-light include (same split as pkt_span.h/.cpp).
 #include "ot_attr.h"
-#include "render.h"
 #include "render_internal.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
 #include "game.h"

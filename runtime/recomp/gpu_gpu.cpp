@@ -2,7 +2,7 @@
 #include "game.h"    // Game / GpuGpuState (per-instance render state)
 #include "gpu_gpu.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_gpu)
 #include "render/screen_fade.h"   // class ScreenFade — the single fade driver (present reads its state)
-#include "render/render.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
+#include "render_substrate.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
 // gpu_gpu.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
 // This is the PC-native renderer re-expressed on the SDL3 GPU API (SDL_gpu.h), replacing gpu_gpu.cpp
@@ -1311,7 +1311,7 @@ void gpu_gpu_render_readback(Core* core, const uint16_t* vram, int sx, int sy, i
   SDL_SubmitGPUCommandBuffer(cmd);                 // render into THIS core's VRAM image; NO swapchain present
   const uint16_t* src = readback_vram(g);          // download it (RG8 bytes == uint16 1555 words)
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (int yy=0; yy<h; yy++) for (int xx=0; xx<w; xx++) if (src[((sy+yy)%VRAM_H)*VRAM_W + ((sx+xx)&1023)]) nz++;
-    RenderStats& st = core->mRender->stats;
+    RenderStats& st = core->rsub.stats;
     fprintf(stderr, "[gpu_gpu] readback region sx=%d sy=%d %dx%d region-nonzero=%ld/%d fade=%d(%d,%d,%d) batch tri=%d tex=%d semi=%d worldquads=%ld\n", sx, sy, w, h, nz, w*h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b, a, b, c, st.dbgWorldQuads);
     st.dbgWorldQuads = 0; }
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {

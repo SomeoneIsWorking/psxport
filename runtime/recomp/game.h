@@ -103,7 +103,7 @@ public:
   Sbs*        sbs = nullptr;// SBS harness back-pointer (nullptr in standalone; set by Sbs::run)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
-  // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->mRender->projprim`, 2026-07-03)
+  // (native-depth cache moved to `class ProjPrim` on Render — reach as `c->rsub.projprim`, 2026-07-03)
   SpuDevice   spu;   // per-instance SPU device (Beetle spu.c handle + SBS write log); bound via spu.bind()
   MdecDevice  mdec;  // per-instance MDEC device (Beetle mdec.c handle); bound via mdec.bind()
 

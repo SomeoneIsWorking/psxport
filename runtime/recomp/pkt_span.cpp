@@ -1,10 +1,9 @@
 // PktSpanSession (RAII object scope) implementation — separated from the header so the header can
 // forward-declare Core*. See pkt_span.h for the class docs.
 #include "pkt_span.h"
-#include "render.h"
-#include "core.h"
+#include "core.h"          // Core::rsub (RenderSubstrate) — pkt_span lives on the framework substrate now
 
-PktSpanSession::PktSpanSession(Core* c) : mPs(&c->mRender->pktSpan), mOuter(mPs->save()) {
+PktSpanSession::PktSpanSession(Core* c) : mPs(&c->rsub.pktSpan), mOuter(mPs->save()) {
   mPs->open();
 }
 

@@ -9,7 +9,7 @@
 //       from the GTE control regs (CR24 OFX, CR25 OFY, CR26 H). Read by SSAO / lighting / depth
 //       normalization (proj_pz_to_ord, proj_near_pz, proj_plane_h, proj_screen_center).
 //
-// PROPER OOP: one instance per Core, embedded on Render (`c->mRender->projParams`) — was a cluster of
+// PROPER OOP: one instance per Core, embedded on Render (`c->rsub.projParams`) — was a cluster of
 // file-scope statics in gte_beetle.cpp (s_camR/T/H/OFX/OFY + s_proj_H/cx/cy). SBS's two cores need
 // SEPARATE state so their published camera + per-frame projection constants don't clobber each other.
 #pragma once
@@ -40,7 +40,7 @@ public:
   void     projScreenCenter(float* cx, float* cy) const { if (cx) *cx = mProjCx; if (cy) *cy = mProjCy; }
 
   // Depth-normalize: view-Z → [0,1] D32 ord using this instance's projection plane. Kept as a
-  // non-static method so a caller with `Core* c` in scope can just do `c->mRender->projParams.pzToOrd(pz)`.
+  // non-static method so a caller with `Core* c` in scope can just do `c->rsub.projParams.pzToOrd(pz)`.
   float pzToOrd(float pz) const;
 
   // Snapshot / restore (fps60.cpp Tier-1: the present-time camera-lerp terrain re-render calls

@@ -299,7 +299,7 @@ void gaugeTextRowTap(Core* c) {
   const uint32_t desc = c->r[4];
   const int y = (int32_t)(int16_t)(uint16_t)c->r[5];
   gen_func_8004EB94(c);
-  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // guest OT walk owns the picture
+  if (c->game->oracle || c->rsub.mode.psxRender()) return;   // guest OT walk owns the picture
   if (c->mem_r8(desc) == 0xFFu) return;                          // empty row (gen early-exit)
 
   // Width per the measure leaf's rules (NOT the emit loop's — the guest centers on THIS number).

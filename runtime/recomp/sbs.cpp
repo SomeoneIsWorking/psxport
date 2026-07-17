@@ -36,7 +36,7 @@
 #include "sbs.h"
 #include "game.h"
 #include "cfg.h"
-#include "render/render.h"    // Render::setPsxRender (per-Core render-path switch)
+#include "render_substrate.h"    // Render::setPsxRender (per-Core render-path switch)
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -637,19 +637,19 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
 // Per-core render-path config. Sets THIS core's Render::mPsxRender — no shared global. psx_fallback is
 // per-Game, set once at boot; render mode is set per core, per step.
 void Sbs::Impl::applyMode(Game* g, int which) {
-  Render* r = g->core.mRender;
+  RenderSubstrate& r = g->core.rsub;
   // PSXPORT_SBS_FORCE_PSX_RENDER=1 — bisect: is a divergence coming from the native-render path?
   // Force PSX render on BOTH cores regardless of mode. If a divergence that showed in RENDER mode
   // (A native render vs B PSX render) DISAPPEARS with this on, the writer lives on the native
   // render side. If it PERSISTS, native render is not the culprit. Cheap A/B one-liner.
   static const int forcePsxRender = []{ const char* e = getenv("PSXPORT_SBS_FORCE_PSX_RENDER"); return e && *e && strcmp(e,"0")!=0 ? 1 : 0; }();
-  if (forcePsxRender) { r->mode.setPsxRender(true); return; }
+  if (forcePsxRender) { r.mode.setPsxRender(true); return; }
   switch (mMode) {
-    case M_RENDER:   r->mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
-    case M_GAMEPLAY: r->mode.setPsxRender(true);          break;   // PSX render on BOTH (isolate gameplay)
-    case M_FULL:     r->mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
-    case M_ORACLE:   r->mode.setPsxRender(false);         break;   // A native; B goes through use_interp+soft_gpu
-    case M_SKIP:     r->mode.setPsxRender(which != 0);    break;   // A = real ./run.sh config, B PSX
+    case M_RENDER:   r.mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
+    case M_GAMEPLAY: r.mode.setPsxRender(true);          break;   // PSX render on BOTH (isolate gameplay)
+    case M_FULL:     r.mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
+    case M_ORACLE:   r.mode.setPsxRender(false);         break;   // A native; B goes through use_interp+soft_gpu
+    case M_SKIP:     r.mode.setPsxRender(which != 0);    break;   // A = real ./run.sh config, B PSX
   }
 }
 

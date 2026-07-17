@@ -10,7 +10,7 @@
 // own file so Core lifetime concerns aren't tangled with the memory-window helpers.
 #include <cstring>
 #include "core.h"
-#include "render/render.h"     // full defn of Render (fwd-declared in core.h)
+#include "render.h"     // full defn of Render (fwd-declared in core.h)
 
 Core::Core() {
   memset((R3000*)this, 0, sizeof(R3000));

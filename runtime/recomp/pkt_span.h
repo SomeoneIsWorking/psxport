@@ -22,7 +22,7 @@
 //      restores the outer and merges the just-closed inner's span into it.
 //
 // Per-Core state so SBS / dualcore run two cores without cross-contamination (was the process-globals
-// g_pkt_track / g_pkt_lo / g_pkt_hi; deglobalize-game 2026-07-02). Reached as `core->mRender->pktSpan`.
+// g_pkt_track / g_pkt_lo / g_pkt_hi; deglobalize-game 2026-07-02). Reached as `core->rsub.pktSpan`.
 #pragma once
 #include <stdint.h>
 class Core;

@@ -16,7 +16,7 @@
 #include "cfg.h"
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include "mods.h"                   // g_mods.fps60 (was g_fps60_on)
-#include "render/render.h"          // Render::mDbgRenderNode (was g_dbg_render_node)
+#include "render_substrate.h"          // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "scea_asset.h"            // baked SCEA license-screen texture+CLUT (PC-native boot splash)
 #include <stdio.h>
 #include <stdlib.h>
@@ -119,7 +119,7 @@ void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
   // the object's PC-native world view-Z (proj_obj_center_ord / object_world_view_depth → proj_pz_to_ord),
   // so this is engine-owned occlusion, never a PSX OT order. `ord` is stored AS GIVEN.
   if (ord < 0.0f) ord = 0.0f; if (ord > 1.0f) ord = 1.0f;
-  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; game->core.mRender->stats.odAdd++; }
+  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; game->core.rsub.stats.odAdd++; }
 }
 // PC-native COPLANAR FACE SEPARATION for OT-walked objects (issue #5 — barrel red/blue z-fight).
 //
@@ -155,7 +155,7 @@ void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
 static const float OD_EPS_STEP = 1.0f / 65536.0f;   // per-face camera-ward step (pre-ord3d ord units)
 static const int   OD_EPS_KMAX = 256;               // cap the run so total drift stays << inter-object gap
 int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
-  if (s_od_frame != s_frame) { game->core.mRender->stats.odMiss++; return 0; }
+  if (s_od_frame != s_frame) { game->core.rsub.stats.odMiss++; return 0; }
   uint32_t n = node | 0x80000000u;
   for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) {
     // Stable per-face epsilon: reset the run on a new frame or when a DIFFERENT object span is hit; the
@@ -167,9 +167,9 @@ int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
     float v = s_od_ord[i] + (float)k * OD_EPS_STEP;     // camera-ward = larger ord (GREATER_OR_EQUAL wins)
     if (v > 1.0f) v = 1.0f;
     if (ord) *ord = v;
-    game->core.mRender->stats.odHit++; return 1;
+    game->core.rsub.stats.odHit++; return 1;
   }
-  game->core.mRender->stats.odMiss++;
+  game->core.rsub.stats.odMiss++;
   return 0;
 }
 void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
@@ -791,7 +791,7 @@ void GpuState::gp0_exec(Core* core) {
         is3d = 1;
         for (int i = 0; i < nv; i++) {
           float pz;
-          if (vaddr[i] && core->mRender->projprim.lookupPz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
+          if (vaddr[i] && core->rsub.projprim.lookupPz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
@@ -840,7 +840,7 @@ void GpuState::gp0_exec(Core* core) {
                               const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi);
           prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys,
                          rs[0], gs[0], bs[0], textured ? 1 : 0, semi); }
-        if (is3d) core->mRender->stats.nd3d++; else core->mRender->stats.nd2d++;
+        if (is3d) core->rsub.stats.nd3d++; else core->rsub.stats.nd2d++;
         // PSXPORT_PRIMAT="x,y" (DISPLAY coords): log EVERY poly whose triangle covers that display pixel,
         // with its 3D/2D classification + per-vertex depth (ord) + node + color. Unlike provat (blind to
         // VK polys), this is the gp0 tee, so it sees the actual occlusion contestants. Frontmost opaque =
@@ -854,7 +854,7 @@ void GpuState::gp0_exec(Core* core) {
             int cover = intri(0,1,2) || (nv==4 && intri(1,2,3));
             if (cover) { static int n=0; if (n++<6000)
               fprintf(stderr,"[primat] f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d bb=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)\n",
-                s_frame, core->mRender->diag.currentNode(), s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+                s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                 us[0], vs[0], s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_off_x,s_off_y,
                 rs[0],gs[0],bs[0], bx0,by0,bx1,by1); } } }
         // PSXPORT_PAINTFG=1 (diag): force every 2D-FG (HUD-band) poly to opaque solid magenta so we can SEE
@@ -1478,12 +1478,12 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
 
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
         cfg_logf("ndepth", "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f",
-                 s_frame, core->mRender->stats.nd3d, core->mRender->stats.nd2d, (core->mRender->stats.nd3d+core->mRender->stats.nd2d) ? 100.0*core->mRender->stats.nd3d/(core->mRender->stats.nd3d+core->mRender->stats.nd2d) : 0.0);
-      { auto s = core->mRender->projprim.stats();
+                 s_frame, core->rsub.stats.nd3d, core->rsub.stats.nd2d, (core->rsub.stats.nd3d+core->rsub.stats.nd2d) ? 100.0*core->rsub.stats.nd3d/(core->rsub.stats.nd3d+core->rsub.stats.nd2d) : 0.0);
+      { auto s = core->rsub.projprim.stats();
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
           cfg_logf("ndepth", "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld", s.set, s.hit, s.miss);
-        core->mRender->projprim.statsReset(); }
-      { RenderStats& st = core->mRender->stats;
+        core->rsub.projprim.statsReset(); }
+      { RenderStats& st = core->rsub.stats;
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
           cfg_logf("ndepth", "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld", st.odAdd, st.odHit, st.odMiss);
         st.odAdd = st.odHit = st.odMiss = 0; }
@@ -1496,7 +1496,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
                    gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
         for (int o = 0; o < 256; o++) s_nd2d_hist[o] = 0;
       }
-      core->mRender->stats.nd3d = core->mRender->stats.nd2d = 0;
+      core->rsub.stats.nd3d = core->rsub.stats.nd2d = 0;
     } }
   // PSXPORT_PROVAT="x,y[:frame]" — at present time, report (in DISPLAY space, so the double buffer
   // is irrelevant) which primitive last wrote each pixel in a 7x7 box around (x,y), with how many
@@ -1566,7 +1566,7 @@ void GpuState::frame_finalize(Core* core) {
   // frame's projections record into it — so a vertex word never reads an OLD frame's depth (submit.cpp
   // repopulates each frame). Same reset gpu_present_ex used to do inline before its diagnostics.
   { int attach_enabled(void);
-    if (attach_enabled()) core->mRender->projprim.reset(); }
+    if (attach_enabled()) core->rsub.projprim.reset(); }
   s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
   gpu_gpu_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;

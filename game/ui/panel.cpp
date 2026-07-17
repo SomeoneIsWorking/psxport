@@ -183,7 +183,7 @@ void panelFillTap(Core* c) {
   const uint16_t attr     = (uint16_t)c->r[6];
   const int32_t  otBucket = (int32_t)c->r[7];
   gen_func_8004FFB4(c);   // byte-exact guest packet pool / OT / stack
-  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // read-only overlay gate
+  if (c->game->oracle || c->rsub.mode.psxRender()) return;   // read-only overlay gate
   Panel::pushFill(c, rectPtr, uvIndex, attr, otBucket);
 }
 void panelBuildTap(Core* c) {
@@ -193,7 +193,7 @@ void panelBuildTap(Core* c) {
   const int32_t  otBucket = (int32_t)c->r[7];
   gen_func_8005019C(c);   // byte-exact guest packet pool / OT / stack; nests through the panelFill
                            // tap above (calls the func_8004FFB4 WRAPPER, not gen_ direct — see panel.h)
-  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // read-only overlay gate
+  if (c->game->oracle || c->rsub.mode.psxRender()) return;   // read-only overlay gate
   Panel::pushCorners(c, rectPtr, style, shadow, otBucket);
 }
 } // namespace
@@ -202,7 +202,7 @@ namespace {
 void dialogGlyphsTap(Core* c) {
   const uint32_t box = c->r[4];
   gen_func_8007CC00(c);   // byte-exact guest packet pool / OT / stack
-  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // read-only overlay gate
+  if (c->game->oracle || c->rsub.mode.psxRender()) return;   // read-only overlay gate
   Panel::pushDialogGlyphs(c, box);
 }
 } // namespace

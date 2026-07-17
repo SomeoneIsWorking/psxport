@@ -5,7 +5,7 @@
 // deterministic by construction — replaced the value-keyed "attach" ring that could only correlate
 // projected SXY back to a depth and was unreliable (same-pixel verts ambiguous; whole-frame staleness).
 //
-// PROPER OOP: one instance per Core, embedded on Render (`c->mRender->projprim`) — was a file-scope
+// PROPER OOP: one instance per Core, embedded on Render (`c->rsub.projprim`) — was a file-scope
 // process-wide cache in gte_beetle.cpp before the SBS deglobalize sweep (2026-07-03). The two SBS
 // cores need SEPARATE caches so their submits + lookups don't clobber each other's per-frame depths.
 #pragma once
@@ -21,7 +21,7 @@ public:
   // bind: mark this instance as the currently-bound cache. Parallels gte_bind/spu_bind — called per
   // core frame-step (native_step_frame) + at boot (dc_boot_init, game_main). Legacy hook for the
   // remaining call sites that lack a Core* in scope; new code should just reach the instance via
-  // `c->mRender->projprim` directly.
+  // `c->rsub.projprim` directly.
   void bind(Core* c);
   static ProjPrim* current() { return sCurrent; }
 

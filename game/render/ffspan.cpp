@@ -19,14 +19,14 @@ void FfSpan::resetFrame() { if (bdtagOn()) { mN = 0; mSp = 0; } }
 
 void FfSpan::begin() {
   if (!bdtagOn() || mSp >= 8) return;
-  PktSpan& ps = core->mRender->pktSpan;
+  PktSpan& ps = core->rsub.pktSpan;
   mStk[mSp++] = ps.save();
   ps.open();
 }
 
 void FfSpan::end(const char* nm) {
   if (!bdtagOn() || mSp <= 0) return;
-  PktSpan& ps = core->mRender->pktSpan;
+  PktSpan& ps = core->rsub.pktSpan;
   uint32_t mlo, mhi;
   bool captured = ps.current(&mlo, &mhi);
   if (captured) record(nm, mlo, mhi);

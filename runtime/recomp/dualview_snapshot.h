@@ -13,7 +13,7 @@
 //
 // Per-Core so SBS / dualcore never mix one core's snapshot into the other (was the
 // process-globals `g_dv_have_pre` + a set of file-scope buffers in dualview_snapshot.cpp;
-// deglobalize-game 2026-07-03). Reached as `core->mRender->dualviewSnapshot`.
+// deglobalize-game 2026-07-03). Reached as `core->rsub.dualviewSnapshot`.
 #pragma once
 #include <stdint.h>
 class Core;

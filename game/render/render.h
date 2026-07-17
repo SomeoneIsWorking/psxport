@@ -9,15 +9,6 @@
 // own back-pointer is wired there too. Callers reach members as `c->mRender->mNodeXform.build(node)`.
 #pragma once
 #include "node_xform.h"
-#include "render_mode.h"
-#include "render_diag.h"
-#include "pkt_span.h"
-#include "ot_attr.h"
-#include "dualview_snapshot.h"
-#include "render_stats.h"
-#include "proj_prim.h"
-#include "pgxp.h"
-#include "proj_params.h"
 #include "projection.h"     // EObjXform (per-Core active per-object xform lives on Render below)
 #include "render_native.h"      // class NativeScenePass — the decoupled native render subsystem
 #include "margin_render.h"    // class MarginRenderer — widescreen margin collect-and-flush
@@ -31,15 +22,10 @@ public:
   Core* mCore = nullptr;
 
   // ---- render-side per-Core subsystems ------------------------------------
-  RenderMode        mode;              // compare-mode toggles (psxRender / dualview)
-  RenderDiag        diag;              // per-object walk-scope tags (currentNode, currentGeomblk)
-  PktSpan           pktSpan;           // packet-pool store-address-span tracker (Core::mem_w* -> track)
-  OtAttr            otAttr;            // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
-  DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
-  RenderStats       stats;             // per-frame render diag counters (ndepth / obj-depth / projprim)
-  ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
-  Pgxp              pgxp;               // PGXP-lite subpixel cache (per-Core; PGXP_pushSXYZ2f target)
-  ProjParams        projParams;         // camview + per-frame projection constants (per-Core)
+  // (The host-only render SUBSTRATE members — mode/diag/pktSpan/otAttr/dualviewSnapshot/stats/projprim/
+  // pgxp/projParams — moved to the framework-owned `class RenderSubstrate` (runtime/recomp/
+  // render_substrate.h), reached as `mCore->rsub.<member>`, so the framework no longer includes this
+  // game umbrella just to reach a projection cache or compare-mode toggle. Byte-neutral host layout.)
   // Active per-object xform for the GT3/GT4 submitters. Set once per render command by the per-object
   // flush (projSetActive), read by the per-vertex projection (projVertexActive), cleared by
   // projClearActive. Was file-scope in projection.cpp; per-Core here so SBS's two cores don't

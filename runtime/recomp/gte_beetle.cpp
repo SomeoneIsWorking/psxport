@@ -7,9 +7,10 @@
 #include "core.h"
 #include "game.h"   // Core::game->gte (per-instance GTE register file) for gte_bind
 #include "cfg.h"
-#include "render/render.h"       // Render::pgxp / projParams — per-Core class instances
-#include "render/pgxp.h"          // class Pgxp — subpixel-cache currently-bound accessor
-#include "render/proj_params.h"   // class ProjParams — camview + per-frame projection constants
+#include "render_substrate.h"       // rsub.pgxp / rsub.projParams / rsub.otAttr — per-Core substrate
+#include "pgxp.h"          // class Pgxp — subpixel-cache currently-bound accessor
+#include "proj_params.h"   // class ProjParams — camview + per-frame projection constants
+#include "projection.h"    // ProjVtx — proj_native_vertex's POD out-struct (was reached via render.h)
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -146,7 +147,7 @@ static constexpr ProjDivTab proj_make_divtab() {           // mirrors GTE_Init's
 }
 static const ProjDivTab s_divtab = proj_make_divtab();
 // per-frame projection constants moved to `class ProjParams` on Render (per-Core, SBS-safe) —
-// reach via `c->mRender->projParams.projH()` etc. Callers below without a Core* in scope go through
+// reach via `c->rsub.projParams.projH()` etc. Callers below without a Core* in scope go through
 // `ProjParams::current()` — the currently-bound instance, set by `bind()` at native_step_frame.
 
 // proj_pz_to_ord + the camview + projection-plane accessors moved to game/render/proj_params.cpp — see
@@ -357,7 +358,7 @@ void rtpcaller_dump(Core* c, const char* tag) {
 void rtpcaller_reset(void) { GteDebug& d = GTE_CurState()->dbg;
                              for (int i = 0; i < 64; i++) { d.rtpcaller[i].ra = 0; d.rtpcaller[i].n = 0; } }
 
-// Native per-vertex depth cache: now `class ProjPrim` on Render — reach as `c->mRender->projprim`.
+// Native per-vertex depth cache: now `class ProjPrim` on Render — reach as `c->rsub.projprim`.
 // See game/render/proj_prim.h. All previously free `projprim_*` functions retired 2026-07-03.
 
 // PC-native per-pixel depth is THE render behavior — this is a PC GAME, not an emulator. The OT-order
@@ -391,7 +392,7 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    if (op == 0x01 || op == 0x30) {
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
-                                                     c->mRender->otAttr.trackGte(c);   // self-gated (`debug otattr`)
+                                                     c->rsub.otAttr.trackGte(c);   // self-gated (`debug otattr`)
                                                      // fps60 (docs/fps60-rework.md) does not tap the GTE op
                                                      // stream for interpolation — it matches/lerps already-
                                                      // resolved render-queue prims at present time (Fps60::
@@ -429,8 +430,8 @@ void     gte_bind(Core* c)                       {
   // Also bind THIS core's per-Core PGXP cache + projection-constant/camview state (both were file-scope
   // process-wide before deglobalize-2026-07-03 → SBS's two cores would clobber each other's per-frame
   // subpixel cache and projection center).
-  c->mRender->pgxp.bind(c);
-  c->mRender->projParams.bind(c);
+  c->rsub.pgxp.bind(c);
+  c->rsub.projParams.bind(c);
 }
 void     gte_init(void)                          { GTE_Init(); GTE_Power();
   // PSXPORT_WIDE is PC-native widescreen now: the GTE keeps its NATIVE projection (NO squish) and the

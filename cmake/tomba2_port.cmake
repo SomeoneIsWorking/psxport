@@ -240,9 +240,6 @@ set(PORT_SRC
   game/object/behavior_dispatch.cpp
   game/render/submit.cpp
   game/render/node_xform.cpp
-  game/render/proj_prim.cpp
-  game/render/pgxp.cpp
-  game/render/proj_params.cpp
   game/render/projection.cpp
   game/render/render_frame.cpp
   game/render/cine_bars.cpp
@@ -275,8 +272,6 @@ set(PORT_SRC
   game/audio/music_list.cpp
   runtime/recomp/sync_overrides.cpp
   runtime/recomp/override_registry.cpp
-  game/render/pkt_span.cpp
-  game/render/ot_attr.cpp
   game/render/render_observer.cpp
   game/render/overlay_gt3gt4.cpp
   game/render/overlay_ground_gt3gt4.cpp
@@ -292,6 +287,11 @@ set(PORT_SRC
   runtime/recomp/scheduler.cpp
   runtime/recomp/native_boot.cpp
   runtime/recomp/dualview_snapshot.cpp
+  runtime/recomp/proj_prim.cpp
+  runtime/recomp/pgxp.cpp
+  runtime/recomp/proj_params.cpp
+  runtime/recomp/pkt_span.cpp
+  runtime/recomp/ot_attr.cpp
   runtime/recomp/hw_bind.cpp
   runtime/recomp/repl.cpp
   runtime/recomp/dbg_server.cpp

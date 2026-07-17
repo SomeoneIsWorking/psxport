@@ -231,7 +231,7 @@ void Render::submitPolyGt3Native(Core* c) {
     int semi = (code & 0x02000000) ? 1 : 0;
     if (!semi) engine_shade_face(c, p, 3, r, g, b);             // engine-native lighting (opaque only)
     if (cfg_dbg("eprojv")) {
-      static long objn = -1; uint32_t geomblk = c->mRender->diag.currentGeomblk();
+      static long objn = -1; uint32_t geomblk = c->rsub.diag.currentGeomblk();
       if ((long)geomblk != objn) { objn = (long)geomblk;
         const EObjXform& x = c->mRender->mActiveXform;
         cfg_logf("eprojv", "cmd=%08x R=[%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f] T=(%.2f,%.2f,%.2f) H=%.0f",
@@ -243,7 +243,7 @@ void Render::submitPolyGt3Native(Core* c) {
         geomblk, i, (double)px[0],(double)py[0],(double)depth[0], (double)px[1],(double)py[1],(double)depth[1],
         (double)px[2],(double)py[2],(double)depth[2]);
     }
-    { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
+    { char tag[32]; snprintf(tag, sizeof tag, "gt3_native@%08X", c->rsub.diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 3, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 3, semi, vv);   // dynamic shadow verts (carried on the item)
       // Tier-1 capture-target redirect (game.h Game::rqRedirect), same as native_terrain.cpp: the ISOLATED
       // sink while Fps60::tier1Render re-runs fieldEntityRender under a lerped camera; the live queue
@@ -303,12 +303,12 @@ void Render::submitPolyGt4Native(Core* c) {
     int semi = (code0 & 0x02000000) ? 1 : 0;                  // GP0 op byte (code0>>24) bit1 = semi-transparency
     if (!semi) engine_shade_face(c, p, 4, r, g, b);             // engine-native lighting (opaque only)
     if (cfg_dbg("eprojv")) {
-      uint32_t geomblk = c->mRender->diag.currentGeomblk();
+      uint32_t geomblk = c->rsub.diag.currentGeomblk();
       cfg_logf("eprojv", "cmd=%08x gt4 idx=%u v0=(%.2f,%.2f,%.2f) v1=(%.2f,%.2f,%.2f) v2=(%.2f,%.2f,%.2f) v3=(%.2f,%.2f,%.2f)",
         geomblk, i, (double)px[0],(double)py[0],(double)depth[0], (double)px[1],(double)py[1],(double)depth[1],
         (double)px[2],(double)py[2],(double)depth[2], (double)px[3],(double)py[3],(double)depth[3]);
     }
-    { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->mRender->diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
+    { char tag[32]; snprintf(tag, sizeof tag, "gt4_native@%08X", c->rsub.diag.currentGeomblk()); sil_bbox_log_verts(tag, px, py, depth, 4, cur_render_node(c), rec, r, g, b); }
     { float vv[4][3]; const float (*sv)[3] = shadow_verts(p, 4, semi, vv);   // dynamic shadow verts (carried on the item)
       // Tier-1 capture-target redirect — see submitPolyGt3Native above.
       RenderQueue& rqOut = c->game->rqRedirect ? *c->game->rqRedirect : c->game->rq;
@@ -361,7 +361,7 @@ void rec_dispatch(Core*, uint32_t);         // interpret/run a guest fn (unowned
 // g_dbg_cur_geomblk retired — per-Core Render::mDbgCurGeomblk
 void Render::gt3gt4(uint32_t geomblk, uint32_t otbase) {   // used by render_walk.cpp
   Core* c = mCore;
-  diag.setGeomblk(geomblk);
+  c->rsub.diag.setGeomblk(geomblk);
   uint32_t counts = c->mem_r32(geomblk + 0);
   c->r[4] = geomblk + 16; c->r[5] = otbase; c->r[6] = counts & 0xFFFFu;
   submitPolyGt3Native(c);
@@ -395,7 +395,7 @@ void Render::fieldEntityRender(uint32_t es) {
   // its extension to fieldEntityRender). Both the real per-logic-frame call (render_walk.cpp sceneNative)
   // and Fps60::tier1Render's present-time re-render go through THIS function, so both tag identically —
   // scoped here (not at each call site) so the tag can never be forgotten at one of the two call sites.
-  c->mRender->diag.beginObject(kSceneTableDbgNode);
+  c->rsub.diag.beginObject(kSceneTableDbgNode);
   // DIAG groundproj: log the camera xform + first GT4 record's model verts and their eproj projection, so we
   // can see whether the world-space scene-table geometry projects on-screen with sane depth. (later-231b)
   if (cfg_dbg("groundproj")) { static int n=0; if (n++ < 3) {
@@ -415,11 +415,11 @@ void Render::fieldEntityRender(uint32_t es) {
     uint32_t s0  = c->mem_r32(cmd);
     // fps60: scene-table entities are world-space (projComposeCamera, camera-only) — they interpolate via
     // the camera during the mid-present, no per-object transform key needed.
-    c->mRender->diag.setGeomblk(cmd);   // sil_bbox_log diag: tag this entity's cmd record (Render::gt3gt4 is NOT the caller here)
+    c->rsub.diag.setGeomblk(cmd);   // sil_bbox_log diag: tag this entity's cmd record (Render::gt3gt4 is NOT the caller here)
     c->r[4] = cmd + 4;  c->r[5] = otbase; c->r[6] = s0 & 0xFF;          submitPolyGt3Native(c);
     c->r[4] = c->r[2];  c->r[5] = otbase; c->r[6] = (s0 >> 16) & 0xFF;  submitPolyGt4Native(c);
   }
-  c->mRender->diag.endObject();
+  c->rsub.diag.endObject();
   c->mRender->projClearActive();
 }
 

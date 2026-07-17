@@ -1,6 +1,5 @@
 // class DualviewSnapshot — per-Core dual-view render-compare snapshot. See dualview_snapshot.h.
 #include "core.h"
-#include "render/render.h"
 #include "dualview_snapshot.h"
 #include <string.h>
 

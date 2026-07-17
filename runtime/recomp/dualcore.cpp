@@ -35,7 +35,7 @@ void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
 extern "C" void watchdog_suspend(void);
 // (g_render_psx retired — per-Core Render::setPsxRender(bool). Set on THIS core in run_and_record.)
-#include "render/render.h"
+#include "render_substrate.h"
 
 namespace {
 
@@ -92,7 +92,7 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
   g->diff_mode = 1;                       // skip the final VK present; ov_render_frame still runs + writes
   load_exe(exe, &g->core);
   dc_boot_init(&g->core);
-  g->core.mRender->mode.setPsxRender(render_psx != 0);   // per-core render path (0 = native walk, 1 = PSX recomp)
+  g->core.rsub.mode.setPsxRender(render_psx != 0);   // per-core render path (0 = native walk, 1 = PSX recomp)
 
   Nav nv; uint32_t f = 0; const uint32_t MAXF = 6000; bool started = false; int k = 0;
   fprintf(stderr, "[dc] --- %s (psxRender=%d) ---\n", tag, render_psx);

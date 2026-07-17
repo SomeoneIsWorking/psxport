@@ -6,7 +6,7 @@
 // integer (sx,sy) and rasterizes with FLOAT positions instead of the integer-snapped ones. Value-keyed
 // PGXP-lite: on a key collision we fall back to integer coords, so a wrong match can only cost smoothing.
 //
-// PROPER OOP: one instance per Core, embedded on Render (`c->mRender->pgxp`) — was a file-scope cache
+// PROPER OOP: one instance per Core, embedded on Render (`c->rsub.pgxp`) — was a file-scope cache
 // in gte_beetle.cpp. `PGXP_pushSXYZ2f` is a Beetle-C ABI callback that lacks a Core* argument, so we
 // keep a `sCurrent` bound pointer (parallels ProjPrim), set from `bind()` alongside gte_bind.
 #pragma once

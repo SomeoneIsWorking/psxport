@@ -65,7 +65,7 @@ extern "C" int   MDFNSS_StateAction(void* st, int load, int data_only, void* sf,
 }
 
 // ---- Free-function shim so callers with `Core* c` in scope keep working during the migration ------
-// (kept intentionally thin — new code should call `c->mRender->pgxp.lookup*(...)`)
+// (kept intentionally thin — new code should call `c->rsub.pgxp.lookup*(...)`)
 int pgxp_lookup(int sx, int sy, float* px, float* py, float* pz) {
   auto* p = Pgxp::current(); return p && p->lookup(sx, sy, px, py, pz) ? 1 : 0;
 }

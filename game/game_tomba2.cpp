@@ -154,7 +154,7 @@ void Engine::drawOTag(uint32_t otHead) {   // called directly from native_step_f
   // used by SBS core B, the `renderpsx` REPL toggle, and to DRIVE into scenes whose native producer
   // isn't built yet (PSXPORT_RENDER_PSX=1). The pc_render path below never walks the guest OT.
   // ============================================================================================
-  if (c->mRender->mode.psxRender()) {
+  if (c->rsub.mode.psxRender()) {
     gpu_dma2_linked_list(c, otHead, /*twoDOnly=*/false);
     if (cfg_dbg("rendernative")) c->mRender->mNativeScene.run();
     c->game->rq.flush(c);

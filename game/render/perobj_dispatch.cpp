@@ -256,12 +256,12 @@ void Render::cmdListDispatch() {
         // legitimately writes guest RAM (GTE CR/OT/packet-pool) — so the guard is scoped tightly to
         // JUST this block, not the whole function, the same discipline game_tomba2.cpp's
         // Engine::drawOTag uses around sceneNative().
-        DisplayPassGuard displayPass(c->mRender->mode);
-        c->mRender->diag.beginObject(node);           // real dbg_node identity for this cmd's RqItems
+        DisplayPassGuard displayPass(c->rsub.mode);
+        c->rsub.diag.beginObject(node);           // real dbg_node identity for this cmd's RqItems
         EObjXform w; c->mRender->projComposeObject(cmd, &w); c->mRender->projSetActive(&w);
         c->mRender->gt3gt4(geomblk, otbase);           // the real picture: native float, real per-vertex depth
         c->mRender->projClearActive();
-        c->mRender->diag.endObject();
+        c->rsub.diag.endObject();
       }
     }
 

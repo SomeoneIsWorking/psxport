@@ -13,7 +13,7 @@
 //
 // Per-Core state so SBS / dualcore run two cores without one core's render walk leaking scope into the
 // other's diag (was the process-globals g_dbg_render_node / g_dbg_cur_geomblk; deglobalize-game 2026-07-02).
-// Reached as `core->mRender->diag`.
+// Reached as `core->rsub.diag`.
 #pragma once
 #include <stdint.h>
 

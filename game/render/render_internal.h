@@ -37,7 +37,7 @@ float proj_obj_center_ord(void);
 // The real per-instance render object: the walk's node when set, else the guest "current render object"
 // scratch (0x1F80028C). Prefer the native walk's node — 0x28C is shared/stale for some billboard paths.
 static inline uint32_t cur_render_node(Core* c) {
-  return c->mRender->diag.currentNode() ? c->mRender->diag.currentNode() : c->mem_r32(0x1F80028Cu);
+  return c->rsub.diag.currentNode() ? c->rsub.diag.currentNode() : c->mem_r32(0x1F80028Cu);
 }
 
 // render_field_native_active: true iff pc_render's native field pass (Render::sceneNative + the
@@ -49,7 +49,7 @@ static inline uint32_t cur_render_node(Core* c) {
 // draw would double-draw. Deliberately narrower than drawOTag's own `scenenative` diagnostic branch
 // (that debug channel stays diagnostic-only; it must not also arm new native draws).
 static inline bool render_field_native_active(Core* c) {
-  if (c->game->oracle || c->mRender->mode.psxRender()) return false;
+  if (c->game->oracle || c->rsub.mode.psxRender()) return false;
   if (c->mem_r32(0x801FE00Cu) != 0x8010637Cu) return false;         // GAME stage resident
   if (c->mem_r32(0x80109450u) == 0x3C021F80u) return false;         // SOP intro narration overlay active
   // #51: an AUTHORED OT sub-scene (hut/door interior, sm[0x4c]==3 — the game's own fieldRunX/frameX
@@ -84,7 +84,7 @@ static inline float obj_world_ord(Core* c, uint32_t node) {
 // 0x8003C29C RCASE_DEFAULT body).
 static inline void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
   if (c->game->oracle) { body(c); return; }
-  c->mRender->diag.beginObject(node);
+  c->rsub.diag.beginObject(node);
   uint32_t slo, shi;
   PktSpanSession sess(c);
   body(c);
@@ -92,7 +92,7 @@ static inline void withDepthTag(Core* c, uint32_t node, void (*body)(Core*)) {
     float od = obj_world_ord(c, node);
     gpu_obj_depth_add(c, slo, shi, od);
   }
-  c->mRender->diag.endObject();
+  c->rsub.diag.endObject();
 }
 
 // ---- WqRec factorization helpers (#67 display-pass quads — render.h WqRec banner) ------------------
@@ -126,7 +126,7 @@ static inline void wq_factor_world(Core* c, const float crF[3][3], const float t
 }
 
 // PktSpan (per-Core packet-pool store-address-span tracker) + PktSpanSession (RAII object scope) live
-// in pkt_span.h — reached as c->mRender->pktSpan. PktSpanSession is defined there; its ctor/close
+// in pkt_span.h — reached as c->rsub.pktSpan. PktSpanSession is defined there; its ctor/close
 // implementation is in pkt_span.cpp.
 
 // Fully-native generic GT3/GT4 submit is Render::gt3gt4 (submit.cpp); the per-object flush in

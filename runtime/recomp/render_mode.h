@@ -6,7 +6,7 @@
 // (was the process-globals g_render_psx / g_dualview; deglobalize-game 2026-07-02).
 //
 // Set at boot from PSXPORT_RENDER_PSX / PSXPORT_DUALVIEW; toggled live via the REPL (`renderpsx`) and
-// the SBS/dualcore harness's per-core apply_mode. Reached as `core->mRender->mode`.
+// the SBS/dualcore harness's per-core apply_mode. Reached as `core->rsub.mode`.
 #pragma once
 
 class RenderMode {

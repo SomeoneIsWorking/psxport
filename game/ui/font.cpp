@@ -282,7 +282,7 @@ void Font::drawTextSmall(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str,
 // 4bpp, op 0x65 = raw (color ignored). Read-only on guest state. The struct is the SCRATCHPAD
 // block at 0x1F800000 (glyphEmit's r18 = 8064<<16), not main RAM.
 void Font::glyphQueuePush(Core* c) {
-  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // guest OT walk owns the picture
+  if (c->game->oracle || c->rsub.mode.psxRender()) return;   // guest OT walk owns the picture
   const uint32_t st = 0x1F800000u;
   const int gx = (int16_t)c->mem_r16(st + 8u), gy = (int16_t)c->mem_r16(st + 10u);
   const int gu = c->mem_r8(st + 12u),          gv = c->mem_r8(st + 13u);
@@ -657,7 +657,7 @@ void iconGlyphTap(Core* c) {
   const int32_t wsz = (int32_t)c->r[6];
   const uint32_t str0 = c->r[7];
   gen_func_80078988(c);
-  if (c->game->oracle || c->mRender->mode.psxRender()) return;   // guest OT walk owns the picture
+  if (c->game->oracle || c->rsub.mode.psxRender()) return;   // guest OT walk owns the picture
 
   const uint32_t clut = (wsz < 16) ? (((uint32_t)(wsz + 496) << 6) | 63u)
                                    : (((uint32_t)(wsz + 480) << 6) | 62u);

@@ -139,7 +139,7 @@ void NativeScenePass::terrainRender() {
   // is the OTHER dbg_node==0 RQ_WORLD producer and is genuinely un-owned (still queue-lerped); tagging
   // terrain distinctly is what lets Fps60::tier1Render's queue-lerp exclusion (fps60.cpp isTier1Owned)
   // target ONLY the prims it actually re-renders.
-  c->mRender->diag.beginObject(kTerrainDbgNode);
+  c->rsub.diag.beginObject(kTerrainDbgNode);
   for (uint32_t rec = TERRAIN_GEOMBLK; ; rec += 36) {
     int32_t ctl = (int32_t)c->mem_r32(rec + 4);
     float px[4], py[4], depth[4]; int u[4], v[4]; uint8_t r[4], g[4], b[4]; float wv[4][3];
@@ -209,7 +209,7 @@ void NativeScenePass::terrainRender() {
     drawn++;
     if (ctl <= 0) break;                                   // control sign marks the last record
   }
-  c->mRender->diag.endObject();
+  c->rsub.diag.endObject();
   if (s_dbg) fprintf(stderr, "[terrpc] node=%08x drew %d quads (H=%u ofx=%.1f ofy=%.1f)\n",
                      node, drawn, (unsigned)H, ofx, ofy);
 }

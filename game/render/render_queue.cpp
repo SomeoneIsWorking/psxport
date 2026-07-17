@@ -547,7 +547,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   int wxs[4]; float wxsf[4];
   { int gpu_gpu_wide_engine(Core*), gpu_gpu_wide_engine_w(Core*);
     if (order_mode != RQ_OM_DEPTH && gpu_gpu_wide_engine(core) && !core->game->gpu.s_ot_2d_only &&
-        core->mRender->diag.currentNode() != kBackdropDbgNode) {
+        core->rsub.diag.currentNode() != kBackdropDbgNode) {
       const int ww = gpu_gpu_wide_engine_w(core), margin = (ww - 320) / 2;
       if (margin > 0) {
         const bool stretch = (layer == RQ_BACKGROUND);
@@ -569,7 +569,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // kBackdropDbgNode (render_queue.h) the same way world producers do, so Fps60::isTier1Owned can key on
   // ITS prims specifically. Any RQ_BACKGROUND item from OUTSIDE that scope (the generic guest-OT-walk bg
   // classification in gpu_native.cpp — no beginObject wraps it) still gets dbg_node==0, unchanged.
-  it.dbg_node = (layer == RQ_WORLD || layer == RQ_BACKGROUND) ? core->mRender->diag.currentNode() : 0;
+  it.dbg_node = (layer == RQ_WORLD || layer == RQ_BACKGROUND) ? core->rsub.diag.currentNode() : 0;
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
   // item so emitItem re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;
@@ -597,7 +597,7 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
                                 const unsigned char* b, uint16_t tp, uint16_t clut, int semi,
                                 const float (*sv)[3]) {
   if (!gpu_gpu_enabled()) return;
-  core->mRender->stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
+  core->rsub.stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
   if (cfg_dbg("silbbox")) { static int once=0; if (!once++) cfg_logf("silbbox", "s_off=(%d,%d)", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);

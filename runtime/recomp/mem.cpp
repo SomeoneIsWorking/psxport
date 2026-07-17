@@ -5,7 +5,7 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
-#include "render/render.h"     // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
+#include "render_substrate.h"     // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -260,10 +260,10 @@ uint32_t Core::mem_r32(uint32_t a) {
 // Every store routes through Core::mem_w* -> pktSpan.track(addr, bytes); the class is a no-op unless
 // armed by a PktSpanSession or ffspan span.
 static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
-  c->mRender->pktSpan.track(a, bytes);
+  c->rsub.pktSpan.track(a, bytes);
   // OT/GTE submission attribution (`debug otattr`, game/render/ot_attr.h): attribute this pool store
   // to the current otattr-shadow-stack fn + render-walk node. No-op unless the channel is on.
-  c->mRender->otAttr.trackStore(c, a, bytes);
+  c->rsub.otAttr.trackStore(c, a, bytes);
 }
 
 // Mirror-verify write journal (game/core/verify_harness.h): while a strictCheck invocation is
@@ -288,7 +288,7 @@ static inline void journal_track(Core* c, uint8_t* p, uint32_t bytes) {
 // always except during the pc_render display pass on this Core).
 extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — guest-stack backtrace
 static void display_pass_write_guard(Core* c, uint32_t a, uint32_t v, int width) {
-  if (!c->mRender->mode.displayPassArmed()) return;
+  if (!c->rsub.mode.displayPassArmed()) return;
   const uint32_t p = a & 0x1FFFFFFF;
   const bool guest_ram   = p < 0x200000;
   const bool scratchpad  = p >= 0x1F800000 && p < 0x1F800400;

@@ -9,8 +9,8 @@
 #include "cfg.h"
 #include "asset.h"
 #include "audio/music_list.h"
-#include "render/render.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
-#include "render/ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
+#include "render_substrate.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
+#include "ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
 #include "guest_call.h"
 #include "repl.h"
 #include <stdio.h>
@@ -256,8 +256,8 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "renderpsx")) {
       char st[16] = {0};
       if (sscanf(line, "%*s %15s", st) == 1)
-        c->mRender->mode.setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
-      fprintf(stderr, "[repl] Render::psxRender = %d\n", c->mRender->mode.psxRender());
+        c->rsub.mode.setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
+      fprintf(stderr, "[repl] Render::psxRender = %d\n", c->rsub.mode.psxRender());
     }
     // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
     // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme
@@ -307,7 +307,7 @@ long Repl::read(Core* c, uint32_t f) {
     // built this OT ran — turn the channel on BEFORE the frame you want to inspect, then run this after.
     // Pipe stderr through tools/symres.py to resolve the raw hex fn/node addresses to FUN_/native names.
     else if (!strcmp(cmd, "otattr")) {
-      OtAttr& oa = c->mRender->otAttr;
+      OtAttr& oa = c->rsub.otAttr;
       char sub[32] = {0};
       sscanf(line, "%*s %31s", sub);
       // LAST-WRITER PROVENANCE sub-commands (ot_attr.h) — answer "who wrote this WORD", independent of

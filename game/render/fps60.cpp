@@ -140,7 +140,7 @@ void Fps60::tier1Render(Core* core, float t) {
   // Game::Game's `rq.game = this` — so its own `game` back-pointer is null unless wired here). #54:
   // that was harmless while every push2dQuad(RQ_BACKGROUND, ...) call unconditionally forced
   // dbg_node=0 (never dereferencing `game`) — extending that to also stamp kBackdropDbgNode via
-  // `core->mRender->diag.currentNode()` (render_queue.cpp emitOrQueue) exposed it: push2dQuad resolves
+  // `core->rsub.diag.currentNode()` (render_queue.cpp emitOrQueue) exposed it: push2dQuad resolves
   // its OWN Core internally as `&game->core` (it takes no Core* param), so a null `game` there crashed
   // on the very next real-frame backdrop re-render. Wire it once, same as every other Game-owned queue.
   if (!mSink) { mSink = new RenderQueue(); mSink->game = game; }
@@ -168,12 +168,12 @@ void Fps60::tier1Render(Core* core, float t) {
   const bool voidBeat = c->mRender->worldVoidBeat();
   const bool areaInit = c->mRender->fieldAreaInit();
 
-  ProjParams::Snapshot projSaved = c->mRender->projParams.snapshot();
+  ProjParams::Snapshot projSaved = c->rsub.projParams.snapshot();
   RenderQueue* prevRedirect = c->game->rqRedirect;
   c->game->rqRedirect = mSink;
   mCamOverrideOn = true;
   {
-    DisplayPassGuard displayPass(c->mRender->mode);   // FAIL-FAST: abort on any guest write, real-path discipline
+    DisplayPassGuard displayPass(c->rsub.mode);   // FAIL-FAST: abort on any guest write, real-path discipline
     if (!voidBeat && !areaInit) c->mRender->terrainRenderAll();
     // SCENE TABLE (grass/terrain props, kSceneTableDbgNode): camera-only, same as terrain — fieldEntityRender
     // composes ONLY the scene camera (projComposeCamera -> sceneCam, honors mCamOverrideOn above), never a
@@ -215,7 +215,7 @@ void Fps60::tier1Render(Core* core, float t) {
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
-  c->mRender->projParams.restore(projSaved);
+  c->rsub.projParams.restore(projSaved);
 
   mSink->sortQueue();
   // Split mSink's telemetry by producer: RQ_BACKGROUND (backdrop) vs RQ_WORLD (terrain+scene-table) — the

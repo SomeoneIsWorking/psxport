@@ -674,7 +674,7 @@ static void emitRecQuad(Core* c, uint32_t node, const uint32_t wCol[4],
     xs[i] = (int)(px[i] < 0 ? px[i] - 0.5f : px[i] + 0.5f) + gs.s_off_x;
     ys[i] = (int)(py[i] < 0 ? py[i] - 0.5f : py[i] + 0.5f) + gs.s_off_y;
   }
-  c->mRender->diag.beginObject(node);
+  c->rsub.diag.beginObject(node);
   c->game->activeRq().emitOrQueue(c, 1, RQ_WORLD, RQ_OM_DEPTH, 4,
                    (op & 2) ? 1 : 0, (op & 1) ? 1 : 0,
                    xs, ys, xsf, ysf, us, vs, rs, gsv, bs, dep,
@@ -682,7 +682,7 @@ static void emitRecQuad(Core* c, uint32_t node, const uint32_t wCol[4],
                    (int)(tp & 0xFu) * 64, (int)((tp >> 4) & 1u) * 256,
                    (int)(clut & 0x3Fu) * 16, (int)((clut >> 6) & 0x1FFu),
                    0, 0, 0, 0, 0, 0, 1023, 511, (int)((tp >> 5) & 3u));
-  c->mRender->diag.endObject();
+  c->rsub.diag.endObject();
 }
 
 void Render::billboardsRender() {
@@ -728,7 +728,7 @@ void Render::billboardsRender() {
       const float ph = H / pz;
       px[i] = ofx + vx * ph;
       py[i] = ofy + vy * ph;
-      dep[i] = projParams.pzToOrd(vz);
+      dep[i] = c->rsub.projParams.pzToOrd(vz);
     }
     if (behind) continue;
 
@@ -775,7 +775,7 @@ void Render::billboardsRender() {
       const float ph = H / pz;
       px[i] = ofx + vx * ph;
       py[i] = ofy + vy * ph;
-      dep[i] = projParams.pzToOrd(vz);
+      dep[i] = c->rsub.projParams.pzToOrd(vz);
     }
     if (behind) continue;
 

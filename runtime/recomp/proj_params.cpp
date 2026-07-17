@@ -57,7 +57,7 @@ bool ProjParams::camWorldScreen(float wx, float wy, float wz, float* sx, float* 
 
 // ---- Free-function bridges (declared in proj_params.h) ---------------------------------------------
 // Thin forwards to `ProjParams::current()` for callers with no `Core*` in scope. When the harness has
-// bound this core (gte_bind), sCurrent points to `c->mRender->projParams` and every call reaches
+// bound this core (gte_bind), sCurrent points to `c->rsub.projParams` and every call reaches
 // this-core state; before the first bind these are safe null-checks.
 
 float proj_pz_to_ord(float pz) { auto* pp = ProjParams::current(); return pp ? pp->pzToOrd(pz) : 0.0f; }

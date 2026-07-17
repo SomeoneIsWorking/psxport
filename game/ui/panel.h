@@ -11,7 +11,7 @@
 // from c->r[4..7] at entry, (b) calls the ORIGINAL gen_func_XXXX(c) so every guest byte (packet
 // pool, OT, stack) stays byte-exact — SBS core B never sees this table (oracle-gated thunk), so it
 // keeps running pure gen — then (c) pushes the equivalent native quads to `c->game->activeRq()`,
-// gated on `c->game->oracle || c->mRender->mode.psxRender()` so pc_render stays a READ-ONLY overlay
+// gated on `c->game->oracle || c->rsub.mode.psxRender()` so pc_render stays a READ-ONLY overlay
 // (host memory only, zero guest writes, zero c->r[] writes beyond what gen already left).
 //
 // NESTING: gen_func_8005019C's guest body calls panelFill through the WRAPPER `func_8004FFB4`
