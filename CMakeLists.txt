@@ -1,3 +1,8 @@
+# psxport — a PSX→PC static-recompilation FRAMEWORK. This repo builds the game-agnostic pieces: the
+# recompiler tooling, the runtime/recomp substrate (interp + HW backends + SBS harness + VK renderer),
+# and the psxport STATIC library a game links. A game (e.g. Tomba2Engine) vendors this repo as a
+# submodule, provides GameConfig/GameHooks (runtime/recomp/game_iface.h) + the recompiled substrate
+# (generated/), and links libpsxport. See docs/porting-a-new-psx-game.md.
 cmake_minimum_required(VERSION 3.21)
 project(psxport CXX C)
 
@@ -12,15 +17,13 @@ if(NOT TARGET zstd::libzstd_shared)
   add_library(zstd::libzstd_shared SHARED IMPORTED)
   set_target_properties(zstd::libzstd_shared PROPERTIES IMPORTED_LOCATION "${ZSTD_LIBRARY}")
 endif()
+find_package(Threads REQUIRED)
 
-# libchdr (CHD access for tools/discdump) comes from the Beetle PSX submodule;
-# it bundles its own lzma (chdr-lzma). DuckStation was removed from this repo.
+# libchdr (CHD access for tools/discdump) — from the Beetle PSX submodule (bundles its own lzma).
 add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
 
 add_subdirectory(common)
 add_subdirectory(tools)
 
-# The native PC port binary (scratch/bin/tomba2_port). Guarded so the lightweight discdump-only
-# configure used by run.sh still works when SDL2/Vulkan/FreeType dev libs are absent.
-find_package(Threads REQUIRED)
-include(cmake/tomba2_port.cmake)
+# The framework static library `psxport` (+ option(PSXPORT_BUILD_SMOKE) + the standalone agnosticism smoke).
+include(cmake/psxport.cmake)

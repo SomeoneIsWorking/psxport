@@ -1,14 +1,7 @@
+# Framework tools. discdump (CHD/ISO extraction) is the one CMake target; the recompiler + RE/analysis
+# tooling are Python/shell scripts run in place. The game-asset exporters (menu_bg_export, tex_export)
+# moved to the consuming game repo (Tomba2Engine) with the assets they read.
 add_executable(discdump discdump.cpp)
 target_link_libraries(discdump PRIVATE psxport_common chdr-static)
 target_include_directories(discdump PRIVATE
-  ${CMAKE_SOURCE_DIR}/vendor/beetle-psx/deps/libchdr/include)
-
-add_executable(menu_bg_export menu_bg_export.cpp)
-target_link_libraries(menu_bg_export PRIVATE psxport_common chdr-static z)
-target_include_directories(menu_bg_export PRIVATE
-  ${CMAKE_SOURCE_DIR}/vendor/beetle-psx/deps/libchdr/include)
-
-add_executable(tex_export tex_export.cpp)
-target_link_libraries(tex_export PRIVATE psxport_common chdr-static z)
-target_include_directories(tex_export PRIVATE
   ${CMAKE_SOURCE_DIR}/vendor/beetle-psx/deps/libchdr/include)
