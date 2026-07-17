@@ -773,7 +773,16 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
       if (max_frames && frames >= max_frames) break;
     }
   }
-  if (skipped) fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames);
+  if (skipped) {
+    fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames);
+    // CONSUME the skip press: the title front-end polls the pad the instant this returns, so if Start is
+    // still held it reads as a fresh menu press and auto-selects New Game. Wait for Start to be RELEASED
+    // (bounded, ~1s safety cap) before handing back — the game's own StrPlayer consumed it the same way.
+    for (int guard = 0; guard < 250 && (game->pad.buttons & PAD_START) == 0; guard++) {
+      game->pad.pollSdl(); SDL_Delay(4);
+    }
+    start_prev = 0;
+  }
   cfg_logf("fmv", "done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)",
             frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
   audioClose();
