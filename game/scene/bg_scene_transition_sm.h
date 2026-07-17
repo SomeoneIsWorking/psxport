@@ -29,6 +29,19 @@ public:
   // bg_scene_transition_sm state 2 uses the same condition inline). Was rec_dispatch(0x80042728u).
   bool readyForProgress() const;
 
+  // registerOverrides — install the native leaves this class owns into the one override registry.
+  void registerOverrides();
+
+  // opSceneEventArmWait (FUN_80042758): cutscene-script opcode leaf. Sub-state at node+120 drives a
+  // two-step wait: state 0 arms a scene event via SceneEvents::arm(node+114) and, once armed and
+  // node+116 has settled to 0, bumps the sub-state; state 1 polls the readyForProgress predicate
+  // (FUN_80042728). Returns the opcode-progress result in v0. READY-FRAME (sp-24, spills s0/ra).
+  static void opSceneEventArmWait(Core* c);
+
+  // opClearSceneFlag80a (FUN_80042884): cutscene-script opcode leaf — clears the scene sub-state
+  // flag byte at 0x800BF80A and returns 1.
+  static void opClearSceneFlag80a(Core* c);
+
 private:
   // Guest-ABI SM body + verify harness + the tiny native sub-leaves it calls (see .cpp for RE).
   static void body(Core* c);                            // FUN_8002655C

@@ -40,4 +40,16 @@ public:
   // stay reachable by address via rec_dispatch — this method owns the CONTROL FLOW + the id-space
   // routing + the pitch/pan math, not the voice hardware.
   void trigger(int id, int pan, int pitchBend);
+
+  // triggerPanned(id, pan): FUN_80074810 — the two-arg SFX entry. A thin wrapper that fires an
+  // SFX by id with a pan offset and NO pitch bend (pitchBend forced to 0), then tail-calls the
+  // firing primitive FUN_80074590. id is masked to a byte, pan is sign-extended from its low byte.
+  // Mirrors the recomp's 24-byte frame (ra spilled at sp+16) so FUN_80074590 lands on the right
+  // stack. Reachable both directly (shard_4 func_80074810) and via rec_dispatch from overlays.
+  void triggerPanned(int id, int pan);
+
+  // registerOverrides(): wires triggerPanned (0x80074810) into the global override registry so
+  // every caller — direct func_80074810 and rec_dispatch — reaches the native method. Called once
+  // from boot.cpp's register_engine_overrides.
+  void registerOverrides();
 };

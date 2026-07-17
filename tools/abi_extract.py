@@ -875,17 +875,27 @@ def extract_op_sequence(body_lines) -> "OpSequence":
     # Contract/CFG path already excludes these (unreachable_block_count); this coarser linear pass must
     # match it, else a hand-rebuilt LEAF (real body has 0 calls) spuriously FAILs port_check on a phantom
     # trailing call. Track a dead region: entered by an unconditional `return;`, left by the next label.
+    # The recompiler sometimes FOLDS several contiguous guest functions into ONE gen_func_ body (each
+    # with its own frame open + return; e.g. gen_func_80074810 folds the 0x80074810/834/868 sfx trio).
+    # Only the function reached at THIS entry is live; the rest are dead siblings. A single function opens
+    # its frame exactly once at entry and never after a return, so a frame-descent seen INSIDE the post-
+    # return dead region marks a folded-sibling boundary — latch `sibling` and never re-enter reachable
+    # code again (the sibling's own goto/labels would otherwise spuriously reactivate). The Contract/CFG
+    # path already scopes to the first function this way; this makes the linear pass agree.
     label_re = re.compile(r'^[A-Za-z_]\w*:\s*;?')
     dead = False
+    sibling = False
 
     for _line_no, stmt in stream:
         lm = label_re.match(stmt)
-        if lm:                       # a label target re-enters reachable code
+        if lm and not sibling:       # a label target re-enters reachable code (unless in a folded sibling)
             dead = False
             stmt = stmt[lm.end():].strip()
             if not stmt:
                 continue
         if dead:                     # unreachable statement after an unconditional return — skip
+            if not sibling and frame_dec_re.search(stmt):
+                sibling = True       # a new frame opened while dead = start of a folded sibling function
             continue
         # frame open (descent) / close (ascent) — checked before generic +=/-= to avoid double count
         fo = frame_dec_re.search(stmt)

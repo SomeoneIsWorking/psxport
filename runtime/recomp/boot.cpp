@@ -12,6 +12,7 @@
 #include "actor_sm_reward.h"  // class ActorReward — reward/tally window actor SM family
 #include "actor_zoned_attacker.h"  // class ActorZonedAttacker — 0x8014xxxx zoned-attacker sub-behavior cluster
 #include "overlay_gt3gt4.h"        // class OverlayGt3Gt4 — A00-overlay GT3/GT4 packet-emitter cluster
+#include "input.h"                 // class Input — SPU voice-table init leaf (0x80093650)
 #include "overlay_ground_gt3gt4.h" // class OverlayGroundGt3Gt4 — A00-overlay GROUND/SCENE GT3/GT4 cluster
 #include "tile_grid_layer.h"       // class TileGridLayer — A00-overlay field scroll-wrap + tile-grid sprite emitter (0x8011534C/0x80115598)
 #include "widescreen_margin_quad.h" // class WidescreenMarginQuad — A00-overlay widescreen-margin OT.GT4 emitter (0x8013CDD4)
@@ -111,6 +112,10 @@ void register_engine_overrides(Game* game) {
   GraphicsBind::registerOverrides(game);             // recordArrayInit (0x800519E0)
   c->engine.cull.registerOverrides();                // cullWrapper family (0x8007778C/800777FC/80077ACC/800779D0/80077A4C/800778E4)
   c->engine.collision.registerOverrides();           // field-collision leaf cluster (0x80045810/80048034/80048134/80048360/80049760)
+  c->engine.bgSceneTransitionSm.registerOverrides(); // BG scene-transition opcode leaves (0x80042758/80042884)
+  c->engine.audioDispatch.registerOverrides();       // field-audio BGM start/override leaves (0x80075024/80075070)
+  c->engine.sfx.registerOverrides();                 // SFX trigger wrapper (0x80074810)
+  Input::registerOverrides(game);                    // SPU voice-table init leaf (0x80093650)
   SceneEvents::registerOverrides(game);              // scene-event ARM FUN_80040B48 (sole owner; deduped from cube_text_ledger)
   CubeTextLedger::registerOverrides(game);           // cube-text popup ledger deactivate/spawn (0x80040C00/80040AA4)
   ActorTomba::registerOverrides(game);               // postInteractWalk sub-handlers (0x80020364/800205CC/800235A0/80022C78)

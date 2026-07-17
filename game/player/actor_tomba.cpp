@@ -857,6 +857,372 @@ void ActorTomba::mode0ActionGate() {
   else       guest_fn(c, 0x80112B50u, 0x8005A960u);  // swim/water-interaction handler
 }
 
+// =================================================================================
+// Four unowned per-frame Tomba leaves ported byte-faithfully 2026-07-17 (fleet band).
+// Each body is the gen_func_<addr> guest-visible op stream VERBATIM (same stores, calls,
+// order, and — for the two frame ports — the same sp descent + callee-save spills at the
+// gen offsets, restored before return), wrapped as a Core*-taking method. Faithful by
+// construction; port_check.py gates equivalence to the ORACLE. func_80085690/func_80074590
+// are the substrate leaf thunks the gen bodies call (kept as calls, faithful).
+// =================================================================================
+void func_80085690(Core*);   // shard_disp.c — atan2-shaped angle leaf (called by proximityAngleWalk)
+void func_80074590(Core*);   // shard_disp.c — spawn/record leaf (called by rampOffsetStep)
+
+// ORACLE: gen_func_80053968
+// proximityAngleWalk — FUN_80053968. Frame port (frame_size=56): spills s0..s7(r16..r23) at
+// +16/+20/+24/+28/+32/+36/+40/+44 and ra at +48, mirrored verbatim below. Walks the aux list at
+// mem[0x800A0140] (r20 base) with a live per-frame remaining-count byte at 0x800A0182, computing an
+// angle (func_80085690) between each entry and Tomba (r17=a0) against a caller-supplied heading
+// window (r23=a1); on a hit stamps the entry's +43 state byte (and, for the r19!=0 arm, +56 on the
+// 0x800BF840 record). Returns 0/1 in r2.
+void ActorTomba::proximityAngleWalk(Core* c) {
+  c->r[29] = c->r[29] + (uint32_t)-56;
+  c->mem_w32((c->r[29] + (uint32_t)20), c->r[17]);
+  c->r[17] = c->r[4] + c->r[0];
+  c->mem_w32((c->r[29] + (uint32_t)48), c->r[31]);
+  c->mem_w32((c->r[29] + (uint32_t)44), c->r[23]);
+  c->mem_w32((c->r[29] + (uint32_t)40), c->r[22]);
+  c->mem_w32((c->r[29] + (uint32_t)36), c->r[21]);
+  c->mem_w32((c->r[29] + (uint32_t)32), c->r[20]);
+  c->mem_w32((c->r[29] + (uint32_t)28), c->r[19]);
+  c->mem_w32((c->r[29] + (uint32_t)24), c->r[18]);
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[16]);
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16((c->r[17] + (uint32_t)366));
+  { int _t = (c->r[2] == c->r[0]); c->r[23] = c->r[5] + c->r[0]; if (_t) goto L_80053BC8; }
+  c->r[2] = (uint32_t)c->mem_r8((c->r[17] + (uint32_t)384));
+  { int _t = (c->r[2] != c->r[0]); c->r[2] = c->r[0] + c->r[0]; if (_t) goto L_80053BCC; }
+  c->r[3] = (uint32_t)c->mem_r8((c->r[17] + (uint32_t)330));
+  c->r[2] = (uint32_t)(c->r[3] < (uint32_t)12);
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = (uint32_t)32769u << 16; if (_t) goto L_80053BC8; }
+  c->r[2] = c->r[2] + (uint32_t)23492;
+  c->r[3] = c->r[3] << 2;
+  c->r[3] = c->r[3] + c->r[2];
+  c->r[2] = c->mem_r32((c->r[3] + (uint32_t)0));
+  {  switch (c->r[2]) { case 0x800539E4u: goto L_800539E4; case 0x800539F0u: goto L_800539F0; case 0x80053BC8u: goto L_80053BC8; case 0x80053A00u: goto L_80053A00; case 0x80053A10u: goto L_80053A10; default: rec_dispatch(c, c->r[2]); return; } }
+L_800539E4:;
+  c->r[18] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)320));
+  c->r[19] = c->r[0] + c->r[0]; goto L_80053A1C;
+L_800539F0:;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)320));
+  c->r[19] = c->r[0] + c->r[0];
+  c->r[18] = c->r[2] + (uint32_t)2048; goto L_80053A1C;
+L_80053A00:;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)320));
+  c->r[19] = c->r[0] + (uint32_t)1;
+  c->r[18] = c->r[2] + (uint32_t)-1024; goto L_80053A1C;
+L_80053A10:;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)320));
+  c->r[19] = c->r[0] + (uint32_t)2;
+  c->r[18] = c->r[2] + (uint32_t)1024;
+L_80053A1C:;
+  c->r[2] = (uint32_t)8064u << 16;
+  c->r[20] = c->mem_r32((c->r[2] + (uint32_t)320));
+  c->r[2] = (uint32_t)8064u << 16;
+  c->r[2] = (uint32_t)c->mem_r8((c->r[2] + (uint32_t)326));
+  c->r[3] = (uint32_t)8064u << 16;
+  c->mem_w8((c->r[3] + (uint32_t)386), (uint8_t)c->r[2]);
+  c->r[2] = c->r[2] & 255u;
+  { int _t = (c->r[2] == c->r[0]); c->r[21] = c->r[0] + (uint32_t)2; if (_t) goto L_80053BC8; }
+  c->r[2] = (uint32_t)32780u << 16;
+  c->r[22] = c->r[2] + (uint32_t)-2040;
+L_80053A48:;
+  c->r[16] = c->mem_r32((c->r[20] + (uint32_t)0));
+  c->r[2] = (uint32_t)c->mem_r8((c->r[3] + (uint32_t)386));
+  c->r[2] = c->r[2] + (uint32_t)-1;
+  c->mem_w8((c->r[3] + (uint32_t)386), (uint8_t)c->r[2]);
+  c->r[3] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)12));
+  c->r[2] = c->r[0] + (uint32_t)9;
+  { int _t = (c->r[3] == c->r[2]); c->r[20] = c->r[20] + (uint32_t)4; if (_t) goto L_80053A84; }
+  { int _t = (c->r[3] != c->r[21]); c->r[3] = (uint32_t)8064u << 16; if (_t) goto L_80053BB8; }
+  c->r[3] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)2));
+  c->r[2] = c->r[0] + (uint32_t)11;
+  { int _t = (c->r[3] != c->r[2]); c->r[3] = (uint32_t)8064u << 16; if (_t) goto L_80053BB8; }
+L_80053A84:;
+  c->r[2] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)0));
+  c->r[2] = c->r[2] & 1u;
+  { int _t = (c->r[2] == c->r[0]); c->r[3] = (uint32_t)8064u << 16; if (_t) goto L_80053BB8; }
+  { int _t = (c->r[19] != c->r[0]);  if (_t) goto L_80053B18; }
+  c->r[2] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)43));
+  { int _t = (c->r[2] != c->r[21]);  if (_t) goto L_80053BB8; }
+  c->r[4] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)54));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)54));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)46));
+  c->r[4] = c->r[4] - c->r[2];
+  c->r[4] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 16);
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)46));
+  c->r[4] = c->r[0] - c->r[4];
+  c->r[5] = c->r[5] - c->r[2];
+  c->r[5] = c->r[5] << 16;
+  c->r[31] = 0x80053AE0u;
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 16); func_80085690(c);
+  c->r[2] = c->r[2] - c->r[18];
+  c->r[2] = c->r[2] << 20;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  { int _t = ((int32_t)c->r[2] >= 0);  if (_t) goto L_80053AF8; }
+  c->r[2] = c->r[0] - c->r[2];
+L_80053AF8:;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < 4096);
+  { int _t = (c->r[2] == c->r[0]); c->r[3] = (uint32_t)8064u << 16; if (_t) goto L_80053BB8; }
+  { int _t = (c->r[23] != c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_80053BCC; }
+  c->r[2] = c->r[0] + (uint32_t)3;
+  c->mem_w8((c->r[16] + (uint32_t)43), (uint8_t)c->r[2]); goto L_80053BB0;
+L_80053B18:;
+  c->r[2] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)43));
+  c->r[2] = c->r[2] + (uint32_t)-1;
+  c->r[2] = (uint32_t)(c->r[2] < (uint32_t)2);
+  { int _t = (c->r[2] == c->r[0]); c->r[3] = (uint32_t)8064u << 16; if (_t) goto L_80053BB8; }
+  c->r[4] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)54));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)54));
+  c->r[5] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)46));
+  c->r[4] = c->r[4] - c->r[2];
+  c->r[4] = c->r[4] << 16;
+  c->r[4] = (uint32_t)((int32_t)c->r[4] >> 16);
+  c->r[2] = (uint32_t)c->mem_r16((c->r[17] + (uint32_t)46));
+  c->r[4] = c->r[0] - c->r[4];
+  c->r[5] = c->r[5] - c->r[2];
+  c->r[5] = c->r[5] << 16;
+  c->r[31] = 0x80053B60u;
+  c->r[5] = (uint32_t)((int32_t)c->r[5] >> 16); func_80085690(c);
+  c->r[2] = c->r[2] - c->r[18];
+  c->r[2] = c->r[2] << 20;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  { int _t = ((int32_t)c->r[2] >= 0);  if (_t) goto L_80053B78; }
+  c->r[2] = c->r[0] - c->r[2];
+L_80053B78:;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < 4096);
+  { int _t = (c->r[2] == c->r[0]); c->r[3] = (uint32_t)8064u << 16; if (_t) goto L_80053BB8; }
+  { int _t = (c->r[23] != c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_80053BCC; }
+  c->r[2] = c->r[0] + (uint32_t)3;
+  c->mem_w8((c->r[16] + (uint32_t)43), (uint8_t)c->r[2]);
+  c->r[2] = c->r[0] + (uint32_t)1;
+  { int _t = (c->r[19] != c->r[2]);  if (_t) goto L_80053BA8; }
+  c->r[2] = c->r[0] + (uint32_t)130; goto L_80053BAC;
+L_80053BA8:;
+  c->r[2] = c->r[0] + (uint32_t)131;
+L_80053BAC:;
+  c->mem_w8((c->r[22] + (uint32_t)56), (uint8_t)c->r[2]);
+L_80053BB0:;
+  c->r[2] = c->r[0] + (uint32_t)1; goto L_80053BCC;
+L_80053BB8:;
+  c->r[2] = (uint32_t)c->mem_r8((c->r[3] + (uint32_t)386));
+  { int _t = (c->r[2] != c->r[0]);  if (_t) goto L_80053A48; }
+L_80053BC8:;
+  c->r[2] = c->r[0] + c->r[0];
+L_80053BCC:;
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)48));
+  c->r[23] = c->mem_r32((c->r[29] + (uint32_t)44));
+  c->r[22] = c->mem_r32((c->r[29] + (uint32_t)40));
+  c->r[21] = c->mem_r32((c->r[29] + (uint32_t)36));
+  c->r[20] = c->mem_r32((c->r[29] + (uint32_t)32));
+  c->r[19] = c->mem_r32((c->r[29] + (uint32_t)28));
+  c->r[18] = c->mem_r32((c->r[29] + (uint32_t)24));
+  c->r[17] = c->mem_r32((c->r[29] + (uint32_t)20));
+  c->r[16] = c->mem_r32((c->r[29] + (uint32_t)16));
+  c->r[29] = c->r[29] + (uint32_t)56; return;
+}
+
+// ORACLE: gen_func_80054790
+// limbFrameLoad — FUN_80054790. Frameless leaf. On a state-byte (a0+71) change vs the value derived
+// from state table 0x800A42F8, loads per-limb frame offsets from a base (mem[0x800A2FD4]) plus the
+// per-state limb-offset triple (table 0x800A44AC) into the actor's five limb records
+// (a0+196/208/220/204/216), each at record+64. r5(a1)=state index. No return value.
+void ActorTomba::limbFrameLoad(Core* c) {
+  c->r[2] = (uint32_t)32778u << 16;
+  c->r[2] = c->r[2] + (uint32_t)17144;
+  c->r[5] = c->r[5] + c->r[2];
+  c->r[5] = (uint32_t)c->mem_r8((c->r[5] + (uint32_t)0));
+  c->r[2] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)71));
+  c->r[6] = c->r[5] & 255u;
+  { int _t = (c->r[6] == c->r[2]); c->r[2] = (uint32_t)32783u << 16; if (_t) goto L_80054904; }
+  c->r[3] = (uint32_t)32782u << 16;
+  c->mem_w8((c->r[4] + (uint32_t)71), (uint8_t)c->r[5]);
+  c->r[8] = c->mem_r32((c->r[2] + (uint32_t)-12268));
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + (uint32_t)32766));
+  c->r[2] = c->r[2] & 64u;
+  { int _t = (c->r[2] != c->r[0]); c->r[7] = c->r[8] + (uint32_t)4; if (_t) goto L_80054844; }
+  c->r[2] = (uint32_t)32778u << 16;
+  c->r[5] = c->r[2] + (uint32_t)17580;
+  c->r[2] = c->r[6] << 1;
+  c->r[2] = c->r[2] + c->r[6];
+  c->r[5] = c->r[2] + c->r[5];
+  c->r[2] = (uint32_t)c->mem_r8((c->r[5] + (uint32_t)0));
+  c->r[2] = c->r[2] << 2;
+  c->r[2] = c->r[2] + c->r[7];
+  c->r[2] = c->mem_r32((c->r[2] + (uint32_t)0));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)196));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = (uint32_t)c->mem_r8((c->r[5] + (uint32_t)1));
+  c->r[2] = c->r[2] << 2;
+  c->r[2] = c->r[2] + c->r[7];
+  c->r[2] = c->mem_r32((c->r[2] + (uint32_t)0));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)208));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = (uint32_t)c->mem_r8((c->r[5] + (uint32_t)2));
+  c->r[2] = c->r[2] << 2;
+  c->r[2] = c->r[2] + c->r[7];
+  c->r[2] = c->mem_r32((c->r[2] + (uint32_t)0));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)220));
+  c->r[2] = c->r[8] + c->r[2]; goto L_80054900;
+L_80054844:;
+  c->r[2] = c->r[0] + (uint32_t)10;
+  { int _t = (c->r[6] != c->r[2]); c->r[2] = (uint32_t)32778u << 16; if (_t) goto L_80054894; }
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)4));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)196));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = c->mem_r32((c->r[4] + (uint32_t)220));
+  c->mem_w32((c->r[2] + (uint32_t)64), c->r[0]);
+  c->r[2] = c->mem_r32((c->r[4] + (uint32_t)208));
+  c->mem_w32((c->r[2] + (uint32_t)64), c->r[0]);
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)76));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)204));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)80));
+   goto L_800548F8;
+L_80054894:;
+  c->r[5] = c->r[2] + (uint32_t)17580;
+  c->r[2] = c->r[6] << 1;
+  c->r[2] = c->r[2] + c->r[6];
+  c->r[5] = c->r[2] + c->r[5];
+  c->r[2] = (uint32_t)c->mem_r8((c->r[5] + (uint32_t)0));
+  c->r[2] = c->r[2] << 2;
+  c->r[2] = c->r[2] + c->r[7];
+  c->r[2] = c->mem_r32((c->r[2] + (uint32_t)0));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)196));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)16));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)208));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)28));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)220));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)12));
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)204));
+  c->r[2] = c->r[8] + c->r[2];
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+  c->r[2] = c->mem_r32((c->r[7] + (uint32_t)24));
+L_800548F8:;
+  c->r[3] = c->mem_r32((c->r[4] + (uint32_t)216));
+  c->r[2] = c->r[8] + c->r[2];
+L_80054900:;
+  c->mem_w32((c->r[3] + (uint32_t)64), c->r[2]);
+L_80054904:;
+   return;
+}
+
+// ORACLE: gen_func_80060268
+// invincibilityFlashStep — FUN_80060268. Frameless leaf. Reads the global damage/state word at
+// mem[0x800A5354]; on the 0x10 bit sets the a0+361 "hit" bit 2; on the 0x80|0x20 bits runs the
+// invincibility-flash cadence — compares a0+95/327/330, bumps the frame counter at 0x800A2238, and
+// (re)arms a0+361 with the flicker mask (bit0 or bit1). Returns a small code in r2.
+void ActorTomba::invincibilityFlashStep(Core* c) {
+  c->r[2] = (uint32_t)32783u << 16;
+  c->r[3] = (uint32_t)c->mem_r16((c->r[2] + (uint32_t)-12460));
+  c->r[2] = c->r[3] & 16u;
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[3] & 160u; if (_t) goto L_80060294; }
+  c->r[2] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)361));
+  c->r[2] = c->r[2] | 2u;
+  c->mem_w8((c->r[4] + (uint32_t)361), (uint8_t)c->r[2]); goto L_8006031C;
+L_80060294:;
+  { int _t = (c->r[2] == c->r[0]);  if (_t) goto L_8006031C; }
+  c->r[2] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)95));
+  { int _t = (c->r[2] == c->r[0]); c->r[2] = c->r[2] & 1u; if (_t) goto L_800602BC; }
+  c->r[3] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)327));
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[0] + c->r[0]; if (_t) goto L_80060324; }
+L_800602BC:;
+  c->r[2] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)330));
+  c->r[3] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)327));
+  c->r[2] = c->r[2] & 1u;
+  { int _t = (c->r[3] != c->r[2]); c->r[2] = (uint32_t)8064u << 16; if (_t) goto L_8006030C; }
+  c->r[3] = (uint32_t)8064u << 16;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[3] + (uint32_t)568));
+  c->r[2] = c->r[2] + (uint32_t)1;
+  c->mem_w16((c->r[3] + (uint32_t)568), (uint16_t)c->r[2]);
+  c->r[2] = c->r[2] & 65535u;
+  c->r[2] = (uint32_t)(c->r[2] < (uint32_t)6);
+  { int _t = (c->r[2] != c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_800602F8; }
+  c->mem_w8((c->r[4] + (uint32_t)361), (uint8_t)c->r[2]);
+L_800602F8:;
+  c->r[3] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)361));
+  c->r[2] = c->r[0] + (uint32_t)1;
+L_80060300:;
+  c->r[3] = c->r[3] | c->r[2];
+  c->mem_w8((c->r[4] + (uint32_t)361), (uint8_t)c->r[3]); return;
+L_8006030C:;
+  c->mem_w16((c->r[2] + (uint32_t)568), (uint16_t)c->r[0]);
+  c->r[3] = (uint32_t)c->mem_r8((c->r[4] + (uint32_t)361));
+  c->r[2] = c->r[0] + (uint32_t)2; goto L_80060300;
+L_8006031C:;
+  c->r[2] = c->r[0] + c->r[0]; return;
+L_80060324:;
+   return;
+}
+
+// ORACLE: gen_func_80063098
+// rampOffsetStep — FUN_80063098. Frame port (frame_size=24): spills s0(r16)@+16 and ra@+20. Ramps
+// the per-frame offset a0+340 up by 32 (clamped to 512), folds it into a0+66 (added, or subtracted
+// when a0+348==a0+327) and a0+86; when the signed a0+66 falls below 1025 it fires the record leaf
+// func_80074590(a0, 27, 0, 0), writes 136 to mem[0x800BF840], and bumps the a0+7 counter.
+void ActorTomba::rampOffsetStep(Core* c) {
+  c->r[29] = c->r[29] + (uint32_t)-24;
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[16]);
+  c->r[16] = c->r[4] + c->r[0];
+  c->mem_w32((c->r[29] + (uint32_t)20), c->r[31]);
+  c->r[2] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)340));
+  c->r[2] = c->r[2] + (uint32_t)32;
+  c->mem_w16((c->r[16] + (uint32_t)340), (uint16_t)c->r[2]);
+  c->r[2] = c->r[2] << 16;
+  c->r[2] = (uint32_t)((int32_t)c->r[2] >> 16);
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < 513);
+  { int _t = (c->r[2] != c->r[0]); c->r[2] = c->r[0] + (uint32_t)512; if (_t) goto L_800630D0; }
+  c->mem_w16((c->r[16] + (uint32_t)340), (uint16_t)c->r[2]);
+L_800630D0:;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)66));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)340));
+  c->r[5] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)327));
+  c->r[4] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)348));
+  c->r[2] = c->r[2] + c->r[3];
+  { int _t = (c->r[4] != c->r[5]); c->mem_w16((c->r[16] + (uint32_t)66), (uint16_t)c->r[2]); if (_t) goto L_800630F8; }
+  c->r[2] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)86));
+  c->r[2] = c->r[2] - c->r[3]; goto L_80063108;
+L_800630F8:;
+  c->r[2] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)86));
+  c->r[3] = (uint32_t)c->mem_r16((c->r[16] + (uint32_t)340));
+  c->r[2] = c->r[2] + c->r[3];
+L_80063108:;
+  c->mem_w16((c->r[16] + (uint32_t)86), (uint16_t)c->r[2]);
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16((c->r[16] + (uint32_t)66));
+  c->r[2] = (uint32_t)((int32_t)c->r[2] < 1025);
+  { int _t = (c->r[2] != c->r[0]); c->r[4] = c->r[0] + (uint32_t)27; if (_t) goto L_80063148; }
+  c->r[5] = c->r[0] + c->r[0];
+  c->r[31] = 0x8006312Cu;
+  c->r[6] = c->r[5] + c->r[0]; func_80074590(c);
+  c->r[3] = (uint32_t)32780u << 16;
+  c->r[2] = c->r[0] + (uint32_t)136;
+  c->mem_w8((c->r[3] + (uint32_t)-1984), (uint8_t)c->r[2]);
+  c->r[2] = (uint32_t)c->mem_r8((c->r[16] + (uint32_t)7));
+  c->r[2] = c->r[2] + (uint32_t)1;
+  c->mem_w8((c->r[16] + (uint32_t)7), (uint8_t)c->r[2]);
+L_80063148:;
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)20));
+  c->r[16] = c->mem_r32((c->r[29] + (uint32_t)16));
+  c->r[29] = c->r[29] + (uint32_t)24; return;
+}
+
+// gov_ trampolines for the four leaves above (guest ABI: a0..a2 in r4..r6, return in r2 — the
+// method bodies read/write c->r[] directly, so the wrapper just forwards c).
+void ActorTomba::gov_proximityAngleWalk(Core* c)     { c->engine.actorTomba.proximityAngleWalk(c); }
+void ActorTomba::gov_limbFrameLoad(Core* c)          { c->engine.actorTomba.limbFrameLoad(c); }
+void ActorTomba::gov_invincibilityFlashStep(Core* c) { c->engine.actorTomba.invincibilityFlashStep(c); }
+void ActorTomba::gov_rampOffsetStep(Core* c)         { c->engine.actorTomba.rampOffsetStep(c); }
+
 // registerOverrides — wire the 4 postInteractWalk sub-handlers into the global override registry.
 // Guest ABI: a0=G (implicit/unused — G is always ActorTomba::G_ADDR), a1=item, a2=mode where
 // applicable; return via r[2] for the two that produce a v0. See actor_tomba.h for why a
@@ -1003,6 +1369,18 @@ void ActorTomba::registerOverrides(Game* /*game*/) {
   extern void gen_func_800531DC(Core*); engine_set_override_main(0x800531DCu, gov_actionHandler800531DC, gen_func_800531DC);
   extern void gen_func_800660AC(Core*); engine_set_override_main(0x800660ACu, gov_actionHandler800660AC, gen_func_800660AC);
   extern void gen_func_8005EF48(Core*); engine_set_override_main(0x8005EF48u, gov_actionHandler8005EF48, gen_func_8005EF48);
+
+  // Four unowned per-frame leaves (2026-07-17). All have DIRECT substrate func_<addr>(c) callers in
+  // generated/shard_*.c (5/9/8/2 respectively — no rec_dispatch case), so they route through
+  // engine_set_override_main (the oracle-gated main-module setter), not a rec_dispatch-only install.
+  extern void gen_func_80053968(Core*);
+  extern void gen_func_80054790(Core*);
+  extern void gen_func_80060268(Core*);
+  extern void gen_func_80063098(Core*);
+  engine_set_override_main(0x80053968u, gov_proximityAngleWalk,     gen_func_80053968);
+  engine_set_override_main(0x80054790u, gov_limbFrameLoad,          gen_func_80054790);
+  engine_set_override_main(0x80060268u, gov_invincibilityFlashStep, gen_func_80060268);
+  engine_set_override_main(0x80063098u, gov_rampOffsetStep,         gen_func_80063098);
 }
 
 // =================================================================================

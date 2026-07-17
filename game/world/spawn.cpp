@@ -394,6 +394,56 @@ uint32_t Spawn::spawnLiftPlatformChild(uint32_t owner) {   // FUN_8013A730
   return spawnTypedChild(owner, /*cls=*/3, 0x8013A330u, /*type=*/16, /*hasSub=*/false, 0);
 }
 
+// FUN_80031558 — Spawn::spawnEffectChild. One of the near-identical MAIN.EXE "spawn a child effect
+// object" leaves (siblings 0x800310F4/8003116C/800312D4/800313A0/80031470, engine_re.md band 2):
+// allocate an effect node via the per-type dispatcher FUN_8007A980 with (cls=0, type=6, list=1), then
+// on success stamp the fresh node — per-frame handler 0x80029B40 at [+0x1C], list/state byte 32 at
+// [+0x0B], owner back-pointer (arg0) at [+0x10], effect data-table ptr 0x80029F6C at [+0x18], caller
+// sub-index (arg1, low byte) at [+3], and OR 0x80 into the flag byte at [+0x28]. Pool-empty
+// (dispatch()==0) returns 0. The dispatcher FUN_8007A980 and the stamped handler/data addresses stay
+// substrate (content routing). READY-FRAME leaf: the gen body descends sp by 32 and spills the callee-
+// saved regs ra/s1/s0 (r31/r17/r16) at sp+24/+20/+16 with their LIVE incoming values, restoring them
+// before return — the native port mirrors that guest stack frame exactly (docs/faithful-execution.md).
+// ORACLE: gen_func_80031558
+extern void func_8007A980(Core*);   // generated/shard_disp.c — per-type spawn dispatcher (FUN_8007A980)
+uint32_t Spawn::spawnEffectChild(uint32_t owner, uint32_t sub) {
+  Core* c = this->core;
+  c->r[4] = owner;
+  c->r[5] = sub;
+  c->r[29] = c->r[29] + (uint32_t)-32;               // addiu sp,-0x20 — descend the guest frame
+  c->mem_w32((c->r[29] + (uint32_t)20), c->r[17]);   // sw s1,0x14(sp) — LIVE incoming s1
+  c->r[17] = c->r[4] + c->r[0];                       // s1 = owner
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[16]);   // sw s0,0x10(sp) — LIVE incoming s0
+  c->r[16] = c->r[5] + c->r[0];                       // s0 = sub
+  c->r[4] = c->r[0] + c->r[0];                        // dispatch arg cls = 0
+  c->r[5] = c->r[0] + (uint32_t)6;                    // dispatch arg type = 6
+  c->mem_w32((c->r[29] + (uint32_t)24), c->r[31]);   // sw ra,0x18(sp)
+  c->r[31] = 0x80031580u;
+  c->r[6] = c->r[0] + (uint32_t)1; func_8007A980(c);  // dispatch arg list = 1 — FUN_8007A980
+  { int poolEmpty = (c->r[2] == c->r[0]); c->r[3] = (uint32_t)32771u << 16; if (poolEmpty) goto L_poolEmpty; }
+  c->r[3] = c->r[3] + (uint32_t)-25792;               // r3 = 0x80029B40 (per-frame effect handler)
+  c->mem_w32((c->r[2] + (uint32_t)28), c->r[3]);      // child[+0x1C] = handler
+  c->r[3] = c->r[0] + (uint32_t)32;
+  c->mem_w8((c->r[2] + (uint32_t)11), (uint8_t)c->r[3]);  // child[+0x0B] = 32
+  c->r[3] = (uint32_t)32771u << 16;
+  c->r[4] = (uint32_t)c->mem_r8((c->r[2] + (uint32_t)40));  // r4 = child[+0x28] flag byte
+  c->r[3] = c->r[3] + (uint32_t)-24724;               // r3 = 0x80029F6C (effect data table)
+  c->mem_w32((c->r[2] + (uint32_t)16), c->r[17]);     // child[+0x10] = owner
+  c->mem_w32((c->r[2] + (uint32_t)24), c->r[3]);      // child[+0x18] = data table ptr
+  c->mem_w8((c->r[2] + (uint32_t)3), (uint8_t)c->r[16]);  // child[+3] = sub (low byte)
+  c->r[4] = c->r[4] | 128u;
+  c->mem_w8((c->r[2] + (uint32_t)40), (uint8_t)c->r[4]);  // child[+0x28] |= 0x80
+  goto L_epilogue;
+L_poolEmpty:;
+  c->r[2] = c->r[0] + c->r[0];                        // return 0 (pool empty)
+L_epilogue:;
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)24));   // lw ra,0x18(sp)
+  c->r[17] = c->mem_r32((c->r[29] + (uint32_t)20));   // lw s1,0x14(sp)
+  c->r[16] = c->mem_r32((c->r[29] + (uint32_t)16));   // lw s0,0x10(sp)
+  c->r[29] = c->r[29] + (uint32_t)32;                 // addiu sp,0x20 — ascend the guest frame
+  return c->r[2];
+}
+
 // Guest-ABI trampolines (registered via overrides::install): substrate/native rec_dispatch callers
 // reach the 4 native bodies above exactly like the recomp bodies — args in r4/r5, return in r2.
 //
@@ -520,12 +570,18 @@ extern void ov_a00_gen_80139838(Core*);
 extern void ov_a00_gen_8013AC34(Core*);
 extern void ov_a00_gen_8013A730(Core*);
 
+// FUN_80031558 — guest-ABI adapter (args in c->r[4]/c->r[5], return in c->r[2]).
+extern void gen_func_80031558(Core*);
+extern void shard_set_override(uint32_t, void (*)(Core*));
+static void eov_spawnEffectChild(Core* c) { c->r[2] = c->engine.spawn.spawnEffectChild(c->r[4], c->r[5]); }
+
 void Spawn::registerTypedChildOverrides() {
   using overrides::install;
   install(0x801360F4u, "Spawn::spawnQuadRecordChild",   eov_spawnQuadRecordChild,   ov_a00_gen_801360F4);
   install(0x80139838u, "Spawn::spawnSiblingAngleChild", eov_spawnSiblingAngleChild, ov_a00_gen_80139838);
   install(0x8013AC34u, "Spawn::spawnChildTrigChild",    eov_spawnChildTrigChild,    ov_a00_gen_8013AC34);
   install(0x8013A730u, "Spawn::spawnLiftPlatformChild", eov_spawnLiftPlatformChild, ov_a00_gen_8013A730);
+  install(0x80031558u, "Spawn::spawnEffectChild",       eov_spawnEffectChild,       gen_func_80031558, shard_set_override);
 }
 
 // FUN_8007E110 — SCENE-ENTITY SPAWN primitive. RE'd from disas 0x8007E110..0x8007E1B4.

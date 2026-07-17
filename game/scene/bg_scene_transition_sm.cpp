@@ -36,6 +36,16 @@ void rec_super_call(Core*, uint32_t);
 void rec_dispatch(Core*, uint32_t);
 #include "render/screen_fade.h"   // class ScreenFade — the single fade driver
 #include "bg_scene_transition_sm.h"
+#include "core/engine.h"
+#include "override_registry.h"    // overrides::install — the one native-override registry
+
+// Ground-truth substrate bodies (the ORACLE gen leg runs these) + the two still-substrate sub-leaves
+// opSceneEventArmWait calls (kept pure-PSX via their func_ thunks, byte-faithful to the gen body).
+extern void gen_func_80042758(Core*);
+extern void gen_func_80042884(Core*);
+extern void shard_set_override(uint32_t, void (*)(Core*));
+void func_80040B48(Core*);   // SceneEvents::arm (scene-event ARM primitive)
+void func_80042728(Core*);   // BgSceneTransitionSm::readyForProgress predicate thunk
 
 namespace {
 
@@ -43,6 +53,12 @@ constexpr uint32_t SM_FN = 0x8002655Cu;
 constexpr uint32_t P      = 0x80100400u;   // the scene-transition struct (fixed BSS arg a0)
 constexpr uint32_t G_dir  = 0x800BF80Fu;   // DAT_800bf80c._3_1_ — direction/abort byte
 constexpr uint32_t G_req  = 0x1F800236u;   // DAT_1f800236 — scene-transition request code (scratchpad)
+constexpr uint32_t G_flag80a = 0x800BF80Au; // scene sub-state flag byte (in the 0x800BF808 control block)
+
+// script-node field offsets used by the opcode leaves below
+constexpr uint32_t NODE_PARAM0   = 114;    // node+0x72 — (s16) scene-event id / first param
+constexpr uint32_t NODE_PARAM1   = 116;    // node+0x74 — (s16) second param / settle latch
+constexpr uint32_t NODE_SUBSTATE = 120;    // node+0x78 — u8 opcode sub-state
 
 }  // namespace
 
@@ -205,4 +221,65 @@ void BgSceneTransitionSm::verifyBody(Core* c) {
 void BgSceneTransitionSm::step() { verifyBody(core); }
 bool BgSceneTransitionSm::readyForProgress() const {
   return core->mem_r8(0x800BF849u) == 0 && core->mem_r8(0x800ED06Du) == 0;
+}
+
+// -- Cutscene-script opcode leaves (adjacent to readyForProgress in the guest binary) ------------
+//
+// opSceneEventArmWait (FUN_80042758) — READY-FRAME leaf. The gen body descends sp by 24 and spills
+// the callee-saved regs ra/s0 (r31/r16) at sp+20/sp+16 with their LIVE incoming values, restoring
+// them before every return; the native port mirrors that guest stack frame exactly (see
+// docs/faithful-execution.md, game/player/collision.cpp::flatNormal). node comes in a0 (= s0 after
+// the prologue). Both sub-calls (SceneEvents::arm, readyForProgress) stay pure-PSX via their func_
+// thunks with the RE'd jal-site ra constant, byte-faithful to gen.
+// ORACLE: gen_func_80042758
+void BgSceneTransitionSm::opSceneEventArmWait(Core* c) {
+  c->r[29] = c->r[29] + (uint32_t)-24;               // addiu sp,-0x18 — descend the guest frame
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[16]);   // sw s0,0x10(sp) — LIVE incoming s0
+  c->r[16] = c->r[4] + c->r[0];                       // s0 = node (a0)
+  c->mem_w32((c->r[29] + (uint32_t)20), c->r[31]);   // sw ra,0x14(sp)
+  c->r[3] = (uint32_t)c->mem_r8((c->r[16] + NODE_SUBSTATE));
+  { int _t = (c->r[3] == c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_state0; }
+  { int _t = (c->r[3] == c->r[2]); c->r[2] = c->r[0] + c->r[0]; if (_t) goto L_state1; }
+   goto L_ret;
+L_state0:;                                            // state 0 — arm the scene event, latch completion
+  c->r[4] = (uint32_t)(int16_t)c->mem_r16((c->r[16] + NODE_PARAM0));
+  { int _t = ((int32_t)c->r[4] < 0);  if (_t) goto L_advance; }
+  c->r[31] = 0x800427A0u;
+   func_80040B48(c);                                  // SceneEvents::arm(param0)
+  c->r[3] = c->r[0] + (uint32_t)1;
+  { int _t = (c->r[2] != c->r[3]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_ret; }
+  c->r[2] = (uint32_t)(int16_t)c->mem_r16((c->r[16] + NODE_PARAM1));
+  { int _t = (c->r[2] != c->r[0]); c->r[2] = c->r[0] + (uint32_t)1; if (_t) goto L_ret; }
+L_advance:;
+  c->r[2] = (uint32_t)c->mem_r8((c->r[16] + NODE_SUBSTATE));
+  c->r[2] = c->r[2] + (uint32_t)1;
+  c->mem_w8((c->r[16] + NODE_SUBSTATE), (uint8_t)c->r[2]); goto L_ret0;
+L_state1:;                                            // state 1 — poll the scene-progress-ready predicate
+  c->r[31] = 0x800427D8u;
+   func_80042728(c);                                  // readyForProgress
+   goto L_ret;
+L_ret0:;
+  c->r[2] = c->r[0] + c->r[0];
+L_ret:;
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)20));   // lw ra,0x14(sp)
+  c->r[16] = c->mem_r32((c->r[29] + (uint32_t)16));   // lw s0,0x10(sp)
+  c->r[29] = c->r[29] + (uint32_t)24;                 // addiu sp,0x18 — ascend the guest frame
+}
+
+// opClearSceneFlag80a (FUN_80042884) — one-shot opcode leaf: clear the scene sub-state flag byte
+// and return 1. No frame.
+// ORACLE: gen_func_80042884
+void BgSceneTransitionSm::opClearSceneFlag80a(Core* c) {
+  c->mem_w8(G_flag80a, (uint8_t)c->r[0]);   // *0x800BF80A = 0
+  c->r[2] = c->r[0] + (uint32_t)1;          // v0 = 1
+}
+
+// eov_* wrappers — guest-ABI adapters (node in c->r[4], return in c->r[2]).
+static void eov_opSceneEventArmWait(Core* c) { BgSceneTransitionSm::opSceneEventArmWait(c); }
+static void eov_opClearSceneFlag80a(Core* c) { BgSceneTransitionSm::opClearSceneFlag80a(c); }
+
+void BgSceneTransitionSm::registerOverrides() {
+  using overrides::install;
+  install(0x80042758u, "BgSceneTransitionSm::opSceneEventArmWait", eov_opSceneEventArmWait, gen_func_80042758, shard_set_override);
+  install(0x80042884u, "BgSceneTransitionSm::opClearSceneFlag80a", eov_opClearSceneFlag80a, gen_func_80042884, shard_set_override);
 }

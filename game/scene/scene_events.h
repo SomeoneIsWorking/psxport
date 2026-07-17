@@ -47,9 +47,24 @@ public:
   // exact body (found via `codemap.py --conflicts`); it was deduped onto this owner, the same way
   // FUN_80040A58 was deduped onto classSize.
   static void armOverride(Core* c);
+
+  // Scene-command record handlers (r4 = pointer to a command record; ret in r2). Both are leaves —
+  // pure guest-state readers/writers, no frame, no sub-calls.
+  //   delayedTrigger (FUN_80042258): two-phase dwell trigger. Phase 0 resets the dwell timer and
+  //     advances to phase 1; phase 1 latches the record's args into the global param halves per the
+  //     selector's low bits, then fires (returns 1) once the arm-ready byte is set OR the dwell timer
+  //     reaches 500, else keeps waiting (returns 0). Returns 0 for any other phase.
+  //   applyFlagOp   (FUN_80042448): set/OR/AND a byte in the flag table (base 0x800BF850, entry
+  //     @ +argA+324) selected by the record's op mode (0=set, 1=OR, 2=AND); always returns 1.
+  static void delayedTriggerOverride(Core* c);   // FUN_80042258
+  static void applyFlagOpOverride(Core* c);      // FUN_80042448
+
   static void registerOverrides(class Game* game);
 
 private:
   // Guest-ABI arm body (plain fn-pointer shape for the verify gate).
   static uint32_t armBody(Core* c);   // FUN_80040B48
+
+  static uint32_t delayedTrigger(Core* c);   // FUN_80042258 body
+  static uint32_t applyFlagOp(Core* c);      // FUN_80042448 body
 };

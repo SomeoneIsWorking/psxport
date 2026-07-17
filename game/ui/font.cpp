@@ -237,6 +237,36 @@ void Font::drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint
   guest_fn(c, 0x80078CA8u, 0x800793B4u, vertex, kA1Const, size, str);   // FUN_80078CA8 (still unowned)
 }
 
+// ORACLE: gen_func_80079324
+// FUN_80079324 — SIBLING of drawText (0x80079374): the SAME arg-packing wrapper around the same
+// still-unowned emitter FUN_80078CA8, differing only in the a1 constant (0x00080008 = {w:8,h:8},
+// half-height 8x8 glyphs vs drawText's 0x00100008) and the scratchpad advance value it writes to
+// 0x1F800180 before the call (-32 vs drawText's +32), and the tail-call return-address constant
+// (0x80079364 vs 0x800793B4). Byte-faithful to gen_func_80079324; mirrors the guest frame (sp-=32,
+// ra spilled at sp+24) exactly as drawText does — single exit point, safe for GuestFrame RAII.
+void Font::drawTextSmall(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color) {
+  GuestFrame<32, 1> frame(c, kDrawTextSpills);
+
+  // a0' = (int16)x | (y << 16) — packed vertex {x: lo16 sign-extended, y: hi16}
+  uint32_t vertex = (uint32_t)(int32_t)(int16_t)(uint16_t)x | ((uint32_t)y << 16);
+  // a1' = constant 0x00080008 ({w:8, h:8}) — the incoming a1/w argument is discarded, same as drawText.
+  constexpr uint32_t kA1Const = 0x00080008u;
+  // a2' = (int16)w — sign-extended low16(w) only.
+  uint32_t size = (uint32_t)(int32_t)(int16_t)(uint16_t)w;
+
+  // Load a0..a3 exactly as gen does (a3=str passes through the caller's r7 untouched in gen; set it
+  // explicitly here — same value — matching drawText's guest_fn 4th arg).
+  c->r[4] = vertex;
+  c->r[5] = kA1Const;
+  c->r[6] = size;
+  c->r[7] = str;
+
+  c->mem_w16(kScrGlyphAdvance, (uint16_t)-32);   // sh -32,384(v1) — scratchpad advance = -32
+
+  c->mem_w32(c->r[29] + 16, color);         // 5th arg on stack, at the callee's expected slot
+  guest_dispatch(c, 0x80079364u, 0x80078CA8u);   // ra=0x80079364; FUN_80078CA8 (still unowned)
+}
+
 // FUN_80078CA8 — the font/glyph emitter drawText() tail-calls. WIDE-RE TIER DRAFT (2026-07-10,
 // disjoint band), UNWIRED/UNVERIFIED. Faithful to gen_func_80078CA8 (generated/shard_5.c:12298),
 // LIVE BODY ONLY (gen-C lines 1-210; 211-402 is confirmed-unreachable dead code, no label targets
@@ -595,6 +625,17 @@ void ov_drawText(Core* c) {
   Font::drawText(c, x, y, w, str, color);
 }
 
+// ov_drawTextSmall: sibling of ov_drawText for FUN_80079324 — same guest-ABI arg extraction (a0..a2
+// = x,y,w; a3 = str; caller's stack[+16] = color, read BEFORE any descent).
+void ov_drawTextSmall(Core* c) {
+  int32_t x = (int32_t)c->r[4];
+  int32_t y = (int32_t)c->r[5];
+  int32_t w = (int32_t)c->r[6];
+  uint32_t str = c->r[7];
+  uint32_t color = c->mem_r32(c->r[29] + 16u);
+  Font::drawTextSmall(c, x, y, w, str, color);
+}
+
 // iconGlyphTap — FUN_80078988, the SJIS/token ICON-GLYPH string emitter glyphEmit's 0x01..0x04
 // special-char arms call (a0=x, a1=y, a2=size-class w, a3=2-byte-token string; 5th stack arg =
 // OT bucket). RE from gen_func_80078988 (generated/shard_4.c:11216): second scratchpad glyph
@@ -661,6 +702,7 @@ void iconGlyphTap(Core* c) {
 }  // namespace
 
 extern void gen_func_80079374(Core*);
+extern void gen_func_80079324(Core*);
 extern void gen_func_80078CA8(Core*);
 extern void gen_func_80078988(Core*);
 
@@ -669,7 +711,8 @@ void font_wide_re_install() {
   if (done) return;
   done = true;
   extern void engine_set_override_main(uint32_t, OverrideFn, OverrideFn);
-  engine_set_override_main(0x80079374u, ov_drawText,    gen_func_80079374);
+  engine_set_override_main(0x80079374u, ov_drawText,      gen_func_80079374);
+  engine_set_override_main(0x80079324u, ov_drawTextSmall, gen_func_80079324);   // 8x8 sibling of drawText
   engine_set_override_main(0x80078CA8u, Font::glyphEmit, gen_func_80078CA8);
   engine_set_override_main(0x80078988u, iconGlyphTap,   gen_func_80078988);   // icon/SJIS glyph strings
 }

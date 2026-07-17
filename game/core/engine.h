@@ -472,4 +472,24 @@ public:
   //   Engine::areaLoadState's state 7 confirm-branch (quit-confirm accepted -> resume). Ghidra
   //   decomp scratch/decomp/area_load_leaves.c.
   void reloadEntityPool();
+
+  // setAreaStartPos(): guest FUN_80078824. Loads the player's spawn position + facing for the
+  //   current (area,sub-area) from the per-area start-pos table 0x800A54A8[area] -> 8-byte record
+  //   [sub]: writes X/Y/Z (<<16 fixed) to 0x800BF890/894/898 and the facing byte (masked 0x7F) to
+  //   0x800BFE38. Leaf, no frame. Called from the area machine's spawn state.
+  void setAreaStartPos();
+
+  // activeModeCtx(): guest FUN_80086604. Returns the active mode/draw-env context pointer held at
+  //   0x800ABE20. Leaf accessor, no frame.
+  uint32_t activeModeCtx();
+
+  // installModeHandlers(): guest FUN_80086738. Installs the 2-entry mode handler table at
+  //   0x80102444 ([0]=0x800867CC, [1]=Engine::runModeEnter=0x80086764) and zeroes the guard slot
+  //   0x80102440 + trailing slot 0x8010244C. Leaf, no frame. Called from initAlloc's post-init.
+  void installModeHandlers();
+
+  // runModeEnter(): guest FUN_80086764. If both bit0 flags in the mode ctx (*0x800ABE98)[+0]/[+4]
+  //   are set, dispatches the mode-enter handler at 0x800ABE60 (when non-null) and returns 1; else
+  //   returns 0. Ready-FRAME (sp-24, ra@16). One of the handlers installModeHandlers registers.
+  uint32_t runModeEnter();
 };

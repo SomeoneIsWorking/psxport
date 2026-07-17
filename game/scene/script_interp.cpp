@@ -28,6 +28,7 @@
 #include <cstdio>
 
 extern "C" void rec_dispatch(Core* c, uint32_t addr);
+extern void shard_set_override(uint32_t, void (*)(Core*));  // raw module installer — intercepts direct func_X callers
 
 namespace {
 // The four object-field offsets we touch, named for readability. Layout matches the guest exactly
@@ -832,6 +833,157 @@ int ScriptInterp::op31TurnTowardTarget(uint32_t obj) {
 }
 
 // =================================================================================================
+// Resident-leaf sweep (2026-07-17) — five small unowned MAIN.EXE leaves homed on ScriptInterp per
+// the sweep assignment. Each body is BYTE-FAITHFUL to its gen_func_* oracle (same loads/stores/
+// calls/frame, same order); raw r[]/offset literals are renamed to named locals + struct-field
+// constants only (a value-identical rename that never changes a store's width/order — port_check
+// gates it). These are NOT script-opcode handlers; they are generic object/scratchpad helpers that
+// simply had no native home yet.
+namespace {
+// 0x8003170C/0x80031748 family — "cached-tail refresh" object fields (a node ptr + its 4-byte cache
+// slot). Same shape as Collision::listScan's 0x34/0x38 pair, one record wider.
+constexpr uint32_t OBJ_TAIL_NODE_3C = 0x3Cu;  // linked-node head pointer
+constexpr uint32_t OBJ_TAIL_CACHE_40 = 0x40u; // cached "node + hdrlen" pointer (or 0 when pruned)
+
+// 0x80042170 — a "state byte 114" query. +0x72 is a 16-bit kind selector; +0x79 is the byte it
+// matches against; the global secondary-actor slot lives in scratchpad at 0x1F800214.
+constexpr uint32_t OBJ_KIND_114 = 114u;   // 0x72 — i16 selector (0 -> self, 1 -> global actor)
+constexpr uint32_t OBJ_MATCH_121 = 121u;  // 0x79 — match byte
+constexpr uint32_t SPAD_ACTIVE_RECORD = 0x1F800000u + 532u;  // 0x1F800214 — *global* actor record ptr
+
+// 0x80044090 — mirror one status byte from a fixed global into a fixed scratchpad slot.
+constexpr uint32_t GLOBAL_STATUS_SRC = 0x800E0000u + 32426u;  // 0x800E7EAA
+constexpr uint32_t SPAD_STATUS_DST   = 0x1F800000u + 519u;    // 0x1F800207
+
+// 0x80073194 — "advance a wrapping gauge and pulse an event on wrap" record fields.
+constexpr uint32_t OBJ_GAUGE_MODE_70 = 70u;   // 0x46 — 0=count up, 1=count down, else no-op
+constexpr uint32_t OBJ_PULSE_GATE_191 = 191u; // 0xBF — nonzero gates the wrap event pulse
+constexpr uint32_t REC_OUTPUT_10 = 10u;       // gaugeBase + gaugeValue written here each call
+constexpr uint32_t REC_BASE_14   = 14u;       // u16 base
+constexpr uint32_t REC_GAUGE_18  = 18u;       // u16 gauge value, stepped +/-64, wraps at 0
+}  // namespace
+
+// The substrate wrap-event pulse (still-substrate leaf); called with the guest ABI exactly as gen does.
+extern void func_80074590(Core*);
+
+// ORACLE: gen_func_80031708
+// Refresh obj's cached tail: read the head node at +0x3C; if its flag byte (node+3, bit 0x80) is
+// set the node is dead -> clear both the cache slot and the head ptr; otherwise cache node+4 into
+// +0x40. No-op when the head ptr is null. Leaf, no frame.
+void ScriptInterp::refreshCachedTailHi(uint32_t obj) {
+  Core* c = core;
+  const uint32_t node = c->mem_r32(obj + OBJ_TAIL_NODE_3C);
+  if (node == 0) return;
+  if ((c->mem_r8(node + 3) & 0x80u) != 0) {
+    c->mem_w32(obj + OBJ_TAIL_CACHE_40, 0);
+    c->mem_w32(obj + OBJ_TAIL_NODE_3C, 0);
+    return;
+  }
+  c->mem_w32(obj + OBJ_TAIL_CACHE_40, node + 4);
+}
+
+// ORACLE: gen_func_80031744
+// Twin of refreshCachedTailHi with the flag byte at node+0 and the cache offset node+1. Leaf, no frame.
+void ScriptInterp::refreshCachedTailLo(uint32_t obj) {
+  Core* c = core;
+  const uint32_t node = c->mem_r32(obj + OBJ_TAIL_NODE_3C);
+  if (node == 0) return;
+  if ((c->mem_r8(node + 0) & 0x80u) != 0) {
+    c->mem_w32(obj + OBJ_TAIL_CACHE_40, 0);
+    c->mem_w32(obj + OBJ_TAIL_NODE_3C, 0);
+    return;
+  }
+  c->mem_w32(obj + OBJ_TAIL_CACHE_40, node + 1);
+}
+
+// ORACLE: gen_func_80042170
+// "Does the acted-upon actor's match byte equal the selector?" Reads obj's kind selector at +0x72:
+//   0 -> compare obj's own match byte (+0x79) against 1;
+//   1 -> follow the global actor record (scratchpad 0x1F800214) and compare ITS match byte against 1;
+//   else -> 0.
+// Returns 1 on match, 0 otherwise. Leaf, no frame.
+int ScriptInterp::matchesActiveByKind(uint32_t obj) {
+  Core* c = core;
+  const int16_t kind = (int16_t)c->mem_r16(obj + OBJ_KIND_114);
+  if (kind == 0) {
+    return (c->mem_r8(obj + OBJ_MATCH_121) == 1u) ? 1 : 0;
+  }
+  if (kind == 1) {
+    const uint32_t rec = c->mem_r32(SPAD_ACTIVE_RECORD);
+    return (c->mem_r8(rec + OBJ_MATCH_121) == (uint32_t)kind) ? 1 : 0;
+  }
+  return 0;
+}
+
+// ORACLE: gen_func_80044090
+// Mirror a single status byte from the fixed global 0x800E7EAA into the fixed scratchpad slot
+// 0x1F800207, and return 1. Ignores its argument. Leaf, no frame.
+int ScriptInterp::mirrorGlobalStatusByte() {
+  Core* c = core;
+  c->mem_w8(SPAD_STATUS_DST, (uint8_t)c->mem_r8(GLOBAL_STATUS_SRC));
+  return 1;
+}
+
+// ORACLE: gen_func_80073194
+// Advance a wrapping gauge on `rec` (r5) driven by `obj`'s mode byte (r4+0x46): mode 0 steps the
+// u16 gauge (rec+0x12) up by 64, mode 1 steps it down by 64, wrapping to 0 when it crosses the sign
+// boundary. On a wrap (and only if obj's pulse gate +0xBF is nonzero) it fires the substrate wrap
+// event func_80074590(24, 0, 15). Finally writes rec+0x0A = rec+0x0E + rec+0x12 and returns 1 iff a
+// wrap occurred this call, else 0.
+// READY-FRAME: sp-=32; spills r16@+16 (rec), r17@+20 (wrap flag), r31@+24 — LIVE incoming values, in
+// gen instruction order; restored in the epilogue.
+int ScriptInterp::advanceGauge(uint32_t obj, uint32_t rec) {
+  Core* c = core;
+  const uint32_t ra = c->r[31];
+  const uint32_t s16 = c->r[16], s17 = c->r[17];
+
+  c->r[29] -= 32;                           // addiu sp,-0x20
+  c->mem_w32(c->r[29] + 16, s16);           // sw s0,0x10(sp) — LIVE incoming r16
+  c->r[16] = rec;                           // s0 = rec (r5)
+  c->mem_w32(c->r[29] + 24, ra);            // sw ra,0x18(sp)
+  c->mem_w32(c->r[29] + 20, s17);           // sw s1,0x14(sp) — LIVE incoming r17
+
+  const uint32_t mode = c->mem_r8(obj + OBJ_GAUGE_MODE_70);
+  c->r[17] = 0;                             // s1 = wrapped = 0
+  if (mode == 0) {
+    uint32_t g = (uint16_t)(c->mem_r16(c->r[16] + REC_GAUGE_18) + 64u);
+    c->mem_w16(c->r[16] + REC_GAUGE_18, (uint16_t)g);
+    if ((int32_t)(g << 16) > 0) {           // crossed into the positive half -> wrap to 0
+      c->mem_w16(c->r[16] + REC_GAUGE_18, 0);
+      c->r[17] = 1;
+    }
+  } else if (mode == 1) {
+    uint32_t g = (uint16_t)(c->mem_r16(c->r[16] + REC_GAUGE_18) - 64u);
+    c->mem_w16(c->r[16] + REC_GAUGE_18, (uint16_t)g);
+    if ((int32_t)(g << 16) < 0) {           // crossed below zero
+      c->mem_w16(c->r[16] + REC_GAUGE_18, 0);
+      c->r[17] = 1;
+    }
+  }
+
+  if (c->r[17] != 0) {
+    if (c->mem_r8(obj + OBJ_PULSE_GATE_191) != 0) {
+      c->r[4] = 24;
+      c->r[5] = 0;
+      c->r[31] = 0x80073238u;               // jal-site ra (matches gen exactly)
+      c->r[6] = 15;
+      func_80074590(c);                     // wrap event pulse (substrate)
+    }
+  }
+
+  const uint16_t base  = (uint16_t)c->mem_r16(c->r[16] + REC_BASE_14);
+  const uint16_t gauge = (uint16_t)c->mem_r16(c->r[16] + REC_GAUGE_18);
+  const int ret = (int)(c->r[17]);
+  c->mem_w16(c->r[16] + REC_OUTPUT_10, (uint16_t)(base + gauge));
+
+  c->r[31] = c->mem_r32(c->r[29] + 24);
+  c->r[17] = c->mem_r32(c->r[29] + 20);
+  c->r[16] = c->mem_r32(c->r[29] + 16);
+  c->r[29] += 32;
+  return ret;
+}
+
+// =================================================================================================
 // Frontier-tier wiring (2026-07-10) — promote the §9-verified opcode drafts to VERIFIED ownership.
 // Guest ABI per the override registry's contract: obj in c->r[4], ret in c->r[2]. step()'s dispatch
 // loop already calls rec_dispatch(c, handler) for every non-0x3E opcode (with sp/ra saved+restored
@@ -844,6 +996,13 @@ void eov_op06TestSceneFlag(Core* c)            { c->r[2] = (uint32_t)c->engine.s
 void eov_op34ClaimGate(Core* c)                { c->r[2] = (uint32_t)c->engine.script.op34ClaimGate(c->r[4]); }
 void eov_op36MoveTowardScriptTarget(Core* c)   { c->r[2] = (uint32_t)c->engine.script.op36MoveTowardScriptTarget(c->r[4]); }
 void eov_op31TurnTowardTarget(Core* c)         { c->r[2] = (uint32_t)c->engine.script.op31TurnTowardTarget(c->r[4]); }
+
+// Resident-leaf sweep (2026-07-17) — guest ABI: args in c->r[4..5], ret in c->r[2].
+void eov_refreshCachedTailHi(Core* c) { c->engine.script.refreshCachedTailHi(c->r[4]); }
+void eov_refreshCachedTailLo(Core* c) { c->engine.script.refreshCachedTailLo(c->r[4]); }
+void eov_matchesActiveByKind(Core* c) { c->r[2] = (uint32_t)c->engine.script.matchesActiveByKind(c->r[4]); }
+void eov_mirrorGlobalStatusByte(Core* c) { c->r[2] = (uint32_t)c->engine.script.mirrorGlobalStatusByte(); }
+void eov_advanceGauge(Core* c) { c->r[2] = (uint32_t)c->engine.script.advanceGauge(c->r[4], c->r[5]); }
 }  // namespace
 
 extern void gen_func_80042090(Core*);
@@ -851,6 +1010,11 @@ extern void gen_func_800420AC(Core*);
 extern void gen_func_80042E10(Core*);
 extern void gen_func_80043108(Core*);
 extern void gen_func_80041468(Core*);
+extern void gen_func_80031708(Core*);
+extern void gen_func_80031744(Core*);
+extern void gen_func_80042170(Core*);
+extern void gen_func_80044090(Core*);
+extern void gen_func_80073194(Core*);
 
 void ScriptInterp::registerOverrides() {
   using overrides::install;   // opcode leaves reached only via ScriptInterp::step rec_dispatch — setter omitted
@@ -859,4 +1023,12 @@ void ScriptInterp::registerOverrides() {
   install(kOp34Addr, "ScriptInterp::op34ClaimGate",              eov_op34ClaimGate,              gen_func_80042E10);
   install(kOp36Addr, "ScriptInterp::op36MoveTowardScriptTarget", eov_op36MoveTowardScriptTarget, gen_func_80043108);
   install(kOp31Addr, "ScriptInterp::op31TurnTowardTarget",       eov_op31TurnTowardTarget,       gen_func_80041468);
+
+  // Resident-leaf sweep (2026-07-17). These leaves are reached via direct func_X(c) callers as well
+  // as any rec_dispatch, so install the setter (shard_set_override) to intercept both.
+  install(0x80031708u, "ScriptInterp::refreshCachedTailHi",   eov_refreshCachedTailHi,   gen_func_80031708, shard_set_override);
+  install(0x80031744u, "ScriptInterp::refreshCachedTailLo",   eov_refreshCachedTailLo,   gen_func_80031744, shard_set_override);
+  install(0x80042170u, "ScriptInterp::matchesActiveByKind",   eov_matchesActiveByKind,   gen_func_80042170, shard_set_override);
+  install(0x80044090u, "ScriptInterp::mirrorGlobalStatusByte", eov_mirrorGlobalStatusByte, gen_func_80044090, shard_set_override);
+  install(0x80073194u, "ScriptInterp::advanceGauge",          eov_advanceGauge,          gen_func_80073194, shard_set_override);
 }

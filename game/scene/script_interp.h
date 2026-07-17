@@ -236,4 +236,13 @@ public:
   // stepEventPulse/advanceStep) are reached only as C++ callees of the two opcode handlers, not
   // separately dispatched, so they need no table entry of their own.
   void registerOverrides();
+
+  // ---- Resident-leaf sweep (2026-07-17) — five small unowned MAIN.EXE leaves homed here. NOT script
+  // opcodes; generic object/scratchpad helpers with no prior native owner. Byte-faithful to their
+  // gen_func_* oracles (see script_interp.cpp for the per-function commentary + the ORACLE markers).
+  void refreshCachedTailHi(uint32_t obj);   // FUN_80031708 — cache tail node+4, flag byte @ node+3
+  void refreshCachedTailLo(uint32_t obj);   // FUN_80031744 — cache tail node+1, flag byte @ node+0
+  int  matchesActiveByKind(uint32_t obj);   // FUN_80042170 — self/global match-byte query (0/1)
+  int  mirrorGlobalStatusByte();            // FUN_80044090 — copy 0x800E7EAA -> scratchpad 0x1F800207
+  int  advanceGauge(uint32_t obj, uint32_t rec);  // FUN_80073194 — wrapping gauge + wrap-event pulse (ready-frame)
 };

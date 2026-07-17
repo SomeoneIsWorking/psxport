@@ -445,6 +445,44 @@ void Cull::cullWrapper() { Core* c = core;
   wrapFrame(RA_8007778C);                      // FUN_8007712C native — was rec_dispatch
 }
 
+// FUN_80077870 — cull-wrapper variant: byte-identical to cullWrapper (obj in c->r[4], deltas
+// computed from obj+0x2E/0x32/0x36 vs cam@0x1F8000D2/D6/DA), but writes 0x1F800084 = 1 (vs 0 for
+// cullWrapper, 2 for cullWrapperFlag2, 4 for cullWrap77acc). Reached by a direct func_ call in the
+// substrate + by-address from beh_typed_variant_router (via leafr1), never a plain native call.
+//
+// Its gen body is the SAME shared shape as the whole cullWrapper* family (`addiu sp,-24;
+// sw ra,16(sp); ...; move ra,0x800778D4; jal FUN_8007712C; lw ra,16(sp); addiu sp,24`). cullWrapper
+// factors that into wrapFrame(); here it is written INLINE in the gen's store order (ra spill first,
+// then the two flag writes) so the guest-frame descent/spill + the internal FUN_8007712C call are
+// visible to the per-method port_check gate rather than hidden inside the wrapFrame() helper. The
+// inner cull runs through performBaseCullFramed() — FUN_8007712C's OWN nested -40 frame — exactly as
+// wrapFrame() does, so the guest stack is byte-identical to the substrate (and to cullWrapper).
+// port_check verdict is UNPROVABLE, not FAIL: frame sizes (24/24), the store-width sequence
+// ([32,32,32]) and the call count + ra-const (0x800778D4) all match the oracle; only the call TARGET
+// is unresolvable, because the native reaches FUN_8007712C's body as the owned performBaseCullFramed
+// method rather than a substrate func_8007712C(c) — inherent to owning the cull body natively.
+// ORACLE: gen_func_80077870
+void Cull::cullWrapperFlag1() {
+  Core* c = core;
+  uint32_t obj = c->r[4];
+  uint32_t savedRa = c->r[31];
+  c->r[29] -= 24;                                      // addiu sp,-24
+  c->mem_w32(c->r[29] + 16, savedRa);                  // sw ra,16(sp) — LIVE incoming ra
+  uint16_t camx = (uint16_t)c->mem_r16(0x1F8000D2u);   // subtracted from obj+0x2E → r[5]
+  uint16_t camz = (uint16_t)c->mem_r16(0x1F8000D6u);   // subtracted from obj+0x32 → r[6]
+  uint16_t camy = (uint16_t)c->mem_r16(0x1F8000DAu);   // subtracted from obj+0x36 → r[7]
+  c->mem_w32(0x1F800080u, 0);
+  c->mem_w32(0x1F800084u, 1);
+  c->r[5] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x2E) - camx);
+  c->r[7] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x36) - camy);
+  c->r[6] = (uint32_t)(int32_t)(int16_t)(uint16_t)((uint16_t)c->mem_r16(obj + 0x32) - camz);
+  c->r[4] = obj;
+  c->r[31] = 0x800778D4u;                              // move ra,0x800778D4 — jal FUN_8007712C return
+  performBaseCullFramed();                             // FUN_8007712C native (its own nested -40 frame)
+  c->r[31] = c->mem_r32(c->r[29] + 16);                // lw ra,16(sp)
+  c->r[29] += 24;                                      // addiu sp,24
+}
+
 // FUN_800777FC — cull-wrapper variant: same taxi shape as cullWrapper (obj in c->r[4], deltas
 // computed from obj+0x2E/0x32/0x36 vs cam@0x1F8000D2/D6/DA), but writes 0x1F800084 = 2 (vs 0 for
 // cullWrapper). RE'd from disas 0x800777FC..0x8007786C. 3 callers in beh_id_compare_motion_dispatch.
@@ -582,12 +620,14 @@ void Cull::cullWrapperOffsetY() { Core* c = core;
 extern void shard_set_override(uint32_t, void (*)(Core*));
 
 static void eov_cullWrapper(Core* c)             { c->engine.cull.cullWrapper(); }
+static void eov_cullWrapperFlag1(Core* c)        { c->engine.cull.cullWrapperFlag1(); }
 static void eov_cullWrapperFlag2(Core* c)        { c->engine.cull.cullWrapperFlag2Framed(); }
 static void eov_cullWrap77acc(Core* c)           { c->engine.cull.cullWrap77accFramed(); }
 static void eov_cullWrapperOffset(Core* c)       { c->engine.cull.cullWrapperOffset(); }
 static void eov_cullWrapperOffsetFlag1(Core* c)  { c->engine.cull.cullWrapperOffsetFlag1(); }
 static void eov_cullWrapperOffsetY(Core* c)      { c->engine.cull.cullWrapperOffsetY(); }
 
+extern void gen_func_80077870(Core*);
 extern void gen_func_8007778C(Core*);
 extern void gen_func_800777FC(Core*);
 extern void gen_func_80077ACC(Core*);
@@ -597,6 +637,7 @@ extern void gen_func_800778E4(Core*);
 
 void Cull::registerOverrides() {
   using overrides::install;
+  install(0x80077870u, "Cull::cullWrapperFlag1",       eov_cullWrapperFlag1,       gen_func_80077870, shard_set_override);
   install(0x8007778Cu, "Cull::cullWrapper",            eov_cullWrapper,            gen_func_8007778C, shard_set_override);
   install(0x800777FCu, "Cull::cullWrapperFlag2",       eov_cullWrapperFlag2,       gen_func_800777FC, shard_set_override);
   install(0x80077ACCu, "Cull::cullWrap77acc",          eov_cullWrap77acc,          gen_func_80077ACC, shard_set_override);

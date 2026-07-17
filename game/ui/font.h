@@ -92,6 +92,21 @@ public:
   //   on-screen coordinates).
   static void drawText(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color);
 
+  // drawTextSmall(x, y, w, str, color): FUN_80079324 — SIBLING of drawText (0x80079374). Identical
+  //   arg-packing wrapper around the same font/glyph emitter FUN_80078CA8, differing ONLY in the two
+  //   fixed constants it feeds the emitter (confirmed byte-for-byte against gen_func_80079324,
+  //   generated/shard_6.c, vs gen_func_80079374):
+  //     a1'          = 0x00080008 instead of 0x00100008 — {w:8, h:8}; low16=8 lands in the glyph
+  //                    scratch struct's +16 field (per-glyph width scale), high16=0x08 is the glyph
+  //                    HEIGHT (drawText passes 0x10=16). So this entry draws HALF-HEIGHT (8x8) text.
+  //     *0x1F800180  = -32 instead of +32 — the fixed per-call horizontal-advance scratchpad value the
+  //                    emitter reads back in its glyph-draw arm (role unconfirmed; a fixed constant,
+  //                    not derived from any argument).
+  //   Everything else is identical: a0' = (int16)x | (y<<16) packed vertex, a2' = (int16)w, a3' = str,
+  //   stack[+16] = color; mirrors the guest frame (sp-=32, ra spilled at sp+24) and tail-calls
+  //   FUN_80078CA8 with ra = 0x80079364. See drawText's doc above for the full ABI trace.
+  static void drawTextSmall(Core* c, int32_t x, int32_t y, int32_t w, uint32_t str, uint32_t color);
+
   // glyphEmit(): FUN_80078CA8 — the font/glyph EMITTER drawText() tail-calls. WIDE-RE TIER DRAFT
   //   (2026-07-10, disjoint band), UNWIRED/UNVERIFIED (docs/fleet-workflow.md §6/§9 — no override
   //   registration, no SBS run; needs the line-by-line re-verify §9 requires before wiring).

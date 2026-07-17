@@ -92,6 +92,18 @@ public:
   // themselves; this method only manipulates the queue. Was rec_dispatch(0x80077EBCu) in 5+ handlers.
   uint32_t enqueueVisibleClass4(uint32_t obj);   // returns v0 (new count on push, 0 on cap-hit)
 
+  // cullWrapperFlag1 (FUN_80077870): CULL WRAPPER variant of cullWrapper — same taxi shape (obj in
+  // c->r[4], camera-relative delta computed from obj+0x2E/0x32/0x36 vs cam@0x1F8000D2/D6/DA), but
+  // writes MODE flag *(u32)0x1F800084 = 1 (vs cullWrapper's 0 and cullWrapperFlag2's 2) before
+  // dispatching to the base cull body. FRAMED — shares the family's -24 frame, written INLINE (in the
+  // gen store order) rather than via wrapFrame() so the frame+call are visible to port_check; the
+  // inner cull still runs through performBaseCullFramed() (FUN_8007712C's nested -40 frame), so the
+  // guest stack is byte-identical to cullWrapper. Reached only through the guest-ABI trampoline
+  // (eov_cullWrapperFlag1) — the substrate reaches it by direct func_ call and beh_typed_variant_router
+  // routes it by address, both through the override thunk, never as a plain native C++ call, so no
+  // separate unframed public entry is needed.
+  void cullWrapperFlag1();
+
   // cullWrapperOffset (FUN_800779D0): cull-wrapper variant — caller-supplied 3-component OFFSET
   // (a1/a2/a3) is ADDED to the object's own position (obj+0x2E/0x32/0x36) before the camera-
   // relative subtraction, flags 0/0 (same as cullWrapper). Taxi: c->r[4]=obj, r[5]/[6]/[7]=offset.

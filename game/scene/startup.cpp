@@ -246,3 +246,51 @@ void Engine::initSubsystems() {
   initInput();                                 // input subsystem init (FUN_80087a60->80086970) — owned native
   c->r[29] = sp; c->r[31] = ra;          // mirror epilogue: addiu sp,+0x18; jr ra
 }
+
+// FUN_80086604 — Engine::activeModeCtx. Accessor: returns the active mode/draw-env context pointer
+// held at the mode-state global 0x800ABE20. Leaf, no frame. (The gen body's trailing func_80086620
+// is a fall-through decompiler artifact past the jr ra — not a callee.)
+// ORACLE: gen_func_80086604
+uint32_t Engine::activeModeCtx() {
+  Core* c = this->core;
+  return c->mem_r32(0x800ABE20);       // active mode/draw-env context ptr
+}
+
+// FUN_80086738 — Engine::installModeHandlers. Installs the mode handler table at 0x80102444:
+// [+0] = 0x800867CC, [+4] = 0x80086764 (Engine::runModeEnter); zeroes the guard slot [-4]
+// (0x80102440) and the trailing slot [+8] (0x8010244C). Leaf, no frame. Called from initAlloc.
+// ORACLE: gen_func_80086738
+void Engine::installModeHandlers() {
+  Core* c = this->core;
+  const uint32_t TABLE = 0x80102444u;                  // mode handler table base
+  c->mem_w32(TABLE + 0, 0x800867CCu);                  // handler[0]
+  c->mem_w32(TABLE + 4, 0x80086764u);                  // handler[1] = Engine::runModeEnter
+  c->mem_w32(TABLE - 4, 0);                             // guard slot 0x80102440
+  c->mem_w32(TABLE + 8, 0);                             // trailing slot 0x8010244C
+}
+
+// FUN_80086764 — Engine::runModeEnter. If both bit0 flags in the mode ctx (*0x800ABE98)[+0]/[+4]
+// are set, dispatches the mode-enter handler at 0x800ABE60 (when non-null) and returns 1; otherwise
+// returns 0. Ready-FRAME: sp descends 24, ra spilled at +16 (no callee-save s-regs). The ctx ptr is
+// loaded BEFORE the frame descent, matching the guest.
+// PORT_CHECK: UNPROVABLE — the mode-enter dispatch is an INDIRECT call through the runtime pointer
+// at 0x800ABE60 (guest jalr v0), so port_check cannot statically resolve the target; the oracle does
+// the identical indirect rec_dispatch(c, *0x800ABE60) with ra=0x800867B8. Frame + flag-gate + ra
+// constant verified by hand against gen_func_80086764. Not a divergence.
+// ORACLE: gen_func_80086764
+uint32_t Engine::runModeEnter() {
+  Core* c = this->core;
+  uint32_t ctx = c->mem_r32(0x800ABE98);               // mode ctx ptr (loaded before frame descent)
+  c->r[29] = c->r[29] + (uint32_t)-24;                 // addiu sp,-0x18 — descend the guest frame
+  c->mem_w32(c->r[29] + 16, c->r[31]);                 // sw ra,0x10(sp) — LIVE incoming ra
+  uint32_t result = 0;
+  if ((c->mem_r32(ctx + 4) & 1u) != 0 &&
+      (c->mem_r32(ctx + 0) & 1u) != 0) {               // both mode flags armed
+    uint32_t handler = c->mem_r32(0x800ABE60);         // mode-enter handler
+    if (handler != 0) { c->r[31] = 0x800867B8u; rec_dispatch(c, handler); }  // jalr handler
+    result = 1;
+  }
+  c->r[31] = c->mem_r32(c->r[29] + 16);                // lw ra,0x10(sp)
+  c->r[29] = c->r[29] + (uint32_t)24;                  // addiu sp,+0x18 — ascend the guest frame
+  return result;
+}

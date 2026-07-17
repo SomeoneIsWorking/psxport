@@ -129,6 +129,17 @@ private:
   static void gov_actionHandler800660AC(Core* c);
   static void gov_actionHandler8005EF48(Core* c);
 
+  // Four unowned per-frame leaves ported byte-faithfully 2026-07-17 (guest ABI: a0=r4 etc; body
+  // reads/writes c->r[] directly). gov_ trampolines wire them via engine_set_override_main.
+  void proximityAngleWalk(Core* c);      // FUN_80053968 — aux-list angle-window proximity walk (frame 56)
+  void limbFrameLoad(Core* c);           // FUN_80054790 — per-state limb frame-offset loader (frameless)
+  void invincibilityFlashStep(Core* c);  // FUN_80060268 — invincibility/hit blink-flash cadence (frameless)
+  void rampOffsetStep(Core* c);          // FUN_80063098 — +32 ramp folded into a0+66/+86, spawn at <1025 (frame 24)
+  static void gov_proximityAngleWalk(Core* c);
+  static void gov_limbFrameLoad(Core* c);
+  static void gov_invincibilityFlashStep(Core* c);
+  static void gov_rampOffsetStep(Core* c);
+
   // Sub-handlers of interactWalk — kept private since the type-dispatch loop is the only caller.
   void proximityCheck    (uint32_t item);     // FUN_80022060
   void type4GuardedCheck (uint32_t item);     // FUN_80114E74

@@ -3399,6 +3399,25 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
 }
 
 
+// FUN_80078824 — Engine::setAreaStartPos. Loads the player's per-area spawn position + facing from
+// the start-pos table 0x800A54A8[area] (word = the area's 8-byte-record sub-table), record[sub]:
+// three int16 coords stored <<16 fixed to 0x800BF890/894/898, facing byte (masked 0x7F) to
+// 0x800BFE38. Leaf, no frame, no callees.
+// ORACLE: gen_func_80078824
+void Engine::setAreaStartPos() {
+  Core* c = this->core;
+  const uint32_t START_TABLE = 0x800A54A8u;              // per-area start-pos table base
+  uint32_t area  = c->mem_r8(0x800BF870);                // current area index
+  uint32_t sub   = c->mem_r8(0x800BF871);                // current sub-area index
+  uint32_t rec   = c->mem_r32(START_TABLE + (area << 2));// area's 8-byte-record sub-table
+  rec += sub << 3;                                        // record[sub]
+  c->mem_w32(0x800BF890, (uint32_t)(int16_t)c->mem_r16(rec + 0) << 16);  // start X (<<16 fixed)
+  c->mem_w32(0x800BF894, (uint32_t)(int16_t)c->mem_r16(rec + 2) << 16);  // start Y
+  c->mem_w32(0x800BF898, (uint32_t)(int16_t)c->mem_r16(rec + 4) << 16);  // start Z
+  c->mem_w8(0x800BFE38, c->mem_r8(rec + 6) & 0x7Fu);                     // facing byte
+}
+
+
 // ── Engine anim-leaf overrides (phase-3 fallthrough-for-already-native, 2026-07-15) ─────────────────
 // animTick (FUN_8004190C) and walkStart (FUN_80054D14) are native Engine methods, but the guest
 // addresses were registered NOWHERE — so their rec_dispatch/callObj callers (beh_actor_tomba_proximity_
@@ -3409,13 +3428,25 @@ int Engine::stage0AdvanceSkip(uint8_t& step) {
 extern void shard_set_override(uint32_t, void (*)(Core*));
 extern void gen_func_8004190C(Core*);
 extern void gen_func_80054D14(Core*);
+extern void gen_func_80078824(Core*);   // Engine::setAreaStartPos (engine.cpp)
+extern void gen_func_80086604(Core*);   // Engine::activeModeCtx     (startup.cpp)
+extern void gen_func_80086738(Core*);   // Engine::installModeHandlers (startup.cpp)
+extern void gen_func_80086764(Core*);   // Engine::runModeEnter      (startup.cpp)
 namespace {
 void ov_engineAnimTick(Core* c)  { c->r[2] = c->engine.animTick(c->r[4]); }
 void ov_engineWalkStart(Core* c) { c->r[2] = c->engine.walkStart(c->r[4], c->r[5], (int16_t)c->r[6]); }
+void ov_engineSetAreaStartPos(Core* c)   { c->engine.setAreaStartPos(); }
+void ov_engineActiveModeCtx(Core* c)     { c->r[2] = c->engine.activeModeCtx(); }
+void ov_engineInstallModeHandlers(Core* c) { c->engine.installModeHandlers(); }
+void ov_engineRunModeEnter(Core* c)      { c->r[2] = c->engine.runModeEnter(); }
 }  // namespace
 
 void RegisterEngineAnimLeafOverrides(Game* /*game*/) {
   using overrides::install;
   install(0x8004190Cu, "Engine::animTick",  ov_engineAnimTick,  gen_func_8004190C, shard_set_override);
   install(0x80054D14u, "Engine::walkStart", ov_engineWalkStart, gen_func_80054D14, shard_set_override);
+  install(0x80078824u, "Engine::setAreaStartPos",     ov_engineSetAreaStartPos,     gen_func_80078824, shard_set_override);
+  install(0x80086604u, "Engine::activeModeCtx",       ov_engineActiveModeCtx,       gen_func_80086604, shard_set_override);
+  install(0x80086738u, "Engine::installModeHandlers", ov_engineInstallModeHandlers, gen_func_80086738, shard_set_override);
+  install(0x80086764u, "Engine::runModeEnter",        ov_engineRunModeEnter,        gen_func_80086764, shard_set_override);
 }

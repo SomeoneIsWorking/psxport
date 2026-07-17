@@ -18,6 +18,16 @@
 
 #include "audio/audio_dispatch.h"
 #include "core.h"
+#include "core/engine.h"
+#include "override_registry.h"   // overrides::install — the one native-override registry
+
+// Byte-exact ready-frame ports below install by guest address into the ONE override registry so
+// every caller (substrate included) reaches the native method. gen_func_* = the recomp oracle body.
+extern void shard_set_override(uint32_t, void (*)(Core*));
+extern void gen_func_80075024(Core*);
+extern void gen_func_80075070(Core*);
+extern void func_800750D8(Core*);   // AudioDispatch::dispatch3Way leaf (native-owned; routed via dispatch)
+extern void func_80075CEC(Core*);   // audio fade-target setter (FUN_80075CEC)
 
 // AudioDispatch::dispatch3Way — native ownership of FUN_800750D8 (Ghidra decomp
 // scratch/decomp/fun_800750d8_v2.c). Returns the flag/settle result via c->r[2] as well as via
@@ -110,4 +120,67 @@ void AudioDispatch::zoneTransitionSetup(int16_t idx) { Core* c = core;
   c->r[6] = tail;
   c->r[7] = (uint32_t)group;
   rec_dispatch(c, 0x8001D2A8u);                       // XA/voice fetch entry (still substrate)
+}
+
+// AudioDispatch::selectStateRemap — native ownership of FUN_80075024. Maps the incoming slot to a
+// state index (19 when slot == 5, else 20), runs dispatch3Way(stateIdx, 1) via the FUN_800750D8
+// leaf, publishes stateIdx to the scratchpad state-index byte 0x1F80023B (same tail as selectState)
+// and clears the text/audio state byte 0x800BE22B. READY-FRAME leaf: the gen body descends sp by 24
+// and spills ra/s0 (r31/r16) at sp+20/+16 with their LIVE incoming values, restoring before return
+// — the native port mirrors that guest stack frame exactly (see docs/faithful-execution.md,
+// game/player/collision.cpp::flatNormal).
+// ORACLE: gen_func_80075024
+void AudioDispatch::selectStateRemap(uint8_t slot) {
+  Core* c = this->core;
+  c->r[4] = slot;
+  c->r[29] = c->r[29] + (uint32_t)-24;               // addiu sp,-0x18 — descend the guest frame
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[16]);   // sw s0,0x10(sp) — LIVE incoming s0
+  c->r[16] = c->r[0] + (uint32_t)20;                 // stateIdx = 20 (default)
+  c->r[4] = c->r[4] & 255u;
+  c->r[2] = c->r[0] + (uint32_t)5;
+  { int _t = (c->r[4] != c->r[2]); c->mem_w32((c->r[29] + (uint32_t)20), c->r[31]); if (_t) goto L_80075044; }  // sw ra,0x14(sp)
+  c->r[16] = c->r[0] + (uint32_t)19;                 // slot == 5 → stateIdx = 19
+L_80075044:;
+  c->r[4] = c->r[16] + c->r[0];
+  c->r[31] = 0x80075050u;
+  c->r[5] = c->r[0] + (uint32_t)1; func_800750D8(c); // dispatch3Way(stateIdx, 1)
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)20));  // lw ra,0x14(sp)
+  c->r[2] = (uint32_t)8064u << 16;
+  c->mem_w8((c->r[2] + (uint32_t)571), (uint8_t)c->r[16]);   // 0x1F80023B = stateIdx (state-index byte)
+  c->r[16] = c->mem_r32((c->r[29] + (uint32_t)16));  // lw s0,0x10(sp)
+  c->r[2] = (uint32_t)32780u << 16;
+  c->mem_w8((c->r[2] + (uint32_t)-7637), (uint8_t)c->r[0]);  // 0x800BE22B = 0 (text/audio state byte)
+  c->r[29] = c->r[29] + (uint32_t)24; return;        // addiu sp,0x18 — ascend the guest frame
+}
+
+// AudioDispatch::publishStateFade — native ownership of FUN_80075070. Publishes the incoming index
+// to the scratchpad state-index byte 0x1F80023B, sets the text/audio state byte 0x800BE22B = 1, then
+// runs the audio fade-target setter FUN_80075CEC(0) (still substrate). READY-FRAME leaf: the gen
+// body descends sp by 24 and spills ra (r31) at sp+16 with its LIVE incoming value, restoring before
+// return — the native port mirrors that guest stack frame exactly.
+// ORACLE: gen_func_80075070
+void AudioDispatch::publishStateFade(uint8_t idx) {
+  Core* c = this->core;
+  c->r[4] = idx;
+  c->r[29] = c->r[29] + (uint32_t)-24;               // addiu sp,-0x18 — descend the guest frame
+  c->r[2] = (uint32_t)8064u << 16;
+  c->r[3] = (uint32_t)32780u << 16;
+  c->mem_w8((c->r[2] + (uint32_t)571), (uint8_t)c->r[4]);    // 0x1F80023B = idx (state-index byte)
+  c->r[2] = c->r[0] + (uint32_t)1;
+  c->r[4] = c->r[0] + c->r[0];                       // fade-target arg = 0
+  c->mem_w32((c->r[29] + (uint32_t)16), c->r[31]);   // sw ra,0x10(sp) — LIVE incoming ra
+  c->r[31] = 0x80075094u;
+  c->mem_w8((c->r[3] + (uint32_t)-7637), (uint8_t)c->r[2]); func_80075CEC(c);  // 0x800BE22B = 1; audioFadeTarget(0)
+  c->r[31] = c->mem_r32((c->r[29] + (uint32_t)16));  // lw ra,0x10(sp)
+  c->r[29] = c->r[29] + (uint32_t)24; return;        // addiu sp,0x18 — ascend the guest frame
+}
+
+// eov_* wrappers — guest-ABI adapters (args in c->r[4], return in c->r[2]). One per leaf.
+static void eov_audioSelectStateRemap(Core* c) { c->engine.audioDispatch.selectStateRemap((uint8_t)c->r[4]); }
+static void eov_audioPublishStateFade(Core* c) { c->engine.audioDispatch.publishStateFade((uint8_t)c->r[4]); }
+
+void AudioDispatch::registerOverrides() {
+  using overrides::install;
+  install(0x80075024u, "AudioDispatch::selectStateRemap", eov_audioSelectStateRemap, gen_func_80075024, shard_set_override);
+  install(0x80075070u, "AudioDispatch::publishStateFade", eov_audioPublishStateFade, gen_func_80075070, shard_set_override);
 }

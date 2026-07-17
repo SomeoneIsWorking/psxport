@@ -97,6 +97,14 @@ public:
   uint32_t spawnChildTrigChild(uint32_t owner, uint32_t sub);     // FUN_8013AC34
   uint32_t spawnLiftPlatformChild(uint32_t owner);                // FUN_8013A730
 
+  // spawnEffectChild(owner, sub): FUN_80031558 — MAIN.EXE "spawn a child effect object" leaf. Allocate
+  //   an effect node via the per-type dispatcher FUN_8007A980 (cls=0, type=6, list=1), then on success
+  //   stamp the per-frame handler 0x80029B40 at [+0x1C], list/state byte 32 at [+0x0B], owner back-
+  //   pointer at [+0x10], effect data-table ptr 0x80029F6C at [+0x18], caller sub-index (low byte) at
+  //   [+3], and OR 0x80 into the flag byte at [+0x28]. Returns the node ptr, or 0 on pool exhaustion.
+  //   READY-FRAME leaf (frame=32, spills ra/s1/s0). Wired via registerTypedChildOverrides().
+  uint32_t spawnEffectChild(uint32_t owner, uint32_t sub);        // FUN_80031558
+
   // Wire the 4 typed-child spawners above into the override registry (overrides::install) at their
   // guest addresses so substrate/native rec_dispatch callers (beh_box_seed_phase_gate,
   // beh_single_child_cull) reach the native bodies instead of the recompiled ones. Called once at
