@@ -79,6 +79,12 @@ struct GameConfig {
 // it used to bake in. More hooks (bootInit, schedFreshEntry, diagnostics) land in later staging steps.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 struct GameHooks {
+  // --- game context lifecycle: the framework allocates/frees the game's opaque per-Core subsystem
+  // aggregate (Core::gameCtx) through these. ctxCreate runs at the end of Core's ctor; ctxDestroy in
+  // its dtor. The framework never names the aggregate type — it holds only the void*. ---
+  void* (*ctxCreate)(Core* c);                // allocate + wire the game's per-Core subsystem aggregate
+  void  (*ctxDestroy)(void* ctx);             // free it
+
   void (*frameUpdate)(Core* c);               // per-frame guest body (was c->engine.frameUpdate())
   void (*drawOTag)(Core* c, uint32_t otHead); // per-frame draw kick (was c->engine.drawOTag(otHead))
   void (*musicCoordTick)(Core* c);            // per-frame music coord (was c->engine.musicCoord.tick())

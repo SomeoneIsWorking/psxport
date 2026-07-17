@@ -10,14 +10,9 @@
 #include "gte_math.h"       // Math::rotmat — libgte RotMatrix (native, static)
 #include "override_registry.h"   // overrides::install — the one native-override registry
 
-// Forward native scene-data record the decoupled native renderer will consume (geometry + float
-// transform + texture). Populated in a later pass; the object subsystem will fill one of these per
-// visible entity instead of building PSX render-command words. (No GTE/OT/GP0.)
-struct SceneObject {
-    uint32_t geomblk;        // model-space prim-list (GT3/GT4 records) guest ptr
-    float    world[16];      // float model->world transform (column-major 4x4)
-    uint32_t texture_id;     // native texture-cache key (resolved from tpage/clut at bind time)
-};
+// (The native scene-data record this subsystem will fill per visible entity is the real
+// SceneObject in game/render/scene_data.h, now in scope via game_ctx.h → render.h. The former
+// local placeholder struct here was dead and is removed.)
 
 // ====================================================================================================
 // OBJECT RENDER-RECORD subsystem — per-object display-record allocation + init (shared by collectables

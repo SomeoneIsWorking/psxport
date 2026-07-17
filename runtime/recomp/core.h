@@ -15,15 +15,7 @@
 #pragma once
 #include <stdint.h>
 #include "r3000.h"
-#include "render/screen_fade.h"   // Core owns a ScreenFade instance directly
 #include "render_substrate.h"     // Core owns a RenderSubstrate (host-only per-Core render substrate)
-#include "core/engine.h"                     // Core owns an Engine instance (GAME/STAGE driver)
-#include "math/rng.h"                         // Core owns an Rng instance (PSX libc rand LCG)
-#include "math/trig.h"                        // Core owns a Trig instance (libgte sin/cos/atan2)
-#include "math/gte_math.h"                 // Core owns a Math instance (GTE matrix cluster)
-#include "math/mtx.h"                         // Core owns a Mtx instance (libgte matrix leaves)
-#include "items/inventory.h"                  // Core owns an Inventory instance
-#include "ui/save_menu.h"                       // Core owns a SaveMenu instance
 #include "interp_diag.h"                      // Core owns an InterpDiag (interp.cpp trace/profile state)
 #include "game_iface.h"                       // THE framework↔game seam: GameConfig / GameHooks / gameCtx
 
@@ -31,8 +23,6 @@
 
 class Game;   // the whole-machine owner (game.h); Core::game points back to it so any code holding a
               // Core* reaches migrated subsystem state via c->game->... (de-globalization, 2026-06-19).
-class Render; // owned by pointer (`Core::mRender`); allocated/wired in Core::Core() (core.cpp), holds
-              // the per-Core render-side subsystems (NodeXform, …). Full defn in game/render/render.h.
 
 class Core : public R3000 {
 public:
@@ -51,18 +41,10 @@ public:
   const GameHooks*  hooks   = nullptr;
   void*             gameCtx = nullptr;
 
-  // ---- Per-Core PC-native subsystems (OOP: methods called as `c->screenFade.method(args)`) ----
-  // Back-pointers to `this` are wired by Core's constructor (below).
-  ScreenFade screenFade;
-  Engine     engine;
-  Rng        rng;
-  Trig       trig;
-  Math       math;
-  Mtx        mtx;
-  Inventory  inventory;
-  SaveMenu   saveMenu;
+  // ---- Per-Core host-only render substrate (framework-side; the 9 GAME-side subsystems that used to
+  // sit here — ScreenFade/Engine/Rng/Trig/Math/Mtx/Inventory/SaveMenu/Render — now live in the game's
+  // opaque per-Core aggregate reached via gameCtx above; the framework no longer names them). ----
   RenderSubstrate rsub;           // host-only per-Core render substrate (by value; binds lazily, no ctor wiring)
-  Render*    mRender = nullptr;   // render subsystem umbrella (owned; ctor/dtor in core.cpp)
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 

@@ -4,6 +4,7 @@
 // with the debug driver. The scheduler (native_boot.cpp) calls c->game->repl.read() between frames and
 // consumes the class Repl's auto-drive request fields (navNewgame / skipFrames / warpArmed / warpDest).
 #include "core.h"
+#include "game_ctx.h"  // inv(c) — the game-context accessors (Inventory moved off Core into gameCtx)
 #include "game.h"
 #include "c_subsys.h"
 #include "cfg.h"
@@ -160,9 +161,9 @@ long Repl::read(Core* c, uint32_t f) {
       for (int i = 0; i < n; i++) {
         uint32_t t = (ty >= 0) ? (uint32_t)ty : (uint32_t)vt[i];
         uint32_t m = (am >= 0) ? (uint32_t)am : (ty >= 0 ? 1u : (uint32_t)va[i]);
-        c->inventory.add(t, m);          // FUN_8004D338 core (via invverify gate)
-        c->inventory.give(t, m);         // FUN_8004D4F4 give_only
-        c->inventory.giveAndFlag(t, m);  // FUN_8004D4C4 give_and_flag
+        inv(c).add(t, m);          // FUN_8004D338 core (via invverify gate)
+        inv(c).give(t, m);         // FUN_8004D4F4 give_only
+        inv(c).giveAndFlag(t, m);  // FUN_8004D4C4 give_and_flag
       }
       fprintf(stderr, "[repl] invtest: fired %d vector(s) through inventory overrides\n", n * 3); }
     else if (!strcmp(cmd, "newgame")) { this->navNewgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }

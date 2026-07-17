@@ -103,6 +103,7 @@ set(PORT_SRC
   game/cd/libcd_native.cpp
   game/core/asset.cpp
   game/core/game_config.cpp
+  game/core/game_ctx.cpp
   game/core/game_hooks.cpp
   game/core/register_overrides.cpp
   game/core/fs_util.cpp

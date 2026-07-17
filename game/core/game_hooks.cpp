@@ -132,10 +132,17 @@ static bool tomba_hasNativeHandlerForEntry(Core* c, uint32_t entryPc) {
 // table names it. Takes Game* (not Core*): the clusters register per-Game.
 extern void register_engine_overrides(Game*);
 
+// TombaCtx lifecycle — the game's per-Core subsystem aggregate alloc/free (game_ctx.cpp). The
+// framework calls these through the ctxCreate/ctxDestroy hooks to fill/free Core::gameCtx.
+extern void* tomba_ctx_create(Core*);
+extern void  tomba_ctx_destroy(void*);
+
 // extern-visible: game_config.cpp names it in the install call. A namespace-scope `const` object
 // has INTERNAL linkage by default in C++, so `extern` is required to export the symbol. One
 // process-global instance; both SBS cores snapshot the same pointer.
 extern const GameHooks g_tomba_hooks = {
+  /* ctxCreate          */ tomba_ctx_create,
+  /* ctxDestroy         */ tomba_ctx_destroy,
   /* frameUpdate        */ tomba_frameUpdate,
   /* drawOTag           */ tomba_drawOTag,
   /* musicCoordTick     */ tomba_musicCoordTick,
