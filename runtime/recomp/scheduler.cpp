@@ -82,11 +82,9 @@ extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — gu
 //     FUN_80080860 override returns this constant).
 // Syscalls EnterCriticalSection / ExitCriticalSection are no-ops in our port — the fiber scheduler
 // doesn't use BIOS critical sections.
-static constexpr uint32_t kTaskTableBaseGuest = 0x801FE000u;
-static constexpr uint32_t kTaskSlotStrideGuest = 0x70u;
 static constexpr uint32_t kBiosTcbHandlePlaceholder = 0xFF000000u;
 void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
-  const uint32_t base = kTaskTableBaseGuest + (uint32_t)slot * kTaskSlotStrideGuest;
+  const uint32_t base = c->cfg->taskTableBase + (uint32_t)slot * c->cfg->taskSlotStride;
 
   // NOTE: substrate FUN_80051F14 also does `sp -= 24; sw s0, 16(sp); sw ra, 20(sp)` — a prologue
   // that produces 12 bytes of stack scratch. Reproducing it in the port ONLY matches core B
@@ -119,7 +117,7 @@ void scheduler_yield(Core* c) {
     // here), the body will never be resumed — unwind the fiber thread so its body returns and the Coro
     // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
     // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
-    if (c->mem_r16(TASKBASE + (uint32_t)slot * TASKSTRIDE) == 0) {
+    if (c->mem_r16(c->cfg->taskTableBase + (uint32_t)slot * c->cfg->taskSlotStride) == 0) {
       cfg_logf("sched", "   switch EXIT slot %d (base.state==0) ra=0x%08X",
                slot, c->r[31]);
       c->game->pcSched.coro[slot]->exit_now();
@@ -183,7 +181,7 @@ int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
     return 1;                                                    // sleeping this frame (state==1)
   }
   c->mem_w16(base, 4);
-  c->mem_w32(CUR_TASK, base);
+  c->mem_w32(c->cfg->curTaskPtr, base);
   c->game->pcSched.cur_slot = i;
   c->game->pcSched.in_stage = 1;
   c->game->pcSched.cur_is_coro = 1;
@@ -241,7 +239,7 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
   c->mem_w16(base, 4);
   cfg_logf("sched", "slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X",
            i, st, resume_pc, c->game->pcSched.task_ctx[i].r[31], c->game->pcSched.task_ctx[i].r[29]);
-  c->mem_w32(CUR_TASK, base);
+  c->mem_w32(c->cfg->curTaskPtr, base);
   c->game->pcSched.cur_slot = i;
   static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];
   c->game->pcSched.in_stage = 1;

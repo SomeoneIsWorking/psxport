@@ -149,7 +149,7 @@ static void cd_loadfile(Core* c) {
   // Position tracker: last sector read. Substrate's cd_async_read (the platform-HLE for the async
   // streaming reader B goes through) writes this; without matching writes here the SBS full-mode
   // diverges at frame 0 by two bytes at 0x800BE0E0 (native = 0, substrate = the last LBA read).
-  if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);
+  if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);
   if (c->game->cd.verbose)
     fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
   void overlay_note_load(Core*, uint32_t);
@@ -197,7 +197,7 @@ void Cd::asyncRead() {
   }
   c->mem_w32(0x1f8001f4, 0);                  // remaining count consumed (callback would zero it)
   c->mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
-  if (nsec) c->mem_w32(0x800be0e0, lba + nsec - 1);  // DAT_800be0e0 = last sector read (pos tracker)
+  if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);  // last sector read (pos tracker)
   if (verbose)
     fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
   void overlay_note_load(Core*, uint32_t);
@@ -325,10 +325,11 @@ static void voice_stop(Core* c) {
 void Cd::hleInit() {
   Core* c = &game->core;
   // FUN_800898a0 success path (0x800898c4..0x800898fc): install the CD-event callback table.
-  c->mem_w32(0x800abfbcu, 0x8009996cu);   // CD-ready / sync callback
-  c->mem_w32(0x800abfc0u, 0x80089994u);   // CD-ready-cb 2
-  c->mem_w32(0x800abf24u, 0x800899bcu);   // CD event handler
-  c->mem_w32(0x800abf28u, 0x00000000u);   // (cleared)
+  const GameConfig* cfg = c->cfg;
+  c->mem_w32(cfg->cdCallbackTable[0], cfg->cdCallbackFn[0]);   // CD-ready / sync callback
+  c->mem_w32(cfg->cdCallbackTable[1], cfg->cdCallbackFn[1]);   // CD-ready-cb 2
+  c->mem_w32(cfg->cdCallbackTable[2], cfg->cdCallbackFn[2]);   // CD event handler
+  c->mem_w32(cfg->cdCallbackTable[3], cfg->cdCallbackFn[3]);   // (cleared)
   if (verbose || cfg_dbg("cd"))
     fprintf(stderr, "[cd] HLE CdInit: drive ready (no controller, no handshake, no busy-wait)\n");
 }
@@ -342,15 +343,16 @@ void Cd::overridesInit() {
   //   0x8008B2D8 (CdInit handshake) is owned by PlatformHle::initBuiltins (cdinit_hs) — don't
   //   double-register here.
   PlatformHle& hle = game->platform_hle;
-  hle.register_(0x8001DC40u, cd_dc40);         // FUN_8001dc40 inline async loader -> sync
-  hle.register_(0x8001D2A8u, voice_play);      // voice/BGM clip player -> native xa_stream
-  hle.register_(0x8001CF2Cu, voice_stop);      // stop voice/BGM -> native
-  hle.register_(0x8001DB8Cu, cd_loadfile);     // engine file loader -> sync sector read
-  hle.register_(0x8008AC34u, cd_command);      // libcd CdCommand -> success (no controller)
-  hle.register_(0x8008A6ECu, cd_sync);         // libcd CdSync -> complete (CD is synchronous)
-  hle.register_(0x8001CE90u, cd_cmd_stream);   // streaming CD-cmd wrapper (GetlocL pos in range)
-  hle.register_(0x8008C1ECu, cd_read);         // libcd by-LBA read -> native sync
-  hle.register_(0x8001D940u, cd_async_read);   // async streaming reader -> sync (area-DATA load)
+  const GameConfig* cfg = game->core.cfg;
+  hle.register_(cfg->cdInlineLoad, cd_dc40);     // FUN_8001dc40 inline async loader -> sync
+  hle.register_(cfg->voicePlay,    voice_play);  // voice/BGM clip player -> native xa_stream
+  hle.register_(cfg->voiceStop,    voice_stop);  // stop voice/BGM -> native
+  hle.register_(cfg->cdFileLoad,   cd_loadfile); // engine file loader -> sync sector read
+  hle.register_(cfg->cdCommand,    cd_command);  // libcd CdCommand -> success (no controller)
+  hle.register_(cfg->cdSync,       cd_sync);     // libcd CdSync -> complete (CD is synchronous)
+  hle.register_(cfg->cdCmdStream,  cd_cmd_stream);// streaming CD-cmd wrapper (GetlocL pos in range)
+  hle.register_(cfg->cdReadPrim,   cd_read);     // libcd by-LBA read -> native sync
+  hle.register_(cfg->cdAsyncRead,  cd_async_read);// async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,

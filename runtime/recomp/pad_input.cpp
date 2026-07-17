@@ -276,7 +276,7 @@ void Pad::pollSdl() {
 // them there; FUN_80003a4c reads them via &DAT_0000aec8 + slot*4).
 // FUN_80003a4c(slot): a0 = slot index.
 static void pad_read(Core* c) {
-  uint32_t b = c->mem_r32(0x0000AEC8u + c->r[4] * 4u);   // registered slot buffer ptr
+  uint32_t b = c->mem_r32(c->cfg->padSlotPtrTable + c->r[4] * 4u);   // registered slot buffer ptr
   if (b) {
     uint8_t pk[4];
     c->game->pad.fillBuffer(pk);
@@ -304,8 +304,7 @@ void Pad::overridesInit() {
 // FIXED, known address: FUN_800520e0 registers &DAT_800BF4F8 (slot0) / &DAT_800BF51A (slot1) via
 // FUN_80088b00, and FUN_800524b4 reads DAT_800BF4F8 directly. So we write the packet to those fixed
 // buffers (and, if the pointer table ever does get populated, to whatever it points at too).
-#define PAD_SLOT0_BUF 0x800BF4F8u
-#define PAD_SLOT1_BUF 0x800BF51Au
+// PAD_SLOT0_BUF / PAD_SLOT1_BUF are now game config (c->cfg->padSlot0Buf / padSlot1Buf).
 
 // REPL pad control (native-port -repl): a held active-low mask + a tap countdown, applied by
 // serviceFrame() so the interactive driver can press/hold/tap buttons.
@@ -476,14 +475,14 @@ void Pad::serviceFrame() {
 
   uint8_t pk[4];
   fillBuffer(pk);
-  uint32_t bufs[2] = { PAD_SLOT0_BUF, PAD_SLOT1_BUF };       // fixed game pad buffers
+  uint32_t bufs[2] = { c->cfg->padSlot0Buf, c->cfg->padSlot1Buf };  // fixed game pad buffers
   for (int slot = 0; slot < 2; slot++) {
-    uint32_t b = c->mem_r32(0x0000AEC8u + (uint32_t)slot * 4u); // registered ptr (NULL in this port)
+    uint32_t b = c->mem_r32(c->cfg->padSlotPtrTable + (uint32_t)slot * 4u); // registered ptr (NULL in this port)
     if (!b) b = bufs[slot];                                  // fall back to the fixed buffer
     for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
   }
   // Slot 1: report "no controller" so single-pad logic ignores it (status 0xFF).
-  c->mem_w8(PAD_SLOT1_BUF, 0xFF);
+  c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
 }
 
 #endif // PSXPORT_PAD_NO_OVERRIDES

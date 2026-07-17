@@ -69,6 +69,7 @@ void rec_super_call(Core*, uint32_t);   // interpret the original PSX body (A/B 
 #include "sbs.h"                        // class Sbs — the PSXPORT_SBS two-core side-by-side harness
 
 static void native_step_frame(Core* c, uint32_t f) {
+  const GameConfig* cfg = c->cfg;
   void gte_bind(Core*); gte_bind(c);   // bind THIS core's GTE register file (per-instance — no shared GTE)
   // #42 widescreen symmetry: re-assert the projection center (GTE CR24 = OFX) from the LIVE present
   // width every frame. Engine::initDisplay baked OFX once at boot, but the SDL window is lazy-created
@@ -96,9 +97,9 @@ static void native_step_frame(Core* c, uint32_t f) {
   // so this is the only thing that ticks the recomp timebase (recomp tasks read it to pace animations).
   c->game->timing.frameTick();
   // Per-frame IRQ-driven events the game's waits poll via TestEvent (VBlank classes + sound-DMA-complete).
-  c->game->hle.deliverEvent(0xF2000003u, 0xFFFFFFFFu);
-  c->game->hle.deliverEvent(0xF0000001u, 0xFFFFFFFFu);
-  c->game->hle.deliverEvent(0xF0000009u, 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(cfg->irqEventClasses[0], 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(cfg->irqEventClasses[1], 0xFFFFFFFFu);
+  c->game->hle.deliverEvent(cfg->irqEventClasses[2], 0xFFFFFFFFu);
   // SINGLE-BUFFERED (PC-native) — the game's own PSX double-buffering is REMOVED (user: "remove the
   // game's own double buffering, it causes problems"). The PSX flips between two VRAM pages each frame:
   // OT region 0x800e80a8 + parity*0x2070 and packet pool 0x800bfe68 + parity*0x14000, with the display/
@@ -109,12 +110,12 @@ static void native_step_frame(Core* c, uint32_t f) {
   // to 0: one OT region, one packet pool, the same env every frame, and NO flip below. 0x1f800135 stays
   // 0 (set by eng_init_framestate), so any guest code that reads it also sees a stable single buffer.
   const uint32_t parity = 0;                                 // was mem_r8(0x1f800135) — pinned single-buffer
-  uint32_t envp = 0x800e80a8u + parity * 0x2070u;            // the one VRAM region we DRAW into every frame
-  c->mem_w32(0x800ed8c8, envp);                               // PTR_DAT_800ed8c8 (OT base, now constant)
-  rc2(c, 0x80081458, envp, 0x800);                            // ClearOTagR(ot, 0x800)
-  c->mem_w16(0x800e809c, 0);                                  // DAT_800e809c = 0 (dwell counter)
-  c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));             // keep last pool ptr (read by some submitters)
-  c->mem_w32(0x800bf544, (parity * 0x14000 + 0x800bfe68) & 0xffffff);   // packet pool (now constant)
+  uint32_t envp = cfg->otRegionBase + parity * cfg->otRegionStride;     // the one VRAM region we DRAW into every frame
+  c->mem_w32(cfg->otBasePtr, envp);                           // PTR_DAT_800ed8c8 (OT base, now constant)
+  rc2(c, cfg->clearOtagR, envp, 0x800);                       // ClearOTagR(ot, 0x800)
+  c->mem_w16(cfg->dwellCounter, 0);                           // DAT_800e809c = 0 (dwell counter)
+  c->mem_w32(cfg->poolPtrLast, c->mem_r32(cfg->poolPtrCur));  // keep last pool ptr (read by some submitters)
+  c->mem_w32(cfg->poolPtrCur, (parity * cfg->packetPoolStride + cfg->packetPoolBase) & 0xffffff);   // packet pool (now constant)
   c->game->pad.serviceFrame();                                       // host input -> game pad buffer (pre-read)
   c->game->cd.audioTrace("pre");                                   // CD-vol fade state BEFORE tick+mix
   c->game->perf.markPre();   // perf: charge the pre-tick host work (input/IRQ/OT-clear) to `pre`
@@ -143,7 +144,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   c->game->perf.phaseEnd(3);
   c->engine.musicCoord.tick();                                // dialogs stop/restore ingame music
   c->game->cd.audioTrace("coord");                                 // CD-vol fade state AFTER coord
-  rc1(c, 0x80080f6c, 0);                                      // draw sync
+  rc1(c, cfg->drawSync, 0);                                   // draw sync
   c->game->pcSched.tickSleepCountdown();                      // was rc0(c, 0x800506d0) — task sleep-countdown (re-arm 1->2)
   // Display + OT submit (LAB_80050c6c, DAT_1f80019c==0 branch). Single-buffered, PC-native display.
   // The PSX disp-env dance is GONE: we draw page `parity` (env0 → VRAM (0,0)) and tell the PC present to
@@ -156,7 +157,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // sbs_render=1 to re-enable THIS render-submit block, so each core EMITS its geometry into its own VK
   // batch (the SBS composite then draws each into its pane). So gate on "not-diff-mode OR sbs_render".
   if ((!c->game->diff_mode || c->game->sbs_render) && c->mem_r16(0x1f80019c) == 0) {
-    rc1(c, 0x800815d0, envp + 0x2014);                        // PutDrawEnv (draw area/offset/clip for page 0)
+    rc1(c, cfg->putDrawEnv, envp + 0x2014);                   // PutDrawEnv (draw area/offset/clip for page 0)
     gpu_set_disp_origin(c, 0, 0);                             // PC-native: present scans the page we draw
     // DrawOTag, PC-native: call Engine::drawOTag DIRECTLY (top-down) instead of interpreting the PSX FUN_80081560.
     // drawOTag walks the OT to ENUMERATE the leftover guest prims (its draw ORDER is discarded), QUEUES
@@ -177,14 +178,14 @@ static void native_step_frame(Core* c, uint32_t f) {
     if (c->mRender->mode.dualview() && dv.havePre() && !c->game->sbs) {
       dv.capturePost(c);             // save the real post-frame canonical state
       dv.restorePre(c);              // rewind to the pre-render (post-gameplay) state the PSX pass needs
-      rc2(c, 0x80081458, envp, 0x800);                          // ClearOTagR(ot, 0x800)
-      c->mem_w32(0x800ed8c8, envp);                             // OT base
-      c->mem_w16(0x800e809c, 0);                                // dwell counter
-      c->mem_w32(0x800bf4f4, c->mem_r32(0x800bf544));
-      c->mem_w32(0x800bf544, (0x800bfe68u) & 0xffffff);         // reset packet pool ptr
+      rc2(c, cfg->clearOtagR, envp, 0x800);                     // ClearOTagR(ot, 0x800)
+      c->mem_w32(cfg->otBasePtr, envp);                         // OT base
+      c->mem_w16(cfg->dwellCounter, 0);                         // dwell counter
+      c->mem_w32(cfg->poolPtrLast, c->mem_r32(cfg->poolPtrCur));
+      c->mem_w32(cfg->poolPtrCur, (cfg->packetPoolBase) & 0xffffff);  // reset packet pool ptr
       gpu_gpu_select_target(1);
-      rec_dispatch(c, 0x8003f9a8u);                             // PSX field render orchestrator (full OT build)
-      rec_dispatch(c, 0x8010810cu);                             // render submit (faithful to ov_field_frame)
+      rec_dispatch(c, cfg->dualviewRenderOrch);                 // PSX field render orchestrator (full OT build)
+      rec_dispatch(c, cfg->dualviewSubmit);                     // render submit (faithful to ov_field_frame)
       c->engine.drawOTag(envp + 0x1ffcu);                       // walk PSX OT -> target-1 batch
       gpu_gpu_select_target(0);
       dv.restorePost(c);             // restore the real canonical state (PSX pass fully undone)
@@ -203,19 +204,20 @@ static void game_main(Core* c);
 // (crt0 jal main -> override). The libc/heap init at 0x80089860 stays a dispatched PSX leaf.
 // crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
 static void crt0_setup(Core* c) {
-  for (uint32_t a = 0x800be0d8; a < 0x80106228; a += 4) c->mem_w32(a, 0);   // BSS zero
-  uint32_t v0 = c->mem_r32(0x800a3f88) - 8;          // stack top base
+  const GameConfig* cfg = c->cfg;
+  for (uint32_t a = cfg->bssZeroLo; a < cfg->bssZeroHi; a += 4) c->mem_w32(a, 0);   // BSS zero
+  uint32_t v0 = c->mem_r32(cfg->stackTopBase) - 8;   // stack top base
   uint32_t sp = v0 | 0x80000000u;
-  uint32_t a0 = 0x80106228u & 0x1FFFFFFFu;           // 0x00106228 (heap base, masked)
-  uint32_t v1 = c->mem_r32(0x800a3f8c);
+  uint32_t a0 = cfg->heapBase & 0x1FFFFFFFu;          // 0x00106228 (heap base, masked)
+  uint32_t v1 = c->mem_r32(cfg->stackTopBase2);
   uint32_t heapsz = (v0 - v1) - a0;
-  c->mem_w32(0x800abef8, heapsz);                    // heap size
+  c->mem_w32(cfg->heapSizePtr, heapsz);              // heap size
   a0 |= 0x80000000u;                                 // 0x80106228
-  c->mem_w32(0x800abef4, a0);                        // heap base
-  c->r[28] = 0x800be0d4u;                            // gp
+  c->mem_w32(cfg->heapBasePtr, a0);                  // heap base
+  c->r[28] = cfg->gp;                                // gp
   c->r[29] = sp; c->r[30] = sp;                      // sp, fp
   c->r[4]  = a0 + 4;                                 // a0 for the init call
-  rec_dispatch(c, 0x80089860u);                      // libc/heap init (PSX leaf) — keep dispatched
+  rec_dispatch(c, cfg->libcInit);                    // libc/heap init (PSX leaf) — keep dispatched
 }
 
 static void native_crt0(Core* c) {
@@ -392,7 +394,7 @@ static void game_main(Core* c) {
       uint32_t stg = c->mem_r32(TASKBASE + 0xc);
       uint8_t  cut = c->mem_r8(0x1F800137u);             // cutscene-active flag
       if (as_phase == 0) {                             // tap Cross until the GAME stage
-        if (stg != 0x8010637Cu) { if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); }
+        if (stg != c->cfg->stageGame) { if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); }
         else { as_phase = 1; fprintf(stderr, "[autoskip] reached GAME at frame %u\n", f); }
       } else if (as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
         if (cut) { as_phase = 2; fprintf(stderr, "[autoskip] intro cutscene up at frame %u; skipping (Start)\n", f); }
@@ -409,7 +411,7 @@ static void game_main(Core* c) {
     // then returns to the REPL prompt. `skip N` then pulses Start each frame for N frames to advance the
     // post-newgame fisherman dialog cutscene into the field. Manual walking = `press`/`run`/`release`.
     if (c->game->repl.navNewgame) {
-      if (c->mem_r32(0x801fe00c) != 0x8010637Cu) {
+      if (c->mem_r32(0x801fe00c) != c->cfg->stageGame) {
         if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
       } else {
         fprintf(stderr, "[repl] newgame: reached GAME prologue at frame %u\n", f);
@@ -560,8 +562,8 @@ static void game_main(Core* c) {
                   (c->mem_r16(TASKBASE+0x4c)<<8)|c->mem_r16(TASKBASE+0x4e)
                   ^ (c->mem_r16(TASKBASE+0x50)<<12)^(c->mem_r16(TASKBASE+0x52)<<4);
     if (t0e != last_entry || sm != last_sm) {
-      const char* stg = t0e == 0x8010649Cu ? "START" : t0e == 0x801062E4u ? "DEMO" :
-                        t0e == 0x8010637Cu ? "GAME" : "?";
+      const char* stg = t0e == c->cfg->stageStart ? "START" : t0e == c->cfg->stageDemo ? "DEMO" :
+                        t0e == c->cfg->stageGame ? "GAME" : "?";
       fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u]"
               " @0x80109450=%08X\n",
               f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
@@ -572,7 +574,7 @@ static void game_main(Core* c) {
     // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
     // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals
     // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
-    if (cfg_dbg("stream") && t0e == 0x8010637Cu && f == 75) {
+    if (cfg_dbg("stream") && t0e == c->cfg->stageGame && f == 75) {
       cfg_logf("stream", "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X",
               c->mem_r16(0x801fe0e0), c->mem_r32(0x801fe0ec));
       cfg_logf("stream", "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "

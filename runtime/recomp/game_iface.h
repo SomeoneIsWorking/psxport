@@ -56,10 +56,14 @@ struct GameConfig {
   // --- CD chokepoints (cd_override.cpp) ---
   uint32_t cdInit, cdCommand, cdSync, cdReadPrim, cdFileLoad, cdAsyncRead,
            voicePlay, voiceStop, lastSectorTracker;
-  uint32_t cdCallbackTable[4];
+  uint32_t cdInlineLoad;      // (added P1.x) FUN_8001DC40 inline (non-spawning) sync loader
+  uint32_t cdCmdStream;       // (added P1.x) FUN_8001CE90 streaming CD-cmd wrapper (GetlocL)
+  uint32_t cdCallbackTable[4];// the 4 guest-RAM slots hleInit writes the CD-event callbacks into
+  uint32_t cdCallbackFn[4];   // (added P1.x) the 4 callback fn-ptr VALUES written into those slots
 
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
+  uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*4)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

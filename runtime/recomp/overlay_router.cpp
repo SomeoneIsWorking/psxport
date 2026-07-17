@@ -26,13 +26,10 @@ void rec_dispatch_miss(Core* c, uint32_t addr);
 
 // Overlap-slot bases (the addresses where mutually-exclusive overlays load) -> a 0..2 index into the
 // per-core resident_ov[] map. Kept in sync with emit.py OVERLAY_BASES / overlay_base().
-static int slot_index(uint32_t base) {
-  switch (base & 0x1FFFFFFF) {
-    case 0x00106228: return 0;   // STAGE slot (START/DEMO/GAME)
-    case 0x00108F9C: return 1;   // MODE slot  (SOP / A0* field area code)
-    case 0x0018A000: return 2;   // AREA slot  (OPN; also raw area DATA — no code overlay)
-    default: return -1;
-  }
+static int slot_index(Core* c, uint32_t base) {
+  for (int i = 0; i < 3; i++)
+    if ((c->cfg->overlaySlots[i].base & 0x1FFFFFFF) == (base & 0x1FFFFFFF)) return i;
+  return -1;
 }
 
 // Called by the overlay LOADERS right after an image is written to `dest`. If dest is a slot base,
@@ -41,7 +38,7 @@ static int slot_index(uint32_t base) {
 // to later header mutation. A non-overlay blob (raw area DATA to the AREA slot) matches nothing -> clear,
 // and the router falls back to a live signature scan (which also won't match data == correct miss).
 void overlay_note_load(Core* c, uint32_t dest) {
-  int s = slot_index(dest);
+  int s = slot_index(c, dest);
   if (s < 0) return;
   const unsigned char* ram = c->ram + (dest & 0x1FFFFFFF);
   int dbg = cfg_dbg("ovload");
@@ -70,7 +67,7 @@ void overlay_note_load(Core* c, uint32_t dest) {
 // resident overlay (or the running core's RAM) changes.
 static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
   const unsigned char* ram = c->ram + (base & 0x1FFFFFFF);
-  int s = slot_index(base);
+  int s = slot_index(c, base);
   const RecOverlay* cached = (s >= 0) ? c->game->pcSched.resident_ov[s] : 0;
   // Trust the load-time IDENTITY only while the live RAM still matches its signature. The cache becomes
   // STALE when the slot is reloaded with a different overlay by a path that bypasses overlay_note_load,

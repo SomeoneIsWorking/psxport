@@ -102,6 +102,7 @@ set(PORT_SRC
   game/game_tomba2.cpp
   game/cd/libcd_native.cpp
   game/core/asset.cpp
+  game/core/game_config.cpp
   game/core/fs_util.cpp
   game/core/str.cpp
   game/core/pc_scheduler.cpp

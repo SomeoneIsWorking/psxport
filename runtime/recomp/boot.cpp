@@ -143,7 +143,13 @@ void register_engine_overrides(Game* game) {
   // match for byte-exact SBS. Root cause was never r16 (that was already correct) — see the finding.
 }
 
+extern void tomba_install_game_config();   // game/core/game_config.cpp — installs the Tomba GameConfig
+
 int main(int argc, char** argv) {
+  // Install the game seam (GameConfig) BEFORE the first Core is constructed: Core's ctor snapshots
+  // psxport_game_config() into c->cfg, and every subsystem reads c->cfg->field for its guest-address
+  // literals — so this must run before `new Game()` below (which constructs the Core).
+  tomba_install_game_config();
   const char* path = argc > 1 ? argv[1] : "scratch/bin/tomba2/MAIN.EXE";
   Game* game = new Game();    // the whole machine (owns the Core + every subsystem's state — no globals)
   Core* c = &game->core;      // the CPU/RAM handle threaded through the interp (2 MB RAM lives in Game)
