@@ -268,5 +268,13 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     fflush(stderr);
     abort();
   }
-  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)\n", c->game->hle.miss_count++, addr);
+  // NULL-CALLBACK NO-OP (addr == 0): a `jalr $zero`-shaped dispatch to a null function pointer. The
+  // libsnd SsSeqCalled command dispatcher (FUN_80091460) reads a per-command handler slot
+  // (0x80104B90..0x80104BA0) and calls it; an unhandled/meta command leaves that slot null, so the
+  // guest dispatches address 0 — a no-op by intent (a call to a null callback does nothing). Both SBS
+  // cores reach it identically (0-diff), i.e. it is faithful guest behavior, not a port miss. Return
+  // silently: a null callback is a no-op, not a "no recompiled fn" error worth reporting.
+  if ((addr & 0x1FFFFFFFu) == 0) return;
+  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)  (caller ra=0x%08X c->pc=0x%08X a0=0x%08X)\n",
+          c->game->hle.miss_count++, addr, c->r[31], c->pc, c->r[4]);
 }
