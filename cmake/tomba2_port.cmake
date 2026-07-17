@@ -105,6 +105,7 @@ set(PORT_SRC
   game/core/game_config.cpp
   game/core/game_ctx.cpp
   game/core/game_hooks.cpp
+  game/core/repl_commands.cpp
   game/core/register_overrides.cpp
   game/core/fs_util.cpp
   game/core/str.cpp

@@ -129,6 +129,14 @@ struct GameHooks {
   void (*replCamTeleport)(Core* c, int x, int y, int z);  // REPL `tp` (was c->engine.camTeleport)
   void (*replCamTeleportOff)(Core* c);                    // REPL `tp off` (was c->engine.camTeleportOff)
   void (*renderBbFrameReset)(Core* c);                    // per-frame bb reset (was c->mRender->bbFrameReset())
+
+  // --- game-side REPL commands + dev-warp area load (last game-class refs pulled out of repl.cpp /
+  // native_boot.cpp so the framework #includes no game header). ---
+  bool (*replCommand)(Core* c, const char* cmd, const char* line); // REPL command the framework doesn't
+                                              // itself handle — game classes / Tomba guest addrs (invtest,
+                                              // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
+  void (*devWarpAreaLoad)(Core* c);           // dev-warp full area load (was native_boot.cpp's
+                                              // eng(c).sop.transitionAreaLoad()).
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

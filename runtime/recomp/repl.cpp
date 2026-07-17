@@ -4,15 +4,12 @@
 // with the debug driver. The scheduler (native_boot.cpp) calls c->game->repl.read() between frames and
 // consumes the class Repl's auto-drive request fields (navNewgame / skipFrames / warpArmed / warpDest).
 #include "core.h"
-#include "game_ctx.h"  // inv(c) — the game-context accessors (Inventory moved off Core into gameCtx)
+#include "game_iface.h"          // GameHooks — game-side command dispatch (replCommand) + REPL diag hooks
 #include "game.h"
 #include "c_subsys.h"
 #include "cfg.h"
-#include "asset.h"
-#include "audio/music_list.h"
 #include "render_substrate.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
 #include "ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
-#include "guest_call.h"
 #include "repl.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,22 +147,6 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
       if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { c->hooks->replCamTeleport(c, x, y, z); fprintf(stderr, "[repl] tp camera -> (%d,%d,%d)\n", x, y, z); }
       else { c->hooks->replCamTeleportOff(c); fprintf(stderr, "[repl] tp off (camera follows player)\n"); } }
-    else if (!strcmp(cmd, "invtest")) {   // diagnostic: exercise the inventory subsystem with a test vector
-      // invtest [type] [amt] — fire FUN_8004D338/D4C4/D4F4(type,amt) through the override path (with the
-      // `invverify` gate enabled this runs the full RAM+scratchpad A/B vs the recomp body). With no args,
-      // sweep a spread of item types/amounts covering both quest-ref variants + the 23..28 ring + the cap.
-      int ty = -1, am = -1; sscanf(line, "%*s %d %d", &ty, &am);
-      static const int vt[] = { 1, 2, 5, 10, 23, 25, 28, 40, 60, 99 };
-      static const int va[] = { 1, 3, 1, 50, 1, 99, 2, 7, 1, 5 };
-      int n = (ty >= 0) ? 1 : (int)(sizeof vt / sizeof vt[0]);
-      for (int i = 0; i < n; i++) {
-        uint32_t t = (ty >= 0) ? (uint32_t)ty : (uint32_t)vt[i];
-        uint32_t m = (am >= 0) ? (uint32_t)am : (ty >= 0 ? 1u : (uint32_t)va[i]);
-        inv(c).add(t, m);          // FUN_8004D338 core (via invverify gate)
-        inv(c).give(t, m);         // FUN_8004D4F4 give_only
-        inv(c).giveAndFlag(t, m);  // FUN_8004D4C4 give_and_flag
-      }
-      fprintf(stderr, "[repl] invtest: fired %d vector(s) through inventory overrides\n", n * 3); }
     else if (!strcmp(cmd, "newgame")) { this->navNewgame = 1; fprintf(stderr, "[repl] newgame: pulsing to GAME prologue\n"); return 100000; }
     else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; this->skipFrames = (long)a; fprintf(stderr, "[repl] skip %u frames\n", a); return (long)a; }
     else if (!strcmp(cmd, "warp")) {
@@ -233,8 +214,6 @@ long Repl::read(Core* c, uint32_t f) {
       }
     }
     else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) c->game->spu_audio.wavReopen(path); }
-    else if (!strcmp(cmd, "bgm") && sscanf(line, "%*s %u", &a) == 1) { rc1(c, 0x80074BF8u, a); fprintf(stderr, "[repl] bgm %u (song@800bed80=%04X)\n", a, c->mem_r16(0x800bed80)); }
-    else if (!strcmp(cmd, "bgmstop")) { rc0(c, 0x80074E48u); fprintf(stderr, "[repl] bgmstop\n"); }
     // native <name> on|off  /  native list — gate PC-native layers (default ON) so the recomp oracle
     // runs in their place. e.g. `native music off` drops the native field-BGM engine.
     else if (!strcmp(cmd, "native")) {
@@ -259,30 +238,6 @@ long Repl::read(Core* c, uint32_t f) {
       if (sscanf(line, "%*s %15s", st) == 1)
         c->rsub.mode.setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
       fprintf(stderr, "[repl] Render::psxRender = %d\n", c->rsub.mode.psxRender());
-    }
-    // seqsolo <i> — stop ALL open libsnd sequences then SsSeqPlay just sequence <i> at full vol, via the
-    // GAME'S OWN sequencer. Lets each area SEP sequence be rendered in isolation (the area's field theme
-    // otherwise plays continuously). SsSeqStop=0x80091AF0, SsSeqPlay(h,mode,loop)=0x80090560, SsSeqSetVol
-    // (h,volL,volR)=0x80091F50. handle == the seq access index (0..13).
-    else if (!strcmp(cmd, "seqsolo") && sscanf(line, "%*s %u", &a) == 1) {
-      for (uint32_t i = 0; i < 14; i++) rc1(c, 0x80091AF0u, i);   // SsSeqStop(i) — silence all
-      rc3(c, 0x80090560u, a, 1, 0);                                // SsSeqPlay(a, mode=1, loop=0)
-      rc3(c, 0x80091F50u, a, 127, 127);                           // SsSeqSetVol(a, 127, 127)
-      fprintf(stderr, "[repl] seqsolo %u\n", a);
-    }
-    // musictest <n> — play catalogued music track <n> through the NATIVE audio engine (sound test).
-    // 'musictest stop' (or n<0) stops. Bypasses the broken libsnd path entirely (engine/audio/).
-    else if (!strcmp(cmd, "musictest")) {
-      MusicList& ml = gctx(c)->music_list;   // music_list moved off Game onto the game-side TombaCtx
-      char sub[32] = {0}; int n = -1;
-      if (sscanf(line, "%*s %31s", sub) == 1 && !strcmp(sub, "stop")) { ml.stop(); fprintf(stderr, "[repl] musictest stop\n"); }
-      else if (sscanf(line, "%*s %d", &n) == 1 && n >= 0) {
-        int rc = ml.play(n);
-        fprintf(stderr, "[repl] musictest %d (%s) -> %s\n", n, ml.name(n) ? ml.name(n) : "?", rc ? "FAIL" : "ok");
-      } else {
-        fprintf(stderr, "[repl] musictest: tracks 0..%d, or 'stop'\n", ml.count()-1);
-        for (int i = 0; i < ml.count(); i++) fprintf(stderr, "   %d: %s\n", i, ml.name(i));
-      }
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump(&c->game->disc, (uint8_t)ch, lba, path, secs ? (int)secs : 3); }
@@ -452,6 +407,9 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
     else if (!strcmp(cmd, "seq")) fprintf(stderr, "[repl] seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X\n",
                                           c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
+    // game-side commands (invtest/bgm/bgmstop/seqsolo/musictest) — game classes / Tomba guest addrs,
+    // dispatched into game/core/repl_commands.cpp so the framework REPL names no game type.
+    else if (c->hooks->replCommand(c, cmd, line)) { /* handled game-side */ }
     else fprintf(stderr, "[repl] ? %s\n", cmd);
     fflush(stderr);
   }

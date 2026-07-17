@@ -28,6 +28,10 @@ static void        tomba_replCamTeleport(Core* c, int x, int y, int z)  { eng(c)
 static void        tomba_replCamTeleportOff(Core* c)                    { eng(c).camTeleportOff(); }
 // Per-frame billboard/bb reset (was native_step_frame's direct rend(c)->bbFrameReset()).
 static void        tomba_renderBbFrameReset(Core* c)                    { rend(c)->bbFrameReset(); }
+// dev-warp full area load (was native_boot.cpp game_main's eng(c).sop.transitionAreaLoad()).
+static void        tomba_devWarpAreaLoad(Core* c)                       { eng(c).sop.transitionAreaLoad(); }
+// game-side REPL commands (invtest/bgm/bgmstop/seqsolo/musictest) — body in game/core/repl_commands.cpp.
+extern bool tomba_repl_command(Core* c, const char* cmd, const char* line);
 
 static void tomba_frameUpdate(Core* c)                { eng(c).frameUpdate(); }
 static void tomba_drawOTag(Core* c, uint32_t otHead)  { eng(c).drawOTag(otHead); }
@@ -186,4 +190,6 @@ extern const GameHooks g_tomba_hooks = {
   /* replCamTeleport    */ tomba_replCamTeleport,
   /* replCamTeleportOff */ tomba_replCamTeleportOff,
   /* renderBbFrameReset */ tomba_renderBbFrameReset,
+  /* replCommand        */ tomba_repl_command,
+  /* devWarpAreaLoad    */ tomba_devWarpAreaLoad,
 };

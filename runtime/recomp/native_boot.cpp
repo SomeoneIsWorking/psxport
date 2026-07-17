@@ -16,16 +16,14 @@
 // MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
 #include "core.h"
-#include "game_ctx.h"  // eng(c) — the game-context accessors (Engine moved off Core into gameCtx)
+#include "game_iface.h" // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "hw_bind.h"   // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
-#include "asset.h"     // class Asset — c->engine.asset (unpackGroup / uploadImage / preload*)
                      // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
-#include "audio/music_list.h"   // native sound-test: music_list_play/stop (engine/audio/)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -416,7 +414,7 @@ static void game_main(Core* c) {
       uint32_t wsm = c->mem_r32(0x1f800138u);
       c->mem_w8(wsm + 0x6e, (uint8_t)dest);
       c->mem_w8(wsm + 0x6d, 2);
-      eng(c).sop.transitionAreaLoad();     // full native area load for `dest` (sets bf870=dest, loads a0<id>)
+      c->hooks->devWarpAreaLoad(c);        // full native area load for `dest` (sets bf870=dest, loads a0<id>)
       c->mem_w16(wsm + 0x48, 2);
       c->mem_w16(wsm + 0x4a, 1);
       c->mem_w16(wsm + 0x4c, c->mem_r8(0x80108f60u + dest));
