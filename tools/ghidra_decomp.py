@@ -15,7 +15,10 @@ outpath = args[0] if len(args) > 0 else "decomp_all.c"
 # Two selection modes after <out.c>:
 #   <lo_hex> <hi_hex>          -> functions whose entry is in [lo,hi)   (range)
 #   list <addr_hex> [addr...]  -> exactly these function entries        (explicit list)
-rest = args[1:]
+# pyghidraRun -H (Ghidra 12) forwards -postScript args as a SINGLE space-joined
+# string, so "list a b c" arrives as ["list a b c"]. Flatten on whitespace so both
+# the per-arg (analyzeHeadless) and joined-arg (pyghidraRun) forms parse identically.
+rest = [tok for a in args[1:] for tok in str(a).split()]
 lo = hi = None
 want = None
 if len(rest) >= 1 and rest[0] == "list":
