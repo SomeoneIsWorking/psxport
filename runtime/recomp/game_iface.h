@@ -178,8 +178,11 @@ struct GameHooks {
                                               // c->game->fps60 (game writing a framework member).
   void (*fps60BbSwapPrev)(Core* c);           // TRANSITIONAL: rend(c)->bbSwapPrev() — billboard record rotate
 
-  // --- diagnostics harness: camera-oracle selftest (game/camera/cutscene_camera_selftest.cpp) ---
-  int (*selftestCameraOracle)(const char* exePath);  // was selftest.cpp's direct run_camera_oracle()
+  // --- diagnostics harness: GAME-defined selftests ---
+  // selftest_run() handles the framework's own PSXPORT_SELFTEST names and delegates anything else
+  // here, so a game can add oracle/unit tests without the agnostic framework naming them. Return 2
+  // for an unrecognised name (same "unknown selftest" code selftest_run uses).
+  int (*selftestGame)(const char* which, const char* exePath);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

@@ -471,7 +471,13 @@ int selftest_run(const char* path) {
   if (which && !strcmp(which, "narration")) return run_narration(path);
   if (which && !strcmp(which, "oracle"))    return run_oracle(path);
   if (which && !strcmp(which, "oraclediff")) return run_oraclediff(path);
-  if (which && !strcmp(which, "camera"))    { return psxport_game_hooks()->selftestCameraOracle(path); }
-  cfg_logi("selftest", "unknown PSXPORT_SELFTEST='%s' (known: startgame, narration, oracle, oraclediff, camera)", which ? which : "");
+  // Anything else may be a GAME-defined selftest — the framework deliberately does not know their
+  // names (psxport is game-agnostic; see game_iface.h selftestGame).
+  if (which && *which) {
+    const int rc = psxport_game_hooks()->selftestGame(which, path);
+    if (rc != 2) return rc;
+  }
+  cfg_logi("selftest", "unknown PSXPORT_SELFTEST='%s' (framework: startgame, narration, oracle, oraclediff; "
+                       "the game may define more)", which ? which : "");
   return 2;
 }
