@@ -82,7 +82,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/interp.cpp           # ORACLE engine: pure-MIPS interpreter for the oracle Core
   ${PSXPORT_ROOT}/runtime/recomp/coro.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_router.cpp
-  ${PSXPORT_ROOT}/runtime/recomp/cfg.c
+  ${PSXPORT_ROOT}/runtime/recomp/cfg.cpp
   ${PSXPORT_ROOT}/runtime/recomp/mem.cpp
   ${PSXPORT_ROOT}/runtime/recomp/stubs.cpp
   ${PSXPORT_ROOT}/runtime/recomp/hle.cpp
@@ -171,7 +171,18 @@ target_compile_options(psxport PRIVATE -w -O2 -g
   ${SDL3_CFLAGS_OTHER} ${FREETYPE_CFLAGS_OTHER})
 
 # Link deps PUBLIC/INTERFACE so any consumer (the game exe, the smoke) inherits them.
+# lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent). The cfg_* API in
+# runtime/recomp/cfg.cpp is a thin shim over it, so every diagnostic in the port shares one output
+# path. Fetched rather than vendored: it is a standalone library with its own tests and release
+# history, not a snapshot to carry around.
+include(FetchContent)
+FetchContent_Declare(lucent
+  GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
+  GIT_TAG main)
+FetchContent_MakeAvailable(lucent)
+
 target_link_libraries(psxport PUBLIC
+  lucent::lucent
   rmlui_debugger rmlui_core chdr-static
   ${SDL3_LIBRARIES} ${SDL3_IMAGE_LIBRARIES} ${FREETYPE_LIBRARIES}
   Threads::Threads m)

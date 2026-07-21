@@ -58,6 +58,14 @@ The two video selectors:
   composite-blit rects; REPL `iresdump <path.ppm>` dumps the full (non-downsampled) scaled target for
   bring-up debugging.
 
+> **cfg is now a thin shim over [lucent](https://github.com/SomeoneIsWorking/lucent)** — the
+> standalone C++20 logging + configuration library this project extracted (2026-07-21). The cfg_*
+> API below is unchanged and remains correct for the ~1000 existing call sites, several of which are
+> in plain C translation units that cannot use lucent's templates. **New C++ code should call lucent
+> directly** (`lucent::info("boot", "loaded {}", path)`), which is type-safe via std::format rather
+> than printf-style. Both share one output path, so `PSXPORT_LOG_FILE`, channel gating and test
+> capture apply to everything either way.
+
 ## The rule: don't call `getenv` — use `cfg` (`runtime/recomp/cfg.h`)
 ```c
 #include "cfg.h"
