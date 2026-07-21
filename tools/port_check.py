@@ -47,6 +47,12 @@ MARKER_RE = re.compile(
     r'^\s*//\s*(PORT_GEN|ORACLE):\s*(?:0x)?(?:gen_func_|ov_[a-z0-9]+_gen_)?([0-9A-Fa-f]{8})\b'
 )
 METHOD_DEF_RE = re.compile(r'^[\w:\*&<>,\s]+?\b(\w+)::(\w+)\s*\([^;{]*\)\s*(?:const\s*)?\{\s*$')
+# A native override is not always a class METHOD. Most of this port (296 of 315 installs) wires a
+# free-function thunk — `static void ov_behArmCountdown(Core* c) {` — and binding a marker only to a
+# `Class::method` definition silently attached those markers to whatever unrelated method came next
+# (typically the file's registerOverrides), manufacturing bogus "missing frame" findings. Accept a
+# plain free function too; group(1) is None for those.
+FREE_FN_DEF_RE = re.compile(r'^(?:static\s+|inline\s+)*[\w:\*&<>,\s]+?\b(\w+)\s*\(\s*Core\s*\*[^;{]*\)\s*\{\s*$')
 
 GUEST_CALL_RE = re.compile(r'\bguest_call\(\s*c\s*,\s*0x([0-9A-Fa-f]+)u?\s*,\s*(\w+)\s*\)')
 GUEST_DISPATCH_RE = re.compile(r'\bguest_dispatch\(\s*c\s*,\s*0x([0-9A-Fa-f]+)u?\s*,\s*([^)]+)\)')
@@ -68,9 +74,11 @@ def find_method_body(lines: list, start_idx: int):
     i = start_idx
     limit = min(len(lines), start_idx + MAX_MARKER_TO_DEF_GAP)
     while i < limit:
-        m = METHOD_DEF_RE.match(lines[i].rstrip('\n'))
-        if m:
-            cls, method = m.group(1), m.group(2)
+        raw = lines[i].rstrip('\n')
+        m = METHOD_DEF_RE.match(raw)
+        fm = FREE_FN_DEF_RE.match(raw) if not m else None
+        if m or fm:
+            cls, method = (m.group(1), m.group(2)) if m else ('(free)', fm.group(1))
             depth = 1
             j = i + 1
             body = []
