@@ -217,3 +217,30 @@ identity from the caller** gives per-object 60fps/anchoring and un-groups manage
 bandaids. The irreducible per-game surface is **parallax/2D backdrops** (no GTE coords to
 recover) and **gameplay logic**. Gate everything against the oracle, and never trust a green gate
 without proving it exercised the code.
+
+## Known gap: the framework does not compile standalone
+
+`cmake --build … --target psxport` fails in a bare psxport checkout:
+
+```
+runtime/recomp/overlay_router.cpp:18:10: fatal error: overlay_table.h: No such file or directory
+```
+
+`overlay_table.h` is **generated per game** (the consumer's `generated/overlay_table.h`, emitted by
+its recompiler run), and `overlay_router.cpp` includes it for the compile-time `REC_MAIN_LO/HI`
+text-range macros. So the framework has a *compile-time* dependency on a consumer artifact.
+
+That is in tension with the agnosticism this repo claims: psxport #includes no game header, and the
+`psxport_smoke` link proves no game symbol resolves — but neither check can run without a consumer's
+`generated/` present, so the proof is only ever available from inside a game repo.
+
+This is a real architectural wart, recorded rather than hidden. The fix is to stop compiling a
+game-generated header into the framework — either take `REC_MAIN_LO/HI` as runtime values through
+`GameConfig` (they are already game-specific data, and `game_iface.h` is exactly the channel for
+that), or default them when the header is absent so a bare checkout compiles and a consumer's build
+overrides them. Until then, `psxport_smoke` is only buildable from a consumer tree with
+`-DPSXPORT_BUILD_SMOKE=ON`.
+
+Verified 2026-07-21 that this is pre-existing and unrelated to the lucent dependency: lucent
+FetchContents correctly into psxport's own standalone build tree (`_deps/lucent-src` is populated);
+the failure is solely the missing generated header.
