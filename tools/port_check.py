@@ -125,6 +125,8 @@ STRUCT_DEF_RE = re.compile(r'^\s*struct\s+(\w+)\s*\{\s*$')
 # the actual open-brace line is found by scanning forward for a line ending in `{`.
 CTOR_START_RE = re.compile(r'^\s*(?:explicit\s+)?(\w+)\s*\(')
 DTOR_START_RE = re.compile(r'^\s*~(\w+)\s*\(\s*\)')
+# `constexpr uint32_t FN_8009A450 = 0x8009A450u;` / `static constexpr uint32_t X = 0x...;`
+CONST_ADDR_RE = re.compile(r'\bconstexpr\s+uint32_t\s+(\w+)\s*=\s*0x([0-9A-Fa-f]{6,8})u?\s*;')
 FRAME_CTOR_CALL_RE = re.compile(r'^\s*(\w*Frame)\s+\w+\(c\)\s*;\s*(?://.*)?$')
 
 
@@ -211,7 +213,7 @@ OPAQUE_CALL_RE = re.compile(r'^\s*[\w:.>-]+\(\s*[^=;]*\)\s*;\s*(?://.*)?$')
 KNOWN_NONCALL_KEYWORDS = {'if', 'for', 'while', 'switch', 'return', 'else'}
 
 
-def native_op_sequence_extra(body_lines, frame_structs: dict = None):
+def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dict = None):
     """Native-dialect op-sequence extraction. Reuses abi_extract's low-level regexes (RA_SET_RE,
     CALL_RE, RECDISP_RE, MEM_W_ANY_RE, frame regexes via abi.extract_op_sequence) as the shared
     token layer, and layers native-only idioms on top in ONE linear pass so call order stays
@@ -323,8 +325,15 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None):
         if rm and 'default:' not in stmt:
             raw_target = rm.group(1).strip()
             lit = re.match(r'^0x([0-9A-Fa-f]+)u?$', raw_target)
-            calls.append(abi.OpSeqCall(ra_const=pending_ra,
-                                        target=('0x' + lit.group(1).upper()) if lit else None))
+            if lit:
+                target = '0x' + lit.group(1).upper()
+            else:
+                # A faithful port routinely dispatches through a NAMED constant
+                # (`constexpr uint32_t FN_8009A450 = 0x8009A450u; ... rec_dispatch(c, FN_8009A450)`),
+                # which is better style than a bare literal — so resolve those instead of punishing
+                # them with an unresolvable target. Anything still unknown stays None (honest).
+                target = (consts or {}).get(raw_target)
+            calls.append(abi.OpSeqCall(ra_const=pending_ra, target=target))
             pending_ra = None
             continue
         if pending_ra is not None and OPAQUE_CALL_RE.match(stmt):
@@ -409,6 +418,9 @@ def check_file(path: str, repo: str, results: list):
     if not hits:
         return
     frame_structs = find_raii_frame_structs(lines)
+    # File-scope guest-address constants, so `rec_dispatch(c, FN_8009A450)` resolves like a literal.
+    consts = {m.group(1): '0x' + m.group(2).upper()
+              for m in CONST_ADDR_RE.finditer('\n'.join(lines))}
     for idx, kind, addr in hits:
         found = find_method_body(lines, idx)
         if found is None:
@@ -424,7 +436,7 @@ def check_file(path: str, repo: str, results: list):
                              [f"oracle lookup failed: {e}"], []))
             continue
         gen_seq = abi.extract_op_sequence(fn.body)
-        native_seq = native_op_sequence_extra(body, frame_structs)
+        native_seq = native_op_sequence_extra(body, frame_structs, consts)
         verdict, findings, unprovable = compare(gen_seq, native_seq)
         results.append((path, addr, cls, method, verdict, findings, unprovable))
 
