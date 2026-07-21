@@ -3,6 +3,7 @@
 // keeps only load_exe (the PS-EXE loader), which the game main AND the harnesses (DualCore/Sbs) all call.
 // The framework provides no main(): the standalone psxport_smoke supplies its own.
 #include "core.h"
+#include "cfg.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +15,7 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
   if (!f) { perror(path); exit(1); }
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
   uint8_t* buf = (uint8_t*)malloc(n);
-  if (fread(buf, 1, n, f) != (size_t)n) { fprintf(stderr, "short read\n"); exit(1); }
+  if (fread(buf, 1, n, f) != (size_t)n) { cfg_loge("boot", "short read on %s", path); exit(1); }
   fclose(f);
   uint32_t entry = rd32(buf+0x10), gp = rd32(buf+0x14);
   uint32_t load = rd32(buf+0x18), tsize = rd32(buf+0x1C), sp = rd32(buf+0x30);
@@ -24,8 +25,8 @@ void load_exe(const char* path, Core* c) {   // non-static: the dual-core harnes
   c->r[29] = sp ? sp : 0x801FFFF0u;    // sp
   c->r[30] = c->r[29];                 // fp
   c->r[31] = 0xDEAD0000u;              // ra sentinel (top-level return)
-  fprintf(stderr, "loaded %s: entry 0x%08X load 0x%08X text 0x%X sp 0x%08X\n",
-          path, entry, load, tsize, c->r[29]);
+  cfg_logi("boot", "loaded %s: entry 0x%08X load 0x%08X text 0x%X sp 0x%08X",
+           path, entry, load, tsize, c->r[29]);
 }
 
 // rec_dispatch_miss now lives in hle.c (routes A0/B0/C0 to the HLE BIOS).

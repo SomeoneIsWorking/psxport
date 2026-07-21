@@ -62,7 +62,7 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
 
 static void exec_command(CdcState* s, uint8_t cmd) {
   if (s->verbose || cfg_dbg("cdc"))
-    fprintf(stderr, "[cdc] cmd 0x%02X params=%d [%02X %02X %02X]\n", cmd, s->param_n,
+    cfg_logi("cdc", "cmd 0x%02X params=%d [%02X %02X %02X]", cmd, s->param_n,
             s->param[0], s->param[1], s->param[2]);
   uint8_t r1[1] = { s->stat };
   switch (cmd) {
@@ -94,7 +94,7 @@ static void exec_command(CdcState* s, uint8_t cmd) {
     case 0x13: { uint8_t t[3] = { s->stat, 0x01, 0x01 }; cdc_irq(s, 3, t, 3); break; }  // GetTN
     case 0x14: { uint8_t t[3] = { s->stat, 0x00, 0x02 }; cdc_irq(s, 3, t, 3); break; }  // GetTD
     default:
-      if (s->verbose) fprintf(stderr, "[cdc] UNHANDLED cmd 0x%02X -> ack only\n", cmd);
+      if (s->verbose) cfg_logi("cdc", "UNHANDLED cmd 0x%02X -> ack only", cmd);
       cdc_irq(s, 3, r1, 1); break;
   }
   s->param_n = 0;                                                // command consumes the param FIFO

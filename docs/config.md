@@ -70,7 +70,21 @@ cfg_enh("name")           // is PC ENHANCEMENT `name` on? PSXPORT_ENH=<name,name
 cfg_logf("chan", fmt, …)  // THE diagnostic print: no-op unless chan enabled; "[chan] msg\n" to stderr
                           // or PSXPORT_LOG_FILE=<path> (append, line-buffered). One line per site —
                           // never write `if (cfg_dbg(chan)) fprintf(stderr, …)` two-steps.
+cfg_logi("chan", fmt, …)  // ALWAYS-ON levels — the messages a normal run is meant to print. Same sink
+cfg_logw("chan", fmt, …)  // and prefixing as cfg_logf but NOT channel-gated. warn/error suffix the tag
+cfg_loge("chan", fmt, …)  // ("[cd:warn]" / "[cd:error]") so they stay greppable.
 ```
+- **Never `fprintf(stderr, …)` / `printf` for a message of your own.** Pick by audience, not by taste:
+  something a normal run should print → `cfg_logi/logw/loge`; something only shown when asked for →
+  a CHANNEL via `cfg_logf`. Raw prints bypass `PSXPORT_LOG_FILE`, which is exactly the bug the
+  2026-07-21 sweep fixed (524 call sites; before it, every always-on message escaped the sink).
+- The format string carries **no** `[chan]` prefix and **no** trailing `\n` — the logger adds both.
+  A LEADING `\n` is kept as a blank-line separator and emitted before the tag.
+- The one legitimate raw-print exception is output that is not ours: the guest's own BIOS-putchar
+  text (e.g. `ResetGraph:jtb=…`) must stay unprefixed and unredirected.
+- Still open (needs restructuring, not a mechanical rewrite): ~19 piecewise line-builders — hex/byte
+  dump loops in `sbs.cpp` / `dualcore.cpp` / `repl.cpp` / `mem.cpp` that emit a line across many
+  calls. Converting one means accumulating into a buffer first (see `cfg_dump` for the shape).
 - Every lookup reads the environment **once** and caches. In hot paths (per-prim / per-GTE-op /
   per-store) still keep a local `static int x=-1; if(x<0) x=cfg_*(…)` so there is no per-call scan.
 - `-w` is on in the build, so an int/pointer mix-up (e.g. mapping a *valued* flag to `cfg_dbg`) is **not**
@@ -436,8 +450,9 @@ quality, complementing `preseqobj`'s per-object oscillation gate above (this one
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:
-- **Logging:** `LOG_FILE`=<path> — redirect ALL `cfg_logf` channel output from stderr to a file
-  (append, line-buffered, opened once).
+- **Logging:** `LOG_FILE`=<path> — redirect ALL logger output (both the `cfg_logf` channels and the
+  always-on `cfg_logi/logw/loge` levels) from stderr to a file (append, line-buffered, opened once).
+  With it set, stderr carries only the guest's own BIOS-putchar text.
 - **Renderer / mode:** `VK` (default on), `SW_GPU`, `VK_NODEPTH`, `VK_TRITEST`, `VK_HEADLESS`,
   `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `FPS60`, `FPS60_GATE`, `FPS60_SYNTH`, `FPS60_TFORCE`
   (TEMPORARY gate-B test knob, docs/fps60-rework.md Tier 1: 0 pins the whole interp present — camera lerp

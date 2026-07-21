@@ -83,9 +83,7 @@ void GpuState::vram_guard_check(Core* core, const char* path, int x, int y, int 
   // out-of-page rect is a garbage descriptor that the vram() wrap would silently fold onto live VRAM.
   if (!rect_in_page(x, y, w, h)) {
     if (s_vg_oob_log++ < 40)
-      fprintf(stderr, "[vramguard] OUT-OF-PAGE %s f%d rect=(%d,%d %dx%d) src=0x%08X node=0x%08X "
-              "-> wraps onto VRAM (likely the clobber vector)\n",
-              path, s_frame, x, y, w, h, src, s_cur_node);
+      cfg_logi("vramguard", "OUT-OF-PAGE %s f%d rect=(%d,%d %dx%d) src=0x%08X node=0x%08X -> wraps onto VRAM (likely the clobber vector)", path, s_frame, x, y, w, h, src, s_cur_node);
   }
 
   // (b) Clobber of a registered, resident atlas region by a NON-atlas writer. Atlas uploads themselves
@@ -98,9 +96,7 @@ void GpuState::vram_guard_check(Core* core, const char* path, int x, int y, int 
     if (!s_vg[i].live) continue;
     if (rects_overlap(x, y, w, h, s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h)) {
       if (s_vg_clobber_log++ < 80)
-        fprintf(stderr, "[vramguard] CLOBBER %s f%d rect=(%d,%d %dx%d) HITS atlas[%s] "
-                "(%d,%d %dx%d) src=0x%08X node=0x%08X\n",
-                path, s_frame, x, y, w, h, s_vg[i].tag,
+        cfg_logi("vramguard", "CLOBBER %s f%d rect=(%d,%d %dx%d) HITS atlas[%s] (%d,%d %dx%d) src=0x%08X node=0x%08X", path, s_frame, x, y, w, h, s_vg[i].tag,
                 s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h, src, s_cur_node);
       return;
     }

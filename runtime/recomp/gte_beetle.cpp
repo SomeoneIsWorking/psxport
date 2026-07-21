@@ -77,8 +77,7 @@ static void ws_sx_record(void) {
 void ws_sx_dump(const char* tag) {
   GteDebug& d = GTE_CurState()->dbg;
   if (d.sxhist_on != 1 || d.sx_n == 0) return;
-  fprintf(stderr, "[ws_sxhist] %s n=%ld  below0=%ld(%.1f%%)  atOrAbove320=%ld(%.1f%%)\n",
-          tag, d.sx_n, d.sx_oob_lo, 100.0*d.sx_oob_lo/d.sx_n, d.sx_oob_hi, 100.0*d.sx_oob_hi/d.sx_n);
+  cfg_logi("ws_sxhist", "%s n=%ld  below0=%ld(%.1f%%)  atOrAbove320=%ld(%.1f%%)", tag, d.sx_n, d.sx_oob_lo, 100.0*d.sx_oob_lo/d.sx_n, d.sx_oob_hi, 100.0*d.sx_oob_hi/d.sx_n);
   for (int b = 0; b < 16; b++)
     fprintf(stderr, "  [%5d..%5d) %ld\n", b*64-256, b*64-256+64, d.sx_hist[b]);
   for (int b = 0; b < 16; b++) d.sx_hist[b] = 0;

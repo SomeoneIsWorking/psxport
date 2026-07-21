@@ -155,46 +155,39 @@ void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
   auto printHeader = [&]() {
     if (headerPrinted) return;
     headerPrinted = true;
-    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
-            addr, (unsigned long long)invocation, entrySp, entryRa, preRegs[4], preRegs[5], preRegs[6], preRegs[7]);
+    cfg_logi("mirror-verify", "0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X", addr, (unsigned long long)invocation, entrySp, entryRa, preRegs[4], preRegs[5], preRegs[6], preRegs[7]);
   };
   for (size_t i = 0; i < mJournal.size() && bad < 16; i++) {
     uint32_t a = mJournal[i].addr;
     uint8_t curVal = c->ram[a];                      // leg 2's result (never rewound)
     if (curVal != mJournal[i].nat) {
       printHeader();
-      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH ram 0x%08X: native=%02X substrate=%02X\n",
-              addr, 0x80000000u + a, mJournal[i].nat, curVal); bad++;
+      cfg_logi("mirror-verify", "0x%08X MISMATCH ram 0x%08X: native=%02X substrate=%02X", addr, 0x80000000u + a, mJournal[i].nat, curVal); bad++;
     }
   }
   for (uint32_t i = 0; i < 0x400 && bad < 16; i++)
     if (c->scratch[i] != natSpad[i]) {
       printHeader();
-      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH spad 0x%08X: native=%02X substrate=%02X\n",
-              addr, 0x1F800000u + i, natSpad[i], c->scratch[i]); bad++;
+      cfg_logi("mirror-verify", "0x%08X MISMATCH spad 0x%08X: native=%02X substrate=%02X", addr, 0x1F800000u + i, natSpad[i], c->scratch[i]); bad++;
     }
   for (int i = 0; i < kNStrictReg; i++)
     if (c->r[kStrictReg[i]] != natRegs[i]) {
       printHeader();
-      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH reg %s: native=%08X substrate=%08X\n",
-              addr, kStrictName[i], natRegs[i], c->r[kStrictReg[i]]); bad++;
+      cfg_logi("mirror-verify", "0x%08X MISMATCH reg %s: native=%08X substrate=%08X", addr, kStrictName[i], natRegs[i], c->r[kStrictReg[i]]); bad++;
     }
   if (c->hi != natHi || c->lo != natLo) {
     printHeader();
-    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH hi/lo: native=%08X/%08X substrate=%08X/%08X\n",
-            addr, natHi, natLo, c->hi, c->lo); bad++;
+    cfg_logi("mirror-verify", "0x%08X MISMATCH hi/lo: native=%08X/%08X substrate=%08X/%08X", addr, natHi, natLo, c->hi, c->lo); bad++;
   }
   if (bad) {
     bool cont = cfg_on("PSXPORT_MIRROR_VERIFY_CONTINUE");
     Check& k = check("mirror-verify");
     k.nMismatch++;
     if (!cont) {
-      fprintf(stderr, "[mirror-verify] 0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact. "
-                      "Aborting (set PSXPORT_MIRROR_VERIFY_CONTINUE=1 to log-and-continue).\n", addr, bad);
+      cfg_loge("mirror-verify", "0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact. Aborting (set PSXPORT_MIRROR_VERIFY_CONTINUE=1 to log-and-continue).", addr, bad);
       abort();
     }
-    fprintf(stderr, "[mirror-verify] 0x%08X CONTINUING past %d+ diffs (PSXPORT_MIRROR_VERIFY_CONTINUE=1) "
-                    "— execution proceeds from the NATIVE result.\n", addr, bad);
+    cfg_logi("mirror-verify", "0x%08X CONTINUING past %d+ diffs (PSXPORT_MIRROR_VERIFY_CONTINUE=1) — execution proceeds from the NATIVE result.", addr, bad);
   }
   for (size_t i = 0; i < mJournal.size(); i++) c->ram[mJournal[i].addr] = mJournal[i].nat;   // continue-from-native
   memcpy(c->scratch, natSpad, 0x400);
@@ -203,7 +196,7 @@ void VerifyHarness::strictCheck(uint32_t addr, void (*fn)(void*), void* ctx) {
   inCheck = false;
   if (!bad) {
     Check& k = check("mirror-verify");
-    if (++k.nMatch % 64 == 1) fprintf(stderr, "[mirror-verify] 0x%08X OK (pass #%ld)\n", addr, k.nMatch);
+    if (++k.nMatch % 64 == 1) cfg_logi("mirror-verify", "0x%08X OK (pass #%ld)", addr, k.nMatch);
   }
 }
 
@@ -232,43 +225,36 @@ void VerifyHarness::strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx)
   auto printHeader = [&]() {
     if (headerPrinted) return;
     headerPrinted = true;
-    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n",
-            addr, (unsigned long long)invocation, entrySp, entryRa, preRegs[4], preRegs[5], preRegs[6], preRegs[7]);
+    cfg_logi("mirror-verify", "0x%08X MISMATCH at invocation #%llu entry sp=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X", addr, (unsigned long long)invocation, entrySp, entryRa, preRegs[4], preRegs[5], preRegs[6], preRegs[7]);
   };
   for (uint32_t i = 0; i < 0x200000 && bad < 16; i++)
     if (c->ram[i] != mStrictNatRam[i]) {
       printHeader();
-      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH ram 0x%08X: native=%02X substrate=%02X\n",
-              addr, 0x80000000u + i, mStrictNatRam[i], c->ram[i]); bad++;
+      cfg_logi("mirror-verify", "0x%08X MISMATCH ram 0x%08X: native=%02X substrate=%02X", addr, 0x80000000u + i, mStrictNatRam[i], c->ram[i]); bad++;
     }
   for (uint32_t i = 0; i < 0x400 && bad < 16; i++)
     if (c->scratch[i] != mStrictNatSpad[i]) {
       printHeader();
-      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH spad 0x%08X: native=%02X substrate=%02X\n",
-              addr, 0x1F800000u + i, mStrictNatSpad[i], c->scratch[i]); bad++;
+      cfg_logi("mirror-verify", "0x%08X MISMATCH spad 0x%08X: native=%02X substrate=%02X", addr, 0x1F800000u + i, mStrictNatSpad[i], c->scratch[i]); bad++;
     }
   for (int i = 0; i < kNStrictReg; i++)
     if (c->r[kStrictReg[i]] != mStrictNatRegs[i]) {
       printHeader();
-      fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH reg %s: native=%08X substrate=%08X\n",
-              addr, kStrictName[i], mStrictNatRegs[i], c->r[kStrictReg[i]]); bad++;
+      cfg_logi("mirror-verify", "0x%08X MISMATCH reg %s: native=%08X substrate=%08X", addr, kStrictName[i], mStrictNatRegs[i], c->r[kStrictReg[i]]); bad++;
     }
   if (c->hi != mStrictNatRegs[14] || c->lo != mStrictNatRegs[15]) {
     printHeader();
-    fprintf(stderr, "[mirror-verify] 0x%08X MISMATCH hi/lo: native=%08X/%08X substrate=%08X/%08X\n",
-            addr, mStrictNatRegs[14], mStrictNatRegs[15], c->hi, c->lo); bad++;
+    cfg_logi("mirror-verify", "0x%08X MISMATCH hi/lo: native=%08X/%08X substrate=%08X/%08X", addr, mStrictNatRegs[14], mStrictNatRegs[15], c->hi, c->lo); bad++;
   }
   if (bad) {
     bool cont = cfg_on("PSXPORT_MIRROR_VERIFY_CONTINUE");
     Check& k = check("mirror-verify");
     k.nMismatch++;
     if (!cont) {
-      fprintf(stderr, "[mirror-verify] 0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact. "
-                      "Aborting (set PSXPORT_MIRROR_VERIFY_CONTINUE=1 to log-and-continue).\n", addr, bad);
+      cfg_loge("mirror-verify", "0x%08X FAILED (%d+ diffs) — native mirror is NOT byte-exact. Aborting (set PSXPORT_MIRROR_VERIFY_CONTINUE=1 to log-and-continue).", addr, bad);
       abort();
     }
-    fprintf(stderr, "[mirror-verify] 0x%08X CONTINUING past %d+ diffs (PSXPORT_MIRROR_VERIFY_CONTINUE=1) "
-                    "— execution proceeds from the NATIVE result.\n", addr, bad);
+    cfg_logi("mirror-verify", "0x%08X CONTINUING past %d+ diffs (PSXPORT_MIRROR_VERIFY_CONTINUE=1) — execution proceeds from the NATIVE result.", addr, bad);
   }
   memcpy(c->ram, mStrictNatRam, 0x200000); memcpy(c->scratch, mStrictNatSpad, 0x400);
   for (int i = 0; i < kNStrictReg; i++) c->r[kStrictReg[i]] = mStrictNatRegs[i];
@@ -276,7 +262,7 @@ void VerifyHarness::strictCheckFull(uint32_t addr, void (*fn)(void*), void* ctx)
   inCheck = false;
   if (!bad) {
     Check& k = check("mirror-verify");
-    if (++k.nMatch % 64 == 1) fprintf(stderr, "[mirror-verify] 0x%08X OK (pass #%ld)\n", addr, k.nMatch);
+    if (++k.nMatch % 64 == 1) cfg_logi("mirror-verify", "0x%08X OK (pass #%ld)", addr, k.nMatch);
   }
 }
 

@@ -77,12 +77,12 @@ void xa_stream_setmode(XaState* xs, uint8_t mode) {
   if (s_dbg < 0) s_dbg = cfg_str("PSXPORT_XA_DBG") ? atoi(cfg_str("PSXPORT_XA_DBG")) : 0;
   s_mode = mode;
   // If XA-ADPCM output (bit6) was turned off mid-stream, stop feeding the SPU.
-  if (s_active && !(mode & 0x40)) { s_active = 0; if (s_dbg) fprintf(stderr, "[xa] stop (XA bit cleared, mode=%02X)\n", mode); }
+  if (s_active && !(mode & 0x40)) { s_active = 0; if (s_dbg) cfg_logi("xa", "stop (XA bit cleared, mode=%02X)", mode); }
 }
 
 void xa_stream_setfilter(XaState* xs, uint8_t file, uint8_t chan) {
   s_filter_set = 1; s_filter_file = file; s_filter_chan = chan;
-  if (s_dbg > 0) fprintf(stderr, "[xa] setfilter file=%u chan=%u\n", file, chan);
+  if (s_dbg > 0) cfg_logi("xa", "setfilter file=%u chan=%u", file, chan);
 }
 
 // Setloc params: amm,ass,asect in BCD; MSF includes the 2s (150-frame) lead-in, so the
@@ -92,24 +92,23 @@ void xa_stream_setloc(XaState* xs, uint8_t amm, uint8_t ass, uint8_t asect) {
   int ss = (ass >> 4) * 10 + (ass & 0xF);
   int ff = (asect >> 4) * 10 + (asect & 0xF);
   s_lba = (uint32_t)((mm * 60 + ss) * 75 + ff - 150);
-  if (s_dbg > 0) fprintf(stderr, "[xa] setloc %02X:%02X:%02X -> LBA %u\n", amm, ass, asect, s_lba);
+  if (s_dbg > 0) cfg_logi("xa", "setloc %02X:%02X:%02X -> LBA %u", amm, ass, asect, s_lba);
 }
 
 void xa_stream_start(XaState* xs) {
   if (s_dbg < 0) s_dbg = cfg_str("PSXPORT_XA_DBG") ? atoi(cfg_str("PSXPORT_XA_DBG")) : 0;
   if (!(s_mode & 0x40)) {            // ReadS without XA-ADPCM enabled = data read (not our concern)
-    if (s_dbg) fprintf(stderr, "[xa] ReadS but XA bit not set (mode=%02X) - ignoring\n", s_mode);
+    if (s_dbg) cfg_logw("xa", "ReadS but XA bit not set (mode=%02X) - ignoring", s_mode);
     return;
   }
   xa_reset_buffers(xs);
   s_end_lba = 0; s_loop = 0;         // open-ended CdControl stream: no clip end -> EOF terminates it
   s_active = 1;
-  if (s_dbg) fprintf(stderr, "[xa] START streaming @ LBA %u (mode=%02X filter=%d)\n",
-                     s_lba, s_mode, s_filter_set);
+  if (s_dbg) cfg_logi("xa", "START streaming @ LBA %u (mode=%02X filter=%d)", s_lba, s_mode, s_filter_set);
 }
 
 void xa_stream_stop(XaState* xs) {
-  if (s_active && s_dbg) fprintf(stderr, "[xa] STOP @ LBA %u\n", s_lba);
+  if (s_active && s_dbg) cfg_logi("xa", "STOP @ LBA %u", s_lba);
   s_active = 0;
   s_owns_slot2 = 0;
 }
@@ -134,7 +133,7 @@ void xa_stream_play(XaState* xs, uint8_t chan, uint32_t start, uint32_t end, int
   s_lba = start; s_end_lba = end; s_clip_start = start; s_clip_chan = chan; s_loop = loop;
   xa_reset_buffers(xs);
   s_active = 1; s_owns_slot2 = 1;
-  if (s_dbg) fprintf(stderr, "[xa] PLAY clip chan=%u [%u..%u] loop=%d\n", chan, start, end, loop);
+  if (s_dbg) cfg_logi("xa", "PLAY clip chan=%u [%u..%u] loop=%d", chan, start, end, loop);
 }
 
 int  xa_stream_owns_slot2(XaState* xs) { return s_owns_slot2; }
@@ -161,10 +160,9 @@ static int xa_decode_next_sector(XaState* xs) {
   // Clip end: when the read head passes the clip's end LBA, the clip is done. Loop clips
   // restart at the start; one-shot clips stop (which clears busy -> cutscene advances).
   if (s_end_lba && s_lba > s_end_lba) {
-    if (s_loop) { if (s_dbg) fprintf(stderr, "[xa] LOOP chan=%u back to %u (passed end %u, span=%u sectors)\n",
-                                     s_clip_chan, s_clip_start, s_end_lba, s_end_lba - s_clip_start);
+    if (s_loop) { if (s_dbg) cfg_logi("xa", "LOOP chan=%u back to %u (passed end %u, span=%u sectors)", s_clip_chan, s_clip_start, s_end_lba, s_end_lba - s_clip_start);
                   s_lba = s_clip_start; s_hist[0][0]=s_hist[0][1]=s_hist[1][0]=s_hist[1][1]=0; }
-    else { if (s_dbg) fprintf(stderr, "[xa] clip done @ LBA %u (end %u)\n", s_lba, s_end_lba); s_active = 0; return 0; }
+    else { if (s_dbg) cfg_logi("xa", "clip done @ LBA %u (end %u)", s_lba, s_end_lba); s_active = 0; return 0; }
   }
   for (int guard = 0; guard < 64; guard++) {     // bounded scan past any interleaved data sectors
     if (!disc_read_raw(xs->disc, s_lba, raw, 2352)) { s_active = 0; return 0; }
@@ -188,19 +186,18 @@ static int xa_decode_next_sector(XaState* xs) {
         s_ring[idx][1] = pcm[2 * i + 1];
       }
       s_wr += (uint32_t)n;
-      if (s_dbg > 1) fprintf(stderr, "[xa]  sector LBA %u file=%u chan=%u submode=%02X n=%d freq=%d (wr=%u rd=%u)\n",
-                             s_lba - 1, file, chan, submode, n, freq, s_wr, (uint32_t)s_rd);
+      if (s_dbg > 1) cfg_logi("xa", " sector LBA %u file=%u chan=%u submode=%02X n=%d freq=%d (wr=%u rd=%u)", s_lba - 1, file, chan, submode, n, freq, s_wr, (uint32_t)s_rd);
       // EOF (submode bit7) ends only an OPEN-ENDED stream. A BOUNDED clip ([start..end], e.g. the
       // looping area music) ends strictly at end_lba (handled above): EOF markers inside the range
       // belong to OTHER files/channels interleaved in the same stream and must NOT cut our clip.
-      if (eof && !s_end_lba) { if (s_dbg) fprintf(stderr, "[xa] EOF @ LBA %u\n", s_lba - 1); s_active = 0; }
+      if (eof && !s_end_lba) { if (s_dbg) cfg_logi("xa", "EOF @ LBA %u", s_lba - 1); s_active = 0; }
       return n;
     }
     // Ditto for an EOF on a NON-matching (other channel's) sector: a spurious interleaved EOF (e.g. a
     // narration/voice file ending mid-range) was killing the chan4 music ~18 s early (LBA 95338 of the
     // [84515..97979] area-music clip) -> the dialog-coord resume restarted it from the top = "loops
     // early". For a bounded clip, ignore it and keep scanning toward end_lba.
-    if (eof && !s_end_lba) { if (s_dbg) fprintf(stderr, "[xa] EOF (non-audio) @ LBA %u\n", s_lba - 1); s_active = 0; return 0; }
+    if (eof && !s_end_lba) { if (s_dbg) cfg_logi("xa", "EOF (non-audio) @ LBA %u", s_lba - 1); s_active = 0; return 0; }
   }
   return 0;   // 64 consecutive non-passing sectors: give up this pump, try again next sample
 }

@@ -34,7 +34,7 @@ void FfSpan::end(const char* nm) {
 
 void FfSpan::dump(uint32_t a) {
   if (mDumped) return; mDumped = 1;
-  fprintf(stderr, "[ffspan] addr %08x NOT in any of %d field-frame spans:\n", a, mN);
+  cfg_logi("ffspan", "addr %08x NOT in any of %d field-frame spans:", a, mN);
   for (int i = 0; i < mN; i++)
-    fprintf(stderr, "[ffspan]   %-12s [%08x .. %08x)\n", mSpans[i].name, mSpans[i].lo, mSpans[i].hi);
+    cfg_logi("ffspan", "  %-12s [%08x .. %08x)", mSpans[i].name, mSpans[i].lo, mSpans[i].hi);
 }

@@ -269,7 +269,7 @@ void prim_dump_close_if_done(Core* core, int frame) {
   GpuState& g = core->game->gpu;
   if (g.s_primdump_f && g.s_primdump_frame >= 0 && frame > g.s_primdump_frame) {
     fclose(g.s_primdump_f); g.s_primdump_f = 0;
-    fprintf(stderr, "[primdump] wrote scratch/logs/prims_f%d.csv\n", g.s_primdump_frame);
+    cfg_logi("primdump", "wrote scratch/logs/prims_f%d.csv", g.s_primdump_frame);
   }
 }
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
@@ -289,8 +289,7 @@ void GpuState::fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && 
 void GpuState::semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
   static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_SEMIDUMP"); sf = e ? atoi(e) : -1; }
   if (sf >= 0 && s_frame == sf)
-    fprintf(stderr, "[semidump] f%d %s blend=%d col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d) offY=%d\n",
-            s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
+    cfg_logi("semidump", "f%d %s blend=%d col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d) offY=%d", s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
 }
 
 // ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
@@ -467,8 +466,7 @@ void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int
         if (n++ < 6) {
           int uu = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
           int vv = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
-          fprintf(stderr, "[reddbg] @(%d,%d) out=(%d,%d,%d) tpmode=%d clut=(%d,%d) tp=(%d,%d) uv=(%d,%d)\n",
-                  x, y, r, g, bl, s_tp_mode, s_clut_x, s_clut_y, s_tp_x, s_tp_y, uu, vv);
+          cfg_logi("reddbg", "@(%d,%d) out=(%d,%d,%d) tpmode=%d clut=(%d,%d) tp=(%d,%d) uv=(%d,%d)", x, y, r, g, bl, s_tp_mode, s_clut_x, s_clut_y, s_tp_x, s_tp_y, uu, vv);
           fprintf(stderr, "[reddbg]   palette[16]@(%d,%d):", s_clut_x, s_clut_y);
           for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_clut_x + k, s_clut_y));
           fprintf(stderr, "\n[reddbg]   texrow@(%d,%d) words:", s_tp_x + (uu>>2), s_tp_y + vv);
@@ -571,7 +569,7 @@ void GpuState::tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
 int GpuState::gpu_native_load_vram(const char* path) {
   FILE* f = fopen(path, "rb"); if (!f) return 0;
   size_t n = fread(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
-  fprintf(stderr, "[transplant] loaded VRAM %zu px from %s\n", n, path);
+  cfg_logi("transplant", "loaded VRAM %zu px from %s", n, path);
   return n == (size_t)VRAM_W * VRAM_H;
 }
 void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) {
@@ -651,9 +649,7 @@ int GpuState::clutwatch_covers(int rx, int ry, int rw, int rh) {
 // copy already happened, so dump immediately.
 void GpuState::clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
   if (!clutwatch_covers(rx, ry, rw, rh)) return;
-  if (tag[0] == 'A') { s_cw_pending = 1; fprintf(stderr,
-      "[clutwatch] A0 upload START f%d rect=(%d,%d %dx%d) covers (%d,%d)\n",
-      s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y); }
+  if (tag[0] == 'A') { s_cw_pending = 1; cfg_logi("clutwatch", "A0 upload START f%d rect=(%d,%d %dx%d) covers (%d,%d)", s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y); }
   else clutwatch_dump(tag, rx, ry, rw, rh);
 }
 
@@ -730,8 +726,7 @@ void GpuState::tex_export(const char* name, int u0, int v0, int w, int h) {
       fwrite(rgb, 1, 3, f);
     }
   fclose(f);
-  fprintf(stderr, "[texexport] wrote %s (%dx%d, tp=(%d,%d) mode=%d clut=(%d,%d) uv0=(%d,%d))\n",
-          path, w, h, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, u0, v0);
+  cfg_logi("texexport", "wrote %s (%dx%d, tp=(%d,%d) mode=%d clut=(%d,%d) uv0=(%d,%d))", path, w, h, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, u0, v0);
 }
 
 // Rasterize one flat line segment with the CURRENT draw state (s_off, clip). Shared by gp0_exec and
@@ -813,7 +808,7 @@ void GpuState::gp0_exec(Core* core) {
           static struct { const char* t; int tx, ty; } seen[64]; static int nseen = 0; int f = 0;
           for (int i = 0; i < nseen; i++) if (seen[i].t == t && seen[i].tx == s_tp_x && seen[i].ty == s_tp_y) { f = 1; break; }
           if (!f && nseen < 64) { seen[nseen].t = t; seen[nseen].tx = s_tp_x; seen[nseen].ty = s_tp_y; nseen++;
-            fprintf(stderr, "[bdtag] PSX is3d=0 op=%02x tp=(%d,%d) built by '%s'\n", op, s_tp_x, s_tp_y, t); } }
+            cfg_logi("bdtag", "PSX is3d=0 op=%02x tp=(%d,%d) built by '%s'", op, s_tp_x, s_tp_y, t); } }
         // FADE/DIM (#21): a full-screen SEMI prim is a fade/dim overlay, NOT a backdrop. It must cover the
         // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
         // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.
@@ -853,8 +848,7 @@ void GpuState::gp0_exec(Core* core) {
               return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
             int cover = intri(0,1,2) || (nv==4 && intri(1,2,3));
             if (cover) { static int n=0; if (n++<6000)
-              fprintf(stderr,"[primat] f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d bb=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)\n",
-                s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+              cfg_logi("primat", "f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d bb=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)", s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                 us[0], vs[0], s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_off_x,s_off_y,
                 rs[0],gs[0],bs[0], bx0,by0,bx1,by1); } } }
         // PSXPORT_PAINTFG=1 (diag): force every 2D-FG (HUD-band) poly to opaque solid magenta so we can SEE
@@ -969,19 +963,14 @@ void GpuState::gp0_exec(Core* core) {
         }
         static int n = 0;
         if (hit && n++ < 2000)
-          fprintf(stderr, "[polydump] f%d node=%08X op=%02X tex=%d gou=%d clut=(%d,%d) tp=(%d,%d) "
-                  "cols[(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)] "
-                  "V[(%d,%d)(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)\n",
-                  s_frame, s_cur_node, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+          cfg_logi("polydump", "f%d node=%08X op=%02X tex=%d gou=%d clut=(%d,%d) tp=(%d,%d) cols[(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)] V[(%d,%d)(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)", s_frame, s_cur_node, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   v[0].r,v[0].g,v[0].b, v[1].r,v[1].g,v[1].b, v[2].r,v[2].g,v[2].b, v[3].r,v[3].g,v[3].b,
                   v[0].x,v[0].y, v[1].x,v[1].y, v[2].x,v[2].y, v[3].x,v[3].y, s_off_x, s_off_y);
       } }
     if (s_reddbg && textured && s_cw_x >= 0 && s_clut_x == s_cw_x && s_clut_y == s_cw_y) {
       static int n = 0;
       if (n++ < 12)
-        fprintf(stderr, "[redpkt] f%d stage=%08X node=0x%08X op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d "
-                "V[(%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d)%s] off=(%d,%d)\n",
-                s_frame, core->mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
+        cfg_logi("redpkt", "f%d stage=%08X node=0x%08X op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d V[(%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d)%s] off=(%d,%d)", s_frame, core->mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
                 v[0].x,v[0].y,v[0].u,v[0].v, v[1].x,v[1].y,v[1].u,v[1].v, v[2].x,v[2].y,v[2].u,v[2].v,
                 quad?" +q":"", s_off_x, s_off_y);
     }
@@ -990,8 +979,7 @@ void GpuState::gp0_exec(Core* core) {
     if (s_oracle_prim_log && soft_gpu) {
       int xmn=v[0].x,xmx=v[0].x,ymn=v[0].y,ymx=v[0].y;
       for (int i=1;i<nv;i++){ if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
-      fprintf(stderr, "[oraprim] POLY op=%02X nv=%d tex=%d semi=%d bbox=(%d,%d)-(%d,%d) col=(%d,%d,%d) tp=(%d,%d) clut=(%d,%d)\n",
-              op, nv, textured?1:0, semi, xmn+s_off_x, ymn+s_off_y, xmx+s_off_x, ymx+s_off_y, v[0].r,v[0].g,v[0].b, s_tp_x, s_tp_y, s_clut_x, s_clut_y);
+      cfg_logi("oraprim", "POLY op=%02X nv=%d tex=%d semi=%d bbox=(%d,%d)-(%d,%d) col=(%d,%d,%d) tp=(%d,%d) clut=(%d,%d)", op, nv, textured?1:0, semi, xmn+s_off_x, ymn+s_off_y, xmx+s_off_x, ymx+s_off_y, v[0].r,v[0].g,v[0].b, s_tp_x, s_tp_y, s_clut_x, s_clut_y);
     }
     if (sw_path()) {                           // VK owns poly raster now (tee'd above); SW does the rest
       tri(v[0], v[1], v[2], textured, shade, semi, raw);
@@ -1017,9 +1005,7 @@ void GpuState::gp0_exec(Core* core) {
         int hit = (pax < 0) || (pax>=X && pax<X+w && pay>=Y && pay<Y+h);
         static int n = 0;
         if (hit && n++ < 2000)
-          fprintf(stderr, "[polydump] f%d node=%08X SPRITE op=%02X tex=%d semi=%d clut=(%d,%d) tp=(%d,%d) "
-                  "col=(%d,%d,%d) at=(%d,%d) %dx%d uv0=(%d,%d) off=(%d,%d)\n",
-                  s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+          cfg_logi("polydump", "f%d node=%08X SPRITE op=%02X tex=%d semi=%d clut=(%d,%d) tp=(%d,%d) col=(%d,%d,%d) at=(%d,%d) %dx%d uv0=(%d,%d) off=(%d,%d)", s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
       } }
     // PSXPORT_TEXEXPORT=<frame> — export the texture of each large textured sprite (backgrounds) on that
@@ -1045,8 +1031,7 @@ void GpuState::gp0_exec(Core* core) {
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
     { if (s_oracle_prim_log && soft_gpu)
-        fprintf(stderr, "[oraprim] SPR  op=%02X tex=%d semi=%d at=(%d,%d) %dx%d col=(%d,%d,%d) uv=(%d,%d) tp=(%d,%d) clut=(%d,%d)\n",
-                op, textured?1:0, semi, x+s_off_x, y+s_off_y, w, h, cr, cg, cb, u0, v0, s_tp_x, s_tp_y, s_clut_x, s_clut_y); }
+        cfg_logi("oraprim", "SPR  op=%02X tex=%d semi=%d at=(%d,%d) %dx%d col=(%d,%d,%d) uv=(%d,%d) tp=(%d,%d) clut=(%d,%d)", op, textured?1:0, semi, x+s_off_x, y+s_off_y, w, h, cr, cg, cb, u0, v0, s_tp_x, s_tp_y, s_clut_x, s_clut_y); }
     if (sw_path()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (vk_path()) {
@@ -1131,7 +1116,7 @@ void GpuState::gp0_exec(Core* core) {
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
     { if (s_oracle_prim_log && soft_gpu)
-        fprintf(stderr, "[oraprim] FILL at=(%d,%d) %dx%d col=(%d,%d,%d)\n", x, y, w, h, cr, cg, cb); }
+        cfg_logi("oraprim", "FILL at=(%d,%d) %dx%d col=(%d,%d,%d)", x, y, w, h, cr, cg, cb); }
     // WIDESCREEN BACKDROP FILL (#52): FillRect ignores clip/offset by design (PSX hardware behavior,
     // see the comment above) and writes only the native 320x240 VRAM rect — it has no notion of the
     // wide margins at all. The field's sky/sea backdrop never hits this problem because it is an
@@ -1317,18 +1302,17 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       if (vk_path()) gpu_vk_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2)) {
-        fprintf(stderr, "[texwatch] f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X\n",
-                s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
+        cfg_logi("texwatch", "f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X", s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
         // Dump RAM + the OT node neighbourhood the first time the atlas-clobbering copy fires, so the
         // malformed node and the chain that reaches it can be examined offline.
         if (cfg_str("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
           uint32_t na = s_cur_node & 0x1FFFFF;
-          fprintf(stderr, "[clobber] OT root madr=0x%08X node@0x%08X neighbourhood:\n", 0x80000000u|s_ot_madr, s_cur_node);
+          cfg_logi("clobber", "OT root madr=0x%08X node@0x%08X neighbourhood:", 0x80000000u|s_ot_madr, s_cur_node);
           for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
                   0x80000000u | ((na + k*4) & 0x1FFFFF), core->mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
           FILE* mf = fopen(cfg_str("PSXPORT_CLOBBERDUMP"), "wb");
           if (mf) { fwrite(core->ram, 1, 0x200000, mf); fclose(mf);
-                    fprintf(stderr, "[clobber] RAM dumped -> %s\n", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
+                    cfg_logi("clobber", "RAM dumped -> %s", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
       }
     } else if (op != 0xC0) {
       gp0_exec(core);
@@ -1438,7 +1422,7 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
   }
   void image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_vk.cpp — PNG by default
   unsigned char* buf = (unsigned char*)malloc((size_t)s_disp_w * s_disp_h * 3);
-  if (!buf) { fprintf(stderr, "[shot] alloc failed for %s\n", path); return; }
+  if (!buf) { cfg_loge("shot", "alloc failed for %s", path); return; }
   for (int y = 0; y < s_disp_h; y++)
     for (int x = 0; x < s_disp_w; x++) {
       uint16_t p = *vram(s_disp_x + x, s_disp_y + y);
@@ -1447,7 +1431,7 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
     }
   image_write_rgb24(path, buf, s_disp_w, s_disp_h);
   free(buf);
-  fprintf(stderr, "[shot] f%d -> %s (%dx%d disp@%d,%d)\n", s_frame, path, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+  cfg_logi("shot", "f%d -> %s (%dx%d disp@%d,%d)", s_frame, path, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
 }
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
 // window; fps60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
@@ -1513,12 +1497,11 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
       if (col && s_frame == fr) { FILE* vf = fopen(col + 1, "wb");
         if (vf) { fwrite(s_vram, 2, VRAM_W * VRAM_H, vf); fclose(vf);
-                  fprintf(stderr, "[gpu] VRAM dump f%d -> %s\n", s_frame, col + 1); } } } }
+                  cfg_logi("gpu", "VRAM dump f%d -> %s", s_frame, col + 1); } } } }
   if (cfg_dbg("stage") && (s_frame % 200) == 0)
     cfg_logf("stage", "[stagetl] gpu f%d task0entry=%08X", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
-  if (s_log) fprintf(stderr, "[gpu] frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)\n",
-                     s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+  if (s_log) cfg_logi("gpu", "frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)", s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
   // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
   // engines at a scene-aligned frame (the atlas is uploaded once at scene load = static per scene).
@@ -1527,7 +1510,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       if (e) { const char* col = strchr(e, ':'); if (col) { vf = atoi(e); snprintf(vp, sizeof vp, "%s", col + 1); } } }
     if (vf >= 0 && s_frame == vf) { FILE* f = fopen(vp, "wb");
       if (f) { fwrite(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
-               fprintf(stderr, "[vramdump] f%d -> %s (1024x512x16)\n", s_frame, vp); } } }
+               cfg_logi("vramdump", "f%d -> %s (1024x512x16)", s_frame, vp); } } }
   if (dir) {
     if (s_frame == 0) { char cmd[600]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", dir); int r = system(cmd); (void)r; }
     char path[512]; snprintf(path, sizeof path, "%s/f%05d.ppm", dir, s_frame);
@@ -1547,8 +1530,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     if (fa == -2) { const char* e = cfg_str("PSXPORT_FADEDBG"); fa = fb = -1;
       if (e) { fa = atoi(e); const char* col = strchr(e, ':'); fb = col ? atoi(col + 1) : fa + 200; } }
     if (fa >= 0 && s_frame >= fa && s_frame <= fb)
-      fprintf(stderr, "[fadedbg] f%d disp=(%d,%d) drawY=%d maxcol=%d nprim=%d nsemi=%d semi[%d..%d] bigsemi=%d\n",
-              s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
+      cfg_logi("fadedbg", "f%d disp=(%d,%d) drawY=%d maxcol=%d nprim=%d nsemi=%d semi[%d..%d] bigsemi=%d", s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
               s_fade_semimin == 999 ? -1 : s_fade_semimin, s_fade_semimax, s_fade_bigsemi); }
   frame_finalize(core);   // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
 }
@@ -1748,8 +1730,7 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
   }
   if (guard >= 0x10000) {
     static int warned = 0;
-    if (!warned++) fprintf(stderr, "[gpu] WARN: OT walk hit %d-node cap (madr=0x%08X) — "
-                           "malformed/cyclic ordering table\n", guard, 0x80000000u | s_ot_madr);
+    if (!warned++) cfg_logw("gpu", "WARN: OT walk hit %d-node cap (madr=0x%08X) — malformed/cyclic ordering table", guard, 0x80000000u | s_ot_madr);
   }
   s_ot_2d_only = false;   // walk done — the parameter is scoped to this call
 }

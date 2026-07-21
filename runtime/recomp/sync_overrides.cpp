@@ -17,6 +17,7 @@
 #include "recomp_iface.h"   // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
 #include <cstdio>
 #include <cstdlib>
+#include "cfg.h"
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
@@ -94,11 +95,10 @@ bool PlatformHle::inBiosWindow(uint32_t a) {
 
 void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   if (!inBiosWindow(addr)) {
-    fprintf(stderr, "[plat-hle] REFUSED 0x%08X — not an I/O / BIOS-library address (game/engine logic "
-                    "is owned top-down, never HLE'd here)\n", addr);
+    cfg_loge("plat-hle", "REFUSED 0x%08X — not an I/O / BIOS-library address (game/engine logic is owned top-down, never HLE'd here)", addr);
     return;
   }
-  if (mN >= kMax) { fprintf(stderr, "[plat-hle] table full\n"); return; }
+  if (mN >= kMax) { cfg_logi("plat-hle", "table full"); return; }
   mAddr[mN] = addr; mFn[mN] = fn; mN++;
   if (addr < mLo) mLo = addr;
   if (addr > mHi) mHi = addr;

@@ -271,7 +271,7 @@ void RmlOverlay::activateFocused(int dir) {
     if (!f) return;
     std::string id;
     if (!(id = f->GetAttribute<Rml::String>("action", "")).empty()) {
-        if (id == "quit")  { fprintf(stderr, "[rmlui] quit from menu\n"); exit(0); }
+        if (id == "quit")  { cfg_logi("rmlui", "quit from menu"); exit(0); }
         if (id == "close") { mVisible = false; applyVisibility(); }
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
         if (id.rfind("music_", 0) == 0 && game) {
@@ -327,7 +327,7 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
 
     auto* render = new RmlRenderInterfaceGpu();
     if (!render->Init(dev, swap_fmt)) {
-        fprintf(stderr, "[rmlui] render interface init failed; overlay disabled\n");
+        cfg_loge("rmlui", "render interface init failed; overlay disabled");
         delete render; return;
     }
     mRender = render;
@@ -337,7 +337,7 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     mSys = sys;
     Rml::SetSystemInterface(sys);
     Rml::SetRenderInterface(render);
-    if (!Rml::Initialise()) { fprintf(stderr, "[rmlui] Rml::Initialise failed; overlay disabled\n"); return; }
+    if (!Rml::Initialise()) { cfg_loge("rmlui", "Rml::Initialise failed; overlay disabled"); return; }
 
     const char* fonts[] = {
         "assets/rml/FiraSans-Regular.ttf",
@@ -346,21 +346,18 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     };
     int loaded = 0;
     for (const char* f : fonts) if (Rml::LoadFontFace(rml_asset(f).c_str())) loaded++;
-    if (!loaded) fprintf(stderr, "[rmlui] WARNING: no fonts loaded (assets/rml/*.ttf missing; "
-                                 "set PSXPORT_ASSET_DIR to the dir containing assets/)\n");
+    if (!loaded) cfg_logw("rmlui", "WARNING: no fonts loaded (assets/rml/*.ttf missing; set PSXPORT_ASSET_DIR to the dir containing assets/)");
 
     int ww = 0, wh = 0; SDL_GetWindowSize(win, &ww, &wh);
     if (ww <= 0) ww = 1280; if (wh <= 0) wh = 720;
     Rml::Context* c = Rml::CreateContext("tomba2_menu", Rml::Vector2i(ww, wh));
-    if (!c) { fprintf(stderr, "[rmlui] CreateContext failed\n"); return; }
+    if (!c) { cfg_loge("rmlui", "CreateContext failed"); return; }
     mCtx = c;
     Rml::Debugger::Initialise(c);
 
     Rml::ElementDocument* d = c->LoadDocument(rml_asset("assets/rml/menu.rml").c_str());
     if (!d) {
-        fprintf(stderr, "[rmlui] LoadDocument(%s) FAILED — menu unavailable "
-                        "(set PSXPORT_ASSET_DIR to the dir containing assets/)\n",
-                rml_asset("assets/rml/menu.rml").c_str());
+        cfg_loge("rmlui", "LoadDocument(%s) FAILED — menu unavailable (set PSXPORT_ASSET_DIR to the dir containing assets/)", rml_asset("assets/rml/menu.rml").c_str());
     } else {
         mDoc = d;
         attachHandlers();
@@ -369,7 +366,7 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     }
 
     mInited = true;
-    fprintf(stderr, "[rmlui] overlay up (ESC to toggle the menu)\n");
+    cfg_logi("rmlui", "overlay up (ESC to toggle the menu)");
 }
 
 void RmlOverlay::shutdown() {

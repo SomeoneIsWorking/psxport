@@ -186,7 +186,7 @@ void gpu_vk_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, 
 int GpuVkState::frame_via_fb() { return 0; }
 
 // ---- SDL_GPU helpers --------------------------------------------------------------------------------
-#define GPUCHK(p, what) do { if (!(p)) { fprintf(stderr, "[gpu_vk] %s failed: %s\n", what, SDL_GetError()); exit(2); } } while (0)
+#define GPUCHK(p, what) do { if (!(p)) { cfg_loge("gpu_vk", "%s failed: %s", what, SDL_GetError()); exit(2); } } while (0)
 
 static SDL_GPUShader* make_shader(const uint32_t* code, unsigned len, SDL_GPUShaderStage stage,
                                   Uint32 num_samplers, Uint32 num_uniform_buffers) {
@@ -402,7 +402,7 @@ void GpuVkState::ensure_ires_targets(int i) {
   rti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
   rti.width = w; rti.height = h; rti.layer_count_or_depth = 1; rti.num_levels = 1;
   s_ires_rgba = SDL_CreateGPUTexture(s_dev, &rti); GPUCHK(s_ires_rgba, "ires rgba tex");
-  fprintf(stderr, "[gpu_vk] ires targets (re)built: %dx%d (scale=%d)\n", w, h, i);
+  cfg_logi("gpu_vk", "ires targets (re)built: %dx%d (scale=%d)", w, h, i);
 }
 
 // Build the 3D raster PIPELINES (shared device objects; the render targets are per-Game). Once.
@@ -443,14 +443,14 @@ static void create_3d_pipelines(void) {
                                                       spv_g_ires_downsample_frag, spv_g_ires_downsample_frag_len,
                                                       SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, 1, 1);   // +1 uniform: box side `n`; 1 sampler: the composite C (plain box downsample for the headless shot)
   gdev().s_pipes_3d = 1;
-  fprintf(stderr, "[gpu_vk] 3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)\n");
+  cfg_logi("gpu_vk", "3D raster up (RG8 color target + D32 depth, real HW-blend semi via float intermediate; per-Game targets)");
 }
 
 static void init_gpu(Game* game) {
   s_inited = 1;
   // SDL_GPU requires the video subsystem even headless (the device is created against it; we just don't
   // open a window or claim a swapchain).
-  if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "[gpu_vk] SDL_Init(VIDEO) failed: %s\n", SDL_GetError()); exit(2); }
+  if (!SDL_Init(SDL_INIT_VIDEO)) { cfg_loge("gpu_vk", "SDL_Init(VIDEO) failed: %s", SDL_GetError()); exit(2); }
   if (!s_headless) {
     int fullscreen = cfg_on("PSXPORT_FULLSCREEN")
                   || (cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) == 0);
@@ -461,7 +461,7 @@ static void init_gpu(Game* game) {
   // Create the GPU device (SPIR-V shaders; let SDL pick the optimal driver — Vulkan on Linux, Metal on Mac).
   s_dev = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, cfg_on("PSXPORT_GPU_DEBUG") ? true : false, NULL);
   GPUCHK(s_dev, "SDL_CreateGPUDevice");
-  fprintf(stderr, "[gpu_vk] SDL_GPU device up (driver: %s)\n", SDL_GetGPUDeviceDriver(s_dev));
+  cfg_logi("gpu_vk", "SDL_GPU device up (driver: %s)", SDL_GetGPUDeviceDriver(s_dev));
   if (!s_headless) {
     GPUCHK(SDL_ClaimWindowForGPUDevice(s_dev, s_win), "SDL_ClaimWindowForGPUDevice");
     s_swap_fmt = SDL_GetGPUSwapchainTextureFormat(s_dev, s_win);
@@ -483,7 +483,7 @@ static void init_gpu(Game* game) {
     s_image_pipe   = make_fullscreen_pipeline(spv_g_image_vert,   spv_g_image_vert_len,   spv_g_image_frag,   spv_g_image_frag_len, s_swap_fmt);
   }
   create_3d_pipelines();   // the native 3D/textured raster pipelines — windowed AND headless
-  fprintf(stderr, "[gpu_vk] %s renderer up (VRAM %dx%d RG8 = PSX 1555)\n", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
+  cfg_logi("gpu_vk", "%s renderer up (VRAM %dx%d RG8 = PSX 1555)", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
   // RmlUi mod/debug overlay — windowed only (it records into the swapchain present pass). No-op if its
   // assets/fonts are missing; ESC toggles it once up.
   if (!s_headless) overlay_glue_init(game, s_win, s_dev, s_swap_fmt);
@@ -828,8 +828,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (cfg_on("PSXPORT_GPU_TRACE")) { int& n = gdev().s_trace_n; if (n++ < 4 || (n % 200) == 0) {
     long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (src[i]) nz++;
     int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += s_semi_n[m];
-    fprintf(stderr, "[gpu_vk] present #%d src nonzero=%ld/%d disp=%d,%d %dx%d | batch tri=%d tex=%d semi=%d\n",
-            n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total); } }
+    cfg_logi("gpu_vk", "present #%d src nonzero=%ld/%d disp=%d,%d %dx%d | batch tri=%d tex=%d semi=%d", n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total); } }
   // `debug fadewatch`: per-present log of the ScreenFade state (the PC-native subsystem that owns fade).
   FadeState fade; game->core.hooks->renderFadeState(&game->core, &fade);
   if (cfg_dbg("fadewatch")) { GpuDevice& gd = gdev();
@@ -959,7 +958,7 @@ static const uint16_t* readback_vram(GpuVkState& g) {
   SDL_ReleaseGPUFence(s_dev, fence);
   const uint16_t* p = (const uint16_t*)SDL_MapGPUTransferBuffer(s_dev, g.s_rb_xfer, false);
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (p[i]) nz++;
-    fprintf(stderr, "[gpu_vk] readback nonzero=%ld/%d\n", nz, VRAM_W * VRAM_H); }
+    cfg_logi("gpu_vk", "readback nonzero=%ld/%d", nz, VRAM_W * VRAM_H); }
   return p;
 }
 #include <SDL3_image/SDL_image.h>
@@ -996,22 +995,22 @@ static void dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int 
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
 }
 void GpuVkState::shot(const char* path) {
-  if (!gpu_vk_enabled() || !s_inited) { fprintf(stderr, "[gpu_shot] GPU not active\n"); return; }
+  if (!gpu_vk_enabled() || !s_inited) { cfg_logi("gpu_shot", "GPU not active"); return; }
   FadeState f; game->core.hooks->renderFadeState(&game->core, &f);
   dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
-  fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
+  cfg_logi("gpu_shot", "wrote %s (%dx%d @ %d,%d)", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuVkState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) return;
   FadeState f; core->hooks->renderFadeState(core, &f);
   dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b);
-  fprintf(stderr, "[gpu_shot] wrote %s (%dx%d @ %d,%d)\n", path, w, h, sx, sy);
+  cfg_logi("gpu_shot", "wrote %s (%dx%d @ %d,%d)", path, w, h, sx, sy);
 }
 void gpu_vk_vram_region(Core* core, const char* path, int x, int y, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) return;
   dump_to(core->game->gpu_vk, path, x, y, w, h, 0, 0, 0, 0);   // raw VRAM region dump — no engine fade applied
-  fprintf(stderr, "[gpu_vram] wrote %s (%dx%d @ %d,%d)\n", path, w, h, x, y);
+  cfg_logi("gpu_vram", "wrote %s (%dx%d @ %d,%d)", path, w, h, x, y);
 }
 // DEBUG ONLY (temporary, ires bring-up): dump the FULL ires-scaled target verbatim (no downsample) so the
 // scaled geometry pass's actual output can be inspected directly. No-op if ires isn't currently active
@@ -1020,7 +1019,7 @@ void gpu_vk_vram_region(Core* core, const char* path, int x, int y, int w, int h
 void gpu_vk_ires_rawdump(Core* core, const char* path) {
   if (!gpu_vk_enabled() || !s_inited) return;
   GpuVkState& g = core->game->gpu_vk;
-  if (g.s_ires_scale <= 1 || !g.s_ires_color) { fprintf(stderr, "[ires_dbg] no ires target built (scale=%d)\n", g.s_ires_scale); return; }
+  if (g.s_ires_scale <= 1 || !g.s_ires_color) { cfg_logi("ires_dbg", "no ires target built (scale=%d)", g.s_ires_scale); return; }
   int cw = VRAM_W * g.s_ires_scale, ch = VRAM_H * g.s_ires_scale;
   SDL_GPUTransferBufferCreateInfo dn = {}; dn.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; dn.size = (Uint32)cw * ch * 2;
   SDL_GPUTransferBuffer* dbg_xfer = SDL_CreateGPUTransferBuffer(s_dev, &dn); GPUCHK(dbg_xfer, "ires dbg xfer");
@@ -1044,7 +1043,7 @@ void gpu_vk_ires_rawdump(Core* core, const char* path) {
   }
   SDL_UnmapGPUTransferBuffer(s_dev, dbg_xfer);
   SDL_ReleaseGPUTransferBuffer(s_dev, dbg_xfer);
-  fprintf(stderr, "[ires_dbg] rawdump %dx%d -> %s\n", cw, ch, path);
+  cfg_logi("ires_dbg", "rawdump %dx%d -> %s", cw, ch, path);
 }
 // Raw 16-bit VRAM words at (x,y..y+n-1 wrapped along X) — dark-outline STP-bit diag (2026-07-01,
 // scratch/handoff.md): tells apart a genuine opaque texel (STP=0, faithful) from a lost/miscomputed
@@ -1064,7 +1063,7 @@ void gpu_vk_vram_raw(Core* core, const char* path) {
   for (int y = 0; y < VRAM_H; y++) fwrite(&vram[y * VRAM_W], 2, VRAM_W, f);
   fclose(f);
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
-  fprintf(stderr, "[gpu_vram] wrote RAW %s (%dx%d u16)\n", path, VRAM_W, VRAM_H);
+  cfg_logi("gpu_vram", "wrote RAW %s (%dx%d u16)", path, VRAM_W, VRAM_H);
 }
 
 // ---- per-prim state setters (depth/order; consumed by the 3D raster) --------------------------------
@@ -1103,7 +1102,7 @@ void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (voi
     char p[192]; snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
     FadeState f; game->core.hooks->renderFadeState(&game->core, &f);
     dump_to(*this, p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
-    if (--s_preseq_left == 0) fprintf(stderr, "[preseq] done: %d frames -> %s\n", s_preseq_idx, s_preseq_dir);
+    if (--s_preseq_left == 0) cfg_logi("preseq", "done: %d frames -> %s", s_preseq_idx, s_preseq_dir);
   }
   s_tri_n = s_tex_n = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_n[m] = 0;
@@ -1290,10 +1289,9 @@ void GpuVkState::tritest() {
   int top_red  = (top[0] > 200 && top[1] < 60 && top[2] < 60);
   int bot_blue = (bot[2] > 200 && bot[0] < 60 && bot[1] < 60);
   int ok = top_red && bot_blue;
-  fprintf(stderr, "[gpu_selftest] top(%d,%d,%d) expect RED  bottom(%d,%d,%d) expect BLUE  orientation+1555 => %s\n",
-          top[0], top[1], top[2], bot[0], bot[1], bot[2], ok ? "PASS" : "FAIL");
+  cfg_logi("gpu_selftest", "top(%d,%d,%d) expect RED  bottom(%d,%d,%d) expect BLUE  orientation+1555 => %s", top[0], top[1], top[2], bot[0], bot[1], bot[2], ok ? "PASS" : "FAIL");
   if (!ok && bot[0] > 200 && top[2] > 200)
-    fprintf(stderr, "[gpu_selftest] (top is BLUE, bottom is RED → image is UPSIDE DOWN — the swapchain Y-flip regressed)\n");
+    cfg_logi("gpu_selftest", "(top is BLUE, bottom is RED → image is UPSIDE DOWN — the swapchain Y-flip regressed)");
   SDL_UnmapGPUTransferBuffer(s_dev, dl);
   exit(ok ? 0 : 1);
 }
@@ -1327,7 +1325,7 @@ void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, in
   const uint16_t* src = readback_vram(g);          // download it (RG8 bytes == uint16 1555 words)
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (int yy=0; yy<h; yy++) for (int xx=0; xx<w; xx++) if (src[((sy+yy)%VRAM_H)*VRAM_W + ((sx+xx)&1023)]) nz++;
     RenderStats& st = core->rsub.stats;
-    fprintf(stderr, "[gpu_vk] readback region sx=%d sy=%d %dx%d region-nonzero=%ld/%d fade=%d(%d,%d,%d) batch tri=%d tex=%d semi=%d worldquads=%ld\n", sx, sy, w, h, nz, w*h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b, a, b, c, st.dbgWorldQuads);
+    cfg_logi("gpu_vk", "readback region sx=%d sy=%d %dx%d region-nonzero=%ld/%d fade=%d(%d,%d,%d) batch tri=%d tex=%d semi=%d worldquads=%ld", sx, sy, w, h, nz, w*h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b, a, b, c, st.dbgWorldQuads);
     st.dbgWorldQuads = 0; }
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
     uint16_t p = src[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];

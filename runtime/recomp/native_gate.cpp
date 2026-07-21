@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include "cfg.h"
 
 int NativeGates::get(const char* name) {
   for (int i = 0; i < mCount; i++) if (!strcmp(mGates[i].name, name)) return mGates[i].on;
@@ -16,7 +17,7 @@ void NativeGates::set(const char* name, int on) {
 }
 
 void NativeGates::list() const {
-  fprintf(stderr, "[native] gates (%d):\n", mCount);
+  cfg_logi("native", "gates (%d):", mCount);
   for (int i = 0; i < mCount; i++)
     fprintf(stderr, "  %-16s %s\n", mGates[i].name, mGates[i].on ? "on" : "off");
 }

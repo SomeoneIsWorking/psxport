@@ -43,7 +43,7 @@ const char* g_forceGen = (const char*)1;   // sentinel: parse on first use
 bool forced(uint32_t addr) {
   if (g_forceGen == (const char*)1) {
     g_forceGen = getenv("PSXPORT_THUNK_FORCE_GEN");
-    if (g_forceGen) fprintf(stderr, "[overrides] FORCE_GEN active: %s\n", g_forceGen);
+    if (g_forceGen) cfg_logi("overrides", "FORCE_GEN active: %s", g_forceGen);
   }
   for (const char* p = g_forceGen; p && *p; ) {
     uint32_t a = (uint32_t)strtoul(p, (char**)&p, 0);
@@ -55,7 +55,7 @@ bool forced(uint32_t addr) {
 
 void dump_atexit() {
   if (!cfg_dbg("ovhit") || g_n == 0) return;
-  fprintf(stderr, "[ovhit] override registry hit counts (native=coreA / oracle=coreB):\n");
+  cfg_logi("ovhit", "override registry hit counts (native=coreA / oracle=coreB):");
   for (int i = 0; i < g_n; i++) {
     const Entry& e = g_tab[i];
     char label[32];
@@ -101,7 +101,7 @@ void runEntry(Core* c, int slot) {
 void thunk(Core* c) {
   int slot = lookup(norm(c->pc));
   if (slot < 0) {
-    fprintf(stderr, "[overrides] thunk with no entry for pc=%08X (table has %d)\n", c->pc, g_n);
+    cfg_logi("overrides", "thunk with no entry for pc=%08X (table has %d)", c->pc, g_n);
     abort();
   }
   runEntry(c, slot);
@@ -115,7 +115,7 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
   const uint32_t k = norm(addr);
   int slot = lookup(k);
   if (slot < 0) {
-    if (g_n >= kCap) { fprintf(stderr, "[overrides] registry full (kCap=%d)\n", kCap); abort(); }
+    if (g_n >= kCap) { cfg_logi("overrides", "registry full (kCap=%d)", kCap); abort(); }
     slot = g_n++;
     g_tab[slot].nativeHits = g_tab[slot].oracleHits = 0;
     if (k < g_lo) g_lo = k;

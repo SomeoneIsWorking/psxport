@@ -176,8 +176,7 @@ void RenderQueue::objidOverlay(Core* core) {
       int cx = (int)(sx + 0.5f), cy = (int)(sy + 0.5f);
       if (cx < -60 || cx > 420 || cy < -40 || cy > 280) continue;   // off-screen
       if (quad) nquad++; else nobj++;
-      if (dolog && quad) fprintf(stderr, "[objid-q] node=%08X rtype=0x%02X scr=(%d,%d) world=(%d,%d,%d) +0xC=%02X +0xD=%02X\n",
-                                 n, rtype, (int)(sx+0.5f),(int)(sy+0.5f), wx,wy,wz, core->mem_r8(n+0xC), core->mem_r8(n+0xD));
+      if (dolog && quad) cfg_logi("objid-q", "node=%08X rtype=0x%02X scr=(%d,%d) world=(%d,%d,%d) +0xC=%02X +0xD=%02X", n, rtype, (int)(sx+0.5f),(int)(sy+0.5f), wx,wy,wz, core->mem_r8(n+0xC), core->mem_r8(n+0xD));
       unsigned char br = quad ? 255 : 0, bg = 255, bb = quad ? 0 : 255;   // quads yellow, 3D objects cyan
       objidBox(core, ref, cx - 6, cy - 6, cx + 6, cy + 6, br, bg, bb, 1);
       char l1[16], l2[40];
@@ -187,7 +186,7 @@ void RenderQueue::objidOverlay(Core* core) {
       objidStr(core, ref, cx + 9, cy + 6, 1, l2, br, bg, bb);
     }
   }
-  if (dolog) fprintf(stderr, "[objid] === %d live; %d quads + %d 3D boxed ===\n", nlive, nquad, nobj);
+  if (dolog) cfg_logi("objid", "=== %d live; %d quads + %d 3D boxed ===", nlive, nquad, nobj);
 }
 
 // The render queue is THE render path — one behavior, the PC game. No env gate (user directive
@@ -204,9 +203,7 @@ RqItem* RenderQueue::push() {
     // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
     // running away (e.g. a stuck render walk re-submitting the same scene every frame — the bug-1 / later-273
     // symptom). Abort with a C backtrace so that submit path is visible rather than hidden behind a drop.
-    fprintf(stderr, "\n[rq] FATAL: render queue full (%d items) — refusing to drop prims (fail-fast).\n"
-                    "  A submit path produced > %d prims this frame (runaway re-submission?). Backtrace:\n",
-            RQ_MAX, RQ_MAX);
+    cfg_loge("rq", "\nFATAL: render queue full (%d items) — refusing to drop prims (fail-fast).\n  A submit path produced > %d prims this frame (runaway re-submission?). Backtrace:", RQ_MAX, RQ_MAX);
     void* bt[32]; int nbt = backtrace(bt, 32); backtrace_symbols_fd(bt, nbt, 2);
     fflush(stderr);
     abort();
@@ -331,25 +328,22 @@ void RenderQueue::zfightScan(Core* core) {
   }
   std::sort(pairs.begin(),pairs.end(),[](const Pair&a,const Pair&b){return a.cnt>b.cnt;});
   auto pc=[](int a,int b){ return b?100.f*a/b:0.f; };
-  fprintf(stderr,"[zfight] f%d eps=%.6g fight=%d ties(<1e-5)=%d | ALL paint-stable raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%% | TIES raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%%\n",
-    s.s_frame, eps, nfight, ntie,
+  cfg_logi("zfight", "f%d eps=%.6g fight=%d ties(<1e-5)=%d | ALL paint-stable raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%% | TIES raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%%", s.s_frame, eps, nfight, ntie,
     pc(paint_stable_raw,nfight), pc(ps_b[0],nfight), pc(ps_b[1],nfight), pc(ps_b[2],nfight), pc(ps_b[3],nfight),
     pc(ptie_raw,ntie), pc(ptie_b[0],ntie), pc(ptie_b[1],ntie), pc(ptie_b[2],ntie), pc(ptie_b[3],ntie));
   auto vd=[](const RqItem&P,int i){ return P.depth?P.depth[i]:-1.f; };
   for (size_t i=0;i<pairs.size()&&i<10;i++){
     const RqItem&A=items[pairs[i].a]; const RqItem&B=items[pairs[i].b];
     int an=A.nv?A.nv:4, bn=B.nv?B.nv:4;
-    fprintf(stderr,"[zfight]   pair px=%d gap>=%.7f\n", pairs[i].cnt, pairs[i].gap);
-    fprintf(stderr,"[zfight]     A node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
-      A.dbg_node,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
+    cfg_logi("zfight", "  pair px=%d gap>=%.7f", pairs[i].cnt, pairs[i].gap);
+    cfg_logi("zfight", "    A node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", A.dbg_node,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
       A.xs[0],A.ys[0],A.xs[1],A.ys[1],A.xs[2],A.ys[2],an==4?A.xs[3]:0,an==4?A.ys[3]:0);
-    fprintf(stderr,"[zfight]     B node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]\n",
-      B.dbg_node,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
+    cfg_logi("zfight", "    B node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", B.dbg_node,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
       B.xs[0],B.ys[0],B.xs[1],B.ys[1],B.xs[2],B.ys[2],bn==4?B.xs[3]:0,bn==4?B.ys[3]:0);
   }
   if (nfight>0) { char path[128]; snprintf(path,sizeof path,"scratch/screenshots/zfight/heat_f%d.ppm",s.s_frame);
     FILE* fp=fopen(path,"wb"); if(fp){ fprintf(fp,"P6\n%d %d\n255\n",W,H); fwrite(heat.data(),3,W*H,fp); fclose(fp);
-      fprintf(stderr,"[zfight]   heatmap -> %s\n",path); } }
+      cfg_logi("zfight", "  heatmap -> %s", path); } }
 }
 
 void RenderQueue::flush(Core* core) {
@@ -474,8 +468,7 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
           interp_ord = l0*d0 + l1*d1 + l2*d2;
           d32 = 0.0625f + interp_ord * (0.9375f - 0.0625f);   // ord3d
         }
-        fprintf(stderr,"[primat-rq] f%d dbgnode=%08X layer=%d om=%d semi=%d tri=%d vdepth=[%.6f %.6f %.6f] interp_ord=%.6f D32=%.6f col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)\n",
-          s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi, t0,
+        cfg_logi("primat-rq", "f%d dbgnode=%08X layer=%d om=%d semi=%d tri=%d vdepth=[%.6f %.6f %.6f] interp_ord=%.6f D32=%.6f col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)", s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi, t0,
           d0, d1, d2, interp_ord, d32,
           rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } } }
   unsigned ord = s.s_prim_order++;

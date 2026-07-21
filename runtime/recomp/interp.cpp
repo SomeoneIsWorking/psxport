@@ -141,8 +141,7 @@ static inline void ldhaz_step(InterpDiag& d, uint32_t in, uint32_t pc) {
     int merge = ((p >> 26) == 0x22 && (in >> 26) == 0x26 && RT(p) == RT(in)) ||
                 ((p >> 26) == 0x26 && (in >> 26) == 0x22 && RT(p) == RT(in));
     if (t && !merge && reads_gpr(in, t) && d.ldhaz_n++ < 60)
-      fprintf(stderr, "[ldhaz] load r%d @%08X (%08X) -> read by next @%08X (%08X)\n",
-              t, d.ld_last_pc, p, pc, in);
+      cfg_logi("ldhaz", "load r%d @%08X (%08X) -> read by next @%08X (%08X)", t, d.ld_last_pc, p, pc, in);
   }
   d.ld_last_in = in; d.ld_last_pc = pc;
 }
@@ -190,7 +189,7 @@ static void exec_simple(Core* c, uint32_t in) {
         case 0x2B: W(rd, (uint32_t)(c->r[rs] < c->r[rt])); break;            // sltu
         case 0x0C: rec_syscall(c, (in >> 6) & 0xFFFFF); break;               // syscall
         case 0x0D: rec_break(c, (in >> 6) & 0xFFFFF); break;                 // break
-        default: fprintf(stderr, "[interp] bad special funct 0x%02X\n", f); break;
+        default: cfg_logi("interp", "bad special funct 0x%02X", f); break;
       }
       break;
     }
@@ -236,8 +235,7 @@ static void exec_simple(Core* c, uint32_t in) {
       // a real bug (wrong jump target / unloaded overlay / corrupt load). Do NOT limp on spewing thousands
       // of "bad opcode" lines; abort immediately with the derail site + a guest-stack backtrace so the
       // broken jump/load can be found and fixed at its root.
-      fprintf(stderr, "\n[DERAIL] bad opcode 0x%02X insn=0x%08X at pc=0x%08X ra=0x%08X sp=0x%08X\n",
-              op, in, c->pc, c->r[31], c->r[29]);
+      cfg_logi("DERAIL", "\nbad opcode 0x%02X insn=0x%08X at pc=0x%08X ra=0x%08X sp=0x%08X", op, in, c->pc, c->r[31], c->r[29]);
       { uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
           uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
@@ -248,7 +246,7 @@ static void exec_simple(Core* c, uint32_t in) {
       { const char* dp = cfg_str("PSXPORT_DERAIL_DUMP");
         if (dp) { FILE* df = fopen(dp, "wb");
           if (df) { fwrite(c->ram, 1, 0x200000, df); fclose(df);
-                    fprintf(stderr, "[DERAIL] guest RAM dumped -> %s (2MB)\n", dp); } } }
+                    cfg_logi("DERAIL", "guest RAM dumped -> %s (2MB)", dp); } } }
       fflush(stderr); abort();
   }
 }
@@ -325,9 +323,9 @@ void prof_start(Core* c) {
   for (uint32_t i = 0; i < (1u << 14); i++) { d.prof_call_addr[i] = 0; d.prof_call_n[i] = 0; }
   d.prof_total = d.prof_call_total = 0;
   d.prof_on = 1;
-  fprintf(stderr, "[prof] profiling started (reset)\n");
+  cfg_logi("prof", "profiling started (reset)");
 }
-void prof_stop(Core* c) { c->idiag.prof_on = 0; fprintf(stderr, "[prof] profiling stopped\n"); }
+void prof_stop(Core* c) { c->idiag.prof_on = 0; cfg_logi("prof", "profiling stopped"); }
 
 void prof_dump(Core* c, const char* path) {
   InterpDiag& d = c->idiag;
@@ -360,7 +358,7 @@ void prof_dump(Core* c, const char* path) {
     fprintf(out, "%08X   %10llu   %5.2f%%\n", d.prof_call_addr[bi], (unsigned long long)best, pct);
     d.prof_call_n[bi] = 0;  // consume
   }
-  if (fp) { fclose(fp); fprintf(stderr, "[prof] dump -> %s\n", path); }
+  if (fp) { fclose(fp); cfg_logi("prof", "dump -> %s", path); }
 }
 
 // Invoke a call target natively if it is a BIOS vector (returns 1), else 0 (caller jumps).
@@ -437,15 +435,11 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     if (spindbg) {
       if (pc < lo) lo = pc; if (pc > hi) hi = pc;
       if (++iters >= 80000000UL) {
-        fprintf(stderr, "[spindbg] busy-loop: pc window 0x%08X..0x%08X (cur 0x%08X) "
-                "regs: v0=%08X v1=%08X a0=%08X a1=%08X t0=%08X t1=%08X s0=%08X s1=%08X\n",
-                lo, hi, pc, c->r[2], c->r[3], c->r[4], c->r[5], c->r[8], c->r[9],
+        cfg_logi("spindbg", "busy-loop: pc window 0x%08X..0x%08X (cur 0x%08X) regs: v0=%08X v1=%08X a0=%08X a1=%08X t0=%08X t1=%08X s0=%08X s1=%08X", lo, hi, pc, c->r[2], c->r[3], c->r[4], c->r[5], c->r[8], c->r[9],
                 c->r[16], c->r[17]);
         // CD-streaming contract (FUN_8001cfc8 task slot 2): start/end LBA = task2 obj
         // (0x801fe0e0) +0x54/+0x58, dest/words at _DAT_1f8001f8/f4, plus the stream flags.
-        fprintf(stderr, "[spindbg]   stream: startLBA=%u endLBA=%u chan=%u be0e4=0x%02X "
-                "dest=0x%08X words=%u f0=%u\n",
-                c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146),
+        cfg_logi("spindbg", "  stream: startLBA=%u endLBA=%u chan=%u be0e4=0x%02X dest=0x%08X words=%u f0=%u", c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146),
                 c->mem_r8(0x800be0e4), c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0));
         iters = 0; lo = hi = pc;
       }
@@ -457,7 +451,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     { if (d.pctrap == 0xFFFFFFFFu) { const char* s = cfg_str("PSXPORT_PCTRAP"); d.pctrap = s ? (uint32_t)strtoul(s,0,0) : 0;
         const char* k = cfg_str("PSXPORT_PCTRAP_SKIP"); d.pctrap_skip = k ? strtol(k,0,0) : 0; }
       if (d.pctrap && pc == d.pctrap) { if (d.pctrap_hit++ == d.pctrap_skip) {
-        fprintf(stderr, "[pctrap] reached 0x%08X  ra=0x%08X sp=0x%08X a0=0x%08X\n", pc, c->r[31], c->r[29], c->r[4]);
+        cfg_logi("pctrap", "reached 0x%08X  ra=0x%08X sp=0x%08X a0=0x%08X", pc, c->r[31], c->r[29], c->r[4]);
         uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) { uint32_t w = c->mem_r32(a); uint32_t k = w & 0x1FFFFFFF;
           if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { fprintf(stderr, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; } }
@@ -467,7 +461,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     if (pc == 0x8007E9C8u) {
       static int fs = -2; if (fs == -2) fs = cfg_dbg("fadeshot") ? 1 : 0;
       if (fs) { void gpu_vk_shot(Core*, const char*); static int fn = 0;
-        fprintf(stderr, "[fadeshot] call=%d color=0x%06X ra=0x%08X\n", fn, c->r[4] & 0xffffff, c->r[31]);
+        cfg_logi("fadeshot", "call=%d color=0x%06X ra=0x%08X", fn, c->r[4] & 0xffffff, c->r[31]);
         if (fn < 120) { char p[128]; snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn); gpu_vk_shot(c, p); }
         fn++; }
     }
@@ -476,8 +470,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // instruments/notes actually compose a song — ground truth for the offline snd_render tool.
     if (pc == 0x800939A0u) {
       static int kon = -2; if (kon == -2) kon = cfg_dbg("keyon") ? 1 : 0;
-      if (kon) fprintf(stderr, "[keyon] seq=%u chan=%u vab=%d prog=%d note=%u vel=%u\n",
-                       c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
+      if (kon) cfg_logi("keyon", "seq=%u chan=%u vab=%d prog=%d note=%u vel=%u", c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
                        (int)(int16_t)c->r[6], c->r[7] & 0xff, c->mem_r32(c->r[29] + 16));
     }
     // PSXPORT_DEBUG=bgmreq: trace the game's BGM trigger sound_play_bgm 0x80074BF8 (a0=idx; low7=song,
@@ -485,15 +478,14 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // signal the native MusicCoord::fieldBgmDirector currently ignores (it hardcodes song 8).
     if (pc == 0x80074BF8u || pc == 0x80074E48u) {
       static int br = -2; if (br == -2) br = cfg_dbg("bgmreq") ? 1 : 0;
-      if (br) { if (pc == 0x80074E48u) fprintf(stderr, "[bgmreq] sound_stop_bgm() ra=%08X\n", c->r[31]);
-                else fprintf(stderr, "[bgmreq] sound_play_bgm(idx=%u song=%u loop=%d) ra=%08X\n",
-                             c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
+      if (br) { if (pc == 0x80074E48u) cfg_logi("bgmreq", "sound_stop_bgm() ra=%08X", c->r[31]);
+                else cfg_logi("bgmreq", "sound_play_bgm(idx=%u song=%u loop=%d) ra=%08X", c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
     }
     // PSXPORT_DEBUG=demoflag: trace which demo-flag (0x1f80019a) READER PCs execute (find DEMO-text drawer).
     if (pc == 0x80026874u || pc == 0x80052208u || pc == 0x800522b0u || pc == 0x80075834u || pc == 0x800788ccu) {
       static int df = -2; if (df == -2) df = cfg_dbg("demoflag") ? 1 : 0;
       if (df) { static unsigned n[5]={0,0,0,0,0}; int k = pc==0x80026874u?0:pc==0x80052208u?1:pc==0x800522b0u?2:pc==0x80075834u?3:4;
-                if (++n[k] <= 2) fprintf(stderr, "[demoflag] reader @%08X hit (flag=%02X) ra=%08X\n", pc, c->mem_r8(0x1f80019au), c->r[31]); }
+                if (++n[k] <= 2) cfg_logi("demoflag", "reader @%08X hit (flag=%02X) ra=%08X", pc, c->mem_r8(0x1f80019au), c->r[31]); }
     }
     // PSXPORT_DEBUG=septrace: trace the libsnd SEP event dispatcher 0x80091460 — at 0x800914d0 the
     // status byte (s2=r18) has just been read from the track stream pointer (a3=r7, already +1). Log
@@ -501,7 +493,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // aligning our na_seq_render parser). r17=seq, r16/.. set later; r7-1 = the status byte's address.
     if (pc == 0x800914D0u) {
       static int stc = -2; if (stc == -2) stc = cfg_dbg("septrace") ? 1 : 0;
-      if (stc) fprintf(stderr, "[septrace] @%08X status=%02X\n", c->r[7] - 1, c->r[18] & 0xff);
+      if (stc) cfg_logi("septrace", "@%08X status=%02X", c->r[7] - 1, c->r[18] & 0xff);
     }
     // PSXPORT_DEBUG=tickdbg: where does the recomp libsnd sequencer stall? trace the per-vblank tick
     // wrapper 0x800909C0, SsSeqCalled 0x80090BD0, and the SEP event dispatcher 0x80091460. If the tick
@@ -510,22 +502,19 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       static int td = -2; if (td == -2) td = cfg_dbg("tickdbg") ? 1 : 0;
       if (td) { static unsigned ct[3]={0,0,0}; int k = pc==0x800909C0u?0 : pc==0x80090BD0u?1:2;
                 if (++ct[k] <= 3 || ct[k]%200==0)
-                  fprintf(stderr, "[tickdbg] %s count=%u\n",
-                          pc==0x800909C0u?"tick(909C0)":pc==0x80090BD0u?"SsSeqCalled(90BD0)":"dispatch(91460)", ct[k]); }
+                  cfg_logi("tickdbg", "%s count=%u", pc==0x800909C0u?"tick(909C0)":pc==0x80090BD0u?"SsSeqCalled(90BD0)":"dispatch(91460)", ct[k]); }
     }
     // PSXPORT_DEBUG=seqopen: trace SsSeqOpen 0x80090210 (a0=SEP addr, a1=VAB id) — the game's intended
     // SEQ->VAB binding (which we currently guess). a2/a3 = seq/sub indices. Reveals which VAB each song
     // is authored against, the missing piece for correct instruments/pitch.
     if (pc == 0x80090210u) {
       static int so = -2; if (so == -2) so = cfg_dbg("seqopen") ? 1 : 0;
-      if (so) fprintf(stderr, "[seqopen] SsSeqOpen(sep=%08X vab=%d) ra=%08X\n",
-                      c->r[4], (int)(int16_t)c->r[5], c->r[31]);
+      if (so) cfg_logi("seqopen", "SsSeqOpen(sep=%08X vab=%d) ra=%08X", c->r[4], (int)(int16_t)c->r[5], c->r[31]);
     }
     // PSXPORT_DEBUG=seqplay: trace SsSeqPlay 0x80090560 (a0=seq handle) — which sequences are played.
     if (pc == 0x80090560u) {
       static int sp = -2; if (sp == -2) sp = cfg_dbg("seqplay") ? 1 : 0;
-      if (sp) fprintf(stderr, "[seqplay] SsSeqPlay(handle=%d, mode=%d, loop=%d)\n",
-                      (int)(int16_t)c->r[4], c->r[5], c->r[6]);
+      if (sp) cfg_logi("seqplay", "SsSeqPlay(handle=%d, mode=%d, loop=%d)", (int)(int16_t)c->r[4], c->r[5], c->r[6]);
     }
     // PSXPORT_DEBUG=banksel: trace the libsnd bank-select event handler 0x8008e390 (sets channel
     // slot[0x26]=VAB from the stream). a0=seq, a1=chan. Reveals whether it runs for note channels.
@@ -534,8 +523,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       if (bs) { uint32_t cap = c->mem_r32(0x80104c30u + (c->r[4] & 0xffff) * 4);
                 uint32_t cs = cap + (c->r[5] & 0xffff) * 176;
                 uint32_t dp = c->mem_r32(cs);
-                fprintf(stderr, "[banksel] seq=%u chan=%u streambyte=0x%02x (-> slot[0x26])\n",
-                        c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
+                cfg_logi("banksel", "seq=%u chan=%u streambyte=0x%02x (-> slot[0x26])", c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
     }
     if (d.prof_on) prof_pc_tick(d, pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
     // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template

@@ -269,7 +269,7 @@ static inline bool isTier1Owned(const RqItem& it) {
 void Fps60::dumpPresent(Core* core, bool interp) {
   if (!cfg_dbg("fps60dump")) { mDumpSeq = 0; return; }   // channel off: idle, and reset the cap for next arm
   if (mDumpSeq >= kDumpMax) {
-    if (mDumpSeq == kDumpMax) { fprintf(stderr, "[fps60dump] cap (%d files) reached — stop capturing\n", kDumpMax); mDumpSeq++; }
+    if (mDumpSeq == kDumpMax) { cfg_logi("fps60dump", "cap (%d files) reached — stop capturing", kDumpMax); mDumpSeq++; }
     return;
   }
   char path[192];
@@ -367,8 +367,7 @@ void Fps60::present_vk(Core* core) {
   }
   gpu_fps60_present_pass(c);
   dumpPresent(c, /*interp=*/true);
-  if (mDbg) fprintf(stderr, "[fps60] f%ld slotA: replay prev=%s n=%d tier1=%ld backdrop=%ld t=%.3f\n",
-                    mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA, mTier1PrimsThisFrame,
+  if (mDbg) cfg_logi("fps60", "f%ld slotA: replay prev=%s n=%d tier1=%ld backdrop=%ld t=%.3f", mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA, mTier1PrimsThisFrame,
                     mBackdropPrimsThisFrame, mT);
   gpu_pace_subframe(c, 2);
 

@@ -167,7 +167,7 @@ void spu_write(uint32_t addr, uint32_t val)
          extern int backtrace(void**, int);
          extern void backtrace_symbols_fd(void* const*, int, int);
          void* frames[32]; int n = backtrace(frames, 32);
-         fprintf(stderr, "[spubt] off=%03X val=%04X\n", addr & 0x3FF, val & 0xFFFF);
+         cfg_logi("spubt", "off=%03X val=%04X", addr & 0x3FF, val & 0xFFFF);
          backtrace_symbols_fd(frames, n, 2); fprintf(stderr, "----\n");
       }
    }

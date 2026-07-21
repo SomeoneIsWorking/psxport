@@ -58,5 +58,5 @@ void Mods::init() {
   // restored next launch.
   ui = 1;                 // overlay always available (live-toggle + the deferred SSAO/light infra)
   load();                 // the player's persisted choices win over the factory defaults
-  if (fps60) fprintf(stderr, "[fps60] TRUE per-object interpolated 60fps ON (overlay)\n");
+  if (fps60) cfg_logi("fps60", "TRUE per-object interpolated 60fps ON (overlay)");
 }

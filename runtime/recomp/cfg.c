@@ -120,23 +120,53 @@ static FILE* log_sink(void) {
   }
   return s_sink;
 }
-void cfg_logf(const char* chan, const char* fmt, ...) {
-  if (!cfg_dbg(chan)) return;
+// The shared body behind every logger entry point: prefix, format, ensure exactly one newline.
+// `tag` is the bracketed prefix ("cd", "cd:warn", ...) — callers never format the brackets.
+static void log_emit(const char* tag, const char* fmt, va_list ap) {
   FILE* f = log_sink();
-  fprintf(f, "[%s] ", chan);
-  va_list ap;
-  va_start(ap, fmt);
+  // Leading newlines are blank-line SEPARATORS (callers use them to set a banner apart), so emit them
+  // before the prefix — otherwise the tag would be stranded on the line above its own message.
+  while (*fmt == '\n') { fputc('\n', f); fmt++; }
+  fprintf(f, "[%s] ", tag);
   vfprintf(f, fmt, ap);
-  va_end(ap);
   size_t n = strlen(fmt);
   if (!n || fmt[n - 1] != '\n') fputc('\n', f);
+}
+
+void cfg_logf(const char* chan, const char* fmt, ...) {
+  if (!cfg_dbg(chan)) return;
+  va_list ap; va_start(ap, fmt); log_emit(chan, fmt, ap); va_end(ap);
+}
+
+// Always-on levels. Same sink and same "[chan] " prefixing as cfg_logf, but NOT channel-gated:
+// these are the messages a normal run is supposed to print (boot progress, warnings, hard errors),
+// which is why they previously had to be raw fprintf(stderr, "[chan] ...\n") and so escaped
+// PSXPORT_LOG_FILE redirection entirely. Warnings/errors suffix the tag so they stay greppable
+// ("[cd:warn]") without needing a separate sink or a level column.
+void cfg_logi(const char* chan, const char* fmt, ...) {
+  va_list ap; va_start(ap, fmt); log_emit(chan, fmt, ap); va_end(ap);
+}
+void cfg_logw(const char* chan, const char* fmt, ...) {
+  char tag[64]; snprintf(tag, sizeof tag, "%s:warn", chan ? chan : "?");
+  va_list ap; va_start(ap, fmt); log_emit(tag, fmt, ap); va_end(ap);
+}
+void cfg_loge(const char* chan, const char* fmt, ...) {
+  char tag[64]; snprintf(tag, sizeof tag, "%s:error", chan ? chan : "?");
+  va_list ap; va_start(ap, fmt); log_emit(tag, fmt, ap); va_end(ap);
 }
 
 void cfg_dump(void) {
   static int done = 0; if (done) return; done = 1;
   if (!environ) return;
-  int any = 0;
-  for (char** e = environ; *e; e++)
-    if (!strncmp(*e, "PSXPORT_", 8)) { if (!any) fprintf(stderr, "[cfg] active:"); any = 1; fprintf(stderr, " %s", *e); }
-  if (any) fprintf(stderr, "\n");
+  // Accumulate into one line rather than printing piecewise, so this goes through the logger (and
+  // therefore honours PSXPORT_LOG_FILE) like every other message.
+  char line[2048];
+  size_t used = 0;
+  for (char** e = environ; *e; e++) {
+    if (strncmp(*e, "PSXPORT_", 8)) continue;
+    int w = snprintf(line + used, sizeof line - used, " %s", *e);
+    if (w < 0 || (size_t)w >= sizeof line - used) { used = sizeof line - 1; break; }
+    used += (size_t)w;
+  }
+  if (used) cfg_logi("cfg", "active:%s", line);
 }

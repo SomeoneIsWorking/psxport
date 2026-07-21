@@ -211,8 +211,7 @@ void rec_dispatch(Core* c, uint32_t addr) {
     // Origin-revealing line: caller ra + full a0/a1/a2 (raw + as-signed-int16 for LUT lookups where
     // small negative args are meaningful). Frame number when sbs is available.
     uint32_t frame = sbs ? sbs->frame() : 0;
-    fprintf(stderr, "[dispwatch] f%u core=%c addr=%08X ra=%08X a0=%08X (s16=%d) a1=%08X a2=%08X node.s0=%u.n3=%u stage=%08X\n",
-            frame, cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, c->r[31], a0, (int)(int16_t)a0, a1, a2, s0, n3, c->mem_r32(0x801fe00c));
+    cfg_logi("dispwatch", "f%u core=%c addr=%08X ra=%08X a0=%08X (s16=%d) a1=%08X a2=%08X node.s0=%u.n3=%u stage=%08X", frame, cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, c->r[31], a0, (int)(int16_t)a0, a1, a2, s0, n3, c->mem_r32(0x801fe00c));
     // Also dump the guest stack so the CALLER CHAIN — not just the immediate ra — is visible. Cheap
     // when the hit is rare (dispwatch is targeted) and doing it by hand each time is what led to the
     // "no call stack" workflow gap (docs/known-bugs.md GAP-1). Pipe stderr through tools/symres.py to

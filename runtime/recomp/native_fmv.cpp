@@ -774,7 +774,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     }
   }
   if (skipped) {
-    fprintf(stderr, "[fmv] skipped by Start at frame %d\n", frames);
+    cfg_logi("fmv", "skipped by Start at frame %d", frames);
     // CONSUME the skip press: the title front-end polls the pad the instant this returns, so if Start is
     // still held it reads as a fresh menu press and auto-selects New Game. Wait for Start to be RELEASED
     // (bounded, ~1s safety cap) before handing back — the game's own StrPlayer consumed it the same way.
@@ -797,10 +797,10 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
 int Fmv::play(const char* path) {
   uint32_t lba = 0, size = 0;
   if (!fmv_resolve_path(&game->disc, path, &lba, &size)) {
-    fprintf(stderr, "[fmv] could not resolve %s on disc\n", path);
+    cfg_logi("fmv", "could not resolve %s on disc", path);
     return -1;
   }
-  fprintf(stderr, "[fmv] %s -> LBA %u, %u bytes\n", path, lba, size);
+  cfg_logi("fmv", "%s -> LBA %u, %u bytes", path, lba, size);
   return playLba(lba, size);
 }
 

@@ -55,20 +55,19 @@ constexpr uint16_t BTN_NONE  = 0xFFFF;
 } // namespace
 
 bool DualCore::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
-  if ((f % 400u) == 0) fprintf(stderr, "[dc-nav] %s f%u phase=%d stage=%08X cut=%u\n",
-                               tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
+  if ((f % 400u) == 0) cfg_logi("dc-nav", "%s f%u phase=%d stage=%08X cut=%u", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
   switch (nv.phase) {
     case REACH_GAME:
-      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { fprintf(stderr, "[dc] %s GAME @f%u\n", tag, f); nv.phase = AWAIT_CUT; }
+      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { cfg_logi("dc", "%s GAME @f%u", tag, f); nv.phase = AWAIT_CUT; }
       else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
-      if (cut) { fprintf(stderr, "[dc] %s cutscene up @f%u\n", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
+      if (cut) { cfg_logi("dc", "%s cutscene up @f%u", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
       break;
     case SKIP_CUT:
       if (cut) { nv.idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
-      else if (++nv.idle >= 60) { fprintf(stderr, "[dc] %s gameplay-start @f%u\n", tag, f); nv.phase = DONE; return true; }
+      else if (++nv.idle >= 60) { cfg_logi("dc", "%s gameplay-start @f%u", tag, f); nv.phase = DONE; return true; }
       break;
     case DONE: return true;
   }
@@ -95,7 +94,7 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
   g->core.rsub.mode.setPsxRender(render_psx != 0);   // per-core render path (0 = native walk, 1 = PSX recomp)
 
   Nav nv; uint32_t f = 0; const uint32_t MAXF = 6000; bool started = false; int k = 0;
-  fprintf(stderr, "[dc] --- %s (psxRender=%d) ---\n", tag, render_psx);
+  cfg_logi("dc", "--- %s (psxRender=%d) ---", tag, render_psx);
   for (; f < MAXF && k < n; f++) {
     if (!started) {
       started = navStep(&g->core, nv, f, tag);
@@ -108,7 +107,7 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
     spads[k] = (uint8_t*)malloc(0x400); memcpy(spads[k], g->core.scratch, 0x400);
     k++;
   }
-  fprintf(stderr, "[dc] %s recorded %d frames (reached f%u)\n", tag, k, f);
+  cfg_logi("dc", "%s recorded %d frames (reached f%u)", tag, k, f);
   // NB: we intentionally leak the Game (one-shot harness, process exits after).
   return k;
 }
@@ -146,8 +145,7 @@ void DualCore::run(const char* exe_path) {
   { const char* e = cfg_str("PSXPORT_DC_LO"); if (e && *e) lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = cfg_str("PSXPORT_DC_HI"); if (e && *e) hi = (uint32_t)strtoul(e, 0, 0); }
   uint32_t rsz = hi - lo;
-  fprintf(stderr, "[dualcore] NATIVE-render vs PSX-render RAM compare: N=%d region 0x%08X..0x%08X (%uKB/frame)\n",
-          n, lo, hi, rsz / 1024);
+  cfg_logi("dualcore", "NATIVE-render vs PSX-render RAM compare: N=%d region 0x%08X..0x%08X (%uKB/frame)", n, lo, hi, rsz / 1024);
 
   uint8_t** snA = (uint8_t**)calloc(n, sizeof(void*)); uint8_t** spA = (uint8_t**)calloc(n, sizeof(void*));
   uint8_t** snB = (uint8_t**)calloc(n, sizeof(void*)); uint8_t** spB = (uint8_t**)calloc(n, sizeof(void*));
@@ -164,7 +162,7 @@ void DualCore::run(const char* exe_path) {
     for (uint32_t i = 0; i < rsz; i++) if (snA[k][i] != snB[k][i] && !isRenderRegion(lo + i)) { ram_d = true; break; }
     bool spd_d = memcmp(spA[k], spB[k], 0x400) != 0;   // scratchpad has no render-pool exclusion
     if (ram_d || spd_d) {
-      if (first < 0) { first = k; fprintf(stderr, "[dc] FIRST DIVERGENCE at gameplay-frame %d:\n", k); }
+      if (first < 0) { first = k; cfg_logi("dc", "FIRST DIVERGENCE at gameplay-frame %d:", k); }
       if (k < first + 6) {     // detail the first few divergent frames
         fprintf(stderr, "  frame %d:\n", k);
         if (ram_d) diffFrameRegion("ram ", snA[k], snB[k], rsz, lo);
@@ -172,7 +170,7 @@ void DualCore::run(const char* exe_path) {
       }
     }
   }
-  if (first < 0) fprintf(stderr, "[dc] NO DIVERGENCE across %d frames — native gameplay == PSX gameplay here.\n", kn);
-  else fprintf(stderr, "[dc] (divergence began at frame %d)\n", first);
+  if (first < 0) cfg_logi("dc", "NO DIVERGENCE across %d frames — native gameplay == PSX gameplay here.", kn);
+  else cfg_logi("dc", "(divergence began at frame %d)", first);
   fprintf(stderr, "========================================================================\n");
 }

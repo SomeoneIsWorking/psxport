@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "cfg.h"
 
 extern "C" void guest_backtrace_to(Core* c, FILE* out);  // sync_overrides.cpp
 
@@ -206,12 +207,12 @@ void rec_syscall(Core* c, uint32_t code) {
     case 1: c->r[V0] = irq_enabled ? 1 : 0; irq_enabled = 0; break;      // EnterCritical
     case 2: irq_enabled = 1; c->r[V0] = 0; break;                        // ExitCritical
     default:
-      fprintf(stderr, "[syscall] a0=%u (unhandled kernel op)\n", c->r[A0]);
+      cfg_logi("syscall", "a0=%u (unhandled kernel op)", c->r[A0]);
       c->r[V0] = 0;
   }
 }
 void rec_break(Core* c, uint32_t code) {
-  fprintf(stderr, "[break] code %u\n", code);
+  cfg_logi("break", "code %u", code);
   (void)c;
 }
 
@@ -222,7 +223,7 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   if (tbl) {
     uint32_t fn = c->r[T1] & 0xFF;
     if (c->game->hle.dispatchBios(tbl, fn)) return;
-    fprintf(stderr, "[hle] UNIMPL %c0:0x%02X\n", tbl, fn);
+    cfg_logi("hle", "UNIMPL %c0:0x%02X", tbl, fn);
     return;
   }
   // Non-recompiled code in RAM (loaded overlay, the boot stub, or an in-function computed-jump
@@ -239,17 +240,14 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     if (addr >= 0x80108F9Cu && addr < 0x8018A000u) {       // a MODE/area-slot overlay address
       uint32_t stage = c->mem_r32(0x801fe00cu);
       uint32_t sm = c->mem_r32(0x1f800138u);
-      fprintf(stderr, "[miss-state] stage=0x%08X sm=0x%08X sm[48]=%u [4a]=%u [4c]=%u [4e]=%u [50]=%u [52]=%u "
-                      "1f80019b=%u areaidx(800bf870)=%u sopsig(80109450)=0x%08X 1f800234=%u\n",
-              stage, sm,
+      cfg_logi("miss-state", "stage=0x%08X sm=0x%08X sm[48]=%u [4a]=%u [4c]=%u [4e]=%u [50]=%u [52]=%u 1f80019b=%u areaidx(800bf870)=%u sopsig(80109450)=0x%08X 1f800234=%u", stage, sm,
               sm ? c->mem_r16(sm + 0x48) : 0xffff, sm ? c->mem_r16(sm + 0x4a) : 0xffff,
               sm ? c->mem_r16(sm + 0x4c) : 0xffff, sm ? c->mem_r16(sm + 0x4e) : 0xffff,
               sm ? c->mem_r16(sm + 0x50) : 0xffff, sm ? c->mem_r16(sm + 0x52) : 0xffff,
               c->mem_r8(0x1f80019bu), c->mem_r8(0x800bf870u), c->mem_r32(0x80109450u), c->mem_r8(0x1f800234u));
       // Callee-saved regs often still hold the guest caller's locals (e.g. s0 = the object node in
       // the 0x8007D208 SFX-update family) — dump them plus the node fields s0 would imply.
-      fprintf(stderr, "[miss-regs] s0=0x%08X s1=0x%08X s2=0x%08X s3=0x%08X\n",
-              c->r[16], c->r[17], c->r[18], c->r[19]);
+      cfg_logi("miss-regs", "s0=0x%08X s1=0x%08X s2=0x%08X s3=0x%08X", c->r[16], c->r[17], c->r[18], c->r[19]);
       uint32_t s0 = c->r[16];
       if (s0 >= 0x80000000u && s0 < 0x80200000u - 0x60u) {
         fprintf(stderr, "[miss-node s0] +0x00=0x%08X +0x1c(handler)=0x%08X +0x0d=%u +0x29=%u +0x44=%d +0x46=0x%02X +0x5c=%d\n",

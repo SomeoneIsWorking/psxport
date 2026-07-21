@@ -36,7 +36,7 @@ int      spu_dma_read(uint32_t* words, int count);
 // [lo,hi), dump a C backtrace. Finds runtime code that clobbers a region the decompressor wrote.
 void Core::mem_set_watch(uint32_t lo, uint32_t hi) {
   s_cw_init = 1; s_cw_lo = lo & 0x1FFFFFFF; s_cw_hi = hi & 0x1FFFFFFF; s_cw_n = 0;
-  fprintf(stderr, "[cw] watch [%08X,%08X)\n", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
+  cfg_logi("cw", "watch [%08X,%08X)", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
 }
 int Core::mem_watch_hits() { return s_cw_n; }
 
@@ -50,7 +50,7 @@ void Core::cw_check(uint32_t a, uint32_t v, int width) {
   if (s_cw_hi && p >= s_cw_lo && p < s_cw_hi) {
     s_cw_n++;
     if (s_cw_n <= 64) {
-      fprintf(stderr, "[cw] #%d store w%d [%08X]=%08X  interp_pc=%08X sp=%08X\n", s_cw_n, width, 0x80000000u|p, v, pc, r[29]);
+      cfg_logi("cw", "#%d store w%d [%08X]=%08X  interp_pc=%08X sp=%08X", s_cw_n, width, 0x80000000u|p, v, pc, r[29]);
       if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
     }
   }
@@ -78,13 +78,11 @@ void Core::wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
   if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
     if (cfg_str("PSXPORT_WWATCH")) {
       extern int gpu_frame_no(Core*);
-      fprintf(stderr, "[wwatch] f%d core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X\n",
-              gpu_frame_no(this), (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
+      cfg_logi("wwatch", "f%d core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X", gpu_frame_no(this), (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
       // PSXPORT_WWATCH_BT=1 — host backtrace per hit. Names the gen_func_*/native call chain even
       // for static gen-to-gen calls (where guest pc/ra go stale under native execution).
       if (cfg_str("PSXPORT_WWATCH_BT")) {
-        fprintf(stderr, "[wwatch-regs] a0=%08X a1=%08X a2=%08X a3=%08X s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X\n",
-                r[4], r[5], r[6], r[7], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
+        cfg_logi("wwatch-regs", "a0=%08X a1=%08X a2=%08X a3=%08X s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X", r[4], r[5], r[6], r[7], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
         void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n");
       }
     }
@@ -134,7 +132,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
   if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
   if (s_io_verbose)
-    fprintf(stderr, "[io] read%u @ 0x%08X -> 0\n", bytes * 8, a);
+    cfg_logi("io", "read%u @ 0x%08X -> 0", bytes * 8, a);
   return 0;
 }
 
@@ -156,8 +154,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       if (v & 1) {                                 // RAM -> SPU
         for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
         if (cfg_str("PSXPORT_SPUDMA")) {           // log VAB/sample transfers: source -> SPU dest, size
-          fprintf(stderr, "[spudma] RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X\n",
-                  0x80000000u | da, s_spu_xfer_addr, n, n * 4, pc, mem_r32(0x801fe00c));
+          cfg_logi("spudma", "RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X", 0x80000000u | da, s_spu_xfer_addr, n, n * 4, pc, mem_r32(0x801fe00c));
           if (n > 20000) {                         // big VAB bank: dump engine-range guest return addrs
             uint32_t sp = r[29] & 0x1FFFFFFF; fprintf(stderr, "  [vab-caller-chain]");
             for (uint32_t o = 0; o < 0x800 && sp + o + 4 <= 0x200000; o += 4) {
@@ -235,7 +232,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     return;
   }
   if (s_io_verbose)
-    fprintf(stderr, "[io] write%u @ 0x%08X = 0x%08X\n", bytes * 8, a, v);
+    cfg_logi("io", "write%u @ 0x%08X = 0x%08X", bytes * 8, a, v);
 }
 
 uint8_t Core::mem_r8(uint32_t a) {

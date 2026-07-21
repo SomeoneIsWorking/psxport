@@ -94,10 +94,7 @@ void GpuPerf::frameEnd() {
   double present = mAcc.present / nf, sched = mAcc.sched / nf, post = mAcc.post / nf;
   double cpu_sum = pre + logic + audio + present + sched + post;
   double idle = frame - cpu_sum;   // pacing / vsync sleep / anything outside the measured spans
-  fprintf(stderr,
-    "[perf] %.0ff avg %.2fms (%.1f fps) | frame %.2f = pre %.2f tick-LOGIC %.2f audio %.2f "
-    "PRESENT-cpu %.2f SCHED-LOGIC %.2f post %.2f + idle/pace %.2f | CPU-sum %.2fms\n",
-    nf, frame, frame > 0 ? 1000.0 / frame : 0.0,
+  cfg_logi("perf", "%.0ff avg %.2fms (%.1f fps) | frame %.2f = pre %.2f tick-LOGIC %.2f audio %.2f PRESENT-cpu %.2f SCHED-LOGIC %.2f post %.2f + idle/pace %.2f | CPU-sum %.2fms", nf, frame, frame > 0 ? 1000.0 / frame : 0.0,
     frame, pre, logic, audio, present, sched, post, idle, cpu_sum);
 
   mAcc = Acc{};

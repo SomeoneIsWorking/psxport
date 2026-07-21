@@ -39,6 +39,23 @@ void        cfg_dbg_set(const char* chans);       // REPL `debug <chans|all>`: e
 __attribute__((format(printf, 2, 3)))
 #endif
 void        cfg_logf(const char* chan, const char* fmt, ...);
+// ALWAYS-ON levels (not channel-gated) — the messages a normal run is meant to print. Same sink and
+// same "[chan] " prefixing as cfg_logf, so PSXPORT_LOG_FILE captures them too; warn/error suffix the
+// tag ("[cd:warn]" / "[cd:error]") to stay greppable. Use these instead of raw fprintf(stderr, ...):
+//   cfg_logi - normal progress/status      cfg_logw - recoverable oddity      cfg_loge - hard failure
+// A message that should only appear when someone asks for it is a CHANNEL -> cfg_logf, not cfg_logi.
+#ifdef __GNUC__
+__attribute__((format(printf, 2, 3)))
+#endif
+void        cfg_logi(const char* chan, const char* fmt, ...);
+#ifdef __GNUC__
+__attribute__((format(printf, 2, 3)))
+#endif
+void        cfg_logw(const char* chan, const char* fmt, ...);
+#ifdef __GNUC__
+__attribute__((format(printf, 2, 3)))
+#endif
+void        cfg_loge(const char* chan, const char* fmt, ...);
 void        cfg_dump(void);   // log every active PSXPORT_* var (once); for boot-time visibility
 #ifdef __cplusplus
 }

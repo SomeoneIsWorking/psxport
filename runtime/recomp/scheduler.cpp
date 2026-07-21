@@ -103,8 +103,7 @@ void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
 
 void scheduler_yield(Core* c) {
   if (c->game && c->game->verify.inCheck) {   // MV_CHECK legs must be yield-free (verify_harness.h)
-    fprintf(stderr, "[mirror-verify] FATAL: yield inside a strict-check leg — this mirror is not "
-                    "yield-free; gate it with SBS lockstep instead of MV_CHECK.\n");
+    cfg_loge("mirror-verify", "FATAL: yield inside a strict-check leg — this mirror is not yield-free; gate it with SBS lockstep instead of MV_CHECK.");
     abort();
   }
   if (!c->game->pcSched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0

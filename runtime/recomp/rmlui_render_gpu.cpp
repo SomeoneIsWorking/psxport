@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "gpu_vk_shaders.h"   // generated SPIR-V: spv_g_rml_vert / spv_g_rml_frag
+#include "cfg.h"
 
 namespace {
 struct RmlUbo { float uTranslate[2]; float uViewport[2]; };
@@ -75,7 +76,7 @@ bool RmlRenderInterfaceGpu::Init(SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_f
   fci.code = (const Uint8*)spv_g_rml_frag; fci.code_size = spv_g_rml_frag_len; fci.entrypoint = "main";
   fci.format = SDL_GPU_SHADERFORMAT_SPIRV; fci.stage = SDL_GPU_SHADERSTAGE_FRAGMENT; fci.num_samplers = 1;
   SDL_GPUShader* fs = SDL_CreateGPUShader(mDev, &fci);
-  if (!vs || !fs) { fprintf(stderr, "[rmlgpu] shader create failed: %s\n", SDL_GetError()); return false; }
+  if (!vs || !fs) { cfg_loge("rmlgpu", "shader create failed: %s", SDL_GetError()); return false; }
 
   SDL_GPUVertexBufferDescription vbd = {}; vbd.slot = 0; vbd.pitch = (Uint32)sizeof(Rml::Vertex);
   vbd.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
@@ -104,18 +105,18 @@ bool RmlRenderInterfaceGpu::Init(SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_f
   gp.target_info.color_target_descriptions = &ct; gp.target_info.num_color_targets = 1;
   mPipe = SDL_CreateGPUGraphicsPipeline(mDev, &gp);
   SDL_ReleaseGPUShader(mDev, vs); SDL_ReleaseGPUShader(mDev, fs);
-  if (!mPipe) { fprintf(stderr, "[rmlgpu] pipeline create failed: %s\n", SDL_GetError()); return false; }
+  if (!mPipe) { cfg_loge("rmlgpu", "pipeline create failed: %s", SDL_GetError()); return false; }
 
   SDL_GPUSamplerCreateInfo si = {};
   si.min_filter = si.mag_filter = SDL_GPU_FILTER_LINEAR; si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
   si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
   mSampler = SDL_CreateGPUSampler(mDev, &si);
-  if (!mSampler) { fprintf(stderr, "[rmlgpu] sampler create failed: %s\n", SDL_GetError()); return false; }
+  if (!mSampler) { cfg_loge("rmlgpu", "sampler create failed: %s", SDL_GetError()); return false; }
 
   const unsigned char white[4] = { 255, 255, 255, 255 };
   mWhiteTex = UploadTexture(white, 1, 1);
   mReady = (mWhiteTex != nullptr);
-  if (mReady) fprintf(stderr, "[rmlgpu] render interface ready (swap fmt %d)\n", (int)mSwapFmt);
+  if (mReady) cfg_logi("rmlgpu", "render interface ready (swap fmt %d)", (int)mSwapFmt);
   return mReady;
 }
 

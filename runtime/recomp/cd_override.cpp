@@ -126,7 +126,7 @@ static void cd_read(Core* c) {
     for (uint32_t j = 0; j < 2048; j++) c->mem_w8(buf + i * 2048u + j, sec[j]);
   }
   if (c->game->cd.verbose)
-    fprintf(stderr, "[cd] read %u blk @ LBA %u -> 0x%08X\n", blocks, lba, buf);
+    cfg_logi("cd", "read %u blk @ LBA %u -> 0x%08X", blocks, lba, buf);
   c->r[V0] = 1;  // bool: success
 }
 
@@ -151,7 +151,7 @@ static void cd_loadfile(Core* c) {
   // diverges at frame 0 by two bytes at 0x800BE0E0 (native = 0, substrate = the last LBA read).
   if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);
   if (c->game->cd.verbose)
-    fprintf(stderr, "[cd] loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X\n", size, lba, dest, c->r[31]);
+    cfg_logi("cd", "loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X", size, lba, dest, c->r[31]);
   void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // record the resident overlay now (fresh image matches its signature)
   c->r[V0] = size;
@@ -199,7 +199,7 @@ void Cd::asyncRead() {
   c->mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
   if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);  // last sector read (pos tracker)
   if (verbose)
-    fprintf(stderr, "[cd] async read %u words (%u B) @ LBA %u -> 0x%08X\n", words, bytes, lba, dest);
+    cfg_logi("cd", "async read %u words (%u B) @ LBA %u -> 0x%08X", words, bytes, lba, dest);
   void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // an A0* field-area code overlay may load here (MODE slot) — note it
 }
@@ -278,7 +278,7 @@ static void voice_play(Core* c) {
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
   if (cfg_str("PSXPORT_XA_DBG"))
-    fprintf(stderr, "[voice_play] chan=%u [%u..%u] loop=%d ra=%08X\n", chan, start, end, loop, c->r[31]);
+    cfg_logi("voice_play", "chan=%u [%u..%u] loop=%d ra=%08X", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
     if (c->hooks->cdDialogToneActive(c)) return;   // suppress during a dialog; resumed by MusicCoord::tick
@@ -331,7 +331,7 @@ void Cd::hleInit() {
   c->mem_w32(cfg->cdCallbackTable[2], cfg->cdCallbackFn[2]);   // CD event handler
   c->mem_w32(cfg->cdCallbackTable[3], cfg->cdCallbackFn[3]);   // (cleared)
   if (verbose || cfg_dbg("cd"))
-    fprintf(stderr, "[cd] HLE CdInit: drive ready (no controller, no handshake, no busy-wait)\n");
+    cfg_logi("cd", "HLE CdInit: drive ready (no controller, no handshake, no busy-wait)");
 }
 
 void Cd::overridesInit() {

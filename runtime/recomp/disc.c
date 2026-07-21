@@ -61,17 +61,16 @@ static char* resolve_disc_path(void) {
 int disc_open(DiscState* d) {
   if (d->chd) return 1;
   char* path = resolve_disc_path();
-  if (!path) { fprintf(stderr, "[disc] no disc image (PSXPORT_TOMBA2_DISC/PSXPORT_DISC/.env)\n"); return 0; }
+  if (!path) { cfg_logi("disc", "no disc image (PSXPORT_TOMBA2_DISC/PSXPORT_DISC/.env)"); return 0; }
   if (chd_open(path, CHD_OPEN_READ, 0, &d->chd) != CHDERR_NONE) {
-    fprintf(stderr, "[disc] failed to open CHD: %s\n", path); free(path); return 0;
+    cfg_loge("disc", "failed to open CHD: %s", path); free(path); return 0;
   }
   const chd_header* h = chd_get_header(d->chd);
   d->hunk_bytes = h->hunkbytes;
   d->frames_per_hunk = h->hunkbytes / RAW_FRAME;
   d->hunk_count = h->totalhunks;
   d->hunk_buf = malloc(d->hunk_bytes);
-  fprintf(stderr, "[disc] opened %s (%u hunks, %u frames/hunk)\n",
-          path, d->hunk_count, d->frames_per_hunk);
+  cfg_logi("disc", "opened %s (%u hunks, %u frames/hunk)", path, d->hunk_count, d->frames_per_hunk);
   free(path);
   return d->frames_per_hunk > 0;
 }
@@ -81,7 +80,7 @@ int disc_read_sector(DiscState* d, uint32_t lba, uint8_t* out) {
   if (!d->chd && !disc_open(d)) return 0;
   uint32_t hunk = lba / d->frames_per_hunk;
   uint32_t off = (lba % d->frames_per_hunk) * RAW_FRAME;
-  if (hunk >= d->hunk_count) { fprintf(stderr, "[disc] LBA %u out of range\n", lba); return 0; }
+  if (hunk >= d->hunk_count) { cfg_logi("disc", "LBA %u out of range", lba); return 0; }
   if (hunk != d->cached_hunk) {
     if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) return 0;
     d->cached_hunk = hunk;

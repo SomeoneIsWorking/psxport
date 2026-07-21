@@ -297,8 +297,7 @@ static void game_main(Core* c) {
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
   if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) nframes = 0;
-  fprintf(stderr, "[native_boot] entering native frame loop (%s)\n",
-          nframes ? "capped" : "interactive (until window close)");
+  cfg_logi("native_boot", "entering native frame loop (%s)", nframes ? "capped" : "interactive (until window close)");
   c->game->dbg_server.start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   // Per-loop state carried across frames (plain locals — one frame loop per Core, no hidden globals):
@@ -338,21 +337,21 @@ static void game_main(Core* c) {
     if (as_phase == -1) {
       const char* s = cfg_str("PSXPORT_AUTO_SKIP");
       as_phase = (s && strcmp(s, "0")) ? 0 : 3;
-      if (as_phase == 0) fprintf(stderr, "[autoskip] armed: drive into GAME free-roam\n");
+      if (as_phase == 0) cfg_logi("autoskip", "armed: drive into GAME free-roam");
     }
     if (as_phase < 3) {
       uint32_t stg = c->mem_r32(TASKBASE + 0xc);
       uint8_t  cut = c->mem_r8(0x1F800137u);             // cutscene-active flag
       if (as_phase == 0) {                             // tap Cross until the GAME stage
         if (stg != c->cfg->stageGame) { if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); }
-        else { as_phase = 1; fprintf(stderr, "[autoskip] reached GAME at frame %u\n", f); }
+        else { as_phase = 1; cfg_logi("autoskip", "reached GAME at frame %u", f); }
       } else if (as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
-        if (cut) { as_phase = 2; fprintf(stderr, "[autoskip] intro cutscene up at frame %u; skipping (Start)\n", f); }
+        if (cut) { as_phase = 2; cfg_logw("autoskip", "intro cutscene up at frame %u; skipping (Start)", f); }
       } else {                                           // phase 2: pulse Start while the cutscene is active
         if (cut) { as_idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6); }
         else if (++as_idle >= 60) {   // ~2s after the flag clears: lets the cutscene-END FADE finish before
           c->game->pad.driveRelease(); as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
-          fprintf(stderr, "[autoskip] free-roam reached at frame %u (cutscene ended)\n", f);   // (not mid-fade)
+          cfg_logi("autoskip", "free-roam reached at frame %u (cutscene ended)", f);   // (not mid-fade)
         }
       }
     }
@@ -364,7 +363,7 @@ static void game_main(Core* c) {
       if (c->mem_r32(0x801fe00c) != c->cfg->stageGame) {
         if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
       } else {
-        fprintf(stderr, "[repl] newgame: reached GAME prologue at frame %u\n", f);
+        cfg_logi("repl", "newgame: reached GAME prologue at frame %u", f);
         c->game->repl.navNewgame = 0; repl_budget = 0;                                     // back to the REPL prompt
         // Do NOT run this frame's native_step_frame: it would advance into the GAME loop body (area
         // INIT -> running sub-mode) and, with the area-code overlay not yet loaded, derail before the
@@ -376,7 +375,7 @@ static void game_main(Core* c) {
     if (c->game->repl.skipFrames > 0) {
       if ((f % 24u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
       if (--c->game->repl.skipFrames == 0) { c->game->pad.driveRelease();
-        fprintf(stderr, "[repl] skip done at frame %u\n", f); }
+        cfg_logi("repl", "skip done at frame %u", f); }
     }
     // `warp` — fire the armed area change by writing the REAL DOOR RECORD, then letting the game's own
     // field-run state machine run its natural transition sequence. RE (engine_re.md "Area WARP", door-record
@@ -419,8 +418,7 @@ static void game_main(Core* c) {
       c->mem_w16(wsm + 0x4a, 1);
       c->mem_w16(wsm + 0x4c, c->mem_r8(0x80108f60u + dest));
       c->mem_w16(wsm + 0x4e, 0);
-      fprintf(stderr, "[repl] warp: full area load for area %u done (f%u), bf870=%u, sm[0x4c]=%u\n",
-              dest, f, c->mem_r8(0x800bf870u), c->mem_r8(wsm + 0x4c));
+      cfg_logi("repl", "warp: full area load for area %u done (f%u), bf870=%u, sm[0x4c]=%u", dest, f, c->mem_r8(0x800bf870u), c->mem_r8(wsm + 0x4c));
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
@@ -498,8 +496,7 @@ static void game_main(Core* c) {
         uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
         uint32_t flag = c->mem_r32(s + 0x98), rd = c->mem_r32(s);
         if ((flag & 1) && rd != bgm_rd[i]) {
-          fprintf(stderr, "[bgmtick] f%u slot%d active rdptr=%08X base=%08X (%+d)\n",
-                  f, i, rd, c->mem_r32(s + 4), (int)(rd - c->mem_r32(s + 4)));
+          cfg_logi("bgmtick", "f%u slot%d active rdptr=%08X base=%08X (%+d)", f, i, rd, c->mem_r32(s + 4), (int)(rd - c->mem_r32(s + 4)));
           bgm_rd[i] = rd;
         }
         if (!(flag & 1)) bgm_rd[i] = 0;
@@ -514,9 +511,7 @@ static void game_main(Core* c) {
     if (t0e != last_entry || sm != last_sm) {
       const char* stg = t0e == c->cfg->stageStart ? "START" : t0e == c->cfg->stageDemo ? "DEMO" :
                         t0e == c->cfg->stageGame ? "GAME" : "?";
-      fprintf(stderr, "[native_boot]   frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u]"
-              " @0x80109450=%08X\n",
-              f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
+      cfg_logi("native_boot", "  frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u] @0x80109450=%08X", f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
               c->mem_r16(TASKBASE+0x4c), c->mem_r16(TASKBASE+0x4e), c->mem_r16(TASKBASE+0x50),
               c->mem_r16(TASKBASE+0x52), c->mem_r32(0x80109450));
       last_entry = t0e; last_sm = sm;
@@ -542,7 +537,7 @@ static void game_main(Core* c) {
         const char* rd = cfg_str("PSXPORT_RAMDUMP"); if (!rd) rd = "scratch/bin/midrun_ram.bin";
         FILE* mf = fopen(rd, "wb");
         if (mf) { fwrite(c->ram, 1, 0x200000, mf); fclose(mf);
-                  fprintf(stderr, "[native_boot] mid-run RAM dump @frame %u -> %s\n", f, rd); }
+                  cfg_logi("native_boot", "mid-run RAM dump @frame %u -> %s", f, rd); }
       } }
     if (cfg_dbg("schedf"))
       cfg_logf("schedf", "f%u t0[st=%u e=%08X s48=%u s4a=%u s4c=%u s5c=%u] t1[st=%u] t2[st=%u]",
@@ -550,20 +545,18 @@ static void game_main(Core* c) {
               c->mem_r16(TASKBASE + 0x4a), c->mem_r16(TASKBASE + 0x4c), c->mem_r16(TASKBASE + 0x5c),
               c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0));
     else if (f < 10 || (f % 30) == 0)
-      fprintf(stderr, "[native_boot]   frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] "
-                      "f135=%u\n", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
+      cfg_logi("native_boot", "  frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] f135=%u", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
               c->mem_r16(TASKBASE + 0x48), c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0),
               c->mem_r8(0x1f800135));
     c->game->dbg_server.service(c);  // service one queued live-debug-server command (non-blocking)
   }
-  fprintf(stderr, "[native_boot] frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u\n",
-          c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
+  cfg_logi("native_boot", "frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
     
     FILE* f = fopen(rd, "wb");
     if (f) { fwrite(c->ram, 1, 0x200000, f); fclose(f);
-             fprintf(stderr, "[native_boot] dumped 2MB RAM -> %s\n", rd); }
+             cfg_logi("native_boot", "dumped 2MB RAM -> %s", rd); }
   }
 }
 
@@ -581,25 +574,24 @@ void native_boot_run(Core* c) {
   if (oracle_mode()) {
     c->game->setOracle();                        // per-Game: recomp gameplay + mods forced neutral
     c->rsub.mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
-    fprintf(stderr, "[native_boot] PSXPORT_ORACLE=1 — pure recomp + pure PSX render "
-                    "(no fps60 / wide / native-depth / observer)\n");
+    cfg_logi("native_boot", "PSXPORT_ORACLE=1 — pure recomp + pure PSX render (no fps60 / wide / native-depth / observer)");
   }
   // PSX-fallback gate (diagnostic): boot + frame-loop stay native; everything the loop calls runs as PSX
   // recomp (sync CD). PSXPORT_GATE nonzero turns it on; the REPL `gate on|off` toggles it live.
   { const char* g = cfg_str("PSXPORT_GATE");
     if (g && *g) c->game->psx_fallback = (atoi(g) != 0);
-    fprintf(stderr, "[native_boot] psx_fallback=%d (%s)\n", c->game->psx_fallback,
+    cfg_logi("native_boot", "psx_fallback=%d (%s)", c->game->psx_fallback,
             c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
   // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
   // Per-Core now (Render::mPsxRender) — was the process-global g_render_psx.
   { const char* r = cfg_str("PSXPORT_RENDER_PSX");
     if (r && *r) c->rsub.mode.setPsxRender(atoi(r) != 0);
-    if (c->rsub.mode.psxRender()) fprintf(stderr, "[native_boot] Render::psxRender=1 (field render via PSX recomp path)\n"); }
+    if (c->rsub.mode.psxRender()) cfg_logi("native_boot", "Render::psxRender=1 (field render via PSX recomp path)"); }
   // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
   // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
   { const char* r = cfg_str("PSXPORT_DUALVIEW");
     if (r && *r) c->rsub.mode.setDualview(atoi(r) != 0);
-    if (c->rsub.mode.dualview()) fprintf(stderr, "[native_boot] Render::dualview=1 (side-by-side native | PSX render)\n"); }
+    if (c->rsub.mode.dualview()) cfg_logi("native_boot", "Render::dualview=1 (side-by-side native | PSX render)"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the
@@ -617,10 +609,10 @@ void native_boot_run(Core* c) {
   const char* nf_ov = cfg_str("PSXPORT_NO_FMV");
   if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
   if (!skip_fmv) {
-    fprintf(stderr, "[native_boot] playing boot FMV (Whoopee logo); OP.STR is the front-end's\n");
+    cfg_logi("native_boot", "playing boot FMV (Whoopee logo); OP.STR is the front-end's");
     c->game->fmv.play("MOVIE/LOGO.STR");
   } else {
-    fprintf(stderr, "[native_boot] skipping intro FMVs (headless/NO_FMV)\n");
+    cfg_logw("native_boot", "skipping intro FMVs (headless/NO_FMV)");
   }
   // Clean hand-off to the front-end (issues #7/#11): black the display FB before the title builds, so the
   // title's first frames (drawn over several frames while its background/font/CLUT upload) never composite
@@ -628,7 +620,7 @@ void native_boot_run(Core* c) {
   // fill is still resident in s_vram even when both intros are skipped). Deterministic, no timer.
   void gpu_clear_display(Core*);
   gpu_clear_display(c);
-  fprintf(stderr, "[native_boot] entering native crt0 (PC-driven)\n");
+  cfg_logi("native_boot", "entering native crt0 (PC-driven)");
   native_crt0(c);
-  fprintf(stderr, "[native_boot] returned from native crt0\n");
+  cfg_logi("native_boot", "returned from native crt0");
 }

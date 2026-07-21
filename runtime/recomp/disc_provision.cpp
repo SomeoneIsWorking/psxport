@@ -6,28 +6,29 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include "cfg.h"
 
 extern "C" int disc_extract_file(DiscState* d, const char* iso_path, const char* out_path) {
   uint32_t lba, size;
   if (!disc_find_file(d, iso_path, &lba, &size)) {
-    fprintf(stderr, "[disc] extract: %s not found on disc\n", iso_path);
+    cfg_logi("disc", "extract: %s not found on disc", iso_path);
     return 0;
   }
   std::vector<uint8_t> buf(size);
   uint8_t sec[2048];
   for (uint32_t off = 0; off < size; off += 2048u, lba++) {
     if (!disc_read_sector(d, lba, sec)) {
-      fprintf(stderr, "[disc] extract: sector read failed for %s\n", iso_path);
+      cfg_loge("disc", "extract: sector read failed for %s", iso_path);
       return 0;
     }
     uint32_t n = size - off < 2048u ? size - off : 2048u;
     memcpy(buf.data() + off, sec, n);
   }
   if (!Fs::writeFile(out_path, buf.data(), buf.size())) {
-    fprintf(stderr, "[disc] extract: failed to write %s\n", out_path);
+    cfg_loge("disc", "extract: failed to write %s", out_path);
     return 0;
   }
-  fprintf(stderr, "[disc] extracted %s -> %s (%u bytes)\n", iso_path, out_path, size);
+  cfg_logi("disc", "extracted %s -> %s (%u bytes)", iso_path, out_path, size);
   return 1;
 }
 

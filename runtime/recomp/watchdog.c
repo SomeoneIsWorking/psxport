@@ -116,8 +116,7 @@ void watchdog_init(void) {
   sigaction(SIGALRM, &sa, 0);
   s_wd.armed = 1;
   alarm((unsigned)s_wd.boot_secs);
-  fprintf(stderr, "[watchdog] armed: %ds frame-progress timeout (%ds grace for the first frame)\n",
-          s_wd.secs, s_wd.boot_secs);
+  cfg_logi("watchdog", "armed: %ds frame-progress timeout (%ds grace for the first frame)", s_wd.secs, s_wd.boot_secs);
 }
 
 // Pet from the present path — one beat per produced frame. Re-arms the timer. The first present

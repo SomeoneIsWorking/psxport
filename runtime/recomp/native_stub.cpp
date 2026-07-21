@@ -39,8 +39,7 @@ static uint32_t load_exe_image(const char* path, Core* c) {
   c->r[29] = sp ? sp : 0x801FFFF0u;
   c->r[30] = c->r[29];
   c->r[31] = 0xDEAD0000u;               // top-level return sentinel
-  fprintf(stderr, "[stub] loaded %s: entry 0x%08X load 0x%08X text 0x%X sp 0x%08X\n",
-          path, entry, load, tsize, c->r[29]);
+  cfg_logi("stub", "loaded %s: entry 0x%08X load 0x%08X text 0x%X sp 0x%08X", path, entry, load, tsize, c->r[29]);
   return entry;
 }
 
@@ -69,7 +68,7 @@ static void scea_dump_ppm(const uint8_t* rgba, float fade01, const char* path) {
     fwrite(o, 1, 3, f);
   }
   fclose(f);
-  fprintf(stderr, "[scea] wrote %s (%dx%d, fade %.2f)\n", path, SCEA_DISP_W, SCEA_DISP_H, fade01);
+  cfg_logi("scea", "wrote %s (%dx%d, fade %.2f)", path, SCEA_DISP_W, SCEA_DISP_H, fade01);
 }
 
 static void native_scea_splash(Core* c) {
@@ -85,7 +84,7 @@ static void native_scea_splash(Core* c) {
     { if (gpu_windowed()) c->game->pad.pollSdl(); }
 #endif
     if ((c->game->pad.buttons & 0x0008u) == 0) {          // Start = skip the license screen
-      fprintf(stderr, "[scea] skipped (Start) at frame %d\n", f); break; }
+      cfg_logi("scea", "skipped (Start) at frame %d", f); break; }
     int fade;                                             // 0..128: fade in, hold, fade out
     if (f < SCEA_FADE_IN)                  fade = f * 128 / SCEA_FADE_IN;
     else if (f < SCEA_FADE_IN + SCEA_HOLD) fade = 128;
@@ -113,6 +112,6 @@ void BootStub::run(const char* main_exe_path) {
   // enter the native MAIN boot. (The PSX stub SCUS_944.54 is no longer run — see native_scea_splash.)
   native_scea_splash(c);
   load_exe_image(main_path, c);   // load MAIN.EXE image + initial registers into the Core
-  fprintf(stderr, "[stub] entering native MAIN boot\n");
+  cfg_logi("stub", "entering native MAIN boot");
   native_boot_run(c);
 }
