@@ -428,7 +428,7 @@ static void game_main(Core* c) {
       if (dbg.isPaused()) watchdog_suspend();   // a debug pause is intentional idle, not a hang
       while (dbg.isPaused()) {
         if (dbg.stepPending()) { dbg.consumeStep(); break; }   // run exactly one frame
-        c->game->pad.serviceFrame();      // pump host input (keeps the window responsive)
+        c->game->pad.pumpHostInput();     // host input ONLY — must not tick the pad-frame clock here
         c->game->gpu.gpu_repaint();           // re-present current frame: window stays live + readback is accurate
         dbg.service(c);    // receive step/play/capture commands
         usleep(15000);

@@ -28,6 +28,13 @@ public:
   void driveRelease();                      // was pad_repl_release(c) — clear REPL drive
   void serviceFrame();                      // was pad_service_frame(c) — per-frame native pad service
 
+  // Pump host input WITHOUT advancing a pad frame. For the debug-server pause loop, which must keep
+  // the window responsive (and the P / '.' keys alive) while the game is explicitly NOT advancing.
+  // serviceFrame() must never be used there: it ticks the record/replay frame index, so a capture
+  // taken across a pause records frames the game never ran, and replaying it consumes them while the
+  // game IS running — the whole session desyncs from that point on.
+  void pumpHostInput();
+
   // ---- live capture (dbg-server `padrec`) ----
   // Every frame's finalized mask is also kept in memory, unconditionally, so a running session can be
   // cut into a replay WITHOUT a file sink, a restart, or racing the incremental writer. 2 bytes/frame:

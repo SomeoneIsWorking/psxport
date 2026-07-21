@@ -321,6 +321,15 @@ void Pad::driveTap(uint16_t activeLowMask, int nframes) { repl_on = 1; repl_tap 
 // overriding host/FORCE input. Used by the state-gated auto-navigator to go hands-off in gameplay.
 void Pad::driveRelease() { repl_on = 0; repl_hold = PAD_NONE; repl_tap = PAD_NONE; repl_tap_n = 0; }
 
+// Host input only — no frame-indexed state touched (no record/replay tick, no mFc, no tap countdown,
+// no shot/dump schedules). pollSdl also carries the P / '.' debug keys, which is what lets a paused
+// session be un-paused from the keyboard.
+void Pad::pumpHostInput() {
+#ifdef PSXPORT_SDL
+  if (gpu_windowed() && !game->sbs) pollSdl();
+#endif
+}
+
 void Pad::serviceFrame() {
   Core* c = &game->core;
   int have_window = gpu_windowed();              // a live on-screen window is up (gpu_vk.cpp)
