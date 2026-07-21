@@ -33,15 +33,8 @@ decomp.openProgram(currentProgram)
 monitor = ConsoleTaskMonitor()
 fm = currentProgram.getFunctionManager()
 
-count = 0
-f = open(outpath, "w")
-for fn in fm.getFunctions(True):
+def emit(f, fn):
     ea = fn.getEntryPoint().getOffset()
-    if want is not None:
-        if ea not in want:
-            continue
-    elif lo is not None and not (lo <= ea < hi):
-        continue
     res = decomp.decompileFunction(fn, 90, monitor)
     f.write("// ==================== %08X %s ====================\n" % (ea, fn.getName()))
     if res is not None and res.decompileCompleted():
@@ -49,6 +42,47 @@ for fn in fm.getFunctions(True):
     else:
         f.write("// DECOMPILE FAILED: %s\n" % (res.getErrorMessage() if res else "no result"))
     f.write("\n")
-    count += 1
+
+
+count = 0
+created = []
+missing = []
+f = open(outpath, "w")
+if want is not None:
+    # EXPLICIT LIST: address-driven, not "iterate what Ghidra happens to have". Auto-analysis only
+    # defines a function where it found a call/branch to it, so a perfectly valid entry reached only
+    # by a jump TABLE (which is most render/dispatch handlers here) has no Function object and used
+    # to be skipped in silence — the script reported "wrote 0 functions" and named nothing. Create the
+    # function on demand, and if that still fails, SAY WHICH ADDRESS rather than dropping it.
+    for ea in sorted(want):
+        # NOT toAddr(ea): these are KSEG0 addresses (>= 0x80000000) and the int overload overflows
+        # Java's signed int ("Cannot convert value to Java int"). Go through the address factory
+        # with a hex STRING, which is width-agnostic.
+        addr = currentProgram.getAddressFactory().getAddress("%08x" % ea)
+        fn = fm.getFunctionAt(addr)
+        if fn is None:
+            fn = createFunction(addr, None)          # disassembles + defines a body if it can
+            if fn is not None:
+                created.append(ea)
+        if fn is None:
+            missing.append(ea)
+            f.write("// ==================== %08X ====================\n" % ea)
+            f.write("// NO FUNCTION at this address (could not create one; is it code in this dump?)\n\n")
+            continue
+        emit(f, fn)
+        count += 1
+else:
+    for fn in fm.getFunctions(True):
+        ea = fn.getEntryPoint().getOffset()
+        if lo is not None and not (lo <= ea < hi):
+            continue
+        emit(f, fn)
+        count += 1
 f.close()
 print("[ghidra_decomp] wrote %d functions -> %s" % (count, outpath))
+if created:
+    print("[ghidra_decomp] created %d function(s) not found by auto-analysis: %s"
+          % (len(created), " ".join("%08X" % a for a in created)))
+if missing:
+    print("[ghidra_decomp] MISSING %d requested address(es): %s"
+          % (len(missing), " ".join("%08X" % a for a in missing)))

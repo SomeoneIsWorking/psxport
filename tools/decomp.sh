@@ -11,7 +11,14 @@
 # virtual addresses in docs/journal.md. Projects live in scratch/ghidra/ (gitignored);
 # output C goes wherever you point <out.c> (default convention: scratch/decomp/).
 set -eu
-repo="$(cd "$(dirname "$0")/.." && pwd)"; cd "$repo"
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+# psxport is a game-AGNOSTIC framework, usually VENDORED (external/psxport) by a game repo. The RAM
+# dumps, the Ghidra project and the decompiled output all belong to the GAME, so scratch/ must resolve
+# against the caller's repo — not the framework's, which would silently point at an empty project dir
+# and fail with "Could not find project". Use the cwd when it looks like a project root.
+workdir="${PSXPORT_WORKDIR:-$PWD}"
+if [ ! -d "$workdir/scratch" ] && [ ! -d "$workdir/.git" ]; then workdir="$repo"; fi
+cd "$workdir"
 # Ghidra headless: use `pyghidraRun -H` resolved from $PATH (put a symlink to it on your PATH, per
 # user directive 2026-07-03 — no filesystem paths so a future upgrade only touches the symlink target).
 # Ghidra 12 dropped bundled Jython; `analyzeHeadless` alone can't run our `ghidra_decomp.py`
