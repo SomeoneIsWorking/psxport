@@ -97,6 +97,11 @@ long Repl::read(Core* c, uint32_t f) {
     if (sscanf(line, "%23s", cmd) != 1) continue;
     if (!strcmp(cmd, "quit") || !strcmp(cmd, "q")) return -1;
     else if (!strcmp(cmd, "run") && sscanf(line, "%*s %u", &a) == 1) return (long)a;
+    // `step [n]` — advance n frames (default 1) and return to the prompt. Same mechanism as `run n`
+    // (the REPL only resumes the frame loop by returning a frame count); provided because `step` is the
+    // command everyone reaches for when single-stepping, and its ABSENCE previously read as "the game is
+    // frozen" (the unknown command just reprinted the prompt, advancing nothing).
+    else if (!strcmp(cmd, "step")) { if (sscanf(line, "%*s %u", &a) != 1 || !a) a = 1; return (long)a; }
     else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
       if (!b) b = 16; fprintf(stderr, "[repl] %08X:", a);
       for (unsigned i = 0; i < b && i < 256; i++) fprintf(stderr, " %02X", c->mem_r8(a + i)); fprintf(stderr, "\n");
