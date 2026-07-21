@@ -124,7 +124,8 @@ struct RenderQueue {
                   const int* xs, const int* ys, const int* us, const int* vs,
                   const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                   int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
-                  int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1);
+                  int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
+                  int semi = 0);   // semi=1 -> blended quad (the guest's GP0 0x62-class semi-transparent prims)
 
   // emitItem: emit one resolved item to the VK rasterizer. Used by both the inline path and the
   // queue flush so emission logic lives in one place.

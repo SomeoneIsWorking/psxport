@@ -640,11 +640,12 @@ void RenderQueue::push2dQuad(int layer, int order_2d_fg,
                              const int* xs, const int* ys, const int* us, const int* vs,
                              const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                              int tp_x, int tp_y, int mode, int raw, int clut_x, int clut_y,
-                             int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1) {
+                             int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
+                             int semi) {
   if (!gpu_vk_enabled()) return;
   Core* core = &game->core;
   int om = order_2d_fg ? RQ_OM_2D_FG : RQ_OM_2D_BG;
-  emitOrQueue(core, 1, layer, om, 4, 0, raw,
+  emitOrQueue(core, 1, layer, om, 4, semi, raw,
                    xs, ys, nullptr, nullptr, us, vs, rs, gs, bs, nullptr, mode,
                    tp_x, tp_y, clut_x, clut_y, tw_mx, tw_my, tw_ox, tw_oy,
                    da_x0, da_y0, da_x1, da_y1, 0, nullptr);
