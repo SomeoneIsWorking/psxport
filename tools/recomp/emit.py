@@ -1093,15 +1093,19 @@ def main():
     #   OPN.BIN — a sub-overlay loaded into the AREA slot 0x8018A000 (cd-log: "async read 13596 B @LBA1888
     #     -> 0x8018A000"; its header fn-ptrs (0x8018A348..) confirm that base). The big area DATA also loads
     #     to 0x8018A000 at other times; the resident-signature routing distinguishes them.
-    #   CRD.BIN — credits sub-mode overlay; NOT on the field path and not yet observed loading, so its base
-    #     is UNVERIFIED (tentatively the MODE slot). If a run dispatches into it, it fail-fasts (the
-    #     signature won't match at the wrong base) — capture its real dest then and fix.
+    #   CRD.BIN — the memory-CARD save browser (NOT "credits"): the title-menu Load-Game substate
+    #     (DEMO sm[0x48]==4 -> FUN_8007BF20 -> FUN_8007BE18) and the in-game save UI. It loads into the
+    #     SAME slot as OPN, 0x8018A000 — cd-log "async read 6265 words (25060 B) @LBA1866 -> 0x8018A000",
+    #     captured by driving the title selection under PSXPORT_DEBUG=cd. Its base was previously guessed
+    #     as the MODE slot, which put its bodies ~0x80080000 off: MAIN calls into it by hard-coded absolute
+    #     (0x8018FA88 / 0x8018FBCC = CRD+0x5A88 / +0x5BCC, both `addiu sp,-0x20` prologues), so every such
+    #     call fail-fasted as a rec_dispatch miss and the Load-Game browser aborted the process.
     #   A0*.BIN — the per-area FIELD CODE overlays (A00..A0L); each loads to the MODE slot 0x80108F9C
     #     (swapping out SOP), holding the field render submitters (0x8013xxxx). cd-log:
     #     "loadfile 285096 B @LBA374 -> 0x80108F9C" (A00). All A0* are interchangeable at this base.
     OVERLAY_BASES = {
         "START": 0x80106228, "DEMO": 0x80106228, "GAME": 0x80106228,
-        "SOP": 0x80108F9C, "OPN": 0x8018A000, "CRD": 0x80108F9C,
+        "SOP": 0x80108F9C, "OPN": 0x8018A000, "CRD": 0x8018A000,
     }
     def overlay_base(stem):
         if stem in OVERLAY_BASES:
