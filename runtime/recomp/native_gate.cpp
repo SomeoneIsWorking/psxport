@@ -19,5 +19,5 @@ void NativeGates::set(const char* name, int on) {
 void NativeGates::list() const {
   cfg_logi("native", "gates (%d):", mCount);
   for (int i = 0; i < mCount; i++)
-    cfg_logi("native_gate", "  %-16s %s", mGates[i].name, mGates[i].on ? "on" : "off");
+    cfg_logi("native", "  %-16s %s", mGates[i].name, mGates[i].on ? "on" : "off");
 }

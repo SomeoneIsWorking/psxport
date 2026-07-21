@@ -29,7 +29,7 @@ static uint32_t load_exe_image(const char* path, Core* c) {
   if (!f) { perror(path); exit(1); }
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
   uint8_t* buf = (uint8_t*)malloc(n);
-  if (fread(buf, 1, n, f) != (size_t)n) { cfg_logi("native_stub", "short read %s", path); exit(1); }
+  if (fread(buf, 1, n, f) != (size_t)n) { cfg_loge("stub", "short read %s", path); exit(1); }
   fclose(f);
   uint32_t entry = rd32(buf+0x10), gp = rd32(buf+0x14);
   uint32_t load = rd32(buf+0x18), tsize = rd32(buf+0x1C), sp = rd32(buf+0x30);

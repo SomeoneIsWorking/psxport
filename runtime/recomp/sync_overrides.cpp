@@ -68,7 +68,7 @@ extern "C" void guest_backtrace_to(Core* c, FILE* out) {
 static void guest_backtrace(Core* c) { guest_backtrace_to(c, stderr); }
 
 static void trap_abort(Core* c, const char* what, uint32_t addr) {
-  cfg_logi("sync_overrides", "\n[%s-TRAP] reached 0x%08X  a0=%d ra=0x%08X pc=0x%08X\n  Everything must be PC-native + SYNCHRONOUS (no PSX vblank/IRQ waits, no async CD).\n  This caller must be PC-owned (ported top-down) so it never reaches this primitive.", what, addr, (int)c->r[4], c->r[31], c->pc);
+  cfg_loge("sync-trap", "\n%s: reached 0x%08X  a0=%d ra=0x%08X pc=0x%08X\n  Everything must be PC-native + SYNCHRONOUS (no PSX vblank/IRQ waits, no async CD).\n  This caller must be PC-owned (ported top-down) so it never reaches this primitive.", what, addr, (int)c->r[4], c->r[31], c->pc);
   guest_backtrace(c);
   fflush(stderr);
   abort();
