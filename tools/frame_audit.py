@@ -83,7 +83,10 @@ def definition_span(source: str, symbol: str):
         elif source[i] == '}':
             depth -= 1
         i += 1
-    return source[m.end():i]
+    # i now sits one PAST the closing brace, so drop it: leaving the '}' on the end made a one-line
+    # thunk body fail THUNK_RE's `;\s*$` anchor, which is exactly why a framed thunk kept being
+    # reported as missing a frame.
+    return source[m.end():max(m.end(), i - 1)]
 
 
 def oracle_frame(addr: str):
@@ -121,16 +124,36 @@ def collect(roots):
             body = definition_span(text, sym)
             if body is None:
                 continue
-            # Follow a one-line thunk to the body it forwards to — that is where the frame belongs.
-            stripped = [ln for ln in body.strip().split("\n") if ln.strip()]
-            if len(stripped) == 1:
-                m = THUNK_RE.match(stripped[0])
+            # Follow a thunk to the body it forwards to — that is where the frame belongs. A thunk is
+            # ONE delegating call plus, optionally, trivial register bookkeeping like `c->r[2] = 0;`
+            # (`eov_propagateRotmat` is exactly that shape). Restricting this to single-line bodies
+            # left three whole files reported as frameless when their real bodies were framed.
+            # Strip // comments before classifying: a trailing comment on the `c->r[2] = 0;` line, or
+            # a standalone comment line, otherwise counts as a second "statement" and stops the body
+            # from being recognised as a thunk (this hid buildFromChild / triggerPanned / the sop_*
+            # handlers, whose real bodies are framed).
+            no_comments = [re.sub(r'//.*$', '', ln).strip() for ln in body.strip().split("\n")]
+            stripped = [ln for ln in no_comments if ln]
+            bookkeeping = re.compile(r'^c->r\[\d+\]\s*=\s*[\w()\-]+\s*;$')
+            calls = [ln for ln in stripped if not bookkeeping.match(ln)]
+            if len(calls) == 1:
+                m = THUNK_RE.match(calls[0])
                 if m:
                     for p2, t2 in sources.items():
                         inner = definition_span(t2, m.group(1))
                         if inner is not None and m.group(1) != sym.split("::")[-1]:
                             sym, path, body = m.group(1), p2, inner
                             break
+            # A method may legitimately be UNFRAMED because the frame lives in a sibling `<name>Framed`
+            # wrapper: the unframed method is what native callers use, the wrapper is the guest-ABI
+            # entry. cull.cpp states the rule outright ("Framing now lives ONLY in
+            # cullWrapperFlag2Framed()"). Moving the frame into the method instead produced a REAL SBS
+            # divergence at 0x801FE8D4 — measured, then reverted — so this is not a cosmetic detail.
+            bare = sym.split("::")[-1]
+            if not HAS_FRAME_RE.search(body):
+                sibling = definition_span(text, bare + "Framed")
+                if sibling is not None and HAS_FRAME_RE.search(sibling):
+                    body = sibling
             located[addr] = (sym, path, body)
             break
     return located
