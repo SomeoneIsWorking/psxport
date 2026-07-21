@@ -218,29 +218,29 @@ bandaids. The irreducible per-game surface is **parallax/2D backdrops** (no GTE 
 recover) and **gameplay logic**. Gate everything against the oracle, and never trust a green gate
 without proving it exercised the code.
 
-## Known gap: the framework does not compile standalone
+## The framework compiles standalone (and that is the agnosticism proof)
 
-`cmake --build … --target psxport` fails in a bare psxport checkout:
+A bare psxport checkout builds with no game present:
 
+```sh
+cmake -S . -B build -DPSXPORT_BUILD_SMOKE=ON
+cmake --build build --target psxport_smoke     # links libpsxport against a stub game
 ```
-runtime/recomp/overlay_router.cpp:18:10: fatal error: overlay_table.h: No such file or directory
-```
 
-`overlay_table.h` is **generated per game** (the consumer's `generated/overlay_table.h`, emitted by
-its recompiler run), and `overlay_router.cpp` includes it for the compile-time `REC_MAIN_LO/HI`
-text-range macros. So the framework has a *compile-time* dependency on a consumer artifact.
+`psxport_smoke` links the library against a stub, so a successful link proves no `game/**` symbol is
+required. Because the framework now builds standalone, that proof is runnable from the framework
+repo itself rather than only from inside a consumer tree.
 
-That is in tension with the agnosticism this repo claims: psxport #includes no game header, and the
-`psxport_smoke` link proves no game symbol resolves — but neither check can run without a consumer's
-`generated/` present, so the proof is only ever available from inside a game repo.
+**This was broken until 2026-07-21.** `overlay_router.cpp` used to `#include "overlay_table.h"` for
+the compile-time `REC_MAIN_LO/HI` text-range macros — a header generated PER GAME. The framework
+therefore had a compile-time dependency on a consumer artifact, and a bare checkout could not
+compile, which quietly made the agnosticism claim unverifiable.
 
-This is a real architectural wart, recorded rather than hidden. The fix is to stop compiling a
-game-generated header into the framework — either take `REC_MAIN_LO/HI` as runtime values through
-`GameConfig` (they are already game-specific data, and `game_iface.h` is exactly the channel for
-that), or default them when the header is absent so a bare checkout compiles and a consumer's build
-overrides them. Until then, `psxport_smoke` is only buildable from a consumer tree with
-`-DPSXPORT_BUILD_SMOKE=ON`.
+The fix is the same seam every other game-specific address already uses: `GameConfig` gained
+`recMainLo` / `recMainHi`, `overlay_router` reads `c->cfg->recMainLo`, and the consumer supplies the
+values from its own `generated/overlay_table.h`. Tomba2Engine's `game_config.cpp` includes that
+header and passes the macros straight through, so the values cannot drift from the substrate they
+describe.
 
-Verified 2026-07-21 that this is pre-existing and unrelated to the lucent dependency: lucent
-FetchContents correctly into psxport's own standalone build tree (`_deps/lucent-src` is populated);
-the failure is solely the missing generated header.
+If you add framework code, do not `#include` anything from `generated/` — that is the consumer's
+namespace. Route the value through `GameConfig` instead, and the standalone build stays honest.

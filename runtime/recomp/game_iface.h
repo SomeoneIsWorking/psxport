@@ -60,6 +60,13 @@ struct GameConfig {
   uint32_t libcInit;                      // libc init entry
   uint32_t gameMain, crt0;                // game-main / crt0 entries
 
+  // Recompiled MAIN .text range, masked to a physical address (addr & 0x1FFFFFFF). overlay_router
+  // uses it to decide "is this address in the resident MAIN module or in an overlay slot". These are
+  // GAME data — they come from the consumer's own recompiler run — so they belong here rather than
+  // as a #include of the consumer's generated/overlay_table.h, which made the framework impossible to
+  // compile standalone (see docs/porting-a-new-psx-game.md).
+  uint32_t recMainLo, recMainHi;
+
   // --- per-frame OT / packet-pool dance (native_boot.cpp native_step_frame) ---
   uint32_t otRegionBase, otRegionStride;      // per-parity OT region
   uint32_t packetPoolBase, packetPoolStride;  // per-parity packet pool

@@ -15,7 +15,6 @@
 // overlay, or an address no module recompiled, still FAILS FAST in rec_dispatch_miss by design.
 #include "core.h"
 #include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
-#include "overlay_table.h"     // generated: REC_MAIN_LO/HI (compile-time text-range macros only)
 #include "recomp_iface.h"      // seam: psxport_recomp() -> main_dispatch / rec_func_index / overlay table
 #include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
 #include "override_registry.h" // overrides::dispatch — native engine/game override interception
@@ -128,7 +127,7 @@ extern "C" void guest_backtrace_to(Core*, FILE*);   // sync_overrides.cpp — he
 int rec_addr_has_entry(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry* R = psxport_recomp();
-  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) return R->rec_func_index(addr) >= 0;
+  if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) return R->rec_func_index(addr) >= 0;
   for (int i = 0; i < R->overlay_count; i++) {
     const RecOverlay* o = &R->overlays[i];
     if (a < (o->base & 0x1FFFFFFF) || a >= (o->end & 0x1FFFFFFF)) continue;
@@ -226,7 +225,7 @@ void rec_dispatch(Core* c, uint32_t addr) {
   const bool otattr_on = cfg_dbg("otattr");
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry* R = psxport_recomp();
-  if (a >= REC_MAIN_LO && a < REC_MAIN_HI) {
+  if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) {
     if (otattr_on) c->idiag.otattrPush(addr);
     R->main_dispatch(c, addr);
     if (otattr_on) c->idiag.otattrPop();
