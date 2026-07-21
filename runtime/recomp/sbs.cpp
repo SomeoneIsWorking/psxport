@@ -750,18 +750,21 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
       mDivBytesB[i] = isSpad(mDivAddr+i) ? mB->core.scratch[(mDivAddr+i)-0x1F800000u] : mB->core.mem_r8(mDivAddr+i);
     }
     cfg_logi("sbs", "diff bytes (up to 64):");
-    fprintf(stderr, "  A @0x%08X:", mDivAddr);
-    for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %02X", mDivBytesA[i]);
-    fprintf(stderr, "\n  B @0x%08X:", mDivAddr);
-    for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %02X", mDivBytesB[i]);
-    fprintf(stderr, "\n           ");
-    for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %s", mDivBytesA[i] != mDivBytesB[i] ? "^^" : "  ");
-    fprintf(stderr, "\n");
+    CfgLine ln; cfg_line_reset(&ln);
+    cfg_line_addf(&ln, "  A @0x%08X:", mDivAddr);
+    for (uint32_t i = 0; i < n; i++) cfg_line_addf(&ln, " %02X", mDivBytesA[i]);
+    cfg_line_flush(&ln, "sbs");
+    cfg_line_addf(&ln, "  B @0x%08X:", mDivAddr);
+    for (uint32_t i = 0; i < n; i++) cfg_line_addf(&ln, " %02X", mDivBytesB[i]);
+    cfg_line_flush(&ln, "sbs");
+    cfg_line_addf(&ln, "           ");
+    for (uint32_t i = 0; i < n; i++) cfg_line_addf(&ln, " %s", mDivBytesA[i] != mDivBytesB[i] ? "^^" : "  ");
+    cfg_line_flush(&ln, "sbs");
   }
   // Print BOTH guest-stack backtraces — captured at the frame boundary AFTER the diverging write, but
   // still pinpoints the region of code that just ran on each core.
-  fprintf(stderr, "[sbs] === FRAME-BOUNDARY BACKTRACE — core A ===\n%s", mBtA[0] ? mBtA : "(empty)\n");
-  fprintf(stderr, "[sbs] === FRAME-BOUNDARY BACKTRACE — core B ===\n%s", mBtB[0] ? mBtB : "(empty)\n");
+  cfg_logi("sbs", "=== FRAME-BOUNDARY BACKTRACE — core A ===\n%s", mBtA[0] ? mBtA : "(empty)\n");
+  cfg_logi("sbs", "=== FRAME-BOUNDARY BACKTRACE — core B ===\n%s", mBtB[0] ? mBtB : "(empty)\n");
   // REWIND-AND-ARM: the diff was detected at the END of frame N. Any writes in frame N have already
   // happened — a wwatch armed NOW would only catch frame N+1 onwards, and if only one core wrote in
   // frame N, that write is lost forever (previously required a manual PREWATCH re-run). Instead:
@@ -1026,11 +1029,12 @@ void Sbs::Impl::checkObservables() {
           while (bad < 524288 && mObsSpuA[bad] == mObsSpuB[bad]) bad++;
           if (bad >= 524288) break;
           uint32_t run = bad; while (run < 524288 && mObsSpuA[run] != mObsSpuB[run] && run - bad < 16) run++;
-          fprintf(stderr, "[sbs-obs]   spu 0x%05X..0x%05X A:", bad, run);
-          for (uint32_t o = bad; o < run; o++) fprintf(stderr, " %02X", mObsSpuA[o]);
-          fprintf(stderr, "  B:");
-          for (uint32_t o = bad; o < run; o++) fprintf(stderr, " %02X", mObsSpuB[o]);
-          fprintf(stderr, "\n");
+          CfgLine ln; cfg_line_reset(&ln);
+          cfg_line_addf(&ln, "  spu 0x%05X..0x%05X A:", bad, run);
+          for (uint32_t o = bad; o < run; o++) cfg_line_addf(&ln, " %02X", mObsSpuA[o]);
+          cfg_line_addf(&ln, "  B:");
+          for (uint32_t o = bad; o < run; o++) cfg_line_addf(&ln, " %02X", mObsSpuB[o]);
+          cfg_line_flush(&ln, "sbs-obs");
           bad = run + 1;
         }
         mObsDone[idx] = true;
@@ -1169,13 +1173,14 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
     else if (c > topCnt[1]) { topCnt[2]=topCnt[1]; topIdx[2]=topIdx[1]; topCnt[1]=c; topIdx[1]=p; }
     else if (c > topCnt[2]) { topCnt[2]=c; topIdx[2]=p; }
   }
-  fprintf(stderr, "[sbs] f%u: A/B differ %u RAM bytes [0x%08X..0x%08X] + %u spad (mode=%s) | top pages:",
-          mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
+  CfgLine ln; cfg_line_reset(&ln);
+  cfg_line_addf(&ln, "f%u: A/B differ %u RAM bytes [0x%08X..0x%08X] + %u spad (mode=%s) | top pages:",
+                mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
   for (int k = 0; k < 3 && topCnt[k]; k++)
-    fprintf(stderr, " 0x%08X:%u", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
+    cfg_line_addf(&ln, " 0x%08X:%u", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
   if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
-    fprintf(stderr, " | scratch-masked: %u ram + %u spad", nMaskedRam, nMaskedSpad);
-  fprintf(stderr, "\n");
+    cfg_line_addf(&ln, " | scratch-masked: %u ram + %u spad", nMaskedRam, nMaskedSpad);
+  cfg_line_flush(&ln, "sbs");
 }
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
@@ -1497,7 +1502,7 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     // This is often empty when sp is near stack-top (write reached from a leaf with no callers on the
     // guest stack) — in that case the HOST backtrace below is the useful one.
     const char* gbt = which ? mWwBtB : mWwBtA;
-    if (gbt[0]) fprintf(stderr, "[sbs-ww]     guest bt (core %c):\n%s", which ? 'B' : 'A', gbt);
+    if (gbt[0]) cfg_logi("sbs-ww", "    guest bt (core %c):\n%s", which ? 'B' : 'A', gbt);
     // Host-side C backtrace — names the actual C function that called mem_w*. This is what pins a
     // NATIVE write vs a SUBSTRATE write (line-105 native_step_frame vs func_XXXX substrate). Even
     // when the guest stack is empty, this is populated (it's the C call stack of the store).
@@ -1506,7 +1511,7 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     if (nbt > 0) {
       char** syms = backtrace_symbols(hbt, nbt);
       cfg_logi("sbs-ww", "    host bt (core %c, %d frames):", which ? 'B' : 'A', nbt);
-      for (int j = 0; j < nbt && j < 12; j++) fprintf(stderr, "        %s\n", syms ? syms[j] : "?");
+      for (int j = 0; j < nbt && j < 12; j++) cfg_logi("sbs-ww", "        %s", syms ? syms[j] : "?");
       free(syms);
     }
   }
@@ -2422,8 +2427,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       int n = 0;
       for (auto& d : diffs) {
         if (n++ >= 30) break;
-        fprintf(stderr, "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)\n",
-                d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
+        cfg_logi("sbs-frameprof", "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)",
+                 d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
       }
       fflush(stderr);
     }
@@ -2454,8 +2459,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       int n = 0;
       for (auto& d : diffs) {
         if (n++ >= 30) break;
-        fprintf(stderr, "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)\n",
-                d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
+        cfg_logi("sbs-frameprof", "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)",
+                 d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
       }
       fflush(stderr);
     }
@@ -2713,13 +2718,13 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           }
         };
         if (mWwHit & 1) {
-          fprintf(stderr, "[sbs] === WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
-                  mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
+          cfg_logi("sbs", "=== WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
+                   mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
           dump_host_bt("core A", mWwHostBtA, mWwHostBtNA);
         }
         if (mWwHit & 2) {
-          fprintf(stderr, "[sbs] === WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
-                  mWwAddr, mWwVb, mWwBtB[0] ? mWwBtB : "(empty)\n");
+          cfg_logi("sbs", "=== WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
+                   mWwAddr, mWwVb, mWwBtB[0] ? mWwBtB : "(empty)\n");
           dump_host_bt("core B", mWwHostBtB, mWwHostBtNB);
         }
         mWwArmed = false;

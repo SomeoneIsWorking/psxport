@@ -79,7 +79,7 @@ void ws_sx_dump(const char* tag) {
   if (d.sxhist_on != 1 || d.sx_n == 0) return;
   cfg_logi("ws_sxhist", "%s n=%ld  below0=%ld(%.1f%%)  atOrAbove320=%ld(%.1f%%)", tag, d.sx_n, d.sx_oob_lo, 100.0*d.sx_oob_lo/d.sx_n, d.sx_oob_hi, 100.0*d.sx_oob_hi/d.sx_n);
   for (int b = 0; b < 16; b++)
-    fprintf(stderr, "  [%5d..%5d) %ld\n", b*64-256, b*64-256+64, d.sx_hist[b]);
+    cfg_logi("gte_beetle", "  [%5d..%5d) %ld", b*64-256, b*64-256+64, d.sx_hist[b]);
   for (int b = 0; b < 16; b++) d.sx_hist[b] = 0;
   d.sx_n = d.sx_oob_lo = d.sx_oob_hi = 0;
 }
@@ -103,20 +103,15 @@ static const char* gte_name(unsigned fn) {
 void gte_probe_dump(const char* tag) {
   GteDebug& d = GTE_CurState()->dbg;
   if (d.gteprobe <= 0) return;
-  fprintf(stderr, "[gteprobe %s] executed GTE ops:\n", tag);
+  cfg_logi("gte_beetle", "[gteprobe %s] executed GTE ops:", tag);
   for (unsigned fn = 0; fn < 64; fn++) if (d.gte_hist[fn])
-    fprintf(stderr, "    %-6s(0x%02X) = %ld\n", gte_name(fn), fn, d.gte_hist[fn]);
+    cfg_logi("gte_beetle", "    %-6s(0x%02X) = %ld", gte_name(fn), fn, d.gte_hist[fn]);
   // lighting/fog control-register snapshot (cop2 CR numbering)
-  fprintf(stderr, "  LightMatrix(LLM cr8-12): %08X %08X %08X %08X %08X\n",
-          GTE_ReadCR(8),GTE_ReadCR(9),GTE_ReadCR(10),GTE_ReadCR(11),GTE_ReadCR(12));
-  fprintf(stderr, "  BackColor(RBK/GBK/BBK cr13-15): %d %d %d\n",
-          (int32_t)GTE_ReadCR(13),(int32_t)GTE_ReadCR(14),(int32_t)GTE_ReadCR(15));
-  fprintf(stderr, "  LightColorMtx(LCM cr16-20): %08X %08X %08X %08X %08X\n",
-          GTE_ReadCR(16),GTE_ReadCR(17),GTE_ReadCR(18),GTE_ReadCR(19),GTE_ReadCR(20));
-  fprintf(stderr, "  FarColor(RFC/GFC/BFC cr21-23): %d %d %d   [fog target]\n",
-          (int32_t)GTE_ReadCR(21),(int32_t)GTE_ReadCR(22),(int32_t)GTE_ReadCR(23));
-  fprintf(stderr, "  DepthCue DQA(cr27)=%d DQB(cr28)=%d   [IR0 = DQB + DQA*h/sz -> fog factor]\n",
-          (int16_t)GTE_ReadCR(27),(int32_t)GTE_ReadCR(28));
+  cfg_logi("gte_beetle", "  LightMatrix(LLM cr8-12): %08X %08X %08X %08X %08X", GTE_ReadCR(8),GTE_ReadCR(9),GTE_ReadCR(10),GTE_ReadCR(11),GTE_ReadCR(12));
+  cfg_logi("gte_beetle", "  BackColor(RBK/GBK/BBK cr13-15): %d %d %d", (int32_t)GTE_ReadCR(13),(int32_t)GTE_ReadCR(14),(int32_t)GTE_ReadCR(15));
+  cfg_logi("gte_beetle", "  LightColorMtx(LCM cr16-20): %08X %08X %08X %08X %08X", GTE_ReadCR(16),GTE_ReadCR(17),GTE_ReadCR(18),GTE_ReadCR(19),GTE_ReadCR(20));
+  cfg_logi("gte_beetle", "  FarColor(RFC/GFC/BFC cr21-23): %d %d %d   [fog target]", (int32_t)GTE_ReadCR(21),(int32_t)GTE_ReadCR(22),(int32_t)GTE_ReadCR(23));
+  cfg_logi("gte_beetle", "  DepthCue DQA(cr27)=%d DQB(cr28)=%d   [IR0 = DQB + DQA*h/sz -> fog factor]", (int16_t)GTE_ReadCR(27),(int32_t)GTE_ReadCR(28));
 }
 // --- Native projection (Phase 1): reimplement RTPS/RTPT in native C, oracle-gate it ----------------
 // The engine projects every vertex through the GTE (RTPS/RTPT) and then copies the integer screen
@@ -323,9 +318,7 @@ static void proj_probe_one(unsigned vidx, uint32_t insn, int b_ir1, int b_ir2, i
 void proj_probe_dump(const char* tag) {
   GteDebug& g = GTE_CurState()->dbg;
   if (g.projprobe <= 0 || g.pp_verts == 0) return;
-  fprintf(stderr, "[projprobe %s] verts=%ld  IR diff=%ld(max%d) SZ diff=%ld(max%d) "
-          "SX diff=%ld(max%d) SY diff=%ld(max%d)  subpix<=1px=%ld(%.2f%%)\n",
-          tag, g.pp_verts, g.pp_bad_ir, g.pp_maxd_ir, g.pp_bad_sz, g.pp_maxd_sz,
+  cfg_logi("gte_beetle", "[projprobe %s] verts=%ld  IR diff=%ld(max%d) SZ diff=%ld(max%d) SX diff=%ld(max%d) SY diff=%ld(max%d)  subpix<=1px=%ld(%.2f%%)", tag, g.pp_verts, g.pp_bad_ir, g.pp_maxd_ir, g.pp_bad_sz, g.pp_maxd_sz,
           g.pp_bad_sx, g.pp_maxd_sx, g.pp_bad_sy, g.pp_maxd_sy,
           g.pp_subpix_le1, 100.0 * g.pp_subpix_le1 / g.pp_verts);
   g.pp_verts = g.pp_bad_ir = g.pp_bad_sz = g.pp_bad_sx = g.pp_bad_sy = g.pp_subpix_le1 = 0;
@@ -344,14 +337,13 @@ static void rtpcaller_record(uint32_t ra) {
 void rtpcaller_dump(Core* c, const char* tag) {
   GteDebug& d = c->game->gte.dbg;
   if (d.rtpcaller_on != 1) return;
-  fprintf(stderr, "[rtpcaller %s] RA histogram (caller return site -> jal target = projection fn):\n", tag);
+  cfg_logi("gte_beetle", "[rtpcaller %s] RA histogram (caller return site -> jal target = projection fn):", tag);
   for (int i = 0; i < 64 && d.rtpcaller[i].n; i++) {
     // the jal that set RA is at RA-8 (RA = jal_addr + 8, MIPS branch-delay). Decode its target.
     uint32_t jal = c->mem_r32(d.rtpcaller[i].ra - 8);
     uint32_t tgt = ((jal >> 26) == 3) ? (((d.rtpcaller[i].ra - 8) & 0xF0000000u) | ((jal & 0x03FFFFFFu) << 2))
                                       : 0;  // 0 = not a jal (jalr / inlined)
-    fprintf(stderr, "    RA=0x%08X  %8ld   jal[%08X]->fn=0x%08X\n",
-            d.rtpcaller[i].ra, d.rtpcaller[i].n, jal, tgt);
+    cfg_logi("gte_beetle", "    RA=0x%08X  %8ld   jal[%08X]->fn=0x%08X", d.rtpcaller[i].ra, d.rtpcaller[i].n, jal, tgt);
   }
 }
 void rtpcaller_reset(void) { GteDebug& d = GTE_CurState()->dbg;

@@ -245,17 +245,19 @@ void rec_dispatch(Core* c, uint32_t addr) {
       // overlay slot but NO resident overlay signature matches -> fail fast. Dump what IS resident so a
       // miss-loop can see whether the slot holds an unexpected overlay or a relocated/clobbered image.
       const unsigned char* ram = c->ram + (o->base & 0x1FFFFFFF);
-      fprintf(stderr, "[overlay-router] addr 0x%08X in slot 0x%08X but NO resident overlay matches.\n"
-                      "  resident[0..16] =", addr, o->base);
-      for (int k = 0; k < 16; k++) fprintf(stderr, " %02X", ram[k]);
-      fprintf(stderr, "\n");
+      cfg_loge("overlay-router", "addr 0x%08X in slot 0x%08X but NO resident overlay matches.", addr, o->base);
+      CfgLine ln; cfg_line_reset(&ln);
+      cfg_line_addf(&ln, "  resident[0..16] =");
+      for (int k = 0; k < 16; k++) cfg_line_addf(&ln, " %02X", ram[k]);
+      cfg_line_flush(&ln, "overlay-router");
       for (int j = 0; j < R->overlay_count; j++) {
         const RecOverlay* q = &R->overlays[j];
         if (q->base != o->base) continue;
         int nmatch = 0; for (unsigned k = 0; k < q->siglen && k < 16; k++) nmatch += (q->sig[k] == ram[k]);
-        fprintf(stderr, "  cand %-6s sig[0..16] =", q->name);
-        for (unsigned k = 0; k < 16 && k < q->siglen; k++) fprintf(stderr, " %02X", q->sig[k]);
-        fprintf(stderr, "   (%d/16 match)\n", nmatch);
+        cfg_line_addf(&ln, "  cand %-6s sig[0..16] =", q->name);
+        for (unsigned k = 0; k < 16 && k < q->siglen; k++) cfg_line_addf(&ln, " %02X", q->sig[k]);
+        cfg_line_addf(&ln, "   (%d/16 match)", nmatch);
+        cfg_line_flush(&ln, "overlay-router");
       }
       break;   // fail fast below
     }

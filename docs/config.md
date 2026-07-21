@@ -82,9 +82,19 @@ cfg_loge("chan", fmt, …)  // ("[cd:warn]" / "[cd:error]") so they stay greppab
   A LEADING `\n` is kept as a blank-line separator and emitted before the tag.
 - The one legitimate raw-print exception is output that is not ours: the guest's own BIOS-putchar
   text (e.g. `ResetGraph:jtb=…`) must stay unprefixed and unredirected.
-- Still open (needs restructuring, not a mechanical rewrite): ~19 piecewise line-builders — hex/byte
-  dump loops in `sbs.cpp` / `dualcore.cpp` / `repl.cpp` / `mem.cpp` that emit a line across many
-  calls. Converting one means accumulating into a buffer first (see `cfg_dump` for the shape).
+- **DUMPS built piece-by-piece** (hex rows, byte tables, register grids) can't call the logger per
+  piece — accumulate with `CfgLine`, then flush once:
+  ```c
+  CfgLine ln; cfg_line_reset(&ln);
+  cfg_line_addf(&ln, "  A @0x%08X:", addr);
+  for (…) cfg_line_addf(&ln, " %02X", b[i]);
+  cfg_line_flush(&ln, "sbs");        // -> cfg_logi("sbs", …) and resets; truncation-safe
+  ```
+  Watch the **tail** piece when converting one of these: the last fragment of a piecewise line looks
+  like an ordinary whole-line print (it ends in `\n`), so converting it alone silently reorders the
+  output — it would emit before the fragments accumulated ahead of it. Convert the whole group.
+- As of 2026-07-21 there are **zero** raw `fprintf(stderr, …)` of our own left in `runtime/recomp/`
+  or `game/`; `grep -rn 'fprintf(stderr' runtime/recomp game` is the regression check.
 - Every lookup reads the environment **once** and caches. In hot paths (per-prim / per-GTE-op /
   per-store) still keep a local `static int x=-1; if(x<0) x=cfg_*(…)` so there is no per-call scan.
 - `-w` is on in the build, so an int/pointer mix-up (e.g. mapping a *valued* flag to `cfg_dbg`) is **not**

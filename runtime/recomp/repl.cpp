@@ -103,11 +103,15 @@ long Repl::read(Core* c, uint32_t f) {
     // frozen" (the unknown command just reprinted the prompt, advancing nothing).
     else if (!strcmp(cmd, "step")) { if (sscanf(line, "%*s %u", &a) != 1 || !a) a = 1; return (long)a; }
     else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
-      if (!b) b = 16; fprintf(stderr, "[repl] %08X:", a);
-      for (unsigned i = 0; i < b && i < 256; i++) fprintf(stderr, " %02X", c->mem_r8(a + i)); fprintf(stderr, "\n");
+      if (!b) b = 16;
+      CfgLine ln; cfg_line_reset(&ln); cfg_line_addf(&ln, "%08X:", a);
+      for (unsigned i = 0; i < b && i < 256; i++) cfg_line_addf(&ln, " %02X", c->mem_r8(a + i));
+      cfg_line_flush(&ln, "repl");
     } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
-      if (!b) b = 8; fprintf(stderr, "[repl] %08X:", a);
-      for (unsigned i = 0; i < b && i < 64; i++) fprintf(stderr, " %08X", c->mem_r32(a + i * 4)); fprintf(stderr, "\n");
+      if (!b) b = 8;
+      CfgLine ln; cfg_line_reset(&ln); cfg_line_addf(&ln, "%08X:", a);
+      for (unsigned i = 0; i < b && i < 64; i++) cfg_line_addf(&ln, " %08X", c->mem_r32(a + i * 4));
+      cfg_line_flush(&ln, "repl");
     } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w32(a, b); cfg_logi("repl", "ok"); }
     else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w8(a, (uint8_t)b); cfg_logi("repl", "ok"); }
     else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) c->mem_set_watch(a, b);
@@ -306,17 +310,17 @@ long Repl::read(Core* c, uint32_t f) {
         auto flush_run = [&]() {
           if (!haveRun) return;
           if (cur.frame == 0xFFFFFFFFu)
-            fprintf(stderr, "  [0x%08X,0x%08X) NEVER WRITTEN since watch registered\n", runLo, runHi);
+            cfg_logi("repl", "  [0x%08X,0x%08X) NEVER WRITTEN since watch registered", runLo, runHi);
           else
-            fprintf(stderr, "  [0x%08X,0x%08X) fn=0x%08X caller=0x%08X frame=%u\n",
-                    runLo, runHi, cur.fn, cur.caller, cur.frame);
+            cfg_logi("repl", "  [0x%08X,0x%08X) fn=0x%08X caller=0x%08X frame=%u",
+                     runLo, runHi, cur.fn, cur.caller, cur.frame);
           any = true; haveRun = false;
         };
         for (; w < end; w += 4) {
           OtAttr::WordRec rec{}; uint32_t wa = 0;
           if (!oa.watchLookup(w, &rec, &wa)) {
             flush_run();
-            fprintf(stderr, "  [0x%08X,0x%08X) NOT WATCHED — run `otattr watch` first\n", w, w + 4);
+            cfg_logi("repl", "  [0x%08X,0x%08X) NOT WATCHED — run `otattr watch` first", w, w + 4);
             continue;
           }
           if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
@@ -327,7 +331,7 @@ long Repl::read(Core* c, uint32_t f) {
           }
         }
         flush_run();
-        if (!any) fprintf(stderr, "  (nothing in range)\n");
+        if (!any) cfg_logi("repl", "  (nothing in range)");
         fflush(stderr);
         continue;
       }
@@ -348,19 +352,14 @@ long Repl::read(Core* c, uint32_t f) {
         // the same frame, i.e. it fans out across many destinations rather than emitting one thing)?
         const OtAttr::FnStoreStat* st = oa.fnStatFind(rec.fn);
         if (!st) {
-          fprintf(stderr, "  [trace] no per-fn store stat recorded for this fn this frame (stale/cross-frame "
-                           "lookup) — re-run `otattr trace` in the same frame the write happened.\n");
+          cfg_logw("repl", "  [trace] no per-fn store stat recorded for this fn this frame (stale/cross-frame lookup) — re-run `otattr trace` in the same frame the write happened.");
         } else {
           bool looksLikeCopyLoop = st->pageOverflow || st->pageCount >= 3;
-          fprintf(stderr, "  [trace] fn=0x%08X made %u store(s) touching %d distinct 4KB page(s) this frame%s -> %s\n",
-                  rec.fn, st->count, st->pageCount, st->pageOverflow ? "+" : "",
+          cfg_logi("repl", "  [trace] fn=0x%08X made %u store(s) touching %d distinct 4KB page(s) this frame%s -> %s", rec.fn, st->count, st->pageCount, st->pageOverflow ? "+" : "",
                   looksLikeCopyLoop ? "LOOKS LIKE A COPY/BATCH LOOP (writes fan out across many destinations; "
                                       "the object identity was likely already lost by the time it reached this word)"
                                     : "looks like a direct, single-destination writer");
-          fprintf(stderr, "  [trace] SOURCE not statically determinable from store data alone (this tool only "
-                           "sees writes, not reads) — Ghidra-decompile fn=0x%08X (tools/decomp.sh) to find its "
-                           "read pointer/source struct, then `otattr watch <src_addr> <len>` and re-run `otattr "
-                           "who`/`trace` on the source to walk one more hop back.\n", rec.fn);
+          cfg_logi("repl", "  [trace] SOURCE not statically determinable from store data alone (this tool only sees writes, not reads) — Ghidra-decompile fn=0x%08X (tools/decomp.sh) to find its read pointer/source struct, then `otattr watch <src_addr> <len>` and re-run `otattr who`/`trace` on the source to walk one more hop back.", rec.fn);
         }
         fflush(stderr);
         continue;
@@ -384,8 +383,7 @@ long Repl::read(Core* c, uint32_t f) {
             bool found = oa.lookupStore(a, &sp);
             uint32_t node = found ? sp.node : 0;
             uint32_t beh = node ? c->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0;
-            fprintf(stderr, "  [%4d] pool=0x%08X op=0x%02X n=%u v0=(%d,%d)  fn=0x%08X caller=0x%08X node=0x%08X beh@node+1C=0x%08X\n",
-                    idx, 0x80000000u | a, op, n, vx, vy,
+            cfg_logi("repl", "  [%4d] pool=0x%08X op=0x%02X n=%u v0=(%d,%d)  fn=0x%08X caller=0x%08X node=0x%08X beh@node+1C=0x%08X", idx, 0x80000000u | a, op, n, vx, vy,
                     found ? sp.fn : 0, found ? sp.caller : 0, node, beh);
           }
           uint32_t next = hdr & 0xFFFFFF;
@@ -396,11 +394,18 @@ long Repl::read(Core* c, uint32_t f) {
       cfg_logi("otattr", "GTE RTPS/RTPT per-(fn,node) call counts this frame:");
       for (int i = 0; i < oa.gteCount(); i++) {
         const OtAttr::GteBucket* g = oa.gteAt(i);
-        fprintf(stderr, "  fn=0x%08X node=0x%08X count=%u\n", g->fn, g->node, g->count);
+        cfg_logi("repl", "  fn=0x%08X node=0x%08X count=%u", g->fn, g->node, g->count);
       }
     }
     else if (!strcmp(cmd, "stage")) cfg_logi("repl", "stage=%08X sm48=%d", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
-    else if (!strcmp(cmd, "regs")) { for (int i = 0; i < 32; i++) { fprintf(stderr, " r%-2d=%08X", i, c->r[i]); if ((i & 3) == 3) fprintf(stderr, "\n"); } fprintf(stderr, " hi=%08X lo=%08X\n", c->hi, c->lo); }
+    else if (!strcmp(cmd, "regs")) {
+      CfgLine ln; cfg_line_reset(&ln);                       // 4 registers per row
+      for (int i = 0; i < 32; i++) {
+        cfg_line_addf(&ln, " r%-2d=%08X", i, c->r[i]);
+        if ((i & 3) == 3) cfg_line_flush(&ln, "repl");
+      }
+      cfg_logi("repl", " hi=%08X lo=%08X", c->hi, c->lo);
+    }
     else if (!strcmp(cmd, "seq")) cfg_logi("repl", "seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X", c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
     // game-side commands (invtest/bgm/bgmstop/seqsolo/musictest) — game classes / Tomba guest addrs,
     // dispatched into game/core/repl_commands.cpp so the framework REPL names no game type.

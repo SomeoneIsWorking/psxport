@@ -168,7 +168,7 @@ void spu_write(uint32_t addr, uint32_t val)
          extern void backtrace_symbols_fd(void* const*, int, int);
          void* frames[32]; int n = backtrace(frames, 32);
          cfg_logi("spubt", "off=%03X val=%04X", addr & 0x3FF, val & 0xFFFF);
-         backtrace_symbols_fd(frames, n, 2); fprintf(stderr, "----\n");
+         backtrace_symbols_fd(frames, n, 2); cfg_logi("spu_beetle", "----");
       }
    }
    SPU_Write(0, addr & 0x3FF, (uint16_t)val);

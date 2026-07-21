@@ -267,8 +267,7 @@ void Cd::audioTrace(const char* tag) {
   int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(&c->game->xa), nlp=xa_stream_is_looping(&c->game->xa);
   int ngate=c->mem_r16(0x801fe0e0)&0xffff;
   if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
-    fprintf(stderr,"[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d\n",
-            c->game->timing.logicFrame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
+    cfg_logi("cd_override", "[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d", c->game->timing.logicFrame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
     t=nt;cur=ncur;mas=nmas;s19a=n19a;s137=n137;song=nsong;act=nact;lp=nlp;gate=ngate;
   }
 }

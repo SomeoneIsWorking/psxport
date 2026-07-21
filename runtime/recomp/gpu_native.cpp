@@ -456,9 +456,7 @@ void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int
       { static int tx = -2, ty; if (tx == -2) { const char* e = cfg_str("PSXPORT_PIXTRACE");
           if (e) sscanf(e, "%d,%d", &tx, &ty); else tx = -1; }
         if (tx >= 0 && x == tx && y == ty)
-          fprintf(stderr, "[pixtrace ours] (%d,%d) tex=%d shade=%d semi=%d px_semi=%d blend=%d dith=%d "
-                  "uv=(%d,%d) texel=%04X out8=(%d,%d,%d) out5=(%d,%d,%d) vcol=(%d,%d,%d)\n",
-                  x, y, tex, shade, semi, px_semi, s_tp_blend, (s_tp_dither && dithered),
+          cfg_logi("gpu_native", "[pixtrace ours] (%d,%d) tex=%d shade=%d semi=%d px_semi=%d blend=%d dith=%d uv=(%d,%d) texel=%04X out8=(%d,%d,%d) out5=(%d,%d,%d) vcol=(%d,%d,%d)", x, y, tex, shade, semi, px_semi, s_tp_blend, (s_tp_dither && dithered),
                   pt_u, pt_v, pt_t, r, g, bl, r >> 3, g >> 3, bl >> 3, pt_cr, pt_cg, pt_cb); }
       // REDDBG: dark-red output anomaly probe (grass blocks). Log the prim's params once.
       if (s_reddbg && tex && r >= 64 && g < 24 && bl < 24 && x >= s_da_x0 && x <= s_da_x1) {
@@ -467,11 +465,13 @@ void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int
           int uu = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
           int vv = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
           cfg_logi("reddbg", "@(%d,%d) out=(%d,%d,%d) tpmode=%d clut=(%d,%d) tp=(%d,%d) uv=(%d,%d)", x, y, r, g, bl, s_tp_mode, s_clut_x, s_clut_y, s_tp_x, s_tp_y, uu, vv);
-          fprintf(stderr, "[reddbg]   palette[16]@(%d,%d):", s_clut_x, s_clut_y);
-          for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_clut_x + k, s_clut_y));
-          fprintf(stderr, "\n[reddbg]   texrow@(%d,%d) words:", s_tp_x + (uu>>2), s_tp_y + vv);
-          for (int k = 0; k < 8; k++) fprintf(stderr, " %04X", *vram(s_tp_x + (uu>>2) + k, s_tp_y + vv));
-          fprintf(stderr, "\n");
+          CfgLine ln; cfg_line_reset(&ln);
+          cfg_line_addf(&ln, "  palette[16]@(%d,%d):", s_clut_x, s_clut_y);
+          for (int k = 0; k < 16; k++) cfg_line_addf(&ln, " %04X", *vram(s_clut_x + k, s_clut_y));
+          cfg_line_flush(&ln, "reddbg");
+          cfg_line_addf(&ln, "  texrow@(%d,%d) words:", s_tp_x + (uu>>2), s_tp_y + vv);
+          for (int k = 0; k < 8; k++) cfg_line_addf(&ln, " %04X", *vram(s_tp_x + (uu>>2) + k, s_tp_y + vv));
+          cfg_line_flush(&ln, "reddbg");
         }
       }
       put_px_b(x, y, r, g, bl, px_semi);
@@ -636,10 +636,11 @@ void GpuState::prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, u
 // in order, with the resulting 16-entry palette. Reveals whether the right palette is written
 // then overwritten, or never written, and by which transfer.
 void GpuState::clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
-  fprintf(stderr, "[clutwatch] %s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
-          tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
-  for (int k = 0; k < 16; k++) fprintf(stderr, " %04X", *vram(s_cw_x + k, s_cw_y));
-  fprintf(stderr, "\n");
+  CfgLine ln; cfg_line_reset(&ln);
+  cfg_line_addf(&ln, "%s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
+                tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
+  for (int k = 0; k < 16; k++) cfg_line_addf(&ln, " %04X", *vram(s_cw_x + k, s_cw_y));
+  cfg_line_flush(&ln, "clutwatch");
 }
 int GpuState::clutwatch_covers(int rx, int ry, int rw, int rh) {
   if (s_cw_x < 0) return 0;
@@ -1285,10 +1286,11 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
         uint32_t src = 0x80000000u | s_dma_src;
-        fprintf(stderr, "[texwatch] f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
-                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
-        for (int k = 0; k < 12; k++) fprintf(stderr, " %02X", core->mem_r8(s_dma_src + k));
-        fprintf(stderr, "\n");
+        CfgLine ln; cfg_line_reset(&ln);
+        cfg_line_addf(&ln, "f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
+                      s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
+        for (int k = 0; k < 12; k++) cfg_line_addf(&ln, " %02X", core->mem_r8(s_dma_src + k));
+        cfg_line_flush(&ln, "texwatch");
       }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
@@ -1308,7 +1310,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         if (cfg_str("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
           uint32_t na = s_cur_node & 0x1FFFFF;
           cfg_logi("clobber", "OT root madr=0x%08X node@0x%08X neighbourhood:", 0x80000000u|s_ot_madr, s_cur_node);
-          for (int k = -8; k <= 16; k++) fprintf(stderr, "  [%+d] 0x%08X: %08X\n", k,
+          for (int k = -8; k <= 16; k++) cfg_logi("gpu_native", "  [%+d] 0x%08X: %08X", k,
                   0x80000000u | ((na + k*4) & 0x1FFFFF), core->mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
           FILE* mf = fopen(cfg_str("PSXPORT_CLOBBERDUMP"), "wb");
           if (mf) { fwrite(core->ram, 1, 0x200000, mf); fclose(mf);

@@ -57,6 +57,21 @@ __attribute__((format(printf, 2, 3)))
 #endif
 void        cfg_loge(const char* chan, const char* fmt, ...);
 void        cfg_dump(void);   // log every active PSXPORT_* var (once); for boot-time visibility
+
+// --- Line accumulator: for DUMPS built piece-by-piece (hex rows, byte tables, column runs) --------
+// The logger emits one whole line per call, so a loop that appends `%02X` per byte cannot call it
+// directly. Accumulate here, then flush once. Truncation-safe (marks "…" and stops).
+//   CfgLine ln; cfg_line_reset(&ln);
+//   cfg_line_addf(&ln, "  A @0x%08X:", addr);
+//   for (…) cfg_line_addf(&ln, " %02X", b[i]);
+//   cfg_line_flush(&ln, "sbs");            // -> cfg_logi("sbs", …) and resets
+typedef struct { char buf[4096]; unsigned used; } CfgLine;
+void        cfg_line_reset(CfgLine* l);
+#ifdef __GNUC__
+__attribute__((format(printf, 2, 3)))
+#endif
+void        cfg_line_addf(CfgLine* l, const char* fmt, ...);
+void        cfg_line_flush(CfgLine* l, const char* chan);   // emit at info level, then reset
 #ifdef __cplusplus
 }
 #endif

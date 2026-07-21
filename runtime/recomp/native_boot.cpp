@@ -473,16 +473,17 @@ static void game_main(Core* c) {
       sig = sig * 31 + ((uint64_t)menu_slot << 8 | menu_page);
       if (sig != state_last_sig) {
         state_last_sig = sig;
-        fprintf(stderr, "[state] f%u", f);
+        CfgLine ln; cfg_line_reset(&ln);
+        cfg_line_addf(&ln, "f%u", f);
         for (int i = 0; i < 3; i++) {
           uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
-          fprintf(stderr, " | s%d st=%u ent=0x%08X", i, c->mem_r16(base), c->mem_r32(base + 0xc));
+          cfg_line_addf(&ln, " | s%d st=%u ent=0x%08X", i, c->mem_r16(base), c->mem_r32(base + 0xc));
         }
-        fprintf(stderr, "  MENU=%s", menu_slot >= 0 ? "OPEN" : "no");
-        if (menu_slot >= 0) fprintf(stderr, "(slot%d page=%u)", menu_slot, menu_page);
-        fprintf(stderr, "  cam=(%d,%d,%d) sm[0x4a]=%u\n",
-                c->mem_r16s(0x1f8000d2u), c->mem_r16s(0x1f8000d6u),
-                c->mem_r16s(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
+        cfg_line_addf(&ln, "  MENU=%s", menu_slot >= 0 ? "OPEN" : "no");
+        if (menu_slot >= 0) cfg_line_addf(&ln, "(slot%d page=%u)", menu_slot, menu_page);
+        cfg_line_addf(&ln, "  cam=(%d,%d,%d) sm[0x4a]=%u", c->mem_r16s(0x1f8000d2u), c->mem_r16s(0x1f8000d6u),
+                      c->mem_r16s(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
+        cfg_line_flush(&ln, "state");
       }
     }
     // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots

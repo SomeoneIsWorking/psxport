@@ -129,11 +129,12 @@ void DualCore::diffFrameRegion(const char* name, const uint8_t* a, const uint8_t
     if (a[i] == b[i] || (!show_all && isRenderRegion(gbase + i))) { i++; continue; }
     uint32_t s = i, last = i, gap = 0; i++;
     while (i < n && gap < GAP) { if (a[i] != b[i]) { last = i; gap = 0; } else gap++; i++; }
-    fprintf(stderr, "    %s 0x%08X..0x%08X (%uB)  A:", name, gbase + s, gbase + last + 1, last + 1 - s);
-    for (uint32_t k = s; k <= last && k < s + 8; k++) fprintf(stderr, "%02X", a[k]);
-    fprintf(stderr, " B:");
-    for (uint32_t k = s; k <= last && k < s + 8; k++) fprintf(stderr, "%02X", b[k]);
-    fprintf(stderr, "\n"); shown++;
+    CfgLine ln; cfg_line_reset(&ln);
+    cfg_line_addf(&ln, "    %s 0x%08X..0x%08X (%uB)  A:", name, gbase + s, gbase + last + 1, last + 1 - s);
+    for (uint32_t k = s; k <= last && k < s + 8; k++) cfg_line_addf(&ln, "%02X", a[k]);
+    cfg_line_addf(&ln, " B:");
+    for (uint32_t k = s; k <= last && k < s + 8; k++) cfg_line_addf(&ln, "%02X", b[k]);
+    cfg_line_flush(&ln, "dc"); shown++;
   }
 }
 
@@ -154,8 +155,8 @@ void DualCore::run(const char* exe_path) {
   int kB = runAndRecord(exe_path, 1, "B(PSX-render)",    n, lo, hi, snB, spB);
 
   int kn = kA < kB ? kA : kB;
-  fprintf(stderr, "\n========== RENDER DIFF  (A=native-render  B=PSX-render)  comparing %d frames ==========\n", kn);
-  fprintf(stderr, "  (ignore the render PACKET POOL 0x800BFE68..0x800E7E68 — legit render-path difference)\n");
+  cfg_logi("dc", "\n========== RENDER DIFF  (A=native-render  B=PSX-render)  comparing %d frames ==========", kn);
+  cfg_logi("dc", "  (ignore the render PACKET POOL 0x800BFE68..0x800E7E68 — legit render-path difference)");
   int first = -1;
   for (int k = 0; k < kn; k++) {
     bool ram_d = false;
@@ -164,7 +165,7 @@ void DualCore::run(const char* exe_path) {
     if (ram_d || spd_d) {
       if (first < 0) { first = k; cfg_logi("dc", "FIRST DIVERGENCE at gameplay-frame %d:", k); }
       if (k < first + 6) {     // detail the first few divergent frames
-        fprintf(stderr, "  frame %d:\n", k);
+        cfg_logi("dc", "  frame %d:", k);
         if (ram_d) diffFrameRegion("ram ", snA[k], snB[k], rsz, lo);
         if (spd_d) diffFrameRegion("spad", spA[k], spB[k], 0x400, 0x1F800000u);
       }
@@ -172,5 +173,5 @@ void DualCore::run(const char* exe_path) {
   }
   if (first < 0) cfg_logi("dc", "NO DIVERGENCE across %d frames — native gameplay == PSX gameplay here.", kn);
   else cfg_logi("dc", "(divergence began at frame %d)", first);
-  fprintf(stderr, "========================================================================\n");
+  cfg_logi("dc", "========================================================================");
 }

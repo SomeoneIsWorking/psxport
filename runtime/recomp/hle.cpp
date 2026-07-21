@@ -250,18 +250,11 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
       cfg_logi("miss-regs", "s0=0x%08X s1=0x%08X s2=0x%08X s3=0x%08X", c->r[16], c->r[17], c->r[18], c->r[19]);
       uint32_t s0 = c->r[16];
       if (s0 >= 0x80000000u && s0 < 0x80200000u - 0x60u) {
-        fprintf(stderr, "[miss-node s0] +0x00=0x%08X +0x1c(handler)=0x%08X +0x0d=%u +0x29=%u +0x44=%d +0x46=0x%02X +0x5c=%d\n",
-                c->mem_r32(s0), c->mem_r32(s0 + 0x1cu), c->mem_r8(s0 + 0x0du), c->mem_r8(s0 + 0x29u),
+        cfg_logi("hle", "[miss-node s0] +0x00=0x%08X +0x1c(handler)=0x%08X +0x0d=%u +0x29=%u +0x44=%d +0x46=0x%02X +0x5c=%d", c->mem_r32(s0), c->mem_r32(s0 + 0x1cu), c->mem_r8(s0 + 0x0du), c->mem_r8(s0 + 0x29u),
                 (int16_t)c->mem_r16(s0 + 0x44u), c->mem_r8(s0 + 0x46u), (int16_t)c->mem_r16(s0 + 0x5cu));
       }
     }
-    fprintf(stderr,
-      "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n"
-      "  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n"
-      "  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n"
-      "  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n"
-      "  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.\n",
-      c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
+    cfg_logw("hle", "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.", c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     fflush(stderr);
     abort();
@@ -273,6 +266,5 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   // cores reach it identically (0-diff), i.e. it is faithful guest behavior, not a port miss. Return
   // silently: a null callback is a no-op, not a "no recompiled fn" error worth reporting.
   if ((addr & 0x1FFFFFFFu) == 0) return;
-  fprintf(stderr, "[miss %d] addr 0x%08X (no recompiled fn / overlay)  (caller ra=0x%08X c->pc=0x%08X a0=0x%08X)\n",
-          c->game->hle.miss_count++, addr, c->r[31], c->pc, c->r[4]);
+  cfg_logi("hle", "[miss %d] addr 0x%08X (no recompiled fn / overlay)  (caller ra=0x%08X c->pc=0x%08X a0=0x%08X)", c->game->hle.miss_count++, addr, c->r[31], c->pc, c->r[4]);
 }

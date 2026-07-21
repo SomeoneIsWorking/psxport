@@ -49,8 +49,8 @@ void VerifyHarness::run(uint32_t (*fn)(Core*), uint32_t superAddr, const char* g
   int so = -1; for (uint32_t a = 0; a < 0x400; a++) if (c->scratch[a] != spadN[a]) { so = (int)a; break; }
   Check& k = check(gate);
   if (ro >= 0 || so >= 0 || v0_n != v0_o) {
-    if (k.nMismatch++ < 40) fprintf(stderr, "[%s] MISMATCH a0=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x\n", gate, a0, v0_n, v0_o, ro, so, sp);
-  } else if (++k.nMatch % 20 == 0) fprintf(stderr, "[%s] %ld matches\n", gate, k.nMatch);
+    if (k.nMismatch++ < 40) cfg_logi("verify_harness", "[%s] MISMATCH a0=%08x v0 n=%x o=%x ram@%x spad@%x sp=%x", gate, a0, v0_n, v0_o, ro, so, sp);
+  } else if (++k.nMatch % 20 == 0) cfg_logi("verify_harness", "[%s] %ld matches", gate, k.nMatch);
 }
 
 // ---- STRICT mirror TDD gate (see header). USER 2026-07-08: every faithful mirror must be

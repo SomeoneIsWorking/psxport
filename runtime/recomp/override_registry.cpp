@@ -61,8 +61,7 @@ void dump_atexit() {
     char label[32];
     const char* name = e.name;
     if (!name) { snprintf(label, sizeof label, "0x%08X", e.addr); name = label; }
-    fprintf(stderr, "  0x%08X %-34s : native=%llu  oracle=%llu%s%s\n",
-            e.addr, name, (unsigned long long)e.nativeHits, (unsigned long long)e.oracleHits,
+    cfg_logi("override_registry", "  0x%08X %-34s : native=%llu  oracle=%llu%s%s", e.addr, name, (unsigned long long)e.nativeHits, (unsigned long long)e.oracleHits,
             e.nativeHits == 0 && e.oracleHits == 0 ? "   <-- NEVER HIT (registered but unreached)" : "",
             (e.oracleHits != 0 && e.nativeHits != e.oracleHits) ? "   <-- COUNT MISMATCH (control-flow divergence)" : "");
   }

@@ -239,7 +239,7 @@ static void exec_simple(Core* c, uint32_t in) {
       { uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
           uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
-          if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { fprintf(stderr, "   [sp+0x%03X]=0x%08X\n", a-sp, w); shown++; }
+          if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { cfg_logi("interp", "   [sp+0x%03X]=0x%08X", a-sp, w); shown++; }
         } }
       // PSXPORT_DERAIL_DUMP=<path>: snapshot guest RAM at the derail so the offending overlay/jump can be
       // reverse-engineered (the overlay code isn't in static MAIN.EXE; disas.py --ram needs this dump).
@@ -454,7 +454,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
         cfg_logi("pctrap", "reached 0x%08X  ra=0x%08X sp=0x%08X a0=0x%08X", pc, c->r[31], c->r[29], c->r[4]);
         uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) { uint32_t w = c->mem_r32(a); uint32_t k = w & 0x1FFFFFFF;
-          if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { fprintf(stderr, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; } }
+          if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { cfg_logi("interp", "    [sp+0x%03X] 0x%08X", a - sp, w); shown++; } }
         fflush(stderr); } } }
     // DIAG (debug chan `fadeshot`): every recomp screen-fade call FUN_8007E9C8(color=a0) — capture s_tex
     // and log color+ra, to see the intro menu->cutscene transition's "two fade-ins" render state deterministically.

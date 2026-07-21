@@ -51,7 +51,7 @@ void Core::cw_check(uint32_t a, uint32_t v, int width) {
     s_cw_n++;
     if (s_cw_n <= 64) {
       cfg_logi("cw", "#%d store w%d [%08X]=%08X  interp_pc=%08X sp=%08X", s_cw_n, width, 0x80000000u|p, v, pc, r[29]);
-      if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n"); }
+      if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); cfg_logi("mem", "----"); }
     }
   }
 }
@@ -83,7 +83,7 @@ void Core::wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
       // for static gen-to-gen calls (where guest pc/ra go stale under native execution).
       if (cfg_str("PSXPORT_WWATCH_BT")) {
         cfg_logi("wwatch-regs", "a0=%08X a1=%08X a2=%08X a3=%08X s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X", r[4], r[5], r[6], r[7], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
-        void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); fprintf(stderr, "----\n");
+        void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); cfg_logi("mem", "----");
       }
     }
     if (storeWatchCb) storeWatchCb(this, ka, v, w);
@@ -156,13 +156,14 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         if (cfg_str("PSXPORT_SPUDMA")) {           // log VAB/sample transfers: source -> SPU dest, size
           cfg_logi("spudma", "RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X", 0x80000000u | da, s_spu_xfer_addr, n, n * 4, pc, mem_r32(0x801fe00c));
           if (n > 20000) {                         // big VAB bank: dump engine-range guest return addrs
-            uint32_t sp = r[29] & 0x1FFFFFFF; fprintf(stderr, "  [vab-caller-chain]");
+            uint32_t sp = r[29] & 0x1FFFFFFF;
+            CfgLine ln; cfg_line_reset(&ln); cfg_line_addf(&ln, "  [vab-caller-chain]");
             for (uint32_t o = 0; o < 0x800 && sp + o + 4 <= 0x200000; o += 4) {
               uint32_t w; memcpy(&w, &ram[sp + o], 4); uint32_t p = w & 0x1FFFFFFF;
               if ((w & 0xFFE00000u) == 0x80000000u && (w & 3) == 0 && p >= 0x1E000 && p < 0x82000)
-                fprintf(stderr, " %08X", w);
+                cfg_line_addf(&ln, " %08X", w);
             }
-            fprintf(stderr, "\n");
+            cfg_line_flush(&ln, "spudma");
           }
         }
         spu_dma_write(s_dma_buf, n);
@@ -291,10 +292,7 @@ static void display_pass_write_guard(Core* c, uint32_t a, uint32_t v, int width)
   const bool guest_ram   = p < 0x200000;
   const bool scratchpad  = p >= 0x1F800000 && p < 0x1F800400;
   if (!guest_ram && !scratchpad) return;
-  fprintf(stderr,
-          "\n[pc_render VIOLATION] guest write to 0x%08X (val 0x%X, width %d) during pc_render "
-          "display pass — pc_render MUST be a read-only overlay (CLAUDE.md). interp_pc=%08X sp=%08X\n",
-          0x80000000u | p, v, width, c->pc, c->r[29]);
+  cfg_logi("mem", "\n[pc_render VIOLATION] guest write to 0x%08X (val 0x%X, width %d) during pc_render display pass — pc_render MUST be a read-only overlay (CLAUDE.md). interp_pc=%08X sp=%08X", 0x80000000u | p, v, width, c->pc, c->r[29]);
   guest_backtrace_to(c, stderr);
   fflush(stderr);
   abort();

@@ -155,6 +155,30 @@ void cfg_loge(const char* chan, const char* fmt, ...) {
   va_list ap; va_start(ap, fmt); log_emit(tag, fmt, ap); va_end(ap);
 }
 
+void cfg_line_reset(CfgLine* l) { l->used = 0; l->buf[0] = 0; }
+
+void cfg_line_addf(CfgLine* l, const char* fmt, ...) {
+  if (l->used >= sizeof l->buf - 1) return;                  // already full (and marked)
+  size_t space = sizeof l->buf - l->used;
+  va_list ap;
+  va_start(ap, fmt);
+  int w = vsnprintf(l->buf + l->used, space, fmt, ap);
+  va_end(ap);
+  if (w < 0) return;
+  if ((size_t)w >= space) {                                  // truncated — mark it and stop taking more
+    l->used = sizeof l->buf - 1;
+    memcpy(l->buf + l->used - 3, "...", 3);
+    l->buf[l->used] = 0;
+    return;
+  }
+  l->used += (unsigned)w;
+}
+
+void cfg_line_flush(CfgLine* l, const char* chan) {
+  if (l->used) cfg_logi(chan, "%s", l->buf);
+  cfg_line_reset(l);
+}
+
 void cfg_dump(void) {
   static int done = 0; if (done) return; done = 1;
   if (!environ) return;
