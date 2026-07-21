@@ -21,19 +21,28 @@ For every native wired to a guest address it asks abi_extract for the oracle's f
 checks the native's own body establishes a frame (`GuestFrame<...>`, a RAII `*Frame` struct, or
 explicit `c->r[29]` arithmetic). Non-zero exit if any native is missing one.
 
-STATUS: CANDIDATE FINDER, not yet a gate. VERIFY EVERY HIT BEFORE EDITING.
-Two independent finder bugs have already produced confident false positives in this exact task —
-matching a forward declaration instead of a definition (63 bogus hits, all pointing at one file), and
-attributing a thunk's missing frame to the thunk rather than the body it forwards to. Thunk-following
-is implemented here and works on the cases tested, but at least one thunk
-(`ov_behSpawnToyType5_80127720`, whose body IS framed) is still reported, and that has not been
-explained yet. So: treat output as a worklist to check, confirm each against its own `install(0x…)`
-site and `abi_extract --contract`, and do not wire this into a pre-commit hook until the residual
-false positive is understood.
+STATUS: UNRELIABLE — DO NOT ACT ON THIS OUTPUT WITHOUT READING THE CODE.
 
-Two wiring shapes are recognised:
-  overrides::install(0xADDR, "name", native, gen[, setter])   — the framework's own registry
-  { 0xADDR, native_symbol, "name" }                           — a game's behaviour dispatch table
+This script has produced FIVE separate waves of confident false positives:
+  1. markers bound to the next `Class::method`, so free-function natives reported `registerOverrides`
+  2. symbol resolution matching forward declarations instead of definitions (63 hits, one file)
+  3. bodies extracted WITH the closing brace, so one-line thunks never matched (43 hits)
+  4. trailing `//` comments defeating end-of-line anchors (a caller check inverted, 54/54)
+  5. thunk-following missing four sop_intro handlers whose bodies ARE hand-framed at
+     sop_intro_events.cpp lines 75 / 137 / 189 / 273
+
+Acting on wave 5 would have added a SECOND frame to correctly-framed functions. Acting on an earlier
+list (the Cull wrappers) did produce a real SBS divergence.
+
+The reason is structural, not a run of bad luck: "where is this defined", "is this body a forwarding
+thunk", "who calls this" are semantic questions about C++, and this file answers them with line
+patterns. Every pattern has an edge case, and the edge case surfaces only after the output looks
+authoritative.
+
+USE IT AS A HINT, NEVER AS A VERDICT. For each hit, open the function, read its body and its RE notes,
+and check `gen_func_<ADDR>` before touching anything. Rebuilding this on libclang (the repo has
+build/compile_commands.json and /usr/lib64/libclang.so) would make the questions exact and retire the
+whole false-positive class; until then, reading beats running this.
 """
 from __future__ import annotations
 
