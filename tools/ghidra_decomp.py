@@ -33,6 +33,26 @@ decomp.openProgram(currentProgram)
 monitor = ConsoleTaskMonitor()
 fm = currentProgram.getFunctionManager()
 
+# BOGUS no-return analysis TRUNCATES a decompile. Ghidra's non-returning-function analyzer guesses
+# from call-site shape, and on this MIPS dump it mislabels ordinary leaf helpers (trig/math tables
+# reached via a jump) as noreturn. Every caller then decompiles to "/* WARNING: Subroutine does not
+# return */" with the whole body AFTER the call discarded and a fabricated `return 0` — output that
+# reads like a complete function and is not one. Clearing the flag restores the real body.
+# PSXPORT_CLEAR_NORETURN=all      -> clear on every function (right default for a game RAM dump:
+#                                    genuine noreturn is essentially absent, misanalysis is not)
+# PSXPORT_CLEAR_NORETURN=a,b,...  -> clear only these entry addresses (hex)
+import os
+_clr = os.environ.get("PSXPORT_CLEAR_NORETURN", "")
+if _clr:
+    _want_all = (_clr.strip().lower() == "all")
+    _addrs = set() if _want_all else set(int(t, 16) for t in _clr.replace(",", " ").split())
+    _n = 0
+    for _fn in fm.getFunctions(True):
+        if _fn.hasNoReturn() and (_want_all or _fn.getEntryPoint().getOffset() in _addrs):
+            _fn.setNoReturn(False)
+            _n += 1
+    print("[decomp] cleared bogus no-return on %d function(s)" % _n)
+
 def emit(f, fn):
     ea = fn.getEntryPoint().getOffset()
     res = decomp.decompileFunction(fn, 90, monitor)
