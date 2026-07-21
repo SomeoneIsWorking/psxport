@@ -662,6 +662,9 @@ or level — they can't be a bare channel:
     a0-a3/s0-s7 — the fastest way to attribute a write when pc/ra lie.
   - `PSXPORT_DEBUG=script` — one line per ScriptInterp::step opcode dispatch (obj, cursor, opword,
     ret). Native-step configs only; the oracle steps scripts in the substrate and logs nothing.
+  - **`PSXPORT_CW_MAX=<n>`** (`cfg_int`, default 64; `0` = unlimited) — how many `CW` store-watchpoint
+    hits to print. The old hard-coded 64 truncated exactly when the interesting store happened late
+    in a session (chasing the save-sign confirm write, every printed hit was load-time noise).
 - **Dual-core render-diff harness (`PSXPORT_DUALCORE=1`, class DualCore, dualcore.cpp):** `DC_N`
   (frames after gameplay-start, default 180, `cfg_int`), `DC_LO`/`DC_HI` (focused guest region
   base/end, default 0x800B0000..0x80110000, `cfg_str`, hex OK), `DC_ALL` (include the render-only

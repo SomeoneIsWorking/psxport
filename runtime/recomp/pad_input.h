@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 class Game;
 typedef struct SDL_Gamepad SDL_Gamepad;   // opaque; only held as pointers (SDL build only)
 
@@ -26,6 +27,15 @@ public:
   void driveTap(uint16_t activeLowMask, int nframes);  // was pad_repl_tap(c, mask, n) — press for n frames
   void driveRelease();                      // was pad_repl_release(c) — clear REPL drive
   void serviceFrame();                      // was pad_service_frame(c) — per-frame native pad service
+
+  // ---- live capture (dbg-server `padrec`) ----
+  // Every frame's finalized mask is also kept in memory, unconditionally, so a running session can be
+  // cut into a replay WITHOUT a file sink, a restart, or racing the incremental writer. 2 bytes/frame:
+  // an hour of play is 432 KB. `saveRecording` writes the same uint16-LE format PSXPORT_PAD_REPLAY reads.
+  size_t recordedFrames() const { return mRecLog.size(); }
+  // nframes = 0 saves everything; otherwise the FIRST nframes (the useful trim — drop the idle tail
+  // after a repro). A suffix is never offered: replays are only valid from boot.
+  bool saveRecording(const char* path, size_t nframes) const;
 
 private:
   // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
@@ -53,6 +63,7 @@ private:
   uint16_t* mRepBuf = nullptr;      // replay source (loaded once)
   size_t    mRepN = 0;
   uint32_t  mRecFc = 0;             // shared record/replay frame index
+  std::vector<uint16_t> mRecLog;    // every finalized mask, always — the `padrec save` source
   int       mShotInit = 0, mShotN = 0;
   uint32_t  mShotAt[64] = {};
   int       mDumpInit = 0, mDumpN = 0;

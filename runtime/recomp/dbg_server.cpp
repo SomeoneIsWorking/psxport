@@ -161,6 +161,7 @@ static void dbg_exec(FILE* out, const char* line) {
       "  press/release B  hold/release a pad button (up/down/left/right/x/o/triangle/square/start/select)\n"
       "  tap B [n]        tap a button for n frames (default 4)\n"
       "  hold <hex>       set the raw active-low pad mask\n"
+      "  padrec [save <path> [nframes]]  frames captured so far / cut the LIVE session into a .pad replay\n"
       "  sbs [0|1]        toggle/set Vulkan-vs-Software side-by-side view\n"
       "  pause            freeze the game (window holds last frame)\n"
       "  step [n]         advance exactly n frames then re-freeze (default 1)\n"
@@ -296,6 +297,19 @@ static void dbg_exec(FILE* out, const char* line) {
     fprintf(out, "tap %s %u\n", arg, a);
   } else if (!strcmp(cmd, "hold") && sscanf(line, "%*s %x", &a) == 1) {
     s_held = (unsigned short)a; s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
+  } else if (!strcmp(cmd, "padrec")) {
+    // Cut a replay out of the LIVE session. Every frame's mask is kept in memory from frame 0, so a
+    // session already in progress (user playing, repro on screen) can be captured on demand — no
+    // restart into a chosen sink, no racing the incremental file writer.
+    char sub[32] = {0}, path[256] = {0}; unsigned nf = 0;
+    const size_t have = s_ctx->game->pad.recordedFrames();
+    if (sscanf(line, "%*s %31s %255s %u", sub, path, &nf) >= 2 && !strcmp(sub, "save")) {
+      const bool ok = s_ctx->game->pad.saveRecording(path, nf);
+      fprintf(out, "padrec save -> %s (%zu of %zu frames)%s\n", path,
+              (nf && nf < have) ? (size_t)nf : have, have, ok ? "" : " FAILED");
+    } else {
+      fprintf(out, "padrec: %zu frames captured; 'padrec save <path> [nframes]' to cut a replay\n", have);
+    }
   } else if (!strcmp(cmd, "pause")) {
     s_paused = 1; s_step = 0; fprintf(out, "paused at frame %d\n", gpu_frame_no(s_ctx));
   } else if (!strcmp(cmd, "play") || !strcmp(cmd, "resume")) {

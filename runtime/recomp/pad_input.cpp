@@ -34,6 +34,15 @@
 #include "core.h"
 #include "game.h"   // class Pad lives on Game; reached via c->game->pad (see class docs)
 #include "c_subsys.h" // gpu_windowed()
+#include "fs_util.h"  // Fs::writeFile — host file writes go through the shared util
+
+// Cut the in-memory capture (every finalized pad mask since frame 0) into a .pad replay. Same
+// uint16-LE-per-frame format PSXPORT_PAD_REPLAY loads, so the result is directly replayable.
+bool Pad::saveRecording(const char* path, size_t nframes) const {
+  if (!path || mRecLog.empty()) return false;
+  const size_t n = (nframes && nframes < mRecLog.size()) ? nframes : mRecLog.size();
+  return Fs::writeFile(path, mRecLog.data(), n * sizeof(uint16_t));
+}
 
 // PSX digital button bits, active-low (0 = pressed). Default = nothing pressed.
 #define PAD_NONE 0xFFFFu
@@ -418,6 +427,10 @@ void Pad::serviceFrame() {
       buttons = rep_buf[rec_fc];            // force the recorded mask (overrides host/repl/force)
     }
     if (rec_fp) { uint16_t m = buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
+    // Always keep the mask in memory too, file sink or not: this is what the debug server's `padrec
+    // save` cuts a replay from, so a LIVE session (the user already playing, with the repro on screen)
+    // can be captured on demand instead of having to be re-played from boot into a chosen sink.
+    mRecLog.push_back(buttons);
     // PSXPORT_PAD_SHOT_AT=f0,f1,... : during replay, screenshot at these EXACT replay (pad) frame
     // indices to scratch/screenshots/padshot_<frame>.ppm. The pad-frame axis (rec_fc) is the faithful
     // one (gpu_frame_no drifts because boot/FMV presents extra frames), so this captures a deterministic
