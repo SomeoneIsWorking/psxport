@@ -678,3 +678,14 @@ or level — they can't be a bare channel:
 (0x1F8000F8/0x1F80010C) and logs `ra=` (caller class) + `rotEq/trEq` + the current walk node. Used to
 decide whether a submitQuad caller class projects under the pure camera or a composed per-object
 transform (2026-07-16: the live field class is the A00-overlay emitter ra=0x801341xx, composed).
+
+### `PSXPORT_BEH_SUBSTRATE=<hex,hex,…>` — force named behaviour handlers back to the substrate
+Diagnostic, default empty. Each hex is a guest handler address from the `beh_*` native table
+(`game/object/behavior_dispatch.cpp`); a listed address skips its native implementation and runs the
+substrate body instead.
+
+Exists because a single bad native behaviour handler is otherwise very hard to isolate: it does not
+crash, it silently corrupts game state, and the only coarse control is `PSXPORT_PC_SKIP=0`, which
+routes ALL handlers to the substrate at once and so proves nothing about which one. Bisecting with
+this flag located the 2026-07-21 save-sign softlock to one handler out of 65
+(`0x800739AC beh_scene_ui_trigger` — see the game repo's docs/findings/scene.md).
