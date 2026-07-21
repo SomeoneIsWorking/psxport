@@ -125,6 +125,33 @@ STRUCT_DEF_RE = re.compile(r'^\s*struct\s+(\w+)\s*\{\s*$')
 # the actual open-brace line is found by scanning forward for a line ending in `{`.
 CTOR_START_RE = re.compile(r'^\s*(?:explicit\s+)?(\w+)\s*\(')
 DTOR_START_RE = re.compile(r'^\s*~(\w+)\s*\(\s*\)')
+# ── Typed-lens accessors ────────────────────────────────────────────────────────────────────────
+# A faithful body may express its guest stores through a NAMED-FIELD lens (game/object/actor.h's
+# Actor, node_xform.cpp's Node, effect_mod.cpp's GpuPacket) instead of raw `c->mem_w16(obj + 0x32,…)`.
+# That is the house style for readable ports — but this tool compares STORE WIDTHS parsed from source
+# text, so a wrapped store would simply vanish and the port would score WORSE for being clearer.
+# Harvest each one-line write-accessor's underlying mem_wN widths so `a.setPosY(v)` counts exactly as
+# the store it performs. Read-accessors are irrelevant here (only stores are compared).
+LENS_SETTER_RE = re.compile(r'void\s+(\w+)\s*\([^)]*\)\s*(?:const\s*)?\{([^}]*)\}')
+
+
+def find_lens_setters(repo):
+    """name -> [store widths], from the lens headers under game/. Cached per run."""
+    out = {}
+    for hdr in glob.glob(os.path.join(repo, 'game', '**', '*.h'), recursive=True):
+        try:
+            text = open(hdr, encoding='utf-8', errors='replace').read()
+        except OSError:
+            continue
+        if 'mem_w' not in text:
+            continue
+        for m in LENS_SETTER_RE.finditer(text):
+            widths = [int(w) for w in re.findall(r'mem_w(\d+)\(', m.group(2))]
+            if widths:
+                out.setdefault(m.group(1), widths)
+    return out
+
+
 # `constexpr uint32_t FN_8009A450 = 0x8009A450u;` / `static constexpr uint32_t X = 0x...;`
 CONST_ADDR_RE = re.compile(r'\bconstexpr\s+uint32_t\s+(\w+)\s*=\s*0x([0-9A-Fa-f]{6,8})u?\s*;')
 FRAME_CTOR_CALL_RE = re.compile(r'^\s*(\w*Frame)\s+\w+\(c\)\s*;\s*(?://.*)?$')
@@ -213,7 +240,8 @@ OPAQUE_CALL_RE = re.compile(r'^\s*[\w:.>-]+\(\s*[^=;]*\)\s*;\s*(?://.*)?$')
 KNOWN_NONCALL_KEYWORDS = {'if', 'for', 'while', 'switch', 'return', 'else'}
 
 
-def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dict = None):
+def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dict = None,
+                             lens_setters: dict = None):
     """Native-dialect op-sequence extraction. Reuses abi_extract's low-level regexes (RA_SET_RE,
     CALL_RE, RECDISP_RE, MEM_W_ANY_RE, frame regexes via abi.extract_op_sequence) as the shared
     token layer, and layers native-only idioms on top in ONE linear pass so call order stays
@@ -299,6 +327,9 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dic
 
         for w in abi.MEM_W_ANY_RE.finditer(stmt):
             widths.append(int(w.group(1)))
+        if lens_setters:                      # `a.setPosY(v)` counts as the store it performs
+            for lm in re.finditer(r'\.(\w+)\s*\(', stmt):
+                widths.extend(lens_setters.get(lm.group(1), ()))
 
         gm = GUEST_CALL_RE.search(stmt)
         gd = GUEST_DISPATCH_RE.search(stmt)
@@ -418,6 +449,7 @@ def check_file(path: str, repo: str, results: list):
     if not hits:
         return
     frame_structs = find_raii_frame_structs(lines)
+    lens_setters = find_lens_setters(repo)
     # File-scope guest-address constants, so `rec_dispatch(c, FN_8009A450)` resolves like a literal.
     consts = {m.group(1): '0x' + m.group(2).upper()
               for m in CONST_ADDR_RE.finditer('\n'.join(lines))}
@@ -436,7 +468,7 @@ def check_file(path: str, repo: str, results: list):
                              [f"oracle lookup failed: {e}"], []))
             continue
         gen_seq = abi.extract_op_sequence(fn.body)
-        native_seq = native_op_sequence_extra(body, frame_structs, consts)
+        native_seq = native_op_sequence_extra(body, frame_structs, consts, lens_setters)
         verdict, findings, unprovable = compare(gen_seq, native_seq)
         results.append((path, addr, cls, method, verdict, findings, unprovable))
 
