@@ -418,13 +418,15 @@ static void game_main(Core* c) {
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
     // exactly one real frame then re-freezes, so transient bad frames can be inspected one at a time.
-    { void gpu_repaint(Core*);
-      DbgServer& dbg = c->game->dbg_server;
+    { DbgServer& dbg = c->game->dbg_server;
       if (dbg.isPaused()) watchdog_suspend();   // a debug pause is intentional idle, not a hang
       while (dbg.isPaused()) {
         if (dbg.stepPending()) { dbg.consumeStep(); break; }   // run exactly one frame
         c->game->pad.pumpHostInput();     // host input ONLY — must not tick the pad-frame clock here
-        c->game->gpu.gpu_repaint();           // re-present current frame: window stays live + readback is accurate
+        // Re-SHOW the last real frame (no rebuild) so the window stays live and the readback target keeps
+        // holding it — see GpuState::gpu_repaint. A pause must never re-render: this loop spins at ~66 Hz,
+        // and at fps60 there is no geometry batch left to re-render at all (kanban #20's black screen).
+        c->game->gpu.gpu_repaint();
         dbg.service(c);    // receive step/play/capture commands
         usleep(15000);
       } }

@@ -24,6 +24,7 @@ struct Core;     // CPU/RAM handle (core.h)
 struct SDL_GPUTexture;
 struct SDL_GPUBuffer;
 struct SDL_GPUTransferBuffer;
+struct SDL_GPUCommandBuffer;
 
 // Capacities for the moved array members (also used by the gpu_vk.cpp bodies via this header).
 #define SEMI_GRP_CAP 2048
@@ -190,6 +191,10 @@ struct GpuVkState {
   void stats(int* tri, int* tex, int* semi);
   void dirty(int x, int y, int w, int h);
   void present(const uint16_t* src, int sx, int sy, int w, int h);
+  // Re-show the last BUILT frame (no VRAM upload, no geometry re-render, no batch reset) — the debug-server
+  // pause loop's window keep-alive. See the body in gpu_vk.cpp for why a pause must never re-render.
+  void repaint();
+  void show_composite(SDL_GPUCommandBuffer* cmd);   // the shared swapchain half of present()/repaint()
   // PSXPORT_SBS: composite TWO different cores' frames (already emitted into batches 0 and 1) into the
   // two side-by-side panes in ONE window frame. vramA/vramB are each core's CPU VRAM; each is uploaded to
   // its own staging buffer + panel so the two panes show the two cores. One acquire/cmd/submit/present.

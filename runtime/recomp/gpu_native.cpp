@@ -1196,10 +1196,15 @@ void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
   gpu_vk_present(&game->core, src, sx, sy, s_disp_w, s_disp_h);   // SDL_GPU present (incl. headless upload)
 }
 void GpuState::present_window() { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
-// Re-present the CURRENT frame without advancing game logic — used by the debug-server pause loop so
-// the window stays live AND the VK readback reflects exactly what's on screen (vkshot reads the same
-// region this presents). No s_frame++ / batch reset (those belong to gpu_present_ex).
-void GpuState::gpu_repaint() { present_window(); }
+// Re-present the CURRENT frame without advancing game logic — the debug-server pause loop's window
+// keep-alive. This does NOT go back through present_window(): that BUILDS a frame (VRAM upload +
+// render_geom over the live vertex batch), and at a pause point there is no frame left to build — under
+// fps60 the batch has already been emitted, presented and reset, so re-running the build cleared the
+// composite target to black (kanban #20). gpu_vk_repaint re-shows the composite the last real present
+// already filled: no upload, no geometry, no batch reset, no s_frame++ (those belong to gpu_present_ex),
+// and identical cost in both fps modes. Because nothing is rebuilt, the readback target is left intact —
+// so `shot`/`vkshot` while paused genuinely report the frame that is on screen.
+void GpuState::gpu_repaint() { gpu_vk_repaint(&game->core); }
 #else
 void GpuState::present_window() {}
 void GpuState::gpu_repaint() {}

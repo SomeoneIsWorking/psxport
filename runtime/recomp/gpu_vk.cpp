@@ -848,7 +848,17 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c);   // draw the tee batch on top (+depth)
 
   if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // shot reads s_vram_tex via its own cmd
+  show_composite(cmd);
+}
 
+// ---- show_composite: the SWAPCHAIN half of a present — sample the composite target built by the last
+// render_geom (s_vram_tex at 1x, s_ires_color at >1x) into the window, letterboxed, with the live fade.
+// Split out of present() so `repaint()` can re-show the SAME finished frame without rebuilding it; there
+// is exactly ONE piece of code that decides what a window frame looks like, and both callers run it.
+// Consumes `cmd` (submits it).
+void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
+  const int sx = s_last_sx, sy = s_last_sy, disp_w = s_last_w, h = s_last_h;
+  FadeState fade; game->core.hooks->renderFadeState(&game->core, &fade);
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
     SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;   // minimized / no swapchain image this frame
@@ -884,6 +894,29 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
   poll_quit(game);
+}
+
+// ---- repaint: re-show the LAST BUILT frame, without building anything (kanban #20) -------------------
+// Used by the debug-server pause loop, which must keep the window live at ~66 Hz while the game does not
+// advance. It must NOT go through present(): present() RE-RENDERS — it re-uploads CPU VRAM and re-runs
+// render_geom over the LIVE vertex batch. At a pause point that batch is whatever the frame ordering
+// happens to have left behind, which is not a property the pause loop can rely on:
+//   * fps60 OFF — frameUpdate presents at the TOP of the frame and drawOTag/rq.flush fills the batch at the
+//     BOTTOM, so at the frame-loop top a full batch is still resident; the re-render accidentally
+//     reproduced the picture, at the cost of a full world re-render every 15 ms while paused.
+//   * fps60 ON  — Fps60::present_vk emits, presents and frame_end-resets BOTH passes inside frameUpdate,
+//     and rq.flush only rq_capture()s afterwards, so the batch is EMPTY at the frame-loop top. render_geom's
+//     "no native submit -> the PC renderer shows BLACK" clear then wiped s_vram_tex: a black window, and a
+//     `vkshot` that read back that same wiped target.
+// So the paused window is not a rendering question at all — the frame is already finished and sitting in
+// the composite target. Re-showing it is one swapchain pass with no upload, no geometry, no batch reset,
+// and it costs the same in both fps modes. Headless: nothing to show and, crucially, nothing to clobber —
+// s_vram_tex keeps holding the last real frame, so `shot`/`vkshot` while paused report it truthfully.
+void GpuVkState::repaint() {
+  if (!gpu_vk_enabled() || !s_inited || s_headless) return;
+  SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  GPUCHK(cmd, "AcquireGPUCommandBuffer");
+  show_composite(cmd);
 }
 
 // ---- present_image: draw a plain RGBA8 image fullscreen (letterboxed 4:3), rgb scaled by `fade` -----
@@ -1428,6 +1461,10 @@ void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int 
       lm=m; lr=r; lg=g; lb=b; lsx=sx; lsy=sy; lw=w; lh=h;
     }
   }
+}
+void gpu_vk_repaint(Core* core) {
+  overlay_glue_frame_begin(core);   // the RmlUi overlay stays interactive while the game is frozen
+  core->game->gpu_vk.repaint();
 }
 void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
   coreA->game->gpu_vk.present_sbs(vramA, vramB, sx, sy, w, h, 0);
