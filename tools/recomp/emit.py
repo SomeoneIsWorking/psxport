@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-07-22.1"
+RECOMP_VERSION = "2026-07-22.2"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1162,45 +1162,19 @@ def main():
         # cross-module discovery doesn't cross the resident->overlay boundary. Seed it so the full-PSX
         # path can advance past field entry (SBS gameplay/full mode, or PSXPORT_GATE=1 field runs).
         "SOP": {0x80109450},
-        # Per-area object-init handlers indexed by DAT_800BF870 (area byte). The JT lives in
-        # resident MAIN.EXE at 0x800A45B8; caller is FUN_80058648 (Tomba state-0 init)
-        # `(*(&PTR_FUN_800A45B8)[DAT_800BF870])(&tomba)`. Each entry is a valid function prologue
-        # in its area overlay (verified: A01 0x80109F7C starts with `addiu sp,-0x20`). The recomp
-        # scan misses these because the JT is code-built via lui+addiu at the call site with the
-        # base loaded from resident RAM — the emitter's function discovery doesn't cross the
-        # resident/overlay boundary via such a computed indirection. Seeded per-overlay so the
-        # RIGHT function ends up in each area's dispatcher. Discovered 2026-07-03 chasing the SBS
-        # rec_dispatch_miss(0x80109F7C) crash — DEMO attract cursor=1 loaded A01, called the JT
-        # dispatch, missed. Fixes #31.
-        "A00": {0x8010AC20},   # jt[ 0]
-        # + 0x801158E0 (2026-07-10): area-1 handler reached via a computed pointer from resident
-        #   FUN_800263C0's dispatch (a0=node) — REPL `warp 1` under PSXPORT_GATE=1 hit
-        #   rec_dispatch_miss; same resident->overlay indirection class as the jt[] seeds.
-        "A01": {0x80109F7C, 0x801158E0},   # jt[ 1]
-        # + 0x80111A20 (2026-07-10, issue #33): attract-demo chain ov_a02 FUN_801122A4 dispatches it
+        # The per-AREA handler tables (indexed by the area byte DAT_800BF870) are NOT listed here —
+        # they are discovered from the binary by area_indexed_overlay_tables() below. Only the two
+        # addresses that are NOT members of such a table stay explicit:
+        # 0x801158E0 (2026-07-10): area-1 handler reached via a computed pointer from resident
+        #   FUN_800263C0's dispatch (a0=node) — REPL `warp 1` under PSXPORT_GATE=1 hit a miss.
+        "A01": {0x801158E0},
+        # 0x80111A20 (2026-07-10, issue #33): attract-demo chain ov_a02 FUN_801122A4 dispatches it
         #   (caller ra=0x80111CAC); discovery missed it — un-driven title screen crashed the port.
-        "A02": {0x8010F9E4, 0x80111A20},   # jt[ 2]
-        "A03": {0x801127EC},   # jt[ 3] (also jt[4] — duplicate)
-        "A04": {0x801127EC},   # jt[ 4]
-        "A05": {0x8010F0F8},   # jt[ 5]
-        "A06": {0x80112C60},   # jt[ 6]
-        "A07": {0x80112428},   # jt[ 7]
-        "A08": {0x80112238},   # jt[ 8]
-        "A09": {0x80109CA0},   # jt[ 9]
-        "A0A": {0x8010B338},   # jt[10]
-        "A0B": {0x8010BD50},   # jt[11]
-        "A0C": {0x8010CC28},   # jt[12]
-        "A0D": {0x8010AC1C},   # jt[13]
-        "A0E": {0x8010B450},   # jt[14]
-        "A0F": {0x8010B960},   # jt[15]
-        "A0G": {0x8010A16C},   # jt[16]
-        "A0H": {0x8010A1E4},   # jt[17]
-        "A0I": {0x8010A554},   # jt[18]
-        "A0J": {0x80109F50},   # jt[19]
-        "A0K": {0x8010F544},   # jt[20]
-        "A0L": {0x801092E8},   # jt[21]
+        "A02": {0x80111A20},
     }
-    overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
+    # ---- pass 1: load every overlay image (the area set must be complete + IN AREA ORDER before
+    # the per-area MAIN tables can be resolved — entry i of such a table is an address in overlay i).
+    ov_images = []          # (stem, fn, base, data, ovexe)
     if ov_dir and os.path.isdir(ov_dir):
         for fn in sorted(os.listdir(ov_dir)):
             if not fn.upper().endswith(".BIN"):
@@ -1213,16 +1187,30 @@ def main():
                 print(f"[overlays] WARNING: {fn} has no known load base — defaulting to 0x80106228; "
                       f"capture its real dest with PSXPORT_DEBUG=cd and add it to OVERLAY_BASES")
                 base = 0x80106228
-            ovexe = psexe.PsxExe(base, 0, base, len(data), 0, 0, data)
-            tag = re.sub(r"[^a-z0-9]", "_", fn[:-4].lower())
-            N = overlay_names(tag)
-            hard_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
-                       | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe)
-                       | OVERLAY_EXTRA_SEEDS.get(stem, set()))
-            soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
-            src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
-                                     soft_seeds=soft_ov, reentry=OVERLAY_EXTRA_SEEDS.get(stem, set()))
-            overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
+            ov_images.append((stem, fn, base, data,
+                              psexe.PsxExe(base, 0, base, len(data), 0, 0, data)))
+    # A0<n> sorts lexicographically in area order (A00..A09, A0A..A0L), which is the index order the
+    # game's area byte uses; sorted(os.listdir) already put them that way.
+    area_exes = [(stem, ovexe) for stem, _, _, _, ovexe in ov_images
+                 if re.fullmatch(r"A0[0-9A-Z]", stem)]
+    area_tbl_seeds = area_indexed_overlay_tables(exe, area_exes)
+
+    # ---- pass 2: emit each overlay module.
+    overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
+    for stem, fn, base, data, ovexe in ov_images:
+        tag = re.sub(r"[^a-z0-9]", "_", fn[:-4].lower())
+        N = overlay_names(tag)
+        # Both the explicit seeds and the discovered per-area table entries are runtime-computed
+        # ENTRY POINTS, so they get the same re-entry treatment (a preceding body that runs off its
+        # end into one of them must continue into it, not `return`).
+        explicit = OVERLAY_EXTRA_SEEDS.get(stem, set()) | area_tbl_seeds.get(stem, set())
+        hard_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
+                   | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe)
+                   | explicit)
+        soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
+        src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
+                                 soft_seeds=soft_ov, reentry=explicit)
+        overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
 
     # Overlay routing table consumed by overlay_router.cpp.
     write_overlay_table(out_dir, exe, overlays)
@@ -1251,6 +1239,68 @@ def overlay_internal_jal_targets(exe):
     return {ins.target for a in range(lo, hi, 4)
             for ins in (decode(a, exe.word(a)),)
             if ins.op == "jal" and lo <= ins.target < hi}
+
+
+def area_indexed_overlay_tables(main_exe, area_exes, min_valid_frac=0.8):
+    """Seed the per-area handler tables that live in RESIDENT MAIN's data but point into the
+    SWAPPABLE overlay slot.
+
+    The game keeps several parallel dispatch tables indexed by the area byte (0x800BF870):
+    `(&TABLE)[area](args)`. Each table has exactly one entry per area overlay, and entry *i* is an
+    address inside overlay *i*'s image — a different function in a different file for every index.
+    Neither per-module scan can see them: MAIN's `pointer_table_funcs`/`code_pointer_tables` reject
+    the words (they point outside MAIN's text), and each overlay's own scan never looks at MAIN's
+    data. So every one of these entries is invisible to discovery and fail-fasts as a
+    `rec_dispatch` miss the first time the area that owns it is entered.
+
+    The tables identify themselves without any hand-maintained address list: a window of N
+    consecutive image words (N = number of area overlays) where word *i* is word-aligned and inside
+    overlay *i*'s image, and the overwhelming majority of the words are a valid FUNCTION ENTRY in
+    their OWN overlay. The per-index bounds test is the discriminator — the overlays differ in size
+    by more than 10x, so a coincidental run of overlay-range words essentially never satisfies it
+    for every index. Only entries that really are function entries in their own overlay are seeded
+    (a table may carry a stale/duplicated slot for an area that never calls it — seeding that would
+    split a real function, the exact failure c0caeef2 fixed).
+
+    `area_exes` is the ORDERED list of (stem, PsxExe) for the area overlays, in area order.
+    Returns {stem: {addr, ...}}.
+    """
+    n = len(area_exes)
+    out = {stem: set() for stem, _ in area_exes}
+    if n < 2:
+        return out
+    def entry_ok(ex, w):
+        # is_func_entry's two signals, plus the NULL HANDLER: a bare `jr ra` at a call-table target is
+        # a do-nothing handler function, and nothing else it could be. It matches neither signal — no
+        # `addiu sp` frame, and it is typically laid out right after a data island (A0L's 0x80109200
+        # follows a pointer table), so it is not preceded by another function's `jr ra` either.
+        return is_func_entry(ex, w) or ex.word(w) == 0x03E00008
+
+    lo, hi = main_exe.load, main_exe.text_end
+    need = int(round(n * min_valid_frac))
+    found = 0
+    a = lo
+    while a + n * 4 <= hi:
+        words = [main_exe.word(a + i * 4) for i in range(n)]
+        inb = all((w & 3) == 0 and ex.load <= w < ex.text_end - 4
+                  for w, (_, ex) in zip(words, area_exes))
+        if not inb:
+            a += 4
+            continue
+        entries = [entry_ok(ex, w) for w, (_, ex) in zip(words, area_exes)]
+        if sum(entries) >= need:
+            for w, ok, (stem, _) in zip(words, entries, area_exes):
+                if ok:
+                    out[stem].add(w)
+            found += 1
+            print(f"[overlays] area-indexed table @0x{a:08X}: {sum(entries)}/{n} entries seeded")
+            a += n * 4
+            continue
+        a += 4
+    if found:
+        print(f"[overlays] {found} area-indexed handler table(s) in MAIN -> "
+              f"{sum(len(v) for v in out.values())} overlay seeds")
+    return out
 
 
 def write_overlay_table(out_dir, main_exe, overlays):
