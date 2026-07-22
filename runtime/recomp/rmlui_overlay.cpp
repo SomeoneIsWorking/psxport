@@ -156,6 +156,50 @@ static void do_adjust(Mods& m, const std::string& id, int dir) {
     m.save();
 }
 
+// ---- dev AREA WARP row (Debug tab) --------------------------------------------------------------
+// The framework knows nothing about areas: how many there are, what they are called, and whether a warp
+// is legal right now all come from the game through GameHooks (game/core/dev_areas.cpp). Arming reuses
+// the SAME path the REPL `warp` command uses — Repl::warpArmed/warpDest — so there is one warp
+// mechanism, not a second one behind a button.
+int RmlOverlay::warpAreaCount() const {
+    if (!game || !game->core.hooks || !game->core.hooks->devAreaCount) return 0;
+    return game->core.hooks->devAreaCount(&game->core);
+}
+
+// Row label: "12 - Ghost Pig boss" when the game has a sourced name, plain "Area 12" when it does not.
+// An unnamed area is shown as its index rather than a guess (docs/areas.md: an index is a fact, a name
+// is a claim that needs a source).
+std::string RmlOverlay::warpAreaLabel(int area) const {
+    const char* nm = (game && game->core.hooks && game->core.hooks->devAreaName)
+                   ? game->core.hooks->devAreaName(&game->core, area) : "";
+    char b[96];
+    if (nm && *nm) snprintf(b, sizeof b, "%d - %s", area, nm);
+    else           snprintf(b, sizeof b, "Area %d", area);
+    return b;
+}
+
+void RmlOverlay::adjustWarpArea(int dir) {
+    const int n = warpAreaCount();
+    if (n <= 0) return;
+    mWarpArea = (mWarpArea + dir) % n;
+    if (mWarpArea < 0) mWarpArea += n;   // wrap both ways, so Left from 0 reaches the last area
+}
+
+// Arm the warp. Returns a status line for the readout: the game decides whether a warp is legal (it is
+// only legal from the field, because the warp runs the game's OWN door transition — fade, teardown, CD
+// settle, reload — and that needs a running field machine to carry it out).
+std::string RmlOverlay::armWarp() {
+    if (!game || !game->core.hooks) return "warp unavailable";
+    if (warpAreaCount() <= 0) return "warp unavailable";
+    if (game->core.hooks->devWarpAllowed && !game->core.hooks->devWarpAllowed(&game->core))
+        return "not in the field - reach gameplay first";
+    game->repl.warpDest  = (uint32_t)mWarpArea;
+    game->repl.warpSub   = 0;
+    game->repl.warpArmed = 1;
+    cfg_logi("rmlui", "warp: armed area %d from the menu", mWarpArea);
+    return "warping to " + warpAreaLabel(mWarpArea);
+}
+
 // ---- value-text + readout refresh ---------------------------------------------------------------
 void RmlOverlay::setRowValue(void* rowRaw) {
     Rml::Element* row = (Rml::Element*)rowRaw;
@@ -165,7 +209,8 @@ void RmlOverlay::setRowValue(void* rowRaw) {
     else return;
     std::string txt;
     if (!game) return;
-    if (!row_value_text(game->mods, kind, id, txt)) return;
+    if (kind == "adjust" && id == "warp_area") txt = warpAreaLabel(mWarpArea);
+    else if (!row_value_text(game->mods, kind, id, txt)) return;
     if (Rml::Element* v = row->QuerySelector("value"))
         if (v->GetInnerRML() != txt) v->SetInnerRML(txt);
 }
@@ -176,6 +221,15 @@ void RmlOverlay::refreshAllRows() {
     Rml::ElementList rows;
     d->GetElementsByTagName(rows, "select-button");
     for (Rml::Element* r : rows) setRowValue(r);
+}
+
+// Write the warp status line into the Debug tab's readout div (empty id = the div is absent, e.g. a
+// game whose menu.rml has no warp section — the overlay must not require it).
+void RmlOverlay::setWarpReadout(const std::string& txt) {
+    Rml::ElementDocument* d = doc_(mDoc);
+    if (!d) return;
+    if (Rml::Element* e = d->GetElementById("warp_readout"))
+        if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
 }
 
 void RmlOverlay::refreshReadouts() {
@@ -274,6 +328,7 @@ void RmlOverlay::activateFocused(int dir) {
         if (id == "quit")  { cfg_logi("rmlui", "quit from menu"); exit(0); }
         if (id == "close") { mVisible = false; applyVisibility(); }
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
+        if (id == "warp_go") { setWarpReadout(armWarp()); return; }
         if (id.rfind("music_", 0) == 0 && game) {
             if (id == "music_stop") game->core.hooks->audioSoundTestPlay(&game->core, -1);
             else                    game->core.hooks->audioSoundTestPlay(&game->core, atoi(id.c_str() + 6));
@@ -282,7 +337,11 @@ void RmlOverlay::activateFocused(int dir) {
         return;
     }
     if (!(id = f->GetAttribute<Rml::String>("toggle", "")).empty()) { if (game) { do_toggle(game->mods, id); setRowValue(f); } return; }
-    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) { if (game) { do_adjust(game->mods, id, dir); setRowValue(f); } return; }
+    if (!(id = f->GetAttribute<Rml::String>("adjust", "")).empty()) {
+        if (id == "warp_area") { adjustWarpArea(dir); setRowValue(f); return; }
+        if (game) { do_adjust(game->mods, id, dir); setRowValue(f); }
+        return;
+    }
 }
 
 void RmlOverlay::attachHandlers() {
@@ -404,13 +463,15 @@ void RmlOverlay::event(const SDL_Event* e) {
             case SDLK_RIGHT: {
                 Rml::Element* f = c->GetFocusElement();
                 std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
-                if (!id.empty()) { if (game) do_adjust(game->mods, id, +1); setRowValue(f); } else nextTab();
+                if (id == "warp_area")  { adjustWarpArea(+1); setRowValue(f); }
+                else if (!id.empty()) { if (game) do_adjust(game->mods, id, +1); setRowValue(f); } else nextTab();
                 return;
             }
             case SDLK_LEFT: {
                 Rml::Element* f = c->GetFocusElement();
                 std::string id = f ? f->GetAttribute<Rml::String>("adjust", "") : std::string();
-                if (!id.empty()) { if (game) do_adjust(game->mods, id, -1); setRowValue(f); } else prevTab();
+                if (id == "warp_area")  { adjustWarpArea(-1); setRowValue(f); }
+                else if (!id.empty()) { if (game) do_adjust(game->mods, id, -1); setRowValue(f); } else prevTab();
                 return;
             }
             case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: activateFocused(+1); return;

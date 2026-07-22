@@ -8,6 +8,7 @@
 // false and all methods no-op. In standalone the sole Game owns the UI.
 #ifndef PSXPORT_RMLUI_OVERLAY_H
 #define PSXPORT_RMLUI_OVERLAY_H
+#include <string>
 #include <SDL3/SDL.h>
 #include <cstdint>
 
@@ -50,6 +51,15 @@ private:
   void setRowValue(void* /*Rml::Element*/ row);   // void* to keep Rml out of the header
   void refreshAllRows();
   void refreshReadouts();
+  // Dev AREA WARP row (Debug tab). The area count, the names and the "is a warp legal now" test all
+  // come from the game via GameHooks — the framework holds only the current selection. Arming reuses
+  // Repl::warpArmed/warpDest, the same path the REPL `warp` command takes, so there is ONE warp
+  // mechanism rather than a second one behind a button.
+  int         warpAreaCount() const;
+  std::string warpAreaLabel(int area) const;
+  void        adjustWarpArea(int dir);
+  std::string armWarp();
+  void        setWarpReadout(const std::string& txt);
   void scrollFocusIntoView();
   void focusFirstInActivePane();
   void focusNext();
@@ -69,6 +79,7 @@ private:
   void* mSys    = nullptr;      // SystemInterface_SDL*
   void* mRender = nullptr;      // RmlRenderInterfaceGpu*
   int   mActiveTab = 0;
+  int   mWarpArea  = 0;         // dev-warp destination selection; transient, deliberately not persisted
 
   // World-position HUD, pushed each frame by overlay_glue.
   int      mWpos[3] = {0, 0, 0};

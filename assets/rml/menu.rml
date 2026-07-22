@@ -57,6 +57,12 @@
 				<select-button toggle="debug_quads"><key>Highlight Quads (billboards)</key><value>Off</value></select-button>
 				<select-button toggle="debug_objects"><key>Highlight 3D Objects</key><value>Off</value></select-button>
 				<p class="hint">Boxes each game object at its world position + shows id and WORLD x,y,z. Quads (2D sprites at 3D positions) are yellow; 3D meshes are cyan.</p>
+
+				<div class="section-heading spaced">Area Warp</div>
+				<div id="warp_readout" class="readout"></div>
+				<select-button adjust="warp_area"><key>Destination</key><value>Area 0</value></select-button>
+				<select-button action="warp_go"><key>Warp There</key><value>&#8594;</value></select-button>
+				<p class="hint">Only from the field &mdash; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md.</p>
 				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
 			</pane>
 

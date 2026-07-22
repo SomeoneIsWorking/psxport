@@ -164,6 +164,13 @@ struct GameHooks {
                                               // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
   void (*devWarpAreaLoad)(Core* c);           // dev-warp full area load (was native_boot.cpp's
                                               // eng(c).sop.transitionAreaLoad()).
+  // Dev-warp AREA INDEX, for the RmlUi warp selector and the REPL `warp` range guard. Game-side because
+  // the framework must not know how many areas a game has, what they are called, or which guest address
+  // says "we are in the field". devAreaName returns "" when the area has no sourced name — the caller
+  // renders "Area N" rather than inventing one.
+  int         (*devAreaCount)(Core* c);
+  const char* (*devAreaName)(Core* c, int area);
+  bool        (*devWarpAllowed)(Core* c);     // is a warp legal right now (game stage test)
 
   // --- scheduler stage bodies (PcScheduler is framework; the stage bodies are game Engine methods) ---
   int      (*schedStageBody)(Core* c, int which, void* arg);  // run the SchedBody-selected game stage

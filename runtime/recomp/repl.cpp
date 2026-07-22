@@ -168,6 +168,15 @@ long Repl::read(Core* c, uint32_t f) {
       if (nargs >= 1) {
         if (c->mem_r32(0x801fe00c) != 0x8010637Cu)
           cfg_logi("repl", "warp: not in GAME stage (stage=%08X) — reach the field first (newgame/skip)", c->mem_r32(0x801fe00c));
+        else if (c->hooks && c->hooks->devAreaCount && (int)a >= c->hooks->devAreaCount(c)) {
+          // Out-of-range ids are NOT areas: the load is file index `area+3` into the table at
+          // 0x800BE118, so an id past the last area loads a non-area file (START/DEMO/GAME) into the
+          // mode slot and produces out-of-range CD reads and a wander/hang. `warp` used to accept them
+          // silently, which is how kanban #24 came to be filed against an "area 22" that does not
+          // exist. Reject instead. (kanban #36)
+          cfg_logi("repl", "warp: area %u is out of range — this game has %d areas (0..%d)",
+                   a, c->hooks->devAreaCount(c), c->hooks->devAreaCount(c) - 1);
+        }
         else {
           this->warpDest = a; this->warpSub = (nargs == 2) ? sub : 0; this->warpArmed = 1;
           cfg_logi("repl", "warp: armed dest area id=%u sub=%u (cur=%u) via door record — run frames to load", a, this->warpSub, c->mem_r8(0x800bf870u));
