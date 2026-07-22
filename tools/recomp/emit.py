@@ -32,7 +32,7 @@ from decode import decode
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
-RECOMP_VERSION = "2026-07-10.1"
+RECOMP_VERSION = "2026-07-22.1"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -249,6 +249,20 @@ def _scan_jt_idiom(ins, a, jr_reg, lo, enhanced):
                 lo_add = j.simm
                 if enhanced:
                     base_regs |= {j.rs}
+            elif not enhanced and j.op == "addiu" and j.rt in base_regs and j.rs != j.rt:
+                # STRICT cannot model `lui tmp,HI ; addiu base,tmp,LO` — the base is built THROUGH a
+                # different register. Bail out instead of scanning past it, or the next `lui` for one of
+                # the other base candidates is mistaken for the table's HI and the base is read WRONG.
+                # MAIN 0x8003BBF8 is exactly that: `lui v0,0x8001 ; addiu s3,v0,0x4A70 ; addu v0,v0,s3 ;
+                # lw v0,0(v0) ; jr v0` — strict used to answer 0x80010000 (the LUI alone) and "recover"
+                # 144 targets straight out of .text's head, swallowing BOTH the real 22-entry stub table
+                # at 0x80010000 AND the head of FUN_80028E10's 22-case switch table at 0x8001021C. The
+                # 9 overlapping case labels were then seeded as functions by the cross-boundary seeder,
+                # truncating FUN_80028E10 at 0x80028E64 so its own switch emitted `default: rec_dispatch`
+                # — and the 12 unseeded cases ABORTED at runtime (recomp-MISS 0x80028FA4/FC4/29004/29024,
+                # the object-template init dispatcher; hit on entry to areas 10/11/13/14). Bailing lets
+                # the ENHANCED pass resolve the real base (s3 = 0x80014A70).
+                return None
         if count is None and j.op == "sltiu":
             count = j.imm
         if hi_val is not None and count is not None:
@@ -1023,6 +1037,14 @@ def main():
         #     the fn set. Seed it so a resume-target dispatch has a body to enter. Surfaced by SBS
         #     gameplay-mode f0 fresh-entry rec_coro_run(0x8010649C) → yield → resume-miss.
         0x80051FA4,
+        # --- AREA-MODE stub table (0x80010000, 22 entries): each entry is a tiny resident stub that
+        #     `jal`s one overlay leaf and falls through to the shared epilogue 0x8001CB98. The guest
+        #     reaches them through the `jr` in FUN_8001CAC0, so the jump-table matcher classifies them
+        #     as that function's switch case labels and prunes them. Tomba2Engine's native
+        #     Engine::areaModeDispatchFaithful dispatches 0x8001CB98 BY ADDRESS, and the whole family is
+        #     documented/mirrored there, so they must stay real function entries.
+        0x8001CB00, 0x8001CB10, 0x8001CB20, 0x8001CB30, 0x8001CB40, 0x8001CB50,
+        0x8001CB60, 0x8001CB70, 0x8001CB80, 0x8001CB90, 0x8001CB98,
         0x8003D5CC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target)
         0x8003D8AC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target) — the observed miss
         # --- native-override targets: seed so the func_<addr> wrapper exists and
