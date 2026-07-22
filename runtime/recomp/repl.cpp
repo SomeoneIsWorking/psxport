@@ -397,6 +397,41 @@ long Repl::read(Core* c, uint32_t f) {
         cfg_logi("repl", "  fn=0x%08X node=0x%08X count=%u", g->fn, g->node, g->count);
       }
     }
+    // otwhere <pkt-hex> <ot-base-hex> [entries] — locate a packet's OT BUCKET in the LAST-walked OT
+    // (read-only chain walk from GpuState::s_ot_madr, the same enumeration DrawOTag used; no draw/state
+    // side effects). Reports {bucket index, position within the bucket, global chain position}. The OT
+    // ARRAY base/entry-count are game data the framework does not know, so the caller supplies them
+    // (Tomba2: base = *0x800ED8C8 via `r 800ED8C8`, entries = 2048 — the guest submitter's own range
+    // check clamps indices to [4,2048)). Bucket = index of the last OT-array sentinel word the walk
+    // passed; packets hang off their bucket's head word, so every node between sentinel k and the next
+    // sentinel belongs to bucket k. Diagnostic for the kanban #11 class (which game sort key did the
+    // emitter give a prim); shipping-path OT reads remain banned — this is REPL-only.
+    else if (!strcmp(cmd, "otwhere")) {
+      uint32_t pkt = 0, base = 0; int entries = 2048;
+      if (sscanf(line, "%*s %x %x %d", &pkt, &base, &entries) < 2) {
+        cfg_logi("repl", "usage: otwhere <pkt-hex> <ot-base-hex> [entries=2048]");
+      } else {
+        uint32_t madr = c->game->gpu.s_ot_madr;
+        if (!madr) { cfg_logi("repl", "otwhere: s_ot_madr == 0 — no OT walked yet"); fflush(stderr); continue; }
+        uint32_t a = madr & 0x1FFFFC, want = pkt & 0x1FFFFC;
+        uint32_t blo = base & 0x1FFFFF, bhi = blo + (uint32_t)entries * 4;
+        int bucket = -1, pos = 0, hits = 0;
+        for (int idx = 0; idx < 0x10000; idx++) {
+          if (a >= blo && a < bhi && ((a - blo) & 3) == 0) { bucket = (int)((a - blo) >> 2); pos = 0; }
+          else pos++;
+          uint32_t hdr = c->mem_r32(a);
+          if (a == want) {
+            cfg_logi("repl", "otwhere 0x%08X: bucket=%d posInBucket=%d chainIdx=%d hdr=0x%08X (len=%u next=0x%06X)",
+                     0x80000000u | a, bucket, pos, idx, hdr, hdr >> 24, hdr & 0xFFFFFF);
+            hits++;
+          }
+          uint32_t next = hdr & 0xFFFFFF;
+          if (next == 0xFFFFFF || next == 0) break;
+          a = next & 0x1FFFFC;
+        }
+        if (!hits) cfg_logi("repl", "otwhere 0x%08X: NOT in the last-walked OT (madr=0x%08X)", pkt, 0x80000000u | madr);
+      }
+    }
     else if (!strcmp(cmd, "stage")) cfg_logi("repl", "stage=%08X sm48=%d", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) {
       CfgLine ln; cfg_line_reset(&ln);                       // 4 registers per row

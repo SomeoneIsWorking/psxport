@@ -39,6 +39,13 @@ public:
   float    projPlaneH() const                  { return mProjH ? (float)mProjH : 1.0f; }
   void     projScreenCenter(float* cx, float* cy) const { if (cx) *cx = mProjCx; if (cy) *cy = mProjCy; }
 
+  // GTE Z scale factors (CR29 ZSF3 / CR30 ZSF4), captured at camview_publish time (frame build) so the
+  // native submitters can recompute the game's own AVSZ3/AVSZ4 OT sort key without a present-time GTE
+  // read (same rule as H — see submit.cpp's proj_set_H banner). 0 until first publish = "no key".
+  void    setZsf(int16_t zsf3, int16_t zsf4)   { mZsf3 = zsf3; mZsf4 = zsf4; }
+  int16_t zsf3() const                         { return mZsf3; }
+  int16_t zsf4() const                         { return mZsf4; }
+
   // Depth-normalize: view-Z → [0,1] D32 ord using this instance's projection plane. Kept as a
   // non-static method so a caller with `Core* c` in scope can just do `c->rsub.projParams.pzToOrd(pz)`.
   float pzToOrd(float pz) const;
@@ -49,18 +56,20 @@ public:
   // it after so the re-render leaves no observable trace for anything reading ProjParams later (the
   // READ-ONLY OVERLAY invariant: writes stay confined to the isolated capture, host state that outlives
   // the call must come back exactly as it was).
-  struct Snapshot { float R[3][3]; float T[3]; float H, OFX, OFY; bool valid; uint16_t projH; float projCx, projCy; };
+  struct Snapshot { float R[3][3]; float T[3]; float H, OFX, OFY; bool valid; uint16_t projH; float projCx, projCy; int16_t zsf3, zsf4; };
   Snapshot snapshot() const {
     Snapshot s;
     for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) s.R[i][j] = mCamR[i][j]; s.T[i] = mCamT[i]; }
     s.H = mCamH; s.OFX = mCamOFX; s.OFY = mCamOFY; s.valid = mCamValid;
     s.projH = mProjH; s.projCx = mProjCx; s.projCy = mProjCy;
+    s.zsf3 = mZsf3; s.zsf4 = mZsf4;
     return s;
   }
   void restore(const Snapshot& s) {
     for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamR[i][j] = s.R[i][j]; mCamT[i] = s.T[i]; }
     mCamH = s.H; mCamOFX = s.OFX; mCamOFY = s.OFY; mCamValid = s.valid;
     mProjH = s.projH; mProjCx = s.projCx; mProjCy = s.projCy;
+    mZsf3 = s.zsf3; mZsf4 = s.zsf4;
   }
 
 private:
@@ -78,6 +87,10 @@ private:
   uint16_t mProjH  = 0;
   float    mProjCx = 160.0f;
   float    mProjCy = 120.0f;
+
+  // GTE Z scale factors (AVSZ3/AVSZ4), captured alongside the camera publish
+  int16_t  mZsf3 = 0;
+  int16_t  mZsf4 = 0;
 };
 
 // ---- Free-function thin bridges for callers with no `Core*` in scope -------------------------------
@@ -86,6 +99,8 @@ private:
 // once and every helper is visible.
 float proj_pz_to_ord(float pz);
 void  proj_set_H(uint16_t h);
+int   proj_zsf3(void);   // captured GTE CR29 (AVSZ3 scale) — 0 until the first camview_publish
+int   proj_zsf4(void);   // captured GTE CR30 (AVSZ4 scale) — 0 until the first camview_publish
 float proj_near_pz(void);
 float proj_plane_h(void);
 void  proj_screen_center(float* cx, float* cy);

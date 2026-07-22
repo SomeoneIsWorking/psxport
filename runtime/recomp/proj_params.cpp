@@ -61,6 +61,8 @@ bool ProjParams::camWorldScreen(float wx, float wy, float wz, float* sx, float* 
 // this-core state; before the first bind these are safe null-checks.
 
 float proj_pz_to_ord(float pz) { auto* pp = ProjParams::current(); return pp ? pp->pzToOrd(pz) : 0.0f; }
+int   proj_zsf3(void)          { auto* pp = ProjParams::current(); return pp ? pp->zsf3() : 0; }
+int   proj_zsf4(void)          { auto* pp = ProjParams::current(); return pp ? pp->zsf4() : 0; }
 void  proj_set_H(uint16_t h)   { if (auto* pp = ProjParams::current()) pp->setProjH(h); }
 float proj_near_pz(void)       { auto* pp = ProjParams::current(); return pp ? pp->projNearPz() : 1.0f; }
 float proj_plane_h(void)       { auto* pp = ProjParams::current(); return pp ? pp->projPlaneH() : 1.0f; }
@@ -81,6 +83,10 @@ void camview_publish(const float R[3][3], const float T[3]) {
   float OFX = (float)(int32_t)GTE_ReadCR(24) / 65536.0f;
   float OFY = (float)(int32_t)GTE_ReadCR(25) / 65536.0f;
   pp->publishCam(R, T, H, OFX, OFY);
+  // ZSF3/ZSF4 (CR29/CR30): the AVSZ scale factors the guest submitters feed into their OT sort key.
+  // Captured here — the once-per-frame GTE-read choke — so the native submitters can recompute that
+  // key without a present-time GTE read (kanban #11 game-sort-key discriminator).
+  pp->setZsf((int16_t)(uint16_t)GTE_ReadCR(29), (int16_t)(uint16_t)GTE_ReadCR(30));
 }
 int   camview_valid(void)                                  { auto* pp = ProjParams::current(); return pp && pp->camValid() ? 1 : 0; }
 float proj_camview_world_ord(float wx, float wy, float wz) { auto* pp = ProjParams::current(); return pp ? pp->camWorldOrd(wx, wy, wz) : 0.0f; }

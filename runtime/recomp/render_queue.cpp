@@ -347,6 +347,9 @@ void RenderQueue::zfightScan(Core* core) {
 }
 
 void RenderQueue::flush(Core* core) {
+  // Game-sort-key order resolution (kanban #11) runs FIRST, on the complete frame, so the snapped
+  // depths reach both the fps60 capture branch and the plain emit path identically.
+  resolveKeyOrder(core);
   if (n && objid_on(core)) objidOverlay(core);   // debug: label each object with its engine ID
   sortQueue();
   // zfightScan reads only the sorted item array (depth/xy/order_mode set at submission time) — it does not
@@ -530,7 +533,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
                               const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                               const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                               int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                              int tp_blend, const float (*sv)[3]) {
+                              int tp_blend, const float (*sv)[3], int sort_key, float key_ord) {
   // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
   // 2026-07-16: dialog/prompt panels sat left-anchored in wide). Native UI producers (Panel, Font/
   // dialog text, gauges, menus) push 4:3 coords (x∈[0,320)); the wide FB spans [0,ww) with the world
@@ -579,6 +582,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // ITS prims specifically. Any RQ_BACKGROUND item from OUTSIDE that scope (the generic guest-OT-walk bg
   // classification in gpu_native.cpp — no beginObject wraps it) still gets dbg_node==0, unchanged.
   it.dbg_node = (layer == RQ_WORLD || layer == RQ_BACKGROUND) ? core->rsub.diag.currentNode() : 0;
+  it.sort_key = sort_key; it.key_ord = key_ord;   // game's own OT sort key (kanban #11) — -1 = none
   // Shadow capture: an opaque world prim with view-space verts casts into the shadow map. Carried on the
   // item so emitItem re-pushes it to the shadow VBO on EVERY emit (= on both 60fps present passes).
   it.sh_cast = sv ? 1 : 0;
@@ -597,6 +601,138 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   else         emitItem(core, &it);
 }
 
+// GAME-SORT-KEY ORDER RESOLUTION (kanban #11) — the waterpump barrel's black top face, done from the
+// game's own data instead of a bias ramp.
+//
+// The barrel draws its top opening as a dark interior cap and, over it, the water surface. Measured on
+// the psx_render leg (REPL `otwhere`, 2026-07-22): the game's own submitter files the cap in OT bucket
+// 460 and the water in bucket 457, and the OT is walked descending — the game DECLARES the water in
+// front, categorically. pc_render's interpolated per-vertex depth says the opposite at the contested
+// pixels (the two surfaces genuinely cross), so the depth buffer paints the cap. Neither depth precision
+// nor any epsilon can recover this: it is authored ORDER, not geometry.
+//
+// The rule: every keyed face carries the sort key the GAME computed for it (RqItem::sort_key, recomputed
+// natively in submit.cpp from the RE'd emitter bodies). Within one object, if a face pair's interpolated
+// depth could CONTRADICT the game's key order — the farther-keyed face able to win a pixel both cover —
+// both faces' test depth is snapped to their key's shared ord (RqItem::key_ord, a pure function of the
+// key). Snapped faces then resolve exactly as the game ordered them; equal keys snap to the SAME value
+// and GREATER_OR_EQUAL + submission order resolves the tie. Everything else — faces whose real depth
+// already agrees with the key order, terrain, other objects — keeps untouched per-vertex depth. Zero
+// bias, zero span budget, zero tuned constant.
+//
+// The contradiction test is per-PAIR and interior-only: a sample point must lie strictly inside BOTH
+// faces' polygons with the farther-keyed face interpolating nearer. Mesh-adjacent faces (shared edge,
+// keys 1 apart) never trigger — their interiors are disjoint, they only touch along the edge — so an
+// ordinary mesh is left entirely on real per-vertex depth. This is what makes it a discriminator rather
+// than the reverted rank ramp, which re-ordered every face of every object by view-independent storage
+// order (measured net-negative: 95/6 in the barrel but 173/311 of unintended winner flips elsewhere).
+
+// Interpolated ord of item `it` at screen point (x,y), using the same triangle split + barycentric the
+// rasterizer applies (tri 0 = verts 0,1,2; tri 1 = verts 1,2,3). Returns false when outside both tris.
+static bool rq_ord_at(const RqItem* it, float x, float y, float* out) {
+  int nv = it->nv ? it->nv : 4;
+  const float* fx = it->has_xyf ? it->xsf : nullptr;
+  const float* fy = it->has_xyf ? it->ysf : nullptr;
+  for (int t = 0; t < (nv == 4 ? 2 : 1); t++) {
+    int i0 = t, i1 = t + 1, i2 = t + 2;
+    float x0 = fx ? fx[i0] : (float)it->xs[i0], y0 = fy ? fy[i0] : (float)it->ys[i0];
+    float x1 = fx ? fx[i1] : (float)it->xs[i1], y1 = fy ? fy[i1] : (float)it->ys[i1];
+    float x2 = fx ? fx[i2] : (float)it->xs[i2], y2 = fy ? fy[i2] : (float)it->ys[i2];
+    float den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    if (den == 0.f) continue;
+    float l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den;
+    float l1 = ((y2 - y0) * (x - x2) + (x0 - x2) * (y - y2)) / den;
+    float l2 = 1.f - l0 - l1;
+    if (l0 < 0.f || l1 < 0.f || l2 < 0.f) continue;   // outside this triangle (strict interior sampling)
+    *out = l0 * it->depth[i0] + l1 * it->depth[i1] + l2 * it->depth[i2];
+    return true;
+  }
+  return false;
+}
+
+void RenderQueue::resolveKeyOrder(Core* core) {
+  (void)core;
+  // Gather this frame's keyed world faces, grouped by object. Real guest nodes only — the reserved
+  // sentinels (terrain/scene-table/backdrop) and unscoped prims carry no game sort key anyway.
+  struct KF { int idx; uint32_t node; float bx0, by0, bx1, by1, dmin, dmax; };
+  static thread_local std::vector<KF> kf;   // scratch, reused across frames
+  kf.clear();
+  for (int i = 0; i < n; i++) {
+    const RqItem& it = items[i];
+    if (it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) continue;
+    if (it.dbg_node < 0x80000000u || it.dbg_node >= 0x80200000u) continue;
+    int nv = it.nv ? it.nv : 4;
+    KF f; f.idx = i; f.node = it.dbg_node;
+    f.bx0 = f.bx1 = it.has_xyf ? it.xsf[0] : (float)it.xs[0];
+    f.by0 = f.by1 = it.has_xyf ? it.ysf[0] : (float)it.ys[0];
+    f.dmin = f.dmax = it.depth[0];
+    for (int k = 1; k < nv; k++) {
+      float x = it.has_xyf ? it.xsf[k] : (float)it.xs[k], y = it.has_xyf ? it.ysf[k] : (float)it.ys[k];
+      if (x < f.bx0) f.bx0 = x; if (x > f.bx1) f.bx1 = x;
+      if (y < f.by0) f.by0 = y; if (y > f.by1) f.by1 = y;
+      if (it.depth[k] < f.dmin) f.dmin = it.depth[k];
+      if (it.depth[k] > f.dmax) f.dmax = it.depth[k];
+    }
+    kf.push_back(f);
+  }
+  if (kf.size() < 2) return;
+  std::stable_sort(kf.begin(), kf.end(), [](const KF& a, const KF& b) { return a.node < b.node; });
+  static thread_local std::vector<uint8_t> snap;   // parallel to kf: face must snap to its key_ord
+  snap.assign(kf.size(), 0);
+  for (size_t g0 = 0; g0 < kf.size(); ) {
+    size_t g1 = g0 + 1;
+    while (g1 < kf.size() && kf[g1].node == kf[g0].node) g1++;
+    for (size_t a = g0; a < g1; a++) {
+      for (size_t b = a + 1; b < g1; b++) {
+        const RqItem& A = items[kf[a].idx];
+        const RqItem& B = items[kf[b].idx];
+        if (A.sort_key == B.sort_key) continue;               // same bucket: real depth is status quo
+        // near = the face the game files NEARER (smaller OT index); far = the other.
+        const KF& nf = A.sort_key < B.sort_key ? kf[a] : kf[b];
+        const KF& ff = A.sort_key < B.sort_key ? kf[b] : kf[a];
+        const RqItem& NI = items[nf.idx];
+        const RqItem& FI = items[ff.idx];
+        // Cheap rejects: no screen overlap, or the far face can never out-depth the near one (ord:
+        // larger = nearer, so contradiction requires far.dmax > near.dmin).
+        float ox0 = nf.bx0 > ff.bx0 ? nf.bx0 : ff.bx0, ox1 = nf.bx1 < ff.bx1 ? nf.bx1 : ff.bx1;
+        float oy0 = nf.by0 > ff.by0 ? nf.by0 : ff.by0, oy1 = nf.by1 < ff.by1 ? nf.by1 : ff.by1;
+        if (ox0 >= ox1 || oy0 >= oy1) continue;
+        if (ff.dmax <= nf.dmin) continue;
+        // Interior contest: sample a grid over the bbox intersection; a point strictly inside BOTH
+        // polygons where the farther-keyed face interpolates nearer = the depth buffer would invert
+        // the game's order there. Grid density: pixel-ish steps, capped — misses only sub-sample
+        // slivers (documented residual), and mesh-adjacent faces (interiors disjoint) never hit.
+        const int GN = 8;
+        float sx = (ox1 - ox0) / (GN + 1), sy = (oy1 - oy0) / (GN + 1);
+        bool contradict = false;
+        for (int iy = 1; iy <= GN && !contradict; iy++) {
+          for (int ix = 1; ix <= GN && !contradict; ix++) {
+            float px = ox0 + sx * ix, py = oy0 + sy * iy, dn, df;
+            if (!rq_ord_at(&NI, px, py, &dn)) continue;
+            if (!rq_ord_at(&FI, px, py, &df)) continue;
+            if (df > dn) contradict = true;
+          }
+        }
+        if (contradict) { snap[a] = 1; snap[b] = 1; }
+      }
+    }
+    g0 = g1;
+  }
+  int nsnap = 0;
+  for (size_t i = 0; i < kf.size(); i++) {
+    if (!snap[i]) continue;
+    RqItem& it = items[kf[i].idx];
+    for (int k = 0; k < 4; k++) it.depth[k] = it.key_ord;
+    nsnap++;
+    if (cfg_dbg("keyord"))
+      cfg_logf("keyord", "f%u snap seq=%u node=%08X key=%d key_ord=%.6f bbox=(%.0f,%.0f)-(%.0f,%.0f)",
+               core->game->gpu.s_frame, it.seq, it.dbg_node, it.sort_key, (double)it.key_ord,
+               (double)kf[i].bx0, (double)kf[i].by0, (double)kf[i].bx1, (double)kf[i].by1);
+  }
+  if (nsnap && cfg_dbg("keyord"))
+    cfg_logf("keyord", "f%u resolveKeyOrder: %d/%zu keyed faces snapped", core->game->gpu.s_frame, nsnap, kf.size());
+}
+
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
 // When non-NULL and opaque, the queued item carries them and emitItem re-pushes them as two tris
 // to the shadow VBO on every emit (= on both 60fps present passes — see render_queue.h sh_cast).
@@ -604,7 +740,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
 void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, const float* depth,
                                 const int* u, const int* v, const unsigned char* r, const unsigned char* g,
                                 const unsigned char* b, uint16_t tp, uint16_t clut, int semi,
-                                const float (*sv)[3]) {
+                                const float (*sv)[3], int sort_key, float key_ord) {
   if (!gpu_vk_enabled()) return;
   core->rsub.stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
   if (cfg_dbg("silbbox")) { static int once=0; if (!once++) cfg_logf("silbbox", "s_off=(%d,%d)", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
@@ -625,11 +761,12 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
   }
   // World geometry: engine layer WORLD with real per-vertex depth. The queue is the render path.
   // Only opaque prims cast a shadow (semi water etc. must not occlude the light); drop the cast if semi.
+  // sort_key/key_ord ride on the item; resolveKeyOrder (flush time) is the ONE consumer.
   const float (*cast)[3] = (sv && !semi) ? sv : nullptr;
   emitOrQueue(core, 1, RQ_WORLD, RQ_OM_DEPTH, 4, semi ? 1 : 0, 0,
                    xs, ys, xsf, ysf, us, vs, rs, gs, bs, depth, s.s_tp_mode,
                    s.s_tp_x, s.s_tp_y, s.s_clut_x, s.s_clut_y, s.s_tw_mx, s.s_tw_my, s.s_tw_ox, s.s_tw_oy,
-                   s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend, cast);
+                   s.s_da_x0, s.s_da_y0, s.s_da_x1, s.s_da_y1, s.s_tp_blend, cast, sort_key, key_ord);
 }
 
 // 2D quad enqueue (HUD / overlay / background) — funnels through emitOrQueue so a 2D drawable is a

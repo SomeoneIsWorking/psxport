@@ -82,6 +82,15 @@ struct RqItem {
   // the prim's emission index within that node) — docs/fps60-rework.md "Prim matching".
   uint32_t dbg_node;
 
+  // GAME SORT KEY (kanban #11): the OT bucket index the GAME'S OWN submitter computes for this face
+  // (recomputed natively in submit.cpp game_sort_key from the RE'd gen_func_8007FDB0/8008007C bodies —
+  // AVSZ/min/max policy by GP0 code, guest log-compression, per-command sub-bucket shift). -1 = no key
+  // (2D, terrain, prims the guest's own range check would drop). key_ord = the key mapped back into the
+  // SAME normalized ord scale as depth[] (submit.cpp key_to_ord) — one shared value per key, used by
+  // resolveKeyOrder when the depth buffer would contradict the game's authored face order.
+  int32_t  sort_key;
+  float    key_ord;
+
   // ---- dynamic-shadow capture (host-only) ----------------------------------------------------------
   // Opaque world prims cast into the shadow map. The shadow GEOMETRY is part of THE FRAME (the queue),
   // not a side-channel: it is carried here and re-pushed to the shadow VBO by emitItem every time
@@ -140,15 +149,23 @@ struct RenderQueue {
                    const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                    const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                    int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                   int tp_blend, const float (*sv)[3] = nullptr);
+                   int tp_blend, const float (*sv)[3] = nullptr,
+                   int sort_key = -1, float key_ord = 0.0f);
 
   // drawWorldQuad: PC-native world-quad draw — a quad already projected to FLOAT screen coords + real
   // per-vertex depth, teed as two triangles to the VK rasterizer through the queue. No GP0 packet, no
-  // OT, no guest write.
+  // OT, no guest write. sort_key/key_ord: the game's own OT sort key for this face (see RqItem), -1 =
+  // none (producers with no guest sort key — terrain, mesh overlays — keep pure per-vertex depth).
   void drawWorldQuad(Core* core, const float* px, const float* py, const float* depth,
                      const int* u, const int* v, const unsigned char* r, const unsigned char* g,
                      const unsigned char* b, uint16_t tp, uint16_t clut, int semi,
-                     const float (*sv)[3]);
+                     const float (*sv)[3], int sort_key = -1, float key_ord = 0.0f);
+
+  // GAME-SORT-KEY ORDER RESOLUTION (kanban #11) — see the implementation banner in render_queue.cpp.
+  // Runs once per frame at flush: within each object, finds face pairs whose interpolated per-vertex
+  // depth would CONTRADICT the game's own sort-key order and snaps those faces' test depth to their
+  // key's shared ord. Zero bias, zero constants: every value is the game's own computation.
+  void resolveKeyOrder(Core* core);
 
 private:
   // Debug OBJECT-ID overlay (REPL `debug objid`) — pure host HUD quads appended at flush time.

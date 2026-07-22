@@ -223,6 +223,20 @@ what this tool cannot see is a store issued by fully-native (non-recompiled, no 
 `otattrTop()` reflects the last guest fn reached via `rec_dispatch` — a native-only copy shows up
 attributed to whichever guest fn most recently called INTO native code, not the native copier itself.
 
+`otwhere <pkt-hex> <ot-base-hex> [entries=2048]` (REPL, `runtime/recomp/repl.cpp`, kanban #11): locate a
+packet's OT BUCKET in the LAST-walked OT — read-only chain walk from `GpuState::s_ot_madr` (the same
+enumeration DrawOTag used, no draw/state side effects), reporting `{bucket index, position within the
+bucket, global chain position}` for the packet. The OT array base/entry count are game data the framework
+doesn't know, so the caller supplies them (Tomba2: base = `r 800ED8C8`, 2048 entries). This is how the
+barrel pair's ground-truth sort keys (cap bucket 460, water bucket 457) were measured; shipping-path OT
+reads remain banned — this is REPL-only.
+
+`keyord` (GAME-SORT-KEY ORDER RESOLUTION diag, `runtime/recomp/render_queue.cpp`
+`RenderQueue::resolveKeyOrder` — kanban #11): logs, per frame, every keyed world face whose test depth
+was snapped to its game-sort-key ord (`snap seq= node= key= key_ord= bbox=`) plus a per-frame
+`N/M keyed faces snapped` summary. The mechanism itself is always on (it is THE fix for authored
+paint-order vs depth-buffer contradictions, not a knob); the channel only makes its decisions visible.
+
 Full-PSX (psx_fallback / SBS core-B) coroutine diagnostics (native_boot.cpp `ov_switch`): `sched` (coro
 start/resume/out + task slot state) · `yieldpc` (per-yield `ra`/`r16`/`r29` + the stale-on-inner-frames
 `waitloop` heuristic — prefer btyield) · `btyield` (at each coro yield: guest-stack scan AND a PRECISE
