@@ -142,6 +142,24 @@ struct Fps60 {
   bool mObjOverrideOn = false;   // set only while the interp present re-runs the object walk
   void projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]);
 
+  // ---- GUEST-TIME WORLD CAPTURE-ONLY (kanban #33) ------------------------------------------------------
+  // Once BOTH presents were unified behind presentPass (both re-render the field WORLD via tier1Render
+  // under lerped inputs), the world that the REAL guest-time render walk (sceneNative) builds into the
+  // live queue is never drawn — the merge skips every tier1-owned prim (isTier1Owned) because it now
+  // comes from mSink on both presents. Its ONLY surviving purpose is the capture side effects the
+  // present-time re-render reads back: the camera (sceneCam→mCamCur), each object's transform
+  // (projObj→mObjCur), the backdrop scroll (bgScroll→mBgCur). So at guest time, when the scene is
+  // tier1-eligible (the present WILL re-render its world), the world DRAW is pure waste — measured ~half
+  // of the fps60 CPU cost (3000-frame headless: full guest world draw ≈ 6.9s of ~14s). This flag, set by
+  // Render::sceneNative around its world block, tells the world leaves (terrainRenderAll / fieldEntityRender
+  // / backdropRender / gt3gt4 / narrationSwirl) to run only the cheap CAPTURE reads (which sit UPSTREAM of
+  // the expensive per-vertex projection — sceneCam/projComposeObject/bgScroll all execute before the quad
+  // emit) and SKIP the projection+submit. The captures land in the same host slots as before, byte-for-
+  // byte, so the two presents' re-rendered world is unchanged. Off (false) everywhere else — never set
+  // during the present re-render (mSink must get the real draw), never for the non-eligible sub-scenes
+  // (hut interior / title) whose captured world DOES present verbatim.
+  bool mWorldCaptureOnly = false;
+
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
   RqItem* mRqPrev = nullptr;    // previous frame's snapshot (Q[N-1])

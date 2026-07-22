@@ -266,6 +266,22 @@ static inline bool isTier1Owned(const RqItem& it) {
 
 
 
+// See the declaration above presentPass.
+static void seqRunDump(const RqItem* items, int n, const char* what) {
+  int i = 0;
+  while (i < n) {
+    const int layer = items[i].layer;
+    const bool owned = isTier1Owned(items[i]);
+    const uint32_t seq0 = items[i].seq;
+    const uint32_t node0 = items[i].dbg_node;
+    int j = i;
+    while (j < n && items[j].layer == layer && isTier1Owned(items[j]) == owned) j++;
+    cfg_logf("fps60seq", "  %s layer=%d %-9s n=%4d seq=[%u..%u] node0=%08X", what, layer,
+             owned ? "TIER1" : "verbatim", j - i, seq0, items[j - 1].seq, node0);
+    i = j;
+  }
+}
+
 // ---- per-present frame dump (debug channel `fps60dump`) ----------------------------------------------
 // Writes what THIS present pass just put in s_vram_tex, exactly like REPL `shot` — same VRAM-readback
 // writer (gpu_vk_shot/gpu_native_shot), no new pixel path. Must run right after the present call that
@@ -357,8 +373,21 @@ void Fps60::present_vk(Core* core) {
 // presents. Those verbatim prims are the REDIRECT backlog (fps60.h): each graduates into the re-render as
 // its emitter is RE'd and ported, and until then it steps at the logic rate on BOTH frame kinds. That
 // residual is honest and symmetric; it is not a second way of building a frame.
+// DIAG (`debug fps60seq`): the captured queue's composition as RUNS of consecutive items sharing
+// (layer, tier1-owned), with each run's seq range. Answers the one question the merge depends on —
+// whether the tier1-owned world prims occupy a CONTIGUOUS seq block inside the guest-time queue, or are
+// interleaved with prims that present verbatim. Read-only; never load-bearing.
+static void seqRunDump(const RqItem* items, int n, const char* what);
+
 void Fps60::presentPass(Core* c, float t) {
   RenderQueue& q = c->game->rq;
+  if (cfg_dbg("fps60seq")) {
+    static long lastDumped = -1;
+    if (lastDumped != mFence) { lastDumped = mFence;
+      cfg_logf("fps60seq", "f%ld captured n=%d", mFence, mNCur);
+      seqRunDump(mRqCur, mNCur, "rqcur");
+    }
+  }
   // mT is the parameter of the pass being built right now — the camera choke (sceneCam), the per-object
   // transform choke (projObj) and the backdrop scroll choke (bgScroll) all read it. Setting it here is
   // what makes `t` the single knob: nothing else distinguishes the two presents.

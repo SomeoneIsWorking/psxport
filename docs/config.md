@@ -154,6 +154,7 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 | `PSXPORT_OTDBG`        | `ot`      | | `PSXPORT_VRAMSCAN`   | `vramscan`  |
 | `PSXPORT_CDCMD_DBG`    | `cdcmd`   | | `PSXPORT_FPS60_SDBG` | `fps60`     |
 | (no legacy var)        | `fps60dump` (per-present PNG frame dump — see below) | | | |
+| (no legacy var)        | `fps60seq` (captured-queue composition by (layer, tier1-owned) runs + seq ranges — the merge-ordering probe for kanban #31/#33; `Fps60::presentPass`) | | | |
 | (so e.g. `PSXPORT_CDCMD_DBG=1` → `PSXPORT_DEBUG=cdcmd`) | | | `PSXPORT_WS_SXHIST` | `sxhist` |
 
 New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
