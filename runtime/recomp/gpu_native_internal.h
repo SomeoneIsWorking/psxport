@@ -42,9 +42,6 @@ struct GpuState {
 
   // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)
-  int s_ot_2d_drawn = 0;  // # of genuine 2D-overlay prims drawn during a twoDOnly walk (reset at walk start).
-                          // drawOTag reads it: >0 in pc_render => the field needs unimplemented native 2D UI
-                          // -> abortUnimplemented (rendering the world alone would MASK the missing overlay).
   int bg_2d(int bx0, int by0, int bx1, int by1);   // FALLBACK 2D backdrop-vs-HUD by screen coverage (un-owned scenes)
   int s_prev_had3d = 0;   // did LAST frame draw any 3D? = "this is a gameplay (3D) frame" (wide pillarbox gate)
   // #54: a pure-2D screen (title/menu) never sets s_seen3d, so s_prev_had3d alone left the widen mechanism
@@ -69,43 +66,6 @@ struct GpuState {
   int s_bg_frame = -1;
   void bg_range_add(uint32_t lo, uint32_t hi);   // record a background drawer's pool span for the current frame
   int  node_is_bg(uint32_t node);                // is this OT node inside a background span this frame?
-
-  // PC-native PER-OBJECT depth by packet-pool SPAN. The engine's native render walk renders each world
-  // object into a contiguous packet-pool span and records [lo,hi)->view-depth here (its WORLD-POSITION
-  // depth). Geometry rasterizes later during the deferred OT walk, where the per-object render context is
-  // gone — so a 2D billboard prim (no projected verts) recovers its object's real depth by which span its
-  // OT-node address falls in, exactly like node_is_bg. Stamped per frame; honored only for that frame.
-  static const int OBJ_DEPTH_MAX = 512;
-  uint32_t s_od_lo[OBJ_DEPTH_MAX] = {}, s_od_hi[OBJ_DEPTH_MAX] = {};
-  float    s_od_ord[OBJ_DEPTH_MAX] = {};
-  int s_od_n = 0;
-  int s_od_frame = -1;
-  // Per-face epsilon-depth run state. Was file-scope in gpu_native.cpp (s_od_eps_*) — moved onto
-  // GpuState because obj_depth_lookup is a per-Core method; two SBS cores need SEPARATE counters
-  // so one core's face ordinal doesn't leak into the other's depth epsilon (2026-07-03).
-  int s_od_eps_frame = -1;
-  int s_od_eps_span  = -1;
-  int s_od_eps_k     = 0;
-  void obj_depth_add(uint32_t lo, uint32_t hi, float ord);  // record an object's pool span + world depth
-  int  obj_depth_lookup(uint32_t node, float* ord);         // depth ord for the OT node, if in an object span
-
-  // NATIVE-COVER registry (docs/fps60-rework.md REDIRECT — windmill-family GT3/GT4 objects). When
-  // Render::cmdListDispatch (perobj_dispatch.cpp) ALSO draws a cmd's geometry through the real
-  // per-object float path (Render::gt3gt4, real identity + real per-vertex depth) because
-  // perModeDispatch would otherwise route it to the byte-exact substrate mirror
-  // (OverlayGt3Gt4::gt3/gt4), the substrate's OWN guest-OT copy of that same geometry becomes
-  // redundant. Presence-only span registry: the field's 2D-only OT
-  // walk checks this FIRST and unconditionally drops a covered span's guest polys — NOT via
-  // obj_depth's billboard promotion (that would draw the coarse GTE-positioned copy AGAIN with a flat
-  // per-object depth, i.e. a double draw with a worse picture). The substrate GTE math that produced
-  // this span still runs untouched underneath (SBS byte-exactness unaffected); only the PICTURE
-  // decision changes.
-  static const int NATIVE_COVER_MAX = 64;
-  uint32_t s_nc_lo[NATIVE_COVER_MAX] = {}, s_nc_hi[NATIVE_COVER_MAX] = {};
-  int s_nc_n = 0;
-  int s_nc_frame = -1;
-  void nativeCoverAdd(uint32_t lo, uint32_t hi);   // record a natively-redrawn cmd's packet-pool span
-  int  nativeCoverLookup(uint32_t addr);           // is this OT node inside a native-covered span?
 
   // VRAM (textures + framebuffers)
   uint16_t  s_vram[VRAM_W * VRAM_H] = {};
@@ -198,10 +158,6 @@ struct GpuState {
   uint32_t s_cur_node = 0;                                    // RAM addr of the OT node being fed to GP0
   uint32_t s_ot_madr = 0;                                     // last OT DMA root (was global g_ot_madr)
   uint32_t s_dma_src = 0;                                     // last block-DMA source (was global g_dma_src)
-  bool     s_ot_2d_only = false;                              // in-flight OT walk mode (was global g_ot_2d_only):
-                                                              // set at gpu_dma2_linked_list entry, read by gp0_exec
-                                                              // to drop the OT's 3D-world prims (owned by native
-                                                              // scene walk), cleared at walk exit.
 
   // ---- rasterizer / GP0 / present methods (bodies in gpu_native.cpp) ----
   uint16_t sample_tex(int u, int v);
@@ -224,10 +180,7 @@ struct GpuState {
   void gp0_exec(Core* core);
   void gpu_gp0(Core* core, uint32_t w);
   void gpu_gp1(uint32_t w);
-  // twoDOnly=true: enumerate the OT and DROP its 3D-world / backdrop prims (owned by the native
-  // scene walk); queue only 2D-overlay prims as RQ_HUD. Was the process-global g_ot_2d_only,
-  // set right before the call and cleared right after — now a real parameter.
-  void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly);
+  void gpu_dma2_linked_list(Core* core, uint32_t madr);
   void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
   void gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src);
   int  gpu_native_load_vram(const char* path);
@@ -256,7 +209,7 @@ void gpu_scene_dump(Core* core, FILE* out, uint32_t madr);   // classify an OT's
 // ---- Public GPU API (free functions; thin wrappers over GpuState methods, reached via Core*) ---
 void gpu_gp0(Core* core, uint32_t w);
 void gpu_gp1(Core* core, uint32_t w);
-void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly);
+void gpu_dma2_linked_list(Core* core, uint32_t madr);
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);

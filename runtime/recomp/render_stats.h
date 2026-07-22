@@ -23,12 +23,6 @@ public:
   long nd3d = 0;
   long nd2d = 0;
 
-  // Object-depth span cache diag (packet-pool [lo,hi) -> world-depth records + lookups by 2D billboard
-  // recovery, gpu_native.cpp). Reset at frame start via the s_od_frame guard.
-  long odAdd  = 0;
-  long odHit  = 0;
-  long odMiss = 0;
-
   // (ProjPrim / depth-cache diag now lives on `class ProjPrim` (game/render/proj_prim.h), embedded on
   // Render as `c->rsub.projprim` — bound via `ProjPrim::bind(c)` alongside gte_bind. Two SBS cores
   // keep separate caches + counters. Read via `.stats()` / `.statsReset()`.)

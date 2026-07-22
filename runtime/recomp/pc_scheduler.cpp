@@ -372,7 +372,7 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
   int handled = 1;
   if (setjmp(yield_jmp) == 0) {
     if (game_fresh) c->hooks->schedStageBody(c, SCHED_GAME_PROLOGUE, nullptr);
-    c->game->ffspan.begin(); handled = c->hooks->schedStageBody(c, SCHED_GAME_FRAME, nullptr); c->game->ffspan.end("gameframe");
+    handled = c->hooks->schedStageBody(c, SCHED_GAME_FRAME, nullptr);
   } else if (cfg_dbg("sched")) {
     if (!warned_game_yield++) cfg_logf("sched", "caught a GAME substate yield (a leaf not "
                                               "yet sync) — frontier");

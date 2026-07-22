@@ -7,7 +7,7 @@
 // through addresses.
 //
 // DIAGNOSTIC ONLY. Zero behavior change when the `otattr` debug channel is off (a single cfg_dbg()
-// check gates every method — same idiom as PktSpan's `!mArmed` early-out). Never writes guest memory;
+// check gates every method). Never writes guest memory;
 // only reads Core::mem_r* / Render::diag / InterpDiag's otattr shadow stack.
 //
 // Two independent tables, both per-Core (SBS runs two: no cross-contamination) and both keyed to the
@@ -17,11 +17,11 @@
 // overflow is COUNTED and reported rather than growing unbounded or silently dropping.
 //
 //   1. Packet-pool store spans — every guest store landing in the shared packet pool
-//      [0x800BFE68, 0x800E7E68) (same range PktSpan watches) is attributed to {emitter fn = the
+//      [0x800BFE68, 0x800E7E68) is attributed to {emitter fn = the
 //      OTATTR SHADOW STACK top (InterpDiag::otattrTop(), the innermost guest fn reached via an
 //      INDIRECT/jalr rec_dispatch — see interp_diag.h), caller fn = one frame below that, node =
 //      Render::diag.currentNode()}. Consecutive stores with the SAME (fn, node) attribution are
-//      COALESCED into one growing [lo,hi) span (mirrors PktSpan's own span-merge idea) so one quad's
+//      COALESCED into one growing [lo,hi) span so one quad's
 //      handful of header/vertex/color words collapse to a single entry instead of one-per-word —
 //      this is what keeps the static cap (OT_ATTR_CAP) from blowing out on a normal frame.
 //
@@ -66,7 +66,7 @@ public:
   struct GteBucket { uint32_t fn, node, count; };
 
   // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store — no-op unless the `otattr` channel
-  // is enabled (checked internally, same as PktSpan's !mArmed hot-path no-op) and the address falls in
+  // is enabled (checked internally — a hot-path early-out) and the address falls in
   // the packet-pool range.
   void trackStore(Core* c, uint32_t addr, uint32_t bytes);
 

@@ -102,109 +102,8 @@ static int sprite_is_bg_texpage(Core* core, int tp_x, int tp_y) {
   return s.s_bgtp_frame == s.s_frame && tp_x == s.s_bgtp_x && tp_y == s.s_bgtp_y;
 }
 
-// PC-native per-object depth: the engine's native render walk records each object's packet-pool span +
-// its WORLD-POSITION view-depth, so a 2D billboard prim rasterized later (deferred OT walk) occludes by
-// the object's real depth instead of sprite order. Stamped per frame (a stale span is never honored).
-// g_od_add/hit/miss retired 2026-07-03 — Render::stats.odAdd/odHit/odMiss (RenderStats).
-void GpuState::obj_depth_add(uint32_t lo, uint32_t hi, float ord) {
-  if (hi <= lo) return;
-  if (s_od_frame != s_frame) { s_od_n = 0; s_od_frame = s_frame; }   // new frame -> clear prior spans
-  // The billboard now occludes by its TRUE world-position view-Z — no implicit camera-ward bias (issue #4).
-  // The old blanket `ord += 1/512` nudge pushed EVERY free-standing billboard (flame/brazier/pickup) toward
-  // the camera so it would sit in front of its host SURFACE — that was the wall-decal (#5 coplanar) bandaid,
-  // and it is exactly what made the flame draw in front of the wall behind it that DOES carry real depth.
-  // A free-standing billboard must sort by its real Z like any world quad, so it is occluded by nearer
-  // geometry and occludes farther geometry. (The genuinely-coplanar decal case adds its own stable epsilon
-  // at its OWN call site if it needs one; it is not a property of every object span.) The depth is already
-  // the object's PC-native world view-Z (proj_obj_center_ord / object_world_view_depth → proj_pz_to_ord),
-  // so this is engine-owned occlusion, never a PSX OT order. `ord` is stored AS GIVEN.
-  if (ord < 0.0f) ord = 0.0f; if (ord > 1.0f) ord = 1.0f;
-  if (s_od_n < OBJ_DEPTH_MAX) { s_od_lo[s_od_n] = lo; s_od_hi[s_od_n] = hi; s_od_ord[s_od_n] = ord; s_od_n++; game->core.rsub.stats.odAdd++; }
-}
-// PC-native COPLANAR FACE SEPARATION for OT-walked objects (issue #5 — barrel red/blue z-fight).
-//
-// A faceted object (barrel/container/crate) that renders through the GUEST OT walk — rather than the
-// owned per-vertex GT3/GT4 float path — has ALL of its face packets in ONE packet-pool span tagged with a
-// SINGLE whole-object world depth (object_world_view_depth, submit.cpp). obj_depth_lookup then
-// stamped the IDENTICAL `od` on every face (gp0_exec: `for(i) dep[i]=od`). With every face at the exact
-// same D32 depth and a GREATER_OR_EQUAL test, which face wins a shared pixel is decided purely by draw
-// order WITHIN the frame — and that order is not stable across the double-buffered queue swap → the red
-// band and the blue band trade contested pixels each frame → the red/blue flicker. The whole-object depth
-// is also COARSE (object_world_view_depth returns dot>>12, the 12-bit fraction discarded), so genuinely
-// distinct faces a few units apart collapse to the same value too.
-//
-// The PROPER PC-owned fix is a STABLE, DETERMINISTIC per-FACE depth separation — an ordering RULE the
-// engine owns, NOT a re-sync with the PSX OT and NOT the removed blanket camera-ward bias (issue #4):
-// each consecutive prim that inherits the SAME object span gets a tiny monotonic camera-ward epsilon by
-// its position in that object's submission run. The OT walk visits a given object's faces in the same
-// link order every frame, so a given face ALWAYS gets the same epsilon → it wins/loses the contested
-// pixel identically every frame → no flicker. Later faces (later in paint order) get a larger ord (=
-// nearer, wins under GREATER_OR_EQUAL) → the same stacking the PSX painter produced, now stable.
-//
-// Why this does NOT reintroduce #4: a free-standing single-prim billboard (a flame/brazier/pickup quad)
-// is the FIRST (and only) prim in its span → k==0 → epsilon 0 → it keeps its true world depth with NO
-// camera-ward bias. The epsilon only separates MULTIPLE prims sharing ONE object span — exactly the
-// faceted-object z-fight case, never the lone billboard. The per-vertex float world path (a barrel that
-// IS owned-GT4) is untouched: it never calls obj_depth_lookup (it carries real per-vertex depth).
-//
-// EPS_STEP (1/65536 in pre-ord3d [0,1] units → ~1.3e-5 after ord3d's ×0.875 band map) is FAR above D32
-// float resolution near these values (~1e-7) yet FAR below the gap between distinct world objects, and
-// the run is capped so even a many-faced object can never drift a face in front of genuinely nearer geo.
-// s_od_eps_frame/span/k moved to GpuState — see gpu_native_internal.h. Two SBS cores contaminate each
-// other's per-face epsilon depth counter otherwise (deglobalize 2026-07-03).
-static const float OD_EPS_STEP = 1.0f / 65536.0f;   // per-face camera-ward step (pre-ord3d ord units)
-static const int   OD_EPS_KMAX = 256;               // cap the run so total drift stays << inter-object gap
-int GpuState::obj_depth_lookup(uint32_t node, float* ord) {
-  if (s_od_frame != s_frame) { game->core.rsub.stats.odMiss++; return 0; }
-  uint32_t n = node | 0x80000000u;
-  for (int i = 0; i < s_od_n; i++) if (n >= s_od_lo[i] && n < s_od_hi[i]) {
-    // Stable per-face epsilon: reset the run on a new frame or when a DIFFERENT object span is hit; the
-    // k-th consecutive face of the SAME span gets k camera-ward steps. Deterministic across frames.
-    if (s_od_eps_frame != s_frame) { s_od_eps_frame = s_frame; s_od_eps_span = -1; s_od_eps_k = 0; }
-    if (i != s_od_eps_span) { s_od_eps_span = i; s_od_eps_k = 0; }
-    int k = s_od_eps_k < OD_EPS_KMAX ? s_od_eps_k : OD_EPS_KMAX;
-    s_od_eps_k++;
-    float v = s_od_ord[i] + (float)k * OD_EPS_STEP;     // camera-ward = larger ord (GREATER_OR_EQUAL wins)
-    if (v > 1.0f) v = 1.0f;
-    if (ord) *ord = v;
-    game->core.rsub.stats.odHit++; return 1;
-  }
-  game->core.rsub.stats.odMiss++;
-  return 0;
-}
-void gpu_obj_depth_add(Core* core, uint32_t lo, uint32_t hi, float ord) { core->game->gpu.obj_depth_add(lo, hi, ord); }
-
-// NATIVE-COVER registry (docs/fps60-rework.md REDIRECT, gpu_native_internal.h). Presence-only, same
-// shape (presence-only span registry): a packet-pool span whose geometry Render::cmdListDispatch ALSO drew
-// through the real per-object float path this frame (real identity + real per-vertex depth) — the
-// gp0_exec classifier below drops a covered span's guest-OT polys unconditionally, before even
-// considering the obj_depth billboard fallback (see the `!is3d && !bg` block).
-void GpuState::nativeCoverAdd(uint32_t lo, uint32_t hi) {
-  if (hi <= lo) return;
-  if (s_nc_frame != s_frame) { s_nc_n = 0; s_nc_frame = s_frame; }   // new frame -> clear prior spans
-  if (s_nc_n < NATIVE_COVER_MAX) { s_nc_lo[s_nc_n] = lo; s_nc_hi[s_nc_n] = hi; s_nc_n++; }
-}
-int GpuState::nativeCoverLookup(uint32_t addr) {
-  if (s_nc_frame != s_frame) return 0;
-  uint32_t n = addr | 0x80000000u;
-  for (int i = 0; i < s_nc_n; i++) if (n >= s_nc_lo[i] && n < s_nc_hi[i]) return 1;
-  return 0;
-}
-void gpu_native_cover_add(Core* core, uint32_t lo, uint32_t hi) { core->game->gpu.nativeCoverAdd(lo, hi); }
-
 // s_gp0_words / s_dma2 moved to GpuState (per-Core; was cross-core-shared per-frame diag).
 // g_nd_3d/nd_2d retired 2026-07-03 — Render::stats.nd3d/nd2d (RenderStats).
-// 2D-OVERLAY-ONLY OT enumeration. When the FIELD render path owns the 3D world + backdrop natively
-// (ov_scene_native), it STILL needs the guest's leftover 2D overlay prims — the opening-cutscene
-// narration glyphs, in-game dialog/item bubbles, menus, HUD — which the field code submits as PSX
-// sprites/polys into the OT. Those are not owned natively yet, so we enumerate them from the OT and
-// queue them as RQ_HUD on top of the native world. Set during that 2nd OT walk so the gpu_gp0 prim
-// classifier DROPS the 3D-world (RQ_WORLD) and backdrop (RQ_BACKGROUND) drawables (the native render
-// already produced them — keeping them would DOUBLE-draw the world); only RQ_HUD 2D prims are queued.
-// State commands (E1 texpage / E2 texwindow / draw-area/offset) are still applied for every node, so
-// the kept 2D prims bind the correct texpage. (engine owns 3D + bg; guest OT supplies leftover 2D.)
-// g_ot_2d_only retired 2026-07-03 — now a parameter of gpu_dma2_linked_list, stashed onto the walk's
-// per-Core GpuState as s_ot_2d_only for gp0_exec to read, cleared at walk exit. (deglobalize-game)
 
 // Engine-owned 2D WIDESCREEN layout. The wide 3D world is centered in the scratch FB by fb_x0=margin*ss
 // (push_wide); 2D prims share that relocation shader, so they get the same +margin. We map each native-320
@@ -780,7 +679,7 @@ void GpuState::gp0_exec(Core* core) {
       // 3D world geometry -> carries real per-vertex view-Z (D32 occlusion); otherwise it is a 2D element
       // -> a backdrop (FAR band) or HUD (near band) by screen coverage.
       int use_rq = rq_active();                  // engine render queue owns ordering (PSXPORT_RQ)
-      float dep[4]; int is3d = 0, bg = 0, billboard = 0;   // billboard = a 2D prim that got obj_depth (world-position occlusion)
+      float dep[4]; int is3d = 0, bg = 0;
       int fade_full = 0;                         // full-screen SEMI overlay (fade/dim) -> stretch-to-fill, stay on top (#21)
       {
         float proj_pz_to_ord(float);
@@ -800,31 +699,10 @@ void GpuState::gp0_exec(Core* core) {
         // fade/overlay -> must NOT be a backdrop (else it draws UNDER the world); leave it in the HUD
         // (topmost) band so fades composite on top. (Owned backdrops still match via node_is_bg.)
         if (!is3d) bg = node_is_bg(s_cur_node) || (!semi && bg_2d(bx0, by0, bx1, by1));
-        // PSXPORT_BDTAG: attribute a DEFERRED PSX gp0 (is3d=0) prim to the build-time call that produced it
-        // (ffspan_lookup maps the packet addr to a recorded pool span). Maps the remaining PSX render so the
-        // next ownership target is picked by data. Dedups by (builder,tp) and only after the field settles
-        // (s_frame>=120, so transition/load frames don't dominate). Logs each unique (builder,tp) once.
-        if (!is3d && cfg_str("PSXPORT_BDTAG") && s_frame >= 120) {
-          const char* t = core->game->ffspan.lookup(s_cur_node);
-          static struct { const char* t; int tx, ty; } seen[64]; static int nseen = 0; int f = 0;
-          for (int i = 0; i < nseen; i++) if (seen[i].t == t && seen[i].tx == s_tp_x && seen[i].ty == s_tp_y) { f = 1; break; }
-          if (!f && nseen < 64) { seen[nseen].t = t; seen[nseen].tx = s_tp_x; seen[nseen].ty = s_tp_y; nseen++;
-            cfg_logi("bdtag", "PSX is3d=0 op=%02x tp=(%d,%d) built by '%s'", op, s_tp_x, s_tp_y, t); } }
         // FADE/DIM (#21): a full-screen SEMI prim is a fade/dim overlay, NOT a backdrop. It must cover the
         // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
         // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.
         if (!is3d && !bg && semi && fade_full_2d(s_disp_w, s_disp_h, bx0, by0, bx1, by1)) fade_full = 1;
-        // NATIVE-COVER (docs/fps60-rework.md REDIRECT): this span's geometry was ALSO drawn through the
-        // real per-object float path this frame (real identity + real per-vertex depth) — the guest-OT
-        // copy is a strictly worse redundant duplicate (coarse GTE screen position, flat per-object
-        // depth, no dbg_node). Drop it outright; do NOT fall through to the obj_depth billboard
-        // promotion below (checked first on purpose — a covered span may ALSO carry a stale obj_depth
-        // tag from the same withDepthTag scope, and native-cover must win).
-        bool native_covered = !is3d && !bg && nativeCoverLookup(s_cur_node);
-        // PC-native object depth: a 2D billboard prim (no projected verts) whose OT-node falls in an
-        // object's packet-pool span inherits that object's world-position view-Z and occludes for real.
-        if (!is3d && !bg && !native_covered) { float od; if (obj_depth_lookup(s_cur_node, &od)) {
-          for (int i = 0; i < nv; i++) dep[i] = od; is3d = 1; s_seen3d = 1; billboard = 1; } }
         if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
           s_nd2d_hist[op]++; }
         if (!is3d && !bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
@@ -849,7 +727,7 @@ void GpuState::gp0_exec(Core* core) {
               return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
             int cover = intri(0,1,2) || (nv==4 && intri(1,2,3));
             if (cover) { static int n=0; if (n++<6000)
-              cfg_logi("primat", "f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d bb=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)", s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, billboard, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+              cfg_logi("primat", "f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)", s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                 us[0], vs[0], s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_off_x,s_off_y,
                 rs[0],gs[0],bs[0], bx0,by0,bx1,by1); } } }
         // PSXPORT_PAINTFG=1 (diag): force every 2D-FG (HUD-band) poly to opaque solid magenta so we can SEE
@@ -878,49 +756,16 @@ void GpuState::gp0_exec(Core* core) {
       // diff: the differing pixels are precisely where native per-pixel depth changes the picture (the
       // object-occlusion bug — terrain/atlas not obeying world-depth). Diagnostic only.
       // PSXPORT_ORACLE forces this too: pure PSX painter order is exactly the unenhanced reference (no
-      // native per-pixel depth / bg-band split). obj_depth is already inert in oracle mode (observer skips
-      // tagging + sceneNative never runs), so every prim composites in OT order like the real PSX.
+      // native per-pixel depth / bg-band split), so every prim composites in OT order like the real PSX.
       { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; }
         if (pm || core->game->oracle) { is3d = 0; bg = 0; } }
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
         int om    = is3d ? RQ_OM_DEPTH : (bg ? RQ_OM_2D_BG : RQ_OM_2D_FG);
-        // 2D-overlay-only field pass: drop ALL guest-OT POLYS. In the field the GTE-projected 3D world
-        // arrives as polys and is OWNED by the native render (ov_scene_native draws it via VK) — these
-        // guest polys are the redundant copy the field path never drew before. We CANNOT keep "2D" polys
-        // via the is3d test here: projprim has no records on the native field path (the projection
-        // provenance is built by the owned submit path, not this separate OT walk), so is3d==0 for EVERY
-        // poly — keeping them would re-emit the whole 3D world as flat HUD prims (render-queue overflow +
-        // double-draw, observed as the free-roam crash). 2D-poly overlays (gradient/fade panels) are a
-        // known frontier; the cutscene narration + the common HUD are SPRITES, handled below. (engine
-        // owns the field's 3D geometry; the guest OT supplies only the leftover 2D SPRITES.)
-        // ... EXCEPT obj-depth-tagged BILLBOARD polys (issue #28): the billboardEmit family's textured
-        // quads (weapon flail, AP gems, apples, splash) are "2D objects with 3D world positions" —
-        // polys by GP0 op, but NOT part of the native-owned world (sceneNative never draws them; they
-        // exist only in the guest OT). `billboard` is set above via obj_depth_lookup(s_cur_node),
-        // which works on the native field path because the owned billboardEmit registers its packet
-        // span through withDepthTag/gpu_obj_depth_add. Dropping these with the world polys is what
-        // made the whole class invisible under pc_render.
-        // (The ui_span registry that used to force dialog-panel FT4 polys to RQ_HUD here was removed
-        // 2026-07-16, break-first-then-rebuild: an untagged 2D panel poly classifies is3d=0/bg=0 →
-        // RQ_HUD by the line above anyway, and the panel's pc_render picture is the native
-        // Panel::pushFill/pushCorners taps, not this walk.)
-        if (s_ot_2d_only && !billboard) { /* field 3D world is native-owned; guest polys are redundant — skip */ }
-        else {
-        // Count only GENUINE unimplemented 2D (a ui-span panel poly), NOT obj_depth-promoted world
-        // billboards: a `billboard` poly is a 2D prim that got obj_depth (:848) → is3d=1, drawn as world
-        // overlay with real depth (the accepted #28/#39 obj_depth transcription). Counting it was a false
-        // positive that crashed field free-roam (~60 flame/gem/pickup billboards). Mirrors the sprite
-        // path, which already excludes its `objz` billboard analog from the count (:1118). (Diagnosis
-        // 2026-07-15: docs/native-render-rebuild.md #3b-A.) NOTE: do NOT also drop `native_covered` from
-        // the count here yet — the hut authored sub-scene has native-cover OFF, so that restructure would
-        // crash it; it needs the object-cover gate broadened first (follow-up).
-        if (s_ot_2d_only && !billboard) s_ot_2d_drawn++;   // genuine 2D-overlay poly (ui panel) — unimplemented natively
         core->game->activeRq().emitOrQueue(core, 1, layer, om, nv, semi, rw, xs, ys, 0, 0, us, vs, rs, gs, bs,
                          is3d ? dep : 0, mode, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                          s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy, s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        }
       } else {
       gpu_vk_set_order(core, ord_idx);           // OT submission order -> depth (preserve opaque/semi order)
       if (!is3d) {                               // 2D band select
@@ -1077,21 +922,11 @@ void GpuState::gp0_exec(Core* core) {
       unsigned char qr[4]={cr,cr,cr,cr}, qg[4]={cg,cg,cg,cg}, qb[4]={cb,cb,cb,cb};
       int mode = textured ? s_tp_mode : 3, rw = op & 1;
       if (use_rq) {
-        // PC-native object depth: a world object's billboard sprite occludes by its world position.
-        float dep[4], od; int objz = (!bg && obj_depth_lookup(s_cur_node, &od));
-        if (objz) { dep[0] = dep[1] = dep[2] = dep[3] = od; s_seen3d = 1; }
-        int layer = objz ? RQ_WORLD     : (bg ? RQ_BACKGROUND : RQ_HUD);
-        int om    = objz ? RQ_OM_DEPTH  : (bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG);
-        // 2D-overlay-only field pass: drop the 3D-world / backdrop prims (owned natively); keep 2D HUD.
-        // objz sprites are billboard-class "2D objects with 3D world positions" (issue #28) — keep
-        // them like the poly path's `billboard` prims; only the native-owned world/bg is redundant.
-        if (s_ot_2d_only && layer != RQ_HUD && !objz) { /* world/bg owned by ov_scene_native — skip */ }
-        else {
-        if (s_ot_2d_only && layer == RQ_HUD) s_ot_2d_drawn++;   // genuine 2D-overlay sprite (HUD icon / font glyph) — unimplemented natively
-        core->game->activeRq().emitOrQueue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, objz ? dep : 0, mode,
+        int layer = bg ? RQ_BACKGROUND : RQ_HUD;
+        int om    = bg ? RQ_OM_2D_BG   : RQ_OM_2D_FG;
+        core->game->activeRq().emitOrQueue(core, 1, layer, om, 4, semi, rw, qx, qy, 0, 0, qu, qv, qr, qg, qb, 0, mode,
                          s_tp_x, s_tp_y, s_clut_x, s_clut_y, s_tw_mx, s_tw_my, s_tw_ox, s_tw_oy,
                          s_da_x0, s_da_y0, s_da_x1, s_da_y1, s_tp_blend);
-        }
       } else {
       gpu_vk_set_order(core, ord_idx);          // OT submission order -> depth (preserve opaque/semi order)
       if (bg) gpu_vk_set_order_2d_bg(core, ord_idx); else gpu_vk_set_order_2d(core, ord_idx);
@@ -1469,10 +1304,6 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
           cfg_logf("ndepth", "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld", s.set, s.hit, s.miss);
         core->rsub.projprim.statsReset(); }
-      { RenderStats& st = core->rsub.stats;
-        if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          cfg_logf("ndepth", "    obj_depth spans=%ld  2D-prim lookups hit=%ld miss=%ld", st.odAdd, st.odHit, st.odMiss);
-        st.odAdd = st.odHit = st.odMiss = 0; }
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
         for (int o = 0; o < 256; o++) if (s_nd2d_hist[o]) {
           int gour=o&0x10, quad=o&0x08, tex=o&0x04, semi=o&0x02;
@@ -1543,8 +1374,8 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
 // returns before gpu_present (game_tomba2.cpp diff_mode early-return) and so would otherwise NEVER reset
 // s_prim_order / s_seen3d / the depth table — they'd accumulate across frames and corrupt cross-frame
 // ordering (a semi-transparent sea drawn over a sprite, the fisherman-cutscene bug), diverging each SBS
-// pane from its standalone counterpart. The frame counter also drives the per-frame span caches
-// (bg_range / obj_depth), which self-clear only when s_frame advances.
+// pane from its standalone counterpart. The frame counter also drives the per-frame span cache
+// (bg_range), which self-clears only when s_frame advances.
 void GpuState::frame_finalize(Core* core) {
   // per-vertex depth table (native-depth path): clear after this frame's DrawOTag/lookups, before next
   // frame's projections record into it — so a vertex word never reads an OLD frame's depth (submit.cpp
@@ -1663,13 +1494,11 @@ void gpu_scene_dump(Core*, FILE*, uint32_t);
 // DMA channel 2 (GPU): walk an ordering-table linked list from `madr`, feeding each node's
 // GP0 words to the parser. Header word: bits[24..31]=word count, bits[0..23]=next node addr
 // (0xFFFFFF = end).
-void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
+void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
   { static int sd = -2; if (sd == -2) { const char* e = cfg_str("PSXPORT_SCENEDUMP"); sd = e ? atoi(e) : -1; }
     if (sd >= 0 && s_frame == sd) gpu_scene_dump(core, stderr, madr); }
   s_dma2++;
   s_ot_madr = madr & 0x1FFFFC;
-  s_ot_2d_only = twoDOnly;
-  if (twoDOnly) s_ot_2d_drawn = 0;   // count genuine 2D-overlay prims this walk (drawOTag's native-2D fail-fast)
   // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
   // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.
   // (Empty OTs are ~0x800 link-only nodes that DO terminate at the sentinel; a true cycle never terminates.)
@@ -1734,7 +1563,6 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) {
     static int warned = 0;
     if (!warned++) cfg_logw("gpu", "WARN: OT walk hit %d-node cap (madr=0x%08X) — malformed/cyclic ordering table", guard, 0x80000000u | s_ot_madr);
   }
-  s_ot_2d_only = false;   // walk done — the parameter is scoped to this call
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
 void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) {
@@ -1753,7 +1581,7 @@ void gpu_gp1(Core* core, uint32_t w) { core->game->gpu.gpu_gp1(w); }
 // native_step_frame to display the single buffer the engine draws into. The display W/H are unchanged
 // (still driven by the mode/range GP1(0x07/0x08) the boot env sets once).
 void gpu_set_disp_origin(Core* core, int x, int y) { core->game->gpu.s_disp_x = x; core->game->gpu.s_disp_y = y; }
-void gpu_dma2_linked_list(Core* core, uint32_t madr, bool twoDOnly) { core->game->gpu.gpu_dma2_linked_list(core, madr, twoDOnly); }
+void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_linked_list(core, madr); }
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }

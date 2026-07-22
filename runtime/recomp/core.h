@@ -180,7 +180,7 @@ void cpu_div (Core* c, uint32_t n, uint32_t d);
 void cpu_divu(Core* c, uint32_t n, uint32_t d);
 
 // ---- Subsystem entry points that read/write this instance's RAM (need the Core) ----
-void gpu_dma2_linked_list(Core* c, uint32_t madr, bool twoDOnly);
+void gpu_dma2_linked_list(Core* c, uint32_t madr);
 void gpu_dma2_block(Core* c, uint32_t madr, int count, int to_gpu);
 
 } // extern "C"

@@ -9,15 +9,13 @@
 // field WORLD passes (terrainRenderAll + fieldEntityRender + fieldObjectsRender + backdropRender — the SAME
 // calls the real sceneNative makes) under those lerped inputs into the isolated mSink; present_vk merges
 // mSink with mRqCur's remaining prims by (layer,seq): 2D HUD/overlay (screen-space, verbatim, no lerp
-// needed) AND every GUEST-EXECUTION-TIME drawable (#67: the guest-OT obj-depth billboards + the #65
-// dual-emit records — RQ_WORLD but has_xyf==0, no display-pass producer to re-run, so they draw verbatim
-// on BOTH presents; they step at 30Hz until each emitter is ported into the display pass per the
-// REDIRECT doctrine, but they can no longer flicker).
+// needed) AND every GUEST-EXECUTION-TIME drawable (RQ_WORLD but has_xyf==0 — no display-pass producer
+// to re-run, so they draw verbatim on BOTH presents; they step at 30Hz until each emitter is ported
+// into the display pass per the REDIRECT doctrine, but they can no longer flicker).
 // The authored sub-scene (hut interior, sm[0x4c]==3) has NO native world producer and is not tier1-
 // eligible, so it could never be interpolated — it used to present the captured queue verbatim (30fps).
 // Per BREAK-FIRST (USER 2026-07-16) renderHutInterior now aborts-with-identity instead of that partial
 // render; the interior is a rebuild-frontier item, not a 30fps fallback.
-// matchAndLerp (the old provenance/fingerprint output-matching heuristic) is DELETED.
 //
 // TIER 1 (docs/fps60-rework.md "Object-tier attempt 2026-07-14", extended to fieldEntityRender): the
 // QUEUE-LERP heuristic above does not own CAMERA-ONLY world-static geometry — it is replaced there by a
@@ -32,9 +30,9 @@
 // present time no logic tick for "this" iteration has run yet, and re-running either pass re-reads the
 // exact same guest state the real call already read this interval (record arrays: static per-area data,
 // not per-frame mutable state). Host-computed matrices only (the lerped camera); no guest writes — same
-// `DisplayPassGuard` discipline the real terrain call uses. World prims tier-1 now owns (RQ_WORLD,
-// dbg_node==kTerrainDbgNode or kSceneTableDbgNode — see render_queue.h) are excluded from matchAndLerp's
-// queue-lerp entirely (see kTier1Sink in fps60.cpp) so they are drawn exactly once.
+// `DisplayPassGuard` discipline the real terrain call uses. World prims tier-1 owns (RQ_WORLD,
+// dbg_node==kTerrainDbgNode or kSceneTableDbgNode — see render_queue.h) are skipped in the mRqCur
+// merge (see isTier1Owned in fps60.cpp) so they are drawn exactly once.
 //
 // SCREEN-SPACE BACKDROP (the scrolling sky/parallax tilemap, Render::backdropRender — was the file-local
 // render_bg_tilemap_native) is a LAYER-TRANSFORM tier, not a camera tier: the whole layer's only per-frame
@@ -42,12 +40,12 @@
 // interpolated as ONE transform, not per-prim: `tier1Render` re-runs `Render::backdropRender()` (the SAME
 // native pass the real per-logic-frame call uses) with the scroll offset overridden to a WRAP-AWARE lerp
 // of the two real frames' captured offsets (mBgCur/mBgPrev, `bgScroll()`), output redirected into `mSink`
-// alongside terrain/scene-table. It is excluded from the queue-lerp entirely (RQ_BACKGROUND has exactly
-// one producer — layer alone is its identity, see isTier1Owned in fps60.cpp).
+// alongside terrain/scene-table (only backdropRender's OWN prims — kBackdropDbgNode; see isTier1Owned
+// in fps60.cpp).
 //
-// The match heuristic (matchAndLerp) remains for everything tier-1/2 don't yet own (objects, HUD, 2D):
-// docs/fps60-rework.md's "REDIRECT" flags it as hack debt to be replaced, emitter by emitter, by real
-// per-element identity as each quad-emitting guest fn is RE'd and ported native — it is NOT deleted yet.
+// Everything the tier-1 re-run does not own (screen-space HUD/2D, guest-time records) presents
+// VERBATIM from the captured queue on both frame kinds; each such emitter graduates into the
+// display-pass re-run as it is RE'd and ported native (docs/fps60-rework.md "REDIRECT").
 //
 // HOST-ONLY (the READ-ONLY OVERLAY invariant): every capture is a guest READ (at queue-flush time for the
 // per-frame queue snapshot / camera, or at present time for tier1Render's re-read of unchanged state per
@@ -131,8 +129,8 @@ struct Fps60 {
   // ---- PER-OBJECT TRANSFORM choke (UNIFIED-PATH redesign 2026-07-15, docs/fps60-rework.md) ------------
   // The object's world rotation/position (Robj cmd+0x18, Tobj cmd+0x2C), the last INPUT still read live
   // by the render (projComposeObject). Given the SAME capture/override shape as sceneCam so the interp
-  // present can re-run the real object walk with lerped transforms instead of the matchAndLerp output
-  // heuristic. Real projComposeObject call: read live + capture into mObjCur[cmd]. Interp present
+  // present can re-run the real object walk with lerped transforms. Real projComposeObject call:
+  // read live + capture into mObjCur[cmd]. Interp present
   // (mObjOverrideOn): return lerp(mObjPrev[cmd], mObjCur[cmd], mT). `cmd` = the object's stable render-
   // command block (node+0xC0[i]) = its per-object identity across frames.
   struct Fps60Obj { float R[3][3]; float T[3]; };
@@ -142,14 +140,14 @@ struct Fps60 {
 
   // ---- present (interpolated in-between + real frame, paced 60fps 1-frame-behind) --------------------
   RqItem* mRqCur  = nullptr;    // this logic frame's resolved queue snapshot (captured at flush)
-  RqItem* mRqPrev = nullptr;    // previous frame's snapshot (matchAndLerp's Q[N-1])
+  RqItem* mRqPrev = nullptr;    // previous frame's snapshot (Q[N-1])
   int mNCur = 0, mNPrev = 0, mHavePrev = 0;
   void rq_capture(const RqItem* items, int n);      // copy the sorted queue snapshot
   void present_vk(Core* core);                      // build+present the in-between, then the real frame
   int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
 
-  // ---- interp parameter + telemetry (UNIFIED PATH — matchAndLerp deleted 2026-07-15) -----------------
-  // The interp present is now the SAME render re-run under lerped inputs (camera + per-object transforms +
+  // ---- interp parameter + telemetry (UNIFIED PATH, 2026-07-15) ---------------------------------------
+  // The interp present is the SAME render re-run under lerped inputs (camera + per-object transforms +
   // backdrop scroll) into mSink, merged with mRqCur's 2D verbatim — no prim matching. mT is the in-between
   // parameter both the camera lerp (tier1Render) and projObj's per-object lerp share.
   float mT = 0.5f;                    // in-between parameter (t=0.5 for one midpoint at 30->60fps)

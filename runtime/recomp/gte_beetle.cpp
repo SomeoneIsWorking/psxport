@@ -385,9 +385,9 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
                                                      c->rsub.otAttr.trackGte(c);   // self-gated (`debug otattr`)
                                                      // fps60 (docs/fps60-rework.md) does not tap the GTE op
-                                                     // stream for interpolation — it matches/lerps already-
-                                                     // resolved render-queue prims at present time (Fps60::
-                                                     // matchAndLerp), not GTE-composed transforms.
+                                                     // stream for interpolation — the interp present re-runs
+                                                     // the native render under lerped input chokes (camera /
+                                                     // object transform / backdrop scroll).
                                                      if (gd.projprobe < 0) gd.projprobe = cfg_on("PSXPORT_PROJPROBE") ? 1 : 0;
                                                      if (gd.projprobe > 0) {
                                                        // Compare native projection to Beetle's outputs. After RTPS the single vertex

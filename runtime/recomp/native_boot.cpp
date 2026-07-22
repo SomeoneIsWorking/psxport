@@ -82,7 +82,6 @@ static void native_step_frame(Core* c, uint32_t f) {
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)
   xa_bind(c);                           // bind THIS core's XA streamer state (per-instance — no shared XA)
-  c->game->ffspan.resetFrame();   // backdrop-attribution: reset the per-frame builder span table
   void gpu_set_disp_origin(Core* c, int x, int y);
   // Timing::logicFrame is the per-Core frame counter several subsystems consult (audio trace tags,
   // BGM-director gating, findings/debug instrumentation). The standalone frame loop (below, in main())
@@ -124,9 +123,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // this was wired they were orphaned with the override table (a live window ran uncapped + stale). The
   // present happens here (before the OT submit below) so the VK batch shown is the one DrawOTag built last
   // frame, exactly as the override-era ordering did.
-  c->game->ffspan.begin();
   c->hooks->frameUpdate(c);                                   // tick + per-vblank audio + present + pace
-  c->game->ffspan.end("frameupd");
   // Billboard-record frame boundary (#67): the records the guest render walk (pcSched.step below) is
   // about to capture belong to the NEW logic frame; the presents above (fps60's interp re-run included)
   // consumed last frame's. Reset here — after present, before the walk — mirroring the mObjCur rotation.
@@ -137,9 +134,7 @@ static void native_step_frame(Core* c, uint32_t f) {
   // longjmp coroutines, CD loads are synchronous). It stays native at every gate level. What the gate
   // controls is whether the TASK BODIES it steps run as native stage dispatchers + content (full native) or
   // as pure PSX recomp coroutines (psx_fallback on) — see the gate checks inside PcScheduler::step.
-  c->game->ffspan.begin();
   c->game->pcSched.step();                                    // <- replaces FUN_80051e60 (BIOS scheduler)
-  c->game->ffspan.end("scheduler");
   c->game->perf.phaseEnd(3);
   c->hooks->musicCoordTick(c);                                // dialogs stop/restore ingame music
   c->game->cd.audioTrace("coord");                                 // CD-vol fade state AFTER coord

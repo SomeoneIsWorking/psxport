@@ -264,7 +264,7 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
       // ALWAYS sets coro_redirect_pc (= 0x801063F4), so the original r[31] fallback branch was dead.
       if (c->coro_redirect_pc) { start = c->coro_redirect_pc; c->coro_redirect_pc = 0; }
     }
-    c->game->ffspan.begin(); rec_coro_run(c, start); c->game->ffspan.end("coro");
+    rec_coro_run(c, start);
     c->mem_w16(base, 0);                                          // task returned (jr ra sentinel)
     c->game->pcSched.task_started[i] = 0;
   }

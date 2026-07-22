@@ -77,9 +77,9 @@ struct RqItem {
   int      da_x0, da_y0, da_x1, da_y1;                // draw-area clip
   int      tp_blend;                                  // semi blend mode
 
-  // dbg_node: the per-instance ENTITY NODE ptr this prim belongs to (0 = unknown/un-owned). Doubles as the
-  // objid overlay's display identity AND Fps60::matchAndLerp's primary provenance-match key (paired with
-  // the prim's emission index within that node) — docs/fps60-rework.md "Prim matching".
+  // dbg_node: the per-instance ENTITY NODE ptr this prim belongs to (0 = unknown/un-owned) — the
+  // objid overlay's display identity, and the tier1-ownership discriminator for fps60's present merge
+  // (kTerrainDbgNode/kSceneTableDbgNode/kBackdropDbgNode sentinels).
   uint32_t dbg_node;
 
   // GAME SORT KEY (kanban #11): the OT bucket index the GAME'S OWN submitter computes for this face

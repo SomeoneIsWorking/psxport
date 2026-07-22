@@ -39,7 +39,6 @@
 #include "dbg_server.h"            // class DbgServer — live TCP debug endpoint (127.0.0.1)
 #include "gpu_perf.h"              // class GpuPerf — per-frame CPU phase profiler (`debug perf`)
 #include "verify_harness.h"        // class VerifyHarness — shared A/B verify scaffold (game/core)
-#include "ffspan.h"                // class FfSpan — PSXPORT_BDTAG builder-span attribution (game/render)
 
 class Sbs;                          // forward decl — Game holds `sbs` back-pointer set by Sbs::run
 #include <stdint.h>
@@ -98,7 +97,6 @@ public:
   DbgServer   dbg_server;   // live TCP debug endpoint (PSXPORT_DEBUG_SERVER=<port>)
   GpuPerf     perf;         // per-frame CPU phase / frame-time profiler (REPL `debug perf`)
   VerifyHarness verify;     // shared A/B verify scaffold: snapshot buffers + per-check counters
-  FfSpan      ffspan;       // PSXPORT_BDTAG per-frame builder-span attribution
   Sbs*        sbs = nullptr;// SBS harness back-pointer (nullptr in standalone; set by Sbs::run)
   GteRegs     gte{}; // GTE (COP2) register file — per-instance so two cores keep SEPARATE GTE state
                      // (Beetle gte.c bound to this via GTE_BindState; see gte_bind, gte_beetle.cpp)
@@ -182,7 +180,7 @@ public:
            spu_audio.game = this;
            rml_overlay.game = this; platform_hle.game = this;
            memcard.game = this;
-           dbg_server.game = this; verify.core = &core; ffspan.core = &core;
+           dbg_server.game = this; verify.core = &core;
            if (!GpuDevice::sInstance) GpuDevice::sInstance = &gpu_dev;   // first Game claims the host device
            mods.init();   // per-Game mod state: factory defaults + the player's settings file
            disc_state_init(&disc); cdc_state_init(&cdc); xa_state_init(&xa);

@@ -213,7 +213,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     s_dma2_chcr = v;
     if (v & 0x01000000u) {                         // start/busy
       int sync = (v >> 9) & 3, to_gpu = v & 1;
-      if (sync == 2) gpu_dma2_linked_list(this, s_dma2_madr, /*twoDOnly=*/false);   // ordering-table linked list — full walk
+      if (sync == 2) gpu_dma2_linked_list(this, s_dma2_madr);   // ordering-table linked list — full walk
       else if (sync == 1) gpu_dma2_block(this, s_dma2_madr,         // block: BC = blocks*size
                (int)((s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16)), to_gpu);
       else gpu_dma2_block(this, s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu);  // immediate
@@ -255,18 +255,9 @@ uint32_t Core::mem_r32(uint32_t a) {
   if (!p) return io_read(a, 4);
   uint32_t v; memcpy(&v, p, 4); return v;
 }
-// PC-native per-OBJECT depth: while armed (during one render-command dispatch, submit.cpp ov_render_cmd),
-// record the address span of stores landing in the packet/OT pool [0x800BFE68,0x800E7E68) (RE'd render-buffer
-// map). The unowned overlay renderers write their GP0 packets HERE but WITHOUT advancing the pool pointer
-// 0x800BF544 — so the pointer can't bound them, but the stores can. The span is then tagged with the object's
-// world-position depth so its 2D billboard prims occlude for real at the deferred OT walk (gpu_native).
-// g_pkt_track/lo/hi retired — per-Core Render::pktSpan (a real PktSpan class, method-oriented).
-// Every store routes through Core::mem_w* -> pktSpan.track(addr, bytes); the class is a no-op unless
-// armed by a PktSpanSession or ffspan span.
+// OT/GTE submission attribution (`debug otattr`, game/render/ot_attr.h): attribute a packet-pool store
+// to the current otattr-shadow-stack fn + render-walk node. No-op unless the channel is on.
 static inline void pkt_track(Core* c, uint32_t a, uint32_t bytes) {
-  c->rsub.pktSpan.track(a, bytes);
-  // OT/GTE submission attribution (`debug otattr`, game/render/ot_attr.h): attribute this pool store
-  // to the current otattr-shadow-stack fn + render-walk node. No-op unless the channel is on.
   c->rsub.otAttr.trackStore(c, a, bytes);
 }
 

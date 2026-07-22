@@ -6,7 +6,7 @@
 // (terrain+scene-table+objects+backdrop) into mSink under those lerped inputs, and present_vk merges it
 // with mRqCur's 2D (HUD/overlay, screen-space, verbatim). The authored sub-scene (hut interior) has no
 // native world producer and now aborts-with-identity (renderHutInterior, break-first) rather than
-// presenting a non-interpolatable 30fps render. No prim matching (matchAndLerp deleted). Host-only,
+// presenting a non-interpolatable 30fps render. No prim matching. Host-only,
 // gated g_mods.fps60.
 #include "core.h"
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
@@ -211,12 +211,7 @@ void Fps60::tier1Render(Core* core, float t) {
 }
 
 
-// Per-frame node-emission-index: walk items in their captured (already paint-ordered) sequence, counting
-// per dbg_node — objects emit their prims in stable order frame-to-frame (submit.cpp's per-object render
-// walk), so (dbg_node, running count) is a stable identity while the object lives. dbg_node==0 (no
-// provenance: terrain/static/background prims, or a billboard the OT walk couldn't stamp) gets the "no
-// node" sentinel — those are matched separately, by fingerprint + order-of-appearance (key strength 3).
-// TIER 1 EXCLUSION RULE (fps60.h "Object-tier attempt", extended to fieldEntityRender): RQ_WORLD prims
+// TIER 1 OWNERSHIP RULE (fps60.h "Object-tier attempt", extended to fieldEntityRender): RQ_WORLD prims
 // tagged kTerrainDbgNode OR kSceneTableDbgNode (render_queue.h) are EXACTLY the prims Fps60::tier1Render
 // re-renders — native_terrain.cpp and Render::fieldEntityRender each scope their own
 // diag.beginObject(...)/endObject() around their quad loop, and BOTH the real per-logic-frame call and
@@ -229,7 +224,7 @@ void Fps60::tier1Render(Core* core, float t) {
 // emitter, as each one gets RE'd+ported per docs/fps60-rework.md's "REDIRECT" doctrine.
 // BACKDROP = TIER 1 (LAYER-TRANSFORM lerp, docs/fps60-rework.md): the scrolling sky/parallax tilemap
 // (Render::backdropRender) is screen-space, GAME-LOGIC-DRIVEN scroll — not camera-projected geometry — so
-// it is never matched/lerped per-prim by the queue-lerp heuristic below; it is re-rendered as ONE layer
+// it is never lerped per-prim; it is re-rendered as ONE layer
 // through the SAME native pass with the scroll offset overridden to a lerp of the two real frames'
 // captured offsets (Fps60::tier1Render), output landing in the same mSink as terrain/scene-table.
 // #54 CORRECTION: "RQ_BACKGROUND has exactly one producer" was FALSE — the generic guest-OT walk
@@ -239,8 +234,7 @@ void Fps60::tier1Render(Core* core, float t) {
 // interpolated frame with no fallback (tier1Render never re-renders them — mTier1EligibleCur is field-
 // only) — the title-menu screen went backdrop-less at 60fps, only its HUD text surviving. Fixed: only
 // backdropRender's OWN prims (tagged kBackdropDbgNode, render_walk.cpp) are tier1-owned; every other
-// RQ_BACKGROUND item keeps dbg_node==0 and falls through to the normal per-prim match+lerp/verbatim-
-// fallback path below, same as any other un-owned 2D content.
+// RQ_BACKGROUND item keeps dbg_node==0 and presents verbatim, same as any other un-owned 2D content.
 static inline bool isTier1Owned(const RqItem& it) {
   // fps60 step 2b: tier1Render re-renders the native display-pass world (terrain + scene-table + OBJECTS
   // via fieldObjectsRender) under lerped inputs, so those prims are tier1-owned and come from mSink.
@@ -303,13 +297,10 @@ void Fps60::frame_commit(Core* core) {
   mFrameGeom = 0;
 }
 
-// STAGE 2 (docs/fps60-rework.md "Match+lerp stage"): slot A draws lerp(Q[N-1], Q[N], t=0.5) — matched
-// prim pairs (see matchAndLerp) interpolate their screen-space verts + depth; prims with no confident
-// cross-frame match draw at Q[N-1] as-is (stage 1's "verbatim replay" behavior, now the fallback for the
-// unmatched case rather than the whole frame). No guest reads at present time, no second render path — an
-// interpolated frame is built ENTIRELY from the two real queues' own captured data, through the exact same
-// per-item draw call (`q.emitItem`) slot B uses for Q[N]; it cannot show a game state neither real frame
-// had.
+// Slot A (the in-between): the tier-1 world re-run under lerped inputs (mSink) merged with the
+// captured queue's verbatim remainder. No guest reads at present time, no second render path — an
+// interpolated frame is built through the exact same per-item draw call (`q.emitItem`) slot B uses
+// for Q[N]; it cannot show a game state neither real frame had.
 void Fps60::present_vk(Core* core) {
   Core* c = core;
   RenderQueue& q = c->game->rq;
@@ -317,7 +308,7 @@ void Fps60::present_vk(Core* core) {
 
   // Gate-B test knob (TEMPORARY, internal — see docs/config.md): PSXPORT_FPS60_TFORCE=0 pins the whole
   // present (camera lerp + queue-prim lerp share mT) to Q[N-1]'s endpoint, =1 to Q[N]'s, so a run can be
-  // pixel-diffed against the adjacent real frame to prove tier1Render/matchAndLerp ARE the real path at
+  // pixel-diffed against the adjacent real frame to prove the tier1 re-run IS the real path at
   // the endpoints, not an approximation. Unset -> default 0.5 (the shipped midpoint).
   int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
   if (tforce == 0) mT = 0.0f; else if (tforce == 1) mT = 1.0f; else if (tforce < 0) mT = 0.5f;
@@ -325,8 +316,8 @@ void Fps60::present_vk(Core* core) {
   // ---- PASS 1 (slot A): TIER 1 (terrain, camera-lerped, into mSink) + lerp(Q[N-1], Q[N]) by matched prim
   // for everything tier1 doesn't own, Q[N-1] as-is otherwise -----------------------------------------------
   // First frame after enabling fps60 (no Q[N-1]/mCamPrev captured yet, mHavePrev==0): degenerate to
-  // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than matching/lerping against
-  // an empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame (stage-1 first-frame case).
+  // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than lerping against an
+  // empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame.
   const RqItem* slotA; int nSlotA;
   mTier1PrimsThisFrame = 0;
   if (mHavePrev) {
@@ -335,8 +326,8 @@ void Fps60::present_vk(Core* core) {
     // interpolated through the SAME render path the real frame used (lerp lives in the INPUTS, not a per-
     // prim output match). Slot A = mSink (that lerped world) merged with mRqCur's REMAINING prims — the 2D
     // HUD/overlay, which are screen-space and presented VERBATIM (no lerp needed) — in (layer, seq) paint
-    // order. isTier1Owned marks the world prims that come from mSink so we skip them in mRqCur. No
-    // matchAndLerp: nothing is fingerprint-matched anymore. (mTier1EligibleCur gates the field re-render;
+    // order. isTier1Owned marks the world prims that come from mSink so we skip them in mRqCur —
+    // nothing is fingerprint-matched. (mTier1EligibleCur gates the field re-render;
     // when false — hut interior / narration / title — there is NO re-run, so nothing is tier1-owned:
     // consult no sink (mSink still holds the LAST eligible frame's world — merging it painted the stale
     // field exterior into non-field interp frames, the #50 bug class) and skip nothing from mRqCur (the

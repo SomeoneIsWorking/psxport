@@ -118,7 +118,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/proj_prim.cpp
   ${PSXPORT_ROOT}/runtime/recomp/pgxp.cpp
   ${PSXPORT_ROOT}/runtime/recomp/proj_params.cpp
-  ${PSXPORT_ROOT}/runtime/recomp/pkt_span.cpp
   ${PSXPORT_ROOT}/runtime/recomp/ot_attr.cpp
   ${PSXPORT_ROOT}/runtime/recomp/hw_bind.cpp
   ${PSXPORT_ROOT}/runtime/recomp/repl.cpp
@@ -134,7 +133,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/rmlui_render_gpu.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_glue.cpp
   ${PSXPORT_ROOT}/runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
-  ${PSXPORT_ROOT}/runtime/recomp/ffspan.cpp           # PSXPORT_BDTAG builder-span attribution (P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/pc_scheduler.cpp     # PC-native cooperative task scheduler; stage bodies via hooks (P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/verify_harness.cpp   # A/B verify scaffold (skip/observable half split to game verify_skip.cpp) (P1.7c)

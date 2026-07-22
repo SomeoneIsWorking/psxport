@@ -46,7 +46,7 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 | `game/ai/` | per-object BEHAVIORS (AI/logic) | 49 `beh_*.cpp` — one per object handler. The native beh registry lives in `game/object/behavior_dispatch.cpp`; `ents` flags each live object owned/PSX. |
 | `game/object/` | object SYSTEM | `object_list.cpp` (object-list walk + field-frame object dispatchers), `behavior_dispatch.cpp`, `array8_dispatch.cpp`, `animation.cpp`, `actor_sm_24448.cpp`, `script_vm.cpp`. |
 | `game/world/` | entity lifecycle | `entity.cpp`, `pool.cpp`, `spawn.cpp`, `placement.cpp`, `graphics_bind.cpp`, `object_table.cpp`, `area_slots.cpp`. |
-| `game/render/` | rendering | `submit`, `render_frame`, `render_walk`, `projection`, `cull`, `fps60`, `margin_render`, `render_queue`, `lighting`, `native_terrain`, `screen_fade`, `ffspan`, `pgxp`; + `render_native.cpp`, `scene_build.cpp`, `mesh_draw.cpp` (folder is FLAT — no `scene/`/`mesh/` subdirs). |
+| `game/render/` | rendering | `submit`, `render_frame`, `render_walk`, `projection`, `cull`, `fps60`, `margin_render`, `render_queue`, `lighting`, `native_terrain`, `screen_fade`, `pgxp`; + `render_native.cpp`, `scene_build.cpp`, `mesh_draw.cpp` (folder is FLAT — no `scene/`/`mesh/` subdirs). |
 | `game/camera/` | per-frame CAMERA follow | `cutscene_camera.cpp`. |
 | `game/scene/` | stage/scene state machines | `demo`, `level_load`, `startup`, `mode_state_arm`, `bg_scene_transition_sm`, `scene_transition`, `scene_events`, `script_interp`, `parallax_bg`, `sop` (intro cutscene). (The GAME-stage sm moved to `game/core/engine.cpp`.) |
 | `game/audio/` | sound + music | `sfx.cpp`, `audio_dispatch.cpp`, `music_coord.cpp`, `music_list.cpp`, `native_music.cpp`, `native_audio.c`. |

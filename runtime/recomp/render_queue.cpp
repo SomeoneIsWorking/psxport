@@ -393,12 +393,11 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   // preseqobj (per-object motion tracker, tools/preseqobj_check.py): when a `preseq` capture is armed AND
   // the `preseqobj` channel is on, log one line per emitted RqItem keyed to the present index this pass
   // will dump. present index >= 0 only while armed, so the cfg_dbg scan is skipped entirely otherwise —
-  // zero cost in a normal run. The tracker groups by `key` (dbg_node = object identity — the same field
-  // Fps60::matchAndLerp keys its provenance match on; 0 = an un-keyed 2D/HUD prim) and follows each
-  // object's screen x/y across consecutive presents to flag sign-alternating (oscillation) or stall-step
-  // (snapping) motion. Both 60fps present passes (interp + real) emit through here, so their prims are
-  // logged under their own present index — the interp pass is exactly what matchAndLerp's match quality
-  // determines, so this instrument doubles as its match-quality debugger (docs/fps60-rework.md REDIRECT).
+  // zero cost in a normal run. The tracker groups by `key` (dbg_node = object identity; 0 = an
+  // un-keyed 2D/HUD prim) and follows each object's screen x/y across consecutive presents to flag
+  // sign-alternating (oscillation) or stall-step (snapping) motion. Both 60fps present passes
+  // (interp + real) emit through here, so their prims are logged under their own present index —
+  // this instrument doubles as the interp pass's quality debugger (docs/fps60-rework.md).
   { int pi = gpu_vk_preseq_present_index(core);
     if (pi >= 0 && cfg_dbg("preseqobj"))
       // scene=1 (== has_xyf): a float-projected display-pass world prim — rebuilt at the interp present
@@ -541,12 +540,11 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   //   HUD/overlay -> +margin (centered, native size — matches 4:3 exactly, just registered with the
   //                  centered world);
   //   RQ_BACKGROUND (dbg_node==0 full-screen art/fades) -> STRETCH to fill [0,ww).
-  // EXEMPT (already wide-final coords): the guest-OT walk (s_ot_2d_only in flight — its call sites
-  // apply ws_2d_local_x with the #38/#52 fill subtleties) and backdropRender's REAL wide tiles
-  // (kBackdropDbgNode via the diag scope). 3D (RQ_OM_DEPTH) never enters. 4:3: margin==0, no-op.
+  // EXEMPT (already wide-final coords): backdropRender's REAL wide tiles (kBackdropDbgNode via the
+  // diag scope). 3D (RQ_OM_DEPTH) never enters. 4:3: margin==0, no-op.
   int wxs[4]; float wxsf[4];
   { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
-    if (order_mode != RQ_OM_DEPTH && gpu_vk_wide_engine(core) && !core->game->gpu.s_ot_2d_only &&
+    if (order_mode != RQ_OM_DEPTH && gpu_vk_wide_engine(core) &&
         core->rsub.diag.currentNode() != kBackdropDbgNode) {
       const int ww = gpu_vk_wide_engine_w(core), margin = (ww - 320) / 2;
       if (margin > 0) {

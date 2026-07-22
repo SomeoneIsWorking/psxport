@@ -1,13 +1,13 @@
 // OtAttr implementation — see ot_attr.h for the design. Separated from the header so the header can
-// stay a forward-declared-Core, dependency-light include (same split as pkt_span.h/.cpp).
+// stay a forward-declared-Core, dependency-light include.
 #include "ot_attr.h"
 #include "render_node.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
 
-// Packet pool range — SAME bytes PktSpan watches (game/render/pkt_span.h): the shared render-buffer
-// map every GP0 packet submitter (owned native or still-substrate) writes into.
+// Packet pool range (RE'd render-buffer map): the shared pool every GP0 packet submitter
+// (owned native or still-substrate) writes into.
 static constexpr uint32_t POOL_LO = 0x800BFE68u;
 static constexpr uint32_t POOL_HI = 0x800E7E68u;
 
@@ -46,9 +46,9 @@ void OtAttr::trackStore(Core* c, uint32_t addr, uint32_t bytes) {
   // MAJORITY of world-object quads (the exact case bug #45 cares about).
   const uint32_t node   = cur_render_node(c);
 
-  // Coalesce a run of stores sharing the same attribution into one growing span (mirrors PktSpan's own
-  // span-merge idea) — a quad's header/vertex/color words collapse to a single entry instead of one
-  // per store, which is what keeps SPAN_CAP from blowing out on a normal frame.
+  // Coalesce a run of stores sharing the same attribution into one growing span — a quad's
+  // header/vertex/color words collapse to a single entry instead of one per store, which is what
+  // keeps SPAN_CAP from blowing out on a normal frame.
   if (mSpanCount > 0) {
     Span& last = mSpans[mSpanCount - 1];
     if (last.fn == fn && last.caller == caller && last.node == node && k >= last.lo && k <= last.hi) {
