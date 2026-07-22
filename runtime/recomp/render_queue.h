@@ -167,6 +167,16 @@ struct RenderQueue {
   // key's shared ord. Zero bias, zero constants: every value is the game's own computation.
   void resolveKeyOrder(Core* core);
 
+  // finalize — turn a fully-submitted queue into a DRAWABLE one: resolve the game's authored face
+  // order, then sort. THE one place that answers "what does a finished queue look like", so a real
+  // frame and an interpolated frame cannot drift apart in how they are built (the fps60 principle:
+  // no difference between the two except the lerp, and the lerp lives in the INPUTS). Both callers
+  // are the two queue-finishing sites: RenderQueue::flush for the real frame, and Fps60::tier1Render
+  // for the re-rendered world of the in-between frame. Adding a third ordering step belongs HERE, not
+  // at a call site — kanban #17 is what happens when it doesn't (resolveKeyOrder ran only on the real
+  // frame, so the barrel's snapped faces alternated every other frame and flickered at 60fps).
+  void finalize(Core* core);
+
 private:
   // Debug OBJECT-ID overlay (REPL `debug objid`) — pure host HUD quads appended at flush time.
   static bool objidSolid(Core* core, const RqItem* ref, int x0, int y0, int x1, int y1,

@@ -346,12 +346,18 @@ void RenderQueue::zfightScan(Core* core) {
       cfg_logi("zfight", "  heatmap -> %s", path); } }
 }
 
-void RenderQueue::flush(Core* core) {
-  // Game-sort-key order resolution (kanban #11) runs FIRST, on the complete frame, so the snapped
-  // depths reach both the fps60 capture branch and the plain emit path identically.
+// finalize — see the header. Game-sort-key order resolution (kanban #11) runs FIRST, on the complete
+// queue, so the snapped depths reach every consumer of that queue identically; the sort follows.
+void RenderQueue::finalize(Core* core) {
   resolveKeyOrder(core);
-  if (n && objid_on(core)) objidOverlay(core);   // debug: label each object with its engine ID
   sortQueue();
+}
+
+void RenderQueue::flush(Core* core) {
+  // debug: label each object with its engine ID. Appended BEFORE finalize so the overlay's quads take
+  // part in the same sort as everything else; resolveKeyOrder ignores them (HUD, no game sort key).
+  if (n && objid_on(core)) objidOverlay(core);
+  finalize(core);
   // zfightScan reads only the sorted item array (depth/xy/order_mode set at submission time) — it does not
   // depend on emitItem having run — so it belongs HERE, right after sortQueue, not inside emitQueue. This is
   // the one placement that scans the exact same (sorted, real-frame) item set under BOTH the fps60 capture

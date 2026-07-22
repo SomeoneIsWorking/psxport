@@ -181,7 +181,10 @@ void Fps60::tier1Render(Core* core, float t) {
   c->game->rqRedirect = prevRedirect;
   c->rsub.projParams.restore(projSaved);
 
-  mSink->sortQueue();
+  // The SAME finish the real frame's flush applies — order resolution then sort. Sorting alone left the
+  // interpolated world without kanban #11's authored-order snap, so a face pair the real frame reorders
+  // reverted on every in-between frame: that is #17's barrel flicker at 60fps.
+  mSink->finalize(c);
   // Split mSink's telemetry by producer: RQ_BACKGROUND (backdrop) vs RQ_WORLD (terrain+scene-table) — the
   // two producers sharing the sink, distinguished the same way the debug print already reported them.
   mBackdropPrimsThisFrame = 0;

@@ -366,10 +366,17 @@ void Pad::serviceFrame() {
     if (mHoldMask != PAD_NONE && mFc >= mHoldAt) setButtons(mHoldMask);
     else setButtons((mFc % 32u) < 8u ? mForceMask : PAD_NONE);
   }
-  // REPL pad control: a tap (countdown) overrides the held mask while active.
+  // REPL pad control: a tap (countdown) overrides the held mask while active. The effective REPL
+  // mask is also kept aside so a replay in progress MERGES it (below) instead of swallowing it:
+  // an explicit press/tap issued at the REPL is user intent NOW, and silently dropping it while
+  // rep_buf still has frames left (a replay pads its full file length, mostly idle tail) misled
+  // two sessions into "the game doesn't react" conclusions. Determinism is unaffected when no
+  // REPL command is issued (mask stays PAD_NONE = no-op).
+  uint16_t repl_mask = PAD_NONE;
   if (repl_on) {
-    if (repl_tap_n > 0) { setButtons(repl_tap); repl_tap_n--; }
-    else setButtons(repl_hold);
+    if (repl_tap_n > 0) { repl_mask = repl_tap; repl_tap_n--; }
+    else repl_mask = repl_hold;
+    setButtons(repl_mask);
   }
   mFc++;
 
@@ -433,7 +440,9 @@ void Pad::serviceFrame() {
       }
     }
     if (rep_buf && rec_fc < rep_n) {
-      buttons = rep_buf[rec_fc];            // force the recorded mask (overrides host/repl/force)
+      // Force the recorded mask (overrides host/force), but MERGE live REPL drive on top: active-low
+      // AND = union of pressed bits. A replay's idle tail no longer makes press/tap dead commands.
+      buttons = rep_buf[rec_fc] & repl_mask;
     }
     if (rec_fp) { uint16_t m = buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
     // Always keep the mask in memory too, file sink or not: this is what the debug server's `padrec
