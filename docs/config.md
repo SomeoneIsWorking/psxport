@@ -373,6 +373,12 @@ host half): glyph xy/wh/uv/clut every 128th push. Silent = no native text pushes
 `panelq` (game/ui/panel.cpp) — rate-limited probe of the panel taps (`Panel::pushFill`/`pushCorners`,
 FUN_8004FFB4/FUN_8005019C): rect/style/attr/semi/raw every 128th push. Silent = no panel drawn.
 
+`pausemenu` (game/ui/pause_menu.cpp) — one line per UI template group the in-game pause/item menu
+draws, printed in the GUEST'S PAINT ORDER (OT bucket descending, LIFO within a bucket): kind
+(FT4/SPR), bucket, template pointer, anchor, size override, attribute byte and clut/semi word.
+Silent = the menu controller FUN_800346BC drew nothing this run. The bucket column is the field to
+read when a menu layer composites in the wrong order.
+
 `gaugeq` (game/render/hud_gauge_emitter.cpp) — rate-limited probe of the FUN_8004EB94 text-row tap
 (the gauge's centered 8x8-glyph label/digits row): desc ptr/y/width every 64th row. Silent = no
 gauge text drawn this run.
