@@ -293,8 +293,12 @@ void RenderQueue::zfightScan(Core* core) {
         float ord=l0*it->depth[i0]+l1*it->depth[i1]+l2*it->depth[i2];
         float d32=0.0625f+ord*(0.9375f-0.0625f);
         int k=y*W+x;
-        if (d32>d1[k]) { d2[k]=d1[k]; p2[k]=p1[k]; d1[k]=d32; p1[k]=idx; }
-        else if (d32>d2[k]) { d2[k]=d32; p2[k]=idx; }
+        // >= not >: the rasterizer's depth test is GREATER_OR_EQUAL and prims are visited in paint order,
+        // so on an exact tie the LATER prim owns the pixel. Modelling that with a strict > made the scan
+        // report every exactly-tied pair as painted against submission order (the earlier prim held d1),
+        // which is the opposite of what actually gets drawn.
+        if (d32>=d1[k]) { d2[k]=d1[k]; p2[k]=p1[k]; d1[k]=d32; p1[k]=idx; }
+        else if (d32>=d2[k]) { d2[k]=d32; p2[k]=idx; }
       }
     }
   }
@@ -307,7 +311,7 @@ void RenderQueue::zfightScan(Core* core) {
   std::vector<unsigned char> heat(W*H*3, 0);
   int nfight=0, paint_stable_raw=0, ps_b[4]={0,0,0,0};
   int ntie=0, ptie_raw=0, ptie_b[4]={0,0,0,0};          // gap<1e-5 subset = the true (flickery) ties
-  struct Pair{int a,b,cnt; float gap;}; std::vector<Pair> pairs;
+  struct Pair{int a,b,cnt,inv; float gap;}; std::vector<Pair> pairs;
   for (int k=0;k<W*H;k++){
     if (p1[k]<0||p2[k]<0||p1[k]==p2[k]) continue;
     if (boxset==1){ int x=k%W, y=k/W; if(x<bx0||x>bx1||y<by0||y>by1) continue; }
@@ -320,13 +324,19 @@ void RenderQueue::zfightScan(Core* core) {
       bool tie = gap < 1e-5f; if (tie) ntie++;
       if (d_later >= d_earlier) { paint_stable_raw++; if (tie) ptie_raw++; }
       for (int u=0;u<4;u++) if (d_later + later_idx*Usw[u] >= d_earlier + earlier_idx*Usw[u]) { ps_b[u]++; if(tie) ptie_b[u]++; }
-      nfight++; heat[k*3]=255; heat[k*3+1]= (unsigned char)fminf(255.f, gap/eps*255.f); heat[k*3+2]=0;
+      nfight++; heat[k*3]=255; heat[k*3+1]= (unsigned char)fminf(255.f, gap/eps*255.f);
+      // BLUE = the contest the depth buffer resolves AGAINST submission order (the earlier-submitted prim
+      // wins the pixel). Submission order IS the game's intra-bucket paint order, so these pixels are the
+      // ones where the picture contradicts the guest's own ordering — the visible z-fight, as opposed to
+      // the (far more numerous) harmless coincident-surface contests the paint order already settles.
+      heat[k*3+2] = (d_later >= d_earlier) ? 0 : 255;
       int a=p1[k], b=p2[k]; if(a>b){int t2=a;a=b;b=t2;}
       int found=-1; for(size_t i=0;i<pairs.size();i++) if(pairs[i].a==a&&pairs[i].b==b){found=(int)i;break;}
-      if(found<0){ pairs.push_back({a,b,1,gap}); } else { pairs[found].cnt++; pairs[found].gap=fminf(pairs[found].gap,gap); }
+      int inv = (d_later >= d_earlier) ? 0 : 1;
+      if(found<0){ pairs.push_back({a,b,1,inv,gap}); } else { pairs[found].cnt++; pairs[found].inv+=inv; pairs[found].gap=fminf(pairs[found].gap,gap); }
     }
   }
-  std::sort(pairs.begin(),pairs.end(),[](const Pair&a,const Pair&b){return a.cnt>b.cnt;});
+  std::sort(pairs.begin(),pairs.end(),[](const Pair&a,const Pair&b){return a.inv!=b.inv ? a.inv>b.inv : a.cnt>b.cnt;});
   auto pc=[](int a,int b){ return b?100.f*a/b:0.f; };
   cfg_logi("zfight", "f%d eps=%.6g fight=%d ties(<1e-5)=%d | ALL paint-stable raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%% | TIES raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%%", s.s_frame, eps, nfight, ntie,
     pc(paint_stable_raw,nfight), pc(ps_b[0],nfight), pc(ps_b[1],nfight), pc(ps_b[2],nfight), pc(ps_b[3],nfight),
@@ -335,10 +345,10 @@ void RenderQueue::zfightScan(Core* core) {
   for (size_t i=0;i<pairs.size()&&i<10;i++){
     const RqItem&A=items[pairs[i].a]; const RqItem&B=items[pairs[i].b];
     int an=A.nv?A.nv:4, bn=B.nv?B.nv:4;
-    cfg_logi("zfight", "  pair px=%d gap>=%.7f", pairs[i].cnt, pairs[i].gap);
-    cfg_logi("zfight", "    A node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", A.dbg_node,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
+    cfg_logi("zfight", "  pair px=%d order-inverted=%d gap>=%.7f", pairs[i].cnt, pairs[i].inv, pairs[i].gap);
+    cfg_logi("zfight", "    A node=%08X key=%d key_ord=%.6f col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", A.dbg_node,A.sort_key,(double)A.key_ord,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
       A.xs[0],A.ys[0],A.xs[1],A.ys[1],A.xs[2],A.ys[2],an==4?A.xs[3]:0,an==4?A.ys[3]:0);
-    cfg_logi("zfight", "    B node=%08X col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", B.dbg_node,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
+    cfg_logi("zfight", "    B node=%08X key=%d key_ord=%.6f col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", B.dbg_node,B.sort_key,(double)B.key_ord,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
       B.xs[0],B.ys[0],B.xs[1],B.ys[1],B.xs[2],B.ys[2],bn==4?B.xs[3]:0,bn==4?B.ys[3]:0);
   }
   if (nfight>0) { char path[128]; snprintf(path,sizeof path,"scratch/screenshots/zfight/heat_f%d.ppm",s.s_frame);
@@ -654,6 +664,29 @@ static bool rq_ord_at(const RqItem* it, float x, float y, float* out) {
   return false;
 }
 
+// Do two faces occupy the IDENTICAL polygon — same vertex count, and every vertex of one matching a
+// vertex of the other in screen position AND depth? Exact comparison on the values the rasterizer
+// actually consumes (float XY when the producer supplied sub-pixel XY, integer XY otherwise), so this
+// is a structural test, not a proximity test: a decal filed on the face it decorates matches, ordinary
+// neighbouring or overlapping geometry does not. Vertex ORDER is deliberately ignored — a rotated
+// listing of the same corners is precisely the case that defeats the depth buffer (see the caller).
+static bool rq_faces_coincident(const RqItem& A, const RqItem& B) {
+  const int nv = A.nv ? A.nv : 4;
+  if ((B.nv ? B.nv : 4) != nv) return false;
+  auto vx = [](const RqItem& P, int i) { return P.has_xyf ? P.xsf[i] : (float)P.xs[i]; };
+  auto vy = [](const RqItem& P, int i) { return P.has_xyf ? P.ysf[i] : (float)P.ys[i]; };
+  if (A.has_xyf != B.has_xyf) return false;
+  bool used[4] = { false, false, false, false };
+  for (int i = 0; i < nv; i++) {
+    int m = -1;
+    for (int j = 0; j < nv && m < 0; j++)
+      if (!used[j] && vx(A, i) == vx(B, j) && vy(A, i) == vy(B, j) && A.depth[i] == B.depth[j]) m = j;
+    if (m < 0) return false;
+    used[m] = true;
+  }
+  return true;
+}
+
 void RenderQueue::resolveKeyOrder(Core* core) {
   (void)core;
   // Gather this frame's keyed world faces, grouped by object. Real guest nodes only — the reserved
@@ -690,7 +723,25 @@ void RenderQueue::resolveKeyOrder(Core* core) {
       for (size_t b = a + 1; b < g1; b++) {
         const RqItem& A = items[kf[a].idx];
         const RqItem& B = items[kf[b].idx];
-        if (A.sort_key == B.sort_key) continue;               // same bucket: real depth is status quo
+        if (A.sort_key == B.sort_key) {
+          // SAME OT BUCKET (kanban #29 — the hut-interior wall decals). The key says nothing about which
+          // face is in front: the guest resolves a bucket internally by LINK order, which our submission
+          // order (RqItem::seq, the array order after sortQueue) reproduces, and GREATER_OR_EQUAL already
+          // hands the pixel to the later face wherever the two interpolate equal. Real depth is therefore
+          // the status quo here — EXCEPT for one case the depth buffer cannot get right at all: a face
+          // pair that is EXACTLY COINCIDENT (a decal quad filed on the wall quad it decorates, same four
+          // projected corners, same four depths) but listed with ROTATED vertex order. The quad
+          // triangulation is fixed at (0,1,2)+(1,2,3), so a rotation splits the two faces on OPPOSITE
+          // diagonals; their interiors then interpolate differently and the EARLIER face wins the half
+          // where its diagonal runs nearer. Measured in the hut interior (f1200, node 800FD850): the top
+          // contesting pair is key 408 vs key 408, identical corners, 115 of 541 pixels painted against
+          // submission order. Coincident faces carry no depth information to preserve, so both snap to
+          // their key's shared ord and submission order — the guest's own intra-bucket order — decides
+          // every pixel. Coincidence is tested EXACTLY (identical vertex multiset, position AND depth):
+          // no epsilon, and ordinary geometry can never satisfy it.
+          if (rq_faces_coincident(A, B)) { snap[a] = 1; snap[b] = 1; }
+          continue;
+        }
         // near = the face the game files NEARER (smaller OT index); far = the other.
         const KF& nf = A.sort_key < B.sort_key ? kf[a] : kf[b];
         const KF& ff = A.sort_key < B.sort_key ? kf[b] : kf[a];

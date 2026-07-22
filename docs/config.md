@@ -449,6 +449,12 @@ Z-FIGHT diagnostics + fix knob (coplanar barrel/decoration surfaces; see docs/fi
   frame from `RenderQueue::flush` right after `sortQueue()` (before the `mods.fps60` capture short-circuit),
   so it fires under fps60 too — it scans the sorted item array only, independent of emission.
   (render_queue.cpp `RenderQueue::zfightScan`.) Pure host diagnostic, no guest write.
+  Each reported pair also carries the game's own OT sort key (`key=` / `key_ord=`, kanban #11) and an
+  `order-inverted=<n>` count — pixels the depth buffer awards to the EARLIER-submitted prim, i.e. against
+  the guest's own paint order; pairs are ranked by that count, since it is the subset that can actually
+  look wrong. The heatmap's BLUE channel marks exactly those pixels (red/green stay the fight/gap map).
+  The scan's top-2 update uses `>=`, matching the rasterizer's GREATER_OR_EQUAL test, so an exactly-tied
+  pair reads as later-prim-wins rather than being mis-reported as an inversion.
 - `PSXPORT_ZBIAS=<f>` — tunes the SHIPPED paint-order depth-tiebreak unit (default 4e-7; 0 disables the
   tiebreak). The fix is ON by default (this is a magnitude knob, not a behavior A/B gate); larger values
   resolve more coplanar ties but risk overrunning genuine world depth separations (span = unit × prim
