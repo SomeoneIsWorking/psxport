@@ -12,10 +12,12 @@
 // needed) AND every GUEST-EXECUTION-TIME drawable (RQ_WORLD but has_xyf==0 — no display-pass producer
 // to re-run, so they draw verbatim on BOTH presents; they step at 30Hz until each emitter is ported
 // into the display pass per the REDIRECT doctrine, but they can no longer flicker).
-// The authored sub-scene (hut interior, sm[0x4c]==3) has NO native world producer and is not tier1-
-// eligible, so it could never be interpolated — it used to present the captured queue verbatim (30fps).
-// Per BREAK-FIRST (USER 2026-07-16) renderHutInterior now aborts-with-identity instead of that partial
-// render; the interior is a rebuild-frontier item, not a 30fps fallback.
+// STALE CLAIM, CORRECTED 2026-07-22: this used to say the authored sub-scene (hut interior, sm[0x4c]==3)
+// has NO native world producer, could never be interpolated, and that renderHutInterior aborts-with-
+// identity. Measured false while root-causing kanban #29 — every interior prim arrives through the native
+// keyed submit path with a real dbg_node (800FD850) and a real sort_key, and the interior renders
+// correctly under pc_render. Whether it is tier1-ELIGIBLE is a separate question from whether it has a
+// producer; do not re-derive the first from the second.
 //
 // TIER 1 (docs/fps60-rework.md "Object-tier attempt 2026-07-14", extended to fieldEntityRender): the
 // QUEUE-LERP heuristic above does not own CAMERA-ONLY world-static geometry — it is replaced there by a
@@ -106,8 +108,10 @@ struct Fps60 {
   long mTier1PrimsThisFrame = 0;     // telemetry: WORLD (terrain+scene-table) prims tier1Render drew into mSink
   // #50: tier1Render re-renders the native FIELD passes (terrain/scene-table) on the interp frame. During an
   // authored OT sub-scene (hut interior, #49) or any beat where the real frame did NOT run sceneNative, there
-  // is no native field to re-render — running it anyway draws the exterior field on interp frames only
-  // (every-other-frame flicker to the exterior). Set true per real frame from the render dispatch
+  // is no native FIELD to re-render — running it anyway draws the exterior field on interp frames only
+  // (every-other-frame flicker to the exterior). Note what this does NOT say: the sub-scene has its own
+  // native producer and its own keyed prims (measured in #29), they simply present verbatim from the
+  // captured queue rather than through the field re-run. Set true per real frame from the render dispatch
   // (game_tomba2.cpp) IFF the native field render ran this frame; tier1Render is skipped otherwise.
   bool mTier1EligibleCur = true;
   void tier1Render(Core* core, float t);   // re-run terrainRenderAll() under lerp(mCamPrev,mCamCur,t) into mSink
