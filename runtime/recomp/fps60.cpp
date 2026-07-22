@@ -8,6 +8,14 @@
 // native world producer and now aborts-with-identity (renderHutInterior, break-first) rather than
 // presenting a non-interpolatable 30fps render. No prim matching. Host-only,
 // gated g_mods.fps60.
+//
+// ONE SITE (USER 2026-07-22: "there should be just one site, the only difference should be whether to
+// lerp"). Both presents call Fps60::presentPass(c, t) and NOTHING else distinguishes them: the real frame
+// is presentPass(c, 1.0f), where every lerped input resolves to its current value. The real frame used to
+// be a separate replay of the captured queue, which meant two ways of building a frame and — bug #17 —
+// two places for them to drift. Verified pixel-exact, not asserted: 12 sampled frames of the hut replay
+// are 0-diff against the pre-refactor build, and under PSXPORT_FPS60_TFORCE=1 the two presents agree
+// 0/76800 over 10 consecutive frames.
 #include "core.h"
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
 #include "render_mode.h"   // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
@@ -314,15 +322,50 @@ void Fps60::present_vk(Core* core) {
   // pixel-diffed against the adjacent real frame to prove the tier1 re-run IS the real path at
   // the endpoints, not an approximation. Unset -> default 0.5 (the shipped midpoint).
   int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
-  if (tforce == 0) mT = 0.0f; else if (tforce == 1) mT = 1.0f; else if (tforce < 0) mT = 0.5f;
+  const float tInterp = (tforce == 0) ? 0.0f : (tforce == 1) ? 1.0f : 0.5f;
 
   // ---- PASS 1 (slot A): TIER 1 (terrain, camera-lerped, into mSink) + lerp(Q[N-1], Q[N]) by matched prim
   // for everything tier1 doesn't own, Q[N-1] as-is otherwise -----------------------------------------------
   // First frame after enabling fps60 (no Q[N-1]/mCamPrev captured yet, mHavePrev==0): degenerate to
   // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than lerping against an
   // empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame.
-  const RqItem* slotA; int nSlotA;
+  presentPass(c, tInterp);
+  gpu_fps60_present_pass(c);
+  dumpPresent(c, /*interp=*/true);
+  if (mDbg) cfg_logi("fps60", "f%ld slotA: replay prev=%s n=%d tier1=%ld backdrop=%ld t=%.3f", mFence,
+                     mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", mNCur, mTier1PrimsThisFrame,
+                     mBackdropPrimsThisFrame, mT);
+  gpu_pace_subframe(c, 2);
+
+  // ---- PASS 2 (slot B): the real frame. SAME call, t=1 — every lerped input resolves to its current
+  // value, so this is the in-between at its near endpoint rather than a separate replay of the captured
+  // queue. That is what makes the symmetry structural instead of a property two code paths happen to
+  // share.
+  presentPass(c, 1.0f);
+  gpu_present_ex(c, 1);
+  dumpPresent(c, /*interp=*/false);
+  gpu_pace_subframe(c, 2);
+
+  presentRotate();
+}
+
+// THE one pass body — see fps60.h. Builds this present's item stream at parameter `t` and emits it.
+// The world (terrain + scene-table + field entities + objects + backdrop) is RE-RENDERED through the
+// game's own passes with every input served lerp(prev, cur, t) at its capture/override choke; everything
+// with no display-pass producer yet — screen-space 2D/HUD, and guest-execution-time drawables that only
+// exist because the guest body ran — replays verbatim from the captured queue, identically on both
+// presents. Those verbatim prims are the REDIRECT backlog (fps60.h): each graduates into the re-render as
+// its emitter is RE'd and ported, and until then it steps at the logic rate on BOTH frame kinds. That
+// residual is honest and symmetric; it is not a second way of building a frame.
+void Fps60::presentPass(Core* c, float t) {
+  RenderQueue& q = c->game->rq;
+  // mT is the parameter of the pass being built right now — the camera choke (sceneCam), the per-object
+  // transform choke (projObj) and the backdrop scroll choke (bgScroll) all read it. Setting it here is
+  // what makes `t` the single knob: nothing else distinguishes the two presents.
+  mT = t;
   mTier1PrimsThisFrame = 0;
+  // First frame after enabling fps60 there is no Q[N-1]/mCamPrev to lerp from (mHavePrev==0), so the
+  // re-render has no second endpoint and the captured queue replays whole for exactly one frame.
   if (mHavePrev) {
     // fps60 UNIFIED PATH (docs/fps60-rework.md): the field frame's WORLD — terrain + scene-table + OBJECTS
     // + backdrop — is re-run by tier1Render into mSink under the lerped camera + per-object transforms, ALL
@@ -337,7 +380,7 @@ void Fps60::present_vk(Core* core) {
     // hut's own perObjFlush world prims must present verbatim, or the interior vanishes every other
     // frame). The whole captured queue replays as-is — the documented degenerate lerp.)
     const bool tier1 = mTier1EligibleCur;
-    if (tier1) tier1Render(c, mT);
+    if (tier1) tier1Render(c, t);
     const int sinkN = (tier1 && mSink) ? mSink->n : 0;
     int ia = 0, ib = 0;
     for (;;) {
@@ -354,24 +397,15 @@ void Fps60::present_vk(Core* core) {
       if (takeSink) q.emitItem(c, &mSink->items[ia++]);
       else          q.emitItem(c, &mRqCur[ib++]);
     }
-    slotA = mRqCur; nSlotA = mNCur;   // telemetry only
   } else {
-    slotA = mRqCur;  nSlotA = mNCur;
-    for (int i = 0; i < nSlotA; i++) q.emitItem(c, &slotA[i]);
+    for (int i = 0; i < mNCur; i++) q.emitItem(c, &mRqCur[i]);
   }
-  gpu_fps60_present_pass(c);
-  dumpPresent(c, /*interp=*/true);
-  if (mDbg) cfg_logi("fps60", "f%ld slotA: replay prev=%s n=%d tier1=%ld backdrop=%ld t=%.3f", mFence, mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", nSlotA, mTier1PrimsThisFrame,
-                    mBackdropPrimsThisFrame, mT);
-  gpu_pace_subframe(c, 2);
+}
 
-  // ---- PASS 2 (slot B): the real frame (the captured queue, exactly as drawOTag built it) ---------------
-  for (int i = 0; i < mNCur; i++) q.emitItem(c, &mRqCur[i]);
-  gpu_present_ex(c, 1);
-  dumpPresent(c, /*interp=*/false);
-  gpu_pace_subframe(c, 2);
-
-  // ---- rotate captures: POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) -------
+// ---- rotate captures, once per logic frame after both presents ----------------------------------------
+void Fps60::presentRotate() {
+  Core* c = &game->core;
+  // POINTER SWAP, not memcpy (avoids the double-copy churn of the old design) ---------------------------
   // mRqCur (just-drawn Q[N]) becomes next frame's mRqPrev; the buffer mRqPrev used to point at (now-stale,
   // two-frames-old content that's never read again) becomes rq_capture's next overwrite target. mCamCur/
   // mCamPrev and mBgCur/mBgPrev rotate in lockstep — both were written by THIS frame's own

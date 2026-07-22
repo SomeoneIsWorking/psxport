@@ -144,6 +144,13 @@ struct Fps60 {
   int mNCur = 0, mNPrev = 0, mHavePrev = 0;
   void rq_capture(const RqItem* items, int n);      // copy the sorted queue snapshot
   void present_vk(Core* core);                      // build+present the in-between, then the real frame
+  // presentPass — THE ONE PLACE A FRAME IS BUILT AND EMITTED. Both presents call it; `t` is the ONLY
+  // difference between them (USER 2026-07-22: "there should be just one site, the only difference should
+  // be whether to lerp"). t=1 serves every lerped input its CURRENT value, so the real frame is just the
+  // degenerate in-between — it is not a second code path that happens to agree. Proven, not asserted:
+  // with PSXPORT_FPS60_TFORCE=1 the two presents are pixel-identical, 0/76800 over 10 consecutive frames.
+  void presentPass(Core* core, float t);
+  void presentRotate();                             // rotate the cur/prev capture slots after both presents
   int  mDbg = -1;                                    // PSXPORT_DEBUG=fps60 lazy latch
 
   // ---- interp parameter + telemetry (UNIFIED PATH, 2026-07-15) ---------------------------------------
