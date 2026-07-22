@@ -45,7 +45,13 @@ namespace overrides {
 typedef void (*Setter)(uint32_t, OverrideFn);
 
 // Wire addr -> { native, gen }. `name` is the trace/ovhit label (may be nullptr -> the address is
-// shown). Re-installing the same address overwrites (idempotent — register_overrides() runs once per
+// shown). Re-installing the same address with the SAME handlers is idempotent and silent
+// (register_overrides() runs once per Game, and several sites self-guard). Re-installing it with
+// DIFFERENT handlers ABORTS: two native owners of one address is never intended, the second silently
+// wins, and the loser's work just disappears from the picture — it costs days because nothing else
+// catches it (no build error, no warning, and SBS stays green since both write the same guest state).
+// Give the address one owner that dispatches to both instead; game/render/mesh_emit_tap.cpp is the
+// worked example. (USER 2026-07-23; the old wording said overwriting was fine — it was not.) Legacy:
 // Game, twice under SBS full, into the one global table).
 //
 // `setter` selects how DIRECT `func_X(c)` callers are handled:

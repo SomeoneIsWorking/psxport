@@ -122,6 +122,39 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
     static bool s_atexit = false;
     if (!s_atexit) { s_atexit = true; atexit(dump_atexit); }
   }
+  else {
+    // ALREADY OWNED. A second install on one address used to overwrite silently, and silence is the
+    // whole problem: it does not fail the build, does not warn, and does not break SBS — both owners
+    // write the same guest state, so the byte-compare stays green — it surfaces only as a missing
+    // effect or a layer drawn in the wrong place, days later and far from the cause. It has now cost
+    // this project real time three separate times: kanban #28 (the dialog box drew over its own text
+    // because a readable rebuild installed a second display pass on 0x8004FFB4), and then twice in one
+    // integration when two independently-verified producers each claimed 0x80027768 and each claimed
+    // the shared UI leaf. Per FAIL-FAST (CLAUDE.md), be loud instead. (USER 2026-07-23.)
+    //
+    // Re-installing the SAME handlers is fine and stays silent: several install() sites are idempotent
+    // by design (a `static bool done` guard, or register_overrides running per Game), and re-running
+    // one is not an ownership conflict. Only a CHANGE of owner aborts.
+    const Entry& e = g_tab[slot];
+    if (e.native != native || e.gen != gen) {
+      // Most call sites reach here through engine_set_override_<mod>, which passes no name — so print
+      // the handler POINTERS too (resolve with `addr2line -fe scratch/bin/tomba2_port <ptr>`) and name
+      // the tool that lists both owners from source. A fatal you cannot act on is only half a fix.
+      cfg_logi("overrides",
+               "FATAL: guest 0x%08X already has a native owner — a second install tried to take it.\n"
+               "  incumbent: '%s'  native=%p gen=%p\n"
+               "  newcomer : '%s'  native=%p gen=%p\n"
+               "  Two native owners of one address is never intended: the second silently wins and the\n"
+               "  first's work just disappears from the picture, with no build error, no warning, and a\n"
+               "  GREEN SBS (both write the same guest state). Give the address ONE owner that dispatches\n"
+               "  to both — game/render/mesh_emit_tap.cpp is the worked example — or delete the loser.\n"
+               "  Who owns it in source:  python3 tools/codemap.py --addr %08X\n"
+               "  Resolve a pointer:      addr2line -fe scratch/bin/tomba2_port <ptr>",
+               k, e.name ? e.name : "<unnamed>", (void*)e.native, (void*)e.gen,
+               name ? name : "<unnamed>", (void*)native, (void*)gen, k);
+      abort();
+    }
+  }
   g_tab[slot].addr = k;
   g_tab[slot].name = name;
   g_tab[slot].native = native;
