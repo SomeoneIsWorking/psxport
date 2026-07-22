@@ -246,12 +246,15 @@ long Repl::read(Core* c, uint32_t f) {
         c->game->psx_fallback = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
       cfg_logi("repl", "psx_fallback = %d", c->game->psx_fallback);
     }
-    // renderpsx on|off — render the FIELD via the PSX recomp path (vs the native world-coord path) with the
-    // SAME native game state, for a native-vs-PSX RENDER diff (must match at 1x/4:3/30fps). Diagnostic.
+    // renderpsx [on|off] — render the FIELD via the PSX recomp path (vs the native world-coord path) with
+    // the SAME native game state, for a native-vs-PSX RENDER diff (must match at 1x/4:3/30fps). Diagnostic.
+    // A BARE `renderpsx` TOGGLES. It used to only print the flag, which silently turned every A/B script
+    // that relied on the bare form into a pc-vs-pc compare (kanban #26 was manufactured that way).
     else if (!strcmp(cmd, "renderpsx")) {
       char st[16] = {0};
-      if (sscanf(line, "%*s %15s", st) == 1)
-        c->rsub.mode.setPsxRender(!(!strcmp(st, "off") || !strcmp(st, "0")));
+      const bool have_arg = sscanf(line, "%*s %15s", st) == 1;
+      const bool want = have_arg ? !(!strcmp(st, "off") || !strcmp(st, "0")) : !c->rsub.mode.psxRender();
+      c->rsub.mode.setPsxRender(want);
       cfg_logi("repl", "Render::psxRender = %d", c->rsub.mode.psxRender());
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
