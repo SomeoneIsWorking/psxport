@@ -468,9 +468,14 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
           interp_ord = l0*d0 + l1*d1 + l2*d2;
           d32 = 0.0625f + interp_ord * (0.9375f - 0.0625f);   // ord3d
         }
-        cfg_logi("primat-rq", "f%d dbgnode=%08X layer=%d om=%d semi=%d tri=%d vdepth=[%.6f %.6f %.6f] interp_ord=%.6f D32=%.6f col=(%d,%d,%d) xy0=(%d,%d) xy2=(%d,%d)", s.s_frame, it->dbg_node, it->layer, it->order_mode, it->semi, t0,
+        // Texture identity is part of "what am I looking at": a face that draws BLACK is either losing a
+        // depth contest or sampling the wrong page/CLUT, and the two are indistinguishable without it.
+        cfg_logi("primat-rq", "f%d seq=%u dbgnode=%08X layer=%d om=%d semi=%d tri=%d nv=%d vdepth=[%.6f %.6f %.6f] interp_ord=%.6f D32=%.6f col=(%d,%d,%d) raw=%d mode=%d tp=(%d,%d) clut=(%d,%d) uv=[(%d,%d) (%d,%d) (%d,%d) (%d,%d)] xy=[(%d,%d) (%d,%d) (%d,%d) (%d,%d)]",
+          s.s_frame, it->seq, it->dbg_node, it->layer, it->order_mode, it->semi, t0, nv,
           d0, d1, d2, interp_ord, d32,
-          rs[0],gs[0],bs[0], xs[0],ys[0], xs[2],ys[2]); } } } }
+          rs[0],gs[0],bs[0], raw, mode, it->tp_x, it->tp_y, it->clut_x, it->clut_y,
+          us[0],vs[0], us[1],vs[1], us[2],vs[2], us[3],vs[3],
+          xs[0],ys[0], xs[1],ys[1], xs[2],ys[2], xs[3],ys[3]); } } } }
   unsigned ord = s.s_prim_order++;
   gpu_vk_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near

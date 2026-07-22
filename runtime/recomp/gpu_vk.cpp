@@ -1077,10 +1077,15 @@ void GpuVkState::set_xyf(const float* xf, const float* yf) { s_xf = xf; s_yf = y
 // Exposed (non-static) for the zfight scanner (render_queue.cpp) so it can model the fix without a re-run.
 float gpu_zbias_unit() { static float u = -1.f; if (u < 0.f) { const char* e = cfg_str("PSXPORT_ZBIAS");
                                                                 u = e ? (float)atof(e) : 4e-7f; if (u < 0.f) u = 0.f; } return u; }
-#define ZBIAS_MAX 1.5e-3f
+// The cap is a SWEEP knob too (PSXPORT_ZBIAS_MAX): raising the unit alone changes nothing once the
+// accumulated bias saturates, so a "can paint order resolve this at all?" experiment needs both. The
+// shipped default is unchanged; only a deliberate sweep moves it.
+static float zbias_max() { static float m = -1.f; if (m < 0.f) { const char* e = cfg_str("PSXPORT_ZBIAS_MAX");
+                                                                 m = e ? (float)atof(e) : 1.5e-3f; if (m < 0.f) m = 0.f; } return m; }
 void GpuVkState::set_order(unsigned idx) { s_cur_ord = (float)(idx + 1) / 65536.0f; if (s_cur_ord > 1.0f) s_cur_ord = 1.0f;
                                            s_cur_ordn = s_cur_ord; s_vd = 0; s_vdn = 0; s_xf = 0; s_yf = 0;
-                                           float b = (float)idx * gpu_zbias_unit(); s_depth_bias = b > ZBIAS_MAX ? ZBIAS_MAX : b; }
+                                           const float cap = zbias_max();
+                                           float b = (float)idx * gpu_zbias_unit(); s_depth_bias = b > cap ? cap : b; }
 void GpuVkState::set_order_2d(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                               s_cur_ord = NATIVE_3D_MAX + (1.0f - NATIVE_3D_MAX) * t; s_vd = 0; }
 void GpuVkState::set_order_2d_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;

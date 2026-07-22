@@ -439,6 +439,12 @@ Z-FIGHT diagnostics + fix knob (coplanar barrel/decoration surfaces; see docs/fi
   tiebreak). The fix is ON by default (this is a magnitude knob, not a behavior A/B gate); larger values
   resolve more coplanar ties but risk overrunning genuine world depth separations (span = unit × prim
   count, capped at 1.5e-3). (gpu_vk.cpp `gpu_zbias_unit`.)
+- `PSXPORT_ZBIAS_MAX=<f>` — the accumulated-bias cap (default 1.5e-3). SWEEP KNOB ONLY: raising
+  `PSXPORT_ZBIAS` alone changes nothing for a late-frame prim, because the bias has already saturated
+  at the cap by then, so a "could paint order resolve this contest at all?" experiment must raise both.
+  A cap large enough to answer that question is far too large to ship — it reorders genuinely separated
+  world geometry (demonstrated on the waterpump barrel, `docs/findings/render.md`). (gpu_vk.cpp
+  `zbias_max`.)
 
 `preseqobj` (per-object fps60 motion tracker, `RenderQueue::emitItem` in game/render/render_queue.cpp) —
 when this channel is on AND a REPL `preseq <N>` present-sequence capture is armed, every render-queue emit
