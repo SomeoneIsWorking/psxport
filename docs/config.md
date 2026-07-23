@@ -694,7 +694,16 @@ or level — they can't be a bare channel:
     chain even where guest pc/ra are stale under native execution) plus a `[wwatch-regs]` line with
     a0-a3/s0-s7 — the fastest way to attribute a write when pc/ra lie.
   - `PSXPORT_DEBUG=script` — one line per ScriptInterp::step opcode dispatch (obj, cursor, opword,
-    ret). Native-step configs only; the oracle steps scripts in the substrate and logs nothing.
+    ret), PLUS one `advance` line per entry advance from `ScriptInterp::loadNextEntry` (cursor, opword,
+    advance kind, new cursor, advanceStep index). The dispatch line is native-step configs only, but the
+    advance line also covers scripts driven by the SUBSTRATE step loop, since `loadNextEntry` owns guest
+    `FUN_80040E54` — that is what made kanban #60 visible after `script` had printed nothing for the two
+    actors involved.
+  - `PSXPORT_DEBUG=rendez` — script op 0x04, the two-party scene-flag RENDEZVOUS (`ScriptInterp::
+    op04SceneFlagRendezvous`): one `post` line per phase-0 write and one `meet` line when a phase-1 await
+    is satisfied. The `post` line prints the value being OVERWRITTEN, because a clobbered post is
+    invisible in state alone — it looks exactly like a partner that has not posted yet. Use it whenever
+    a cutscene parks while the frame loop keeps ticking (see docs/findings/scene.md "SEQUENCE softlock").
   - **`PSXPORT_CW_MAX=<n>`** (`cfg_int`, default 64; `0` = unlimited) — how many `CW` store-watchpoint
     hits to print. The old hard-coded 64 truncated exactly when the interesting store happened late
     in a session (chasing the save-sign confirm write, every printed hit was load-time noise).
