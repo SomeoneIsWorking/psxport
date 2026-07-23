@@ -1327,7 +1327,16 @@ uint16_t Sbs::Impl::btnBit(const char* n) const {
 void Sbs::Impl::parseKeys() {
   mKeysParsed = true;
   const char* e = getenv("PSXPORT_SBS_KEYS"); if (!e || !*e) return;
-  char buf[2048]; strncpy(buf, e, sizeof buf - 1); buf[sizeof buf - 1] = 0;
+  // Generous cap: a COVERAGE gate route (tap-through-intro + a walk) runs to thousands of chars, and
+  // a silent truncation there drops the tail of the route — the worst failure for a gate whose whole
+  // job is reach. Warn if the env actually exceeds it rather than truncating unseen.
+  const size_t bufsz = 65536;
+  std::vector<char> bufv(bufsz);
+  char* buf = bufv.data();
+  if (strlen(e) >= bufsz - 1)
+    cfg_logw("sbs", "PSXPORT_SBS_KEYS is %zu bytes — capped at %zu; the tail of the route is DROPPED.",
+             strlen(e), bufsz - 1);
+  strncpy(buf, e, bufsz - 1); buf[bufsz - 1] = 0;
   for (char* p = strtok(buf, ","); p; p = strtok(0, ",")) {
     uint32_t from = 0, to = 0; char name[32] = {0};
     if (sscanf(p, "%u-%u:%31s", &from, &to, name) == 3) {
