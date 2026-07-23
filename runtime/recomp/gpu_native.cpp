@@ -1001,6 +1001,25 @@ void GpuState::gp0_exec(Core* core) {
       if (i >= s_fcount) break;
       vx[nv] = cx(s_fifo[i]); vy[nv] = cy(s_fifo[i]); vr[nv] = r; vg[nv] = g; vb[nv] = b; nv++; i++;
     }
+    // `debug lineprim` — LINE-PRIMITIVE CENSUS (diagnostic only, never draws). Answers "which guest fn
+    // emits the GP0 lines pc_render has no producer for" without hand-walking the OT: the packet's own
+    // pool address (s_fifo_addr[0], stamped by the OT walk) is looked up in the otattr store-span table,
+    // which carries {emitter fn, caller fn, render-walk node}. Run with `debug otattr,lineprim` — the
+    // span table is only populated while the `otattr` channel is on.
+    if (cfg_dbg("lineprim")) {
+      OtAttr::Span sp{};
+      uint32_t pkt = s_fifo_addr[0];
+      bool attributed = pkt && core->rsub.otAttr.lookupStore(pkt & 0x1FFFFC, &sp);
+      uint32_t node = attributed ? sp.node : 0;
+      CfgLine ln; cfg_line_reset(&ln);
+      cfg_line_addf(&ln, "f%d op=0x%02X nv=%d semi=%d gouraud=%d pkt=0x%08X fn=0x%08X caller=0x%08X node=0x%08X beh=0x%08X V[",
+                    s_frame, op, nv, semi, gouraud, 0x80000000u | (pkt & 0x1FFFFC),
+                    attributed ? sp.fn : 0, attributed ? sp.caller : 0, node,
+                    node ? core->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0);
+      for (int s = 0; s < nv; s++) cfg_line_addf(&ln, "(%d,%d)c(%d,%d,%d) ", vx[s], vy[s], vr[s], vg[s], vb[s]);
+      cfg_line_addf(&ln, "] off=(%d,%d) blend=%d", s_off_x, s_off_y, s_tp_blend);
+      cfg_line_flush(&ln, "lineprim");
+    }
     for (int s = 0; s + 1 < nv; s++) {        // flat colour = start vertex
       if (sw_path())
         raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
