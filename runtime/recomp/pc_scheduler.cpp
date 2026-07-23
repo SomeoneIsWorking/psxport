@@ -14,6 +14,7 @@
 #include "override_registry.h" // overrides::install — the one native-override registry
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdlib.h>   // abort — the fail-fast on a wait that can never complete
 
 // ---- Ported guest scheduler primitives (docs/faithful-execution.md) --------------------------
 // Byte-shape source: generated recomp bodies gen_func_80051F80 / 80051F14 / 80044BD4 / 80052010 /
@@ -155,9 +156,84 @@ void PcScheduler::bd4Tail(uint32_t taskBase, uint32_t flag) {
   }
 }
 
+// runTaskInline — run the task armed in `slot` to completion HERE, inside the caller's call, and
+// leave the caller's task context exactly as it was. See onFlatTask() in pc_scheduler.h for when
+// (and why) a wait must do this instead of parking.
+//
+// The body runs on its own Coro fiber — set up exactly like the slot stanzas do, FRESH at the slot's
+// entry with its own guest sp (slot+0x08), the caller's gp and the 0xDEAD0000 return sentinel, or
+// RESUMED at the saved r31 of a slot that already ran and parked (the drain loop's case; restarting
+// such a task at its entry would run its first half twice). Because it is a fiber, a body that parks
+// mid-way keeps its C stack and is resumed by the pump below rather than truncated. A parked body is
+// re-armed immediately instead of after its sleep countdown: collapsing the multi-FRAME handshake
+// into one step is the whole point — the waiting caller cannot survive a frame boundary.
+//
+// The body ends either by returning (jr ra to the sentinel) or by self-closing (FUN_80051FB4 sets
+// state 0 and scheduler_yield unwinds the fiber) — both leave the slot ENDED, so the per-frame sweep
+// will not run it a SECOND time.
+static constexpr int kInlineTaskPumpLimit = 4096;   // a body still parked after this waits on a frame
+void PcScheduler::runTaskInline(int slot) {
+  Core* c = &game->core;
+  const uint32_t base  = TASKBASE + (uint32_t)slot * TASKSTRIDE;
+  const uint32_t entry = c->mem_r32(base + 0x0C);
+  const bool     fresh = !task_started[slot];
+
+  const R3000    caller_regs = static_cast<R3000&>(*c);
+  const uint32_t caller_task = c->mem_r32(kCurTaskPtr);
+  const int      caller_slot = cur_slot;
+  const int      caller_coro = cur_is_coro;
+
+  if (fresh) {
+    task_ctx[slot] = caller_regs;                     // inherit gp, as a fresh task does
+    task_ctx[slot].r[29] = c->mem_r32(base + 8);      // the slot's own guest stack
+    task_ctx[slot].r[31] = 0xDEAD0000u;
+  }
+  const uint32_t start_pc = fresh ? entry : task_ctx[slot].r[31];
+  if (coro[slot]) { delete coro[slot]; coro[slot] = nullptr; }   // ~Coro cancels a blocked fiber
+  task_started[slot] = 1;
+  native_fiber[slot] = 0;
+  c->mem_w16(base, 4);                                // RUNNING
+  c->mem_w32(kCurTaskPtr, base);
+  cur_slot = slot;
+  cur_is_coro = 1;
+  static_cast<R3000&>(*c) = task_ctx[slot];
+  cfg_logf("sched", "inline task slot %d %s pc=0x%08X sp=0x%08X", slot,
+           fresh ? "start" : "resume", start_pc, c->r[29]);
+
+  Coro* co = new Coro();
+  coro[slot] = co;
+  Core* cc = c;
+  co->start([cc, start_pc] { rec_coro_run(cc, start_pc); });
+  int pumps = 0;
+  while (true) {
+    co->resume();
+    if (co->done() || c->mem_r16(base) == 0) break;   // returned, or self-closed
+    if (++pumps >= kInlineTaskPumpLimit) {
+      cfg_loge("sched", "FATAL: inline task 0x%08X (slot %d) still parked after %d resumes — it "
+                        "waits on something only a frame boundary provides; own that leaf "
+                        "synchronously instead of leaving it async.", entry, slot, pumps);
+      abort();
+    }
+    c->mem_w16(base + 0x02, 0);                       // collapse the sleep countdown
+    c->mem_w16(base, 2);                              // re-arm RUNNABLE (what FUN_800506D0 does)
+  }
+  c->mem_w16(base, 0);                                // ENDED (a plain return leaves it RUNNING)
+
+  cur_is_coro = caller_coro;
+  cur_slot    = caller_slot;
+  delete co;
+  coro[slot]         = nullptr;
+  task_started[slot] = 0;
+  native_fiber[slot] = 0;
+  c->mem_w32(kCurTaskPtr, caller_task);
+  static_cast<R3000&>(*c) = caller_regs;
+}
+
 // FUN_80044BD4 — spawn a slot-1 task and wait for its done_flag. Frame: sp-=40, spills at
 // +16..+32 hold the caller's LIVE s0..s3 + ra; the body then keeps fn/flag/p2/p3 in s-regs
 // (r18/r19/r17/r16) so nested callee spills (spawnPrim's s0 etc.) hold live values too.
+// The two wait loops park on yieldPrim when the running task CAN suspend, and complete the awaited
+// task inline when it cannot (onFlatTask / runTaskInline — kanban #50).
 void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag) {
   Core* c = &game->core;
   c->r[29] -= 40;
@@ -167,6 +243,7 @@ void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t f
   c->mem_w32(c->r[29] + 16, c->r[16]); c->r[16] = p3;
   c->mem_w32(c->r[29] + 32, c->r[31]);
   while (c->mem_r16(kTask1State) != 0) {           // drain: a live task-1 finishes first
+    if (onFlatTask()) { runTaskInline(1); continue; }
     c->r[4] = 1; c->r[31] = 0x80044C10u;
     yieldPrim(1);
   }
@@ -191,6 +268,15 @@ void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t f
           c->mem_w16(kWaitFrameCtr, (uint16_t)(c->mem_r16(kWaitFrameCtr) + 1));
           c->r[31] = 0x80044CA0u;
           rec_dispatch(c, 0x8007FD54u);                    // flag==2 per-wait-frame service
+        }
+        if (onFlatTask()) {
+          runTaskInline(1);                                // flat task: complete the body now
+          if (c->mem_r8(kDoneFlag) == 0) {
+            cfg_loge("sched", "FATAL: spawned task 0x%08X ended without raising the done flag — "
+                              "the wait at FUN_80044BD4 can never complete.", fn);
+            abort();
+          }
+          break;
         }
         c->r[4] = 1; c->r[31] = 0x80044CA8u;
         yieldPrim(1);                                      // parks the fiber one frame

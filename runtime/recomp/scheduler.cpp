@@ -23,8 +23,6 @@
 // (e.g. 0x80051FA4). The native path avoids this entirely: each stage runs as a synchronous per-frame
 // native dispatcher (DEMO/GAME/SOP) and the GAME field re-enters at its loop top (game_coop), never a
 // mid-function resume. See docs/findings/recomp.md "full-PSX coroutine resume".
-void rec_coro_run(Core* c, uint32_t pc);
-
 // --- Native cooperative scheduler (replaces FUN_80051e60) without ucontext ------------------
 // Tomba2 runs up to 3 cooperative tasks (objs @0x801fe000, stride 0x70): task0 = the stage
 // sequencer (START/DEMO/GAME), task1/2 = sub-tasks it spawns (asset loaders etc.). Each is an

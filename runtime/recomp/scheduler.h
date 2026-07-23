@@ -8,6 +8,11 @@ struct R3000;
 #define CUR_TASK 0x1f800138u   // DAT_1f800138: scheduler current-task ptr
 void scheduler_yield(Core* c);              // FUN_80080880 ChangeThread override — the universal task-switch/yield primitive
 
+// Enter a recompiled/overridden cooperative-task body at its top and run it until it returns or
+// parks in a yield (dispatch.cpp). The task-slot stanzas start their fibers on this; so does
+// PcScheduler's inline spawned-task runner.
+void rec_coro_run(Core* c, uint32_t pc);
+
 // Substrate task-slot stanzas (scheduler.cpp), called from PcScheduler::step when no PC-native
 // stanza claims the slot. Each returns 1 when it processed the tick, 0 to fall through.
 int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,

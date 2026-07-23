@@ -65,6 +65,27 @@ public:
   // exactly (frame descent, ra/s-reg spills of the LIVE register values, task-slot writes) so a
   // strict SBS byte-compare holds. Callers must have c->r[31] set to the guest call-site constant
   // of THEIR RE'd body before calling (the primitives spill it), exactly as a jal would.
+  // ---- Cooperative waits reached from a FLAT task (kanban #50) ---------------------------------
+  // A cooperative wait suspends by saving the guest registers and handing control back to the
+  // scheduler. HOW it hands control back depends on the running task's parking mechanism:
+  //   * Coro fiber (pc_faithful stages, task-1 bodies, core B's substrate tasks) — the fiber
+  //     BLOCKS, its whole C stack alive, and the next resume continues mid-body. A wait works.
+  //   * FLAT setjmp task (the pc_skip DEMO/GAME/SOP/STAGE-0 per-frame dispatchers) — scheduler_yield
+  //     LONGJMPS to the stanza's setjmp and the C++ stack is GONE. Everything after the wait in that
+  //     frame never runs, silently: the stanza re-enters the dispatcher at its top next tick.
+  // So a wait reached from a flat task cannot be a wait. onFlatTask() names that condition and
+  // spawnAndWait completes the awaited body INLINE instead (runTaskInline) — the port's standing
+  // "no PSX async: do it inline or abort" rule, applied once in the primitive rather than re-derived
+  // as a hand-collapse at every call site (which is what areas 1..21's enter hooks were missing).
+  // OUTSIDE a task (in_stage == 0) the yield is a documented no-op and the caller is the native boot
+  // driver, not a task — that path is left exactly as it is.
+  bool onFlatTask() const { return in_stage && !cur_is_coro; }
+
+  // Run the task armed in `slot` to completion inside the current call, on its own Coro fiber (so a
+  // body that parks mid-way is resumed rather than truncated), then restore the caller's task
+  // context. The multi-frame handshake collapses into one step — pc_skip semantics.
+  void runTaskInline(int slot);
+
   void yieldPrim(uint16_t mode);                 // FUN_80051F80: task yield (state=1, fiber-park)
   void spawnPrim(uint32_t slot, uint32_t entry_pc); // FUN_80051F14: arm slot (entry/gp/state=2/tcb)
   void spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t flag); // FUN_80044BD4
