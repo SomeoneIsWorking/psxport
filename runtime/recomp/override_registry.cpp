@@ -164,6 +164,14 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
   if (setter) setter(addr, thunk);   // install the shared thunk into the module's g_<mod>_override[] slot
 }
 
+void coverage(int* total, int* unreached) {
+  int n = 0;
+  for (int i = 0; i < g_n; i++)
+    if (g_tab[i].nativeHits == 0 && g_tab[i].oracleHits == 0) n++;
+  if (total) *total = g_n;
+  if (unreached) *unreached = n;
+}
+
 bool dispatch(Core* c, uint32_t addr) {
   int slot = lookup(norm(addr));
   if (slot < 0) return false;

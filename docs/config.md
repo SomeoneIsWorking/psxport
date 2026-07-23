@@ -13,6 +13,20 @@ with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now c
 | `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` | recomp_path + psx_render | THE REFERENCE. Works perfectly. |
 | `PSXPORT_SBS_MODE=full` | dual-core byte-compare | Core A = pc_faithful, Core B = recomp_path. Job#1 harness. |
 
+**SBS gate honesty (read before trusting a green run — docs/findings/sbs.md "COVERAGE-limited"):**
+- Every SBS run now prints its own REACH at exit: `coverage: N/M owned addresses executed this run — K
+  NEVER reached`. A byte-compare only reports on code the run ENTERS; a boot-window run reaches ~236
+  of 411 owned addresses (~43% never compared). Green ≠ whole port verified. `PSXPORT_DEBUG=ovhit`
+  lists the unreached ones. This is why kanban #60 (a guaranteed A/B divergence) sat behind a green
+  41k-frame gate — its opcode was outside the window.
+- `PSXPORT_SBS_CANARY=<frame>[:<hexaddr>]` — SELF-TEST the oracle: flip one byte on core A only at that
+  frame; the next compare MUST trip. Default addr `0x800E7EAC` (reached every field frame). Run it when
+  a long-red gate suddenly goes green. Writes guest RAM — never during a real verification run.
+- `PSXPORT_SBS_PAD_REPLAY=<path>` — drive BOTH cores from a recorded pad (mirrored, lockstep held), to
+  walk the gate PAST boot into the field where coverage lives. CAVEAT: core A is pc_skip=false but
+  `./run.sh` captures are pc_skip=true, so a frame-indexed `replays/*.pad` lands inputs at the wrong
+  moments and does NOT raise coverage — you need a pc_skip=false capture or a game-state-driven route.
+
 The per-fork shortcut bool is `Game::mPcSkip` — see the class comment on `runtime/recomp/game.h`. Default
 `mPcSkip=true` (shortcuts on); SBS forces it `false` so the faithful branch of every fork is exercised.
 

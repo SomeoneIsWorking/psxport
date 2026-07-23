@@ -69,6 +69,19 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
 // always linked, independent of overlay residency).
 bool dispatch(Core* c, uint32_t addr);
 
+// COVERAGE — how much of what we OWN did a run actually execute? Fills `total` with the number of
+// registered addresses and `unreached` with how many were never dispatched on either core.
+//
+// This exists because a byte-compare gate reports only on code the run REACHES, and that is invisible
+// in the result: a green SBS run over a boot window says nothing whatsoever about a native the window
+// never enters. Tomba2Engine kanban #60 was a GUARANTEED core-A/core-B divergence (a native wrote a
+// shared table 0x20 below where the gen body writes it) that sat behind a green 41,280-frame gate for
+// as long as it existed, purely because those frames never executed that opcode. The per-address
+// counts were already here, but only under PSXPORT_DEBUG=ovhit — a flag you have to already suspect
+// something to set. Callers that report a clean compare should print this ALONGSIDE the verdict so
+// "green" is self-qualifying, not a claim about the whole port.
+void coverage(int* total, int* unreached);
+
 }  // namespace overrides
 
 // Thin module-named forwarders for the direct-install call sites (render emitters etc.) that already

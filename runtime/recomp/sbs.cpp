@@ -34,6 +34,7 @@
 // and never returns (the process exits when the window closes).
 
 #include "sbs.h"
+#include "override_registry.h"   // overrides::coverage — the gate reports its own reach
 #include "game.h"
 #include "cfg.h"
 #include "render_substrate.h"    // Render::setPsxRender (per-Core render-path switch)
@@ -409,6 +410,17 @@ public:
   // ---- scripted headless input (PSXPORT_SBS_KEYS) ----
   std::vector<SbsKey> mKeys;
   bool                mKeysParsed = false;
+
+  // PSXPORT_SBS_PAD_REPLAY=<path> — drive BOTH cores from a recorded pad (uint16-LE per frame from
+  // boot, the same format PSXPORT_PAD_REPLAY / `padrec save` use). The point is COVERAGE: a boot-only
+  // gate never reaches the field, so ~43% of owned addresses are never compared (see overrides::
+  // coverage). Feeding a captured route walks the gate INTO gameplay, where the interesting natives
+  // (scripts, behaviours, the op12 that hid kanban #60) actually run. SBS feeds input via feedInput()
+  // -> pad.setButtons() directly and NEVER calls pad.serviceFrame(), so the normal PSXPORT_PAD_REPLAY
+  // path (consumed inside serviceFrame) does not apply here — this buffer is read in feedInput()
+  // instead, mirrored to A and B so lockstep is preserved.
+  std::vector<uint16_t> mPadReplay;
+  bool                  mPadReplayInit = false;
 
   // ---- navigation state (concurrent boot AUTO-NAV to free-roam) ----
   Nav mNavA, mNavB;
@@ -1329,7 +1341,25 @@ void Sbs::Impl::parseKeys() {
 // Feed the SAME host pad mask to BOTH cores (mirrored input). PSXPORT_SBS_KEYS injects timed input.
 void Sbs::Impl::feedInput() {
   if (!mKeysParsed) parseKeys();
+  if (!mPadReplayInit) {
+    mPadReplayInit = true;
+    if (const char* p = getenv("PSXPORT_SBS_PAD_REPLAY"); p && *p) {
+      if (FILE* f = fopen(p, "rb")) {
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+        mPadReplay.resize((size_t)(sz / 2));
+        if (!mPadReplay.empty() && fread(mPadReplay.data(), 2, mPadReplay.size(), f) != mPadReplay.size())
+          mPadReplay.clear();
+        fclose(f);
+        cfg_logi("sbs", "PAD_REPLAY: %zu frames <- %s (drives BOTH cores; walks the gate into the field "
+                        "so coverage climbs past the boot-only ~57%%)", mPadReplay.size(), p);
+      } else cfg_loge("sbs", "PAD_REPLAY open FAILED: %s", p);
+    }
+  }
+  // Replay mask if we have one for this frame; MERGE live REPL/keys on top (active-low AND = union of
+  // pressed bits) so a replay's idle tail doesn't make interactive drive dead — same rule serviceFrame
+  // uses for PSXPORT_PAD_REPLAY.
   uint16_t mask = (uint16_t)sbs_rl_poll_input();
+  if (mFrame < mPadReplay.size()) mask &= mPadReplay[mFrame];
   for (const SbsKey& k : mKeys)
     if (mFrame >= k.from && mFrame <= k.to) mask &= ~k.btn;   // active-low: pressed = bit cleared
   mA->pad.setButtons(mask);
@@ -1888,6 +1918,19 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     s_self = this;
     static void (*dumpAll)() = +[]{
       if (!s_self) return;
+      // COVERAGE, printed UNCONDITIONALLY at the end of every SBS run. A byte-compare only reports on
+      // code the run REACHES, and that limit is otherwise invisible: the verdict line says "A/B
+      // identical" whether the run exercised the whole port or a tenth of it. kanban #60 was a
+      // guaranteed A/B divergence that survived behind a green 41,280-frame gate purely because those
+      // frames never executed the opcode. So the gate now states its own reach next to its verdict.
+      {
+        int total = 0, unreached = 0;
+        overrides::coverage(&total, &unreached);
+        if (total > 0)
+          cfg_logi("sbs", "coverage: %d/%d owned addresses executed this run — %d NEVER reached. "
+                          "A clean compare says NOTHING about those (PSXPORT_DEBUG=ovhit lists them).",
+                   total - unreached, total, unreached);
+      }
       if (s_self->mAllocTraceOn || s_self->mByteTraceOn) {
         if (!s_self->mAllocRaDumped) { s_self->mAllocRaDumped = 1; s_self->dumpAllocRa(stderr); s_self->dumpByteTrace(stderr); }
       }
@@ -2431,6 +2474,26 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
                  d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
       }
       fflush(stderr);
+    }
+    // ORACLE SELF-TEST (PSXPORT_SBS_CANARY=<frame>[:<hex-addr>]). Built-in proof that this gate can
+    // still see a divergence at all. A byte-compare that never trips is indistinguishable from a
+    // broken one that CAN'T trip — the same "no signal == dead instrument" failure the info-system
+    // INSTRUMENTS ledger exists for. At the named frame, poke ONE byte on core A only (default a
+    // reached, always-compared main-RAM address); the very next checkDivergence MUST report a
+    // divergence there. If it stays green, the gate is lying and that outranks any bug on the board.
+    // Run it periodically, and any time a long-red gate suddenly goes green. This is a test hook, so
+    // it deliberately writes guest RAM — never enable it during a real verification run.
+    if (const char* e = getenv("PSXPORT_SBS_CANARY"); e && *e) {
+      unsigned long cf = 0, ca = 0x800E7EACul;  // Tomba's master position — reached every field frame
+      if (const char* colon = strchr(e, ':')) { cf = strtoul(e, nullptr, 0); ca = strtoul(colon + 1, nullptr, 16); }
+      else cf = strtoul(e, nullptr, 0);
+      if (mFrame == (uint32_t)cf) {
+        uint8_t old = mA->core.mem_r8((uint32_t)ca);
+        mA->core.mem_w8((uint32_t)ca, (uint8_t)(old ^ 0xFF));
+        cfg_logi("sbs", "CANARY: flipped core-A [%08lX] %02X->%02X at f%u — checkDivergence MUST now trip. "
+                        "If the run stays green, this gate is NOT detecting divergences.",
+                 ca, old, (uint8_t)(old ^ 0xFF), mFrame);
+      }
     }
     if (nav_done || prenav) {
       summarizeDivergence(30);
