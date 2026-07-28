@@ -45,10 +45,14 @@ std::string vformat(const char* fmt, va_list ap) {
 // PSXPORT_DEBUG / PSXPORT_LOG_FILE predate lucent's own LUCENT_* names and are what every script and
 // doc in this project sets, so honour them. Done lazily on first use rather than at static-init time,
 // because the environment is fully set up by then and static-init order is not worth relying on.
+// Bumped whenever the enabled-channel SET changes; hot paths cache cfg_dbg() against it.
+static unsigned s_dbg_gen = 0;
+
 void bootstrap_once() {
   static bool done = false;
   if (done) return;
   done = true;
+  s_dbg_gen++;
 
   const std::string& chans = lucent::config::text("PSXPORT_DEBUG");
   if (!chans.empty()) lucent::enable_channels(chans);
@@ -89,9 +93,14 @@ int cfg_dbg(const char* chan) {
   return lucent::channel_on(chan) ? 1 : 0;
 }
 
+// Defined OUTSIDE the anonymous namespace above: cfg.h declares it extern "C", so a definition inside
+// that namespace would be a different, internally-linked function and the link would fail.
+unsigned cfg_dbg_generation(void) { bootstrap_once(); return s_dbg_gen; }
+
 void cfg_dbg_set(const char* chans) {
   bootstrap_once();
   lucent::enable_channels(chans ? chans : "");
+  s_dbg_gen++;                       // invalidate every hot-path cache of cfg_dbg()
 }
 
 void cfg_logf(const char* chan, const char* fmt, ...) {

@@ -19,7 +19,20 @@ void OtAttr::resetIfNewFrame(uint32_t frame) {
 }
 
 void OtAttr::trackStore(Core* c, uint32_t addr, uint32_t bytes) {
-  if (!cfg_dbg("otattr")) return;   // single predicted-false check gates everything below when off
+  // Reached from Core::mem_w32 via pkt_track — on EVERY guest memory write, the hottest path in the
+  // substrate. cfg_dbg() is not a cheap flag test: it calls into lucent and string-compares the channel
+  // name against the enabled set. MEASURED on the Spyro port with a 6-sample stack profile: 6/6 samples
+  // landed in lucent::detail::channel_enabled reached from exactly here. The old comment called this "a
+  // single predicted-false check" — it never was.
+  //
+  // Cache the answer, re-checking only when the enabled-channel SET changes, so the steady state is an
+  // integer compare. bootstrap and the REPL `debug` command both bump the generation, so `debug otattr`
+  // still takes effect immediately.
+  static unsigned s_gen = ~0u;
+  static int s_on = 0;
+  const unsigned gen = cfg_dbg_generation();
+  if (gen != s_gen) { s_gen = gen; s_on = cfg_dbg("otattr"); }
+  if (!s_on) return;
 
   const uint32_t frame  = c->game->gpu.s_frame;
   const uint32_t fn     = c->idiag.otattrTop();

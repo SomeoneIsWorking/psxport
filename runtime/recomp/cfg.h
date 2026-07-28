@@ -31,6 +31,10 @@ int         oracle_mode(void);
 int         cfg_enh(const char* name);
 int         cfg_dbg(const char* chan);            // is debug CHANNEL `chan` enabled? (set via REPL `debug`)
 void        cfg_dbg_set(const char* chans);       // REPL `debug <chans|all>`: enable diagnostic channels
+// Generation counter for the enabled-channel SET, bumped whenever it changes. cfg_dbg() is NOT a cheap
+// flag test — it string-compares the channel name against the enabled set — so a call site on a
+// genuinely hot path caches cfg_dbg()'s answer and re-checks only when this counter moves.
+unsigned    cfg_dbg_generation(void);
 // THE diagnostic print primitive: no-op unless cfg_dbg(chan); emits "[chan] <msg>\n" (newline added
 // if fmt lacks one) to stderr, or to PSXPORT_LOG_FILE=<path> when set. Replaces every
 // `if (cfg_dbg(chan)) fprintf(stderr, ...)` two-step — new diagnostics use THIS, one line per site.
