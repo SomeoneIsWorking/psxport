@@ -117,6 +117,8 @@ uint8_t* Core::host_ptr(uint32_t a, uint32_t bytes) {
   return 0;
 }
 
+static uint32_t s_dma3_madr, s_dma3_bcr, s_dma3_chcr;   // DMA3: CDROM data FIFO -> RAM
+
 static int s_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access (diagnostic only)
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
@@ -193,6 +195,9 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
   if (p == 0x1F801DAE) return 0;                 // SPUSTAT: report idle/transfer-complete
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) return spu_read(p);    // SPU register file
+  if (p == 0x1F8010B0) return s_dma3_madr;        // DMA3 CDROM->RAM
+  if (p == 0x1F8010B4) return s_dma3_bcr;
+  if (p == 0x1F8010B8) return s_dma3_chcr;        // busy bit already cleared by the write handler
   if (p == 0x1F8010C0) return s_dma4_madr;
   if (p == 0x1F8010C4) return s_dma4_bcr;
   if (p == 0x1F8010C8) return s_dma4_chcr;
@@ -277,6 +282,34 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
   if (p == 0x1F801DA6) s_spu_xfer_addr = (v & 0xFFFF) << 3;               // SPU transfer-start addr (bytes)
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) { spu_write(p, v); return; }    // SPU register file
+  // DMA3 — CDROM sector data -> RAM. This channel was simply ABSENT: an unmapped CHCR read returns
+  // 0, which reads as "busy clear", so a guest that started a transfer and polled for completion was
+  // told the transfer finished while not one byte had moved. Stock Sony libcd fetches every sector
+  // this way (CD_getsector drives 0x1F8010B0/B4/B8 through its own pointer globals), so no
+  // libcd-based game could read from disc at all.
+  if (p == 0x1F8010B0) { s_dma3_madr = v; return; }
+  if (p == 0x1F8010B4) { s_dma3_bcr  = v; return; }
+  if (p == 0x1F8010B8) {
+    s_dma3_chcr = v;
+    if (v & 0x01000000u) {                         // start/busy
+      int n = dma_block_words(s_dma3_bcr);
+      if (n > 0x10000) n = 0x10000;
+      const uint32_t da = s_dma3_madr & 0x1FFFFC;
+      const int got = cdc_dma_read(&game->cdc, s_dma_buf, n);
+      for (int i = 0; i < got; i++) mem_w32(da + i * 4, s_dma_buf[i]);
+      // A short drain means the sector FIFO ran dry. Report it and write NOTHING for the missing
+      // words — filling them would hand the guest fabricated data that looks like a real read.
+      if (got < n)
+        cfg_loge("cdc", "DMA3 underrun: guest asked %d words, FIFO held %d — the missing words were "
+                        "NOT written, so this read is genuinely incomplete", n, got);
+      if (cfg_dbg("cdc"))
+        cfg_logf("cdc", "DMA3 %d words -> 0x%08X (head now LBA %u)", got, 0x80000000u | da,
+                 game->cdc.loc_lba);
+      s_dma3_chcr &= ~0x01000000u;                 // clear busy: the completion poll must pass
+      irqStatLatch();                              // draining a sector queues the next INT1
+    }
+    return;
+  }
   if (p == 0x1F8010C0) { s_dma4_madr = v; return; }
   if (p == 0x1F8010C4) { s_dma4_bcr = v; return; }
   if (p == 0x1F8010C8) {                           // DMA4 CHCR: SPU-RAM transfer

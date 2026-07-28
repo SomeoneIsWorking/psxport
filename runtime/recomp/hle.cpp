@@ -151,6 +151,24 @@ void Hle::irqDeq(uint32_t elem) {
 // either, so an ISR that clobbers it must save it itself. Matching the hardware is the faithful
 // choice; saving it here would mask a genuinely misbehaving guest handler.
 void Hle::irqPoll(Core* c) {
+  // One-shot decline diagnostic. "No delivery happened" has four possible causes and they are
+  // indistinguishable from the outside; naming the first one that fires turns a silent nothing into
+  // a pointed question.
+  // Decline accounting. A ONE-SHOT version of this could not distinguish "declined once early" from
+  // "declined for the entire run", which are completely different diagnoses — so count each reason
+  // and report periodically. Cheap: only runs when the channel is on.
+  if (cfg_dbg("irq")) {
+    static unsigned n_crit = 0, n_nest = 0, n_transient = 0, n_report = 0;
+    if (!irq_enabled) n_crit++;
+    else if (in_irq) n_nest++;
+    else if (c->override_tgt || c->coro_redirect_pc) n_transient++;
+    const unsigned tot = n_crit + n_nest + n_transient;
+    if (tot && (tot % 200000) == 0 && n_report < 6) {
+      n_report++;
+      cfg_logi("irq", "delivery declined %u times: critical-section=%u nested=%u transient=%u "
+                      "(irq_enabled=%d now)", tot, n_crit, n_nest, n_transient, irq_enabled);
+    }
+  }
   if (in_irq || !irq_enabled) return;
   const uint32_t pending = c->irqStatLatch() & i_mask;
   // Clear the gate whenever there is nothing to deliver, so the common case costs one load-and-test
@@ -386,8 +404,10 @@ void rec_syscall(Core* c, uint32_t code) {
   int& irq_enabled = c->game->hle.irq_enabled;
   switch (c->r[A0]) {
     case 0: c->r[V0] = 0; break;
-    case 1: c->r[V0] = irq_enabled ? 1 : 0; irq_enabled = 0; break;      // EnterCritical
-    case 2: irq_enabled = 1; c->r[V0] = 0; break;                        // ExitCritical
+    // Keep COP0 Status in agreement with the flag: the guest may leave a critical section by poking
+    // SR directly rather than calling ExitCriticalSection, and the two views must not diverge.
+    case 1: c->r[V0] = irq_enabled ? 1 : 0; irq_enabled = 0; c->cop0[12] &= ~1u; break;  // EnterCritical
+    case 2: irq_enabled = 1; c->cop0[12] |= 1u; c->r[V0] = 0; break;                     // ExitCritical
     default:
       cfg_logi("syscall", "a0=%u (unhandled kernel op)", c->r[A0]);
       c->r[V0] = 0;

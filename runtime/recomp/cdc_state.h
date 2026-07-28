@@ -44,6 +44,9 @@ void cdc_state_init(CdcState* s);
 // MMIO 0x1F801800-3 register model — the instance is explicit (mem.cpp passes &game->cdc).
 uint32_t cdc_read(CdcState* s, uint32_t p);
 void     cdc_write(CdcState* s, uint32_t p, uint8_t v);
+// DMA3 (CDROM -> RAM) FIFO drain, called by the DMA3 CHCR model in mem.cpp. Returns words delivered;
+// a short return means the FIFO ran dry and the transfer is genuinely incomplete.
+int      cdc_dma_read(CdcState* s, uint32_t* out, int words);
 #ifdef __cplusplus
 }
 #endif

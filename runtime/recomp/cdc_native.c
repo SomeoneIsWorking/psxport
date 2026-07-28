@@ -57,8 +57,45 @@ static uint32_t lba_from_param(CdcState* s) {  // Setloc params: amm,ass,asect (
 
 static void load_sector(CdcState* s) {    // fill the data FIFO with the sector at loc_lba
   uint8_t sec[2048];
-  if (!disc_read_sector(s->disc, s->loc_lba, sec)) { s->data_n = 0; s->data_rd = 0; return; }
+  if (!disc_read_sector(s->disc, s->loc_lba, sec)) {
+    // Leave the FIFO EMPTY rather than serving zeros. A read that "succeeds" with zeroed data is
+    // indistinguishable from a real one to the guest and corrupts arbitrarily far downstream; an
+    // empty FIFO stalls the guest's fetch visibly, right here, with this line in the log.
+    cfg_loge("cdc", "ReadN: no data for LBA %u (no disc, or out of range) — data FIFO left EMPTY",
+             s->loc_lba);
+    s->data_n = 0; s->data_rd = 0; return;
+  }
   memcpy(s->data, sec, 2048); s->data_n = 2048; s->data_rd = 0;
+}
+
+// A whole sector has been consumed (drained by DMA3 or popped by the CPU) during a continuous
+// ReadN/ReadS. Real hardware delivers the NEXT sector as a fresh INT1 one sector-time later; this
+// model is synchronous, so it is ready immediately: advance the head and announce INT1.
+//
+// Without this, exec_command queued exactly ONE INT1 per ReadN and never advanced loc_lba, so a
+// multi-sector read received sector N forever — the guest waits for a second sector that is never
+// announced. Nothing is raised when the drive is not reading (Pause/Stop cleared s->reading), so no
+// event is fabricated.
+static void sector_consumed(CdcState* s) {
+  s->data_n = 0; s->data_rd = 0;
+  if (!s->reading) return;
+  s->loc_lba++;
+  load_sector(s);
+  { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }   // INT1: next sector data-ready
+}
+
+// DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
+// actually delivered; a SHORT return means the FIFO ran dry and the caller must say so loudly — a
+// transfer reported complete that moved nothing is exactly the silent lie this layer must not tell.
+int cdc_dma_read(CdcState* s, uint32_t* out, int words) {
+  int got = 0;
+  while (got < words && s->data_rd + 4 <= s->data_n) {
+    const uint8_t* p = s->data + s->data_rd;
+    out[got++] = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    s->data_rd += 4;
+  }
+  if (got && s->data_rd >= s->data_n) sector_consumed(s);
+  return got;
 }
 
 static void exec_command(CdcState* s, uint8_t cmd) {
@@ -116,8 +153,12 @@ uint32_t cdc_read(CdcState* s, uint32_t p) {
       CdcIrqEnt* f = &s->q[s->q_head];
       return s->resp_rd < f->len ? f->resp[s->resp_rd++] : 0;
     }
-    case 2:    // data FIFO
-      return s->data_rd < s->data_n ? s->data[s->data_rd++] : 0;
+    case 2: {  // data FIFO — CPU pop path; must advance the head exactly as DMA3 does
+      if (s->data_rd >= s->data_n) return 0;
+      const uint8_t b = s->data[s->data_rd++];
+      if (s->data_rd >= s->data_n) sector_consumed(s);
+      return b;
+    }
     case 3:    // bank0/2: interrupt enable; bank1/3: interrupt flag (low 3 bits = pending type)
       if (s->index & 1) return q_empty(s) ? 0xE0 : (uint8_t)(0xE0 | s->q[s->q_head].type);
       return s->irq_en | 0xE0;

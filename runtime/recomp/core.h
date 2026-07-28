@@ -82,6 +82,10 @@ public:
   // `i_stat & i_mask` inline so the hot path stays a single load-and-test.
   int irq_pending = 0;
 
+  // COP0 registers (12 = Status, 13 = Cause, 14 = EPC). Per-Core: exception state must never be
+  // shared between two Cores. Status bit 0 is the master interrupt enable — see stubs.cpp.
+  uint32_t cop0[16] = {};
+
   // ORACLE engine select (later-278, docs/oracle.md). 0 = run guest code as the recomp SUBSTRATE
   // (the shipping native port). 1 = run guest code through the pure MIPS INTERPRETER (interp.cpp) —
   // used ONLY by the oracle Core in the divergence harness, which must interpret the real overlay
