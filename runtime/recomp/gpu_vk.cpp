@@ -830,7 +830,14 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
     int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += s_semi_n[m];
     cfg_logi("gpu_vk", "present #%d src nonzero=%ld/%d disp=%d,%d %dx%d | batch tri=%d tex=%d semi=%d", n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total); } }
   // `debug fadewatch`: per-present log of the ScreenFade state (the PC-native subsystem that owns fade).
-  FadeState fade; game->core.hooks->renderFadeState(&game->core, &fade);
+  // A game that owns no fade subsystem leaves this hook null — the seam documents null hooks as
+  // tolerated, and other call sites guard. These did not, so presenting from such a game jumped to
+  // address 0. It stayed hidden because the reference consumer always supplies the hook; a second
+  // consumer (Spyro, whose Phase-0 hook table is almost entirely null) segfaulted on its first
+  // present. Default to "no fade" — zeroed, i.e. mode 0 / rgb 0 — which is exactly the state a game
+  // without a fade subsystem is in.
+  FadeState fade{};
+  if (game->core.hooks->renderFadeState) game->core.hooks->renderFadeState(&game->core, &fade);
   if (cfg_dbg("fadewatch")) { GpuDevice& gd = gdev();
     int& lastmode = gd.s_fw_lastmode; uint8_t& lr = gd.s_fw_lr; uint8_t& lg = gd.s_fw_lg; uint8_t& lb = gd.s_fw_lb;
     int& lsx = gd.s_fw_lsx; int& lsy = gd.s_fw_lsy; int& lw = gd.s_fw_lw; int& lh = gd.s_fw_lh;
@@ -858,7 +865,14 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
 // Consumes `cmd` (submits it).
 void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
   const int sx = s_last_sx, sy = s_last_sy, disp_w = s_last_w, h = s_last_h;
-  FadeState fade; game->core.hooks->renderFadeState(&game->core, &fade);
+  // A game that owns no fade subsystem leaves this hook null — the seam documents null hooks as
+  // tolerated, and other call sites guard. These did not, so presenting from such a game jumped to
+  // address 0. It stayed hidden because the reference consumer always supplies the hook; a second
+  // consumer (Spyro, whose Phase-0 hook table is almost entirely null) segfaulted on its first
+  // present. Default to "no fade" — zeroed, i.e. mode 0 / rgb 0 — which is exactly the state a game
+  // without a fade subsystem is in.
+  FadeState fade{};
+  if (game->core.hooks->renderFadeState) game->core.hooks->renderFadeState(&game->core, &fade);
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
     SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;   // minimized / no swapchain image this frame
