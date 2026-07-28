@@ -606,9 +606,18 @@ void native_boot_run(Core* c) {
   int skip_fmv = cfg_on("PSXPORT_NO_FMV") || cfg_on("PSXPORT_VK_HEADLESS");
   const char* nf_ov = cfg_str("PSXPORT_NO_FMV");
   if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
-  if (!skip_fmv) {
-    cfg_logi("native_boot", "playing boot FMV (Whoopee logo); OP.STR is the front-end's");
-    c->game->fmv.play("MOVIE/LOGO.STR");
+  // The list comes from GameConfig::bootFmv — it used to be a hardcoded path, which is the first
+  // consumer's file and nothing a second port could ever open. An all-null list is a real answer
+  // ("this game's boot plays no movie natively"), not a missing value, so it is not a warning.
+  const char* const* boot_fmv = c->cfg ? c->cfg->bootFmv : nullptr;
+  const int n_boot_fmv = boot_fmv ? (int)(sizeof c->cfg->bootFmv / sizeof c->cfg->bootFmv[0]) : 0;
+  if (!skip_fmv && boot_fmv && boot_fmv[0]) {
+    for (int i = 0; i < n_boot_fmv && boot_fmv[i]; i++) {
+      cfg_logi("native_boot", "playing boot FMV %d/%d: %s", i + 1, n_boot_fmv, boot_fmv[i]);
+      c->game->fmv.play(boot_fmv[i]);
+    }
+  } else if (!skip_fmv) {
+    cfg_logi("native_boot", "no boot FMV configured (GameConfig::bootFmv is empty) — nothing to play");
   } else {
     cfg_logw("native_boot", "skipping intro FMVs (headless/NO_FMV)");
   }

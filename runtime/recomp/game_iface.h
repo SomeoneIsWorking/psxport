@@ -74,6 +74,17 @@ struct GameConfig {
   // null to rely on the generic PSXPORT_DISC / drop-in *.chd paths, which are always tried too.
   const char* discEnvVar;
 
+  // Boot intro movies, in play order, NULL-terminated. The framework's native .STR player
+  // (native_fmv.cpp) resolves each path on the disc itself and needs nothing game-specific to
+  // decode one — but native_boot_run used to play a HARDCODED path, the first consumer's file. A
+  // second port then failed to open it on every boot, and the only way to silence that was an
+  // env-var workaround that disabled FMV wholesale.
+  //
+  // Leave every slot null when a game's boot plays no movie natively. That is a real state, not a
+  // gap: a port whose boot runs on the recompiled substrate has its movies played by the GUEST, and
+  // the framework must not invent an intro it was never asked for.
+  const char* bootFmv[4];
+
   // --- per-frame OT / packet-pool dance (native_boot.cpp native_step_frame) ---
   uint32_t otRegionBase, otRegionStride;      // per-parity OT region
   uint32_t packetPoolBase, packetPoolStride;  // per-parity packet pool
