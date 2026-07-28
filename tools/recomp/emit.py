@@ -470,9 +470,32 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             add_a, srcs = a, (i.rs, i.rt)
             break
         if (i.rd == dst or i.rt == dst) and i.op != "sll":
-            return None                       # dst rewritten by something else — not this idiom
+            # dst rewritten by something that is not the base+index `add`. If that write is IMMEDIATE
+            # construction (lui/addiu), this is the no-index form and the constants below are the
+            # answer — bailing here made the scan blind to it, because the very instruction that
+            # assigns the target address looked like disqualifying interference.
+            if i.op in ("lui", "addi", "addiu"):
+                break
+            return None
     if add_a is None:
-        return None
+        # NO INDEX AT ALL: `lui rX,HI ; addiu rX,rX,LO ; ... ; jr rX` — an indirect jump whose register
+        # holds a plain IMMEDIATE, set at one or more sites in the function (Spyro's 0x800243FC reaches
+        # 0x800240F8 or 0x800241A8 this way). There is no base+index to decompose, so the earlier scan
+        # bails; the targets are simply the constants assigned to that register. Same principle as the
+        # constant-index route — read the values the code actually puts there — applied one level up.
+        consts, hi_v = set(), {}
+        for a in range(lo, hi, 4):
+            i = ins.get(a)
+            if i is None:
+                continue
+            if i.op == "lui":
+                hi_v[i.rt] = i.imm << 16
+            elif i.op in ("addi", "addiu") and i.rs in hi_v:
+                v = (hi_v[i.rs] + i.simm) & 0xFFFFFFFF
+                hi_v[i.rt] = v
+                if i.rt == dst and lo <= v < hi:
+                    consts.add(v)
+        return sorted(consts) if len(consts) >= 2 else None
 
     # 2. the immediate base. FORWARD, because `lui rB,HI ; addiu rB,rB,LO` cannot be resolved walking
     #    backward — the addiu is met before the lui that gives it meaning.
