@@ -222,7 +222,20 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         if (i >= 0) { s_ev[i].enabled = 0; c->r[V0] = 1; } else c->r[V0] = 0; return true; }
       case 0x12: case 0x13: case 0x14: case 0x15: case 0x16:              // BIOS pad — no-op (native)
         c->r[V0] = 0; return true;
-      case 0x19: int_handler = a0; c->r[V0] = 0; return true;             // HookEntryInt
+      case 0x19:                                                         // B(19h)
+        // NOT "hook a handler function". This is SetCustomExitFromException: $a0 points at a
+        // jmp_buf-shaped structure { +0 ra, +4 sp, +8 fp, +0x0C..0x28 s0..s7, +0x2C gp }, and the
+        // BIOS exception path — AFTER walking the SysEnqIntRP chains — loads those registers and
+        // jumps to `ra` instead of resuming the interrupted context. Dump it: whether `+0` is a
+        // function ENTRY decides whether a static recompile can enter it at all. A mid-function `ra`,
+        // which a real setjmp would leave, is not an address the substrate can dispatch to.
+        if (cfg_dbg("bios")) {
+          cfg_logf("bios", "B0:0x19 custom-exit buf=0x%08X: ra=0x%08X sp=0x%08X fp=0x%08X gp=0x%08X",
+                   a0, c->mem_r32(a0), c->mem_r32(a0 + 4), c->mem_r32(a0 + 8), c->mem_r32(a0 + 0x2C));
+          for (int i = 0; i < 8; i++)
+            cfg_logf("bios", "  s%d = 0x%08X", i, c->mem_r32(a0 + 0x0Cu + 4u * (uint32_t)i));
+        }
+        int_handler = a0; c->r[V0] = 0; return true;
       case 0x35: {                                                       // FileWrite
         uint32_t fd = a0, buf = a1, len = a2;
         if (fd == 1 || fd == 2) for (uint32_t i = 0; i < len; i++) fputc(c->mem_r8(buf + i), stderr);
