@@ -23,6 +23,18 @@ public:
   int      irq_enabled = 1;       // was s_irq_enabled
   int      miss_count  = 0;       // recomp-miss log numbering (was s_miss)
 
+  // I_STAT (0x1F801070) / I_MASK (0x1F801074). These had NO model at all: both reads fell through to
+  // the unmapped-I/O path and returned 0, so every guest interrupt VERIFIER — which exists precisely
+  // to test `I_MASK & bit` then `I_STAT & bit` — rejected unconditionally. Per-Game, like the rest of
+  // the hardware state, so two Cores never share an interrupt controller.
+  //
+  // Only sources the framework ACTUALLY models may set a bit here. Today that is bit 2 (CDROM),
+  // latched from CdcState::irq_edge. The rest stay 0 — and 0 means "this framework has no source for
+  // that interrupt", NOT "the hardware did not raise it". Do not assert a bit from a free-running
+  // timer to make some guest wait finish; that is fabricating an event.
+  uint32_t i_stat = 0;
+  uint32_t i_mask = 0;
+
   // deliverEvent(evClass, spec): mark every open+enabled event slot whose class matches evClass
   //   and whose spec masks against `spec` as fired. Called by the frame VBlank tick, memcard
   //   completion, and sound-DMA completion so guest waits (TestEvent/WaitEvent) advance.

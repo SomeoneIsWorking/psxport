@@ -25,6 +25,13 @@ typedef struct CdcState {
   int      reading;           // ReadN/ReadS active                          (was s_reading)
   CdcIrqEnt q[8];             // pending-interrupt queue                     (was s_q)
   int      q_head, q_tail, resp_rd;  //                                     (was s_q_head/s_q_tail/s_resp_rd)
+  uint8_t  irq_edge;          // 1 = the controller just RAISED an interrupt and nothing has latched
+                              // it yet. The MMIO dispatcher (mem.cpp) consumes this and sets I_STAT
+                              // bit 2, which is edge-triggered on real hardware: acking the CD
+                              // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
+                              // response raises a FRESH edge as it becomes current. Kept here rather
+                              // than reaching for I_STAT directly because this file is plain C with
+                              // no Game pointer.
   int      verbose;           // `debug cdc` log gate (config, read at init)  (was s_verbose)
   struct DiscState* disc;     // Game-owned disc backend (wired by Game())
 } CdcState;

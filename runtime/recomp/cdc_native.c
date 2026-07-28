@@ -43,6 +43,7 @@ static void cdc_irq(CdcState* s, uint8_t type, const uint8_t* resp, int len) {
   if (len) memcpy(s->q[s->q_tail].resp, resp, (size_t)len);
   if (s->q_tail == s->q_head) s->resp_rd = 0;   // first entry becomes active
   s->q_tail = n;
+  s->irq_edge = 1;                              // -> I_STAT bit 2, latched by the MMIO dispatcher
 }
 static int q_empty(CdcState* s) { return s->q_head == s->q_tail; }
 
@@ -137,7 +138,14 @@ void cdc_write(CdcState* s, uint32_t p, uint8_t v) {
     case 3:
       if (s->index == 1) {                         // interrupt flag: write 1s to ack/clear
         if (v & 0x07) {                            // ack current IRQ -> advance the queue
-          if (!q_empty(s)) { s->q_head = (s->q_head + 1) & 7; s->resp_rd = 0; }
+          if (!q_empty(s)) {
+            s->q_head = (s->q_head + 1) & 7; s->resp_rd = 0;
+            // A response that was QUEUED behind the one just acked becomes current now, and that is
+            // a fresh interrupt on real hardware — not a continuation of the acked one. Without this
+            // edge the second and later responses of a multi-INT command sequence would be visible
+            // in the FIFO but never announced, which looks exactly like a dropped response.
+            if (!q_empty(s)) s->irq_edge = 1;
+          }
         }
         if (v & 0x40) s->param_n = 0;              // reset param FIFO
       } else if (s->index == 0) {                  // request register

@@ -125,6 +125,7 @@ private:
   uint8_t* host_ptr(uint32_t a, uint32_t bytes);
   uint32_t io_read (uint32_t a, uint32_t bytes);
   void     io_write(uint32_t a, uint32_t v, uint32_t bytes);
+  uint32_t irq_stat_latch();   // fold the CDC's pending interrupt edge into I_STAT, then read it
   void     cw_check(uint32_t a, uint32_t v, int width);
   void     wwatch_check(uint32_t a, uint32_t v, uint32_t w);
 
