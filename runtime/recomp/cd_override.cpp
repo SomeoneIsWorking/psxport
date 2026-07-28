@@ -110,7 +110,14 @@ static void cd_command(Core* c) {
       c->mem_w8(lp + 4, p0);
   }
   switch (cmd) {
-    case 0x0E: xa_stream_setmode(&c->game->xa, p0); break;                                  // Setmode
+    case 0x0E:                                                                            // Setmode
+      xa_stream_setmode(&c->game->xa, p0);
+      // Mirror it into the CONTROLLER as well. Bit 0x20 selects whole-sector framing, and a
+      // streaming reader reads the first 8 words of each sector as header+subheader to identify it.
+      // Forwarding only to the XA streamer left the controller in user-data framing, so those reads
+      // returned picture bytes and the reader re-requested the same sector indefinitely.
+      cdc_set_mode(&c->game->cdc, p0);
+      break;
     case 0x0D: xa_stream_setfilter(&c->game->xa, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0); break;  // Setfilter
     case 0x02: if (param) {                                                                    // Setloc
       const uint8_t mm = p0, ss = (uint8_t)c->mem_r8(param + 1), ff = (uint8_t)c->mem_r8(param + 2);
@@ -173,7 +180,7 @@ static void cd_cmd_stream(Core* c) {
   }
   { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)c->mem_r8(pp) : 0;
     switch (cmd) {
-      case 0x0E: xa_stream_setmode(&c->game->xa, p0); break;
+      case 0x0E: xa_stream_setmode(&c->game->xa, p0); cdc_set_mode(&c->game->cdc, p0); break;
       case 0x0D: xa_stream_setfilter(&c->game->xa, p0, pp ? (uint8_t)c->mem_r8(pp + 1) : 0); break;
       case 0x02: if (pp) xa_stream_setloc(&c->game->xa, p0, (uint8_t)c->mem_r8(pp+1), (uint8_t)c->mem_r8(pp+2)); break;
       case 0x06: case 0x1B: xa_stream_start(&c->game->xa); break;

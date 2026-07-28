@@ -56,11 +56,25 @@ static uint32_t lba_from_param(CdcState* s) {  // Setloc params: amm,ass,asect (
 }
 
 static void load_sector(CdcState* s) {    // fill the data FIFO with the sector at loc_lba
+  // WHAT THE FIFO CONTAINS DEPENDS ON Setmode's bit 0x20 ("whole sector"), and getting this wrong is
+  // invisible until much later. Streaming code reads the first 8 words of each sector expecting the
+  // 4-byte header plus 8-byte subheader — that is how it tells a video sector from an audio one.
+  // Serving user data there hands it 32 bytes of picture data as a subheader, it recognises nothing,
+  // and it re-requests the same sector forever.
+  //   bit 0x20 set  -> raw sector from offset 12 (past sync): header, subheader, then data
+  //   bit 0x20 clear-> 2048 bytes of user data only
+  if (s->mode & 0x20) {
+    uint8_t raw[2352];
+    if (!disc_read_raw(s->disc, s->loc_lba, raw, sizeof raw)) {
+      cfg_loge("cdc", "ReadN: no data for LBA %u — data FIFO left EMPTY", s->loc_lba);
+      s->data_n = 0; s->data_rd = 0; return;
+    }
+    memcpy(s->data, raw + 12, 2340);
+    s->data_n = 2340; s->data_rd = 0;
+    return;
+  }
   uint8_t sec[2048];
   if (!disc_read_sector(s->disc, s->loc_lba, sec)) {
-    // Leave the FIFO EMPTY rather than serving zeros. A read that "succeeds" with zeroed data is
-    // indistinguishable from a real one to the guest and corrupts arbitrarily far downstream; an
-    // empty FIFO stalls the guest's fetch visibly, right here, with this line in the log.
     cfg_loge("cdc", "ReadN: no data for LBA %u (no disc, or out of range) — data FIFO left EMPTY",
              s->loc_lba);
     s->data_n = 0; s->data_rd = 0; return;
@@ -76,13 +90,16 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
 // multi-sector read received sector N forever — the guest waits for a second sector that is never
 // announced. Nothing is raised when the drive is not reading (Pause/Stop cleared s->reading), so no
 // event is fabricated.
+// The single advance point. A sector is done when its FIFO has been fully consumed; the drive then
+// presents the next one and announces it. An earlier revision moved this to the interrupt-ACK path on
+// the theory that hardware paces per interrupt — but this guest's streaming reader never acks
+// (it drives BFRD directly), so advancement there never fired. Keep exactly one advance point.
 static void sector_consumed(CdcState* s) {
-  // Cursor reset ONLY. Advancing the head here would be wrong: during a continuous read the drive
-  // does not deliver the next sector when the host finishes reading the previous one — it delivers
-  // one per interrupt, and the host acknowledges each. Streaming code proves the difference: it
-  // reads only the 32-byte header out of each sector and discards the rest, so a drain-based advance
-  // never fires and the same sector is served forever. Advancement lives in the ACK path below.
   s->data_n = 0; s->data_rd = 0;
+  if (!s->reading) return;
+  s->loc_lba++;
+  load_sector(s);
+  { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }   // INT1: next sector data-ready
 }
 
 // DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
@@ -99,6 +116,8 @@ static void sector_consumed(CdcState* s) {
 //
 // So the two layers must share one source of truth: when the native CD layer accepts a read, the
 // controller model is positioned and loaded from the same disc image. Neither layer invents data.
+void cdc_set_mode(CdcState* s, uint8_t mode) { s->mode = mode; }
+
 void cdc_begin_read(CdcState* s, uint32_t lba) {
   s->loc_lba = lba;
   s->reading = 1;
@@ -217,7 +236,20 @@ void cdc_write(CdcState* s, uint32_t p, uint8_t v) {
         }
         if (v & 0x40) s->param_n = 0;              // reset param FIFO
       } else if (s->index == 0) {                  // request register
-        if (v & 0x80) { if (s->reading) load_sector(s); }  // BFRD: want sector data
+        // BFRD: "give me sector data". If the host has ALREADY taken bytes from the current
+        // sector, this request is for the FOLLOWING one — the drive refills its FIFO per sector and
+        // whatever the host did not read is discarded. That is the advance point for a streaming
+        // reader, which takes 2048 of a 2340-byte whole-sector FIFO and then simply asks again, so a
+        // drain-based advance can never fire for it.
+        if (v & 0x80) {
+          if (s->reading) {
+            if (s->data_rd > 0) {
+              s->loc_lba++;
+              { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }   // INT1: next sector ready
+            }
+            load_sector(s);
+          }
+        }
       }
       return;
   }

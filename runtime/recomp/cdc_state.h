@@ -51,6 +51,10 @@ int      cdc_dma_read(CdcState* s, uint32_t* out, int words);
 // hardware directly (XA/streaming: spin on DRQSTS, then DMA3) sees real data even when the libcd
 // file-read path is served natively. Both layers read the same disc image.
 void     cdc_begin_read(CdcState* s, uint32_t lba);
+// Mirror a Setmode the native CD layer intercepted into the controller model. Bit 0x20 decides
+// whether the data FIFO presents whole sectors (header + subheader + data) or user data only, and a
+// streaming reader depends on that framing to identify sector types.
+void     cdc_set_mode(CdcState* s, uint8_t mode);
 #ifdef __cplusplus
 }
 #endif
