@@ -17,6 +17,7 @@
 #include "game.h"
 #include "c_subsys.h"
 #include "cfg.h"
+#include "overlay_router.h"
 #include "platform_hle.h"   // class PlatformHle — CD-subsystem HLE registrations go through the singleton
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,7 +163,6 @@ static void cd_loadfile(Core* c) {
   if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);
   if (c->game->cd.verbose)
     cfg_logi("cd", "loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X", size, lba, dest, c->r[31]);
-  void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // record the resident overlay now (fresh image matches its signature)
   c->r[V0] = size;
 }
@@ -210,7 +210,6 @@ void Cd::asyncRead() {
   if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);  // last sector read (pos tracker)
   if (verbose)
     cfg_logi("cd", "async read %u words (%u B) @ LBA %u -> 0x%08X", words, bytes, lba, dest);
-  void overlay_note_load(Core*, uint32_t);
   overlay_note_load(c, dest);   // an A0* field-area code overlay may load here (MODE slot) — note it
 }
 
