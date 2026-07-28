@@ -52,13 +52,27 @@ uint32_t mdec_read(uint32_t addr)            { return MDEC_Read(0, addr); }
 // So: honour the predicate, and if the FIFO fills, say so LOUDLY with the exact word counts rather
 // than dropping the remainder. A partially-fed decode is a real failure and must look like one.
 void mdec_dma_in(const uint32_t* words, int count) {
-  int i;
-  for (i = 0; i < count; i++) {
-    if (!MDEC_DMACanWrite()) {
-      cfg_loge("mdec", "DMA0 in: input FIFO full after %d of %d word(s) — the remainder was NOT "
-                       "written. This decode is incomplete; expect the guest's DecDCTinSync to time "
-                       "out. (Real DMA0 stalls here; this model cannot yet.)", i, count);
-      return;
+  // Beetle's MDEC is TIME-STEPPED: it consumes its input FIFO and produces output only inside
+  // MDEC_Run(). Nothing in this runtime was calling it, so the FIFO could never drain — the very
+  // first word filled it and every word after that was dropped on the floor by MDEC_DMAWrite.
+  //
+  // Real DMA0 achieves the same effect by STALLING while the decoder works. This model cannot stall
+  // a transfer mid-flight, so it does the equivalent: when the FIFO is full, advance the decoder and
+  // try again. That is faithful in the only sense that matters here — the words all arrive, in
+  // order, and the decoder sees them at a rate it can absorb.
+  enum { kStepClocks = 256, kMaxSteps = 4096 };
+  for (int i = 0; i < count; i++) {
+    int steps = 0;
+    while (!MDEC_DMACanWrite()) {
+      if (++steps > kMaxSteps) {
+        // Genuinely wedged: report it with exact counts rather than dropping the remainder, which
+        // would corrupt the decode invisibly and surface frames later as the guest's own timeout.
+        cfg_loge("mdec", "DMA0 in: decoder still cannot accept after %d step(s); %d of %d word(s) "
+                         "written, remainder NOT sent. This decode is incomplete.",
+                 kMaxSteps, i, count);
+        return;
+      }
+      MDEC_Run(kStepClocks);
     }
     MDEC_DMAWrite(words[i]);
   }
@@ -117,16 +131,25 @@ void mdec_dma_in(const uint32_t* words, int count) {
 // 4bpp/8bpp: for depth 0/1, RAMOffsetWWS == 0, so voffs is always 0 and placement degrades to a
 // plain linear drain (buf[i]) — which is exactly what hardware does there (no interleave).
 int mdec_dma_out(uint32_t* buf, int count) {
+  // Same time-stepping requirement as mdec_dma_in: decoded words only APPEAR inside MDEC_Run(), so a
+  // loop that gives up the moment the output FIFO is empty returns a short (often zero-length)
+  // drain and the frame is never produced. Advance the decoder and re-check before concluding there
+  // is genuinely nothing left — that is what the hardware channel's stall accomplishes.
+  enum { kStepClocks = 256, kMaxSteps = 4096 };
   int i;
   for (i = 0; i < count; i++) {
-    if (!MDEC_DMACanRead())
-      break;
+    int steps = 0;
+    while (!MDEC_DMACanRead()) {
+      if (++steps > kMaxSteps) goto done;   // truly exhausted: return the short count, honestly
+      MDEC_Run(kStepClocks);
+    }
     uint32_t offs;
     uint32_t v = MDEC_DMARead(&offs);
     // hardware: MainRAM[(CurAddr + (offs<<2)) & 0x1FFFFC] = v, CurAddr += 4 each word.
     // (int32_t)offs makes the lower-half-block negative displacement subtract correctly.
     buf[i + (int32_t)offs] = v;
   }
+done:
   return i;
 }
 
