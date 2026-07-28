@@ -143,7 +143,27 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
 
 void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  if (p >= 0x1F801800 && p <= 0x1F801803) { cdc_write(&game->cdc, p, (uint8_t)v); return; }  // CD controller
+  if (p >= 0x1F801800 && p <= 0x1F801803) {        // CD controller
+    // `PSXPORT_DEBUG=cdcw` — WHO wrote a CD register. The cdc channel (cdc_native.c) can say WHAT
+    // command arrived but not where it came from: that file is plain C with no Core, so it has no
+    // guest pc/ra. This is the same store one level up, where the caller context still exists, and
+    // it is what turns "the model saw command 0x00" into "this guest site issued it".
+    // Logged BEFORE the write so the bank shown is the one in effect when the store lands.
+    // CAUTION on pc/ra below: under static gen-to-gen calls the recomp does not refresh the guest
+    // pc/ra, so they can name a function that is nowhere near the store (observed: a 3-instruction
+    // getter "issuing" a CD command, with ra=0 — the tell). Trust them only when ra is plausible.
+    // `PSXPORT_DEBUG=cdcbt` adds a host backtrace, which names the real gen_func_* chain; that is the
+    // identification to rely on.
+    if (cfg_dbg("cdcw")) {
+      cfg_logf("cdcw", "w[%04X]=%02X bank=%d pc=%08X ra=%08X",
+               (unsigned)(p & 0xFFFF), (unsigned)(v & 0xFF), game->cdc.index, pc, r[31]);
+      if (cfg_dbg("cdcbt") && (p & 3) == 1 && game->cdc.index == 0) {   // command-register write only
+        void* bt[24]; int n = backtrace(bt, 24); backtrace_symbols_fd(bt, n, 2);
+      }
+    }
+    cdc_write(&game->cdc, p, (uint8_t)v);
+    return;
+  }
   if (p == 0x1F801810) { gpu_gp0(this, v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(this, v); return; }    // GP1 (display/control)
   if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
