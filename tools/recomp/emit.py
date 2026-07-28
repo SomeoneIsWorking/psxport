@@ -438,18 +438,30 @@ def find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=None):
 
 
 
+class _NoIns:
+    kind = None
+
+
+_N = _NoIns()
+
+
 def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
-    """Recover `jr base+idx*2^k` (computed OFFSET, no table). Returns the exact case targets, or None.
+    """Recover `jr base + idx*2^k` — a computed OFFSET dispatch with NO address table.
 
-    Shape:  lui/addiu rB,<imm base> ; sll rI,rI,k ; add dst,rB,rI ; jr dst
+    Shape:  lui/addiu rB,<immediate base> ; sll rI,rI,k ; add dst,rB,rI ; jr dst
 
-    The window is generous because the `sll` that scales the index is SHARED across consecutive
-    dispatches in this code — three jrs in a row reuse one `sll s1,s1,4` sitting ~68 instructions back —
-    so a tight window silently matches only the first of them.
-    The case set is the set of CONSTANTS assigned to rI by the branch cascade that dominates the jr —
-    not a count read from a guard, and never a guessed range. Returning None (emit nothing) is the
-    correct outcome when the constants cannot be recovered: a bogus case label splits real code."""
-    add_a = None
+    The two idioms above this one both require the target ADDRESS to be read from a table with
+    `lw rN,OFF(base)`. Here there is no table: the base is an immediate and the index is scaled into an
+    offset, so the jump lands in an UNROLLED RUN of equal-sized blocks. Returns the case targets, or
+    None. Emitting nothing is always preferable to guessing — but note these become LABELS inside the
+    enclosing function, not function entries, so an extra label is dead code the C compiler drops while
+    a MISSING one is a runtime fail-fast. Coverage is therefore biased generous, deliberately.
+
+    The window is wide because consecutive dispatchers SHARE one `sll` (three in a row here reuse an
+    `sll s1,s1,4` sitting ~68 instructions back), so a tight window silently matches only the first.
+    """
+    # 1. the `add dst, rB, rI` feeding the jr
+    add_a = srcs = None
     for a in range(jr_a - 4, max(lo, jr_a - window * 4) - 4, -4):
         i = ins.get(a)
         if i is None:
@@ -458,18 +470,13 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             add_a, srcs = a, (i.rs, i.rt)
             break
         if (i.rd == dst or i.rt == dst) and i.op != "sll":
-            return None                      # dst rewritten by something else — not this idiom
+            return None                       # dst rewritten by something else — not this idiom
     if add_a is None:
         return None
-    # FORWARD over the window, not backward. The base is built `lui rB,HI ; addiu rB,rB,LO`, so a
-    # backward walk meets the addiu BEFORE the lui that gives it meaning and can never resolve the pair.
-    # That bug silently matched only those jrs whose operand order happened to suit it (0x8004C548 yes,
-    # the neighbouring 0x8004C4E4 no) — a partial match that looked like success.
-    # The add's two operands are the BASE and the scaled INDEX, so identifying one identifies the other.
-    # Relying on "the last sll writing either operand" instead picked up an unrelated `sll s2,s2,1` on
-    # the BASE register once the window was widened, giving idx=base and no constants — a wrong match
-    # that looked like a clean no-match. Pin base_reg first, then require the sll to write the OTHER one.
-    base = base_reg = idx_reg = shift = None
+
+    # 2. the immediate base. FORWARD, because `lui rB,HI ; addiu rB,rB,LO` cannot be resolved walking
+    #    backward — the addiu is met before the lui that gives it meaning.
+    base = base_reg = None
     hi_val = {}
     for a in range(max(lo, add_a - window * 4), add_a, 4):
         i = ins.get(a)
@@ -479,30 +486,62 @@ def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
             hi_val[i.rt] = i.imm << 16
         elif i.op == "addiu" and i.rs in hi_val and i.rt in srcs:
             base, base_reg = (hi_val[i.rs] + i.simm) & 0xFFFFFFFF, i.rt
-    if base_reg is None:
+    if base_reg is None or not (lo <= base < hi):
         return None
+
+    # 3. the scale. The add's operands ARE the base and the scaled index, so the `sll` must write the
+    #    OTHER addend — keying on "any sll writing either operand" picked up an unrelated `sll` on the
+    #    base register once the window widened, giving idx == base and no cases.
     other = srcs[1] if srcs[0] == base_reg else srcs[0]
+    idx_reg = shift = scale_op = None
     for a in range(max(lo, add_a - window * 4), add_a, 4):
         i = ins.get(a)
-        if i is not None and i.op == "sll" and i.rd == other:
-            idx_reg, shift = i.rt, i.shamt
-    if base is None or idx_reg is None or shift is None:
+        # `srl` as well as `sll`: the index is sometimes a BITFIELD, masked out with andi and shifted
+        # DOWN into place (0x8004E5A4-0x8004E5A8 is `andi t2,v0,0xFF00 ; srl t2,t2,5`, i.e. bits 8-15
+        # scaled by 8). An sll-only match missed that whole family.
+        if i is not None and i.op in ("sll", "srl") and i.rd == other:
+            idx_reg, shift, scale_op = i.rt, i.shamt, i.op
+    if idx_reg is None:
         return None
-    if not (lo <= base < hi):
-        return None                          # a real dispatch jumps inside its own function
-    consts = set()
+    # For a right-shifted bitfield the constant-index route is meaningless (the constants feeding it are
+    # pre-shift field values), so the run walk is the only sound bound — it is unioned in below anyway.
+    stride = (1 << shift) if scale_op == "sll" else 8
+
+    targets = set()
+    # 4a. indices assigned as CONSTANTS by the branch cascade dominating the jr — exact when the index
+    #     is static.
     for a in range(lo, jr_a, 4):
         i = ins.get(a)
-        if i is None:
-            continue
-        if i.op in ("addi", "addiu") and i.rs == 0 and i.rt == idx_reg:
-            consts.add(i.simm)
-    if not consts or min(consts) < 0:
-        return None
-    targets = [(base + (c << shift)) & 0xFFFFFFFF for c in sorted(consts)]
-    if any(not (lo <= t < hi) for t in targets):
-        return None
-    return targets
+        if (scale_op == "sll" and i is not None and i.op in ("addi", "addiu")
+                and i.rs == 0 and i.rt == idx_reg and i.simm >= 0):
+            targets.add((base + (i.simm << shift)) & 0xFFFFFFFF)
+    # 4b. the RUN's own extent — needed when the index is dynamic (a counter, a masked field), and
+    #     unioned rather than used as a fallback: an index that is only PARTLY static yields one
+    #     constant and would otherwise leave the rest of its run unreachable.
+    # Walk at the recovered stride AND at the minimum 8. A dispatcher's `sll` scale does not always
+    # match the spacing of the run it lands in — 0x8004C818 scales by 16 while its trampolines sit 8
+    # apart, so the stride-16 walk stepped straight over half of them and 0x8004C828 stayed a fail-fast.
+    # Unioning a stride-8 walk costs only extra labels (dead code the compiler drops) and removes a
+    # whole class of near-misses.
+    for stride in sorted({stride, 8} if stride >= 8 else {8}):
+        miss = 0
+        for k in range(256):
+            blk = (base + k * stride) & 0xFFFFFFFF
+            if not (lo <= blk < hi) or blk + stride > hi:
+                break
+            if any((ins.get(blk + o) or _N).kind in (D.JUMP, D.JUMPR) for o in range(0, stride, 4)):
+                targets.add(blk)
+                miss = 0
+            else:
+                # Tolerate a gap rather than stopping dead: the base can point at PADDING before the
+                # run proper (0x8004C620 is two nops, with the first real case at index 1), so breaking
+                # on the first jumpless block found nothing at all there. Two in a row is the end.
+                miss += 1
+                if miss >= 2:
+                    break
+
+    out = sorted(t for t in targets if lo <= t < hi)
+    return out if len(out) >= 2 else None
 
 
 def collect_jt_targets(exe, funcs, text_end):
