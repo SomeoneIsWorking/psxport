@@ -411,12 +411,98 @@ def find_jump_tables(exe, ins, lo, hi, validate=True, tbl_spans=None):
         if res is None:
             res = resolve(_scan_jt_idiom(ins, a, i.rs, lo, enhanced=True))
         if res is None:
+            # THIRD IDIOM — computed OFFSET, no table at all (Spyro's GTE code):
+            #     lui/addiu rB, <immediate base>   ; sll rI, rI, k   ; add rD, rB, rI ; jr rD
+            # target = base + idx*2^k, i.e. a jump INTO AN UNROLLED RUN of fixed-size blocks. Both
+            # idioms above require the target ADDRESS to be read from a table with `lw rN,OFF(base)`;
+            # here there is no table and nothing to read, so they return None and the jr would fall
+            # through to rec_dispatch and fail-fast at runtime, one case per build+run cycle.
+            #
+            # Runs LAST, only when both table idioms found nothing, so an already-correct recovery can
+            # never be perturbed — the same strict-first discipline the table idioms use on each other.
+            #
+            # The case COUNT is not guessed. This idiom's index is assigned CONSTANTS in a branch
+            # cascade dominating the jr (Spyro: s1 <- 0 / 1 / 2 at three sites), so the reachable case
+            # set is exactly the set of those constants. If no constant assignment is found, we emit
+            # NOTHING rather than assume a range — a wrong case label carves up real code.
+            res2 = _scan_computed_offset(ins, a, i.rs, lo, hi)
+            if res2 is None:
+                continue
+            jt[a] = res2
             continue
         tbl, count, targets = res
         if tbl_spans is not None:                  # the DATA table occupies [tbl, tbl+4*count)
             tbl_spans.add((tbl, count))
         jt[a] = targets
     return jt
+
+
+
+def _scan_computed_offset(ins, jr_a, dst, lo, hi, window=160):
+    """Recover `jr base+idx*2^k` (computed OFFSET, no table). Returns the exact case targets, or None.
+
+    Shape:  lui/addiu rB,<imm base> ; sll rI,rI,k ; add dst,rB,rI ; jr dst
+
+    The window is generous because the `sll` that scales the index is SHARED across consecutive
+    dispatches in this code — three jrs in a row reuse one `sll s1,s1,4` sitting ~68 instructions back —
+    so a tight window silently matches only the first of them.
+    The case set is the set of CONSTANTS assigned to rI by the branch cascade that dominates the jr —
+    not a count read from a guard, and never a guessed range. Returning None (emit nothing) is the
+    correct outcome when the constants cannot be recovered: a bogus case label splits real code."""
+    add_a = None
+    for a in range(jr_a - 4, max(lo, jr_a - window * 4) - 4, -4):
+        i = ins.get(a)
+        if i is None:
+            continue
+        if i.kind == D.ALU_RRR and i.op in ("add", "addu") and i.rd == dst:
+            add_a, srcs = a, (i.rs, i.rt)
+            break
+        if (i.rd == dst or i.rt == dst) and i.op != "sll":
+            return None                      # dst rewritten by something else — not this idiom
+    if add_a is None:
+        return None
+    # FORWARD over the window, not backward. The base is built `lui rB,HI ; addiu rB,rB,LO`, so a
+    # backward walk meets the addiu BEFORE the lui that gives it meaning and can never resolve the pair.
+    # That bug silently matched only those jrs whose operand order happened to suit it (0x8004C548 yes,
+    # the neighbouring 0x8004C4E4 no) — a partial match that looked like success.
+    # The add's two operands are the BASE and the scaled INDEX, so identifying one identifies the other.
+    # Relying on "the last sll writing either operand" instead picked up an unrelated `sll s2,s2,1` on
+    # the BASE register once the window was widened, giving idx=base and no constants — a wrong match
+    # that looked like a clean no-match. Pin base_reg first, then require the sll to write the OTHER one.
+    base = base_reg = idx_reg = shift = None
+    hi_val = {}
+    for a in range(max(lo, add_a - window * 4), add_a, 4):
+        i = ins.get(a)
+        if i is None:
+            continue
+        if i.op == "lui":
+            hi_val[i.rt] = i.imm << 16
+        elif i.op == "addiu" and i.rs in hi_val and i.rt in srcs:
+            base, base_reg = (hi_val[i.rs] + i.simm) & 0xFFFFFFFF, i.rt
+    if base_reg is None:
+        return None
+    other = srcs[1] if srcs[0] == base_reg else srcs[0]
+    for a in range(max(lo, add_a - window * 4), add_a, 4):
+        i = ins.get(a)
+        if i is not None and i.op == "sll" and i.rd == other:
+            idx_reg, shift = i.rt, i.shamt
+    if base is None or idx_reg is None or shift is None:
+        return None
+    if not (lo <= base < hi):
+        return None                          # a real dispatch jumps inside its own function
+    consts = set()
+    for a in range(lo, jr_a, 4):
+        i = ins.get(a)
+        if i is None:
+            continue
+        if i.op in ("addi", "addiu") and i.rs == 0 and i.rt == idx_reg:
+            consts.add(i.simm)
+    if not consts or min(consts) < 0:
+        return None
+    targets = [(base + (c << shift)) & 0xFFFFFFFF for c in sorted(consts)]
+    if any(not (lo <= t < hi) for t in targets):
+        return None
+    return targets
 
 
 def collect_jt_targets(exe, funcs, text_end):
