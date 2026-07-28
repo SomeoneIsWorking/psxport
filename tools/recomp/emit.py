@@ -21,11 +21,111 @@ not hidden:
 
 Usage: python3 tools/recomp/emit.py <MAIN.EXE> <out.c> [--limit N]
 """
-import os, sys, re
+import os, sys, re, json
 sys.path.insert(0, os.path.dirname(__file__))
 import psexe
 import decode as D
 from decode import decode
+
+
+# ---- game-supplied recompiler seeds (--seeds) --------------------------------------------------
+# The seed set is a GAME FACT, not a framework fact: which addresses are reached only indirectly
+# (fn-pointer / runtime-computed re-entry) is a property of the specific executable, and the load
+# base of each overlay is a property of the specific disc. Baking one game's addresses into the
+# recompiler is not merely untidy — it is WRONG for every other game: a foreign seed that lands
+# inside the new game's text SPLITS a real function at an arbitrary offset (silently corrupting the
+# recomp), and one that lands outside it raises on decode. So a consumer supplies its own seed file
+# and the framework ships none. See docs/porting-a-new-psx-game.md.
+def load_seeds(path):
+    """Parse a game's seed file. JSON with `//` line comments allowed — the RATIONALE for each seed
+    (how it is reached, which run surfaced it) is the most valuable part of the file and must stay
+    next to the address, so plain JSON is not enough.
+
+    Schema (every key optional):
+      main                  [addr, ...]          resident-module seeds
+      main_reentry          [addr, ...]          mid-function re-entry points in the resident module
+      overlay_bases         {STEM: addr, ...}    per-overlay load base
+      overlay_base_patterns [[regex, addr], ...] load base for overlay stems matching a regex
+      overlay_seeds         {STEM: [addr, ...]}  per-overlay explicit seeds
+    Addresses are hex strings ("0x80051FA4") or ints.
+    """
+    with open(path) as f:
+        raw = f.read()
+    # Strip `//` comments outside of string literals (a naive replace would corrupt any string
+    # containing a slash, e.g. a disc path like "\CD\SWDATA.BIN;1" in a rationale comment).
+    out, i, in_str, esc = [], 0, False, False
+    while i < len(raw):
+        ch = raw[i]
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(raw) and raw[i + 1] == "/":
+            while i < len(raw) and raw[i] != "\n":
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    try:
+        data = json.loads("".join(out))
+    except json.JSONDecodeError as e:
+        sys.exit(f"[recomp] {path}: malformed seed file: {e}")
+
+    def addr(v, where):
+        if isinstance(v, int):
+            return v
+        try:
+            return int(str(v), 16 if str(v).lower().startswith("0x") else 10)
+        except ValueError:
+            sys.exit(f"[recomp] {path}: {where}: not an address: {v!r}")
+
+    def addrs(vs, where):
+        return {addr(v, where) for v in vs}
+
+    known = {"main", "main_reentry", "overlay_bases", "overlay_base_patterns", "overlay_seeds"}
+    unknown = set(data) - known
+    if unknown:
+        sys.exit(f"[recomp] {path}: unknown key(s) {sorted(unknown)}; expected {sorted(known)}")
+    return {
+        "main": addrs(data.get("main", []), "main"),
+        "main_reentry": addrs(data.get("main_reentry", []), "main_reentry"),
+        "overlay_bases": {k: addr(v, f"overlay_bases[{k}]")
+                          for k, v in data.get("overlay_bases", {}).items()},
+        "overlay_base_patterns": [(rx, addr(v, "overlay_base_patterns"))
+                                  for rx, v in data.get("overlay_base_patterns", [])],
+        "overlay_seeds": {k: addrs(v, f"overlay_seeds[{k}]")
+                          for k, v in data.get("overlay_seeds", {}).items()},
+    }
+
+
+EMPTY_SEEDS = {"main": set(), "main_reentry": set(), "overlay_bases": {},
+               "overlay_base_patterns": [], "overlay_seeds": {}}
+
+
+def check_seeds_in_text(exe, seeds, where):
+    """Fail with a READABLE diagnostic when a seed lies outside the module's text.
+
+    Without this the failure is an IndexError from decode() deep inside discovery, which reads as a
+    recompiler bug rather than a bad seed file. This is exactly how a foreign game's seed list
+    announces itself, so the message names the likely cause."""
+    bad = sorted(a for a in seeds if not (exe.load <= a < exe.text_end - 4))
+    if bad:
+        sys.exit(f"[recomp] {where}: seed(s) outside the module text "
+                 f"[0x{exe.load:08X},0x{exe.text_end:08X}): "
+                 + ", ".join(f"0x{a:08X}" for a in bad)
+                 + "\n  A seed must be an address INSIDE the image being recompiled. If these are "
+                   "another game's addresses, point --seeds at this game's own seed file.")
 
 # Recomp version stamp — BUMP this whenever the recompiler logic or the seed set changes in a way that
 # must invalidate every machine's existing generated/ output. tools/ensure_recomp.py folds it into the
@@ -619,15 +719,22 @@ def ghidra_funcs(text_lo, text_hi, decomp="scratch/decomp/ram_f1000_all.c"):
         if text_lo <= int(x, 16) < text_hi})
 
 
-def overlay_funcs(exe, overlay_dir, base=0x80106228):
+def overlay_funcs(exe, overlay_dir, base=None):
     """Seed resident functions that are reached ONLY from the stage overlays (\\BIN\\*.BIN, loaded
-    raw to `base` at runtime and run by the interpreter). Those overlays `jal` into resident
-    MAIN.EXE functions (the cooperative scheduler, file loaders, etc.) that direct-jal discovery
-    within MAIN.EXE never sees — e.g. FUN_80044bd4. We scan each overlay's words for `jal` targets
-    landing in MAIN.EXE text whose first word decodes as a real instruction (filters data/jump-
-    table false positives), and seed them; discover_funcs then follows their call graph. Pure
-    binary input (the overlays are game data, like MAIN.EXE) — no Ghidra. Skipped if absent."""
+    raw to `base` at runtime). Those overlays `jal` into resident MAIN.EXE functions (the cooperative
+    scheduler, file loaders, etc.) that direct-jal discovery within MAIN.EXE never sees. We scan each
+    overlay's words for `jal` targets landing in MAIN.EXE text whose first word decodes as a real
+    instruction (filters data/jump-table false positives), and seed them; discover_funcs then follows
+    their call graph. Pure binary input (the overlays are game data, like MAIN.EXE) — no Ghidra.
+    Skipped if absent.
+
+    `base` is only the PC used to decode each word, and a `jal` target is
+    `(PC & 0xF0000000) | (imm26 << 2)` — so only its top nibble can matter, and every overlay shares
+    that nibble with the resident image. Default to the image's own load address rather than naming
+    any particular game's overlay slot."""
     lo, hi = exe.load, exe.text_end
+    if base is None:
+        base = exe.load
     if not overlay_dir or not os.path.isdir(overlay_dir):
         return set()
     targets = set()
@@ -993,90 +1100,37 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
 
 def main():
     if len(sys.argv) < 3:
-        sys.exit("usage: emit.py <MAIN.EXE> <out.c> [--overlays DIR] [--stub SCUS.EXE] [--limit N]")
+        sys.exit("usage: emit.py <MAIN.EXE> <out.c> [--seeds FILE] [--overlays DIR] "
+                 "[--stub SCUS.EXE] [--limit N]")
     exe = psexe.load(sys.argv[1])
     out_path = sys.argv[2]
     limit = None
     if "--limit" in sys.argv:
         limit = int(sys.argv[sys.argv.index("--limit") + 1])
 
-    # Functions reached only indirectly (jalr through a function pointer) — invisible to
-    # direct-jal discovery, found empirically via boot dispatch-misses. Documented seeds.
-    # NOTE: 0x8009A8E8/ADC4/AA4C were NOT functions — they are mid-function jump-table
-    # (switch) labels inside the printf/format-parser at 0x8009A76C, surfaced as misses
-    # because computed `jr` is routed to rec_dispatch (no in-function jump-table recovery
-    # yet). The real entry is seeded instead; the parser still needs jump-table recovery
-    # OR a native printf override to work (see docs/recomp_port_plan.md).
-    EXTRA_SEEDS = {
-        0x8009A76C,  # printf/format-parser, reached only via fn-pointer (jalr), Ghidra-missed
-        # --- FULL-PSX (psx_fallback) cooperative TASK ENTRIES: stored at task-obj+0xc by a runtime
-        #     task-register call and reached only as the scheduler's fresh-entry dispatch (ra=DEAD0000),
-        #     so neither direct-jal nor the pointer scans find them. Needed for PSXPORT_SBS_MODE=both/
-        #     gameplay (full-PSX core B); the native path owns these stages so it never dispatches them.
-        #     Surfaced empirically by the full-PSX miss-loop (later-264).
-        # (the object-behavior handler family 0x800739AC/0x80073CD8/… AND the overlay-registered task
-        #  entries 0x8004514C/0x800452C0/… are seeded GENERALLY by overlay_data_func_pointers — handler
-        #  pointers live in area-overlay object templates; task entries are lui+addiu-built in overlay code.)
-        # --- engine render functions reached ONLY via a function pointer (so direct-jal discovery
-        #     misses them) — seeded to EMIT readable C for the native-engine RE/port (later-135). The
-        #     runtime is interpreter-only, so seeding doesn't change execution; it makes the body
-        #     available in generated/ for RE (and rec_set_override works on them by address regardless).
-        0x8002AB5C,  # field terrain/map renderer — node+24 render-fn ptr of the t32 render-list node
-        0x80051C8C,  # per-object transform builder (node+0x98 matrix from euler angles + position)
-        # --- per-object RENDER sub-handlers reached ONLY via a runtime handler pointer (the perobj
-        #     render dispatcher FUN_8003CCA4 `jr v0` where v0 = a node's render-cmd fn ptr, built at
-        #     area-load into guest data — NOT the static table 0x80014EC8). They are ALSO jump-table
-        #     case labels of the sibling FUN_8003D584's own switch, so discovery treated them as
-        #     mid-function labels and did NOT emit function entries; a runtime dispatch to them then
-        #     recomp-MISSes via FUN_8003CCA4's switch default. Latent until the task0 stack-leak fix
-        #     (later-286) let free-roam run long enough to render the object that carries this handler.
-        # --- Mid-function COROUTINE RESUME target inside the yield primitive FUN_80051F80. When a
-        #     task calls FUN_80051F80 to yield, the substrate scheduler captures ra = the instruction
-        #     AFTER `jal 0x80080880` inside 51F80 (i.e. 0x80051FA4). Resuming the coroutine dispatches
-        #     that ra as a function entry, but 0x80051FA4 is a mid-function label — not naturally in
-        #     the fn set. Seed it so a resume-target dispatch has a body to enter. Surfaced by SBS
-        #     gameplay-mode f0 fresh-entry rec_coro_run(0x8010649C) → yield → resume-miss.
-        0x80051FA4,
-        # --- AREA-MODE stub table (0x80010000, 22 entries): each entry is a tiny resident stub that
-        #     `jal`s one overlay leaf and falls through to the shared epilogue 0x8001CB98. The guest
-        #     reaches them through the `jr` in FUN_8001CAC0, so the jump-table matcher classifies them
-        #     as that function's switch case labels and prunes them. Tomba2Engine's native
-        #     Engine::areaModeDispatchFaithful dispatches 0x8001CB98 BY ADDRESS, and the whole family is
-        #     documented/mirrored there, so they must stay real function entries.
-        0x8001CB00, 0x8001CB10, 0x8001CB20, 0x8001CB30, 0x8001CB40, 0x8001CB50,
-        0x8001CB60, 0x8001CB70, 0x8001CB80, 0x8001CB90, 0x8001CB98,
-        0x8003D5CC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target)
-        0x8003D8AC,  # FUN_8003CCA4/FUN_8003D584 perobj render sub-handler (switch case target) — the observed miss
-        # --- native-override targets: seed so the func_<addr> wrapper exists and
-        #     rec_set_override(addr,fn) reaches them (rec_set_override only works on RECOMPILED
-        #     entries). libcard B0-vector I/O trampolines, overridden by memcard.c for native
-        #     synchronous card file I/O (see runtime/recomp/memcard.c). All three are already
-        #     reachable via direct jal (so this is a harmless no-op today), seeded proactively
-        #     so the override contract never depends on jal-discovery happening to reach them.
-        0x8009BAF0,  # _card_read   (B0:0x4E) — override target (memcard.c ov_card_read)
-        0x8009C600,  # _card_write  (B0:0x4F) — override target (memcard.c ov_card_write)
-        0x8009C610,  # _card_status (B0:0x5C) — override target (memcard.c ov_card_status)
-        # NOTE (later-254): resident fns reached ONLY via a function pointer (jalr) — invisible to
-        # direct-jal discovery — are now auto-seeded by pointer_table_funcs + constructed_func_pointers
-        # (data-word AND lui+addiu code-built vtable pointers). Add a manual seed here ONLY for a fn
-        # those two scans can't see (e.g. a stackless leaf not preceded by `jr ra`, or a pointer built
-        # by an unusual instruction sequence) when the fail-fast boot surfaces it as a [recomp-MISS].
-        # NOTE: 0x80003A4C (per-VBlank pad read FUN_80003a4c) is intentionally NOT seeded here.
-        # It lives at 0x80003A4C, BELOW MAIN.EXE's text [0x80010000,0x800BE800) — it is part of
-        # the boot-stub/resident low-text SIO driver loaded at runtime, NOT present in MAIN.EXE
-        # (our recompiler input). emit.py can only recompile addresses inside MAIN.EXE's text, so
-        # seeding it would raise (decode of an out-of-text vaddr) and break the build. The pad
-        # override must therefore be wired differently (it cannot use rec_set_override on a
-        # not-in-input address); see report / pad_input.c wiring.
-    }
-    # Seed purely from the BINARY — the entry point + indirectly-reached helpers — and grow the
-    # recompiled set by following direct jal targets (discover_funcs). No Ghidra / external
-    # function list. The interpreter is GONE (later-254): a fn reached only via a function pointer
-    # (jalr) that discovery can't see is NOT recompiled, so a call to it FAILS FAST at runtime — seed
-    # it in EXTRA_SEEDS above when the boot surfaces it. (Set PSXPORT_USE_GHIDRA=1 to additionally
-    # seed from the Ghidra decomp / committed list, recompiling more up-front.)
+    # Seed purely from the BINARY — the entry point + the pointer scans — plus the GAME's OWN seed
+    # file (--seeds). Functions reached only indirectly (jalr through a function pointer), or entered
+    # as a runtime-computed re-entry point, are invisible to direct-jal discovery, and WHICH ones
+    # those are is a fact about the specific executable, not about the framework. Discovery then
+    # grows the recompiled set by following direct jal targets (discover_funcs).
+    #
+    # The interpreter is GONE (later-254): a fn reached only via a function pointer that no scan sees
+    # is NOT recompiled, so a call to it FAILS FAST at runtime — add it to the game's seed file when
+    # the boot surfaces it as a [recomp-MISS], with a note on how it is reached. (Set
+    # PSXPORT_USE_GHIDRA=1 to additionally seed from the Ghidra decomp, recompiling more up-front.)
+    if "--seeds" in sys.argv:
+        gs = load_seeds(sys.argv[sys.argv.index("--seeds") + 1])
+    else:
+        # Say so LOUDLY. A game that needs seeds but forgets the flag still emits a complete-looking
+        # set — just a smaller one — and only fails much later as a runtime [recomp-MISS]. Announcing
+        # it here is the difference between a one-line cause and a debugging session.
+        print("[recomp] no --seeds file: discovery is BINARY-ONLY (entry point + pointer scans + jal "
+              "graph). Any function reached only via a fn-pointer or a runtime-computed re-entry will "
+              "be missing and fail fast at runtime as a [recomp-MISS].")
+        gs = EMPTY_SEEDS
+    check_seeds_in_text(exe, gs["main"] | gs["main_reentry"], "--seeds main/main_reentry")
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
-    seeds = ({exe.entry} | EXTRA_SEEDS | pointer_table_funcs(exe)
+    seeds = ({exe.entry} | gs["main"] | pointer_table_funcs(exe)
              | constructed_func_pointers(exe) | code_pointer_tables(exe)
              | overlay_data_func_pointers(exe, ov_dir))   # object-behavior handlers in overlay templates
     out_dir = os.path.dirname(out_path) or "."
@@ -1084,11 +1138,10 @@ def main():
     SHARDS = max(1, int(os.environ.get("PSXPORT_SHARDS", "8")))
     # NOTE: --overlays is NOT passed to the MAIN module's emit_module anymore (no `ov_dir`). The old
     # overlay_funcs() seeding (resident fns the overlays jal into) is still useful, so keep it:
-    # Mid-function re-entry seeds — an entry inside another function whose body must fall through
-    # into the seed (not `return`). Currently just the yield-primitive resume point 0x80051FA4.
-    MAIN_REENTRY = {0x80051FA4}
+    # Mid-function re-entry seeds — an entry inside another function whose body must fall THROUGH
+    # into the seed (not `return`) — come from the game's seed file (`main_reentry`).
     src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS,
-                            reentry=MAIN_REENTRY)
+                            reentry=gs["main_reentry"])
 
     # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
     # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with
@@ -1104,74 +1157,24 @@ def main():
     # a given guest address is different code depending on which overlay is resident, so each is its OWN
     # module (ov_<tag>_*) keyed at its base+offset, and the runtime router (overlay_router.cpp) routes a
     # slot address to the CURRENTLY resident overlay (identified by a content signature of guest RAM at
-    # the base). Bases below are the EXACT load destinations observed in the CD load-log (PSXPORT_DEBUG=cd
-    # over a boot->field run); they are deterministic game facts, NOT magic offsets:
-    #   STAGE slot 0x80106228 — START/DEMO/GAME.BIN (the main stage; mutually exclusive). cd-log:
-    #     "loadfile 1648 B @LBA1904->0x80106228" (START), "5372 B @LBA1879" (DEMO), "11636 B @LBA1882" (GAME).
-    #   MODE slot 0x80108F9C — SOP.BIN (the field/sub-mode overlay loaded RIGHT AFTER GAME.BIN, which stays
-    #     resident at 0x80106228). cd-log: "async read 4415 words (17660 B) @LBA1895 -> 0x80108F9C";
-    #     == engine_demo.cpp:445 "the overlay slot right after GAME.BIN". GAME [0x80106228,0x80108F9C) and
-    #     SOP [0x80108F9C,..) are both resident together (adjacent, non-overlapping ranges).
-    #   OPN.BIN — a sub-overlay loaded into the AREA slot 0x8018A000 (cd-log: "async read 13596 B @LBA1888
-    #     -> 0x8018A000"; its header fn-ptrs (0x8018A348..) confirm that base). The big area DATA also loads
-    #     to 0x8018A000 at other times; the resident-signature routing distinguishes them.
-    #   CRD.BIN — the memory-CARD save browser (NOT "credits"): the title-menu Load-Game substate
-    #     (DEMO sm[0x48]==4 -> FUN_8007BF20 -> FUN_8007BE18) and the in-game save UI. It loads into the
-    #     SAME slot as OPN, 0x8018A000 — cd-log "async read 6265 words (25060 B) @LBA1866 -> 0x8018A000",
-    #     captured by driving the title selection under PSXPORT_DEBUG=cd. Its base was previously guessed
-    #     as the MODE slot, which put its bodies ~0x80080000 off: MAIN calls into it by hard-coded absolute
-    #     (0x8018FA88 / 0x8018FBCC = CRD+0x5A88 / +0x5BCC, both `addiu sp,-0x20` prologues), so every such
-    #     call fail-fasted as a rec_dispatch miss and the Load-Game browser aborted the process.
-    #   A0*.BIN — the per-area FIELD CODE overlays (A00..A0L); each loads to the MODE slot 0x80108F9C
-    #     (swapping out SOP), holding the field render submitters (0x8013xxxx). cd-log:
-    #     "loadfile 285096 B @LBA374 -> 0x80108F9C" (A00). All A0* are interchangeable at this base.
-    OVERLAY_BASES = {
-        "START": 0x80106228, "DEMO": 0x80106228, "GAME": 0x80106228,
-        "SOP": 0x80108F9C, "OPN": 0x8018A000, "CRD": 0x8018A000,
-    }
+    # the base). A base is therefore a fact about the SPECIFIC DISC, and the game supplies it in its
+    # own seed file (`overlay_bases`, or `overlay_base_patterns` for a whole family that shares one
+    # slot — e.g. interchangeable per-area code overlays). Capture the real load destinations with
+    # PSXPORT_DEBUG=cd over a boot->field run; they are deterministic game facts, NOT magic offsets.
+    # A base that is merely GUESSED is unrecoverable garbage rather than an error, so a missing one
+    # fails fast below instead of defaulting.
     def overlay_base(stem):
-        if stem in OVERLAY_BASES:
-            return OVERLAY_BASES[stem]
-        if re.fullmatch(r"A0[0-9A-Z]", stem):    # field area code overlays -> MODE slot
-            return 0x80108F9C
+        if stem in gs["overlay_bases"]:
+            return gs["overlay_bases"][stem]
+        for rx, base in gs["overlay_base_patterns"]:
+            if re.fullmatch(rx, stem):
+                return base
         return None
     # Explicit per-overlay seeds: addresses reached NOT by a jal/pointer the scans see, but as a CLEAN
-    # RE-ENTRY POINT the runtime resumes at — a "game-specific tailoring" (documented game fact). GAME's
-    # cooperative task loop is re-entered each frame at its LOOP TOP 0x801063F4 (native_boot.cpp:285, the
-    # scheduler sets resume PC = loop top after the GAME-stage SM yields). It is mid the task fn (the
-    # prologue 0x8010637C is owned natively by ov_game_stage_main), so no scan finds it — seed it so the
-    # per-frame resume dispatches to a recompiled body (the loop runs one frame then yields via ov_switch).
-    OVERLAY_EXTRA_SEEDS = {
-        # GAME loop top (per-frame re-entry) + the GAME stage-main 0x8010637C and DEMO stage-main
-        # 0x801062E4. The stage-main entries are owned NATIVELY (ov_demo/ov_game dispatchers), so the
-        # native path never dispatches them and no scan seeds them — but the FULL-PSX path (psx_fallback /
-        # SBS gameplay/both) runs each stage as a pure recompiled body from its entry, so seed them.
-        "GAME": {0x801063F4, 0x8010637C},
-        "DEMO": {0x801062E4},
-        # START.BIN is the stage-0 FILE-TABLE overlay: its header is a filename string table (count@base=6,
-        # "\CD\SWDATA.BIN;1" ...), so NO scan finds code. The bootstrap FUN_800499e8 builds task0 with
-        # entry PC = base+0x274 = 0x8010649C (a `addiu sp,-0x1c8` prologue, the START stage fn). The native
-        # path owns that bootstrap (native_task0_bootstrap) so it never dispatches the recompiled body — but
-        # the FULL-PSX path (PSXPORT_SBS_MODE=both core B, psx_fallback) runs task0 under the substrate and
-        # resumes at 0x8010649C, so seed it (a documented runtime-computed re-entry, like GAME's loop top).
-        "START": {0x8010649C},
-        # SOP field-mode machine (FUN_80109450): the SOP.BIN overlay body dispatched from GAME.BIN
-        # (caller ra 0x801088B0 in gameplay-mode SBS, full-PSX field mode). It's the sm[0x4e]-indexed
-        # sub-mode dispatcher (per findings/render.md's later-286 note); the scan misses it because
-        # GAME.BIN calls it by hard-coded absolute 0x80109450 into the SOP overlay slot, and the
-        # cross-module discovery doesn't cross the resident->overlay boundary. Seed it so the full-PSX
-        # path can advance past field entry (SBS gameplay/full mode, or PSXPORT_GATE=1 field runs).
-        "SOP": {0x80109450},
-        # The per-AREA handler tables (indexed by the area byte DAT_800BF870) are NOT listed here —
-        # they are discovered from the binary by area_indexed_overlay_tables() below. Only the two
-        # addresses that are NOT members of such a table stay explicit:
-        # 0x801158E0 (2026-07-10): area-1 handler reached via a computed pointer from resident
-        #   FUN_800263C0's dispatch (a0=node) — REPL `warp 1` under PSXPORT_GATE=1 hit a miss.
-        "A01": {0x801158E0},
-        # 0x80111A20 (2026-07-10, issue #33): attract-demo chain ov_a02 FUN_801122A4 dispatches it
-        #   (caller ra=0x80111CAC); discovery missed it — un-driven title screen crashed the port.
-        "A02": {0x80111A20},
-    }
+    # RE-ENTRY POINT the runtime resumes at (a cooperative loop top, a stage entry the native path
+    # owns, a hard-coded absolute call into another overlay's slot). Game facts — supplied by the
+    # game's seed file under `overlay_seeds`.
+    OVERLAY_EXTRA_SEEDS = gs["overlay_seeds"]
     # ---- pass 1: load every overlay image (the area set must be complete + IN AREA ORDER before
     # the per-area MAIN tables can be resolved — entry i of such a table is an address in overlay i).
     ov_images = []          # (stem, fn, base, data, ovexe)
@@ -1184,9 +1187,13 @@ def main():
             stem = fn[:-4].upper()
             base = overlay_base(stem)
             if base is None:
-                print(f"[overlays] WARNING: {fn} has no known load base — defaulting to 0x80106228; "
-                      f"capture its real dest with PSXPORT_DEBUG=cd and add it to OVERLAY_BASES")
-                base = 0x80106228
+                # NEVER guess a base. An overlay is keyed BY its load address, so a wrong base emits a
+                # whole module of correctly-decoded instructions at wrong addresses — every jal target,
+                # every pointer-table test and the runtime router are then silently wrong. That is
+                # unrecoverable-looking garbage rather than an error, so fail fast instead.
+                sys.exit(f"[recomp] overlay {fn}: no load base in the game's seed file. Capture the real "
+                         f"load destination (PSXPORT_DEBUG=cd over a boot->field run) and add it under "
+                         f"`overlay_bases` (or `overlay_base_patterns` for a family sharing one slot).")
             ov_images.append((stem, fn, base, data,
                               psexe.PsxExe(base, 0, base, len(data), 0, 0, data)))
     # A0<n> sorts lexicographically in area order (A00..A09, A0A..A0L), which is the index order the

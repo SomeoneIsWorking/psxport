@@ -56,6 +56,42 @@ Before any game logic (see `recomp-init`):
 You now have a byte-gated recomp running. Everything after is *progressively replacing substrate
 with owned native code*, gated by the harness.
 
+### The game's seed file (`emit.py --seeds`)
+
+The recompiler discovers functions from the binary itself — the entry point, the pointer/table scans,
+then the direct-`jal` call graph. What it *cannot* see is anything reached only through a function
+pointer, or entered at a runtime-computed re-entry point (a cooperative loop top, a stage entry the
+native path owns, a hard-coded absolute call into another overlay's slot). Which addresses those are
+is a fact about **the specific executable**, and each overlay's load base is a fact about **the
+specific disc**. So the framework ships none of them and every game supplies its own seed file:
+
+```sh
+python3 tools/recomp/emit.py MAIN.EXE generated/rec.c --seeds game/recomp_seeds.json [--overlays DIR]
+```
+
+JSON with `//` comments (keep the *rationale* next to each address — it is what makes the entry
+reviewable a year later). Every key is optional:
+
+| key | meaning |
+|---|---|
+| `main` | resident-module seeds |
+| `main_reentry` | mid-function re-entry points (the body before must fall *through*, not `return`) |
+| `overlay_bases` | `{STEM: addr}` — per-overlay load base |
+| `overlay_base_patterns` | `[[regex, addr]]` — one slot shared by a family (e.g. per-area overlays) |
+| `overlay_seeds` | `{STEM: [addr]}` — per-overlay explicit seeds |
+
+Two rules this enforces, both learned the hard way:
+
+- **Never reuse another game's seed list.** A foreign seed that lands inside your text SPLITS a real
+  function at an arbitrary offset — the emit succeeds and the recomp is silently corrupt. One that
+  lands outside raises. `emit.py` range-checks seeds and names this cause in the error.
+- **Never guess an overlay base.** An overlay is keyed *by* its load address, so a wrong base emits a
+  whole module of correctly-decoded instructions at wrong addresses — every `jal` target, pointer
+  test and router lookup then silently wrong. A missing base is a hard error, not a default.
+
+Grow the file empirically: boot, and when the substrate fail-fasts with a `[recomp-MISS]`, add that
+address with a note on how it is reached.
+
 ---
 
 ## 3. Phase 1 — faithful: byte-exact native ownership
@@ -189,7 +225,8 @@ real and already isolated.
 
 ## 6. A concrete order of operations for a new game
 
-1. **Provision + recompile** the target's `MAIN.EXE`/overlays; vendor the oracle emulator.
+1. **Provision + recompile** the target's `MAIN.EXE`/overlays (with your own `--seeds` file — see
+   Phase 0); vendor the oracle emulator.
 2. **Stand up the harness** (SBS/abcompare) and confirm byte-lockstep with everything on substrate.
 3. **Lift the framework** unchanged: substrate, PSX-HW backends, SDK-HLE, tooling, render substrate.
 4. **Bring up the GTE tap** (`projprim`/PGXP equivalent) → native depth for the 3D world. This is
