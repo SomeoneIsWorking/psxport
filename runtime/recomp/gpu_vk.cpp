@@ -809,6 +809,19 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
 }
 
 // ---- present: upload CPU VRAM, render the 3D/textured batch on top, sample [sx,sy,w,h] to the swapchain
+// renderFadeState is an OPTIONAL GameHooks entry — a port whose fade is not RE'd yet leaves it null,
+// and two call sites below already guarded it, which is what makes it optional by design. Five others
+// called it unconditionally and segfaulted the moment a shot/dump ran in such a port. That crash was
+// recorded for months as "the VK readback BLOCKS" (issue 0018): the run produced few frames and no
+// files, which looks exactly like a hang unless you check the exit status — it was 139 all along.
+// One accessor so the guard cannot be forgotten again; absent means "no fade", which is what the
+// guarded sites already did by leaving FadeState default-initialised.
+static inline FadeState fade_state_of(Core* c) {
+  FadeState f{};
+  if (c && c->hooks && c->hooks->renderFadeState) c->hooks->renderFadeState(c, &f);
+  return f;
+}
+
 static void dump_to(GpuVkState& g, const char*, int, int, int, int, int, uint8_t, uint8_t, uint8_t);   // fwd (defined below) — preseq dump
 void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
@@ -993,15 +1006,27 @@ void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float
 
 // ---- readback (shot / vram dump): download THIS Game's VRAM image → host, decode 1555 → PPM ---------
 static const uint16_t* readback_vram(GpuVkState& g) {
+  // STEP TRACE (PSXPORT_DEBUG=rbtrace). Kept, not temporary: this is what falsified issue 0018's
+  // recorded diagnosis. That issue said this function BLOCKED from three call sites; the trace shows
+  // enter -> targets ok -> cmd acquired -> submitted -> fence signalled every time, and the real fault
+  // was a null optional GameHooks call at the DUMP site. A claim that a specific call blocks should be
+  // cheap to check rather than re-argued.
+  const bool tr = cfg_dbg("rbtrace");
+  if (tr) cfg_logf("rbtrace", "enter");
   g.ensure_targets();
+  if (tr) cfg_logf("rbtrace", "targets ok");
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "AcquireGPUCommandBuffer");
+  if (tr) cfg_logf("rbtrace", "cmd acquired");
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
   SDL_GPUTextureRegion srcr = {}; srcr.texture = g.s_vram_tex; srcr.w = VRAM_W; srcr.h = VRAM_H; srcr.d = 1;
   SDL_GPUTextureTransferInfo dsti = {}; dsti.transfer_buffer = g.s_rb_xfer; dsti.pixels_per_row = VRAM_W; dsti.rows_per_layer = VRAM_H;
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
+  if (tr) cfg_logf("rbtrace", "copy pass ended, submitting");
   SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+  if (tr) cfg_logf("rbtrace", "submitted, fence=%p — waiting", (void*)fence);
   SDL_WaitForGPUFences(s_dev, true, &fence, 1);
+  if (tr) cfg_logf("rbtrace", "fence signalled");
   SDL_ReleaseGPUFence(s_dev, fence);
   const uint16_t* p = (const uint16_t*)SDL_MapGPUTransferBuffer(s_dev, g.s_rb_xfer, false);
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (p[i]) nz++;
@@ -1043,14 +1068,14 @@ static void dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int 
 }
 void GpuVkState::shot(const char* path) {
   if (!gpu_vk_enabled() || !s_inited) { cfg_logi("gpu_shot", "GPU not active"); return; }
-  FadeState f; game->core.hooks->renderFadeState(&game->core, &f);
+  FadeState f = fade_state_of(&game->core);
   dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
   cfg_logi("gpu_shot", "wrote %s (%dx%d @ %d,%d)", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuVkState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) return;
-  FadeState f; core->hooks->renderFadeState(core, &f);
+  FadeState f = fade_state_of(core);
   dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b);
   cfg_logi("gpu_shot", "wrote %s (%dx%d @ %d,%d)", path, w, h, sx, sy);
 }
@@ -1152,7 +1177,7 @@ void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (voi
   // tools/preseq_flicker.py's 30Hz-oscillation detection.
   if (s_preseq_left > 0) {
     char p[192]; snprintf(p, sizeof p, "%s/p%04d.ppm", s_preseq_dir, s_preseq_idx++);
-    FadeState f; game->core.hooks->renderFadeState(&game->core, &f);
+    FadeState f = fade_state_of(&game->core);
     dump_to(*this, p, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
     if (--s_preseq_left == 0) cfg_logi("preseq", "done: %d frames -> %s", s_preseq_idx, s_preseq_dir);
   }
@@ -1364,7 +1389,7 @@ void gpu_vk_rawdump_arm(const char* path, int frame) { (void)path; (void)frame; 
 // two returned panes via gpu_vk_present_sbs2. Reuses the proven upload+geom+readback path; the engine
 // screen-fade is applied (same math as dump_to / present.frag).
 void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, int w, int h, uint8_t* rgba) {
-  FadeState f; core->hooks->renderFadeState(core, &f);  // THIS core's fade (guest-backed, SBS-clean)
+  FadeState f = fade_state_of(core);   // THIS core's fade (guest-backed, SBS-clean)
   const int s_fade_mode = f.mode;
   const uint8_t s_fade_r = f.r, s_fade_g = f.g, s_fade_b = f.b;
   if (!gpu_vk_enabled()) { memset(rgba, 0, (size_t)w * h * 4); return; }
@@ -1465,7 +1490,7 @@ void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int 
     GpuDevice& gd = gdev();
     int& lm = gd.s_fws_lastmode; uint8_t& lr = gd.s_fws_lr; uint8_t& lg = gd.s_fws_lg; uint8_t& lb = gd.s_fws_lb;
     int& lsx = gd.s_fws_lsx; int& lsy = gd.s_fws_lsy; int& lw = gd.s_fws_lw; int& lh = gd.s_fws_lh;
-    FadeState f; core->hooks->renderFadeState(core, &f);
+    FadeState f = fade_state_of(core);
     int m = f.mode; uint8_t r = f.r, g = f.g, b = f.b;
     if (m != lm || r != lr || g != lg || b != lb || sx != lsx || sy != lsy || w != lw || h != lh) {
       uint32_t sm = core->mem_r32(0x1f800138u);
