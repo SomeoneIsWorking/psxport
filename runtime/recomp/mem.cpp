@@ -124,6 +124,33 @@ static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word 
   return (int)(bs * (bc ? bc : 1));
 }
 
+// An address that looks like MAIN RAM but did not resolve through host_ptr is a MEMORY-MODEL DEFECT,
+// not a stray peripheral poke, and the two must not share a diagnostic. An unimplemented I/O register
+// reaching here is expected and routine; a RAM address reaching here means the access is being
+// silently DISCARDED (writes vanish, reads return 0) while the guest believes its memory works.
+//
+// That distinction is not academic. PSX RAM is 2 MB mirrored across the low 8 MB, and until 2026-07-28
+// host_ptr modelled only the first mirror — so a game whose stack sat in the top mirror had its ENTIRE
+// stack silently dropped. The symptom (a callee-saved register restored as 0, several frames from any
+// memory code) took most of a session to trace back, because the only diagnostic was an `io` verbose
+// line that is off by default and indistinguishable from ordinary unmapped-peripheral chatter.
+//
+// Reported once per distinct address so a hot loop cannot drown the log, and NOT gated behind the io
+// verbosity knob: if this fires, something is wrong that the user needs to see without knowing to ask.
+static bool ram_range_addr(uint32_t p) { return p < 0x1F000000u; }   // below the I/O window == RAM space
+static void warn_unmapped_ram(uint32_t a, uint32_t bytes, const char* how) {
+  static uint32_t seen[32];
+  static int n = 0;
+  const uint32_t p = a & 0x1FFFFFFF;
+  if (!ram_range_addr(p)) return;
+  for (int i = 0; i < n; i++) if (seen[i] == p) return;
+  if (n < 32) seen[n++] = p;
+  cfg_loge("mem", "UNMAPPED RAM %s%u @ 0x%08X (phys 0x%08X) — access is being DISCARDED. "
+                  "This is a memory-model gap, not a stray I/O poke: guest writes here vanish and "
+                  "reads return 0. Check host_ptr's mapping for this range.", how, bytes * 8, a, p);
+  if (n == 32) cfg_loge("mem", "UNMAPPED RAM: further distinct addresses will not be reported");
+}
+
 uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
   if (p == 0x1F801814) {                           // GPUSTAT: report ready; toggle even/odd line
@@ -166,6 +193,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010E0) return s_dma6_madr;        // DMA6 OTC MADR
   if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
   if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
+  warn_unmapped_ram(a, bytes, "read");
   if (s_io_verbose)
     cfg_logi("io", "read%u @ 0x%08X -> 0", bytes * 8, a);
   return 0;
@@ -287,6 +315,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     }
     return;
   }
+  warn_unmapped_ram(a, bytes, "write");
   if (s_io_verbose)
     cfg_logi("io", "write%u @ 0x%08X = 0x%08X", bytes * 8, a, v);
 }
