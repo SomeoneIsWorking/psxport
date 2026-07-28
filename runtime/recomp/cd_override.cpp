@@ -343,15 +343,21 @@ void Cd::overridesInit() {
   //   double-register here.
   PlatformHle& hle = game->platform_hle;
   const GameConfig* cfg = game->core.cfg;
-  hle.register_(cfg->cdInlineLoad, cd_dc40);     // FUN_8001dc40 inline async loader -> sync
-  hle.register_(cfg->voicePlay,    voice_play);  // voice/BGM clip player -> native xa_stream
-  hle.register_(cfg->voiceStop,    voice_stop);  // stop voice/BGM -> native
-  hle.register_(cfg->cdFileLoad,   cd_loadfile); // engine file loader -> sync sector read
-  hle.register_(cfg->cdCommand,    cd_command);  // libcd CdCommand -> success (no controller)
-  hle.register_(cfg->cdSync,       cd_sync);     // libcd CdSync -> complete (CD is synchronous)
-  hle.register_(cfg->cdCmdStream,  cd_cmd_stream);// streaming CD-cmd wrapper (GetlocL pos in range)
-  hle.register_(cfg->cdReadPrim,   cd_read);     // libcd by-LBA read -> native sync
-  hle.register_(cfg->cdAsyncRead,  cd_async_read);// async streaming reader -> sync (area-DATA load)
+  // Skip an address the game has not configured. Zero means "this game has no such CD primitive, or
+  // it has not been RE'd yet" — the same convention GameConfig::hle uses. Passing 0 straight through
+  // made register_() emit "REFUSED 0x00000000" once per unconfigured entry, which is pure noise that
+  // looks like a real error: a port with no CD group RE'd yet printed nine of them at every boot and
+  // buried whatever the next diagnostic was.
+  auto reg = [&](uint32_t addr, OverrideFn fn) { if (addr) hle.register_(addr, fn); };
+  reg(cfg->cdInlineLoad, cd_dc40);     // inline async loader -> sync
+  reg(cfg->voicePlay,    voice_play);  // voice/BGM clip player -> native xa_stream
+  reg(cfg->voiceStop,    voice_stop);  // stop voice/BGM -> native
+  reg(cfg->cdFileLoad,   cd_loadfile); // engine file loader -> sync sector read
+  reg(cfg->cdCommand,    cd_command);  // libcd CdCommand -> success (no controller)
+  reg(cfg->cdSync,       cd_sync);     // libcd CdSync -> complete (CD is synchronous)
+  reg(cfg->cdCmdStream,  cd_cmd_stream);// streaming CD-cmd wrapper (GetlocL pos in range)
+  reg(cfg->cdReadPrim,   cd_read);     // libcd by-LBA read -> native sync
+  reg(cfg->cdAsyncRead,  cd_async_read);// async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
   // _DAT_1f8001f8/f0/f4 read state — but runs the reader INLINE (calls FUN_8001d940 directly,
