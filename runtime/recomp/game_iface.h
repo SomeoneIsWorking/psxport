@@ -138,6 +138,16 @@ struct GameConfig {
   // as the cause. Zero for a game that does not use stock libcd.
   uint32_t cdLastPosBuf;
 
+  // STOCK Sony libcd CdRead(sectors, buf, mode) and CdReadSync(mode, result). Overriding at THIS
+  // level makes the PC perform the whole read: the guest's per-sector callback loop, drive-position
+  // check, vblank timeout and retry path never run. Zero for a game that does not use stock libcd.
+  uint32_t cdReadStock;
+  uint32_t cdReadSync;
+
+  // STOCK Sony libcd CdSearchFile(CdlFILE*, name) — resolved natively from the disc image's ISO9660
+  // tree, so the guest's filesystem walk issues no drive activity at all.
+  uint32_t cdSearchFile;
+
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
   uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)

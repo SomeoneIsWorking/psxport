@@ -277,6 +277,101 @@ static void cd_getsector_stock(Core* c) {
   c->r[V0] = 0;
 }
 
+// STOCK Sony libcd CdRead(sectors, buf, mode) — the PC performs the ENTIRE read.
+//
+// Overriding here rather than at the per-sector level removes the whole guest state machine: no
+// ready-callback loop, no drive-position check, no vblank-based timeout, and therefore none of the
+// retry path that timeout drives. The guest asks for N sectors and gets N sectors.
+//
+// Bytes per sector are chosen from the MODE exactly as the guest's own code does (0x80089ECC):
+//   (mode & 0x30) == 0x00 -> 0x200 words (2048) — user data only, from raw offset 24
+//   (mode & 0x30) == 0x20 -> 0x249 words (2340) — whole sector, from raw offset 12 (past sync)
+//   otherwise             -> 0x246 words (2328)
+// Mirroring the guest's selection matters: hand it 2048-byte payloads when it asked for whole
+// sectors and every header it reads back is misframed.
+static void cd_read_stock(Core* c) {
+  const uint32_t sectors = c->r[A0], buf = c->r[A1], mode = c->r[A2];
+  Cd& cd = c->game->cd;
+  if (cd.setloc_lba < 0) {
+    cfg_loge("cd", "CdRead(%u sectors) with NO Setloc — the drive was never positioned. Refusing.",
+             sectors);
+    c->r[V0] = 0;                       // bool: 0 == failure, as the guest routine reports it
+    return;
+  }
+  const uint32_t m = mode & 0x30u;
+  const uint32_t bytes = (m == 0x00u) ? 2048u : (m == 0x20u) ? 2340u : 2328u;
+  const uint32_t off   = (m == 0x20u) ? 12u : 24u;
+
+  uint8_t raw[2352];
+  for (uint32_t i = 0; i < sectors; i++) {
+    const uint32_t lba = (uint32_t)cd.setloc_lba + i;
+    if (!disc_read_raw(&c->game->disc, lba, raw, sizeof raw)) {
+      cfg_loge("cd", "CdRead: LBA %u unreadable at sector %u/%u — %u sector(s) delivered, the rest "
+                     "NOT written. This read is genuinely incomplete.", lba, i, sectors, i);
+      c->r[V0] = 0;
+      return;
+    }
+    for (uint32_t k = 0; k < bytes; k++) c->mem_w8(buf + i * bytes + k, raw[off + k]);
+  }
+  cd.setloc_lba += (int32_t)sectors;    // the head ends where a real sequential read would leave it
+  cd.sec_pos = 0; cd.sec_len = 0; cd.sec_lba = -1;   // any per-sector FIFO state is now stale
+  cd.stock_reading = 0;                 // this read is finished; no callback loop should run
+  if (cd.verbose || cfg_dbg("cd"))
+    cfg_logi("cd", "CdRead %u sector(s) x %u bytes from LBA %d -> 0x%08X (mode 0x%02X)", sectors,
+             bytes, (int)(cd.setloc_lba - (int32_t)sectors), buf, mode);
+  c->r[V0] = 1;                         // bool: success
+}
+
+// CdReadSync(mode, result) -> sectors REMAINING. cd_read_stock already transferred everything
+// synchronously, so the honest answer is zero. This is not a fabricated completion: the data is in
+// guest memory, read from the real disc, before this ever returns.
+static void cd_readsync_stock(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 0; }
+
+// STOCK Sony libcd CdSearchFile(CdlFILE* loc, const char* name) — resolved natively.
+//
+// The guest version walks the ISO filesystem by issuing real CD reads. The framework already parses
+// ISO9660 directly off the disc image (disc_find_file), so the PC answers the question outright and
+// no drive activity happens at all.
+//
+// CdlFILE is { CdlLOC pos; u_long size; char name[16] } with CdlLOC = { u_char minute, second,
+// sector, track } — BCD minutes/seconds/frames. The caller's next moves confirm the layout: it
+// passes this same pointer to CdControl(CdlSetloc, ...) (which consumes pos) and computes its sector
+// count from the field at +4.
+//
+// Returns the loc pointer on success and 0 on failure, which is what the guest tests.
+static void cd_searchfile_native(Core* c) {
+  const uint32_t loc = c->r[A0], namep = c->r[A1];
+  char name[80];
+  unsigned n = 0;
+  while (n + 1 < sizeof name) {
+    const char ch = (char)c->mem_r8(namep + n);
+    if (!ch) break;
+    name[n++] = (ch == '\\') ? '/' : ch;   // ISO paths arrive in DOS form
+  }
+  name[n] = 0;
+
+  uint32_t lba = 0, size = 0;
+  if (!disc_find_file(&c->game->disc, name, &lba, &size)) {
+    // Not fabricating a hit: a bogus location would send the game reading arbitrary sectors.
+    cfg_loge("cd", "CdSearchFile: '%s' not found on the disc image", name);
+    c->r[V0] = 0;
+    return;
+  }
+  const uint32_t total = lba + 150u;                     // LBA -> MSF (sector 0 is 00:02:00)
+  auto bcd = [](uint32_t v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); };
+  c->mem_w8(loc + 0, bcd(total / (75u * 60u)));
+  c->mem_w8(loc + 1, bcd((total / 75u) % 60u));
+  c->mem_w8(loc + 2, bcd(total % 75u));
+  c->mem_w8(loc + 3, 0);
+  c->mem_w32(loc + 4, size);
+  for (unsigned i = 0; i < 16; i++)                      // name[16], NUL-padded
+    c->mem_w8(loc + 8 + i, i < n ? (uint8_t)name[i] : 0);
+  c->game->cd.setloc_lba = (int32_t)lba;                 // as the guest's own version leaves it
+  if (c->game->cd.verbose || cfg_dbg("cd"))
+    cfg_logi("cd", "CdSearchFile '%s' -> LBA %u, %u bytes", name, lba, size);
+  c->r[V0] = loc;
+}
+
 static void cd_loadfile(Core* c) {
   uint32_t dest = c->r[A0], lba = c->r[A1], size = c->r[A2];
   uint8_t sec[2048];
@@ -497,6 +592,9 @@ void Cd::overridesInit() {
   reg(cfg->cdCmdStream,  cd_cmd_stream);// streaming CD-cmd wrapper (GetlocL pos in range)
   reg(cfg->cdReadPrim,   cd_read);     // libcd by-LBA read -> native sync
   reg(cfg->cdGetSector,  cd_getsector_stock);  // STOCK libcd CdGetSector(dest, words) -> native
+  reg(cfg->cdReadStock,  cd_read_stock);      // STOCK libcd CdRead(sectors, buf, mode) -> native
+  reg(cfg->cdReadSync,   cd_readsync_stock);  // STOCK libcd CdReadSync -> complete
+  reg(cfg->cdSearchFile, cd_searchfile_native); // STOCK libcd CdSearchFile -> native ISO9660 lookup
   reg(cfg->cdAsyncRead,  cd_async_read);// async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical
