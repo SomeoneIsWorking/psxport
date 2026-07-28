@@ -75,6 +75,13 @@ public:
   // (each Core has its own scheduler / dispatch). Was the process-global g_override_tgt.
   uint32_t override_tgt = 0;
 
+  // Interrupt-delivery fast gate. Every recompiled function's wrapper tests this ONE per-Core int on
+  // entry (emit.py), which is the cheapest place a static recompile has that is guaranteed to be a
+  // call-coherent guest boundary. Set when a source raises or the guest changes I_MASK/critical
+  // state; cleared by Hle::irqPoll when it finds nothing deliverable. A flag rather than recomputing
+  // `i_stat & i_mask` inline so the hot path stays a single load-and-test.
+  int irq_pending = 0;
+
   // ORACLE engine select (later-278, docs/oracle.md). 0 = run guest code as the recomp SUBSTRATE
   // (the shipping native port). 1 = run guest code through the pure MIPS INTERPRETER (interp.cpp) —
   // used ONLY by the oracle Core in the divergence harness, which must interpret the real overlay
@@ -121,11 +128,15 @@ public:
   // Core's storeWatchCb (installed by sbs.cpp) with (this, addr, value) —
   void wwatch_arm(uint32_t lo, uint32_t hi);
 
+  // Fold the CDC's pending interrupt edge into I_STAT, then read it. PUBLIC because interrupt
+  // delivery (Hle::irqPoll) has to test the same latch the guest would see.
+  uint32_t irqStatLatch();
+
 private:
   uint8_t* host_ptr(uint32_t a, uint32_t bytes);
   uint32_t io_read (uint32_t a, uint32_t bytes);
   void     io_write(uint32_t a, uint32_t v, uint32_t bytes);
-  uint32_t irq_stat_latch();   // fold the CDC's pending interrupt edge into I_STAT, then read it
+
   void     cw_check(uint32_t a, uint32_t v, int width);
   void     wwatch_check(uint32_t a, uint32_t v, uint32_t w);
 
@@ -156,6 +167,7 @@ void rec_dispatch(Core* c, uint32_t addr);
 void rec_dispatch_miss(Core* c, uint32_t addr);
 void rec_syscall(Core* c, uint32_t code);
 void rec_break(Core* c, uint32_t code);
+void rec_irq_poll(Core* c);                // deliver a pending interrupt at a guest call boundary
 void rec_interp(Core* c, uint32_t pc);     // synchronous nested call (super-call / RAM-code)
 void rec_coro_run(Core* c, uint32_t pc);   // cooperative task entry
 void rec_coro_redirect(Core* c, uint32_t target);  // override: continue the flat interp at `target`

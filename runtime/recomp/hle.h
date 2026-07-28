@@ -35,6 +35,27 @@ public:
   uint32_t i_stat = 0;
   uint32_t i_mask = 0;
 
+  // ---- interrupt DELIVERY (C0:0x02/0x03 SysEnqIntRP/SysDeqIntRP + B0:0x17 ReturnFromException) ----
+  // The chain of guest InterruptElement pointers the game registered, in priority order. Layout is
+  // MEASURED, not taken from a header: { +0 next, +4 handler, +8 verifier, +0xC pad }. The elements
+  // live in GUEST memory and only their ADDRESSES are held here, so a guest that rewrites its own
+  // element between interrupts is honoured — the fields are re-read at every delivery.
+  //
+  // Before this existed the framework accepted every registration and discarded it, so any guest
+  // waiting on an interrupt-delivered completion waited until its own timeout, forever.
+  enum { IRQ_CHAIN_MAX = 8 };
+  uint32_t irq_elem[IRQ_CHAIN_MAX] = {};
+  uint32_t irq_prio[IRQ_CHAIN_MAX] = {};
+  int      irq_n = 0;
+  int      in_irq = 0;            // re-entrancy guard: an ISR's own BIOS calls must not re-deliver
+
+  // Deliver one pending interrupt, if any, to the guest's registered chain. MUST only be called at a
+  // point where guest state is call-coherent — a guest function boundary — never from inside a
+  // native routine that is midway through mutating hardware state.
+  void irqPoll(Core* c);
+  void irqEnq(uint32_t prio, uint32_t elem);
+  void irqDeq(uint32_t elem);
+
   // deliverEvent(evClass, spec): mark every open+enabled event slot whose class matches evClass
   //   and whose spec masks against `spec` as fired. Called by the frame VBlank tick, memcard
   //   completion, and sound-DMA completion so guest waits (TestEvent/WaitEvent) advance.

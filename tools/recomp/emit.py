@@ -1255,7 +1255,13 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         # c->pc = this function's guest address — the PER-CORE program counter (r3000.h). Set on
         # every recompiled-function entry so mem-watch / store-trap / backtrace diagnostics report
         # which guest function THIS core is in (the substrate's analog of the old interpreter PC).
-        d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = 0x{a:08X}u; if ({N.ovtab}[{i}]) {{ "
+        # INTERRUPT DELIVERY: a static recompile has no instruction boundary to interrupt at, so
+        # delivery happens at guest FUNCTION entry — the one point that is guaranteed call-coherent
+        # (o32 says caller-saved registers are dead here, and no native runtime routine is midway
+        # through mutating hardware state). One predictable load-and-test per call; the poll itself
+        # runs only when a source has actually raised.
+        d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = 0x{a:08X}u; "
+                 f"if (c->irq_pending) rec_irq_poll(c); if ({N.ovtab}[{i}]) {{ "
                  f"{N.ovtab}[{i}](c); return; }} {N.gen}_{a:08X}(c); }}")
     d.append(f"int {N.index}(uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
     for a in funcs:

@@ -107,6 +107,102 @@ uint32_t thread_open(Core* c);
 uint32_t thread_close(Core* c);
 void     thread_change(Core* c, uint32_t handle);
 
+// ---- interrupt delivery -------------------------------------------------------------------------
+// Registering an element is priority-ordered and idempotent: the standard guest idiom is
+// SysDeqIntRP(prio, elem) immediately followed by SysEnqIntRP(prio, elem), so a re-register must
+// replace rather than accumulate.
+void Hle::irqEnq(uint32_t prio, uint32_t elem) {
+  if (!elem) return;
+  irqDeq(elem);
+  if (irq_n >= IRQ_CHAIN_MAX) {
+    cfg_logw("irq", "interrupt chain full (%d) — dropping elem 0x%08X. Raise IRQ_CHAIN_MAX; a "
+                    "silently dropped handler is an interrupt that never gets serviced.",
+             (int)IRQ_CHAIN_MAX, elem);
+    return;
+  }
+  int at = irq_n;
+  while (at > 0 && irq_prio[at - 1] > prio) {          // lower priority value runs first
+    irq_elem[at] = irq_elem[at - 1]; irq_prio[at] = irq_prio[at - 1]; at--;
+  }
+  irq_elem[at] = elem; irq_prio[at] = prio; irq_n++;
+  cfg_logi("irq", "registered interrupt element 0x%08X prio=%u (chain now %d)", elem, prio, irq_n);
+}
+
+void Hle::irqDeq(uint32_t elem) {
+  for (int i = 0; i < irq_n; i++) {
+    if (irq_elem[i] != elem) continue;
+    for (int j = i; j + 1 < irq_n; j++) { irq_elem[j] = irq_elem[j + 1]; irq_prio[j] = irq_prio[j + 1]; }
+    irq_n--;
+    return;
+  }
+}
+
+// Deliver ONE pending interrupt to the guest's chain, exactly as the BIOS exception path would:
+// walk in priority order, run each element's VERIFIER, and on the first that claims the interrupt
+// run that element's HANDLER and stop.
+//
+// Why saving c->r[] is sufficient here, and not merely hopeful: in this substrate the generated code
+// holds the ENTIRE guest register file in c->r[] — every emitted line reads and writes c->r[N]
+// directly, and nothing is cached in host locals across a call. So r[1..31] + hi/lo + pc IS the
+// guest CPU context, and restoring it makes the injection invisible to the interrupted function.
+// Guest MEMORY changes are deliberately NOT undone — mutating memory is what an ISR is for.
+//
+// GTE/cop2 state is deliberately NOT saved: real hardware does not save it on exception entry
+// either, so an ISR that clobbers it must save it itself. Matching the hardware is the faithful
+// choice; saving it here would mask a genuinely misbehaving guest handler.
+void Hle::irqPoll(Core* c) {
+  if (in_irq || !irq_enabled) return;
+  const uint32_t pending = c->irqStatLatch() & i_mask;
+  // Clear the gate whenever there is nothing to deliver, so the common case costs one load-and-test
+  // per function entry and nothing more. Re-armed by whoever raises next.
+  if (!pending || irq_n == 0) { c->irq_pending = 0; return; }
+
+  // These two are transient per-Core execution state consumed by the dispatch machinery. If either
+  // is live we are NOT at a clean boundary, and delivering here could lose a pending redirect.
+  if (c->override_tgt || c->coro_redirect_pc) return;
+
+  in_irq = 1;
+  int claimed = 0;
+  R3000 saved = *static_cast<R3000*>(c);      // r[0..31] + hi + lo + pc — the whole guest context
+
+  for (int i = 0; i < irq_n; i++) {
+    const uint32_t elem     = irq_elem[i];
+    const uint32_t handler  = c->mem_r32(elem + 4);
+    const uint32_t verifier = c->mem_r32(elem + 8);
+    if (verifier) {
+      rec_dispatch(c, verifier);
+      if (c->r[V0] == 0) continue;            // not this element's interrupt
+    }
+    if (!handler) continue;
+    // The BIOS passes the verifier's return to the handler; a handler that reads $a0 expects it.
+    c->r[A0] = c->r[V0];
+    cfg_logf("irq", "delivering: elem 0x%08X handler 0x%08X (I_STAT&I_MASK=0x%03X)",
+             elem, handler, pending);
+    rec_dispatch(c, handler);
+    claimed = 1;
+    break;
+  }
+  // "Nobody claimed it" and "the walk never ran" look identical from the outside, and only the first
+  // is a statement about the GAME. Say which, once per distinct pending mask.
+  if (!claimed) {
+    static uint32_t last_unclaimed = 0xFFFFFFFFu;
+    if (pending != last_unclaimed) {
+      last_unclaimed = pending;
+      cfg_logi("irq", "pending I_STAT&I_MASK=0x%03X but NO registered element claimed it "
+                      "(%d in chain) — this game does not service that source via the BIOS chain",
+               pending, irq_n);
+    }
+  }
+
+  *static_cast<R3000*>(c) = saved;
+  in_irq = 0;
+  c->irq_pending = 0;   // re-armed by the next raise / mask change
+}
+
+// The substrate's entry point: every recompiled function wrapper calls this when Core::irq_pending
+// is set (emit.py). Free function so the generated code needs no knowledge of Game or Hle.
+void rec_irq_poll(Core* c) { c->game->hle.irqPoll(c); }
+
 // Dispatch one A0/B0/C0 BIOS call. Returns true if handled (c->r[V0] set), false otherwise.
 bool Hle::dispatchBios(char table, uint32_t fn) {
   Core* c = &game->core;
@@ -271,6 +367,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                    which, a0, a1, c->mem_r32(a1), c->mem_r32(a1 + 4),
                    c->mem_r32(a1 + 8), c->mem_r32(a1 + 12));
         }
+        if (fn == 0x02) irqEnq(a0, a1); else irqDeq(a1);
         c->r[V0] = a1; return true;
       case 0x00: case 0x01: case 0x07: case 0x08:                        // kernel-table
       case 0x0A: case 0x0C: case 0x12: case 0x1C:                        // installers + RCnt
