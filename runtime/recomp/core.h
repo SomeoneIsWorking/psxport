@@ -141,8 +141,24 @@ private:
   uint32_t io_read (uint32_t a, uint32_t bytes);
   void     io_write(uint32_t a, uint32_t v, uint32_t bytes);
 
-  void     cw_check(uint32_t a, uint32_t v, int width);
-  void     wwatch_check(uint32_t a, uint32_t v, uint32_t w);
+  // WATCH HOOKS — every guest store calls these, so their DISABLED path is on the hottest path in
+  // the runtime. Profiling put cw_check at 3.1-3.7% and wwatch_check at 1.8% of total CPU with no
+  // watch armed at all: almost none of that is the range test, it is the out-of-line CALL itself,
+  // made once per store to reach a function that immediately returns.
+  //
+  // So the "is anything armed" test lives HERE, inline, and only the armed case takes a call. Before
+  // the first store the armed flag is unknown, so the slow path runs once to read the environment and
+  // set it — which is why the test is `initialised && !armed` rather than just `!armed`.
+  void     cw_check_slow(uint32_t a, uint32_t v, int width);
+  void     wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w);
+  inline void cw_check(uint32_t a, uint32_t v, int width) {
+    if (s_cw_init && !s_cw_hi) return;
+    cw_check_slow(a, v, width);
+  }
+  inline void wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
+    if (s_ww_init && !s_ww_hi) return;
+    wwatch_check_slow(a, v, w);
+  }
 
   // DMA channel state (per-instance) — DMA0 MDEC-in, 1 MDEC-out, 2 GPU, 4 SPU, 6 OTC.
   uint32_t s_dma0_madr=0, s_dma0_bcr=0, s_dma0_chcr=0;
@@ -154,7 +170,7 @@ private:
   uint32_t s_dma_buf[0x10000];
 
   // Watchpoint state.
-  int      s_cw_init=0, s_cw_n=0;
+  int      s_cw_init=0, s_cw_n=0;   // read by the inline cw_check above
   uint32_t s_cw_lo=0, s_cw_hi=0;
   int      s_ww_init=0;
   uint32_t s_ww_lo=0, s_ww_hi=0;

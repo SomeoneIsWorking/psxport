@@ -40,7 +40,7 @@ void Core::mem_set_watch(uint32_t lo, uint32_t hi) {
 }
 int Core::mem_watch_hits() { return s_cw_n; }
 
-void Core::cw_check(uint32_t a, uint32_t v, int width) {
+void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
   if (!s_cw_init) {
     s_cw_init = 1;
     const char* w = cfg_str("PSXPORT_CW");
@@ -73,7 +73,7 @@ void Core::wwatch_arm(uint32_t lo, uint32_t hi) {
 
 // PSXPORT_WWATCH=lo,hi — log the interpreter PC of any store landing in [lo,hi). Also fires
 // storeWatchCb (programmatic arm via wwatch_arm) for the SBS write-site backtrace.
-void Core::wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
+void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
   if (!s_ww_init) {
     s_ww_init = 1;
     const char* w = cfg_str("PSXPORT_WWATCH");
