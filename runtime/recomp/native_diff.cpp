@@ -2,6 +2,7 @@
 #include "native_diff.h"
 #include "core.h"
 #include "cfg.h"
+#include "game.h"      // Game::gte — the COP2 register file, compared below
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -23,6 +24,11 @@ struct State {
   // Reused across calls so a verified run does not churn 6 MB of allocation per call.
   std::vector<uint8_t> pre, natRam, subRam;
   std::vector<uint8_t> preSpad, natSpad, subSpad;
+  // COP2/GTE. A PS1 game's hot maths lives here, and comparing only GPRs + RAM would report "matches"
+  // while a native body silently left the GTE register file different — the substrate's `cop2`
+  // instructions write REG[0..63] and FLAGS, none of which is guest RAM. Without this the differential
+  // simply cannot verify any function containing lwc2/swc2/cop2, which is most of the geometry code.
+  GteRegs preGte{}, natGte{}, subGte{};
 };
 
 State& st() { static State s; return s; }
@@ -77,20 +83,24 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
   s.pre.assign(c->ram, c->ram + RAM_SIZE);
   s.preSpad.assign(c->scratch, c->scratch + spad);
   const R3000 preRegs = *static_cast<R3000*>(c);
+  s.preGte = c->game->gte;
 
   native(c);
   s.natRam.assign(c->ram, c->ram + RAM_SIZE);
   s.natSpad.assign(c->scratch, c->scratch + spad);
   const R3000 natRegs = *static_cast<R3000*>(c);
+  s.natGte = c->game->gte;
 
   // Rewind to the exact pre-state and run the body the native code claims to replace.
   memcpy(c->ram, s.pre.data(), RAM_SIZE);
   memcpy(c->scratch, s.preSpad.data(), spad);
   *static_cast<R3000*>(c) = preRegs;
+  c->game->gte = s.preGte;
   body(c);
   s.subRam.assign(c->ram, c->ram + RAM_SIZE);
   s.subSpad.assign(c->scratch, c->scratch + spad);
   const R3000 subRegs = *static_cast<R3000*>(c);
+  s.subGte = c->game->gte;
 
   int diffs = 0;
   diffs += report_ram(name, s.natRam, s.subRam, 0x80000000u, "RAM", s.maxdiff);
@@ -106,6 +116,19 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
                natRegs.r[i], subRegs.r[i]);
       diffs++;
     }
+  // COP2 data regs are DR = REG[0..31], control regs CR = REG[32..63]; name them that way so a diff
+  // reads as "cop2 DR12" rather than an opaque index.
+  for (int i = 0; i < 64; i++)
+    if (s.natGte.REG[i] != s.subGte.REG[i]) {
+      cfg_loge("ndiff", "  %s cop2 %s%d: native=0x%08X substrate=0x%08X", name,
+               i < 32 ? "DR" : "CR", i < 32 ? i : i - 32, s.natGte.REG[i], s.subGte.REG[i]);
+      diffs++;
+    }
+  if (s.natGte.FLAGS != s.subGte.FLAGS) {
+    cfg_loge("ndiff", "  %s cop2 FLAGS: native=0x%08X substrate=0x%08X", name,
+             s.natGte.FLAGS, s.subGte.FLAGS);
+    diffs++;
+  }
   if (natRegs.hi != subRegs.hi || natRegs.lo != subRegs.lo) {
     cfg_loge("ndiff", "  %s hi/lo: native=%08X/%08X substrate=%08X/%08X", name,
              natRegs.hi, natRegs.lo, subRegs.hi, subRegs.lo);
@@ -117,6 +140,7 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
   memcpy(c->ram, s.natRam.data(), RAM_SIZE);
   memcpy(c->scratch, s.natSpad.data(), spad);
   *static_cast<R3000*>(c) = natRegs;
+  c->game->gte = s.natGte;
 
   if (diffs) {
     site.diffs++;

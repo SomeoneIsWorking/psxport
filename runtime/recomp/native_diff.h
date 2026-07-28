@@ -12,7 +12,7 @@
 // instead of asking "did a whole run diverge", it asks "does this function, from THIS exact input
 // state, produce exactly what the recompiled body produces" — and answers it on every call.
 //
-//   1. snapshot guest RAM + scratchpad + the register file
+//   1. snapshot guest RAM + scratchpad + the register file + the COP2/GTE register file
 //   2. run the NATIVE body; capture the resulting RAM + registers
 //   3. restore the snapshot; run the RECOMPILED body; capture again
 //   4. compare. Any difference is reported with the address, both values, and the register.
@@ -28,9 +28,14 @@
 //   PSXPORT_NDIFF=8            verify the first 8 calls of every ndiff_run site
 //   PSXPORT_NDIFF_MAXDIFF=32   stop listing individual byte diffs past this many (per call)
 //
-// WHAT IT CANNOT TELL YOU. Equality here means equal for the inputs actually exercised. It does not
-// prove equivalence for unexercised paths, and it cannot see divergence in state the substrate keeps
-// outside guest RAM (host-side GPU queue contents, for example). Say so when citing it: "matched the
+// COP2/GTE IS COMPARED TOO, and that was not optional. A PS1 game's hot maths is geometry code whose
+// entire effect can be in the GTE register file — none of which is guest RAM. Comparing only GPRs and
+// memory would have reported "matches" while a native body left REG[0..63] or FLAGS different, which
+// is worse than no check: it is a green light on an unverified replacement.
+//
+// WHAT IT STILL CANNOT TELL YOU. Equality here means equal for the inputs actually exercised. It does
+// not prove equivalence for unexercised paths, and it cannot see divergence in state kept outside the
+// Core and the GTE — the host-side GPU render queue, for example. Say so when citing it: "matched the
 // substrate on N calls covering X" is a claim; "verified equivalent" is not.
 #pragma once
 #include <cstdint>
