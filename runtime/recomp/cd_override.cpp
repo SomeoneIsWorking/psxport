@@ -147,6 +147,49 @@ static void cd_read(Core* c) {
 // no decompression) — an async streaming path our no-IRQ overrides can't feed. Replace it
 // with a native consecutive-sector read of the same bytes: ceil(size/2048) sectors from `lba`
 // into `dest`, copying exactly `size` bytes. Returns param_3 (size), as the original does.
+// STOCK Sony libcd CdGetSector(dest, words) — the PC takes this over outright.
+//
+// This is the seam where a stock-libcd game becomes PC-owned. The guest routine programs DMA3 with a
+// destination and a word count, spins on the CD status bit until data is ready, kicks the transfer
+// and spins again until it completes. All of that is PSX hardware ceremony around ONE fact: move
+// this many words of the current sector into this buffer. The port does the move and skips the
+// ceremony — no controller handshake, no interrupt, no busy-wait.
+//
+// The LBA is NOT an argument, and that is the whole difference from the engine-loader handlers above
+// (cd_read/cd_loadfile) which receive one. Stock libcd positions the head with CdlSetloc and then
+// reads from wherever it was left, so the target sector is only ever stated at Setloc time —
+// recorded there in Cd::setloc_lba, and consumed here. That field existed for exactly this and had
+// no consumer until now.
+//
+// Data comes from the real disc image. A read that cannot be served fails LOUDLY and returns
+// non-zero, because a zero-filled buffer reported as a successful read is indistinguishable from a
+// real one to the guest and corrupts arbitrarily far downstream.
+static void cd_getsector_stock(Core* c) {
+  const uint32_t dest = c->r[A0], words = c->r[A1];
+  Cd& cd = c->game->cd;
+  if (cd.setloc_lba < 0) {
+    cfg_loge("cd", "CdGetSector(dest=0x%08X, %u words) with NO Setloc — the drive was never "
+                   "positioned, so there is no sector to serve. Refusing to invent one.", dest, words);
+    c->r[V0] = 1;                       // non-zero == failure, as the guest routine reports it
+    return;
+  }
+  const uint32_t lba = (uint32_t)cd.setloc_lba;
+  uint8_t sec[2048];
+  if (!disc_read_sector(&c->game->disc, lba, sec)) {
+    cfg_loge("cd", "CdGetSector: LBA %u unreadable (no disc, or past the end) — nothing written", lba);
+    c->r[V0] = 1;
+    return;
+  }
+  uint32_t n = words * 4u;
+  if (n > sizeof sec) n = sizeof sec;   // a sector is the transfer unit; never read past it
+  for (uint32_t i = 0; i < n; i++) c->mem_w8(dest + i, sec[i]);
+  cd.setloc_lba = (int32_t)(lba + 1);   // the head advances, exactly as a real sequential read does
+  if (cd.verbose || cfg_dbg("cd"))
+    cfg_logi("cd", "CdGetSector %u words from LBA %u -> 0x%08X (head now %d)", words, lba, dest,
+             cd.setloc_lba);
+  c->r[V0] = 0;                         // 0 == success
+}
+
 static void cd_loadfile(Core* c) {
   uint32_t dest = c->r[A0], lba = c->r[A1], size = c->r[A2];
   uint8_t sec[2048];
@@ -366,6 +409,7 @@ void Cd::overridesInit() {
   reg(cfg->cdSync,       cd_sync);     // libcd CdSync -> complete (CD is synchronous)
   reg(cfg->cdCmdStream,  cd_cmd_stream);// streaming CD-cmd wrapper (GetlocL pos in range)
   reg(cfg->cdReadPrim,   cd_read);     // libcd by-LBA read -> native sync
+  reg(cfg->cdGetSector,  cd_getsector_stock);  // STOCK libcd CdGetSector(dest, words) -> native
   reg(cfg->cdAsyncRead,  cd_async_read);// async streaming reader -> sync (area-DATA load)
   // 0x8001DC40 FUN_8001dc40(a0=dest, a1=lba, a2=size_bytes): the intro sequencer's loader
   // variant. Same (dest, lba, size_bytes) contract as FUN_8001db8c — it sets the identical

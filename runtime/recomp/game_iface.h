@@ -112,6 +112,15 @@ struct GameConfig {
   uint32_t cdCallbackTable[4];// the 4 guest-RAM slots hleInit writes the CD-event callbacks into
   uint32_t cdCallbackFn[4];   // (added P1.x) the 4 callback fn-ptr VALUES written into those slots
 
+  // STOCK Sony libcd CdGetSector(dest, words) — the sector-transfer routine. Appended at the END of
+  // this group on purpose: GameConfig is initialised POSITIONALLY by every consumer, so inserting a
+  // field mid-struct silently shifts every value after it.
+  //
+  // Distinct from cdReadPrim because the CONTRACT differs: this one carries no LBA. Stock libcd
+  // positions the head with CdlSetloc and reads from wherever it was left, so the handler consumes
+  // Cd::setloc_lba rather than an argument. Zero for a game that uses an engine loader instead.
+  uint32_t cdGetSector;
+
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
   uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)
