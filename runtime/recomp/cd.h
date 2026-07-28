@@ -32,6 +32,25 @@ public:
   // resolve a target sector.
   int32_t  setloc_lba = -1;
 
+  // Stock-libcd read driving (cd_override.cpp cd_drive_stock_read). `stock_reading` is cleared by the
+  // guest's own Pause/Stop, which is what terminates the per-sector callback loop; `in_stock_read`
+  // stops a callback that re-issues ReadN from starting a nested loop.
+  int stock_reading = 0;
+  int in_stock_read = 0;
+
+  // Sector FIFO for the stock-libcd path. Real hardware presents ONE sector as a byte stream that
+  // successive CdGetSector calls pop SEQUENTIALLY — the game reads 3 words (the 4-byte header plus
+  // 8-byte subheader, to verify the drive position) and then 512 words (the user data) out of the
+  // same sector. Serving every call from offset 0 hands the position check user data, it disagrees
+  // with the expected sector number, and the read is rejected and retried forever.
+  //
+  // So the buffer is RAW (2352 bytes) and a cursor tracks how much has been popped, starting past
+  // the 12-byte sync pattern — which is exactly where the PSX data FIFO begins in whole-sector mode.
+  uint8_t  sec_raw[2352] = {};
+  int      sec_pos  = 0;      // cursor into sec_raw; 0 = nothing loaded
+  int      sec_len  = 0;      // bytes available in sec_raw
+  int32_t  sec_lba  = -1;     // which LBA sec_raw holds
+
   // loadFile(dest, lba, size): direct-call native loadfile (0x8001DB8C semantics) — used by the
   //   PC-native boot/stage path, which owns the START.BIN / stage-overlay load top-down.
   void loadFile(uint32_t dest, uint32_t lba, uint32_t size);

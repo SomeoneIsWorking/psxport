@@ -40,6 +40,52 @@ static void cdinit(Core* c) { c->r[V0] = 0; }
 static void zero_result(Core* c, uint32_t p) { if (p) for (int i = 0; i < 8; i++) c->mem_w8(p + i, 0); }
 
 // 0x8008AC34 FUN_8008ac34(cmd, param, result, mode) CdCommand -> 0 (success).
+// Drive a STOCK-libcd read to completion, natively, with no interrupt.
+//
+// A stock-libcd read is a per-sector CALLBACK LOOP: the game installs a ready callback with
+// CdReadyCallback(), issues ReadN, and expects that callback to be invoked once per sector. Its body
+// fetches the sector (CdGetSector), advances its own destination pointer, decrements its remaining
+// count, and when the count reaches zero restores the callbacks and issues Pause.
+//
+// So the port does not need an interrupt controller, a CD IRQ, or the guest's ISR chain to finish a
+// read. It needs to call the callback the game already registered. That is the whole mechanism.
+//
+// TERMINATION is the guest's own signal, not a guess: its callback issues Pause/Stop through this
+// same cd_command, which clears `reading`. The loop is additionally bounded, and hitting the bound
+// is reported LOUDLY rather than silently truncating a read — a short read that looks successful is
+// exactly the failure this layer must never produce.
+static void cd_drive_stock_read(Core* c) {
+  const GameConfig* cfg = c->cfg;
+  if (!cfg || !cfg->cdReadyCbPtr) return;      // not a stock-libcd game, or not RE'd yet
+
+  Cd& cd = c->game->cd;
+  if (cd.in_stock_read) return;                // the callback re-issued a read; let the outer loop run
+  cd.in_stock_read = 1;
+  cd.stock_reading = 1;
+
+  // The guest callback runs as a normal function: save and restore the whole register context around
+  // it, exactly as an exception entry would, so the interrupted caller sees nothing.
+  const R3000 saved = *static_cast<R3000*>(c);
+
+  enum { kMaxSectors = 65536 };                // ~150 MB; larger than any single PSX read
+  unsigned n = 0;
+  for (; n < kMaxSectors && cd.stock_reading; n++) {
+    const uint32_t cb = c->mem_r32(cfg->cdReadyCbPtr);
+    if (!cb) break;                            // no callback installed -> nothing to drive
+    c->r[A0] = 1;                              // libcd passes the completion status as arg 1
+    c->r[A1] = 0;
+    rec_dispatch(c, cb);
+  }
+
+  *static_cast<R3000*>(c) = saved;
+  cd.in_stock_read = 0;
+  if (n >= kMaxSectors)
+    cfg_loge("cd", "stock read did not terminate after %u sectors — the guest never issued "
+                   "Pause/Stop. Read ABANDONED; treat any data from it as incomplete.", n);
+  else if (cd.verbose || cfg_dbg("cd"))
+    cfg_logi("cd", "stock read complete: %u ready-callback invocation(s)", n);
+}
+
 static void cd_command(Core* c) {
   if (cfg_dbg("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
@@ -68,8 +114,14 @@ static void cd_command(Core* c) {
       if (c->game->cd.verbose)
         cfg_logi("cd", "setloc %02X:%02X:%02X -> LBA %d", mm, ss, ff, c->game->cd.setloc_lba);
     } break;
-    case 0x06: case 0x1B: xa_stream_start(&c->game->xa); break;                           // ReadN / ReadS
-    case 0x08: case 0x09: xa_stream_stop(&c->game->xa); break;                            // Stop / Pause
+    case 0x06: case 0x1B:                                                                 // ReadN / ReadS
+      xa_stream_start(&c->game->xa);
+      cd_drive_stock_read(c);
+      break;
+    case 0x08: case 0x09:                                                                 // Stop / Pause
+      xa_stream_stop(&c->game->xa);
+      c->game->cd.stock_reading = 0;   // the guest's own end-of-read signal; ends cd_drive_stock_read
+      break;
     default: break;
   }
   zero_result(c, c->r[A2]); c->r[V0] = 0;
@@ -170,24 +222,45 @@ static void cd_getsector_stock(Core* c) {
   if (cd.setloc_lba < 0) {
     cfg_loge("cd", "CdGetSector(dest=0x%08X, %u words) with NO Setloc — the drive was never "
                    "positioned, so there is no sector to serve. Refusing to invent one.", dest, words);
-    c->r[V0] = 1;                       // non-zero == failure, as the guest routine reports it
-    return;
-  }
-  const uint32_t lba = (uint32_t)cd.setloc_lba;
-  uint8_t sec[2048];
-  if (!disc_read_sector(&c->game->disc, lba, sec)) {
-    cfg_loge("cd", "CdGetSector: LBA %u unreadable (no disc, or past the end) — nothing written", lba);
     c->r[V0] = 1;
     return;
   }
-  uint32_t n = words * 4u;
-  if (n > sizeof sec) n = sizeof sec;   // a sector is the transfer unit; never read past it
-  for (uint32_t i = 0; i < n; i++) c->mem_w8(dest + i, sec[i]);
-  cd.setloc_lba = (int32_t)(lba + 1);   // the head advances, exactly as a real sequential read does
+  uint32_t need = words * 4u;
+  uint32_t done = 0;
+  while (done < need) {
+    // Load the next sector when the current one is exhausted. SYNC_SKIP is where the PSX data FIFO
+    // begins: the 12-byte sync pattern is not presented, so the first bytes a game pops are the
+    // 4-byte header (min/sec/frame/mode) followed by the 8-byte subheader.
+    enum { SYNC_SKIP = 12 };
+    if (cd.sec_pos >= cd.sec_len) {
+      const uint32_t lba = (uint32_t)cd.setloc_lba;
+      if (!disc_read_raw(&c->game->disc, lba, cd.sec_raw, sizeof cd.sec_raw)) {
+        cfg_loge("cd", "CdGetSector: LBA %u unreadable — %u of %u bytes delivered, rest NOT written",
+                 lba, done, need);
+        c->r[V0] = 1;
+        return;
+      }
+      cd.sec_lba = (int32_t)lba;
+      // The first 4 bytes a game pops are the sector HEADER (min:sec:frame in BCD, then mode), and
+      // stock libcd reads exactly those to verify the drive landed where it asked. If they disagree
+      // with the requested position the read is rejected and retried forever, so print them.
+      if (cfg_dbg("cd"))
+        cfg_logf("cd", "sector LBA %u header %02X:%02X:%02X mode %02X", lba,
+                 cd.sec_raw[12], cd.sec_raw[13], cd.sec_raw[14], cd.sec_raw[15]);
+      cd.sec_pos = SYNC_SKIP;
+      cd.sec_len = (int)sizeof cd.sec_raw;
+      cd.setloc_lba = (int32_t)(lba + 1);   // the head advances, as a sequential read does
+    }
+    uint32_t avail = (uint32_t)(cd.sec_len - cd.sec_pos);
+    uint32_t n = need - done < avail ? need - done : avail;
+    for (uint32_t k = 0; k < n; k++) c->mem_w8(dest + done + k, cd.sec_raw[cd.sec_pos + k]);
+    cd.sec_pos += (int)n;
+    done += n;
+  }
   if (cd.verbose || cfg_dbg("cd"))
-    cfg_logi("cd", "CdGetSector %u words from LBA %u -> 0x%08X (head now %d)", words, lba, dest,
-             cd.setloc_lba);
-  c->r[V0] = 0;                         // 0 == success
+    cfg_logi("cd", "CdGetSector %u words -> 0x%08X (sector LBA %d, cursor %d/%d)", words, dest,
+             cd.sec_lba, cd.sec_pos, cd.sec_len);
+  c->r[V0] = 0;
 }
 
 static void cd_loadfile(Core* c) {

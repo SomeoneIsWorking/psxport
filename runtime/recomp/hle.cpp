@@ -292,6 +292,58 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                         "mechanism. Faking a return here would resume the wrong continuation with "
                         "the failed operation's state live. Refusing.", a0, a1);
         abort();
+      // A(3Fh) printf — the GAME'S OWN diagnostics. Leaving this unimplemented threw away the most
+      // direct evidence a port can get: the binary saying, in English, what it thinks went wrong.
+      // This port's single most useful identification so far came from a string the executable
+      // emits, and every one of these was being discarded as "UNIMPL A0:0x3F" (hundreds per boot).
+      // Routed to the `guest` channel so a normal run is quiet and PSXPORT_DEBUG=guest shows it.
+      case 0x3F: {
+        char out[1024];
+        unsigned o = 0;
+        uint32_t fmt = a0, argi = 0;
+        const uint32_t argreg[3] = { a1, a2, c->r[A3] };
+        // Varargs past the fourth land on the guest stack, at sp+16 in the o32 layout.
+        auto nextarg = [&]() -> uint32_t {
+          if (argi < 3) return argreg[argi++];
+          return c->mem_r32(c->r[29] + 16u + 4u * (argi++ - 3));
+        };
+        for (uint32_t i = 0; o + 1 < sizeof out; i++) {
+          const char ch = (char)c->mem_r8(fmt + i);
+          if (!ch) break;
+          if (ch != '%') { out[o++] = ch; continue; }
+          // Copy the whole conversion spec through to the host printf rather than reimplementing
+          // width/precision/flags: the guest's format string is the authority on its own arguments.
+          char spec[32]; unsigned sn = 0; spec[sn++] = '%';
+          char conv = 0;
+          for (uint32_t k = i + 1; sn + 1 < sizeof spec; k++) {
+            const char cc = (char)c->mem_r8(fmt + k);
+            if (!cc) break;
+            spec[sn++] = cc;
+            if (strchr("diouxXcspfgeEG%", cc)) { conv = cc; i = k; break; }
+          }
+          spec[sn] = 0;
+          if (!conv) break;
+          char tmp[256];
+          if (conv == '%') { out[o++] = '%'; continue; }
+          if (conv == 's') {
+            const uint32_t p = nextarg();
+            unsigned n = 0;
+            while (n + 1 < sizeof tmp) { const char sc = (char)c->mem_r8(p + n); if (!sc) break; tmp[n++] = sc; }
+            tmp[n] = 0;
+            o += (unsigned)snprintf(out + o, sizeof out - o, "%s", tmp);
+          } else if (conv == 'c') {
+            o += (unsigned)snprintf(out + o, sizeof out - o, "%c", (char)nextarg());
+          } else {
+            snprintf(tmp, sizeof tmp, "%s", spec);
+            o += (unsigned)snprintf(out + o, sizeof out - o, tmp, (int)nextarg());
+          }
+        }
+        out[o < sizeof out ? o : sizeof out - 1] = 0;
+        // The guest terminates its own lines; strip a trailing newline so the log stays one-per-line.
+        if (o && out[o - 1] == '\n') out[o - 1] = 0;
+        if (cfg_dbg("guest")) cfg_logf("guest", "%s", out);
+        c->r[V0] = 0; return true;
+      }
       case 0x44: c->r[V0] = 0; return true;                              // FlushCache (no-op)
       case 0x49: c->r[V0] = 0; return true;                              // GPU_cw (GP0 word — harmless)
       case 0x51: if (s_loadexec_hook) { s_loadexec_hook(c); return true; } return false;  // LoadExec
@@ -336,6 +388,14 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         if (i >= 0) { s_ev[i].enabled = 1; c->r[V0] = 1; } else c->r[V0] = 0; return true; }
       case 0x0D: { int i = eventIndex(a0);                                // DisableEvent
         if (i >= 0) { s_ev[i].enabled = 0; c->r[V0] = 1; } else c->r[V0] = 0; return true; }
+      case 0x3F: {                                                       // B(3Fh) puts
+        char out[512]; unsigned n = 0;
+        while (n + 1 < sizeof out) { const char ch = (char)c->mem_r8(a0 + n); if (!ch) break; out[n++] = ch; }
+        out[n] = 0;
+        if (n && out[n - 1] == '\n') out[n - 1] = 0;
+        if (cfg_dbg("guest")) cfg_logf("guest", "%s", out);
+        c->r[V0] = 0; return true;
+      }
       case 0x12: case 0x13: case 0x14: case 0x15: case 0x16:              // BIOS pad — no-op (native)
         c->r[V0] = 0; return true;
       case 0x19:                                                         // B(19h)

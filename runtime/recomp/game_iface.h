@@ -121,6 +121,12 @@ struct GameConfig {
   // Cd::setloc_lba rather than an argument. Zero for a game that uses an engine loader instead.
   uint32_t cdGetSector;
 
+  // Guest global holding stock libcd's READY callback pointer (what CdReadyCallback() writes). The
+  // PC drives the read through it: a stock-libcd read is a per-sector callback loop, so invoking
+  // this once per sector completes the transfer with no interrupt in the picture at all. Zero for a
+  // game that does not use stock libcd. See cd_override.cpp cd_command's ReadN case.
+  uint32_t cdReadyCbPtr;
+
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
   uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)
