@@ -338,6 +338,18 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         for (int i = 0; i < got; i++) mem_w32(da + i * 4, s_dma_buf[i]);
       }
       s_dma4_chcr &= ~0x01000000u;
+      // SPU transfer complete. On hardware this raises IRQ9 and the BIOS turns it into
+      // DeliverEvent(HwSPU) — which is what a guest waiting on the transfer is testing for. This
+      // model performs the DMA SYNCHRONOUSLY, so the event is due the moment the words have moved;
+      // announcing it here is the faithful equivalent, not an invented completion.
+      //
+      // Without it, a guest that opens the SPU event and polls TestEvent (the ordinary way to wait
+      // for a VAB/sample upload) spins forever, several frames of init after the upload actually
+      // finished — with nothing in any log pointing at the SPU.
+      // 0xF0000009 is the PSX's fixed HwSPU class, hardware nomenclature rather than a game value,
+      // so it belongs here rather than in GameConfig. The spec mask is left wide because the class
+      // identifies the source; the guest's own OpenEvent spec decides which slots match.
+      game->hle.deliverEvent(0xF0000009u, 0xFFFFFFFFu);
     }
     return;
   }
