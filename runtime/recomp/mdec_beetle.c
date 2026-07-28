@@ -8,6 +8,7 @@
 // matches the oracle exactly. No enhancements: same IDCT, same YCbCr coefficients, same packing.
 #include <stdint.h>
 #include <stdbool.h>
+#include "cfg.h"
 
 // Beetle MDEC API (mednafen/psx/mdec.h), declared locally to avoid pulling Beetle headers.
 // (mdec.c has no MDEC_Init; MDEC_Power is the reset/construct entry point.)
@@ -41,12 +42,26 @@ void mdec_write(uint32_t addr, uint32_t val) { MDEC_Write(0, addr, val); }
 uint32_t mdec_read(uint32_t addr)            { return MDEC_Read(0, addr); }
 
 // DMA0 (MDEC-in): feed `count` 32-bit words of the compressed stream into the input FIFO.
-// MDEC_DMAWrite pushes one word and steps the decode state machine; it silently drops words
-// when the input FIFO is full (faithful — the real DMA channel honors MDEC_DMACanWrite()).
+//
+// MDEC_DMAWrite SILENTLY DROPS a word when the input FIFO is full, and real DMA channel 0 never
+// lets that happen — it honours MDEC_DMACanWrite() and stalls until the decoder has room. Pushing
+// the whole block unconditionally therefore loses words, the decode never finishes, MDEC1 STAT keeps
+// its data-in bit set, and the guest's DecDCTinSync spins out and prints its own "MDEC_in_sync"
+// timeout. The corruption is invisible at the point it happens and only surfaces frames later.
+//
+// So: honour the predicate, and if the FIFO fills, say so LOUDLY with the exact word counts rather
+// than dropping the remainder. A partially-fed decode is a real failure and must look like one.
 void mdec_dma_in(const uint32_t* words, int count) {
   int i;
-  for (i = 0; i < count; i++)
+  for (i = 0; i < count; i++) {
+    if (!MDEC_DMACanWrite()) {
+      cfg_loge("mdec", "DMA0 in: input FIFO full after %d of %d word(s) — the remainder was NOT "
+                       "written. This decode is incomplete; expect the guest's DecDCTinSync to time "
+                       "out. (Real DMA0 stalls here; this model cannot yet.)", i, count);
+      return;
+    }
     MDEC_DMAWrite(words[i]);
+  }
 }
 
 // DMA1 (MDEC-out): drain decoded 32-bit words out of the output FIFO and PLACE each one at the
