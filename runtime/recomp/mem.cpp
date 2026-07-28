@@ -130,7 +130,23 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     io_gpustat_toggle ^= 0x80000000u;              // per-instance (Core member), not a shared static
     return 0x1C000000u | io_gpustat_toggle;
   }
-  if (p >= 0x1F801800 && p <= 0x1F801803) return cdc_read(&game->cdc, p);   // CD controller registers
+  if (p >= 0x1F801800 && p <= 0x1F801803) {                                 // CD controller registers
+    const uint32_t rv = cdc_read(&game->cdc, p);
+    // `PSXPORT_DEBUG=cdcr` — the READ counterpart of cdcw. Without it you can see every command and
+    // parameter a game writes but not whether it ever comes back for the DATA, which is the question
+    // that decides how a port serves reads: a game that pops the data FIFO (register 2) transfers
+    // sectors with its OWN code and only needs the FIFO filled, whereas one that never touches it is
+    // taking delivery some other way and needs a destination. Distinguishing those two by reading
+    // disassembly is guesswork; one run of this settles it.
+    // Same pc/ra caveat as cdcw: static gen-to-gen calls do not refresh guest pc/ra, so treat them as
+    // hints and use cdcbt when the caller identity matters.
+    if (cfg_dbg("cdcr"))
+      cfg_logf("cdcr", "r[%04X]=%02X bank=%d %s pc=%08X ra=%08X",
+               (unsigned)(p & 0xFFFF), (unsigned)(rv & 0xFF), game->cdc.index,
+               (p & 3) == 2 ? "DATA-FIFO" : (p & 3) == 1 ? "resp" : (p & 3) == 0 ? "status" : "irq",
+               pc, r[31]);
+    return rv;
+  }
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
   if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
   if (p == 0x1F801DAE) return 0;                 // SPUSTAT: report idle/transfer-complete
