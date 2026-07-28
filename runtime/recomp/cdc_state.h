@@ -47,6 +47,10 @@ void     cdc_write(CdcState* s, uint32_t p, uint8_t v);
 // DMA3 (CDROM -> RAM) FIFO drain, called by the DMA3 CHCR model in mem.cpp. Returns words delivered;
 // a short return means the FIFO ran dry and the transfer is genuinely incomplete.
 int      cdc_dma_read(CdcState* s, uint32_t* out, int words);
+// Position the controller at `lba` and load that sector into the data FIFO, so a guest driving the
+// hardware directly (XA/streaming: spin on DRQSTS, then DMA3) sees real data even when the libcd
+// file-read path is served natively. Both layers read the same disc image.
+void     cdc_begin_read(CdcState* s, uint32_t lba);
 #ifdef __cplusplus
 }
 #endif

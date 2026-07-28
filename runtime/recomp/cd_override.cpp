@@ -130,6 +130,11 @@ static void cd_command(Core* c) {
     } break;
     case 0x06: case 0x1B:                                                                 // ReadN / ReadS
       xa_stream_start(&c->game->xa);
+      // Position and load the CONTROLLER too. Streaming code bypasses libcd and waits on the CD
+      // status DRQSTS bit before kicking DMA3; with only the native path served, that bit never set
+      // and the streaming poller spun forever. Both layers now read the same disc image.
+      if (c->game->cd.setloc_lba >= 0)
+        cdc_begin_read(&c->game->cdc, (uint32_t)c->game->cd.setloc_lba);
       cd_drive_stock_read(c);
       break;
     case 0x08: case 0x09:                                                                 // Stop / Pause

@@ -87,6 +87,24 @@ static void sector_consumed(CdcState* s) {
 // DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
 // actually delivered; a SHORT return means the FIFO ran dry and the caller must say so loudly — a
 // transfer reported complete that moved nothing is exactly the silent lie this layer must not tell.
+// Begin a sequential read at `lba` and make the first sector available NOW.
+//
+// Why the HLE path must call this: a game can read the disc at TWO levels. File reads go through
+// libcd (CdRead/CdGetSector), which this port serves natively. But XA/streaming code bypasses all of
+// that and drives the hardware directly — it spins on the CD status register's DRQSTS bit waiting for
+// the data FIFO to fill, then kicks DMA3. With libcd HLE'd, the controller model never saw a command,
+// so its FIFO stayed empty, DRQSTS never set, and the streaming poller spun forever BEFORE the DMA
+// it was preparing ever started.
+//
+// So the two layers must share one source of truth: when the native CD layer accepts a read, the
+// controller model is positioned and loaded from the same disc image. Neither layer invents data.
+void cdc_begin_read(CdcState* s, uint32_t lba) {
+  s->loc_lba = lba;
+  s->reading = 1;
+  load_sector(s);
+  { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }   // INT1: sector data-ready
+}
+
 int cdc_dma_read(CdcState* s, uint32_t* out, int words) {
   int got = 0;
   while (got < words && s->data_rd + 4 <= s->data_n) {
