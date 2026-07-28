@@ -127,6 +127,17 @@ struct GameConfig {
   // game that does not use stock libcd. See cd_override.cpp cd_command's ReadN case.
   uint32_t cdReadyCbPtr;
 
+  // Guest buffer holding stock libcd's LAST REQUESTED POSITION (what CdLastPos() returns), and the
+  // last Setmode byte immediately after it: [+0..3] = the Setloc parameter, [+4] = mode.
+  //
+  // This is bookkeeping the REPLACED routine used to do. Overriding a library entry point means
+  // inheriting the state it maintained: stock libcd records the Setloc parameter inside its
+  // command-send routine, and its read path later seeds the expected-sector counter from it
+  // (CdPosToInt(CdLastPos())). Skip the record and the counter is seeded from stale bytes, the
+  // drive-position check fails, and every read is rejected — with nothing pointing at the override
+  // as the cause. Zero for a game that does not use stock libcd.
+  uint32_t cdLastPosBuf;
+
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
   uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)

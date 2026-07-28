@@ -99,6 +99,16 @@ static void cd_command(Core* c) {
   // streaming-relevant ones to the native XA engine; everything else still just ACKs.
   uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
   uint8_t p0 = param ? (uint8_t)c->mem_r8(param) : 0;
+  // Inherit the bookkeeping the replaced routine performed. Stock libcd's command-send records the
+  // Setloc parameter and the Setmode byte in guest RAM, and its own read path reads them back later
+  // (CdPosToInt(CdLastPos()) seeds the expected-sector counter). An override that acknowledges the
+  // command without maintaining that state leaves the guest reasoning from stale bytes.
+  if (const uint32_t lp = c->cfg ? c->cfg->cdLastPosBuf : 0) {
+    if (cmd == 0x02 && param)      // Setloc: the 4-byte position parameter
+      for (uint32_t i = 0; i < 4; i++) c->mem_w8(lp + i, c->mem_r8(param + i));
+    else if (cmd == 0x0E && param) // Setmode: the mode byte, stored just after the position
+      c->mem_w8(lp + 4, p0);
+  }
   switch (cmd) {
     case 0x0E: xa_stream_setmode(&c->game->xa, p0); break;                                  // Setmode
     case 0x0D: xa_stream_setfilter(&c->game->xa, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0); break;  // Setfilter
@@ -108,6 +118,10 @@ static void cd_command(Core* c) {
       // ALSO remember it as a DATA read position. The XA streamer above is the audio path; a game on
       // stock libcd positions the drive here and then issues a read that carries no LBA argument, so
       // this is the only place that target sector is ever stated. Pure bookkeeping — see Cd::setloc_lba.
+      // Repositioning the drive INVALIDATES whatever sector is buffered. Without this the cursor
+      // keeps popping the previously loaded sector, so the next header read returns mid-sector user
+      // data and the guest's drive-position check compares against garbage.
+      c->game->cd.sec_pos = 0; c->game->cd.sec_len = 0; c->game->cd.sec_lba = -1;
       auto bcd = [](uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); };
       const int lba = (bcd(mm) * 60 + bcd(ss)) * 75 + bcd(ff) - 150;   // MSF -> LBA (sector 0 == 00:02:00)
       c->game->cd.setloc_lba = lba >= 0 ? lba : -1;
