@@ -110,6 +110,14 @@ void     thread_change(Core* c, uint32_t handle);
 bool Hle::dispatchBios(char table, uint32_t fn) {
   Core* c = &game->core;
   uint32_t a0 = c->r[A0], a1 = c->r[A1], a2 = c->r[A2];
+  // `PSXPORT_DEBUG=bios` — EVERY BIOS call the guest makes, handled or not. The existing UNIMPL log
+  // only fires for calls that fall through, which answers "what is missing" but not "what does this
+  // game actually use" — and that second question is what a port needs when deciding which BIOS
+  // subsystem to model. $ra is the caller: the A0/B0/C0 stubs are tail jumps (`li $t2,0xA0; jr $t2`),
+  // so it still holds the real call site and links a call back to the library routine that made it.
+  if (cfg_dbg("bios"))
+    cfg_logf("bios", "%c0:0x%02X(0x%08X, 0x%08X, 0x%08X, 0x%08X) from 0x%08X",
+             table, fn, a0, a1, a2, c->r[A3], c->r[31]);
   HleEvCB* s_ev = ev;   // alias so the switch bodies below read tersely
   if (table == 'A') {
     switch (fn) {
@@ -236,7 +244,20 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
   }
   if (table == 'C') {
     switch (fn) {
-      case 0x02: case 0x03: c->r[V0] = a1; return true;                   // SysEnqIntRP/DeqIntRP -> elem
+      // SysEnqIntRP / SysDeqIntRP. Still return the element (what callers expect), but LOG it:
+      // psxport does not yet dispatch interrupts to guest code (WART-05 in the Spider-Man port), and
+      // the first thing a delivery model needs is the guest InterruptElement's field layout, which
+      // cannot be read off the SDK header with confidence. Dumping the four words at registration
+      // time answers it from the run: whichever slots hold addresses inside the recompiled .text are
+      // the handler/verifier pair.
+      case 0x02: case 0x03:
+        if (cfg_dbg("bios")) {
+          const char* which = (fn == 0x02) ? "SysEnqIntRP" : "SysDeqIntRP";
+          cfg_logf("bios", "%s prio=%u elem=0x%08X -> [+0]=0x%08X [+4]=0x%08X [+8]=0x%08X [+C]=0x%08X",
+                   which, a0, a1, c->mem_r32(a1), c->mem_r32(a1 + 4),
+                   c->mem_r32(a1 + 8), c->mem_r32(a1 + 12));
+        }
+        c->r[V0] = a1; return true;
       case 0x00: case 0x01: case 0x07: case 0x08:                        // kernel-table
       case 0x0A: case 0x0C: case 0x12: case 0x1C:                        // installers + RCnt
         c->r[V0] = 0; return true;
