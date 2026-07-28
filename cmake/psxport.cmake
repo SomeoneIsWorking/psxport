@@ -92,6 +92,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/vram_xfer.cpp
   ${PSXPORT_ROOT}/runtime/recomp/spu_audio.cpp
   ${PSXPORT_ROOT}/runtime/recomp/pad_input.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/snapshot.cpp
   ${PSXPORT_ROOT}/runtime/recomp/memcard.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_fmv.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
