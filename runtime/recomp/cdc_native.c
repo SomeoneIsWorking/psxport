@@ -77,7 +77,15 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
   if (!disc_read_sector(s->disc, s->loc_lba, sec)) {
     cfg_loge("cdc", "ReadN: no data for LBA %u (no disc, or out of range) — data FIFO left EMPTY",
              s->loc_lba);
-    s->data_n = 0; s->data_rd = 0; return;
+    s->data_n = 0; s->data_rd = 0;
+    // AND STOP THE CONTINUOUS READ. A real drive runs out of disc: it cannot keep presenting sectors
+    // past the lead-out, so it stops raising INT1. Without this the ack path's advance is a feedback
+    // loop — ack raises the next INT1, which is acked, which advances again — and a consumer whose
+    // ack handling differs from the one this was designed for walks the head off the end of the disc
+    // forever. Measured in the Spyro port: 4.4 MILLION out-of-range reads in a 40s run, 8 frames
+    // presented instead of 18809, with the head at LBA 23476094 on a ~281k-sector disc.
+    s->reading = 0;
+    return;
   }
   memcpy(s->data, sec, 2048); s->data_n = 2048; s->data_rd = 0;
 }
@@ -217,14 +225,6 @@ void cdc_write(CdcState* s, uint32_t p, uint8_t v) {
     case 3:
       if (s->index == 1) {                         // interrupt flag: write 1s to ack/clear
         if (v & 0x07) {                            // ack current IRQ -> advance the queue
-          // Acknowledging a data interrupt during a continuous read is what makes the drive present
-          // the NEXT sector. This is the hardware's own pacing, and it is what a streaming reader
-          // relies on — it never drains a sector, so nothing else would ever advance the head.
-          if (s->reading) {
-            s->loc_lba++;
-            load_sector(s);
-            { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }
-          }
           if (!q_empty(s)) {
             s->q_head = (s->q_head + 1) & 7; s->resp_rd = 0;
             // A response that was QUEUED behind the one just acked becomes current now, and that is
