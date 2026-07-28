@@ -1192,6 +1192,17 @@ void GpuState::gpu_gp1(uint32_t w) {
     case 0x08:  // display mode: horizontal res (bits0-1, bit6=368), interlace (bit5), VRes 480 (bit2)
       s_disp_w = ((w & 3) == 0) ? 256 : ((w & 3) == 1) ? 320 : ((w & 3) == 2) ? 512 : 640;
       s_disp_480i = ((w & 0x20) && (w & 0x04)) ? 1 : 0;
+      // BIT 4 IS THE DISPLAY COLOUR DEPTH: 0 = 15-bit, 1 = 24-bit. It was decoded nowhere, so a game
+      // that switches to 24bpp for a still (logo screens, FMV frames) has its VRAM read as 15-bit —
+      // which scrambles every colour AND shows only two thirds of the width, because 24bpp packs 1.5
+      // halfwords per pixel. That is precisely the symptom recorded in the consumer's issue 0016.
+      // Recording and reporting it first; honouring it in the present path is a separate change.
+      { const int d24 = (w >> 4) & 1;
+        if (d24 != s_disp_rgb24) {
+          s_disp_rgb24 = d24;
+          cfg_logi("gpu", "display depth -> %s (GP1(08)=%08X, %dx%d)", d24 ? "24-BIT" : "15-bit",
+                   w, s_disp_w, s_disp_h);
+        } }
       { int n = s_disp_vy1 - s_disp_vy0; if (n <= 0) n = 240; s_disp_h = s_disp_480i ? n * 2 : n; }
       break;
     default: break;

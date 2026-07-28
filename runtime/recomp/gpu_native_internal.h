@@ -85,6 +85,10 @@ struct GpuState {
   int s_disp_w = 320, s_disp_h = 240;
   int s_disp_vy0 = 0, s_disp_vy1 = 240;                       // GP1(0x07) vertical display range
   int s_disp_480i = 0;                                        // GP1(0x08) interlace + 480-line
+  // GP1(0x08) bit 4 — display-area colour depth, 0 = 15-bit, 1 = 24-bit. Was decoded NOWHERE, so a
+  // game switching to 24bpp for a still had its VRAM read as 15-bit: every colour scrambled and only
+  // two thirds of the width shown, since 24bpp packs 1.5 halfwords per pixel.
+  int s_disp_rgb24 = 0;
 
   // Per-frame prim ordering + provenance
   uint32_t s_prim_order = 0;                                  // OT submission index of the current prim (VK depth)
