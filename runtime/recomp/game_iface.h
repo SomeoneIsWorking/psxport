@@ -114,7 +114,12 @@ struct GameConfig {
 
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
-  uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*4)
+  uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)
+  // Byte distance between consecutive slots' buffer pointers. A driver that keeps a flat pointer
+  // array uses 4 (Tomba!2); one that stores the pointer INSIDE a per-port context record uses that
+  // record's size (Spyro: libpad's 240-byte per-port context). 0 is read as 4 so a config that
+  // predates this field keeps its old meaning rather than silently reading slot 1 from slot 0.
+  uint32_t padSlotPtrStride;
 
   // --- platform HLE: the PSX hardware-sync primitives (sync_overrides.cpp) ---
   // These are the SCEI library entry points whose real bodies busy-spin on a hardware IRQ our no-IRQ

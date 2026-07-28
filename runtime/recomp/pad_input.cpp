@@ -504,13 +504,19 @@ void Pad::serviceFrame() {
   uint8_t pk[4];
   fillBuffer(pk);
   uint32_t bufs[2] = { c->cfg->padSlot0Buf, c->cfg->padSlot1Buf };  // fixed game pad buffers
+  const uint32_t tbl = c->cfg->padSlotPtrTable;
+  const uint32_t stride = c->cfg->padSlotPtrStride ? c->cfg->padSlotPtrStride : 4u;
   for (int slot = 0; slot < 2; slot++) {
-    uint32_t b = c->mem_r32(c->cfg->padSlotPtrTable + (uint32_t)slot * 4u); // registered ptr (NULL in this port)
+    // Only consult the driver's table when the port HAS one. Reading it unconditionally means a
+    // game with no known table reads guest address 0 (and 0+stride) and calls whatever garbage is
+    // there a buffer pointer — writing the pad packet into an arbitrary address.
+    uint32_t b = tbl ? c->mem_r32(tbl + (uint32_t)slot * stride) : 0u;
     if (!b) b = bufs[slot];                                  // fall back to the fixed buffer
+    if (!b) continue;                                        // neither known: nothing to fill
     for (int i = 0; i < 4; i++) c->mem_w8(b + i, pk[i]);
   }
   // Slot 1: report "no controller" so single-pad logic ignores it (status 0xFF).
-  c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
+  if (c->cfg->padSlot1Buf) c->mem_w8(c->cfg->padSlot1Buf, 0xFF);
 }
 
 #endif // PSXPORT_PAD_NO_OVERRIDES
