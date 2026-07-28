@@ -199,6 +199,17 @@ long Repl::read(Core* c, uint32_t f) {
         else                   { gpu_native_shot(c, path); cfg_logi("repl", "shot (SW) -> %s", path); }
       }
     }
+    else if (!strcmp(cmd, "shotregion")) {   // dump an ARBITRARY VRAM region, not just what is presented
+      // `shot` captures the PRESENT window, which is the right default and useless for the question
+      // "where in VRAM is the content?". gpu_vk_shot_region already existed and was reachable from
+      // nothing — exposing it costs four lines and answers that directly: `shotregion v.ppm 0 0 1024
+      // 512` dumps the whole of VRAM, so a black present window can be told apart from a black VRAM.
+      char path[200] = {0}; int x = 0, y = 0, w = 0, h = 0;
+      if (sscanf(line, "%*s %199s %d %d %d %d", path, &x, &y, &w, &h) == 5) {
+        void gpu_vk_shot_region(Core*, const char*, int, int, int, int);
+        gpu_vk_shot_region(c, path, x, y, w, h);
+      } else cfg_logi("repl", "shotregion <path> <x> <y> <w> <h> — raw VRAM region (VRAM is 1024x512)");
+    }
     else if (!strcmp(cmd, "setires")) {   // live ires toggle (same mods.ires mutation the RmlUi overlay's
       // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuVkState::ensure_ires_targets' teardown+
       // rebuild path headless, without needing a windowed run to reach the overlay.
