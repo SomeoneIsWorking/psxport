@@ -185,5 +185,9 @@ public:
            mods.init();   // per-Game mod state: factory defaults + the player's settings file
            disc_state_init(&disc); cdc_state_init(&cdc); xa_state_init(&xa);
            gte.dbg.sxhist_on = gte.dbg.gteprobe = gte.dbg.projprobe = gte.dbg.rtpcaller_on = -1;
+           // core.cfg is already valid here: Core is a MEMBER, so its constructor (which snapshots
+           // the installed GameConfig) runs before this body. Must follow disc_state_init, which
+           // memsets the struct.
+           disc.env_key = core.cfg ? core.cfg->discEnvVar : 0;   // GameConfig::discEnvVar
            cdc.disc = &disc; xa.disc = &disc; }   // per-instance disc backend + CD-controller + XA streamer
 };

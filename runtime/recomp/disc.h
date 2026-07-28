@@ -14,6 +14,8 @@ typedef struct DiscState {
   uint32_t hunk_bytes;
   uint8_t* hunk_buf;             // one-hunk read cache
   uint32_t cached_hunk;          // 0xFFFFFFFF = cache empty
+  const char* env_key;           // GameConfig::discEnvVar — the consuming game's disc env/.env key.
+                                 // Wired by Game(); NULL falls back to the generic keys only.
 } DiscState;
 
 void disc_state_init(DiscState* d);

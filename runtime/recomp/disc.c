@@ -18,9 +18,9 @@
 
 void disc_state_init(DiscState* d) { memset(d, 0, sizeof *d); d->cached_hunk = 0xFFFFFFFFu; }
 
-// Resolve the disc path: PSXPORT_TOMBA2_DISC, then PSXPORT_DISC, then a KEY=VALUE line in
-// ./.env (the build/runtime run from the repo root). Mirrors common/env.h's order for the
-// keys this port uses; kept minimal (no parent-walk) since boot runs from the repo root.
+// Resolve the disc path: the CONSUMING GAME's own key (DiscState::env_key, from
+// GameConfig::discEnvVar), then the generic PSXPORT_DISC, each as an environment variable and then
+// as a KEY=VALUE line in ./.env. Kept minimal (no parent-walk) since boot runs from the repo root.
 static char* dup_trim(const char* s) {
   while (*s == ' ' || *s == '\t') s++;
   size_t n = strlen(s);
@@ -41,15 +41,18 @@ static char* env_from_dotenv(const char* key) {
   fclose(f);
   return found;
 }
-// Last-resort resolution order: CLI arg (run.sh) > PSXPORT_TOMBA2_DISC/PSXPORT_DISC env > .env >
-// a *.chd dropped into the working directory (repo root). The drop-in scan itself is implemented
-// in disc_provision.cpp (Fs::findFirstWithExtension, std::filesystem — no hand-rolled dirent).
-static char* resolve_disc_path(void) {
-  const char* e = cfg_str("PSXPORT_TOMBA2_DISC");
+// Last-resort resolution order: CLI arg (run.sh) > the game's own key > PSXPORT_DISC, each from the
+// environment then from .env > a *.chd dropped into the working directory (repo root). The drop-in
+// scan itself is in disc_provision.cpp (Fs::findFirstWithExtension, std::filesystem).
+static char* resolve_disc_path(DiscState* d0) {
+  const char* key = d0->env_key;
+  if (key && *key) {
+    const char* e = cfg_str(key);
+    if (e && *e) return dup_trim(e);
+  }
+  const char* e = cfg_str("PSXPORT_DISC");
   if (e && *e) return dup_trim(e);
-  e = cfg_str("PSXPORT_DISC");
-  if (e && *e) return dup_trim(e);
-  char* d = env_from_dotenv("PSXPORT_TOMBA2_DISC");
+  char* d = (key && *key) ? env_from_dotenv(key) : 0;
   if (d) return d;
   d = env_from_dotenv("PSXPORT_DISC");
   if (d) return d;
@@ -60,8 +63,13 @@ static char* resolve_disc_path(void) {
 
 int disc_open(DiscState* d) {
   if (d->chd) return 1;
-  char* path = resolve_disc_path();
-  if (!path) { cfg_logi("disc", "no disc image (PSXPORT_TOMBA2_DISC/PSXPORT_DISC/.env)"); return 0; }
+  char* path = resolve_disc_path(d);
+  if (!path) {
+    cfg_logw("disc", "no disc image: tried %s, PSXPORT_DISC (env and ./.env), and a *.chd drop-in "
+                     "in the working directory. The CD model will run with NO MEDIA.",
+             d->env_key ? d->env_key : "<no GameConfig::discEnvVar set>");
+    return 0;
+  }
   if (chd_open(path, CHD_OPEN_READ, 0, &d->chd) != CHDERR_NONE) {
     cfg_loge("disc", "failed to open CHD: %s", path); free(path); return 0;
   }

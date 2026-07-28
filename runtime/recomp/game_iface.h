@@ -67,6 +67,13 @@ struct GameConfig {
   // compile standalone (see docs/porting-a-new-psx-game.md).
   uint32_t recMainLo, recMainHi;
 
+  // Per-game name of the environment variable / .env key that points at this game's disc image
+  // (e.g. "PSXPORT_TOMBA2_DISC", "PSXPORT_SPIDERMAN_DISC"). The resolver in disc.c used to hardcode
+  // the FIRST consumer's key, so a second port set its own variable, the framework never read it,
+  // and the CD model ran with NO DISC MOUNTED while every log line still looked ordinary. Leave it
+  // null to rely on the generic PSXPORT_DISC / drop-in *.chd paths, which are always tried too.
+  const char* discEnvVar;
+
   // --- per-frame OT / packet-pool dance (native_boot.cpp native_step_frame) ---
   uint32_t otRegionBase, otRegionStride;      // per-parity OT region
   uint32_t packetPoolBase, packetPoolStride;  // per-parity packet pool

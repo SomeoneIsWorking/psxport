@@ -127,6 +127,47 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                              heapFree(old); }
                    c->r[V0] = np; return true; }
       case 0x39: heapInit(a0, a1); c->r[V0] = 0; return true;          // InitHeap
+      // --- BIOS libc string/memory leaves -------------------------------------------------------
+      // These were absent, and absence here is SILENT DATA LOSS, not a missing feature: an
+      // unhandled BIOS call logs UNIMPL, leaves $v0 holding whatever the previous call left there,
+      // and — crucially — DOES NOT PERFORM THE WRITE. A guest bzero() that quietly does nothing
+      // leaves a structure full of garbage that surfaces arbitrarily far away. Spider-Man's boot
+      // calls A(28h) and A(2Ah) twice each; every PSX title that uses the BIOS libc calls them.
+      case 0x28:                                                       // bzero(dst, n)
+        for (uint32_t i = 0; i < a1; i++) c->mem_w8(a0 + i, 0);
+        c->r[V0] = a0; return true;
+      case 0x2A:                                                       // memcpy(dst, src, n)
+        for (uint32_t i = 0; i < a2; i++) c->mem_w8(a0 + i, c->mem_r8(a1 + i));
+        c->r[V0] = a0; return true;
+      case 0x2B:                                                       // memset(dst, c, n)
+        for (uint32_t i = 0; i < a2; i++) c->mem_w8(a0 + i, (uint8_t)a1);
+        c->r[V0] = a0; return true;
+      case 0x2C:                                                       // memmove(dst, src, n) —
+        if (a0 > a1)                                                   // overlap-correct, unlike 2Ah
+          for (uint32_t i = a2; i-- > 0;) c->mem_w8(a0 + i, c->mem_r8(a1 + i));
+        else
+          for (uint32_t i = 0; i < a2; i++) c->mem_w8(a0 + i, c->mem_r8(a1 + i));
+        c->r[V0] = a0; return true;
+      // setjmp: fill the guest's jmp_buf with the real callee-saved set and return 0 (the
+      // direct-call result). The layout is the BIOS's: ra, sp, fp, s0..s7, gp. Writing it truthfully
+      // matters even though longjmp is unsupported below — a guest that INSPECTS the buffer, or
+      // that longjmps and is therefore about to abort, should see the state that actually existed.
+      case 0x13: {                                                     // setjmp(buf)
+        static const int kSave[12] = { 31, 29, 30, 16, 17, 18, 19, 20, 21, 22, 23, 28 };
+        for (int i = 0; i < 12; i++) c->mem_w32(a0 + 4u * (uint32_t)i, c->r[kSave[i]]);
+        c->r[V0] = 0; return true;
+      }
+      // longjmp CANNOT be honoured here and must not be faked. Restoring the guest's $sp/$ra does
+      // nothing on a static recompile: control lives on the HOST stack, and returning normally
+      // would resume the setjmp caller's successor instead of unwinding to it — silently running
+      // the error path's continuation with the failed operation's state still live. Stop instead;
+      // a guest reaching longjmp is a real event that needs a real mechanism (host setjmp at the
+      // dispatch boundary, or a coroutine unwind), not a plausible-looking return.
+      case 0x14:                                                       // longjmp(buf, val)
+        cfg_loge("hle", "A0:0x14 longjmp(buf=0x%08X, val=%u) — psxport has no guest unwind "
+                        "mechanism. Faking a return here would resume the wrong continuation with "
+                        "the failed operation's state live. Refusing.", a0, a1);
+        abort();
       case 0x44: c->r[V0] = 0; return true;                              // FlushCache (no-op)
       case 0x49: c->r[V0] = 0; return true;                              // GPU_cw (GP0 word — harmless)
       case 0x51: if (s_loadexec_hook) { s_loadexec_hook(c); return true; } return false;  // LoadExec
