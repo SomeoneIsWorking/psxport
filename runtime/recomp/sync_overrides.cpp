@@ -13,6 +13,7 @@
 
 #include "platform_hle.h"
 #include "core.h"
+#include "game.h"           // Game::core — register_/initBuiltins read the game's config off the Core
 #include "scheduler.h"
 #include "recomp_iface.h"   // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
 #include <cstdio>
@@ -44,10 +45,15 @@ static void cddatasync(Core* c) { c->r[V0] = 0; }
 // We model no controller; report drive ready (v0=0).
 static void cdinit_hs(Core* c) { c->r[V0] = 0; }
 
-// 0x800834A0 / 0x800834D4 — libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK) and
-// the OT-DMA runs SYNCHRONOUSLY on the channel-start write, so the timeout is never needed. Arm a
-// far-future deadline (no VSync read); report "not timed out".
-static void gpu_timeout_arm(Core* c) { c->mem_w32(0x800a5adcu, 0x7fffffffu); c->mem_w32(0x800a5ae0u, 0); }
+// libgpu GPU-DMA-completion TIMEOUT (arm / check). Our GPU is native (VK) and the OT-DMA runs
+// SYNCHRONOUSLY on the channel-start write, so the timeout is never needed. Arm a far-future deadline
+// (no VSync read); report "not timed out". The two guest globals the arm writes are GAME data and
+// come from the config alongside the entry point itself.
+static void gpu_timeout_arm(Core* c) {
+  const GameConfig* cfg = c->cfg;
+  if (cfg->hle.gpuTimeoutDeadlineVar) c->mem_w32(cfg->hle.gpuTimeoutDeadlineVar, 0x7fffffffu);
+  if (cfg->hle.gpuTimeoutFlagVar)     c->mem_w32(cfg->hle.gpuTimeoutFlagVar, 0);
+}
 static void gpu_timeout_chk(Core* c) { c->r[V0] = 0; }
 
 // Walk the guest stack (sp upward) printing plausible return addresses in resident-code range, so a
@@ -55,13 +61,21 @@ static void gpu_timeout_chk(Core* c) { c->r[V0] = 0; }
 // the recomp ABI doesn't frame-link, so this scans sp..sp+512 for words that look like return PCs.
 // Kept as `extern "C"` because the SBS divergence debugger captures it via a function-pointer.
 extern "C" void guest_backtrace_to(Core* c, FILE* out) {
+  // The "does this word look like a return address" test needs the game's resident-code range.
+  // Configured range wins; otherwise fall back to the recompiled MAIN text, which every game states.
+  // (Was hardcoded to Tomba!2's 0x10000..0x120000 — for another game that silently prints nothing,
+  // or prints noise, exactly when a trap most needs to show its call chain.)
+  const GameConfig* cfg = c->cfg;
+  uint32_t lo = cfg->hle.codeScanLo, hi = cfg->hle.codeScanHi;
+  if (!hi) { lo = cfg->recMainLo; hi = cfg->recMainHi; }
+
   uint32_t sp = c->r[29];
   fprintf(out, "  guest stack (sp=0x%08X), plausible return addrs:\n", sp);
   int shown = 0;
   for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
     uint32_t w = c->mem_r32(a);
     uint32_t k = w & 0x1FFFFFFF;
-    if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0)   // resident MAIN/overlay code, word-aligned
+    if (k >= lo && k < hi && (w & 3) == 0)   // resident MAIN/overlay code, word-aligned
       { fprintf(out, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; }
   }
 }
@@ -74,24 +88,37 @@ static void trap_abort(Core* c, const char* what, uint32_t addr) {
   abort();
 }
 
-// VSync TRAP (user 2026-06-22): the PC-native frame loop OWNS all timing. NOTHING may reach libetc
-// VSync 0x80085900 — not to WAIT for a vblank and not to QUERY the vblank counter. Every mode traps.
-static void vsync_trap(Core* c) { trap_abort(c, "VSYNC", 0x80085900u); }
+// VSync TRAP (user 2026-06-22): for a port whose PC-native frame loop OWNS all timing, NOTHING may
+// reach libetc VSync — not to WAIT for a vblank and not to QUERY the counter. Every mode traps.
+// This is opt-in per game (GameConfig::hle.vsyncTrap); see the field comment for why it is a policy
+// rather than a universal.
+static void vsync_trap(Core* c) { trap_abort(c, "VSYNC", c->cfg->hle.vsyncTrap); }
 
 // ---- class PlatformHle ---------------------------------------------------------------------------
 
-// Two platform windows, both I/O / hardware-service, NEVER game logic:
-//   [0x8001C000,0x8001E000) — the engine's CD/SPU I/O GLUE (libcd-wrapper readers, SPU-mix).
-//   [0x80080000,0x8009E000) — the SCEI LIBRARY text (libgpu/libetc/libcd/libgs/libmdec) + the kernel
-//     thread primitives at 0x80080xxx (ChangeThread/OpenThread — the scheduler funnel).
-// Game/engine LOGIC lives in [0x8001E000,0x80082000) (main) and the overlays (0x8010xxxx+) — both
-// OUTSIDE these windows, so the guard keeps logic out of this table.
-bool PlatformHle::inBiosWindow(uint32_t a) {
-  return (a >= 0x8001C000u && a < 0x8001E000u) || (a >= 0x80080000u && a < 0x8009E000u);
+// The platform windows are I/O / hardware-service address ranges, NEVER game logic — the guard is
+// what keeps engine FUN_xxxx out of this table (those are owned top-down via the override registry).
+// WHICH ranges those are is a fact about the game's memory map, so it comes from GameConfig
+// (hle.windowLo/windowHi). Tomba!2's two, for reference, are the engine's CD/SPU I/O glue and the
+// SCEI library text; another game's layout will differ.
+//
+// A game that configures NO window gets everything refused, with a diagnostic saying so. That is
+// deliberate: silently accepting any address would turn the one guard protecting this table into a
+// no-op for exactly the games that forgot to state their map.
+bool PlatformHle::inBiosWindow(const GameConfig* cfg, uint32_t a) {
+  bool any = false;
+  for (int i = 0; i < 2; i++) {
+    if (!cfg->hle.windowHi[i]) continue;
+    any = true;
+    if (a >= cfg->hle.windowLo[i] && a < cfg->hle.windowHi[i]) return true;
+  }
+  if (!any) cfg_loge("plat-hle", "no BIOS-library address window configured "
+                                 "(GameConfig::hle.windowLo/windowHi) — refusing every registration");
+  return false;
 }
 
 void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
-  if (!inBiosWindow(addr)) {
+  if (!inBiosWindow(game->core.cfg, addr)) {
     cfg_loge("plat-hle", "REFUSED 0x%08X — not an I/O / BIOS-library address (game/engine logic is owned top-down, never HLE'd here)", addr);
     return;
   }
@@ -116,22 +143,36 @@ OverrideFn PlatformHle::lookup(uint32_t addr) const {
 }
 
 void PlatformHle::initBuiltins() {
-  // libmdec sync (reached from libgs FUN_8009c820/FUN_8009c9d0/FUN_8009ca60 etc. — interpreted).
-  register_(0x8009CAECu, sync_ok);          // DecDCTinSync
-  register_(0x8009CB80u, sync_ok);          // DecDCToutSync
-  // libcd sync (reached from in-game/cutscene CD code — interpreted).
-  register_(0x8008A96Cu, cdreadsync);       // CdReadSync
-  register_(0x8008B4B8u, cddatasync);       // CdDataSync
-  register_(0x8008B2D8u, cdinit_hs);        // low-level CdInit reset handshake
-  // libgpu GPU-DMA-completion timeout — native no-ops, never read VSync (GPU is synchronous).
-  register_(0x800834A0u, gpu_timeout_arm);  // FUN_800834a0 arm deadline
-  register_(0x800834D4u, gpu_timeout_chk);  // FUN_800834d4 check (not timed out)
-  // libetc VSync — TRAP every caller, every mode.
-  register_(0x80085900u, vsync_trap);
-  // Cooperative task-switch: ChangeThread (FUN_80080880) is the universal yield/task-end primitive.
-  // Wire it to scheduler_yield so a yield from an interpreted task coroutine saves the task's resume
-  // context and longjmps back to the native scheduler. switch no-ops outside a task run.
-  register_(0x80080880u, scheduler_yield);
+  // Every address here is GAME data (GameConfig::hle) — the framework ships none. A zero entry means
+  // "this game has no such primitive, or it has not been RE'd yet" and is skipped; the game then
+  // hangs in the real spin loop if it needs it, which is the honest signal that RE is outstanding.
+  const GameConfig::PlatformHleCfg& h = game->core.cfg->hle;
+  auto reg = [&](uint32_t addr, OverrideFn fn) { if (addr) register_(addr, fn); };
+
+  // libmdec sync — MDEC decode + its DMAs are synchronous here, so the sync is already done.
+  reg(h.decDctInSync,  sync_ok);
+  reg(h.decDctOutSync, sync_ok);
+  // libcd sync — native reads complete synchronously; the drive is modelled as always ready.
+  reg(h.cdReadSync,      cdreadsync);
+  reg(h.cdDataSync,      cddatasync);
+  reg(h.cdInitHandshake, cdinit_hs);
+  // libgpu GPU-DMA-completion timeout — native no-ops, never read VSync (the GPU is synchronous).
+  reg(h.gpuTimeoutArm,   gpu_timeout_arm);
+  reg(h.gpuTimeoutCheck, gpu_timeout_chk);
+  // Cooperative task-switch (ChangeThread): the universal yield/task-end primitive. Wired to
+  // scheduler_yield so a yield from an interpreted task coroutine saves the task's resume context and
+  // longjmps back to the native scheduler. No-ops outside a task run.
+  reg(h.changeThread, scheduler_yield);
+  // libetc VSync — trap every caller, every mode. Opt-in: only for a port whose native frame loop
+  // owns timing. A game reimplementing VSync registers its own handler instead and leaves this zero.
+  reg(h.vsyncTrap, vsync_trap);
+
+  // State the wiring's own reach. Now that the addresses come from the game, "the table is empty
+  // because the game configured nothing" and "the table is full" fail IDENTICALLY at a glance — the
+  // run just hangs somewhere later. Reporting the count turns a silent misconfiguration into a
+  // visible one, and gives any port a one-line check that its HLE actually installed.
+  cfg_logi("plat-hle", "%d hardware-sync primitive(s) installed from GameConfig::hle%s",
+           mN, mN ? "" : " — NONE configured; the guest will spin in any real sync loop it reaches");
 }
 
 // Instance method — PlatformHle is a Game member (see game.h). Callers use `c->game->platform_hle`.

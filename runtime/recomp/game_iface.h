@@ -97,6 +97,51 @@ struct GameConfig {
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
   uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*4)
+
+  // --- platform HLE: the PSX hardware-sync primitives (sync_overrides.cpp) ---
+  // These are the SCEI library entry points whose real bodies busy-spin on a hardware IRQ our no-IRQ
+  // runtime never raises (libmdec/libcd/libgpu/libetc sync + the kernel task-switch funnel).
+  // PlatformHle::initBuiltins() installs a native handler at each.
+  //
+  // They were hardcoded in sync_overrides.cpp until 2026-07-28 — the SAME defect the seed set had,
+  // and wrong in the same way: the addresses are facts about ONE executable. For a different game
+  // they miss every primitive it actually uses AND install handlers over unrelated functions that
+  // happen to sit at those addresses, which is a wrong abort waiting to fire rather than a silent
+  // no-op. (Found standing up a second consumer; Spider-Man has real code at Tomba!2's VSync
+  // address.) Same remedy as recMainLo/recMainHi: the value travels with the game.
+  //
+  // ZERO MEANS "this game has no such primitive, or it has not been RE'd yet" — initBuiltins skips
+  // it. A game that leaves one zero and needs it will hang in the real spin loop, which is the
+  // honest signal that its RE is outstanding.
+  struct PlatformHleCfg {
+    // The address windows register_() will accept. Everything outside them is refused, which is what
+    // keeps GAME/engine logic out of this table (game logic is owned top-down through the override
+    // registry instead). Two windows; an unused one is left {0,0}. If NO window is configured,
+    // register_() refuses everything and says so — a game must state its own memory map.
+    uint32_t windowLo[2], windowHi[2];
+
+    // Resident-code range for the guest-backtrace heuristic (which words on the guest stack look
+    // like return addresses). Compared against `addr & 0x1FFFFFFF`, so these are PHYSICAL. When left
+    // zero the scan falls back to [recMainLo, recMainHi); set it explicitly when the game has
+    // overlays resident above the main text.
+    uint32_t codeScanLo, codeScanHi;
+
+    uint32_t decDctInSync, decDctOutSync;      // libmdec DecDCTinSync / DecDCToutSync
+    uint32_t cdReadSync, cdDataSync;           // libcd CdReadSync / CdDataSync
+    uint32_t cdInitHandshake;                  // libcd low-level CdInit controller-ready handshake
+    uint32_t gpuTimeoutArm, gpuTimeoutCheck;   // libgpu GPU-DMA-completion timeout (arm / check)
+    uint32_t gpuTimeoutDeadlineVar;            // guest global the arm writes its far-future deadline to
+    uint32_t gpuTimeoutFlagVar;                // guest global the arm clears
+    uint32_t changeThread;                     // kernel cooperative task-switch / yield funnel
+
+    // libetc VSync, as a TRAP: "nothing may reach VSync, in any mode, because the native frame loop
+    // owns all timing". That is a per-game POLICY, not a framework universal — it holds only for a
+    // port whose native loop actually drives the frame. A game still running the guest's own loop on
+    // the substrate must instead reimplement VSync faithfully and register it itself via
+    // PlatformHle::register_(). Leave this ZERO in that case; setting both is a contradiction, and
+    // initBuiltins would clobber the game's handler with the trap.
+    uint32_t vsyncTrap;
+  } hle;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

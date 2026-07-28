@@ -33,6 +33,10 @@ public:
   OverrideFn lookup(uint32_t addr) const;
 
 private:
+  // The accepted address windows are GAME data (GameConfig::hle.windowLo/windowHi), so the guard
+  // takes the config rather than baking one game's memory map into the framework.
+  static bool inBiosWindow(const struct GameConfig* cfg, uint32_t a);
+
   static constexpr int kMax = 32;
 
   uint32_t   mAddr[kMax] = {0};
@@ -41,5 +45,4 @@ private:
   uint32_t   mLo = 0xFFFFFFFFu;
   uint32_t   mHi = 0;
 
-  static bool inBiosWindow(uint32_t a);
 };
