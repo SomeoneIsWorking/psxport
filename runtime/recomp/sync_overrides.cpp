@@ -79,6 +79,26 @@ extern "C" void guest_backtrace_to(Core* c, FILE* out) {
       { fprintf(out, "    [sp+0x%03X] 0x%08X\n", a - sp, w); shown++; }
   }
 }
+// WHERE DID THIS ADDRESS COME FROM? On a dispatch miss the address is often not referenced anywhere in
+// the executable — it arrived as DATA (a function-pointer table loaded off the disc, a value the game
+// computed and stored). Then the static question "who jumps here" has no answer and the only way
+// forward is to find where the pointer LIVES. Scanning main RAM for the value gives that directly, and
+// its address usually identifies the structure — and therefore the load — that produced it.
+//
+// Bounded and best-effort: 2MB of word compares is cheap on a path that is about to abort anyway.
+extern "C" void guest_find_word_to(Core* c, FILE* out, uint32_t val) {
+  fprintf(out, "  guest RAM locations holding 0x%08X:\n", val);
+  int shown = 0;
+  for (uint32_t a = 0x10000; a < 0x200000 && shown < 12; a += 4) {
+    if (c->mem_r32(a | 0x80000000u) == val) {
+      fprintf(out, "    [0x%08X]\n", a | 0x80000000u);
+      shown++;
+    }
+  }
+  if (!shown)
+    fprintf(out, "    (none — not stored in RAM as a word, so it is computed at the jump site)\n");
+}
+
 static void guest_backtrace(Core* c) { guest_backtrace_to(c, stderr); }
 
 static void trap_abort(Core* c, const char* what, uint32_t addr) {

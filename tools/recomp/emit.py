@@ -672,6 +672,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     state machine into an infinite loop; this is the additive, minimal version.)"""
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
     jt = find_jump_tables(exe, ins, lo, hi)
+    ra_tails = ra_tail_returns(ins, lo, hi)
     dup_ins, dup_blocks = collect_tail_dups(exe, lo, hi, funcset, ins, jt)
     if dup_ins:
         ins = {**ins, **dup_ins}
@@ -688,6 +689,12 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
         if x in ins:
             all_targets |= {t for t in tgts if t in ins}
     labels = {t for t in all_targets if t in standalone}
+    # MEASUREMENT ONLY (PSXPORT_LABEL_ALL=1): label every standalone instruction, so any address inside
+    # a recompiled function could be resumed at. This is the cost half of docs/issues/0021's option 1 —
+    # it does NOT wire up mid-function ENTRY (that needs a dispatch switch at the top of each function),
+    # it only answers "what do universal labels cost in size and build time". Not for shipping.
+    if os.environ.get("PSXPORT_LABEL_ALL") == "1":
+        labels = set(standalone)
     # BRANCH-INTO-DELAY-SLOT (MAIN 0x80084080: a `bltz` jumps to 0x800840C8, the delay slot of the
     # preceding unconditional `beq $0,$0`). Such a target is NOT standalone, so without help it routes to
     # the dispatcher. Emit a label for it: after the owning control op drop `L_<ds>: <slot>` (guarded by a
@@ -711,7 +718,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 slot = ins.get(a + 4)
                 ds_c = emit_simple(slot) if (slot and slot.kind not in
                        (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
-                out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a)))
+                out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a), a in ra_tails))
                 if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
                     out.append(f"  goto L_DSAFTER_{a:08X};")
                     out.append(f"L_{a + 4:08X}:; {ds_c}")
@@ -783,7 +790,41 @@ def call_or_dispatch(target, funcset, N):
             else f"{N.router}(c, 0x{target:08X}u);")
 
 
-def emit_control(i, ds_c, funcset, labels, N, jtargets=None):
+
+def ra_tail_returns(ins, lo, hi):
+    """Addresses of `jr rX` (rX != ra) where rX provably holds `ra` — i.e. TAIL-RETURNS, not calls.
+
+    A guest that stashes `ra` in another register and jumps through it is returning. The recompiler
+    otherwise routes that to the dispatcher, where the target — the instruction after some caller's
+    `jal` — is mid-function, never a function entry, and fail-fasts. Deciding it here is static and
+    conservative: only a register whose value provably came from `ra` inside this function qualifies.
+
+    Both move forms matter. The R-type (`addu rX,ra,zero`) is the obvious one; the I-type
+    (`addi rX,ra,0`) is what the real case uses, and a check that only looks at `rd` misses it
+    silently — which first told me the pattern occurred once in the whole game instead of four times.
+    Also covers `sw ra,N(sp)` followed by `lw rX,N(sp)`.
+    """
+    out, slots, src = set(), set(), {}
+    for a in range(lo, hi, 4):
+        i = ins.get(a)
+        if i is None:
+            continue
+        if i.op == "sw" and i.rt == 31:
+            slots.add(i.simm)
+        elif i.kind == D.ALU_RRR and 31 in (i.rs, i.rt):
+            src[i.rd] = True
+        elif i.op in ("addi", "addiu") and i.rs == 31:
+            src[i.rt] = True
+        elif i.op == "lw" and i.simm in slots:
+            src[i.rt] = True
+        elif i.op == "jr" and i.rs != 31 and src.get(i.rs):
+            out.add(a)
+        elif i.rd and i.kind in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V):
+            src.pop(i.rd, None)          # clobbered by something unrelated to ra
+    return out
+
+
+def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
     """Lines for a control instruction `i` whose delay-slot C is `ds_c`. `jtargets` (if set) = the
     recovered jump-table case-label addresses for a computed `jr` -> emit a C switch on the target
     value (auto-dedupes repeated entries) so the jump stays inside this compiled body."""
@@ -824,6 +865,17 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None):
                 cases.append(f"case 0x{t:08X}u: goto L_{t:08X};")
             L.append(f"  {{ {ds_c} switch ({R(i.rs)}) {{ {' '.join(cases)} "
                      f"default: {N.router}(c, {R(i.rs)}); return; }} }}")
+        elif ra_tail:
+            # TAIL-RETURN THROUGH A NON-`ra` REGISTER. The guest moved `ra` into another register and
+            # jumps through it, so this is a RETURN, not a computed call — but it is indistinguishable
+            # from one at the jump itself, and dispatching it fail-fasts: the target is the instruction
+            # after some caller's `jal`, i.e. mid-function, which is never a function entry.
+            # (Spyro: 0x80053594 `addi a3,ra,0` then 0x800535B8 `jr a3` lands on 0x80038620, exactly the
+            # instruction after `jal 0x800530C0`.) Emitting `return` lets the C stack unwind to the real
+            # caller, which resumes after its own call site — precisely the guest semantics.
+            # Decided STATICALLY by ra_tail_returns(), so it cannot mask a genuine computed call: only
+            # a jr whose register provably came from `ra` within the function takes this path.
+            L.append(f"  {ds_c} return;   /* tail-return via {R(i.rs)} (= ra) */")
         else:
             L.append(f"  {ds_c} {N.router}(c, {R(i.rs)}); return;")
     else:  # jalr rd, rs

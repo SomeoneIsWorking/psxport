@@ -18,6 +18,7 @@
 #include "cfg.h"
 
 extern "C" void guest_backtrace_to(Core* c, FILE* out);  // sync_overrides.cpp
+extern "C" void guest_find_word_to(Core* c, FILE* out, uint32_t val);  // sync_overrides.cpp
 
 // MIPS o32 register indices (== c->r[]).
 enum { A0=4, A1=5, A2=6, A3=7, T1=9, V0=2 };
@@ -340,6 +341,7 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     }
     cfg_logw("hle", "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.", c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
+    guest_find_word_to(c, stderr, addr | 0x80000000u);
     fflush(stderr);
     abort();
   }
