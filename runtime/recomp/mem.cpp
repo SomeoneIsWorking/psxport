@@ -155,8 +155,8 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     // `PSXPORT_DEBUG=cdcbt` adds a host backtrace, which names the real gen_func_* chain; that is the
     // identification to rely on.
     if (cfg_dbg("cdcw")) {
-      cfg_logf("cdcw", "w[%04X]=%02X bank=%d pc=%08X ra=%08X",
-               (unsigned)(p & 0xFFFF), (unsigned)(v & 0xFF), game->cdc.index, pc, r[31]);
+      cfg_logf("cdcw", "w[%04X]=%02X bank=%d a0=%08X s1=%08X pc=%08X ra=%08X",
+               (unsigned)(p & 0xFFFF), (unsigned)(v & 0xFF), game->cdc.index, r[4], r[17], pc, r[31]);
       if (cfg_dbg("cdcbt") && (p & 3) == 1 && game->cdc.index == 0) {   // command-register write only
         void* bt[24]; int n = backtrace(bt, 24); backtrace_symbols_fd(bt, n, 2);
       }
