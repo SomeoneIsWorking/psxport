@@ -17,6 +17,21 @@ public:
   uint32_t pm_end   = 0;        // was s_pm_end
   int      verbose  = 0;        // [cd] read/loadfile trace (was s_cd_verbose)
 
+  // Drive position last set by CdlSetloc (command 0x02), as an LBA; -1 = none set yet.
+  //
+  // Why this exists: a game built on an ENGINE loader hands the read primitive its LBA directly
+  // (dest, lba, size), so the framework's cd_read/cd_loadfile handlers get it as an argument. A game
+  // built on STOCK Sony libcd does not — there the sequence is CdControl(CdlSetloc, msf) to position
+  // the drive, then a read that transfers from wherever the head was left. The LBA is simply not an
+  // argument to the read, so without remembering it here a stock-libcd read has no idea what to fetch.
+  //
+  // cd_command already intercepts Setloc, but only forwarded it to the XA audio streamer; that path
+  // is for cutscene BGM/voice and keeps no DATA read position. Recording it costs nothing, is pure
+  // bookkeeping (no guest memory is touched), and is what a stock-libcd read path needs to exist at
+  // all. Surfaced by the Spyro port, which spins forever after its boot splash because no read can
+  // resolve a target sector.
+  int32_t  setloc_lba = -1;
+
   // loadFile(dest, lba, size): direct-call native loadfile (0x8001DB8C semantics) — used by the
   //   PC-native boot/stage path, which owns the START.BIN / stage-overlay load top-down.
   void loadFile(uint32_t dest, uint32_t lba, uint32_t size);

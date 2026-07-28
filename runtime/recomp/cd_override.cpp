@@ -55,8 +55,18 @@ static void cd_command(Core* c) {
   switch (cmd) {
     case 0x0E: xa_stream_setmode(&c->game->xa, p0); break;                                  // Setmode
     case 0x0D: xa_stream_setfilter(&c->game->xa, p0, param ? (uint8_t)c->mem_r8(param + 1) : 0); break;  // Setfilter
-    case 0x02: if (param) xa_stream_setloc(&c->game->xa, p0, (uint8_t)c->mem_r8(param + 1),     // Setloc
-                                           (uint8_t)c->mem_r8(param + 2)); break;
+    case 0x02: if (param) {                                                                    // Setloc
+      const uint8_t mm = p0, ss = (uint8_t)c->mem_r8(param + 1), ff = (uint8_t)c->mem_r8(param + 2);
+      xa_stream_setloc(&c->game->xa, mm, ss, ff);
+      // ALSO remember it as a DATA read position. The XA streamer above is the audio path; a game on
+      // stock libcd positions the drive here and then issues a read that carries no LBA argument, so
+      // this is the only place that target sector is ever stated. Pure bookkeeping — see Cd::setloc_lba.
+      auto bcd = [](uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); };
+      const int lba = (bcd(mm) * 60 + bcd(ss)) * 75 + bcd(ff) - 150;   // MSF -> LBA (sector 0 == 00:02:00)
+      c->game->cd.setloc_lba = lba >= 0 ? lba : -1;
+      if (c->game->cd.verbose)
+        cfg_logi("cd", "setloc %02X:%02X:%02X -> LBA %d", mm, ss, ff, c->game->cd.setloc_lba);
+    } break;
     case 0x06: case 0x1B: xa_stream_start(&c->game->xa); break;                           // ReadN / ReadS
     case 0x08: case 0x09: xa_stream_stop(&c->game->xa); break;                            // Stop / Pause
     default: break;
