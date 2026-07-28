@@ -77,11 +77,12 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
 // announced. Nothing is raised when the drive is not reading (Pause/Stop cleared s->reading), so no
 // event is fabricated.
 static void sector_consumed(CdcState* s) {
+  // Cursor reset ONLY. Advancing the head here would be wrong: during a continuous read the drive
+  // does not deliver the next sector when the host finishes reading the previous one — it delivers
+  // one per interrupt, and the host acknowledges each. Streaming code proves the difference: it
+  // reads only the 32-byte header out of each sector and discards the rest, so a drain-based advance
+  // never fires and the same sector is served forever. Advancement lives in the ACK path below.
   s->data_n = 0; s->data_rd = 0;
-  if (!s->reading) return;
-  s->loc_lba++;
-  load_sector(s);
-  { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }   // INT1: next sector data-ready
 }
 
 // DMA3 (CDROM -> RAM): pop up to `words` 32-bit words from the sector data FIFO. Returns the count
@@ -197,6 +198,14 @@ void cdc_write(CdcState* s, uint32_t p, uint8_t v) {
     case 3:
       if (s->index == 1) {                         // interrupt flag: write 1s to ack/clear
         if (v & 0x07) {                            // ack current IRQ -> advance the queue
+          // Acknowledging a data interrupt during a continuous read is what makes the drive present
+          // the NEXT sector. This is the hardware's own pacing, and it is what a streaming reader
+          // relies on — it never drains a sector, so nothing else would ever advance the head.
+          if (s->reading) {
+            s->loc_lba++;
+            load_sector(s);
+            { uint8_t r1[1]; r1[0] = s->stat; cdc_irq(s, 1, r1, 1); }
+          }
           if (!q_empty(s)) {
             s->q_head = (s->q_head + 1) & 7; s->resp_rd = 0;
             // A response that was QUEUED behind the one just acked becomes current now, and that is
