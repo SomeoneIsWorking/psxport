@@ -51,6 +51,7 @@
 //      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
 #include <stdint.h>
+#include "cfg.h"   // cfg_dbg_generation_fast — the inline armed test below
 class Core;
 
 class OtAttr {
@@ -68,7 +69,19 @@ public:
   // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store — no-op unless the `otattr` channel
   // is enabled (checked internally — a hot-path early-out) and the address falls in
   // the packet-pool range.
-  void trackStore(Core* c, uint32_t addr, uint32_t bytes);
+  // Called on EVERY guest store (Core::mem_w* -> pkt_track). The armed test is inline so the common
+  // case is a load and a compare with no call at all — it was three nested out-of-line calls
+  // (trackStore -> cfg_dbg_generation -> bootstrap_once) to conclude it had nothing to do, measuring
+  // 2.54% of total CPU on its own. The generation compare stays so `debug otattr` still takes effect
+  // immediately at the REPL.
+  void trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes);
+  inline void trackStore(Core* c, uint32_t addr, uint32_t bytes) {
+    const unsigned gen = cfg_dbg_generation_fast();
+    if (gen == mTsGen && !mTsOn) return;      // steady state: one compare, no call
+    trackStoreSlow(c, addr, bytes);
+  }
+  unsigned mTsGen = ~0u;   // generation the cached mTsOn was computed at
+  int      mTsOn  = 0;     // is the `otattr` channel on?
 
   // Called from gte_op's RTPS/RTPT branch (gte_beetle.cpp) — aggregates a call count per (fn, node).
   void trackGte(Core* c);

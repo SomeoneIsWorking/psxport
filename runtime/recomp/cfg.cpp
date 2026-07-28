@@ -26,6 +26,12 @@
 #include <string>
 #include <vector>
 
+// PUBLIC and at GLOBAL scope so cfg.h can read it INLINE — defining it inside the anonymous namespace
+// below gives it internal linkage and makes every reference ambiguous against cfg.h's extern. It
+// starts at 0 and bootstrap_once() makes it non-zero, which doubles as the "bootstrapped yet?" flag,
+// so an inline reader takes the fast path on any non-zero value and falls back exactly once.
+unsigned cfg_dbg_gen_v = 0;
+
 namespace {
 
 // Formats a printf-style call into a bounded buffer. Truncation marks itself rather than silently
@@ -46,7 +52,7 @@ std::string vformat(const char* fmt, va_list ap) {
 // doc in this project sets, so honour them. Done lazily on first use rather than at static-init time,
 // because the environment is fully set up by then and static-init order is not worth relying on.
 // Bumped whenever the enabled-channel SET changes; hot paths cache cfg_dbg() against it.
-static unsigned s_dbg_gen = 0;
+#define s_dbg_gen cfg_dbg_gen_v
 
 void bootstrap_once() {
   static bool done = false;

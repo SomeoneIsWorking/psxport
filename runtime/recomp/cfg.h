@@ -35,6 +35,15 @@ void        cfg_dbg_set(const char* chans);       // REPL `debug <chans|all>`: e
 // flag test — it string-compares the channel name against the enabled set — so a call site on a
 // genuinely hot path caches cfg_dbg()'s answer and re-checks only when this counter moves.
 unsigned    cfg_dbg_generation(void);
+// ...and the INLINE form, because the caching call sites this counter exists for are on the hottest
+// path in the substrate and were paying an out-of-line call to read it. OtAttr::trackStore runs on
+// EVERY guest store and reached the counter through two nested calls (cfg_dbg_generation ->
+// bootstrap_once) just to decide it was not logging; the pair measured 3.42% + 2.54% of total CPU.
+// The counter is zero until bootstrap_once() has run, so a zero here means "take the slow path once".
+extern unsigned cfg_dbg_gen_v;
+static inline unsigned cfg_dbg_generation_fast(void) {
+  return cfg_dbg_gen_v ? cfg_dbg_gen_v : cfg_dbg_generation();
+}
 // THE diagnostic print primitive: no-op unless cfg_dbg(chan); emits "[chan] <msg>\n" (newline added
 // if fmt lacks one) to stderr, or to PSXPORT_LOG_FILE=<path> when set. Replaces every
 // `if (cfg_dbg(chan)) fprintf(stderr, ...)` two-step — new diagnostics use THIS, one line per site.
