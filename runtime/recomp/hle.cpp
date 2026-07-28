@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "cfg.h"
+#include "fs_util.h"   // Fs::writeFile — the miss RAM dump below
 
 extern "C" void guest_backtrace_to(Core* c, FILE* out);  // sync_overrides.cpp
 extern "C" void guest_find_word_to(Core* c, FILE* out, uint32_t val);  // sync_overrides.cpp
@@ -459,6 +460,23 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     cfg_logw("hle", "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.", c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     guest_find_word_to(c, stderr, addr | 0x80000000u);
+    // DUMP RAM BEFORE DYING. A miss is exactly the moment worth analysing offline — the missing code
+    // is RESIDENT right now, along with whatever overlay brought it in, and the process is about to
+    // take that state to the grave. Reconstructing it afterwards from image slices means guessing
+    // which overlay was loaded and where, which is the question the miss usually raises.
+    // Import the dump at 0x80000000 (tools/decomp.sh) and every address matches the log verbatim.
+    // PSXPORT_MISS_RAMDUMP=<path> to redirect; =0 to disable.
+    {
+      const char* mp = cfg_str("PSXPORT_MISS_RAMDUMP");
+      if (!mp) mp = "scratch/raw/miss_ram.bin";
+      if (strcmp(mp, "0") != 0) {
+        if (Fs::writeFile(mp, c->ram, 0x200000))
+          cfg_logi("hle", "miss RAM dump -> %s (2 MB, base 0x80000000 — import with tools/decomp.sh)", mp);
+        else
+          cfg_logw("hle", "miss RAM dump FAILED to write %s — analysing this miss offline will need "
+                          "the state reconstructed by hand", mp);
+      }
+    }
     fflush(stderr);
     abort();
   }
