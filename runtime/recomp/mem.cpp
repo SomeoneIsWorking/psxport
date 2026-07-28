@@ -98,7 +98,21 @@ void Core::wwatch_check(uint32_t a, uint32_t v, uint32_t w) {
 // Map a virtual address to a RAM/scratchpad host pointer, or NULL for I/O.
 uint8_t* Core::host_ptr(uint32_t a, uint32_t bytes) {
   const uint32_t p = a & 0x1FFFFFFF;
-  if (p + bytes <= 0x200000) return &ram[p];
+  // PSX main RAM is 2 MB, and the memory controller MIRRORS it four times across the low 8 MB of
+  // each segment — 0x000000, 0x200000, 0x400000 and 0x600000 are the same storage. Games use the
+  // mirror deliberately; Spider-Man (SLUS_008.75) ships a stack-top constant of 0x00800000, so its
+  // crt0 computes sp = 0x807FFFF8 and the ENTIRE guest stack lives in the top mirror.
+  //
+  // Modelling only the first 2 MB made every such access resolve to NULL, and NULL here falls
+  // through to io_write/io_read — an unmapped-I/O path with no handler for a RAM address. So the
+  // accesses were SILENTLY DISCARDED: stack writes vanished and stack reads returned 0. That
+  // presents as callee-saved registers being lost across calls (a saved register restored as 0),
+  // which is arbitrarily far from the real cause and cost a long investigation to trace back.
+  if (p < 0x800000) {
+    const uint32_t off = p & 0x1FFFFF;
+    if (off + bytes <= 0x200000) return &ram[off];
+    return 0;                                    // straddles the mirror wrap — not a valid access
+  }
   if (p >= 0x1F800000 && p + bytes <= 0x1F800400) return &scratch[p - 0x1F800000];
   return 0;
 }
