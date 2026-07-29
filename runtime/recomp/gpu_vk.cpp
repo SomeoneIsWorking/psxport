@@ -701,13 +701,23 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
     total += g.s_tri2d_n[band] + g.s_tex2d_n[band] + semi2d_total[band];
   g.s_present_ires = 0;   // default: present from native s_vram_tex; the unified path below raises it to `scale`
   if (total == 0) {
-    // No native submit this frame → the PC renderer shows BLACK, never the raw PSX VRAM. (A native FMV
-    // or splash draws via gpu_vk_present_image, a separate native RGBA path — not this VRAM present.)
-    SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_vram_tex; ct.store_op = SDL_GPU_STOREOP_STORE;
-    ct.load_op = SDL_GPU_LOADOP_CLEAR; ct.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
-    SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, NULL);
-    SDL_EndGPURenderPass(rp);
-    return;
+    // No native submit this frame. Which of two things that means depends on who owns the frame, and
+    // GameConfig::preserveVramBackdrop is what says so — the SAME switch band 1 below consults for its
+    // clear. Honour it here too; not doing so was issue 0029.
+    //   * A port whose NATIVE renderer owns the frame: zero prims means nothing to show, so clear to
+    //     BLACK rather than reveal raw PSX VRAM. (A native FMV or splash draws via gpu_vk_present_image,
+    //     a separate native RGBA path — not this VRAM present.)
+    //   * A port still running the GUEST's drawing: upload-only screens are NORMAL — loading screens,
+    //     fades and static art are blitted straight into VRAM and submit zero primitives. Clearing here
+    //     destroys exactly those frames, and it does so ABOVE every other backdrop control in this
+    //     function, so preserving the backdrop at band 1 could never take effect on them.
+    if (!preserveBackdrop) {
+      SDL_GPUColorTargetInfo ct = {}; ct.texture = g.s_vram_tex; ct.store_op = SDL_GPU_STOREOP_STORE;
+      ct.load_op = SDL_GPU_LOADOP_CLEAR; ct.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
+      SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, NULL);
+      SDL_EndGPURenderPass(rp);
+    }
+    return;   // s_present_ires is already 0 above → present() samples the native s_vram_tex either way
   }
   g.ensure_targets();
 
