@@ -62,8 +62,15 @@ void Timing::frameTick() {
   game->core.mem_w32(VBLANK_COUNT, vblank);
 }
 
-#define VSYNC_CB_TABLE 0x800AFDC0u  // real retail BIOS VSyncCallback array — 8 fn-ptr slots
-#define VSYNC_CB_COUNT  0x800AFDE0u // IRQ-tick counter bumped once per dispatch pass
+// CORRECTED 2026-07-29 — these were BOTH 0x4000 too high (0x800AFDC0 / 0x800AFDE0) while the draft
+// below asserted it was "faithful to gen_func_80086288". Decoded from the gen body, which builds
+// them as 32779<<16 (= 0x800B0000) plus a negative offset:
+//   generated/shard_4.c:13425  r16 = 0x800B0000 - 16960  -> 0x800ABDC0  (the 8-slot table)
+//   generated/shard_4.c:13419  r2  = 0x800B0000 - 16928  -> 0x800ABDE0  (the tick counter)
+// The tell was in this file all along: VBLANK_COUNT at line 14 is already 0x800ABDE0, i.e. the SAME
+// counter this block spelled 0x800AFDE0. One file, one address, two values.
+#define VSYNC_CB_TABLE 0x800ABDC0u  // BIOS VSyncCallback array — 8 fn-ptr slots
+#define VSYNC_CB_COUNT VBLANK_COUNT // the very same counter VBLANK_COUNT names; do not re-spell it
 
 // 0x80086288 FUN_80086288 — BIOS intr.c VSyncCallback chain invoker. WIDE-RE DRAFT, UNWIRED
 // (see timing.h). Faithful to gen_func_80086288: descend sp 32, spill s0(r16)/s1(r17)/ra(r31)
@@ -71,14 +78,35 @@ void Timing::frameTick() {
 // byte-identical guest-stack bytes), bump the tick counter, walk the 8-entry fn-ptr table
 // rec_dispatch()-ing every non-null slot, then restore + ascend. No caller reaches this
 // natively today (see header note) so nothing currently observes the spilled bytes.
+//
+// STILL NOT SAFE TO WIRE — two issues remain beyond the two corrected above:
+//
+// (1) LIVE-REGISTER LAW. The gen body keeps the walk state in the GUEST registers: r16 = &table[i]
+//     (:13425, advanced by 4 per iteration) and r17 = the index (:13422, zeroed then incremented).
+//     The loop below keeps them in a C++ local `i` instead. Every dispatched callback is free to
+//     spill its incoming r16/r17 into its own frame, so it would spill whatever stale values the
+//     previous native code parked there rather than the cursor/index the substrate spills. Same
+//     class as the kanban #61 divergence at 0x801FE808 (see game/render/subpart_walk.cpp's
+//     LIVE-REGISTER LAW banner in the consuming game).
+//
+// (2) LAYERING. 0x80086288, 0x800ABDC0 and 0x800ABDE0 are facts about ONE game's MAIN.EXE, hardcoded
+//     here in the game-AGNOSTIC framework. That is the same defect GameConfig was created to fix for
+//     recMainLo/recMainHi, the HLE primitive addresses and bootFmv: for a second consumer these
+//     addresses are not merely useless, they name unrelated code. If this is ever wired, the
+//     addresses belong in GameConfig and travel with the game.
 void Timing::vsyncCallbackDispatch() {
   Core* c = &game->core;
   const uint32_t sp_save = c->r[29];
   const uint32_t ra_save = c->r[31];
   c->r[29] = sp_save - 32u;
   const uint32_t sp = c->r[29];
-  c->mem_w32(sp + 20u, c->r[16]);
-  c->mem_w32(sp + 16u, c->r[17]);
+  // CORRECTED 2026-07-29 — r16 and r17 were SWAPPED here. The gen body spills r17 to sp+20 and r16
+  // to sp+16 (generated/shard_4.c:13421 and :13423). The draft wrote r16 to sp+20 and r17 to sp+16,
+  // and restored them the same swapped way — self-consistent, so nothing local looks wrong, while
+  // the GUEST STACK BYTES differ from the substrate's. That is invisible until an SBS byte-compare
+  // reaches it, which is exactly why it survived a banner claiming faithfulness.
+  c->mem_w32(sp + 20u, c->r[17]);
+  c->mem_w32(sp + 16u, c->r[16]);
   c->mem_w32(sp + 24u, ra_save);
 
   c->mem_w32(VSYNC_CB_COUNT, c->mem_r32(VSYNC_CB_COUNT) + 1u);
@@ -88,7 +116,7 @@ void Timing::vsyncCallbackDispatch() {
   }
 
   c->r[31] = c->mem_r32(sp + 24u);
-  c->r[17] = c->mem_r32(sp + 20u);
+  c->r[17] = c->mem_r32(sp + 20u);   // matches the corrected spill above
   c->r[16] = c->mem_r32(sp + 16u);
   c->r[29] = sp_save;
   c->r[31] = ra_save;
