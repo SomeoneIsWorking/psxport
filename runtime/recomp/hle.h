@@ -7,12 +7,18 @@
 #include <cstdint>
 class Game;
 
+// OpenEvent modes: EvMdINTR means 'call the handler', EvMdNOINTR means 'mark it and let TestEvent poll'.
+enum { EV_MD_INTR = 0x1000, EV_MD_NOINTR = 0x2000 };
+
 struct HleEvCB { int open, enabled, fired; uint32_t ev_class, spec, mode, func; };  // was EvCB
 struct HleHeapBlock { uint32_t addr, size; int used; };                             // was HeapBlock
 class Hle {
 public:
   Game* game = nullptr;
   HleEvCB     ev[16]      = {};   // was s_ev[EVCB_MAX]
+  // EvMdINTR events are delivered by CALLING their handler; this guards against a handler
+  // re-entering delivery (see Hle::deliverEvent).
+  int         ev_depth     = 0;
   HleHeapBlock blk[4096]  = {};   // was s_blk[HEAP_MAX_BLOCKS]
   int      nblk       = 0;        // was s_nblk
   uint32_t heap_base  = 0;        // was s_heap_base

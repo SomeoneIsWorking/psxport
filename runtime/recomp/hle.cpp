@@ -11,6 +11,7 @@
 #include "core.h"
 #include "game.h"
 #include "platform_hle.h"   // class PlatformHle — sync-primitive HLE consulted on a RAM-code miss
+#include "guest_call.h"   // rc0 — invoke an EvMdINTR handler
 #include "memcard.h"        // card_hle_a0 / card_hle_b0 — libcard BIOS dispatch (class Memcard)
 #include <cstdio>
 #include <cstdlib>
@@ -33,11 +34,44 @@ int Hle::eventIndex(uint32_t id) const {
   return (idx < EVCB_MAX && ev[idx].open) ? (int)idx : -1;
 }
 
-// Native VBlank delivery (called by the frame tick): mark matching open+enabled slots fired.
+// Event delivery (called by the frame tick, the CD model and the memory-card model).
+//
+// TWO DELIVERY MODES, and only one of them used to work. An event opened EvMdNOINTR (0x2000) is POLLED:
+// the game calls TestEvent, which reads and clears `fired`, so marking the slot is the whole job. An
+// event opened EvMdINTR (0x1000) is a CALLBACK: the BIOS invokes the handler stored at OpenEvent, and
+// the game never polls it at all. This function only ever marked slots, so every EvMdINTR event was
+// registered, delivered, and silently dropped — the slot's `func` was captured and never called.
+//
+// That is not hypothetical: Spyro opens SwCARD (0xF4000001) spec 4 with mode 0x1000 and waits forever
+// on a handler that could not run (consumer issue 0027). Marking `fired` for such a slot is worse than
+// doing nothing, because it leaves state saying the event was handled when nothing ran.
+//
+// RE-ENTRANCY IS GUARDED. A handler may itself deliver events — the card handlers do — and without a
+// depth guard a handler that (directly or otherwise) re-delivers its own class recurses until the host
+// stack dies. The guard drops nested delivery rather than queueing it: the BIOS runs these at interrupt
+// time with interrupts masked, so "not re-entered" is the faithful behaviour, and a silent stack
+// overflow is the alternative.
+//
+// The register file is saved and restored around the call for the same reason vsync.cpp does it: this
+// runs from INSIDE guest execution, and a real interrupt preserves the interrupted function's registers.
 void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
-  for (int i = 0; i < EVCB_MAX; i++)
-    if (ev[i].open && ev[i].enabled && ev[i].ev_class == evClass && (ev[i].spec & spec))
-      ev[i].fired = 1;
+  Core* c = &game->core;
+  for (int i = 0; i < EVCB_MAX; i++) {
+    if (!(ev[i].open && ev[i].enabled && ev[i].ev_class == evClass && (ev[i].spec & spec))) continue;
+    ev[i].fired = 1;
+    if (ev[i].mode != EV_MD_INTR || !ev[i].func) continue;
+    if (ev_depth) {
+      cfg_logw("ev", "nested delivery of class=0x%08X spec=0x%08X dropped (handler 0x%08X): the BIOS "
+                     "runs these with interrupts masked, so re-entry is not faithful",
+               evClass, spec, ev[i].func);
+      continue;
+    }
+    ev_depth++;
+    R3000 saved = *static_cast<R3000*>(c);
+    rc0(c, ev[i].func);
+    *static_cast<R3000*>(c) = saved;
+    ev_depth--;
+  }
 }
 
 // ---- Heap (A0:0x33-0x39): native first-fit arena, bookkeeping outside PSX RAM -------
