@@ -103,12 +103,12 @@ void rec_host_turn(Core* c) {
   // Hle::irqPoll has always made this check (`if (in_irq || !irq_enabled) return;`). The host turn
   // dispatches guest code for the same reason and must make it too.
   //
-  // HONESTY NOTE, so this is not read as more than it is: this check was added while chasing the
-  // loop-back-edge gate's state corruption on the Spider-Man port, and it did NOT fix it — the same
-  // corruption reproduces with the check in place. It is kept because it is correct on its own
-  // merits, not because it repaired anything. Two hypotheses for that corruption are now FALSIFIED:
-  // register save/restore across the poll (a PSXPORT_DEBUG=pollregs probe reports ZERO clobbers of
-  // sp/fp/gp/s0-s7), and this missing critical-section check. Do not re-try either.
+  // HONESTY NOTE: this check was added while chasing what looked like state corruption caused by the
+  // loop-back-edge gate, and it did NOT fix that. It is kept because it is correct on its own merits.
+  // The corruption turned out not to be the gate's at all — it was a branch-and-link mistranslation
+  // in the recompiler leaking a stack frame (emit_control's BRANCH-AND-LINK note). Hypotheses
+  // falsified on the way, none worth re-trying: register save/restore across the poll
+  // (PSXPORT_DEBUG=pollregs reports zero clobbers), and this critical-section check.
   //
   // Do NOT clear PW_HOST when deferring: hardware would leave the VBlank latched and deliver it when
   // the guest re-enables. Leaving the bit set reproduces that — the turn is taken at the first gate

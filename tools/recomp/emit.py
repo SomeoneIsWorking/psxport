@@ -865,26 +865,25 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     #
     # Only back-edges, not every label: a forward branch cannot spin, so gating it would cost the hot
     # path with no benefit. A self-loop (target == own address) counts, hence <=.
-    #
-    # OFF BY DEFAULT (PSXPORT_BACKEDGE_GATE=1 to enable) — IT CORRUPTS GUEST STATE. Measured on the
-    # Spider-Man port, A/B on the same build with only this flag changed:
-    #   gate ON : main() re-calls its module loader with a0 = 0x001CD480 — no KSEG0 bit, outside RAM —
-    #             where the argument is a CODE CONSTANT (0x800B4FD0) that cannot legally change. The
-    #             index walk then runs off the end of its table and the port fail-fasts.
-    #   gate OFF: the same call site is reached with the correct pointer and no fault.
-    # So taking deferred work mid-function is not register-transparent, even though rec_host_turn and
-    # Hle::irqPoll both save and restore the whole R3000, and even though the emitted code keeps guest
-    # registers in c->r[] rather than in C locals (so a restore should be sufficient). The mechanism is
-    # NOT understood yet, and shipping it enabled would trade a diagnosable hang for silent corruption.
-    #
-    # Do not re-enable this without explaining the A/B above. The problem it solves is real — a guest
-    # loop that calls nothing never reaches a function entry, so the host can never take a turn while
-    # it spins — but function ENTRY is safe precisely because it is a clean boundary, and a back-edge
-    # evidently is not.
     backedges = {i.target for x, i in ins.items()
                  if i.kind in (D.BRANCH, D.JUMP) and i.target is not None
                  and i.target in ins and i.target <= x}
     backedges &= labels
+    #
+    # ON by default. It was briefly disabled on the belief that it corrupted guest state; that was
+    # WRONG and the retraction is worth keeping, because the reasoning error is easy to repeat.
+    #
+    # The A/B was real: enabling the gate produced a corrupt global-base register ($fp) in the
+    # Spider-Man port, disabling it did not. But the gate was not the corruptor. It only lets the host
+    # take a turn inside call-free spin loops, which is what finally let that boot RUN FAR ENOUGH to
+    # consume an $fp that a branch-and-link mistranslation had already wrecked (see the
+    # BRANCH-AND-LINK note in emit_control). Fixing that mistranslation makes the same A/B come out
+    # clean, with the gate on. A reproducible A/B proves correlation with the flag, not that the flag
+    # is the cause — the flag can simply be what makes an existing bug reachable.
+    #
+    # Two other hypotheses were falsified along the way and should not be re-tried: register
+    # save/restore across the poll (a PSXPORT_DEBUG=pollregs probe reports zero clobbers of
+    # sp/fp/gp/s0-s7 over a full boot), and the host turn ignoring guest critical sections.
     # MEASUREMENT ONLY (PSXPORT_LABEL_ALL=1): label every standalone instruction, so any address inside
     # a recompiled function could be resumed at. This is the cost half of docs/issues/0021's option 1 —
     # it does NOT wire up mid-function ENTRY (that needs a dispatch switch at the top of each function),
@@ -913,7 +912,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 # Loop back-edge: give the host a turn. One predictable load-and-test per iteration,
                 # and only on loops — see the `backedges` note above for why function entry alone is
                 # not enough.
-                if a in backedges and os.environ.get("PSXPORT_BACKEDGE_GATE") == "1":
+                if a in backedges:
                     out.append("  if (c->pending_work) rec_irq_poll(c);")
             if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
                 slot = ins.get(a + 4)
@@ -1041,8 +1040,34 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
     value (auto-dedupes repeated entries) so the jump stays inside this compiled body."""
     L = []
     if i.kind == D.BRANCH:
+        # BRANCH-AND-LINK (bltzal / bgezal) is a CONDITIONAL CALL, not a conditional branch: the
+        # subroutine returns via `jr $ra` and execution RESUMES at addr+8. It must therefore call and
+        # then FALL THROUGH — never `goto`, never `return`.
+        #
+        # Both of the ordinary-branch paths below are wrong for it, and were being used:
+        #   goto L_<target>  jumps INTO the subroutine's body, whose `jr $ra` the emitter renders as a
+        #                    bare `return;` — so the ENCLOSING function exits early, skipping its
+        #                    epilogue and leaking its stack frame. Every ancestor frame then shifts,
+        #                    and an outer function reloads a callee-saved register from the wrong
+        #                    stack word. Measured on Spider-Man: gen_func_8007C4D8 exited 40 bytes low
+        #                    via L_8007D160, which is how $fp (a global base held at 0x800B0000) came
+        #                    back as 0x00000000 and then as garbage in main().
+        #   call + return    returns from the enclosing function instead of resuming at addr+8.
+        #
+        # 131 sites across this game's substrate were mis-emitted this way (115 goto, 16 call+return).
+        # Discovery only followed `jal`, so link-branch targets were never function entries — see
+        # discover_funcs.
         if i.op in ("bltzal", "bgezal"):
-            L.append(f"  {R(31)} = 0x{i.addr + 8:08X}u;")
+            # Order matters: MIPS evaluates the rs comparison BEFORE writing $ra, and writes $ra
+            # UNCONDITIONALLY (taken or not). Writing the link first would corrupt the condition
+            # whenever rs == 31. Then the delay slot runs, then the call.
+            # One braced statement, like the ordinary-branch path below: a function-scope declaration
+            # here would make every `goto` in the function jump across an initialisation, which this
+            # dialect rejects outright.
+            cond = BRANCH_COND[i.op](i)
+            L.append(f"  {{ int _t = ({cond}); {R(31)} = 0x{i.addr + 8:08X}u; {ds_c} "
+                     f"if (_t) {{ {call_or_dispatch(i.target, funcset, N)} }} }}")
+            return L
         cond = BRANCH_COND[i.op](i)
         if i.target in labels:
             tgt = f"goto L_{i.target:08X};"
@@ -1318,7 +1343,13 @@ def discover_funcs(exe, seeds):
                 ins = decode(x, exe.word(x))
                 if ins.kind == D.UNKNOWN:
                     break  # start of trailing data
-                if ins.op == "jal" and lo <= ins.target < hi and ins.target not in funcs:
+                # `jal` is not the only CALL. bltzal/bgezal link too, so their targets are function
+                # entries by definition. Following only `jal` left those targets as bare labels inside
+                # whatever function happened to contain them, and emit_control then `goto`-ed into a
+                # body whose `jr $ra` exits the ENCLOSING function — see the branch-and-link note in
+                # emit_control for the stack-frame leak that causes.
+                if ins.op in ("jal", "bltzal", "bgezal") and lo <= ins.target < hi \
+                        and ins.target not in funcs:
                     funcs.add(ins.target)
                     changed = True
     return sorted(funcs)
