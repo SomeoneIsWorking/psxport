@@ -99,6 +99,33 @@ static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
   return cached;
 }
 
+// Exact, name-keyed residency. See the header for why signature identification is not sufficient for
+// a port that pins many modules to one base.
+int overlay_set_resident(Core* c, const char* name) {
+  const RecompRegistry* R = psxport_recomp();
+  for (int i = 0; i < R->overlay_count; i++) {
+    const RecOverlay* o = &R->overlays[i];
+    if (!o->name || !name) continue;
+    const char *a = o->name, *b = name;
+    while (*a && *b && *a == *b) { a++; b++; }
+    if (*a || *b) continue;                       // not this one
+    const int s = slot_index(c, o->base);
+    if (s < 0) {
+      cfg_loge("ovload", "overlay '%s' is emitted at 0x%08X, which is not a declared slot base — "
+                         "GameConfig::overlaySlots must list it or dispatch cannot route there.",
+               o->name, o->base);
+      return 0;
+    }
+    c->game->pcSched.resident_ov[s] = o;
+    if (cfg_dbg("ovload")) cfg_logf("ovload", "slot %d <- '%s' (exact, by name)", s, o->name);
+    return 1;
+  }
+  cfg_loge("ovload", "no recompiled overlay is named '%s' — a call into it will fail as a dispatch "
+                     "miss. Is it listed in the seed file's overlay_base_patterns / overlay_seeds?",
+           name ? name : "(null)");
+  return 0;
+}
+
 // Diagnostic for the miss path (hle.cpp): for a slot-range address, report which overlay is currently
 // resident in that slot (the one rec_dispatch routed to before its switch fell to the miss default).
 // Returns the overlay name, or "none" (slot empty / unmatched), or 0 if addr is not in any slot range.

@@ -17,6 +17,20 @@ struct Core;
 // (bulk data loads, say) are ignored, so it is safe to call unconditionally after any load.
 void overlay_note_load(Core* c, uint32_t dest);
 
+// Record EXACTLY which overlay is resident, by name, bypassing signature identification entirely.
+//
+// Why this exists: signature routing assumes each overlay's first bytes are distinctive, which holds
+// when overlays load to DIFFERENT bases (their relocated words differ). It fails when a port pins
+// many relocatable modules to ONE shared base — Spider-Man's 30 CD.WAD modules collapse to 14
+// distinct 32-byte signatures there, because the module entry prologues are identical boilerplate and
+// relocating them all to the same address makes the words identical too. 12 of them share a single
+// signature.
+//
+// A loader that KNOWS which module it just placed should say so rather than let the router guess.
+// Returns 0 and logs if the name matches no emitted overlay — a silent miss here would route a call
+// into a sibling module's switch and surface far away as a dispatch miss.
+int overlay_set_resident(Core* c, const char* name);
+
 // For a slot-range address, the name of the overlay currently resident in that slot — "none" when the
 // slot is empty or its content matches no known overlay, and null when `addr` is in no slot range.
 // Diagnostic only (the dispatch-miss reporter uses it to say which overlay was routed to).
