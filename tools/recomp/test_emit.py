@@ -358,8 +358,10 @@ HARNESS = r"""
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+static void rec_irq_poll(struct Core*);
 struct Core {
   uint32_t r[32]; uint32_t lo, hi, pc;
+  uint32_t pending_work = 0;      // upstream's deferred-work gate tests this at entries/back-edges
   uint8_t ram[0x200000];
   uint8_t  mem_r8 (uint32_t a){ return ram[a & 0x1FFFFF]; }
   uint16_t mem_r16(uint32_t a){ uint16_t v; memcpy(&v, ram + (a & 0x1FFFFF), 2); return v; }
@@ -379,6 +381,14 @@ static void cpu_div(Core* c, uint32_t a, uint32_t b){ int32_t x=(int32_t)a,y=(in
   else { c->lo=(uint32_t)(x/y); c->hi=(uint32_t)(x%y); } }
 static void cpu_divu(Core* c, uint32_t a, uint32_t b){ if(!b){ c->lo=0xFFFFFFFFu; c->hi=a; }
   else { c->lo=a/b; c->hi=a%b; } }
+// Native-depth taps. The emitter now places these in ordinary functions (any lw->sw word copy), so
+// the execution harness has to satisfy them. They have no effect on the register/RAM assertions.
+void gte_hold_pz(Core*, int, int) {}
+void gte_record_pz(Core*, uint32_t, int) {}
+void gte_hold_src(Core*, int, uint32_t) {}
+void gte_copy_pz(Core*, int, uint32_t) {}
+uint32_t gte_read_data(uint32_t){ return 0; }
+static void rec_irq_poll(Core*) {}
 uint32_t g_dispatch = 0;
 void (*g_dispatch_fn)(Core*) = 0;   // when set, rec_dispatch TAIL-calls it (models the loop back-edge)
 void rec_dispatch(Core* c, uint32_t addr){ g_dispatch = addr; if (g_dispatch_fn) g_dispatch_fn(c); }
@@ -775,10 +785,13 @@ def test_mfc2_then_sw_taps_the_depth_recorder():
     a.rtps()                         # SOFTWARE PIPELINING: the next vertex's transform is issued
     a.sw("a2", 8, "a0")              # STILL TAPPED — the Z was held at the mfc2, before the FIFO moved
 
-    a.mfc2("a3", 12)
-    a.bne("a0", "zero", "skip")      # basic-block boundary
+    # A label reachable from OUTSIDE this walk — the branch to it is issued BEFORE the mfc2, so on
+    # that path a3 never held a vertex at all. The register state on arrival is not the state this
+    # walk reasoned about, so the identity cannot be assumed and the store must be refused.
+    a.bne("a0", "zero", "joined")    # inbound edge from before the walk starts
     a.nop()
-    a.label("skip")
+    a.mfc2("a3", 12)
+    a.label("joined")
     a.sw("a3", 12, "a0")             # not tapped
 
     a.jr("ra")
@@ -787,11 +800,10 @@ def test_mfc2_then_sw_taps_the_depth_recorder():
     c = emit_c(data)
     n = c.count("gte_record_pz(c, ")
     assert n == 2, f"expected 2 tapped vertex stores (the simple one and the pipelined one), got {n}:\n{c}"
+    assert c.count("gte_hold_pz(c, ") == 2, f"each tapped vertex holds its Z at the mfc2:\n{c}"
     assert "gte_record_pz(c, (c->r[4] + (uint32_t)0), 2)" in c, \
         f"tap must carry the store address and the GPR whose Z was held (v0 = r2):\n{c}"
-    # The held Z is captured AT the mfc2, which is the only moment it is still this vertex's.
-    assert c.count("gte_hold_pz(c, ") == 2, \
-        f"each tapped vertex must hold its Z at the mfc2, not read it at the store:\n{c}"
+
 
 
 
@@ -824,8 +836,71 @@ def test_lw_then_sw_propagates_depth_across_a_copy():
     c = emit_c(data)
     n = c.count("gte_copy_pz(c, ")
     assert n == 1, f"expected exactly 1 propagated copy, got {n}:\n{c}"
-    assert "gte_copy_pz(c, (c->r[4] + (uint32_t)0), (c->r[5] + (uint32_t)0))" in c, \
-        f"propagation must carry BOTH the source and the destination address:\n{c}"
+    assert "gte_hold_src(c, 2, (c->r[4] + (uint32_t)0))" in c, \
+        f"the source address must be HELD at the load (keyed by the seed GPR v0=2):\n{c}"
+    assert "gte_copy_pz(c, 2, (c->r[5] + (uint32_t)0))" in c, \
+        f"propagation must consume the held source and carry the destination address:\n{c}"
+
+
+
+def test_vertex_survives_derivation_and_forward_branches():
+    """Modeled literally on Spyro's terrain renderer, stage 1 (0x8004EDF8-0x8004EE44).
+
+    The projected XY is NOT stored as it comes out of the GTE. It is shifted left 5 and the vertex's
+    CLIP CODE is packed into the freed low bits by up to four conditional `addi`s, and only then
+    stored to a scratchpad vertex cache. A tap that requires `mfc2 rX` -> `sw rX` with rX untouched
+    sees none of it, which is why a renderer submitting ~1600 prims a frame recorded nothing.
+
+    Two things have to hold. The value's IDENTITY must survive single-source derivations — a shift or
+    an add-immediate still designates the same vertex. And the walk must cross the CONDITIONAL
+    branches: they are forward jumps within this same run, so whichever path is taken, the store at
+    the end stores this vertex. Crossing a branch is safe precisely because a not-taken store simply
+    does not execute; what would be unsafe is a target reachable from OUTSIDE the run, carrying
+    foreign register state."""
+    a = Asm(0x80010000)
+    a.mfc2("v0", 14)                  # projected XY of this vertex
+    a.sll("a0", "v0", 5)              # shift up to make room for the clip code
+    a.bgtz("a1", "c1")
+    a.nop()
+    a.addi("a0", "a0", 1)             # clip bit — conditional
+    a.label("c1")
+    a.bltz("a1", "c2")
+    a.nop()
+    a.addi("a0", "a0", 2)             # clip bit — conditional
+    a.label("c2")
+    a.sw("a0", 0, "s7")               # -> the scratchpad vertex cache. MUST be tapped.
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    c = emit_c(data)
+    assert c.count("gte_record_pz(c, ") == 1, \
+        f"the derived, branch-crossed vertex store was not tapped:\n{c}"
+
+
+def test_copy_source_address_is_captured_at_the_load():
+    """Modeled on Spyro's terrain renderer, stage 2 (0x8004EF38-0x8004EF5C): the face list indexes the
+    scratchpad cache, unshifts, and writes the packet.
+
+    THE LOAD CLOBBERS ITS OWN BASE — `add t6,t6,s4` then `lw t6,0(t6)`. So re-evaluating the load's
+    address expression at the STORE site reads the loaded VALUE as if it were a pointer, and attaches
+    some unrelated word's depth. That is a wrong depth, which this code's own rule calls worse than
+    none. The source address must be captured AT THE LOAD.
+
+    The unshift (`sra`) between load and store is a derivation, not a kill — same identity."""
+    a = Asm(0x80010000)
+    a.add("t6", "t6", "s4")           # index the cache
+    a.lw("t6", 0, "t6")               # load — DESTROYS the base register
+    a.sra("t6", "t6", 5)              # unshift away the clip code
+    a.sw("t6", 4, "fp")               # -> the GP0 packet
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    c = emit_c(data)
+    assert "gte_hold_src(c, " in c, f"the copy source address must be held at the load:\n{c}"
+    assert c.count("gte_copy_pz(c, ") == 1, f"the packet store was not propagated to:\n{c}"
+    # The propagation must NOT rebuild the source address from the (now clobbered) base register.
+    assert "gte_copy_pz(c, 14," in c, \
+        f"propagation must consume the HELD source (keyed by the seed GPR t6=14), not re-evaluate it:\n{c}"
 
 
 # ----------------------------------------------------------------------------------------------------

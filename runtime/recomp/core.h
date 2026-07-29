@@ -245,9 +245,12 @@ void     gte_store_xy(Core* c, uint32_t addr, int rt);
 // when the GPR is stored into the packet, keyed by the address written. See emit.py vertex_pz_stores.
 void     gte_hold_pz(Core* c, int gpr, int zreg);
 void     gte_record_pz(Core* c, uint32_t addr, int gpr);
-// A word copied between buffers: carry any recorded vertex depth from `src` to `dst`. Does nothing if
-// the source has none — never fabricates depth. See gte_beetle.cpp for why that asymmetry matters.
-void     gte_copy_pz(Core* c, uint32_t src, uint32_t dst);
+// A word copied between buffers. gte_hold_src records where it was loaded from (captured AT the load,
+// because a load may clobber its own base register); gte_copy_pz carries any recorded vertex depth
+// from there to `dst`. Does nothing if the source has none — never fabricates depth. See
+// gte_beetle.cpp for why both properties matter.
+void     gte_hold_src(Core* c, int gpr, uint32_t src);
+void     gte_copy_pz(Core* c, int gpr, uint32_t dst);
 
 // R3000 integer division semantics (no traps; defined /0 + overflow results).
 void cpu_div (Core* c, uint32_t n, uint32_t d);

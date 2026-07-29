@@ -637,111 +637,149 @@ def defines_reg(i, r):
     return True                    # unknown: assume it writes, and stop the pairing
 
 
-def vertex_pz_stores(ins, lo, hi):
-    """{sw_addr: paired_Z_register} for the `mfc2 rX, DR12..15` -> `sw rX, off(base)` vertex idiom.
-
-    THE SECOND HALF OF THE NATIVE-DEPTH TAP. `swc2` of a screen-XY register is one way a game writes a
-    projected vertex into its primitive packet (see GTE_SCREEN_XY_REGS in emit_simple); the other, just
-    as common, is to move the value into a GPR with `mfc2` and store it with a plain `sw`. A tap that
-    only understands `swc2` records nothing at all for such a game, and records it SILENTLY — "no
-    depth" and "no 3D content" look identical. Spyro's main executable is exactly this shape: zero
-    `swc2` of DR12-15, and 70 `mfc2` of them (issue 0036).
-
-    The scan is deliberately LOCAL and conservative. Walking forward from each `mfc2 rX, DRk` it stops
-    at the first of:
-
-      * a redefinition of rX          — the word finally stored is no longer that vertex,
-      * any control transfer          — the store is no longer unconditionally reached from the mfc2.
-
-    Both are correctness requirements, not caution: pairing across either attaches a WRONG depth to a
-    real vertex, which is worse than attaching none (a wrong depth draws geometry at the wrong
-    distance; a missing one falls back to draw order, which is what we have today).
-
-    AN INTERVENING COP2 OP IS NOT A BARRIER, and treating it as one threw away most of the real sites.
-    PSX submit loops are SOFTWARE PIPELINED: they read vertex N's screen XY, issue the transform for
-    vertex N+1, and only then store N — so by the time the store runs, the Z FIFO holds N+1's depth.
-    Reading Z at the store is what would be wrong. Instead the Z is HELD at the mfc2, the one moment it
-    is still this vertex's, and consumed at the store. In Spyro this is 29 of 70 sites — the majority
-    of the ones that matter.
-
-    A store sitting in a BRANCH DELAY SLOT is skipped, because the emitter embeds delay slots inside
-    the control statement and there is nowhere to append the record call. Those are counted and
-    reported by the caller rather than dropped quietly."""
-    # DR12/13/14 are the XY_FIFO slots an RTPT fills; DR15 is RTPS's single-vertex slot. Z pairs:
-    # 12->17, 13->18, 14->19, and 15->19 (RTPS writes the same Z slot).
-    ZPAIR = {12: 17, 13: 18, 14: 19, 15: 19}
-    holds, out, skipped_ds = {}, {}, 0
-    # Delay-slot addresses: the word after any control op is emitted inside that op's statement.
-    ds = {a + 4 for a in range(lo, hi, 4)
-          if a in ins and ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR)}
-    for a in range(lo, hi, 4):
-        i = ins.get(a)
-        if i is None or i.kind != D.GTE_MOVE or i.op != "mfc2" or i.rd not in ZPAIR:
-            continue
-        gpr = i.rt
-        if gpr == 0:
-            continue                                  # mfc2 into $zero: discarded, not a vertex
-        b = a + 4
-        while b < hi:
-            j = ins.get(b)
-            if j is None:
-                break
-            if j.kind in (D.BRANCH, D.JUMP, D.JUMPR):
-                break                                 # block boundary: store not unconditionally reached
-            if j.kind == D.STORE and j.op == "sw" and j.rt == gpr:
-                if b in ds:
-                    skipped_ds += 1
-                else:
-                    holds[a] = (gpr, ZPAIR[i.rd])     # hold the Z at the mfc2 …
-                    out[b] = gpr                      # … and consume it at the store
-                break
-            if defines_reg(j, gpr):
-                break                                 # the vertex value is gone
-            b += 4
-    return holds, out, skipped_ds
-
-
-def word_copy_pairs(ins, lo, hi):
-    """{sw_addr: lw_addr} for `lw rX, off(src)` -> `sw rX, off2(dst)` word copies.
-
-    THE THIRD PIECE OF NATIVE DEPTH, and the one Spyro actually needs. Recording a vertex's depth is
-    useless if the renderer looks it up at a DIFFERENT address, and that is exactly this game's shape:
-    it projects vertices into one buffer (largely the scratchpad) and assembles the GP0 packets it
-    DMAs in another, copying the screen XY across. Measured in one frame — depths recorded at
-    0x1A86xx-0x1A8Dxx, packets drawn from 0x1AB7xx, every lookup a miss. So the depth has to follow
-    the copy.
-
-    Same refusal rules as vertex_pz_stores, and for the same reason: a redefinition of rX means a
-    different word is being stored, a control transfer means the store is not unconditionally reached
-    from the load. A COP2 op is irrelevant here (no GTE state is read), so it does not break a pair.
-
-    Returns pairs unconditionally — whether the SOURCE actually carries a depth is a runtime question,
-    and gte_copy_pz answers it by looking; a source with no recorded pz must leave the destination
-    with none, or 2D elements that shuffle words through the same registers would acquire a world
-    depth and sort into the 3D scene."""
+def _branch_target_sources(ins, lo, hi):
+    """{target_addr: [source_addrs]} for conditional branches inside [lo,hi)."""
     out = {}
-    ds = {a + 4 for a in range(lo, hi, 4)
-          if a in ins and ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR)}
     for a in range(lo, hi, 4):
         i = ins.get(a)
-        if i is None or i.kind != D.LOAD or i.op != "lw":
-            continue
-        gpr = i.rt
-        if gpr == 0:
-            continue
-        b = a + 4
-        while b < hi:
-            j = ins.get(b)
-            if j is None or j.kind in (D.BRANCH, D.JUMP, D.JUMPR):
-                break
-            if j.kind == D.STORE and j.op == "sw" and j.rt == gpr:
-                if b not in ds:
-                    out[b] = a
-                break
-            if defines_reg(j, gpr):
-                break
-            b += 4
+        if i is not None and i.kind == D.BRANCH and i.target is not None:
+            out.setdefault(i.target, []).append(a)
     return out
+
+
+# Single-source derivations that PRESERVE a value's identity: the result still designates the same
+# projected vertex. Spyro's terrain renderer packs a vertex's clip code into the low bits with
+# `sll rD,rS,5` + conditional `addi rD,rD,1|2|4|8`, and unpacks it later with `sra rD,rD,5`; a tap
+# that treats any of those as "a different value now" sees the whole renderer as untapped.
+# Deliberately EXCLUDES register-register arithmetic: `and s0,s0,a0` (the renderer's clip-code
+# ACCUMULATOR) combines two values and designates neither.
+_DERIVE_IMM_OPS = ("addi", "addiu", "andi", "ori", "xori")
+
+
+def _derives_from(j, tracked):
+    """If `j` derives a still-identifying value from a tracked register, return its dest, else None."""
+    if j.kind in (D.SHIFT_I,) and j.rt in tracked:
+        return j.rd                                     # sll/srl/sra rd, rt, sh
+    if j.kind == D.ALU_RRI and j.op in _DERIVE_IMM_OPS and j.rs in tracked:
+        return j.rt
+    if j.kind == D.ALU_RRR and j.op in ("addu", "add", "or_", "or") and j.rt == 0 and j.rs in tracked:
+        return j.rd                                     # `move rd, rs`
+    return None
+
+
+def _track_value(ins, lo, hi, start, seed, tsources, ds, limit=256):
+    """Walk forward from `start`, following the value seeded in GPR `seed` through identity-preserving
+    derivations, and return ([sw_addrs], n_skipped_delay_slot_stores).
+
+    CROSSES CONDITIONAL BRANCHES ON PURPOSE. A forward branch inside this run just means the store may
+    not execute — and a call that does not execute costs nothing. What is genuinely unsafe is arriving
+    at a label reachable from OUTSIDE the run, because then the register state is not the one this walk
+    reasoned about; so a branch TARGET is allowed only when every branch to it originates within the
+    walk. Unconditional jumps and calls always stop it.
+
+    DOES NOT STOP AT THE FIRST STORE. One projected vertex feeds several packet layouts in this engine
+    (the FT3 and F3 arms write different offsets), and stopping early silently drops all but one.
+
+    Tracking dies if the SEED register is redefined, even when the value also lives in a derived
+    register, because the runtime slot that holds the vertex's depth is keyed by the seed."""
+    tracked = {seed}
+    stores, skipped = [], 0
+    b = start + 4
+    steps = 0
+    while b < hi and tracked and steps < limit:
+        steps += 1
+        j = ins.get(b)
+        if j is None:
+            break
+        if b in tsources and any(src < start or src >= b for src in tsources[b]):
+            break                                        # a label reachable from outside this walk
+        if j.kind in (D.JUMP, D.JUMPR):
+            break
+        if j.kind == D.BRANCH:
+            slot = ins.get(b + 4)                        # the delay slot still executes
+            if slot is not None:
+                if slot.kind == D.STORE and slot.op == "sw" and slot.rt in tracked:
+                    skipped += 1                         # emitter cannot append inside a control stmt
+                else:
+                    d = _derives_from(slot, tracked)
+                    if d is not None:
+                        tracked.add(d)
+                    elif defines_reg(slot, seed):
+                        tracked.clear()
+                    else:
+                        tracked -= {r for r in list(tracked) if defines_reg(slot, r)}
+            b += 8
+            continue
+        if j.kind == D.STORE and j.op == "sw" and j.rt in tracked:
+            if b in ds:
+                skipped += 1
+            else:
+                stores.append(b)
+            b += 4
+            continue
+        d = _derives_from(j, tracked)
+        if d is not None:
+            tracked.add(d)
+        elif defines_reg(j, seed):
+            break                                        # the seed's runtime slot is no longer valid
+        else:
+            tracked -= {r for r in list(tracked) if defines_reg(j, r)}
+        b += 4
+    return stores, skipped
+
+
+def vertex_pz_stores(ins, lo, hi):
+    """The native-depth taps for one function, as four maps:
+
+        mfc2_holds   {mfc2_addr: (seed_gpr, z_reg)}   snapshot this vertex's Z at the read
+        vertex_stores{sw_addr:   seed_gpr}            record that Z against the address written
+        src_holds    {lw_addr:   seed_gpr}            remember where a loaded word came from
+        copy_stores  {sw_addr:   seed_gpr}            carry any depth from there to the address written
+
+    WHY BOTH HALVES EXIST. A game only gets native depth if the address the renderer looks up is the
+    address the depth was recorded against. Spyro's terrain renderer projects vertices into a
+    SCRATCHPAD cache (stage 1) and later assembles its GP0 packets from that cache (stage 2), so
+    recording alone attaches depth to a buffer nothing draws from. Measured before this worked:
+    depths at 0x1A86xx-0x1A8Dxx, packets drawn from 0x1AB7xx, every lookup a miss.
+
+    WHY THE SOURCE ADDRESS IS HELD AT THE LOAD rather than rebuilt at the store: stage 2's load
+    clobbers its own base register (`add t6,t6,s4` then `lw t6,0(t6)`), so the store site's version of
+    that expression reads the loaded VALUE as a pointer and would attach an unrelated word's depth.
+
+    Delay-slot stores are counted, not dropped quietly — the emitter embeds a delay slot inside its
+    control statement and has nowhere to append the call."""
+    ZPAIR = {12: 17, 13: 18, 14: 19, 15: 19}
+    ds = {a + 4 for a in range(lo, hi, 4)
+          if a in ins and ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR)}
+    tsources = _branch_target_sources(ins, lo, hi)
+    mfc2_holds, vertex_stores, src_holds, copy_stores = {}, {}, {}, {}
+    skipped_ds = 0
+
+    for a in range(lo, hi, 4):
+        i = ins.get(a)
+        if i is None:
+            continue
+        seed = None
+        if i.kind == D.GTE_MOVE and i.op == "mfc2" and i.rd in ZPAIR:
+            seed, kind = i.rt, "vertex"
+        elif i.kind == D.LOAD and i.op == "lw":
+            seed, kind = i.rt, "copy"
+        if seed is None or seed == 0:
+            continue
+        stores, sk = _track_value(ins, lo, hi, a, seed, tsources, ds)
+        skipped_ds += sk
+        if not stores:
+            continue
+        if kind == "vertex":
+            mfc2_holds[a] = (seed, ZPAIR[i.rd])
+            for b in stores:
+                vertex_stores[b] = seed
+        else:
+            src_holds[a] = seed
+            for b in stores:
+                if b not in vertex_stores:               # a real vertex store keeps its own depth
+                    copy_stores[b] = seed
+    return mfc2_holds, vertex_stores, src_holds, copy_stores, skipped_ds
 
 
 def walk_standalone(ins, lo, hi):
@@ -878,8 +916,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     jt = find_jump_tables(exe, ins, lo, hi)
     ra_tails = ra_tail_returns(ins, lo, hi)
     # Native depth, mfc2 form: which `sw` stores a projected vertex, and which Z reg pairs with it.
-    pz_holds, pz_stores, pz_skipped_ds = vertex_pz_stores(ins, lo, hi)
-    pz_copies = word_copy_pairs(ins, lo, hi)     # depth must follow a vertex copied between buffers
+    pz_holds, pz_stores, pz_srcs, pz_copies, pz_skipped_ds = vertex_pz_stores(ins, lo, hi)
     global g_pz_tapped, g_pz_skipped
     g_pz_tapped += len(pz_stores); g_pz_skipped += pz_skipped_ds
     dup_ins, dup_blocks = collect_tail_dups(exe, lo, hi, funcset, ins, jt)
@@ -978,12 +1015,13 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 if a in pz_holds:
                     g, z = pz_holds[a]
                     out.append(f"  gte_hold_pz(c, {g}, {z});")
+                if a in pz_srcs:
+                    # Capture WHERE this word came from, now — the load may clobber its own base.
+                    out.append(f"  gte_hold_src(c, {pz_srcs[a]}, {addr_expr(i)});")
                 if a in pz_stores:
                     out.append(f"  gte_record_pz(c, {addr_expr(i)}, {pz_stores[a]});")
                 elif a in pz_copies:
-                    # A copied word: carry any depth from the source address to the destination.
-                    # `elif` — a store that IS a projected vertex already has its real depth.
-                    out.append(f"  gte_copy_pz(c, {addr_expr(ins[pz_copies[a]])}, {addr_expr(i)});")
+                    out.append(f"  gte_copy_pz(c, {pz_copies[a]}, {addr_expr(i)});")
                 a += 4
 
     # A function cut at a DELIBERATE mid-function RE-ENTRY SEED (reentry) whose body runs off its end into

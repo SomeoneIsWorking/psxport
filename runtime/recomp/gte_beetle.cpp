@@ -488,10 +488,23 @@ void gte_hold_pz(Core* c, int gpr, int zreg) {
 //
 // Uses peekPz, not lookupPz: these probes must not move the render's hit/miss counters, which are the
 // numbers that say whether native depth is working.
-void gte_copy_pz(Core* c, uint32_t src, uint32_t dst) {
+// Where a loaded word came FROM, one slot per seed GPR, captured at the load.
+//
+// IT MUST BE CAPTURED AT THE LOAD, not rebuilt at the store. Spyro's terrain renderer indexes its
+// scratchpad vertex cache with `add t6,t6,s4` then `lw t6,0(t6)` — the load CLOBBERS ITS OWN BASE, so
+// evaluating that address expression at the store site reads the loaded VALUE as a pointer and would
+// carry some unrelated word's depth. A wrong depth is worse than none.
+static uint32_t s_held_src[32];
+
+void gte_hold_src(Core* c, int gpr, uint32_t src) {
+  (void)c;
+  s_held_src[gpr & 31] = src;
+}
+
+void gte_copy_pz(Core* c, int gpr, uint32_t dst) {
   if (!attach_enabled()) return;
   float pz;
-  if (c->rsub.projprim.peekPz(src, &pz)) c->rsub.projprim.setPz(dst, pz);
+  if (c->rsub.projprim.peekPz(s_held_src[gpr & 31], &pz)) c->rsub.projprim.setPz(dst, pz);
 }
 
 void gte_record_pz(Core* c, uint32_t addr, int gpr) {
