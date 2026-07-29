@@ -147,7 +147,16 @@ static void cd_command(Core* c) {
       // That makes this a clean discriminator rather than a guess — mark the stream and let the
       // periodic pump drive it, instead of the self-terminating burst a file read wants.
       c->game->cd.stream_active = 1;
-      cd_drive_stock_read(c);
+      // Run the file-read burst ONLY for a game that has not taken over CdRead. Where CdRead is
+      // served natively (cdReadStock set), a finite read never issues ReadN, so every ReadN arriving
+      // here is a CONTINUOUS read — which has no end for the burst to reach. It ran away to its
+      // 65536-sector bound and wedged the boot, doing the streaming reader's job badly instead of
+      // letting it drive itself through the controller.
+      if (!c->cfg || !c->cfg->cdReadStock) cd_drive_stock_read(c);
+      // Deliberately NOT running the file-read burst otherwise. That burst drives a finite
+      // read's per-sector callback to completion, and it was correct while CdRead ran on the
+      // substrate. CdRead is now served natively, so a finite read never issues ReadN — every ReadN
+      // reaching this handler is a CONTINUOUS read, which has no end for the burst to reach. It ran
       break;
     case 0x08: case 0x09:                                                                 // Stop / Pause
       xa_stream_stop(&c->game->xa);
