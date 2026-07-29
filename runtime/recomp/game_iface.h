@@ -201,6 +201,23 @@ struct GameConfig {
     // initBuiltins would clobber the game's handler with the trap.
     uint32_t vsyncTrap;
   } hle;
+
+  // --- rendering policy (gpu_vk.cpp render_geom) ---
+  // Does the guest's UPLOADED VRAM stay visible under the submitted primitives?
+  //
+  // The renderer clears the colour target to black before drawing, on the principle that "the PC
+  // renderer shows ONLY what a native producer submitted". That is right for a port whose native
+  // renderer owns the frame — anything left over from the guest's own drawing would be stale.
+  //
+  // It is WRONG for a port still running the guest's drawing code, because on real hardware an upload
+  // into the display area IS visible. A game whose logo screens, FMV stills or menus are uploads with
+  // no primitives renders them BLACK: the upload lands in VRAM and the clear discards it before
+  // anything is drawn on top. That is exactly what Spyro's SCE/Universal screens do.
+  //
+  // ZERO KEEPS THE EXISTING BEHAVIOUR (clear to black), so a consumer that does not set it is
+  // unaffected — and this field is APPENDED at the end of the struct because GameConfig is
+  // initialised positionally by some consumers. Set to 1 while the guest still owns drawing.
+  uint32_t preserveVramBackdrop;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

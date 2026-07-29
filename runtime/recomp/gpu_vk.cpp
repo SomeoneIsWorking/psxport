@@ -688,7 +688,8 @@ static void render_pass_set(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* colorTgt,
   }
 }
 static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src,
-                        int sx, int sy, int disp_w, int h, int* dtri, int* dtex, int* dsemi) {
+                        int sx, int sy, int disp_w, int h, int* dtri, int* dtex, int* dsemi,
+                        bool preserveBackdrop = false) {
   int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += g.s_semi_n[m];
   int semi2d_total[GGS_NUM_2D_BANDS] = {};
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
@@ -783,7 +784,11 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
   render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc2d, scale,          // band 1: 2D_BG (backdrop)
                    g.s_tri2d_vbuf[GGS_2D_BG], g.s_tri2d_n[GGS_2D_BG], g.s_tex2d_vbuf[GGS_2D_BG], g.s_tex2d_n[GGS_2D_BG],
                    g.s_semi2d_vbuf[GGS_2D_BG], g.s_semi2d_n[GGS_2D_BG],
-                   /*stampSemiCoverage=*/false, /*clearColorBlack=*/true);   // native submits over BLACK, not VRAM
+                   /*stampSemiCoverage=*/false, /*clearColorBlack=*/!preserveBackdrop);
+                   // Clearing to black shows ONLY what was submitted, which is right when a native
+                   // renderer owns the frame. A port still running the guest's drawing needs the
+                   // uploaded VRAM to survive, or its upload-only screens render black — see
+                   // GameConfig::preserveVramBackdrop.
   render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc3d, scale,          // band 2: the 3D world
                    g.s_tri_vbuf, g.s_tri_n, g.s_tex_vbuf, g.s_tex_n, g.s_semi_vbuf, g.s_semi_n);
   render_pass_set(cmd, C, Cd, Cr, g.s_vram_snap, vp, sc2d, scale,          // band 3: 2D_FG (HUD / menus)
@@ -865,7 +870,8 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev);
   GPUCHK(cmd, "AcquireGPUCommandBuffer");
   upload_vram(*this, cmd, src);                             // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
-  render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c);   // draw the tee batch on top (+depth)
+  render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
+              game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
 
   if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // shot reads s_vram_tex via its own cmd
   show_composite(cmd);
