@@ -1463,7 +1463,28 @@ void GpuState::frame_finalize(Core* core) {
   s_seen_bg2d = 0;
   { void prim_dump_close_if_done(Core*, int); prim_dump_close_if_done(core, s_frame); }   // PSXPORT_PRIMDUMP: flush the file
 }
-void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
+void GpuState::gpu_present(Core* core) {
+  gpu_present_ex(core, 1);
+  // PSXPORT_SHOT_AT=f0,f1,... — dump the presented frame to scratch/screenshots/shot_<f>.ppm at these
+  // present indices. gpu_vk_shot already existed but was reachable ONLY from pad-replay
+  // (PSXPORT_PAD_SHOT_AT, pad_input.cpp), so an ordinary boot had no way to produce a picture at all —
+  // and "does it render?" was being answered from primitive counters instead of from pixels. Counters
+  // say the queue drained; only an image says what the player would see.
+  static int init = 0; static uint32_t at[32]; static int n = 0;
+  if (!init) {
+    init = 1;
+    const char* e = cfg_str("PSXPORT_SHOT_AT");
+    if (e) { char buf[256]; snprintf(buf, sizeof buf, "%s", e);
+             for (char* t = strtok(buf, ","); t && n < 32; t = strtok(nullptr, ","))
+               at[n++] = (uint32_t)strtoul(t, 0, 0); }
+  }
+  for (int i = 0; i < n; i++) if (at[i] == s_frame) {
+    void gpu_vk_shot(Core*, const char*);
+    char pth[128]; snprintf(pth, sizeof pth, "scratch/screenshots/shot_%u.ppm", s_frame);
+    gpu_vk_shot(core, pth);
+    cfg_logi("shot", "present %u -> %s", s_frame, pth);
+  }
+}
 // FMV / SCEA-splash teardown (issues #7/#11): black out the DISPLAYED framebuffer region of s_vram and
 // present once, so no FMV last-frame or SCEA white-fill survives into the front-end. The resident
 // off-display SCEA text page is left alone — the title overwrites that VRAM when it uploads its atlas;
