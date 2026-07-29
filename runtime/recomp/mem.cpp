@@ -307,6 +307,10 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                  game->cdc.loc_lba);
       s_dma3_chcr &= ~0x01000000u;                 // clear busy: the completion poll must pass
       irqStatLatch();                              // draining a sector queues the next INT1
+      // Announce completion. Deferred to a function-entry boundary rather than dispatched here: we
+      // are inside a guest store, with native code mid-mutation.
+      game->cd.dma_done_pending = 1;
+      irq_pending = 1;
     }
     return;
   }

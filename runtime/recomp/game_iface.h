@@ -148,6 +148,13 @@ struct GameConfig {
   // tree, so the guest's filesystem walk issues no drive activity at all.
   uint32_t cdSearchFile;
 
+  // Guest slot holding stock libcd's DMA-COMPLETION callback (libcd's own callback table, indexed by
+  // channel). A streaming reader marks each ring slot "DMA in flight" when it starts a transfer and
+  // relies on this callback to promote it to "ready". With the transfer served synchronously and no
+  // completion announced, every slot stalls half-done and the reader waits forever on a ring that is
+  // full. Zero for a game that does not stream through stock libcd.
+  uint32_t cdDmaDoneCbPtr;
+
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
   uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)

@@ -186,6 +186,22 @@ void Hle::irqDeq(uint32_t elem) {
 // either, so an ISR that clobbers it must save it itself. Matching the hardware is the faithful
 // choice; saving it here would mask a genuinely misbehaving guest handler.
 void Hle::irqPoll(Core* c) {
+  // A completed CD DMA owes the guest its completion callback. This is genuinely interrupt-shaped —
+  // on hardware the transfer raises an IRQ and the BIOS runs the handler — so it is serviced here,
+  // at the same safe boundary, rather than from the store that finished the transfer.
+  if (c->game->cd.dma_done_pending) {
+    c->game->cd.dma_done_pending = 0;
+    const uint32_t slot = c->cfg ? c->cfg->cdDmaDoneCbPtr : 0;
+    const uint32_t cb = slot ? c->mem_r32(slot) : 0;
+    if (cb && !in_irq) {
+      in_irq = 1;                                  // the callback's own BIOS calls must not re-enter
+      const R3000 saved = *static_cast<R3000*>(c);
+      rec_dispatch(c, cb);
+      *static_cast<R3000*>(c) = saved;
+      in_irq = 0;
+    }
+  }
+
   // One-shot decline diagnostic. "No delivery happened" has four possible causes and they are
   // indistinguishable from the outside; naming the first one that fires turns a silent nothing into
   // a pointed question.
