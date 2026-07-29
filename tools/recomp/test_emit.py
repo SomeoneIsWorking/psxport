@@ -646,6 +646,63 @@ def test_exec_tail_jump_loop_is_O1_stack():
     assert res["r"][2] == (n * (n + 1) // 2) & 0xFFFFFFFF, hex(res["r"][2])
 
 
+
+def test_exec_jalr_in_shared_tail_falls_through_to_epilogue():
+    """A `jalr` inside a DUPLICATED shared tail must fall through to the instruction after its delay
+    slot — here, the epilogue that restores s0.
+
+    `jr` and `jalr` share the JUMPR decode kind, and collect_tail_dups used to end its walk on either.
+    `jalr` writes ra with (addr+8) and control comes BACK to it, so ending the run there truncates the
+    tail just before the epilogue; the emitter then closes the run with a bare `return;` and the
+    `lw s0,8(sp)` never runs. Real occurrence: Spyro 0x800487D8 `jalr v0` with the state machine's own
+    epilogue at 0x800487E0. s0 came back holding a stack pointer instead of the caller's saved value,
+    and the caller used it as a loop counter -> ~62M iterations and a dead port (issue 0034).
+    """
+    if _skip_if_no_cc():
+        return
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -16)
+    a.sw("s0", 8, "sp")             # save the caller's s0
+    a.addiu("s0", "zero", 0x77)     # clobber it, as a real case body does (`addiu s0, sp, 32`)
+    a.j(0x80010018)                 # -> the shared tail, which lives PAST hi
+    a.nop()
+    a.nop()                         # pad so hi lands exactly on the tail
+    a.label("tail")                 # 0x80010018
+    a.jalr("v0")                    # a CALL through a register: ra = 0x80010020
+    a.nop()
+    a.lw("s0", 8, "sp")             # THE EPILOGUE — only runs if the jalr falls through
+    a.addiu("sp", "sp", 16)
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    res = run_func(data, 0x80010000, regs={"v0": 0x80055554, "sp": 0x801000, "s0": 0xCAFE},
+                   hi=0x80010018)
+    assert res["dispatch"] == 0x80055554, f"jalr did not call through v0: {res['dispatch']:#x}"
+    assert res["r"][16] == 0xCAFE, \
+        f"s0={res['r'][16]:#x} not restored — the tail ended AT the jalr, dropping the epilogue"
+
+
+def test_exec_jalr_at_body_end_chains_into_next_fragment():
+    """The same misclassification in body_falls_through(): a body whose LAST instruction is a `jalr`
+    DOES reach `hi`, so emit_func must chain into the next fragment rather than emit a bare `return;`.
+    (`jr` genuinely does not fall through, which is why the two must be told apart.)"""
+    if _skip_if_no_cc():
+        return
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -16)
+    a.sw("s0", 8, "sp")
+    a.addiu("s0", "zero", 0x77)
+    a.jalr("v0")                    # last instruction of [lo, hi)
+    a.nop()
+    data, _ = a.assemble()
+    hi = 0x80010014                 # the epilogue fragment, a separate function entry
+    hooks = ("void func_80010014(Core* c){ c->r[16] = c->mem_r32(c->r[29] + 8); c->r[29] += 16; }\n")
+    res = run_func(data, 0x80010000, regs={"v0": 0x80055554, "sp": 0x801000, "s0": 0xCAFE},
+                   hi=hi, funcset={0x80010000, hi}, hooks=hooks)
+    assert res["r"][16] == 0xCAFE, \
+        f"s0={res['r'][16]:#x} — body ending in `jalr` did not chain into the fall-through fragment"
+
+
 # ----------------------------------------------------------------------------------------------------
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

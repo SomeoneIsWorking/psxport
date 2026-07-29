@@ -602,7 +602,27 @@ def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
     out-of-[lo,hi), in-module, NON-entry targets (a sibling ENTRY is a real tail call, left to
     emit_control); we never re-enter [lo,hi) (that's a goto to an existing label). Returns
     (dup_ins, dup_blocks) where dup_blocks = [(start, end, fall_into_main_addr_or_None)] — each a maximal
-    contiguous run; fall target set when the run flows back into [lo,hi) (needs a goto)."""
+    contiguous run; fall target set when the run flows back into [lo,hi) (needs a goto).
+
+    JALR IS A CALL, NOT A TERMINATOR. `jr` and `jalr` share the JUMPR kind, and treating them alike here
+    is wrong in a way that produces no error and no crash — only a wrong register hundreds of thousands of
+    instructions later. `jalr rd, rs` writes rd (= ra) with the address of the instruction after the delay
+    slot, so control COMES BACK to it; `jr rs` does not. Stopping the walk at a `jalr` truncates the run
+    just before that instruction, and the emitter then closes the run with a bare `return;` — silently
+    dropping everything after the call.
+
+    That is not hypothetical. Spyro 0x80047B60 is a 45-case state machine whose cases converge on
+    `jalr v0` at 0x800487D8 with the function's own epilogue at 0x800487E0, the very next instruction:
+
+        800487d8: jalr v0            ; ra = 0x800487E0
+        800487dc: nop                ;   delay slot
+        800487e0: ...                ; <- the epilogue: lw ra/s2/s1/s0 from the frame, addiu sp,+144, jr ra
+
+    The truncated run emitted the call and returned, so the epilogue never ran: `s0` came back holding the
+    case body's `addiu s0, sp, 32` instead of the caller's saved 0. The caller at 0x80048C04 uses `s0` as a
+    loop counter tested against a count of 2 — with a large positive value in it the loop ran ~62 MILLION
+    times and the port stopped presenting frames entirely (Spyro issue 0034). Nothing about the symptom
+    pointed here; it took an ABI check around a traced call to name the function."""
     LO_M, HI_M = exe.load, exe.text_end
     def in_main(x):
         return lo <= x < hi
@@ -640,6 +660,8 @@ def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
                         if want(i.target):
                             seeds.append(i.target)
                         break
+                elif i.op == "jalr":
+                    a = ds + 4       # see JALR IS A CALL below
                 else:
                     break    # jr: terminator (its table, if any, is recovered in the recomputed jt below)
             else:
@@ -665,7 +687,7 @@ def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
                         dup[ds] = decode(ds, exe.word(ds))
                     if i.kind == D.BRANCH:
                         a = ds + 4
-                    elif i.kind == D.JUMP and i.op == "jal":
+                    elif i.op in ("jal", "jalr"):   # both are CALLS — see JALR IS A CALL below
                         a = ds + 4
                     else:
                         break
@@ -773,8 +795,10 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
             a += 8 if i.kind in (D.BRANCH, D.JUMP, D.JUMPR) else 4
         if last is None:
             return False
-        if last.kind == D.JUMPR:            # jr (jr ra or computed) — unconditional, no fall-through
+        if last.kind == D.JUMPR and last.op == "jr":   # jr ra / computed jump — no fall-through
             return False
+        # a trailing `jalr` DOES fall through (it is a call; ra points at `hi`) — see JALR IS A CALL
+        # in collect_tail_dups.
         if last.kind == D.JUMP and last.op == "j":   # unconditional j — no fall-through
             return False
         return True                          # normal / conditional branch / jal -> reaches hi
