@@ -745,6 +745,22 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     #
     # Only back-edges, not every label: a forward branch cannot spin, so gating it would cost the hot
     # path with no benefit. A self-loop (target == own address) counts, hence <=.
+    #
+    # OFF BY DEFAULT (PSXPORT_BACKEDGE_GATE=1 to enable) — IT CORRUPTS GUEST STATE. Measured on the
+    # Spider-Man port, A/B on the same build with only this flag changed:
+    #   gate ON : main() re-calls its module loader with a0 = 0x001CD480 — no KSEG0 bit, outside RAM —
+    #             where the argument is a CODE CONSTANT (0x800B4FD0) that cannot legally change. The
+    #             index walk then runs off the end of its table and the port fail-fasts.
+    #   gate OFF: the same call site is reached with the correct pointer and no fault.
+    # So taking deferred work mid-function is not register-transparent, even though rec_host_turn and
+    # Hle::irqPoll both save and restore the whole R3000, and even though the emitted code keeps guest
+    # registers in c->r[] rather than in C locals (so a restore should be sufficient). The mechanism is
+    # NOT understood yet, and shipping it enabled would trade a diagnosable hang for silent corruption.
+    #
+    # Do not re-enable this without explaining the A/B above. The problem it solves is real — a guest
+    # loop that calls nothing never reaches a function entry, so the host can never take a turn while
+    # it spins — but function ENTRY is safe precisely because it is a clean boundary, and a back-edge
+    # evidently is not.
     backedges = {i.target for x, i in ins.items()
                  if i.kind in (D.BRANCH, D.JUMP) and i.target is not None
                  and i.target in ins and i.target <= x}
@@ -777,7 +793,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 # Loop back-edge: give the host a turn. One predictable load-and-test per iteration,
                 # and only on loops — see the `backedges` note above for why function entry alone is
                 # not enough.
-                if a in backedges:
+                if a in backedges and os.environ.get("PSXPORT_BACKEDGE_GATE") == "1":
                     out.append("  if (c->pending_work) rec_irq_poll(c);")
             if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
                 slot = ins.get(a + 4)

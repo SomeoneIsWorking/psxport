@@ -140,17 +140,33 @@ static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word 
 // Reported once per distinct address so a hot loop cannot drown the log, and NOT gated behind the io
 // verbosity knob: if this fires, something is wrong that the user needs to see without knowing to ask.
 static bool ram_range_addr(uint32_t p) { return p < 0x1F000000u; }   // below the I/O window == RAM space
+// FAIL-FAST on an access to RAM space the memory model does not map.
+//
+// This used to warn once per distinct address and then DISCARD the access — writes vanished and reads
+// returned 0. That is fabricating behaviour: it lets a run continue on data it did not actually
+// store, so the failure surfaces arbitrarily far from its cause. It cost real debugging time on the
+// Spider-Man port, where the visible end state was a module loader being handed a garbage name
+// string — a pointer that had been corrupted thousands of discarded accesses earlier — plus a 1 GB
+// log of warnings in 90 seconds.
+//
+// A discarded guest access is never recoverable, so there is nothing to trade off: abort at the FIRST
+// one, with a backtrace, so the submit path that produced the address is visible. If a game
+// legitimately needs an address in this range (the PSX mirrors its 2 MB of RAM four times across
+// KSEG0, so 0x80800000 aliases physical 0), the fix is to MAP that range in host_ptr — not to let the
+// access evaporate.
 static void warn_unmapped_ram(uint32_t a, uint32_t bytes, const char* how) {
-  static uint32_t seen[32];
-  static int n = 0;
   const uint32_t p = a & 0x1FFFFFFF;
   if (!ram_range_addr(p)) return;
-  for (int i = 0; i < n; i++) if (seen[i] == p) return;
-  if (n < 32) seen[n++] = p;
-  cfg_loge("mem", "UNMAPPED RAM %s%u @ 0x%08X (phys 0x%08X) — access is being DISCARDED. "
-                  "This is a memory-model gap, not a stray I/O poke: guest writes here vanish and "
-                  "reads return 0. Check host_ptr's mapping for this range.", how, bytes * 8, a, p);
-  if (n == 32) cfg_loge("mem", "UNMAPPED RAM: further distinct addresses will not be reported");
+  cfg_loge("mem", "\nFATAL: UNMAPPED RAM %s%u @ 0x%08X (phys 0x%08X) — fail-fast.\n"
+                  "  The memory model does not map this address, so the access cannot be honoured. "
+                  "Discarding it would corrupt silently.\n"
+                  "  Main RAM is 2 MB (phys 0x00000000..0x001FFFFF). If the guest legitimately reaches "
+                  "the KSEG0 mirrors, map them in host_ptr;\n"
+                  "  if it does not, this address is the real bug and the backtrace below names the "
+                  "path that produced it. Backtrace:", how, bytes * 8, a, p);
+  void* bt[32]; int nbt = backtrace(bt, 32); backtrace_symbols_fd(bt, nbt, 2);
+  fflush(stderr);
+  abort();
 }
 
 uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
