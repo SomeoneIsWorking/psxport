@@ -154,9 +154,22 @@ static bool ram_range_addr(uint32_t p) { return p < 0x1F000000u; }   // below th
 // legitimately needs an address in this range (the PSX mirrors its 2 MB of RAM four times across
 // KSEG0, so 0x80800000 aliases physical 0), the fix is to MAP that range in host_ptr — not to let the
 // access evaporate.
-static void warn_unmapped_ram(uint32_t a, uint32_t bytes, const char* how) {
+static void warn_unmapped_ram(Core* gc, uint32_t a, uint32_t bytes, const char* how) {
   const uint32_t p = a & 0x1FFFFFFF;
   if (!ram_range_addr(p)) return;
+  // GUEST context, not just the host backtrace. A bad address is almost always a bad POINTER, and the
+  // register that held it (plus gp, which this game uses as a table base) says far more about where it
+  // came from than the C call stack does — the host frames are confounded by -foptimize-sibling-calls
+  // anyway. Printing it here means the next occurrence is diagnosable from one run instead of needing
+  // a bespoke probe.
+  if (gc) {
+    cfg_loge("mem", "  guest: pc=0x%08X ra=0x%08X sp=0x%08X gp=0x%08X fp=0x%08X",
+             gc->pc, gc->r[31], gc->r[29], gc->r[28], gc->r[30]);
+    cfg_loge("mem", "  args : a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X  v0=0x%08X v1=0x%08X",
+             gc->r[4], gc->r[5], gc->r[6], gc->r[7], gc->r[2], gc->r[3]);
+    cfg_loge("mem", "  temps: t0=0x%08X t1=0x%08X t2=0x%08X t3=0x%08X  s0=0x%08X s1=0x%08X",
+             gc->r[8], gc->r[9], gc->r[10], gc->r[11], gc->r[16], gc->r[17]);
+  }
   cfg_loge("mem", "\nFATAL: UNMAPPED RAM %s%u @ 0x%08X (phys 0x%08X) — fail-fast.\n"
                   "  The memory model does not map this address, so the access cannot be honoured. "
                   "Discarding it would corrupt silently.\n"
@@ -229,7 +242,7 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010E0) return s_dma6_madr;        // DMA6 OTC MADR
   if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
   if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
-  warn_unmapped_ram(a, bytes, "read");
+  warn_unmapped_ram(this, a, bytes, "read");
   if (s_io_verbose)
     cfg_logi("io", "read%u @ 0x%08X -> 0", bytes * 8, a);
   return 0;
@@ -430,7 +443,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     }
     return;
   }
-  warn_unmapped_ram(a, bytes, "write");
+  warn_unmapped_ram(this, a, bytes, "write");
   if (s_io_verbose)
     cfg_logi("io", "write%u @ 0x%08X = 0x%08X", bytes * 8, a, v);
 }
