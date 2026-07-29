@@ -70,9 +70,19 @@ int ndiff_divergences() { return st().divergences; }
 bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Core*)) {
   init_once();
   State& s = st();
-  Site& site = s.sites[name];
 
-  if (s.budget <= 0 || site.calls >= s.budget) {
+  // DISABLED IS THE COMMON CASE, AND IT MUST COST NOTHING. The site lookup used to happen before the
+  // budget test, so every call of every natively-owned body paid for a std::string constructed from
+  // `name` plus a red-black tree walk — on a run with the differential switched off, where none of that
+  // bookkeeping is ever read. With 18 owned bodies on hot paths that showed up as 9.7% of total CPU in
+  // a host profile, which is a tenth of the port spent maintaining a map nobody queries. Test the
+  // budget first and the disabled path touches no container at all.
+  if (s.budget <= 0) {
+    native(c);
+    return false;
+  }
+  Site& site = s.sites[name];
+  if (site.calls >= s.budget) {
     site.calls++;
     native(c);
     return false;
