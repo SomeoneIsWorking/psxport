@@ -910,6 +910,36 @@ def test_copy_source_address_is_captured_at_the_load():
         f"propagation must consume the HELD source (keyed by the seed GPR t6=14), not re-evaluate it:\n{c}"
 
 
+
+def test_vertex_store_in_a_branch_delay_slot_is_tapped():
+    """A vertex store sitting in a BRANCH DELAY SLOT must still be tapped.
+
+    Hand-written PS1 assembly fills delay slots with real work, and these renderers put the vertex
+    store there constantly: Spyro's main executable has 96 such stores, and in the single hottest
+    renderer (0x800258F0) it is what breaks FOUR subdivided-face submitters end to end — their
+    second stage is already tapped, so the whole chain is lost to one instruction per block.
+
+    The emitter finds these stores; it simply had nowhere to append the record call, because a delay
+    slot is emitted INSIDE the control statement. Appending to the delay-slot statement itself puts
+    the call exactly where the hardware runs it: after the store, before the transfer."""
+    a = Asm(0x80010000)
+    a.mfc2("v0", 14)
+    a.bne("a0", "zero", "skip")
+    a.sw("v0", 0, "a1")              # THE DELAY SLOT — runs on both paths, and stores the vertex
+    a.label("skip")
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    c = emit_c(data)
+    assert c.count("gte_record_pz(c, ") == 1, \
+        f"a vertex store in a delay slot was not tapped:\n{c}"
+    # It must land INSIDE the control statement, after the store — not after the branch, where it
+    # would run only on the fall-through path (or not at all).
+    line = next(l for l in c.split("\n") if "gte_record_pz(c, " in l)
+    assert "mem_w32" in line and "goto" in line, \
+        f"the tap must sit in the delay-slot statement, between the store and the transfer:\n{line}"
+
+
 # ----------------------------------------------------------------------------------------------------
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

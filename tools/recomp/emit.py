@@ -691,15 +691,43 @@ def _track_value(ins, lo, hi, start, seed, tsources, ds, limit=256):
         j = ins.get(b)
         if j is None:
             break
-        if b in tsources and any(src < start or src >= b for src in tsources[b]):
-            break                                        # a label reachable from outside this walk
+        # A label reachable from OUTSIDE this walk arrives with register state this walk never
+        # reasoned about, so it stops here. `start - 4` counts as INSIDE: when the seed instruction
+        # is itself a branch's delay slot, that branch sits at start-4 and is part of the same flow,
+        # not a foreign entry.
+        if b in tsources and any(src < start - 4 or src >= b for src in tsources[b]):
+            break
+        if j.kind == D.JUMP and j.op == "j" and j.target is not None \
+                and lo <= j.target < hi and j.target > b:
+            # AN UNCONDITIONAL FORWARD `j` INSIDE THIS FUNCTION IS NOT A BARRIER — it is a hop over
+            # the other arm of an if/else, and the register state at the target is the state this
+            # walk already reasoned about. Stopping here cost the stage-2 copies of two whole
+            # renderers in Spyro (0x80026474->0x8002649C, 0x80026720->0x80026730,
+            # 0x80026C00->0x80026C30, 0x80026CB8->0x80026CFC): depth was recorded into their
+            # scratchpad caches and then never carried into the packet.
+            # The delay slot still executes; process it, then resume at the target, where the
+            # inbound-edge guard above is applied exactly as for any other address.
+            slot = ins.get(b + 4)
+            if slot is not None:
+                if slot.kind == D.STORE and slot.op == "sw" and slot.rt in tracked:
+                    stores.append(b + 4)
+                else:
+                    d = _derives_from(slot, tracked)
+                    if d is not None:
+                        tracked.add(d)
+                    elif defines_reg(slot, seed):
+                        break
+                    else:
+                        tracked -= {r for r in list(tracked) if defines_reg(slot, r)}
+            b = j.target
+            continue
         if j.kind in (D.JUMP, D.JUMPR):
             break
         if j.kind == D.BRANCH:
             slot = ins.get(b + 4)                        # the delay slot still executes
             if slot is not None:
                 if slot.kind == D.STORE and slot.op == "sw" and slot.rt in tracked:
-                    skipped += 1                         # emitter cannot append inside a control stmt
+                    stores.append(b + 4)                 # emitted inside the control statement
                 else:
                     d = _derives_from(slot, tracked)
                     if d is not None:
@@ -711,11 +739,8 @@ def _track_value(ins, lo, hi, start, seed, tsources, ds, limit=256):
             b += 8
             continue
         if j.kind == D.STORE and j.op == "sw" and j.rt in tracked:
-            if b in ds:
-                skipped += 1
-            else:
-                stores.append(b)
-            b += 4
+            stores.append(b)     # delay-slot stores included: emit_run appends inside the
+            b += 4               # control statement, which is exactly where they execute
             continue
         d = _derives_from(j, tracked)
         if d is not None:
@@ -999,6 +1024,23 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 slot = ins.get(a + 4)
                 ds_c = emit_simple(slot) if (slot and slot.kind not in
                        (D.BRANCH, D.JUMP, D.JUMPR)) else "/* DS */"
+                # NATIVE-DEPTH TAPS FOR A DELAY-SLOT INSTRUCTION. A delay slot is emitted INSIDE the
+                # control statement, so a tap appended after that statement would run on the wrong
+                # path — or not at all. Splicing it into the delay-slot text puts it exactly where
+                # the hardware runs it: after the slot executes, before the transfer. Hand-written
+                # assembly fills delay slots with real work; 96 vertex stores in this game's main
+                # executable sit here, and four whole renderers are lost to one such store each.
+                sa = a + 4
+                if slot is not None:
+                    if sa in pz_srcs:                   # the hold must precede its own load
+                        ds_c = f"gte_hold_src(c, {pz_srcs[sa]}, {addr_expr(slot)}); " + ds_c
+                    if sa in pz_holds:
+                        g, z = pz_holds[sa]
+                        ds_c += f" gte_hold_pz(c, {g}, {z});"
+                    if sa in pz_stores:
+                        ds_c += f" gte_record_pz(c, {addr_expr(slot)}, {pz_stores[sa]});"
+                    elif sa in pz_copies:
+                        ds_c += f" gte_copy_pz(c, {pz_copies[sa]}, {addr_expr(slot)});"
                 out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a), a in ra_tails))
                 if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
                     out.append(f"  goto L_DSAFTER_{a:08X};")
