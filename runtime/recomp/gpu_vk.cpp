@@ -687,6 +687,18 @@ static void render_pass_set(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* colorTgt,
     SDL_EndGPURenderPass(rp);
   }
 }
+// True when this frame's geometry batch received nothing — the same accounting render_geom does for
+// its `total`, hoisted so the present path can decide whether there is anything new to composite.
+static bool geom_batch_empty(GpuVkState& g) {
+  int total = g.s_tri_n + g.s_tex_n;
+  for (int m = 0; m < NUM_BLEND_MODES; m++) total += g.s_semi_n[m];
+  for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
+    total += g.s_tri2d_n[band] + g.s_tex2d_n[band];
+    for (int m = 0; m < NUM_BLEND_MODES; m++) total += g.s_semi2d_n[band][m];
+  }
+  return total == 0;
+}
+
 static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src,
                         int sx, int sy, int disp_w, int h, int* dtri, int* dtex, int* dsemi,
                         bool preserveBackdrop = false) {
@@ -879,6 +891,27 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   }
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev);
   GPUCHK(cmd, "AcquireGPUCommandBuffer");
+
+  // A PRESENT WITH NO NEW GEOMETRY RE-SHOWS THE LAST COMPOSITE — it does not rebuild one.
+  //
+  // Presents are paced by the display field clock, but a guest need not draw every field: a 30 fps
+  // game builds one ordering table per TWO fields. Rebuilding the composite on the empty present
+  // produced a frame that alternated full-scene / black at 30 Hz. Measured on the Spider-Man port
+  // over six consecutive presents: 0.0%, 99.4%, 0.0%, 99.4%, 0.0%, 99.4% non-black, where the 99.4%
+  // frames are the fully-rendered main menu.
+  //
+  // Hardware does not do this. The display re-scans the SAME persistent framebuffer every field
+  // whether or not the game drew into it, so a field with no drawing shows the previous image again.
+  // Skipping the rebuild reproduces that exactly, and costs nothing — there is nothing new to show.
+  //
+  // preserveVramBackdrop does NOT cover this case and was tried first: it only skips render_geom's
+  // CLEAR, while upload_vram above still overwrites the composite with guest VRAM — which for a port
+  // that composites natively is empty, so the frame came out black anyway.
+  //
+  // The guard is deliberately "did the batch get anything this frame", not a frame-rate assumption:
+  // a genuinely blank frame the guest MEANT to be blank clears its own VRAM and submits that.
+  if (geom_batch_empty(*this)) { show_composite(cmd); return; }
+
   upload_vram(*this, cmd, src);                             // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
   render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
               game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
