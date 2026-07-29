@@ -227,8 +227,25 @@ static void mc_read_guest_str(Core* c, uint32_t va, char* out, size_t cap) {
 // Deliver the libcard I/O-complete event so callers waiting on TestEvent (SwCARD-0x8000 SUCCESS +
 // EvSpIOE for save/load and card-detect flows) fall through immediately.
 void Memcard::deliverComplete(Core* c) {
-  c->game->hle.deliverEvent(0xF4000001u, 0x8000u);   // SwCARD save/load SUCCESS
-  c->game->hle.deliverEvent(0xF4000001u, 0x0004u);   // SwCARD card-detect completion
+  // ONLY the I/O-end spec. 0x8000 is EvSpERROR, not success — this used to deliver it as well, on a
+  // comment that called it "SwCARD save/load SUCCESS", and that is an announcement of a card FAULT.
+  //
+  // It is not harmless, and Spider-Man shows exactly how it bites. Its card-status routine at
+  // 0x80015300 TestEvents all four opened SwCARD specs IN ORDER and writes a status code each time
+  // one fires, with NO early exit:
+  //
+  //   TestEvent(0x0004) -> status 1   (I/O end)
+  //   TestEvent(0x8000) -> status 2   (error)
+  //   TestEvent(0x0100) -> status 3
+  //   TestEvent(0x2000) -> status 4
+  //
+  // so a later match OVERWRITES an earlier one. Delivering 0x0004 and 0x8000 together set success and
+  // then immediately replaced it with error, and the game sat on "CHECKING MEMORY CARD" forever.
+  //   python3 external/psxport/tools/disasm.py <ram.bin> 0x80015300 0x80015370
+  //
+  // A caller that needs to report a genuine FAILURE should deliver 0x8000 explicitly at that point,
+  // not have it ride along with every completion.
+  c->game->hle.deliverEvent(0xF4000001u, 0x0004u);   // SwCARD I/O end (EvSpIOE)
   c->game->hle.deliverEvent(0xF0000011u, 0x0004u);   // HwCARD BIOS-level completion
 }
 
