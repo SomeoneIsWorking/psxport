@@ -145,21 +145,32 @@ void interp_run(Core* c, uint32_t addr);   // interp.cpp — pure-interpreter en
 #include <cstdlib>
 // recdep (later-286): RECOMP-DEPENDENCY meter — histogram every substrate function rec_dispatch routes to
 // (the native port; the oracle interp path is excluded), dumped top-40 at exit. The metric for the
-// "minimize recomp" goal: rank which substrate fns to own natively next. Gated on cfg_dbg("recdep").
+// "minimize recomp" goal: rank which substrate fns to own natively next.
+//
+// EITHER channel arms the meter: `recdep` (top-40) or `recdep-all` (full histogram). recdep_enabled()
+// exists because the two used to be independent, so `PSXPORT_DEBUG=recdep-all` alone armed nothing and
+// printed nothing — and an empty histogram is indistinguishable from "the run dispatched nothing".
+// A diagnostic whose failure mode is silence has to be impossible to arm halfway.
 // The histogram lives on Core (c->idiag.recdep); the atexit hook needs a static Core* because
 // atexit handlers take no context — documented signal/atexit exception, set once on first use.
 static Core* s_recdepCore = nullptr;
+static bool recdep_enabled() { return cfg_dbg("recdep") || cfg_dbg("recdep-all"); }
+// The dump must be EMITTED on a channel that is actually on — cfg_logf drops a line whose channel is
+// off, so hard-coding "recdep" here would have left `recdep-all` alone collecting a histogram it then
+// silently discarded at exit. Same defect as the arming one, one layer down.
+static const char* recdep_chan() { return cfg_dbg("recdep") ? "recdep" : "recdep-all"; }
 extern "C" void recdep_dump() {
-  if (!cfg_dbg("recdep") || !s_recdepCore) return;
+  if (!recdep_enabled() || !s_recdepCore) return;
   std::vector<std::pair<uint64_t,uint32_t>> v;
   for (auto& kv : s_recdepCore->idiag.recdep) v.push_back({kv.second, kv.first});
   std::sort(v.rbegin(), v.rend());
   // PSXPORT_DEBUG=recdep-all dumps the FULL histogram instead of the top-40 — needed to see rare
   // (low-call-count) dispatch targets in a specific address band that the top-40 truncation hides.
   size_t cap = cfg_dbg("recdep-all") ? v.size() : 40;
-  cfg_logf("recdep", "top substrate dispatch targets (addr: calls), %zu unique:", v.size());
+  const char* chan = recdep_chan();
+  cfg_logf(chan, "top substrate dispatch targets (addr: calls), %zu unique:", v.size());
   for (size_t i = 0; i < v.size() && i < cap; i++)
-    cfg_logf("recdep", "  0x%08X : %llu", v[i].second, (unsigned long long)v[i].first);
+    cfg_logf(chan, "  0x%08X : %llu", v[i].second, (unsigned long long)v[i].first);
 }
 void rec_dispatch(Core* c, uint32_t addr) {
   // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
@@ -180,7 +191,7 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // owns the oracle gate: the psx_fallback / inSubstrateLeg leg runs the gen body, so SBS core B stays
   // the pure substrate reference. Hit counting + `dispatch`/`ovhit` tracing live inside the registry.
   if (overrides::dispatch(c, addr)) return;
-  if (cfg_dbg("recdep")) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
+  if (recdep_enabled()) { if (!s_recdepCore) { s_recdepCore = c; atexit(recdep_dump); } c->idiag.recdep[(addr & 0x1FFFFFFF) | 0x80000000]++; }
   // Attack (a) probe: attribute rec_dispatch calls to specific overlay handlers. Env=hex address, e.g.
   // PSXPORT_DISPWATCH=0x8013B2E4. Prints per-core when reached; distinguishes "B never dispatches this
   // handler" (real gap) from "B dispatches but the resident overlay isn't A00" (loader gap).

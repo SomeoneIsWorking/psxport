@@ -180,9 +180,11 @@ and WHEN it loaded; the tool that pinned later-273's "A00 code overlay never loa
 overlay_router.cpp) · `recdep` (RECOMP-DEPENDENCY meter: histograms every substrate function `rec_dispatch`
 routes to and dumps the top-40 by call count at exit, overlay_router.cpp — the metric for the "minimize
 recomp" goal; run `PSXPORT_DEBUG=recdep` on a free-roam session to rank which substrate functions to own
-natively next. 410 unique in free-roam; #1 is `rand` 0x8009A450 @ 86/frame). Add `recdep-all` (e.g.
-`PSXPORT_DEBUG=recdep,recdep-all`) to dump the FULL histogram instead of just the top-40 — needed to spot
-rare/low-call-count targets in a specific address band the top-40 truncation would otherwise hide. See
+natively next. 410 unique in free-roam; #1 is `rand` 0x8009A450 @ 86/frame). `recdep-all` dumps the FULL
+histogram instead of just the top-40 — needed to spot rare/low-call-count targets in a specific address
+band the top-40 truncation would otherwise hide. **Either channel alone arms the meter and prints**:
+`PSXPORT_DEBUG=recdep-all` used to arm nothing and emit nothing (2026-07-29), which reads exactly like a
+run that dispatched nothing to the substrate. See
 journal later-168 /
 engine_re.md "GAME stage state machine" · `silbbox` (dark-outline render-bug diag, `render_internal.h`
 `sil_bbox_log`/`_i`: logs the screen bbox of every quad — native_gt3gt4's GT3/GT4/byte-packed submitters,
