@@ -63,6 +63,7 @@ const int CALLEE_SAVED[] = { 16,17,18,19,20,21,22,23, 28,29,30,31 };  // s0-s7, 
 const char* const CALLEE_SAVED_NAME[] = { "s0","s1","s2","s3","s4","s5","s6","s7","gp","sp","fp","ra" };
 Site g_sites[MAX_TRACE];
 int g_n = 0;
+long g_regs_n = 0;   // PSXPORT_FNTRACE_REGS: how many calls per site to dump registers for
 bool g_on = false;
 
 int find(uint32_t a) {
@@ -90,6 +91,15 @@ void hook(Core* c) {
   }
   g_sites[i].hits++;
 
+  // PSXPORT_FNTRACE_REGS=N — dump the argument and saved registers for the first N calls of each
+  // site. "Is this register what the static reading predicts?" is otherwise unanswerable: a
+  // watchpoint shows memory, the ABI check shows preservation, and neither shows what a loop
+  // counter actually HOLDS on entry.
+  if (g_regs_n && (long)g_sites[i].hits <= g_regs_n)
+    cfg_logi("fntrace", "0x%08X call #%lu: a0=%08X a1=%08X a2=%08X a3=%08X | s0=%08X s1=%08X s2=%08X s3=%08X",
+             addr, g_sites[i].hits, c->r[4], c->r[5], c->r[6], c->r[7],
+             c->r[16], c->r[17], c->r[18], c->r[19]);
+
   // ABI CHECK. Snapshot the callee-saved registers, run the body, and compare. This is free to add
   // here because the trampoline already brackets the call, and it answers a question nothing else can:
   // "is this function's recompilation ABI-correct?". A violation corrupts the CALLER's locals, so it
@@ -107,17 +117,26 @@ void hook(Core* c) {
   // and the control case passing proves nothing. This is how to confirm it can say the other thing.
   if (cfg_on("PSXPORT_FNTRACE_SELFTEST")) c->r[16] ^= 0xA5A5A5A5u;
 
+  // REPORT EVERY DIFFERING REGISTER, not just the first. The earlier version stopped at one, and
+  // that under-report cost real time: 0x80047B60 was reported as clobbering s0 (index 0) while sp
+  // and ra were mangled by the same missing epilogue and stayed invisible, which made the failure
+  // look narrower — and stranger — than it was. Seeing sp move by the frame size would have named
+  // "the epilogue did not run" immediately instead of "something ate a register". Still first CALL
+  // only: a broken function breaks on every call, and 62M identical lines help nobody.
+  int listed = 0;
   for (size_t k = 0; k < sizeof saved / sizeof saved[0]; k++) {
     if (c->r[CALLEE_SAVED[k]] == saved[k]) continue;
     g_sites[i].abi_violations++;
-    if (!g_sites[i].abi_reported) {       // first only — a broken function breaks on every call
-      g_sites[i].abi_reported = 1;
-      cfg_loge("fntrace", "0x%08X VIOLATES THE ABI: %s entered as %08X, returned as %08X. A guest "
-                          "compiler does not emit this, so the RECOMPILATION is wrong; the damage "
-                          "lands in the caller's locals, far from here.",
-               addr, CALLEE_SAVED_NAME[k], saved[k], c->r[CALLEE_SAVED[k]]);
-    }
+    if (g_sites[i].abi_reported) continue;
+    if (listed++ == 0)
+      cfg_loge("fntrace", "0x%08X VIOLATES THE ABI. A guest compiler does not emit this, so the "
+                          "RECOMPILATION is wrong; the damage lands in the caller's locals, far "
+                          "from here. Every register that moved:", addr);
+    cfg_loge("fntrace", "    %-2s entered as %08X, returned as %08X%s",
+             CALLEE_SAVED_NAME[k], saved[k], c->r[CALLEE_SAVED[k]],
+             CALLEE_SAVED[k] == 29 ? "   (sp moved: an epilogue did not run)" : "");
   }
+  if (listed) g_sites[i].abi_reported = 1;
 }
 
 void report() {
@@ -147,6 +166,7 @@ void on_term(int sig) {
 }  // namespace
 
 void fntrace_init() {
+  if (const char* r = cfg_str("PSXPORT_FNTRACE_REGS")) g_regs_n = atol(r);
   const char* s = cfg_str("PSXPORT_FNTRACE");
   if (!s || !*s) return;
   const RecompRegistry* R = psxport_recomp();
