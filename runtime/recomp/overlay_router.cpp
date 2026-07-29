@@ -168,9 +168,20 @@ extern "C" void recdep_dump() {
   // (low-call-count) dispatch targets in a specific address band that the top-40 truncation hides.
   size_t cap = cfg_dbg("recdep-all") ? v.size() : 40;
   const char* chan = recdep_chan();
+  // ANNOTATE WHAT IS ALREADY OWNED. This counter sits AFTER overrides::dispatch (so registry-owned
+  // addresses never reach it) but BEFORE main_dispatch -> func_X consults g_<mod>_override[], which
+  // is where PlatformHle's handlers live. A PlatformHle-owned address therefore lands in this
+  // histogram at full call count while running a native handler, not the recompiled body — and the
+  // list is read as "what to own next". That misreads directly into wasted work: 0x800834A0
+  // (gpuTimeoutArm) sat at the TOP of this histogram at 33,152 calls while PlatformHle had owned it
+  // all along, and porting it would have been a double-install. Say so on the line instead.
+  PlatformHle* hle = s_recdepCore->game ? &s_recdepCore->game->platform_hle : nullptr;
   cfg_logf(chan, "top substrate dispatch targets (addr: calls), %zu unique:", v.size());
-  for (size_t i = 0; i < v.size() && i < cap; i++)
-    cfg_logf(chan, "  0x%08X : %llu", v[i].second, (unsigned long long)v[i].first);
+  for (size_t i = 0; i < v.size() && i < cap; i++) {
+    const bool owned = hle && hle->lookup(v[i].second) != nullptr;
+    cfg_logf(chan, "  0x%08X : %llu%s", v[i].second, (unsigned long long)v[i].first,
+             owned ? "   <-- ALREADY OWNED by PlatformHle (not a porting target)" : "");
+  }
 }
 void rec_dispatch(Core* c, uint32_t addr) {
   // ORACLE Core (later-278): interpret the target instead of routing to a recompiled body. The
