@@ -381,6 +381,16 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                    if (gd.gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); gd.gteprobe = e ? atoi(e) : 0; }
                                                    if (gd.gteprobe > 0) gd.gte_hist[op]++;
                                                    if (op == 0x01 || op == 0x30) {
+                                                     // PROJECTION CONSTANTS, captured generically. pzToOrd needs the
+                                                     // projection plane H (CR26) to place the near plane; without it every
+                                                     // depth normalizes against a default and the whole scene flattens.
+                                                     // The reference consumer sets these from its own native transform, but
+                                                     // a game that has no native transform yet still projects through the
+                                                     // GTE — so read them from the control regs that RTPS/RTPT just used.
+                                                     // OFX/OFY (CR24/25) are 16.16 fixed point.
+                                                     c->rsub.projParams.setProjH((uint16_t)gte_read_ctrl(26));
+                                                     c->rsub.projParams.setProjCenter((float)(int32_t)gte_read_ctrl(24) / 65536.0f,
+                                                                                      (float)(int32_t)gte_read_ctrl(25) / 65536.0f);
                                                      ws_sx_record();          // self-gated (PSXPORT_WS_SXHIST)
                                                      rtpcaller_record(c->r[31]);   // self-gated (PSXPORT_RTPCALLER)
                                                      c->rsub.otAttr.trackGte(c);   // self-gated (`debug otattr`)
@@ -414,6 +424,30 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                        }
                                                      }
                                                    } }
+// swc2 of a PROJECTED SCREEN-XY register (DR12/13/14, or DR15 for RTPS's single-vertex slot). The
+// recompiler routes only those registers here (emit.py GTE_SCREEN_XY_REGS); every other cop2 store
+// keeps the plain inline form, so this costs nothing on them.
+//
+// WHY THIS IS THE NATIVE-DEPTH SEAM. The renderer needs each drawn vertex's view-space Z, and it can
+// only ask for it by the ADDRESS the guest wrote the projected X/Y to (gp0_exec -> projprim.lookupPz).
+// `gte_stsxy*` compiles to exactly this instruction, so the address and the depth are both in hand
+// here — for ANY game, with no reverse engineering of its submit path. That is the whole point of the
+// GTE choke point the porting guide describes.
+//
+// THE PAIRING IS FIXED BY THE FIFOs, not guessed: an RTPT pushes v0,v1,v2 into XY DR12,DR13,DR14 and
+// Z into DR17,DR18,DR19; an RTPS writes the single vertex to DR15 and its Z to DR19.
+//
+// The Z is the GTE's SZ, which is view-space Z in the same units as the projection plane H — exactly
+// what ProjParams::pzToOrd expects (it clamps at H/2 and normalizes 1/z). Reading it UNSIGNED matters:
+// SZ is a 16-bit unsigned FIFO value and sign-extending it would fold the far half of the scene in
+// front of the camera.
+void gte_store_xy(Core* c, uint32_t addr, int rt) {
+  c->mem_w32(addr, gte_read_data((uint32_t)rt));
+  if (!attach_enabled()) return;
+  const int zreg = (rt == 15) ? 19 : (17 + (rt - 12));
+  c->rsub.projprim.setPz(addr, (float)(uint16_t)gte_read_data((uint32_t)zreg));
+}
+
 // Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.
 // Called per core frame-step (native_step_frame) + at boot, from the explicit Core — no shared regs.
 void     gte_bind(Core* c)                       {

@@ -236,6 +236,10 @@ void     gte_write_data(uint32_t reg, uint32_t v);
 uint32_t gte_read_ctrl (uint32_t reg);
 void     gte_write_ctrl(uint32_t reg, uint32_t v);
 void     gte_op(Core* c, uint32_t insn);
+// swc2 of a projected screen-XY register (DR12/13/14/15): stores to memory AND records that vertex's
+// view-space Z against the written address, which is what gives the renderer native per-vertex depth.
+// The recompiler routes only those registers here; see gte_beetle.cpp for why the pairing is exact.
+void     gte_store_xy(Core* c, uint32_t addr, int rt);
 
 // R3000 integer division semantics (no traps; defined /0 + overflow results).
 void cpu_div (Core* c, uint32_t n, uint32_t d);

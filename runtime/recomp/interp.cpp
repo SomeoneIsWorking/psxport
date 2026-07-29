@@ -229,7 +229,15 @@ static void exec_simple(Core* c, uint32_t in) {
       break;
     }
     case 0x32: gte_write_data(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;       // lwc2
-    case 0x3A: c->mem_w32(c->r[RS(in)] + SIMM(in), gte_read_data(RT(in))); break;        // swc2
+    // swc2. Routed through gte_store_xy for the projected screen-XY registers so the interpreter
+    // records native depth exactly as the recompiled path does — a function stepped under the
+    // interpreter must not silently lose its vertices' depth (the two paths are mixed at will).
+    case 0x3A: {
+      const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
+      if (rt >= 12 && rt <= 15) gte_store_xy(c, a, (int)rt);
+      else c->mem_w32(a, gte_read_data(rt));
+      break;
+    }
     default:
       // FAIL-FAST (global rule, user 2026-06-22): a bad opcode means the PC derailed into data/garbage —
       // a real bug (wrong jump target / unloaded overlay / corrupt load). Do NOT limp on spewing thousands

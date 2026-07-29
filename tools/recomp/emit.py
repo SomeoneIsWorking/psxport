@@ -132,6 +132,12 @@ def check_seeds_in_text(exe, seeds, where):
 # recomp identity and re-emits when the stamp on disk (generated/.recomp_version) differs, so a stale
 # generated/ on another box (which an input-content hash alone failed to catch — a box can build a
 # self-consistent-but-outdated set) is forced to regenerate. Date + a per-day counter; keep it terse.
+# GTE data registers holding a PROJECTED SCREEN XY. DR12/13/14 are the XY_FIFO slots an RTPT fills
+# (v0,v1,v2); DR15 is the slot an RTPS fills for a single vertex. A `swc2` of one of these is a
+# packet-vertex store — see the GTE_STORE case in emit_simple. They pair with the Z_FIFO registers
+# DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
+GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
+
 RECOMP_VERSION = "2026-07-22.2"
 
 R = lambda n: f"c->r[{n}]"
@@ -258,6 +264,15 @@ def emit_simple(ins):
     if k == D.GTE_LOAD:   # lwc2: cop2_data[rt] = mem[rs+imm]
         return f"gte_write_data({ins.rt}, c->mem_r32({addr_expr(ins)}));"
     if k == D.GTE_STORE:  # swc2: mem[rs+imm] = cop2_data[rt]
+        # THE NATIVE-DEPTH SEAM, and it is generic — no per-game RE. A `swc2` of a GTE SCREEN-XY
+        # register (DR12/13/14, or DR15 for the RTPS single-vertex slot) IS the packet-vertex store:
+        # `gte_stsxy*` compiles to exactly this. The address it writes is the key the renderer later
+        # looks up in gp0_exec to recover that vertex's view-space Z, so tapping here gives every game
+        # real per-vertex depth without reverse-engineering its submit path.
+        # `rt` is a compile-time constant here, so every other cop2 store keeps the plain form and the
+        # tap costs nothing on them.
+        if ins.rt in GTE_SCREEN_XY_REGS:
+            return f"gte_store_xy(c, {addr_expr(ins)}, {ins.rt});"
         return f"c->mem_w32({addr_expr(ins)}, gte_read_data({ins.rt}));"
     if k == D.COP0:
         if o == "mfc0":

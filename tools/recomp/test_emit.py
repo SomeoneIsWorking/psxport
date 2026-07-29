@@ -123,6 +123,10 @@ class Asm:
             return I(op, rs, rt, imm)
         if mn == "lui":
             return I(0xF, 0, args[0], args[1])
+        if mn in ("swc2", "lwc2"):          # COP2 store/load: op 0x3A/0x32, rt = cop2 data reg
+            op = 0x3A if mn == "swc2" else 0x32
+            rt, off, rs = args
+            return I(op, rs, rt, off)
         if mn in ("lw", "lh", "lhu", "lb", "lbu", "sw", "sh", "sb"):
             op = {"lb": 0x20, "lh": 0x21, "lw": 0x23, "lbu": 0x24, "lhu": 0x25,
                   "sb": 0x28, "sh": 0x29, "sw": 0x2B}[mn]
@@ -701,6 +705,45 @@ def test_exec_jalr_at_body_end_chains_into_next_fragment():
                    hi=hi, funcset={0x80010000, hi}, hooks=hooks)
     assert res["r"][16] == 0xCAFE, \
         f"s0={res['r'][16]:#x} — body ending in `jalr` did not chain into the fall-through fragment"
+
+
+
+def emit_c(data, base=0x80010000, hi=None):
+    """emit_func -> the C text, with no compile step. For asserting the SHAPE of an emission."""
+    e = exe_of(data, base)
+    out = []
+    emit.emit_func(e, base, hi if hi is not None else e.text_end, {base}, out,
+                   f"gen_func_{base:08X}", emit.MAIN_NAMES)
+    return "\n".join(out)
+
+
+def test_swc2_of_a_screen_xy_reg_taps_the_depth_recorder():
+    """`swc2` of a GTE SCREEN-XY register is the packet-vertex store, and its address is the key the
+    native-depth cache (ProjPrim) needs.
+
+    WHY THIS IS THE WHOLE FEATURE. Native depth needs, per drawn vertex, the view-space Z that produced
+    it. The recompiler already routes every perspective transform through one place, but the DEPTH has
+    to be keyed by the address the guest wrote the projected X/Y to — that is what the renderer later
+    looks up in gp0_exec. `gte_stsxy*` compiles to `swc2` of DR12/13/14 (and DR15 after an RTPS), so
+    that store IS the seam, and it needs no per-game reverse engineering at all.
+
+    The pairing is fixed by the GTE's FIFOs: XY DR12/13/14 pair with Z DR17/18/19, and DR15 (the RTPS
+    single-vertex slot) pairs with DR19.
+
+    `rt` is a compile-time constant in the emitted C, so a store of any OTHER cop2 register must emit
+    the plain form — the tap costs nothing on the stores that are not vertices."""
+    a = Asm(0x80010000)
+    a.swc2(12, 0, "a0")        # screen XY of vertex 0 -> tapped, pairs with SZ DR17
+    a.swc2(15, 8, "a0")        # RTPS single-vertex slot -> tapped, pairs with SZ DR19
+    a.swc2(0, 16, "a0")        # VXY0: not a projected vertex -> must stay the plain store
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    c = emit_c(data)
+    assert "gte_store_xy(c, " in c, f"no depth tap emitted for swc2 of a screen-XY reg:\n{c}"
+    assert c.count("gte_store_xy(c, ") == 2, \
+        f"expected exactly 2 tapped stores (DR12, DR15), got {c.count('gte_store_xy(c, ')}:\n{c}"
+    assert "gte_read_data(0)" in c, f"swc2 of a non-vertex reg must stay the plain store:\n{c}"
 
 
 # ----------------------------------------------------------------------------------------------------
