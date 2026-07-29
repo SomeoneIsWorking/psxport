@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 struct Core;
+struct GameConfig;
 class  Game;
 
 struct McFd { int used; int block; uint32_t pos; uint32_t size; };
@@ -57,7 +58,7 @@ private:
   bool  mVerbose = false;
   McFd  mFd[kFdMax] = {};
 
-  static char* resolvePath();
+  static char* resolvePath(const struct GameConfig* cfg);
   static void  mkParents(const char* path);
 };
 

@@ -225,6 +225,15 @@ struct GameConfig {
   // unaffected — and this field is APPENDED at the end of the struct because GameConfig is
   // initialised positionally by some consumers. Set to 1 while the guest still owns drawing.
   uint32_t preserveVramBackdrop;
+
+  // --- memory card (memcard.cpp) ----------------------------------------------------------------
+  // The consuming game's memory-card env key and default backing-file path. Same lesson as
+  // discEnvVar: the resolver used to hardcode the FIRST consumer's key (PSXPORT_TOMBA2_CARD) and
+  // filename (scratch/saves/tomba2.mcr), so a second consumer's card silently landed in the
+  // reference game's file, or nowhere. NULL keeps the old behaviour for a consumer that has not set
+  // them. Appended at the end because GameConfig is initialised positionally.
+  const char* cardEnvVar;
+  const char* cardDefaultPath;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

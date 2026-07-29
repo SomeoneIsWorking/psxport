@@ -49,12 +49,22 @@ static char* mc_env_from_dotenv(const char* key) {
   fclose(f);
   return found;
 }
-char* Memcard::resolvePath() {
-  const char* e = cfg_str("PSXPORT_TOMBA2_CARD");
-  if (e && *e) return mc_dup_trim(e);
-  char* d = mc_env_from_dotenv("PSXPORT_TOMBA2_CARD");
-  if (d) return d;
-  return mc_dup_trim("scratch/saves/tomba2.mcr");
+// The consuming game supplies its own env key and default path (GameConfig::cardEnvVar /
+// cardDefaultPath). This used to hardcode the FIRST consumer's key and filename, which meant a
+// second consumer's saves silently went to the reference game's card file — the same defect the disc
+// resolver had (WART-06 in the Spider-Man port). Order: the game's key, then the generic
+// PSXPORT_CARD, each from the environment then .env, then the game's default path.
+char* Memcard::resolvePath(const GameConfig* cfg) {
+  const char* keys[2] = { cfg ? cfg->cardEnvVar : nullptr, "PSXPORT_CARD" };
+  for (int i = 0; i < 2; i++) {
+    if (!keys[i] || !*keys[i]) continue;
+    const char* e = cfg_str(keys[i]);
+    if (e && *e) return mc_dup_trim(e);
+    char* d = mc_env_from_dotenv(keys[i]);
+    if (d) return d;
+  }
+  if (cfg && cfg->cardDefaultPath && *cfg->cardDefaultPath) return mc_dup_trim(cfg->cardDefaultPath);
+  return mc_dup_trim("scratch/saves/card.mcr");
 }
 
 void Memcard::mkParents(const char* path) {
@@ -76,7 +86,7 @@ void Memcard::mkParents(const char* path) {
 
 void Memcard::init() {
   if (mCard) return;
-  char* path = resolvePath();
+  char* path = resolvePath(game ? game->core.cfg : nullptr);
   snprintf(mPath, sizeof mPath, "%s", path);
   free(path);
   mkParents(mPath);
