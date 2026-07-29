@@ -1214,6 +1214,29 @@ void GpuState::gpu_gp1(uint32_t w) {
         } }
       { int n = s_disp_vy1 - s_disp_vy0; if (n <= 0) n = 240; s_disp_h = s_disp_480i ? n * 2 : n; }
       break;
+    // GP1(06) HORIZONTAL DISPLAY RANGE IS DELIBERATELY NOT DECODED — do not "fix" this without
+    // re-taking the measurement below, because driving the display width from it can only make a
+    // correct picture worse.
+    //
+    // The visible width is range/dotclock-divider (10/8/5/4 for 256/320/512/640, 7 for 368), and a
+    // game that wants a normal full-width picture programs the standard 2560-clock span, which by
+    // construction reproduces the resolution GP1(08) already gave us. Measured on Spider-Man
+    // (PSXPORT_DEBUG=gp1, X1 = bits 0-11, X2 = bits 12-23):
+    //
+    //   C58258  X1=600  X2=3160  span 2560  with GP1(08)=1 (320)  -> 2560/8 = 320   agrees
+    //   C67267  X1=615  X2=3175  span 2560  with GP1(08)=2 (512)  -> 2560/5 = 512   agrees
+    //   CDA8A7  X1=2215 X2=3290  span 1075                        -> 1075/5 = 215   transient
+    //
+    // The first two are the steady state and confirm GP1(08) alone is right. The third is a narrow
+    // window during a screen change — the same window in which the guest also programs a 2-scanline
+    // vertical range (GP1(07)=040900, the libgpu NTSC clamp floor), i.e. a deliberately degenerate
+    // display, not a picture anyone sees. An audit read that 215 in isolation and concluded the port
+    // was reporting framebuffer width instead of raster width; the full distribution says otherwise.
+    //
+    // Decoding it into state nothing consumes would just be clutter. If a game ever genuinely
+    // letterboxes via GP1(06) — a non-2560 span held across normal frames — decode it THEN, and gate
+    // the width on it only for that case.
+    case 0x06: break;
     default: break;
   }
 }
