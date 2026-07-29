@@ -229,7 +229,7 @@ uint32_t Core::irqStatLatch() {
   if (game->cdc.irq_edge) {
     game->cdc.irq_edge = 0;
     game->hle.i_stat |= 1u << 2;
-    irq_pending = 1;                    // arm the per-function-entry delivery gate
+    pending_work |= PW_IRQ;             // arm the per-function-entry delivery gate
     if (cfg_dbg("irq"))
       cfg_logf("irq", "CD raised IRQ2 -> I_STAT=0x%03X (mask=0x%03X, %s)", game->hle.i_stat,
                game->hle.i_mask, (game->hle.i_mask & 4) ? "ENABLED" : "masked off by the guest");
@@ -250,7 +250,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   }
   if (p == 0x1F801074) {                                             // I_MASK
     game->hle.i_mask = v & 0x7FFu;
-    irq_pending = 1;                    // unmasking may have made a latched bit deliverable
+    pending_work |= PW_IRQ;             // unmasking may have made a latched bit deliverable
     if (cfg_dbg("irq")) cfg_logf("irq", "w I_MASK 0x%03X ra=%08X", game->hle.i_mask, r[31]);
     return;
   }
@@ -310,7 +310,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       // Announce completion. Deferred to a function-entry boundary rather than dispatched here: we
       // are inside a guest store, with native code mid-mutation.
       game->cd.dma_done_pending = 1;
-      irq_pending = 1;
+      pending_work |= PW_IRQ;
     }
     return;
   }

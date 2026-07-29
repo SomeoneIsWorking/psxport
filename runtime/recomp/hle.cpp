@@ -224,7 +224,7 @@ void Hle::irqPoll(Core* c) {
   const uint32_t pending = c->irqStatLatch() & i_mask;
   // Clear the gate whenever there is nothing to deliver, so the common case costs one load-and-test
   // per function entry and nothing more. Re-armed by whoever raises next.
-  if (!pending || irq_n == 0) { c->irq_pending = 0; return; }
+  if (!pending || irq_n == 0) { c->pending_work &= ~Core::PW_IRQ; return; }
 
   // These two are transient per-Core execution state consumed by the dispatch machinery. If either
   // is live we are NOT at a clean boundary, and delivering here could lose a pending redirect.
@@ -265,12 +265,20 @@ void Hle::irqPoll(Core* c) {
 
   *static_cast<R3000*>(c) = saved;
   in_irq = 0;
-  c->irq_pending = 0;   // re-armed by the next raise / mask change
+  c->pending_work &= ~Core::PW_IRQ;   // re-armed by the next raise / mask change
 }
 
-// The substrate's entry point: every recompiled function wrapper calls this when Core::irq_pending
-// is set (emit.py). Free function so the generated code needs no knowledge of Game or Hle.
-void rec_irq_poll(Core* c) { c->game->hle.irqPoll(c); }
+// The substrate's entry point: every recompiled function wrapper calls this when Core::pending_work
+// is non-zero (emit.py). Free function so the generated code needs no knowledge of Game or Hle.
+//
+// Two INDEPENDENT kinds of deferred work share the gate word, and the order here is deliberate: the
+// host turn runs FIRST. A host turn advances the frame clock and can present; a guest IRQ dispatch
+// runs guest code. Doing the cheap, guest-invisible one first means a long IRQ handler cannot delay
+// the frame clock by a whole dispatch.
+void rec_irq_poll(Core* c) {
+  if (c->pending_work & Core::PW_HOST) rec_host_turn(c);
+  if (c->pending_work & Core::PW_IRQ)  c->game->hle.irqPoll(c);
+}
 
 // Dispatch one A0/B0/C0 BIOS call. Returns true if handled (c->r[V0] set), false otherwise.
 bool Hle::dispatchBios(char table, uint32_t fn) {

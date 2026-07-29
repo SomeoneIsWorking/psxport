@@ -75,12 +75,24 @@ public:
   // (each Core has its own scheduler / dispatch). Was the process-global g_override_tgt.
   uint32_t override_tgt = 0;
 
-  // Interrupt-delivery fast gate. Every recompiled function's wrapper tests this ONE per-Core int on
+  // Deferred-work fast gate. Every recompiled function's wrapper tests this ONE per-Core int on
   // entry (emit.py), which is the cheapest place a static recompile has that is guaranteed to be a
-  // call-coherent guest boundary. Set when a source raises or the guest changes I_MASK/critical
-  // state; cleared by Hle::irqPoll when it finds nothing deliverable. A flag rather than recomputing
-  // `i_stat & i_mask` inline so the hot path stays a single load-and-test.
-  int irq_pending = 0;
+  // call-coherent guest boundary. A flag word rather than recomputing anything inline, so the hot
+  // path stays a single load-and-test no matter how many kinds of deferred work exist.
+  //
+  // PW_IRQ  — set when a source raises or the guest changes I_MASK/critical state; cleared by
+  //           Hle::irqPoll when it finds nothing deliverable.
+  // PW_HOST — set by the host frame timer (host_turn.cpp) when real time has produced at least one
+  //           new display field. This is what lets the HOST get a turn while the guest is executing
+  //           straight-line code that never calls back into the runtime. It is NOT an interrupt and
+  //           carries no controller state: the port owns the frame clock, and this bit only says
+  //           "you are owed a turn". What that turn does is the game's registered host-turn handler.
+  //
+  //           Without it, a guest busy-wait paced by a per-vblank callback can never terminate,
+  //           because nothing advances time between two guest instructions. Spider-Man's boot does
+  //           exactly that (see spider1 docs/re-frontier.md RE-05).
+  enum : int { PW_IRQ = 1, PW_HOST = 2 };
+  int pending_work = 0;
 
   // COP0 registers (12 = Status, 13 = Cause, 14 = EPC). Per-Core: exception state must never be
   // shared between two Cores. Status bit 0 is the master interrupt enable — see stubs.cpp.
@@ -187,7 +199,24 @@ void rec_dispatch(Core* c, uint32_t addr);
 void rec_dispatch_miss(Core* c, uint32_t addr);
 void rec_syscall(Core* c, uint32_t code);
 void rec_break(Core* c, uint32_t code);
-void rec_irq_poll(Core* c);                // deliver a pending interrupt at a guest call boundary
+void rec_irq_poll(Core* c);                // service Core::pending_work at a guest call boundary
+
+// --- host turn (host_turn.cpp) -----------------------------------------------------------------
+// A static recompile has no place to give the HOST a turn while the guest executes straight-line
+// code: the guest runs until it calls back into the runtime, and a guest busy-wait paced by a
+// per-vblank callback never does. rec_host_turn() is that turn, taken at the same call-coherent
+// function-entry boundary interrupt delivery uses.
+//
+// The framework stays game-agnostic: it owns the FRAME CLOCK (real time at the display field rate)
+// and the arming, and knows nothing about what a turn should do. The consuming port registers the
+// handler at runtime — no GameConfig field, so adding this cannot disturb any consumer's positional
+// initialiser. A port that registers nothing pays one already-existing load-and-test and no more.
+typedef void (*HostTurnFn)(Core* c);
+void rec_host_turn(Core* c);
+// fps: display field rate in milli-hertz (e.g. 59940 for NTSC's 60000/1001). The caller states it
+// because it is a property of the GAME's video standard, not of the framework.
+void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz);
+void rec_host_turn_shutdown();
 void rec_interp(Core* c, uint32_t pc);     // synchronous nested call (super-call / RAM-code)
 void rec_coro_run(Core* c, uint32_t pc);   // cooperative task entry
 void rec_coro_redirect(Core* c, uint32_t target);  // override: continue the flat interp at `target`
