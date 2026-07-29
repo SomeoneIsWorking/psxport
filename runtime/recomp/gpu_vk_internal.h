@@ -142,6 +142,11 @@ struct GpuVkState {
   // (pure-2D frames / ires=1). Read by present() to pick the present source. See gpu_vk.cpp.
   int s_present_ires = 0;
   int s_last_sx = 0, s_last_sy = 0, s_last_w = 320, s_last_h = 240;
+  // GP1(0x08) bit 4 — display colour depth, 0 = 15-bit (1555), 1 = 24-bit (packed RGB888). Pushed here
+  // by gpu_vk_set_display_depth() from the GP0/GP1 decode, because present()'s signature carries the
+  // display RECT but not its FORMAT. Both readers of the display region — the windowed present shader
+  // and the CPU shot/readback — must agree with this or a 24bpp still is decoded as 1555.
+  int s_disp_rgb24 = 0;
   int s_dbg_tri = 0, s_dbg_tex = 0, s_dbg_semi = 0;
   // PRESENT-SEQUENCE capture (REPL `preseq <N> [dir]`): dump the next N PRESENTED frames — every
   // present-pass readback, so REAL and fps60-INTERPOLATED frames both land — as dir/p%04d.ppm.

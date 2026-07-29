@@ -80,7 +80,7 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 // reads ScreenFade::get(core) directly — see readback + PresentPC uniform builders below.)
 
 // Present-pass fragment uniform: matches present.frag's `PC { ivec4 disp; ivec4 fade; }`.
-struct PresentPC { int32_t disp[4]; int32_t fade[4]; };
+struct PresentPC { int32_t disp[4]; int32_t fade[4]; int32_t fmt[4]; };   // fmt.x = 1 when the display is 24bpp
 
 // ---- Pass 2: native 3D / textured raster (depth-ordered, REAL HW blend for semi) ----------------------
 // The engine draws the world AND the 2D menus/HUD/sprites as textured/flat prims through the tee
@@ -922,6 +922,9 @@ void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
   pc.disp[0] = sx * (pscale > 1 ? pscale : 1); pc.disp[1] = sy * (pscale > 1 ? pscale : 1);
   pc.disp[2] = disp_w * (pscale > 1 ? pscale : 1); pc.disp[3] = h * (pscale > 1 ? pscale : 1);
   pc.fade[0] = fade.mode; pc.fade[1] = fade.r; pc.fade[2] = fade.g; pc.fade[3] = fade.b;
+  // 24bpp applies to the NATIVE VRAM read only. The ires composite is rendered by our own raster in
+  // 1555, so a scaled present is never 24bpp regardless of what the display register says.
+  pc.fmt[0] = (pscale > 1) ? 0 : s_disp_rgb24; pc.fmt[1] = pc.fmt[2] = pc.fmt[3] = 0;
   SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
 
   SDL_GPUViewport vp = letterbox(disp_w, 240, (int)sw, (int)sh);
@@ -1070,9 +1073,23 @@ static void dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int 
   const uint16_t* vram = readback_vram(g);
   unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
   if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return; }
+  // 24bpp packs RGB888 across 1.5 VRAM halfwords per pixel, so column x of the display sits at BYTE
+  // offset sx*2 + x*3 in the row — not at halfword sx+x. Decoding it as 1555 is what scrambled the
+  // colours and showed two thirds of the width.
+  const int rgb24 = g.s_disp_rgb24;
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
-    uint16_t p = vram[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
-    int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, b = ((p >> 10) & 31) << 3;
+    int r, g_, b;
+    if (rgb24) {
+      const uint8_t* row = (const uint8_t*)&vram[((sy + y) % VRAM_H) * VRAM_W];
+      int bx = sx * 2 + x * 3;                       // VRAM rows are VRAM_W halfwords = VRAM_W*2 bytes
+      r  = row[ bx      % (VRAM_W * 2)];
+      g_ = row[(bx + 1) % (VRAM_W * 2)];
+      b  = row[(bx + 2) % (VRAM_W * 2)];
+    } else {
+      uint16_t p = vram[((sy + y) % VRAM_H) * VRAM_W + ((sx + x) & 1023)];
+      r = (p & 31) << 3; g_ = ((p >> 5) & 31) << 3; b = ((p >> 10) & 31) << 3;
+    }
+    int g = g_;
     if (fade_mode == 1)      { r += fade_r; g += fade_g; b += fade_b; if (r>255)r=255; if (g>255)g=255; if (b>255)b=255; }
     else if (fade_mode == 2) { r -= fade_r; g -= fade_g; b -= fade_b; if (r<0)r=0; if (g<0)g=0; if (b<0)b=0; }
     unsigned char* c = &rgb[((size_t)y * w + x) * 3];
@@ -1089,6 +1106,13 @@ void GpuVkState::shot(const char* path) {
   cfg_logi("gpu_shot", "wrote %s (%dx%d @ %d,%d)", path, s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuVkState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
+// GP1(0x08) bit 4 changed. The decode lives in gpu_native; the two things that DECODE the display region
+// live here, so the bit has to cross over. Silently ignoring it is what made a 24bpp still render with
+// every colour scrambled and only two thirds of the width shown.
+void gpu_vk_set_display_depth(Core* core, int rgb24) {
+  if (!core || !core->game) return;
+  core->game->gpu_vk.s_disp_rgb24 = rgb24 ? 1 : 0;
+}
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) return;
   FadeState f = fade_state_of(core);
