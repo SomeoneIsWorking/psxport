@@ -344,6 +344,39 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       case 0x2B:                                                       // memset(dst, c, n)
         for (uint32_t i = 0; i < a2; i++) c->mem_w8(a0 + i, (uint8_t)a1);
         c->r[V0] = a0; return true;
+      // The STRING leaves, added for the same reason and next to their memory siblings. An absent
+      // one is worse than a missing feature: dispatchBios returns false, the miss path logs UNIMPL
+      // and returns WITHOUT WRITING $v0, so the guest reads whatever the previous BIOS call left
+      // there. A comparison that never returns 0 is then a lookup that can never match.
+      //
+      // Spider-Man shows exactly that. Its font registry (FUN_8001AF74) linear-searches a name table
+      // with A(17h) strcmp and, on the no-match fall-through, stores index == count — one PAST the
+      // last entry. With strcmp inert the match was impossible, the index climbed to 8, and the text
+      // metrics routine then read 0x80097BBC + 8*0x28 + 0x14 = 0x80097D10, which is off the end of
+      // the font table and inside an unrelated u16 constant table. It dereferenced the constant
+      // 0x1C001D00 as a pointer. A(19h) strcpy being inert compounded it: the names were never
+      // copied in, so entry 0's name field is all-zero .bss and there was nothing to match anyway.
+      // Measured per boot before the fix: A(1Bh) x355, A(17h) x105, A(19h) x8.
+      //
+      // Conventions are the BIOS's: the compare family returns the signed difference of UNSIGNED
+      // chars, the copy family returns dst, strlen returns the length. Every byte goes through
+      // mem_r8/mem_w8 like the memory group above, so guest memory mapping is honoured.
+      case 0x17: {                                                     // strcmp(s1, s2)
+        uint32_t i = 0; uint8_t x, y;
+        do { x = c->mem_r8(a0 + i); y = c->mem_r8(a1 + i); i++; } while (x && x == y);
+        c->r[V0] = (uint32_t)(int32_t)((int)x - (int)y); return true; }
+      case 0x18: {                                                     // strncmp(s1, s2, n)
+        uint32_t i = 0; int d = 0;
+        for (; i < a2; i++) { uint8_t x = c->mem_r8(a0 + i), y = c->mem_r8(a1 + i);
+                              d = (int)x - (int)y; if (d || !x) break; }
+        c->r[V0] = (uint32_t)(int32_t)d; return true; }
+      case 0x19: {                                                     // strcpy(dst, src)
+        uint32_t i = 0; uint8_t ch;
+        do { ch = c->mem_r8(a1 + i); c->mem_w8(a0 + i, ch); i++; } while (ch);
+        c->r[V0] = a0; return true; }
+      case 0x1B: {                                                     // strlen(s)
+        uint32_t n = 0; while (c->mem_r8(a0 + n)) n++;
+        c->r[V0] = n; return true; }
       case 0x2C:                                                       // memmove(dst, src, n) —
         if (a0 > a1)                                                   // overlap-correct, unlike 2Ah
           for (uint32_t i = a2; i-- > 0;) c->mem_w8(a0 + i, c->mem_r8(a1 + i));
@@ -564,6 +597,26 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   if (tbl) {
     uint32_t fn = c->r[T1] & 0xFF;
     if (c->game->hle.dispatchBios(tbl, fn)) return;
+    // An unhandled BIOS call returns WITHOUT writing $v0, so the guest consumes a stale value as
+    // this call's result. For a libc leaf that is indistinguishable from a wrong answer and it
+    // corrupts silently — a strcmp that never returns 0 turned into an out-of-range table index and
+    // a dereferenced constant, several frames and one subsystem away from here.
+    //
+    // So the libc range fails fast rather than logging and shrugging. The cutoff is the A-table's
+    // libc block (0x13..0x2F): every function in it RETURNS A VALUE the caller uses. Calls outside
+    // it keep the old log-and-continue, because plenty of them are genuinely ignorable and several
+    // are deliberately handled as no-ops above.
+    if (tbl == 'A' && fn >= 0x13 && fn <= 0x2F) {
+      cfg_loge("hle", "\nFATAL: unimplemented BIOS A0:0x%02X (libc) — fail-fast.\n"
+                      "  This leaf RETURNS A VALUE the guest uses, and returning without writing $v0 "
+                      "hands it a stale result.\n"
+                      "  That is fabricating behaviour, not a missing feature: implement it in "
+                      "Hle::dispatchBios next to its siblings.\n"
+                      "  caller ra=0x%08X  a0=0x%08X a1=0x%08X a2=0x%08X", fn, c->r[31],
+               c->r[A0], c->r[A1], c->r[A2]);
+      fflush(stderr);
+      abort();
+    }
     cfg_logi("hle", "UNIMPL %c0:0x%02X", tbl, fn);
     return;
   }

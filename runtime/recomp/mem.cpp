@@ -163,7 +163,13 @@ static void warn_unmapped_ram(Core* gc, uint32_t a, uint32_t bytes, const char* 
   // anyway. Printing it here means the next occurrence is diagnosable from one run instead of needing
   // a bespoke probe.
   if (gc) {
-    cfg_loge("mem", "  guest: pc=0x%08X ra=0x%08X sp=0x%08X gp=0x%08X fp=0x%08X",
+    // `pc` is NOT the faulting instruction and must not be labelled as if it were. Core::pc is
+    // written only by the wrapper prologue emit.py emits at each function ENTRY, and never restored
+    // on return — so it names the last recompiled function that was entered, which can be a callee
+    // that has already returned. It named FUN_800197A4 for a fault whose real site was inside
+    // FUN_800195FC, and an investigation took that at face value. Label it for what it is.
+    cfg_loge("mem", "  guest: last-fn-entered=0x%08X (NOT the faulting pc — see comment) "
+                    "ra=0x%08X sp=0x%08X gp=0x%08X fp=0x%08X",
              gc->pc, gc->r[31], gc->r[29], gc->r[28], gc->r[30]);
     cfg_loge("mem", "  args : a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X  v0=0x%08X v1=0x%08X",
              gc->r[4], gc->r[5], gc->r[6], gc->r[7], gc->r[2], gc->r[3]);
