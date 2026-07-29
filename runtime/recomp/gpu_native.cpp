@@ -1627,6 +1627,21 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
     static int warned = 0;
     if (!warned++) cfg_logw("gpu", "WARN: OT walk hit %d-node cap (madr=0x%08X) — malformed/cyclic ordering table", guard, 0x80000000u | s_ot_madr);
   }
+  // FLUSH. The walk above ENUMERATES the guest's prims and QUEUES them; something must then drain the
+  // queue, or it accumulates across frames until RenderQueue's fail-fast fires ("render queue full
+  // (65536 items) — refusing to drop prims"). A guest-driven DrawOTag is a complete draw-list
+  // submission, so its end is exactly the right boundary.
+  //
+  // This was missing for the GUEST-DRIVEN path only. rq_flush lived solely in Engine::drawOTag, which
+  // native_step_frame calls (native_boot.cpp) — so a port whose frame loop owns rendering drained the
+  // queue every frame, while a port still running the game's OWN main() on the substrate (Phase 0,
+  // where DrawOTag reaches the GPU through DMA2 rather than through the hook) never did. The same
+  // omission is already described in native_boot.cpp's drawOTag comment as a past bug that rendered
+  // the whole front-end black; this is that bug's other half, on the path that has no native hook.
+  //
+  // A walk over an EMPTY ordering table (the link-only chain ClearOTagR produces) queues nothing, and
+  // flush -> emitQueue already returns immediately on an empty queue, so no guard is needed here.
+  core->game->rq.flush(core);
 }
 // DMA channel 2 block mode: `count` words from `madr` (to/from GP0). to_gpu=1 -> GP0 writes.
 void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) {
