@@ -734,6 +734,21 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
         if x in ins:
             all_targets |= {t for t in tgts if t in ins}
     labels = {t for t in all_targets if t in standalone}
+    # BACK-EDGE targets: a branch/jump whose target is at or below its own address closes a LOOP.
+    #
+    # These are where the deferred-work gate has to be re-tested. The gate is otherwise only at
+    # function ENTRY, which is a fine boundary for a function that calls something — but a guest loop
+    # that calls NOTHING never reaches another entry, so the host can never take a turn while it
+    # spins. That is not hypothetical: Spider-Man's boot has two such loops, `while (counter < target)`
+    # in its field-wait primitive and `do {} while (flag)` in its own main(), and each one wedged the
+    # port until it was owned natively one at a time. Gating back-edges fixes the whole class instead.
+    #
+    # Only back-edges, not every label: a forward branch cannot spin, so gating it would cost the hot
+    # path with no benefit. A self-loop (target == own address) counts, hence <=.
+    backedges = {i.target for x, i in ins.items()
+                 if i.kind in (D.BRANCH, D.JUMP) and i.target is not None
+                 and i.target in ins and i.target <= x}
+    backedges &= labels
     # MEASUREMENT ONLY (PSXPORT_LABEL_ALL=1): label every standalone instruction, so any address inside
     # a recompiled function could be resumed at. This is the cost half of docs/issues/0021's option 1 —
     # it does NOT wire up mid-function ENTRY (that needs a dispatch switch at the top of each function),
@@ -759,6 +774,11 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
             i = ins[a]
             if a in labels:
                 out.append(f"L_{a:08X}:;")
+                # Loop back-edge: give the host a turn. One predictable load-and-test per iteration,
+                # and only on loops — see the `backedges` note above for why function entry alone is
+                # not enough.
+                if a in backedges:
+                    out.append("  if (c->pending_work) rec_irq_poll(c);")
             if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
                 slot = ins.get(a + 4)
                 ds_c = emit_simple(slot) if (slot and slot.kind not in
