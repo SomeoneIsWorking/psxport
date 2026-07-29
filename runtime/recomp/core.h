@@ -240,9 +240,11 @@ void     gte_op(Core* c, uint32_t insn);
 // view-space Z against the written address, which is what gives the renderer native per-vertex depth.
 // The recompiler routes only those registers here; see gte_beetle.cpp for why the pairing is exact.
 void     gte_store_xy(Core* c, uint32_t addr, int rt);
-// Native depth, mfc2 form: the store already happened; record the vertex's view-space Z (from Z_FIFO
-// register `zreg`) against the address that was written. See emit.py vertex_pz_stores for the pairing.
-void     gte_record_pz(Core* c, uint32_t addr, int zreg);
+// Native depth, mfc2 form. gte_hold_pz snapshots the vertex's view-space Z at the `mfc2` (the last
+// moment it is still that vertex's — submit loops are software pipelined); gte_record_pz consumes it
+// when the GPR is stored into the packet, keyed by the address written. See emit.py vertex_pz_stores.
+void     gte_hold_pz(Core* c, int gpr, int zreg);
+void     gte_record_pz(Core* c, uint32_t addr, int gpr);
 
 // R3000 integer division semantics (no traps; defined /0 + overflow results).
 void cpu_div (Core* c, uint32_t n, uint32_t d);

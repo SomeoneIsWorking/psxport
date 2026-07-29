@@ -457,9 +457,29 @@ void gte_store_xy(Core* c, uint32_t addr, int rt) {
 // is reading the same vertex's depth, not a later one.
 //
 // Same unsigned read as gte_store_xy: SZ is a 16-bit unsigned FIFO value.
-void gte_record_pz(Core* c, uint32_t addr, int zreg) {
+// HELD DEPTHS, one slot per GPR. gte_hold_pz snapshots the Z that belongs to the vertex just read out
+// of the GTE; gte_record_pz consumes it when that GPR is stored into the packet.
+//
+// WHY HOLD AT ALL, instead of reading Z at the store: PSX submit loops are SOFTWARE PIPELINED. They
+// read vertex N's screen XY, issue the transform for vertex N+1, then store N — so at the store the Z
+// FIFO already holds N+1's depth. Reading it there attaches the NEXT vertex's distance to this one,
+// which is a wrong depth rather than a missing one. The mfc2 is the last moment the value is still
+// this vertex's. In Spyro this shape is 29 of 70 vertex sites.
+//
+// Keyed by GPR because the recompiler proved the pairing: between the hold and the consume the GPR is
+// not redefined and control does not branch, so the slot cannot be claimed by another vertex in
+// between. No staleness handling is needed — an unconsumed slot is simply overwritten by the next
+// hold on that register.
+static float s_held_pz[32];
+
+void gte_hold_pz(Core* c, int gpr, int zreg) {
+  (void)c;
+  s_held_pz[gpr & 31] = (float)(uint16_t)gte_read_data((uint32_t)zreg);
+}
+
+void gte_record_pz(Core* c, uint32_t addr, int gpr) {
   if (!attach_enabled()) return;
-  c->rsub.projprim.setPz(addr, (float)(uint16_t)gte_read_data((uint32_t)zreg));
+  c->rsub.projprim.setPz(addr, s_held_pz[gpr & 31]);
 }
 
 // Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.

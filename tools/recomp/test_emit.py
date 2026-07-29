@@ -772,8 +772,8 @@ def test_mfc2_then_sw_taps_the_depth_recorder():
     a.sw("v1", 4, "a0")              # not tapped
 
     a.mfc2("a2", 14)
-    a.rtps()                         # a COP2 op: the Z FIFO has moved on
-    a.sw("a2", 8, "a0")              # not tapped
+    a.rtps()                         # SOFTWARE PIPELINING: the next vertex's transform is issued
+    a.sw("a2", 8, "a0")              # STILL TAPPED — the Z was held at the mfc2, before the FIFO moved
 
     a.mfc2("a3", 12)
     a.bne("a0", "zero", "skip")      # basic-block boundary
@@ -786,9 +786,12 @@ def test_mfc2_then_sw_taps_the_depth_recorder():
     data, _ = a.assemble()
     c = emit_c(data)
     n = c.count("gte_record_pz(c, ")
-    assert n == 1, f"expected exactly 1 tapped vertex store, got {n}:\n{c}"
-    assert "gte_record_pz(c, (c->r[4] + (uint32_t)0), 17)" in c, \
-        f"tap must carry the store address and the PAIRED Z register (DR12 -> DR17):\n{c}"
+    assert n == 2, f"expected 2 tapped vertex stores (the simple one and the pipelined one), got {n}:\n{c}"
+    assert "gte_record_pz(c, (c->r[4] + (uint32_t)0), 2)" in c, \
+        f"tap must carry the store address and the GPR whose Z was held (v0 = r2):\n{c}"
+    # The held Z is captured AT the mfc2, which is the only moment it is still this vertex's.
+    assert c.count("gte_hold_pz(c, ") == 2, \
+        f"each tapped vertex must hold its Z at the mfc2, not read it at the store:\n{c}"
 
 
 # ----------------------------------------------------------------------------------------------------

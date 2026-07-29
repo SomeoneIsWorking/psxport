@@ -624,8 +624,11 @@ def defines_reg(i, r):
         return i.rd == r
     if k == D.COP0 and i.op == "mfc0":
         return i.rt == r
-    # Non-writers: stores, mtc2/ctc2, mult/div, nop, break/syscall.
-    if k in (D.STORE, D.GTE_STORE, D.MULDIV, D.NOP):
+    # Non-writers: stores, the COP2 ops and cop2-side moves/loads, mult/div, nop.
+    # GTE_OP and GTE_LOAD (lwc2) write the COP2 register file, never a GPR — leaving them in the
+    # "unknown, assume it writes" bucket silently killed every software-pipelined pairing, which is
+    # the majority of the real ones.
+    if k in (D.STORE, D.GTE_STORE, D.GTE_LOAD, D.GTE_OP, D.MULDIV, D.NOP):
         return False
     if k == D.GTE_MOVE:            # mtc2 / ctc2 write the COP2 side, not a GPR
         return False
@@ -648,12 +651,18 @@ def vertex_pz_stores(ins, lo, hi):
     at the first of:
 
       * a redefinition of rX          — the word finally stored is no longer that vertex,
-      * any COP2 op                   — the Z FIFO has advanced, so the depth would be another vertex's,
       * any control transfer          — the store is no longer unconditionally reached from the mfc2.
 
-    Each of those is a correctness requirement, not caution: pairing across any of them attaches a
-    wrong depth to a real vertex, which is worse than attaching none (a wrong depth draws geometry at
-    the wrong distance; a missing one falls back to draw order, which is what we have today).
+    Both are correctness requirements, not caution: pairing across either attaches a WRONG depth to a
+    real vertex, which is worse than attaching none (a wrong depth draws geometry at the wrong
+    distance; a missing one falls back to draw order, which is what we have today).
+
+    AN INTERVENING COP2 OP IS NOT A BARRIER, and treating it as one threw away most of the real sites.
+    PSX submit loops are SOFTWARE PIPELINED: they read vertex N's screen XY, issue the transform for
+    vertex N+1, and only then store N — so by the time the store runs, the Z FIFO holds N+1's depth.
+    Reading Z at the store is what would be wrong. Instead the Z is HELD at the mfc2, the one moment it
+    is still this vertex's, and consumed at the store. In Spyro this is 29 of 70 sites — the majority
+    of the ones that matter.
 
     A store sitting in a BRANCH DELAY SLOT is skipped, because the emitter embeds delay slots inside
     the control statement and there is nowhere to append the record call. Those are counted and
@@ -661,7 +670,7 @@ def vertex_pz_stores(ins, lo, hi):
     # DR12/13/14 are the XY_FIFO slots an RTPT fills; DR15 is RTPS's single-vertex slot. Z pairs:
     # 12->17, 13->18, 14->19, and 15->19 (RTPS writes the same Z slot).
     ZPAIR = {12: 17, 13: 18, 14: 19, 15: 19}
-    out, skipped_ds = {}, 0
+    holds, out, skipped_ds = {}, {}, 0
     # Delay-slot addresses: the word after any control op is emitted inside that op's statement.
     ds = {a + 4 for a in range(lo, hi, 4)
           if a in ins and ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR)}
@@ -677,18 +686,19 @@ def vertex_pz_stores(ins, lo, hi):
             j = ins.get(b)
             if j is None:
                 break
-            if j.kind in (D.BRANCH, D.JUMP, D.JUMPR) or j.kind == D.GTE_OP:
-                break                                 # block boundary / the Z FIFO moved on
+            if j.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                break                                 # block boundary: store not unconditionally reached
             if j.kind == D.STORE and j.op == "sw" and j.rt == gpr:
                 if b in ds:
                     skipped_ds += 1
                 else:
-                    out[b] = ZPAIR[i.rd]
+                    holds[a] = (gpr, ZPAIR[i.rd])     # hold the Z at the mfc2 …
+                    out[b] = gpr                      # … and consume it at the store
                 break
             if defines_reg(j, gpr):
                 break                                 # the vertex value is gone
             b += 4
-    return out, skipped_ds
+    return holds, out, skipped_ds
 
 
 def walk_standalone(ins, lo, hi):
@@ -825,7 +835,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     jt = find_jump_tables(exe, ins, lo, hi)
     ra_tails = ra_tail_returns(ins, lo, hi)
     # Native depth, mfc2 form: which `sw` stores a projected vertex, and which Z reg pairs with it.
-    pz_stores, pz_skipped_ds = vertex_pz_stores(ins, lo, hi)
+    pz_holds, pz_stores, pz_skipped_ds = vertex_pz_stores(ins, lo, hi)
     global g_pz_tapped, g_pz_skipped
     g_pz_tapped += len(pz_stores); g_pz_skipped += pz_skipped_ds
     dup_ins, dup_blocks = collect_tail_dups(exe, lo, hi, funcset, ins, jt)
@@ -922,6 +932,9 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 # NATIVE DEPTH (mfc2 form): this `sw` wrote a projected vertex's screen XY. Record its
                 # view-space Z against the address just written, which is the key gp0_exec looks up.
                 # Emitted AFTER the store so the memory write is unchanged and the tap is purely additive.
+                if a in pz_holds:
+                    g, z = pz_holds[a]
+                    out.append(f"  gte_hold_pz(c, {g}, {z});")
                 if a in pz_stores:
                     out.append(f"  gte_record_pz(c, {addr_expr(i)}, {pz_stores[a]});")
                 a += 4
