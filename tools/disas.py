@@ -36,6 +36,55 @@ SPECIAL= {0x00:"sll",0x02:"srl",0x03:"sra",0x04:"sllv",0x06:"srlv",0x07:"srav",0
           0x23:"subu",0x24:"and",0x25:"or",0x26:"xor",0x27:"nor",0x2a:"slt",0x2b:"sltu"}
 REGIMM = {0x00:"bltz",0x01:"bgez",0x10:"bltzal",0x11:"bgezal"}
 
+# ---- COP2 / GTE ---------------------------------------------------------------------------------
+# The GTE is where a PS1 game's geometry actually happens, so printing these as an opaque
+# "cop2/GTE 0x0c30000" leaves exactly the code you most need to read unreadable. Transcribing a
+# hand-written assembly renderer then means hand-decoding every one of these words, which is slow and
+# a good way to put a silent error into a body that is supposed to be byte-exact.
+#
+# Two forms share opcode 0x12, separated by bit 25:
+#   bit25 = 0 : a register MOVE selected by rs — mfc2/cfc2/mtc2/ctc2 (rt = GPR, rd = COP2 reg)
+#   bit25 = 1 : a GTE COMMAND selected by the low 6 bits, with sf/lm (and MVMVA's mx/v/cv) between
+#
+# Register names follow the standard Sony/nocash naming, which is what every reference and every
+# existing comment in this project already uses.
+GTE_DR = ["VXY0","VZ0","VXY1","VZ1","VXY2","VZ2","RGBC","OTZ",
+          "IR0","IR1","IR2","IR3","SXY0","SXY1","SXY2","SXYP",
+          "SZ0","SZ1","SZ2","SZ3","RGB0","RGB1","RGB2","RES1",
+          "MAC0","MAC1","MAC2","MAC3","IRGB","ORGB","LZCS","LZCR"]
+GTE_CR = ["R11R12","R13R21","R22R23","R31R32","R33","TRX","TRY","TRZ",
+          "L11L12","L13L21","L22L23","L31L32","L33","RBK","GBK","BBK",
+          "LR1LR2","LR3LG1","LG2LG3","LB1LB2","LB3","RFC","GFC","BFC",
+          "OFX","OFY","H","DQA","DQB","ZSF3","ZSF4","FLAG"]
+GTE_OPS = {0x01:"RTPS", 0x06:"NCLIP", 0x0C:"OP", 0x10:"DPCS", 0x11:"INTPL", 0x12:"MVMVA",
+           0x13:"NCDS", 0x14:"CDP", 0x16:"NCDT", 0x1B:"NCCS", 0x1C:"CC", 0x1E:"NCS",
+           0x20:"NCT", 0x28:"SQR", 0x29:"DCPL", 0x2A:"DPCT", 0x2D:"AVSZ3", 0x2E:"AVSZ4",
+           0x30:"RTPT", 0x3D:"GPF", 0x3E:"GPL", 0x3F:"NCCT"}
+COP2_MOVE = {0x00:"mfc2", 0x02:"cfc2", 0x04:"mtc2", 0x06:"ctc2"}
+
+
+def cop2_text(w):
+    rs, rt, rd = (w >> 21) & 31, (w >> 16) & 31, (w >> 11) & 31
+    if not (w >> 25) & 1:
+        nm = COP2_MOVE.get(rs)
+        if nm is None:
+            return f"cop2 ?move rs={rs} 0x{w & 0x1ffffff:07x}"
+        creg = (GTE_CR if nm in ("cfc2", "ctc2") else GTE_DR)[rd]
+        return f"{nm} {REG[rt]}, {creg}"
+    fn = w & 0x3F
+    nm = GTE_OPS.get(fn, f"GTE?0x{fn:02x}")
+    # sf (bit 19) is the 12-bit fractional shift; lm (bit 10) saturates IR to [0,0x7FFF] rather than
+    # [-0x8000,0x7FFF]. Both change the RESULT, so a transcription that drops them is wrong.
+    bits = []
+    if (w >> 19) & 1: bits.append("sf")
+    if (w >> 10) & 1: bits.append("lm")
+    if nm == "MVMVA":
+        bits[:0] = [f"mx={['R','L','C','?'][(w>>17)&3]}",
+                    f"v={['V0','V1','V2','IR'][(w>>15)&3]}",
+                    f"cv={['TR','BK','FC','0'][(w>>13)&3]}"]
+    return nm + (" [" + ",".join(bits) + "]" if bits else "")
+
+
 def s16(x): return x - 0x10000 if x & 0x8000 else x
 
 def fmt(w, a, regval):
@@ -71,7 +120,7 @@ def fmt(w, a, regval):
         width = {0x20:1,0x24:1,0x28:1, 0x21:2,0x25:2,0x29:2, 0x23:4,0x2b:4,0x32:4,0x3a:4}.get(op)
         return (f"{nm} {R(rt)}, {s16(imm)}({R(rs)})", tgt, width)
     if op == 0x10: return (f"cop0 0x{w&0x1ffffff:07x}", None, None)
-    if op == 0x12: return (f"cop2/GTE 0x{w&0x1ffffff:07x}", None, None)
+    if op == 0x12: return (cop2_text(w), None, None)
     return (f".word 0x{w:08x}", None, None)
 
 def track(w, regval):
