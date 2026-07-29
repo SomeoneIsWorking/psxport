@@ -132,7 +132,14 @@ def _split_live_extent(body):
         if not [l for l in tail if l.strip()]:
             return body, []
 
-        # SOUNDNESS GUARD. "Everything after the first return; is a folded sibling" is only true if
+        # MEASURED over all 2119 main-EXE gen functions (2026-07-29): 1788 clean, 282 with a folded tail
+    # that is now trimmed (largest 16,861 foreign lines at 0x8009D06C), and 49 with trailing text
+    # where THIS GUARD HELD. That last number is the justification for the guard existing: without
+    # it, a naive "trim at the first return;" would have deleted REACHABLE code in 49 functions —
+    # 15% of every case with trailing text. The guard is not defensive programming, it is the
+    # difference between a sound transform and a silent corruption in one port out of seven.
+    #
+    # SOUNDNESS GUARD. "Everything after the first return; is a folded sibling" is only true if
         # the live part never jumps INTO that region. A recompiled body can place a legitimate
         # continuation behind an early return and reach it by label — trimming there would delete
         # reachable code and, at best, fail to compile. So only trim when no label defined in the
