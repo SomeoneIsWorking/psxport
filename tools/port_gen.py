@@ -74,9 +74,22 @@ def emit_cpp(fn: abi.FoundFunction, class_name: str, method: str, core_member: s
     out.append("void rec_dispatch(Core*, uint32_t);  // overlay_router.cpp — shared dispatch choke point")
     # Forward-declare every direct func_XXXXXXXX/ov_<area>_func_XXXXXXXX callee the body invokes —
     # same pattern as game/render/perobj_dispatch.cpp's explicit `void func_800803DC(Core*);` line.
+    # LIVE EXTENT. The recompiler FOLDS contiguous guest functions into one gen_func_ body: the real
+    # function ends at a bare `return;` and the NEXT function's code follows as unreachable trailing
+    # text before the closing brace (abi_extract.py:869-885 documents the artifact and excludes it,
+    # which is why it reports a large unreachable_block_count on these).
+    #
+    # Emitting that tail is not harmless-but-untidy. It puts a DIFFERENT FUNCTION'S BODY inside this
+    # method, and it defeats the checks: port_check compares static store sequences and FAILS, while a
+    # whole-body diff against the gen text still says "identical" — because a diff against the wrong
+    # extent cannot detect a wrong extent. That combination shipped a 74-line foreign tail into
+    # Input::setVoiceVolume on 2026-07-29 and then produced a confident, wrong accusation that
+    # abi_extract was broken. Cut it here, at the source, so no consumer has to notice.
+    live_body, foreign = _split_live_extent(fn.body)
+
     callees = []
     seen = set()
-    for raw in fn.body:
+    for raw in live_body:
         for m in abi.CALL_RE.finditer(raw):
             name = m.group(1)
             if name not in seen:
@@ -87,11 +100,50 @@ def emit_cpp(fn: abi.FoundFunction, class_name: str, method: str, core_member: s
     out.append("")
     out.append(f"void {class_name}::{method}() {{")
     out.append(f"  Core* c = {core_member};")
-    for line in fn.body:
+    for line in live_body:
         out.append("  " + line if line.strip() else "")
     out.append("}")
+    if foreign:
+        out.append("")
+        out.append(f"// port_gen TRIMMED {len(foreign)} line(s) of FOLDED-SIBLING tail after this")
+        out.append(f"// function's real `return;` — they belong to the next guest function, not to")
+        out.append(f"// 0x{fn.addr}. abi_extract counts them in unreachable_block_count. Nothing is lost:")
+        out.append(f"// the next function has its own address and can be ported on its own.")
     out.append("")
     return "\n".join(out) + "\n"
+
+
+def _split_live_extent(body):
+    """Split a gen body into (live, foreign) at the first bare `return;`.
+
+    Every `return;` a recompiled body emits is unconditional (it is a `jr ra`; conditional flow is
+    always a branch/goto), so statements after the first one are reachable only via a label — i.e.
+    they belong to a folded sibling function, not to this one. Returns (body, []) when there is no
+    trailing text, which is the common case.
+    """
+    import re as _re
+    label_def = _re.compile(r'^([A-Za-z_]\w*):\s*;?\s*$')
+    goto_ref = _re.compile(r'goto\s+([A-Za-z_]\w*)\s*;')
+
+    for i, line in enumerate(body):
+        if line.strip() != 'return;':
+            continue
+        head, tail = body[:i + 1], body[i + 1:]
+        if not [l for l in tail if l.strip()]:
+            return body, []
+
+        # SOUNDNESS GUARD. "Everything after the first return; is a folded sibling" is only true if
+        # the live part never jumps INTO that region. A recompiled body can place a legitimate
+        # continuation behind an early return and reach it by label — trimming there would delete
+        # reachable code and, at best, fail to compile. So only trim when no label defined in the
+        # tail is targeted from the head. If one is, this is not a sibling boundary: leave the body
+        # whole and let port_check speak.
+        tail_labels = {m.group(1) for l in tail for m in [label_def.match(l.strip())] if m}
+        head_targets = {m.group(1) for l in head for m in goto_ref.finditer(l)}
+        if tail_labels & head_targets:
+            return body, []
+        return head, tail
+    return body, []
 
 
 def main(argv=None):
@@ -134,7 +186,11 @@ def main(argv=None):
     os.makedirs(os.path.dirname(cpp_abs), exist_ok=True)
     with open(cpp_abs, 'w') as f:
         f.write(emit_cpp(fn, args.class_name, args.method, args.core_member, header_include))
-    print(f"port_gen: wrote {cpp_path}  ({fn.name}, {len(fn.body)} body lines, "
+    _live, _foreign = _split_live_extent(fn.body)
+    if _foreign:
+        print(f"port_gen: TRIMMED {len(_foreign)} folded-sibling line(s) after the real `return;` "
+              f"— they belong to the NEXT guest function, not 0x{fn.addr}")
+    print(f"port_gen: wrote {cpp_path}  ({fn.name}, {len(_live)} live body lines, "
           f"frame_size={contract.frame_size}, {len(contract.call_sites)} call site(s))")
     print(f"port_gen: NEXT — add {cpp_path} to cmake/tomba2_port.cmake, build, then run "
           f"tools/port_check.py {cpp_path}")
