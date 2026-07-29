@@ -1109,6 +1109,13 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
     s_pl_g = (op & 0x10) ? 1 : 0;
     s_fneed = gp0_len(w);
   }
+  // NATIVE-DEPTH COVERAGE COUNTER. A GP0 word only CAN carry depth if we know which guest word it
+  // came from (s_gp0_src), because that address is the key projprim stores view-Z against. Words fed
+  // through a path that does not stamp an address — a direct GP0 register write, an FMV/block upload —
+  // are permanently depth-less, and there is no way to tell that apart at the ndepth counter: it shows
+  // "lookups hit=0 miss=0", which reads as "the depth side is broken" when the ADDRESS side is what is
+  // missing. Counting both here makes the distinction visible on the ordinary per-frame gpu line.
+  if (s_gp0_src) s_gp0_addressed++; else s_gp0_anon++;
   s_fifo_addr[s_fcount] = s_gp0_src;
   s_fifo[s_fcount++] = w;
   if (s_pl) {
@@ -1371,7 +1378,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   if (cfg_dbg("stage") && (s_frame % 200) == 0)
     cfg_logf("stage", "[stagetl] gpu f%d task0entry=%08X", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
-  if (s_log) cfg_logi("gpu", "frame %d: %ld prims, %ld gp0words, %ld dma2, disp %dx%d @ (%d,%d)", s_frame, s_prims, s_gp0_words, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+  if (s_log) cfg_logi("gpu", "frame %d: %ld prims, %ld gp0words (%ld addressed, %ld anon), %ld dma2, disp %dx%d @ (%d,%d)", s_frame, s_prims, s_gp0_words, s_gp0_addressed, s_gp0_anon, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
   // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
   // engines at a scene-aligned frame (the atlas is uploaded once at scene load = static per scene).
@@ -1448,7 +1455,7 @@ void GpuState::frame_finalize(Core* core) {
     if (attach_enabled()) core->rsub.projprim.reset(); }
   s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
   gpu_vk_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
-  s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0;
+  s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0; s_gp0_addressed = 0; s_gp0_anon = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
@@ -1648,7 +1655,18 @@ void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) 
   s_dma2++;
   uint32_t addr = madr & 0x1FFFFC;
   s_dma_src = addr;
-  for (int i = 0; i < count; i++) { if (to_gpu) gpu_gp0(core, core->mem_r32(addr)); addr += 4; }
+  // STAMP THE PER-WORD GUEST ADDRESS, exactly as the linked-list walk does. gp0_exec reads
+  // s_fifo_addr[] to recover which guest word each vertex came from, and that address is the ONLY key
+  // native depth has: projprim stores view-Z against the address the guest wrote the projected XY to,
+  // and the renderer looks it up here. Block mode used to leave s_gp0_src at whatever the last caller
+  // set (0 for non-OT callers), so EVERY vertex of a game that submits this way resolved to vaddr=0,
+  // is3d fell to 0 for the whole scene, and no amount of correct depth RECORDING could have helped —
+  // the lookup was never even attempted. The tell is `projprim(vtx) records=N lookups hit=0 miss=0`
+  // under PSXPORT_DEBUG=ndepth: zero LOOKUPS (not misses) means the address side is missing, not the
+  // depth side. Same contiguous-packet rule as the linked-list path: word i lives at madr + 4*i.
+  for (int i = 0; i < count; i++) { if (to_gpu) { s_gp0_src = addr; gpu_gp0(core, core->mem_r32(addr)); }
+                                    addr += 4; }
+  s_gp0_src = 0;   // leave no stale address for a later non-packet GP0 caller to inherit
 }
 
 // ---- Public GPU API: thin free-function wrappers over the per-instance GpuState methods. Keep the

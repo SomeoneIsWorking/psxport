@@ -123,6 +123,11 @@ class Asm:
             return I(op, rs, rt, imm)
         if mn == "lui":
             return I(0xF, 0, args[0], args[1])
+        if mn == "mfc2":                    # cop2 move-from: op 0x12, fmt 0, rt = GPR, rd = cop2 data reg
+            rt, rd = args
+            return (0x12 << 26) | (0 << 21) | (_r(rt) << 16) | (rd << 11)
+        if mn == "rtps":                    # a COP2 op (bit25 set) — moves the GTE FIFOs
+            return (0x12 << 26) | (1 << 25) | 0x01
         if mn in ("swc2", "lwc2"):          # COP2 store/load: op 0x3A/0x32, rt = cop2 data reg
             op = 0x3A if mn == "swc2" else 0x32
             rt, off, rs = args
@@ -744,6 +749,46 @@ def test_swc2_of_a_screen_xy_reg_taps_the_depth_recorder():
     assert c.count("gte_store_xy(c, ") == 2, \
         f"expected exactly 2 tapped stores (DR12, DR15), got {c.count('gte_store_xy(c, ')}:\n{c}"
     assert "gte_read_data(0)" in c, f"swc2 of a non-vertex reg must stay the plain store:\n{c}"
+
+
+
+def test_mfc2_then_sw_taps_the_depth_recorder():
+    """The OTHER vertex-submit idiom: `mfc2 rX, DR12..15` then `sw rX, off(base)`.
+
+    A swc2-only depth tap records NOTHING for a game that submits this way, and records nothing
+    SILENTLY — which is indistinguishable from a game with no 3D. Spyro is exactly that game: its main
+    executable has zero `swc2` of the screen-XY registers and 70 `mfc2` of them (issue 0036).
+
+    The pairing must be REFUSED in three cases, and each is a real correctness requirement rather than
+    caution: the GPR being redefined before the store means the stored word is no longer that vertex; an
+    intervening COP2 op has moved the Z FIFO on, so the depth would belong to a different vertex; and a
+    basic-block boundary means the store is not reached unconditionally from the mfc2."""
+    a = Asm(0x80010000)
+    a.mfc2("v0", 12)                 # vertex 0's screen XY -> v0
+    a.sw("v0", 0, "a0")              # TAPPED — pairs with Z DR17
+
+    a.mfc2("v1", 13)
+    a.addiu("v1", "zero", 5)         # v1 redefined: the stored word is not the vertex any more
+    a.sw("v1", 4, "a0")              # not tapped
+
+    a.mfc2("a2", 14)
+    a.rtps()                         # a COP2 op: the Z FIFO has moved on
+    a.sw("a2", 8, "a0")              # not tapped
+
+    a.mfc2("a3", 12)
+    a.bne("a0", "zero", "skip")      # basic-block boundary
+    a.nop()
+    a.label("skip")
+    a.sw("a3", 12, "a0")             # not tapped
+
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    c = emit_c(data)
+    n = c.count("gte_record_pz(c, ")
+    assert n == 1, f"expected exactly 1 tapped vertex store, got {n}:\n{c}"
+    assert "gte_record_pz(c, (c->r[4] + (uint32_t)0), 17)" in c, \
+        f"tap must carry the store address and the PAIRED Z register (DR12 -> DR17):\n{c}"
 
 
 # ----------------------------------------------------------------------------------------------------

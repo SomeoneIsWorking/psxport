@@ -101,6 +101,11 @@ struct GpuState {
   uint32_t s_fifo[256] = {};                                  // big enough for variable-length poly-lines
   uint32_t s_fifo_addr[256] = {};                             // guest source addr of each FIFO word
   uint32_t s_gp0_src = 0;                                     // OT walk sets this per word (Phase-1 attach)
+  // How many GP0 words this frame arrived WITH a guest source address vs without. Only addressed
+  // words can ever get native depth (see the counter's banner in gpu_native.cpp). Reset per frame
+  // alongside s_gp0_words.
+  long s_gp0_addressed = 0;
+  long s_gp0_anon = 0;
   int s_fcount = 0, s_fneed = 0;
   int s_pl = 0, s_pl_g = 0;                                   // poly-line in progress / gouraud
   int s_xfer = 0, s_xfer_x = 0, s_xfer_y = 0, s_xfer_w = 0, s_xfer_h = 0, s_xfer_px = 0;

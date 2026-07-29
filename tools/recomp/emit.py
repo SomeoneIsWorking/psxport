@@ -600,6 +600,97 @@ def collect_jt_targets(exe, funcs, text_end):
     return out
 
 
+# Native-depth tap counters, summed across every function emitted in a module and reported once by
+# emit_module. A silent tap is the failure mode this whole feature has to avoid — "0 recorded" and "no
+# 3D content" look identical at runtime — so the BUILD says how many stores it found.
+g_pz_tapped = 0
+g_pz_skipped = 0
+
+
+def defines_reg(i, r):
+    """Does instruction `i` write GPR `r`? Used by vertex_pz_stores to know when a projected vertex
+    value has been overwritten. Deliberately OVER-approximates: anything not clearly a non-writer is
+    treated as a write, so an unrecognised instruction breaks the pairing rather than silently
+    carrying a stale association past it. A missed vertex costs depth on one primitive; a wrongly
+    paired one draws real geometry at the wrong distance."""
+    k = i.kind
+    if k in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V):
+        return i.rd == r
+    if k in (D.ALU_RRI, D.LUI, D.LOAD, D.GTE_MOVE) and i.op in (
+            "addi", "addiu", "andi", "ori", "xori", "slti", "sltiu", "lui",
+            "lw", "lh", "lhu", "lb", "lbu", "lwl", "lwr", "mfc2", "cfc2"):
+        return i.rt == r
+    if k == D.HILO and i.op in ("mfhi", "mflo"):
+        return i.rd == r
+    if k == D.COP0 and i.op == "mfc0":
+        return i.rt == r
+    # Non-writers: stores, mtc2/ctc2, mult/div, nop, break/syscall.
+    if k in (D.STORE, D.GTE_STORE, D.MULDIV, D.NOP):
+        return False
+    if k == D.GTE_MOVE:            # mtc2 / ctc2 write the COP2 side, not a GPR
+        return False
+    if k == D.HILO:                # mthi / mtlo
+        return False
+    return True                    # unknown: assume it writes, and stop the pairing
+
+
+def vertex_pz_stores(ins, lo, hi):
+    """{sw_addr: paired_Z_register} for the `mfc2 rX, DR12..15` -> `sw rX, off(base)` vertex idiom.
+
+    THE SECOND HALF OF THE NATIVE-DEPTH TAP. `swc2` of a screen-XY register is one way a game writes a
+    projected vertex into its primitive packet (see GTE_SCREEN_XY_REGS in emit_simple); the other, just
+    as common, is to move the value into a GPR with `mfc2` and store it with a plain `sw`. A tap that
+    only understands `swc2` records nothing at all for such a game, and records it SILENTLY — "no
+    depth" and "no 3D content" look identical. Spyro's main executable is exactly this shape: zero
+    `swc2` of DR12-15, and 70 `mfc2` of them (issue 0036).
+
+    The scan is deliberately LOCAL and conservative. Walking forward from each `mfc2 rX, DRk` it stops
+    at the first of:
+
+      * a redefinition of rX          — the word finally stored is no longer that vertex,
+      * any COP2 op                   — the Z FIFO has advanced, so the depth would be another vertex's,
+      * any control transfer          — the store is no longer unconditionally reached from the mfc2.
+
+    Each of those is a correctness requirement, not caution: pairing across any of them attaches a
+    wrong depth to a real vertex, which is worse than attaching none (a wrong depth draws geometry at
+    the wrong distance; a missing one falls back to draw order, which is what we have today).
+
+    A store sitting in a BRANCH DELAY SLOT is skipped, because the emitter embeds delay slots inside
+    the control statement and there is nowhere to append the record call. Those are counted and
+    reported by the caller rather than dropped quietly."""
+    # DR12/13/14 are the XY_FIFO slots an RTPT fills; DR15 is RTPS's single-vertex slot. Z pairs:
+    # 12->17, 13->18, 14->19, and 15->19 (RTPS writes the same Z slot).
+    ZPAIR = {12: 17, 13: 18, 14: 19, 15: 19}
+    out, skipped_ds = {}, 0
+    # Delay-slot addresses: the word after any control op is emitted inside that op's statement.
+    ds = {a + 4 for a in range(lo, hi, 4)
+          if a in ins and ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR)}
+    for a in range(lo, hi, 4):
+        i = ins.get(a)
+        if i is None or i.kind != D.GTE_MOVE or i.op != "mfc2" or i.rd not in ZPAIR:
+            continue
+        gpr = i.rt
+        if gpr == 0:
+            continue                                  # mfc2 into $zero: discarded, not a vertex
+        b = a + 4
+        while b < hi:
+            j = ins.get(b)
+            if j is None:
+                break
+            if j.kind in (D.BRANCH, D.JUMP, D.JUMPR) or j.kind == D.GTE_OP:
+                break                                 # block boundary / the Z FIFO moved on
+            if j.kind == D.STORE and j.op == "sw" and j.rt == gpr:
+                if b in ds:
+                    skipped_ds += 1
+                else:
+                    out[b] = ZPAIR[i.rd]
+                break
+            if defines_reg(j, gpr):
+                break                                 # the vertex value is gone
+            b += 4
+    return out, skipped_ds
+
+
 def walk_standalone(ins, lo, hi):
     """The 'standalone' addresses in a CONTIGUOUS run [lo,hi): each is emitted as its own statement; a
     control op consumes the next word as its delay slot, so that word is NOT standalone."""
@@ -733,6 +824,10 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     ins = {a: decode(a, exe.word(a)) for a in range(lo, hi, 4)}
     jt = find_jump_tables(exe, ins, lo, hi)
     ra_tails = ra_tail_returns(ins, lo, hi)
+    # Native depth, mfc2 form: which `sw` stores a projected vertex, and which Z reg pairs with it.
+    pz_stores, pz_skipped_ds = vertex_pz_stores(ins, lo, hi)
+    global g_pz_tapped, g_pz_skipped
+    g_pz_tapped += len(pz_stores); g_pz_skipped += pz_skipped_ds
     dup_ins, dup_blocks = collect_tail_dups(exe, lo, hi, funcset, ins, jt)
     if dup_ins:
         ins = {**ins, **dup_ins}
@@ -824,6 +919,11 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                 st = emit_simple(i)
                 if st:
                     out.append("  " + st)
+                # NATIVE DEPTH (mfc2 form): this `sw` wrote a projected vertex's screen XY. Record its
+                # view-space Z against the address just written, which is the key gp0_exec looks up.
+                # Emitted AFTER the store so the memory write is unchanged and the tap is purely additive.
+                if a in pz_stores:
+                    out.append(f"  gte_record_pz(c, {addr_expr(i)}, {pz_stores[a]});")
                 a += 4
 
     # A function cut at a DELIBERATE mid-function RE-ENTRY SEED (reentry) whose body runs off its end into
@@ -1380,6 +1480,14 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     open(os.path.join(out_dir, f"{N.disp}.c"), "w").write("\n".join(d) + "\n")
     print(f"[{N.wrap}] emitted {len(funcs)} functions -> {out_dir}/{N.shardpfx}_*.c "
           f"({shards} shards) + {N.decls}")
+    # NATIVE-DEPTH COVERAGE, reported at BUILD time. At run time "0 vertices recorded" and "this game
+    # has no 3D" are the same observation, so the number of taps the emitter actually placed has to be
+    # visible here — a game whose submit idiom neither form matches shows up as 0 now, not as a mystery
+    # later. `swc2` sites are inline (GTE_SCREEN_XY_REGS); `mfc2->sw` pairs come from vertex_pz_stores.
+    global g_pz_tapped, g_pz_skipped
+    print(f"[{N.wrap}] native-depth: {g_pz_tapped} mfc2->sw vertex store(s) tapped"
+          + (f", {g_pz_skipped} skipped (store sits in a branch delay slot)" if g_pz_skipped else ""))
+    g_pz_tapped = 0; g_pz_skipped = 0
     # The source TUs this module wrote (basenames) — collected into generated/rec_sources.cmake so
     # the build links exactly what was emitted (overlay count is dynamic).
     return [f"{N.disp}.c"] + [f"{N.shardpfx}_{s}.c" for s in range(shards)]

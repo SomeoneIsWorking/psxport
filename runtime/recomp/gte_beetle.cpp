@@ -448,6 +448,20 @@ void gte_store_xy(Core* c, uint32_t addr, int rt) {
   c->rsub.projprim.setPz(addr, (float)(uint16_t)gte_read_data((uint32_t)zreg));
 }
 
+// Native depth, mfc2 form. The recompiler pairs `mfc2 rX, DR12..15` with the `sw rX, off(base)` that
+// writes it into the primitive packet (emit.py vertex_pz_stores) and emits this call right after the
+// store. `addr` is what was written; `zreg` is the Z_FIFO register the analysis proved pairs with it.
+//
+// The pairing is only emitted when nothing between the mfc2 and the store could invalidate it — no
+// redefinition of the GPR, no COP2 op moving the Z FIFO on, no block boundary — so reading the Z here
+// is reading the same vertex's depth, not a later one.
+//
+// Same unsigned read as gte_store_xy: SZ is a 16-bit unsigned FIFO value.
+void gte_record_pz(Core* c, uint32_t addr, int zreg) {
+  if (!attach_enabled()) return;
+  c->rsub.projprim.setPz(addr, (float)(uint16_t)gte_read_data((uint32_t)zreg));
+}
+
 // Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.
 // Called per core frame-step (native_step_frame) + at boot, from the explicit Core — no shared regs.
 void     gte_bind(Core* c)                       {
