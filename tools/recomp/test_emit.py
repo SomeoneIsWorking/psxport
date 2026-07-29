@@ -794,6 +794,40 @@ def test_mfc2_then_sw_taps_the_depth_recorder():
         f"each tapped vertex must hold its Z at the mfc2, not read it at the store:\n{c}"
 
 
+
+def test_lw_then_sw_propagates_depth_across_a_copy():
+    """`lw rX, off(src)` then `sw rX, off2(dst)` — a word copy. If the loaded address carries a
+    recorded vertex depth, the destination must inherit it.
+
+    WHY THIS IS NEEDED. Spyro projects vertices into one buffer (much of it the scratchpad) and
+    assembles the GP0 packets it actually DMAs in another, copying the screen XY across. Measured in a
+    single frame: depths recorded at 0x1A86xx-0x1A8Dxx, packets drawn from 0x1AB7xx. Every lookup
+    misses, and no amount of extra recording coverage can fix that — the depth is attached to the
+    wrong copy of the value, so it has to follow the copy.
+
+    The same refusal rules as the vertex tap apply: a redefinition of rX between the load and the
+    store means a different word is being stored, and a control transfer means the store is not
+    unconditionally reached.
+
+    The runtime side must NOT fabricate depth: a source address with no recorded pz leaves the
+    destination with none. Otherwise 2D elements that happen to copy words through the same registers
+    acquire a world depth and sort themselves into the 3D scene."""
+    a = Asm(0x80010000)
+    a.lw("v0", 0, "a0")              # load from a tracked address …
+    a.sw("v0", 0, "a1")              # … and store it: PROPAGATE
+    a.lw("v1", 4, "a0")
+    a.addiu("v1", "zero", 7)         # redefined: no longer the loaded word
+    a.sw("v1", 4, "a1")              # must NOT propagate
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    c = emit_c(data)
+    n = c.count("gte_copy_pz(c, ")
+    assert n == 1, f"expected exactly 1 propagated copy, got {n}:\n{c}"
+    assert "gte_copy_pz(c, (c->r[4] + (uint32_t)0), (c->r[5] + (uint32_t)0))" in c, \
+        f"propagation must carry BOTH the source and the destination address:\n{c}"
+
+
 # ----------------------------------------------------------------------------------------------------
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

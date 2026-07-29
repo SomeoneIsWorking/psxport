@@ -42,6 +42,14 @@ void ProjPrim::setPz(uint32_t addr, float pz) {
   e->addr = addr; e->pz = pz; e->next = mHead[h]; mHead[h] = mN++;
 }
 
+bool ProjPrim::peekPz(uint32_t addr, float* pz) {
+  if (!mInited) return false;
+  addr = pz_key(addr);
+  for (int i = mHead[hashOf(addr)]; i >= 0; i = mEntries[i].next)
+    if (mEntries[i].addr == addr) { if (pz) *pz = mEntries[i].pz; return true; }
+  return false;
+}
+
 bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
   if (!mInited) return false;
   addr = pz_key(addr);

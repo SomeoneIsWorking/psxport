@@ -35,6 +35,11 @@ public:
   // true if hit (fills *pz), false on miss.
   bool lookupPz(uint32_t addr, float* pz);
 
+  // peekPz: same lookup, but does NOT touch the hit/miss counters. Used by the copy-propagation path,
+  // which probes an address for every word the guest copies — counting those would swamp the render's
+  // own hit/miss ratio, which is the number that says whether native depth is working at all.
+  bool peekPz(uint32_t addr, float* pz);
+
   bool overflowed() const { return mOverflow != 0; }
   int  count()      const { return mN; }
   Stats stats()     const { return {mSetCt, mHitCt, mMissCt}; }

@@ -701,6 +701,49 @@ def vertex_pz_stores(ins, lo, hi):
     return holds, out, skipped_ds
 
 
+def word_copy_pairs(ins, lo, hi):
+    """{sw_addr: lw_addr} for `lw rX, off(src)` -> `sw rX, off2(dst)` word copies.
+
+    THE THIRD PIECE OF NATIVE DEPTH, and the one Spyro actually needs. Recording a vertex's depth is
+    useless if the renderer looks it up at a DIFFERENT address, and that is exactly this game's shape:
+    it projects vertices into one buffer (largely the scratchpad) and assembles the GP0 packets it
+    DMAs in another, copying the screen XY across. Measured in one frame — depths recorded at
+    0x1A86xx-0x1A8Dxx, packets drawn from 0x1AB7xx, every lookup a miss. So the depth has to follow
+    the copy.
+
+    Same refusal rules as vertex_pz_stores, and for the same reason: a redefinition of rX means a
+    different word is being stored, a control transfer means the store is not unconditionally reached
+    from the load. A COP2 op is irrelevant here (no GTE state is read), so it does not break a pair.
+
+    Returns pairs unconditionally — whether the SOURCE actually carries a depth is a runtime question,
+    and gte_copy_pz answers it by looking; a source with no recorded pz must leave the destination
+    with none, or 2D elements that shuffle words through the same registers would acquire a world
+    depth and sort into the 3D scene."""
+    out = {}
+    ds = {a + 4 for a in range(lo, hi, 4)
+          if a in ins and ins[a].kind in (D.BRANCH, D.JUMP, D.JUMPR)}
+    for a in range(lo, hi, 4):
+        i = ins.get(a)
+        if i is None or i.kind != D.LOAD or i.op != "lw":
+            continue
+        gpr = i.rt
+        if gpr == 0:
+            continue
+        b = a + 4
+        while b < hi:
+            j = ins.get(b)
+            if j is None or j.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                break
+            if j.kind == D.STORE and j.op == "sw" and j.rt == gpr:
+                if b not in ds:
+                    out[b] = a
+                break
+            if defines_reg(j, gpr):
+                break
+            b += 4
+    return out
+
+
 def walk_standalone(ins, lo, hi):
     """The 'standalone' addresses in a CONTIGUOUS run [lo,hi): each is emitted as its own statement; a
     control op consumes the next word as its delay slot, so that word is NOT standalone."""
@@ -836,6 +879,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     ra_tails = ra_tail_returns(ins, lo, hi)
     # Native depth, mfc2 form: which `sw` stores a projected vertex, and which Z reg pairs with it.
     pz_holds, pz_stores, pz_skipped_ds = vertex_pz_stores(ins, lo, hi)
+    pz_copies = word_copy_pairs(ins, lo, hi)     # depth must follow a vertex copied between buffers
     global g_pz_tapped, g_pz_skipped
     g_pz_tapped += len(pz_stores); g_pz_skipped += pz_skipped_ds
     dup_ins, dup_blocks = collect_tail_dups(exe, lo, hi, funcset, ins, jt)
@@ -936,6 +980,10 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                     out.append(f"  gte_hold_pz(c, {g}, {z});")
                 if a in pz_stores:
                     out.append(f"  gte_record_pz(c, {addr_expr(i)}, {pz_stores[a]});")
+                elif a in pz_copies:
+                    # A copied word: carry any depth from the source address to the destination.
+                    # `elif` — a store that IS a projected vertex already has its real depth.
+                    out.append(f"  gte_copy_pz(c, {addr_expr(ins[pz_copies[a]])}, {addr_expr(i)});")
                 a += 4
 
     # A function cut at a DELIBERATE mid-function RE-ENTRY SEED (reentry) whose body runs off its end into

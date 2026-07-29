@@ -477,6 +477,23 @@ void gte_hold_pz(Core* c, int gpr, int zreg) {
   s_held_pz[gpr & 31] = (float)(uint16_t)gte_read_data((uint32_t)zreg);
 }
 
+// A word the guest COPIED between buffers. If the source carries a projected vertex's depth, the
+// destination inherits it; if it does not, nothing happens.
+//
+// THAT ASYMMETRY IS THE WHOLE SAFETY PROPERTY. This runs on every `lw`->`sw` pair the recompiler
+// found, which is most word copies in the game — the overwhelming majority have nothing to do with
+// geometry. Fabricating a depth for those would give 2D elements a world Z and sort them into the 3D
+// scene, which is a visibly wrong picture; leaving them alone costs nothing, because absent depth
+// falls back to draw order, exactly as today.
+//
+// Uses peekPz, not lookupPz: these probes must not move the render's hit/miss counters, which are the
+// numbers that say whether native depth is working.
+void gte_copy_pz(Core* c, uint32_t src, uint32_t dst) {
+  if (!attach_enabled()) return;
+  float pz;
+  if (c->rsub.projprim.peekPz(src, &pz)) c->rsub.projprim.setPz(dst, pz);
+}
+
 void gte_record_pz(Core* c, uint32_t addr, int gpr) {
   if (!attach_enabled()) return;
   c->rsub.projprim.setPz(addr, s_held_pz[gpr & 31]);
