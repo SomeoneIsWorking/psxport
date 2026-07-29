@@ -38,6 +38,12 @@ public:
   int stock_reading = 0;
   int in_stock_read = 0;
 
+  // A CONTINUOUS read (XA / STR streaming) is active. Distinct from a file read, which is finite and
+  // self-terminating: the guest asks for N sectors and stops. A stream expects its ready callback to
+  // keep being invoked for as long as it runs, paced by the drive — so it needs a periodic pump
+  // rather than the burst a file read gets. Set on ReadN/ReadS, cleared by the guest's own Pause/Stop.
+  int stream_active = 0;
+
   // Sector FIFO for the stock-libcd path. Real hardware presents ONE sector as a byte stream that
   // successive CdGetSector calls pop SEQUENTIALLY — the game reads 3 words (the 4-byte header plus
   // 8-byte subheader, to verify the drive position) and then 512 words (the user data) out of the
@@ -72,4 +78,9 @@ public:
   void hleInit();
   // overridesInit(): register every CD-subsystem PlatformHle handler with this Game's table.
   void overridesInit();
+  // pumpStream(c, sectors): deliver up to `sectors` more streamed sectors to the guest by invoking
+  //   the ready callback it registered. No-op unless a continuous read is active. Call from the
+  //   port's per-field timing so the stream advances at roughly the drive's rate; a file read must
+  //   NOT be pumped this way (it terminates itself).
+  void pumpStream(Core* c, int sectors);
 };

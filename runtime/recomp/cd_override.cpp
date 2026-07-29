@@ -142,11 +142,17 @@ static void cd_command(Core* c) {
       // and the streaming poller spun forever. Both layers now read the same disc image.
       if (c->game->cd.setloc_lba >= 0)
         cdc_begin_read(&c->game->cdc, (uint32_t)c->game->cd.setloc_lba);
+      // A ReadN reaching this handler is a CONTINUOUS read. File reads no longer arrive here at all:
+      // CdRead is served natively above, so the guest's finite read state machine never issues one.
+      // That makes this a clean discriminator rather than a guess — mark the stream and let the
+      // periodic pump drive it, instead of the self-terminating burst a file read wants.
+      c->game->cd.stream_active = 1;
       cd_drive_stock_read(c);
       break;
     case 0x08: case 0x09:                                                                 // Stop / Pause
       xa_stream_stop(&c->game->xa);
       c->game->cd.stock_reading = 0;   // the guest's own end-of-read signal; ends cd_drive_stock_read
+      c->game->cd.stream_active = 0;   // ...and ends the continuous-read pump. The guest decides.
       break;
     default: break;
   }
@@ -577,6 +583,31 @@ void Cd::hleInit() {
   c->mem_w32(cfg->cdCallbackTable[3], cfg->cdCallbackFn[3]);   // (cleared)
   if (verbose || cfg_dbg("cd"))
     cfg_logi("cd", "HLE CdInit: drive ready (no controller, no handshake, no busy-wait)");
+}
+
+// Deliver more streamed sectors by invoking the ready callback the guest registered.
+//
+// A stream is not a file read. A file read is finite and terminates itself, which is why
+// cd_drive_stock_read can run it to completion in one burst. A stream runs until the guest says
+// stop, and it expects its callback invoked repeatedly at roughly the drive's sector rate — so it
+// must be pumped from the port's timing, not from the command that started it.
+//
+// The guest's own Pause/Stop clears stream_active, so this never outlives what the game asked for.
+void Cd::pumpStream(Core* c, int sectors) {
+  const GameConfig* cfg = c->cfg;
+  if (!stream_active || !cfg || !cfg->cdReadyCbPtr) return;
+  const uint32_t cb = c->mem_r32(cfg->cdReadyCbPtr);
+  if (!cb) return;
+
+  // The callback runs as an ordinary guest function; save and restore the whole register context
+  // around it so whatever the port interrupted sees nothing.
+  const R3000 saved = *static_cast<R3000*>(c);
+  for (int i = 0; i < sectors && stream_active; i++) {
+    c->r[A0] = 1;                      // libcd passes the completion status as arg 1
+    c->r[A1] = 0;
+    rec_dispatch(c, cb);
+  }
+  *static_cast<R3000*>(c) = saved;
 }
 
 void Cd::overridesInit() {
