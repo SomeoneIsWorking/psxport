@@ -1203,10 +1203,24 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
             # a jr whose register provably came from `ra` within the function takes this path.
             L.append(f"  {ds_c} return;   /* tail-return via {R(i.rs)} (= ra) */")
         else:
-            L.append(f"  {ds_c} {N.router}(c, {R(i.rs)}); return;")
+            # LATCH THE TARGET BEFORE THE DELAY SLOT. MIPS reads the jump register at the JUMP, not
+            # after its delay slot, so a delay slot that overwrites that register does NOT change
+            # where control goes. Restoring the jump register in the delay slot is a legal and
+            # common idiom precisely because of this. Reading it after `ds_c` would jump to whatever
+            # the delay slot happened to leave there.
+            L.append(f"  {{ uint32_t _tgt = {R(i.rs)}; {ds_c} {N.router}(c, _tgt); return; }}")
     else:  # jalr rd, rs
-        L.append(f"  {R(i.rd)} = 0x{i.addr + 8:08X}u;")
-        L.append(f"  {ds_c} {N.router}(c, {R(i.rs)});")
+        # Two MIPS details, both of which this emitted wrongly:
+        #
+        # 1. rd may be $zero. `jalr $zero, rs` is a legal encoding (a call whose return address is
+        #    discarded), and writing it directly emitted `c->r[0] = <addr>` — CORRUPTING THE ZERO
+        #    REGISTER. Every `addiu rX, $zero, imm` in the substrate reads r0, so the damage is
+        #    immediate, unbounded and nowhere near the jump. wr() is the helper that discards r0
+        #    writes; every other write site already uses it.
+        # 2. The target register is read at the JUMP, before the delay slot runs — same latching rule
+        #    as the computed `jr` above.
+        L.append(f"  {{ uint32_t _tgt = {R(i.rs)}; {wr(i.rd, f'0x{i.addr + 8:08X}u')} {ds_c} "
+                 f"{N.router}(c, _tgt); }}")
     return L
 
 
