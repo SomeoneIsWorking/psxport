@@ -162,6 +162,23 @@ def find_lens_setters(repo):
 
 # `constexpr uint32_t FN_8009A450 = 0x8009A450u;` / `static constexpr uint32_t X = 0x...;`
 CONST_ADDR_RE = re.compile(r'\bconstexpr\s+uint32_t\s+(\w+)\s*=\s*0x([0-9A-Fa-f]{6,8})u?\s*;')
+# ANY file-scope integer constant, decimal or hex — frame sizes, spill offsets, ra values. A readable
+# port names these (`c->r[31] = kRaAfterPartTick;`, `c->r[29] -= kOscFrame;`) where a port_gen draft
+# has bare literals. Without this the checker sees no frame and no ra constant and FAILS a body that
+# is byte-identical, i.e. it penalises exactly the house style docs/port-framework.md asks for.
+CONST_NUM_RE = re.compile(r'\bconstexpr\s+(?:u?int(?:8|16|32)_t|unsigned|int)\s+(\w+)\s*=\s*'
+                          r'(0x[0-9A-Fa-f]+u?|\d+u?)\s*;')
+
+
+def _subst_consts(stmt: str, consts_num: dict) -> str:
+    """Replace named integer constants with their literal value, so the frame/ra recognisers below
+    see the same text they would have seen in a port_gen draft."""
+    if not consts_num:
+        return stmt
+    def rep(m):
+        v = consts_num.get(m.group(0))
+        return v if v is not None else m.group(0)   # original literal text — hex stays hex, `u` kept
+    return re.sub(r'\b[A-Za-z_]\w*\b', rep, stmt)
 FRAME_CTOR_CALL_RE = re.compile(r'^\s*(\w*Frame)\s+\w+\(c\)\s*;\s*(?://.*)?$')
 
 
@@ -249,6 +266,7 @@ KNOWN_NONCALL_KEYWORDS = {'if', 'for', 'while', 'switch', 'return', 'else'}
 
 
 def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dict = None,
+                             consts_num: dict = None,
                              lens_setters: dict = None):
     """Native-dialect op-sequence extraction. Reuses abi_extract's low-level regexes (RA_SET_RE,
     CALL_RE, RECDISP_RE, MEM_W_ANY_RE, frame regexes via abi.extract_op_sequence) as the shared
@@ -256,6 +274,14 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dic
     correct relative to the gen-dialect calls the base pass finds: guest_call/guest_dispatch
     (guest_abi.h), GuestFrame<N,...> RAII, XxxFrame struct RAII (spliced from frame_structs), and
     opaque sibling-method calls (target unresolved, but counted — never silently dropped)."""
+    # Named integer constants -> their literal value, BEFORE any recogniser runs. A readable port
+    # writes `c->r[29] = sp0 - kOscFrame;` and `c->r[31] = kRaAfterPartTick;` where a port_gen draft
+    # has bare numbers; without this the frame and the ra constant are invisible and the checker FAILs
+    # a byte-identical body for being clearer, which is the exact trap docs/port-framework.md warns
+    # about.
+    if consts_num:
+        body_lines = [_subst_consts(l, consts_num) for l in body_lines]
+
     if frame_structs:
         expanded = []
         dtor_tail = []
@@ -277,7 +303,7 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dic
     # carries no size literal of its own) can be paired with the descent that used the same alias.
     sp_alias_open_size = {}   # alias name -> frame size opened through it, most recent value
     sp_alias_names = set()
-    SP_ALIAS_DEF_RE = re.compile(r'^\s*(?:uint32_t\s+)?(\w+)\s*=\s*c->r\[29\]\s*;\s*$')
+    SP_ALIAS_DEF_RE = re.compile(r'^\s*(?:const\s+)?(?:uint32_t\s+)?(\w+)\s*=\s*c->r\[29\]\s*;\s*$')
     SP_ALIAS_OPEN_RE = re.compile(r'^\s*c->r\[29\]\s*=\s*(\w+)\s*-\s*(?:\(?uint32_t\)?)?(\d+)u?\s*;\s*$')
     SP_ALIAS_CLOSE_RE = re.compile(r'^\s*c->r\[29\]\s*=\s*(\w+)\s*;\s*$')
 
@@ -461,6 +487,7 @@ def check_file(path: str, repo: str, results: list):
     # File-scope guest-address constants, so `rec_dispatch(c, FN_8009A450)` resolves like a literal.
     consts = {m.group(1): '0x' + m.group(2).upper()
               for m in CONST_ADDR_RE.finditer('\n'.join(lines))}
+    consts_num = {m.group(1): m.group(2) for m in CONST_NUM_RE.finditer('\n'.join(lines))}
     for idx, kind, addr in hits:
         found = find_method_body(lines, idx)
         if found is None:
@@ -476,7 +503,7 @@ def check_file(path: str, repo: str, results: list):
                              [f"oracle lookup failed: {e}"], []))
             continue
         gen_seq = abi.extract_op_sequence(fn.body)
-        native_seq = native_op_sequence_extra(body, frame_structs, consts, lens_setters)
+        native_seq = native_op_sequence_extra(body, frame_structs, consts, consts_num, lens_setters)
         verdict, findings, unprovable = compare(gen_seq, native_seq)
         results.append((path, addr, cls, method, verdict, findings, unprovable))
 
