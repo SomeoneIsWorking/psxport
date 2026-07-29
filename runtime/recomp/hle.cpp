@@ -276,8 +276,28 @@ void Hle::irqPoll(Core* c) {
 // runs guest code. Doing the cheap, guest-invisible one first means a long IRQ handler cannot delay
 // the frame clock by a whole dispatch.
 void rec_irq_poll(Core* c) {
+  // PSXPORT_DEBUG=pollregs — does taking deferred work preserve the guest's callee-saved state?
+  // Both paths below save and restore the whole R3000, so the answer should be trivially yes; this
+  // exists because the loop-back-edge gate demonstrably corrupts a guest global-base register on the
+  // Spider-Man port, and "should be" is not evidence. Watches sp/fp/gp and the s-registers, which are
+  // the ones a mid-function resume actually depends on.
+  const bool w = cfg_dbg("pollregs");
+  uint32_t before[11];
+  if (w) { before[0]=c->r[29]; before[1]=c->r[30]; before[2]=c->r[28];
+           for (int i = 0; i < 8; i++) before[3+i] = c->r[16+i]; }
+
   if (c->pending_work & Core::PW_HOST) rec_host_turn(c);
   if (c->pending_work & Core::PW_IRQ)  c->game->hle.irqPoll(c);
+
+  if (w) {
+    static const char* nm[11] = {"sp","fp","gp","s0","s1","s2","s3","s4","s5","s6","s7"};
+    uint32_t after[11] = {c->r[29], c->r[30], c->r[28], c->r[16], c->r[17], c->r[18], c->r[19],
+                          c->r[20], c->r[21], c->r[22], c->r[23]};
+    for (int i = 0; i < 11; i++)
+      if (after[i] != before[i])
+        cfg_loge("pollregs", "poll CLOBBERED %s at pc=0x%08X: 0x%08X -> 0x%08X",
+                 nm[i], c->pc, before[i], after[i]);
+  }
 }
 
 // Dispatch one A0/B0/C0 BIOS call. Returns true if handled (c->r[V0] set), false otherwise.

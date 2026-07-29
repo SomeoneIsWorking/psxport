@@ -23,6 +23,7 @@
 // time. There is no such constant here: the arming interval only affects how promptly a turn is
 // taken, while the number of fields owed is always elapsed_time × field_rate.
 #include "core.h"
+#include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
 #include "cfg.h"
 #include <atomic>
 #include <chrono>
@@ -94,8 +95,28 @@ void rec_host_turn_shutdown() {
 
 // Called from rec_irq_poll (the substrate's gate entry) when PW_HOST is set.
 void rec_host_turn(Core* c) {
-  // Clear FIRST. The timer may set it again while the handler runs — that is correct and means
-  // another field elapsed during the turn. Clearing afterwards would swallow that.
+  // RESPECT THE GUEST'S CRITICAL SECTIONS. The turn dispatches a callback the GUEST registered, so it
+  // is guest code running at a moment the guest did not choose. When the guest has masked interrupts
+  // (COP0 Status.IEc clear) it is saying exactly one thing: do not run my handlers here. Ignoring
+  // that runs the callback in the middle of a non-atomic update and corrupts state.
+  //
+  // Hle::irqPoll has always made this check (`if (in_irq || !irq_enabled) return;`). The host turn
+  // dispatches guest code for the same reason and must make it too.
+  //
+  // HONESTY NOTE, so this is not read as more than it is: this check was added while chasing the
+  // loop-back-edge gate's state corruption on the Spider-Man port, and it did NOT fix it — the same
+  // corruption reproduces with the check in place. It is kept because it is correct on its own
+  // merits, not because it repaired anything. Two hypotheses for that corruption are now FALSIFIED:
+  // register save/restore across the poll (a PSXPORT_DEBUG=pollregs probe reports ZERO clobbers of
+  // sp/fp/gp/s0-s7), and this missing critical-section check. Do not re-try either.
+  //
+  // Do NOT clear PW_HOST when deferring: hardware would leave the VBlank latched and deliver it when
+  // the guest re-enables. Leaving the bit set reproduces that — the turn is taken at the first gate
+  // after the critical section ends, rather than being silently dropped.
+  if (!c->game->hle.irq_enabled) return;
+
+  // Clear only once the turn is actually being taken. The timer may set it again while the handler
+  // runs — that is correct and means another field elapsed during the turn.
   __atomic_and_fetch(&c->pending_work, ~Core::PW_HOST, __ATOMIC_RELAXED);
 
   if (s_in_turn || !s_fn || c != s_core) return;
