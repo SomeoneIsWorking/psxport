@@ -1006,18 +1006,22 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                     out.append(f"L_DSAFTER_{a:08X}:;")
                 a += 8
             else:
+                # NATIVE DEPTH, the copy source: capture WHERE this word comes from BEFORE the load
+                # runs. `lw t6,0(t6)` overwrites the very register the address is built from, so a
+                # capture placed after it records the loaded VALUE as if it were an address and would
+                # carry an unrelated word's depth — a wrong depth, which is worse than none. Emitting
+                # it here is the entire guarantee; one line later silently reintroduces the bug.
+                if a in pz_srcs:
+                    out.append(f"  gte_hold_src(c, {pz_srcs[a]}, {addr_expr(i)});")
                 st = emit_simple(i)
                 if st:
                     out.append("  " + st)
-                # NATIVE DEPTH (mfc2 form): this `sw` wrote a projected vertex's screen XY. Record its
-                # view-space Z against the address just written, which is the key gp0_exec looks up.
-                # Emitted AFTER the store so the memory write is unchanged and the tap is purely additive.
+                # NATIVE DEPTH (mfc2 form): snapshot this vertex's Z at the read, and record it against
+                # the address written. Both are emitted AFTER their instruction, so the guest's own
+                # memory write and register update are untouched and the tap is purely additive.
                 if a in pz_holds:
                     g, z = pz_holds[a]
                     out.append(f"  gte_hold_pz(c, {g}, {z});")
-                if a in pz_srcs:
-                    # Capture WHERE this word came from, now — the load may clobber its own base.
-                    out.append(f"  gte_hold_src(c, {pz_srcs[a]}, {addr_expr(i)});")
                 if a in pz_stores:
                     out.append(f"  gte_record_pz(c, {addr_expr(i)}, {pz_stores[a]});")
                 elif a in pz_copies:

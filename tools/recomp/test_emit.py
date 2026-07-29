@@ -897,6 +897,13 @@ def test_copy_source_address_is_captured_at_the_load():
     data, _ = a.assemble()
     c = emit_c(data)
     assert "gte_hold_src(c, " in c, f"the copy source address must be held at the load:\n{c}"
+    # ORDER IS THE WHOLE POINT. The hold must be emitted BEFORE the load statement: `lw t6,0(t6)`
+    # overwrites the very register the address is built from, so a hold placed after it captures the
+    # LOADED VALUE as if it were an address. Same wrong-depth bug, one line later.
+    hold_at = c.index("gte_hold_src(c, ")
+    load_at = c.index("c->r[14] = c->mem_r32(")
+    assert hold_at < load_at, \
+        f"gte_hold_src must precede the load that clobbers its base register:\n{c}"
     assert c.count("gte_copy_pz(c, ") == 1, f"the packet store was not propagated to:\n{c}"
     # The propagation must NOT rebuild the source address from the (now clobbered) base register.
     assert "gte_copy_pz(c, 14," in c, \

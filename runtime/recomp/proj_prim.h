@@ -25,7 +25,18 @@ public:
   void bind(Core* c);
   static ProjPrim* current() { return sCurrent; }
 
-  // reset: per-frame — drop last frame's depths so none are read stale.
+  // reset: per-frame. Retires the OLDEST generation and starts a new one, keeping the PREVIOUS
+  // frame's depths readable.
+  //
+  // WHY TWO GENERATIONS AND NOT ONE. A hard per-frame clear assumes a vertex is recorded and drawn in
+  // the same frame. Engines with a DOUBLE-BUFFERED PACKET POOL fill pool A while the DMA draws pool B,
+  // so a vertex recorded in frame N is drawn in frame N+1 and a one-frame cache wipes it in between.
+  // That is not a hypothesis here: 6568 addresses in Spyro showed up as BOTH a record and a later
+  // miss — the depth was recorded at exactly the address that then failed to resolve.
+  //
+  // Two is the right number, not "keep everything": the pool is reused, so an entry older than the
+  // buffer cycle describes a vertex that no longer occupies that address, and serving it would be a
+  // WRONG depth. Two generations covers one full flip and nothing more.
   void reset();
 
   // setPz: submit.cpp records a vertex's view-Z keyed by the packet-vertex GUEST ADDRESS `addr`.
@@ -46,10 +57,11 @@ public:
   void  statsReset()      { mSetCt = mHitCt = mMissCt = 0; }
 
 private:
-  struct Ent { uint32_t addr; float pz; int next; };
+  struct Ent { uint32_t addr; float pz; int next; int gen; };
   Ent  mEntries[kMax];
   int  mHead[kHashSize];
   int  mN = 0, mInited = 0, mOverflow = 0;
+  int  mGen = 0;                 // current generation; entries from mGen and mGen-1 are readable
   long mSetCt = 0, mHitCt = 0, mMissCt = 0;
 
   static ProjPrim* sCurrent;
