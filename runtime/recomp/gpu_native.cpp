@@ -1380,9 +1380,36 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       if (f) { fwrite(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
                cfg_logi("vramdump", "f%d -> %s (1024x512x16)", s_frame, vp); } } }
   if (dir) {
+    // PSXPORT_GPU_DUMP=dir[:every] — dump every Nth frame instead of all of them.
+    //
+    // Dumping unconditionally is expensive at both ends. A consumer's 40s gate run wrote 19003 PPMs
+    // totalling 6.6 GB, and the check that consumes them then had to read all of it back; that
+    // post-phase dominated the gate's wall clock and, under load, pushed several runs past their
+    // timeouts. The write side is worse than it looks too: it is I/O inside the measured run, so it
+    // distorts any timing taken from the same run.
+    //
+    // "does the picture change over the run" is answered just as well by a few hundred evenly spaced
+    // frames. Bare `dir` still means every frame, so nothing changes for a caller that wants them all.
+    char dbuf[512]; snprintf(dbuf, sizeof dbuf, "%s", dir);
+    int every = 1;
+    // Only treat a trailing ":N" as an interval when N is ALL DIGITS. atoi alone would read
+    // "/path/to/a:2b" as interval 2 and silently truncate the directory name; a path whose last
+    // component legitimately contains a colon should be left alone.
+    { char* col = strrchr(dbuf, ':');
+      if (col && col[1]) {
+        bool alldig = true;
+        for (const char* q = col + 1; *q; q++) if (*q < '0' || *q > '9') { alldig = false; break; }
+        if (alldig) { int n = atoi(col + 1); if (n > 0) { every = n; *col = 0; } }
+      } }
+    dir = dbuf;
+    // Skip only the WRITE on a non-sampled frame. An early return here would also skip
+    // frame_finalize() at the end of this function — the depth-table reset, batch reset and s_frame++
+    // — so the frame counter would stop advancing and geometry batches would accumulate across
+    // frames. Cheap mistake to make, expensive to diagnose.
+    const bool want = (every <= 1) || ((s_frame % every) == 0);
     if (s_frame == 0) { char cmd[600]; snprintf(cmd, sizeof cmd, "mkdir -p '%s'", dir); int r = system(cmd); (void)r; }
     char path[512]; snprintf(path, sizeof path, "%s/f%05d.ppm", dir, s_frame);
-    FILE* f = fopen(path, "wb");
+    FILE* f = want ? fopen(path, "wb") : nullptr;
     if (f) {
       fprintf(f, "P6\n%d %d\n255\n", s_disp_w, s_disp_h);
       for (int y = 0; y < s_disp_h; y++)
