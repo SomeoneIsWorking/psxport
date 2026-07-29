@@ -52,7 +52,15 @@ int gpu_frame_no(Core*);
 namespace {
 
 constexpr int MAX_TRACE = 16;
-struct Site { uint32_t addr; unsigned long hits; uint32_t first_ra; int first_frame; };
+struct Site { uint32_t addr; unsigned long hits; uint32_t first_ra; int first_frame;
+              int abi_reported; unsigned long abi_violations; };
+
+// Callee-saved under the MIPS o32 ABI: a function that returns with any of these changed has broken
+// its contract with every caller. A guest compiler does not emit such code, so a mismatch here means
+// the RECOMPILATION of that function is wrong — which is otherwise almost impossible to see, because
+// the damage lands in the caller's locals and surfaces far away as a loop that will not terminate.
+const int CALLEE_SAVED[] = { 16,17,18,19,20,21,22,23, 28,29,30,31 };  // s0-s7, gp, sp, fp, ra
+const char* const CALLEE_SAVED_NAME[] = { "s0","s1","s2","s3","s4","s5","s6","s7","gp","sp","fp","ra" };
 Site g_sites[MAX_TRACE];
 int g_n = 0;
 bool g_on = false;
@@ -82,18 +90,43 @@ void hook(Core* c) {
   }
   g_sites[i].hits++;
 
+  // ABI CHECK. Snapshot the callee-saved registers, run the body, and compare. This is free to add
+  // here because the trampoline already brackets the call, and it answers a question nothing else can:
+  // "is this function's recompilation ABI-correct?". A violation corrupts the CALLER's locals, so it
+  // surfaces as a bug with no visible connection to the culprit.
+  uint32_t saved[sizeof CALLEE_SAVED / sizeof CALLEE_SAVED[0]];
+  for (size_t k = 0; k < sizeof saved / sizeof saved[0]; k++) saved[k] = c->r[CALLEE_SAVED[k]];
+
   const RecompRegistry* R = psxport_recomp();
   R->shard_set_override(addr, nullptr);   // step aside so the dispatcher runs the real body
   R->main_dispatch(c, addr);
   R->shard_set_override(addr, hook);      // and back, for the next call
+
+  // PSXPORT_FNTRACE_SELFTEST=1 — deliberately clobber s0 after the call so the check below MUST fire.
+  // A checker that reports "0 violations" everywhere looks identical to one that cannot report at all,
+  // and the control case passing proves nothing. This is how to confirm it can say the other thing.
+  if (cfg_on("PSXPORT_FNTRACE_SELFTEST")) c->r[16] ^= 0xA5A5A5A5u;
+
+  for (size_t k = 0; k < sizeof saved / sizeof saved[0]; k++) {
+    if (c->r[CALLEE_SAVED[k]] == saved[k]) continue;
+    g_sites[i].abi_violations++;
+    if (!g_sites[i].abi_reported) {       // first only — a broken function breaks on every call
+      g_sites[i].abi_reported = 1;
+      cfg_loge("fntrace", "0x%08X VIOLATES THE ABI: %s entered as %08X, returned as %08X. A guest "
+                          "compiler does not emit this, so the RECOMPILATION is wrong; the damage "
+                          "lands in the caller's locals, far from here.",
+               addr, CALLEE_SAVED_NAME[k], saved[k], c->r[CALLEE_SAVED[k]]);
+    }
+  }
 }
 
 void report() {
   if (!g_on) return;
   for (int i = 0; i < g_n; i++) {
     if (g_sites[i].hits)
-      cfg_logi("fntrace", "0x%08X: %lu call(s), first at frame %d from ra=%08X",
-               g_sites[i].addr, g_sites[i].hits, g_sites[i].first_frame, g_sites[i].first_ra);
+      cfg_logi("fntrace", "0x%08X: %lu call(s), first at frame %d from ra=%08X, ABI violations %lu",
+               g_sites[i].addr, g_sites[i].hits, g_sites[i].first_frame, g_sites[i].first_ra,
+               g_sites[i].abi_violations);
     else
       cfg_logi("fntrace", "0x%08X: NEVER CALLED — control did not reach it in this run",
                g_sites[i].addr);
