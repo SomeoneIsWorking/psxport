@@ -154,7 +154,7 @@ def find_lens_setters(repo):
         if 'mem_w' not in text:
             continue
         for m in LENS_SETTER_RE.finditer(text):
-            widths = [int(w) for w in re.findall(r'mem_w(\d+)\(', m.group(2))]
+            widths = [int(w) for w in re.findall(r'mem_w(\d+)\s*\(', m.group(2))]  # \s* — see abi_extract.MEM_W_ANY_RE
             if widths:
                 out.setdefault(m.group(1), widths)
     return out

@@ -183,7 +183,9 @@ INDIRECT_SP_LOAD_RE = re.compile(
 RA_SET_RE = re.compile(r'c->r\[31\] = 0x([0-9A-Fa-f]+)u;')
 
 # Direct intra-shard / intra-overlay calls: func_XXXXXXXX(c) or ov_<area>_func_XXXXXXXX(c)
-CALL_RE = re.compile(r'\b((?:ov_[a-z0-9]+_func_|func_)([0-9A-Fa-f]{8}))\(c\);')
+# Same whitespace hazard as MEM_W_ANY_RE below: `func_80083F50 (c);` or `func_X( c );` used to
+# match nothing, silently dropping a CALL from the ordered call list the gate compares.
+CALL_RE = re.compile(r'\b((?:ov_[a-z0-9]+_func_|func_)([0-9A-Fa-f]{8}))\s*\(\s*c\s*\);')
 # Indirect dispatch: rec_dispatch(c, <expr>);
 RECDISP_RE = re.compile(r'rec_dispatch\(c, ([^)]+)\);')
 
@@ -196,7 +198,13 @@ CALLEE_SAVED = list(range(16, 24)) + [30]  # r16..r23, r30 (s8/fp) — MIPS o32 
 # tools/port_check.py's op-sequence extraction. Deliberately just the width, not the address: address
 # expressions can be arbitrarily reformatted by a faithful rename without changing behavior, but a
 # missing/extra/reordered/width-changed store is a real semantic difference.
-MEM_W_ANY_RE = re.compile(r'c->mem_w(8|16|32)\(')
+#
+# The `\s*` before the paren is load-bearing, not tidiness. Without it `c->mem_w8 (obj + 4, v)` — a
+# space a formatter or a human can introduce at any time — matched NOTHING, so the store vanished from
+# the width sequence and the gate silently compared a shorter list. A gate that drops an operation it
+# cannot see is the failure mode this whole checker exists to catch, one level up. Found 2026-07-30
+# when a readability rebuild hit a FAIL that moved as the spacing changed.
+MEM_W_ANY_RE = re.compile(r'c->mem_w(8|16|32)\s*\(')
 
 
 # --------------------------------------------------------------------------------------------------
