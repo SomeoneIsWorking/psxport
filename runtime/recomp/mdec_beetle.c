@@ -67,9 +67,20 @@ void mdec_dma_in(const uint32_t* words, int count) {
       if (++steps > kMaxSteps) {
         // Genuinely wedged: report it with exact counts rather than dropping the remainder, which
         // would corrupt the decode invisibly and surface frames later as the guest's own timeout.
+        // NAME THE CAUSE, don't just report the symptom. There are two very different reasons the
+        // decoder can refuse input forever, and "cannot accept" alone cannot tell them apart:
+        //   - OutFIFO has data waiting  -> the decoder is BLOCKED ON OUTPUT. MDEC_Run() cannot
+        //     retire a macroblock while its result has nowhere to go, so pumping harder can never
+        //     help. Nothing drains the output here: mdec_dma_in only advances the decoder, while
+        //     real DMA0/DMA1 ping-pong around it (see native_fmv.cpp, which interleaves feed/pump/
+        //     drain and is the pattern that works).
+        //   - OutFIFO empty             -> genuinely wedged mid-block; a decoder-state bug.
         cfg_loge("mdec", "DMA0 in: decoder still cannot accept after %d step(s); %d of %d word(s) "
-                         "written, remainder NOT sent. This decode is incomplete.",
-                 kMaxSteps, i, count);
+                         "written, remainder NOT sent. This decode is incomplete. "
+                         "outfifo_has_data=%d (%s)",
+                 kMaxSteps, i, count, (int)MDEC_DMACanRead(),
+                 MDEC_DMACanRead() ? "BLOCKED ON OUTPUT — nothing is draining DMA1"
+                                   : "output empty — decoder wedged internally");
         return;
       }
       MDEC_Run(kStepClocks);
