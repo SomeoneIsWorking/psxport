@@ -980,11 +980,41 @@ void GpuState::gp0_exec(Core* core) {
       int gpu_vk_wide_engine(Core*);
       int full = bg_2d(x, y, x + w, y + h);
       if (full) s_seen_bg2d = 1;
-      if (full && gpu_vk_wide_engine(core) && (s_prev_had3d || s_prev_had_bg2d)) {
+      // `debug fillrect` — every FillRect with its rect and the full-screen verdict, plus a running
+      // count. Without this, "the margin fix did nothing" has three indistinguishable causes: the game
+      // issues no FillRect at all, it issues one that does not cover the base display, or the widen
+      // ran and had no visible effect. The count is what separates the first from the others.
+      if (cfg_dbg("fillrect")) {
+        static long n = 0;
+        if (++n <= 24 || (n % 512) == 0)
+          cfg_logf("fillrect", "#%ld at=(%d,%d) %dx%d full=%d wide=%d", n, x, y, w, h, full,
+                   gpu_vk_wide_engine(core));
+      }
+      // NOT GATED ON THE had3d/had_bg2d LATCH, unlike the poly/sprite widen a few hundred lines up,
+      // and the difference is the classification not the caution. Those need to know whether a
+      // primitive is screen-space or world-space, which rides on per-primitive DEPTH — and on a port
+      // with low depth coverage that gate answers "everything is 2D" and shifts the whole frame twice
+      // (measured: sky, ground AND caption each moved a further +86 px). THIS case needs no such
+      // judgement: `full` already established GEOMETRICALLY that the rect covers the entire base
+      // display, which is what makes it a backdrop clear. Requiring the latch as well made the margin
+      // fix unavailable to exactly the ports that need it — one whose pool is double buffered never
+      // sets the latch on a prim-bearing frame at all.
+      if (full && gpu_vk_wide_engine(core)) {
         int ww = gpu_vk_wide_engine_w(core);
         if (ww > 320) {
-          int x0 = ws_2d_local_x(core, x, /*is_bg=*/1), x1 = ws_2d_local_x(core, x + w, /*is_bg=*/1);
-          int xs[4] = { x0, x1, x0, x1 }, ys[4] = { y, y, y + h, y + h };
+          // TO DISPLAY-LOCAL FIRST. A FillRect's rect is VRAM-ABSOLUTE — it ignores clip and offset by
+          // design, which is the whole reason this case needs handling separately — while the 2D queue
+          // takes display-local coordinates and adds the display origin back on submit. Passing the
+          // raw rect therefore offsets the backdrop by the display origin.
+          //
+          // On a game whose display sits at VRAM y=8 that is an EIGHT-ROW slip, and it is exactly what
+          // the residual widescreen artefact was: measured on the margin columns, the atlas noise sat
+          // in display rows 0-9 and 230-239 and nowhere else, with rows 10-229 clean. The backdrop was
+          // covering rows 8-231 instead of 0-223. x was already going through ws_2d_local_x, which
+          // assumes a display-local input, so the two axes disagreed about what frame they were in.
+          const int lx = x - s_disp_x, ly = y - s_disp_y;
+          int x0 = ws_2d_local_x(core, lx, /*is_bg=*/1), x1 = ws_2d_local_x(core, lx + w, /*is_bg=*/1);
+          int xs[4] = { x0, x1, x0, x1 }, ys[4] = { ly, ly, ly + h, ly + h };
           int us[4] = { 0, 0, 0, 0 }, vs[4] = { 0, 0, 0, 0 };
           unsigned char rs[4] = { cr, cr, cr, cr }, gs[4] = { cg, cg, cg, cg }, bs[4] = { cb, cb, cb, cb };
           core->game->activeRq().push2dQuad(RQ_BACKGROUND, /*order_2d_fg=*/0, xs, ys, us, vs, rs, gs, bs,
