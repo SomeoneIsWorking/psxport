@@ -147,8 +147,10 @@ class Asm:
             rs, tgt = args
             imm = (self._lbl(a, tgt) - (a + 4)) >> 2
             return I(op, rs, 0, imm)
-        if mn in ("bltz", "bgez"):
-            rt = {"bltz": 0, "bgez": 1}[mn]
+        if mn in ("bltz", "bgez", "bltzal", "bgezal"):
+            # REGIMM: the LINKING forms are rt 0x10/0x11. They are calls wearing a branch's
+            # encoding, and the demotion criterion has to tell them apart from plain branches.
+            rt = {"bltz": 0, "bgez": 1, "bltzal": 0x10, "bgezal": 0x11}[mn]
             rs, tgt = args
             imm = (self._lbl(a, tgt) - (a + 4)) >> 2
             return I(1, rs, rt, imm)
@@ -960,3 +962,68 @@ def _main():
 
 if __name__ == "__main__":
     _main()
+
+
+def test_demote_internal_labels_criterion():
+    # RE-16: `jal` discovery promotes the internal block of a hand-written coroutine to a function
+    # entry, splitting the real body; the emitter then renders an intra-function branch to it as
+    # call+return and the enclosing function leaks its frame. Demotion fixes that, but ONLY if the
+    # criterion can tell an internal label from three lookalikes that must be kept. All four shapes
+    # below lack a stack prologue, which is why the old "no prologue AND fall-through" heuristic had
+    # no discriminating power and demoted hundreds of entries.
+    a = Asm(0x80010000)
+    # H: a host body that CONDITIONALLY branches into `lbl` — fall-through stays in H, so both
+    # successors belong to H and `lbl` is part of its control flow. THE demote case.
+    a.addiu("sp", "sp", -0x10)      # 0x00  H (hard entry, has a prologue)
+    a.bgez("zero", "lbl")           # 0x04  unconditional-in-practice, CONDITIONAL by encoding
+    a.nop()                          # 0x08
+    a.jal("lbl")                     # 0x0C  also jal'd — a mixed-reference internal block
+    a.nop()                          # 0x10
+    a.jal("sub")                     # 0x14  keeps `sub` a discovered entry
+    a.nop()                          # 0x18
+    a.j("tail")                      # 0x1C  TAIL CALL into `tail` — $ra is still H's caller's
+    a.nop()                          # 0x20
+    a.label("lbl")
+    a.addu("v0", "v0", "v1")        # 0x24  internal label: no prologue, no way to return alone
+    a.jr("ra")                       # 0x28
+    a.nop()                          # 0x2C
+    a.label("sub")
+    a.addu("v0", "a0", "a1")        # 0x30  ordinary jal-only subroutine
+    a.jr("ra")                       # 0x34
+    a.nop()                          # 0x38
+    a.label("tail")
+    a.addu("v0", "a0", "zero")      # 0x3C  reached by `j` (tail call) AND `jal` below
+    a.jr("ra")                       # 0x40
+    a.nop()                          # 0x44
+    a.jal("tail")                    # 0x48  the call that proves `tail` is a real function
+    a.nop()                          # 0x4C
+    data, _ = a.assemble()
+    e = exe_of(data)
+    H, lbl, sub, tail = 0x80010000, 0x80010024, 0x80010030, 0x8001003C
+    got = emit.demote_internal_labels(e, [H, lbl, sub, tail], keep=set())
+    assert got == {lbl}, f"expected only the branch-target label demoted, got {[hex(x) for x in sorted(got)]}"
+    # Each spared case matters for a different reason, so assert them individually rather than as a set.
+    assert sub not in got,  "a jal-only subroutine must never be demoted"
+    assert tail not in got, "a `j` into a function is a TAIL CALL ($ra is the caller's) — not a label"
+    assert H not in got,    "a hard entry with its own prologue must never be demoted"
+
+
+def test_demote_spares_branch_and_link_targets():
+    # bltzal/bgezal targets are CALL targets — discover_funcs seeds them deliberately (the 131-site
+    # link-branch fix). They are branch-shaped, so a criterion that keys on "branched to" without
+    # excluding the LINKING forms demotes them and reintroduces the exact frame leak it exists to
+    # fix. Spider-Man has four such entries (0x8007CD44/D160/D1F0/D254), all link-only.
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -0x10)      # 0x00  H
+    a.bltzal("a0", "linked")        # 0x04  CONDITIONAL *and* linking -> a call, not a branch
+    a.nop()                          # 0x08
+    a.jr("ra")                       # 0x0C
+    a.nop()                          # 0x10
+    a.label("linked")
+    a.addu("v0", "v0", "v1")        # 0x14  no prologue, reached only by a link-branch
+    a.jr("ra")                       # 0x18
+    a.nop()                          # 0x1C
+    data, _ = a.assemble()
+    e = exe_of(data)
+    got = emit.demote_internal_labels(e, [0x80010000, 0x80010014], keep=set())
+    assert got == set(), f"a bltzal target is a real subroutine, got {[hex(x) for x in sorted(got)]}"

@@ -1501,6 +1501,94 @@ def discover_funcs(exe, seeds):
     return sorted(funcs)
 
 
+LINKING_OPS = ("jal", "bltzal", "bgezal")
+
+
+def demote_internal_labels(exe, funcs, keep):
+    """Remove entries that are INTERNAL LABELS of a larger guest function, not functions.
+
+    `jal` discovery is deliberately eager, and hand-written assembly breaks it: a routine that uses
+    `jal`/`jr $ra` as an internal coroutine mechanism inside ONE stack frame gets its internal block
+    promoted to a function entry, which splits the real body. The emitter then renders an
+    intra-function branch to that block as `call + return`, so the enclosing function exits without
+    reaching its epilogue and leaks its frame — Spider-Man `0x8002A338` leaks 4 bytes per call,
+    measured.
+
+    RULE 1 IS A PROOF, NOT A HEURISTIC. An entry reached by a NON-LINKING branch (`bgez`, `j`, `beq`
+    …) from inside another body **cannot** be a function: control arrives there with no return
+    address established, so it has no way to return. It is an internal label by construction.
+
+    This is what four earlier heuristics missed. They tested "no prologue AND fall-through reachable
+    AND same host" — but NONE of the candidates has a prologue, so that test has no discriminating
+    power at all, and tuning it demoted 78, then 325, then 50 entries. Worse, it took genuine library
+    functions with it (`StGetNext`), which the port itself super-calls, breaking the LINK.
+
+    Measured on Spider-Man: 5 entries are branch targets from another body, and rule 1 separates them
+    exactly — because the distinction it draws is the real one.
+
+        0x8002A478   bgez x14 + j x1 + jal x3   MIXED     -> internal label   (demote)
+        0x8007CD44   bgezal x2                  \\
+        0x8007D160   bltzal x8                   |  LINK-ONLY -> real subroutines (KEEP). These are
+        0x8007D1F0   bltzal x2                   |  branch-and-link targets that discover_funcs
+        0x8007D254   bltzal x2                  /   seeds ON PURPOSE; demoting one reintroduces the
+                                                    very stack leak this function exists to fix.
+
+    THERE IS DELIBERATELY NO SECOND RULE. A "link-only, single host, no epilogue of its own" fixpoint
+    was written to also catch `0x8002A5F4` (reached by `jal` x4 from inside the same body) and it
+    demoted **255** entries, `StGetNext` among them — reproducing attempt 1's link breakage exactly.
+    The flaw: a LEAF function has no epilogue *because it needs none*, returning straight through
+    `jr $ra` with the caller's value, so "no epilogue" is true of a huge class of perfectly ordinary
+    functions and carries almost no information. It did not even catch its intended target, whose
+    region does contain the shared tail's `lw ra, (sp)`.
+
+    That is the same mistake as the prologue heuristic, one level along: pairing a proof with a guess
+    and letting the guess do the work. Rule 1 alone is exact here. If a future body genuinely needs
+    more, derive another PROOF — do not tune a threshold.
+
+    `keep` is never demoted (explicit seeds / real call targets from outside).
+    """
+    import bisect as _bisect
+    lo, hi = exe.load, exe.text_end
+    keep = set(keep)
+
+    def has_prologue(a):                       # `addi(u) sp, sp, -N` — allocates its OWN frame
+        return (exe.word(a) & 0xFFFF8000) in (0x27BD8000, 0x23BD8000)
+
+    demoted = set()
+    for _ in range(16):
+        live = sorted(set(funcs) - demoted)
+        live_set = set(live)
+        # references into each entry, attributed to the body they come from
+        refs = {}
+        for idx, a in enumerate(live):
+            end = live[idx + 1] if idx + 1 < len(live) else hi
+            for x in range(a, end, 4):
+                i = decode(x, exe.word(x))
+                if i.kind == D.UNKNOWN:
+                    break                      # trailing data, not code
+                if i.kind in (D.BRANCH, D.JUMP) and i.target is not None and lo <= i.target < hi:
+                    refs.setdefault(i.target, []).append((i.op, i.kind, a))
+        grew = False
+        for t, rs in refs.items():
+            if t in demoted or t in keep or t not in live_set or has_prologue(t):
+                continue
+            # A CONDITIONAL, non-linking arrival from a DIFFERENT body. Conditional is load-bearing:
+            # the branch's FALL-THROUGH continues in that same body, so both successors belong to one
+            # function and the target is part of its control flow, not a callee.
+            #
+            # An unconditional `j` does NOT qualify, and assuming it did was wrong. `j` into a
+            # function is the ordinary TAIL-CALL idiom — `$ra` still holds the caller's return
+            # address, so the target returns perfectly well. Spider-Man 0x8007D534 is exactly that:
+            # `jal` x5 then `j` x2 from the same two bodies (call it, then tail-jump for the last
+            # one). Counting `j` demoted it and would have inlined a real function into two callers.
+            if any(kind == D.BRANCH and op not in LINKING_OPS and h != t for op, kind, h in rs):
+                demoted.add(t)
+                grew = True
+        if not grew:
+            break
+    return demoted
+
+
 def merge_early_return_boundaries(exe, funcs, removable, hard):
     """Fix FALSE function boundaries from func_entries_after_return: a `jr ra` is NOT always a function
     end — a function may have an EARLY RETURN mid-body (an `if(...) return;`) or several returns sharing a
