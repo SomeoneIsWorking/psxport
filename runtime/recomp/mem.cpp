@@ -24,6 +24,7 @@ void     mdec_write(uint32_t addr, uint32_t val);
 uint32_t mdec_read(uint32_t addr);
 void     mdec_dma_in(const uint32_t* words, int count);
 int      mdec_dma_out(uint32_t* words, int count);
+bool     mdec_dma_can_read(void);
 void     spu_write(uint32_t addr, uint32_t val);
 uint32_t spu_read(uint32_t addr);
 void     spu_dma_write(const uint32_t* words, int count);
@@ -397,6 +398,14 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801088) {                           // DMA0 CHCR: MDEC-in (RAM -> MDEC)
     s_dma0_chcr = v;
     if (v & 0x01000000u) {
+      // WHICH MDEC CHANNEL STARTS FIRST decides whether this model's atomic-per-transfer shape can
+      // ever complete a decode. The guest computes the DMA register base dynamically, so a static
+      // scan of the executable cannot answer it (it finds no DMA0/DMA1 CHCR write at all) — but this
+      // handler sees every one. Reported as an ordered trace, with the word count, so a DMA1-before-
+      // DMA0 start is visible as such rather than inferred.
+      if (cfg_dbg("mdecdma"))
+        cfg_logf("mdecdma", "DMA0(in)  start madr=%08X bcr=%08X words=%d",
+                 s_dma0_madr, s_dma0_bcr, dma_block_words(s_dma0_bcr));
       int n = dma_block_words(s_dma0_bcr); if (n > 0x10000) n = 0x10000;
       uint32_t da = s_dma0_madr & 0x1FFFFC;
       for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
@@ -410,6 +419,12 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801098) {                           // DMA1 CHCR: MDEC-out (MDEC -> RAM)
     s_dma1_chcr = v;
     if (v & 0x01000000u) {
+      // Paired with the DMA0 trace above. A DMA1 start that drains ZERO words and still clears its
+      // busy bit is a SILENT TRUNCATION — the frame is short and nothing says so — so the drained
+      // count is reported next to the requested one rather than left to be inferred.
+      if (cfg_dbg("mdecdma"))
+        cfg_logf("mdecdma", "DMA1(out) start madr=%08X bcr=%08X words=%d canread=%d",
+                 s_dma1_madr, s_dma1_bcr, dma_block_words(s_dma1_bcr), (int)mdec_dma_can_read());
       int n = dma_block_words(s_dma1_bcr); if (n > 0x10000) n = 0x10000;
       for (int i = 0; i < n; i++) s_dma_buf[i] = 0;     // clear: mdec_dma_out scatters into buf
       mdec_dma_out(s_dma_buf, n);                       // places macroblock words at buf[i+offs]
