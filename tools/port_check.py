@@ -532,17 +532,35 @@ def main(argv=None):
         print("port_check: no files given (pass paths or --all)", file=sys.stderr)
         sys.exit(2)
 
-    results = []
+    # A GATE THAT CHECKED NOTHING MUST NOT EXIT 0. Both paths below used to be soft: a missing file was
+    # a warning-and-continue, and an empty marker set printed "nothing to check" and exited 0. Together
+    # they certified a PASS for input the tool never read — and the natural mistake makes it fire, because
+    # port_check takes FILES while every other tool in this pipeline (abi_extract.py, port_gen.py,
+    # codemap.py --addr) takes an ADDRESS. `port_check.py 800834A0` therefore printed a warning and
+    # exited 0, which reads as "the port is verified". Refuse instead, and say what was and wasn't read.
+    results, missing = [], []
     for f in files:
         p = f if os.path.isabs(f) else os.path.join(repo, f)
         if not os.path.isfile(p):
-            print(f"port_check: WARNING — {f} not found, skipping", file=sys.stderr)
+            missing.append(f)
             continue
         check_file(p, repo, results)
 
+    if missing:
+        print(f"port_check: REFUSING — {len(missing)} of {len(files)} given path(s) do not exist under "
+              f"{repo}: {', '.join(missing)}", file=sys.stderr)
+        if any(re.fullmatch(r'(0x)?[0-9A-Fa-f]{6,8}', m) for m in missing):
+            print("port_check: that looks like a GUEST ADDRESS. This tool takes SOURCE FILES — the file "
+                  "holding the native, whose method carries a `// ORACLE: gen_func_<addr>` marker. "
+                  "(Address-taking tools: abi_extract.py, port_gen.py, codemap.py --addr.)", file=sys.stderr)
+        sys.exit(2)
+
     if not results:
-        print("port_check: no // PORT_GEN: / // ORACLE: markers found in the given file(s) — nothing to check")
-        sys.exit(0)
+        print(f"port_check: NOTHING CHECKED — read {len(files)} file(s) and found 0 "
+              f"`// PORT_GEN:` / `// ORACLE:` markers. THIS IS NOT A PASS: an unmarked native is "
+              f"outside this gate's reach entirely, so it proves nothing about equivalence. Add the "
+              f"marker to the method under test, or point at the file that has one.", file=sys.stderr)
+        sys.exit(2)
 
     n_pass = n_fail = n_unprov = 0
     for path, addr, cls, method, verdict, findings, unprovable in results:
