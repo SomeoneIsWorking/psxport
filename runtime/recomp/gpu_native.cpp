@@ -1497,11 +1497,22 @@ void GpuState::frame_finalize(Core* core) {
   // and which therefore submits ~1600 prims on one frame and ZERO on the next (Spyro the Dragon),
   // s_prev_had3d is false on every prim-bearing frame and the 2D widen never fires at all.
   //
-  // Making the latch survive an empty frame DOES make it fire, and that made the picture WORSE, which
-  // is the useful part: the 2D widen shifts screen-space elements by the margin to line up with a 3D
-  // world that OFX has re-centred in the wider frame. A port that has not widened its 3D projection
-  // yet has no such shift, so widening 2D alone misaligns the two. The ordering is therefore fixed:
-  // widen the 3D projection FIRST, then this gate becomes correct rather than merely active.
+  // Making the latch survive an empty frame DOES make it fire, and that made the picture WORSE.
+  //
+  // THE FIRST EXPLANATION FOR THAT WAS WRONG, and is corrected here rather than left to mislead: it
+  // was recorded as an ORDERING problem — 2D widened against a 3D projection that had not been
+  // re-centred yet. That port has since re-centred OFX across every renderer that contributes to a
+  // frame, so the ordering precondition now holds, and enabling the latch STILL makes it worse.
+  // Measured this time instead of reasoned: with the latch firing, the sky, the ground AND the
+  // screen-space caption each move a further +86 px — the margin — so the widen is not shifting 2D
+  // relative to 3D at all, it is shifting the WHOLE FRAME a second time on top of OFX.
+  //
+  // THE REAL GATE IS 2D-vs-3D DISCRIMINATION. The widen only makes sense applied to content the
+  // renderer can tell is screen-space, and that discrimination rides on per-primitive DEPTH being
+  // resolved (s_seen3d is set from a projected world prim). On a port whose depth coverage is a few
+  // percent, almost nothing is classified 3D, so "widen the 2D" becomes "widen everything". This
+  // gate cannot be enabled there until native depth coverage is real — which is what OWNING the
+  // geometry renderers buys, and is now the reason to own them.
   s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide widen gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
   s_prev_had_bg2d = s_seen_bg2d;   // #54: remember whether this frame drew a full-screen 2D backdrop
