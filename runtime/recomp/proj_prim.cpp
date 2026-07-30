@@ -1,6 +1,7 @@
 // class ProjPrim — impl. See proj_prim.h for the design.
 #include "proj_prim.h"
 #include "cfg.h"
+#include <stdio.h>
 
 ProjPrim* ProjPrim::sCurrent = nullptr;
 
@@ -21,8 +22,27 @@ void ProjPrim::reset() {
     mInited = 1;
     return;
   }
-  // Advance the generation and drop entries older than the previous one. Compaction is a single pass
-  // over the live entries; the table is small and this runs once per frame.
+  // WHY THE GENERATION IS STILL ROLLED PER FRAME, even though that is provably wrong for a
+  // double-buffered packet pool — and what the correct fix has to do.
+  //
+  // A generation is meant to be one POOL BUFFER, and the retirement rule below ("older than one full
+  // buffer flip") is only sound if generations and flips advance together. A pool that submits ~1600
+  // prims on one frame and ZERO on the next burns a generation without a flip, so the buffer filled
+  // two frames ago has its depths compacted away before the DMA draws it. Measured on such a port:
+  // frames alternate between `hit=1547 miss=0` and `hit=0 miss=1540`, and a near-miss probe
+  // (`debug pznear`) confirms the depths are not merely at the wrong offset — nothing within +/-32
+  // bytes. Exactly half the frames lose every vertex.
+  //
+  // Rolling only on frames that RECORDED something fixes the alternation and takes resolved lookups
+  // from 6.9% to 23% — AND BREAKS THE PICTURE: entries then outlive the address they describe, the
+  // pool reuses those addresses, and stale depths get served as real ones. The player character was
+  // depth-culled out of the frame. That is the hazard this rule was written against, so the naive
+  // extension trades a visible miss for an invisible lie, which is worse.
+  //
+  // The sound fix keys entries so a reused address CANNOT alias — carry the pool buffer's identity in
+  // the key, or invalidate on the pool pointer wrapping — rather than extending how long an
+  // address-only key stays live. Until then the alternation stands, because half the vertices
+  // resolving correctly beats all of them resolving wrongly.
   mGen++;
   int n = 0;
   for (int i = 0; i < kHashSize; i++) mHead[i] = -1;
@@ -78,5 +98,45 @@ bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
   mMissCt++;
   if (cfg_dbg("pzaddr") && s_pz_dbg_miss < 12)
     { s_pz_dbg_miss++; cfg_logf("pzaddr", "MISS   [%06X]", addr); }
+  // NEAR-MISS HISTOGRAM (`debug pznear`). "Records climb, hits do not" has two completely different
+  // causes — the depth is being attached to the WRONG BUFFER entirely, or to the RIGHT buffer at the
+  // WRONG WORD — and the hit/miss ratio cannot tell them apart. This can: for every miss, probe the
+  // cache at a spread of nearby offsets and count which one WOULD have hit. A flat-zero histogram
+  // means the recorded addresses are nowhere near what the renderer reads (wrong buffer); a spike at
+  // a single offset means the tap is one fixed stride off (right buffer, wrong word), which is a
+  // one-line fix rather than an open question.
+  //
+  // Deliberately NOT capped at the first N: this fires on the same frames the summary describes, and
+  // the first N misses of a run are boot frames with no geometry at all — the mistake `pzaddr`'s own
+  // 12-line cap makes, which is why it has never answered this question.
+  if (cfg_dbg("pznear")) {
+    static const int kOff[] = {-32,-28,-24,-20,-16,-12,-8,-4,4,8,12,16,20,24,28,32};
+    for (int k = 0; k < (int)(sizeof kOff / sizeof kOff[0]); k++)
+      if (peekPz((uint32_t)((int32_t)addr + kOff[k]), nullptr)) mNear[k]++;
+    mNearMiss++;
+  }
   return false;
+}
+
+// Report the near-miss histogram, and say plainly when it found nothing — a silent "(no data)" here
+// would read exactly like "the offsets are all wrong", which is a different answer.
+void ProjPrim::nearReport(const char* tag) {
+  if (!cfg_dbg("pznear")) return;
+  static const int kOff[] = {-32,-28,-24,-20,-16,-12,-8,-4,4,8,12,16,20,24,28,32};
+  long tot = 0;
+  for (int k = 0; k < 16; k++) tot += mNear[k];
+  if (!mNearMiss) { cfg_logf("pznear", "%s: no misses probed yet", tag); return; }
+  if (!tot) {
+    cfg_logf("pznear", "%s: %ld misses probed, NONE had a recorded depth within +/-32 bytes — the "
+                       "depths are not in this buffer at all, so no stride fix can help",
+             tag, mNearMiss);
+    mNearMiss = 0;
+    return;
+  }
+  char line[256]; int n = 0;
+  for (int k = 0; k < 16 && n < (int)sizeof line - 24; k++)
+    if (mNear[k]) n += snprintf(line + n, sizeof line - n, " %+d:%ld", kOff[k], mNear[k]);
+  cfg_logf("pznear", "%s: %ld misses probed, %ld had a recorded depth nearby —%s", tag, mNearMiss, tot, line);
+  for (int k = 0; k < 16; k++) mNear[k] = 0;
+  mNearMiss = 0;
 }

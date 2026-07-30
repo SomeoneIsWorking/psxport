@@ -1381,7 +1381,15 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
                  s_frame, core->rsub.stats.nd3d, core->rsub.stats.nd2d, (core->rsub.stats.nd3d+core->rsub.stats.nd2d) ? 100.0*core->rsub.stats.nd3d/(core->rsub.stats.nd3d+core->rsub.stats.nd2d) : 0.0);
       { auto s = core->rsub.projprim.stats();
         if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-          cfg_logf("ndepth", "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld", s.set, s.hit, s.miss);
+          // OCCUPANCY AND OVERFLOW ARE PART OF THIS LINE, not an internal detail. The cache drops
+          // every record once it is full (ProjPrim::setPz: `if (mN >= kMax) { mOverflow = 1; return; }`)
+          // and nothing read that flag, so a port whose taps outgrew the cache saw its records climb
+          // and its hit rate stay flat with no way to tell that from "the taps are on the wrong
+          // addresses". A silently-dropped record is exactly the failure this channel exists to expose.
+          cfg_logf("ndepth", "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld  cache %d/%d%s",
+                   s.set, s.hit, s.miss, core->rsub.projprim.count(), ProjPrim::kMax,
+                   core->rsub.projprim.overflowed() ? "  OVERFLOWED — records were DROPPED" : "");
+          core->rsub.projprim.nearReport("ndepth");
         core->rsub.projprim.statsReset(); }
       if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
         for (int o = 0; o < 256; o++) if (s_nd2d_hist[o]) {

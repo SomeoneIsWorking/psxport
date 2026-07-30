@@ -51,6 +51,10 @@ public:
   // own hit/miss ratio, which is the number that says whether native depth is working at all.
   bool peekPz(uint32_t addr, float* pz);
 
+  // Near-miss histogram (`debug pznear`): for each missed lookup, which nearby offset WOULD have hit.
+  // Separates "wrong buffer" from "right buffer, wrong word" — see the comment at the probe.
+  void nearReport(const char* tag);
+
   bool overflowed() const { return mOverflow != 0; }
   int  count()      const { return mN; }
   Stats stats()     const { return {mSetCt, mHitCt, mMissCt}; }
@@ -63,6 +67,7 @@ private:
   int  mN = 0, mInited = 0, mOverflow = 0;
   int  mGen = 0;                 // current generation; entries from mGen and mGen-1 are readable
   long mSetCt = 0, mHitCt = 0, mMissCt = 0;
+  long mNear[16] = {0}; long mNearMiss = 0;
 
   static ProjPrim* sCurrent;
 

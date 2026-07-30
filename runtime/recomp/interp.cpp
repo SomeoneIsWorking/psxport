@@ -100,6 +100,18 @@ static inline void ncall_log(InterpDiag& d, char kind, uint32_t tgt, uint32_t a0
 enum : uint8_t { PZ_NONE = 0, PZ_VERTEX = 1, PZ_SRC = 2 };
 static uint8_t s_pz_kind[32];
 
+// OFF BY DEFAULT (PSXPORT_INTERP_DEPTH=1). Coverage is not correctness: with the depth-cache
+// generation counting pool FILLS rather than frames, this tap took resolved lookups to 99.8% — and
+// the rendered frame collapsed to near-empty, because the depths it attaches are not all real
+// vertices and the renderer culls on them. It stays until it can be made precise enough to earn
+// being on; the switch is here so the two changes can be measured apart, which is how the breakage
+// was attributed in the first place.
+static int interp_depth_on() {
+  static int v = -1;
+  if (v < 0) v = cfg_on("PSXPORT_INTERP_DEPTH") ? 1 : 0;
+  return v;
+}
+
 #define W(n, v) do { uint32_t _n = (n); if (_n) { c->r[_n] = (v); s_pz_kind[_n] = PZ_NONE; } } while (0)
 
 // A DERIVED value keeps its provenance. Both renderers pack a projected vertex as
@@ -252,7 +264,7 @@ static void exec_simple(Core* c, uint32_t in) {
       W(rt, c->mem_r32(a));
       // Remember WHERE this word came from, at the load — a load may clobber its own base register
       // (Spyro's vertex-cache index does exactly that), so the address cannot be rebuilt at the store.
-      if (rt) { gte_hold_src(c, (int)rt, a); s_pz_kind[rt] = PZ_SRC; }
+      if (rt && interp_depth_on()) { gte_hold_src(c, (int)rt, a); s_pz_kind[rt] = PZ_SRC; }
       break;
     }
     case 0x22: W(RT(in), c->mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwl
@@ -284,7 +296,7 @@ static void exec_simple(Core* c, uint32_t in) {
         W(rt, gte_read_data(rd));
         // SXY0/1/2 and SXYP are the projected screen-XY registers; each pairs with the SZ holding
         // that vertex's view-space Z (same pairing the recompiler uses — see emit.py ZPAIR).
-        if (rt && rd >= 12 && rd <= 15) {
+        if (rt && rd >= 12 && rd <= 15 && interp_depth_on()) {
           static const int kZPair[4] = {17, 18, 19, 19};
           gte_hold_pz(c, (int)rt, kZPair[rd - 12]);
           s_pz_kind[rt] = PZ_VERTEX;
