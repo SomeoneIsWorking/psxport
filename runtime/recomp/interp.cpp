@@ -649,3 +649,19 @@ void interp_run(Core* c, uint32_t pc) {
   interp_flat(c, pc, CORO_SENTINEL);
   c->r[31] = saved_ra;
 }
+
+// interp_call — the same nested call, but leaving the guest's OWN ra in place.
+//
+// WHY BOTH EXIST. interp_run poisons r[31] with the sentinel so it can recognise the callee's
+// return, and restores it afterwards, so the substitution is invisible to the caller. It is NOT
+// invisible to a callee that SPILLS ra to memory: a body whose prologue does `sw ra, N(at)` writes
+// the SENTINEL into guest RAM, and a per-call differential against the recompiled body then reports
+// a RAM divergence for a body that is otherwise bit-exact. Hand-written assembly with a fixed
+// register-save area instead of a stack frame does exactly this, and that is the shape a port most
+// wants to run interpreted (it is where a recompiled constant needs to become a variable).
+//
+// interp_flat's stop condition is a plain PC comparison, so the caller's real return address works
+// as the sentinel: it is the caller's continuation, reachable from inside the callee only by the
+// `jr ra` this is meant to stop on. Requires r[31] to hold the guest return address on entry, which
+// is what the recompiler emits before every call.
+void interp_call(Core* c, uint32_t pc) { interp_flat(c, pc, c->r[31]); }
