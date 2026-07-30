@@ -46,7 +46,14 @@ import abi_extract as abi  # the one parser — reused, not forked (see abi_extr
 MARKER_RE = re.compile(
     r'^\s*//\s*(PORT_GEN|ORACLE):\s*(?:0x)?(?:gen_func_|ov_[a-z0-9]+_gen_)?([0-9A-Fa-f]{8})\b'
 )
-METHOD_DEF_RE = re.compile(r'^[\w:\*&<>,\s]+?\b(\w+)::(\w+)\s*\([^;{]*\)\s*(?:const\s*)?\{\s*$')
+# The trailing `(?://.*)?` is load-bearing. Requiring `{` at END-OF-LINE made the house-style
+# `void Foo::bar(uint32_t x) {   // FUN_800844C0` definition INVISIBLE — and the failure mode was not
+# a skip, it was a MISBINDING: the `// ORACLE:` marker above it silently bound to the next visible
+# definition, ~100 lines away, and port_check then reported a store-width FAIL against a function
+# that had nothing to do with the marker. A wrong answer with a plausible shape is worse than no
+# answer, and the tree is full of such trailing comments (33 in cutscene_camera.cpp alone), so this
+# was a live trap for anyone adding a marker to an existing file.
+METHOD_DEF_RE = re.compile(r'^[\w:\*&<>,\s]+?\b(\w+)::(\w+)\s*\([^;{]*\)\s*(?:const\s*)?\{\s*(?://.*)?$')
 # A native override is not always a class METHOD. Most of this port (296 of 315 installs) wires a
 # free-function thunk — `static void ov_behArmCountdown(Core* c) {` — and binding a marker only to a
 # `Class::method` definition silently attached those markers to whatever unrelated method came next
