@@ -507,6 +507,18 @@ void gte_copy_pz(Core* c, int gpr, uint32_t dst) {
   if (c->rsub.projprim.peekPz(s_held_src[gpr & 31], &pz)) c->rsub.projprim.setPz(dst, pz);
 }
 
+// Carry a hold from one GPR to another, for a value the guest DERIVED rather than copied verbatim.
+//
+// Both renderers here pack a projected vertex as `(screenXY << 5) | clipcode` into a cache and unshift
+// it when they assemble the packet, so the word that reaches the primitive is several ALU ops away
+// from the one that was loaded. The provenance is unchanged by that arithmetic — the value still
+// derives from that vertex, or from that source address — so the hold moves with it. Copies the SLOT,
+// not the register file: re-deriving a held Z later would read whatever SZ has become by then.
+void gte_hold_move(int dst, int src) {
+  s_held_pz[dst & 31]  = s_held_pz[src & 31];
+  s_held_src[dst & 31] = s_held_src[src & 31];
+}
+
 void gte_record_pz(Core* c, uint32_t addr, int gpr) {
   if (!attach_enabled()) return;
   c->rsub.projprim.setPz(addr, s_held_pz[gpr & 31]);

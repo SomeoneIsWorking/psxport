@@ -83,7 +83,50 @@ static inline void ncall_log(InterpDiag& d, char kind, uint32_t tgt, uint32_t a0
 #define SIMM(i)((uint32_t)(int32_t)(int16_t)(i))
 #define TGT(i, pc) (((pc) & 0xF0000000u) | (((i) & 0x03FFFFFFu) << 2))
 
-#define W(n, v) do { uint32_t _n = (n); if (_n) c->r[_n] = (v); } while (0)
+// ── NATIVE DEPTH, mfc2 FORM, DONE DYNAMICALLY (see gte_beetle.cpp gte_hold_pz / gte_record_pz).
+//
+// The recompiler finds these taps STATICALLY: emit.py's vertex_pz_stores tracks a value from an
+// `mfc2` of a projected screen-XY register to the `sw` that writes it into a packet. That analysis
+// has to be conservative, and it can only see what it can prove — on Spyro it resolves 6.9% of
+// vertex lookups. The interpreter does not need to prove anything: it can watch the dataflow happen.
+//
+// One tag per GPR says what that register is CURRENTLY carrying — a projected vertex's depth (from
+// `mfc2`), or the address a word was loaded from (from `lw`) — and ANY other write to the register
+// clears it. That clear is the whole safety property: without it, a `sw` of a register whose held
+// depth belongs to some earlier vertex would attach a STALE depth to an unrelated address, and a
+// wrong depth is worse than none (it sorts a 2D element into the 3D scene). The static analysis
+// achieves the same thing by refusing to track through a redefinition; here it falls out of the
+// register write itself, which is why this can be exact where the analysis had to be conservative.
+enum : uint8_t { PZ_NONE = 0, PZ_VERTEX = 1, PZ_SRC = 2 };
+static uint8_t s_pz_kind[32];
+
+#define W(n, v) do { uint32_t _n = (n); if (_n) { c->r[_n] = (v); s_pz_kind[_n] = PZ_NONE; } } while (0)
+
+// A DERIVED value keeps its provenance. Both renderers pack a projected vertex as
+// `(screenXY << 5) | clipcode` into a cache and unshift it when assembling the packet, so the word
+// that reaches the primitive is several ALU ops from the one that was projected or loaded — and with
+// the plain W() above, every one of those ops cleared the tag. Measured: recording tripled but
+// resolved lookups barely moved, because the depth was landing on the cache and never reaching the
+// packet address anything draws from.
+//
+// Only the operand's OWN provenance moves; nothing is invented. If neither operand carries a hold the
+// destination is left cleared, exactly as before.
+//
+// DOES NOT CALL W(), deliberately. W declares its own `_n`, so `W(_n, v)` from inside another macro
+// expands to `uint32_t _n = (_n)` — self-initialisation from an uninitialised value, and every
+// derived write lands on a garbage register. That is exactly what happened, and it presented as the
+// port hanging on the first interpreted renderer, not as anything resembling a depth problem.
+#define WD(n, v, a, b) do {                                                    \
+    uint32_t _dn = (n), _da = (a), _db = (b);                                  \
+    uint32_t _ds = s_pz_kind[_da & 31] ? _da : (s_pz_kind[_db & 31] ? _db : 0u); \
+    uint8_t  _dk = _ds ? s_pz_kind[_ds & 31] : (uint8_t)PZ_NONE;               \
+    uint32_t _dv = (v);   /* BEFORE the write — v may read the destination */  \
+    if (_dn) {                                                                 \
+      if (_ds) gte_hold_move((int)_dn, (int)_ds);                              \
+      c->r[_dn] = _dv;                                                         \
+      s_pz_kind[_dn] = _dk;                                                    \
+    }                                                                          \
+  } while (0)
 
 // ---- Core load-delay hazard DETECTOR (PSXPORT_LDHAZARD) ------------------------------------
 // Our interpreter omits the load-delay slot (interp.c head): a load's target reg is visible to
@@ -163,12 +206,12 @@ static void exec_simple(Core* c, uint32_t in) {
     case 0x00: {  // SPECIAL
       uint32_t f = FN(in), rs = RS(in), rt = RT(in), rd = RD(in), sh = SH(in);
       switch (f) {
-        case 0x00: W(rd, c->r[rt] << sh); break;                              // sll
-        case 0x02: W(rd, c->r[rt] >> sh); break;                             // srl
-        case 0x03: W(rd, (uint32_t)((int32_t)c->r[rt] >> sh)); break;        // sra
-        case 0x04: W(rd, c->r[rt] << (c->r[rs] & 31)); break;                // sllv
-        case 0x06: W(rd, c->r[rt] >> (c->r[rs] & 31)); break;                // srlv
-        case 0x07: W(rd, (uint32_t)((int32_t)c->r[rt] >> (c->r[rs] & 31))); break; // srav
+        case 0x00: WD(rd, c->r[rt] << sh, rt, rt); break;                              // sll
+        case 0x02: WD(rd, c->r[rt] >> sh, rt, rt); break;                             // srl
+        case 0x03: WD(rd, (uint32_t)((int32_t)c->r[rt] >> sh), rt, rt); break;        // sra
+        case 0x04: WD(rd, c->r[rt] << (c->r[rs] & 31), rt, rt); break;                // sllv
+        case 0x06: WD(rd, c->r[rt] >> (c->r[rs] & 31), rt, rt); break;                // srlv
+        case 0x07: WD(rd, (uint32_t)((int32_t)c->r[rt] >> (c->r[rs] & 31)), rt, rt); break; // srav
         case 0x10: W(rd, c->hi); break;                                      // mfhi
         case 0x11: c->hi = c->r[rs]; break;                                  // mthi
         case 0x12: W(rd, c->lo); break;                                      // mflo
@@ -179,11 +222,11 @@ static void exec_simple(Core* c, uint32_t in) {
                      c->lo = (uint32_t)p; c->hi = (uint32_t)(p >> 32); } break;           // multu
         case 0x1A: cpu_div(c, c->r[rs], c->r[rt]); break;                    // div
         case 0x1B: cpu_divu(c, c->r[rs], c->r[rt]); break;                   // divu
-        case 0x20: case 0x21: W(rd, c->r[rs] + c->r[rt]); break;             // add/addu
-        case 0x22: case 0x23: W(rd, c->r[rs] - c->r[rt]); break;             // sub/subu
-        case 0x24: W(rd, c->r[rs] & c->r[rt]); break;                        // and
-        case 0x25: W(rd, c->r[rs] | c->r[rt]); break;                        // or
-        case 0x26: W(rd, c->r[rs] ^ c->r[rt]); break;                        // xor
+        case 0x20: case 0x21: WD(rd, c->r[rs] + c->r[rt], rs, rt); break;    // add/addu
+        case 0x22: case 0x23: WD(rd, c->r[rs] - c->r[rt], rs, rt); break;    // sub/subu
+        case 0x24: WD(rd, c->r[rs] & c->r[rt], rs, rt); break;               // and
+        case 0x25: WD(rd, c->r[rs] | c->r[rt], rs, rt); break;               // or
+        case 0x26: WD(rd, c->r[rs] ^ c->r[rt], rs, rt); break;               // xor
         case 0x27: W(rd, ~(c->r[rs] | c->r[rt])); break;                     // nor
         case 0x2A: W(rd, (uint32_t)((int32_t)c->r[rs] < (int32_t)c->r[rt])); break; // slt
         case 0x2B: W(rd, (uint32_t)(c->r[rs] < c->r[rt])); break;            // sltu
@@ -194,22 +237,36 @@ static void exec_simple(Core* c, uint32_t in) {
       break;
     }
     case 0x0F: W(RT(in), IMM(in) << 16); break;                             // lui
-    case 0x08: case 0x09: W(RT(in), c->r[RS(in)] + SIMM(in)); break;        // addi/addiu
+    case 0x08: case 0x09: WD(RT(in), c->r[RS(in)] + SIMM(in), RS(in), RS(in)); break;        // addi/addiu
     case 0x0A: W(RT(in), (uint32_t)((int32_t)c->r[RS(in)] < (int32_t)SIMM(in))); break; // slti
     case 0x0B: W(RT(in), (uint32_t)(c->r[RS(in)] < SIMM(in))); break;       // sltiu
-    case 0x0C: W(RT(in), c->r[RS(in)] & IMM(in)); break;                    // andi
-    case 0x0D: W(RT(in), c->r[RS(in)] | IMM(in)); break;                    // ori
-    case 0x0E: W(RT(in), c->r[RS(in)] ^ IMM(in)); break;                    // xori
+    case 0x0C: WD(RT(in), c->r[RS(in)] & IMM(in), RS(in), RS(in)); break;                    // andi
+    case 0x0D: WD(RT(in), c->r[RS(in)] | IMM(in), RS(in), RS(in)); break;                    // ori
+    case 0x0E: WD(RT(in), c->r[RS(in)] ^ IMM(in), RS(in), RS(in)); break;                    // xori
     case 0x20: W(RT(in), (uint32_t)c->mem_r8s(c->r[RS(in)] + SIMM(in))); break;   // lb
     case 0x24: W(RT(in), (uint32_t)c->mem_r8(c->r[RS(in)] + SIMM(in))); break;           // lbu
     case 0x21: W(RT(in), (uint32_t)c->mem_r16s(c->r[RS(in)] + SIMM(in))); break; // lh
     case 0x25: W(RT(in), (uint32_t)c->mem_r16(c->r[RS(in)] + SIMM(in))); break;          // lhu
-    case 0x23: W(RT(in), c->mem_r32(c->r[RS(in)] + SIMM(in))); break;                    // lw
+    case 0x23: {                                                                          // lw
+      const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
+      W(rt, c->mem_r32(a));
+      // Remember WHERE this word came from, at the load — a load may clobber its own base register
+      // (Spyro's vertex-cache index does exactly that), so the address cannot be rebuilt at the store.
+      if (rt) { gte_hold_src(c, (int)rt, a); s_pz_kind[rt] = PZ_SRC; }
+      break;
+    }
     case 0x22: W(RT(in), c->mem_lwl(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwl
     case 0x26: W(RT(in), c->mem_lwr(c->r[RT(in)], c->r[RS(in)] + SIMM(in))); break;      // lwr
     case 0x28: c->mem_w8(c->r[RS(in)] + SIMM(in), (uint8_t)c->r[RT(in)]); break;         // sb
     case 0x29: c->mem_w16(c->r[RS(in)] + SIMM(in), (uint16_t)c->r[RT(in)]); break;       // sh
-    case 0x2B: c->mem_w32(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // sw
+    case 0x2B: {                                                                          // sw
+      const uint32_t a = c->r[RS(in)] + SIMM(in), rt = RT(in);
+      c->mem_w32(a, c->r[rt]);
+      // Attach depth to the address written, but ONLY from a register that still carries it.
+      if (s_pz_kind[rt & 31] == PZ_VERTEX)   gte_record_pz(c, a, (int)rt);
+      else if (s_pz_kind[rt & 31] == PZ_SRC) gte_copy_pz(c, (int)rt, a);
+      break;
+    }
     case 0x2A: c->mem_swl(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swl
     case 0x2E: c->mem_swr(c->r[RS(in)] + SIMM(in), c->r[RT(in)]); break;                 // swr
     case 0x10: {  // COP0
@@ -222,7 +279,17 @@ static void exec_simple(Core* c, uint32_t in) {
     case 0x12: {  // COP2 / GTE
       uint32_t fmt = RS(in);
       if (in & (1u << 25)) { gte_op(c, in); break; }          // GTE operation (cop2 bit25)
-      if (fmt == 0x00) W(RT(in), gte_read_data(RD(in)));      // mfc2
+      if (fmt == 0x00) {                                      // mfc2
+        const uint32_t rd = RD(in), rt = RT(in);
+        W(rt, gte_read_data(rd));
+        // SXY0/1/2 and SXYP are the projected screen-XY registers; each pairs with the SZ holding
+        // that vertex's view-space Z (same pairing the recompiler uses — see emit.py ZPAIR).
+        if (rt && rd >= 12 && rd <= 15) {
+          static const int kZPair[4] = {17, 18, 19, 19};
+          gte_hold_pz(c, (int)rt, kZPair[rd - 12]);
+          s_pz_kind[rt] = PZ_VERTEX;
+        }
+      }
       else if (fmt == 0x02) W(RT(in), gte_read_ctrl(RD(in))); // cfc2
       else if (fmt == 0x04) gte_write_data(RD(in), c->r[RT(in)]); // mtc2
       else if (fmt == 0x06) gte_write_ctrl(RD(in), c->r[RT(in)]); // ctc2

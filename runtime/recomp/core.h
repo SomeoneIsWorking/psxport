@@ -266,6 +266,9 @@ void     gte_record_pz(Core* c, uint32_t addr, int gpr);
 // gte_beetle.cpp for why both properties matter.
 void     gte_hold_src(Core* c, int gpr, uint32_t src);
 void     gte_copy_pz(Core* c, int gpr, uint32_t dst);
+// Move a hold between GPRs when the guest DERIVES a value (shift/mask/add) rather than copying it —
+// the packing these renderers do between projecting a vertex and writing it into a packet.
+void     gte_hold_move(int dst, int src);
 
 // R3000 integer division semantics (no traps; defined /0 + overflow results).
 void cpu_div (Core* c, uint32_t n, uint32_t d);
