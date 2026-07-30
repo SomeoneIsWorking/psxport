@@ -413,6 +413,12 @@ static void game_main(Core* c) {
       c->mem_w16(wsm + 0x4a, 1);
       c->mem_w16(wsm + 0x4c, c->mem_r8(0x80108f60u + dest));
       c->mem_w16(wsm + 0x4e, 0);
+      // Run the destination area's OWN entry handler. Forcing the machine into its running state above
+      // is what makes a cold warp survivable, but it also jumps PAST the outer-state-0 transition that
+      // normally dispatches that handler — so without this the area's data and code sit resident with
+      // nothing ever arming its objects. Measured before this call existed: after `warp 12` exactly ONE
+      // of the destination overlay's 170 functions ran, while the arena rendered normally.
+      if (c->hooks->devWarpAreaEnter) c->hooks->devWarpAreaEnter(c);
       cfg_logi("repl", "warp: full area load for area %u done (f%u), bf870=%u, sm[0x4c]=%u", dest, f, c->mem_r8(0x800bf870u), c->mem_r8(wsm + 0x4c));
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input

@@ -301,6 +301,12 @@ struct GameHooks {
                                               // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
   void (*devWarpAreaLoad)(Core* c);           // dev-warp full area load (was native_boot.cpp's
                                               // eng(c).sop.transitionAreaLoad()).
+  void (*devWarpAreaEnter)(Core* c);          // dev-warp: run the destination area's OWN entry handler
+                                              // after the load. A warp forces the area machine past the
+                                              // transition that normally dispatches it, so without this
+                                              // the area's data and code are resident but nothing arms
+                                              // its objects. Game-side because only the game knows where
+                                              // its per-area handler table lives. May be null.
   // Dev-warp AREA INDEX, for the RmlUi warp selector and the REPL `warp` range guard. Game-side because
   // the framework must not know how many areas a game has, what they are called, or which guest address
   // says "we are in the field". devAreaName returns "" when the area has no sourced name — the caller
