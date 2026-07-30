@@ -346,6 +346,7 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dic
 
     frame_opens, frame_closes, widths, calls = [], [], [], []
     pending_ra = None
+    pending_default = False
     for stmt in substmts:
         for gf in GUESTFRAME_RE.finditer(stmt):
             n = int(gf.group(1))
@@ -412,6 +413,21 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dic
         if cm:
             calls.append(abi.OpSeqCall(ra_const=pending_ra, target=cm.group(1)))
             pending_ra = None
+            continue
+        # A switch's DEFAULT arm is the guest's `jr` tail and is deliberately not counted as a call.
+        # Detecting it by "is the literal text `default:` in THIS sub-statement" made the gate depend on
+        # FORMATTING, not behaviour: the recompiler emits its whole switch on one line so the oracle was
+        # skipped, while an identical arm written across several lines was counted and the method FAILed
+        # with a bogus call-count mismatch. That punished exactly the readable style this project asks
+        # for. The flag below is set by a `default:` sub-statement and consumed by the next rec_dispatch,
+        # so one-line and multi-line arms behave the same. Cleared by `case ` / `}` so it cannot leak
+        # past the switch it belongs to.
+        if 'default:' in stmt:
+            pending_default = True
+        elif re.search(r'\bcase\b|\}', stmt):
+            pending_default = False
+        if rm and pending_default:
+            pending_default = False
             continue
         if rm and 'default:' not in stmt:
             raw_target = rm.group(1).strip()
