@@ -10,6 +10,8 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include "c_subsys.h"   // mdec_* primitives (run_mdecpump)
+#include "hw_bind.h"    // mdec_bind (run_mdecpump)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -464,6 +466,139 @@ static int run_oraclediff(const char* path) {
   return 0;   // diagnostic harness: always exit 0 (it reports, it doesn't pass/fail)
 }
 
+// MDEC PENDING-DMA PUMP — regression for the RE-03c fix (mem.cpp mdec_dma_pump) and for the voffs
+// PLACEMENT CONTRACT it must reproduce (dest_word(i) = MADR_word + i + (int32)voffs_i, vendor
+// dma.c CH_MDEC_OUT). Fully synthetic and game-agnostic: no disc, no EXE, no tables from a game.
+//
+// Method: decode ONE synthetic 16bpp frame twice on the same per-instance MDEC —
+//   (a) REFERENCE: the native_fmv idiom (mdec_dma_in / mdec_step / mdec_dma_out into a flat
+//       buffer), the placement path verified against real STR frames;
+//   (b) PUMP: the guest-visible path — input staged in guest RAM, decode command written through
+//       the MDEC0 port ADDRESS, DMA0 then DMA1 started through their CHCR ADDRESSES — so the
+//       pending-channel latch, the deferral, the poll-driven resume and the per-word scatter
+//       stores all execute exactly as a game drives them.
+// PASS requires bit-identical output AND three mechanism assertions: DMA0's CHCR busy bit is
+// still SET after its start (the deferral really engaged — the old model cleared it and a pump
+// bypass would too), and both busy bits are CLEAR after DMA1 completes the ping-pong.
+//
+// The discriminator is validated against its own blind spot: an all-alike output would compare
+// equal under ANY placement bug, so the test FAILS if the reference frame is not sufficiently
+// varied (>= 16 distinct words). DC-only blocks with a position-varying IDCT row give every
+// macroblock quadrant and row a distinct value, so a wrong i-base, a dropped/sign-flipped voffs,
+// or a burst-boundary slip all change bytes. (Verified once by deliberately zeroing `offs` in
+// mdec_dma_pump: this test fails with thousands of mismatching words; restored, it passes.)
+static int run_mdecpump(const char*) {
+  Game* game = new Game();
+  Core* c = &game->core;
+  mdec_bind(c);                                   // per-instance Beetle MDEC (lazy MDEC_Power)
+
+  enum { NMB = 16, IN_WORDS = NMB * 6, OUT_WORDS = NMB * 128 };   // 16bpp: 128 words / 16x16 MB
+  static uint32_t in_words[IN_WORDS], ref[OUT_WORDS];
+  // One word per 8x8 block: lo halfword = DC (qscale 0, 10-bit, never 0xFE00), hi = 0xFE00 EOB.
+  // 6 blocks (Cr,Cb,Y0..Y3) per macroblock; distinct DC per block so placement errors move pixels.
+  for (int b = 0; b < IN_WORDS; b++)
+    in_words[b] = ((uint32_t)((b * 37 + 100) & 0x3FF) | 1u) | 0xFE000000u;
+  const uint32_t cmd = (1u << 29) | (3u << 27) | IN_WORDS;        // decode, 16bpp, 96 param words
+
+  // IDCT matrix with a position-varying first row (DC-only blocks project through row u=0 twice,
+  // so varying it makes every pixel of a block differ) — uploaded once, survives MDEC reset.
+  {
+    uint32_t iwords[32];
+    int16_t idct[64];
+    for (int u = 0; u < 8; u++)
+      for (int x = 0; x < 8; x++)
+        idct[u * 8 + x] = (int16_t)(((u * 13 + x * 7 + 5) % 50 - 25) * 256);
+    for (int i = 0; i < 32; i++)
+      iwords[i] = (uint16_t)idct[i * 2] | ((uint32_t)(uint16_t)idct[i * 2 + 1] << 16);
+    mdec_write(0x1F801824u, 0x80000000u);                         // reset
+    mdec_write(0x1F801824u, (1u << 30) | (1u << 29));             // enable DMA in + out
+    mdec_write(0x1F801820u, 3u << 29);                            // SetIdctTab
+    mdec_dma_in(iwords, 32);
+    mdec_step();
+  }
+
+  // (a) Reference decode — native_fmv's verified interleave into a flat frame buffer.
+  {
+    mdec_write(0x1F801820u, cmd);
+    int in_pos = 0, got = 0, stall = 0;
+    for (;;) {
+      if (in_pos < IN_WORDS && mdec_dma_can_write()) {
+        int chunk = IN_WORDS - in_pos; if (chunk > 0x10) chunk = 0x10;
+        in_pos += mdec_dma_in(&in_words[in_pos], chunk);
+      }
+      mdec_step();
+      int n = (got < OUT_WORDS) ? mdec_dma_out(ref + got, OUT_WORDS - got) : 0;
+      got += n;
+      if (in_pos >= IN_WORDS && n == 0) { if (++stall >= 4) break; } else stall = 0;
+      if (got >= OUT_WORDS && in_pos >= IN_WORDS) break;
+    }
+    // mdec_dma_out's per-word DMACanRead gate strands a final sub-0x20 tail in the OutFIFO (the
+    // native_fmv-documented constraint); drain it with the scatter still applied. The PUMP path
+    // does not need this: its per-BURST gate drains exact 0x20 blocks, so totals divide evenly.
+    got += mdec_dma_out_rest(ref + got, OUT_WORDS - got);
+    if (got != OUT_WORDS) {
+      cfg_logi("selftest", "FAIL: reference decode produced %d of %d words", got, OUT_WORDS);
+      return 1;
+    }
+    // Discriminator validity: a near-uniform frame could not catch a placement bug.
+    int distinct = 0;
+    for (int i = 0; i < OUT_WORDS; i++) {
+      int seen = 0;
+      for (int j = 0; j < i && !seen; j++) seen = (ref[j] == ref[i]);
+      if (!seen && ++distinct >= 16) break;
+    }
+    if (distinct < 16) {
+      cfg_logi("selftest", "FAIL: reference frame degenerate (only %d distinct words) — the "
+                           "comparison could not see a placement bug; fix the test stream", distinct);
+      return 1;
+    }
+  }
+
+  // (b) The guest-visible pump path.
+  const uint32_t SRC = 0x00100000u, DST = 0x00180000u;
+  mdec_write(0x1F801824u, 0x80000000u);                           // reset (IDCT matrix persists)
+  mdec_write(0x1F801824u, (1u << 30) | (1u << 29));
+  c->mem_w32(0x1F801820u, cmd);                                   // command through the PORT address
+  for (int i = 0; i < IN_WORDS; i++) c->mem_w32(SRC + (uint32_t)i * 4, in_words[i]);
+  for (int i = 0; i < OUT_WORDS; i++) c->mem_w32(DST + (uint32_t)i * 4, 0xDEADBEEFu);
+  c->mem_w32(0x1F801080u, SRC);
+  c->mem_w32(0x1F801084u, 0x00030020u);                           // 3 blocks x 0x20 = 96 words
+  c->mem_w32(0x1F801088u, 0x01000201u);                           // start DMA0 (sync 1, to MDEC)
+  if (!(c->mem_r32(0x1F801088u) & 0x01000000u)) {
+    cfg_logi("selftest", "FAIL: DMA0 busy bit clear right after start — the transfer completed "
+                         "atomically, so the pending/deferral mechanism never engaged");
+    return 1;
+  }
+  c->mem_w32(0x1F801090u, DST);
+  c->mem_w32(0x1F801094u, 0x00400020u);                           // 0x40 blocks x 0x20 = 2048 words
+  c->mem_w32(0x1F801098u, 0x01000200u);                           // start DMA1 (sync 1, to RAM)
+  if (c->mem_r32(0x1F801098u) & 0x01000000u) {
+    cfg_logi("selftest", "FAIL: DMA1 busy bit still set — the ping-pong did not complete its %d words",
+             OUT_WORDS);
+    return 1;
+  }
+  if (c->mem_r32(0x1F801088u) & 0x01000000u) {
+    cfg_logi("selftest", "FAIL: DMA0 busy bit still set after DMA1 completed — pending input never "
+                         "finished feeding");
+    return 1;
+  }
+
+  int bad = 0; uint32_t first_bad = 0;
+  for (int i = 0; i < OUT_WORDS; i++) {
+    uint32_t got_w = c->mem_r32(DST + (uint32_t)i * 4);
+    if (got_w != ref[i] && bad++ == 0) first_bad = (uint32_t)i;
+  }
+  if (bad) {
+    cfg_logi("selftest", "FAIL: pump output differs from reference in %d of %d words (first at "
+                         "word %u: got %08X want %08X) — the voffs placement contract is broken",
+             bad, OUT_WORDS, first_bad, c->mem_r32(DST + first_bad * 4), ref[first_bad]);
+    return 1;
+  }
+  cfg_logi("selftest", "PASS: pending-DMA pump decode == reference (%d words bit-identical; "
+                       "DMA0 deferred at start, both busy bits cleared on completion)", OUT_WORDS);
+  return 0;
+}
+
 // Dispatched from boot.cpp when PSXPORT_SELFTEST is set.
 int selftest_run(const char* path) {
   const char* which = cfg_str("PSXPORT_SELFTEST");
@@ -471,13 +606,14 @@ int selftest_run(const char* path) {
   if (which && !strcmp(which, "narration")) return run_narration(path);
   if (which && !strcmp(which, "oracle"))    return run_oracle(path);
   if (which && !strcmp(which, "oraclediff")) return run_oraclediff(path);
+  if (which && !strcmp(which, "mdecpump"))  return run_mdecpump(path);
   // Anything else may be a GAME-defined selftest — the framework deliberately does not know their
   // names (psxport is game-agnostic; see game_iface.h selftestGame).
   if (which && *which) {
     const int rc = psxport_game_hooks()->selftestGame(which, path);
     if (rc != 2) return rc;
   }
-  cfg_logi("selftest", "unknown PSXPORT_SELFTEST='%s' (framework: startgame, narration, oracle, oraclediff; "
-                       "the game may define more)", which ? which : "");
+  cfg_logi("selftest", "unknown PSXPORT_SELFTEST='%s' (framework: startgame, narration, oracle, oraclediff, "
+                       "mdecpump; the game may define more)", which ? which : "");
   return 2;
 }

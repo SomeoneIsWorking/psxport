@@ -175,6 +175,21 @@ private:
   // DMA channel state (per-instance) — DMA0 MDEC-in, 1 MDEC-out, 2 GPU, 4 SPU, 6 OTC.
   uint32_t s_dma0_madr=0, s_dma0_bcr=0, s_dma0_chcr=0;
   uint32_t s_dma1_madr=0, s_dma1_bcr=0, s_dma1_chcr=0;
+
+  // MDEC DMA pending-channel state. On real hardware DMA0 (MDEC-in) and DMA1 (MDEC-out) sit
+  // PENDING with CHCR bit 24 set and ping-pong around the decoder, each gated per block by the
+  // decoder's readiness (vendor beetle-psx dma.c: ChCan -> MDEC_DMACanWrite/CanRead). This model's
+  // transfers are synchronous, so a start that cannot complete latches its remainder here — busy
+  // stays SET, exactly as hardware shows — and mdec_dma_pump() moves it forward on the counterpart
+  // channel's start and on every guest-visible poll (DMA0/DMA1 CHCR reads, MDEC status/data reads).
+  // The per-instance Beetle MDEC this pumps is bound per frame-step (MdecDevice::bind).
+  uint32_t s_mdec0_addr=0; int s_mdec0_left=0;  // DMA0: next guest word to read, words still to feed
+  uint32_t s_mdec1_addr=0; int s_mdec1_left=0;  // DMA1: running CurAddr (dma.c form), words still to drain
+  int      s_mdec_stall_reported=0;             // one loud wedge report per latched start, not per poll
+  uint32_t s_mdec_defer_note=0;                 // last traced deferral (reason<<24|count): trace state
+                                                // CHANGES, not every poll — a pending remainder the
+                                                // guest never cleans up is polled millions of times
+  void     mdec_dma_pump();
   uint32_t s_dma2_madr=0, s_dma2_bcr=0, s_dma2_chcr=0;
   uint32_t s_dma4_madr=0, s_dma4_bcr=0, s_dma4_chcr=0;
   uint32_t s_spu_xfer_addr=0;   // last SPU transfer-start addr (reg 0x1F801DA6 << 3), for SPU-DMA logging

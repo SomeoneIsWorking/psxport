@@ -26,10 +26,13 @@ int gpu_windowed(void);
 void     mdec_init(void);
 void     mdec_write(uint32_t addr, uint32_t val);
 uint32_t mdec_read(uint32_t addr);
-void     mdec_dma_in(const uint32_t* words, int count);
+int      mdec_dma_in(const uint32_t* words, int count);   // returns words actually fed (short = deferral)
 int      mdec_dma_out(uint32_t* buf, int count);
 int      mdec_dma_out_rest(uint32_t* buf, int count);
+uint32_t mdec_dma_read_word(uint32_t* offs);              // pop one OutFIFO word + its scatter displacement
+void     mdec_step(void);                                 // run the decoder until it parks at a FIFO gate
 int      mdec_dma_can_write(void);
+int      mdec_dma_can_read(void);
 void     MDEC_Run(int32_t clocks);
 
 // (spu_audio has moved to `class SpuAudio` owned by Game — `c->game->spu_audio.method()`.

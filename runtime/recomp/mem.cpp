@@ -22,8 +22,10 @@ extern "C" {
 #include "cdc_state.h"
 void     mdec_write(uint32_t addr, uint32_t val);
 uint32_t mdec_read(uint32_t addr);
-void     mdec_dma_in(const uint32_t* words, int count);
-int      mdec_dma_out(uint32_t* words, int count);
+int      mdec_dma_in(const uint32_t* words, int count);   // returns words actually fed (short = deferral)
+uint32_t mdec_dma_read_word(uint32_t* offs);              // pop one OutFIFO word + its scatter displacement
+void     mdec_step(void);                                 // run the decoder until it parks at a FIFO gate
+bool     mdec_dma_can_write(void);
 bool     mdec_dma_can_read(void);
 void     spu_write(uint32_t addr, uint32_t val);
 uint32_t spu_read(uint32_t addr);
@@ -127,6 +129,156 @@ static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word 
   return (int)(bs * (bc ? bc : 1));
 }
 
+// MDEC pending-channel pump — the ping-pong real hardware gets from DMA0 (MDEC-in) and DMA1
+// (MDEC-out) running CONCURRENTLY around the decoder. In vendor beetle-psx dma.c both channels sit
+// with CHCR bit 24 set and each block transfer is gated by ChCan() — MDEC_DMACanWrite() for CH0,
+// MDEC_DMACanRead() for CH1 — so DMA0 stalls while a macroblock decodes and DMA1 drains the output
+// that lets the next macroblock retire. This model's transfers are synchronous CHCR-write handlers,
+// which made each transfer atomic: whichever channel started first ran to completion before the
+// other could begin, and a whole-frame decode (whose output is far larger than the 0x20-word
+// OutFIFO) could NEVER complete — the measured RE-03c wedge ("6 of 1824 words written,
+// outfifo_has_data=1"). The fix is the missing hardware concept, a PENDING channel: a start that
+// cannot complete latches its remainder (busy stays set, as hardware shows), and this pump moves
+// both channels forward together. It is called from both CHCR starts and from every guest-visible
+// poll (DMA0/DMA1 CHCR reads, MDEC status/data-port reads, MDEC port writes), so every guest spin
+// loop drives progress instead of observing a frozen model.
+void Core::mdec_dma_pump() {
+  for (;;) {
+    bool progress = false;
+
+    // DMA0 (MDEC-in): feed the pending remainder while the decoder can accept. MDEC_DMACanWrite()
+    // is true only when >= 0x20 InFIFO words are free (i.e. the FIFO is empty), so a 0x10-word
+    // chunk is never silently dropped — the same constraint native_fmv.cpp documents and relies on.
+    while (s_mdec0_left > 0 && mdec_dma_can_write()) {
+      uint32_t chunk_buf[0x10];
+      int chunk = s_mdec0_left < 0x10 ? s_mdec0_left : 0x10;
+      for (int k = 0; k < chunk; k++)
+        chunk_buf[k] = mem_r32((s_mdec0_addr + (uint32_t)k * 4) & 0x1FFFFCu);
+      int fed = mdec_dma_in(chunk_buf, chunk);
+      s_mdec0_addr = (s_mdec0_addr + (uint32_t)fed * 4) & 0xFFFFFFu;
+      s_mdec0_left -= fed;
+      if (fed > 0) progress = true;
+      if (fed < chunk) break;                        // decoder refused mid-chunk: fall through to classify
+    }
+
+    // DMA1 (MDEC-out): drain in hardware-shaped bursts. Real DMA1 re-checks MDEC_DMACanRead() once
+    // per BLOCK (WordCounter reload, vendor dma.c) and then transfers the whole block, so the gate
+    // is per-burst, not per-word. Each word is stored EXACTLY as dma.c CH_MDEC_OUT stores it:
+    //     MainRAM[(CurAddr + (voffs << 2)) & 0x1FFFFC] = word;   CurAddr = (CurAddr + 4) & 0xFFFFFF;
+    // i.e. dest_word(i) = MADR_word + i + (int32)voffs_i, with i cumulative over THIS channel's
+    // transfer (the voffs placement contract, mdec_beetle.c). Per-word DIRECT stores — never the
+    // old zero-fill-stage-then-copy-all-n, which on a partial drain wrote zeros over guest RAM at
+    // every position the scatter's forward reach had not covered yet.
+    while (s_mdec1_left > 0 && mdec_dma_can_read()) {
+      int bs = (int)(s_dma1_bcr & 0xFFFF); if (bs == 0) bs = 0x10000;
+      int burst = bs < s_mdec1_left ? bs : s_mdec1_left;
+      for (int k = 0; k < burst; k++) {
+        uint32_t offs = 0;
+        uint32_t val = mdec_dma_read_word(&offs);
+        mem_w32((s_mdec1_addr + (offs << 2)) & 0x1FFFFCu, val);
+        s_mdec1_addr = (s_mdec1_addr + 4) & 0xFFFFFFu;
+      }
+      s_mdec1_left -= burst;
+      progress = true;
+    }
+
+    // Channel completion: busy (bit 24) clears ONLY when the word count is exhausted — the same
+    // moment hardware clears it. (DecDCTinSync-style waits poll MDEC1 status bit 29 = InCommand,
+    // which Beetle derives itself, so completion needs no extra signalling here. The guest never
+    // touches DICR/DPCR — measured, 0 references across the executable — so no DMA IRQ is due.)
+    if (s_mdec0_left == 0 && (s_dma0_chcr & 0x01000000u)) {
+      s_dma0_chcr &= ~0x01000000u;
+      if (cfg_dbg("mdecdma")) cfg_logf("mdecdma", "DMA0(in)  complete");
+    }
+    if (s_mdec1_left == 0 && (s_dma1_chcr & 0x01000000u)) {
+      s_dma1_chcr &= ~0x01000000u;
+      if (cfg_dbg("mdecdma")) cfg_logf("mdecdma", "DMA1(out) complete");
+    }
+    if (s_mdec0_left == 0 && s_mdec1_left == 0) return;   // nothing pending
+    if (progress) continue;
+
+    // No progress with work still pending: hand the decoder its clock budget once (the state
+    // machine only moves inside MDEC_Run; one call runs it to the next genuine FIFO gate) and
+    // classify what it parked at. A silent return here would be the old bug wearing a new coat, so
+    // every exit below is either a TRACED deferral (guest action will resume it) or a LOUD wedge.
+    mdec_step();
+    if ((s_mdec0_left > 0 && mdec_dma_can_write()) ||
+        (s_mdec1_left > 0 && mdec_dma_can_read()))
+      continue;                                            // the step freed a FIFO — keep pumping
+
+    const uint32_t st = mdec_read(0x1F801824u);            // MDEC1 status
+    const int in_cmd  = (st >> 29) & 1;                    // bit 29: a decode command is consuming input
+    const int out_has = !((st >> 31) & 1);                 // bit 31 clear: OutFIFO non-empty
+
+    if (s_mdec0_left > 0 && !in_cmd && (st & 0xFFFF) == 0xFFFF) {
+      // The decode command RETIRED (InCounter wrapped to 0xFFFF) with input still pending: the
+      // guest oversized DMA0 against the command's word count, and MDEC_DMACanWrite requires
+      // InCommand, so this transfer can never complete. Hardware would hang the channel busy
+      // forever; keep that state (a later command write re-pumps and may legally consume it),
+      // but say so ONCE — never spin on it, never fake completion.
+      if (!s_mdec_stall_reported) {
+        s_mdec_stall_reported = 1;
+        cfg_loge("mdec", "DMA0 in: %d word(s) pending @%08X but the decode command has retired "
+                         "(InCommand clear, InCounter=0xFFFF) — input remainder outlives the "
+                         "command; transfer cannot complete. MDEC1 status=%08X",
+                 s_mdec0_left, s_mdec0_addr, st);
+      }
+      return;
+    }
+    // Deferral traces fire on state CHANGE only (reason + pending count), never per poll: the
+    // measured guest abandons its final DMA0 remainder without a forced stop and then touches the
+    // MDEC/DMA registers millions of times over a session — a per-poll trace wrote a 654 MB log.
+    if (s_mdec0_left > 0 && !in_cmd) {
+      // No decode command in flight (fresh reset / between commands): a command write to the MDEC
+      // port resumes this via the port-write pump point. Faithful wait, traced.
+      const uint32_t note = 0x01000000u | (uint32_t)s_mdec0_left;
+      if (cfg_dbg("mdecdma") && s_mdec_defer_note != note) {
+        s_mdec_defer_note = note;
+        cfg_logf("mdecdma", "DMA0(in)  deferred: %d word(s) pending, no decode command in flight",
+                 s_mdec0_left);
+      }
+      return;
+    }
+    if (s_mdec0_left > 0 && s_mdec1_left == 0 && out_has) {
+      // FAITHFUL DEFERRAL — the measured live path (DMA0-first): the decoder is blocked on output
+      // and the guest has not started DMA1 yet. DMA0 stays busy/pending; the DMA1 start (or any
+      // guest poll) resumes it. On hardware this is exactly the DMA0 stall in dma.c's ping-pong.
+      const uint32_t note = 0x02000000u | (uint32_t)s_mdec0_left;
+      if (cfg_dbg("mdecdma") && s_mdec_defer_note != note) {
+        s_mdec_defer_note = note;
+        cfg_logf("mdecdma", "DMA0(in)  deferred: %d word(s) pending, decoder blocked on output",
+                 s_mdec0_left);
+      }
+      return;
+    }
+    if (s_mdec1_left > 0 && s_mdec0_left == 0) {
+      // Deferral: output has not reached a DMA burst (>= 0x20 words) and there is no pending input
+      // to make more. Either the guest feeds another DMA0 (which resumes this), or it oversized
+      // DMA1 against the frame — in which case hardware would hang busy identically and the
+      // guest's own sync timeout is the correct observer.
+      const uint32_t note = 0x03000000u | (uint32_t)s_mdec1_left;
+      if (cfg_dbg("mdecdma") && s_mdec_defer_note != note) {
+        s_mdec_defer_note = note;
+        cfg_logf("mdecdma", "DMA1(out) deferred: %d word(s) pending, awaiting decoder output",
+                 s_mdec1_left);
+      }
+      return;
+    }
+    // Work pending on both sides (or input-side with an active command), gates still shut after a
+    // full clock budget: a genuine wedge — decoder state bug, or DMA enable bits (Control 30/29)
+    // dropped mid-transfer. Report ONCE per latched start, with both pending counts and the raw
+    // status so the two causes are distinguishable. Never silently.
+    if (!s_mdec_stall_reported) {
+      s_mdec_stall_reported = 1;
+      cfg_loge("mdec", "DMA pump wedged: no progress possible. DMA0 %d word(s) pending @%08X, "
+                       "DMA1 %d word(s) pending @%08X, MDEC1 status=%08X (InCommand=%d "
+                       "outfifo_has_data=%d)",
+               s_mdec0_left, s_mdec0_addr, s_mdec1_left, s_mdec1_addr, st, in_cmd, out_has);
+    }
+    return;
+  }
+}
+
 // An address that looks like MAIN RAM but did not resolve through host_ptr is a MEMORY-MODEL DEFECT,
 // not a stray peripheral poke, and the two must not share a diagnostic. An unimplemented I/O register
 // reaching here is expected and routine; a RAM address reaching here means the access is being
@@ -228,7 +380,12 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     return rv;
   }
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
-  if (p == 0x1F801820 || p == 0x1F801824) return mdec_read(p);  // MDEC0 data / MDEC1 status
+  if (p == 0x1F801820 || p == 0x1F801824) {        // MDEC0 data / MDEC1 status
+    // Guest-visible poll = pump point: a DecDCTinSync-style status spin (or a data-port tail read)
+    // must drive the pending MDEC DMA machinery forward, or it observes a frozen model forever.
+    if (s_mdec0_left > 0 || s_mdec1_left > 0) mdec_dma_pump();
+    return mdec_read(p);
+  }
   if (p == 0x1F801DAE) return 0;                 // SPUSTAT: report idle/transfer-complete
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) return spu_read(p);    // SPU register file
   if (p == 0x1F8010B0) return s_dma3_madr;        // DMA3 CDROM->RAM
@@ -239,10 +396,16 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010C8) return s_dma4_chcr;
   if (p == 0x1F801080) return s_dma0_madr;
   if (p == 0x1F801084) return s_dma0_bcr;
-  if (p == 0x1F801088) return s_dma0_chcr;
+  if (p == 0x1F801088) {                           // DMA0 CHCR: bit 24 stays SET while input is pending
+    if (s_mdec0_left > 0 || s_mdec1_left > 0) mdec_dma_pump();   // a busy-poll drives progress
+    return s_dma0_chcr;
+  }
   if (p == 0x1F801090) return s_dma1_madr;
   if (p == 0x1F801094) return s_dma1_bcr;
-  if (p == 0x1F801098) return s_dma1_chcr;
+  if (p == 0x1F801098) {                           // DMA1 CHCR: bit 24 stays SET while output is pending
+    if (s_mdec0_left > 0 || s_mdec1_left > 0) mdec_dma_pump();
+    return s_dma1_chcr;
+  }
   if (p == 0x1F8010A0) return s_dma2_madr;        // DMA2 MADR
   if (p == 0x1F8010A4) return s_dma2_bcr;         // DMA2 BCR
   if (p == 0x1F8010A8) return s_dma2_chcr;        // DMA2 CHCR (busy bit already cleared)
@@ -315,7 +478,13 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   }
   if (p == 0x1F801810) { gpu_gp0(this, v); return; }    // GP0 (direct)
   if (p == 0x1F801814) { gpu_gp1(this, v); return; }    // GP1 (display/control)
-  if (p == 0x1F801820 || p == 0x1F801824) { mdec_write(p, v); return; }  // MDEC0 cmd / MDEC1 ctrl
+  if (p == 0x1F801820 || p == 0x1F801824) {        // MDEC0 cmd / MDEC1 ctrl
+    mdec_write(p, v);
+    // A command or control write can be exactly what un-blocks a pending transfer (decode command
+    // arriving after a DMA0 start; DMA enable bits set late), so it is a pump point too.
+    if (s_mdec0_left > 0 || s_mdec1_left > 0) mdec_dma_pump();
+    return;
+  }
   if (p == 0x1F801DA6) s_spu_xfer_addr = (v & 0xFFFF) << 3;               // SPU transfer-start addr (bytes)
   if (p >= 0x1F801C00 && p <= 0x1F801FFF) { spu_write(p, v); return; }    // SPU register file
   // DMA3 — CDROM sector data -> RAM. This channel was simply ABSENT: an unmapped CHCR read returns
@@ -398,19 +567,27 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801088) {                           // DMA0 CHCR: MDEC-in (RAM -> MDEC)
     s_dma0_chcr = v;
     if (v & 0x01000000u) {
-      // WHICH MDEC CHANNEL STARTS FIRST decides whether this model's atomic-per-transfer shape can
-      // ever complete a decode. The guest computes the DMA register base dynamically, so a static
-      // scan of the executable cannot answer it (it finds no DMA0/DMA1 CHCR write at all) — but this
-      // handler sees every one. Reported as an ordered trace, with the word count, so a DMA1-before-
-      // DMA0 start is visible as such rather than inferred.
+      // WHICH MDEC CHANNEL STARTS FIRST decides what a synchronous model must defer. The guest
+      // computes the DMA register base dynamically, so a static scan of the executable cannot
+      // answer it (it finds no DMA0/DMA1 CHCR write at all) — but this handler sees every one.
+      // Measured (PSXPORT_DEBUG=mdecdma, 2026-07-30 boot): DMA0-first, every decode.
       if (cfg_dbg("mdecdma"))
         cfg_logf("mdecdma", "DMA0(in)  start madr=%08X bcr=%08X words=%d",
                  s_dma0_madr, s_dma0_bcr, dma_block_words(s_dma0_bcr));
       int n = dma_block_words(s_dma0_bcr); if (n > 0x10000) n = 0x10000;
-      uint32_t da = s_dma0_madr & 0x1FFFFC;
-      for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
-      mdec_dma_in(s_dma_buf, n);
-      s_dma0_chcr &= ~0x01000000u;
+      s_mdec0_addr = s_dma0_madr & 0xFFFFFCu;
+      s_mdec0_left = n;
+      s_mdec_stall_reported = 0;
+      s_mdec_defer_note = 0;
+      // Busy (bit 24) is NOT cleared here: mdec_dma_pump clears it when the last word is fed. A
+      // decode whose output backs up leaves this channel PENDING — hardware-visible busy — and the
+      // DMA1 start (or any guest poll of CHCR / the MDEC ports) resumes it.
+      mdec_dma_pump();
+    } else if (s_mdec0_left > 0) {
+      // Forced stop (vendor dma.c DMA_Write kludge: clearing bit 24 aborts the channel).
+      if (cfg_dbg("mdecdma"))
+        cfg_logf("mdecdma", "DMA0(in)  forced stop: %d word(s) abandoned", s_mdec0_left);
+      s_mdec0_left = 0;
     }
     return;
   }
@@ -419,18 +596,23 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F801098) {                           // DMA1 CHCR: MDEC-out (MDEC -> RAM)
     s_dma1_chcr = v;
     if (v & 0x01000000u) {
-      // Paired with the DMA0 trace above. A DMA1 start that drains ZERO words and still clears its
-      // busy bit is a SILENT TRUNCATION — the frame is short and nothing says so — so the drained
-      // count is reported next to the requested one rather than left to be inferred.
+      // Paired with the DMA0 trace above. This start usually finds DMA0's remainder pending
+      // (measured live order); the pump then ping-pongs both channels to completion. A DMA1 start
+      // that cannot complete no longer truncates silently — it stays PENDING with busy set (traced
+      // as a deferral on this channel), exactly as hardware would show it.
       if (cfg_dbg("mdecdma"))
         cfg_logf("mdecdma", "DMA1(out) start madr=%08X bcr=%08X words=%d canread=%d",
                  s_dma1_madr, s_dma1_bcr, dma_block_words(s_dma1_bcr), (int)mdec_dma_can_read());
       int n = dma_block_words(s_dma1_bcr); if (n > 0x10000) n = 0x10000;
-      for (int i = 0; i < n; i++) s_dma_buf[i] = 0;     // clear: mdec_dma_out scatters into buf
-      mdec_dma_out(s_dma_buf, n);                       // places macroblock words at buf[i+offs]
-      uint32_t da = s_dma1_madr & 0x1FFFFC;             // copy the whole post-scatter region
-      for (int i = 0; i < n; i++) mem_w32(da + i * 4, s_dma_buf[i]);
-      s_dma1_chcr &= ~0x01000000u;
+      s_mdec1_addr = s_dma1_madr & 0xFFFFFFu;      // dma.c CurAddr form: advances 4/word, 0x1FFFFC at store
+      s_mdec1_left = n;
+      s_mdec_stall_reported = 0;
+      s_mdec_defer_note = 0;
+      mdec_dma_pump();
+    } else if (s_mdec1_left > 0) {
+      if (cfg_dbg("mdecdma"))
+        cfg_logf("mdecdma", "DMA1(out) forced stop: %d word(s) abandoned", s_mdec1_left);
+      s_mdec1_left = 0;
     }
     return;
   }

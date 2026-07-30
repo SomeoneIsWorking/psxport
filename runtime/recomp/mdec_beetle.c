@@ -8,7 +8,6 @@
 // matches the oracle exactly. No enhancements: same IDCT, same YCbCr coefficients, same packing.
 #include <stdint.h>
 #include <stdbool.h>
-#include "cfg.h"
 
 // Beetle MDEC API (mednafen/psx/mdec.h), declared locally to avoid pulling Beetle headers.
 // (mdec.c has no MDEC_Init; MDEC_Power is the reset/construct entry point.)
@@ -41,52 +40,35 @@ void mdec_init(void) { MDEC_Power(); }
 void mdec_write(uint32_t addr, uint32_t val) { MDEC_Write(0, addr, val); }
 uint32_t mdec_read(uint32_t addr)            { return MDEC_Read(0, addr); }
 
-// DMA0 (MDEC-in): feed `count` 32-bit words of the compressed stream into the input FIFO.
+// DMA0 (MDEC-in): feed up to `count` 32-bit words of the compressed stream into the input FIFO.
+// Returns the number of words ACTUALLY fed (a short return is a deferral, not a drop).
 //
 // MDEC_DMAWrite SILENTLY DROPS a word when the input FIFO is full, and real DMA channel 0 never
-// lets that happen — it honours MDEC_DMACanWrite() and stalls until the decoder has room. Pushing
-// the whole block unconditionally therefore loses words, the decode never finishes, MDEC1 STAT keeps
-// its data-in bit set, and the guest's DecDCTinSync spins out and prints its own "MDEC_in_sync"
-// timeout. The corruption is invisible at the point it happens and only surfaces frames later.
+// lets that happen — it honours MDEC_DMACanWrite() and stalls until the decoder has room. Beetle's
+// MDEC is TIME-STEPPED: it consumes its input FIFO and produces output only inside MDEC_Run(), so
+// between words we hand it an effectively unbounded clock budget (EventCycles is the only ceiling;
+// the state machine parks itself at a FIFO gate, same idiom as native_fmv's mdec_pump).
 //
-// So: honour the predicate, and if the FIFO fills, say so LOUDLY with the exact word counts rather
-// than dropping the remainder. A partially-fed decode is a real failure and must look like one.
-void mdec_dma_in(const uint32_t* words, int count) {
-  // Beetle's MDEC is TIME-STEPPED: it consumes its input FIFO and produces output only inside
-  // MDEC_Run(). Nothing in this runtime was calling it, so the FIFO could never drain — the very
-  // first word filled it and every word after that was dropped on the floor by MDEC_DMAWrite.
-  //
-  // Real DMA0 achieves the same effect by STALLING while the decoder works. This model cannot stall
-  // a transfer mid-flight, so it does the equivalent: when the FIFO is full, advance the decoder and
-  // try again. That is faithful in the only sense that matters here — the words all arrive, in
-  // order, and the decoder sees them at a rate it can absorb.
-  enum { kStepClocks = 256, kMaxSteps = 4096 };
-  for (int i = 0; i < count; i++) {
-    int steps = 0;
-    while (!MDEC_DMACanWrite()) {
-      if (++steps > kMaxSteps) {
-        // Genuinely wedged: report it with exact counts rather than dropping the remainder, which
-        // would corrupt the decode invisibly and surface frames later as the guest's own timeout.
-        // NAME THE CAUSE, don't just report the symptom. There are two very different reasons the
-        // decoder can refuse input forever, and "cannot accept" alone cannot tell them apart:
-        //   - OutFIFO has data waiting  -> the decoder is BLOCKED ON OUTPUT. MDEC_Run() cannot
-        //     retire a macroblock while its result has nowhere to go, so pumping harder can never
-        //     help. Nothing drains the output here: mdec_dma_in only advances the decoder, while
-        //     real DMA0/DMA1 ping-pong around it (see native_fmv.cpp, which interleaves feed/pump/
-        //     drain and is the pattern that works).
-        //   - OutFIFO empty             -> genuinely wedged mid-block; a decoder-state bug.
-        cfg_loge("mdec", "DMA0 in: decoder still cannot accept after %d step(s); %d of %d word(s) "
-                         "written, remainder NOT sent. This decode is incomplete. "
-                         "outfifo_has_data=%d (%s)",
-                 kMaxSteps, i, count, (int)MDEC_DMACanRead(),
-                 MDEC_DMACanRead() ? "BLOCKED ON OUTPUT — nothing is draining DMA1"
-                                   : "output empty — decoder wedged internally");
-        return;
-      }
-      MDEC_Run(kStepClocks);
+// When the decoder still cannot accept, this primitive returns the short count and lets the CALLER
+// decide whether that is a legitimate deferral or a wedge — only the caller can see both DMA
+// channels. mem.cpp's mdec_dma_pump() owns the pending bookkeeping and the loud wedge report;
+// native_fmv.cpp detects a stalled decode with its own stall counter. Reporting here would cry wolf
+// on every legitimate deferral now that a short feed is NORMAL (the pending DMA0 remainder resumes
+// when DMA1 drains). In particular, when the decoder is BLOCKED ON OUTPUT (OutFIFO has data),
+// MDEC_Run() can NEVER retire the macroblock in flight — real DMA0/DMA1 ping-pong around the
+// decoder (vendor dma.c ChCan) — so bail immediately rather than burning a step budget.
+int mdec_dma_in(const uint32_t* words, int count) {
+  int i;
+  for (i = 0; i < count; i++) {
+    if (!MDEC_DMACanWrite()) {
+      if (!MDEC_DMACanRead())
+        MDEC_Run(0x40000000);        // run until the state machine parks at a FIFO gate
+      if (!MDEC_DMACanWrite())
+        return i;                    // output-blocked, command retired, or wedged: caller classifies
     }
     MDEC_DMAWrite(words[i]);
   }
+  return i;
 }
 
 // DMA1 (MDEC-out): drain decoded 32-bit words out of the output FIFO and PLACE each one at the
@@ -122,10 +104,12 @@ void mdec_dma_in(const uint32_t* words, int count) {
 // of destinations for a frame is exactly the contiguous range [0, total_words), a permutation with
 // no gaps/overlaps — see scratch/mdecfixdev/mdecfixtest.c).
 //
-// `buf` therefore represents the destination RAM region as a flat 32-bit-word array whose index 0
-// is the channel's MADR. Returns the number of words consumed/produced (how far the linear base i
-// advanced). The PM's DMA1 in mem.c should treat buf as the post-scatter image: copy buf[k] to
-// MainRAM at (MADR + k*4) for k in [0, returned_count) — equivalently MainRAM[MADR/4 + k] = buf[k].
+// `buf` therefore represents the destination region as a flat 32-bit-word array whose index 0 is
+// the channel's MADR. Returns the number of words consumed/produced (how far the linear base i
+// advanced). Consumer: native_fmv.cpp, which owns both sides of its decode and drains linearly
+// into its own frame buffer. (The guest-facing DMA1 in mem.cpp does NOT use this staged form — its
+// pending-channel pump stores per word directly to guest RAM via mdec_dma_read_word, because a
+// staged copy-back is only sound when the whole transfer completes in one call.)
 //
 // BUFFER SIZING (important): the written index i+offs can exceed the returned count-1 because the
 // interleave reaches FORWARD by up to RAMOffsetWWS*7 on the upper block-rows (e.g. word 0 of a
@@ -136,8 +120,8 @@ void mdec_dma_in(const uint32_t* words, int count) {
 // could touch one row beyond. In practice the caller passes the channel's whole word count.
 // NOTE on count: real DMA1 only fires in >=0x20-word bursts (MDEC_DMACanRead gates on
 // OutFIFO.in_count >= 0x20); the trailing partial group below 0x20 is drained by the game via the
-// MDEC data-port reads, not DMA. So a strict DMACanRead-gated loop here returns a multiple-of-0x20
-// prefix; the caller (mem.c) replicates the same burst gating it already uses for other channels.
+// MDEC data-port reads, not DMA — hence mdec_dma_out_rest below for a caller that wants the tail
+// WITH the scatter applied.
 //
 // 4bpp/8bpp: for depth 0/1, RAMOffsetWWS == 0, so voffs is always 0 and placement degrades to a
 // plain linear drain (buf[i]) — which is exactly what hardware does there (no interleave).
@@ -181,6 +165,19 @@ int mdec_dma_out_rest(uint32_t* buf, int count) {
   }
   return i;
 }
+
+// DMA1 per-word primitive for a caller that walks the destination itself (mem.cpp's pending-channel
+// pump): pops one OutFIFO word and returns the hardware's per-word scatter displacement in *offs.
+// The caller must apply EXACTLY what vendor dma.c CH_MDEC_OUT applies (the placement contract
+// documented above mdec_dma_out):
+//     MainRAM[(CurAddr + (offs << 2)) & 0x1FFFFC] = word;   CurAddr = (CurAddr + 4) & 0xFFFFFF;
+// with CurAddr running from the channel's MADR and advancing one word per transferred word.
+uint32_t mdec_dma_read_word(uint32_t* offs) { return MDEC_DMARead(offs); }
+
+// Give the decoder an effectively unbounded clock budget: runs the state machine until it parks at
+// a FIFO gate (InFIFO empty / OutFIFO full). Same idiom as native_fmv's mdec_pump; EventCycles
+// (0x7FFFFFFF here) is the only ceiling, so one call always reaches the next genuine block point.
+void mdec_step(void) { MDEC_Run(0x40000000); }
 
 // Status helpers wrapping Beetle's DMA-readiness predicates, for a caller that gates its own
 // DMA0/DMA1 transfers (>= 0x20 words available and the matching enable bit set in Control).
