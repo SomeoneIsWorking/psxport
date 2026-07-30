@@ -293,6 +293,75 @@ void Core::mdec_dma_pump() {
 // Reported once per distinct address so a hot loop cannot drown the log, and NOT gated behind the io
 // verbosity knob: if this fires, something is wrong that the user needs to see without knowing to ask.
 static bool ram_range_addr(uint32_t p) { return p < 0x1F000000u; }   // below the I/O window == RAM space
+
+// A bad address is almost always a bad POINTER, and when the guest is in string-handling code (a
+// module/file lookup, an asset name) the STRING the pointers refer to is the single most identifying
+// piece of evidence at the fault — it names WHICH asset the run died on, which no register value can.
+//
+// Capturing it at the PRODUCER is what does not work. On the Spider-Man port the producer builds the
+// name in a stack buffer, and both obvious probes are disqualified there for opposite reasons: an
+// override or entry probe changes the call-chain shape and the fault disappears, while a store
+// watchpoint over the stack window logged ~9M stores and starved the run before it ever reached the
+// fault. The CONSUMER is free of both problems — this reporter fires exactly once, at the moment of
+// interest, with the registers still live, so it cannot flood and it perturbs nothing.
+//
+// The NEGATIVE is the part that has to carry information. "No strings" printed bare would be
+// indistinguishable from "this code never looked", so the report always states its denominator (how
+// many GPRs were examined, how many resolved into mapped RAM) and its blind spot: it can only see a
+// string whose pointer is STILL LIVE in a GPR at fault time. A name that was built in a stack buffer
+// whose pointer has already been overwritten is invisible here, and that must not read as "there was
+// no name".
+void Core::dumpStringishRegs() {
+  Core* const gc = this;
+  static const char* kReg[32] = {
+    "zero","at","v0","v1","a0","a1","a2","a3","t0","t1","t2","t3","t4","t5","t6","t7",
+    "s0","s1","s2","s3","s4","s5","s6","s7","t8","t9","k0","k1","gp","sp","fp","ra"};
+  int examined = 0, mapped = 0, printed = 0;
+  for (int i = 1; i < 32; i++) {
+    if (i == 28 || i == 29 || i == 30) continue;    // gp/sp/fp are bases, not string pointers
+    examined++;
+    const uint32_t a = gc->r[i];
+    uint8_t* p = gc->host_ptr(a, 1);
+    if (!p) continue;
+    mapped++;
+    // Printable, NUL-terminated, and long enough that random bytes are unlikely to qualify. Bounded
+    // by what host_ptr will still resolve, so the scan cannot walk off the end of the mirror.
+    char buf[64]; int n = 0;
+    while (n < 63) {
+      uint8_t* q = gc->host_ptr(a + (uint32_t)n, 1);
+      if (!q) break;
+      const uint8_t c = *q;
+      if (c == 0) break;
+      if (c < 0x20 || c > 0x7E) { n = 0; break; }   // non-printable => not a string, reject outright
+      buf[n++] = (char)c;
+    }
+    // A rejected pointer is not nothing. The first run of this instrument answered "0 looked like C
+    // strings" for a fault whose whole question was *which name was passed*, with the suspected name
+    // pointer (`s1`) sitting right there in the mapped list — so "rejected" alone left the question
+    // exactly where it was. Dump the bytes for every mapped GPR instead: it fires once, it is 20-odd
+    // lines, and it distinguishes "the pointer is stale/garbage" from "the string is there but the
+    // classifier is too strict", which the verdict alone cannot.
+    if (n >= 4) {
+      buf[n] = 0;
+      cfg_loge("mem", "  string: %s=0x%08X -> \"%s\"", kReg[i], a, buf);
+      printed++;
+    }
+    char hex[16 * 3 + 1], asc[17]; int hn = 0, an = 0;
+    for (int k = 0; k < 16; k++) {
+      uint8_t* q = gc->host_ptr(a + (uint32_t)k, 1);
+      if (!q) break;
+      hn += snprintf(hex + hn, sizeof hex - (size_t)hn, "%02X ", *q);
+      asc[an++] = (*q >= 0x20 && *q <= 0x7E) ? (char)*q : '.';
+    }
+    hex[hn] = 0; asc[an] = 0;
+    cfg_loge("mem", "  bytes : %-4s=0x%08X  %-48s |%s|", kReg[i], a, hex, asc);
+  }
+  cfg_loge("mem", "  strings: examined %d GPRs (excl gp/sp/fp), %d resolved into mapped RAM, "
+                  "%d looked like C strings. BLIND SPOT: only sees a string whose pointer is still "
+                  "live in a GPR here — one reached via a stack buffer or a struct field is NOT "
+                  "visible, so %s does not mean there was no name.",
+           examined, mapped, printed, printed ? "this list" : "an empty list");
+}
 // FAIL-FAST on an access to RAM space the memory model does not map.
 //
 // This used to warn once per distinct address and then DISCARD the access — writes vanished and reads
@@ -328,6 +397,7 @@ static void warn_unmapped_ram(Core* gc, uint32_t a, uint32_t bytes, const char* 
              gc->r[4], gc->r[5], gc->r[6], gc->r[7], gc->r[2], gc->r[3]);
     cfg_loge("mem", "  temps: t0=0x%08X t1=0x%08X t2=0x%08X t3=0x%08X  s0=0x%08X s1=0x%08X",
              gc->r[8], gc->r[9], gc->r[10], gc->r[11], gc->r[16], gc->r[17]);
+    gc->dumpStringishRegs();
   }
   cfg_loge("mem", "\nFATAL: UNMAPPED RAM %s%u @ 0x%08X (phys 0x%08X) — fail-fast.\n"
                   "  The memory model does not map this address, so the access cannot be honoured. "

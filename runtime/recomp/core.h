@@ -148,6 +148,11 @@ public:
   // delivery (Hle::irqPoll) has to test the same latch the guest would see.
   uint32_t irqStatLatch();
 
+  // Fault-reporter helper: print any GPR that points at a printable C string in mapped RAM, with
+  // its denominator and blind spot. A member because it needs host_ptr; public because the
+  // fail-fast reporter that calls it is a free function.
+  void dumpStringishRegs();
+
 private:
   uint8_t* host_ptr(uint32_t a, uint32_t bytes);
   uint32_t io_read (uint32_t a, uint32_t bytes);
