@@ -160,6 +160,9 @@ def main(argv=None):
     ap.add_argument('--method', required=True, help='target method name')
     ap.add_argument('--file', help='output .cpp path (default: derived from --class under game/core/)')
     ap.add_argument('--header', help='output .h path (default: same basename as --file, .h)')
+    ap.add_argument('--force', action='store_true',
+                    help='overwrite an EXISTING output .cpp, discarding its entire contents. Without '
+                         'this, an existing file is refused (see the guard below for why).')
     ap.add_argument('--core-member', default='mCore', help='name of the Core* member (default mCore)')
     ap.add_argument('--repo', default=None)
     args = ap.parse_args(argv)
@@ -188,6 +191,23 @@ def main(argv=None):
     else:
         print(f"port_gen: {header_path} already exists — NOT modified. Add by hand if missing:\n"
               f"    void {args.method}();   // Core* {args.core_member} member assumed to already exist")
+
+    # REFUSE TO DESTROY AN EXISTING SOURCE FILE. The header path a few lines up already guards this
+    # ("already exists — NOT modified"); the .cpp path did not, and opened 'w' unconditionally. Given
+    # `--file` pointing at a real file — the natural thing to type when adding a method to a class
+    # that already owns its siblings — it replaced the whole file with the draft. That really happened
+    # here: 682 lines of game/math/gte_math.cpp were overwritten by a 152-line draft, and the only
+    # reason nothing was lost is that the tree happened to be clean enough to `git checkout --` it.
+    # A generator silently eating a source file is not a tradeoff, it is a bug.
+    if os.path.isfile(cpp_abs) and not args.force:
+        print(f"port_gen: REFUSING to overwrite existing {cpp_path} — it is {os.path.getsize(cpp_abs)} "
+              f"bytes and this would replace ALL of it with a fresh draft.", file=sys.stderr)
+        print(f"port_gen: to add a method to a file that already exists, generate the draft somewhere "
+              f"scratch and merge the parts you want by hand, e.g.\n"
+              f"    port_gen.py {fn.addr} --file scratch/re/{args.class_name.lower()}_{fn.addr}.cpp ...\n"
+              f"port_gen: pass --force ONLY if you genuinely intend to discard {cpp_path}.",
+              file=sys.stderr)
+        sys.exit(2)
 
     contract = abi.parse_contract(fn)
     os.makedirs(os.path.dirname(cpp_abs), exist_ok=True)
