@@ -1092,8 +1092,14 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         // right clip by (nw-320) — else the wide-side world fragments are clipped and the present shows
         // raw VRAM texture-atlas garbage in the [320,nw) band. Off at 4:3 (wide_engine()==0). This is a
         // render-clip widen consumed by the GPU batch (i_da); it never widens where guest logic reads.
+        // The widen is (wide width - THIS GAME'S 4:3 width), not (wide width - 320). Hardcoding 320
+        // assumed a 320-wide framebuffer: for a 512-wide game it over-extends the draw area by 192
+        // columns past anything the renderer draws, and every column inside the clip that nothing
+        // writes presents as raw texture-atlas VRAM. Same wrong assumption as wide_native_w had.
+        // At 320 the two forms are identical, so no existing consumer moves.
         { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
-          if (gpu_vk_wide_engine(core)) s_da_x1 += (gpu_vk_wide_engine_w(core) - 320); }
+          if (gpu_vk_wide_engine(core))
+            s_da_x1 += (gpu_vk_wide_engine_w(core) - (s_disp_w > 0 ? s_disp_w : 320)); }
         cfg_logf("env", "E4 clip_br=(%d,%d)", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
         cfg_logf("env", "E5 offset=(%d,%d)", s_off_x, s_off_y); return;
