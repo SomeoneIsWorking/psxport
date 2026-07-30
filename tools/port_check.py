@@ -311,8 +311,27 @@ def native_op_sequence_extra(body_lines, frame_structs: dict = None, consts: dic
     # one-statement-per-line emission) routinely puts several on one line
     # (`uint32_t sp = c->r[29]; c->r[29] -= 24;`), and several of the regexes above are anchored to
     # a full statement (`^...;$`) so they need one sub-statement at a time, not the whole raw line.
-    substmts = []
+    # STRIP COMMENTS FIRST. Without this a COMMENT that merely mentions a store — and the house style
+    # actively encourages such comments, e.g. `// gen writes c->mem_w16(obj + 0x32, v) here` — was
+    # counted as a real store and inserted a phantom width into the sequence. The method then FAILed
+    # for a reason with no connection to its behaviour, and (worse in the other direction) a phantom
+    # could pad a sequence into accidentally matching. Cost a real agent a wasted FAIL iteration.
+    # Block comments are tracked across lines because the file banners in this tree use them.
+    stripped_lines, in_block = [], False
     for raw in body_lines:
+        out, i = [], 0
+        while i < len(raw):
+            if in_block:
+                end = raw.find('*/', i)
+                if end < 0: i = len(raw); break
+                in_block = False; i = end + 2; continue
+            if raw.startswith('//', i): break            # line comment — rest of the line is prose
+            if raw.startswith('/*', i): in_block = True; i += 2; continue
+            out.append(raw[i]); i += 1
+        stripped_lines.append(''.join(out))
+
+    substmts = []
+    for raw in stripped_lines:
         for piece in raw.split(';'):
             piece = piece.strip()
             if piece:
