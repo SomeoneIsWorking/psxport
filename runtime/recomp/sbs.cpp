@@ -2200,6 +2200,24 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (warpFrame >= 0 && !warpFired && (long)mFrame >= warpFrame) {
         warpFired = 1;
         const uint16_t rec = (uint16_t)(((warpArea & 0x1f) << 8) | (warpSub & 0x3f));
+        // LOAD THE DESTINATION'S CODE OVERLAY FIRST, on both cores. Writing the door record alone is
+        // enough only when the destination's field code lives in the ALREADY-RESIDENT overlay — true
+        // for the hut entry this was built for (#37), false in general. Warping to area 12 (overlay
+        // A0C) aborted here with "no recompiled fn for 0x8010CC28, caller ra=0x800587F8": that caller
+        // is ActorTomba::enterOuterState0's per-area handler dispatch, and it fired before the
+        // transition had brought A0C in, so the recompiler had no body for the address. Priming the
+        // load-task slot and running the synchronous area load — exactly what the REPL `warp` does in
+        // native_boot.cpp — makes the destination's code resident before anything can dispatch into
+        // it. Same call on both cores, so lockstep is preserved; a game that supplies no hook is
+        // unaffected and keeps the old door-record-only behaviour.
+        for (Core* c : { &mA->core, &mB->core }) {
+          if (c->hooks && c->hooks->devWarpAreaLoad) {
+            const uint32_t wsm = c->mem_r32(0x1f800138u);
+            c->mem_w8(wsm + 0x6e, (uint8_t)(warpArea & 0x1f));
+            c->mem_w8(wsm + 0x6d, 2);
+            c->hooks->devWarpAreaLoad(c);
+          }
+        }
         for (Core* c : { &mA->core, &mB->core }) {
           c->mem_w16(0x800bf83au, rec);
           c->mem_w8 (0x800bf839u, 3);
