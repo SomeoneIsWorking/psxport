@@ -131,9 +131,16 @@ LABEL_PREFIX_RE = re.compile(r'^(L_[0-9A-Fa-f]+):;\s*(\S.*)$')
 # DELAY_INSN always executes (branch delay slot) regardless of COND; verified over the whole
 # generated/ corpus (47524 instances) that the delay part is always a single statement (no embedded
 # ';') — see docs/abi-extract.md "corpus shapes".
-COMPOUND_DELAY_RE = re.compile(r'^\{ int _t = \((.+?)\); (.+?); if \(_t\) goto (L_[0-9A-Fa-f]+); \}$')
+# WHITESPACE MUST BE FLEXIBLE HERE. These two patterns decide whether a line is a CONDITIONAL
+# BRANCH or an ordinary statement, and they used to hardcode exactly one space around the `if`.
+# The recompiler emits `);  if (_t) goto L_x; }` with TWO spaces when the delay slot is empty,
+# so those lines fell through to 'plain statement' — the CFG never got the cond_taken edge, the
+# branch target became UNREACHABLE, and every call site and every store in it was silently
+# dropped from the contract. Found on 0x80027E5C, whose contract reported 1 of its 2 calls.
+# A short call-site list reads exactly like a complete one, which is why this rated a fix.
+COMPOUND_DELAY_RE = re.compile(r'^\{\s*int _t = \((.+?)\);\s*(.+?);\s*if \(_t\) goto (L_[0-9A-Fa-f]+);\s*\}$')
 # Compound with no delay insn (pure conditional branch).
-COMPOUND_NODELAY_RE = re.compile(r'^\{ int _t = \((.+?)\); if \(_t\) goto (L_[0-9A-Fa-f]+); \}$')
+COMPOUND_NODELAY_RE = re.compile(r'^\{\s*int _t = \((.+?)\);\s*if \(_t\) goto (L_[0-9A-Fa-f]+);\s*\}$')
 
 # Unconditional goto, optionally preceded by exactly one plain statement on the same line
 # ("STMT; goto L;"); verified over the corpus that this shape never carries more than one leading
