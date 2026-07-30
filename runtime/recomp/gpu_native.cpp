@@ -131,10 +131,16 @@ int gpu_vk_wide_engine_w(Core*);
 //              margin+320] band (matches 4:3, just centered). (Was identity, which left HUD left-anchored.)
 // In 4:3 margin==0 -> backdrop x*320/320=x, HUD x+0=x — byte-identical.
 static int ws_2d_local_x(Core* core, int x, int is_bg) {
-  int ww = gpu_vk_wide_engine_w(core), margin = (ww - 320) / 2;
+  // RELATIVE TO THIS GAME'S OWN 4:3 WIDTH, not to 320. The 320 this used to hardcode is the fourth
+  // instance of that assumption in the widescreen path (after wide_native_w, the GP0 E4 draw-area
+  // widen, and the display blank), and here it is the most visible: for a 512-wide game it centred
+  // HUD elements by (ww-320)/2 = 182 columns instead of 86, shoving them off the right edge, and
+  // stretched backdrops by ww/320 = 2.14x instead of ww/512 = 1.34x. Identical at 320.
+  const int native = core->game->gpu.s_disp_w > 0 ? core->game->gpu.s_disp_w : 320;
+  int ww = gpu_vk_wide_engine_w(core), margin = (ww - native) / 2;
   if (margin <= 0) return x;                          // 4:3 -> no-op
-  if (is_bg) return x * ww / 320;                     // backdrop: stretch to fill [0,ww)
-  return x + margin;                                  // HUD: center the native-320 element in the wide FB
+  if (is_bg) return x * ww / native;                  // backdrop: stretch to fill [0,ww)
+  return x + margin;                                  // HUD: center the native-width element in the wide FB
 }
 
 // PSXPORT_PRIMDUMP=<frame>: dump every prim drawn on that frame, in OT-walk order, to
@@ -1486,7 +1492,17 @@ void GpuState::frame_finalize(Core* core) {
   gpu_vk_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0; s_gp0_addressed = 0; s_gp0_anon = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
-  s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide pillarbox gate)
+  // NOTE, measured on a consuming port and deliberately NOT changed here. These latches gate the
+  // widescreen 2D widen and are rolled every frame — so on a game whose packet pool is double buffered
+  // and which therefore submits ~1600 prims on one frame and ZERO on the next (Spyro the Dragon),
+  // s_prev_had3d is false on every prim-bearing frame and the 2D widen never fires at all.
+  //
+  // Making the latch survive an empty frame DOES make it fire, and that made the picture WORSE, which
+  // is the useful part: the 2D widen shifts screen-space elements by the margin to line up with a 3D
+  // world that OFX has re-centred in the wider frame. A port that has not widened its 3D projection
+  // yet has no such shift, so widening 2D alone misaligns the two. The ordering is therefore fixed:
+  // widen the 3D projection FIRST, then this gate becomes correct rather than merely active.
+  s_prev_had3d = s_seen3d;   // remember whether this frame was a gameplay (3D) frame (wide widen gate)
   s_seen3d = 0;       // restart backdrop-vs-HUD discrimination (no 3D prim seen yet next frame)
   s_prev_had_bg2d = s_seen_bg2d;   // #54: remember whether this frame drew a full-screen 2D backdrop
   s_seen_bg2d = 0;
