@@ -143,17 +143,35 @@ static int win_w(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPix
 static int win_h(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return h > 0 ? h : 240; }
 
 // ---- PC-native widescreen accessors (kept; the engine projection reads these) -----------------------
+//
+// THE WIDE WIDTH SCALES FROM THE GAME'S OWN 4:3 WIDTH, not from a hardcoded 320. The fixed returns
+// here were 320-based, which silently assumed every PSX game renders a 320-wide framebuffer. Plenty
+// do not: Spyro the Dragon runs 512x240, so asking for 16:9 returned 428 — NARROWER than the game's
+// own 4:3 frame. Widescreen would have cropped the picture instead of widening it, and the failure
+// would have looked like a broken renderer rather than a wrong constant.
+//
+// The 320 case is unchanged BY CONSTRUCTION: the aspect entries are expressed as the same targets
+// they always returned for a 320-wide game, and everything else scales by (native/320). 16:9 keeps
+// 428 rather than the arithmetic 426.67 because that is the value this framework has always used and
+// consumers are tuned to it; scaling preserves that choice instead of silently re-deriving it.
 static int wide_native_w(const Game* game) {
+  const int native = game->gpu.s_disp_w > 0 ? game->gpu.s_disp_w : 320;
+  auto scaled = [native](int for320) {
+    if (native == 320) return for320;                       // exact, for every existing consumer
+    int w = (int)((double)for320 * native / 320.0 + 0.5);
+    w &= ~1;                                                // even, as the AUTO path also requires
+    return w > VRAM_W ? VRAM_W : w;
+  };
   switch (game->mods.aspect) {
-    case ASPECT_16_9: return 428;
-    case ASPECT_21_9: return 560;
+    case ASPECT_16_9: return scaled(428);
+    case ASPECT_21_9: return scaled(560);
     case ASPECT_AUTO: { // AUTO = match the live window aspect — identically in standalone and under SBS
                         // (each core renders its full-window FOV into its own target; the SBS compositor
                         // letterboxes that into its half-window pane, so no special-case here).
                         int ww = win_w();
-                        int w = (int)((240.0 * ww) / win_h() + 0.5); w &= ~1;
-                        if (w < 320) w = 320; if (w > VRAM_W) w = VRAM_W; return w; }
-    default:          return 320;
+                        int w = (int)(((double)native * 0.75 * ww) / win_h() + 0.5); w &= ~1;
+                        if (w < native) w = native; if (w > VRAM_W) w = VRAM_W; return w; }
+    default:          return native;
   }
 }
 // Per-core (was process-global): widescreen never touches the PSX oracle — and `oracle` is per-Game
