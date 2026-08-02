@@ -99,6 +99,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/fntrace.cpp
   ${PSXPORT_ROOT}/runtime/recomp/memcard.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_fmv.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
   ${PSXPORT_ROOT}/runtime/recomp/gte_beetle.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
@@ -176,13 +177,12 @@ target_compile_options(psxport PRIVATE -w -O2 -g
 # Link deps PUBLIC/INTERFACE so any consumer (the game exe, the smoke) inherits them.
 # lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent). The cfg_* API in
 # runtime/recomp/cfg.cpp is a thin shim over it, so every diagnostic in the port shares one output
-# path. Fetched rather than vendored: it is a standalone library with its own tests and release
-# history, not a snapshot to carry around.
-include(FetchContent)
-FetchContent_Declare(lucent
-  GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
-  GIT_TAG main)
-FetchContent_MakeAvailable(lucent)
+# path. Vendored as a submodule (vendor/lucent) alongside beetle-psx/rmlui so the framework and its
+# offline tools build hermetically — no configure-time network fetch, and tools can compile lucent's
+# sources directly (see tools/fmv_export/build.sh). add_subdirectory installs the `lucent` target and
+# its `lucent::lucent` alias; lucent's own tests are gated on its CMAKE_SOURCE_DIR and never build
+# here.
+add_subdirectory(${PSXPORT_ROOT}/vendor/lucent)
 
 target_link_libraries(psxport PUBLIC
   lucent::lucent

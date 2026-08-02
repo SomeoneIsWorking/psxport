@@ -1,3 +1,6 @@
 [submodule "vendor/beetle-psx"]
 	path = vendor/beetle-psx
 	url = https://github.com/SomeoneIsWorking/beetle-psx-libretro.git
+[submodule "vendor/lucent"]
+	path = vendor/lucent
+	url = https://github.com/SomeoneIsWorking/lucent.git

@@ -48,8 +48,9 @@ runtime/recomp/gpu_vk_shaders.h
 
 # standalone offline XA extractor binary (built by tools/build_xa_wavdump.sh)
 tools/xa_wavdump
-# FMV STR extract/decode binary (built by tools/fmv_export/build.sh)
+# FMV STR extract/decode binaries (built by tools/fmv_export/build.sh)
 tools/fmv_export/fmv_export
+tools/fmv_export/test_fmv_decode
 psxport_settings.ini
 docs/reference/issues/shot_*.png
 *.log

@@ -35,13 +35,11 @@ private:
   int  mdecDecodeToRgb555(const uint16_t* codes, int ncodes,
                           int width, int height, uint16_t* pixels);
 
-  // decode scratch, heap-allocated on first play (multi-MB; was file-scope static buffers)
+  // decode scratch, heap-allocated on first play (multi-MB; was file-scope static buffers).
+  // The MDEC in/out word buffers live inside fmv_decode.cpp (function-static), since the
+  // offline tools use the same decode entry points.
   uint8_t*  payload_buf = nullptr;   // concatenated BS payload (512 KB)
   uint16_t* codes_buf   = nullptr;   // MDEC run-level code stream (512K codes)
   uint16_t* pixels_buf  = nullptr;   // decoded RGB555 frame (1024x512)
-  uint32_t* inbuf       = nullptr;   // MDEC input words (128K words)
-  uint32_t* outbuf      = nullptr;   // MDEC output words (512K words)
   int16_t*  xa_pcm      = nullptr;   // one sector's decoded stereo PCM (4032 frames)
-  int bs_hdr_logged = 0;             // [fmv] BS-header debug print latch
-  int dconly = -1;                   // PSXPORT_FMV_DCONLY cache (-1 = unread)
 };

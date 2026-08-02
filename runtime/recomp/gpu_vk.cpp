@@ -944,6 +944,12 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
 // is exactly ONE piece of code that decides what a window frame looks like, and both callers run it.
 // Consumes `cmd` (submits it).
 void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
+  // The empty-batch early-out in present() (and repaint()) reaches here WITHOUT upload_vram/render_geom,
+  // which are what lazily create the per-Game targets. Before any real frame has ever been built — e.g.
+  // the Tomba2 boot stub's gpu_clear_display + present before the first scene submit — s_vram_tex is still
+  // null, and binding it as the present sampler segfaults inside the SDL_GPU driver. Materialise the
+  // targets here; ensure_targets() is a one-shot no-op once they exist.
+  ensure_targets();
   const int sx = s_last_sx, sy = s_last_sy, disp_w = s_last_w, h = s_last_h;
   // A game that owns no fade subsystem leaves this hook null — the seam documents null hooks as
   // tolerated, and other call sites guard. These did not, so presenting from such a game jumped to
