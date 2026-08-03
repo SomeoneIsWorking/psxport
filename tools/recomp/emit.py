@@ -138,7 +138,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-07-22.2"
+RECOMP_VERSION = "2026-08-03.1"
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1278,6 +1278,53 @@ def ghidra_funcs(text_lo, text_hi, decomp="scratch/decomp/ram_f1000_all.c"):
         if text_lo <= int(x, 16) < text_hi})
 
 
+def code_image_stats(exe):
+    """(undecodable-word fraction, jr-ra count, stack-prologue count) over the whole image — the
+    evidence looks_like_code reports. Only the jr-ra count decides (see there); the rest is context
+    for the diagnostic."""
+    lo, hi = exe.load, exe.text_end
+    n = (hi - lo) // 4
+    unk = ret = prol = 0
+    for a in range(lo, hi - 3, 4):
+        w = exe.word(a)
+        if decode(a, w).kind == D.UNKNOWN:
+            unk += 1
+        if w == 0x03E00008:                          # jr ra
+            ret += 1
+        if (w & 0xFFFF8000) == 0x27BD8000:           # addiu sp, sp, -N
+            prol += 1
+    return (unk / n if n else 1.0), ret, prol
+
+
+def looks_like_code(exe):
+    """Is this image recompilable CODE — or data that merely passed through a code slot?
+
+    An overlay slot is a load DESTINATION, not a promise that what lands there is code: games stream
+    data through the same arena their code overlays use, and a scanner that records every arena load
+    (Spyro's tools/overlay_scan.py) hands the recompiler data reads alongside code — 512KB, 480KB and
+    75KB ones among Spyro's twelve. Recompiling data is not a small error: with no `jr ra` anywhere
+    in the image, every seeded "function" flood-fills to the module end, and the flood-fill's
+    shared-tail duplication then re-emits the whole module PER FUNCTION — 480KB of Spyro data became
+    ~144MB of garbage C (one shard alone was 83MB). Asked independently, Ghidra's analyser finds 0
+    functions / 0% instruction coverage in those images — the recompiler now refuses to out-guess it.
+
+    The criterion is the presence of a function RETURN (`jr ra`, the exact word 0x03E00008), and
+    nothing else, because every broader signal misfires on a real input:
+      * undecodable-fraction: real overlays mix data in — Tomba!2's area overlays are 20-30%
+        undecodable with HUNDREDS of returns (code + embedded graphics/tables); Spyro's data reads
+        include nop-padding runs that decode 100% clean. Neither direction separates.
+      * stack-prologue pattern: 2^-17 per random word — a 480KB data image expects ~1 spurious hit
+        (Spyro's OV_20F800). Too weak to vouch for code.
+      * `jr ra` exact-word: 2^-32 per random word — 3e-5 over the largest overlay seen. Data never
+        has one; every callable function ends in one.
+    The one real-code shape with NO return is a noreturn stage main (Tomba!2 START.BIN: a filename
+    table with one stage fn that never `jr ra`s) — the caller overrides this test with the game's
+    EXPLICIT seeds (someone vouched for an entry point), so the absence of returns alone can never
+    silently drop a seeded overlay.
+    Pinned by test_emit.py's data-image guard tests."""
+    return code_image_stats(exe)[1] > 0
+
+
 def overlay_funcs(exe, overlay_dir, base=None):
     """Seed resident functions that are reached ONLY from the stage overlays (\\BIN\\*.BIN, loaded
     raw to `base` at runtime). Those overlays `jal` into resident MAIN.EXE functions (the cooperative
@@ -1905,6 +1952,24 @@ def main():
         # ENTRY POINTS, so they get the same re-entry treatment (a preceding body that runs off its
         # end into one of them must continue into it, not `return`).
         explicit = OVERLAY_EXTRA_SEEDS.get(stem, set()) | area_tbl_seeds.get(stem, set())
+        if not explicit and not looks_like_code(ovexe):
+            # DATA through a code slot (a stream read into the overlay arena — see looks_like_code).
+            # Emit an EMPTY module: the dispatch/index symbols must still exist (overlay_table.c
+            # references them), the router keeps identifying the resident image by signature, and a
+            # call into it falls to rec_dispatch_miss and fails fast. Recompiling it is never an
+            # option — that is how 480KB of Spyro data became ~144MB of garbage C.
+            unk, ret, prol = code_image_stats(ovexe)
+            print(f"[recomp] overlay {fn}: NOT CODE ({unk:.0%} undecodable, {ret} jr-ra, "
+                  f"{prol} prologues in {len(data)} bytes) — emitting an EMPTY module; the router "
+                  f"keeps its signature entry and a call into it fails fast at dispatch")
+            src_files += emit_module(ovexe, out_dir, N, set(), None, None, shards=2)
+            overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
+            continue
+        if explicit and not looks_like_code(ovexe):
+            # Noreturn code (a stage main that never `jr ra`s — Tomba!2 START.BIN) trips the data
+            # test; the game's explicit seeds vouch for it. Say so, so the override is auditable.
+            print(f"[recomp] overlay {fn}: no jr-ra in image, but {len(explicit)} explicit seed(s) "
+                  f"vouch for code — recompiling")
         hard_ov = (pointer_table_funcs(ovexe) | constructed_func_pointers(ovexe)
                    | code_pointer_tables(ovexe) | overlay_internal_jal_targets(ovexe)
                    | explicit)

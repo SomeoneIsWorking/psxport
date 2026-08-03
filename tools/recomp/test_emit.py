@@ -15,6 +15,7 @@ Two layers:
 Run: python3 tools/recomp/test_emit.py   (or: python3 -m pytest tools/recomp/test_emit.py -q)
 """
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -960,8 +961,6 @@ def _main():
     sys.exit(1 if fails else 0)
 
 
-if __name__ == "__main__":
-    _main()
 
 
 def test_demote_internal_labels_criterion():
@@ -1027,3 +1026,191 @@ def test_demote_spares_branch_and_link_targets():
     e = exe_of(data)
     got = emit.demote_internal_labels(e, [0x80010000, 0x80010014], keep=set())
     assert got == set(), f"a bltzal target is a real subroutine, got {[hex(x) for x in sorted(got)]}"
+
+
+# ----------------------------------------------------------------------------------------------------
+# 3. DATA-IMAGE GUARD — an overlay that is not code must emit an EMPTY module, never a recompiled
+#    garbage blowup. Regression: Spyro's overlay scanner records every load into the shared arena,
+#    including large DATA reads (OV_18F800 512KB, OV_20F800 480KB, OV_287800 75KB — Ghidra confirms
+#    0 functions / 0% instruction coverage in all three). emit.py recompiled them as code: with no
+#    jr-ra anywhere, every seeded "function" flood-filled the module, and OV_20F800 alone produced
+#    ~144MB of C from 480KB of input.
+# ----------------------------------------------------------------------------------------------------
+def _garbage_image(nwords, base=0x8007AA38, seed=0x20F800):
+    """Deterministic data-like bytes: high-entropy words with in-window `jal`s sprinkled in, so
+    pre-fix discovery DOES seed functions inside the garbage, and — the whole point — no jr-ra and
+    no stack prologue anywhere, so nothing ever terminates a flood-fill."""
+    rng = random.Random(seed)
+    words = []
+    for _ in range(nwords):
+        w = rng.getrandbits(32)
+        if w == 0x03E00008 or (w & 0xFFFF8000) == 0x27BD8000:   # keep it return-free / prologue-free
+            w ^= 0xFFFFFFFF
+        words.append(w)
+    for i in range(0, nwords, max(1, nwords // 8)):             # plant in-window jal seeds
+        tgt = base + ((i * 137) % (nwords * 4)) & ~3
+        words[i] = (3 << 26) | ((tgt >> 2) & 0x3FFFFFF)
+    return struct.pack(f"<{len(words)}I", *words)
+
+
+def test_data_image_is_not_code():
+    e = exe_of(_garbage_image(4096), base=0x8007AA38)
+    assert not emit.looks_like_code(e), \
+        "return-free, prologue-free, largely-undecodable garbage must not classify as code"
+
+
+def test_zero_filled_image_is_not_code():
+    # All-nop padding decodes 0% unknown yet is still not code (OV_18F800's middle third was exactly
+    # this). The unknown-fraction alone cannot be the criterion — the missing returns are what gives
+    # data away.
+    e = exe_of(b"\0" * 16384, base=0x8007AA38)
+    assert not emit.looks_like_code(e), "a sea of nops has no callable function — not code"
+
+
+def test_code_image_is_code():
+    a = Asm(0x8007AA38)
+    a.addiu("sp", "sp", -0x10)      # prologue
+    a.sw("ra", 0x0C, "sp")
+    a.jal("sub")
+    a.nop()
+    a.lw("ra", 0x0C, "sp")
+    a.jr("ra")
+    a.addiu("sp", "sp", 0x10)
+    a.label("sub")
+    a.addu("v0", "a0", "a1")
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    e = exe_of(data, base=0x8007AA38)
+    assert emit.looks_like_code(e), "ordinary assembled functions must classify as code"
+
+
+def test_data_overlay_emits_an_empty_module():
+    """End-to-end through emit.py's CLI: a data .BIN under --overlays must produce a tiny EMPTY
+    module (dispatch falls to rec_dispatch_miss) while KEEPING the overlay's router-table entry —
+    the load is real and the runtime must still identify the resident image; it is just not code."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with tempfile.TemporaryDirectory() as td:
+        a = Asm()                                   # minimal valid MAIN.EXE
+        a.addiu("sp", "sp", -0x10)
+        a.jr("ra")
+        a.nop()
+        text, _ = a.assemble()
+        exe_path = os.path.join(td, "MAIN.EXE")
+        hdr = bytearray(0x800)
+        hdr[:8] = b"PS-X EXE"
+        struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)              # entry, gp
+        struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))      # load, text size
+        open(exe_path, "wb").write(bytes(hdr) + text)
+        ovdir = os.path.join(td, "ovl")
+        os.makedirs(ovdir)
+        open(os.path.join(ovdir, "DATAOVL0.BIN"), "wb").write(_garbage_image(4096))   # 16KB of data
+        seeds_path = os.path.join(td, "seeds.json")
+        open(seeds_path, "w").write('{"overlay_bases": {"DATAOVL0": "0x8007AA38"}}')
+        gen = os.path.join(td, "gen")
+        os.makedirs(gen)
+        r = subprocess.run([sys.executable, os.path.join(here, "emit.py"),
+                            exe_path, os.path.join(gen, "rec.c"),
+                            "--seeds", seeds_path, "--overlays", ovdir],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, f"emit.py failed:\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+        shards = [f for f in os.listdir(gen) if f.startswith("ov_dataovl0_shard_")]
+        assert shards, "the data overlay still needs its module TUs (dispatch/index symbols are " \
+                       "referenced by overlay_table.c)"
+        total = sum(os.path.getsize(os.path.join(gen, f)) for f in shards)
+        assert total < 4096, \
+            f"data overlay emitted {total} bytes of C across {shards} — the garbage blowup is back"
+        disp = open(os.path.join(gen, "ov_dataovl0_disp.c")).read()
+        assert "case 0x" not in disp, "a data overlay must have ZERO dispatchable functions"
+        table = open(os.path.join(gen, "overlay_table.c")).read()
+        assert '"DATAOVL0"' in table, \
+            "router identity must survive — the runtime still has to name the resident image"
+        assert "NOT CODE" in r.stdout + r.stderr, \
+            "a skipped data overlay must be ANNOUNCED, not silent — silence is how this hid"
+
+def test_mixed_code_and_data_image_is_code():
+    # Tomba!2's area overlays are the shape that kills a naive criterion: real functions (hundreds
+    # of jr-ra) followed by embedded graphics/tables that decode 20-30% undecodable. The undecodable
+    # fraction must NOT convict them — the returns are what counts.
+    a = Asm(0x8007AA38)
+    a.addiu("sp", "sp", -0x10)
+    a.jal("sub")
+    a.nop()
+    a.jr("ra")
+    a.nop()
+    a.label("sub")
+    a.addu("v0", "a0", "a1")
+    a.jr("ra")
+    a.nop()
+    code, _ = a.assemble()
+    data_tail = _garbage_image(2048)                      # 8KB of undecodable data after the code
+    e = exe_of(code + data_tail, base=0x8007AA38)
+    assert emit.looks_like_code(e), \
+        "code with an embedded data section must stay CODE — Tomba!2's area overlays are this shape"
+
+
+def _run_emit_cli(here, td, ov_bytes, ov_seeds=None):
+    """Minimal emit.py CLI run with one overlay; returns (proc, gen_dir)."""
+    a = Asm()
+    a.addiu("sp", "sp", -0x10)
+    a.jr("ra")
+    a.nop()
+    text, _ = a.assemble()
+    exe_path = os.path.join(td, "MAIN.EXE")
+    hdr = bytearray(0x800)
+    hdr[:8] = b"PS-X EXE"
+    struct.pack_into("<II", hdr, 0x10, 0x80010000, 0)
+    struct.pack_into("<II", hdr, 0x18, 0x80010000, len(text))
+    open(exe_path, "wb").write(bytes(hdr) + text)
+    ovdir = os.path.join(td, "ovl")
+    os.makedirs(ovdir, exist_ok=True)
+    open(os.path.join(ovdir, "STAGE0.BIN"), "wb").write(ov_bytes)
+    seeds = {"overlay_bases": {"STAGE0": "0x8007AA38"}}
+    if ov_seeds:
+        seeds["overlay_seeds"] = {"STAGE0": ov_seeds}
+    seeds_path = os.path.join(td, "seeds.json")
+    import json as _json
+    open(seeds_path, "w").write(_json.dumps(seeds))
+    gen = os.path.join(td, "gen")
+    os.makedirs(gen, exist_ok=True)
+    r = subprocess.run([sys.executable, os.path.join(here, "emit.py"),
+                        exe_path, os.path.join(gen, "rec.c"),
+                        "--seeds", seeds_path, "--overlays", ovdir],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"emit.py failed:\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    return r, gen
+
+
+def test_noreturn_code_needs_an_explicit_seed():
+    """The one real-code shape with no jr-ra is a noreturn stage main (Tomba!2 START.BIN). With NO
+    explicit seed the guard treats it as data (empty module, loudly); WITH one, the seed vouches for
+    it and it is recompiled. Assert both arms — dropping a seeded overlay silently is the worse
+    failure."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    a = Asm(0x8007AA38)
+    a.addiu("sp", "sp", -0x1C8)         # the START.BIN stage fn shape: prologue, no return
+    a.label("loop")
+    a.jal("worker")
+    a.nop()
+    a.b("loop")                          # noreturn main loop
+    a.nop()
+    a.label("worker")
+    a.addu("v0", "a0", "zero")
+    a.jalr("ra", "t9")                   # returns through t9, never a bare jr ra
+    a.nop()
+    ov, entry = a.assemble()
+    # strip every jr-ra-shaped word just in case the assembler emitted one
+    assert b"\x08\x00\xe0\x03" not in ov, "test image must contain no jr ra"
+    with tempfile.TemporaryDirectory() as td:
+        r, gen = _run_emit_cli(here, td, ov)
+        disp = open(os.path.join(gen, "ov_stage0_disp.c")).read()
+        assert "case 0x" not in disp, "seedless noreturn image: the data guard should empty it"
+        assert "NOT CODE" in r.stdout + r.stderr
+    with tempfile.TemporaryDirectory() as td:
+        r, gen = _run_emit_cli(here, td, ov, ov_seeds=["0x8007AA38"])
+        disp = open(os.path.join(gen, "ov_stage0_disp.c")).read()
+        assert "case 0x" in disp, "an explicit seed vouches for noreturn code — it must recompile"
+
+
+if __name__ == "__main__":
+    _main()
