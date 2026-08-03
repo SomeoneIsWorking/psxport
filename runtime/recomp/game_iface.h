@@ -234,6 +234,25 @@ struct GameConfig {
   // them. Appended at the end because GameConfig is initialised positionally.
   const char* cardEnvVar;
   const char* cardDefaultPath;
+
+  // --- windowed frame pacing (gpu_native.cpp gpu_pace_subframe) ---------------------------------
+  // The windowed pacer sleeps a whole-frame interval per call so a live run plays at the game's
+  // intended speed instead of spinning. Its interval is `quota * 1000/60 / parts` ms, where `quota`
+  // is the number of vblanks ONE pacing call represents.
+  //
+  // ZERO KEEPS THE LEGACY BEHAVIOUR: read the scratchpad byte 0x1F800235 as the quota. That address
+  // is the FIRST consumer's (Tomba!2) engine field — "vblanks per displayed frame, =2 => 30fps" —
+  // hardcoded because the framework predates a per-game config knob. It is a fact about ONE
+  // executable, and it is WRONG for any other game: the byte is ordinary scratchpad working memory
+  // (Spyro's geometry renderer writes vertex data over it), so a second consumer reads garbage and
+  // the windowed run sleeps seconds per frame. A new game MUST set this field; 0 is the legacy wart,
+  // kept so the reference consumer is untouched, not a licence to leave it unset.
+  //
+  // Semantics of the value are by CALLING CADENCE, not the game's display rate: a native-loop port
+  // that calls gpu_pace_frame once per logic frame sets the game's vblanks-per-frame (2 => 30fps). A
+  // port that still runs the guest's own frame loop and paces once per vblank (each vblank is
+  // 1/60s) sets 1. Appended at the end because GameConfig is initialised positionally.
+  uint32_t paceQuota;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

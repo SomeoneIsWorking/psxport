@@ -1316,11 +1316,12 @@ void GpuState::gpu_repaint() {}
 
 // Frame pacing: the native game loop (game_main) runs UNTHROTTLED — at thousands of fps.
 // That's right for headless tests but unplayable windowed. When a window is up we throttle to
-// the game's own pace: DAT_1f800235 is the engine's vblank quota (vblanks at 60 Hz per displayed
-// frame; =2 => 30 fps, Tomba2's logic rate). PSXPORT_NOPACE disables (fast-forward); headless
+// the game's own pace, set per-game via GameConfig::paceQuota (was the hardcoded Tomba2 field
+// DAT_1f800235 — see the read below). PSXPORT_NOPACE disables (fast-forward); headless
 // (no window) is never paced so tests stay fast. SDL timing keeps it portable (a window implies
 // SDL is up). Called ONCE per native game-frame from ov_frame_update — NOT from gpu_present,
 // which the boot stub also drives many times per frame (pacing those would stall the boot).
+// A guest-owned-loop port paces once per vblank and sets paceQuota=1.
 // Pace 1/`parts` of a logic frame: parts=1 → one full logic frame (30fps faithful path); parts=2 →
 // half a logic frame (fps60 presents twice per logic frame for 60fps). The shared `next` accumulator
 // advances by exactly one logic frame's worth per logic frame either way, so audio stays realtime.
@@ -1332,7 +1333,13 @@ void gpu_pace_subframe(Core* core, int parts) {
   // SDL dependency), so it works identically on Linux and macOS.
   if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;
   if (parts < 1) parts = 1;
-  int quota = core->mem_r8(0x1F800235u); if (quota < 1) quota = 2;   // vblanks per frame (default 30fps)
+  // The pacing quota is per-game (GameConfig::paceQuota): the vblanks one pacing call represents.
+  // The legacy path read a hardcoded Tomba!2 engine field (scratchpad 0x1F800235) that is ordinary
+  // working memory in any other game — Spyro's geometry renderer writes over it, so a windowed run
+  // slept the byte's garbage value (2..38 vblanks) per vblank and dropped to ~3fps. Kept only for
+  // consumers that never set the field; see game_iface.h.
+  int quota = (core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0;
+  if (quota < 1) { quota = core->mem_r8(0x1F800235u); if (quota < 1) quota = 2; }
   double interval_ms = quota * 1000.0 / 60.0 / parts;               // target ms for this (sub)frame
   struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
   double now = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
