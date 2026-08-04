@@ -33,7 +33,7 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
-#include "cfg.h"              // cfg_dbg/bootstrap so PSXPORT_DEBUG drives the lucent channels
+#include "cfg.h"              // cfg_on (PSXPORT_FMV_DUMPCODES)
 #include "fmv_decode.h"       // bs_decode_frame / mdec_decode_to_rgb555 / xa_decode_sector
 #include "c_subsys.h"         // mdec_init
 
@@ -233,8 +233,6 @@ static std::string dotenv(const std::string& key) {
 }
 
 int main(int argc, char** argv) {
-  (void)cfg_dbg("fmv");                     // trigger cfg bootstrap: PSXPORT_DEBUG=... drives the lucent channels
-
   if (argc < 2) {
     fprintf(stderr, "usage: %s <out-dir> [movie-path] [disc.chd]\n"
                     "       (movie-path default: MOVIE/LOGO.STR; disc: arg > PSXPORT_TOMBA2_DISC > PSXPORT_DISC, env or ./.env)\n",

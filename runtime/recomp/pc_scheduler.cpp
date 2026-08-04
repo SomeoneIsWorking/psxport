@@ -6,7 +6,6 @@
 #include "pc_scheduler.h"
 #include "core.h"
 #include "game.h"
-#include "cfg.h"
 #include <lucent/log.h>
 #include "scheduler.h"  // TASKBASE/TASKSTRIDE/CUR_TASK + the substrate stanzas + yield primitive
 #include "c_subsys.h"   // xa_stream_owns_slot2/xa_stream_voice_busy/xa_stream_voice_release

@@ -14,11 +14,19 @@
 //   MDFNSS_StateAction(...)    — savestate (unused)
 // Each is shimmed faithful-first below; none pull in another .c file.
 #include <stdint.h>
-#include "cfg.h"
+#include "cfg.h"          // cfg_str (PSXPORT_SPUBT) — the CONFIG half of cfg.h
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <lucent/log.h>
+
+// C LINKAGE FOR THE WHOLE FILE. This module is the C-ABI adapter between the vendored Beetle spu.c
+// (compiled as C, and the caller of IRQ_Assert) and the C++ runtime, which reaches spu_init/spu_write/
+// spu_render/... through its own `extern "C"` declarations (mem.cpp, spu_audio.cpp, spu_state.h). The
+// file itself is C++ so it can use lucent; every symbol it defines or imports across that boundary
+// still has to carry C linkage, so the whole body sits in one linkage specification.
+extern "C" {
 
 // ---------------------------------------------------------------------------
 // Beetle SPU API (mednafen/psx/spu.h), declared locally to avoid pulling the
@@ -81,11 +89,11 @@ void IRQ_Assert(int which, bool asserted)
 // CD-DA / CD-XA audio source. spu.c calls this once per output sample to fetch the stereo CD
 // audio pair (then mixes it under CDVol/SPUControl). Contract (from PS_CDC::GetCDAudio):
 // both channels are always written, clamped to -32768..32767. The real implementation lives
-// in xa_stream.c (native in-game XA-ADPCM streaming) — that module owns this symbol so it can
+// in xa_stream.cpp (native in-game XA-ADPCM streaming) — that module owns this symbol so it can
 // pull/resample the decoded XA ring. (It returns silence when nothing is streaming, which is
 // the same faithful default the old stub here provided.)
 
-// MDFNSS_StateAction (savestate, unused) is defined once in gte_beetle.c — shared across the
+// MDFNSS_StateAction (savestate, unused) is defined once in gte_beetle.cpp — shared across the
 // lifted Beetle modules to avoid a multiple-definition link error.
 
 // ---------------------------------------------------------------------------
@@ -137,9 +145,12 @@ void spu_write(uint32_t addr, uint32_t val)
       s_spu_log->entries[s_spu_log->count * 2 + 1] = val;
       s_spu_log->count++;
    }
-   // PSXPORT_SPU_DBG: surface whether the game drives the SPU at all (silent-output triage).
+   // `PSXPORT_DEBUG=spu`: surface whether the game drives the SPU at all (silent-output triage).
    // Logs total writes, key-on (KON 0x1F801D88/8A), and SPUCNT (0x1F801DAA, bit15 = SPU enable).
-   if (cfg_dbg("spu")) {
+   // The gate guards the BLOCK (the per-category counters below are real work) and spu_write runs
+   // per MMIO store, so it is an interned Channel rather than a name lookup per call.
+   static const lucent::Channel spu_ch{"spu"};
+   if (spu_ch) {
       // Process-wide `debug spu` print counters, consolidated in one static struct (this module is
       // instance-free at its MMIO entry; the counters are log numbering only, never machine state).
       static struct { long n, datacnt, voice_w, koff_w, vol_w, cdvol_w; uint32_t lastaddr; } sd;
@@ -156,18 +167,18 @@ void spu_write(uint32_t addr, uint32_t val)
       // what pitch, when" stream for A/B sequence diffs (docs/config.md `spu` channel).
       if (off < 0x180) {
          uint32_t vreg = off & 0xF, vno = off >> 4;
-         if (vreg == 0x4)      cfg_logf("spu", "[spudbg] V%02u pitch=%04X", vno, val & 0xFFFF);
-         else if (vreg == 0x6) cfg_logf("spu", "[spudbg] V%02u start=%04X", vno, val & 0xFFFF);
+         if (vreg == 0x4)      lucent::debug(spu_ch, "[spudbg] V{:02} pitch={:04X}", vno, val & 0xFFFF);
+         else if (vreg == 0x6) lucent::debug(spu_ch, "[spudbg] V{:02} start={:04X}", vno, val & 0xFFFF);
       }
-      if (off == 0x188 || off == 0x18A) cfg_logf("spu", "[spudbg] KON off=%03X val=%04X (writes=%ld)", off, val & 0xFFFF, n);
-      else if (off == 0x18C || off == 0x18E) cfg_logf("spu", "[spudbg] KOFF off=%03X val=%04X (writes=%ld)", off, val & 0xFFFF, n);
-      else if (off == 0x1AA) cfg_logf("spu", "[spudbg] SPUCNT=%04X enable=%d cdaudio=%d xfermode=%d (writes=%ld)", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
-      else if (off == 0x1B0 || off == 0x1B2) cfg_logf("spu", "[spudbg] CDVOL off=%03X val=%04X (writes=%ld)", off, val & 0xFFFF, n);
-      else if (off == 0x1A6) { sd.lastaddr = (val & 0xFFFF) << 3; cfg_logf("spu", "[spudbg] SPU xfer ADDR=0x%05X", sd.lastaddr); }
-      else if (off == 0x1A8) { sd.datacnt++; if ((sd.datacnt % 1000) == 1) cfg_logf("spu", "[spudbg] SPU DATA-port write #%ld (val=%04X)", sd.datacnt, val & 0xFFFF); }
+      if (off == 0x188 || off == 0x18A) lucent::debug(spu_ch, "[spudbg] KON off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+      else if (off == 0x18C || off == 0x18E) lucent::debug(spu_ch, "[spudbg] KOFF off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+      else if (off == 0x1AA) lucent::debug(spu_ch, "[spudbg] SPUCNT={:04X} enable={} cdaudio={} xfermode={} (writes={})", val & 0xFFFF, (val >> 15) & 1, val & 1, (val >> 4) & 3, n);
+      else if (off == 0x1B0 || off == 0x1B2) lucent::debug(spu_ch, "[spudbg] CDVOL off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+      else if (off == 0x1A6) { sd.lastaddr = (val & 0xFFFF) << 3; lucent::debug(spu_ch, "[spudbg] SPU xfer ADDR=0x{:05X}", sd.lastaddr); }
+      else if (off == 0x1A8) { sd.datacnt++; if ((sd.datacnt % 1000) == 1) lucent::debug(spu_ch, "[spudbg] SPU DATA-port write #{} (val={:04X})", sd.datacnt, val & 0xFFFF); }
       if ((n % 20000) == 0)
-         cfg_logf("spu", "[spudbg] SUMMARY writes=%ld voice=%ld koff=%ld mainvol=%ld cdvol=%ld",
-                  n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
+         lucent::debug(spu_ch, "[spudbg] SUMMARY writes={} voice={} koff={} mainvol={} cdvol={}",
+                       n, sd.voice_w, sd.koff_w, sd.vol_w, sd.cdvol_w);
    }
    // PSXPORT_SPUBT=<hex reg offset> — host backtrace on every write to that SPU register (e.g.
    // 156 = voice 21 start-addr). Guest-side attribution for SPU writes: wwatch can't see MMIO and
@@ -178,8 +189,8 @@ void spu_write(uint32_t addr, uint32_t val)
          extern int backtrace(void**, int);
          extern void backtrace_symbols_fd(void* const*, int, int);
          void* frames[32]; int n = backtrace(frames, 32);
-         cfg_logi("spubt", "off=%03X val=%04X", addr & 0x3FF, val & 0xFFFF);
-         backtrace_symbols_fd(frames, n, 2); cfg_logi("spubt", "----");
+         lucent::info("spubt", "off={:03X} val={:04X}", addr & 0x3FF, val & 0xFFFF);
+         backtrace_symbols_fd(frames, n, 2); lucent::info("spubt", "----");
       }
    }
    SPU_Write(0, addr & 0x3FF, (uint16_t)val);
@@ -195,10 +206,11 @@ uint32_t spu_read(uint32_t addr)
 // caller's word block.
 void spu_dma_write(const uint32_t *words, int count)
 {
-   if (cfg_dbg("spu")) {
+   static const lucent::Channel spu_ch{"spu"};
+   if (spu_ch) {                              // guards the counters, not the print
       static struct { long calls, total; } sd;   // process-wide `debug spu` print counters (see spu_write)
       sd.calls++; sd.total += count;
-      cfg_logf("spu", "[spudbg] SPU-RAM DMA write: %d words (call %ld, total %ld words)", count, sd.calls, sd.total);
+      lucent::debug(spu_ch, "[spudbg] SPU-RAM DMA write: {} words (call {}, total {} words)", count, sd.calls, sd.total);
    }
    int i;
    for (i = 0; i < count; i++)
@@ -233,11 +245,12 @@ int spu_render(int16_t *out, int max_frames)
 
    memcpy(out, IntermediateBuffer, (size_t)n * 2 * sizeof(int16_t));
 
-   if (cfg_dbg("spu")) {
+   static const lucent::Channel spu_ch{"spu"};
+   if (spu_ch) {                              // guards the peak SCAN over n*2 samples, not the print
       static long fr; int peak = 0;   // process-wide `debug spu` print counter (see spu_write)
       for (uint32_t i = 0; i < n * 2; i++) { int v = out[i]; if (v < 0) v = -v; if (v > peak) peak = v; }
       if ((++fr % 60) == 0 || peak > 0)
-         cfg_logf("spu", "[spudbg] spu_render frame %ld: %u stereo samples, peak=%d", fr, n, peak);
+         lucent::debug(spu_ch, "[spudbg] spu_render frame {}: {} stereo samples, peak={}", fr, n, peak);
    }
 
    if (n < avail)
@@ -254,3 +267,5 @@ int spu_render(int16_t *out, int max_frames)
    }
    return (int)n;
 }
+
+}  // extern "C"

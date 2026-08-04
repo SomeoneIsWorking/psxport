@@ -5,7 +5,6 @@
 #include "core.h"
 #include "game.h"
 #include "sbs.h"
-#include "cfg.h"
 #include <lucent/log.h>
 #include "verify_harness.h"
 #include "recomp_iface.h"   // seam: the generated per-module override setters (shard/ov_a00/ov_game)

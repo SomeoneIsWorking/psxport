@@ -41,7 +41,7 @@ int      spu_dma_read(uint32_t* words, int count);
 // [lo,hi), dump a C backtrace. Finds runtime code that clobbers a region the decompressor wrote.
 void Core::mem_set_watch(uint32_t lo, uint32_t hi) {
   s_cw_init = 1; s_cw_lo = lo & 0x1FFFFFFF; s_cw_hi = hi & 0x1FFFFFFF; s_cw_n = 0;
-  cfg_logi("cw", "watch [%08X,%08X)", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
+  lucent::info("cw", "watch [{:08X},{:08X})", 0x80000000u | s_cw_lo, 0x80000000u | s_cw_hi);
 }
 int Core::mem_watch_hits() { return s_cw_n; }
 
@@ -60,8 +60,8 @@ void Core::cw_check_slow(uint32_t a, uint32_t v, int width) {
     static int s_cw_max = -1;
     if (s_cw_max < 0) s_cw_max = cfg_int("PSXPORT_CW_MAX", 64);
     if (s_cw_max == 0 || s_cw_n <= s_cw_max) {
-      cfg_logi("cw", "#%d store w%d [%08X]=%08X  interp_pc=%08X sp=%08X", s_cw_n, width, 0x80000000u|p, v, pc, r[29]);
-      if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); cfg_logi("mem", "----"); }
+      lucent::info("cw", "#{} store w{} [{:08X}]={:08X}  interp_pc={:08X} sp={:08X}", s_cw_n, width, 0x80000000u|p, v, pc, r[29]);
+      if (cfg_str("PSXPORT_CW_BT")) { void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); lucent::info("mem", "----"); }
     }
   }
 }
@@ -88,12 +88,12 @@ void Core::wwatch_check_slow(uint32_t a, uint32_t v, uint32_t w) {
   if (s_ww_hi && ka >= s_ww_lo && ka < s_ww_hi) {
     if (cfg_str("PSXPORT_WWATCH")) {
       extern int gpu_frame_no(Core*);
-      cfg_logi("wwatch", "f%d core=%p store [%08X]=%08X by pc=%08X ra=%08X stage=%08X", gpu_frame_no(this), (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
+      lucent::info("wwatch", "f{} core={} store [{:08X}]={:08X} by pc={:08X} ra={:08X} stage={:08X}", gpu_frame_no(this), (void*)this, ka, v, pc, r[31], mem_r32(0x801fe00c));
       // PSXPORT_WWATCH_BT=1 — host backtrace per hit. Names the gen_func_*/native call chain even
       // for static gen-to-gen calls (where guest pc/ra go stale under native execution).
       if (cfg_str("PSXPORT_WWATCH_BT")) {
-        cfg_logi("wwatch-regs", "a0=%08X a1=%08X a2=%08X a3=%08X s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X", r[4], r[5], r[6], r[7], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
-        void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); cfg_logi("mem", "----");
+        lucent::info("wwatch-regs", "a0={:08X} a1={:08X} a2={:08X} a3={:08X} s0={:08X} s1={:08X} s2={:08X} s3={:08X} s4={:08X} s5={:08X} s6={:08X} s7={:08X}", r[4], r[5], r[6], r[7], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
+        void* bt[32]; int n = backtrace(bt, 32); backtrace_symbols_fd(bt, n, 2); lucent::info("mem", "----");
       }
     }
     if (storeWatchCb) storeWatchCb(this, ka, v, w);
@@ -136,8 +136,6 @@ static uint32_t s_dpcr = DPCR_RESET;
 static uint32_t s_dicr = 0;
 
 void dma_irq_ack(int ch) { s_dicr &= ~(1u << (24 + ch)); }
-
-static int s_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access (diagnostic only)
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
   uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
@@ -204,11 +202,11 @@ void Core::mdec_dma_pump() {
     // MDEC channel completion into a guest callback, so arming them would have nothing to signal.)
     if (s_mdec0_left == 0 && (s_dma0_chcr & 0x01000000u)) {
       s_dma0_chcr &= ~0x01000000u;
-      if (cfg_dbg("mdecdma")) cfg_logf("mdecdma", "DMA0(in)  complete");
+      lucent::debug("mdecdma", "DMA0(in)  complete");
     }
     if (s_mdec1_left == 0 && (s_dma1_chcr & 0x01000000u)) {
       s_dma1_chcr &= ~0x01000000u;
-      if (cfg_dbg("mdecdma")) cfg_logf("mdecdma", "DMA1(out) complete");
+      lucent::debug("mdecdma", "DMA1(out) complete");
     }
     if (s_mdec0_left == 0 && s_mdec1_left == 0) return;   // nothing pending
     if (progress) continue;
@@ -234,10 +232,10 @@ void Core::mdec_dma_pump() {
       // but say so ONCE — never spin on it, never fake completion.
       if (!s_mdec_stall_reported) {
         s_mdec_stall_reported = 1;
-        cfg_loge("mdec", "DMA0 in: %d word(s) pending @%08X but the decode command has retired "
-                         "(InCommand clear, InCounter=0xFFFF) — input remainder outlives the "
-                         "command; transfer cannot complete. MDEC1 status=%08X",
-                 s_mdec0_left, s_mdec0_addr, st);
+        lucent::error("mdec", "DMA0 in: {} word(s) pending @{:08X} but the decode command has retired "
+                              "(InCommand clear, InCounter=0xFFFF) — input remainder outlives the "
+                              "command; transfer cannot complete. MDEC1 status={:08X}",
+                      s_mdec0_left, s_mdec0_addr, st);
       }
       return;
     }
@@ -248,10 +246,10 @@ void Core::mdec_dma_pump() {
       // No decode command in flight (fresh reset / between commands): a command write to the MDEC
       // port resumes this via the port-write pump point. Faithful wait, traced.
       const uint32_t note = 0x01000000u | (uint32_t)s_mdec0_left;
-      if (cfg_dbg("mdecdma") && s_mdec_defer_note != note) {
+      if (s_mdec_defer_note != note) {                       // state CHANGE, not per poll — see above
         s_mdec_defer_note = note;
-        cfg_logf("mdecdma", "DMA0(in)  deferred: %d word(s) pending, no decode command in flight",
-                 s_mdec0_left);
+        lucent::debug("mdecdma", "DMA0(in)  deferred: {} word(s) pending, no decode command in flight",
+                      s_mdec0_left);
       }
       return;
     }
@@ -260,10 +258,10 @@ void Core::mdec_dma_pump() {
       // and the guest has not started DMA1 yet. DMA0 stays busy/pending; the DMA1 start (or any
       // guest poll) resumes it. On hardware this is exactly the DMA0 stall in dma.c's ping-pong.
       const uint32_t note = 0x02000000u | (uint32_t)s_mdec0_left;
-      if (cfg_dbg("mdecdma") && s_mdec_defer_note != note) {
+      if (s_mdec_defer_note != note) {                       // state CHANGE, not per poll — see above
         s_mdec_defer_note = note;
-        cfg_logf("mdecdma", "DMA0(in)  deferred: %d word(s) pending, decoder blocked on output",
-                 s_mdec0_left);
+        lucent::debug("mdecdma", "DMA0(in)  deferred: {} word(s) pending, decoder blocked on output",
+                      s_mdec0_left);
       }
       return;
     }
@@ -273,10 +271,10 @@ void Core::mdec_dma_pump() {
       // DMA1 against the frame — in which case hardware would hang busy identically and the
       // guest's own sync timeout is the correct observer.
       const uint32_t note = 0x03000000u | (uint32_t)s_mdec1_left;
-      if (cfg_dbg("mdecdma") && s_mdec_defer_note != note) {
+      if (s_mdec_defer_note != note) {                       // state CHANGE, not per poll — see above
         s_mdec_defer_note = note;
-        cfg_logf("mdecdma", "DMA1(out) deferred: %d word(s) pending, awaiting decoder output",
-                 s_mdec1_left);
+        lucent::debug("mdecdma", "DMA1(out) deferred: {} word(s) pending, awaiting decoder output",
+                      s_mdec1_left);
       }
       return;
     }
@@ -286,10 +284,10 @@ void Core::mdec_dma_pump() {
     // status so the two causes are distinguishable. Never silently.
     if (!s_mdec_stall_reported) {
       s_mdec_stall_reported = 1;
-      cfg_loge("mdec", "DMA pump wedged: no progress possible. DMA0 %d word(s) pending @%08X, "
-                       "DMA1 %d word(s) pending @%08X, MDEC1 status=%08X (InCommand=%d "
-                       "outfifo_has_data=%d)",
-               s_mdec0_left, s_mdec0_addr, s_mdec1_left, s_mdec1_addr, st, in_cmd, out_has);
+      lucent::error("mdec", "DMA pump wedged: no progress possible. DMA0 {} word(s) pending @{:08X}, "
+                            "DMA1 {} word(s) pending @{:08X}, MDEC1 status={:08X} (InCommand={} "
+                            "outfifo_has_data={})",
+                    s_mdec0_left, s_mdec0_addr, s_mdec1_left, s_mdec1_addr, st, in_cmd, out_has);
     }
     return;
   }
@@ -359,7 +357,7 @@ void Core::dumpStringishRegs() {
     // classifier is too strict", which the verdict alone cannot.
     if (n >= 4) {
       buf[n] = 0;
-      cfg_loge("mem", "  string: %s=0x%08X -> \"%s\"", kReg[i], a, buf);
+      lucent::error("mem", "  string: {}=0x{:08X} -> \"{}\"", kReg[i], a, buf);
       printed++;
     }
     char hex[16 * 3 + 1], asc[17]; int hn = 0, an = 0;
@@ -370,13 +368,13 @@ void Core::dumpStringishRegs() {
       asc[an++] = (*q >= 0x20 && *q <= 0x7E) ? (char)*q : '.';
     }
     hex[hn] = 0; asc[an] = 0;
-    cfg_loge("mem", "  bytes : %-4s=0x%08X  %-48s |%s|", kReg[i], a, hex, asc);
+    lucent::error("mem", "  bytes : {:<4}=0x{:08X}  {:<48} |{}|", kReg[i], a, hex, asc);
   }
-  cfg_loge("mem", "  strings: examined %d GPRs (excl gp/sp/fp), %d resolved into mapped RAM, "
-                  "%d looked like C strings. BLIND SPOT: only sees a string whose pointer is still "
-                  "live in a GPR here — one reached via a stack buffer or a struct field is NOT "
-                  "visible, so %s does not mean there was no name.",
-           examined, mapped, printed, printed ? "this list" : "an empty list");
+  lucent::error("mem", "  strings: examined {} GPRs (excl gp/sp/fp), {} resolved into mapped RAM, "
+                       "{} looked like C strings. BLIND SPOT: only sees a string whose pointer is still "
+                       "live in a GPR here — one reached via a stack buffer or a struct field is NOT "
+                       "visible, so {} does not mean there was no name.",
+                examined, mapped, printed, printed ? "this list" : "an empty list");
 }
 // FAIL-FAST on an access to RAM space the memory model does not map.
 //
@@ -406,22 +404,22 @@ static void warn_unmapped_ram(Core* gc, uint32_t a, uint32_t bytes, const char* 
     // on return — so it names the last recompiled function that was entered, which can be a callee
     // that has already returned. It named FUN_800197A4 for a fault whose real site was inside
     // FUN_800195FC, and an investigation took that at face value. Label it for what it is.
-    cfg_loge("mem", "  guest: last-fn-entered=0x%08X (NOT the faulting pc — see comment) "
-                    "ra=0x%08X sp=0x%08X gp=0x%08X fp=0x%08X",
-             gc->pc, gc->r[31], gc->r[29], gc->r[28], gc->r[30]);
-    cfg_loge("mem", "  args : a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X  v0=0x%08X v1=0x%08X",
-             gc->r[4], gc->r[5], gc->r[6], gc->r[7], gc->r[2], gc->r[3]);
-    cfg_loge("mem", "  temps: t0=0x%08X t1=0x%08X t2=0x%08X t3=0x%08X  s0=0x%08X s1=0x%08X",
-             gc->r[8], gc->r[9], gc->r[10], gc->r[11], gc->r[16], gc->r[17]);
+    lucent::error("mem", "  guest: last-fn-entered=0x{:08X} (NOT the faulting pc — see comment) "
+                         "ra=0x{:08X} sp=0x{:08X} gp=0x{:08X} fp=0x{:08X}",
+                  gc->pc, gc->r[31], gc->r[29], gc->r[28], gc->r[30]);
+    lucent::error("mem", "  args : a0=0x{:08X} a1=0x{:08X} a2=0x{:08X} a3=0x{:08X}  v0=0x{:08X} v1=0x{:08X}",
+                  gc->r[4], gc->r[5], gc->r[6], gc->r[7], gc->r[2], gc->r[3]);
+    lucent::error("mem", "  temps: t0=0x{:08X} t1=0x{:08X} t2=0x{:08X} t3=0x{:08X}  s0=0x{:08X} s1=0x{:08X}",
+                  gc->r[8], gc->r[9], gc->r[10], gc->r[11], gc->r[16], gc->r[17]);
     gc->dumpStringishRegs();
   }
-  cfg_loge("mem", "\nFATAL: UNMAPPED RAM %s%u @ 0x%08X (phys 0x%08X) — fail-fast.\n"
-                  "  The memory model does not map this address, so the access cannot be honoured. "
-                  "Discarding it would corrupt silently.\n"
-                  "  Main RAM is 2 MB (phys 0x00000000..0x001FFFFF). If the guest legitimately reaches "
-                  "the KSEG0 mirrors, map them in host_ptr;\n"
-                  "  if it does not, this address is the real bug and the backtrace below names the "
-                  "path that produced it. Backtrace:", how, bytes * 8, a, p);
+  lucent::error("mem", "\nFATAL: UNMAPPED RAM {}{} @ 0x{:08X} (phys 0x{:08X}) — fail-fast.\n"
+                       "  The memory model does not map this address, so the access cannot be honoured. "
+                       "Discarding it would corrupt silently.\n"
+                       "  Main RAM is 2 MB (phys 0x00000000..0x001FFFFF). If the guest legitimately reaches "
+                       "the KSEG0 mirrors, map them in host_ptr;\n"
+                       "  if it does not, this address is the real bug and the backtrace below names the "
+                       "path that produced it. Backtrace:", how, bytes * 8, a, p);
   void* bt[32]; int nbt = backtrace(bt, 32); backtrace_symbols_fd(bt, nbt, 2);
   fflush(stderr);
   abort();
@@ -440,9 +438,8 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     // even reaching I_STAT (before this model existed the read fell through to unmapped I/O and
     // returned 0, so every verifier rejected and nothing said so), and whether a bit the framework
     // asserted was ever acknowledged. `ra` names the verifier or handler doing the read.
-    if (cfg_dbg("irq"))
-      cfg_logf("irq", "r %s = 0x%03X (stat=0x%03X mask=0x%03X) ra=%08X",
-               p == 0x1F801070 ? "I_STAT" : "I_MASK", rv, game->hle.i_stat, game->hle.i_mask, r[31]);
+    lucent::debug("irq", "r {} = 0x{:03X} (stat=0x{:03X} mask=0x{:03X}) ra={:08X}",
+                  p == 0x1F801070 ? "I_STAT" : "I_MASK", rv, game->hle.i_stat, game->hle.i_mask, r[31]);
     return rv;
   }
   if (p >= 0x1F801800 && p <= 0x1F801803) {                                 // CD controller registers
@@ -458,11 +455,10 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
     // disassembly is guesswork; one run of this settles it.
     // Same pc/ra caveat as cdcw: static gen-to-gen calls do not refresh guest pc/ra, so treat them as
     // hints and use cdcbt when the caller identity matters.
-    if (cfg_dbg("cdcr"))
-      cfg_logf("cdcr", "r[%04X]=%02X bank=%d %s pc=%08X ra=%08X",
-               (unsigned)(p & 0xFFFF), (unsigned)(rv & 0xFF), game->cdc.index,
-               (p & 3) == 2 ? "DATA-FIFO" : (p & 3) == 1 ? "resp" : (p & 3) == 0 ? "status" : "irq",
-               pc, r[31]);
+    lucent::debug("cdcr", "r[{:04X}]={:02X} bank={} {} pc={:08X} ra={:08X}",
+                  (unsigned)(p & 0xFFFF), (unsigned)(rv & 0xFF), game->cdc.index,
+                  (p & 3) == 2 ? "DATA-FIFO" : (p & 3) == 1 ? "resp" : (p & 3) == 0 ? "status" : "irq",
+                  pc, r[31]);
     return rv;
   }
   if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
@@ -503,8 +499,9 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
   if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
   warn_unmapped_ram(this, a, bytes, "read");
-  if (s_io_verbose)
-    cfg_logi("io", "read%u @ 0x%08X -> 0", bytes * 8, a);
+  // `PSXPORT_DEBUG=io` — an unmapped PERIPHERAL access (a RAM address never gets here; the call above
+  // fail-fasts on those). Reads back 0, which is what an unimplemented register looks like to a guest.
+  lucent::debug("io", "read{} @ 0x{:08X} -> 0", bytes * 8, a);
   return 0;
 }
 
@@ -519,9 +516,8 @@ uint32_t Core::irqStatLatch() {
     game->cdc.irq_edge = 0;
     game->hle.i_stat |= 1u << 2;
     pending_work |= PW_IRQ;             // arm the per-function-entry delivery gate
-    if (cfg_dbg("irq"))
-      cfg_logf("irq", "CD raised IRQ2 -> I_STAT=0x%03X (mask=0x%03X, %s)", game->hle.i_stat,
-               game->hle.i_mask, (game->hle.i_mask & 4) ? "ENABLED" : "masked off by the guest");
+    lucent::debug("irq", "CD raised IRQ2 -> I_STAT=0x{:03X} (mask=0x{:03X}, {})", game->hle.i_stat,
+                  game->hle.i_mask, (game->hle.i_mask & 4) ? "ENABLED" : "masked off by the guest");
   }
   return game->hle.i_stat;
 }
@@ -532,15 +528,14 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     irqStatLatch();                             // cleared; a bit written as 1 is left alone. This
     const uint32_t before = game->hle.i_stat;     // is the PSX's semantic, NOT write-1-to-clear.
     game->hle.i_stat &= v & 0x7FFu;
-    if (cfg_dbg("irq"))
-      cfg_logf("irq", "w I_STAT 0x%03X: 0x%03X -> 0x%03X ra=%08X",
-               v & 0x7FFu, before, game->hle.i_stat, r[31]);
+    lucent::debug("irq", "w I_STAT 0x{:03X}: 0x{:03X} -> 0x{:03X} ra={:08X}",
+                  v & 0x7FFu, before, game->hle.i_stat, r[31]);
     return;
   }
   if (p == 0x1F801074) {                                             // I_MASK
     game->hle.i_mask = v & 0x7FFu;
     pending_work |= PW_IRQ;             // unmasking may have made a latched bit deliverable
-    if (cfg_dbg("irq")) cfg_logf("irq", "w I_MASK 0x%03X ra=%08X", game->hle.i_mask, r[31]);
+    lucent::debug("irq", "w I_MASK 0x{:03X} ra={:08X}", game->hle.i_mask, r[31]);
     return;
   }
   if (p >= 0x1F801800 && p <= 0x1F801803) {        // CD controller
@@ -554,12 +549,13 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     // getter "issuing" a CD command, with ra=0 — the tell). Trust them only when ra is plausible.
     // `PSXPORT_DEBUG=cdcbt` adds a host backtrace, which names the real gen_func_* chain; that is the
     // identification to rely on.
-    if (cfg_dbg("cdcw")) {
-      cfg_logf("cdcw", "w[%04X]=%02X bank=%d a0=%08X s1=%08X pc=%08X ra=%08X",
-               (unsigned)(p & 0xFFFF), (unsigned)(v & 0xFF), game->cdc.index, r[4], r[17], pc, r[31]);
-      if (cfg_dbg("cdcbt") && (p & 3) == 1 && game->cdc.index == 0) {   // command-register write only
-        void* bt[24]; int n = backtrace(bt, 24); backtrace_symbols_fd(bt, n, 2);
-      }
+    lucent::debug("cdcw", "w[{:04X}]={:02X} bank={} a0={:08X} s1={:08X} pc={:08X} ra={:08X}",
+                  (unsigned)(p & 0xFFFF), (unsigned)(v & 0xFF), game->cdc.index, r[4], r[17], pc, r[31]);
+    // The backtrace is an ADDENDUM to the cdcw line, so it needs cdcw on as well as cdcbt — the
+    // cheap tests first, then the two channel lookups, then the (non-logging) unwind.
+    if ((p & 3) == 1 && game->cdc.index == 0 &&                         // command-register write only
+        lucent::channel_on("cdcbt") && lucent::channel_on("cdcw")) {
+      void* bt[24]; int n = backtrace(bt, 24); backtrace_symbols_fd(bt, n, 2);
     }
     cdc_write(&game->cdc, p, (uint8_t)v);
     irqStatLatch();   // a command usually completes here and raises IRQ2 — latch it now, not on
@@ -595,11 +591,10 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       // A short drain means the sector FIFO ran dry. Report it and write NOTHING for the missing
       // words — filling them would hand the guest fabricated data that looks like a real read.
       if (got < n)
-        cfg_loge("cdc", "DMA3 underrun: guest asked %d words, FIFO held %d — the missing words were "
-                        "NOT written, so this read is genuinely incomplete", n, got);
-      if (cfg_dbg("cdc"))
-        cfg_logf("cdc", "DMA3 %d words -> 0x%08X (head now LBA %u)", got, 0x80000000u | da,
-                 game->cdc.loc_lba);
+        lucent::error("cdc", "DMA3 underrun: guest asked {} words, FIFO held {} — the missing words were "
+                             "NOT written, so this read is genuinely incomplete", n, got);
+      lucent::debug("cdc", "DMA3 {} words -> 0x{:08X} (head now LBA {})", got, 0x80000000u | da,
+                    game->cdc.loc_lba);
       s_dma3_chcr &= ~0x01000000u;                 // clear busy: the completion poll must pass
       irqStatLatch();                              // draining a sector queues the next INT1
       // Announce completion — but ONLY if the guest asked to hear about THIS transfer. DICR is where
@@ -631,16 +626,16 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       if (v & 1) {                                 // RAM -> SPU
         for (int i = 0; i < n; i++) s_dma_buf[i] = mem_r32(da + i * 4);
         if (cfg_str("PSXPORT_SPUDMA")) {           // log VAB/sample transfers: source -> SPU dest, size
-          cfg_logi("spudma", "RAM 0x%08X -> SPU 0x%06X  %d words (%d B)  pc=%08X stage=%08X", 0x80000000u | da, s_spu_xfer_addr, n, n * 4, pc, mem_r32(0x801fe00c));
+          lucent::info("spudma", "RAM 0x{:08X} -> SPU 0x{:06X}  {} words ({} B)  pc={:08X} stage={:08X}", 0x80000000u | da, s_spu_xfer_addr, n, n * 4, pc, mem_r32(0x801fe00c));
           if (n > 20000) {                         // big VAB bank: dump engine-range guest return addrs
             uint32_t sp = r[29] & 0x1FFFFFFF;
-            CfgLine ln; cfg_line_reset(&ln); cfg_line_addf(&ln, "  [vab-caller-chain]");
+            lucent::Line ln; ln.add("  [vab-caller-chain]");
             for (uint32_t o = 0; o < 0x800 && sp + o + 4 <= 0x200000; o += 4) {
               uint32_t w; memcpy(&w, &ram[sp + o], 4); uint32_t p = w & 0x1FFFFFFF;
               if ((w & 0xFFE00000u) == 0x80000000u && (w & 3) == 0 && p >= 0x1E000 && p < 0x82000)
-                cfg_line_addf(&ln, " %08X", w);
+                ln.add(" {:08X}", w);
             }
-            cfg_line_flush(&ln, "spudma");
+            ln.flush(lucent::Level::Info, "spudma");
           }
         }
         spu_dma_write(s_dma_buf, n);
@@ -673,9 +668,8 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       // computes the DMA register base dynamically, so a static scan of the executable cannot
       // answer it (it finds no DMA0/DMA1 CHCR write at all) — but this handler sees every one.
       // Measured (PSXPORT_DEBUG=mdecdma, 2026-07-30 boot): DMA0-first, every decode.
-      if (cfg_dbg("mdecdma"))
-        cfg_logf("mdecdma", "DMA0(in)  start madr=%08X bcr=%08X words=%d",
-                 s_dma0_madr, s_dma0_bcr, dma_block_words(s_dma0_bcr));
+      lucent::debug("mdecdma", "DMA0(in)  start madr={:08X} bcr={:08X} words={}",
+                    s_dma0_madr, s_dma0_bcr, dma_block_words(s_dma0_bcr));
       int n = dma_block_words(s_dma0_bcr); if (n > 0x10000) n = 0x10000;
       s_mdec0_addr = s_dma0_madr & 0xFFFFFCu;
       s_mdec0_left = n;
@@ -687,8 +681,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       mdec_dma_pump();
     } else if (s_mdec0_left > 0) {
       // Forced stop (vendor dma.c DMA_Write kludge: clearing bit 24 aborts the channel).
-      if (cfg_dbg("mdecdma"))
-        cfg_logf("mdecdma", "DMA0(in)  forced stop: %d word(s) abandoned", s_mdec0_left);
+      lucent::debug("mdecdma", "DMA0(in)  forced stop: {} word(s) abandoned", s_mdec0_left);
       s_mdec0_left = 0;
     }
     return;
@@ -702,9 +695,8 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       // (measured live order); the pump then ping-pongs both channels to completion. A DMA1 start
       // that cannot complete no longer truncates silently — it stays PENDING with busy set (traced
       // as a deferral on this channel), exactly as hardware would show it.
-      if (cfg_dbg("mdecdma"))
-        cfg_logf("mdecdma", "DMA1(out) start madr=%08X bcr=%08X words=%d canread=%d",
-                 s_dma1_madr, s_dma1_bcr, dma_block_words(s_dma1_bcr), (int)mdec_dma_can_read());
+      lucent::debug("mdecdma", "DMA1(out) start madr={:08X} bcr={:08X} words={} canread={}",
+                    s_dma1_madr, s_dma1_bcr, dma_block_words(s_dma1_bcr), (int)mdec_dma_can_read());
       int n = dma_block_words(s_dma1_bcr); if (n > 0x10000) n = 0x10000;
       s_mdec1_addr = s_dma1_madr & 0xFFFFFFu;      // dma.c CurAddr form: advances 4/word, 0x1FFFFC at store
       s_mdec1_left = n;
@@ -712,8 +704,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       s_mdec_defer_note = 0;
       mdec_dma_pump();
     } else if (s_mdec1_left > 0) {
-      if (cfg_dbg("mdecdma"))
-        cfg_logf("mdecdma", "DMA1(out) forced stop: %d word(s) abandoned", s_mdec1_left);
+      lucent::debug("mdecdma", "DMA1(out) forced stop: {} word(s) abandoned", s_mdec1_left);
       s_mdec1_left = 0;
     }
     return;
@@ -760,8 +751,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     return;
   }
   warn_unmapped_ram(this, a, bytes, "write");
-  if (s_io_verbose)
-    cfg_logi("io", "write%u @ 0x%08X = 0x%08X", bytes * 8, a, v);
+  lucent::debug("io", "write{} @ 0x{:08X} = 0x{:08X}", bytes * 8, a, v);   // discarded: no such register
 }
 
 uint8_t Core::mem_r8(uint32_t a) {
@@ -811,7 +801,7 @@ static void display_pass_write_guard(Core* c, uint32_t a, uint32_t v, int width)
   const bool guest_ram   = p < 0x200000;
   const bool scratchpad  = p >= 0x1F800000 && p < 0x1F800400;
   if (!guest_ram && !scratchpad) return;
-  cfg_logi("mem", "\n[pc_render VIOLATION] guest write to 0x%08X (val 0x%X, width %d) during pc_render display pass — pc_render MUST be a read-only overlay (CLAUDE.md). interp_pc=%08X sp=%08X", 0x80000000u | p, v, width, c->pc, c->r[29]);
+  lucent::info("mem", "\n[pc_render VIOLATION] guest write to 0x{:08X} (val 0x{:X}, width {}) during pc_render display pass — pc_render MUST be a read-only overlay (CLAUDE.md). interp_pc={:08X} sp={:08X}", 0x80000000u | p, v, width, c->pc, c->r[29]);
   guest_backtrace_to(c, stderr);
   fflush(stderr);
   abort();

@@ -22,6 +22,7 @@
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
+#include <lucent/log.h>
                      // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
 #include <stdio.h>
@@ -292,7 +293,7 @@ static void game_main(Core* c) {
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
   if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) nframes = 0;
-  cfg_logi("native_boot", "entering native frame loop (%s)", nframes ? "capped" : "interactive (until window close)");
+  lucent::info("native_boot", "entering native frame loop ({})", nframes ? "capped" : "interactive (until window close)");
   c->game->dbg_server.start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
   // Per-loop state carried across frames (plain locals — one frame loop per Core, no hidden globals):
@@ -332,21 +333,21 @@ static void game_main(Core* c) {
     if (as_phase == -1) {
       const char* s = cfg_str("PSXPORT_AUTO_SKIP");
       as_phase = (s && strcmp(s, "0")) ? 0 : 3;
-      if (as_phase == 0) cfg_logi("autoskip", "armed: drive into GAME free-roam");
+      if (as_phase == 0) lucent::info("autoskip", "armed: drive into GAME free-roam");
     }
     if (as_phase < 3) {
       uint32_t stg = c->mem_r32(TASKBASE + 0xc);
       uint8_t  cut = c->mem_r8(0x1F800137u);             // cutscene-active flag
       if (as_phase == 0) {                             // tap Cross until the GAME stage
         if (stg != c->cfg->stageGame) { if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6); }
-        else { as_phase = 1; cfg_logi("autoskip", "reached GAME at frame %u", f); }
+        else { as_phase = 1; lucent::info("autoskip", "reached GAME at frame {}", f); }
       } else if (as_phase == 1) {                      // wait for the cutscene to actually start (flag -> 1)
-        if (cut) { as_phase = 2; cfg_logw("autoskip", "intro cutscene up at frame %u; skipping (Start)", f); }
+        if (cut) { as_phase = 2; lucent::warn("autoskip", "intro cutscene up at frame {}; skipping (Start)", f); }
       } else {                                           // phase 2: pulse Start while the cutscene is active
         if (cut) { as_idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6); }
         else if (++as_idle >= 60) {   // ~2s after the flag clears: lets the cutscene-END FADE finish before
           c->game->pad.driveRelease(); as_phase = 3;   // hand-off, so a Start right after skip opens the pause menu
-          cfg_logi("autoskip", "free-roam reached at frame %u (cutscene ended)", f);   // (not mid-fade)
+          lucent::info("autoskip", "free-roam reached at frame {} (cutscene ended)", f);   // (not mid-fade)
         }
       }
     }
@@ -358,7 +359,7 @@ static void game_main(Core* c) {
       if (c->mem_r32(0x801fe00c) != c->cfg->stageGame) {
         if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x4000), 6);   // tap Cross
       } else {
-        cfg_logi("repl", "newgame: reached GAME prologue at frame %u", f);
+        lucent::info("repl", "newgame: reached GAME prologue at frame {}", f);
         c->game->repl.navNewgame = 0; repl_budget = 0;                                     // back to the REPL prompt
         // Do NOT run this frame's native_step_frame: it would advance into the GAME loop body (area
         // INIT -> running sub-mode) and, with the area-code overlay not yet loaded, derail before the
@@ -370,7 +371,7 @@ static void game_main(Core* c) {
     if (c->game->repl.skipFrames > 0) {
       if ((f % 24u) == 0) c->game->pad.driveTap((uint16_t)(0xFFFF & ~0x0008), 6);     // pulse Start
       if (--c->game->repl.skipFrames == 0) { c->game->pad.driveRelease();
-        cfg_logi("repl", "skip done at frame %u", f); }
+        lucent::info("repl", "skip done at frame {}", f); }
     }
     // `warp` — fire the armed area change by writing the REAL DOOR RECORD, then letting the game's own
     // field-run state machine run its natural transition sequence. RE (engine_re.md "Area WARP", door-record
@@ -419,7 +420,7 @@ static void game_main(Core* c) {
       // nothing ever arming its objects. Measured before this call existed: after `warp 12` exactly ONE
       // of the destination overlay's 170 functions ran, while the arena rendered normally.
       if (c->hooks->devWarpAreaEnter) c->hooks->devWarpAreaEnter(c);
-      cfg_logi("repl", "warp: full area load for area %u done (f%u), bf870=%u, sm[0x4c]=%u", dest, f, c->mem_r8(0x800bf870u), c->mem_r8(wsm + 0x4c));
+      lucent::info("repl", "warp: full area load for area {} done (f{}), bf870={}, sm[0x4c]={}", dest, f, c->mem_r8(0x800bf870u), c->mem_r8(wsm + 0x4c));
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs
@@ -445,12 +446,13 @@ static void game_main(Core* c) {
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the
     // missing-BGM root cause is upstream (song open/play not happening), not the SPU/tick.
-    if (cfg_dbg("seq")) {
+    { // Two guest reads — cheap enough to do unconditionally; the ON-CHANGE guard is what keeps this
+      // quiet, and it is real work (it updates seq_last), so it stays.
       uint32_t st = (c->mem_r16(0x801054B0) << 16) | (c->mem_r32(0x80104C28) & 0xFFFF);
       if (st != seq_last) {
-        cfg_logf("seq", "[seqdbg] f%u open=%d playmask=0x%04X tickmode=%d seqfn=0x%08X stage=0x%08X",
-                f, c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
-                c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
+        lucent::debug("seq", "[seqdbg] f{} open={} playmask=0x{:04X} tickmode={} seqfn=0x{:08X} stage=0x{:08X}",
+                      f, c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF,
+                      c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(TASKBASE + 0xc));
         seq_last = st;
       }
     }
@@ -462,9 +464,12 @@ static void game_main(Core* c) {
     // Logged only on change of the (slot-state/entry + page) signature to stay quiet.
     // PSXPORT_DEBUG=cam — per-frame camera pos (tracks Tomba). Used to determine controls empirically:
     // hold one button and watch for a vertical (Y) excursion = a JUMP, vs a planar (X/Z) shift = walking.
-    cfg_logf("cam", "f%u (%d,%d,%d)", f, c->mem_r16s(0x1f8000d2u),
-              c->mem_r16s(0x1f8000d6u), c->mem_r16s(0x1f8000dau));
-    if (cfg_dbg("state")) {
+    lucent::debug("cam", "f{} ({},{},{})", f, c->mem_r16s(0x1f8000d2u),
+                  c->mem_r16s(0x1f8000d6u), c->mem_r16s(0x1f8000dau));
+    // Per-frame, and the body is a 3-slot walk of guest memory plus a signature hash — real work, so
+    // the channel gate stays (hoisted onto a Channel handle: the loop runs every frame).
+    static const lucent::Channel ch_state{"state"};
+    if (ch_state) {
       uint64_t sig = 0; int menu_slot = -1; uint8_t menu_page = 0;
       for (int i = 0; i < 3; i++) {
         uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
@@ -476,17 +481,17 @@ static void game_main(Core* c) {
       sig = sig * 31 + ((uint64_t)menu_slot << 8 | menu_page);
       if (sig != state_last_sig) {
         state_last_sig = sig;
-        CfgLine ln; cfg_line_reset(&ln);
-        cfg_line_addf(&ln, "f%u", f);
+        lucent::Line ln;
+        ln.add("f{}", f);
         for (int i = 0; i < 3; i++) {
           uint32_t base = 0x801fe000u + (uint32_t)i * 0x70u;
-          cfg_line_addf(&ln, " | s%d st=%u ent=0x%08X", i, c->mem_r16(base), c->mem_r32(base + 0xc));
+          ln.add(" | s{} st={} ent=0x{:08X}", i, c->mem_r16(base), c->mem_r32(base + 0xc));
         }
-        cfg_line_addf(&ln, "  MENU=%s", menu_slot >= 0 ? "OPEN" : "no");
-        if (menu_slot >= 0) cfg_line_addf(&ln, "(slot%d page=%u)", menu_slot, menu_page);
-        cfg_line_addf(&ln, "  cam=(%d,%d,%d) sm[0x4a]=%u", c->mem_r16s(0x1f8000d2u), c->mem_r16s(0x1f8000d6u),
-                      c->mem_r16s(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
-        cfg_line_flush(&ln, "state");
+        ln.add("  MENU={}", menu_slot >= 0 ? "OPEN" : "no");
+        if (menu_slot >= 0) ln.add("(slot{} page={})", menu_slot, menu_page);
+        ln.add("  cam=({},{},{}) sm[0x4a]={}", c->mem_r16s(0x1f8000d2u), c->mem_r16s(0x1f8000d6u),
+               c->mem_r16s(0x1f8000dau), c->mem_r16(0x801fe000u + 0x4au));
+        ln.flush_debug(ch_state);
       }
     }
     // BGM-active probe (PSXPORT_BGMDBG): each frame scan the 14 libsnd sequence slots
@@ -500,7 +505,7 @@ static void game_main(Core* c) {
         uint32_t s = 0x800be3d8u + (uint32_t)i * 0xB0u;
         uint32_t flag = c->mem_r32(s + 0x98), rd = c->mem_r32(s);
         if ((flag & 1) && rd != bgm_rd[i]) {
-          cfg_logi("bgmtick", "f%u slot%d active rdptr=%08X base=%08X (%+d)", f, i, rd, c->mem_r32(s + 4), (int)(rd - c->mem_r32(s + 4)));
+          lucent::info("bgmtick", "f{} slot{} active rdptr={:08X} base={:08X} ({:+})", f, i, rd, c->mem_r32(s + 4), (int)(rd - c->mem_r32(s + 4)));
           bgm_rd[i] = rd;
         }
         if (!(flag & 1)) bgm_rd[i] = 0;
@@ -515,23 +520,25 @@ static void game_main(Core* c) {
     if (t0e != last_entry || sm != last_sm) {
       const char* stg = t0e == c->cfg->stageStart ? "START" : t0e == c->cfg->stageDemo ? "DEMO" :
                         t0e == c->cfg->stageGame ? "GAME" : "?";
-      cfg_logi("native_boot", "  frame %u: stage=%s(0x%08X) sm[48=%u 4a=%u 4c=%u 4e=%u 50=%u 52=%u] @0x80109450=%08X", f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
-              c->mem_r16(TASKBASE+0x4c), c->mem_r16(TASKBASE+0x4e), c->mem_r16(TASKBASE+0x50),
-              c->mem_r16(TASKBASE+0x52), c->mem_r32(0x80109450));
+      lucent::info("native_boot", "  frame {}: stage={}(0x{:08X}) sm[48={} 4a={} 4c={} 4e={} 50={} 52={}] @0x80109450={:08X}", f, stg, t0e, c->mem_r16(TASKBASE+0x48), c->mem_r16(TASKBASE+0x4a),
+                   c->mem_r16(TASKBASE+0x4c), c->mem_r16(TASKBASE+0x4e), c->mem_r16(TASKBASE+0x50),
+                   c->mem_r16(TASKBASE+0x52), c->mem_r32(0x80109450));
       last_entry = t0e; last_sm = sm;
     }
     // One-shot: when GAME has settled, dump the CD-streaming contract (FUN_8001cfc8, task
     // slot 2). task2 obj @0x801fe0e0; +0x54=start LBA, +0x58=end LBA (= globals
     // DAT_801fe134/138). DAT_801fe146=channel/type. _DAT_1f8001f8=dest, _DAT_1f8001f4=words.
-    if (cfg_dbg("stream") && t0e == c->cfg->stageGame && f == 75) {
-      cfg_logf("stream", "[streamdbg] task2 obj @0x801fe0e0 state=%u entry=0x%08X",
-              c->mem_r16(0x801fe0e0), c->mem_r32(0x801fe0ec));
-      cfg_logf("stream", "[streamdbg] startLBA(+54/801fe134)=%u endLBA(+58/801fe138)=%u "
-              "chan(801fe146)=%u be0e4=0x%02X",
-              c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146), c->mem_r8(0x800be0e4));
-      cfg_logf("stream", "[streamdbg] dest(_DAT_1f8001f8)=0x%08X words(_DAT_1f8001f4)=%u "
-              "f0=%u f1f800224=0x%08X",
-              c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0), c->mem_r32(0x1f800224));
+    // One-shot condition (the GAME stage, at exactly frame 75) — that part is real logic and stays;
+    // only the channel test folded into the logger.
+    if (t0e == c->cfg->stageGame && f == 75) {
+      lucent::debug("stream", "[streamdbg] task2 obj @0x801fe0e0 state={} entry=0x{:08X}",
+                    c->mem_r16(0x801fe0e0), c->mem_r32(0x801fe0ec));
+      lucent::debug("stream", "[streamdbg] startLBA(+54/801fe134)={} endLBA(+58/801fe138)={} "
+                    "chan(801fe146)={} be0e4=0x{:02X}",
+                    c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146), c->mem_r8(0x800be0e4));
+      lucent::debug("stream", "[streamdbg] dest(_DAT_1f8001f8)=0x{:08X} words(_DAT_1f8001f4)={} "
+                    "f0={} f1f800224=0x{:08X}",
+                    c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0), c->mem_r32(0x1f800224));
     }
     // PSXPORT_RAMDUMP_FRAME=N — dump RAM mid-run at native frame N (overlay state during gameplay
     // differs from end-of-run; needed to disasm the LIVE level/stage overlay at 0x8010/0x8011xxxx).
@@ -541,26 +548,28 @@ static void game_main(Core* c) {
         const char* rd = cfg_str("PSXPORT_RAMDUMP"); if (!rd) rd = "scratch/bin/midrun_ram.bin";
         FILE* mf = fopen(rd, "wb");
         if (mf) { fwrite(c->ram, 1, 0x200000, mf); fclose(mf);
-                  cfg_logi("native_boot", "mid-run RAM dump @frame %u -> %s", f, rd); }
+                  lucent::info("native_boot", "mid-run RAM dump @frame {} -> {}", f, rd); }
       } }
-    if (cfg_dbg("schedf"))
-      cfg_logf("schedf", "f%u t0[st=%u e=%08X s48=%u s4a=%u s4c=%u s5c=%u] t1[st=%u] t2[st=%u]",
-              f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48),
-              c->mem_r16(TASKBASE + 0x4a), c->mem_r16(TASKBASE + 0x4c), c->mem_r16(TASKBASE + 0x5c),
-              c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0));
-    else if (f < 10 || (f % 30) == 0)
-      cfg_logi("native_boot", "  frame %u: t0[st=%u e=0x%08X s48=%u] t1[st=%u] t2[st=%u] f135=%u", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
-              c->mem_r16(TASKBASE + 0x48), c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0),
-              c->mem_r8(0x1f800135));
+    lucent::debug("schedf", "f{} t0[st={} e={:08X} s48={} s4a={} s4c={} s5c={}] t1[st={}] t2[st={}]",
+                  f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48),
+                  c->mem_r16(TASKBASE + 0x4a), c->mem_r16(TASKBASE + 0x4c), c->mem_r16(TASKBASE + 0x5c),
+                  c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0));
+    // RATE LIMIT (kept): the normal-run frame milestone — every frame for the first 10, then every 30th.
+    // It used to be the ELSE of the `schedf` channel test, i.e. asking for the schedf trace SUPPRESSED
+    // the milestone line. That coupling is gone with the guard: both now print when schedf is on.
+    if (f < 10 || (f % 30) == 0)
+      lucent::info("native_boot", "  frame {}: t0[st={} e=0x{:08X} s48={}] t1[st={}] t2[st={}] f135={}", f, c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc),
+                   c->mem_r16(TASKBASE + 0x48), c->mem_r16(TASKBASE + 0x70), c->mem_r16(TASKBASE + 0xe0),
+                   c->mem_r8(0x1f800135));
     c->game->dbg_server.service(c);  // service one queued live-debug-server command (non-blocking)
   }
-  cfg_logi("native_boot", "frame loop done; task0 state=%u entry=0x%08X obj+0x48=%u", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
+  lucent::info("native_boot", "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
     
     FILE* f = fopen(rd, "wb");
     if (f) { fwrite(c->ram, 1, 0x200000, f); fclose(f);
-             cfg_logi("native_boot", "dumped 2MB RAM -> %s", rd); }
+             lucent::info("native_boot", "dumped 2MB RAM -> {}", rd); }
   }
 }
 
@@ -578,24 +587,24 @@ void native_boot_run(Core* c) {
   if (oracle_mode()) {
     c->game->setOracle();                        // per-Game: recomp gameplay + mods forced neutral
     c->rsub.mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
-    cfg_logi("native_boot", "PSXPORT_ORACLE=1 — pure recomp + pure PSX render (no fps60 / wide / native-depth / observer)");
+    lucent::info("native_boot", "PSXPORT_ORACLE=1 — pure recomp + pure PSX render (no fps60 / wide / native-depth / observer)");
   }
   // PSX-fallback gate (diagnostic): boot + frame-loop stay native; everything the loop calls runs as PSX
   // recomp (sync CD). PSXPORT_GATE nonzero turns it on; the REPL `gate on|off` toggles it live.
   { const char* g = cfg_str("PSXPORT_GATE");
     if (g && *g) c->game->psx_fallback = (atoi(g) != 0);
-    cfg_logi("native_boot", "psx_fallback=%d (%s)", c->game->psx_fallback,
-            c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
+    lucent::info("native_boot", "psx_fallback={} ({})", c->game->psx_fallback,
+                 c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
   // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
   // Per-Core now (Render::mPsxRender) — was the process-global g_render_psx.
   { const char* r = cfg_str("PSXPORT_RENDER_PSX");
     if (r && *r) c->rsub.mode.setPsxRender(atoi(r) != 0);
-    if (c->rsub.mode.psxRender()) cfg_logi("native_boot", "Render::psxRender=1 (field render via PSX recomp path)"); }
+    if (c->rsub.mode.psxRender()) lucent::info("native_boot", "Render::psxRender=1 (field render via PSX recomp path)"); }
   // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
   // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
   { const char* r = cfg_str("PSXPORT_DUALVIEW");
     if (r && *r) c->rsub.mode.setDualview(atoi(r) != 0);
-    if (c->rsub.mode.dualview()) cfg_logi("native_boot", "Render::dualview=1 (side-by-side native | PSX render)"); }
+    if (c->rsub.mode.dualview()) lucent::info("native_boot", "Render::dualview=1 (side-by-side native | PSX render)"); }
   // Intro FMVs: the real boot is SCEA (stub) -> Whoopee logo (LOGO.STR) -> opening movie (OP.STR) ->
   // title/menu. The game's own STR streaming (strNext) TIMES OUT under our runtime (we don't feed
   // CD-streamed FMV sectors to its StrPlayer — see "time out in strNext()" in the DEMO stage), so the
@@ -619,13 +628,13 @@ void native_boot_run(Core* c) {
   const int n_boot_fmv = boot_fmv ? (int)(sizeof c->cfg->bootFmv / sizeof c->cfg->bootFmv[0]) : 0;
   if (!skip_fmv && boot_fmv && boot_fmv[0]) {
     for (int i = 0; i < n_boot_fmv && boot_fmv[i]; i++) {
-      cfg_logi("native_boot", "playing boot FMV %d/%d: %s", i + 1, n_boot_fmv, boot_fmv[i]);
+      lucent::info("native_boot", "playing boot FMV {}/{}: {}", i + 1, n_boot_fmv, boot_fmv[i]);
       c->game->fmv.play(boot_fmv[i]);
     }
   } else if (!skip_fmv) {
-    cfg_logi("native_boot", "no boot FMV configured (GameConfig::bootFmv is empty) — nothing to play");
+    lucent::info("native_boot", "no boot FMV configured (GameConfig::bootFmv is empty) — nothing to play");
   } else {
-    cfg_logw("native_boot", "skipping intro FMVs (headless/NO_FMV)");
+    lucent::warn("native_boot", "skipping intro FMVs (headless/NO_FMV)");
   }
   // Clean hand-off to the front-end (issues #7/#11): black the display FB before the title builds, so the
   // title's first frames (drawn over several frames while its background/font/CLUT upload) never composite
@@ -633,7 +642,7 @@ void native_boot_run(Core* c) {
   // fill is still resident in s_vram even when both intros are skipped). Deterministic, no timer.
   void gpu_clear_display(Core*);
   gpu_clear_display(c);
-  cfg_logi("native_boot", "entering native crt0 (PC-driven)");
+  lucent::info("native_boot", "entering native crt0 (PC-driven)");
   native_crt0(c);
-  cfg_logi("native_boot", "returned from native crt0");
+  lucent::info("native_boot", "returned from native crt0");
 }

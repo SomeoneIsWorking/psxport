@@ -130,6 +130,12 @@ def canon_fmt(s, printf):
 
 STR = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
+# `static const lucent::Channel spu_ch{"spu"};` / `inline const lucent::Channel g_c("otattr");`
+# — the declaration that gives a Channel handle its name, so a call passing the HANDLE can still be
+# attributed to its channel. Same-file only: a handle declared in a header is reported as
+# <non-literal> rather than guessed, which is the honest answer for what this scan can see.
+CHANNEL_DECL = re.compile(r'\blucent::Channel\s+(\w+)\s*[({]\s*"((?:[^"\\]|\\.)*)"')
+
 
 def split_top(args):
     """Split a call's argument text on top-level commas."""
@@ -194,6 +200,7 @@ def close_paren(src, start):
 def sigs(path):
     src = open(path, encoding='utf-8', errors='replace').read()
     out, nonliteral = [], 0
+    channels = dict(CHANNEL_DECL.findall(src))
     for m in LINE_ADD.finditer(src):
         end = close_paren(src, m.end())
         args = split_top(src[m.end():end - 1])
@@ -227,6 +234,13 @@ def sigs(path):
         if fmt is None:
             nonliteral += 1
             fmt = '<non-literal>'
+        if chan is None and args:
+            # A `lucent::Channel` HANDLE, not a name. The hot-path form of a call site passes an
+            # interned handle instead of a string_view, so `debug(spu_ch, ...)` carries its channel
+            # name at the handle's DECLARATION. Without this the whole channel column of every
+            # Channel-using file reads `<non-literal>`, and a cfg_logf("spu",...) -> debug(spu_ch,...)
+            # conversion — which is CORRECT — shows up as a diff. Found converting spu_beetle.
+            chan = channels.get(args[0].strip())
         if chan is None:
             chan = '<non-literal>'
         out.append('%s|%s|%s' % (LEVEL[name], chan, canon_fmt(fmt, printf=bool(m.group('cfg')))))
@@ -253,6 +267,10 @@ SELFTEST = r'''
   lucent::info("repl", "-> {}/p%04d.ppm", dir);
   cfg_logi("oraclediff", "wrote fb_{native,oracle}.ppm");
   lucent::info("oraclediff", "wrote fb_{{native,oracle}}.ppm");
+  static const lucent::Channel spu_ch{"spu"};
+  cfg_logf("spu", "[spudbg] KON off=%03X (writes=%ld)", off, n);
+  lucent::debug(spu_ch, "[spudbg] KON off={:03X} (writes={})", off, n);
+  lucent::debug(handle_from_a_header, "declared elsewhere {}", x);
 '''
 
 
@@ -266,18 +284,24 @@ def selftest():
     # The whole point: each cfg_ line and its lucent:: twin must canonicalise IDENTICALLY.
     # (a, b) pairs that MUST canonicalise identically. Indices 0/1 are the two line
     # pieces, which sort ahead of everything else because they are emitted first.
+    # (19, 20) is the Channel-HANDLE pair: cfg_logf("spu", ...) and its converted twin
+    # lucent::debug(spu_ch, ...) must land on the same channel, resolved from spu_ch's declaration.
     pairs = [(0, 1), (2, 3), (4, 5), (6, 7), (9, 10), (11, 12), (13, 14), (15, 16),
-             (17, 18)]
+             (17, 18), (19, 20)]
     for a, b in pairs:
         if got[a] != got[b]:
             print('SELFTEST FAIL: %r != %r' % (got[a], got[b])); ok = False
     if nonlit != 1:
         print('SELFTEST FAIL: expected 1 non-literal format, saw %d' % nonlit); ok = False
-    if len(got) != 19:
-        print('SELFTEST FAIL: expected 19 sites, saw %d' % len(got)); ok = False
+    if len(got) != 22:
+        print('SELFTEST FAIL: expected 22 sites, saw %d' % len(got)); ok = False
     # And it must be able to say NO: a changed template must not compare equal.
     if got[2] == got[4]:
         print('SELFTEST FAIL: two different templates compared equal'); ok = False
+    # The handle resolver must REFUSE, not guess: a Channel declared in a header is not visible to a
+    # single-file scan, and reporting some other channel's name there would be a silent wrong answer.
+    if '|<non-literal>|' not in got[21]:
+        print('SELFTEST FAIL: an out-of-file Channel handle was resolved anyway: %r' % got[21]); ok = False
     print('\n'.join('  %s' % g for g in got))
     print('SELFTEST %s (%d sites, %d non-literal)' % ('PASS' if ok else 'FAIL', len(got), nonlit))
     return 0 if ok else 1

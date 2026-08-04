@@ -3,7 +3,6 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include "cfg.h"
 #include <lucent/log.h>
 
 int NativeGates::get(const char* name) {

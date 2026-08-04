@@ -8,7 +8,6 @@
 #include "core.h"
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "scheduler.h"
-#include "cfg.h"
 #include <lucent/log.h>
 #include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 #include <setjmp.h>

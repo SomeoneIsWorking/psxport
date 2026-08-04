@@ -18,8 +18,11 @@
 
 // Debug object-ID overlay: split into QUAD (billboard) and 3D-OBJECT (mesh) highlighting so the user can
 // box only one class. On when its RmlUi/cfg toggle is set. `objid` channel + legacy debug_ids = both.
-static inline int objid_quads_on(Core* c)   { const Mods& m = c->game->mods; return m.debug_quads   || m.debug_ids || cfg_dbg("objid"); }
-static inline int objid_objects_on(Core* c) { const Mods& m = c->game->mods; return m.debug_objects || m.debug_ids || cfg_dbg("objid"); }
+// Interned: these are asked once per LIVE ENTITY per frame (three lists, up to 512 nodes each), which
+// is too often to hash the channel name under lucent's mutex.
+static const lucent::Channel g_objid_ch{"objid"};
+static inline int objid_quads_on(Core* c)   { const Mods& m = c->game->mods; return m.debug_quads   || m.debug_ids || g_objid_ch.enabled(); }
+static inline int objid_objects_on(Core* c) { const Mods& m = c->game->mods; return m.debug_objects || m.debug_ids || g_objid_ch.enabled(); }
 static inline int objid_on(Core* c) { return objid_quads_on(c) || objid_objects_on(c); }
 
 int  gpu_vk_enabled(void);        // gpu_vk.cpp — Core*-less device-singleton query (declared at use)
@@ -177,7 +180,7 @@ void RenderQueue::objidOverlay(Core* core) {
       int cx = (int)(sx + 0.5f), cy = (int)(sy + 0.5f);
       if (cx < -60 || cx > 420 || cy < -40 || cy > 280) continue;   // off-screen
       if (quad) nquad++; else nobj++;
-      if (dolog && quad) cfg_logi("objid-q", "node=%08X rtype=0x%02X scr=(%d,%d) world=(%d,%d,%d) +0xC=%02X +0xD=%02X", n, rtype, (int)(sx+0.5f),(int)(sy+0.5f), wx,wy,wz, core->mem_r8(n+0xC), core->mem_r8(n+0xD));
+      if (dolog && quad) lucent::info("objid-q", "node={:08X} rtype=0x{:02X} scr=({},{}) world=({},{},{}) +0xC={:02X} +0xD={:02X}", n, rtype, (int)(sx+0.5f),(int)(sy+0.5f), wx,wy,wz, core->mem_r8(n+0xC), core->mem_r8(n+0xD));
       unsigned char br = quad ? 255 : 0, bg = 255, bb = quad ? 0 : 255;   // quads yellow, 3D objects cyan
       objidBox(core, ref, cx - 6, cy - 6, cx + 6, cy + 6, br, bg, bb, 1);
       char l1[16], l2[40];
@@ -187,7 +190,7 @@ void RenderQueue::objidOverlay(Core* core) {
       objidStr(core, ref, cx + 9, cy + 6, 1, l2, br, bg, bb);
     }
   }
-  if (dolog) cfg_logi("objid", "=== %d live; %d quads + %d 3D boxed ===", nlive, nquad, nobj);
+  if (dolog) lucent::info("objid", "=== {} live; {} quads + {} 3D boxed ===", nlive, nquad, nobj);
 }
 
 // The render queue is THE render path — one behavior, the PC game. No env gate (user directive
@@ -204,7 +207,7 @@ RqItem* RenderQueue::push() {
     // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
     // running away (e.g. a stuck render walk re-submitting the same scene every frame — the bug-1 / later-273
     // symptom). Abort with a C backtrace so that submit path is visible rather than hidden behind a drop.
-    cfg_loge("rq", "\nFATAL: render queue full (%d items) — refusing to drop prims (fail-fast).\n  A submit path produced > %d prims this frame (runaway re-submission?). Backtrace:", RQ_MAX, RQ_MAX);
+    lucent::error("rq", "\nFATAL: render queue full ({} items) — refusing to drop prims (fail-fast).\n  A submit path produced > {} prims this frame (runaway re-submission?). Backtrace:", RQ_MAX, RQ_MAX);
     void* bt[32]; int nbt = backtrace(bt, 32); backtrace_symbols_fd(bt, nbt, 2);
     fflush(stderr);
     abort();
@@ -231,11 +234,14 @@ void RenderQueue::sortQueue() {
 void RenderQueue::emitQueue(Core* core) {
   if (!n) { mark_consumed(); return; }
   // `debug rqhist` (diag): per-frame histogram of what the queue actually emits, by layer × opaque/semi.
-  if (cfg_dbg("rqhist")) {
+  // The guard is real: the histogram walk is O(queue) — up to ~43k items — on EVERY frame. Interned
+  // Channel so the off case is a load/compare rather than a name hash under a mutex.
+  static const lucent::Channel rqhist_ch{"rqhist"};
+  if (rqhist_ch) {
     int c[4][2] = {{0,0},{0,0},{0,0},{0,0}};
     for (int i = 0; i < n; i++) { int L = items[i].layer & 3, sm = items[i].semi ? 1 : 0; c[L][sm]++; }
     static int lf = 0; if ((lf++ % 30) == 0)
-      cfg_logf("rqhist", "n=%d  bg(op/semi)=%d/%d  WORLD=%d/%d  ovl=%d/%d  hud=%d/%d",
+      lucent::debug("rqhist", "n={}  bg(op/semi)={}/{}  WORLD={}/{}  ovl={}/{}  hud={}/{}",
               n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
   }
   for (int i = 0; i < n; i++) emitItem(core, &items[i]);
@@ -339,22 +345,22 @@ void RenderQueue::zfightScan(Core* core) {
   }
   std::sort(pairs.begin(),pairs.end(),[](const Pair&a,const Pair&b){return a.inv!=b.inv ? a.inv>b.inv : a.cnt>b.cnt;});
   auto pc=[](int a,int b){ return b?100.f*a/b:0.f; };
-  cfg_logi("zfight", "f%d eps=%.6g fight=%d ties(<1e-5)=%d | ALL paint-stable raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%% | TIES raw=%.0f%% U4e7=%.0f%% U1e6=%.0f%% U4e6=%.0f%% U1e5=%.0f%%", s.s_frame, eps, nfight, ntie,
+  lucent::info("zfight", "f{} eps={:.6g} fight={} ties(<1e-5)={} | ALL paint-stable raw={:.0f}% U4e7={:.0f}% U1e6={:.0f}% U4e6={:.0f}% U1e5={:.0f}% | TIES raw={:.0f}% U4e7={:.0f}% U1e6={:.0f}% U4e6={:.0f}% U1e5={:.0f}%", s.s_frame, eps, nfight, ntie,
     pc(paint_stable_raw,nfight), pc(ps_b[0],nfight), pc(ps_b[1],nfight), pc(ps_b[2],nfight), pc(ps_b[3],nfight),
     pc(ptie_raw,ntie), pc(ptie_b[0],ntie), pc(ptie_b[1],ntie), pc(ptie_b[2],ntie), pc(ptie_b[3],ntie));
   auto vd=[](const RqItem&P,int i){ return P.depth?P.depth[i]:-1.f; };
   for (size_t i=0;i<pairs.size()&&i<10;i++){
     const RqItem&A=items[pairs[i].a]; const RqItem&B=items[pairs[i].b];
     int an=A.nv?A.nv:4, bn=B.nv?B.nv:4;
-    cfg_logi("zfight", "  pair px=%d order-inverted=%d gap>=%.7f", pairs[i].cnt, pairs[i].inv, pairs[i].gap);
-    cfg_logi("zfight", "    A node=%08X key=%d key_ord=%.6f col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", A.dbg_node,A.sort_key,(double)A.key_ord,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
+    lucent::info("zfight", "  pair px={} order-inverted={} gap>={:.7f}", pairs[i].cnt, pairs[i].inv, pairs[i].gap);
+    lucent::info("zfight", "    A node={:08X} key={} key_ord={:.6f} col=({},{},{}) seq={} nv={} xyf={} vdepth=[{:.6f} {:.6f} {:.6f} {:.6f}] xy=[({},{})({},{})({},{})({},{})]", A.dbg_node,A.sort_key,(double)A.key_ord,A.rs[0],A.gs[0],A.bs[0],A.seq,an,A.has_xyf, vd(A,0),vd(A,1),vd(A,2),an==4?vd(A,3):-1.f,
       A.xs[0],A.ys[0],A.xs[1],A.ys[1],A.xs[2],A.ys[2],an==4?A.xs[3]:0,an==4?A.ys[3]:0);
-    cfg_logi("zfight", "    B node=%08X key=%d key_ord=%.6f col=(%d,%d,%d) seq=%u nv=%d xyf=%d vdepth=[%.6f %.6f %.6f %.6f] xy=[(%d,%d)(%d,%d)(%d,%d)(%d,%d)]", B.dbg_node,B.sort_key,(double)B.key_ord,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
+    lucent::info("zfight", "    B node={:08X} key={} key_ord={:.6f} col=({},{},{}) seq={} nv={} xyf={} vdepth=[{:.6f} {:.6f} {:.6f} {:.6f}] xy=[({},{})({},{})({},{})({},{})]", B.dbg_node,B.sort_key,(double)B.key_ord,B.rs[0],B.gs[0],B.bs[0],B.seq,bn,B.has_xyf, vd(B,0),vd(B,1),vd(B,2),bn==4?vd(B,3):-1.f,
       B.xs[0],B.ys[0],B.xs[1],B.ys[1],B.xs[2],B.ys[2],bn==4?B.xs[3]:0,bn==4?B.ys[3]:0);
   }
   if (nfight>0) { char path[128]; snprintf(path,sizeof path,"scratch/screenshots/zfight/heat_f%d.ppm",s.s_frame);
     FILE* fp=fopen(path,"wb"); if(fp){ fprintf(fp,"P6\n%d %d\n255\n",W,H); fwrite(heat.data(),3,W*H,fp); fclose(fp);
-      cfg_logi("zfight", "  heatmap -> %s", path); } }
+      lucent::info("zfight", "  heatmap -> {}", path); } }
 }
 
 // finalize — see the header. Game-sort-key order resolution (kanban #11) runs FIRST, on the complete
@@ -409,19 +415,20 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   if (!gpu_vk_enabled()) return;
   // preseqobj (per-object motion tracker, tools/preseqobj_check.py): when a `preseq` capture is armed AND
   // the `preseqobj` channel is on, log one line per emitted RqItem keyed to the present index this pass
-  // will dump. present index >= 0 only while armed, so the cfg_dbg scan is skipped entirely otherwise —
-  // zero cost in a normal run. The tracker groups by `key` (dbg_node = object identity; 0 = an
+  // will dump. present index >= 0 only while armed, so in a normal run this is one compare and no
+  // channel work at all; when armed, lucent::debug gates itself on `preseqobj` without evaluating
+  // its arguments. The tracker groups by `key` (dbg_node = object identity; 0 = an
   // un-keyed 2D/HUD prim) and follows each object's screen x/y across consecutive presents to flag
   // sign-alternating (oscillation) or stall-step (snapping) motion. Both 60fps present passes
   // (interp + real) emit through here, so their prims are logged under their own present index —
   // this instrument doubles as the interp pass's quality debugger (docs/fps60-rework.md).
   { int pi = gpu_vk_preseq_present_index(core);
-    if (pi >= 0 && cfg_dbg("preseqobj"))
+    if (pi >= 0)
       // scene=1 (== has_xyf): a float-projected display-pass world prim — rebuilt at the interp present
       // by tier1Render, correct-by-construction; the tracker counts but does not judge these (its NN/
       // emit-index identity is meaningless over dense mesh triangles). scene=0 = a guest-time drawable
       // (OT-walk billboard / #65 dual-emit / 2D / HUD) — the class the per-object gate actually verifies.
-      cfg_logf("preseqobj", "p%04d key=%08X layer=%d x=%d y=%d scene=%d",
+      lucent::debug("preseqobj", "p{:04} key={:08X} layer={} x={} y={} scene={}",
               pi, it->dbg_node, it->layer, it->xs[0], it->ys[0], it->has_xyf ? 1 : 0); }
   GpuState& s = core->game->gpu;
   // PSXPORT_PAINTWORLD=1 (diag): force every opaque RQ_WORLD prim to untextured solid magenta so we can SEE
@@ -489,7 +496,7 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
         }
         // Texture identity is part of "what am I looking at": a face that draws BLACK is either losing a
         // depth contest or sampling the wrong page/CLUT, and the two are indistinguishable without it.
-        cfg_logi("primat-rq", "f%d seq=%u dbgnode=%08X layer=%d om=%d semi=%d tri=%d nv=%d vdepth=[%.6f %.6f %.6f] interp_ord=%.6f D32=%.6f col=(%d,%d,%d) raw=%d mode=%d tp=(%d,%d) clut=(%d,%d) uv=[(%d,%d) (%d,%d) (%d,%d) (%d,%d)] xy=[(%d,%d) (%d,%d) (%d,%d) (%d,%d)]",
+        lucent::info("primat-rq", "f{} seq={} dbgnode={:08X} layer={} om={} semi={} tri={} nv={} vdepth=[{:.6f} {:.6f} {:.6f}] interp_ord={:.6f} D32={:.6f} col=({},{},{}) raw={} mode={} tp=({},{}) clut=({},{}) uv=[({},{}) ({},{}) ({},{}) ({},{})] xy=[({},{}) ({},{}) ({},{}) ({},{})]",
           s.s_frame, it->seq, it->dbg_node, it->layer, it->order_mode, it->semi, t0, nv,
           d0, d1, d2, interp_ord, d32,
           rs[0],gs[0],bs[0], raw, mode, it->tp_x, it->tp_y, it->clut_x, it->clut_y,
@@ -871,7 +878,11 @@ void RenderQueue::drawWorldQuad(Core* core, const float* px, const float* py, co
                                 const float (*sv)[3], int sort_key, float key_ord) {
   if (!gpu_vk_enabled()) return;
   core->rsub.stats.dbgWorldQuads++;   // PSXPORT_GPU_TRACE: world quads this frame (SBS diag)
-  if (cfg_dbg("silbbox")) { static int once=0; if (!once++) cfg_logf("silbbox", "s_off=(%d,%d)", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
+  // ONCE-guard, kept: `once` must only be spent on a call where the channel is actually on, otherwise
+  // arming `silbbox` at the REPL mid-run would print nothing (the first quad would already have burnt
+  // it). Interned Channel because this runs per world quad.
+  { static const lucent::Channel silbbox{"silbbox"}; static int once = 0;
+    if (silbbox && !once++) lucent::debug("silbbox", "s_off=({},{})", core->game->gpu.s_off_x, core->game->gpu.s_off_y); }
   GpuState& s = core->game->gpu;
   s.set_texpage(tp);
   s.set_clut(clut);

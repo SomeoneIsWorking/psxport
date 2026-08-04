@@ -29,7 +29,6 @@ typedef struct XaState {
   double   rd;                // total frames read (monotonic, fractional)      (was s_rd)
   int16_t  hist[2][2];        // XA IIR history, persists across sectors        (was s_hist)
   int      src_freq;          //                                               (was s_src_freq, init 37800)
-  int      dbg;               // PSXPORT_XA_DBG level, -1 = not read yet        (was s_dbg)
   struct DiscState* disc;     // Game-owned disc backend (wired by Game())
 } XaState;
 

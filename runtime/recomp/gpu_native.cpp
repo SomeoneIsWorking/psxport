@@ -14,6 +14,7 @@
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "r3000.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include "mods.h"                   // g_mods.fps60 (was g_fps60_on)
 #include "render_substrate.h"          // Render::mDbgRenderNode (was g_dbg_render_node)
@@ -174,7 +175,7 @@ void prim_dump_close_if_done(Core* core, int frame) {
   GpuState& g = core->game->gpu;
   if (g.s_primdump_f && g.s_primdump_frame >= 0 && frame > g.s_primdump_frame) {
     fclose(g.s_primdump_f); g.s_primdump_f = 0;
-    cfg_logi("primdump", "wrote scratch/logs/prims_f%d.csv", g.s_primdump_frame);
+    lucent::info("primdump", "wrote scratch/logs/prims_f{}.csv", g.s_primdump_frame);
   }
 }
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
@@ -194,7 +195,7 @@ void GpuState::fade_note_size(int w, int h, int semi) { if (semi && w >= 160 && 
 void GpuState::semi_dump(const char* kind, int blend, int r, int g, int b, int x0, int y0, int x1, int y1, int offy) {
   static int sf = -2; if (sf == -2) { const char* e = cfg_str("PSXPORT_SEMIDUMP"); sf = e ? atoi(e) : -1; }
   if (sf >= 0 && s_frame == sf)
-    cfg_logi("semidump", "f%d %s blend=%d col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d) offY=%d", s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
+    lucent::info("semidump", "f{} {} blend={} col=({},{},{}) bbox=({},{})-({},{}) offY={}", s_frame, kind, blend, r, g, b, x0, y0, x1, y1, offy);
 }
 
 // ---- Per-pixel primitive provenance (PSXPORT_PROVAT="x,y[:frame]") --------------------------
@@ -361,7 +362,7 @@ void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int
       { static int tx = -2, ty; if (tx == -2) { const char* e = cfg_str("PSXPORT_PIXTRACE");
           if (e) sscanf(e, "%d,%d", &tx, &ty); else tx = -1; }
         if (tx >= 0 && x == tx && y == ty)
-          cfg_logi("gpu_native", "[pixtrace ours] (%d,%d) tex=%d shade=%d semi=%d px_semi=%d blend=%d dith=%d uv=(%d,%d) texel=%04X out8=(%d,%d,%d) out5=(%d,%d,%d) vcol=(%d,%d,%d)", x, y, tex, shade, semi, px_semi, s_tp_blend, (s_tp_dither && dithered),
+          lucent::info("gpu_native", "[pixtrace ours] ({},{}) tex={} shade={} semi={} px_semi={} blend={} dith={} uv=({},{}) texel={:04X} out8=({},{},{}) out5=({},{},{}) vcol=({},{},{})", x, y, tex, shade, semi, px_semi, s_tp_blend, (s_tp_dither && dithered),
                   pt_u, pt_v, pt_t, r, g, bl, r >> 3, g >> 3, bl >> 3, pt_cr, pt_cg, pt_cb); }
       // REDDBG: dark-red output anomaly probe (grass blocks). Log the prim's params once.
       if (s_reddbg && tex && r >= 64 && g < 24 && bl < 24 && x >= s_da_x0 && x <= s_da_x1) {
@@ -369,14 +370,14 @@ void GpuState::tri_px(Vtx a, Vtx b, Vtx c, int x, int y, int tex, int shade, int
         if (n++ < 6) {
           int uu = (int)((l0*a.u + l1*b.u + l2*c.u) / aa);
           int vv = (int)((l0*a.v + l1*b.v + l2*c.v) / aa);
-          cfg_logi("reddbg", "@(%d,%d) out=(%d,%d,%d) tpmode=%d clut=(%d,%d) tp=(%d,%d) uv=(%d,%d)", x, y, r, g, bl, s_tp_mode, s_clut_x, s_clut_y, s_tp_x, s_tp_y, uu, vv);
-          CfgLine ln; cfg_line_reset(&ln);
-          cfg_line_addf(&ln, "  palette[16]@(%d,%d):", s_clut_x, s_clut_y);
-          for (int k = 0; k < 16; k++) cfg_line_addf(&ln, " %04X", *vram(s_clut_x + k, s_clut_y));
-          cfg_line_flush(&ln, "reddbg");
-          cfg_line_addf(&ln, "  texrow@(%d,%d) words:", s_tp_x + (uu>>2), s_tp_y + vv);
-          for (int k = 0; k < 8; k++) cfg_line_addf(&ln, " %04X", *vram(s_tp_x + (uu>>2) + k, s_tp_y + vv));
-          cfg_line_flush(&ln, "reddbg");
+          lucent::info("reddbg", "@({},{}) out=({},{},{}) tpmode={} clut=({},{}) tp=({},{}) uv=({},{})", x, y, r, g, bl, s_tp_mode, s_clut_x, s_clut_y, s_tp_x, s_tp_y, uu, vv);
+          lucent::Line ln;
+          ln.add("  palette[16]@({},{}):", s_clut_x, s_clut_y);
+          for (int k = 0; k < 16; k++) ln.add(" {:04X}", *vram(s_clut_x + k, s_clut_y));
+          ln.flush(lucent::Level::Info, "reddbg");
+          ln.add("  texrow@({},{}) words:", s_tp_x + (uu>>2), s_tp_y + vv);
+          for (int k = 0; k < 8; k++) ln.add(" {:04X}", *vram(s_tp_x + (uu>>2) + k, s_tp_y + vv));
+          ln.flush(lucent::Level::Info, "reddbg");
         }
       }
       put_px_b(x, y, r, g, bl, px_semi);
@@ -474,7 +475,7 @@ void GpuState::tri(Vtx a, Vtx b, Vtx c, int tex, int shade, int semi, int raw) {
 int GpuState::gpu_native_load_vram(const char* path) {
   FILE* f = fopen(path, "rb"); if (!f) return 0;
   size_t n = fread(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
-  cfg_logi("transplant", "loaded VRAM %zu px from %s", n, path);
+  lucent::info("transplant", "loaded VRAM {} px from {}", n, path ? path : "(null)");
   return n == (size_t)VRAM_W * VRAM_H;
 }
 void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uint32_t src) {
@@ -495,7 +496,7 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
   // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
   if (gpu_vk_enabled()) gpu_vk_dirty(core, x, y, w, h);
-  cfg_logf("upload", "f%d NATIVE dest=(%d,%d) %dx%d src=0x%08X", s_frame, x, y, w, h, src);
+  lucent::debug("upload", "f{} NATIVE dest=({},{}) {}x{} src=0x{:08X}", s_frame, x, y, w, h, src);
 }
 
 // GP0 command-word color packs as 0x00BBGGRR — R in the low byte, B in the high byte.
@@ -541,11 +542,11 @@ void GpuState::prov_begin(uint8_t op, int tex, int semi, uint8_t r, uint8_t g, u
 // in order, with the resulting 16-entry palette. Reveals whether the right palette is written
 // then overwritten, or never written, and by which transfer.
 void GpuState::clutwatch_dump(const char* tag, int rx, int ry, int rw, int rh) {
-  CfgLine ln; cfg_line_reset(&ln);
-  cfg_line_addf(&ln, "%s f%d rect=(%d,%d %dx%d) covers (%d,%d) palette:",
-                tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
-  for (int k = 0; k < 16; k++) cfg_line_addf(&ln, " %04X", *vram(s_cw_x + k, s_cw_y));
-  cfg_line_flush(&ln, "clutwatch");
+  lucent::Line ln;
+  ln.add("{} f{} rect=({},{} {}x{}) covers ({},{}) palette:",
+         tag, s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y);
+  for (int k = 0; k < 16; k++) ln.add(" {:04X}", *vram(s_cw_x + k, s_cw_y));
+  ln.flush(lucent::Level::Info, "clutwatch");
 }
 int GpuState::clutwatch_covers(int rx, int ry, int rw, int rh) {
   if (s_cw_x < 0) return 0;
@@ -555,7 +556,7 @@ int GpuState::clutwatch_covers(int rx, int ry, int rw, int rh) {
 // copy already happened, so dump immediately.
 void GpuState::clutwatch_xfer(const char* tag, int rx, int ry, int rw, int rh) {
   if (!clutwatch_covers(rx, ry, rw, rh)) return;
-  if (tag[0] == 'A') { s_cw_pending = 1; cfg_logi("clutwatch", "A0 upload START f%d rect=(%d,%d %dx%d) covers (%d,%d)", s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y); }
+  if (tag[0] == 'A') { s_cw_pending = 1; lucent::info("clutwatch", "A0 upload START f{} rect=({},{} {}x{}) covers ({},{})", s_frame, rx, ry, rw, rh, s_cw_x, s_cw_y); }
   else clutwatch_dump(tag, rx, ry, rw, rh);
 }
 
@@ -632,7 +633,7 @@ void GpuState::tex_export(const char* name, int u0, int v0, int w, int h) {
       fwrite(rgb, 1, 3, f);
     }
   fclose(f);
-  cfg_logi("texexport", "wrote %s (%dx%d, tp=(%d,%d) mode=%d clut=(%d,%d) uv0=(%d,%d))", path, w, h, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, u0, v0);
+  lucent::info("texexport", "wrote {} ({}x{}, tp=({},{}) mode={} clut=({},{}) uv0=({},{}))", path, w, h, s_tp_x, s_tp_y, s_tp_mode, s_clut_x, s_clut_y, u0, v0);
 }
 
 // Rasterize one flat line segment with the CURRENT draw state (s_off, clip). Shared by gp0_exec and
@@ -709,11 +710,14 @@ void GpuState::gp0_exec(Core* core) {
         // WHOLE wide FB (else green field shows in the widescreen margins) but composite ON TOP (HUD band).
         // Tag it so the 2D-X mapping below stretches it to fill while the layer stays topmost.
         if (!is3d && !bg && semi && fade_full_2d(s_disp_w, s_disp_h, bx0, by0, bx1, by1)) fade_full = 1;
-        if (!is3d && cfg_dbg("ndepth")) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
-          s_nd2d_hist[op]++; }
-        if (!is3d && !bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
-          cfg_logf("objz", "[polynode] id=%u op=%02x bbox=(%d,%d)-(%d,%d) node=%08x",
-                   ord_idx, op, bx0, by0, bx1, by1, s_cur_node);
+        // Per-primitive, so the channel name is resolved ONCE (lucent::Channel) rather than hashed under
+        // a mutex on every 2D prim; the histogram itself is real non-logging work, so the guard stays.
+        { static const lucent::Channel nd_ch{"ndepth"};
+          if (!is3d && nd_ch) {   // categorize what lands in the 2D band: op + gouraud/quad/tex
+            s_nd2d_hist[op]++; } }
+        if (!is3d && !bg && s_frame == s_primdump_frame)
+          lucent::debug("objz", "[polynode] id={} op={:02x} bbox=({},{})-({},{}) node={:08x}",
+                        ord_idx, op, bx0, by0, bx1, by1, s_cur_node);
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
         // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
         { void prim_dump_poly(Core*, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
@@ -733,7 +737,7 @@ void GpuState::gp0_exec(Core* core) {
               return (w0>=0&&w1>=0&&w2>=0)||(w0<=0&&w1<=0&&w2<=0); };
             int cover = intri(0,1,2) || (nv==4 && intri(1,2,3));
             if (cover) { static int n=0; if (n++<6000)
-              cfg_logi("primat", "f%d objnode=%08X pktnode=%08X op=%02X is3d=%d bg=%d semi=%d tex=%d mode=%d raw=%d tp=(%d,%d) clut=(%d,%d) uv0=(%d,%d) da=(%d,%d)-(%d,%d) off=(%d,%d) col=(%d,%d,%d) bbox=(%d,%d)-(%d,%d)", s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
+              lucent::info("primat", "f{} objnode={:08X} pktnode={:08X} op={:02X} is3d={} bg={} semi={} tex={} mode={} raw={} tp=({},{}) clut=({},{}) uv0=({},{}) da=({},{})-({},{}) off=({},{}) col=({},{},{}) bbox=({},{})-({},{})", s_frame, core->rsub.diag.currentNode(), s_cur_node, op, is3d, bg, semi, textured?1:0, mode, rw, s_tp_x, s_tp_y, s_clut_x, s_clut_y,
                 us[0], vs[0], s_da_x0,s_da_y0,s_da_x1,s_da_y1, s_off_x,s_off_y,
                 rs[0],gs[0],bs[0], bx0,by0,bx1,by1); } } }
         // PSXPORT_PAINTFG=1 (diag): force every 2D-FG (HUD-band) poly to opaque solid magenta so we can SEE
@@ -815,14 +819,14 @@ void GpuState::gp0_exec(Core* core) {
         }
         static int n = 0;
         if (hit && n++ < 2000)
-          cfg_logi("polydump", "f%d node=%08X op=%02X tex=%d gou=%d clut=(%d,%d) tp=(%d,%d) cols[(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)(%d,%d,%d)] V[(%d,%d)(%d,%d)(%d,%d)(%d,%d)] off=(%d,%d)", s_frame, s_cur_node, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+          lucent::info("polydump", "f{} node={:08X} op={:02X} tex={} gou={} clut=({},{}) tp=({},{}) cols[({},{},{})({},{},{})({},{},{})({},{},{})] V[({},{})({},{})({},{})({},{})] off=({},{})", s_frame, s_cur_node, op, textured?1:0, gouraud?1:0, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   v[0].r,v[0].g,v[0].b, v[1].r,v[1].g,v[1].b, v[2].r,v[2].g,v[2].b, v[3].r,v[3].g,v[3].b,
                   v[0].x,v[0].y, v[1].x,v[1].y, v[2].x,v[2].y, v[3].x,v[3].y, s_off_x, s_off_y);
       } }
     if (s_reddbg && textured && s_cw_x >= 0 && s_clut_x == s_cw_x && s_clut_y == s_cw_y) {
       static int n = 0;
       if (n++ < 12)
-        cfg_logi("redpkt", "f%d stage=%08X node=0x%08X op=%02X nv=%d gou=%d semi=%d clut=(%d,%d) tp=(%d,%d) blend=%d mode=%d V[(%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d) (%d,%d)uv(%d,%d)%s] off=(%d,%d)", s_frame, core->mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
+        lucent::info("redpkt", "f{} stage={:08X} node=0x{:08X} op={:02X} nv={} gou={} semi={} clut=({},{}) tp=({},{}) blend={} mode={} V[({},{})uv({},{}) ({},{})uv({},{}) ({},{})uv({},{}){}] off=({},{})", s_frame, core->mem_r32(0x801fe00c), s_cur_node, op, nv, gouraud, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y, s_tp_blend, s_tp_mode,
                 v[0].x,v[0].y,v[0].u,v[0].v, v[1].x,v[1].y,v[1].u,v[1].v, v[2].x,v[2].y,v[2].u,v[2].v,
                 quad?" +q":"", s_off_x, s_off_y);
     }
@@ -831,7 +835,7 @@ void GpuState::gp0_exec(Core* core) {
     if (s_oracle_prim_log && soft_gpu) {
       int xmn=v[0].x,xmx=v[0].x,ymn=v[0].y,ymx=v[0].y;
       for (int i=1;i<nv;i++){ if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
-      cfg_logi("oraprim", "POLY op=%02X nv=%d tex=%d semi=%d bbox=(%d,%d)-(%d,%d) col=(%d,%d,%d) tp=(%d,%d) clut=(%d,%d)", op, nv, textured?1:0, semi, xmn+s_off_x, ymn+s_off_y, xmx+s_off_x, ymx+s_off_y, v[0].r,v[0].g,v[0].b, s_tp_x, s_tp_y, s_clut_x, s_clut_y);
+      lucent::info("oraprim", "POLY op={:02X} nv={} tex={} semi={} bbox=({},{})-({},{}) col=({},{},{}) tp=({},{}) clut=({},{})", op, nv, textured?1:0, semi, xmn+s_off_x, ymn+s_off_y, xmx+s_off_x, ymx+s_off_y, v[0].r,v[0].g,v[0].b, s_tp_x, s_tp_y, s_clut_x, s_clut_y);
     }
     if (sw_path()) {                           // VK owns poly raster now (tee'd above); SW does the rest
       tri(v[0], v[1], v[2], textured, shade, semi, raw);
@@ -857,7 +861,7 @@ void GpuState::gp0_exec(Core* core) {
         int hit = (pax < 0) || (pax>=X && pax<X+w && pay>=Y && pay<Y+h);
         static int n = 0;
         if (hit && n++ < 2000)
-          cfg_logi("polydump", "f%d node=%08X SPRITE op=%02X tex=%d semi=%d clut=(%d,%d) tp=(%d,%d) col=(%d,%d,%d) at=(%d,%d) %dx%d uv0=(%d,%d) off=(%d,%d)", s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
+          lucent::info("polydump", "f{} node={:08X} SPRITE op={:02X} tex={} semi={} clut=({},{}) tp=({},{}) col=({},{},{}) at=({},{}) {}x{} uv0=({},{}) off=({},{})", s_frame, s_cur_node, op, textured?1:0, semi, s_clut_x, s_clut_y, s_tp_x, s_tp_y,
                   cr, cg, cb, x, y, w, h, u0, v0, s_off_x, s_off_y);
       } }
     // PSXPORT_TEXEXPORT=<frame> — export the texture of each large textured sprite (backgrounds) on that
@@ -883,7 +887,7 @@ void GpuState::gp0_exec(Core* core) {
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
     { if (s_oracle_prim_log && soft_gpu)
-        cfg_logi("oraprim", "SPR  op=%02X tex=%d semi=%d at=(%d,%d) %dx%d col=(%d,%d,%d) uv=(%d,%d) tp=(%d,%d) clut=(%d,%d)", op, textured?1:0, semi, x+s_off_x, y+s_off_y, w, h, cr, cg, cb, u0, v0, s_tp_x, s_tp_y, s_clut_x, s_clut_y); }
+        lucent::info("oraprim", "SPR  op={:02X} tex={} semi={} at=({},{}) {}x{} col=({},{},{}) uv=({},{}) tp=({},{}) clut=({},{})", op, textured?1:0, semi, x+s_off_x, y+s_off_y, w, h, cr, cg, cb, u0, v0, s_tp_x, s_tp_y, s_clut_x, s_clut_y); }
     if (sw_path()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
     if (vk_path()) {
@@ -902,9 +906,9 @@ void GpuState::gp0_exec(Core* core) {
       // FADE/DIM (#21): a full-screen SEMI sprite is a fade/dim overlay -> stretch-to-fill the wide FB so it
       // covers the margins too, while staying in the topmost (HUD) band (not a backdrop). See ws_2d_local_x.
       int fade_full = (!bg && semi && fade_full_2d(s_disp_w, s_disp_h, x, y, x + w, y + h));
-      if (!bg && cfg_dbg("objz") && s_frame == s_primdump_frame)
-        cfg_logf("objz", "[sprnode] op=%02x at(%d,%d %dx%d) rgb=(%d,%d,%d) node=%08x",
-                 op, x, y, w, h, cr, cg, cb, s_cur_node);
+      if (!bg && s_frame == s_primdump_frame)
+        lucent::debug("objz", "[sprnode] op={:02x} at({},{} {}x{}) rgb=({},{},{}) node={:08x}",
+                      op, x, y, w, h, cr, cg, cb, s_cur_node);
       { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
         prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
       int X = x + s_off_x, Y = y + s_off_y;
@@ -958,7 +962,7 @@ void GpuState::gp0_exec(Core* core) {
     uint16_t col = to555(cr, cg, cb);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
     { if (s_oracle_prim_log && soft_gpu)
-        cfg_logi("oraprim", "FILL at=(%d,%d) %dx%d col=(%d,%d,%d)", x, y, w, h, cr, cg, cb); }
+        lucent::info("oraprim", "FILL at=({},{}) {}x{} col=({},{},{})", x, y, w, h, cr, cg, cb); }
     // WIDESCREEN BACKDROP FILL (#52): FillRect ignores clip/offset by design (PSX hardware behavior,
     // see the comment above) and writes only the native 320x240 VRAM rect — it has no notion of the
     // wide margins at all. The field's sky/sea backdrop never hits this problem because it is an
@@ -984,12 +988,10 @@ void GpuState::gp0_exec(Core* core) {
       // count. Without this, "the margin fix did nothing" has three indistinguishable causes: the game
       // issues no FillRect at all, it issues one that does not cover the base display, or the widen
       // ran and had no visible effect. The count is what separates the first from the others.
-      if (cfg_dbg("fillrect")) {
-        static long n = 0;
+      { static long n = 0;   // RATE LIMIT — the count is the point of the line; keep the counter.
         if (++n <= 24 || (n % 512) == 0)
-          cfg_logf("fillrect", "#%ld at=(%d,%d) %dx%d full=%d wide=%d", n, x, y, w, h, full,
-                   gpu_vk_wide_engine(core));
-      }
+          lucent::debug("fillrect", "#{} at=({},{}) {}x{} full={} wide={}", n, x, y, w, h, full,
+                        gpu_vk_wide_engine(core)); }
       // NOT GATED ON THE had3d/had_bg2d LATCH, unlike the poly/sprite widen a few hundred lines up,
       // and the difference is the classification not the caution. Those need to know whether a
       // primitive is screen-space or world-space, which rides on per-primitive DEPTH — and on a port
@@ -1042,20 +1044,24 @@ void GpuState::gp0_exec(Core* core) {
     // pool address (s_fifo_addr[0], stamped by the OT walk) is looked up in the otattr store-span table,
     // which carries {emitter fn, caller fn, render-walk node}. Run with `debug otattr,lineprim` — the
     // span table is only populated while the `otattr` channel is on.
-    if (cfg_dbg("lineprim")) {
+    // GUARD KEPT (expensive non-logging work): a span-table lookup plus an N-vertex row built piece by
+    // piece — Line::add formats eagerly, so this block must not run with the channel off. Per line
+    // primitive, so the name is resolved once into a Channel rather than hashed per call.
+    { static const lucent::Channel lp_ch{"lineprim"};
+    if (lp_ch) {
       OtAttr::Span sp{};
       uint32_t pkt = s_fifo_addr[0];
       bool attributed = pkt && core->rsub.otAttr.lookupStore(pkt & 0x1FFFFC, &sp);
       uint32_t node = attributed ? sp.node : 0;
-      CfgLine ln; cfg_line_reset(&ln);
-      cfg_line_addf(&ln, "f%d op=0x%02X nv=%d semi=%d gouraud=%d pkt=0x%08X fn=0x%08X caller=0x%08X node=0x%08X beh=0x%08X V[",
-                    s_frame, op, nv, semi, gouraud, 0x80000000u | (pkt & 0x1FFFFC),
-                    attributed ? sp.fn : 0, attributed ? sp.caller : 0, node,
-                    node ? core->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0);
-      for (int s = 0; s < nv; s++) cfg_line_addf(&ln, "(%d,%d)c(%d,%d,%d) ", vx[s], vy[s], vr[s], vg[s], vb[s]);
-      cfg_line_addf(&ln, "] off=(%d,%d) blend=%d", s_off_x, s_off_y, s_tp_blend);
-      cfg_line_flush(&ln, "lineprim");
-    }
+      lucent::Line ln;
+      ln.add("f{} op=0x{:02X} nv={} semi={} gouraud={} pkt=0x{:08X} fn=0x{:08X} caller=0x{:08X} node=0x{:08X} beh=0x{:08X} V[",
+             s_frame, op, nv, semi, gouraud, 0x80000000u | (pkt & 0x1FFFFC),
+             attributed ? sp.fn : 0, attributed ? sp.caller : 0, node,
+             node ? core->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0);
+      for (int s = 0; s < nv; s++) ln.add("({},{})c({},{},{}) ", vx[s], vy[s], vr[s], vg[s], vb[s]);
+      ln.add("] off=({},{}) blend={}", s_off_x, s_off_y, s_tp_blend);
+      ln.flush_debug(lp_ch);
+    } }
     for (int s = 0; s + 1 < nv; s++) {        // flat colour = start vertex
       if (sw_path())
         raster_line(vx[s], vy[s], vx[s+1], vy[s+1], vr[s], vg[s], vb[s], semi);
@@ -1121,7 +1127,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       case 0xE1: set_texpage(w & 0xFFFF); return;
       case 0xE2: s_tw_mx = w & 31; s_tw_my = (w >> 5) & 31; s_tw_ox = (w >> 10) & 31; s_tw_oy = (w >> 15) & 31; return;
       case 0xE3: s_da_x0 = w & 0x3FF; s_da_y0 = (w >> 10) & 0x1FF;
-        cfg_logf("env", "E3 clip_tl=(%d,%d)", s_da_x0, s_da_y0); return;
+        lucent::debug("env", "E3 clip_tl=({},{})", s_da_x0, s_da_y0); return;
       case 0xE4: s_da_x1 = w & 0x3FF; s_da_y1 = (w >> 10) & 0x1FF;
         // Widescreen: the guest clips the draw area to the 4:3 FB right edge (s_disp_x+319). The engine
         // renders a wider FOV (OFX shifted to nw/2) into VRAM columns up to s_disp_x+nw, so extend the
@@ -1136,9 +1142,9 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
         { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
           if (gpu_vk_wide_engine(core))
             s_da_x1 += (gpu_vk_wide_engine_w(core) - (s_disp_w > 0 ? s_disp_w : 320)); }
-        cfg_logf("env", "E4 clip_br=(%d,%d)", s_da_x1, s_da_y1); return;
+        lucent::debug("env", "E4 clip_br=({},{})", s_da_x1, s_da_y1); return;
       case 0xE5: s_off_x = ((int)(w & 0x7FF) << 21) >> 21; s_off_y = ((int)((w >> 11) & 0x7FF) << 21) >> 21;
-        cfg_logf("env", "E5 offset=(%d,%d)", s_off_x, s_off_y); return;
+        lucent::debug("env", "E5 offset=({},{})", s_off_x, s_off_y); return;
       case 0xE6: return;                         // mask settings (mask-test not modeled)
       default: break;
     }
@@ -1185,15 +1191,15 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       if (vk_path()) gpu_vk_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
-      cfg_logf("upload", "f%d A0 dest=(%d,%d) %dx%d src=0x%08X",
-               s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
+      lucent::debug("upload", "f{} A0 dest=({},{}) {}x{} src=0x{:08X}",
+                    s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
         uint32_t src = 0x80000000u | s_dma_src;
-        CfgLine ln; cfg_line_reset(&ln);
-        cfg_line_addf(&ln, "f%d A0 dest=(%d,%d) %dx%d src=0x%08X srcbytes:",
-                      s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
-        for (int k = 0; k < 12; k++) cfg_line_addf(&ln, " %02X", core->mem_r8(s_dma_src + k));
-        cfg_line_flush(&ln, "texwatch");
+        lucent::Line ln;
+        ln.add("f{} A0 dest=({},{}) {}x{} src=0x{:08X} srcbytes:",
+               s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
+        for (int k = 0; k < 12; k++) ln.add(" {:02X}", core->mem_r8(s_dma_src + k));
+        ln.flush(lucent::Level::Info, "texwatch");
       }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
@@ -1207,17 +1213,17 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       if (vk_path()) gpu_vk_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
       if (texwatch_overlap(dx, dy, w2, h2)) {
-        cfg_logi("texwatch", "f%d 80copy src=(%d,%d) dest=(%d,%d) %dx%d node=0x%08X words=%08X,%08X,%08X,%08X", s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
+        lucent::info("texwatch", "f{} 80copy src=({},{}) dest=({},{}) {}x{} node=0x{:08X} words={:08X},{:08X},{:08X},{:08X}", s_frame, sx, sy, dx, dy, w2, h2, s_cur_node, s_fifo[0], s_fifo[1], s_fifo[2], s_fifo[3]);
         // Dump RAM + the OT node neighbourhood the first time the atlas-clobbering copy fires, so the
         // malformed node and the chain that reaches it can be examined offline.
         if (cfg_str("PSXPORT_CLOBBERDUMP")) { static int done = 0; if (!done++) {
           uint32_t na = s_cur_node & 0x1FFFFF;
-          cfg_logi("clobber", "OT root madr=0x%08X node@0x%08X neighbourhood:", 0x80000000u|s_ot_madr, s_cur_node);
-          for (int k = -8; k <= 16; k++) cfg_logi("gpu_native", "  [%+d] 0x%08X: %08X", k,
+          lucent::info("clobber", "OT root madr=0x{:08X} node@0x{:08X} neighbourhood:", 0x80000000u|s_ot_madr, s_cur_node);
+          for (int k = -8; k <= 16; k++) lucent::info("gpu_native", "  [{:+}] 0x{:08X}: {:08X}", k,
                   0x80000000u | ((na + k*4) & 0x1FFFFF), core->mem_r32(0x80000000u | ((na + k*4) & 0x1FFFFF)));
           FILE* mf = fopen(cfg_str("PSXPORT_CLOBBERDUMP"), "wb");
           if (mf) { fwrite(core->ram, 1, 0x200000, mf); fclose(mf);
-                    cfg_logi("clobber", "RAM dumped -> %s", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
+                    lucent::info("clobber", "RAM dumped -> {}", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
       }
     } else if (op != 0xC0) {
       gp0_exec(core);
@@ -1229,7 +1235,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
 // GP1 display/control commands.
 void GpuState::gpu_gp1(uint32_t w) {
   uint8_t op = w >> 24;
-  cfg_logf("gp1", "f%d %02X %06X", s_frame, op, w & 0xFFFFFF);
+  lucent::debug("gp1", "f{} {:02X} {:06X}", s_frame, op, w & 0xFFFFFF);
   switch (op) {
     case 0x05: s_disp_x = w & 0x3FF; s_disp_y = (w >> 10) & 0x1FF; break;          // display area start
     case 0x07:  // vertical display range (scanlines). In 480i the field is shown twice (two VRAM
@@ -1251,8 +1257,8 @@ void GpuState::gpu_gp1(uint32_t w) {
           s_disp_rgb24 = d24;
           extern void gpu_vk_set_display_depth(Core*, int);
           if (game) gpu_vk_set_display_depth(&game->core, d24);
-          cfg_logi("gpu", "display depth -> %s (GP1(08)=%08X, %dx%d)", d24 ? "24-BIT" : "15-bit",
-                   w, s_disp_w, s_disp_h);
+          lucent::info("gpu", "display depth -> {} (GP1(08)={:08X}, {}x{})", d24 ? "24-BIT" : "15-bit",
+                       w, s_disp_w, s_disp_h);
         } }
       { int n = s_disp_vy1 - s_disp_vy0; if (n <= 0) n = 240; s_disp_h = s_disp_480i ? n * 2 : n; }
       break;
@@ -1375,7 +1381,7 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
   }
   void image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_vk.cpp — PNG by default
   unsigned char* buf = (unsigned char*)malloc((size_t)s_disp_w * s_disp_h * 3);
-  if (!buf) { cfg_loge("shot", "alloc failed for %s", path); return; }
+  if (!buf) { lucent::error("shot", "alloc failed for {}", path ? path : "(null)"); return; }
   for (int y = 0; y < s_disp_h; y++)
     for (int x = 0; x < s_disp_w; x++) {
       uint16_t p = *vram(s_disp_x + x, s_disp_y + y);
@@ -1384,23 +1390,25 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
     }
   image_write_rgb24(path, buf, s_disp_w, s_disp_h);
   free(buf);
-  cfg_logi("shot", "f%d -> %s (%dx%d disp@%d,%d)", s_frame, path, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+  lucent::info("shot", "f{} -> {} ({}x{} disp@{},{})", s_frame, path ? path : "(null)", s_disp_w, s_disp_h, s_disp_x, s_disp_y);
 }
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
 // window; fps60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
 // frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
 void GpuState::gpu_present_ex(Core* core, int do_blit) {
   watchdog_pet();             // frame-progress heartbeat (see watchdog.c)
-  if (cfg_dbg("vramscan")) {
+  // GUARD KEPT: a full 1024x512 VRAM sweep, not a log call. Once per frame, so the string_view
+  // form's ~19 ns is irrelevant next to the 512k-pixel scan it gates.
+  if (lucent::channel_on("vramscan")) {
     int minx=99999,miny=99999,maxx=-1,maxy=-1; long nz=0;
     for (int y=0;y<512;y++) for (int x=0;x<1024;x++) if (*vram(x,y)&0x7FFF) {
       nz++; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-    cfg_logf("vramscan", "f%d disp@(%d,%d) %dx%d  nonblack=%ld bbox=(%d,%d)-(%d,%d)",
-             s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
+    lucent::debug("vramscan", "f{} disp@({},{}) {}x{}  nonblack={} bbox=({},{})-({},{})",
+                  s_frame, s_disp_x, s_disp_y, s_disp_w, s_disp_h, nz, minx, miny, maxx, maxy);
   }
   if (do_blit) present_window();
   { void ws_sx_dump(const char*);   // widescreen RE (later-55): dump GTE screen-X histogram
-    if (cfg_dbg("sxhist") && s_frame > 0 && (s_frame % 500) == 0) {
+    if (lucent::channel_on("sxhist") && s_frame > 0 && (s_frame % 500) == 0) {
       char t[32]; snprintf(t, sizeof t, "f%d", s_frame); ws_sx_dump(t); } }
   { void proj_probe_dump(const char*);   // Phase-1: native-projection 0-diff verifier (PSXPORT_PROJPROBE)
     if (cfg_on("PSXPORT_PROJPROBE") && s_frame > 0 && (s_frame % 200) == 0) {
@@ -1408,33 +1416,37 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   { void rtpcaller_dump(Core*, const char*); void rtpcaller_reset(void);  // Phase-1: pin RTP caller sites
     // Window the histogram to the LAST 50 frames so a dump reflects only the CURRENT scene's submitters
     // (a cumulative-since-boot count is dominated by the title/menu phase before the field is reached).
-    if (cfg_dbg("rtpcaller") && s_frame > 0 && (s_frame % 50) == 0) {
+    if (lucent::channel_on("rtpcaller") && s_frame > 0 && (s_frame % 50) == 0) {
       char t[24]; snprintf(t, sizeof t, "f%d(last50)", s_frame); rtpcaller_dump(core, t); rtpcaller_reset(); } }
   {
     {
 
-      if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
-        cfg_logf("ndepth", "[ndepth f%d] real-depth(3D) prims=%ld  OT-band(2D) prims=%ld  3D%%=%.1f",
-                 s_frame, core->rsub.stats.nd3d, core->rsub.stats.nd2d, (core->rsub.stats.nd3d+core->rsub.stats.nd2d) ? 100.0*core->rsub.stats.nd3d/(core->rsub.stats.nd3d+core->rsub.stats.nd2d) : 0.0);
+      if (s_frame > 0 && (s_frame % 60) == 0)
+        lucent::debug("ndepth", "[ndepth f{}] real-depth(3D) prims={}  OT-band(2D) prims={}  3D%={:.1f}",
+                      s_frame, core->rsub.stats.nd3d, core->rsub.stats.nd2d, (core->rsub.stats.nd3d+core->rsub.stats.nd2d) ? 100.0*core->rsub.stats.nd3d/(core->rsub.stats.nd3d+core->rsub.stats.nd2d) : 0.0);
       { auto s = core->rsub.projprim.stats();
-        if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0)
+        if (s_frame > 0 && (s_frame % 60) == 0)
           // OCCUPANCY AND OVERFLOW ARE PART OF THIS LINE, not an internal detail. The cache drops
           // every record once it is full (ProjPrim::setPz: `if (mN >= kMax) { mOverflow = 1; return; }`)
           // and nothing read that flag, so a port whose taps outgrew the cache saw its records climb
           // and its hit rate stay flat with no way to tell that from "the taps are on the wrong
           // addresses". A silently-dropped record is exactly the failure this channel exists to expose.
-          cfg_logf("ndepth", "    projprim(vtx) records=%ld  lookups hit=%ld miss=%ld  cache %d/%d%s",
-                   s.set, s.hit, s.miss, core->rsub.projprim.count(), ProjPrim::kMax,
-                   core->rsub.projprim.overflowed() ? "  OVERFLOWED — records were DROPPED" : "");
-          core->rsub.projprim.nearReport("ndepth");
+          lucent::debug("ndepth", "    projprim(vtx) records={}  lookups hit={} miss={}  cache {}/{}{}",
+                        s.set, s.hit, s.miss, core->rsub.projprim.count(), ProjPrim::kMax,
+                        core->rsub.projprim.overflowed() ? "  OVERFLOWED — records were DROPPED" : "");
+        // UNCONDITIONAL, and it always was — the old indentation only made it look guarded (the `if`
+        // above has no braces). nearReport gates itself on its own `pznear` channel.
+        core->rsub.projprim.nearReport("ndepth");
         core->rsub.projprim.statsReset(); }
-      if (cfg_dbg("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
+      // GUARD KEPT: the block also CLEARS the histogram, which is real work and must not happen on a
+      // run where nobody asked for the channel (the accumulator above is gated the same way).
+      if (lucent::channel_on("ndepth") && s_frame > 0 && (s_frame % 60) == 0) {
         for (int o = 0; o < 256; o++) if (s_nd2d_hist[o]) {
           int gour=o&0x10, quad=o&0x08, tex=o&0x04, semi=o&0x02;
           const char* k = (o>=0x60&&o<0x80) ? "SPRITE" : (o>=0x40&&o<0x60) ? "LINE" :
                           (o>=0x20&&o<0x40) ? "POLY" : (o>=0x80) ? "BLIT" : "misc";
-          cfg_logf("ndepth", "    2D-band op 0x%02X x%ld  [%s%s%s%s %s]", o, s_nd2d_hist[o],
-                   gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
+          lucent::debug("ndepth", "    2D-band op 0x{:02X} x{}  [{}{}{}{} {}]", o, s_nd2d_hist[o],
+                        gour?"G":"-", quad?"4":"3", tex?"T":"-", semi?"s":"-", k); }
         for (int o = 0; o < 256; o++) s_nd2d_hist[o] = 0;
       }
       core->rsub.stats.nd3d = core->rsub.stats.nd2d = 0;
@@ -1454,11 +1466,11 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     if (vd) { int fr = atoi(vd); const char* col = strchr(vd, ':');
       if (col && s_frame == fr) { FILE* vf = fopen(col + 1, "wb");
         if (vf) { fwrite(s_vram, 2, VRAM_W * VRAM_H, vf); fclose(vf);
-                  cfg_logi("gpu", "VRAM dump f%d -> %s", s_frame, col + 1); } } } }
-  if (cfg_dbg("stage") && (s_frame % 200) == 0)
-    cfg_logf("stage", "[stagetl] gpu f%d task0entry=%08X", s_frame, core->mem_r32(0x801fe00c));
+                  lucent::info("gpu", "VRAM dump f{} -> {}", s_frame, col + 1); } } } }
+  if ((s_frame % 200) == 0)
+    lucent::debug("stage", "[stagetl] gpu f{} task0entry={:08X}", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
-  if (s_log) cfg_logi("gpu", "frame %d: %ld prims, %ld gp0words (%ld addressed, %ld anon), %ld dma2, disp %dx%d @ (%d,%d)", s_frame, s_prims, s_gp0_words, s_gp0_addressed, s_gp0_anon, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
+  if (s_log) lucent::info("gpu", "frame {}: {} prims, {} gp0words ({} addressed, {} anon), {} dma2, disp {}x{} @ ({},{})", s_frame, s_prims, s_gp0_words, s_gp0_addressed, s_gp0_anon, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
   // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
   // engines at a scene-aligned frame (the atlas is uploaded once at scene load = static per scene).
@@ -1467,7 +1479,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
       if (e) { const char* col = strchr(e, ':'); if (col) { vf = atoi(e); snprintf(vp, sizeof vp, "%s", col + 1); } } }
     if (vf >= 0 && s_frame == vf) { FILE* f = fopen(vp, "wb");
       if (f) { fwrite(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
-               cfg_logi("vramdump", "f%d -> %s (1024x512x16)", s_frame, vp); } } }
+               lucent::info("vramdump", "f{} -> {} (1024x512x16)", s_frame, vp); } } }
   if (dir) {
     // PSXPORT_GPU_DUMP=dir[:every] — dump every Nth frame instead of all of them.
     //
@@ -1514,8 +1526,8 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     if (fa == -2) { const char* e = cfg_str("PSXPORT_FADEDBG"); fa = fb = -1;
       if (e) { fa = atoi(e); const char* col = strchr(e, ':'); fb = col ? atoi(col + 1) : fa + 200; } }
     if (fa >= 0 && s_frame >= fa && s_frame <= fb)
-      cfg_logi("fadedbg", "f%d disp=(%d,%d) drawY=%d maxcol=%d nprim=%d nsemi=%d semi[%d..%d] bigsemi=%d", s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
-              s_fade_semimin == 999 ? -1 : s_fade_semimin, s_fade_semimax, s_fade_bigsemi); }
+      lucent::info("fadedbg", "f{} disp=({},{}) drawY={} maxcol={} nprim={} nsemi={} semi[{}..{}] bigsemi={}", s_frame, s_disp_x, s_disp_y, s_fade_lasty, s_fade_maxc, s_fade_npoly, s_fade_nsemi,
+                   s_fade_semimin == 999 ? -1 : s_fade_semimin, s_fade_semimax, s_fade_bigsemi); }
   frame_finalize(core);   // depth-table reset, batch reset, s_frame++ / s_prim_order / s_seen3d bookkeeping
 }
 // Per-frame render finalize: the "advance to the next frame" work that is INDEPENDENT of the window blit —
@@ -1583,7 +1595,7 @@ void GpuState::gpu_present(Core* core) {
     void gpu_vk_shot(Core*, const char*);
     char pth[128]; snprintf(pth, sizeof pth, "scratch/screenshots/shot_%u.ppm", s_frame);
     gpu_vk_shot(core, pth);
-    cfg_logi("shot", "present %u -> %s", s_frame, pth);
+    lucent::info("shot", "present {} -> {}", s_frame, pth);
   }
 }
 // FMV / SCEA-splash teardown (issues #7/#11): black out the DISPLAYED framebuffer region of s_vram and
@@ -1625,8 +1637,8 @@ void GpuState::gpu_fps60_present_pass(Core* core) {
 }
 
 void GpuState::gpu_native_init() {
-  if (cfg_dbg("gpu") || cfg_on("PSXPORT_GPU_LOG")) s_log = 1;   // diagnostic: per-frame prim log via env
-  if (cfg_dbg("red")) s_reddbg = 1;
+  if (lucent::channel_on("gpu") || cfg_on("PSXPORT_GPU_LOG")) s_log = 1;   // diagnostic: per-frame prim log via env
+  if (lucent::channel_on("red")) s_reddbg = 1;
   const char* cw = cfg_str("PSXPORT_CLUTWATCH");
   if (cw) { s_cw_x = 880; s_cw_y = 507; int x, y; if (sscanf(cw, "%d,%d", &x, &y) == 2) { s_cw_x = x; s_cw_y = y; } }
 }
@@ -1695,7 +1707,9 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
   // PSXPORT_DEBUG=ot (diagnostic only — the driver no longer reads the OT): on a chain that fails to
   // terminate within an OT's worth of nodes (cyclic = malformed), dump its first 40 nodes once for diagnosis.
   // (Empty OTs are ~0x800 link-only nodes that DO terminate at the sentinel; a true cycle never terminates.)
-  if (cfg_dbg("ot")) {
+  // GUARD KEPT: a 4096-step guest-memory chain walk to decide whether the OT terminates, then a
+  // 40-node dump — all of it non-logging work, and none of it may run on an ordinary run.
+  if (lucent::channel_on("ot")) {
     static int dumped = 0;
     uint32_t a = madr & 0x1FFFFC; int term = 0;
     for (int k = 0; k < 4096; k++) {
@@ -1705,11 +1719,11 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
     }
     if (!term && !dumped++) {
       a = madr & 0x1FFFFC;
-      cfg_logf("ot", "[otdbg] MALFORMED OT from madr=0x%08X:", 0x80000000u | (madr & 0x1FFFFC));
+      lucent::debug("ot", "[otdbg] MALFORMED OT from madr=0x{:08X}:", 0x80000000u | (madr & 0x1FFFFC));
       for (int k = 0; k < 40; k++) {
         uint32_t hdr = core->mem_r32(a); uint32_t next = hdr & 0xFFFFFF; int n = hdr >> 24;
-        cfg_logf("ot", "  [%2d] @0x%08X hdr=0x%08X (n=%d) -> 0x%08X",
-                 k, 0x80000000u | a, hdr, n, 0x80000000u | (next & 0x1FFFFC));
+        lucent::debug("ot", "  [{:2}] @0x{:08X} hdr=0x{:08X} (n={}) -> 0x{:08X}",
+                      k, 0x80000000u | a, hdr, n, 0x80000000u | (next & 0x1FFFFC));
         if (next == 0xFFFFFF || next == 0) break;
         a = next & 0x1FFFFC;
       }
@@ -1745,16 +1759,19 @@ void GpuState::gpu_dma2_linked_list(Core* core, uint32_t madr) {
   // PSXPORT_DEBUG=pool: per-DrawOTag OT node count + the packet-pool high-water (write ptr 0x800BF544),
   // to inspect the widescreen fixed-buffer-overflow hypothesis (later-124). node count = OT entries the
   // walk traversed. (Pool write ptr is the field overlay's global; meaningless on non-field overlays.)
-  if (cfg_dbg("pool")) {
+  // GUARD KEPT: `mx` is a high-water mark the line reports, so the read-and-update is real state work
+  // and must stay tied to the same condition the line is (leaving it unguarded would change what the
+  // reported high-water means).
+  if (lucent::channel_on("pool")) {
     static int mx = 0; int nodes = guard + 1;
     uint32_t pool = core->mem_r32(0x800BF544u);
     if ((int)pool > mx) mx = (int)pool;
-    cfg_logf("pool", "f%d madr=0x%08X nodes=%d pool=0x%08X hi=0x%08X",
-             s_frame, 0x80000000u | s_ot_madr, nodes, pool, (uint32_t)mx);
+    lucent::debug("pool", "f{} madr=0x{:08X} nodes={} pool=0x{:08X} hi=0x{:08X}",
+                  s_frame, 0x80000000u | s_ot_madr, nodes, pool, (uint32_t)mx);
   }
   if (guard >= 0x10000) {
     static int warned = 0;
-    if (!warned++) cfg_logw("gpu", "WARN: OT walk hit %d-node cap (madr=0x%08X) — malformed/cyclic ordering table", guard, 0x80000000u | s_ot_madr);
+    if (!warned++) lucent::warn("gpu", "WARN: OT walk hit {}-node cap (madr=0x{:08X}) — malformed/cyclic ordering table", guard, 0x80000000u | s_ot_madr);
   }
   // FLUSH. The walk above ENUMERATES the guest's prims and QUEUES them; something must then drain the
   // queue, or it accumulates across frames until RenderQueue's fail-fast fires ("render queue full

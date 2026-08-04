@@ -1,12 +1,13 @@
-// cdc_state.h — per-instance native CD-controller register state (cdc_native.c), so two Cores run with
+// cdc_state.h — per-instance native CD-controller register state (cdc_native.cpp), so two Cores run with
 // SEPARATE CD-controller state (one native, one PSX-recomp). The CXD1199-style register model
 // (index/bank, param/response/data FIFOs, the pending-interrupt queue, drive/read state) used to live
-// in file-scope statics in cdc_native.c; that mutable state now lives in this struct, one per Game
+// in file-scope statics in cdc_native.cpp; that mutable state now lives in this struct, one per Game
 // (game.h embeds it). cdc_read/cdc_write take the instance EXPLICITLY (the MMIO dispatcher in
 // mem.cpp passes &game->cdc) — no bound "current" pointer — so each core reads/writes only its own
-// CD registers; nothing is shared (the disc image itself is a read-only data source, see disc.c).
+// CD registers; nothing is shared (the disc image itself is a read-only data source, see disc.cpp).
 //
-// Plain-C struct (no C++) so cdc_native.c stays C, exactly like gte_state.h's GteRegs.
+// Plain-aggregate struct: the vendored Beetle backends (still C) embed sibling state structs, so this
+// stays C-compatible even though cdc_native.cpp is now C++.
 #pragma once
 #include <stdint.h>
 
@@ -30,9 +31,8 @@ typedef struct CdcState {
                               // bit 2, which is edge-triggered on real hardware: acking the CD
                               // controller at 0x1F801803 does NOT clear I_STAT, and a queued second
                               // response raises a FRESH edge as it becomes current. Kept here rather
-                              // than reaching for I_STAT directly because this file is plain C with
-                              // no Game pointer.
-  int      verbose;           // `debug cdc` log gate (config, read at init)  (was s_verbose)
+                              // than reaching for I_STAT directly because this model has no Game
+                              // pointer.
   struct DiscState* disc;     // Game-owned disc backend (wired by Game())
 } CdcState;
 

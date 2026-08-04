@@ -6,8 +6,9 @@
 // direct native reads of this image. Pure data path: form/mode-2 audio/video framing
 // (XA/STR) is a later front-end concern; data files are mode2/form1 with 2048 user bytes.
 #include "r3000.h"
-#include "cfg.h"
+#include "cfg.h"          // cfg_str — the CONFIG half of cfg.h; the logging half is retired
 #include "disc.h"
+#include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,7 @@ static char* dup_trim(const char* s) {
   while (*s == ' ' || *s == '\t') s++;
   size_t n = strlen(s);
   while (n && (s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == ' ' || s[n-1] == '\t')) n--;
-  char* o = malloc(n + 1); memcpy(o, s, n); o[n] = 0; return o;
+  char* o = (char*)malloc(n + 1); memcpy(o, s, n); o[n] = 0; return o;
 }
 static char* env_from_dotenv(const char* key) {
   FILE* f = fopen(".env", "rb");
@@ -65,20 +66,20 @@ int disc_open(DiscState* d) {
   if (d->chd) return 1;
   char* path = resolve_disc_path(d);
   if (!path) {
-    cfg_logw("disc", "no disc image: tried %s, PSXPORT_DISC (env and ./.env), and a *.chd drop-in "
-                     "in the working directory. The CD model will run with NO MEDIA.",
-             d->env_key ? d->env_key : "<no GameConfig::discEnvVar set>");
+    lucent::warn("disc", "no disc image: tried {}, PSXPORT_DISC (env and ./.env), and a *.chd drop-in "
+                         "in the working directory. The CD model will run with NO MEDIA.",
+                 d->env_key ? d->env_key : "<no GameConfig::discEnvVar set>");
     return 0;
   }
   if (chd_open(path, CHD_OPEN_READ, 0, &d->chd) != CHDERR_NONE) {
-    cfg_loge("disc", "failed to open CHD: %s", path); free(path); return 0;
+    lucent::error("disc", "failed to open CHD: {}", path); free(path); return 0;
   }
   const chd_header* h = chd_get_header(d->chd);
   d->hunk_bytes = h->hunkbytes;
   d->frames_per_hunk = h->hunkbytes / RAW_FRAME;
   d->hunk_count = h->totalhunks;
-  d->hunk_buf = malloc(d->hunk_bytes);
-  cfg_logi("disc", "opened %s (%u hunks, %u frames/hunk)", path, d->hunk_count, d->frames_per_hunk);
+  d->hunk_buf = (uint8_t*)malloc(d->hunk_bytes);
+  lucent::info("disc", "opened {} ({} hunks, {} frames/hunk)", path, d->hunk_count, d->frames_per_hunk);
   free(path);
   return d->frames_per_hunk > 0;
 }
@@ -88,7 +89,7 @@ int disc_read_sector(DiscState* d, uint32_t lba, uint8_t* out) {
   if (!d->chd && !disc_open(d)) return 0;
   uint32_t hunk = lba / d->frames_per_hunk;
   uint32_t off = (lba % d->frames_per_hunk) * RAW_FRAME;
-  if (hunk >= d->hunk_count) { cfg_logi("disc", "LBA %u out of range", lba); return 0; }
+  if (hunk >= d->hunk_count) { lucent::info("disc", "LBA {} out of range", lba); return 0; }
   if (hunk != d->cached_hunk) {
     if (chd_read(d->chd, hunk, d->hunk_buf) != CHDERR_NONE) return 0;
     d->cached_hunk = hunk;

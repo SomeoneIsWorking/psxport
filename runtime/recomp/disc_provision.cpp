@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#include "cfg.h"
 #include <lucent/log.h>
 
 extern "C" int disc_extract_file(DiscState* d, const char* iso_path, const char* out_path) {

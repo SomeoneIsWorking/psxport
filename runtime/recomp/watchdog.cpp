@@ -7,7 +7,9 @@
 // Build note: backtrace symbol names need -rdynamic at link time (run.sh adds it). Without it
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
 #include <signal.h>
-#include "cfg.h"
+#include "cfg.h"          // cfg_str — the CONFIG half of cfg.h; the logging half is retired
+#include "c_subsys.h"    // C linkage for watchdog_init/pet/suspend/disable (callers are C++ and vendored C)
+#include <lucent/log.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,7 +84,7 @@ static void on_interrupt(int sig) {
 void watchdog_init(void) {
   // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace names the gen_func_<addr>
   // guest call chain), not silently dump core — install the fault handler regardless of the setting.
-  struct sigaction fa = {0};
+  struct sigaction fa = {};
   fa.sa_handler = on_fault;
   sigaction(SIGSEGV, &fa, 0);
   sigaction(SIGABRT, &fa, 0);
@@ -91,7 +93,7 @@ void watchdog_init(void) {
   // Always make Ctrl+C / kill work + diagnostic, regardless of the frame-watchdog setting — a hung
   // interpreter loop otherwise leaves the window unclosable and SIGINT swallowed (the event pump
   // never runs). Our handler force-exits with the stuck PC.
-  struct sigaction ia = {0};
+  struct sigaction ia = {};
   ia.sa_handler = on_interrupt;
   sigaction(SIGINT, &ia, 0);
   sigaction(SIGTERM, &ia, 0);
@@ -111,12 +113,12 @@ void watchdog_init(void) {
   // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45).
   const char* sb = cfg_str("PSXPORT_WATCHDOG_BOOT");
   s_wd.boot_secs = sb ? atoi(sb) : (s_wd.secs > 45 ? s_wd.secs : 45);
-  struct sigaction sa = {0};
+  struct sigaction sa = {};
   sa.sa_handler = on_alarm;
   sigaction(SIGALRM, &sa, 0);
   s_wd.armed = 1;
   alarm((unsigned)s_wd.boot_secs);
-  cfg_logi("watchdog", "armed: %ds frame-progress timeout (%ds grace for the first frame)", s_wd.secs, s_wd.boot_secs);
+  lucent::info("watchdog", "armed: {}s frame-progress timeout ({}s grace for the first frame)", s_wd.secs, s_wd.boot_secs);
 }
 
 // Pet from the present path — one beat per produced frame. Re-arms the timer. The first present

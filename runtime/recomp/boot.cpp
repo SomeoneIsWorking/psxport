@@ -3,7 +3,6 @@
 // keeps only load_exe (the PS-EXE loader), which the game main AND the harnesses (DualCore/Sbs) all call.
 // The framework provides no main(): the standalone psxport_smoke supplies its own.
 #include "core.h"
-#include "cfg.h"
 #include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>

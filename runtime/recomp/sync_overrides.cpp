@@ -18,7 +18,6 @@
 #include "recomp_iface.h"   // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
 #include <cstdio>
 #include <cstdlib>
-#include "cfg.h"
 #include <lucent/log.h>
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };

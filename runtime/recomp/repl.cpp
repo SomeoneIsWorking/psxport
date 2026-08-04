@@ -7,7 +7,6 @@
 #include "game_iface.h"          // GameHooks — game-side command dispatch (replCommand) + REPL diag hooks
 #include "game.h"
 #include "c_subsys.h"
-#include "cfg.h"                 // cfg_dbg_set — the `debug <chans>` command
 #include <lucent/log.h>
 #include "render_substrate.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
 #include "ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
@@ -121,7 +120,7 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); c->game->pad.driveHold(held); lucent::info("repl", "held={:04X}", held); }
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  c->game->pad.driveHold(held); lucent::info("repl", "held={:04X}", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); lucent::info("repl", "tap {} {}", arg, a); }
-    else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); void cfg_dbg_set(const char*); cfg_dbg_set(ch); lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)"); }
+    else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); lucent::enable_channels(ch); lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)"); }
     else if (!strcmp(cmd, "ents")) {   // enumerate live GAME OBJECTS across the 3 entity lists, with identity
       // Each object is a node in a doubly-linked list (next @ +0x24). Identity fields: type @+0xc, render
       // intrinsic @+0xb (0x10..0x14 = sprite/billboard, 0/0xf = mesh), behavior handler @+0x1c (the object's

@@ -22,6 +22,7 @@
 #include "render_queue.h"
 #include "proj_params.h"   // ProjParams::Snapshot — save/restore around tier1Render's re-render
 #include "cfg.h"
+#include <lucent/log.h>
 #include "mods.h"     // Mods (game->mods.fps60)
 #include "fs_util.h"  // Fs::ensureParentDirs — no hand-rolled mkdir
 #include <stdint.h>
@@ -163,10 +164,10 @@ void Fps60::tier1Render(Core* core, float t) {
   lerp.ofy = mCamPrev.ofy + (mCamCur.ofy - mCamPrev.ofy) * t;
   lerp.H   = mCamPrev.H   + (mCamCur.H   - mCamPrev.H)   * t;
   mCamOverride = lerp;
-  cfg_logf("terrpc", "[tier1dbg] t=%.3f cur.T=(%.1f,%.1f,%.1f) prev.T=(%.1f,%.1f,%.1f) lerp.T=(%.1f,%.1f,%.1f) "
-                      "cur.H=%.1f prev.H=%.1f lerp.H=%.1f ofx=%.1f ofy=%.1f",
-           t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
-           lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
+  lucent::debug("terrpc", "[tier1dbg] t={:.3f} cur.T=({:.1f},{:.1f},{:.1f}) prev.T=({:.1f},{:.1f},{:.1f}) lerp.T=({:.1f},{:.1f},{:.1f}) "
+                          "cur.H={:.1f} prev.H={:.1f} lerp.H={:.1f} ofx={:.1f} ofy={:.1f}",
+                t, mCamCur.T[0], mCamCur.T[1], mCamCur.T[2], mCamPrev.T[0], mCamPrev.T[1], mCamPrev.T[2],
+                lerp.T[0], lerp.T[1], lerp.T[2], mCamCur.H, mCamPrev.H, lerp.H, lerp.ofx, lerp.ofy);
 
   // #67 GATE PARITY: mirror the REAL frame's world-pass gates (Render::worldVoidBeat / fieldAreaInit —
   // the same reads sceneNative made this interval, unchanged since per the present-time invariant). The
@@ -201,7 +202,10 @@ void Fps60::tier1Render(Core* core, float t) {
   // DIAG (debug channel "tier1sc"): the aggregate screen bbox tier1Render actually re-rendered this
   // present, split by producer — used once to data-derive the scene-table's on-screen footprint for the
   // exactness gate (docs/fps60-rework.md), not load-bearing.
-  if (cfg_dbg("tier1sc")) {
+  // The bbox scan below walks every item in the sink (per PRESENT — hot), so the channel gate here
+  // guards real non-logging work, not the print.
+  static const lucent::Channel ch_tier1sc{"tier1sc"};
+  if (ch_tier1sc) {
     float tminx=1e9f,tmaxx=-1e9f,tminy=1e9f,tmaxy=-1e9f, sminx=1e9f,smaxx=-1e9f,sminy=1e9f,smaxy=-1e9f;
     int tn=0, sn=0;
     for (int i = 0; i < mSink->n; i++) {
@@ -216,8 +220,9 @@ void Fps60::tier1Render(Core* core, float t) {
         if (it.ysf[k] < *mny) *mny = it.ysf[k]; if (it.ysf[k] > *mxy) *mxy = it.ysf[k];
       }
     }
-    cfg_logf("tier1sc", "terrain n=%d bbox=[%.0f,%.0f,%.0f,%.0f] sceneTable n=%d bbox=[%.0f,%.0f,%.0f,%.0f]",
-             tn, tn?tminx:0, tn?tminy:0, tn?tmaxx:0, tn?tmaxy:0, sn, sn?sminx:0, sn?sminy:0, sn?smaxx:0, sn?smaxy:0);
+    lucent::debug(ch_tier1sc, "terrain n={} bbox=[{:.0f},{:.0f},{:.0f},{:.0f}] sceneTable n={} bbox=[{:.0f},{:.0f},{:.0f},{:.0f}]",
+                  tn, tn?tminx:0.f, tn?tminy:0.f, tn?tmaxx:0.f, tn?tmaxy:0.f,
+                  sn, sn?sminx:0.f, sn?sminy:0.f, sn?smaxx:0.f, sn?smaxy:0.f);
   }
 }
 
@@ -266,7 +271,10 @@ static inline bool isTier1Owned(const RqItem& it) {
 
 
 
-// See the declaration above presentPass.
+// See the declaration above presentPass. `fps60seq` is consulted once per PRESENT (presentPass) to
+// decide whether to walk the whole captured queue, so it is hoisted into a Channel handle.
+static const lucent::Channel ch_fps60seq{"fps60seq"};
+
 static void seqRunDump(const RqItem* items, int n, const char* what) {
   int i = 0;
   while (i < n) {
@@ -276,8 +284,8 @@ static void seqRunDump(const RqItem* items, int n, const char* what) {
     const uint32_t node0 = items[i].dbg_node;
     int j = i;
     while (j < n && items[j].layer == layer && isTier1Owned(items[j]) == owned) j++;
-    cfg_logf("fps60seq", "  %s layer=%d %-9s n=%4d seq=[%u..%u] node0=%08X", what, layer,
-             owned ? "TIER1" : "verbatim", j - i, seq0, items[j - 1].seq, node0);
+    lucent::debug(ch_fps60seq, "  {} layer={} {:<9} n={:4} seq=[{}..{}] node0={:08X}", what, layer,
+                  owned ? "TIER1" : "verbatim", j - i, seq0, items[j - 1].seq, node0);
     i = j;
   }
 }
@@ -288,9 +296,12 @@ static void seqRunDump(const RqItem* items, int n, const char* what) {
 // filled the target (present_vk's PASS 1 for interp, PASS 2 for real) so the readback sees that pass's
 // content, not the next one's.
 void Fps60::dumpPresent(Core* core, bool interp) {
-  if (!cfg_dbg("fps60dump")) { mDumpSeq = 0; return; }   // channel off: idle, and reset the cap for next arm
+  // Not a print guard: the channel decides whether this present does a full VRAM readback + PNG write,
+  // and the off-branch RESETS the capture cap. Per present, so it is a Channel handle.
+  static const lucent::Channel ch_fps60dump{"fps60dump"};
+  if (!ch_fps60dump) { mDumpSeq = 0; return; }   // channel off: idle, and reset the cap for next arm
   if (mDumpSeq >= kDumpMax) {
-    if (mDumpSeq == kDumpMax) { cfg_logi("fps60dump", "cap (%d files) reached — stop capturing", kDumpMax); mDumpSeq++; }
+    if (mDumpSeq == kDumpMax) { lucent::info("fps60dump", "cap ({} files) reached — stop capturing", kDumpMax); mDumpSeq++; }
     return;
   }
   char path[192];
@@ -331,7 +342,6 @@ void Fps60::frame_commit(Core* core) {
 void Fps60::present_vk(Core* core) {
   Core* c = core;
   RenderQueue& q = c->game->rq;
-  if (mDbg < 0) mDbg = cfg_dbg("fps60") ? 1 : 0;
 
   // Gate-B test knob (TEMPORARY, internal — see docs/config.md): PSXPORT_FPS60_TFORCE=0 pins the whole
   // present (camera lerp + queue-prim lerp share mT) to Q[N-1]'s endpoint, =1 to Q[N]'s, so a run can be
@@ -348,9 +358,12 @@ void Fps60::present_vk(Core* core) {
   presentPass(c, tInterp);
   gpu_fps60_present_pass(c);
   dumpPresent(c, /*interp=*/true);
-  if (mDbg) cfg_logi("fps60", "f%ld slotA: replay prev=%s n=%d tier1=%ld backdrop=%ld t=%.3f", mFence,
-                     mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", mNCur, mTier1PrimsThisFrame,
-                     mBackdropPrimsThisFrame, mT);
+  // Was an info line behind a latched `fps60` channel test — a per-present line that only ever appeared
+  // when the channel was asked for, so it is debug audience, not info. (fps60.h's `mDbg` latch that
+  // gated it is now unused; drop the member next time that header is touched.)
+  lucent::debug("fps60", "f{} slotA: replay prev={} n={} tier1={} backdrop={} t={:.3f}", mFence,
+                mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", mNCur, mTier1PrimsThisFrame,
+                mBackdropPrimsThisFrame, mT);
   gpu_pace_subframe(c, 2);
 
   // ---- PASS 2 (slot B): the real frame. SAME call, t=1 — every lerped input resolves to its current
@@ -381,10 +394,10 @@ static void seqRunDump(const RqItem* items, int n, const char* what);
 
 void Fps60::presentPass(Core* c, float t) {
   RenderQueue& q = c->game->rq;
-  if (cfg_dbg("fps60seq")) {
+  if (ch_fps60seq) {   // guards seqRunDump's walk of the whole captured queue, not the print
     static long lastDumped = -1;
     if (lastDumped != mFence) { lastDumped = mFence;
-      cfg_logf("fps60seq", "f%ld captured n=%d", mFence, mNCur);
+      lucent::debug(ch_fps60seq, "f{} captured n={}", mFence, mNCur);
       seqRunDump(mRqCur, mNCur, "rqcur");
     }
   }

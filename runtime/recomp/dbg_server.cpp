@@ -21,6 +21,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include "cfg.h"
+#include <lucent/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -314,7 +315,7 @@ static void dbg_exec(FILE* out, const char* line) {
     }
   } else if (!strcmp(cmd, "debug")) {
     char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch);
-    void cfg_dbg_set(const char*); cfg_dbg_set(ch);
+    lucent::enable_channels(ch);
     fprintf(out, "debug channels = %s\n", ch[0] ? ch : "(none)");
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
     s_held &= ~(unsigned short)dbg_btn(arg); s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
@@ -446,7 +447,7 @@ static void* dbg_thread(void* arg) {
   sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (bind(ls, (struct sockaddr*)&sa, sizeof sa) < 0) { perror("[dbgsrv] bind"); close(ls); return NULL; }
   if (listen(ls, 4) < 0) { perror("[dbgsrv] listen"); close(ls); return NULL; }
-  cfg_logi("dbgsrv", "listening on 127.0.0.1:%d (PSXPORT_DEBUG_SERVER)", port);
+  lucent::info("dbgsrv", "listening on 127.0.0.1:{} (PSXPORT_DEBUG_SERVER)", port);
   for (;;) {
     int cs = accept(ls, NULL, NULL);
     if (cs < 0) continue;
@@ -472,7 +473,7 @@ void DbgServer::start(Core* c) {
   c->game->gpu.gpu_provat_enable();                // so `provat` works at any time (not gated on PSXPORT_PROVAT)
   pthread_t t;
   if (pthread_create(&t, NULL, dbg_thread, (void*)(intptr_t)port) != 0) {
-    cfg_loge("dbgsrv", "pthread_create failed"); return;
+    lucent::error("dbgsrv", "pthread_create failed"); return;
   }
   pthread_detach(t);
   s_started = 1;

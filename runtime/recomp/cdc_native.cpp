@@ -7,7 +7,7 @@
 // machine (0x800123B0) loops forever. This is a focused, faithful model of the CXD1199-style
 // register interface: index banking, parameter/response/data FIFOs, and a queue of pending
 // interrupts (commands that return INT3-ack-then-INT2-complete). Data reads are served from the
-// disc image (disc.c). We complete commands SYNCHRONOUSLY (the response is ready on the next poll),
+// disc image (disc.cpp). We complete commands SYNCHRONOUSLY (the response is ready on the next poll),
 // which is correct for code that busy-polls the flag without advancing time.
 //
 // Register map (bank = 0x1F801800 & 3):
@@ -17,12 +17,12 @@
 //   0x1F801803  W bank0: request (BFRD want-data) W bank1: ack/reset IRQ flags
 //               R bank0/2: interrupt enable      R bank1/3: interrupt flag (pending IRQ type)
 #include "r3000.h"
-#include "cfg.h"
 #include "cdc_state.h"
 #include "disc.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <lucent/log.h>
 
 // PER-INSTANCE CD-controller state: the register/FIFO/IRQ-queue model lives on a CdcState (one per
 // Game, game.h) passed EXPLICITLY to every entry point — no bound "current" pointer.
@@ -32,7 +32,6 @@ void cdc_state_init(CdcState* s) {
   memset(s, 0, sizeof *s);
   s->stat = 0x02;                     // power-on defaults
   s->disc = disc;
-  s->verbose = cfg_dbg("cdc") ? 1 : 0;
 }
 
 static void cdc_irq(CdcState* s, uint8_t type, const uint8_t* resp, int len) {
@@ -66,7 +65,7 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
   if (s->mode & 0x20) {
     uint8_t raw[2352];
     if (!disc_read_raw(s->disc, s->loc_lba, raw, sizeof raw)) {
-      cfg_loge("cdc", "ReadN: no data for LBA %u — data FIFO left EMPTY", s->loc_lba);
+      lucent::error("cdc", "ReadN: no data for LBA {} — data FIFO left EMPTY", s->loc_lba);
       s->data_n = 0; s->data_rd = 0; return;
     }
     memcpy(s->data, raw + 12, 2340);
@@ -75,8 +74,8 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
   }
   uint8_t sec[2048];
   if (!disc_read_sector(s->disc, s->loc_lba, sec)) {
-    cfg_loge("cdc", "ReadN: no data for LBA %u (no disc, or out of range) — data FIFO left EMPTY",
-             s->loc_lba);
+    lucent::error("cdc", "ReadN: no data for LBA {} (no disc, or out of range) — data FIFO left EMPTY",
+                  s->loc_lba);
     s->data_n = 0; s->data_rd = 0;
     // AND STOP THE CONTINUOUS READ. A real drive runs out of disc: it cannot keep presenting sectors
     // past the lead-out, so it stops raising INT1. Without this the ack path's advance is a feedback
@@ -145,9 +144,8 @@ int cdc_dma_read(CdcState* s, uint32_t* out, int words) {
 }
 
 static void exec_command(CdcState* s, uint8_t cmd) {
-  if (s->verbose || cfg_dbg("cdc"))
-    cfg_logi("cdc", "cmd 0x%02X params=%d [%02X %02X %02X]", cmd, s->param_n,
-            s->param[0], s->param[1], s->param[2]);
+  lucent::debug("cdc", "cmd 0x{:02X} params={} [{:02X} {:02X} {:02X}]", cmd, s->param_n,
+                s->param[0], s->param[1], s->param[2]);
   uint8_t r1[1] = { s->stat };
   switch (cmd) {
     case 0x01: cdc_irq(s, 3, r1, 1); break;                          // Getstat
@@ -178,7 +176,7 @@ static void exec_command(CdcState* s, uint8_t cmd) {
     case 0x13: { uint8_t t[3] = { s->stat, 0x01, 0x01 }; cdc_irq(s, 3, t, 3); break; }  // GetTN
     case 0x14: { uint8_t t[3] = { s->stat, 0x00, 0x02 }; cdc_irq(s, 3, t, 3); break; }  // GetTD
     default:
-      if (s->verbose) cfg_logi("cdc", "UNHANDLED cmd 0x%02X -> ack only", cmd);
+      lucent::debug("cdc", "UNHANDLED cmd 0x{:02X} -> ack only", cmd);
       cdc_irq(s, 3, r1, 1); break;
   }
   s->param_n = 0;                                                // command consumes the param FIFO

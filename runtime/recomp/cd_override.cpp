@@ -16,7 +16,6 @@
 #include "core.h"
 #include "game.h"
 #include "c_subsys.h"
-#include "cfg.h"
 #include "overlay_router.h"
 #include "platform_hle.h"   // class PlatformHle — CD-subsystem HLE registrations go through the singleton
 #include <lucent/log.h>
@@ -519,16 +518,19 @@ void Cd::toSpuMix(int on) { Core* c = &game->core; c->r[A0] = on ? 1 : 0; rec_di
 // tgt/cur = DAT_800be222/224 (fade target/current), mas = DAT_800be220 (master),
 // 19a/137 = state bytes gating FUN_80075824's ramp, song = 0x800bed80, gate = 0x801fe0e0.
 // g_bgm_frame retired — c->game->timing.logicFrame.
+// The gate is a lucent::Channel: this runs on the per-frame CD tick and the nine guest reads below
+// are real work, so it guards the BLOCK, not a print. `PSXPORT_DEBUG=cd_override` turns it on.
 void Cd::audioTrace(const char* tag) {
   Core* c = &game->core;
-  if (!cfg_str("PSXPORT_XA_DBG")) return;
+  static const lucent::Channel ch{"cd_override"};
+  if (!ch) return;
   static int t=1<<30,cur,mas,s19a,s137,song,act,lp,gate;
   int nt=c->mem_r16s(0x800be222), ncur=c->mem_r16s(0x800be224), nmas=c->mem_r16s(0x800be220);
   int n19a=c->mem_r8(0x1f80019a), n137=c->mem_r8(0x1f800137);
   int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(&c->game->xa), nlp=xa_stream_is_looping(&c->game->xa);
   int ngate=c->mem_r16(0x801fe0e0)&0xffff;
   if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
-    lucent::info("cd_override", "[xa f{} {:<5}] tgt={} cur={} mas={} 19a={} 137={} song={} act={} loop={} gate={}", c->game->timing.logicFrame,tag ? tag : "(null)",nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
+    lucent::debug(ch, "[xa f{} {:<5}] tgt={} cur={} mas={} 19a={} 137={} song={} act={} loop={} gate={}", c->game->timing.logicFrame,tag ? tag : "(null)",nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
     t=nt;cur=ncur;mas=nmas;s19a=n19a;s137=n137;song=nsong;act=nact;lp=nlp;gate=ngate;
   }
 }
@@ -537,8 +539,7 @@ static void voice_play(Core* c) {
   uint8_t  chan  = (uint8_t)(c->r[A0] & 0xFF);
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
-  if (cfg_str("PSXPORT_XA_DBG"))
-    lucent::info("voice_play", "chan={} [{}..{}] loop={} ra={:08X}", chan, start, end, loop, c->r[31]);
+  lucent::debug("voice_play", "chan={} [{}..{}] loop={} ra={:08X}", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
     if (c->hooks->cdDialogToneActive(c)) return;   // suppress during a dialog; resumed by MusicCoord::tick

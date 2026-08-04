@@ -35,7 +35,6 @@
 // `[vramguard] CLOBBER ...` line names the exact write that hit the atlas — turning a rare visual into a
 // deterministic, pinpointed root cause.
 #include "core.h"
-#include "cfg.h"
 #include <lucent/log.h>
 #include "gpu_native_internal.h"
 #include <stdio.h>

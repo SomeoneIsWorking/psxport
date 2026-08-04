@@ -24,7 +24,6 @@
 // taken, while the number of fields owed is always elapsed_time × field_rate.
 #include "core.h"
 #include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
-#include "cfg.h"
 #include <lucent/log.h>
 #include <atomic>
 #include <chrono>

@@ -77,7 +77,7 @@ public:
   //   Also called from MusicCoord::tick() on the dialog-end resume path.
   void toSpuMix(int on);
   // audioTrace(tag): diagnostic — trace the game's CD-volume fade state + XA stream lifecycle,
-  //   on change only (PSXPORT_XA_DBG).
+  //   on change only (`PSXPORT_DEBUG=cd_override`).
   void audioTrace(const char* tag);
   // hleInit(): native HLE CdInit — leave RAM in the state FUN_800898a0's SUCCESS path leaves it
   //   (CD-event callback table installed); no controller handshake, no busy-wait.

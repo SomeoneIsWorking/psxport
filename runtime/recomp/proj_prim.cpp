@@ -1,6 +1,5 @@
 // class ProjPrim — impl. See proj_prim.h for the design.
 #include "proj_prim.h"
-#include "cfg.h"
 #include <lucent/log.h>
 #include <stdio.h>
 

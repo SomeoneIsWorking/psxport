@@ -105,12 +105,12 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
   ${PSXPORT_ROOT}/runtime/recomp/mdec_beetle.c
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
-  ${PSXPORT_ROOT}/runtime/recomp/spu_beetle.c
-  ${PSXPORT_ROOT}/runtime/recomp/disc.c
+  ${PSXPORT_ROOT}/runtime/recomp/spu_beetle.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/disc.cpp
   ${PSXPORT_ROOT}/runtime/recomp/disc_provision.cpp
   ${PSXPORT_ROOT}/runtime/recomp/cd_override.cpp
-  ${PSXPORT_ROOT}/runtime/recomp/cdc_native.c
-  ${PSXPORT_ROOT}/runtime/recomp/xa_stream.c
+  ${PSXPORT_ROOT}/runtime/recomp/cdc_native.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/xa_stream.cpp
   ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
@@ -129,7 +129,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/repl.cpp
   ${PSXPORT_ROOT}/runtime/recomp/dbg_server.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_stub.cpp
-  ${PSXPORT_ROOT}/runtime/recomp/watchdog.c
+  ${PSXPORT_ROOT}/runtime/recomp/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/recomp/dualcore.cpp
   ${PSXPORT_ROOT}/runtime/recomp/sbs.cpp
   ${PSXPORT_ROOT}/runtime/recomp/sbs_present_sdl.cpp

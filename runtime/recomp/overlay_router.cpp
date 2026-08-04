@@ -16,7 +16,6 @@
 #include "core.h"
 #include "game.h"              // PcScheduler::resident_ov (per-core resident-overlay-by-slot map)
 #include "recomp_iface.h"      // seam: psxport_recomp() -> main_dispatch / rec_func_index / overlay table
-#include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
 #include "override_registry.h" // overrides::dispatch — native engine/game override interception
 #include <lucent/log.h>
 #include <stdlib.h>            // abort() — the overlapping-placement fail-fast
@@ -43,24 +42,23 @@ void overlay_note_load(Core* c, uint32_t dest) {
   int s = slot_index(c, dest);
   if (s < 0) return;
   const unsigned char* ram = c->ram + (dest & 0x1FFFFFFF);
-  int dbg = cfg_dbg("ovload");
   Sbs*     sbs = c->game->sbs;
-  int      cid = (dbg && sbs) ? sbs->coreId(c) : -1;
-  uint32_t fr  = (dbg && sbs) ? sbs->frame()   :  0;
+  int      cid = sbs ? sbs->coreId(c) : -1;
+  uint32_t fr  = sbs ? sbs->frame()   :  0;
   const RecompRegistry* R = psxport_recomp();
   for (int i = 0; i < R->overlay_count; i++) {
     const RecOverlay* o = &R->overlays[i];
     if ((o->base & 0x1FFFFFFF) != (dest & 0x1FFFFFFF)) continue;
     if (memcmp(o->sig, ram, o->siglen) == 0) {
       c->game->pcSched.resident_ov[s] = o;
-      if (dbg) cfg_logf("ovload", "core %c slot %d <- %s (frame %u)",
-                        cid < 0 ? '?' : cid ? 'B' : 'A', s, o->name, fr);
+      lucent::debug("ovload", "core {} slot {} <- {} (frame {})",
+                    cid < 0 ? '?' : cid ? 'B' : 'A', s, o->name ? o->name : "(null)", fr);
       return;
     }
   }
   c->game->pcSched.resident_ov[s] = 0;   // unknown content in this slot -> fall back to signature scan
-  if (dbg) cfg_logf("ovload", "core %c slot %d <- (none/unmatched, dest=0x%08X, frame %u)",
-                    cid < 0 ? '?' : cid ? 'B' : 'A', s, dest, fr);
+  lucent::debug("ovload", "core {} slot {} <- (none/unmatched, dest=0x{:08X}, frame {})",
+                cid < 0 ? '?' : cid ? 'B' : 'A', s, dest, fr);
 }
 
 // Which overlay currently occupies `base`? The overlays overlap, so we identify the resident one by
@@ -239,11 +237,11 @@ void interp_run(Core* c, uint32_t addr);   // interp.cpp — pure-interpreter en
 // The histogram lives on Core (c->idiag.recdep); the atexit hook needs a static Core* because
 // atexit handlers take no context — documented signal/atexit exception, set once on first use.
 static Core* s_recdepCore = nullptr;
-static bool recdep_enabled() { return cfg_dbg("recdep") || cfg_dbg("recdep-all"); }
-// The dump must be EMITTED on a channel that is actually on — cfg_logf drops a line whose channel is
-// off, so hard-coding "recdep" here would have left `recdep-all` alone collecting a histogram it then
+static bool recdep_enabled() { return lucent::channel_on("recdep") || lucent::channel_on("recdep-all"); }
+// The dump must be EMITTED on a channel that is actually on — lucent::debug drops a line whose channel
+// is off, so hard-coding "recdep" here would have left `recdep-all` alone collecting a histogram it then
 // silently discarded at exit. Same defect as the arming one, one layer down.
-static const char* recdep_chan() { return cfg_dbg("recdep") ? "recdep" : "recdep-all"; }
+static const char* recdep_chan() { return lucent::channel_on("recdep") ? "recdep" : "recdep-all"; }
 extern "C" void recdep_dump() {
   if (!recdep_enabled() || !s_recdepCore) return;
   std::vector<std::pair<uint64_t,uint32_t>> v;
@@ -251,7 +249,7 @@ extern "C" void recdep_dump() {
   std::sort(v.rbegin(), v.rend());
   // PSXPORT_DEBUG=recdep-all dumps the FULL histogram instead of the top-40 — needed to see rare
   // (low-call-count) dispatch targets in a specific address band that the top-40 truncation hides.
-  size_t cap = cfg_dbg("recdep-all") ? v.size() : 40;
+  size_t cap = lucent::channel_on("recdep-all") ? v.size() : 40;
   const char* chan = recdep_chan();
   // ANNOTATE WHAT IS ALREADY OWNED. This counter sits AFTER overrides::dispatch (so registry-owned
   // addresses never reach it) but BEFORE main_dispatch -> func_X consults g_<mod>_override[], which
@@ -261,11 +259,11 @@ extern "C" void recdep_dump() {
   // (gpuTimeoutArm) sat at the TOP of this histogram at 33,152 calls while PlatformHle had owned it
   // all along, and porting it would have been a double-install. Say so on the line instead.
   PlatformHle* hle = s_recdepCore->game ? &s_recdepCore->game->platform_hle : nullptr;
-  cfg_logf(chan, "top substrate dispatch targets (addr: calls), %zu unique:", v.size());
+  lucent::debug(chan, "top substrate dispatch targets (addr: calls), {} unique:", v.size());
   for (size_t i = 0; i < v.size() && i < cap; i++) {
     const bool owned = hle && hle->lookup(v[i].second) != nullptr;
-    cfg_logf(chan, "  0x%08X : %llu%s", v[i].second, (unsigned long long)v[i].first,
-             owned ? "   <-- ALREADY OWNED by PlatformHle (not a porting target)" : "");
+    lucent::debug(chan, "  0x{:08X} : {}{}", v[i].second, v[i].first,
+                  owned ? "   <-- ALREADY OWNED by PlatformHle (not a porting target)" : "");
   }
 }
 void rec_dispatch(Core* c, uint32_t addr) {
@@ -276,11 +274,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // TEMP PROBE (Job 2 investigation, docs/findings/animation.md): r29-at-entry for Animation::attach
   // on both SBS cores, to determine whether the isDeadStackScratch residual is caused by an upstream
   // native caller failing to descend r29 like the substrate (vs. attach's own frame needing a mirror).
-  if ((addr & 0x1FFFFFFFu) == 0x00077C40u && cfg_dbg("animstack")) {
+  if ((addr & 0x1FFFFFFFu) == 0x00077C40u) {
     Sbs* sbs = c->game ? c->game->sbs : nullptr;
     int cid = sbs ? sbs->coreId(c) : -1;
-    cfg_logf("animstack", "f%u core=%c r29=%08X ra=%08X a0=%08X",
-             sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), c->r[29], c->r[31], c->r[4]);
+    lucent::debug("animstack", "f{} core={} r29={:08X} ra={:08X} a0={:08X}",
+                  sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), c->r[29], c->r[31], c->r[4]);
   }
   // Intercepting HERE (not only at the g_<mod>_override[] wrapper) makes an override fire even when
   // its overlay image is not resident in guest RAM — the gen bodies are always linked. dispatch()
@@ -317,7 +315,7 @@ void rec_dispatch(Core* c, uint32_t addr) {
     // Origin-revealing line: caller ra + full a0/a1/a2 (raw + as-signed-int16 for LUT lookups where
     // small negative args are meaningful). Frame number when sbs is available.
     uint32_t frame = sbs ? sbs->frame() : 0;
-    cfg_logi("dispwatch", "f%u core=%c addr=%08X ra=%08X a0=%08X (s16=%d) a1=%08X a2=%08X node.s0=%u.n3=%u stage=%08X", frame, cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, c->r[31], a0, (int)(int16_t)a0, a1, a2, s0, n3, c->mem_r32(0x801fe00c));
+    lucent::info("dispwatch", "f{} core={} addr={:08X} ra={:08X} a0={:08X} (s16={}) a1={:08X} a2={:08X} node.s0={}.n3={} stage={:08X}", frame, cid < 0 ? '?' : (cid ? 'B' : 'A'), addr, c->r[31], a0, (int)(int16_t)a0, a1, a2, s0, n3, c->mem_r32(0x801fe00c));
     // Also dump the guest stack so the CALLER CHAIN — not just the immediate ra — is visible. Cheap
     // when the hit is rare (dispwatch is targeted) and doing it by hand each time is what led to the
     // "no call stack" workflow gap (docs/known-bugs.md GAP-1). Pipe stderr through tools/symres.py to
@@ -327,9 +325,11 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // `debug otattr` — OT/GTE submission-attribution shadow stack (docs/config.md, docs/gfx-debug.md):
   // push the guest fn addr around the two real dispatch-body calls below (main_dispatch / resident-
   // overlay disp), pop on return. Diagnostic only — zero behavior change, no guest-memory writes.
-  // cfg_dbg() is a cheap linear scan over the (usually empty) enabled-channel set, same idiom as the
-  // `recdep`/`ovhit` checks above in this same hot function — a single predicted-false check when off.
-  const bool otattr_on = cfg_dbg("otattr");
+  // This gates real NON-LOGGING work (the shadow-stack push/pop), in the hottest function in the
+  // substrate, so it is an interned lucent::Channel: one relaxed load, one compare, one branch when
+  // off — not a name hash under a mutex.
+  static const lucent::Channel otattr_ch{"otattr"};
+  const bool otattr_on = otattr_ch.enabled();
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry* R = psxport_recomp();
   if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) {
@@ -362,19 +362,19 @@ void rec_dispatch(Core* c, uint32_t addr) {
       // overlay slot but NO resident overlay signature matches -> fail fast. Dump what IS resident so a
       // miss-loop can see whether the slot holds an unexpected overlay or a relocated/clobbered image.
       const unsigned char* ram = c->ram + (o->base & 0x1FFFFFFF);
-      cfg_loge("overlay-router", "addr 0x%08X in slot 0x%08X but NO resident overlay matches.", addr, o->base);
-      CfgLine ln; cfg_line_reset(&ln);
-      cfg_line_addf(&ln, "  resident[0..16] =");
-      for (int k = 0; k < 16; k++) cfg_line_addf(&ln, " %02X", ram[k]);
-      cfg_line_flush(&ln, "overlay-router");
+      lucent::error("overlay-router", "addr 0x{:08X} in slot 0x{:08X} but NO resident overlay matches.", addr, o->base);
+      lucent::Line ln;
+      ln.add("  resident[0..16] =");
+      for (int k = 0; k < 16; k++) ln.add(" {:02X}", ram[k]);
+      ln.flush(lucent::Level::Info, "overlay-router");
       for (int j = 0; j < R->overlay_count; j++) {
         const RecOverlay* q = &R->overlays[j];
         if (q->base != o->base) continue;
         int nmatch = 0; for (unsigned k = 0; k < q->siglen && k < 16; k++) nmatch += (q->sig[k] == ram[k]);
-        cfg_line_addf(&ln, "  cand %-6s sig[0..16] =", q->name);
-        for (unsigned k = 0; k < 16 && k < q->siglen; k++) cfg_line_addf(&ln, " %02X", q->sig[k]);
-        cfg_line_addf(&ln, "   (%d/16 match)", nmatch);
-        cfg_line_flush(&ln, "overlay-router");
+        ln.add("  cand {:<6} sig[0..16] =", q->name ? q->name : "(null)");
+        for (unsigned k = 0; k < 16 && k < q->siglen; k++) ln.add(" {:02X}", q->sig[k]);
+        ln.add("   ({}/16 match)", nmatch);
+        ln.flush(lucent::Level::Info, "overlay-router");
       }
       break;   // fail fast below
     }
