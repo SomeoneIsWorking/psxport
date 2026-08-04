@@ -27,7 +27,10 @@ foreach(test_src IN LISTS PSXPORT_TEST_SRCS)
   # C++17 matches the framework library (cmake/psxport.cmake), so tests compile the framework headers
   # exactly as libpsxport.a was compiled.
   set_target_properties(${test_name} PROPERTIES
-    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+    # C++20, matching the library. 17 was a trap: the house rule is that diagnostics go through
+    # lucent, and <lucent/log.h> needs std::format_string — so the first test of any logging unit
+    # would have failed to COMPILE, in a suite whose whole job is to be the thing you trust.
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON
     LINKER_LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
   target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -109,6 +109,13 @@ struct RqItem {
 // e.g. a stuck render walk re-submitting forever — is a real bug, not a drop-and-continue).
 #define RQ_MAX 65536
 
+// CONTEST — are two faces of ONE object a pair whose relative order the depth buffer cannot be
+// trusted with? Symmetric in A and B. Two distinct rules (same OT bucket + exactly coincident, or
+// differing keys with the farther-keyed face interpolating nearer somewhere both cover) — see the
+// definition in render_queue.cpp. Exposed so the test suite can assert resolveKeyOrderFaces against
+// a brute-force existence oracle built from this same predicate.
+bool rq_faces_in_contest(const RqItem& A, const RqItem& B);
+
 // Per-instance (on Game) so two cores keep independent queues; pure host render data (never guest RAM),
 // so it does not affect a Core::ram lockstep diff.
 struct RenderQueue {
@@ -166,6 +173,17 @@ struct RenderQueue {
   // depth would CONTRADICT the game's own sort-key order and snaps those faces' test depth to their
   // key's shared ord. Zero bias, zero constants: every value is the game's own computation.
   void resolveKeyOrder(Core* core);
+
+  // The algorithm behind resolveKeyOrder, with no Core dependency — `frame` only labels diagnostics.
+  // Split out so the rule can be tested on its inputs alone (tests/test_render_queue_keyorder.cpp):
+  // build a queue, push the faces, call this, inspect the snap decisions.
+  void resolveKeyOrderFaces(uint32_t frame);
+
+  // Pair tests performed by the last resolveKeyOrderFaces call. The rule asks an EXISTENCE question
+  // per face ("is this face in contest with any other face of its object"), so this must scale with
+  // the number of keyed faces, NOT with their square — an exhaustive pairwise scan is what wedged
+  // the Tomba!2 frame loop at gpu f1822 (596,134,804 tests in one frame). Gated on by the test suite.
+  uint64_t keyOrderPairTests = 0;
 
   // finalize — turn a fully-submitted queue into a DRAWABLE one: resolve the game's authored face
   // order, then sort. THE one place that answers "what does a finished queue look like", so a real

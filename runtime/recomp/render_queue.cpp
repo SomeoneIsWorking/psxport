@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <vector>
+#include <lucent/log.h>
 #include <cmath>
 #include <stdio.h>
 #include <stdlib.h>
@@ -641,17 +642,27 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
 // than the reverted rank ramp, which re-ordered every face of every object by view-independent storage
 // order (measured net-negative: 95/6 in the barrel but 173/311 of unintended winner flips elsewhere).
 
+// The vertex position the RASTERIZER consumes: sub-pixel float XY when the producer supplied it
+// (drawWorldQuad's vertex smoothing), the rounded integer XY otherwise. Every geometric test below
+// must agree with the rasterizer on this or it is reasoning about a different polygon.
+static inline float rq_vx(const RqItem& it, int k) { return it.has_xyf ? it.xsf[k] : (float)it.xs[k]; }
+static inline float rq_vy(const RqItem& it, int k) { return it.has_xyf ? it.ysf[k] : (float)it.ys[k]; }
+
+// A real guest entity-node pointer always lies inside the 2 MB main-RAM window; the reserved
+// dbg_node sentinels (kTerrainDbgNode / kSceneTableDbgNode / kBackdropDbgNode, render_queue.h) sit
+// far above it, which is what lets the gather below take "is this a real object" as an address test.
+static constexpr uint32_t kGuestRamBase = 0x80000000u;
+static constexpr uint32_t kGuestRamEnd  = 0x80200000u;
+
 // Interpolated ord of item `it` at screen point (x,y), using the same triangle split + barycentric the
 // rasterizer applies (tri 0 = verts 0,1,2; tri 1 = verts 1,2,3). Returns false when outside both tris.
 static bool rq_ord_at(const RqItem* it, float x, float y, float* out) {
   int nv = it->nv ? it->nv : 4;
-  const float* fx = it->has_xyf ? it->xsf : nullptr;
-  const float* fy = it->has_xyf ? it->ysf : nullptr;
   for (int t = 0; t < (nv == 4 ? 2 : 1); t++) {
     int i0 = t, i1 = t + 1, i2 = t + 2;
-    float x0 = fx ? fx[i0] : (float)it->xs[i0], y0 = fy ? fy[i0] : (float)it->ys[i0];
-    float x1 = fx ? fx[i1] : (float)it->xs[i1], y1 = fy ? fy[i1] : (float)it->ys[i1];
-    float x2 = fx ? fx[i2] : (float)it->xs[i2], y2 = fy ? fy[i2] : (float)it->ys[i2];
+    float x0 = rq_vx(*it, i0), y0 = rq_vy(*it, i0);
+    float x1 = rq_vx(*it, i1), y1 = rq_vy(*it, i1);
+    float x2 = rq_vx(*it, i2), y2 = rq_vy(*it, i2);
     float den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
     if (den == 0.f) continue;
     float l0 = ((y1 - y2) * (x - x2) + (x2 - x1) * (y - y2)) / den;
@@ -673,119 +684,181 @@ static bool rq_ord_at(const RqItem* it, float x, float y, float* out) {
 static bool rq_faces_coincident(const RqItem& A, const RqItem& B) {
   const int nv = A.nv ? A.nv : 4;
   if ((B.nv ? B.nv : 4) != nv) return false;
-  auto vx = [](const RqItem& P, int i) { return P.has_xyf ? P.xsf[i] : (float)P.xs[i]; };
-  auto vy = [](const RqItem& P, int i) { return P.has_xyf ? P.ysf[i] : (float)P.ys[i]; };
   if (A.has_xyf != B.has_xyf) return false;
   bool used[4] = { false, false, false, false };
   for (int i = 0; i < nv; i++) {
     int m = -1;
     for (int j = 0; j < nv && m < 0; j++)
-      if (!used[j] && vx(A, i) == vx(B, j) && vy(A, i) == vy(B, j) && A.depth[i] == B.depth[j]) m = j;
+      if (!used[j] && rq_vx(A, i) == rq_vx(B, j) && rq_vy(A, i) == rq_vy(B, j) &&
+          A.depth[i] == B.depth[j]) m = j;
     if (m < 0) return false;
     used[m] = true;
   }
   return true;
 }
 
+// The screen bbox + ord range of one face, as the cheap contest rejects consume them. `omin`/`omax`
+// are the face's near/far bounds in the renderer's ord convention (LARGER = NEARER).
+struct RqFaceExtent { float x0, y0, x1, y1, omin, omax; };
+
+static RqFaceExtent rq_face_extent(const RqItem& it) {
+  const int nv = it.nv ? it.nv : 4;
+  RqFaceExtent e;
+  e.x0 = e.x1 = rq_vx(it, 0);
+  e.y0 = e.y1 = rq_vy(it, 0);
+  e.omin = e.omax = it.depth[0];
+  for (int k = 1; k < nv; k++) {
+    const float x = rq_vx(it, k), y = rq_vy(it, k);
+    if (x < e.x0) e.x0 = x;
+    if (x > e.x1) e.x1 = x;
+    if (y < e.y0) e.y0 = y;
+    if (y > e.y1) e.y1 = y;
+    if (it.depth[k] < e.omin) e.omin = it.depth[k];
+    if (it.depth[k] > e.omax) e.omax = it.depth[k];
+  }
+  return e;
+}
+
+// CONTEST — are these two faces of one object a pair the depth buffer cannot be trusted to order?
+// There are exactly TWO ways, and they are different rules with different evidence:
+//
+//   SAME KEY   — the game filed both in the SAME OT bucket, so the key expresses no order at all and
+//                real depth is normally the right answer. The one exception is a pair that is EXACTLY
+//                coincident (a decal quad filed on the wall quad it decorates: same corners, same
+//                depths) but listed with a ROTATED vertex order. The quad triangulation is fixed at
+//                (0,1,2)+(1,2,3), so a rotation splits the two faces on OPPOSITE diagonals; their
+//                interiors then interpolate differently and the earlier face wins the half where its
+//                diagonal runs nearer. Such a pair carries no depth information to preserve.
+//
+//   KEYS DIFFER — the game DECLARED an order (smaller OT index = nearer). They are in contest when
+//                the depth buffer would INVERT that declaration: at some point strictly inside both
+//                polygons, the farther-keyed face interpolates nearer.
+//
+// Both rules are symmetric in A and B, which is what lets the caller treat "is this face in contest
+// with anything" as an existence question and stop at the first witness.
+bool rq_faces_in_contest(const RqItem& A, const RqItem& B) {
+  if (A.sort_key == B.sort_key)                      // SAME OT BUCKET (kanban #29 — hut wall decals)
+    return rq_faces_coincident(A, B);
+
+  // near = the face the game files NEARER (smaller OT index); far = the other.
+  const bool a_is_near = A.sort_key < B.sort_key;
+  const RqItem& near_face = a_is_near ? A : B;
+  const RqItem& far_face  = a_is_near ? B : A;
+  const RqFaceExtent near_ext = rq_face_extent(near_face);
+  const RqFaceExtent far_ext  = rq_face_extent(far_face);
+
+  // Cheap rejects. No screen overlap at all, or the far face can never out-depth the near one (ord:
+  // larger = nearer, so an inversion requires far.omax > near.omin).
+  const float ox0 = near_ext.x0 > far_ext.x0 ? near_ext.x0 : far_ext.x0;
+  const float ox1 = near_ext.x1 < far_ext.x1 ? near_ext.x1 : far_ext.x1;
+  const float oy0 = near_ext.y0 > far_ext.y0 ? near_ext.y0 : far_ext.y0;
+  const float oy1 = near_ext.y1 < far_ext.y1 ? near_ext.y1 : far_ext.y1;
+  if (ox0 >= ox1 || oy0 >= oy1) return false;
+  if (far_ext.omax <= near_ext.omin) return false;
+
+  // Interior contest: sample a grid over the bbox intersection; a point strictly inside BOTH
+  // polygons where the farther-keyed face interpolates nearer = the depth buffer would invert the
+  // game's order there. Grid density: pixel-ish steps, capped — misses only sub-sample slivers
+  // (documented residual), and mesh-adjacent faces (interiors disjoint) never hit.
+  const int kGridSteps = 8;
+  const float sx = (ox1 - ox0) / (kGridSteps + 1), sy = (oy1 - oy0) / (kGridSteps + 1);
+  for (int iy = 1; iy <= kGridSteps; iy++)
+    for (int ix = 1; ix <= kGridSteps; ix++) {
+      const float px = ox0 + sx * ix, py = oy0 + sy * iy;
+      float ord_near, ord_far;
+      if (!rq_ord_at(&near_face, px, py, &ord_near)) continue;
+      if (!rq_ord_at(&far_face,  px, py, &ord_far))  continue;
+      if (ord_far > ord_near) return true;
+    }
+  return false;
+}
+
 void RenderQueue::resolveKeyOrder(Core* core) {
-  (void)core;
+  resolveKeyOrderFaces(core->game->gpu.s_frame);
+}
+
+// Core-free so the rule is testable on its inputs alone (tests/test_render_queue_keyorder.cpp);
+// `frame` is carried purely to label the diagnostics.
+void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
   // Gather this frame's keyed world faces, grouped by object. Real guest nodes only — the reserved
   // sentinels (terrain/scene-table/backdrop) and unscoped prims carry no game sort key anyway.
-  struct KF { int idx; uint32_t node; float bx0, by0, bx1, by1, dmin, dmax; };
-  static thread_local std::vector<KF> kf;   // scratch, reused across frames
-  kf.clear();
+  struct KeyedFace { int idx; uint32_t node; };
+  static thread_local std::vector<KeyedFace> faces;   // scratch, reused across frames
+  faces.clear();
   for (int i = 0; i < n; i++) {
     const RqItem& it = items[i];
     if (it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) continue;
-    if (it.dbg_node < 0x80000000u || it.dbg_node >= 0x80200000u) continue;
-    int nv = it.nv ? it.nv : 4;
-    KF f; f.idx = i; f.node = it.dbg_node;
-    f.bx0 = f.bx1 = it.has_xyf ? it.xsf[0] : (float)it.xs[0];
-    f.by0 = f.by1 = it.has_xyf ? it.ysf[0] : (float)it.ys[0];
-    f.dmin = f.dmax = it.depth[0];
-    for (int k = 1; k < nv; k++) {
-      float x = it.has_xyf ? it.xsf[k] : (float)it.xs[k], y = it.has_xyf ? it.ysf[k] : (float)it.ys[k];
-      if (x < f.bx0) f.bx0 = x; if (x > f.bx1) f.bx1 = x;
-      if (y < f.by0) f.by0 = y; if (y > f.by1) f.by1 = y;
-      if (it.depth[k] < f.dmin) f.dmin = it.depth[k];
-      if (it.depth[k] > f.dmax) f.dmax = it.depth[k];
-    }
-    kf.push_back(f);
+    if (it.dbg_node < kGuestRamBase || it.dbg_node >= kGuestRamEnd) continue;
+    faces.push_back(KeyedFace{ i, it.dbg_node });
   }
-  if (kf.size() < 2) return;
-  std::stable_sort(kf.begin(), kf.end(), [](const KF& a, const KF& b) { return a.node < b.node; });
-  static thread_local std::vector<uint8_t> snap;   // parallel to kf: face must snap to its key_ord
-  snap.assign(kf.size(), 0);
-  for (size_t g0 = 0; g0 < kf.size(); ) {
-    size_t g1 = g0 + 1;
-    while (g1 < kf.size() && kf[g1].node == kf[g0].node) g1++;
-    for (size_t a = g0; a < g1; a++) {
-      for (size_t b = a + 1; b < g1; b++) {
-        const RqItem& A = items[kf[a].idx];
-        const RqItem& B = items[kf[b].idx];
-        if (A.sort_key == B.sort_key) {
-          // SAME OT BUCKET (kanban #29 — the hut-interior wall decals). The key says nothing about which
-          // face is in front: the guest resolves a bucket internally by LINK order, which our submission
-          // order (RqItem::seq, the array order after sortQueue) reproduces, and GREATER_OR_EQUAL already
-          // hands the pixel to the later face wherever the two interpolate equal. Real depth is therefore
-          // the status quo here — EXCEPT for one case the depth buffer cannot get right at all: a face
-          // pair that is EXACTLY COINCIDENT (a decal quad filed on the wall quad it decorates, same four
-          // projected corners, same four depths) but listed with ROTATED vertex order. The quad
-          // triangulation is fixed at (0,1,2)+(1,2,3), so a rotation splits the two faces on OPPOSITE
-          // diagonals; their interiors then interpolate differently and the EARLIER face wins the half
-          // where its diagonal runs nearer. Measured in the hut interior (f1200, node 800FD850): the top
-          // contesting pair is key 408 vs key 408, identical corners, 115 of 541 pixels painted against
-          // submission order. Coincident faces carry no depth information to preserve, so both snap to
-          // their key's shared ord and submission order — the guest's own intra-bucket order — decides
-          // every pixel. Coincidence is tested EXACTLY (identical vertex multiset, position AND depth):
-          // no epsilon, and ordinary geometry can never satisfy it.
-          if (rq_faces_coincident(A, B)) { snap[a] = 1; snap[b] = 1; }
-          continue;
-        }
-        // near = the face the game files NEARER (smaller OT index); far = the other.
-        const KF& nf = A.sort_key < B.sort_key ? kf[a] : kf[b];
-        const KF& ff = A.sort_key < B.sort_key ? kf[b] : kf[a];
-        const RqItem& NI = items[nf.idx];
-        const RqItem& FI = items[ff.idx];
-        // Cheap rejects: no screen overlap, or the far face can never out-depth the near one (ord:
-        // larger = nearer, so contradiction requires far.dmax > near.dmin).
-        float ox0 = nf.bx0 > ff.bx0 ? nf.bx0 : ff.bx0, ox1 = nf.bx1 < ff.bx1 ? nf.bx1 : ff.bx1;
-        float oy0 = nf.by0 > ff.by0 ? nf.by0 : ff.by0, oy1 = nf.by1 < ff.by1 ? nf.by1 : ff.by1;
-        if (ox0 >= ox1 || oy0 >= oy1) continue;
-        if (ff.dmax <= nf.dmin) continue;
-        // Interior contest: sample a grid over the bbox intersection; a point strictly inside BOTH
-        // polygons where the farther-keyed face interpolates nearer = the depth buffer would invert
-        // the game's order there. Grid density: pixel-ish steps, capped — misses only sub-sample
-        // slivers (documented residual), and mesh-adjacent faces (interiors disjoint) never hit.
-        const int GN = 8;
-        float sx = (ox1 - ox0) / (GN + 1), sy = (oy1 - oy0) / (GN + 1);
-        bool contradict = false;
-        for (int iy = 1; iy <= GN && !contradict; iy++) {
-          for (int ix = 1; ix <= GN && !contradict; ix++) {
-            float px = ox0 + sx * ix, py = oy0 + sy * iy, dn, df;
-            if (!rq_ord_at(&NI, px, py, &dn)) continue;
-            if (!rq_ord_at(&FI, px, py, &df)) continue;
-            if (df > dn) contradict = true;
-          }
-        }
-        if (contradict) { snap[a] = 1; snap[b] = 1; }
+  keyOrderPairTests = 0;
+  if (faces.size() < 2) {
+    // A NEGATIVE WITH ITS DENOMINATOR: "nothing snapped" and "there was nothing to snap" are
+    // different answers, and a silent return makes them look identical in a log.
+    lucent::debug("keyord", "f{} resolveKeyOrder: {} keyed faces of {} queued prims — nothing to contest",
+                  frame, faces.size(), n);
+    return;
+  }
+  std::stable_sort(faces.begin(), faces.end(),
+                   [](const KeyedFace& a, const KeyedFace& b) { return a.node < b.node; });
+  static thread_local std::vector<uint8_t> snap;   // parallel to faces: snap this face to its key_ord
+  snap.assign(faces.size(), 0);
+
+  // WITNESS SEARCH, not a pairwise enumeration. The output is one bit per FACE — "is this face in
+  // contest with ANY other face of the same object" — and an existence question is answered by ONE
+  // witness. So a face whose witness is already known is skipped outright, and a face still
+  // undecided stops scanning the moment it finds one.
+  //
+  // This is the whole reason the DEMO attract loop wedged (2026-08-04, gpu f1822): the previous form
+  // enumerated every C(n,2) pair of every group, and on a frame where one guest node emitted 31,308
+  // keyed faces that is 596,134,804 pair tests feeding 496,339,081 interior-grid samples — minutes
+  // of work for one frame, so the watchdog fired inside this function and no frame was ever
+  // presented again. 45,917 of those 45,993 faces were snapped, i.e. essentially every one of those
+  // half-billion tests was re-deciding a face whose answer was already settled.
+  //
+  // The snap SET is unchanged, and that equivalence is the point: `snap[x]` was, and still is,
+  // exactly "there exists a y in x's object with rq_faces_in_contest(x, y)". The pair rule is
+  // symmetric, so a witness found while deciding `a` settles `b` too — which is why setting both
+  // ends here loses nothing. tests/test_render_queue_keyorder.cpp asserts this against a brute-force
+  // oracle on inputs exercising both contest rules AND the negative case.
+  for (size_t group_start = 0; group_start < faces.size(); ) {
+    size_t group_end = group_start + 1;
+    while (group_end < faces.size() && faces[group_end].node == faces[group_start].node) group_end++;
+    for (size_t a = group_start; a < group_end; a++) {
+      if (snap[a]) continue;                        // its witness has already been found
+      for (size_t b = group_start; b < group_end; b++) {
+        if (b == a) continue;
+        keyOrderPairTests++;
+        if (!rq_faces_in_contest(items[faces[a].idx], items[faces[b].idx])) continue;
+        snap[a] = 1;
+        snap[b] = 1;
+        break;                                      // one witness is all the rule needs
       }
     }
-    g0 = g1;
+    group_start = group_end;
   }
-  int nsnap = 0;
-  for (size_t i = 0; i < kf.size(); i++) {
+
+  // Apply the decisions. The per-face detail is accumulated into ONE line rather than logged per
+  // face: on the spike frame that loop runs 45,921 times, and 45,921 individual log calls took long
+  // enough to trip the frame watchdog by themselves — a diagnostic that stops the thing it is
+  // measuring. lucent::Line truncates past its cap, so the summary that follows carries the totals.
+  size_t nsnap = 0;
+  lucent::Line snapped_seqs;
+  for (size_t i = 0; i < faces.size(); i++) {
     if (!snap[i]) continue;
-    RqItem& it = items[kf[i].idx];
+    RqItem& it = items[faces[i].idx];
     for (int k = 0; k < 4; k++) it.depth[k] = it.key_ord;
     nsnap++;
-    if (cfg_dbg("keyord"))
-      cfg_logf("keyord", "f%u snap seq=%u node=%08X key=%d key_ord=%.6f bbox=(%.0f,%.0f)-(%.0f,%.0f)",
-               core->game->gpu.s_frame, it.seq, it.dbg_node, it.sort_key, (double)it.key_ord,
-               (double)kf[i].bx0, (double)kf[i].by0, (double)kf[i].bx1, (double)kf[i].by1);
+    snapped_seqs.add(" {}:{:08X}/{}", it.seq, it.dbg_node, it.sort_key);
   }
-  if (nsnap && cfg_dbg("keyord"))
-    cfg_logf("keyord", "f%u resolveKeyOrder: %d/%zu keyed faces snapped", core->game->gpu.s_frame, nsnap, kf.size());
+  lucent::debug("keyord", "f{} resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims)",
+                frame, nsnap, faces.size(), keyOrderPairTests, n);
+  if (!snapped_seqs.empty()) {
+    lucent::Line detail;
+    detail.add("f{} snapped seq:node/key —", frame);
+    detail.add("{}", snapped_seqs.view());
+    detail.flush_debug("keyord");
+  }
 }
 
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
