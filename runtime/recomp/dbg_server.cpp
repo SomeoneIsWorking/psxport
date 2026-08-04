@@ -162,6 +162,8 @@ static void dbg_exec(FILE* out, const char* line) {
       "  tap B [n]        tap a button for n frames (default 4)\n"
       "  hold <hex>       set the raw active-low pad mask\n"
       "  padrec [save <path> [nframes]]  frames captured so far / cut the LIVE session into a .pad replay\n"
+      "  preseq <N> [dir] dump the next N PRESENTED frames (fps60: real AND interp) as dir/p%04d.ppm\n"
+      "  tp [x y z]       pin the camera at (x,y,z); bare `tp` releases it back to the follow logic\n"
       "  sbs [0|1]        toggle/set Vulkan-vs-Software side-by-side view\n"
       "  pause            freeze the game (window holds last frame)\n"
       "  step [n]         advance exactly n frames then re-freeze (default 1)\n"
@@ -284,6 +286,32 @@ static void dbg_exec(FILE* out, const char* line) {
     fprintf(out, "vkpix (%u,%u x%u):", x, y, n);
     for (unsigned i = 0; i < n; i++) fprintf(out, " %04X", words[i]);
     fprintf(out, "\n");
+  } else if (!strcmp(cmd, "preseq")) {
+    // Arm a PRESENT-sequence dump: the next N PRESENTED frames, which with fps60 on INTERLEAVES the
+    // real and the interpolated frames. That interleave is the only headless view of a TEMPORAL
+    // artefact (interp seam, one-frame lag, judder) — a per-logic-frame `step`+`shot` loop steps
+    // whole logic frames and therefore skips every interpolated frame, so it is blind to that whole
+    // bug class by construction. Was REPL-only, and the REPL blocks the frame loop (see
+    // docs/driving-the-game.md), so no interactive session could reach it. Same call the REPL makes.
+    unsigned n = 0; char dir[200] = "scratch/screenshots/preseq";
+    if (sscanf(line, "%*s %u %199s", &n, dir) >= 1 && n > 0) {
+      extern void gpu_vk_preseq_arm(Core*, int, const char*);
+      gpu_vk_preseq_arm(s_ctx, (int)n, dir);
+      fprintf(out, "preseq armed: next %u presents -> %s/p%%04d.ppm\n", n, dir);
+    } else {
+      fprintf(out, "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)\n");
+    }
+  } else if (!strcmp(cmd, "tp")) {
+    // Camera teleport override / release. Was REPL-only, for the same reason as `preseq`. `tp` with
+    // three coords pins the camera; `tp` alone hands it back to the game's follow logic.
+    int x = 0, y = 0, z = 0;
+    if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) {
+      s_ctx->hooks->replCamTeleport(s_ctx, x, y, z);
+      fprintf(out, "tp camera -> (%d,%d,%d)\n", x, y, z);
+    } else {
+      s_ctx->hooks->replCamTeleportOff(s_ctx);
+      fprintf(out, "tp off (camera follows player)\n");
+    }
   } else if (!strcmp(cmd, "debug")) {
     char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch);
     void cfg_dbg_set(const char*); cfg_dbg_set(ch);
