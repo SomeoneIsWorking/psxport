@@ -19,6 +19,7 @@
 #include "cfg.h"
 #include "overlay_router.h"
 #include "platform_hle.h"   // class PlatformHle — CD-subsystem HLE registrations go through the singleton
+#include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -80,19 +81,19 @@ static void cd_drive_stock_read(Core* c) {
   *static_cast<R3000*>(c) = saved;
   cd.in_stock_read = 0;
   if (n >= kMaxSectors)
-    cfg_loge("cd", "stock read did not terminate after %u sectors — the guest never issued "
-                   "Pause/Stop. Read ABANDONED; treat any data from it as incomplete.", n);
-  else if (cd.verbose || cfg_dbg("cd"))
-    cfg_logi("cd", "stock read complete: %u ready-callback invocation(s)", n);
+    lucent::error("cd", "stock read did not terminate after {} sectors — the guest never issued "
+                        "Pause/Stop. Read ABANDONED; treat any data from it as incomplete.", n);
+  else if (cd.verbose || lucent::channel_on("cd"))
+    lucent::info("cd", "stock read complete: {} ready-callback invocation(s)", n);
 }
 
 static void cd_command(Core* c) {
-  if (cfg_dbg("cdcmd")) {
+  if (lucent::channel_on("cdcmd")) {
     uint32_t cmd = c->r[A0] & 0xFF, param = c->r[A1];
     uint8_t p[4] = {0,0,0,0};
     if (param) for (int i = 0; i < 4; i++) p[i] = (uint8_t)c->mem_r8(param + i);
-    cfg_logf("cdcmd", "cmd=0x%02X param=[%02X %02X %02X %02X] mode=%u ra=0x%08X",
-             cmd, p[0], p[1], p[2], p[3], c->r[7], c->r[31]);
+    lucent::debug("cdcmd", "cmd=0x{:02X} param=[{:02X} {:02X} {:02X} {:02X}] mode={} ra=0x{:08X}",
+                  cmd, p[0], p[1], p[2], p[3], c->r[7], c->r[31]);
   }
   // In-game XA-ADPCM streaming: the game drives cutscene BGM / voice through these controller
   // commands. We don't model the controller (data is read natively elsewhere), so route the
@@ -133,7 +134,7 @@ static void cd_command(Core* c) {
       const int lba = (bcd(mm) * 60 + bcd(ss)) * 75 + bcd(ff) - 150;   // MSF -> LBA (sector 0 == 00:02:00)
       c->game->cd.setloc_lba = lba >= 0 ? lba : -1;
       if (c->game->cd.verbose)
-        cfg_logi("cd", "setloc %02X:%02X:%02X -> LBA %d", mm, ss, ff, c->game->cd.setloc_lba);
+        lucent::info("cd", "setloc {:02X}:{:02X}:{:02X} -> LBA {}", mm, ss, ff, c->game->cd.setloc_lba);
     } break;
     case 0x06: case 0x1B:                                                                 // ReadN / ReadS
       xa_stream_start(&c->game->xa);
@@ -187,11 +188,11 @@ static void cd_sync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 2; }
 // and is unaffected.
 static void cd_cmd_stream(Core* c) {
   uint32_t cmd = c->r[A0] & 0xFF, result = c->r[A2];
-  if (cfg_dbg("cdcmd")) {
+  if (lucent::channel_on("cdcmd")) {
     uint32_t pp = c->r[A1]; uint8_t p[4] = {0,0,0,0};
     if (pp) for (int i = 0; i < 4; i++) p[i] = (uint8_t)c->mem_r8(pp + i);
-    cfg_logf("cdcmd", "[cdstream] cmd=0x%02X param=[%02X %02X %02X %02X] ra=0x%08X",
-             cmd, p[0], p[1], p[2], p[3], c->r[31]);
+    lucent::debug("cdcmd", "[cdstream] cmd=0x{:02X} param=[{:02X} {:02X} {:02X} {:02X}] ra=0x{:08X}",
+                  cmd, p[0], p[1], p[2], p[3], c->r[31]);
   }
   { uint32_t pp = c->r[A1]; uint8_t p0 = pp ? (uint8_t)c->mem_r8(pp) : 0;
     switch (cmd) {
@@ -230,7 +231,7 @@ static void cd_read(Core* c) {
     for (uint32_t j = 0; j < 2048; j++) c->mem_w8(buf + i * 2048u + j, sec[j]);
   }
   if (c->game->cd.verbose)
-    cfg_logi("cd", "read %u blk @ LBA %u -> 0x%08X", blocks, lba, buf);
+    lucent::info("cd", "read {} blk @ LBA {} -> 0x{:08X}", blocks, lba, buf);
   c->r[V0] = 1;  // bool: success
 }
 
@@ -261,8 +262,8 @@ static void cd_getsector_stock(Core* c) {
   const uint32_t dest = c->r[A0], words = c->r[A1];
   Cd& cd = c->game->cd;
   if (cd.setloc_lba < 0) {
-    cfg_loge("cd", "CdGetSector(dest=0x%08X, %u words) with NO Setloc — the drive was never "
-                   "positioned, so there is no sector to serve. Refusing to invent one.", dest, words);
+    lucent::error("cd", "CdGetSector(dest=0x{:08X}, {} words) with NO Setloc — the drive was never "
+                        "positioned, so there is no sector to serve. Refusing to invent one.", dest, words);
     c->r[V0] = 1;
     return;
   }
@@ -276,8 +277,8 @@ static void cd_getsector_stock(Core* c) {
     if (cd.sec_pos >= cd.sec_len) {
       const uint32_t lba = (uint32_t)cd.setloc_lba;
       if (!disc_read_raw(&c->game->disc, lba, cd.sec_raw, sizeof cd.sec_raw)) {
-        cfg_loge("cd", "CdGetSector: LBA %u unreadable — %u of %u bytes delivered, rest NOT written",
-                 lba, done, need);
+        lucent::error("cd", "CdGetSector: LBA {} unreadable — {} of {} bytes delivered, rest NOT written",
+                      lba, done, need);
         c->r[V0] = 1;
         return;
       }
@@ -285,9 +286,8 @@ static void cd_getsector_stock(Core* c) {
       // The first 4 bytes a game pops are the sector HEADER (min:sec:frame in BCD, then mode), and
       // stock libcd reads exactly those to verify the drive landed where it asked. If they disagree
       // with the requested position the read is rejected and retried forever, so print them.
-      if (cfg_dbg("cd"))
-        cfg_logf("cd", "sector LBA %u header %02X:%02X:%02X mode %02X", lba,
-                 cd.sec_raw[12], cd.sec_raw[13], cd.sec_raw[14], cd.sec_raw[15]);
+      lucent::debug("cd", "sector LBA {} header {:02X}:{:02X}:{:02X} mode {:02X}", lba,
+                    cd.sec_raw[12], cd.sec_raw[13], cd.sec_raw[14], cd.sec_raw[15]);
       cd.sec_pos = SYNC_SKIP;
       cd.sec_len = (int)sizeof cd.sec_raw;
       cd.setloc_lba = (int32_t)(lba + 1);   // the head advances, as a sequential read does
@@ -298,9 +298,9 @@ static void cd_getsector_stock(Core* c) {
     cd.sec_pos += (int)n;
     done += n;
   }
-  if (cd.verbose || cfg_dbg("cd"))
-    cfg_logi("cd", "CdGetSector %u words -> 0x%08X (sector LBA %d, cursor %d/%d)", words, dest,
-             cd.sec_lba, cd.sec_pos, cd.sec_len);
+  if (cd.verbose || lucent::channel_on("cd"))
+    lucent::info("cd", "CdGetSector {} words -> 0x{:08X} (sector LBA {}, cursor {}/{})", words, dest,
+                 cd.sec_lba, cd.sec_pos, cd.sec_len);
   c->r[V0] = 0;
 }
 
@@ -320,8 +320,8 @@ static void cd_read_stock(Core* c) {
   const uint32_t sectors = c->r[A0], buf = c->r[A1], mode = c->r[A2];
   Cd& cd = c->game->cd;
   if (cd.setloc_lba < 0) {
-    cfg_loge("cd", "CdRead(%u sectors) with NO Setloc — the drive was never positioned. Refusing.",
-             sectors);
+    lucent::error("cd", "CdRead({} sectors) with NO Setloc — the drive was never positioned. Refusing.",
+                  sectors);
     c->r[V0] = 0;                       // bool: 0 == failure, as the guest routine reports it
     return;
   }
@@ -333,8 +333,8 @@ static void cd_read_stock(Core* c) {
   for (uint32_t i = 0; i < sectors; i++) {
     const uint32_t lba = (uint32_t)cd.setloc_lba + i;
     if (!disc_read_raw(&c->game->disc, lba, raw, sizeof raw)) {
-      cfg_loge("cd", "CdRead: LBA %u unreadable at sector %u/%u — %u sector(s) delivered, the rest "
-                     "NOT written. This read is genuinely incomplete.", lba, i, sectors, i);
+      lucent::error("cd", "CdRead: LBA {} unreadable at sector {}/{} — {} sector(s) delivered, the rest "
+                          "NOT written. This read is genuinely incomplete.", lba, i, sectors, i);
       c->r[V0] = 0;
       return;
     }
@@ -343,9 +343,9 @@ static void cd_read_stock(Core* c) {
   cd.setloc_lba += (int32_t)sectors;    // the head ends where a real sequential read would leave it
   cd.sec_pos = 0; cd.sec_len = 0; cd.sec_lba = -1;   // any per-sector FIFO state is now stale
   cd.stock_reading = 0;                 // this read is finished; no callback loop should run
-  if (cd.verbose || cfg_dbg("cd"))
-    cfg_logi("cd", "CdRead %u sector(s) x %u bytes from LBA %d -> 0x%08X (mode 0x%02X)", sectors,
-             bytes, (int)(cd.setloc_lba - (int32_t)sectors), buf, mode);
+  if (cd.verbose || lucent::channel_on("cd"))
+    lucent::info("cd", "CdRead {} sector(s) x {} bytes from LBA {} -> 0x{:08X} (mode 0x{:02X})", sectors,
+                 bytes, (int)(cd.setloc_lba - (int32_t)sectors), buf, mode);
   c->r[V0] = 1;                         // bool: success
 }
 
@@ -380,7 +380,7 @@ static void cd_searchfile_native(Core* c) {
   uint32_t lba = 0, size = 0;
   if (!disc_find_file(&c->game->disc, name, &lba, &size)) {
     // Not fabricating a hit: a bogus location would send the game reading arbitrary sectors.
-    cfg_loge("cd", "CdSearchFile: '%s' not found on the disc image", name);
+    lucent::error("cd", "CdSearchFile: '{}' not found on the disc image", name);
     c->r[V0] = 0;
     return;
   }
@@ -394,8 +394,8 @@ static void cd_searchfile_native(Core* c) {
   for (unsigned i = 0; i < 16; i++)                      // name[16], NUL-padded
     c->mem_w8(loc + 8 + i, i < n ? (uint8_t)name[i] : 0);
   c->game->cd.setloc_lba = (int32_t)lba;                 // as the guest's own version leaves it
-  if (c->game->cd.verbose || cfg_dbg("cd"))
-    cfg_logi("cd", "CdSearchFile '%s' -> LBA %u, %u bytes", name, lba, size);
+  if (c->game->cd.verbose || lucent::channel_on("cd"))
+    lucent::info("cd", "CdSearchFile '{}' -> LBA {}, {} bytes", name, lba, size);
   c->r[V0] = loc;
 }
 
@@ -414,7 +414,7 @@ static void cd_loadfile(Core* c) {
   // diverges at frame 0 by two bytes at 0x800BE0E0 (native = 0, substrate = the last LBA read).
   if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);
   if (c->game->cd.verbose)
-    cfg_logi("cd", "loadfile %u B @ LBA %u -> 0x%08X ra=0x%08X", size, lba, dest, c->r[31]);
+    lucent::info("cd", "loadfile {} B @ LBA {} -> 0x{:08X} ra=0x{:08X}", size, lba, dest, c->r[31]);
   overlay_note_load(c, dest);   // record the resident overlay now (fresh image matches its signature)
   c->r[V0] = size;
 }
@@ -461,7 +461,7 @@ void Cd::asyncRead() {
   c->mem_w32(0x1f8001f8, dest + done);        // dest advanced, as FUN_8001d7c4 leaves it
   if (nsec) c->mem_w32(c->cfg->lastSectorTracker, lba + nsec - 1);  // last sector read (pos tracker)
   if (verbose)
-    cfg_logi("cd", "async read %u words (%u B) @ LBA %u -> 0x%08X", words, bytes, lba, dest);
+    lucent::info("cd", "async read {} words ({} B) @ LBA {} -> 0x{:08X}", words, bytes, lba, dest);
   overlay_note_load(c, dest);   // an A0* field-area code overlay may load here (MODE slot) — note it
 }
 
@@ -528,7 +528,7 @@ void Cd::audioTrace(const char* tag) {
   int nsong=c->mem_r16(0x800bed80)&0xffff, nact=xa_stream_is_active(&c->game->xa), nlp=xa_stream_is_looping(&c->game->xa);
   int ngate=c->mem_r16(0x801fe0e0)&0xffff;
   if (nt!=t||ncur!=cur||nmas!=mas||n19a!=s19a||n137!=s137||nsong!=song||nact!=act||nlp!=lp||ngate!=gate) {
-    cfg_logi("cd_override", "[xa f%u %-5s] tgt=%d cur=%d mas=%d 19a=%d 137=%d song=%d act=%d loop=%d gate=%d", c->game->timing.logicFrame,tag,nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
+    lucent::info("cd_override", "[xa f{} {:<5}] tgt={} cur={} mas={} 19a={} 137={} song={} act={} loop={} gate={}", c->game->timing.logicFrame,tag ? tag : "(null)",nt,ncur,nmas,n19a,n137,nsong,nact,nlp,ngate);
     t=nt;cur=ncur;mas=nmas;s19a=n19a;s137=n137;song=nsong;act=nact;lp=nlp;gate=ngate;
   }
 }
@@ -538,7 +538,7 @@ static void voice_play(Core* c) {
   uint32_t start = c->r[A1], end = c->r[A2];
   int      loop  = (int)(c->r[7] & 1);              // a3 = flags
   if (cfg_str("PSXPORT_XA_DBG"))
-    cfg_logi("voice_play", "chan=%u [%u..%u] loop=%d ra=%08X", chan, start, end, loop, c->r[31]);
+    lucent::info("voice_play", "chan={} [{}..{}] loop={} ra={:08X}", chan, start, end, loop, c->r[31]);
   if (loop) {                                       // looping clip == ingame/area background music
     c->game->cd.pending_music = 1; c->game->cd.pm_chan = chan; c->game->cd.pm_start = start; c->game->cd.pm_end = end;
     if (c->hooks->cdDialogToneActive(c)) return;   // suppress during a dialog; resumed by MusicCoord::tick
@@ -590,8 +590,8 @@ void Cd::hleInit() {
   c->mem_w32(cfg->cdCallbackTable[1], cfg->cdCallbackFn[1]);   // CD-ready-cb 2
   c->mem_w32(cfg->cdCallbackTable[2], cfg->cdCallbackFn[2]);   // CD event handler
   c->mem_w32(cfg->cdCallbackTable[3], cfg->cdCallbackFn[3]);   // (cleared)
-  if (verbose || cfg_dbg("cd"))
-    cfg_logi("cd", "HLE CdInit: drive ready (no controller, no handshake, no busy-wait)");
+  if (verbose || lucent::channel_on("cd"))
+    lucent::info("cd", "HLE CdInit: drive ready (no controller, no handshake, no busy-wait)");
 }
 
 // Deliver more streamed sectors by invoking the ready callback the guest registered.
@@ -620,7 +620,7 @@ void Cd::pumpStream(Core* c, int sectors) {
 }
 
 void Cd::overridesInit() {
-  if (cfg_dbg("cd")) verbose = 1;
+  if (lucent::channel_on("cd")) verbose = 1;
   // All CD-subsystem HLE handlers register with this Game's PlatformHle table (class in
   // platform_hle.h). Every entry is an I/O primitive in the platform-HLE window (0x8001Cxxx
   // engine CD glue / 0x8008xxxx libcd) — the FAIL-FAST sync model: every CD op is served

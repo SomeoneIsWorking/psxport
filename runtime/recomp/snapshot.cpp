@@ -3,6 +3,7 @@
 #include "core.h"
 #include "cfg.h"
 #include "fs_util.h"
+#include <lucent/log.h>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -48,9 +49,9 @@ void init_once() {
   // because you rarely know in advance that a state is worth capturing.
   signal(SIGUSR1, on_usr1);
   if (!s.at.empty() || s.every)
-    cfg_logi("snap", "scheduled: %zu explicit frame(s), every=%llu, max=%d "
-                     "(also: kill -USR1 %d)",
-             s.at.size(), (unsigned long long)s.every, s.max, (int)getpid());
+    lucent::info("snap", "scheduled: {} explicit frame(s), every={}, max={} "
+                         "(also: kill -USR1 {})",
+                 s.at.size(), (unsigned long long)s.every, s.max, (int)getpid());
 }
 
 }  // namespace
@@ -58,16 +59,16 @@ void init_once() {
 bool snapshot_now(Core* c, const char* why) {
   Sched& s = sched();
   if (s.written >= s.max) {
-    cfg_logw("snap", "cap reached (%d) — NOT writing '%s'. Raise PSXPORT_SNAP_MAX if you meant it; "
-                     "silently skipping would leave you waiting for a file that never arrives.",
-             s.max, why ? why : "?");
+    lucent::warn("snap", "cap reached ({}) — NOT writing '{}'. Raise PSXPORT_SNAP_MAX if you meant it; "
+                         "silently skipping would leave you waiting for a file that never arrives.",
+                 s.max, why ? why : "?");
     return false;
   }
   char path[160], side[192];
   snprintf(path, sizeof path, "scratch/raw/snap_%llu.bin", (unsigned long long)s.frame);
   snprintf(side, sizeof side, "%s.txt", path);
   if (!Fs::writeFile(path, c->ram, 0x200000)) {
-    cfg_loge("snap", "FAILED to write %s — the capture you asked for does not exist", path);
+    lucent::error("snap", "FAILED to write {} — the capture you asked for does not exist", path);
     return false;
   }
   // A directory of anonymous 2 MB dumps is unusable a day later. Say what this one is.
@@ -82,7 +83,7 @@ bool snapshot_now(Core* c, const char* why) {
   meta += line;
   Fs::writeFile(side, meta.data(), meta.size());
   s.written++;
-  cfg_logi("snap", "frame %llu -> %s (%s)", (unsigned long long)s.frame, path, why ? why : "?");
+  lucent::info("snap", "frame {} -> {} ({})", (unsigned long long)s.frame, path, why ? why : "?");
   return true;
 }
 

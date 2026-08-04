@@ -2,6 +2,7 @@
 #include "native_diff.h"
 #include "core.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "game.h"      // Game::gte — the COP2 register file, compared below
 #include <cstdlib>
 #include <cstring>
@@ -40,8 +41,8 @@ void init_once() {
   if (const char* n = cfg_str("PSXPORT_NDIFF")) s.budget = atoi(n);
   if (const char* m = cfg_str("PSXPORT_NDIFF_MAXDIFF")) s.maxdiff = atoi(m);
   if (s.budget > 0)
-    cfg_logi("ndiff", "per-call differential ON: verifying the first %d call(s) of each native site "
-                      "against the recompiled body", s.budget);
+    lucent::info("ndiff", "per-call differential ON: verifying the first {} call(s) of each native site "
+                          "against the recompiled body", s.budget);
 }
 
 // Report the differing bytes, bounded. A wall of diffs is not more informative than the first few
@@ -53,13 +54,13 @@ int report_ram(const char* name, const std::vector<uint8_t>& a, const std::vecto
     if (a[i] == b[i]) continue;
     total++;
     if (shown < cap) {
-      cfg_loge("ndiff", "  %s %s 0x%08X: native=%02X substrate=%02X",
-               name, what, (unsigned)(base + i), a[i], b[i]);
+      lucent::error("ndiff", "  {} {} 0x{:08X}: native={:02X} substrate={:02X}",
+                    name ? name : "(null)", what, (unsigned)(base + i), a[i], b[i]);
       shown++;
     }
   }
   if (total > shown)
-    cfg_loge("ndiff", "  %s %s: %d more differing byte(s) not listed", name, what, total - shown);
+    lucent::error("ndiff", "  {} {}: {} more differing byte(s) not listed", name ? name : "(null)", what, total - shown);
   return total;
 }
 
@@ -122,26 +123,26 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
     "s0","s1","s2","s3","s4","s5","s6","s7","t8","t9","k0","k1","gp","sp","fp","ra"};
   for (int i = 1; i < 32; i++)
     if (natRegs.r[i] != subRegs.r[i]) {
-      cfg_loge("ndiff", "  %s reg %s: native=0x%08X substrate=0x%08X", name, kReg[i],
-               natRegs.r[i], subRegs.r[i]);
+      lucent::error("ndiff", "  {} reg {}: native=0x{:08X} substrate=0x{:08X}", name ? name : "(null)", kReg[i],
+                    natRegs.r[i], subRegs.r[i]);
       diffs++;
     }
   // COP2 data regs are DR = REG[0..31], control regs CR = REG[32..63]; name them that way so a diff
   // reads as "cop2 DR12" rather than an opaque index.
   for (int i = 0; i < 64; i++)
     if (s.natGte.REG[i] != s.subGte.REG[i]) {
-      cfg_loge("ndiff", "  %s cop2 %s%d: native=0x%08X substrate=0x%08X", name,
-               i < 32 ? "DR" : "CR", i < 32 ? i : i - 32, s.natGte.REG[i], s.subGte.REG[i]);
+      lucent::error("ndiff", "  {} cop2 {}{}: native=0x{:08X} substrate=0x{:08X}", name ? name : "(null)",
+                    i < 32 ? "DR" : "CR", i < 32 ? i : i - 32, s.natGte.REG[i], s.subGte.REG[i]);
       diffs++;
     }
   if (s.natGte.FLAGS != s.subGte.FLAGS) {
-    cfg_loge("ndiff", "  %s cop2 FLAGS: native=0x%08X substrate=0x%08X", name,
-             s.natGte.FLAGS, s.subGte.FLAGS);
+    lucent::error("ndiff", "  {} cop2 FLAGS: native=0x{:08X} substrate=0x{:08X}", name ? name : "(null)",
+                  s.natGte.FLAGS, s.subGte.FLAGS);
     diffs++;
   }
   if (natRegs.hi != subRegs.hi || natRegs.lo != subRegs.lo) {
-    cfg_loge("ndiff", "  %s hi/lo: native=%08X/%08X substrate=%08X/%08X", name,
-             natRegs.hi, natRegs.lo, subRegs.hi, subRegs.lo);
+    lucent::error("ndiff", "  {} hi/lo: native={:08X}/{:08X} substrate={:08X}/{:08X}", name ? name : "(null)",
+                  natRegs.hi, natRegs.lo, subRegs.hi, subRegs.lo);
     diffs++;
   }
 
@@ -155,10 +156,10 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
   if (diffs) {
     site.diffs++;
     s.divergences++;
-    cfg_loge("ndiff", "%s call #%d DIVERGES from the recompiled body (%d difference(s))",
-             name, site.calls, diffs);
+    lucent::error("ndiff", "{} call #{} DIVERGES from the recompiled body ({} difference(s))",
+                  name ? name : "(null)", site.calls, diffs);
   } else {
-    cfg_logi("ndiff", "%s call #%d matches the recompiled body exactly", name, site.calls);
+    lucent::info("ndiff", "{} call #{} matches the recompiled body exactly", name ? name : "(null)", site.calls);
   }
   return diffs != 0;
 }

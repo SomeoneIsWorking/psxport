@@ -7,6 +7,7 @@
 #include "core.h"
 #include "game.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "scheduler.h"  // TASKBASE/TASKSTRIDE/CUR_TASK + the substrate stanzas + yield primitive
 #include "c_subsys.h"   // xa_stream_owns_slot2/xa_stream_voice_busy/xa_stream_voice_release
 #include "coro.h"       // native task bodies park on the same Coro fiber the substrate bodies use
@@ -197,8 +198,8 @@ void PcScheduler::runTaskInline(int slot) {
   cur_slot = slot;
   cur_is_coro = 1;
   static_cast<R3000&>(*c) = task_ctx[slot];
-  cfg_logf("sched", "inline task slot %d %s pc=0x%08X sp=0x%08X", slot,
-           fresh ? "start" : "resume", start_pc, c->r[29]);
+  lucent::debug("sched", "inline task slot {} {} pc=0x{:08X} sp=0x{:08X}", slot,
+                fresh ? "start" : "resume", start_pc, c->r[29]);
 
   Coro* co = new Coro();
   coro[slot] = co;
@@ -209,9 +210,9 @@ void PcScheduler::runTaskInline(int slot) {
     co->resume();
     if (co->done() || c->mem_r16(base) == 0) break;   // returned, or self-closed
     if (++pumps >= kInlineTaskPumpLimit) {
-      cfg_loge("sched", "FATAL: inline task 0x%08X (slot %d) still parked after %d resumes — it "
-                        "waits on something only a frame boundary provides; own that leaf "
-                        "synchronously instead of leaving it async.", entry, slot, pumps);
+      lucent::error("sched", "FATAL: inline task 0x{:08X} (slot {}) still parked after {} resumes — it "
+                             "waits on something only a frame boundary provides; own that leaf "
+                             "synchronously instead of leaving it async.", entry, slot, pumps);
       abort();
     }
     c->mem_w16(base + 0x02, 0);                       // collapse the sleep countdown
@@ -272,8 +273,8 @@ void PcScheduler::spawnAndWait(uint32_t fn, uint32_t p2, uint32_t p3, uint32_t f
         if (onFlatTask()) {
           runTaskInline(1);                                // flat task: complete the body now
           if (c->mem_r8(kDoneFlag) == 0) {
-            cfg_loge("sched", "FATAL: spawned task 0x%08X ended without raising the done flag — "
-                              "the wait at FUN_80044BD4 can never complete.", fn);
+            lucent::error("sched", "FATAL: spawned task 0x{:08X} ended without raising the done flag — "
+                                   "the wait at FUN_80044BD4 can never complete.", fn);
             abort();
           }
           break;
@@ -383,9 +384,9 @@ PcScheduler::StanzaResult PcScheduler::runDemoStanza(Core* c, int i, uint32_t ba
   in_stage = 1;
   if (setjmp(yield_jmp) == 0) {
     runDemoBody(c, i, demo_fresh);
-  } else if (cfg_dbg("demo")) {
-    if (!warned_demo_yield++) cfg_logf("demo", "caught a substate yield (async CD not yet "
-                                              "owned native+sync) — frontier");
+  } else {
+    if (!warned_demo_yield++) lucent::debug("demo", "caught a substate yield (async CD not yet "
+                                                   "owned native+sync) — frontier");
   }
   in_stage = 0;
   if (c->mem_r32(base + 0xc) != 0x801062E4u) {                  // s5 -> GAME rewrote entry
@@ -419,7 +420,7 @@ PcScheduler::StanzaResult PcScheduler::runSopAreaLoadStanza(Core* c, int i, uint
   if (setjmp(yield_jmp) == 0) {
     c->hooks->schedStageBody(c, SCHED_SOP_AREALOAD, nullptr);
   } else {
-    cfg_logf("sched", "SOP area-load yielded unexpectedly — a leaf isn't sync yet");
+    lucent::debug("sched", "SOP area-load yielded unexpectedly — a leaf isn't sync yet");
   }
   in_stage = 0;
   c->mem_w16(base, 0);
@@ -459,9 +460,9 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
   if (setjmp(yield_jmp) == 0) {
     if (game_fresh) c->hooks->schedStageBody(c, SCHED_GAME_PROLOGUE, nullptr);
     handled = c->hooks->schedStageBody(c, SCHED_GAME_FRAME, nullptr);
-  } else if (cfg_dbg("sched")) {
-    if (!warned_game_yield++) cfg_logf("sched", "caught a GAME substate yield (a leaf not "
-                                              "yet sync) — frontier");
+  } else {
+    if (!warned_game_yield++) lucent::debug("sched", "caught a GAME substate yield (a leaf not "
+                                                    "yet sync) — frontier");
   }
   in_stage = 0;
   if (c->mem_r32(base + 0xc) != 0x8010637Cu) {                  // area transition rewrote entry
@@ -476,8 +477,8 @@ PcScheduler::StanzaResult PcScheduler::runGameStanza(Core* c, int i, uint32_t ba
     game_native[i] = 0;
     game_coop[i] = 1;
     c->mem_w16(base, 2);
-    cfg_logf("sched", "GAME -> cooperative guest loop (state not yet "
-                                           "owned native; field reachable)");
+    lucent::debug("sched", "GAME -> cooperative guest loop (state not yet "
+                                                "owned native; field reachable)");
     return STANZA_HANDLED;
   }
   task_ctx[i] = static_cast<R3000&>(*c);
@@ -528,8 +529,8 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
   in_stage = 1;
   cur_is_coro = 1;
   static_cast<R3000&>(*c) = task_ctx[i];
-  cfg_logf("sched", "slot %d native-fiber %s st=%u sp=0x%08X", i,
-            fresh ? "start" : "resume", st, task_ctx[i].r[29]);
+  lucent::debug("sched", "slot {} native-fiber {} st={} sp=0x{:08X}", i,
+                fresh ? "start" : "resume", st, task_ctx[i].r[29]);
   co->resume();
   cur_is_coro = 0;
   in_stage = 0;
@@ -582,8 +583,8 @@ PcScheduler::StanzaResult PcScheduler::runStage0FiberStanza(Core* c, int i, uint
   in_stage = 1;
   cur_is_coro = 1;
   static_cast<R3000&>(*c) = task_ctx[i];
-  cfg_logf("sched", "slot %d native-fiber %s st=%u sp=0x%08X", i,
-            fresh ? "start" : "resume", st, task_ctx[i].r[29]);
+  lucent::debug("sched", "slot {} native-fiber {} st={} sp=0x{:08X}", i,
+                fresh ? "start" : "resume", st, task_ctx[i].r[29]);
   co->resume();
   cur_is_coro = 0;
   in_stage = 0;

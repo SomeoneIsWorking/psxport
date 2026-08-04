@@ -37,6 +37,7 @@
 #include "override_registry.h"   // overrides::coverage — the gate reports its own reach
 #include "game.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "render_substrate.h"    // Render::setPsxRender (per-Core render-path switch)
 #include <cstdio>
 #include <cstring>
@@ -552,15 +553,15 @@ void Sbs::Impl::capBt(Core* c, char* buf, size_t n) {
 // Cross to release the fishing-line hold (fieldRun sm[0x4e]==9) and wait for sm[0x4e] to settle at
 // 1 (the genuine running-field frame) — THIS is when Tomba responds to pad input.
 bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
-  if ((f % 400u) == 0) cfg_logi("sbs-nav", "%s f%u phase=%d stage=%08X cut=%u", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
+  if ((f % 400u) == 0) lucent::info("sbs-nav", "{} f{} phase={} stage={:08X} cut={}", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
   switch (nv.phase) {
     case REACH_GAME:
-      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { cfg_logi("sbs", "%s GAME @f%u", tag, f); nv.phase = AWAIT_CUT; }
+      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { lucent::info("sbs", "{} GAME @f{}", tag, f); nv.phase = AWAIT_CUT; }
       else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
-      if (cut) { cfg_logi("sbs", "%s cutscene up @f%u", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
+      if (cut) { lucent::info("sbs", "{} cutscene up @f{}", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
       break;
     case SKIP_CUT: {
       // PSXPORT_SBS_WATCH_CUT=1 — DON'T press Start during the intro cutscene; let it play out
@@ -577,7 +578,7 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
         bool press_ok = !watch_cut && (cut_presses < 0 || nv.postFrame < cut_presses);
         if (press_ok && (f % 40u) == 0) { c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); nv.postFrame++; }
       }
-      else if (++nv.idle >= 60) { cfg_logi("sbs", "%s field-rendering @f%u (still scripted-caught — awaiting real control)", tag, f); nv.phase = AWAIT_CONTROL; nv.idle = 0; nv.postFrame = 0; }
+      else if (++nv.idle >= 60) { lucent::info("sbs", "{} field-rendering @f{} (still scripted-caught — awaiting real control)", tag, f); nv.phase = AWAIT_CONTROL; nv.idle = 0; nv.postFrame = 0; }
       break;
     }
     case AWAIT_CONTROL: {
@@ -593,12 +594,12 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
       if ((f % 20u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       if (s4e == 1) {
         if (++nv.idle >= 30) {
-          cfg_logi("sbs", "%s player-controllable @f%u (s4e settled at 1, s4a=%u, gate=%u)", tag, f, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
+          lucent::info("sbs", "{} player-controllable @f{} (s4e settled at 1, s4a={}, gate={})", tag, f, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
           nv.phase = DONE; nv.idle = 0; return true;
         }
       } else {
         nv.idle = 0;
-        if ((f % 200u) == 0) cfg_logi("sbs-nav", "%s f%u awaiting control: s4e=%u s4a=%u gate=%u", tag, f, s4e, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
+        if ((f % 200u) == 0) lucent::info("sbs-nav", "{} f{} awaiting control: s4e={} s4a={} gate={}", tag, f, s4e, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
       }
       break;
     }
@@ -623,9 +624,9 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
         // PSXPORT_DEBUG=combatnav — periodic progress print (Tomba G-block position + pad drive
         // state), the tool used to trace this leg's navigation live (2026-07-10) and to confirm it
         // reaches the ActorMeleeEngage/MeleeProximity encounter zone in future sessions.
-        if (cfg_dbg("combatnav") && (nv.postFrame % 100) == 1) {
+        if ((nv.postFrame % 100) == 1) {
           constexpr uint32_t G_ADDR = 0x800E7E80u;
-          cfg_logf("combatnav", "%s pf=%d f=%u pos(Z,Y,X)=(%d,%d,%d) repl_on=%d hold=%04X tap_n=%d",
+          lucent::debug("combatnav", "{} pf={} f={} pos(Z,Y,X)=({},{},{}) repl_on={} hold={:04X} tap_n={}",
                    tag, nv.postFrame, f,
                    (int16_t)c->mem_r16(G_ADDR+46), (int16_t)c->mem_r16(G_ADDR+50), (int16_t)c->mem_r16(G_ADDR+54),
                    c->game->pad.repl_on, c->game->pad.repl_hold, c->game->pad.repl_tap_n);
@@ -725,8 +726,8 @@ void Sbs::Impl::takePreStepSnap() {
   mPreSnapValid = true;
 }
 void Sbs::Impl::rewindAndArm(uint32_t addr) {
-  if (!mPreSnapValid) { cfg_logi("sbs", "rewind: no snapshot — divergence surfaced pre-nav."); return; }
-  cfg_logi("sbs", "rewinding one frame to catch the divergent write on 0x%08X on BOTH cores.", addr);
+  if (!mPreSnapValid) { lucent::info("sbs", "rewind: no snapshot — divergence surfaced pre-nav."); return; }
+  lucent::info("sbs", "rewinding one frame to catch the divergent write on 0x{:08X} on BOTH cores.", addr);
   sbs_restore_core(mA->core, mPreRamA, mPreSpadA, mPreRegsA, mPrePcA);
   sbs_restore_core(mB->core, mPreRamB, mPreSpadB, mPreRegsB, mPrePcB);
   sbs_restore_sched(mA->pcSched, mPreSchedA);
@@ -751,7 +752,7 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   mDivFound = true; mDivFrame = mFrame; mDivAddr = addr; mDivEnd = last + 1;
   capBt(&mA->core, mBtA, sizeof mBtA);
   capBt(&mB->core, mBtB, sizeof mBtB);
-  cfg_logi("sbs", "\n*** DIVERGENCE at lockstep frame %u: 0x%08X..0x%08X (mode=%s) ***", mFrame, mDivAddr, mDivEnd, modeName());
+  lucent::info("sbs", "\n*** DIVERGENCE at lockstep frame {}: 0x{:08X}..0x{:08X} (mode={}) ***", mFrame, mDivAddr, mDivEnd, modeName());
   // Print the diverging bytes side-by-side so it's clear WHAT differs, without needing debug server.
   {
     uint32_t n = mDivEnd - mDivAddr;
@@ -761,22 +762,22 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
       mDivBytesA[i] = isSpad(mDivAddr+i) ? mA->core.scratch[(mDivAddr+i)-0x1F800000u] : mA->core.mem_r8(mDivAddr+i);
       mDivBytesB[i] = isSpad(mDivAddr+i) ? mB->core.scratch[(mDivAddr+i)-0x1F800000u] : mB->core.mem_r8(mDivAddr+i);
     }
-    cfg_logi("sbs", "diff bytes (up to 64):");
-    CfgLine ln; cfg_line_reset(&ln);
-    cfg_line_addf(&ln, "  A @0x%08X:", mDivAddr);
-    for (uint32_t i = 0; i < n; i++) cfg_line_addf(&ln, " %02X", mDivBytesA[i]);
-    cfg_line_flush(&ln, "sbs");
-    cfg_line_addf(&ln, "  B @0x%08X:", mDivAddr);
-    for (uint32_t i = 0; i < n; i++) cfg_line_addf(&ln, " %02X", mDivBytesB[i]);
-    cfg_line_flush(&ln, "sbs");
-    cfg_line_addf(&ln, "           ");
-    for (uint32_t i = 0; i < n; i++) cfg_line_addf(&ln, " %s", mDivBytesA[i] != mDivBytesB[i] ? "^^" : "  ");
-    cfg_line_flush(&ln, "sbs");
+    lucent::info("sbs", "diff bytes (up to 64):");
+    lucent::Line ln;
+    ln.add("  A @0x{:08X}:", mDivAddr);
+    for (uint32_t i = 0; i < n; i++) ln.add(" {:02X}", mDivBytesA[i]);
+    ln.flush(lucent::Level::Info, "sbs");
+    ln.add("  B @0x{:08X}:", mDivAddr);
+    for (uint32_t i = 0; i < n; i++) ln.add(" {:02X}", mDivBytesB[i]);
+    ln.flush(lucent::Level::Info, "sbs");
+    ln.add("           ");
+    for (uint32_t i = 0; i < n; i++) ln.add(" {}", mDivBytesA[i] != mDivBytesB[i] ? "^^" : "  ");
+    ln.flush(lucent::Level::Info, "sbs");
   }
   // Print BOTH guest-stack backtraces — captured at the frame boundary AFTER the diverging write, but
   // still pinpoints the region of code that just ran on each core.
-  cfg_logi("sbs", "=== FRAME-BOUNDARY BACKTRACE — core A ===\n%s", mBtA[0] ? mBtA : "(empty)\n");
-  cfg_logi("sbs", "=== FRAME-BOUNDARY BACKTRACE — core B ===\n%s", mBtB[0] ? mBtB : "(empty)\n");
+  lucent::info("sbs", "=== FRAME-BOUNDARY BACKTRACE — core A ===\n{}", mBtA[0] ? mBtA : "(empty)\n");
+  lucent::info("sbs", "=== FRAME-BOUNDARY BACKTRACE — core B ===\n{}", mBtB[0] ? mBtB : "(empty)\n");
   // REWIND-AND-ARM: the diff was detected at the END of frame N. Any writes in frame N have already
   // happened — a wwatch armed NOW would only catch frame N+1 onwards, and if only one core wrote in
   // frame N, that write is lost forever (previously required a manual PREWATCH re-run). Instead:
@@ -793,7 +794,7 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
     // divergent DATA byte to name the real writer. PSXPORT_SBS_LW_ADDR=0xADDR[,0xADDR2,...]
     const char* extra = getenv("PSXPORT_SBS_LW_ADDR");
     if (extra && *extra) {
-      cfg_logi("sbs", "(PSXPORT_SBS_LW_ADDR probes)");
+      lucent::info("sbs", "(PSXPORT_SBS_LW_ADDR probes)");
       for (const char* p = extra; p && *p; ) {
         uint32_t a = (uint32_t)strtoul(p, (char**)&p, 0);
         if (a) { lwReport(a); for (uint32_t d = a + 1; d < a + 6; d++) lwReport(d); }
@@ -813,11 +814,11 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
   }
   if (!mWwArmed && !nativeFiberLive) rewindAndArm(mDivAddr);
   else if (nativeFiberLive) {
-    cfg_logi("sbs", "rewind skipped (fiber live — coro replay is unsound) — last-writer map above is the write-site source.");
-    if (!mHaveDbgsrv) { cfg_logi("sbs", "headless: exiting after last-writer report."); sbs_rl_shutdown(); exit(0); }
+    lucent::info("sbs", "rewind skipped (fiber live — coro replay is unsound) — last-writer map above is the write-site source.");
+    if (!mHaveDbgsrv) { lucent::info("sbs", "headless: exiting after last-writer report."); sbs_rl_shutdown(); exit(0); }
   }
   if (mHaveDbgsrv) {
-    cfg_logi("sbs", "paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.");
+    lucent::info("sbs", "paused. Inspect over the debug server: `sbs diff`, `sbs bt`, `sbs watch`.");
     mA->dbg_server.setPaused(true);
   }
 }
@@ -879,8 +880,8 @@ bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, c
   if (ok) {
     if (site.waiting) {
       uint32_t waited = mFrame - site.firstWaitFrame;
-      cfg_logf("skiprv", "[sbs][rendezvous] f%u '%s' SETTLED after %u frame(s) — 0x%08X now %u (wanted >=%u)",
-               mFrame, label, waited, addr, v, minVal);
+      lucent::debug("skiprv", "[sbs][rendezvous] f{} '{}' SETTLED after {} frame(s) — 0x{:08X} now {} (wanted >={})",
+               mFrame, label ? label : "(null)", waited, addr, v, minVal);
       site.waiting = false;
     }
     return true;
@@ -889,16 +890,16 @@ bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, c
   if (!site.waiting) { site.waiting = true; site.firstWaitFrame = mFrame; }
   uint32_t waited = mFrame - site.firstWaitFrame;
   if (waited > site.maxWaitFrames) site.maxWaitFrames = waited;
-  if (cfg_dbg("skiprv") && (waited % 60) == 0)
-    cfg_logf("skiprv", "[sbs][rendezvous] f%u waiting on '%s': 0x%08X=%u want>=%u (%u frame(s) so far)",
-             mFrame, label, addr, v, minVal, waited);
+  if ((waited % 60) == 0)
+    lucent::debug("skiprv", "[sbs][rendezvous] f{} waiting on '{}': 0x{:08X}={} want>={} ({} frame(s) so far)",
+             mFrame, label ? label : "(null)", addr, v, minVal, waited);
   if (waited >= kRvTimeoutFrames) {
     // Deadlock diagnostic, not a hang (CLAUDE.md fail-fast): the shortcut side has been idling on
     // this milestone for a full minute of frames with no sign the oracle side is ever going to
     // write it — that's either a genuinely broken rendezvous predicate (wrong addr/minVal for this
     // fork) or the oracle side is itself stuck. Either way, printing both sides' relevant state and
     // aborting beats a silent 10-minute-gate hang that just looks like "the harness is slow".
-    cfg_logi("sbs", "\n[rendezvous] *** DEADLOCK f%u: fork '%s' waited %u frames (>= timeout %u) ***\n  addr 0x%08X: A=%u B=%u (want >= %u)\n  A last id=%s", mFrame, label, waited, kRvTimeoutFrames, addr,
+    lucent::info("sbs", "\n[rendezvous] *** DEADLOCK f{}: fork '{}' waited {} frames (>= timeout {}) ***\n  addr 0x{:08X}: A={} B={} (want >= {})\n  A last id={}", mFrame, label ? label : "(null)", waited, kRvTimeoutFrames, addr,
             mA->core.mem_r16(addr), mB->core.mem_r16(addr), minVal,
             coreId(c) == 0 ? "A(skip side)" : "B(oracle side)");
     dumpRendezvousSites(stderr);
@@ -953,7 +954,7 @@ void Sbs::Impl::checkObservables() {
         };
         int64_t d = rd(mA->core) - rd(mB->core);
         if (d != prevDelta[i]) {
-          cfg_logi("sbs-skiptick", "f%u %s A-B delta %lld -> %lld (A=%lld B=%lld)", mFrame, kP[i].name, (long long)prevDelta[i], (long long)d,
+          lucent::info("sbs-skiptick", "f{} {} A-B delta {} -> {} (A={} B={})", mFrame, kP[i].name, (long long)prevDelta[i], (long long)d,
                   (long long)rd(mA->core), (long long)rd(mB->core));
           prevDelta[i] = d;
         }
@@ -983,9 +984,9 @@ void Sbs::Impl::checkObservables() {
   static const bool skip_continue = []{ const char* e = getenv("PSXPORT_SBS_SKIP_CONTINUE");
     return e && *e && e[0] != '0'; }();
   auto report = [this](int idx, const char* label, uint32_t addr, uint8_t va, uint8_t vb) {
-    cfg_logi("sbs-obs", "\n*** OBSERVABLE DIVERGENCE f%u [%s] @0x%08X A=%02X B=%02X ***", mFrame, label, addr, va, vb);
+    lucent::info("sbs-obs", "\n*** OBSERVABLE DIVERGENCE f{} [{}] @0x{:08X} A={:02X} B={:02X} ***", mFrame, label, addr, va, vb);
     mObsDone[idx] = true;
-    if (mHaveDbgsrv) { cfg_logi("sbs-obs", "paused for inspection."); mA->dbg_server.setPaused(true); }
+    if (mHaveDbgsrv) { lucent::info("sbs-obs", "paused for inspection."); mA->dbg_server.setPaused(true); }
     if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
   };
   // A rendezvous-gated fork legitimately holds core A back WHILE the oracle is still mid-load — its
@@ -1036,21 +1037,21 @@ void Sbs::Impl::checkObservables() {
       }
       if (!diff) mObsCnt[idx] = 0;
       else if (++mObsCnt[idx] >= kObsPersist) {
-        cfg_logi("sbs-obs", "\n*** OBSERVABLE DIVERGENCE f%u [SPU RAM / VAB banks] @0x%05X A=%02X B=%02X ***", mFrame, bad, mObsSpuA[bad], mObsSpuB[bad]);
+        lucent::info("sbs-obs", "\n*** OBSERVABLE DIVERGENCE f{} [SPU RAM / VAB banks] @0x{:05X} A={:02X} B={:02X} ***", mFrame, bad, mObsSpuA[bad], mObsSpuB[bad]);
         for (int k = 0; k < 3; k++) {   // a few following diff runs for shape
           while (bad < 524288 && mObsSpuA[bad] == mObsSpuB[bad]) bad++;
           if (bad >= 524288) break;
           uint32_t run = bad; while (run < 524288 && mObsSpuA[run] != mObsSpuB[run] && run - bad < 16) run++;
-          CfgLine ln; cfg_line_reset(&ln);
-          cfg_line_addf(&ln, "  spu 0x%05X..0x%05X A:", bad, run);
-          for (uint32_t o = bad; o < run; o++) cfg_line_addf(&ln, " %02X", mObsSpuA[o]);
-          cfg_line_addf(&ln, "  B:");
-          for (uint32_t o = bad; o < run; o++) cfg_line_addf(&ln, " %02X", mObsSpuB[o]);
-          cfg_line_flush(&ln, "sbs-obs");
+          lucent::Line ln;
+          ln.add("  spu 0x{:05X}..0x{:05X} A:", bad, run);
+          for (uint32_t o = bad; o < run; o++) ln.add(" {:02X}", mObsSpuA[o]);
+          ln.add("  B:");
+          for (uint32_t o = bad; o < run; o++) ln.add(" {:02X}", mObsSpuB[o]);
+          ln.flush(lucent::Level::Info, "sbs-obs");
           bad = run + 1;
         }
         mObsDone[idx] = true;
-        if (mHaveDbgsrv) { cfg_logi("sbs-obs", "paused for inspection."); mA->dbg_server.setPaused(true); }
+        if (mHaveDbgsrv) { lucent::info("sbs-obs", "paused for inspection."); mA->dbg_server.setPaused(true); }
         if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
       }
     }
@@ -1076,8 +1077,8 @@ void Sbs::Impl::compareRegs() {
   add("pc", mA->core.pc, mB->core.pc);
   sig[off] = 0;
   if (strcmp(sig, mRegDiffSig) != 0) {
-    if (off == 0) cfg_logi("sbs-regdiff", "f%u: register files CONVERGED (all equal)", mFrame);
-    else          cfg_logi("sbs-regdiff", "f%u:%s", mFrame, sig);
+    if (off == 0) lucent::info("sbs-regdiff", "f{}: register files CONVERGED (all equal)", mFrame);
+    else          lucent::info("sbs-regdiff", "f{}:{}", mFrame, sig);
     snprintf(mRegDiffSig, sizeof mRegDiffSig, "%s", sig);
   }
 }
@@ -1115,9 +1116,9 @@ void Sbs::Impl::checkDivergence() {
         snprintf(va_hex + j*3, 4, "%02X ", readA(run_start + j));
         snprintf(vb_hex + j*3, 4, "%02X ", readB(run_start + j));
       }
-      cfg_logi("sbs-div", "f%u [%s] 0x%08X..0x%08X (%u B)  A=%s B=%s", mFrame, label, addr, base + run_end, run_end - run_start, va_hex, vb_hex);
+      lucent::info("sbs-div", "f{} [{}] 0x{:08X}..0x{:08X} ({} B)  A={} B={}", mFrame, label, addr, base + run_end, run_end - run_start, va_hex, vb_hex);
       hits++;
-      if (!only_label && hits >= 16) { cfg_logi("sbs-div", "f%u (more suppressed this frame)", mFrame); break; }
+      if (!only_label && hits >= 16) { lucent::info("sbs-div", "f{} (more suppressed this frame)", mFrame); break; }
     }
     return hits;
   };
@@ -1172,9 +1173,9 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   }
   if (nDiff == 0 && nSpad == 0) {
     if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
-      cfg_logi("sbs", "f%u: A/B identical modulo scratch mask (%u ram + %u spad masked) (mode=%s pc_skip=on)", mFrame, nMaskedRam, nMaskedSpad, modeName());
+      lucent::info("sbs", "f{}: A/B identical modulo scratch mask ({} ram + {} spad masked) (mode={} pc_skip=on)", mFrame, nMaskedRam, nMaskedSpad, modeName());
     else
-      cfg_logi("sbs", "f%u: A/B identical (mode=%s)", mFrame, modeName());
+      lucent::info("sbs", "f{}: A/B identical (mode={})", mFrame, modeName());
     return;
   }
   // Pick top-3 pages by count for the compact per-frame report.
@@ -1185,14 +1186,14 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
     else if (c > topCnt[1]) { topCnt[2]=topCnt[1]; topIdx[2]=topIdx[1]; topCnt[1]=c; topIdx[1]=p; }
     else if (c > topCnt[2]) { topCnt[2]=c; topIdx[2]=p; }
   }
-  CfgLine ln; cfg_line_reset(&ln);
-  cfg_line_addf(&ln, "f%u: A/B differ %u RAM bytes [0x%08X..0x%08X] + %u spad (mode=%s) | top pages:",
-                mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
+  lucent::Line ln;
+  ln.add("f{}: A/B differ {} RAM bytes [0x{:08X}..0x{:08X}] + {} spad (mode={}) | top pages:",
+         mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
   for (int k = 0; k < 3 && topCnt[k]; k++)
-    cfg_line_addf(&ln, " 0x%08X:%u", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
+    ln.add(" 0x{:08X}:{}", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
   if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
-    cfg_line_addf(&ln, " | scratch-masked: %u ram + %u spad", nMaskedRam, nMaskedSpad);
-  cfg_line_flush(&ln, "sbs");
+    ln.add(" | scratch-masked: {} ram + {} spad", nMaskedRam, nMaskedSpad);
+  ln.flush(lucent::Level::Info, "sbs");
 }
 
 // Step ONE core's frame for the SBS composite: diff_mode=1 suppresses its OWN per-core present/pace/audio
@@ -1274,7 +1275,7 @@ void Sbs::Impl::checkPaneDiff() {
   mRdiffChecked++;
   if (pct > mRdiffWorstPct) { mRdiffWorstPct = pct; mRdiffWorstFrame = mFrame; }
   if (pct >= mRdiffThreshPct) {
-    cfg_logi("renderdiff", "f%u %.2f%% pixels differ (port vs oracle) bbox x[%d..%d] y[%d..%d] of %dx%d", mFrame, pct, minx, maxx, miny, maxy, W, H);
+    lucent::info("renderdiff", "f{} {:.2f}% pixels differ (port vs oracle) bbox x[{}..{}] y[{}..{}] of {}x{}", mFrame, pct, minx, maxx, miny, maxy, W, H);
     // PSXPORT_SBS_RENDERDIFF_FROM=<frame> — don't spend the 40-dump budget on boot/phase-skew
     // noise: dumps start at <frame> (reports still print from f0). Lets a run target a SCENE.
     static const uint32_t dump_from = []{
@@ -1334,7 +1335,7 @@ void Sbs::Impl::parseKeys() {
   std::vector<char> bufv(bufsz);
   char* buf = bufv.data();
   if (strlen(e) >= bufsz - 1)
-    cfg_logw("sbs", "PSXPORT_SBS_KEYS is %zu bytes — capped at %zu; the tail of the route is DROPPED.",
+    lucent::warn("sbs", "PSXPORT_SBS_KEYS is {} bytes — capped at {}; the tail of the route is DROPPED.",
              strlen(e), bufsz - 1);
   strncpy(buf, e, bufsz - 1); buf[bufsz - 1] = 0;
   for (char* p = strtok(buf, ","); p; p = strtok(0, ",")) {
@@ -1344,7 +1345,7 @@ void Sbs::Impl::parseKeys() {
       if (b) mKeys.push_back({from, to, b});
     }
   }
-  cfg_logi("sbs", "PSXPORT_SBS_KEYS: %zu scripted input ranges", mKeys.size());
+  lucent::info("sbs", "PSXPORT_SBS_KEYS: {} scripted input ranges", mKeys.size());
 }
 
 // Feed the SAME host pad mask to BOTH cores (mirrored input). PSXPORT_SBS_KEYS injects timed input.
@@ -1359,9 +1360,9 @@ void Sbs::Impl::feedInput() {
         if (!mPadReplay.empty() && fread(mPadReplay.data(), 2, mPadReplay.size(), f) != mPadReplay.size())
           mPadReplay.clear();
         fclose(f);
-        cfg_logi("sbs", "PAD_REPLAY: %zu frames <- %s (drives BOTH cores; walks the gate into the field "
-                        "so coverage climbs past the boot-only ~57%%)", mPadReplay.size(), p);
-      } else cfg_loge("sbs", "PAD_REPLAY open FAILED: %s", p);
+        lucent::info("sbs", "PAD_REPLAY: {} frames <- {} (drives BOTH cores; walks the gate into the field "
+                        "so coverage climbs past the boot-only ~57%)", mPadReplay.size(), p);
+      } else lucent::error("sbs", "PAD_REPLAY open FAILED: {}", p);
     }
   }
   // Replay mask if we have one for this frame; MERGE live REPL/keys on top (active-low AND = union of
@@ -1379,7 +1380,7 @@ void Sbs::Impl::feedInput() {
 void Sbs::Impl::dumpPpm(const char* path) {
   int H = mHa > mHb ? mHa : mHb; int W = mWa + mWb;
   if (W < 1 || H < 1) return;
-  FILE* f = fopen(path, "wb"); if (!f) { cfg_loge("sbs", "dump: cannot open %s", path); return; }
+  FILE* f = fopen(path, "wb"); if (!f) { lucent::error("sbs", "dump: cannot open {}", path); return; }
   fprintf(f, "P6\n%d %d\n255\n", W, H);
   for (int y = 0; y < H; y++) {
     for (int x = 0; x < W; x++) {
@@ -1392,7 +1393,7 @@ void Sbs::Impl::dumpPpm(const char* path) {
     }
   }
   fclose(f);
-  cfg_logi("sbs", "dumped side-by-side panes (A %dx%d | B %dx%d) -> %s", mWa, mHa, mWb, mHb, path);
+  lucent::info("sbs", "dumped side-by-side panes (A {}x{} | B {}x{}) -> {}", mWa, mHa, mWb, mHb, path);
 }
 
 // Write-watch callback. Fired mid-frame by whichever core writes the armed address; capture that core's
@@ -1424,7 +1425,7 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     uint32_t obj = c->r[16];
     uint16_t f42 = obj ? c->mem_r16(obj + 0x42) : 0;
     uint8_t  f46 = obj ? c->mem_r8 (obj + 0x46) : 0;
-    cfg_logi("upprobe", "f%u %c write [%08X]=%08X  obj=%08X obj[+42]=%04X obj[+46]=%02X  r[4]=%08X r[2]=%08X r[3]=%08X ra=%08X", mFrame, which_a ? 'B' : 'A', a, v, obj, f42, f46, c->r[4], c->r[2], c->r[3], c->r[31]);
+    lucent::info("upprobe", "f{} {} write [{:08X}]={:08X}  obj={:08X} obj[+42]={:04X} obj[+46]={:02X}  r[4]={:08X} r[2]={:08X} r[3]={:08X} ra={:08X}", mFrame, which_a ? 'B' : 'A', a, v, obj, f42, f46, c->r[4], c->r[2], c->r[3], c->r[31]);
   }
   // ALLOCTRACE: sniff writes to 0x800ED098 (free-slot count) — count per-frame decrements per core.
   // Fires INDEPENDENTLY of mWwArmed so it stays live across the whole run without arming a watch.
@@ -1514,14 +1515,14 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     //      the two cores took different call paths to reach the write — that names the upstream
     //      divergence without another PREWATCH chase.
     // sp = c->r[29] — for the guest-stack backtrace we already dump on real divergence.
-    cfg_logi("sbs-ww", "f%u %c wrote [%08X]=%08X (pc=%08X ra=%08X sp=%08X stage=%08X) [c=%p mA=%p mB=%p]", mFrame, which ? 'B' : 'A', a, v, c->pc, c->r[31], c->r[29], c->mem_r32(0x801fe00c),
+    lucent::info("sbs-ww", "f{} {} wrote [{:08X}]={:08X} (pc={:08X} ra={:08X} sp={:08X} stage={:08X}) [c={} mA={} mB={}]", mFrame, which ? 'B' : 'A', a, v, c->pc, c->r[31], c->r[29], c->mem_r32(0x801fe00c),
             (void*)c, (void*)&mA->core, (void*)&mB->core);
     // t/v/a regs per store: the substrate packet emitters (gen_func_8007FDB0 etc.) keep their
     // prim-walk state in t-regs (t5=r13 prim ptr, t2=r10 pool cursor). Printing them per store lets
     // an offline diff of the A vs B store sequences name the exact prim where the walks diverge.
-    cfg_logi("sbs-ww", "    t: v0=%08X v1=%08X t0=%08X t1=%08X t2=%08X t3=%08X t4=%08X t5=%08X t6=%08X t7=%08X a0=%08X a1=%08X a2=%08X a3=%08X", c->r[2], c->r[3], c->r[8], c->r[9], c->r[10], c->r[11], c->r[12], c->r[13], c->r[14], c->r[15],
+    lucent::info("sbs-ww", "    t: v0={:08X} v1={:08X} t0={:08X} t1={:08X} t2={:08X} t3={:08X} t4={:08X} t5={:08X} t6={:08X} t7={:08X} a0={:08X} a1={:08X} a2={:08X} a3={:08X}", c->r[2], c->r[3], c->r[8], c->r[9], c->r[10], c->r[11], c->r[12], c->r[13], c->r[14], c->r[15],
             c->r[4], c->r[5], c->r[6], c->r[7]);
-    cfg_logi("sbs-ww", "    s: s0=%08X s1=%08X s2=%08X s3=%08X s4=%08X s5=%08X s6=%08X s7=%08X fp=%08X", c->r[16], c->r[17], c->r[18], c->r[19], c->r[20], c->r[21], c->r[22], c->r[23], c->r[30]);
+    lucent::info("sbs-ww", "    s: s0={:08X} s1={:08X} s2={:08X} s3={:08X} s4={:08X} s5={:08X} s6={:08X} s7={:08X} fp={:08X}", c->r[16], c->r[17], c->r[18], c->r[19], c->r[20], c->r[21], c->r[22], c->r[23], c->r[30]);
     // GTE control regs at the store — the packet emitters are pure functions of (prim data, CR
     // rotation+translation, CR projection). When RAM matches but the emit diverges, this is the
     // input that differs. CR0-7 = composed rotation+translation, CR24-30 = OFX/OFY/H/DQA/DQB/ZSF3/ZSF4.
@@ -1531,17 +1532,17 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
       uint32_t cr[8], pj[7];
       for (int k = 0; k < 8; k++) cr[k] = gte_read_ctrl(k);
       for (int k = 0; k < 7; k++) pj[k] = gte_read_ctrl(24 + k);
-      cfg_logi("sbs-ww", "    gte: cr0-7=%08X %08X %08X %08X %08X %08X %08X %08X  cr24-30=%08X %08X %08X %08X %08X %08X %08X", cr[0], cr[1], cr[2], cr[3], cr[4], cr[5], cr[6], cr[7],
+      lucent::info("sbs-ww", "    gte: cr0-7={:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}  cr24-30={:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}", cr[0], cr[1], cr[2], cr[3], cr[4], cr[5], cr[6], cr[7],
               pj[0], pj[1], pj[2], pj[3], pj[4], pj[5], pj[6]);
     }
     // Peek AFTER the actual host write, so we see the byte the store LANDED in. (mem_w8 does wwatch_check
     // BEFORE the write, so we peek RIGHT NOW = pre-store, but the write is imminent one-line below.)
-    cfg_logi("sbs-ww", "    pre-store peek A[%08X]=%u  B[%08X]=%u", a, mA->core.mem_r8(a), a, mB->core.mem_r8(a));
+    lucent::info("sbs-ww", "    pre-store peek A[{:08X}]={}  B[{:08X}]={}", a, mA->core.mem_r8(a), a, mB->core.mem_r8(a));
     // Guest stack backtrace at write time (walks c->r[29] upward looking for plausible ra values).
     // This is often empty when sp is near stack-top (write reached from a leaf with no callers on the
     // guest stack) — in that case the HOST backtrace below is the useful one.
     const char* gbt = which ? mWwBtB : mWwBtA;
-    if (gbt[0]) cfg_logi("sbs-ww", "    guest bt (core %c):\n%s", which ? 'B' : 'A', gbt);
+    if (gbt[0]) lucent::info("sbs-ww", "    guest bt (core {}):\n{}", which ? 'B' : 'A', gbt);
     // Host-side C backtrace — names the actual C function that called mem_w*. This is what pins a
     // NATIVE write vs a SUBSTRATE write (line-105 native_step_frame vs func_XXXX substrate). Even
     // when the guest stack is empty, this is populated (it's the C call stack of the store).
@@ -1549,8 +1550,8 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     int    nbt = which ? mWwHostBtNB : mWwHostBtNA;
     if (nbt > 0) {
       char** syms = backtrace_symbols(hbt, nbt);
-      cfg_logi("sbs-ww", "    host bt (core %c, %d frames):", which ? 'B' : 'A', nbt);
-      for (int j = 0; j < nbt && j < 12; j++) cfg_logi("sbs-ww", "        %s", syms ? syms[j] : "?");
+      lucent::info("sbs-ww", "    host bt (core {}, {} frames):", which ? 'B' : 'A', nbt);
+      for (int j = 0; j < nbt && j < 12; j++) lucent::info("sbs-ww", "        {}", syms ? syms[j] : "?");
       free(syms);
     }
   }
@@ -1891,27 +1892,27 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       unsigned long lo=0, hi=0;
       if (sscanf(e, "%lx,%lx", &lo, &hi) == 2 && hi > lo) {
         mByteTraceOn = 1; mByteTraceLo = (uint32_t)lo; mByteTraceHi = (uint32_t)hi;
-        cfg_logi("sbs", "BYTETRACE on — per-byte value+ra bucketing over 0x%08X..0x%08X (settled-state classifier at exit)", mByteTraceLo, mByteTraceHi);
+        lucent::info("sbs", "BYTETRACE on — per-byte value+ra bucketing over 0x{:08X}..0x{:08X} (settled-state classifier at exit)", mByteTraceLo, mByteTraceHi);
       } else {
-        cfg_logi("sbs", "BYTETRACE: bad range '%s' (want <lo>,<hi>, hex, e.g. 0x800EE0DC,0x800EE10D)", e);
+        lucent::info("sbs", "BYTETRACE: bad range '{}' (want <lo>,<hi>, hex, e.g. 0x800EE0DC,0x800EE10D)", e);
       }
     }
   }
   { const char* e = getenv("PSXPORT_SBS_ALLOCTRACE"); if (e && *e && strcmp(e, "0") != 0) mAllocTraceOn = 1; }
   if (mAllocTraceOn)
-    cfg_logi("sbs", "ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B");
+    lucent::info("sbs", "ALLOCTRACE on — per-frame decrement count of 0x800ED098 logged when A != B");
   { const char* e = getenv("PSXPORT_SBS_FRAMEPROF");
     if (e && *e) {
       unsigned long f = strtoul(e, nullptr, 0);
       mFpFrame = (uint32_t)f;
       mFpArmed = true;
-      cfg_logi("sbs", "FRAMEPROF on — per-(pc,ra) store-count A-vs-B diff at frame %u", mFpFrame);
+      lucent::info("sbs", "FRAMEPROF on — per-(pc,ra) store-count A-vs-B diff at frame {}", mFpFrame);
     }
   }
   { const char* e = getenv("PSXPORT_SBS_REGDIFF");
     if (e && *e && strcmp(e, "0") != 0) {
       mRegDiffOn = true;
-      cfg_logi("sbs", "REGDIFF on — per-frame A-vs-B register-file compare (logs on diff-set change)");
+      lucent::info("sbs", "REGDIFF on — per-frame A-vs-B register-file compare (logs on diff-set change)");
     }
   }
   {
@@ -1936,7 +1937,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         int total = 0, unreached = 0;
         overrides::coverage(&total, &unreached);
         if (total > 0)
-          cfg_logi("sbs", "coverage: %d/%d owned addresses executed this run — %d NEVER reached. "
+          lucent::info("sbs", "coverage: {}/{} owned addresses executed this run — {} NEVER reached. "
                           "A clean compare says NOTHING about those (PSXPORT_DEBUG=ovhit lists them).",
                    total - unreached, total, unreached);
       }
@@ -1994,7 +1995,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   //   the SAME per-Game config as standalone `PSXPORT_ORACLE=1 ./run.sh`, so pane B IS the oracle
   //   picture (render_observer/billboard/painter/wide gates all read game->oracle per core).
   if (fb_b) mB->setOracle(); else mB->mods.forceNeutral();
-  cfg_logi("sbs", "per-core config: A = user mods (aspect=%d fps60=%d), B %s", mA->mods.aspect, mA->mods.fps60,
+  lucent::info("sbs", "per-core config: A = user mods (aspect={} fps60={}), B {}", mA->mods.aspect, mA->mods.fps60,
           fb_b ? "ORACLE (recomp + neutral mods, game->oracle=1)" : "mods=neutral");
   mA->core.storeWatchCb = &Sbs::storeCb;     // write-watch trampoline (fires only once wwatch_arm'd)
   mB->core.storeWatchCb = &Sbs::storeCb;
@@ -2017,11 +2018,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // register-write drift, not just RAM byte drift. Bound by spu_bind on every frame step.
   mA->spu.writeLog = spu_new_log();
   mB->spu.writeLog = spu_new_log();
-  cfg_logi("sbs", "core A pc_faithful (hard-wired): native faithful path, byte-exact strict — B recomp is the oracle");
+  lucent::info("sbs", "core A pc_faithful (hard-wired): native faithful path, byte-exact strict — B recomp is the oracle");
   if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
-  cfg_logi("sbs", "core-map A=%p B=%p (use to attribute [wwatch] lines)", (void*)&mA->core, (void*)&mB->core);
+  lucent::info("sbs", "core-map A={} B={} (use to attribute [wwatch] lines)", (void*)&mA->core, (void*)&mB->core);
 
   // BOOT-SYNC CHECK: both cores just loaded the same MAIN.EXE and ran dc_boot_init. Their RAM +
   // scratchpad should be BYTE-IDENTICAL at this point — anything else means the boot code itself
@@ -2034,20 +2035,20 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     for (uint32_t a = 0; a < 0x200000; a++) {
       if (mA->core.ram[a] != mB->core.ram[a]) {
         if (firstAddr < 0) firstAddr = (int)a;
-        if (nDiff < 8) cfg_logi("sbs", "BOOT-DIFF main 0x%08X: A=%02X B=%02X", 0x80000000u + a, mA->core.ram[a], mB->core.ram[a]);
+        if (nDiff < 8) lucent::info("sbs", "BOOT-DIFF main 0x{:08X}: A={:02X} B={:02X}", 0x80000000u + a, mA->core.ram[a], mB->core.ram[a]);
         nDiff++;
       }
     }
     for (uint32_t i = 0; i < 0x400; i++) {
       if (mA->core.scratch[i] != mB->core.scratch[i]) {
-        if (nSpad < 8) cfg_logi("sbs", "BOOT-DIFF spad 0x%08X: A=%02X B=%02X", 0x1F800000u + i, mA->core.scratch[i], mB->core.scratch[i]);
+        if (nSpad < 8) lucent::info("sbs", "BOOT-DIFF spad 0x{:08X}: A={:02X} B={:02X}", 0x1F800000u + i, mA->core.scratch[i], mB->core.scratch[i]);
         nSpad++;
       }
     }
     if (nDiff || nSpad) {
-      cfg_logi("sbs", "*** BOOT DIVERGENCE: %d RAM bytes, %d spad bytes differ AT BOOT (first RAM addr 0x%08X). Downstream analysis is unreliable until this is fixed. ***", nDiff, nSpad, 0x80000000u + firstAddr);
+      lucent::info("sbs", "*** BOOT DIVERGENCE: {} RAM bytes, {} spad bytes differ AT BOOT (first RAM addr 0x{:08X}). Downstream analysis is unreliable until this is fixed. ***", nDiff, nSpad, 0x80000000u + firstAddr);
     } else {
-      cfg_logi("sbs", "BOOT sync verified: RAM + scratchpad byte-identical at boot start.");
+      lucent::info("sbs", "BOOT sync verified: RAM + scratchpad byte-identical at boot start.");
     }
   }
 
@@ -2076,12 +2077,12 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     mWwAddr = addr | 0x80000000u; mWwArmed = true; mWwPersist = true; mWwHit = 0; mWwBtA[0] = mWwBtB[0] = 0;
     mA->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
     mB->core.wwatch_arm(addr & ~3u, (addr & ~3u) + 4);
-    cfg_logi("sbs", "PREWATCH armed at boot on 0x%08X — pauses at end of the first frame with a DIVERGENT store.", addr);
+    lucent::info("sbs", "PREWATCH armed at boot on 0x{:08X} — pauses at end of the first frame with a DIVERGENT store.", addr);
   }
 
   sbs_rl_init();
 
-  cfg_logi("sbs", "LIVE side-by-side: mode=%s  A=%s  B=%s  diff region 0x%08X..0x%08X + scratchpad", modeName(),
+  lucent::info("sbs", "LIVE side-by-side: mode={}  A={}  B={}  diff region 0x{:08X}..0x{:08X} + scratchpad", modeName(),
           mMode == M_RENDER ? "native-gp/native-render" : mMode == M_GAMEPLAY ? "native-gp/PSX-render" : "FULL native",
           mMode == M_RENDER ? "native-gp/PSX-render"    : mMode == M_GAMEPLAY ? "PSX-gp/PSX-render"   :
           mMode == M_ORACLE ? "PURE-ORACLE(interp+softGPU)" : "FULL PSX",
@@ -2096,19 +2097,19 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   const bool  sbsAutonav = sbs_autonav_env && *sbs_autonav_env && strcmp(sbs_autonav_env, "0") != 0;
   const char* sbsDumpPath = getenv("PSXPORT_SBS_DUMP");
   bool dumped = false;
-  cfg_logi("sbs", "%s — then drive both panes with the window keyboard (WASD/arrows, K=Cross, Enter=Start, …) or the debug server; inspect via `sbs` cmds.", sbsAutonav ? "AUTO-NAV to the field" : "LOCKSTEP from boot (no auto-nav)");
+  lucent::info("sbs", "{} — then drive both panes with the window keyboard (WASD/arrows, K=Cross, Enter=Start, …) or the debug server; inspect via `sbs` cmds.", sbsAutonav ? "AUTO-NAV to the field" : "LOCKSTEP from boot (no auto-nav)");
 
   for (;;) {
-    if (sbs_rl_should_close()) { cfg_logi("sbs", "window closed — exiting."); break; }
+    if (sbs_rl_should_close()) { lucent::info("sbs", "window closed — exiting."); break; }
     Core* sel = mSel ? &mB->core : &mA->core;
     DbgServer& dbg = mA->dbg_server;   // one endpoint per process; mA owns it
     // TRACE: pre-service state
     const bool ww_trace_ext = mWwArmed && mWwAddr == 0x800BF81Eu && mFrame >= 180 && mFrame <= 200;
     if (ww_trace_ext)
-      cfg_logi("sbs-trace", "f%u pre-service     A[0x800BF81E]=%u  B[0x800BF81E]=%u", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
+      lucent::info("sbs-trace", "f{} pre-service     A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     dbg.service(sel);
     if (ww_trace_ext)
-      cfg_logi("sbs-trace", "f%u post-service    A[0x800BF81E]=%u  B[0x800BF81E]=%u", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
+      lucent::info("sbs-trace", "f{} post-service    A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     bool nav_done = !sbsAutonav || (mNavA.phase == DONE && mNavB.phase == DONE);
     // PSXPORT_SBS_POSTDRIVE=1 / PSXPORT_SBS_AUTONAV=combat: keep calling navStep() past nav_done too —
     // its DONE case is where the post-control walk/jump SCRIPT lives (Nav::DONE below). Without this,
@@ -2120,7 +2121,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (!nav_done || sbsPostdriveOn() || sbsCombatOn()) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
     else feedInput();
     if (ww_trace_ext)
-      cfg_logi("sbs-trace", "f%u post-nav/input  A[0x800BF81E]=%u  B[0x800BF81E]=%u", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
+      lucent::info("sbs-trace", "f{} post-nav/input  A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     if (dbg.isPaused() && !dbg.stepPending()) {
       presentPanes();
       usleep(15000);
@@ -2152,14 +2153,14 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       uint32_t bSig = bE ^ (bS_<<1) ^ (b48<<4) ^ (b4a<<8) ^ (b4c<<12) ^ (b4e<<16) ^ (b50<<20) ^ (bCut<<24) ^ (bI34<<26);
       bool verbose_window = (stagetrace >= 2) && ((mFrame >= 22 && mFrame <= 36) || mFrame <= 12);
       if (verbose_window || aSig != aP || bSig != bP) {
-        cfg_logi("stagetrace", "f%u A entry=%08X st=%u sm48=%u/4a=%u/4c=%u/4e=%u/50=%u cut=%u i34=%u | B entry=%08X st=%u sm48=%u/4a=%u/4c=%u/4e=%u/50=%u cut=%u i34=%u", mFrame, aE, aS_, a48, a4a, a4c, a4e, a50, aCut, aI34,
+        lucent::info("stagetrace", "f{} A entry={:08X} st={} sm48={}/4a={}/4c={}/4e={}/50={} cut={} i34={} | B entry={:08X} st={} sm48={}/4a={}/4c={}/4e={}/50={} cut={} i34={}", mFrame, aE, aS_, a48, a4a, a4c, a4e, a50, aCut, aI34,
                         bE, bS_, b48, b4a, b4c, b4e, b50, bCut, bI34);
         aP = aSig; bP = bSig;
       }
     }
     // ALLOCTRACE: reset per-frame counters and, if A != B this frame, log both.
     if (mAllocTraceOn && (mAllocA != mAllocB || (mAllocA + mAllocB) > 0 && (mAllocCumA != mAllocCumB))) {
-      cfg_logi("alloctrace", "f%u  A: this=%d cum=%d  |  B: this=%d cum=%d  |  A-B this=%+d cum=%+d", mFrame, mAllocA, mAllocCumA, mAllocB, mAllocCumB,
+      lucent::info("alloctrace", "f{}  A: this={} cum={}  |  B: this={} cum={}  |  A-B this={:+} cum={:+}", mFrame, mAllocA, mAllocCumA, mAllocB, mAllocCumB,
               mAllocA - mAllocB, mAllocCumA - mAllocCumB);
     }
     mAllocA = 0; mAllocB = 0;
@@ -2169,7 +2170,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     const bool ww_trace = mWwArmed && mWwAddr == 0x800BF81Eu && mFrame >= 180 && mFrame <= 200;
     auto ww_log = [&](const char* tag){
       if (!ww_trace) return;
-      cfg_logi("sbs-trace", "f%u %-14s  A[0x800BF81E]=%u  B[0x800BF81E]=%u", mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
+      lucent::info("sbs-trace", "f{} {:<14}  A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     };
     ww_log("frame-start");
     // Divergence check runs THROUGHOUT the run (2026-07-04 user directive [[sbs-two-compare-modes]]
@@ -2195,7 +2196,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         if (const char* e = getenv("PSXPORT_SBS_WARP"); e && *e) {
           long fr = -1, ar = 0, su = 0; int n = sscanf(e, "%ld:%ld:%ld", &fr, &ar, &su);
           if (n >= 2) { warpFrame = fr; warpArea = ar; warpSub = su;
-            cfg_logi("sbs", "PSXPORT_SBS_WARP: at f%ld write door-record area=%ld sub=%ld to BOTH cores", fr, ar, su); }
+            lucent::info("sbs", "PSXPORT_SBS_WARP: at f{} write door-record area={} sub={} to BOTH cores", fr, ar, su); }
         } }
       if (warpFrame >= 0 && !warpFired && (long)mFrame >= warpFrame) {
         warpFired = 1;
@@ -2222,7 +2223,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           c->mem_w16(0x800bf83au, rec);
           c->mem_w8 (0x800bf839u, 3);
         }
-        cfg_logi("sbs", "WARP fired at f%u: door-record 0x800BF83A=%04X trig=3 (curA=%u curB=%u)", mFrame, rec, mA->core.mem_r8(0x800bf870u), mB->core.mem_r8(0x800bf870u));
+        lucent::info("sbs", "WARP fired at f{}: door-record 0x800BF83A={:04X} trig=3 (curA={} curB={})", mFrame, rec, mA->core.mem_r8(0x800bf870u), mB->core.mem_r8(0x800bf870u));
       }
       // Post-warp trace: confirm the field-run machine consumes the door record and runs the area
       // load (trigger byte 0x800BF839 clears, area id 0x800bf870 commits, sm[0x4c] area-machine cycles).
@@ -2232,7 +2233,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         uint32_t s = (mA->core.mem_r8(0x800bf870u)) | (mA->core.mem_r8(0x800bf839u) << 8)
                    | (mA->core.mem_r16(sm + 0x4a) << 16) | (mA->core.mem_r16(sm + 0x4c) << 24);
         if (s != sig) { sig = s;
-          cfg_logi("sbs-warptrace", "f%u A area=%u trig=%u sm[4a]=%u/4c=%u/4e=%u  B area=%u trig=%u", mFrame, mA->core.mem_r8(0x800bf870u), mA->core.mem_r8(0x800bf839u),
+          lucent::info("sbs-warptrace", "f{} A area={} trig={} sm[4a]={}/4c={}/4e={}  B area={} trig={}", mFrame, mA->core.mem_r8(0x800bf870u), mA->core.mem_r8(0x800bf839u),
                   mA->core.mem_r16(sm + 0x4a), mA->core.mem_r16(sm + 0x4c), mA->core.mem_r16(sm + 0x4e),
                   mB->core.mem_r8(0x800bf870u), mB->core.mem_r8(0x800bf839u)); }
       }
@@ -2249,7 +2250,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (!armParsed) { armParsed = 1;
         if (const char* e = getenv("PSXPORT_SBS_ARMSLOT"); e && *e) {
           long fr = -1, sl = 0; if (sscanf(e, "%ld:%ld", &fr, &sl) >= 1) { armFrame = fr; armSlot = sl;
-            cfg_logi("sbs", "PSXPORT_SBS_ARMSLOT: at f%ld arm slot %ld (kind=0xFF) on BOTH cores", fr, sl); } }
+            lucent::info("sbs", "PSXPORT_SBS_ARMSLOT: at f{} arm slot {} (kind=0xFF) on BOTH cores", fr, sl); } }
       }
       if (armFrame >= 0 && !armFired && (long)mFrame >= armFrame) {
         armFired = 1;
@@ -2260,7 +2261,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           // benign identical arg bytes (slot[1..7]); value is irrelevant to the register-mirror spill
           for (uint32_t k = 1; k < 8; k++) c->mem_w8(slotBase + k, 0);
         }
-        cfg_logi("sbs", "ARMSLOT fired at f%u: slot %ld @0x%08X kind=0xFF (both cores)", mFrame, armSlot, slotBase);
+        lucent::info("sbs", "ARMSLOT fired at f{}: slot {} @0x{:08X} kind=0xFF (both cores)", mFrame, armSlot, slotBase);
       }
     }
     // PSXPORT_SBS_FORCES4C="frame:value" — deterministic hook to force the GAME sm[0x4c] area-machine
@@ -2276,7 +2277,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (!fs4cParsed) { fs4cParsed = 1;
         if (const char* e = getenv("PSXPORT_SBS_FORCES4C"); e && *e) {
           long fr = -1, v = 3; if (sscanf(e, "%ld:%ld", &fr, &v) >= 1) { fs4cFrame = fr; fs4cVal = v;
-            cfg_logi("sbs", "PSXPORT_SBS_FORCES4C: at f%ld set sm[0x4c]=%ld on BOTH cores", fr, v); } }
+            lucent::info("sbs", "PSXPORT_SBS_FORCES4C: at f{} set sm[0x4c]={} on BOTH cores", fr, v); } }
       }
       if (fs4cFrame >= 0 && !fs4cFired && (long)mFrame >= fs4cFrame) {
         fs4cFired = 1;
@@ -2285,7 +2286,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           c->mem_w16(sm + 0x4cu, (uint16_t)fs4cVal);
           c->mem_w16(sm + 0x4eu, 0);                    // reset the sm[0x4e] sub-machine to init
         }
-        cfg_logi("sbs", "FORCES4C fired at f%u: sm[0x4c]=%ld (both cores)", mFrame, fs4cVal);
+        lucent::info("sbs", "FORCES4C fired at f{}: sm[0x4c]={} (both cores)", mFrame, fs4cVal);
       }
     }
     // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
@@ -2325,10 +2326,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (hit) {
         auto wr = [this](const char* pfx, char side, const uint8_t* rgba, int w, int h) {
           char p[240]; snprintf(p, sizeof p, "%s_f%u_%c.ppm", pfx, mFrame, side);
-          FILE* f = fopen(p, "wb"); if (!f) { cfg_loge("sbs", "SHOT: cannot open %s", p); return; }
+          FILE* f = fopen(p, "wb"); if (!f) { lucent::error("sbs", "SHOT: cannot open {}", p); return; }
           fprintf(f, "P6\n%d %d\n255\n", w, h);
           for (int i = 0; i < w * h; i++) fwrite(rgba + (size_t)i * 4, 1, 3, f);
-          fclose(f); cfg_logi("sbs", "SHOT f%u pane %c (%dx%d) -> %s", mFrame, side, w, h, p);
+          fclose(f); lucent::info("sbs", "SHOT f{} pane {} ({}x{}) -> {}", mFrame, side, w, h, p);
         };
         wr(shotPrefix, 'A', mRgbaA, mWa, mHa);
         wr(shotPrefix, 'B', mRgbaB, mWb, mHb);
@@ -2368,12 +2369,12 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         if (sa != sb) {
           // Address touched by only one core — that's an ordering/cadence hit, not a value hit. Log
           // it but keep hunting for a real value-mismatch (which is the #29 signature).
-          cfg_logi("sbs-div", "f%u [AUDIO spu_reg 0x%03X only-%c] val=0x%04X", mFrame, off, sa ? 'A' : 'B', sa ? va : vb);
+          lucent::info("sbs-div", "f{} [AUDIO spu_reg 0x{:03X} only-{}] val=0x{:04X}", mFrame, off, sa ? 'A' : 'B', sa ? va : vb);
           if (++flagged >= 8) break;
         } else if (va != vb) {
           const char* voice_hint = "";
           if (off < 0x180) { static char buf[32]; snprintf(buf, sizeof buf, "voice%u+0x%02X", off >> 4, off & 0xF); voice_hint = buf; }
-          cfg_logi("sbs-div", "f%u [AUDIO spu_reg 0x%03X %s] A=0x%04X  B=0x%04X", mFrame, off, voice_hint, va, vb);
+          lucent::info("sbs-div", "f{} [AUDIO spu_reg 0x{:03X} {}] A=0x{:04X}  B=0x{:04X}", mFrame, off, voice_hint, va, vb);
           if (++flagged >= 8) break;
         }
       }
@@ -2396,13 +2397,13 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       bool count_diverge = (mWwCountA != mWwCountB);
       bool value_diverge = (seedA != seedB);
       if ((count_diverge || value_diverge) && !mDivFound) {
-        cfg_logi("sbs", "=== RNG advance-count divergence: f%u  A_calls=%u  B_calls=%u  (delta=%d)   endA=0x%08X endB=0x%08X ===", mFrame, mWwCountA, mWwCountB, (int)mWwCountA - (int)mWwCountB, seedA, seedB);
-        cfg_logi("sbs", "Last-write host stack per core is the fn that made the EXTRA (or first missed) advance THIS FRAME.");
+        lucent::info("sbs", "=== RNG advance-count divergence: f{}  A_calls={}  B_calls={}  (delta={})   endA=0x{:08X} endB=0x{:08X} ===", mFrame, mWwCountA, mWwCountB, (int)mWwCountA - (int)mWwCountB, seedA, seedB);
+        lucent::info("sbs", "Last-write host stack per core is the fn that made the EXTRA (or first missed) advance THIS FRAME.");
         auto dump_bt = [&](const char* tag, void** bt, int n) {
-          if (n <= 0) { cfg_logi("sbs", "=== HOST BACKTRACE — %s (empty) ===", tag); return; }
-          cfg_logi("sbs", "=== HOST BACKTRACE — %s (%d frames) ===", tag, n);
+          if (n <= 0) { lucent::info("sbs", "=== HOST BACKTRACE — {} (empty) ===", tag); return; }
+          lucent::info("sbs", "=== HOST BACKTRACE — {} ({} frames) ===", tag, n);
           char** syms = backtrace_symbols(bt, n);
-          if (syms) { for (int i = 0; i < n; i++) cfg_logi("sbs", "  #%d %s", i, syms[i]); free(syms); }
+          if (syms) { for (int i = 0; i < n; i++) lucent::info("sbs", "  #{} {}", i, syms[i]); free(syms); }
         };
         dump_bt("core A (last RNG advance THIS frame)", mWwHostBtA, mWwHostBtNA);
         dump_bt("core B (last RNG advance THIS frame)", mWwHostBtB, mWwHostBtNB);
@@ -2411,10 +2412,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // different values → the divergence surfaces as a VALUE-MISMATCH inside a matched code path.
         // Dump the neighborhoods around a few common overlay .rodata addresses to name the diff.
         {
-          cfg_logi("sbs", "=== overlay .rodata sample (byte@addr, A vs B) ===");
+          lucent::info("sbs", "=== overlay .rodata sample (byte@addr, A vs B) ===");
           for (uint32_t addr : {0x80105EE8u, 0x800BFA13u, 0x800BF873u, 0x800ED098u, 0x800E7E74u, 0x800ECFD4u}) {
             uint32_t a = mA->core.mem_r32(addr), b = mB->core.mem_r32(addr);
-            cfg_logi("sbs", "  [0x%08X]: A=0x%08X  B=0x%08X  %s", addr, a, b, a == b ? "match" : "!! DIVERGE !!");
+            lucent::info("sbs", "  [0x{:08X}]: A=0x{:08X}  B=0x{:08X}  {}", addr, a, b, a == b ? "match" : "!! DIVERGE !!");
           }
           // Scan main RAM for locations that hold the write address as a 4-byte value. A common
           // divergence is "different object owns render-record at addr X" — search for the addr in
@@ -2424,17 +2425,17 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           {
             uint32_t target = mWwAddr & 0x00FFFFFFu;   // strip kseg bits
             target |= 0x80000000u;
-            cfg_logi("sbs", "=== RAM scan for the write-target ptr (0x%08X, and nearby) ===", target);
+            lucent::info("sbs", "=== RAM scan for the write-target ptr (0x{:08X}, and nearby) ===", target);
             auto scan_range = [&](const char* tag, Core* c, uint32_t lo, uint32_t hi) {
               int hits = 0;
               for (uint32_t a = 0x80010000u; a < 0x80200000u && hits < 20; a += 4) {
                 uint32_t v = c->mem_r32(a);
                 if (v >= lo && v <= hi) {
-                  cfg_logi("sbs", "  %s: 0x%08X holds ptr 0x%08X", tag, a, v);
+                  lucent::info("sbs", "  {}: 0x{:08X} holds ptr 0x{:08X}", tag, a, v);
                   hits++;
                 }
               }
-              if (hits == 0) cfg_logi("sbs", "  %s: no matches in [0x%08X, 0x%08X]", tag, lo, hi);
+              if (hits == 0) lucent::info("sbs", "  {}: no matches in [0x{:08X}, 0x{:08X}]", tag, lo, hi);
             };
             // Broaden window ± 128 bytes — render records are 128-byte structures, the write may
             // land at any offset inside one.
@@ -2443,22 +2444,22 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
             // For any obj+0xC0 that holds a render-rec ptr inside the target window, dump the OBJECT
             // fields on both cores. Divergence in obj+4 (state), obj+8 (sub-count), obj+9 (active
             // gate), obj+0x1C (handler) names why one core fires the write and the other doesn't.
-            cfg_logi("sbs", "=== candidate owner-object state (obj+0xC0 = render-rec ptr) ===");
+            lucent::info("sbs", "=== candidate owner-object state (obj+0xC0 = render-rec ptr) ===");
             for (uint32_t a = 0x80010000u; a < 0x80200000u; a += 4) {
               uint32_t v = mA->core.mem_r32(a);
               if (v < target - 128 || v > target) continue;
               // Assume `a` is at obj+0xC0. obj_base = a - 0xC0.
               uint32_t obj = a - 0xC0u;
-              cfg_logi("sbs", "  obj @ 0x%08X (rec ptr 0x%08X, delta from write = 0x%X):", obj, v, target - v);
+              lucent::info("sbs", "  obj @ 0x{:08X} (rec ptr 0x{:08X}, delta from write = 0x{:X}):", obj, v, target - v);
               for (uint32_t off : {0x00u, 0x04u, 0x05u, 0x08u, 0x09u, 0x0Cu, 0x1Cu, 0x24u, 0x3Cu}) {
                 uint32_t va = obj + off;
                 uint32_t aval = mA->core.mem_r32(va), bval = mB->core.mem_r32(va);
-                cfg_logi("sbs", "    obj+0x%02X: A=0x%08X  B=0x%08X  %s", off, aval, bval, aval == bval ? "match" : "!! DIVERGE !!");
+                lucent::info("sbs", "    obj+0x{:02X}: A=0x{:08X}  B=0x{:08X}  {}", off, aval, bval, aval == bval ? "match" : "!! DIVERGE !!");
               }
             }
           }
         }
-        cfg_logi("sbs", "headless: exiting after RNG-count divergence.");
+        lucent::info("sbs", "headless: exiting after RNG-count divergence.");
         fflush(stderr);
         sbs_rl_shutdown();
         exit(0);
@@ -2493,11 +2494,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         int da = std::abs((int)a.ca - (int)a.cb), db = std::abs((int)b.ca - (int)b.cb);
         return da > db;
       });
-      cfg_logi("sbs-frameprof", "f%u: %zu (pc,ra) sites with count mismatch (top 30):", mFpFrame, diffs.size());
+      lucent::info("sbs-frameprof", "f{}: {} (pc,ra) sites with count mismatch (top 30):", mFpFrame, diffs.size());
       int n = 0;
       for (auto& d : diffs) {
         if (n++ >= 30) break;
-        cfg_logi("sbs-frameprof", "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)",
+        lucent::info("sbs-frameprof", "  pc={:08X} ra={:08X}  A={}  B={}  (delta={:+})",
                  d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
       }
       fflush(stderr);
@@ -2517,7 +2518,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (mFrame == (uint32_t)cf) {
         uint8_t old = mA->core.mem_r8((uint32_t)ca);
         mA->core.mem_w8((uint32_t)ca, (uint8_t)(old ^ 0xFF));
-        cfg_logi("sbs", "CANARY: flipped core-A [%08lX] %02X->%02X at f%u — checkDivergence MUST now trip. "
+        lucent::info("sbs", "CANARY: flipped core-A [{:08X}] {:02X}->{:02X} at f{} — checkDivergence MUST now trip. "
                         "If the run stays green, this gate is NOT detecting divergences.",
                  ca, old, (uint8_t)(old ^ 0xFF), mFrame);
       }
@@ -2545,11 +2546,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         int da = std::abs((int)a.ca - (int)a.cb), db = std::abs((int)b.ca - (int)b.cb);
         return da > db;
       });
-      cfg_logi("sbs-frameprof", "f%u: %zu (pc,ra) sites with count mismatch (top 30):", mFpFrame, diffs.size());
+      lucent::info("sbs-frameprof", "f{}: {} (pc,ra) sites with count mismatch (top 30):", mFpFrame, diffs.size());
       int n = 0;
       for (auto& d : diffs) {
         if (n++ >= 30) break;
-        cfg_logi("sbs-frameprof", "  pc=%08X ra=%08X  A=%u  B=%u  (delta=%+d)",
+        lucent::info("sbs-frameprof", "  pc={:08X} ra={:08X}  A={}  B={}  (delta={:+})",
                  d.key.pc, d.key.ra, d.ca, d.cb, (int)d.ca - (int)d.cb);
       }
       fflush(stderr);
@@ -2580,7 +2581,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         divergent = (v_written != v_other);              // asymmetric — pause iff writer's value ≠ other's current
       }
       if (divergent || !mWwPersist) {
-        cfg_logi("sbs", "*** WRITE-SITE caught 0x%08X (A=%08X B=%08X, mask=%d) at frame %u ***", mWwAddr, mWwVa, mWwVb, mWwHit, mFrame);
+        lucent::info("sbs", "*** WRITE-SITE caught 0x{:08X} (A={:08X} B={:08X}, mask={}) at frame {} ***", mWwAddr, mWwVa, mWwVb, mWwHit, mFrame);
         // Auto-diagnosis: compare per-core call-site metadata captured during the rewind. Reports the
         // most likely CLASS of divergence so the operator doesn't have to eyeball the raw wwatch log.
         //  - VALUE-MISMATCH  : both cores wrote different values via the SAME call path (same pc + ra).
@@ -2598,11 +2599,11 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         //  - ASYMMETRIC      : only one core wrote in the rewind frame (mWwHit != 3). The other core's
         //                       path never touches this address this tick; look at the frame BEFORE to
         //                       find why the writer's caller was taken (state, flag, spawn count).
-        cfg_logi("sbs", "=== auto-diagnosis ===");
-        cfg_logi("sbs", "  A: pc=0x%08X ra=0x%08X sp=0x%08X val=0x%08X hits=%u", mWwPcA, mWwRaA, mWwSpA, mWwVa, mWwCountA);
-        cfg_logi("sbs", "  B: pc=0x%08X ra=0x%08X sp=0x%08X val=0x%08X hits=%u", mWwPcB, mWwRaB, mWwSpB, mWwVb, mWwCountB);
+        lucent::info("sbs", "=== auto-diagnosis ===");
+        lucent::info("sbs", "  A: pc=0x{:08X} ra=0x{:08X} sp=0x{:08X} val=0x{:08X} hits={}", mWwPcA, mWwRaA, mWwSpA, mWwVa, mWwCountA);
+        lucent::info("sbs", "  B: pc=0x{:08X} ra=0x{:08X} sp=0x{:08X} val=0x{:08X} hits={}", mWwPcB, mWwRaB, mWwSpB, mWwVb, mWwCountB);
         auto emit_class = [&](const char* cls, const char* detail) {
-          cfg_logi("sbs", "  CLASS: %s — %s", cls, detail);
+          lucent::info("sbs", "  CLASS: {} — {}", cls, detail);
         };
         if (mWwHit != 3) {
           emit_class("ASYMMETRIC", "only one core stored this frame; look at prior frames for the flag that gates the writer's caller");
@@ -2650,7 +2651,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
             uint32_t off  = mWwAddr - L.base;
             uint32_t idx  = off / L.stride;
             uint32_t roff = off % L.stride;
-            cfg_logi("sbs", "=== struct layout: %s[%u] + 0x%02X @ base 0x%08X (stride 0x%X, count %u) ===", L.name, idx, roff, L.base, L.stride, L.count);
+            lucent::info("sbs", "=== struct layout: {}[{}] + 0x{:02X} @ base 0x{:08X} (stride 0x{:X}, count {}) ===", L.name, idx, roff, L.base, L.stride, L.count);
             break;
           }
         }
@@ -2658,7 +2659,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // Upstream state cross-check: dump a handful of commonly-diverging globals so the caller can
         // see at a glance whether RNG or well-known state has drifted before the visible divergence.
         // Cheap (8 words) and often decisive — if RNG matches, drift is downstream of RNG.
-        cfg_logi("sbs", "=== upstream state cross-check ===");
+        lucent::info("sbs", "=== upstream state cross-check ===");
         struct GlobalCheck { uint32_t addr; uint8_t width; const char* name; };
         static constexpr GlobalCheck kUpstream[] = {
           { 0x80105EE8u, 4, "RNG.seed" },
@@ -2675,19 +2676,19 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           if (g.width == 1) { va = mA->core.mem_r8(g.addr); vb = mB->core.mem_r8(g.addr); }
           else if (g.width == 2) { va = mA->core.mem_r16(g.addr); vb = mB->core.mem_r16(g.addr); }
           else { va = mA->core.mem_r32(g.addr); vb = mB->core.mem_r32(g.addr); }
-          cfg_logi("sbs", "  %-14s @0x%08X (%uB): A=0x%08X B=0x%08X %s", g.name, g.addr, g.width, va, vb, va == vb ? "match" : "!! DIVERGE !!");
+          lucent::info("sbs", "  {:<14} @0x{:08X} ({}B): A=0x{:08X} B=0x{:08X} {}", g.name, g.addr, g.width, va, vb, va == vb ? "match" : "!! DIVERGE !!");
         }
 
         // Task-slot state dump. Each slot's state (+0x00), entry pc (+0x0C), done-mark (+0x02).
         // Divergent slot state = task-scheduling divergence — the most common cause of a wrong
         // CUR_TASK / wrong writer during multitask cooperative code (task-1 preload etc.).
-        cfg_logi("sbs", "=== task-slot state ===");
+        lucent::info("sbs", "=== task-slot state ===");
         for (int slot = 0; slot < 3; slot++) {
           uint32_t base = 0x801FE000u + (uint32_t)slot * 0x70u;
           uint16_t sa_st = mA->core.mem_r16(base + 0x00), sb_st = mB->core.mem_r16(base + 0x00);
           uint16_t sa_02 = mA->core.mem_r16(base + 0x02), sb_02 = mB->core.mem_r16(base + 0x02);
           uint32_t sa_ep = mA->core.mem_r32(base + 0x0C), sb_ep = mB->core.mem_r32(base + 0x0C);
-          cfg_logi("sbs", "  task[%d] @0x%08X: state A=%u B=%u %s  +2 A=0x%X B=0x%X %s  entry A=0x%08X B=0x%08X %s", slot, base, sa_st, sb_st, sa_st == sb_st ? "==" : "!!",
+          lucent::info("sbs", "  task[{}] @0x{:08X}: state A={} B={} {}  +2 A=0x{:X} B=0x{:X} {}  entry A=0x{:08X} B=0x{:08X} {}", slot, base, sa_st, sb_st, sa_st == sb_st ? "==" : "!!",
                   sa_02, sb_02, sa_02 == sb_02 ? "==" : "!!",
                   sa_ep, sb_ep, sa_ep == sb_ep ? "==" : "!!");
         }
@@ -2697,12 +2698,12 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // as the guest-stack backtrace but showing ACTUAL bytes not just plausible-ra hits.
         auto dump_stack_window = [&](const char* tag, Core* c, uint32_t sp) {
           if (!sp || sp < 0x80010000u || sp >= 0x80200000u) return;
-          cfg_logi("sbs", "=== guest stack window %s (sp=0x%08X, sp-16..sp+64) ===", tag, sp);
+          lucent::info("sbs", "=== guest stack window {} (sp=0x{:08X}, sp-16..sp+64) ===", tag, sp);
           for (int32_t off = -16; off <= 64; off += 4) {
             uint32_t va = sp + (uint32_t)off;
             if (va < 0x80010000u || va >= 0x80200000u) continue;
             uint32_t w = c->mem_r32(va);
-            cfg_logi("sbs", "  sp%+d @0x%08X = 0x%08X%s", off, va, w, off == 0 ? " <-- sp" : "");
+            lucent::info("sbs", "  sp{:+} @0x{:08X} = 0x{:08X}{}", off, va, w, off == 0 ? " <-- sp" : "");
           }
         };
         if (mWwHit & 1) dump_stack_window("A", &mA->core, mWwSpA);
@@ -2712,7 +2713,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // has a different depth on each core. Point that out so the caller doesn't have to eyeball sp.
         if (mWwHit == 3 && mWwPcA == mWwPcB && mWwRaA == mWwRaB && mWwSpA != mWwSpB) {
           int32_t delta = (int32_t)mWwSpA - (int32_t)mWwSpB;
-          cfg_logi("sbs", "  CALL-CHAIN DEPTH DIFFERS: A.sp=0x%08X B.sp=0x%08X (delta %+d B — %s%s)", mWwSpA, mWwSpB, delta,
+          lucent::info("sbs", "  CALL-CHAIN DEPTH DIFFERS: A.sp=0x{:08X} B.sp=0x{:08X} (delta {:+} B — {}{})", mWwSpA, mWwSpB, delta,
                   delta > 0 ? "B is deeper" : "A is deeper",
                   " — a caller above the writer differs; disasm the fn containing ra to find the split");
         }
@@ -2744,42 +2745,42 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
               { 0x800FB168u, "OBJLIST_1" }, { 0x800F2624u, "OBJLIST_2" },
               { 0x800F2738u, "OBJLIST_3" }, // AUX_LIST_HEAD candidate (walkAux uses one of these)
             };
-            cfg_logi("sbs", "=== list-membership probe (write addr 0x%08X) ===", mWwAddr);
+            lucent::info("sbs", "=== list-membership probe (write addr 0x{:08X}) ===", mWwAddr);
             for (auto& L : lists) {
               int pos_a = -1, pos_b = -1;
               int on_a = find_on_list(&mA->core, L.head, mWwAddr, &pos_a);
               int on_b = find_on_list(&mB->core, L.head, mWwAddr, &pos_b);
               const char* verdict = (on_a == on_b) ? "match" : "!! DIVERGE !!";
-              cfg_logi("sbs", "  %s (head@%08X): A=%s(idx=%d) B=%s(idx=%d) %s", L.name, L.head, on_a ? "on" : "off", pos_a, on_b ? "on" : "off", pos_b, verdict);
+              lucent::info("sbs", "  {} (head@{:08X}): A={}(idx={}) B={}(idx={}) {}", L.name, L.head, on_a ? "on" : "off", pos_a, on_b ? "on" : "off", pos_b, verdict);
             }
             // Dump the object record's key fields on both cores. If the containing object is a linked-
             // list node its per-obj handler ptr lives at obj+0x1c (T2OBJ_HANDLER); state bytes typically
             // at obj+4/5/6/7. Divergence in these fields IS the upstream root when list membership
             // matches — the same node has different data on each core.
-            cfg_logi("sbs", "=== object record dump (base 0x%08X, T2 offsets) ===", obj_base);
+            lucent::info("sbs", "=== object record dump (base 0x{:08X}, T2 offsets) ===", obj_base);
             // Bytes at meaningful T2 offsets (byte-precise reads so we see the actual flag values,
             // not the u32 they're packed into).
             for (uint32_t off : {0x00u, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x07u, 0x08u, 0x09u,
                                   0x0Au, 0x0Bu, 0x28u}) {
               uint32_t va = obj_base + off;
               uint8_t a = mA->core.mem_r8(va), b = mB->core.mem_r8(va);
-              cfg_logi("sbs", "  +0x%02X byte: A=0x%02X  B=0x%02X  %s", off, a, b, a == b ? "match" : "!! DIVERGE !!");
+              lucent::info("sbs", "  +0x{:02X} byte: A=0x{:02X}  B=0x{:02X}  {}", off, a, b, a == b ? "match" : "!! DIVERGE !!");
             }
             // Key u32 fields at natural alignment. Read at obj_base + off (obj_base is aligned since
             // T2 records live on aligned addresses).
             for (uint32_t off : {0x1Cu, 0x24u}) {
               uint32_t va = obj_base + off;
               uint32_t a4 = mA->core.mem_r32(va), b4 = mB->core.mem_r32(va);
-              cfg_logi("sbs", "  +0x%02X word (@%08X): A=0x%08X  B=0x%08X  %s%s", off, va, a4, b4, a4 == b4 ? "match" : "!! DIVERGE !!",
+              lucent::info("sbs", "  +0x{:02X} word (@{:08X}): A=0x{:08X}  B=0x{:08X}  {}{}", off, va, a4, b4, a4 == b4 ? "match" : "!! DIVERGE !!",
                       off == 0x1Cu ? "  (T2OBJ_HANDLER)" : "  (T2OBJ_NEXT)");
             }
             // Object position (obj+0x2C/2E/30) — cull inputs. If they diverge, the divergence is
             // upstream in physics/spawn, not in the cull itself.
-            cfg_logi("sbs", "=== object position (cull input) + camera scratchpad ===");
+            lucent::info("sbs", "=== object position (cull input) + camera scratchpad ===");
             for (uint32_t off : {0x2Cu, 0x2Eu, 0x30u}) {
               uint32_t va = obj_base + off;
               int16_t a = (int16_t)mA->core.mem_r16(va), b = (int16_t)mB->core.mem_r16(va);
-              cfg_logi("sbs", "  obj+0x%02X (s16): A=%d  B=%d  %s", off, a, b, a == b ? "match" : "!! DIVERGE !!");
+              lucent::info("sbs", "  obj+0x{:02X} (s16): A={}  B={}  {}", off, a, b, a == b ? "match" : "!! DIVERGE !!");
             }
             // Camera pos + fwd vec (scratchpad, cull-cone inputs).
             for (uint32_t va : {0x1F8000D2u, 0x1F8000D6u, 0x1F8000DAu, 0x1F8000E8u, 0x1F8000EAu, 0x1F8000ECu}) {
@@ -2787,7 +2788,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
               const char* what =
                   va == 0x1F8000D2u ? "cam.x" : va == 0x1F8000D6u ? "cam.y" : va == 0x1F8000DAu ? "cam.z" :
                   va == 0x1F8000E8u ? "fwd.x" : va == 0x1F8000EAu ? "fwd.y" : "fwd.z";
-              cfg_logi("sbs", "  @0x%08X (%s, s16): A=%d  B=%d  %s", va, what, a, b, a == b ? "match" : "!! DIVERGE !!");
+              lucent::info("sbs", "  @0x{:08X} ({}, s16): A={}  B={}  {}", va, what, a, b, a == b ? "match" : "!! DIVERGE !!");
             }
           }
         }
@@ -2796,24 +2797,24 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // happens elsewhere), but the host backtrace names the ACTUAL C function running when
         // mem_w8/w16/w32 fired — the uncontested writer. Filter with symres or head -N as needed.
         auto dump_host_bt = [](const char* tag, void** bt, int n) {
-          if (n <= 0) { cfg_logi("sbs", "=== HOST BACKTRACE — %s (empty) ===", tag); return; }
-          cfg_logi("sbs", "=== HOST BACKTRACE — %s (%d frames, last-fire) ===", tag, n);
+          if (n <= 0) { lucent::info("sbs", "=== HOST BACKTRACE — {} (empty) ===", tag); return; }
+          lucent::info("sbs", "=== HOST BACKTRACE — {} ({} frames, last-fire) ===", tag, n);
           char** syms = backtrace_symbols(bt, n);
           if (syms) {
-            for (int i = 0; i < n; i++) cfg_logi("sbs", "  #%d %s", i, syms[i]);
+            for (int i = 0; i < n; i++) lucent::info("sbs", "  #{} {}", i, syms[i]);
             free(syms);
           } else {
             // backtrace_symbols failed (rare); fall back to raw ptrs so we still have SOMETHING.
-            for (int i = 0; i < n; i++) cfg_logi("sbs", "  #%d %p (unresolved)", i, bt[i]);
+            for (int i = 0; i < n; i++) lucent::info("sbs", "  #{} {} (unresolved)", i, bt[i]);
           }
         };
         if (mWwHit & 1) {
-          cfg_logi("sbs", "=== WRITE SITE — core A wrote 0x%08X=%08X ===\n%s",
+          lucent::info("sbs", "=== WRITE SITE — core A wrote 0x{:08X}={:08X} ===\n{}",
                    mWwAddr, mWwVa, mWwBtA[0] ? mWwBtA : "(empty)\n");
           dump_host_bt("core A", mWwHostBtA, mWwHostBtNA);
         }
         if (mWwHit & 2) {
-          cfg_logi("sbs", "=== WRITE SITE — core B wrote 0x%08X=%08X ===\n%s",
+          lucent::info("sbs", "=== WRITE SITE — core B wrote 0x{:08X}={:08X} ===\n{}",
                    mWwAddr, mWwVb, mWwBtB[0] ? mWwBtB : "(empty)\n");
           dump_host_bt("core B", mWwHostBtB, mWwHostBtNB);
         }
@@ -2821,7 +2822,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         mA->core.wwatch_arm(0, 0); mB->core.wwatch_arm(0, 0);
         mA->dbg_server.setPaused(true);
         // Headless (no debug server): the write-site IS the answer — exit so the log ends with it.
-        if (!mHaveDbgsrv) { cfg_logi("sbs", "headless: exiting after write-site capture."); sbs_rl_shutdown(); exit(0); }
+        if (!mHaveDbgsrv) { lucent::info("sbs", "headless: exiting after write-site capture."); sbs_rl_shutdown(); exit(0); }
       }
       // Else: identical shared write in PREWATCH mode — silently continue and keep watching.
     }
@@ -2833,7 +2834,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     { static int s_exitFrame = -2;
       if (s_exitFrame == -2) s_exitFrame = cfg_int("PSXPORT_SBS_EXIT_FRAME", -1);
       if (s_exitFrame >= 0 && mFrame >= (uint32_t)s_exitFrame) {
-        cfg_logi("sbs", "PSXPORT_SBS_EXIT_FRAME=%d reached — clean exit for atexit dumps.", s_exitFrame);
+        lucent::info("sbs", "PSXPORT_SBS_EXIT_FRAME={} reached — clean exit for atexit dumps.", s_exitFrame);
         sbs_rl_shutdown();
         exit(0);
       } }

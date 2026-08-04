@@ -10,6 +10,7 @@
 #include "game.h"   // class BootStub lives on Game (game->stub); this TU implements its run()
 #include "c_subsys.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "scea_asset.h"   // SCEA_DISP_W/H (the decoded RGBA splash dims)
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,7 +30,7 @@ static uint32_t load_exe_image(const char* path, Core* c) {
   if (!f) { perror(path); exit(1); }
   fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
   uint8_t* buf = (uint8_t*)malloc(n);
-  if (fread(buf, 1, n, f) != (size_t)n) { cfg_loge("stub", "short read %s", path); exit(1); }
+  if (fread(buf, 1, n, f) != (size_t)n) { lucent::error("stub", "short read {}", path ? path : "(null)"); exit(1); }
   fclose(f);
   uint32_t entry = rd32(buf+0x10), gp = rd32(buf+0x14);
   uint32_t load = rd32(buf+0x18), tsize = rd32(buf+0x1C), sp = rd32(buf+0x30);
@@ -39,7 +40,7 @@ static uint32_t load_exe_image(const char* path, Core* c) {
   c->r[29] = sp ? sp : 0x801FFFF0u;
   c->r[30] = c->r[29];
   c->r[31] = 0xDEAD0000u;               // top-level return sentinel
-  cfg_logi("stub", "loaded %s: entry 0x%08X load 0x%08X text 0x%X sp 0x%08X", path, entry, load, tsize, c->r[29]);
+  lucent::info("stub", "loaded {}: entry 0x{:08X} load 0x{:08X} text 0x{:X} sp 0x{:08X}", path ? path : "(null)", entry, load, tsize, c->r[29]);
   return entry;
 }
 
@@ -68,7 +69,7 @@ static void scea_dump_ppm(const uint8_t* rgba, float fade01, const char* path) {
     fwrite(o, 1, 3, f);
   }
   fclose(f);
-  cfg_logi("scea", "wrote %s (%dx%d, fade %.2f)", path, SCEA_DISP_W, SCEA_DISP_H, fade01);
+  lucent::info("scea", "wrote {} ({}x{}, fade {:.2f})", path, SCEA_DISP_W, SCEA_DISP_H, fade01);
 }
 
 static void native_scea_splash(Core* c) {
@@ -84,7 +85,7 @@ static void native_scea_splash(Core* c) {
     { if (gpu_windowed()) c->game->pad.pollSdl(); }
 #endif
     if ((c->game->pad.buttons & 0x0008u) == 0) {          // Start = skip the license screen
-      cfg_logi("scea", "skipped (Start) at frame %d", f); break; }
+      lucent::info("scea", "skipped (Start) at frame {}", f); break; }
     int fade;                                             // 0..128: fade in, hold, fade out
     if (f < SCEA_FADE_IN)                  fade = f * 128 / SCEA_FADE_IN;
     else if (f < SCEA_FADE_IN + SCEA_HOLD) fade = 128;
@@ -112,6 +113,6 @@ void BootStub::run(const char* main_exe_path) {
   // enter the native MAIN boot. (The PSX stub SCUS_944.54 is no longer run — see native_scea_splash.)
   native_scea_splash(c);
   load_exe_image(main_path, c);   // load MAIN.EXE image + initial registers into the Core
-  cfg_logi("stub", "entering native MAIN boot");
+  lucent::info("stub", "entering native MAIN boot");
   native_boot_run(c);
 }

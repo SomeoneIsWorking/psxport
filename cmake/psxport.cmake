@@ -182,6 +182,20 @@ target_compile_options(psxport PRIVATE -w -O2 -g
 # sources directly (see tools/fmv_export/build.sh). add_subdirectory installs the `lucent` target and
 # its `lucent::lucent` alias; lucent's own tests are gated on its CMAKE_SOURCE_DIR and never build
 # here.
+#
+# THE TWO NAMES OUR USERS ACTUALLY TYPE. lucent's own variables are LUCENT_DEBUG / LUCENT_LOG_FILE;
+# every script, doc, .env and agent brief across the four repos says PSXPORT_DEBUG / PSXPORT_LOG_FILE,
+# so lucent is BUILT to read those. It is a build-time setting and not an init call on purpose:
+# lucent resolves both lazily on the first log call, so with the name baked in there is nothing to
+# initialise and therefore no initialisation that can fail to run.
+#
+# That last point is not theoretical. These two variables used to be loaded by bootstrap_once() in
+# runtime/recomp/cfg.cpp, reachable ONLY from a cfg_* entry point — so a plain lucent::debug() did not
+# load them, and the whole thing worked purely because ~700 legacy cfg_log* sites fire during boot.
+# Finishing the cfg_* retirement would have switched every diagnostic channel in four repos off,
+# silently. tests/test_lucent_channel_env.cpp is the gate that keeps it defused.
+set(LUCENT_CHANNEL_ENV  "PSXPORT_DEBUG")
+set(LUCENT_LOG_FILE_ENV "PSXPORT_LOG_FILE")
 add_subdirectory(${PSXPORT_ROOT}/vendor/lucent)
 
 target_link_libraries(psxport PUBLIC

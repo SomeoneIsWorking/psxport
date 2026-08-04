@@ -16,6 +16,7 @@
 #include <string.h>
 #include <math.h>
 #include "cfg.h"
+#include <lucent/log.h>
 #include "c_subsys.h"     // mdec_init/mdec_write/mdec_dma_in/mdec_dma_out/mdec_dma_out_rest/mdec_dma_can_write/MDEC_Run
 #include "fmv_decode.h"
 
@@ -238,12 +239,12 @@ int bs_decode_frame(const uint8_t* payload, uint32_t payload_size,
   uint16_t bs_q = (uint16_t)(payload[4] | (payload[5] << 8));
   int qscale = bs_q & 0x3F;
   if (qscale == 0) qscale = 1;
-  if (cfg_dbg("fmv")) {
+  if (lucent::channel_on("fmv")) {
     uint16_t magic = (uint16_t)(payload[2] | (payload[3] << 8));
     uint16_t ver   = (uint16_t)(payload[6] | (payload[7] << 8));
     if (!bs_hdr_logged) { bs_hdr_logged = 1;
-      cfg_logf("fmv", "BS hdr: nwords=%u magic=%04x qscale=%d version=%u",
-              (unsigned)(payload[0] | (payload[1] << 8)), magic, qscale, ver); }
+      lucent::debug("fmv", "BS hdr: nwords={} magic={:04x} qscale={} version={}",
+                    (unsigned)(payload[0] | (payload[1] << 8)), magic, qscale, ver); }
   }
 
   BitReader br;
@@ -451,8 +452,8 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int got_before_tail = got;
   int tail = mdec_dma_out_rest(outbuf + got, total_words - got);
   got += tail;
-  cfg_logf("fmv", "  drain: %d scattered + %d tail-scatter = %d/%d total",
-            got_before_tail, tail, got, total_words);
+  lucent::debug("fmv", "  drain: {} scattered + {} tail-scatter = {}/{} total",
+                got_before_tail, tail, got, total_words);
 
   // Tile 16x16 macroblocks (each 128 words = 256 px, raster within the block) into the frame.
   memset(pixels, 0, (size_t)width * height * 2);
@@ -460,7 +461,7 @@ int mdec_decode_to_rgb555(const uint16_t* codes, int ncodes,
   int mbx = (width + 15) / 16;
   int mby = (height + 15) / 16;
   int produced = got;                            // words actually drained
-  cfg_logf("fmv", "  drained %d/%d words (%d macroblocks)", got, total_words, got/128);
+  lucent::debug("fmv", "  drained {}/{} words ({} macroblocks)", got, total_words, got/128);
   int blocks_avail = produced / 128;             // 128 (32-bit) words per 16x16 MB
   // Each 128-word (256 px) group is a 16x16 RASTER macroblock: mednafen emits four 8x8 Y
   // sub-blocks and mdec_dma_out's voffs scatter (RAMOffsetWWS=4) lays them out as a 16x16

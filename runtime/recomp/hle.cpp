@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "cfg.h"
+#include <lucent/log.h>
 #include "fs_util.h"   // Fs::writeFile — the miss RAM dump below
 #include "dma_irq.h"   // dma_irq_ack — the CD DMA completion dispatch below stands in for the
                        // BIOS DMA handler, so it performs that handler's acknowledge
@@ -63,9 +64,9 @@ void Hle::deliverEvent(uint32_t evClass, uint32_t spec) {
     ev[i].fired = 1;
     if (ev[i].mode != EV_MD_INTR || !ev[i].func) continue;
     if (ev_depth) {
-      cfg_logw("ev", "nested delivery of class=0x%08X spec=0x%08X dropped (handler 0x%08X): the BIOS "
-                     "runs these with interrupts masked, so re-entry is not faithful",
-               evClass, spec, ev[i].func);
+      lucent::warn("ev", "nested delivery of class=0x{:08X} spec=0x{:08X} dropped (handler 0x{:08X}): the BIOS "
+                        "runs these with interrupts masked, so re-entry is not faithful",
+                   evClass, spec, ev[i].func);
       continue;
     }
     ev_depth++;
@@ -152,9 +153,9 @@ void Hle::irqEnq(uint32_t prio, uint32_t elem) {
   if (!elem) return;
   irqDeq(elem);
   if (irq_n >= IRQ_CHAIN_MAX) {
-    cfg_logw("irq", "interrupt chain full (%d) — dropping elem 0x%08X. Raise IRQ_CHAIN_MAX; a "
-                    "silently dropped handler is an interrupt that never gets serviced.",
-             (int)IRQ_CHAIN_MAX, elem);
+    lucent::warn("irq", "interrupt chain full ({}) — dropping elem 0x{:08X}. Raise IRQ_CHAIN_MAX; a "
+                        "silently dropped handler is an interrupt that never gets serviced.",
+                 (int)IRQ_CHAIN_MAX, elem);
     return;
   }
   int at = irq_n;
@@ -162,7 +163,7 @@ void Hle::irqEnq(uint32_t prio, uint32_t elem) {
     irq_elem[at] = irq_elem[at - 1]; irq_prio[at] = irq_prio[at - 1]; at--;
   }
   irq_elem[at] = elem; irq_prio[at] = prio; irq_n++;
-  cfg_logi("irq", "registered interrupt element 0x%08X prio=%u (chain now %d)", elem, prio, irq_n);
+  lucent::info("irq", "registered interrupt element 0x{:08X} prio={} (chain now {})", elem, prio, irq_n);
 }
 
 void Hle::irqDeq(uint32_t elem) {
@@ -211,7 +212,7 @@ void Hle::irqPoll(Core* c) {
   // Decline accounting. A ONE-SHOT version of this could not distinguish "declined once early" from
   // "declined for the entire run", which are completely different diagnoses — so count each reason
   // and report periodically. Cheap: only runs when the channel is on.
-  if (cfg_dbg("irq")) {
+  if (lucent::channel_on("irq")) {
     static unsigned n_crit = 0, n_nest = 0, n_transient = 0, n_report = 0;
     if (!irq_enabled) n_crit++;
     else if (in_irq) n_nest++;
@@ -219,8 +220,8 @@ void Hle::irqPoll(Core* c) {
     const unsigned tot = n_crit + n_nest + n_transient;
     if (tot && (tot % 200000) == 0 && n_report < 6) {
       n_report++;
-      cfg_logi("irq", "delivery declined %u times: critical-section=%u nested=%u transient=%u "
-                      "(irq_enabled=%d now)", tot, n_crit, n_nest, n_transient, irq_enabled);
+      lucent::info("irq", "delivery declined {} times: critical-section={} nested={} transient={} "
+                          "(irq_enabled={} now)", tot, n_crit, n_nest, n_transient, irq_enabled);
     }
   }
   if (in_irq || !irq_enabled) return;
@@ -248,8 +249,8 @@ void Hle::irqPoll(Core* c) {
     if (!handler) continue;
     // The BIOS passes the verifier's return to the handler; a handler that reads $a0 expects it.
     c->r[A0] = c->r[V0];
-    cfg_logf("irq", "delivering: elem 0x%08X handler 0x%08X (I_STAT&I_MASK=0x%03X)",
-             elem, handler, pending);
+    lucent::debug("irq", "delivering: elem 0x{:08X} handler 0x{:08X} (I_STAT&I_MASK=0x{:03X})",
+                  elem, handler, pending);
     rec_dispatch(c, handler);
     claimed = 1;
     break;
@@ -260,9 +261,9 @@ void Hle::irqPoll(Core* c) {
     static uint32_t last_unclaimed = 0xFFFFFFFFu;
     if (pending != last_unclaimed) {
       last_unclaimed = pending;
-      cfg_logi("irq", "pending I_STAT&I_MASK=0x%03X but NO registered element claimed it "
-                      "(%d in chain) — this game does not service that source via the BIOS chain",
-               pending, irq_n);
+      lucent::info("irq", "pending I_STAT&I_MASK=0x{:03X} but NO registered element claimed it "
+                          "({} in chain) — this game does not service that source via the BIOS chain",
+                   pending, irq_n);
     }
   }
 
@@ -284,7 +285,7 @@ void rec_irq_poll(Core* c) {
   // exists because the loop-back-edge gate demonstrably corrupts a guest global-base register on the
   // Spider-Man port, and "should be" is not evidence. Watches sp/fp/gp and the s-registers, which are
   // the ones a mid-function resume actually depends on.
-  const bool w = cfg_dbg("pollregs");
+  const bool w = lucent::channel_on("pollregs");
   uint32_t before[11];
   if (w) { before[0]=c->r[29]; before[1]=c->r[30]; before[2]=c->r[28];
            for (int i = 0; i < 8; i++) before[3+i] = c->r[16+i]; }
@@ -298,8 +299,8 @@ void rec_irq_poll(Core* c) {
                           c->r[20], c->r[21], c->r[22], c->r[23]};
     for (int i = 0; i < 11; i++)
       if (after[i] != before[i])
-        cfg_loge("pollregs", "poll CLOBBERED %s at pc=0x%08X: 0x%08X -> 0x%08X",
-                 nm[i], c->pc, before[i], after[i]);
+        lucent::error("pollregs", "poll CLOBBERED {} at pc=0x{:08X}: 0x{:08X} -> 0x{:08X}",
+                      nm[i], c->pc, before[i], after[i]);
   }
 }
 
@@ -312,9 +313,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
   // game actually use" — and that second question is what a port needs when deciding which BIOS
   // subsystem to model. $ra is the caller: the A0/B0/C0 stubs are tail jumps (`li $t2,0xA0; jr $t2`),
   // so it still holds the real call site and links a call back to the library routine that made it.
-  if (cfg_dbg("bios"))
-    cfg_logf("bios", "%c0:0x%02X(0x%08X, 0x%08X, 0x%08X, 0x%08X) from 0x%08X",
-             table, fn, a0, a1, a2, c->r[A3], c->r[31]);
+  lucent::debug("bios", "{}0:0x{:02X}(0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X}) from 0x{:08X}",
+                table, fn, a0, a1, a2, c->r[A3], c->r[31]);
   HleEvCB* s_ev = ev;   // alias so the switch bodies below read tersely
   if (table == 'A') {
     switch (fn) {
@@ -402,9 +402,9 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       // a guest reaching longjmp is a real event that needs a real mechanism (host setjmp at the
       // dispatch boundary, or a coroutine unwind), not a plausible-looking return.
       case 0x14:                                                       // longjmp(buf, val)
-        cfg_loge("hle", "A0:0x14 longjmp(buf=0x%08X, val=%u) — psxport has no guest unwind "
-                        "mechanism. Faking a return here would resume the wrong continuation with "
-                        "the failed operation's state live. Refusing.", a0, a1);
+        lucent::error("hle", "A0:0x14 longjmp(buf=0x{:08X}, val={}) — psxport has no guest unwind "
+                            "mechanism. Faking a return here would resume the wrong continuation with "
+                            "the failed operation's state live. Refusing.", a0, a1);
         abort();
       // A(3Fh) printf — the GAME'S OWN diagnostics. Leaving this unimplemented threw away the most
       // direct evidence a port can get: the binary saying, in English, what it thinks went wrong.
@@ -455,7 +455,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         out[o < sizeof out ? o : sizeof out - 1] = 0;
         // The guest terminates its own lines; strip a trailing newline so the log stays one-per-line.
         if (o && out[o - 1] == '\n') out[o - 1] = 0;
-        if (cfg_dbg("guest")) cfg_logf("guest", "%s", out);
+        lucent::debug("guest", "{}", out);
         c->r[V0] = 0; return true;
       }
       case 0x44: c->r[V0] = 0; return true;                              // FlushCache (no-op)
@@ -484,9 +484,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
             // discover a game's classes short of reading its OpenEvent call sites by hand; this
             // prints them from the run. Handle is what TestEvent/WaitEvent are later called with,
             // so it also links a spinning poll back to the event it is waiting on.
-            if (cfg_dbg("ev"))
-              cfg_logf("ev", "OpenEvent class=0x%08X spec=0x%08X mode=0x%08X handler=0x%08X -> handle=0x%08X",
-                       a0, a1, a2, c->r[A3], EV_ID_BASE + (uint32_t)i);
+            lucent::debug("ev", "OpenEvent class=0x{:08X} spec=0x{:08X} mode=0x{:08X} handler=0x{:08X} -> handle=0x{:08X}",
+                          a0, a1, a2, c->r[A3], EV_ID_BASE + (uint32_t)i);
             c->r[V0] = EV_ID_BASE + (uint32_t)i; return true;
           }
         c->r[V0] = 0xFFFFFFFFu; return true;                             // table full
@@ -507,7 +506,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         while (n + 1 < sizeof out) { const char ch = (char)c->mem_r8(a0 + n); if (!ch) break; out[n++] = ch; }
         out[n] = 0;
         if (n && out[n - 1] == '\n') out[n - 1] = 0;
-        if (cfg_dbg("guest")) cfg_logf("guest", "%s", out);
+        lucent::debug("guest", "{}", out);
         c->r[V0] = 0; return true;
       }
       case 0x12: case 0x13: case 0x14: case 0x15: case 0x16:              // BIOS pad — no-op (native)
@@ -519,11 +518,11 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
         // jumps to `ra` instead of resuming the interrupted context. Dump it: whether `+0` is a
         // function ENTRY decides whether a static recompile can enter it at all. A mid-function `ra`,
         // which a real setjmp would leave, is not an address the substrate can dispatch to.
-        if (cfg_dbg("bios")) {
-          cfg_logf("bios", "B0:0x19 custom-exit buf=0x%08X: ra=0x%08X sp=0x%08X fp=0x%08X gp=0x%08X",
-                   a0, c->mem_r32(a0), c->mem_r32(a0 + 4), c->mem_r32(a0 + 8), c->mem_r32(a0 + 0x2C));
+        if (lucent::channel_on("bios")) {
+          lucent::debug("bios", "B0:0x19 custom-exit buf=0x{:08X}: ra=0x{:08X} sp=0x{:08X} fp=0x{:08X} gp=0x{:08X}",
+                        a0, c->mem_r32(a0), c->mem_r32(a0 + 4), c->mem_r32(a0 + 8), c->mem_r32(a0 + 0x2C));
           for (int i = 0; i < 8; i++)
-            cfg_logf("bios", "  s%d = 0x%08X", i, c->mem_r32(a0 + 0x0Cu + 4u * (uint32_t)i));
+            lucent::debug("bios", "  s{} = 0x{:08X}", i, c->mem_r32(a0 + 0x0Cu + 4u * (uint32_t)i));
         }
         int_handler = a0; c->r[V0] = 0; return true;
       case 0x35: {                                                       // FileWrite
@@ -554,11 +553,11 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       // time answers it from the run: whichever slots hold addresses inside the recompiled .text are
       // the handler/verifier pair.
       case 0x02: case 0x03:
-        if (cfg_dbg("bios")) {
+        if (lucent::channel_on("bios")) {
           const char* which = (fn == 0x02) ? "SysEnqIntRP" : "SysDeqIntRP";
-          cfg_logf("bios", "%s prio=%u elem=0x%08X -> [+0]=0x%08X [+4]=0x%08X [+8]=0x%08X [+C]=0x%08X",
-                   which, a0, a1, c->mem_r32(a1), c->mem_r32(a1 + 4),
-                   c->mem_r32(a1 + 8), c->mem_r32(a1 + 12));
+          lucent::debug("bios", "{} prio={} elem=0x{:08X} -> [+0]=0x{:08X} [+4]=0x{:08X} [+8]=0x{:08X} [+C]=0x{:08X}",
+                        which, a0, a1, c->mem_r32(a1), c->mem_r32(a1 + 4),
+                        c->mem_r32(a1 + 8), c->mem_r32(a1 + 12));
         }
         if (fn == 0x02) irqEnq(a0, a1); else irqDeq(a1);
         c->r[V0] = a1; return true;
@@ -584,12 +583,12 @@ void rec_syscall(Core* c, uint32_t code) {
     case 1: c->r[V0] = irq_enabled ? 1 : 0; irq_enabled = 0; c->cop0[12] &= ~1u; break;  // EnterCritical
     case 2: irq_enabled = 1; c->cop0[12] |= 1u; c->r[V0] = 0; break;                     // ExitCritical
     default:
-      cfg_logi("syscall", "a0=%u (unhandled kernel op)", c->r[A0]);
+      lucent::info("syscall", "a0={} (unhandled kernel op)", c->r[A0]);
       c->r[V0] = 0;
   }
 }
 void rec_break(Core* c, uint32_t code) {
-  cfg_logi("break", "code %u", code);
+  lucent::info("break", "code {}", code);
   (void)c;
 }
 
@@ -610,17 +609,17 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     // it keep the old log-and-continue, because plenty of them are genuinely ignorable and several
     // are deliberately handled as no-ops above.
     if (tbl == 'A' && fn >= 0x13 && fn <= 0x2F) {
-      cfg_loge("hle", "\nFATAL: unimplemented BIOS A0:0x%02X (libc) — fail-fast.\n"
-                      "  This leaf RETURNS A VALUE the guest uses, and returning without writing $v0 "
-                      "hands it a stale result.\n"
-                      "  That is fabricating behaviour, not a missing feature: implement it in "
-                      "Hle::dispatchBios next to its siblings.\n"
-                      "  caller ra=0x%08X  a0=0x%08X a1=0x%08X a2=0x%08X", fn, c->r[31],
-               c->r[A0], c->r[A1], c->r[A2]);
+      lucent::error("hle", "\nFATAL: unimplemented BIOS A0:0x{:02X} (libc) — fail-fast.\n"
+                          "  This leaf RETURNS A VALUE the guest uses, and returning without writing $v0 "
+                          "hands it a stale result.\n"
+                          "  That is fabricating behaviour, not a missing feature: implement it in "
+                          "Hle::dispatchBios next to its siblings.\n"
+                          "  caller ra=0x{:08X}  a0=0x{:08X} a1=0x{:08X} a2=0x{:08X}", fn, c->r[31],
+                    c->r[A0], c->r[A1], c->r[A2]);
       fflush(stderr);
       abort();
     }
-    cfg_logi("hle", "UNIMPL %c0:0x%02X", tbl, fn);
+    lucent::info("hle", "UNIMPL {}0:0x{:02X}", tbl, fn);
     return;
   }
   // Non-recompiled code in RAM (loaded overlay, the boot stub, or an in-function computed-jump
@@ -637,21 +636,21 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
     if (addr >= 0x80108F9Cu && addr < 0x8018A000u) {       // a MODE/area-slot overlay address
       uint32_t stage = c->mem_r32(0x801fe00cu);
       uint32_t sm = c->mem_r32(0x1f800138u);
-      cfg_logi("miss-state", "stage=0x%08X sm=0x%08X sm[48]=%u [4a]=%u [4c]=%u [4e]=%u [50]=%u [52]=%u 1f80019b=%u areaidx(800bf870)=%u sopsig(80109450)=0x%08X 1f800234=%u", stage, sm,
+      lucent::info("miss-state", "stage=0x{:08X} sm=0x{:08X} sm[48]={} [4a]={} [4c]={} [4e]={} [50]={} [52]={} 1f80019b={} areaidx(800bf870)={} sopsig(80109450)=0x{:08X} 1f800234={}", stage, sm,
               sm ? c->mem_r16(sm + 0x48) : 0xffff, sm ? c->mem_r16(sm + 0x4a) : 0xffff,
               sm ? c->mem_r16(sm + 0x4c) : 0xffff, sm ? c->mem_r16(sm + 0x4e) : 0xffff,
               sm ? c->mem_r16(sm + 0x50) : 0xffff, sm ? c->mem_r16(sm + 0x52) : 0xffff,
               c->mem_r8(0x1f80019bu), c->mem_r8(0x800bf870u), c->mem_r32(0x80109450u), c->mem_r8(0x1f800234u));
       // Callee-saved regs often still hold the guest caller's locals (e.g. s0 = the object node in
       // the 0x8007D208 SFX-update family) — dump them plus the node fields s0 would imply.
-      cfg_logi("miss-regs", "s0=0x%08X s1=0x%08X s2=0x%08X s3=0x%08X", c->r[16], c->r[17], c->r[18], c->r[19]);
+      lucent::info("miss-regs", "s0=0x{:08X} s1=0x{:08X} s2=0x{:08X} s3=0x{:08X}", c->r[16], c->r[17], c->r[18], c->r[19]);
       uint32_t s0 = c->r[16];
       if (s0 >= 0x80000000u && s0 < 0x80200000u - 0x60u) {
-        cfg_logi("hle", "[miss-node s0] +0x00=0x%08X +0x1c(handler)=0x%08X +0x0d=%u +0x29=%u +0x44=%d +0x46=0x%02X +0x5c=%d", c->mem_r32(s0), c->mem_r32(s0 + 0x1cu), c->mem_r8(s0 + 0x0du), c->mem_r8(s0 + 0x29u),
+        lucent::info("hle", "[miss-node s0] +0x00=0x{:08X} +0x1c(handler)=0x{:08X} +0x0d={} +0x29={} +0x44={} +0x46=0x{:02X} +0x5c={}", c->mem_r32(s0), c->mem_r32(s0 + 0x1cu), c->mem_r8(s0 + 0x0du), c->mem_r8(s0 + 0x29u),
                 (int16_t)c->mem_r16(s0 + 0x44u), c->mem_r8(s0 + 0x46u), (int16_t)c->mem_r16(s0 + 0x5cu));
       }
     }
-    cfg_logw("hle", "\n[recomp-MISS %d] no recompiled fn for 0x%08X  (caller ra=0x%08X, a0=0x%08X, c->pc=0x%08X)\n  resident overlay for this slot = %s (if non-A00 but addr is an A00 fn -> stale pointer /\n  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.", c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
+    lucent::warn("hle", "\n[recomp-MISS {}] no recompiled fn for 0x{:08X}  (caller ra=0x{:08X}, a0=0x{:08X}, c->pc=0x{:08X})\n  resident overlay for this slot = {} (if non-A00 but addr is an A00 fn -> stale pointer /\n  wrong overlay resident; if matches but still missed -> function-discovery gap in that overlay)\n  not a recompiled MAIN fn / native override / platform-HLE leaf — likely overlay code or a\n  mid-function coroutine resume. The interpreter is removed; this is fail-fast by design.", c->game->hle.miss_count++, addr, c->r[31], c->r[4], c->pc, resov ? resov : "(addr not in any slot range)");
     guest_backtrace_to(c, stderr);
     guest_find_word_to(c, stderr, addr | 0x80000000u);
     // DUMP RAM BEFORE DYING. A miss is exactly the moment worth analysing offline — the missing code
@@ -665,10 +664,10 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
       if (!mp) mp = "scratch/raw/miss_ram.bin";
       if (strcmp(mp, "0") != 0) {
         if (Fs::writeFile(mp, c->ram, 0x200000))
-          cfg_logi("hle", "miss RAM dump -> %s (2 MB, base 0x80000000 — import with tools/decomp.sh)", mp);
+          lucent::info("hle", "miss RAM dump -> {} (2 MB, base 0x80000000 — import with tools/decomp.sh)", mp);
         else
-          cfg_logw("hle", "miss RAM dump FAILED to write %s — analysing this miss offline will need "
-                          "the state reconstructed by hand", mp);
+          lucent::warn("hle", "miss RAM dump FAILED to write {} — analysing this miss offline will need "
+                              "the state reconstructed by hand", mp);
       }
     }
     fflush(stderr);
@@ -681,5 +680,5 @@ void rec_dispatch_miss(Core* c, uint32_t addr) {
   // cores reach it identically (0-diff), i.e. it is faithful guest behavior, not a port miss. Return
   // silently: a null callback is a no-op, not a "no recompiled fn" error worth reporting.
   if ((addr & 0x1FFFFFFFu) == 0) return;
-  cfg_logi("hle", "[miss %d] addr 0x%08X (no recompiled fn / overlay)  (caller ra=0x%08X c->pc=0x%08X a0=0x%08X)", c->game->hle.miss_count++, addr, c->r[31], c->pc, c->r[4]);
+  lucent::info("hle", "[miss {}] addr 0x{:08X} (no recompiled fn / overlay)  (caller ra=0x{:08X} c->pc=0x{:08X} a0=0x{:08X})", c->game->hle.miss_count++, addr, c->r[31], c->pc, c->r[4]);
 }

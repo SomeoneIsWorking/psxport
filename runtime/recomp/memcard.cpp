@@ -16,6 +16,7 @@
 #include "core.h"
 #include "game.h"     // c->game->hle.deliverEvent — Hle subsystem lives on Game
 #include "cfg.h"
+#include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,7 +103,7 @@ void Memcard::init() {
     }
   }
   if (!mCard) {
-    cfg_loge("card", "FAILED to open/create card image: %s", mPath);
+    lucent::error("card", "FAILED to open/create card image: {}", mPath);
     return;
   }
   // Ensure the file is at least full card size (in case of a truncated prior file).
@@ -138,10 +139,10 @@ void Memcard::init() {
         fwrite(fr, 1, kFrameSize, mCard);
       }
       fflush(mCard);
-      cfg_logi("card", "formatted blank card image (MC header + 15 free dir entries)");
+      lucent::info("card", "formatted blank card image (MC header + 15 free dir entries)");
     }
   }
-  cfg_logi("card", "%s (%u frames / 128 KB)", mPath, kFrames);
+  lucent::info("card", "{} ({} frames / 128 KB)", mPath, kFrames);
 }
 
 void Memcard::readFrame(uint32_t frame, uint8_t* out128) {
@@ -256,7 +257,7 @@ static void card_read(Core* c) {
   uint8_t f[Memcard::kFrameSize];
   m.readFrame(sector, f);
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) c->mem_w8(buf + i, f[i]);
-  if (m.verbose()) cfg_logi("card", "read  frame %u -> 0x%08X", sector, buf);
+  if (m.verbose()) lucent::info("card", "read  frame {} -> 0x{:08X}", sector, buf);
   c->r[V0] = 1;
 }
 
@@ -267,7 +268,7 @@ static void card_write(Core* c) {
   uint8_t f[Memcard::kFrameSize];
   for (uint32_t i = 0; i < Memcard::kFrameSize; i++) f[i] = c->mem_r8(buf + i);
   m.writeFrame(sector, f);
-  if (m.verbose()) cfg_logi("card", "write frame %u <- 0x%08X", sector, buf);
+  if (m.verbose()) lucent::info("card", "write frame {} <- 0x{:08X}", sector, buf);
   c->r[V0] = 1;
 }
 
@@ -284,12 +285,12 @@ static void file_open(Core* c) {
     uint32_t nblocks = (mode >> 16) & 0xFFFFu; if (!nblocks) nblocks = 1;
     blk = m.dirCreate(name, nblocks * (Memcard::kBlockFrames - 1) * Memcard::kFrameSize);
   }
-  if (blk < 0) { c->r[V0] = 0xFFFFFFFFu; if (m.verbose()) cfg_logi("card", "open '%s' mode=%X -> FAIL", name, mode); return; }
+  if (blk < 0) { c->r[V0] = 0xFFFFFFFFu; if (m.verbose()) lucent::info("card", "open '{}' mode={:X} -> FAIL", name, mode); return; }
   uint8_t e[Memcard::kFrameSize]; m.readFrame((uint32_t)blk, e);
   uint32_t sz = (uint32_t)e[4] | ((uint32_t)e[5] << 8) | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
   int fd = m.fdAlloc(blk, sz);
   c->r[V0] = (fd < 0) ? 0xFFFFFFFFu : (uint32_t)fd;
-  if (m.verbose()) cfg_logi("card", "open '%s' mode=%X -> fd=%d block=%d size=%u", name, mode, fd, blk, sz);
+  if (m.verbose()) lucent::info("card", "open '{}' mode={:X} -> fd={} block={} size={}", name, mode, fd, blk, sz);
 }
 
 // B0:0x33 lseek(fd, off, whence).
@@ -302,7 +303,7 @@ static void file_lseek(Core* c) {
   uint32_t base = (whence == 1) ? f->pos : (whence == 2) ? f->size : 0u;
   f->pos = base + (uint32_t)off;
   c->r[V0] = f->pos;
-  if (m.verbose()) cfg_logi("card", "lseek fd=%d off=%d whence=%u -> pos=%u", fd, off, whence, f->pos);
+  if (m.verbose()) lucent::info("card", "lseek fd={} off={} whence={} -> pos={}", fd, off, whence, f->pos);
 }
 
 // B0:0x34 read(fd, buf, len).
@@ -321,7 +322,7 @@ static void file_read(Core* c) {
   }
   f->pos += len;
   c->r[V0] = len;
-  if (m.verbose()) cfg_logi("card", "read  fd=%d -> 0x%08X len=%u (pos now %u)", fd, buf, len, f->pos);
+  if (m.verbose()) lucent::info("card", "read  fd={} -> 0x{:08X} len={} (pos now {})", fd, buf, len, f->pos);
   Memcard::deliverComplete(c);
 }
 
@@ -348,7 +349,7 @@ static void file_write(Core* c) {
   if (cur_frame != 0xFFFFFFFFu) m.writeFrame(cur_frame, fr);      // flush the last partial frame
   f->pos += len;
   c->r[V0] = len;
-  if (m.verbose()) cfg_logi("card", "write fd=%d <- 0x%08X len=%u (pos now %u)", fd, buf, len, f->pos);
+  if (m.verbose()) lucent::info("card", "write fd={} <- 0x{:08X} len={} (pos now {})", fd, buf, len, f->pos);
   Memcard::deliverComplete(c);
 }
 
@@ -360,7 +361,7 @@ static void file_close(Core* c) {
   bool ok = m.fdValid(fd);
   if (ok) m.fdFree(fd);
   c->r[V0] = ok ? (uint32_t)fd : 0xFFFFFFFFu;
-  if (m.verbose()) cfg_logi("card", "close fd=%d", fd);
+  if (m.verbose()) lucent::info("card", "close fd={}", fd);
 }
 
 // B0:0x45 erase(name).
@@ -368,13 +369,13 @@ static void file_erase(Core* c) {
   Memcard& m = c->game->memcard;
   char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
   int blk = m.dirFind(name);
-  if (blk < 0) { c->r[V0] = 0; if (m.verbose()) cfg_logi("card", "erase '%s' -> not found", name); return; }
+  if (blk < 0) { c->r[V0] = 0; if (m.verbose()) lucent::info("card", "erase '{}' -> not found", name); return; }
   uint8_t e[Memcard::kFrameSize]; memset(e, 0, sizeof e);
   e[0] = Memcard::kDirFree; e[8] = 0xFF; e[9] = 0xFF;
   uint8_t x = 0; for (uint32_t i = 0; i < 0x7F; i++) x ^= e[i]; e[0x7F] = x;
   m.writeFrame((uint32_t)blk, e);
   c->r[V0] = 1;
-  if (m.verbose()) cfg_logi("card", "erase '%s' (block %d) -> ok", name, blk);
+  if (m.verbose()) lucent::info("card", "erase '{}' (block {}) -> ok", name, blk);
 }
 
 // B0:0x43 firstfile — the menu opens slots by name directly, so "no more files" is sufficient.
@@ -391,7 +392,7 @@ extern "C" int card_hle_a0(uint32_t fn, Core* c) {
   switch (fn) {
     case 0xABu:   // _card_info(port)
     case 0xACu:   // _card_load(slot)
-      if (m.verbose()) cfg_logi("card", "A0:0x%02X(a0=%X a1=%X a2=%X)", fn, c->r[A0], c->r[A1], c->r[A2]);
+      if (m.verbose()) lucent::info("card", "A0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
       Memcard::deliverComplete(c); c->r[V0] = 1; return 1;
     default: return 0;
   }
@@ -403,7 +404,7 @@ extern "C" int card_hle_b0(uint32_t fn, Core* c) {
   Memcard& m = c->game->memcard;
   switch (fn) {
     case 0x4Cu: case 0x4Eu: case 0x4Fu: case 0x50u: case 0x5Cu:
-      if (m.verbose()) cfg_logi("card", "B0:0x%02X(a0=%X a1=%X a2=%X)", fn, c->r[A0], c->r[A1], c->r[A2]);
+      if (m.verbose()) lucent::info("card", "B0:0x{:02X}(a0={:X} a1={:X} a2={:X})", fn, c->r[A0], c->r[A1], c->r[A2]);
       break;
     default: break;
   }
@@ -426,7 +427,7 @@ extern "C" int card_hle_b0(uint32_t fn, Core* c) {
 
 void card_overrides_init(Game* game) {
   Memcard& m = game->memcard;
-  if (cfg_dbg("card")) m.setVerbose(true);
+  if (lucent::channel_on("card")) m.setVerbose(true);
   m.init();
   // Low-level libcard B0 frame primitives + BIOS file API dispatch through card_hle_b0 above;
   // no address overrides needed.

@@ -4,7 +4,6 @@
 #include "render_node.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
 #include "game.h"
-#include "cfg.h"
 
 // Packet pool range (RE'd render-buffer map): the shared pool every GP0 packet submitter
 // (owned native or still-substrate) writes into.
@@ -20,22 +19,13 @@ void OtAttr::resetIfNewFrame(uint32_t frame) {
 
 void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
   // Reached from Core::mem_w32 via pkt_track — on EVERY guest memory write, the hottest path in the
-  // substrate. cfg_dbg() is not a cheap flag test: it calls into lucent and string-compares the channel
-  // name against the enabled set. MEASURED on the Spyro port with a 6-sample stack profile: 6/6 samples
-  // landed in lucent::detail::channel_enabled reached from exactly here. The old comment called this "a
-  // single predicted-false check" — it never was.
+  // substrate. Looking the channel up by NAME here is not a cheap flag test: it hashes the name under
+  // a mutex. MEASURED on the Spyro port with a 6-sample stack profile: 6/6 samples landed in
+  // lucent::detail::channel_enabled reached from exactly here.
   //
-  // Cache the answer, re-checking only when the enabled-channel SET changes, so the steady state is an
-  // integer compare. bootstrap and the REPL `debug` command both bump the generation, so `debug otattr`
-  // still takes effect immediately.
-  // Cache into the MEMBERS the inline gate in ot_attr.h reads. They were file-scope statics here, so
-  // the inline fast path compared against members that nothing ever updated and every call fell
-  // through to this function — which measured WORSE than before the "optimisation" (5.22% vs 2.54%).
-  // Exactly the failure mode as the lucent fix earlier: a fast path that never engages.
-  const unsigned gen = cfg_dbg_generation_fast();
-  if (gen != mTsGen) { mTsGen = gen; mTsOn = cfg_dbg("otattr"); }
-  if (!mTsOn) return;
-
+  // The gate is now the inline `if (!g_otattr_channel)` in ot_attr.h and there is nothing left to
+  // re-check here: a Channel re-resolves itself whenever the enabled set changes, so `debug otattr`
+  // at the REPL still takes effect on the next store. Anything reaching this function is armed.
   const uint32_t frame  = c->game->gpu.s_frame;
   const uint32_t fn     = c->idiag.otattrTop();
   const uint32_t caller = c->idiag.otattrCaller();
@@ -76,7 +66,7 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
 }
 
 void OtAttr::trackGte(Core* c) {
-  if (!cfg_dbg("otattr")) return;
+  if (!g_otattr_channel) return;
   const uint32_t frame = c->game->gpu.s_frame;
   if (frame != mGteFrame) { mGteFrame = frame; mGteCount = 0; mGteOverflow = 0; }
 

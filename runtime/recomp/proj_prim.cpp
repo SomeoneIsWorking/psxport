@@ -1,6 +1,7 @@
 // class ProjPrim — impl. See proj_prim.h for the design.
 #include "proj_prim.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include <stdio.h>
 
 ProjPrim* ProjPrim::sCurrent = nullptr;
@@ -68,8 +69,8 @@ void ProjPrim::setPz(uint32_t addr, float pz) {
   mSetCt++;
   if (!mInited) reset();
   addr = pz_key(addr);
-  if (cfg_dbg("pzaddr") && s_pz_dbg_set < 12)
-    { s_pz_dbg_set++; cfg_logf("pzaddr", "RECORD [%06X] pz=%.1f", addr, (double)pz); }
+  if (s_pz_dbg_set < 12)
+    { s_pz_dbg_set++; lucent::debug("pzaddr", "RECORD [{:06X}] pz={:.1f}", addr, (double)pz); }
   uint32_t h = hashOf(addr);
   for (int i = mHead[h]; i >= 0; i = mEntries[i].next)
     if (mEntries[i].addr == addr) { mEntries[i].pz = pz; mEntries[i].gen = mGen; return; }
@@ -96,8 +97,8 @@ bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
       return true;
     }
   mMissCt++;
-  if (cfg_dbg("pzaddr") && s_pz_dbg_miss < 12)
-    { s_pz_dbg_miss++; cfg_logf("pzaddr", "MISS   [%06X]", addr); }
+  if (s_pz_dbg_miss < 12)
+    { s_pz_dbg_miss++; lucent::debug("pzaddr", "MISS   [{:06X}]", addr); }
   // NEAR-MISS HISTOGRAM (`debug pznear`). "Records climb, hits do not" has two completely different
   // causes — the depth is being attached to the WRONG BUFFER entirely, or to the RIGHT buffer at the
   // WRONG WORD — and the hit/miss ratio cannot tell them apart. This can: for every miss, probe the
@@ -109,7 +110,7 @@ bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
   // Deliberately NOT capped at the first N: this fires on the same frames the summary describes, and
   // the first N misses of a run are boot frames with no geometry at all — the mistake `pzaddr`'s own
   // 12-line cap makes, which is why it has never answered this question.
-  if (cfg_dbg("pznear")) {
+  if (lucent::channel_on("pznear")) {
     static const int kOff[] = {-32,-28,-24,-20,-16,-12,-8,-4,4,8,12,16,20,24,28,32};
     for (int k = 0; k < (int)(sizeof kOff / sizeof kOff[0]); k++)
       if (peekPz((uint32_t)((int32_t)addr + kOff[k]), nullptr)) mNear[k]++;
@@ -121,22 +122,22 @@ bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
 // Report the near-miss histogram, and say plainly when it found nothing — a silent "(no data)" here
 // would read exactly like "the offsets are all wrong", which is a different answer.
 void ProjPrim::nearReport(const char* tag) {
-  if (!cfg_dbg("pznear")) return;
+  if (!lucent::channel_on("pznear")) return;
   static const int kOff[] = {-32,-28,-24,-20,-16,-12,-8,-4,4,8,12,16,20,24,28,32};
   long tot = 0;
   for (int k = 0; k < 16; k++) tot += mNear[k];
-  if (!mNearMiss) { cfg_logf("pznear", "%s: no misses probed yet", tag); return; }
+  if (!mNearMiss) { lucent::debug("pznear", "{}: no misses probed yet", tag ? tag : "(null)"); return; }
   if (!tot) {
-    cfg_logf("pznear", "%s: %ld misses probed, NONE had a recorded depth within +/-32 bytes — the "
-                       "depths are not in this buffer at all, so no stride fix can help",
-             tag, mNearMiss);
+    lucent::debug("pznear", "{}: {} misses probed, NONE had a recorded depth within +/-32 bytes — the "
+                            "depths are not in this buffer at all, so no stride fix can help",
+                  tag ? tag : "(null)", mNearMiss);
     mNearMiss = 0;
     return;
   }
   char line[256]; int n = 0;
   for (int k = 0; k < 16 && n < (int)sizeof line - 24; k++)
     if (mNear[k]) n += snprintf(line + n, sizeof line - n, " %+d:%ld", kOff[k], mNear[k]);
-  cfg_logf("pznear", "%s: %ld misses probed, %ld had a recorded depth nearby —%s", tag, mNearMiss, tot, line);
+  lucent::debug("pznear", "{}: {} misses probed, {} had a recorded depth nearby —{}", tag ? tag : "(null)", mNearMiss, tot, line);
   for (int k = 0; k < 16; k++) mNear[k] = 0;
   mNearMiss = 0;
 }

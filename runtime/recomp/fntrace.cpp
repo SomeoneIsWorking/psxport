@@ -40,6 +40,7 @@
 #include "cfg.h"
 #include "core.h"
 #include "recomp_iface.h"
+#include <lucent/log.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -79,15 +80,15 @@ void hook(Core* c) {
   const uint32_t addr = c->pc;
   const int i = find(addr);
   if (i < 0) {
-    cfg_loge("fntrace", "hook fired with pc=%08X, which is not a traced address — the dispatcher's "
-                        "pc-before-override contract no longer holds; counts cannot be trusted", addr);
+    lucent::error("fntrace", "hook fired with pc={:08X}, which is not a traced address — the dispatcher's "
+                             "pc-before-override contract no longer holds; counts cannot be trusted", addr);
     return;
   }
   if (g_sites[i].hits == 0) {
     g_sites[i].first_ra = c->r[31];
     g_sites[i].first_frame = gpu_frame_no(c);
-    cfg_logi("fntrace", "0x%08X REACHED — first call at frame %d from ra=%08X",
-             addr, g_sites[i].first_frame, g_sites[i].first_ra);
+    lucent::info("fntrace", "0x{:08X} REACHED — first call at frame {} from ra={:08X}",
+                 addr, g_sites[i].first_frame, g_sites[i].first_ra);
   }
   g_sites[i].hits++;
 
@@ -96,9 +97,9 @@ void hook(Core* c) {
   // watchpoint shows memory, the ABI check shows preservation, and neither shows what a loop
   // counter actually HOLDS on entry.
   if (g_regs_n && (long)g_sites[i].hits <= g_regs_n)
-    cfg_logi("fntrace", "0x%08X call #%lu: a0=%08X a1=%08X a2=%08X a3=%08X | s0=%08X s1=%08X s2=%08X s3=%08X",
-             addr, g_sites[i].hits, c->r[4], c->r[5], c->r[6], c->r[7],
-             c->r[16], c->r[17], c->r[18], c->r[19]);
+    lucent::info("fntrace", "0x{:08X} call #{}: a0={:08X} a1={:08X} a2={:08X} a3={:08X} | s0={:08X} s1={:08X} s2={:08X} s3={:08X}",
+                 addr, g_sites[i].hits, c->r[4], c->r[5], c->r[6], c->r[7],
+                 c->r[16], c->r[17], c->r[18], c->r[19]);
 
   // ABI CHECK. Snapshot the callee-saved registers, run the body, and compare. This is free to add
   // here because the trampoline already brackets the call, and it answers a question nothing else can:
@@ -129,12 +130,12 @@ void hook(Core* c) {
     g_sites[i].abi_violations++;
     if (g_sites[i].abi_reported) continue;
     if (listed++ == 0)
-      cfg_loge("fntrace", "0x%08X VIOLATES THE ABI. A guest compiler does not emit this, so the "
-                          "RECOMPILATION is wrong; the damage lands in the caller's locals, far "
-                          "from here. Every register that moved:", addr);
-    cfg_loge("fntrace", "    %-2s entered as %08X, returned as %08X%s",
-             CALLEE_SAVED_NAME[k], saved[k], c->r[CALLEE_SAVED[k]],
-             CALLEE_SAVED[k] == 29 ? "   (sp moved: an epilogue did not run)" : "");
+      lucent::error("fntrace", "0x{:08X} VIOLATES THE ABI. A guest compiler does not emit this, so the "
+                               "RECOMPILATION is wrong; the damage lands in the caller's locals, far "
+                               "from here. Every register that moved:", addr);
+    lucent::error("fntrace", "    {:<2} entered as {:08X}, returned as {:08X}{}",
+                  CALLEE_SAVED_NAME[k], saved[k], c->r[CALLEE_SAVED[k]],
+                  CALLEE_SAVED[k] == 29 ? "   (sp moved: an epilogue did not run)" : "");
   }
   if (listed) g_sites[i].abi_reported = 1;
 }
@@ -143,12 +144,12 @@ void report() {
   if (!g_on) return;
   for (int i = 0; i < g_n; i++) {
     if (g_sites[i].hits)
-      cfg_logi("fntrace", "0x%08X: %lu call(s), first at frame %d from ra=%08X, ABI violations %lu",
-               g_sites[i].addr, g_sites[i].hits, g_sites[i].first_frame, g_sites[i].first_ra,
-               g_sites[i].abi_violations);
+      lucent::info("fntrace", "0x{:08X}: {} call(s), first at frame {} from ra={:08X}, ABI violations {}",
+                   g_sites[i].addr, g_sites[i].hits, g_sites[i].first_frame, g_sites[i].first_ra,
+                   g_sites[i].abi_violations);
     else
-      cfg_logi("fntrace", "0x%08X: NEVER CALLED — control did not reach it in this run",
-               g_sites[i].addr);
+      lucent::info("fntrace", "0x{:08X}: NEVER CALLED — control did not reach it in this run",
+                   g_sites[i].addr);
   }
 }
 
@@ -171,7 +172,7 @@ void fntrace_init() {
   if (!s || !*s) return;
   const RecompRegistry* R = psxport_recomp();
   if (!R || !R->shard_set_override || !R->main_dispatch) {
-    cfg_loge("fntrace", "recomp registry not installed yet — call fntrace_init() after it");
+    lucent::error("fntrace", "recomp registry not installed yet — call fntrace_init() after it");
     return;
   }
   char buf[512];
@@ -182,8 +183,8 @@ void fntrace_init() {
     if (R->rec_func_index && R->rec_func_index(a) < 0) {
       // Not a MAIN entry: either an overlay address (unhookable here) or not a function start at all.
       // Say which, because "my trace printed nothing" otherwise looks like "the code never ran".
-      cfg_loge("fntrace", "0x%08X is not a MAIN function entry — overlay entries cannot be hooked "
-                          "this way, and a mid-function address is not an entry at all. NOT traced.", a);
+      lucent::error("fntrace", "0x{:08X} is not a MAIN function entry — overlay entries cannot be hooked "
+                               "this way, and a mid-function address is not an entry at all. NOT traced.", a);
       continue;
     }
     g_sites[g_n].addr = a; g_sites[g_n].hits = 0;
@@ -195,5 +196,5 @@ void fntrace_init() {
   atexit(report);
   signal(SIGTERM, on_term);
   signal(SIGINT, on_term);
-  cfg_logi("fntrace", "tracing %d guest function(s); a zero count at exit means NEVER REACHED", g_n);
+  lucent::info("fntrace", "tracing {} guest function(s); a zero count at exit means NEVER REACHED", g_n);
 }

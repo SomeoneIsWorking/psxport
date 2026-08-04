@@ -61,7 +61,7 @@ static int run_startgame(const char* path) {
     uint32_t st = stage(), s = sm48();
     if (verbose && (st != last_stage || s != last_sm)) {
       const char* n = st == STAGE_DEMO ? "DEMO" : st == STAGE_GAME ? "GAME" : "?";
-      cfg_logi("selftest", "f%u stage=%s(0x%08X) sm[0x48]=%u", f, n, st, s);
+      lucent::info("selftest", "f{} stage={}(0x{:08X}) sm[0x48]={}", f, n, st, s);
       last_stage = st; last_sm = s;
     }
   };
@@ -75,11 +75,11 @@ static int run_startgame(const char* path) {
     log_change();
   }
   if (stage() != STAGE_GAME) {
-    cfg_logi("selftest", "FAIL: never reached GAME stage after %u frames of mashing Start (stuck stage=0x%08X sm[0x48]=%u)", f, stage(), sm48());
+    lucent::info("selftest", "FAIL: never reached GAME stage after {} frames of mashing Start (stuck stage=0x{:08X} sm[0x48]={})", f, stage(), sm48());
     return 1;
   }
   uint32_t reached_at = f;
-  cfg_logi("selftest", "reached GAME stage at frame %u — now checking it reaches free-roam", reached_at);
+  lucent::info("selftest", "reached GAME stage at frame {} — now checking it reaches free-roam", reached_at);
 
   // Phase 2 — DON'T touch Start in gameplay (Start = pause menu). Just step and require the GAME state
   // machine to advance to field free-roam (sm[0x48]==2). A freeze = it never gets there.
@@ -112,7 +112,7 @@ static int run_startgame(const char* path) {
         for (uint32_t k = 0; k < WIN; k++, f++) dc_step_frame(c, f);
         if (xa_stream_is_active(&game->xa)) saw_clip = 1;
         else if (saw_clip) clip_ended = 1;
-        if (verbose) cfg_logi("selftest", "  window %u: loop raw=%u xa_active=%d", w, c->mem_r16(0x1F800198u), xa_stream_is_active(&game->xa));
+        if (verbose) lucent::info("selftest", "  window {}: loop raw={} xa_active={}", w, c->mem_r16(0x1F800198u), xa_stream_is_active(&game->xa));
       }
       uint32_t loop_adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
       int loop_ran = (loop_adv > 0) || (sm48() == 2 && c->mem_r16(0x1F800198u) != c0);
@@ -132,20 +132,20 @@ static int run_startgame(const char* path) {
         for (uint32_t k = 0; k < RUN; k++, f++) dc_step_frame(c, f);
         uint32_t adv = (uint16_t)(c->mem_r16(0x1F800198u) - before);
         if (adv < 50) {
-          cfg_loge("selftest", "FAIL: field FROZE after the intro clip — GAME loop counter *(0x1F800198) advanced only %u over %u frames (stuck=%u). The full-PSX field is not progressing (recomp-coro callee-saved-register corruption — see docs/findings/sbs.md / FUN_8003c048 jump-table emit).", adv, RUN, c->mem_r16(0x1F800198u));
+          lucent::error("selftest", "FAIL: field FROZE after the intro clip — GAME loop counter *(0x1F800198) advanced only {} over {} frames (stuck={}). The full-PSX field is not progressing (recomp-coro callee-saved-register corruption — see docs/findings/sbs.md / FUN_8003c048 jump-table emit).", adv, RUN, c->mem_r16(0x1F800198u));
           return 1;
         }
-        cfg_logi("selftest", "PASS: GAME loop RAN, the intro XA clip PLAYED then COMPLETED headless, AND the field KEEPS running (counter +%u over %u frames).", adv, RUN);
+        lucent::info("selftest", "PASS: GAME loop RAN, the intro XA clip PLAYED then COMPLETED headless, AND the field KEEPS running (counter +{} over {} frames).", adv, RUN);
         return 0;
       }
-      cfg_logi("selftest", "FAIL: loop_ran=%d (counter +%u) saw_clip=%d clip_ended=%d (xa_active=%d sm[0x48]=%u).", loop_ran, loop_adv, saw_clip, clip_ended, xa_stream_is_active(&game->xa), sm48());
+      lucent::info("selftest", "FAIL: loop_ran={} (counter +{}) saw_clip={} clip_ended={} (xa_active={} sm[0x48]={}).", loop_ran, loop_adv, saw_clip, clip_ended, xa_stream_is_active(&game->xa), sm48());
       return 1;
     }
     if (stage() != STAGE_GAME) {   // bounced back out of GAME (e.g. froze->reset) — not free-roam
-      cfg_logi("selftest", "note: left GAME stage at frame %u (stage=0x%08X)", f, stage());
+      lucent::info("selftest", "note: left GAME stage at frame {} (stage=0x{:08X})", f, stage());
     }
   }
-  cfg_logi("selftest", "FAIL: GAME stage entered at f%u but field never reached free-roam (stuck sm[0x48]=%u after %u frames) — the start-game sequence FROZE.", reached_at, sm48(), SETTLE_CAP);
+  lucent::info("selftest", "FAIL: GAME stage entered at f{} but field never reached free-roam (stuck sm[0x48]={} after {} frames) — the start-game sequence FROZE.", reached_at, sm48(), SETTLE_CAP);
   return 1;
 }
 
@@ -177,10 +177,10 @@ static int run_narration(const char* path) {
     dc_step_frame(c, f);
   }
   if (stage() != STAGE_GAME) {
-    cfg_logi("selftest", "FAIL: never reached GAME stage after %u frames (stuck stage=0x%08X)", f, stage());
+    lucent::info("selftest", "FAIL: never reached GAME stage after {} frames (stuck stage=0x{:08X})", f, stage());
     return 1;
   }
-  cfg_logi("selftest", "reached GAME at frame %u — now playing the intro narration (no input) through the field transition", f);
+  lucent::info("selftest", "reached GAME at frame {} — now playing the intro narration (no input) through the field transition", f);
 
   // Release input and run a long window spanning the narration AND the SOP->field transition (the crash was
   // ~frame 1105 into GAME). If the render-queue overflow fires, the process aborts here and the test dies.
@@ -190,14 +190,14 @@ static int run_narration(const char* path) {
   for (uint32_t k = 0; k < RUN; k++, f++) {
     dc_step_frame(c, f);
     if (verbose && (k % 200u) == 0)
-      cfg_logi("selftest", "  narration f=%u sm[0x48]=%u loop=%u", f, sm48(), c->mem_r16(0x1F800198u));
+      lucent::info("selftest", "  narration f={} sm[0x48]={} loop={}", f, sm48(), c->mem_r16(0x1F800198u));
   }
   uint32_t adv = (uint16_t)(c->mem_r16(0x1F800198u) - c0);
   if (adv < 50) {
-    cfg_logi("selftest", "FAIL: GAME loop did not progress through the narration (counter advanced only %u over %u frames; sm[0x48]=%u). The narration->field transition stalled.", adv, RUN, sm48());
+    lucent::info("selftest", "FAIL: GAME loop did not progress through the narration (counter advanced only {} over {} frames; sm[0x48]={}). The narration->field transition stalled.", adv, RUN, sm48());
     return 1;
   }
-  cfg_logi("selftest", "PASS: the un-skipped intro narration played through the field transition WITHOUT a render-queue overflow, and the GAME loop kept running (counter +%u over %u frames).", adv, RUN);
+  lucent::info("selftest", "PASS: the un-skipped intro narration played through the field transition WITHOUT a render-queue overflow, and the GAME loop kept running (counter +{} over {} frames).", adv, RUN);
   return 0;
 }
 
@@ -234,10 +234,10 @@ static int run_oracle(const char* path) {
     dc_step_frame(c, f);
   }
   if (stage() != STAGE_GAME) {
-    cfg_logi("selftest", "FAIL(oracle): interpreter core never reached GAME after %u frames (stuck stage=0x%08X sm[0x48]=%u)", f, stage(), sm48());
+    lucent::info("selftest", "FAIL(oracle): interpreter core never reached GAME after {} frames (stuck stage=0x{:08X} sm[0x48]={})", f, stage(), sm48());
     return 1;
   }
-  cfg_logi("selftest", "oracle: reached GAME at frame %u — now running the cutscene interpreted", f);
+  lucent::info("selftest", "oracle: reached GAME at frame {} — now running the cutscene interpreted", f);
   c->game->pad.driveHold(PAD_NONE);
 
   // Run a long window; track the loop counter and the furthest SOP scene id seen.
@@ -253,14 +253,14 @@ static int run_oracle(const char* path) {
     // (overlay 0x801138A4, scene byte back to 0), dump the soft-GPU field framebuffer at a couple of
     // settled frames so we can diff the REAL PSX field render against the native VK shot.
     if (ovsig() == 0x801138A4u && sc == 0) {
-      if (freeroam_since < 0) { freeroam_since = (int)k; cfg_logi("selftest", "  oracle: FREE-ROAM field reached at f=%u", f); }
+      if (freeroam_since < 0) { freeroam_since = (int)k; lucent::info("selftest", "  oracle: FREE-ROAM field reached at f={}", f); }
       int held = (int)k - freeroam_since;
       if (held == 30 || held == 120 || held == 300 ||
           held == 600 || held == 1200 || held == 1800 ||
           held == 2400 || held == 2550 || held == 2600 || held == 2700) {
         char p[160]; snprintf(p, sizeof p, "scratch/screenshots/oracle_field_h%d_f%u.ppm", held, f);
         gpu_native_shot(c, p);
-        cfg_logi("selftest", "  oracle: dumped free-roam field framebuffer %s", p);
+        lucent::info("selftest", "  oracle: dumped free-roam field framebuffer {}", p);
       }
     }
     // Phase-2 deliverable: dump the oracle's SOFTWARE-rendered framebuffer the first time we reach each
@@ -277,16 +277,16 @@ static int run_oracle(const char* path) {
       gpu_native_shot(c, p);
     }
     if (verbose && (k % 250) == 0)
-      cfg_logi("selftest", "  oracle f=%u loop=%u sm[0x48]=%u scene(bf9b4)=%u ovsig=0x%08X", f, loopc(), sm48(), sc, ovsig());
+      lucent::info("selftest", "  oracle f={} loop={} sm[0x48]={} scene(bf9b4)={} ovsig=0x{:08X}", f, loopc(), sm48(), sc, ovsig());
   }
-  cfg_logi("selftest", "  oracle END-OF-CUTSCENE: f=%u scene=%u ovsig=0x%08X (0x801138A4=free-roam field)", f, scene(), ovsig());
+  lucent::info("selftest", "  oracle END-OF-CUTSCENE: f={} scene={} ovsig=0x{:08X} (0x801138A4=free-roam field)", f, scene(), ovsig());
   uint32_t adv = (uint16_t)(loopc() - c0);
   // The recomp full-PSX path froze with adv≈0 (counter stuck ~34). The interpreter must advance FAR past that.
   if (adv < 100) {
-    cfg_logi("selftest", "FAIL(oracle): GAME loop did not advance under interpretation (counter +%u over %u frames; sm[0x48]=%u, max scene=%u) — the interpreter oracle froze.", adv, RUN, sm48(), max_scene);
+    lucent::info("selftest", "FAIL(oracle): GAME loop did not advance under interpretation (counter +{} over {} frames; sm[0x48]={}, max scene={}) — the interpreter oracle froze.", adv, RUN, sm48(), max_scene);
     return 1;
   }
-  cfg_logi("selftest", "PASS(oracle): interpreter core RAN the cutscene without freeze/MISS (GAME loop +%u over %u frames; furthest SOP scene id=%u).", adv, RUN, max_scene);
+  lucent::info("selftest", "PASS(oracle): interpreter core RAN the cutscene without freeze/MISS (GAME loop +{} over {} frames; furthest SOP scene id={}).", adv, RUN, max_scene);
   return 0;
 }
 
@@ -346,11 +346,11 @@ static int run_oraclediff(const char* path) {
   for (; fa < 4000 && stageA() != STAGE_GAME; fa++) { bool on=(fa%16u)<8u; A->pad.driveHold(on?((fa&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&A->core, fa); }
   for (; fb < 4000 && stageB() != STAGE_GAME; fb++) { bool on=(fb%16u)<8u; B->pad.driveHold(on?((fb&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&B->core, fb); }
   if (stageA() != STAGE_GAME || stageB() != STAGE_GAME) {
-    cfg_logi("oraclediff", "FAIL: reach GAME — A stage=0x%08X (f%u), B stage=0x%08X (f%u)", stageA(), fa, stageB(), fb);
+    lucent::info("oraclediff", "FAIL: reach GAME — A stage=0x{:08X} (f{}), B stage=0x{:08X} (f{})", stageA(), fa, stageB(), fb);
     return 1;
   }
   A->pad.driveHold(PAD_NONE); B->pad.driveHold(PAD_NONE);
-  cfg_logi("oraclediff", "both at GAME (A f%u, B f%u). Checkpoint-diffing the narration beats.", fa, fb);
+  lucent::info("oraclediff", "both at GAME (A f{}, B f{}). Checkpoint-diffing the narration beats.", fa, fb);
 
   int total_div = 0, summary_div = 0;   // summary_div = narration+free-roam only (excludes the render-noisy interactive walk)
   // Shared engine-state RAM diff at an aligned checkpoint (both cores parked at the same game moment).
@@ -362,7 +362,7 @@ static int run_oraclediff(const char* path) {
     const uint8_t* b = B->core.ram + (LO - 0x80000000u);
     int ranges = 0; uint32_t total_bytes = 0;
     uint32_t pagehist[0x60] = {0};   // per-0x1000-page diverging-byte counts across 0x800B0000..0x80110000
-    if (label) cfg_logi("oraclediff", "=== %s (native f%u, oracle f%u) ===", label, fa, fb);
+    if (label) lucent::info("oraclediff", "=== {} (native f{}, oracle f{}) ===", label, fa, fb);
     for (uint32_t i = 0; i < HI - LO; ) {
       if (a[i] == b[i] || od_is_render(LO + i) || od_is_cd_cache(LO + i)) { i++; continue; }
       uint32_t start = i, bytes = 0;
@@ -370,12 +370,12 @@ static int run_oraclediff(const char* path) {
       total_bytes += bytes; if (label) total_div++;
       pagehist[(LO + start - 0x800B0000u) >> 12] += bytes;
       if (ranges++ < 48 && label)
-        cfg_logi("oraclediff", "  diff @0x%08X..0x%08X (%u B)  nat[0]=%02X ora[0]=%02X", LO + start, LO + start + bytes, bytes, a[start], b[start]);
+        lucent::info("oraclediff", "  diff @0x{:08X}..0x{:08X} ({} B)  nat[0]={:02X} ora[0]={:02X}", LO + start, LO + start + bytes, bytes, a[start], b[start]);
     }
     if (label) {
-      cfg_logi("oraclediff", "  %s: %d diverging ranges, %u bytes total%s (CD-cache excluded)", label, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
+      lucent::info("oraclediff", "  {}: {} diverging ranges, {} bytes total{} (CD-cache excluded)", label, ranges, total_bytes, ranges > 48 ? " (first 48 shown)" : "");
       for (uint32_t p = 0; p < 0x60; p++)
-        if (pagehist[p]) cfg_logi("oraclediff", "    page 0x%08X: %u diverging bytes", 0x800B0000u + (p << 12), pagehist[p]);
+        if (pagehist[p]) lucent::info("oraclediff", "    page 0x{:08X}: {} diverging bytes", 0x800B0000u + (p << 12), pagehist[p]);
     }
     return ranges;
   };
@@ -386,7 +386,7 @@ static int run_oraclediff(const char* path) {
     od_advance_to_scene(&A->core, fa, ck, 4000, &ra);
     od_advance_to_scene(&B->core, fb, ck, 8000, &rb);   // B (interp+CD) gets a larger cap
     if (!ra || !rb) {
-      cfg_logi("oraclediff", "CHECKPOINT scene=%u UNREACHED: native=%d(f%u) oracle=%d(f%u) — one core never reaches this beat (a divergence in itself).", ck, ra, fa, rb, fb);
+      lucent::info("oraclediff", "CHECKPOINT scene={} UNREACHED: native={}(f{}) oracle={}(f{}) — one core never reaches this beat (a divergence in itself).", ck, (int)ra, fa, (int)rb, fb);
       continue;
     }
     char lbl[32]; snprintf(lbl, sizeof lbl, "scene %u", ck);
@@ -402,13 +402,13 @@ static int run_oraclediff(const char* path) {
     od_advance_to_ovsig(&A->core, fa, 0x801138A4u, 4000, &ra);
     od_advance_to_ovsig(&B->core, fb, 0x801138A4u, 8000, &rb);
     if (!ra || !rb)
-      cfg_logi("oraclediff", "FREE-ROAM UNREACHED: native=%d(f%u) oracle=%d(f%u)", ra, fa, rb, fb);
+      lucent::info("oraclediff", "FREE-ROAM UNREACHED: native={}(f{}) oracle={}(f{})", (int)ra, fa, (int)rb, fb);
     else {
       // RAM diff at the EXACT onset frame (both cores parked at the overlay flip) — this is where state is
       // aligned. Free-running past it drifts (the two cores animate the scripted opening at slightly different
       // sub-frame cadence: the interp core does real CD loads), so any post-step diff is drift, not a bug.
-      cfg_logi("oraclediff", "ONSET area id: A(native) bf870=%u bf9b4=%u sm48=%u | B(oracle) bf870=%u bf9b4=%u sm48=%u", A->core.mem_r8(0x800bf870u), A->core.mem_r8(0x800bf9b4u), A->core.mem_r16(0x801fe048u),
-              B->core.mem_r8(0x800bf870u), B->core.mem_r8(0x800bf9b4u), B->core.mem_r16(0x801fe048u));
+      lucent::info("oraclediff", "ONSET area id: A(native) bf870={} bf9b4={} sm48={} | B(oracle) bf870={} bf9b4={} sm48={}", A->core.mem_r8(0x800bf870u), A->core.mem_r8(0x800bf9b4u), A->core.mem_r16(0x801fe048u),
+                   B->core.mem_r8(0x800bf870u), B->core.mem_r8(0x800bf9b4u), B->core.mem_r16(0x801fe048u));
       int onset_ranges = diff_band("free-roam");
       summary_div = total_div;   // freeze the summary count here — the interactive walk's diff below is render noise
 
@@ -431,18 +431,18 @@ static int run_oraclediff(const char* path) {
       // 0x800F24xx) DIFFERENTLY — so hundreds of "divergences" here are expected and are NOT gameplay bugs.
       {
         const int WALK_FRAMES = 90;
-        cfg_logi("oraclediff", "=== interactive-play scan: hold RIGHT %d frames from onset (baseline=%d benign ranges) ===", WALK_FRAMES, onset_ranges);
+        lucent::info("oraclediff", "=== interactive-play scan: hold RIGHT {} frames from onset (baseline={} benign ranges) ===", WALK_FRAMES, onset_ranges);
         for (int k = 0; k < WALK_FRAMES; k++) {
           A->pad.driveHold(PAD_RIGHT); dc_step_frame(&A->core, fa); fa++;
           B->pad.driveHold(PAD_RIGHT); dc_step_frame(&B->core, fb); fb++;
         }
         int nd = diff_band("interactive-play (post-walk, render-noise-dominated)");
-        cfg_logi("oraclediff", "  post-walk RAM: %d ranges (render scene-graph noise). NOTE: Tomba is NOT controllable at this checkpoint (scripted caught pose) — this re-confirms still-convergence, it is NOT yet an interactive-MOVEMENT test.", nd);
+        lucent::info("oraclediff", "  post-walk RAM: {} ranges (render scene-graph noise). NOTE: Tomba is NOT controllable at this checkpoint (scripted caught pose) — this re-confirms still-convergence, it is NOT yet an interactive-MOVEMENT test.", nd);
       }
       A->pad.driveHold(PAD_NONE); B->pad.driveHold(PAD_NONE);
       gpu_native_shot(&A->core, "scratch/screenshots/oraclediff_freeroam_native.ppm");
       gpu_native_shot(&B->core, "scratch/screenshots/oraclediff_freeroam_oracle.ppm");
-      cfg_logi("oraclediff", "post-walk framebuffers: oraclediff_freeroam_{native,oracle}.ppm (native VK vs PSX soft-GPU content match — still-convergent; Tomba stays in the scripted caught pose, so this is not yet an interactive-movement test)");
+      lucent::info("oraclediff", "post-walk framebuffers: oraclediff_freeroam_{{native,oracle}}.ppm (native VK vs PSX soft-GPU content match — still-convergent; Tomba stays in the scripted caught pose, so this is not yet an interactive-movement test)");
 
       // NO-INPUT SCRIPTED-OPENING PROGRESSION (later-284): from the free-roam onset, drive BOTH cores with
       // NO input and dump each core's soft-GPU framebuffer at matched held frames. The pure-PSX reference (B)
@@ -462,8 +462,8 @@ static int run_oraclediff(const char* path) {
             snprintf(pa, sizeof pa, "scratch/screenshots/prog_native_h%d.ppm", marks[mi]);
             snprintf(pb, sizeof pb, "scratch/screenshots/prog_oracle_h%d.ppm", marks[mi]);
             gpu_native_shot(&A->core, pa); gpu_native_shot(&B->core, pb);
-            cfg_logi("oraclediff", "  progression h%d: native scene=%u ovsig=0x%08X sm48=%u | oracle scene=%u ovsig=0x%08X sm48=%u", marks[mi], A->core.mem_r8(0x800bf9b4u), A->core.mem_r32(0x80109450u), A->core.mem_r16(0x801fe048u),
-                    B->core.mem_r8(0x800bf9b4u), B->core.mem_r32(0x80109450u), B->core.mem_r16(0x801fe048u));
+            lucent::info("oraclediff", "  progression h{}: native scene={} ovsig=0x{:08X} sm48={} | oracle scene={} ovsig=0x{:08X} sm48={}", marks[mi], A->core.mem_r8(0x800bf9b4u), A->core.mem_r32(0x80109450u), A->core.mem_r16(0x801fe048u),
+                         B->core.mem_r8(0x800bf9b4u), B->core.mem_r32(0x80109450u), B->core.mem_r16(0x801fe048u));
             mi++;
           }
         }
@@ -471,7 +471,7 @@ static int run_oraclediff(const char* path) {
     }
   }
 
-  cfg_logi("oraclediff", "DONE: %d total diverging ranges across narration + free-roam (interactive-play walk excluded — render-noise-dominated).", summary_div ? summary_div : total_div);
+  lucent::info("oraclediff", "DONE: {} total diverging ranges across narration + free-roam (interactive-play walk excluded — render-noise-dominated).", summary_div ? summary_div : total_div);
   return 0;   // diagnostic harness: always exit 0 (it reports, it doesn't pass/fail)
 }
 
@@ -546,7 +546,7 @@ static int run_mdecpump(const char*) {
     // does not need this: its per-BURST gate drains exact 0x20 blocks, so totals divide evenly.
     got += mdec_dma_out_rest(ref + got, OUT_WORDS - got);
     if (got != OUT_WORDS) {
-      cfg_logi("selftest", "FAIL: reference decode produced %d of %d words", got, OUT_WORDS);
+      lucent::info("selftest", "FAIL: reference decode produced {} of {} words", got, (int)OUT_WORDS);
       return 1;
     }
     // Discriminator validity: a near-uniform frame could not catch a placement bug.
@@ -557,8 +557,8 @@ static int run_mdecpump(const char*) {
       if (!seen && ++distinct >= 16) break;
     }
     if (distinct < 16) {
-      cfg_logi("selftest", "FAIL: reference frame degenerate (only %d distinct words) — the "
-                           "comparison could not see a placement bug; fix the test stream", distinct);
+      lucent::info("selftest", "FAIL: reference frame degenerate (only {} distinct words) — the "
+                               "comparison could not see a placement bug; fix the test stream", distinct);
       return 1;
     }
   }
@@ -574,21 +574,21 @@ static int run_mdecpump(const char*) {
   c->mem_w32(0x1F801084u, 0x00030020u);                           // 3 blocks x 0x20 = 96 words
   c->mem_w32(0x1F801088u, 0x01000201u);                           // start DMA0 (sync 1, to MDEC)
   if (!(c->mem_r32(0x1F801088u) & 0x01000000u)) {
-    cfg_logi("selftest", "FAIL: DMA0 busy bit clear right after start — the transfer completed "
-                         "atomically, so the pending/deferral mechanism never engaged");
+    lucent::info("selftest", "FAIL: DMA0 busy bit clear right after start — the transfer completed "
+                             "atomically, so the pending/deferral mechanism never engaged");
     return 1;
   }
   c->mem_w32(0x1F801090u, DST);
   c->mem_w32(0x1F801094u, 0x00400020u);                           // 0x40 blocks x 0x20 = 2048 words
   c->mem_w32(0x1F801098u, 0x01000200u);                           // start DMA1 (sync 1, to RAM)
   if (c->mem_r32(0x1F801098u) & 0x01000000u) {
-    cfg_logi("selftest", "FAIL: DMA1 busy bit still set — the ping-pong did not complete its %d words",
-             OUT_WORDS);
+    lucent::info("selftest", "FAIL: DMA1 busy bit still set — the ping-pong did not complete its {} words",
+                 (int)OUT_WORDS);
     return 1;
   }
   if (c->mem_r32(0x1F801088u) & 0x01000000u) {
-    cfg_logi("selftest", "FAIL: DMA0 busy bit still set after DMA1 completed — pending input never "
-                         "finished feeding");
+    lucent::info("selftest", "FAIL: DMA0 busy bit still set after DMA1 completed — pending input never "
+                             "finished feeding");
     return 1;
   }
 
@@ -598,13 +598,13 @@ static int run_mdecpump(const char*) {
     if (got_w != ref[i] && bad++ == 0) first_bad = (uint32_t)i;
   }
   if (bad) {
-    cfg_logi("selftest", "FAIL: pump output differs from reference in %d of %d words (first at "
-                         "word %u: got %08X want %08X) — the voffs placement contract is broken",
-             bad, OUT_WORDS, first_bad, c->mem_r32(DST + first_bad * 4), ref[first_bad]);
+    lucent::info("selftest", "FAIL: pump output differs from reference in {} of {} words (first at "
+                             "word {}: got {:08X} want {:08X}) — the voffs placement contract is broken",
+                 bad, (int)OUT_WORDS, first_bad, c->mem_r32(DST + first_bad * 4), ref[first_bad]);
     return 1;
   }
-  cfg_logi("selftest", "PASS: pending-DMA pump decode == reference (%d words bit-identical; "
-                       "DMA0 deferred at start, both busy bits cleared on completion)", OUT_WORDS);
+  lucent::info("selftest", "PASS: pending-DMA pump decode == reference ({} words bit-identical; "
+                           "DMA0 deferred at start, both busy bits cleared on completion)", (int)OUT_WORDS);
   return 0;
 }
 
@@ -691,7 +691,7 @@ int selftest_run(const char* path) {
     const int rc = psxport_game_hooks()->selftestGame(which, path);
     if (rc != 2) return rc;
   }
-  cfg_logi("selftest", "unknown PSXPORT_SELFTEST='%s' (framework: startgame, narration, oracle, oraclediff, "
-                       "mdecpump, spuirq; the game may define more)", which ? which : "");
+  lucent::info("selftest", "unknown PSXPORT_SELFTEST='{}' (framework: startgame, narration, oracle, oraclediff, "
+                           "mdecpump, spuirq; the game may define more)", which ? which : "");
   return 2;
 }

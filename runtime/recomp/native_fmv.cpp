@@ -40,6 +40,7 @@
 // The boot/front-end sequencers call game->fmv.play().
 #include <stdint.h>
 #include "cfg.h"
+#include <lucent/log.h>
 #include "fmv_decode.h"   // the pure decode machinery (shared with tools/fmv_export + fmv_compare)
 #include <stdio.h>
 #include <stdlib.h>
@@ -256,8 +257,8 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     if (expected_chunks > 0 && got_chunks >= expected_chunks) {
       int ncodes = bsDecodeFrame(payload, paylen, fwidth, fheight, codes,
                                  (int)FMV_CODES_MAX);
-      cfg_logf("fmv", "frame %d: %dx%d, %u payload bytes, %d codes",
-                framenum, fwidth, fheight, paylen, ncodes);
+      lucent::debug("fmv", "frame {}: {}x{}, {} payload bytes, {} codes",
+                    framenum, fwidth, fheight, paylen, ncodes);
       if (ncodes > 0) {
         int np = mdecDecodeToRgb555(codes, ncodes, fwidth, fheight, pixels);
         if (np > 0) {
@@ -271,7 +272,7 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     }
   }
   if (skipped) {
-    cfg_logi("fmv", "skipped by Start at frame %d", frames);
+    lucent::info("fmv", "skipped by Start at frame {}", frames);
     // CONSUME the skip press: the title front-end polls the pad the instant this returns, so if Start is
     // still held it reads as a fresh menu press and auto-selects New Game. Wait for Start to be RELEASED
     // (bounded, ~1s safety cap) before handing back — the game's own StrPlayer consumed it the same way.
@@ -280,8 +281,8 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     }
     start_prev = 0;
   }
-  cfg_logf("fmv", "done: %d video frames, %ld audio sample-pairs (%.2fs @ %dHz)",
-            frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
+  lucent::debug("fmv", "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz)",
+                frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);
   audioClose();
   // FMV teardown (issues #7/#11): EVERY exit (normal end AND Start-skip break) leaves the FMV's last
   // (possibly partial) frame in the display FB. Black it + present once so no FMV residue is revealed
@@ -294,10 +295,10 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
 int Fmv::play(const char* path) {
   uint32_t lba = 0, size = 0;
   if (!fmv_resolve_path(&game->disc, path, &lba, &size)) {
-    cfg_logi("fmv", "could not resolve %s on disc", path);
+    lucent::info("fmv", "could not resolve {} on disc", path ? path : "(null)");
     return -1;
   }
-  cfg_logi("fmv", "%s -> LBA %u, %u bytes", path, lba, size);
+  lucent::info("fmv", "{} -> LBA {}, {} bytes", path ? path : "(null)", lba, size);
   return playLba(lba, size);
 }
 

@@ -6,8 +6,8 @@
 // time. "Which fn+node drew this dialog-panel packet / this gem quad" without hand-walking backwards
 // through addresses.
 //
-// DIAGNOSTIC ONLY. Zero behavior change when the `otattr` debug channel is off (a single cfg_dbg()
-// check gates every method). Never writes guest memory;
+// DIAGNOSTIC ONLY. Zero behavior change when the `otattr` debug channel is off (one interned
+// lucent::Channel test gates every method). Never writes guest memory;
 // only reads Core::mem_r* / Render::diag / InterpDiag's otattr shadow stack.
 //
 // Two independent tables, both per-Core (SBS runs two: no cross-contamination) and both keyed to the
@@ -51,8 +51,17 @@
 //      like a copy loop (batching many sources into one buffer), which is the census's actual scenario.
 #pragma once
 #include <stdint.h>
-#include "cfg.h"   // cfg_dbg_generation_fast — the inline armed test below
+#include <lucent/log.h>   // lucent::Channel — the inline armed test below
 class Core;
+
+// The `otattr` channel as an INTERNED HANDLE. This is the one place in the framework that has earned
+// one: the gate below runs on every guest store. A `lucent::Channel` is constant-initialised (no
+// guard variable, no static-init order), caches its answer next to a stamp of the enabled-channel
+// set, and is invalidated globally by any enable_channels() — so `debug otattr` at the REPL still
+// takes effect on the very next store, which is the property the hand-rolled generation counter this
+// replaces existed to provide. Measured in lucent: 0.66 ns/gate against 19.4 ns for the
+// channel-name-lookup form.
+inline const lucent::Channel g_otattr_channel{"otattr"};
 
 class OtAttr {
 public:
@@ -72,16 +81,13 @@ public:
   // Called on EVERY guest store (Core::mem_w* -> pkt_track). The armed test is inline so the common
   // case is a load and a compare with no call at all — it was three nested out-of-line calls
   // (trackStore -> cfg_dbg_generation -> bootstrap_once) to conclude it had nothing to do, measuring
-  // 2.54% of total CPU on its own. The generation compare stays so `debug otattr` still takes effect
-  // immediately at the REPL.
+  // 2.54% of total CPU on its own. lucent::Channel is that same generation-stamped cache, done once
+  // in the logging library instead of hand-rolled here against a counter cfg.cpp had to export.
   void trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes);
   inline void trackStore(Core* c, uint32_t addr, uint32_t bytes) {
-    const unsigned gen = cfg_dbg_generation_fast();
-    if (gen == mTsGen && !mTsOn) return;      // steady state: one compare, no call
+    if (!g_otattr_channel) return;            // steady state: one relaxed load, one compare
     trackStoreSlow(c, addr, bytes);
   }
-  unsigned mTsGen = ~0u;   // generation the cached mTsOn was computed at
-  int      mTsOn  = 0;     // is the `otattr` channel on?
 
   // Called from gte_op's RTPS/RTPT branch (gte_beetle.cpp) — aggregates a call count per (fn, node).
   void trackGte(Core* c);

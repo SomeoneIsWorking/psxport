@@ -450,9 +450,20 @@ is stalled, and a `SETTLED after N frame(s)` line when the wait resolves. Cheap 
 for a whole `MODE=skip` run; the end-of-run `dumpRendezvousSites()` summary (checks/stalls/maxWait
 per label) prints unconditionally under `MODE=skip` regardless of this channel. See docs/findings/
 sbs.md "SKIP-mode frame alignment".
-**`PSXPORT_DEBUG=chanA,chanB` env now works at launch** (seeded once in `cfg_dbg`, runtime/recomp/cfg.c) —
-previously channels were ONLY settable via the REPL/debug-server `debug` command, so headless/SBS runs
-couldn't enable one despite this doc claiming the env drove it. A later REPL `debug …` overrides the seed.
+**`PSXPORT_DEBUG=chanA,chanB` env works at launch**, and now works no matter what runs first. lucent
+itself reads it: `cmake/psxport.cmake` builds the vendored lucent with `LUCENT_CHANNEL_ENV="PSXPORT_DEBUG"`
+(and `LUCENT_LOG_FILE_ENV="PSXPORT_LOG_FILE"`), and lucent resolves both LAZILY on its first log call.
+There is nothing to initialise, so there is no initialisation that can fail to run.
+
+That is not a cosmetic change. The load used to live in `bootstrap_once()` in `runtime/recomp/cfg.cpp`,
+which is reachable ONLY from a `cfg_*` entry point — a plain `lucent::debug(...)` never triggered it.
+It worked purely because ~700 legacy `cfg_log*` sites fire during boot, so finishing the `cfg_*`
+retirement would have switched every channel in all four repos off, silently, with nothing in the
+output to explain why. `tests/test_lucent_channel_env.cpp` is the gate that keeps it defused: it
+asserts a `lucent::debug` on a `PSXPORT_DEBUG` channel is emitted when it is the FIRST logging call in
+the process, and again from a static initialiser in a freshly exec'd child.
+
+A REPL/debug-server `debug …` command still overrides the environment for the rest of the run.
 
 Render layer-isolation diags (value flags, `cfg_str`, gpu_native.cpp gpu_emit_rq_item) for "where did the
 native world go?": `PSXPORT_ONLYWORLD=1` (emit ONLY RQ_WORLD), `PSXPORT_NOBG=1` (drop RQ_BACKGROUND),

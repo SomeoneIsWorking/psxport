@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "cfg.h"
+#include <lucent/log.h>
 
 int NativeGates::get(const char* name) {
   for (int i = 0; i < mCount; i++) if (!strcmp(mGates[i].name, name)) return mGates[i].on;
@@ -17,7 +18,7 @@ void NativeGates::set(const char* name, int on) {
 }
 
 void NativeGates::list() const {
-  cfg_logi("native", "gates (%d):", mCount);
+  lucent::info("native", "gates ({}):", mCount);
   for (int i = 0; i < mCount; i++)
-    cfg_logi("native", "  %-16s %s", mGates[i].name, mGates[i].on ? "on" : "off");
+    lucent::info("native", "  {:<16} {}", mGates[i].name ? mGates[i].name : "(null)", mGates[i].on ? "on" : "off");
 }

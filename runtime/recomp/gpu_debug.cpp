@@ -8,7 +8,7 @@
 #include "gpu_native_internal.h"
 #include "game.h"
 #include <stdio.h>
-#include "cfg.h"
+#include <lucent/log.h>
 
 // Provenance query at an ABSOLUTE VRAM coord (the differ replays into the back buffer at off=(0,256),
 // so query e.g. vram y = display y + 256 — no double-buffer confound, unlike the live-run PROVAT).
@@ -18,15 +18,15 @@ void gpu_prov_dump(Core* core, int vx, int vy) {
   uint16_t p = *g.vram(vx, vy);
   uint32_t gid = g.s_prov[(vy & 511) * VRAM_W + (vx & 1023)];
   ProvMeta* m = &g.s_provmeta[gid % PROVRING];
-  CfgLine ln; cfg_line_reset(&ln);
-  cfg_line_addf(&ln, "vram(%d,%d)=%04X rgb(%d,%d,%d) ", vx, vy, p,
-                (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
-  if (!gid) { cfg_line_addf(&ln, "<never written>"); cfg_line_flush(&ln, "prov"); return; }
-  if (m->gid != gid) { cfg_line_addf(&ln, "gid=%u <evicted>", gid); cfg_line_flush(&ln, "prov"); return; }
-  cfg_line_addf(&ln, "gid=%u op=%02X tex=%d texmode=%d semi=%d blend=%d clut=(%d,%d) tp=(%d,%d) primcol=(%d,%d,%d) v0=(%d,%d) uv0=(%d,%d)",
-                gid, m->op, m->tex, m->mode, m->semi, m->blend, m->clut_x, m->clut_y, m->tp_x, m->tp_y,
-                m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
-  cfg_line_flush(&ln, "prov");
+  lucent::Line ln;
+  ln.add("vram({},{})={:04X} rgb({},{},{}) ", vx, vy, p,
+         (p & 31) << 3, ((p >> 5) & 31) << 3, ((p >> 10) & 31) << 3);
+  if (!gid) { ln.add("<never written>"); ln.flush(lucent::Level::Info, "prov"); return; }
+  if (m->gid != gid) { ln.add("gid={} <evicted>", gid); ln.flush(lucent::Level::Info, "prov"); return; }
+  ln.add("gid={} op={:02X} tex={} texmode={} semi={} blend={} clut=({},{}) tp=({},{}) primcol=({},{},{}) v0=({},{}) uv0=({},{})",
+         gid, m->op, m->tex, m->mode, m->semi, m->blend, m->clut_x, m->clut_y, m->tp_x, m->tp_y,
+         m->r, m->g, m->b, m->x0, m->y0, m->u0, m->v0);
+  ln.flush(lucent::Level::Info, "prov");
 }
 
 // Present-time provenance at DISPLAY coords (qx,qy): report, for the 7x7 box around it, which prim

@@ -77,7 +77,8 @@ REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), 
 `tools/` — `recomp/emit.py` (recompiler), `ensure_recomp.py` (the SINGLE hash-checked recomp step run.sh
 calls — extracts MAIN.EXE/stub/overlays, runs emit.py, verifies generated/ matches a SHA-256 of the inputs
 in generated/.recomp.hash), `disas.py` (MAIN.EXE disasm), `dbgclient.py` (debug-server REPL
-client), `build_port.sh`, bgm/frame tooling. `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored,
+client), `build_port.sh`, bgm/frame tooling,
+`logsig.py` + `syntaxcheck.sh` (the `cfg_*` -> `lucent::` sweep's two instruments — see below). `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored,
 run.sh rebuilds via ensure_recomp.py). `vendor/beetle-psx` (committed GPL fork — the port's GTE/MDEC/SPU/CHD **hardware backend**,
 NOT a reference emulator), `vendor/imgui`.
 
@@ -130,6 +131,28 @@ cmake -S . -B build          # standalone psxport configure (from a game tree: -
 cmake --build build -j6
 ctest --test-dir build --output-on-failure
 ```
+
+### The `cfg_*` -> `lucent::` sweep: two instruments, in `tools/`
+
+Retiring the printf-style `cfg_log*` shim is a several-hundred-site mechanical edit, which is exactly
+the kind that loses lines silently. Two tools make it checkable:
+
+```bash
+tools/syntaxcheck.sh runtime/recomp/foo.cpp     # compile ONE TU with the project's real flags,
+                                                # -fsyntax-only, WITHOUT touching build/ — several
+                                                # agents share one build dir and a concurrent
+                                                # `cmake --build` corrupts it.
+tools/logsig.py runtime/recomp/foo.cpp          # one canonical message template per call site
+tools/logsig.py --selftest                      # prove the extractor fires, and can say NO
+```
+
+`logsig.py` canonicalises the printf spelling and the `std::format` spelling of a call site to the
+SAME string (`cfg_logf("cd","%08X")` and `lucent::debug("cd","{:08X}")` both become
+`debug|cd|{:08X}`), so before/after over the converted files must diff EMPTY. Its denominator is
+every site in the files, not just the ones a run happens to execute. Validate the comparison itself
+by deleting one known template and confirming the diff names exactly it — an empty diff from a broken
+comparison reads identical to success. It cannot see argument ORDER, and a non-literal format string
+is reported as `<non-literal>` rather than dropped. It exits non-zero on a scan that found nothing.
 
 **Adding a test = adding ONE file.** `tests/CMakeLists.txt` GLOBs `tests/test_*.c` and
 `tests/test_*.cpp` (`CONFIGURE_DEPENDS`, so a plain `cmake --build` re-configures and picks up a new

@@ -31,6 +31,7 @@
 
 #include <stdint.h>
 #include "cfg.h"
+#include <lucent/log.h>
 #include "core.h"
 #include "game.h"   // class Pad lives on Game; reached via c->game->pad (see class docs)
 #include "c_subsys.h" // gpu_windowed()
@@ -246,7 +247,7 @@ void Pad::pollSdl() {
     int pad_dirs   = (before_pads & DIRS) != (mask & DIRS);          // a pad changed a direction bit
     int kbd_no_dir = (before_pads & DIRS) == DIRS;                   // keyboard pressed no direction
     if (pad_dirs && kbd_no_dir && !mPadDirsWarned) {
-      cfg_logi("pad", "a game controller is driving DIRECTIONS (host pad mask=0x%04x). If WASD seems dead, an analog stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.", (unsigned)mask);
+      lucent::info("pad", "a game controller is driving DIRECTIONS (host pad mask=0x{:04x}). If WASD seems dead, an analog stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.", (unsigned)mask);
       mPadDirsWarned = 1;
     }
   }
@@ -425,7 +426,7 @@ void Pad::serviceFrame() {
           rename("scratch/bin/pad_session.pad", "scratch/bin/pad_session.1.pad");
         }
         rec_fp = fopen(rpath, "wb");
-        cfg_logi("padrec", "recording -> %s%s", rec_fp ? rpath : "(open FAILED)",
+        lucent::info("padrec", "recording -> {}{}", rec_fp ? rpath : "(open FAILED)",
                 default_sink ? " (prev rotated to pad_session.1..5.pad; use replays/<cat>/<name>.pad to keep a repro)" : "");
       }
       const char* ppath = cfg_str("PSXPORT_PAD_REPLAY");
@@ -435,8 +436,8 @@ void Pad::serviceFrame() {
           rep_n = (size_t)(sz / 2); rep_buf = (uint16_t*)malloc(rep_n * 2);
           if (rep_buf && fread(rep_buf, 2, rep_n, f) != rep_n) { free(rep_buf); rep_buf = nullptr; rep_n = 0; }
           fclose(f);
-          cfg_logi("padrec", "replaying %zu frames <- %s", rep_n, ppath);
-        } else cfg_loge("padrec", "replay open FAILED: %s", ppath);
+          lucent::info("padrec", "replaying {} frames <- {}", rep_n, ppath);
+        } else lucent::error("padrec", "replay open FAILED: {}", ppath);
       }
     }
     if (rep_buf && rec_fc < rep_n) {
@@ -465,7 +466,7 @@ void Pad::serviceFrame() {
       void gpu_vk_shot(Core*, const char*); char p[96];
       snprintf(p, sizeof p, "scratch/screenshots/padshot_%u.ppm", rec_fc);
       gpu_vk_shot(c, p);
-      cfg_logi("padrec", "shot at replay-frame %u -> %s", rec_fc, p);
+      lucent::info("padrec", "shot at replay-frame {} -> {}", rec_fc, p);
     }
     // PSXPORT_PAD_DUMP_AT=f0,f1,... : dump 2MB guest RAM (+.spad) at these REPLAY frames to
     // scratch/bin/padram_<f>.bin — for A/B diffing scene state (e.g. village vs hut interior).
@@ -483,7 +484,7 @@ void Pad::serviceFrame() {
       void gpu_scene_dump_now(Core*, FILE*);
       char sc[100]; snprintf(sc, sizeof sc, "scratch/bin/padscene_%u.txt", rec_fc);
       FILE* scf = fopen(sc, "w"); if (scf) { gpu_scene_dump_now(c, scf); fclose(scf); }
-      cfg_logi("padrec", "dumpram+scene at replay-frame %u -> %s", rec_fc, p);
+      lucent::info("padrec", "dumpram+scene at replay-frame {} -> {}", rec_fc, p);
     }
     // PSXPORT_PAD_TRACE=lo-hi : log the transition/scene markers EVERY replay frame in [lo,hi] (pad-frame
     // indexed — the faithful axis). Finds which field moves when the player walks into the hut (the
@@ -493,7 +494,7 @@ void Pad::serviceFrame() {
       if (s) { unsigned a=0,b=0; if (sscanf(s,"%u-%u",&a,&b)==2){trace_lo=a;trace_hi=b;} else if (sscanf(s,"%u",&a)==1){trace_lo=0;trace_hi=a;} } }
     if (rec_fc >= trace_lo && rec_fc <= trace_hi) {
       uint32_t sm = c->mem_r32(0x1f800138u);
-      cfg_logi("padtr", "f%-4u bf839=%02X bf80f=%02X i236=%02X sm4a=%u sm4c=%u sm4e=%u scene=%u bf870=%02X bf809=%02X bf89c=%02X e7e68=%08X tX=%d tZ=%d", rec_fc, c->mem_r8(0x800bf839u), c->mem_r8(0x800bf80fu), c->mem_r8(0x1f800236u),
+      lucent::info("padtr", "f{:<4} bf839={:02X} bf80f={:02X} i236={:02X} sm4a={} sm4c={} sm4e={} scene={} bf870={:02X} bf809={:02X} bf89c={:02X} e7e68={:08X} tX={} tZ={}", rec_fc, c->mem_r8(0x800bf839u), c->mem_r8(0x800bf80fu), c->mem_r8(0x1f800236u),
         c->mem_r16(sm+0x4a), c->mem_r16(sm+0x4c), c->mem_r16(sm+0x4e),
         c->mem_r32(0x800be258u), c->mem_r8(0x800bf870u), c->mem_r8(0x800bf809u), c->mem_r8(0x800bf89cu),
         c->mem_r32(0x800e7e68u), c->mem_r16s(0x800fe916u), c->mem_r16s(0x800fe91eu));

@@ -7,28 +7,29 @@
 #include <cstring>
 #include <vector>
 #include "cfg.h"
+#include <lucent/log.h>
 
 extern "C" int disc_extract_file(DiscState* d, const char* iso_path, const char* out_path) {
   uint32_t lba, size;
   if (!disc_find_file(d, iso_path, &lba, &size)) {
-    cfg_logi("disc", "extract: %s not found on disc", iso_path);
+    lucent::info("disc", "extract: {} not found on disc", iso_path ? iso_path : "(null)");
     return 0;
   }
   std::vector<uint8_t> buf(size);
   uint8_t sec[2048];
   for (uint32_t off = 0; off < size; off += 2048u, lba++) {
     if (!disc_read_sector(d, lba, sec)) {
-      cfg_loge("disc", "extract: sector read failed for %s", iso_path);
+      lucent::error("disc", "extract: sector read failed for {}", iso_path ? iso_path : "(null)");
       return 0;
     }
     uint32_t n = size - off < 2048u ? size - off : 2048u;
     memcpy(buf.data() + off, sec, n);
   }
   if (!Fs::writeFile(out_path, buf.data(), buf.size())) {
-    cfg_loge("disc", "extract: failed to write %s", out_path);
+    lucent::error("disc", "extract: failed to write {}", out_path ? out_path : "(null)");
     return 0;
   }
-  cfg_logi("disc", "extracted %s -> %s (%u bytes)", iso_path, out_path, size);
+  lucent::info("disc", "extracted {} -> {} ({} bytes)", iso_path ? iso_path : "(null)", out_path ? out_path : "(null)", size);
   return 1;
 }
 

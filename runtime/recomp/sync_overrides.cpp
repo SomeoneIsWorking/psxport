@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "cfg.h"
+#include <lucent/log.h>
 
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
@@ -102,7 +103,7 @@ extern "C" void guest_find_word_to(Core* c, FILE* out, uint32_t val) {
 static void guest_backtrace(Core* c) { guest_backtrace_to(c, stderr); }
 
 static void trap_abort(Core* c, const char* what, uint32_t addr) {
-  cfg_loge("sync-trap", "\n%s: reached 0x%08X  a0=%d ra=0x%08X pc=0x%08X\n  Everything must be PC-native + SYNCHRONOUS (no PSX vblank/IRQ waits, no async CD).\n  This caller must be PC-owned (ported top-down) so it never reaches this primitive.", what, addr, (int)c->r[4], c->r[31], c->pc);
+  lucent::error("sync-trap", "\n{}: reached 0x{:08X}  a0={} ra=0x{:08X} pc=0x{:08X}\n  Everything must be PC-native + SYNCHRONOUS (no PSX vblank/IRQ waits, no async CD).\n  This caller must be PC-owned (ported top-down) so it never reaches this primitive.", what, addr, (int)c->r[4], c->r[31], c->pc);
   guest_backtrace(c);
   fflush(stderr);
   abort();
@@ -132,17 +133,17 @@ bool PlatformHle::inBiosWindow(const GameConfig* cfg, uint32_t a) {
     any = true;
     if (a >= cfg->hle.windowLo[i] && a < cfg->hle.windowHi[i]) return true;
   }
-  if (!any) cfg_loge("plat-hle", "no BIOS-library address window configured "
-                                 "(GameConfig::hle.windowLo/windowHi) — refusing every registration");
+  if (!any) lucent::error("plat-hle", "no BIOS-library address window configured "
+                                      "(GameConfig::hle.windowLo/windowHi) — refusing every registration");
   return false;
 }
 
 void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
   if (!inBiosWindow(game->core.cfg, addr)) {
-    cfg_loge("plat-hle", "REFUSED 0x%08X — not an I/O / BIOS-library address (game/engine logic is owned top-down, never HLE'd here)", addr);
+    lucent::error("plat-hle", "REFUSED 0x{:08X} — not an I/O / BIOS-library address (game/engine logic is owned top-down, never HLE'd here)", addr);
     return;
   }
-  if (mN >= kMax) { cfg_logi("plat-hle", "table full"); return; }
+  if (mN >= kMax) { lucent::info("plat-hle", "table full"); return; }
   mAddr[mN] = addr; mFn[mN] = fn; mN++;
   if (addr < mLo) mLo = addr;
   if (addr > mHi) mHi = addr;
@@ -191,8 +192,8 @@ void PlatformHle::initBuiltins() {
   // because the game configured nothing" and "the table is full" fail IDENTICALLY at a glance — the
   // run just hangs somewhere later. Reporting the count turns a silent misconfiguration into a
   // visible one, and gives any port a one-line check that its HLE actually installed.
-  cfg_logi("plat-hle", "%d hardware-sync primitive(s) installed from GameConfig::hle%s",
-           mN, mN ? "" : " — NONE configured; the guest will spin in any real sync loop it reaches");
+  lucent::info("plat-hle", "{} hardware-sync primitive(s) installed from GameConfig::hle{}",
+               mN, mN ? "" : " — NONE configured; the guest will spin in any real sync loop it reaches");
 }
 
 // Instance method — PlatformHle is a Game member (see game.h). Callers use `c->game->platform_hle`.

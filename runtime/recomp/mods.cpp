@@ -4,6 +4,7 @@
 // overlay change; loaded by init().
 #include "mods.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -58,5 +59,5 @@ void Mods::init() {
   // restored next launch.
   ui = 1;                 // overlay always available (live-toggle + the deferred SSAO/light infra)
   load();                 // the player's persisted choices win over the factory defaults
-  if (fps60) cfg_logi("fps60", "TRUE per-object interpolated 60fps ON (overlay)");
+  if (fps60) lucent::info("fps60", "TRUE per-object interpolated 60fps ON (overlay)");
 }

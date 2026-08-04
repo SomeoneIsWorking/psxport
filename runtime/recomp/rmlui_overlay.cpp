@@ -22,6 +22,7 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Debugger.h>
 #include "cfg.h"                  // cfg_str — PSXPORT_ASSET_DIR asset-base resolution
+#include <lucent/log.h>
 #include <string>
 
 // SDL platform helpers (system interface + SDL->Rml input translation) from the vendored RmlUi
@@ -196,7 +197,7 @@ std::string RmlOverlay::armWarp() {
     game->repl.warpDest  = (uint32_t)mWarpArea;
     game->repl.warpSub   = 0;
     game->repl.warpArmed = 1;
-    cfg_logi("rmlui", "warp: armed area %d from the menu", mWarpArea);
+    lucent::info("rmlui", "warp: armed area {} from the menu", mWarpArea);
     return "warping to " + warpAreaLabel(mWarpArea);
 }
 
@@ -325,7 +326,7 @@ void RmlOverlay::activateFocused(int dir) {
     if (!f) return;
     std::string id;
     if (!(id = f->GetAttribute<Rml::String>("action", "")).empty()) {
-        if (id == "quit")  { cfg_logi("rmlui", "quit from menu"); exit(0); }
+        if (id == "quit")  { lucent::info("rmlui", "quit from menu"); exit(0); }
         if (id == "close") { mVisible = false; applyVisibility(); }
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
         if (id == "warp_go") { setWarpReadout(armWarp()); return; }
@@ -386,7 +387,7 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
 
     auto* render = new RmlRenderInterfaceGpu();
     if (!render->Init(dev, swap_fmt)) {
-        cfg_loge("rmlui", "render interface init failed; overlay disabled");
+        lucent::error("rmlui", "render interface init failed; overlay disabled");
         delete render; return;
     }
     mRender = render;
@@ -396,7 +397,7 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     mSys = sys;
     Rml::SetSystemInterface(sys);
     Rml::SetRenderInterface(render);
-    if (!Rml::Initialise()) { cfg_loge("rmlui", "Rml::Initialise failed; overlay disabled"); return; }
+    if (!Rml::Initialise()) { lucent::error("rmlui", "Rml::Initialise failed; overlay disabled"); return; }
 
     const char* fonts[] = {
         "assets/rml/FiraSans-Regular.ttf",
@@ -405,18 +406,18 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     };
     int loaded = 0;
     for (const char* f : fonts) if (Rml::LoadFontFace(rml_asset(f).c_str())) loaded++;
-    if (!loaded) cfg_logw("rmlui", "WARNING: no fonts loaded (assets/rml/*.ttf missing; set PSXPORT_ASSET_DIR to the dir containing assets/)");
+    if (!loaded) lucent::warn("rmlui", "WARNING: no fonts loaded (assets/rml/*.ttf missing; set PSXPORT_ASSET_DIR to the dir containing assets/)");
 
     int ww = 0, wh = 0; SDL_GetWindowSize(win, &ww, &wh);
     if (ww <= 0) ww = 1280; if (wh <= 0) wh = 720;
     Rml::Context* c = Rml::CreateContext("tomba2_menu", Rml::Vector2i(ww, wh));
-    if (!c) { cfg_loge("rmlui", "CreateContext failed"); return; }
+    if (!c) { lucent::error("rmlui", "CreateContext failed"); return; }
     mCtx = c;
     Rml::Debugger::Initialise(c);
 
     Rml::ElementDocument* d = c->LoadDocument(rml_asset("assets/rml/menu.rml").c_str());
     if (!d) {
-        cfg_loge("rmlui", "LoadDocument(%s) FAILED — menu unavailable (set PSXPORT_ASSET_DIR to the dir containing assets/)", rml_asset("assets/rml/menu.rml").c_str());
+        lucent::error("rmlui", "LoadDocument({}) FAILED — menu unavailable (set PSXPORT_ASSET_DIR to the dir containing assets/)", rml_asset("assets/rml/menu.rml"));
     } else {
         mDoc = d;
         attachHandlers();
@@ -425,7 +426,7 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     }
 
     mInited = true;
-    cfg_logi("rmlui", "overlay up (ESC to toggle the menu)");
+    lucent::info("rmlui", "overlay up (ESC to toggle the menu)");
 }
 
 void RmlOverlay::shutdown() {

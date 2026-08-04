@@ -6,6 +6,7 @@
 // Game's SpuAudio actually drives the host device.
 #include "spu_audio.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "game.h"
 
 #include <cstdio>
@@ -52,12 +53,12 @@ void SpuAudio::wavClose() {
   fseek(mWav, 40, SEEK_SET); wavLe32(mWav, data);      // data chunk size
   fclose(mWav); mWav = nullptr;
   if (sWavOwner == this) sWavOwner = nullptr;
-  cfg_logi("spu_wav", "wrote %u PCM bytes (%.2f s)", data, data / (44100.0 * 4.0));
+  lucent::info("spu_wav", "wrote {} PCM bytes ({:.2f} s)", data, data / (44100.0 * 4.0));
 }
 
 void SpuAudio::wavOpen(const char* path) {
   mWav = fopen(path, "wb");
-  if (!mWav) { cfg_loge("spu_wav", "cannot open %s", path); return; }
+  if (!mWav) { lucent::error("spu_wav", "cannot open {}", path ? path : "(null)"); return; }
   fwrite("RIFF", 1, 4, mWav); wavLe32(mWav, 0);        // size patched at close
   fwrite("WAVE", 1, 4, mWav);
   fwrite("fmt ", 1, 4, mWav); wavLe32(mWav, 16);
@@ -70,7 +71,7 @@ void SpuAudio::wavOpen(const char* path) {
   fwrite("data", 1, 4, mWav); wavLe32(mWav, 0);        // size patched at close
   if (!sWavOwner) { sWavOwner = this; atexit(&SpuAudio::wavCloseAtExit); }
   else            { sWavOwner = this; }   // atexit already registered; hand ownership to us
-  cfg_logi("spu_wav", "capturing SPU output -> %s", path);
+  lucent::info("spu_wav", "capturing SPU output -> {}", path ? path : "(null)");
 }
 
 // REPL music-dump helper: switch the SPU WAV capture to a new file mid-run.
@@ -94,7 +95,8 @@ void SpuAudio::init() {
 
 #ifdef PSXPORT_SDL
   if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-    cfg_loge("spu_audio", "SDL_InitSubSystem(AUDIO) failed: %s — audio disabled", SDL_GetError());
+    { const char* err = SDL_GetError();
+      lucent::error("spu_audio", "SDL_InitSubSystem(AUDIO) failed: {} — audio disabled", err ? err : "(null)"); }
     mState = -1; return;
   }
 
@@ -106,7 +108,8 @@ void SpuAudio::init() {
 
   mStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
   if (!mStream) {
-    cfg_loge("spu_audio", "SDL_OpenAudioDeviceStream failed: %s — audio disabled", SDL_GetError());
+    { const char* err = SDL_GetError();
+      lucent::error("spu_audio", "SDL_OpenAudioDeviceStream failed: {} — audio disabled", err ? err : "(null)"); }
     mState = -1; return;
   }
   SDL_ResumeAudioStreamDevice(mStream);   // start playback (streams are paused at open)
@@ -140,7 +143,7 @@ void SpuAudio::frameEx(bool output) {
   int16_t* buf = mMixBuf;
 
   // Diagnostics: `debug spuprof` prints the average spu_update() wall time every 60 frames.
-  if (mProfOn < 0) mProfOn = cfg_dbg("spuprof") ? 1 : 0;
+  if (mProfOn < 0) mProfOn = lucent::channel_on("spuprof") ? 1 : 0;
   if (mProfOn) {
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
@@ -150,8 +153,8 @@ void SpuAudio::frameEx(bool output) {
     mProfAccumMs += (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
     mProfPrev = a; mProfHavePrev = 1;
     if (++mProfN >= 60) {
-      cfg_logi("spu_prof", "spu_update %.4f ms | full frame iter %.4f ms | spu share %.1f%%", mProfAccumMs / mProfN, mProfLoopMs / mProfN,
-              mProfLoopMs > 0 ? 100.0 * mProfAccumMs / mProfLoopMs : 0.0);
+      lucent::info("spu_prof", "spu_update {:.4f} ms | full frame iter {:.4f} ms | spu share {:.1f}%", mProfAccumMs / mProfN, mProfLoopMs / mProfN,
+                   mProfLoopMs > 0 ? 100.0 * mProfAccumMs / mProfLoopMs : 0.0);
       mProfAccumMs = 0; mProfLoopMs = 0; mProfN = 0;
     }
   } else {
@@ -182,21 +185,21 @@ void SpuAudio::frameEx(bool output) {
 #ifdef PSXPORT_SDL
   if (!sdl_on) return;
   // `debug audiorate`: measure effective production rate (samples/wall-sec) + drop count.
-  { if (mRateOn < 0) mRateOn = cfg_dbg("audiorate") ? 1 : 0;
+  { if (mRateOn < 0) mRateOn = lucent::channel_on("audiorate") ? 1 : 0;
     if (mRateOn) {
       struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
       double now = ts.tv_sec + ts.tv_nsec/1e9; if (!mRateHave) { mRateT0 = now; mRateHave = 1; }
       mRateSamp += frames; mRateCalls++;
       if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) mRateDrops++;
       double dt = now - mRateT0;
-      if (dt >= 2.0) { cfg_logi("audio_rate", "%.0f samples/s (want 44100), %ld calls/%.1fs, drops=%ld, backlog=%d", mRateSamp/dt, mRateCalls, dt, mRateDrops, SDL_GetAudioStreamQueued(mStream));
+      if (dt >= 2.0) { lucent::info("audio_rate", "{:.0f} samples/s (want 44100), {} calls/{:.1f}s, drops={}, backlog={}", mRateSamp/dt, mRateCalls, dt, mRateDrops, SDL_GetAudioStreamQueued(mStream));
                        mRateT0 = now; mRateSamp = 0; mRateCalls = 0; mRateDrops = 0; } } }
   // Drop (don't queue) when the backlog is already too deep — keeps latency bounded.
   if (SDL_GetAudioStreamQueued(mStream) > AUDIO_QUEUE_CAP_BYTES) return;
 
   SDL_PutAudioStreamData(mStream, buf, (int)(frames * 2 * sizeof(int16_t)));
 
-  cfg_logf("audio", "[spu_audio] rendered %d frames, queued=%d bytes",
-           frames, SDL_GetAudioStreamQueued(mStream));
+  lucent::debug("audio", "[spu_audio] rendered {} frames, queued={} bytes",
+                frames, SDL_GetAudioStreamQueued(mStream));
 #endif
 }

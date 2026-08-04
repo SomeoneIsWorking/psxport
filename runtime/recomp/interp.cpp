@@ -18,6 +18,7 @@
 #include "core.h"
 #include "game.h"            // c->game->platform_hle
 #include "cfg.h"
+#include <lucent/log.h>
 #include "platform_hle.h"    // class PlatformHle — sync-primitive HLE lookup on an interpreted call target
 #include "recomp_iface.h"    // seam: psxport_recomp()->rec_func_index (generated MAIN entry index)
 #include <stdio.h>
@@ -189,14 +190,14 @@ static int reads_gpr(uint32_t in, int r) {
 // executed one, then make it the new "last". Called in execution order — INCLUDING delay slots —
 // so a load in a jump/branch delay slot is checked against the branch TARGET (the real next op).
 static inline void ldhaz_step(InterpDiag& d, uint32_t in, uint32_t pc) {
-  if (d.ldhaz < 0) d.ldhaz = cfg_dbg("ldhazard") ? 1 : 0;
+  if (d.ldhaz < 0) d.ldhaz = lucent::channel_on("ldhazard") ? 1 : 0;
   if (d.ldhaz) {
     uint32_t p = d.ld_last_in; int t = ld_target(p);
     // Skip the lwl/lwr unaligned-merge idiom (same rt): our no-delay model merges correctly.
     int merge = ((p >> 26) == 0x22 && (in >> 26) == 0x26 && RT(p) == RT(in)) ||
                 ((p >> 26) == 0x26 && (in >> 26) == 0x22 && RT(p) == RT(in));
     if (t && !merge && reads_gpr(in, t) && d.ldhaz_n++ < 60)
-      cfg_logi("ldhaz", "load r%d @%08X (%08X) -> read by next @%08X (%08X)", t, d.ld_last_pc, p, pc, in);
+      lucent::info("ldhaz", "load r{} @{:08X} ({:08X}) -> read by next @{:08X} ({:08X})", t, d.ld_last_pc, p, pc, in);
   }
   d.ld_last_in = in; d.ld_last_pc = pc;
 }
@@ -244,7 +245,7 @@ static void exec_simple(Core* c, uint32_t in) {
         case 0x2B: W(rd, (uint32_t)(c->r[rs] < c->r[rt])); break;            // sltu
         case 0x0C: rec_syscall(c, (in >> 6) & 0xFFFFF); break;               // syscall
         case 0x0D: rec_break(c, (in >> 6) & 0xFFFFF); break;                 // break
-        default: cfg_logi("interp", "bad special funct 0x%02X", f); break;
+        default: lucent::info("interp", "bad special funct 0x{:02X}", f); break;
       }
       break;
     }
@@ -322,18 +323,18 @@ static void exec_simple(Core* c, uint32_t in) {
       // a real bug (wrong jump target / unloaded overlay / corrupt load). Do NOT limp on spewing thousands
       // of "bad opcode" lines; abort immediately with the derail site + a guest-stack backtrace so the
       // broken jump/load can be found and fixed at its root.
-      cfg_logi("DERAIL", "\nbad opcode 0x%02X insn=0x%08X at pc=0x%08X ra=0x%08X sp=0x%08X", op, in, c->pc, c->r[31], c->r[29]);
+      lucent::info("DERAIL", "\nbad opcode 0x{:02X} insn=0x{:08X} at pc=0x{:08X} ra=0x{:08X} sp=0x{:08X}", op, in, c->pc, c->r[31], c->r[29]);
       { uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 512 && shown < 16; a += 4) {
           uint32_t w = c->mem_r32(a), k = w & 0x1FFFFFFF;
-          if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { cfg_logi("interp", "   [sp+0x%03X]=0x%08X", a-sp, w); shown++; }
+          if (k >= 0x10000 && k < 0x120000 && (w & 3) == 0) { lucent::info("interp", "   [sp+0x{:03X}]=0x{:08X}", a-sp, w); shown++; }
         } }
       // PSXPORT_DERAIL_DUMP=<path>: snapshot guest RAM at the derail so the offending overlay/jump can be
       // reverse-engineered (the overlay code isn't in static MAIN.EXE; disas.py --ram needs this dump).
       { const char* dp = cfg_str("PSXPORT_DERAIL_DUMP");
         if (dp) { FILE* df = fopen(dp, "wb");
           if (df) { fwrite(c->ram, 1, 0x200000, df); fclose(df);
-                    cfg_logi("DERAIL", "guest RAM dumped -> %s (2MB)", dp); } } }
+                    lucent::info("DERAIL", "guest RAM dumped -> {} (2MB)", dp); } } }
       fflush(stderr); abort();
   }
 }
@@ -410,9 +411,9 @@ void prof_start(Core* c) {
   for (uint32_t i = 0; i < (1u << 14); i++) { d.prof_call_addr[i] = 0; d.prof_call_n[i] = 0; }
   d.prof_total = d.prof_call_total = 0;
   d.prof_on = 1;
-  cfg_logi("prof", "profiling started (reset)");
+  lucent::info("prof", "profiling started (reset)");
 }
-void prof_stop(Core* c) { c->idiag.prof_on = 0; cfg_logi("prof", "profiling stopped"); }
+void prof_stop(Core* c) { c->idiag.prof_on = 0; lucent::info("prof", "profiling stopped"); }
 
 void prof_dump(Core* c, const char* path) {
   InterpDiag& d = c->idiag;
@@ -445,7 +446,7 @@ void prof_dump(Core* c, const char* path) {
     fprintf(out, "%08X   %10llu   %5.2f%%\n", d.prof_call_addr[bi], (unsigned long long)best, pct);
     d.prof_call_n[bi] = 0;  // consume
   }
-  if (fp) { fclose(fp); cfg_logi("prof", "dump -> %s", path); }
+  if (fp) { fclose(fp); lucent::info("prof", "dump -> {}", path); }
 }
 
 // Invoke a call target natively if it is a BIOS vector (returns 1), else 0 (caller jumps).
@@ -509,7 +510,7 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
   // window, the game is busy-waiting — dump the loop range + the branch's register operands so
   // the wait condition can be identified and ported to PC.
   InterpDiag& d = c->idiag;
-  if (d.spindbg < 0) d.spindbg = cfg_dbg("spin") ? 1 : 0;
+  if (d.spindbg < 0) d.spindbg = lucent::channel_on("spin") ? 1 : 0;
   int spindbg = d.spindbg;
   unsigned long iters = 0; uint32_t lo = pc, hi = pc;
   for (;;) {
@@ -522,12 +523,12 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     if (spindbg) {
       if (pc < lo) lo = pc; if (pc > hi) hi = pc;
       if (++iters >= 80000000UL) {
-        cfg_logi("spindbg", "busy-loop: pc window 0x%08X..0x%08X (cur 0x%08X) regs: v0=%08X v1=%08X a0=%08X a1=%08X t0=%08X t1=%08X s0=%08X s1=%08X", lo, hi, pc, c->r[2], c->r[3], c->r[4], c->r[5], c->r[8], c->r[9],
-                c->r[16], c->r[17]);
+        lucent::info("spindbg", "busy-loop: pc window 0x{:08X}..0x{:08X} (cur 0x{:08X}) regs: v0={:08X} v1={:08X} a0={:08X} a1={:08X} t0={:08X} t1={:08X} s0={:08X} s1={:08X}", lo, hi, pc, c->r[2], c->r[3], c->r[4], c->r[5], c->r[8], c->r[9],
+                     c->r[16], c->r[17]);
         // CD-streaming contract (FUN_8001cfc8 task slot 2): start/end LBA = task2 obj
         // (0x801fe0e0) +0x54/+0x58, dest/words at _DAT_1f8001f8/f4, plus the stream flags.
-        cfg_logi("spindbg", "  stream: startLBA=%u endLBA=%u chan=%u be0e4=0x%02X dest=0x%08X words=%u f0=%u", c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146),
-                c->mem_r8(0x800be0e4), c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0));
+        lucent::info("spindbg", "  stream: startLBA={} endLBA={} chan={} be0e4=0x{:02X} dest=0x{:08X} words={} f0={}", c->mem_r32(0x801fe134), c->mem_r32(0x801fe138), c->mem_r8(0x801fe146),
+                     c->mem_r8(0x800be0e4), c->mem_r32(0x1f8001f8), c->mem_r32(0x1f8001f4), c->mem_r32(0x1f8001f0));
         iters = 0; lo = hi = pc;
       }
     }
@@ -538,17 +539,17 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     { if (d.pctrap == 0xFFFFFFFFu) { const char* s = cfg_str("PSXPORT_PCTRAP"); d.pctrap = s ? (uint32_t)strtoul(s,0,0) : 0;
         const char* k = cfg_str("PSXPORT_PCTRAP_SKIP"); d.pctrap_skip = k ? strtol(k,0,0) : 0; }
       if (d.pctrap && pc == d.pctrap) { if (d.pctrap_hit++ == d.pctrap_skip) {
-        cfg_logi("pctrap", "reached 0x%08X  ra=0x%08X sp=0x%08X a0=0x%08X", pc, c->r[31], c->r[29], c->r[4]);
+        lucent::info("pctrap", "reached 0x{:08X}  ra=0x{:08X} sp=0x{:08X} a0=0x{:08X}", pc, c->r[31], c->r[29], c->r[4]);
         uint32_t sp = c->r[29]; int shown = 0;
         for (uint32_t a = sp; a < sp + 1024 && shown < 24; a += 4) { uint32_t w = c->mem_r32(a); uint32_t k = w & 0x1FFFFFFF;
-          if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { cfg_logi("interp", "    [sp+0x%03X] 0x%08X", a - sp, w); shown++; } }
+          if (k >= 0x10000 && k < 0x200000 && (w & 3) == 0) { lucent::info("interp", "    [sp+0x{:03X}] 0x{:08X}", a - sp, w); shown++; } }
         fflush(stderr); } } }
     // DIAG (debug chan `fadeshot`): every recomp screen-fade call FUN_8007E9C8(color=a0) — capture s_tex
     // and log color+ra, to see the intro menu->cutscene transition's "two fade-ins" render state deterministically.
     if (pc == 0x8007E9C8u) {
-      static int fs = -2; if (fs == -2) fs = cfg_dbg("fadeshot") ? 1 : 0;
+      static int fs = -2; if (fs == -2) fs = lucent::channel_on("fadeshot") ? 1 : 0;
       if (fs) { void gpu_vk_shot(Core*, const char*); static int fn = 0;
-        cfg_logi("fadeshot", "call=%d color=0x%06X ra=0x%08X", fn, c->r[4] & 0xffffff, c->r[31]);
+        lucent::info("fadeshot", "call={} color=0x{:06X} ra=0x{:08X}", fn, c->r[4] & 0xffffff, c->r[31]);
         if (fn < 120) { char p[128]; snprintf(p, sizeof p, "scratch/screenshots/fade_%03d.ppm", fn); gpu_vk_shot(c, p); }
         fn++; }
     }
@@ -556,61 +557,61 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // (a0=seq|chan<<8, a1=vab id, a2=program, a3=note, sp+16=velocity). Reveals which sequences/
     // instruments/notes actually compose a song — ground truth for the offline snd_render tool.
     if (pc == 0x800939A0u) {
-      static int kon = -2; if (kon == -2) kon = cfg_dbg("keyon") ? 1 : 0;
-      if (kon) cfg_logi("keyon", "seq=%u chan=%u vab=%d prog=%d note=%u vel=%u", c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
+      static int kon = -2; if (kon == -2) kon = lucent::channel_on("keyon") ? 1 : 0;
+      if (kon) lucent::info("keyon", "seq={} chan={} vab={} prog={} note={} vel={}", c->r[4] & 0xff, (c->r[4] >> 8) & 0xff, (int)(int16_t)c->r[5],
                        (int)(int16_t)c->r[6], c->r[7] & 0xff, c->mem_r32(c->r[29] + 16));
     }
     // PSXPORT_DEBUG=bgmreq: trace the game's BGM trigger sound_play_bgm 0x80074BF8 (a0=idx; low7=song,
     // bit7 set => loop). Reveals which song the GAME LOGIC actually requests per area/dialogue — the
     // signal the native MusicCoord::fieldBgmDirector currently ignores (it hardcodes song 8).
     if (pc == 0x80074BF8u || pc == 0x80074E48u) {
-      static int br = -2; if (br == -2) br = cfg_dbg("bgmreq") ? 1 : 0;
-      if (br) { if (pc == 0x80074E48u) cfg_logi("bgmreq", "sound_stop_bgm() ra=%08X", c->r[31]);
-                else cfg_logi("bgmreq", "sound_play_bgm(idx=%u song=%u loop=%d) ra=%08X", c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
+      static int br = -2; if (br == -2) br = lucent::channel_on("bgmreq") ? 1 : 0;
+      if (br) { if (pc == 0x80074E48u) lucent::info("bgmreq", "sound_stop_bgm() ra={:08X}", c->r[31]);
+                else lucent::info("bgmreq", "sound_play_bgm(idx={} song={} loop={}) ra={:08X}", c->r[4], c->r[4] & 0x7f, (c->r[4] & 0x80) == 0, c->r[31]); }
     }
     // PSXPORT_DEBUG=demoflag: trace which demo-flag (0x1f80019a) READER PCs execute (find DEMO-text drawer).
     if (pc == 0x80026874u || pc == 0x80052208u || pc == 0x800522b0u || pc == 0x80075834u || pc == 0x800788ccu) {
-      static int df = -2; if (df == -2) df = cfg_dbg("demoflag") ? 1 : 0;
+      static int df = -2; if (df == -2) df = lucent::channel_on("demoflag") ? 1 : 0;
       if (df) { static unsigned n[5]={0,0,0,0,0}; int k = pc==0x80026874u?0:pc==0x80052208u?1:pc==0x800522b0u?2:pc==0x80075834u?3:4;
-                if (++n[k] <= 2) cfg_logi("demoflag", "reader @%08X hit (flag=%02X) ra=%08X", pc, c->mem_r8(0x1f80019au), c->r[31]); }
+                if (++n[k] <= 2) lucent::info("demoflag", "reader @{:08X} hit (flag={:02X}) ra={:08X}", pc, c->mem_r8(0x1f80019au), c->r[31]); }
     }
     // PSXPORT_DEBUG=septrace: trace the libsnd SEP event dispatcher 0x80091460 — at 0x800914d0 the
     // status byte (s2=r18) has just been read from the track stream pointer (a3=r7, already +1). Log
     // the byte ADDRESS and value per event = the game's exact event walk (byte-consumption oracle for
     // aligning our na_seq_render parser). r17=seq, r16/.. set later; r7-1 = the status byte's address.
     if (pc == 0x800914D0u) {
-      static int stc = -2; if (stc == -2) stc = cfg_dbg("septrace") ? 1 : 0;
-      if (stc) cfg_logi("septrace", "@%08X status=%02X", c->r[7] - 1, c->r[18] & 0xff);
+      static int stc = -2; if (stc == -2) stc = lucent::channel_on("septrace") ? 1 : 0;
+      if (stc) lucent::info("septrace", "@{:08X} status={:02X}", c->r[7] - 1, c->r[18] & 0xff);
     }
     // PSXPORT_DEBUG=tickdbg: where does the recomp libsnd sequencer stall? trace the per-vblank tick
     // wrapper 0x800909C0, SsSeqCalled 0x80090BD0, and the SEP event dispatcher 0x80091460. If the tick
     // runs but the dispatcher never does, the sequence clock isn't advancing (frozen sequencer).
     if (pc == 0x800909C0u || pc == 0x80090BD0u || pc == 0x80091460u) {
-      static int td = -2; if (td == -2) td = cfg_dbg("tickdbg") ? 1 : 0;
+      static int td = -2; if (td == -2) td = lucent::channel_on("tickdbg") ? 1 : 0;
       if (td) { static unsigned ct[3]={0,0,0}; int k = pc==0x800909C0u?0 : pc==0x80090BD0u?1:2;
                 if (++ct[k] <= 3 || ct[k]%200==0)
-                  cfg_logi("tickdbg", "%s count=%u", pc==0x800909C0u?"tick(909C0)":pc==0x80090BD0u?"SsSeqCalled(90BD0)":"dispatch(91460)", ct[k]); }
+                  lucent::info("tickdbg", "{} count={}", pc==0x800909C0u?"tick(909C0)":pc==0x80090BD0u?"SsSeqCalled(90BD0)":"dispatch(91460)", ct[k]); }
     }
     // PSXPORT_DEBUG=seqopen: trace SsSeqOpen 0x80090210 (a0=SEP addr, a1=VAB id) — the game's intended
     // SEQ->VAB binding (which we currently guess). a2/a3 = seq/sub indices. Reveals which VAB each song
     // is authored against, the missing piece for correct instruments/pitch.
     if (pc == 0x80090210u) {
-      static int so = -2; if (so == -2) so = cfg_dbg("seqopen") ? 1 : 0;
-      if (so) cfg_logi("seqopen", "SsSeqOpen(sep=%08X vab=%d) ra=%08X", c->r[4], (int)(int16_t)c->r[5], c->r[31]);
+      static int so = -2; if (so == -2) so = lucent::channel_on("seqopen") ? 1 : 0;
+      if (so) lucent::info("seqopen", "SsSeqOpen(sep={:08X} vab={}) ra={:08X}", c->r[4], (int)(int16_t)c->r[5], c->r[31]);
     }
     // PSXPORT_DEBUG=seqplay: trace SsSeqPlay 0x80090560 (a0=seq handle) — which sequences are played.
     if (pc == 0x80090560u) {
-      static int sp = -2; if (sp == -2) sp = cfg_dbg("seqplay") ? 1 : 0;
-      if (sp) cfg_logi("seqplay", "SsSeqPlay(handle=%d, mode=%d, loop=%d)", (int)(int16_t)c->r[4], c->r[5], c->r[6]);
+      static int sp = -2; if (sp == -2) sp = lucent::channel_on("seqplay") ? 1 : 0;
+      if (sp) lucent::info("seqplay", "SsSeqPlay(handle={}, mode={}, loop={})", (int)(int16_t)c->r[4], c->r[5], c->r[6]);
     }
     // PSXPORT_DEBUG=banksel: trace the libsnd bank-select event handler 0x8008e390 (sets channel
     // slot[0x26]=VAB from the stream). a0=seq, a1=chan. Reveals whether it runs for note channels.
     if (pc == 0x8008e390u) {
-      static int bs = -2; if (bs == -2) bs = cfg_dbg("banksel") ? 1 : 0;
+      static int bs = -2; if (bs == -2) bs = lucent::channel_on("banksel") ? 1 : 0;
       if (bs) { uint32_t cap = c->mem_r32(0x80104c30u + (c->r[4] & 0xffff) * 4);
                 uint32_t cs = cap + (c->r[5] & 0xffff) * 176;
                 uint32_t dp = c->mem_r32(cs);
-                cfg_logi("banksel", "seq=%u chan=%u streambyte=0x%02x (-> slot[0x26])", c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
+                lucent::info("banksel", "seq={} chan={} streambyte=0x{:02x} (-> slot[0x26])", c->r[4] & 0xffff, c->r[5] & 0xffff, c->mem_r8(dp)); }
     }
     if (d.prof_on) prof_pc_tick(d, pc);   // perf profiler: instructions-per-PC-bucket (time histogram)
     // PSXPORT_SPRITEDBG: when the sprite-flush routine copies the red-quad clut template
@@ -618,24 +619,24 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
     // the owning sprite object ($a3/$t5) and its descriptor list ($a2) can be identified.
     // PSXPORT_TEXTDBG: log every call to the text/sprite-row drawer 0x8007E998 (a0=x, a1=y, a3=glyph),
     // with the caller ra — to trace which overlay code draws a given 2D text/banner element.
-    if (pc == 0x8007E998 && cfg_dbg("text")) {
+    if (pc == 0x8007E998 && lucent::channel_on("text")) {
       static int n = 0;
       if (n++ < 30)
-        cfg_logf("text", "[textdbg] 8007E998(x=%d y=%d a2=%08X a3=%08X) ra=%08X stage=%08X",
-                 (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
-                 c->mem_r32(0x801fe00c));
+        lucent::debug("text", "[textdbg] 8007E998(x={} y={} a2={:08X} a3={:08X}) ra={:08X} stage={:08X}",
+                      (int)(int16_t)c->r[4], (int)(int16_t)c->r[5], c->r[6], c->r[7], c->r[31],
+                      c->mem_r32(0x801fe00c));
     }
     uint32_t in = c->mem_r32(pc);
     uint32_t op = in >> 26;
     // SUBSTRATE derail reporter (PSXPORT_DERAIL): a compiled<->interp return that goes wrong lands the
     // interp on garbage (insn 0xFFFFFFFF). Report the exact PC + regs ONCE and stop the run (instead of
     // spinning 12M "bad opcode" lines), so the offending function's broken return can be identified.
-    if (op == 0x3F && cfg_dbg("derail")) {
-      cfg_logf("derail", "pc=%08X in=%08X  ra=%08X sp=%08X gp=%08X  stop_ra=%08X",
-               pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
-      for (int k = 0; k < 16; k++) cfg_logf("derail", "  stk[%2d] @%08X = %08X", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
-      cfg_logf("derail", "last compiled entries (newest last):");
-      for (int k = 24; k >= 1; k--) { uint32_t a = d.callring[(d.callring_pos - k) & 63]; if (a) cfg_logf("derail", "  %08X", a); }
+    if (op == 0x3F && lucent::channel_on("derail")) {
+      lucent::debug("derail", "pc={:08X} in={:08X}  ra={:08X} sp={:08X} gp={:08X}  stop_ra={:08X}",
+                    pc, in, c->r[31], c->r[29], c->r[28], stop_ra);
+      for (int k = 0; k < 16; k++) lucent::debug("derail", "  stk[{:2}] @{:08X} = {:08X}", k, c->r[29] + k*4, c->mem_r32(c->r[29] + k*4));
+      lucent::debug("derail", "last compiled entries (newest last):");
+      for (int k = 24; k >= 1; k--) { uint32_t a = d.callring[(d.callring_pos - k) & 63]; if (a) lucent::debug("derail", "  {:08X}", a); }
       fflush(stderr); abort();
     }
     ldhaz_step(d, in, pc);                           // load-delay hazard detector (execution order)

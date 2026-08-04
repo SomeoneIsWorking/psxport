@@ -25,6 +25,7 @@
 #include "core.h"
 #include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
 #include "cfg.h"
+#include <lucent/log.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -70,19 +71,19 @@ void timer_main() {
 
 void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz) {
   if (!c || !fn || !fps_millihz) {
-    cfg_loge("hostturn", "refusing to register: core=%p fn=%p fps_millihz=%u — a zero field rate "
-                         "would make the timer spin, and a null handler would arm a gate nothing "
-                         "services.", (void*)c, (void*)fn, fps_millihz);
+    lucent::error("hostturn", "refusing to register: core={} fn={} fps_millihz={} — a zero field rate "
+                              "would make the timer spin, and a null handler would arm a gate nothing "
+                              "services.", (void*)c, (void*)fn, fps_millihz);
     return;
   }
   if (s_fn) {
-    cfg_logw("hostturn", "already registered; ignoring the second registration");
+    lucent::warn("hostturn", "already registered; ignoring the second registration");
     return;
   }
   s_fn = fn; s_core = c; s_fps_millihz = fps_millihz;
   s_thread = std::thread(timer_main);
-  cfg_logi("hostturn", "host turn armed at %u.%03u Hz — the guest yields to the host at recompiled "
-                       "function entry", fps_millihz / 1000, fps_millihz % 1000);
+  lucent::info("hostturn", "host turn armed at {}.{:03} Hz — the guest yields to the host at recompiled "
+                           "function entry", fps_millihz / 1000, fps_millihz % 1000);
 }
 
 void rec_host_turn_shutdown() {

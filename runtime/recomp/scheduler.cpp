@@ -9,6 +9,7 @@
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "scheduler.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 #include <setjmp.h>
 #include <stdio.h>
@@ -101,12 +102,12 @@ void native_task_spawn(Core* c, int slot, uint32_t entry_pc) {
 
 void scheduler_yield(Core* c) {
   if (c->game && c->game->verify.inCheck) {   // MV_CHECK legs must be yield-free (verify_harness.h)
-    cfg_loge("mirror-verify", "FATAL: yield inside a strict-check leg — this mirror is not yield-free; gate it with SBS lockstep instead of MV_CHECK.");
+    lucent::error("mirror-verify", "FATAL: yield inside a strict-check leg — this mirror is not yield-free; gate it with SBS lockstep instead of MV_CHECK.");
     abort();
   }
   if (!c->game->pcSched.in_stage) { c->r[2] = c->r[4]; return; }   // no-op: return the handle arg in v0
-  cfg_logf("yieldpc", "switch yield ra=0x%08X waitloop=0x%08X r16=0x%08X r29=0x%08X 801fe0e0=0x%X",
-           c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
+  lucent::debug("yieldpc", "switch yield ra=0x{:08X} waitloop=0x{:08X} r16=0x{:08X} r29=0x{:08X} 801fe0e0=0x{:X}",
+                c->r[31], c->mem_r32(c->r[29] + 16), c->r[16], c->r[29], c->mem_r32(0x801fe0e0u));
   int slot = c->game->pcSched.cur_slot;
   c->game->pcSched.task_ctx[slot] = static_cast<R3000&>(*c);  // save REGISTERS only (r29=task SP, r31=resume ra)
   if (c->game->pcSched.cur_is_coro) {
@@ -115,18 +116,18 @@ void scheduler_yield(Core* c) {
     // finishes (else the thread blocks forever). Otherwise BLOCK the fiber (its whole C stack preserved);
     // the scheduler's co->resume() returns and we continue here on the next resume — mid-function.
     if (c->mem_r16(c->cfg->taskTableBase + (uint32_t)slot * c->cfg->taskSlotStride) == 0) {
-      cfg_logf("sched", "   switch EXIT slot %d (base.state==0) ra=0x%08X",
-               slot, c->r[31]);
+      lucent::debug("sched", "   switch EXIT slot {} (base.state==0) ra=0x{:08X}",
+                    slot, c->r[31]);
       c->game->pcSched.coro[slot]->exit_now();
     }
-    cfg_logf("yieldpc", "[sched]   switch YIELD slot %d ra=0x%08X", slot, c->r[31]);
+    lucent::debug("yieldpc", "[sched]   switch YIELD slot {} ra=0x{:08X}", slot, c->r[31]);
     // btyield: dump the coro's guest call chain at the yield point (the live regs ARE the yielding
     // field-mode frame). Diagnoses WHERE a full-PSX task is parked (e.g. the deep field-mode sub-wait).
-    if (cfg_dbg("btyield")) {
-      cfg_logf("btyield", "slot %d ra=0x%08X r16=0x%08X r17=0x%08X r18=0x%08X r19=0x%08X r29=0x%08X",
-               slot, c->r[31], c->r[16], c->r[17], c->r[18], c->r[19], c->r[29]);
+    if (lucent::channel_on("btyield")) {
+      lucent::debug("btyield", "slot {} ra=0x{:08X} r16=0x{:08X} r17=0x{:08X} r18=0x{:08X} r19=0x{:08X} r29=0x{:08X}",
+                    slot, c->r[31], c->r[16], c->r[17], c->r[18], c->r[19], c->r[29]);
       guest_backtrace_to(c, stderr);
-      { void* bt[40]; int n = backtrace(bt, 40); cfg_logf("btyield", "C-stack (recomp func chain):");
+      { void* bt[40]; int n = backtrace(bt, 40); lucent::debug("btyield", "C-stack (recomp func chain):");
         backtrace_symbols_fd(bt, n, 2); }
     }
     c->game->pcSched.coro[slot]->yield();
@@ -183,13 +184,13 @@ int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
   c->game->pcSched.in_stage = 1;
   c->game->pcSched.cur_is_coro = 1;
   static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];
-  cfg_logf("sched", "slot %d coro %s st=%u entry=0x%08X sp=0x%08X", i,
-           co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->pcSched.task_ctx[i].r[29]);
+  lucent::debug("sched", "slot {} coro {} st={} entry=0x{:08X} sp=0x{:08X}", i,
+                co_fresh ? "start" : "resume", st, c->mem_r32(base + 0xc), c->game->pcSched.task_ctx[i].r[29]);
   co->resume();
   c->game->pcSched.cur_is_coro = 0;
   c->game->pcSched.in_stage = 0;
-  cfg_logf("sched", "   slot %d coro out: done=%d base.state=%u entry=0x%08X",
-           i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
+  lucent::debug("sched", "   slot {} coro out: done={} base.state={} entry=0x{:08X}",
+                i, co->done() ? 1 : 0, c->mem_r16(base), c->mem_r32(base + 0xc));
   if (co->done() || c->mem_r16(base) == 0) {
     c->mem_w16(base, 0);
     c->game->pcSched.task_started[i] = 0;
@@ -234,8 +235,8 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
     return 1;                                                    // sleeping this frame (state==1)
   }
   c->mem_w16(base, 4);
-  cfg_logf("sched", "slot %d st_in=%u resume_pc=0x%08X ra=0x%08X sp=0x%08X",
-           i, st, resume_pc, c->game->pcSched.task_ctx[i].r[31], c->game->pcSched.task_ctx[i].r[29]);
+  lucent::debug("sched", "slot {} st_in={} resume_pc=0x{:08X} ra=0x{:08X} sp=0x{:08X}",
+                i, st, resume_pc, c->game->pcSched.task_ctx[i].r[31], c->game->pcSched.task_ctx[i].r[29]);
   c->mem_w32(c->cfg->curTaskPtr, base);
   c->game->pcSched.cur_slot = i;
   static_cast<R3000&>(*c) = c->game->pcSched.task_ctx[i];

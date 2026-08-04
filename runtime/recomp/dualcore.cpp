@@ -26,6 +26,7 @@
 #include "game.h"
 #include "dualcore.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -55,19 +56,19 @@ constexpr uint16_t BTN_NONE  = 0xFFFF;
 } // namespace
 
 bool DualCore::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
-  if ((f % 400u) == 0) cfg_logi("dc-nav", "%s f%u phase=%d stage=%08X cut=%u", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
+  if ((f % 400u) == 0) lucent::info("dc-nav", "{} f{} phase={} stage={:08X} cut={}", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
   switch (nv.phase) {
     case REACH_GAME:
-      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { cfg_logi("dc", "%s GAME @f%u", tag, f); nv.phase = AWAIT_CUT; }
+      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { lucent::info("dc", "{} GAME @f{}", tag, f); nv.phase = AWAIT_CUT; }
       else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
-      if (cut) { cfg_logi("dc", "%s cutscene up @f%u", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
+      if (cut) { lucent::info("dc", "{} cutscene up @f{}", tag, f); nv.phase = SKIP_CUT; nv.idle = 0; }
       break;
     case SKIP_CUT:
       if (cut) { nv.idle = 0; if ((f % 40u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_START), 6); }
-      else if (++nv.idle >= 60) { cfg_logi("dc", "%s gameplay-start @f%u", tag, f); nv.phase = DONE; return true; }
+      else if (++nv.idle >= 60) { lucent::info("dc", "{} gameplay-start @f{}", tag, f); nv.phase = DONE; return true; }
       break;
     case DONE: return true;
   }
@@ -94,7 +95,7 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
   g->core.rsub.mode.setPsxRender(render_psx != 0);   // per-core render path (0 = native walk, 1 = PSX recomp)
 
   Nav nv; uint32_t f = 0; const uint32_t MAXF = 6000; bool started = false; int k = 0;
-  cfg_logi("dc", "--- %s (psxRender=%d) ---", tag, render_psx);
+  lucent::info("dc", "--- {} (psxRender={}) ---", tag, render_psx);
   for (; f < MAXF && k < n; f++) {
     if (!started) {
       started = navStep(&g->core, nv, f, tag);
@@ -107,7 +108,7 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
     spads[k] = (uint8_t*)malloc(0x400); memcpy(spads[k], g->core.scratch, 0x400);
     k++;
   }
-  cfg_logi("dc", "%s recorded %d frames (reached f%u)", tag, k, f);
+  lucent::info("dc", "{} recorded {} frames (reached f{})", tag, k, f);
   // NB: we intentionally leak the Game (one-shot harness, process exits after).
   return k;
 }
@@ -129,12 +130,12 @@ void DualCore::diffFrameRegion(const char* name, const uint8_t* a, const uint8_t
     if (a[i] == b[i] || (!show_all && isRenderRegion(gbase + i))) { i++; continue; }
     uint32_t s = i, last = i, gap = 0; i++;
     while (i < n && gap < GAP) { if (a[i] != b[i]) { last = i; gap = 0; } else gap++; i++; }
-    CfgLine ln; cfg_line_reset(&ln);
-    cfg_line_addf(&ln, "    %s 0x%08X..0x%08X (%uB)  A:", name, gbase + s, gbase + last + 1, last + 1 - s);
-    for (uint32_t k = s; k <= last && k < s + 8; k++) cfg_line_addf(&ln, "%02X", a[k]);
-    cfg_line_addf(&ln, " B:");
-    for (uint32_t k = s; k <= last && k < s + 8; k++) cfg_line_addf(&ln, "%02X", b[k]);
-    cfg_line_flush(&ln, "dc"); shown++;
+    lucent::Line ln;
+    ln.add("    {} 0x{:08X}..0x{:08X} ({}B)  A:", name, gbase + s, gbase + last + 1, last + 1 - s);
+    for (uint32_t k = s; k <= last && k < s + 8; k++) ln.add("{:02X}", a[k]);
+    ln.add(" B:");
+    for (uint32_t k = s; k <= last && k < s + 8; k++) ln.add("{:02X}", b[k]);
+    ln.flush(lucent::Level::Info, "dc"); shown++;
   }
 }
 
@@ -146,7 +147,7 @@ void DualCore::run(const char* exe_path) {
   { const char* e = cfg_str("PSXPORT_DC_LO"); if (e && *e) lo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = cfg_str("PSXPORT_DC_HI"); if (e && *e) hi = (uint32_t)strtoul(e, 0, 0); }
   uint32_t rsz = hi - lo;
-  cfg_logi("dualcore", "NATIVE-render vs PSX-render RAM compare: N=%d region 0x%08X..0x%08X (%uKB/frame)", n, lo, hi, rsz / 1024);
+  lucent::info("dualcore", "NATIVE-render vs PSX-render RAM compare: N={} region 0x{:08X}..0x{:08X} ({}KB/frame)", n, lo, hi, rsz / 1024);
 
   uint8_t** snA = (uint8_t**)calloc(n, sizeof(void*)); uint8_t** spA = (uint8_t**)calloc(n, sizeof(void*));
   uint8_t** snB = (uint8_t**)calloc(n, sizeof(void*)); uint8_t** spB = (uint8_t**)calloc(n, sizeof(void*));
@@ -155,23 +156,23 @@ void DualCore::run(const char* exe_path) {
   int kB = runAndRecord(exe_path, 1, "B(PSX-render)",    n, lo, hi, snB, spB);
 
   int kn = kA < kB ? kA : kB;
-  cfg_logi("dc", "\n========== RENDER DIFF  (A=native-render  B=PSX-render)  comparing %d frames ==========", kn);
-  cfg_logi("dc", "  (ignore the render PACKET POOL 0x800BFE68..0x800E7E68 — legit render-path difference)");
+  lucent::info("dc", "\n========== RENDER DIFF  (A=native-render  B=PSX-render)  comparing {} frames ==========", kn);
+  lucent::info("dc", "  (ignore the render PACKET POOL 0x800BFE68..0x800E7E68 — legit render-path difference)");
   int first = -1;
   for (int k = 0; k < kn; k++) {
     bool ram_d = false;
     for (uint32_t i = 0; i < rsz; i++) if (snA[k][i] != snB[k][i] && !isRenderRegion(lo + i)) { ram_d = true; break; }
     bool spd_d = memcmp(spA[k], spB[k], 0x400) != 0;   // scratchpad has no render-pool exclusion
     if (ram_d || spd_d) {
-      if (first < 0) { first = k; cfg_logi("dc", "FIRST DIVERGENCE at gameplay-frame %d:", k); }
+      if (first < 0) { first = k; lucent::info("dc", "FIRST DIVERGENCE at gameplay-frame {}:", k); }
       if (k < first + 6) {     // detail the first few divergent frames
-        cfg_logi("dc", "  frame %d:", k);
+        lucent::info("dc", "  frame {}:", k);
         if (ram_d) diffFrameRegion("ram ", snA[k], snB[k], rsz, lo);
         if (spd_d) diffFrameRegion("spad", spA[k], spB[k], 0x400, 0x1F800000u);
       }
     }
   }
-  if (first < 0) cfg_logi("dc", "NO DIVERGENCE across %d frames — native gameplay == PSX gameplay here.", kn);
-  else cfg_logi("dc", "(divergence began at frame %d)", first);
-  cfg_logi("dc", "========================================================================");
+  if (first < 0) lucent::info("dc", "NO DIVERGENCE across {} frames — native gameplay == PSX gameplay here.", kn);
+  else lucent::info("dc", "(divergence began at frame {})", first);
+  lucent::info("dc", "========================================================================");
 }

@@ -48,30 +48,22 @@ std::string vformat(const char* fmt, va_list ap) {
   return std::string(buf, static_cast<size_t>(n));
 }
 
-// PSXPORT_DEBUG / PSXPORT_LOG_FILE predate lucent's own LUCENT_* names and are what every script and
-// doc in this project sets, so honour them. Done lazily on first use rather than at static-init time,
-// because the environment is fully set up by then and static-init order is not worth relying on.
-// Bumped whenever the enabled-channel SET changes; hot paths cache cfg_dbg() against it.
+// Bumped whenever the enabled-channel SET changes; hot paths cache cfg_dbg() against it. Starts at 0
+// and must become non-zero once, which is all bootstrap_once() is still for.
 #define s_dbg_gen cfg_dbg_gen_v
 
+// PSXPORT_DEBUG and PSXPORT_LOG_FILE are read by LUCENT ITSELF — cmake/psxport.cmake builds it with
+// LUCENT_CHANNEL_ENV / LUCENT_LOG_FILE_ENV set to those names, and lucent resolves them lazily on its
+// first log call. This function used to load them here instead, and that was a time bomb: it is
+// reachable only from a cfg_* entry point, so a plain lucent::debug() never triggered it and the two
+// variables worked purely because ~700 legacy cfg_log* sites happen to fire during boot. Retiring
+// those would have turned every diagnostic channel in four repos off with no message. The load lives
+// where it cannot be skipped now; tests/test_lucent_channel_env.cpp is the gate.
 void bootstrap_once() {
   static bool done = false;
   if (done) return;
   done = true;
   s_dbg_gen++;
-
-  const std::string& chans = lucent::config::text("PSXPORT_DEBUG");
-  if (!chans.empty()) lucent::enable_channels(chans);
-
-  const std::string& path = lucent::config::text("PSXPORT_LOG_FILE");
-  if (path.empty()) return;
-  std::FILE* f = std::fopen(path.c_str(), "a");
-  if (!f) return;
-  setvbuf(f, nullptr, _IOLBF, 0);   // line-buffered: tail -f works, a crash keeps the last lines
-  lucent::set_sink([f](lucent::Level, std::string_view line) {
-    std::fwrite(line.data(), 1, line.size(), f);
-    std::fputc('\n', f);
-  });
 }
 
 void emit(lucent::Level level, const char* chan, const char* fmt, va_list ap) {

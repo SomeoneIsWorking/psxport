@@ -24,6 +24,7 @@
 // does not accumulate samples there — which is what you want when the question is "where is the work".
 #include "cfg.h"
 #include "fs_util.h"
+#include <lucent/log.h>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -91,13 +92,13 @@ void dump() {
       t += line;
     }
   if (Fs::writeFile(out, t.data(), t.size()))
-    cfg_logi("prof", "%llu sample(s) -> %s  (resolve with tools/prof_hot.py)",
-             (unsigned long long)g_total, out);
+    lucent::info("prof", "{} sample(s) -> {}  (resolve with tools/prof_hot.py)",
+                 (unsigned long long)g_total, out);
   else
-    cfg_loge("prof", "FAILED to write %s — the profile you asked for does not exist", out);
+    lucent::error("prof", "FAILED to write {} — the profile you asked for does not exist", out);
   if (g_dropped)
-    cfg_logw("prof", "%llu sample(s) DROPPED to table congestion — the hot set is wider than the "
-                     "histogram; treat the tail as incomplete", (unsigned long long)g_dropped);
+    lucent::warn("prof", "{} sample(s) DROPPED to table congestion — the hot set is wider than the "
+                         "histogram; treat the tail as incomplete", (unsigned long long)g_dropped);
 }
 
 }  // namespace
@@ -124,5 +125,5 @@ void hostprof_init() {
   // SIGTERM/SIGINT are how a profiled run actually ends here. SIGPROF stays on its own handler.
   signal(SIGTERM, on_term);
   signal(SIGINT, on_term);
-  cfg_logi("prof", "host-PC sampling at %d Hz (ITIMER_PROF — CPU time, not wall time)", hz);
+  lucent::info("prof", "host-PC sampling at {} Hz (ITIMER_PROF — CPU time, not wall time)", hz);
 }

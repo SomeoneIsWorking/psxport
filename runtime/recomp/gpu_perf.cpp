@@ -28,7 +28,7 @@
 // GPU ms ~= frame time while CPU phases are small, it is GPU-BOUND (the present/raster path is the lever).
 
 #include "gpu_perf.h"
-#include "cfg.h"
+#include <lucent/log.h>
 #include <cstdio>
 
 static inline double ms_between(std::chrono::steady_clock::time_point a,
@@ -44,7 +44,7 @@ double* GpuPerf::phaseSlot(int p) {
 }
 
 int GpuPerf::perfOn() {
-  if (--mPerfRecheck <= 0) { mPerf = cfg_dbg("perf"); mPerfRecheck = 30; }
+  if (--mPerfRecheck <= 0) { mPerf = lucent::channel_on("perf"); mPerfRecheck = 30; }
   return mPerf;
 }
 
@@ -94,7 +94,7 @@ void GpuPerf::frameEnd() {
   double present = mAcc.present / nf, sched = mAcc.sched / nf, post = mAcc.post / nf;
   double cpu_sum = pre + logic + audio + present + sched + post;
   double idle = frame - cpu_sum;   // pacing / vsync sleep / anything outside the measured spans
-  cfg_logi("perf", "%.0ff avg %.2fms (%.1f fps) | frame %.2f = pre %.2f tick-LOGIC %.2f audio %.2f PRESENT-cpu %.2f SCHED-LOGIC %.2f post %.2f + idle/pace %.2f | CPU-sum %.2fms", nf, frame, frame > 0 ? 1000.0 / frame : 0.0,
+  lucent::info("perf", "{:.0f}f avg {:.2f}ms ({:.1f} fps) | frame {:.2f} = pre {:.2f} tick-LOGIC {:.2f} audio {:.2f} PRESENT-cpu {:.2f} SCHED-LOGIC {:.2f} post {:.2f} + idle/pace {:.2f} | CPU-sum {:.2f}ms", nf, frame, frame > 0 ? 1000.0 / frame : 0.0,
     frame, pre, logic, audio, present, sched, post, idle, cpu_sum);
 
   mAcc = Acc{};

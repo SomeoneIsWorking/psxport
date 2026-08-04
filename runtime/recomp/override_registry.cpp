@@ -6,6 +6,7 @@
 #include "game.h"
 #include "sbs.h"
 #include "cfg.h"
+#include <lucent/log.h>
 #include "verify_harness.h"
 #include "recomp_iface.h"   // seam: the generated per-module override setters (shard/ov_a00/ov_game)
 #include <cstdio>
@@ -43,7 +44,7 @@ const char* g_forceGen = (const char*)1;   // sentinel: parse on first use
 bool forced(uint32_t addr) {
   if (g_forceGen == (const char*)1) {
     g_forceGen = getenv("PSXPORT_THUNK_FORCE_GEN");
-    if (g_forceGen) cfg_logi("overrides", "FORCE_GEN active: %s", g_forceGen);
+    if (g_forceGen) lucent::info("overrides", "FORCE_GEN active: {}", g_forceGen);
   }
   for (const char* p = g_forceGen; p && *p; ) {
     uint32_t a = (uint32_t)strtoul(p, (char**)&p, 0);
@@ -54,16 +55,16 @@ bool forced(uint32_t addr) {
 }
 
 void dump_atexit() {
-  if (!cfg_dbg("ovhit") || g_n == 0) return;
-  cfg_logi("ovhit", "override registry hit counts (native=coreA / oracle=coreB):");
+  if (!lucent::channel_on("ovhit") || g_n == 0) return;
+  lucent::info("ovhit", "override registry hit counts (native=coreA / oracle=coreB):");
   for (int i = 0; i < g_n; i++) {
     const Entry& e = g_tab[i];
     char label[32];
     const char* name = e.name;
     if (!name) { snprintf(label, sizeof label, "0x%08X", e.addr); name = label; }
-    cfg_logi("ovhit", "  0x%08X %-34s : native=%llu  oracle=%llu%s%s", e.addr, name, (unsigned long long)e.nativeHits, (unsigned long long)e.oracleHits,
-            e.nativeHits == 0 && e.oracleHits == 0 ? "   <-- NEVER HIT (registered but unreached)" : "",
-            (e.oracleHits != 0 && e.nativeHits != e.oracleHits) ? "   <-- COUNT MISMATCH (control-flow divergence)" : "");
+    lucent::info("ovhit", "  0x{:08X} {:<34} : native={}  oracle={}{}{}", e.addr, name, (unsigned long long)e.nativeHits, (unsigned long long)e.oracleHits,
+                 e.nativeHits == 0 && e.oracleHits == 0 ? "   <-- NEVER HIT (registered but unreached)" : "",
+                 (e.oracleHits != 0 && e.nativeHits != e.oracleHits) ? "   <-- COUNT MISMATCH (control-flow divergence)" : "");
   }
 }
 
@@ -76,12 +77,12 @@ void runEntry(Core* c, int slot) {
   if (oracle) { e.oracleHits++; e.gen(c); return; }
 
   e.nativeHits++;
-  if (cfg_dbg("dispatch")) {
+  if (lucent::channel_on("dispatch")) {
     Sbs* sbs = c->game ? c->game->sbs : nullptr;
     int cid = sbs ? sbs->coreId(c) : -1;
-    cfg_logf("dispatch", "f%u core=%c 0x%08X %s ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X",
-             sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), e.addr,
-             e.name ? e.name : "?", c->r[31], c->r[4], c->r[5], c->r[6], c->r[7]);
+    lucent::debug("dispatch", "f{} core={} 0x{:08X} {} ra={:08X} a0={:08X} a1={:08X} a2={:08X} a3={:08X}",
+                  sbs ? sbs->frame() : 0, cid < 0 ? '-' : (cid ? 'B' : 'A'), e.addr,
+                  e.name ? e.name : "?", c->r[31], c->r[4], c->r[5], c->r[6], c->r[7]);
   }
   // PSXPORT_MIRROR_VERIFY[=all|=0xADDR,...]: per-invocation mechanical oracle. strictCheck replays the
   // pure gen leg via rec_dispatch with inSubstrateLeg=true; the oracle test above honours that flag, so
@@ -100,7 +101,7 @@ void runEntry(Core* c, int slot) {
 void thunk(Core* c) {
   int slot = lookup(norm(c->pc));
   if (slot < 0) {
-    cfg_logi("overrides", "thunk with no entry for pc=%08X (table has %d)", c->pc, g_n);
+    lucent::info("overrides", "thunk with no entry for pc={:08X} (table has {})", c->pc, g_n);
     abort();
   }
   runEntry(c, slot);
@@ -114,7 +115,7 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
   const uint32_t k = norm(addr);
   int slot = lookup(k);
   if (slot < 0) {
-    if (g_n >= kCap) { cfg_logi("overrides", "registry full (kCap=%d)", kCap); abort(); }
+    if (g_n >= kCap) { lucent::info("overrides", "registry full (kCap={})", kCap); abort(); }
     slot = g_n++;
     g_tab[slot].nativeHits = g_tab[slot].oracleHits = 0;
     if (k < g_lo) g_lo = k;
@@ -140,15 +141,15 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
       // Most call sites reach here through engine_set_override_<mod>, which passes no name — so print
       // the handler POINTERS too (resolve with `addr2line -fe scratch/bin/tomba2_port <ptr>`) and name
       // the tool that lists both owners from source. A fatal you cannot act on is only half a fix.
-      cfg_logi("overrides",
-               "FATAL: guest 0x%08X already has a native owner — a second install tried to take it.\n"
-               "  incumbent: '%s'  native=%p gen=%p\n"
-               "  newcomer : '%s'  native=%p gen=%p\n"
+      lucent::info("overrides",
+               "FATAL: guest 0x{:08X} already has a native owner — a second install tried to take it.\n"
+               "  incumbent: '{}'  native={} gen={}\n"
+               "  newcomer : '{}'  native={} gen={}\n"
                "  Two native owners of one address is never intended: the second silently wins and the\n"
                "  first's work just disappears from the picture, with no build error, no warning, and a\n"
                "  GREEN SBS (both write the same guest state). Give the address ONE owner that dispatches\n"
                "  to both — game/render/mesh_emit_tap.cpp is the worked example — or delete the loser.\n"
-               "  Who owns it in source:  python3 tools/codemap.py --addr %08X\n"
+               "  Who owns it in source:  python3 tools/codemap.py --addr {:08X}\n"
                "  Resolve a pointer:      addr2line -fe scratch/bin/tomba2_port <ptr>",
                k, e.name ? e.name : "<unnamed>", (void*)e.native, (void*)e.gen,
                name ? name : "<unnamed>", (void*)native, (void*)gen, k);

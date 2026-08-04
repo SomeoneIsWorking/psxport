@@ -7,7 +7,7 @@
 // hidden globals shared across the two SBS cores. This class owns that state per-Game:
 //   * ram0()/ramN() — the 2 MB main-RAM snapshot pair, malloc'd on first traced run.
 //   * check(name)   — per-check match/mismatch counters, keyed by the gate/channel name.
-//   * on(chan)      — lazy cfg_dbg cache per channel (latches the value at first use, like the old
+//   * on(chan)      — lazy channel_on cache per channel (latches the value at first use, like the old
 //                     `static int s_v = -1` sites — a later REPL `debug <chan>` before first use still wins).
 //   * run(...)      — the common fn(Core*)-shaped gate (was class VerifyGate in game/world).
 // Gates are DORMANT diagnostic channels (REPL `debug <chan>`); off by default. Reached as
@@ -29,10 +29,10 @@ public:
     const char* name = nullptr;
     long nMatch = 0;      // was the per-site `static long ng`
     long nMismatch = 0;   // was the per-site `static long nb`
-    int  flag = -1;       // was the per-site `static int s_v` cfg_dbg cache (-1 = not latched yet)
+    int  flag = -1;       // was the per-site `static int s_v` channel cache (-1 = not latched yet)
   };
 
-  // Lazy cfg_dbg(chan) cache: latches on first call (same semantics as the old static-local caches).
+  // Lazy lucent::channel_on(chan) cache: latches on first call (same semantics as the old static-local caches).
   int on(const char* chan);
 
   // The counters entry for `name` (created on first use; `name` must be a literal that stays alive).

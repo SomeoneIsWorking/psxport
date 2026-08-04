@@ -7,7 +7,8 @@
 #include "game_iface.h"          // GameHooks — game-side command dispatch (replCommand) + REPL diag hooks
 #include "game.h"
 #include "c_subsys.h"
-#include "cfg.h"
+#include "cfg.h"                 // cfg_dbg_set — the `debug <chans>` command
+#include <lucent/log.h>
 #include "render_substrate.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
 #include "ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
 #include "repl.h"
@@ -39,7 +40,7 @@ static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
 
 static void repl_wav_write(const char* path, const int16_t* pcm, uint32_t frames, int rate) {
   FILE* fp = fopen(path, "wb");
-  if (!fp) { cfg_loge("repl", "wav write: cannot open %s", path); return; }
+  if (!fp) { lucent::error("repl", "wav write: cannot open {}", path); return; }
   uint32_t data = frames * 4u, riff = 36u + data, brate = (uint32_t)rate * 4u, fmtlen = 16;
   uint16_t pcm1 = 1, ch2 = 2, ba = 4, bits = 16; uint32_t r = (uint32_t)rate;
   fwrite("RIFF", 1, 4, fp); fwrite(&riff, 4, 1, fp); fwrite("WAVE", 1, 4, fp);
@@ -48,7 +49,7 @@ static void repl_wav_write(const char* path, const int16_t* pcm, uint32_t frames
   fwrite(&brate, 4, 1, fp); fwrite(&ba, 2, 1, fp); fwrite(&bits, 2, 1, fp);
   fwrite("data", 1, 4, fp); fwrite(&data, 4, 1, fp);
   fwrite(pcm, 4, frames, fp); fclose(fp);
-  cfg_logi("repl", "xadump -> %s (%u frames @ %d Hz, %.2fs)", path, frames, rate, frames / (double)rate);
+  lucent::info("repl", "xadump -> {} ({} frames @ {} Hz, {:.2f}s)", path, frames, rate, frames / (double)rate);
 }
 
 // Decode ~`secs` of the XA stream on subheader channel `chan` starting at CHD `start_lba`,
@@ -91,7 +92,7 @@ static void repl_xadump(DiscState* disc, uint8_t chan, uint32_t start_lba, const
 long Repl::read(Core* c, uint32_t f) {
   uint16_t& held = mHeldMask;                 // active-low held mask (persists across REPL entries)
   char line[256];
-  cfg_logi("repl", "frame=%u ready", f); fflush(stderr);
+  lucent::info("repl", "frame={} ready", f); fflush(stderr);
   while (fgets(line, sizeof line, stdin)) {
     char cmd[24] = {0}, arg[32] = {0}; unsigned a = 0, b = 0;
     if (sscanf(line, "%23s", cmd) != 1) continue;
@@ -104,23 +105,23 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "step")) { if (sscanf(line, "%*s %u", &a) != 1 || !a) a = 1; return (long)a; }
     else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
       if (!b) b = 16;
-      CfgLine ln; cfg_line_reset(&ln); cfg_line_addf(&ln, "%08X:", a);
-      for (unsigned i = 0; i < b && i < 256; i++) cfg_line_addf(&ln, " %02X", c->mem_r8(a + i));
-      cfg_line_flush(&ln, "repl");
+      lucent::Line ln; ln.add("{:08X}:", a);
+      for (unsigned i = 0; i < b && i < 256; i++) ln.add(" {:02X}", c->mem_r8(a + i));
+      ln.flush(lucent::Level::Info, "repl");
     } else if (!strcmp(cmd, "rw") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
       if (!b) b = 8;
-      CfgLine ln; cfg_line_reset(&ln); cfg_line_addf(&ln, "%08X:", a);
-      for (unsigned i = 0; i < b && i < 64; i++) cfg_line_addf(&ln, " %08X", c->mem_r32(a + i * 4));
-      cfg_line_flush(&ln, "repl");
-    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w32(a, b); cfg_logi("repl", "ok"); }
-    else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w8(a, (uint8_t)b); cfg_logi("repl", "ok"); }
+      lucent::Line ln; ln.add("{:08X}:", a);
+      for (unsigned i = 0; i < b && i < 64; i++) ln.add(" {:08X}", c->mem_r32(a + i * 4));
+      ln.flush(lucent::Level::Info, "repl");
+    } else if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w32(a, b); lucent::info("repl", "ok"); }
+    else if (!strcmp(cmd, "w8") && sscanf(line, "%*s %x %x", &a, &b) == 2) { c->mem_w8(a, (uint8_t)b); lucent::info("repl", "ok"); }
     else if (!strcmp(cmd, "watch") && sscanf(line, "%*s %x %x", &a, &b) == 2) c->mem_set_watch(a, b);
-    else if (!strcmp(cmd, "unwatch")) { c->mem_set_watch(0, 0); cfg_logi("repl", "unwatch"); }
-    else if (!strcmp(cmd, "hits")) cfg_logi("repl", "watch hits=%d", c->mem_watch_hits());
-    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); c->game->pad.driveHold(held); cfg_logi("repl", "held=%04X", held); }
-    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  c->game->pad.driveHold(held); cfg_logi("repl", "held=%04X", held); }
-    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); cfg_logi("repl", "tap %s %u", arg, a); }
-    else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); void cfg_dbg_set(const char*); cfg_dbg_set(ch); cfg_logi("repl", "debug channels = %s", ch[0] ? ch : "(none)"); }
+    else if (!strcmp(cmd, "unwatch")) { c->mem_set_watch(0, 0); lucent::info("repl", "unwatch"); }
+    else if (!strcmp(cmd, "hits")) lucent::info("repl", "watch hits={}", c->mem_watch_hits());
+    else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); c->game->pad.driveHold(held); lucent::info("repl", "held={:04X}", held); }
+    else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  c->game->pad.driveHold(held); lucent::info("repl", "held={:04X}", held); }
+    else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); lucent::info("repl", "tap {} {}", arg, a); }
+    else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); void cfg_dbg_set(const char*); cfg_dbg_set(ch); lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)"); }
     else if (!strcmp(cmd, "ents")) {   // enumerate live GAME OBJECTS across the 3 entity lists, with identity
       // Each object is a node in a doubly-linked list (next @ +0x24). Identity fields: type @+0xc, render
       // intrinsic @+0xb (0x10..0x14 = sprite/billboard, 0/0xf = mesh), behavior handler @+0x1c (the object's
@@ -135,7 +136,7 @@ long Repl::read(Core* c, uint32_t f) {
       int total = 0, owned = 0;
       for (int h = 0; h < 3; h++) {
         uint32_t n = c->mem_r32(heads[h]);
-        cfg_logi("ents", "-- list %d head=%08X --", h, n);
+        lucent::info("ents", "-- list {} head={:08X} --", h, n);
         for (int g = 0; n && g < 400; g++, n = c->mem_r32(n + 0x24)) {
           uint32_t cmd0 = c->mem_r8(n + 8) ? c->mem_r32(n + 0xC0) : 0;
           uint32_t hh = c->mem_r32(n + 0x1c);
@@ -143,20 +144,20 @@ long Repl::read(Core* c, uint32_t f) {
           int16_t nx = c->mem_r16s(n + 0x2e), nz = c->mem_r16s(n + 0x36);
           int is_player = (c->mem_r32(n + 0x38) == 0) && (nx == px) && (nz == pz);
           if (bn) owned++;
-          cfg_logi("ents", " %08X t=%02X ri=%02X model=%04X h=%08X pos=(%6d,%6d,%6d) rf=%u cmds=%u gb0=%08X  %s%s", n, c->mem_r8(n + 0xc), c->mem_r8(n + 0xb), c->mem_r16(n + 0xe) & 0x3fff, hh,
-                  c->mem_r16s(n + 0x2e), c->mem_r16s(n + 0x32), nz,
-                  c->mem_r8(n + 1), c->mem_r8(n + 8), cmd0 ? c->mem_r32(cmd0 + 0x40) : 0,
-                  bn ? bn : "PSX", is_player ? "  <== PLAYER" : "");
+          lucent::info("ents", " {:08X} t={:02X} ri={:02X} model={:04X} h={:08X} pos=({:6},{:6},{:6}) rf={} cmds={} gb0={:08X}  {}{}", n, c->mem_r8(n + 0xc), c->mem_r8(n + 0xb), c->mem_r16(n + 0xe) & 0x3fff, hh,
+                       c->mem_r16s(n + 0x2e), c->mem_r16s(n + 0x32), nz,
+                       c->mem_r8(n + 1), c->mem_r8(n + 8), cmd0 ? c->mem_r32(cmd0 + 0x40) : 0,
+                       bn ? bn : "PSX", is_player ? "  <== PLAYER" : "");
           total++;
         }
       }
-      cfg_logi("ents", "(%d nodes; %d native-owned, %d still-PSX)", total, owned, total - owned);
+      lucent::info("ents", "({} nodes; {} native-owned, {} still-PSX)", total, owned, total - owned);
     }
     else if (!strcmp(cmd, "tp")) { int x=0,y=0,z=0;
-      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { c->hooks->replCamTeleport(c, x, y, z); cfg_logi("repl", "tp camera -> (%d,%d,%d)", x, y, z); }
-      else { c->hooks->replCamTeleportOff(c); cfg_logi("repl", "tp off (camera follows player)"); } }
-    else if (!strcmp(cmd, "newgame")) { this->navNewgame = 1; cfg_logi("repl", "newgame: pulsing to GAME prologue"); return 100000; }
-    else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; this->skipFrames = (long)a; cfg_logi("repl", "skip %u frames", a); return (long)a; }
+      if (sscanf(line, "%*s %d %d %d", &x, &y, &z) == 3) { c->hooks->replCamTeleport(c, x, y, z); lucent::info("repl", "tp camera -> ({},{},{})", x, y, z); }
+      else { c->hooks->replCamTeleportOff(c); lucent::info("repl", "tp off (camera follows player)"); } }
+    else if (!strcmp(cmd, "newgame")) { this->navNewgame = 1; lucent::info("repl", "newgame: pulsing to GAME prologue"); return 100000; }
+    else if (!strcmp(cmd, "skip")) { a = 0; sscanf(line, "%*s %u", &a); if (!a) a = 500; this->skipFrames = (long)a; lucent::info("repl", "skip {} frames", a); return (long)a; }
     else if (!strcmp(cmd, "warp")) {
       // warp <area_id> [sub] — load a different area on demand via the REAL DOOR RECORD (foundation for a
       // level/boss selector). Only valid from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the
@@ -167,36 +168,36 @@ long Repl::read(Core* c, uint32_t f) {
       unsigned sub = 0; int nargs = sscanf(line, "%*s %u %u", &a, &sub);
       if (nargs >= 1) {
         if (c->mem_r32(0x801fe00c) != 0x8010637Cu)
-          cfg_logi("repl", "warp: not in GAME stage (stage=%08X) — reach the field first (newgame/skip)", c->mem_r32(0x801fe00c));
+          lucent::info("repl", "warp: not in GAME stage (stage={:08X}) — reach the field first (newgame/skip)", c->mem_r32(0x801fe00c));
         else if (c->hooks && c->hooks->devAreaCount && (int)a >= c->hooks->devAreaCount(c)) {
           // Out-of-range ids are NOT areas: the load is file index `area+3` into the table at
           // 0x800BE118, so an id past the last area loads a non-area file (START/DEMO/GAME) into the
           // mode slot and produces out-of-range CD reads and a wander/hang. `warp` used to accept them
           // silently, which is how kanban #24 came to be filed against an "area 22" that does not
           // exist. Reject instead. (kanban #36)
-          cfg_logi("repl", "warp: area %u is out of range — this game has %d areas (0..%d)",
-                   a, c->hooks->devAreaCount(c), c->hooks->devAreaCount(c) - 1);
+          lucent::info("repl", "warp: area {} is out of range — this game has {} areas (0..{})",
+                       a, c->hooks->devAreaCount(c), c->hooks->devAreaCount(c) - 1);
         }
         else {
           this->warpDest = a; this->warpSub = (nargs == 2) ? sub : 0; this->warpArmed = 1;
-          cfg_logi("repl", "warp: armed dest area id=%u sub=%u (cur=%u) via door record — run frames to load", a, this->warpSub, c->mem_r8(0x800bf870u));
+          lucent::info("repl", "warp: armed dest area id={} sub={} (cur={}) via door record — run frames to load", a, this->warpSub, c->mem_r8(0x800bf870u));
         }
-      } else cfg_logi("repl", "warp <area_id> [sub]  (area table @0x800be118, ids 0..0x1f; sub = 0x800BF871 sub-state)");
+      } else lucent::info("repl", "warp <area_id> [sub]  (area table @0x800be118, ids 0..0x1f; sub = 0x800BF871 sub-state)");
     }
     else if (!strcmp(cmd, "preseq")) {   // arm a PRESENT-sequence dump: next N presented frames (real + fps60 interp)
       unsigned n = 0; char dir[120] = "scratch/screenshots/preseq";
       if (sscanf(line, "%*s %u %119s", &n, dir) >= 1 && n > 0) {
         extern void gpu_vk_preseq_arm(Core*, int, const char*);
         gpu_vk_preseq_arm(c, (int)n, dir);
-        cfg_logi("repl", "preseq armed: next %u presents -> %s/p%%04d.ppm", n, dir);
-      } else cfg_logi("repl", "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)");
+        lucent::info("repl", "preseq armed: next {} presents -> {}/p%04d.ppm", n, dir);
+      } else lucent::info("repl", "preseq <N> [dir] — dump the next N PRESENTED frames (incl. fps60 interp)");
     }
     else if (!strcmp(cmd, "shot")) {   // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
         int gpu_vk_enabled(void); void gpu_vk_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
-        if (gpu_vk_enabled()) { gpu_vk_shot(c, path); cfg_logi("repl", "shot (VK) -> %s", path); }
-        else                   { gpu_native_shot(c, path); cfg_logi("repl", "shot (SW) -> %s", path); }
+        if (gpu_vk_enabled()) { gpu_vk_shot(c, path); lucent::info("repl", "shot (VK) -> {}", path); }
+        else                   { gpu_native_shot(c, path); lucent::info("repl", "shot (SW) -> {}", path); }
       }
     }
     else if (!strcmp(cmd, "shotregion")) {   // dump an ARBITRARY VRAM region, not just what is presented
@@ -208,14 +209,14 @@ long Repl::read(Core* c, uint32_t f) {
       if (sscanf(line, "%*s %199s %d %d %d %d", path, &x, &y, &w, &h) == 5) {
         void gpu_vk_shot_region(Core*, const char*, int, int, int, int);
         gpu_vk_shot_region(c, path, x, y, w, h);
-      } else cfg_logi("repl", "shotregion <path> <x> <y> <w> <h> — raw VRAM region (VRAM is 1024x512)");
+      } else lucent::info("repl", "shotregion <path> <x> <y> <w> <h> — raw VRAM region (VRAM is 1024x512)");
     }
     else if (!strcmp(cmd, "setires")) {   // live ires toggle (same mods.ires mutation the RmlUi overlay's
       // "ires" row does — 0=Auto, 1..cap=fixed). Exercises GpuVkState::ensure_ires_targets' teardown+
       // rebuild path headless, without needing a windowed run to reach the overlay.
       unsigned n = 0;
-      if (sscanf(line, "%*s %u", &n) == 1) { c->game->mods.ires = (int)n; cfg_logi("repl", "mods.ires = %d", c->game->mods.ires); }
-      else cfg_logi("repl", "setires <0..4> — live ires toggle (0=Auto)");
+      if (sscanf(line, "%*s %u", &n) == 1) { c->game->mods.ires = (int)n; lucent::info("repl", "mods.ires = {}", c->game->mods.ires); }
+      else lucent::info("repl", "setires <0..4> — live ires toggle (0=Auto)");
     }
     else if (!strcmp(cmd, "iresdump")) {   // DEBUG ONLY (ires bring-up): raw dump of the ires-scaled target
       char path[200] = {0};
@@ -230,13 +231,13 @@ long Repl::read(Core* c, uint32_t f) {
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
         FILE* fp = fopen(path, "wb");
-        if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); cfg_logi("repl", "dumpram -> %s", path); }
-        else cfg_loge("repl", "dumpram: cannot open %s", path);
+        if (fp) { fwrite(c->ram, 1, 0x200000, fp); fclose(fp); lucent::info("repl", "dumpram -> {}", path); }
+        else lucent::error("repl", "dumpram: cannot open {}", path);
         // Also dump the 1 KB scratchpad (0x1F800000) to a sidecar .spad — the main-RAM A/B diff is
         // BLIND to scratchpad, where several engine flags live (DEMO: 0x1f80019a/19d/134/198 etc.).
         char spath[208]; snprintf(spath, sizeof spath, "%s.spad", path);
         FILE* sp = fopen(spath, "wb");
-        if (sp) { fwrite(c->scratch, 1, sizeof c->scratch, sp); fclose(sp); cfg_logi("repl", "dumpram scratchpad -> %s", spath); }
+        if (sp) { fwrite(c->scratch, 1, sizeof c->scratch, sp); fclose(sp); lucent::info("repl", "dumpram scratchpad -> {}", spath); }
       }
     }
     else if (!strcmp(cmd, "wav")) { char path[200] = {0}; if (sscanf(line, "%*s %199s", path) == 1) c->game->spu_audio.wavReopen(path); }
@@ -246,7 +247,7 @@ long Repl::read(Core* c, uint32_t f) {
       char nm[64] = {0}, st[16] = {0}; int k = sscanf(line, "%*s %63s %15s", nm, st);
       if (k <= 0 || !strcmp(nm, "list")) c->game->native_gates.list();
       else { c->game->native_gates.set(nm, strcmp(st, "off") != 0);
-             cfg_logi("repl", "native %s = %s", nm, strcmp(st, "off") ? "on" : "off"); }
+             lucent::info("repl", "native {} = {}", nm, strcmp(st, "off") ? "on" : "off"); }
     }
     // gate on|off (or 1|0) — toggle PSX-fallback live: everything the frame loop calls runs as PSX recomp
     // (sync CD) instead of the native owners. Applies to tasks freshly (re)entered after the toggle; an
@@ -255,7 +256,7 @@ long Repl::read(Core* c, uint32_t f) {
       char st[16] = {0};
       if (sscanf(line, "%*s %15s", st) == 1)
         c->game->psx_fallback = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
-      cfg_logi("repl", "psx_fallback = %d", c->game->psx_fallback);
+      lucent::info("repl", "psx_fallback = {}", c->game->psx_fallback);
     }
     // renderpsx [on|off] — render the FIELD via the PSX recomp path (vs the native world-coord path) with
     // the SAME native game state, for a native-vs-PSX RENDER diff (must match at 1x/4:3/30fps). Diagnostic.
@@ -266,7 +267,7 @@ long Repl::read(Core* c, uint32_t f) {
       const bool have_arg = sscanf(line, "%*s %15s", st) == 1;
       const bool want = have_arg ? !(!strcmp(st, "off") || !strcmp(st, "0")) : !c->rsub.mode.psxRender();
       c->rsub.mode.setPsxRender(want);
-      cfg_logi("repl", "Render::psxRender = %d", c->rsub.mode.psxRender());
+      lucent::info("repl", "Render::psxRender = {}", c->rsub.mode.psxRender());
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump(&c->game->disc, (uint8_t)ch, lba, path, secs ? (int)secs : 3); }
@@ -276,12 +277,12 @@ long Repl::read(Core* c, uint32_t f) {
       if (!strcmp(sub, "start")) prof_start(c);
       else if (!strcmp(sub, "stop") || !strcmp(sub, "off")) prof_stop(c);
       else if (!strcmp(sub, "dump")) prof_dump(c, path[0] ? path : 0);
-      else cfg_logi("repl", "prof: start | stop | dump <path>");
+      else lucent::info("repl", "prof: start | stop | dump <path>");
     }
     else if (!strcmp(cmd, "trace")) {   // trace <path> : open the interp call tracer; `trace` alone closes
       void interp_trace_open(Core*, const char*); char path[200] = {0};
-      if (sscanf(line, "%*s %199s", path) == 1) { interp_trace_open(c, path); cfg_logi("repl", "trace -> %s", path); }
-      else { interp_trace_open(c, 0); cfg_logi("repl", "trace closed"); }
+      if (sscanf(line, "%*s %199s", path) == 1) { interp_trace_open(c, path); lucent::info("repl", "trace -> {}", path); }
+      else { interp_trace_open(c, 0); lucent::info("repl", "trace closed"); }
     }
     // otattr — dump the OT/GTE submission-attribution tables (game/render/ot_attr.h, `debug otattr`).
     // Re-walks the LAST OT this Core drew (GpuState::s_ot_madr) READ-ONLY (header/first-word peeks
@@ -300,12 +301,12 @@ long Repl::read(Core* c, uint32_t f) {
       if (!strcmp(sub, "watch")) {
         uint32_t addr = 0, len = 0;
         if (sscanf(line, "%*s %*s %x %x", &addr, &len) != 2 || len == 0) {
-          cfg_logi("otattr", "usage: otattr watch <addr-hex> <len-hex>");
+          lucent::info("otattr", "usage: otattr watch <addr-hex> <len-hex>");
         } else {
           int slot = oa.watchRegister(addr, len);
           if (slot < 0)
-            cfg_logi("otattr", "watch REJECTED (slots=%d/%d wordsUsed=%d/%d overflow=%d) — free a slot or shrink the region", oa.watchSlotCount(), OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), OtAttr::WATCH_CAP_WORDS,
-                    oa.watchOverflow());
+            lucent::info("otattr", "watch REJECTED (slots={}/{} wordsUsed={}/{} overflow={}) — free a slot or shrink the region", oa.watchSlotCount(), (int)OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), (int)OtAttr::WATCH_CAP_WORDS,
+                         oa.watchOverflow());
           else {
             const OtAttr::WatchRegion* r = oa.watchAt(slot);
             // Decorate as KSEG0 (0x800xxxxx) ONLY for main-RAM regions — scratchpad (0x1F800000-
@@ -314,8 +315,8 @@ long Repl::read(Core* c, uint32_t f) {
             // canonical form).
             uint32_t dlo = r->lo < 0x200000u ? (0x80000000u | r->lo) : r->lo;
             uint32_t dhi = r->hi < 0x200000u ? (0x80000000u | r->hi) : r->hi;
-            cfg_logi("otattr", "watch[%d] = [0x%08X,0x%08X) (%u words) — slots %d/%d, %d/%d words used", slot, dlo, dhi, (r->hi - r->lo) / 4,
-                    oa.watchSlotCount(), OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), OtAttr::WATCH_CAP_WORDS);
+            lucent::info("otattr", "watch[{}] = [0x{:08X},0x{:08X}) ({} words) — slots {}/{}, {}/{} words used", slot, dlo, dhi, (r->hi - r->lo) / 4,
+                         oa.watchSlotCount(), (int)OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), (int)OtAttr::WATCH_CAP_WORDS);
           }
         }
         fflush(stderr);
@@ -324,26 +325,26 @@ long Repl::read(Core* c, uint32_t f) {
       if (!strcmp(sub, "who")) {
         uint32_t addr = 0, len = 4;
         int got = sscanf(line, "%*s %*s %x %x", &addr, &len);
-        if (got < 1) { cfg_logi("otattr", "usage: otattr who <addr-hex> [len-hex]"); fflush(stderr); continue; }
+        if (got < 1) { lucent::info("otattr", "usage: otattr who <addr-hex> [len-hex]"); fflush(stderr); continue; }
         if (got == 1) len = 4;
-        cfg_logi("otattr", "who 0x%08X..0x%08X (word-granular, coalesced runs):", addr, addr + len);
+        lucent::info("otattr", "who 0x{:08X}..0x{:08X} (word-granular, coalesced runs):", addr, addr + len);
         uint32_t w = addr & ~3u, end = addr + len;
         bool any = false;
         OtAttr::WordRec cur{}; uint32_t runLo = 0, runHi = 0; bool haveRun = false;
         auto flush_run = [&]() {
           if (!haveRun) return;
           if (cur.frame == 0xFFFFFFFFu)
-            cfg_logi("repl", "  [0x%08X,0x%08X) NEVER WRITTEN since watch registered", runLo, runHi);
+            lucent::info("repl", "  [0x{:08X},0x{:08X}) NEVER WRITTEN since watch registered", runLo, runHi);
           else
-            cfg_logi("repl", "  [0x%08X,0x%08X) fn=0x%08X caller=0x%08X frame=%u",
-                     runLo, runHi, cur.fn, cur.caller, cur.frame);
+            lucent::info("repl", "  [0x{:08X},0x{:08X}) fn=0x{:08X} caller=0x{:08X} frame={}",
+                         runLo, runHi, cur.fn, cur.caller, cur.frame);
           any = true; haveRun = false;
         };
         for (; w < end; w += 4) {
           OtAttr::WordRec rec{}; uint32_t wa = 0;
           if (!oa.watchLookup(w, &rec, &wa)) {
             flush_run();
-            cfg_logi("repl", "  [0x%08X,0x%08X) NOT WATCHED — run `otattr watch` first", w, w + 4);
+            lucent::info("repl", "  [0x{:08X},0x{:08X}) NOT WATCHED — run `otattr watch` first", w, w + 4);
             continue;
           }
           if (haveRun && rec.fn == cur.fn && rec.caller == cur.caller && rec.frame == cur.frame && wa == runHi) {
@@ -354,44 +355,44 @@ long Repl::read(Core* c, uint32_t f) {
           }
         }
         flush_run();
-        if (!any) cfg_logi("repl", "  (nothing in range)");
+        if (!any) lucent::info("repl", "  (nothing in range)");
         fflush(stderr);
         continue;
       }
       if (!strcmp(sub, "trace")) {
         uint32_t addr = 0;
-        if (sscanf(line, "%*s %*s %x", &addr) != 1) { cfg_logi("otattr", "usage: otattr trace <addr-hex>"); fflush(stderr); continue; }
+        if (sscanf(line, "%*s %*s %x", &addr) != 1) { lucent::info("otattr", "usage: otattr trace <addr-hex>"); fflush(stderr); continue; }
         OtAttr::WordRec rec{}; uint32_t wa = 0;
         if (!oa.watchLookup(addr, &rec, &wa)) {
-          cfg_logi("otattr", "trace 0x%08X: NOT in any watched region — `otattr watch <addr> <len>` first", addr);
+          lucent::info("otattr", "trace 0x{:08X}: NOT in any watched region — `otattr watch <addr> <len>` first", addr);
           fflush(stderr); continue;
         }
         if (rec.frame == 0xFFFFFFFFu) {
-          cfg_logi("otattr", "trace 0x%08X: watched, but NEVER WRITTEN since registration", addr);
+          lucent::info("otattr", "trace 0x{:08X}: watched, but NEVER WRITTEN since registration", addr);
           fflush(stderr); continue;
         }
-        cfg_logi("otattr", "trace 0x%08X (word 0x%08X): last writer fn=0x%08X caller=0x%08X frame=%u", addr, wa, rec.fn, rec.caller, rec.frame);
+        lucent::info("otattr", "trace 0x{:08X} (word 0x{:08X}): last writer fn=0x{:08X} caller=0x{:08X} frame={}", addr, wa, rec.fn, rec.caller, rec.frame);
         // One-hop heuristic: does the writer LOOK like a copy loop (touches many distinct 4KB pages in
         // the same frame, i.e. it fans out across many destinations rather than emitting one thing)?
         const OtAttr::FnStoreStat* st = oa.fnStatFind(rec.fn);
         if (!st) {
-          cfg_logw("repl", "  [trace] no per-fn store stat recorded for this fn this frame (stale/cross-frame lookup) — re-run `otattr trace` in the same frame the write happened.");
+          lucent::warn("repl", "  [trace] no per-fn store stat recorded for this fn this frame (stale/cross-frame lookup) — re-run `otattr trace` in the same frame the write happened.");
         } else {
           bool looksLikeCopyLoop = st->pageOverflow || st->pageCount >= 3;
-          cfg_logi("repl", "  [trace] fn=0x%08X made %u store(s) touching %d distinct 4KB page(s) this frame%s -> %s", rec.fn, st->count, st->pageCount, st->pageOverflow ? "+" : "",
-                  looksLikeCopyLoop ? "LOOKS LIKE A COPY/BATCH LOOP (writes fan out across many destinations; "
-                                      "the object identity was likely already lost by the time it reached this word)"
-                                    : "looks like a direct, single-destination writer");
-          cfg_logi("repl", "  [trace] SOURCE not statically determinable from store data alone (this tool only sees writes, not reads) — Ghidra-decompile fn=0x%08X (tools/decomp.sh) to find its read pointer/source struct, then `otattr watch <src_addr> <len>` and re-run `otattr who`/`trace` on the source to walk one more hop back.", rec.fn);
+          lucent::info("repl", "  [trace] fn=0x{:08X} made {} store(s) touching {} distinct 4KB page(s) this frame{} -> {}", rec.fn, st->count, st->pageCount, st->pageOverflow ? "+" : "",
+                       looksLikeCopyLoop ? "LOOKS LIKE A COPY/BATCH LOOP (writes fan out across many destinations; "
+                                           "the object identity was likely already lost by the time it reached this word)"
+                                         : "looks like a direct, single-destination writer");
+          lucent::info("repl", "  [trace] SOURCE not statically determinable from store data alone (this tool only sees writes, not reads) — Ghidra-decompile fn=0x{:08X} (tools/decomp.sh) to find its read pointer/source struct, then `otattr watch <src_addr> <len>` and re-run `otattr who`/`trace` on the source to walk one more hop back.", rec.fn);
         }
         fflush(stderr);
         continue;
       }
-      cfg_logi("otattr", "frame=%u spans=%d(overflow=%d) gteBuckets=%d(overflow=%d) watch: slots=%d/%d words=%d/%d(overflow=%d)", oa.frame(), oa.spanCount(), oa.spanOverflow(), oa.gteCount(), oa.gteOverflow(),
-              oa.watchSlotCount(), OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), OtAttr::WATCH_CAP_WORDS, oa.watchOverflow());
+      lucent::info("otattr", "frame={} spans={}(overflow={}) gteBuckets={}(overflow={}) watch: slots={}/{} words={}/{}(overflow={})", oa.frame(), oa.spanCount(), oa.spanOverflow(), oa.gteCount(), oa.gteOverflow(),
+                   oa.watchSlotCount(), (int)OtAttr::WATCH_SLOTS, oa.watchWordsUsed(), (int)OtAttr::WATCH_CAP_WORDS, oa.watchOverflow());
       uint32_t madr = c->game->gpu.s_ot_madr;
       if (!madr) {
-        cfg_logi("otattr", "GpuState::s_ot_madr == 0 — no OT walked yet this run");
+        lucent::info("otattr", "GpuState::s_ot_madr == 0 — no OT walked yet this run");
       } else {
         uint32_t a = madr & 0x1FFFFC;
         for (int idx = 0; idx < 0x10000; idx++) {
@@ -406,18 +407,18 @@ long Repl::read(Core* c, uint32_t f) {
             bool found = oa.lookupStore(a, &sp);
             uint32_t node = found ? sp.node : 0;
             uint32_t beh = node ? c->mem_r32((node & 0x1FFFFFFF) + 0x1C) : 0;
-            cfg_logi("repl", "  [%4d] pool=0x%08X op=0x%02X n=%u v0=(%d,%d)  fn=0x%08X caller=0x%08X node=0x%08X beh@node+1C=0x%08X", idx, 0x80000000u | a, op, n, vx, vy,
-                    found ? sp.fn : 0, found ? sp.caller : 0, node, beh);
+            lucent::info("repl", "  [{:4}] pool=0x{:08X} op=0x{:02X} n={} v0=({},{})  fn=0x{:08X} caller=0x{:08X} node=0x{:08X} beh@node+1C=0x{:08X}", idx, 0x80000000u | a, op, n, vx, vy,
+                         found ? sp.fn : 0, found ? sp.caller : 0, node, beh);
           }
           uint32_t next = hdr & 0xFFFFFF;
           if (next == 0xFFFFFF || next == 0) break;
           a = next & 0x1FFFFC;
         }
       }
-      cfg_logi("otattr", "GTE RTPS/RTPT per-(fn,node) call counts this frame:");
+      lucent::info("otattr", "GTE RTPS/RTPT per-(fn,node) call counts this frame:");
       for (int i = 0; i < oa.gteCount(); i++) {
         const OtAttr::GteBucket* g = oa.gteAt(i);
-        cfg_logi("repl", "  fn=0x%08X node=0x%08X count=%u", g->fn, g->node, g->count);
+        lucent::info("repl", "  fn=0x{:08X} node=0x{:08X} count={}", g->fn, g->node, g->count);
       }
     }
     // otwhere <pkt-hex> <ot-base-hex> [entries] — locate a packet's OT BUCKET in the LAST-walked OT
@@ -432,10 +433,10 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "otwhere")) {
       uint32_t pkt = 0, base = 0; int entries = 2048;
       if (sscanf(line, "%*s %x %x %d", &pkt, &base, &entries) < 2) {
-        cfg_logi("repl", "usage: otwhere <pkt-hex> <ot-base-hex> [entries=2048]");
+        lucent::info("repl", "usage: otwhere <pkt-hex> <ot-base-hex> [entries=2048]");
       } else {
         uint32_t madr = c->game->gpu.s_ot_madr;
-        if (!madr) { cfg_logi("repl", "otwhere: s_ot_madr == 0 — no OT walked yet"); fflush(stderr); continue; }
+        if (!madr) { lucent::info("repl", "otwhere: s_ot_madr == 0 — no OT walked yet"); fflush(stderr); continue; }
         uint32_t a = madr & 0x1FFFFC, want = pkt & 0x1FFFFC;
         uint32_t blo = base & 0x1FFFFF, bhi = blo + (uint32_t)entries * 4;
         int bucket = -1, pos = 0, hits = 0;
@@ -444,31 +445,31 @@ long Repl::read(Core* c, uint32_t f) {
           else pos++;
           uint32_t hdr = c->mem_r32(a);
           if (a == want) {
-            cfg_logi("repl", "otwhere 0x%08X: bucket=%d posInBucket=%d chainIdx=%d hdr=0x%08X (len=%u next=0x%06X)",
-                     0x80000000u | a, bucket, pos, idx, hdr, hdr >> 24, hdr & 0xFFFFFF);
+            lucent::info("repl", "otwhere 0x{:08X}: bucket={} posInBucket={} chainIdx={} hdr=0x{:08X} (len={} next=0x{:06X})",
+                         0x80000000u | a, bucket, pos, idx, hdr, hdr >> 24, hdr & 0xFFFFFF);
             hits++;
           }
           uint32_t next = hdr & 0xFFFFFF;
           if (next == 0xFFFFFF || next == 0) break;
           a = next & 0x1FFFFC;
         }
-        if (!hits) cfg_logi("repl", "otwhere 0x%08X: NOT in the last-walked OT (madr=0x%08X)", pkt, 0x80000000u | madr);
+        if (!hits) lucent::info("repl", "otwhere 0x{:08X}: NOT in the last-walked OT (madr=0x{:08X})", pkt, 0x80000000u | madr);
       }
     }
-    else if (!strcmp(cmd, "stage")) cfg_logi("repl", "stage=%08X sm48=%d", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
+    else if (!strcmp(cmd, "stage")) lucent::info("repl", "stage={:08X} sm48={}", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) {
-      CfgLine ln; cfg_line_reset(&ln);                       // 4 registers per row
+      lucent::Line ln;                                       // 4 registers per row
       for (int i = 0; i < 32; i++) {
-        cfg_line_addf(&ln, " r%-2d=%08X", i, c->r[i]);
-        if ((i & 3) == 3) cfg_line_flush(&ln, "repl");
+        ln.add(" r{:<2}={:08X}", i, c->r[i]);
+        if ((i & 3) == 3) ln.flush(lucent::Level::Info, "repl");
       }
-      cfg_logi("repl", " hi=%08X lo=%08X", c->hi, c->lo);
+      lucent::info("repl", " hi={:08X} lo={:08X}", c->hi, c->lo);
     }
-    else if (!strcmp(cmd, "seq")) cfg_logi("repl", "seq open=%d playmask=%04X tickmode=%d seqfn=%08X stage=%08X", c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
+    else if (!strcmp(cmd, "seq")) lucent::info("repl", "seq open={} playmask={:04X} tickmode={} seqfn={:08X} stage={:08X}", c->mem_r16s(0x801054B0), c->mem_r32(0x80104C28) & 0xFFFF, c->mem_r8(0x800AC424), c->mem_r32(0x800AC42C), c->mem_r32(0x801fe00c));
     // game-side commands (invtest/bgm/bgmstop/seqsolo/musictest) — game classes / Tomba guest addrs,
     // dispatched into game/core/repl_commands.cpp so the framework REPL names no game type.
     else if (c->hooks->replCommand(c, cmd, line)) { /* handled game-side */ }
-    else cfg_logi("repl", "? %s", cmd);
+    else lucent::info("repl", "? {}", cmd);
     fflush(stderr);
   }
   return -1;  // EOF
