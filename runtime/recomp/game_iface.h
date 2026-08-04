@@ -148,12 +148,18 @@ struct GameConfig {
   // tree, so the guest's filesystem walk issues no drive activity at all.
   uint32_t cdSearchFile;
 
-  // Guest slot holding stock libcd's DMA-COMPLETION callback (libcd's own callback table, indexed by
-  // channel). A streaming reader marks each ring slot "DMA in flight" when it starts a transfer and
-  // relies on this callback to promote it to "ready". With the transfer served synchronously and no
-  // completion announced, every slot stalls half-done and the reader waits forever on a ring that is
-  // full. Zero for a game that does not stream through stock libcd.
-  uint32_t cdDmaDoneCbPtr;
+  // BASE of the guest's per-channel DMA-COMPLETION callback table — the table `DMACallback(ch, fn)`
+  // writes, indexed by DMA channel (channel ch's entry is base + 4*ch). The port dispatches these
+  // itself, standing in for the BIOS DMA interrupt handler, gated on the channel's DICR enable.
+  //
+  // EVERY channel, not just the CD's: a streaming reader relies on the channel-3 callback to promote
+  // a ring slot from "DMA in flight" to "ready", and an FMV player relies on the channel-1 (MDEC-out)
+  // callback to upload the decoded strip to VRAM. Announcing only one of them looks like a working
+  // port right up until the other subsystem is used.
+  //
+  // Zero for a game whose table has not been reverse-engineered — then NO callback is dispatched,
+  // which is the same behaviour as a guest that registered none, never a wrong one.
+  uint32_t dmaCallbackTable;
 
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;

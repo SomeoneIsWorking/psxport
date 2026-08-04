@@ -93,3 +93,47 @@ inline uint32_t dma_dicr_complete(uint32_t dicr, int ch) {
 // completion and DICR bit 31 reads asserted for the rest of the run, which is a lie about the
 // hardware to any guest that looks.
 void dma_irq_ack(int ch);
+
+// The pending-completion set, owned by mem.cpp (which is where transfers finish) and drained by
+// Hle::irqPoll (which is where guest code may safely be re-entered).
+bool dma_done_owed(int ch);
+void dma_done_taken(int ch);
+bool dma_done_any();      // is ANY channel still owed? the deferred-work gate must not clear while so
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// WHO gets called when a transfer finishes, and on WHICH channels.
+//
+// The port dispatches the guest's own DMA-completion callback in place of the BIOS DMA handler that
+// would run on hardware. The BIOS keeps ONE CALLBACK PER CHANNEL, in a table the guest's
+// `DMACallback(ch, fn)` writes; `GameConfig::dmaCallbackTable` is that table's base, so channel
+// `ch`'s entry is `base + 4*ch`. A game that has not RE'd its table leaves the base 0 and gets no
+// dispatch at all — the same behaviour as a game that registered no callback, never a wrong one.
+inline uint32_t dma_callback_slot(uint32_t table, int ch) {
+  return table ? table + 4u * (uint32_t)ch : 0u;
+}
+
+// The set of channels that have completed a transfer whose interrupt the guest ARMED, and therefore
+// owe it the callback it registered.
+//
+// A SET, not a flag, and per CHANNEL, not per subsystem. Both were wrong before and both were wrong
+// in a way that reads as working: the runtime tracked one boolean, set only by the CD channel, so a
+// guest that armed channel 1 (MDEC-out) and channel 4 (SPU) — which Spider-Man does, DICR 0x009A0000
+// — was simply never told. Its FMV player's MDEC-out callback, the routine that uploads a decoded
+// strip to VRAM, was never called once in a whole run. A set is needed as well as a channel, because
+// the MDEC pump drains DMA0 and DMA1 inside ONE guest store and both finish before the runtime
+// reaches its next safe dispatch point.
+//
+// Dispatch is DEFERRED, not done at the completion: the completion happens inside a guest store,
+// with native code mid-mutation. The runtime takes it at a function-entry boundary (Hle::irqPoll).
+struct DmaDone {
+  uint32_t mask = 0;
+  // Record a completion on `ch`, applying the hardware gate. True if the guest is now owed a call.
+  bool complete(uint32_t& dicr, int ch) {
+    if (!dma_irq_armed(dicr, ch)) return false;
+    dicr = dma_dicr_complete(dicr, ch);           // hardware sets the channel's flag
+    mask |= 1u << ch;
+    return true;
+  }
+  bool owed(int ch) const { return (mask & (1u << ch)) != 0; }
+  void taken(int ch) { mask &= ~(1u << ch); }
+};

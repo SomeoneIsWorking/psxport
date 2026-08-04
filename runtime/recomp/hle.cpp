@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <lucent/log.h>
 #include "cfg.h"
 #include <lucent/log.h>
 #include "fs_util.h"   // Fs::writeFile — the miss RAM dump below
@@ -192,18 +193,31 @@ void Hle::irqPoll(Core* c) {
   // A completed CD DMA owes the guest its completion callback. This is genuinely interrupt-shaped —
   // on hardware the transfer raises an IRQ and the BIOS runs the handler — so it is serviced here,
   // at the same safe boundary, rather than from the store that finished the transfer.
-  if (c->game->cd.dma_done_pending) {
-    c->game->cd.dma_done_pending = 0;
-    dma_irq_ack(3);   // this dispatch stands in for the BIOS DMA handler, which acknowledges first
-    const uint32_t slot = c->cfg ? c->cfg->cdDmaDoneCbPtr : 0;
+  // EVERY channel, lowest first, exactly as the BIOS handler scans them. It used to be channel 3
+  // alone, and that hid a whole subsystem: Spider-Man's FMV player registers an MDEC-out (channel 1)
+  // callback that uploads each decoded strip to VRAM, and it was never called once in a run.
+  const uint32_t table = c->cfg ? c->cfg->dmaCallbackTable : 0;
+  for (int ch = 0; ch < 7; ch++) {
+    if (!dma_done_owed(ch)) continue;
+    const uint32_t slot = dma_callback_slot(table, ch);
     const uint32_t cb = slot ? c->mem_r32(slot) : 0;
-    if (cb && !in_irq) {
-      in_irq = 1;                                  // the callback's own BIOS calls must not re-enter
-      const R3000 saved = *static_cast<R3000*>(c);
-      rec_dispatch(c, cb);
-      *static_cast<R3000*>(c) = saved;
-      in_irq = 0;
-    }
+    lucent::debug("dmairq", "owed ch{} -> callback {:08X} (slot {:08X}){}", ch, cb, slot,
+                  in_irq ? "  DEFERRED: a guest callback is running" : "");
+    // A COMPLETION IS ONLY CONSUMED WHEN IT IS DELIVERED. Taking it first and then declining the
+    // dispatch silently DROPS the callback, and that is not a corner case: these callbacks CHAIN.
+    // The FMV player's MDEC-out handler starts the next strip's transfer, which finishes while the
+    // handler is still running — so the second completion always lands with `in_irq` set. Consuming
+    // it there ended the chain after two strips per movie, with the decoder left holding 1640
+    // abandoned input words. Left owed, the next poll delivers it and the chain runs to the end.
+    if (in_irq) continue;
+    dma_done_taken(ch);
+    dma_irq_ack(ch);  // this dispatch stands in for the BIOS DMA handler, which acknowledges first
+    if (!cb) continue;                             // nothing registered: the completion is consumed
+    in_irq = 1;                                    // the callback's own BIOS calls must not re-enter
+    const R3000 saved = *static_cast<R3000*>(c);
+    rec_dispatch(c, cb);
+    *static_cast<R3000*>(c) = saved;
+    in_irq = 0;
   }
 
   // One-shot decline diagnostic. "No delivery happened" has four possible causes and they are
@@ -228,7 +242,13 @@ void Hle::irqPoll(Core* c) {
   const uint32_t pending = c->irqStatLatch() & i_mask;
   // Clear the gate whenever there is nothing to deliver, so the common case costs one load-and-test
   // per function entry and nothing more. Re-armed by whoever raises next.
-  if (!pending || irq_n == 0) { c->pending_work &= ~Core::PW_IRQ; return; }
+  // A DMA completion recorded DURING the callback dispatch above (the FMV player's MDEC-out handler
+  // starts the NEXT strip's transfer, which can finish before it returns) leaves a channel still
+  // owed. Clearing the gate then loses it, and the chain stops after one strip — measured: two
+  // strips per movie decoded and then "no decode command in flight". So the gate survives while
+  // anything is owed, and only the genuinely-idle case pays nothing.
+  if ((!pending || irq_n == 0) && !dma_done_any()) { c->pending_work &= ~Core::PW_IRQ; return; }
+  if (!pending || irq_n == 0) return;
 
   // These two are transient per-Core execution state consumed by the dispatch machinery. If either
   // is live we are NOT at a clean boundary, and delivering here could lose a pending redirect.
@@ -269,7 +289,8 @@ void Hle::irqPoll(Core* c) {
 
   *static_cast<R3000*>(c) = saved;
   in_irq = 0;
-  c->pending_work &= ~Core::PW_IRQ;   // re-armed by the next raise / mask change
+  if (!dma_done_any())                // see above: an owed DMA callback keeps the gate armed
+    c->pending_work &= ~Core::PW_IRQ; // re-armed by the next raise / mask change
 }
 
 // The substrate's entry point: every recompiled function wrapper calls this when Core::pending_work

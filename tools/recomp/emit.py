@@ -138,7 +138,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-04.1"   # base-relative (relocatable) overlay modules
+RECOMP_VERSION = "2026-08-05.1"   # internal labels demoted; intra-function bal/jr-$ra coroutines
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1146,7 +1146,7 @@ def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
     return dup, blocks
 
 
-def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
+def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozenset()):
     """Emit one C function: the proven LINEAR walk over the contiguous body [lo,hi), PLUS appended
     DUPLICATED tail blocks for shared-epilogue targets that live outside [lo,hi) (collect_tail_dups).
     The [lo,hi) emission is unchanged; the entry (lo) is always first; tails are reached only by goto.
@@ -1223,6 +1223,26 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
     labels |= ds_label_targets
     # a duplicated tail that flows back into the main body jumps to L_<fall>; force that to be a label.
     labels |= {fall for _, _, fall in dup_blocks if fall is not None}
+    # INTRA-FUNCTION `jal` — a hand-written routine calling its OWN internal block (`bal`), which is
+    # how the PSX libraries write a coroutine: `jal blk` … `blk: … jr $ra` inside one stack frame.
+    # `demote_internal_labels` keeps such a block OUT of the function set, so the target is a label of
+    # this body and the call cannot be a C call — `call_or_dispatch` would fail-fast on an address
+    # that is not a function entry. Emit the guest's actual semantics instead: write the link, jump.
+    #
+    # The RETURN ADDRESS has to become a label too, because that is where the matching `jr $ra`
+    # resumes. Those addresses are also the ONLY values such a `jr $ra` can legally hold, which is
+    # what lets it be emitted as a switch over labels rather than a runtime dispatch.
+    intra_links = {a2: ins[a2].target for a2 in standalone
+                   if ins[a2].op == "jal" and ins[a2].target in ins
+                   and ins[a2].target not in funcset and ins[a2].target in standalone}
+    labels |= set(intra_links.values())
+    ra_conts = sorted({a2 + 8 for a2 in intra_links if (a2 + 8) in standalone})
+    labels |= set(ra_conts)
+    # A computed `jr $ra` that resumes at an EARLIER address closes a loop exactly as a backward
+    # branch does — the decoder's own strip loop is one — so it needs the same host-turn gate.
+    computed_jrs = [a2 for a2 in standalone
+                    if a2 in ra_computed and ins[a2].op == "jr" and ins[a2].rs == 31]
+    backedges |= {t for t in ra_conts if any(t <= j for j in computed_jrs)}
 
     def emit_run(s, e):
         a = s
@@ -1256,7 +1276,8 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
                         ds_c += f" gte_record_pz(c, {addr_expr(slot)}, {pz_stores[sa]});"
                     elif sa in pz_copies:
                         ds_c += f" gte_copy_pz(c, {pz_copies[sa]}, {addr_expr(slot)});"
-                out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a), a in ra_tails))
+                out.extend(emit_control(i, ds_c, funcset, labels, N, jt.get(a), a in ra_tails,
+                                        a in ra_computed, intra_links.get(a), ra_conts))
                 if (a + 4) in ds_label_targets:        # the delay slot is also a branch target
                     out.append(f"  goto L_DSAFTER_{a:08X};")
                     out.append(f"L_{a + 4:08X}:; {ds_c}")
@@ -1381,7 +1402,69 @@ def ra_tail_returns(ins, lo, hi):
     return out
 
 
-def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
+def ra_computed_jumps(exe, bounds):
+    """Addresses of `jr $ra` that are COMPUTED JUMPS, not returns — decided per-`jr` by
+    reaching-definitions on `$ra` over each guest function in `bounds`.
+
+    `jr $ra` normally means "return", and the emitter renders it as `return;`. That is wrong for
+    hand-written assembly that uses `jal`/`jr $ra` as an INTERNAL COROUTINE mechanism: the `$ra` it
+    reads is a mid-body resume point, so `return;` unwinds out of the function instead of resuming,
+    dropping the rest of the routine's work (and, where the function allocated a frame, its epilogue).
+
+    Spider-Man's `0x8002A338` is the case this was built for — a resumable bit-stream decoder that
+    saves its whole register context, INCLUDING its continuation, to a global block and restores it on
+    re-entry. Its three `jr $ra` are not the same kind: `0x8002A460` jumps to a resume point, while
+    `0x8002A7E0` and `0x8002A838` are ordinary returns after the frame reload. A whole-body gate ("this
+    body writes $ra as data, so convert all of its `jr $ra`") is therefore wrong whichever way it
+    answers; the decision has to be per-`jr`.
+
+        reaching def is `lw $ra, N(sp)`                              -> return
+        reaching def is `lw $ra, N(..)` at an offset this function
+          also `sw $ra`-ed to                                        -> return  (a save slot)
+        reaching def is `lw $ra, N(..)` otherwise                    -> COMPUTED (a continuation)
+        reaching def is a `jal` / `bltzal` / `bgezal` / `jalr $ra`   -> COMPUTED (a live link)
+        anything else, or no definition at all                       -> return
+
+    The default is `return` on everything it cannot prove, so this can only move a site AWAY from
+    current behaviour on positive evidence. Two false-positive classes were found by auditing the
+    sites it reported and are handled above: `move $ra, $sN` restore, and a FRAMELESS function that
+    saves `$ra` to a GLOBAL and reloads it (`0x8008BE5C`: `sw $ra, 0x392C($at)` … `lw $ra, 0x392C($ra)`)
+    — "not the stack" is not the same as "not a return address".
+
+    `bounds` is the function-start list to partition by, and it matters as much as the rule: it must be
+    the extent of the GUEST function, so mid-body re-entry seeds must be excluded from it or the
+    definition ends up in a different fragment from the `jr` that reads it. Measured on Spider-Man:
+    1 site out of 1722. The game-side tool `tools/ra_classes.py` reports and cross-checks this set
+    without a build.
+    """
+    out = set()
+    for idx, lo in enumerate(bounds):
+        hi = bounds[idx + 1] if idx + 1 < len(bounds) else exe.text_end
+        slots = set()
+        for a in range(lo, hi, 4):
+            i = decode(a, exe.word(a))
+            if i.op == "sw" and i.rt == 31:
+                slots.add(i.simm)
+        cur = None
+        for a in range(lo, hi, 4):
+            i = decode(a, exe.word(a))
+            if i.op == "jr" and i.rs == 31:
+                if cur == "computed":
+                    out.add(a)
+            if i.op == "lw" and i.rt == 31:
+                cur = "return" if (i.rs == 29 or i.simm in slots) else "computed"
+            elif i.op in ("jal", "bltzal", "bgezal"):
+                cur = "computed"
+            elif i.kind == D.JUMPR and i.op == "jalr" and i.rd == 31:
+                cur = "computed"
+            elif (i.kind in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V) and i.rd == 31) \
+                    or (i.kind in (D.ALU_RRI, D.LUI) and i.rt == 31):
+                cur = "return"
+    return out
+
+
+def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False, ra_computed=False,
+                 intra_link=None, ra_conts=()):
     """Lines for a control instruction `i` whose delay-slot C is `ds_c`. `jtargets` (if set) = the
     recovered jump-table case-label addresses for a computed `jr` -> emit a C switch on the target
     value (auto-dedupes repeated entries) so the jump stays inside this compiled body."""
@@ -1425,7 +1508,13 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
     if i.kind == D.JUMP:
         if i.op == "jal":
             L.append(f"  {R(31)} = {addr_const(i.addr + 8)};")
-            L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset, N)}")
+            if intra_link is not None:
+                # INTERNAL call (`bal`): the target is a label of THIS body, not a function. Write the
+                # link and jump — a C call would need a callee that does not exist, and dispatching
+                # the address fail-fasts because a mid-function address is not an entry.
+                L.append(f"  {ds_c} goto L_{intra_link:08X};   /* internal call (bal) */")
+            else:
+                L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset, N)}")
         else:  # j
             if i.target in labels:
                 L.append(f"  {ds_c} goto L_{i.target:08X};")
@@ -1434,7 +1523,33 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
         return L
     # JUMPR
     if i.op == "jr":
-        if i.rs == 31:
+        if i.rs == 31 and ra_computed:
+            # COROUTINE RESUME, not a return — `$ra` here provably holds a mid-body resume point
+            # rather than a caller's return address (ra_computed_jumps decided this statically, per
+            # `jr`, by reaching-definitions). Route it like any other computed jump: the target is a
+            # mid-function address, so it must be seeded as a re-entry point for the router to
+            # resolve it — a missing one fail-fasts with a [recomp-MISS] naming the address, which is
+            # the diagnosable failure, not a silent one. Same target-latching rule as the computed
+            # `jr` below: MIPS reads the register at the JUMP, before the delay slot runs.
+            #
+            # The legal targets are known STATICALLY and exhaustively: `$ra` here was written by one
+            # of this body's own internal `jal`s, so it is one of their return addresses — each of
+            # which emit_func has made a label. A switch over those keeps the jump inside this C
+            # function, which is the whole point; routing it out through the dispatcher instead would
+            # need every resume point seeded as a mid-function entry, and a missing seed shows up as
+            # a recomp-MISS on decoder DATA (0x03FF03FF — measured, and why the first attempt at this
+            # was reverted at 88f58d7f). `default` still dispatches, so an unforeseen value fails
+            # fast and NAMES itself rather than being silently swallowed by a `return`.
+            cases = " ".join(f"case 0x{t:08X}u: goto L_{t:08X};"
+                             for t in ra_conts if t in labels)
+            if cases:
+                L.append(f"  {{ uint32_t _tgt = {R(31)}; {ds_c} switch ({link_space('_tgt')}) {{ "
+                         f"{cases} default: {N.router}(c, _tgt); return; }} }}"
+                         f"   /* coroutine resume, not a return */")
+            else:
+                L.append(f"  {{ uint32_t _tgt = {R(31)}; {ds_c} {N.router}(c, _tgt); return; }}"
+                         f"   /* coroutine resume, not a return */")
+        elif i.rs == 31:
             L.append(f"  {ds_c} return;")
         elif jtargets:
             # recovered jump table: switch on the loaded target value -> goto the case label. Dedupe
@@ -1930,6 +2045,19 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     if jt_labels:
         funcs = [f for f in funcs if f not in jt_labels]
         print(f"[{N.wrap}] pruned {len(jt_labels)} jump-table case labels from the function set")
+    # DEMOTE INTERNAL LABELS. `jal` discovery is eager, and hand-written assembly using `jal`/`jr $ra`
+    # as an internal coroutine inside ONE frame gets its inner block promoted to a function entry,
+    # splitting the real body. The emitter then renders the routine's own back-edge — an unconditional
+    # intra-function branch — as `call + return`, so the function exits without its epilogue. Measured
+    # live on Spider-Man 0x8002A338 (libpress `DecDCTvlc`): returns with sp 4 low and $ra holding its
+    # internal link 0x8002A424, its caller's locals wrecked, and the intro FMV decodes one strip per
+    # movie and stops. See demote_internal_labels for the criterion and for the three lookalikes it
+    # must spare.
+    internal = demote_internal_labels(exe, funcs, keep=seeds)
+    if internal:
+        funcs = [f for f in funcs if f not in internal]
+        print(f"[{N.wrap}] demoted {len(internal)} internal label(s) back into their guest function: "
+              + " ".join(f"0x{a:08X}" for a in sorted(internal)))
     # Merge FALSE early-return boundaries (soft func_entries_after_return seeds that split a function with
     # a mid-body `jr ra`). removable = soft seeds that are NOT a real call target (jal/pointer entry).
     if soft_seeds:
@@ -1998,9 +2126,20 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     hdr.append(f"void {N.setov}(uint32_t addr, OverrideFn fn);")
     write_if_changed(os.path.join(out_dir, N.decls), "\n".join(hdr) + "\n")
 
+    # COROUTINE `jr $ra` sites, decided ONCE over the whole module. The partition is the function set
+    # with the mid-body RE-ENTRY seeds removed: a re-entry point splits a guest function into
+    # fragments, and the `jal` whose link a later `jr $ra` reads then lives in a DIFFERENT fragment —
+    # so a per-fragment analysis finds no definition and silently answers "return", which is the
+    # right-looking answer for the wrong reason. See ra_computed_jumps.
+    ra_computed = ra_computed_jumps(exe, [a for a in funcs if a not in set(reentry)])
+    if ra_computed:
+        print(f"[{N.wrap}] {len(ra_computed)} `jr $ra` emitted as a COMPUTED JUMP (coroutine resume): "
+              + " ".join(f"0x{a:08X}" for a in sorted(ra_computed)))
+
     shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
     for k, a in enumerate(funcs):
-        emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry)
+        emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry,
+                  ra_computed)
     for s in range(shards):
         write_if_changed(os.path.join(out_dir, f"{N.shardpfx}_{s}.c"), "\n".join(shard[s]) + "\n")
 

@@ -135,6 +135,75 @@ static void test_str_frame_owes_exactly_one_completion(void) {
   CHECK_EQ(dicr & DICR_FLAG_MASK, 1u << (24 + CH_CD));
 }
 
+// ---------------------------------------------------------------------------------------------
+// EVERY ARMED CHANNEL IS OWED ITS CALLBACK, NOT JUST THE CD'S.
+//
+// Measured on Spider-Man, and the reason these exist: the intro FMV player registers an MDEC-out
+// (channel 1) completion callback — `FUN_80085BC0(0x8002B28C)` -> `DMACallback(1, ...)`, and the
+// DICR the guest actually writes is 0x009A0000, i.e. master + channels 1, 3 and 4. The runtime
+// signalled channel 3 and nothing else, so 0x8002B28C was NEVER CALLED over a whole run while its
+// registrar ran 4 times and the movie loop pumped 4653 iterations. That callback is what uploads the
+// decoded strip to VRAM, so the movie decoded and never appeared.
+static constexpr int CH_MDEC_IN = 0, CH_MDEC_OUT = 1, CH_SPU = 4;
+
+static void test_a_completion_signals_the_channel_that_completed(void) {
+  uint32_t dicr = dmacallback_arm(dmacallback_arm(0, CH_MDEC_OUT), CH_CD);
+  DmaDone done;
+  CHECK(done.complete(dicr, CH_MDEC_OUT));
+  CHECK(done.owed(CH_MDEC_OUT));
+  CHECK(!done.owed(CH_CD));                       // nothing completed on the CD channel
+  CHECK_EQ(dicr & DICR_FLAG_MASK, 1u << (24 + CH_MDEC_OUT));
+  // Denominator: no OTHER channel was left owed either.
+  int owed = 0;
+  for (int ch = 0; ch < 7; ch++) if (done.owed(ch)) owed++;
+  CHECK_EQ(owed, 1);
+}
+
+static void test_an_unarmed_channel_is_owed_nothing(void) {
+  uint32_t dicr = dmacallback_arm(0, CH_CD);      // only the CD channel armed
+  DmaDone done;
+  CHECK(!done.complete(dicr, CH_MDEC_OUT));
+  CHECK(!done.owed(CH_MDEC_OUT));
+  CHECK_EQ(dicr & DICR_FLAG_MASK, 0u);
+}
+
+static void test_two_channels_completing_in_one_window_both_survive(void) {
+  // The MDEC pump drains DMA0 and DMA1 inside ONE guest store, so both can finish before the
+  // runtime reaches its next safe dispatch point. A single pending FLAG drops one of them.
+  uint32_t dicr = dmacallback_arm(dmacallback_arm(0, CH_MDEC_IN), CH_MDEC_OUT);
+  DmaDone done;
+  CHECK(done.complete(dicr, CH_MDEC_IN));
+  CHECK(done.complete(dicr, CH_MDEC_OUT));
+  CHECK(done.owed(CH_MDEC_IN));
+  CHECK(done.owed(CH_MDEC_OUT));
+  done.taken(CH_MDEC_IN);
+  CHECK(!done.owed(CH_MDEC_IN));
+  CHECK(done.owed(CH_MDEC_OUT));                  // taking one must not clear the other
+}
+
+static void test_callback_slot_is_per_channel(void) {
+  // Spider-Man's table base, read out of libcd's DMACallback at 0x8009152C (it computes
+  // 0x800B4388 + index*4). Slot 3 is the CD callback the earlier fix used directly.
+  const uint32_t TABLE = 0x800B4388u;
+  CHECK_EQ(dma_callback_slot(TABLE, CH_CD), 0x800B4394u);
+  CHECK_EQ(dma_callback_slot(TABLE, CH_MDEC_OUT), 0x800B438Cu);
+  for (int ch = 0; ch < 7; ch++)
+    CHECK_EQ(dma_callback_slot(TABLE, ch), TABLE + 4u * (uint32_t)ch);
+  // A game that has not RE'd its table gets no slot at all, on every channel.
+  int nonzero = 0;
+  for (int ch = 0; ch < 7; ch++) if (dma_callback_slot(0, ch)) nonzero++;
+  CHECK_EQ(nonzero, 0);
+}
+
+static void test_the_spu_channel_is_owed_when_the_guest_armed_it(void) {
+  // Not hypothetical: the DICR Spider-Man writes has bit 20 set. A rule that hard-codes one channel
+  // is wrong for this one too, and stating it here keeps the gate from being re-narrowed later.
+  uint32_t dicr = dmacallback_arm(0, CH_SPU);
+  DmaDone done;
+  CHECK(done.complete(dicr, CH_SPU));
+  CHECK(done.owed(CH_SPU));
+}
+
 int main(void) {
   RUN(reset_state_arms_no_channel);
   RUN(dmacallback_arms_master_and_one_channel);
@@ -143,5 +212,10 @@ int main(void) {
   RUN(flags_are_write_one_to_clear_in_written_lanes_only);
   RUN(master_flag_is_read_only_and_computed);
   RUN(str_frame_owes_exactly_one_completion);
+  RUN(a_completion_signals_the_channel_that_completed);
+  RUN(an_unarmed_channel_is_owed_nothing);
+  RUN(two_channels_completing_in_one_window_both_survive);
+  RUN(callback_slot_is_per_channel);
+  RUN(the_spu_channel_is_owed_when_the_guest_armed_it);
   return pt_summary();
 }

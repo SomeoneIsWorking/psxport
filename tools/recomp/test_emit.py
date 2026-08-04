@@ -465,6 +465,61 @@ def run_func(data, base, regs=None, mem=None, hooks="", base_exe=0x80010000, fun
     return res
 
 
+def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
+    """WHOLE-PIPELINE execution test: emit_module(exe) -> shards + dispatch TU, compile them together
+    with the harness, run `entry`, return the same dict as run_func.
+
+    run_func calls emit_func with a funcset the TEST hands it, so it cannot see anything that
+    emit_module decides — which function set discovery produces, and what emit_module does to it
+    afterwards. RE-16 lived exactly there: `demote_internal_labels` was written, unit-tested and
+    never wired in, and no emit_func-level test could have noticed. This one runs the wiring."""
+    cc = _have_cxx()
+    if not cc:
+        return None
+    e = exe_of(data, base_exe)
+    with tempfile.TemporaryDirectory() as td:
+        # core.h is what the generated TUs include; give them the harness's Core plus the runtime
+        # symbols the dispatch TU references.
+        prelude = HARNESS.split("__HOOKS__")[0]
+        # Every TU includes this, so the harness's definitions have to be inline/static here.
+        for sym in ("void gte_hold_pz", "void gte_record_pz", "void gte_hold_src", "void gte_copy_pz",
+                    "uint32_t gte_read_data", "void rec_dispatch(", "uint32_t g_dispatch",
+                    "void (*g_dispatch_fn)"):
+            prelude = prelude.replace(sym, "inline " + sym)
+        core_h = ("#pragma once\n" + prelude
+                  + "\ntypedef void (*OverrideFn)(Core*);\n"
+                    "inline void rec_dispatch_miss(Core* c, uint32_t a){ rec_dispatch(c, a); }\n")
+        open(os.path.join(td, "core.h"), "w").write(core_h)
+        srcs = emit.emit_module(e, td, emit.MAIN_NAMES, seeds or {base}, shards=1)
+        main_cpp = os.path.join(td, "main.cpp")
+        open(main_cpp, "w").write(
+            '#include "rec_decls.h"\n#include <cstdio>\n#include <cstring>\n'
+            "int main(int argc, char** argv){\n"
+            "  static Core c; memset(&c, 0, sizeof(c));\n"
+            "  for(int i=1;i<argc;i++){ unsigned idx,val; if(sscanf(argv[i],\"r%u=%x\",&idx,&val)==2) c.r[idx]=val;\n"
+            "    else { unsigned ad; if(sscanf(argv[i],\"m%x=%x\",&ad,&val)==2) c.mem_w32(ad,val); } }\n"
+            f"  gen_func_{entry:08X}(&c);\n"
+            '  for(int i=0;i<32;i++) printf("r%d=%08x\\n", i, c.r[i]);\n'
+            '  printf("lo=%08x\\nhi=%08x\\ndispatch=%08x\\n", c.lo, c.hi, g_dispatch);\n'
+            "  return 0;\n}\n")
+        binp = os.path.join(td, "t")
+        cmd = [cc, "-O2", "-foptimize-sibling-calls", "-w", f"-I{td}", "-o", binp, "-x", "c++",
+               main_cpp] + [os.path.join(td, s) for s in srcs]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        assert r.returncode == 0, f"module compile failed:\n{r.stderr}"
+        args = [binp] + [f"r{_r(k)}={v & 0xFFFFFFFF:x}" for k, v in (regs or {}).items()]
+        out = subprocess.run(args, capture_output=True, text=True, check=True).stdout
+    res = {"r": [0] * 32}
+    for line in out.splitlines():
+        key, _, val = line.partition("=")
+        v = int(val, 16)
+        if key.startswith("r"):
+            res["r"][int(key[1:])] = v
+        else:
+            res[key] = v
+    return res
+
+
 def _skip_if_no_cc():
     if not _have_cxx():
         print("   (no C++ compiler — execution tests skipped)")
@@ -1028,6 +1083,73 @@ def test_demote_spares_branch_and_link_targets():
     assert got == set(), f"a bltzal target is a real subroutine, got {[hex(x) for x in sorted(got)]}"
 
 
+def _coroutine_image():
+    """A minimal reproduction of Spider-Man 0x8002A338 (libpress `DecDCTvlc`, hand-written asm):
+    an internal block that is BOTH `jal`-ed and branched to, whose `jr $ra` is the routine's own loop
+    back-edge rather than a return.
+
+        H:    addiu sp,sp,-4 / sw ra,(sp)      ; a frame it must give back
+              jal  BLK                          ; $ra = A  -- an INTERNAL call
+        A:    t1++ ; while (t1 < 3) goto L2
+              b    EPI
+        L2:   b    BLK                          ; UNCONDITIONAL INTRA-FUNCTION BRANCH; $ra still = A
+        BLK:  v0 += 10
+              jr   ra                           ; -> A. NOT a return.
+        EPI:  lw ra,(sp) / addiu sp,sp,4 / jr ra
+
+    Correct execution runs BLK three times: v0 == 30, and sp/ra come back exactly as they went in.
+    The epilogue sits AFTER the coroutine `jr $ra`, as it does in the real routine — ra_computed_jumps
+    walks a body in address order, so a test that put it earlier would answer "return" for a reason
+    that has nothing to do with the wiring under test."""
+    a = Asm(0x80010000)
+    a.addiu("sp", "sp", -4)         # 0x00
+    a.sw("ra", 0, "sp")             # 0x04
+    a.ori("v0", "zero", 0)          # 0x08
+    a.ori("t1", "zero", 0)          # 0x0C
+    a.jal("BLK")                    # 0x10  $ra = 0x18
+    a.nop()                          # 0x14
+    a.label("A")
+    a.addiu("t1", "t1", 1)          # 0x18
+    a.slti("at", "t1", 3)           # 0x1C
+    a.bne("at", "zero", "L2")       # 0x20
+    a.nop()                          # 0x24
+    a.bgez("zero", "EPI")           # 0x28
+    a.nop()                          # 0x2C
+    a.label("L2")
+    a.bgez("zero", "BLK")           # 0x30  the back-edge the emitter turns into call+return
+    a.nop()                          # 0x34
+    a.label("BLK")
+    a.addiu("v0", "v0", 10)         # 0x38
+    a.jr("ra")                       # 0x3C  coroutine resume, not a return
+    a.nop()                          # 0x40
+    a.label("EPI")
+    a.lw("ra", 0, "sp")             # 0x44
+    a.addiu("sp", "sp", 4)          # 0x48
+    a.jr("ra")                       # 0x4C  the real return
+    a.nop()                          # 0x50
+    data, _ = a.assemble()
+    return data
+
+
+def test_exec_coroutine_internal_label_runs_its_loop_and_its_epilogue():
+    # RE-16, end to end through emit_module. `jal` discovery promotes BLK to a function entry, which
+    # splits the body; the unconditional branch to it at 0x30 is then emitted as `call + return`, so
+    # the routine unwinds after ONE pass with its epilogue unrun. Measured on the real game before
+    # the fix: 0x8002A338 returns with sp 4 low and $ra = 0x8002A424 (fntrace ABI check, validated
+    # both ways), and the intro FMV decoder therefore produces one strip per movie and stops.
+    if _skip_if_no_cc():
+        return
+    SP0, RA0 = 0x801FFF00, 0x80042424
+    res = run_module(_coroutine_image(), 0x80010000, 0x80010000, regs={"sp": SP0, "ra": RA0})
+    assert res["r"][2] == 30, \
+        f"the coroutine's loop ran {res['r'][2] // 10} of 3 passes (v0={res['r'][2]}) — the " \
+        f"intra-function branch to the internal block unwound the routine instead of jumping"
+    assert res["r"][29] == SP0, \
+        f"sp {SP0:08X} -> {res['r'][29]:08X}: the epilogue did not run, so the frame leaked"
+    assert res["r"][31] == RA0, \
+        f"ra {RA0:08X} -> {res['r'][31]:08X}: the internal link escaped as the caller's return address"
+
+
 # ----------------------------------------------------------------------------------------------------
 # 3. DATA-IMAGE GUARD — an overlay that is not code must emit an EMPTY module, never a recompiled
 #    garbage blowup. Regression: Spyro's overlay scanner records every load into the shared arena,
@@ -1214,3 +1336,78 @@ def test_noreturn_code_needs_an_explicit_seed():
 
 if __name__ == "__main__":
     _main()
+
+
+def test_ra_computed_jump_vs_real_return():
+    # RE-16: `jr $ra` does NOT always mean "return". Hand-written assembly can use `jal`/`jr $ra` as an
+    # internal COROUTINE mechanism inside one frame, in which case $ra holds a mid-body resume point and
+    # emitting `return;` unwinds out of the routine instead of resuming — dropping the rest of its work
+    # and its epilogue. Spider-Man's 0x8002A338 (a resumable bit-stream decoder that saves its own
+    # continuation to a global) has BOTH kinds of `jr $ra` in one body, so a whole-body gate is wrong
+    # whichever way it answers. The decision must be per-`jr`, by reaching-definitions on $ra.
+    a = Asm(0x80010000)
+    a.addi("sp", "sp", -4)          # 0x00  frame
+    a.sw("ra", 0, "sp")             # 0x04
+    a.jal("sub")                    # 0x08  link = 0x10 — a live in-body resume point
+    a.nop()                         # 0x0C  delay
+    a.addu("v0", "v0", "v1")        # 0x10  <- the resume point
+    a.b("tail")                     # 0x14
+    a.nop()                         # 0x18
+    a.label("sub")
+    a.jr("ra")                      # 0x1C  COMPUTED: $ra is the jal link, not a return address
+    a.nop()                         # 0x20  delay
+    a.label("tail")
+    a.lw("ra", 0, "sp")             # 0x24  epilogue reload
+    a.addi("sp", "sp", 4)           # 0x28
+    a.jr("ra")                      # 0x2C  REAL RETURN
+    a.nop()                         # 0x30  delay
+    data, _ = a.assemble()
+    e = exe_of(data)
+    got = emit.ra_computed_jumps(e, [0x80010000])
+    assert got == {0x8001001C}, \
+        f"expected only the coroutine jr to be computed, got {[hex(x) for x in sorted(got)]}"
+
+    # The emitter must render the two differently: a router dispatch vs a bare `return;`.
+    ins = {x: decode(x, e.word(x)) for x in range(0x80010000, 0x80010034, 4)}
+    NM = emit.MAIN_NAMES
+    coro = emit.emit_control(ins[0x8001001C], "", set(), set(), NM, None, False, True)
+    real = emit.emit_control(ins[0x8001002C], "", set(), set(), NM, None, False, False)
+    assert real[0].strip() == "return;", f"real return should be a bare return, got {real}"
+    assert NM.router in coro[0] and "r[31]" in coro[0], \
+        f"coroutine resume should dispatch on $ra, got {coro}"
+
+
+def test_ra_saved_to_a_global_is_still_a_return():
+    # "Not the stack" is not the same as "not a return address". A FRAMELESS function parks its return
+    # address in a GLOBAL and reloads it (Spider-Man 0x8008BE5C: `sw $ra, 0x392C($at)` … `lw $ra,
+    # 0x392C($ra)`). Treating any non-`sp` reload as a continuation reported four such functions as
+    # coroutines. The discriminator is whether THIS function ever stored $ra to that offset.
+    a = Asm(0x80010000)
+    a.lui("at", 0x800B)             # 0x00
+    a.sw("ra", 0x392C, "at")        # 0x04  save slot — a global, not the stack
+    a.jal("callee")                 # 0x08
+    a.nop()                         # 0x0C
+    a.lui("ra", 0x800B)             # 0x10
+    a.lw("ra", 0x392C, "ra")        # 0x14  reload — a RETURN address
+    a.nop()                         # 0x18
+    a.jr("ra")                      # 0x1C  REAL RETURN, despite the jal above it
+    a.nop()                         # 0x20
+    a.label("callee")
+    a.jr("ra")                      # 0x24
+    a.nop()                         # 0x28
+    data, _ = a.assemble()
+    e = exe_of(data)
+    got = emit.ra_computed_jumps(e, [0x80010000, 0x80010024])
+    assert got == set(), f"a global save slot is still a return, got {[hex(x) for x in sorted(got)]}"
+
+    # And the guard is what saves it: without the `sw` the same reload IS a restored continuation.
+    b = Asm(0x80010000)
+    b.lui("ra", 0x800B)
+    b.lw("ra", 0x392C, "ra")
+    b.nop()
+    b.jr("ra")
+    b.nop()
+    d2, _ = b.assemble()
+    got2 = emit.ra_computed_jumps(exe_of(d2), [0x80010000])
+    assert got2 == {0x8001000C}, \
+        f"a reload from a slot this function never saved to is a continuation, got {got2}"

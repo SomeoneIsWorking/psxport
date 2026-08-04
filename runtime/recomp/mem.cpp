@@ -135,7 +135,28 @@ static uint32_t s_dma3_madr, s_dma3_bcr, s_dma3_chcr;   // DMA3: CDROM data FIFO
 static uint32_t s_dpcr = DPCR_RESET;
 static uint32_t s_dicr = 0;
 
+// Channels that finished a transfer the guest armed and have not had their callback run yet.
+// Deferred to a guest FUNCTION-ENTRY boundary (Hle::irqPoll), never dispatched from inside the store
+// that finished the transfer: native runtime code is mid-mutation there, and re-entering guest code
+// from a store is how a controller gets re-entered halfway through a command.
+static DmaDone s_dma_done;
+
 void dma_irq_ack(int ch) { s_dicr &= ~(1u << (24 + ch)); }
+bool dma_done_owed(int ch) { return s_dma_done.owed(ch); }
+void dma_done_taken(int ch) { s_dma_done.taken(ch); }
+bool dma_done_any() { return s_dma_done.mask != 0; }
+
+// One completion point per channel, all identical: the DICR gate decides, never the channel number.
+// (mem.cpp is where the transfers finish, so this is where the set is populated.)
+// Returns true if the guest is now owed a callback, so the caller can raise its deferred-work bit
+// (the completion sites are all Core methods; this is deliberately not one, so it cannot touch
+// anything else on the Core by accident).
+static bool dma_completed(int ch) {
+  const bool owed = s_dma_done.complete(s_dicr, ch);
+  lucent::debug("dmairq", "DMA{} complete: armed={} (DICR {:08X})", ch, owed ? 1 : 0,
+                dma_dicr_read(s_dicr));
+  return owed;
+}
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
   uint32_t bs = bcr & 0xFFFF, bc = bcr >> 16;
@@ -203,10 +224,12 @@ void Core::mdec_dma_pump() {
     if (s_mdec0_left == 0 && (s_dma0_chcr & 0x01000000u)) {
       s_dma0_chcr &= ~0x01000000u;
       lucent::debug("mdecdma", "DMA0(in)  complete");
+      if (dma_completed(0)) pending_work |= PW_IRQ;
     }
     if (s_mdec1_left == 0 && (s_dma1_chcr & 0x01000000u)) {
       s_dma1_chcr &= ~0x01000000u;
       lucent::debug("mdecdma", "DMA1(out) complete");
+      if (dma_completed(1)) pending_work |= PW_IRQ;
     }
     if (s_mdec0_left == 0 && s_mdec1_left == 0) return;   // nothing pending
     if (progress) continue;
@@ -606,13 +629,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       //
       // Deferred to a function-entry boundary rather than dispatched here: we are inside a guest
       // store, with native code mid-mutation.
-      if (dma_irq_armed(s_dicr, 3)) {
-        s_dicr = dma_dicr_complete(s_dicr, 3);     // hardware sets the channel's flag
-        game->cd.dma_done_pending = 1;
-        pending_work |= PW_IRQ;
-      }
-      lucent::debug("dmairq", "DMA3 complete: {} words, armed={} (DICR {:08X})", got,
-                    dma_irq_armed(s_dicr, 3) ? 1 : 0, dma_dicr_read(s_dicr));
+      if (dma_completed(3)) pending_work |= PW_IRQ;
     }
     return;
   }
@@ -644,6 +661,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         for (int i = 0; i < got; i++) mem_w32(da + i * 4, s_dma_buf[i]);
       }
       s_dma4_chcr &= ~0x01000000u;
+      if (dma_completed(4)) pending_work |= PW_IRQ;
       // SPU transfer complete. On hardware this raises IRQ9 and the BIOS turns it into
       // DeliverEvent(HwSPU) — which is what a guest waiting on the transfer is testing for. This
       // model performs the DMA SYNCHRONOUSLY, so the event is due the moment the words have moved;
@@ -720,6 +738,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                (int)((s_dma2_bcr & 0xFFFF) * (s_dma2_bcr >> 16)), to_gpu);
       else gpu_dma2_block(this, s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu);  // immediate
       s_dma2_chcr &= ~0x01000000u;                 // clear busy -> game's DMA-done poll passes
+      if (dma_completed(2)) pending_work |= PW_IRQ;
     }
     return;
   }
@@ -730,8 +749,10 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   }
   if (p >= 0x1F8010F4 && p <= 0x1F8010F7) {        // DICR
     s_dicr = dma_dicr_store(s_dicr, p, v, bytes);
-    lucent::debug("dmairq", "w DICR{}[{}] = {:08X} -> {:08X} (armed ch3={}) ra={:08X}",
-                  (p & 3u), bytes, v, dma_dicr_read(s_dicr), dma_irq_armed(s_dicr, 3) ? 1 : 0, r[31]);
+    unsigned armed = 0;
+    for (int ch = 0; ch < 7; ch++) if (dma_irq_armed(s_dicr, ch)) armed |= 1u << ch;
+    lucent::debug("dmairq", "w DICR{}[{}] = {:08X} -> {:08X} (armed channel mask {:02X}) ra={:08X}",
+                  (p & 3u), bytes, v, dma_dicr_read(s_dicr), armed, r[31]);
     return;
   }
   if (p == 0x1F8010E0) { s_dma6_madr = v; return; }
@@ -747,6 +768,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         mem_w32(addr, word);
       }
       s_dma6_chcr &= ~0x01000000u;                 // clear busy -> ClearOTagR's busy-poll passes
+      if (dma_completed(6)) pending_work |= PW_IRQ;
     }
     return;
   }

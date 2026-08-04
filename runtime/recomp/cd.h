@@ -44,11 +44,6 @@ public:
   // rather than the burst a file read gets. Set on ReadN/ReadS, cleared by the guest's own Pause/Stop.
   int stream_active = 0;
 
-  // A CD DMA transfer completed and the guest's completion callback has not been run yet. Serviced
-  // at a guest FUNCTION-ENTRY boundary, never from inside the memory write that finished the
-  // transfer: native runtime code is mid-mutation there, and re-entering guest code from a store is
-  // how a controller gets re-entered halfway through a command.
-  int dma_done_pending = 0;
 
   // Sector FIFO for the stock-libcd path. Real hardware presents ONE sector as a byte stream that
   // successive CdGetSector calls pop SEQUENTIALLY — the game reads 3 words (the 4-byte header plus
