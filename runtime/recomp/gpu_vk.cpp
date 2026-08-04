@@ -1,6 +1,8 @@
 #include "core.h"
 #include "game.h"    // Game / GpuVkState (per-instance render state)
 #include "gpu_vk.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
+#include "gpu_vk_present_policy.h"   // present_rebuild_decision — when a present must rebuild the composite
+#include <lucent/log.h>              // diagnostics: lucent::debug (channel-gated internally — never guard it)
 #include "render_substrate.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
 // gpu_vk.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
@@ -926,13 +928,41 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // CLEAR, while upload_vram above still overwrites the composite with guest VRAM — which for a port
   // that composites natively is empty, so the frame came out black anyway.
   //
-  // The guard is deliberately "did the batch get anything this frame", not a frame-rate assumption:
-  // a genuinely blank frame the guest MEANT to be blank clears its own VRAM and submits that.
-  if (geom_batch_empty(*this)) { show_composite(cmd); return; }
+  // BUT "the batch got nothing" is not the same question as "the guest produced nothing". A port
+  // still running the guest's own drawing has a SECOND producer: a direct framebuffer write. An
+  // upload-only screen — a logo still, a loading screen, a fade — is DMA'd straight into VRAM with
+  // zero primitives, and skipping the rebuild for it means no composite is ever built, so it shows
+  // black for its whole duration. That is Spyro's black boot logos, and it is issue 0029 one level
+  // up: the identical "zero prims means nothing to show" assumption, re-introduced ABOVE the
+  // preserveVramBackdrop control that was added to fix it, where that control cannot be reached.
+  //
+  // So the guard asks about CHANGE from BOTH producers, which is also what the hardware analogy
+  // actually says — the display re-scans the same framebuffer only while nothing has written it.
+  // A genuinely blank frame the guest MEANT to be blank clears its own VRAM, and that clear is a
+  // VRAM write, so it still rebuilds.
+  const bool guestVramIsPicture = game->core.cfg && game->core.cfg->preserveVramBackdrop;
+  const PresentRebuild decision =
+      present_rebuild_decision(geom_batch_empty(*this), guestVramIsPicture,
+                               s_vram_writes, s_vram_writes_built);
+  // `debug presentskip`: the decision's running DISTRIBUTION with its denominator. This is the
+  // measurement that sizes the change for a given port: REUSE_LAST is what afca817d bought (an idle
+  // field costing nothing), REBUILD_VRAM is what this predicate restored (an upload-only screen that
+  // would otherwise be black). A port where REUSE_LAST collapses to ~0 has a guest that writes VRAM
+  // every field, and for that port the early-out is doing nothing regardless of this change.
+  // The tally is kept UNCONDITIONALLY — it is one add, and totals that depended on whether logging
+  // was enabled would be worthless. The emit is one unguarded lucent::debug: the channel gate lives
+  // inside the logger, which is the whole point of having a configurable one.
+  GpuDevice& gd = gdev();
+  gd.s_ps_n[decision]++;
+  lucent::debug("presentskip", "presents={} reuse_last={} rebuild_geom={} rebuild_vram={} | vram_writes={}",
+                gd.s_ps_n[0] + gd.s_ps_n[1] + gd.s_ps_n[2], gd.s_ps_n[PRESENT_REUSE_LAST],
+                gd.s_ps_n[PRESENT_REBUILD_GEOM], gd.s_ps_n[PRESENT_REBUILD_VRAM], s_vram_writes);
+  if (decision == PRESENT_REUSE_LAST) { show_composite(cmd); return; }
 
   upload_vram(*this, cmd, src);                             // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
   render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
               game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
+  s_vram_writes_built = s_vram_writes;   // this composite now reflects every guest write so far
 
   if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // shot reads s_vram_tex via its own cmd
   show_composite(cmd);
@@ -1264,7 +1294,12 @@ void GpuVkState::set_order_2d_bg(unsigned idx) { float t = (float)(idx + 1) / 65
 void GpuVkState::set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 65536.0f; if (t > 1.0f) t = 1.0f;
                                                    s_cur_ordn = NATIVE_3D_MIN * t; s_vdn = 0; }
 void GpuVkState::semi_group(int x0, int y0, int x1, int y1) { (void)x0; (void)y0; (void)x1; (void)y1; }
-void GpuVkState::dirty(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
+// Every CPU->VRAM write path funnels here (GP0 0xA0 upload, GP0 0x02 fill, VRAM->VRAM copy, native
+// load_image). The VK renderer needs no per-rect mirror — render_geom uploads the whole of CPU VRAM
+// each time it builds — but it does need to KNOW a write happened, because a write with no primitives
+// is a complete new picture (an upload-only logo/loading screen) and present() must rebuild for it.
+// The rect is still unused; only the fact of the write matters. See gpu_vk_present_policy.h.
+void GpuVkState::dirty(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; s_vram_writes++; }
 void GpuVkState::stats(int* tri, int* tex, int* semi) { if (tri) *tri = s_dbg_tri_c; if (tex) *tex = s_dbg_tex_c; if (semi) *semi = s_dbg_semi_c; }
 // Per-logic-frame reset of the host geometry batch (present consumed it; the next frame re-emits the queue).
 void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame;

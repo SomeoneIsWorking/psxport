@@ -176,6 +176,15 @@ struct GpuVkState {
   int   s_tex2d_n[GGS_NUM_2D_BANDS]   = {};
   void* s_semi2d_buf[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES] = {};
   int   s_semi2d_n[GGS_NUM_2D_BANDS][GGS_NUM_BLEND_MODES]   = {};
+  // GUEST FRAMEBUFFER-WRITE ACCOUNTING — the second way a present can be new.
+  // s_vram_writes counts CPU->VRAM write operations as they arrive at the dirty() chokepoint that
+  // every such path already calls (GP0 0xA0 upload, GP0 0x02 fill, VRAM->VRAM copy, and the native
+  // gpu_native_load_image). s_vram_writes_built records its value when the composite currently on
+  // screen was built. Equal means the guest has not touched the framebuffer since, which — together
+  // with an empty geometry batch — is the only state in which there is genuinely nothing new to show.
+  // See gpu_vk_present_policy.h for why the batch alone is not that test.
+  uint32_t s_vram_writes = 0;
+  uint32_t s_vram_writes_built = 0;
   // Last-frame draw counts (for the `vkstats` debug-server probe). Written by render_geom, read by
   // `stats` — per-Core so `@a vkstats` / `@b vkstats` return each core's independent counts.
   int   s_dbg_tri_c  = 0;

@@ -61,6 +61,7 @@ public:
 
   // ---- diagnostics dedupe / scratch ----
   int s_trace_n = 0;                                  // PSXPORT_GPU_TRACE print counter
+  long s_ps_n[3] = {0, 0, 0};                         // `debug presentskip`: PresentRebuild decision tally
   int s_fw_lastmode = -999;                           // `debug fadewatch` change detector (present)
   uint8_t s_fw_lr = 0, s_fw_lg = 0, s_fw_lb = 0;
   int s_fw_lsx = -999, s_fw_lsy = -999, s_fw_lw = -999, s_fw_lh = -999;
