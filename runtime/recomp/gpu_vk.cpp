@@ -476,7 +476,11 @@ static void init_gpu(Game* game) {
     int fullscreen = cfg_on("PSXPORT_FULLSCREEN")
                   || (cfg_str("PSXPORT_WINDOWED") && atoi(cfg_str("PSXPORT_WINDOWED")) == 0);
     SDL_WindowFlags flags = fullscreen ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
-    s_win = SDL_CreateWindow("Tomba! 2 (SDL_GPU)", 960, 720, flags);
+    // GameConfig::windowTitle — never a game name in the framework. The fallback is deliberately
+    // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
+    const char* title = (game->core.cfg && game->core.cfg->windowTitle) ? game->core.cfg->windowTitle
+                                                                       : "psxport (untitled game)";
+    s_win = SDL_CreateWindow(title, 960, 720, flags);
     GPUCHK(s_win, "SDL_CreateWindow");
   }
   // Create the GPU device (SPIR-V shaders; let SDL pick the optimal driver — Vulkan on Linux, Metal on Mac).

@@ -253,6 +253,15 @@ struct GameConfig {
   // port that still runs the guest's own frame loop and paces once per vblank (each vblank is
   // 1/60s) sets 1. Appended at the end because GameConfig is initialised positionally.
   uint32_t paceQuota;
+
+  // Window title. The framework is game-agnostic and must not name a game, but gpu_vk.cpp hardcoded
+  // "Tomba! 2 (SDL_GPU)" — the FIRST consumer's — so every port added since presented itself as
+  // Tomba!2 in the title bar and the taskbar, on all three games at once. Left null, the window is
+  // titled "psxport (untitled game)": OBVIOUSLY wrong rather than plausibly wrong, because a title
+  // naming some OTHER game reads as correct and therefore never gets reported.
+  // Also appended at the end — spider1 initialises GameConfig POSITIONALLY, so inserting a field
+  // mid-struct silently shifts every field after it there.
+  const char* windowTitle;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
