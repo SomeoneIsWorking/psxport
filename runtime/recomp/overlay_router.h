@@ -17,19 +17,37 @@ struct Core;
 // (bulk data loads, say) are ignored, so it is safe to call unconditionally after any load.
 void overlay_note_load(Core* c, uint32_t dest);
 
-// Record EXACTLY which overlay is resident, by name, bypassing signature identification entirely.
+// ---- RELOCATABLE MODULES: the live placement registry -------------------------------------------
 //
-// Why this exists: signature routing assumes each overlay's first bytes are distinctive, which holds
-// when overlays load to DIFFERENT bases (their relocated words differ). It fails when a port pins
-// many relocatable modules to ONE shared base — Spider-Man's 30 CD.WAD modules collapse to 14
-// distinct 32-byte signatures there, because the module entry prologues are identical boilerplate and
-// relocating them all to the same address makes the words identical too. 12 of them share a single
-// signature.
+// A game that loads code modules at runtime and relocates them (Spider-Man's 30 CD.WAD modules) has
+// no fixed address to route by: the game's own allocator picks each module's base at load time, it
+// differs per module and per playthrough, and several modules are live at once. Such a module is
+// recompiled BASE-RELATIVE against a link base, and where it actually IS lives in a per-Core
+// registry (Core::ovBase / Core::ovDelta) that the game's loader keeps up to date.
 //
-// A loader that KNOWS which module it just placed should say so rather than let the router guess.
-// Returns 0 and logs if the name matches no emitted overlay — a silent miss here would route a call
-// into a sibling module's switch and surface far away as a dispatch miss.
-int overlay_set_resident(Core* c, const char* name);
+// This supersedes signature identification for those modules, and has to: guest RAM holds the image
+// relocated to the LIVE base, so it no longer matches the signature baked in at recompile time.
+// Routing is by live RANGE instead, which is exact — two resident modules cannot share an address.
+
+// The game's loader calls this the moment the module body's address is known (its allocation), and
+// before the module's entry point runs. `name` is the emitted overlay name (the upper-cased file
+// stem). Returns the module's overlay index, or -1 if no recompiled module has that name.
+//
+// FAIL-FAST: if the incoming module's live range overlaps one that is already resident, this aborts.
+// That is the invariant the whole design rests on — an overlap means two modules' code occupies the
+// same guest bytes, so the next call through either one runs the other's instructions. It used to be
+// unavoidable (every module was pinned to one address) and merely warned about; it is now impossible
+// unless the loader intercept has mis-identified an allocation, which is a defect, not a condition
+// to continue through.
+int overlay_place(Core* c, const char* name, uint32_t base, uint32_t size);
+
+// The game's loader calls this when the guest frees a module body. Returns the evicted overlay index,
+// or -1 if `base` is not a live module (an ordinary heap free — the common case).
+int overlay_evict_at(Core* c, uint32_t base);
+
+// Which live relocatable module owns guest address `addr`? -1 if none. This is the router's own
+// lookup, exposed because a game's loader diagnostics want the same answer.
+int overlay_live_index(Core* c, uint32_t addr);
 
 // For a slot-range address, the name of the overlay currently resident in that slot — "none" when the
 // slot is empty or its content matches no known overlay, and null when `addr` is in no slot range.

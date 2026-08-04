@@ -94,6 +94,33 @@ public:
   enum : int { PW_IRQ = 1, PW_HOST = 2 };
   int pending_work = 0;
 
+  // ---- RELOCATABLE OVERLAY MODULES: where each one is living right now ----
+  //
+  // A game that loads code modules at runtime and RELOCATES them (Spider-Man's 30 CD.WAD modules)
+  // cannot have them recompiled at fixed addresses: several are resident at once and the game's own
+  // allocator decides where each lands, per load. Those modules are recompiled BASE-RELATIVE against
+  // a LINK base (generated/overlay_table.c) and the difference lives here:
+  //
+  //   ovBase[i]   the module's LIVE base, or 0 when module i is not resident. This is the router's
+  //               range table — the one thing that says which module owns a guest address NOW.
+  //   ovDelta[i]  live base − link base. GENERATED CODE READS THIS DIRECTLY (`c->ovDelta[7]`), which
+  //               is why it is a plain array member and not behind an accessor: it is on the path of
+  //               every address a relocated module composes.
+  //
+  // PER-CORE, not global, for the same reason every other execution-state member here is: two Cores
+  // in the SBS harness are two machines, and a module placement leaking between them would silently
+  // dispatch one core's addresses into the other's module image.
+  //
+  // Owned by overlay_router.cpp (overlay_place / overlay_evict / overlay_live_index); a game's module
+  // loader calls those, never these fields. Indices are the module's ordinal in g_rec_overlays[].
+  // ovLive is how many entries of ovBase[] are non-zero. It exists so the router's per-dispatch
+  // lookup costs ONE predicted-false test on a game that has no relocatable modules at all (every
+  // other consumer of this framework), instead of a scan over the whole overlay table.
+  static constexpr int kRecMaxOverlays = 64;   // must match emit.py REC_MAX_OVERLAYS
+  uint32_t ovBase[kRecMaxOverlays]  = {};
+  int32_t  ovDelta[kRecMaxOverlays] = {};
+  int      ovLive = 0;
+
   // COP0 registers (12 = Status, 13 = Cause, 14 = EPC). Per-Core: exception state must never be
   // shared between two Cores. Status bit 0 is the master interrupt enable — see stubs.cpp.
   uint32_t cop0[16] = {};

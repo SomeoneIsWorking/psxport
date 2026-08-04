@@ -138,7 +138,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-03.1"
+RECOMP_VERSION = "2026-08-04.1"   # base-relative (relocatable) overlay modules
 
 R = lambda n: f"c->r[{n}]"
 
@@ -146,6 +146,217 @@ R = lambda n: f"c->r[{n}]"
 def wr(n, expr):
     """Assignment to GPR n, discarding writes to r0."""
     return "" if n == 0 else f"{R(n)} = {expr};"
+
+
+# ==================================================================================================
+# BASE-RELATIVE (relocatable) module emission
+#
+# A game whose code modules are loaded and RELOCATED at runtime cannot have them pinned to one guest
+# address: two modules resident at once would occupy the same bytes. Such a module is instead emitted
+# BASE-RELATIVE — recompiled from an image relocated at an arbitrary LINK base B0, with a per-Core
+# `delta` (= live base − B0) added at exactly the sites whose value moves with the module.
+#
+# WHICH SITES, AND WHY THAT SET IS COMPLETE. A recompiled body holds a guest address in only four
+# shapes, and each has one rule:
+#
+#   1. an address COMPOSED at runtime from a `lui` + a 16-bit low half. The game's relocation table
+#      names the `lui` (its HI16 entries). Adding delta to what the `lui` produces gives
+#      a(B0) + delta = a(B) for EVERY low-half partner of that `lui`, however many there are and
+#      whatever their carry — because the emitter never re-splits hi/lo, delta simply passes through
+#      the addition. So the low halves are emitted completely UNCHANGED. (This is the whole reason
+#      the model is cheap: 911 `lui` sites carry the 978 low halves for free.)
+#   2. an address the emitted code hands to the ROUTER (`rec_dispatch`) — a `j`/`jal`/branch target
+#      outside this module's own function set. The criterion is the ADDRESS RANGE, not the
+#      relocation type: branch targets are PC-relative so the relocation table never names them, yet
+#      they move with the module exactly the same. A constant inside [B0, B0+size) gets delta; one
+#      outside (the resident executable, a BIOS vector) must not.
+#   3. a LINK register value (`jal`/`jalr`/`bltzal`/`bgezal` write `addr + 8`), always in-module.
+#   4. a runtime address the body switches on (a recovered jump table's target register). The table
+#      words are relocated by the GUEST, so the register holds a live address and the emitted `case`
+#      labels are link-space — subtract delta before matching.
+#
+# Everything else is either a compile-time C label (`goto`), a direct call to a C symbol, or data
+# read out of guest RAM through `c->mem_r*` (which the guest's own relocator has already fixed up).
+#
+# The MODULE'S OWN address->function switch takes a RUNTIME address (that is what the router hands
+# it, and what a dispatch miss must report) and subtracts delta itself. `<mod>_func_index` and
+# `<mod>_set_override` take a LINK-SPACE address instead: they are build-time keys — you register an
+# override against the address you read in a disassembly — and they have no Core to read delta from.
+class ModuleReloc:
+    """Base-relative emission context for ONE relocatable module. `hi16` is the set of guest
+    addresses (in LINK space) at which the game's relocation table names a HI16 site."""
+
+    def __init__(self, index, link_lo, link_hi, hi16):
+        self.index = index                       # slot in Core::ovDelta[] — the emit-time overlay ordinal
+        self.link_lo, self.link_hi = link_lo, link_hi
+        self.hi16 = hi16
+        self.delta = f"c->ovDelta[{index}]"
+
+    def in_module(self, a):
+        return self.link_lo <= a < self.link_hi
+
+
+g_mod = None      # the ModuleReloc being emitted, or None for an ordinary (fixed-base) module
+
+# Core::ovDelta[] capacity (runtime/recomp/core.h, kRecMaxOverlays). A relocatable module's delta is
+# reached from generated code as `c->ovDelta[<ordinal>]`, so the table has to be a fixed-size member.
+# Exceeding it is a build ERROR, never a truncation.
+REC_MAX_OVERLAYS = 64
+
+
+def load_reloc_sidecar(path, base, size, fn):
+    """`<stem>.reloc.json` -> the set of LINK-space addresses at which the game relocates a HI16, or
+    None when the module has no sidecar (an ordinary fixed-base overlay).
+
+    THE SIDECAR IS A GAME ARTIFACT, and deliberately dumb: the game's own extractor knows its
+    console's relocation format, and hands the recompiler nothing but offsets. The framework does not
+    parse a `.rel`, does not know a relocation encoding, and cannot acquire a game-specific one here.
+
+        {"size": <module bytes>, "hi16": [offset, ...], "counts": {...}}
+
+    `hi16` is the only field the emitter consumes; `counts` is carried so a mismatch between what the
+    extractor saw and what the emitter got is visible rather than silent."""
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        side = json.load(f)
+    if side.get("size") != size:
+        sys.exit(f"[recomp] {fn}: relocation sidecar says the module is {side.get('size')} bytes but "
+                 f"the image is {size}. The sidecar and the image must come from the same extraction "
+                 f"— re-run the game's module extractor.")
+    hi16 = {base + off for off in side["hi16"]}
+    print(f"[recomp] {fn}: base-relative ({len(hi16)} HI16 site(s) from {os.path.basename(path)})")
+    return hi16
+
+
+# Instructions that may consume a `lui`-built address high half. The emitted `lui` result carries
+# delta, so a consumer is SAFE exactly when delta passes through it into the composed address —
+# i.e. when the register is used additively (a low-half add, a load/store base, an index add) or
+# simply copied. Anything else (storing the raw high half, comparing it, masking or shifting it)
+# would observe a value the console never held, because on hardware the relocated `lui` immediate is
+# `hi(B)` while this emits `hi(B0) + delta`, which differ below bit 16 whenever delta is not
+# 64K-aligned. Compiled code does not do that with a relocated `lui` — but "does not" is an
+# assumption, so it is CHECKED, and a violation stops the build instead of shipping a wrong value.
+_HI16_ADDITIVE_IMM = ("addiu", "addi")
+_HI16_ADDITIVE_RRR = ("addu", "add", "subu", "sub")
+
+
+# `rt` is a SOURCE in some encodings and a DESTINATION in others, and conflating the two makes a
+# dataflow walk report a redefinition as a use. These two say which is which, per instruction kind.
+_BRANCH_TWO_OPERAND = ("beq", "bne")
+
+
+def reg_reads(i):
+    k = i.kind
+    if k == D.ALU_RRR or k == D.MULDIV or k == D.SHIFT_V:
+        return {i.rs, i.rt}
+    if k == D.ALU_RRI or k == D.LOAD or k == D.GTE_LOAD:
+        return {i.rs}
+    if k == D.STORE or k == D.GTE_STORE:
+        return {i.rs, i.rt}
+    if k == D.SHIFT_I:
+        return {i.rt}
+    if k == D.BRANCH:
+        return {i.rs, i.rt} if i.op in _BRANCH_TWO_OPERAND else {i.rs}
+    if k == D.JUMPR:
+        return {i.rs}
+    if k == D.GTE_MOVE:
+        return {i.rt} if i.op in ("mtc2", "ctc2") else set()
+    if k == D.COP0:
+        return {i.rt} if i.op == "mtc0" else set()
+    if k == D.HILO:
+        return {i.rs} if i.op in ("mthi", "mtlo") else set()
+    return set()
+
+
+def reg_writes(i):
+    k = i.kind
+    if k in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V):
+        return {i.rd}
+    if k in (D.ALU_RRI, D.LUI, D.LOAD):
+        return {i.rt}
+    if k == D.GTE_MOVE:
+        return {i.rt} if i.op in ("mfc2", "cfc2") else set()
+    if k == D.COP0:
+        return {i.rt} if i.op == "mfc0" else set()
+    if k == D.HILO:
+        return {i.rd} if i.op in ("mfhi", "mflo") else set()
+    if k == D.JUMPR and i.op == "jalr":
+        return {i.rd}
+    return set()
+
+
+def check_hi16_consumers(exe, hi16, fn):
+    """Fail the emit if any HI16-relocated `lui` result is consumed in a way that would expose the
+    high half itself rather than a composed address. Reports its denominator either way."""
+    ins = {a: decode(a, exe.word(a)) for a in range(exe.load, exe.text_end, 4)}
+    bad, uses = [], 0
+    for site in sorted(hi16):
+        i0 = ins.get(site)
+        if i0 is None or i0.kind != D.LUI:
+            bad.append((site, "the relocation table names a HI16 here, but the word is not a `lui`"))
+            continue
+        # `raw` = registers holding the HIGH HALF ALONE. That is the only value whose emitted form
+        # (hi(B0) + delta) differs from the console's (hi(B)). The moment a low half is added the
+        # register holds a COMPOSED address, which is bit-exact — so it leaves the set, and storing
+        # or comparing it from then on is ordinary correct code.
+        raw = {i0.rt}
+        a = site + 4
+        while a < exe.text_end and raw:
+            i = ins.get(a)
+            if i is None:
+                break
+            rd_regs, wr_regs = reg_reads(i), reg_writes(i)
+            if raw & rd_regs:
+                uses += 1
+                if i.kind == D.ALU_RRI and i.op in _HI16_ADDITIVE_IMM and i.rs in raw:
+                    raw.discard(i.rt)             # `addiu rt, raw, LO` — rt is now a full address
+                elif i.kind in (D.LOAD, D.STORE, D.GTE_LOAD, D.GTE_STORE) and i.rs in raw \
+                        and not (i.kind in (D.STORE, D.GTE_STORE) and i.rt in raw):
+                    pass                          # `lw/sw x, LO(raw)` — composed in the addressing mode
+                elif i.kind == D.ALU_RRR and i.op in _HI16_ADDITIVE_RRR and (i.rs in raw or i.rt in raw):
+                    # `addu rd, raw, rX`. A register-register move (rX == $zero) COPIES the raw high
+                    # half; anything else adds a real value, so rd is a composed address.
+                    if i.rt == 0 or i.rs == 0:
+                        raw.add(i.rd)
+                    else:
+                        raw.discard(i.rd)
+                else:
+                    bad.append((a, f"`{i.op}` consumes the RAW high half built at 0x{site:08X} "
+                                   f"(rs=r{i.rs} rt=r{i.rt})"))
+                    break
+            # the raw value dies where its register is written by anything other than the `move` that
+            # propagates it (which the read handler above has already re-added).
+            for w in wr_regs:
+                if w and not (i.kind == D.ALU_RRR and w == i.rd and (i.rt == 0 or i.rs == 0)
+                              and (i.rs in raw or i.rt in raw)):
+                    raw.discard(w)
+            if i.kind in (D.JUMP, D.JUMPR):
+                break                             # caller-saved liveness ends at a control transfer
+            a += 4
+    print(f"[recomp] {fn}: HI16 consumer check — {len(hi16)} site(s), {uses} use(s) examined, "
+          f"{len(bad)} outside the additive class")
+    if bad:
+        for a, why in bad[:20]:
+            print(f"[recomp]     0x{a:08X}: {why}")
+        sys.exit(f"[recomp] {fn}: a HI16-relocated `lui` result escapes as a raw value. Base-relative "
+                 f"emission adds the module delta to that register, so the escaping value would differ "
+                 f"from the console's. This needs the emitter to model that site explicitly — it must "
+                 f"not be waved through.")
+
+
+def addr_const(a):
+    """A guest-address CONSTANT the emitted body hands to the router or writes to a link register.
+    Moves with the module when it names an in-module address (rule 2/3 above)."""
+    if g_mod is not None and g_mod.in_module(a):
+        return f"(0x{a:08X}u + (uint32_t)c->ovDelta[{g_mod.index}])"
+    return f"0x{a:08X}u"
+
+
+def link_space(expr):
+    """A RUNTIME guest address computed by the body, expressed in LINK space so it can be matched
+    against the emitter's compile-time `case` labels (rule 4 above)."""
+    return f"({expr} - (uint32_t)c->ovDelta[{g_mod.index}])" if g_mod is not None else expr
 
 
 def simm_lit(ins):
@@ -162,6 +373,10 @@ def emit_simple(ins):
     if k == D.NOP:
         return ""
     if k == D.LUI:
+        # A HI16 relocation site in a relocatable module: this `lui` builds the high half of an
+        # in-module address, so its result carries delta for every low half that follows it.
+        if g_mod is not None and ins.addr in g_mod.hi16:
+            return wr(ins.rt, f"((uint32_t){ins.imm}u << 16) + (uint32_t)c->ovDelta[{g_mod.index}]")
         return wr(ins.rt, f"(uint32_t){ins.imm}u << 16")
     if k == D.ALU_RRR:
         a, b = R(ins.rs), R(ins.rt)
@@ -1129,7 +1344,7 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=()):
 
 def call_or_dispatch(target, funcset, N):
     return (f"{N.wrap}_{target:08X}(c);" if target in funcset
-            else f"{N.router}(c, 0x{target:08X}u);")
+            else f"{N.router}(c, {addr_const(target)});")
 
 
 
@@ -1197,7 +1412,7 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
             # here would make every `goto` in the function jump across an initialisation, which this
             # dialect rejects outright.
             cond = BRANCH_COND[i.op](i)
-            L.append(f"  {{ int _t = ({cond}); {R(31)} = 0x{i.addr + 8:08X}u; {ds_c} "
+            L.append(f"  {{ int _t = ({cond}); {R(31)} = {addr_const(i.addr + 8)}; {ds_c} "
                      f"if (_t) {{ {call_or_dispatch(i.target, funcset, N)} }} }}")
             return L
         cond = BRANCH_COND[i.op](i)
@@ -1209,7 +1424,7 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
         return L
     if i.kind == D.JUMP:
         if i.op == "jal":
-            L.append(f"  {R(31)} = 0x{i.addr + 8:08X}u;")
+            L.append(f"  {R(31)} = {addr_const(i.addr + 8)};")
             L.append(f"  {ds_c} {call_or_dispatch(i.target, funcset, N)}")
         else:  # j
             if i.target in labels:
@@ -1231,7 +1446,7 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
                     continue
                 seen.add(t)
                 cases.append(f"case 0x{t:08X}u: goto L_{t:08X};")
-            L.append(f"  {{ {ds_c} switch ({R(i.rs)}) {{ {' '.join(cases)} "
+            L.append(f"  {{ {ds_c} switch ({link_space(R(i.rs))}) {{ {' '.join(cases)} "
                      f"default: {N.router}(c, {R(i.rs)}); return; }} }}")
         elif ra_tail:
             # TAIL-RETURN THROUGH A NON-`ra` REGISTER. The guest moved `ra` into another register and
@@ -1261,7 +1476,7 @@ def emit_control(i, ds_c, funcset, labels, N, jtargets=None, ra_tail=False):
         #    writes; every other write site already uses it.
         # 2. The target register is read at the JUMP, before the delay slot runs — same latching rule
         #    as the computed `jr` above.
-        L.append(f"  {{ uint32_t _tgt = {R(i.rs)}; {wr(i.rd, f'0x{i.addr + 8:08X}u')} {ds_c} "
+        L.append(f"  {{ uint32_t _tgt = {R(i.rs)}; {wr(i.rd, addr_const(i.addr + 8))} {ds_c} "
                  f"{N.router}(c, _tgt); }}")
     return L
 
@@ -1810,7 +2025,7 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         # guest busy-wait paced by a per-vblank callback can never terminate, because nothing
         # advances time between two guest instructions. Both share one word so the hot path cost is
         # unchanged: still a single load-and-test, however many kinds of work exist.
-        d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = 0x{a:08X}u; "
+        d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = {addr_const(a)}; "
                  f"if (c->pending_work) rec_irq_poll(c); if ({N.ovtab}[{i}]) {{ "
                  f"{N.ovtab}[{i}](c); return; }} {N.gen}_{a:08X}(c); }}")
     d.append(f"int {N.index}(uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
@@ -1819,7 +2034,7 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     d.append("    default: return -1;\n  }\n}")
     d.append(f"void {N.setov}(uint32_t addr, OverrideFn fn) "
              f"{{ int i = {N.index}(addr); if (i >= 0) {N.ovtab}[i] = fn; }}")
-    d.append(f"void {N.dispatch}(Core* c, uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
+    d.append(f"void {N.dispatch}(Core* c, uint32_t addr) {{\n  switch ({link_space('addr')} & 0x1FFFFFFFu) {{")
     for a in funcs:
         d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: {N.wrap}_{a:08X}(c); return;")
     d.append("    default: rec_dispatch_miss(c, addr); return;\n  }\n}")
@@ -1918,7 +2133,7 @@ def main():
     OVERLAY_EXTRA_SEEDS = gs["overlay_seeds"]
     # ---- pass 1: load every overlay image (the area set must be complete + IN AREA ORDER before
     # the per-area MAIN tables can be resolved — entry i of such a table is an address in overlay i).
-    ov_images = []          # (stem, fn, base, data, ovexe)
+    ov_images = []          # (stem, fn, base, data, ovexe, reloc_hi16 | None)
     if ov_dir and os.path.isdir(ov_dir):
         for fn in sorted(os.listdir(ov_dir)):
             if not fn.upper().endswith(".BIN"):
@@ -1936,18 +2151,33 @@ def main():
                          f"load destination (PSXPORT_DEBUG=cd over a boot->field run) and add it under "
                          f"`overlay_bases` (or `overlay_base_patterns` for a family sharing one slot).")
             ov_images.append((stem, fn, base, data,
-                              psexe.PsxExe(base, 0, base, len(data), 0, 0, data)))
+                              psexe.PsxExe(base, 0, base, len(data), 0, 0, data),
+                              load_reloc_sidecar(os.path.join(ov_dir, fn[:-4] + ".reloc.json"), base,
+                                                 len(data), fn)))
     # A0<n> sorts lexicographically in area order (A00..A09, A0A..A0L), which is the index order the
     # game's area byte uses; sorted(os.listdir) already put them that way.
-    area_exes = [(stem, ovexe) for stem, _, _, _, ovexe in ov_images
+    area_exes = [(stem, ovexe) for stem, _, _, _, ovexe, _ in ov_images
                  if re.fullmatch(r"A0[0-9A-Z]", stem)]
     area_tbl_seeds = area_indexed_overlay_tables(exe, area_exes)
 
     # ---- pass 2: emit each overlay module.
-    overlays = []   # (tag, NAME, base, end, sig32 bytes, Names)
-    for stem, fn, base, data, ovexe in ov_images:
+    overlays = []   # (tag, NAME, base, end, sig32 bytes, Names, relocatable)
+    global g_mod
+    for stem, fn, base, data, ovexe, hi16 in ov_images:
         tag = re.sub(r"[^a-z0-9]", "_", fn[:-4].lower())
         N = overlay_names(tag)
+        # A module with a relocation sidecar is emitted BASE-RELATIVE (see ModuleReloc): its live
+        # address is decided by the GAME's allocator at load time, so nothing here may bake it in.
+        # The Core::ovDelta[] slot is the module's ordinal in g_rec_overlays[], which is this loop's
+        # append order — the two must not drift, so the index is taken from the list being built.
+        g_mod = None
+        if hi16 is not None:
+            if len(overlays) >= REC_MAX_OVERLAYS:
+                sys.exit(f"[recomp] {fn} is relocatable module #{len(overlays)}, but Core::ovDelta[] "
+                         f"holds {REC_MAX_OVERLAYS} (runtime/recomp/core.h kRecMaxOverlays). Raise it "
+                         f"there and rebuild — a silently truncated table would mis-route dispatch.")
+            g_mod = ModuleReloc(len(overlays), base, base + len(data), hi16)
+            check_hi16_consumers(ovexe, hi16, fn)
         # Both the explicit seeds and the discovered per-area table entries are runtime-computed
         # ENTRY POINTS, so they get the same re-entry treatment (a preceding body that runs off its
         # end into one of them must continue into it, not `return`).
@@ -1963,7 +2193,8 @@ def main():
                   f"{prol} prologues in {len(data)} bytes) — emitting an EMPTY module; the router "
                   f"keeps its signature entry and a call into it fails fast at dispatch")
             src_files += emit_module(ovexe, out_dir, N, set(), None, None, shards=2)
-            overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
+            overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N, hi16 is not None))
+            g_mod = None
             continue
         if explicit and not looks_like_code(ovexe):
             # Noreturn code (a stage main that never `jr ra`s — Tomba!2 START.BIN) trips the data
@@ -1976,7 +2207,8 @@ def main():
         soft_ov = func_entries_after_return(ovexe)   # jr-ra boundaries (mergeable if false)
         src_files += emit_module(ovexe, out_dir, N, hard_ov, None, None, shards=2,
                                  soft_seeds=soft_ov, reentry=explicit)
-        overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N))
+        overlays.append((tag, fn[:-4].upper(), base, base + len(data), data[:32], N, hi16 is not None))
+        g_mod = None
 
     # Overlay routing table consumed by overlay_router.cpp.
     write_overlay_table(out_dir, exe, overlays)
@@ -2070,29 +2302,33 @@ def area_indexed_overlay_tables(main_exe, area_exes, min_valid_frac=0.8):
 
 
 def write_overlay_table(out_dir, main_exe, overlays):
-    """Emit generated/overlay_table.{h,c}: MAIN text range + per-overlay (base,end,name,dispatch,sig)
-    descriptors for the runtime router (overlay_router.cpp)."""
+    """Emit generated/overlay_table.{h,c}: MAIN text range + per-overlay descriptor for the runtime
+    router (overlay_router.cpp).
+
+    `base`/`end` are the LINK range — where this module's code was recompiled to sit. For a
+    RELOCATABLE module that is not where it runs: the game's allocator picks the live base at load
+    time and the router adds the per-Core delta. For a fixed-base overlay the two coincide."""
     mlo, mhi = main_exe.load & 0x1FFFFFFF, main_exe.text_end & 0x1FFFFFFF
     h = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", "#pragma once",
          '#include "core.h"',
          '#include "recomp_iface.h"   // framework: struct RecOverlay (owned framework-side, not redefined here)', "",
          f"#define REC_MAIN_LO 0x{mlo:08X}u", f"#define REC_MAIN_HI 0x{mhi:08X}u", "",
          "void main_dispatch(Core*, uint32_t);", ""]
-    for tag, NAME, base, end, sig, N in overlays:
+    for tag, NAME, base, end, sig, N, relocatable in overlays:
         h.append(f"void {N.dispatch}(Core*, uint32_t);")
         h.append(f"int {N.index}(uint32_t);")
     h += ["extern const RecOverlay g_rec_overlays[];", "extern const int g_rec_overlay_count;", ""]
     write_if_changed(os.path.join(out_dir, "overlay_table.h"), "\n".join(h) + "\n")
 
     c = ["// GENERATED by tools/recomp/emit.py — DO NOT EDIT.", '#include "overlay_table.h"', ""]
-    for tag, NAME, base, end, sig, N in overlays:
+    for tag, NAME, base, end, sig, N, relocatable in overlays:
         bytes_c = ", ".join(f"0x{b:02X}" for b in sig)
         c.append(f"static const unsigned char sig_{tag}[{len(sig)}] = {{ {bytes_c} }};")
     c.append("")
     c.append("const RecOverlay g_rec_overlays[] = {")
-    for tag, NAME, base, end, sig, N in overlays:
+    for tag, NAME, base, end, sig, N, relocatable in overlays:
         c.append(f"  {{ 0x{base:08X}u, 0x{end:08X}u, \"{NAME}\", {N.dispatch}, {N.index}, "
-                 f"sig_{tag}, {len(sig)} }},")
+                 f"sig_{tag}, {len(sig)}, {1 if relocatable else 0} }},")
     c.append("};")
     c.append(f"const int g_rec_overlay_count = {len(overlays)};")
     write_if_changed(os.path.join(out_dir, "overlay_table.c"), "\n".join(c) + "\n")

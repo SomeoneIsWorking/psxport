@@ -18,6 +18,8 @@
 #include "recomp_iface.h"      // seam: psxport_recomp() -> main_dispatch / rec_func_index / overlay table
 #include "cfg.h"               // cfg_dbg("ovload") — per-core MODE-slot overlay residency trace
 #include "override_registry.h" // overrides::dispatch — native engine/game override interception
+#include <lucent/log.h>
+#include <stdlib.h>            // abort() — the overlapping-placement fail-fast
 #include <string.h>
 #include <stdio.h>
 
@@ -99,31 +101,81 @@ static const RecOverlay* resident_overlay(Core* c, uint32_t base) {
   return cached;
 }
 
-// Exact, name-keyed residency. See the header for why signature identification is not sufficient for
-// a port that pins many modules to one base.
-int overlay_set_resident(Core* c, const char* name) {
+// ---- RELOCATABLE MODULES: the live placement registry (overlay_router.h) -------------------------
+//
+// Core::ovBase[i] is module i's live base, or 0 when it is not resident; Core::ovDelta[i] is the
+// difference from its link base, which the module's own recompiled code adds to every address it
+// composes. The two are written together and only here.
+int overlay_live_index(Core* c, uint32_t addr) {
+  if (!c->ovLive) return -1;
   const RecompRegistry* R = psxport_recomp();
-  for (int i = 0; i < R->overlay_count; i++) {
-    const RecOverlay* o = &R->overlays[i];
-    if (!o->name || !name) continue;
-    const char *a = o->name, *b = name;
-    while (*a && *b && *a == *b) { a++; b++; }
-    if (*a || *b) continue;                       // not this one
-    const int s = slot_index(c, o->base);
-    if (s < 0) {
-      cfg_loge("ovload", "overlay '%s' is emitted at 0x%08X, which is not a declared slot base — "
-                         "GameConfig::overlaySlots must list it or dispatch cannot route there.",
-               o->name, o->base);
-      return 0;
-    }
-    c->game->pcSched.resident_ov[s] = o;
-    if (cfg_dbg("ovload")) cfg_logf("ovload", "slot %d <- '%s' (exact, by name)", s, o->name);
-    return 1;
+  const uint32_t a = addr & 0x1FFFFFFFu;
+  for (int i = 0; i < R->overlay_count && i < Core::kRecMaxOverlays; i++) {
+    if (!c->ovBase[i]) continue;
+    const uint32_t lo = c->ovBase[i] & 0x1FFFFFFFu;
+    const uint32_t hi = lo + (R->overlays[i].end - R->overlays[i].base);
+    if (a >= lo && a < hi) return i;
   }
-  cfg_loge("ovload", "no recompiled overlay is named '%s' — a call into it will fail as a dispatch "
-                     "miss. Is it listed in the seed file's overlay_base_patterns / overlay_seeds?",
-           name ? name : "(null)");
-  return 0;
+  return -1;
+}
+
+int overlay_place(Core* c, const char* name, uint32_t base, uint32_t size) {
+  const RecompRegistry* R = psxport_recomp();
+  for (int i = 0; i < R->overlay_count && i < Core::kRecMaxOverlays; i++) {
+    const RecOverlay* o = &R->overlays[i];
+    if (!o->name || !name || strcmp(o->name, name) != 0) continue;
+    if (!o->relocatable) {
+      lucent::error("ovload", "module '{}' was placed at 0x{:08X} at runtime, but it was recompiled "
+                              "at the FIXED base 0x{:08X}. Its emitted code has that address baked "
+                              "in, so running it anywhere else executes the wrong bytes.",
+                    name, base, o->base);
+      return -1;
+    }
+    // The invariant the base-relative design rests on: no two resident modules overlap. Checked on
+    // every placement, because the alternative is one module's code silently running as another's.
+    const uint32_t lo = base & 0x1FFFFFFFu, hi = lo + size;
+    for (int j = 0; j < R->overlay_count && j < Core::kRecMaxOverlays; j++) {
+      if (j == i || !c->ovBase[j]) continue;
+      const uint32_t jlo = c->ovBase[j] & 0x1FFFFFFFu;
+      const uint32_t jhi = jlo + (R->overlays[j].end - R->overlays[j].base);
+      if (lo < jhi && jlo < hi) {
+        lucent::error("ovload", "\nmodule '{}' is being placed at 0x{:08X}..0x{:08X} but '{}' is "
+                                "already live at 0x{:08X}..0x{:08X}.\n"
+                                "  Two resident modules cannot share guest bytes: whichever loaded "
+                                "last owns the code, and the other module's still-live method table "
+                                "points into it. The game's own allocator cannot produce this — it "
+                                "means the loader intercept named the wrong allocation as the module "
+                                "body, or a body was freed without evicting it from this registry.",
+                      name, base, base + size, R->overlays[j].name,
+                      c->ovBase[j], c->ovBase[j] + (R->overlays[j].end - R->overlays[j].base));
+        fflush(stderr);
+        abort();
+      }
+    }
+    if (!c->ovBase[i]) ++c->ovLive;
+    c->ovBase[i]  = base;
+    c->ovDelta[i] = (int32_t)(base - o->base);
+    lucent::debug("ovload", "module '{}' live at 0x{:08X}..0x{:08X} (delta {:+#x} from link base "
+                            "0x{:08X})", name, base, base + size, c->ovDelta[i], o->base);
+    return i;
+  }
+  lucent::error("ovload", "no recompiled module is named '{}' — a call into it will fail as a "
+                          "dispatch miss. Is it listed in the seed file's overlay_base_patterns / "
+                          "overlay_seeds?", name ? name : "(null)");
+  return -1;
+}
+
+int overlay_evict_at(Core* c, uint32_t base) {
+  const RecompRegistry* R = psxport_recomp();
+  for (int i = 0; i < R->overlay_count && i < Core::kRecMaxOverlays; i++) {
+    if (c->ovBase[i] != base) continue;
+    lucent::debug("ovload", "module '{}' evicted from 0x{:08X}", R->overlays[i].name, base);
+    c->ovBase[i]  = 0;
+    c->ovDelta[i] = 0;
+    --c->ovLive;
+    return i;
+  }
+  return -1;
 }
 
 // Diagnostic for the miss path (hle.cpp): for a slot-range address, report which overlay is currently
@@ -132,8 +184,11 @@ int overlay_set_resident(Core* c, const char* name) {
 const char* overlay_router_resident_name(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry* R = psxport_recomp();
+  const int live = overlay_live_index(c, addr);
+  if (live >= 0) return R->overlays[live].name;
   for (int i = 0; i < R->overlay_count; i++) {
     const RecOverlay* o = &R->overlays[i];
+    if (o->relocatable) continue;
     if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
       const RecOverlay* res = resident_overlay(c, o->base);
       return res ? res->name : "none";
@@ -155,7 +210,10 @@ int rec_addr_has_entry(Core* c, uint32_t addr) {
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry* R = psxport_recomp();
   if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) return R->rec_func_index(addr) >= 0;
+  const int live = overlay_live_index(c, addr);
+  if (live >= 0) return R->overlays[live].idx(addr - (uint32_t)c->ovDelta[live]) >= 0;
   for (int i = 0; i < R->overlay_count; i++) {
+    if (R->overlays[i].relocatable) continue;   // routed by live base, handled above
     const RecOverlay* o = &R->overlays[i];
     if (a < (o->base & 0x1FFFFFFF) || a >= (o->end & 0x1FFFFFFF)) continue;
     const RecOverlay* res = resident_overlay(c, o->base);
@@ -280,8 +338,19 @@ void rec_dispatch(Core* c, uint32_t addr) {
     if (otattr_on) c->idiag.otattrPop();
     return;
   }
+  // A RELOCATABLE module owns whatever range it was placed at, so it is routed by live base. Its
+  // own switch takes the LIVE address (that is what a dispatch miss must report) and subtracts the
+  // delta itself, so nothing is translated here.
+  const int live = overlay_live_index(c, addr);
+  if (live >= 0) {
+    if (otattr_on) c->idiag.otattrPush(addr);
+    R->overlays[live].disp(c, addr);
+    if (otattr_on) c->idiag.otattrPop();
+    return;
+  }
   for (int i = 0; i < R->overlay_count; i++) {
     const RecOverlay* o = &R->overlays[i];
+    if (o->relocatable) continue;               // live-base routed, handled above
     if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
       const RecOverlay* res = resident_overlay(c, o->base);
       if (res) {

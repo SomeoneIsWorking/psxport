@@ -27,12 +27,19 @@ typedef void (*RecOverrideFn)(Core*);
 // redefining the struct. The overlay TABLE itself (g_rec_overlays / g_rec_overlay_count) stays
 // generated and is reached through RecompRegistry::overlays below.
 struct RecOverlay {
-  uint32_t base, end;             // guest address range this overlay occupies when resident
+  uint32_t base, end;            // the LINK range this overlay's code was recompiled for
   const char* name;              // overlay file stem (DEMO/GAME/...), for diagnostics
-  void (*disp)(Core*, uint32_t); // this overlay's address->fn switch
-  int  (*idx)(uint32_t);         // addr -> function-entry index, or -1 if addr is not an entry
+  void (*disp)(Core*, uint32_t); // this overlay's address->fn switch. Takes a LIVE guest address.
+  int  (*idx)(uint32_t);         // LINK-space addr -> function-entry index, or -1 if not an entry
   const unsigned char* sig;      // first 32 bytes of the overlay image (resident-ID signature)
   unsigned siglen;
+  // RELOCATABLE: this module is recompiled base-relative and the game's allocator decides where it
+  // lives. `base`/`end` are then only its LINK range — the router must not range-test against them.
+  // Where it actually is comes from the per-Core live registry (overlay_router.cpp), and `sig` does
+  // not identify it either: guest RAM holds the image relocated to the LIVE base, so its first bytes
+  // differ from the ones baked in here. A relocatable module is routed by RANGE over live bases,
+  // which is unambiguous precisely because two live modules cannot occupy the same address.
+  unsigned relocatable;
 };
 
 // RecompRegistry — the game's generated substrate, presented to the framework as function/table
