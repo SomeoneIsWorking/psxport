@@ -440,7 +440,7 @@ static void game_main(Core* c) {
                       // and re-arms after an idle suspend); c_subsys.h C-linkage decl
     native_step_frame(c, f);   // one frame of deterministic guest work (steppable core; see fn above).
     // native_step_frame -> ov_frame_update OWNS present + pace + per-vblank audio (PC-driven frame body),
-    // so the loop no longer needs a separate pacer here (the earlier orphaned-override stopgap is gone).
+    // so this loop runs no pacer of its own.
     // PSXPORT_SEQDBG — libsnd sequencer STATE trace (from SsSeqCalled @0x80090BD0): is any BGM
     // sequence OPEN/PLAYING? 0x801054B0=open-seq count, 0x80104C28=playing bitmask, 0x800AC424=tick
     // mode, 0x800AC42C=SsSeqCalled ptr. If these never go nonzero, no song is ever started → the

@@ -1027,8 +1027,8 @@ void Sbs::Impl::checkObservables() {
     const int idx = kNObs + 1;
     if (!mObsDone[idx]) {
       if (!mObsSpuA) { mObsSpuA = (uint8_t*)malloc(524288); mObsSpuB = (uint8_t*)malloc(524288); }
-      mA->spu.bind(); SPU_PeekRAM(mObsSpuA);
-      mB->spu.bind(); SPU_PeekRAM(mObsSpuB);
+      mA->spu.bind(&mA->core); SPU_PeekRAM(mObsSpuA);
+      mB->spu.bind(&mB->core); SPU_PeekRAM(mObsSpuB);
       uint32_t bad = 0; bool diff = false;
       if (memcmp(mObsSpuA, mObsSpuB, 524288) != 0) {
         for (uint32_t o = 0; o < 524288; o++)

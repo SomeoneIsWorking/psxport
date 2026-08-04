@@ -13,6 +13,11 @@ void  SPU_Power(void);        // reset the BOUND state to power-on (after SPU_In
 void  SPU_PeekRAM(uint8_t* dst);       // copy the BOUND instance's 512 KB SPU RAM (observable compares)
 void  SPU_PokeRAM(const uint8_t* src); // restore it (SV_CHECK leg isolation)
 
+// SPU IRQ line (spu_beetle.c). The SPU raises it on an SPU-RAM address match; `core` is the Core whose
+// I_STAT bit 9 that raise latches into (null -> the line is dropped, e.g. before the first bind).
+// Bound per core frame-step alongside the SPU state itself, so two cores never cross interrupt lines.
+void  spu_bind_irq_core(void* core);
+
 // SBS SPU write log (spu_beetle.c). Per-Game log buffer of (addr, val) pairs — spu_write appends
 // to the currently-bound log via spu_bind_log. SBS resets both cores' logs at frame start and
 // compares them at frame end (Issue #29: catch audio-relevant divergences).

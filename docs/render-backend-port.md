@@ -65,13 +65,19 @@ absent on iOS, and its immediate-mode batch fought a custom integer-VRAM PSX ras
     the intro FMV renders correctly (scratch/screenshots/window_grab*.png). gpu_vk.cpp kept for reference.
   - Diagnostics (tracked): `PSXPORT_GPU_TRACE` (per-present src occupancy + disp region; readback nz),
     `PSXPORT_GPU_DEBUG` (SDL_GPU device validation — slows boot, can trip the watchdog).
-  - NOTE: 3D `draw_*` are STOPGAP no-ops (Pass 2). Headless `shot` can read the BACK buffer (display
-    page x=320 vs the sampled 0,0) at some frames; the WINDOWED present samples the live front buffer
-    correctly — that quirk is pre-existing display-page behavior, not a renderer bug.
+  - NOTE: at the time of Pass 1 the 3D `draw_*` were no-ops (Pass 2 built them). Headless `shot` can
+    read the BACK buffer (display page x=320 vs the sampled 0,0) at some frames; the WINDOWED present
+    samples the live front buffer correctly — that quirk is pre-existing display-page behavior, not a
+    renderer bug.
 - [ ] Pass 2 — native 3D raster (draw_tri/tritri/semi) on an R16_UINT color target with IN-SHADER semi
   blend against a VRAM snapshot (no HW blend / no format alias) + a real depth buffer + the 3 ordering
   bands. This is the bulk of gpu_vk.cpp's tri/tritex/semi pipelines re-expressed; rewrite tri/tritex
   fragments to OUTPUT the packed 1555 uint (not the A1R5G5B5 swizzle).
-- [ ] Pass 3 — SBS two-target compose (native Metal → no MoltenVK black).
+- [x] **Pass 3 — SBS two-pane compose.** Landed in a different shape than planned, and the plan's
+  "two render targets" is not what it needs: the two panes come from two DIFFERENT `Game`s, so each core
+  renders and reads its own frame back to a CPU RGBA pane (`gpu_vk_render_readback`) and the free
+  function `gpu_vk_present_sbs2` composites them into one window frame. Pane geometry (A left, B right,
+  each letterboxed by its own aspect) is `runtime/recomp/sbs_pane_layout.h`, pinned by
+  `tests/test_sbs_pane_layout.cpp`.
 - [ ] delete VK (gpu_vk.cpp) + SDL2 once Pass 2/3 verified.
 - [ ] Mac Metal shaders via SDL_shadercross.

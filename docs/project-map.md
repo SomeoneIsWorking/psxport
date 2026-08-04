@@ -183,7 +183,11 @@ oracle. To verify:
   GAME loop runs (guards the recompiler stage-split freeze, later-269) AND the intro XA clip plays→completes
   headless (later-270: the SPU/XA stream is now advanced even without an audio device, so audio-gated game
   logic progresses headless). `PSXPORT_SELFTEST_VERBOSE=1` traces per-frame stage/SM. Add a new case in
-  `selftest_run()`. (The full-PSX field still doesn't progress PAST the intro cutscene under coroutines — a
+  `selftest_run()` — and note the CONSUMER must call `selftest_run()` from its `main()`, or none of these
+  can run at all (Spyro's did not, so the whole suite was unreachable from that port until 2026-08-04).
+  `=spuirq`: drives the SPU register file (IRQ address, transfer address, SPUCNT bit 6) and asserts the
+  SPU's interrupt line reaches `Hle::i_stat` bit 9 edge-latched, with a negative control. It exists
+  because NO game run exercises that path — Spyro sets SPUCNT bit 6 in 0 of its 172 SPUCNT writes. (The full-PSX field still doesn't progress PAST the intro cutscene under coroutines — a
   known diagnostic-path limit, docs/findings/sbs.md; the shipping NATIVE field is unaffected.)
 
 ## Rendering, present, and config — see the dedicated docs

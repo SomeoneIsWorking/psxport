@@ -35,9 +35,10 @@ public:
   // the hardware state, so two Cores never share an interrupt controller.
   //
   // Only sources the framework ACTUALLY models may set a bit here. Today that is bit 2 (CDROM),
-  // latched from CdcState::irq_edge. The rest stay 0 — and 0 means "this framework has no source for
-  // that interrupt", NOT "the hardware did not raise it". Do not assert a bit from a free-running
-  // timer to make some guest wait finish; that is fabricating an event.
+  // latched from CdcState::irq_edge, and bit 9 (SPU), latched from the vendored Beetle SPU's own
+  // address-match logic by spu_irq_raise (hw_bind.cpp). The rest stay 0 — and 0 means "this framework
+  // has no source for that interrupt", NOT "the hardware did not raise it". Do not assert a bit from a
+  // free-running timer to make some guest wait finish; that is fabricating an event.
   uint32_t i_stat = 0;
   uint32_t i_mask = 0;
 

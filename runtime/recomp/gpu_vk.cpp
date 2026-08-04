@@ -2,6 +2,7 @@
 #include "game.h"    // Game / GpuVkState (per-instance render state)
 #include "gpu_vk.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "gpu_vk_present_policy.h"   // present_rebuild_decision — when a present must rebuild the composite
+#include "sbs_pane_layout.h"         // pane_letterbox / sbs_pane_rect — where each frame lands in the window
 #include <lucent/log.h>              // diagnostics: lucent::debug (channel-gated internally — never guard it)
 #include "render_substrate.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
 // gpu_vk.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
@@ -530,12 +531,13 @@ static void upload_vram(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
   SDL_EndGPUCopyPass(cp);
 }
 
+// SDL_GPUViewport for a PaneRect (sbs_pane_layout.h owns the geometry; this only adds SDL's depth range).
+static SDL_GPUViewport viewport_of(PaneRect r) {
+  return SDL_GPUViewport{ (float)r.x, (float)r.y, (float)r.w, (float)r.h, 0.0f, 1.0f };
+}
 // Compute the letterboxed viewport for an aspect aw:ah within the window (ow x oh).
 static SDL_GPUViewport letterbox(int aw, int ah, int ow, int oh) {
-  int dw, dh;
-  if (ow * ah >= oh * aw) { dh = oh; dw = oh * aw / ah; } else { dw = ow; dh = ow * ah / aw; }
-  SDL_GPUViewport vp = { (float)((ow - dw) / 2), (float)((oh - dh) / 2), (float)dw, (float)dh, 0.0f, 1.0f };
-  return vp;
+  return viewport_of(pane_letterbox(aw, ah, ow, oh));
 }
 
 // Upload this frame's VRAM snapshot (texture/CLUT atlas source) + the geometry batches, then render in
@@ -1435,11 +1437,6 @@ void GpuVkState::panel_upload(Panel* p) { (void)p; }
 void GpuVkState::panel_render(Panel* p) { (void)p; }
 void GpuVkState::ssao_pass() {}
 void GpuVkState::shadow_pass() {}
-void GpuVkState::present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h, int repaint) {
-  // STOPGAP: SBS two-pane composite is Pass 3. For now present core A's frame so the window stays live.
-  (void)vramB; (void)repaint;
-  if (vramA) present(vramA, sx, sy, w, h);
-}
 // PSXPORT_GPU_SELFTEST=1: headless renderer self-test, then exit. Renders a KNOWN VRAM pattern through the
 // REAL present pipeline (present.vert/frag) into an offscreen RGBA8 target, reads it back, and asserts:
 //   (1) ORIENTATION — VRAM row 0 (top) lands at the TOP of the output, not the bottom. This is the
@@ -1562,15 +1559,15 @@ void gpu_vk_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const
   if (!gpu_vk_enabled() || s_headless) return;
   if (!s_inited) init_gpu(game);
   if (wA < 1) wA = 1; if (hA < 1) hA = 1; if (wB < 1) wB = 1; if (hB < 1) hB = 1;
-  sbs_make_tex(0, wA, hA); sbs_make_tex(1, wB, hB);
-  const uint8_t* rgb[2] = { rgbaA, rgbaB };
-  int pw[2] = { wA, wB }, ph[2] = { hA, hB };
+  sbs_make_tex(SBS_PANE_A, wA, hA); sbs_make_tex(SBS_PANE_B, wB, hB);
+  const uint8_t* rgb[SBS_PANE_COUNT] = { rgbaA, rgbaB };
+  int pw[SBS_PANE_COUNT] = { wA, wB }, ph[SBS_PANE_COUNT] = { hA, hB };
 
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "sbs cmd");
-  for (int i = 0; i < 2; i++) { void* p = SDL_MapGPUTransferBuffer(s_dev, s_sbs_xfer[i], true);
+  for (int i = 0; i < SBS_PANE_COUNT; i++) { void* p = SDL_MapGPUTransferBuffer(s_dev, s_sbs_xfer[i], true);
     memcpy(p, rgb[i], (size_t)pw[i] * ph[i] * 4); SDL_UnmapGPUTransferBuffer(s_dev, s_sbs_xfer[i]); }
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
-  for (int i = 0; i < 2; i++) { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = s_sbs_xfer[i]; si.pixels_per_row = (Uint32)pw[i]; si.rows_per_layer = (Uint32)ph[i];
+  for (int i = 0; i < SBS_PANE_COUNT; i++) { SDL_GPUTextureTransferInfo si = {}; si.transfer_buffer = s_sbs_xfer[i]; si.pixels_per_row = (Uint32)pw[i]; si.rows_per_layer = (Uint32)ph[i];
     SDL_GPUTextureRegion dr = {}; dr.texture = s_sbs_tex[i]; dr.w = (Uint32)pw[i]; dr.h = (Uint32)ph[i]; dr.d = 1;
     SDL_UploadToGPUTexture(cp, &si, &dr, false); }
   SDL_EndGPUCopyPass(cp);
@@ -1583,11 +1580,10 @@ void gpu_vk_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const
   float fpc[4] = { 1.0f, 0, 0, 0 };   // no fade (already applied in the readback)
   SDL_PushGPUFragmentUniformData(cmd, 0, fpc, sizeof fpc);
   SDL_BindGPUGraphicsPipeline(rp, s_image_pipe);
-  int paneW = (int)sw / 2;
   SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
-  for (int i = 0; i < 2; i++) {
-    SDL_GPUViewport vp = letterbox(pw[i], ph[i], paneW, (int)sh);   // per-pane aspect (A may be wide, B 4:3)
-    vp.x += (float)(i * paneW);
+  for (int i = 0; i < SBS_PANE_COUNT; i++) {
+    // A left, B right, each letterboxed inside its own half by its OWN aspect (A may be wide, B 4:3).
+    SDL_GPUViewport vp = viewport_of(sbs_pane_rect(i, pw[i], ph[i], (int)sw, (int)sh));
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
     SDL_GPUTextureSamplerBinding tsb = { s_sbs_tex[i], s_samp_linear };
     SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
@@ -1636,12 +1632,6 @@ void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int 
 void gpu_vk_repaint(Core* core) {
   overlay_glue_frame_begin(core);   // the RmlUi overlay stays interactive while the game is frozen
   core->game->gpu_vk.repaint();
-}
-void gpu_vk_present_sbs(Core* coreA, const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h) {
-  coreA->game->gpu_vk.present_sbs(vramA, vramB, sx, sy, w, h, 0);
-}
-void gpu_vk_present_sbs_repaint(Core* coreA, int sx, int sy, int w, int h) {
-  coreA->game->gpu_vk.present_sbs(nullptr, nullptr, sx, sy, w, h, 1);
 }
 void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }

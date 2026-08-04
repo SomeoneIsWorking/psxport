@@ -2,9 +2,9 @@
 // (mednafen/psx/spu.c, compiled as-is). All of the game's audio — 24 ADPCM voices,
 // ADSR enveloping, pitch/sweeps, noise, reverb, and CD-DA mixing — flows through here;
 // the SPU mixes 44.1 kHz stereo into Beetle's global IntermediateBuffer. This adapts a
-// CLEAN recomp interface (spu_*) to Beetle's SPU_* API and provides faithful-first stubs
-// for the handful of externs spu.c references (IRQ controller not yet wired, CD-DA source
-// not yet wired, savestate unused) so the mixed output matches the oracle exactly.
+// CLEAN recomp interface (spu_*) to Beetle's SPU_* API and provides definitions for the
+// handful of externs spu.c references (the SPU IRQ line, the CD-DA source, savestate) so
+// the mixed output matches the oracle exactly.
 //
 // Dependency surface (from `nm -u` on spu.o, minus libc memcpy/memset/__assert_fail):
 //   spu_samples                — config: SPU update granularity in 44.1kHz samples
@@ -56,15 +56,26 @@ uint8_t spu_samples = 1;
 // idempotent and the audio output as bit-identical. Upstream default is true. Faithful = true.
 bool psx_spu_silent_voice_opt = true;
 
-// Interrupt controller — SPU IRQ line (IRQ_SPU = 9 in irq.h). The interpreter/runtime
-// owns interrupt delivery; until the PM wires the SPU IRQ into it, this is a faithful
-// no-op (the SPU computes the assert level correctly; only delivery is deferred).
-// STOPGAP: route to the runtime's interrupt controller because the SPU IRQ (e.g. used
-// for SPU-RAM-address-match streaming) must reach the CPU; deferred to PM wiring.
+// Interrupt controller — the SPU IRQ line. spu.c raises it when SPUCNT bit 6 is set and a voice's
+// (or the transfer port's) SPU-RAM address matches IRQAddr, which is how a guest streams sample data
+// into SPU RAM behind a playing voice: it arms the address one buffer ahead and refills on the
+// interrupt. Only spu.c links this symbol (nothing else lifted from Beetle calls IRQ_Assert), so the
+// only line that can arrive here is IRQ_SPU = 9.
+//
+// The line is delivered to the Core bound by spu_bind_irq_core (SpuDevice::bind, per core frame-step
+// — the same instance-free bind spu_bind_log uses), which latches the rising edge into that Game's
+// I_STAT bit 9 and lets the existing Hle::irqPoll chain run the guest's handler. NULL before the
+// first bind and in the psxport_smoke link, where there is no Core to raise on.
+void spu_irq_raise(void* core, int asserted);   // hw_bind.cpp (C++ side owns Game/Hle)
+
+static void* s_irq_core = 0;
+void spu_bind_irq_core(void* core) { s_irq_core = core; }
+
 void IRQ_Assert(int which, bool asserted)
 {
-   (void)which;
-   (void)asserted;
+   (void)which;   // IRQ_SPU (9) is the only source that reaches this adapter — see above
+   if (s_irq_core)
+      spu_irq_raise(s_irq_core, asserted ? 1 : 0);
 }
 
 // CD-DA / CD-XA audio source. spu.c calls this once per output sample to fetch the stereo CD

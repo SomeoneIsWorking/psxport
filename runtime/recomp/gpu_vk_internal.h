@@ -209,12 +209,10 @@ struct GpuVkState {
   // pause loop's window keep-alive. See the body in gpu_vk.cpp for why a pause must never re-render.
   void repaint();
   void show_composite(SDL_GPUCommandBuffer* cmd);   // the shared swapchain half of present()/repaint()
-  // PSXPORT_SBS: composite TWO different cores' frames (already emitted into batches 0 and 1) into the
-  // two side-by-side panes in ONE window frame. vramA/vramB are each core's CPU VRAM; each is uploaded to
-  // its own staging buffer + panel so the two panes show the two cores. One acquire/cmd/submit/present.
-  // repaint=1: re-present the existing persistent panel images (no VRAM upload / geometry re-record), used
-  // while the harness is PAUSED so the window stays live. repaint=0: normal two-core upload+render+composite.
-  void present_sbs(const uint16_t* vramA, const uint16_t* vramB, int sx, int sy, int w, int h, int repaint);
+  // PSXPORT_SBS two-pane present is NOT a GpuVkState method: each core renders + reads its own frame back
+  // to a CPU RGBA pane (gpu_vk_render_readback), and the free function gpu_vk_present_sbs2 composites the
+  // two panes into one window frame. A method could not do it — the two panes come from two DIFFERENT
+  // Games, so neither Game's GpuVkState owns both.
   void draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                 int x2,int y2,int r2,int g2,int b2);
   void draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,

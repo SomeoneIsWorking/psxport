@@ -1809,7 +1809,7 @@ void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(co
 // never reset — see GpuState::frame_finalize). Replaces the bare gpu_vk_frame_end grabPane used to call.
 void gpu_present_finalize(Core* core) { core->game->gpu.frame_finalize(core); }
 // PSXPORT_SBS accessors: each core's CPU front-buffer (s_vram) + its current display region, so the SBS
-// composite can present each core's frame into its own pane (gpu_vk_present_sbs). GpuState is a plain
+// composite can present each core's frame into its own pane (gpu_vk_present_sbs2). GpuState is a plain
 // struct (all-public), so these reach the members directly.
 const uint16_t* gpu_vram_ptr(Core* core) { return core->game->gpu.s_vram; }
 void gpu_disp_region(Core* core, int* sx, int* sy, int* w, int* h) {

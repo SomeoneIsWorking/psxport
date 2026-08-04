@@ -12,9 +12,18 @@
 #include "cfg.h"
 #include "c_subsys.h"   // mdec_* primitives (run_mdecpump)
 #include "hw_bind.h"    // mdec_bind (run_mdecpump)
+#include "hle.h"        // Hle::i_stat — the interrupt controller run_spuirq asserts on
+#include <lucent/log.h> // diagnostics: lucent::info / error (channel-gated internally, never guarded)
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// SPU adapter (spu_beetle.c, plain C): the register file the run_spuirq self-test drives.
+extern "C" {
+void spu_init(void);
+void spu_write(uint32_t addr, uint32_t val);
+}
 
 struct XaState;
 extern "C" int xa_stream_owns_slot2(XaState* xs);
@@ -599,6 +608,74 @@ static int run_mdecpump(const char*) {
   return 0;
 }
 
+// PSXPORT_SELFTEST=spuirq — does the SPU's interrupt line actually reach the CPU?
+//
+// No game run can answer that. Measured on Spyro over 600 headless frames, the guest performs 172
+// SPUCNT writes carrying five distinct values (0000, 0010, C000, C001, C021) and NOT ONE sets bit 6,
+// so it never arms the SPU IRQ at all — while doing 240,000 SPU register writes and 37,230 key-ons,
+// i.e. the SPU is thoroughly exercised and this one line is not. A path no run exercises is a path
+// that rots silently, which is exactly how IRQ_Assert came to be an unconditional no-op. So drive it
+// here, in the shipping artifact, where a regression is a failed test rather than missing audio in
+// some other game two months from now.
+//
+// The trigger is the SPU's own documented one (Beetle spu.c SPU_Write cases 0x24/0x26/0x2A): with
+// SPUCNT bit 6 set, writing IRQAddr, the transfer address, or SPUCNT re-checks the transfer address
+// against IRQAddr and raises on a match. Nothing is special-cased for the test — this is the register
+// sequence a guest streaming samples into SPU RAM behind a playing voice performs.
+static int run_spuirq(const char*) {
+  Game* game = new Game();
+  Core* c = &game->core;
+  spu_init();        // one-time global Beetle SPU init
+  spu_bind(c);       // this core's SPU instance, its write log, and its IRQ-line target
+
+  const uint32_t SPU_IRQ_ADDR = 0x1F801DA4;   // IRQ address    (word address >> 3)
+  const uint32_t SPU_XFER_ADDR = 0x1F801DA6;  // transfer address (word address >> 3)
+  const uint32_t SPUCNT = 0x1F801DAA;
+  const uint32_t MATCH = 0x100;               // both registers point at SPU-RAM word 0x400
+  const uint32_t I_STAT_SPU = 1u << 9;
+  Hle& hle = game->hle;
+  int fails = 0;
+  auto check = [&](bool ok, const char* what) {
+    if (ok) return;
+    fails++;
+    lucent::error("selftest", "spuirq FAIL: {} (I_STAT=0x{:03X} pending_work=0x{:X})",
+                  what, hle.i_stat, (unsigned)c->pending_work);
+  };
+
+  // (1) NEGATIVE CONTROL. SPUCNT bit 6 is clear, so an address match must raise NOTHING. Without this
+  //     leg a test that always reported "raised" would look identical to a correct one.
+  spu_write(SPU_IRQ_ADDR, MATCH);
+  spu_write(SPU_XFER_ADDR, MATCH);            // transfer address == IRQ address, IRQ still disabled
+  check((hle.i_stat & I_STAT_SPU) == 0, "IRQ disabled, yet an address match latched I_STAT bit 9");
+
+  // (2) POSITIVE. Arm SPUCNT bit 6: the SPUCNT write itself re-checks the transfer address, matches,
+  //     and must latch bit 9 AND arm the delivery gate the recompiled code polls.
+  spu_write(SPUCNT, 0xC040);                  // SPU enable | IRQ enable
+  check((hle.i_stat & I_STAT_SPU) != 0, "armed IRQ on a matching address did not reach I_STAT bit 9");
+  check((c->pending_work & Core::PW_IRQ) != 0, "I_STAT bit 9 latched but PW_IRQ was not armed");
+
+  // (3) EDGE, NOT LEVEL. After the guest acks, a line that is STILL asserted must not re-raise —
+  //     otherwise every acked SPU interrupt would immediately re-enter its handler.
+  hle.i_stat &= ~I_STAT_SPU;                  // the ack a guest performs by writing I_STAT (mem.cpp)
+  spu_write(SPU_XFER_ADDR, MATCH);            // match again, line never went low
+  check((hle.i_stat & I_STAT_SPU) == 0, "a held (un-lowered) SPU line re-raised after the ack");
+
+  // (4) RE-ARM. Drop the line (clearing SPUCNT bit 6 deasserts it, per spu.c case 0x2A) and raise it
+  //     again — a streaming guest gets one interrupt per buffer, not one per run.
+  spu_write(SPUCNT, 0xC000);                  // IRQ disable -> line low
+  spu_write(SPUCNT, 0xC040);                  // re-arm -> re-check -> match -> raise
+  check((hle.i_stat & I_STAT_SPU) != 0, "the SPU line never raised again after going low");
+
+  if (fails) {
+    lucent::error("selftest", "spuirq: {} of 5 checks FAILED", fails);
+    return 1;
+  }
+  lucent::info("selftest", "PASS: spuirq — 5 checks (negative control, raise, PW_IRQ armed, "
+                           "edge-not-level after ack, re-arm) on the real spu_write -> Beetle SPU -> "
+                           "IRQ_Assert -> I_STAT bit 9 path");
+  return 0;
+}
+
 // Dispatched from boot.cpp when PSXPORT_SELFTEST is set.
 int selftest_run(const char* path) {
   const char* which = cfg_str("PSXPORT_SELFTEST");
@@ -607,6 +684,7 @@ int selftest_run(const char* path) {
   if (which && !strcmp(which, "oracle"))    return run_oracle(path);
   if (which && !strcmp(which, "oraclediff")) return run_oraclediff(path);
   if (which && !strcmp(which, "mdecpump"))  return run_mdecpump(path);
+  if (which && !strcmp(which, "spuirq"))    return run_spuirq(path);
   // Anything else may be a GAME-defined selftest — the framework deliberately does not know their
   // names (psxport is game-agnostic; see game_iface.h selftestGame).
   if (which && *which) {
@@ -614,6 +692,6 @@ int selftest_run(const char* path) {
     if (rc != 2) return rc;
   }
   cfg_logi("selftest", "unknown PSXPORT_SELFTEST='%s' (framework: startgame, narration, oracle, oraclediff, "
-                       "mdecpump; the game may define more)", which ? which : "");
+                       "mdecpump, spuirq; the game may define more)", which ? which : "");
   return 2;
 }
