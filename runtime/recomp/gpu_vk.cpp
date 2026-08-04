@@ -157,6 +157,11 @@ static int win_h(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPix
 // they always returned for a 320-wide game, and everything else scales by (native/320). 16:9 keeps
 // 428 rather than the arithmetic 426.67 because that is the value this framework has always used and
 // consumers are tuned to it; scaling preserves that choice instead of silently re-deriving it.
+// The GAME'S OWN 4:3 framebuffer width — the denominator every widescreen ratio scales from. One
+// definition, because "320" open-coded at each consumer is exactly the defect a0b88136 / 94e52472 /
+// 2c54ce71 / 6dda8528 each had to fix separately.
+int gpu_vk_native_w(Core* c) { const Game* g = c->game; return g->gpu.s_disp_w > 0 ? g->gpu.s_disp_w : 320; }
+
 static int wide_native_w(const Game* game) {
   const int native = game->gpu.s_disp_w > 0 ? game->gpu.s_disp_w : 320;
   auto scaled = [native](int for320) {

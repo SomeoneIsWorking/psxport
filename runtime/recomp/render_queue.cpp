@@ -550,6 +550,35 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
 // under PSXPORT_RQ); otherwise it draws inline immediately (default — identical to pre-queue behavior).
 // Not static: gpu_native.cpp's guest GP0/OT-walk poly and sprite submit paths (gp0_exec) also funnel their
 // queued items through this same one place via their own local extern forward declaration.
+// THE widescreen 2D layout rule. See render_queue.h for the contract; this is the whole decision.
+//
+// Two questions, in order:
+//
+//  1. WHOSE COORDINATES ARE THESE? A wide-final x came out of a projection the framework already
+//     widened, so it is finished — nothing may move it, on any layer, with any material. That is the
+//     case the queue used to get wrong: it inferred "4:3-authored" for everything except one debug
+//     node id, so the score popup's GTE-projected anchor was centred a SECOND time and landed one
+//     margin right of the character it floats over (Tomba2 kanban #73).
+//  2. If authored 4:3 — centre it, or stretch it if it is a uniform solid background fill.
+//     Stretching a flat untextured quad is uniform (it is what backs the pillarbox bars); stretching
+//     a GRADIENT or a TEXTURED backdrop would spread or squish real content, so those are centred and
+//     pillarboxed like everything else.
+//
+// The margin and the stretch both scale from the GAME'S OWN 4:3 width. A hardcoded 320 here assumed
+// every PSX game renders 320 wide — the assumption psxport a0b88136 / 94e52472 / 2c54ce71 / 6dda8528
+// each removed from one other place, and which survived here because it is a no-op for a 320-wide
+// game and nothing tested a wider one.
+Rq2dXform rq_2d_xform(int ww, int native_w, Rq2dSpace space, int layer, bool flat, bool untextured) {
+  Rq2dXform t;
+  if (space == RQ_2D_WIDE_FINAL) return t;          // already in the wide frame — finished
+  if (native_w <= 0) native_w = 320;
+  const int margin = (ww - native_w) / 2;
+  if (margin <= 0) return t;                        // 4:3, or a "wide" width that is not wider
+  if (layer == RQ_BACKGROUND && flat && untextured) { t.stretch = true; t.num = ww; t.den = native_w; }
+  else                                              { t.shift = margin; }
+  return t;
+}
+
 void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode, int nv, int semi, int raw,
                               const int* xs, const int* ys, const float* xsf, const float* ysf,
                               const int* us, const int* vs,
@@ -558,40 +587,33 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
                               int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
                               int tp_blend, const float (*sv)[3], int sort_key, float key_ord) {
   // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
-  // 2026-07-16: dialog/prompt panels sat left-anchored in wide). Native UI producers (Panel, Font/
-  // dialog text, gauges, menus) push 4:3 coords (x∈[0,320)); the wide FB spans [0,ww) with the world
-  // centered at ww/2, so un-shifted 2D hugs the left edge. Rule (mirrors gpu_native's ws_2d_local_x):
-  //   HUD/overlay -> +margin (centered, native size — matches 4:3 exactly, just registered with the
-  //                  centered world);
-  //   RQ_BACKGROUND (dbg_node==0 full-screen art/fades) -> STRETCH to fill [0,ww).
-  // EXEMPT (already wide-final coords): backdropRender's REAL wide tiles (kBackdropDbgNode via the
-  // diag scope). 3D (RQ_OM_DEPTH) never enters. 4:3: margin==0, no-op.
+  // 2026-07-16: dialog/prompt panels sat left-anchored in wide). The wide FB spans [0,ww) with the
+  // world centred at ww/2, so a 4:3-authored x hugs the left edge until it is centred.
+  //
+  // WHICH SPACE the coordinates are in is DECLARED by the producer (RenderQueue::Space2dScope), not
+  // inferred here. It used to be inferred, and the inference was wrong for every producer whose x
+  // comes out of the widened projection rather than a 4:3 layout — see rq_2d_xform and kanban #73.
+  // The rule itself lives in rq_2d_xform (hermetically tested); this is only its application.
+  // 3D (RQ_OM_DEPTH) never enters. At 4:3 the transform is the identity.
   int wxs[4]; float wxsf[4];
-  { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*);
-    if (order_mode != RQ_OM_DEPTH && gpu_vk_wide_engine(core) &&
-        core->rsub.diag.currentNode() != kBackdropDbgNode) {
-      const int ww = gpu_vk_wide_engine_w(core), margin = (ww - 320) / 2;
-      if (margin > 0) {
-        // RQ_BACKGROUND art on widescreen: only a UNIFORM SOLID FILL — flat vertex colour AND
-        // untextured (all-zero UVs) — STRETCHES to fill the wide FB (stretching a flat colour is
-        // uniform, and this is what backs the pillarbox bars). ANYTHING with visible content — a
-        // GRADIENT (non-flat colour) or a TEXTURED backdrop (title art, menu image; flat colour but
-        // real UVs) — must NOT stretch (that spreads/squishes it), so it gets the same centering
-        // +margin as every other 2D layer, pillarboxed on the flat wide fill.
-        const bool flat = rs && gs && bs &&
-                          rs[0]==rs[1] && rs[1]==rs[2] && rs[2]==rs[3] &&
-                          gs[0]==gs[1] && gs[1]==gs[2] && gs[2]==gs[3] &&
-                          bs[0]==bs[1] && bs[1]==bs[2] && bs[2]==bs[3];
-        const bool untextured = (!us || (us[0]==0 && us[1]==0 && us[2]==0 && us[3]==0)) &&
-                                (!vs || (vs[0]==0 && vs[1]==0 && vs[2]==0 && vs[3]==0));
-        const bool stretch = (layer == RQ_BACKGROUND) && flat && untextured;
-        for (int i = 0; i < nv; i++) {
-          wxs[i] = stretch ? xs[i] * ww / 320 : xs[i] + margin;
-          if (xsf) wxsf[i] = stretch ? xsf[i] * (float)ww / 320.0f : xsf[i] + (float)margin;
-        }
-        xs = wxs;
-        if (xsf) xsf = wxsf;
+  { int gpu_vk_wide_engine(Core*), gpu_vk_wide_engine_w(Core*), gpu_vk_native_w(Core*);
+    if (order_mode != RQ_OM_DEPTH && gpu_vk_wide_engine(core)) {
+      // The material shape selects the background stretch: only a UNIFORM SOLID FILL (flat vertex
+      // colour AND untextured) may be spread across the wide FB.
+      const bool flat = rs && gs && bs &&
+                        rs[0]==rs[1] && rs[1]==rs[2] && rs[2]==rs[3] &&
+                        gs[0]==gs[1] && gs[1]==gs[2] && gs[2]==gs[3] &&
+                        bs[0]==bs[1] && bs[1]==bs[2] && bs[2]==bs[3];
+      const bool untextured = (!us || (us[0]==0 && us[1]==0 && us[2]==0 && us[3]==0)) &&
+                              (!vs || (vs[0]==0 && vs[1]==0 && vs[2]==0 && vs[3]==0));
+      const Rq2dXform t = rq_2d_xform(gpu_vk_wide_engine_w(core), gpu_vk_native_w(core),
+                                      m2dSpace, layer, flat, untextured);
+      for (int i = 0; i < nv; i++) {
+        wxs[i] = t.apply(xs[i]);
+        if (xsf) wxsf[i] = t.applyf(xsf[i]);
       }
+      xs = wxs;
+      if (xsf) xsf = wxsf;
     } }
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;

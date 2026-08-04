@@ -25,6 +25,48 @@ enum RqLayer { RQ_BACKGROUND = 0, RQ_WORLD = 1, RQ_OVERLAY = 2, RQ_HUD = 3 };
 // preserving the existing 2D depth semantics — the queue changes only the draw ORDER, not depth.
 enum RqOrderMode { RQ_OM_DEPTH = 0, RQ_OM_2D_BG = 1, RQ_OM_2D_FG = 2 };
 
+// The screen space a 2D producer's x coordinates are ALREADY in.
+//
+// The queue CANNOT infer this, and must not try: two producers reach it through the very same leaf.
+// Render::emitUiFt4 serves both the 4:3-authored field HUD and the projection-anchored score popup,
+// so the space is a property of the CALLER, not of the layer, the order mode, or the material. The
+// producer declares it (RenderQueue::Space2dScope); everything that does not declare is authored 4:3,
+// which is the overwhelming majority and the historical behaviour.
+enum Rq2dSpace {
+  // x is as the game authored it, in [0, native_w): a fixed HUD / menu / panel / dialogue layout.
+  // Widescreen CENTRES it in the wide frame (or, for a uniform background fill, stretches it).
+  RQ_2D_AUTHORED_4_3 = 0,
+  // x already came out of a projection the framework itself WIDENED — the guest GTE with CR24 = OFX
+  // = nw/2 (native_boot.cpp), or the native camera — so it is in [0, ww) and ALREADY lines up with
+  // the world. Centring it again moves it off whatever it is anchored to by exactly one margin.
+  // That was Tomba2 kanban #73: the score popup sat 54 px right of the character at 16:9.
+  RQ_2D_WIDE_FINAL = 1,
+};
+
+// The resolved widescreen layout transform for one 2D submission. Split from the decision so the
+// SAME decision applies to the integer and the float vertex arrays without being re-derived.
+struct Rq2dXform {
+  int  shift   = 0;      // x + shift        (the centring margin)
+  bool stretch = false;  // x * num / den    (a uniform background fill spread across the wide FB)
+  int  num = 1, den = 1;
+  int   apply (int   x) const { return stretch ? (int)((long long)x * num / den) : x + shift; }
+  float applyf(float x) const { return stretch ? x * (float)num / (float)den : x + (float)shift; }
+};
+
+// rq_2d_xform: THE widescreen 2D layout rule, as pure arithmetic — no Core, no GPU, no globals — so
+// it is hermetically testable (tests/test_rq_widen_2d.cpp). `ww` is the wide framebuffer width and
+// `native_w` the GAME'S OWN 4:3 width; passing a hardcoded 320 here is the bug psxport a0b88136 /
+// 94e52472 / 2c54ce71 / 6dda8528 each fixed one instance of (Spyro renders 512 wide). `flat` and
+// `untextured` describe the quad's material and select the background stretch. At 4:3, ww ==
+// native_w, the margin is 0 and every path is the identity.
+Rq2dXform rq_2d_xform(int ww, int native_w, Rq2dSpace space, int layer, bool flat, bool untextured);
+
+// Single-coordinate convenience over rq_2d_xform (tests and any caller with one x).
+inline int rq_widen_2d_x(int x, int ww, int native_w, Rq2dSpace space, int layer,
+                         bool flat, bool untextured) {
+  return rq_2d_xform(ww, native_w, space, layer, flat, untextured).apply(x);
+}
+
 // Reserved dbg_node sentinel for TERRAIN prims (native_terrain.cpp, tagged via Render::diag.beginObject/
 // endObject around the quad-draw loop). Distinguishes them from the OTHER dbg_node==0 RQ_WORLD producer,
 // Render::fieldEntityRender (grass/props/"terrain props" — the SOP field-overlay SCENE TABLE walk) — a
@@ -131,6 +173,29 @@ struct RenderQueue {
   void     emitQueue(Core* core);   // emit each item to the VK rasterizer + mark consumed (no sort)
   void     zfightScan(Core* core);  // PSXPORT_ZFIGHT diag: SW-rasterize opaque depth prims, find near-equal top-2 contests
   void     mark_consumed();
+
+  // The screen space of the 2D quads being pushed RIGHT NOW. Producers that author 4:3 layout — the
+  // overwhelming majority: HUD, menus, panels, dialogue — leave it alone; a producer whose x is
+  // already wide-final raises a Space2dScope around its pushes. Per-RenderQueue (never a file-scope
+  // flag) so SBS's two cores cannot see each other's scope.
+  Rq2dSpace m2dSpace = RQ_2D_AUTHORED_4_3;
+
+  // RAII declaration of the screen space of everything pushed inside it. Restores the previous value
+  // rather than resetting to the default, so a producer nested inside another cannot silently
+  // re-space its parent's remaining quads.
+  //
+  //   { RenderQueue::Space2dScope wide(rq, RQ_2D_WIDE_FINAL);   // x came from the widened camera
+  //     ...pushes... }
+  class Space2dScope {
+   public:
+    Space2dScope(RenderQueue& rq, Rq2dSpace space) : mRq(rq), mPrev(rq.m2dSpace) { rq.m2dSpace = space; }
+    ~Space2dScope() { mRq.m2dSpace = mPrev; }
+    Space2dScope(const Space2dScope&) = delete;
+    Space2dScope& operator=(const Space2dScope&) = delete;
+   private:
+    RenderQueue& mRq;
+    Rq2dSpace    mPrev;
+  };
 
   // push2dQuad: enqueue a 2D textured quad (HUD / overlay / background) into the render queue so it is
   // part of THE FRAME and gets re-emitted on both 60fps present passes (no direct gpu_vk_draw_tritri
