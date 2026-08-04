@@ -61,7 +61,13 @@ cd psxport
 cmake -S . -B build
 cmake --build build --target psxport        # the static library
 cmake --build build --target psxport_smoke  # agnosticism proof (needs a consumer's generated/ headers)
+cmake --build build && ctest --test-dir build --output-on-failure   # the framework test gate
 ```
+
+The test suite is **hermetic** — no disc image, no GPU, no window — because psxport is shared by
+several game ports and each of them needs a disc to run at all. Adding a test means dropping one
+`tests/test_*.cpp` file in (they are globbed, not listed). See
+[`docs/project-map.md`](docs/project-map.md#tests--ctest-the-framework-gate-tests).
 
 To actually run a game, use a consumer repo (e.g. Tomba2Engine), which vendors psxport as a submodule
 and supplies the game code + the disc image.

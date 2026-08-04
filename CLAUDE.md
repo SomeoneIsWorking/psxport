@@ -12,4 +12,8 @@ symbols).
 - **Porting a NEW game:** see `docs/porting-a-new-psx-game.md` + `docs/port-framework.md`.
 - **Build:** `cmake -S . -B build && cmake --build build --target psxport` (library) or `psxport_smoke`
   (agnosticism proof; needs a consumer's `generated/` headers present to compile).
+- **Test gate:** `cmake --build build && ctest --test-dir build --output-on-failure`. A framework
+  change starts with a RED hermetic test in `tests/` (no disc, no GPU, no window) — drop in one
+  `tests/test_*.cpp` using `tests/testutil.h`; they are globbed, so no shared file to edit. See
+  `docs/project-map.md` ("Tests").
 - **Never commit CHDs or machine-specific paths.**

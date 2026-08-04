@@ -1,100 +1,123 @@
-// test_coro.cpp — unit test for the Coro fiber primitive (no game deps).
-// Standalone (no cmake target):
-//   c++ -std=c++17 -pthread -Iruntime/recomp runtime/recomp/coro.cpp tests/test_coro.cpp -o scratch/bin/test_coro && scratch/bin/test_coro
+// test_coro — unit test for the Coro fiber primitive (runtime/recomp/coro.{h,cpp}), the mechanism the
+// cooperative scheduler resumes a guest task on. Hermetic: no disc, no GPU, no window, no game.
+//
+// It was previously an orphan built by a comment-in-the-header command line and asserted with
+// assert() — which compiles out under NDEBUG, so it could have "passed" while checking nothing. It now
+// runs under ctest through testutil.h, where every check is counted.
+#include "testutil.h"
+
 #include "coro.h"
-#include <cassert>
-#include <cstdio>
+
 #include <vector>
 
 static std::vector<int> trace;
 
-int main() {
-  // 1) A fiber that yields twice mid-body. Each resume() advances it one segment; the C-stack-local
-  //    `phase` MUST survive each yield (the whole point — mid-function resume).
+// A fiber that yields twice mid-body. Each resume() advances it one segment; the C-stack-local
+// `phase` MUST survive each yield — that is the whole point of a fiber over a longjmp scheduler.
+static void test_midbody_yield_preserves_locals(void) {
+  trace.clear();
+  Coro co;
+  co.start([&] {
+    int phase = 10;          // a real C local: only correct on resume if the stack is preserved
+    trace.push_back(phase);  // 10
+    co.yield();
+    phase += 1;
+    trace.push_back(phase);  // 11
+    co.yield();
+    phase += 1;
+    trace.push_back(phase);  // 12
+  });
+  CHECK(co.started());
+  CHECK(!co.done());                       // nothing runs before the first resume
+  CHECK_EQ(trace.size(), 0u);
+
+  co.resume();
+  CHECK_EQ(trace.size(), 1u); CHECK_EQ(trace[0], 10); CHECK(!co.done());
+  co.resume();
+  CHECK_EQ(trace.size(), 2u); CHECK_EQ(trace[1], 11); CHECK(!co.done());
+  co.resume();
+  CHECK_EQ(trace.size(), 3u); CHECK_EQ(trace[2], 12); CHECK(co.done());
+  co.resume();
+  CHECK_EQ(trace.size(), 3u);              // resume after done is a no-op
+}
+
+// Deep nested calls across a yield: the resume point is mid-INNER-function, the exact case the
+// longjmp scheduler could not do. The nested frames + their locals must all survive.
+static void test_yield_from_nested_frames(void) {
+  trace.clear();
+  Coro co;
+  auto inner = [&](int base) {
+    trace.push_back(base + 1);
+    co.yield();                 // suspend 3 frames deep
+    trace.push_back(base + 2);  // resume mid-inner-function
+  };
+  auto mid = [&](int base) { trace.push_back(base); inner(base + 10); trace.push_back(base + 99); };
+  co.start([&] { mid(100); });
+
+  co.resume();  // 100, 111
+  CHECK_EQ(trace.size(), 2u); CHECK_EQ(trace[0], 100); CHECK_EQ(trace[1], 111); CHECK(!co.done());
+  co.resume();  // 112, 199 -> body returns
+  CHECK_EQ(trace.size(), 4u); CHECK_EQ(trace[2], 112); CHECK_EQ(trace[3], 199); CHECK(co.done());
+}
+
+// Two interleaved fibers driven by one "scheduler" — resuming A must not disturb B's suspended stack.
+static void test_two_fibers_interleave(void) {
+  trace.clear();
+  Coro a, b;
+  a.start([&] { trace.push_back(1); a.yield(); trace.push_back(3); a.yield(); trace.push_back(5); });
+  b.start([&] { trace.push_back(2); b.yield(); trace.push_back(4); b.yield(); trace.push_back(6); });
+  a.resume(); b.resume();   // 1,2
+  a.resume(); b.resume();   // 3,4
+  a.resume(); b.resume();   // 5,6
+  const std::vector<int> want{1, 2, 3, 4, 5, 6};
+  CHECK_EQ(trace.size(), want.size());
+  for (size_t i = 0; i < want.size(); i++) CHECK_EQ(trace[i], want[i]);
+  CHECK(a.done());
+  CHECK(b.done());
+}
+
+// cancel() on a fiber BLOCKED mid-yield must unwind it to done() so it can be destroyed without
+// destroying a condvar that still has a waiter (the bug that hung the scheduler at a stage transition).
+static void test_cancel_unwinds_blocked_fiber(void) {
+  trace.clear();
+  int reached_after = 0;
   {
     Coro co;
     co.start([&] {
-      int phase = 10;          // a real C local: only correct on resume if the stack is preserved
-      trace.push_back(phase);  // 10
-      co.yield();
-      phase += 1;
-      trace.push_back(phase);  // 11
-      co.yield();
-      phase += 1;
-      trace.push_back(phase);  // 12
+      trace.push_back(1);
+      co.yield();            // blocks here forever unless cancel()'d
+      reached_after = 1;     // must NOT run after cancel
+      trace.push_back(2);
     });
-    assert(!co.started() ? false : true);
-    assert(!co.done());          // nothing runs before the first resume
-    assert(trace.empty());
-    co.resume(); assert(trace.size() == 1 && trace[0] == 10 && !co.done());
-    co.resume(); assert(trace.size() == 2 && trace[1] == 11 && !co.done());
-    co.resume(); assert(trace.size() == 3 && trace[2] == 12 && co.done());
-    co.resume(); assert(trace.size() == 3);   // resume after done is a no-op
-  }
+    co.resume();             // runs to the yield
+    CHECK_EQ(trace.size(), 1u); CHECK(!co.done());
+    co.cancel();             // unwinds the blocked fiber
+    CHECK(co.done());
+  }                          // ~Coro joins cleanly (no hang/abort)
+  CHECK_EQ(reached_after, 0);
+  CHECK_EQ(trace.size(), 1u);
+}
 
-  // 2) Deep nested calls across a yield: the resume point is mid-INNER-function, the exact case the
-  //    longjmp scheduler couldn't do. The nested frames + locals must all survive.
-  {
-    trace.clear();
-    Coro co;
-    auto inner = [&](int base) {
-      trace.push_back(base + 1);
-      co.yield();                 // suspend 3 frames deep
-      trace.push_back(base + 2);  // resume mid-inner-function
-    };
-    auto mid = [&](int base) { trace.push_back(base); inner(base + 10); trace.push_back(base + 99); };
-    co.start([&] { mid(100); });
-    co.resume();  // 100, 111
-    assert(trace.size() == 2 && trace[0] == 100 && trace[1] == 111 && !co.done());
-    co.resume();  // 112, 199 -> body returns
-    assert(trace.size() == 4 && trace[2] == 112 && trace[3] == 199 && co.done());
-  }
-
-  // 3) Two interleaved fibers driven by a single "scheduler" — exercises the per-task-thread isolation
-  //    the cooperative scheduler relies on (resuming A must not disturb B's suspended stack).
-  {
-    trace.clear();
-    Coro a, b;
-    a.start([&] { trace.push_back(1); a.yield(); trace.push_back(3); a.yield(); trace.push_back(5); });
-    b.start([&] { trace.push_back(2); b.yield(); trace.push_back(4); b.yield(); trace.push_back(6); });
-    a.resume(); b.resume();   // 1,2
-    a.resume(); b.resume();   // 3,4
-    a.resume(); b.resume();   // 5,6
-    assert((trace == std::vector<int>{1, 2, 3, 4, 5, 6}));
-    assert(a.done() && b.done());
-  }
-
-  // 4) cancel() a fiber that is BLOCKED mid-yield: it must unwind to done() so it can be destroyed
-  //    without destroying a condvar that still has a waiter (the bug that hung the scheduler at a stage
-  //    transition). Locals with destructors on the abandoned frames are fine (none here).
-  {
-    trace.clear();
-    int reached_after = 0;
-    {
-      Coro co;
-      co.start([&] {
-        trace.push_back(1);
-        co.yield();            // blocks here forever unless cancel()'d
-        reached_after = 1;     // must NOT run after cancel
-        trace.push_back(2);
-      });
-      co.resume();             // runs to the yield
-      assert(trace.size() == 1 && !co.done());
-      co.cancel();             // unwinds the blocked fiber
-      assert(co.done());
-    }                          // ~Coro joins cleanly (no hang/abort)
-    assert(reached_after == 0 && trace.size() == 1);
-  }
-
-  // 5) ~Coro on a still-blocked fiber must self-cancel (no explicit cancel) — the scheduler relies on
-  //    `delete co` being safe for an abandoned task.
+// ~Coro on a still-blocked fiber must self-cancel (no explicit cancel) — the scheduler relies on
+// `delete co` being safe for an abandoned task. Reaching the check below without hanging IS the result;
+// if the destructor deadlocks, ctest's per-test TIMEOUT reports it rather than wedging the run.
+static void test_destructor_self_cancels(void) {
+  int destructed = 0;
   {
     Coro co;
     co.start([&] { co.yield(); co.yield(); });
     co.resume();               // blocked at first yield
-    assert(!co.done());
-  }                            // destructor must cancel+join without hanging — reaching here = pass
+    CHECK(!co.done());
+  }
+  destructed = 1;              // only reached if ~Coro cancelled + joined instead of hanging
+  CHECK_EQ(destructed, 1);
+}
 
-  printf("test_coro: all passed\n");
-  return 0;
+int main(void) {
+  RUN(midbody_yield_preserves_locals);
+  RUN(yield_from_nested_frames);
+  RUN(two_fibers_interleave);
+  RUN(cancel_unwinds_blocked_fiber);
+  RUN(destructor_self_cancels);
+  return pt_summary();
 }

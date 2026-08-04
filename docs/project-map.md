@@ -119,6 +119,53 @@ Decodes CD-XA from the ReadS-streamed sectors and feeds the SPU's CD-audio input
 self-paces to realtime). `xa_decode_sector()` lives in `native_fmv.c`. The SPU mixes XA only when
 the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. Debug: `PSXPORT_XA_DBG=1`.
 
+## Tests — `ctest`, the framework gate (`tests/`)
+
+psxport is shared by three game ports, so a framework change is gated by a **hermetic** suite that
+needs no disc, no GPU and no window — the three games each need a disc to run at all, so anything
+disc-gated is useless as a shared gate.
+
+```bash
+cmake -S . -B build          # standalone psxport configure (from a game tree: -S external/psxport)
+cmake --build build -j6
+ctest --test-dir build --output-on-failure
+```
+
+**Adding a test = adding ONE file.** `tests/CMakeLists.txt` GLOBs `tests/test_*.c` and
+`tests/test_*.cpp` (`CONFIGURE_DEPENDS`, so a plain `cmake --build` re-configures and picks up a new
+file), makes one executable + one `ctest` entry per file, and links it against `psxport`. There is
+deliberately **no explicit source list**: several agents add tests concurrently and a list would make
+every new test a conflicting edit to one shared file. Do not convert it to a list. (If a new file
+does not appear, re-run `cmake -S . -B build`.)
+
+Write the test against **`tests/testutil.h`**, the counted assertion harness:
+
+```cpp
+#include "testutil.h"
+static void test_thing(void) { CHECK(setup()); CHECK_EQ(compute(2), 4); }
+int main(void) { RUN(thing); return pt_summary(); }
+```
+
+`CHECK` / `CHECK_EQ` (prints both values) / `CHECK_STREQ` / `CHECK_MEM_EQ` (names the first differing
+byte) count every check and abort the case on the first failure; `RUN` prints `PASS (n checks)` per
+case and a summary line. **A case that asserts nothing is reported as a FAILURE**, and so is a binary
+that `RUN`s no cases — `assert()` cannot give you that (it vanishes under `NDEBUG`, and an empty test
+exits 0 exactly like a passing one). There is intentionally **no `skip()`**: a suite that reports
+"skipped" reads as green while covering nothing.
+
+- `tests/test_harness_selftest.cpp` asserts the harness's own failure paths still fire (a failing
+  check counted + short-circuiting the case, an empty case going red, the exit code). A harness
+  nobody has seen fail is not a harness — this one re-proves it every run.
+- Tests link the `psxport` static archive, so only the objects a test references are pulled in. A
+  unit that calls into the game substrate fails to LINK on the `generated/` symbols
+  (`main_dispatch`, `g_rec_overlays`, `rec_func_index`) — that is the framework/game seam saying the
+  unit is not testable in isolation, not a harness bug.
+- The suite is wired from the **root** `CMakeLists.txt` only. A consuming game includes
+  `cmake/psxport.cmake` directly and never processes it, so the gate is run from a standalone
+  psxport configure (which works fine from inside a game tree's `external/psxport`).
+- `tools/fmv_export/test_fmv_decode.cpp` is a separate, older suite with its own build script
+  (`tools/fmv_export/build.sh`) — it is disc-gated in part and is not in `ctest`.
+
 ## Verifying a change — run the PC game and observe it
 There is **no oracle to diff against** and no automated A/B gate. The PSX recomp body is still the
 behavioral REFERENCE you READ when reimplementing an engine function, but you do NOT diff a running

@@ -27,3 +27,10 @@ add_subdirectory(tools)
 
 # The framework static library `psxport` (+ option(PSXPORT_BUILD_SMOKE) + the standalone agnosticism smoke).
 include(cmake/psxport.cmake)
+
+# Framework test suite — `ctest --test-dir build`. Must come after psxport.cmake (the tests link
+# `psxport`). Tests are globbed in tests/CMakeLists.txt, so adding one edits no shared file.
+# This is only wired in a STANDALONE psxport configure; a consuming game includes cmake/psxport.cmake
+# directly and never processes this file. See docs/project-map.md ("Tests").
+enable_testing()
+add_subdirectory(tests)
