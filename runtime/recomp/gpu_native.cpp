@@ -1340,12 +1340,26 @@ void gpu_pace_subframe(Core* core, int parts) {
   if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;
   if (parts < 1) parts = 1;
   // The pacing quota is per-game (GameConfig::paceQuota): the vblanks one pacing call represents.
-  // The legacy path read a hardcoded Tomba!2 engine field (scratchpad 0x1F800235) that is ordinary
-  // working memory in any other game — Spyro's geometry renderer writes over it, so a windowed run
-  // slept the byte's garbage value (2..38 vblanks) per vblank and dropped to ~3fps. Kept only for
-  // consumers that never set the field; see game_iface.h.
+  //
+  // The scratchpad fallback is DELETED. It read 0x1F800235 — a hardcoded Tomba!2 engine field that is
+  // ordinary working memory in any other game. Spyro's geometry renderer writes over that byte, so a
+  // windowed run slept its garbage (2..38 vblanks) per vblank and ran at ~3fps; Spider-Man then set
+  // paceQuota=0 and inherited the same silent garbage read, measuring ~2.3x slower windowed than
+  // headless. An un-RE'd magic address feeding a timing decision is exactly the banned shape, and its
+  // failure mode is a plausible-looking slow run rather than an error.
+  //
+  // Unset is now LOUD, once, and paces at a sane 1 rather than guessing from memory: a port that has
+  // not derived its cadence should be visibly unconfigured, not quietly mistimed.
   int quota = (core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0;
-  if (quota < 1) { quota = core->mem_r8(0x1F800235u); if (quota < 1) quota = 2; }
+  if (quota < 1) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      lucent::warn("gpu", "GameConfig::paceQuota is unset — pacing 1 vblank per call. Derive this "
+                          "port's real cadence (vblanks per gpu_pace_frame call) and set it.");
+    }
+    quota = 1;
+  }
   double interval_ms = quota * 1000.0 / 60.0 / parts;               // target ms for this (sub)frame
   struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
   double now = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
