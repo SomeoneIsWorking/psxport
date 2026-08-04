@@ -7,6 +7,8 @@
 #include "recomp_iface.h"   // seam: psxport_recomp()->guestMemset_gen (generated gen_func_8009A420)
 #include "cfg.h"
 #include "render_substrate.h"     // RenderMode::displayPassArmed() — pc_render read-only-overlay guard
+#include "dma_irq.h"              // DPCR/DICR semantics — which DMA completions the guest hears about
+#include <lucent/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,6 +124,19 @@ uint8_t* Core::host_ptr(uint32_t a, uint32_t bytes) {
 
 static uint32_t s_dma3_madr, s_dma3_bcr, s_dma3_chcr;   // DMA3: CDROM data FIFO -> RAM
 
+// DPCR (0x1F8010F0) and DICR (0x1F8010F4) — the DMA controller's channel-enable and interrupt
+// registers. Rules in dma_irq.h; state here, alongside the per-channel registers it governs.
+//
+// DPCR is storage only: no transfer is gated on it. That is deliberate and measured, not laziness —
+// two of the three consuming ports never write DPCR at all, so a channel-enable gate would read
+// their untouched 0 as "every channel disabled" and stop every DMA in the port. Its power-on value
+// is published so a guest that read-modify-writes it (which is the only way it is ever used) sees
+// the other channels' bits rather than zeros.
+static uint32_t s_dpcr = DPCR_RESET;
+static uint32_t s_dicr = 0;
+
+void dma_irq_ack(int ch) { s_dicr &= ~(1u << (24 + ch)); }
+
 static int s_io_verbose = 0;  // PSXPORT_IO_VERBOSE=1 to log every stray access (diagnostic only)
 
 static int dma_block_words(uint32_t bcr) {  // sync-mode-1 block DMA total word count
@@ -184,8 +199,9 @@ void Core::mdec_dma_pump() {
 
     // Channel completion: busy (bit 24) clears ONLY when the word count is exhausted — the same
     // moment hardware clears it. (DecDCTinSync-style waits poll MDEC1 status bit 29 = InCommand,
-    // which Beetle derives itself, so completion needs no extra signalling here. The guest never
-    // touches DICR/DPCR — measured, 0 references across the executable — so no DMA IRQ is due.)
+    // which Beetle derives itself, so completion needs no extra signalling here. No DMA IRQ is due
+    // on these two channels: DICR is modelled now (dma_irq.h) and nothing in the runtime turns an
+    // MDEC channel completion into a guest callback, so arming them would have nothing to signal.)
     if (s_mdec0_left == 0 && (s_dma0_chcr & 0x01000000u)) {
       s_dma0_chcr &= ~0x01000000u;
       if (cfg_dbg("mdecdma")) cfg_logf("mdecdma", "DMA0(in)  complete");
@@ -479,6 +495,10 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
   if (p == 0x1F8010A0) return s_dma2_madr;        // DMA2 MADR
   if (p == 0x1F8010A4) return s_dma2_bcr;         // DMA2 BCR
   if (p == 0x1F8010A8) return s_dma2_chcr;        // DMA2 CHCR (busy bit already cleared)
+  if (p >= 0x1F8010F0 && p <= 0x1F8010F3)          // DPCR — plain storage, byte-addressable
+    return s_dpcr >> ((p & 3u) * 8u);
+  if (p >= 0x1F8010F4 && p <= 0x1F8010F7)          // DICR — bit 31 is computed, not stored
+    return dma_dicr_read(s_dicr) >> ((p & 3u) * 8u);
   if (p == 0x1F8010E0) return s_dma6_madr;        // DMA6 OTC MADR
   if (p == 0x1F8010E4) return s_dma6_bcr;         // DMA6 OTC BCR
   if (p == 0x1F8010E8) return s_dma6_chcr;        // DMA6 OTC CHCR (busy bit already cleared)
@@ -582,10 +602,22 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                  game->cdc.loc_lba);
       s_dma3_chcr &= ~0x01000000u;                 // clear busy: the completion poll must pass
       irqStatLatch();                              // draining a sector queues the next INT1
-      // Announce completion. Deferred to a function-entry boundary rather than dispatched here: we
-      // are inside a guest store, with native code mid-mutation.
-      game->cd.dma_done_pending = 1;
-      pending_work |= PW_IRQ;
+      // Announce completion — but ONLY if the guest asked to hear about THIS transfer. DICR is where
+      // it says so, per channel, and a guest may deliberately run most of its transfers silent:
+      // Sony's libstr streams an STR frame as N sector DMAs on this channel and enables the
+      // interrupt for the LAST chunk only, so the frame-completion callback owes the guest one call
+      // per FRAME. Signalling every transfer ran it once per SECTOR, which marked ring slots ready
+      // before the frame was assembled (spider1 RE-07: the intro movies deadlocked on it).
+      //
+      // Deferred to a function-entry boundary rather than dispatched here: we are inside a guest
+      // store, with native code mid-mutation.
+      if (dma_irq_armed(s_dicr, 3)) {
+        s_dicr = dma_dicr_complete(s_dicr, 3);     // hardware sets the channel's flag
+        game->cd.dma_done_pending = 1;
+        pending_work |= PW_IRQ;
+      }
+      lucent::debug("dmairq", "DMA3 complete: {} words, armed={} (DICR {:08X})", got,
+                    dma_irq_armed(s_dicr, 3) ? 1 : 0, dma_dicr_read(s_dicr));
     }
     return;
   }
@@ -698,6 +730,17 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       else gpu_dma2_block(this, s_dma2_madr, (int)(s_dma2_bcr & 0xFFFF), to_gpu);  // immediate
       s_dma2_chcr &= ~0x01000000u;                 // clear busy -> game's DMA-done poll passes
     }
+    return;
+  }
+  if (p >= 0x1F8010F0 && p <= 0x1F8010F3) {        // DPCR
+    const uint32_t lane = dma_lane_mask(p, bytes);
+    s_dpcr = (s_dpcr & ~lane) | (dma_lane_value(p, v, bytes) & lane);
+    return;
+  }
+  if (p >= 0x1F8010F4 && p <= 0x1F8010F7) {        // DICR
+    s_dicr = dma_dicr_store(s_dicr, p, v, bytes);
+    lucent::debug("dmairq", "w DICR{}[{}] = {:08X} -> {:08X} (armed ch3={}) ra={:08X}",
+                  (p & 3u), bytes, v, dma_dicr_read(s_dicr), dma_irq_armed(s_dicr, 3) ? 1 : 0, r[31]);
     return;
   }
   if (p == 0x1F8010E0) { s_dma6_madr = v; return; }

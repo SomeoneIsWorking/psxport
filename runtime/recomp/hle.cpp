@@ -18,6 +18,8 @@
 #include <cstring>
 #include "cfg.h"
 #include "fs_util.h"   // Fs::writeFile — the miss RAM dump below
+#include "dma_irq.h"   // dma_irq_ack — the CD DMA completion dispatch below stands in for the
+                       // BIOS DMA handler, so it performs that handler's acknowledge
 
 extern "C" void guest_backtrace_to(Core* c, FILE* out);  // sync_overrides.cpp
 extern "C" void guest_find_word_to(Core* c, FILE* out, uint32_t val);  // sync_overrides.cpp
@@ -191,6 +193,7 @@ void Hle::irqPoll(Core* c) {
   // at the same safe boundary, rather than from the store that finished the transfer.
   if (c->game->cd.dma_done_pending) {
     c->game->cd.dma_done_pending = 0;
+    dma_irq_ack(3);   // this dispatch stands in for the BIOS DMA handler, which acknowledges first
     const uint32_t slot = c->cfg ? c->cfg->cdDmaDoneCbPtr : 0;
     const uint32_t cb = slot ? c->mem_r32(slot) : 0;
     if (cb && !in_irq) {
