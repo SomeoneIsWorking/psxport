@@ -2,6 +2,7 @@
 #include "game.h"    // Game / GpuVkState (per-instance render state)
 #include "gpu_vk.h"  // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "gpu_vk_present_policy.h"   // present_rebuild_decision — when a present must rebuild the composite
+#include "gpu_vk_present_mode.h"     // preferred_present_mode — the sink must not stall the guest thread
 #include "sbs_pane_layout.h"         // pane_letterbox / sbs_pane_rect — where each frame lands in the window
 #include <lucent/log.h>              // diagnostics: lucent::debug (channel-gated internally — never guard it)
 #include "render_substrate.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
@@ -496,6 +497,21 @@ static void init_gpu(Game* game) {
     lucent::info("gpu_vk", "SDL_GPU device up (driver: {})", drv ? drv : "(null)"); }
   if (!s_headless) {
     GPUCHK(SDL_ClaimWindowForGPUDevice(s_dev, s_win), "SDL_ClaimWindowForGPUDevice");
+    // The swapchain must NOT stall the guest thread. A freshly claimed window keeps SDL's DEFAULT
+    // present mode, VSYNC, under which SDL_WaitAndAcquireGPUSwapchainTexture (show_composite) sleeps
+    // until the next vblank — on the one thread that runs the guest, the CD pump, MDEC and the DMA
+    // completions. Ask for a non-blocking mode instead; see gpu_vk_present_mode.h for the measurement.
+    const SDL_GPUPresentMode want =
+        preferred_present_mode(SDL_WindowSupportsGPUPresentMode(s_dev, s_win, SDL_GPU_PRESENTMODE_MAILBOX),
+                               SDL_WindowSupportsGPUPresentMode(s_dev, s_win, SDL_GPU_PRESENTMODE_IMMEDIATE));
+    const bool set_ok = SDL_SetGPUSwapchainParameters(s_dev, s_win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, want);
+    if (!set_ok)
+      lucent::warn("gpu_vk", "SDL_SetGPUSwapchainParameters({}) failed: {}", present_mode_name(want), SDL_GetError());
+    // The mode actually IN EFFECT, not the one asked for: on failure the swapchain keeps SDL's default,
+    // which is VSYNC. Unguarded info — a normal windowed run must state whether its sink blocks.
+    const SDL_GPUPresentMode got = set_ok ? want : SDL_GPU_PRESENTMODE_VSYNC;
+    lucent::info("gpu_vk", "swapchain present mode: {}{}", present_mode_name(got),
+                 present_mode_blocks_caller(got) ? " (BLOCKING — every present stalls the guest thread until vblank)" : "");
     s_swap_fmt = SDL_GetGPUSwapchainTextureFormat(s_dev, s_win);
   }
 
