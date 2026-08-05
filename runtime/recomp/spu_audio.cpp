@@ -77,7 +77,7 @@ void SpuAudio::wavOpen(const char* path) {
 // REPL music-dump helper: switch the SPU WAV capture to a new file mid-run.
 void SpuAudio::wavReopen(const char* path) {
   wavClose();
-  mWavBytes = 0;
+  mWavBytes = 0; mWavSynced = 0;
   wavOpen(path);
 }
 
@@ -117,6 +117,18 @@ void SpuAudio::init() {
 #else
   mState = -1;
 #endif
+}
+
+// See spu_audio.h for why this is a free function rather than part of frameEx.
+//
+// `audioMixFrame` is an OPTIONAL hook. A port with no native music engine of its own never binds it,
+// and psxport's convention (bind by name, unlisted fields value-initialise to null) makes that the
+// normal state rather than an error — so there is nothing to report here: no game music is not a
+// fault, it is a port that has none. Gated by tests/test_spu_mix_optional_hook.cpp, which also
+// asserts the hook IS called when a port does supply one.
+void spu_mix_game_audio(Core* c, const GameHooks* hooks, int16_t* buf, int frames) {
+  if (!hooks || !hooks->audioMixFrame) return;
+  hooks->audioMixFrame(c, buf, frames);
 }
 
 // Called once per video frame: advance the SPU one NTSC frame of clocks (~735 stereo frames),
@@ -173,13 +185,30 @@ void SpuAudio::frameEx(bool output) {
   // Mix the game's native music engine on top of the SPU's output (game-owned; the framework names
   // no game audio type). The hook renders the game's NativeMusic into its own scratch and saturating-
   // adds it into `buf`; it's a no-op when nothing is playing. Silent when no game is bound.
-  if (game) game->core.hooks->audioMixFrame(&game->core, buf, frames);
+  if (game) spu_mix_game_audio(&game->core, game->core.hooks, buf, frames);
 
   // WAV capture: append the drained PCM. Capped.
   if (wav_on && mWavBytes < WAV_MAX_BYTES) {
     size_t bytes = (size_t)frames * 2 * sizeof(int16_t);
     fwrite(buf, 1, bytes, mWav);
     mWavBytes += (uint32_t)bytes;
+    // Keep the file VALID AT ALL TIMES rather than only after a clean exit. wavClose() patches the
+    // two RIFF size fields from an atexit hook — but atexit does not run on a signal, and the
+    // watchdog's SIGINT/SIGTERM handler ends the process with _exit(130). A port that never returns
+    // from its frame loop (every one of them, under `timeout`) therefore left a 0-byte file with the
+    // PCM still sitting in the stdio buffer: PSXPORT_WAV, the only headless way to hear what the
+    // port produced, silently captured NOTHING on exactly the runs it exists for.
+    //
+    // So flush and patch the sizes about once a second. Cost is one fflush + two seeks per ~172
+    // frames; the capture is then at most ~1 s short if the process is killed, instead of empty.
+    if (mWavBytes - mWavSynced >= 44100u * 2u * sizeof(int16_t)) {
+      mWavSynced = mWavBytes;
+      const long end = ftell(mWav);
+      fseek(mWav, 4, SEEK_SET);  wavLe32(mWav, 36 + mWavBytes);
+      fseek(mWav, 40, SEEK_SET); wavLe32(mWav, mWavBytes);
+      fseek(mWav, end, SEEK_SET);
+      fflush(mWav);
+    }
   }
 
 #ifdef PSXPORT_SDL

@@ -68,6 +68,11 @@ static void load_sector(CdcState* s) {    // fill the data FIFO with the sector 
       lucent::error("cdc", "ReadN: no data for LBA {} — data FIFO left EMPTY", s->loc_lba);
       s->data_n = 0; s->data_rd = 0; return;
     }
+    // The subheader is at raw[16..23]: file, channel, submode, coding. Submode bit 0x04 marks an
+    // XA-ADPCM audio sector. Logged for EVERY sector, with its submode, so a run's census carries
+    // its own denominator — "no audio sectors" is only meaningful next to "of N sectors read".
+    lucent::debug("cdc", "sector LBA {} file={} chan={} submode=0x{:02X} audio={} -> data FIFO",
+                  s->loc_lba, raw[16], raw[17], raw[18], (raw[18] & 0x04) ? 1 : 0);
     memcpy(s->data, raw + 12, 2340);
     s->data_n = 2340; s->data_rd = 0;
     return;
@@ -123,7 +128,16 @@ static void sector_consumed(CdcState* s) {
 //
 // So the two layers must share one source of truth: when the native CD layer accepts a read, the
 // controller model is positioned and loaded from the same disc image. Neither layer invents data.
-void cdc_set_mode(CdcState* s, uint8_t mode) { s->mode = mode; }
+void cdc_set_mode(CdcState* s, uint8_t mode) {
+  // Print the WHOLE byte, not just the bits this model currently acts on. Bit 0x40 (XA-ADPCM
+  // enable) and bit 0x08 (XA filter) decide whether the drive is supposed to swallow audio
+  // sectors into the ADPCM decoder instead of presenting them as data; a mode log that showed
+  // only 0x20 would make an unimplemented audio path look like a mode the game never asked for.
+  lucent::debug("cdc", "setmode 0x{:02X} (speed={} xa-adpcm={} filter={} whole-sector={})", mode,
+                (mode & 0x80) ? 2 : 1, (mode & 0x40) ? 1 : 0, (mode & 0x08) ? 1 : 0,
+                (mode & 0x20) ? 1 : 0);
+  s->mode = mode;
+}
 
 void cdc_begin_read(CdcState* s, uint32_t lba) {
   s->loc_lba = lba;

@@ -29,6 +29,13 @@ typedef struct XaState {
   double   rd;                // total frames read (monotonic, fractional)      (was s_rd)
   int16_t  hist[2][2];        // XA IIR history, persists across sectors        (was s_hist)
   int      src_freq;          //                                               (was s_src_freq, init 37800)
+  // Census for the stream currently active, reset at start/play and reported at stop. Decode is
+  // PULL-driven, so "no audio came out" has two very different causes that look identical from
+  // outside: the SPU never pulled a sample (pulls == 0 — the mixer is not running, or CD audio is
+  // gated off), or it pulled and the disc side produced nothing (pulls > 0, sectors == 0). These
+  // need opposite fixes, so the stop line names both counts instead of leaving silence unexplained.
+  uint32_t pulls;             // CDC_GetCDAudioSample calls while this stream was active
+  uint32_t sectors;           // audio sectors actually decoded into the ring
   struct DiscState* disc;     // Game-owned disc backend (wired by Game())
 } XaState;
 

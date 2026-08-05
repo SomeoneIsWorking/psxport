@@ -65,9 +65,12 @@ void xa_bind_state(XaState* s) { s_bound = s; }
 #define s_rd          (xs->rd)
 #define s_hist        (xs->hist)
 #define s_src_freq    (xs->src_freq)
+#define s_pulls       (xs->pulls)
+#define s_sectors     (xs->sectors)
 
 static void xa_reset_buffers(XaState* xs) {
   s_wr = 0; s_rd = 0.0;
+  s_pulls = 0; s_sectors = 0;
   s_hist[0][0] = s_hist[0][1] = s_hist[1][0] = s_hist[1][1] = 0;
 }
 
@@ -104,7 +107,11 @@ void xa_stream_start(XaState* xs) {
 }
 
 void xa_stream_stop(XaState* xs) {
-  if (s_active) lucent::debug("xa", "STOP @ LBA {}", s_lba);
+  // Report the census, not just the position. A stream that stops having decoded nothing is the
+  // silent-audio symptom, and `pulls` says WHICH side failed (see XaState::pulls).
+  if (s_active)
+    lucent::debug("xa", "STOP @ LBA {} — {} pull(s) from the SPU, {} audio sector(s) decoded",
+                  s_lba, s_pulls, s_sectors);
   s_active = 0;
   s_owns_slot2 = 0;
 }
@@ -181,6 +188,7 @@ static int xa_decode_next_sector(XaState* xs) {
         s_ring[idx][1] = pcm[2 * i + 1];
       }
       s_wr += (uint32_t)n;
+      s_sectors++;
       lucent::debug("xasec", " sector LBA {} file={} chan={} submode={:02X} n={} freq={} (wr={} rd={})", s_lba - 1, file, chan, submode, n, freq, s_wr, (uint32_t)s_rd);
       // EOF (submode bit7) ends only an OPEN-ENDED stream. A BOUNDED clip ([start..end], e.g. the
       // looping area music) ends strictly at end_lba (handled above): EOF markers inside the range
@@ -203,6 +211,7 @@ static int xa_decode_next_sector(XaState* xs) {
 extern "C" void CDC_GetCDAudioSample(int32_t* samples) {   // called from the vendored spu.c (C)
   XaState* xs = s_bound;              // vendor-interop pull: reads the bound instance (see above)
   if (!xs || !s_active) { samples[0] = samples[1] = 0; return; }
+  s_pulls++;
 
   // Keep at least 2 frames decoded ahead of the read cursor (linear interp needs the next one).
   while (s_active && (s_wr - (uint32_t)s_rd) < 2) {
