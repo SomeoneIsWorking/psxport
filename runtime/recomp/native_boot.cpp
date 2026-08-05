@@ -25,6 +25,8 @@
 #include <lucent/log.h>
                      // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
+#include "gpu_vk.h"          // gpu_vk_wide_engine / _ofx — the widescreen projection centre
+#include "proj_params.h"     // ProjParams::setGeomOfxForAspect — the camera's copy of that centre
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,8 +79,16 @@ static void native_step_frame(Core* c, uint32_t f) {
   // wide view then expanded only to the RIGHT. Re-asserting nw/2 each frame centers it symmetrically
   // (the middle 4:3 band stays pixel-identical). CR24 is a GTE control reg, not guest RAM -> read-only-
   // overlay compliant; gated on wide_engine so 4:3 (OFX=160, margin==0) and the oracle are untouched.
-  { int gpu_vk_wide_engine(Core*); int gpu_vk_wide_engine_ofx(Core*);
-    if (gpu_vk_wide_engine(c)) gte_write_ctrl(24u, (uint32_t)gpu_vk_wide_engine_ofx(c) << 16); }
+  //
+  // The native camera's copy moves WITH it (ProjParams::setGeomOfxForAspect). It reads the projection
+  // centre from ProjParams rather than from CR24, so re-asserting only the control register would
+  // leave the 3D reprojecting against the stale boot centre while the guest packets used the wide one
+  // — the ~54px double-image this re-assert exists to prevent, reintroduced one layer up.
+  if (gpu_vk_wide_engine(c)) {
+    const int ofx = gpu_vk_wide_engine_ofx(c);
+    gte_write_ctrl(24u, (uint32_t)ofx << 16);
+    c->rsub.projParams.setGeomOfxForAspect((float)ofx);
+  }
   c->rsub.projprim.bind(c);         // bind THIS core's native-depth cache (class ProjPrim on Render)
   spu_bind(c);                          // bind THIS core's SPU state (per-instance — no shared SPU)
   mdec_bind(c);                         // bind THIS core's MDEC state (per-instance — no shared MDEC)

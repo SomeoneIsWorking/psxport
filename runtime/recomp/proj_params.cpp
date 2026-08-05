@@ -4,10 +4,21 @@
 // `ProjParams::current()`. They exist so callers with no `Core*` in scope (inner projection loops,
 // callback bodies) can still reach the currently-bound per-Core state.
 #include "proj_params.h"
+#include "core.h"        // Core::rsub.projParams — the per-Core projection record
+#include <lucent/log.h>
+#include <execinfo.h>   // backtrace() — the unset-projection fail-fast in requireGeom
+#include <stdio.h>      // fflush
+#include <stdlib.h>     // abort
 
-// GTE control-reg reads for camview_publish (CR24=OFX, CR25=OFY, CR26=H). Declared here to avoid
-// pulling the full Beetle GTE header into proj_params.h.
+// GTE control-reg access for camview_publish + the libgte geom setters. Declared here to avoid pulling
+// the full Beetle GTE header into proj_params.h.
 extern "C" uint32_t GTE_ReadCR(unsigned which);
+void gte_write_ctrl(uint32_t reg, uint32_t val);
+
+// The GTE control registers that hold the camera projection.
+static constexpr uint32_t kGteCrOfx = 24;   // 16.16 screen-centre X
+static constexpr uint32_t kGteCrOfy = 25;   // 16.16 screen-centre Y
+static constexpr uint32_t kGteCrH   = 26;   // projection-plane distance
 
 ProjParams* ProjParams::sCurrent = nullptr;
 
@@ -21,6 +32,27 @@ float ProjParams::pzToOrd(float pz) const {
   float inv_near = 1.0f / nearp, inv_far = 1.0f / 65535.0f;
   float ord = (1.0f / pz - inv_far) / (inv_near - inv_far);
   return ord < 0.0f ? 0.0f : (ord > 1.0f ? 1.0f : ord);
+}
+
+// The validated read of the game-set projection constants. See the header for why there is no
+// fallback: this exists to make an RE gap ANNOUNCE itself rather than be papered over with a
+// plausible projection, so the only two outcomes are "the game's own OFX/OFY/H" and "stop".
+void ProjParams::requireGeom(const char* who, float& ofx, float& ofy, float& H) const {
+  if (!geomValid()) {
+    lucent::error("proj",
+                  "\nFATAL: {} asked for the camera projection before the game set one.\n"
+                  "  SetGeomOffset (OFX/OFY) {} — SetGeomScreen (H) {}.\n"
+                  "  This port has no projection to draw with. It is an RE gap, not a tuning problem;\n"
+                  "  reading CR24/25/26 back out of the GTE used to hide it behind whatever the guest\n"
+                  "  last left there. Backtrace (the producer that asked):",
+                  who, mGeomOffsetSet ? "ran" : "NEVER RAN", mGeomScreenSet ? "ran" : "NEVER RAN");
+    void* bt[32]; int nbt = backtrace(bt, 32); backtrace_symbols_fd(bt, nbt, 2);
+    fflush(stderr);
+    abort();
+  }
+  ofx = mGeomOfx;
+  ofy = mGeomOfy;
+  H   = mGeomH;
 }
 
 void ProjParams::publishCam(const float R[3][3], const float T[3], float H, float OFX, float OFY) {
@@ -53,6 +85,20 @@ bool ProjParams::camWorldScreen(float wx, float wy, float wz, float* sx, float* 
   *sx = mCamOFX + vx * ph;
   *sy = mCamOFY + vy * ph;
   return true;
+}
+
+// ---- libgte SetGeomOffset / SetGeomScreen (declared in proj_params.h) ------------------------------
+// The GTE control-register write and the port's record of the projection, in ONE place so they cannot
+// drift. See the header for why this is framework code with a per-game address.
+void libgte_set_geom_offset(Core* c, int32_t ofx, int32_t ofy) {
+  gte_write_ctrl(kGteCrOfx, (uint32_t)ofx << 16);   // OFX/OFY are 16.16 fixed point
+  gte_write_ctrl(kGteCrOfy, (uint32_t)ofy << 16);
+  c->rsub.projParams.setGeomOffset((float)ofx, (float)ofy);
+}
+
+void libgte_set_geom_screen(Core* c, int32_t h) {
+  gte_write_ctrl(kGteCrH, (uint32_t)h);             // H is a plain integer
+  c->rsub.projParams.setGeomScreen((float)h);
 }
 
 // ---- Free-function bridges (declared in proj_params.h) ---------------------------------------------

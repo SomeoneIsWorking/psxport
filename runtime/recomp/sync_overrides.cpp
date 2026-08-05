@@ -16,6 +16,7 @@
 #include "game.h"           // Game::core — register_/initBuiltins read the game's config off the Core
 #include "scheduler.h"
 #include "recomp_iface.h"   // seam: psxport_recomp()->shard_set_override (generated MAIN override setter)
+#include "proj_params.h"    // libgte_set_geom_offset / _screen — the camera projection setters
 #include <cstdio>
 #include <cstdlib>
 #include <lucent/log.h>
@@ -23,6 +24,28 @@
 enum { V0 = 2, A0 = 4, A1 = 5, A2 = 6 };
 
 // ---- HANDLERS (stateless, take Core*, mutate Core state directly) ---------------------------------
+
+// libgte SetGeomOffset(a0 = ofx, a1 = ofy) / SetGeomScreen(a0 = h) — the camera projection.
+//
+// UNLIKE EVERY OTHER ENTRY HERE these do not stand in for a spin loop: they are owned so the port
+// RECORDS the projection where the game states it, instead of the native camera reading CR24/25/26
+// back out of the GTE at draw time (see proj_params.h). They belong in this table rather than the
+// override registry because they touch no guest RAM, so running natively on the oracle core too is
+// correct — and because their behaviour is identical in every game that links libgte, with only the
+// address being per-game, which is exactly what this table models.
+//
+// The recompiled body of SetGeomOffset shifts a0/a1 left 16 IN PLACE before writing them, so a caller
+// reading them back afterwards sees the shifted values. That mutation is observable state; reproduce
+// it. SetGeomScreen's body mutates no register.
+static void set_geom_offset(Core* c) {
+  const int32_t ofx = (int32_t)c->r[A0];
+  const int32_t ofy = (int32_t)c->r[A1];
+  c->r[A0] = (uint32_t)ofx << 16;
+  c->r[A1] = (uint32_t)ofy << 16;
+  libgte_set_geom_offset(c, ofx, ofy);
+}
+
+static void set_geom_screen(Core* c) { libgte_set_geom_screen(c, (int32_t)c->r[A0]); }
 
 // 0x8009CAEC DecDCTinSync / 0x8009CB80 DecDCToutSync — libmdec in/out sync. Real bodies spin (0x100000
 // iters) on the MDEC1 status until an IRQ clears them. MDEC decode + its DMAs are synchronous here, so
@@ -186,6 +209,9 @@ void PlatformHle::initBuiltins() {
   // libetc VSync — trap every caller, every mode. Opt-in: only for a port whose native frame loop
   // owns timing. A game reimplementing VSync registers its own handler instead and leaves this zero.
   reg(h.vsyncTrap, vsync_trap);
+  // libgte SetGeomOffset / SetGeomScreen — the camera projection, recorded where the game STATES it.
+  reg(h.setGeomOffset, set_geom_offset);
+  reg(h.setGeomScreen, set_geom_screen);
 
   // State the wiring's own reach. Now that the addresses come from the game, "the table is empty
   // because the game configured nothing" and "the table is full" fail IDENTICALLY at a glance — the

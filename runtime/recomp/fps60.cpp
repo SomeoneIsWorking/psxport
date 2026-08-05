@@ -20,7 +20,7 @@
 #include "game.h"     // Fps60 (per-instance) via core->game->fps60; RenderQueue rq
 #include "render_mode.h"   // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
 #include "render_queue.h"
-#include "proj_params.h"   // ProjParams::Snapshot — save/restore around tier1Render's re-render
+#include "proj_params.h"   // ProjParams — the camera's projection constants + Snapshot save/restore
 #include "cfg.h"
 #include <lucent/log.h>
 #include "mods.h"     // Mods (game->mods.fps60)
@@ -34,7 +34,6 @@
 #include <utility>   // std::swap (pointer-swap double buffer rotation, stage 1)
 
 extern "C" { uint32_t GTE_ReadDR(unsigned); }   // Beetle GTE (mednafen gte.c) — RTP result regs (rate tap)
-uint32_t gte_read_ctrl(uint32_t reg);            // GTE control-reg read (projection consts)
 
 // Present primitives (gpu_native.cpp): the real per-frame present + the 60fps in-between pass + the pacer.
 void gpu_present_ex(Core* core, int do_blit);
@@ -80,10 +79,10 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
     return;
   }
   // Read the scene camera from the scratchpad view matrix (CR0-4 halfword packing @ SCR+0xF8; translation
-  // @ SCR+0x10C) + the projection constants (CR24 OFX / CR25 OFY 16.16 / CR26 H). R is the RAW int16 rows
-  // (undivided — the convention projComposeCore/projComposeCamera consume). This is the ONE camera reader
-  // for the whole native projection path (projComposeCore/projComposeCamera/native_terrain), unconditional
-  // — not gated on fps60 (fps60 no longer reprojects at present time; it lerps already-resolved queue prims).
+  // @ SCR+0x10C). R is the RAW int16 rows (undivided — the convention projComposeCore/projComposeCamera
+  // consume). This is the ONE camera reader for the whole native projection path
+  // (projComposeCore/projComposeCamera/native_terrain), unconditional — not gated on fps60 (fps60 no
+  // longer reprojects at present time; it lerps already-resolved queue prims).
   const uint32_t SCR = 0x1F800000u;
   uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
            w3 = c->mem_r32(SCR + 0x104), w4 = c->mem_r32(SCR + 0x108);
@@ -93,9 +92,16 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   T[0] = (float)(int32_t)c->mem_r32(SCR + 0x10C);
   T[1] = (float)(int32_t)c->mem_r32(SCR + 0x110);
   T[2] = (float)(int32_t)c->mem_r32(SCR + 0x114);
-  ofx = (float)(int32_t)gte_read_ctrl(24) / 65536.0f;
-  ofy = (float)(int32_t)gte_read_ctrl(25) / 65536.0f;
-  H   = (float)(uint16_t)gte_read_ctrl(26);
+  // The projection constants come from the GAME'S SETTER (ProjParams::setGeomOffset/setGeomScreen,
+  // recorded where libgte SetGeomOffset/SetGeomScreen run), NOT from gte_read_ctrl(24/25/26). Reading
+  // them back out of the GTE was asking engine state, after the fact, for constants the game had
+  // already stated — the banned pattern, and it coupled the camera to whatever the guest last left in
+  // the control registers. Every native producer inherits this call, so this one site is the whole
+  // camera path.
+  //
+  // NO FALLBACK — requireGeom aborts if the game never set a projection, because a fallback would
+  // render a plausible picture over an RE gap and make it unfindable.
+  c->rsub.projParams.requireGeom("Fps60::sceneCam", ofx, ofy, H);
   // TIER 1 capture: this is a REAL-frame call (mCamOverrideOn is false) — mirror it into mCamCur, the slot
   // that present_vk's end-of-frame swap rotates in lockstep with mRqCur/mRqPrev. Every sceneCam() call this
   // logic frame reads the same unchanged guest camera, so overwriting on every call is idempotent.

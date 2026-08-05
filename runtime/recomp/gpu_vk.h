@@ -3,12 +3,21 @@
 // Every entry point that touches the per-frame render machine state now takes a `Core*` first: it is a
 // thin wrapper that forwards to `core->game->gpu_vk` (the GpuVkState instance). This is the single
 // declaration site — the scattered local forward-decls inside the gp0 tee (gpu_native.cpp) are gone.
-// The device-singleton / config functions (gpu_vk_enabled, gpu_vk_wide_engine*, gpu_vk_video_status,
-// gpu_vk_rawdump_arm, gpu_vk_vram_region) keep their Core*-less signatures and are declared at use.
 #ifndef GPU_GPU_H
 #define GPU_GPU_H
 #include <stdint.h>
 struct Core;
+
+// Widescreen geometry. Per-core, because widescreen never touches the PSX oracle: one process can
+// hold a wide user core and a pure 4:3 oracle core at the same time.
+//   wide_engine     — is this core rendering wider than 4:3 (and not the oracle)?
+//   wide_engine_w   — the native render width in that aspect
+//   wide_engine_ofx — the projection centre for that width (w/2), i.e. the GTE OFX to use
+// These were forward-declared inline at each call site, which is how three separate writers of the
+// projection centre grew without anything tying them together. One declaration site now.
+int gpu_vk_wide_engine(Core* core);
+int gpu_vk_wide_engine_w(Core* core);
+int gpu_vk_wide_engine_ofx(Core* core);
 
 // per-prim depth / OT-submission order (set by the gp0 tee before each VK draw)
 void gpu_vk_set_order(Core* core, unsigned idx);

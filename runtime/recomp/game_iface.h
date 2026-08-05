@@ -206,6 +206,17 @@ struct GameConfig {
     uint32_t gpuTimeoutFlagVar;                // guest global the arm clears
     uint32_t changeThread;                     // kernel cooperative task-switch / yield funnel
 
+    // libgte SetGeomOffset / SetGeomScreen — the two leaves through which the game STATES its camera
+    // projection (screen centre OFX/OFY, projection-plane distance H). Owned natively so the port
+    // RECORDS the projection where the game sets it instead of reading CR24/25/26 back out of the GTE
+    // at draw time. See proj_params.h for the implementation and why it is oracle-safe.
+    //
+    // Zero for a game whose libgte entry points have not been located — then nothing is registered and
+    // the recompiled bodies run, which leaves ProjParams unset and makes the native camera's
+    // requireGeom abort rather than draw with an invented projection. That is the intended behaviour
+    // for an un-RE'd port, not a gap to paper over.
+    uint32_t setGeomOffset, setGeomScreen;
+
     // libetc VSync, as a TRAP: "nothing may reach VSync, in any mode, because the native frame loop
     // owns all timing". That is a per-game POLICY, not a framework universal — it holds only for a
     // port whose native loop actually drives the frame. A game still running the guest's own loop on
