@@ -482,7 +482,7 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   // VRAM-transfer guard: bounds-report + atlas-clobber catch (vram_xfer.cpp, `debug vramguard`). This is
   // the single CPU->VRAM upload chokepoint for every texture-group page, font page, and CLUT, so it is
   // both the place to REGISTER the protected atlas regions and a transfer to validate. Diagnostic only.
-  vram_guard_check(core, "native", x, y, w, h, src);
+  vram_guard_check("native", x, y, w, h, src);
   // Register texture-region uploads (anything right of the two 320-wide framebuffers) as a protected,
   // resident page: these are exactly the atlas/font/CLUT rects a later draw samples; a non-upload write
   // landing on one is the stripe-corruption clobber. Framebuffer uploads (x<320) are NOT atlas data.
@@ -960,7 +960,19 @@ void GpuState::gp0_exec(Core* core) {
     uint32_t xy = s_fifo[1], wh = s_fifo[2];
     int x = xy & 0x3F0, y = (xy >> 16) & 0x1FF, w = ((wh & 0x3FF) + 0xF) & ~0xF, h = (wh >> 16) & 0x1FF;
     uint16_t col = to555(cr, cg, cb);
+    // A FILL IS A VRAM WRITER, so the atlas guard has to see it. vram_xfer.cpp states that "every
+    // VRAM-writing transfer calls this" — that was untrue here, and the gap sat exactly where an
+    // atlas clobber is most likely: a full-screen fill is what a pause/menu/blackout does. A clobber
+    // arriving via GP0(0x02) produced NO [vramguard] line at all, so the instrument reported a clean
+    // bill of health for a writer it could not see. Diagnostic only; the fill itself is unchanged.
+    vram_guard_check("fill", x, y, w, h, 0);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
+    // Mirror to the VK VRAM image. The native-upload path documents the mirror as happening on "the
+    // GP0 0xA0 / VRAM-copy / fill paths" — this one did not do it. The VK opaque pass re-uploads a
+    // full s_vram snapshot so it saw the fill anyway, but the SEMI pass samples the dirty-tracked
+    // s_tex, so a semi-transparent prim over a filled region sampled stale pixels. Same shape as the
+    // invisible-puddle-water bug that put the mirror on the native upload.
+    if (vk_path()) gpu_vk_dirty(core, x, y, w, h);
     { if (s_oracle_prim_log && soft_gpu)
         lucent::info("oraprim", "FILL at=({},{}) {}x{} col=({},{},{})", x, y, w, h, cr, cg, cb); }
     // WIDESCREEN BACKDROP FILL (#52): FillRect ignores clip/offset by design (PSX hardware behavior,
@@ -1189,7 +1201,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
       s_xfer_px = 0; s_xfer = 1;
       if (vk_path()) gpu_vk_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
-      vram_guard_check(core, "A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
+      vram_guard_check("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       clutwatch_xfer("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);
       lucent::debug("upload", "f{} A0 dest=({},{}) {}x{} src=0x{:08X}",
                     s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
@@ -1208,7 +1220,7 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       // Guard the DEST rect: a render-OT 0x80 copy whose dest lands on a live texpage is the classic
       // atlas-clobber (later-72 poly-line-desync family). Checked BEFORE the copy so the log names the
       // clobber even though the copy still proceeds (diagnostic, non-mutating; the catch is the point).
-      vram_guard_check(core, "80copy", dx, dy, w2, h2, 0x80000000u | ((uint32_t)(sy * VRAM_W + sx) * 2));
+      vram_guard_check("80copy", dx, dy, w2, h2, 0x80000000u | ((uint32_t)(sy * VRAM_W + sx) * 2));
       for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) *vram(dx + x, dy + y) = *vram(sx + x, sy + y);
       if (vk_path()) gpu_vk_dirty(core, dx, dy, w2, h2);   // mirror VRAM->VRAM copy to VK
       clutwatch_xfer("80copy", dx, dy, w2, h2);
@@ -1484,6 +1496,7 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
   if ((s_frame % 200) == 0)
     lucent::debug("stage", "[stagetl] gpu f{} task0entry={:08X}", s_frame, core->mem_r32(0x801fe00c));
   const char* dir = cfg_str("PSXPORT_GPU_DUMP");
+  if ((s_frame % 300) == 0) vram_guard_report();   // vramguard census — the negative with its denominator
   if (s_log) lucent::info("gpu", "frame {}: {} prims, {} gp0words ({} addressed, {} anon), {} dma2, disp {}x{} @ ({},{})", s_frame, s_prims, s_gp0_words, s_gp0_addressed, s_gp0_anon, s_dma2, s_disp_w, s_disp_h, s_disp_x, s_disp_y);
   // PSXPORT_VRAMDUMP="frame:path" — dump our full 1024x512x16 VRAM at `frame` (raw u16, no header),
   // matching the oracle's PSXPORT_VRAMDUMP (main.cpp) so the texture/CLUT ATLAS can be diffed across
@@ -1631,6 +1644,11 @@ void GpuState::gpu_blank_display() {            // zero the display FB rect (NO 
   // loader/black-out ran wide while the atlas was resident); starting 4:3 blanked 320 and spared it.
   // The wide margin is the RENDERER's job (native backdrop / pillarbox fills [320,nw) at present), not a
   // guest-VRAM clear, so it must never touch the atlas here.
+  // GUARDED, because THIS WRITER HAS ALREADY CLOBBERED THE ATLAS ONCE — see the #54 note above, where
+  // a widened clear zeroed the texture pages that live to the right of the framebuffer and corrupted
+  // every object sampling them. It was fixed by narrowing the rect, but nothing was ever put in place
+  // to CATCH a recurrence, and the atlas guard did not watch this path.
+  vram_guard_check("blank", s_disp_x, s_disp_y, dw, dh, 0);
   for (int y = 0; y < dh; y++)
     for (int x = 0; x < dw; x++) *vram(s_disp_x + x, s_disp_y + y) = 0;   // opaque black (555, bit15=0)
 }

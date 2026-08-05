@@ -19,7 +19,12 @@
 //   * vram_register_atlas(x,y,w,h,tag): the native upload registers each big texture-group page it lands as
 //     a PROTECTED, populated region. These are exactly the atlas/font/CLUT rectangles the characters and UI
 //     sample from. Re-uploads to the same rect refresh in place (the region is re-confirmed live, not stale).
-//   * vram_guard_check(path,x,y,w,h,src): every VRAM-writing transfer calls this. It (a) bounds-reports a
+//   * vram_guard_check(path,x,y,w,h,src): every VRAM-writing transfer calls this — the native upload,
+//     the GP0(0xA0) CPU->VRAM load, the GP0(0x80) VRAM->VRAM copy, the GP0(0x02) FILL, and the
+//     display blank. That list is the guard's COVERAGE, and it is load-bearing: fill and blank were
+//     absent until 2026-08-05, so a clobber arriving through either produced no line at all and the
+//     guard read as "no clobber found" when it had simply not been looking. If a new VRAM writer is
+//     added, it calls this too, or this comment becomes a lie again. It (a) bounds-reports a
 //     transfer whose base or extent is OUT OF the 1024x512 VRAM page (the smoking gun of a garbage
 //     descriptor — a correct transfer never has an out-of-page base), and (b) under `debug vramguard`, logs
 //     any transfer that OVERLAPS a registered, still-resident atlas region but is NOT itself an atlas
@@ -51,6 +56,17 @@ static inline int rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, 
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
+// REGISTRATION IS CURRENTLY TOMBA-ONLY, and that is a real limitation, not a detail. The only caller
+// is the framework's NATIVE upload path, so a port whose game uploads its textures through GP0(0xA0)
+// instead — Spider-Man does, 12090 uploads in a 600-frame boot — registers NOTHING, and the clobber
+// test below then cannot fire no matter what happens to its atlas. Measured: "0 atlas region(s)
+// registered ... native=0". vram_guard_report() says so out loud rather than reporting a clean run.
+//
+// DO NOT "fix" this by registering A0 uploads whose x >= 320: that threshold is Tomba's framebuffer
+// layout (two 320-wide buffers) turned into a magic constant, and it is wrong for a port that
+// displays 512x240. The port-agnostic answer is to register a page when a DRAW SAMPLES it — the
+// texpage/CLUT a primitive actually reads is ground truth about what is live atlas, needs no layout
+// assumption, and works for every consumer. Not done here; recorded as the next step.
 void GpuState::vram_register_atlas(int x, int y, int w, int h, const char* tag) {
   if (w <= 0 || h <= 0) return;
   // Refresh an existing region with the same origin in place (the game re-uploads pages each area load).
@@ -75,13 +91,43 @@ void GpuState::vram_register_atlas(int x, int y, int w, int h, const char* tag) 
   snprintf(r.tag, sizeof r.tag, "%s", tag ? tag : "tex");
 }
 
-void GpuState::vram_guard_check(Core* core, const char* path, int x, int y, int w, int h, uint32_t src) {
+// THE NEGATIVE, WITH ITS DENOMINATOR. "No clobber found" is worth nothing on its own — it reads
+// identically whether the guard watched five writers across a hundred atlas pages and saw nothing, or
+// watched nothing at all. (It was the latter for GP0 fills and the display blank until 2026-08-05.)
+// So the guard states what it WATCHED: how many atlas regions are registered, how many writes of each
+// kind it checked, and how many clobbers and out-of-page rects that produced. A run whose census shows
+// 0 registered regions has proven NOTHING about clobbers, and this line says so out loud.
+void GpuState::vram_guard_report() {
+  if (!lucent::channel_on("vramguard")) return;
+  if (s_vg_reported_frame == (int)s_frame) return;
+  s_vg_reported_frame = (int)s_frame;
+  const long total = s_vg_checks[0] + s_vg_checks[1] + s_vg_checks[2] + s_vg_checks[3] + s_vg_checks[4];
+  lucent::info("vramguard",
+               "census f{}: {} atlas region(s) registered; {} write(s) checked "
+               "(native={} A0={} 80copy={} fill={} blank={}); {} clobber(s), {} out-of-page{}",
+               s_frame, s_vg_n, total, s_vg_checks[0], s_vg_checks[1], s_vg_checks[2],
+               s_vg_checks[3], s_vg_checks[4], s_vg_clobbers, s_vg_oob,
+               s_vg_n == 0 ? "  <-- NO ATLAS REGISTERED: a clobber CANNOT be detected in this run"
+                           : "");
+}
+
+void GpuState::vram_guard_check(const char* path, int x, int y, int w, int h, uint32_t src) {
   if (!lucent::channel_on("vramguard")) return;
   if (w <= 0 || h <= 0) return;
+  // Census first, so a write is counted even when it is clean — that count IS the denominator.
+  switch (path ? path[0] : 0) {
+    case 'n': s_vg_checks[0]++; break;
+    case 'A': s_vg_checks[1]++; break;
+    case '8': s_vg_checks[2]++; break;
+    case 'f': s_vg_checks[3]++; break;
+    case 'b': s_vg_checks[4]++; break;
+    default: break;
+  }
 
   // (a) Out-of-page base/extent: a correct atlas/render transfer is always wholly inside VRAM; an
   // out-of-page rect is a garbage descriptor that the vram() wrap would silently fold onto live VRAM.
   if (!rect_in_page(x, y, w, h)) {
+    s_vg_oob++;
     if (s_vg_oob_log++ < 40)
       lucent::info("vramguard", "OUT-OF-PAGE {} f{} rect=({},{} {}x{}) src=0x{:08X} node=0x{:08X} -> wraps onto VRAM (likely the clobber vector)", path ? path : "(null)", s_frame, x, y, w, h, src, s_cur_node);
   }
@@ -95,6 +141,7 @@ void GpuState::vram_guard_check(Core* core, const char* path, int x, int y, int 
   for (int i = 0; i < s_vg_n; i++) {
     if (!s_vg[i].live) continue;
     if (rects_overlap(x, y, w, h, s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h)) {
+      s_vg_clobbers++;
       if (s_vg_clobber_log++ < 80)
         lucent::info("vramguard", "CLOBBER {} f{} rect=({},{} {}x{}) HITS atlas[{}] ({},{} {}x{}) src=0x{:08X} node=0x{:08X}", path ? path : "(null)", s_frame, x, y, w, h, s_vg[i].tag,
                      s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h, src, s_cur_node);

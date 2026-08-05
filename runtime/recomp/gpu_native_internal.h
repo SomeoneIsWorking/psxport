@@ -124,12 +124,24 @@ struct GpuState {
   VgRegion s_vg[VG_MAX] = {};
   int s_vg_n = 0;
   long s_vg_oob_log = 0, s_vg_clobber_log = 0;   // vramguard log-rate counters (vram_xfer.cpp)
+  // vramguard CENSUS. A "0 clobbers" result is meaningless without its denominator: the clobber test
+  // can only fire if atlas regions were ever REGISTERED and non-atlas writes were ever CHECKED, and
+  // for two of the five writers it could not fire at all until 2026-08-05 because they never called
+  // the guard. These make the negative self-describing — see vram_guard_report().
+  long s_vg_checks[5] = {0};      // per writer: native, A0, 80copy, fill, blank
+  long s_vg_clobbers = 0, s_vg_oob = 0;
+  int  s_vg_reported_frame = -1;
   // Register a texture-group/atlas upload rect as a protected, populated region (called from the native
   // upload). label distinguishes atlas vs CLUT vs framebuffer. Overlapping re-uploads refresh in place.
   void vram_register_atlas(int x, int y, int w, int h, const char* tag);
   // Guard a transfer: validate bounds; under vramguard, log if it clobbers a protected atlas region.
   // `path` names the writer (e.g. "A0", "80copy", "native"); src is the guest source addr (0 if N/A).
-  void vram_guard_check(Core* core, const char* path, int x, int y, int w, int h, uint32_t src);
+  // Validate a VRAM-writing transfer against the registered atlas regions (diagnostic only).
+  // Takes NO Core*: it reads only GpuState members, and the unused parameter it used to carry made it
+  // uncallable from the writers that have no Core in scope — which is precisely why the display blank
+  // went unguarded.
+  void vram_guard_report();   // census line: what the guard actually watched (see vram_xfer.cpp)
+  void vram_guard_check(const char* path, int x, int y, int w, int h, uint32_t src);
 
   // ---- diagnostics (per-Core so SBS cores never share dedupe/log state) -----------------------
   int s_log = 0;                    // PSXPORT_GPU_LOG / `debug gpu` per-frame prim log
