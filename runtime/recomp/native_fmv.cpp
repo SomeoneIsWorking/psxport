@@ -201,11 +201,18 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   // Audio: STR interleaves XA-ADPCM sectors with the video sectors. Decode them, play through
   // a dedicated SDL device at the XA rate, and pace VIDEO to the audio/media clock (the real
   // PSX rate). uncapped = PSXPORT_FMV_FPS=0 (headless dumps: no pacing, no audio device).
-  // AUTO-UNCAP HEADLESS: a headless run has no viewer, so real-time FMV pacing only wastes wall-clock
-  // (it was making a field probe take ~77s instead of ~1.4s). Fast-forward the FMV unless the user
-  // explicitly set an FMV_FPS. Same principle as the windowed-gated gpu_pace/stub pacing.
-  int uncapped = 0; { const char* f = cfg_str("PSXPORT_FMV_FPS"); if (f && *f) uncapped = (atoi(f) == 0);
-                      else if (cfg_on("PSXPORT_VK_HEADLESS")) uncapped = 1; }
+  // FMV pacing is asked for explicitly, never inferred from the render sink.
+  //
+  // This used to auto-uncap on PSXPORT_VK_HEADLESS. USER RULE: "Headless and windowed should never
+  // be different code paths" — and pacing is not a sink concern, it is what the movie DOES. A
+  // headless run that silently fast-forwards is measuring a different program from the one the user
+  // watches, which is how a black intro was measured green all day while the user still saw black.
+  // It also makes every headless timing/sync number about the movies meaningless by construction,
+  // including the audio/video sync question that is still open on this port.
+  //
+  // The wall-clock saving is real and is still available — ask for it: PSXPORT_FMV_FPS=0. A probe
+  // that wants to fast-forward says so, and its log then records that it did.
+  int uncapped = 0; { const char* f = cfg_str("PSXPORT_FMV_FPS"); if (f && *f) uncapped = (atoi(f) == 0); }
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
   long media_frames = 0;                       // cumulative audio sample-pairs = media clock

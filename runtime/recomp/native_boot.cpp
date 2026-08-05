@@ -614,11 +614,23 @@ void native_boot_run(Core* c) {
   // menu machine's states 4..7 ARE the OP.STR sequence (demo.cpp demo_menu_machine), which now
   // plays it via fmv.play. Playing OP here too made it play TWICE (boot + front-end) — the
   // "FMV repeats" bug. Boot plays LOGO; the front-end plays OP -> SCEA->LOGO->OP->title, no repeat.
-  // Skip the intro FMVs when there's no viewer: PSXPORT_NO_FMV, OR any headless run (a headless probe
-  // has nobody watching — playing/decoding the intro movies just burns wall-clock; a field probe went
-  // from ~77s to ~1.4s). The in-game/cutscene FMVs that still play are also auto-uncapped in headless
-  // (native_fmv.c) so they fast-forward. Set PSXPORT_NO_FMV=0 explicitly to force them on if ever needed.
-  int skip_fmv = cfg_on("PSXPORT_NO_FMV") || cfg_on("PSXPORT_VK_HEADLESS");
+  // Skip the intro FMVs on PSXPORT_NO_FMV ONLY.
+  //
+  // This used to read `|| cfg_on("PSXPORT_VK_HEADLESS")`, and that one term cost a user-reported bug
+  // a whole day. USER RULE: "Headless and windowed should never be different code paths" — headless
+  // is the same pipeline with a different FINAL SINK (a readback instead of a swapchain present),
+  // and whether a movie PLAYS is game behaviour, not a sink concern.
+  //
+  // Concretely: the user reported "boots into black screen, missing splash or FMV". Every
+  // measurement taken to investigate it was headless, so every one of them SKIPPED THE INTRO MOVIES
+  // BY CONSTRUCTION. The instrument could not produce the failing answer, the numbers came back
+  // green, and the bug was reported fixed while the user still saw a black screen. A run that
+  // silently does less than the real program is not a fast probe, it is a lie with a good excuse.
+  //
+  // The wall-clock argument the old comment made (a field probe 77s -> 1.4s) is real, and it is what
+  // PSXPORT_NO_FMV is FOR — a probe that does not want movies asks for that explicitly, and its log
+  // then says so. What is not acceptable is inferring the intent from the render sink.
+  int skip_fmv = cfg_on("PSXPORT_NO_FMV");
   const char* nf_ov = cfg_str("PSXPORT_NO_FMV");
   if (nf_ov && atoi(nf_ov) == 0 && *nf_ov) skip_fmv = 0;     // explicit PSXPORT_NO_FMV=0 forces FMVs on
   // The list comes from GameConfig::bootFmv — it used to be a hardcoded path, which is the first
