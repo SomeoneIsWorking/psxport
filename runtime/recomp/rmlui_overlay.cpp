@@ -50,6 +50,7 @@ static std::string rml_asset(const char* rel) {
 #include <algorithm>
 
 #include "mods.h"
+#include "game_hooks_opt.h"   // OPTIONAL hooks are never called directly — see that header
 // g_fps60_on retired — read game->mods.fps60 (mods.h; #included above)
 extern "C" int cfg_on(const char* name);    // cfg.c
 void gpu_vk_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap);
@@ -246,7 +247,7 @@ void RmlOverlay::refreshReadouts() {
     if (Rml::Element* e = d->GetElementById("music_readout")) {
         std::string txt = "stopped";
         if (game) {
-            const char* nm = game->core.hooks->audioNowPlayingName(&game->core);
+            const char* nm = game_audio_now_playing_name(&game->core, game->core.hooks);
             if (nm) txt = std::string("playing: ") + nm;
         }
         if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
@@ -331,8 +332,8 @@ void RmlOverlay::activateFocused(int dir) {
         // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
         if (id == "warp_go") { setWarpReadout(armWarp()); return; }
         if (id.rfind("music_", 0) == 0 && game) {
-            if (id == "music_stop") game->core.hooks->audioSoundTestPlay(&game->core, -1);
-            else                    game->core.hooks->audioSoundTestPlay(&game->core, atoi(id.c_str() + 6));
+            if (id == "music_stop") game_audio_sound_test_play(&game->core, game->core.hooks, -1);
+            else                    game_audio_sound_test_play(&game->core, game->core.hooks, atoi(id.c_str() + 6));
             refreshReadouts();
         }
         return;

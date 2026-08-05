@@ -137,6 +137,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/boot.cpp
   ${PSXPORT_ROOT}/runtime/recomp/rmlui_overlay.cpp
   ${PSXPORT_ROOT}/runtime/recomp/rmlui_render_gpu.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/game_hooks_opt.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_glue.cpp
   ${PSXPORT_ROOT}/runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
   ${PSXPORT_ROOT}/runtime/recomp/render_queue.cpp     # engine-owned draw-ORDER authority (P1.7c)
