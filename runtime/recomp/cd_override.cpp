@@ -19,6 +19,7 @@
 #include "overlay_router.h"
 #include "platform_hle.h"   // class PlatformHle — CD-subsystem HLE registrations go through the singleton
 #include <lucent/log.h>
+#include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -147,6 +148,10 @@ static void cd_command(Core* c) {
       // That makes this a clean discriminator rather than a guess — mark the stream and let the
       // periodic pump drive it, instead of the self-terminating burst a file read wants.
       c->game->cd.stream_active = 1;
+      // Fresh pacing budget per stream, so a new movie cannot inherit the previous one's credit and
+      // burst its opening sectors.
+      c->game->cd.stream_t0_ns = 0;
+      c->game->cd.stream_delivered = 0;
       // Run the file-read burst ONLY for a game that has not taken over CdRead. Where CdRead is
       // served natively (cdReadStock set), a finite read never issues ReadN, so every ReadN arriving
       // here is a CONTINUOUS read — which has no end for the burst to reach. It ran away to its
@@ -603,16 +608,57 @@ void Cd::hleInit() {
 // must be pumped from the port's timing, not from the command that started it.
 //
 // The guest's own Pause/Stop clears stream_active, so this never outlives what the game asked for.
+// ---- streamed-read drive pacing (declared in cd.h; gated by tests/test_cd_stream_drive_rate.cpp) --
+int cd_stream_sectors_per_sec(uint8_t mode) {
+  return (mode & 0x80) ? 150 : 75;    // 75 sectors/s per speed multiple; bit 0x80 = double speed
+}
+
+int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t already_delivered) {
+  if (sectors_per_sec <= 0) return 0;
+  const uint64_t owed = elapsed_ns * (uint64_t)sectors_per_sec / 1000000000ull;
+  if (owed <= (uint64_t)already_delivered) return 0;   // caught up or ahead — never negative
+  uint64_t due = owed - (uint64_t)already_delivered;
+  if (due > (uint64_t)CD_STREAM_MAX_BURST) due = CD_STREAM_MAX_BURST;
+  return (int)due;
+}
+
 void Cd::pumpStream(Core* c, int sectors) {
   const GameConfig* cfg = c->cfg;
   if (!stream_active || !cfg || !cfg->cdReadyCbPtr) return;
   const uint32_t cb = c->mem_r32(cfg->cdReadyCbPtr);
   if (!cb) return;
 
+  // PACE IT AT THE DRIVE'S RATE. The caller asks for `sectors`; the DRIVE decides how many it can
+  // actually have delivered by now. Without this the stream ran as fast as the guest asked and the
+  // movies played ~4x too fast against their own (correctly paced) audio — see cd_stream_sectors_due.
+  //
+  // A refusal here is not a failure: StGetNext's honest answer becomes "no sector ready", which is
+  // exactly what the guest sees on hardware between sectors, and it spins in its own loop until the
+  // drive catches up. The host still gets its turn at every recompiled function entry, so this
+  // cannot wedge.
+  {
+    const uint64_t now_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (stream_t0_ns == 0) stream_t0_ns = now_ns;    // first pump of this stream seeds the clock
+    const uint8_t mode = game ? game->cdc.mode : 0x80;
+    const int rate = cd_stream_sectors_per_sec(mode);
+    int due = cd_stream_sectors_due(now_ns - stream_t0_ns, rate, stream_delivered);
+    // The very first sector is never withheld: at t=0 nothing has elapsed, so nothing is owed, and
+    // a stream that cannot deliver its first sector can never start.
+    if (stream_delivered == 0 && due == 0) due = 1;
+    if (due <= 0) {
+      lucent::debug("cdpace", "holding: {} sector(s) delivered in {} ms at {}/s — the drive is ahead",
+                    stream_delivered, (now_ns - stream_t0_ns) / 1000000ull, rate);
+      return;
+    }
+    if (sectors > due) sectors = due;
+  }
+
   // The callback runs as an ordinary guest function; save and restore the whole register context
   // around it so whatever the port interrupted sees nothing.
   const R3000 saved = *static_cast<R3000*>(c);
   for (int i = 0; i < sectors && stream_active; i++) {
+    stream_delivered++;
     c->r[A0] = 1;                      // libcd passes the completion status as arg 1
     c->r[A1] = 0;
     rec_dispatch(c, cb);

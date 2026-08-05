@@ -6,6 +6,34 @@
 #pragma once
 #include <cstdint>
 class Game;
+class Core;
+
+// ---- streamed-read DRIVE PACING ----------------------------------------------------------------
+// A continuous read (XA / STR) is paced by the DRIVE, not by how fast the guest asks for sectors.
+// Cd::pumpStream used to deliver one every time the guest's StGetNext found none ready, with no rate
+// limit at all, so a movie ran as fast as the host could walk the file: measured on spider1, the
+// guest's data head covered 2040 sectors of CINEMAS/ATVILOGO.STR while the real-time-paced XA audio
+// head covered 512 — video 3.98x too fast, reproduced at 3.97x on LOGO.STR. Audio can never sync to
+// that, and nothing was wrong with the audio.
+//
+// These two are pure functions of hardware facts and elapsed time, so they are gated by a hermetic
+// test (tests/test_cd_stream_drive_rate.cpp) rather than reasoned about.
+
+// Sectors per second for a Setmode byte. A CD-ROM delivers 75 sectors/s per speed multiple, and
+// Setmode bit 0x80 selects double speed. Not a tunable: the guest programs mode 0xE0 for these
+// movies, which is double speed.
+int cd_stream_sectors_per_sec(uint8_t mode);
+
+// How many sectors the drive owes RIGHT NOW: elapsed x rate, minus what has already been delivered
+// for this stream. Never negative (a caller uses it directly as a loop count) and bounded per call,
+// so a long stall cannot be repaid as one unpaced burst — which would be the very behaviour this
+// exists to stop.
+int cd_stream_sectors_due(uint64_t elapsed_ns, int sectors_per_sec, uint32_t already_delivered);
+
+// Per-call bound on the catch-up above. One video field of double-speed delivery (150/60 = 2.5,
+// rounded up): enough that a stream pumped once per field keeps up exactly, and small enough that a
+// backlog is repaid over several fields instead of in one burst.
+#define CD_STREAM_MAX_BURST 3
 
 class Cd {
 public:
@@ -43,6 +71,14 @@ public:
   // keep being invoked for as long as it runs, paced by the drive — so it needs a periodic pump
   // rather than the burst a file read gets. Set on ReadN/ReadS, cleared by the guest's own Pause/Stop.
   int stream_active = 0;
+
+  // Drive-rate pacing for that stream (see cd_stream_sectors_due above). `stream_t0_ns` is the
+  // steady-clock reading when the stream started and `stream_delivered` counts the sectors handed to
+  // the guest since then; together they say whether the drive is ahead of or behind real time.
+  // Reset on every ReadN/ReadS so a new movie starts with a fresh budget rather than inheriting the
+  // last one's credit.
+  uint64_t stream_t0_ns    = 0;
+  uint32_t stream_delivered = 0;
 
 
   // Sector FIFO for the stock-libcd path. Real hardware presents ONE sector as a byte stream that
