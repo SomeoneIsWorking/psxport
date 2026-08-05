@@ -67,6 +67,23 @@ static inline int rects_overlap(int ax, int ay, int aw, int ah, int bx, int by, 
 // displays 512x240. The port-agnostic answer is to register a page when a DRAW SAMPLES it — the
 // texpage/CLUT a primitive actually reads is ground truth about what is live atlas, needs no layout
 // assumption, and works for every consumer. Not done here; recorded as the next step.
+// Register a page the game SAMPLED. This is the port-agnostic half of the registry: it needs no
+// framebuffer-layout constant, because "a draw read from here" is ground truth about what is live
+// atlas regardless of how the game got the pixels there.
+//
+// EXCLUDES THE DISPLAYED FRAMEBUFFER. A game may legitimately sample from the screen (feedback,
+// blur, a captured backdrop); that region is NOT atlas, and registering it would make every ordinary
+// draw into the framebuffer look like a clobber. Residual and deliberately not hidden: the BACK
+// buffer of a double-buffered game is not the displayed rect, so it can still be registered if
+// sampled — such a hit is reported with the "sampled" tag so it triages at a glance rather than
+// being silently filtered out.
+void GpuState::vram_register_sampled(int x, int y, int w, int h, const char* tag) {
+  if (w <= 0 || h <= 0) return;
+  if (!lucent::channel_on("vramguard")) return;   // pure diagnostic bookkeeping; off = no cost
+  if (rects_overlap(x, y, w, h, s_disp_x, s_disp_y, s_disp_w, s_disp_h)) return;
+  vram_register_atlas(x, y, w, h, tag);
+}
+
 void GpuState::vram_register_atlas(int x, int y, int w, int h, const char* tag) {
   if (w <= 0 || h <= 0) return;
   // Refresh an existing region with the same origin in place (the game re-uploads pages each area load).
@@ -136,12 +153,30 @@ void GpuState::vram_guard_check(const char* path, int x, int y, int w, int h, ui
   // (path "native") legitimately (re)write these regions — they are how the region got registered; skip
   // them. Any OTHER path (a render-OT 0x80 VRAM->VRAM copy, a 0xA0 DMA load) that lands on a live texpage
   // is the corruption: it overwrites pixels a draw will sample as the wrong page/palette = stripes.
-  int is_atlas_upload = (path && path[0] == 'n');   // "native" upload re-fills its own region
-  if (is_atlas_upload) return;
+  // AN UPLOAD IS HOW TEXTURE DATA LEGITIMATELY ARRIVES, so it is never the clobber — whichever
+  // mechanism this particular game uses. Tomba!2 streams its atlas through the framework's native
+  // upload; Spider-Man streams it through GP0(0xA0), 12090 times in a 600-frame boot. Treating only
+  // "native" as legitimate (the original test) made every one of those A0 texture loads look like a
+  // clobber: 9253 reports in one boot, which is not a signal, it is noise that buries one.
+  //
+  // The distinction is structural, not tuned: native and A0 are CPU->VRAM transfers of pixel data —
+  // that IS a texture load. A fill, a VRAM->VRAM copy and a display blank are not; when one of those
+  // lands on a page a draw is sampling, the page's contents change to something nobody uploaded, and
+  // that is precisely the corruption this guard exists to name.
+  const char p0 = path ? path[0] : 0;
+  const int is_upload = (p0 == 'n' || p0 == 'A');
+  if (is_upload) return;
   for (int i = 0; i < s_vg_n; i++) {
     if (!s_vg[i].live) continue;
     if (rects_overlap(x, y, w, h, s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h)) {
       s_vg_clobbers++;
+      // ONE LINE PER (writer, region) PAIR. A clobber that repeats every frame is one fact, not
+      // thousands; printing it thousands of times spends the log budget on boot and hides the NEW
+      // clobber that appears later — which, for a bug reproduced by playing to a specific moment, is
+      // the only one that matters. The census still counts every occurrence, so the total is not lost.
+      const int wclass = (p0 == 'f') ? 0 : (p0 == '8') ? 1 : (p0 == 'b') ? 2 : 3;
+      if (s_vg_seen[wclass][i]) return;
+      s_vg_seen[wclass][i] = 1;
       if (s_vg_clobber_log++ < 80)
         lucent::info("vramguard", "CLOBBER {} f{} rect=({},{} {}x{}) HITS atlas[{}] ({},{} {}x{}) src=0x{:08X} node=0x{:08X}", path ? path : "(null)", s_frame, x, y, w, h, s_vg[i].tag,
                      s_vg[i].x, s_vg[i].y, s_vg[i].w, s_vg[i].h, src, s_cur_node);

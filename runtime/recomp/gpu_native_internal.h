@@ -130,6 +130,9 @@ struct GpuState {
   // the guard. These make the negative self-describing — see vram_guard_report().
   long s_vg_checks[5] = {0};      // per writer: native, A0, 80copy, fill, blank
   long s_vg_clobbers = 0, s_vg_oob = 0;
+  // Log DEDUP key set: one line per (writer, atlas region) pair. Without it the 80-line cap is spent
+  // on whatever clobbers first — boot — and a NEW clobber later (the one being hunted) never prints.
+  unsigned char s_vg_seen[8][VG_MAX] = {};
   int  s_vg_reported_frame = -1;
   // Register a texture-group/atlas upload rect as a protected, populated region (called from the native
   // upload). label distinguishes atlas vs CLUT vs framebuffer. Overlapping re-uploads refresh in place.
@@ -140,6 +143,9 @@ struct GpuState {
   // Takes NO Core*: it reads only GpuState members, and the unused parameter it used to carry made it
   // uncallable from the writers that have no Core in scope — which is precisely why the display blank
   // went unguarded.
+  // Register a page/CLUT the GAME ACTUALLY SAMPLED as live atlas (port-agnostic — see gpu_native.cpp
+  // set_texpage). Skips anything overlapping the displayed framebuffer, which is not atlas.
+  void vram_register_sampled(int x, int y, int w, int h, const char* tag);
   void vram_guard_report();   // census line: what the guard actually watched (see vram_xfer.cpp)
   void vram_guard_check(const char* path, int x, int y, int w, int h, uint32_t src);
 

@@ -512,8 +512,23 @@ void GpuState::set_texpage(uint16_t tp) {
   s_tp_blend = (tp >> 5) & 3;
   s_tp_mode = (tp >> 7) & 3; if (s_tp_mode > 2) s_tp_mode = 2;
   s_tp_dither = (tp >> 9) & 1;     // ordered 4x4 dither enable
+  // A PAGE A DRAW SAMPLES IS, BY DEFINITION, LIVE ATLAS. That is the port-agnostic registration the
+  // guard needs: it asks the game what it READS rather than guessing from where an upload landed, so
+  // it works for a game that uploads through GP0(0xA0) (Spider-Man) exactly as for one that uses the
+  // framework's native upload path (Tomba!2). Registering on the texpage CHANGE, not per texel, keeps
+  // it to a handful of calls per frame; re-registration refreshes in place.
+  //
+  // VRAM FOOTPRINT OF A PAGE, by colour mode — a page is 256 texels wide, and a VRAM cell is 16 bits,
+  // so 4bpp packs 4 texels per cell (64 cells), 8bpp packs 2 (128), and 15bpp is 1:1 (256).
+  const int page_w = (s_tp_mode == 0) ? 64 : (s_tp_mode == 1) ? 128 : 256;
+  vram_register_sampled(s_tp_x, s_tp_y, page_w, 256, "texpage");
 }
-void GpuState::set_clut(uint16_t cl) { s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF; }
+void GpuState::set_clut(uint16_t cl) {
+  s_clut_x = (cl & 0x3F) * 16; s_clut_y = (cl >> 6) & 0x1FF;
+  // A CLUT is one VRAM row: 16 entries for 4bpp, 256 for 8bpp. The mode is whatever the current
+  // texpage selected; a 15bpp page samples no CLUT at all, so nothing is registered for it.
+  if (s_tp_mode < 2) vram_register_sampled(s_clut_x, s_clut_y, s_tp_mode == 0 ? 16 : 256, 1, "clut");
+}
 
 // sv (optional, NULL = no shadow): the prim's 4 VIEW-SPACE verts (x=vx, y=vy, z=pz) for the shadow map.
 // When non-NULL and opaque, the queued item carries them and RenderQueue::emitItem re-pushes them as two tris
