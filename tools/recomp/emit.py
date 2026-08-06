@@ -138,7 +138,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-05.1"   # internal labels demoted; intra-function bal/jr-$ra coroutines
+RECOMP_VERSION = "2026-08-06.1"   # jr-$ra classifier: module-wide save slots + a real CFG fixpoint
 
 R = lambda n: f"c->r[{n}]"
 
@@ -1402,7 +1402,48 @@ def ra_tail_returns(ins, lo, hi):
     return out
 
 
-def ra_computed_jumps(exe, bounds):
+def ra_const_base(exe, at, reg):
+    """The LINK-TIME CONSTANT address held in `reg` at instruction `at`, or None if it is not one.
+
+    Only the `lui rX,H` [`addiu rX,rX,L`] idiom, scanned back at most 16 instructions. Anything else
+    — a base arriving in an argument register, a pointer loaded from memory, an indexed address — is
+    UNRESOLVED and returned as None, never guessed in either direction. `ra_computed_jumps` counts
+    the unresolved cases and prints the count, because "found no save slot" and "could not look" are
+    different answers and must not read the same."""
+    lo_add = None
+    for x in range(at - 4, max(at - 68, exe.load) - 4, -4):
+        i = decode(x, exe.word(x))
+        if i.op == "addiu" and i.rt == reg and lo_add is None and i.rs == reg:
+            lo_add = i.simm
+        elif i.op == "lui" and i.rt == reg:
+            return ((i.simm & 0xFFFF) << 16) + (lo_add or 0)
+        elif i.rt == reg and i.kind in (D.LOAD, D.ALU_RRI) and i.op != "addiu":
+            return None
+        elif i.rd == reg and i.kind in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V):
+            return None
+    return None
+
+
+def ra_global_save_slots(exe):
+    """Every `(link-time base, offset)` in the MODULE that some `sw $ra` writes to.
+
+    MODULE-WIDE ON PURPOSE, and keyed by the ADDRESS rather than the displacement. A frameless
+    function that parks its return address in a fixed GLOBAL block shares that block with every other
+    frameless function by construction, so "the same *fragment* stored to this offset" is not a
+    property the guest has — see `ra_computed_jumps`. Stack slots are excluded: an `sp`-relative
+    displacement means nothing without the frame it belongs to, and `lw $ra, N(sp)` is already a
+    return by the rule above."""
+    slots = set()
+    for a in range(exe.load, exe.text_end, 4):
+        i = decode(a, exe.word(a))
+        if i.op == "sw" and i.rt == 31 and i.rs != 29:
+            b = ra_const_base(exe, a, i.rs)
+            if b is not None:
+                slots.add((b, i.simm))
+    return slots
+
+
+def ra_computed_jumps(exe, bounds, stats=None):
     """Addresses of `jr $ra` that are COMPUTED JUMPS, not returns — decided per-`jr` by
     reaching-definitions on `$ra` over each guest function in `bounds`.
 
@@ -1419,47 +1460,136 @@ def ra_computed_jumps(exe, bounds):
     answers; the decision has to be per-`jr`.
 
         reaching def is `lw $ra, N(sp)`                              -> return
-        reaching def is `lw $ra, N(..)` at an offset this function
-          also `sw $ra`-ed to                                        -> return  (a save slot)
-        reaching def is `lw $ra, N(..)` otherwise                    -> COMPUTED (a continuation)
+        reaching def is `lw $ra, N(<const base>)` and some `sw $ra`
+          in the MODULE writes that same (base, N)                   -> return  (a save slot)
+        reaching def is `lw $ra, N(<const base>)` otherwise          -> COMPUTED (a continuation)
+        reaching def is `lw $ra, N(<unresolved base>)`               -> return  (cannot prove either)
         reaching def is a `jal` / `bltzal` / `bgezal` / `jalr $ra`   -> COMPUTED (a live link)
-        anything else, or no definition at all                       -> return
+        anything else, no definition, or DISAGREEING paths           -> return
 
     The default is `return` on everything it cannot prove, so this can only move a site AWAY from
-    current behaviour on positive evidence. Two false-positive classes were found by auditing the
-    sites it reported and are handled above: `move $ra, $sN` restore, and a FRAMELESS function that
-    saves `$ra` to a GLOBAL and reloads it (`0x8008BE5C`: `sw $ra, 0x392C($at)` … `lw $ra, 0x392C($ra)`)
-    — "not the stack" is not the same as "not a return address".
+    current behaviour on positive evidence.
 
-    `bounds` is the function-start list to partition by, and it matters as much as the rule: it must be
-    the extent of the GUEST function, so mid-body re-entry seeds must be excluded from it or the
-    definition ends up in a different fragment from the `jr` that reads it. Measured on Spider-Man:
-    1 site out of 1722. The game-side tool `tools/ra_classes.py` reports and cross-checks this set
-    without a build.
+    TWO THINGS DECIDE THIS, AND BOTH WERE WRONG WHEN IT FIRST LANDED (spyro docs/issues/0040, 0046 —
+    nine ordinary returns dispatched as coroutines, a `recomp-MISS` at 0x8001E91C and SIGABRT 3544
+    frames into the run, on a game that has no coroutine anywhere in its MAIN).
+
+    **The save-slot test is MODULE-WIDE and keyed by the ADDRESS.** A frameless function that parks
+    `$ra` in a GLOBAL block shares that block with every other frameless function BY CONSTRUCTION —
+    Spyro's hand-written renderers all spill to `0x80077DD8+44` (19 stores, 457 `sw $ra` sites in the
+    module). So "did THIS fragment also store to that displacement" is not a property the guest has:
+    it answers "continuation" on a plain return whenever the partition splits a body, and it answers
+    "return" on a real continuation whenever an unrelated block happens to reuse the displacement.
+    `ra_global_save_slots` asks the question the guest actually answers. It also makes the analysis
+    INDEPENDENT of the partition, which matters because the partition is not the guest function list
+    and never can be: it is every address the emitter had to make addressable.
+
+    **The traversal is a fixpoint over the BASIC-BLOCK GRAPH, not a sweep in address order.** A `jal`
+    on a path that does not reach the `jr` cannot define the `$ra` that `jr` reads. Spyro
+    `0x80053570` is the case: the `bne` at `0x8005358C` jumps over the `jal` at `0x80053598`, whose
+    path leaves through its own `jr $a3`, so `$ra` is untouched on every path that reaches
+    `0x800535E0`/`0x80053600`. A linear sweep walks past that `jal` anyway. Paths that DISAGREE merge
+    to "not proven", i.e. return.
+
+    Walking the graph means deciding what a `jal` does, and the answer is taken from `emit_func`'s own
+    `intra_links` rule so the classifier and the emitter cannot drift: a `jal` whose target lies
+    INSIDE this fragment and is NOT a function entry is emitted `goto L_target` (an internal `bal`),
+    so control really does enter that block with the link live — walk into it. A `jal` to a FUNCTION is
+    a C call whose callee returns here, so do not. `bltzal`/`bgezal` are always emitted as calls
+    (`emit_control`), so they are never walked into either.
+
+    Spider-Man's `0x8002A338` is the case the analysis exists for — a resumable bit-stream decoder
+    whose three `jr $ra` are not the same kind: `0x8002A460` resumes a continuation, `0x8002A7E0` and
+    `0x8002A838` are ordinary returns. It stays classified correctly under both rules above, and it is
+    worth seeing WHY the save-slot rule does not misfire on it: the decoder does save its continuation
+    to a global (`0x80097D88+48`), but it saves it from `$at` (`or $1,$zero,$ra` at `0x8002A7EC`, then
+    `sw $at,48($t6)`), never from `$ra` — because at that instant `$ra` holds the CALLER's return
+    address, which it restores from the stack and returns through. A callee-save prologue stores `$ra`
+    itself. That difference is not a coincidence, it is what the two idioms mean, and it is why
+    `sw $ra` is the right thing to look for. Measured: 0 `sw $ra` anywhere in Spider-Man's MAIN
+    targets `(0x80097D88, 48)`, out of 1039 `sw $ra` sites.
+
+    `bounds` is the function-start list to partition by; mid-body re-entry seeds must be excluded from
+    it (`emit_module` does). `stats`, if given, is filled with the denominators the caller prints. The
+    game-side tool `spyro/tools/ra_classes.py` cross-checks this set off `generated/` without a build.
     """
+    slots = ra_global_save_slots(exe)
+    fset = set(bounds)
+    unresolved = set()
+    n_jr = 0
+
+    def defines(i):
+        """What instruction `i` leaves in `$ra`: 'return', 'computed', or None (does not touch it)."""
+        if i.op == "lw" and i.rt == 31:
+            if i.rs == 29:
+                return "return"
+            b = ra_const_base(exe, i.addr, i.rs)
+            if b is None:
+                unresolved.add(i.addr)
+                return "return"          # cannot prove a continuation -> the stated default
+            return "return" if (b, i.simm) in slots else "computed"
+        if i.op in ("jal", "bltzal", "bgezal"):
+            return "computed"
+        if i.kind == D.JUMPR and i.op == "jalr" and i.rd == 31:
+            return "computed"
+        if (i.kind in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V) and i.rd == 31) \
+                or (i.kind in (D.ALU_RRI, D.LUI) and i.rt == 31):
+            return "return"
+        return None
+
     out = set()
     for idx, lo in enumerate(bounds):
         hi = bounds[idx + 1] if idx + 1 < len(bounds) else exe.text_end
-        slots = set()
-        for a in range(lo, hi, 4):
+        at_jr = {}                        # jr-$ra address -> set of states it is REACHED with
+        work = [(lo, None)]
+        seen = set()
+        while work:
+            a, st = work.pop()
+            if not (lo <= a < hi) or (a, st) in seen:
+                continue
+            seen.add((a, st))
             i = decode(a, exe.word(a))
-            if i.op == "sw" and i.rt == 31:
-                slots.add(i.simm)
-        cur = None
-        for a in range(lo, hi, 4):
-            i = decode(a, exe.word(a))
+            if i.kind == D.UNKNOWN:
+                continue                  # trailing data, not code
             if i.op == "jr" and i.rs == 31:
-                if cur == "computed":
-                    out.add(a)
-            if i.op == "lw" and i.rt == 31:
-                cur = "return" if (i.rs == 29 or i.simm in slots) else "computed"
-            elif i.op in ("jal", "bltzal", "bgezal"):
-                cur = "computed"
-            elif i.kind == D.JUMPR and i.op == "jalr" and i.rd == 31:
-                cur = "computed"
-            elif (i.kind in (D.ALU_RRR, D.SHIFT_I, D.SHIFT_V) and i.rd == 31) \
-                    or (i.kind in (D.ALU_RRI, D.LUI) and i.rt == 31):
-                cur = "return"
+                at_jr.setdefault(a, set()).add(st)
+                continue                  # the `jr` ends the path
+            nxt = defines(i) or st
+            if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
+                # ORDER IS THE HARDWARE'S: a branch-and-link writes `$ra` when it ISSUES and the delay
+                # slot runs after, so a delay slot that also writes `$ra` overrides the link.
+                if i.op in ("jal", "bltzal", "bgezal"):
+                    nxt = "computed"
+                ds = defines(decode(a + 4, exe.word(a + 4)))
+                if ds is not None:
+                    nxt = ds
+                if i.kind == D.JUMPR:
+                    if i.op == "jalr":
+                        work.append((a + 8, nxt))
+                    continue              # an unresolved register jump ends this path
+                if i.op == "jal":
+                    if lo <= i.target < hi and i.target not in fset:
+                        work.append((i.target, nxt))     # internal `bal` — emit_func's intra_links
+                    work.append((a + 8, nxt))
+                elif i.op in ("bltzal", "bgezal"):
+                    work.append((a + 8, nxt))            # always a call; resumes past the slot
+                else:
+                    if i.target is not None:
+                        work.append((i.target, nxt))
+                    if i.kind == D.BRANCH:
+                        work.append((a + 8, nxt))
+                continue
+            work.append((a + 4, nxt))
+        for a in range(lo, hi, 4):
+            i = decode(a, exe.word(a))
+            if i.op == "jr" and i.rs == 31 and i.kind != D.UNKNOWN:
+                n_jr += 1
+        for site, states in at_jr.items():
+            if states == {"computed"}:    # proven on EVERY path that reaches it
+                out.add(site)
+    if stats is not None:
+        stats.update(jr_sites=n_jr, fragments=len(bounds), save_slots=len(slots),
+                     unresolved=sorted(unresolved))
     return out
 
 
@@ -2131,10 +2261,15 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     # fragments, and the `jal` whose link a later `jr $ra` reads then lives in a DIFFERENT fragment —
     # so a per-fragment analysis finds no definition and silently answers "return", which is the
     # right-looking answer for the wrong reason. See ra_computed_jumps.
-    ra_computed = ra_computed_jumps(exe, [a for a in funcs if a not in set(reentry)])
-    if ra_computed:
-        print(f"[{N.wrap}] {len(ra_computed)} `jr $ra` emitted as a COMPUTED JUMP (coroutine resume): "
-              + " ".join(f"0x{a:08X}" for a in sorted(ra_computed)))
+    ra_stats = {}
+    ra_computed = ra_computed_jumps(exe, [a for a in funcs if a not in set(reentry)], ra_stats)
+    # PRINTED UNCONDITIONALLY, WITH ITS DENOMINATORS. "0 coroutines" is the answer for most games and
+    # it has to be distinguishable from "the analysis never ran" — and from "it ran but could not see".
+    print(f"[{N.wrap}] `jr $ra`: {len(ra_computed)} of {ra_stats['jr_sites']} emitted as a COMPUTED "
+          f"JUMP (coroutine resume) over {ra_stats['fragments']} fragments; "
+          f"{ra_stats['save_slots']} global `sw $ra` save slots; "
+          f"{len(ra_stats['unresolved'])} `lw $ra` base(s) UNRESOLVED (blind spot — counted as "
+          f"returns): " + (" ".join(f"0x{a:08X}" for a in sorted(ra_computed)) or "(none computed)"))
 
     shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
     for k, a in enumerate(funcs):

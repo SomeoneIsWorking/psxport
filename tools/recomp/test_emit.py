@@ -1411,3 +1411,94 @@ def test_ra_saved_to_a_global_is_still_a_return():
     got2 = emit.ra_computed_jumps(exe_of(d2), [0x80010000])
     assert got2 == {0x8001000C}, \
         f"a reload from a slot this function never saved to is a continuation, got {got2}"
+
+
+def test_ra_global_save_slot_survives_a_partition_split():
+    # SPYRO 0x80022A2C, verbatim shape. A FRAMELESS renderer spills its callee-saved registers AND
+    # `$ra` to a fixed GLOBAL block (0x80077DD8 + 44) and reloads them in its epilogue. The emitter's
+    # partition is the emitted-function list, not the guest function, and this body gets SPLIT — its
+    # `overlay_funcs` jal-scan promoted 0x80023384, a `nop` in the delay slot of `j`, to a function
+    # entry. So the prologue's `sw $ra` lands in a DIFFERENT partition entry from the epilogue's
+    # `lw $ra`, a per-entry save-slot test cannot see it, and a plain return was emitted as
+    # `rec_dispatch(c, ra)` into the CALLER's mid-function return address -> recomp-MISS -> SIGABRT
+    # 3544 frames into the run (spyro docs/issues/0046).
+    #
+    # A GLOBAL save area is shared across guest functions BY CONSTRUCTION, so "the same entry stored
+    # to this offset" is unsound for one. The store has to be looked for MODULE-WIDE, keyed by the
+    # resolved link-time base as well as the offset.
+    a = Asm(0x80010000)
+    a.lui("at", 0x8007)             # 00  the global register-save block ...
+    a.addiu("at", "at", 0x7DD8)     # 04  ... = 0x80077DD8
+    a.sw("ra", 44, "at")            # 08  PROLOGUE: park the caller's return address in it
+    a.jal("helper")                 # 0C  ordinary call — clobbers $ra
+    a.nop()                         # 10
+    a.j("body")                     # 14  the split point is this jump's DELAY SLOT
+    a.nop()                         # 18  <- 0x80010018: seeded as a "function", splitting the body
+    a.label("body")
+    a.lui("at", 0x8007)             # 1C  EPILOGUE
+    a.addiu("at", "at", 0x7DD8)     # 20
+    a.lw("ra", 44, "at")            # 24  reload — a RETURN address, not a continuation
+    a.nop()                         # 28
+    a.jr("ra")                      # 2C  ORDINARY RETURN
+    a.nop()                         # 30
+    a.label("helper")
+    a.jr("ra")                      # 34
+    a.nop()                         # 38
+    data, _ = a.assemble()
+    e = exe_of(data)
+    # The BAD partition is the point: 0x80010018 is a delay-slot `nop`, not a function.
+    assert not emit.is_func_entry(e, 0x80010018), "the split point must not look like an entry"
+    got = emit.ra_computed_jumps(e, [0x80010000, 0x80010018, 0x80010034])
+    assert got == set(), \
+        ("a global save slot is a RETURN even when the partition splits the store away from the "
+         f"load, got {[hex(x) for x in sorted(got)]}")
+
+
+def test_ra_a_jal_on_a_skipped_path_does_not_poison_a_return():
+    # SPYRO 0x80053570, verbatim shape. The `bne` jumps OVER the `jal`; the `jal` path leaves through
+    # its own `jr $a3` and never reaches the `jr $ra`. So $ra is untouched on EVERY path that reaches
+    # the return — but the shipped analysis is a LINEAR SWEEP in address order (its docstring claims
+    # reaching-definitions), so it walks past the `jal` it can never have executed and calls the
+    # return a coroutine resume. The fix is an actual forward fixpoint over the basic-block graph.
+    a = Asm(0x80010000)
+    a.bne("v0", "a1", "skipped")    # 00  taken -> the jal below never runs
+    a.nop()                         # 04
+    a.addi("a3", "ra", 0)           # 08  the jal path saves $ra in $a3 ...
+    a.jal("helper")                 # 0C  ... calls ...
+    a.nop()                         # 10
+    a.jr("a3")                      # 14  ... and tail-returns through $a3. It NEVER falls through.
+    a.nop()                         # 18
+    a.label("skipped")
+    a.jr("ra")                      # 1C  ORDINARY RETURN — $ra is the caller's, untouched
+    a.nop()                         # 20
+    a.label("helper")
+    a.jr("ra")                      # 24
+    a.nop()                         # 28
+    data, _ = a.assemble()
+    e = exe_of(data)
+    got = emit.ra_computed_jumps(e, [0x80010000, 0x80010024])
+    assert got == set(), \
+        ("a `jal` the control flow skips cannot define the $ra a later `jr` reads, got "
+         f"{[hex(x) for x in sorted(got)]}")
+
+
+def test_ra_save_slot_is_matched_by_BASE_not_just_offset():
+    # The save-slot test has to compare the ADDRESS, not the displacement. Two unrelated globals
+    # sharing an offset is ordinary (every one of Spyro's save blocks uses +44), so matching on the
+    # offset alone lets a store to block A vouch for a load from block B — and a restored
+    # CONTINUATION then reads as a return, which is the failure in the other direction.
+    a = Asm(0x80010000)
+    a.lui("at", 0x8007)             # 00
+    a.addiu("at", "at", 0x7DD8)     # 04  block A = 0x80077DD8
+    a.sw("ra", 44, "at")            # 08  store to A+44
+    a.lui("t0", 0x8009)             # 0C
+    a.addiu("t0", "t0", 0x1234)     # 10  block B = 0x80091234 — a DIFFERENT object
+    a.lw("ra", 44, "t0")            # 14  load from B+44: nothing ever stored $ra there
+    a.nop()                         # 18
+    a.jr("ra")                      # 1C  a restored CONTINUATION, not a return
+    a.nop()                         # 20
+    data, _ = a.assemble()
+    got = emit.ra_computed_jumps(exe_of(data), [0x80010000])
+    assert got == {0x8001001C}, \
+        ("a store to a different global must not vouch for this load, got "
+         f"{[hex(x) for x in sorted(got)]}")
