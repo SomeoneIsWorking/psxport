@@ -145,20 +145,33 @@ void Memcard::init() {
   lucent::info("card", "{} ({} frames / 128 KB)", mPath, kFrames);
 }
 
-void Memcard::readFrame(uint32_t frame, uint8_t* out128) {
+// A frame that cannot be moved returns FALSE and says why once. It used to return silently — zeros
+// for a read, nothing at all for a write — which is the "silently-skipped input" failure: the file
+// API above could not tell a completed transfer from one that never happened, so it announced
+// success either way. The caller is what turns this into the card ERROR event the guest reads.
+bool Memcard::readFrame(uint32_t frame, uint8_t* out128) {
   if (!mCard) init();
   memset(out128, 0, kFrameSize);
-  if (!mCard || frame >= kFrames) return;
+  if (!mCard) { lucent::error("card", "read frame {}: no card image is open ({})", frame, mPath); return false; }
+  if (frame >= kFrames) {
+    lucent::error("card", "read frame {} is past the end of a {}-frame card — refusing", frame, kFrames);
+    return false;
+  }
   fseek(mCard, (long)frame * kFrameSize, SEEK_SET);
-  fread(out128, 1, kFrameSize, mCard);
+  return fread(out128, 1, kFrameSize, mCard) == kFrameSize;
 }
 
-void Memcard::writeFrame(uint32_t frame, const uint8_t* in128) {
+bool Memcard::writeFrame(uint32_t frame, const uint8_t* in128) {
   if (!mCard) init();
-  if (!mCard || frame >= kFrames) return;
+  if (!mCard) { lucent::error("card", "write frame {}: no card image is open ({})", frame, mPath); return false; }
+  if (frame >= kFrames) {
+    lucent::error("card", "write frame {} is past the end of a {}-frame card — refusing", frame, kFrames);
+    return false;
+  }
   fseek(mCard, (long)frame * kFrameSize, SEEK_SET);
-  fwrite(in128, 1, kFrameSize, mCard);
+  const bool ok = fwrite(in128, 1, kFrameSize, mCard) == kFrameSize;
   fflush(mCard);
+  return ok;
 }
 
 // ---- PSX card-filesystem: directory helpers ------------------------------------------------------
@@ -250,6 +263,17 @@ void Memcard::deliverComplete(Core* c) {
   c->game->hle.deliverEvent(0xF0000011u, 0x0004u);   // HwCARD BIOS-level completion
 }
 
+// The failure half. THE RETURN VALUE CANNOT CARRY AN ERROR on this API — libmcrd retries the BIOS
+// call while it is non-zero (see file_read below) — so a transfer the backend could not perform is
+// still ACCEPTED and then completed with the ERROR spec. That is not a convention invented here: the
+// guest's next state reads exactly this distinction. Spyro's 0x8006841C sums the four SwCARD flags
+// and 0x80068264 maps them to a code, where the error code drives a bounded retry (16) and then an
+// access code the game reports to the player.
+void Memcard::deliverError(Core* c) {
+  c->game->hle.deliverEvent(0xF4000001u, 0x8000u);   // SwCARD error (EvSpERROR)
+  c->game->hle.deliverEvent(0xF0000011u, 0x8000u);   // HwCARD error
+}
+
 // B0:0x4E _card_read(chan, sector, buf).
 static void card_read(Core* c) {
   Memcard& m = c->game->memcard;
@@ -307,23 +331,51 @@ static void file_lseek(Core* c) {
 }
 
 // B0:0x34 read(fd, buf, len).
+//
+// ── THE RETURN VALUE IS NOT A BYTE COUNT ──────────────────────────────────────────────────────────
+//
+// On a memory-card fd this call only STARTS a transfer; completion arrives as a card EVENT, and the
+// caller's next act is to wait for it. Sony's stock libmcrd encodes that contract as a retry loop —
+// Spyro's read op state machine (generated/shard_0.c gen_func_80066F34 case 0x14) is
+//
+//     clear_card_events(); do { v0 = read(fd, buf, len); } while (v0 != 0); state = wait_for_event;
+//
+// and its write op (gen_func_800671F0) is the same shape. So 0 means "accepted", non-zero means
+// "busy, ask again", and returning `len` is an unbounded loop in the guest. This ran inside the
+// game's own vblank callback, so the whole frame loop stopped: the port presented nothing further
+// and the watchdog killed it. That is the user-reported "SELECT MEMORY CARD" softlock (the consuming
+// game's docs/issues/0051, claim C161). tests/test_memcard_file_api.cpp pins it.
+//
+// A FAILED TRANSFER IS REPORTED THROUGH THE EVENT, NOT THE RETURN, for the same reason: any non-zero
+// value re-runs the loop. See Memcard::deliverError.
+//
+// fd 0..2 are the console devices, not the card: they keep the ordinary synchronous file semantics
+// and announce nothing.
 static void file_read(Core* c) {
   Memcard& m = c->game->memcard;
   int fd = (int)c->r[A0]; uint32_t buf = c->r[A1], len = c->r[A2];
   if (fd >= 0 && fd <= 2) { c->r[V0] = 0; return; }
   auto* f = m.fdAt(fd);
-  if (!f) { c->r[V0] = 0xFFFFFFFFu; return; }
+  // A bad descriptor is a BIOS ARGUMENT error — synchronous, -1, and no card event, because no card
+  // operation was ever started. libmcrd cannot reach here (it abandons the op when open fails).
+  if (!f) {
+    lucent::error("card", "read on fd {} which is not an open card file — returning -1", fd);
+    c->r[V0] = 0xFFFFFFFFu; return;
+  }
   uint8_t fr[Memcard::kFrameSize]; uint32_t loaded_frame = 0xFFFFFFFFu;
+  bool ok = true;
   for (uint32_t i = 0; i < len; i++) {
     uint32_t off = f->pos + i;
     uint32_t gframe = mc_data_frame(f->block, off), boff = off % Memcard::kFrameSize;
-    if (gframe != loaded_frame) { m.readFrame(gframe, fr); loaded_frame = gframe; }
+    if (gframe != loaded_frame) { ok = m.readFrame(gframe, fr) && ok; loaded_frame = gframe; }
     c->mem_w8(buf + i, fr[boff]);
   }
   f->pos += len;
-  c->r[V0] = len;
-  if (m.verbose()) lucent::info("card", "read  fd={} -> 0x{:08X} len={} (pos now {})", fd, buf, len, f->pos);
-  Memcard::deliverComplete(c);
+  c->r[V0] = 0;                       // accepted; the result is the event below
+  if (m.verbose()) lucent::info("card", "read  fd={} -> 0x{:08X} len={} (pos now {}) {}", fd, buf, len,
+                                f->pos, ok ? "-> IOEND" : "-> ERROR");
+  if (ok) Memcard::deliverComplete(c);
+  else    Memcard::deliverError(c);
 }
 
 // B0:0x35 write(fd, buf, len).
@@ -335,22 +387,28 @@ static void file_write(Core* c) {
     c->r[V0] = len; return;
   }
   auto* f = m.fdAt(fd);
-  if (!f) { c->r[V0] = 0xFFFFFFFFu; return; }
+  if (!f) {                                                       // see file_read: argument error
+    lucent::error("card", "write on fd {} which is not an open card file — returning -1", fd);
+    c->r[V0] = 0xFFFFFFFFu; return;
+  }
   uint8_t fr[Memcard::kFrameSize]; uint32_t cur_frame = 0xFFFFFFFFu;
+  bool ok = true;
   for (uint32_t i = 0; i < len; i++) {
     uint32_t off = f->pos + i;
     uint32_t gframe = mc_data_frame(f->block, off), boff = off % Memcard::kFrameSize;
     if (gframe != cur_frame) {                                    // read-modify-write frames
-      if (cur_frame != 0xFFFFFFFFu) m.writeFrame(cur_frame, fr);
-      m.readFrame(gframe, fr); cur_frame = gframe;
+      if (cur_frame != 0xFFFFFFFFu) ok = m.writeFrame(cur_frame, fr) && ok;
+      ok = m.readFrame(gframe, fr) && ok; cur_frame = gframe;
     }
     fr[boff] = c->mem_r8(buf + i);
   }
-  if (cur_frame != 0xFFFFFFFFu) m.writeFrame(cur_frame, fr);      // flush the last partial frame
+  if (cur_frame != 0xFFFFFFFFu) ok = m.writeFrame(cur_frame, fr) && ok;  // flush the last partial frame
   f->pos += len;
-  c->r[V0] = len;
-  if (m.verbose()) lucent::info("card", "write fd={} <- 0x{:08X} len={} (pos now {})", fd, buf, len, f->pos);
-  Memcard::deliverComplete(c);
+  c->r[V0] = 0;                       // accepted; see file_read for why this is not `len`
+  if (m.verbose()) lucent::info("card", "write fd={} <- 0x{:08X} len={} (pos now {}) {}", fd, buf, len,
+                                f->pos, ok ? "-> IOEND" : "-> ERROR");
+  if (ok) Memcard::deliverComplete(c);
+  else    Memcard::deliverError(c);
 }
 
 // B0:0x36 close(fd).

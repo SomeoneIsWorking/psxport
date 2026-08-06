@@ -48,3 +48,23 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
 // Has any site reported a divergence this run? For a gate check — a port whose native bodies match
 // should be able to assert zero, and a regression then fails loudly rather than drifting.
 int ndiff_divergences();
+
+// TRUE while ndiff_run is executing either of its two legs.
+//
+// WHY ANYONE ELSE NEEDS TO KNOW. The comparison's premise is that both legs start from the identical
+// pre-state AND that nothing else runs during either of them. Anything that can inject guest
+// execution asynchronously breaks that premise, and it breaks it ASYMMETRICALLY: the native leg is
+// straight C with no gate in it, while the recompiled leg is emitted code that polls
+// `Core::pending_work` at every function entry and loop back-edge. So an asynchronous injection can
+// only ever land in the SUBSTRATE leg, and the difference it makes is reported as a divergence of the
+// native body — which is the one thing this harness exists to be trusted about.
+//
+// MEASURED, on the run that produced this function: with the host frame clock armed
+// (rec_host_turn_register), spyro's gate reported 2 divergences whose bytes were the vblank counter
+// 0x800749E0, the pad-decoder counters 0x80075760/0x800758C8, the pad buffers at 0x800773Ex and the
+// vblank handler's own stack — i.e. every byte a delivered display field writes, and nothing the
+// native bodies touch.
+//
+// Callers DEFER rather than drop: leave the work armed and take it at the next gate, exactly as
+// rec_host_turn already does for a guest critical section.
+bool ndiff_in_progress();

@@ -29,8 +29,12 @@ public:
   // Physical-layer card I/O — host-file backed.
   void init();
   bool present() const { return mCard != nullptr; }
-  void readFrame (uint32_t frame, uint8_t* out128);
-  void writeFrame(uint32_t frame, const uint8_t* in128);
+  // Return TRUE only if the frame was actually moved. A card image that failed to open, or a frame
+  // index off the end of the card, used to be a silent no-op that returned zeros — so a transfer the
+  // backend could not perform was indistinguishable from one that worked, and the BIOS file API
+  // above it announced I/O-END for a save that never landed.
+  bool readFrame (uint32_t frame, uint8_t* out128);
+  bool writeFrame(uint32_t frame, const uint8_t* in128);
 
   // PSX card-filesystem helpers (directory scan + free-block allocation).
   int  dirFind  (const char* name);
@@ -48,9 +52,13 @@ public:
   bool verbose() const { return mVerbose; }
   void setVerbose(bool v) { mVerbose = v; }
 
-  // Deliver the libcard I/O-complete event (SwCARD/HwCARD SUCCESS + EvSpIOE) so callers waiting on
-  // TestEvent fall through immediately. Static — routes to the Core's per-Game `class Hle`.
+  // Deliver the libcard I/O-complete event (SwCARD/HwCARD EvSpIOE) so callers waiting on TestEvent
+  // fall through immediately. Static — routes to the Core's per-Game `class Hle`.
   static void deliverComplete(Core* c);
+  // …and its opposite. An operation the backend could not perform completes with the ERROR spec
+  // instead, which is the ONLY channel a libmcrd consumer can see a card failure through: the BIOS
+  // call's return value is a "busy, retry" flag, so it cannot carry an error (see memcard.cpp).
+  static void deliverError(Core* c);
 
 private:
   FILE* mCard = nullptr;

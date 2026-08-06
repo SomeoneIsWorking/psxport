@@ -546,11 +546,17 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
             lucent::debug("bios", "  s{} = 0x{:08X}", i, c->mem_r32(a0 + 0x0Cu + 4u * (uint32_t)i));
         }
         int_handler = a0; c->r[V0] = 0; return true;
-      case 0x35: {                                                       // FileWrite
-        uint32_t fd = a0, buf = a1, len = a2;
-        if (fd == 1 || fd == 2) for (uint32_t i = 0; i < len; i++) fputc(c->mem_r8(buf + i), stderr);
-        c->r[V0] = len; return true;
-      }
+      // B0:0x35 FileWrite is NOT handled here. It used to be, unconditionally: this switch wrote fd
+      // 1/2 to stderr and then returned `len` FOR EVERY fd — so a write to a memory-card file never
+      // reached the card at all, and the guest was told the byte count as if it had. Two bugs in one
+      // line: the save was silently discarded, and `len` is the wrong return for a card fd (see
+      // memcard.cpp file_read for the libmcrd retry loop that spins on a non-zero return; that spin
+      // is the user-reported SELECT MEMORY CARD softlock). memcard.cpp's `file_write` already
+      // implements the console-device arm identically, so the whole call now goes to card_hle_b0
+      // through the default arm below and the console path has ONE definition.
+      // Pinned by tests/test_memcard_file_api.cpp, which drives THIS function rather than the card
+      // module directly — precisely because an earlier case here can claim a number before the card
+      // module sees it.
       case 0x0E: c->r[V0] = thread_open(c); return true;                  // OpenThread
       case 0x0F: c->r[V0] = thread_close(c); return true;                 // CloseThread
       case 0x10: thread_change(c, a0); c->r[V0] = a0; return true;        // ChangeThread

@@ -24,6 +24,7 @@
 // taken, while the number of fields owed is always elapsed_time × field_rate.
 #include "core.h"
 #include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
+#include "native_diff.h"  // ndiff_in_progress — the differential is a critical section too
 #include <lucent/log.h>
 #include <atomic>
 #include <chrono>
@@ -114,6 +115,13 @@ void rec_host_turn(Core* c) {
   // the guest re-enables. Leaving the bit set reproduces that — the turn is taken at the first gate
   // after the critical section ends, rather than being silently dropped.
   if (!c->game->hle.irq_enabled) return;
+
+  // THE DIFFERENTIAL HARNESS IS ALSO A CRITICAL SECTION, and for the same reason: guest code must not
+  // run at a moment it did not choose. A turn taken inside ndiff_run's substrate leg (the only leg
+  // with a gate in it) writes the vblank counter, the pad buffers and the handler's stack, and the
+  // comparison then reports those bytes as the NATIVE body diverging. See native_diff.h. PW_HOST is
+  // deliberately left armed: the turn is taken at the first gate after the comparison finishes.
+  if (ndiff_in_progress()) return;
 
   // Clear only once the turn is actually being taken. The timer may set it again while the handler
   // runs — that is correct and means another field elapsed during the turn.

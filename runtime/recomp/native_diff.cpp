@@ -68,6 +68,12 @@ int report_ram(const char* name, const std::vector<uint8_t>& a, const std::vecto
 
 int ndiff_divergences() { return st().divergences; }
 
+// Depth rather than a bool: ndiff_run's substrate leg can reach another natively-owned body, which
+// opens a second window inside the first. A bool would close on the inner one's exit and re-open the
+// outer leg to injection for the rest of its run.
+static int s_in_diff = 0;
+bool ndiff_in_progress() { return s_in_diff > 0; }
+
 bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Core*)) {
   init_once();
   State& s = st();
@@ -91,6 +97,11 @@ bool ndiff_run(Core* c, const char* name, void (*native)(Core*), void (*body)(Co
   site.calls++;
 
   const size_t spad = sizeof c->scratch;
+  // Both legs run inside this window; see ndiff_in_progress() in the header for what must stand
+  // still while they do. RAII so an early return or a throw cannot leave the port permanently unable
+  // to take a host turn.
+  struct DiffWindow { DiffWindow() { ++s_in_diff; } ~DiffWindow() { --s_in_diff; } } _diff_window;
+
   s.pre.assign(c->ram, c->ram + RAM_SIZE);
   s.preSpad.assign(c->scratch, c->scratch + spad);
   const R3000 preRegs = *static_cast<R3000*>(c);
