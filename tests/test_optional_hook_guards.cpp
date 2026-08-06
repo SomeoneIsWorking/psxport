@@ -6,7 +6,7 @@
 // framework then called them without checking, jumping to address 0:
 //
 //   1. audioMixFrame    — segfaulted spyro on its first audio frame (fixed: spu_mix_game_audio).
-//   2. renderFadeState  — segfaulted spyro on its first present (fixed in show_composite).
+//   2. renderFadeState  — segfaulted spyro on its first present (the guard lives in GpuVkState::present).
 //   3. audioNowPlayingName / audioSoundTestPlay — THIS ONE. rmlui_overlay's refreshReadouts() guards
 //      on `game` but not on the hook, so pressing ESC to open the debug menu in spider1 or spyro
 //      called through a null pointer and the process died. To the user that reads as "ESC closes the

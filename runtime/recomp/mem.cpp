@@ -20,6 +20,7 @@
 // uploads + the DMA linked-list walk read this instance's RAM).
 void gpu_gp0(Core* core, uint32_t w);
 void gpu_gp1(Core*, uint32_t w);
+uint32_t gpu_read_word(Core* core);   // GPUREAD drain of an armed GP0(0xC0) VRAM->CPU readback
 extern "C" {
 #include "cdc_state.h"
 void     mdec_write(uint32_t addr, uint32_t val);
@@ -484,7 +485,11 @@ uint32_t Core::io_read(uint32_t a, uint32_t bytes) {
                   pc, r[31]);
     return rv;
   }
-  if (p == 0x1F801810) return 0;                 // GPUREAD (VRAM-store path: minimal)
+  // GPUREAD. The register-polled drain of a GP0(0xC0) VRAM->CPU readback (the DMA2 drain is the other
+  // one; both go through the same cursor in gpu_native.cpp). This returned a hard 0 before 2026-08-05,
+  // which made every VRAM save/restore round-trip in every consuming game restore whatever its
+  // destination buffer already held — silently. See spider1 issue 0007.
+  if (p == 0x1F801810) return gpu_read_word(this);
   if (p == 0x1F801820 || p == 0x1F801824) {        // MDEC0 data / MDEC1 status
     // Guest-visible poll = pump point: a DecDCTinSync-style status spin (or a data-port tail read)
     // must drive the pending MDEC DMA machinery forward, or it observes a frozen model forever.

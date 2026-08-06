@@ -75,6 +75,20 @@ struct GpuVkState {
   int s_have_3d = 0;                              // THIS Game's targets created
   void ensure_targets();                          // lazy target creation (device must be inited)
 
+  // ---- THE PRESENTED PICTURE (sink-independent) -------------------------------------------------------
+  // The composite that the PLAYER sees — letterboxed, faded, source-selected, 24bpp-decoded — rendered
+  // into an offscreen image at sink resolution. It is built in BOTH legs, because everything above the
+  // sink is one code path; only `show_present_image` (the swapchain blit) is windowed.
+  //
+  // Before this existed, `present()` returned above the composite when headless, so the composite stage
+  // ran ONLY in a window while nearly every measurement in the project was taken headless. That is issue
+  // 0005: a 99.95%-non-black headless reading of an intro the user was watching go black. This target is
+  // what makes a headless capture a statement about the presented picture rather than about guest VRAM.
+  SDL_GPUTexture*         s_present_img = nullptr;   // RGBA8 sink-resolution composite (SAMPLER|COLOR_TARGET)
+  SDL_GPUTransferBuffer*  s_present_rb = nullptr;    // s_present_img → host download (present shot)
+  int s_present_img_w = 0, s_present_img_h = 0;      // its current size; rebuilt when the sink resizes
+  void ensure_present_img(int w, int h);             // (re)create the composite target at this sink size
+
   // ---- 2D (non-world) GPU vertex buffers — bug #55 fix ------------------------------------------------
   // A SEPARATE vertex-buffer set per 2D band (GGS_2D_BG / GGS_2D_FG), so 2D content never shares the
   // 3D-world buffers above and never gets bound to the ires-scaled target: render_geom draws these bands
@@ -208,7 +222,12 @@ struct GpuVkState {
   // Re-show the last BUILT frame (no VRAM upload, no geometry re-render, no batch reset) — the debug-server
   // pause loop's window keep-alive. See the body in gpu_vk.cpp for why a pause must never re-render.
   void repaint();
-  void show_composite(SDL_GPUCommandBuffer* cmd);   // the shared swapchain half of present()/repaint()
+  // The two halves of what used to be `show_composite`, split so the LEG can only appear between them.
+  // build: VRAM/ires target -> s_present_img. Runs in BOTH legs; this is the picture.
+  // show:  s_present_img -> the window swapchain (+ the RmlUi overlay). Windowed only; this is the SINK.
+  void build_present_image(SDL_GPUCommandBuffer* cmd, const struct PresentPlan& plan);
+  void show_present_image(SDL_GPUCommandBuffer* cmd);
+  void present_shot(const char* path);   // read back s_present_img — WHAT THE PLAYER SEES, either leg
   // PSXPORT_SBS two-pane present is NOT a GpuVkState method: each core renders + reads its own frame back
   // to a CPU RGBA pane (gpu_vk_render_readback), and the free function gpu_vk_present_sbs2 composites the
   // two panes into one window frame. A method could not do it — the two panes come from two DIFFERENT

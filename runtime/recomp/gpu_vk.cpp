@@ -4,6 +4,9 @@
 #include "gpu_vk_present_policy.h"   // present_rebuild_decision — when a present must rebuild the composite
 #include "gpu_vk_present_mode.h"     // preferred_present_mode — the sink must not stall the guest thread
 #include "sbs_pane_layout.h"         // pane_letterbox / sbs_pane_rect — where each frame lands in the window
+#include "present_plan.h"            // plan_present — the presented picture, decided identically in both legs
+#include "fs_util.h"                 // Fs::ensureParentDirs — a capture must not silently write nothing
+#include <errno.h>                   // strerror on a failed capture: the reason rides with the failure
 #include <lucent/log.h>              // diagnostics: lucent::debug (channel-gated internally — never guard it)
 #include "render_substrate.h"                    // Render::stats (RenderStats — was g_dbg_world_quads)
 // gpu_vk.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
@@ -145,6 +148,51 @@ extern "C" int gpu_has_window(void) { return s_win != 0; }
 // Live window size in pixels (swapchain extent). Fall back to native 4:3 before the window exists.
 static int win_w(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return w > 0 ? w : 320; }
 static int win_h(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return h > 0 ? h : 240; }
+
+// The presented-picture target's format. RGBA8 rather than the swapchain's format so it exists
+// identically in both legs (headless has no swapchain and therefore no swapchain format) and so the
+// readback decode is one fixed rule.
+static const SDL_GPUTextureFormat PRESENT_IMG_FMT = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+
+// The window's creation size, defined ONCE and used both at SDL_CreateWindow and as the headless
+// sink default, so the two cannot drift. (They were two hand-copied 960x720 literals; changing the
+// window would silently have desynchronised the headless sink from it.)
+enum { PRESENT_WINDOW_W = 960, PRESENT_WINDOW_H = 720 };
+
+// ---- THE SINK SIZE — the only leg-dependent input to the presented picture, and deliberately so ------
+// Windowed it is the live drawable; headless there is no drawable, so it is a configured size
+// (PSXPORT_PRESENT_SINK=WxH) defaulting to the window's own creation size. A SIZE is a legitimate leg
+// parameter — the composite is the same code either way, fed a number — whereas a leg-dependent code
+// PATH is what made headless measurements describe a program the user never runs.
+//
+// COMPARABILITY, stated honestly rather than promised: the headless default matches the window's
+// LOGICAL creation size, so a headless and a windowed present shot line up pixel for pixel only in a
+// windowed, non-fullscreen, 1x-display-scale run. Under HiDPI the drawable is scaled (a 960x720
+// window has a 1920x1440 drawable), PSXPORT_FULLSCREEN makes the sink the monitor, and the window is
+// resizable — in all three the two shots differ in size. present_shot logs its sink size and leg on
+// every capture precisely so that mismatch is visible in the output instead of assumed away.
+//
+// Resolved ONCE PER PROCESS. It used to re-read and re-validate the env var on every call, and it is
+// called three times per present (once for the plan, twice via ensure_present_img) — so a malformed
+// override emitted three warns per frame: MEASURED at 7990 of 8020 lines in a 45 s run, burying every
+// other diagnostic in the log. The value cannot change during a run, so parsing it per frame bought
+// nothing and cost the log.
+static void sink_size(int* w, int* h) {
+  if (!s_headless) { *w = win_w(); *h = win_h(); return; }
+  static int cw = 0, ch = 0;
+  if (!cw) {
+    cw = PRESENT_WINDOW_W; ch = PRESENT_WINDOW_H;
+    const char* e = cfg_str("PSXPORT_PRESENT_SINK");
+    int pw = 0, ph = 0;
+    if (e && sscanf(e, "%dx%d", &pw, &ph) == 2 && pw > 0 && ph > 0) { cw = pw; ch = ph; }
+    else if (e)
+      // A malformed override must not silently become the default: a run measured at 960x720 while
+      // the operator believed it was measuring 1920x1080 is a false negative with true numbers. Once
+      // per process is enough to say so — and quiet enough to still be readable.
+      lucent::warn("gpu_vk", "PSXPORT_PRESENT_SINK=\"{}\" is not WxH — using the default {}x{}", e, cw, ch);
+  }
+  *w = cw; *h = ch;
+}
 
 // ---- PC-native widescreen accessors (kept; the engine projection reads these) -----------------------
 //
@@ -486,7 +534,7 @@ static void init_gpu(Game* game) {
     // self-evidently wrong: a port that forgets to set it must look untitled, not look like Tomba!2.
     const char* title = (game->core.cfg && game->core.cfg->windowTitle) ? game->core.cfg->windowTitle
                                                                        : "psxport (untitled game)";
-    s_win = SDL_CreateWindow(title, 960, 720, flags);
+    s_win = SDL_CreateWindow(title, PRESENT_WINDOW_W, PRESENT_WINDOW_H, flags);
     GPUCHK(s_win, "SDL_CreateWindow");
   }
   // Create the GPU device (SPIR-V shaders; let SDL pick the optimal driver — Vulkan on Linux, Metal on Mac).
@@ -498,7 +546,7 @@ static void init_gpu(Game* game) {
   if (!s_headless) {
     GPUCHK(SDL_ClaimWindowForGPUDevice(s_dev, s_win), "SDL_ClaimWindowForGPUDevice");
     // The swapchain must NOT stall the guest thread. A freshly claimed window keeps SDL's DEFAULT
-    // present mode, VSYNC, under which SDL_WaitAndAcquireGPUSwapchainTexture (show_composite) sleeps
+    // present mode, VSYNC, under which SDL_WaitAndAcquireGPUSwapchainTexture (show_present_image) sleeps
     // until the next vblank — on the one thread that runs the guest, the CD pump, MDEC and the DMA
     // completions. Ask for a non-blocking mode instead; see gpu_vk_present_mode.h for the measurement.
     const SDL_GPUPresentMode want =
@@ -525,11 +573,15 @@ static void init_gpu(Game* game) {
   si.min_filter = SDL_GPU_FILTER_LINEAR; si.mag_filter = SDL_GPU_FILTER_LINEAR;
   s_samp_linear = SDL_CreateGPUSampler(s_dev, &si); GPUCHK(s_samp_linear, "CreateGPUSampler(linear)");
 
-  // Pipelines need the swapchain format (color target) — windowed only; headless never runs a render pass.
-  if (!s_headless) {
-    s_present_pipe = make_fullscreen_pipeline(spv_g_present_vert, spv_g_present_vert_len, spv_g_present_frag, spv_g_present_frag_len, s_swap_fmt);
-    s_image_pipe   = make_fullscreen_pipeline(spv_g_image_vert,   spv_g_image_vert_len,   spv_g_image_frag,   spv_g_image_frag_len, s_swap_fmt);
-  }
+  // The PRESENT pipeline targets s_present_img, whose format is fixed and leg-independent, so it is
+  // created in BOTH legs — headless composites the same picture, it just never blits it to a window.
+  // (It used to be windowed-only, on the reasoning that "headless never runs a render pass". Headless
+  // not running the present pass was the bug, not a premise.)
+  s_present_pipe = make_fullscreen_pipeline(spv_g_present_vert, spv_g_present_vert_len, spv_g_present_frag, spv_g_present_frag_len, PRESENT_IMG_FMT);
+  // The IMAGE pipeline draws into the swapchain (the s_present_img blit, and gpu_vk_present_image), so it
+  // needs the swapchain format and is genuinely windowed-only.
+  if (!s_headless)
+    s_image_pipe = make_fullscreen_pipeline(spv_g_image_vert, spv_g_image_vert_len, spv_g_image_frag, spv_g_image_frag_len, s_swap_fmt);
   create_3d_pipelines();   // the native 3D/textured raster pipelines — windowed AND headless
   lucent::info("gpu_vk", "{} renderer up (VRAM {}x{} RG8 = PSX 1555)", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
   // RmlUi mod/debug overlay — windowed only (it records into the swapchain present pass). No-op if its
@@ -898,7 +950,41 @@ static inline FadeState fade_state_of(Core* c) {
   return f;
 }
 
-static void dump_to(GpuVkState& g, const char*, int, int, int, int, int, uint8_t, uint8_t, uint8_t);   // fwd (defined below) — preseq dump
+void GpuVkState::ensure_present_img(int w, int h) {
+  if (w <= 0 || h <= 0) return;
+  if (s_present_img && s_present_img_w == w && s_present_img_h == h) return;
+  if (s_present_img) { SDL_ReleaseGPUTexture(s_dev, s_present_img); SDL_ReleaseGPUTransferBuffer(s_dev, s_present_rb); }
+  SDL_GPUTextureCreateInfo ti = {};
+  ti.type = SDL_GPU_TEXTURETYPE_2D; ti.format = PRESENT_IMG_FMT;
+  ti.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+  ti.width = (Uint32)w; ti.height = (Uint32)h; ti.layer_count_or_depth = 1; ti.num_levels = 1;
+  s_present_img = SDL_CreateGPUTexture(s_dev, &ti); GPUCHK(s_present_img, "CreateGPUTexture(present img)");
+  SDL_GPUTransferBufferCreateInfo dn = {}; dn.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+  dn.size = (Uint32)w * (Uint32)h * 4;
+  s_present_rb = SDL_CreateGPUTransferBuffer(s_dev, &dn); GPUCHK(s_present_rb, "present img readback xfer");
+  s_present_img_w = w; s_present_img_h = h;
+  lucent::info("gpu_vk", "present image {}x{} ({} sink)", w, h, s_headless ? "headless" : "windowed");
+}
+
+// Gather the plan's inputs out of renderer state. Separate from plan_present() so the DECISION stays
+// pure and testable while the state-reading stays in one place — and so it is visible at a glance that
+// no leg term is read here either.
+static PresentInputs present_inputs(const GpuVkState& g, int sx, int sy, int disp_w, int h,
+                                    int native_w, const FadeState& fade) {
+  PresentInputs in{};
+  sink_size(&in.sink_w, &in.sink_h);
+  in.sx = sx; in.sy = sy; in.disp_w = disp_w; in.disp_h = h;
+  // The game's OWN 4:3 width, BEFORE any widescreen widening — this is what makes the presented
+  // aspect 4:3 for a native frame of ANY width, and wider only when the port deliberately widened
+  // it. See present_plan.h and issue 0008; passing disp_w here would restore the stretch.
+  in.native_w = native_w;
+  in.present_ires = g.s_present_ires;
+  in.fade_mode = fade.mode; in.fade_r = fade.r; in.fade_g = fade.g; in.fade_b = fade.b;
+  in.disp_rgb24 = g.s_disp_rgb24;
+  return in;
+}
+
+static bool dump_to(GpuVkState& g, const char*, int, int, int, int, int, uint8_t, uint8_t, uint8_t);   // fwd (defined below) — preseq dump; false = NOTHING written
 void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled()) return;
   if (!s_inited) init_gpu(game);
@@ -917,7 +1003,16 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   if (cfg_on("PSXPORT_GPU_TRACE")) { int& n = gdev().s_trace_n; if (n++ < 4 || (n % 200) == 0) {
     long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (src[i]) nz++;
     int semi_total = 0; for (int m = 0; m < NUM_BLEND_MODES; m++) semi_total += s_semi_n[m];
-    lucent::info("gpu_vk", "present #{} src nonzero={}/{} disp={},{} {}x{} | batch tri={} tex={} semi={}", n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total); } }
+    // `batch` is the LIVE accumulator, sampled here at the TOP of present() — which is BEFORE this
+    // frame's drawing and AFTER the previous frame_end reset it (gpu_vk.cpp:1569). On a game that
+    // presents at the top of its frame loop, batch is therefore LEGITIMATELY 0 every time, and
+    // reading it as "no primitives reached the native raster" is a false negative this line has
+    // already produced once. `drawn` is what render_geom ACTUALLY rasterised on the last present
+    // (s_dbg_*_c, the same counters gpu_vk_stats/dbg_server report) — that is the number to read
+    // when asking whether the native renderer is doing anything.
+    lucent::info("gpu_vk", "present #{} src nonzero={}/{} disp={},{} {}x{} | batch tri={} tex={} semi={} | drawn tri={} tex={} semi={}",
+                 n, nz, VRAM_W*VRAM_H, sx, sy, w, h, s_tri_n, s_tex_n, semi_total,
+                 s_dbg_tri_c, s_dbg_tex_c, s_dbg_semi_c); } }
   // `debug fadewatch`: per-present log of the ScreenFade state (the PC-native subsystem that owns fade).
   // A game that owns no fade subsystem leaves this hook null — the seam documents null hooks as
   // tolerated, and other call sites guard. These did not, so presenting from such a game jumped to
@@ -987,38 +1082,81 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   lucent::debug("presentskip", "presents={} reuse_last={} rebuild_geom={} rebuild_vram={} | vram_writes={}",
                 gd.s_ps_n[0] + gd.s_ps_n[1] + gd.s_ps_n[2], gd.s_ps_n[PRESENT_REUSE_LAST],
                 gd.s_ps_n[PRESENT_REBUILD_GEOM], gd.s_ps_n[PRESENT_REBUILD_VRAM], s_vram_writes);
-  if (decision == PRESENT_REUSE_LAST) { show_composite(cmd); return; }
+  // REUSE_LAST skips REBUILDING THE FRAME (no VRAM upload, no geometry) — it does not skip PRESENTING
+  // one. The composite below still runs, because the picture depends on live state the frame does not:
+  // the fade ramps every field, and the window can be resized under a completely idle guest.
+  if (decision != PRESENT_REUSE_LAST) {
+    upload_vram(*this, cmd, src);                           // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
+    render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
+                game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
+    s_vram_writes_built = s_vram_writes;   // this composite now reflects every guest write so far
+  }
 
-  upload_vram(*this, cmd, src);                             // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
-  render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
-              game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
-  s_vram_writes_built = s_vram_writes;   // this composite now reflects every guest write so far
-
-  if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // shot reads s_vram_tex via its own cmd
-  show_composite(cmd);
+  // ---- THE PRESENT STAGE, ONE CODE PATH -------------------------------------------------------------
+  // What used to be here was `if (s_headless) { submit; return; }` — headless stopped one stage short of
+  // the picture, so every headless capture measured guest VRAM and no capture anywhere measured what the
+  // player sees (issue 0005; instruments.md INST-18). The plan is computed from inputs with no leg term,
+  // the composite is built in both legs, and the leg appears exactly once: whether it reaches a window.
+  const PresentPlan plan = plan_present(present_inputs(*this, sx, sy, disp_w, h, /*native_w=*/w, fade), s_headless != 0);
+  if (plan.build) build_present_image(cmd, plan);
+  if (plan.to_swapchain) { show_present_image(cmd); return; }   // consumes cmd (submits + polls)
+  SDL_SubmitGPUCommandBuffer(cmd);
 }
 
-// ---- show_composite: the SWAPCHAIN half of a present — sample the composite target built by the last
-// render_geom (s_vram_tex at 1x, s_ires_color at >1x) into the window, letterboxed, with the live fade.
-// Split out of present() so `repaint()` can re-show the SAME finished frame without rebuilding it; there
-// is exactly ONE piece of code that decides what a window frame looks like, and both callers run it.
-// Consumes `cmd` (submits it).
-void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
+// ---- build_present_image: THE PICTURE — sample the composite target built by the last render_geom
+// (s_vram_tex at 1x, s_ires_color at >1x) into s_present_img, letterboxed, with the live fade.
+//
+// This is the half that used to be swapchain-only, and moving it off the swapchain is the entire point:
+// a window is a SINK, not a rendering stage, and nothing that decides what the picture LOOKS like may
+// depend on whether one is open. Runs identically in both legs — the plan it consumes has no leg term
+// (present_plan.h), and tests/test_present_plan.cpp fails if one is ever re-introduced.
+//
+// Does NOT consume `cmd`: the caller either follows with show_present_image (windowed) or submits.
+void GpuVkState::build_present_image(SDL_GPUCommandBuffer* cmd, const PresentPlan& plan) {
   // The empty-batch early-out in present() (and repaint()) reaches here WITHOUT upload_vram/render_geom,
   // which are what lazily create the per-Game targets. Before any real frame has ever been built — e.g.
   // the Tomba2 boot stub's gpu_clear_display + present before the first scene submit — s_vram_tex is still
   // null, and binding it as the present sampler segfaults inside the SDL_GPU driver. Materialise the
   // targets here; ensure_targets() is a one-shot no-op once they exist.
   ensure_targets();
-  const int sx = s_last_sx, sy = s_last_sy, disp_w = s_last_w, h = s_last_h;
-  // A game that owns no fade subsystem leaves this hook null — the seam documents null hooks as
-  // tolerated, and other call sites guard. These did not, so presenting from such a game jumped to
-  // address 0. It stayed hidden because the reference consumer always supplies the hook; a second
-  // consumer (Spyro, whose Phase-0 hook table is almost entirely null) segfaulted on its first
-  // present. Default to "no fade" — zeroed, i.e. mode 0 / rgb 0 — which is exactly the state a game
-  // without a fade subsystem is in.
-  FadeState fade{};
-  if (game->core.hooks->renderFadeState) game->core.hooks->renderFadeState(&game->core, &fade);
+  // From the PLAN, never a fresh sink_size() call — see PresentPlan::sink_w. The target and the
+  // viewport must be two views of ONE measurement of the window, or a resize mid-present letterboxes
+  // for a rectangle that is not the one being drawn into.
+  ensure_present_img(plan.sink_w, plan.sink_h);
+  if (!s_present_img) return;
+
+  SDL_GPUColorTargetInfo cti = {};
+  cti.texture = s_present_img; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
+  cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;   // CLEAR paints the letterbox bars
+  SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
+
+  // Widescreen present: SAMPLE the wide FB region [sx, sx+nw) and letterbox to the aspect's display shape
+  // (nw:240), else the wide FB is squeezed into a 4:3 box. At 4:3 nw==320 = old path. HIGH-RES PRESENT:
+  // when render_geom built a valid ires composite this frame (plan.src_ires>1), sample the SCALED
+  // s_ires_color over the scaled display sub-rect — a genuinely high-res picture — instead of the native
+  // s_vram_tex downsample. Pure-2D frames / ires=1 keep the native path (src_ires==0). Every one of those
+  // decisions is now made in plan_present() and merely EXECUTED here.
+  SDL_GPUTexture* present_src = plan.src_ires > 1 ? s_ires_color : s_vram_tex;
+  PresentPC pc;
+  for (int i = 0; i < 4; i++) { pc.disp[i] = plan.disp[i]; pc.fade[i] = plan.fade[i]; pc.fmt[i] = plan.fmt[i]; }
+  SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
+
+  SDL_GPUViewport vp = viewport_of(plan.viewport);
+  SDL_Rect sc = { 0, 0, s_present_img_w, s_present_img_h };
+  SDL_BindGPUGraphicsPipeline(rp, s_present_pipe);
+  SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
+  SDL_GPUTextureSamplerBinding tsb = { present_src, s_samp_nearest };
+  SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+  SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  SDL_EndGPURenderPass(rp);
+}
+
+// ---- show_present_image: THE SINK — blit the finished picture into the window swapchain. -------------
+// The one place in the renderer a leg difference is legitimate, and it does no picture work at all: the
+// letterbox, fade, source selection and 24bpp decode are already baked into s_present_img, so this is a
+// 1:1 fullscreen copy. If this function ever starts DECIDING something, the split has been lost.
+// Consumes `cmd` (submits it).
+void GpuVkState::show_present_image(SDL_GPUCommandBuffer* cmd) {
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
     SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;   // minimized / no swapchain image this frame
@@ -1027,32 +1165,32 @@ void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
   cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
   cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
-
-  // Widescreen present (disp_w computed above): SAMPLE the wide FB region [sx, sx+nw) and letterbox to the
-  // aspect's display shape (nw:240), else the wide FB is squeezed into a 4:3 box. At 4:3 nw==320 = old path.
-  // HIGH-RES PRESENT: when render_geom built a valid ires composite this frame (s_present_ires>1), sample
-  // the SCALED s_ires_color over the scaled display sub-rect — a genuinely high-res picture — instead of
-  // the native s_vram_tex downsample. Pure-2D frames / ires=1 keep the native path (s_present_ires==0).
-  const int pscale = s_present_ires;                       // 0 = native, >1 = present from s_ires_color
-  SDL_GPUTexture* present_src = pscale > 1 ? s_ires_color : s_vram_tex;
-  PresentPC pc;
-  pc.disp[0] = sx * (pscale > 1 ? pscale : 1); pc.disp[1] = sy * (pscale > 1 ? pscale : 1);
-  pc.disp[2] = disp_w * (pscale > 1 ? pscale : 1); pc.disp[3] = h * (pscale > 1 ? pscale : 1);
-  pc.fade[0] = fade.mode; pc.fade[1] = fade.r; pc.fade[2] = fade.g; pc.fade[3] = fade.b;
-  // 24bpp applies to the NATIVE VRAM read only. The ires composite is rendered by our own raster in
-  // 1555, so a scaled present is never 24bpp regardless of what the display register says.
-  pc.fmt[0] = (pscale > 1) ? 0 : s_disp_rgb24; pc.fmt[1] = pc.fmt[2] = pc.fmt[3] = 0;
-  SDL_PushGPUFragmentUniformData(cmd, 0, &pc, sizeof pc);
-
-  SDL_GPUViewport vp = letterbox(disp_w, 240, (int)sw, (int)sh);
-  SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
-  SDL_BindGPUGraphicsPipeline(rp, s_present_pipe);
-  SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-  SDL_GPUTextureSamplerBinding tsb = { present_src, s_samp_nearest };
-  SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
-  SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  if (s_present_img) {
+    // The image pipeline is an RGBA sampler with a scalar brightness; 1.0 = copy. The picture's own fade
+    // was applied in build_present_image, where it belongs — applying any here would be a second,
+    // window-only fade, i.e. exactly the leg-dependent picture this split exists to make impossible.
+    float fpc[4] = { 1.0f, 0, 0, 0 };
+    SDL_PushGPUFragmentUniformData(cmd, 0, fpc, sizeof fpc);
+    // LETTERBOX, never stretch. s_present_img is normally already the swapchain's shape, in which case
+    // this is the identity and the blit is the 1:1 copy it claims to be. But the two CAN disagree, and
+    // when they do a full-window viewport silently distorts the picture:
+    //   * the window is resized between the size this image was built for and this acquire;
+    //   * repaint() — the debug-server pause loop, ~66 Hz from native_boot.cpp — re-blits the LAST
+    //     BUILT image, which is sized to whatever the window was when the pause began. Resize while
+    //     paused and nothing rebuilds it, because repaint deliberately builds nothing.
+    // Fitting by aspect degrades to bars, which is the honest answer for "re-show the last built
+    // frame"; stretching invents pixel geometry the game never produced.
+    SDL_GPUViewport vp = viewport_of(pane_letterbox(s_present_img_w, s_present_img_h, (int)sw, (int)sh));
+    SDL_Rect sc = { 0, 0, (int)sw, (int)sh };
+    SDL_BindGPUGraphicsPipeline(rp, s_image_pipe);
+    SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
+    SDL_GPUTextureSamplerBinding tsb = { s_present_img, s_samp_nearest };
+    SDL_BindGPUFragmentSamplers(rp, 0, &tsb, 1);
+    SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
+  }
   // RmlUi mod/debug overlay (ESC) composites ON TOP of the game frame, into the same present pass over
-  // the FULL window. No-op when the menu is hidden / overlay not inited.
+  // the FULL window. It is host UI, not the game's picture, which is why it belongs to the sink and not
+  // to s_present_img — a present shot must show the frame, not the debug menu over it.
   overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
   SDL_SubmitGPUCommandBuffer(cmd);
@@ -1075,11 +1213,14 @@ void GpuVkState::show_composite(SDL_GPUCommandBuffer* cmd) {
 // the composite target. Re-showing it is one swapchain pass with no upload, no geometry, no batch reset,
 // and it costs the same in both fps modes. Headless: nothing to show and, crucially, nothing to clobber —
 // s_vram_tex keeps holding the last real frame, so `shot`/`vkshot` while paused report it truthfully.
+// Since the present split this is literally true rather than approximately so: the finished picture is
+// sitting in s_present_img, and a repaint is one swapchain blit of it. It no longer even re-runs the
+// composite, which is what "without building anything" always meant.
 void GpuVkState::repaint() {
   if (!gpu_vk_enabled() || !s_inited || s_headless) return;
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev);
   GPUCHK(cmd, "AcquireGPUCommandBuffer");
-  show_composite(cmd);
+  show_present_image(cmd);
 }
 
 // ---- present_image: draw a plain RGBA8 image fullscreen (letterboxed 4:3), rgb scaled by `fade` -----
@@ -1168,27 +1309,115 @@ static const uint16_t* readback_vram(GpuVkState& g) {
     lucent::info("gpu_vk", "readback nonzero={}/{}", nz, VRAM_W * VRAM_H); }
   return p;
 }
+// ---- present_shot: THE INSTRUMENT THAT WAS MISSING — read back what the player sees ----------------
+//
+// Every other capture in this framework (shot / dump_to / gpu_vk_render_readback / PSXPORT_GPU_DUMP)
+// reads GUEST VRAM, i.e. the stage BEFORE the composite. instruments.md INST-18 records what that cost:
+// "nothing in this port samples the swapchain, so every 'the picture is correct' result in this repo is
+// a claim about VRAM", after PSXPORT_SHOT_AT certified an intro at 99.95% non-black that the user was
+// watching go black. This reads back s_present_img instead — after the letterbox, the fade, the source
+// selection and the 24bpp decode — so its answer is about the picture, in EITHER leg.
+//
+// It cannot silently return an empty file: with no image it says so and writes nothing, because a
+// plausible black PPM is exactly how the earlier instruments lied.
+void GpuVkState::present_shot(const char* path) {
+  bool image_write_rgb24(const char*, const unsigned char*, int, int);   // defined below — PNG by default; false = nothing written
+  if (!gpu_vk_enabled() || !s_inited) { lucent::warn("present_shot", "GPU not active — NOTHING captured"); return; }
+  if (!s_present_img) {
+    lucent::warn("present_shot", "no present image yet (no frame has been composited) — NOTHING captured");
+    return;
+  }
+  const int w = s_present_img_w, h = s_present_img_h;
+  SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "present_shot cmd");
+  SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
+  SDL_GPUTextureRegion srcr = {}; srcr.texture = s_present_img; srcr.w = (Uint32)w; srcr.h = (Uint32)h; srcr.d = 1;
+  SDL_GPUTextureTransferInfo dsti = {}; dsti.transfer_buffer = s_present_rb;
+  dsti.pixels_per_row = (Uint32)w; dsti.rows_per_layer = (Uint32)h;
+  SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
+  SDL_EndGPUCopyPass(cp);
+  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+  SDL_WaitForGPUFences(s_dev, true, &fence, 1);
+  SDL_ReleaseGPUFence(s_dev, fence);
+  const uint8_t* rgba = (const uint8_t*)SDL_MapGPUTransferBuffer(s_dev, s_present_rb, false);
+  unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
+  if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb); lucent::error("present_shot", "out of memory — NOTHING captured"); return; }
+  // The picture is already final: no fade to apply, no format to decode. Anything this function did to
+  // the pixels beyond dropping alpha would be the instrument editing its own measurement.
+  long nonblack = 0;
+  for (long i = 0; i < (long)w * h; i++) {
+    rgb[i*3+0] = rgba[i*4+0]; rgb[i*3+1] = rgba[i*4+1]; rgb[i*3+2] = rgba[i*4+2];
+    if (rgba[i*4+0] || rgba[i*4+1] || rgba[i*4+2]) nonblack++;
+  }
+  SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb);
+  const bool wrote = image_write_rgb24(path, rgb, w, h);
+  free(rgb);
+  if (!wrote) {
+    // The measurement is real but the FILE is not, and saying "wrote" here is how this instrument
+    // would certify a capture that does not exist. errno carries the reason (ENOENT, EACCES, ENOSPC).
+    lucent::error("present_shot", "NOTHING captured for {} (image_write said why) — the picture itself was {:.2f}% non-black",
+                  path ? path : "(null)", 100.0 * (double)nonblack / ((double)w * h));
+    return;
+  }
+  // The coverage rides WITH the file, unconditionally: an all-black present shot is a real and
+  // important answer, and it must be distinguishable from a capture that never happened.
+  lucent::info("present_shot", "wrote {} ({}x{} {} sink) non-black {}/{} ({:.2f}%)",
+               path ? path : "(null)", w, h, s_headless ? "headless" : "windowed",
+               nonblack, (long)w * h, 100.0 * (double)nonblack / ((double)w * h));
+}
+
 #include <SDL3_image/SDL_image.h>
 // THE one place any shot/dump turns an RGB24 buffer into a file. Format is chosen by extension, and
 // PNG is the DEFAULT (a bare or unknown extension writes PNG) so callers get a directly-viewable file
 // with no PPM->PNG convert step — only an explicit `.ppm` path keeps the raw P6 dump. Shared by the VK
 // readback (dump_to) and the software-GPU shot (gpu_native.cpp) so the rule can't drift between them.
-void image_write_rgb24(const char* path, const unsigned char* rgb, int w, int h) {
+//
+// RETURNS FALSE WHEN NOTHING WAS WRITTEN, and that return type is the whole point of this function's
+// last revision. It used to be `void` with a bare `if (f)`, so a missing scratch/screenshots/ made
+// every capture a silent no-op while its caller logged "wrote <path>" with a coverage percentage.
+// MEASURED 2026-08-05 on the real spider1 build from a cwd without that directory: 2 armed captures,
+// 2 cheerful success lines, 0 files on disk. That is this project's cardinal failure — an instrument
+// certifying a measurement it never took — committed by the very code written to stop it. The parent
+// directory is now created (nothing else in the framework creates scratch/screenshots), and every
+// failure path returns false so the caller must say so.
+// WHY THE REASON IS LOGGED HERE AND NOT BY THE CALLER: only this function knows which step failed,
+// and the obvious caller-side `strerror(errno)` is a LIE — Fs::ensureParentDirs goes through
+// std::filesystem, which reports via error_code and does not set errno, so a failed mkdir left the
+// caller printing whatever unrelated errno happened to be lying around. It printed "Timer expired"
+// for a path that could not be created. A diagnostic that states a confidently wrong cause is worse
+// than one that states none, so the cause is named at the site that actually has it.
+bool image_write_rgb24(const char* path, const unsigned char* rgb, int w, int h) {
+  if (!path || !rgb || w <= 0 || h <= 0) {
+    lucent::error("image_write", "refusing to write: path={} rgb={} {}x{}",
+                  path ? path : "(null)", (const void*)rgb, w, h);
+    return false;
+  }
+  if (!Fs::ensureParentDirs(path)) {
+    lucent::error("image_write", "cannot create the parent directory of {} — NOTHING written", path);
+    return false;
+  }
   size_t n = strlen(path);
   bool ppm = (n > 4 && strcmp(path + n - 4, ".ppm") == 0);
   if (ppm) {
     FILE* f = fopen(path, "wb");
-    if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }
-    return;
+    if (!f) { lucent::error("image_write", "fopen({}) failed: {}", path, strerror(errno)); return false; }
+    bool ok = fprintf(f, "P6\n%d %d\n255\n", w, h) > 0
+           && fwrite(rgb, 3, (size_t)w * h, f) == (size_t)w * h;
+    if (!ok) lucent::error("image_write", "short write to {}: {}", path, strerror(errno));
+    if (fclose(f) != 0) { lucent::error("image_write", "fclose({}) failed: {}", path, strerror(errno)); ok = false; }
+    return ok;
   }
   SDL_Surface* s = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGB24, (void*)rgb, w * 3);
-  if (s) { IMG_SavePNG(s, path); SDL_DestroySurface(s); }
+  if (!s) { lucent::error("image_write", "SDL_CreateSurfaceFrom failed for {}: {}", path, SDL_GetError()); return false; }
+  bool ok = IMG_SavePNG(s, path);
+  if (!ok) lucent::error("image_write", "IMG_SavePNG({}) failed: {}", path, SDL_GetError());
+  SDL_DestroySurface(s);
+  return ok;
 }
-static void dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int h,
+static bool dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int h,
                     int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
   const uint16_t* vram = readback_vram(g);
   unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
-  if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return; }
+  if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return false; }
   // 24bpp packs RGB888 across 1.5 VRAM halfwords per pixel, so column x of the display sits at BYTE
   // offset sx*2 + x*3 in the row — not at halfword sx+x. Decoding it as 1555 is what scrambled the
   // colours and showed two thirds of the width.
@@ -1211,14 +1440,20 @@ static void dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int 
     unsigned char* c = &rgb[((size_t)y * w + x) * 3];
     c[0] = (unsigned char)r; c[1] = (unsigned char)g; c[2] = (unsigned char)b;
   }
-  image_write_rgb24(path, rgb, w, h);
+  // Propagated, not swallowed: every VRAM shot below reports the file it ACTUALLY wrote. These
+  // callers logged "wrote <path>" unconditionally too — the same lie as present_shot's, and measured
+  // in the same run — so they are fixed in the same pass rather than left as the older half of a
+  // rule that now only holds in one place.
+  const bool wrote = image_write_rgb24(path, rgb, w, h);
   free(rgb);
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
+  return wrote;
 }
 void GpuVkState::shot(const char* path) {
-  if (!gpu_vk_enabled() || !s_inited) { lucent::info("gpu_shot", "GPU not active"); return; }
+  if (!gpu_vk_enabled() || !s_inited) { lucent::warn("gpu_shot", "GPU not active — NOTHING captured"); return; }
   FadeState f = fade_state_of(&game->core);
-  dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
+  const bool wrote = dump_to(*this, path, s_last_sx, s_last_sy, s_last_w, s_last_h, f.mode, f.r, f.g, f.b);
+  if (!wrote) { lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)"); return; }
   lucent::info("gpu_shot", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", s_last_w, s_last_h, s_last_sx, s_last_sy);
 }
 void GpuVkState::shot_b(const char* path) { shot(path); }   // Pass 1: single target
@@ -1232,12 +1467,14 @@ void gpu_vk_set_display_depth(Core* core, int rgb24) {
 void gpu_vk_shot_region(Core* core, const char* path, int sx, int sy, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) return;
   FadeState f = fade_state_of(core);
-  dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b);
+  if (!dump_to(core->game->gpu_vk, path, sx, sy, w, h, f.mode, f.r, f.g, f.b)) {
+    lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)"); return; }
   lucent::info("gpu_shot", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", w, h, sx, sy);
 }
 void gpu_vk_vram_region(Core* core, const char* path, int x, int y, int w, int h) {
   if (!gpu_vk_enabled() || !s_inited) return;
-  dump_to(core->game->gpu_vk, path, x, y, w, h, 0, 0, 0, 0);   // raw VRAM region dump — no engine fade applied
+  if (!dump_to(core->game->gpu_vk, path, x, y, w, h, 0, 0, 0, 0))   // raw VRAM region dump — no engine fade applied
+    lucent::error("gpu_shot", "NOTHING captured for {} (image_write said why)", path ? path : "(null)");
   lucent::info("gpu_vram", "wrote {} ({}x{} @ {},{})", path ? path : "(null)", w, h, x, y);
 }
 // DEBUG ONLY (temporary, ires bring-up): dump the FULL ires-scaled target verbatim (no downsample) so the
@@ -1665,6 +1902,7 @@ void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int 
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }
+void gpu_vk_present_shot(Core* core, const char* path) { core->game->gpu_vk.present_shot(path); }
 void gpu_vk_shot_b(Core* core, const char* path) { core->game->gpu_vk.shot_b(path); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
 

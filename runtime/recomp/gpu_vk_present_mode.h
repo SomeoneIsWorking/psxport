@@ -9,7 +9,7 @@
 //
 // psxport never called SDL_SetGPUSwapchainParameters, so a claimed window kept SDL's DEFAULT present
 // mode, VSYNC. Under VSYNC, SDL_WaitAndAcquireGPUSwapchainTexture blocks the CALLING thread until the
-// next vblank — and the caller is GpuVkState::show_composite, reached from vblank_advance -> gpu_present
+// next vblank — and the caller is GpuVkState::show_present_image, reached from vblank_advance -> gpu_present
 // on the GUEST thread. There is no I/O thread: the CD pump, MDEC, DMA completion and the guest itself
 // all run there. So the sink was spending ~16.7 ms of every guest field asleep inside an ioctl, and the
 // guest got almost no CPU. Headless never blocked (null window, acquire fails instantly), which is why

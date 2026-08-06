@@ -65,6 +65,10 @@ void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame);
 // capture is armed. Lets RenderQueue::emitItem key each [preseqobj] line to its present frame.
 int gpu_vk_preseq_present_index(Core* core);
 void gpu_vk_shot(Core* core, const char* path);
+// Capture the PRESENTED PICTURE (s_present_img) rather than guest VRAM — the composite as the player
+// sees it: letterboxed, faded, source-selected, 24bpp-decoded. Works in BOTH legs, and is the only
+// capture in this framework that samples the present stage. See PSXPORT_PRESENT_SHOT_AT.
+void gpu_vk_present_shot(Core* core, const char* path);
 void gpu_vk_stats(Core* core, int* tri, int* tex, int* semi);
 
 // (Engine-owned screen fade is now the PC-native subsystem class ScreenFade at

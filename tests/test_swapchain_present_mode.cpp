@@ -3,7 +3,7 @@
 // THE BUG THIS PINS. gpu_vk.cpp claimed the window (SDL_ClaimWindowForGPUDevice) and never called
 // SDL_SetGPUSwapchainParameters, so the swapchain kept SDL's DEFAULT present mode: VSYNC. Under VSYNC
 // SDL_WaitAndAcquireGPUSwapchainTexture BLOCKS the calling thread until the next vblank, and its caller
-// (GpuVkState::show_composite) runs on the GUEST thread — vblank_advance -> gpu_present, reached from
+// (GpuVkState::show_present_image) runs on the GUEST thread — vblank_advance -> gpu_present, reached from
 // every VSync(), every field wait and every host turn. There is no I/O thread, so the CD pump, MDEC and
 // DMA completion were blocked along with the guest. Headless never blocked (no window, acquire fails
 // instantly), which is exactly why headless looked fine while the user's window was black.

@@ -25,6 +25,22 @@ typedef struct { uint32_t gid, frame, node; int clut_x, clut_y, tp_x, tp_y, x0, 
 
 typedef struct { int x, y; uint8_t r, g, b; int u, v; } Vtx;   // rasterizer vertex (was local to gpu_native)
 
+// ---- CPU<->VRAM transfer header ----------------------------------------------------------------
+// The two parameter words that follow GP0(0xA0) (CPU->VRAM) and GP0(0xC0) (VRAM->CPU): destination/
+// source coords, then width/height. Decoded HERE, once, so the two directions cannot drift apart —
+// a readback whose rect decode disagreed with the upload's would corrupt exactly the save/restore
+// round-trip it exists to serve, and would do it silently. A zero size field means the maximum
+// (1024 / 512), which is the convention the A0 arm has always used.
+typedef struct { int x, y, w, h; } VramRect;
+static inline VramRect vram_xfer_rect(uint32_t coord, uint32_t size) {
+  VramRect r;
+  r.x = (int)(coord & 0x3FF);
+  r.y = (int)((coord >> 16) & 0x1FF);
+  r.w = (int)(size & 0x3FF);        if (!r.w) r.w = VRAM_W;
+  r.h = (int)((size >> 16) & 0x1FF); if (!r.h) r.h = VRAM_H;
+  return r;
+}
+
 // ---- GpuState — the native GPU's per-instance render machine state + rasterizer ----------------
 // Owned by Game (game.h has `GpuState gpu;`). Field names keep their historical `s_`/`g_` spelling so
 // the rasterizer bodies are unchanged by the move (they now read members via implicit `this`).
@@ -157,6 +173,9 @@ struct GpuState {
   // PSXPORT_PRIMDUMP=frame: one-frame CSV dump of every OT prim (see primdump_open).
   FILE* s_primdump_f = nullptr;
   int   s_primdump_frame = -2;      // -2 = env not read, -1 = off
+  int   s_primdump_end = -1;        // last frame of the armed window (PSXPORT_PRIMDUMP="a:b")
+  long  s_primdump_seen = 0;        // prims offered inside the window (the CSV's denominator)
+  int   s_primdump_reported = 0;    // the window's outcome (wrote N / ZERO) has been logged
   FILE* primdump_open(int frame);
   // Fade-flash diagnostic (PSXPORT_FADEDBG) accumulators, reset per present.
   int s_fade_maxc = 0, s_fade_npoly = 0, s_fade_nsemi = 0, s_fade_lasty = 0;
@@ -169,6 +188,35 @@ struct GpuState {
   // PSXPORT_TEXWATCH="x0,y0,x1,y1" watched VRAM rect.
   int s_tw_init = 0, s_tw_x0 = -1, s_tw_y0 = 0, s_tw_x1 = 0, s_tw_y1 = 0;
   int texwatch_overlap(int rx, int ry, int rw, int rh);
+  // TEXWATCH PAYLOAD TRUTH. `src`/`srcbytes` above are read from s_dma_src, which ONLY gpu_dma2_block
+  // sets — an A0 arriving through the OT linked-list walk (or a direct GP0 register write) reports a
+  // STALE address and therefore fictitious source bytes. These fields instead summarise the halfwords
+  // the transfer ACTUALLY streamed into VRAM, plus the guest address stamped on the first payload word
+  // (s_gp0_src, which the OT walk and block DMA both set per word). A watched transfer always emits its
+  // summary line, including the uniform case, with px written / px expected as the denominator.
+  int      s_twp_active = 0;        // this A0 transfer overlaps the watched rect
+  long     s_twp_px = 0;            // payload halfwords seen
+  uint32_t s_twp_addr0 = 0;         // s_gp0_src of the first payload word (0 = unstamped path)
+  uint16_t s_twp_vals[8] = {0};     // first up-to-8 DISTINCT halfword values
+  int      s_twp_nvals = 0;         // distinct values recorded (capped at 8)
+  int      s_twp_more = 0;          // 1 = more than 8 distinct values existed
+  void     twp_note(uint16_t v);
+  void     twp_flush(const char* tag);
+  // GP0(0xC0) VRAM->CPU readback counters. Reported PERIODICALLY EVEN WHEN ZERO while TEXWATCH is
+  // armed, so "the guest never reads VRAM back" is a measurement rather than an absence of output.
+  long     s_c0_n = 0, s_c0_frame = 0;
+  // How many readbacks asked for a rect that overlaps the DISPLAY area while the VK backend owns the
+  // picture. Those pixels live in the GPU texture and are never written back to s_vram (issue 0006 /
+  // INST-18), so such a readback returns STALE CPU-side data. Counted and reported rather than
+  // silently served, because a wrong answer that looks like an answer is the failure mode this whole
+  // feature exists to remove.
+  long     s_c0_stale = 0;
+  // ---- GP0(0xC0) VRAM->CPU transfer cursor ------------------------------------------------------
+  // Mirrors s_xfer* (the A0 CPU->VRAM cursor) exactly: same rect decode, same row-major 2-pixels-per-
+  // word stream, same VRAM wrap. Drained by the GPUREAD register (0x1F801810) and by DMA2 in the
+  // VRAM->CPU direction; both call gpu_read_word(), so there is ONE implementation, not two.
+  int s_rd = 0, s_rd_x = 0, s_rd_y = 0, s_rd_w = 0, s_rd_h = 0, s_rd_px = 0;
+  uint32_t gpu_read_word();         // next word of the readback stream (0 when no transfer is active)
   void gpu_native_init();           // seed the diag gates from cfg (boot + FMV player)
 
   // Frame + OT bookkeeping
@@ -238,6 +286,7 @@ void gpu_gp0(Core* core, uint32_t w);
 void gpu_gp1(Core* core, uint32_t w);
 void gpu_dma2_linked_list(Core* core, uint32_t madr);
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu);
+uint32_t gpu_read_word(Core* core);   // GPUREAD (0x1F801810 read) — GP0(0xC0) VRAM->CPU pixel stream
 void gpu_present(Core* core);
 void gpu_present_ex(Core* core, int do_blit);
 void gpu_clear_display(Core* core);   // FMV/splash teardown: black the display FB + present (no stale pixels)

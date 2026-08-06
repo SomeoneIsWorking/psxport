@@ -19,6 +19,7 @@
 #include "mods.h"                   // g_mods.fps60 (was g_fps60_on)
 #include "render_substrate.h"          // Render::mDbgRenderNode (was g_dbg_render_node)
 #include "scea_asset.h"            // baked SCEA license-screen texture+CLUT (PC-native boot splash)
+#include <execinfo.h>              // PSXPORT_TEXWATCH_BT host backtrace (guest pc is fiction, INST-23)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -148,34 +149,87 @@ static int ws_2d_local_x(Core* core, int x, int is_bg) {
 // scratch/logs/prims_f<frame>.csv — one row per prim: id (walk order), kind, op, is3d, bg(ackdrop),
 // bbox, rgb, textured, semi. Lets a human identify which IDs are the water/sky backdrop so the
 // backdrop-vs-HUD band split can be made correct (and order-independent).
+// A RANGE, not a single frame ("a:b" or "a-b", inclusive; a bare "a" is still one frame). A game that
+// draws at 30 Hz presents at 60, so HALF the frames emit no prims at all — arming a single frame is a
+// coin flip, and the miss used to be SILENT (no file, no line, indistinguishable from "the probe never
+// compiled in"). Both holes are closed here: a range makes the hit deterministic, and the close path
+// below reports the ZERO case out loud.
 FILE* GpuState::primdump_open(int frame) {
-  if (s_primdump_frame == -2) { const char* e = cfg_str("PSXPORT_PRIMDUMP"); s_primdump_frame = e ? atoi(e) : -1; }
-  if (s_primdump_frame < 0 || frame != s_primdump_frame) return 0;
+  if (s_primdump_frame == -2) {
+    const char* e = cfg_str("PSXPORT_PRIMDUMP");
+    s_primdump_frame = -1; s_primdump_end = -1;
+    if (e) { int a = 0, b = 0;
+      if (sscanf(e, "%d:%d", &a, &b) == 2 || sscanf(e, "%d-%d", &a, &b) == 2) { s_primdump_frame = a; s_primdump_end = b; }
+      else { s_primdump_frame = atoi(e); s_primdump_end = s_primdump_frame; } }
+    // UNCONDITIONAL arm line: without it "no CSV appeared" is indistinguishable between "the env var
+    // never reached us", "the armed frame never came" and "the frame had no prims" (instruments.md
+    // rule 1). Printed once, at the first prim of the run, whether armed or not.
+    lucent::info("primdump", "armed frames {}..{} (PSXPORT_PRIMDUMP={})",
+                 s_primdump_frame, s_primdump_end, e ? e : "<unset>");
+  }
+  if (s_primdump_frame < 0 || frame < s_primdump_frame || frame > s_primdump_end) return 0;
+  s_primdump_seen++;                                  // denominator: prims offered inside the window
   if (!s_primdump_f) {
     int r = system("mkdir -p scratch/logs"); (void)r;
-    char p[128]; snprintf(p, sizeof p, "scratch/logs/prims_f%d.csv", frame);
+    char p[128]; snprintf(p, sizeof p, "scratch/logs/prims_f%d.csv", s_primdump_frame);
     s_primdump_f = fopen(p, "w");
-    if (s_primdump_f) fprintf(s_primdump_f, "id,kind,op,is3d,bg,x0,y0,x1,y1,r,g,b,tex,semi\n");
+    if (s_primdump_f) fprintf(s_primdump_f,
+        "frame,id,kind,op,is3d,bg,x0,y0,x1,y1,r,g,b,tex,semi,"
+        "mode,raw,tpx,tpy,clutx,cluty,twmx,twmy,twox,twoy,u0,v0,umin,umax,vmin,vmax\n");
   }
   return s_primdump_f;
 }
+// Texture-addressing columns, appended 2026-08-05 for issue 0007 (untextured 3D world). Without
+// these the CSV could not distinguish "the prims point outside the atlas" from "they point into it
+// and the sampling is wrong" — the exact fork the issue is stuck on. mode is the GP0 texture colour
+// mode (0=4bpp CLUT, 1=8bpp CLUT, 2=15bpp direct, 3=untextured); tp/clut are the ABSOLUTE VRAM
+// texel coords set_texpage()/set_clut() computed; tw* is the texture window mask/offset in 8-texel
+// units; u/v are the raw per-vertex texcoords (min/max over the prim's vertices, so a degenerate
+// all-equal UV set is visible as umin==umax && vmin==vmax).
+static void primdump_texcols(FILE* f, const GpuState& g, int tex, const int* us, const int* vs, int nv, int raw) {
+  // An UNTEXTURED GP0 poly carries no UV words, so Vtx::u/v were never assigned and the caller's
+  // us[]/vs[] hold stack garbage (the first CSV printed values like -1472683276 for them). Emit -1,
+  // which cannot be confused with a real 0..255 texcoord, rather than laundering the garbage.
+  if (!tex) { fprintf(f, ",3,%d,%d,%d,%d,%d,%d,%d,%d,%d,-1,-1,-1,-1,-1,-1\n",
+                      raw, g.s_tp_x, g.s_tp_y, g.s_clut_x, g.s_clut_y,
+                      g.s_tw_mx, g.s_tw_my, g.s_tw_ox, g.s_tw_oy); return; }
+  int u0 = nv > 0 ? us[0] : 0, v0 = nv > 0 ? vs[0] : 0;
+  int umin=u0, umax=u0, vmin=v0, vmax=v0;
+  for (int i = 1; i < nv; i++) { if(us[i]<umin)umin=us[i]; if(us[i]>umax)umax=us[i];
+                                 if(vs[i]<vmin)vmin=vs[i]; if(vs[i]>vmax)vmax=vs[i]; }
+  fprintf(f, ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+          tex ? g.s_tp_mode : 3, raw, g.s_tp_x, g.s_tp_y, g.s_clut_x, g.s_clut_y,
+          g.s_tw_mx, g.s_tw_my, g.s_tw_ox, g.s_tw_oy, u0, v0, umin, umax, vmin, vmax);
+}
 void prim_dump_poly(Core* core, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
-                    const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi) {
+                    const int* xs, const int* ys, const int* us, const int* vs,
+                    uint8_t r, uint8_t g, uint8_t b, int tex, int semi, int raw) {
   FILE* f = core->game->gpu.primdump_open(frame); if (!f) return;
   int x0=xs[0],y0=ys[0],x1=xs[0],y1=ys[0];
   for (int i = 1; i < nv; i++) { if(xs[i]<x0)x0=xs[i]; if(xs[i]>x1)x1=xs[i]; if(ys[i]<y0)y0=ys[i]; if(ys[i]>y1)y1=ys[i]; }
-  fprintf(f, "%u,poly,%02X,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", id, op, is3d, bg, x0,y0,x1,y1, r,g,b, tex, semi);
+  fprintf(f, "%d,%u,poly,%02X,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", frame, id, op, is3d, bg, x0,y0,x1,y1, r,g,b, tex, semi);
+  primdump_texcols(f, core->game->gpu, tex, us, vs, nv, raw);
 }
 void prim_dump_sprite(Core* core, int frame, unsigned id, uint8_t op, int x, int y, int w, int h,
-                      int bg, uint8_t r, uint8_t g, uint8_t b, int tex, int semi) {
+                      int bg, uint8_t r, uint8_t g, uint8_t b, int tex, int semi, int u0, int v0, int raw) {
   FILE* f = core->game->gpu.primdump_open(frame); if (!f) return;
-  fprintf(f, "%u,sprite,%02X,0,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", id, op, bg, x,y,x+w,y+h, r,g,b, tex, semi);
+  fprintf(f, "%d,%u,sprite,%02X,0,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", frame, id, op, bg, x,y,x+w,y+h, r,g,b, tex, semi);
+  int us[2] = { u0, u0 + (w > 0 ? w - 1 : 0) }, vs[2] = { v0, v0 + (h > 0 ? h - 1 : 0) };
+  primdump_texcols(f, core->game->gpu, tex, us, vs, 2, raw);
 }
 void prim_dump_close_if_done(Core* core, int frame) {
   GpuState& g = core->game->gpu;
-  if (g.s_primdump_f && g.s_primdump_frame >= 0 && frame > g.s_primdump_frame) {
-    fclose(g.s_primdump_f); g.s_primdump_f = 0;
-    lucent::info("primdump", "wrote scratch/logs/prims_f{}.csv", g.s_primdump_frame);
+  if (g.s_primdump_frame < 0 || g.s_primdump_reported || frame <= g.s_primdump_end) return;
+  g.s_primdump_reported = 1;
+  if (g.s_primdump_f) { fclose(g.s_primdump_f); g.s_primdump_f = 0;
+    lucent::info("primdump", "wrote scratch/logs/prims_f{}.csv — {} prims over frames {}..{}",
+                 g.s_primdump_frame, g.s_primdump_seen, g.s_primdump_frame, g.s_primdump_end);
+  } else {
+    // THE NEGATIVE, said out loud. Previously this branch did not exist and the window closing empty
+    // produced no file and no line at all.
+    lucent::warn("primdump", "frames {}..{} passed with ZERO prims offered — no CSV written. The game "
+                 "draws at 30 Hz (half the presents emit nothing); widen the window (PSXPORT_PRIMDUMP=a:b).",
+                 g.s_primdump_frame, g.s_primdump_end);
   }
 }
 // Fade-flash diagnostic (PSXPORT_FADEDBG="a:b"): per-frame max emitted prim brightness + how the
@@ -496,6 +550,11 @@ void GpuState::gpu_native_load_image(Core* core, int x, int y, int w, int h, uin
   // SEMI pass samples the post-opaque s_tex (dirty regions only) — so a SEMI-transparent textured
   // prim whose texture arrived here read zeros and discarded (the invisible in-game puddle water).
   if (gpu_vk_enabled()) gpu_vk_dirty(core, x, y, w, h);
+  // TEXWATCH coverage: this is the third VRAM writer and the watch did not see it either (see the
+  // FILL path). Completing the set is what makes a texwatch NEGATIVE mean "nothing wrote here".
+  if (texwatch_overlap(x, y, w, h))
+    lucent::info("texwatch", "f{} NATIVE dest=({},{}) {}x{} src=0x{:08X} first={:04X}",
+                 s_frame, x, y, w, h, src, core->mem_r16(src));
   lucent::debug("upload", "f{} NATIVE dest=({},{}) {}x{} src=0x{:08X}", s_frame, x, y, w, h, src);
 }
 
@@ -587,6 +646,27 @@ int GpuState::texwatch_overlap(int rx, int ry, int rw, int rh) {
   }
   if (s_tw_x0 < 0) return 0;
   return rx < s_tw_x1 && rx + rw > s_tw_x0 && ry < s_tw_y1 && ry + rh > s_tw_y0;
+}
+
+// Record one payload halfword of a watched CPU->VRAM transfer (see gpu_native_internal.h).
+void GpuState::twp_note(uint16_t v) {
+  s_twp_px++;
+  for (int i = 0; i < s_twp_nvals; i++) if (s_twp_vals[i] == v) return;
+  if (s_twp_nvals < 8) s_twp_vals[s_twp_nvals++] = v; else s_twp_more = 1;
+}
+
+// Emit the payload summary for a watched transfer. Unconditional for a watched transfer: the
+// UNIFORM case (distinct=1) is the answer this instrument exists to be able to state, so it must
+// never be the branch that prints nothing.
+void GpuState::twp_flush(const char* tag) {
+  if (!s_twp_active) return;
+  lucent::Line ln;
+  ln.add("f{} {} PAYLOAD dest=({},{}) {}x{} px={}/{} firstwordaddr=0x{:08X} distinct={}{}:",
+         s_frame, tag, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, s_twp_px,
+         (long)s_xfer_w * s_xfer_h, s_twp_addr0, s_twp_nvals, s_twp_more ? "+" : "");
+  for (int i = 0; i < s_twp_nvals; i++) ln.add(" {:04X}", s_twp_vals[i]);
+  ln.flush(lucent::Level::Info, "texwatch");
+  s_twp_active = 0; s_twp_px = 0; s_twp_nvals = 0; s_twp_more = 0; s_twp_addr0 = 0;
 }
 
 // Rasterize one sprite/rect with the CURRENT draw state (s_off, s_da clip, texpage via sample_tex,
@@ -736,9 +816,10 @@ void GpuState::gp0_exec(Core* core) {
         // PSXPORT_PRIMDUMP=<frame>: dump every prim (poly) of that frame as an individual PNG (named by its
         // OT-walk ID) so the backdrop can be identified by eye and its band corrected. id=ord_idx.
         { void prim_dump_poly(Core*, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
-                              const int* xs, const int* ys, uint8_t r, uint8_t g, uint8_t b, int tex, int semi);
-          prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys,
-                         rs[0], gs[0], bs[0], textured ? 1 : 0, semi); }
+                              const int* xs, const int* ys, const int* us, const int* vs,
+                              uint8_t r, uint8_t g, uint8_t b, int tex, int semi, int raw);
+          prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys, us, vs,
+                         rs[0], gs[0], bs[0], textured ? 1 : 0, semi, rw); }
         if (is3d) core->rsub.stats.nd3d++; else core->rsub.stats.nd2d++;
         // PSXPORT_PRIMAT="x,y" (DISPLAY coords): log EVERY poly whose triangle covers that display pixel,
         // with its 3D/2D classification + per-vertex depth (ord) + node + color. Unlike provat (blind to
@@ -924,8 +1005,9 @@ void GpuState::gp0_exec(Core* core) {
       if (!bg && s_frame == s_primdump_frame)
         lucent::debug("objz", "[sprnode] op={:02x} at({},{} {}x{}) rgb=({},{},{}) node={:08x}",
                       op, x, y, w, h, cr, cg, cb, s_cur_node);
-      { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int);
-        prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi); }
+      { void prim_dump_sprite(Core*, int, unsigned, uint8_t, int, int, int, int, int, uint8_t, uint8_t, uint8_t, int, int, int, int, int);
+        prim_dump_sprite(core, s_frame, ord_idx, op, x, y, w, h, bg, cr, cg, cb, textured ? 1 : 0, semi,
+                         u0, v0, (op & 1) ? 1 : 0); }
       int X = x + s_off_x, Y = y + s_off_y;
       int XL = X, XR = X + w;
       // Widescreen 2D handling. Genuine engine-wide widens the 3D world at the projection (OFX); 2D
@@ -981,6 +1063,12 @@ void GpuState::gp0_exec(Core* core) {
     // arriving via GP0(0x02) produced NO [vramguard] line at all, so the instrument reported a clean
     // bill of health for a writer it could not see. Diagnostic only; the fill itself is unchanged.
     vram_guard_check("fill", x, y, w, h, 0);
+    // TEXWATCH must see the FILL too. It watched only A0 and 80copy, so "which write put value V into
+    // the CLUT strip?" could be answered SILENTLY WRONG: a fill is a VRAM writer, and a watch that
+    // cannot see one writer reports "nothing wrote here" with total confidence. Same coverage gap the
+    // vram_guard comment above records for itself. (issue 0007)
+    if (texwatch_overlap(x, y, w, h))
+      lucent::info("texwatch", "f{} FILL dest=({},{}) {}x{} col={:04X}", s_frame, x, y, w, h, col);
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) *vram(x + dx, y + dy) = col;
     // Mirror to the VK VRAM image. The native-upload path documents the mirror as happening on "the
     // GP0 0xA0 / VRAM-copy / fill paths" — this one did not do it. The VK opaque pass re-uploads a
@@ -1114,6 +1202,48 @@ void GpuState::gp0_exec(Core* core) {
   // env commands (E1..E6) handled in gpu_gp0 directly (single-word).
 }
 
+// PSXPORT_GP0RAW=<frame>: dump the RAW GP0 word stream of that frame to
+// scratch/logs/gp0raw_f<frame>.u32 — little-endian uint32 words EXACTLY as the guest wrote them,
+// before this file's decoder touches them. Purpose: let an independent decoder (tools/gp0_decode.py)
+// read the texpage/texture-window/CLUT the GAME asks for, so "the port decodes it wrong" and "the
+// game asks for something wrong" can be told apart. Words belonging to a CPU->VRAM pixel stream are
+// texel DATA, not commands: they are excluded from the file but COUNTED, and both counts are logged
+// unconditionally at close, so an empty dump can never be mistaken for "no words were issued".
+// A WINDOW of GP0RAW_N frames starting at <frame>, not a single frame: this game draws at 30 Hz, so
+// half of its logic frames issue ZERO GP0 words. Armed on one frame you have a 50% chance of capturing
+// an idle frame and reading it as "the guest issues nothing" — which is exactly what the first run of
+// this instrument did (frame 11600: 0 command words). The window makes the alternation visible instead
+// of being sampled blindly, and each frame's word count is logged whether or not it was zero.
+#define GP0RAW_N 4
+static FILE* s_gp0raw_f[GP0RAW_N] = {0,0,0,0};
+static int   s_gp0raw_frame = -2;
+static long  s_gp0raw_cmd[GP0RAW_N] = {0,0,0,0}, s_gp0raw_pix[GP0RAW_N] = {0,0,0,0};
+static void gp0raw_note(int frame, uint32_t w, int is_pixel_stream) {
+  if (s_gp0raw_frame == -2) { const char* e = cfg_str("PSXPORT_GP0RAW"); s_gp0raw_frame = e ? atoi(e) : -1; }
+  if (s_gp0raw_frame < 0) return;
+  int k = frame - s_gp0raw_frame;
+  if (k < 0 || k >= GP0RAW_N) return;
+  if (is_pixel_stream) { s_gp0raw_pix[k]++; return; }
+  if (!s_gp0raw_f[k]) {
+    int r = system("mkdir -p scratch/logs"); (void)r;
+    char p[128]; snprintf(p, sizeof p, "scratch/logs/gp0raw_f%d.u32", frame);
+    s_gp0raw_f[k] = fopen(p, "wb");
+    if (!s_gp0raw_f[k]) { lucent::error("gp0raw", "cannot open scratch/logs/gp0raw_f{}.u32 — NOTHING captured", frame); return; }
+    lucent::info("gp0raw", "armed on frame {} -> scratch/logs/gp0raw_f{}.u32", frame, frame);
+  }
+  fwrite(&w, 4, 1, s_gp0raw_f[k]); s_gp0raw_cmd[k]++;
+}
+void gp0raw_close_if_done(int frame) {
+  if (s_gp0raw_frame < 0 || frame < s_gp0raw_frame + GP0RAW_N) return;
+  for (int k = 0; k < GP0RAW_N; k++) {
+    if (s_gp0raw_f[k]) { fclose(s_gp0raw_f[k]); s_gp0raw_f[k] = 0; }
+    lucent::info("gp0raw", "frame {}: {} command words, {} pixel-stream words skipped ({})",
+                 s_gp0raw_frame + k, s_gp0raw_cmd[k], s_gp0raw_pix[k],
+                 s_gp0raw_cmd[k] ? "file written" : "NO file — zero command words this frame");
+  }
+  s_gp0raw_frame = -1;
+}
+
 // Words needed to complete the packet beginning with command word `c`.
 static int gp0_len(uint32_t c) {
   uint8_t op = c >> 24;
@@ -1134,14 +1264,18 @@ static int gp0_len(uint32_t c) {
 // One word into the GP0 port (direct write or DMA).
 void GpuState::gpu_gp0(Core* core, uint32_t w) {
   s_gp0_words++;
+  gp0raw_note(s_frame, w, s_xfer ? 1 : 0);       // PSXPORT_GP0RAW: raw word capture, pre-decode
   if (s_xfer) {                                  // CPU->VRAM pixel stream (2 px/word)
+    if (s_twp_active && s_twp_px == 0) s_twp_addr0 = s_gp0_src;
     for (int k = 0; k < 2; k++) {
       int px = s_xfer_px % s_xfer_w, py = s_xfer_px / s_xfer_w;
-      if (py < s_xfer_h) *vram(s_xfer_x + px, s_xfer_y + py) = (k ? (w >> 16) : w) & 0xFFFF;
+      uint16_t hv = (uint16_t)((k ? (w >> 16) : w) & 0xFFFF);
+      if (py < s_xfer_h) { *vram(s_xfer_x + px, s_xfer_y + py) = hv; if (s_twp_active) twp_note(hv); }
       s_xfer_px++;
     }
     if (s_xfer_px >= s_xfer_w * s_xfer_h) {
       s_xfer = 0;
+      twp_flush("A0");
       if (s_cw_pending) { clutwatch_dump("A0 DONE", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h); s_cw_pending = 0; }
     }
     return;
@@ -1211,9 +1345,8 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
   if (s_fcount >= s_fneed) {
     uint8_t op = s_fifo[0] >> 24;
     if (op == 0xA0) {                            // CPU->VRAM: set up the pixel stream
-      s_xfer_x = s_fifo[1] & 0x3FF; s_xfer_y = (s_fifo[1] >> 16) & 0x1FF;
-      s_xfer_w = ((s_fifo[2] & 0x3FF) ? (s_fifo[2] & 0x3FF) : 1024);
-      s_xfer_h = (((s_fifo[2] >> 16) & 0x1FF) ? ((s_fifo[2] >> 16) & 0x1FF) : 512);
+      const VramRect rc = vram_xfer_rect(s_fifo[1], s_fifo[2]);
+      s_xfer_x = rc.x; s_xfer_y = rc.y; s_xfer_w = rc.w; s_xfer_h = rc.h;
       s_xfer_px = 0; s_xfer = 1;
       if (vk_path()) gpu_vk_dirty(core, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h);   // mirror upload to VK
       vram_guard_check("A0", s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
@@ -1221,12 +1354,26 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
       lucent::debug("upload", "f{} A0 dest=({},{}) {}x{} src=0x{:08X}",
                     s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, 0x80000000u | s_dma_src);
       if (texwatch_overlap(s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h)) {
+        // Arm the payload summary for this transfer (fires at its last word, in the s_xfer branch).
+        s_twp_active = 1; s_twp_px = 0; s_twp_nvals = 0; s_twp_more = 0; s_twp_addr0 = 0;
         uint32_t src = 0x80000000u | s_dma_src;
         lucent::Line ln;
         ln.add("f{} A0 dest=({},{}) {}x{} src=0x{:08X} srcbytes:",
                s_frame, s_xfer_x, s_xfer_y, s_xfer_w, s_xfer_h, src);
         for (int k = 0; k < 12; k++) ln.add(" {:02X}", core->mem_r8(s_dma_src + k));
         ln.flush(lucent::Level::Info, "texwatch");
+        // PSXPORT_TEXWATCH_BT="w,h" — host backtrace for a watched upload of exactly this size. The
+        // guest pc/ra are fiction under recompiled execution (INST-23), but the HOST stack names the
+        // gen_func_* chain, which is the only way to attribute an upload to guest code. Sized rather
+        // than unconditional because the interesting transfer is one specific rect among thousands.
+        if (const char* bt = cfg_str("PSXPORT_TEXWATCH_BT")) {
+          int bw = 0, bh = 0; sscanf(bt, "%d,%d", &bw, &bh);
+          if (bw == s_xfer_w && bh == s_xfer_h) {
+            static int n_bt = 0;
+            if (n_bt++ < 3) { lucent::info("texwatch", "backtrace #{} for {}x{} upload:", n_bt, bw, bh);
+                              void* b[32]; int n = backtrace(b, 32); backtrace_symbols_fd(b, n, 2); }
+          }
+        }
       }
     } else if (op == 0x80) {                     // VRAM->VRAM copy
       int sx = s_fifo[1] & 0x3FF, sy = (s_fifo[1] >> 16) & 0x1FF;
@@ -1252,7 +1399,35 @@ void GpuState::gpu_gp0(Core* core, uint32_t w) {
           if (mf) { fwrite(core->ram, 1, 0x200000, mf); fclose(mf);
                     lucent::info("clobber", "RAM dumped -> {}", cfg_str("PSXPORT_CLOBBERDUMP")); } } }
       }
-    } else if (op != 0xC0) {
+    } else if (op == 0xC0) {
+      // GP0(0xC0) VRAM->CPU readback: arm the pixel stream. The guest drains it either through the
+      // GPUREAD register (0x1F801810) or through DMA2 in the VRAM->CPU direction; both end up in
+      // gpu_read_word(), so the two drains share one cursor and one addressing rule (the same one
+      // the A0 upload above uses — see vram_xfer_rect).
+      const VramRect rc = vram_xfer_rect(s_fifo[1], s_fifo[2]);
+      s_rd_x = rc.x; s_rd_y = rc.y; s_rd_w = rc.w; s_rd_h = rc.h;
+      s_rd_px = 0; s_rd = 1;
+      s_c0_n++; s_c0_frame++;
+      // THE SOURCE OF TRUTH IS s_vram, AND IT IS NOT COMPLETE UNDER THE VK BACKEND. Guest uploads
+      // (A0), fills (0x02) and VRAM->VRAM copies (0x80) all land in s_vram, so a readback of
+      // guest-authored content — texture pages, CLUT strips — is exact. What the NATIVE RASTER draws
+      // lives in the GPU texture and is never read back into s_vram (issue 0006 / INST-18), so a
+      // readback overlapping the displayed framebuffer returns stale CPU-side pixels. Count and name
+      // that case instead of serving a wrong answer that looks like an answer.
+      const int dx1 = s_disp_x + (s_disp_w > 0 ? s_disp_w : 320), dy1 = s_disp_y + (s_disp_h > 0 ? s_disp_h : 240);
+      if (vk_path() && rc.x < dx1 && rc.x + rc.w > s_disp_x && rc.y < dy1 && rc.y + rc.h > s_disp_y) {
+        s_c0_stale++;
+        static long warned = 0;   // rate limit only — the running total is on the per-frame line below
+        if (warned++ < 4)
+          lucent::warn("gpu", "f{} GP0(C0) reads ({},{}) {}x{}, which overlaps the display area "
+                              "({},{}) {}x{}. Under the VK backend the rendered picture is not written "
+                              "back to CPU VRAM (issue 0006), so these pixels are STALE. #{} so far.",
+                       s_frame, rc.x, rc.y, rc.w, rc.h, s_disp_x, s_disp_y, s_disp_w, s_disp_h, s_c0_stale);
+      }
+      if (texwatch_overlap(rc.x, rc.y, rc.w, rc.h))
+        lucent::info("texwatch", "f{} C0 readback src=({},{}) {}x{} dstaddr=0x{:08X} ({} px armed)",
+                     s_frame, rc.x, rc.y, rc.w, rc.h, 0x80000000u | s_dma_src, rc.w * rc.h);
+    } else {
       gp0_exec(core);
     }
     s_fcount = 0; s_fneed = 0;
@@ -1420,7 +1595,7 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
     gpu_vk_shot_region(core, path, s_disp_x, s_disp_y, dw, dh);
     return;
   }
-  void image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_vk.cpp — PNG by default
+  bool image_write_rgb24(const char*, const unsigned char*, int, int);   // gpu_vk.cpp — false = NOTHING written
   unsigned char* buf = (unsigned char*)malloc((size_t)s_disp_w * s_disp_h * 3);
   if (!buf) { lucent::error("shot", "alloc failed for {}", path ? path : "(null)"); return; }
   for (int y = 0; y < s_disp_h; y++)
@@ -1429,10 +1604,15 @@ void GpuState::gpu_native_shot(Core* core, const char* path) {
       unsigned char* c = &buf[((size_t)y * s_disp_w + x) * 3];
       c[0] = (uint8_t)((p & 31) << 3); c[1] = (uint8_t)(((p >> 5) & 31) << 3); c[2] = (uint8_t)(((p >> 10) & 31) << 3);
     }
-  image_write_rgb24(path, buf, s_disp_w, s_disp_h);
+  const bool wrote = image_write_rgb24(path, buf, s_disp_w, s_disp_h);
   free(buf);
+  if (!wrote) {   // same rule as the VK shots: never report a capture that did not land on disk
+    lucent::error("shot", "f{} could NOT write {} — NOTHING captured", s_frame, path ? path : "(null)");
+    return;
+  }
   lucent::info("shot", "f{} -> {} ({}x{} disp@{},{})", s_frame, path ? path : "(null)", s_disp_w, s_disp_h, s_disp_x, s_disp_y);
 }
+static void shot_triggers(Core* core, uint32_t frame);   // capture triggers (defined below the presenters)
 // gpu_present_ex: the per-frame present + bookkeeping. `do_blit` blits the live front buffer to the
 // window; fps60 passes 0 (it owns presentation: it blits the previous real frame + the interpolated
 // frame itself) but still wants the bookkeeping (watchdog, s_frame++, diagnostics).
@@ -1522,6 +1702,21 @@ void GpuState::gpu_present_ex(Core* core, int do_blit) {
     if (vf >= 0 && s_frame == vf) { FILE* f = fopen(vp, "wb");
       if (f) { fwrite(s_vram, 2, (size_t)VRAM_W * VRAM_H, f); fclose(f);
                lucent::info("vramdump", "f{} -> {} (1024x512x16)", s_frame, vp); } } }
+  // PSXPORT_GRAMDUMP="frame:path" — dump the full 2 MB of guest RAM at `frame`.
+  //
+  // WHY IT LIVES HERE, next to VRAMDUMP, and not with PSXPORT_RAMDUMP_FRAME: that knob fires from the
+  // NATIVE frame loop (native_boot.cpp), which a port running the guest's own main() on the substrate
+  // never executes — it produces no file AND no message, so "no dump" and "this knob is inert here" are
+  // indistinguishable (instruments.md INST-22). gpu_present_ex runs on BOTH paths, which is exactly why
+  // VRAMDUMP works where RAMDUMP_FRAME does not. It also logs unconditionally on the target frame,
+  // including the fopen failure, so a silent run means the frame was never reached.
+  { static int gf = -2; static char gp[256];
+    if (gf == -2) { const char* e = cfg_str("PSXPORT_GRAMDUMP"); gf = -1;
+      if (e) { const char* col = strchr(e, ':'); if (col) { gf = atoi(e); snprintf(gp, sizeof gp, "%s", col + 1); } } }
+    if (gf >= 0 && s_frame == gf) { FILE* f = fopen(gp, "wb");
+      if (!f) lucent::warn("gramdump", "f{} could not open {}", s_frame, gp);
+      else { size_t n = fwrite(core->ram, 1, 0x200000, f); fclose(f);
+             lucent::info("gramdump", "f{} -> {} ({} bytes of 2097152)", s_frame, gp, n); } } }
   if (dir) {
     // PSXPORT_GPU_DUMP=dir[:every] — dump every Nth frame instead of all of them.
     //
@@ -1589,6 +1784,15 @@ void GpuState::frame_finalize(Core* core) {
     if (attach_enabled()) core->rsub.projprim.reset(); }
   s_fade_maxc = 0; s_fade_npoly = 0; s_fade_nsemi = 0; s_fade_semimax = -1; s_fade_semimin = 999; s_fade_bigsemi = 0;
   gpu_vk_frame_end(core, s_vram, s_frame);   // VK: diff + geometry-batch reset
+  // A watched CPU->VRAM transfer still open at the frame boundary NEVER completed: report it rather
+  // than dropping it, because "no PAYLOAD line" would otherwise be indistinguishable from "the watch
+  // did not fire". px=</expected on this line is the tell that the pixel stream was short.
+  if (s_twp_active) twp_flush("A0-INCOMPLETE");
+  if (s_tw_x0 >= 0 && (s_c0_frame || (s_frame % 1000) == 0))
+    lucent::info("texwatch", "f{} GP0(C0) VRAM->CPU readbacks: {} this frame, {} total, {} of them "
+                             "STALE (overlapped the VK-owned display area)",
+                 s_frame, s_c0_frame, s_c0_n, s_c0_stale);
+  s_c0_frame = 0;
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0; s_gp0_addressed = 0; s_gp0_anon = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   // NOTE, measured on a consuming port and deliberately NOT changed here. These latches gate the
@@ -1617,9 +1821,20 @@ void GpuState::frame_finalize(Core* core) {
   s_prev_had_bg2d = s_seen_bg2d;   // #54: remember whether this frame drew a full-screen 2D backdrop
   s_seen_bg2d = 0;
   { void prim_dump_close_if_done(Core*, int); prim_dump_close_if_done(core, s_frame); }   // PSXPORT_PRIMDUMP: flush the file
+  { void gp0raw_close_if_done(int); gp0raw_close_if_done(s_frame); }                      // PSXPORT_GP0RAW: flush + report counts
+  shot_triggers(core, s_frame);   // PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT — every presenter reaches here
 }
-void GpuState::gpu_present(Core* core) {
-  gpu_present_ex(core, 1);
+// ---- capture triggers, at the ONE point every present goes through ---------------------------------
+// These live here, called from the tail of gpu_present_ex, rather than in gpu_present — and that is a
+// correctness fix, not tidying. GpuState::gpu_present is NOT the only presenter: Fps60::present_vk
+// calls gpu_present_ex directly (fps60.cpp:380), and a port running fps60 never reaches gpu_present at
+// all (Tomba2Engine ships fps60=1). So both capture instruments were SILENTLY INERT on that port —
+// MEASURED 2026-08-05: PSXPORT_SHOT_AT over 2802 presents produced zero files and zero log lines,
+// while the same binary with fps60=0 captured normally. That is a diagnostic that can print nothing,
+// which this project treats as a lying instrument: "no capture" and "capture not wired here" are
+// indistinguishable on screen. gpu_present_ex is the chokepoint BOTH presenters share.
+// No behaviour change when the env vars are unset, which is every normal run.
+static void shot_triggers(Core* core, uint32_t frame) {
   // PSXPORT_SHOT_AT=f0,f1,... — dump the presented frame to scratch/screenshots/shot_<f>.ppm at these
   // present indices. gpu_vk_shot already existed but was reachable ONLY from pad-replay
   // (PSXPORT_PAD_SHOT_AT, pad_input.cpp), so an ordinary boot had no way to produce a picture at all —
@@ -1633,13 +1848,35 @@ void GpuState::gpu_present(Core* core) {
              for (char* t = strtok(buf, ","); t && n < 32; t = strtok(nullptr, ","))
                at[n++] = (uint32_t)strtoul(t, 0, 0); }
   }
-  for (int i = 0; i < n; i++) if (at[i] == s_frame) {
+  for (int i = 0; i < n; i++) if (at[i] == frame) {
     void gpu_vk_shot(Core*, const char*);
-    char pth[128]; snprintf(pth, sizeof pth, "scratch/screenshots/shot_%u.ppm", s_frame);
+    char pth[128]; snprintf(pth, sizeof pth, "scratch/screenshots/shot_%u.ppm", frame);
+    // Announces the ARM, not the outcome — gpu_vk_shot logs whether a file actually landed, and this
+    // line used to sit after it saying "present N -> <path>" even when nothing was written, which
+    // read as a second confirmation of a capture that had just failed.
+    lucent::info("shot", "present {} -> arming VRAM capture to {} (GUEST VRAM at this present — not "
+                         "the presented picture; use PSXPORT_PRESENT_SHOT_AT for that)", frame, pth);
     gpu_vk_shot(core, pth);
-    lucent::info("shot", "present {} -> {}", s_frame, pth);
+  }
+  // PSXPORT_PRESENT_SHOT_AT=f0,f1,... — the same trigger over the PRESENT stage. Deliberately a
+  // SEPARATE variable rather than a mode of the one above: the two answer different questions ("what
+  // did the guest draw into VRAM" vs "what does the player see"), the project has already spent a
+  // session confusing them (issue 0005), and a run that wants both should get both files.
+  static int pinit = 0; static uint32_t pat[32]; static int pn = 0;
+  if (!pinit) {
+    pinit = 1;
+    const char* e = cfg_str("PSXPORT_PRESENT_SHOT_AT");
+    if (e) { char buf[256]; snprintf(buf, sizeof buf, "%s", e);
+             for (char* t = strtok(buf, ","); t && pn < 32; t = strtok(nullptr, ","))
+               pat[pn++] = (uint32_t)strtoul(t, 0, 0); }
+  }
+  for (int i = 0; i < pn; i++) if (pat[i] == frame) {
+    void gpu_vk_present_shot(Core*, const char*);
+    char pth[128]; snprintf(pth, sizeof pth, "scratch/screenshots/present_%u.ppm", frame);
+    gpu_vk_present_shot(core, pth);   // logs its own path, size, leg and non-black coverage
   }
 }
+void GpuState::gpu_present(Core* core) { gpu_present_ex(core, 1); }
 // FMV / SCEA-splash teardown (issues #7/#11): black out the DISPLAYED framebuffer region of s_vram and
 // present once, so no FMV last-frame or SCEA white-fill survives into the front-end. The resident
 // off-display SCEA text page is left alone — the title overwrites that VRAM when it uploads its atlas;
@@ -1850,9 +2087,38 @@ void GpuState::gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) 
   // the lookup was never even attempted. The tell is `projprim(vtx) records=N lookups hit=0 miss=0`
   // under PSXPORT_DEBUG=ndepth: zero LOOKUPS (not misses) means the address side is missing, not the
   // depth side. Same contiguous-packet rule as the linked-list path: word i lives at madr + 4*i.
-  for (int i = 0; i < count; i++) { if (to_gpu) { s_gp0_src = addr; gpu_gp0(core, core->mem_r32(addr)); }
-                                    addr += 4; }
+  // to_gpu==0 is the VRAM->CPU direction: the drain half of a GP0(0xC0) readback. It used to do
+  // NOTHING but advance `addr` — the transfer "completed", CHCR's busy bit cleared, the guest's
+  // DrawSync passed, and the destination buffer kept whatever it already held. That silence is the
+  // whole of spider1 issue 0007.
+  for (int i = 0; i < count; i++) {
+    if (to_gpu) { s_gp0_src = addr; gpu_gp0(core, core->mem_r32(addr)); }
+    else        { core->mem_w32(addr, gpu_read_word()); }
+    addr += 4;
+  }
   s_gp0_src = 0;   // leave no stale address for a later non-packet GP0 caller to inherit
+}
+
+// GPUREAD / DMA2-to-RAM: pop the next 32-bit word of an armed GP0(0xC0) readback — two pixels, low
+// halfword first, row-major across the rect, wrapping in X at 1024 and Y at 512 exactly as `vram()`
+// (and therefore every other VRAM transfer path here) does.
+//
+// WHEN NO TRANSFER IS ARMED this returns 0 rather than continuing to walk VRAM. That is deliberate:
+// GPUREAD with no transfer in flight yields the last GP1 info-command result on hardware, which
+// nothing in this framework models, and a runaway guest read must not be handed a slice of the
+// texture atlas that it would then write somewhere as if it were saved pixels.
+uint32_t GpuState::gpu_read_word() {
+  if (!s_rd) return 0;
+  const int total = s_rd_w * s_rd_h;
+  uint32_t w = 0;
+  for (int k = 0; k < 2; k++) {
+    if (s_rd_px >= total) break;       // odd-pixel-count rect: the tail halfword of the last word
+    const int px = s_rd_px % s_rd_w, py = s_rd_px / s_rd_w;   // is padding on hardware too
+    w |= (uint32_t)*vram(s_rd_x + px, s_rd_y + py) << (k * 16);
+    s_rd_px++;
+  }
+  if (s_rd_px >= total) s_rd = 0;      // transfer complete
+  return w;
 }
 
 // ---- Public GPU API: thin free-function wrappers over the per-instance GpuState methods. Keep the
@@ -1866,6 +2132,7 @@ void gpu_gp1(Core* core, uint32_t w) { core->game->gpu.gpu_gp1(w); }
 void gpu_set_disp_origin(Core* core, int x, int y) { core->game->gpu.s_disp_x = x; core->game->gpu.s_disp_y = y; }
 void gpu_dma2_linked_list(Core* core, uint32_t madr) { core->game->gpu.gpu_dma2_linked_list(core, madr); }
 void gpu_dma2_block(Core* core, uint32_t madr, int count, int to_gpu) { core->game->gpu.gpu_dma2_block(core, madr, count, to_gpu); }
+uint32_t gpu_read_word(Core* core) { return core->game->gpu.gpu_read_word(); }
 void gpu_present(Core* core) { core->game->gpu.gpu_present(core); }
 void gpu_present_ex(Core* core, int do_blit) { core->game->gpu.gpu_present_ex(core, do_blit); }
 // SBS per-core frame finalize: the readback grab renders + reads this core's frame but skips gpu_present,
