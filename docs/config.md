@@ -557,6 +557,20 @@ or level — they can't be a bare channel:
   no disc needed). `VK_HEADLESS` (offscreen, no window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
+- **`NOPACE` IS THE ONLY SWITCH FOR "RUN AS FAST AS THE HOST CAN", and a headless run is NOT one.**
+  `gpu_pace_subframe` used to open with `if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;`,
+  so headless was unpaced *by accident of having no window*. That made every headless timing number a
+  statement about a program the user never runs — and headless is where nearly every measurement in
+  this project is taken. Headless and windowed are one program (headless = no window surface, no audio
+  device, nothing else), so a headless run now PACES. Any gate or tool that wants frames rather than
+  real time must pass `PSXPORT_NOPACE=1`; the repos' tools already do. Speed is orthogonal to
+  windowing, and conflating them is how this got in.
+  The pacing interval is `paceQuota` display FIELDS at the game's real field rate — decoded from
+  GP1(0x08) bit 3 (`gpu_field_rate_millihz`, `runtime/recomp/field_rate.h`): 59.940 Hz for NTSC,
+  50 Hz for PAL. It was a hardcoded 60.000 Hz, which beat against every consumer counting fields at
+  60000/1001. A run states its decoded standard once: `[gpu] display standard -> NTSC (59.940 Hz
+  fields — the frame pacer's clock, GP1(08)=…)`. `PSXPORT_DEBUG=pacer` shows the per-call interval,
+  sleep and resyncs.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
 - **SBS observable mode:** `SBS_MODE=skip` — pc_skip (real default config, core A) vs recomp
   (oracle, core B), compared on a curated observable-state list (see skill `sbs-diverge`).

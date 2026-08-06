@@ -105,6 +105,19 @@ struct GpuState {
   // game switching to 24bpp for a still had its VRAM read as 15-bit: every colour scrambled and only
   // two thirds of the width shown, since 24bpp packs 1.5 halfwords per pixel.
   int s_disp_rgb24 = 0;
+  // GP1(0x08) bit 3 — the DISPLAY STANDARD the guest programmed: 0 = NTSC, 1 = PAL. This is the
+  // game's own statement of its field rate, and the port's ONLY honest source for one. The frame
+  // pacer used to divide by a hardcoded 60.0 while the consumer of the pacing counted fields at the
+  // real NTSC rate (60000/1001 = 59.940 Hz); two clocks at different rates across one wait loop is a
+  // beat, and the beat is what reaches the screen. Decoded here so the rate is READ rather than
+  // assumed. Defaults to NTSC, which is what the field rate is until the guest says otherwise.
+  int s_disp_pal = 0;
+  // Has GP1(0x08) been decoded at all? The standard is logged on the FIRST write as well as on a
+  // change, because an NTSC game never changes it away from the default and a log that only fires on
+  // a change would print NOTHING for it — leaving "what field rate is this run pacing on?" answerable
+  // only by reading the source. A diagnostic that cannot print the ordinary answer is not a
+  // diagnostic.
+  bool s_disp_std_seen = false;
 
   // Per-frame prim ordering + provenance
   uint32_t s_prim_order = 0;                                  // OT submission index of the current prim (VK depth)

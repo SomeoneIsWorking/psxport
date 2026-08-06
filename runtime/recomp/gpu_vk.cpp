@@ -29,6 +29,7 @@
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
 #include "mods.h"             // Mods: per-Game mod toggles (wide/ires) — reached via game->mods
+#include "video_plan.h"       // video_wide_native_w / video_ires_scale — resolution from the SINK, not a window
 #include "overlay_glue.h"     // RmlUi mod/debug overlay hooks (init / event / per-frame / record)
 #include "gpu_vk_shaders.h"  // generated: spv_g_present_{vert,frag} / spv_g_image_{vert,frag}
 #include <stdint.h>
@@ -143,9 +144,18 @@ int gpu_vk_enabled(void) {
   return s_gpu_on;
 }
 extern "C" int gpu_windowed(void)   { return gpu_vk_enabled() && !s_headless; }
-extern "C" int gpu_has_window(void) { return s_win != 0; }
 
-// Live window size in pixels (swapchain extent). Fall back to native 4:3 before the window exists.
+// Live window size in pixels (swapchain extent), used ONLY to answer "how big is the sink" in the
+// windowed leg — see sink_size() below, which is what every consumer must ask.
+//
+// DO NOT REACH FOR THESE TO SIZE ANYTHING. They fall back to 320x240 when no window exists, and that
+// fallback silently became the RESOLUTION INPUT for the AUTO internal-resolution scale and for
+// ASPECT_AUTO's widened framebuffer: headless computed ires = round(240/240) = 1 where the same
+// build in its window computed round(720/240) = 3, so a headless capture was not the user's picture.
+// Both decisions now live in video_plan.h and take the SINK, which exists in both legs.
+// (`gpu_has_window()` is gone with the same defect: its only caller was the frame pacer's
+// `if (!gpu_has_window()) return`, which made headless unpaced. PSXPORT_NOPACE is the switch for
+// that, and it always was.)
 static int win_w(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return w > 0 ? w : 320; }
 static int win_h(void) { int w = 320, h = 240; if (s_win) SDL_GetWindowSizeInPixels(s_win, &w, &h); return h > 0 ? h : 240; }
 
@@ -211,48 +221,46 @@ static void sink_size(int* w, int* h) {
 // 2c54ce71 / 6dda8528 each had to fix separately.
 int gpu_vk_native_w(Core* c) { const Game* g = c->game; return g->gpu.s_disp_w > 0 ? g->gpu.s_disp_w : 320; }
 
-static int wide_native_w(const Game* game) {
-  const int native = game->gpu.s_disp_w > 0 ? game->gpu.s_disp_w : 320;
-  auto scaled = [native](int for320) {
-    if (native == 320) return for320;                       // exact, for every existing consumer
-    int w = (int)((double)for320 * native / 320.0 + 0.5);
-    w &= ~1;                                                // even, as the AUTO path also requires
-    return w > VRAM_W ? VRAM_W : w;
-  };
-  switch (game->mods.aspect) {
-    case ASPECT_16_9: return scaled(428);
-    case ASPECT_21_9: return scaled(560);
-    case ASPECT_AUTO: { // AUTO = match the live window aspect — identically in standalone and under SBS
-                        // (each core renders its full-window FOV into its own target; the SBS compositor
-                        // letterboxes that into its half-window pane, so no special-case here).
-                        int ww = win_w();
-                        int w = (int)(((double)native * 0.75 * ww) / win_h() + 0.5); w &= ~1;
-                        if (w < native) w = native; if (w > VRAM_W) w = VRAM_W; return w; }
-    default:          return native;
-  }
+// The inputs the resolution decisions (video_plan.h) take. THE SINK, never the window — see the
+// banner on win_w()/win_h(). `iresCap` is filled by the one caller that needs it.
+static VideoInputs video_inputs(const Game* game, int iresCap) {
+  VideoInputs v;
+  sink_size(&v.sinkW, &v.sinkH);
+  v.nativeW  = game->gpu.s_disp_w;
+  v.aspect   = game->mods.aspect;
+  v.modsIres = game->mods.ires;
+  v.iresCap  = iresCap;
+  v.vramW    = VRAM_W;
+  return v;
 }
+
+static int wide_native_w(const Game* game) { return video_wide_native_w(video_inputs(game, 1)); }
 // Per-core (was process-global): widescreen never touches the PSX oracle — and `oracle` is per-Game
 // now, so one process can hold a wide user core and a pure 4:3 oracle core (SBS honesty).
 int gpu_vk_wide_engine(Core* c)     { Game* g = c->game; return g->mods.aspect != ASPECT_4_3 && !g->oracle; }
 int gpu_vk_wide_engine_ofx(Core* c) { return wide_native_w(c->game) / 2; }
 int gpu_vk_wide_engine_w(Core* c)   { return wide_native_w(c->game); }
 void gpu_vk_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
-  const Mods& m = c->game->mods;
   // Cap = largest i whose ires target set (VRAM_W*i x VRAM_H*i, IRES_BYTES_PER_PX/px) stays under
   // IRES_MEM_BUDGET_BYTES — a real memory budget, independent of aspect (the scaled render is a standalone
   // target now, not squeezed into the fixed VRAM canvas — see the ires_cap comment above). 8x is a hard
   // ceiling regardless of budget: past that the internal resolution exceeds any plausible display, so more
   // headroom just wastes GPU memory for no visible gain.
-  int nw = wide_native_w(c->game);
   double budget_px = (double)IRES_MEM_BUDGET_BYTES / IRES_BYTES_PER_PX;
   int cap = (int)sqrt(budget_px / ((double)VRAM_W * VRAM_H));
   if (cap < 1) cap = 1; if (cap > 8) cap = 8;
-  // mods.ires: 0 = AUTO (derive the scale from the live window height, ~round(h/240)), 1..cap = fixed.
-  int i = m.ires;
-  if (i == 0) { i = (int)((win_h() / 240.0) + 0.5); if (i < 1) i = 1; }
-  if (i < 1) i = 1; if (i > cap) i = cap;
-  if (native_w) *native_w = nw; if (ires) *ires = i; if (fbw) *fbw = nw * i;
-  if (fbh) *fbh = 240 * i;      if (ww) *ww = win_w(); if (wh) *wh = win_h();
+  // mods.ires: 0 = AUTO (derive the scale from the SINK's height, ~round(h/240)), 1..cap = fixed.
+  // It used to derive from win_h(), which is 240 when there is no window — so a headless run rendered
+  // at 1x where the same build in its window rendered at 3x, and headless captures were not the
+  // user's picture. Both decisions moved to video_plan.h and take the sink, which exists in both legs.
+  const VideoInputs v = video_inputs(c->game, cap);
+  const int nw = video_wide_native_w(v);
+  const int i  = video_ires_scale(v);
+  if (native_w) *native_w = nw; if (ires) *ires = i;   if (fbw) *fbw = nw * i;
+  if (fbh) *fbh = PRESENT_NATIVE_LINES * i;
+  // The SINK, reported as the sink, in both legs — the overlay's "window size" row used to read
+  // 320x240 headless, which is neither the window's size nor the size anything was composed for.
+  if (ww) *ww = v.sinkW;        if (wh) *wh = v.sinkH;
   if (ires_cap) *ires_cap = cap;
 }
 // Unused stub (no call sites) — the ires-scaled 3D target that actually exists now (GpuVkState::
