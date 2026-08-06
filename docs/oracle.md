@@ -162,3 +162,37 @@ cores each frame" must become "drive each core toward its next checkpoint indepe
   Tomba is in a non-interactive scripted "caught" pose right at the free-roam onset checkpoint; simple held
   D-pad input doesn't move him there) — recommend driving `PSXPORT_SBS_MODE=oracle` interactively via a real
   windowed run instead of headless scripting for this specific check.
+
+---
+
+# THE ORACLE REGISTRY — there is no single oracle, and every one we have has a blind spot
+
+> *"I knew PSX render wasn't really oracle, I don't know if there is a true oracle, last time I
+> checked all the 'oracles' we have had some sort of problems"* — USER, 2026-08-06
+
+Correct, and it is STRUCTURAL rather than bad luck. **Every render path in this port ends in the
+native VK renderer** — float math, ires scaling, per-pixel depth. The so-called oracles differ in
+which NATIVE DECISIONS they bypass, not in whether the renderer is native. So none of them answers
+"what would a PSX put on screen".
+
+The fix is not to hunt for one true oracle. It is to know WHICH QUESTION each one can answer, and to
+**reduce a picture question to a submission question**, because submission HAS a true oracle and
+pixels do not.
+
+| oracle | the question it genuinely answers | its blind spot — and how it has actually misled |
+|---|---|---|
+| **SBS full** (`PSXPORT_SBS_MODE=full`) — two Cores, byte-compare | **Guest RAM state.** A real oracle for state, and Job #1 rests on it. | Says NOTHING about pixels. Its B core runs the recomp substrate, which freezes/aborts in the intro cutscene (recomp-MISS on un-recompiled overlay code) — i.e. it cannot reach the scenes that most need checking. That is the whole reason this document proposed an interpreter core. |
+| **`PSXPORT_RENDER_PSX=1`** ("psx_render") | It walks the guest OT. | **NOT a pure reference**: it still hands every prim to the NATIVE render queue's layer split and per-pixel depth, so its fidelity depends on pc_render producers having run. MEASURED 2026-08-06: on the GATE leg it draws **sky and sea only — no world geometry at all**. An investigation nearly concluded "vanilla culls this geometry" from an instrument that draws nothing (kanban #77/#78). Positive-controlled. |
+| **`PSXPORT_ORACLE=1`** | Implies GATE + RENDER_PSX and forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. **The best in-tree picture reference.** | Still the native rasterizer, at native precision, at ires>1. It answers "what does the SUBSTRATE draw", never "what does the HARDWARE draw". |
+| **The guest's own DISPATCH TABLES** (e.g. `0x80014DB8`, `0x80014A70`, with their no-op arms) | **"Does vanilla submit/draw this node?" — a TRUE oracle**, because it is DATA IN THE GAME, not a render path, so no renderer decision can contaminate it. | Answers submission, not appearance. Says nothing about colour, order or occlusion. **This is what kanban #77 fell back on when psx_render turned out dead, and it is the only thing in that investigation that held up.** |
+| **beetle-psx** (`vendor/beetle-psx`) | It is a real PSX rasterizer and would be a TRUE PIXEL oracle. | Deliberately used only as a GTE/MDEC/SPU/CHD hardware backend, never as a reference renderer. Standing it up as a diagnostic-only reference is the one unexplored route to an actual picture oracle. |
+| **The interpreter + software-GPU second Core** (this document) | Would answer pixels AND state, in lockstep, reaching scenes the recomp cannot. | **Not built.** |
+
+**THE WORKING RULE, from the one investigation where this bit hardest:** when you catch yourself asking
+"does vanilla draw this?", do not reach for a renderer. Reach for the guest's submission path — the
+queue, the per-type dispatch table, the no-op arm — and answer it as DATA. A renderer comparison
+inherits every defect of both renderers; a table lookup inherits none.
+
+**And state each oracle's blind spot in the report that uses it.** The recurring failure here has never
+been "we had no oracle". It has been using one whose blind spot nobody had written down — which is the
+same defect as a diagnostic that cannot print the failing answer, one level up.
