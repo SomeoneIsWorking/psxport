@@ -136,9 +136,21 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/sbs_present_sdl.cpp
   ${PSXPORT_ROOT}/runtime/recomp/selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/boot.cpp
-  ${PSXPORT_ROOT}/runtime/recomp/rmlui_overlay.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/rmlui_overlay.cpp  # RmlUi LIFETIME only — the UI itself is runtime/ui/
   ${PSXPORT_ROOT}/runtime/recomp/rmlui_render_gpu.cpp
   ${PSXPORT_ROOT}/runtime/recomp/rml_text.cpp       # DATA -> RML markup boundary (see rml_text.h)
+  # ---- runtime/ui: the overlay's COMPONENT tree (Dusklight src/dusk/ui/ shape, CC0). One file
+  # pair per component; ui_component.h documents what was taken and where ours deliberately differs.
+  ${PSXPORT_ROOT}/runtime/ui/ui_event.cpp           # ScopedEventListener — registration IS lifetime
+  ${PSXPORT_ROOT}/runtime/ui/ui_component.cpp       # Component base + the ONE data->DOM text boundary
+  ${PSXPORT_ROOT}/runtime/ui/ui_assets.cpp          # asset resolution that REFUSES to report success
+  ${PSXPORT_ROOT}/runtime/ui/mod_row_model.cpp      # what a menu row MEANS (Mods toggle/adjust tables)
+  ${PSXPORT_ROOT}/runtime/ui/warp_control.cpp       # the Debug tab's dev area warp
+  ${PSXPORT_ROOT}/runtime/ui/menu_row.cpp           # one <select-button> + its binding
+  ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
+  ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
+  ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video/world/music/warp status lines
+  ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/recomp/game_hooks_opt.cpp
   ${PSXPORT_ROOT}/runtime/recomp/overlay_glue.cpp
   ${PSXPORT_ROOT}/runtime/recomp/fps60.cpp            # interpolated-60fps lerp tier (framework render-infra; P1.7c)
@@ -161,7 +173,7 @@ set_target_properties(psxport PROPERTIES
 # generated/ sources (the game substrate) — so the archive carries them as UNDEFINED, resolved only at
 # the final game-exe link. That is expected for a static archive.
 target_include_directories(psxport PUBLIC
-  ${PSXPORT_ROOT}/${RT} ${CMAKE_SOURCE_DIR}/generated
+  ${PSXPORT_ROOT}/${RT} ${PSXPORT_ROOT}/runtime/ui ${CMAKE_SOURCE_DIR}/generated
   ${MED} ${MED}/psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include

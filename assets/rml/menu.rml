@@ -7,7 +7,7 @@
 <body>
 	<window id="window">
 		<tab-bar id="tab-bar">
-			<tab class="selected">Display</tab>
+			<tab>Display</tab>
 			<tab>Graphics</tab>
 			<tab>Debug</tab>
 			<tab>Game</tab>
@@ -22,13 +22,21 @@
 			     RENDERS LITERALLY — that is exactly the bug the user reported in the readouts.
 			     tests/test_rml_text_encoding.cpp lints this whole file for it, comments included,
 			     which is why this note spells the names without their punctuation. -->
-			<!-- One <pane> per tab; the C++ (RmlMenu) shows only the active tab's pane and moves the
-			     `selected`/`active` classes. Each focusable row is a <select-button> with a <key>
+			<!-- One <pane> per tab; psx::ui::MenuDocument pairs the Nth <tab> with the Nth
+			     <pane> and shows only the selected one (a count mismatch is now an error,
+			     not a silent std::min clamp). Each focusable row is a <select-button> with a <key>
 			     (label) + <value>. `tab-index: auto` (RCSS, in menu.rcss) drives Up/Down nav.
-			     `toggle="<id>"` = on/off row; `cycle="<id>"` = multi-state row; `adjust="<id>"` =
-			     numeric step row; `action="<id>"` = a one-shot button (quit/close). The value text is
-			     refreshed from the live mod state on open / activation by RmlMenu. -->
-			<pane class="active">
+			     A row carries EXACTLY ONE of three attributes, and there is no fourth:
+			       toggle="<id>"  cycles a named state (Off/On, or Vanilla/16:9/21:9/Auto)
+			       adjust="<id>"  steps a number, and is the only kind Left/Right act on
+			       action="<id>"  is a one-shot button (quit / close / warp_go / music_*)
+			     (An earlier version of this note also listed `cycle="<id>"`. NOTHING has ever
+			     read that attribute — a row carrying it would be inert. `toggle` already
+			     handles multi-state rows. Do not reintroduce it.)
+			     An id psx::ui::ModRowModel does not know is now reported as an error at load
+			     instead of producing a dead row. The value text is refreshed from live state
+			     by psx::ui::MenuDocument every frame the menu is open. -->
+			<pane>
 				<div id="video_readout" class="readout">render -</div>
 				<div id="world_readout" class="readout"></div>
 

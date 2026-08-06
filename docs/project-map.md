@@ -57,6 +57,16 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 | `game/math/` | math + GTE ops | `gte_math`, `mathlib`, `mtx`, `trig`, `rng`. |
 | `game/core/` | engine core + assets | `engine.{cpp,h}` (the `Engine` class + GAME-stage sm), `asset.cpp`, `pc_scheduler.{cpp,h}` (class `PcScheduler`), `verify_harness.{cpp,h}` (class `VerifyHarness` on `Game`). |
 
+## `runtime/ui/` — the overlay's COMPONENT tree
+One file pair per component on `psx::ui::Component`, modelled on Dusklight's `src/dusk/ui/` (CC0):
+`ui_event` (scoped listeners), `ui_component` (the base + the ONE data->DOM text boundary),
+`ui_assets` (asset resolution that refuses to report success), `mod_row_model` (what a row means),
+`warp_control`, `menu_row`, `menu_pane`, `menu_tab_bar`, `menu_readouts`, `menu_document`.
+`runtime/recomp/rmlui_overlay.{h,cpp}` keeps RmlUi's LIFETIME only and knows no elements.
+**Read `docs/ui-architecture.md` before adding to the menu** — it carries the shapes taken from
+Dusklight, the one place ours deliberately differs, the headless driving surface (`menu dump` /
+`menu tab` / `menu nav`), and the decision NOT to stand an ImGui developer stack up yet.
+
 ## `runtime/recomp/` — the PSX→PC PLATFORM (common; future `psxport` submodule)
 **Core / glue:** `interp.cpp` (flat R3000 interpreter), `mem.cpp` (bus dispatch + watchpoints PSXPORT_WWATCH/CW),
 `core.h`/`game.h` (the `Core`/`Game` objects), `dispatch.cpp` (override table), `hle.cpp` (BIOS HLE),
@@ -65,7 +75,7 @@ Every subfolder is on the include path, so `#include "foo.h"` resolves regardles
 REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present —
-1746 ln) + `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`, `imgui_overlay.cpp`.
+1746 ln) + `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
@@ -80,7 +90,11 @@ in generated/.recomp.hash), `disas.py` (MAIN.EXE disasm), `dbgclient.py` (debug-
 client), `build_port.sh`, bgm/frame tooling,
 `logsig.py` + `syntaxcheck.sh` (the `cfg_*` -> `lucent::` sweep's two instruments — see below). `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored,
 run.sh rebuilds via ensure_recomp.py). `vendor/beetle-psx` (committed GPL fork — the port's GTE/MDEC/SPU/CHD **hardware backend**,
-NOT a reference emulator), `vendor/imgui`.
+NOT a reference emulator), `vendor/rmlui` (the overlay's HTML/CSS engine), `vendor/lucent` (the logger).
+**`vendor/imgui` is VENDORED BUT DEAD** — 2.9 MB of committed source referenced by no build file and no
+source file (measured 2026-08-06). It is not a submodule, so it does not even track upstream. See
+`docs/ui-architecture.md` for the decision not to stand an ImGui developer stack up yet, and for the
+one-line removal the operator should run if that decision holds.
 
 ## ORGANIZATION conventions + known DEBT
 - **A native belongs in its SUBSYSTEM FOLDER, named for the system** (`game/camera/cutscene_camera.cpp`), one

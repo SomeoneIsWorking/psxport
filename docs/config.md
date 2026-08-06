@@ -684,9 +684,11 @@ or level — they can't be a bare channel:
   the adjacent real frame; unset = the shipped t=0.5 midpoint), `NATIVE_DEPTH`,
   `SSAO` (+ `SSAO_STRENGTH`/`SSAO_RADIUS`/`SSAO_BIAS`/`SSAO_RANGE`/`SSAO_VIZ`), `LIGHT`
   (+ `LIGHT_DIR`="x,y,z"/`LIGHT_AMBIENT`/`LIGHT_DIFFUSE`; SSAO+LIGHT share one deferred pass, `SSAO_VIZ`
-  =2 shows normals, =3 shows the lit factor), `UI` (Dear ImGui mod-toggle overlay, windowed only —
-  toggle live: wide/ires/fps60/ssao/light; ` or F1 to hide; forces native-depth + deferred infra on so
-  the toggles work live; seeds g_mods in mods.c), `ATTACH`, `PROJPROBE`,
+  =2 shows normals, =3 shows the lit factor), `UI` (the mod-toggle overlay's deferred
+  infra — forces native-depth + the deferred pass on so the toggles work live; seeds Game::mods).
+  NOTE: this used to read "Dear ImGui mod-toggle overlay, windowed only". BOTH halves were wrong by
+  2026-08-06: the overlay is RmlUi (`runtime/ui/`, `assets/rml/menu.rml`), and it is brought up in
+  BOTH legs — see `docs/ui-architecture.md`. ESC toggles it, F1 toggles RmlUi's own debugger), `ATTACH`, `PROJPROBE`,
   `CULL`/`CULL_FAR`/`CULL_FOV`, `*_RECOMP` (`OT_/LZ_/GEOM_/RECOMP_OBJWALK`), `TRANSPLANT`.
 - **SDL_GPU renderer (gpu_vk.cpp):** `GPU_TRACE` (per-present src-VRAM occupancy + sampled disp region +
   readback nonzero count), `GPU_DEBUG` (enable the SDL_GPU device validation layer — slows pipeline

@@ -83,7 +83,10 @@ tab:focus {
 	decorator: vertical-gradient(#c2a42d00 #c2a42d26);
 }
 
-tab.selected {
+/* Selection is RUNTIME state, so it is a PSEUDO-class (psx::ui::Component::set_selected), not a
+   class: `class` is the document author's namespace and a runtime SetClass writes into it.
+   Dusklight styles `tab-bar tab:selected` the same way (res/rml/tabbing.rcss:29). */
+tab:selected {
 	color: #E0DBC8;
 	border-bottom: 4px #C2A42D;
 	font-effect: glow(0px 4px 0px 4px black);
@@ -97,7 +100,11 @@ content {
 	overflow: hidden;
 }
 
-/* One pane per tab; only the active tab's pane is shown (the C++ toggles the `active` class). */
+/* One pane per tab; only the selected tab's pane is shown. The runtime sets the `:shown`
+   PSEUDO-class (psx::ui::MenuPane::set_shown). It is NOT called `:active`: `:active` is an RmlUi
+   BUILT-IN pseudo-class meaning "the mouse is held down on this element" (Dusklight uses
+   `tab-bar tab:active` for exactly that, res/rml/tabbing.rcss:42), so a pane whose visibility was
+   spelled that way would flicker under any mouse press. */
 pane {
 	display: none;
 	flex: 1 1 0;
@@ -107,7 +114,7 @@ pane {
 	overflow-y: auto;
 }
 
-pane.active {
+pane:shown {
 	display: block;
 }
 

@@ -45,6 +45,8 @@
 
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -237,21 +239,63 @@ static void test_shipped_rml_assets_use_only_decodable_entities(void) {
 }
 
 // ---- 4. the structural regression gate ------------------------------------------------------------
+// The defect was five hand-built markup strings. There must be exactly ONE raw SetInnerRML call in
+// the whole UI subsystem — inside psx::ui::set_text(), the encoding boundary — so a future readout
+// cannot reintroduce data-as-markup without this test going red.
+//
+// THE CORPUS IS ENUMERATED, NOT LISTED. This test used to name one file,
+// `runtime/recomp/rmlui_overlay.cpp`, because at the time the whole UI was that file. When the UI
+// was split into components under `runtime/ui/`, the boundary moved with it and the test went red
+// reporting "0 call sites" — the right failure, but only because the count had to be EXACTLY one.
+// Had it been written as "at most one" it would have gone green while covering nothing. A
+// hardcoded list has the same failure mode more slowly: every new component file is uncovered until
+// someone remembers this file. So the corpus is `runtime/ui/**` walked at run time, plus the
+// overlay shell, and the test REFUSES (rather than passing) if that walk finds nothing.
 static void test_overlay_routes_all_text_through_one_boundary(void) {
-  // The defect was five hand-built markup strings. There must be exactly ONE raw SetInnerRML call
-  // in the overlay — inside set_text(), the encoding boundary — so a future readout cannot
-  // reintroduce data-as-markup without this test going red.
-  std::string src;
-  const std::string path = repo_root() + "/runtime/recomp/rmlui_overlay.cpp";
-  if (!read_file(path, src)) {
-    PT_FAILED("overlay source not found, so this test checked NOTHING: %s", path.c_str());
+  std::vector<std::string> corpus;   // repo-relative paths
+
+  const std::string ui_dir = repo_root() + "/runtime/ui";
+  std::error_code ec;
+  if (!std::filesystem::is_directory(ui_dir, ec)) {
+    PT_FAILED("runtime/ui does not exist, so this test scanned NOTHING: %s", ui_dir.c_str());
     return;
   }
-  int calls = 0;
-  for (size_t p = src.find("SetInnerRML("); p != std::string::npos; p = src.find("SetInnerRML(", p + 1))
-    calls++;
-  fprintf(stderr, "    [lint] rmlui_overlay.cpp: %d SetInnerRML( call site(s)\n", calls);
+  for (const auto& e : std::filesystem::directory_iterator(ui_dir, ec)) {
+    if (!e.is_regular_file()) continue;
+    const std::string ext = e.path().extension().string();
+    if (ext == ".cpp" || ext == ".h") corpus.push_back("runtime/ui/" + e.path().filename().string());
+  }
+  // The overlay shell still owns RmlUi's lifetime and could reintroduce a raw setter on its own.
+  corpus.push_back("runtime/recomp/rmlui_overlay.cpp");
+  std::sort(corpus.begin(), corpus.end());
+
+  // A corpus this small means the walk broke, not that the subsystem shrank. Stated as a floor so
+  // "scanned 1 file, found 1 call" can never masquerade as a clean result.
+  CHECK(corpus.size() >= 10);
+
+  int calls = 0, scanned = 0;
+  std::vector<std::string> sites;
+  for (const std::string& rel : corpus) {
+    std::string src;
+    if (!read_file(repo_root() + "/" + rel, src)) {
+      PT_FAILED("UI source not readable, so this test's corpus is INCOMPLETE: %s", rel.c_str());
+      continue;
+    }
+    scanned++;
+    for (size_t p = src.find("SetInnerRML("); p != std::string::npos;
+         p = src.find("SetInnerRML(", p + 1)) {
+      calls++;
+      sites.push_back(rel);
+    }
+  }
+  fprintf(stderr, "    [lint] UI subsystem: scanned %d file(s), %d raw SetInnerRML( call site(s)\n",
+          scanned, calls);
+  for (const std::string& s : sites) fprintf(stderr, "    [lint]   call site in: %s\n", s.c_str());
+  CHECK_EQ(scanned, (int)corpus.size());
   CHECK_EQ(calls, 1);
+  // And it must be the ONE we mean. A single raw setter that had migrated into, say, a row widget
+  // would satisfy the count while defeating the purpose.
+  if (calls == 1) CHECK_STREQ(sites[0].c_str(), "runtime/ui/ui_component.cpp");
 }
 
 int main(void) {

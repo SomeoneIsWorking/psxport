@@ -489,6 +489,33 @@ long Repl::read(Core* c, uint32_t f) {
       RmlOverlay& ov = c->game->rml_overlay;
       if (!ov.inited())       lucent::info("repl", "menu: overlay NOT initialised — nothing to show");
       else if (!ov.hasMenu()) lucent::info("repl", "menu: overlay is up but has NO DOCUMENT (LoadDocument failed; check PSXPORT_ASSET_DIR)");
+      // `dump`, `tab <n>` and `nav <key>` make the menu's CONTENT and NAVIGATION reachable without a
+      // window. The menu is driven by SDL keyboard events, which do not exist headless, so before
+      // these the component tree could be brought up but never exercised — visibility was the only
+      // thing an agent could change, and "does the Graphics tab still have its 13 rows?" had no
+      // answer short of a windowed run. They are a DRIVING surface (like press/tap): host UI state
+      // only, no guest state, no behaviour switch.
+      else if (!strcmp(which, "dump")) ov.dumpMenu();
+      else if (!strcmp(which, "tab")) {
+        int n = -1;
+        if (sscanf(line, "%*s %*s %d", &n) == 1) { ov.selectTab(n); lucent::info("repl", "menu: tab {}", n); }
+        else lucent::info("repl", "menu tab <index>");
+      }
+      else if (!strcmp(which, "nav")) {
+        char key[16] = {0};
+        sscanf(line, "%*s %*s %15s", key);
+        const int code = !strcmp(key, "up")    ? SDLK_UP
+                       : !strcmp(key, "down")  ? SDLK_DOWN
+                       : !strcmp(key, "left")  ? SDLK_LEFT
+                       : !strcmp(key, "right") ? SDLK_RIGHT
+                       : !strcmp(key, "enter") ? SDLK_RETURN : 0;
+        // A key name nobody recognises must SAY so. A no-op that logged nothing would look
+        // identical to a nav that ran and changed nothing — the difference matters when the whole
+        // point of the command is to tell those two apart.
+        if (!code) lucent::info("repl", "menu nav <up|down|left|right|enter> — \"{}\" is not one of them", key);
+        else if (!ov.visible()) lucent::info("repl", "menu nav {}: IGNORED, the menu is hidden (`menu on` first)", key);
+        else lucent::info("repl", "menu nav {}: {}", key, ov.sendKey(code) ? "handled" : "NOT handled by the menu");
+      }
       else {
         const bool on = !strcmp(which, "off") ? false
                       : !strcmp(which, "on")  ? true
