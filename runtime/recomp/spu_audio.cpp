@@ -7,6 +7,7 @@
 #include "spu_audio.h"
 #include "cfg.h"
 #include "config_vars.h"
+#include "audio_policy.h"   // audio_may_open — ONE definition, shared with native_fmv.cpp
 #include <lucent/log.h>
 #include "game.h"
 
@@ -92,7 +93,7 @@ void SpuAudio::init() {
 
   // Headless implies no audio — there's no point driving the sound device for an automated /
   // offscreen run. Audio opens ONLY for a real on-screen window.
-  if (psx::config::cv_noaudio.get() || !gpu_windowed()) { mState = -1; return; }
+  if (!audio_may_open(psx::config::cv_noaudio.get(), gpu_windowed() != 0)) { mState = -1; return; }
 
 #ifdef PSXPORT_SDL
   if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
