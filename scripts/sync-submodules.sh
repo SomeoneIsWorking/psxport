@@ -232,6 +232,51 @@ if [ -n "$dirty" ]; then
   exit 0
 fi
 
+# ---- 4b. NEVER REWIND A DELIBERATE CHECKOUT -----------------------------------------------------
+# The sync exists for ONE case: a pull moved the recorded gitlink and the checkout is BEHIND it. It
+# must not run for the opposite case — someone deliberately checked the submodule onto a different
+# commit in order to build or gate against it — because `git submodule update` silently puts it back
+# and the run that follows measures a framework nobody chose.
+#
+# MEASURED 2026-08-06, and it cost a full build+gate cycle: Tomba2Engine was checked out onto psxport
+# 9a08efca, built, and gated green (243 presents, exit 0). A CONCURRENT agent ran ./run.sh, this
+# script reverted the checkout to the recorded 9890eaa8, and the commit that followed recorded the OLD
+# pin. Nothing reported it; the submodule reflog was the only trace, and only a `git ls-tree` check
+# caught it afterwards. Reporting the move (which this script already did) is not enough — by then the
+# checkout is gone.
+#
+# ANCESTRY IS THE DISCRIMINATOR, and it is exact rather than a heuristic:
+#   checkout is an ANCESTOR of recorded  -> STALE. Sync forward. This is what the script is FOR.
+#   checkout is a DESCENDANT of recorded -> AHEAD ON PURPOSE. Never rewind it.
+#   neither                              -> DIVERGED. Not this script's to resolve.
+rewind=""
+while read -r p rec chk; do
+  [ -n "${p:-}" ] || continue
+  [ "$rec" != "$chk" ] || continue
+  [ "$chk" != "-" ] || continue          # declared but not checked out: nothing to protect
+  if git -C "$TOP/$p" merge-base --is-ancestor "$chk" "$rec" 2>/dev/null; then
+    continue                             # behind the pin -> the legitimate forward sync
+  fi
+  if git -C "$TOP/$p" merge-base --is-ancestor "$rec" "$chk" 2>/dev/null; then
+    ahead="$(git -C "$TOP/$p" rev-list --count "$rec".."$chk" 2>/dev/null || echo '?')"
+    rewind="$rewind$p\tAHEAD of the recorded gitlink by $ahead commit(s) — a deliberate checkout
+"
+  else
+    rewind="$rewind$p\tDIVERGED from the recorded gitlink (neither is an ancestor of the other)
+"
+  fi
+done <<< "$ENUM"
+
+if [ -n "$rewind" ]; then
+  warn "NOT syncing — these submodules are not merely stale, and a sync would DISCARD a deliberate checkout:"
+  printf '%b' "$rewind" | awk -F'\t' 'NF{printf "    %s: %s\n", $1, $2}' >&2
+  warn "the build will use the CHECKED-OUT commits, not this repo's recorded gitlinks."
+  warn "if the checkout is what you want, RECORD it and the sync will move toward it instead:"
+  warn "    git add <path> && git commit"
+  warn "if you really want the recorded pin back: git submodule update --recursive"
+  exit 0
+fi
+
 # ---- 5. sync, then re-enumerate and report what actually moved ----------------------------------
 before="$ENUM"
 git submodule update --recursive \

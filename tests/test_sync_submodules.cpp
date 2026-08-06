@@ -119,9 +119,11 @@ static bool step(const Fixture& fx, const std::string& cmd, bool required = true
 }
 
 /* ghost      = declare a submodule whose remote does not exist (an UNRESOLVABLE declared path)
- * arm_drift  = leave vendor/lucent one commit behind its recorded gitlink
+ * arm_drift  = leave vendor/lucent one commit BEHIND its recorded gitlink (stale — sync should fix)
+ * ahead_drift= leave vendor/lucent one commit AHEAD of it (a DELIBERATE checkout — must be kept)
  * local_work = leave an untracked file inside vendor/lucent                                        */
-static Fixture make_fixture(const char* name, bool ghost, bool arm_drift, bool local_work) {
+static Fixture make_fixture(const char* name, bool ghost, bool arm_drift, bool local_work,
+                           bool ahead_drift = false) {
   Fixture fx;
   char cwd[4096];
   if (!getcwd(cwd, sizeof cwd)) return fx;
@@ -188,6 +190,16 @@ static Fixture make_fixture(const char* name, bool ghost, bool arm_drift, bool l
     if (old.size() != 40) return fx;
     if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent checkout -q " + old))
       return fx;
+  }
+  /* AHEAD: a commit the recorded gitlink does not contain, checked out on purpose. This is the
+   * operator bumping a pin, or an agent testing a newer framework — the exact case a blind
+   * `git submodule update` silently destroys. */
+  if (ahead_drift) {
+    if (!step(fx, G + " -C " + R + "/src/lucent commit -q --allow-empty -m ahead")) return fx;
+    const std::string tip = capture(fx.env + G + " -C " + R + "/src/lucent rev-parse HEAD");
+    if (tip.size() != 40) return fx;
+    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent fetch -q origin")) return fx;
+    if (!step(fx, G + " -C " + R + "/game/external/framework/vendor/lucent checkout -q " + tip)) return fx;
   }
   if (local_work)
     if (!step(fx, "echo mine > " + R + "/game/external/framework/vendor/lucent/LOCAL_WORK")) return fx;
@@ -329,11 +341,38 @@ static void test_still_refuses_to_clobber_real_local_work(void) {
   cleanup(fx);
 }
 
+/* ---- case 5: a DELIBERATE checkout is never rewound -------------------------------------------- */
+/* The sync exists for ONE direction: the recorded gitlink moved and the checkout is BEHIND it (case
+ * 1). Running it in the other direction destroys work: MEASURED 2026-08-06, Tomba2Engine was checked
+ * out onto psxport 9a08efca, built and gated green, and a CONCURRENT agent's ./run.sh reverted it to
+ * the recorded 9890eaa8 — the following commit recorded the OLD pin and only a `git ls-tree` caught
+ * it. Reporting the move was not enough; by then the checkout is gone.
+ *
+ * Ancestry is the discriminator. This case pins the DESCENDANT arm; case 1 pins the ANCESTOR arm, so
+ * the two together prove the script distinguishes them rather than just refusing everything. */
+static void test_never_rewinds_a_deliberate_checkout(void) {
+  Fixture fx = make_fixture("ahead", /*ghost=*/false, /*arm_drift=*/false, /*local_work=*/false,
+                            /*ahead_drift=*/true);
+  CHECK(fx.ok);
+  const std::string before = lucent_head(fx);
+  CHECK(before != lucent_gitlink(fx));
+
+  const Run r = script_in(fx);
+  fprintf(stderr, "  script exit=%d, output:\n%s", r.rc, r.out.c_str());
+  CHECK(has(r.out, "NOT syncing"));
+  CHECK(has(r.out, "AHEAD of the recorded gitlink"));
+  CHECK(has(r.out, "external/framework/vendor/lucent"));
+  /* THE ASSERTION THAT MATTERS: the checkout survived. */
+  CHECK(lucent_head(fx) == before);
+  cleanup(fx);
+}
+
 int main(void) {
   RUN(preconditions);
   RUN(does_not_certify_a_submodule_gits_recursion_never_reached);
   RUN(refuses_to_certify_when_a_declared_submodule_is_unseeable);
   RUN(certifies_an_in_sync_tree_with_the_full_denominator);
   RUN(still_refuses_to_clobber_real_local_work);
+  RUN(never_rewinds_a_deliberate_checkout);
   return pt_summary();
 }
