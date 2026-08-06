@@ -6,15 +6,18 @@
 // the per-frame CPU update) lives HERE, not crammed into the renderer.
 //
 // Each hook takes the calling Game/Core so it can reach `game->rml_overlay` — one overlay per
-// Game (see rmlui_overlay.h). All hooks are no-ops until the overlay is initialised (windowed only).
+// Game (see rmlui_overlay.h). All hooks are no-ops until the overlay is initialised.
 #include <SDL3/SDL.h>
 
 class Core;
 class Game;
 
-// Bring the overlay up on the port's SDL_GPU device for the given swapchain format (call once
-// per Game after the device + swapchain exist; windowed only).
-void overlay_glue_init(Game* game, SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt);
+// Bring the overlay up on the port's SDL_GPU device (call once per Game after the device exists).
+// `win` may be NULL — the overlay EXISTS in both legs; the window is a sink, not a mode. `sink_w`/
+// `sink_h` is the sink's measured size and `target_fmt` the colour format of the pass the overlay
+// records into. See rmlui_overlay.h for why none of this is re-derived from the window.
+void overlay_glue_init(Game* game, SDL_Window* win, SDL_GPUDevice* dev,
+                       SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h);
 
 // Feed every SDL event (overlay mouse/keys; ESC toggles the menu). No-op if not inited.
 void overlay_glue_event(Game* game, const SDL_Event* e);

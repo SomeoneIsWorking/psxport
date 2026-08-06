@@ -597,9 +597,15 @@ static void init_gpu(Game* game) {
     s_image_pipe = make_fullscreen_pipeline(spv_g_image_vert, spv_g_image_vert_len, spv_g_image_frag, spv_g_image_frag_len, s_swap_fmt);
   create_3d_pipelines();   // the native 3D/textured raster pipelines — windowed AND headless
   lucent::info("gpu_vk", "{} renderer up (VRAM {}x{} RG8 = PSX 1555)", s_headless ? "headless" : "windowed", VRAM_W, VRAM_H);
-  // RmlUi mod/debug overlay — windowed only (it records into the swapchain present pass). No-op if its
-  // assets/fonts are missing; ESC toggles it once up.
-  if (!s_headless) overlay_glue_init(game, s_win, s_dev, s_swap_fmt);
+  // RmlUi mod/debug overlay. Brought up in BOTH legs: this used to be `if (!s_headless)`, which made
+  // the overlay's very EXISTENCE a property of the window — so every headless instrument was
+  // structurally blind to it, and a user-reported dead overlay could not be diagnosed at all without
+  // taking the user's screen (spyro issue #52). The window is an output sink, not a mode
+  // (coord/PROTOCOL.md), so the overlay takes the SINK's size and the format of the pass it will
+  // record into, and `s_win` (NULL headless) is passed only for input translation.
+  int ow = 0, oh = 0;
+  sink_size(&ow, &oh);
+  overlay_glue_init(game, s_win, s_dev, s_headless ? PRESENT_IMG_FMT : s_swap_fmt, ow, oh);
 }
 
 static void poll_quit(Game* game) {

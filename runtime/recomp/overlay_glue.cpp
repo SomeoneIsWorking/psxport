@@ -6,8 +6,9 @@
 #include "core.h"
 #include "game.h"
 
-void overlay_glue_init(Game* game, SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
-    if (game) game->rml_overlay.init(win, dev, swap_fmt);
+void overlay_glue_init(Game* game, SDL_Window* win, SDL_GPUDevice* dev,
+                       SDL_GPUTextureFormat target_fmt, int sink_w, int sink_h) {
+    if (game) game->rml_overlay.init(win, dev, target_fmt, sink_w, sink_h);
 }
 
 void overlay_glue_event(Game* game, const SDL_Event* e) {

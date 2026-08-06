@@ -19,9 +19,22 @@ class RmlOverlay {
 public:
   Game* game = nullptr;   // back-pointer wired by Game()
 
-  // Bring RmlUi up on the port's existing SDL_GPU device, for the given swapchain colour format.
-  // Call once after the device + swapchain exist (windowed only). No-op if already inited.
-  void init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt);
+  // Bring RmlUi up on the port's existing SDL_GPU device. Call once after the device exists.
+  // No-op if already inited.
+  //
+  // THE WINDOW IS OPTIONAL AND `win` MAY BE NULL. Whether the UI EXISTS must not depend on whether
+  // there is a window (coord/PROTOCOL.md: "the window is an output sink, not a mode") — this used
+  // to be called under `if (!s_headless)`, which made every overlay failure invisible to every
+  // headless instrument, and that is precisely why a user-reported dead overlay could not be
+  // diagnosed without taking the user's screen. `win` is used ONLY for input translation and the
+  // SDL system interface; it is never the source of a size.
+  //
+  // `sink_w`/`sink_h` are the SINK's size, measured by the caller and passed in explicitly — never
+  // re-derived here from SDL_GetWindowSize, which exists in one leg only. `target_fmt` is the
+  // colour format of the pass the overlay will record into (swapchain windowed, present image
+  // headless).
+  void init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat target_fmt,
+            int sink_w, int sink_h);
   void shutdown();
 
   // Feed every SDL event (ESC toggles the menu; F1 debugger). Safe if not inited.
@@ -31,7 +44,13 @@ public:
   // Record the menu geometry into the present render pass. No-op when menu is hidden / not inited.
   void recordGpu(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* rp, int win_w, int win_h);
 
+  // `inited()` = RmlUi is up and owns resources. It is NOT "there is a menu": LoadDocument can fail
+  // (typically a missing PSXPORT_ASSET_DIR) and leave a live context with no document. Ask
+  // `hasMenu()` before anything that assumes a UI exists — conflating the two is what let a failed
+  // asset load still log "overlay up".
   bool inited() const { return mInited; }
+  bool hasMenu() const { return mDoc != nullptr; }
+  bool visible() const { return mVisible; }
   void setVisible(bool v);
   void setOptionsMode(bool v) { mOptionsMode = v; }
 

@@ -11,6 +11,8 @@
 // cases go red.
 #include "testutil.h"
 
+#include <string>   // test_streq_survives_temporaries builds temporaries on purpose
+
 // ---- probes: each is a test body that is WRONG on purpose ---------------------------------------
 static void test_probe_failing_check(void) {
   CHECK(1 == 2);                 // must record a failure and return immediately
@@ -69,6 +71,21 @@ static void test_comparators_pass_on_equal(void) {
   CHECK_MEM_EQ(a, b, sizeof a);
 }
 
+// CHECK_STREQ must survive a TEMPORARY on either side — `f().c_str()` is the commonest argument
+// there is, and the macro used to copy the pointer out in one statement and dereference it in the
+// next, by which time the temporary std::string was destroyed. That failed SILENTLY-PASSING for
+// short results (small-string optimisation leaves the bytes in the dead stack slot) and garbled
+// long ones, so the verdict depended on the LENGTH of the answer. Both lengths are checked here:
+// the case above used only string literals, which is why the trap survived.
+static std::string echo(const char* s) { return std::string(s); }
+
+static void test_streq_survives_temporaries(void) {
+  CHECK_STREQ(echo("short").c_str(), "short");                    // 5 chars: inline (SSO)
+  const char* kLong = "a string comfortably past the small-string optimisation boundary";
+  CHECK_STREQ(echo(kLong).c_str(), kLong);                        // 64 chars: heap-allocated
+  CHECK_STREQ(echo(kLong).c_str(), echo(kLong).c_str());          // temporaries on BOTH sides
+}
+
 // pt_verdict() is what pt_summary() returns to the shell, i.e. what ctest reads as red/green.
 // Observations are taken first and the counters restored BEFORE asserting, so a failure of this
 // case cannot be swallowed by the restore.
@@ -88,6 +105,7 @@ int main(void) {
   RUN(failing_check_goes_red);
   RUN(empty_case_goes_red);
   RUN(comparators_pass_on_equal);
+  RUN(streq_survives_temporaries);
   RUN(verdict_exit_code);
   return pt_summary();
 }

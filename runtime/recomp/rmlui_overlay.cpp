@@ -23,6 +23,7 @@
 #include <RmlUi/Debugger.h>
 #include "cfg.h"
 #include "config_vars.h"                  // cv_asset_dir — PSXPORT_ASSET_DIR asset-base resolution
+#include "rml_text.h"                     // set_text()'s DATA -> markup boundary; RML_TEXT_SEP
 #include <lucent/log.h>
 #include <string>
 
@@ -60,6 +61,35 @@ void gpu_vk_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, 
 // The header keeps RmlUi types out (so C callers can include it). Impl-side helpers cast back.
 static inline Rml::Context*         ctx_(void* p)  { return (Rml::Context*)p; }
 static inline Rml::ElementDocument* doc_(void* p)  { return (Rml::ElementDocument*)p; }
+
+// ---- the ONE place overlay text enters the DOM ---------------------------------------------------
+// Every readout and row value is DATA — numbers, a stage name, a track title — and `SetInnerRML`
+// PARSES ITS ARGUMENT AS MARKUP, so data must be encoded on the way in. Going through one boundary
+// is what keeps two failure modes structurally impossible rather than merely absent today:
+//
+//   * a value can never be read as markup. The readouts used to be snprintf'd straight into
+//     SetInnerRML with a `&middot;` separator, and RmlUi decodes only `&lt; &gt; &amp; &quot;` plus
+//     numeric references — so the user saw the literal text "&middot;" (see rml_text.h).
+//   * the "don't rewrite unless it changed" guard actually fires. `GetInnerRML()` returns
+//     `EncodeRml(text)`, so comparing it against a RAW string containing `& < > "` never matched
+//     and the element was reparsed and relaid-out every single frame. Comparing ENCODED against
+//     ENCODED is the same string on both sides.
+//
+// tests/test_rml_text_encoding.cpp asserts this file holds exactly one raw inner-RML call site —
+// the one below. Add readouts by calling set_text, never by reaching for that setter again.
+static void set_text(Rml::Element* el, std::string_view text) {
+    if (!el) return;
+    const std::string markup = rml_text_markup(text);
+    if (el->GetInnerRML() == markup) return;
+    el->SetInnerRML(markup);
+    // Report what the DOM NOW HOLDS, not what we sent — DecodeRml(GetInnerRML()) is literally the
+    // character sequence RmlUi will hand to the font. That distinction is the whole point: the
+    // "&middot;" bug was invisible to any diagnostic that echoed the string we composed, because
+    // the string we composed was fine and the DOM's interpretation of it was not. Channel `rmlui`.
+    const Rml::String& id = el->GetId();
+    lucent::debug("rmlui", "text {} = \"{}\"", id.empty() ? el->GetTagName() : "#" + id,
+                  Rml::StringUtilities::DecodeRml(el->GetInnerRML()));
+}
 
 // ---- per-element event listeners (implementation-only classes) ----------------------------------
 // Each listener holds a pointer back to its owning RmlOverlay so the callback routes UI state
@@ -214,8 +244,7 @@ void RmlOverlay::setRowValue(void* rowRaw) {
     if (!game) return;
     if (kind == "adjust" && id == "warp_area") txt = warpAreaLabel(mWarpArea);
     else if (!row_value_text(game->mods, kind, id, txt)) return;
-    if (Rml::Element* v = row->QuerySelector("value"))
-        if (v->GetInnerRML() != txt) v->SetInnerRML(txt);
+    set_text(row->QuerySelector("value"), txt);
 }
 
 void RmlOverlay::refreshAllRows() {
@@ -231,8 +260,7 @@ void RmlOverlay::refreshAllRows() {
 void RmlOverlay::setWarpReadout(const std::string& txt) {
     Rml::ElementDocument* d = doc_(mDoc);
     if (!d) return;
-    if (Rml::Element* e = d->GetElementById("warp_readout"))
-        if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
+    set_text(d->GetElementById("warp_readout"), txt);
 }
 
 void RmlOverlay::refreshReadouts() {
@@ -241,29 +269,29 @@ void RmlOverlay::refreshReadouts() {
     int nw = 320, ir = 1, fbw = 320, fbh = 240, ww = 0, wh = 0, cap = 4;
     gpu_vk_video_status(game ? &game->core : nullptr, &nw, &ir, &fbw, &fbh, &ww, &wh, &cap);
     char buf[192];
-    if (Rml::Element* e = d->GetElementById("video_readout")) {
-        snprintf(buf, sizeof buf, "render %dx%d &middot; window %dx%d &middot; internal %dx", fbw, fbh, ww, wh, ir);
-        if (e->GetInnerRML() != buf) e->SetInnerRML(buf);
+
+    // RML_TEXT_SEP is a real U+00B7 character in the TEXT, not an entity: these strings are data,
+    // and `set_text` encodes them so nothing in them is ever parsed as markup (see rml_text.h).
+    snprintf(buf, sizeof buf, "render %dx%d" RML_TEXT_SEP "window %dx%d" RML_TEXT_SEP "internal %dx",
+             fbw, fbh, ww, wh, ir);
+    set_text(d->GetElementById("video_readout"), buf);
+
+    std::string music = "stopped";
+    if (game) {
+        const char* nm = game_audio_now_playing_name(&game->core, game->core.hooks);
+        if (nm) music = std::string("playing: ") + nm;
     }
-    if (Rml::Element* e = d->GetElementById("music_readout")) {
-        std::string txt = "stopped";
-        if (game) {
-            const char* nm = game_audio_now_playing_name(&game->core, game->core.hooks);
-            if (nm) txt = std::string("playing: ") + nm;
-        }
-        if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
+    set_text(d->GetElementById("music_readout"), music);
+
+    std::string world;
+    if (mWvalid) {
+        const char* sname = mWstage == 0x8010637Cu ? "GAME" : mWstage == 0x801062E4u ? "DEMO"
+                          : mWstage == 0x8010649Cu ? "START" : "?";
+        snprintf(buf, sizeof buf, "pos X %d Y %d Z %d" RML_TEXT_SEP "stage %s (0x%08X)",
+                 mWpos[0], mWpos[1], mWpos[2], sname, mWstage);
+        world = buf;
     }
-    if (Rml::Element* e = d->GetElementById("world_readout")) {
-        std::string txt;
-        if (mWvalid) {
-            const char* sname = mWstage == 0x8010637Cu ? "GAME" : mWstage == 0x801062E4u ? "DEMO"
-                              : mWstage == 0x8010649Cu ? "START" : "?";
-            snprintf(buf, sizeof buf, "pos X %d Y %d Z %d &middot; stage %s (0x%08X)",
-                     mWpos[0], mWpos[1], mWpos[2], sname, mWstage);
-            txt = buf;
-        }
-        if (e->GetInnerRML() != txt) e->SetInnerRML(txt);
-    }
+    set_text(d->GetElementById("world_readout"), world);
 }
 
 // ---- tab + focus navigation (mirrors soh3d's SohRmlUi) ------------------------------------------
@@ -383,12 +411,13 @@ void RmlOverlay::applyVisibility() {
 }
 
 // ---- init ---------------------------------------------------------------------------------------
-void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat swap_fmt) {
+void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat target_fmt,
+                      int sink_w, int sink_h) {
     if (mInited) return;
-    mWin = win;
+    mWin = win;   // may be null — headless. See the header: the window is a sink, not a mode.
 
     auto* render = new RmlRenderInterfaceGpu();
-    if (!render->Init(dev, swap_fmt)) {
+    if (!render->Init(dev, target_fmt)) {
         lucent::error("rmlui", "render interface init failed; overlay disabled");
         delete render; return;
     }
@@ -410,25 +439,42 @@ void RmlOverlay::init(SDL_Window* win, SDL_GPUDevice* dev, SDL_GPUTextureFormat 
     for (const char* f : fonts) if (Rml::LoadFontFace(rml_asset(f).c_str())) loaded++;
     if (!loaded) lucent::warn("rmlui", "WARNING: no fonts loaded (assets/rml/*.ttf missing; set PSXPORT_ASSET_DIR to the dir containing assets/)");
 
-    int ww = 0, wh = 0; SDL_GetWindowSize(win, &ww, &wh);
-    if (ww <= 0) ww = 1280; if (wh <= 0) wh = 720;
-    Rml::Context* c = Rml::CreateContext("tomba2_menu", Rml::Vector2i(ww, wh));
-    if (!c) { lucent::error("rmlui", "CreateContext failed"); return; }
+    // The SINK's size, passed in by the caller. NOT SDL_GetWindowSize: that answers only in the
+    // windowed leg, and a UI sized from a leg-dependent measurement is a UI that differs between
+    // legs. Clamped rather than defaulted-to-1280x720 so a caller that passes nonsense is visible.
+    if (sink_w <= 0 || sink_h <= 0) {
+        lucent::warn("rmlui", "init got a degenerate sink {}x{}; the menu will be laid out for it as given", sink_w, sink_h);
+    }
+    Rml::Context* c = Rml::CreateContext("tomba2_menu", Rml::Vector2i(sink_w > 0 ? sink_w : 1, sink_h > 0 ? sink_h : 1));
+    if (!c) { lucent::error("rmlui", "CreateContext failed — menu unavailable"); return; }
     mCtx = c;
     Rml::Debugger::Initialise(c);
 
-    Rml::ElementDocument* d = c->LoadDocument(rml_asset("assets/rml/menu.rml").c_str());
-    if (!d) {
-        lucent::error("rmlui", "LoadDocument({}) FAILED — menu unavailable (set PSXPORT_ASSET_DIR to the dir containing assets/)", rml_asset("assets/rml/menu.rml"));
-    } else {
-        mDoc = d;
-        attachHandlers();
-        refreshAllRows();
-        d->Hide();   // start hidden; ESC shows it
-    }
-
+    const std::string doc_path = rml_asset("assets/rml/menu.rml");
+    Rml::ElementDocument* d = c->LoadDocument(doc_path.c_str());
+    // `mInited` means "RmlUi is up and owns resources shutdown() must free" — it is NOT the same
+    // question as "is there a menu", which is `hasMenu()`. Conflating the two is what let a failed
+    // LoadDocument still report success.
     mInited = true;
-    lucent::info("rmlui", "overlay up (ESC to toggle the menu)");
+
+    if (!d) {
+        // REPORT THE FAILURE AS THE FAILURE. This used to fall through to the "overlay up" line
+        // below after its own fatal error, so a log reader was told the overlay was working while
+        // ESC toggled visibility on a null document and nothing happened — the exact reason a
+        // user-reported dead overlay read as a mystery rather than as a missing asset dir. An
+        // instrument that reports success on its own failure path is worse than no instrument.
+        lucent::error("rmlui", "LoadDocument({}) FAILED — MENU UNAVAILABLE, the overlay is up but "
+                               "has NOTHING TO SHOW (set PSXPORT_ASSET_DIR to the dir containing "
+                               "assets/; fonts loaded: {}/3)", doc_path, loaded);
+        return;
+    }
+    mDoc = d;
+    attachHandlers();
+    refreshAllRows();
+    d->Hide();   // start hidden; ESC shows it
+
+    lucent::info("rmlui", "overlay up ({} sink {}x{}, {}/3 fonts, ESC to toggle the menu)",
+                 win ? "windowed" : "headless", sink_w, sink_h, loaded);
 }
 
 void RmlOverlay::shutdown() {
@@ -448,8 +494,15 @@ void RmlOverlay::event(const SDL_Event* e) {
     Rml::Context* c = ctx_(mCtx);
     // ESC toggles the menu (the game's old "ESC quits" was removed in gpu_vk.cpp). In options-mode the
     // game owns visibility (Circle/Triangle), so don't fight it. (SDL3 event/key field names.)
+    // ESC only toggles a menu that EXISTS. Without this, a failed LoadDocument left ESC flipping
+    // mVisible on a null document — which showed nothing and yet made wantsKeyboard() true, so the
+    // port silently swallowed every gameplay key with no menu on screen and no way to get out.
     if (!mOptionsMode && e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat &&
         e->key.scancode == SDL_SCANCODE_ESCAPE) {
+        if (!hasMenu()) {
+            lucent::warn("rmlui", "ESC ignored: no menu document loaded (see the LoadDocument error above)");
+            return;
+        }
         mVisible = !mVisible; applyVisibility(); return;
     }
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
@@ -494,7 +547,7 @@ void RmlOverlay::setWorld(int x, int y, int z, unsigned stage) { mWpos[0]=x; mWp
 // Tomba. (No text fields exist in this menu; the input/textarea checks are kept for completeness.)
 bool RmlOverlay::wantsKeyboard() const {
     Rml::Context* c = ctx_(mCtx);
-    if (!mInited || !c) return false;
+    if (!mInited || !c || !hasMenu()) return false;   // no document = no UI to type into
     if (mVisible) return true;
     Rml::Element* fe = c->GetFocusElement();
     if (!fe) return false;
@@ -508,11 +561,17 @@ bool RmlOverlay::wantsKeyboard() const {
 void RmlOverlay::newFrame() {
     Rml::Context* c = ctx_(mCtx);
     if (!mInited || !c) return;
-    if (mWin) {
-        int ww = 0, wh = 0; SDL_GetWindowSize(mWin, &ww, &wh);
-        if (ww > 0 && wh > 0) {
+    // Track the SINK, not the window. gpu_vk_video_status reports the sink in BOTH legs (it is the
+    // window size when there is a window and the configured headless present size when there is
+    // not), so the menu is laid out for the same rectangle the picture is composed for either way.
+    // This used to be SDL_GetWindowSize under `if (mWin)`, which meant the layout simply froze at
+    // its initial size in the leg with no window.
+    if (game) {
+        int nw = 0, ir = 0, fbw = 0, fbh = 0, sw = 0, sh = 0, cap = 0;
+        gpu_vk_video_status(&game->core, &nw, &ir, &fbw, &fbh, &sw, &sh, &cap);
+        if (sw > 0 && sh > 0) {
             Rml::Vector2i cur = c->GetDimensions();
-            if (cur.x != ww || cur.y != wh) c->SetDimensions(Rml::Vector2i(ww, wh));
+            if (cur.x != sw || cur.y != sh) c->SetDimensions(Rml::Vector2i(sw, sh));
         }
     }
     if (mVisible) refreshReadouts();   // keep the live video/world status lines current

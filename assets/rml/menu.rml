@@ -15,6 +15,13 @@
 			<tab>About</tab>
 		</tab-bar>
 		<content id="content">
+			<!-- NON-ASCII GLYPHS ARE NUMERIC CHARACTER REFERENCES: &#183; is "·", &#8212; is "—".
+			     Never write an HTML entity NAME here (middot, mdash, rarr, hellip, times, copy…).
+			     RML is XML-ish, not HTML: RmlUi decodes the four XML predefined names plus numeric
+			     references and NOTHING else, so an unknown name is passed straight through and
+			     RENDERS LITERALLY — that is exactly the bug the user reported in the readouts.
+			     tests/test_rml_text_encoding.cpp lints this whole file for it, comments included,
+			     which is why this note spells the names without their punctuation. -->
 			<!-- One <pane> per tab; the C++ (RmlMenu) shows only the active tab's pane and moves the
 			     `selected`/`active` classes. Each focusable row is a <select-button> with a <key>
 			     (label) + <value>. `tab-index: auto` (RCSS, in menu.rcss) drives Up/Down nav.
@@ -29,7 +36,7 @@
 				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
 				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
-				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -49,7 +56,7 @@
 				<select-button adjust="light_diffuse"><key>Diffuse</key><value>0.70</value></select-button>
 				<select-button toggle="shadows"><key>Dynamic Shadows</key><value>Off</value></select-button>
 				<select-button adjust="shadow_strength"><key>Shadow Strength</key><value>0.60</value></select-button>
-				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -62,15 +69,15 @@
 				<div id="warp_readout" class="readout"></div>
 				<select-button adjust="warp_area"><key>Destination</key><value>Area 0</value></select-button>
 				<select-button action="warp_go"><key>Warp There</key><value>&#8594;</value></select-button>
-				<p class="hint">Only from the field &mdash; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md.</p>
-				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A change &middot; Esc close</p>
+				<p class="hint">Only from the field &#8212; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md.</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
 			<pane>
 				<div class="section-heading">Game</div>
 				<select-button action="close"><key>Resume</key><value>&#8629;</value></select-button>
 				<select-button action="quit"><key>Quit Game</key><value>&#10005;</value></select-button>
-				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A select &middot; Esc close</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A select &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -87,13 +94,13 @@
 				<select-button action="music_8"><key>Song 8 (field)</key><value>&#9654;</value></select-button>
 				<select-button action="music_9"><key>Song 9 (field)</key><value>&#9654;</value></select-button>
 				<select-button action="music_stop"><key>Stop</key><value>&#9632;</value></select-button>
-				<p class="hint">Native PC audio engine (engine/audio/) &middot; replaces the libsnd music path.</p>
-				<p class="hint">&#8596; switch tab &middot; &#8597; move &middot; Enter / A play &middot; Esc close</p>
+				<p class="hint">Native PC audio engine (engine/audio/) &#183; replaces the libsnd music path.</p>
+				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A play &#183; Esc close</p>
 			</pane>
 
 			<pane>
 				<div class="section-heading">About</div>
-				<p>Tomba! 2 &mdash; PC-native engine port (Tomba2Engine).</p>
+				<p>Tomba! 2 &#8212; PC-native engine port (Tomba2Engine).</p>
 				<p class="hint">RmlUi (HTML/CSS) menu over the Vulkan renderer. Layout from Dusklight (CC0).</p>
 			</pane>
 		</content>

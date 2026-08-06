@@ -152,7 +152,30 @@ The RmlUi debug/mod overlay disk-loads its fonts + `menu.rml` from `<PSXPORT_ASS
 (the SPIR-V shaders are embedded, but these are not). Default (unset) = cwd-relative `assets/rml/…`,
 which works when the runtime cwd IS the framework root. A consumer whose cwd is its own repo root sets
 this to the dir CONTAINING `assets/` — for a submodule vendoring, `external/psxport` (run.sh does this).
-Unset + no `./assets/rml/` ⇒ `[rmlui] LoadDocument … FAILED` / no fonts, and the overlay is blank.
+Unset + no `./assets/rml/` ⇒ `[rmlui] LoadDocument … FAILED — MENU UNAVAILABLE, the overlay is up but
+has NOTHING TO SHOW`. That used to be followed by `[rmlui] overlay up (…)` regardless, i.e. the log
+told you it worked right after its own fatal error; it no longer does, and ESC now refuses to open a
+menu that does not exist instead of swallowing every gameplay key with nothing on screen.
+
+### The `rmlui` diagnostic channel (`PSXPORT_DEBUG=rmlui`)
+Emits one line per overlay text change, reporting what the **DOM holds** — `DecodeRml(GetInnerRML())`,
+i.e. the exact character sequence RmlUi will hand to the font — not the string we composed:
+
+```
+[rmlui] text #video_readout = "render 960x720 · window 960x720 · internal 3x"
+```
+
+Echoing what we sent would have been useless for the class of bug this exists to catch: the composed
+string was always fine, and RmlUi's *reading* of it was the defect. **The overlay is brought up in
+both legs**, so this works headless; drive it with the REPL/debug-server `menu [on|off|toggle]`
+command (the readouts only refresh while the menu is open).
+
+**RML text is not HTML.** RmlUi decodes only `&lt; &gt; &amp; &quot;` and numeric character
+references `&#NNN;` / `&#xHH;` — an HTML entity NAME like `&middot;` is passed through and RENDERS
+LITERALLY. Author non-ASCII glyphs in `assets/rml/*.rml` as numeric references; in C++ compose PLAIN
+TEXT (UTF-8, `RML_TEXT_SEP` for the separator) and let `rml_text_markup()` encode it — never build
+markup by string concatenation. `tests/test_rml_text_encoding.cpp` lints the asset corpus for this
+and asserts the overlay keeps exactly one raw inner-RML call site.
 
 ### Video settings file (`psxport_settings.ini`, path overridable with `PSXPORT_SETTINGS`)
 The F1 overlay writes `key=value` lines; `mods_load()` restores them at launch (`runtime/recomp/mods.{h,c}`).

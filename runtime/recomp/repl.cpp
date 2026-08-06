@@ -474,6 +474,29 @@ long Repl::read(Core* c, uint32_t f) {
         if (!hits) lucent::info("repl", "otwhere 0x{:08X}: NOT in the last-walked OT (madr=0x{:08X})", pkt, 0x80000000u | madr);
       }
     }
+    // `menu [on|off|toggle]` — drive the RmlUi overlay without a keyboard.
+    //
+    // WHY THIS EXISTS: the overlay could previously only be opened by an SDL ESC key event, i.e.
+    // only through a window. Agents may not run windowed (coord/PROTOCOL.md), so the entire UI was
+    // undrivable by every instrument the project actually uses, and that — together with the
+    // windowed-only init this replaced — is why a user-reported dead overlay could not be examined
+    // at all. Visibility is host UI state, not guest state, so this is a driving surface like
+    // `press`/`tap`, not a behaviour switch. Reports what it DID, including the refusal cases, so
+    // a run that changed nothing cannot read like a run that worked.
+    else if (!strcmp(cmd, "menu")) {
+      char which[16] = {0};
+      sscanf(line, "%*s %15s", which);
+      RmlOverlay& ov = c->game->rml_overlay;
+      if (!ov.inited())       lucent::info("repl", "menu: overlay NOT initialised — nothing to show");
+      else if (!ov.hasMenu()) lucent::info("repl", "menu: overlay is up but has NO DOCUMENT (LoadDocument failed; check PSXPORT_ASSET_DIR)");
+      else {
+        const bool on = !strcmp(which, "off") ? false
+                      : !strcmp(which, "on")  ? true
+                      : !ov.visible();                       // bare `menu` / `menu toggle`
+        ov.setVisible(on);
+        lucent::info("repl", "menu: {}", on ? "shown" : "hidden");
+      }
+    }
     else if (!strcmp(cmd, "stage")) lucent::info("repl", "stage={:08X} sm48={}", c->mem_r32(0x801fe00c), (int)c->mem_r16(0x801fe048));
     else if (!strcmp(cmd, "regs")) {
       lucent::Line ln;                                       // 4 registers per row

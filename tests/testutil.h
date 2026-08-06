@@ -76,16 +76,41 @@ static int pt_expect_fail = 0;  /* self-test only: suppress the FAIL print for a
     }                                                                                              \
   } while (0)
 
-#define CHECK_STREQ(got, want)                                                                      \
+/* String equality.
+ *
+ * THE LIFETIME TRAP THIS IS SHAPED AROUND — do not "simplify" it back. The obvious spelling
+ *
+ *     const char *pt_g = (got), *pt_w = (want);      // statement 1
+ *     if (strcmp(pt_g, pt_w) != 0) ...               // statement 2  <-- pt_g is DANGLING
+ *
+ * is wrong for the most common C++ argument there is, `some_call().c_str()`: the temporary
+ * std::string is destroyed at the end of statement 1, so statement 2 compares freed memory. And it
+ * fails in the worst possible way — SILENTLY PASSING. A result short enough for the small-string
+ * optimisation still lives in the (dead but not yet reused) stack slot and compares equal, while a
+ * longer one reads a freed heap block. Measured 2026-08-06 in this very header: the same test
+ * passed `"a &amp; b"` (9 chars, inline) and garbled `"say &quot;hi&quot;"` (18 chars, heap) —
+ * so the macro's verdict depended on the LENGTH of the answer, not its correctness.
+ *
+ * The fix is to do the whole comparison inside ONE full-expression, so every temporary in `got` and
+ * `want` is still alive: the call below is that expression. Kept as a plain function (not a lambda,
+ * not a statement expression) so C tests can use this header too. */
+static int pt_streq_failed(const char* got_expr, const char* want_expr, const char* got,
+                           const char* want, const char* file, int line) {
+  if (got && want && strcmp(got, want) == 0)
+    return 0;
+  ++pt_fails;
+  if (!pt_expect_fail)
+    fprintf(stderr, "    FAIL %s:%d: %s == %s: got \"%s\" want \"%s\"\n", file, line, got_expr,
+            want_expr, got ? got : "(null)", want ? want : "(null)");
+  return 1;
+}
+
+#define CHECK_STREQ(got, want)                                                                     \
   do {                                                                                             \
-    const char *pt_g = (got), *pt_w = (want);                                                       \
-    ++pt_checks;                                                                                    \
-    ++pt_case_checks;                                                                               \
-    if (!pt_g || !pt_w || strcmp(pt_g, pt_w) != 0) {                                                \
-      PT_FAILED("%s == %s: got \"%s\" want \"%s\"", #got, #want, pt_g ? pt_g : "(null)",            \
-                pt_w ? pt_w : "(null)");                                                            \
-      return;                                                                                       \
-    }                                                                                               \
+    ++pt_checks;                                                                                   \
+    ++pt_case_checks;                                                                              \
+    if (pt_streq_failed(#got, #want, (got), (want), __FILE__, __LINE__))                           \
+      return;                                                                                      \
   } while (0)
 
 /* Buffer equality; on mismatch names the FIRST differing byte index and both bytes. */
