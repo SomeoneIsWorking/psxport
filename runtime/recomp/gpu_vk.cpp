@@ -408,6 +408,11 @@ void GpuVkState::ensure_targets() {
   vi.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
   vi.width = VRAM_W; vi.height = VRAM_H; vi.layer_count_or_depth = 1; vi.num_levels = 1;
   s_vram_tex = SDL_CreateGPUTexture(s_dev, &vi); GPUCHK(s_vram_tex, "CreateGPUTexture(VRAM)");
+  // A brand-new texture holds nothing we know about, so the first present uploads all of it. After
+  // that the composite is persistent and only guest writes touch it (vram_dirty.h). setCanvas() also
+  // arms the full upload, so the order of these two lines does not matter — say both anyway.
+  s_dirty.setCanvas(VRAM_W, VRAM_H);
+  s_dirty.markAll();
   SDL_GPUTransferBufferCreateInfo up = {}; up.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD; up.size = VRAM_W * VRAM_H * 2;
   s_vram_xfer = SDL_CreateGPUTransferBuffer(s_dev, &up); GPUCHK(s_vram_xfer, "CreateGPUTransferBuffer(up)");
   SDL_GPUTransferBufferCreateInfo dn = {}; dn.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; dn.size = VRAM_W * VRAM_H * 2;
@@ -597,18 +602,44 @@ static void poll_quit(Game* game) {
   }
 }
 
-// Upload the whole CPU VRAM (src, 1024*512 uint16) into THIS Game's VRAM image via a copy pass on `cmd`.
-static void upload_vram(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src) {
+// Copy CPU VRAM (src, 1024*512 uint16) into THIS Game's VRAM image — but only over `regions`.
+//
+// THE COMPOSITE IS A PERSISTENT FRAMEBUFFER, so WHICH REGIONS is the whole content of this function.
+// It used to upload all 1024x512 unconditionally, and under vk_path() the guest's polygons never reach
+// CPU VRAM (they go to the VK rasterizer) — so every present erased every rasterized pixel, including
+// the entire buffer the guest was about to display. That is the measured every-other-frame flicker; see
+// vram_dirty.h for the numbers and tests/test_vram_persistence.cpp for the property.
+//
+// The STAGING memcpy stays whole-VRAM: it writes the transfer buffer, not the composite, so it destroys
+// nothing, and keeping it whole means each region's GPU copy can address the transfer buffer with the
+// full 1024-pixel row stride (srci.offset + pixels_per_row) instead of needing its own packing.
+// `regions` MUST be explicit at every call site — a caller that genuinely wants the whole canvas says
+// so, rather than getting it because nobody thought about it.
+static void upload_vram(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t* src,
+                        const VramDirtyRect* regions, int nregions) {
   g.ensure_targets();
+  if (nregions <= 0) return;   // nothing the guest wrote — the composite already shows it
   void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_vram_xfer, true);
   memcpy(p, src, (size_t)VRAM_W * VRAM_H * 2);
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_vram_xfer);
   SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cmd);
-  SDL_GPUTextureTransferInfo srci = {}; srci.transfer_buffer = g.s_vram_xfer; srci.pixels_per_row = VRAM_W; srci.rows_per_layer = VRAM_H;
-  SDL_GPUTextureRegion dst = {}; dst.texture = g.s_vram_tex; dst.w = VRAM_W; dst.h = VRAM_H; dst.d = 1;
-  SDL_UploadToGPUTexture(cp, &srci, &dst, false);
+  for (int i = 0; i < nregions; i++) {
+    const VramDirtyRect& r = regions[i];
+    if (r.w <= 0 || r.h <= 0) continue;
+    SDL_GPUTextureTransferInfo srci = {}; srci.transfer_buffer = g.s_vram_xfer;
+    srci.offset = (Uint32)(((size_t)r.y * VRAM_W + r.x) * 2);   // the rect's first pixel...
+    srci.pixels_per_row = VRAM_W; srci.rows_per_layer = VRAM_H; // ...read with the full VRAM row stride
+    SDL_GPUTextureRegion dst = {}; dst.texture = g.s_vram_tex;
+    dst.x = (Uint32)r.x; dst.y = (Uint32)r.y; dst.w = (Uint32)r.w; dst.h = (Uint32)r.h; dst.d = 1;
+    SDL_UploadToGPUTexture(cp, &srci, &dst, false);
+  }
   SDL_EndGPUCopyPass(cp);
 }
+
+// The whole canvas, as a region list — for the callers that really do mean all of it (the GPU selftest
+// pattern, and the SBS pane readback, which rebuilds each core's picture from that core's CPU VRAM by
+// design). Spelled out so those call sites read as a decision rather than an omission.
+static const VramDirtyRect kWholeVram[1] = { { 0, 0, VRAM_W, VRAM_H } };
 
 // SDL_GPUViewport for a PaneRect (sbs_pane_layout.h owns the geometry; this only adds SDL's depth range).
 static SDL_GPUViewport viewport_of(PaneRect r) {
@@ -1086,7 +1117,14 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // one. The composite below still runs, because the picture depends on live state the frame does not:
   // the fade ramps every field, and the window can be resized under a completely idle guest.
   if (decision != PRESENT_REUSE_LAST) {
-    upload_vram(*this, cmd, src);                           // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
+    // Only the regions the guest actually wrote (vram_dirty.h). Uploading all of VRAM here is what
+    // erased the rasterized picture out of the buffer that was about to be displayed.
+    VramDirtyRect up[VramDirty::CAP + 1];
+    const int nup = vram_upload_regions(s_dirty, up, VramDirty::CAP + 1);
+    lucent::debug("vramup", "regions={} all={} writes={} merges={} dropped={}",
+                  nup, s_dirty.all() ? 1 : 0, s_dirty.adds(), s_dirty.merges(), s_dirty.dropped());
+    upload_vram(*this, cmd, src, up, nup);                   // CPU VRAM -> THIS Game's VRAM image (2D backdrop)
+    s_dirty.clear();                                         // the composite now holds every guest write
     render_geom(*this, cmd, src, sx, sy, disp_w, h, &s_dbg_tri_c, &s_dbg_tex_c, &s_dbg_semi_c,
                 game->core.cfg && game->core.cfg->preserveVramBackdrop);   // draw the batch on top (+depth)
     s_vram_writes_built = s_vram_writes;   // this composite now reflects every guest write so far
@@ -1561,11 +1599,13 @@ void GpuVkState::set_order_2d_bg_n(unsigned idx) { float t = (float)(idx + 1) / 
                                                    s_cur_ordn = NATIVE_3D_MIN * t; s_vdn = 0; }
 void GpuVkState::semi_group(int x0, int y0, int x1, int y1) { (void)x0; (void)y0; (void)x1; (void)y1; }
 // Every CPU->VRAM write path funnels here (GP0 0xA0 upload, GP0 0x02 fill, VRAM->VRAM copy, native
-// load_image). The VK renderer needs no per-rect mirror — render_geom uploads the whole of CPU VRAM
-// each time it builds — but it does need to KNOW a write happened, because a write with no primitives
-// is a complete new picture (an upload-only logo/loading screen) and present() must rebuild for it.
-// The rect is still unused; only the fact of the write matters. See gpu_vk_present_policy.h.
-void GpuVkState::dirty(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; s_vram_writes++; }
+// load_image). Two consumers, and they need different things from it:
+//   * s_vram_writes — the COUNT. A write with no primitives is a complete new picture (an upload-only
+//     logo/loading screen), so present() must rebuild for it. See gpu_vk_present_policy.h.
+//   * s_dirty — the RECT. The composite is a persistent framebuffer, so a present re-uploads only what
+//     the guest wrote; uploading all of VRAM erases everything the rasterizer drew. See vram_dirty.h.
+// The rect used to be discarded here (`(void)x; ...`) precisely because the upload was unconditional.
+void GpuVkState::dirty(int x, int y, int w, int h) { s_vram_writes++; s_dirty.add(x, y, w, h); }
 void GpuVkState::stats(int* tri, int* tex, int* semi) { if (tri) *tri = s_dbg_tri_c; if (tex) *tex = s_dbg_tex_c; if (semi) *semi = s_dbg_semi_c; }
 // Per-logic-frame reset of the host geometry batch (present consumed it; the next frame re-emits the queue).
 void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (void)frame;
@@ -1730,7 +1770,7 @@ void GpuVkState::tritest() {
     pat[y * VRAM_W + x] = (y < VRAM_H / 2) ? 0x001F : 0x7C00;
 
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "selftest cmd");
-  upload_vram(*this, cmd, pat);
+  upload_vram(*this, cmd, pat, kWholeVram, 1);   // a synthetic full-VRAM pattern: all of it
   SDL_GPUColorTargetInfo cti = {}; cti.texture = tgt; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
   cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
@@ -1789,7 +1829,7 @@ void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, in
   if (!s_inited) init_gpu(core ? core->game : nullptr);
   GpuVkState& g = core->game->gpu_vk;            // THIS core's own VRAM image + targets (no cross-core sharing)
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
-  upload_vram(g, cmd, vram);
+  upload_vram(g, cmd, vram, kWholeVram, 1);   // SBS pane: this core's picture IS its CPU VRAM + batch
   int a, b, c; render_geom(g, cmd, vram, sx, sy, w, h, &a, &b, &c);
   SDL_SubmitGPUCommandBuffer(cmd);                 // render into THIS core's VRAM image; NO swapchain present
   const uint16_t* src = readback_vram(g);          // download it (RG8 bytes == uint16 1555 words)

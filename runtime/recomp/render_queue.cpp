@@ -371,6 +371,26 @@ void RenderQueue::finalize(Core* core) {
 }
 
 void RenderQueue::flush(Core* core) {
+  // `debug rqflush`: what this flush is ACTUALLY emitting, and whether it is a RE-EMIT. `consumed` is
+  // still set from the previous flush exactly when nothing was pushed since it, i.e. when reset() has
+  // not run — so this flush re-sends an already-emitted queue. Without this line "the batch is
+  // non-empty" and "the guest drew something this field" are indistinguishable in every log, which is
+  // the ambiguity that made the 30/60 alternation unreadable. `n` and the re-emit bit carry the
+  // denominator: n=0 says the queue is genuinely empty, not that the instrument was silent.
+  // The y RANGE is what says WHICH FRAMEBUFFER this queue was drawn into: ys[] carries the guest's
+  // draw offset, so a double-buffered guest's two buffers show up as two disjoint bands. Computed
+  // only when the channel is on — this is a walk of the whole queue, the one case the project's
+  // logging rule allows a guard around, using an interned Channel.
+  static const lucent::Channel rqflush_ch{"rqflush"};
+  if (rqflush_ch) {
+    int ylo = 1 << 30, yhi = -(1 << 30);
+    for (int i = 0; i < n; i++) for (int v = 0; v < items[i].nv; v++) {
+      if (items[i].ys[v] < ylo) ylo = items[i].ys[v];
+      if (items[i].ys[v] > yhi) yhi = items[i].ys[v];
+    }
+    lucent::debug(rqflush_ch, "n={} reemit={} seq={} y=[{}..{}]", n, consumed && n ? 1 : 0, seq,
+                  n ? ylo : 0, n ? yhi : 0);
+  }
   // debug: label each object with its engine ID. Appended BEFORE finalize so the overlay's quads take
   // part in the same sort as everything else; resolveKeyOrder ignores them (HUD, no game sort key).
   if (n && objid_on(core)) objidOverlay(core);

@@ -14,6 +14,7 @@
 #ifndef GPU_GPU_INTERNAL_H
 #define GPU_GPU_INTERNAL_H
 #include <stdint.h>
+#include "vram_dirty.h"   // class VramDirty — which parts of guest VRAM a present must re-upload
 
 struct Game;     // back-pointer target (game.h); only frame_via_fb() uses it (to reach s_seen3d via Core)
 struct Panel;    // gpu_vk.cpp: a self-contained per-target render view (Vulkan-typed; pointer-only here)
@@ -199,6 +200,11 @@ struct GpuVkState {
   // See gpu_vk_present_policy.h for why the batch alone is not that test.
   uint32_t s_vram_writes = 0;
   uint32_t s_vram_writes_built = 0;
+  // ...and WHERE those writes landed. The composite is a persistent framebuffer (see vram_dirty.h): a
+  // present re-uploads only the regions the guest actually wrote, because a blanket re-upload erases
+  // every pixel the VK rasterizer has drawn — including the whole of the buffer the guest is about to
+  // display. `dirty()` fills this; `present()` drains it once the composite is up to date.
+  VramDirty s_dirty;
   // Last-frame draw counts (for the `vkstats` debug-server probe). Written by render_geom, read by
   // `stats` — per-Core so `@a vkstats` / `@b vkstats` return each core's independent counts.
   int   s_dbg_tri_c  = 0;

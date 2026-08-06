@@ -174,7 +174,14 @@ together: `debug spu,cdcmd,bgm`. Old → new channel:
 New channels (no legacy var): `schedf` (per-frame cooperative task0/1/2 state + GAME `sm[0x48/4a/4c/5c]`
 trace, native_boot.cpp — for stage/scheduler debugging) · `stage` (GAME stage-machine native-ownership log,
 game/core/engine.cpp) · `rqhist` (per-frame render-queue layer×opaque/semi histogram, render_queue.cpp — "is
-the world even being queued?") · `ovload` (per-core MODE/AREA-slot overlay residency: logs each
+the world even being queued?") · `rqflush` (ONE line per `RenderQueue::flush`: `n=` items, `reemit=` — this
+flush re-sent an already-consumed queue because nothing was pushed since the last one — `seq=`, and
+`y=[lo..hi]`, the queued items' min/max `ys[]`. The y range carries the guest's DRAW OFFSET, so on a
+double-buffered guest the two framebuffers show up as two disjoint bands; that is what identified spyro
+issue 0045. Read "empty queue" off `n`, not off `y`) · `vramup` (per-present CPU→VRAM upload set:
+`regions=` how many rects this present copies into the composite, `all=` whether it is the initial
+whole-canvas upload, plus the VramDirty accounting `writes=/merges=/dropped=` — the denominators for
+"is the persistent-composite upload actually staying narrow?", gpu_vk.cpp) · `ovload` (per-core MODE/AREA-slot overlay residency: logs each
 `overlay_note_load` — `core A/B slot N <- TAG` — so you can see WHICH overlay each core thinks is resident
 and WHEN it loaded; the tool that pinned later-273's "A00 code overlay never loaded on the PSX core",
 overlay_router.cpp) · `recdep` (RECOMP-DEPENDENCY meter: histograms every substrate function `rec_dispatch`
