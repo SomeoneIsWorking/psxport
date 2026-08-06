@@ -1,5 +1,116 @@
 # Configuration & debug flags — `cfg` module + the REPL-driven `debug` channel set
 
+## THE PRECEDENCE LADDER — read this first
+
+Until 2026-08-06 this port had three configuration mechanisms and **one sentence** of documented
+precedence between them (it was "a REPL `debug` still overrides the environment for the rest of the
+run", further down this file). 201 distinct `PSXPORT_*` variables, a separate `psxport_settings.ini`,
+and the REPL/debug-server commands each resolved on their own, and which one won was whichever
+`getenv` happened to run first. There is now one answer, and it is a layer ladder
+(`runtime/recomp/config_var.h`, shape taken from Dusklight's `src/dusk/config_var.hpp`, CC0):
+
+| layer | where it comes from | persisted? |
+|---|---|---|
+| `default` | the framework's compiled-in value | — |
+| `value`   | `psxport_settings.ini` (the F1 overlay writes it) | **yes** |
+| `env`     | the `PSXPORT_*` environment variable — a launch argument | never |
+| `runtime` | a REPL / debug-server command — this run only | never |
+
+**Lower in the table wins.** `env` beats the settings file; a `runtime` command beats everything,
+which is what the old sentence about the REPL already meant. The two upper layers are **never
+written back to the settings file**: launching once with `PSXPORT_FPS60=1` must not turn into the
+player's saved configuration, and it does not (`value_for_save()`).
+
+Ours deviates from Dusklight in one place, deliberately: their ladder is
+`Default < Value < Speedrun < Override`, with the launch argument on top. Ours puts `runtime` above
+`env`, because a human typing at a live console is later and more specific than the environment the
+process was launched in — and because that is what the REPL already did, so anything else would have
+silently changed a documented behaviour.
+
+### Ask the program, do not guess
+
+```
+cvars                 # over the debug server or the REPL
+```
+
+prints every declared knob, its resolved value, **which layer that value came from**, and the layers
+underneath it — plus an audit of the `PSXPORT_*` variables in the process's environment, split into
+`declared` / `legacy` / **`UNKNOWN`**. The same report is printed at boot by `cfg_dump()` and again at
+exit. `cvar <NAME> <VALUE>` sets a knob at the `runtime` layer; bare `cvar <NAME>` clears it.
+
+### Why the UNKNOWN bucket exists
+
+`PSXPORT_FPS60` was documented in this file and **read by nothing**. A run with it set was
+byte-identical to a run without, with no message either way, and it had already been used on both
+legs of an A/B comparison that then produced a plausible-looking result. The audit makes that
+impossible to repeat: a `PSXPORT_*` variable that matches no declared knob and that nothing ever read
+is printed as a **warning naming the variable**.
+
+It has a **blind spot and says so on every run**: only the migrated knobs are declared CVars, so an
+un-migrated one is recognised only once something *reads* it, and one sitting on a code path this run
+never entered is counted UNKNOWN at boot. The exit-time audit resolves that — except in a run killed
+by a signal (an agent's `timeout`-bounded headless run ends in SIGTERM, which `watchdog.cpp` answers
+with `_exit`), where `cvars` on the live process is the way to ask.
+
+The audit ships with its own proof that it can fire: `psx::config::selftest()` runs the classifier
+against a name that MUST come back UNKNOWN *and* a declared name that MUST NOT
+(`PSXPORT_CFG_SELFTEST_DECLARED`, which is reserved and configures nothing — it is the calibration
+target, not a knob). It is asserted in `tests/test_config_cvar.cpp`.
+
+### What is migrated, and what is not
+
+**Migrated onto CVars** (the inventory is `runtime/recomp/config_vars.h` — grep it, it is the list):
+`PSXPORT_ORACLE`, `PSXPORT_NOAUDIO`, `PSXPORT_NOPACE`, `PSXPORT_WATCHDOG`, `PSXPORT_WATCHDOG_BOOT`,
+`PSXPORT_ASSET_DIR`, `PSXPORT_SETTINGS`, `PSXPORT_FPS60`. Plus `PSXPORT_DEBUG` and
+`PSXPORT_LOG_FILE`, declared `external`: **lucent** resolves those two for itself (it is built with
+`LUCENT_CHANNEL_ENV` / `LUCENT_LOG_FILE_ENV`, see `cmake/psxport.cmake`), and nothing here reads or
+overrides them — they are declared only so the audit does not report the port's two most-used knobs
+as unknown. `tests/test_lucent_channel_env.cpp` is the gate on that and must stay green.
+
+**Everything else — about 190 knobs — is unchanged.** `cfg_on` / `cfg_int` / `cfg_str` fall through
+to the environment exactly as before for any name that is not a declared CVar, and record the read so
+the audit can tell an un-migrated knob from a typo. No knob changed meaning.
+
+Two DELIBERATE behaviour changes, listed here because "nothing may silently change meaning":
+- `PSXPORT_FPS60` now **works**. It resolves through the ladder (`env` over the settings file's
+  `fps60=` line), and the boot line says which layer it came from.
+- `PSXPORT_WATCHDOG` used to be `atoi(cfg_str(...))`, and `atoi("abc")` is `0`, so a typo silently
+  **disabled the watchdog**. A non-integer value now logs a warning naming it and falls back to the
+  declared default of 3.
+
+### Migrating the next knob
+
+Declare it in `runtime/recomp/config_vars.h`, define it in `runtime/recomp/config.cpp`, change the
+call site from `cfg_*("PSXPORT_X")` to `cv_x.get()`, and add it to the compatibility case in
+`tests/test_config_cvar.cpp` — which checks the migrated value against
+`lucent::config::flag/number/text` on the same variable, i.e. against the pre-migration
+implementation itself. That check is the point of the exercise, not a formality.
+
+**The order for the rest is `docs/config-migration.md`** — the measured inventory of all 201 names,
+what reads each one, and a grouped plan. What landed here is its Group 0 (the core) and Group 1 (the
+self-report), plus a first slice of Groups 2/3/4b as the proof that the core carries a real knob. Read
+that map before migrating anything; it also lists 74 names that are read by NOTHING and should be
+DELETED rather than migrated, which is 74 fewer knobs for every later step to reason about.
+
+Two places where what landed differs from that map, both deliberate:
+- **The ladder's top is `runtime`, not `env`.** The map's Group-0 line has
+  `Default < Value < Runtime < Override`, following Dusklight. The code disagrees with that today: a
+  REPL `debug` calls `lucent::enable_channels()`, and lucent's contract is that an explicit
+  `enable_channels()` always wins over the environment variable. Putting `env` on top would have
+  silently reversed a documented behaviour, so `runtime` is on top and
+  `tests/test_config_cvar.cpp::runtime_layer_outranks_the_environment_override` pins it.
+- **No fatal-on-unregistered-access and no two-phase `Register()`.** A CVar self-registers in its
+  constructor, so an unregistered CVar cannot exist and there is nothing to abort about. A separate
+  registration step is exactly the shape that produced the `PSXPORT_DEBUG` bootstrap bug this repo
+  already paid for once (`tests/test_lucent_channel_env.cpp`). A duplicate name is reported as an
+  error rather than aborting the process, because it is a build-time mistake and killing a player's
+  game over it helps nobody.
+
+**`PSXPORT_DEBUG` goes last.** It has 44 call sites across four repos, is wired through CMake into
+lucent, and getting it wrong switches every diagnostic channel in all four off with nothing in the
+output to say why.
+
+
 Read this before adding a new `getenv("PSXPORT_…")`. The repo accumulated ~105 ad-hoc env flags, each
 with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now centralized.
 
@@ -470,7 +581,10 @@ output to explain why. `tests/test_lucent_channel_env.cpp` is the gate that keep
 asserts a `lucent::debug` on a `PSXPORT_DEBUG` channel is emitted when it is the FIRST logging call in
 the process, and again from a static initialiser in a freshly exec'd child.
 
-A REPL/debug-server `debug …` command still overrides the environment for the rest of the run.
+A REPL/debug-server `debug …` command still overrides the environment for the rest of the run —
+that is the `runtime` layer of the precedence ladder at the top of this file, and `cvars` shows it
+as such on `PSXPORT_DEBUG`. (The channel set itself is still applied by `lucent::enable_channels`;
+the CVar records it so the dump can say where the live setting came from.)
 
 Render layer-isolation diags (value flags, `cfg_str`, gpu_native.cpp gpu_emit_rq_item) for "where did the
 native world go?": `PSXPORT_ONLYWORLD=1` (emit ONLY RQ_WORLD), `PSXPORT_NOBG=1` (drop RQ_BACKGROUND),
@@ -539,7 +653,9 @@ or level — they can't be a bare channel:
   always-on `cfg_logi/logw/loge` levels) from stderr to a file (append, line-buffered, opened once).
   With it set, stderr carries only the guest's own BIOS-putchar text.
 - **Renderer / mode:** `VK` (default on), `SW_GPU`, `VK_NODEPTH`, `VK_TRITEST`, `VK_HEADLESS`,
-  `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `FPS60`, `FPS60_GATE`, `FPS60_SYNTH`, `FPS60_TFORCE`
+  `GPU_WINDOW`, `WINDOWED`, `IRES`, `WIDE`, `FPS60` (a CVar now, and it actually applies — it was
+  documented here and read by NOTHING until 2026-08-06; see the precedence ladder at the top),
+  `FPS60_GATE`, `FPS60_SYNTH`, `FPS60_TFORCE`
   (TEMPORARY gate-B test knob, docs/fps60-rework.md Tier 1: 0 pins the whole interp present — camera lerp
   AND queue-prim lerp share `mT` — to Q[N-1]'s endpoint, 1 to Q[N]'s, so a run can be pixel-diffed against
   the adjacent real frame; unset = the shipped t=0.5 midpoint), `NATIVE_DEPTH`,

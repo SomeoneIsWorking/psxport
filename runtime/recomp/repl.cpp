@@ -8,6 +8,7 @@
 #include "game.h"
 #include "c_subsys.h"
 #include <lucent/log.h>
+#include "config.h"        // `cvars` / `cvar` — the layered CVar registry + env audit
 #include "render_substrate.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
 #include "ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
 #include "repl.h"
@@ -120,7 +121,25 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1)   { held &= ~repl_btn(arg); c->game->pad.driveHold(held); lucent::info("repl", "held={:04X}", held); }
     else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) { held |= repl_btn(arg);  c->game->pad.driveHold(held); lucent::info("repl", "held={:04X}", held); }
     else if (!strcmp(cmd, "tap") && sscanf(line, "%*s %31s %u", arg, &a) >= 1) { if (!a) a = 4; c->game->pad.driveTap((uint16_t)(0xFFFF & ~repl_btn(arg)), (int)a); lucent::info("repl", "tap {} {}", arg, a); }
-    else if (!strcmp(cmd, "debug")) { char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch); lucent::enable_channels(ch); lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)"); }
+    else if (!strcmp(cmd, "debug")) {
+      char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch);
+      lucent::enable_channels(ch);
+      // ...and record it on PSXPORT_DEBUG's CVar at the RUNTIME layer. That layer exists precisely
+      // to give this a name: docs/config.md has always said a REPL `debug` "still overrides the
+      // environment for the rest of the run", and that was the only sentence about precedence
+      // anywhere in the repo. It is a layer now, and `cvars` will show it. The VALUE is still
+      // resolved by lucent (the CVar is marked external) — nothing about who reads PSXPORT_DEBUG
+      // changes here; see cmake/psxport.cmake and tests/test_lucent_channel_env.cpp.
+      psx::config::note_runtime_external("PSXPORT_DEBUG", ch);
+      lucent::info("repl", "debug channels = {}", ch[0] ? ch : "(none)");
+    }
+    else if (!strcmp(cmd, "cvars")) psx::config::report();
+    else if (!strcmp(cmd, "cvar")) {
+      char nm[128] = {0}, val[192] = {0};
+      if (sscanf(line, "%*s %127s %191[^\n]", nm, val) == 2) psx::config::set_runtime(nm, val);
+      else if (nm[0]) psx::config::clear_runtime(nm);
+      else lucent::info("repl", "cvar <PSXPORT_NAME> <value> — set for this run only; `cvar <name>` clears it; `cvars` lists everything");
+    }
     else if (!strcmp(cmd, "ents")) {   // enumerate live GAME OBJECTS across the 3 entity lists, with identity
       // Each object is a node in a doubly-linked list (next @ +0x24). Identity fields: type @+0xc, render
       // intrinsic @+0xb (0x10..0x14 = sprite/billboard, 0/0xf = mesh), behavior handler @+0x1c (the object's

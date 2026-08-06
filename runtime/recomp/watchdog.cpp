@@ -8,6 +8,7 @@
 // you still get addresses — resolve with `addr2line -e scratch/bin/tomba2_port <addr>`.
 #include <signal.h>
 #include "cfg.h"          // cfg_str — the CONFIG half of cfg.h; the logging half is retired
+#include "config_vars.h"  // cv_watchdog / cv_watchdog_boot — migrated onto the layered CVar system
 #include "c_subsys.h"    // C linkage for watchdog_init/pet/suspend/disable (callers are C++ and vendored C)
 #include <lucent/log.h>
 #include <unistd.h>
@@ -102,17 +103,24 @@ void watchdog_init(void) {
   // windowed `./run.sh` self-aborts with a backtrace instead of wedging forever. A frame must take
   // well under a second, so 3s is already far past any healthy frame; gameplay pets every present
   // and never trips it. Explicit PSXPORT_WATCHDOG=0 disables it; set higher only for slow debugging.
-  const char* s = cfg_str("PSXPORT_WATCHDOG");
-  s_wd.secs = s ? atoi(s) : 3;
+  // MIGRATED to a CVar (runtime/recomp/config_vars.h). One DELIBERATE behaviour change, called out
+  // here because "nothing may silently change meaning": this used to be `atoi(cfg_str(...))`, and
+  // atoi("abc") is 0, so a TYPO in PSXPORT_WATCHDOG silently DISABLED the watchdog. It now falls
+  // back to the declared default and the CVar binding logs a warn naming the bad value. A hang that
+  // wedges forever because someone mistyped the timeout is not a behaviour worth preserving.
+  s_wd.secs = (int)psx::config::cv_watchdog.get();
   if (s_wd.secs <= 0) return;
   // The FIRST presented frame is legitimately slow: RADV/AMD compiles every Vulkan pipeline (SSAO,
   // shadow map, tritex, present blit, …) on first use, so the first present blocks in the GPU fence
   // wait for several seconds on a cold shader cache (e.g. right after a full ./run.sh rebuild). That
   // is NOT a hang, so the 3s steady-state budget must not apply to it. Give the first frame a much
   // larger grace (still finite, so a real first-frame GPU hang is still caught + a Ctrl+C works).
-  // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45).
-  const char* sb = cfg_str("PSXPORT_WATCHDOG_BOOT");
-  s_wd.boot_secs = sb ? atoi(sb) : (s_wd.secs > 45 ? s_wd.secs : 45);
+  // PSXPORT_WATCHDOG_BOOT overrides; default = max(s_secs, 45). The CVar's default is -1, NOT 0,
+  // precisely so that an explicit PSXPORT_WATCHDOG_BOOT=0 still means zero rather than being
+  // swallowed by the "derive it" sentinel — that is the one way this migration could have changed
+  // an existing run's behaviour, so the sentinel is out of the value's range.
+  const long boot = psx::config::cv_watchdog_boot.get();
+  s_wd.boot_secs = boot >= 0 ? (int)boot : (s_wd.secs > 45 ? s_wd.secs : 45);
   struct sigaction sa = {};
   sa.sa_handler = on_alarm;
   sigaction(SIGALRM, &sa, 0);

@@ -14,6 +14,8 @@
 // primitives via texpage+CLUT) and the framebuffer regions the game composes & displays.
 #include "r3000.h"
 #include "cfg.h"
+#include "config.h"      // psx::config::cv_nopace — the pace knob resolves through the CVar ladder
+#include "config_vars.h"
 #include <lucent/log.h>
 #include "gpu_native_internal.h"   // shared VRAM/state/helpers (also used by gpu_debug.cpp)
 #include "field_rate.h"            // THE display field rate, in milli-hertz (one definition)
@@ -1587,7 +1589,7 @@ void gpu_pace_subframe(Core* core, int parts) {
   struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
 
   PaceInputs in;
-  in.unpaced           = cfg_on("PSXPORT_NOPACE") != 0;
+  in.unpaced           = psx::config::cv_nopace.get();
   in.quota             = (core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0;
   in.parts             = parts;
   in.fieldRateMilliHz  = gpu_field_rate_millihz(core);

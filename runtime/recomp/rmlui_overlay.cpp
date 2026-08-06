@@ -21,7 +21,8 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Debugger.h>
-#include "cfg.h"                  // cfg_str — PSXPORT_ASSET_DIR asset-base resolution
+#include "cfg.h"
+#include "config_vars.h"                  // cv_asset_dir — PSXPORT_ASSET_DIR asset-base resolution
 #include <lucent/log.h>
 #include <string>
 
@@ -36,8 +37,8 @@
 // containing assets/ (e.g. `external/psxport`). Unset (default) keeps the historical cwd-relative
 // behaviour, so a framework-root launch still works with no config.
 static std::string rml_asset(const char* rel) {
-    const char* base = cfg_str("PSXPORT_ASSET_DIR");
-    return (base && *base) ? std::string(base) + "/" + rel : std::string(rel);
+    const std::string& base = psx::config::cv_asset_dir.get();
+    return base.empty() ? std::string(rel) : base + "/" + rel;
 }
 
 #include <cstdio>

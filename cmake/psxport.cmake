@@ -115,6 +115,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/recomp/mods.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/config.cpp   # layered CVar registry + the environment audit (docs/config.md)
   ${PSXPORT_ROOT}/runtime/recomp/native_gate.cpp
   ${PSXPORT_ROOT}/runtime/recomp/sync_overrides.cpp
   ${PSXPORT_ROOT}/runtime/recomp/override_registry.cpp

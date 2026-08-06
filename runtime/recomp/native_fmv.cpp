@@ -40,6 +40,7 @@
 // The boot/front-end sequencers call game->fmv.play().
 #include <stdint.h>
 #include "cfg.h"
+#include "config_vars.h"
 #include <lucent/log.h>
 #include "fmv_decode.h"   // the pure decode machinery (shared with tools/fmv_export + fmv_compare)
 #include <stdio.h>
@@ -116,7 +117,7 @@ static void present_rgb555(Core* core, const uint16_t* pixels, int width, int he
 // SDL3 push-model audio stream bound to the default playback device, opened at the movie's XA rate.
 void Fmv::audioOpen(int freq) {
   SDL_AudioStream* st = (SDL_AudioStream*)stream;
-  if (cfg_on("PSXPORT_NOAUDIO")) return;
+  if (psx::config::cv_noaudio.get()) return;
   if (st && stream_freq == freq) { SDL_ClearAudioStream(st); return; }
   if (st) { SDL_DestroyAudioStream(st); stream = st = 0; }
   if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;

@@ -21,6 +21,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include "cfg.h"
+#include "config.h"        // `cvars` / `cvar` — the layered CVar registry + env audit
 #include <lucent/log.h>
 #include <stdlib.h>
 #include <string.h>
@@ -169,7 +170,11 @@ static void dbg_exec(FILE* out, const char* line) {
       "  pause            freeze the game (window holds last frame)\n"
       "  step [n]         advance exactly n frames then re-freeze (default 1)\n"
       "  play|resume      unfreeze\n"
-      "  frame            current present-frame counter + paused state\n");
+      "  frame            current present-frame counter + paused state\n"
+      "  cvars            every declared config knob: value, WHICH LAYER it came from, plus the\n"
+      "                   PSXPORT_* variables in this process's environment that matched NOTHING\n"
+      "  cvar N [V]       set knob N to V at the runtime layer (this run only, never persisted);\n"
+      "                   bare `cvar N` clears that layer. Ladder: default < value < env < runtime\n");
   } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) b = 16; if (b > 256) b = 256;
     fprintf(out, "%08X:", a);
@@ -316,7 +321,31 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "debug")) {
     char ch[200] = {0}; sscanf(line, "%*s %199[^\n]", ch);
     lucent::enable_channels(ch);
+    psx::config::note_runtime_external("PSXPORT_DEBUG", ch);   // the RUNTIME layer; see repl.cpp
     fprintf(out, "debug channels = %s\n", ch[0] ? ch : "(none)");
+  } else if (!strcmp(cmd, "cvars")) {
+    // The configuration, answered where the question gets asked. Same three facts as report(): what
+    // each knob resolved to, WHICH LAYER that came from, and which PSXPORT_* variables in this
+    // process's environment matched nothing at all.
+    psx::config::enumerate([out](psx::config::CVarBase& v) {
+      fprintf(out, "  %-32s %-4s = %-24s [%s]%s\n", v.name(), psx::config::kind_name(v.kind()),
+              v.value_text().c_str(), psx::config::layer_name(v.layer()),
+              v.external() ? "  (external: resolved by lucent)" : "");
+    });
+    const psx::config::EnvAudit a = psx::config::audit_environment();
+    fprintf(out, "env audit: %zu PSXPORT_* set -> %zu declared, %zu legacy (observed when read), %zu UNKNOWN\n",
+            a.set_in_env.size(), a.declared.size(), a.legacy.size(), a.unknown.size());
+    for (const std::string& u : a.unknown)
+      fprintf(out, "  UNKNOWN %s — set, matched nothing, did NOTHING this run\n", u.c_str());
+    fprintf(out, "blind spot: %zu knobs are declared CVars; an un-migrated one is recognised only "
+                 "once something READS it, so one on a path this run never entered counts UNKNOWN.\n",
+            psx::config::registered_count());
+  } else if (!strcmp(cmd, "cvar")) {
+    char nm[128] = {0}, val[192] = {0};
+    const int n = sscanf(line, "%*s %127s %191[^\n]", nm, val);
+    if (n == 2) fprintf(out, "cvar %s = %s -> %s\n", nm, val, psx::config::set_runtime(nm, val) ? "ok" : "REJECTED");
+    else if (n == 1) fprintf(out, "cvar %s cleared -> %s\n", nm, psx::config::clear_runtime(nm) ? "ok" : "REJECTED");
+    else fprintf(out, "cvar <PSXPORT_NAME> <value> — this run only; `cvar <name>` clears it; `cvars` lists everything\n");
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
     s_held &= ~(unsigned short)dbg_btn(arg); s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {

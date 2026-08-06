@@ -15,7 +15,23 @@
 //   CfgLine                 -> the same accumulate-then-flush shape as lucent::Line
 // printf-style formatting is preserved here (vsnprintf into a buffer, then hand lucent the finished
 // text) because every existing call site is printf-style; lucent itself is std::format-based.
+//
+// ── AND THE CONFIG HALF IS NOW A FRONT END ONTO THE LAYERED CVar SYSTEM ─────────────────────────
+// cfg_on / cfg_int / cfg_str used to be `lucent::config::flag/number/text` and nothing else: the
+// environment was the only layer, and precedence between the environment, psxport_settings.ini and
+// a REPL `debug` command was undocumented because there was nothing to document it against.
+// runtime/recomp/config.h now owns that, with an explicit ladder (default < value < env < runtime).
+//
+// TWO PATHS THROUGH HERE, and the split is the whole compatibility story:
+//   * the name IS a declared CVar (runtime/recomp/config_vars.h) — resolve through the full ladder.
+//     For a run that only sets the environment, that is the same answer as before, by construction:
+//     the CVar's Override layer is bound with the very expression this function used to return.
+//   * the name is NOT — fall through to lucent::config exactly as before, and RECORD the read, so
+//     the environment audit can tell an un-migrated knob apart from a typo. 190-odd knobs come
+//     through here and none of them changes behaviour.
 #include "cfg.h"
+#include "config.h"
+#include "config_vars.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -75,14 +91,65 @@ void emit(lucent::Level level, const char* chan, const char* fmt, va_list ap) {
 
 extern "C" {
 
-int cfg_on(const char* name) { return lucent::config::flag(name) ? 1 : 0; }
+namespace {
+
+// A declared CVar of the wrong Kind for the accessor being used is a mistake in the inventory, not a
+// runtime condition — but silently falling through to the environment would hide it, and a knob that
+// half-works is exactly what this system exists to stop. Say it once, then behave as before.
+psx::config::CVarBase* declared_as(const char* name, psx::config::Kind want) {
+  psx::config::CVarBase* v = psx::config::find(name);
+  if (!v) return nullptr;
+  if (v->external()) return nullptr;   // lucent owns it; see config_vars.h
+  if (v->kind() != want) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      lucent::warn("cfg", "{} is declared as {} but is being read as {} — falling back to the environment",
+                   name, psx::config::kind_name(v->kind()), psx::config::kind_name(want));
+    }
+    return nullptr;
+  }
+  return v;
+}
+
+}  // namespace
+
+int cfg_on(const char* name) {
+  if (psx::config::CVarBase* v = declared_as(name, psx::config::Kind::Bool))
+    return static_cast<psx::config::BoolVar*>(v)->get() ? 1 : 0;
+  const bool on = lucent::config::flag(name);
+  psx::config::note_legacy_read(name, psx::config::Kind::Bool, on ? "1" : "0");
+  return on ? 1 : 0;
+}
 
 int cfg_int(const char* name, int def) {
-  return static_cast<int>(lucent::config::number(name, def));
+  if (psx::config::CVarBase* v = declared_as(name, psx::config::Kind::Int)) {
+    psx::config::IntVar* iv = static_cast<psx::config::IntVar*>(v);
+    // The caller's `def` and the CVar's declared default must agree, or the same knob means two
+    // things depending on which call site got there first. That is a build-time mistake; report it
+    // rather than picking a winner in silence. The inventory is the authority.
+    if ((long)def != iv->default_value()) {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        lucent::warn("cfg", "cfg_int({}, {}) disagrees with the declared default {} — using the declared one",
+                     name, def, iv->default_value());
+      }
+    }
+    return static_cast<int>(iv->get());
+  }
+  const long v = lucent::config::number(name, def);
+  psx::config::note_legacy_read(name, psx::config::Kind::Int, std::to_string(v));
+  return static_cast<int>(v);
 }
 
 const char* cfg_str(const char* name) {
+  if (psx::config::CVarBase* v = declared_as(name, psx::config::Kind::Text)) {
+    const std::string& s = static_cast<psx::config::TextVar*>(v)->get();
+    return s.empty() ? nullptr : s.c_str();   // callers test for NULL, not for ""
+  }
   const std::string& v = lucent::config::text(name);
+  psx::config::note_legacy_read(name, psx::config::Kind::Text, v);
   return v.empty() ? nullptr : v.c_str();   // callers test for NULL, not for ""
 }
 
@@ -119,12 +186,10 @@ void cfg_loge(const char* chan, const char* fmt, ...) {
   va_list ap; va_start(ap, fmt); emit(lucent::Level::Error, chan, fmt, ap); va_end(ap);
 }
 
-// PSXPORT_ORACLE — the pure PSX reference mode. Cached once; every enhancement gate consults it.
-int oracle_mode(void) {
-  static int v = -1;
-  if (v < 0) v = cfg_on("PSXPORT_ORACLE");
-  return v;
-}
+// PSXPORT_ORACLE — the pure PSX reference mode. MIGRATED: the hand-rolled `static int v = -1` cache
+// is gone; the CVar binds the environment once and every enhancement gate reads the same object, so
+// `report()` can say what oracle mode resolved to and from which layer.
+int oracle_mode(void) { return psx::config::cv_oracle.get() ? 1 : 0; }
 
 // PSXPORT_ENH=<name,name|all> — the sanctioned enhancement class. FORCE-SUPPRESSED under
 // PSXPORT_ORACLE or any SBS mode, so a stray .env can never contaminate a byte-compare. That
@@ -172,7 +237,14 @@ void cfg_dump(void) {
     line.push_back(' ');
     line.append(entry);
   }
-  if (!line.empty()) lucent::log(lucent::Level::Info, "cfg", "active:" + line);
+  // Print the raw list even when it is EMPTY. "active:" with nothing after it says "this run was
+  // configured with no PSXPORT_* variables at all", which is a fact; printing nothing says only that
+  // this function may not have run.
+  lucent::log(lucent::Level::Info, "cfg", line.empty() ? "active: (no PSXPORT_* variables set)"
+                                                       : "active:" + line);
+  // ...and then the part the raw list cannot give you: what each knob RESOLVED to, which layer it
+  // came from, and which variables in that list matched nothing at all.
+  psx::config::report_once();
 }
 
 // --- CfgLine: the piecewise line accumulator ----------------------------------------------------
