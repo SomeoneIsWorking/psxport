@@ -601,7 +601,7 @@ static void init_gpu(Game* game) {
   // the overlay's very EXISTENCE a property of the window — so every headless instrument was
   // structurally blind to it, and a user-reported dead overlay could not be diagnosed at all without
   // taking the user's screen (spyro issue #52). The window is an output sink, not a mode
-  // (coord/PROTOCOL.md), so the overlay takes the SINK's size and the format of the pass it will
+  // (docs/workspace/PROTOCOL.md), so the overlay takes the SINK's size and the format of the pass it will
   // record into, and `s_win` (NULL headless) is passed only for input translation.
   int ow = 0, oh = 0;
   sink_size(&ow, &oh);

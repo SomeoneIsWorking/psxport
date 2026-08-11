@@ -2,7 +2,7 @@
 
 // ---- "May this run open an audio device?" — ONE definition, for every audio path -----------------
 //
-// USER RULE (coord/PROTOCOL.md): **headless means exactly two things — no window surface and no audio
+// USER RULE (docs/workspace/PROTOCOL.md): **headless means exactly two things — no window surface and no audio
 // device.** Audio is not a separate opt-out; it is half of what headless already means, and
 // config_vars.h has said so in words since PSXPORT_NOAUDIO was declared.
 //

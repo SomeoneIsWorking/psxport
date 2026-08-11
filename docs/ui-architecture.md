@@ -72,7 +72,7 @@ when both halves had been false for some time. Both are now gone, so there is no
 `runtime/recomp/repl.cpp` (stdin) and `runtime/recomp/dbg_server.cpp` (TCP + `tools/dbgclient.py`)
 are the analogue of Dusklight's ImGui console, and unlike ImGui they work with no window at all.
 
-**And that is the deciding constraint.** `coord/PROTOCOL.md`: *agents never run windowed*. An ImGui
+**And that is the deciding constraint.** `docs/workspace/PROTOCOL.md`: *agents never run windowed*. An ImGui
 developer stack draws into the swapchain, so the primary consumer of developer tooling in this
 project — an agent — could not see or drive any of it. That is precisely the defect this UI work
 was sent to fix, and adopting a second stack now would double the amount of host UI that no

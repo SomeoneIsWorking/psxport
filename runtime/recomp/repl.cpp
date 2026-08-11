@@ -477,7 +477,7 @@ long Repl::read(Core* c, uint32_t f) {
     // `menu [on|off|toggle]` — drive the RmlUi overlay without a keyboard.
     //
     // WHY THIS EXISTS: the overlay could previously only be opened by an SDL ESC key event, i.e.
-    // only through a window. Agents may not run windowed (coord/PROTOCOL.md), so the entire UI was
+    // only through a window. Agents may not run windowed (docs/workspace/PROTOCOL.md), so the entire UI was
     // undrivable by every instrument the project actually uses, and that — together with the
     // windowed-only init this replaced — is why a user-reported dead overlay could not be examined
     // at all. Visibility is host UI state, not guest state, so this is a driving surface like

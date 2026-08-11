@@ -2,7 +2,7 @@
 """layout_move.py — the psxport `runtime/recomp/` -> `runtime/<subsystem>/` move, as a
 RE-RUNNABLE TRANSFORMATION rather than a patch.
 
-Spec: coord/LAYOUT.md ("Target layout — organize like Dusklight/Aurora"). LAYOUT.md counted
+Spec: docs/workspace/LAYOUT.md ("Target layout — organize like Dusklight/Aurora"). LAYOUT.md counted
 149 files FLAT in runtime/recomp/; it is 168 tracked entries as of 2026-08-06 and still growing —
 which is the argument, not a nitpick. this splits them into one directory per subsystem, mirroring how
 Dusklight splits `src/dusk/` into `audio/ imgui/ ui/ mods/` rather than one bag of files.

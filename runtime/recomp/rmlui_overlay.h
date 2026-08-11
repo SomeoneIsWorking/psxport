@@ -42,7 +42,7 @@ public:
   // No-op if already inited.
   //
   // THE WINDOW IS OPTIONAL AND `win` MAY BE NULL. Whether the UI EXISTS must not depend on whether
-  // there is a window (coord/PROTOCOL.md: "the window is an output sink, not a mode") — this used
+  // there is a window (docs/workspace/PROTOCOL.md: "the window is an output sink, not a mode") — this used
   // to be called under `if (!s_headless)`, which made every overlay failure invisible to every
   // headless instrument, and that is precisely why a user-reported dead overlay could not be
   // diagnosed without taking the user's screen. `win` is used ONLY for input translation and the
@@ -81,7 +81,7 @@ public:
   bool wantsKeyboard() const;
 
   // ---- headless driving surface (REPL `menu ...`) -------------------------------------------------
-  // AGENTS MAY NOT RUN WINDOWED (coord/PROTOCOL.md) and the menu is driven by SDL keyboard events,
+  // AGENTS MAY NOT RUN WINDOWED (docs/workspace/PROTOCOL.md) and the menu is driven by SDL keyboard events,
   // which do not exist without a window — so without these the UI is unreachable by every
   // instrument the project uses. Same class of blindness as the windowed-only init that was already
   // removed, and the same answer: the window is a SINK, not the only way in. Host UI state only.
