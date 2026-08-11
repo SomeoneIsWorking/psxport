@@ -76,7 +76,9 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
   const PoolRange pool = pool_range(c);
   if (!pool.known || k < pool.lo || k >= pool.hi) return;
 
-  resetIfNewFrame(frame);
+  // NOT reset off `frame` (= gpu.s_frame) any more: that counts presents, so on a path where presents
+  // are rare it never fired and the table saturated with stale spans (see beginLogicFrame). The frame
+  // loop owns the reset now; this only stamps what it records.
   // Same node fallback the native GT3/GT4 submit path itself uses (render_internal.h cur_render_node):
   // the walk's beginObject() node when set, else the guest "current render object" scratchpad
   // (0x1F80028C) — most native per-object quad submission (submit.cpp) never opens a diag walk scope,

@@ -271,6 +271,32 @@ tool and `docs/producers/` are game-side and need no framework claim.
 >   `0x00000000` holding 107,837 prims, which is worse than being uncounted because it reads as a
 >   producer. It is now its own blindness reason (`WHY_SPAN_NO_FN`) so the report distinguishes "no span
 >   covered this address" from "a span did, and it does not know the author".
+> * **UPDATE, same day — the saturation is FIXED and it was MASKING the real blocker.** The table was
+>   reset off `gpu.s_frame`, which counts PRESENTS: measured, 60 logic frames advanced it to 3, so the
+>   reset almost never fired. It is now driven per LOGIC frame from the frame loop
+>   (`OtAttr::beginLogicFrame`). Overflow went **2,681,415 -> 0** and span-miss **113,586 -> 26**, so
+>   lookups now find their span essentially always. And with that noise gone the real problem is plain:
+>   **`span-no-fn` is now 221,397 of 221,423** — the spans are found and their emitter fn is ZERO.
+> * **THE ACTUAL BLOCKER, and it is architectural rather than a capacity bug.** `OtAttr`'s identity comes
+>   from `InterpDiag::otattrTop()`, which by design pushes ONLY around indirect (`jalr`/`r2`) dispatch in
+>   `rec_dispatch` — "direct recompiler-emitted `func_XXXX(c)` calls do NOT push" (interp_diag.h). This
+>   port's frame loop is NATIVE and calls guest bodies directly, so for the pool stores that build a
+>   frame there is frequently NOTHING indirectly-dispatched on the stack and the shadow stack is empty.
+>   The guest leg therefore cannot get a producer identity from that source on this execution model, and
+>   no amount of table tuning changes it.
+> * **Do not "fix" this by keying rows on 0, or by falling back to the last non-zero fn.** The first
+>   invents a producer (already measured: it produced one bogus row holding 107,837 prims); the second
+>   attributes work to whoever happened to be dispatched most recently, which is worse because it looks
+>   plausible. `WHY_SPAN_NO_FN` exists to keep this visible until it is genuinely solved.
+> * **Candidate directions, none measured yet, listed so the next session starts from evidence:**
+>   (a) attribute at the OT WALK instead of at the store — the walk visits each packet with the OT entry
+>   in hand, which is a different and possibly better identity source; (b) use the span's `node` field
+>   (already recorded) and read the node's render fn at `node+0x18`, which would land in the SAME key
+>   space the native leg uses — but check first whether `node` is populated on this path, since
+>   `RenderDiag::currentNode()` is set by the NATIVE walk and the gte leg does not run it;
+>   (c) push the shadow stack on direct calls too, which is a substrate-wide cost that must be priced
+>   before being considered.
+>
 > * **NEXT, and do not skip to the join's downstream:** give the span table a per-frame reset or a ring
 >   discipline so it stops saturating, THEN re-measure whether `span-no-fn` survives — it may be a
 >   symptom of lookups landing in a saturated table rather than an independent defect. Do not tune the

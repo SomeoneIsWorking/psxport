@@ -324,6 +324,11 @@ static void game_main(Core* c) {
   uint32_t last_entry = 0;            // stage/sm change detector
   uint32_t last_sm = 0xFFFFFFFF;
   for (uint32_t f = 0; nframes == 0 || f < nframes; f++) {
+    // The OT/GTE attribution span table describes THIS frame's packets only, so its lifetime is one
+    // logic frame. Driven here rather than off gpu.s_frame, which counts presents — on a path where
+    // presents are rare that reset never fired and the table saturated with stale spans, making the
+    // producer DB's guest leg attribute nothing (see OtAttr::beginLogicFrame).
+    c->rsub.otAttr.beginLogicFrame(f);
     // c->game->timing.logicFrame = f is now set centrally in native_step_frame() itself (so SBS's
     // dc_step_frame() path gets it too, not just this standalone loop).
     // REPL: when the run-budget is exhausted, block reading stdin commands until a `run N` refills

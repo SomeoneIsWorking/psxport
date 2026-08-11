@@ -162,6 +162,17 @@ public:
   int fnStatCount() const { return mFnStatCount; }
   const FnStoreStat* fnStatAt(int i) const { return &mFnStat[i]; }
 
+  // Bound the span table's lifetime to ONE LOGIC FRAME, driven by the frame loop.
+  //
+  // WHY THIS IS PUBLIC AND CALLED FROM OUTSIDE. The table used to be reset off `gpu.s_frame`, which
+  // counts PRESENTS, not logic frames. Measured on the gte render path: 60 logic frames advanced
+  // s_frame to 3, so the reset almost never fired, the table saturated at SPAN_CAP and then reported
+  // 140,153 overflows — and worse, every lookup after that matched a STALE early-boot span whose
+  // emitter fn was 0, which is why the guest leg reported 16,384 prims as span-no-fn and attributed
+  // NONE. A span table is only meaningful for the frame whose packets it describes, so the frame loop
+  // says when a frame begins and this is the one clock that matters.
+  void beginLogicFrame(uint32_t frame) { resetIfNewFrame(frame); }
+
 private:
   void resetIfNewFrame(uint32_t frame);
   void trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame);
