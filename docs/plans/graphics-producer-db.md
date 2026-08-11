@@ -334,25 +334,31 @@ tool and `docs/producers/` are game-side and need no framework claim.
 > emitters into one meaningless row. Result: attributed **69,276 -> 484,940** prims, world-undeclared
 > **846,223 -> 430,559**, new dominant row `0x80146478` at 415,664. `Tomba2Engine` commit 9c94008.
 >
-> **The finding that matters beyond this row: the guest per-object dispatch chain
-> (`FUN_8003CCA4` -> `FUN_8003CDD8` -> `FUN_8003F698`) DOES NOT EXECUTE on the leg where the native
-> census measures** — 0 `cmdListDispatch` calls in a 200-frame field replay against ~846k world prims
-> drawn there. Two consequences for this plan:
+> **CORRECTION (2026-08-12, same day): the earlier claim here — "the guest per-object dispatch chain
+> does not execute on the leg where the census measures" — WAS WRONG, and the way it was wrong is the
+> reusable lesson.** It rested on an instrumented NATIVE body logging 0 calls. But `PSXPORT_GATE=1` sets
+> `psx_fallback`, and `overrides::runEntry` routes EVERY registered address to its `gen` body on that leg:
+> `PSXPORT_DEBUG=ovhit` reports **482 registry entries, ZERO with native hits, 268 with oracle hits**.
+> The chain runs — `FUN_8003CDD8` 1195 times, `FUN_8003F698` 9507, `FUN_80146478` 6245 — only the PC
+> bodies are bypassed, which is what recomp_path MEANS.
 >
-> 1. **The world layer has no runtime guest side to compare against.** Its rows can only ever carry a
->    native count; `primsGuest` stays 0 not because attribution failed but because nothing ran. Any
->    coverage percentage over these rows must say so, or it reads as a two-leg comparison that isn't one.
-> 2. **A design where the guest code records something for a native producer to read is dead here**, and
->    it fails silently. The first implementation did exactly that (sound on ordering grounds —
->    `cmdListDispatch` runs earlier in the same logic frame, which is precisely why `nativeObjDrawn`
->    could NOT be a registry and this could). It was caught only because the miss counter printed its
->    denominator: `key MISS #1 ... hits so far 0`. The first version of that counter had no print at
->    all — the diagnostic-that-can-print-nothing failure, one revision away from reporting a clean
->    result over a mechanism that never fired.
+> Worse, this was already recorded: `Tomba2Engine/docs/findings/render.md` has carried it since
+> 2026-08-06, with the one-line check (`PSXPORT_DEBUG=ovhit`) that would have settled it in seconds. The
+> registry was queried about the crash being triaged, never about the silence. The finding has been
+> retitled so the phrasings anyone would actually type — "never runs", "never called", "0 calls", "never
+> dispatched", "probe prints nothing" — reach it, and all four were verified to hit.
 >
-> The key is therefore resolved from guest DATA (the same `MODE_FORCE`/`MODE_BYTE`/`MODE_TABLE` reads
-> `perModeDispatch` makes) and is a **counterfactual**: the emitter the guest WOULD route to. That is
-> correct row identity, and it exposes rather than hides a real asymmetry — the guest routes to one of
+> **What this changes, and what it does not.** The recorder design still had to go, but for the routing
+> reason rather than an idle guest: the record lived in a native body the measuring leg bypasses. The key
+> resolved from data is unaffected and is in fact BETTER than described — it reads the same `MODE_*` state
+> the executing gen body reads, so it names the emitter the guest ACTUALLY used, not a counterfactual.
+> And the world layer DOES have a runtime guest side; `primsGuest` is 0 because the guest leg's
+> attribution is structurally blind for packet-pool stores, not because nothing ran. A guest-side
+> comparison is therefore possible in principle, blocked by that blindness alone.
+>
+> The key is resolved from guest DATA (the same `MODE_FORCE`/`MODE_BYTE`/`MODE_TABLE` reads
+> `perModeDispatch` makes), naming the emitter the guest actually routed to. It exposes rather than hides
+> a real asymmetry — the guest routes to one of
 > eleven per-mode emitters while the native pass draws every geomblk as generic GT3/GT4, so a row keyed
 > to a non-generic emitter quantifies the generic rebuild of a special-cased guest renderer. One input
 > (`flag & 1`, which also forces generic) belongs to a function that never runs on this leg and so is
