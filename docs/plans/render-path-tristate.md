@@ -1,11 +1,15 @@
 # The THREE-WAY render-path toggle — orientation + design
 
-**Status: A PLAN. Nothing here is implemented.** Written 2026-08-11, orientation pass only; no
-framework file was edited and no `coord/claims/` lock was taken. Companion doc:
-`docs/plans/graphics-producer-db.md` — this toggle is the instrument that makes that DB's
-"GTE/OT vs native producers" comparison observable per producer.
+**Status: LANDED as psxport `e16c58dc`** (2026-08-11) — steps 1-4 of the plan below are done and
+measured; steps 5 (the F1 overlay row) and 6 (converting the games' gates, then deleting the aliases)
+are NOT. Kept as the design record: what was measured, what was decided with the user, and what the
+two present-path bugs actually were. The measurements live in spyro C168 and issue 0055.
 
-Citations are `file:line` in a psxport checkout at `d6b8e17d` (all three trees on that gitlink, clean).
+Companion doc: `docs/plans/graphics-producer-db.md` — this toggle is the instrument that makes that
+DB's "GTE/OT vs native producers" comparison observable per producer.
+
+Citations are `file:line` as of `d6b8e17d`, the state this was WRITTEN against; the code has since
+moved (that is what `e16c58dc` is), so read a line number as "where this was", not "where it is".
 
 ---
 
@@ -139,9 +143,32 @@ number before psxport `80e3d203`; the `RENDER_PSX`/`ORACLE` mixup).
 
 ---
 
-## What is NOT free — the two real risks
+## MEASURED (2026-08-11): mode 3 was BLACK, for TWO reasons
 
-1. **Mode 3's present is plausible but UNVERIFIED.** `present_window()` blits `s_vram` through
+Stage 1 below was run before anything was designed around mode 3, and it was right to be: the
+presented frame was **0.0% non-black / 1 colour** at presents 700, 1200 and 2010, while a direct
+`s_vram` capture of the SAME run was **81.5% / 2117 colours**. The rasterizer was drawing; the present
+was discarding it. Both halves are one blindness — the VK present learns of framebuffer change ONLY
+through `gpu_vk_dirty()`, and every call site of it is gated `if (vk_path())`:
+
+1. `present_rebuild_decision` saw `batchEmpty=true` (permanently — the software path never tees a
+   primitive to VK) and a write counter that never moved, so it returned `REUSE_LAST` for the whole
+   run, re-showing a composite that had never been built once.
+2. **Fixing only that still presented black:** the upload takes the dirty RECT list, which is empty for
+   the same reason, so a rebuild uploaded nothing.
+
+After both fixes: 81.7%/2166, 93.3%/3737, 93.3%/3508 — with colour counts DIFFERENT from the `gte`
+leg's 2008/3534/3284 at the same frames, which is what proves the capture is the software rasterizer's
+own picture rather than the VK one leaking through. Full write-up: spyro `docs/issues/0055`.
+
+**What that run does NOT show:** with `PSXPORT_SPYRO_FRAME_LOOP` unset, spyro's picture comes from the
+guest's own driver on BOTH the `native` and `gte` legs, so their near-identical numbers are not
+evidence that a native producer drew anything. It is evidence that all three paths PRESENT.
+
+## What was NOT free — the risks, as they turned out
+
+1. **Mode 3's present was the predicted failure, and it was worse than predicted** (two bugs, not one).
+   Original note, kept because it was the reason to measure first: `present_window()` blits `s_vram` through
    `gpu_vk_present` (`gpu_native.cpp:1526-1527`), and under `soft_gpu` the SW rasterizer writes
    `s_vram` — so the picture should be coherent by construction, and mode 3 needs no new present
    path. But the VK geometry batch is EMPTY in that mode, and an empty batch has produced a fully
