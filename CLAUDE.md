@@ -97,11 +97,25 @@ To extract a boot executable or inspect a disc WITHOUT run.sh, use the framework
 **`PSXPORT_NOWINDOW` is read by NOTHING in the binary** — only `run.sh` translated it (into
 `PSXPORT_VK_HEADLESS`), so it does nothing for an agent driving the binary directly. Do not set
 `PSXPORT_VK_HEADLESS` either: a run is HEADLESS BY DEFAULT (`gpu_vk.cpp` requires `PSXPORT_VK_WINDOW=1`
-to open a window, so a forgotten flag fails safe), and setting it only produces a known-false "UNKNOWN
-knob" line because gpu_vk initialises after the startup validator (`config.cpp`). Likewise
-`PSXPORT_REPL` is read through the legacy `cfg_on()` path and is not registered in `config_vars.h`, so
-it too reports UNKNOWN while working correctly — those two are the only known false alarms on that line;
-treat every other one as a flag that really did nothing.
+to open a window, so a forgotten flag fails safe).
+
+**JUDGE AN UNKNOWN-KNOB WARNING ON THE *EXIT* AUDIT, NEVER ON THE STARTUP LINE.** The startup audit
+runs before the late-initialising subsystems have read anything, so it reports every un-migrated knob
+on a not-yet-entered code path as `UNKNOWN ... it did NOTHING in this run` — a claim about the run,
+made before the run. It prints its own blind spot and says to re-check at exit; do that, and read only:
+
+```
+[cfg] env audit AT EXIT (everything that was going to be read has been): N set -> ... 0 UNKNOWN
+```
+
+Measured 2026-08-12: a census run with 6 knobs set reported **4 UNKNOWN at startup**
+(`PSXPORT_GATE`, `PSXPORT_PAD_REPLAY`, `PSXPORT_PRODUCERS_DIR`, `PSXPORT_REPL`) and **0 UNKNOWN at
+exit** — all four had worked. This paragraph previously named `PSXPORT_VK_HEADLESS` and `PSXPORT_REPL`
+as "the only known false alarms" and said to treat every other one as a flag that really did nothing;
+that rule is what produced a false conclusion in BOTH directions — it would clear `PSXPORT_PAD_REPLAY`
+as broken when it works, having earlier let a genuinely misspelled replay knob pass as fine. The
+number of late-read knobs is not a fixed list, so only the exit audit answers the question.
+`Tomba2Engine/tools/gate.py` gates on the exit line for exactly this reason.
 
 ## Configuration: knobs resolve through a CVar ladder
 
