@@ -603,7 +603,14 @@ log call per byte.
 Your game must still boot at the end at least as far as it did at the start. Record the before
 number, and re-run at the end:
 
-    cd <yourgame> && PSXPORT_NOWINDOW=1 PSXPORT_NOPACE=1 PSXPORT_WATCHDOG=30 ./run.sh
+    cd <yourgame> && cmake --build build --target <port> -j$(nproc)   # build EXPLICITLY, never run.sh
+    python3 tools/gate.py boot --frames 400 --expect-stage <entry> --expect-sm48 <n>
+
+**NEVER `./run.sh` — that is the USER's play launcher** (USER 2026-08-11), and its submodule re-sync
+silently reverts in-progress framework work to the recorded pin under you. A game without a gate tool
+grows one; `Tomba2Engine/tools/gate.py` is the reference shape. Assert the ADVANCE past the newgame
+prologue and the END STATE, never an absolute end frame — `newgame` takes a variable number of frames to
+reach the prologue, so an absolute number is a hardcoded expected value that fails for unrelated reasons.
 
 `PSXPORT_NOPACE=1` because the gate measures boot PROGRESS in a wall-clock budget, and a headless run
 is paced now (see the divergence table above). Without it the gate measures ~60 presents per second

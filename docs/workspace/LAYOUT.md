@@ -126,8 +126,10 @@ it **before** you commit anything. To re-check later, `--verify --before-ref <th
 #    and the substrate already on disk still says `core.h`. Skipping this gets you a baffling
 #    `generated/rec_decls.h:3: fatal error: core.h: No such file or directory`. generated/ is
 #    SACROSANCT — regenerate it, never hand-edit it. --apply names each stale tree and its count.
+#    NEVER ./run.sh here — it is the USER's play launcher (USER 2026-08-11) and its submodule re-sync
+#    reverts in-progress framework work under you. Build explicitly, then use the repo's own gate tool.
 for r in spyro spider1 Tomba2Engine; do (cd ~/repo/psx/$r && \
-  PSXPORT_NOWINDOW=1 PSXPORT_NOPACE=1 PSXPORT_WATCHDOG=30 ./run.sh); done
+  cmake --build build -j$(nproc) --target "$(basename $r)_port" && python3 tools/gate.py boot); done
 #    ensure_recomp.py hashes emit.py, so the move already invalidates the stamp and run.sh re-emits
 #    on its own; PSXPORT_FORCE_RECOMP=1 if you want to be sure.
 ```

@@ -57,25 +57,51 @@ A framework change **starts with a RED hermetic test** in `tests/` (no disc, no 
 in one `tests/test_*.cpp` using `tests/testutil.h`; they are globbed, so there is no shared file to
 edit and no merge point. See `docs/project-map.md` ("Tests"). Paste the failing output before the fix.
 
-Per-game build/run (from inside a game repo):
+## `./run.sh` IS THE USER'S. Agents build and gate with their own tools
+
+**USER directive, 2026-08-11: *"I don't know why you are running run.sh, that is for me to play, you
+should have your own tools."* An agent must never invoke `./run.sh`** — not even with
+`PSXPORT_NOWINDOW=1`. It is the end-to-end WINDOWED play launcher: it re-syncs submodules, re-extracts
+the boot executable, recompiles, rebuilds and launches. Two concrete harms, both already recorded: it
+competes with the user's own session for the shared tree, and its submodule re-sync silently reverts
+in-progress framework work to the recorded pin, after which every measurement an agent takes describes a
+different framework than it believes (`docs/workspace/PROTOCOL.md`).
+
+Agents build explicitly and drive the ALREADY-BUILT binary:
 
 ```sh
-./run.sh [/path/to/game.chd]     # end-to-end: sync submodules, build CHD tools, extract the boot
-                                 # executable from the disc, statically recompile it to C, build, launch
 cmake -S . -B build && cmake --build build --target <spyro_port|spiderman_port|tomba2_port> -j$(nproc)
-./scratch/bin/<port> scratch/bin/<game>/<EXECUTABLE>              # run a built binary directly
-PSXPORT_NOWINDOW=1 PSXPORT_NOPACE=1 PSXPORT_WATCHDOG=30 ./run.sh  # the boot gate every agent re-runs
+./scratch/bin/<port> scratch/bin/<game>/<EXECUTABLE>     # the binary is HEADLESS BY DEFAULT
+python3 tools/gate.py boot --frames 400 \
+    --expect-stage <entry> --expect-sm48 <n>             # Tomba!2's agent gate; see below
 ```
+
+**A gate is a TOOL the game repo owns, not a borrowed launcher.** `Tomba2Engine/tools/gate.py` is the
+reference shape: it neither builds nor extracts, it drives the REPL over stdin, and it prints its own
+denominator every run (output lines scanned, failure patterns searched, prologue frame, frames advanced,
+end state, the exit-time env audit) so a pass cannot be confused with a run that never launched. Its
+refusals exit 2 rather than 0 — missing binary, missing boot executable, zero output, no frame counter,
+or a hang the watchdog failed to kill. **Do not assert an absolute end frame:** `newgame` pulses an
+unspecified number of frames to reach the GAME prologue (measured 27 on one build where an older note
+says 39), so an absolute frame is a hardcoded expected value that fails for reasons unrelated to your
+change. Assert the ADVANCE past the prologue plus the END STATE. Games without a gate tool yet should
+grow one rather than reaching for `run.sh`.
 
 The disc image is never in a repo. Resolution order is **CLI arg > env var > `.env` > a `*.chd` dropped
 in the repo root**; the env var is `PSXPORT_SPYRO_DISC` / `PSXPORT_SPIDERMAN_DISC` /
-`PSXPORT_TOMBA2_DISC`. Binaries land in the git-ignored `scratch/bin/`; `generated/` (the recompiled
-substrate, ~200 MB of C) is git-ignored and rebuilt from your disc.
+`PSXPORT_TOMBA2_DISC`. Every repo already has a `.env` pointing at its disc. Binaries land in the
+git-ignored `scratch/bin/`; `generated/` (the recompiled substrate, ~200 MB of C) is git-ignored.
+To extract a boot executable or inspect a disc WITHOUT run.sh, use the framework's own tool:
+`cmake --build build --target discdump`, then `discdump list|get <NAME> <disc> [outdir]`.
 
-**`PSXPORT_NOWINDOW` is read by NOTHING in the binary** — only `run.sh` translates it (into
-`PSXPORT_VK_HEADLESS`). It works in the gate line above; passing it to `./scratch/bin/<port>` directly
-does nothing. That is harmless only because a run is HEADLESS BY DEFAULT (`gpu_vk.cpp` requires
-`PSXPORT_VK_WINDOW=1` to open a window) — do not read it as evidence the flag applied.
+**`PSXPORT_NOWINDOW` is read by NOTHING in the binary** — only `run.sh` translated it (into
+`PSXPORT_VK_HEADLESS`), so it does nothing for an agent driving the binary directly. Do not set
+`PSXPORT_VK_HEADLESS` either: a run is HEADLESS BY DEFAULT (`gpu_vk.cpp` requires `PSXPORT_VK_WINDOW=1`
+to open a window, so a forgotten flag fails safe), and setting it only produces a known-false "UNKNOWN
+knob" line because gpu_vk initialises after the startup validator (`config.cpp`). Likewise
+`PSXPORT_REPL` is read through the legacy `cfg_on()` path and is not registered in `config_vars.h`, so
+it too reports UNKNOWN while working correctly — those two are the only known false alarms on that line;
+treat every other one as a flag that really did nothing.
 
 ## Configuration: knobs resolve through a CVar ladder
 

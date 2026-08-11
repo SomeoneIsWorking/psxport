@@ -431,7 +431,8 @@ The line falls between per-frame and per-instruction, and the design differs on 
 ## 6. Migration order — smallest first, each step landable and gated
 
 Every step leaves `psxport_smoke` linking, `ctest` green, and the three boot gates green
-(`PSXPORT_NOWINDOW=1 PSXPORT_NOPACE=1 PSXPORT_WATCHDOG=30 ./run.sh` in each game repo); steps
+(build explicitly, then each repo's own gate tool — e.g. `python3 tools/gate.py boot`; NEVER
+`./run.sh`, which is the USER's play launcher and re-syncs the submodule under you); steps
 touching Tomba behaviour additionally hold the SBS byte-compare. No step touches two taxonomy
 kinds at once.
 
