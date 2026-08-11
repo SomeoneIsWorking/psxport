@@ -618,6 +618,47 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(), 1u,
                                     (uint32_t)gpu_frame_no(core), layer);
 
+  // WHO draws the undeclared prims — `PSXPORT_DEBUG=unscoped`.
+  //
+  // The census can say HOW MANY undeclared prims a layer holds; it cannot say WHICH C++ producer pushed
+  // them, and without that the only way to shrink the number is to guess a file, scope it, and re-measure.
+  // That guessing already cost a round: four producers were identified and scoped on solid evidence, and
+  // the undeclared totals did not move by a single prim, because none of the four runs in that replay.
+  // So capture the CALL SITE at the moment a prim arrives with no producer declared.
+  //
+  // Deduplicated by stack, and capped by NOVELTY rather than by count: every DISTINCT stack is printed
+  // once, so a producer pushing 300k prims and one pushing 12 are equally visible. A plain "first N"
+  // cap would have printed 8 lines of the same hot loop and hidden every other producer behind it.
+  if (!core->rsub.producerScope.active() && lucent::channel_on("unscoped")) {
+    void* frames[24];
+    const int n = backtrace(frames, 24);
+    // Cheap order-sensitive hash of the return addresses — enough to tell distinct call sites apart.
+    uint64_t h = 1469598103934665603ull;
+    for (int i = 0; i < n; i++) { h ^= (uint64_t)(uintptr_t)frames[i]; h *= 1099511628211ull; }
+    static uint64_t seen[64];
+    static int seenN = 0;
+    bool fresh = true;
+    for (int i = 0; i < seenN; i++) if (seen[i] == h) { fresh = false; break; }
+    if (fresh) {
+      if (seenN < (int)(sizeof seen / sizeof seen[0])) seen[seenN++] = h;
+      char** sym = backtrace_symbols(frames, n);
+      lucent::Line ln;
+      ln.add("UNDECLARED native prim #{} layer={} — no ProducerScope open. Call site:\n",
+             seenN, (int)layer);
+      // Skip this function's own frame; print the producer chain above it.
+      for (int i = 1; i < n && i < 12; i++) ln.add("    {}\n", sym && sym[i] ? sym[i] : "?");
+      ln.flush(lucent::Level::Warn, "unscoped");
+      free(sym);
+    } else if (seenN >= (int)(sizeof seen / sizeof seen[0])) {
+      // The table is full: say so ONCE rather than silently deduplicating against a truncated set,
+      // which would read as "these are all the producers".
+      static bool warned = false;
+      if (!warned) { warned = true;
+        lucent::warn("unscoped", "distinct-call-site table FULL at {} entries — further NEW sites are "
+                                "no longer reported. Scope what is listed and re-run.", seenN); }
+    }
+  }
+
   // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
   // 2026-07-16: dialog/prompt panels sat left-anchored in wide). The wide FB spans [0,ww) with the
   // world centred at ww/2, so a 4:3-authored x hugs the left edge until it is centred.
