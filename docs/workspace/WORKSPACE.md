@@ -50,11 +50,11 @@ writable.**
    submodule, so each game repo still builds standalone from a bare clone — that is what keeps "each
    game is its own project using psxport as the framework" true rather than aspirational. `run.sh`
    announces which checkout it built from, and whether that checkout was dirty.
-3. **Parallel framework work: a separate CLONE per agent** (`git clone psxport psxport-<area>`), each
-   with its own `PSXPORT_DIR`, converging through the remote — NOT a `git worktree`, which shares
-   `.git` and therefore `refs/stash` and the vendors' `.git/modules` (`PROTOCOL.md` has the incident).
-   Claims decide who owns an area; the separate checkout keeps their files apart. Clean up after
-   yourself — no orphaned clones, no dangling worktrees.
+3. **Parallel framework work: `git worktree` off `psxport/`, one per claim area**, and point that
+   agent's `PSXPORT_DIR` at its worktree. Claims (`PROTOCOL.md`) decide who owns an area; the worktree
+   keeps two agents' files apart. Clean them up — no dangling worktrees. One sharp edge: a worktree
+   shares `.git`, so inside one, do not `git stash` and do not move a vendor pin (`PROTOCOL.md` has
+   the incident).
 4. **Landing:** commit + push in `psxport/`, then bump each game's gitlink — and record the gitlink
    BEFORE building or gating that tree (`PROTOCOL.md` says why: `sync-submodules.sh` syncs
    toward the RECORDED pin, so an un-recorded checkout gets silently reverted under you).

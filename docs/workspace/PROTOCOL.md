@@ -27,18 +27,17 @@ submodule:
 `run.sh` prints which framework checkout the run was built from and whether it was dirty — read that
 line before trusting a measurement.
 
-**Two agents needing the framework at once: a separate CLONE per agent** —
-`git clone $PSX/psxport $PSX/psxport-<area>` — with each agent's `PSXPORT_DIR` pointing at its own
-clone, and the edits converging through the remote. That is the same rule the user set for concurrent
-game-repo sessions on 2026-07-28, and for the same reason: **a `git worktree` shares `.git`**, so
-`refs/stash` and the vendored submodules' repos under `.git/modules` stay common ground between the two
-agents. A worktree stash-pop has already grabbed another agent's stash in this workspace, and
-`external/psxport` is exactly what desynced. A worktree is acceptable only for a change that touches no
-vendor pin and uses no stash — and it is never the default. Either way, clean up after yourself: no
-dangling worktrees, no orphaned clones.
+**Two agents needing the framework at once: `git worktree add` off the dev clone** (USER, 2026-08-11 —
+separate clones are unnecessary), one worktree per claim area, each agent's `PSXPORT_DIR` pointing at
+its own worktree. The claim below decides who owns an AREA; the worktree keeps their FILES apart. Both
+are needed — the lock alone does not stop two agents from stepping on one tree.
 
-The claim below decides who owns an AREA; the separate checkout keeps their FILES apart. Both are
-needed — the lock alone does not stop two agents from stepping on one tree.
+**Clean up after yourself: no dangling worktrees.** And know the one sharp edge, because it has cut
+this workspace before: a worktree shares `.git`, so `refs/stash` and the vendors' repos under
+`.git/modules` are common ground between the two worktrees. A worktree stash-pop has already grabbed
+another agent's stash here (`Tomba2Engine/CLAUDE.md`). So in a worktree: **do not `git stash`, and do
+not move a vendor pin** (`vendor/beetle-psx`, `vendor/lucent`) — leave your work dirty and report it,
+which is what this protocol asks for anyway.
 
 **Landing is still the operator's** (only the operator sees the whole tree and the other agents in
 flight): commit + push in the dev clone, then bump the three gitlinks — recording each gitlink BEFORE
