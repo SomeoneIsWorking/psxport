@@ -73,11 +73,13 @@ static void test_ownership_distinguishes_all_three_states(void) {
 
   // installed AND ran -> both true, and the hit count travels so "ran" is not just a bool to trust.
   CHECK(strstr(buf, "\"key\":\"0x8002BC9C\"") != NULL);
-  CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":true,\"native_hits\":42") != NULL);
+  CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":true,\"native_hits\":42,\"oracle_hits\":7") != NULL);
 
   // installed and NEVER ran -> the combination that is a lie in the DB rather than a gap. It must be
   // expressible; if this line ever stops appearing, --todo's ranking silently stops working again.
-  CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":false,\"native_hits\":0") != NULL);
+  // ...and the oracle count comes with it, so "never dispatched" (0/0) is separable from "dispatched
+  // to the substrate body" (0/n). Without this the row reads as unexercised in both cases.
+  CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":false,\"native_hits\":0,\"oracle_hits\":3") != NULL);
 
   // NOT installed -> false, which is the CORRECT and normal answer for a display-pass producer that
   // draws the picture from game state while the guest function stays on the substrate.

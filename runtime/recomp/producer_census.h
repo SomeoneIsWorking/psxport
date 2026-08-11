@@ -217,10 +217,17 @@ class ProducerCensus {
       } else {
         uint64_t nativeHits = 0, oracleHits = 0;
         const bool registered = ownedQuery(r.key.id, &nativeHits, &oracleHits);
-        snprintf(owned, sizeof owned, ",\"has_native\":%s,\"native_reached\":%s,\"native_hits\":%llu",
+        // BOTH hit counts, because native_reached==false has TWO causes with different meanings and
+        // they are indistinguishable from the native count alone: the address was never dispatched at
+        // all (the guest path does not execute on this leg), or it WAS dispatched and routed to the
+        // substrate gen body (oracle leg / forced). The first says the override is unexercised; the
+        // second says it ran as the reference. Reporting only nativeHits collapses them into one row
+        // that reads like the first — the same conflation that made these fields useless to begin with.
+        snprintf(owned, sizeof owned,
+                 ",\"has_native\":%s,\"native_reached\":%s,\"native_hits\":%llu,\"oracle_hits\":%llu",
                  registered ? "true" : "false",
                  (registered && nativeHits > 0) ? "true" : "false",
-                 (unsigned long long)nativeHits);
+                 (unsigned long long)nativeHits, (unsigned long long)oracleHits);
       }
       fprintf(f,
               "{\"key\":\"0x%08X\",\"kind\":\"%s\",\"prims_guest\":%u,\"prims_native\":%u,"
