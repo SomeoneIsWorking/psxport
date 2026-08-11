@@ -280,6 +280,89 @@ int GpuVkState::frame_via_fb() { return 0; }
 // ---- SDL_GPU helpers --------------------------------------------------------------------------------
 #define GPUCHK(p, what) do { if (!(p)) { lucent::error("gpu_vk", "{} failed: {}", what, SDL_GetError()); exit(2); } } while (0)
 
+// ── GPU-FAULT LATCH — a failed submit ENDS this process's GPU work, permanently ────────────────────
+//
+// A GPU hang is not a crash you retry. The fault belongs to the whole card: the kernel resets it, and
+// the process that loses is the one drawing the USER'S DESKTOP. The global rule
+// (~/.claude/CLAUDE.md, 2026-08-12) was written after a render path hung the graphics ring seven times
+// in one session and took the desktop down twice, the second time hard enough to need a reboot — and
+// every reset after the FIRST was avoidable, caused by continuing to submit into a card being reset.
+//
+// Before this, all NINE plain SDL_SubmitGPUCommandBuffer call sites in this file DISCARDED the return
+// value, so nothing could stop the frame loop from submitting again — and the four fence-returning
+// submits then waited on the result with NO wall-clock bound, which holds the process open straight
+// through a kernel reset. That is the exact "fifteen consecutive
+// failed submits" shape the rule names, and it was one bad frame away from happening here.
+//
+// WHY A LATCH RATHER THAN A RETRY: the rule is that the first device loss stops all GPU work, not that
+// it be handled gracefully. There is no recovery a game process can perform that is worth the risk of a
+// second ring reset, so this is deliberately one-way — once tripped it never clears for the lifetime of
+// the process. It does NOT exit(): the run continues without submitting so the caller can still write
+// its diagnostics, and gpu_submit_failed() lets a gate report an honest "the GPU stopped" instead of a
+// silent black capture that reads like a rendering bug.
+static bool s_gpu_faulted = false;
+
+bool gpu_submit_failed() { return s_gpu_faulted; }
+
+// Submit and WAIT, with a wall-clock bound. Returns false (already latched) if the submit failed or the
+// wait timed out; the caller must then treat its readback as unavailable rather than reading stale bytes.
+//
+// WHY THE POLL LOOP: SDL_WaitForGPUFences takes no timeout, so calling it is an UNBOUNDED wait — exactly
+// what the rule forbids, because a process sitting in one holds itself open through the card's reset.
+// SDL_QueryGPUFence is the non-blocking form, so the bound is built from it. The budget is generous
+// (seconds, not milliseconds): a legitimate readback of a full VRAM image on a loaded machine can take
+// far longer than a frame, and a timeout that fires on slowness rather than death would latch the
+// renderer off during normal use — a false positive here costs the user their picture.
+static bool gpu_submit_and_wait(SDL_GPUCommandBuffer* cmd, const char* where) {
+  if (!cmd) return false;
+  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+  if (!fence) {
+    if (!s_gpu_faulted) {
+      s_gpu_faulted = true;
+      lucent::error("gpu_vk", "GPU SUBMIT (fenced) FAILED at {}: {} — LATCHING THE RENDERER OFF for the "
+                              "rest of this process; see the latch banner above.", where, SDL_GetError());
+    }
+    return false;
+  }
+  static const Uint64 kBudgetMs = 5000;
+  const Uint64 t0 = SDL_GetTicks();
+  for (;;) {
+    if (SDL_QueryGPUFence(s_dev, fence)) { SDL_ReleaseGPUFence(s_dev, fence); return true; }
+    const Uint64 waited = SDL_GetTicks() - t0;
+    if (waited >= kBudgetMs) {
+      SDL_ReleaseGPUFence(s_dev, fence);
+      if (!s_gpu_faulted) {
+        s_gpu_faulted = true;
+        lucent::error("gpu_vk",
+                      "GPU FENCE at {} DID NOT SIGNAL within {} ms — treating the device as hung and "
+                      "LATCHING THE RENDERER OFF. Waiting longer is what keeps this process alive through "
+                      "a kernel ring reset; the readback that wanted this fence is NOT available and its "
+                      "caller must not read the transfer buffer.", where, (unsigned long long)kBudgetMs);
+      }
+      return false;
+    }
+    SDL_Delay(1);
+  }
+}
+
+// Submit, and latch on failure. EVERY submit in this file goes through here — a raw
+// SDL_SubmitGPUCommandBuffer is the defect this exists to remove, so do not add one back.
+static bool gpu_submit(SDL_GPUCommandBuffer* cmd, const char* where) {
+  if (!cmd) return false;
+  if (SDL_SubmitGPUCommandBuffer(cmd)) return true;
+  if (!s_gpu_faulted) {
+    s_gpu_faulted = true;
+    lucent::error("gpu_vk",
+                  "GPU SUBMIT FAILED at {}: {} — LATCHING THE RENDERER OFF for the rest of this "
+                  "process. A submit failure means the device is gone or being reset by the kernel, and "
+                  "continuing to submit into it is what escalates one lost frame into a desktop-killing "
+                  "ring reset. This run will keep executing WITHOUT drawing; any capture taken from here "
+                  "on is not a picture of the game.", where, SDL_GetError());
+  }
+  return false;
+}
+
+
 static SDL_GPUShader* make_shader(const uint32_t* code, unsigned len, SDL_GPUShaderStage stage,
                                   Uint32 num_samplers, Uint32 num_uniform_buffers) {
   SDL_GPUShaderCreateInfo ci = {};
@@ -1171,7 +1254,7 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   const PresentPlan plan = plan_present(present_inputs(*this, sx, sy, disp_w, h, /*native_w=*/w, fade), s_headless != 0);
   if (plan.build) build_present_image(cmd, plan);
   if (plan.to_swapchain) { show_present_image(cmd); return; }   // consumes cmd (submits + polls)
-  SDL_SubmitGPUCommandBuffer(cmd);
+  gpu_submit(cmd, "present");
 }
 
 // ---- build_present_image: THE PICTURE — sample the composite target built by the last render_geom
@@ -1230,7 +1313,7 @@ void GpuVkState::build_present_image(SDL_GPUCommandBuffer* cmd, const PresentPla
 void GpuVkState::show_present_image(SDL_GPUCommandBuffer* cmd) {
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
-    SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;   // minimized / no swapchain image this frame
+    gpu_submit(cmd, "show_present_image"); poll_quit(game); return;   // minimized / no swapchain image this frame
   }
   SDL_GPUColorTargetInfo cti = {};
   cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
@@ -1264,7 +1347,7 @@ void GpuVkState::show_present_image(SDL_GPUCommandBuffer* cmd) {
   // to s_present_img — a present shot must show the frame, not the debug menu over it.
   overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
-  SDL_SubmitGPUCommandBuffer(cmd);
+  gpu_submit(cmd, "show_present_image");
   poll_quit(game);
 }
 
@@ -1325,11 +1408,11 @@ void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float
   SDL_UploadToGPUTexture(cp, &srci, &dst, false);
   SDL_EndGPUCopyPass(cp);
 
-  if (s_headless) { SDL_SubmitGPUCommandBuffer(cmd); return; }   // caller PPM-dumps its own rgba headless
+  if (s_headless) { gpu_submit(cmd, "gpu_vk_present_image"); return; }   // caller PPM-dumps its own rgba headless
 
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
   if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) {
-    SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return;
+    gpu_submit(cmd, "gpu_vk_present_image"); poll_quit(game); return;
   }
   SDL_GPUColorTargetInfo cti = {};
   cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
@@ -1348,7 +1431,7 @@ void gpu_vk_present_image(Core* core, const uint8_t* rgba, int iw, int ih, float
   // above) — otherwise the manually-drawn SCEA splash would cover the overlay. No-op when hidden.
   overlay_glue_record(game, cmd, rp, (int)sw, (int)sh);
   SDL_EndGPURenderPass(rp);
-  SDL_SubmitGPUCommandBuffer(cmd);
+  gpu_submit(cmd, "gpu_vk_present_image");
   poll_quit(game);
 }
 
@@ -1370,11 +1453,14 @@ static const uint16_t* readback_vram(GpuVkState& g) {
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
   lucent::debug("rbtrace", "copy pass ended, submitting");
-  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-  lucent::debug("rbtrace", "submitted, fence={} — waiting", (void*)fence);
-  SDL_WaitForGPUFences(s_dev, true, &fence, 1);
+  // Bounded submit+wait. On a fault the transfer buffer holds whatever was last in it, so returning it
+  // would hand the caller a STALE VRAM image that looks like a real readback — refuse instead.
+  if (!gpu_submit_and_wait(cmd, "readback_vram")) {
+    lucent::error("gpu_vk", "readback_vram: no VRAM image this call — the GPU is latched off. Callers get "
+                            "nullptr rather than the previous frame's bytes.");
+    return nullptr;
+  }
   lucent::debug("rbtrace", "fence signalled");
-  SDL_ReleaseGPUFence(s_dev, fence);
   const uint16_t* p = (const uint16_t*)SDL_MapGPUTransferBuffer(s_dev, g.s_rb_xfer, false);
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (long i = 0; i < (long)VRAM_W * VRAM_H; i++) if (p[i]) nz++;
     lucent::info("gpu_vk", "readback nonzero={}/{}", nz, VRAM_W * VRAM_H); }
@@ -1406,9 +1492,12 @@ void GpuVkState::present_shot(const char* path) {
   dsti.pixels_per_row = (Uint32)w; dsti.rows_per_layer = (Uint32)h;
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
-  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-  SDL_WaitForGPUFences(s_dev, true, &fence, 1);
-  SDL_ReleaseGPUFence(s_dev, fence);
+  if (!gpu_submit_and_wait(cmd, "present_shot")) {
+    lucent::error("present_shot", "NOTHING captured for {} — the GPU faulted and is latched off. The "
+                                  "transfer buffer still holds an older frame; writing it would be a "
+                                  "capture of the wrong moment presented as this one.", path ? path : "(null)");
+    return;
+  }
   const uint8_t* rgba = (const uint8_t*)SDL_MapGPUTransferBuffer(s_dev, s_present_rb, false);
   unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
   if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, s_present_rb); lucent::error("present_shot", "out of memory — NOTHING captured"); return; }
@@ -1486,7 +1575,10 @@ bool image_write_rgb24(const char* path, const unsigned char* rgb, int w, int h)
 }
 static bool dump_to(GpuVkState& g, const char* path, int sx, int sy, int w, int h,
                     int fade_mode, uint8_t fade_r, uint8_t fade_g, uint8_t fade_b) {
+  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
+  // would segfault, and pretending success would emit garbage as a measurement.
   const uint16_t* vram = readback_vram(g);
+  if (!vram) { lucent::error("gpu_vk", "shot24: NOTHING captured — GPU latched off"); return false; }
   unsigned char* rgb = (unsigned char*)malloc((size_t)w * h * 3);
   if (!rgb) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return false; }
   // 24bpp packs RGB888 across 1.5 VRAM halfwords per pixel, so column x of the display sits at BYTE
@@ -1565,8 +1657,11 @@ void gpu_vk_ires_rawdump(Core* core, const char* path) {
   SDL_GPUTextureTransferInfo di = {}; di.transfer_buffer = dbg_xfer; di.pixels_per_row = (Uint32)cw; di.rows_per_layer = (Uint32)ch;
   SDL_DownloadFromGPUTexture(dcp, &sr, &di);
   SDL_EndGPUCopyPass(dcp);
-  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(dbg_cmd);
-  SDL_WaitForGPUFences(s_dev, true, &fence, 1); SDL_ReleaseGPUFence(s_dev, fence);
+  if (!gpu_submit_and_wait(dbg_cmd, "GpuVkState::shot")) {
+    lucent::error("gpu_vk", "shot: NOTHING written to {} — the GPU faulted and is latched off.",
+                  path ? path : "(null)");
+    return;
+  }
   const uint16_t* px = (const uint16_t*)SDL_MapGPUTransferBuffer(s_dev, dbg_xfer, false);
   FILE* f = fopen(path, "wb");
   if (f) {
@@ -1587,14 +1682,23 @@ void gpu_vk_ires_rawdump(Core* core, const char* path) {
 void gpu_vk_vram_words(Core* core, int x, int y, int n, uint16_t* out) {
   if (!gpu_vk_enabled() || !s_inited) { for (int i = 0; i < n; i++) out[i] = 0; return; }
   GpuVkState& g = core->game->gpu_vk;
+  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
+  // would segfault, and pretending success would emit garbage as a measurement.
   const uint16_t* vram = readback_vram(g);
+  if (!vram) { lucent::error("gpu_vk", "vram row read of {} word(s) at ({},{}) UNAVAILABLE — GPU latched "
+                                       "off; `out` is left untouched, not zero-filled, so a caller cannot "
+                                       "mistake a fault for a black row", n, x, y); return; }
   for (int i = 0; i < n; i++) out[i] = vram[(y % VRAM_H) * VRAM_W + ((x + i) & 1023)];
   SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer);
 }
 void gpu_vk_vram_raw(Core* core, const char* path) {
   if (!gpu_vk_enabled() || !s_inited) return;
   GpuVkState& g = core->game->gpu_vk;
+  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
+  // would segfault, and pretending success would emit garbage as a measurement.
   const uint16_t* vram = readback_vram(g);
+  if (!vram) { lucent::error("gpu_vk", "vramdump: NOTHING written to {} — GPU latched off",
+                             path ? path : "(null)"); return; }
   FILE* f = fopen(path, "wb"); if (!f) { SDL_UnmapGPUTransferBuffer(s_dev, g.s_rb_xfer); return; }
   for (int y = 0; y < VRAM_H; y++) fwrite(&vram[y * VRAM_W], 2, VRAM_W, f);
   fclose(f);
@@ -1823,8 +1927,11 @@ void GpuVkState::tritest() {
   SDL_GPUTextureTransferInfo dsti = {}; dsti.transfer_buffer = dl; dsti.pixels_per_row = TW; dsti.rows_per_layer = TH;
   SDL_DownloadFromGPUTexture(cp, &srcr, &dsti);
   SDL_EndGPUCopyPass(cp);
-  SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-  SDL_WaitForGPUFences(s_dev, true, &fence, 1); SDL_ReleaseGPUFence(s_dev, fence);
+  if (!gpu_submit_and_wait(cmd, "GpuVkState::tritest")) {
+    lucent::error("gpu_vk", "tritest: INCONCLUSIVE — the GPU faulted and is latched off, so this "
+                            "self-test neither passed nor failed. Do not read it as a pass.");
+    return;
+  }
 
   const uint8_t* px = (const uint8_t*)SDL_MapGPUTransferBuffer(s_dev, dl, false);
   const uint8_t* top = px + ((size_t)(TH / 4) * TW + TW / 2) * 4;        // y=60: should be RED (VRAM row ~64)
@@ -1864,8 +1971,12 @@ void gpu_vk_render_readback(Core* core, const uint16_t* vram, int sx, int sy, in
   SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_dev); GPUCHK(cmd, "render_readback cmd");
   upload_vram(g, cmd, vram, kWholeVram, 1);   // SBS pane: this core's picture IS its CPU VRAM + batch
   int a, b, c; render_geom(g, cmd, vram, sx, sy, w, h, &a, &b, &c);
-  SDL_SubmitGPUCommandBuffer(cmd);                 // render into THIS core's VRAM image; NO swapchain present
+  gpu_submit(cmd, "gpu_vk_render_readback");                 // render into THIS core's VRAM image; NO swapchain present
+  // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
+  // would segfault, and pretending success would emit garbage as a measurement.
   const uint16_t* src = readback_vram(g);          // download it (RG8 bytes == uint16 1555 words)
+  if (!src) { lucent::error("gpu_vk", "present: no VRAM image — GPU latched off; skipping this present "
+                                      "rather than presenting stale or garbage pixels"); return; }
   if (cfg_on("PSXPORT_GPU_TRACE")) { long nz = 0; for (int yy=0; yy<h; yy++) for (int xx=0; xx<w; xx++) if (src[((sy+yy)%VRAM_H)*VRAM_W + ((sx+xx)&1023)]) nz++;
     RenderStats& st = core->rsub.stats;
     lucent::info("gpu_vk", "readback region sx={} sy={} {}x{} region-nonzero={}/{} fade={}({},{},{}) batch tri={} tex={} semi={} worldquads={}", sx, sy, w, h, nz, w*h, s_fade_mode, s_fade_r, s_fade_g, s_fade_b, a, b, c, st.dbgWorldQuads);
@@ -1910,7 +2021,7 @@ void gpu_vk_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const
   SDL_EndGPUCopyPass(cp);
 
   SDL_GPUTexture* swaptex = NULL; Uint32 sw = 0, sh = 0;
-  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) { SDL_SubmitGPUCommandBuffer(cmd); poll_quit(game); return; }
+  if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, s_win, &swaptex, &sw, &sh) || !swaptex) { gpu_submit(cmd, "gpu_vk_present_sbs2"); poll_quit(game); return; }
   SDL_GPUColorTargetInfo cti = {}; cti.texture = swaptex; cti.clear_color = (SDL_FColor){ 0, 0, 0, 1 };
   cti.load_op = SDL_GPU_LOADOP_CLEAR; cti.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &cti, 1, NULL);
@@ -1927,7 +2038,7 @@ void gpu_vk_present_sbs2(Game* game, const uint8_t* rgbaA, int wA, int hA, const
     SDL_DrawGPUPrimitives(rp, 3, 1, 0, 0);
   }
   SDL_EndGPURenderPass(rp);
-  SDL_SubmitGPUCommandBuffer(cmd);
+  gpu_submit(cmd, "gpu_vk_present_sbs2");
   poll_quit(game);
 }
 
