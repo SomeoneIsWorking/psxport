@@ -269,12 +269,18 @@ tool and `docs/producers/` are game-side and need no framework claim.
    single-producer A/B recipe already used for spyro C167 (one early return in the producer's emit,
    same 24 presents, distinct-colour count) is the per-row instrument.
 
+## DECIDED (USER, 2026-08-11): the row IS the guest submitter fn
+
+Asked directly, with the alternatives (fn + material signature; named-effect rows with fns as
+attributes) on the table. **One row per guest submitter fn, auto-created on first sight; `name` and
+`re_status` curated on it; `has_native` / `native_reached` DERIVED from the override table.** Exactly
+the schema above — so nothing in this plan changes, and the question is closed rather than left for a
+later session to re-open. A fn that is honestly two effects is split by HAND, and the split records
+its discriminator (the `sub_signatures` field is the evidence for when that is needed).
+
 ## Open questions (do not guess these — they change the schema)
 
-1. **Is a guest fn the effect granularity you want, or do you want the DB rowed by NAMED EFFECT with
-   fn as an attribute?** Plan above assumes fn-keyed with curated names; the plume case is the
-   argument for it.
-2. **Should a row track pixel-area rather than prim count?** Prim count is free; screen-area coverage
+1. **Should a row track pixel-area rather than prim count?** Prim count is free; screen-area coverage
    is the number that actually says "how much of the frame do we own", and needs a bbox accumulator.
-3. **One DB per game, or a shared row space for producers that are engine-common across games?**
+2. **One DB per game, or a shared row space for producers that are engine-common across games?**
    Assumed strictly per-game (the ask says "for each game"); guest addresses are per-game anyway.
