@@ -410,7 +410,7 @@ void RenderQueue::flush(Core* core) {
   // per-frame: under diff_mode (SBS dual-core compare) per-core present is suppressed, so present_vk never
   // runs — capturing would leave the geometry batch empty (black SBS panes). In diff_mode the SBS composite
   // reads the geometry batch directly, so flush MUST inline-emit. Gate the fps60 capture on !diff_mode.
-  if (core->game->mods.fps60 && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  if (core->game->fps60.active() && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
   emitQueue(core);
 }
 

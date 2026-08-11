@@ -9,6 +9,7 @@
 #include "c_subsys.h"
 #include <lucent/log.h>
 #include "config.h"        // `cvars` / `cvar` — the layered CVar registry + env audit
+#include "config_vars.h"      // psx::config::cv_render_path — mirror a live switch into the Runtime layer
 #include "render_substrate.h"    // Render::psxRender / setPsxRender (per-Core render-path switch)
 #include "ot_attr.h"   // OtAttr — `otattr` command (OT/GTE submission attribution)
 #include "repl.h"
@@ -213,9 +214,16 @@ long Repl::read(Core* c, uint32_t f) {
     else if (!strcmp(cmd, "shot")) {   // VK-aware, same pick as dbg_server's `shot`: capture what is PRESENTED
       char path[200] = {0};
       if (sscanf(line, "%*s %199s", path) == 1) {
-        int gpu_vk_enabled(void); void gpu_vk_shot(Core*, const char*); void gpu_native_shot(Core*, const char*);
-        if (gpu_vk_enabled()) { gpu_vk_shot(c, path); lucent::info("repl", "shot (VK) -> {}", path); }
-        else                   { gpu_native_shot(c, path); lucent::info("repl", "shot (SW) -> {}", path); }
+        // PICK BY WHICH RASTERIZER DREW THE FRAME, not by whether the VK backend is up. Those are
+        // different questions the moment a render path exists: under RenderPath::Psx the picture is
+        // software-rasterized into s_vram while gpu_vk_enabled() is still 1 process-wide, so the old
+        // test captured the VK image — a buffer nothing had drawn into — and reported it as the shot.
+        // GpuState::gpu_native_shot already routes on vk_path()/sw_path(); go through it.
+        void gpu_native_shot(Core*, const char*);
+        gpu_native_shot(c, path);
+        lucent::info("repl", "shot ({}) -> {}   [render path = {}]",
+                     c->game->gpu.sw_path() ? "SW s_vram" : "VK readback", path,
+                     render_path_name(c->rsub.mode.path()));
       }
     }
     else if (!strcmp(cmd, "shotregion")) {   // dump an ARBITRARY VRAM region, not just what is presented
@@ -276,16 +284,42 @@ long Repl::read(Core* c, uint32_t f) {
         c->game->psx_fallback = (!strcmp(st, "off") || !strcmp(st, "0")) ? 0 : 1;
       lucent::info("repl", "psx_fallback = {}", c->game->psx_fallback);
     }
-    // renderpsx [on|off] — render the FIELD via the PSX recomp path (vs the native world-coord path) with
-    // the SAME native game state, for a native-vs-PSX RENDER diff (must match at 1x/4:3/30fps). Diagnostic.
-    // A BARE `renderpsx` TOGGLES. It used to only print the flag, which silently turned every A/B script
-    // that relied on the bare form into a pc-vs-pc compare (kanban #26 was manufactured that way).
+    // renderpath [native|gte|psx] — THE render-path switch (docs/plans/render-path-tristate.md).
+    // native = PC producers + PC rasterizer + PC enhancements; gte = the guest's own GTE+OT on the PC
+    // rasterizer; psx = the guest's own GTE+OT on the PSX software rasterizer. Both guest paths are PURE
+    // (no fps60 / wide / ires / deferred). A BARE `renderpath` CYCLES native -> gte -> psx -> native; it
+    // does not merely print, because a bare form that only printed is what turned A/B scripts into
+    // pc-vs-pc compares before (kanban #26).
+    else if (!strcmp(cmd, "renderpath")) {
+      char st[16] = {0};
+      RenderPath p = c->rsub.mode.path();
+      if (sscanf(line, "%*s %15s", st) == 1) {
+        if (!render_path_parse(st, &p)) {
+          lucent::warn("repl", "renderpath: '{}' is not a path — valid: native | gte | psx (unchanged: {})",
+                       st, render_path_name(c->rsub.mode.path()));
+          continue;
+        }
+      } else {
+        p = (RenderPath)(((int)p + 1) % 3);   // bare form CYCLES
+      }
+      c->rsub.mode.setPath(p);
+      psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(p));   // so `cvars` reports the live value
+      lucent::info("repl", "render path = {} (enhancements {})", render_path_name(c->rsub.mode.path()),
+                   c->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
+    }
+    // renderpsx [on|off] — DEPRECATED ALIAS for `renderpath native|gte`. It no longer keeps the PC
+    // enhancements live (they are native-only now, USER 2026-08-11), so a script using it is measuring
+    // something different from what it measured before. Warns for that reason.
     else if (!strcmp(cmd, "renderpsx")) {
       char st[16] = {0};
       const bool have_arg = sscanf(line, "%*s %15s", st) == 1;
       const bool want = have_arg ? !(!strcmp(st, "off") || !strcmp(st, "0")) : !c->rsub.mode.psxRender();
-      c->rsub.mode.setPsxRender(want);
-      lucent::info("repl", "Render::psxRender = {}", c->rsub.mode.psxRender());
+      const RenderPath p = want ? RenderPath::Gte : RenderPath::Native;
+      c->rsub.mode.setPath(p);
+      psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(p));
+      lucent::warn("repl", "renderpsx is DEPRECATED -> `renderpath {}`. The guest render is now PURE "
+                           "(fps60/wide/ires are native-only), which is NOT what this flag used to mean.",
+                   render_path_name(p));
     }
     else if (!strcmp(cmd, "xadump")) { unsigned ch = 0, lba = 0, secs = 3; char path[200] = {0};
       if (sscanf(line, "%*s %u %u %199s %u", &ch, &lba, path, &secs) >= 3) repl_xadump(&c->game->disc, (uint8_t)ch, lba, path, secs ? (int)secs : 3); }

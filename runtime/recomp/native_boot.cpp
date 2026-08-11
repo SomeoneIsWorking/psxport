@@ -22,6 +22,7 @@
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
 #include "cfg.h"
+#include "config_vars.h"  // psx::config::render_path() — PSXPORT_RENDER_PATH through the CVar ladder
 #include <lucent/log.h>
                      // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
@@ -261,7 +262,13 @@ static void game_init(Core* c) {
 // the registry must already carry these entries before any guest code runs, or a call through an
 // unregistered thunk aborts on "unregistered" (found live: SBS core A crashed here before this line
 // was moved above the init calls).
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); c->hooks->registerOverrides(c->game); crt0_setup(c); game_init(c); }
+// dc_boot_init — the per-Core boot chokepoint EVERY port and harness funnels through (standalone
+// main(), SBS, dualcore, the selftests). The render path is installed HERE, not in one boot spine's
+// tail, because that is the mistake this replaces: it used to be resolved inside native_boot_run, so a
+// port that boots past it (spyro: main -> dc_boot_init -> bootInit hook) had the path stuck at its
+// default and had to re-parse the flag game-side to get it back. A knob read at Core setup belongs at
+// Core setup. Harnesses that own the path per leg (Sbs::Impl::applyMode) set it after this and win.
+void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); c->hooks->registerOverrides(c->game); render_path_install(c); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
@@ -587,29 +594,25 @@ static void game_main(Core* c) {
 // crt0; crt0's call to FUN_80050b08 lands in game_main.
 void native_boot_run(Core* c) {
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
-  // PSXPORT_ORACLE — THE PURE PSX REFERENCE (user 2026-07-08). recomp gameplay + UNENHANCED PSX render:
-  // the substrate's own GTE+OT+GP0 composited in painter order, with NO native enhancement able to touch
-  // the picture — no fps60 interpolation, no widescreen FOV/stretch, no native depth/obj_depth compositing,
-  // no RenderObserver tagging. THE trustworthy oracle for byte + picture comparison. Implies GATE +
-  // RENDER_PSX; the render-internal enhancement gates (painter order, wide_engine, observer) consult
-  // oracle_mode() so nothing can leak an enhancement into it. Forced here BEFORE the GATE/RENDER_PSX
-  // blocks so their log lines report the final state.
+  // PSXPORT_ORACLE — THE PURE PSX REFERENCE (user 2026-07-08). recomp gameplay + UNENHANCED guest
+  // render: the substrate's own GTE+OT+GP0, with NO native enhancement able to touch the picture. THE
+  // trustworthy oracle for byte + picture comparison. It is now expressed as the BUNDLE it always was:
+  // psx_fallback (gameplay on the substrate) + RenderPath::Gte (the picture from the guest's own
+  // geometry, purity carried by the path itself via RenderMode::enhancementsAllowed). Forced here
+  // BEFORE the GATE / RENDER_PATH blocks so their log lines report the final state.
   if (oracle_mode()) {
     c->game->setOracle();                        // per-Game: recomp gameplay + mods forced neutral
-    c->rsub.mode.setPsxRender(true);         // full PSX OT walk — not the native scene pass
-    lucent::info("native_boot", "PSXPORT_ORACLE=1 — pure recomp + pure PSX render (no fps60 / wide / native-depth / observer)");
+    c->rsub.mode.setPath(RenderPath::Gte);       // the guest's own GTE+OT — not the native scene pass
+    lucent::info("native_boot", "PSXPORT_ORACLE=1 — pure recomp + pure guest render (path=gte: no fps60 / wide / ires / native-depth / observer)");
   }
   // PSX-fallback gate (diagnostic): boot + frame-loop stay native; everything the loop calls runs as PSX
   // recomp (sync CD). PSXPORT_GATE nonzero turns it on; the REPL `gate on|off` toggles it live.
+  // ORTHOGONAL TO THE RENDER PATH: this is a GAMEPLAY switch. Do not fold it into one.
   { const char* g = cfg_str("PSXPORT_GATE");
     if (g && *g) c->game->psx_fallback = (atoi(g) != 0);
     lucent::info("native_boot", "psx_fallback={} ({})", c->game->psx_fallback,
                  c->game->psx_fallback ? "native boot+frameloop, PSX everything else (sync)" : "full native"); }
-  // RENDER-path compare switch: PSXPORT_RENDER_PSX renders the field via the PSX recomp path (native state).
-  // Per-Core now (Render::mPsxRender) — was the process-global g_render_psx.
-  { const char* r = cfg_str("PSXPORT_RENDER_PSX");
-    if (r && *r) c->rsub.mode.setPsxRender(atoi(r) != 0);
-    if (c->rsub.mode.psxRender()) lucent::info("native_boot", "Render::psxRender=1 (field render via PSX recomp path)"); }
+  render_path_install(c);   // native | gte | psx, from the CVar ladder + aliases (render_path.cpp)
   // DUAL-VIEW: render the SAME game state TWICE per frame — engine-native (left) + PSX-recomp (right) — and
   // composite side by side. Set at launch (PSXPORT_DUALVIEW=1) so the GPU allocates two geometry batches.
   { const char* r = cfg_str("PSXPORT_DUALVIEW");

@@ -83,7 +83,37 @@ int main(void) {
   check("native producer, primitives submitted: rebuild as always",
         present_rebuild_decision(false, false, 9, 0), PRESENT_REBUILD_GEOM);
 
-  // ---- 5. The counter must not wedge. -------------------------------------------------------------
+  // ---- 5. THE SOFTWARE RASTERIZER OWNS THE PICTURE (RenderPath::Psx, 2026-08-11). ------------------
+  // MEASURED FAILURE THIS ENCODES: spyro on PSXPORT_RENDER_PATH=psx presented 0.0% non-black / 1 colour
+  // at presents 700, 1200 and 2010, while a direct s_vram capture at present 700 of the SAME run was
+  // 81.5% non-black / 2117 colours. So the rasterizer was drawing and the PRESENT was throwing it away.
+  //
+  // Why the two inputs above cannot see it: on the software path there is never any VK geometry, so
+  // batchEmpty is permanently true, and every gpu_vk_dirty() call site is gated `if (vk_path())`, so the
+  // change counter never moves either. Both inputs are structurally pinned, and the decision was
+  // REUSE_LAST for the entire run — of a composite that had never been built once.
+  //
+  // The third input is therefore not a special case bolted on; it is the missing statement that this
+  // frame HAS a source. When the software rasterizer owns the picture, s_vram IS the frame at every
+  // present, and there is no "the guest did nothing this field" optimisation to model — that
+  // optimisation is about the VK composite.
+  check("software raster: empty batch, no VRAM write, no geometry — still the picture",
+        present_rebuild_decision(/*batchEmpty=*/true, /*guestVramIsPicture=*/true, /*vramWrites=*/7,
+                                 /*atLastBuild=*/7, /*swRasterIsPicture=*/true),
+        PRESENT_REBUILD_VRAM);
+  // It must not depend on preserveVramBackdrop: that flag answers "is the GUEST's VRAM the picture",
+  // and this path's picture is in s_vram because WE rasterized it there.
+  check("software raster: native-producer port flag, still the picture",
+        present_rebuild_decision(true, /*guestVramIsPicture=*/false, 0, 0, /*swRasterIsPicture=*/true),
+        PRESENT_REBUILD_VRAM);
+  // BOTH DIRECTIONS: with the new input false, every pre-existing decision is bit-identical. This is
+  // the assertion that stops the fix from becoming "always rebuild" on the paths that were working.
+  check("VK path unchanged: idle field still reuses",
+        present_rebuild_decision(true, true, 12, 12, /*swRasterIsPicture=*/false), PRESENT_REUSE_LAST);
+  check("VK path unchanged: geometry still dominates",
+        present_rebuild_decision(false, true, 5, 5, /*swRasterIsPicture=*/false), PRESENT_REBUILD_GEOM);
+
+  // ---- 6. The counter must not wedge. -------------------------------------------------------------
   // Compared with != rather than >, so a wrapped uint32 counter still reads as "changed" instead of
   // silently pinning the frame to REUSE_LAST forever (which is a black screen that never recovers).
   check("write counter wrapped past the recorded build value",

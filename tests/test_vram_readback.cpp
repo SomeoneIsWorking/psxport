@@ -33,7 +33,9 @@
 static Game* gam() {
   static Game g;
   static bool once = false;
-  if (!once) { once = true; g.gpu.soft_gpu = 1; }   // oracle/software path: no VK device in a test
+  // Software rasterizer: there is no VK device in a hermetic test. That is now a property of the
+  // Core's RENDER PATH (RenderPath::Psx) rather than a GpuState flag — see render_mode.h.
+  if (!once) { once = true; g.core.rsub.mode.setPath(RenderPath::Psx); }
   return &g;
 }
 

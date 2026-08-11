@@ -53,8 +53,13 @@ void Fps60::fold(uint32_t v) {
 // gte RTP tap (fps60 gate): fold this vertex's projected SXY into the frame fingerprint. RTPS(0x01) writes
 // one SXY (DR14); RTPT(0x30) writes three (DR12/13/14). This is the ONLY remaining GTE tap — it feeds the
 // rate detector so the tier knows the logic rate (Tomba2 = 30fps → one in-between per frame).
+// See the declaration in fps60.h: the user's toggle AND the render path must both allow it.
+bool Fps60::active() const {
+  return game && game->mods.fps60 && game->core.rsub.mode.enhancementsAllowed();
+}
+
 void Fps60::rtp(uint32_t op) {
-  if (!game->mods.fps60) return;
+  if (!active()) return;
   unsigned lo = (op == 0x30) ? 12 : 14;
   for (unsigned r = lo; r <= 14; r++) fold(GTE_ReadDR(r));
 }
@@ -105,7 +110,7 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   // TIER 1 capture: this is a REAL-frame call (mCamOverrideOn is false) — mirror it into mCamCur, the slot
   // that present_vk's end-of-frame swap rotates in lockstep with mRqCur/mRqPrev. Every sceneCam() call this
   // logic frame reads the same unchanged guest camera, so overwriting on every call is idempotent.
-  if (game->mods.fps60) {
+  if (active()) {
     for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamCur.R[i][j] = R[i][j]; mCamCur.T[i] = T[i]; }
     mCamCur.ofx = ofx; mCamCur.ofy = ofy; mCamCur.H = H;
   }
@@ -118,7 +123,7 @@ void Fps60::bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY) {
   scrollY = c->mem_r16s(t4 + 0x2au);
   // TIER 1 capture: this is a REAL-frame call — mirror it into mBgCur, rotated in lockstep with mRqCur/
   // mRqPrev / mCamCur/mCamPrev by present_vk's end-of-frame swap.
-  if (game->mods.fps60) { mBgCur.scrollX = scrollX; mBgCur.scrollY = scrollY; }
+  if (active()) { mBgCur.scrollX = scrollX; mBgCur.scrollY = scrollY; }
 }
 
 // Shortest-signed-path lerp for a value the guest wraps into [0, mod) every tick (ParallaxBg::step's
@@ -332,7 +337,7 @@ void Fps60::rq_capture(const RqItem* items, int n) {
 }
 
 void Fps60::frame_commit(Core* core) {
-  if (!game->mods.fps60) return;
+  if (!active()) return;
   uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&mRd, set_hash);
   mFence++;

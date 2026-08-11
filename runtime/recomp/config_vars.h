@@ -13,6 +13,7 @@
 // pre-migration one in tests/test_config_cvar.cpp — the compatibility gate is the point of the
 // exercise, not a formality.
 #include "config_var.h"
+#include "render_mode.h"   // RenderPath — the type cv_render_path resolves to
 
 namespace psx::config {
 
@@ -55,6 +56,11 @@ extern TextVar cv_settings_path;
 // It is the reason the environment audit exists. Its Value layer is the `fps60=` line in
 // psxport_settings.ini, written by the F1 overlay (runtime/recomp/mods.cpp).
 extern BoolVar cv_fps60;
+
+// PSXPORT_RENDER_PATH — the render path: native | gte | psx (docs/plans/render-path-tristate.md).
+// Read it through render_path() below, never by parsing the text at a call site.
+extern TextVar cv_render_path;
+RenderPath render_path();
 
 // ── declared for introspection only; resolved elsewhere ─────────────────────────────────────────
 // lucent reads these two for itself — it is BUILT with LUCENT_CHANNEL_ENV="PSXPORT_DEBUG" and

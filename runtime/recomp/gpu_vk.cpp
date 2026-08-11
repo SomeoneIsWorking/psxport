@@ -227,17 +227,26 @@ static VideoInputs video_inputs(const Game* game, int iresCap) {
   VideoInputs v;
   sink_size(&v.sinkW, &v.sinkH);
   v.nativeW  = game->gpu.s_disp_w;
-  v.aspect   = game->mods.aspect;
-  v.modsIres = game->mods.ires;
+  // THE ENHANCEMENT GATE, at the one place aspect + internal resolution enter the video plan. On a pure
+  // render path (RenderPath::Gte / Psx) the picture is 4:3 at 1x no matter what the user's saved settings
+  // say — USER 2026-08-11: the guest render stays pure, and fps60/wide/ires are native-only. Gating the
+  // READ, rather than mutating Mods the way Game::setOracle's forceNeutral() does, is what lets the path
+  // be toggled live at the REPL and give the user their own settings back on the way out.
+  const bool enh = game->core.rsub.mode.enhancementsAllowed();
+  v.aspect   = enh ? game->mods.aspect : ASPECT_4_3;
+  v.modsIres = enh ? game->mods.ires   : 1;
   v.iresCap  = iresCap;
   v.vramW    = VRAM_W;
   return v;
 }
 
 static int wide_native_w(const Game* game) { return video_wide_native_w(video_inputs(game, 1)); }
-// Per-core (was process-global): widescreen never touches the PSX oracle — and `oracle` is per-Game
-// now, so one process can hold a wide user core and a pure 4:3 oracle core (SBS honesty).
-int gpu_vk_wide_engine(Core* c)     { Game* g = c->game; return g->mods.aspect != ASPECT_4_3 && !g->oracle; }
+// Per-core: widescreen is a PC enhancement, so it exists only on a path that allows one. This used to
+// read `!g->oracle` — the oracle BUNDLE (substrate gameplay + pure picture) standing in for the precise
+// question, which meant `PSXPORT_RENDER_PATH=gte` alone (no ORACLE) would have widened a picture that is
+// supposed to be pure. RenderMode::enhancementsAllowed IS the question, and it is per-Core, so one
+// process still holds a wide user core beside a pure oracle core (SBS honesty).
+int gpu_vk_wide_engine(Core* c)     { return c->game->mods.aspect != ASPECT_4_3 && c->rsub.mode.enhancementsAllowed(); }
 int gpu_vk_wide_engine_ofx(Core* c) { return wide_native_w(c->game) / 2; }
 int gpu_vk_wide_engine_w(Core* c)   { return wide_native_w(c->game); }
 void gpu_vk_video_status(Core* c, int* native_w, int* ires, int* fbw, int* fbh, int* ww, int* wh, int* ires_cap) {
@@ -1111,9 +1120,12 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // A genuinely blank frame the guest MEANT to be blank clears its own VRAM, and that clear is a
   // VRAM write, so it still rebuilds.
   const bool guestVramIsPicture = game->core.cfg && game->core.cfg->preserveVramBackdrop;
+  // …and a THIRD source, on which both of the inputs above are structurally blind: the PSX software
+  // rasterizer (RenderPath::Psx) draws the frame into s_vram with no VK geometry and no dirty mark, so
+  // s_vram is the picture at every present. See the policy header for the measurement.
   const PresentRebuild decision =
       present_rebuild_decision(geom_batch_empty(*this), guestVramIsPicture,
-                               s_vram_writes, s_vram_writes_built);
+                               s_vram_writes, s_vram_writes_built, game->gpu.sw_path());
   // `debug presentskip`: the decision's running DISTRIBUTION with its denominator. This is the
   // measurement that sizes the change for a given port: REUSE_LAST is what afca817d bought (an idle
   // field costing nothing), REBUILD_VRAM is what this predicate restored (an upload-only screen that
@@ -1131,6 +1143,13 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
   // one. The composite below still runs, because the picture depends on live state the frame does not:
   // the fade ramps every field, and the window can be resized under a completely idle guest.
   if (decision != PRESENT_REUSE_LAST) {
+    // SOFTWARE RASTERIZER: the whole of s_vram is new, every present. The dirty list is the OTHER half
+    // of the same blindness the decision above just fixed — both are fed exclusively by
+    // `gpu_vk_dirty()`, and every one of its call sites in gpu_native.cpp is gated `if (vk_path())`. So
+    // on RenderPath::Psx the region list is empty, `nup` is 0, and a rebuild uploads NOTHING: measured
+    // 2026-08-11, fixing only the decision left the present still 0.0% non-black at 700/1200/2010. It
+    // is not a heuristic here — on this path we rasterized every pixel of that buffer ourselves.
+    if (game->gpu.sw_path()) s_dirty.markAll();
     // Only the regions the guest actually wrote (vram_dirty.h). Uploading all of VRAM here is what
     // erased the rasterized picture out of the buffer that was about to be displayed.
     VramDirtyRect up[VramDirty::CAP + 1];

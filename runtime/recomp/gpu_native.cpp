@@ -865,10 +865,13 @@ void GpuState::gp0_exec(Core* core) {
       // frame composites exactly as the PSX ordering table would. Render the field with and without this and
       // diff: the differing pixels are precisely where native per-pixel depth changes the picture (the
       // object-occlusion bug — terrain/atlas not obeying world-depth). Diagnostic only.
-      // PSXPORT_ORACLE forces this too: pure PSX painter order is exactly the unenhanced reference (no
-      // native per-pixel depth / bg-band split), so every prim composites in OT order like the real PSX.
+      // A PURE RENDER PATH forces this too: PSX painter order is exactly the unenhanced reference (no
+      // native per-pixel depth, no bg-band split), so every prim composites in OT order like the real PSX.
+      // Keyed on the render path rather than on `game->oracle` — the bundle used to stand in for the
+      // question, so `PSXPORT_RENDER_PATH=gte` without ORACLE would have kept native depth in a picture
+      // that is meant to be pure.
       { static int pm=-2; if(pm==-2){ const char* e=cfg_str("PSXPORT_PAINTER"); pm=e?atoi(e):0; }
-        if (pm || core->game->oracle) { is3d = 0; bg = 0; } }
+        if (pm || !core->rsub.mode.enhancementsAllowed()) { is3d = 0; bg = 0; } }
       if (use_rq) {
         // Engine owns ordering: hand the prim to the render queue tagged with its layer + depth mode.
         int layer = is3d ? RQ_WORLD : (bg ? RQ_BACKGROUND : RQ_HUD);
@@ -932,7 +935,7 @@ void GpuState::gp0_exec(Core* core) {
     }
     prov_begin(op, textured ? 1 : 0, semi, v[0].r, v[0].g, v[0].b,
                v[0].x + s_off_x, v[0].y + s_off_y, v[0].u, v[0].v);
-    if (s_oracle_prim_log && soft_gpu) {
+    if (s_oracle_prim_log && soft_gpu()) {
       int xmn=v[0].x,xmx=v[0].x,ymn=v[0].y,ymx=v[0].y;
       for (int i=1;i<nv;i++){ if(v[i].x<xmn)xmn=v[i].x; if(v[i].x>xmx)xmx=v[i].x; if(v[i].y<ymn)ymn=v[i].y; if(v[i].y>ymx)ymx=v[i].y; }
       lucent::info("oraprim", "POLY op={:02X} nv={} tex={} semi={} bbox=({},{})-({},{}) col=({},{},{}) tp=({},{}) clut=({},{})", op, nv, textured?1:0, semi, xmn+s_off_x, ymn+s_off_y, xmx+s_off_x, ymx+s_off_y, v[0].r,v[0].g,v[0].b, s_tp_x, s_tp_y, s_clut_x, s_clut_y);
@@ -986,7 +989,7 @@ void GpuState::gp0_exec(Core* core) {
     // bit0=1 -> raw texel; bit0=0 -> modulate by command color (beetle sprite decode table:
     // 0x64/0x66 = TM1 modulate, 0x65/0x67 = TM0 raw). Modulating unconditionally once wrongly
     // tinted raw 0x65 sprites (turned a blue item green).
-    { if (s_oracle_prim_log && soft_gpu)
+    { if (s_oracle_prim_log && soft_gpu())
         lucent::info("oraprim", "SPR  op={:02X} tex={} semi={} at=({},{}) {}x{} col=({},{},{}) uv=({},{}) tp=({},{}) clut=({},{})", op, textured?1:0, semi, x+s_off_x, y+s_off_y, w, h, cr, cg, cb, u0, v0, s_tp_x, s_tp_y, s_clut_x, s_clut_y); }
     if (sw_path()) raster_sprite(op, x, y, u0, v0, w, h, cr, cg, cb, textured, semi);  // VK owns it (tee'd below)
     // VK backend (M5): tee rects/sprites as two triangles (opaque or semi; mode 3 = untextured solid).
@@ -1080,7 +1083,7 @@ void GpuState::gp0_exec(Core* core) {
     // s_tex, so a semi-transparent prim over a filled region sampled stale pixels. Same shape as the
     // invisible-puddle-water bug that put the mirror on the native upload.
     if (vk_path()) gpu_vk_dirty(core, x, y, w, h);
-    { if (s_oracle_prim_log && soft_gpu)
+    { if (s_oracle_prim_log && soft_gpu())
         lucent::info("oraprim", "FILL at=({},{}) {}x{} col=({},{},{})", x, y, w, h, cr, cg, cb); }
     // WIDESCREEN BACKDROP FILL (#52): FillRect ignores clip/offset by design (PSX hardware behavior,
     // see the comment above) and writes only the native 320x240 VRAM rect — it has no notion of the
@@ -1514,6 +1517,11 @@ void GpuState::gpu_gp1(uint32_t w) {
 // out to the same 4:3 screen area, so mapping disp_w×disp_h into a 4:3 rect reproduces the correct
 // pixel aspect and keeps 2D art / FMVs un-stretched regardless of window size. (This is the display
 // scaler, independent of the — currently blocked — widescreen GEOMETRY tier; we do not widen here.)
+// GpuState::soft_gpu — WHICH RASTERIZER, read off this Game's Core render path. Out-of-line because
+// gpu_native_internal.h cannot see Game/Core's definitions. `game` is null only before Game() wires it,
+// which is before any GP0 word exists; treat that as the shipping VK path rather than crashing.
+bool GpuState::soft_gpu() const { return game && game->core.rsub.mode.softGpu(); }
+
 #ifdef PSXPORT_SDL
 // The legacy SDL_Renderer software-present window is RETIRED: the SDL_GPU renderer (gpu_vk.cpp) is THE
 // present path (gpu_vk_enabled() is always 1), windowed or headless. blit_src forwards the display region

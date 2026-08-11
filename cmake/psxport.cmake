@@ -121,6 +121,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/override_registry.cpp
   ${PSXPORT_ROOT}/runtime/recomp/scheduler.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_boot.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/render_path.cpp   # render_path_install — the render-path tri-state, one parser for every boot spine
   ${PSXPORT_ROOT}/runtime/recomp/dualview_snapshot.cpp
   ${PSXPORT_ROOT}/runtime/recomp/proj_prim.cpp
   ${PSXPORT_ROOT}/runtime/recomp/pgxp.cpp

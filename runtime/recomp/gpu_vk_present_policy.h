@@ -42,10 +42,23 @@ enum PresentRebuild {
 // vramWrites: a monotonically increasing count of guest CPU->VRAM write operations (the gpu_vk_dirty()
 //   chokepoint). vramWritesAtLastBuild: its value when the composite currently on screen was built.
 //   Compared with != rather than > so wraparound cannot wedge the decision into "never rebuild".
+// swRasterIsPicture: GpuState::sw_path() — the PSX SOFTWARE rasterizer drew this frame into s_vram
+//   (RenderPath::Psx). Then s_vram IS the picture at EVERY present and there is nothing to detect: the
+//   two inputs above are both structurally blind on that path. `batchEmpty` is permanently true (the
+//   software path never tees a primitive to VK) and every gpu_vk_dirty() call site is gated
+//   `if (vk_path())`, so the change counter never moves. MEASURED 2026-08-11: spyro at
+//   PSXPORT_RENDER_PATH=psx presented 0.0% non-black / 1 colour at presents 700/1200/2010 while a
+//   direct s_vram capture from the same run was 81.5% non-black / 2117 colours — the rasterizer was
+//   drawing and the present was discarding it, for the whole run, because the decision was REUSE_LAST
+//   for a composite that had never been built. Checked FIRST, and it does not consult
+//   guestVramIsPicture: that flag answers "is the GUEST's VRAM the picture", while here the picture is
+//   in s_vram because WE rasterized it there.
 static inline PresentRebuild present_rebuild_decision(bool batchEmpty,
                                                       bool guestVramIsPicture,
                                                       uint32_t vramWrites,
-                                                      uint32_t vramWritesAtLastBuild) {
+                                                      uint32_t vramWritesAtLastBuild,
+                                                      bool swRasterIsPicture = false) {
+  if (swRasterIsPicture) return PRESENT_REBUILD_VRAM;
   if (!batchEmpty) return PRESENT_REBUILD_GEOM;
   if (guestVramIsPicture && vramWrites != vramWritesAtLastBuild) return PRESENT_REBUILD_VRAM;
   return PRESENT_REUSE_LAST;

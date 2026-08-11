@@ -74,7 +74,15 @@ typedef struct { uint64_t last_hash; int held; int period; int votes[9]; long ch
 
 // ---- Fps60 — the 60fps tier's per-instance interpolation state + methods ------------------------------
 struct Fps60 {
-  Game* game = nullptr;   // owner back-pointer (set in Game()) — gates via game->mods.fps60
+  Game* game = nullptr;   // owner back-pointer (set in Game()) — gates via active()
+
+  // IS THE TIER LIVE? Two conditions, and both are real: the user asked for it (Mods::fps60) AND this
+  // Core's render path allows a PC enhancement to touch the picture (RenderMode::enhancementsAllowed —
+  // native only, USER 2026-08-11 "fps60/wide/native-depth is supposed to be native-only"). Every gate in
+  // this class and its callers goes through here, so the two can never be tested in only one of the
+  // places that matter — which is how an enhancement leaks into a reference picture. Body in fps60.cpp
+  // (needs Game/Core).
+  bool active() const;
   // ---- logic-rate detector (kept) --------------------------------------------------------------------
   uint64_t mFrameHash = 1469598103934665603ull;   // per-frame projected-geometry fingerprint (rate input)
   long     mFrameGeom = 0;                          // #verts folded this frame (0 => idle frame)

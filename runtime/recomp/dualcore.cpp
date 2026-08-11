@@ -92,7 +92,7 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
   g->diff_mode = 1;                       // skip the final VK present; ov_render_frame still runs + writes
   load_exe(exe, &g->core);
   dc_boot_init(&g->core);
-  g->core.rsub.mode.setPsxRender(render_psx != 0);   // per-core render path (0 = native walk, 1 = PSX recomp)
+  g->core.rsub.mode.setPath(render_psx ? RenderPath::Gte : RenderPath::Native);   // per-core render path
 
   Nav nv; uint32_t f = 0; const uint32_t MAXF = 6000; bool started = false; int k = 0;
   lucent::info("dc", "--- {} (psxRender={}) ---", tag, render_psx);

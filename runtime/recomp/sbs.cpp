@@ -653,13 +653,17 @@ void Sbs::Impl::applyMode(Game* g, int which) {
   // (A native render vs B PSX render) DISAPPEARS with this on, the writer lives on the native
   // render side. If it PERSISTS, native render is not the culprit. Cheap A/B one-liner.
   static const int forcePsxRender = []{ const char* e = getenv("PSXPORT_SBS_FORCE_PSX_RENDER"); return e && *e && strcmp(e,"0")!=0 ? 1 : 0; }();
-  if (forcePsxRender) { r.mode.setPsxRender(true); return; }
+  if (forcePsxRender) { r.mode.setPath(RenderPath::Gte); return; }
   switch (mMode) {
-    case M_RENDER:   r.mode.setPsxRender(which != 0);    break;   // A native render (0), B PSX render (1)
-    case M_GAMEPLAY: r.mode.setPsxRender(true);          break;   // PSX render on BOTH (isolate gameplay)
-    case M_FULL:     r.mode.setPsxRender(which != 0);    break;   // A native render, B PSX render
-    case M_ORACLE:   r.mode.setPsxRender(false);         break;   // A native; B goes through use_interp+soft_gpu
-    case M_SKIP:     r.mode.setPsxRender(which != 0);    break;   // A = real ./run.sh config, B PSX
+    // A = native path, B = the guest's own GTE+OT on the PC rasterizer (RenderPath::Gte). B is now
+    // ENHANCEMENT-FREE by construction (RenderMode::enhancementsAllowed) — the oracle leg no longer
+    // depends on the harness having remembered to neutralise mods.
+    case M_RENDER:   r.mode.setPath(which ? RenderPath::Gte : RenderPath::Native); break;
+    case M_GAMEPLAY: r.mode.setPath(RenderPath::Gte);                              break;  // both legs guest-render (isolate gameplay)
+    case M_FULL:     r.mode.setPath(which ? RenderPath::Gte : RenderPath::Native); break;
+    // B is the SOFTWARE-rasterized reference: use_interp + RenderPath::Psx, set at boot below.
+    case M_ORACLE:   if (!which) r.mode.setPath(RenderPath::Native);               break;
+    case M_SKIP:     r.mode.setPath(which ? RenderPath::Gte : RenderPath::Native); break;  // A = real ./run.sh config
   }
 }
 
@@ -2019,7 +2023,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   mA->spu.writeLog = spu_new_log();
   mB->spu.writeLog = spu_new_log();
   lucent::info("sbs", "core A pc_faithful (hard-wired): native faithful path, byte-exact strict — B recomp is the oracle");
-  if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->gpu.soft_gpu = 1; }
+  if (mMode == M_ORACLE) { mB->core.use_interp = 1; mB->core.rsub.mode.setPath(RenderPath::Psx); }
   load_exe(exePath, &mA->core); dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core); dc_boot_init(&mB->core);
   lucent::info("sbs", "core-map A={} B={} (use to attribute [wwatch] lines)", (void*)&mA->core, (void*)&mB->core);

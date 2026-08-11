@@ -47,14 +47,18 @@ static inline VramRect vram_xfer_rect(uint32_t coord, uint32_t size) {
 struct GpuState {
   Game* game = nullptr;   // set by Game(); blit_src uses &game->core to reach the gpu_vk present wrapper
 
-  // ORACLE soft-GPU (docs/oracle.md Phase 2): when set, this GpuState rasterizes its GP0 stream into
-  // s_vram in SOFTWARE (the existing tri()/raster_sprite()/raster_line() path) and NEVER touches the VK
-  // backend — even though the native port Core keeps the VK backend up (gpu_vk_enabled()==1 is global).
-  // The diff harness sets it on the interpreter oracle Core so we get the REAL PSX cutscene framebuffer
-  // (s_vram) to dump/diff, fully decoupled from the native render path. Default 0 = the shipping VK path.
-  int soft_gpu = 0;
-  inline bool vk_path() const { extern int gpu_vk_enabled(void); return gpu_vk_enabled() && !soft_gpu; }
-  inline bool sw_path() const { extern int gpu_vk_enabled(void); return soft_gpu || !gpu_vk_enabled(); }
+  // WHICH RASTERIZER — derived from this Game's Core RENDER PATH, never stored here. RenderPath::Psx
+  // rasterizes the GP0 stream into s_vram in SOFTWARE (the existing tri()/raster_sprite()/raster_line()
+  // path) and NEVER touches the VK backend, even though the process keeps the VK backend up
+  // (gpu_vk_enabled()==1 is global); every other path tees prims to VK.
+  //
+  // This WAS `int soft_gpu`, a GpuState field only the SBS oracle leg and the selftest could set. It
+  // moved because it is one half of an answer whose other half (which geometry) lived somewhere else —
+  // two independent switches that must agree, i.e. a pair that could be set to a black screen. See
+  // render_mode.h and tests/test_render_path.cpp.
+  bool soft_gpu() const;   // = game->core.rsub.mode.softGpu()  (out-of-line: needs Game/Core)
+  inline bool vk_path() const { extern int gpu_vk_enabled(void); return gpu_vk_enabled() && !soft_gpu(); }
+  inline bool sw_path() const { extern int gpu_vk_enabled(void); return soft_gpu() || !gpu_vk_enabled(); }
 
   // Backdrop-vs-HUD / gameplay-frame discrimination (read by the gpu_vk present path via Core).
   int s_seen3d = 0;       // has any GTE-projected (3D) prim been teed yet this frame? (else 2D backdrop band)

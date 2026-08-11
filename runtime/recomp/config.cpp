@@ -248,6 +248,29 @@ TextVar cv_settings_path("PSXPORT_SETTINGS", "psxport_settings.ini",
 
 BoolVar cv_fps60("PSXPORT_FPS60", false, "interpolated-60fps tier (Value layer = fps60= in the settings file)");
 
+// PSXPORT_RENDER_PATH — the RENDER PATH tri-state: native | gte | psx
+// (docs/plans/render-path-tristate.md). A TextVar rather than an int so the settings file and the REPL
+// both read as the thing they select, and so a typo is REJECTED by render_path_parse instead of
+// resolving to a plausible number. Persistable: the F1 overlay writes the Value layer, like fps60.
+TextVar cv_render_path("PSXPORT_RENDER_PATH", "native",
+                       "render path: native (PC producers) | gte (guest GTE+OT on the PC rasterizer) | "
+                       "psx (guest GTE+OT on the PSX software rasterizer). The two guest paths are PURE — "
+                       "fps60/wide/ires/deferred are native-only.");
+
+// render_path() — the resolved path, with a NAMED refusal rather than a silent default. A value that
+// parses to nothing is a knob that did nothing, and the CVar audit's whole purpose is that such a knob
+// says so out loud (docs/config.md).
+RenderPath render_path() {
+  const std::string s = cv_render_path.get();
+  RenderPath p = RenderPath::Native;
+  if (!render_path_parse(s.c_str(), &p)) {
+    lucent::warn("cfg", "PSXPORT_RENDER_PATH='{}' matched NO render path — falling back to 'native'. "
+                        "Valid: native | gte | psx.", s);
+    return RenderPath::Native;
+  }
+  return p;
+}
+
 TextVar cv_debug_channels("PSXPORT_DEBUG", "", "enabled diagnostic channels — READ BY LUCENT, declared here for visibility",
                           /*persistable=*/false, /*external=*/true);
 TextVar cv_log_file("PSXPORT_LOG_FILE", "", "log output path — READ BY LUCENT, declared here for visibility",
