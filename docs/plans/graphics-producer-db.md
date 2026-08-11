@@ -327,25 +327,38 @@ tool and `docs/producers/` are game-side and need no framework claim.
 >   symptom of lookups landing in a saturated table rather than an independent defect. Do not tune the
 >   attribution until the table stops dropping 2.68M spans, or you are tuning against noise.
 
-> **THE LARGEST UNDECLARED BLOCK IS `Render::perObjFlush`, AND IT HAS NO ESTABLISHED GUEST ADDRESS
-> (2026-08-11).** After scoping the type-0x20 family (11 rows) and terrain, the native leg still reports
-> ~918k undeclared prims in the WORLD layer on a 500-frame replay. They come from
-> `Tomba2Engine/game/render/render_walk.cpp`'s `Render::perObjFlush` -> `projComposeObject` -> `gt3gt4`,
-> the general per-object geometry dispatch. `gt3gt4` itself is a SHARED submitter and must not open a
-> scope (same rule as the mesh writer: it would shadow every caller), so the scope belongs on the walker.
+> **THE WORLD LAYER IS NOW KEYED, AND THE GUEST CHAIN BEHIND IT DOES NOT RUN (2026-08-12).** The
+> largest undeclared block was `Render::perObjFlush`, the PICTURE half of guest `FUN_8003CDD8`
+> (~846k prims per 500-frame field replay). It is now scoped, keyed by the **per-mode emitter** the mode
+> routes to — never by `FUN_8003CDD8`, which is a shared caller whose key would collapse all eleven
+> emitters into one meaningless row. Result: attributed **69,276 -> 484,940** prims, world-undeclared
+> **846,223 -> 430,559**, new dominant row `0x80146478` at 415,664. `Tomba2Engine` commit 9c94008.
 >
-> **But `perObjFlush` is not keyable yet.** `tools/codemap.py --addr` records no guest owner for it, and it
-> is a REBUILD rather than a transcription — the file header notes the old `gen_func_8003F698` per-mode
-> dispatcher it replaced. A nearby comment reading "Render::perObjFlush/func_80051464" is NOT an address
-> claim: `0x80051464` is `NodeXform::propagateAxis`, and the comment means both functions read the same
-> `node+0xC0` command array. Do not key a scope on it.
+> **The finding that matters beyond this row: the guest per-object dispatch chain
+> (`FUN_8003CCA4` -> `FUN_8003CDD8` -> `FUN_8003F698`) DOES NOT EXECUTE on the leg where the native
+> census measures** — 0 `cmdListDispatch` calls in a 200-frame field replay against ~846k world prims
+> drawn there. Two consequences for this plan:
 >
-> Two options, and the choice is deliberately left open rather than made hastily:
-> (a) RE which guest fn `perObjFlush` corresponds to and key on that — best, because it puts both legs in
-> one row like every other producer; (b) give it a `ProducerKey::native(iid)` row, the id space that exists
-> exactly for a producer with no guest counterpart — honest and immediately useful (918k prims stop being
-> anonymous), but it permanently states "no guest counterpart" about a function that probably has one, and
-> that is a claim worth being sure of. Prefer (a); use (b) only with the uncertainty written into the row.
+> 1. **The world layer has no runtime guest side to compare against.** Its rows can only ever carry a
+>    native count; `primsGuest` stays 0 not because attribution failed but because nothing ran. Any
+>    coverage percentage over these rows must say so, or it reads as a two-leg comparison that isn't one.
+> 2. **A design where the guest code records something for a native producer to read is dead here**, and
+>    it fails silently. The first implementation did exactly that (sound on ordering grounds —
+>    `cmdListDispatch` runs earlier in the same logic frame, which is precisely why `nativeObjDrawn`
+>    could NOT be a registry and this could). It was caught only because the miss counter printed its
+>    denominator: `key MISS #1 ... hits so far 0`. The first version of that counter had no print at
+>    all — the diagnostic-that-can-print-nothing failure, one revision away from reporting a clean
+>    result over a mechanism that never fired.
+>
+> The key is therefore resolved from guest DATA (the same `MODE_FORCE`/`MODE_BYTE`/`MODE_TABLE` reads
+> `perModeDispatch` makes) and is a **counterfactual**: the emitter the guest WOULD route to. That is
+> correct row identity, and it exposes rather than hides a real asymmetry — the guest routes to one of
+> eleven per-mode emitters while the native pass draws every geomblk as generic GT3/GT4, so a row keyed
+> to a non-generic emitter quantifies the generic rebuild of a special-cased guest renderer. One input
+> (`flag & 1`, which also forces generic) belongs to a function that never runs on this leg and so is
+> unobservable in principle; it is passed as 0 and named at the call site.
+>
+> **Still undeclared, not claimed as done:** world 430,559 (a second producer) + background 323,163.
 
 3. **Native-leg feed.** `RenderQueue::ProducerScope` + the interned producer-id table; count pushes
    in `emitOrQueue`/`push2dQuad`/`drawWorldQuad`. RED test: pushes inside a scope are attributed,
