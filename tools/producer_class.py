@@ -313,6 +313,7 @@ class Verdict:
     own_lighting_ops: list = field(default_factory=list)
     subtree_lighting_ops: list = field(default_factory=list)
     blocked_on: list = field(default_factory=list)     # SharedDep, each = ONE amortised judgement
+    resolved_deps: list = field(default_factory=list)  # shared deps whose native owner ALREADY exists
     invalid_gte_ops: dict = field(default_factory=dict)
     own_stores: int = 0
     subtree_stores: int = 0
@@ -325,6 +326,7 @@ class Verdict:
     def to_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items()}
         d['blocked_on'] = [b.__dict__ for b in self.blocked_on]
+        d['resolved_deps'] = [b.__dict__ for b in self.resolved_deps]
         d['unresolved_count'] = len(self.unresolved)
         d['unresolved'] = self.unresolved[:40]
         d['missing_callees'] = self.missing_callees[:40]
@@ -422,8 +424,17 @@ def classify(corpus: Corpus, root: str, frontier: set = frozenset(),
         for k, n in rec['ops'].items():
             v.own_op_hist[k] = v.own_op_hist.get(k, 0) + n
         v.own_stores += rec['stores']
-    v.blocked_on = [cut[a] for a in sorted(cut) if any(
-        k not in GEOMETRY_OPS and k != 'MVMVA.rot' for k in cut[a].ops)]
+    # A dep that carries lighting ops is a judgement call ONLY IF IT IS NOT ALREADY PORTED. A frontier
+    # dep is one whose native owner exists, so the judgement was already made and reporting it as
+    # outstanding overstates the gate — measured: 0x80085480 (Math::rotmat) and 0x80027A4C
+    # (Render::fxSpriteRender) are both native, so a 4-dep list was really 2.
+    def _has_lighting(d: SharedDep) -> bool:
+        return any(k not in GEOMETRY_OPS and k != 'MVMVA.rot' for k in d.ops)
+
+    v.blocked_on = [cut[a] for a in sorted(cut)
+                    if _has_lighting(cut[a]) and cut[a].why != 'frontier']
+    v.resolved_deps = [cut[a] for a in sorted(cut)
+                       if _has_lighting(cut[a]) and cut[a].why == 'frontier']
 
     def _lighting(hist: dict) -> list:
         return sorted(k for k in hist if k not in GEOMETRY_OPS and k != 'MVMVA.rot')
@@ -506,12 +517,62 @@ def _load_addr_file(path: str) -> list:
     return out
 
 
+# STRICT: one bare 8-hex address per line, optional `# comment`. Nothing else is accepted.
+FRONTIER_LINE_RE = re.compile(r'^(?:0[xX])?([0-9A-Fa-f]{8})$')
+
+
+def load_frontier(path: str) -> set:
+    """Addresses whose native owner ALREADY EXISTS. Strict format, and it refuses to guess.
+
+    WHY THIS IS STRICT, HAVING BEEN WRONG IN BOTH DIRECTIONS.
+      * Hand-typed, it reported two already-ported deps (0x80085480 Math::rotmat, 0x80027A4C
+        Render::fxSpriteRender) as outstanding blockers — a 3x OVERstatement of the gate.
+      * Then, scraping a game's codemap markdown for the first hex token per line, it swallowed
+        0x80027768 — which appears there only in the address column of a `todo` port-map row, i.e. an
+        UNPORTED step — and reported it as already ported. That UNDERstates the gate, which is the more
+        dangerous direction: it retires a judgement call nobody made.
+    A rich document cannot be scraped for ownership, because "mentioned" and "owned" look identical in
+    text. So this accepts only bare addresses, and the GAME is responsible for generating them from its
+    authoritative ownership index (Tomba!2: `tools/codemap.py --addr <a>`, which answers OWNED vs NO
+    NATIVE OWNER and declares its own blind spots). Keeping that resolution on the game side is also
+    what keeps this tool game-agnostic.
+    """
+    out = set()
+    lines = 0
+    bad: list = []
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            raw = line.split('#')[0].strip()
+            if not raw:
+                continue
+            lines += 1
+            m = FRONTIER_LINE_RE.match(raw)
+            if m:
+                out.add(m.group(1).upper())
+            else:
+                bad.append((n, raw[:60]))
+    if bad:
+        detail = '; '.join(f"line {n}: {t!r}" for n, t in bad[:5])
+        raise abi.AbiParseError(
+            f"--frontier {path}: {len(bad)} of {lines} non-empty line(s) are not a bare 8-hex address "
+            f"({detail}). This file must list ONLY addresses whose native owner exists. It is NOT a "
+            f"codemap or a port-map: scraping one of those cannot tell 'owned' from 'mentioned in a "
+            f"todo row', and getting that wrong retires a judgement call nobody made. Generate it from "
+            f"the game's ownership index instead.")
+    if not out:
+        raise abi.AbiParseError(
+            f"--frontier {path}: read {lines} non-empty line(s) and extracted ZERO addresses. An empty "
+            f"frontier reports every shared dependency as OUTSTANDING even when it is already ported, "
+            f"so this refuses rather than silently overstating the work.")
+    return out
+
+
 def cmd_classify(args) -> int:
     corpus = index_generated(args.repo)
     addrs = list(args.addrs)
     if args.file:
         addrs += _load_addr_file(args.file)
-    frontier = set(_norm(a) for a in _load_addr_file(args.frontier)) if args.frontier else set()
+    frontier = load_frontier(args.frontier) if args.frontier else set()
     if not addrs:
         print("no addresses given (pass hex addresses or --file) — NOTHING WAS CLASSIFIED",
               file=sys.stderr)
@@ -536,6 +597,9 @@ def cmd_classify(args) -> int:
             print(f"  blocked on {len(v.blocked_on)} SHARED dep(s) — one judgement each, amortised:")
             for b in v.blocked_on:
                 print(f"      0x{b.addr}  fan-in {b.fanin} call sites ({b.why})  ops: {_hist(b.ops)}")
+        if v.resolved_deps:
+            print(f"  shared dep(s) ALREADY PORTED (judgement made, not outstanding): "
+                  f"{', '.join('0x' + b.addr for b in v.resolved_deps)}")
         if v.invalid_gte_ops:
             print(f"  INVALID gte_op words (data-as-code?): {_hist(v.invalid_gte_ops)}")
         print(f"  walked:  {v.nodes_walked} fn, depth {v.max_depth}, "
@@ -567,13 +631,33 @@ def cmd_classify(args) -> int:
         print(f"#   {label:24s} {parts}")
         print(f"#   {'':24s} => MECHANICALLY DRAFTABLE: {draftable}/{len(verdicts)}")
     allblk: dict = {}
+    allres: dict = {}
     for v in verdicts:
         for b in v.blocked_on:
             allblk[b.addr] = b
+        for b in v.resolved_deps:
+            allres[b.addr] = b
+    if allres:
+        print(f"#   shared dependencies ALREADY PORTED (were counted as blockers before --frontier): "
+              f"{len(allres)}")
+        for a in sorted(allres):
+            print(f"#      0x{a}  fan-in {allres[a].fanin}  ops: {_hist(allres[a].ops)}")
     if allblk:
         print(f"#   DISTINCT shared dependencies needing judgement ONCE: {len(allblk)}")
         for a in sorted(allblk):
             print(f"#      0x{a}  fan-in {allblk[a].fanin}  ops: {_hist(allblk[a].ops)}")
+        # THE BLIND SPOT THIS TOOL HAD, made loud. Without a frontier the blocked_on list is a list of
+        # GUEST functions carrying lighting ops — it says nothing about whether the port already
+        # exists. Reported as outstanding work it overstates the gate: measured, 2 of 3 "outstanding"
+        # deps were already native (Math::rotmat, Render::fxSpriteRender), a 3x overstatement.
+        if not frontier:
+            print(f"#   WARNING: no --frontier given, so the {len(allblk)} dep(s) above are NOT checked "
+                  f"against what is already ported — treat that list as UNVERIFIED, not as the "
+                  f"remaining work. Pass the game's ownership index (Tomba!2: --frontier "
+                  f"docs/code-map.md, regenerate with tools/codemap.py first).")
+        else:
+            print(f"#   (checked against a {len(frontier)}-address frontier: these are the deps that "
+                  f"remain UNOWNED)")
     if args.json:
         with open(args.json, 'w') as f:
             json.dump({'corpus_bodies': len(corpus.bodies), 'corpus_files': corpus.files,
