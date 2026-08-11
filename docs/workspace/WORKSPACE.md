@@ -92,6 +92,8 @@ cross-studio SDK ceiling) plus `docs/plans/game-seam-redesign.md`.
 |---|---|---|
 | `psxport/` | the framework, and the ONLY framework | exists |
 | `spyro/` | the Insomniac lineage — Spyro 1, 2, 3 as `titles/<t>/` with shared `game/` | exists; converts to multi-title WHEN Spyro 2 work actually starts |
+| `spider1/` | the Neversoft lineage — Spider-Man (`SLUS_008.75`) + **Spider-Man 2: Enter Electro** (USER, 2026-08-12: "can be part of spider-man") | exists; converts to multi-title WHEN Enter Electro work actually starts |
+| `Tomba2Engine/` | the Whoopee Camp lineage — Tomba! 2, and **Tomba! 1** is the candidate second title | exists; Tomba! 1's placement is UNMEASURED — see below |
 | `crash/` | Crash 1, 2, 3 (Naughty Dog, GOOL VM) | when Crash work starts, not before |
 | `ctr/`, `crashbash/` | one title each — measured as their own engines | when that work starts, not before |
 
@@ -110,7 +112,36 @@ cross-studio SDK ceiling) plus `docs/plans/game-seam-redesign.md`.
 - **Not 8 sibling per-title repos.** Spyro 2↔3 measure 64.2% — one codebase — so per-title repos would
   duplicate exactly the code most worth sharing.
 
-**Spyro 1 is in the Insomniac repo by PREFERENCE, not by measurement.** It shares the asset pipeline and
+**MEASURED 2026-08-12 — and the two new titles came out on OPPOSITE sides of the line.** Run before
+shaping either repo's shared `game/`, because assuming was exactly what the Spyro measurement punished.
+`tools/exe_similarity.py`, boot executables extracted with `discdump` into gitignored `scratch/exes/`:
+
+|  | TOMBA1 | TOMBA2 | SPIDER1 | SPIDER2 |
+|---|---|---|---|---|
+| **TOMBA1** | · | 18.8% | 7.3% | 6.9% |
+| **TOMBA2** | 18.8% | · | 11.8% | 10.5% |
+| **SPIDER1** | 7.3% | 11.8% | · | **74.2%** |
+| **SPIDER2** | 6.9% | 10.5% | **74.2%** | · |
+
+- **Spider-Man 1 ↔ 2: 74.2% — ONE CODEBASE, and the strongest pair measured in this workspace** (above
+  even Spyro 2↔3's 64.2%). The USER's call to fold Enter Electro into `spider1/` is confirmed by
+  measurement, not merely permitted: there is more to share here than anywhere else, so the multi-title
+  split matters most in this repo.
+- **Tomba! 1 ↔ Tomba! 2: 18.8% — NOT one codebase.** Above the 12.5% cross-studio SDK ceiling, so the
+  two do share something real, but nowhere near a shared engine. This is the Spyro-1 situation with a
+  little more overlap: expect FORMAT and tooling knowledge to transfer and expect native engine classes
+  NOT to. A shared `game/` between them would mostly hold code one title cannot use.
+- The cross-lineage cells (Tomba×Spider, 6.9–11.8%) sit at or below the SDK ceiling, which is the
+  NEGATIVE CONTROL working — it is what makes the 74.2% and 18.8% readable rather than two bare numbers.
+
+**One caveat, stated because it is the kind that inverts a conclusion.** Tomba! 2's engine is `MAIN.EXE`;
+its `SCUS_944.54` is a small loader. Comparing Tomba! 1's single exe against that LOADER instead gives
+47.6% — far higher — but the metric's denominator is the smaller shingle set, and the loader is precisely
+where SDK init and boot boilerplate live, so a high score there measures shared Sony code, not a shared
+engine. `TOMBA2_MAIN ↔ TOMBA2_SCUS` is 76.8% *within the same game*, which shows how much of that overlap
+is generic. The engine-to-engine number, 18.8%, is the one that decides repo shape.
+
+**Spyro 1 is in the Insomniac repo by PREFERENCE, not by measurement.****Spyro 1 is in the Insomniac repo by PREFERENCE, not by measurement.** It shares the asset pipeline and
 tooling with 2/3 and **~no code**: 10-11% against a 12.5% SDK ceiling means Insomniac rewrote the engine
 between 1 and 2. Do not expect its native classes to serve Spyro 2; expect its FORMAT knowledge to.
 
