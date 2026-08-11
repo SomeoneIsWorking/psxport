@@ -327,6 +327,26 @@ tool and `docs/producers/` are game-side and need no framework claim.
 >   symptom of lookups landing in a saturated table rather than an independent defect. Do not tune the
 >   attribution until the table stops dropping 2.68M spans, or you are tuning against noise.
 
+> **THE LARGEST UNDECLARED BLOCK IS `Render::perObjFlush`, AND IT HAS NO ESTABLISHED GUEST ADDRESS
+> (2026-08-11).** After scoping the type-0x20 family (11 rows) and terrain, the native leg still reports
+> ~918k undeclared prims in the WORLD layer on a 500-frame replay. They come from
+> `Tomba2Engine/game/render/render_walk.cpp`'s `Render::perObjFlush` -> `projComposeObject` -> `gt3gt4`,
+> the general per-object geometry dispatch. `gt3gt4` itself is a SHARED submitter and must not open a
+> scope (same rule as the mesh writer: it would shadow every caller), so the scope belongs on the walker.
+>
+> **But `perObjFlush` is not keyable yet.** `tools/codemap.py --addr` records no guest owner for it, and it
+> is a REBUILD rather than a transcription — the file header notes the old `gen_func_8003F698` per-mode
+> dispatcher it replaced. A nearby comment reading "Render::perObjFlush/func_80051464" is NOT an address
+> claim: `0x80051464` is `NodeXform::propagateAxis`, and the comment means both functions read the same
+> `node+0xC0` command array. Do not key a scope on it.
+>
+> Two options, and the choice is deliberately left open rather than made hastily:
+> (a) RE which guest fn `perObjFlush` corresponds to and key on that — best, because it puts both legs in
+> one row like every other producer; (b) give it a `ProducerKey::native(iid)` row, the id space that exists
+> exactly for a producer with no guest counterpart — honest and immediately useful (918k prims stop being
+> anonymous), but it permanently states "no guest counterpart" about a function that probably has one, and
+> that is a claim worth being sure of. Prefer (a); use (b) only with the uncertainty written into the row.
+
 3. **Native-leg feed.** `RenderQueue::ProducerScope` + the interned producer-id table; count pushes
    in `emitOrQueue`/`push2dQuad`/`drawWorldQuad`. RED test: pushes inside a scope are attributed,
    pushes outside are counted as `unscoped` (a real number, not silence).
