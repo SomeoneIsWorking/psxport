@@ -1,6 +1,6 @@
 // class RenderSubstrate — the game-agnostic, per-Core RENDER SUBSTRATE.
 //
-// These 9 members are HOST-ONLY render-substrate state (compare-mode toggles, per-object walk-scope
+// These 11 members are HOST-ONLY render-substrate state (compare-mode toggles, per-object walk-scope
 // diag tags, packet-pool span/attribution trackers, the dual-view snapshot buffers, per-frame render
 // counters, the native-depth / PGXP subpixel caches, and the per-frame projection constants). None of
 // them hold guest memory, and none carry a ctor back-pointer to Core — they bind lazily (bind()/
@@ -13,6 +13,8 @@
 #include "render_mode.h"
 #include "render_diag.h"
 #include "ot_attr.h"
+#include "producer_census.h"
+#include "producer_scope.h"
 #include "dualview_snapshot.h"
 #include "render_stats.h"
 #include "proj_prim.h"
@@ -25,6 +27,13 @@ public:
   RenderMode        mode;              // compare-mode toggles (psxRender / dualview)
   RenderDiag        diag;              // per-object walk-scope tags (currentNode, currentGeomblk)
   OtAttr            otAttr;            // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
+  // The graphics-producer DB's two legs (docs/plans/graphics-producer-db.md). `census` is the per-run
+  // table of "which producer drew what, on which leg"; `producerScope` is the native leg's current-
+  // producer stack, which is how an otherwise-anonymous drawWorldQuad push acquires an identity. Both
+  // are host-only value state and write NO guest memory, so they are SBS-neutral by construction and a
+  // producer may wrap a byte-exact walk with a scope for free.
+  ProducerCensus     census;
+  ProducerScopeState producerScope;
   DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
   RenderStats       stats;             // per-frame render diag counters (ndepth / projprim)
   ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
