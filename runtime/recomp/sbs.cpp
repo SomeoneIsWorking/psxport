@@ -39,6 +39,9 @@
 #include "cfg.h"
 #include <lucent/log.h>
 #include "render_substrate.h"    // Render::setPsxRender (per-Core render-path switch)
+#include "game_iface.h"          // psxport_game_config() — the nav predicate + every guest address here
+#include "task_slot_layout.h"    // task0_*_addr() / task_slot_base() (STOPGAP: the slot-field offsets)
+#include "render_noise.h"        // THE one GameConfig-derived pool/OT window (addrLabel)
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -83,8 +86,22 @@ void sbs_rl_present(Game* game, const unsigned char* rgbaA, int wA, int hA, cons
 // ============================================================================
 
 enum Mode { M_RENDER, M_GAMEPLAY, M_FULL, M_ORACLE, M_SKIP };
-constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
-constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
+
+// THE NAV PREDICATE COMES FROM THE GAME. GAME_ENTRY / TASK0_ENTRY were Tomba!2 literals
+// (0x8010637C / 0x801fe00c) in game-agnostic framework code — the same pair dualcore.cpp and
+// selftest.cpp carried until psxport 10c37cf5. They are now GameConfig::stageGame and
+// taskTableBase + the slot's stage-entry offset (Impl::mNavStageGame / mNavEntryAddr, set in
+// Impl::run()), and AUTO-NAV REFUSES TO ARM without them: with both 0 the REACH_GAME test is
+// `mem_r32(0x0C) == 0`, which is TRUE on frame 0 because the stage word is zero during boot too.
+// SBS would then declare "GAME @f0", start its byte-compare during the BIOS/crt0 boot where the two
+// cores legitimately differ, and bury the real signal under boot noise — and the whole verdict is
+// gated on nav_done. Nav is the only part that needs the predicate, so the byte-compare itself still
+// runs without it (a game with no stage predicate is driven by hand or by PSXPORT_PAD_REPLAY).
+//
+// CUT_FLAG (and FISH_GATE below) are still Tomba!2 literals: the cutscene-active scratchpad byte and
+// the scripted-camera gate have NO GameConfig field, and inventing one was out of scope for this
+// sweep. They are only read from nav phases AFTER REACH_GAME fires, which cannot happen unless the
+// game filled the predicate above. STOPGAP: GameConfig::cutsceneActiveFlag.
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
 // BTN_RIGHT FIX (2026-07-10): was 0x2000 — that bit is CIRCLE, not Right (see the pad-button table in
 // docs/driving-the-game.md: Right=0x0020, Circle=0x2000). This mislabeling meant PSXPORT_SBS_POSTDRIVE=1's
@@ -152,10 +169,11 @@ static bool sbsCombatOn() {
 // REPL `newgame`+`skip`+manual Cross taps + `ents`/`node`): Tomba's node position (obj+0x2e/32/36)
 // is flat while s4e==9 under held Right, and starts changing once s4e settles at 1 under the
 // same held Right — see docs/findings/sbs.md "AUTONAV: reaching real player control (s4e==9 -> 1)".
-constexpr uint32_t TASK0_BASE  = 0x801fe000u;
-constexpr uint32_t SM_S4A      = TASK0_BASE + 0x4au;   // running sub-mode (0=intro-cutscene machine, 1=field)
-constexpr uint32_t SM_S4E      = TASK0_BASE + 0x4eu;   // fieldRun's own running state (1 = steady playable frame, 9 = scripted caught hold)
+// The BASE of those two words is GameConfig::taskTableBase (it was TASK0_BASE = 0x801fe000 here, a
+// third copy of Tomba!2's table base); the OFFSETS live in task_slot_layout.h, which is the one place
+// a slot-field offset may be written. mNavSmS4a / mNavSmS4e below hold the derived addresses.
 constexpr uint32_t FISH_GATE   = 0x800BF89Cu;          // scripted-camera/cull gate; ==2 while s4e==9's caught pose is armed
+                                                       // (Tomba!2 literal — STOPGAP, see CUT_FLAG above)
 struct SbsKey { uint32_t from, to; uint16_t btn; };
 
 // One-frame rewind snapshot of the PcScheduler fields the harness must roll back alongside
@@ -425,6 +443,17 @@ public:
 
   // ---- navigation state (concurrent boot AUTO-NAV to free-roam) ----
   Nav mNavA, mNavB;
+  // The nav predicate, from GameConfig (see the banner above CUT_FLAG). All zero => mNavKnown false
+  // => auto-nav is NOT armed and navStep() is never called; 0 is not an address that may be read.
+  uint32_t mNavEntryAddr = 0;    // taskTableBase + stage-entry offset  (was 0x801fe00c)
+  uint32_t mNavStageGame = 0;    // GameConfig::stageGame               (was 0x8010637C)
+  uint32_t mNavSmS4a     = 0;    // taskTableBase + field sub-mode off  (was 0x801fe04a)
+  uint32_t mNavSmS4e     = 0;    // taskTableBase + field run-state off (was 0x801fe04e)
+  bool     mNavKnown     = false;
+  // task0 + 0x48, the oracle's SEQ/VAB-build gate MODE=skip's observable compare waits on. 0 =>
+  // MODE=skip refuses at startup (checkObservables would otherwise return early on EVERY frame).
+  uint32_t mStageSmAddr  = 0;
+  bool navArm();                 // fills the above from GameConfig; false = refuse to auto-nav
 
   // ---- helpers / stages ----
   const char* modeName() const;
@@ -552,12 +581,27 @@ void Sbs::Impl::capBt(Core* c, char* buf, size_t n) {
 // is FIELD RENDERING, not player control: Tomba is still scripted-caught), (3) AWAIT_CONTROL: tap
 // Cross to release the fishing-line hold (fieldRun sm[0x4e]==9) and wait for sm[0x4e] to settle at
 // 1 (the genuine running-field frame) — THIS is when Tomba responds to pad input.
+
+// navArm — fill the nav predicate from GameConfig. Called from Impl::run() BEFORE anything is booted;
+// false means the game has not RE'd its stage entry, and then navStep() below is never called at all
+// (see the refusal in run()). Every address the nav machine reads is resolved here, once.
+bool Sbs::Impl::navArm() {
+  const GameConfig* cfg = psxport_game_config();
+  mNavEntryAddr = task0_stage_entry_addr(cfg);
+  mNavStageGame = cfg ? cfg->stageGame : 0;
+  mNavSmS4a     = task0_field_submode_addr(cfg);
+  mNavSmS4e     = task0_field_runstate_addr(cfg);
+  mStageSmAddr  = task0_state_mach_addr(cfg);
+  mNavKnown     = mNavEntryAddr && mNavStageGame;
+  return mNavKnown;
+}
+
 bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
-  if ((f % 400u) == 0) lucent::info("sbs-nav", "{} f{} phase={} stage={:08X} cut={}", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
+  if ((f % 400u) == 0) lucent::info("sbs-nav", "{} f{} phase={} stage={:08X} cut={}", tag, f, (int)nv.phase, c->mem_r32(mNavEntryAddr), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
   switch (nv.phase) {
     case REACH_GAME:
-      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { lucent::info("sbs", "{} GAME @f{}", tag, f); nv.phase = AWAIT_CUT; }
+      if (c->mem_r32(mNavEntryAddr) == mNavStageGame) { lucent::info("sbs", "{} GAME @f{}", tag, f); nv.phase = AWAIT_CUT; }
       else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
@@ -590,16 +634,16 @@ bool Sbs::Impl::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
       // until fieldRun settles at s4e==1 (the real "RUNNING field frame" state) for 30 consecutive
       // frames — long enough to rule out a transient pass-through (s4e visits 6/7/8/10/11 on the
       // way out of 9, and case 5 also sets s4e=1 transiently for an area-7 re-arm).
-      uint16_t s4e = c->mem_r16(SM_S4E);
+      uint16_t s4e = c->mem_r16(mNavSmS4e);
       if ((f % 20u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       if (s4e == 1) {
         if (++nv.idle >= 30) {
-          lucent::info("sbs", "{} player-controllable @f{} (s4e settled at 1, s4a={}, gate={})", tag, f, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
+          lucent::info("sbs", "{} player-controllable @f{} (s4e settled at 1, s4a={}, gate={})", tag, f, c->mem_r16(mNavSmS4a), c->mem_r8(FISH_GATE));
           nv.phase = DONE; nv.idle = 0; return true;
         }
       } else {
         nv.idle = 0;
-        if ((f % 200u) == 0) lucent::info("sbs-nav", "{} f{} awaiting control: s4e={} s4a={} gate={}", tag, f, s4e, c->mem_r16(SM_S4A), c->mem_r8(FISH_GATE));
+        if ((f % 200u) == 0) lucent::info("sbs-nav", "{} f{} awaiting control: s4e={} s4a={} gate={}", tag, f, s4e, c->mem_r16(mNavSmS4a), c->mem_r8(FISH_GATE));
       }
       break;
     }
@@ -830,18 +874,44 @@ void Sbs::Impl::recordDivergence(uint32_t addr) {
 // Human-readable label for a divergent address so the log names *what* diverged, not just where.
 // Audio-relevant hits (fx_table, spu-related scratchpad, area-audio-table) get a distinctive tag so
 // they stand out when scanning a flood of divergences under PSXPORT_SBS_NOPAUSE=1.
+//
+// THE RENDER + TASK-TABLE LABELS ARE DERIVED FROM GameConfig (the render-noise windows via
+// render_noise.h, the task table via GameConfig::taskTableBase/taskSlotStride/taskCount). They used to
+// be Tomba!2 literals — 0x800BFE68..0x800E7E68 "packet_pool", 0x801FE000.. "task_slots" — so on another
+// game a divergence in ordinary engine data was NAMED as the packet pool or the scheduler table, which
+// is the single most believable wrong output a diagnostic can produce. When those fields are unset the
+// label is simply "?" (honest: no name is known here), never another game's name.
+//
+// THE REST OF THIS TABLE IS STILL Tomba!2 LITERALS (audio tables, libcd file table, area_state,
+// scratchpad game state) — none has a GameConfig field and inventing one was out of scope. STOPGAP:
+// GameConfig::addrLabels[] supplied by the game. Until then addrLabel() warns ONCE per process that
+// the names below are one game's, so a wrong name in a log is at least self-flagged.
 static const char* addrLabel(uint32_t a) {
+  const GameConfig* cfg = psxport_game_config();
+  static const RenderNoiseMask mask = RenderNoiseMask::from(cfg, "sbs-addrlabel");
+  static bool warned = false;
+  if (!warned) {
+    warned = true;
+    lucent::warn("sbs", "addrLabel()'s non-derived entries (AUDIO*/libcd/area_state/scratchpad_game_state) "
+                        "are Tomba!2 addresses with no GameConfig field — on any other game a label from "
+                        "that set is WRONG, not a finding. Only the packet-pool/OT and task-slot labels "
+                        "are derived from this game's GameConfig.");
+  }
+  if (mask.known) {
+    if (a >= mask.ptrLo  && a < mask.ptrHi)  return "packet_pool_ptrs";
+    if (a >= mask.poolLo && a < mask.poolHi) return "packet_pool";
+    if (a >= mask.envLo  && a < mask.envHi)  return "OT_env";      // draw env + dwell, between pool and OT
+    if (a >= mask.otLo   && a < mask.otHi)   return "OT";
+  }
+  if (cfg && cfg->taskTableBase && cfg->taskCount &&
+      a >= cfg->taskTableBase && a < cfg->taskTableBase + cfg->taskCount * cfg->taskSlotStride)
+    return "task_slots";
   if (a >= 0x800A4D18u && a <  0x800A5000u) return "AUDIO fx_table[0..111]";
   if (a >= 0x800A4EF8u && a <  0x800A4F80u) return "AUDIO fx_area_table_ptrs";
   if (a == 0x800FB165u)                    return "AUDIO global_scale";
   if (a >= 0x800AC000u && a <  0x800AC800u) return "libgs.gfx_ctx";
   if (a >= 0x800BE000u && a <  0x800BF000u) return "libcd/file-table";
-  if (a >= 0x800BF4F0u && a <  0x800BF54Cu) return "packet_pool_ptrs";
   if (a >= 0x800BF800u && a <  0x800BF900u) return "area_state";
-  if (a >= 0x800BFE68u && a <= 0x800E7E68u) return "packet_pool";
-  if (a >= 0x800E7E68u && a <  0x800E8000u) return "OT_ring";
-  if (a >= 0x800E8000u && a <  0x800E8100u) return "OT_head";
-  if (a >= 0x801FE000u && a <  0x801FE200u) return "task_slots";
   if (a == 0x1F80019Bu)                    return "done_flag";
   if (a == 0x1F800137u)                    return "AUDIO paused_flag";
   if (a >= 0x1F800100u && a <  0x1F800200u) return "scratchpad_game_state";
@@ -938,15 +1008,20 @@ void Sbs::Impl::checkObservables() {
       return e && *e && e[0] != '0' ? 1 : 0; }();
     if (tick_on) {
       struct Probe { const char* name; uint32_t addr; int w; };
-      static const Probe kP[] = {
+      // The stage word is DERIVED (GameConfig::taskTableBase + the slot's stage-entry offset); it was
+      // Tomba!2's 0x801FE00C. MODE=skip already refused to start without taskTableBase, so it is set
+      // here. The other four are still Tomba!2 literals with no GameConfig field (STOPGAP) — on another
+      // game they read whatever is at those addresses, so an "A-B delta" line from them names nothing.
+      const Probe kP[] = {
         { "vsync",  0x800ABDE0u, 4 },   // libetc VSync tick counter
         { "sptick", 0x1F80017Cu, 4 },   // scratchpad tick (pc_skip collapse must bump both)
-        { "stage",  0x801FE00Cu, 4 },   // task-0 stage word
+        { "stage",  mNavEntryAddr, 4 }, // task-0 stage word (GameConfig-derived)
         { "scene",  0x800BE258u, 1 },   // scene-active latch
         { "beat",   0x800BF9B4u, 1 },   // SOP scene/backdrop identity byte
       };
       static int64_t prevDelta[5] = {0, 0, 0, 0, 0};
       for (int i = 0; i < 5; i++) {
+        if (!kP[i].addr) continue;      // never probe address 0 — it answers, and the answer is a lie
         auto rd = [&](Core& c) -> int64_t {
           if (kP[i].addr >= 0x1F800000u && kP[i].addr < 0x1F800400u) {
             uint32_t off = kP[i].addr - 0x1F800000u;
@@ -1002,7 +1077,10 @@ void Sbs::Impl::checkObservables() {
   // stage0AdvanceSkip's "seqvab_build" gate keys on) directly instead: while it's below the gate's
   // target, the oracle hasn't finished the SEQ/VAB build and any observable tied to that fork is
   // expected to still be catching up on core A. (docs/findings/sbs.md "SBS self-surfacing sweep")
-  bool vabBuildPending = mB->core.mem_r16(0x801FE048u) < 3u;
+  // `3` is the Tomba!2 gate value (stage0AdvanceSkip's "seqvab_build" target) and stays a literal —
+  // GameConfig has no field for it. The ADDRESS is derived (mStageSmAddr, task0+0x48) and MODE=skip
+  // refuses at startup when it is 0, so this is never a read of address 0x48.
+  bool vabBuildPending = mB->core.mem_r16(mStageSmAddr) < 3u;
   if (vabBuildPending || anyRendezvousWaiting()) return;
   for (int i = 0; i < kNObs; i++) {
     if (mObsDone[i]) continue;
@@ -1519,7 +1597,10 @@ void Sbs::Impl::storeCb(Core* c, uint32_t a, uint32_t v, uint32_t w) {
     //      the two cores took different call paths to reach the write — that names the upstream
     //      divergence without another PREWATCH chase.
     // sp = c->r[29] — for the guest-stack backtrace we already dump on real divergence.
-    lucent::info("sbs-ww", "f{} {} wrote [{:08X}]={:08X} (pc={:08X} ra={:08X} sp={:08X} stage={:08X}) [c={} mA={} mB={}]", mFrame, which ? 'B' : 'A', a, v, c->pc, c->r[31], c->r[29], c->mem_r32(0x801fe00c),
+    lucent::info("sbs-ww", "f{} {} wrote [{:08X}]={:08X} (pc={:08X} ra={:08X} sp={:08X} stage={:08X}) [c={} mA={} mB={}]", mFrame, which ? 'B' : 'A', a, v, c->pc, c->r[31], c->r[29],
+            // stage= is the GameConfig-derived stage word (was Tomba!2's 0x801fe00c); 0 when the game
+            // has not RE'd its task table, which is honest — reading address 0xC would print BIOS.
+            mNavEntryAddr ? c->mem_r32(mNavEntryAddr) : 0u,
             (void*)c, (void*)&mA->core, (void*)&mB->core);
     // t/v/a regs per store: the substrate packet emitters (gen_func_8007FDB0 etc.) keep their
     // prim-walk state in t-regs (t5=r13 prim ptr, t2=r10 pool cursor). Printing them per store lets
@@ -1884,6 +1965,21 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     else if (!strcmp(m, "skip"))              mMode = M_SKIP;
     else                                       mMode = M_RENDER;
   }
+  // The guest addresses this harness navigates and gates by come from GameConfig — resolved BEFORE
+  // anything is booted, because one of them decides whether a mode may run at all.
+  navArm();
+  // MODE=skip's observable compare waits on the oracle's SEQ/VAB-build gate at task0+0x48. Reading
+  // address 0 there answers with zero forever, `< 3` stays TRUE, checkObservables() returns early on
+  // EVERY frame, and the run ends green having compared NOTHING — a diagnostic printing silence,
+  // indistinguishable from one that found nothing. Refuse the mode instead.
+  if (mMode == M_SKIP && !mStageSmAddr) {
+    lucent::error("sbs", "REFUSING MODE=skip: it gates its observable compare on the oracle's stage "
+                         "state machine (GameConfig::taskTableBase + 0x48) and this game has not RE'd "
+                         "the task table. With it at 0 the gate never opens, the compare NEVER RUNS, and "
+                         "the run would end green having compared nothing. Fill taskTableBase or use "
+                         "PSXPORT_SBS_MODE=render|gameplay|full|oracle.");
+    return;
+  }
   { const char* e = getenv("PSXPORT_SBS_LO"); if (e && *e) mLo = (uint32_t)strtoul(e, 0, 0); }
   { const char* e = getenv("PSXPORT_SBS_HI"); if (e && *e) mHi = (uint32_t)strtoul(e, 0, 0); }
 
@@ -2098,7 +2194,21 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // Concurrent boot to gameplay-start (both cores lockstep, one frame per iteration, both panes present
   // every frame). YOU drive both cores from frame 0 by default; opt into AUTO-NAV with PSXPORT_SBS_AUTONAV=1.
   const char* sbs_autonav_env = getenv("PSXPORT_SBS_AUTONAV");
-  const bool  sbsAutonav = sbs_autonav_env && *sbs_autonav_env && strcmp(sbs_autonav_env, "0") != 0;
+  const bool  sbsAutonavAsked = sbs_autonav_env && *sbs_autonav_env && strcmp(sbs_autonav_env, "0") != 0;
+  // REFUSE TO AUTO-NAV rather than navigate by another game's addresses. Without the predicate the
+  // REACH_GAME test (`mem_r32(taskTableBase+0xC) == stageGame`) reads 0 == 0 on frame 0 and the whole
+  // byte-compare — whose verdict is gated on nav_done — would run over the BIOS boot. The compare
+  // itself does not need nav, so it still runs; only the pad-driving does not.
+  const bool  navOk = mNavKnown;
+  const bool  sbsAutonav = sbsAutonavAsked && navOk;
+  if ((sbsAutonavAsked || sbsPostdriveOn() || sbsCombatOn()) && !navOk)
+    lucent::error("sbs", "AUTO-NAV IS OFF, and it was asked for: SBS navigates by the scheduler stage "
+                         "word and GameConfig::taskTableBase (stage-entry word 0x{:08X}) / stageGame "
+                         "(0x{:08X}) are unset for this game. With those at 0 the REACH_GAME predicate "
+                         "matches on FRAME 0 (the stage word is zero during boot too), so the harness "
+                         "would compare the BIOS boot as if it were gameplay. Drive the panes by hand or "
+                         "with PSXPORT_SBS_PAD_REPLAY, or RE the task table + stage entry PC.",
+                  mNavEntryAddr, mNavStageGame);
   const char* sbsDumpPath = getenv("PSXPORT_SBS_DUMP");
   bool dumped = false;
   lucent::info("sbs", "{} — then drive both panes with the window keyboard (WASD/arrows, K=Cross, Enter=Start, …) or the debug server; inspect via `sbs` cmds.", sbsAutonav ? "AUTO-NAV to the field" : "LOCKSTEP from boot (no auto-nav)");
@@ -2107,13 +2217,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     if (sbs_rl_should_close()) { lucent::info("sbs", "window closed — exiting."); break; }
     Core* sel = mSel ? &mB->core : &mA->core;
     DbgServer& dbg = mA->dbg_server;   // one endpoint per process; mA owns it
-    // TRACE: pre-service state
-    const bool ww_trace_ext = mWwArmed && mWwAddr == 0x800BF81Eu && mFrame >= 180 && mFrame <= 200;
-    if (ww_trace_ext)
-      lucent::info("sbs-trace", "f{} pre-service     A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     dbg.service(sel);
-    if (ww_trace_ext)
-      lucent::info("sbs-trace", "f{} post-service    A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     bool nav_done = !sbsAutonav || (mNavA.phase == DONE && mNavB.phase == DONE);
     // PSXPORT_SBS_POSTDRIVE=1 / PSXPORT_SBS_AUTONAV=combat: keep calling navStep() past nav_done too —
     // its DONE case is where the post-control walk/jump SCRIPT lives (Nav::DONE below). Without this,
@@ -2122,10 +2226,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // SAME bug class bit the combat leg on introduction (2026-07-10: sbsCombatOn() was missing from
     // this condition, so the combat script in Nav::DONE never ran despite being wired). Fall back to
     // feedInput() (live keyboard/debug-server driving) when neither is on, preserving that path.
-    if (!nav_done || sbsPostdriveOn() || sbsCombatOn()) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
+    if (navOk && (!nav_done || sbsPostdriveOn() || sbsCombatOn())) { navStep(&mA->core, mNavA, mFrame, "A"); navStep(&mB->core, mNavB, mFrame, "B"); }
     else feedInput();
-    if (ww_trace_ext)
-      lucent::info("sbs-trace", "f{} post-nav/input  A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
     if (dbg.isPaused() && !dbg.stepPending()) {
       presentPanes();
       usleep(15000);
@@ -2138,11 +2240,31 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // On-change: normal (whole boot window). Verbose per-tick: PSXPORT_SBS_STAGETRACE=2 (dumps EVERY
     // tick in f22..f36 so slip-window diffs are visible even when the state doesn't nominally change).
     static const int stagetrace = []{ const char* e = getenv("PSXPORT_SBS_STAGETRACE"); return e ? atoi(e) : 0; }();
-    if (stagetrace && mFrame < 250) {
-      auto smState = [](Core* c) {
-        uint32_t sm = c->mem_r32(0x1f800138u);
-        return std::make_tuple(c->mem_r32(0x801fe00cu),                  // TASK0_ENTRY (base+0xc)
-                               c->mem_r16(0x801fe000u),                    // TASK0 base state (base+0)
+    // The scheduler addresses come from GameConfig (they were Tomba!2's 0x1f800138 / 0x801fe00c /
+    // 0x801fe000). Unset => the trace CANNOT read the stage machine and says so once instead of
+    // printing entry/state words read out of BIOS memory. cut/i34 are still Tomba!2 scratchpad
+    // literals with no GameConfig field (STOPGAP), and they are printed only alongside the derived
+    // words, never on their own.
+    const GameConfig* stcfg = psxport_game_config();
+    const uint32_t curTaskPtrAddr = stcfg ? stcfg->curTaskPtr : 0u;
+    const uint32_t stageEntryAddr = task0_stage_entry_addr(stcfg);
+    const uint32_t task0BaseAddr  = task_slot_base(stcfg, 0);
+    if (stagetrace && !(curTaskPtrAddr && stageEntryAddr)) {
+      static bool stwarned = false;
+      if (!stwarned) {
+        stwarned = true;
+        lucent::warn("stagetrace", "PSXPORT_SBS_STAGETRACE is on but DISABLED for this game: it traces the "
+                                   "scheduler stage machine and GameConfig::curTaskPtr (0x{:08X}) / "
+                                   "taskTableBase (stage-entry word 0x{:08X}) are unset. Tracing address 0 "
+                                   "would print BIOS words as this game's stage state.",
+                     curTaskPtrAddr, stageEntryAddr);
+      }
+    }
+    if (stagetrace && curTaskPtrAddr && stageEntryAddr && mFrame < 250) {
+      auto smState = [&](Core* c) {
+        uint32_t sm = c->mem_r32(curTaskPtrAddr);
+        return std::make_tuple(c->mem_r32(stageEntryAddr),                  // task0 + stage-entry off
+                               c->mem_r16(task0BaseAddr),                   // TASK0 base state (base+0)
                                c->mem_r16(sm + 0x48), c->mem_r16(sm + 0x4a),
                                c->mem_r16(sm + 0x4c), c->mem_r16(sm + 0x4e),
                                c->mem_r16(sm + 0x50),                      // sm[0x50] (submode0's inner var)
@@ -2169,14 +2291,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     }
     mAllocA = 0; mAllocB = 0;
     mWwHit = 0; mWwVa = mWwVb = 0;
-    // TRACE 2026-07-03: instrument where 0x800BF81E flips during a frame in RENDER mode.
-    // Log the byte on both cores at each waypoint of the frame to name the exact stage.
-    const bool ww_trace = mWwArmed && mWwAddr == 0x800BF81Eu && mFrame >= 180 && mFrame <= 200;
-    auto ww_log = [&](const char* tag){
-      if (!ww_trace) return;
-      lucent::info("sbs-trace", "f{} {:<14}  A[0x800BF81E]={}  B[0x800BF81E]={}", mFrame, tag, mA->core.mem_r8(0x800BF81Eu), mB->core.mem_r8(0x800BF81Eu));
-    };
-    ww_log("frame-start");
+    // (The dated `ww_trace` scaffold and its ww_log() waypoints — one Tomba!2 byte 0x800BF81E, frames
+    // 180..200, "TRACE 2026-07-03" — were DELETED 2026-08-11. It named one game's byte inside
+    // game-agnostic framework code, and the general facility it prototyped already exists: PSXPORT_WWATCH
+    // + the per-core last-writer map, which work on any address of any game.)
     // Divergence check runs THROUGHOUT the run (2026-07-04 user directive [[sbs-two-compare-modes]]
     // reinforced: "autonav can press Start but it can't skip diverges happening during autonav").
     // Autonav is a pad-driving convenience; the byte-exact compare must be active from f0.
@@ -2299,17 +2417,17 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // Step order: MODE=skip steps the ORACLE (B) first so core A's skipRendezvousReached() checks
     // read B's SAME-frame state — with A-first, every rendezvous fork lagged one extra frame behind
     // the milestone it waits on (measured on 'demo_start_game': 2-frame residual skew, halved by
-    // this reorder). Other modes keep A-first (wwatch/ww_log transcripts are ordered around it).
+    // this reorder). Other modes keep A-first (wwatch transcripts are ordered around it).
     if (mMode == M_SKIP) {
-      stepCore(mB, 1);              ww_log("post-stepB");
-      grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
-      stepCore(mA, 0);              ww_log("post-stepA");
-      grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
+      stepCore(mB, 1);
+      grabPane(mB, mRgbaB, &mWb, &mHb);
+      stepCore(mA, 0);
+      grabPane(mA, mRgbaA, &mWa, &mHa);
     } else {
-    stepCore(mA, 0);              ww_log("post-stepA");
-    grabPane(mA, mRgbaA, &mWa, &mHa); ww_log("post-grabA");
-    stepCore(mB, 1);              ww_log("post-stepB");
-    grabPane(mB, mRgbaB, &mWb, &mHb); ww_log("post-grabB");
+    stepCore(mA, 0);
+    grabPane(mA, mRgbaA, &mWa, &mHa);
+    stepCore(mB, 1);
+    grabPane(mB, mRgbaB, &mWb, &mHb);
     }
     checkPaneDiff();              // PICTURE compare: port pane (A) vs oracle pane (B) — render bugs
     // PSXPORT_SBS_SHOT=<frame>:<prefix> — dump each pane SEPARATELY at one lockstep frame, as
@@ -2383,7 +2501,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         }
       }
     }
-    presentPanes();               ww_log("post-present");
+    presentPanes();
     static const int only_on_value_diverge_ss = []{ const char* e = getenv("PSXPORT_SBS_WW_ONVALUEDIVERGE"); return e && *e && e[0] != '0' ? 1 : 0; }();
     // Per-lockstep-frame RNG advance-count divergence check. When PSXPORT_SBS_WW_ONVALUEDIVERGE is
     // set on 0x80105EE8, we want the FIRST frame where A's advance count != B's — that's the frame
@@ -2416,7 +2534,15 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // different values → the divergence surfaces as a VALUE-MISMATCH inside a matched code path.
         // Dump the neighborhoods around a few common overlay .rodata addresses to name the diff.
         {
-          lucent::info("sbs", "=== overlay .rodata sample (byte@addr, A vs B) ===");
+          // STOPGAP, NOT FIXED IN THIS SWEEP: these six are Tomba!2 addresses chosen empirically during
+          // one investigation (RNG seed, two unnamed bytes, the free-slot count, an OT-adjacent word, a
+          // pool word) and they need GameConfig::upstreamGlobals[] — a field this sweep was not allowed
+          // to add. Two of them (0x80105EE8, 0x800ED098) are also in kUpstream below, i.e. this is a
+          // second partly-overlapping copy of the same idea. NOTE ALSO, independent of agnosticism: the
+          // heading says "overlay .rodata" and three of the six are not in the overlay range even on
+          // Tomba!2, so it mislabels half its own rows. The header says whose addresses these are.
+          lucent::info("sbs", "=== sample of six Tomba!2-specific globals (hardcoded here; heading is "
+                              "historically mislabelled 'overlay .rodata') — byte@addr, A vs B ===");
           for (uint32_t addr : {0x80105EE8u, 0x800BFA13u, 0x800BF873u, 0x800ED098u, 0x800E7E74u, 0x800ECFD4u}) {
             uint32_t a = mA->core.mem_r32(addr), b = mB->core.mem_r32(addr);
             lucent::info("sbs", "  [0x{:08X}]: A=0x{:08X}  B=0x{:08X}  {}", addr, a, b, a == b ? "match" : "!! DIVERGE !!");
@@ -2630,13 +2756,24 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // inside a registered array, dump the record INDEX + offset within-record so a caller doesn't
         // have to hand-decode it. Every new hit that recurs across sessions ought to land here.
         struct StructLayout { uint32_t base; uint32_t stride; uint32_t count; const char* name; };
-        static constexpr StructLayout kLayouts[] = {
+        // THE TASK-SLOT ENTRY IS DERIVED from GameConfig (it was 0x801FE000 / 0x70 / 3 verbatim); a
+        // base of 0 disables it rather than decoding address 0x00 as task_slot[0].
+        //
+        // THE OTHER SIX ARE Tomba!2 GUEST ARRAYS with no GameConfig field, each justified by a Tomba!2
+        // game source file (input.cpp FUN_800931C0, AreaSlots::updateTail, game/render/screen_fade) —
+        // only the GAME can maintain that justification. STOPGAP: GameConfig::structLayouts[]. On
+        // another game they MIS-DECODE: an address in 0x801054CE..0x80105906 is reported as
+        // `input.record[k]+0xNN`, sending the next session to an input table that is not there. Until
+        // the field exists, the decode line says whose registry it came from.
+        const StructLayout kLayouts[] = {
           // input-processor record table (input.cpp FUN_800931C0): iterated over records[0, N)
           // where N = (int8)0x80105CEC. Each 56 B record holds pad/controller state; +0x00 is the
           // h0 field written by FUN_8009A1D0. Native input_dispatch_931c0 references it verbatim.
           { 0x801054CEu, 56u, 25u, "input.record" },
-          // Task-slot table (0x801FE000, stride 0x70, 3 slots) — scheduler state
-          { 0x801FE000u, 0x70u, 3u, "task_slot" },
+          // Task-slot table — scheduler state. GameConfig-derived (base 0 => entry disabled below).
+          { psxport_game_config() ? psxport_game_config()->taskTableBase : 0u,
+            psxport_game_config() ? psxport_game_config()->taskSlotStride : 1u,
+            psxport_game_config() ? psxport_game_config()->taskCount : 0u, "task_slot" },
           // Object arm-slot table (0x800BE238, stride 12, 24 slots) — walked by AreaSlots::updateTail
           { 0x800BE238u, 12u, 24u, "area.arm_slot" },
           // Voice/audio state at 0x800BE1F8 (single struct, 0x40 B typical)
@@ -2650,6 +2787,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
           { 0x800EE480u, 0x40u, 32u, "object.pool[T2]" },
         };
         for (const auto& L : kLayouts) {
+          if (!L.base || !L.stride || !L.count) continue;   // an un-RE'd entry decodes NOTHING
           uint32_t end = L.base + L.stride * L.count;
           if (mWwAddr >= L.base && mWwAddr < end) {
             uint32_t off  = mWwAddr - L.base;
@@ -2665,17 +2803,26 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // Cheap (8 words) and often decisive — if RNG matches, drift is downstream of RNG.
         lucent::info("sbs", "=== upstream state cross-check ===");
         struct GlobalCheck { uint32_t addr; uint8_t width; const char* name; };
-        static constexpr GlobalCheck kUpstream[] = {
-          { 0x80105EE8u, 4, "RNG.seed" },
-          { 0x800BE358u, 4, "arm-mask" },
-          { 0x800BED84u, 2, "hword.0BED84" },
-          { 0x800A4F7Eu, 2, "hword.0A4F7E" },
-          { 0x800BF870u, 1, "area.idx" },
-          { 0x1F800137u, 1, "cutMode" },
-          { 0x1F800138u, 4, "CUR_TASK" },
-          { 0x1F80019Bu, 1, "done_flag" },
+        // CUR_TASK is GameConfig::curTaskPtr (it was 0x1F800138 hardcoded). THE OTHER SEVEN ARE Tomba!2
+        // GLOBALS with no GameConfig field — two are unnamed even on Tomba!2 ("hword.0BED84"). STOPGAP:
+        // GameConfig::upstreamGlobals[]. The reads always SUCCEED, so on another game this block would
+        // print seven rows of unrelated memory under authoritative Tomba!2 names with match/DIVERGE
+        // verdicts — the most believable wrong diagnosis in this file. A 0 address is skipped, and the
+        // header below names the provenance so the rows are not read as this game's state.
+        const GlobalCheck kUpstream[] = {
+          { 0x80105EE8u, 4, "RNG.seed[T2]" },
+          { 0x800BE358u, 4, "arm-mask[T2]" },
+          { 0x800BED84u, 2, "hword.0BED84[T2]" },
+          { 0x800A4F7Eu, 2, "hword.0A4F7E[T2]" },
+          { 0x800BF870u, 1, "area.idx[T2]" },
+          { 0x1F800137u, 1, "cutMode[T2]" },
+          { psxport_game_config() ? psxport_game_config()->curTaskPtr : 0u, 4, "CUR_TASK" },
+          { 0x1F80019Bu, 1, "done_flag[T2]" },
         };
+        lucent::info("sbs", "  (rows tagged [T2] are Tomba!2 addresses hardcoded in the framework — no "
+                            "GameConfig field yet; on another game they name nothing. CUR_TASK is derived.)");
         for (const auto& g : kUpstream) {
+          if (!g.addr) continue;
           uint32_t va = 0, vb = 0;
           if (g.width == 1) { va = mA->core.mem_r8(g.addr); vb = mB->core.mem_r8(g.addr); }
           else if (g.width == 2) { va = mA->core.mem_r16(g.addr); vb = mB->core.mem_r16(g.addr); }
@@ -2686,12 +2833,22 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
         // Task-slot state dump. Each slot's state (+0x00), entry pc (+0x0C), done-mark (+0x02).
         // Divergent slot state = task-scheduling divergence — the most common cause of a wrong
         // CUR_TASK / wrong writer during multitask cooperative code (task-1 preload etc.).
-        lucent::info("sbs", "=== task-slot state ===");
-        for (int slot = 0; slot < 3; slot++) {
-          uint32_t base = 0x801FE000u + (uint32_t)slot * 0x70u;
+        // Base/stride/count come from GameConfig (they were 0x801FE000 / 0x70 / 3 — Tomba!2's, sitting
+        // one file away from the fields that hold them). Unset => SAY SO and dump nothing: with zeros
+        // this loop printed three slots of BIOS memory at 0x00/0x70/0xE0 as "task[0..2] state/entry",
+        // under a header calling any difference there a task-scheduling divergence.
+        const GameConfig* tcfg = psxport_game_config();
+        const uint32_t nSlots = (tcfg && tcfg->taskTableBase) ? tcfg->taskCount : 0u;
+        if (!nSlots)
+          lucent::info("sbs", "=== task-slot state: NOT DUMPED — GameConfig::taskTableBase/taskCount are "
+                              "unset for this game, so the scheduler table's location is unknown here ===");
+        else
+          lucent::info("sbs", "=== task-slot state ({} slots @0x{:08X} stride 0x{:X}) ===", nSlots, tcfg->taskTableBase, tcfg->taskSlotStride);
+        for (uint32_t slot = 0; slot < nSlots; slot++) {
+          uint32_t base = task_slot_base(tcfg, slot);
           uint16_t sa_st = mA->core.mem_r16(base + 0x00), sb_st = mB->core.mem_r16(base + 0x00);
           uint16_t sa_02 = mA->core.mem_r16(base + 0x02), sb_02 = mB->core.mem_r16(base + 0x02);
-          uint32_t sa_ep = mA->core.mem_r32(base + 0x0C), sb_ep = mB->core.mem_r32(base + 0x0C);
+          uint32_t sa_ep = mA->core.mem_r32(base + kTaskSlotStageEntryOff), sb_ep = mB->core.mem_r32(base + kTaskSlotStageEntryOff);
           lucent::info("sbs", "  task[{}] @0x{:08X}: state A={} B={} {}  +2 A=0x{:X} B=0x{:X} {}  entry A=0x{:08X} B=0x{:08X} {}", slot, base, sa_st, sb_st, sa_st == sb_st ? "==" : "!!",
                   sa_02, sb_02, sa_02 == sb_02 ? "==" : "!!",
                   sa_ep, sb_ep, sa_ep == sb_ep ? "==" : "!!");

@@ -16,8 +16,9 @@
 // op, which is exactly when a REPL command run between `run N` steps executes. Sized statically;
 // overflow is COUNTED and reported rather than growing unbounded or silently dropping.
 //
-//   1. Packet-pool store spans — every guest store landing in the shared packet pool
-//      [0x800BFE68, 0x800E7E68) is attributed to {emitter fn = the
+//   1. Packet-pool store spans — every guest store landing in the shared packet pool (the
+//      GameConfig-derived window, render_noise.h; Tomba!2's is [0x800BFE68, 0x800E7E68), and a game
+//      that has not RE'd its pool gets NO window and is told so) is attributed to {emitter fn = the
 //      OTATTR SHADOW STACK top (InterpDiag::otattrTop(), the innermost guest fn reached via an
 //      INDIRECT/jalr rec_dispatch — see interp_diag.h), caller fn = one frame below that, node =
 //      Render::diag.currentNode()}. Consecutive stores with the SAME (fn, node) attribution are
