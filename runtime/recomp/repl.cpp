@@ -300,7 +300,7 @@ long Repl::read(Core* c, uint32_t f) {
           continue;
         }
       } else {
-        p = (RenderPath)(((int)p + 1) % 3);   // bare form CYCLES
+        p = render_path_next(p);   // bare form CYCLES — same order as the F5 hotkey (render_mode.h)
       }
       c->rsub.mode.setPath(p);
       psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(p));   // so `cvars` reports the live value

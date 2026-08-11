@@ -125,6 +125,19 @@ A `TextVar cv_render_path` in `config_vars.h` / `config.cpp`: `Default` = `nativ
 - `PSXPORT_RENDER_PSX` / `PSXPORT_ORACLE` become **compatibility aliases that map onto the enum and
   log the mapping**, then get deleted once the games' scripts/gates are converted. No tombstones
   (global CLAUDE.md): once nothing sets them, every reference goes.
+- **HOTKEY: `F5` cycles the path live** — `native -> gte -> psx -> native` — which is what the USER
+  actually asked for ("need a toggle to switch between PC render native, PC render from GTE and pure PSX
+  rasterizer"). The env var alone does not satisfy that ask: the three paths only mean anything next to
+  each other, and comparing them by relaunching loses the scene, so you can never hold one frame still
+  and swap the renderer under it. `pad_input.cpp`, edge-detected beside the existing `P` / `.` debug keys.
+  The cycle ORDER lives in one place (`render_path_next`, `render_mode.h`) and is shared with the REPL, so
+  key and command cannot drift; the order is asserted by `tests/test_render_path_cycle.cpp` because it is
+  part of the contract — each step changes exactly ONE variable (Native->Gte swaps the geometry source
+  with the rasterizer fixed; Gte->Psx swaps the rasterizer with the geometry fixed), so a visible
+  difference stays attributable. The key writes the CVar's Runtime layer too, so `cvars` and any capture's
+  provenance report the LIVE path rather than the launch value. REFUSED OUT LOUD under
+  `PSXPORT_ORACLE`/SBS: those runs exist to BE the reference, and a keystroke that silently changed the
+  renderer mid-compare would invalidate the run while looking like nothing happened.
 - REPL: `renderpath [native|gte|psx]`, bare form cycles and prints. `renderpsx` stays as an alias
   that logs the mapping, for the A/B scripts that already pipe it (`repl.cpp:279-288` documents that
   a bare `renderpsx` toggling — rather than printing — was itself a past silent-A/B bug; do not

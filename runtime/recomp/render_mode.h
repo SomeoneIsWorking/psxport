@@ -37,6 +37,20 @@ inline const char* render_path_name(RenderPath p) {
   return "?";
 }
 
+// CYCLE to the next path — the one definition of "next", so the hotkey and the REPL's bare `renderpath`
+// cannot drift into different orders. Native -> Gte -> Psx -> Native. The order is deliberate and is the
+// order a comparison wants: the shipping picture, then the guest's own geometry on the PC rasterizer, then
+// that same geometry on the PSX rasterizer — so consecutive presses isolate ONE variable at a time
+// (producers, then rasterizer) instead of changing two things at once.
+inline RenderPath render_path_next(RenderPath p) {
+  switch (p) {
+    case RenderPath::Native: return RenderPath::Gte;
+    case RenderPath::Gte:    return RenderPath::Psx;
+    case RenderPath::Psx:    return RenderPath::Native;
+  }
+  return RenderPath::Native;
+}
+
 // Parse a path NAME. Returns false and leaves *out untouched on anything it does not recognise — no
 // prefix matching, no fallback to `native`: a knob whose value matched nothing must be reported as
 // matching nothing (the CVar audit's rule), never silently resolved to the default.

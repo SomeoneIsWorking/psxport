@@ -52,6 +52,7 @@ private:
   int  mGcSubInit = 0;                            // lazily added the gamepad subsystem?
   int  mNoPad = -1;                               // PSXPORT_PAD_NOPAD cache (-1 = not read)
   int  mPrevP = 0, mPrevStep = 0;                 // P / '.' debug-key edge detectors
+  int  mPrevRenderPath = 0;                       // F5 render-path-cycle edge detector
   int  mPadDirsWarned = 0;                        // "controller is driving directions" once-notice
   void ensureGcSubsystem();
   void rescanControllers();
