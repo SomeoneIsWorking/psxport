@@ -580,6 +580,7 @@ static void game_main(Core* c) {
                    c->mem_r8(0x1f800135));
     c->game->dbg_server.service(c);  // service one queued live-debug-server command (non-blocking)
   }
+  c->rsub.census.report("run-end");
   lucent::info("native_boot", "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {

@@ -606,6 +606,15 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
                               const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                               int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
                               int tp_blend, const float (*sv)[3], int sort_key, float key_ord) {
+  // ---- graphics-producer DB, NATIVE leg (docs/plans/graphics-producer-db.md stage 3) -------------
+  // THE one chokepoint: drawWorldQuad and push2dQuad both funnel here, so counting once here covers
+  // every native push and cannot double-count. An open ProducerScope names the producer; with none
+  // open the key is NONE and the prim lands in unscopedNative() — real drawing by an UNDECLARED
+  // producer, which is exactly the row the DB exists to surface. Never dropped, never charged to
+  // whichever producer happened to be last. Host-only counters, no guest write: SBS-neutral.
+  core->rsub.census.noteNative(core->rsub.producerScope.currentKey(), 1u,
+                               (uint32_t)gpu_frame_no(core));
+
   // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
   // 2026-07-16: dialog/prompt panels sat left-anchored in wide). The wide FB spans [0,ww) with the
   // world centred at ww/2, so a 4:3-authored x hugs the left edge until it is centred.

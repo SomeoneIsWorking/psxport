@@ -30,6 +30,7 @@
 // A report that prints a row list without these six is not allowed to claim coverage.
 #pragma once
 #include <stdint.h>
+#include <lucent/log.h>
 
 // ---- ProducerKey — the row identity -------------------------------------------------------------
 //
@@ -120,6 +121,34 @@ class ProducerCensus {
   uint64_t spanMiss()         const { return mSpanMiss; }
   uint64_t unscopedNative()  const { return mUnscopedNative; }
   int      overflow()        const { return mOverflow; }
+
+  // ---- the run's summary line, and it must be readable when it found NOTHING ---------------------
+  // A census that was never fed and a census that counted zero prims are DIFFERENT facts with
+  // different fixes (the feed is unwired vs no native producer ran), and they print identically unless
+  // said outright. Likewise a coverage percentage with no denominator is unreadable, so every blind
+  // spot is named with its count rather than folded into "attributed".
+  void report(const char* who) const {
+    if (!mFed) {
+      lucent::warn("producers",
+                   "{}: the producer census was NEVER FED this run — 0 notes reached it. This is NOT "
+                   "'no producer drew anything'; it means the feed is not wired or never executed, so "
+                   "the DB learned NOTHING from this run.", who);
+      return;
+    }
+    lucent::info("producers",
+                 "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + gp0-anon {} + "
+                 "span-miss {}{}",
+                 who, mRowCount, (unsigned long long)mPrimsSeen,
+                 (unsigned long long)primsAttributed(), (unsigned long long)mUnscopedNative,
+                 (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
+                 mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
+    if (mUnscopedNative) {
+      lucent::warn("producers",
+                   "{}: {} native prim(s) drew with NO ProducerScope open — real work by an UNDECLARED "
+                   "producer. Those are missing DB rows, not noise: wrap the producer in a "
+                   "ProducerScope naming its guest address.", who, (unsigned long long)mUnscopedNative);
+    }
+  }
 
  private:
   void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native) {
