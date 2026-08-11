@@ -164,6 +164,15 @@ void install(uint32_t addr, const char* name, OverrideFn native, OverrideFn gen,
   if (setter) setter(addr, thunk);   // install the shared thunk into the module's g_<mod>_override[] slot
 }
 
+// Per-address ownership query — see the header for why the producer DB needs it.
+bool query(uint32_t addr, uint64_t* nativeHits, uint64_t* oracleHits) {
+  const int slot = lookup(norm(addr));
+  if (slot < 0) return false;
+  if (nativeHits) *nativeHits = g_tab[slot].nativeHits;
+  if (oracleHits) *oracleHits = g_tab[slot].oracleHits;
+  return true;
+}
+
 void coverage(int* total, int* unreached) {
   int n = 0;
   for (int i = 0; i < g_n; i++)

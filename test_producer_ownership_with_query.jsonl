@@ -1,0 +1,4 @@
+{"key":"0x8002BC9C","kind":"guest","prims_guest":0,"prims_native":3,"frames":1,"first_frame":10,"last_frame":10,"has_native":false,"native_reached":false,"native_hits":0,"seen_at":"stamp"}
+{"key":"0x800288AC","kind":"guest","prims_guest":0,"prims_native":5,"frames":1,"first_frame":11,"last_frame":11,"has_native":false,"native_reached":false,"native_hits":0,"seen_at":"stamp"}
+{"key":"0x80146478","kind":"guest","prims_guest":0,"prims_native":7,"frames":1,"first_frame":12,"last_frame":12,"has_native":false,"native_reached":false,"native_hits":0,"seen_at":"stamp"}
+{"type":"totals","prims_seen":15,"prims_attributed":15,"gp0_anon":0,"span_miss":0,"span_no_fn":0,"unscoped_native":0,"overflow":0,"rows":3,"seen_at":"stamp"}

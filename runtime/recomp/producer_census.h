@@ -185,7 +185,12 @@ class ProducerCensus {
   // A FAILED WRITE IS REPORTED, NOT SWALLOWED: a census that counted a whole session and then quietly
   // failed to persist it is the same silence as never having been fed, and the next run would look like
   // the game simply drew nothing new.
-  void writeJsonl(const char* path, const char* stamp) const {
+  // Ownership query injected by the caller (overrides::query) rather than #included here, so this header
+  // stays hermetic — tests/test_producer_scope.cpp exercises the census with no registry linked at all.
+  // Returns false when the address is not override-installed; fills the native hit count on true.
+  typedef bool (*OwnedQueryFn)(uint32_t addr, uint64_t* nativeHits, uint64_t* oracleHits);
+
+  void writeJsonl(const char* path, const char* stamp, OwnedQueryFn ownedQuery = nullptr) const {
     if (!mFed) {
       lucent::warn("producers",
                    "NOT writing {}: the census was never fed this run, so there is nothing observed to "
@@ -202,11 +207,26 @@ class ProducerCensus {
     }
     for (int i = 0; i < mRowCount; i++) {
       const Row& r = mRows[i];
+      // OWNERSHIP, and the three states are deliberately distinct. Without a query we must not write
+      // `false`: "the address is not override-installed" and "nobody asked" are different facts, and
+      // collapsing them is how the DB's own report line came to print one answer forever — the fields
+      // were consumed as "derived by the runtime" while nothing ever emitted them.
+      char owned[96];
+      if (!ownedQuery) {
+        snprintf(owned, sizeof owned, ",\"owned_query\":\"unavailable\"");
+      } else {
+        uint64_t nativeHits = 0, oracleHits = 0;
+        const bool registered = ownedQuery(r.key.id, &nativeHits, &oracleHits);
+        snprintf(owned, sizeof owned, ",\"has_native\":%s,\"native_reached\":%s,\"native_hits\":%llu",
+                 registered ? "true" : "false",
+                 (registered && nativeHits > 0) ? "true" : "false",
+                 (unsigned long long)nativeHits);
+      }
       fprintf(f,
               "{\"key\":\"0x%08X\",\"kind\":\"%s\",\"prims_guest\":%u,\"prims_native\":%u,"
-              "\"frames\":%u,\"first_frame\":%u,\"last_frame\":%u,\"seen_at\":\"%s\"}\n",
+              "\"frames\":%u,\"first_frame\":%u,\"last_frame\":%u%s,\"seen_at\":\"%s\"}\n",
               r.key.id, r.key.isNativeOnly() ? "native-only" : "guest",
-              r.primsGuest, r.primsNative, r.frames, r.firstFrame, r.lastFrame, stamp ? stamp : "");
+              r.primsGuest, r.primsNative, r.frames, r.firstFrame, r.lastFrame, owned, stamp ? stamp : "");
     }
     // The denominators travel WITH the rows. Without them a later reader can compute a coverage
     // percentage from the rows alone and be confidently wrong, because the rows say nothing about the

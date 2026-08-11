@@ -23,6 +23,7 @@
 #include "hw_bind.h"   // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
+#include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "cfg.h"
 #include "config_vars.h"  // psx::config::render_path() — PSXPORT_RENDER_PATH through the CVar ladder
 #include <lucent/log.h>
@@ -615,7 +616,10 @@ static void game_main(Core* c) {
 #else
     mkdir(dir, 0755);
 #endif
-    c->rsub.census.writeJsonl(path, stamp);
+    // Pass the override registry's own query so each row carries whether its guest address is
+    // override-installed and whether that native ever ran. Without it the DB's ownership fields are
+    // written as "unavailable" rather than a misleading false.
+    c->rsub.census.writeJsonl(path, stamp, &overrides::query);
   }
   lucent::info("native_boot", "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");

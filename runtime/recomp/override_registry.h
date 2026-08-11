@@ -82,6 +82,23 @@ bool dispatch(Core* c, uint32_t addr);
 // "green" is self-qualifying, not a claim about the whole port.
 void coverage(int* total, int* unreached);
 
+// PER-ADDRESS OWNERSHIP QUERY — is this guest address override-installed, and did its native body run?
+// Returns false when the address is not registered at all; on true, fills the hit counts (core A native
+// / core B oracle), which are already maintained for the `ovhit` channel.
+//
+// WHY THIS EXISTS. The graphics-producer DB records, per guest address, how many prims a native producer
+// drew. It also wants to report "we THINK we own this guest function and its native never ran" — the
+// combination that is a lie in the DB rather than a gap. That question is answerable only here, and until
+// this function existed the DB's own two fields for it were never populated by anything, so its report
+// line could print only one answer (0 of N) no matter what the run did — a metric that reads as "we own
+// nothing" while N native producers are demonstrably drawing.
+//
+// MIND WHAT IT DOES AND DOES NOT MEAN: false means the guest ADDRESS is not override-installed. It does
+// NOT mean no native draws that picture. A display-pass producer legitimately draws from game state while
+// the guest function stays on the substrate (the per-mode emitters and the per-area backdrop drawers are
+// exactly this), so a row with prims_native > 0 and has_native false is normal and correct, not a defect.
+bool query(uint32_t addr, uint64_t* nativeHits, uint64_t* oracleHits);
+
 }  // namespace overrides
 
 // Thin module-named forwarders for the direct-install call sites (render emitters etc.) that already
