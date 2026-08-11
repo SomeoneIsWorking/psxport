@@ -2071,6 +2071,14 @@ void GpuState::censusGuestPrim(Core* core) {
         return;
       }
     }
+    // THE GUEST PC WAS TRIED HERE AND REJECTED ON EVIDENCE, 2026-08-11. `sp.pc` is populated for direct
+    // calls (every recompiled wrapper opens by setting it), and using it attributed 221,397 of 221,397
+    // prims — a complete-looking guest leg. But the addresses it named were `0x80080000`, `0x8008007C`,
+    // `0x8007FDB0`, `0x8007E620`: the SDK's own libgs/libgpu packet builders. c->pc is the innermost
+    // guest fn ENTERED, so it names the LIBRARY ROUTINE that performed the store, never the effect that
+    // asked for it. That is the plan's explicitly banned shape — an identity that looks plausible and is
+    // wrong — so it is NOT used. The span still carries `pc` for diagnostics; it is simply not an
+    // attribution source. Leaving these prims counted as span-no-fn is the honest answer.
     core->rsub.census.noteUnattributable(ProducerCensus::WHY_SPAN_NO_FN, 1u);
     return;
   }

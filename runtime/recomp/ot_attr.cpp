@@ -96,7 +96,7 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
       return;
     }
   }
-  if (mSpanCount < SPAN_CAP) mSpans[mSpanCount++] = Span{ k, k + bytes, fn, caller, node };
+  if (mSpanCount < SPAN_CAP) mSpans[mSpanCount++] = Span{ k, k + bytes, fn, caller, node, c->pc };
   else mSpanOverflow++;
 }
 

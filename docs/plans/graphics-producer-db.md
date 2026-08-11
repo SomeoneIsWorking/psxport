@@ -304,8 +304,22 @@ tool and `docs/producers/` are game-side and need no framework claim.
 >   against the wrong denominator is still the wrong answer. The route is KEPT because it is correct where
 >   it fires and it lands in the native leg's key space, and both identity routes are counted separately
 >   so a row's provenance is visible. It is not the guest leg's answer.
-> * **So the remaining candidates are (a) attribute at the OT WALK and (c) price pushing the shadow stack
->   on direct calls.** (a) is the more promising: the walk holds the OT entry, and the OT entry is what the
+> * **CANDIDATE: the store's guest PC — TRIED AND REJECTED ON EVIDENCE, 2026-08-11.** Every recompiled
+>   wrapper opens with `c->pc = <its own address>`, so unlike the shadow stack it IS populated for direct
+>   calls. Wiring it attributed **221,397 of 221,397** prims: a guest leg that looked finished. The
+>   addresses it named were `0x80080000`, `0x8008007C`, `0x8007FDB0`, `0x8007E620` — the SDK's own
+>   libgs/libgpu packet builders. `c->pc` is the innermost guest fn ENTERED, so it names the LIBRARY
+>   ROUTINE that performed the store, never the effect that requested it. **This is the single most
+>   instructive negative in this plan: it produced 100% attribution and ~0% truth, and only reading the
+>   actual row keys caught it.** A coverage number cannot validate an identity source.
+> * **NOTE WHAT THAT IMPLIES ABOUT THE WHOLE APPROACH.** The pool stores are performed by SHARED SDK
+>   routines on behalf of a caller, so no per-store observation can name the effect: the information is
+>   not present at the store. Identity has to come from something that spans the call — a scope the
+>   caller opens (which is what the NATIVE leg does and why it works), or the guest's own dispatch record.
+> * **So the remaining candidate is (c) price pushing the shadow stack on direct calls** — the only option
+>   left that restores caller context at store time. (a), attributing at the OT walk, was reconsidered and
+>   is NOT promising after all: the OT entry yields the packet ADDRESS, which the join already has, and no
+>   author. (a) is the more promising: the walk holds the OT entry, and the OT entry is what the
 >   guest itself uses to find the packet, so identity there does not depend on the C call stack at all.
 >
 > * **NEXT, and do not skip to the join's downstream:** give the span table a per-frame reset or a ring

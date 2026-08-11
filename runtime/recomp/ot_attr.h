@@ -91,7 +91,13 @@ public:
   static constexpr int SPAN_CAP = 65536;
   static constexpr int GTE_CAP  = 512;
 
-  struct Span { uint32_t lo, hi; uint32_t fn, caller, node; };
+  // `pc` = the guest fn most recently ENTERED when this store happened. Every recompiled wrapper opens
+  // with `c->pc = 0x<its own address>`, so unlike `fn` (which comes from the indirect-dispatch shadow
+  // stack and is 0 whenever nothing was dispatched indirectly) this is populated for DIRECT calls too.
+  // It is a WEAKER claim than `fn`: nothing restores it when a nested call returns, so a store made by A
+  // after A called B reads as B. Recorded alongside `fn` rather than instead of it, and reported
+  // separately, so the difference stays visible instead of one silently standing in for the other.
+  struct Span { uint32_t lo, hi; uint32_t fn, caller, node, pc; };
   struct GteBucket { uint32_t fn, node, count; };
 
   // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store — no-op unless the `otattr` channel

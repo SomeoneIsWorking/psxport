@@ -135,6 +135,10 @@ class ProducerCensus {
   // row was named, not just what it was named.
   void noteGuestViaNode(uint32_t prims) { mGuestViaNode += prims; }
   uint64_t guestViaNode() const { return mGuestViaNode; }
+  // Named by the store's guest PC. Its own channel because it is the WEAKEST of the three routes —
+  // c->pc is not restored when a nested call returns, so it can name a callee rather than the submitter.
+  void noteGuestViaPc(uint32_t prims) { mGuestViaPc += prims; }
+  uint64_t guestViaPc() const { return mGuestViaPc; }
 
   void noteUnattributable(Why why, uint32_t prims) {
     mFed = true;
@@ -272,6 +276,13 @@ class ProducerCensus {
                    "the span's emitter fn — the same key space the native leg uses, so both legs land in "
                    "one row.", who, (unsigned long long)mGuestViaNode);
     }
+    if (mGuestViaPc) {
+      lucent::warn("producers",
+                   "{}: {} guest prim(s) were named only by the store's guest PC — the WEAKEST route "
+                   "(c->pc is not restored after a nested call, so it may name a callee rather than the "
+                   "submitter). Treat those rows as provisional until a stronger identity replaces them.",
+                   who, (unsigned long long)mGuestViaPc);
+    }
     if (mSpanNoFn) {
       lucent::warn("producers",
                    "{}: {} prim(s) had a span with NO emitter fn — of those, {} DID carry a render-walk "
@@ -322,6 +333,7 @@ class ProducerCensus {
   uint64_t mSpanNoFn = 0;
   uint64_t mSpanNoFnWithNode = 0;
   uint64_t mGuestViaNode = 0;
+  uint64_t mGuestViaPc = 0;
   uint64_t mUnscopedByLayer[LAYER_CAP] = {};
   uint64_t mUnscopedLayerUnknown = 0;
   Row      mRows[CAP] = {};
