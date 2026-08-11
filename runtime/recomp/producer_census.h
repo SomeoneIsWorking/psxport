@@ -123,6 +123,19 @@ class ProducerCensus {
   }
   // Prims the census SAW and could not attribute. Recording these is what makes a coverage number
   // honest; dropping them is what makes "100% attributed" meaningless.
+  // Of the prims whose span had NO emitter fn, how many still carried a render-walk NODE? That is the
+  // denominator for the candidate fix of keying the guest leg on the node's render fn (node+0x18), which
+  // would land in the SAME key space the native leg uses. Counted rather than reasoned about, because
+  // "the node is probably there" is exactly the assumption that costs a session.
+  void noteSpanNoFnHadNode(uint32_t prims) { mSpanNoFnWithNode += prims; }
+  uint64_t spanNoFnWithNode() const { return mSpanNoFnWithNode; }
+  // Guest-leg prims whose producer was named by the NODE's render fn rather than by the span's emitter
+  // fn. Counted separately and reported, because two identity SOURCES feeding one column is exactly the
+  // kind of quiet conflation that makes a row untrustworthy later: a reader must be able to see how a
+  // row was named, not just what it was named.
+  void noteGuestViaNode(uint32_t prims) { mGuestViaNode += prims; }
+  uint64_t guestViaNode() const { return mGuestViaNode; }
+
   void noteUnattributable(Why why, uint32_t prims) {
     mFed = true;
     mPrimsSeen += prims;
@@ -253,6 +266,19 @@ class ProducerCensus {
         lucent::info("producers", "  … {} more row(s) not shown (full set goes to the JSONL writer)",
                      n - shown);
     }
+    if (mGuestViaNode) {
+      lucent::info("producers",
+                   "{}: {} guest prim(s) were named by the NODE's render fn (node+0x18) rather than by "
+                   "the span's emitter fn — the same key space the native leg uses, so both legs land in "
+                   "one row.", who, (unsigned long long)mGuestViaNode);
+    }
+    if (mSpanNoFn) {
+      lucent::warn("producers",
+                   "{}: {} prim(s) had a span with NO emitter fn — of those, {} DID carry a render-walk "
+                   "node. That second number is the denominator for keying the guest leg on the node's "
+                   "render fn (node+0x18); if it is 0 that candidate is dead, not merely unexplored.",
+                   who, (unsigned long long)mSpanNoFn, (unsigned long long)mSpanNoFnWithNode);
+    }
     if (mUnscopedNative) {
       // WHERE the undeclared work is, ranked, so the next producer to scope is measured not guessed.
       // Layer names match RqLayer (render_queue.h) without including it — this header is used by
@@ -294,6 +320,8 @@ class ProducerCensus {
   }
 
   uint64_t mSpanNoFn = 0;
+  uint64_t mSpanNoFnWithNode = 0;
+  uint64_t mGuestViaNode = 0;
   uint64_t mUnscopedByLayer[LAYER_CAP] = {};
   uint64_t mUnscopedLayerUnknown = 0;
   Row      mRows[CAP] = {};

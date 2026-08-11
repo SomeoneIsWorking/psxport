@@ -2053,7 +2053,24 @@ void GpuState::censusGuestPrim(Core* core) {
     core->rsub.census.noteUnattributable(ProducerCensus::WHY_SPAN_MISS, 1u);
     return;
   }
-  if (!sp.fn) {   // the span knows the address but not the author — NOT a producer keyed 0
+  if (!sp.fn) {
+    // The span knows the address but not the author, because OtAttr's shadow stack only tracks INDIRECT
+    // dispatch and this port's frame loop calls guest bodies directly. Fall back to the NODE's own render
+    // fn — which is not a guess: node+0x18 is the address the guest itself dispatches through, and it is
+    // the SAME key the native leg uses for the type-0x20 family, so both legs land in one row. Measured
+    // before relying on it: 219,322 of 221,397 such prims carried a node (99.06%).
+    // Sanity-filtered to a main-RAM code address so a node whose +0x18 is not a render fn cannot mint a
+    // nonsense row, and the two identity routes are counted separately so a reader can see HOW a row was
+    // named.
+    if (sp.node) {
+      core->rsub.census.noteSpanNoFnHadNode(1u);
+      const uint32_t rfn = core->mem_r32((sp.node & 0x1FFFFFFFu) + 0x18u);
+      if (rfn >= 0x80010000u && rfn < 0x80200000u) {
+        core->rsub.census.noteGuest(rfn, 1u, s_frame);
+        core->rsub.census.noteGuestViaNode(1u);
+        return;
+      }
+    }
     core->rsub.census.noteUnattributable(ProducerCensus::WHY_SPAN_NO_FN, 1u);
     return;
   }

@@ -296,6 +296,17 @@ tool and `docs/producers/` are game-side and need no framework claim.
 >   `RenderDiag::currentNode()` is set by the NATIVE walk and the gte leg does not run it;
 >   (c) push the shadow stack on direct calls too, which is a substrate-wide cost that must be priced
 >   before being considered.
+> * **CANDIDATE (b) MEASURED AND MOSTLY DEAD, 2026-08-11.** The node IS there — 219,322 of 221,397
+>   no-fn prims carried a render-walk node (99.06%), which looked decisive. But keying on `node+0x18`
+>   only attributed **439** of them (0.2%): for the rest, +0x18 is not a main-RAM code address, i.e. those
+>   nodes are not the type-0x20 render-fn shape at all. The 99.06% figure measured "is a node present",
+>   which is NOT the same question as "does that node name a producer" — a reminder that a high number
+>   against the wrong denominator is still the wrong answer. The route is KEPT because it is correct where
+>   it fires and it lands in the native leg's key space, and both identity routes are counted separately
+>   so a row's provenance is visible. It is not the guest leg's answer.
+> * **So the remaining candidates are (a) attribute at the OT WALK and (c) price pushing the shadow stack
+>   on direct calls.** (a) is the more promising: the walk holds the OT entry, and the OT entry is what the
+>   guest itself uses to find the packet, so identity there does not depend on the C call stack at all.
 >
 > * **NEXT, and do not skip to the join's downstream:** give the span table a per-frame reset or a ring
 >   discipline so it stops saturating, THEN re-measure whether `span-no-fn` survives — it may be a
