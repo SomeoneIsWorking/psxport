@@ -745,6 +745,12 @@ void GpuState::raster_line(int x0, int y0, int x1, int y1, uint8_t cr, uint8_t c
 
 // Execute a complete GP0 primitive packet held in s_fifo[0..s_fcount).
 void GpuState::gp0_exec(Core* core) {
+  // Producer census: everything this function pushes into the native render queue is GUEST-ORIGIN — it is
+  // the guest's own GP0 word being executed. Marking it here means the chokepoint counts those prims as
+  // guest-origin instead of as an undeclared NATIVE producer, which is a claim that can never be
+  // discharged (a guest prim has no native producer) and which invited the one wrong fix: opening a
+  // ProducerScope on a guest function. Host-only; writes no guest memory.
+  GuestGp0Scope guestGp0(&core->rsub);
   uint32_t c = s_fifo[0];
   uint8_t op = c >> 24;
   if (op >= 0x20 && op <= 0x3F) {            // polygon

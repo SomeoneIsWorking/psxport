@@ -618,9 +618,18 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // The scope's NAME travels with the key: for a PC-only producer the key is an interned hash, so the
   // name is the only thing that says which code the row belongs to — and holding the first name is what
   // lets the census DETECT two producers colliding on one iid instead of merging them silently.
-  core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(), 1u,
-                                    (uint32_t)gpu_frame_no(core), layer,
-                                    core->rsub.producerScope.currentName());
+  // GUEST-ORIGIN FIRST. A push made while the guest's own GP0 execution is on the stack is the guest's
+  // prim, not an undeclared native producer, and the two must not share a counter: "undeclared native"
+  // names remaining WORK, and a guest prim can never be declared, so mixing them made the number
+  // unreachable on any leg that walks the guest OT and pointed the next reader at the one fix that would
+  // mint a false row — a ProducerScope on a guest function.
+  if (core->rsub.guestGp0Depth > 0) {
+    core->rsub.census.noteGuestOriginPush(1u);
+  } else {
+    core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(), 1u,
+                                      (uint32_t)gpu_frame_no(core), layer,
+                                      core->rsub.producerScope.currentName());
+  }
 
   // WHO draws the undeclared prims — `PSXPORT_DEBUG=unscoped`.
   //
@@ -633,7 +642,8 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // Deduplicated by stack, and capped by NOVELTY rather than by count: every DISTINCT stack is printed
   // once, so a producer pushing 300k prims and one pushing 12 are equally visible. A plain "first N"
   // cap would have printed 8 lines of the same hot loop and hidden every other producer behind it.
-  if (!core->rsub.producerScope.active() && lucent::channel_on("unscoped")) {
+  if (!core->rsub.producerScope.active() && core->rsub.guestGp0Depth == 0 &&
+      lucent::channel_on("unscoped")) {
     void* frames[24];
     const int n = backtrace(frames, 24);
     // Cheap order-sensitive hash of the return addresses — enough to tell distinct call sites apart.

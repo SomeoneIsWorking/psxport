@@ -151,6 +151,24 @@ class ProducerCensus {
   void noteGuestViaPc(uint32_t prims) { mGuestViaPc += prims; }
   uint64_t guestViaPc() const { return mGuestViaPc; }
 
+  // GUEST-ORIGIN prims arriving at the NATIVE queue's chokepoint, counted apart from undeclared native
+  // work — and this distinction is not cosmetic, it decides whether a number can ever reach zero.
+  //
+  // `unscopedNative()` means "real drawing by a native producer nobody has DECLARED yet", and its whole
+  // value is that it names remaining work. But the guest's own GP0 linked-list walk also pushes into this
+  // queue on any leg that walks the guest OT, and a guest prim has NO native producer by definition — it
+  // can never be declared. Counting it as undeclared-native asserted something false and made the headline
+  // number unreachable: measured 2026-08-12, native attribution read exactly 100% at 4:3 and 99.92% at
+  // 16:9, and the whole 418-prim difference was this, not a widescreen producer gap.
+  //
+  // The trap it sets is worse than the miscount. The obvious way to drive "undeclared" to zero is to open
+  // a ProducerScope on the guest function that pushed — which mints exactly the false row the producer DB
+  // exists to prevent. So this is a SEPARATE, REPORTED number rather than a silent exclusion: it says
+  // "these prims came from the guest, they are not yours to declare", which is a different sentence from
+  // "these are attributed".
+  void noteGuestOriginPush(uint32_t prims) { mFed = true; mPrimsSeen += prims; mGuestOrigin += prims; }
+  uint64_t guestOrigin() const { return mGuestOrigin; }
+
   void noteUnattributable(Why why, uint32_t prims) {
     mFed = true;
     mPrimsSeen += prims;
@@ -170,7 +188,7 @@ class ProducerCensus {
   bool     wasFed()          const { return mFed; }
   uint64_t primsSeen()       const { return mPrimsSeen; }
   uint64_t primsAttributed() const {
-    return mPrimsSeen - mGp0Anon - mSpanMiss - mSpanNoFn - mUnscopedNative;
+    return mPrimsSeen - mGp0Anon - mSpanMiss - mSpanNoFn - mUnscopedNative - mGuestOrigin;
   }
   uint64_t gp0Anon()         const { return mGp0Anon; }
   uint64_t spanMiss()         const { return mSpanMiss; }
@@ -266,12 +284,12 @@ class ProducerCensus {
     // prims that could not be attributed at all.
     fprintf(f,
             "{\"type\":\"totals\",\"prims_seen\":%llu,\"prims_attributed\":%llu,"
-            "\"gp0_anon\":%llu,\"span_miss\":%llu,\"span_no_fn\":%llu,"
+            "\"gp0_anon\":%llu,\"span_miss\":%llu,\"span_no_fn\":%llu,\"guest_origin\":%llu,"
             "\"unscoped_native\":%llu,\"overflow\":%d,\"iid_collisions\":%d,"
             "\"rows\":%d,\"seen_at\":\"%s\"}\n",
             (unsigned long long)mPrimsSeen, (unsigned long long)primsAttributed(),
             (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
-            (unsigned long long)mSpanNoFn,
+            (unsigned long long)mSpanNoFn, (unsigned long long)mGuestOrigin,
             (unsigned long long)mUnscopedNative, mOverflow, mIidCollisions, mRowCount,
             stamp ? stamp : "");
     fclose(f);
@@ -292,10 +310,11 @@ class ProducerCensus {
       return;
     }
     lucent::info("producers",
-                 "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + gp0-anon {} + "
-                 "span-miss {} + span-no-fn {}{}",
+                 "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + guest-origin {} + "
+                 "gp0-anon {} + span-miss {} + span-no-fn {}{}",
                  who, mRowCount, (unsigned long long)mPrimsSeen,
                  (unsigned long long)primsAttributed(), (unsigned long long)mUnscopedNative,
+                 (unsigned long long)mGuestOrigin,
                  (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
                  (unsigned long long)mSpanNoFn,
                  mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
@@ -448,4 +467,5 @@ class ProducerCensus {
   int      mOverflow = 0;
   bool     mFed = false;
   uint64_t mPrimsSeen = 0, mGp0Anon = 0, mSpanMiss = 0, mUnscopedNative = 0;
+  uint64_t mGuestOrigin = 0;   // guest-origin pushes at the native chokepoint (see noteGuestOriginPush)
 };

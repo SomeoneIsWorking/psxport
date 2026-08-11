@@ -34,9 +34,28 @@ public:
   // producer may wrap a byte-exact walk with a scope for free.
   ProducerCensus     census;
   ProducerScopeState producerScope;
+  // Are we INSIDE the guest's own GP0 execution right now? Set only by GuestGp0Scope (below), read only
+  // by the native render queue's chokepoint, so a push that came from the guest's linked-list walk is
+  // counted as GUEST-ORIGIN instead of as an undeclared native producer — a guest prim has no native
+  // producer to declare, and conflating the two made the DB's headline number unable to reach zero on any
+  // leg that walks the guest OT. Host-only, writes no guest memory.
+  int guestGp0Depth = 0;
   DualviewSnapshot  dualviewSnapshot;  // dual-view render harness's per-Core RAM+scratchpad+GTE snapshots
   RenderStats       stats;             // per-frame render diag counters (ndepth / projprim)
   ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
   Pgxp              pgxp;               // PGXP-lite subpixel cache (per-Core; PGXP_pushSXYZ2f target)
   ProjParams        projParams;        // camview + per-frame projection constants (per-Core)
+};
+
+// Marks the guest's own GP0 execution for the producer census. Nesting-safe by depth rather than a bool:
+// the guest's DMA walk can re-enter, and a bool would clear the mark on the first inner exit and silently
+// re-attribute the remainder of the outer walk to "undeclared native".
+class GuestGp0Scope {
+ public:
+  explicit GuestGp0Scope(RenderSubstrate* rsub) : mRsub(rsub) { if (mRsub) mRsub->guestGp0Depth++; }
+  ~GuestGp0Scope() { if (mRsub && mRsub->guestGp0Depth > 0) mRsub->guestGp0Depth--; }
+  GuestGp0Scope(const GuestGp0Scope&) = delete;
+  GuestGp0Scope& operator=(const GuestGp0Scope&) = delete;
+ private:
+  RenderSubstrate* mRsub;
 };
