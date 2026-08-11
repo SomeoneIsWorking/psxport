@@ -1,0 +1,149 @@
+// producer_census.h — class ProducerCensus: WHO DREW THIS FRAME, per producer, per Core.
+//
+// THE ASK (USER, 2026-08-11): *"I need a DB for each game to keep track of native graphics producers,
+// framework should do this automatically, when the game renders an effect, if it's not in the DB then a
+// DB entry gets created and we need to track if it has a native producer equivalent"* — populated by
+// ordinary play, *"then I can tell you something like 'work on the DB entries'"*. Full design, schema
+// and staging: docs/plans/graphics-producer-db.md.
+//
+// THE NUMBER THIS EXISTS TO PRODUCE, and why nothing else in the workspace can: three registries
+// already say what code EXISTS (codemap), what has been TRIED (issue-catalog) and which RE steps are
+// REAL (re-frontier), and `overrides::coverage` says how much of what we OWN a run reached — a fraction
+// whose denominator is our own ambition. The missing fraction is the opposite one: of the
+// picture-producing work the game DID this run, how much does the PC produce natively? That denominator
+// is discovered by RUNNING, and this is the table that discovers it.
+//
+// WHAT IT IS NOT: an ordering, a renderer, or a diagnostic channel. It is a per-Core value table with
+// no Core pointer, no GPU dependency and no I/O, so it is testable on its inputs alone
+// (tests/test_producer_census.cpp) and cheap enough to leave ON in a normal windowed run — which the ask
+// requires, because the user's own play session is the primary data source.
+//
+// DESIGNED-NEGATIVE FIRST (global CLAUDE.md: "a diagnostic that can print nothing is lying"). Every
+// count that a report could read as "nothing to see" is separated from "I never looked":
+//   wasFed()         — was this census fed AT ALL? An unfed census and a clean one are different runs.
+//   primsSeen()      — the denominator: prims the census was told about, attributable or not.
+//   gp0Anon()        — prims with no GP0 source address: PERMANENTLY unattributable, not unowned.
+//   spanMiss()       — prims whose packet address matched no attribution span: the feed was off or
+//                      overflowed. Not "this prim has no producer".
+//   unscopedNative() — native pushes with no ProducerScope open: real work by an UNDECLARED producer.
+//   overflow()       — producers that did not fit the table, so a short list cannot read as complete.
+// A report that prints a row list without these six is not allowed to claim coverage.
+#pragma once
+#include <stdint.h>
+
+// ---- ProducerKey — the row identity -------------------------------------------------------------
+//
+// DECIDED with the user (2026-08-11), with the alternatives on the table (fn + material signature;
+// named-effect rows with fns as attributes): **the row IS the guest submitter fn address**, created
+// mechanically on first sight, with the name and RE status curated on it afterwards.
+//
+// Why this key: it lives in the SAME space as `overrides::install`'s key, which is what makes "does
+// this effect have a native producer" a DERIVED fact rather than a box someone has to remember to tick.
+// A name cannot be minted at run time, so a name-keyed table cannot satisfy "an entry gets created"; a
+// material signature splits one effect across texpages and merges unrelated ones.
+//
+// `native` keys exist for PC-only producers (an enhancement with no guest counterpart). They are a
+// SEPARATE space from guest addresses — `native(7)` and `guest(7)` are different rows — because an
+// interned producer id and a guest address are different kinds of thing and collapsing them would
+// silently merge two producers.
+struct ProducerKey {
+  enum Kind : uint8_t { NONE = 0, GUEST = 1, NATIVE_ONLY = 2 };
+  Kind     kind = NONE;
+  uint32_t id   = 0;      // GUEST: the guest fn address. NATIVE_ONLY: an interned producer id.
+
+  static ProducerKey guest(uint32_t addr)  { return ProducerKey{GUEST, addr}; }
+  static ProducerKey native(uint32_t iid)  { return ProducerKey{NATIVE_ONLY, iid}; }
+  // NONE is not "unknown, pick something" — it is the explicit statement that the caller could not
+  // name a producer, and it routes to unscopedNative()/spanMiss() rather than to a row.
+  static ProducerKey none()                { return ProducerKey{NONE, 0}; }
+
+  bool valid()        const { return kind != NONE; }
+  bool isNativeOnly() const { return kind == NATIVE_ONLY; }
+  bool operator==(const ProducerKey& o) const { return kind == o.kind && id == o.id; }
+};
+
+class ProducerCensus {
+ public:
+  // A play session traverses a lot of scenes; Tomba!2 has 68 files under game/render/ and the guest
+  // has more producers than that. 1024 rows is generous for one run and still a fixed ~40 KB per Core,
+  // and going over is REPORTED (overflow()) rather than dropped silently.
+  static constexpr int CAP = 1024;
+
+  // Why a prim could not be attributed. Named rather than bool'd so a report can say WHICH blindness
+  // it hit — the two have different fixes (one is unfixable, one means the feed is off).
+  enum Why : uint8_t {
+    WHY_GP0_ANON  = 0,   // the GP0 words carried no guest source address at all
+    WHY_SPAN_MISS = 1,   // there was an address, but no attribution span covered it
+  };
+
+  struct Row {
+    ProducerKey key;
+    uint32_t primsGuest  = 0;   // prims attributed to this producer on the guest/GTE leg
+    uint32_t primsNative = 0;   // prims its native ProducerScope pushed
+    uint32_t firstFrame  = 0;   // first sighting (never overwritten — it is the "first_seen" the DB keeps)
+    uint32_t lastFrame   = 0;
+    uint32_t frames      = 0;   // distinct frames it was seen in (a one-frame flash vs a constant draw)
+  };
+
+  // ---- feed -------------------------------------------------------------------------------------
+  // The guest leg: `addr` is the submitter fn (OtAttr::Span::fn). An invalid key never reaches here —
+  // callers that could not attribute a prim call noteUnattributable instead, which is the whole point.
+  void noteGuest(uint32_t fnAddr, uint32_t prims, uint32_t frame) {
+    note(ProducerKey::guest(fnAddr), prims, frame, /*native=*/false);
+  }
+  // The native leg. A ProducerKey::none() here means the pushes arrived outside any ProducerScope:
+  // counted as unscoped, never attributed to whichever row happened to be last.
+  void noteNative(ProducerKey key, uint32_t prims, uint32_t frame) {
+    if (!key.valid()) { mFed = true; mUnscopedNative += prims; mPrimsSeen += prims; return; }
+    note(key, prims, frame, /*native=*/true);
+  }
+  // Prims the census SAW and could not attribute. Recording these is what makes a coverage number
+  // honest; dropping them is what makes "100% attributed" meaningless.
+  void noteUnattributable(Why why, uint32_t prims) {
+    mFed = true;
+    mPrimsSeen += prims;
+    if (why == WHY_GP0_ANON) mGp0Anon += prims; else mSpanMiss += prims;
+  }
+
+  // ---- read -------------------------------------------------------------------------------------
+  int rowCount() const { return mRowCount; }
+  const Row* rowAt(int i) const { return (i >= 0 && i < mRowCount) ? &mRows[i] : nullptr; }
+  const Row* find(ProducerKey key) const {
+    for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) return &mRows[i];
+    return nullptr;
+  }
+
+  bool     wasFed()          const { return mFed; }
+  uint64_t primsSeen()       const { return mPrimsSeen; }
+  uint64_t primsAttributed() const { return mPrimsSeen - mGp0Anon - mSpanMiss - mUnscopedNative; }
+  uint64_t gp0Anon()         const { return mGp0Anon; }
+  uint64_t spanMiss()         const { return mSpanMiss; }
+  uint64_t unscopedNative()  const { return mUnscopedNative; }
+  int      overflow()        const { return mOverflow; }
+
+ private:
+  void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native) {
+    mFed = true;
+    mPrimsSeen += prims;
+    Row* r = nullptr;
+    for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) { r = &mRows[i]; break; }
+    if (!r) {
+      if (mRowCount >= CAP) { mOverflow++; return; }   // the prim still counted as seen+attributed
+      r = &mRows[mRowCount++];
+      r->key = key;
+      r->firstFrame = frame;
+      r->lastFrame  = frame;
+      r->frames     = 1;
+    } else if (frame != r->lastFrame) {
+      r->lastFrame = frame;
+      r->frames++;
+    }
+    if (native) r->primsNative += prims; else r->primsGuest += prims;
+  }
+
+  Row      mRows[CAP] = {};
+  int      mRowCount = 0;
+  int      mOverflow = 0;
+  bool     mFed = false;
+  uint64_t mPrimsSeen = 0, mGp0Anon = 0, mSpanMiss = 0, mUnscopedNative = 0;
+};

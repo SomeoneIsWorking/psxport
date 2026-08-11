@@ -4,11 +4,38 @@
 #include "render_node.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
 #include "game.h"
+#include <lucent/log.h>
 
-// Packet pool range (RE'd render-buffer map): the shared pool every GP0 packet submitter
-// (owned native or still-substrate) writes into.
-static constexpr uint32_t POOL_LO = 0x800BFE68u;
-static constexpr uint32_t POOL_HI = 0x800E7E68u;
+// THE PACKET POOL RANGE COMES FROM THE GAME, not from here. It used to be two file-scope constants
+// holding Tomba!2's addresses (0x800BFE68..0x800E7E68) inside game-agnostic framework code — so on any
+// other consumer this whole table silently matched nothing and reported no attributions, which is
+// indistinguishable from "the guest submitted no packets". GameConfig::packetPoolBase/Stride already
+// carry it (native_step_frame's per-frame OT/pool dance uses them); this reads the same fields.
+//
+// TWO PARITY POOLS: base + 2*stride is the pair, which reproduces Tomba!2's old constants exactly
+// (0x800BFE68 + 2*0x14000 = 0x800E7E68) — verified against them rather than re-derived.
+//
+// A GAME THAT HAS NOT RE'd ITS POOL LEAVES THE FIELDS 0 (spyro, spider1 — an honest zero with a TODO,
+// per their own rules). Then this feed CANNOT attribute anything, and it says so once instead of
+// producing an empty table that reads like a measurement.
+namespace {
+struct PoolRange { uint32_t lo, hi; bool known; };
+PoolRange pool_range(Core* c) {
+  const GameConfig* cfg = c->cfg;
+  if (!cfg || !cfg->packetPoolBase || !cfg->packetPoolStride) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      lucent::warn("otattr", "GameConfig::packetPoolBase/Stride are 0 for this game — packet-pool "
+                             "attribution is STRUCTURALLY BLIND here, so an empty span table means "
+                             "'not measured', NOT 'the guest submitted nothing'. RE the pool and fill "
+                             "those fields to turn this on.");
+    }
+    return { 0, 0, false };
+  }
+  return { cfg->packetPoolBase, cfg->packetPoolBase + 2u * cfg->packetPoolStride, true };
+}
+}  // namespace
 
 void OtAttr::resetIfNewFrame(uint32_t frame) {
   if (frame == mFrame) return;
@@ -41,7 +68,8 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
   trackWatch(fn, caller, phys, bytes, frame);
 
   const uint32_t k = addr | 0x80000000u;
-  if (k < POOL_LO || k >= POOL_HI) return;
+  const PoolRange pool = pool_range(c);
+  if (!pool.known || k < pool.lo || k >= pool.hi) return;
 
   resetIfNewFrame(frame);
   // Same node fallback the native GT3/GT4 submit path itself uses (render_internal.h cur_render_node):
