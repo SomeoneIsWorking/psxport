@@ -78,3 +78,63 @@ writable.**
   clone with `git clone --recurse-submodules` died on that exact path *after* cloning beetle and
   *before* checking out `vendor/lucent`, which left lucent's worktree empty with every file staged
   deleted. Recursive submodule operations on this tree do not fail loudly — they stop early.
+
+## DECIDED: how the workspace grows to the Spyro/Crash titles (2026-08-11)
+
+The USER delegated this call ("I'm not gonna decide, maybe Fable should decide" → then "it's yours"), so
+it is decided here rather than left open. Evidence is the engine-lineage measurement in
+`tools/exe_similarity.py`'s docstring (validated both directions: 64.2% positive, 2.3% negative, 12.5%
+cross-studio SDK ceiling) plus `docs/plans/game-seam-redesign.md`.
+
+**One repo per ENGINE LINEAGE, multiple titles inside it. No third vendored layer. Nothing speculative.**
+
+| tree | covers | when it is created |
+|---|---|---|
+| `psxport/` | the framework, and the ONLY framework | exists |
+| `spyro/` | the Insomniac lineage — Spyro 1, 2, 3 as `titles/<t>/` with shared `game/` | exists; converts to multi-title WHEN Spyro 2 work actually starts |
+| `crash/` | Crash 1, 2, 3 (Naughty Dog, GOOL VM) | when Crash work starts, not before |
+| `ctr/`, `crashbash/` | one title each — measured as their own engines | when that work starts, not before |
+
+**Why not the three things that were on the table.**
+
+- **Not one repo for Spyro AND Crash**, which is what was first asked for. Different developer, different
+  data formats (`WAD.WAD`/`SOURCE.TRD` vs `NSF`/`NSD`), and a Lisp-VM architecture needing its own
+  tooling. They already share what they should share — psxport. The cross-shipped rival demos on every
+  disc are why they *look* like one family; they are cross-promotion, not shared code.
+- **Not an engine-family LIBRARY vendored between psxport and a game.** A middle layer whose whole nature
+  is "holds facts for N games" is a factory for the residence defect `pc_scheduler.cpp` already is —
+  invisible to `psxport_smoke`, outside `test_no_game_address_literals.cpp`'s scope, and a second pin to
+  sync through a `sync-submodules.sh` that already certifies pins it never checked. Shared lineage code
+  lives INSIDE the lineage repo, where inheritance is the seam plan's own answer and where the repo-local
+  rule "shared `game/` may not hold title literals" can be linted the same way.
+- **Not 8 sibling per-title repos.** Spyro 2↔3 measure 64.2% — one codebase — so per-title repos would
+  duplicate exactly the code most worth sharing.
+
+**Spyro 1 is in the Insomniac repo by PREFERENCE, not by measurement.** It shares the asset pipeline and
+tooling with 2/3 and **~no code**: 10-11% against a 12.5% SDK ceiling means Insomniac rewrote the engine
+between 1 and 2. Do not expect its native classes to serve Spyro 2; expect its FORMAT knowledge to.
+
+**Order, if it matters:** Spyro 2 first (strongest family prior, adjacent to a working port, and the
+cheapest real test of the multi-title bet), then Spyro 3, then the Crash trio, then CTR/Bash.
+
+**Prerequisite that is not negotiable:** do not bring up a second Insomniac title while the framework
+still contains Tomba!2's frame loop and scheduler. `spyro/game/render/frame_loop.cpp` already documents
+"THIS PORT CANNOT USE THE FRAMEWORK'S FRAME LOOP"; a third consumer would fork it again. Land
+`docs/plans/game-seam-redesign.md`'s early steps first.
+
+## DECIDED: the tooling hoist happens ADDITIVELY, starting now (2026-08-11)
+
+The generic tool ENGINES (`info.py`, `catalog.py`, `re_frontier.py`, `codemap.py`, `whatis.py`,
+`go_public.py`, …) move into `psxport/tools/port/`; the DATA (`docs/info/`, `docs/issues/`, codemaps,
+roadmaps) stays per-game. Every game already vendors psxport, so the engines reach them all.
+
+**The evidence is not theoretical.** `re_frontier.py`'s green-over-nothing bug has now been fixed FOUR
+times across THREE diverged copies (890 / 443 / skill lines), and two of those copies were still reporting
+"OK" over a zero-entry parse on 2026-08-11 — one of them the copy a CLAUDE.md tells you to run. Divergence
+also produced the `RE_FRONTIER_ROADMAP` trap and the `codemap.md` vs `code-map.md` split.
+
+**Additively, because Tomba2Engine is mid-Job-#1 and a flag day is unacceptable:** psxport gains the
+engine as a new file; each game's existing tool keeps working untouched; a game switches to a 3-line shim
+one tool at a time, when someone is already in that repo. No window exists in which a repo has no working
+tool, and each step is independently revertible. Unify `codemap.md`/`code-map.md` naming in the same pass
+as whichever repo switches that tool.
