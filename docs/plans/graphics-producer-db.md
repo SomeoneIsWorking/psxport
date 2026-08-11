@@ -358,7 +358,30 @@ tool and `docs/producers/` are game-side and need no framework claim.
 > (`flag & 1`, which also forces generic) belongs to a function that never runs on this leg and so is
 > unobservable in principle; it is passed as 0 and named at the call site.
 >
-> **Still undeclared, not claimed as done:** world 430,559 (a second producer) + background 323,163.
+> **NATIVE-LEG ATTRIBUTION IS NOW 94.2%** (1,170,025 of 1,241,704 prims, 500-frame field replay,
+> `Tomba2Engine` 94f6c8a). Two more producers keyed after perObjFlush, and each taught the same lesson:
+>
+> * **`backdropRender`** -> keyed on the **resident drawer**, resolved per area from the guest's bg-state
+>   jump table (`backdropTilemapDrawer` already decoded it and merely did not report it). Background
+>   undeclared 323,163 -> 27. NOT a hardcoded literal, and the run proved why: two distinct drawers
+>   appeared in one replay — `0x80115598` (seaside field, 299,200 prims) and `0x8010C26C` (SOP narration,
+>   23,936, frames 63..96). A literal would have credited the narration's prims to the seaside drawer.
+> * **`fieldEntityRender`** (scene table: grass, props) -> `0x80109FE0`. World undeclared 430,559 ->
+>   68,610. The address was confirmed with `codemap.py --addr`, not read off the file's own banner —
+>   a banner address in this subsystem was already wrong once (`"perObjFlush/func_80051464"` names
+>   `NodeXform::propagateAxis`).
+>
+> **The generalisable rule from all three: the key is RESOLVED, never written down.** Two of the three
+> guest addresses vary at runtime (per-mode emitter, per-area drawer), and both resolutions already
+> existed in the code for other reasons. A literal would have been wrong for every case but the one it
+> was sampled from, and wrong in the way a DB cannot detect — a plausible row naming a function that was
+> not resident.
+>
+> **Still undeclared, NOT claimed as done:** world 68,610 + hud 2,939 + overlay 103 + background 27.
+> Candidates are the unscoped emitting producers: `mesh_draw`, `fx_sprite`, `fx_vortex`,
+> `fx_backdrop_plane` (world); `minimap`, `card_browser`, `hud_gauge_emitter`, `render_options`,
+> `screen_fade`, `margin_render` (hud/overlay). Each needs its own guest address RE'd and verified.
+> `mesh_quads` stays deliberately unscoped — the shared writer must inherit its caller's scope.
 
 3. **Native-leg feed.** `RenderQueue::ProducerScope` + the interned producer-id table; count pushes
    in `emitOrQueue`/`push2dQuad`/`drawWorldQuad`. RED test: pushes inside a scope are attributed,
