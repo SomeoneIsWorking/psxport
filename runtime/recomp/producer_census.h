@@ -162,6 +162,31 @@ class ProducerCensus {
                  (unsigned long long)primsAttributed(), (unsigned long long)mUnscopedNative,
                  (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
                  mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
+    // THE ROWS THEMSELVES, ranked. Totals alone say how much is attributed but not TO WHAT, and "which
+    // producers did this run actually see" is the question the DB exists to answer — `producers.py
+    // report --todo` will consume the JSONL, but a run should be readable without a second tool.
+    {
+      int order[CAP];
+      const int n = mRowCount;
+      for (int i = 0; i < n; i++) order[i] = i;
+      for (int i = 1; i < n; i++) {          // insertion sort: n is small and this must not allocate
+        const int v = order[i];
+        int j = i - 1;
+        while (j >= 0 && (mRows[order[j]].primsNative + mRows[order[j]].primsGuest) <
+                         (mRows[v].primsNative + mRows[v].primsGuest)) { order[j + 1] = order[j]; j--; }
+        order[j + 1] = v;
+      }
+      const int shown = n < 16 ? n : 16;
+      for (int i = 0; i < shown; i++) {
+        const Row& r = mRows[order[i]];
+        lucent::info("producers", "  {} 0x{:08X}  native {}  guest {}  frames {} (f{}..f{})",
+                     r.key.isNativeOnly() ? "pc-only" : "guest  ", r.key.id,
+                     r.primsNative, r.primsGuest, r.frames, r.firstFrame, r.lastFrame);
+      }
+      if (n > shown)
+        lucent::info("producers", "  … {} more row(s) not shown (full set goes to the JSONL writer)",
+                     n - shown);
+    }
     if (mUnscopedNative) {
       // WHERE the undeclared work is, ranked, so the next producer to scope is measured not guessed.
       // Layer names match RqLayer (render_queue.h) without including it — this header is used by
