@@ -117,11 +117,142 @@ static void test_same_producer_across_frames_is_one_row(void) {
   CHECK_EQ(r->lastFrame, 109u);
 }
 
+
+// ---- PC-ONLY producers: an enhancement with no guest counterpart must be able to declare itself ----
+//
+// WHY THESE CASES EXIST. Before `pc_producer()` there was no way to open a scope that was not keyed on a
+// guest address, so a PC-only producer had exactly two options and both corrupted the DB: borrow a guest
+// address (the widescreen pillarbox quad then read 2-vs-1 in a producer that is actually faithful — see
+// game/render/render_options.cpp, which deliberately left the quad OUTSIDE its scope for that reason), or
+// stay undeclared and inflate unscopedNative(), the number that is supposed to mean "a guest producer
+// nobody has written down yet". Both are silent. So the assertions below are the two things the fix must
+// make true: a PC-only row EXISTS, and it does not touch the guest row.
+
+// The iid space is derived, deterministic, never zero, and NOT the guest space.
+static void test_pc_producer_iids_are_stable_and_distinct(void) {
+  static_assert(producer_iid("pc/margin-render") != 0u, "an iid of 0 would mint a row keyed zero");
+  static_assert(producer_iid("pc/margin-render") == producer_iid("pc/margin-render"),
+                "the same stable id must intern to the same row on every run");
+  static_assert(producer_iid("pc/margin-render") != producer_iid("pc/pillarbox-fill"),
+                "two different producers must not share a row");
+  CHECK(producer_iid("") != 0u);                       // the empty id is still not a zero key
+  CHECK_EQ(pc_producer("pc/margin-render").iid, producer_iid("pc/margin-render"));
+  CHECK(strcmp(pc_producer("pc/margin-render").name, "pc/margin-render") == 0);
+  // Same NUMBER in the two spaces is two different rows — asserted on the key, not assumed.
+  const uint32_t iid = producer_iid("pc/margin-render");
+  CHECK(!(ProducerKey::native(iid) == ProducerKey::guest(iid)));
+}
+
+// A PC-only scope opens, and its prims land on a NATIVE-ONLY row: attributed, not unscoped, not dropped.
+static void test_pc_only_scope_is_attributed_to_a_native_row(void) {
+  ProducerCensus cx;
+  ProducerScopeState st;
+  static constexpr PcProducer kMargin = pc_producer("pc/margin-render");
+  {
+    ProducerScope s(&st, kMargin);
+    CHECK(st.active());
+    CHECK(st.currentKey().valid());
+    CHECK(st.currentKey().isNativeOnly());             // <- the whole gap: this was GUEST unconditionally
+    // A PC-only scope has NO guest address, and must not answer with its iid as though it had one.
+    CHECK_EQ(st.currentAddr(), 0u);
+    CHECK(strcmp(st.currentName(), "pc/margin-render") == 0);
+    cx.noteNative(st.currentKey(), 24, /*frame=*/5, st.currentName());
+  }
+  CHECK(!st.active());
+  CHECK_EQ(cx.unscopedNative(), 0u);                   // (a) not silently dropped into "undeclared"
+  CHECK_EQ(cx.primsSeen(), 24u);
+  CHECK_EQ(cx.primsAttributed(), 24u);
+  CHECK_EQ(cx.rowCount(), 1);
+  const ProducerCensus::Row* pc = cx.find(ProducerKey::native(kMargin.iid));
+  CHECK(pc != nullptr);
+  CHECK_EQ(pc->primsNative, 24u);
+  CHECK_EQ(pc->primsGuest, 0u);
+  CHECK(strcmp(pc->name, "pc/margin-render") == 0);    // the row can say WHICH code it is
+  // The two id spaces stay separate: the same number as a guest address is a different row.
+  CHECK(cx.find(ProducerKey::guest(kMargin.iid)) == nullptr);
+  // (c) the census invariant, restated on this path.
+  CHECK_EQ(cx.primsSeen(), cx.primsAttributed() + cx.unscopedNative());
+}
+
+// THE CONSEQUENCE THAT WAS ALREADY BEING PAID: a PC enhancement drawn next to a faithful guest producer
+// must not add a prim to that producer's row. Guest row stays 1-vs-1; the enhancement gets its own row.
+static void test_pc_only_prims_do_not_land_on_the_guest_row(void) {
+  ProducerCensus cx;
+  ProducerScopeState st;
+  static constexpr PcProducer kPillarbox = pc_producer("pc/pillarbox-fill");
+  { ProducerScope s(&st, kPillarbox); cx.noteNative(st.currentKey(), 1, 3, st.currentName()); }
+  { ProducerScope s(&st, 0x8007FC24u, "optionsBackdrop");
+    cx.noteNative(st.currentKey(), 1, 3, st.currentName()); }
+  cx.noteGuest(0x8007FC24u, 1, 3);                     // what the guest leg saw: ONE prim
+  const ProducerCensus::Row* g = cx.find(ProducerKey::guest(0x8007FC24u));
+  CHECK(g != nullptr);
+  CHECK_EQ(g->primsNative, 1u);                        // 1-vs-1, not the fabricated 2-vs-1
+  CHECK_EQ(g->primsGuest, 1u);
+  const ProducerCensus::Row* p = cx.find(ProducerKey::native(kPillarbox.iid));
+  CHECK(p != nullptr);
+  CHECK_EQ(p->primsNative, 1u);
+  CHECK_EQ(p->primsGuest, 0u);                         // a PC-only row can never have a guest leg
+  CHECK_EQ(cx.rowCount(), 2);
+  CHECK_EQ(cx.unscopedNative(), 0u);
+  CHECK_EQ(cx.primsSeen(), cx.primsAttributed());
+}
+
+// Nesting works in both directions, and RESTORES — a PC-only overlay drawn inside a guest producer must
+// not leave the guest producer's later prims on the PC row (or unattributed).
+static void test_pc_only_scope_nests_and_restores(void) {
+  ProducerCensus cx;
+  ProducerScopeState st;
+  static constexpr PcProducer kMargin = pc_producer("pc/margin-render");
+  {
+    ProducerScope outer(&st, 0x8003CCA4u, "perObjRenderDispatch");
+    cx.noteNative(st.currentKey(), 2, 9, st.currentName());
+    {
+      ProducerScope inner(&st, kMargin);
+      CHECK(st.currentKey().isNativeOnly());
+      cx.noteNative(st.currentKey(), 5, 9, st.currentName());
+    }
+    CHECK_EQ(st.currentAddr(), 0x8003CCA4u);           // restored, and it is a GUEST scope again
+    CHECK(st.currentKey() == ProducerKey::guest(0x8003CCA4u));
+    cx.noteNative(st.currentKey(), 3, 9, st.currentName());
+  }
+  CHECK_EQ(cx.find(ProducerKey::guest(0x8003CCA4u))->primsNative, 5u);   // 2 + 3
+  CHECK_EQ(cx.find(ProducerKey::native(kMargin.iid))->primsNative, 5u);
+  CHECK_EQ(cx.unscopedNative(), 0u);
+}
+
+// An iid COLLISION (two different producers hashing to one row) is DETECTED and counted, not merged —
+// and the check is run against BOTH classes: it must NOT fire for the same producer seen twice, and it
+// must NOT fire for two natives sharing ONE GUEST row, which is by design (0x8007FCC8 has two).
+static void test_iid_collision_is_counted_and_only_for_native_rows(void) {
+  ProducerCensus cx;
+  const uint32_t iid = producer_iid("pc/margin-render");
+  cx.noteNative(ProducerKey::native(iid), 1, 1, "pc/margin-render");
+  cx.noteNative(ProducerKey::native(iid), 1, 2, "pc/margin-render");    // same producer again
+  CHECK_EQ(cx.iidCollisions(), 0);
+  cx.noteNative(ProducerKey::native(iid), 1, 3, "pc/something-else");   // a DIFFERENT producer, one iid
+  CHECK_EQ(cx.iidCollisions(), 1);
+  CHECK_EQ(cx.rowCount(), 1);                          // it still counts the prims rather than dropping
+  CHECK_EQ(cx.primsSeen(), 3u);
+  CHECK_EQ(cx.primsAttributed(), 3u);
+
+  // The negative class: one GUEST address reimplemented by two different natives is NORMAL.
+  ProducerCensus guestCx;
+  guestCx.noteNative(ProducerKey::guest(0x8007FCC8u), 1, 1, "optionsSolidBox");
+  guestCx.noteNative(ProducerKey::guest(0x8007FCC8u), 1, 1, "pushDialogBackdrop");
+  CHECK_EQ(guestCx.iidCollisions(), 0);
+  CHECK_EQ(guestCx.rowCount(), 1);
+}
+
 int main(void) {
   RUN(scope_sets_and_restores);
   RUN(scoped_pushes_are_attributed);
   RUN(unscoped_pushes_are_counted_not_dropped);
   RUN(unfed_is_distinguishable_from_zero);
   RUN(same_producer_across_frames_is_one_row);
+  RUN(pc_producer_iids_are_stable_and_distinct);
+  RUN(pc_only_scope_is_attributed_to_a_native_row);
+  RUN(pc_only_prims_do_not_land_on_the_guest_row);
+  RUN(pc_only_scope_nests_and_restores);
+  RUN(iid_collision_is_counted_and_only_for_native_rows);
   return pt_summary();
 }

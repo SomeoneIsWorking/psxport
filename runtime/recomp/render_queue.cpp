@@ -615,8 +615,12 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // `layer` is passed so an UNDECLARED push is recorded with the PASS it came from: the report then
   // ranks the undeclared work by layer and names which producer family to scope next, instead of only
   // reporting how much of it there is.
+  // The scope's NAME travels with the key: for a PC-only producer the key is an interned hash, so the
+  // name is the only thing that says which code the row belongs to — and holding the first name is what
+  // lets the census DETECT two producers colliding on one iid instead of merging them silently.
   core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(), 1u,
-                                    (uint32_t)gpu_frame_no(core), layer);
+                                    (uint32_t)gpu_frame_no(core), layer,
+                                    core->rsub.producerScope.currentName());
 
   // WHO draws the undeclared prims — `PSXPORT_DEBUG=unscoped`.
   //

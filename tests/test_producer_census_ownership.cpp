@@ -132,9 +132,124 @@ static void test_totals_record_survives_the_row_change(void) {
   remove(path);
 }
 
+
+// ---- THE FOURTH OWNERSHIP STATE: a PC-only row has no guest function to own -----------------------
+//
+// A native-only row is keyed by an INTERNED id, not an address, so asking the override registry whether
+// that number is installed is a category error — and answering `has_native:false` stamps "no native
+// producer" on the one row that is native by construction. Worse, the interned id is printed as the row's
+// key, which is also its FILENAME in the DB: `0x6E3A1C2B` would read as a guest function that does not
+// exist. Both are silent failures, so both are asserted here.
+
+// Return a COPY of the single JSONL line containing `needle`, or NULL. Two properties, both learned the
+// hard way while writing this file: it is LINE-SCOPED, because `strstr` over the whole buffer happily
+// matches a field belonging to a DIFFERENT row and passes; and it is NON-DESTRUCTIVE, because an earlier
+// version terminated the line in place and every later whole-buffer check then silently searched only the
+// first line — a test that reported a missing field that was in fact present.
+static const char* line_with(const char* buf, const char* needle) {
+  static char line[2048];
+  for (const char* p = buf; p && *p; ) {
+    const char* nl = strchr(p, '\n');
+    const size_t len = nl ? (size_t)(nl - p) : strlen(p);
+    if (len < sizeof line) {
+      memcpy(line, p, len);
+      line[len] = 0;
+      if (strstr(line, needle)) return line;
+    }
+    if (!nl) return NULL;
+    p = nl + 1;
+  }
+  return NULL;
+}
+
+static void test_pc_only_row_is_keyed_and_not_asked_about_ownership(void) {
+  const char* path = "test_producer_ownership_pc_only.jsonl";
+  remove(path);
+  ProducerCensus cx;
+  ProducerScopeState st;
+  static constexpr PcProducer kMargin = pc_producer("pc/margin-render");
+  feed_three_rows(cx, st);
+  { ProducerScope s(&st, kMargin); cx.noteNative(st.currentKey(), 11, 14, st.currentName()); }
+  cx.writeJsonl(path, "stamp", &stub_query);
+
+  static char buf[8192];
+  const long n = slurp(path, buf, sizeof buf);
+  CHECK(n > 0);
+  CHECK_EQ(cx.rowCount(), 4);
+
+  // The key names its own space, so it cannot be read as a guest address (and cannot collide with a
+  // guest row's DB filename).
+  char expectKey[40];
+  snprintf(expectKey, sizeof expectKey, "\"key\":\"pc-%08X\"", kMargin.iid);
+  const char* row = line_with(buf, expectKey);
+  CHECK(row != NULL);
+  if (row) {
+    CHECK(strstr(row, "\"kind\":\"native-only\"") != NULL);
+    CHECK(strstr(row, "\"pc_name\":\"pc/margin-render\"") != NULL);   // WHICH code this row is
+    CHECK(strstr(row, "\"prims_native\":11") != NULL);
+    CHECK(strstr(row, "\"owned_query\":\"pc-only\"") != NULL);        // the fourth state
+    CHECK(strstr(row, "has_native") == NULL);                         // no fabricated verdict…
+    CHECK(strstr(row, "native_reached") == NULL);                     // …in either field
+  }
+  // And the guest rows are untouched by the addition: the query still answers all three states.
+  CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":true,\"native_hits\":42,\"oracle_hits\":7") != NULL);
+  CHECK(strstr(buf, "\"has_native\":true,\"native_reached\":false,\"native_hits\":0,\"oracle_hits\":3") != NULL);
+  CHECK(strstr(buf, "\"has_native\":false,\"native_reached\":false") != NULL);
+  remove(path);
+}
+
+// The invariant, with a PC-only row in the mix: seen == attributed + unscoped, and the totals record
+// still carries every denominator (plus the collision counter, which must read 0 on a clean run — a
+// counter that is never printed cannot be trusted to be zero).
+static void test_totals_hold_with_a_pc_only_row(void) {
+  const char* path = "test_producer_ownership_pc_totals.jsonl";
+  remove(path);
+  ProducerCensus cx;
+  ProducerScopeState st;
+  feed_three_rows(cx, st);                                     // 3 + 5 + 7 guest-keyed native prims
+  { ProducerScope s(&st, pc_producer("pc/pillarbox-fill"));
+    cx.noteNative(st.currentKey(), 2, 13, st.currentName()); }
+  cx.noteNative(ProducerKey::none(), 4, 13);                   // still-undeclared work
+  cx.writeJsonl(path, "stamp", &stub_query);
+
+  static char buf[8192];
+  CHECK(slurp(path, buf, sizeof buf) > 0);
+  CHECK(strstr(buf, "\"prims_seen\":21") != NULL);              // 3+5+7+2+4
+  CHECK(strstr(buf, "\"prims_attributed\":17") != NULL);        // the PC-only prims ARE attributed
+  CHECK(strstr(buf, "\"unscoped_native\":4") != NULL);
+  CHECK(strstr(buf, "\"iid_collisions\":0") != NULL);
+  CHECK_EQ(cx.primsSeen(), cx.primsAttributed() + cx.unscopedNative());
+  CHECK_EQ(cx.iidCollisions(), 0);
+  remove(path);
+}
+
+
+// The same defect stated WITHOUT the new constructor, so this case compiles against the OLD header too
+// and FAILS AT RUNTIME on it rather than at build time — the native-only key space was always reachable
+// through `ProducerKey::native()`; what was missing was a scope that could open it and a writer that
+// treats the row as PC-only. Pre-fix this prints `"key":"0x6E3A1C2B"` and `"has_native":false`.
+static void test_native_only_key_is_written_as_pc_not_as_an_address(void) {
+  const char* path = "test_producer_ownership_native_key.jsonl";
+  remove(path);
+  ProducerCensus cx;
+  const uint32_t iid = 0x6E3A1C2Bu;
+  cx.noteNative(ProducerKey::native(iid), 11, 14);
+  cx.writeJsonl(path, "stamp", &stub_query);
+  static char buf[8192];
+  CHECK(slurp(path, buf, sizeof buf) > 0);
+  CHECK(strstr(buf, "\"key\":\"pc-6E3A1C2B\"") != NULL);   // not "0x6E3A1C2B" — a non-existent guest fn
+  CHECK(strstr(buf, "\"kind\":\"native-only\"") != NULL);
+  CHECK(strstr(buf, "\"owned_query\":\"pc-only\"") != NULL);
+  CHECK(strstr(buf, "has_native") == NULL);                // the registry was never asked an address
+  remove(path);
+}
+
 int main(void) {
   RUN(ownership_distinguishes_all_three_states);
   RUN(no_query_reports_unavailable_not_false);
   RUN(totals_record_survives_the_row_change);
+  RUN(pc_only_row_is_keyed_and_not_asked_about_ownership);
+  RUN(totals_hold_with_a_pc_only_row);
+  RUN(native_only_key_is_written_as_pc_not_as_an_address);
   return pt_summary();
 }

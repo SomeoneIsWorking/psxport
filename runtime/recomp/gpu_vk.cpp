@@ -25,6 +25,7 @@
 // State model: the SDL_GPU device/window/pipelines live on class GpuDevice (gpu_vk_device.h),
 // ONE per process — the first Game constructed claims it (GpuDevice::sInstance); the wrappers
 // ignore Core* exactly as before. The per-frame batch state lives on GpuVkState (game.h).
+#include <sys/stat.h>   // mkdir — the user-level GPU-fault marker dir
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include "cfg.h"
@@ -313,6 +314,90 @@ bool gpu_submit_failed() { return s_gpu_faulted; }
 // (seconds, not milliseconds): a legitimate readback of a full VRAM image on a loaded machine can take
 // far longer than a frame, and a timeout that fires on slowness rather than death would latch the
 // renderer off during normal use — a false positive here costs the user their picture.
+// ── CROSS-PROCESS GPU-FAULT MARKER — the NEXT process refuses to start ─────────────────────────────
+//
+// The in-process latch above protects ONE run. The recorded damage came from the runs AFTER the first
+// fault: seven ring resets in one session, two of them taking the desktop down, because each new process
+// started clean and submitted into a card the kernel was still resetting. So the fault has to outlive the
+// process that saw it.
+//
+// USER-LEVEL, NOT PER-REPO, and that is the whole point: the fault belongs to the CARD, not to a game.
+// A marker under one game's scratch/ would let the next launch of a DIFFERENT game walk into it — and the
+// workspace has four of them sharing one GPU.
+//
+// CLEARING IT IS THE USER'S DECISION, never ours. The rule says diagnose statically and ask the user,
+// whose machine it is, so the refusal prints the exact command to clear and a knob to override for one
+// run. It must never self-clear on a timer or after "looks fine now": that is the retry this exists to
+// prevent, one level up.
+static const char* gpu_fault_marker_path() {
+  static char path[512];
+  static bool built = false;
+  if (built) return path;
+  built = true;
+  const char* xdg = getenv("XDG_STATE_HOME");
+  const char* home = getenv("HOME");
+  if (xdg && *xdg)       snprintf(path, sizeof path, "%s/psxport", xdg);
+  else if (home && *home) snprintf(path, sizeof path, "%s/.local/state/psxport", home);
+  else                    { path[0] = 0; return path; }   // no writable home: nothing to persist to
+  // Best-effort mkdir -p of the two levels we may have added; failure is reported by the open() below.
+  { char tmp[512]; snprintf(tmp, sizeof tmp, "%s", path);
+    for (char* q = tmp + 1; *q; q++) if (*q == '/') { *q = 0; mkdir(tmp, 0755); *q = '/'; }
+    mkdir(tmp, 0755); }
+  const size_t n = strlen(path);
+  snprintf(path + n, sizeof path - n, "/gpu_fault");
+  return path;
+}
+
+// Record the fault for the next process. Called from the latch; never from anywhere else.
+static void gpu_fault_persist(const char* where, const char* detail) {
+  const char* path = gpu_fault_marker_path();
+  if (!path || !*path) {
+    lucent::warn("gpu_vk", "cannot persist the GPU fault (no XDG_STATE_HOME or HOME) — this run is "
+                           "latched off, but the NEXT process will start clean and can submit into the "
+                           "same card. Do not launch another GPU run until the machine is known good.");
+    return;
+  }
+  FILE* f = fopen(path, "wb");
+  if (!f) {
+    lucent::warn("gpu_vk", "could not write the GPU-fault marker {} — the next process will NOT refuse to "
+                           "start. Treat the machine as suspect manually.", path);
+    return;
+  }
+  fprintf(f, "psxport GPU fault\nwhere: %s\ndetail: %s\n", where ? where : "?", detail ? detail : "?");
+  fclose(f);
+  lucent::error("gpu_vk", "GPU fault PERSISTED to {} — every psxport process will now REFUSE to bring up "
+                          "the GPU until you clear it: rm {}", path, path);
+}
+
+// Preflight: refuse to create a device while a previous fault stands. Returns false if we must not start.
+static bool gpu_fault_preflight() {
+  const char* path = gpu_fault_marker_path();
+  if (!path || !*path) return true;
+  FILE* f = fopen(path, "rb");
+  if (!f) return true;                       // no marker: normal start
+  char body[512] = {0};
+  const size_t n = fread(body, 1, sizeof body - 1, f);
+  body[n] = 0;
+  fclose(f);
+  if (cfg_on("PSXPORT_GPU_FAULT_OVERRIDE")) {
+    lucent::warn("gpu_vk", "a GPU fault is on record at {} and PSXPORT_GPU_FAULT_OVERRIDE is set — starting "
+                           "anyway ON YOUR SAY-SO. If the card is still unhealthy this run can reset the "
+                           "graphics ring again. Recorded fault:\n{}", path, body);
+    return true;
+  }
+  lucent::error("gpu_vk",
+                "REFUSING TO START THE GPU: a previous run recorded a GPU fault and it has not been "
+                "cleared. Continuing is what turns one lost frame into a desktop-killing ring reset — the "
+                "recorded incident was seven resets in one session, and every one after the first came "
+                "from a process that started clean.\n"
+                "  marker : {}\n{}"
+                "  clear it (your call, your machine): rm {}\n"
+                "  or override for a single run:       PSXPORT_GPU_FAULT_OVERRIDE=1\n"
+                "  check the kernel first:             journalctl -k -b | grep -iE 'gpu reset|ring|drm'",
+                path, body, path);
+  return false;
+}
+
 static bool gpu_submit_and_wait(SDL_GPUCommandBuffer* cmd, const char* where) {
   if (!cmd) return false;
   SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
@@ -321,6 +406,7 @@ static bool gpu_submit_and_wait(SDL_GPUCommandBuffer* cmd, const char* where) {
       s_gpu_faulted = true;
       lucent::error("gpu_vk", "GPU SUBMIT (fenced) FAILED at {}: {} — LATCHING THE RENDERER OFF for the "
                               "rest of this process; see the latch banner above.", where, SDL_GetError());
+      gpu_fault_persist(where, SDL_GetError());
     }
     return false;
   }
@@ -338,6 +424,7 @@ static bool gpu_submit_and_wait(SDL_GPUCommandBuffer* cmd, const char* where) {
                       "LATCHING THE RENDERER OFF. Waiting longer is what keeps this process alive through "
                       "a kernel ring reset; the readback that wanted this fence is NOT available and its "
                       "caller must not read the transfer buffer.", where, (unsigned long long)kBudgetMs);
+        gpu_fault_persist(where, "fence did not signal within the wall-clock budget");
       }
       return false;
     }
@@ -358,6 +445,7 @@ static bool gpu_submit(SDL_GPUCommandBuffer* cmd, const char* where) {
                   "continuing to submit into it is what escalates one lost frame into a desktop-killing "
                   "ring reset. This run will keep executing WITHOUT drawing; any capture taken from here "
                   "on is not a picture of the game.", where, SDL_GetError());
+    gpu_fault_persist(where, SDL_GetError());
   }
   return false;
 }
@@ -643,6 +731,8 @@ static void init_gpu(Game* game) {
     GPUCHK(s_win, "SDL_CreateWindow");
   }
   // Create the GPU device (SPIR-V shaders; let SDL pick the optimal driver — Vulkan on Linux, Metal on Mac).
+  // A recorded fault from a PREVIOUS process stops us before we ever touch the device.
+  if (!gpu_fault_preflight()) { s_gpu_faulted = true; exit(3); }
   s_dev = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, cfg_on("PSXPORT_GPU_DEBUG") ? true : false, NULL);
   GPUCHK(s_dev, "SDL_CreateGPUDevice");
   // SDL_GetGPUDeviceDriver returns NULL on an invalid device — a null const char* is UB for std::format.

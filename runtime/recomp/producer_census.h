@@ -31,6 +31,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>          // strcmp — the native-only iid collision check (see note())
 #include <lucent/log.h>
 
 // ---- ProducerKey — the row identity -------------------------------------------------------------
@@ -87,6 +88,12 @@ class ProducerCensus {
 
   struct Row {
     ProducerKey key;
+    // The name the FIRST producer to claim this row declared, by pointer (a string literal, same
+    // contract as ProducerScope's `name`). It exists for two reasons and one of them is load-bearing:
+    // a native-only row is keyed by an interned hash, so without the name the row is unidentifiable in
+    // the DB; and holding the first name is what lets an iid COLLISION be detected instead of silently
+    // merging two PC-only producers into one row.
+    const char* name = "";
     uint32_t primsGuest  = 0;   // prims attributed to this producer on the guest/GTE leg
     uint32_t primsNative = 0;   // prims its native ProducerScope pushed
     uint32_t firstFrame  = 0;   // first sighting (never overwritten — it is the "first_seen" the DB keeps)
@@ -102,15 +109,19 @@ class ProducerCensus {
   }
   // The native leg. A ProducerKey::none() here means the pushes arrived outside any ProducerScope:
   // counted as unscoped, never attributed to whichever row happened to be last.
-  void noteNative(ProducerKey key, uint32_t prims, uint32_t frame) {
-    noteNativeLayer(key, prims, frame, /*layer=*/-1);
+  // `name` is the open scope's declared name (ProducerScopeState::currentName()) and is OPTIONAL only
+  // so that every existing call site keeps compiling; pass it wherever it is available, because it is
+  // the only thing that makes a native-only (PC-only) row identifiable and iid collisions detectable.
+  void noteNative(ProducerKey key, uint32_t prims, uint32_t frame, const char* name = nullptr) {
+    noteNativeLayer(key, prims, frame, /*layer=*/-1, name);
   }
   // Same, but records WHICH DRAW LAYER an UNSCOPED push came from. Without this the report can only say
   // "1.3M prims were drawn by nobody", which names the size of the problem and not its location — and
   // the obvious way to find the location (guess a producer, scope it, re-run) is exactly the
   // re-derivation this DB exists to replace. The layer is free at the call site, so the report can rank
   // the un-declared work by pass and say which producer family to scope next.
-  void noteNativeLayer(ProducerKey key, uint32_t prims, uint32_t frame, int layer) {
+  void noteNativeLayer(ProducerKey key, uint32_t prims, uint32_t frame, int layer,
+                       const char* name = nullptr) {
     if (!key.valid()) {
       mFed = true;
       mUnscopedNative += prims;
@@ -119,7 +130,7 @@ class ProducerCensus {
       else                                 mUnscopedLayerUnknown += prims;
       return;
     }
-    note(key, prims, frame, /*native=*/true);
+    note(key, prims, frame, /*native=*/true, name);
   }
   // Prims the census SAW and could not attribute. Recording these is what makes a coverage number
   // honest; dropping them is what makes "100% attributed" meaningless.
@@ -166,6 +177,9 @@ class ProducerCensus {
   uint64_t spanNoFn()        const { return mSpanNoFn; }
   uint64_t unscopedNative()  const { return mUnscopedNative; }
   int      overflow()        const { return mOverflow; }
+  // PC-only producers whose interned iid landed on a row already claimed under a DIFFERENT name. Zero is
+  // the normal answer; non-zero means two producers are sharing one row and BOTH rows' numbers are wrong.
+  int      iidCollisions()   const { return mIidCollisions; }
   static constexpr int LAYER_CAP = 8;    // RqLayer today is 0..3; headroom without a dependency on it
   uint64_t unscopedInLayer(int l) const {
     return (l >= 0 && l < LAYER_CAP) ? mUnscopedByLayer[l] : 0;
@@ -212,7 +226,15 @@ class ProducerCensus {
       // collapsing them is how the DB's own report line came to print one answer forever — the fields
       // were consumed as "derived by the runtime" while nothing ever emitted them.
       char owned[96];
-      if (!ownedQuery) {
+      if (r.key.isNativeOnly()) {
+        // A PC-ONLY ROW HAS NO GUEST FUNCTION TO OWN, so the ownership question does not apply and must
+        // not be answered. Two things would go wrong otherwise: the query would be handed an INTERNED ID
+        // as if it were a guest address (a hash can coincide with an installed address), and
+        // `has_native:false` — the shape a reader takes as "no native producer exists" — would be
+        // stamped on the one row that is native BY CONSTRUCTION. This is the fourth distinct state,
+        // alongside true / false / "nobody asked".
+        snprintf(owned, sizeof owned, ",\"owned_query\":\"pc-only\"");
+      } else if (!ownedQuery) {
         snprintf(owned, sizeof owned, ",\"owned_query\":\"unavailable\"");
       } else {
         uint64_t nativeHits = 0, oracleHits = 0;
@@ -229,10 +251,14 @@ class ProducerCensus {
                  (registered && nativeHits > 0) ? "true" : "false",
                  (unsigned long long)nativeHits, (unsigned long long)oracleHits);
       }
+      // `pc_name` is the OBSERVED scope name, kept separate from producers.py's CURATED `name:` — the
+      // runtime must not overwrite a human's label, and for a native-only row it is the only thing that
+      // says which code the interned key belongs to.
       fprintf(f,
-              "{\"key\":\"0x%08X\",\"kind\":\"%s\",\"prims_guest\":%u,\"prims_native\":%u,"
+              "{\"key\":\"%s\",\"kind\":\"%s\",\"pc_name\":\"%s\","
+              "\"prims_guest\":%u,\"prims_native\":%u,"
               "\"frames\":%u,\"first_frame\":%u,\"last_frame\":%u%s,\"seen_at\":\"%s\"}\n",
-              r.key.id, r.key.isNativeOnly() ? "native-only" : "guest",
+              keyStr(r.key).s, r.key.isNativeOnly() ? "native-only" : "guest", jsonSafe(r.name).s,
               r.primsGuest, r.primsNative, r.frames, r.firstFrame, r.lastFrame, owned, stamp ? stamp : "");
     }
     // The denominators travel WITH the rows. Without them a later reader can compute a coverage
@@ -241,12 +267,13 @@ class ProducerCensus {
     fprintf(f,
             "{\"type\":\"totals\",\"prims_seen\":%llu,\"prims_attributed\":%llu,"
             "\"gp0_anon\":%llu,\"span_miss\":%llu,\"span_no_fn\":%llu,"
-            "\"unscoped_native\":%llu,\"overflow\":%d,"
+            "\"unscoped_native\":%llu,\"overflow\":%d,\"iid_collisions\":%d,"
             "\"rows\":%d,\"seen_at\":\"%s\"}\n",
             (unsigned long long)mPrimsSeen, (unsigned long long)primsAttributed(),
             (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
             (unsigned long long)mSpanNoFn,
-            (unsigned long long)mUnscopedNative, mOverflow, mRowCount, stamp ? stamp : "");
+            (unsigned long long)mUnscopedNative, mOverflow, mIidCollisions, mRowCount,
+            stamp ? stamp : "");
     fclose(f);
     lucent::info("producers", "wrote {} row(s) + totals -> {}", mRowCount, path);
   }
@@ -289,13 +316,21 @@ class ProducerCensus {
       const int shown = n < 16 ? n : 16;
       for (int i = 0; i < shown; i++) {
         const Row& r = mRows[order[i]];
-        lucent::info("producers", "  {} 0x{:08X}  native {}  guest {}  frames {} (f{}..f{})",
-                     r.key.isNativeOnly() ? "pc-only" : "guest  ", r.key.id,
-                     r.primsNative, r.primsGuest, r.frames, r.firstFrame, r.lastFrame);
+        lucent::info("producers", "  {} {}  native {}  guest {}  frames {} (f{}..f{})  {}",
+                     r.key.isNativeOnly() ? "pc-only" : "guest  ", keyStr(r.key).s,
+                     r.primsNative, r.primsGuest, r.frames, r.firstFrame, r.lastFrame, r.name);
       }
       if (n > shown)
         lucent::info("producers", "  … {} more row(s) not shown (full set goes to the JSONL writer)",
                      n - shown);
+    }
+    if (mIidCollisions) {
+      lucent::error("producers",
+                    "{}: {} PC-only push(es) hit an iid ALREADY CLAIMED BY A DIFFERENT PRODUCER — first "
+                    "clash: pc-{:08X} claimed by '{}', then pushed by '{}'. Both rows' prim counts are "
+                    "now wrong; rename one producer's stable id.",
+                    who, mIidCollisions, mCollideIid,
+                    mCollideA ? mCollideA : "?", mCollideB ? mCollideB : "?");
     }
     if (mGuestViaNode) {
       lucent::info("producers",
@@ -338,15 +373,30 @@ class ProducerCensus {
   }
 
  private:
-  void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native) {
+  void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native, const char* name = nullptr) {
     mFed = true;
     mPrimsSeen += prims;
     Row* r = nullptr;
     for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) { r = &mRows[i]; break; }
+    if (r && name && name[0]) {
+      if (!r->name[0]) {
+        r->name = name;
+      } else if (key.isNativeOnly() && strcmp(r->name, name) != 0) {
+        // TWO DIFFERENT PC-ONLY PRODUCERS ON ONE iid. The hash is not injective, so this is possible;
+        // what is not acceptable is merging them quietly, which would report one row's prims as the
+        // other's. Counted, and the pair is kept for the report so the fix is "rename one of these two"
+        // rather than an investigation. Only for native-only keys: a guest row legitimately receives
+        // pushes from more than one native under more than one name (0x8007FCC8 has two claimants —
+        // `codemap.py --addr 0x8007FCC8`), so a name mismatch there is not evidence of a key collision.
+        mIidCollisions++;
+        if (!mCollideA) { mCollideA = r->name; mCollideB = name; mCollideIid = key.id; }
+      }
+    }
     if (!r) {
       if (mRowCount >= CAP) { mOverflow++; return; }   // the prim still counted as seen+attributed
       r = &mRows[mRowCount++];
       r->key = key;
+      r->name = (name && name[0]) ? name : "";
       r->firstFrame = frame;
       r->lastFrame  = frame;
       r->frames     = 1;
@@ -357,6 +407,36 @@ class ProducerCensus {
     if (native) r->primsNative += prims; else r->primsGuest += prims;
   }
 
+  // ---- the row key AS A STRING, and why native-only rows may not use the guest format --------------
+  // The key string is the row's identity everywhere downstream: it is the JSONL `key`, the DB row's
+  // FILENAME (docs/producers/<key>.md) and the argument to `producers.py show`. An interned iid printed
+  // as `0x6E3A1C2B` would be indistinguishable from a guest address in every one of those places — a
+  // row that looks like a function that does not exist. `pc-` says which space the number lives in.
+  struct KeyStr { char s[24]; };
+  static KeyStr keyStr(ProducerKey k) {
+    KeyStr o{};
+    snprintf(o.s, sizeof o.s, k.isNativeOnly() ? "pc-%08X" : "0x%08X", k.id);
+    return o;
+  }
+  // Names come from source string literals, but this writes JSON that a tool INGESTS: one stray quote
+  // and producers.py counts the whole record unparseable, so a run's rows vanish from the DB. Sanitised
+  // rather than trusted; truncation is visible in the value itself.
+  struct SafeStr { char s[64]; };
+  static SafeStr jsonSafe(const char* in) {
+    SafeStr o{};
+    size_t n = 0;
+    for (const char* p = in ? in : ""; *p && n + 1 < sizeof o.s; ++p) {
+      const unsigned char c = (unsigned char)*p;
+      o.s[n++] = (c >= 0x20 && c < 0x7F && c != '"' && c != '\\') ? (char)c : '_';
+    }
+    o.s[n] = 0;
+    return o;
+  }
+
+  int         mIidCollisions = 0;
+  const char* mCollideA = nullptr;
+  const char* mCollideB = nullptr;
+  uint32_t    mCollideIid = 0;
   uint64_t mSpanNoFn = 0;
   uint64_t mSpanNoFnWithNode = 0;
   uint64_t mGuestViaNode = 0;
