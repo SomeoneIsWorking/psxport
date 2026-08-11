@@ -643,7 +643,7 @@ def cmd_classify(args) -> int:
         for a in sorted(allres):
             print(f"#      0x{a}  fan-in {allres[a].fanin}  ops: {_hist(allres[a].ops)}")
     if allblk:
-        print(f"#   DISTINCT shared dependencies needing judgement ONCE: {len(allblk)}")
+        print(f"#   shared deps with NO address-keyed owner — CHECK each (see NOTE): {len(allblk)}")
         for a in sorted(allblk):
             print(f"#      0x{a}  fan-in {allblk[a].fanin}  ops: {_hist(allblk[a].ops)}")
         # THE BLIND SPOT THIS TOOL HAD, made loud. Without a frontier the blocked_on list is a list of
@@ -656,8 +656,18 @@ def cmd_classify(args) -> int:
                   f"remaining work. Pass the game's ownership index (Tomba!2: --frontier "
                   f"docs/code-map.md, regenerate with tools/codemap.py first).")
         else:
-            print(f"#   (checked against a {len(frontier)}-address frontier: these are the deps that "
-                  f"remain UNOWNED)")
+            print(f"#   (checked against a {len(frontier)}-address frontier: these have no ADDRESS-KEYED "
+                  f"owner)")
+        # THE LIMIT OF THIS WHOLE MECHANISM, stated where the list is printed. A frontier answers
+        # "is this ADDRESS owned". A shared writer can be owned BEHAVIOURALLY by a native that records
+        # no guest address — measured: 0x80027768 -> Render::meshQuadRecordsEmit and 0x8002847C ->
+        # emitAnimQuadRecords, both of which take the depth cue as an explicit parameter, and neither of
+        # which any address index can see. Successive attempts at that family reported 4, 1 and 2
+        # outstanding deps; the real answer was 0. So this list is what to CHECK, never a worklist.
+        print(f"#   NOTE: these are addresses to CHECK, NOT a worklist. A writer can be owned "
+              f"BEHAVIOURALLY by a native that records no guest address, which no address index can "
+              f"see — grep the record format in the game's render sources and docs/re/ before treating "
+              f"any of them as outstanding.")
     if args.json:
         with open(args.json, 'w') as f:
             json.dump({'corpus_bodies': len(corpus.bodies), 'corpus_files': corpus.files,
