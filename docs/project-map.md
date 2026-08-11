@@ -193,6 +193,19 @@ exits 0 exactly like a passing one). There is intentionally **no `skip()`**: a s
 - `tests/test_harness_selftest.cpp` asserts the harness's own failure paths still fire (a failing
   check counted + short-circuiting the case, an empty case going red, the exit code). A harness
   nobody has seen fail is not a harness — this one re-proves it every run.
+- `tests/test_no_game_address_literals.cpp` is the **game-agnosticism gate**: it scans `runtime/` +
+  `common/` for hex literals in LIVE CODE (comments and string literals are RE documentation and do
+  not count) that name a particular game's guest memory — main RAM `0x80010000-0x801FFFFF` and its
+  KSEG1 mirror, plus any scratchpad FIELD `0x1F800001-0x1F8003FF` — while every console constant
+  (`0x1F801xxx` HW regs, the BIOS/kernel region, `0x200000`, segment masks, the PS-EXE load base and
+  initial SP) is asserted NOT to trip it. The repo holds **391** such literals today, recorded as a
+  per-`(file, address, count)` **baseline in the test itself**; the gate fails on anything NEW, and
+  also fails when a count is too HIGH (someone fixed a literal without shrinking the baseline) or a
+  row matches nothing (delete it). So the baseline is shrink-only, and raising a count is a
+  hand-written edit to the gate, visible in review. The count is printed every run. Fix one by moving
+  the address into `GameConfig` (`runtime/recomp/game_iface.h`) — reuse an existing field — and obey
+  the honest-zero rule: a consumer reading `0` must fail fast or announce its blindness once, loudly
+  (`runtime/recomp/ot_attr.cpp`'s `pool_range()` is the worked example).
 - Tests link the `psxport` static archive, so only the objects a test references are pulled in. A
   unit that calls into the game substrate fails to LINK on the `generated/` symbols
   (`main_dispatch`, `g_rec_overlays`, `rec_func_index`) — that is the framework/game seam saying the
