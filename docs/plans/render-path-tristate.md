@@ -67,21 +67,22 @@ enum class RenderPath { Native = 0, Gte = 1, Psx = 2 };
   cannot disagree. `GpuState::soft_gpu` is DELETED, not left as an alias — a second way to say it is
   how the four switches above happened.
 
-### Mode 3 must imply the enhancement lockout, and say so
+### DECIDED (USER, 2026-08-11): THE ENHANCEMENTS ARE NATIVE-ONLY. BOTH guest paths are pure.
 
-`Psx` implies what `PSXPORT_ORACLE` implies (`native_boot.cpp:593-600`): no fps60 interpolation, no
-widescreen geometry, no native depth compositing, no observer tagging. Those gates already consult
-`oracle_mode()`; they get repointed at `path == RenderPath::Psx` (or `oracle_mode()` becomes exactly
-"the path is Psx"). Otherwise mode 3 is a PSX rasterizer drawing an enhanced frame — a reference
-that is not a reference.
+> *"I don't want GTE enhancements, GTE/OT should stay pure"* — and, confirmed directly when this
+> consequence was put to them: *"Yes fps60/wide/native-depth is supposed to be native-only"*.
 
-### DECIDED (USER, 2026-08-11): `Gte` IS PURE TOO
+So **the enhancement lockout hangs on `path != Native`**, not on `path == Psx`. `fps60` interpolation,
+widescreen geometry, native depth compositing and observer tagging run in `native` and nowhere else.
+Those gates already refuse to run under `oracle_mode()` (`native_boot.cpp:593-600`), so the change is
+to widen that one predicate — either repoint each gate at `path != RenderPath::Native`, or make
+`oracle_mode()` mean exactly that and leave the call sites alone. Prefer the second: there are only
+four `oracle_mode()` call sites, and one predicate cannot drift out of sync with itself.
 
-> *"I don't want GTE enhancements, GTE/OT should stay pure"*
-
-So the enhancement lockout hangs on `path != Native`, not on `path == Psx`, and **modes 2 and 3
-differ by exactly one thing: the rasterizer.** That is what makes the pair a usable A/B — a
-difference between them is attributable to rasterization and nothing else.
+**This is settled, not a recommendation — do not re-derive it.** The consequence is that
+**modes 2 and 3 differ by exactly one thing: the rasterizer**, which is what makes the pair a usable
+A/B (a difference between them is attributable to rasterization and nothing else), and that there is
+NO mode meaning "guest geometry with PC enhancements". An enhanced frame is a frame the PC produced.
 
 This does not add a mode; it DELETES one. Today's four switches map onto the enum like this:
 
@@ -95,12 +96,11 @@ This does not add a mode; it DELETES one. Today's four switches map onto the enu
 
 **Two consequences to state up front, because they are behaviour changes, not renames:**
 
-1. **fps60 interpolation, widescreen geometry, native depth compositing and observer tagging become
-   NATIVE-ONLY.** They already refuse to run under `oracle_mode()`; widening that gate to
-   `path != Native` means there is no longer any way to interpolate or widen the guest's own render.
-   That agrees with the workspace rule that interpolation is unlocked by *execution ownership*
-   (root CLAUDE.md, the Dusklight record-and-replace caveat) — you get 60fps by owning the producer,
-   not by lerping guest output.
+1. **There is no longer any way to interpolate or widen the guest's own render** — which is the
+   intended shape, not a cost: it agrees with the standing rule that interpolation is unlocked by
+   *execution ownership* (`docs/workspace/WORKSPACE.md` / `CLAUDE.md`, the Dusklight
+   record-and-replace caveat). You get 60fps by owning the producer, not by lerping guest output.
+   It also means the enhancements stop being a variable in every guest-leg measurement.
 2. **Every existing `PSXPORT_RENDER_PSX` A/B changes meaning** (it becomes pure). The sites to
    re-read before flipping the switch: `dualcore.cpp:95` (per-core render path), `sbs.cpp:656-662`
    (`M_RENDER`/`M_GAMEPLAY`/`M_FULL`/`M_SKIP` set `psxRender` per leg), `repl.cpp:283`
