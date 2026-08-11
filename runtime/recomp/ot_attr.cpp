@@ -4,6 +4,7 @@
 #include "render_node.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
 #include "game.h"
+#include "render_noise.h"   // THE one GameConfig-derived definition of the pool / OT / pool-ptr windows
 #include <lucent/log.h>
 
 // THE PACKET POOL RANGE COMES FROM THE GAME, not from here. It used to be two file-scope constants
@@ -18,11 +19,15 @@
 // A GAME THAT HAS NOT RE'd ITS POOL LEAVES THE FIELDS 0 (spyro, spider1 — an honest zero with a TODO,
 // per their own rules). Then this feed CANNOT attribute anything, and it says so once instead of
 // producing an empty table that reads like a measurement.
+//
+// The arithmetic moved to render_noise.h (2026-08-11) because dualcore.cpp and selftest.cpp each had
+// their OWN copy of it with Tomba!2's literals still in them — three copies meant fixing one left two
+// lying. This function is now just the pool window of that shared mask.
 namespace {
 struct PoolRange { uint32_t lo, hi; bool known; };
 PoolRange pool_range(Core* c) {
-  const GameConfig* cfg = c->cfg;
-  if (!cfg || !cfg->packetPoolBase || !cfg->packetPoolStride) {
+  const RenderNoiseMask m = RenderNoiseMask::from(c->cfg, "otattr");
+  if (!m.poolLo && !m.poolHi) {
     static bool warned = false;
     if (!warned) {
       warned = true;
@@ -33,7 +38,7 @@ PoolRange pool_range(Core* c) {
     }
     return { 0, 0, false };
   }
-  return { cfg->packetPoolBase, cfg->packetPoolBase + 2u * cfg->packetPoolStride, true };
+  return { m.poolLo, m.poolHi, true };
 }
 }  // namespace
 

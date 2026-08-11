@@ -14,6 +14,9 @@
 #include "hw_bind.h"    // mdec_bind (run_mdecpump)
 #include "hle.h"        // Hle::i_stat — the interrupt controller run_spuirq asserts on
 #include <lucent/log.h> // diagnostics: lucent::info / error (channel-gated internally, never guarded)
+#include "game_iface.h"       // psxport_game_config() — the stage predicate is GAME data, not framework data
+#include "task_slot_layout.h" // task0_stage_entry_addr / task0_state_mach_addr (STOPGAP: slot offsets)
+#include "render_noise.h"     // RenderNoiseMask — the one GameConfig-derived render-noise definition
 
 #include <cstdio>
 #include <cstdlib>
@@ -33,9 +36,43 @@ void load_exe(const char* path, Core* c);
 void dc_boot_init(Core* c);
 void dc_step_frame(Core* c, uint32_t f);
 
-#define TASKBASE   0x801fe000u   // scheduler task-0 object; the active STAGE runs here (entry @+0xc)
-#define STAGE_DEMO 0x801062E4u
-#define STAGE_GAME 0x8010637Cu   // the field; free-roam settles at sm[0x48]==2
+// THE STAGE PREDICATE COMES FROM THE GAME. These were three Tomba!2 literals (TASKBASE 0x801fe000,
+// STAGE_DEMO 0x801062E4, STAGE_GAME 0x8010637C) in game-agnostic framework code, and all three are
+// exact matches for GameConfig::taskTableBase / stageDemo / stageGame — so on any other consumer these
+// framework selftests drove a nav machine against another game's addresses, ran out their 2500-frame cap
+// and printed "FAIL: reach GAME". That reads as a bug in the port under test; it was a bug in the
+// selftest. Now: read GameConfig, and if the game has not RE'd these, REFUSE (exit code 2 = this
+// selftest is inapplicable to this game) instead of failing it.
+namespace {
+struct StageCfg {
+  uint32_t entryAddr = 0;   // task0 + 0x0C — PC of the stage body currently running
+  uint32_t smAddr    = 0;   // task0 + 0x48 — that stage's state machine (free-roam settles at 2)
+  uint32_t game      = 0;   // GameConfig::stageGame
+  uint32_t demo      = 0;   // GameConfig::stageDemo (log labelling only)
+};
+// Fills *out, or explains once why this selftest cannot run here. Zero is NOT a usable address: reading
+// mem_r32(0x0C) succeeds (it is BIOS/zero memory), so every `stage() != game` test would be true
+// forever — a silent no-op is not available, only a lie or a refusal.
+bool stage_cfg(const char* which, StageCfg* out) {
+  const GameConfig* cfg = psxport_game_config();
+  StageCfg s;
+  s.entryAddr = task0_stage_entry_addr(cfg);
+  s.smAddr    = task0_state_mach_addr(cfg);
+  s.game      = cfg ? cfg->stageGame : 0;
+  s.demo      = cfg ? cfg->stageDemo : 0;
+  if (!s.entryAddr || !s.game) {
+    lucent::error("selftest",
+                  "selftest '{}' is INAPPLICABLE to this game: it navigates by the scheduler stage word, "
+                  "and GameConfig::taskTableBase (stage-entry word 0x{:08X}) / stageGame (0x{:08X}) are "
+                  "unset. NOT running it and NOT reporting a failure — a red 'FAIL: reach GAME' here "
+                  "would name the port under test for a gap in its GameConfig. RE the task table + stage "
+                  "entry PCs and fill those fields.", which, s.entryAddr, s.game);
+    return false;
+  }
+  *out = s;
+  return true;
+}
+}  // namespace
 #define PAD_NONE   0xFFFFu
 #define PAD_START  (0xFFFFu & ~0x0008u)   // active-low: Start pressed
 #define PAD_CROSS  (0xFFFFu & ~0x4000u)   // active-low: Cross pressed (menu confirm)
@@ -43,6 +80,10 @@ void dc_step_frame(Core* c, uint32_t f);
 
 // One self-test run. Returns 0 on pass, 1 on fail.
 static int run_startgame(const char* path) {
+  // REFUSE before booting anything if this game has not RE'd its stage predicate (exit 2 =
+  // inapplicable, the same code selftest_run() uses for a name it does not know).
+  StageCfg sc;
+  if (!stage_cfg("startgame", &sc)) return 2;
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
   Game* game = new Game();
   game->psx_fallback = 1;                 // FULL PSX: cooperative tasks run as coroutine-resumed recomp
@@ -55,12 +96,12 @@ static int run_startgame(const char* path) {
   uint32_t f = 0;
   uint32_t last_stage = 0, last_sm = 0xFFFFFFFFu;
 
-  auto stage = [&]{ return c->mem_r32(TASKBASE + 0xc); };
-  auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
+  auto stage = [&]{ return c->mem_r32(sc.entryAddr); };
+  auto sm48  = [&]{ return (uint32_t)c->mem_r16(sc.smAddr); };
   auto log_change = [&]{
     uint32_t st = stage(), s = sm48();
     if (verbose && (st != last_stage || s != last_sm)) {
-      const char* n = st == STAGE_DEMO ? "DEMO" : st == STAGE_GAME ? "GAME" : "?";
+      const char* n = st == sc.demo ? "DEMO" : st == sc.game ? "GAME" : "?";
       lucent::info("selftest", "f{} stage={}(0x{:08X}) sm[0x48]={}", f, n, st, s);
       last_stage = st; last_sm = s;
     }
@@ -68,13 +109,13 @@ static int run_startgame(const char* path) {
 
   // Phase 1 — MASH START: pulse Start (and Cross as a confirm) to leave the title and start the game.
   // Pulsing (8 on / 8 off) makes each press a fresh input EDGE the menu's current&~prev logic sees.
-  for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
+  for (; f < REACH_CAP && stage() != sc.game; f++) {
     bool on = (f % 16u) < 8u;
     c->game->pad.driveHold(on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
     dc_step_frame(c, f);
     log_change();
   }
-  if (stage() != STAGE_GAME) {
+  if (stage() != sc.game) {
     lucent::info("selftest", "FAIL: never reached GAME stage after {} frames of mashing Start (stuck stage=0x{:08X} sm[0x48]={})", f, stage(), sm48());
     return 1;
   }
@@ -87,7 +128,7 @@ static int run_startgame(const char* path) {
   for (uint32_t g = 0; g < SETTLE_CAP; g++, f++) {
     dc_step_frame(c, f);
     log_change();
-    if (stage() == STAGE_GAME && sm48() == 2) {
+    if (stage() == sc.game && sm48() == 2) {
       // Reached the RUNNING field state (sm[0x48]==2). The bug this test guards (the recompiler split the
       // GAME stage fn at the seeded loop top 0x801063F4, so the prologue func returned instead of flowing
       // into the loop -> the coro task was reaped as "done" and the field FROZE at sm[0x48]==0, never
@@ -141,7 +182,7 @@ static int run_startgame(const char* path) {
       lucent::info("selftest", "FAIL: loop_ran={} (counter +{}) saw_clip={} clip_ended={} (xa_active={} sm[0x48]={}).", loop_ran, loop_adv, saw_clip, clip_ended, xa_stream_is_active(&game->xa), sm48());
       return 1;
     }
-    if (stage() != STAGE_GAME) {   // bounced back out of GAME (e.g. froze->reset) — not free-roam
+    if (stage() != sc.game) {   // bounced back out of GAME (e.g. froze->reset) — not free-roam
       lucent::info("selftest", "note: left GAME stage at frame {} (stage=0x{:08X})", f, stage());
     }
   }
@@ -159,6 +200,10 @@ static int run_startgame(const char* path) {
 // across it (its per-iteration counter *(0x1F800198) advances) — so we test the field actually progresses,
 // not merely that we dodged the abort. RED before the narration->field transition is owned; GREEN after.
 static int run_narration(const char* path) {
+  // REFUSE before booting anything if this game has not RE'd its stage predicate (exit 2 =
+  // inapplicable, the same code selftest_run() uses for a name it does not know).
+  StageCfg sc;
+  if (!stage_cfg("narration", &sc)) return 2;
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
   Game* game = new Game();
   game->psx_fallback = 0;                  // NATIVE shipping path (not the SBS full-PSX coroutine core)
@@ -166,17 +211,17 @@ static int run_narration(const char* path) {
   load_exe(path, c);
   dc_boot_init(c);
 
-  auto stage = [&]{ return c->mem_r32(TASKBASE + 0xc); };
-  auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
+  auto stage = [&]{ return c->mem_r32(sc.entryAddr); };
+  auto sm48  = [&]{ return (uint32_t)c->mem_r16(sc.smAddr); };
 
   const uint32_t REACH_CAP = 2500;
   uint32_t f = 0;
-  for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
+  for (; f < REACH_CAP && stage() != sc.game; f++) {
     bool on = (f % 16u) < 8u;
     c->game->pad.driveHold(on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
     dc_step_frame(c, f);
   }
-  if (stage() != STAGE_GAME) {
+  if (stage() != sc.game) {
     lucent::info("selftest", "FAIL: never reached GAME stage after {} frames (stuck stage=0x{:08X})", f, stage());
     return 1;
   }
@@ -210,6 +255,10 @@ static int run_narration(const char* path) {
 // the void/cliff scene ids 5..7). This is the foundation check for the divergence harness (docs/oracle.md);
 // the state-sync barrier + VRAM diff build on top. Selected by PSXPORT_SELFTEST=oracle.
 static int run_oracle(const char* path) {
+  // REFUSE before booting anything if this game has not RE'd its stage predicate (exit 2 =
+  // inapplicable, the same code selftest_run() uses for a name it does not know).
+  StageCfg sc;
+  if (!stage_cfg("oracle", &sc)) return 2;
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
   Game* game = new Game();
   game->psx_fallback = 1;                  // FULL PSX: cooperative tasks run as coroutine-resumed bodies...
@@ -220,20 +269,20 @@ static int run_oracle(const char* path) {
   dc_boot_init(c);
   void gpu_native_shot(Core*, const char*);
 
-  auto stage = [&]{ return c->mem_r32(TASKBASE + 0xc); };
-  auto sm48  = [&]{ return (uint32_t)c->mem_r16(TASKBASE + 0x48); };
+  auto stage = [&]{ return c->mem_r32(sc.entryAddr); };
+  auto sm48  = [&]{ return (uint32_t)c->mem_r16(sc.smAddr); };
   auto loopc = [&]{ return c->mem_r16(0x1F800198u); };
   auto scene = [&]{ return c->mem_r8(0x800bf9b4u); };
   auto ovsig = [&]{ return c->mem_r32(0x80109450u); };   // MODE overlay: 0x3C021F80=SOP narration, 0x801138A4=walkable field
 
   const uint32_t REACH_CAP = 4000;
   uint32_t f = 0;
-  for (; f < REACH_CAP && stage() != STAGE_GAME; f++) {
+  for (; f < REACH_CAP && stage() != sc.game; f++) {
     bool on = (f % 16u) < 8u;
     c->game->pad.driveHold(on ? ((f & 16u) ? PAD_CROSS : PAD_START) : PAD_NONE);
     dc_step_frame(c, f);
   }
-  if (stage() != STAGE_GAME) {
+  if (stage() != sc.game) {
     lucent::info("selftest", "FAIL(oracle): interpreter core never reached GAME after {} frames (stuck stage=0x{:08X} sm[0x48]={})", f, stage(), sm48());
     return 1;
   }
@@ -300,10 +349,15 @@ static int run_oracle(const char* path) {
 // engine-state RAM band, excluding the render/timing regions that differ BY DESIGN (the native render path
 // writes a different OT/packet pool than the PSX one). Surviving divergences are native-reimplementation
 // bugs — e.g. scene state the native side fails to set up (the void "effect" we are missing). PSXPORT_SELFTEST=oraclediff.
+// The render/timing regions that differ BY DESIGN. This was a VERBATIM copy of dualcore.cpp's
+// Tomba!2 literals; both now derive from GameConfig (render_noise.h). The amplification that makes it
+// worth more than tidiness: od_is_render is applied INSIDE diff_band's coalescing loop below, so a
+// mask shaped for another game does not merely drop ranges — it MERGES adjacent real divergences
+// across the masked gap and misreports their extents. An un-RE'd game gets an EMPTY mask and one loud
+// line, never an inherited window.
 static bool od_is_render(uint32_t a) {
-  if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // render pool ptrs + dwell
-  if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (x2) + OT (x2) + env (render-only)
-  return false;
+  static const RenderNoiseMask mask = RenderNoiseMask::from(psxport_game_config(), "oraclediff");
+  return mask.covers(a);
 }
 // The guest CdSearchFile directory/file cache (FUN_8008b8f0 / FUN_8008bbe8): a 128-entry stride-0x2c dir
 // table @0x80102D6C, a stride-0x20 file-record table @*0x80102728, working vars 0x801026E0.., and the
@@ -331,6 +385,10 @@ static uint32_t od_advance_to_scene(Core* c, uint32_t& f, uint8_t target, uint32
   return n;
 }
 static int run_oraclediff(const char* path) {
+  // REFUSE before booting anything if this game has not RE'd its stage predicate (exit 2 =
+  // inapplicable, the same code selftest_run() uses for a name it does not know).
+  StageCfg sc;
+  if (!stage_cfg("oraclediff", &sc)) return 2;
   const int verbose = cfg_on("PSXPORT_SELFTEST_VERBOSE");
   Game* A = new Game(); A->psx_fallback = 0;                              // native port core (renders via VK)
   Game* B = new Game(); B->psx_fallback = 1; B->core.use_interp = 1;      // pure-PSX interpreter oracle core
@@ -338,14 +396,14 @@ static int run_oraclediff(const char* path) {
   void gpu_native_shot(Core*, const char*);
   load_exe(path, &A->core); dc_boot_init(&A->core);
   load_exe(path, &B->core); dc_boot_init(&B->core);
-  auto stageA = [&]{ return A->core.mem_r32(TASKBASE + 0xc); };
-  auto stageB = [&]{ return B->core.mem_r32(TASKBASE + 0xc); };
+  auto stageA = [&]{ return A->core.mem_r32(sc.entryAddr); };
+  auto stageB = [&]{ return B->core.mem_r32(sc.entryAddr); };
 
   // Drive both to the GAME stage (mash Start), each on its own frame clock.
   uint32_t fa = 0, fb = 0;
-  for (; fa < 4000 && stageA() != STAGE_GAME; fa++) { bool on=(fa%16u)<8u; A->pad.driveHold(on?((fa&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&A->core, fa); }
-  for (; fb < 4000 && stageB() != STAGE_GAME; fb++) { bool on=(fb%16u)<8u; B->pad.driveHold(on?((fb&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&B->core, fb); }
-  if (stageA() != STAGE_GAME || stageB() != STAGE_GAME) {
+  for (; fa < 4000 && stageA() != sc.game; fa++) { bool on=(fa%16u)<8u; A->pad.driveHold(on?((fa&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&A->core, fa); }
+  for (; fb < 4000 && stageB() != sc.game; fb++) { bool on=(fb%16u)<8u; B->pad.driveHold(on?((fb&16u)?PAD_CROSS:PAD_START):PAD_NONE); dc_step_frame(&B->core, fb); }
+  if (stageA() != sc.game || stageB() != sc.game) {
     lucent::info("oraclediff", "FAIL: reach GAME — A stage=0x{:08X} (f{}), B stage=0x{:08X} (f{})", stageA(), fa, stageB(), fb);
     return 1;
   }

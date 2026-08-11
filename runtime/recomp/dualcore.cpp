@@ -12,9 +12,11 @@
 // psx_fallback compare does NOT apply here). We navigate each to the gameplay-START flag, then run N frames
 // under an IDENTICAL scripted input schedule, snapshotting a focused RAM region + scratchpad each frame.
 // Diffing A[k] vs B[k] yields the FIRST frame + address where native render's writes diverge from PSX —
-// i.e. the guest state the native renderer corrupts. NB the render PACKET POOL [0x800BFE68,0x800E7E68) will
-// diff legitimately (PSX writes GP0 packets there, native does not) — that is render noise, not the bug;
-// the corruption is divergence OUTSIDE that pool (object structs / control blocks / scratchpad).
+// i.e. the guest state the native renderer corrupts. NB the render PACKET POOL + ordering tables (the
+// GameConfig-derived RenderNoiseMask, render_noise.h) will diff legitimately (PSX writes GP0 packets
+// there, native does not) — that is render noise, not the bug; the corruption is divergence OUTSIDE
+// those windows (object structs / control blocks / scratchpad). The bounds used are PRINTED in the
+// report header; they used to be Tomba!2 literals printed into every game's log.
 //
 // SEQUENTIAL by design: the Beetle GTE/MDEC backends are process-global singletons, so we run A fully
 // (recording per-frame snapshots into host RAM), then B fully, then diff offline. diff_mode=1 skips only
@@ -26,6 +28,8 @@
 #include "game.h"
 #include "dualcore.h"
 #include "cfg.h"
+#include "game_iface.h"        // psxport_game_config() — the nav predicate + render mask come from it
+#include "task_slot_layout.h"  // task0_stage_entry_addr() (STOPGAP: the slot-field offset)
 #include <lucent/log.h>
 #include <cstdio>
 #include <cstring>
@@ -40,8 +44,14 @@ extern "C" void watchdog_suspend(void);
 
 namespace {
 
-constexpr uint32_t GAME_ENTRY  = 0x8010637Cu;  // task0 entry while the GAME stage runs (in the field)
-constexpr uint32_t TASK0_ENTRY = 0x801fe00cu;  // task0 obj +0xc = current stage entry
+// GAME_ENTRY / TASK0_ENTRY were Tomba!2 literals (0x8010637C / 0x801fe00c) sitting in game-agnostic
+// framework code; they now come from GameConfig::stageGame / taskTableBase (DualCore::mStageGame /
+// mStageEntryAddr, set in run(), which REFUSES to run without them).
+//
+// CUT_FLAG is still a Tomba!2 literal: the cutscene-active scratchpad byte has NO GameConfig field, and
+// inventing one was out of scope for this sweep. It is only reached AFTER the stage predicate above
+// fires, and run() cannot start without that predicate, so it is unreachable on a game that has not
+// RE'd its stage entry. STOPGAP: GameConfig::cutsceneActiveFlag.
 constexpr uint32_t CUT_FLAG    = 0x1F800137u;  // cutscene-active byte (1 = intro cutscene, 0 = free-roam)
 
 // PSX digital pad bits (active-low: a CLEARED bit = pressed).
@@ -56,11 +66,11 @@ constexpr uint16_t BTN_NONE  = 0xFFFF;
 } // namespace
 
 bool DualCore::navStep(Core* c, Nav& nv, uint32_t f, const char* tag) {
-  if ((f % 400u) == 0) lucent::info("dc-nav", "{} f{} phase={} stage={:08X} cut={}", tag, f, (int)nv.phase, c->mem_r32(TASK0_ENTRY), c->mem_r8(CUT_FLAG));
+  if ((f % 400u) == 0) lucent::info("dc-nav", "{} f{} phase={} stage={:08X} cut={}", tag, f, (int)nv.phase, c->mem_r32(mStageEntryAddr), c->mem_r8(CUT_FLAG));
   uint8_t cut = c->mem_r8(CUT_FLAG);
   switch (nv.phase) {
     case REACH_GAME:
-      if (c->mem_r32(TASK0_ENTRY) == GAME_ENTRY) { lucent::info("dc", "{} GAME @f{}", tag, f); nv.phase = AWAIT_CUT; }
+      if (c->mem_r32(mStageEntryAddr) == mStageGame) { lucent::info("dc", "{} GAME @f{}", tag, f); nv.phase = AWAIT_CUT; }
       else if ((f % 12u) == 0) c->game->pad.driveTap((uint16_t)(BTN_NONE & ~BTN_CROSS), 6);
       break;
     case AWAIT_CUT:
@@ -116,11 +126,12 @@ int DualCore::runAndRecord(const char* exe, int render_psx, const char* tag,
 // The legitimate render-only guest regions the native vs PSX render paths SHALL differ in (packet pool
 // pointers, both packet-pool pages, both ordering-table pages, env). Divergence here is render noise, not
 // the gameplay corruption we hunt. Excluded from the report unless PSXPORT_DC_ALL=1.
-bool DualCore::isRenderRegion(uint32_t a) {
-  if (a >= 0x800BF4F0u && a < 0x800BF54Cu) return true;   // pool ptrs (0x800BF4F4/0x800BF544) + dwell
-  if (a >= 0x800BFE68u && a < 0x800EA200u) return true;   // packet pool (×2 pages) + OT (×2 pages) + env
-  return false;
-}
+//
+// The windows are DERIVED from GameConfig (render_noise.h) — they were Tomba!2 literals, which on any
+// other game masked 168 KB of ordinary engine data out of a 384 KB focused region while the report still
+// said "NO DIVERGENCE". An un-RE'd game gets an EMPTY mask (masks nothing) and a loud line; it never
+// inherits another game's window.
+bool DualCore::isRenderRegion(uint32_t a) const { return mMask.covers(a); }
 
 // First-divergence coalesced report for two equal-length region buffers; skips render-only regions.
 void DualCore::diffFrameRegion(const char* name, const uint8_t* a, const uint8_t* b, uint32_t n, uint32_t gbase) {
@@ -140,8 +151,28 @@ void DualCore::diffFrameRegion(const char* name, const uint8_t* a, const uint8_t
 }
 
 void DualCore::run(const char* exe_path) {
+  // REFUSE rather than measure the wrong thing. The nav machine's REACH_GAME test is
+  // `mem_r32(task0+0xc) == stageGame`; with both unset that is `mem_r32(0xc) == 0`, which is TRUE at
+  // frame 0 (the stage word is zero during boot too). The harness would log "GAME @f0", record 180
+  // frames of BIOS/crt0 boot as gameplay, and then — because both cores boot identically — print
+  // "NO DIVERGENCE ... native gameplay == PSX gameplay here". A false clean bill of health is worse
+  // than no run, so this exits before booting anything.
+  const GameConfig* cfg = psxport_game_config();
+  mStageGame      = cfg ? cfg->stageGame : 0;
+  mStageEntryAddr = task0_stage_entry_addr(cfg);
+  if (!mStageGame || !mStageEntryAddr) {
+    lucent::error("dualcore",
+                  "REFUSING TO RUN: DUALCORE requires GameConfig::stageGame (have 0x{:08X}) and "
+                  "GameConfig::taskTableBase (stage-entry word 0x{:08X}) — this game has not RE'd its "
+                  "stage entry, so I cannot tell gameplay from boot. With these at 0 the REACH_GAME "
+                  "predicate matches on frame 0 and the harness would compare the BIOS boot and call it "
+                  "clean. Fill those fields in the game's game_config.cpp and re-run.",
+                  mStageGame, mStageEntryAddr);
+    return;
+  }
   watchdog_suspend();
   show_all = cfg_on("PSXPORT_DC_ALL");
+  mMask = RenderNoiseMask::from(cfg, "dualcore");
   int n = cfg_int("PSXPORT_DC_N", 180);
   uint32_t lo = 0x800B0000u, hi = 0x80110000u;
   { const char* e = cfg_str("PSXPORT_DC_LO"); if (e && *e) lo = (uint32_t)strtoul(e, 0, 0); }
@@ -157,7 +188,9 @@ void DualCore::run(const char* exe_path) {
 
   int kn = kA < kB ? kA : kB;
   lucent::info("dc", "\n========== RENDER DIFF  (A=native-render  B=PSX-render)  comparing {} frames ==========", kn);
-  lucent::info("dc", "  (ignore the render PACKET POOL 0x800BFE68..0x800E7E68 — legit render-path difference)");
+  // Print the range ACTUALLY masked. This line used to print Tomba!2's pool bounds into every game's
+  // log, which is how a wrong reading becomes a durable note in someone's findings file.
+  { char b[256]; lucent::info("dc", "  (excluded as legit render-path difference: {})", mMask.describe(b, sizeof b)); }
   int first = -1;
   for (int k = 0; k < kn; k++) {
     bool ram_d = false;
