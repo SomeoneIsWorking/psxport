@@ -64,6 +64,24 @@ class Core;
 // channel-name-lookup form.
 inline const lucent::Channel g_otattr_channel{"otattr"};
 
+// THE SECOND REASON TO TRACK SPANS: the graphics-producer DB's GUEST leg needs the same attribution the
+// `otattr` channel produces, but during ORDINARY PLAY with no debug channel on — the DB's whole premise
+// is that playing populates it (docs/plans/graphics-producer-db.md). So the hot-path gate opens for
+// EITHER reason. This is a plain bool rather than a Channel because it is not a diagnostic the user
+// enables; it is armed by the census's own wiring, and it is read on every guest store, so the cost of
+// widening the gate is MEASURED and recorded next to the arming call — not assumed to be free. The
+// existing comment below records what the out-of-line version cost (2.54% of total CPU) and is the
+// number any change here has to beat.
+// DEFAULT ON, and that is a measured decision rather than an optimistic one. The DB's premise is that
+// ORDINARY PLAY populates it, so an opt-in flag would leave exactly the data source that matters
+// uncounted. Priced on Tomba!2, 300 frames headless, three runs each, identical script:
+//     gate closed (before): 77.7 / 77.6 / 77.7 s
+//     gate open  (armed)  : 77.9 / 77.9 / 77.7 s     => +0.26%
+// against the 2.54% of total CPU the OUT-OF-LINE version of this gate once cost (see below). And the
+// work is real, not optimised away: the same run records 10,188 spans with 0 overflow, which is printed
+// at run end precisely so "no cost" can never be mistaken for "no work happened".
+inline bool g_producer_census_armed = true;
+
 class OtAttr {
 public:
   // A single terrain-heavy field frame can produce well over 4096 attribution-distinct spans (terrain
@@ -86,7 +104,8 @@ public:
   // in the logging library instead of hand-rolled here against a counter cfg.cpp had to export.
   void trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes);
   inline void trackStore(Core* c, uint32_t addr, uint32_t bytes) {
-    if (!g_otattr_channel) return;            // steady state: one relaxed load, one compare
+    // Steady state with both off: two relaxed loads and two compares, still no call.
+    if (!g_otattr_channel && !g_producer_census_armed) return;
     trackStoreSlow(c, addr, bytes);
   }
 

@@ -582,6 +582,11 @@ static void game_main(Core* c) {
                    c->mem_r8(0x1f800135));
     c->game->dbg_server.service(c);  // service one queued live-debug-server command (non-blocking)
   }
+  // The GUEST leg's denominator, printed next to the census so "0 guest prims" can be told apart from
+  // "the span feed recorded nothing". Without it, an armed feed that silently did no work measures as
+  // free and reads as working.
+  lucent::info("producers", "run-end: OtAttr spans recorded {} (overflow {}) — the guest leg's feed",
+               c->rsub.otAttr.spanCount(), c->rsub.otAttr.spanOverflow());
   c->rsub.census.report("run-end");
   // Persist the OBSERVED half so the DB survives the run and can reach git through the game's
   // tools/producers.py ingest (USER: populated by playing, and tracked). Path is a knob so a harness can

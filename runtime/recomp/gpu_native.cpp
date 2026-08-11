@@ -945,6 +945,7 @@ void GpuState::gp0_exec(Core* core) {
       if (quad) tri(v[1], v[2], v[3], textured, shade, semi, raw);
     }
     s_prims++;
+    censusGuestPrim(core);
   } else if (op >= 0x60 && op <= 0x7F) {     // rectangle / sprite
     int textured = op & 0x04, semi = (op & 0x02) ? 1 : 0, size = (op >> 3) & 3;
     uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
@@ -1059,6 +1060,7 @@ void GpuState::gp0_exec(Core* core) {
       }
     }
     s_prims++;
+    censusGuestPrim(core);
   } else if (op == 0x02) {                   // fill rectangle (in VRAM, ignores clip/offset)
     uint8_t cr = cmd_r(c), cg = cmd_g(c), cb = cmd_b(c);
     uint32_t xy = s_fifo[1], wh = s_fifo[2];
@@ -1205,6 +1207,7 @@ void GpuState::gp0_exec(Core* core) {
       }
     }
     s_prims++;
+    censusGuestPrim(core);
   }
   // env commands (E1..E6) handled in gpu_gp0 directly (single-word).
 }
@@ -2037,6 +2040,25 @@ void GpuState::gpu_vram_save(uint16_t* dst)       { memcpy(dst, s_vram, sizeof(s
 // Enable per-pixel provenance stamping unconditionally (the live debug server turns this on at
 // startup so `provat` works at any time without PSXPORT_PROVAT). Cheap: one extra store per pixel.
 void GpuState::gpu_provat_enable() { s_prov_on = 1; }
+
+void GpuState::censusGuestPrim(Core* core) {
+  if (!g_producer_census_armed) return;
+  const uint32_t pkt = s_fifo_addr[0];
+  if (!pkt) {                       // the packet carried no guest source address at all
+    core->rsub.census.noteUnattributable(ProducerCensus::WHY_GP0_ANON, 1u);
+    return;
+  }
+  OtAttr::Span sp{};
+  if (!core->rsub.otAttr.lookupStore(pkt & 0x1FFFFCu, &sp)) {
+    core->rsub.census.noteUnattributable(ProducerCensus::WHY_SPAN_MISS, 1u);
+    return;
+  }
+  if (!sp.fn) {   // the span knows the address but not the author — NOT a producer keyed 0
+    core->rsub.census.noteUnattributable(ProducerCensus::WHY_SPAN_NO_FN, 1u);
+    return;
+  }
+  core->rsub.census.noteGuest(sp.fn, 1u, s_frame);
+}
 
 int GpuState::gpu_frame_no() { return s_frame; }
 

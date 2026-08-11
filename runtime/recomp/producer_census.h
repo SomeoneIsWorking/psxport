@@ -74,8 +74,15 @@ class ProducerCensus {
   // Why a prim could not be attributed. Named rather than bool'd so a report can say WHICH blindness
   // it hit — the two have different fixes (one is unfixable, one means the feed is off).
   enum Why : uint8_t {
-    WHY_GP0_ANON  = 0,   // the GP0 words carried no guest source address at all
-    WHY_SPAN_MISS = 1,   // there was an address, but no attribution span covered it
+    WHY_GP0_ANON   = 0,  // the GP0 words carried no guest source address at all
+    WHY_SPAN_MISS  = 1,  // there was an address, but no attribution span covered it
+    // A span WAS found and its emitter fn is 0: nothing indirectly-dispatched was on OtAttr's shadow
+    // stack when the store happened, so the span cannot name a producer. This is its own reason because
+    // its fix differs from the other two — it is not a missing span, it is a span that knows the address
+    // and not the author. Keeping it separate is what stops a key of 0 becoming a ROW: measured on the
+    // gte leg, 107,837 prims all had fn=0 and collapsed into one bogus row keyed 0x00000000, which is
+    // worse than being uncounted because it looks like a producer.
+    WHY_SPAN_NO_FN = 2,
   };
 
   struct Row {
@@ -119,7 +126,9 @@ class ProducerCensus {
   void noteUnattributable(Why why, uint32_t prims) {
     mFed = true;
     mPrimsSeen += prims;
-    if (why == WHY_GP0_ANON) mGp0Anon += prims; else mSpanMiss += prims;
+    if (why == WHY_GP0_ANON)        mGp0Anon += prims;
+    else if (why == WHY_SPAN_NO_FN) mSpanNoFn += prims;
+    else                            mSpanMiss += prims;
   }
 
   // ---- read -------------------------------------------------------------------------------------
@@ -132,9 +141,12 @@ class ProducerCensus {
 
   bool     wasFed()          const { return mFed; }
   uint64_t primsSeen()       const { return mPrimsSeen; }
-  uint64_t primsAttributed() const { return mPrimsSeen - mGp0Anon - mSpanMiss - mUnscopedNative; }
+  uint64_t primsAttributed() const {
+    return mPrimsSeen - mGp0Anon - mSpanMiss - mSpanNoFn - mUnscopedNative;
+  }
   uint64_t gp0Anon()         const { return mGp0Anon; }
   uint64_t spanMiss()         const { return mSpanMiss; }
+  uint64_t spanNoFn()        const { return mSpanNoFn; }
   uint64_t unscopedNative()  const { return mUnscopedNative; }
   int      overflow()        const { return mOverflow; }
   static constexpr int LAYER_CAP = 8;    // RqLayer today is 0..3; headroom without a dependency on it
@@ -184,10 +196,12 @@ class ProducerCensus {
     // prims that could not be attributed at all.
     fprintf(f,
             "{\"type\":\"totals\",\"prims_seen\":%llu,\"prims_attributed\":%llu,"
-            "\"gp0_anon\":%llu,\"span_miss\":%llu,\"unscoped_native\":%llu,\"overflow\":%d,"
+            "\"gp0_anon\":%llu,\"span_miss\":%llu,\"span_no_fn\":%llu,"
+            "\"unscoped_native\":%llu,\"overflow\":%d,"
             "\"rows\":%d,\"seen_at\":\"%s\"}\n",
             (unsigned long long)mPrimsSeen, (unsigned long long)primsAttributed(),
             (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
+            (unsigned long long)mSpanNoFn,
             (unsigned long long)mUnscopedNative, mOverflow, mRowCount, stamp ? stamp : "");
     fclose(f);
     lucent::info("producers", "wrote {} row(s) + totals -> {}", mRowCount, path);
@@ -208,10 +222,11 @@ class ProducerCensus {
     }
     lucent::info("producers",
                  "{}: {} row(s); prims seen {} = attributed {} + unscoped-native {} + gp0-anon {} + "
-                 "span-miss {}{}",
+                 "span-miss {} + span-no-fn {}{}",
                  who, mRowCount, (unsigned long long)mPrimsSeen,
                  (unsigned long long)primsAttributed(), (unsigned long long)mUnscopedNative,
                  (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
+                 (unsigned long long)mSpanNoFn,
                  mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
     // THE ROWS THEMSELVES, ranked. Totals alone say how much is attributed but not TO WHAT, and "which
     // producers did this run actually see" is the question the DB exists to answer — `producers.py
@@ -278,6 +293,7 @@ class ProducerCensus {
     if (native) r->primsNative += prims; else r->primsGuest += prims;
   }
 
+  uint64_t mSpanNoFn = 0;
   uint64_t mUnscopedByLayer[LAYER_CAP] = {};
   uint64_t mUnscopedLayerUnknown = 0;
   Row      mRows[CAP] = {};

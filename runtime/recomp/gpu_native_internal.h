@@ -292,6 +292,13 @@ struct GpuState {
   void gpu_vram_save(uint16_t* dst);
   void gpu_provat_enable();
   int  gpu_frame_no();
+  // Graphics-producer DB, GUEST leg: attribute ONE completed prim to the guest fn that submitted it,
+  // by joining this packet's pool address (s_fifo_addr[0], stamped by the OT walk) against OtAttr's
+  // store-span table. Called at every prim-completion site. Both ways of failing to attribute are
+  // COUNTED and DISTINGUISHED (no source address at all vs an address no span covers) because they have
+  // different fixes: one is inherent to a packet the walk never stamped, the other means the span feed
+  // missed. See runtime/recomp/producer_census.h.
+  void censusGuestPrim(Core* core);
   void gpu_fps60_present_pass(Core* core);   // VK 60fps: present the accumulated batch over s_vram, reset batch (no s_frame++)
 };
 

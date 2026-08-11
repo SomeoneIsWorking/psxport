@@ -250,6 +250,32 @@ tool and `docs/producers/` are game-side and need no framework claim.
    DB that quietly stopped being fed reads exactly like a game that quietly stopped drawing anything
    new. RED test: a synthetic pool store + one-node OT walk attributes one prim to one fn (this is
    also the `--selftest`).
+> **STAGE 2 STATUS 2026-08-11 — the gate cost is SETTLED and CHEAP; the feed is BLOCKED on span-table
+> capacity.** Measured, not estimated:
+>
+> * **The hot-path gate is affordable, so the census stays on in ordinary play.** Widening
+>   `OtAttr::trackStore` to `g_otattr_channel || g_producer_census_armed` costs **+0.26%** (Tomba!2, 300
+>   frames headless, three runs each: 77.7/77.6/77.7 s closed vs 77.9/77.9/77.7 s armed) against the
+>   **2.54%** the out-of-line version once cost. The work is real and not optimised away: the same run
+>   records **10,188 spans, 0 overflow**, printed at run end so "no cost" can never be read as "no work".
+>   With the guest-leg join added the total is **+0.8%**. So the plan's fear — that the census could not
+>   be free enough to leave on during play — does NOT hold, and no opt-in flag is needed.
+> * **The join is wired** at all three prim-completion sites in `gpu_gp0` (polygon, rect/sprite, line)
+>   via `GpuState::censusGuestPrim`, joining `s_fifo_addr[0]` -> `OtAttr::lookupStore` -> the census.
+> * **THE BLOCKER: the span table saturates.** On the `gte` render path (the only path where guest GP0
+>   prims execute at all — on the native path pc_render does not walk the OT, so the guest leg correctly
+>   records NOTHING), a 300-frame run reports `spans recorded 65536 (overflow 2681415)`. The table is
+>   sized for a diagnostic burst, not a session. Consequences, both counted rather than guessed:
+>   `span-miss 113,586` and `span-no-fn 107,837` out of 442,846 prims seen — attributed **0**.
+> * **A span with `fn == 0` is NOT a row.** Wiring it as one produced a single bogus row keyed
+>   `0x00000000` holding 107,837 prims, which is worse than being uncounted because it reads as a
+>   producer. It is now its own blindness reason (`WHY_SPAN_NO_FN`) so the report distinguishes "no span
+>   covered this address" from "a span did, and it does not know the author".
+> * **NEXT, and do not skip to the join's downstream:** give the span table a per-frame reset or a ring
+>   discipline so it stops saturating, THEN re-measure whether `span-no-fn` survives — it may be a
+>   symptom of lookups landing in a saturated table rather than an independent defect. Do not tune the
+>   attribution until the table stops dropping 2.68M spans, or you are tuning against noise.
+
 3. **Native-leg feed.** `RenderQueue::ProducerScope` + the interned producer-id table; count pushes
    in `emitOrQueue`/`push2dQuad`/`drawWorldQuad`. RED test: pushes inside a scope are attributed,
    pushes outside are counted as `unscoped` (a real number, not silence).
