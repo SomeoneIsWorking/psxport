@@ -95,7 +95,22 @@ class ProducerCensus {
   // The native leg. A ProducerKey::none() here means the pushes arrived outside any ProducerScope:
   // counted as unscoped, never attributed to whichever row happened to be last.
   void noteNative(ProducerKey key, uint32_t prims, uint32_t frame) {
-    if (!key.valid()) { mFed = true; mUnscopedNative += prims; mPrimsSeen += prims; return; }
+    noteNativeLayer(key, prims, frame, /*layer=*/-1);
+  }
+  // Same, but records WHICH DRAW LAYER an UNSCOPED push came from. Without this the report can only say
+  // "1.3M prims were drawn by nobody", which names the size of the problem and not its location — and
+  // the obvious way to find the location (guess a producer, scope it, re-run) is exactly the
+  // re-derivation this DB exists to replace. The layer is free at the call site, so the report can rank
+  // the un-declared work by pass and say which producer family to scope next.
+  void noteNativeLayer(ProducerKey key, uint32_t prims, uint32_t frame, int layer) {
+    if (!key.valid()) {
+      mFed = true;
+      mUnscopedNative += prims;
+      mPrimsSeen += prims;
+      if (layer >= 0 && layer < LAYER_CAP) mUnscopedByLayer[layer] += prims;
+      else                                 mUnscopedLayerUnknown += prims;
+      return;
+    }
     note(key, prims, frame, /*native=*/true);
   }
   // Prims the census SAW and could not attribute. Recording these is what makes a coverage number
@@ -121,6 +136,11 @@ class ProducerCensus {
   uint64_t spanMiss()         const { return mSpanMiss; }
   uint64_t unscopedNative()  const { return mUnscopedNative; }
   int      overflow()        const { return mOverflow; }
+  static constexpr int LAYER_CAP = 8;    // RqLayer today is 0..3; headroom without a dependency on it
+  uint64_t unscopedInLayer(int l) const {
+    return (l >= 0 && l < LAYER_CAP) ? mUnscopedByLayer[l] : 0;
+  }
+  uint64_t unscopedLayerUnknown() const { return mUnscopedLayerUnknown; }
 
   // ---- the run's summary line, and it must be readable when it found NOTHING ---------------------
   // A census that was never fed and a census that counted zero prims are DIFFERENT facts with
@@ -143,6 +163,18 @@ class ProducerCensus {
                  (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
                  mOverflow ? " [ROW TABLE OVERFLOWED — rows were DROPPED]" : "");
     if (mUnscopedNative) {
+      // WHERE the undeclared work is, ranked, so the next producer to scope is measured not guessed.
+      // Layer names match RqLayer (render_queue.h) without including it — this header is used by
+      // hermetic tests that must not pull the queue in.
+      static const char* kLayer[LAYER_CAP] = { "background", "world", "overlay", "hud",
+                                               "layer4", "layer5", "layer6", "layer7" };
+      lucent::Line ln;
+      ln.add("{}: undeclared native prims BY LAYER:", who);
+      for (int l = 0; l < LAYER_CAP; l++)
+        if (mUnscopedByLayer[l]) ln.add(" {}={}", kLayer[l], (unsigned long long)mUnscopedByLayer[l]);
+      if (mUnscopedLayerUnknown) ln.add(" (no-layer-reported={})",
+                                        (unsigned long long)mUnscopedLayerUnknown);
+      ln.flush(lucent::Level::Warn, "producers");
       lucent::warn("producers",
                    "{}: {} native prim(s) drew with NO ProducerScope open — real work by an UNDECLARED "
                    "producer. Those are missing DB rows, not noise: wrap the producer in a "
@@ -170,6 +202,8 @@ class ProducerCensus {
     if (native) r->primsNative += prims; else r->primsGuest += prims;
   }
 
+  uint64_t mUnscopedByLayer[LAYER_CAP] = {};
+  uint64_t mUnscopedLayerUnknown = 0;
   Row      mRows[CAP] = {};
   int      mRowCount = 0;
   int      mOverflow = 0;

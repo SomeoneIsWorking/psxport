@@ -612,8 +612,11 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   // open the key is NONE and the prim lands in unscopedNative() — real drawing by an UNDECLARED
   // producer, which is exactly the row the DB exists to surface. Never dropped, never charged to
   // whichever producer happened to be last. Host-only counters, no guest write: SBS-neutral.
-  core->rsub.census.noteNative(core->rsub.producerScope.currentKey(), 1u,
-                               (uint32_t)gpu_frame_no(core));
+  // `layer` is passed so an UNDECLARED push is recorded with the PASS it came from: the report then
+  // ranks the undeclared work by layer and names which producer family to scope next, instead of only
+  // reporting how much of it there is.
+  core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(), 1u,
+                                    (uint32_t)gpu_frame_no(core), layer);
 
   // ---- WIDESCREEN 2D layout — the ONE layout authority for NATIVE screen-space producers (USER
   // 2026-07-16: dialog/prompt panels sat left-anchored in wide). The wide FB spans [0,ww) with the
