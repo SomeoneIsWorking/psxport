@@ -669,6 +669,25 @@ a similar centroid/pixel-diff script) to check whether interp frames sit BETWEEN
 quality, complementing `preseqobj`'s per-object oscillation gate above (this one is pixel-ground-truth,
 `preseqobj` is queue-position ground-truth).
 
+## `PSXPORT_GPU_FAULT_OVERRIDE` — start despite a RECORDED GPU fault (your call, your machine)
+
+A GPU submit failure or a fence that never signals latches the renderer off for the process AND writes a
+marker to `$XDG_STATE_HOME/psxport/gpu_fault` (falling back to `~/.local/state/psxport/gpu_fault`). Every
+psxport process then **refuses to bring up the GPU**, exiting 3 with the marker's contents, the exact `rm`
+command to clear it, and a `journalctl -k` suggestion — because the recorded damage from a GPU hang comes
+from the runs AFTER the first one, each starting clean and submitting into a card the kernel is resetting.
+
+The marker is USER-LEVEL, not per-repo, on purpose: the fault belongs to the CARD, and four game trees in
+this workspace share one GPU. It never self-clears — a timer or a "looks fine now" heuristic would be the
+retry this exists to prevent, one level up.
+
+`PSXPORT_GPU_FAULT_OVERRIDE=1` starts anyway for a single run and says it is doing so on your say-so.
+Clearing the marker (`rm` it) is the other route. Both are deliberately manual.
+
+**Verified in all three states** (2026-08-12), because a preflight that refuses wrongly costs you the game:
+marker present → exit 3 with the refusal; marker present + override → exit 0 with the warning; marker
+absent → exit 0 with no refusal and nothing left behind.
+
 ## Flags that kept their own var (they carry a VALUE, not just on/off)
 These stay as `PSXPORT_*` (read via `cfg_int`/`cfg_str`) because they take a frame number, coords, path,
 or level — they can't be a bare channel:
