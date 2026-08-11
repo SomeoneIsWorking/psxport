@@ -30,6 +30,7 @@
 // A report that prints a row list without these six is not allowed to claim coverage.
 #pragma once
 #include <stdint.h>
+#include <stdio.h>
 #include <lucent/log.h>
 
 // ---- ProducerKey — the row identity -------------------------------------------------------------
@@ -141,6 +142,56 @@ class ProducerCensus {
     return (l >= 0 && l < LAYER_CAP) ? mUnscopedByLayer[l] : 0;
   }
   uint64_t unscopedLayerUnknown() const { return mUnscopedLayerUnknown; }
+
+  // ---- persistence: one JSONL per run, which is how the DB reaches GIT ---------------------------
+  // USER 2026-08-11: the DB "should also be populated when I'm playing" AND "should be in the git".
+  // A run therefore appends its rows to scratch/producers/run-<stamp>.jsonl (gitignored), and the
+  // game-side tools/producers.py folds those into docs/producers/*.md, which IS tracked. This writer
+  // owns the OBSERVED half only; nothing curated is ever emitted here.
+  //
+  // Field names are producers.py's contract (its _fold reads kind/prims_guest/prims_native/frames/
+  // seen_at, and a `{"type":"totals"}` record for the denominators). Changing a name here silently
+  // stops rows folding, so they are matched deliberately.
+  //
+  // A FAILED WRITE IS REPORTED, NOT SWALLOWED: a census that counted a whole session and then quietly
+  // failed to persist it is the same silence as never having been fed, and the next run would look like
+  // the game simply drew nothing new.
+  void writeJsonl(const char* path, const char* stamp) const {
+    if (!mFed) {
+      lucent::warn("producers",
+                   "NOT writing {}: the census was never fed this run, so there is nothing observed to "
+                   "persist. This is not an empty run — it is an unwired or unexecuted feed.", path);
+      return;
+    }
+    FILE* f = fopen(path, "ab");
+    if (!f) {
+      lucent::error("producers",
+                    "could not open {} for append — THIS RUN'S OBSERVATIONS ARE LOST ({} row(s), {} "
+                    "prims). The directory may not exist; it is created by the caller, not here.",
+                    path, mRowCount, (unsigned long long)mPrimsSeen);
+      return;
+    }
+    for (int i = 0; i < mRowCount; i++) {
+      const Row& r = mRows[i];
+      fprintf(f,
+              "{\"key\":\"0x%08X\",\"kind\":\"%s\",\"prims_guest\":%u,\"prims_native\":%u,"
+              "\"frames\":%u,\"first_frame\":%u,\"last_frame\":%u,\"seen_at\":\"%s\"}\n",
+              r.key.id, r.key.isNativeOnly() ? "native-only" : "guest",
+              r.primsGuest, r.primsNative, r.frames, r.firstFrame, r.lastFrame, stamp ? stamp : "");
+    }
+    // The denominators travel WITH the rows. Without them a later reader can compute a coverage
+    // percentage from the rows alone and be confidently wrong, because the rows say nothing about the
+    // prims that could not be attributed at all.
+    fprintf(f,
+            "{\"type\":\"totals\",\"prims_seen\":%llu,\"prims_attributed\":%llu,"
+            "\"gp0_anon\":%llu,\"span_miss\":%llu,\"unscoped_native\":%llu,\"overflow\":%d,"
+            "\"rows\":%d,\"seen_at\":\"%s\"}\n",
+            (unsigned long long)mPrimsSeen, (unsigned long long)primsAttributed(),
+            (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
+            (unsigned long long)mUnscopedNative, mOverflow, mRowCount, stamp ? stamp : "");
+    fclose(f);
+    lucent::info("producers", "wrote {} row(s) + totals -> {}", mRowCount, path);
+  }
 
   // ---- the run's summary line, and it must be readable when it found NOTHING ---------------------
   // A census that was never fed and a census that counted zero prims are DIFFERENT facts with

@@ -16,6 +16,8 @@
 // MILESTONE 1 (this file, current): run the init prefix and confirm it executes cleanly via
 // PC/RAM probes. The native frame loop + per-stage stepping land next.
 #include "core.h"
+#include <time.h>       // run stamp for the producer-census JSONL filename
+#include <sys/stat.h>   // mkdir — create scratch/producers/ on a fresh clone
 #include "game_iface.h" // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "hw_bind.h"   // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
@@ -581,6 +583,30 @@ static void game_main(Core* c) {
     c->game->dbg_server.service(c);  // service one queued live-debug-server command (non-blocking)
   }
   c->rsub.census.report("run-end");
+  // Persist the OBSERVED half so the DB survives the run and can reach git through the game's
+  // tools/producers.py ingest (USER: populated by playing, and tracked). Path is a knob so a harness can
+  // separate its runs; the default lands in the gitignored scratch/ tree, never /tmp.
+  {
+    const char* dir = cfg_str("PSXPORT_PRODUCERS_DIR");
+    if (!dir || !*dir) dir = "scratch/producers";
+    char stamp[32];
+    { const time_t t = time(nullptr); struct tm tmv{};
+#ifdef _WIN32
+      localtime_s(&tmv, &t);
+#else
+      localtime_r(&t, &tmv);
+#endif
+      strftime(stamp, sizeof stamp, "%Y-%m-%dT%H:%M:%S", &tmv); }
+    char path[512];
+    snprintf(path, sizeof path, "%s/run-%s.jsonl", dir, stamp);
+    // Create the directory rather than failing on a fresh clone; the writer REPORTS a failed open.
+#ifdef _WIN32
+    _mkdir(dir);
+#else
+    mkdir(dir, 0755);
+#endif
+    c->rsub.census.writeJsonl(path, stamp);
+  }
   lucent::info("native_boot", "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
