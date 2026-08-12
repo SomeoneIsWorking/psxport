@@ -1,4 +1,5 @@
 #include "core.h"
+#include "census_frame.h"   // census_frame — presents are NOT the tick a producer lifetime is measured in
 #include "game.h"
 #include "gpu_vk.h"   // Core*-threaded VK present API (de-globalized R2)
 #include "c_subsys.h"
@@ -2072,7 +2073,7 @@ void GpuState::censusGuestPrim(Core* core) {
       core->rsub.census.noteSpanNoFnHadNode(1u);
       const uint32_t rfn = core->mem_r32((sp.node & 0x1FFFFFFFu) + 0x18u);
       if (rfn >= 0x80010000u && rfn < 0x80200000u) {
-        core->rsub.census.noteGuest(rfn, 1u, s_frame);
+        core->rsub.census.noteGuest(rfn, 1u, census_frame(core));
         core->rsub.census.noteGuestViaNode(1u);
         return;
       }
@@ -2095,7 +2096,7 @@ void GpuState::censusGuestPrim(Core* core) {
   // resolved outward to the handler/pass frame; when it is 0 no frame in the searched window is claimed,
   // which is the DB's real answer for that effect — IT HAS NO NATIVE PRODUCER — and it keeps the emitter
   // key so the row still identifies something a human can go and port.
-  core->rsub.census.noteGuest(sp.claimed ? sp.claimed : sp.fn, 1u, s_frame);
+  core->rsub.census.noteGuest(sp.claimed ? sp.claimed : sp.fn, 1u, census_frame(core));
 }
 
 int GpuState::gpu_frame_no() { return s_frame; }

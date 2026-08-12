@@ -3,6 +3,7 @@
 #include "render_queue.h"
 #include "proj_params.h"   // class ProjParams — proj_camview_world_screen / camview_publish bridges
 #include "game.h"
+#include "census_frame.h"   // census_frame — the ONE frame number a producer row is stamped with
 #include "cfg.h"
 #include "mods.h"
 #include "gpu_vk.h"
@@ -627,7 +628,7 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
     core->rsub.census.noteGuestOriginPush(1u);
   } else {
     core->rsub.census.noteNativeLayer(core->rsub.producerScope.currentKey(), 1u,
-                                      (uint32_t)gpu_frame_no(core), layer,
+                                      census_frame(core), layer,
                                       core->rsub.producerScope.currentName());
   }
 
