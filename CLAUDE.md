@@ -233,6 +233,16 @@ this. Everything transient goes in the git-ignored `scratch/`, split by kind (`s
 `scratch/bin/`, `scratch/raw/`) — **never `/tmp`**, which is a small RAM-backed tmpfs on this machine;
 diagnose "disk quota exceeded" with `quota -s`, not `df`.
 
+## Other people are working on these binaries — `docs/prior-art.md`
+
+Read it before designing anything and before assuming we are alone on a binary. It records the matching
+decomps that exist per title (Spyro 1's is already a submodule and targets a byte-identical executable;
+Tomba! 1 has one at 18.17%), the fact that a static-recompiler ecosystem with the same architecture already
+ships Tomba! and Tomba! 2 ports, the LICENSE ASYMMETRY that decides whether we may take code or only the
+shape (CC0 vs PolyForm Noncommercial), why psxport structurally cannot report a decomp.dev percentage, and
+a standing USER decision about which community not to engage. Where a reference and a MEASUREMENT disagree,
+the measurement wins.
+
 ## Follow DUSKLIGHT's structure — consult it BEFORE designing anything it already solved
 
 `~/repo/dusklight` (`github.com/TwilitRealm/dusklight`, **CC0**, `git pull` before reading — it moves
