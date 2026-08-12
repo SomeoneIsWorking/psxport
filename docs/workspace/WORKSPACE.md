@@ -70,9 +70,20 @@ Evidence for every verdict below — matrices, null distributions, the per-decis
 `docs/findings/lineage-metric.md`. A bare similarity percentage means nothing without its multiple of the
 measured cross-studio null.
 
-**This call is DELEGATED, which is why it is settled here rather than left open for the USER.** USER,
-2026-08-11: *"I'm not gonna decide, maybe Fable should decide"*, then *"it's yours"*. So a session may
-revise the shape on new MEASUREMENT, but must not re-open it as a question for the USER.
+**This call was DELEGATED and is now USER-CONFIRMED, so do not re-litigate it.** USER, 2026-08-11:
+*"I'm not gonna decide, maybe Fable should decide"*, then *"it's yours"*. A session may still revise the
+shape on new MEASUREMENT, but must not re-open it as a question for the USER.
+
+**USER CONFIRMED the four-repo shape on 2026-08-12** — not a quote: they asked whether Crash would be
+bundled with Spyro "like I asked", were shown three concrete layouts (one repo holding all 8
+Spyro/Crash/CTR/Bash titles · two repos split by studio · the four repos below), and chose the four. Two
+things were put in front of them and did not change the answer: that **their original ask WAS one repo
+for Spyro AND Crash** (`docs/findings/lineage-metric.md` records it as "what was first asked for"), and
+that the measured family signal is weak in BOTH directions — `SPYRO1↔SPYRO2` reads 2.25× the null on the
+whole-function tool but **5.6% = 0.8×, BELOW the floor** on Jaccard, with `CRASH1↔CRASH2` inverted the
+same way, so the evidence for grouping the Spyro trio is barely stronger than the evidence against
+adding Crash to it. Reversal was also free at that moment: no `crash/`, `ctr/` or `crashbash/` existed
+and `spyro/` had not converted to multi-title, so nothing was defended by inertia.
 
 - Spider-Man 1 + 2 share a repo · Spyro 1 + 2 + 3 share a repo (`titles/<t>/` over a shared `game/`), each
   converting to multi-title WHEN that title's work starts, not before.
