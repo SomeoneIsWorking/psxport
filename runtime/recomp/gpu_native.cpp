@@ -2081,7 +2081,12 @@ void GpuState::censusGuestPrim(Core* core) {
     // THE GUEST PC WAS TRIED HERE AND REJECTED ON EVIDENCE, 2026-08-11. `sp.pc` is populated for direct
     // calls (every recompiled wrapper opens by setting it), and using it attributed 221,397 of 221,397
     // prims — a complete-looking guest leg. But the addresses it named were `0x80080000`, `0x8008007C`,
-    // `0x8007FDB0`, `0x8007E620`: the SDK's own libgs/libgpu packet builders. c->pc is the innermost
+    // `0x8007FDB0`, `0x8007E620`. THOSE WERE MISLABELLED HERE AS "the SDK's own libgs/libgpu packet
+    // builders" until 2026-08-12, and the label was wrong in a way that would send a reader the wrong
+    // direction entirely: they are the GAME'S OWN POLY_GT3/GT4 submit leaves, already NATIVE-OWNED
+    // (Tomba!2 `ov_submit_poly_gt3`/`gt4`, game/render/submit.cpp:59 names all three). They merely SIT in
+    // the 0x80080000-0x8009E000 band that sync_overrides.cpp calls the SCEI library window. The
+    // CONCLUSION below is unaffected and is the reason this note stays: c->pc is the innermost
     // guest fn ENTERED, so it names the LIBRARY ROUTINE that performed the store, never the effect that
     // asked for it. That is the plan's explicitly banned shape — an identity that looks plausible and is
     // wrong — so it is NOT used. The span still carries `pc` for diagnostics; it is simply not an
@@ -2090,7 +2095,8 @@ void GpuState::censusGuestPrim(Core* core) {
     return;
   }
   // THE JOIN: attribute to the frame a native producer already keys a row at, when the chain had one.
-  // `sp.fn` is the innermost EMITTER (an `OverlayGt3Gt4::gt3` builder, a libgs packet routine), which is
+  // `sp.fn` is the innermost EMITTER (an `OverlayGt3Gt4::gt3` builder, or a per-game POLY_GT3/GT4 submit
+  // leaf — NOT an SDK routine, see the note above), which is
   // NOT where a native row is keyed — measured, keying on it put the two legs in disjoint rows (2 of 25
   // keys coincided) so the DB looked complete and compared nothing. `sp.claimed` is that same chain
   // resolved outward to the handler/pass frame; when it is 0 no frame in the searched window is claimed,

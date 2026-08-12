@@ -308,7 +308,9 @@ tool and `docs/producers/` are game-side and need no framework claim.
 >   wrapper opens with `c->pc = <its own address>`, so unlike the shadow stack it IS populated for direct
 >   calls. Wiring it attributed **221,397 of 221,397** prims: a guest leg that looked finished. The
 >   addresses it named were `0x80080000`, `0x8008007C`, `0x8007FDB0`, `0x8007E620` — the SDK's own
->   libgs/libgpu packet builders. `c->pc` is the innermost guest fn ENTERED, so it names the LIBRARY
+>   packet-submit leaves — NOT SDK code, though this document called them that until 2026-08-12; they are
+>   the game's own POLY_GT3/GT4 submitters, already native-owned, sitting inside the address band that
+>   happens to hold the SCEI library. `c->pc` is the innermost guest fn ENTERED, so it names the LEAF
 >   ROUTINE that performed the store, never the effect that requested it. **This is the single most
 >   instructive negative in this plan: it produced 100% attribution and ~0% truth, and only reading the
 >   actual row keys caught it.** A coverage number cannot validate an identity source.
@@ -477,7 +479,15 @@ and its blind spots for exactly this reason.
 
 ### Still open, and none of it is papered over
 
-* ~10% of guest prims key at SDK libgs builders (`0x80080000`, `0x8008007C`, `0x8007FDB0`) because no
+* ~10% of guest prims key at the game's own POLY_GT3/GT4 SUBMIT LEAVES (`0x80080000`, `0x8008007C`,
+  `0x8007FDB0`) — MEASURED 2026-08-12 and the cause is settled: NO frame anywhere on those chains is a
+  claim, out to the root at depth 28, so widening the search window would change nothing. The row is
+  honest that the join failed and is named one granularity level too deep; the fix is a `ProducerScope` on
+  the per-mode guest emitter the command routes to (Tomba!2: `0x800803DC`, the generic GT3/GT4 case),
+  never on the shared dispatcher (which would shadow all eleven per-mode emitters into one row) and never
+  on a leaf. **"No native producer" here does NOT mean "not ported"** — native code for this picture
+  already exists; what is missing is a claim on THIS route. Reading it the other way sends someone to
+  re-port code that is already there. Because no
   frame in their 8-frame window is claimed — `Tomba2Engine` kanban #88, with the two candidate causes and
   the experiment that distinguishes them.
 * `otattrFrameFromTop` REFUSES above `OTATTR_CAP` rather than guessing, so a chain deeper than 256 guest
