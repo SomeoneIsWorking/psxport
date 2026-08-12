@@ -40,8 +40,8 @@ init_vendors() {                       # init_vendors <psxport checkout>
 say "framework dev clone: $PSXPORT"
 init_vendors "$PSXPORT"
 
-REMOTE_BACKED=(spyro spider1 Tomba2Engine)
-LOCAL_ONLY=(vagrant megamanx4)          # no remote yet — see the header comment
+REMOTE_BACKED=(spyro spider1 Tomba2Engine vagrant megamanx4)
+LOCAL_ONLY=()                          # all trees have remotes as of 2026-08-12
 
 cloned=0; present=0
 for g in "${REMOTE_BACKED[@]}"; do
