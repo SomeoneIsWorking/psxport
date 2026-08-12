@@ -286,6 +286,33 @@ struct GameConfig {
   // Also appended at the end — spider1 initialises GameConfig POSITIONALLY, so inserting a field
   // mid-struct silently shifts every field after it there.
   const char* windowTitle;
+
+  // --- crt0 stack-top bias (crt0_boot.h) --------------------------------------------------------
+  // The guest crt0's OWN adjustment of the stack-top word before it becomes sp:
+  //
+  //     v0 = mem[stackTopBase] + stackBias.value ;  sp = fp = v0 | 0x80000000
+  //
+  // and, because the biased word also feeds the heap-size subtraction, `heapsz = (v0 - mem[
+  // stackTopBase2]) - (heapBase & 0x1FFFFFFF)` moves with it too.
+  //
+  // WHY THIS IS A DECLARATION AND NOT JUST A NUMBER. The framework used to hardcode `- 8`, which is
+  // the stock PSY-Q crt0's `addi v0,v0,-8`. MEASURED over all six of this workspace's executables with
+  // `tools/crt0_extract` (which calls the same `crt0_scan` the boot-time audit uses, so the extractor
+  // and the gate cannot drift): FOUR bias by -8 (Tomba!2, Spyro, Spider-Man, Vagrant Story) and TWO do
+  // not bias at all — Mega Man X4 AND Toy Story 2, whose measured value is 0. So zero cannot mean
+  // "unset" for this field the way it does for every address in GameConfig — 0 is a real answer —
+  // and a plain `int32_t` defaulting to 0 would silently move sp 8 bytes on the four ports that DO
+  // bias, while defaulting to -8 would silently mis-boot every future port that does not. Both
+  // silent. Hence: `declared` must be set to 1 by the consumer, and `crt0_plan` REFUSES a boot where
+  // it is 0, naming the field. Loud is recoverable; either default is not.
+  //
+  // Appended at the END of the struct, like paceQuota/windowTitle above, because GameConfig is
+  // initialised POSITIONALLY by some consumers (spider1) — a field inserted into the crt0 group at
+  // the top would shift every value after it there, silently.
+  struct Crt0StackBias {
+    uint32_t declared;   // 1 = this game has stated its bias (even if the bias is 0). 0 = crt0 refuses.
+    int32_t  value;      // the measured adjustment, e.g. -8 for the stock PSY-Q crt0, 0 for X4.
+  } stackBias;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

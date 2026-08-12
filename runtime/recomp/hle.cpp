@@ -101,6 +101,15 @@ uint32_t Hle::heapAlloc(uint32_t size) {
     }
     blk[i].used = 1; return blk[i].addr;
   }
+  // NO BLOCK COULD SATISFY THE REQUEST. Reported, not silently NULL: a heap whose size came from a
+  // wrong InitHeap argument refuses everything, and the guest's own null check then routes around the
+  // failure so the symptom surfaces arbitrarily far away. Novelty-capped (first refusal, then powers
+  // of two) so it names the condition without becoming a per-call firehose.
+  ++heap_refused;
+  if ((heap_refused & (heap_refused - 1)) == 0)
+    lucent::warn("hle", "malloc({}) REFUSED — heap base=0x{:08X} size=0x{:X} ({} block(s)); "
+                 "refusal #{}. A size of 0 here means InitHeap was called with a wrong a1.",
+                 size, heap_base, heap_size, nblk, heap_refused);
   return 0;
 }
 
@@ -352,7 +361,16 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                              for (uint32_t i = 0; i < n; i++) c->mem_w8(np + i, c->mem_r8(old + i));
                              heapFree(old); }
                    c->r[V0] = np; return true; }
-      case 0x39: heapInit(a0, a1); c->r[V0] = 0; return true;          // InitHeap
+      // InitHeap(base, size). LOGGED AT INFO, not debug-gated, and it prints on EVERY boot because
+      // both arguments come from the guest register file and a wrong `size` here is silent: the
+      // native arena simply reports whatever it was given, and heapAlloc only fails once a request
+      // exceeds it. A boot that initialises the heap with a leftover register value looks identical
+      // to a correct one until an allocation near the limit fails, arbitrarily far away. So the
+      // measured pair is stated once per boot rather than being knowable only under a debug channel.
+      case 0x39:
+        lucent::info("hle", "InitHeap(base=0x{:08X}, size=0x{:X} = {} bytes) from guest a0/a1",
+                     a0, a1, a1);
+        heapInit(a0, a1); c->r[V0] = 0; return true;                   // InitHeap
       // --- BIOS libc string/memory leaves -------------------------------------------------------
       // These were absent, and absence here is SILENT DATA LOSS, not a missing feature: an
       // unhandled BIOS call logs UNIMPL, leaves $v0 holding whatever the previous call left there,

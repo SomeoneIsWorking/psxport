@@ -19,6 +19,8 @@
 #include <time.h>       // run stamp for the producer-census JSONL filename
 #include <sys/stat.h>   // mkdir — create scratch/producers/ on a fresh clone
 #include "game_iface.h" // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
+#include "crt0_boot.h" // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
+#include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
 #include "hw_bind.h"   // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
@@ -215,21 +217,57 @@ static void game_main(Core* c);
 // call to game_main — the top of the top-down PC-driven spine. Replaces the old bootstrap flip
 // (crt0 jal main -> override). The libc/heap init at 0x80089860 stays a dispatched PSX leaf.
 // crt0 register/heap setup only (no main call) — shared by native_crt0 and the dual-core harness.
+// THIS FUNCTION PERFORMS NO ARITHMETIC. Every value it applies comes from crt0_plan (crt0_boot.h),
+// which is the one place the derivation, the required/absent decision and the refusal live — so the
+// hermetic test (tests/test_crt0_boot_group.cpp) exercises the code that SHIPS rather than a helper
+// beside it. Keep it that way: a computation added here is a second copy by definition.
 static void crt0_setup(Core* c) {
   const GameConfig* cfg = c->cfg;
-  for (uint32_t a = cfg->bssZeroLo; a < cfg->bssZeroHi; a += 4) c->mem_w32(a, 0);   // BSS zero
-  uint32_t v0 = c->mem_r32(cfg->stackTopBase) - 8;   // stack top base
-  uint32_t sp = v0 | 0x80000000u;
-  uint32_t a0 = cfg->heapBase & 0x1FFFFFFFu;          // 0x00106228 (heap base, masked)
-  uint32_t v1 = c->mem_r32(cfg->stackTopBase2);
-  uint32_t heapsz = (v0 - v1) - a0;
-  c->mem_w32(cfg->heapSizePtr, heapsz);              // heap size
-  a0 |= 0x80000000u;                                 // 0x80106228
-  c->mem_w32(cfg->heapBasePtr, a0);                  // heap base
-  c->r[28] = cfg->gp;                                // gp
-  c->r[29] = sp; c->r[30] = sp;                      // sp, fp
-  c->r[4]  = a0 + 4;                                 // a0 for the init call
-  rec_dispatch(c, cfg->libcInit);                    // libc/heap init (PSX leaf) — keep dispatched
+  // The two words the guest crt0 loads. Read before the .bss clear, exactly as the guest does — and
+  // read through the plan's inputs rather than inside it, so the plan stays pure and testable.
+  const uint32_t stackTopWord = cfg ? c->mem_r32(cfg->stackTopBase)  : 0u;
+  const uint32_t reserveWord  = cfg ? c->mem_r32(cfg->stackTopBase2) : 0u;
+  const Crt0Plan p = crt0_plan(cfg, stackTopWord, reserveWord, "crt0_setup");
+  if (!p.ok) {
+    // crt0_plan has already said WHICH fields are missing and how many it checked. Exiting is the
+    // only honest continuation: the previous behaviour was to clear whatever span the zero fields
+    // described, build sp out of mem[0], write the heap base and size to GUEST 0x00000000, and hand
+    // InitHeap a garbage capacity — a boot that looks like a boot and is not one.
+    lucent::error("crt0", "boot ABORTED: the game's crt0 boot group is incomplete (see above). No "
+                          "guest state has been modified.");
+    fflush(stderr);
+    exit(1);
+  }
+  // CROSS-CHECK THE SHIPPED CONSTANTS AGAINST THE GUEST'S OWN crt0 BYTES, before applying any of them.
+  // This is the gate that was missing: every field above is a MEASURED value hand-copied into the game's
+  // game_config.cpp, and nothing compared the copy to the measurement. crt0_audit re-derives the group
+  // from the instruction stream at cfg->crt0 and refuses a CONFIRMED disagreement (crt0_verify.h).
+  if (!crt0_audit(cfg, p, [c](uint32_t a) { return c->mem_r32(a); }, "crt0_setup")) {
+    lucent::error("crt0", "boot ABORTED: the shipped crt0 boot group DISAGREES with the guest's own "
+                          "crt0 (see above). No guest state has been modified.");
+    fflush(stderr);
+    exit(1);
+  }
+  // a1 = heap size USED TO BE MISSING: libcInit is the BIOS A(39h) InitHeap(ptr, size) thunk in every
+  // consumer measured so far, and hle.cpp's `case 0x39` copies a1 straight into Hle::heap_size — the
+  // capacity every BIOS malloc is checked against. The old code set only r[4], so the arena length was
+  // whatever the register file happened to hold. The PRIOR value is logged next to the correct one
+  // because that difference IS the blast radius of the bug, and it is only observable here: reading
+  // c->r[5] after crt0 has set it tells you nothing.
+  lucent::info("crt0", "libcInit 0x{:08X}: a0=0x{:08X} a1=0x{:X} (a1 held 0x{:08X} = {} before crt0 set "
+                       "it — that stale value is the heap capacity this port passed to InitHeap before "
+                       "the r[5] fix; a difference here is the bug's blast radius)",
+               p.libcInit, p.a0, p.a1, c->r[5], c->r[5]);
+  // The write sequence itself comes from crt0_apply, NOT from lines here: the defect was in the
+  // application (an unconditional store through a zero pointer), so the sequence lives in the tested
+  // header and this is only the adapter that binds it to a Core.
+  struct CoreWriter {
+    Core* c;
+    void w32(uint32_t a, uint32_t v) { c->mem_w32(a, v); }
+    void reg(int i, uint32_t v)      { c->r[i] = v; }
+    void call(uint32_t entry)        { rec_dispatch(c, entry); }
+  } w{c};
+  crt0_apply(p, w);
 }
 
 static void native_crt0(Core* c) {

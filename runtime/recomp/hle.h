@@ -24,6 +24,11 @@ public:
   uint32_t heap_base  = 0;        // was s_heap_base
   uint32_t heap_size  = 0;        // was s_heap_size
   int      heap_ok    = 0;        // was s_heap_ok
+  // Requests heapAlloc could not satisfy. Counted rather than silently returning NULL: the BIOS
+  // malloc contract IS to return NULL, so a heap initialised with the wrong size refuses every
+  // request while looking — from outside — exactly like a game that never allocates. This counter is
+  // the denominator behind any claim that the heap "works".
+  uint32_t heap_refused = 0;
   int      work_ok    = 0;        // was s_work_ok
   uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
   int      irq_enabled = 1;       // was s_irq_enabled
