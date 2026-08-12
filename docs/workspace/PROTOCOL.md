@@ -286,8 +286,41 @@ finished A/B nobody removed.
 5. **A worktree SHARES `.git`.** `refs/stash` and the submodule repos under `.git/modules` are COMMON
    GROUND: a worktree `stash pop` has already grabbed another agent's stash in this workspace. Do not
    stash in a worktree, and do not assume your submodule checkout is private.
-6. **Operator: `git worktree list` in all three repos is part of end-of-session cleanup.** Anything
+6. **Operator: `git worktree list` in EVERY game repo is part of end-of-session cleanup.** Anything
    `prunable` gets pruned; anything unexplained gets attributed before it is removed.
+
+## LICENSING IS NOT A CONSTRAINT — BUT COPYLEFT STAYS OUT OF `psxport`. USER RULE.
+
+> *"Licensing isn't an issue, you can use whatever license needed"* — USER, 2026-08-12, when asked
+> whether the AGPL-3.0 decomp `sozud/mmx4` could be used for Mega Man X4.
+
+So do not deliberate about whether a reference may be used. Vendor it, cite it, take from it.
+
+**The one engineering rule that survives that permission: copyleft-derived code lives INSIDE the
+game repo that needs it, and NEVER in `psxport`.** The framework is shared by every port, so an
+AGPL file landing there pulls Tomba!2, Spyro, Spider-Man, Vagrant Story and X4 into AGPL with it —
+a decision about five titles, made by an edit to one. Per-repo licenses differ on purpose:
+
+| tree | vendored reference | license | what that permits |
+|---|---|---|---|
+| `spyro/external/open-spyro` | Spyro 1 decomp | CC0-1.0 | code AND ideas, freely, both directions |
+| `vagrant/external/rood-reverse` | Vagrant Story decomp | CC0-1.0 | same |
+| `megamanx4/external/mmx4` | Mega Man X4 decomp | **AGPL-3.0** | usable, but **repo-local**. Never lift into `psxport` |
+| `psxport/vendor/beetle-psx` | GTE/MDEC/SPU/CHD backends | GPL-2-**or-later** | verified 2026-08-12: 121 "any later version" headers, so it can be upgraded to AGPL-3. GPL-2-ONLY would have made the combination undistributable |
+
+A reference whose license is UNVERIFIED is read-only until someone checks it. `mstan/psxrecomp` is
+PolyForm Noncommercial — **read and learn only**; take the SHAPE, never the text.
+`psxport/docs/prior-art.md` holds the full table and is the place to record the next one.
+
+## BEETLE-PSX IS NEVER A BLOCKER. USER RULE.
+
+> *"Beetle is never a blocker, you can just drop beetle altogether if it causes a problem"* — USER,
+> 2026-08-12.
+
+`vendor/beetle-psx` supplies the GTE/MDEC/SPU/CHD backends. Dropping it means porting those native —
+which is already this project's stated long-term direction, so this is **permission to accelerate
+that, not a new plan.** Never let a beetle constraint (its licence, its behaviour, its build) stop a
+decision: state what dropping it would cost, then proceed.
 
 ## TDD — the framework change starts with a RED test
 

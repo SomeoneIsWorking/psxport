@@ -17,7 +17,7 @@ tree through that repo's `external/psxport` submodule, and reaches every subagen
 
 ## What is here
 
-`~/repo/psx` is a plain **directory** holding four independent repos side by side. There is no
+`~/repo/psx` is a plain **directory** holding six independent repos side by side. There is no
 workspace repo and no superproject: a game must build from a bare clone of itself, a gitlink at this
 level would churn on every game commit, and a recursive clone would pull four copies of psxport +
 beetle-psx.
@@ -28,6 +28,8 @@ beetle-psx.
 | `spyro/` | Spyro the Dragon (`SCUS_942.28`) port · `github.com/SomeoneIsWorking/spyro` |
 | `spider1/` | Spider-Man (`SLUS_008.75`, USA) port · `github.com/SomeoneIsWorking/spider1` |
 | `Tomba2Engine/` | Tomba! 2 port — psxport's reference consumer · `github.com/SomeoneIsWorking/Tomba2Engine` |
+| `vagrant/` | Vagrant Story (`SLUS_010.40`, USA) port · created 2026-08-12, **local only, no remote yet**. Vendors the CC0 `rood-reverse` decomp. Defining fact: the boot exe is ~15% of the code, 933,925 B lives in `.PRG` overlays |
+| `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — the ONLY **enhancement-class** port here: already 60fps, so no native producers, no lerp, no native depth. Wants widescreen + load removal + drop-in co-op. Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
 | `coord/` | **UNTRACKED, machine-local, EPHEMERAL ONLY**: `claims/` (the area locks — a lock coordinates the agents running on THIS machine, so it must not be a tracked file), plus historical `patches*/` and agent scratch. Nothing durable belongs here: a finding goes in the psxport repo or a game repo, never here |
 
 `$PSX` in any doc means this workspace root. To reproduce the workspace on a fresh machine:
@@ -193,6 +195,8 @@ means nothing on its own.
 | `Tomba2Engine/` | the Whoopee Camp lineage — Tomba! 2; **Tomba! 1** may live here by PREFERENCE only (0.5× the null max — measured NOT to share an engine) | exists; Tomba! 1 gets no shared `game/` — see below |
 | `crash/` | Crash 1, 2, 3 (Naughty Dog, GOOL VM) | when Crash work starts, not before |
 | `ctr/`, `crashbash/` | one title each — measured as their own engines | when that work starts, not before |
+| `vagrant/` | Vagrant Story — one title, one engine. No lineage scaffolding: Square's Ivalice-era code appears in nothing else we port | exists (2026-08-12) |
+| `megamanx4/` | Mega Man X4 — one title. X5/X6 are NOT in scope; the port is enhancements, not an engine rebuild, so a shared lineage layer would carry nothing | exists (2026-08-12) |
 
 **Why not the three things that were on the table.**
 
