@@ -17,6 +17,7 @@
 #include "game_iface.h"       // psxport_game_config() — the stage predicate is GAME data, not framework data
 #include "task_slot_layout.h" // task0_stage_entry_addr / task0_state_mach_addr (STOPGAP: slot offsets)
 #include "render_noise.h"     // RenderNoiseMask — the one GameConfig-derived render-noise definition
+#include "repl_service.h"     // refuse_if_unserviced — no selftest pumps Repl::read()
 
 #include <cstdio>
 #include <cstdlib>
@@ -734,8 +735,16 @@ static int run_spuirq(const char*) {
   return 0;
 }
 
-// Dispatched from boot.cpp when PSXPORT_SELFTEST is set.
+// Dispatched from the GAME's main() when PSXPORT_SELFTEST is set (Tomba2Engine/spyro/spider1
+// game/core/main.cpp — not boot.cpp, which now keeps only load_exe).
 int selftest_run(const char* path) {
+  // None of the selftests below reads stdin (Repl::read() is pumped only by native_boot.cpp's
+  // single-core loop), so a piped REPL script handed to a PSXPORT_SELFTEST run would be discarded
+  // while the fixed script ran and reported its own PASS/FAIL — a verdict over input it threw away
+  // (Tomba2Engine kanban #90). Refuse first: every selftest exits on a code, and a PASS produced
+  // this way is the worst of the outcomes.
+  psx::repl_service::refuse_if_unserviced("selftest", /*loopServicesRepl=*/false);
+
   const char* which = cfg_str("PSXPORT_SELFTEST");
   if (which && !strcmp(which, "startgame")) return run_startgame(path);
   if (which && !strcmp(which, "narration")) return run_narration(path);

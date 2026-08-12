@@ -30,6 +30,7 @@
 #include "cfg.h"
 #include "game_iface.h"        // psxport_game_config() — the nav predicate + render mask come from it
 #include "task_slot_layout.h"  // task0_stage_entry_addr() (STOPGAP: the slot-field offset)
+#include "repl_service.h"      // refuse_if_unserviced — this harness has NO Repl::read() pump
 #include <lucent/log.h>
 #include <cstdio>
 #include <cstring>
@@ -151,6 +152,14 @@ void DualCore::diffFrameRegion(const char* name, const uint8_t* a, const uint8_t
 }
 
 void DualCore::run(const char* exe_path) {
+  // BEFORE ANYTHING IS BOOTED: this harness never reads stdin — Repl::read() is pumped only by the
+  // single-core loop in native_boot.cpp — so a piped REPL script handed to a PSXPORT_DUALCORE run
+  // would sit in the pipe while the harness ran its own scripted nav, and the RAM diff would be
+  // reported as if the script had driven it (Tomba2Engine kanban #90, the same defect sbs.cpp was
+  // guarded for). Same failure shape as the stage-predicate refusal below: a clean bill of health
+  // over a run that measured something else.
+  psx::repl_service::refuse_if_unserviced("DualCore", /*loopServicesRepl=*/false);
+
   // REFUSE rather than measure the wrong thing. The nav machine's REACH_GAME test is
   // `mem_r32(task0+0xc) == stageGame`; with both unset that is `mem_r32(0xc) == 0`, which is TRUE at
   // frame 0 (the stage word is zero during boot too). The harness would log "GAME @f0", record 180

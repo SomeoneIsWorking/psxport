@@ -37,7 +37,8 @@ extern BoolVar cv_nopace;
 // SBS harness therefore REFUSES this knob (exit 2) rather than ignoring it — runtime/recomp/
 // repl_service.h reads it here for exactly that check, which is why it is migrated: the refusal must
 // resolve through the same ladder (and appear in the same env audit) as the flag it is refusing.
-// DualCore and selftest are NOT guarded yet: same defect, same one-line fix, not measured here.
+// ALL THREE pumpless loops now guard (SBS, DualCore, selftest); the census that keeps that true as a
+// fourth is added is tests/test_repl_unserviced_refusal.cpp's every_pumpless_loop_guards.
 extern BoolVar cv_repl;
 
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────

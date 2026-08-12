@@ -4,8 +4,9 @@
 //
 // WHY THIS FILE EXISTS. `Repl::read()` (repl.cpp) is pumped by exactly ONE loop: the single-core
 // native frame loop in native_boot.cpp. Every other loop that can own the process — the SBS
-// two-core harness (sbs.cpp), and the same shape in dualcore.cpp/selftest.cpp — never touches
-// stdin. So a piped REPL script handed to one of those runs is not rejected and not executed; it
+// two-core harness (sbs.cpp), DualCore (dualcore.cpp) and the selftests (selftest.cpp), all three
+// dispatched from a game's own main() — never touches stdin, and ALL THREE now call the guard
+// below. So a piped REPL script handed to one of those runs is not rejected and not executed; it
 // sits in the pipe while the harness runs its own default script, and the run LOOKS like it worked.
 // That is how a crash report on 2026-08-12 came to blame "SBS + a REPL-driven newgame" for a run
 // that never left attract mode (Tomba2Engine kanban #90).
@@ -117,8 +118,8 @@ inline std::string message(const char* loopName, const Query& q, Verdict v) {
   if (q.stdinPendingBytes > 0)
     s += std::to_string(q.stdinPendingBytes) +
          " byte(s) are ALREADY WAITING on stdin and NOTHING in this run will ever read them: every "
-         "command in that script would be silently discarded while the harness ran its own default "
-         "lockstep, and the run would look like it had worked. ";
+         "command in that script would be silently discarded while the " + loop + " harness ran its "
+         "own script, and the run would look like it had worked. ";
   if (const char* advice = drive_advice(loopName)) {
     s += advice;
     s += " ";
