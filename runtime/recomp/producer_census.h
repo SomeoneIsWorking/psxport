@@ -216,6 +216,32 @@ class ProducerCensus {
   // claim set silently turns every guest prim into "has no native producer" — a false negative that reads
   // exactly like a real finding. The count loaded is always printed, so "0 claims" can never pass for
   // "nothing has a native producer".
+  // THE BUILD IDENTITY OF THE RUNNING CODE, injected by the caller (producer_db.cpp reads it from the
+  // generated psxport_build_id.h) rather than #included here — this header must stay hermetic, and a test
+  // has to be able to inject any identity, INCLUDING the `UNKNOWN(<reason>)` shape the generator emits
+  // when it could not describe a repo. Nothing here manufactures an identity: an unset id stays empty and
+  // the provenance report REFUSES to classify rather than comparing against "".
+  static constexpr int BUILD_ID_CAP = 96;
+  void setBuildId(const char* id) {
+    mBuildId[0] = 0;
+    if (!id) return;
+    size_t n = 0;
+    // The id is written into a WHITESPACE-DELIMITED claim-file column, so a space in it would split into
+    // two fields and silently corrupt every later parse. Sanitised at the boundary, visibly (`_`).
+    for (const char* p = id; *p && n + 1 < BUILD_ID_CAP; ++p) {
+      const unsigned char ch = (unsigned char)*p;
+      mBuildId[n++] = (ch > 0x20 && ch < 0x7F) ? (char)ch : '_';
+    }
+    mBuildId[n] = 0;
+  }
+  const char* buildId() const { return mBuildId; }
+  // An id of the form `UNKNOWN(<reason>)` is the generator saying NO IDENTITY WAS AVAILABLE. It must never
+  // take part in an equality test: two builds that both failed to describe themselves are not the same
+  // build, and treating them as equal is exactly the false negative the DB exists to stop reporting.
+  static bool buildIdIsReal(const char* id) {
+    return id && id[0] && strncmp(id, "UNKNOWN(", 8) != 0;
+  }
+
   int loadClaims(const char* path) {
     FILE* f = fopen(path, "r");
     if (!f) {
@@ -226,7 +252,7 @@ class ProducerCensus {
       return 0;
     }
     char line[2048];
-    int loaded = 0, skippedNoNative = 0, dup = 0;
+    int loaded = 0, skippedNoNative = 0, dup = 0, provUpdated = 0, provAbsent = 0;
     while (fgets(line, sizeof line, f)) {
       // Two accepted shapes, because the flat claim file and the run JSONL are both legitimate inputs and
       // guessing which one a path is would be a silent failure. A bare `0x…` line is a claim by
@@ -234,8 +260,29 @@ class ProducerCensus {
       if (line[0] == '0' && (line[1] == 'x' || line[1] == 'X')) {
         const uint32_t a = (uint32_t)strtoul(line, nullptr, 16);
         if (!a) continue;
-        if (claims(a)) { dup++; continue; }
-        if (mClaimCount < CLAIM_CAP) { mClaims[mClaimCount++] = a; loaded++; } else mClaimOverflow++;
+        // PROVENANCE COLUMNS, and the OLD ONE-COLUMN FILE STILL LOADS: `strtoul` already ignored the tail,
+        // so a bare `0x…` line simply yields no provenance — which is a REAL third state ("written by a
+        // pre-provenance build"), not a defect to paper over with a placeholder id.
+        const char* prov = claimLineBuildId(line);
+        if (!prov) provAbsent++;
+        // A LATER LINE FOR AN ADDRESS ALREADY IN THE SET *UPDATES* ITS PROVENANCE, and this is the whole
+        // reason the report can say "last earned by". The file is append-only and therefore chronological,
+        // so the newest line for an address is the newest EARN event; keeping the first one (the previous
+        // behaviour, a plain `dup++; continue;`) would have made every claim report the OLDEST build that
+        // ever earned it and read as a fossil forever after one stale block.
+        const int at = claimIndexOf(a);
+        if (at >= 0) {
+          dup++;
+          if (prov) { setClaimProv(at, prov); provUpdated++; }
+          continue;
+        }
+        if (mClaimCount < CLAIM_CAP) {
+          const int i = mClaimCount++;
+          mClaims[i] = a;
+          mClaimFromDisk[i] = true;
+          setClaimProv(i, prov);
+          loaded++;
+        } else mClaimOverflow++;
         continue;
       }
       const char* pn = strstr(line, "\"prims_native\":");
@@ -245,15 +292,24 @@ class ProducerCensus {
       if (!k) continue;
       const uint32_t addr = (uint32_t)strtoul(k + 9, nullptr, 16);
       if (!addr) continue;
-      if (claims(addr)) { dup++; continue; }
-      if (mClaimCount < CLAIM_CAP) { mClaims[mClaimCount++] = addr; loaded++; }
+      const int at = claimIndexOf(addr);
+      if (at >= 0) { dup++; continue; }
+      if (mClaimCount < CLAIM_CAP) {
+        const int i = mClaimCount++;
+        mClaims[i] = addr;
+        mClaimFromDisk[i] = true;
+        setClaimProv(i, nullptr);      // a JSONL row carries no claim-file provenance column
+        provAbsent++;
+        loaded++;
+      }
       else                         { mClaimOverflow++; }
     }
     fclose(f);
     lucent::info("producers", "claim set loaded from {}: {} address(es) ({} row(s) skipped as having no "
-                              "native producer, {} duplicate(s), {} lost to CLAIM_CAP={}). These are the "
-                              "rows a guest prim can be JOINED to.",
-                 path, loaded, skippedNoNative, dup, mClaimOverflow, CLAIM_CAP);
+                              "native producer, {} duplicate line(s) of which {} carried NEWER provenance "
+                              "that superseded an earlier line, {} line(s) carried NO build id at all, {} "
+                              "lost to CLAIM_CAP={}). These are the rows a guest prim can be JOINED to.",
+                 path, loaded, skippedNoNative, dup, provUpdated, provAbsent, mClaimOverflow, CLAIM_CAP);
     return loaded;
   }
 
@@ -262,20 +318,51 @@ class ProducerCensus {
   // prims_native 0, so the newest file legitimately contains no claims, and loading it would report "no
   // effect has a native producer" about a game where nine of them do. Accumulating instead means a claim,
   // once earned by a native producer actually drawing, stays a claim until someone deletes the file.
-  int appendClaims(const char* path) const {
-    if (mClaimCount == 0) return 0;   // nothing earned this run; the file keeps what earlier runs earned
+  // WHAT THIS WRITES IS WHAT THIS RUN *EARNED*, and that is a bug fix, not a policy change (kanban #91).
+  // It used to write `mClaims[0..mClaimCount)` — the UNION of the loaded set and the earned set, because
+  // `loadClaims` fills the same array `note()` does. So every run re-emitted the whole file's contents and
+  // the NEWEST block always looked freshly earned; the on-disk file could not answer "what did this run
+  // earn" even in principle, which is how a claim whose producer KEY had MOVED kept reading as live.
+  // Re-emitting a loaded claim is also what would DESTROY its provenance: the only honest build id for a
+  // claim this run did not earn is the one already on its old line, and leaving that line alone preserves
+  // it. Append-only is UNCHANGED and still right for the reason its original note gives — absence on one
+  // leg must never un-earn a claim, because no single leg runs both halves.
+  int appendClaims(const char* path, const char* runStamp) const {
+    int earned = 0;
+    for (int i = 0; i < mClaimCount; i++) if (mClaimEarnedHere[i]) earned++;
+    if (earned == 0) {
+      // NOT SILENT. "This run earned nothing new" is a real and common outcome (a pure psx_render leg, or a
+      // native leg that revisited only content it had already claimed) and it must be distinguishable from
+      // a failed write, which is what an early `return 0` with no line looked like before.
+      lucent::info("producers", "claim set: appended 0 address(es) -> {} — this run EARNED no claim "
+                                "({} claim(s) were loaded from disk and are deliberately NOT re-emitted; "
+                                "re-emitting them is the union-echo bug kanban #91 is about)",
+                   path, mClaimCount);
+      return 0;
+    }
     FILE* f = fopen(path, "a");
     if (!f) {
       lucent::warn("producers", "claim set NOT persisted: cannot append to {} — the next run will resolve "
                                 "fewer guest prims and will say so", path);
       return 0;
     }
-    for (int i = 0; i < mClaimCount; i++) fprintf(f, "0x%08X\n", mClaims[i]);
+    // Line format `0xADDRESS <run-stamp> <build-id>`. Deliberately whitespace-columnar and address-first:
+    // `loadClaims`'s existing `line[0]=='0'` branch strtoul's the address and IGNORES the tail, so a file
+    // written here still loads in a PRE-provenance build, and a pre-provenance file still loads here.
+    for (int i = 0; i < mClaimCount; i++) {
+      if (!mClaimEarnedHere[i]) continue;
+      fprintf(f, "0x%08X %s %s\n", mClaims[i],
+              (runStamp && runStamp[0]) ? runStamp : "no-stamp",
+              mBuildId[0] ? mBuildId : "UNKNOWN(no-build-id-set)");
+    }
     fclose(f);
-    lucent::info("producers", "claim set: appended {} address(es) -> {} (append-only; a claim earned by a "
-                              "native producer drawing is never un-earned by a later leg that skips it)",
-                 mClaimCount, path);
-    return mClaimCount;
+    lucent::info("producers", "claim set: appended {} address(es) EARNED THIS RUN -> {} (of {} in the set; "
+                              "the other {} were loaded from disk and keep the provenance of the run that "
+                              "earned them). Stamped build id: {}. Append-only: a claim earned by a native "
+                              "producer drawing is never un-earned by a later leg that skips it.",
+                 earned, path, mClaimCount, mClaimCount - earned,
+                 mBuildId[0] ? mBuildId : "NONE — the caller never called setBuildId()");
+    return earned;
   }
 
   bool claims(uint32_t addr) const {
@@ -284,6 +371,27 @@ class ProducerCensus {
   }
   int claimCount() const { return mClaimCount; }
   uint32_t claimAt(int i) const { return (i >= 0 && i < mClaimCount) ? mClaims[i] : 0; }
+  // ---- THE UNION SPLIT (kanban #91 step 1) --------------------------------------------------------
+  // `claimCount()` is a UNION and always was: `loadClaims` and `note()` fill the same array, on purpose —
+  // the resolver wants every address a guest prim may join to, whoever earned it. What was missing is that
+  // NOTHING could tell the two apart afterwards, so a claim earned five commits ago and one earned in this
+  // very run were indistinguishable. These two predicates are that distinction, and everything provenance
+  // downstream (the file writer, the report, the tests) is built on them rather than on array position.
+  bool claimEarnedHere(int i) const { return (i >= 0 && i < mClaimCount) && mClaimEarnedHere[i]; }
+  bool claimFromDisk(int i)   const { return (i >= 0 && i < mClaimCount) && mClaimFromDisk[i]; }
+  // The build id the claim FILE recorded for this claim; "" when the line carried none (a pre-provenance
+  // build wrote it). Never synthesised — see the note on `UNKNOWN(...)` above.
+  const char* claimProv(int i) const { return (i >= 0 && i < mClaimCount) ? mClaimProv[i] : ""; }
+  int claimEarnedHereCount() const {
+    int n = 0;
+    for (int i = 0; i < mClaimCount; i++) if (mClaimEarnedHere[i]) n++;
+    return n;
+  }
+  int claimLoadedCount() const {
+    int n = 0;
+    for (int i = 0; i < mClaimCount; i++) if (mClaimFromDisk[i]) n++;
+    return n;
+  }
   // Stores attributed while the set was still EMPTY — the ordering blind spot, COUNTED rather than
   // argued about. A prim drawn before the frame's first native producer ran cannot be resolved, so it
   // lands on its emitter key. If this is large, early rows are emitter-keyed and the join is partial.
@@ -398,14 +506,100 @@ class ProducerCensus {
             "{\"type\":\"totals\",\"prims_seen\":%llu,\"prims_attributed\":%llu,"
             "\"gp0_anon\":%llu,\"span_miss\":%llu,\"span_no_fn\":%llu,\"guest_origin\":%llu,"
             "\"unscoped_native\":%llu,\"overflow\":%d,\"iid_collisions\":%d,"
-            "\"rows\":%d,\"seen_at\":\"%s\"}\n",
+            "\"rows\":%d,\"claims_earned_here\":%d,\"claims_loaded\":%d,"
+            "\"build_id\":\"%s\",\"seen_at\":\"%s\"}\n",
             (unsigned long long)mPrimsSeen, (unsigned long long)primsAttributed(),
             (unsigned long long)mGp0Anon, (unsigned long long)mSpanMiss,
             (unsigned long long)mSpanNoFn, (unsigned long long)mGuestOrigin,
             (unsigned long long)mUnscopedNative, mOverflow, mIidCollisions, mRowCount,
-            stamp ? stamp : "");
+            claimEarnedHereCount(), claimLoadedCount(),
+            // THE RUN'S OWN BUILD IDENTITY, travelling with the rows. `tools/producers.py stale` states
+            // as its residual that "nothing here can say which PSXPORT_DIR a build came from" — it
+            // identifies a leg's binary by an md5 the harness records, which `touch` cannot fake but which
+            // also cannot name the CODE. This field is that name. It is written EXACTLY as held: when no
+            // identity was set it is the empty string, never a placeholder, because a reader must be able
+            // to tell "this run had no identity" from "this run was build ''".
+            mBuildId, stamp ? stamp : "");
     fclose(f);
     lucent::info("producers", "wrote {} row(s) + totals -> {}", mRowCount, path);
+  }
+
+  // ---- CLAIM-SET PROVENANCE, printed UNCONDITIONALLY (kanban #91 step 3) --------------------------
+  //
+  // THE QUESTION: of the claims this run loaded from disk, which were last earned by a DIFFERENT build than
+  // the one running? Those are the ones whose attribution of guest prims may be a FOSSIL of a producer key
+  // that moved — the concrete case is Tomba!2's `perObjFlush`, whose key is the per-mode emitter and which
+  // therefore moved from 0x800803DC to 0x80146478 when the routing changed, leaving a claim on disk that no
+  // build since can earn in mode-0 content.
+  //
+  // THE NEGATIVE IS DESIGNED FIRST, three ways, because every one of them was a way to lie silently:
+  //
+  //  1. NOT RE-EARNED IS NOT DEAD, and the line says so in those words. A producer key is a FUNCTION OF
+  //     GUEST STATE: 12 of Tomba!2's 22 MODE_TABLE entries select 0x800803DC, so a claim goes un-earned
+  //     whenever the run never visited the content that earns it. Measured, on that game: 119 historical
+  //     native legs missed 0x800803DC purely because the whole corpus was mode-0 seaside content. A report
+  //     that said "stale" would have had a session prune a claim that is live in over half the game.
+  //  2. NO BUILD IDENTITY -> REFUSE TO CLASSIFY. With no id set, every comparison would be against "" and
+  //     every claim would read DIFFERENT-BUILD. The report says the comparison COULD NOT BE MADE instead.
+  //  3. `UNKNOWN(<reason>)` IS NOT AN ID. Two builds that both failed to describe themselves are not the
+  //     same build, so an UNKNOWN on either side is its own class and never an equal or an unequal.
+  //
+  // It prints even when the set is empty and even when nothing is wrong, because "the set holds nothing
+  // from a foreign build" is a finding only if the reader can see the denominator it was drawn from.
+  void reportClaimProvenance(const char* who) const {
+    const int loaded = claimLoadedCount();
+    const int earnedHere = claimEarnedHereCount();
+    const int fresh = mClaimCount - loaded;   // earned this run and never seen on disk before
+    if (!buildIdIsReal(mBuildId)) {
+      lucent::warn("producers",
+                   "{}: claim set provenance CANNOT BE COMPUTED — this run has no usable build identity "
+                   "({}). {} claim(s) in the set, {} loaded from disk, {} re-earned by this run. Whether "
+                   "any of the loaded ones were last earned by a DIFFERENT build is UNKNOWN, not 'none': "
+                   "the comparison was never made. Fix the build-id generator (cmake/build_id.cmake) "
+                   "rather than reading the numbers above as an all-clear.",
+                   who, mBuildId[0] ? mBuildId : "setBuildId() was never called",
+                   mClaimCount, loaded, earnedHere);
+      return;
+    }
+    int reEarned = 0, otherBuild = 0, sameBuildCold = 0, noProv = 0, provUnknown = 0;
+    const char* firstOther = nullptr;
+    uint32_t firstOtherAddr = 0;
+    for (int i = 0; i < mClaimCount; i++) {
+      if (!mClaimFromDisk[i]) continue;
+      if (mClaimEarnedHere[i]) { reEarned++; continue; }
+      const char* p = mClaimProv[i];
+      if (!p[0])                    { noProv++; continue; }
+      if (!buildIdIsReal(p))        { provUnknown++; continue; }
+      if (strcmp(p, mBuildId) == 0) { sameBuildCold++; continue; }
+      otherBuild++;
+      if (!firstOther) { firstOther = p; firstOtherAddr = mClaims[i]; }
+    }
+    char firstOtherNote[160] = "";
+    if (firstOther)
+      snprintf(firstOtherNote, sizeof firstOtherNote, " (first: 0x%08X, last earned by %s)",
+               firstOtherAddr, firstOther);
+    lucent::info("producers",
+                 "{}: claim set provenance — build id {}. {} claim(s) in the set = {} loaded from disk + {} "
+                 "first earned in this run. Of the {} loaded: {} RE-EARNED by this build in this run, {} "
+                 "last earned by a DIFFERENT build{}, {} last earned by THIS build id but not re-earned in "
+                 "this run, {} carry NO provenance (written by a pre-provenance build), {} carry an "
+                 "UNKNOWN(...) id which is NOT comparable and so is neither.",
+                 who, mBuildId, mClaimCount, loaded, fresh, loaded, reEarned, otherBuild, firstOtherNote,
+                 sameBuildCold, noProv, provUnknown);
+    // THE BLIND SPOT, and it is louder than the numbers on purpose — this is the sentence whose absence
+    // would make a reader draw the exactly wrong conclusion from the line above.
+    const int notReEarned = otherBuild + sameBuildCold + noProv + provUnknown;
+    if (notReEarned) {
+      lucent::warn("producers",
+                   "{}: {} loaded claim(s) were NOT re-earned by this run — of which {} were last earned by "
+                   "a DIFFERENT build, so their attribution of guest prims is POSSIBLY A FOSSIL of a "
+                   "producer key that MOVED. NOT RE-EARNED IS NOT DEAD: a producer's key is a function of "
+                   "GUEST STATE (Tomba!2's perObjFlush keys on the per-mode emitter, and 12 of 22 render "
+                   "modes select one single address), so a claim goes un-earned whenever this run never "
+                   "visited the content that earns it. REACH THE CONTENT before treating any of these as "
+                   "dead, and do not prune them.",
+                   who, notReEarned, otherBuild);
+    }
   }
 
   // ---- the run's summary line, and it must be readable when it found NOTHING ---------------------
@@ -505,10 +699,44 @@ class ProducerCensus {
 
  private:
   static constexpr int CLAIM_CAP = 256;
+  static constexpr int PROV_CAP  = BUILD_ID_CAP;
   uint32_t mClaims[CLAIM_CAP] = {};
+  // Parallel to mClaims, and parallel rather than a struct only because mClaims' layout is what
+  // `reportChains` and `claimAt` already hand out; a struct here would churn three call sites for nothing.
+  bool     mClaimEarnedHere[CLAIM_CAP] = {};   // a native producer pushed on this GUEST key IN THIS RUN
+  bool     mClaimFromDisk[CLAIM_CAP]   = {};   // the claim existed before this run started
+  char     mClaimProv[CLAIM_CAP][PROV_CAP] = {};   // build id the FILE recorded; "" = none recorded
+  char     mBuildId[BUILD_ID_CAP] = {};        // identity of the RUNNING code; "" = caller never set one
   int      mClaimCount = 0;
   int      mClaimOverflow = 0;     // claims lost to a full set — an UNCLAIMED prim may be this, not a miss
   uint64_t mClaimTooEarly = 0;
+
+  int claimIndexOf(uint32_t addr) const {
+    for (int i = 0; i < mClaimCount; i++) if (mClaims[i] == addr) return i;
+    return -1;
+  }
+  void setClaimProv(int i, const char* prov) {
+    mClaimProv[i][0] = 0;
+    if (!prov) return;
+    size_t n = 0;
+    while (prov[n] && (unsigned char)prov[n] > 0x20 && n + 1 < PROV_CAP) { mClaimProv[i][n] = prov[n]; n++; }
+    mClaimProv[i][n] = 0;
+  }
+  // Third whitespace-delimited field of a claim line, or nullptr when the line has no such field. Returns
+  // nullptr — never "" and never a placeholder — because "this line records no build id" is a REAL state
+  // the report has to name separately from "recorded a different build".
+  static const char* claimLineBuildId(const char* line) {
+    int field = 0;
+    const char* p = line;
+    while (*p) {
+      while (*p == ' ' || *p == '\t') p++;
+      if (!*p || *p == '\n' || *p == '\r') return nullptr;
+      if (field == 2) return p;
+      while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+      field++;
+    }
+    return nullptr;
+  }
 
   void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native, const char* name = nullptr) {
     mFed = true;
@@ -517,9 +745,22 @@ class ProducerCensus {
     // here, in the one funnel both native entry points share, so no producer can be a claim in one path
     // and not the other. Linear + deduped: the set is tens of entries, and it is read on a store path, so
     // it stays a flat array rather than becoming a hash nobody can dump.
-    if (native && key.kind == ProducerKey::GUEST && !claims(key.id)) {
-      if (mClaimCount < CLAIM_CAP) mClaims[mClaimCount++] = key.id;
-      else                         mClaimOverflow++;
+    if (native && key.kind == ProducerKey::GUEST) {
+      const int at = claimIndexOf(key.id);
+      if (at >= 0) {
+        // ALREADY IN THE SET — but this run has now EARNED it, and that is the fact the old code threw
+        // away. A claim loaded from disk and re-earned here is not a fossil; one loaded and never re-earned
+        // may be. Nothing could tell them apart, so `producer_db_finish` had nothing to report.
+        mClaimEarnedHere[at] = true;
+      } else if (mClaimCount < CLAIM_CAP) {
+        const int i = mClaimCount++;
+        mClaims[i] = key.id;
+        mClaimEarnedHere[i] = true;
+        mClaimFromDisk[i] = false;
+        mClaimProv[i][0] = 0;         // brand new: its provenance is THIS build, written by appendClaims
+      } else {
+        mClaimOverflow++;
+      }
     }
     Row* r = nullptr;
     for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) { r = &mRows[i]; break; }

@@ -165,6 +165,31 @@ set(PSXPORT_FRAMEWORK_SRC
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC} ${SHADERS_H})
 add_dependencies(psxport gen_gpu_shaders)
 
+# ---- BUILD IDENTITY (kanban #91 step 2) -------------------------------------------------------
+# `git describe --always --dirty` for the framework AND for the consuming project, written into
+# ${CMAKE_BINARY_DIR}/psxport_build_id.h. This is the framework's ONLY build stamp; nothing else here
+# emitted GIT_*/BUILD_ID/__DATE__, which is why the producer claim file could not say which build
+# earned a claim.
+#
+# A CUSTOM TARGET IN `ALL`, NOT A CONFIGURE-TIME VARIABLE, and the difference is the whole point: a
+# configure-time id goes stale the moment you commit and rebuild without re-running cmake, and a stale
+# provenance stamp files new work under the old sha — the exact false negative kanban #91 is about. The
+# generator writes only when the content CHANGES, so the cost is one `git describe` per build and no
+# spurious recompilation. It lives in cmake/psxport.cmake rather than the root CMakeLists because a
+# consuming GAME includes this file directly and never processes psxport's own CMakeLists — put in the
+# root, every game build would have had no build id at all.
+set(PSXPORT_BUILD_ID_H ${CMAKE_BINARY_DIR}/psxport_build_id.h)
+add_custom_target(psxport_build_id ALL
+  COMMAND ${CMAKE_COMMAND}
+          -DPSXPORT_ROOT=${PSXPORT_ROOT}
+          -DAPP_ROOT=${CMAKE_SOURCE_DIR}
+          -DOUT=${PSXPORT_BUILD_ID_H}
+          -P ${PSXPORT_ROOT}/cmake/build_id.cmake
+  BYPRODUCTS ${PSXPORT_BUILD_ID_H}
+  COMMENT "psxport: stamping build identity (git describe --always --dirty)"
+  VERBATIM)
+add_dependencies(psxport psxport_build_id)
+
 # C++17 for the framework (mednafen backends), overriding the project-wide C++20.
 set_target_properties(psxport PROPERTIES
   CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
@@ -176,6 +201,9 @@ set_target_properties(psxport PROPERTIES
 # generated/ sources (the game substrate) — so the archive carries them as UNDEFINED, resolved only at
 # the final game-exe link. That is expected for a static archive.
 target_include_directories(psxport PUBLIC
+  # ${CMAKE_BINARY_DIR} is here for ONE header: the generated psxport_build_id.h above. It is PUBLIC
+  # because a game's own translation units are entitled to the same identity the framework stamps.
+  ${CMAKE_BINARY_DIR}
   ${PSXPORT_ROOT}/${RT} ${PSXPORT_ROOT}/runtime/ui ${CMAKE_SOURCE_DIR}/generated
   ${MED} ${MED}/psx
   ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx

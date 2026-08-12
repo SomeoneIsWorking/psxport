@@ -7,6 +7,11 @@
 #include "override_registry.h"   // overrides::query — per-row ownership for the JSONL
 #include "config_vars.h"         // cv_producers_dir / cv_producers_db
 #include "ot_attr.h"
+// GENERATED at every build by cmake/build_id.cmake into ${CMAKE_BINARY_DIR} (see cmake/psxport.cmake).
+// Included HERE and nowhere else: producer_census.h stays hermetic and takes the identity through
+// setBuildId(), so a test can inject any identity — including the `UNKNOWN(<reason>)` shape — without
+// needing a build to have produced a header first.
+#include "psxport_build_id.h"
 #include <lucent/log.h>
 #include <stdio.h>
 #include <string>
@@ -14,6 +19,26 @@
 #include <sys/stat.h>
 
 void producer_db_begin(Core* c) {
+  // THE RUNNING CODE'S IDENTITY, set BEFORE loadClaims so every claim read off disk can be compared
+  // against it. Deliberately NOT a CVar: `cv_*` are env-settable knobs, and a provenance stamp anyone can
+  // set with `PSXPORT_BUILD_ID=...` is forgeable, which would make the fossil report certify whatever the
+  // caller typed. It is a compile-time constant from `git describe --always --dirty`, logged
+  // unconditionally here (so it reaches the log without an env audit entry) and written into every run's
+  // JSONL totals row by writeJsonl.
+  c->rsub.census.setBuildId(PSXPORT_BUILD_ID_COMPOSITE);
+  if (ProducerCensus::buildIdIsReal(c->rsub.census.buildId())) {
+    lucent::info("producers", "build identity for this run: {} (framework {}, app {}) — this is the id "
+                              "stamped on every claim this run EARNS",
+                 c->rsub.census.buildId(), PSXPORT_BUILD_ID_FRAMEWORK, PSXPORT_BUILD_ID_APP);
+  } else {
+    // NOT SILENT, and not downgraded to info: with no identity the provenance report REFUSES to classify,
+    // so every "which build earned this claim" answer for this whole run is UNKNOWN rather than "none".
+    lucent::warn("producers", "build identity for this run is NOT USABLE: {} (framework {}, app {}). Claim "
+                              "provenance CANNOT be compared this run — the report will say so rather than "
+                              "reading as an all-clear. Fix cmake/build_id.cmake's inputs.",
+                 c->rsub.census.buildId()[0] ? c->rsub.census.buildId() : "(empty)",
+                 PSXPORT_BUILD_ID_FRAMEWORK, PSXPORT_BUILD_ID_APP);
+  }
   // Load the accumulated claim set BEFORE the first frame, so the guest leg can resolve from frame 0.
   // This is what makes the producer DB a COMPARISON rather than two disjoint row sets: no single leg runs
   // both halves (pc_render never GP0-executes the guest packets; psx_render never runs a native producer),
@@ -35,6 +60,12 @@ void producer_db_finish(Core* c) {
     c->rsub.census.claimResolveTooEarly(), c->rsub.census.claimCount(), c->rsub.otAttr.claimAtLimit(),
     c->rsub.otAttr.claimAtLimit() ? " — WIDEN CLAIM_SEARCH_DEPTH: a claim at the limit means deeper ones are being missed" : "");
   c->rsub.census.report("run-end");
+  // CLAIM-SET PROVENANCE (kanban #91 step 3), unconditional and BEFORE the file is appended, so the line
+  // describes the set this run actually resolved against rather than the set after this run's own writes.
+  // It prints on an empty set and on a clean set too: "no claim came from a foreign build" is a finding
+  // only when the reader can see the denominator, and an early return here would be indistinguishable
+  // from the report never having been wired.
+  c->rsub.census.reportClaimProvenance("run-end");
   // `PSXPORT_DEBUG=otchain` — the chain report, tested against THE CLAIM SET: every guest-keyed row a
   // NATIVE producer has claimed (primsNative > 0). That set is the right one because the open question is
   // whether the two legs can be joined, and a row only joins if a native producer keyed it. Rows with a
@@ -89,6 +120,9 @@ void producer_db_finish(Core* c) {
     // ProducerCensus::loadClaims): no single leg runs both halves, so the join is cross-run by nature.
     char cpath[512];
     snprintf(cpath, sizeof cpath, "%s/claims.txt", dir);
-    c->rsub.census.appendClaims(cpath);
+    // `stamp` is this run's wall clock, the same one on the JSONL rows, so a claim line can be traced back
+    // to the run file that earned it. It is the SECOND column; the third is the build id, which is the one
+    // that actually decides fossil-vs-live (a wall clock cannot — see #91's withdrawn HEAD-dating claim).
+    c->rsub.census.appendClaims(cpath, stamp);
   }
 }
