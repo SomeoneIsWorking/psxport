@@ -62,6 +62,21 @@ extern BoolVar cv_fps60;
 extern TextVar cv_render_path;
 RenderPath render_path();
 
+// ── the graphics-producer DB ────────────────────────────────────────────────────────────────────
+// PSXPORT_PRODUCERS_DIR — where the per-run producer-census JSONL and the accumulated claim set are
+// written. Default is the game repo's gitignored scratch/ tree; NEVER /tmp (small tmpfs here).
+extern TextVar cv_producers_dir;
+
+// PSXPORT_PRODUCERS_DB — the claim set the guest leg resolves against: either the flat claims file or a
+// run JSONL. Empty = <PRODUCERS_DIR>/claims.txt, the file the previous run appended.
+//
+// WHY THIS KNOB HAS TO EXIST AT ALL, since a path with a default looks like scaffolding: no single leg
+// runs both halves of the comparison (pc_render never GP0-executes the guest packets; psx_render never
+// runs a native producer), so the addresses native producers key are earned on ONE run and consumed by
+// ANOTHER. Pointing this at a specific DB is how a harness compares against a chosen baseline instead of
+// whatever the last run happened to leave behind.
+extern TextVar cv_producers_db;
+
 // ── declared for introspection only; resolved elsewhere ─────────────────────────────────────────
 // lucent reads these two for itself — it is BUILT with LUCENT_CHANNEL_ENV="PSXPORT_DEBUG" and
 // LUCENT_LOG_FILE_ENV="PSXPORT_LOG_FILE" (cmake/psxport.cmake), resolving both lazily on its first

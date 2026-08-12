@@ -2088,7 +2088,14 @@ void GpuState::censusGuestPrim(Core* core) {
     core->rsub.census.noteUnattributable(ProducerCensus::WHY_SPAN_NO_FN, 1u);
     return;
   }
-  core->rsub.census.noteGuest(sp.fn, 1u, s_frame);
+  // THE JOIN: attribute to the frame a native producer already keys a row at, when the chain had one.
+  // `sp.fn` is the innermost EMITTER (an `OverlayGt3Gt4::gt3` builder, a libgs packet routine), which is
+  // NOT where a native row is keyed — measured, keying on it put the two legs in disjoint rows (2 of 25
+  // keys coincided) so the DB looked complete and compared nothing. `sp.claimed` is that same chain
+  // resolved outward to the handler/pass frame; when it is 0 no frame in the searched window is claimed,
+  // which is the DB's real answer for that effect — IT HAS NO NATIVE PRODUCER — and it keeps the emitter
+  // key so the row still identifies something a human can go and port.
+  core->rsub.census.noteGuest(sp.claimed ? sp.claimed : sp.fn, 1u, s_frame);
 }
 
 int GpuState::gpu_frame_no() { return s_frame; }

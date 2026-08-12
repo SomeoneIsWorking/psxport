@@ -4,7 +4,8 @@
 #include "render_node.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
 #include "game.h"
-#include "render_noise.h"   // THE one GameConfig-derived definition of the pool / OT / pool-ptr windows
+#include "render_noise.h"
+#include "producer_census.h"   // ProducerCensus::claims — the claim set the chain walk resolves against   // THE one GameConfig-derived definition of the pool / OT / pool-ptr windows
 #include <lucent/log.h>
 
 // THE PACKET POOL RANGE COMES FROM THE GAME, not from here. It used to be two file-scope constants
@@ -102,8 +103,99 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
       return;
     }
   }
-  if (mSpanCount < SPAN_CAP) mSpans[mSpanCount++] = Span{ k, k + bytes, fn, caller, node, c->pc };
+  // Resolved HERE and not at GP0-execution time, because the call chain only exists during the store —
+  // by the time the packet is executed the guest has long returned and there is nothing left to walk.
+  const uint32_t claimed = resolveClaimedFrame(c);
+  if (mSpanCount < SPAN_CAP) mSpans[mSpanCount++] = Span{ k, k + bytes, fn, caller, node, c->pc, claimed };
   else mSpanOverflow++;
+
+  // Sampled on a NEW SPAN only (the coalescing return above already left), so one quad contributes one
+  // chain rather than one per word. Channel-gated: a full stack walk per store is real work.
+  if (g_otchain_channel) sampleChain(c);
+}
+
+// Walk the call chain outward from the emitter and return the first frame a native producer keys a row
+// at — the join between the two legs (see OtAttr::Span::claimed). Returns 0 when the searched window holds
+// no claimed frame, which is the honest "this effect has no native producer" and is what populates the
+// DB's actual answer rather than a guess.
+uint32_t OtAttr::resolveClaimedFrame(Core* c) {
+  const ProducerCensus& census = c->rsub.census;
+  // AN EMPTY CLAIM SET RESOLVES NOTHING, AND THAT IS COUNTED, NOT SILENT. It happens for real: on a pure
+  // psx_render leg no native producer runs, and during the first frames of any leg the natives have not
+  // run yet. Without this counter those prims land on their emitter key and read as "no native producer"
+  // — a false negative indistinguishable from a true one.
+  if (census.claimCount() == 0) { c->rsub.census.noteClaimTooEarly(); return 0; }
+  const int vis = c->idiag.otattrVisibleDepth();
+  const int lim = vis < CLAIM_SEARCH_DEPTH ? vis : CLAIM_SEARCH_DEPTH;
+  for (int i = 0; i < lim; i++) {
+    const uint32_t f = c->idiag.otattrFrameFromTop(i);
+    if (f && census.claims(f)) {
+      if (i == CLAIM_SEARCH_DEPTH - 1) mClaimAtLimit++;
+      mClaimResolved++;
+      return f;
+    }
+  }
+  mClaimUnresolved++;
+  return 0;
+}
+
+// See ot_attr.h for why this exists: it checks the premise the frame-selection fix rests on.
+void OtAttr::sampleChain(Core* c) {
+  mChainSeen++;
+  const int depth = c->idiag.otattr_depth;
+  const int vis   = c->idiag.otattrVisibleDepth();
+  if (vis == 0) { mChainBlind++; return; }   // over OTATTR_CAP: the chain is not knowable, and is COUNTED
+  const uint32_t top = c->idiag.otattrFrameFromTop(0);
+  for (int i = 0; i < mChainCount; i++)
+    if (mChains[i].top == top && mChains[i].depth == depth) { mChains[i].hits++; return; }
+  if (mChainCount >= CHAIN_SLOTS) { mChainDropped++; return; }
+  ChainSample& s = mChains[mChainCount++];
+  s.top = top; s.depth = depth; s.hits = 1;
+  s.nframes = vis < CHAIN_FRAMES ? vis : CHAIN_FRAMES;
+  for (int i = 0; i < s.nframes; i++) s.frames[i] = c->idiag.otattrFrameFromTop(i);
+}
+
+void OtAttr::reportChains(const uint32_t* claims, int nclaims) const {
+  // THE NEGATIVE CARRIES ITS DENOMINATOR AND ITS BLIND SPOTS. An empty or all-unclaimed report must be
+  // distinguishable from a sampler that never ran, so the header prints unconditionally and states what
+  // was scanned, what it cannot see, and against how many claim addresses the chains were tested.
+  lucent::info("otchain",
+    "chain report: {} distinct shape(s) from {} sampled store(s); {} shape(s) DROPPED (table full at {}), "
+    "{} store(s) BLIND (guest depth over OTATTR_CAP={} — chain unknowable, not merely unmatched); "
+    "tested against {} claim address(es); {} frames recorded per shape",
+    mChainCount, mChainSeen, mChainDropped, CHAIN_SLOTS, mChainBlind, InterpDiag::OTATTR_CAP,
+    nclaims, CHAIN_FRAMES);
+  if (nclaims == 0)
+    lucent::warn("otchain", "NO claim addresses were supplied, so EVERY shape below reads as unclaimed "
+                            "for that reason alone — this run cannot answer whether a handler frame is on "
+                            "the chain. Arm the census so producer rows exist.");
+  if (mChainCount == 0 && mChainSeen == 0)
+    lucent::warn("otchain", "the sampler recorded NOTHING: no packet-pool store reached it. Either the leg "
+                            "draws nothing through the guest pool (is this a native-render run?) or the "
+                            "pool window is unknown for this game. This is NOT evidence about chains.");
+  int matched = 0;
+  for (int i = 0; i < mChainCount; i++) {
+    const ChainSample& s = mChains[i];
+    int      claimIdx = -1;       // depth-from-top of the first frame a producer row claims
+    uint32_t claimFn  = 0;
+    for (int f = 0; f < s.nframes && claimIdx < 0; f++)
+      for (int q = 0; q < nclaims; q++)
+        if (claims[q] == s.frames[f]) { claimIdx = f; claimFn = s.frames[f]; break; }
+    if (claimIdx >= 0) matched++;
+    lucent::Line ln;
+    ln.add("  top 0x{:08X} depth {} hits {} -> ", s.top, s.depth, s.hits);
+    if (claimIdx == 0)      ln.add("CLAIMED AT TOP (0x{:08X}) — both legs already agree", claimFn);
+    else if (claimIdx > 0)  ln.add("claimed {} frame(s) down: 0x{:08X}", claimIdx, claimFn);
+    else                    ln.add("UNCLAIMED — no frame in the visible chain is a producer key");
+    ln.add("  chain:");
+    for (int f = 0; f < s.nframes; f++) ln.add(" 0x{:08X}", s.frames[f]);
+    if (s.depth > s.nframes) ln.add(" ... (+{} deeper, not recorded)", s.depth - s.nframes);
+    ln.flush(lucent::Level::Info, "otchain");
+  }
+  lucent::info("otchain",
+    "VERDICT: {} of {} shape(s) have a producer key somewhere on the visible chain. This is the premise "
+    "the frame-selection fix rests on — if it is low, keying on a claimed frame cannot join the two legs.",
+    matched, mChainCount);
 }
 
 void OtAttr::trackGte(Core* c) {

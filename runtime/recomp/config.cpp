@@ -246,6 +246,14 @@ TextVar cv_settings_path("PSXPORT_SETTINGS", "psxport_settings.ini",
                          "path to the settings file — selects the Value layer, so never persisted",
                          /*persistable=*/false);
 
+TextVar cv_producers_dir("PSXPORT_PRODUCERS_DIR", "scratch/producers",
+                         "where the producer-census JSONL + accumulated claim set are written",
+                         /*persistable=*/false);
+TextVar cv_producers_db("PSXPORT_PRODUCERS_DB", "",
+                        "claim set the guest leg resolves against (flat claims file or a run JSONL); "
+                        "empty = <PRODUCERS_DIR>/claims.txt",
+                        /*persistable=*/false);
+
 BoolVar cv_fps60("PSXPORT_FPS60", false, "interpolated-60fps tier (Value layer = fps60= in the settings file)");
 
 // PSXPORT_RENDER_PATH — the RENDER PATH tri-state: native | gte | psx

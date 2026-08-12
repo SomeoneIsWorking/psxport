@@ -31,6 +31,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>         // strtoul — loadClaims parses the persisted DB
 #include <string.h>          // strcmp — the native-only iid collision check (see note())
 #include <lucent/log.h>
 
@@ -178,6 +179,116 @@ class ProducerCensus {
   }
 
   // ---- read -------------------------------------------------------------------------------------
+  // ---- THE CLAIM SET — which guest addresses a NATIVE producer has keyed a row at ----------------
+  //
+  // This is what lets the two legs meet in ONE row. The guest leg's raw identity is the innermost
+  // EMITTER frame, while a native row is keyed at the HANDLER/PASS frame, so keying the guest leg on its
+  // emitter puts the legs in DISJOINT rows and the DB looks complete while comparing nothing (measured:
+  // 2 of 25 keys coincided). Resolution walks the call chain outward from the emitter and takes the
+  // first frame THIS SET contains — i.e. the frame a native producer already claims.
+  //
+  // MEMBERSHIP IS EARNED BY A NATIVE PRODUCER, not by being override-installed. Every native-owned
+  // function is installed, most of them nothing to do with drawing, so resolving against the override
+  // table would happily key a prim at a scheduler leaf — a confident wrong row, which is worse than an
+  // honest unclaimed one.
+  //
+  // KNOWN LIMIT, stated because it decides which leg can be compared: the set is populated as native
+  // producers RUN, so on a pure psx_render leg (no native producer runs at all) it stays EMPTY and every
+  // guest row is unclaimed. That is not a bug to paper over — with no native leg there is nothing to
+  // compare against. The leg where the comparison is real is `PSXPORT_GATE=1` with pc_render, where the
+  // substrate still fills the packet pool underneath while native producers draw. Making the set survive
+  // across runs (loading it from the persisted DB) is the follow-up that would let the pure leg join too.
+  // LOADING THE CLAIM SET FROM THE PERSISTED DB — what makes the two legs joinable AT ALL.
+  //
+  // Measured 2026-08-12, and it is a structural fact rather than a wiring gap: NO SINGLE LEG runs both
+  // halves. On pc_render the guest packets are never GP0-executed, so the guest column is structurally 0;
+  // on psx_render no native producer runs, so the claim set is empty and nothing resolves. A claim set
+  // built only from THIS run therefore cannot ever join them. Reading it back from the DB the previous
+  // run wrote does: a pc_render run records which addresses natives key, and the psx_render run that
+  // follows resolves its guest prims into those same rows. That is also the user's stated design — the DB
+  // accumulates across play sessions rather than describing one run.
+  //
+  // Deliberately a DUMB SCAN for `"key":"0x…"` on lines whose `prims_native` is non-zero: the file is the
+  // framework's own output, a few hundred lines, read once at startup. A JSON parser here would be more
+  // code with more ways to be wrong about a format we control on both ends.
+  //
+  // REFUSES LOUDLY RATHER THAN RETURNING EMPTY. A missing or unreadable DB is reported, because an empty
+  // claim set silently turns every guest prim into "has no native producer" — a false negative that reads
+  // exactly like a real finding. The count loaded is always printed, so "0 claims" can never pass for
+  // "nothing has a native producer".
+  int loadClaims(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) {
+      lucent::warn("producers", "claim set NOT loaded: cannot open {} — every guest prim will resolve to "
+                                "'no native producer' for that reason alone, which is NOT a measurement. "
+                                "Run a pc_render leg first to write a DB, or point PSXPORT_PRODUCERS_DB at one.",
+                   path);
+      return 0;
+    }
+    char line[2048];
+    int loaded = 0, skippedNoNative = 0, dup = 0;
+    while (fgets(line, sizeof line, f)) {
+      // Two accepted shapes, because the flat claim file and the run JSONL are both legitimate inputs and
+      // guessing which one a path is would be a silent failure. A bare `0x…` line is a claim by
+      // construction (nothing else is written to that file); a JSONL row must prove prims_native > 0.
+      if (line[0] == '0' && (line[1] == 'x' || line[1] == 'X')) {
+        const uint32_t a = (uint32_t)strtoul(line, nullptr, 16);
+        if (!a) continue;
+        if (claims(a)) { dup++; continue; }
+        if (mClaimCount < CLAIM_CAP) { mClaims[mClaimCount++] = a; loaded++; } else mClaimOverflow++;
+        continue;
+      }
+      const char* pn = strstr(line, "\"prims_native\":");
+      if (!pn) continue;
+      if (strtoul(pn + 16, nullptr, 10) == 0) { skippedNoNative++; continue; }   // no native producer -> not a claim
+      const char* k = strstr(line, "\"key\":\"0x");
+      if (!k) continue;
+      const uint32_t addr = (uint32_t)strtoul(k + 9, nullptr, 16);
+      if (!addr) continue;
+      if (claims(addr)) { dup++; continue; }
+      if (mClaimCount < CLAIM_CAP) { mClaims[mClaimCount++] = addr; loaded++; }
+      else                         { mClaimOverflow++; }
+    }
+    fclose(f);
+    lucent::info("producers", "claim set loaded from {}: {} address(es) ({} row(s) skipped as having no "
+                              "native producer, {} duplicate(s), {} lost to CLAIM_CAP={}). These are the "
+                              "rows a guest prim can be JOINED to.",
+                 path, loaded, skippedNoNative, dup, mClaimOverflow, CLAIM_CAP);
+    return loaded;
+  }
+
+  // The claim set is persisted APPEND-ONLY and separately from the per-run JSONL, on purpose. The obvious
+  // alternative — reload the newest run file — silently DESTROYS the set: a psx_render run's rows all have
+  // prims_native 0, so the newest file legitimately contains no claims, and loading it would report "no
+  // effect has a native producer" about a game where nine of them do. Accumulating instead means a claim,
+  // once earned by a native producer actually drawing, stays a claim until someone deletes the file.
+  int appendClaims(const char* path) const {
+    if (mClaimCount == 0) return 0;   // nothing earned this run; the file keeps what earlier runs earned
+    FILE* f = fopen(path, "a");
+    if (!f) {
+      lucent::warn("producers", "claim set NOT persisted: cannot append to {} — the next run will resolve "
+                                "fewer guest prims and will say so", path);
+      return 0;
+    }
+    for (int i = 0; i < mClaimCount; i++) fprintf(f, "0x%08X\n", mClaims[i]);
+    fclose(f);
+    lucent::info("producers", "claim set: appended {} address(es) -> {} (append-only; a claim earned by a "
+                              "native producer drawing is never un-earned by a later leg that skips it)",
+                 mClaimCount, path);
+    return mClaimCount;
+  }
+
+  bool claims(uint32_t addr) const {
+    for (int i = 0; i < mClaimCount; i++) if (mClaims[i] == addr) return true;
+    return false;
+  }
+  int claimCount() const { return mClaimCount; }
+  // Stores attributed while the set was still EMPTY — the ordering blind spot, COUNTED rather than
+  // argued about. A prim drawn before the frame's first native producer ran cannot be resolved, so it
+  // lands on its emitter key. If this is large, early rows are emitter-keyed and the join is partial.
+  uint64_t claimResolveTooEarly() const { return mClaimTooEarly; }
+  void noteClaimTooEarly() { mClaimTooEarly++; }
+
   int rowCount() const { return mRowCount; }
   const Row* rowAt(int i) const { return (i >= 0 && i < mRowCount) ? &mRows[i] : nullptr; }
   const Row* find(ProducerKey key) const {
@@ -392,9 +503,23 @@ class ProducerCensus {
   }
 
  private:
+  static constexpr int CLAIM_CAP = 256;
+  uint32_t mClaims[CLAIM_CAP] = {};
+  int      mClaimCount = 0;
+  int      mClaimOverflow = 0;     // claims lost to a full set — an UNCLAIMED prim may be this, not a miss
+  uint64_t mClaimTooEarly = 0;
+
   void note(ProducerKey key, uint32_t prims, uint32_t frame, bool native, const char* name = nullptr) {
     mFed = true;
     mPrimsSeen += prims;
+    // A NATIVE push on a GUEST key is what makes that address a claim — see claims() above. Registered
+    // here, in the one funnel both native entry points share, so no producer can be a claim in one path
+    // and not the other. Linear + deduped: the set is tens of entries, and it is read on a store path, so
+    // it stays a flat array rather than becoming a hash nobody can dump.
+    if (native && key.kind == ProducerKey::GUEST && !claims(key.id)) {
+      if (mClaimCount < CLAIM_CAP) mClaims[mClaimCount++] = key.id;
+      else                         mClaimOverflow++;
+    }
     Row* r = nullptr;
     for (int i = 0; i < mRowCount; i++) if (mRows[i].key == key) { r = &mRows[i]; break; }
     if (r && name && name[0]) {

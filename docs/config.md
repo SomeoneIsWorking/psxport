@@ -342,13 +342,35 @@ pc_render mesh-orientation bug (bug #44) against the GTE-computed guest OT packe
 geomblk under `PSXPORT_GATE=1`, where the substrate still populates the OT/packet pool alongside
 pc_render's own float projection).
 
-`otattr` (OT/GTE SUBMISSION ATTRIBUTION, `game/render/ot_attr.{h,cpp}`, USER 2026-07-14 — serves bug #45
-"multi-quad batching" + bug #34 dialog-panel emitter): traces every guest-submitted packet-pool store
-[0x800BFE68,0x800E7E68) and every GTE RTPS/RTPT back to (a) the emitting guest FN — a per-Core shadow
-stack of guest addrs pushed/popped ONLY around rec_dispatch's two real dispatch-body calls
-(`InterpDiag::otattr*`, overlay_router.cpp), so it sees INDIRECT/jalr-dispatched handlers (e.g. a
-node+0x1C behavior ptr) but is BLIND to plain nested `func_XXXX(c)` C calls and to fully-NATIVE (never
-dispatched) draw paths — and (b) the world-object NODE, via the SAME `cur_render_node` fallback
+`otchain` (WHAT THE WHOLE CALL CHAIN IS at a packet-pool store, `runtime/recomp/ot_attr.cpp`
+`sampleChain`/`reportChains`, 2026-08-12): separate from `otattr` because it walks the entire shadow stack
+on every new span. It exists to settle ONE structural question with data: the producer DB's guest leg keys
+a prim at the chain's TOP (the innermost emitter, e.g. an `OverlayGt3Gt4::gt3` builder) while its NATIVE
+rows are keyed at the HANDLER/PASS frame (perObjFlush, fieldEntityRender, terrainRender) — so the two legs
+land in DISJOINT rows and compare nothing. The proposed fix keys on "the frame in the chain that a producer
+row claims", which rests entirely on the premise that the handler frame IS on the chain at store time.
+This prints the chains so that premise is measured, not assumed.
+
+Sampled BY NOVELTY (one sample per distinct `(top, depth)` shape, `CHAIN_SLOTS=128`, 20 frames recorded per
+shape), so a shape occurring once is as visible as one occurring 78,000 times. The run-end report states its
+own denominator and blind spots — shapes seen, shapes DROPPED to a full table, stores BLIND because guest
+depth exceeded `OTATTR_CAP`, and how many claim addresses it tested against — and warns explicitly when the
+claim set is EMPTY, because then every shape reads as unclaimed for that reason alone and the run answers
+nothing. The claim set is every guest-keyed census row with `primsNative > 0`: a row only joins if a native
+producer keyed it, so guest-keyed rows with no native prims (the effects that HAVE no native producer) are
+deliberately not claims. Verdict line: `N of M shape(s) have a producer key somewhere on the visible chain`.
+
+`otattr` (OT/GTE SUBMISSION ATTRIBUTION, `runtime/recomp/ot_attr.{h,cpp}`, USER 2026-07-14 — serves bug
+#45 "multi-quad batching" + bug #34 dialog-panel emitter): traces every guest-submitted packet-pool store
+(the GameConfig-derived pool window) and every GTE RTPS/RTPT back to (a) the emitting guest FN — a
+per-Core shadow stack of guest addrs (`InterpDiag::otattr*`) pushed/popped in EVERY guest function's
+recompiler-emitted WRAPPER since 2026-08-12, so it covers DIRECT `func_XXXX(c)` calls as well as
+INDIRECT/jalr dispatch. **This paragraph previously said the opposite** — pushed only around
+rec_dispatch's two dispatch-body calls, and "BLIND to plain nested `func_XXXX(c)` C calls" — which was
+true until that change and is exactly why the producer DB's guest leg attributed 1.61% of its prims. It
+remains blind to fully-NATIVE draw paths (nothing guest is entered, so nothing is pushed), and above
+`OTATTR_CAP` frames of guest depth the chain is reported as unknowable rather than guessed — and (b) the
+world-object NODE, via the SAME `cur_render_node` fallback
 (render_internal.h: walk's beginObject() node, else guest scratch 0x1F80028C) the native GT3/GT4 submit
 path itself uses. Turn the channel on BEFORE the frame to inspect, then run the REPL `otattr` command: it
 re-walks the LAST OT (`GpuState::s_ot_madr`) READ-ONLY (header/first-word peeks only, no `gpu_gp0()`

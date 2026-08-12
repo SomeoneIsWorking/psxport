@@ -63,6 +63,9 @@ class Core;
 // replaces existed to provide. Measured in lucent: 0.66 ns/gate against 19.4 ns for the
 // channel-name-lookup form.
 inline const lucent::Channel g_otattr_channel{"otattr"};
+// `otchain` is SEPARATE from `otattr` on purpose: it walks the whole shadow stack per new span, which is
+// real per-store work, and it answers a one-off structural question rather than being a run-time trace.
+inline const lucent::Channel g_otchain_channel{"otchain"};
 
 // THE SECOND REASON TO TRACK SPANS: the graphics-producer DB's GUEST leg needs the same attribution the
 // `otattr` channel produces, but during ORDINARY PLAY with no debug channel on — the DB's whole premise
@@ -97,7 +100,20 @@ public:
   // It is a WEAKER claim than `fn`: nothing restores it when a nested call returns, so a store made by A
   // after A called B reads as B. Recorded alongside `fn` rather than instead of it, and reported
   // separately, so the difference stays visible instead of one silently standing in for the other.
-  struct Span { uint32_t lo, hi; uint32_t fn, caller, node, pc; };
+  // `claimed` = the frame in this store's call chain that a NATIVE producer already keys a row at
+  // (ProducerCensus::claims), or 0 when no frame in the searched window is claimed. THE JOIN BETWEEN THE
+  // TWO LEGS: `fn` is the innermost EMITTER, which is not where a native row is keyed, so attributing the
+  // guest leg to `fn` puts the legs in disjoint rows. Kept ALONGSIDE `fn` rather than replacing it, so
+  // "the emitter" and "the row it belongs to" stay separately readable — collapsing them is how a
+  // resolution bug becomes invisible.
+  struct Span { uint32_t lo, hi; uint32_t fn, caller, node, pc, claimed; };
+
+  // The chain walk is BOUNDED — an unclaimed chain would otherwise pay a full-depth scan on every new
+  // span, on a path that is armed by default. 8 is not a guess: the otchain measurement found every claim
+  // within 3 frames of the top (max observed 3), so 8 is well past the observed need. A claim found AT the
+  // limit is COUNTED and warned about, because a silently-too-small window looks exactly like an effect
+  // with no native producer.
+  static constexpr int CLAIM_SEARCH_DEPTH = 8;
   struct GteBucket { uint32_t fn, node, count; };
 
   // Called from Core::mem_w8/16/32 (mem.cpp) for EVERY guest store — no-op unless the `otattr` channel
@@ -179,6 +195,38 @@ public:
   // says when a frame begins and this is the one clock that matters.
   void beginLogicFrame(uint32_t frame) { resetIfNewFrame(frame); }
 
+  // `PSXPORT_DEBUG=otchain` — WHAT THE WHOLE CALL CHAIN IS at a packet-pool store, sampled.
+  //
+  // It exists to settle ONE question with data instead of reasoning: the producer DB's guest leg keys a
+  // prim at the chain's TOP (the innermost emitter), while its native rows are keyed at the HANDLER/PASS
+  // frame — so the two legs land in disjoint rows and compare nothing. The proposed fix is to key on "the
+  // frame in the chain that a producer row claims", and that fix rests entirely on the premise THE HANDLER
+  // FRAME IS ACTUALLY ON THE CHAIN at store time. This prints the chains so the premise can be checked
+  // rather than assumed.
+  //
+  // Capped BY NOVELTY, not by count: one sample per distinct (top, depth) pair, so a chain shape that
+  // occurs once is as visible as one that occurs 78,000 times. `mChainSeen` is the denominator and
+  // `mChainDropped` the shapes lost to a full table — a report with a full table is explicitly incomplete.
+  static constexpr int CHAIN_SLOTS  = 128;   // distinct chain SHAPES kept
+  static constexpr int CHAIN_FRAMES = 20;    // frames recorded per shape, innermost first
+  struct ChainSample {
+    uint32_t top;      // otattrTop() — the key the guest leg uses today
+    int      depth;    // full guest depth (may exceed what was recorded, and may exceed the cap)
+    int      nframes;  // how many of `frames` are populated
+    uint64_t hits;     // stores that matched this shape
+    uint32_t frames[CHAIN_FRAMES];
+  };
+  uint32_t resolveClaimedFrame(Core* c);
+  void sampleChain(Core* c);
+  // Reported at run end alongside the census. `claims`/`nclaims` = the addresses a producer row is keyed
+  // at, so the report can state, per shape, WHETHER any frame in the chain is one of them — that is the
+  // measurement, and a chain matching none is the interesting case, not a blank.
+  void reportChains(const uint32_t* claims, int nclaims) const;
+  // Run-end accounting for the claim resolution itself, so a join rate is never read off row counts alone.
+  uint64_t claimResolved()   const { return mClaimResolved; }
+  uint64_t claimUnresolved() const { return mClaimUnresolved; }
+  uint64_t claimAtLimit()    const { return mClaimAtLimit; }
+
 private:
   void resetIfNewFrame(uint32_t frame);
   void trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame);
@@ -199,6 +247,16 @@ private:
   int         mWatchWordsUsed = 0;
   int         mWatchOverflow = 0;
   WordRec     mWatchWords[WATCH_CAP_WORDS] = {};   // pooled backing store, indexed via wordBase + offset
+
+  ChainSample mChains[CHAIN_SLOTS] = {};
+  int         mChainCount = 0;
+  uint64_t    mChainSeen = 0;        // stores offered to the sampler — the denominator
+  uint64_t    mChainDropped = 0;     // novel shapes lost because the table was full
+  uint64_t    mChainBlind = 0;       // chains the shadow stack could not see (depth over OTATTR_CAP)
+  uint64_t    mClaimAtLimit = 0;    // claims found at the last searched frame — the window may be too small
+  uint64_t    mClaimResolved = 0;   // spans whose chain yielded a claimed frame
+  uint64_t    mClaimUnresolved = 0; // spans with no claimed frame in the window — the honest "no native producer"
+
 
   uint32_t    mFnStatFrame = 0xFFFFFFFFu;
   FnStoreStat mFnStat[FNSTAT_CAP] = {};

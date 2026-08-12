@@ -86,4 +86,18 @@ struct InterpDiag {
   void     otattrPop()               { if (otattr_depth > 0) otattr_depth--; }
   uint32_t otattrTop()    const      { int d = otattr_depth; return (d > 0 && d <= OTATTR_CAP) ? otattr_stack[d - 1] : 0; }
   uint32_t otattrCaller() const      { int d = otattr_depth; return (d > 1 && d - 1 <= OTATTR_CAP) ? otattr_stack[d - 2] : 0; }
+  // The whole live chain, innermost first, for the `otchain` diagnostic and for CLAIM RESOLUTION (the
+  // frame-selection policy: which frame in the chain a producer row claims). `i == 0` is the top.
+  // Returns 0 past the end AND past the cap — a frame that overflowed the cap is not knowable here, and
+  // reporting 0 rather than a stale word is what keeps "no claimed frame found" an honest answer.
+  // ABOVE THE CAP THE CHAIN IS NOT KNOWABLE AND THIS SAYS SO, rather than returning a plausible frame.
+  // otattrPush stores only while depth < CAP, so once the guest goes deeper the array holds the OUTERMOST
+  // CAP frames and index CAP-1 is frame #CAP counting from the BOTTOM — not the top. Indexing from the
+  // end there would hand back a frame from an unrelated part of the call tree that looks perfectly valid.
+  // So visible depth is 0 when overflowed: callers get "I can see nothing", which is the truth.
+  int      otattrVisibleDepth() const { int d = otattr_depth; return d <= OTATTR_CAP ? d : 0; }
+  uint32_t otattrFrameFromTop(int i) const {
+    const int d = otattrVisibleDepth();
+    return (i >= 0 && i < d) ? otattr_stack[d - 1 - i] : 0;
+  }
 };

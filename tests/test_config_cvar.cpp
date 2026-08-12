@@ -120,6 +120,28 @@ static void test_migrated_int_and_text_knobs_match_pre_migration_env_behaviour(v
   set_env("PSXPORT_ASSET_DIR", nullptr);
 }
 
+// The producer-DB knobs, migrated 2026-08-12. PSXPORT_PRODUCERS_DIR is the migration that can bite: its
+// pre-migration call sites read cfg_str and applied `if (!dir || !*dir) dir = "scratch/producers"` at each
+// site, so the CVar must carry that SAME default — a CVar defaulting to empty would silently write the
+// per-run JSONL and the claim set to "/run-...jsonl" at the filesystem root. Asserted on the resolved
+// value, both unset and set, because that is the behaviour the two call sites depend on.
+static void test_producer_db_knobs_resolve_with_their_pre_migration_defaults(void) {
+  set_env("PSXPORT_PRODUCERS_DIR", nullptr);
+  CHECK_STREQ(psx::config::cv_producers_dir.get().c_str(), "scratch/producers");
+  set_env("PSXPORT_PRODUCERS_DIR", "scratch/other");
+  CHECK_STREQ(psx::config::cv_producers_dir.get().c_str(), "scratch/other");
+  set_env("PSXPORT_PRODUCERS_DIR", nullptr);
+
+  // PSXPORT_PRODUCERS_DB defaults EMPTY on purpose — empty means "derive <DIR>/claims.txt", and a
+  // non-empty default would make that derivation unreachable.
+  set_env("PSXPORT_PRODUCERS_DB", nullptr);
+  CHECK(psx::config::cv_producers_db.get().empty());
+  set_env("PSXPORT_PRODUCERS_DB", "scratch/producers/run-x.jsonl");
+  CHECK_STREQ(psx::config::cv_producers_db.get().c_str(), "scratch/producers/run-x.jsonl");
+  set_env("PSXPORT_PRODUCERS_DB", nullptr);
+  fprintf(stderr, "  producer-DB knobs: 4 resolution(s) checked incl. both defaults\n");
+}
+
 // An UNMIGRATED knob — the compatibility path that carries the other ~190 — must be untouched too.
 static void test_unmigrated_knob_still_resolves_through_the_env(void) {
   set_env("PSXPORT_SBS_AUTONAV", "1");
@@ -254,6 +276,7 @@ static void test_the_declared_inventory_is_not_empty(void) {
 int main(void) {
   RUN(migrated_bool_knob_matches_pre_migration_env_behaviour);
   RUN(migrated_int_and_text_knobs_match_pre_migration_env_behaviour);
+  RUN(producer_db_knobs_resolve_with_their_pre_migration_defaults);
   RUN(unmigrated_knob_still_resolves_through_the_env);
   RUN(layer_ladder_resolves_and_unresolves_in_the_documented_order);
   RUN(runtime_layer_outranks_the_environment_override);
