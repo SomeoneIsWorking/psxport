@@ -189,8 +189,8 @@ constraint (licence, behaviour, build) stop a decision: state what dropping it w
 An RE step measures values with a tool; the tool keeps its own copy and asserts the binary matches it; the
 port keeps a SECOND copy (`constexpr kFoo = 0x…` in `game_config.cpp`); **nothing compares the two.** The
 tool verifies itself, the `static_assert`s verify internal consistency, both gates pass, and the value that
-actually ships can be anything. Found INDEPENDENTLY in four of five projects and proven by sabotage in each
-(2026-08-12; table in findings).
+actually ships can be anything. Found INDEPENDENTLY in four of five projects, each proven by breaking the
+gate and requiring RED (2026-08-12; table in findings).
 
 **THE RULE. A measured constant that ships in code must be checked, by something that runs, against the
 measurement it came from.** Either the tool PARSES the shipping file and diffs it against what it measures
@@ -201,13 +201,34 @@ generator in the gate — then the two copies cannot drift because there is only
 0x46B20` holds just as well when both are wrong. **And the selftest must exercise the SHIPPING path, not a
 pure helper beside it** — twice in one session the tested code and the shipping code were different code.
 
-**HOW TO KNOW YOURS IS REAL: sabotage it.** Break what the gate protects, run it, require RED; restore, and
-prove the restore with `git diff`. A gate that has only ever been green is decoration.
+## PROVE THE GATE GOES RED — a check never seen fail is decoration
+
+**Nothing a check prints is evidence until that same check, in that same mode, has produced the FAILING
+answer** — "0 problems found" from a check that never could find one is the defect, not the evidence, and
+that is what every fix claim rests on.
+
+**TWO REQUIREMENTS, and collapsing them into one is how this rule gets quietly gutted** — it has already
+happened once, in the edit that first merged these sections. One is per GATE and one is per FIX:
+
+1. **COMMISSION each gate, selftest or instrument ONCE, per CLASS it claims.** Break what it protects in
+   the SHIPPING path, run it, require RED, restore, and prove the restore against the SHIPPING file AFTER
+   your last edit — md5 plus `git diff --numstat`, because a proof taken before a later edit once described
+   a file one line different from the one that shipped. Per CLASS, not per tool — a selftest green across
+   every class it had has still missed real holes in the very tool it covered, and one audit needed a
+   separate break per mechanism before it was trustworthy (findings has both, with their counts; do not
+   hand-copy a live count into this file). This half IS one-time — not a ritual on every change.
+2. **PER FIX, the negative control is not optional and not inherited:** *this same instrument, in this same
+   mode, produced the FAILING answer BEFORE THIS CHANGE.* A gate commissioned last month tells you the gate
+   works; it says NOTHING about whether it can see the bug in front of you. **A commissioning record can
+   never discharge this**, and if you find yourself citing one instead, you are about to close a bug your
+   measurement cannot see. The incident behind this sentence: a fix closed at "99.95% non-black" measured
+   entirely under a mode that SKIPS INTRO FMVS BY CONSTRUCTION (findings) — the check was sound, was
+   commissioned, and could not have come back negative for THAT bug.
 
 ## TDD — the framework change starts with a RED test
 
 1. **Write the failing test first** in `psxport/tests/` (globbed — no shared file to edit), wire it into
-   `ctest`, run it. It must FAIL and you must paste that failure — a test never seen red proves nothing.
+   `ctest`, run it. It must FAIL and you must paste that failure.
 2. Then make it pass with the smallest change that names the actual cause.
 3. Prefer HERMETIC (no disc, no GPU, no window): feed the unit its inputs.
    `tools/fmv_export/test_fmv_decode.cpp` runs 4/4 without a disc.
@@ -267,9 +288,9 @@ user's observation. A tap is the same move in code.
 
 1. **Reproduce in the user's conditions BEFORE fixing anything** — not a proxy, not a headless
    approximation, not "the underlying unit". If you cannot reproduce it you do not understand it yet.
-2. **State the NEGATIVE CONTROL or do not claim a fix:** *this same instrument, in this same mode, produced
-   the FAILING answer before the change.* "0 problems found" from a check that never could find one is the
-   defect, not the evidence.
+2. **The instrument must have produced the FAILING answer FOR THIS BUG, BEFORE THIS CHANGE, or you have
+   no fix claim** — "PROVE THE GATE GOES RED" above, requirement 2. A gate's commissioning record does not
+   count; it is per-fix evidence or it is nothing.
 3. **Close on a FIX plus evidence, never on a diagnosis**, and **name what you did NOT verify** — the
    reopen is only cheap if the user can see which part of their report your evidence covers. "Measured X
    under Y; did not check Z" is a good close. "Fixed" is not.

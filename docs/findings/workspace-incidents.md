@@ -113,7 +113,7 @@ A black intro was "fixed" and verified at 99.95% non-black, entirely under `PSXP
 mode that SKIPS INTRO FMVS BY CONSTRUCTION (`native_boot.cpp:612`). The numbers were true and answered a
 question nobody asked; the USER, watching the window, still saw a black screen.
 
-**Rules it produced:** reproduce in the user's conditions before fixing; state the negative control;
+**Rules it produced:** reproduce in the user's conditions before fixing; prove the gate goes red;
 `cfg_on("PSXPORT_VK_HEADLESS")` reached anywhere except the final present/readback step is a defect.
 
 ## 2026-08-04/06 — the "vibrating" effect was manufactured entirely by the port
@@ -142,9 +142,9 @@ The shape: an RE step measures values with a tool. The tool keeps its own copy (
 `X4_EXPECT`) and asserts the binary still matches it. The port keeps a SECOND copy (`constexpr kFoo = 0x…`
 in `game_config.cpp`). **Nothing compares the two copies.** The tool verifies itself, the `static_assert`s
 verify internal consistency, both gates pass — and the value that actually ships can be anything.
-Verified by sabotage in each repo, not argued:
+Verified in each repo by breaking the gate and requiring RED, not argued:
 
-| repo | sabotage | both gates said |
+| repo | the break | both gates said |
 |---|---|---|
 | megamanx4 | `kCrt0GameMain` → `0x80999999`, `kCrt0LibcInit` → `0xDEADBEEF` | PASS |
 | vagrant | `kHeapSizePtr` +4, `kLibcInit` → a real nop instruction | PASS |
@@ -158,6 +158,37 @@ enhancement, so the byte-compare oracle is contaminated — and the shipping sel
 — the pure predicate — and never called `enh_gate()`, the function the game actually reaches. Tomba2's
 injected its reference string, so the novel half had zero coverage. In both cases the tested code and the
 shipping code were different code.
+
+## 2026-08-12 — what BREAKING a gate found that 15 green classes never did
+
+Evidence for "PROVE THE GATE GOES RED", and for why the proof is **per class** rather than per tool.
+
+Tomba2Engine `tools/producers.py` had 15 green selftest classes. Two real holes survived all of them, each
+surfaced only by breaking the shipping path and requiring RED:
+
+| the break | the tool said | what it hid |
+|---|---|---|
+| deleted `if fw > stamp: stamp = fw` — the framework half of the staleness reference | 0 FAILs | the real reference moved 9 hours |
+| narrowed `>=` to `>` on the reference boundary | green | contradicted the tool's OWN printed contract |
+
+Both are now gated (17 classes) and both re-proven RED.
+
+psxport's crt0 audit (726d10c9) needed **six** breaks, each proven RED and then restored with md5 identity:
+dropping an undeclared-bias refusal; storing a heap size through an unset pointer; not setting `a1`;
+accepting an underflowed heap size; an audit not refusing a confirmed disagreement; an audit certifying
+while resolving nothing. No single green run covers any of these — the count IS the finding: a class is
+commissioned only by its own break.
+
+**Falsifier:** the class counts above are LIVE — `python3 Tomba2Engine/tools/producers.py stale --selftest`
+prints its own class count, and this section is falsified the moment that number disagrees with the 15->17
+stated here. Re-read it from the tool rather than trusting this line; the sibling incident three sections
+down ("a stale hand-copied count in a doc") is what this warning is for. Falsified also if a break listed
+above stops turning its gate RED, which would mean the gate regressed after commissioning.
+
+**The RESTORE half has already burned us.** A restore proof citing an md5 plus `git diff --numstat`
+described a file ONE LINE different from the one that shipped — a leftover debug probe added after the
+proof was taken. So the proof must be taken against the SHIPPING file AFTER the last edit, or it certifies
+a program nobody ran.
 
 ## 2026-08-11 — a tool's headline answer was false because debt was never registered
 
