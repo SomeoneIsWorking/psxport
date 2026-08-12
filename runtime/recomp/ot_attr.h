@@ -157,7 +157,9 @@ public:
   // mask to the same 0x000xxxxx..0x1FFFFFxx physical range) AND scratchpad (0x1F800000-0x1F8003FF,
   // which is NOT mirrored across segments the way main RAM is — see trackStore's `phys` comment).
   struct WatchRegion { uint32_t lo = 0, hi = 0, wordBase = 0; bool active = false; };
-  struct WordRec     { uint32_t fn = 0, caller = 0, frame = 0xFFFFFFFFu; };
+  // `frame == NO_FRAME` is the never-written state of a freshly carved region's slice (see
+  // watchRegister) — the negative that must stay distinguishable from a recorded write.
+  struct WordRec     { uint32_t fn = 0, caller = 0, frame = 0xFFFFFFFFu /* NO_FRAME */; };
 
   static constexpr int FNSTAT_CAP   = 256;
   static constexpr int FNSTAT_PAGES = 8;   // distinct 4KB dest pages tracked per fn before "overflow" (many)
@@ -194,6 +196,33 @@ public:
   // NONE. A span table is only meaningful for the frame whose packets it describes, so the frame loop
   // says when a frame begins and this is the one clock that matters.
   void beginLogicFrame(uint32_t frame) { resetIfNewFrame(frame); }
+
+  // The idle value of every frame field below: "no frame has been declared yet" for the table clocks,
+  // and "this word was never written" for a watch record. Named because two of the three used to be a
+  // bare 0xFFFFFFFF literal and a reader could not tell whether a report showing it meant "nothing
+  // happened" or "the clock was never set".
+  static constexpr uint32_t NO_FRAME = 0xFFFFFFFFu;
+
+  // THE ONE CLOCK EVERYTHING HERE STAMPS WITH — and the reason this class no longer touches `Game`.
+  //
+  // ROOT CAUSE IT REPLACES (fixed 2026-08-12): trackStoreSlow and trackGte read `c->game->gpu.s_frame`.
+  // That was wrong twice over. (1) It made a CORE PRIMITIVE hard-require the whole machine: `Core::game`
+  // is nullptr until `Game`'s constructor sets it, `g_producer_census_armed` is default TRUE, so
+  // `Core::mem_w32` on a Core-alone embedder reached this path and null-dereferenced — a plain guest
+  // store crashing with no game bound. Measured victim: `psxport_smoke` (rc=139, zero output).
+  // `tests/test_overlay_reloc.cpp` is a bare-Core embedder too but writes no memory at all, so it was
+  // latently exposed rather than actually broken. (2) `gpu.s_frame`
+  // counts PRESENTS while `mFrame` (driven by beginLogicFrame) counts LOGIC FRAMES, so ONE function
+  // stamped its span table off one clock and its watch + per-fn tables off another. The measured
+  // saturation that made beginLogicFrame exist in the first place (60 logic frames advanced s_frame to
+  // 3, so the reset almost never fired) applied verbatim to those other two tables.
+  //
+  // A Core that no frame loop drives has a genuinely undefined frame, and that case is WARNED rather
+  // than quietly stamped: an unstamped table must not be mistakable for a stamped one. It returns 0
+  // (not NO_FRAME) because NO_FRAME is also WordRec's "never written" — stamping a real write with it
+  // would make a recorded store indistinguishable from an untouched word.
+  uint32_t stampFrame();
+
 
   // `PSXPORT_DEBUG=otchain` — WHAT THE WHOLE CALL CHAIN IS at a packet-pool store, sampled.
   //
@@ -240,12 +269,12 @@ private:
   void trackWatch(uint32_t fn, uint32_t caller, uint32_t phys, uint32_t bytes, uint32_t frame);
   void recordFnStat(uint32_t frame, uint32_t fn, uint32_t phys);
 
-  uint32_t mFrame = 0xFFFFFFFFu;
+  uint32_t mFrame = NO_FRAME;
   Span     mSpans[SPAN_CAP] = {};
   int      mSpanCount = 0;
   int      mSpanOverflow = 0;
 
-  uint32_t mGteFrame = 0xFFFFFFFFu;
+  uint32_t mGteFrame = NO_FRAME;
   GteBucket mGte[GTE_CAP] = {};
   int       mGteCount = 0;
   int       mGteOverflow = 0;
@@ -266,7 +295,7 @@ private:
   uint64_t    mClaimUnresolved = 0; // spans with no claimed frame in the window — the honest "no native producer"
 
 
-  uint32_t    mFnStatFrame = 0xFFFFFFFFu;
+  uint32_t    mFnStatFrame = NO_FRAME;
   FnStoreStat mFnStat[FNSTAT_CAP] = {};
   int         mFnStatCount = 0;
   int         mFnStatOverflow = 0;

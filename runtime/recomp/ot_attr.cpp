@@ -3,7 +3,10 @@
 #include "ot_attr.h"
 #include "render_node.h"   // cur_render_node — same node fallback the native submit path itself uses
 #include "core.h"
-#include "game.h"
+// NO "game.h" HERE, DELIBERATELY, and it is a compile-enforced fence rather than a convention: with
+// `Game` left incomplete (core.h only forward-declares it) any future `c->game->…` in this TU fails to
+// build. That is what keeps the store path off the whole machine — see OtAttr::stampFrame for the crash
+// that reaching through `c->game` for a frame counter caused.
 #include "render_noise.h"
 #include "producer_census.h"   // ProducerCensus::claims — the claim set the chain walk resolves against   // THE one GameConfig-derived definition of the pool / OT / pool-ptr windows
 #include <lucent/log.h>
@@ -43,6 +46,27 @@ PoolRange pool_range(Core* c) {
 }
 }  // namespace
 
+// The frame stamp every table here shares — see ot_attr.h for the null-deref this replaced and for why
+// there is now exactly ONE clock instead of a logic clock for the spans and a present clock for the rest.
+uint32_t OtAttr::stampFrame() {
+  if (mFrame != NO_FRAME) return mFrame;
+  // NO frame loop has ever called beginLogicFrame on this Core. That is legitimate — a Core-alone
+  // embedder (psxport_smoke, a unit test, a differential harness) has no frame loop — but it means the
+  // per-frame tables below NEVER reset, so their contents span the whole lifetime instead of one frame.
+  // Said ONCE, out loud, naming who must call what: a saturated unreset table otherwise reads exactly
+  // like a busy frame, and an "overflow" count would be the only hint.
+  static bool warned = false;
+  if (!warned) {
+    warned = true;
+    lucent::warn("otattr", "no frame loop has declared a frame on this Core (nothing called "
+                           "OtAttr::beginLogicFrame), so the span / watch / per-fn tables are stamped "
+                           "frame 0 and NEVER reset — every entry they hold spans the whole lifetime of "
+                           "the Core, not one frame. Expected for a Core-alone embedder; if you see this "
+                           "in a game run, the frame loop is not driving beginLogicFrame.");
+  }
+  return 0;
+}
+
 void OtAttr::resetIfNewFrame(uint32_t frame) {
   if (frame == mFrame) return;
   mFrame = frame;
@@ -59,7 +83,10 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
   // The gate is now the inline `if (!g_otattr_channel)` in ot_attr.h and there is nothing left to
   // re-check here: a Channel re-resolves itself whenever the enabled set changes, so `debug otattr`
   // at the REPL still takes effect on the next store. Anything reaching this function is armed.
-  const uint32_t frame  = c->game->gpu.s_frame;
+  // OtAttr's OWN clock, not `c->game->gpu.s_frame` (see stampFrame): reaching through `Core::game` here
+  // made a plain guest store null-deref on every Core that no `Game` owns, and mixed the present counter
+  // into a function whose span table is keyed on the logic frame.
+  const uint32_t frame  = stampFrame();
   const uint32_t fn     = c->idiag.otattrTop();
   const uint32_t caller = c->idiag.otattrCaller();
   // Physical form: mask off the segment bits (KUSEG/KSEG0/KSEG1 mirror main RAM at 0x000xxxxx/0x800xxxxx/
@@ -200,7 +227,9 @@ void OtAttr::reportChains(const uint32_t* claims, int nclaims) const {
 
 void OtAttr::trackGte(Core* c) {
   if (!g_otattr_channel) return;
-  const uint32_t frame = c->game->gpu.s_frame;
+  // Same one clock as the store path, and for the same reason: `gte_op` is a core primitive too, so
+  // reaching through `c->game` for a frame counter would crash a Core-alone embedder that executes GTE.
+  const uint32_t frame = stampFrame();
   if (frame != mGteFrame) { mGteFrame = frame; mGteCount = 0; mGteOverflow = 0; }
 
   const uint32_t fn   = c->idiag.otattrTop();
