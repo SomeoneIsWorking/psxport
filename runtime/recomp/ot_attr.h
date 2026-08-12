@@ -208,7 +208,10 @@ public:
   // occurs once is as visible as one that occurs 78,000 times. `mChainSeen` is the denominator and
   // `mChainDropped` the shapes lost to a full table — a report with a full table is explicitly incomplete.
   static constexpr int CHAIN_SLOTS  = 128;   // distinct chain SHAPES kept
-  static constexpr int CHAIN_FRAMES = 20;    // frames recorded per shape, innermost first
+  // 32, raised from 20 on 2026-08-12: the deepest observed chain is 28 frames, and at 20 a reader had to
+  // RECONSTRUCT the tail by splicing two shapes together to answer "is there a claim further out". A
+  // diagnostic that requires arithmetic to read is one people will read wrong.
+  static constexpr int CHAIN_FRAMES = 32;    // frames recorded per shape, innermost first
   struct ChainSample {
     uint32_t top;      // otattrTop() — the key the guest leg uses today
     int      depth;    // full guest depth (may exceed what was recorded, and may exceed the cap)
@@ -222,6 +225,11 @@ public:
   // at, so the report can state, per shape, WHETHER any frame in the chain is one of them — that is the
   // measurement, and a chain matching none is the interesting case, not a blank.
   void reportChains(const uint32_t* claims, int nclaims) const;
+  // The claim set AS THE RESOLVER SEES IT. reportChains used to be handed a list derived from this run's
+  // census rows, while resolveClaimedFrame consults the PERSISTED set — so on a guest leg the report
+  // measured a different thing from the resolver and printed "0 of 29 claimed" while the resolver was
+  // joining 266,760 spans. It refused loudly rather than lying, which is why this was findable, but a
+  // report and the mechanism it reports on must not read from two sources.
   // Run-end accounting for the claim resolution itself, so a join rate is never read off row counts alone.
   uint64_t claimResolved()   const { return mClaimResolved; }
   uint64_t claimUnresolved() const { return mClaimUnresolved; }

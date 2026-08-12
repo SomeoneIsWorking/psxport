@@ -283,6 +283,7 @@ class ProducerCensus {
     return false;
   }
   int claimCount() const { return mClaimCount; }
+  uint32_t claimAt(int i) const { return (i >= 0 && i < mClaimCount) ? mClaims[i] : 0; }
   // Stores attributed while the set was still EMPTY — the ordering blind spot, COUNTED rather than
   // argued about. A prim drawn before the frame's first native producer ran cannot be resolved, so it
   // lands on its emitter key. If this is large, early rows are emitter-keyed and the join is partial.

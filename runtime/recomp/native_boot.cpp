@@ -610,7 +610,9 @@ static void game_main(Core* c) {
   // failure); too-early = the claim set was still empty, so the prim could not be resolved either way and
   // must not be counted as "no native producer".
   lucent::info("producers",
-    "run-end: claim resolution — {} span(s) joined to a native row, {} with no claimed frame in the top {} "
+    "run-end: claim resolution (SPANS, not prims — a span is a coalesced run of packet-pool stores, and "
+    "many spans back one prim, so these are NOT the row counts below and must not be read as a per-prim "
+    "join rate) — {} span(s) joined to a native row, {} with no claimed frame in the top {} "
     "(no native producer), {} unresolvable because the claim set was still EMPTY (pure psx_render leg, or "
     "before the first native producer ran); {} claim(s) in the set; {} found AT the search limit{}",
     c->rsub.otAttr.claimResolved(), c->rsub.otAttr.claimUnresolved(), OtAttr::CLAIM_SEARCH_DEPTH,
@@ -623,18 +625,22 @@ static void game_main(Core* c) {
   // guest key but no native prims are exactly the effects with NO native producer — they are not claims,
   // and counting them as such would make the report say "joined" about a row that has nothing to join to.
   if (g_otchain_channel) {
-    static constexpr int CLAIM_CAP = 256;
-    uint32_t claims[CLAIM_CAP];
+    // THE SAME SET THE RESOLVER USES, not a re-derivation. This block used to build its own list from
+    // this run's census rows (guest-keyed with primsNative > 0), which is a DIFFERENT set from the
+    // persisted one resolveClaimedFrame consults — so on a guest leg the report printed "0 of 29 shapes
+    // claimed" while the resolver was joining 266,760 spans against 10 loaded claims. It refused loudly
+    // instead of inventing a number, which is the only reason the split was findable; a report and the
+    // mechanism it reports on must still read from ONE source.
+    static constexpr int CLAIM_REPORT_CAP = 512;
+    uint32_t claims[CLAIM_REPORT_CAP];
     int nclaims = 0, skipped = 0;
-    for (int i = 0; i < c->rsub.census.rowCount(); i++) {
-      const ProducerCensus::Row* r = c->rsub.census.rowAt(i);
-      if (!r || r->key.kind != ProducerKey::GUEST || r->primsNative == 0) continue;
-      if (nclaims < CLAIM_CAP) claims[nclaims++] = r->key.id; else skipped++;
+    for (int i = 0; i < c->rsub.census.claimCount(); i++) {
+      if (nclaims < CLAIM_REPORT_CAP) claims[nclaims++] = c->rsub.census.claimAt(i); else skipped++;
     }
     if (skipped)
-      lucent::warn("otchain", "claim set TRUNCATED: {} guest-keyed native row(s) dropped past CLAIM_CAP={} "
+      lucent::warn("otchain", "claim set TRUNCATED for the report: {} claim(s) past CLAIM_REPORT_CAP={} "
                               "— an UNCLAIMED verdict below may be this truncation, not a real miss",
-                   skipped, CLAIM_CAP);
+                   skipped, CLAIM_REPORT_CAP);
     c->rsub.otAttr.reportChains(claims, nclaims);
   }
   // Persist the OBSERVED half so the DB survives the run and can reach git through the game's
