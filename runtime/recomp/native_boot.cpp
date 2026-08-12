@@ -25,6 +25,7 @@
 #include "c_subsys.h"
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "cfg.h"
+#include "config.h"        // psx::config::report_once — arms the exit audit at BOOT, for every port
 #include "config_vars.h"  // psx::config::render_path() / cv_repl — knobs through the CVar ladder
 #include <lucent/log.h>
                      // (rsub substrate members come via core.h -> render_substrate.h)
@@ -273,10 +274,17 @@ static void game_init(Core* c) {
 // port that boots past it (spyro: main -> dc_boot_init -> bootInit hook) had the path stuck at its
 // default and had to re-parse the flag game-side to get it back. A knob read at Core setup belongs at
 // Core setup. Harnesses that own the path per leg (Sbs::Impl::applyMode) set it after this and win.
-void dc_boot_init(Core* c) { void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); c->hooks->registerOverrides(c->game); render_path_install(c); crt0_setup(c); game_init(c); }
+void dc_boot_init(Core* c) { psx::config::report_once(); void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); c->hooks->registerOverrides(c->game); render_path_install(c); crt0_setup(c); game_init(c); }
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
+  // ARM THE CONFIG AUDIT AT BOOT, not after the frame loop. It used to be armed only by the cfg_dump()
+  // call below the loop, so a port whose bootInit NEVER RETURNS (spider1 dispatches the guest main; spyro
+  // does not enter this function at all) got NO startup report and NO exit audit — while psxport/CLAUDE.md
+  // instructs every reader to judge an UNKNOWN-knob warning on the EXIT audit. The instruction pointed at
+  // an instrument that, in those ports, had never been registered. report_once() is idempotent, so the
+  // call below the loop is harmless and stays as the place the FULL dump happens.
+  psx::config::report_once();
   void gte_bind(Core*); gte_bind(c);   // bind this core's GTE before the init prefix / frame loop
   c->rsub.projprim.bind(c);         // and this core's native depth-cache (class ProjPrim on Render)
   spu_bind(c);                          // and this core's SPU

@@ -23,6 +23,7 @@
 // time. There is no such constant here: the arming interval only affects how promptly a turn is
 // taken, while the number of fields owed is always elapsed_time × field_rate.
 #include "core.h"
+#include <cstdlib>   // std::atexit — the timer thread joins itself at exit (see below)
 #include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
 #include "native_diff.h"  // ndiff_in_progress — the differential is a critical section too
 #include <lucent/log.h>
@@ -82,6 +83,20 @@ void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz) {
   }
   s_fn = fn; s_core = c; s_fps_millihz = fps_millihz;
   s_thread = std::thread(timer_main);
+  // THE THREAD JOINS ITSELF AT EXIT, and it has to be armed HERE rather than left to the port.
+  // rec_host_turn_shutdown() existed for this and had ZERO callers anywhere — framework, tests or any
+  // port — for one reason: until 2026-08-12 no psxport port had ever reached a clean exit, so a still-
+  // joinable std::thread at static destruction never got the chance to abort. The first port that DID
+  // exit cleanly (spyro, once the producer-DB run cap gave it a last frame) died with rc=139 and
+  // "terminate called without an active exception" in std::thread::~thread — a failure that looks like a
+  // crash in the port and is actually the framework never shutting its own thread down.
+  //
+  // Registered once, next to the only place the thread is created, so no port can forget it and no port
+  // has to know it exists. Idempotent: shutdown() early-returns when the thread is not joinable, so an
+  // explicit call from a port (spyro's producer_run.cpp does one) costs nothing and the atexit path is
+  // still there for the ports that do not.
+  static bool atexit_armed = false;
+  if (!atexit_armed) { atexit_armed = true; std::atexit(+[] { rec_host_turn_shutdown(); }); }
   lucent::info("hostturn", "host turn armed at {}.{:03} Hz — the guest yields to the host at recompiled "
                            "function entry", fps_millihz / 1000, fps_millihz % 1000);
 }
