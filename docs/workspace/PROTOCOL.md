@@ -134,6 +134,37 @@ head, and `grep -c 'status: ready' claims/*/claim.md` stops meaning "what is out
 - If you cannot map a claim to a commit, write `status: UNKNOWN — could not map to a commit`. An
   honestly unmapped claim is fine; a wrong sha is not.
 
+## THE GPU INTERLOCK IS `gpuguard`, AND ITS CLASSIFIER IS NOT THE SAFETY PROPERTY
+
+The interlock lives at `~/.claude/tools/gpuguard/` with a PreToolUse hook at
+`~/.claude/hooks/gpu_guard_hook.py`. Both are MACHINE-LOCAL and are lost on a machine switch, which is
+why this note is in the repo: on a fresh machine the interlock does not exist until it is reinstalled,
+and a run there is UNGUARDED. The hook fails open by design (a guard that bricks every Bash call the
+moment it has a bug is worse than the problem), so its absence is silent.
+
+**A denial is a STOP.** Do not retry, do not reach for `GPUGUARD=off`, do not hand-roll a launch that
+dodges the pattern. Diagnose statically and ask the user, whose machine it is.
+
+**But do not mistake the classifier for the guarantee.** Fixed 2026-08-12 after it DENIED a `git commit`:
+it searched the whole command string for a binary name, so a commit whose MESSAGE mentioned `psxport` and
+`tomba2_port` was classified as a GPU launch. Reading that code found it was wrong in BOTH directions —
+`spyro_port`, `spiderman_port`, `control_port` and `ffa` were not in its list at all, and it only examined
+one statement, so `cd x && ./scratch/bin/spyro_port` was MISSED. Three of the four PSX ports were never
+interlocked. It also had a blanket "the word gpuguard appears" exemption, which let
+`gpuguard status && ./scratch/bin/tomba2_port …` through entirely.
+
+It now matches in COMMAND POSITION only (the executable of each statement, after skipping `VAR=val` and
+wrappers like `timeout`/`env`/`python3`), strips heredoc bodies as data, and treats `tools/gate.py` and
+`tools/gate.sh` as launches because they drive the port binary. **Validate it in both directions before
+trusting it** — `python3 ~/.claude/hooks/gpu_guard_hook.py --selftest` runs 13 launch and 12 non-launch
+cases; the old matcher scores 5 false positives and 4 false negatives against that suite, which is what
+makes the suite a discriminator rather than a decoration. To prove the classifier reaches the interlock
+rather than merely labelling correctly: `gpuguard latch …`, feed the hook a launch and a commit, confirm
+DENY/ALLOW, then `gpuguard clear`.
+
+**A build is not a launch.** `cmake --build --target <port>` must stay allowed, or a latched card blocks
+all work rather than all runs.
+
 ## AGENTS NEVER RUN WINDOWED. USER RULE.
 
 > *"Ideally agents should never do windowed runs and windowed and headless should be equal anyway, it
