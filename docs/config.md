@@ -126,8 +126,21 @@ with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now c
 | (none) | pc_faithful + pc_render | Default. Byte-exact target for SBS. Currently broken (Job#1). |
 | `PSXPORT_GATE=1` | recomp_path + pc_render | Substrate runs gameplay; native renderer. Works, render issues. |
 | `PSXPORT_RENDER_PSX=1` | pc_faithful + psx_render | Substrate renderer only. Faithful still broken. |
-| `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` | recomp_path + psx_render | THE REFERENCE. Works perfectly. |
+| `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` | recomp_path + psx_render | Substrate gameplay + substrate renderer. **NOT the reference** — see below. |
+| **`PSXPORT_ORACLE=1`** | recomp_path + psx_render, enhancement-free | **THE PICTURE REFERENCE.** Implies the row above AND forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. `cfg_enh` is force-suppressed under it. |
 | `PSXPORT_SBS_MODE=full` | dual-core byte-compare | Core A = pc_faithful, Core B = recomp_path. Job#1 harness. |
+
+**Why the bare `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` pair is not the reference** (this table called it
+"THE REFERENCE. Works perfectly." until 2026-08-12 — kanban #82): those two flags select the substrate
+for gameplay and the substrate rasterizer for the picture, but they do **not** suppress the native
+render decisions layered on top. Painter order, the depth band, widescreen and fps60 can all still
+reach the frame, so a picture taken that way is not enhancement-free and comparing against it can
+certify a difference as absent when a native decision produced it. `PSXPORT_ORACLE=1` is the pair
+*plus* those suppressions — it is what `docs/oracle.md` means by "the best in-tree picture reference".
+
+And its own limit, stated there rather than left implied: it is still the native rasterizer at native
+precision and at `ires>1`. It answers *"what does the SUBSTRATE draw"*, never *"what does the HARDWARE
+draw"*. For the latter there is no in-tree answer.
 
 **SBS gate honesty (read before trusting a green run — docs/findings/sbs.md "COVERAGE-limited"):**
 - Every SBS run now prints its own REACH at exit: `coverage: N/M owned addresses executed this run — K
