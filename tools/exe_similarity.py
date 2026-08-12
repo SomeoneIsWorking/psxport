@@ -16,6 +16,25 @@ discriminator run against one class is not known to discriminate:
   * POSITIVE control, Spyro 2 vs Spyro 3 (same studio iterating one codebase): 64.2%
   * NEGATIVE control, Spyro 2 vs Crash 1 (different studios, different engines):  2.3%
   * SDK CEILING, the highest cross-studio pair measured (Spyro 1 vs Crash 2):    12.5%
+    ⛔⛔ THAT CEILING IS FALSIFIED AND THIS TOOL IS DISTRUSTED FOR LINEAGE DECISIONS (2026-08-12).
+    The highest cross-studio pair is NOT Spyro1/Crash2 at 12.5% — it is CRASH BASH vs TOMBA! 2 at
+    **33.4%**: different developer, different publisher, different engine, different data formats. That is
+    HIGHER than Crash 2 vs Crash 3 (35.2%) is above it, so on this metric a null pair and a same-engine
+    pair are indistinguishable. Two mechanical causes, both verified rather than argued:
+      1. the denominator is the SMALLER shingle set, so a library-dominated small binary (Crash Bash's
+         boot exe) scores 22-36% against everything;
+      2. DATA inside .text is decoded as instructions — a 4081-window CRASHBASH/TOMBA2 match at
+         0x80068bd4 disassembles to a JUMP-OFFSET TABLE.
+    Zero-window filtering does not rescue it: it RAISES that null pair to 35.0%, and a stricter code-only
+    variant to 35.9%. The sensitivity check that once "showed" padding was not driving the matrix had been
+    run over only the 8 executables that EXCLUDE the offending pairs — tested where it could not fail.
+    BEFORE THIS TOOL'S NUMBERS MEAN ANYTHING AGAIN it needs a symmetric denominator (Jaccard), a code/data
+    filter, and recalibration against the real NULL DISTRIBUTION of the ~40 genuinely cross-studio pairs in
+    the 14-executable corpus — publishing mean/max, not one hand-picked pair. Until then use it to rank
+    candidates, never to decide repo shape; decide that from shared functions, shared dispatch mechanisms,
+    shared formats and SDK version strings. See psxport/docs/workspace/WORKSPACE.md.
+    STILL USABLE, because it clears the observed null by more than 2x: Spider-Man 1 vs 2 at 74.2% (both
+    engine-sized binaries). NOT usable: Tomba! 1 vs 2 at 18.8%, which is BELOW the observed null maximum.
 So >~60% means one codebase; ~10-13% means "shares the SDK and nothing else"; and the ceiling is what
 any claim of family membership must clear. Full matrix and conclusions:
 `docs/plans/` engine-lineage findings + the workspace decision that cites them.

@@ -125,6 +125,46 @@ static void test_repl_pump_census(void) {
   CHECK(fgets_stdin >= 1);
 }
 
+// ── 1b. THE CENSUS OF PUMPLESS LOOPS: sbs.cpp was not the only one ───────────────────────────────
+// The first fix guarded SBS and said so in a header comment: "DualCore and selftest are NOT guarded
+// yet: same defect, same one-line fix". A known-unguarded path recorded in a comment is exactly the
+// silent-swallow this file exists to stop — nothing makes a comment come true. So EVERY loop that
+// can own the process without pumping Repl::read() is enumerated here, and each must guard.
+//
+// The list is closed by test_repl_pump_census(): native_boot.cpp holds the framework's only
+// repl.read() pump, so any other loop reached from a game's main() is pumpless by construction.
+// These three are the ones a game's main() dispatches to (verified in all three consumer repos:
+// Tomba2Engine dispatches PSXPORT_DUALCORE + PSXPORT_SELFTEST, spyro and spider1 dispatch
+// PSXPORT_SELFTEST).
+static void test_every_pumpless_loop_guards(void) {
+  struct Loop { const char* file; const char* what; };
+  static const Loop loops[] = {
+    {"runtime/recomp/sbs.cpp",      "SBS two-core harness (PSXPORT_SBS / PSXPORT_SBS_MODE)"},
+    {"runtime/recomp/dualcore.cpp", "DualCore render-divergence harness (PSXPORT_DUALCORE)"},
+    {"runtime/recomp/selftest.cpp", "selftest dispatcher (PSXPORT_SELFTEST)"},
+  };
+  int scanned = 0, guarded = 0, unguarded = 0;
+  for (const Loop& L : loops) {
+    bool ok = false;
+    const std::string src = read_source(L.file, &ok);
+    CHECK(ok);                       // a file we cannot read is a refusal, never a pass
+    ++scanned;
+    const int guards = count_of(src, "refuse_if_unserviced");
+    const int reads  = count_of(src, "repl.read(");
+    fprintf(stderr, "    %-30s guards=%d repl.read=%d  <- %s\n", L.file, guards, reads, L.what);
+    if (guards + reads > 0) ++guarded;
+    else {
+      ++unguarded;
+      fprintf(stderr, "    ^ UNGUARDED: this loop owns the process and neither reads stdin nor\n"
+                      "      refuses, so a piped REPL script handed to it is silently discarded.\n");
+    }
+  }
+  fprintf(stderr, "    census: scanned %d pumpless loop(s), %d guarded, %d UNGUARDED\n",
+          scanned, guarded, unguarded);
+  CHECK_EQ(scanned, 3);              // a shrinking corpus must fail, not quietly pass
+  CHECK_EQ(unguarded, 0);
+}
+
 // ── 2. POLICY: the decision, exercised on BOTH classes ──────────────────────────────────────────
 using psx::repl_service::Query;
 using psx::repl_service::Verdict;
@@ -235,6 +275,64 @@ static void test_the_refusal_names_the_supported_alternative(void) {
   CHECK(w.find("PSXPORT_SBS_AUTONAV") != std::string::npos);
 }
 
+// Every call site must pass a loop name drive_advice() actually knows. This is the discriminator
+// for the failure mode a keyed-by-string registry invites: a typo (`"sbs"`) or a new harness added
+// without a paragraph resolves to the fallback, and the operator is told nothing useful. Scanning
+// the real call sites is what turns that from a silent no-op into a test failure.
+static void test_every_call_site_passes_a_registered_loop_name(void) {
+  static const char* const kFiles[] = {"runtime/recomp/sbs.cpp", "runtime/recomp/dualcore.cpp",
+                                       "runtime/recomp/selftest.cpp"};
+  static const char kNeedle[] = "refuse_if_unserviced(\"";
+  int sites = 0, unregistered = 0;
+  for (const char* rel : kFiles) {
+    bool ok = false;
+    const std::string src = read_source(rel, &ok);
+    CHECK(ok);
+    for (size_t p = src.find(kNeedle); p != std::string::npos; p = src.find(kNeedle, p + 1)) {
+      const size_t a = p + sizeof(kNeedle) - 1;
+      const size_t b = src.find('"', a);
+      CHECK(b != std::string::npos);
+      const std::string name = src.substr(a, b - a);
+      const bool reg = psx::repl_service::drive_advice(name.c_str()) != nullptr;
+      fprintf(stderr, "    %s: refuse_if_unserviced(\"%s\") -> advice %s\n",
+              rel, name.c_str(), reg ? "REGISTERED" : "MISSING");
+      ++sites;
+      if (!reg) ++unregistered;
+    }
+  }
+  fprintf(stderr, "    scanned %zu file(s), found %d call site(s) with a literal loop name, "
+                  "%d unregistered\n", sizeof(kFiles) / sizeof(kFiles[0]), sites, unregistered);
+  CHECK(sites >= 3);            // 0 sites would mean the scan found nothing and "passed"
+  CHECK_EQ(unregistered, 0);
+}
+
+// The fallback must be UNMISTAKABLE, not silently-SBS. Before drive_advice() existed, message() had
+// the SBS paragraph hardcoded while loopName was a parameter — so a DualCore refusal handed the
+// operator PSXPORT_SBS_AUTONAV, advice that does nothing for a DualCore run.
+static void test_advice_is_per_loop_and_the_gap_is_loud(void) {
+  Query piped;
+  piped.loopServicesRepl = false;
+  piped.stdinPendingBytes = 24;
+
+  const std::string sbs = message("SBS", piped, Verdict::Refuse);
+  const std::string dc  = message("DualCore", piped, Verdict::Refuse);
+  const std::string st  = message("selftest", piped, Verdict::Refuse);
+  CHECK(sbs.find("PSXPORT_SBS_AUTONAV") != std::string::npos);
+  CHECK(dc.find("PSXPORT_DUALCORE") != std::string::npos);
+  CHECK(dc.find("PSXPORT_SBS_AUTONAV") == std::string::npos);   // the bug this pins
+  CHECK(st.find("PSXPORT_SELFTEST") != std::string::npos);
+  CHECK(st.find("PSXPORT_SBS_AUTONAV") == std::string::npos);
+  fprintf(stderr, "    DualCore advice (%zu chars, SBS knobs present: %s)\n", dc.size(),
+          dc.find("PSXPORT_SBS") == std::string::npos ? "no" : "YES — WRONG");
+
+  const std::string unk = message("sbs", piped, Verdict::Refuse);   // lowercase typo
+  fprintf(stderr, "    unregistered loop \"sbs\" -> %s\n", unk.c_str());
+  CHECK(unk.find("NO DRIVE MECHANISM IS REGISTERED") != std::string::npos);
+  CHECK(unk.find("PSXPORT_SBS_AUTONAV") == std::string::npos);
+  CHECK(psx::repl_service::drive_advice("sbs") == nullptr);
+  CHECK(psx::repl_service::drive_advice(nullptr) == nullptr);
+}
+
 // ── 2b. THE SHIPPING FUNCTION ACTUALLY FIRES ────────────────────────────────────────────────────
 // A policy nobody calls is the same bug one level up (and so is a probe that measures the wrong
 // thing). These cases run the REAL refuse_if_unserviced() — its fstat/FIONREAD probe, its lucent
@@ -328,6 +426,9 @@ static void test_psxport_repl_is_a_ladder_knob_matching_its_pre_migration_behavi
 int main(void) {
   RUN(sbs_loop_does_not_ignore_stdin);
   RUN(repl_pump_census);
+  RUN(every_pumpless_loop_guards);
+  RUN(every_call_site_passes_a_registered_loop_name);
+  RUN(advice_is_per_loop_and_the_gap_is_loud);
   RUN(dropped_input_is_refused);
   RUN(legitimate_headless_runs_are_not_refused);
   RUN(the_refusal_names_the_supported_alternative);

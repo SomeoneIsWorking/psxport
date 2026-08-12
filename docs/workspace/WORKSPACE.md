@@ -79,12 +79,55 @@ writable.**
   *before* checking out `vendor/lucent`, which left lucent's worktree empty with every file staged
   deleted. Recursive submodule operations on this tree do not fail loudly — they stop early.
 
+## ⛔ THE SIMILARITY METRIC IS DISTRUSTED (2026-08-12) — no repo-shape claim may cite a percentage
+
+**`tools/exe_similarity.py` cannot currently support a lineage decision, and every percentage below is
+suspect until it is recalibrated.** Found by adversarially verifying a Crash-family measurement: the
+verifier reproduced every cell and then falsified the CALIBRATION the measurement rested on.
+
+**The decisive number:** `CRASHBASH ↔ TOMBA2 = 33.4%` — different developer, different publisher, different
+engine, different data formats. That is a NULL pair, and it scores higher than `CRASH2 ↔ CRASH3` (35.2%) is
+above it. So the "12.5% cross-studio SDK ceiling" is wrong by ~21 points, and a session that proposed
+correcting it to ~22.5% would have replaced one wrong number with another (`CRASHBASH ↔ SPIDER1` = 22.4%).
+
+**Two mechanical defects, both verified by disassembly rather than argued:**
+1. **The denominator is the SMALLER shingle set**, so a library-dominated small binary scores high against
+   everything. Crash Bash's boot exe is exactly that: it reads 22–36% against unrelated games.
+2. **DATA inside `.text` is decoded as instructions.** A 4081-window `CRASHBASH ↔ TOMBA2` match at
+   `0x80068bd4` was disassembled and is a **jump-offset table**, not code.
+
+**And the escape hatch fails, which is the part worth remembering.** The padding hypothesis is backwards:
+zero-window filtering RAISES `CRASHBASH ↔ TOMBA2` to 35.0%, and a stricter code-only variant gives 35.9% —
+*above* `CRASH2 ↔ CRASH3` in the same run. The sensitivity check that "showed" the matrix was not
+padding-driven had been run over only the 8 executables that EXCLUDE the offending pairs: **tested where it
+could not fail.**
+
+**What survives, because it does not depend on the metric.** Direct evidence, verified independently:
+- **The Crash trio is one architecture.** The GOOL bytecode dispatch loop is byte-identical across
+  Crash 1/2/3 (disassembled at `0x80020218` / `0x8003A06C` / `0x80038E80`), and a trio engine function
+  matches 36/36 windows in Crash 2 and Crash 3 and **0/36** in CTR, Bash, Spyro 2, Spider-Man, Tomba! 2 and
+  Tomba! 1 — a negative control set the original measurement never ran. Crash 1's interpreter is near-absent
+  in 2/3 (19 and 8 of 1242 windows), consistent with "same architecture, rewritten".
+- **CTR and Crash Bash are not part of it** (0/36 on that function), which is what the existing per-title
+  decision already says.
+- **Toy Story 2 shares nothing with any of the other 12** and is absent from this document entirely; it
+  needs its own row and its own repo, with no shared `game/`.
+- **Tomba! 1 links a DIFFERENT PSY-Q than Tomba! 2** (`sys.c` 1.129 / 1996-12-25 and `intr.c` 1.74 vs
+  `sys.c` 1.140 / 1998-01-12 and `intr.c` 1.75) — version strings in the binaries, not a metric.
+
+**Until the tool is recalibrated against a real NULL DISTRIBUTION** (the ~40 genuinely cross-studio pairs of
+the 14-exe corpus, publishing mean/max rather than one hand-picked "ceiling") **and given a symmetric
+denominator plus a code/data filter, decide repo shape from DIRECT evidence — shared functions, shared
+dispatch mechanisms, shared formats, SDK version strings — never from a similarity percentage.**
+
 ## DECIDED: how the workspace grows to the Spyro/Crash titles (2026-08-11)
 
 The USER delegated this call ("I'm not gonna decide, maybe Fable should decide" → then "it's yours"), so
 it is decided here rather than left open. Evidence is the engine-lineage measurement in
 `tools/exe_similarity.py`'s docstring (validated both directions: 64.2% positive, 2.3% negative, 12.5%
-cross-studio SDK ceiling) plus `docs/plans/game-seam-redesign.md`.
+cross-studio SDK ceiling) plus `docs/plans/game-seam-redesign.md`. ⛔ **THAT CEILING IS FALSIFIED — read the
+distrust block above before using any number in this section.** The decisions themselves mostly survive on
+direct evidence; the arithmetic that justified them does not.
 
 **One repo per ENGINE LINEAGE, multiple titles inside it. No third vendored layer. Nothing speculative.**
 
@@ -127,12 +170,25 @@ shaping either repo's shared `game/`, because assuming was exactly what the Spyr
   even Spyro 2↔3's 64.2%). The USER's call to fold Enter Electro into `spider1/` is confirmed by
   measurement, not merely permitted: there is more to share here than anywhere else, so the multi-title
   split matters most in this repo.
-- **Tomba! 1 ↔ Tomba! 2: 18.8% — NOT one codebase.** Above the 12.5% cross-studio SDK ceiling, so the
+- **Tomba! 1 ↔ Tomba! 2: 18.8% — NOT one codebase.** ⛔ THE REASONING IN THIS BULLET IS FALSIFIED (see the
+  distrust block at the top of this section): it leaned on the 12.5% ceiling, which is wrong by ~21 points,
+  and the raw 18.8% is 44% data-window artifact (code-only 12.3%). The code shared by ONLY these two of 13
+  executables is 1.5% and 87–93% confined to the text tail, i.e. the PSY-Q link tail — and the two link
+  DIFFERENT PSY-Q versions. **Tomba! 1 is its own engine.** Keeping it in `Tomba2Engine/` is a PREFERENCE
+  call exactly like Spyro 1, not a measurement-backed lineage. Original wording follows: above the 12.5%
+  cross-studio SDK ceiling, so the
   two do share something real, but nowhere near a shared engine. This is the Spyro-1 situation with a
   little more overlap: expect FORMAT and tooling knowledge to transfer and expect native engine classes
   NOT to. A shared `game/` between them would mostly hold code one title cannot use.
 - The cross-lineage cells (Tomba×Spider, 6.9–11.8%) sit at or below the SDK ceiling, which is the
   NEGATIVE CONTROL working — it is what makes the 74.2% and 18.8% readable rather than two bare numbers.
+  ⛔ **This is the sentence the distrust block kills.** Those cells are not the null distribution; they are
+  four cells hand-picked from it. The observed cross-studio MAXIMUM is `CRASHBASH ↔ TOMBA2` at 33.4%, so a
+  "negative control" of 6.9–11.8% was measuring which pairs happen to be small, not what unrelated looks
+  like. **Spider-Man 1↔2's 74.2% still stands**, and now for a better reason than the old ceiling: it is
+  more than double the observed null maximum, and both binaries are engine-sized (186,879 and 196,095 text
+  words against Tomba!2 MAIN.EXE's 178,687), so the smaller-denominator defect cannot be inflating it.
+  Tomba! 1↔2's 18.8% is BELOW that null maximum and therefore says nothing at all.
 
 **One caveat, stated because it is the kind that inverts a conclusion.** Tomba! 2's engine is `MAIN.EXE`;
 its `SCUS_944.54` is a small loader. Comparing Tomba! 1's single exe against that LOADER instead gives

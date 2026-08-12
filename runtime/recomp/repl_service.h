@@ -71,9 +71,41 @@ inline Verdict decide(const Query& q) {
   return Verdict::Ok;
 }
 
+// ── per-loop drive advice ───────────────────────────────────────────────────────────────────────
+// "Use this instead" is DIFFERENT for every harness — PSXPORT_SBS_AUTONAV means nothing to a
+// DualCore run — so the advice is a registry keyed by the loop, not one paragraph with the loop's
+// name pasted in. It returns nullptr for a name nobody registered, and message() then says so out
+// loud: an unregistered loop must read as "this harness has no registered advice", never as
+// silently-correct SBS advice. That is what makes the typo case (`"sbs"`, a new harness added
+// without a paragraph) visible instead of a no-op — and tests/test_repl_unserviced_refusal.cpp
+// scans every call site in the runtime to check the name it passes IS registered.
+inline const char* drive_advice(const char* loopName) {
+  const std::string n = loopName ? loopName : "";
+  if (n == "SBS")
+    return "To DRIVE an SBS run use the harness's own two-core mechanisms, which apply to BOTH "
+           "cores identically: PSXPORT_SBS_AUTONAV=1 (auto-nav to the field), "
+           "PSXPORT_SBS_WARP=frame:area[:sub] (deterministic area load), "
+           "PSXPORT_SBS_PAD_REPLAY=<file.pad> (recorded input), or PSXPORT_DEBUG_SERVER=1 (live "
+           "socket). For the REPL itself, run the SINGLE-CORE port without "
+           "PSXPORT_SBS/PSXPORT_SBS_MODE.";
+  if (n == "DualCore")
+    return "A DualCore run (PSXPORT_DUALCORE=1) is a one-shot diagnostic that drives ITSELF: its "
+           "nav machine taps Cross to the GAME stage and pulses Start through the cutscene, then "
+           "it diffs guest RAM between the native-render and PSX-render legs. There is no operator "
+           "input to give it; PSXPORT_DC_ALL=1 is the only knob that changes its report. For the "
+           "REPL itself, run the SINGLE-CORE port without PSXPORT_DUALCORE.";
+  if (n == "selftest")
+    return "A PSXPORT_SELFTEST run is a FIXED script with a pass/fail exit code and no operator "
+           "input, so there is nothing for a REPL command to drive; PSXPORT_SELFTEST_VERBOSE=1 is "
+           "what changes what it prints. For the REPL itself, run the SINGLE-CORE port without "
+           "PSXPORT_SELFTEST.";
+  return nullptr;   // unregistered: message() states that rather than inventing advice
+}
+
 // The operator-facing text. Built here, next to the rule, so the test can assert what a refusal
 // SAYS — a refusal that does not name the unserviced thing and the supported alternative just
-// looks like a crash. `loopName` is the loop that owns the process ("SBS", "DualCore", …).
+// looks like a crash. `loopName` is the loop that owns the process ("SBS", "DualCore", …) and must
+// be one of the names drive_advice() registers.
 inline std::string message(const char* loopName, const Query& q, Verdict v) {
   const std::string loop = loopName ? loopName : "this harness";
   std::string s;
@@ -87,17 +119,22 @@ inline std::string message(const char* loopName, const Query& q, Verdict v) {
          " byte(s) are ALREADY WAITING on stdin and NOTHING in this run will ever read them: every "
          "command in that script would be silently discarded while the harness ran its own default "
          "lockstep, and the run would look like it had worked. ";
-  s += "To DRIVE an SBS run use the harness's own two-core mechanisms, which apply to BOTH cores "
-       "identically: PSXPORT_SBS_AUTONAV=1 (auto-nav to the field), PSXPORT_SBS_WARP=frame:area[:sub] "
-       "(deterministic area load), PSXPORT_SBS_PAD_REPLAY=<file.pad> (recorded input), or "
-       "PSXPORT_DEBUG_SERVER=1 (live socket). For the REPL itself, run the SINGLE-CORE port without "
-       "PSXPORT_SBS/PSXPORT_SBS_MODE. ";
+  if (const char* advice = drive_advice(loopName)) {
+    s += advice;
+    s += " ";
+  } else {
+    // Honest fallback. It must not read like advice, because it isn't: nobody registered this loop.
+    s += "NO DRIVE MECHANISM IS REGISTERED for a loop called \"" + loop +
+         "\" (repl_service.h drive_advice() knows: SBS, DualCore, selftest), so this refusal cannot "
+         "tell you what to use instead — that is a gap in the guard, not in your command line. For "
+         "the REPL itself, run the SINGLE-CORE port. ";
+  }
   if (v == Verdict::Refuse)
     s += "REFUSING THE RUN (exit " + std::to_string(kRefusalExit) +
          ") rather than producing a verdict over input it threw away.";
   else
-    s += "Nothing is being read from your terminal; the SBS panes are driven by the window keyboard "
-         "or the debug server. (Continuing — a live session is not killed for a keystroke.)";
+    s += "Nothing in this run is reading your terminal; drive it with the mechanisms above. "
+         "(Continuing — a live session is not killed for a keystroke.)";
   return s;
 }
 
