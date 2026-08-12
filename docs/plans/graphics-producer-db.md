@@ -417,6 +417,75 @@ the schema above — so nothing in this plan changes, and the question is closed
 later session to re-open. A fn that is honestly two effects is split by HAND, and the split records
 its discriminator (the `sub_signatures` field is the evidence for when that is needed).
 
+## IMPLEMENTED 2026-08-12: the guest leg has identity AND the two legs now JOIN
+
+Three things landed today. Recorded here because this file is the design of record and the earlier
+sections above describe a state that no longer holds.
+
+**1. The guest leg's identity (psxport `38cec620`).** The attribution shadow stack is now maintained in
+EVERY guest function's recompiler-emitted wrapper, so it covers direct `jal` calls, not just indirect
+dispatch — that was the whole defect: the packet-pool stores are performed by shared SDK-adjacent
+routines reached by direct `jal`, so the stack was empty for exactly the stores that mattered.
+`span-no-fn` 274,089 -> **0**. Priced: 3,071,077 wrapper calls over a 1200-frame replay, +0.0% user CPU
+for the push; the real cost is ~4.5% `.text` (the wrapper loses its tail call because it must return to
+pop). The `if (g_otattr_channel)` gate on `recordFnStat` is LOAD-BEARING (+24% pc_render / +87%
+psx_render without it).
+
+**2. The JOIN (psxport `90604e18`).** Identity alone did not produce a comparison: the guest leg keyed
+at the innermost EMITTER frame while a native row is keyed at the HANDLER/PASS frame, so only **2 of 25**
+keys coincided and every guest row read `native 0`. A guest prim now resolves outward along its call
+chain to the first frame a native producer keys a row at (`OtAttr::resolveClaimedFrame`), bounded at
+`CLAIM_SEARCH_DEPTH = 8` — measured, not guessed: `PSXPORT_DEBUG=otchain` found every claim within 3
+frames of the top, and a claim found AT the limit is counted and warned about. When no frame in the
+window is claimed the prim keeps its emitter key, which IS the DB's answer for that effect: it has no
+native producer.
+
+**3. Row lifetimes (psxport `63c5f537`).** Both feed sites stamped rows with `GpuState::s_frame`, which
+counts PRESENTS, so every guest row read `frames 1 (f3..f3)`. One shared definition now
+(`census_frame.h` -> `Timing::logicFrame`). This was the SAME root cause already fixed one layer down for
+the span-table reset — fixing the reset while leaving the row stamp on the same counter left the identical
+defect in the field a human reads.
+
+### THE STRUCTURAL FACT THE JOIN EXPOSED — the comparison is CROSS-RUN
+
+**No single leg runs both halves.** Under pc_render the guest packets are never GP0-executed, so
+`primsGuest` is structurally 0; under psx_render no native producer runs, so nothing can be claimed. The
+claim set is therefore earned on one run and consumed by another, persisted APPEND-ONLY to
+`<PSXPORT_PRODUCERS_DIR>/claims.txt` and loaded before frame 0.
+
+**The rejected alternative is a trap worth naming:** reload the newest run JSONL. That DESTROYS the set —
+a psx_render run's rows legitimately carry `prims_native: 0`, so loading them would report "nothing has a
+native producer" about a game where nine things do. Append-only means a claim earned by a native producer
+actually drawing is never un-earned by a later leg that skips it.
+
+### The instrument caught ITSELF, which is the reusable part
+
+The FIRST `otchain` run reported "0 of 29 shapes claimed" — on a pure psx_render leg, where the claim set
+could ONLY be empty. Because the report prints its claim count and warns explicitly when it is zero, that
+0 was legible as "this run cannot answer the question" rather than "the fix does not work". Reading it as
+a finding would have killed the correct design. Every negative in this instrument carries its denominator
+and its blind spots for exactly this reason.
+
+### Measured end state (Tomba!2, 300-frame `house-on-the-point`, two legs)
+
+* leg 1 (pc_render) earns 9 claims; leg 2 (psx_render) joins **217,533** spans, **145,027** with no
+  claimed frame, **1** unresolvable (claim set still empty), **0** at the search limit.
+* folded through `Tomba2Engine/tools/producers.py`: **8 rows carry BOTH legs** (GTE prims vs native prims
+  on one key), **27 rows are guest-only** — the ranked "no native producer" list, topped by `0x8003DF04`
+  at 394,944 prims.
+* SBS-full byte-exact with all of this on the guest hot path (both documented gate legs, 0 `sbs-div`).
+
+### Still open, and none of it is papered over
+
+* ~10% of guest prims key at SDK libgs builders (`0x80080000`, `0x8008007C`, `0x8007FDB0`) because no
+  frame in their 8-frame window is claimed — `Tomba2Engine` kanban #88, with the two candidate causes and
+  the experiment that distinguishes them.
+* `otattrFrameFromTop` REFUSES above `OTATTR_CAP` rather than guessing, so a chain deeper than 256 guest
+  frames is reported blind (1 store in the measured run).
+* Whether the census is structurally live in `spyro` / `spider1` depends on their `GameConfig`
+  `packetPoolBase`/`Stride` being RE'd; where those are 0 the guest leg is BLIND and says so, and an empty
+  table there means "not measured", never "the guest submitted nothing".
+
 ## Open questions (do not guess these — they change the schema)
 
 1. **Should a row track pixel-area rather than prim count?** Prim count is free; screen-area coverage
