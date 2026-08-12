@@ -78,6 +78,33 @@ through it.
   `mouksx/Toy-Story-2-Modding`.
 - **Spider-Man** — nothing found. Scanned: decomp.dev's full PSX list plus targeted searches; a negative
   from a search is weaker than a negative from a measurement, so treat it as "not found", not "absent".
+- **Tekken 3 — SCOUTED 2026-08-12 AND DECIDED AGAINST. Do not build a tree for it.** The measurements
+  below are worth keeping so nobody re-scouts; the verdict is worth keeping so nobody re-argues it.
+  - **The reason is the VALUE PROPOSITION, not difficulty.** DuckStation already ships this title's
+    entire cheap enhancement set — widescreen via the GTE hack, 4K, PGXP perspective-correct texturing
+    and wobble removal, texture replacement, rewind, save states. A port would spend the workspace's
+    hardest RE budget to reproduce checkbox features. That is the inverse of Tomba!2 and Spyro, where
+    the port delivers what emulation structurally cannot. The only moat is rollback netplay and
+    input-latency reduction, and both sit behind full engine RE. Everything cheap is already free;
+    everything with a moat is expensive.
+  - **Mega Man X4 is NOT the analogy.** X4 has an AGPL decomp whose build target is byte-identical to
+    our extraction — free symbols at our addresses. Tekken 3 is X4's enhancement shape with Toy Story
+    2's prior art *minus* TS2's format tooling: one MIT archive unpacker, its file map derived from the
+    wrong region. Hardest tree in the workspace on the prior-art axis.
+  - **It DOES stream code overlays** — `SLUS_004.02`, SHA-1 `562c82d5888f5cb19a883dbfbf1e61a5fa143cbe`,
+    1,185,792 B. Overlay code lives in `TEKKEN3.BNS`: 7 word-aligned clusters, ≥220,564 B, +49% on the
+    resident 448 KiB. The decisive signal is call-target locality — 3,104 of 3,164 `j`/`jal` targets in
+    those clusters land inside `0x80010000..0x80131000`, against 2.7% for BNS as a whole.
+  - **The "hand-written assembly arcade port" reputation is REFUTED**: it links stock PSY-Q and ships
+    the debug strings verbatim (`sys.c` 1.135, `intr.c` 1.76, `bios.c` 1.86) — the same cohort as
+    CRASH3 and DIGIMON. Largest boot exe in the corpus but only ~448 KiB is code; "big exe" here means
+    big embedded data.
+  - **`TEKKEN3.DA` is a worse `MOJIPAT.ARC`**: 24.3% code-plausible with **zero** `jr $ra`. Running
+    `megamanx4/tools/code_scan.py --selftest` against Tekken's own files correctly FAILS (exit 1) — the
+    instrument is sound, the file is precisely what the three-signal design exists for. `TEKKEN3.DMY`
+    is pure padding (0 of 5887 pages non-zero).
+  - FALSIFIER for the verdict: a moat feature emulation cannot reach (rollback netplay shipping in a
+    PS1 emulator would strengthen the case against; a decomp appearing would weaken the cost argument).
 
 ## If we ever want to contribute outward
 
