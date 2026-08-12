@@ -253,6 +253,16 @@ static void test_an_unmigrated_knob_is_classified_legacy_once_it_has_been_read(v
 // the library (not only here) is what stops the audit from quietly degrading into a function that
 // returns an empty list forever.
 static void test_the_audit_selftest_fires_in_the_shipping_library(void) {
+  // HERMETIC, deliberately: selftest() now also drives the enhancement gate, and it REFUSES (returns
+  // false, naming what it did not exercise) in a process that is already a byte-compare run — reaching
+  // the honour class there would mean forcing the oracle off in a run that IS one. Verified by running
+  // this binary with PSXPORT_SBS=1 before adding these three lines: `[cfg:error] selftest FAILED: the
+  // enhancement gate cannot be exercised in a byte-compare run (PSXPORT_SBS)`. That refusal is correct
+  // and must stay, but a developer with PSXPORT_SBS exported in their shell is not a regression in the
+  // framework, so the case clears the three inputs rather than inheriting the ambient environment.
+  set_env("PSXPORT_ORACLE", nullptr);
+  set_env("PSXPORT_SBS", nullptr);
+  set_env("PSXPORT_SBS_MODE", nullptr);
   const bool ok = psx::config::selftest();
   fprintf(stderr, "  psx::config::selftest() -> %s\n", ok ? "true (audit produced its positive)" : "FALSE");
   CHECK(ok);

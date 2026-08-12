@@ -260,6 +260,171 @@ TextVar cv_producers_db("PSXPORT_PRODUCERS_DB", "",
 
 BoolVar cv_fps60("PSXPORT_FPS60", false, "interpolated-60fps tier (Value layer = fps60= in the settings file)");
 
+TextVar cv_enh("PSXPORT_ENH", "",
+               "pc_enh selection: <name,name|all> — deliberate guest-state changes. "
+               "FORCE-SUPPRESSED under PSXPORT_ORACLE or either SBS form; read it through "
+               "enh_named()/enh(), never by parsing this text at a call site.");
+
+// ── the enhancement gate ────────────────────────────────────────────────────────────────────────
+// THE DEFINITION OF A BYTE-COMPARE RUN, in one place. Pure in its three inputs so selftest() can run
+// it over all eight combinations without touching the environment.
+//
+// PSXPORT_SBS and PSXPORT_SBS_MODE are deliberately NOT migrated here. They belong to the SBS harness
+// group (docs/config-migration.md), and migrating a knob as a side effect of migrating a different one
+// is how a group ends up half-done with no gate on it. compare_run() reads them through
+// detail::env_bool / detail::env_text — the same 1:1 forwarders cfg_on / cfg_str resolve through — and
+// notes the read, so they appear in the audit as legacy-observed rather than as unknown.
+//
+// THAT IS CHEAP ONLY UNTIL THEY ARE MIGRATED, which docs/config-migration.md Group 4a lists as
+// remaining work. On the commit that declares either as a CVar, THIS FUNCTION MUST CHANGE WITH IT:
+// reading detail::env_* would bypass the ladder for exactly the two inputs that decide whether a
+// byte-compare is protected (a settings-file or REPL value for them would never reach the gate), and
+// the one-time binding below would freeze a value that can now move mid-run — the pre-migration
+// cfg_enh seeded-static defect, one layer down. tests/test_config_enh.cpp's
+// test_migrating_the_sbs_knobs_must_update_compare_run goes RED when either name becomes a CVar, so
+// this note cannot be missed rather than merely being written down.
+bool compare_run_from(bool oracle, bool sbs, std::string_view sbs_mode, std::string* why) {
+  if (why) why->clear();
+  const bool mode = !sbs_mode.empty();
+  if (why) {
+    if (oracle) why->append(why->empty() ? "" : ", ").append("PSXPORT_ORACLE");
+    if (sbs) why->append(why->empty() ? "" : ", ").append("PSXPORT_SBS");
+    if (mode) why->append(why->empty() ? "" : ", ").append("PSXPORT_SBS_MODE=").append(sbs_mode);
+  }
+  return oracle || sbs || mode;
+}
+
+namespace {
+
+// The gate's whole mutable state, behind ONE mutex. Three parts, and each is here rather than in a
+// local static for a stated reason:
+//
+//  * THE SBS ENVIRONMENT CACHE. compare_run() is called on every gate call, and note_legacy_read()
+//    takes the registry lock and inserts into a map — paying that per call on a per-frame gate is not
+//    acceptable. The two SBS names are ENV-ONLY knobs (they are not CVars, so no Value or Runtime layer
+//    can move them mid-run), so binding them once is not a shortcut, it is their actual lifetime; the
+//    legacy-read note is recorded once, which is exactly what "this knob was read this run" means.
+//    cv_oracle is NOT cached here — it is a CVar and the REPL can move it, so it is read every call.
+//  * THE WARN-ONCE REGISTERS, keyed on the KNOB. Two of them, because a run can legitimately have one
+//    enhancement suppressed and another honoured, and neither announcement may silence the other.
+//    Keyed by NAME, since the name is a knob's identity (a cfg_enh caller passes only a name, and the
+//    same knob must not warn twice through the two entry points) — and a vector has no fixed capacity
+//    to overflow silently.
+//  * THE PARSED PSXPORT_ENH LIST, cached against the TEXT the ladder resolved rather than behind a
+//    one-shot "seeded" flag. A Runtime-layer (REPL) write changes the text and the cache must notice.
+//    That one-shot seeding is precisely the pre-migration defect: after the first call nothing could
+//    change the answer for the rest of the process.
+struct EnhState {
+  std::mutex mutex;
+  bool sbs_bound = false;
+  bool sbs = false;
+  std::string sbs_mode;
+  std::vector<std::string> warned_suppressed;
+  std::vector<std::string> warned_active;
+  bool warned_nameless = false;
+  std::string parsed_text = "\x01";   // a value no environment can produce: the first call always parses
+  bool parsed_all = false;
+  std::vector<std::string> parsed_names;
+};
+EnhState& enh_state() {
+  static EnhState s;
+  return s;
+}
+
+// True the FIRST time this key is seen in `r`; false afterwards. Caller holds the lock.
+bool first_time(std::vector<std::string>& r, const char* key) {
+  if (contains(r, key)) return false;
+  r.emplace_back(key);
+  return true;
+}
+
+}  // namespace
+
+bool compare_run(std::string* why) {
+  EnhState& s = enh_state();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  if (!s.sbs_bound) {
+    s.sbs_bound = true;
+    s.sbs = detail::env_bool("PSXPORT_SBS");
+    s.sbs_mode = detail::env_text("PSXPORT_SBS_MODE");
+    note_legacy_read("PSXPORT_SBS", Kind::Bool, s.sbs ? "1" : "0");
+    note_legacy_read("PSXPORT_SBS_MODE", Kind::Text, s.sbs_mode);
+  }
+  return compare_run_from(cv_oracle.get(), s.sbs, s.sbs_mode, why);
+}
+
+bool enh_gate(const char* key, bool asked) {
+  // A NAMELESS enhancement is refused, LOUDLY — the one place this deliberately departs from the
+  // pre-migration behaviour, which returned 1 for cfg_enh("") whenever PSXPORT_ENH=all because `all`
+  // short-circuited before it ever looked at the name. That made an empty or unexpanded name at a call
+  // site read as a working enabled enhancement, and it cannot be carried forward: every notice here is
+  // keyed on the knob's identity, so a nameless key would produce an unattributable log line and a
+  // register entry nothing can match. tests/test_config_enh.cpp asserts this divergence explicitly
+  // rather than letting the compatibility gate paper over it.
+  if (!key || !*key) {
+    EnhState& s = enh_state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (!s.warned_nameless) {
+      s.warned_nameless = true;
+      lucent::error("cfg", "enhancement gate called with an EMPTY name — refused. An enhancement is "
+                           "identified by its name; a call site with none is a bug at the call site, "
+                           "not a knob that is off.");
+    }
+    return false;
+  }
+  std::string why;
+  const bool compare = compare_run(&why);
+  EnhState& s = enh_state();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  if (compare) {
+    // NOT announced when the knob was never asked for: an enhancement nobody requested being off is
+    // not news. When it WAS asked for, the run must say so PER KNOB — otherwise a run with two
+    // enhancements set names one of them and the other reads as never having been requested.
+    if (asked && first_time(s.warned_suppressed, key))
+      lucent::warn("cfg", "{} SUPPRESSED: oracle/SBS run must stay enhancement-free ({})", key, why);
+    return false;
+  }
+  // THE POSITIVE PRINTS TOO. "No SUPPRESSED line" is otherwise indistinguishable from "the gate was
+  // never reached", and a pc_enh changes canon guest state — a run that had one on must name it, or a
+  // later byte-compare against that run reads the deliberate divergence as a port bug.
+  if (asked && first_time(s.warned_active, key))
+    lucent::info("cfg", "{} ENHANCEMENT ACTIVE: this run deliberately diverges from recomp_path "
+                        "(pc_enh, affect=full) — see docs/behavior-map.md", key);
+  return asked;
+}
+
+bool enh(const CVar<bool>& v) { return enh_gate(v.name(), v.get()); }
+
+bool enh_named(const char* name) {
+  if (!name || !*name) return enh_gate(name, false);   // refused, and it says so — see enh_gate
+  const std::string text = cv_enh.get();
+  bool selected = false;
+  {
+    EnhState& s = enh_state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.parsed_text != text) {
+      s.parsed_text = text;
+      s.parsed_all = (text == "all");
+      s.parsed_names.clear();
+      if (!s.parsed_all && !text.empty()) {
+        // The pre-migration splitter, verbatim: the separators are `,`, `:` and space. It is compared
+        // against the old body over 36 (value, name) pairs in tests/test_config_enh.cpp — that
+        // comparison, not this comment, is what keeps the parse identical.
+        std::size_t start = 0;
+        while (start <= text.size()) {
+          const std::size_t sep = text.find_first_of(",: ", start);
+          const std::size_t end = (sep == std::string::npos) ? text.size() : sep;
+          if (end > start) s.parsed_names.emplace_back(text.substr(start, end - start));
+          if (sep == std::string::npos) break;
+          start = sep + 1;
+        }
+      }
+    }
+    selected = s.parsed_all || contains(s.parsed_names, name);
+  }
+  return enh_gate(name, selected);
+}
+
 // PSXPORT_RENDER_PATH — the RENDER PATH tri-state: native | gte | psx
 // (docs/plans/render-path-tristate.md). A TextVar rather than an int so the settings file and the REPL
 // both read as the thing they select, and so a typo is REJECTED by render_path_parse instead of
@@ -453,7 +618,140 @@ bool selftest() {
   if (!negative)
     lucent::error("cfg", "selftest FAILED: a DECLARED knob set in the environment was misclassified ({} declared of {} scanned)",
                   a.declared.size(), a.set_in_env.size());
-  return positive && negative;
+
+  // ── PART 1: the DEFINITION of a byte-compare run, over ALL EIGHT input combinations ──────────
+  // compare_run_from() is the pure form of that definition, so this loop can reach the four
+  // combinations the live process cannot (PSXPORT_SBS / PSXPORT_SBS_MODE are env-only knobs; nothing
+  // in-process can move them). Both classes are required: the positive (every combination with any
+  // input set must suppress, and must NAME the input that did it) and the negative (the one
+  // combination with nothing set must NOT suppress). A gate only ever checked on the class it is
+  // supposed to block would pass if it blocked everything — which is a port that silently cannot
+  // enable an enhancement at all.
+  //
+  // THIS LOOP IS NOT SUFFICIENT ON ITS OWN, and that was measured rather than reasoned: the verifier
+  // deleted the suppression from enh_gate() outright (`const bool compare = false && compare_run(&why)`)
+  // and this loop still reported "0 disagreement(s)", because it never called the function the game
+  // reaches. PART 2 below is what closes that hole; this part is kept for the coverage it adds.
+  int enh_cases = 0, enh_bad = 0;
+  for (int bits = 0; bits < 8; ++bits) {
+    const bool oracle = (bits & 1) != 0, sbs = (bits & 2) != 0, mode = (bits & 4) != 0;
+    std::string why;
+    const bool got = compare_run_from(oracle, sbs, mode ? std::string_view("panes") : std::string_view(),
+                                      &why);
+    const bool want = oracle || sbs || mode;
+    const bool named = want ? (why.find("PSXPORT_") != std::string::npos) : why.empty();
+    ++enh_cases;
+    if (got != want || !named) {
+      ++enh_bad;
+      lucent::error("cfg", "selftest FAILED: compare_run(oracle={} sbs={} sbs_mode={}) = {} (want {}), "
+                           "why=\"{}\"", oracle, sbs, mode ? "panes" : "", got, want, why);
+    }
+  }
+  // The DENOMINATOR, printed whether or not anything failed: "the definition is fine" and "the
+  // definition was never exercised" must not read the same.
+  lucent::info("cfg", "selftest: compare_run_from() exercised over {} of 8 input combination(s) "
+                      "(1 must honour, 7 must suppress) -> {} disagreement(s)", enh_cases, enh_bad);
+  const bool defn_ok = (enh_cases == 8) && (enh_bad == 0);
+
+  // ── PART 2: THE SHIPPING PATH — enh_gate() itself, driven mid-process ─────────────────────────
+  // The function the game actually reaches, exercised over both classes, in ONE process, with the
+  // suppression input MOVED BETWEEN CASES AND NOTHING RESET IN BETWEEN. That last clause is the whole
+  // design, and it gates two properties that were previously asserted only in comments:
+  //
+  //   * enh_gate() consults compare_run() at all. Delete the suppression and case 2 honours an
+  //     enhancement under PSXPORT_ORACLE — which is a CONTAMINATED byte-compare oracle.
+  //   * cv_oracle is re-read on EVERY call, so the REPL can still turn the oracle on (or off) after
+  //     the first gate call. Bind it once and case 2 keeps case 1's answer.
+  //
+  // The lever is the RUNTIME LAYER of PSXPORT_ORACLE — i.e. set_runtime(), the REPL's own entry point,
+  // not a test-only back door — because a CVar's environment Override is bound once per process and
+  // cannot be moved by setenv() after the fact. Whatever the Runtime layer held is restored at the end.
+  //
+  // WHY THIS REFUSES IN A COMPARE RUN instead of adapting to one: reaching the HONOUR class would mean
+  // forcing PSXPORT_ORACLE off in a process that IS an oracle run, transiently un-suppressing every
+  // enhancement in the run this gate exists to protect. The other direction (a plain run transiently
+  // looking like an oracle run for the duration of case 2) suppresses rather than contaminates, which
+  // is why it is allowed. So in a compare run the selftest FAILS and says what it could not exercise —
+  // it does not quietly return true over an unexercised gate.
+  // The key is NOT a knob and its name says so, because driving the real gate makes the real gate LOG:
+  // the lines below are a genuine `ENHANCEMENT ACTIVE` and a genuine `SUPPRESSED` notice, and a reader
+  // scanning a boot log must not read them as this run's configuration. Hence the bracketing line too —
+  // an announcement whose absence would make the selftest's own output indistinguishable from the run's.
+  static const char kEnhKey[] = "PSXPORT_CFG_SELFTEST_ENH_NOT_A_REAL_KNOB";
+  bool gate_ok = false;
+  int gate_cases = 0, gate_bad = 0, gate_honour = 0, gate_suppress = 0;
+  {
+    std::string live_why;
+    if (compare_run(&live_why)) {
+      lucent::error("cfg",
+                    "selftest FAILED: the enhancement gate cannot be exercised in a byte-compare run "
+                    "({}). Reaching the HONOUR class would mean forcing the oracle off in a run that "
+                    "IS one. NOTHING of enh_gate() was checked — run the selftest in a plain process.",
+                    live_why);
+    } else {
+      lucent::info("cfg",
+                   "selftest: driving enh_gate() with the synthetic knob {} — every runtime:/"
+                   "ENHANCEMENT ACTIVE/SUPPRESSED line until the summary below is the SELFTEST's, not "
+                   "this run's configuration. PSXPORT_ORACLE's Runtime layer is moved and restored.",
+                   kEnhKey);
+      // What the Runtime layer held before, so a REPL `oracle 1` typed earlier in this run survives.
+      const bool had_runtime = cv_oracle.has(Layer::Runtime);
+      const std::string prior_runtime = cv_oracle.layer_text(Layer::Runtime);
+
+      // -1 = clear the Runtime layer, 0/1 = set it. `want` is what enh_gate(key, asked=true) must
+      // return. Cases 2 and 3 move the input in BOTH directions, so a one-way latch fails one of them.
+      struct GateCase { const char* what; int runtime; bool want; };
+      static const GateCase kGate[] = {
+          {"plain run, Runtime layer clear",                    -1, true},
+          {"PSXPORT_ORACLE moved to 1 mid-process (no reset)",    1, false},
+          {"PSXPORT_ORACLE moved back to 0 mid-process",          0, true},
+      };
+      int want_honour = 0, want_suppress = 0;
+      for (const GateCase& g : kGate) (g.want ? want_honour : want_suppress)++;
+
+      for (const GateCase& g : kGate) {
+        const bool moved = (g.runtime < 0) ? clear_runtime("PSXPORT_ORACLE")
+                                           : set_runtime("PSXPORT_ORACLE", g.runtime ? "1" : "0");
+        // Both classes of `asked` through the hook itself, plus the PSXPORT_ENH-token entry point
+        // enh_named(), which drags the parse and the cv_enh ladder read through with it. enh(CVar) is
+        // NOT reached from here — it is the one-line forwarder enh_gate(v.name(), v.get()) and would
+        // need a knob declared in the registry purely to call it; tests/test_config_enh.cpp case 7
+        // drives it over both classes instead. Stated because an unlisted entry point reads as covered.
+        const bool asked = enh_gate(kEnhKey, true);
+        const bool unasked = enh_gate(kEnhKey, false);
+        const bool named = enh_named(kEnhKey);   // resolves through cv_enh; unset -> not selected
+        const bool ok = moved && asked == g.want && !unasked && !named;
+        ++gate_cases;
+        (g.want ? gate_honour : gate_suppress)++;
+        if (!ok) {
+          ++gate_bad;
+          lucent::error("cfg",
+                        "selftest FAILED: {} -> enh_gate(asked=true) = {} (want {}), "
+                        "enh_gate(asked=false) = {} (want 0), enh_named() = {} (want 0), "
+                        "ladder move accepted = {}",
+                        g.what, asked, g.want, unasked, named, moved);
+        }
+      }
+
+      if (had_runtime)
+        cv_oracle.set_text(Layer::Runtime, prior_runtime);
+      else
+        cv_oracle.clear(Layer::Runtime);
+
+      // The denominator AND the blind spot, printed on the way through whether or not anything failed.
+      lucent::info("cfg",
+                   "selftest: enh_gate() — THE SHIPPING PATH — driven over {} configuration(s) in one "
+                   "process ({} must honour, {} must suppress; expected {}/{}) -> {} disagreement(s). "
+                   "BLIND SPOT: only cv_oracle can be moved in-process, so the SBS half of the "
+                   "suppression is covered by compare_run_from() above and by "
+                   "tests/test_config_enh.cpp; the notice TEXT needs a log sink and is gated there too.",
+                   gate_cases, gate_honour, gate_suppress, want_honour, want_suppress, gate_bad);
+      gate_ok = (gate_cases == 3) && (gate_bad == 0) && (gate_honour == want_honour) &&
+                (gate_suppress == want_suppress);
+    }
+  }
+
+  return positive && negative && defn_ok && gate_ok;
 }
 
 // ── mutation from outside ───────────────────────────────────────────────────────────────────────
@@ -534,6 +832,21 @@ void reset_for_test() {
     v->clear(Layer::Override);
     v->mEnvBound = false;
   }
+  // The enhancement gate's state is an environment binding too — the SBS cache literally is one, and
+  // the warn-once registers are "what this configuration has already announced". A test that
+  // re-configures the environment and then measures the previous configuration's silence would be
+  // measuring the reset it forgot to ask for, so this is not separable.
+  EnhState& s = enh_state();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  s.sbs_bound = false;
+  s.sbs = false;
+  s.sbs_mode.clear();
+  s.warned_suppressed.clear();
+  s.warned_active.clear();
+  s.warned_nameless = false;
+  s.parsed_text = "\x01";
+  s.parsed_all = false;
+  s.parsed_names.clear();
 }
 
 }  // namespace psx::config

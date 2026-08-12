@@ -67,6 +67,54 @@ extern TextVar cv_settings_path;
 // psxport_settings.ini, written by the F1 overlay (runtime/recomp/mods.cpp).
 extern BoolVar cv_fps60;
 
+// PSXPORT_ENH=<name,name|all> — the sanctioned pc_enh class: deliberate, MEANINGFUL guest-state
+// changes on top of the faithful engine. Read it through enh_named() / enh(), never by parsing the
+// text at a call site. Persistable: an enhancement selection is a user preference, the class the
+// Value layer exists for (cf. cv_fps60).
+//
+// MIGRATED 2026-08-12 (Tomba2Engine kanban #92). It used to be read by cfg_enh() straight out of
+// lucent::config into a function-local SEEDED STATIC, which cost three things: no Value layer (the
+// settings file could not select an enhancement), no Runtime layer (nor could the REPL), and — because
+// the static was seeded on the first call and never re-read — no way for anything to change the answer
+// later in the process, including the suppression below. Gate: tests/test_config_enh.cpp.
+extern TextVar cv_enh;
+
+// ── the enhancement gate ────────────────────────────────────────────────────────────────────────
+// compare_run() is THE definition of "this run is a byte-compare run", and the reason it is a named
+// framework function rather than three reads at each call site: megamanx4/game/core/enhancements.cpp
+// had to keep a SECOND copy of that expression, and two copies of the definition of what a
+// byte-compare IS is the worst possible duplication — if they diverge, one of them fails to recognise
+// an SBS variant and a contaminated compare still looks clean.
+//
+// `why`, when non-null, receives the INPUTS that made it a compare run ("PSXPORT_ORACLE",
+// "PSXPORT_SBS_MODE=panes", …) so the suppression notice can say what suppressed it. Empty when the
+// verdict is false.
+bool compare_run(std::string* why = nullptr);
+// The same decision as a PURE function of its three inputs, so it can be exercised over all eight
+// combinations without touching the process environment — including the four the live process cannot
+// reach, since PSXPORT_SBS / PSXPORT_SBS_MODE are env-only and nothing in-process can move them.
+// compare_run() is this, fed from the environment.
+//
+// EXERCISING THIS IS NOT EXERCISING THE GATE, and that has to be said here because believing otherwise
+// was the defect: selftest() (config.h) used to loop ONLY this predicate, and deleting the suppression
+// from enh_gate() left it reporting no disagreements. selftest() now drives enh_gate() itself and keeps
+// this loop for the SBS combinations only.
+bool compare_run_from(bool oracle, bool sbs, std::string_view sbs_mode, std::string* why = nullptr);
+
+// THE RESOLVE-TIME HOOK. `asked` is what the ladder resolved; the return is what the run may do.
+// Under a compare run it is false whatever the ladder said (docs/config-migration.md
+// "Qualification 2": a suppression is not a layer — it is one knob forcing another regardless of
+// layer) and the suppression is announced ONCE PER `key`, keyed on the knob's own identity.
+//
+// PER KNOB, NOT PER RUN, and that is the part to preserve: a run with two enhancements asked for must
+// NAME BOTH, or the second one reads as never having been asked for.
+bool enh_gate(const char* key, bool asked);
+// The two ways to reach it. `enh(v)` is for a game that declares its enhancements as its OWN CVars
+// (the shape megamanx4 uses); `enh_named(name)` is for a name selected through PSXPORT_ENH, and is
+// what cfg_enh() forwards to.
+bool enh(const CVar<bool>& v);
+bool enh_named(const char* name);
+
 // PSXPORT_RENDER_PATH — the render path: native | gte | psx (docs/plans/render-path-tristate.md).
 // Read it through render_path() below, never by parsing the text at a call site.
 extern TextVar cv_render_path;

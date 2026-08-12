@@ -206,6 +206,20 @@ exits 0 exactly like a passing one). There is intentionally **no `skip()`**: a s
   the address into `GameConfig` (`runtime/recomp/game_iface.h`) — reuse an existing field — and obey
   the honest-zero rule: a consumer reading `0` must fail fast or announce its blindness once, loudly
   (`runtime/recomp/ot_attr.cpp`'s `pool_range()` is the worked example).
+- `tests/test_config_enh.cpp` is the **anti-divergence gate on the enhancement suppression rule**. A
+  pc_enh knob must resolve to OFF under `PSXPORT_ORACLE` or either SBS form whatever the CVar ladder
+  said, and there must be exactly ONE definition of what a byte-compare run is: while `PSXPORT_ENH` was
+  env-only, a consuming game had to keep a second copy of the rule, and if two copies diverge one fails
+  to recognise an SBS variant while the contaminated compare still looks clean. The gate compares
+  `psx::config::compare_run_from()` against the hand-written three-input expression over all 8 input
+  combinations, asserts the suppression notice fires ONCE PER KNOB and NAMES both the knob and the input
+  that tripped it, and checks the migrated parse against the pre-migration body over 36 (value, name)
+  pairs. Two cases exist because sabotage showed the rest of the file could not see the defect: one
+  moves `PSXPORT_ORACLE` mid-process through `set_runtime()` with **no caches cleared** (every other case
+  resets between configurations, so none of them notices a gate that answers from a one-time binding),
+  and one is a TRIP-WIRE that fails when `PSXPORT_SBS`/`PSXPORT_SBS_MODE` become CVars while
+  `compare_run()` still reads the environment. `psx::config::selftest()` drives `enh_gate()` — the
+  shipping function, not the pure predicate beside it — over both classes in one process.
 - Tests link the `psxport` static archive, so only the objects a test references are pulled in. A
   unit that calls into the game substrate fails to LINK on the `generated/` symbols
   (`main_dispatch`, `g_rec_overlays`, `rec_func_index`) — that is the framework/game seam saying the

@@ -191,39 +191,21 @@ void cfg_loge(const char* chan, const char* fmt, ...) {
 // `report()` can say what oracle mode resolved to and from which layer.
 int oracle_mode(void) { return psx::config::cv_oracle.get() ? 1 : 0; }
 
-// PSXPORT_ENH=<name,name|all> — the sanctioned enhancement class. FORCE-SUPPRESSED under
-// PSXPORT_ORACLE or any SBS mode, so a stray .env can never contaminate a byte-compare. That
-// suppression is the whole point of this function living in cfg rather than at each call site.
+// PSXPORT_ENH=<name,name|all> — the sanctioned enhancement class, MIGRATED onto the CVar ladder
+// (Tomba2Engine kanban #92). The body used to live here: it read lucent::config::text("PSXPORT_ENH")
+// into a function-local SEEDED STATIC and applied the ORACLE/SBS suppression itself. Three things were
+// wrong with that and all three are gone — no Value/Runtime layer and no row in the CVar dump or the
+// environment audit; a one-shot seeding that froze the answer on the first call; and one global warning
+// naming the raw PSXPORT_ENH string, so a run with two enhancements set could not name both.
+//
+// This is now a C-callable forwarder onto psx::config::enh_named(), which is the ONE definition of the
+// suppression rule (psx::config::compare_run) — a game declaring its enhancements as its own CVars
+// reaches the same rule through psx::config::enh(). Two copies of "what a byte-compare run IS" is the
+// worst possible duplication: diverge, and one of them fails to recognise an SBS variant while the
+// contaminated compare still looks clean.
 int cfg_enh(const char* name) {
-  static bool seeded = false;
-  static bool suppressed = false, all = false;
-  static std::vector<std::string> names;
-  if (!seeded) {
-    seeded = true;
-    const std::string& e = lucent::config::text("PSXPORT_ENH");
-    if (!e.empty()) {
-      if (oracle_mode() || cfg_on("PSXPORT_SBS") || !lucent::config::text("PSXPORT_SBS_MODE").empty()) {
-        suppressed = true;
-        lucent::log(lucent::Level::Warn, "cfg",
-                    "PSXPORT_ENH=" + e + " SUPPRESSED: oracle/SBS run must stay enhancement-free");
-      } else if (e == "all") {
-        all = true;
-      } else {
-        size_t start = 0;
-        while (start <= e.size()) {
-          const size_t sep = e.find_first_of(",: ", start);
-          const size_t end = (sep == std::string::npos) ? e.size() : sep;
-          if (end > start) names.emplace_back(e.substr(start, end - start));
-          if (sep == std::string::npos) break;
-          start = sep + 1;
-        }
-      }
-    }
-  }
-  if (suppressed) return 0;
-  if (all) return 1;
-  for (const std::string& n : names) if (n == name) return 1;
-  return 0;
+  bootstrap_once();
+  return psx::config::enh_named(name) ? 1 : 0;
 }
 
 void cfg_dump(void) {

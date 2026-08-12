@@ -192,11 +192,87 @@ only if it is marked persistable. A `PSXPORT_SBS_LW_ADDR` written into `psxport_
 someone once ran a byte-trace is a new class of bug.
 
 **Qualification 2 — `PSXPORT_ENH` and `oracle_mode()` are a SUPPRESSION rule, not a layer.**
-`cfg.cpp:123-152` (`oracle_mode` at 123, `cfg_enh` at 132): `cfg_enh(name)` returns 0 unconditionally — with a warning — when
-`PSXPORT_ORACLE` or any SBS mode is on, *whatever the user asked for*. That is deliberate (a stray
-enhancement must never contaminate a byte-compare) and it is not expressible as a precedence ladder,
-because it is one CVar forcing another regardless of layer. Keep it as an explicit resolve-time hook
-with its own log line; do not try to model it as a layer, and do not lose the warning.
+`cfg_enh(name)` returns 0 unconditionally — with a warning — when `PSXPORT_ORACLE` or any SBS mode is
+on, *whatever the user asked for*. That is deliberate (a stray enhancement must never contaminate a
+byte-compare) and it is not expressible as a precedence ladder, because it is one CVar forcing another
+regardless of layer. Keep it as an explicit resolve-time hook with its own log line; do not try to
+model it as a layer, and do not lose the warning.
+
+**LANDED 2026-08-12 (Tomba2Engine kanban #92), and this is the worked example the rest of Group 4a
+should follow.** `PSXPORT_ENH` is now `cv_enh` (`config_vars.h`); the suppression is
+`psx::config::compare_run()` — the ONE definition of "this run is a byte-compare run" — consumed by the
+resolve-time hook `psx::config::enh_gate()`, reached either as `enh_named("name")` (a `PSXPORT_ENH`
+token; `cfg_enh` is now a C forwarder onto it) or as `enh(cv_my_bool)` (a game's own enhancement CVar).
+Three things the pattern had to get right, each of which is a trap for the next hook:
+
+1. **The warning is per KNOB, keyed on the knob's identity — not one flag for the run.** The old
+   function-local seeded static could only warn once, naming the raw `PSXPORT_ENH` string, so a run with
+   two enhancements set named one and the second read as never having been requested. That defect is
+   why `megamanx4/game/core/enhancements.cpp` reproduced the rule instead of calling it.
+2. **The seeded static also froze the answer.** Once the first call had parsed the environment nothing
+   could change it — which defeats the Runtime layer the migration exists to provide, and made it
+   impossible for one process to observe two configurations (i.e. impossible to test). The list is now
+   cached against the resolved TEXT, so a REPL write invalidates it.
+3. **The positive prints too.** `ENHANCEMENT ACTIVE` per knob: absence of a `SUPPRESSED` line otherwise
+   cannot be told apart from a gate that was never reached.
+
+`PSXPORT_SBS` / `PSXPORT_SBS_MODE` are deliberately still un-migrated — they belong to the SBS group,
+and migrating a knob as a side effect of migrating another is how a group ends up half-done with no gate
+on it. `compare_run()` reads them through the same `detail::env_*` forwarders `cfg_on`/`cfg_str` use and
+notes the read once, so they show up as legacy-observed rather than unknown.
+
+**AND THAT CHOICE IS NOT COST-FREE — THE COST FALLS ON GROUP 4a ITSELF** — the group below lists
+both names as remaining work, so read this before starting them. `compare_run()` binds the two SBS
+inputs ONCE per process (the per-frame gate cannot afford `note_legacy_read`'s registry lock per call,
+and an env-only knob has no layer that could move). Migrate either onto the ladder and two things break
+in the same instant: a **Value or Runtime value for it would never reach the gate**, because
+`compare_run()` calls `detail::env_bool`/`env_text` directly rather than the CVar — the ladder bypassed
+for precisely the two inputs that decide whether a byte-compare is protected — and the **one-time cache
+would freeze a value that can now move mid-run**, which is the pre-migration `cfg_enh` seeded-static
+defect reappearing one layer down. So the migration of those two is not "declare a CVar and change the
+call site": it must switch `compare_run()` to the CVars and delete the cache in the same commit.
+**This is enforced, not merely written down:** `test_migrating_the_sbs_knobs_must_update_compare_run`
+(`tests/test_config_enh.cpp`) fails the moment either name becomes a declared CVar, in the same repo as
+the code that has to change with it.
+
+**WHAT THIS COSTS THE CONSUMER THAT ALREADY DUPLICATED THE RULE** — audited against
+`megamanx4/game/core/enhancements.cpp` as it stands, not remembered. The operator deletes the
+`compare_run` expression (its lines 102–114), the `g_warned_suppressed` register, and the HONEST NOTE ON
+THE DUPLICATION; `x4::enh()` survives as a thin wrapper around `psx::config::enh(v)` because the
+framework has no notion of X4's *second* half — the `kUnimplemented` / "DECLARED but NO feature reads it
+yet" register — so "every read goes through one chokepoint `x4::enh()`" stays true. **Six behaviour
+changes fall out, and every one of them must be in the landing commit's message even though four are
+improvements**, because "an improvement" and "a silent change" are the same thing to the next reader:
+
+1. **An OFF knob in a compare run goes quiet.** X4 warns `SUPPRESSED` for any knob it is asked about;
+   `enh_gate` warns only when `asked` is true, on the grounds that an enhancement nobody requested being
+   off is not news. Almost certainly better — and invisible today, because
+   `audit_declared_enhancements()` only calls `enh()` for knobs the user turned ON. It becomes visible
+   at the first real call site, which will call `enh()` unconditionally every frame.
+2. **The `SUPPRESSED` line gains the input that tripped it** — `… enhancement-free (PSXPORT_ORACLE)`.
+   `megamanx4/docs/config.md` quotes the old string exactly and must be updated with it.
+3. **A line that did not exist appears:** `[cfg] <knob> ENHANCEMENT ACTIVE: this run deliberately
+   diverges from recomp_path`. For X4's three knobs it **contradicts** the port's own
+   `DECLARED but NO feature reads it yet — this run did NOTHING with it`, and both print for the same
+   knob in the same run. The framework cannot know a knob has no consumer, so the pair is the honest
+   reading ("asked for, not implemented") — but `megamanx4/docs/config.md`'s verified paragraph ("all
+   three set → three DECLARED-but-unread lines") is now six lines and is wrong as written.
+4. **The warn-once register loses a fixed capacity.** X4's is `const void* [8]`, and `warn_once` returns
+   *true on every call* once all eight slots are taken — i.e. a 9th knob turns a once-per-run notice into
+   a per-call log flood. The framework's is a `std::vector<std::string>`.
+5. **The register is keyed by NAME, not by CVar address.** Two entry points (`enh(cv)` and
+   `enh_named("…")`) reaching the same knob now share one entry instead of warning twice.
+6. **`reset_for_test()` clears the framework register**; X4's file-scope statics were never resettable,
+   so a test could observe only one configuration per process — the same defect as the seeded static, in
+   the consumer.
+
+Gates: `tests/test_config_enh.cpp` (12 cases, 110 checks — the framework verdict vs the hand-written
+three-input expression over all 8 combinations; the oracle moved mid-process with NO caches cleared; the
+trip-wire above) plus `psx::config::selftest()`, which drives **`enh_gate()` itself** over both classes.
+That last point was a real defect, found by sabotage: the selftest used to loop only the pure
+`compare_run_from()` predicate, so deleting the suppression from `enh_gate()` outright left it printing
+"0 disagreement(s)" over a **contaminated oracle**. A selftest beside the shipping path is not a gate on
+it.
 
 **Qualification 3 — `PSXPORT_DEBUG` and `PSXPORT_LOG_FILE` must NOT become ordinary CVars.** See
 below. They are lucent's own configuration, resolved inside lucent from a build-time-baked name.
@@ -289,6 +365,13 @@ program does, so each needs a runtime check as well as a unit test.
   `oracle_mode()`/`cfg_enh()`'s suppression rule (qualification 2) lands here, keeping its warning.
   *Gate:* the boot gate at each of the 5 documented flag combinations reaches at least as far as
   before; `PSXPORT_ENH=all PSXPORT_ORACLE=1` still logs the suppression warning and returns 0.
+  **`PSXPORT_ENH` LANDED 2026-08-12** — see qualification 2 for the pattern the remaining six should
+  copy. `PSXPORT_ORACLE` and `PSXPORT_NOPACE` were already migrated; `PSXPORT_GATE`,
+  `PSXPORT_RENDER_PSX`, `PSXPORT_SBS` and `PSXPORT_SBS_MODE` remain. **`PSXPORT_SBS` and
+  `PSXPORT_SBS_MODE` carry a prerequisite**: `psx::config::compare_run()` reads them from the
+  environment and caches them once, so migrating them without changing that function bypasses the
+  ladder for the two inputs that protect a byte-compare. Qualification 2 spells it out;
+  `test_migrating_the_sbs_knobs_must_update_compare_run` fails if you forget.
 - **4b, presentation and lifetime (14):** `VK_HEADLESS`, `VK_WINDOW`, `WINDOWED`, `FULLSCREEN`,
   `PRESENT_SINK`, `NOAUDIO`, `NO_FMV`, `WATCHDOG`, `WATCHDOG_BOOT`, `REPL`, `DEBUG_SERVER`,
   `AUTO_SKIP`, `NATIVE_FRAMES`, `GPU_DEBUG`. Note `WATCHDOG`'s default of 3 s and `WATCHDOG_BOOT`'s
@@ -372,7 +455,7 @@ quoting a call). The class map prints any framework-live knob it does not cover;
 | `PSXPORT_AUTO_SKIP` | string | 2 | `runtime/recomp/native_boot.cpp:297` · `runtime/recomp/native_boot.cpp:344` | config.md:697 |
 | `PSXPORT_DEBUG_SERVER` | bool | 3 | `runtime/recomp/dbg_server.cpp:461` · `runtime/recomp/sbs.cpp:2091` · `runtime/recomp/native_boot.cpp:305` | config.md:559 |
 | `PSXPORT_DUALVIEW` | string | 1 | `runtime/recomp/native_boot.cpp:615` | **none** |
-| `PSXPORT_ENH` | string | 1 | `runtime/recomp/cfg.cpp:138` | config.md:90,127 |
+| `PSXPORT_ENH` | string | 1 | **MIGRATED 2026-08-12** — `cv_enh`, gate `psx::config::enh_gate` (`runtime/recomp/config.cpp`) | config.md "PC enhancements" |
 | `PSXPORT_FMV_DCONLY` | bool | 1 | `runtime/recomp/fmv_decode.cpp:269` | **none** |
 | `PSXPORT_FMV_FPS` | int(str) | 1 | `runtime/recomp/native_fmv.cpp:215` | **none** |
 | `PSXPORT_FMV_MAXFRAMES` | int | 2 | `runtime/recomp/native_fmv.cpp:199` · `tools/fmv_export/fmv_export.cpp:282` | **none** |

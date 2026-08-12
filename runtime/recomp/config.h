@@ -60,10 +60,26 @@ void report();
 void report_once();
 void report_exit_audit();
 
-// Proof, in the shipping library, that the audit can produce a positive AND a negative — it is run
-// against a name that MUST come back unknown and one that MUST NOT. An audit only ever checked
-// against the class it is supposed to stay silent about is not an instrument.
-// See PSXPORT_CFG_SELFTEST_DECLARED in config_vars.h.
+// Proof, in the shipping library, that two instruments can each produce a positive AND a negative.
+//
+//  1. THE ENVIRONMENT AUDIT, run against a name that MUST come back unknown and one that MUST NOT. An
+//     audit only ever checked against the class it is supposed to stay silent about is not an
+//     instrument. See PSXPORT_CFG_SELFTEST_DECLARED in config_vars.h.
+//  2. THE ENHANCEMENT GATE — and specifically enh_gate() / enh() / enh_named(), the functions a game
+//     reaches, not the pure compare_run_from() predicate beside them. That distinction is the whole
+//     point: an earlier version looped only the predicate, so deleting the ORACLE/SBS suppression from
+//     enh_gate() outright still printed "0 disagreement(s)" while an PSXPORT_ORACLE run would have
+//     enabled every enhancement — a contaminated byte-compare oracle, certified clean.
+//
+// TWO THINGS A CALLER MUST KNOW, because this is not a read-only diagnostic:
+//  * It MOVES PSXPORT_ORACLE's Runtime layer (via set_runtime) and restores whatever was there. That
+//    is the only lever that can change the gate's input mid-process, and driving the gate through it is
+//    also what gates "cv_oracle is re-read on every call so the REPL can move it".
+//  * It REFUSES — returns false, saying what it did not exercise — when the process ALREADY is a
+//    byte-compare run. Reaching the honour class would mean forcing the oracle off in a run that IS
+//    one. So do not call this from an oracle/SBS boot path and read the result as a verdict on the
+//    configuration; it is a verdict on the code, and it wants a plain process.
+// The gate's own log lines during the run are marked as the selftest's, since it drives the real gate.
 bool selftest();
 
 // --- mutation from outside -------------------------------------------------------------------------

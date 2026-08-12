@@ -61,7 +61,7 @@ target, not a knob). It is asserted in `tests/test_config_cvar.cpp`.
 
 **Migrated onto CVars** (the inventory is `runtime/recomp/config_vars.h` — grep it, it is the list):
 `PSXPORT_ORACLE`, `PSXPORT_NOAUDIO`, `PSXPORT_NOPACE`, `PSXPORT_WATCHDOG`, `PSXPORT_WATCHDOG_BOOT`,
-`PSXPORT_ASSET_DIR`, `PSXPORT_SETTINGS`, `PSXPORT_FPS60`, `PSXPORT_REPL`. Plus `PSXPORT_DEBUG` and
+`PSXPORT_ASSET_DIR`, `PSXPORT_SETTINGS`, `PSXPORT_FPS60`, `PSXPORT_REPL`, `PSXPORT_ENH`. Plus `PSXPORT_DEBUG` and
 `PSXPORT_LOG_FILE`, declared `external`: **lucent** resolves those two for itself (it is built with
 `LUCENT_CHANNEL_ENV` / `LUCENT_LOG_FILE_ENV`, see `cmake/psxport.cmake`), and nothing here reads or
 overrides them — they are declared only so the audit does not report the port's two most-used knobs
@@ -71,12 +71,18 @@ as unknown. `tests/test_lucent_channel_env.cpp` is the gate on that and must sta
 to the environment exactly as before for any name that is not a declared CVar, and record the read so
 the audit can tell an un-migrated knob from a typo. No knob changed meaning.
 
-Two DELIBERATE behaviour changes, listed here because "nothing may silently change meaning":
+FOUR DELIBERATE behaviour changes, listed here because "nothing may silently change meaning" (the
+count was stale at "two" while the list already held three — if you add one, move the number):
 - `PSXPORT_FPS60` now **works**. It resolves through the ladder (`env` over the settings file's
   `fps60=` line), and the boot line says which layer it came from.
 - `PSXPORT_WATCHDOG` used to be `atoi(cfg_str(...))`, and `atoi("abc")` is `0`, so a typo silently
   **disabled the watchdog**. A non-integer value now logs a warning naming it and falls back to the
   declared default of 3.
+- `PSXPORT_ENH` (2026-08-12, Tomba2Engine kanban #92) gains the Value and Runtime layers, a row in the
+  CVar dump and the env audit, and **a suppression notice per KNOB instead of one per run** — plus a
+  positive `ENHANCEMENT ACTIVE` line, which did not exist. The parse is unchanged (36-pair comparison
+  against the old body); the one behaviour change is that an EMPTY name is now refused with a
+  `[cfg:error]` instead of answering YES under `PSXPORT_ENH=all`. See the pc_enh section below.
 - `PSXPORT_REPL` is now **REFUSED, not ignored, by a run that cannot service it** — see
   "`PSXPORT_REPL` is serviced by ONE loop" below. Its value resolves identically (checked against the
   pre-migration `lucent::config::flag` body over 7 inputs in
@@ -127,7 +133,7 @@ with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now c
 | `PSXPORT_GATE=1` | recomp_path + pc_render | Substrate runs gameplay; native renderer. Works, render issues. |
 | `PSXPORT_RENDER_PSX=1` | pc_faithful + psx_render | Substrate renderer only. Faithful still broken. |
 | `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` | recomp_path + psx_render | Substrate gameplay + substrate renderer. **NOT the reference** — see below. |
-| **`PSXPORT_ORACLE=1`** | recomp_path + psx_render, enhancement-free | **THE PICTURE REFERENCE.** Implies the row above AND forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. `cfg_enh` is force-suppressed under it. |
+| **`PSXPORT_ORACLE=1`** | recomp_path + psx_render, enhancement-free | **THE PICTURE REFERENCE.** Implies the row above AND forces pure OT painter order, so no native band/depth/widescreen/fps60 decision reaches the picture. Every pc_enh knob is force-suppressed under it, per knob and by name — `psx::config::compare_run()`. |
 | `PSXPORT_SBS_MODE=full` | dual-core byte-compare | Core A = pc_faithful, Core B = recomp_path. Job#1 harness. |
 
 **Why the bare `PSXPORT_GATE=1 PSXPORT_RENDER_PSX=1` pair is not the reference** (this table called it
@@ -295,8 +301,9 @@ cfg_on("PSXPORT_FOO")     // boolean config/feature flag: env present and != "0"
 cfg_int("PSXPORT_FOO", d) // integer-valued flag (frame number, scale, port…), default d (cached)
 cfg_str("PSXPORT_FOO")    // string-valued flag (paths, "x,y" coords); NULL if unset    (cached)
 cfg_dbg("chan")           // is debug CHANNEL `chan` on? set at runtime via the REPL `debug chan,chan…`
-cfg_enh("name")           // is PC ENHANCEMENT `name` on? PSXPORT_ENH=<name,name|all>; force-suppressed
-                          // under PSXPORT_ORACLE / SBS so byte-compares stay enhancement-free
+cfg_enh("name")           // is PC ENHANCEMENT `name` on? A C-callable forwarder onto the CVar-ladder
+                          // gate psx::config::enh_named(); force-suppressed under PSXPORT_ORACLE / SBS
+                          // so byte-compares stay enhancement-free. New C++ calls the gate directly.
 cfg_logf("chan", fmt, …)  // THE diagnostic print: no-op unless chan enabled; "[chan] msg\n" to stderr
                           // or PSXPORT_LOG_FILE=<path> (append, line-buffered). One line per site —
                           // never write `if (cfg_dbg(chan)) fprintf(stderr, …)` two-steps.
@@ -332,21 +339,67 @@ cfg_loge("chan", fmt, …)  // ("[cd:warn]" / "[cd:error]") so they stay greppab
   Still: classify before you wire (boolean → `cfg_on`/`cfg_dbg`; anything whose value is read → `cfg_str`/`cfg_int`).
 - `cfg_dump()` logs every active `PSXPORT_*` var once (boot-time visibility).
 
-## PC enhancements: `PSXPORT_ENH=<name,name|all>` (USER 2026-07-16)
+## PC enhancements: the gate is `psx::config::enh*` (USER 2026-07-16; ON THE LADDER 2026-08-12)
 The third behavior class (see CLAUDE.md vocabulary): deliberate, MEANINGFUL guest-state changes on
 top of the faithful engine — unlike pc_render (host-only picture) and pc_skip (multi-step collapse,
-no meaningful end-state change). Gated per-name via `cfg_enh("name")`; `all` is the umbrella.
-`cfg_enh` is force-suppressed (one-time `[cfg]` notice) whenever `PSXPORT_ORACLE` or SBS is active,
-so an oracle/SBS byte-compare can never be clobbered by a stray `.env` — the suppression lives in
-`cfg.c`, not in per-call-site discipline.
+no meaningful end-state change).
+
+**There are TWO ways to declare an enhancement, and ONE gate.**
+
+| how the knob is declared | who declares it | how a call site asks |
+|---|---|---|
+| a token in `PSXPORT_ENH=<name,name\|all>` | the framework (`cv_enh`), for names in the table below | `psx::config::enh_named("name")` — or `cfg_enh("name")` from C |
+| its OWN `psx::config::BoolVar` | the consuming game, for a per-title enhancement | `psx::config::enh(cv_my_knob)` |
+
+Both go through `psx::config::enh_gate()`, whose suppression input is `psx::config::compare_run()` —
+**THE definition of "this run is a byte-compare run"**: `cv_oracle` OR `PSXPORT_SBS` OR a non-empty
+`PSXPORT_SBS_MODE`. Under any of those the gate returns false **whatever the ladder resolved**, so a
+stray `.env` can never clobber an oracle/SBS compare. THREE properties of the notice matter (if you add
+one, move the number — this said "Two" over three bullets):
+
+- it names the input that suppressed it — `[cfg:warn] <knob> SUPPRESSED: oracle/SBS run must stay
+  enhancement-free (PSXPORT_SBS_MODE=panes)`;
+- it fires **once per KNOB**, not once per run. A run with two enhancements asked for must NAME BOTH,
+  or the second reads as never having been requested.
+- the POSITIVE prints too — `[cfg] <knob> ENHANCEMENT ACTIVE: this run deliberately diverges from
+  recomp_path` — so "no SUPPRESSED line" cannot be confused with "the gate was never reached".
+
+`compare_run()` is a named framework function precisely so there is only one copy of it: while
+`cfg_enh` was env-only, `megamanx4/game/core/enhancements.cpp` had to REPRODUCE the three-input
+expression to get per-knob warnings, and two copies of the definition of what a byte-compare IS is the
+worst possible duplication — diverge, and one of them fails to recognise an SBS variant while the
+contaminated compare still looks clean. `tests/test_config_enh.cpp` asserts the framework's verdict
+against the hand-written expression over all eight input combinations, and `psx::config::selftest()`
+drives **`enh_gate()` itself** — the function the game reaches — over both classes in one process,
+moving `PSXPORT_ORACLE` mid-run through `set_runtime()` with nothing reset in between. That last detail
+is the gate, not a flourish: an earlier selftest looped only the pure `compare_run_from()` predicate, so
+deleting the suppression from `enh_gate()` outright still printed "0 disagreement(s)" — a contaminated
+oracle certified clean by its own selftest.
+
+**THE HALF OF THE SUPPRESSION THAT IS NOT ON THE LADDER, and what it will cost.** `compare_run()` reads
+`PSXPORT_SBS` and `PSXPORT_SBS_MODE` through `detail::env_bool` / `detail::env_text` and caches them
+once per process. That is correct *today* — they are env-only knobs, so binding once is their actual
+lifetime — and it becomes WRONG on the commit that migrates them (`docs/config-migration.md` Group 4a
+lists both as remaining work, so this is scheduled, not hypothetical). Two things break at once: a
+settings-file or REPL value for either would be invisible to the gate, i.e. the ladder bypassed for
+exactly the two inputs that decide whether a byte-compare is protected; and the one-time cache would
+freeze a value that can now move mid-run, which is the pre-migration `cfg_enh` defect returning in a new
+place. **When you migrate them, `compare_run()` must read the CVars and lose the cache** — and this is
+not left to a reader noticing this paragraph: `test_migrating_the_sbs_knobs_must_update_compare_run` in
+`tests/test_config_enh.cpp` goes RED the moment either name is declared as a CVar.
+
+**One deliberate behaviour change from the pre-migration `cfg_enh`:** an EMPTY name is refused with a
+`[cfg:error]`, where the old body answered YES to `cfg_enh("")` under `PSXPORT_ENH=all` (the `all`
+short-circuit never looked at the name). Every other input resolves identically — gated by a 36-pair
+comparison against the old parse in `tests/test_config_enh.cpp`.
 
 **Registered enhancement names live in the BEHAVIOR-DIFFERENCE MAP** (`docs/behavior-map.md`,
 managed by `tools/behavior.py`) — the fourth tracking-stack axis, which records every intentional
 divergence from recomp_path (not just pc_enh) keyed by guest-memory affect. pc_enh entries are the
 `affect: full` group (they change canon guest state and are the ONLY class that must be
 force-suppressed under ORACLE/SBS). When you land an enhancement, register it there
-(`behavior.py set <name> --class pc_enh --affect full --flag 'cfg_enh("<name>")' ...`) and add its
-`PSXPORT_ENH` token to the list below.
+(`behavior.py set <name> --class pc_enh --affect full --flag 'enh_named("<name>")' ...` — or the
+game's own CVar name for the BoolVar shape) and add its `PSXPORT_ENH` token to the list below.
 
 | name | effect | status |
 |---|---|---|

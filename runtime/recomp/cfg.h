@@ -25,9 +25,16 @@ const char* cfg_str(const char* name);
 int         oracle_mode(void);
 // Is PC ENHANCEMENT `name` enabled? Driven by PSXPORT_ENH=<name,name|all>. Enhancements are the
 // sanctioned third behavior class: deliberate, meaningful guest-state changes (expanded object
-// load/unload, faster fades/transitions). Force-suppressed (returns 0, one-time notice) whenever
-// PSXPORT_ORACLE or SBS is active, so oracle byte-compares can never be clobbered by a stray .env.
-// Register every name in docs/config.md.
+// load/unload, faster fades/transitions). Force-suppressed (returns 0, a notice PER KNOB) whenever
+// PSXPORT_ORACLE or either SBS form is active, so oracle byte-compares can never be clobbered by a
+// stray .env. Register every name in docs/config.md.
+//
+// THIS IS A C-CALLABLE FORWARDER, not the mechanism. PSXPORT_ENH is a CVar (config_vars.h: cv_enh) and
+// the gate is psx::config::enh_named() -> enh_gate(), whose suppression input psx::config::compare_run()
+// is the ONE definition of "this run is a byte-compare run". New C++ calls those directly; a game whose
+// enhancements are its OWN CVars calls psx::config::enh(cv_my_knob) and gets the identical rule rather
+// than a second copy of it. An EMPTY name is REFUSED with an error (the pre-migration body answered YES
+// to it under PSXPORT_ENH=all) — see docs/config.md "PC enhancements".
 int         cfg_enh(const char* name);
 int         cfg_dbg(const char* chan);            // is debug CHANNEL `chan` enabled? (set via REPL `debug`)
 void        cfg_dbg_set(const char* chans);       // REPL `debug <chans|all>`: enable diagnostic channels
