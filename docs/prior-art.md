@@ -86,6 +86,10 @@ before it is clean and the USER has approved.
    names flow out, their symbol map flows in. Already vendored, so the plumbing exists.
 2. **`psx_tomba`** — our Tomba! 2 engine RE is deep; format/tooling knowledge transfers even though engine
    code does not.
-3. **Our own tooling, which has no equivalent elsewhere** — `tools/exe_similarity.py` with its *calibrated*
-   thresholds (64.2% positive control, 2.3% negative, 12.5% cross-studio SDK ceiling) is a validated
-   lineage metric; nobody else appears to have one. Same for the registry/gate patterns and `gpuguard`.
+3. **Our own tooling, which has no equivalent elsewhere** — `tools/exe_similarity.py` (Jaccard over
+   code-plausible windows, calibrated against the MEASURED cross-studio null distribution: n=67, mean 3.91%,
+   max 11.89%, stratified by PSY-Q version; positives 57.5% and 47.0% at 4.8x and 4.0x that max) plus the
+   independent `tools/lineage_probe.py` (whole-function + exclusive-string evidence). Both were recalibrated
+   on 2026-08-12 after the original single "12.5% SDK ceiling" was falsified by a null pair reading 33.4%;
+   both now ship a `--selftest` that gates positives AND negatives. Nobody else appears to have either.
+   Same for the registry/gate patterns and `gpuguard`.

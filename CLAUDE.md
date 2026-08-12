@@ -137,7 +137,9 @@ discard every command while the harness ran its own default lockstep — that is
 to blame a `newgame` on a run that never left attract mode. Such a run now **exits 2** naming what it
 did not service; drive an SBS run with `PSXPORT_SBS_AUTONAV` / `PSXPORT_SBS_WARP` /
 `PSXPORT_SBS_PAD_REPLAY` / `PSXPORT_DEBUG_SERVER` instead (`docs/config.md`,
-`runtime/recomp/repl_service.h`).
+`runtime/recomp/repl_service.h`). **`PSXPORT_DUALCORE` and `PSXPORT_SELFTEST` refuse the same way** —
+they are the other two loops a game's `main()` dispatches to that own the process without a REPL pump,
+and each names its own drive mechanism, not the SBS one.
 
 Common knobs: `PSXPORT_NOAUDIO=1` · `PSXPORT_DEBUG=cd,gpu` (channel-gated diagnostics) ·
 `PSXPORT_FORCE_RECOMP=1` · `PSXPORT_WATCHDOG=<sec>` · `PSXPORT_REPL=1` · `PSXPORT_SNAP_AT=<frames>` ·

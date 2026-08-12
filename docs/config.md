@@ -182,10 +182,22 @@ so a REPL `press`/`newgame` against the selected pane would inject a divergence 
 reports as a port bug, and driving both cores identically means duplicating `navStep` +
 `PSXPORT_SBS_WARP`, which already do it and already refuse when the nav addresses are unset.
 
-**Still unguarded (same defect, not fixed here):** `PSXPORT_DUALCORE` (`dualcore.cpp`) and
-`PSXPORT_SELFTEST` (`selftest.cpp`) own the process the same way and also never read stdin. The guard
-is game-agnostic and takes a loop name — `psx::repl_service::refuse_if_unserviced("DualCore")` — but
-those two paths were outside this change's scope and were not measured.
+**All three pumpless loops guard (2026-08-12).** `PSXPORT_DUALCORE` (`dualcore.cpp`) and
+`PSXPORT_SELFTEST` (`selftest.cpp`) own the process exactly as SBS does and also never read stdin, so
+each now calls the guard first thing — before booting anything — with its own loop name. Leaving them
+for later was itself the swallow this guard exists to stop: the gap was recorded in a comment, and a
+comment does not refuse anything.
+
+Each loop gets its OWN "use this instead" paragraph from `repl_service.h`'s `drive_advice()` registry
+(`SBS` → the two-core mechanisms above; `DualCore` → it drives itself, `PSXPORT_DC_ALL=1` is the only
+knob; `selftest` → a fixed script, `PSXPORT_SELFTEST_VERBOSE=1` is the only knob). A loop name nobody
+registered gets `NO DRIVE MECHANISM IS REGISTERED for a loop called "<name>"` rather than the SBS
+advice — which is what the text used to do for every caller, since the paragraph was hardcoded while
+the loop name was a parameter. `test_repl_unserviced_refusal.cpp` scans every call site in the runtime
+and fails if one passes an unregistered name, so the typo case (`"sbs"`) cannot no-op.
+
+No new knob: the guard reads the existing `PSXPORT_REPL` CVar, and the loop name is a compile-time
+string literal at the call site, not configuration.
 
 The per-fork shortcut bool is `Game::mPcSkip` — see the class comment on `runtime/recomp/game.h`. Default
 `mPcSkip=true` (shortcuts on); SBS forces it `false` so the faithful branch of every fork is exercised.
