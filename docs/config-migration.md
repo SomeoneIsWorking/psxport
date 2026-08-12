@@ -400,7 +400,7 @@ quoting a call). The class map prints any framework-live knob it does not cover;
 | `PSXPORT_PCTRAP_SKIP` | hex-int | 1 | `runtime/recomp/interp.cpp:540` | **none** |
 | `PSXPORT_PRESENT_SINK` | string | 1 | `runtime/recomp/gpu_vk.cpp:185` | **none** |
 | `PSXPORT_RENDER_PSX` | string | 1 +game:spyro | `runtime/recomp/native_boot.cpp:610` | config.md:12,13 |
-| `PSXPORT_REPL` | bool | 1 +game:spyro | `runtime/recomp/native_boot.cpp:292` | config.md:559 |
+| `PSXPORT_REPL` | bool | 1 +game:spyro | **MIGRATED 2026-08-12** → `cv_repl` (`config_vars.h`); read by `native_boot.cpp` (the only pump) + `repl_service.cpp` (the refusal for loops with none) | config.md:559 |
 | `PSXPORT_SBS` | bool | 1 +game:Tomba2Engine | `runtime/recomp/cfg.cpp:140` | config.md:724 |
 | `PSXPORT_SBS_ARMSLOT` | string | 1 | `runtime/recomp/sbs.cpp:2251` | config.md:613 |
 | `PSXPORT_SBS_AUTONAV` | string | 2 | `runtime/recomp/sbs.cpp:133` · `runtime/recomp/sbs.cpp:2096` | config.md:449,588 |

@@ -233,6 +233,10 @@ BoolVar cv_oracle("PSXPORT_ORACLE", false, "pure PSX reference mode: no native r
 BoolVar cv_noaudio("PSXPORT_NOAUDIO", false, "open no audio device", /*persistable=*/false);
 BoolVar cv_nopace("PSXPORT_NOPACE", false, "do not sleep to hold the present rate",
                   /*persistable=*/false);
+BoolVar cv_repl("PSXPORT_REPL", false,
+                "interactive REPL on stdin — SERVICED ONLY by the single-core native frame loop; "
+                "REFUSED (exit 2) under the SBS harness (repl_service.h)",
+                /*persistable=*/false);
 
 IntVar cv_watchdog("PSXPORT_WATCHDOG", 3, "frame-progress timeout, seconds (0 = off)",
                    /*persistable=*/false);

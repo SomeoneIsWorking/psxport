@@ -61,7 +61,7 @@ target, not a knob). It is asserted in `tests/test_config_cvar.cpp`.
 
 **Migrated onto CVars** (the inventory is `runtime/recomp/config_vars.h` — grep it, it is the list):
 `PSXPORT_ORACLE`, `PSXPORT_NOAUDIO`, `PSXPORT_NOPACE`, `PSXPORT_WATCHDOG`, `PSXPORT_WATCHDOG_BOOT`,
-`PSXPORT_ASSET_DIR`, `PSXPORT_SETTINGS`, `PSXPORT_FPS60`. Plus `PSXPORT_DEBUG` and
+`PSXPORT_ASSET_DIR`, `PSXPORT_SETTINGS`, `PSXPORT_FPS60`, `PSXPORT_REPL`. Plus `PSXPORT_DEBUG` and
 `PSXPORT_LOG_FILE`, declared `external`: **lucent** resolves those two for itself (it is built with
 `LUCENT_CHANNEL_ENV` / `LUCENT_LOG_FILE_ENV`, see `cmake/psxport.cmake`), and nothing here reads or
 overrides them — they are declared only so the audit does not report the port's two most-used knobs
@@ -77,6 +77,11 @@ Two DELIBERATE behaviour changes, listed here because "nothing may silently chan
 - `PSXPORT_WATCHDOG` used to be `atoi(cfg_str(...))`, and `atoi("abc")` is `0`, so a typo silently
   **disabled the watchdog**. A non-integer value now logs a warning naming it and falls back to the
   declared default of 3.
+- `PSXPORT_REPL` is now **REFUSED, not ignored, by a run that cannot service it** — see
+  "`PSXPORT_REPL` is serviced by ONE loop" below. Its value resolves identically (checked against the
+  pre-migration `lucent::config::flag` body over 7 inputs in
+  `tests/test_repl_unserviced_refusal.cpp`); what changed is that a run which will never pump it now
+  exits 2 instead of running a different script and looking fine.
 
 ### Migrating the next knob
 
@@ -137,6 +142,50 @@ with its own `static int x=-1; if(x<0) x=getenv(...)` boilerplate. That is now c
   walk the gate PAST boot into the field where coverage lives. CAVEAT: core A is pc_skip=false but
   `./run.sh` captures are pc_skip=true, so a frame-indexed `replays/*.pad` lands inputs at the wrong
   moments and does NOT raise coverage — you need a pc_skip=false capture or a game-state-driven route.
+
+### `PSXPORT_REPL` is serviced by ONE loop — every other run REFUSES it (exit 2)
+
+`Repl::read()` (`runtime/recomp/repl.cpp`, the only `fgets(…, stdin)` in the runtime) is pumped by
+exactly one loop: the **single-core** native frame loop in `runtime/recomp/native_boot.cpp`. The SBS
+harness owns the process from `PSXPORT_SBS` / `PSXPORT_SBS_MODE` onward and never reads stdin, so this
+used to be silent data loss:
+
+```sh
+printf 'newgame\nrun 200\nquit\n' | PSXPORT_SBS_MODE=full ./scratch/bin/<port> <exe>   # ← every command DISCARDED
+```
+
+`main()` routes to `Sbs::run()` before `native_boot` is reached; the script sat in the pipe while the
+harness ran a plain no-autonav lockstep from boot, and the run looked like it had worked. On 2026-08-12
+that made a crash report blame "SBS + a REPL-driven `newgame`" for a run that never left attract mode
+(Tomba2Engine kanban #90).
+
+`runtime/recomp/repl_service.h` now decides this in one place, and the SBS loop calls it at entry **and
+once per frame** (the launch-time check can only see bytes already queued; a driver that waits for
+output before writing — `Tomba2Engine/tools/gate.py`'s shape — would sail past it):
+
+| stdin under a loop with no REPL pump | verdict |
+|---|---|
+| `PSXPORT_REPL` set | **refuse, exit 2** (the knob cannot be honoured here) |
+| bytes already waiting on a pipe / file redirect | **refuse, exit 2** (they would be discarded) |
+| a terminal with keystrokes waiting | warn once, continue (a live session is not killed) |
+| `< /dev/null`, an idle/EOF pipe, an unmeasurable fd | silent — every existing headless run |
+
+The probe is `fstat` + `FIONREAD`, deliberately **not** `poll(POLLIN)`: poll reports a fd readable at
+EOF, so `< /dev/null` would look like a waiting script and every headless SBS gate in this repo would
+be refused. Both directions are asserted, in a forked child against the shipping function, in
+`tests/test_repl_unserviced_refusal.cpp`.
+
+**To drive an SBS run**, use the mechanisms that apply to BOTH cores identically —
+`PSXPORT_SBS_AUTONAV=1`, `PSXPORT_SBS_WARP=frame:area[:sub]`, `PSXPORT_SBS_PAD_REPLAY=<file.pad>`,
+`PSXPORT_DEBUG_SERVER=1`. The REPL was NOT extended to the SBS loop on purpose: it drives one `Core`,
+so a REPL `press`/`newgame` against the selected pane would inject a divergence the byte-compare then
+reports as a port bug, and driving both cores identically means duplicating `navStep` +
+`PSXPORT_SBS_WARP`, which already do it and already refuse when the nav addresses are unset.
+
+**Still unguarded (same defect, not fixed here):** `PSXPORT_DUALCORE` (`dualcore.cpp`) and
+`PSXPORT_SELFTEST` (`selftest.cpp`) own the process the same way and also never read stdin. The guard
+is game-agnostic and takes a loop name — `psx::repl_service::refuse_if_unserviced("DualCore")` — but
+those two paths were outside this change's scope and were not measured.
 
 The per-fork shortcut bool is `Game::mPcSkip` — see the class comment on `runtime/recomp/game.h`. Default
 `mPcSkip=true` (shortcuts on); SBS forces it `false` so the faithful branch of every fork is exercised.

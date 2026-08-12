@@ -37,6 +37,7 @@
 #include "override_registry.h"   // overrides::coverage — the gate reports its own reach
 #include "game.h"
 #include "cfg.h"
+#include "repl_service.h"        // refuse_if_unserviced — this loop has NO Repl::read() pump
 #include <lucent/log.h>
 #include "render_substrate.h"    // Render::setPsxRender (per-Core render-path switch)
 #include "game_iface.h"          // psxport_game_config() — the nav predicate + every guest address here
@@ -1956,6 +1957,14 @@ void Sbs::Impl::dumpByteTrace(FILE* out) {
 void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   watchdog_disable();   // the SBS pauses indefinitely on a divergence for live inspection — not a hang
 
+  // BEFORE ANYTHING IS BOOTED: this loop never reads stdin, so a piped REPL script handed to an SBS
+  // run would be silently discarded while the harness ran its own default lockstep — and the run
+  // would look like it had worked (Tomba2Engine kanban #90; it already cost a false crash report).
+  // Refuse instead, naming the two-core mechanisms that DO drive an SBS run. Placed first so the
+  // refusal costs no boot and cannot be mistaken for a mid-run failure. See repl_service.h for why
+  // servicing the REPL from here was rejected: it drives ONE core, i.e. it is a divergence source.
+  psx::repl_service::refuse_if_unserviced("SBS", /*loopServicesRepl=*/false);
+
   // Mode selection (PSXPORT_SBS_MODE)
   const char* m = getenv("PSXPORT_SBS_MODE");
   if (m) {
@@ -2215,6 +2224,10 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
 
   for (;;) {
     if (sbs_rl_should_close()) { lucent::info("sbs", "window closed — exiting."); break; }
+    // Re-check every frame, because the startup check can only see bytes ALREADY queued: a driver
+    // that waits for output before writing its first command (Tomba2Engine/tools/gate.py's shape)
+    // would sail past a launch-time-only probe and have every command dropped. Two syscalls a frame.
+    psx::repl_service::refuse_if_unserviced("SBS", /*loopServicesRepl=*/false);
     Core* sel = mSel ? &mB->core : &mA->core;
     DbgServer& dbg = mA->dbg_server;   // one endpoint per process; mA owns it
     dbg.service(sel);

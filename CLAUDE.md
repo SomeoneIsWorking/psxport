@@ -131,6 +131,14 @@ startup:
 **Check that line before trusting any run whose flag you are relying on.** The REPL `cvars` command
 dumps every knob, its value, and which layer it resolved from.
 
+**`PSXPORT_REPL` works on the SINGLE-CORE loop only.** `Repl::read()` is pumped by `native_boot.cpp`
+and nothing else, so piping a REPL script into an SBS run (`PSXPORT_SBS` / `PSXPORT_SBS_MODE`) used to
+discard every command while the harness ran its own default lockstep — that is how a crash report came
+to blame a `newgame` on a run that never left attract mode. Such a run now **exits 2** naming what it
+did not service; drive an SBS run with `PSXPORT_SBS_AUTONAV` / `PSXPORT_SBS_WARP` /
+`PSXPORT_SBS_PAD_REPLAY` / `PSXPORT_DEBUG_SERVER` instead (`docs/config.md`,
+`runtime/recomp/repl_service.h`).
+
 Common knobs: `PSXPORT_NOAUDIO=1` · `PSXPORT_DEBUG=cd,gpu` (channel-gated diagnostics) ·
 `PSXPORT_FORCE_RECOMP=1` · `PSXPORT_WATCHDOG=<sec>` · `PSXPORT_REPL=1` · `PSXPORT_SNAP_AT=<frames>` ·
 `PSXPORT_WWATCH=<lo>,<hi>`.

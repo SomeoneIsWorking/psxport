@@ -130,6 +130,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/producer_db.cpp
   ${PSXPORT_ROOT}/runtime/recomp/hw_bind.cpp
   ${PSXPORT_ROOT}/runtime/recomp/repl.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/repl_service.cpp   # "is anybody going to READ this stdin?" — the refusal guard for loops with no REPL pump
   ${PSXPORT_ROOT}/runtime/recomp/dbg_server.cpp
   ${PSXPORT_ROOT}/runtime/recomp/native_stub.cpp
   ${PSXPORT_ROOT}/runtime/recomp/watchdog.cpp

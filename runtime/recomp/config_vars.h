@@ -31,6 +31,15 @@ extern BoolVar cv_noaudio;
 // frames as fast as they come; a normal run wants 60 Hz.
 extern BoolVar cv_nopace;
 
+// PSXPORT_REPL — the interactive REPL on stdin. IT IS SERVICED BY EXACTLY ONE LOOP: the single-core
+// native frame loop (runtime/recomp/native_boot.cpp) calls Repl::read() between frames. Every other
+// loop that can own the process (the SBS two-core harness, DualCore, selftest) never reads stdin. The
+// SBS harness therefore REFUSES this knob (exit 2) rather than ignoring it — runtime/recomp/
+// repl_service.h reads it here for exactly that check, which is why it is migrated: the refusal must
+// resolve through the same ladder (and appear in the same env audit) as the flag it is refusing.
+// DualCore and selftest are NOT guarded yet: same defect, same one-line fix, not measured here.
+extern BoolVar cv_repl;
+
 // ── watchdog ────────────────────────────────────────────────────────────────────────────────────
 // PSXPORT_WATCHDOG — frame-progress timeout in seconds. Default 3, ON even when unset, so a hang
 // self-aborts with a backtrace instead of wedging. 0 disables it.

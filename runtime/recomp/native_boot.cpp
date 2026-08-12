@@ -25,7 +25,7 @@
 #include "c_subsys.h"
 #include "override_registry.h" // overrides::query — per-row ownership for the producer-census JSONL
 #include "cfg.h"
-#include "config_vars.h"  // psx::config::render_path() — PSXPORT_RENDER_PATH through the CVar ladder
+#include "config_vars.h"  // psx::config::render_path() / cv_repl — knobs through the CVar ladder
 #include <lucent/log.h>
                      // (rsub substrate members come via core.h -> render_substrate.h)
 #include "mods.h"            // g_mods.fps60 / g_mods.aspect — forced off in PSXPORT_ORACLE
@@ -301,7 +301,10 @@ static void game_main(Core* c) {
   // a window is up this is the real interactive game loop — run until the user closes the window
   // (SDL_QUIT -> exit(0) in present_window); headless with no cap defaults to 120 (CI/smoke).
   uint32_t nframes = 0;   // 0 == run until window close / REPL quit
-  int repl_mode = cfg_on("PSXPORT_REPL") != 0;
+  // PSXPORT_REPL through the CVar ladder (config_vars.h cv_repl). THIS loop is the one and only
+  // Repl::read() pump in the framework — repl_service.h names it, and every other loop that owns the
+  // process refuses the knob rather than ignoring it.
+  int repl_mode = psx::config::cv_repl.get() ? 1 : 0;
   if (repl_mode) nframes = 0;                       // REPL drives frame count via `run N`
   else { if (!gpu_windowed()) nframes = 120; }  // headless smoke default
   // PSXPORT_AUTO_SKIP needs time to tap through title -> GAME -> field: raise the headless smoke cap so a
