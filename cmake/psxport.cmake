@@ -127,6 +127,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/pgxp.cpp
   ${PSXPORT_ROOT}/runtime/recomp/proj_params.cpp
   ${PSXPORT_ROOT}/runtime/recomp/ot_attr.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/producer_db.cpp
   ${PSXPORT_ROOT}/runtime/recomp/hw_bind.cpp
   ${PSXPORT_ROOT}/runtime/recomp/repl.cpp
   ${PSXPORT_ROOT}/runtime/recomp/dbg_server.cpp

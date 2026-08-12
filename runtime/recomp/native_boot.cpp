@@ -40,7 +40,9 @@
 #include "coro.h"      // thread-fiber for full-PSX mid-function resume (later-264)
 #include "dualview_snapshot.h"  // dv_capture_post/dv_restore_pre/dv_restore_post (extern "C" linkage)
 #include "guest_call.h" // rc0-4 guest-call helpers (shared with repl.cpp)
-#include "repl.h"       // class Repl — REPL driver + auto-drive request state (per-Core, on Game)
+#include "repl.h"
+#include "producer_db.h"   // producer_db_begin/_finish — the producer-DB run lifecycle
+       // class Repl — REPL driver + auto-drive request state (per-Core, on Game)
 
 // Native XA voice/BGM clip player (xa_stream.c) owns task slot 2 — it replaced the FUN_8001cfc8
 // streaming-reader coroutine. The scheduler skips slot 2 while owned and reflects clip completion
@@ -313,17 +315,7 @@ static void game_main(Core* c) {
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
   if (!repl_mode && !gpu_windowed() && cfg_on("PSXPORT_DEBUG_SERVER")) nframes = 0;
-  // Load the accumulated claim set BEFORE the first frame, so the guest leg can resolve from frame 0.
-  // This is what makes the producer DB a COMPARISON rather than two disjoint row sets: no single leg runs
-  // both halves (pc_render never GP0-executes the guest packets; psx_render never runs a native producer),
-  // so the addresses natives key are earned on one leg and consumed on the other. `PSXPORT_PRODUCERS_DB`
-  // points at either the flat claims file or a run JSONL; the default is the file the previous run appended.
-  {
-    const std::string db = psx::config::cv_producers_db.get();
-    char def[512];
-    if (db.empty()) snprintf(def, sizeof def, "%s/claims.txt", psx::config::cv_producers_dir.get().c_str());
-    c->rsub.census.loadClaims(db.empty() ? def : db.c_str());
-  }
+  producer_db_begin(c);   // the DB's claim set — see producer_db.h (a port owning its loop calls this itself)
   lucent::info("native_boot", "entering native frame loop ({})", nframes ? "capped" : "interactive (until window close)");
   c->game->dbg_server.start(c);    // PSXPORT_DEBUG_SERVER: non-blocking live TCP debug server (dbg_server.cpp)
   long repl_budget = 0;   // frames remaining in the current REPL `run N`
@@ -609,72 +601,7 @@ static void game_main(Core* c) {
   // searched window is claimed, i.e. THIS EFFECT HAS NO NATIVE PRODUCER (the DB's actual answer, not a
   // failure); too-early = the claim set was still empty, so the prim could not be resolved either way and
   // must not be counted as "no native producer".
-  lucent::info("producers",
-    "run-end: claim resolution (SPANS, not prims — a span is a coalesced run of packet-pool stores, and "
-    "many spans back one prim, so these are NOT the row counts below and must not be read as a per-prim "
-    "join rate) — {} span(s) joined to a native row, {} with no claimed frame in the top {} "
-    "(no native producer), {} unresolvable because the claim set was still EMPTY (pure psx_render leg, or "
-    "before the first native producer ran); {} claim(s) in the set; {} found AT the search limit{}",
-    c->rsub.otAttr.claimResolved(), c->rsub.otAttr.claimUnresolved(), OtAttr::CLAIM_SEARCH_DEPTH,
-    c->rsub.census.claimResolveTooEarly(), c->rsub.census.claimCount(), c->rsub.otAttr.claimAtLimit(),
-    c->rsub.otAttr.claimAtLimit() ? " — WIDEN CLAIM_SEARCH_DEPTH: a claim at the limit means deeper ones are being missed" : "");
-  c->rsub.census.report("run-end");
-  // `PSXPORT_DEBUG=otchain` — the chain report, tested against THE CLAIM SET: every guest-keyed row a
-  // NATIVE producer has claimed (primsNative > 0). That set is the right one because the open question is
-  // whether the two legs can be joined, and a row only joins if a native producer keyed it. Rows with a
-  // guest key but no native prims are exactly the effects with NO native producer — they are not claims,
-  // and counting them as such would make the report say "joined" about a row that has nothing to join to.
-  if (g_otchain_channel) {
-    // THE SAME SET THE RESOLVER USES, not a re-derivation. This block used to build its own list from
-    // this run's census rows (guest-keyed with primsNative > 0), which is a DIFFERENT set from the
-    // persisted one resolveClaimedFrame consults — so on a guest leg the report printed "0 of 29 shapes
-    // claimed" while the resolver was joining 266,760 spans against 10 loaded claims. It refused loudly
-    // instead of inventing a number, which is the only reason the split was findable; a report and the
-    // mechanism it reports on must still read from ONE source.
-    static constexpr int CLAIM_REPORT_CAP = 512;
-    uint32_t claims[CLAIM_REPORT_CAP];
-    int nclaims = 0, skipped = 0;
-    for (int i = 0; i < c->rsub.census.claimCount(); i++) {
-      if (nclaims < CLAIM_REPORT_CAP) claims[nclaims++] = c->rsub.census.claimAt(i); else skipped++;
-    }
-    if (skipped)
-      lucent::warn("otchain", "claim set TRUNCATED for the report: {} claim(s) past CLAIM_REPORT_CAP={} "
-                              "— an UNCLAIMED verdict below may be this truncation, not a real miss",
-                   skipped, CLAIM_REPORT_CAP);
-    c->rsub.otAttr.reportChains(claims, nclaims);
-  }
-  // Persist the OBSERVED half so the DB survives the run and can reach git through the game's
-  // tools/producers.py ingest (USER: populated by playing, and tracked). Path is a knob so a harness can
-  // separate its runs; the default lands in the gitignored scratch/ tree, never /tmp.
-  {
-    const std::string dirs = psx::config::cv_producers_dir.get();
-    const char* dir = dirs.c_str();
-    char stamp[32];
-    { const time_t t = time(nullptr); struct tm tmv{};
-#ifdef _WIN32
-      localtime_s(&tmv, &t);
-#else
-      localtime_r(&t, &tmv);
-#endif
-      strftime(stamp, sizeof stamp, "%Y-%m-%dT%H:%M:%S", &tmv); }
-    char path[512];
-    snprintf(path, sizeof path, "%s/run-%s.jsonl", dir, stamp);
-    // Create the directory rather than failing on a fresh clone; the writer REPORTS a failed open.
-#ifdef _WIN32
-    _mkdir(dir);
-#else
-    mkdir(dir, 0755);
-#endif
-    // Pass the override registry's own query so each row carries whether its guest address is
-    // override-installed and whether that native ever ran. Without it the DB's ownership fields are
-    // written as "unavailable" rather than a misleading false.
-    c->rsub.census.writeJsonl(path, stamp, &overrides::query);
-    // Persist the claim set so the NEXT run can join legs this one structurally cannot (see
-    // ProducerCensus::loadClaims): no single leg runs both halves, so the join is cross-run by nature.
-    char cpath[512];
-    snprintf(cpath, sizeof cpath, "%s/claims.txt", dir);
-    c->rsub.census.appendClaims(cpath);
-  }
+  producer_db_finish(c);   // report + JSONL + claim append — see producer_db.h
   lucent::info("native_boot", "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {
