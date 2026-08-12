@@ -9,24 +9,22 @@
 // name the field — including the exact disagreement the pre-fix framework shipped (a hardcoded -8 stack
 // bias against a guest that has no bias instruction).
 //
-// WHY THE GUEST BYTES ARE ASSEMBLED HERE RATHER THAN COPIED FROM A GAME. Two reasons, one of them
-// technical: (a) the framework must not carry bytes lifted out of a commercial executable, and (b) an
-// assembler in the test makes the fixture a SPEC the decoder is checked against, instead of one recorded
-// blob that could be wrong in the same way the decoder is.
+// WHERE THE GUEST BYTES COME FROM. `tests/crt0_fixture.h` — the stock PSY-Q crt0 ASSEMBLED
+// FROM A SPEC, not a blob recorded out of a game: the framework must not carry fragments of a commercial
+// executable, and a recorded blob can be wrong in the same way the decoder is. That header is SHARED with
+// `tools/crt0_extract --selftest` on purpose — two hand-written assemblers would drift, and the drift
+// would show up as one of the two gates passing against a stream the other does not recognise.
 //
-// THE ASSEMBLER IS NOT ASSUMED CORRECT — IT IS PINNED TO MEASURED BYTES. Each encoder below carries the
-// exact word it must produce for one instruction disassembled out of a real crt0 on 2026-08-12
-// (scratch/crt0_dump.py over Tomba!2 MAIN.EXE / SLUS_005.61), and `test_assembler_matches_measured_bytes`
-// asserts every one of them BEFORE any audit case runs. If the assembler drifts, that test fails first
-// and the audit cases below cannot pass vacuously against a fixture nobody recognises.
-//
-// The template itself is the stock PSY-Q crt0, verified instruction-for-instruction identical across
-// FIVE executables (Tomba!2, Spyro, Spider-Man, Vagrant Story, Mega Man X4) — the table in
-// crt0_verify.h records the five entry points and their measured biases.
+// THE ASSEMBLER IS NOT ASSUMED CORRECT — IT IS PINNED TO MEASURED BYTES. `crt0_fixture_pins()` carries
+// one row per instruction disassembled out of a real crt0 on 2026-08-12 (scratch/crt0_dump.py over
+// Tomba!2 MAIN.EXE / SLUS_005.61), and `test_assembler_matches_measured_bytes` asserts every row BEFORE
+// any audit case runs. If the encoder drifts, that test fails first and the audit cases below cannot pass
+// vacuously against a fixture nobody recognises.
 //
 // Hermetic: a std::map stands in for guest RAM, lucent's sink is in-process. No Core, no disc, no GPU.
 #include "testutil.h"
 
+#include "crt0_fixture.h"
 #include "crt0_verify.h"
 
 #include <lucent/log.h>
@@ -56,130 +54,42 @@ static bool any_line_has(const char* needle) {
   return false;
 }
 
-// ── a minimal R3000A assembler ──────────────────────────────────────────────────────────────────────
-enum { ZERO = 0, AT = 1, V0 = 2, V1 = 3, A0 = 4, A1 = 5, T0 = 8, GP = 28, SP = 29, FP = 30, RA = 31 };
-static uint32_t I16(int32_t v) { return (uint32_t)v & 0xFFFFu; }
-static uint32_t A_lui  (int rt, uint32_t hi)             { return 0x3C000000u | (uint32_t)rt << 16 | (hi & 0xFFFF); }
-static uint32_t A_addiu(int rt, int rs, int32_t im)      { return 0x24000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | I16(im); }
-static uint32_t A_addi (int rt, int rs, int32_t im)      { return 0x20000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | I16(im); }
-static uint32_t A_lw   (int rt, int rs, int32_t im)      { return 0x8C000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | I16(im); }
-static uint32_t A_sw   (int rt, int rs, int32_t im)      { return 0xAC000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | I16(im); }
-static uint32_t A_bne  (int rs, int rt, int32_t off)     { return 0x14000000u | (uint32_t)rs << 21 | (uint32_t)rt << 16 | I16(off); }
-static uint32_t A_spec (int rd, int rs, int rt, uint32_t sa, uint32_t fn) {
-  return (uint32_t)rs << 21 | (uint32_t)rt << 16 | (uint32_t)rd << 11 | sa << 6 | fn;
-}
-static uint32_t A_sltu(int rd, int rs, int rt) { return A_spec(rd, rs, rt, 0, 0x2B); }
-static uint32_t A_subu(int rd, int rs, int rt) { return A_spec(rd, rs, rt, 0, 0x23); }
-static uint32_t A_or  (int rd, int rs, int rt) { return A_spec(rd, rs, rt, 0, 0x25); }
-static uint32_t A_addu(int rd, int rs, int rt) { return A_spec(rd, rs, rt, 0, 0x21); }
-static uint32_t A_sll (int rd, int rt, uint32_t sa) { return A_spec(rd, 0, rt, sa, 0x00); }
-static uint32_t A_srl (int rd, int rt, uint32_t sa) { return A_spec(rd, 0, rt, sa, 0x02); }
-static uint32_t A_jal (uint32_t target) { return 0x0C000000u | ((target >> 2) & 0x3FFFFFFu); }
-
-// `lui rX,hi / addiu rX,rX,lo` for an absolute 32-bit address (the standard %hi/%lo pair: the addiu's
-// immediate is SIGN-extended, so hi is adjusted when lo's top bit is set).
-static uint32_t HI(uint32_t a) { return ((a >> 16) + ((a & 0x8000u) ? 1u : 0u)) & 0xFFFFu; }
-static int32_t  LO(uint32_t a) { return (int32_t)(int16_t)(uint16_t)(a & 0xFFFFu); }
-
 // ── the memory model ────────────────────────────────────────────────────────────────────────────────
 struct FakeRam {
   std::map<uint32_t, uint32_t> w;
   uint32_t read(uint32_t a) const { auto it = w.find(a); return it == w.end() ? 0u : it->second; }
 };
 
-// The stock PSY-Q crt0. `bias` is emitted as an `addi v0,v0,bias` ONLY when nonzero — which is exactly
-// the difference between the four ports that bias and Mega Man X4, which has no such instruction.
-// `stores` emits the two absolute heap globals; X4 emits NEITHER.
-// `indirectStackTop` emits X4's own addressing for the stack-top load (`addiu v0,zero,4 / lui a0,hi /
-// addiu a0,a0,lo / addu a0,a0,v0 / lw v0,0(a0)`) instead of the direct `lui v0 / lw v0,lo(v0)` — so the
-// decoder is exercised on BOTH forms found in the corpus rather than only the common one.
-struct Crt0Template {
-  uint32_t entry, bssLo, bssHi, stackTopBase, stackTopBase2, heapBase, gp, libcInit;
-  int32_t  bias = -8;
-  uint32_t heapSizePtr = 0, heapBasePtr = 0;   // 0 = this crt0 has no such global
-  uint32_t raSave = 0;                         // the one absolute store X4 does have
-  bool     indirectStackTop = false;
-};
-
+// The prologue comes from the shared fixture (tests/crt0_fixture.h): `Crt0Template`, the emitter, and the two
+// measured shapes all live there so this test and `crt0_extract --selftest` assemble the SAME bytes.
 static void emit_crt0(FakeRam& ram, const Crt0Template& t) {
-  std::vector<uint32_t> c;
-  // .bss clear loop: v0 = bssLo, v1 = bssHi, then `sw zero,0(v0); addiu v0,v0,4; sltu at,v0,v1; bne`.
-  c.push_back(A_lui(V0, HI(t.bssLo)));   c.push_back(A_addiu(V0, V0, LO(t.bssLo)));
-  c.push_back(A_lui(V1, HI(t.bssHi)));   c.push_back(A_addiu(V1, V1, LO(t.bssHi)));
-  c.push_back(A_sw(ZERO, V0, 0));
-  c.push_back(A_addiu(V0, V0, 4));
-  c.push_back(A_sltu(AT, V0, V1));
-  c.push_back(A_bne(AT, ZERO, -4));
-  c.push_back(0);                                             // delay slot
-  // sp = (mem[stackTopBase] + bias) | KSEG0
-  if (t.indirectStackTop) {
-    c.push_back(A_addiu(V0, ZERO, 4));
-    c.push_back(A_lui(A0, HI(t.stackTopBase - 4)));  c.push_back(A_addiu(A0, A0, LO(t.stackTopBase - 4)));
-    c.push_back(A_addu(A0, A0, V0));
-    c.push_back(A_lw(V0, A0, 0));
-  } else {
-    c.push_back(A_lui(V0, HI(t.stackTopBase)));  c.push_back(A_lw(V0, V0, LO(t.stackTopBase)));
-    c.push_back(0);                                           // load delay
-  }
-  if (t.bias) c.push_back(A_addi(V0, V0, t.bias));
-  c.push_back(A_lui(T0, 0x8000));
-  c.push_back(A_or(SP, V0, T0));
-  // a0 = heapBase & 0x1FFFFFFF, via sll 3 / srl 3
-  c.push_back(A_lui(A0, HI(t.heapBase)));  c.push_back(A_addiu(A0, A0, LO(t.heapBase)));
-  c.push_back(A_sll(A0, A0, 3));  c.push_back(A_srl(A0, A0, 3));
-  // a1 = (v0 - mem[stackTopBase2]) - a0
-  c.push_back(A_lui(V1, HI(t.stackTopBase2)));  c.push_back(A_lw(V1, V1, LO(t.stackTopBase2)));
-  c.push_back(0);
-  c.push_back(A_subu(A1, V0, V1));
-  c.push_back(A_subu(A1, A1, A0));
-  if (t.heapSizePtr) { c.push_back(A_lui(AT, HI(t.heapSizePtr))); c.push_back(A_sw(A1, AT, LO(t.heapSizePtr))); }
-  c.push_back(A_or(A0, A0, T0));
-  if (t.heapBasePtr) { c.push_back(A_lui(AT, HI(t.heapBasePtr))); c.push_back(A_sw(A0, AT, LO(t.heapBasePtr))); }
-  if (t.raSave)      { c.push_back(A_lui(AT, HI(t.raSave)));      c.push_back(A_sw(RA, AT, LO(t.raSave))); }
-  c.push_back(A_lui(GP, HI(t.gp)));  c.push_back(A_addiu(GP, GP, LO(t.gp)));
-  c.push_back(A_addu(FP, SP, ZERO));
-  c.push_back(A_jal(t.libcInit));
-  c.push_back(A_addi(A0, A0, 4));                             // the delay slot IS the +4
-  for (size_t i = 0; i < c.size(); i++) ram.w[t.entry + 4u * (uint32_t)i] = c[i];
-  // the BIOS A(39h) InitHeap thunk the jal lands on
-  ram.w[t.libcInit + 0] = 0x240A00A0u;   // addiu t2,zero,0xA0
-  ram.w[t.libcInit + 4] = 0x01400008u;   // jr t2
-  ram.w[t.libcInit + 8] = 0x24090039u;   // addiu t1,zero,0x39
+  crt0_fixture_emit(t, [&ram](uint32_t a, uint32_t w) { ram.w[a] = w; });
 }
-
 // ── the two shapes, as GameConfigs ──────────────────────────────────────────────────────────────────
-// Addresses are the MEASURED groups of the two real ports (Tomba2Engine and megamanx4
-// game/core/game_config.cpp), so the fixtures describe real crt0s rather than invented ones.
-static const uint32_t T2_CRT0 = 0x800896E0u;
-static GameConfig t2_cfg(void) {
+// The guest templates are the fixture header's two MEASURED shapes (the crt0 groups of Tomba2Engine and
+// megamanx4 `game/core/game_config.cpp`), so these cases describe real crt0s rather than invented ones.
+//
+// The `GameConfig` under audit is DERIVED from the same template rather than hand-typed a second time.
+// That is deliberate: a second hand copy of eleven addresses is exactly the defect class this file
+// gates, and a typo in it would surface as a spurious refusal that looks like a framework bug. It costs
+// the test nothing, because what the audit actually compares is the config against what `crt0_scan`
+// DECODES from the emitted bytes — deriving the config does not short-circuit the encoder→decoder round
+// trip, and every refusal case below perturbs the config away from the template on purpose.
+static GameConfig cfg_from(const Crt0Template& t) {
   GameConfig c{};
-  c.bssZeroLo = 0x800BE0D8u; c.bssZeroHi = 0x80106228u;
-  c.stackTopBase = 0x800A3F88u; c.stackTopBase2 = 0x800A3F8Cu;
-  c.heapBase = 0x80106228u;
-  c.heapSizePtr = 0x800ABEF8u; c.heapBasePtr = 0x800ABEF4u;
-  c.gp = 0x800BE0D4u; c.libcInit = 0x80089860u; c.crt0 = T2_CRT0;
-  c.stackBias = {1u, -8};
+  c.bssZeroLo = t.bssLo; c.bssZeroHi = t.bssHi;
+  c.stackTopBase = t.stackTopBase; c.stackTopBase2 = t.stackTopBase2;
+  c.heapBase = t.heapBase;
+  c.heapSizePtr = t.heapSizePtr; c.heapBasePtr = t.heapBasePtr;   // 0 = ABSENT, a measured answer
+  c.gp = t.gp; c.libcInit = t.libcInit; c.crt0 = t.entry;
+  c.stackBias = {1u, t.bias};
   return c;
 }
-static Crt0Template t2_guest(void) {
-  return Crt0Template{T2_CRT0, 0x800BE0D8u, 0x80106228u, 0x800A3F88u, 0x800A3F8Cu, 0x80106228u,
-                      0x800BE0D4u, 0x80089860u, -8, 0x800ABEF8u, 0x800ABEF4u, 0x800BE0D8u, false};
-}
-static const uint32_t X4_CRT0 = 0x800DAE8Cu;
-static GameConfig x4_cfg(void) {
-  GameConfig c{};
-  c.bssZeroLo = 0x8012F418u; c.bssZeroHi = 0x80175F38u;
-  c.stackTopBase = 0x800DAF3Cu; c.stackTopBase2 = 0x8011CB74u;
-  c.heapBase = 0x80175F38u;
-  c.heapSizePtr = 0; c.heapBasePtr = 0;                      // ABSENT — this crt0 has no such global
-  c.gp = 0x8012F418u; c.libcInit = 0x800EDCDCu; c.crt0 = X4_CRT0;
-  c.stackBias = {1u, 0};
-  return c;
-}
-static Crt0Template x4_guest(void) {
-  return Crt0Template{X4_CRT0, 0x8012F418u, 0x80175F38u, 0x800DAF3Cu, 0x8011CB74u, 0x80175F38u,
-                      0x8012F418u, 0x800EDCDCu, 0, 0, 0, 0x8012F418u, true};
-}
+static const uint32_t T2_CRT0 = CRT0_FIXTURE_TOMBA2_ENTRY;
+static Crt0Template t2_guest(void) { return crt0_fixture_psyq_tomba2(); }
+static GameConfig   t2_cfg(void)   { return cfg_from(t2_guest()); }
+static Crt0Template x4_guest(void) { return crt0_fixture_psyq_mmx4(); }
+static GameConfig   x4_cfg(void)   { return cfg_from(x4_guest()); }
 
 // A plan is needed only so the audit can print the applied values next to the verified ones.
 static Crt0Plan plan_for(const GameConfig& cfg, uint32_t stackWord, uint32_t reserveWord) {
@@ -194,29 +104,26 @@ static Crt0Plan plan_for(const GameConfig& cfg, uint32_t stackWord, uint32_t res
 // every fixture below describes an instruction stream no PSX would execute, and the audit cases would be
 // passing against nothing.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
+// The pin ROWS live in the fixture header beside the encoder that produces them, and so does the FLOOR
+// (`CRT0_FIXTURE_PIN_FLOOR`) — a `for` over an empty list passes while proving nothing, so the COUNT is
+// asserted before the loop runs. That floor is what makes "0 mismatches" meaningful rather than a report
+// of never having looked. It is shared with `crt0_extract --selftest` rather than re-typed: the floor is
+// a fact about the row list, and two copies is one to forget when a row is added.
 static void test_assembler_matches_measured_bytes(void) {
-  CHECK_EQ(A_lui(V0, 0x800C),        0x3C02800Cu);   // 0x800896E0 lui   v0,0x800C
-  CHECK_EQ(A_addiu(V0, V0, -7976),   0x2442E0D8u);   // 0x800896E4 addiu v0,v0,-7976
-  CHECK_EQ(A_sw(ZERO, V0, 0),        0xAC400000u);   // 0x800896F0 sw    zero,0(v0)
-  CHECK_EQ(A_sltu(AT, V0, V1),       0x0043082Bu);   // 0x800896F8 sltu  at,v0,v1
-  CHECK_EQ(A_bne(AT, ZERO, -4),      0x1420FFFCu);   // 0x800896FC bne   at,zero,-4
-  CHECK_EQ(A_lw(V0, V0, 16264),      0x8C423F88u);   // 0x80089708 lw    v0,16264(v0)
-  CHECK_EQ(A_addi(V0, V0, -8),       0x2042FFF8u);   // 0x80089710 addi  v0,v0,-8
-  CHECK_EQ(A_lui(T0, 0x8000),        0x3C088000u);   // 0x80089714 lui   t0,0x8000
-  CHECK_EQ(A_or(SP, V0, T0),         0x0048E825u);   // 0x80089718 or    sp,v0,t0
-  CHECK_EQ(A_sll(A0, A0, 3),         0x000420C0u);   // 0x80089724 sll   a0,a0,3
-  CHECK_EQ(A_srl(A0, A0, 3),         0x000420C2u);   // 0x80089728 srl   a0,a0,3
-  CHECK_EQ(A_subu(A1, V0, V1),       0x00432823u);   // 0x80089738 subu  a1,v0,v1
-  CHECK_EQ(A_subu(A1, A1, A0),       0x00A42823u);   // 0x8008973C subu  a1,a1,a0
-  CHECK_EQ(A_sw(A1, AT, -16648),     0xAC25BEF8u);   // 0x80089744 sw    a1,-16648(at)
-  CHECK_EQ(A_addu(FP, SP, ZERO),     0x03A0F021u);   // 0x80089764 addu  fp,sp,zero
-  CHECK_EQ(A_jal(0x80089860u),       0x0C022618u);   // 0x80089768 jal   0x80089860
-  CHECK_EQ(A_addu(A0, A0, V0),       0x00822021u);   // 0x800DAECC addu  a0,a0,v0   (X4's form)
-  CHECK_EQ(A_lw(V0, A0, 0),          0x8C820000u);   // 0x800DAED0 lw    v0,0(a0)   (X4's form)
-  // And the %hi/%lo pair really reconstructs the address, including the sign-extension carry.
-  CHECK_EQ((HI(0x800BE0D8u) << 16) + (uint32_t)LO(0x800BE0D8u), 0x800BE0D8u);
-  CHECK_EQ((HI(0x800A3F88u) << 16) + (uint32_t)LO(0x800A3F88u), 0x800A3F88u);
-  CHECK_EQ((HI(0x80106228u) << 16) + (uint32_t)LO(0x80106228u), 0x80106228u);
+  const std::vector<Crt0PinRow> pins = crt0_fixture_pins();
+  fprintf(stderr, "  [pins] checking %zu encoder row(s) against bytes measured out of real crt0s\n",
+          pins.size());
+  CHECK(pins.size() >= (size_t)CRT0_FIXTURE_PIN_FLOOR);
+  int bad = 0;
+  for (const Crt0PinRow& p : pins) {
+    if (p.got != p.want) {
+      bad++;
+      fprintf(stderr, "  [pins] MISMATCH %s: encoder produced 0x%08X, the executable contains 0x%08X\n",
+              p.what, p.got, p.want);
+    }
+    CHECK_EQ(p.got, p.want);
+  }
+  fprintf(stderr, "  [pins] %zu row(s) checked, %d mismatch(es)\n", pins.size(), bad);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
