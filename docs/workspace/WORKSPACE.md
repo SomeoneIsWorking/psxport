@@ -151,17 +151,40 @@ and replaces the code. **Where a targeted function-level match WITH A NEGATIVE C
 this metric, the targeted match wins.** The metric ranks candidates and REFUTES false families; it does not
 certify one. Direct evidence still decides repo shape.
 
-**AN INDEPENDENT SECOND TOOL AGREES, which is why these numbers may be trusted again.**
+**AN INDEPENDENT SECOND TOOL AGREES ON BAND MEMBERSHIP AND ON THE EXTREMES — NOT ON MID-TABLE ORDER.**
 `tools/lineage_probe.py` (built the same day, sharing no code with this one: whole FUNCTIONS segmented at
-`jr $ra`, plus exclusive-string overlap, counted absolutely and ranked by corpus SPREAD) reaches the same
-ordering over a 17-binary corpus — SPIDER1|SPIDER2 16.4× its own null max, SPYRO2|SPYRO3 3.9×,
-CRASH2|CRASH3 3.8×, and TOMBA1|TOMBA2, CRASHBASH|TOMBA2 and the TOMBA2 loader/engine pair all BELOW it.
-Two tools with different failure modes agreeing on every repo-shape call is stronger than either number.
-**Where they disagree, record it rather than pick a winner:** `SPYRO1|SPYRO2` reads 0.8× (below the floor)
-on the aggregate metric but 27 exclusive whole functions = 1.8× on the function metric, with the PSY-Q
-cohort differing (1.129 vs 1.140), so it is not an SDK artifact. Both readings fit one picture — a handful
-of shared utility functions survived the rewrite, a negligible fraction of the engine — and the decision
-(Spyro 1 in the Insomniac repo by PREFERENCE, no shared `game/`) is what both support.
+`jr $ra`, plus exclusive-string overlap, counted absolutely and ranked by corpus SPREAD) agrees on the
+TOP TWO pairs (SPIDER1|SPIDER2 strongest at 246 units = 16.4× its own measured null max, SPYRO2|SPYRO3
+next at 59 = 3.9×) and on the SET of pairs that fall below each tool's own floor (TOMBA1|TOMBA2,
+CRASHBASH|TOMBA2, the TOMBA2 loader/engine pair). It **DISAGREES on mid-table rank in two cells, both
+listed** — an earlier version of this paragraph claimed "the same ordering", which its own data
+contradicts:
+
+| pair | lineage_probe | exe_similarity | |
+|---|---|---|---|
+| SPYRO1 ↔ SPYRO2 | 27 units = **2.25×** | 5.6% = **0.8×** (below floor) | inverted vs CRASH1↔CRASH2 |
+| CRASH1 ↔ CRASH2 | 25 units = **2.08×** | 8.2% = **1.1×** | inverted vs SPYRO1↔SPYRO2 |
+| TOMBA2_SCUS ↔ TOMBA2_MAIN | 1 unit = **0.07×**, bottom | 8.6% = 0.7×, *above* SPYRO1↔SPYRO2 there | recorded nowhere before |
+
+State the agreement as **set-membership per band, never as a total order.** CRASH2|CRASH3 is 4.75× (not
+the 3.8× recorded earlier: that divided by the pooled null max instead of the pair's own PSY-Q stratum,
+which is the stratification the sibling tool was forced into and this one had not been).
+
+**The two tools are independent in FEATURES and CODE but NOT in CALIBRATION INPUT.** They share the same
+19-file corpus and the same hand-written studio attribution defining "cross-studio null". A wrong
+developer attribution, or a contaminated corpus member, moves a pair in BOTH tools at once and both
+report a stronger family signal — **their agreement cannot detect an attribution or corpus error.** Both
+now print their own null (n, mean, median, zero count, named max, stratified by PSY-Q `sys.c`) and
+`lineage_probe.py` prints a per-file sha256 fingerprint, so a published count names the corpus it came
+from.
+
+**`lineage_probe.py`'s multiples are partly a measurement of its own gate constants**, whose thresholds
+are asserted rather than derived from disassembled ground truth. Its `--sweep` (measured 2026-08-12)
+moves separation from 1.75× to 6.00× across a defensible grid, and at `min_insns=40` CRASH2|CRASH3
+OVERTAKES SPYRO2|SPYRO3 — the mid-table order is not robust. Robust across every cell: SPIDER1|SPIDER2
+is the top pair by 3–8×, and TOMBA1|TOMBA2_MAIN sits at 0–1. **Cite it for band membership and the
+ordering of the extremes; never for a mid-table decimal.** Its same-code upper anchors (a title vs its
+own demo build: 216 and 40) straddle the family pairs, which is the same caveat from the other side.
 
 **DOES EACH RECORDED DECISION SURVIVE THE CORRECTED METRIC? (2026-08-12)** — every one does; two get
 stronger reasons, three are re-labelled from "measured" to "preference", and none is reversed.
@@ -171,7 +194,7 @@ stronger reasons, three are re-labelled from "measured" to "preference", and non
 | Spider-Man 1 + 2 in one repo | **SURVIVES, strengthened** | 57.5% = 4.8× the null max, the strongest pair in the corpus; both binaries are engine-sized (186,879 / 196,095 words), so the small-denominator defect cannot be inflating it |
 | Spyro 2 + 3 in one repo | **SURVIVES, strengthened** | 47.0% = 4.0× the null max |
 | Spyro 1 in the Insomniac repo | **SURVIVES as PREFERENCE, not measurement** | 5.6% = 0.8× — BELOW the null max, so this is evidence of NOT sharing engine code. Asset pipeline and format knowledge only |
-| Tomba! 1 is its own engine | **SURVIVES, strengthened** | 3.9% = 0.5×, below the null max; the old 18.8% was inflation. Different PSY-Q (`sys.c` 1.129 vs 1.140) agrees. Keeping it in `Tomba2Engine/` is a preference like Spyro 1, and a shared `game/` would hold code one title cannot use |
+| Tomba! 1 is its own engine | **SURVIVES as NOT-ONE-CODEBASE — and *not* as "strengthened"** | 3.9% = 0.5× and 1 whole function = 0.08×: both tools DETECT NOTHING. That is not evidence of separate engines. **The in-corpus counterexample: CRASH1↔CRASH3 reads 4.6% (0.6×) and 12 units (1.00×), at or below both floors, while WORKSPACE.md itself holds the Crash trio to be ONE architecture on direct evidence.** So "below the floor" means "neither tool can see it", and neither tool can distinguish "rewritten, same architecture" from "unrelated". What the measurement *does* support: a SHARED CODEBASE would read in the hundreds (SPIDER1↔SPIDER2 = 246 units, 57.5%), and Tomba! 1↔2 does not — so no shared `game/`. Deleted from this row as false: "strengthened", and "below two random titles" (1 unit is above ~57% of the 109 cross-studio pairs, whose median is 0). Different PSY-Q (`sys.c` 1.129/`intr.c` 1.74 vs 1.140/1.75) still agrees. FALSIFIER: a targeted function-level match with a negative control set, which this file already says beats an aggregate metric |
 | the Crash trio as ONE architecture | **SURVIVES on DIRECT evidence, which this metric cannot resolve** | 19.8% = 2.7× for 2↔3 lands in the "rewritten" band, but CRASH1↔CRASH2 is 1.1× and CRASH1↔CRASH3 0.6×. The byte-identical GOOL loop and the 36/36-vs-0/36 function match are what the decision rests on — believe them over the aggregate |
 | CTR and Crash Bash separate | **SURVIVES** | CTR ↔ the trio is 0.6–3.0% (0.1–0.4×) and Bash ↔ the trio 1.3–6.4%, both at or below the floor, matching 0/36 on the trio function |
 | Toy Story 2 standalone | **SURVIVES** | it is cross-studio with all 12, so every cell is a NULL member by construction; its largest is 8.2% with Tomba! 1 = 0.7× the same-PSY-Q null max, and those two link the SAME PSY-Q 1.129 — SDK, not engine. Next is CRASH2 at 6.2% |
@@ -192,7 +215,7 @@ means nothing on its own.
 | `psxport/` | the framework, and the ONLY framework | exists |
 | `spyro/` | the Insomniac lineage — Spyro 1, 2, 3 as `titles/<t>/` with shared `game/` | exists; converts to multi-title WHEN Spyro 2 work actually starts |
 | `spider1/` | the Neversoft lineage — Spider-Man (`SLUS_008.75`) + **Spider-Man 2: Enter Electro** (USER, 2026-08-12: "can be part of spider-man") | exists; converts to multi-title WHEN Enter Electro work actually starts |
-| `Tomba2Engine/` | the Whoopee Camp lineage — Tomba! 2; **Tomba! 1** may live here by PREFERENCE only (0.5× the null max — measured NOT to share an engine) | exists; Tomba! 1 gets no shared `game/` — see below |
+| `Tomba2Engine/` | the Whoopee Camp lineage — Tomba! 2; **Tomba! 1** may live here by PREFERENCE only (0.5× / 0.08× — measured NOT to share a CODEBASE; "not the same engine" is the preference, since below-the-floor means neither tool detects anything) | exists; Tomba! 1 gets no shared `game/` — see below |
 | `crash/` | Crash 1, 2, 3 (Naughty Dog, GOOL VM) | when Crash work starts, not before |
 | `ctr/`, `crashbash/` | one title each — measured as their own engines | when that work starts, not before |
 | `vagrant/` | Vagrant Story — one title, one engine. No lineage scaffolding: Square's Ivalice-era code appears in nothing else we port | exists (2026-08-12) |

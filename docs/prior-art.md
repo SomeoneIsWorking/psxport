@@ -65,8 +65,12 @@ through it.
   name OUR addresses with no translation. Its matched figure is now **14.63%** (828 main-EXE functions —
   673 game, 155 PSY-Q/libc — plus 37 overlays); `spyro/docs/references.md` said ~5% and was stale.
   Also: `TheMobyCollective/spyro-1`, `celophi/spyro-decompilation`.
-- **Tomba! 1** — `hansbonini/psx_tomba` (above). Engine code will NOT transfer (measured 18.8% against
-  Tomba! 2's `MAIN.EXE`), but format and tooling knowledge should.
+- **Tomba! 1** — `hansbonini/psx_tomba` (above). Engine code will NOT transfer — 3.9% = 0.5× the
+  cross-studio null max against Tomba! 2's `MAIN.EXE`, and 1 shared whole function = 0.08× (the 18.8% an
+  earlier version of this line quoted is the pre-recalibration asymmetric figure; do not reuse it). Both
+  readings are BELOW their floors, i.e. neither tool detects anything, which is weaker than "different
+  engines" — but a shared codebase reads in the hundreds, so nothing transfers at the code level. Format
+  and tooling knowledge should.
 - **Crash** — no matching decomp. Partial efforts exist: a Crash 2 mini-decomp, a decomp strand inside the
   CTR ModSDK (active July 2026), and a Crash Bash RE project. Nothing to vendor yet.
 - **Toy Story 2** — no decomp. Traveller's Tales *format* tooling exists and is the useful half:
@@ -90,6 +94,10 @@ before it is clean and the USER has approved.
    code-plausible windows, calibrated against the MEASURED cross-studio null distribution: n=67, mean 3.91%,
    max 11.89%, stratified by PSY-Q version; positives 57.5% and 47.0% at 4.8x and 4.0x that max) plus the
    independent `tools/lineage_probe.py` (whole-function + exclusive-string evidence). Both were recalibrated
-   on 2026-08-12 after the original single "12.5% SDK ceiling" was falsified by a null pair reading 33.4%;
-   both now ship a `--selftest` that gates positives AND negatives. Nobody else appears to have either.
+   on 2026-08-12 after the original single "12.5% SDK ceiling" was falsified by a null pair reading 33.4%.
+   Both now ship a `--selftest` that gates positives AND negatives ON THE REAL CORPUS, and both refuse
+   (exit 2) rather than certify a corpus they did not scan — but note that `lineage_probe.py` only got its
+   corpus layer on 2026-08-12 in a later pass: until then its selftest was SYNTHETIC-ONLY and passed with
+   the corpus absent, truncated or swapped, which is exactly the gap that let the first tool's wrong SDK
+   ceiling survive. Nobody else appears to have either.
    Same for the registry/gate patterns and `gpuguard`.

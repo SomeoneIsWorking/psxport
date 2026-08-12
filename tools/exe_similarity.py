@@ -120,15 +120,21 @@ code). This is the matrix `--selftest` reproduces.
   WITH A NEGATIVE CONTROL SET disagrees with this tool, THE TARGETED MATCH WINS. This tool ranks
   candidates and refutes false families; it cannot certify one.
 
-  CORROBORATION BY AN INDEPENDENT TOOL, which is why these numbers may be trusted again:
+  CORROBORATION BY AN INDEPENDENT TOOL — ON BAND MEMBERSHIP AND THE EXTREMES, NOT ON ORDERING:
   `tools/lineage_probe.py` shares no code with this one (whole FUNCTIONS segmented at `jr $ra`, plus
-  exclusive-string overlap, counted absolutely and ranked by corpus spread) and reaches the same
-  ordering over a 17-binary corpus: SPIDER1|SPIDER2 16.4x its own null max, SPYRO2|SPYRO3 3.9x,
-  CRASH2|CRASH3 3.8x, and TOMBA1|TOMBA2, CRASHBASH|TOMBA2 and the loader/engine pair all BELOW it.
-  ONE DISAGREEMENT, recorded rather than resolved: SPYRO1|SPYRO2 is 0.8x here but 27 exclusive whole
-  functions = 1.8x there, across different PSY-Q cohorts (1.129 vs 1.140) so not an SDK artifact —
-  consistent with a few shared utility functions surviving a rewrite, which a whole-binary ratio
-  cannot see.
+  exclusive-string overlap, counted absolutely and ranked by corpus spread). Over a 17-binary corpus it
+  agrees on the TOP TWO pairs (SPIDER1|SPIDER2 16.4x its own measured null max, SPYRO2|SPYRO3 3.9x) and
+  on WHICH pairs fall below each tool's own floor (TOMBA1|TOMBA2, CRASHBASH|TOMBA2, the loader/engine
+  pair). It DISAGREES on mid-table order in two cells, and an earlier version of this paragraph claimed
+  "the same ordering", which the data contradicts:
+      SPYRO1|SPYRO2   0.8x here (below floor)  vs  27 units = 2.25x there
+      CRASH1|CRASH2   1.1x here                vs  25 units = 2.08x there   -> the pair is INVERTED
+      SCUS|MAIN       0.7x here, above SPYRO1|SPYRO2  vs  1 unit = 0.07x there, bottom of the table
+  (CRASH2|CRASH3 is 4.75x there, not the 3.8x recorded earlier — that divided by the pooled null max
+  instead of the pair's own PSY-Q stratum.) So: set-membership per band, never a total order.
+  AND THE INDEPENDENCE HAS A CEILING: the two tools share their CORPUS and their STUDIO ATTRIBUTION,
+  so a wrong developer attribution or a contaminated corpus member moves a pair in BOTH at once and
+  their agreement cannot detect it. See the STUDIOS caveat in KNOWN LIMITS — it applies JOINTLY.
 
 KNOWN LIMITS:
   * BOOT EXECUTABLES only. Overlays are not compared, so a game whose engine lives in overlays is
