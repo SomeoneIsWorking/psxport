@@ -138,7 +138,7 @@ def check_seeds_in_text(exe, seeds, where):
 # DR17/18/19 (DR15 pairs with DR19, the same slot RTPS writes).
 GTE_SCREEN_XY_REGS = (12, 13, 14, 15)
 
-RECOMP_VERSION = "2026-08-06.1"   # jr-$ra classifier: module-wide save slots + a real CFG fixpoint
+RECOMP_VERSION = "2026-08-12.1"   # wrappers maintain the OT-attribution stack on DIRECT calls too
 
 R = lambda n: f"c->r[{n}]"
 
@@ -2299,9 +2299,28 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         # guest busy-wait paced by a per-vblank callback can never terminate, because nothing
         # advances time between two guest instructions. Both share one word so the hot path cost is
         # unchanged: still a single load-and-test, however many kinds of work exist.
+        # OT/GTE SUBMISSION ATTRIBUTION ON DIRECT CALLS (docs/plans/graphics-producer-db.md, guest leg).
+        # Every direct call is emitted as this wrapper (call_or_dispatch) and the dispatch switch calls it
+        # too, so ONE push/pop here covers every guest call of BOTH kinds. Before this, the attribution
+        # stack was pushed only around INDIRECT dispatch, and the packet-pool stores are performed by
+        # shared SDK-adjacent routines reached by direct jal — so the stack was empty for exactly the
+        # stores that mattered and the guest leg attributed 1.61% of its prims.
+        #
+        # PRICED, NOT ASSUMED: 3,071,077 wrapper calls over a 1200-frame replay (2,559/frame), and an arm
+        # that pushes a CONSTANT (identical downstream behaviour, mechanism fully paid) measured +0.0%
+        # user CPU against baseline over interleaved pairs with PSXPORT_NOPACE=1. The wrapper already
+        # stores c->pc and does two load-and-test branches, so this is the same order of work as what it
+        # already pays. Secondary, and the real cost: .text grows ~4.5% because the wrapper loses its
+        # tail call into the body (it must return in order to pop).
+        #
+        # RESTORE, NOT CLEAR, and this is why the stack exists at all: c->pc is the same word one level
+        # down and is NOT restored on return, so a c->pc-based guest leg can only ever name a CALLEE.
+        # That is precisely how the removed PC route scored 100% coverage and ~0% truth
+        # (Tomba2Engine/docs/findings/render.md) — it named SDK libgs builders as the producers.
         d.append(f"void {N.wrap}_{a:08X}(Core* c) {{ c->pc = {addr_const(a)}; "
-                 f"if (c->pending_work) rec_irq_poll(c); if ({N.ovtab}[{i}]) {{ "
-                 f"{N.ovtab}[{i}](c); return; }} {N.gen}_{a:08X}(c); }}")
+                 f"if (c->pending_work) rec_irq_poll(c); c->idiag.otattrPush({addr_const(a)}); "
+                 f"if ({N.ovtab}[{i}]) {{ {N.ovtab}[{i}](c); c->idiag.otattrPop(); return; }} "
+                 f"{N.gen}_{a:08X}(c); c->idiag.otattrPop(); }}")
     d.append(f"int {N.index}(uint32_t addr) {{\n  switch (addr & 0x1FFFFFFFu) {{")
     for a in funcs:
         d.append(f"    case 0x{a & 0x1FFFFFFF:08X}u: return {idx[a]};")

@@ -57,16 +57,29 @@ struct InterpDiag {
   uint32_t dispwatch = 0xFFFFFFFFu;          // 0xFFFFFFFF = env not read yet; 0 = off
   uint32_t dispwatch_ra = 0;
 
-  // `debug otattr` — OT/GTE submission-attribution shadow stack (overlay_router.cpp rec_dispatch).
-  // Pushed/popped ONLY around the two real dispatch-body call sites in rec_dispatch (main_dispatch /
-  // resident-overlay disp) — i.e. only guest fns entered via an INDIRECT (jalr/r2) dispatch, which is
-  // exactly the shape of a data-driven per-object handler call (node+0x1C behavior ptr, render-command
-  // tables, …). Direct recompiler-emitted `func_XXXX(c)` calls do NOT push — they're plain nested C
-  // calls, invisible here — so the stack top is "the last INDIRECTLY-dispatched handler still on the
-  // C call stack", which is the useful "who is this GP0/GTE submission attributed to" answer, not a
-  // full instruction-level call trace. depth can exceed the array cap (only the top 64 are kept); pop
-  // still tracks it symmetrically so push/pop never desyncs.
-  static constexpr int OTATTR_CAP = 64;
+  // OT/GTE submission-attribution shadow stack — "who is this GP0/GTE submission attributed to".
+  //
+  // MAINTAINED ON EVERY GUEST CALL, both kinds, since 2026-08-12: the recompiler emits the push/pop in
+  // each guest function's WRAPPER (tools/recomp/emit.py), and both direct calls and the generated
+  // dispatch switches go through that wrapper. It is NOT channel-gated, so the attribution has the same
+  // shape in a normal run as in a diagnostic one.
+  //
+  // THE INVARIANT USED TO BE THE OPPOSITE and it is worth knowing why it changed, because the old shape
+  // produced a measured failure rather than merely being incomplete: pushes happened only around INDIRECT
+  // (jalr) dispatch, while the packet-pool stores are performed by shared SDK-adjacent routines reached by
+  // direct jal. Those stores therefore always read an EMPTY stack, and the graphics-producer DB's guest
+  // leg attributed 1.61% of its prims. Maintaining it on direct calls took that to 98.47%, priced at
+  // +0.0% user CPU over a 1200-frame replay (see emit.py's note for the measurement).
+  //
+  // This is a call-attribution stack, not an instruction-level trace. Depth may exceed the cap; only the
+  // top OTATTR_CAP frames are KEPT, while `otattr_depth` keeps counting, so push/pop never desyncs and
+  // otattrTop() returns an honest 0 above the cap rather than a stale frame.
+  //
+  // CAP RAISED 64 -> 256 with the invariant change, and not arbitrarily: the old stack only ever held
+  // indirectly-dispatched frames, so it was shallow by construction; it now holds the real guest call
+  // depth. Overflow does not corrupt anything, it silently stops attributing — which is a candidate for
+  // the residual 1.36% of stores that still read no fn (unmeasured). 256 words is 1 KB per Core.
+  static constexpr int OTATTR_CAP = 256;
   uint32_t otattr_stack[OTATTR_CAP] = {};
   int      otattr_depth = 0;
   void     otattrPush(uint32_t addr) { if (otattr_depth < OTATTR_CAP) otattr_stack[otattr_depth] = addr; otattr_depth++; }

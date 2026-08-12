@@ -322,20 +322,19 @@ void rec_dispatch(Core* c, uint32_t addr) {
     // resolve addresses to FUN_/native names automatically.
     guest_backtrace_to(c, stderr);
   }
-  // `debug otattr` — OT/GTE submission-attribution shadow stack (docs/config.md, docs/gfx-debug.md):
-  // push the guest fn addr around the two real dispatch-body calls below (main_dispatch / resident-
-  // overlay disp), pop on return. Diagnostic only — zero behavior change, no guest-memory writes.
-  // This gates real NON-LOGGING work (the shadow-stack push/pop), in the hottest function in the
-  // substrate, so it is an interned lucent::Channel: one relaxed load, one compare, one branch when
-  // off — not a name hash under a mutex.
-  static const lucent::Channel otattr_ch{"otattr"};
-  const bool otattr_on = otattr_ch.enabled();
+  // THE OT-ATTRIBUTION PUSHES THAT USED TO LIVE HERE ARE GONE, and their absence is the fix rather than a
+  // regression. They wrapped the generated dispatch switches, which reach a guest function through its
+  // WRAPPER — and the wrapper now pushes and pops for itself (tools/recomp/emit.py), on direct calls as
+  // well as indirect. Keeping these would push the same address TWICE for every indirect dispatch, which
+  // breaks otattrCaller(): the caller of a span would be read back as the span's own function.
+  //
+  // They were also channel-gated, which made the guest leg's identity depend on whether a debug channel
+  // happened to be on. The wrapper's push is unconditional and was measured free (+0.0% user CPU), so the
+  // attribution no longer changes shape between a diagnostic run and a normal one.
   uint32_t a = addr & 0x1FFFFFFF;
   const RecompRegistry* R = psxport_recomp();
   if (a >= c->cfg->recMainLo && a < c->cfg->recMainHi) {
-    if (otattr_on) c->idiag.otattrPush(addr);
-    R->main_dispatch(c, addr);
-    if (otattr_on) c->idiag.otattrPop();
+    R->main_dispatch(c, addr);   // pushes/pops inside the wrapper now — see the note above
     return;
   }
   // A RELOCATABLE module owns whatever range it was placed at, so it is routed by live base. Its
@@ -343,9 +342,7 @@ void rec_dispatch(Core* c, uint32_t addr) {
   // delta itself, so nothing is translated here.
   const int live = overlay_live_index(c, addr);
   if (live >= 0) {
-    if (otattr_on) c->idiag.otattrPush(addr);
-    R->overlays[live].disp(c, addr);
-    if (otattr_on) c->idiag.otattrPop();
+    R->overlays[live].disp(c, addr);   // pushes/pops inside the wrapper now
     return;
   }
   for (int i = 0; i < R->overlay_count; i++) {
@@ -354,9 +351,7 @@ void rec_dispatch(Core* c, uint32_t addr) {
     if (a >= (o->base & 0x1FFFFFFF) && a < (o->end & 0x1FFFFFFF)) {
       const RecOverlay* res = resident_overlay(c, o->base);
       if (res) {
-        if (otattr_on) c->idiag.otattrPush(addr);
-        res->disp(c, addr);
-        if (otattr_on) c->idiag.otattrPop();
+        res->disp(c, addr);   // pushes/pops inside the wrapper now
         return;
       }
       // overlay slot but NO resident overlay signature matches -> fail fast. Dump what IS resident so a

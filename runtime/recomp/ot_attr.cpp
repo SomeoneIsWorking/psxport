@@ -69,7 +69,13 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
   // (LAST-WRITER PROVENANCE, ot_attr.h) can cover scratchpad, not just the packet pool.
   const uint32_t phys   = addr & 0x1FFFFFFFu;
 
-  recordFnStat(frame, fn, phys);          // fed unconditionally — `otattr trace`'s copy-loop heuristic
+  // GATED ON THE CHANNEL, and the gate is LOAD-BEARING — shipping the direct-call push without it costs
+  // +24% user CPU on pc_render and +87% on psx_render (1200-frame replay, PSXPORT_NOPACE=1, measured).
+  // recordFnStat LINEAR-SCANS up to FNSTAT_CAP entries keyed on `fn`, on EVERY guest store, before the
+  // pool-range early-out. That was O(1) BY ACCIDENT while otattrTop() was structurally 0: one row, always
+  // a first-iteration hit. Maintaining the stack on direct calls turns it into a real scan. It is read
+  // ONLY by `otattr trace`, whose REPL path already reports "no per-fn store stat recorded" when empty.
+  if (g_otattr_channel) recordFnStat(frame, fn, phys);
   trackWatch(fn, caller, phys, bytes, frame);
 
   const uint32_t k = addr | 0x80000000u;
