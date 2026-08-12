@@ -25,9 +25,16 @@ So the *mechanism* is sound and only the *reference* is wrong. This plan replace
 - The complete Mednafen PSX core is vendored: `cpu.c` (3,765 lines), `dma.c`, `irq.c`, `timer.c`,
   `cdc.c` (3,201), `gpu.c` + its polygon/line/sprite units, `sio.c`, `frontio.c`, `spu.c`, `gte.c`,
   `mdec.c`. `vendor/beetle-psx/libretro.c` is the system glue and owns `MainRAM`.
-- `mednafen/psx/cpu.c` **compiles clean** against the vendored include paths — 0 errors. The others need
-  only `-Ivendor/beetle-psx/libretro-common/include` for `boolean.h`; psxport ALREADY builds `gte.c`,
-  `mdec.c` and `spu.c` this way, so the toolchain question is settled.
+- **THE CORE BUILDS. Measured by compiling it, not by reading it:** with
+  `-Ivendor/beetle-psx{,/mednafen,/mednafen/psx,/include,/libretro-common/include,/deps/libchdr/include}`,
+  **10 of the 15 `.c` files compile to objects**, `cpu.o` among them (73,512 bytes, 16 exported
+  functions). The five that do not are explained and none is a real obstacle: `gpu_polygon.c`,
+  `gpu_sprite.c` and `gpu_line.c` are `#include`d INTO `gpu.c` (lines 64-66) and were never separate
+  translation units; `gte.c` needs psxport's own `runtime/recomp/gte_state.h` on the path, which is why
+  psxport already builds it; only `gpu.c` itself has a genuine missing declaration to resolve, and the
+  GPU is not needed for milestones 1-3 below.
+- **COMPILING IS NOT WORKING.** This settles the toolchain question and nothing else: no object here has
+  been linked, initialised, or stepped for a single instruction.
 - A BIOS exists and is not a licensing problem: `bios/openbios-fast.bin` plus
   `vendor/beetle-psx/deps/openbios/openbios.bin` (OpenBIOS, open source). No retail Sony image needed.
 - Beetle is a **committed GPL-2 fork** on the submodule's `psxport` branch (`patches/beetle-psx/README.md`),
