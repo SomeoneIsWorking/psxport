@@ -146,6 +146,34 @@ cmake --build build -j6
 ctest --test-dir build --output-on-failure
 ```
 
+### The agnosticism RATCHET: `game_literals` (`tools/lint/game_literals.py`)
+
+Two of those 38 ctest entries are not compiled tests. `game_literals` scans `runtime/**` and
+`tools/recomp/**` for hardcoded GUEST addresses — one game's fact compiled into the library every
+port links — and `game_literals_selftest` gates the detector that certifies it. `psxport_smoke` is
+structurally blind to this leak class: a byte-faithful transcription of another game's functions
+contains no game SYMBOLS. Spec and burn-down order: `docs/plans/game-seam-redesign.md` §7 / §6.
+
+```bash
+python3 tools/lint/game_literals.py            # the gate (also ctest `game_literals`)
+python3 tools/lint/game_literals.py --selftest # both classes: must-flag and must-not-flag
+python3 tools/lint/game_literals.py --write-baseline   # ONLY to record a deliberate burn-down
+```
+
+It is a **ratchet**: `tools/lint/game_literals_baseline.txt` records today's flagged
+`<file>:<value>:<count>`, a count may only go DOWN, and going down requires regenerating that
+tracked file in the same reviewed change. `--write-baseline` REFUSES to record more than the
+baseline already holds without `--grow` (neither ctest nor the hook passes it). Only LIVE code is
+gated; the same values in comments and strings are counted and listed separately at the bottom of
+the baseline, because sizing seam work off a grep count that mixes the two has misled this project
+before (`pc_scheduler.h` reads 17 in a raw grep and **0** in live code). Two legal remedies for a
+failure: move the fact across the seam (§2 decides which mechanism), or annotate the line
+`// psx-console: <the console fact>` when the value really is a console constant the classifier
+cannot know. A scan that matches zero files exits **2** saying it scanned NOTHING — never clean.
+
+The same two commands are in `scripts/hooks/pre-commit`; install it per clone with
+`ln -sf ../../scripts/hooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
+
 ### The `cfg_*` -> `lucent::` sweep: two instruments, in `tools/`
 
 Retiring the printf-style `cfg_log*` shim is a several-hundred-site mechanical edit, which is exactly
