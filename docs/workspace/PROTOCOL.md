@@ -156,9 +156,16 @@ interlocked. It also had a blanket "the word gpuguard appears" exemption, which 
 It now matches in COMMAND POSITION only (the executable of each statement, after skipping `VAR=val` and
 wrappers like `timeout`/`env`/`python3`), strips heredoc bodies as data, and treats `tools/gate.py` and
 `tools/gate.sh` as launches because they drive the port binary. **Validate it in both directions before
-trusting it** — `python3 ~/.claude/hooks/gpu_guard_hook.py --selftest` runs 13 launch and 12 non-launch
-cases; the old matcher scores 5 false positives and 4 false negatives against that suite, which is what
-makes the suite a discriminator rather than a decoration. To prove the classifier reaches the interlock
+trusting it** — `python3 ~/.claude/hooks/gpu_guard_hook.py --selftest` runs 20 launch and 14 non-launch
+cases; the old matcher scores 6 false positives and 7 false negatives against that suite, which is what
+makes the suite a discriminator rather than a decoration.
+
+**Matching in command position is necessary but NOT SUFFICIENT if you cannot FIND the command position.**
+The first pass at this fix still missed `for g in a b; do ./bin/spyro_port; done`, `if true; then
+./bin/tomba2_port; fi`, `while read l; do …; done`, `time …` and `nohup …` — five real launch shapes, all
+unguarded, because the statement began with a shell keyword that is not a wrapper so the classifier
+returned the keyword as the executable. Found by PROBING the classifier with the command shapes actually
+in use, not by re-reading it. Shell keywords are statement separators now. To prove the classifier reaches the interlock
 rather than merely labelling correctly: `gpuguard latch …`, feed the hook a launch and a commit, confirm
 DENY/ALLOW, then `gpuguard clear`.
 
