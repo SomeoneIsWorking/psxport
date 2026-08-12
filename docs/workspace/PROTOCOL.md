@@ -322,6 +322,51 @@ which is already this project's stated long-term direction, so this is **permiss
 that, not a new plan.** Never let a beetle constraint (its licence, its behaviour, its build) stop a
 decision: state what dropping it would cost, then proceed.
 
+## THE SHIPPED VALUE MUST BE COMPARED TO THE MEASURED ONE — BY CODE, NOT BY A HUMAN'S EYES
+
+Measured 2026-08-12, and this is why it is a rule rather than four bug reports: **the same structural
+defect appeared INDEPENDENTLY in four of five projects in one run**, and in every case the author
+believed a gate protected the value, and named that gate in a registry entry.
+
+The shape is always this. An RE step measures values with a tool. The tool keeps its own copy
+(`FIXTURE_EXPECT`, `X4_EXPECT`) and asserts the binary still matches it. The port keeps a SECOND copy
+(`constexpr kFoo = 0x…` in `game_config.cpp`). **Nothing compares the two copies.** So the tool
+verifies itself, the `static_assert`s verify internal consistency, both gates pass — and the value
+that actually ships can be anything at all. Verified by sabotage in each repo, not argued:
+
+| repo | sabotage | both gates said |
+|---|---|---|
+| megamanx4 | `kCrt0GameMain` -> `0x80999999`, `kCrt0LibcInit` -> `0xDEADBEEF` | PASS |
+| vagrant | `kHeapSizePtr` +4, `kLibcInit` -> a real nop instruction | PASS |
+| psxport | deleted the ORACLE/SBS suppression from `enh_gate()` entirely | selftest PASS, "0 disagreement(s)" |
+| Tomba2Engine | replaced `_ref_time_from_git()` with a 1970 constant | selftest PASS while the tool's whole answer INVERTED |
+
+The psxport row is the one to feel: with the suppression gone, an `PSXPORT_ORACLE` run enables every
+enhancement, so the byte-compare oracle is contaminated — and the shipping selftest still certified it.
+
+**THE RULE. A measured constant that ships in code must be checked, by something that runs, against the
+measurement it came from.** Concretely, one of:
+
+1. **The tool reads the shipping file.** `verify_crt0.py --check` should parse `game_config.cpp`'s
+   constants and diff them against what it measures from the binary. One source of truth, one
+   comparison, and a hand-edit of either side goes red.
+2. **Or the shipping file is GENERATED** from the measurement, and the generator is in the gate. Then
+   the two copies cannot drift because there is only one.
+
+A `static_assert` over the constants' internal RELATIONS is worth having and is NOT this. `hi - lo ==
+0x46B20` holds just as well when both are wrong.
+
+**AND THE SELFTEST MUST EXERCISE THE SHIPPING PATH, not a pure helper beside it.** psxport's
+`selftest()` looped `compare_run_from()` — the pure predicate — and never called `enh_gate()`, the
+function the game actually reaches. Tomba2's injected its reference string, so the novel half had zero
+coverage. In both cases the tested code and the shipping code were different code.
+
+**HOW TO KNOW YOURS IS REAL: sabotage it.** Break the thing the gate exists to protect — the shipped
+constant, the suppression, the novel helper — run the gate, and require RED. Restore, and prove the
+restore with `git diff`. A gate that has only ever been green is not evidence; it is decoration. This
+is the same discipline the instruments rule already demands of a diagnostic, applied to the gate that
+guards a ported value.
+
 ## TDD — the framework change starts with a RED test
 
 psxport currently has **no wired test suite at all**: `tests/` holds two files
