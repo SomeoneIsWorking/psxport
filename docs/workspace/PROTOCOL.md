@@ -201,29 +201,40 @@ generator in the gate — then the two copies cannot drift because there is only
 0x46B20` holds just as well when both are wrong. **And the selftest must exercise the SHIPPING path, not a
 pure helper beside it** — twice in one session the tested code and the shipping code were different code.
 
-## PROVE THE GATE GOES RED — a check never seen fail is decoration
+## WRITE THE TEST FOR THE CASE THAT WOULD FAIL — do not break the tree to prove it could
 
-**Nothing a check prints is evidence until that same check, in that same mode, has produced the FAILING
-answer** — "0 problems found" from a check that never could find one is the defect, not the evidence, and
-that is what every fix claim rests on.
+> USER, 2026-08-12: *"this sabotage thing is too excessive, I'd rather verify that things work rather
+> than break them and see they are broken"*
 
-**TWO REQUIREMENTS, and collapsing them into one is how this rule gets quietly gutted** — it has already
-happened once, in the edit that first merged these sections. One is per GATE and one is per FIX:
+**So: DO NOT edit the live tree to make a gate go red.** That ritual is retired. It was tried heavily on
+2026-08-12 and its own cost showed up the same day, twice, in the way that matters most — **broken code
+left behind in the tree**. An agent died mid-break and left `tools/crt0_extract.cpp`'s PS-X EXE magic
+check as `if (false)`, which would have shipped a tool that accepts a headerless blob and prints a boot
+group of garbage in its normal confident format, into six repos' `game_config.cpp`. Hours later a
+break-and-restore loop hit a command timeout before its restore ran and left `producer_census.h`
+sabotaged. Neither was caught by a gate; both were caught by hand, one of them only because a checklist
+had been written down.
 
-1. **COMMISSION each gate, selftest or instrument ONCE, per CLASS it claims.** Break what it protects in
-   the SHIPPING path, run it, require RED, restore, and prove the restore against the SHIPPING file AFTER
-   your last edit — md5 plus `git diff --numstat`, because a proof taken before a later edit once described
-   a file one line different from the one that shipped. Per CLASS, not per tool — a selftest green across
-   every class it had has still missed real holes in the very tool it covered, and one audit needed a
-   separate break per mechanism before it was trustworthy (findings has both, with their counts; do not
-   hand-copy a live count into this file). This half IS one-time — not a ritual on every change.
-2. **PER FIX, the negative control is not optional and not inherited:** *this same instrument, in this same
-   mode, produced the FAILING answer BEFORE THIS CHANGE.* A gate commissioned last month tells you the gate
-   works; it says NOTHING about whether it can see the bug in front of you. **A commissioning record can
-   never discharge this**, and if you find yourself citing one instead, you are about to close a bug your
-   measurement cannot see. The incident behind this sentence: a fix closed at "99.95% non-black" measured
-   entirely under a mode that SKIPS INTRO FMVS BY CONSTRUCTION (findings) — the check was sound, was
-   commissioned, and could not have come back negative for THAT bug.
+**What survives is the QUESTION, not the ritual.** The thing worth keeping is:
+
+- **Nothing a check prints is evidence until it COULD have said otherwise.** "0 problems found" from a
+  check that could not have found one is the defect, not the evidence.
+- **So enumerate the case that WOULD fail, and write it as a POSITIVE test.** Not "break the code and
+  watch"— *add the input that must produce a failure, and assert the failure.* A test whose fixture is a
+  foreign build id, an underflowed heap size, a headerless image, a claim earned by a different build, is
+  permanent, runs on every build, needs no restore, and cannot leave debris. Every hole that breaking
+  things found this session was fixed by adding exactly such a test; the break was only how the missing
+  case got noticed, and noticing is cheaper by reading the check and asking what input it cannot see.
+- **If you genuinely must confirm a gate can fail at all, do it on a COPY** — a scratch clone, never the
+  live tree — and say so in your report.
+- **The per-FIX half still holds and is not a ritual:** before claiming a fix, your instrument must have
+  actually produced the failing answer FOR THIS BUG. Not a commissioning record from last month — those
+  answer a different question. The incident: a fix closed at "99.95% non-black" measured entirely under a
+  mode that SKIPS INTRO FMVS BY CONSTRUCTION (findings). The check was sound and still could not have come
+  back negative for that bug. Reproducing the bug with your own instrument IS verifying that things work.
+
+**And the selftest must exercise the SHIPPING path, not a pure helper beside it** — twice in one session
+the tested code and the shipping code were different code.
 
 ## TDD — the framework change starts with a RED test
 
@@ -289,8 +300,8 @@ user's observation. A tap is the same move in code.
 1. **Reproduce in the user's conditions BEFORE fixing anything** — not a proxy, not a headless
    approximation, not "the underlying unit". If you cannot reproduce it you do not understand it yet.
 2. **The instrument must have produced the FAILING answer FOR THIS BUG, BEFORE THIS CHANGE, or you have
-   no fix claim** — "PROVE THE GATE GOES RED" above, requirement 2. A gate's commissioning record does not
-   count; it is per-fix evidence or it is nothing.
+   no fix claim** — "WRITE THE TEST FOR THE CASE THAT WOULD FAIL" above. Reproducing the bug with your own
+   instrument is the requirement; a gate's history answers a different question.
 3. **Close on a FIX plus evidence, never on a diagnosis**, and **name what you did NOT verify** — the
    reopen is only cheap if the user can see which part of their report your evidence covers. "Measured X
    under Y; did not check Z" is a good close. "Fixed" is not.

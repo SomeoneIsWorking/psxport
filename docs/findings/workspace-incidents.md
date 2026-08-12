@@ -113,7 +113,8 @@ A black intro was "fixed" and verified at 99.95% non-black, entirely under `PSXP
 mode that SKIPS INTRO FMVS BY CONSTRUCTION (`native_boot.cpp:612`). The numbers were true and answered a
 question nobody asked; the USER, watching the window, still saw a black screen.
 
-**Rules it produced:** reproduce in the user's conditions before fixing; prove the gate goes red;
+**Rules it produced:** reproduce in the user's conditions before fixing; write the test for the case
+that would fail;
 `cfg_on("PSXPORT_VK_HEADLESS")` reached anywhere except the final present/readback step is a defect.
 
 ## 2026-08-04/06 — the "vibrating" effect was manufactured entirely by the port
@@ -161,7 +162,10 @@ shipping code were different code.
 
 ## 2026-08-12 — what BREAKING a gate found that 15 green classes never did
 
-Evidence for "PROVE THE GATE GOES RED", and for why the proof is **per class** rather than per tool.
+Evidence for "WRITE THE TEST FOR THE CASE THAT WOULD FAIL", and for why coverage is owed **per class**
+rather than per tool. Read it as a record of what was MISSING from a test suite — each row below became a
+new positive test — not as an argument for breaking a live tree, which USER 2026-08-12 retired after it
+left broken code behind twice in one day.
 
 Tomba2Engine `tools/producers.py` had 15 green selftest classes. Two real holes survived all of them, each
 surfaced only by breaking the shipping path and requiring RED:
