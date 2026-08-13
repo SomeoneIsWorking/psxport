@@ -291,6 +291,7 @@ void     gte_op(Core* c, uint32_t insn);
 // per-Core pre-op observer. The interpreter's gte_op path uses Core::pc, which is exact there.
 void     gte_op_at(Core* c, uint32_t insn, uint32_t guest_pc);
 void     gte_preop_observer_arm(Core* c, GtePreOpFn fn, void* user);
+void     gte_op_observer_arm(Core* c, GtePreOpFn preFn, GtePostOpFn postFn, void* user);
 uint64_t gte_preop_observer_disarm(Core* c);  // returns armed-op denominator
 uint64_t gte_preop_observer_seen(const Core* c);
 // swc2 of a projected screen-XY register (DR12/13/14/15): stores to memory AND records that vertex's
