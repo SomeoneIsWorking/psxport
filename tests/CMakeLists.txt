@@ -55,3 +55,17 @@ endforeach()
 
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
+
+# tool_selftests — run every psxport tool's own --selftest, and NAME the tools that have none.
+# Added because toystory2/tools/overlay_map.py sat COMMITTED with its constant fold disabled while its own
+# --selftest reported 2/7 the whole time: nothing in any repo ever ran a tool selftest. This target runs
+# the runner's OWN fixture selftest (7 constructed classes, so the classifier is checked against known
+# answers) — that part is hermetic and belongs in ctest. Sweeping the real tools/ directory is NOT wired
+# in here: several tools need a disc, a live debug server, or Ghidra, so a ctest over them would be
+# environment-dependent and would fail for reasons that are not defects. Run that sweep by hand:
+#     python3 scripts/tool_selftests.py tools
+# Measured 2026-08-13: of 24 framework tools, only 2 have a selftest that runs and passes here, 17 have
+# none at all, and 3 are Ghidra-only. That backlog is the finding, not this test.
+add_test(NAME tool_selftests_classifier
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/tool_selftests.py --selftest)
