@@ -25,8 +25,9 @@ GH=https://github.com/SomeoneIsWorking
 
 # Vendors, ONE AT A TIME and NON-recursively. `--recurse-submodules` / `--recursive` ABORT on
 # beetle-psx's URL-less nested deps/lightning/gnulib and stop BEFORE the submodules that follow,
-# leaving them empty with every file staged-deleted (measured 2026-08-11 creating the dev clone; see
-# docs/workspace/KNOWN-DEFECT-sync-submodules.md). The reset is what repairs that half-checkout.
+# leaving them empty with every file staged-deleted (measured 2026-08-11 creating the dev clone; the
+# same abort is the incident recorded in docs/findings/workspace-incidents.md, where the fix for
+# scripts/sync-submodules.sh is described). The reset is what repairs that half-checkout.
 init_vendors() {                       # init_vendors <psxport checkout>
   local root="$1"
   for sm in vendor/beetle-psx vendor/lucent; do

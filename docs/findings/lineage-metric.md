@@ -169,7 +169,7 @@ reversed.
 - **Not an engine-family LIBRARY vendored between psxport and a game.** A middle layer whose whole nature
   is "holds facts for N games" is a factory for the residence defect `pc_scheduler.cpp` already is —
   invisible to `psxport_smoke`, outside `test_no_game_address_literals.cpp`'s scope, and a second pin to
-  sync through a `sync-submodules.sh` that already certifies pins it never checked. Shared lineage code
+  sync through a `sync-submodules.sh` whose enumeration defect cost three builds in a day before it was fixed. Shared lineage code
   lives INSIDE the lineage repo, where inheritance is the seam plan's own answer
   (`docs/plans/game-seam-redesign.md`) and where "shared `game/` may not hold title literals" can be
   linted the same way.

@@ -18,14 +18,22 @@ pin, and only a `git ls-tree` check caught it.
 **Falsifier:** `sync-submodules.sh` no longer syncing toward the recorded pin, or `run.sh` no longer
 calling it.
 
-## 2026-08-11 — `sync-submodules.sh` certifies pins it never checked, and no fixed copy exists
+## 2026-08-11 — `sync-submodules.sh` certified pins it never checked (FIXED 2026-08-13)
 
 `git submodule status --recursive` aborts on beetle-psx's URL-less nested `deps/lightning/gnulib`, so it
-never reaches `vendor/lucent`; the script's `|| true` swallows the non-zero exit and it prints "all at
-recorded gitlinks" over a partial enumeration. Full write-up:
-`docs/workspace/KNOWN-DEFECT-sync-submodules.md`. Verify with
-`md5sum $PSX/coord/st.sh */external/psxport/scripts/sync-submodules.sh` before trusting any claim that
-this is fixed.
+never reached `vendor/lucent`; the script's `|| true` swallowed the non-zero exit and it printed "all at
+recorded gitlinks" over a partial enumeration. It cost three broken builds in one day: `ot_attr.h` needs
+vendored lucent >= `07c5836` and the stale `02ea34b` checkout failed to compile every time.
+
+**THE CAUSE WAS NOT `|| true` — the check HAD NO DENOMINATOR**, so a short enumeration was
+indistinguishable from a complete one. That is this workspace's recurring failure class, and it was
+living inside the script written to prevent it.
+
+**FIXED, verified 2026-08-13:** the script enumerates gitlinks directly (`ls-files -s` filtered to mode
+160000) rather than trusting git's recursive walk, prints "checked N of M submodule(s)", and NAMES what
+it cannot cover (the URL-less nested path git itself cannot sync). All seven trees carry it, md5
+`535fd152dba6…`, and `tests/test_sync_submodules.cpp` passes. **Falsifier:** the script reporting "all
+at recorded gitlinks" without an N-of-M count, or an N less than M presented as clean.
 
 **Re-confirmed the same day by the same abort in a different tool:** creating the dev clone with
 `git clone --recurse-submodules` died on that exact path *after* cloning beetle and *before* checking out

@@ -93,8 +93,18 @@ and `spyro/` had not converted to multi-title, so nothing was defended by inerti
 - Rejected: one repo for Spyro AND Crash · an engine-family library vendored between psxport and a game ·
   8 sibling per-title repos.
 
-## Known workspace defect
+## Submodule sync: FIXED, and what it now guarantees
 
-`sync-submodules.sh` certifies pins it never checked — recursive submodule operations on this tree stop
-early instead of failing loudly, and no fixed copy exists. `KNOWN-DEFECT-sync-submodules.md`, beside this
-file.
+`scripts/sync-submodules.sh` used to certify pins it never checked. It now enumerates gitlinks DIRECTLY
+(`ls-files -s`, filtering mode 160000) instead of trusting `git submodule status --recursive`, which
+aborts on beetle-psx's URL-less nested `deps/lightning/gnulib` and so never reached `vendor/lucent`.
+It prints a DENOMINATOR and names what it cannot cover:
+
+    [submodules] checked 2 of 2 submodule(s), all at this repo's recorded gitlinks — NOT covered
+    (gitlink(s) no .gitmodules declares, so git itself cannot sync them):
+    vendor/beetle-psx/deps/lightning/gnulib
+
+Verified 2026-08-13: all SEVEN trees carry the fixed script (md5 `535fd152dba6…`), and
+`tests/test_sync_submodules.cpp` passes. The lesson it cost is in
+`docs/findings/workspace-incidents.md` — the check had no denominator, so a short enumeration read as a
+clean bill of health.
