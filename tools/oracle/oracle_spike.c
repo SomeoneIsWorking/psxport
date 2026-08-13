@@ -39,7 +39,7 @@ static uint32_t i_lw   (int rt, int16_t off, int rs)    { return (0x23u << 26) |
 static uint32_t i_nop  (void)                           { return 0u; }
 
 // ── check bookkeeping: a plan up front, so a run that stops early cannot read as a pass ──────────
-#define PLANNED_CHECKS 12
+#define PLANNED_CHECKS 18
 static int s_ran = 0, s_failed = 0;
 
 static void check_u32(const char *what, uint32_t got, uint32_t want) {
@@ -80,8 +80,9 @@ static void check_stop(const char *what, OracleStop got, OracleStop want) {
 //                            architecturally readable after this instruction
 //   nop ...                  and the rest of RAM is zeros, which decode as `sll $zero,$zero,0` = nop,
 //                            so the CPU runs harmlessly forward until the cycle budget ends
-static int positive_case(void) {
-  uint32_t prog[8];
+// Built once, used by BOTH the bulk-run case and the single-step case, so "stepping agrees with running"
+// is a statement about the same 8 instructions rather than about two fixtures that happen to look alike.
+static int build_fixture(uint32_t *prog) {
   int n = 0;
   prog[n++] = i_lui  (R_T0, 0x1234);
   prog[n++] = i_ori  (R_T0, R_T0, 0x5678);
@@ -91,11 +92,19 @@ static int positive_case(void) {
   prog[n++] = i_lw   (R_T3, -16, R_SP);
   prog[n++] = i_nop();
   prog[n++] = i_nop();
+  return n;
+}
+
+#define WINDOW_CYCLES 200
+
+static int positive_case(void) {
+  uint32_t prog[8];
+  const int n = build_fixture(prog);
 
   if (!oracle_init())                                                        return 0;
   if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) return 0;
 
-  const OracleStop stop = oracle_run(200);   // ~8 real instructions then nops; no device is touched
+  const OracleStop stop = oracle_run(WINDOW_CYCLES);   // 8 real instructions then nops; no device touched
 
   OracleState st;
   oracle_capture(&st);
@@ -171,6 +180,77 @@ static int negative_case(void) {
   return 1;
 }
 
+// ── STEPPING: one instruction at a time must land where one bulk run lands ────────────────────────
+//
+// This is the property milestone 2 rests on. A register-level differential localises a divergence to ONE
+// instruction, which means driving both sides a step at a time — and that is only meaningful if stepping
+// and running are the same execution. The core keeps cycle-relative deadlines (`gte_ts_done`,
+// `muldiv_ts_done`, the load-absorb counters) as absolute values against its own timestamp, so a stepper
+// that restarted the clock at 0 each call would expire stalls early and quietly produce a DIFFERENT
+// result from the bulk run. That is exactly what this compares, rather than assuming it away.
+static int stepping_case(void) {
+  uint32_t prog[8];
+  const int n = build_fixture(prog);
+
+  // Reference: the bulk run, captured.
+  if (!oracle_init()) return 0;
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) return 0;
+  oracle_run(WINDOW_CYCLES);
+  OracleState bulk;
+  oracle_capture(&bulk);
+  oracle_teardown();
+
+  // The same window, reached one step at a time.
+  if (!oracle_init()) return 0;
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) return 0;
+
+  int      steps    = 0;
+  uint32_t distinct = 0, last_pc = 0;
+  OracleStop st = ORACLE_STOP_NONE;
+  while (oracle_timestamp() < WINDOW_CYCLES) {
+    st = oracle_step();
+    if (st != ORACLE_STOP_BUDGET) break;   // hardware or an event ended the window; not a step failure
+    steps++;
+    OracleState now;
+    oracle_capture(&now);
+    if (now.pc != last_pc) { distinct++; last_pc = now.pc; }
+    if (steps > WINDOW_CYCLES * 4) break;  // a stepper that never advances the clock must not spin forever
+  }
+  OracleState stepped;
+  oracle_capture(&stepped);
+
+  check_u32("stepping: $t0 matches the bulk run", stepped.gpr[R_T0], bulk.gpr[R_T0]);
+  check_u32("stepping: $t2 matches the bulk run", stepped.gpr[R_T2], bulk.gpr[R_T2]);
+  check_u32("stepping: $t3 matches the bulk run", stepped.gpr[R_T3], bulk.gpr[R_T3]);
+  check_u32("stepping: PC matches the bulk run",  stepped.pc,        bulk.pc);
+
+  // Without these two, every check above would pass on a stepper that executed nothing at all: the
+  // captures would agree because both sides would be at the entry with zeroed registers. A comparison
+  // that agrees because neither side moved is the failure mode this whole file exists to refuse.
+  s_ran++;
+  if (steps > 1) {
+    printf("  ok   %-46s = %d steps, %u distinct PC(s)\n",
+           "stepping: it really stepped, repeatedly", steps, distinct);
+  } else {
+    s_failed++;
+    printf("  FAIL %-46s = %d step(s) — the stepper does not advance\n",
+           "stepping: it really stepped, repeatedly", steps);
+  }
+  s_ran++;
+  if (distinct > 8) {
+    printf("  ok   %-46s = %u distinct PC(s) over %d step(s)\n",
+           "stepping: PC moved through the program", distinct, steps);
+  } else {
+    s_failed++;
+    printf("  FAIL %-46s = %u distinct PC(s) — the fixture is 8 instructions, so a real trace must\n"
+           "       visit more than 8 addresses before the window ends\n",
+           "stepping: PC moved through the program", distinct);
+  }
+
+  oracle_teardown();
+  return 1;
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);   // unbuffered: a crash mid-run must not swallow the checks already
   setvbuf(stderr, NULL, _IONBF, 0);   // printed, and stderr/stdout must interleave in the real order
@@ -181,6 +261,8 @@ int main(void) {
          "    assert $t0-$t3, $gp, $sp, the stored word in RAM, a clean stop, and that PC advanced within RAM.\n", FIX_ADDR);
   printf("  NEGATIVE (3 checks): read GPUSTAT at 0x1F801814 and assert the run REPORTS a hardware\n"
          "    stop at that address, rather than reading 0 and continuing.\n");
+  printf("  STEPPING (6 checks): run the SAME fixture one instruction at a time and require it to land\n"
+         "    exactly where the bulk run landed, having actually stepped through the program.\n");
   printf("  BLIND SPOTS, stated so this is not mistaken for more than it is: no BIOS is mapped, no\n"
          "    real game executable is loaded, no comparison against psxport's own paths is performed,\n"
          "    and nothing here exercises the GTE, DMA, CD or timers.\n\n");
@@ -190,6 +272,9 @@ int main(void) {
 
   printf("\nNEGATIVE — a hardware access must end the window and be named:\n");
   if (!negative_case()) { printf("  REFUSED: oracle setup failed; the negative case did not run.\n"); return 2; }
+
+  printf("\nSTEPPING — one instruction at a time must equal one bulk run:\n");
+  if (!stepping_case()) { printf("  REFUSED: oracle setup failed; the stepping case did not run.\n"); return 2; }
 
   printf("\n%d checks planned, %d ran, %d failed.\n", PLANNED_CHECKS, s_ran, s_failed);
   if (s_ran != PLANNED_CHECKS) {

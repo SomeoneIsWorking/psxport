@@ -70,6 +70,11 @@ static uint32_t   s_stop_addr = 0;
 // segfaulted — measured 2026-08-13. Lifecycle state belongs to whoever owns the lifecycle.
 static int s_up = 0;
 
+// The core's own cycle count, accumulated across every run/step since the last load. It is the ONE clock
+// the plan's DETERMINISM section requires: nothing else advances it, because `PSX_SetEventNT` refuses to
+// schedule and no timer or DMA is built into this library at all.
+static int32_t s_ts = 0;
+
 const char *oracle_stop_name(OracleStop s) {
   switch (s) {
     case ORACLE_STOP_NONE:     return "NOT RUN";
@@ -229,6 +234,7 @@ int oracle_init(void) {
 
   s_stop      = ORACLE_STOP_NONE;
   s_stop_addr = 0;
+  s_ts        = 0;
   s_up        = 1;
   return 1;
 }
@@ -266,7 +272,21 @@ int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr,
 
   s_stop      = ORACLE_STOP_NONE;
   s_stop_addr = 0;
+  s_ts        = 0;      // a fresh image starts a fresh clock; carrying one over would make two runs of
+                        // the same fixture report different cycle positions for the same instruction
   return 1;
+}
+
+// One slice of execution: run from the accumulated timestamp until `budget` more cycles have passed.
+// Shared by `oracle_run` and `oracle_step` so a whole window and a single instruction cannot drift apart
+// in how they treat the clock — the budget is the only difference between them.
+static OracleStop oracle_slice(int32_t budget) {
+  s_stop            = ORACLE_STOP_NONE;
+  s_stop_addr       = 0;
+  cpu_next_event_ts = s_ts + budget;
+  s_ts              = CPU_Run(PSX_CPU, s_ts);
+  if (s_stop == ORACLE_STOP_NONE) s_stop = ORACLE_STOP_BUDGET;
+  return s_stop;
 }
 
 OracleStop oracle_run(int32_t cycles) {
@@ -274,13 +294,21 @@ OracleStop oracle_run(int32_t cycles) {
     fprintf(stderr, "oracle: REFUSING to run — no CPU. oracle_init() has not succeeded.\n");
     return ORACLE_STOP_NONE;
   }
-  s_stop            = ORACLE_STOP_NONE;
-  s_stop_addr       = 0;
-  cpu_next_event_ts = cycles;         // the ONE clock: where this window ends
-  (void)CPU_Run(PSX_CPU, 0);
-  if (s_stop == ORACLE_STOP_NONE) s_stop = ORACLE_STOP_BUDGET;
-  return s_stop;
+  return oracle_slice(cycles);
 }
+
+OracleStop oracle_step(void) {
+  if (!s_up) {
+    fprintf(stderr, "oracle: REFUSING to step — no CPU. oracle_init() has not succeeded.\n");
+    return ORACLE_STOP_NONE;
+  }
+  // A 1-cycle budget. The core may spend more than one cycle on one instruction (a multiply, a GTE op and
+  // a load stall all cost several), so a step is "at least one instruction", not "exactly one cycle" —
+  // stated because a caller counting steps as cycles would mis-locate every divergence it found.
+  return oracle_slice(1);
+}
+
+int32_t oracle_timestamp(void) { return s_ts; }
 
 void oracle_capture(OracleState *out) {
   memset(out, 0, sizeof(*out));
@@ -291,7 +319,8 @@ void oracle_capture(OracleState *out) {
   out->hi        = r[33];
   out->pc        = PSX_CPU->BACKED_PC;
   out->next_pc   = PSX_CPU->BACKED_new_PC;
-  out->timestamp = cpu_next_event_ts;
+  out->timestamp = s_ts;   // cycles CONSUMED, not the budget — reporting the budget would make every
+                           // capture claim the window ran to completion even when hardware cut it short
   out->stop      = s_stop;
   out->stop_addr = s_stop_addr;
 }

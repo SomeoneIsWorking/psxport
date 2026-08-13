@@ -131,6 +131,19 @@ Three things milestone 1 taught that were NOT in the design:
    `PSX_SetEventNT` that refuses to schedule anything, that makes "no counter influenced this window" a
    checked property rather than an assumption — which is the DETERMINISM section's requirement, satisfied.
 
+**Single-stepping works and is EXACT, which is milestone 2's substrate.** `oracle_step()` advances the
+core by a 1-cycle budget with the timestamp carried forward, and the spike requires a step-by-step trace of
+the fixture to land exactly where one bulk run landed: 40 steps, 40 distinct PCs, identical registers and
+final PC. No vendor patch was needed — `cpu.c`'s `PSXPORT_HOOKS` per-instruction hook belongs to the
+retired architecture and its `psxport_hooks.h` no longer exists in this tree, so "use the existing hook"
+would have meant reviving a dead surface. The oracle owns the run loop, so it does not need one.
+
+The clock has to be carried, not reset: the core keeps cycle-relative deadlines (`gte_ts_done`,
+`muldiv_ts_done`, the load-absorb counters) as absolute values against its own timestamp. That is not an
+argument, it is a MEASURED mutation — `prove_spike_can_fail.sh` builds a variant whose slice restarts the
+clock at 0, and the stepped trace ends at `0x80010C84` instead of `0x800100A0`. One check catches it, the
+stepping-vs-bulk PC comparison, and nothing else does.
+
 **What milestone 1 still does not prove: anything about the port.** No comparison has been run. The spike
 says so in its own output.
 
@@ -147,8 +160,13 @@ determinism), or **prefix the archive's symbols** (`objcopy --prefix-symbols=ora
 1. ~~**Spike:** build the mednafen core into a `psxport_oracle` static library, no game, no port. Prove it
    steps N instructions from an injected executable and can read `MainRAM`. Nothing else.~~ **DONE, above.**
 2. **Register-level differential** over a straight-line window from the game entry (option 2), driven by
-   the existing PC hook. First real result: does our interpreter agree with Beetle instruction for
-   instruction before any BIOS call?
+   `oracle_step()` — NOT by "the existing PC hook", which no longer has a header in this tree. First real
+   result: does our interpreter agree with Beetle instruction for instruction before any BIOS call?
+   Two things are already known about where that window ends. `crt0_extract` reports Spyro's prologue as
+   35 instructions from `0x8005B8E0`, stopping on `jal (libcInit)` — the `A(39h)` `InitHeap` thunk at
+   `0x8005DB14`. And the oracle maps NO BIOS, so the thunk's jump into the kernel jump table at `0xA0`
+   lands in zeroed RAM. That is not a defect to patch around: it is precisely the boundary milestone 3
+   exists to model, reached by measurement instead of by assumption.
 3. **BIOS-call boundary** (option 1): detect the thunk, suspend the compare, resume at the return, and
    assert on the documented result. Each HLE becomes its own case.
 4. **Then** extend to RAM-per-frame with the CD path in, which is where `cdc.c`'s instant-read tap and

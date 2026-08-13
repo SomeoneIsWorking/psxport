@@ -56,6 +56,23 @@ int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr,
 OracleStop oracle_run(int32_t cycles);
 void       oracle_capture(OracleState *out);
 
+// Advance by the smallest amount the core will advance — the substrate for milestone 2's register-level
+// differential, where a divergence must localise to ONE instruction rather than one frame.
+//
+// It needs NO vendor patch, which is the point: `cpu.c`'s `PSXPORT_HOOKS` per-instruction hook belongs to
+// the retired architecture where psxport hooked into Beetle, and its `psxport_hooks.h` no longer exists in
+// this tree — so "use the existing hook" would have meant reviving a whole dead surface. The oracle owns
+// the run loop instead, so a one-cycle budget with the timestamp carried forward does the same job.
+//
+// The timestamp IS carried forward, deliberately: the core keeps cycle-relative deadlines
+// (`gte_ts_done`, `muldiv_ts_done`, the load-absorb counters) as absolute values against its own
+// timestamp, so restarting it at 0 every step would make stalls expire early and quietly change results.
+OracleStop oracle_step(void);
+
+// How many cycles the core has consumed since the last load. Carried across `oracle_step` calls, so a
+// trace can report where in the window a divergence sat.
+int32_t oracle_timestamp(void);
+
 // Direct RAM access, for injecting fixtures and for the eventual byte-compare.
 uint8_t *oracle_main_ram(void);
 uint32_t oracle_ram_size(void);
