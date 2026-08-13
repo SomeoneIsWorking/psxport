@@ -533,6 +533,9 @@ static void interp_flat(Core* c, uint32_t pc, uint32_t stop_ra) {
       }
     }
     c->pc = pc;   // per-core PC for backtraces/watchdog (oracle Core)
+    // Interpreter parity for generation-selected recomp checkpoints. The per-instruction branch
+    // exists only while a diagnostic is armed; normal interpreter runs pay the existing false test.
+    if (c->pcObserver.matches(pc)) c->pcObserver.observe(c, pc);
     // PSXPORT_PCTRAP=0xADDR — when the interpreter first reaches ADDR, dump the guest call chain (ra + a
     // wide stack scan incl. OVERLAY code 0x80100000..0x80200000) so we can find the native->interpreted
     // handoff for a still-PSX path (e.g. the field render driver). later-242 (RE tool, not behavior).

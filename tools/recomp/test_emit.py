@@ -172,6 +172,45 @@ def exe_of(data, base=0x80010000):
 # ----------------------------------------------------------------------------------------------------
 # 1. STRUCTURAL TESTS
 # ----------------------------------------------------------------------------------------------------
+def _emit_checkpoint_fixture(out_dir, diagnostic_pcs=None):
+    a = Asm()
+    a.addiu("v0", "zero", 1)
+    a.addiu("v1", "zero", 2)
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    kwargs = {} if diagnostic_pcs is None else {"diagnostic_pcs": set(diagnostic_pcs)}
+    emit.emit_module(exe_of(data), out_dir, emit.MAIN_NAMES, {a.base}, shards=1, **kwargs)
+    return {name: open(os.path.join(out_dir, name), "rb").read()
+            for name in sorted(os.listdir(out_dir))}
+
+
+def test_diagnostic_checkpoint_empty_set_is_byte_identical_to_legacy_output():
+    with tempfile.TemporaryDirectory() as legacy, tempfile.TemporaryDirectory() as explicit:
+        assert _emit_checkpoint_fixture(legacy) == _emit_checkpoint_fixture(explicit, set())
+
+
+def test_diagnostic_checkpoints_precede_two_selected_ordinary_instructions():
+    with tempfile.TemporaryDirectory() as td:
+        files = _emit_checkpoint_fixture(td, {0x80010000, 0x80010004})
+        shard = files[emit.MAIN_NAMES.shardpfx + "_0.c"].decode()
+        assert shard.count("pc_observer_at(c,") == 2
+        assert "pc_observer_at(c, 0x80010000u);\n  c->r[2] =" in shard
+        assert "pc_observer_at(c, 0x80010004u);\n  c->r[3] =" in shard
+
+
+def test_diagnostic_checkpoint_outside_emitted_text_refuses_with_denominator():
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            _emit_checkpoint_fixture(td, {0x80010100})
+        except SystemExit as error:
+            message = str(error)
+            assert "requested=1 emitted=0" in message
+            assert "0x80010100" in message
+        else:
+            assert False, "an unemitted requested checkpoint must refuse generation"
+
+
 def test_jumptable_idiom_A():
     # Variant A: lui base,HI ; addiu base,base,LO ; addu base,base,idx ; lw rN,0(base) ; jr rN
     # Table at 0x80010400 with 3 entries inside the function.
@@ -362,9 +401,15 @@ HARNESS = r"""
 #include <cstdio>
 #include <cstdlib>
 static void rec_irq_poll(struct Core*);
+struct InterpDiagFixture {
+  uint32_t otattr_pushes = 0, otattr_pops = 0, otattr_depth = 0;
+  void otattrPush(uint32_t){ ++otattr_pushes; ++otattr_depth; }
+  void otattrPop(){ if (!otattr_depth) std::abort(); ++otattr_pops; --otattr_depth; }
+};
 struct Core {
   uint32_t r[32]; uint32_t lo, hi, pc;
   uint32_t pending_work = 0;      // upstream's deferred-work gate tests this at entries/back-edges
+  InterpDiagFixture idiag;        // generated wrappers maintain the shipping OT-attribution stack
   uint8_t ram[0x200000];
   uint8_t  mem_r8 (uint32_t a){ return ram[a & 0x1FFFFF]; }
   uint16_t mem_r16(uint32_t a){ uint16_t v; memcpy(&v, ram + (a & 0x1FFFFF), 2); return v; }
@@ -501,6 +546,8 @@ def run_module(data, base, entry, regs=None, base_exe=0x80010000, seeds=None):
             f"  gen_func_{entry:08X}(&c);\n"
             '  for(int i=0;i<32;i++) printf("r%d=%08x\\n", i, c.r[i]);\n'
             '  printf("lo=%08x\\nhi=%08x\\ndispatch=%08x\\n", c.lo, c.hi, g_dispatch);\n'
+            '  printf("otpush=%08x\\notpop=%08x\\notdepth=%08x\\n", c.idiag.otattr_pushes, '
+            'c.idiag.otattr_pops, c.idiag.otattr_depth);\n'
             "  return 0;\n}\n")
         binp = os.path.join(td, "t")
         cmd = [cc, "-O2", "-foptimize-sibling-calls", "-w", f"-I{td}", "-o", binp, "-x", "c++",
@@ -1148,6 +1195,11 @@ def test_exec_coroutine_internal_label_runs_its_loop_and_its_epilogue():
         f"sp {SP0:08X} -> {res['r'][29]:08X}: the epilogue did not run, so the frame leaked"
     assert res["r"][31] == RA0, \
         f"ra {RA0:08X} -> {res['r'][31]:08X}: the internal link escaped as the caller's return address"
+    # run_module intentionally enters the generated body directly; any wrapper reached through an
+    # internal dispatch must nevertheless leave the shipping attribution stack balanced.
+    assert res["otpush"] == res["otpop"] and res["otdepth"] == 0, \
+        f"generated dispatch OT attribution was unbalanced: {res['otpush']} push, " \
+        f"{res['otpop']} pop, depth {res['otdepth']}"
 
 
 # ----------------------------------------------------------------------------------------------------

@@ -93,7 +93,8 @@ def load_seeds(path):
     def addrs(vs, where):
         return {addr(v, where) for v in vs}
 
-    known = {"main", "main_reentry", "overlay_bases", "overlay_base_patterns", "overlay_seeds"}
+    known = {"main", "main_reentry", "overlay_bases", "overlay_base_patterns", "overlay_seeds",
+             "diagnostic_pcs"}
     unknown = set(data) - known
     if unknown:
         sys.exit(f"[recomp] {path}: unknown key(s) {sorted(unknown)}; expected {sorted(known)}")
@@ -106,11 +107,12 @@ def load_seeds(path):
                                   for rx, v in data.get("overlay_base_patterns", [])],
         "overlay_seeds": {k: addrs(v, f"overlay_seeds[{k}]")
                           for k, v in data.get("overlay_seeds", {}).items()},
+        "diagnostic_pcs": addrs(data.get("diagnostic_pcs", []), "diagnostic_pcs"),
     }
 
 
 EMPTY_SEEDS = {"main": set(), "main_reentry": set(), "overlay_bases": {},
-               "overlay_base_patterns": [], "overlay_seeds": {}}
+               "overlay_base_patterns": [], "overlay_seeds": {}, "diagnostic_pcs": set()}
 
 
 def check_seeds_in_text(exe, seeds, where):
@@ -1149,7 +1151,8 @@ def collect_tail_dups(exe, lo, hi, funcset, ins, jt):
     return dup, blocks
 
 
-def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozenset()):
+def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozenset(),
+              diagnostic_pcs=frozenset(), emitted_diagnostic_pcs=None):
     """Emit one C function: the proven LINEAR walk over the contiguous body [lo,hi), PLUS appended
     DUPLICATED tail blocks for shared-epilogue targets that live outside [lo,hi) (collect_tail_dups).
     The [lo,hi) emission is unchanged; the entry (lo) is always first; tails are reached only by goto.
@@ -1251,6 +1254,10 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
         a = s
         while a < e:
             i = ins[a]
+            if a in diagnostic_pcs:
+                out.append(f"  pc_observer_at(c, 0x{a:08X}u);")
+                if emitted_diagnostic_pcs is not None:
+                    emitted_diagnostic_pcs.add(a)
             if a in labels:
                 out.append(f"L_{a:08X}:;")
                 # Loop back-edge: give the host a turn. One predictable load-and-test per iteration,
@@ -2157,7 +2164,8 @@ def write_if_changed(path, text):
     return True
 
 
-def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_seeds=None, reentry=()):
+def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_seeds=None, reentry=(),
+                diagnostic_pcs=frozenset()):
     """Discover the recompiled function set for `exe` and emit its module (shards + dispatch TU +
     decls header) under the symbol/file names in `N`. Shared by the MAIN.EXE module and the boot-
     stub module; the stub gets distinct names so its func_<addr> don't collide with MAIN's."""
@@ -2275,9 +2283,17 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
           f"returns): " + (" ".join(f"0x{a:08X}" for a in sorted(ra_computed)) or "(none computed)"))
 
     shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
+    emitted_diagnostic_pcs = set()
     for k, a in enumerate(funcs):
         emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry,
-                  ra_computed)
+                  ra_computed, diagnostic_pcs, emitted_diagnostic_pcs)
+    if emitted_diagnostic_pcs != set(diagnostic_pcs):
+        missing = sorted(set(diagnostic_pcs) - emitted_diagnostic_pcs)
+        extra = sorted(emitted_diagnostic_pcs - set(diagnostic_pcs))
+        raise SystemExit(f"[recomp] diagnostic checkpoints requested={len(diagnostic_pcs)} "
+                         f"emitted={len(emitted_diagnostic_pcs)} missing="
+                         f"{[f'0x{x:08X}' for x in missing]} extra="
+                         f"{[f'0x{x:08X}' for x in extra]}")
     for s in range(shards):
         write_if_changed(os.path.join(out_dir, f"{N.shardpfx}_{s}.c"), "\n".join(shard[s]) + "\n")
 
@@ -2381,6 +2397,7 @@ def main():
               "be missing and fail fast at runtime as a [recomp-MISS].")
         gs = EMPTY_SEEDS
     check_seeds_in_text(exe, gs["main"] | gs["main_reentry"], "--seeds main/main_reentry")
+    check_seeds_in_text(exe, gs["diagnostic_pcs"], "--seeds diagnostic_pcs")
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
     seeds = ({exe.entry} | gs["main"] | pointer_table_funcs(exe)
              | constructed_func_pointers(exe) | code_pointer_tables(exe)
@@ -2393,7 +2410,7 @@ def main():
     # Mid-function re-entry seeds — an entry inside another function whose body must fall THROUGH
     # into the seed (not `return`) — come from the game's seed file (`main_reentry`).
     src_files = emit_module(exe, out_dir, MAIN_NAMES, seeds, ov_dir, limit, SHARDS,
-                            reentry=gs["main_reentry"])
+                            reentry=gs["main_reentry"], diagnostic_pcs=gs["diagnostic_pcs"])
 
     # The disc's boot stub (SCUS_944.54): the real PSX entry — draws SCEA, then LoadExec's MAIN.
     # It overlaps MAIN.EXE's address space, so it is emitted as a SEPARATE module (STUB_NAMES) with

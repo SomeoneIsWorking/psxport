@@ -17,6 +17,7 @@
 #include "r3000.h"
 #include "render_substrate.h"     // Core owns a RenderSubstrate (host-only per-Core render substrate)
 #include "interp_diag.h"                      // Core owns an InterpDiag (interp.cpp trace/profile state)
+#include "pc_observer.h"
 #include "game_iface.h"                       // THE framework↔game seam: GameConfig / GameHooks / gameCtx
 
 #ifdef __cplusplus
@@ -45,6 +46,7 @@ public:
   // sit here — ScreenFade/Engine/Rng/Trig/Math/Mtx/Inventory/SaveMenu/Render — now live in the game's
   // opaque per-Core aggregate reached via gameCtx above; the framework no longer names them). ----
   RenderSubstrate rsub;           // host-only per-Core render substrate (by value; binds lazily, no ctor wiring)
+  PcObserver pcObserver;          // selected generated instruction boundaries only; diagnostic and per-Core
 
   uint32_t io_gpustat_toggle = 0;  // GPUSTAT (0x1F801814) even/odd line bit — per-instance HW state
 
@@ -290,6 +292,9 @@ void     gte_op(Core* c, uint32_t insn);
 // same GTE instruction; `_at` additionally supplies the instruction VA to an explicitly armed,
 // per-Core pre-op observer. The interpreter's gte_op path uses Core::pc, which is exact there.
 void     gte_op_at(Core* c, uint32_t insn, uint32_t guest_pc);
+inline void pc_observer_at(Core* c, uint32_t guest_pc) {
+  if (c && c->pcObserver.armed()) c->pcObserver.observe(c, guest_pc);
+}
 void     gte_preop_observer_arm(Core* c, GtePreOpFn fn, void* user);
 void     gte_op_observer_arm(Core* c, GtePreOpFn preFn, GtePostOpFn postFn, void* user);
 uint64_t gte_preop_observer_disarm(Core* c);  // returns armed-op denominator
