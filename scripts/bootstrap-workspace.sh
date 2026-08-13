@@ -42,7 +42,7 @@ say "framework dev clone: $PSXPORT"
 init_vendors "$PSXPORT"
 
 REMOTE_BACKED=(spyro spider1 Tomba2Engine vagrant megamanx4)
-LOCAL_ONLY=()                          # all trees have remotes as of 2026-08-12
+LOCAL_ONLY=()                          # no non-reproducible tree is currently registered here
 
 cloned=0; present=0
 for g in "${REMOTE_BACKED[@]}"; do

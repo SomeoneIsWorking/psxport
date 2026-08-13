@@ -23,12 +23,14 @@ Seven independent repos side by side, all public under `github.com/SomeoneIsWork
 and no superproject: a game must build from a bare clone of itself, a gitlink at this level would churn on
 every game commit, and a recursive clone would pull seven copies of psxport + beetle-psx.
 
-### Active title scope
+### Target title scope
 
-The active ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
+The target ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
 X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2. Mega Man X4 is already 60 fps, so its enhancement path is
-widescreen first and, much later, drop-in co-op — not interpolation. The checkout table below records
-what currently exists on this machine; it is not a promise that every checkout is an active port.
+widescreen first and, much later, drop-in co-op — not interpolation. **Today only Spyro 1, Spider-Man 1,
+Tomba! 2, Vagrant Story, and Mega Man X4 have reproducible local trees.** The remaining named titles are
+scope, not implementation coverage; create their planned lineage trees before claiming their framework,
+widescreen, or interpolation paths are underway.
 
 | path | what it is |
 |---|---|
@@ -48,8 +50,9 @@ git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport
 ~/repo/psx/psxport/scripts/bootstrap-workspace.sh   # clones the games, inits vendors, relinks CLAUDE.md
 ```
 
-A new tree is only reproducible once it is added to that script's `REMOTE_BACKED` list; `toystory2` is
-not in it yet.
+A new tree is only reproducible once it is added to that script's `REMOTE_BACKED` list; all target titles
+not listed there are currently absent. `toystory2` is also not in it because it is outside the target
+scope.
 
 ## The structure rule: ONE writable framework checkout
 

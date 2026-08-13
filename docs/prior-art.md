@@ -78,16 +78,16 @@ through it.
   `mouksx/Toy-Story-2-Modding`.
 - **Spider-Man** — nothing found. Scanned: decomp.dev's full PSX list plus targeted searches; a negative
   from a search is weaker than a negative from a measurement, so treat it as "not found", not "absent".
-- **Tekken 3 — SCOUTED 2026-08-12, DECIDED AGAINST, and the verdict is now USER-CONFIRMED. Do not build
-  a tree for it.** The measurements below are worth keeping so nobody re-scouts; the verdict is worth
-  keeping so nobody re-argues it.
+- **Tekken 3 — SCOUTED 2026-08-12, previously deferred while framework work came first.** The current
+  target scope now includes it, so this is prior-art/cost evidence only, not a prohibition on creating a
+  tree. The measurements below are worth keeping so nobody re-scouts.
   - **PROVENANCE, because it changed.** The USER's own input was only *"tekken 3 too maybe"* (2026-08-12,
     hedged), so the decision-against was a SESSION's, not theirs — recorded that way at first, correctly.
     They then asked outright whether Tekken 3 had been started, were offered three paths (bootstrap it
     anyway · leave it and do framework work first · scout the netplay/input path deeper before deciding)
-    and chose **leave it, framework first** (2026-08-12; a choice among options, not a quote). So the
-    "framework before any new title" prerequisite in `docs/findings/lineage-metric.md` now has direct
-    USER endorsement, and it applies to every unbuilt tree, not just this one.
+    and chose **leave it, framework first** (2026-08-12; a choice among options, not a quote). That
+    ordering was satisfied by the framework-first pass; a later user scope update includes Tekken 3 with
+    the other target games. This earlier decision is retained as provenance, not as a standing ban.
   - **The reason is the VALUE PROPOSITION, not difficulty.** DuckStation already ships this title's
     entire cheap enhancement set — widescreen via the GTE hack, 4K, PGXP perspective-correct texturing
     and wobble removal, texture replacement, rewind, save states. A port would spend the workspace's
