@@ -68,6 +68,30 @@ Three ways out, in preference order:
    excluded. Listed for completeness and NOT recommended — an exclusion list is the allowlist the
    current harness rightly forbids, and it would grow every time it was inconvenient.
 
+## DETERMINISM IS A PRECONDITION, and this plan originally omitted it
+
+A diff only means something if both sides are reproducible, and identical starting RAM is NOT enough.
+Three sources of drift, each of which would make the oracle lie rather than fail:
+
+- **Free-running counters.** Beetle advances root counters and the CPU cycle count on real hardware
+  timing (`timer.c`, the event scheduler in `psx_events.h`); our runtime has its own notion of a frame.
+  Any game code that reads a timer, waits on a counter, or spins on VSync will legitimately differ. So
+  the compare must either run in a window that touches none of them (milestone 2's straight-line window)
+  or drive both from ONE synthetic clock. Do not discover this at milestone 4.
+- **Input.** Pinned and scripted on both sides, never live. The SBS harness already has
+  `PSXPORT_SBS_PAD_REPLAY` for the mirrored-lockstep case, with a recorded caveat that a frame-indexed
+  capture lands inputs at the wrong moments when `pc_skip` differs — the same trap applies here.
+- **Uninitialised memory.** Both sides must start from a bit-identical image, which is what injecting
+  the executable buys. Mednafen also has a savestate layer (`mednafen/state.h`, `state_helpers.h`)
+  usable to freeze a reached point instead of re-deriving it — worth using once a window past boot is
+  interesting.
+
+**On a residual list:** the general recomp-harness discipline allows one, provided every entry records
+WHY it is benign. `Tomba2Engine/CLAUDE.md` is STRICTER — no allowlist, no residual list, every diff
+fatal — and that stricter rule WINS here, because this project's failures have come from exclusions
+that grew. The correct way to handle a free-running counter is therefore to REMOVE the divergence by
+sharing a clock, not to list the address as expected.
+
 ## Order of work
 
 1. **Spike:** build the mednafen core into a `psxport_oracle` static library, no game, no port. Prove it
