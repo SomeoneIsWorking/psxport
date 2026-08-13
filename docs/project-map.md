@@ -190,7 +190,7 @@ ctest --test-dir build --output-on-failure
 
 ### The agnosticism RATCHET: `game_literals` (`tools/lint/game_literals.py`)
 
-Two of those 38 ctest entries are not compiled tests. `game_literals` scans `runtime/**` and
+Two of the 44 current ctest entries are not compiled tests. `game_literals` scans `runtime/**` and
 `tools/recomp/**` for hardcoded GUEST addresses — one game's fact compiled into the library every
 port links — and `game_literals_selftest` gates the detector that certifies it. `psxport_smoke` is
 structurally blind to this leak class: a byte-faithful transcription of another game's functions
@@ -263,6 +263,10 @@ exits 0 exactly like a passing one). There is intentionally **no `skip()`**: a s
 - `tests/test_harness_selftest.cpp` asserts the harness's own failure paths still fire (a failing
   check counted + short-circuiting the case, an empty case going red, the exit code). A harness
   nobody has seen fail is not a harness — this one re-proves it every run.
+- `tests/test_vram_xfer_rect.cpp` pins the GP0 A0/C0 transfer-rectangle decoder shared by CPU→VRAM
+  uploads and VRAM→CPU readbacks: coordinate masks, independent width/height fields, and the PSX
+  zero-size encoding for a full 1024×512 transfer. It is deliberately a small pure helper test;
+  the integration round-trip remains `test_vram_readback.cpp`.
 - `tests/test_no_game_address_literals.cpp` is the **game-agnosticism gate**: it scans `runtime/` +
   `common/` for hex literals in LIVE CODE (comments and string literals are RE documentation and do
   not count) that name a particular game's guest memory — main RAM `0x80010000-0x801FFFFF` and its
