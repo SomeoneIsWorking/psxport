@@ -1,0 +1,207 @@
+// oracle_spike.c — milestone 1 of `docs/plans/oracle-against-beetle.md`, and its own proof.
+//
+// WHAT THIS PROVES: that the vendored Mednafen PSX CPU, hosted without `libretro.c`, executes MIPS
+// instructions we inject into a RAM image and produces the register and memory results we can compute by
+// hand. WHAT IT DOES NOT PROVE: anything at all about our port. No comparison happens here. A working
+// oracle is a working reference, not a verified port — the plan says so and it stays true until
+// milestone 2 puts one window through both sides.
+//
+// WHY IT RUNS TWO CLASSES OF PROGRAM. A checker that has only ever seen the case it expects is not an
+// instrument, and this workspace has been burned by exactly that (`docs/findings/`: a discriminator that
+// scored 25 on the negative case and 0 on the positive). So:
+//   * the POSITIVE program computes a value only a working CPU can produce, and every register is
+//     asserted against a constant worked out from the MIPS reference by hand, right here in the comments;
+//   * the NEGATIVE program reads a GPU register, and the run must report ORACLE_STOP_HARDWARE at that
+//     exact address. If the shim silently returned 0 for device reads, this case would come back as a
+//     clean window and the compare would later run over instructions nobody executed.
+// Neither case can pass by the oracle doing nothing: an oracle that executes zero instructions fails the
+// positive (registers stay 0) and fails the negative (no hardware access is ever seen).
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "oracle_shim.h"
+
+// ── MIPS R3000A encoders, so the fixture reads as instructions rather than hex ────────────────────
+#define R_ZERO 0
+#define R_T0   8
+#define R_T1   9
+#define R_T2  10
+#define R_T3  11
+#define R_SP  29
+
+static uint32_t i_lui  (int rt, uint16_t imm)          { return (0x0Fu << 26) | ((uint32_t)rt << 16) | imm; }
+static uint32_t i_ori  (int rt, int rs, uint16_t imm)   { return (0x0Du << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | imm; }
+static uint32_t i_addiu(int rt, int rs, int16_t imm)    { return (0x09u << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | (uint16_t)imm; }
+static uint32_t i_addu (int rd, int rs, int rt)         { return ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | ((uint32_t)rd << 11) | 0x21u; }
+static uint32_t i_sw   (int rt, int16_t off, int rs)    { return (0x2Bu << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | (uint16_t)off; }
+static uint32_t i_lw   (int rt, int16_t off, int rs)    { return (0x23u << 26) | ((uint32_t)rs << 21) | ((uint32_t)rt << 16) | (uint16_t)off; }
+static uint32_t i_nop  (void)                           { return 0u; }
+
+// ── check bookkeeping: a plan up front, so a run that stops early cannot read as a pass ──────────
+#define PLANNED_CHECKS 12
+static int s_ran = 0, s_failed = 0;
+
+static void check_u32(const char *what, uint32_t got, uint32_t want) {
+  s_ran++;
+  if (got == want) {
+    printf("  ok   %-46s = 0x%08X\n", what, got);
+  } else {
+    s_failed++;
+    printf("  FAIL %-46s = 0x%08X, expected 0x%08X\n", what, got, want);
+  }
+}
+static void check_stop(const char *what, OracleStop got, OracleStop want) {
+  s_ran++;
+  if (got == want) {
+    printf("  ok   %-46s = %s\n", what, oracle_stop_name(got));
+  } else {
+    s_failed++;
+    printf("  FAIL %-46s = %s, expected %s\n", what, oracle_stop_name(got), oracle_stop_name(want));
+  }
+}
+
+// The fixture's load address and entry. 0x80010000 is where a real PS-X EXE typically lands, chosen so
+// the spike exercises the KSEG0 mirror rather than the physical alias — that mirror is the one every
+// game's `t_addr` actually uses, so a FastMap bug there would be invisible under a KUSEG-only fixture.
+#define FIX_ADDR 0x80010000u
+#define FIX_GP   0x80011234u
+#define FIX_SP   0x801FFF00u
+
+// ── POSITIVE: a program whose every result is derived here, by hand ───────────────────────────────
+//
+//   lui   $t0, 0x1234        $t0 = 0x12340000
+//   ori   $t0, $t0, 0x5678   $t0 = 0x12345678
+//   addiu $t1, $zero, 100    $t1 = 0x00000064
+//   addu  $t2, $t0, $t1      $t2 = 0x12345678 + 0x64 = 0x123456DC
+//   sw    $t2, -16($sp)      [0x801FFEF0] = 0x123456DC
+//   lw    $t3, -16($sp)      $t3 = 0x123456DC   (after its load-delay slot)
+//   nop                      the load-delay slot — R3000A has no interlock, so $t3 is only
+//                            architecturally readable after this instruction
+//   nop ...                  and the rest of RAM is zeros, which decode as `sll $zero,$zero,0` = nop,
+//                            so the CPU runs harmlessly forward until the cycle budget ends
+static int positive_case(void) {
+  uint32_t prog[8];
+  int n = 0;
+  prog[n++] = i_lui  (R_T0, 0x1234);
+  prog[n++] = i_ori  (R_T0, R_T0, 0x5678);
+  prog[n++] = i_addiu(R_T1, R_ZERO, 100);
+  prog[n++] = i_addu (R_T2, R_T0, R_T1);
+  prog[n++] = i_sw   (R_T2, -16, R_SP);
+  prog[n++] = i_lw   (R_T3, -16, R_SP);
+  prog[n++] = i_nop();
+  prog[n++] = i_nop();
+
+  if (!oracle_init())                                                        return 0;
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) return 0;
+
+  const OracleStop stop = oracle_run(200);   // ~8 real instructions then nops; no device is touched
+
+  OracleState st;
+  oracle_capture(&st);
+
+  check_stop("positive: window ended cleanly",   stop, ORACLE_STOP_BUDGET);
+  check_u32 ("positive: $t0 = lui|ori",          st.gpr[R_T0], 0x12345678u);
+  check_u32 ("positive: $t1 = addiu 100",        st.gpr[R_T1], 0x00000064u);
+  check_u32 ("positive: $t2 = $t0 + $t1",        st.gpr[R_T2], 0x123456DCu);
+  check_u32 ("positive: $t3 = lw of what sw wrote", st.gpr[R_T3], 0x123456DCu);
+  check_u32 ("positive: $gp survived injection", st.gpr[28], FIX_GP);
+  check_u32 ("positive: $sp survived injection", st.gpr[29], FIX_SP);
+
+  // The store must be visible in RAM itself, not only in a register: that is the byte-compare surface
+  // milestone 2 will diff, so it gets checked here rather than assumed.
+  const uint32_t off = (FIX_SP - 16) & 0x1FFFFFFFu;
+  uint32_t in_ram = 0;
+  memcpy(&in_ram, oracle_main_ram() + off, 4);
+  check_u32("positive: RAM at $sp-16 holds the store", in_ram, 0x123456DCu);
+
+  // The PC must have moved FORWARD AND STILL BE IN RAM. "advanced past the entry" alone is not enough,
+  // and that is measured rather than argued: with the FastMap deliberately left unpopulated in a
+  // throwaway copy of the shim (2026-08-13), the CPU fetched zeros, took a bus error, and ended at
+  // 0xBFC00180 — the exception vector — which a bare `pc > entry` test reported as ok while every
+  // register check around it failed. A wild jump is not progress. So the bound is the mirror the fixture
+  // was injected into: forward of the entry, and inside the 2 MB of main RAM behind it.
+  s_ran++;
+  const uint32_t ram_end = (FIX_ADDR & 0xFFE00000u) + 0x00200000u;
+  if (st.pc > FIX_ADDR && st.pc < ram_end) {
+    printf("  ok   %-46s = 0x%08X (advanced %u bytes, still in RAM)\n",
+           "positive: PC advanced, and stayed in RAM", st.pc, st.pc - FIX_ADDR);
+  } else {
+    s_failed++;
+    printf("  FAIL %-46s = 0x%08X — entry was 0x%08X, RAM ends 0x%08X. %s\n",
+           "positive: PC advanced, and stayed in RAM", st.pc, FIX_ADDR, ram_end,
+           st.pc <= FIX_ADDR ? "The CPU never fetched."
+                             : "The CPU left RAM — a fault or a wild jump, not execution.");
+  }
+
+  oracle_teardown();
+  return 1;
+}
+
+// ── NEGATIVE: the window must END, loudly, at a device access ─────────────────────────────────────
+//
+//   lui   $t0, 0x1F80        $t0 = 0x1F800000
+//   ori   $t0, $t0, 0x1814   $t0 = 0x1F801814  — GPUSTAT, the GPU status register
+//   lw    $t1, 0($t0)        a hardware read: main RAM and the scratchpad both refuse this
+//
+// 0x1F801814 is deliberately just past the scratchpad (0x1F800000..0x1F8003FF), so this also checks the
+// scratchpad's UPPER bound rather than only that some far address is rejected.
+static int negative_case(void) {
+  uint32_t prog[4];
+  int n = 0;
+  prog[n++] = i_lui(R_T0, 0x1F80);
+  prog[n++] = i_ori(R_T0, R_T0, 0x1814);
+  prog[n++] = i_lw (R_T1, 0, R_T0);
+  prog[n++] = i_nop();
+
+  if (!oracle_init())                                                        return 0;
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) return 0;
+
+  printf("  (the `oracle: HARDWARE READ32` block below is the EXPECTED output of this case)\n");
+  const OracleStop stop = oracle_run(200);
+
+  OracleState st;
+  oracle_capture(&st);
+
+  check_stop("negative: window ended at hardware", stop, ORACLE_STOP_HARDWARE);
+  check_u32 ("negative: the offending address",    st.stop_addr, 0x1F801814u);
+  check_u32 ("negative: $t0 computed the address", st.gpr[R_T0], 0x1F801814u);
+
+  oracle_teardown();
+  return 1;
+}
+
+int main(void) {
+  setvbuf(stdout, NULL, _IONBF, 0);   // unbuffered: a crash mid-run must not swallow the checks already
+  setvbuf(stderr, NULL, _IONBF, 0);   // printed, and stderr/stdout must interleave in the real order
+
+  printf("psxport oracle spike — milestone 1 of docs/plans/oracle-against-beetle.md\n");
+  printf("PLAN: %d checks across 2 program classes.\n", PLANNED_CHECKS);
+  printf("  POSITIVE (9 checks): inject 8 hand-assembled instructions at 0x%08X, run 200 cycles,\n"
+         "    assert $t0-$t3, $gp, $sp, the stored word in RAM, a clean stop, and that PC advanced within RAM.\n", FIX_ADDR);
+  printf("  NEGATIVE (3 checks): read GPUSTAT at 0x1F801814 and assert the run REPORTS a hardware\n"
+         "    stop at that address, rather than reading 0 and continuing.\n");
+  printf("  BLIND SPOTS, stated so this is not mistaken for more than it is: no BIOS is mapped, no\n"
+         "    real game executable is loaded, no comparison against psxport's own paths is performed,\n"
+         "    and nothing here exercises the GTE, DMA, CD or timers.\n\n");
+
+  printf("POSITIVE — a program whose results are derived by hand in this file:\n");
+  if (!positive_case()) { printf("  REFUSED: oracle setup failed; the positive case did not run.\n"); return 2; }
+
+  printf("\nNEGATIVE — a hardware access must end the window and be named:\n");
+  if (!negative_case()) { printf("  REFUSED: oracle setup failed; the negative case did not run.\n"); return 2; }
+
+  printf("\n%d checks planned, %d ran, %d failed.\n", PLANNED_CHECKS, s_ran, s_failed);
+  if (s_ran != PLANNED_CHECKS) {
+    printf("REFUSING to report a result: %d checks ran but %d were planned, so this run does not cover\n"
+           "what it claims to. Fix the plan or the code path that skipped a check.\n", s_ran, PLANNED_CHECKS);
+    return 2;
+  }
+  if (s_failed) {
+    printf("FAILED. The oracle does not execute injected code correctly; do not build a compare on it.\n");
+    return 1;
+  }
+  printf("PASSED. The vendored Mednafen CPU steps injected MIPS without libretro.c, and reports a\n"
+         "hardware access instead of hiding it. This says NOTHING about the port yet — milestone 2.\n");
+  return 0;
+}

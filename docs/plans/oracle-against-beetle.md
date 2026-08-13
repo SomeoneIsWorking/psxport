@@ -92,10 +92,60 @@ fatal — and that stricter rule WINS here, because this project's failures have
 that grew. The correct way to handle a free-running counter is therefore to REMOVE the divergence by
 sharing a clock, not to list the address as expected.
 
+## Milestone 1 is DONE — measured 2026-08-13
+
+`tools/oracle/` builds `psxport_oracle` (a static library) and `oracle_spike`, both wired into CMake and
+into `ctest`. What was actually established, by running it:
+
+- **The vendored Mednafen CPU executes MIPS we inject, with no `libretro.c` at all.** The spike loads 8
+  hand-assembled instructions at `0x80010000`, runs a 200-cycle window, and every result matches a value
+  derived by hand in the fixture's own comments: `$t0 = 0x12345678` from `lui`+`ori`, `$t2 = 0x123456DC`
+  from `addu`, `$t3` round-tripped through a `sw`/`lw` pair, the stored word visible in main RAM itself,
+  and PC advanced 160 bytes while staying inside RAM. 12 of 12 checks pass.
+- **The glue surface is 15 symbols, not 53.** Measured by linking rather than by reading: a CPU that only
+  has to STEP needs `cpu.c`, `gte.c` and the six PGXP translation units, and those leave undefined only
+  `ScratchRAM`, the eight `PSX_MemRead/Write*`, `PSX_EventHandler`, `psx_gte_overclock`,
+  `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. The CD, GPU, DMA,
+  timer, SIO and filestream layers are not in the stepping path at all. `gte.c` compiles once
+  `runtime/recomp` is on the include path, exactly as the feasibility section predicted.
+- **A hardware access is REPORTED, not absorbed.** The spike's second program reads GPUSTAT at
+  `0x1F801814`; the run must come back `ORACLE_STOP_HARDWARE` naming that address. A shim that returned 0
+  for device reads would report a clean window instead, and milestone 2 would then compare instructions
+  nobody executed.
+- **The spike has shown BOTH answers.** `tools/oracle/prove_spike_can_fail.sh` (ctest:
+  `oracle_spike_discriminates`) rebuilds the shim with its FastMap population loop disabled — in a
+  throwaway copy under `scratch/`, never the shipping file — and requires the spike to FAIL: 9 of 12
+  checks fail there. Without that, 12/12 would have meant nothing.
+
+Three things milestone 1 taught that were NOT in the design:
+
+1. **Instruction fetch bypasses `PSX_MemRead32` entirely.** `cpu.c` reads opcodes straight out of
+   `FastMap` (lines 794, 810), so a core with an unpopulated FastMap fetches from `DummyPage`, executes
+   zeros, takes a bus error and lands at `0xBFC00180` — while still reporting a clean cycle-budget stop.
+   Correct memory callbacks are not enough; the mirrors from `libretro.c:2720-2725` must be replicated.
+2. **`cpu.c:111` is `PS_CPU *PSX_CPU = &s_cpu;` — non-NULL before anything initialises.** An `if (PSX_CPU)
+   return 1;` idempotence guard therefore reported successful init having allocated no RAM, and the first
+   `memcpy` into main RAM segfaulted. Lifecycle state must be owned by whoever owns the lifecycle.
+3. **`PSX_EventHandler` returning false is the documented way to end a timeslice**, not a stub pretending
+   to work: `CPU_Run`'s outer loop is `do { ... } while (PSX_EventHandler(timestamp))`. Combined with a
+   `PSX_SetEventNT` that refuses to schedule anything, that makes "no counter influenced this window" a
+   checked property rather than an assumption — which is the DETERMINISM section's requirement, satisfied.
+
+**What milestone 1 still does not prove: anything about the port.** No comparison has been run. The spike
+says so in its own output.
+
+### The collision milestone 2 has to solve deliberately
+
+`libpsxport` already compiles `gte.c` for its own GTE backend, so linking both archives into one
+executable hits duplicate symbols — and worse, would have the reference and the thing being tested sharing
+state, which destroys the independence that is the whole point. Two honest options, to be chosen rather
+than stumbled into: run the oracle in a **separate process** and compare over a pipe (which also isolates
+determinism), or **prefix the archive's symbols** (`objcopy --prefix-symbols=oracle_`).
+
 ## Order of work
 
-1. **Spike:** build the mednafen core into a `psxport_oracle` static library, no game, no port. Prove it
-   steps N instructions from an injected executable and can read `MainRAM`. Nothing else.
+1. ~~**Spike:** build the mednafen core into a `psxport_oracle` static library, no game, no port. Prove it
+   steps N instructions from an injected executable and can read `MainRAM`. Nothing else.~~ **DONE, above.**
 2. **Register-level differential** over a straight-line window from the game entry (option 2), driven by
    the existing PC hook. First real result: does our interpreter agree with Beetle instruction for
    instruction before any BIOS call?

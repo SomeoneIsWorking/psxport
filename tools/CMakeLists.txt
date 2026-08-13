@@ -11,3 +11,8 @@ add_executable(discdump discdump.cpp)
 target_link_libraries(discdump PRIVATE psxport_common chdr-static)
 target_include_directories(discdump PRIVATE
   ${CMAKE_SOURCE_DIR}/vendor/beetle-psx/deps/libchdr/include)
+
+# psxport_oracle + oracle_spike — the INDEPENDENT reference emulator (the vendored Mednafen PSX core
+# without libretro.c), so a differential compare stops using our own pc_faithful path as its reference.
+# docs/plans/oracle-against-beetle.md.
+add_subdirectory(oracle)

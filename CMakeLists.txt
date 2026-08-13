@@ -23,6 +23,13 @@ find_package(Threads REQUIRED)
 add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
 
 add_subdirectory(common)
+
+# enable_testing() must precede any subdirectory that calls add_test(), and tools/oracle does — its
+# oracle_spike is a gate, not a demo. Registered here rather than in tests/ because it links
+# psxport_oracle (the independent reference emulator) and not `psxport`, so it does not belong to the
+# globbed framework suite. A silently-unregistered test is worse than none: `ctest -R oracle` answered
+# "No tests were found!!!" while the binary passed 12/12, which reads as a missing feature.
+enable_testing()
 add_subdirectory(tools)
 
 # The framework static library `psxport` (+ option(PSXPORT_BUILD_SMOKE) + the standalone agnosticism smoke).
@@ -32,5 +39,5 @@ include(cmake/psxport.cmake)
 # `psxport`). Tests are globbed in tests/CMakeLists.txt, so adding one edits no shared file.
 # This is only wired in a STANDALONE psxport configure; a consuming game includes cmake/psxport.cmake
 # directly and never processes this file. See docs/project-map.md ("Tests").
-enable_testing()
+# enable_testing() is called above tools/, which needs it too.
 add_subdirectory(tests)

@@ -1,0 +1,300 @@
+// oracle_shim.c — the minimum host the vendored Mednafen PSX CPU needs in order to STEP, and no more.
+//
+// WHY THIS FILE EXISTS. `docs/plans/oracle-against-beetle.md`: today's side-by-side compare uses
+// `recomp_path` as its reference, which is OUR code, so a wrong assumption shared with `pc_faithful`
+// reads as SUCCESS. The fix is an INDEPENDENT reference, and the whole Mednafen PSX core is already
+// vendored. That core's system glue lives in `vendor/beetle-psx/libretro.c`, which also owns the disc,
+// the BIOS, the video frontend and the libretro option system. This file replaces that glue with the
+// smallest surface that lets the CPU execute instructions out of a RAM image we control.
+//
+// MEASURED GLUE SURFACE (2026-08-13, by linking rather than by reading): stepping needs `cpu.o`,
+// `gte.o` and the six PGXP objects, and those reference exactly FIFTEEN symbols nobody in that set
+// defines — `ScratchRAM`, the eight `PSX_MemRead/Write*`, `PSX_EventHandler`, `psx_gte_overclock`,
+// `MDFNSS_StateAction`, `widescreen_hack`, `widescreen_hack_aspect_ratio_setting`. Not the 53 the whole
+// core needs: the CD, GPU, DMA, timer, SIO and filestream layers are not in the stepping path at all.
+// `MainRAM` is here because THIS file owns the RAM, not because the CPU asks for it — the CPU reaches
+// main memory through `PSX_MemRead*` and through the FastMap set up in `oracle_init`.
+//
+// ═══ THE RULE HERE: A STUB THAT IS REACHED MUST SAY SO, NEVER RETURN ZERO ═════════════════════════════
+// Milestone 1 executes a STRAIGHT-LINE window of game code: no disc, no GPU, no timers, no interrupts.
+// A hardware access inside that window is not an error to swallow, it is THE MEASUREMENT — it marks the
+// instruction at which the window ended, past which any comparison would be comparing two programs that
+// diverged for a correct reason. So `PSX_MemRead*`/`PSX_MemWrite*` refuse anything outside main RAM and
+// scratchpad, naming the address, and the run reports `ORACLE_STOP_HARDWARE` rather than a clean stop.
+// Returning 0 there would make "the window ended" indistinguishable from "a device held zero".
+//
+// ═══ DETERMINISM ═════════════════════════════════════════════════════════════════════════════════════
+// The plan makes determinism a precondition, so: nothing here reads host time or host entropy, and
+// nothing may schedule work inside the window (see `PSX_SetEventNT`). The window's end is set by ONE
+// synthetic clock — the core's own `cpu_next_event_ts`, which `oracle_run` writes — which is the plan's
+// "run a window that touches no counters" option enforced rather than hoped for.
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "psx.h"
+#include "cpu.h"
+#include "oracle_shim.h"
+
+// `cpu_next_event_ts` is a non-static global in cpu.c (line 112). CPU_Run's inner loop is
+// `while (timestamp < next_event_ts)`, so writing it is how a host declares where a timeslice ends —
+// the same lever libretro.c pulls, reached directly instead of through the event scheduler.
+extern int32_t cpu_next_event_ts;
+
+// ── the memory the reference owns ──────────────────────────────────────────────────────────────────
+MultiAccessSizeMem *MainRAM    = NULL;   // 2 MB, mirrored across KUSEG/KSEG0/KSEG1
+MultiAccessSizeMem *BIOSROM    = NULL;   // deliberately NULL: milestone 1 executes NO BIOS on either side
+MultiAccessSizeMem *ScratchRAM = NULL;   // 1 KB at 0x1F800000
+
+// Settings globals libretro.c owns. Values are the neutral ones, written explicitly rather than left to
+// zero-initialisation, because "off because nobody set it" and "off on purpose" read identically in a
+// debugger and only one of them is a decision.
+int32_t psx_gte_overclock                    = 0;  // stock GTE timing; the reference must not be faster
+uint8_t widescreen_hack                      = 0;  // no geometry change in a byte-compare reference
+uint8_t widescreen_hack_aspect_ratio_setting = 0;
+
+#define RAM_SIZE   0x00200000u
+#define SPAD_BASE  0x1F800000u
+#define SPAD_SIZE  0x00000400u
+
+// Where the window stood when it ended. File-scope because the memory callbacks discover it while
+// `oracle_run` reports it, and Mednafen's callback signatures have nowhere to thread it through.
+static OracleStop s_stop      = ORACLE_STOP_NONE;
+static uint32_t   s_stop_addr = 0;
+
+// Whether THIS file has brought the oracle up. It cannot be inferred from `PSX_CPU`: cpu.c defines it as
+// `PS_CPU *PSX_CPU = &s_cpu;` (line 111), i.e. non-NULL from program start, and `CPU_New` hands back that
+// same file-scope instance rather than an allocation. Keying the guard on `PSX_CPU != NULL` made
+// `oracle_init` return SUCCESS having allocated no RAM at all, and the first `memcpy` into main RAM then
+// segfaulted — measured 2026-08-13. Lifecycle state belongs to whoever owns the lifecycle.
+static int s_up = 0;
+
+const char *oracle_stop_name(OracleStop s) {
+  switch (s) {
+    case ORACLE_STOP_NONE:     return "NOT RUN";
+    case ORACLE_STOP_BUDGET:   return "cycle budget consumed (clean end of window)";
+    case ORACLE_STOP_HARDWARE: return "hardware register touched (window ended here)";
+    case ORACLE_STOP_EVENT:    return "scheduled event came due";
+  }
+  return "UNKNOWN";
+}
+
+// ── the memory bus ────────────────────────────────────────────────────────────────────────────────
+// Main RAM is mirrored at 0x00000000 (KUSEG), 0x80000000 (KSEG0) and 0xA0000000 (KSEG1); the scratchpad
+// is not mirrored. Masking the segment bits is what the framework's own physical-address handling does.
+static inline int in_main_ram(uint32_t a, uint32_t *off) {
+  const uint32_t phys = a & 0x1FFFFFFFu;
+  if (phys < RAM_SIZE) { *off = phys; return 1; }
+  return 0;
+}
+static inline int in_scratch(uint32_t a, uint32_t *off) {
+  const uint32_t phys = a & 0x1FFFFFFFu, base = SPAD_BASE & 0x1FFFFFFFu;
+  if (phys >= base && phys < base + SPAD_SIZE) { *off = phys - base; return 1; }
+  return 0;
+}
+static inline uint8_t *ram(void)  { return (uint8_t *)MultiAccessSizeMem_get_data32(MainRAM); }
+static inline uint8_t *spad(void) { return (uint8_t *)MultiAccessSizeMem_get_data32(ScratchRAM); }
+
+// A device access ends the window. Recorded AND announced, and the CPU is told to stop, so the caller
+// sees the exact instruction rather than a run that carried on over garbage.
+static void hw_access(uint32_t addr, int is_write, int bits) {
+  if (s_stop == ORACLE_STOP_NONE || s_stop == ORACLE_STOP_BUDGET) {
+    s_stop      = ORACLE_STOP_HARDWARE;
+    s_stop_addr = addr;
+  }
+  fprintf(stderr,
+          "oracle: HARDWARE %s%d at 0x%08X — outside main RAM and scratchpad.\n"
+          "        Milestone 1 runs a window that touches no hardware, so the window is OVER at this\n"
+          "        instruction; a comparison past it would compare two programs that diverged for a\n"
+          "        correct reason. Reported instead of returning 0, because a zero here cannot be told\n"
+          "        apart from a device that really held zero. docs/plans/oracle-against-beetle.md\n",
+          is_write ? "WRITE" : "READ", bits, addr);
+  cpu_next_event_ts = 0;   // end the timeslice at the next check rather than executing on
+}
+
+uint8_t MDFN_FASTCALL PSX_MemRead8(int32_t *ts, uint32_t A) {
+  uint32_t o; (void)ts;
+  if (in_main_ram(A, &o)) return ram()[o];
+  if (in_scratch(A, &o))  return spad()[o];
+  hw_access(A, 0, 8);
+  return 0;
+}
+uint16_t MDFN_FASTCALL PSX_MemRead16(int32_t *ts, uint32_t A) {
+  uint32_t o; uint16_t v; (void)ts;
+  if (in_main_ram(A, &o)) { memcpy(&v, ram()  + o, 2); return v; }
+  if (in_scratch(A, &o))  { memcpy(&v, spad() + o, 2); return v; }
+  hw_access(A, 0, 16);
+  return 0;
+}
+uint32_t MDFN_FASTCALL PSX_MemRead32(int32_t *ts, uint32_t A) {
+  uint32_t o, v; (void)ts;
+  if (in_main_ram(A, &o)) { memcpy(&v, ram()  + o, 4); return v; }
+  if (in_scratch(A, &o))  { memcpy(&v, spad() + o, 4); return v; }
+  hw_access(A, 0, 32);
+  return 0;
+}
+// 24-bit access serves the unaligned-load path; it is a 32-bit fetch at the same address.
+uint32_t MDFN_FASTCALL PSX_MemRead24(int32_t *ts, uint32_t A) { return PSX_MemRead32(ts, A); }
+
+void MDFN_FASTCALL PSX_MemWrite8(int32_t ts, uint32_t A, uint32_t V) {
+  uint32_t o; (void)ts;
+  if (in_main_ram(A, &o)) { ram()[o]  = (uint8_t)V; return; }
+  if (in_scratch(A, &o))  { spad()[o] = (uint8_t)V; return; }
+  hw_access(A, 1, 8);
+}
+void MDFN_FASTCALL PSX_MemWrite16(int32_t ts, uint32_t A, uint32_t V) {
+  uint32_t o; uint16_t v = (uint16_t)V; (void)ts;
+  if (in_main_ram(A, &o)) { memcpy(ram()  + o, &v, 2); return; }
+  if (in_scratch(A, &o))  { memcpy(spad() + o, &v, 2); return; }
+  hw_access(A, 1, 16);
+}
+void MDFN_FASTCALL PSX_MemWrite32(int32_t ts, uint32_t A, uint32_t V) {
+  uint32_t o; (void)ts;
+  if (in_main_ram(A, &o)) { memcpy(ram()  + o, &V, 4); return; }
+  if (in_scratch(A, &o))  { memcpy(spad() + o, &V, 4); return; }
+  hw_access(A, 1, 32);
+}
+void MDFN_FASTCALL PSX_MemWrite24(int32_t ts, uint32_t A, uint32_t V) { PSX_MemWrite32(ts, A, V); }
+
+// ── the event scheduler ───────────────────────────────────────────────────────────────────────────
+// `PSX_EventHandler` is how a host ends a timeslice: CPU_Run's outer loop is
+// `do { ... } while (PSX_EventHandler(timestamp))`, so returning false stops the run. Returning false
+// here is therefore NOT a stub pretending to work — it is the documented lever. And the only thing that
+// can bring the timestamp up to `cpu_next_event_ts` is the budget `oracle_run` set, because
+// `PSX_SetEventNT` below refuses to schedule anything else. That is what makes "no counter influenced
+// this window" a checked property rather than an assumption.
+bool MDFN_FASTCALL PSX_EventHandler(const int32_t timestamp) {
+  (void)timestamp;
+  if (s_stop == ORACLE_STOP_NONE) s_stop = ORACLE_STOP_BUDGET;
+  return false;
+}
+
+void PSX_SetEventNT(const int type, const int32_t next_timestamp) {
+  // Deliberately ignored, and LOUD about it: if a subsystem tries to schedule work, the window is no
+  // longer the counter-free straight line milestone 1 is defined as, and silently dropping the event
+  // would leave a timing difference to be discovered at milestone 4 instead.
+  fprintf(stderr,
+          "oracle: a subsystem scheduled event type %d at t=%d. Milestone 1's window is defined as\n"
+          "        touching no counters, so this is dropped and flagged rather than honoured. If it\n"
+          "        fires for real, the window needs shortening, or the plan's shared-clock option.\n"
+          "        docs/plans/oracle-against-beetle.md\n", type, next_timestamp);
+}
+
+// `MDFNSS_StateAction` reaches the CPU only from `CPU_StateAction`, which milestone 1 never calls: the
+// starting state comes from injecting an executable, not from thawing a savestate. It aborts rather than
+// returning success, because a savestate that silently did nothing would leave a zeroed core that would
+// still step, and still compare, and mean nothing.
+int MDFNSS_StateAction(void *st, int load, int data_only, SFORMAT *sf, const char *name) {
+  (void)st; (void)load; (void)data_only; (void)sf;
+  fprintf(stderr,
+          "oracle: REACHED MDFNSS_StateAction(\"%s\") — savestate serialisation. Milestone 1 neither\n"
+          "        saves nor loads state; its start point is an injected executable. Aborting rather\n"
+          "        than reporting success.\n", name ? name : "(unnamed)");
+  fflush(stderr);
+  abort();
+}
+
+// ── lifecycle ─────────────────────────────────────────────────────────────────────────────────────
+int oracle_init(void) {
+  if (s_up) return 1;                          // idempotent by design
+
+  MainRAM    = MultiAccessSizeMem_New(RAM_SIZE);
+  ScratchRAM = MultiAccessSizeMem_New(SPAD_SIZE);
+  if (!MainRAM || !ScratchRAM) {
+    fprintf(stderr, "oracle: REFUSING — could not allocate main RAM (%u B) + scratchpad (%u B). "
+                    "Nothing was initialised; do not step.\n", RAM_SIZE, SPAD_SIZE);
+    return 0;
+  }
+  memset(ram(),  0, RAM_SIZE);
+  memset(spad(), 0, SPAD_SIZE);
+
+  PSX_CPU = CPU_New();   // returns cpu.c's single file-scope PS_CPU; nothing to free later
+  if (!PSX_CPU) {
+    fprintf(stderr, "oracle: REFUSING — CPU_New() returned NULL.\n");
+    return 0;
+  }
+  CPU_Power(PSX_CPU);
+
+  // Instruction fetch does NOT go through PSX_MemRead32: cpu.c reads opcodes straight out of `FastMap`
+  // (lines 794 and 810), so a core with an unpopulated FastMap fetches from `DummyPage` and executes
+  // zeros no matter how correct the memory callbacks are. Mirrors copied from libretro.c:2720-2725.
+  for (uint32_t ma = 0; ma < 0x00800000u; ma += RAM_SIZE) {
+    CPU_SetFastMap(PSX_CPU, ram(), 0x00000000u + ma, RAM_SIZE);
+    CPU_SetFastMap(PSX_CPU, ram(), 0x80000000u + ma, RAM_SIZE);
+    CPU_SetFastMap(PSX_CPU, ram(), 0xA0000000u + ma, RAM_SIZE);
+  }
+  // BIOSROM is deliberately NOT mapped: an executable that jumps to 0xBFC00000 must fail visibly rather
+  // than quietly run an OpenBIOS our own port never executes.
+
+  s_stop      = ORACLE_STOP_NONE;
+  s_stop_addr = 0;
+  s_up        = 1;
+  return 1;
+}
+
+void oracle_teardown(void) {
+  // `PSX_CPU` is deliberately left pointing at cpu.c's own instance: `CPU_Destroy` frees nothing (it only
+  // shuts down lightrec), so nulling it would be a lie about ownership. The next `oracle_init` re-powers
+  // and re-maps that same instance, which is what makes back-to-back windows independent.
+  if (s_up)       { CPU_Destroy(PSX_CPU); }
+  if (MainRAM)    { MultiAccessSizeMem_Free(MainRAM);    MainRAM = NULL; }
+  if (ScratchRAM) { MultiAccessSizeMem_Free(ScratchRAM); ScratchRAM = NULL; }
+  s_up = 0;
+}
+
+int oracle_load_exe(const void *image, uint32_t len, uint32_t t_addr,
+                    uint32_t pc, uint32_t gp, uint32_t sp) {
+  if (!s_up) {
+    fprintf(stderr, "oracle: REFUSING to load — oracle_init() has not succeeded.\n");
+    return 0;
+  }
+  uint32_t off;
+  if (!in_main_ram(t_addr, &off) || (uint64_t)off + len > RAM_SIZE) {
+    fprintf(stderr, "oracle: REFUSING to load — t_addr 0x%08X + %u bytes does not fit in %u B of main "
+                    "RAM. Nothing was copied.\n", t_addr, len, RAM_SIZE);
+    return 0;
+  }
+  memcpy(ram() + off, image, len);
+
+  uint32_t *r = CPU_GPR(PSX_CPU);
+  r[28] = gp;                        // $gp — the executable's own global pointer, from its PS-X EXE header
+  r[29] = sp;                        // $sp
+  r[30] = sp;                        // $fp starts at $sp, as every Sony crt0 leaves it
+  PSX_CPU->BACKED_PC     = pc;
+  PSX_CPU->BACKED_new_PC = pc + 4;   // no branch pending at entry
+
+  s_stop      = ORACLE_STOP_NONE;
+  s_stop_addr = 0;
+  return 1;
+}
+
+OracleStop oracle_run(int32_t cycles) {
+  if (!s_up) {
+    fprintf(stderr, "oracle: REFUSING to run — no CPU. oracle_init() has not succeeded.\n");
+    return ORACLE_STOP_NONE;
+  }
+  s_stop            = ORACLE_STOP_NONE;
+  s_stop_addr       = 0;
+  cpu_next_event_ts = cycles;         // the ONE clock: where this window ends
+  (void)CPU_Run(PSX_CPU, 0);
+  if (s_stop == ORACLE_STOP_NONE) s_stop = ORACLE_STOP_BUDGET;
+  return s_stop;
+}
+
+void oracle_capture(OracleState *out) {
+  memset(out, 0, sizeof(*out));
+  if (!s_up) { out->stop = ORACLE_STOP_NONE; return; }
+  const uint32_t *r = CPU_GPR(PSX_CPU);
+  memcpy(out->gpr, r, 32 * sizeof(uint32_t));
+  out->lo        = r[32];
+  out->hi        = r[33];
+  out->pc        = PSX_CPU->BACKED_PC;
+  out->next_pc   = PSX_CPU->BACKED_new_PC;
+  out->timestamp = cpu_next_event_ts;
+  out->stop      = s_stop;
+  out->stop_addr = s_stop_addr;
+}
+
+uint8_t *oracle_main_ram(void) { return MainRAM ? ram() : NULL; }
+uint32_t oracle_ram_size(void) { return RAM_SIZE; }
