@@ -60,7 +60,7 @@ git clone --recursive https://github.com/SomeoneIsWorking/psxport.git
 cd psxport
 cmake -S . -B build
 cmake --build build --target psxport        # the static library
-cmake --build build --target psxport_smoke  # agnosticism proof (needs a consumer's generated/ headers)
+cmake --build build --target psxport_smoke  # agnosticism proof (standalone stub; no game code)
 cmake --build build && ctest --test-dir build --output-on-failure   # the framework test gate
 ```
 
