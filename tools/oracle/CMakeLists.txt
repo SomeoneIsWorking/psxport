@@ -67,11 +67,10 @@ add_executable(oracle_trace oracle_trace.c)
 target_link_libraries(oracle_trace PRIVATE psxport_oracle)
 target_compile_options(oracle_trace PRIVATE -O2 -g)
 
-# The instrument-validation gate. `oracle_spike` passing proves the oracle works; THIS proves the spike
-# could have said otherwise — it rebuilds the shim with the FastMap population loop disabled (in a
-# throwaway copy under scratch/, never the shipping file) and requires the spike to FAIL against it. A
-# checker that has only ever seen the case it expects is not an instrument, so this runs in ctest rather
-# than living as a claim in a comment.
-add_test(NAME oracle_spike_discriminates
-         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/prove_spike_can_fail.sh ${CMAKE_BINARY_DIR})
-set_tests_properties(oracle_spike_discriminates PROPERTIES DEPENDS oracle_spike)
+# NO mutation harness here. `prove_spike_can_fail.sh` used to rebuild the shim with one thing broken and
+# require oracle_spike to fail. It earned its keep once — it is what exposed the unpopulated-FastMap and
+# the missing RAM-mirror bugs — but it was a test OF A TEST, and USER, 2026-08-13: *"we have too much meta
+# imo, so deep that the base gets ignored among all of it"*. The coverage that actually matters did not
+# live in it: oracle_spike's own 22 checks are what catch a broken FastMap, a reset step clock, an
+# unmirrored RAM window and a silently-swallowed device access. Deleting the harness loses the assurance
+# that those checks would notice, not the checks themselves.

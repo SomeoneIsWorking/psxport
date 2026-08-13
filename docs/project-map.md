@@ -83,18 +83,60 @@ REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), 
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle gte.c),
 `mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`.
 
-## Tools, generated, vendor
-`tools/` — `recomp/emit.py` (recompiler), `ensure_recomp.py` (the SINGLE hash-checked recomp step run.sh
-calls — extracts MAIN.EXE/stub/overlays, runs emit.py, verifies generated/ matches a SHA-256 of the inputs
-in generated/.recomp.hash), `disas.py` (MAIN.EXE disasm), `dbgclient.py` (debug-server REPL
-client), `build_port.sh`, bgm/frame tooling,
-`logsig.py` + `syntaxcheck.sh` (the `cfg_*` -> `lucent::` sweep's two instruments — see below). `generated/` — recompiled MAIN.EXE `shard_*.c` (gitignored,
-run.sh rebuilds via ensure_recomp.py). `vendor/beetle-psx` (committed GPL fork — the port's GTE/MDEC/SPU/CHD **hardware backend**,
-NOT a reference emulator), `vendor/rmlui` (the overlay's HTML/CSS engine), `vendor/lucent` (the logger).
+## Tools — ONE LINE EACH, and what is wrong with this list
+
+**32 tool files here; 172 across the workspace.** USER, 2026-08-13: *"I think you made the project too
+bloated, hordes of tools and tests that no one knows what they are for"*. That is accurate, and this table
+exists so the claim can be checked rather than argued. Two rules follow from it:
+
+1. **A new tool needs a row here, or it does not land.** Prefer a new MODE of an existing tool over a new
+   file. A tool that checks another tool is almost never worth a file — `prove_crossvalidate_discriminates.py`
+   was deleted the day it was written for exactly that reason (a proof of a proof), its one-time result
+   kept in `docs/findings/oracle-crt0-crossvalidation.md` where it belongs.
+2. **A finished one-off gets DELETED, not documented.** `restructure.py` went when the
+   `native_path*.cpp` files it re-sorted stopped existing. No tombstones.
+
+| tool | what it is for | note |
+|---|---|---|
+| `recomp/emit.py` | the static recompiler: PSX MIPS -> emitted C | |
+| `abi_extract.py` | static ABI/stack-contract extractor for generated function bodies | |
+| `port_check.py` | equivalence gate: does a native port's guest-visible store sequence match the substrate | |
+| `port_gen.py` | first-draft generator for a byte-faithful native class method | |
+| `logsig.py` | extract the message template of every diagnostic call site | selftest PASSES |
+| `layout_move.py` | the planned `runtime/recomp/` -> `runtime/<subsystem>/` move | selftest PASSES; move NOT done yet |
+| `tool_selftests.py` | run every tool's `--selftest` in a repo, and name the ones with none | in `scripts/` |
+| `exe_similarity.py` | address-independent code similarity between PS-EXE images | needs 2 executables |
+| `lineage_probe.py` | whole-function + string lineage evidence between PS-EXE images | selftest needs a corpus |
+| `disasm.py` | disassemble a region of a 2 MB main-RAM dump (capstone) | |
+| `dbgclient.py` | REPL client for the debug server | needs a live server |
+| `ghidra_decomp.py` · `symdump_re.py` · `symwidth_re.py` | Ghidra headless scripts | run only inside Ghidra |
+| `oracle/oracle_trace` | run a real executable in the independent reference emulator, write a per-instruction trace | + `oracle_spike` (gate), `crossvalidate_crt0.py` |
+| `crt0_extract` | report a PS-X EXE's crt0 boot group through the shipping decoder | |
+| `discdump` | extract files from a CHD/ISO without `run.sh` | |
+| `smoke/psxport_smoke` | the agnosticism proof: link libpsxport against a stub, zero game symbols | |
+
+**GAME-SPECIFIC tools sitting in the game-agnostic framework** — they belong in `Tomba2Engine/tools/`, and
+their presence here is the same defect as the guest addresses in `runtime/` (see
+`docs/findings/framework-carries-game-addresses.md`):
+
+| tool | why it is not framework |
+|---|---|
+| `disas.py` | "MIPS-I disassembler for **Tomba!2's MAIN.EXE**" |
+| `abcompare.py` | compares `./run.sh` against the oracle — `run.sh` is a game's launcher |
+| `yield_reach.py` | asks whether a function reaches `FUN_80051f80` — a Tomba!2 guest address |
+| `frame_audit.py` · `producer_class.py` | audit Tomba!2 native overrides / graphics producers |
+| `interp_dump.py` | a wide60 proof-of-concept over a GPU dump |
+
+**PURPOSE UNDOCUMENTED — nobody can say what these are for.** They have no docstring and no row anyone
+wrote. Each is either given a one-line purpose or deleted; being listed here is not the same as being
+justified: `ldscan.py`, `prof_report.py`, `symres.py`, `vramcmp.py`, `vram_png.py`.
+
+`generated/` — the recompiled substrate (gitignored). `vendor/beetle-psx` (committed GPL fork: the port's
+GTE/MDEC/SPU/CHD **hardware backend** AND, as of 2026-08-13, the independent reference emulator behind
+`tools/oracle/`), `vendor/rmlui` (the overlay's HTML/CSS engine), `vendor/lucent` (the logger).
 **`vendor/imgui` is VENDORED BUT DEAD** — 2.9 MB of committed source referenced by no build file and no
-source file (measured 2026-08-06). It is not a submodule, so it does not even track upstream. See
-`docs/ui-architecture.md` for the decision not to stand an ImGui developer stack up yet, and for the
-one-line removal the operator should run if that decision holds.
+source file (measured 2026-08-06), not even a submodule. `docs/ui-architecture.md` has the decision not to
+stand an ImGui developer stack up yet, and the one-line removal if that holds.
 
 ## ORGANIZATION conventions + known DEBT
 - **A native belongs in its SUBSYSTEM FOLDER, named for the system** (`game/camera/cutscene_camera.cpp`), one
