@@ -286,6 +286,13 @@ void     gte_write_data(uint32_t reg, uint32_t v);
 uint32_t gte_read_ctrl (uint32_t reg);
 void     gte_write_ctrl(uint32_t reg, uint32_t v);
 void     gte_op(Core* c, uint32_t insn);
+// Diagnostic-only exact-PC variant emitted by newly generated recomp code. Both entry points run the
+// same GTE instruction; `_at` additionally supplies the instruction VA to an explicitly armed,
+// per-Core pre-op observer. The interpreter's gte_op path uses Core::pc, which is exact there.
+void     gte_op_at(Core* c, uint32_t insn, uint32_t guest_pc);
+void     gte_preop_observer_arm(Core* c, GtePreOpFn fn, void* user);
+uint64_t gte_preop_observer_disarm(Core* c);  // returns armed-op denominator
+uint64_t gte_preop_observer_seen(const Core* c);
 // swc2 of a projected screen-XY register (DR12/13/14/15): stores to memory AND records that vertex's
 // view-space Z against the written address, which is what gives the renderer native per-vertex depth.
 // The recompiler routes only those registers here; see gte_beetle.cpp for why the pairing is exact.

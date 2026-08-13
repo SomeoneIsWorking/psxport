@@ -20,6 +20,7 @@
 #include "proj_prim.h"
 #include "pgxp.h"
 #include "proj_params.h"
+#include "gte_preop_observer.h"
 class Core;
 
 class RenderSubstrate {
@@ -45,6 +46,7 @@ public:
   ProjPrim          projprim;          // vertex-depth cache for native depth path (per-Core; SBS-safe)
   Pgxp              pgxp;               // PGXP-lite subpixel cache (per-Core; PGXP_pushSXYZ2f target)
   ProjParams        projParams;        // camview + per-frame projection constants (per-Core)
+  GtePreOpObserver  gtePreOp;          // explicitly armed pre-GTE diagnostic observer (per-Core)
 };
 
 // Marks the guest's own GP0 execution for the producer census. Nesting-safe by depth rather than a bool:

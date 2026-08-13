@@ -475,7 +475,10 @@ def emit_simple(ins):
         if o == "ctc2":
             return f"gte_write_ctrl({ins.rd}, {R(ins.rt)});"
     if k == D.GTE_OP:
-        return f"gte_op(c, 0x{ins.cop2:08X}u);"
+        # Exact guest VA is diagnostic evidence: Core::pc is exact in the interpreter, but a static
+        # recomp function may retain only its entry/block PC. The normal unarmed path still performs
+        # the same GTE operation; the per-Core observer is a single null callback check.
+        return f"gte_op_at(c, 0x{ins.cop2:08X}u, 0x{ins.addr:08X}u);"
     if k == D.GTE_LOAD:   # lwc2: cop2_data[rt] = mem[rs+imm]
         return f"gte_write_data({ins.rt}, c->mem_r32({addr_expr(ins)}));"
     if k == D.GTE_STORE:  # swc2: mem[rs+imm] = cop2_data[rt]

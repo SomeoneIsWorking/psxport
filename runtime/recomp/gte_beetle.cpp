@@ -376,7 +376,9 @@ int attach_enabled(void) { return 1; }
 //   correct data — that is the content-interface CORRECTNESS gate, not GTE-hardware emulation, and it is
 //   fine. The fixed-point interface itself disappears once that content consumer is ported too.
 // Every gte_op caller ported this way removes work from GTE_Instruction; it vanishes when none remain.
-void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
+static void gte_op_impl(Core* c, uint32_t insn, uint32_t guest_pc) {
+                                                   c->rsub.gtePreOp.observe(c, guest_pc, insn);
+                                                   GTE_Instruction(insn);
                                                    unsigned op = insn & 0x3F;
                                                    GteDebug& gd = c->game->gte.dbg;
                                                    if (gd.gteprobe < 0) { const char* e = cfg_str("PSXPORT_GTEPROBE"); gd.gteprobe = e ? atoi(e) : 0; }
@@ -425,6 +427,19 @@ void     gte_op(Core* c, uint32_t insn)         { GTE_Instruction(insn);
                                                        }
                                                      }
                                                    } }
+void gte_op(Core* c, uint32_t insn) { gte_op_impl(c, insn, c ? c->pc : 0); }
+void gte_op_at(Core* c, uint32_t insn, uint32_t guest_pc) { gte_op_impl(c, insn, guest_pc); }
+
+void gte_preop_observer_arm(Core* c, GtePreOpFn fn, void* user) {
+  if (!c) return;
+  c->rsub.gtePreOp.arm(fn, user);
+}
+uint64_t gte_preop_observer_disarm(Core* c) {
+  return c ? c->rsub.gtePreOp.disarm() : 0;
+}
+uint64_t gte_preop_observer_seen(const Core* c) {
+  return c ? c->rsub.gtePreOp.seen() : 0;
+}
 // swc2 of a PROJECTED SCREEN-XY register (DR12/13/14, or DR15 for RTPS's single-vertex slot). The
 // recompiler routes only those registers here (emit.py GTE_SCREEN_XY_REGS); every other cop2 store
 // keeps the plain inline form, so this costs nothing on them.

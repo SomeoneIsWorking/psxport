@@ -218,8 +218,8 @@ class BodyFacts:
 
 
 GTE_HELPER_RE = re.compile(r'\bgte_([a-z_0-9]+)\s*\(')
-GTE_OP_LIT_RE = re.compile(r'\bgte_op\(c,\s*(0x[0-9A-Fa-f]+)u?\s*\)')
-GTE_OP_ANY_RE = re.compile(r'\bgte_op\(c,')
+GTE_OP_LIT_RE = re.compile(r'\bgte_op(?:_at)?\(c,\s*(0x[0-9A-Fa-f]+)u?\s*[,)]')
+GTE_OP_ANY_RE = re.compile(r'\bgte_op(?:_at)?\(c,')
 MEM_W_RE = re.compile(r'c->mem_w(?:8|16|32)\s*\(')
 
 _facts_cache: dict = {}
