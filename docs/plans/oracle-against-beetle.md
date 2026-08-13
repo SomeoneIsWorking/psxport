@@ -147,13 +147,35 @@ stepping-vs-bulk PC comparison, and nothing else does.
 **What milestone 1 still does not prove: anything about the port.** No comparison has been run. The spike
 says so in its own output.
 
-### The collision milestone 2 has to solve deliberately
+### The collision is SOLVED, by a third option: a trace FILE
 
-`libpsxport` already compiles `gte.c` for its own GTE backend, so linking both archives into one
-executable hits duplicate symbols — and worse, would have the reference and the thing being tested sharing
-state, which destroys the independence that is the whole point. Two honest options, to be chosen rather
-than stumbled into: run the oracle in a **separate process** and compare over a pipe (which also isolates
-determinism), or **prefix the archive's symbols** (`objcopy --prefix-symbols=oracle_`).
+`libpsxport` already compiles `gte.c` for its own GTE backend, so linking both archives into one executable
+hits duplicate symbols — and worse, would have the reference and the thing being tested sharing state,
+which destroys the independence that is the whole point. The two options recorded here were a separate
+process with a pipe, or `objcopy --prefix-symbols`. **A trace file beats both** and is what `oracle_trace`
+now does: it is a separate process (so no shared state), it needs no IPC protocol or lockstep handshake,
+and it is reproducible and human-readable — so after a recompiler change, "did the oracle move or did we?"
+is answerable, which with two live processes it is not.
+
+The one thing it gives up: the oracle cannot be steered mid-run by the port, which milestone 3's
+BIOS-call boundary may want. If that bites, the trace becomes a pipe and the format is unchanged.
+
+### Milestone 2, part one: the crt0 constants are now confirmed BY EXECUTION
+
+`docs/findings/oracle-crt0-crossvalidation.md` has the full result. In short: `crt0_extract` decodes the
+prologue, `oracle_trace` executes it, the two share no code, and
+`tools/oracle/crossvalidate_crt0.py` diffs them in code. **24 comparisons across all 6 executables, 24
+agree, 0 disagree.** All six leave the game's own text at `pc=0x000000A0` with `$t1=0x39` — `A(39h)
+InitHeap` — which is exactly the boundary option 1 was designed around, now reached by measurement.
+
+It also confirms `crt0_plan`'s arithmetic against execution (Spyro: `a0=0x8007AA3C`, `a1=0x00184DC0`), so
+the earlier InitHeap-size fix is validated by an emulator that knows nothing about our code. And it
+measured something no symbolic decode can see: Spyro's real heap size, because that crt0 keeps it in a
+register and never stores it.
+
+The named gap: **`a1` is not yet a compared field** — the oracle measures it, but `crt0_extract` does not
+print its own computed value, so there is nothing to diff against. That is the field that was actually
+wrong before, which makes it the highest-value one to add next.
 
 ## Order of work
 

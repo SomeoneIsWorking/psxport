@@ -59,6 +59,14 @@ target_compile_options(oracle_spike PRIVATE -O2 -g)
 # available to run by hand. Guarding on BUILD_TESTING here made it vanish from ctest silently.
 add_test(NAME oracle_spike COMMAND oracle_spike)
 
+# oracle_trace — runs a REAL game executable in the reference and writes a per-instruction trace, which is
+# one side of milestone 2's differential. A trace FILE rather than a pipe or a symbol-prefixed archive: it
+# keeps the reference in its own process (so it shares no state with the port), needs no IPC protocol, and
+# is reproducible and human-readable, so "did the oracle change or did we?" stays answerable.
+add_executable(oracle_trace oracle_trace.c)
+target_link_libraries(oracle_trace PRIVATE psxport_oracle)
+target_compile_options(oracle_trace PRIVATE -O2 -g)
+
 # The instrument-validation gate. `oracle_spike` passing proves the oracle works; THIS proves the spike
 # could have said otherwise — it rebuilds the shim with the FastMap population loop disabled (in a
 # throwaway copy under scratch/, never the shipping file) and requires the spike to FAIL against it. A
