@@ -10,9 +10,16 @@ game; a game provides `GameConfig` + `GameHooks` + the recompiled substrate and 
 `psxport_smoke` exists to keep that seam honest by linking the library against a stub and proving zero game
 symbols resolve.
 
-The `#include` half of that is true and tested. The **address** half is not: 19 guest addresses from one
-specific game are compiled into the framework. `psxport_smoke` cannot catch them because a hex literal is
-not a symbol.
+The `#include` half of that is true and tested by `psxport_smoke`, which cannot catch an address because a
+hex literal is not a symbol.
+
+**The address half is already ratcheted, and I did not know that when I started.**
+`tests/test_no_game_address_literals.cpp` holds a per-file, per-address baseline with SHRINK-ONLY
+semantics: it fails if a literal appears more often than the baseline says, AND it fails if a baseline row
+has become stale, telling you to lower the count or delete the row. It reported this refactor precisely —
+three rows fixed outright, four dispatcher counts down — and refused to pass until the baseline was
+shrunk with the change. That is the guard working exactly as intended, and it means the framework's
+game-address debt is *tracked*, not unnoticed. `pc_scheduler.cpp` alone carries 62 baseline rows.
 
 ## What is actually there
 
@@ -97,7 +104,37 @@ byte-compare (SBS) run is the stronger check for the behavioural half.
   simply go. The rest belong behind a `GameHooks` per-instruction diagnostic callback the GAME installs, so
   a game-specific probe lives in the game repo, and the framework's hot loop tests one function pointer
   instead of eleven literals.
-- **`psxport_smoke` should gain an address check** so this cannot recur: the seam test proves no game
-  SYMBOL resolves, and it should equally prove no game ADDRESS is compiled in. A grep for
-  `0x80[0-9A-F]{6}` in `runtime/**` with an explicit allowlist of genuine hardware/BIOS constants
-  (`0x800000A0`, the exception vectors) would have failed the day the first probe landed.
+- **The ratchet already exists** — `tests/test_no_game_address_literals.cpp` — so the remaining work is
+  to keep shrinking it, not to build it. Its 62 rows for `pc_scheduler.cpp` are the actual backlog, and
+  the entry-PC work below removed 7 of them.
+
+## What was DONE, and the honest limit on how well it is verified
+
+The behavioural half is moved: `GameConfig` gained a `SchedEntry` table (`pc`, `nativeHandler`,
+`hasFiberBody`, `fiberBody`), `pc_scheduler.cpp` looks up instead of testing literals, Tomba! 2 declares
+the seven entries in its own `game_config.cpp`, and the ratchet baseline shrank by 3 rows plus 4 counts.
+The transcription is verbatim — same addresses, same classification — and the previous `if/else` chain's
+bare `else` (which silently made any unlisted entry `SCHED_CORO_AREALOAD_FAITHFUL`) is gone, because a
+table has no fall-through to be wrong about.
+
+**It is NOT verified by execution, and the reason is measured rather than assumed.** Three runs:
+
+| run | result |
+|---|---|
+| `gate.py boot --frames 400` after the change | PASS, byte-identical numbers to the baseline (133 lines, stage `8010637C`, sm48 2) |
+| the same gate with `schedEntryCount = 0` (temporary, reverted) | **also PASS**, identically |
+| a 400-frame attract run (`gate.py run`, no `newgame`) | PASS, and no seam line either |
+
+The second row is the important one: a green boot gate cannot tell a correct table from an empty one. So
+the first row is not evidence. `PcScheduler::hasNativeHandlerForEntry` is the guard at
+`scheduler.cpp:157` inside the SUBSTRATE fallback stanza — reached only for a task the native path did not
+claim — and neither a boot nor an attract run reaches it.
+
+That is now visible instead of invisible: the first consultation logs a one-shot line naming the entry PC,
+whether it matched, and how many entries were declared, and it says outright that a log lacking the line
+proves nothing about the table. It was tried in the destructor first and that did not fire at all — a
+headless run leaves through `_exit`, so static teardown never happens. A diagnostic that only fires on a
+clean shutdown does not fire.
+
+**What would actually exercise it:** a run with un-ported tasks reaching the substrate fallback —
+`pc_skip=false` / an SBS byte-compare run. That is the check this refactor still owes.

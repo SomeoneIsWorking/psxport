@@ -24,6 +24,7 @@ class PcScheduler {
 public:
   Game* game = nullptr;
 
+
   jmp_buf yield_jmp;          // longjmp target = the setjmp in the running stanza (was g_yield_jmp)
   R3000   task_ctx[3] = {};   // saved CPU register context per task slot, registers only (was g_task_ctx)
   int     in_stage = 0;       // 1 while inside a task run (gates the yield override) (was g_in_stage)
@@ -184,6 +185,14 @@ public:
 
   // True when entry_pc is one of the stage entries the PC port handles natively.
   bool hasNativeHandlerForEntry(uint32_t entry_pc) const;
+
+  // Counts consultations of the game's entry-PC seam, so "was this reached" is answerable. Tomba!2's boot
+  // gate passes IDENTICALLY with an empty table, and neither a 400-frame boot nor a 400-frame attract run
+  // consults this at all (measured 2026-08-13) — it is the SUBSTRATE FALLBACK guard at scheduler.cpp:157,
+  // reached only for a task the native path did not claim. So a green gate is not evidence about this
+  // table, and the one-shot line the first lookup prints is how a run says whether it touched it.
+  // `mutable` because the accessor is const and this is a pure diagnostic touching no guest state.
+  mutable unsigned long schedLookupsSeen = 0;
 
 private:
   enum StanzaResult { STANZA_NOT_MINE = 0, STANZA_HANDLED = 1 };

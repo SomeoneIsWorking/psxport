@@ -313,7 +313,43 @@ struct GameConfig {
     uint32_t declared;   // 1 = this game has stated its bias (even if the bias is 0). 0 = crt0 refuses.
     int32_t  value;      // the measured adjustment, e.g. -8 for the stock PSY-Q crt0, 0 for X4.
   } stackBias;
+
+  // ── the scheduler's guest task ENTRY PCs, declared by the game ─────────────────────────────────
+  // P1.7c moved PcScheduler into the framework with the game supplying task BODIES through
+  // `hooks->schedStageBody(kind)`. The mapping from a guest task's entry PC to which body it is did NOT
+  // move with it: `pc_scheduler.cpp` tested eight Tomba!2 literals directly
+  // (`entry_pc == 0x801062E4` and friends). That made the framework schedule ONE game specially, left
+  // those branches dead for the other five ports, and gave a new port no way to say "this entry is my
+  // area-load callback". This table is the missing half of that seam — the noun to go with the verb.
+  //
+  // A game that declares nothing gets `schedEntryCount == 0`, which is exactly what the other five
+  // ports experience today (the literals never matched), so adding this changes no port's behaviour.
+  //
+  // `nativeHandler` and `fiberBody` are separate because the two call sites ask different questions:
+  // `hasNativeHandlerForEntry` asks "do the native per-frame stanzas own this entry at all", while the
+  // fresh-fiber stanza asks "which coro body do I start for it". An entry can answer yes to the first
+  // and have no fiber body (the DEMO/GAME dispatchers), or the reverse (the preload bodies), so one
+  // flag could not express both without a sentinel that reads as a real value.
+  struct SchedEntry {
+    uint32_t pc;             // the guest task entry PC, from `mem_r32(taskbase + 0xc)`
+    uint32_t nativeHandler;  // 1 = the native per-frame stanzas handle this entry
+    uint32_t hasFiberBody;   // 1 = a fresh task at this entry starts a coro body
+    SchedBody fiberBody;     // which body — meaningful ONLY when hasFiberBody is 1
+  };
+  const SchedEntry* schedEntries;   // may be null when the count is 0
+  uint32_t          schedEntryCount;
 };
+
+// Look up a task entry PC in the game's declared table. Returns null when the game declared none or the
+// PC is not one of them — the caller must treat null as "not mine", which is the same fall-through the
+// hardcoded comparisons produced. Kept inline in the seam header so both the framework and the game read
+// one definition of what a declared entry means.
+static inline const GameConfig::SchedEntry* sched_entry_for(const GameConfig* cfg, uint32_t entry_pc) {
+  if (!cfg || !cfg->schedEntries) return nullptr;
+  for (uint32_t i = 0; i < cfg->schedEntryCount; i++)
+    if (cfg->schedEntries[i].pc == entry_pc) return &cfg->schedEntries[i];
+  return nullptr;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // GameHooks — the callback vtable the framework calls to reach game behaviour. Each member is a

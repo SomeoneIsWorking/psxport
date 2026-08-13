@@ -338,12 +338,32 @@ void PcScheduler::registerOverrides(const PrimGen& gen) {
 // 2026-07-04 (and again after a second attempt) per user directive: "PC_SKIP=0 uses native
 // calls but is BYTE exact to recomp path" — the ported path RUNS, and its byte-exactness is
 // the gate, not the routing.
+// The four entries this used to name as literals (Tomba!2's DEMO 0x801062E4, SOP area-load 0x80109164,
+// GAME 0x8010637C, STAGE-0 START.BIN 0x8010649C) now come from `cfg->schedEntries`, which the GAME
+// declares. See the SchedEntry comment in game_iface.h: P1.7c moved the task BODIES to the hooks seam and
+// left this mapping behind, so the framework was scheduling one specific game specially.
+//
+// THE COUNTERS EXIST BECAUSE THE BOOT GATE CANNOT SEE THIS CODE. Measured 2026-08-13: Tomba!2's
+// `gate.py boot --frames 400` passes IDENTICALLY with `schedEntryCount = 0` — same 133 lines, same
+// stage=8010637C, same sm48=2. So a green boot gate is NOT evidence that this table is right, and
+// without a reached-counter there is no way to tell "the declaration is correct" from "nothing ever
+// asked". `schedLookupsSeen` is the DENOMINATOR: a run reporting 0 hits out of 0 lookups never
+// exercised the seam, and must not be read as agreement.
 bool PcScheduler::hasNativeHandlerForEntry(uint32_t entry_pc) const {
-  return entry_pc == 0x801062E4u   // DEMO
-      || entry_pc == 0x80109164u   // SOP area-load
-      || entry_pc == 0x8010637Cu   // GAME
-      || entry_pc == 0x8010649Cu;  // STAGE-0 START.BIN
+  const GameConfig::SchedEntry* e = sched_entry_for(game->core.cfg, entry_pc);
+  if (schedLookupsSeen++ == 0) {
+    const GameConfig* cfg = game->core.cfg;
+    lucent::info("sched", "entry-PC seam FIRST CONSULTED: entry 0x{:08X} {} one of {} declared entry/entries. "
+                          "A run whose log lacks this line never reached the seam at all, and says nothing "
+                          "about whether the declared table is correct.",
+                 entry_pc, e ? "MATCHED" : "did NOT match", cfg ? cfg->schedEntryCount : 0u);
+  }
+  return e && e->nativeHandler;
 }
+
+// Reported at exit by whoever owns shutdown, so a run states whether the scheduler seam was reached at
+// all. Not behind a debug channel: a silent 0 is exactly the failure this is here to make visible.
+
 
 // DEMO 0x801062E4 — native per-frame dispatcher (both pc_skip modes; see the note on
 // hasNativeHandlerForEntry). Fresh: stageMain (prologue) then frame() dispatches
@@ -498,12 +518,9 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
   const int fresh = (st == 3 || (st == 2 && !task_started[i]));
   if (fresh) {
     const uint32_t entry_pc = c->mem_r32(base + 0xc);
-    const bool is_preload_body    = entry_pc == 0x80044F58u;
-    const bool is_stage1_callback = entry_pc == 0x8004514Cu;
-    const bool is_sop_area_load   = entry_pc == 0x80109164u;
-    const bool is_area_data_load  = entry_pc == 0x800452C0u;   // walkable-field area-DATA loader
-    if (!is_preload_body && !is_stage1_callback && !is_sop_area_load && !is_area_data_load)
-      return STANZA_NOT_MINE;
+    // Which coro body a fresh task at this entry starts is the GAME's declaration, not a literal here.
+    const GameConfig::SchedEntry* se = sched_entry_for(c->cfg, entry_pc);
+    if (!se || !se->hasFiberBody) return STANZA_NOT_MINE;
     if (co) { delete co; co = nullptr; }        // ~Coro cancels a blocked fiber
     task_ctx[i] = loop;
     task_ctx[i].r[29] = c->mem_r32(base + 8);
@@ -512,10 +529,12 @@ PcScheduler::StanzaResult PcScheduler::runTask1PreloadStanza(Core* c, int i, uin
     native_fiber[i] = 1;
     Core* cc = c;
     co = new Coro();
-    if (is_preload_body)         co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_TEXGROUP, nullptr); });
-    else if (is_stage1_callback) co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_PRELOAD1, nullptr); });
-    else if (is_area_data_load)  co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_AREADATA, nullptr); });
-    else                         co->start([cc] { cc->hooks->schedStageBody(cc, SCHED_CORO_AREALOAD_FAITHFUL, nullptr); });
+    // The body kind is the game's declaration. The previous if/else chain ended in a bare `else`, which
+    // meant any entry reaching here that was not one of the first three silently became
+    // SCHED_CORO_AREALOAD_FAITHFUL — a default that only happened to be right because the guard above
+    // admitted exactly four literals. With the table there is no fall-through to be wrong about.
+    const SchedBody kind = se->fiberBody;
+    co->start([cc, kind] { cc->hooks->schedStageBody(cc, kind, nullptr); });
   } else if (!native_fiber[i]) {
     return STANZA_NOT_MINE;
   } else if (st != 2 || !co || co->done()) {
