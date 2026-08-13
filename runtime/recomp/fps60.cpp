@@ -190,7 +190,12 @@ void Fps60::tier1Render(Core* core, float t) {
   mCamOverrideOn = true;
   {
     DisplayPassGuard displayPass(c->rsub.mode);   // FAIL-FAST: abort on any guest write, real-path discipline
-    c->hooks->fps60WorldPass(c, t);               // gates + terrain/scene-table/backdrop/objects (game Render)
+    if (!game_fps60_world_pass(c, c ? c->hooks : nullptr, t)) {
+      lucent::error("fps60", "Fps60::tier1Render REFUSED: this frame claimed a native world pass, "
+                    "but this game supplied no fps60WorldPass hook; captured world faces cannot be "
+                    "discarded without a producer to replace them");
+      abort();
+    }
   }
   mCamOverrideOn = false;
   c->game->rqRedirect = prevRedirect;
@@ -466,7 +471,9 @@ void Fps60::presentRotate() {
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
   mObjCur.clear();                // fresh capture set for the next real frame's projComposeObject calls
-  c->hooks->fps60BbSwapPrev(c); // billboard records rotate in lockstep (#67 per-particle lerp source);
+  game_fps60_bb_swap_prev(c, c ? c->hooks : nullptr); // billboard records rotate in lockstep (#67
+                                  // per-particle lerp source); games with no native billboard history
+                                  // have nothing to rotate
                                   // native_boot's bbFrameReset clears the new cur before the next walk
   mHavePrev = 1;
 }

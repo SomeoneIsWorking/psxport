@@ -121,7 +121,10 @@ struct Fps60 {
   // native producer and its own keyed prims (measured in #29), they simply present verbatim from the
   // captured queue rather than through the field re-run. Set true per real frame from the render dispatch
   // (game_tomba2.cpp) IFF the native field render ran this frame; tier1Render is skipped otherwise.
-  bool mTier1EligibleCur = true;
+  // Fail closed: a port must positively claim this frame after its native world producer actually ran.
+  // Default-true made a game with no producer enter tier1 and call a null hook (or, if made a no-op,
+  // discard captured world faces without replacements).
+  bool mTier1EligibleCur = false;
   void tier1Render(Core* core, float t);   // re-run terrainRenderAll() under lerp(mCamPrev,mCamCur,t) into mSink
 
   // ---- TIER 1 BACKDROP: game-logic-scroll LAYER-TRANSFORM lerp (docs/fps60-rework.md) -----------------

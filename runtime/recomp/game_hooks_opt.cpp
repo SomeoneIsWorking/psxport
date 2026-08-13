@@ -18,3 +18,14 @@ bool game_fps60_read_scene_cam(Core* c, const GameHooks* hooks, float R[3][3], f
   hooks->fps60ReadSceneCam(c, R, T);
   return true;
 }
+
+bool game_fps60_world_pass(Core* c, const GameHooks* hooks, float t) {
+  if (!hooks || !hooks->fps60WorldPass) return false;
+  hooks->fps60WorldPass(c, t);
+  return true;
+}
+
+void game_fps60_bb_swap_prev(Core* c, const GameHooks* hooks) {
+  if (!hooks || !hooks->fps60BbSwapPrev) return;
+  hooks->fps60BbSwapPrev(c);
+}

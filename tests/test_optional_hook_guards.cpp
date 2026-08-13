@@ -27,6 +27,7 @@
 
 #include "game_iface.h"
 #include "game_hooks_opt.h"
+#include "fps60.h"
 
 // `Core` is never CONSTRUCTED here — it has a real constructor that a hermetic test cannot stand up.
 // The accessors take the hooks table explicitly for exactly that reason, so the Core pointer is only
@@ -42,6 +43,11 @@ static int  s_play_track = -999;
 static Core* s_name_core  = nullptr;
 static Core* s_play_core  = nullptr;
 static Core* s_cam_core   = nullptr;
+static Core* s_world_core = nullptr;
+static Core* s_bb_core    = nullptr;
+static int s_world_calls = 0;
+static int s_bb_calls = 0;
+static float s_world_t = -1.0f;
 
 static const char* spy_now_playing(Core* c) { s_name_calls++; s_name_core = c; return "Track 07"; }
 static void        spy_sound_test(Core* c, int track) { s_play_calls++; s_play_core = c; s_play_track = track; }
@@ -50,10 +56,18 @@ static void        spy_scene_cam(Core* c, float R[3][3], float T[3]) {
   for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = (float)(10 * i + j);
   T[0] = -3.0f; T[1] = 4.0f; T[2] = 99.0f;
 }
+static void spy_world_pass(Core* c, float t) {
+  s_world_calls++;
+  s_world_core = c;
+  s_world_t = t;
+}
+static void spy_bb_swap(Core* c) { s_bb_calls++; s_bb_core = c; }
 
 static void reset_spies(void) {
   s_name_calls = s_play_calls = 0; s_play_track = -999;
   s_name_core = s_play_core = s_cam_core = nullptr;
+  s_world_calls = s_bb_calls = 0; s_world_t = -1.0f;
+  s_world_core = s_bb_core = nullptr;
 }
 
 // A null hooks TABLE is a different failure from a null hook IN the table — a port that never installs
@@ -120,10 +134,51 @@ static void test_scene_camera_reader_has_no_silent_fallback(void) {
   CHECK_EQ((int)T[2], 99);
 }
 
+static void test_world_pass_absence_refuses_instead_of_claiming_an_empty_world(void) {
+  GameHooks empty{};
+  reset_spies();
+  CHECK(!game_fps60_world_pass(kFakeCore, &empty, 0.25f));
+  CHECK(!game_fps60_world_pass(kFakeCore, nullptr, 0.75f));
+  CHECK_EQ(s_world_calls, 0);
+}
+
+static void test_world_pass_presence_forwards_one_exact_rerun(void) {
+  GameHooks hooks{};
+  hooks.fps60WorldPass = spy_world_pass;
+  reset_spies();
+  CHECK(game_fps60_world_pass(kFakeCore, &hooks, 0.375f));
+  CHECK_EQ(s_world_calls, 1);
+  CHECK(s_world_core == kFakeCore);
+  CHECK(s_world_t == 0.375f);
+}
+
+static void test_billboard_rotate_is_optional_but_present_hook_runs(void) {
+  GameHooks empty{};
+  reset_spies();
+  game_fps60_bb_swap_prev(kFakeCore, &empty);
+  game_fps60_bb_swap_prev(kFakeCore, nullptr);
+  CHECK_EQ(s_bb_calls, 0);
+
+  GameHooks hooks{};
+  hooks.fps60BbSwapPrev = spy_bb_swap;
+  game_fps60_bb_swap_prev(kFakeCore, &hooks);
+  CHECK_EQ(s_bb_calls, 1);
+  CHECK(s_bb_core == kFakeCore);
+}
+
+static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
+  Fps60 fps60;
+  CHECK(!fps60.mTier1EligibleCur);
+}
+
 int main(void) {
   RUN(absent_hook_is_a_safe_answer_not_a_jump_to_zero);
   RUN(a_null_hooks_table_is_also_safe);
   RUN(a_present_hook_is_actually_called);
   RUN(scene_camera_reader_has_no_silent_fallback);
+  RUN(world_pass_absence_refuses_instead_of_claiming_an_empty_world);
+  RUN(world_pass_presence_forwards_one_exact_rerun);
+  RUN(billboard_rotate_is_optional_but_present_hook_runs);
+  RUN(world_rerun_is_not_eligible_until_a_game_claims_it);
   return pt_summary();
 }
