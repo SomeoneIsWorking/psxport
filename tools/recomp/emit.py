@@ -1254,10 +1254,6 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
         a = s
         while a < e:
             i = ins[a]
-            if a in diagnostic_pcs:
-                out.append(f"  pc_observer_at(c, 0x{a:08X}u);")
-                if emitted_diagnostic_pcs is not None:
-                    emitted_diagnostic_pcs.add(a)
             if a in labels:
                 out.append(f"L_{a:08X}:;")
                 # Loop back-edge: give the host a turn. One predictable load-and-test per iteration,
@@ -1265,6 +1261,12 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
                 # not enough.
                 if a in backedges:
                     out.append("  if (c->pending_work) rec_irq_poll(c);")
+            # A checkpoint observes entry to the guest instruction, including a branch landing on
+            # this label. Placing it before the label lets `goto L_PC` skip the observer entirely.
+            if a in diagnostic_pcs:
+                out.append(f"  pc_observer_at(c, 0x{a:08X}u);")
+                if emitted_diagnostic_pcs is not None:
+                    emitted_diagnostic_pcs[a] = emitted_diagnostic_pcs.get(a, 0) + 1
             if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
                 slot = ins.get(a + 4)
                 ds_c = emit_simple(slot) if (slot and slot.kind not in
@@ -2283,16 +2285,20 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
           f"returns): " + (" ".join(f"0x{a:08X}" for a in sorted(ra_computed)) or "(none computed)"))
 
     shard = [["// GENERATED — DO NOT EDIT.", f'#include "{N.decls}"', ""] for _ in range(shards)]
-    emitted_diagnostic_pcs = set()
+    emitted_diagnostic_pcs = {}
     for k, a in enumerate(funcs):
         emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry,
                   ra_computed, diagnostic_pcs, emitted_diagnostic_pcs)
-    if emitted_diagnostic_pcs != set(diagnostic_pcs):
-        missing = sorted(set(diagnostic_pcs) - emitted_diagnostic_pcs)
-        extra = sorted(emitted_diagnostic_pcs - set(diagnostic_pcs))
-        raise SystemExit(f"[recomp] diagnostic checkpoints requested={len(diagnostic_pcs)} "
-                         f"emitted={len(emitted_diagnostic_pcs)} missing="
-                         f"{[f'0x{x:08X}' for x in missing]} extra="
+    requested = set(diagnostic_pcs)
+    missing = sorted(pc for pc in requested if emitted_diagnostic_pcs.get(pc, 0) == 0)
+    duplicates = sorted(pc for pc in requested if emitted_diagnostic_pcs.get(pc, 0) > 1)
+    extra = sorted(set(emitted_diagnostic_pcs) - requested)
+    emitted_sites = sum(emitted_diagnostic_pcs.values())
+    if missing or duplicates or extra or emitted_sites != len(requested):
+        raise SystemExit(f"[recomp] diagnostic checkpoints requested_targets={len(requested)} "
+                         f"emitted_sites={emitted_sites} missing="
+                         f"{[f'0x{x:08X}' for x in missing]} duplicate_pcs="
+                         f"{[f'0x{x:08X}({emitted_diagnostic_pcs[x]})' for x in duplicates]} extra="
                          f"{[f'0x{x:08X}' for x in extra]}")
     for s in range(shards):
         write_if_changed(os.path.join(out_dir, f"{N.shardpfx}_{s}.c"), "\n".join(shard[s]) + "\n")

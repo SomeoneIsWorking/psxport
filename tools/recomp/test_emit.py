@@ -199,13 +199,57 @@ def test_diagnostic_checkpoints_precede_two_selected_ordinary_instructions():
         assert "pc_observer_at(c, 0x80010004u);\n  c->r[3] =" in shard
 
 
+def test_diagnostic_checkpoint_branch_target_observes_after_label_before_instruction():
+    a = Asm()
+    a.beq("zero", "zero", "target")
+    a.nop()
+    a.addiu("v0", "zero", 1)
+    a.label("target")
+    a.addiu("v1", "zero", 2)
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    with tempfile.TemporaryDirectory() as td:
+        emit.emit_module(exe_of(data), td, emit.MAIN_NAMES, {a.base}, shards=1,
+                         diagnostic_pcs={a.labels["target"]})
+        shard = open(os.path.join(td, emit.MAIN_NAMES.shardpfx + "_0.c")).read()
+        pc = a.labels["target"]
+        assert f"L_{pc:08X}:;\n  pc_observer_at(c, 0x{pc:08X}u);\n  c->r[3] =" in shard
+
+
+def test_diagnostic_checkpoint_overlapping_bodies_refuse_duplicate_site():
+    a = Asm()
+    a.beq("zero", "zero", "shared")
+    a.nop()
+    a.jr("ra")
+    a.nop()
+    second = a.base + 16
+    a.addiu("v0", "zero", 1)
+    a.nop()
+    a.label("shared")
+    a.addiu("v1", "zero", 2)
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            emit.emit_module(exe_of(data), td, emit.MAIN_NAMES, {a.base, second}, shards=1,
+                             diagnostic_pcs={a.labels["shared"]})
+        except SystemExit as error:
+            message = str(error)
+            assert "requested_targets=1" in message and "emitted_sites=2" in message
+            assert f"0x{a.labels['shared']:08X}(2)" in message
+        else:
+            assert False, "a requested PC duplicated into overlapping generated bodies must refuse"
+
+
 def test_diagnostic_checkpoint_outside_emitted_text_refuses_with_denominator():
     with tempfile.TemporaryDirectory() as td:
         try:
             _emit_checkpoint_fixture(td, {0x80010100})
         except SystemExit as error:
             message = str(error)
-            assert "requested=1 emitted=0" in message
+            assert "requested_targets=1 emitted_sites=0" in message
             assert "0x80010100" in message
         else:
             assert False, "an unemitted requested checkpoint must refuse generation"
