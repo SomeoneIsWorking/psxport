@@ -19,7 +19,7 @@ All of these live in the psxport repo, so they reach every game tree and every s
 
 ## What is here
 
-Seven independent repos side by side, all public under `github.com/SomeoneIsWorking`. No workspace repo
+Independent repos live side by side, all public under `github.com/SomeoneIsWorking`. No workspace repo
 and no superproject: a game must build from a bare clone of itself, a gitlink at this level would churn on
 every game commit, and a recursive clone would pull seven copies of psxport + beetle-psx.
 
@@ -27,19 +27,22 @@ every game commit, and a recursive clone would pull seven copies of psxport + be
 
 The target ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
 X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2. Mega Man X4 is already 60 fps, so its enhancement path is
-widescreen first and, much later, drop-in co-op — not interpolation. **Today only Spyro 1, Spider-Man 1,
-Tomba! 2, Vagrant Story, and Mega Man X4 have reproducible local trees.** The remaining named titles are
-scope, not implementation coverage; create their planned lineage trees before claiming their framework,
-widescreen, or interpolation paths are underway.
+widescreen first and, much later, drop-in co-op — not interpolation. All planned lineage repositories
+now have public, reproducible trees. Most newly added titles are honest harness-first scaffolds, not
+implementation coverage; no widescreen or interpolation support is implied by repository existence.
 
 | path | what it is |
 |---|---|
 | `psxport/` | **the framework DEV CLONE — the one writable framework checkout.** Also the home of every doc listed above |
-| `Tomba2Engine/` | Tomba! 2 — psxport's reference consumer. Tomba! 1 may live here by preference; no shared `game/` |
-| `spyro/` | Spyro the Dragon (`SCUS_942.28`); the Insomniac lineage repo (Spyro 2/3 join it) |
-| `spider1/` | Spider-Man (`SLUS_008.75`, USA); the Neversoft lineage repo (Enter Electro joins it) |
+| `Tomba2Engine/` | Tomba! 2 — psxport's reference consumer; also owns the separate Tomba! 1 title project, with no shared `game/` |
+| `spyro/` | Spyro 1/2/3, the Insomniac-lineage repository; Spyro 1 (`SCUS_942.28`) is the current implementation |
+| `spider1/` | Spider-Man 1/2, the Neversoft-lineage repository; Spider-Man 1 (`SLUS_008.75`, USA) is the current implementation |
 | `vagrant/` | Vagrant Story (`SLUS_010.40`, USA). Vendors the CC0 `rood-reverse` decomp. Defining fact: the boot exe is ~15% of the code, 933,925 B lives in `.PRG` overlays |
 | `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — the only **enhancement-class** port here: already 60fps, so no native producers, no lerp, no native depth. Wants widescreen + load removal + drop-in co-op. Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
+| `crash/` | Crash Bandicoot 1/2/3 in one architecture repository; harness-first scaffold |
+| `ctr/` | Crash Team Racing; standalone harness-first scaffold |
+| `crashbash/` | Crash Bash; standalone harness-first scaffold |
+| `tekken3/` | Tekken 3; standalone harness-first scaffold |
 | `toystory2/` | Existing Toy Story 2 (`SLUS_008.93`, USA) checkout — not in the active title scope above |
 | `coord/` | **UNTRACKED, machine-local, EPHEMERAL ONLY**: `claims/` (the area locks — a lock coordinates the agents on THIS machine, so it must not be tracked), plus agent scratch. Nothing durable belongs here |
 
@@ -50,14 +53,13 @@ git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport
 ~/repo/psx/psxport/scripts/bootstrap-workspace.sh   # clones the games, inits vendors, relinks CLAUDE.md
 ```
 
-A new tree is only reproducible once it is added to that script's `REMOTE_BACKED` list; all target titles
-not listed there are currently absent. `toystory2` is also not in it because it is outside the target
-scope.
+All active target repositories are in that script's `REMOTE_BACKED` list. `toystory2` is not because
+it is outside the active target scope.
 
 ## The structure rule: ONE writable framework checkout
 
 Each game vendors the framework at `external/psxport` (a submodule, itself nesting `vendor/beetle-psx` and
-`vendor/lucent`). **Seven checkouts of one framework exist; exactly one is writable.**
+`vendor/lucent`). **Multiple checkouts of one framework exist; exactly one is writable.**
 
 1. **Framework edits happen ONLY in `psxport/`.** A game's `external/psxport` is a read-only pinned
    consumer — `git checkout <pin>` territory. Never edit, commit, push or merge in there.

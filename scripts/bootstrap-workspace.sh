@@ -41,7 +41,7 @@ init_vendors() {                       # init_vendors <psxport checkout>
 say "framework dev clone: $PSXPORT"
 init_vendors "$PSXPORT"
 
-REMOTE_BACKED=(spyro spider1 Tomba2Engine vagrant megamanx4)
+REMOTE_BACKED=(spyro spider1 Tomba2Engine vagrant megamanx4 crash ctr crashbash tekken3)
 LOCAL_ONLY=()                          # no non-reproducible tree is currently registered here
 
 cloned=0; present=0
