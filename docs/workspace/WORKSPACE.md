@@ -23,6 +23,13 @@ Seven independent repos side by side, all public under `github.com/SomeoneIsWork
 and no superproject: a game must build from a bare clone of itself, a gitlink at this level would churn on
 every game commit, and a recursive clone would pull seven copies of psxport + beetle-psx.
 
+### Active title scope
+
+The active ports are Spyro 1/2/3; Crash 1/2/3; Crash Bash; Crash Team Racing; Vagrant Story; Mega Man
+X4; Tomba! 1/2; Tekken 3; and Spider-Man 1/2. Mega Man X4 is already 60 fps, so its enhancement path is
+widescreen first and, much later, drop-in co-op — not interpolation. The checkout table below records
+what currently exists on this machine; it is not a promise that every checkout is an active port.
+
 | path | what it is |
 |---|---|
 | `psxport/` | **the framework DEV CLONE — the one writable framework checkout.** Also the home of every doc listed above |
@@ -31,7 +38,7 @@ every game commit, and a recursive clone would pull seven copies of psxport + be
 | `spider1/` | Spider-Man (`SLUS_008.75`, USA); the Neversoft lineage repo (Enter Electro joins it) |
 | `vagrant/` | Vagrant Story (`SLUS_010.40`, USA). Vendors the CC0 `rood-reverse` decomp. Defining fact: the boot exe is ~15% of the code, 933,925 B lives in `.PRG` overlays |
 | `megamanx4/` | Mega Man X4 (`SLUS_005.61`, USA) — the only **enhancement-class** port here: already 60fps, so no native producers, no lerp, no native depth. Wants widescreen + load removal + drop-in co-op. Vendors the AGPL-3.0 `mmx4` decomp, which may NOT be lifted into `psxport` |
-| `toystory2/` | Toy Story 2 (`SLUS_008.93`, USA), Traveller's Tales — its own engine, no shared `game/` |
+| `toystory2/` | Existing Toy Story 2 (`SLUS_008.93`, USA) checkout — not in the active title scope above |
 | `coord/` | **UNTRACKED, machine-local, EPHEMERAL ONLY**: `claims/` (the area locks — a lock coordinates the agents on THIS machine, so it must not be tracked), plus agent scratch. Nothing durable belongs here |
 
 `$PSX` in any doc means this workspace root. To reproduce the workspace on a fresh machine:
@@ -87,7 +94,7 @@ and `spyro/` had not converted to multi-title, so nothing was defended by inerti
 
 - Spider-Man 1 + 2 share a repo · Spyro 1 + 2 + 3 share a repo (`titles/<t>/` over a shared `game/`), each
   converting to multi-title WHEN that title's work starts, not before.
-- Spyro 1, Tomba! 1, Toy Story 2, Vagrant Story, Mega Man X4, CTR, Crash Bash: **no shared `game/`.**
+- Tomba! 1, Vagrant Story, Mega Man X4, CTR, Crash Bash, and Tekken 3: **no shared `game/`.**
 - The Crash trio (1/2/3) is ONE architecture, on direct evidence rather than the aggregate metric; `crash/`
   is created when Crash work starts. `ctr/` and `crashbash/` likewise, one title each.
 - Rejected: one repo for Spyro AND Crash · an engine-family library vendored between psxport and a game ·
