@@ -41,3 +41,8 @@ const char* game_audio_now_playing_name(Core* c, const GameHooks* hooks);
 // has no Sound Test — the menu row is inert rather than fatal. `track` reaches the game unchanged;
 // the negative "stop" value is meaningful and must not be clamped.
 void game_audio_sound_test_play(Core* c, const GameHooks* hooks, int track);
+
+// Read a game-owned scene view matrix for a native projection path. Unlike the audio accessors, an
+// absent reader is not a usable result: it returns false so Fps60::sceneCam can refuse rather than
+// inventing a camera. The explicit hooks argument keeps both cases hermetically testable.
+bool game_fps60_read_scene_cam(Core* c, const GameHooks* hooks, float R[3][3], float T[3]);

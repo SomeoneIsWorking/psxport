@@ -93,10 +93,10 @@ struct Fps60 {
   void frame_commit(Core* core);                    // per-logic-frame fence + present orchestration
 
   // ---- shared camera reader ----------------------------------------------------------------------------
-  // Scene camera read choke: fills R(int16 units)/T/ofx/ofy/H from the scratchpad view matrix + the GTE
-  // projection constants. This is the ONE reader the whole native projection path uses (projComposeCore /
-  // projComposeCamera / native_terrain) — not fps60-specific; it lives here because it predates the split
-  // and every caller already reaches it via c->game->fps60.sceneCam(...).
+  // Scene camera read choke: a GAME hook fills R(int16 units)/T from that game's own camera state and the
+  // framework supplies the game-recorded OFX/OFY/H projection constants. This is the ONE reader the whole
+  // native projection path uses (projComposeCore / projComposeCamera / native_terrain) — not fps60-specific;
+  // it lives here because every caller already reaches it via c->game->fps60.sceneCam(...).
   void sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy, float& H);
 
   // ---- TIER 1: camera-lerp native world (terrain) re-render (docs/fps60-rework.md) ---------------------

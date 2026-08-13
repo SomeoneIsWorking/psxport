@@ -455,6 +455,12 @@ struct GameHooks {
   // here, so a game can add oracle/unit tests without the agnostic framework naming them. Return 2
   // for an unrecognised name (same "unknown selftest" code selftest_run uses).
   int (*selftestGame)(const char* which, const char* exePath);
+
+  // --- native-projection input ---------------------------------------------------------------
+  // The framework owns the interpolation slots and projection constants, but a scene view matrix is
+  // game layout. A native producer asks through this hook rather than teaching psxport a scratchpad
+  // address. Null means this game has no native camera path; Fps60::sceneCam refuses that request.
+  void (*fps60ReadSceneCam)(Core* c, float R[3][3], float T[3]);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────

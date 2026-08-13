@@ -41,13 +41,19 @@ static int  s_play_calls = 0;
 static int  s_play_track = -999;
 static Core* s_name_core  = nullptr;
 static Core* s_play_core  = nullptr;
+static Core* s_cam_core   = nullptr;
 
 static const char* spy_now_playing(Core* c) { s_name_calls++; s_name_core = c; return "Track 07"; }
 static void        spy_sound_test(Core* c, int track) { s_play_calls++; s_play_core = c; s_play_track = track; }
+static void        spy_scene_cam(Core* c, float R[3][3], float T[3]) {
+  s_cam_core = c;
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = (float)(10 * i + j);
+  T[0] = -3.0f; T[1] = 4.0f; T[2] = 99.0f;
+}
 
 static void reset_spies(void) {
   s_name_calls = s_play_calls = 0; s_play_track = -999;
-  s_name_core = s_play_core = nullptr;
+  s_name_core = s_play_core = s_cam_core = nullptr;
 }
 
 // A null hooks TABLE is a different failure from a null hook IN the table — a port that never installs
@@ -97,9 +103,27 @@ static void test_a_present_hook_is_actually_called(void) {
   CHECK_EQ(s_play_track, -1);
 }
 
+static void test_scene_camera_reader_has_no_silent_fallback(void) {
+  GameHooks empty{};
+  float R[3][3] = {{-1}};
+  float T[3] = {-1, -1, -1};
+  CHECK(!game_fps60_read_scene_cam(kFakeCore, &empty, R, T));
+  CHECK_EQ((int)R[0][0], -1);
+  CHECK_EQ((int)T[2], -1);
+
+  GameHooks hooks{};
+  hooks.fps60ReadSceneCam = spy_scene_cam;
+  CHECK(game_fps60_read_scene_cam(kFakeCore, &hooks, R, T));
+  CHECK(s_cam_core == kFakeCore);
+  CHECK_EQ((int)R[2][1], 21);
+  CHECK_EQ((int)T[0], -3);
+  CHECK_EQ((int)T[2], 99);
+}
+
 int main(void) {
   RUN(absent_hook_is_a_safe_answer_not_a_jump_to_zero);
   RUN(a_null_hooks_table_is_also_safe);
   RUN(a_present_hook_is_actually_called);
+  RUN(scene_camera_reader_has_no_silent_fallback);
   return pt_summary();
 }

@@ -21,6 +21,7 @@
 #include "render_mode.h"   // DisplayPassGuard — display-pass FAIL-FAST guard (framework)
 #include "render_queue.h"
 #include "proj_params.h"   // ProjParams — the camera's projection constants + Snapshot save/restore
+#include "game_hooks_opt.h" // game-owned scene-camera reader; never a framework scratchpad layout
 #include "cfg.h"
 #include <lucent/log.h>
 #include "mods.h"     // Mods (game->mods.fps60)
@@ -83,20 +84,14 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
     ofx = mCamOverride.ofx; ofy = mCamOverride.ofy; H = mCamOverride.H;
     return;
   }
-  // Read the scene camera from the scratchpad view matrix (CR0-4 halfword packing @ SCR+0xF8; translation
-  // @ SCR+0x10C). R is the RAW int16 rows (undivided — the convention projComposeCore/projComposeCamera
-  // consume). This is the ONE camera reader for the whole native projection path
-  // (projComposeCore/projComposeCamera/native_terrain), unconditional — not gated on fps60 (fps60 no
-  // longer reprojects at present time; it lerps already-resolved queue prims).
-  const uint32_t SCR = 0x1F800000u;
-  uint32_t w0 = c->mem_r32(SCR + 0xF8), w1 = c->mem_r32(SCR + 0xFC), w2 = c->mem_r32(SCR + 0x100),
-           w3 = c->mem_r32(SCR + 0x104), w4 = c->mem_r32(SCR + 0x108);
-  R[0][0] = (int16_t)w0;         R[0][1] = (int16_t)(w0 >> 16); R[0][2] = (int16_t)w1;
-  R[1][0] = (int16_t)(w1 >> 16); R[1][1] = (int16_t)w2;         R[1][2] = (int16_t)(w2 >> 16);
-  R[2][0] = (int16_t)w3;         R[2][1] = (int16_t)(w3 >> 16); R[2][2] = (int16_t)w4;
-  T[0] = (float)(int32_t)c->mem_r32(SCR + 0x10C);
-  T[1] = (float)(int32_t)c->mem_r32(SCR + 0x110);
-  T[2] = (float)(int32_t)c->mem_r32(SCR + 0x114);
+  // The view matrix is GAME state. psxport used to decode Tomba!2's scratchpad layout here, which
+  // made every future native producer silently read unrelated memory in another title. The game owns
+  // that decode; the framework owns only the capture/lerp around its result.
+  if (!game_fps60_read_scene_cam(c, c ? c->hooks : nullptr, R, T)) {
+    lucent::error("fps60", "Fps60::sceneCam REFUSED: this game supplied no fps60ReadSceneCam hook; "
+                  "a native camera cannot be inferred from framework memory");
+    abort();
+  }
   // The projection constants come from the GAME'S SETTER (ProjParams::setGeomOffset/setGeomScreen,
   // recorded where libgte SetGeomOffset/SetGeomScreen run), NOT from gte_read_ctrl(24/25/26). Reading
   // them back out of the GTE was asking engine state, after the fact, for constants the game had
@@ -515,4 +510,3 @@ void Fps60::projObj(Core* c, uint32_t cmd, float Robj[3][3], float Tobj[3]) {
   for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) o.R[i][j] = Robj[i][j]; o.T[i] = Tobj[i]; }
   mObjCur[cmd] = o;
 }
-
