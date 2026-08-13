@@ -59,6 +59,16 @@ def parse_symbolic(text):
     # recorded as a comparable FIELD rather than left as prose nobody checks.
     if re.search(r"libcInit is the A\(39h\) InitHeap BIOS thunk: YES", text):
         out["biosFn"] = 0x39
+    # What the SHIPPING arithmetic (`crt0_plan`) makes of the scan. This is the line that lets a1 — the
+    # InitHeap heap SIZE — be compared at all: it is not a scanned field, it is computed from two words the
+    # crt0 loads, and it is the field that was actually WRONG before (every port passed size 0).
+    m = re.search(r"crt0_plan \(THE shipping arithmetic[^)]*\): sp=0x([0-9A-Fa-f]+) gp=0x([0-9A-Fa-f]+)"
+                  r" InitHeap\(a0=0x([0-9A-Fa-f]+), a1=0x([0-9A-Fa-f]+)\)", text)
+    if m:
+        out["planSp"] = int(m.group(1), 16)
+        out["planGp"] = int(m.group(2), 16)
+        out["planA0"] = int(m.group(3), 16)
+        out["planA1"] = int(m.group(4), 16)
     for line in text.splitlines():
         m = re.match(r"\s+(bssZeroLo|bssZeroHi|stackTopBase|stackTopBase2|heapBase|gp|libcInit)\s+"
                      r"0x([0-9A-Fa-f]+)\s*$", line)
@@ -167,6 +177,16 @@ def main():
             regs.get("a0"),
             "crt0_extract reports the delay slot is `addi a0,a0,4`, so the executed a0 must be "
             "heapBase+4")
+    # The three crt0_plan outputs. a1 is the important one: it is COMPUTED, not scanned, from two words the
+    # crt0 loads — so until crt0_extract printed its own value there was nothing to diff the oracle's
+    # measurement against, and the heap size is precisely the field that shipped wrong.
+    cmp_row("crt0_plan sp", sym.get("planSp"), regs.get("sp"),
+            "crt0_plan computes sp = mem[stackTopBase] + bias | 0x80000000; the executed $sp must equal it")
+    cmp_row("crt0_plan a0", sym.get("planA0"), regs.get("a0"),
+            "crt0_plan computes a0 = (heapBase masked | KSEG0) + 4")
+    cmp_row("crt0_plan a1 (HEAP SIZE)", sym.get("planA1"), regs.get("a1"),
+            "crt0_plan computes a1 = (mem[stackTopBase] + bias - mem[stackTopBase2]) - maskedHeapBase; "
+            "the executed $a1 at the InitHeap call must equal it")
 
     # sp: crt0_extract reports the ADDRESS of the stack-top global plus the bias, not the resulting sp,
     # so this row states what it can and cannot check rather than inventing a comparison.
@@ -206,9 +226,11 @@ def main():
     print()
     total = agree + disagree + cannot
     print(f"  compared {total} field(s): {agree} agree, {disagree} disagree, {cannot} could not be seen.")
-    print(f"  NOT covered by this cross-check (crt0_extract reports them; nothing in the executed register")
-    print(f"  file at the boundary can confirm them, because they are addresses the crt0 reads rather than")
-    print(f"  values it leaves behind): bssZeroLo/Hi, stackTopBase, stackTopBase2, heapBase directly.")
+    print("  NOT covered by this cross-check: bssZeroLo/Hi, stackTopBase, stackTopBase2 and heapBase as")
+    print("  ADDRESSES. They are locations the crt0 reads, not values it leaves in a register, so the")
+    print("  boundary register file cannot confirm them. (bssZeroLo/Hi are corroborated indirectly — the")
+    print("  first four traced instructions load exactly those two values into $v0/$v1 — but this script")
+    print("  does not assert that, so it is not counted above.)")
 
     if disagree:
         print("\nDISAGREEMENT. The two methods do not describe the same crt0. Trust neither shipped constant")

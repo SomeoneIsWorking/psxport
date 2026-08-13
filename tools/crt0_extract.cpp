@@ -70,6 +70,14 @@ struct Crt0xOutcome {
   uint32_t     entry    = 0;
   int          resolved = 0, total = 0;
   Crt0Observed o;
+
+  // What the SHIPPING arithmetic makes of the scan: `crt0_plan` from runtime/recomp/crt0_boot.h, run on
+  // this image's own words. Carried out of `extract_from_image` so `--selftest` asserts on the same values
+  // the human report prints, and so `tools/oracle/crossvalidate_crt0.py` can diff a1 (the heap SIZE)
+  // against what the oracle MEASURED at the InitHeap call. Before this existed, a1 was the one field the
+  // cross-check could not see — and it is the field that was actually wrong (every port passed size 0).
+  bool     planOk = false;
+  Crt0Plan plan;
 };
 
 // extract_from_image — THE shipping path. `main` and `--selftest` both call this and nothing else, so
@@ -155,6 +163,46 @@ static Crt0xOutcome extract_from_image(const uint8_t* data, size_t n, const char
   }
   if (report) fprintf(report, "    %d of %d field(s) resolved\n", r.resolved, r.total);
 
+  // ── what the SHIPPING arithmetic computes from this scan ────────────────────────────────────────
+  // `crt0_plan` is called, not reimplemented: the extractor and the boot path must not be able to disagree
+  // about the InitHeap arguments, for the same reason they already share `crt0_scan`. It is pure — the two
+  // words the guest crt0 loads are passed in — so it can run here against the image's own bytes.
+  if (r.resolved == r.total && o.scanComplete) {
+    GameConfig gc{};
+    gc.bssZeroLo     = o.bssLo;
+    gc.bssZeroHi     = o.bssHi;
+    gc.stackTopBase  = o.stackTopBase;
+    gc.stackTopBase2 = o.stackTopBase2;
+    gc.heapBase      = o.heapBase;
+    gc.heapSizePtr   = o.sawHeapSizeStore ? o.heapSizePtr : 0u;
+    gc.heapBasePtr   = o.sawHeapBaseStore ? o.heapBasePtr : 0u;
+    gc.gp            = o.gp;
+    gc.libcInit      = o.libcInit;
+    gc.stackBias     = {1u, o.bias};
+    const uint32_t stackTopWord    = exe.r32(o.stackTopBase);
+    const uint32_t stackReserveWord = exe.r32(o.stackTopBase2);
+    r.plan   = crt0_plan(&gc, stackTopWord, stackReserveWord, "crt0_extract");
+    r.planOk = r.plan.ok;
+    if (report) {
+      if (r.planOk)
+        fprintf(report, "  crt0_plan (THE shipping arithmetic, run on this image): sp=0x%08X gp=0x%08X"
+                        " InitHeap(a0=0x%08X, a1=0x%X)\n"
+                        "    a1 = ((mem[0x%08X]=0x%08X %c %d) - mem[0x%08X]=0x%08X) - 0x%08X = %u byte(s)\n",
+                r.plan.sp, r.plan.gp, r.plan.a0, r.plan.a1,
+                o.stackTopBase, stackTopWord, o.bias < 0 ? '-' : '+',
+                o.bias < 0 ? -(int)o.bias : (int)o.bias,
+                o.stackTopBase2, stackReserveWord, r.plan.heapBaseMasked, r.plan.a1);
+      else
+        fputs("  crt0_plan REFUSED on this image's own words — see its error above. The boot group scanned"
+              " cleanly\n    but the arithmetic over it does not produce a usable plan, so nothing here"
+              " should be shipped.\n", report);
+    }
+  } else if (report) {
+    fprintf(report, "  crt0_plan NOT RUN: %d of %d field(s) resolved and the prologue is %s. Running it on"
+                    " an\n    incomplete group would print an InitHeap size derived from zeroes.\n",
+            r.resolved, r.total, o.scanComplete ? "complete" : "INCOMPLETE");
+  }
+
   // The two OPTIONAL stores. "no store" is only a conclusion when the whole prologue was seen — that is
   // the difference between "this crt0 has no heap-size global" and "I stopped before I could tell".
   if (report) {
@@ -235,6 +283,22 @@ static std::vector<uint8_t> image_from_template(const Crt0Template& t) {
   return img;
 }
 
+// crt0_plan on a FIXTURE image must REFUSE, and that is asserted rather than left silent.
+//
+// `crt0_fixture_emit` writes the prologue and the InitHeap thunk — code only, no DATA. So the words at
+// `stackTopBase` / `stackTopBase2` read as 0 in a fixture image, the heap-size subtraction underflows, and
+// `crt0_plan` correctly refuses (`hsz >= CRT0_MAX_PLAUSIBLE_HEAP`). Asserting that refusal is what stops
+// the plan block from being a code path nothing ever checks: if it started silently succeeding on zeroed
+// words, it would be printing an InitHeap capacity derived from nothing and this would catch it.
+//
+// The POSITIVE side of the plan block is exercised where the data actually exists — on real executables,
+// by `tools/oracle/crossvalidate_crt0.py`, which diffs its `sp`/`a0`/`a1` against what the reference
+// emulator MEASURED at the InitHeap call across 7 images. That is stronger evidence than a fixture could
+// give, because a fixture's expected value would be computed by this same arithmetic.
+static void selftest_plan_refuses_on_fixture(const Crt0xOutcome& r) {
+  sx(!r.planOk, "crt0_plan REFUSED on a fixture image (its stack-top words are 0: code only, no data)");
+}
+
 // One known-good shape: every field the tool REPORTS is compared against the spec that assembled the
 // bytes. This is the check that makes the tool's output trustworthy as a source of shipped constants —
 // "it exited 0" would not.
@@ -264,6 +328,7 @@ static void selftest_shape(const char* name, const Crt0Template& t, bool expectH
   sx(r.o.libcInitIsInitHeap, "libcInit recognised as the A(39h) InitHeap thunk");
   sx(r.o.a1LiveAtCall, "a1 (InitHeap's size) live at the guest's own jal");
   sx(r.o.a0PlusFour, "the jal's delay slot is addi a0,a0,4");
+  selftest_plan_refuses_on_fixture(r);
   // ABSENT vs PRESENT for the two optional stores — the distinction that stopped the ports writing to
   // guest address 0.
   sx(r.o.sawHeapSizeStore == expectHeapGlobals, "heapSizePtr store PRESENT/ABSENT matches the spec");
