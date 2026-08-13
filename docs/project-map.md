@@ -74,6 +74,8 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
 REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
+`ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
+run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present),
 `wide_margin_plan.h` (renderer-only coverage for host-visible VRAM extension),
 `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`.

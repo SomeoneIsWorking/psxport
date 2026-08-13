@@ -50,21 +50,29 @@ PoolRange pool_range(Core* c) {
 // there is now exactly ONE clock instead of a logic clock for the spans and a present clock for the rest.
 uint32_t OtAttr::stampFrame() {
   if (mFrame != NO_FRAME) return mFrame;
-  // NO frame loop has ever called beginLogicFrame on this Core. That is legitimate — a Core-alone
-  // embedder (psxport_smoke, a unit test, a differential harness) has no frame loop — but it means the
-  // per-frame tables below NEVER reset, so their contents span the whole lifetime instead of one frame.
-  // Said ONCE, out loud, naming who must call what: a saturated unreset table otherwise reads exactly
-  // like a busy frame, and an "overflow" count would be the only hint.
-  static bool warned = false;
-  if (!warned) {
-    warned = true;
-    lucent::warn("otattr", "no frame loop has declared a frame on this Core (nothing called "
-                           "OtAttr::beginLogicFrame), so the span / watch / per-fn tables are stamped "
-                           "frame 0 and NEVER reset — every entry they hold spans the whole lifetime of "
-                           "the Core, not one frame. Expected for a Core-alone embedder; if you see this "
-                           "in a game run, the frame loop is not driving beginLogicFrame.");
-  }
+  // Pre-loop boot stores are normal in a game run. Count them and use frame 0, but defer the verdict
+  // until run end: only then can we distinguish "the loop has not started YET" from "no loop ever
+  // declared a frame". The old immediate warning accused every healthy port during crt0.
+  mPreFrameStamps++;
   return 0;
+}
+
+void OtAttr::reportFrameContract(const char* context) const {
+  const char* who = (context && *context) ? context : "run";
+  if (mFrame != NO_FRAME) {
+    lucent::info("otattr", "{}: frame-loop contract SATISFIED — beginLogicFrame reached frame {} "
+                           "after {} pre-frame stamp(s)", who, mFrame, mPreFrameStamps);
+    return;
+  }
+  if (mPreFrameStamps == 0) {
+    lucent::info("otattr", "{}: frame-loop contract NOT EXERCISED — 0 table stamps and 0 declared "
+                           "frames; there is no per-frame data to certify", who);
+    return;
+  }
+  lucent::warn("otattr", "{}: frame-loop contract FAILED — {} table stamp(s) occurred but nothing "
+                         "called OtAttr::beginLogicFrame. The span / watch / per-fn tables were "
+                         "stamped frame 0 and never reset; their contents span the whole run, not "
+                         "one frame.", who, mPreFrameStamps);
 }
 
 void OtAttr::resetIfNewFrame(uint32_t frame) {

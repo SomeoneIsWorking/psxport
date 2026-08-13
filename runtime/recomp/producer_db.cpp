@@ -50,6 +50,7 @@ void producer_db_begin(Core* c) {
 }
 
 void producer_db_finish(Core* c) {
+  c->rsub.otAttr.reportFrameContract("producer_db_finish");
   lucent::info("producers",
     "run-end: claim resolution (SPANS, not prims — a span is a coalesced run of packet-pool stores, and "
     "many spans back one prim, so these are NOT the row counts below and must not be read as a per-prim "

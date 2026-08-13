@@ -197,6 +197,13 @@ public:
   // says when a frame begins and this is the one clock that matters.
   void beginLogicFrame(uint32_t frame) { resetIfNewFrame(frame); }
 
+  // Run-end verdict for the frame-loop contract. Stores before a game's loop starts are legitimate
+  // boot activity, so stampFrame records them but does not accuse the loop immediately. The verdict
+  // becomes meaningful only after the run had a chance to call beginLogicFrame.
+  bool frameContractSatisfied() const { return mFrame != NO_FRAME || mPreFrameStamps == 0; }
+  uint64_t preFrameStampCount() const { return mPreFrameStamps; }
+  void reportFrameContract(const char* context) const;
+
   // The idle value of every frame field below: "no frame has been declared yet" for the table clocks,
   // and "this word was never written" for a watch record. Named because two of the three used to be a
   // bare 0xFFFFFFFF literal and a reader could not tell whether a report showing it meant "nothing
@@ -217,8 +224,9 @@ public:
   // saturation that made beginLogicFrame exist in the first place (60 logic frames advanced s_frame to
   // 3, so the reset almost never fired) applied verbatim to those other two tables.
   //
-  // A Core that no frame loop drives has a genuinely undefined frame, and that case is WARNED rather
-  // than quietly stamped: an unstamped table must not be mistakable for a stamped one. It returns 0
+  // A Core that no frame loop drives has a genuinely undefined frame, and that case is WARNED AT
+  // RUN END rather than quietly stamped. Warning here would falsely accuse normal boot stores before
+  // a healthy game loop has had a chance to start. An unstamped table must not be mistakable for a stamped one. It returns 0
   // (not NO_FRAME) because NO_FRAME is also WordRec's "never written" — stamping a real write with it
   // would make a recorded store indistinguishable from an untouched word.
   uint32_t stampFrame();
@@ -270,6 +278,7 @@ private:
   void recordFnStat(uint32_t frame, uint32_t fn, uint32_t phys);
 
   uint32_t mFrame = NO_FRAME;
+  uint64_t mPreFrameStamps = 0;
   Span     mSpans[SPAN_CAP] = {};
   int      mSpanCount = 0;
   int      mSpanOverflow = 0;

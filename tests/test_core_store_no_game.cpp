@@ -110,6 +110,15 @@ static void test_store_is_still_attributed(void) {
   // An address OUTSIDE every watched region must still report "not watched" rather than a stale hit —
   // the negative case of the same instrument, so a lookup that always returns true is caught here.
   CHECK(!oa.watchLookup(0x80030000u, nullptr));
+
+  // NEGATIVE: this Core used the per-frame tables but never declared a frame.
+  CHECK(oa.preFrameStampCount() > 0);
+  CHECK(!oa.frameContractSatisfied());
+
+  // POSITIVE: exactly the transition a real game makes after pre-loop boot stores. Once its owned
+  // loop begins, the same history is healthy and must not be diagnosed as "no frame loop".
+  oa.beginLogicFrame(1);
+  CHECK(oa.frameContractSatisfied());
 }
 
 int main(void) {

@@ -145,6 +145,10 @@ int main() {
       pass();
   }
 
+  // A Core-alone embedder genuinely has no frame loop. Report that NEGATIVE only after all stores
+  // have run; warning at the first store cannot distinguish this case from normal pre-loop boot.
+  c->rsub.otAttr.reportFrameContract("psxport_smoke");
+
   delete c;
 
   // ---- verdict, with its denominator and its blind spots ---------------------------------------
