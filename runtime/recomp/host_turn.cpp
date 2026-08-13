@@ -23,6 +23,7 @@
 // time. There is no such constant here: the arming interval only affects how promptly a turn is
 // taken, while the number of fields owed is always elapsed_time × field_rate.
 #include "core.h"
+#include "host_turn_plan.h"
 #include <cstdlib>   // std::atexit — the timer thread joins itself at exit (see below)
 #include "game.h"   // Game::hle.irq_enabled — the guest's critical-section flag
 #include "native_diff.h"  // ndiff_in_progress — the differential is a critical section too
@@ -45,7 +46,12 @@ std::thread             s_thread;
 std::mutex              s_m;
 std::condition_variable s_cv;
 bool                    s_stop = false;
-unsigned long           s_clock_generation = 0;
+HostTurnClockState      s_clock;
+
+int64_t steady_now_ns() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+           std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // Re-entrancy guard. The handler runs guest code (it dispatches the game's registered callback), and
 // that guest code enters recompiled functions, each of which tests the gate. Without this a turn
@@ -59,19 +65,25 @@ bool s_in_turn = false;
 // one".
 void timer_main() {
   const auto period = std::chrono::nanoseconds(1000000000000ull / s_fps_millihz);
+  const int64_t period_ns = period.count();
   std::unique_lock<std::mutex> lk(s_m);
   while (!s_stop) {
-    const auto generation = s_clock_generation;
-    if (s_cv.wait_for(lk, period, [generation] {
-          return s_stop || s_clock_generation != generation;
-        })) {
-      if (s_stop) break;
-      continue;  // another owner delivered a field; its completion starts the next field period
-    }
+    const uint64_t generation = s_clock.generation;
+    const auto deadline = std::chrono::steady_clock::time_point(
+      std::chrono::nanoseconds(s_clock.deadline_ns));
+    s_cv.wait_until(lk, deadline, [generation] {
+      return s_stop || s_clock.generation != generation;
+    });
+    const int64_t now_ns = steady_now_ns();
+    const HostTurnWakeAction action =
+      host_turn_wake_action(generation, s_clock, now_ns, s_stop);
+    if (action == HostTurnWakeAction::Stop) break;
+    if (action == HostTurnWakeAction::Restart) continue;
     Core* c = s_core;
     // Relaxed is right: this is a hint word, and the guest thread re-derives the actual amount of
     // owed work from the clock. A missed or late set costs latency, never correctness.
     if (c) __atomic_or_fetch(&c->pending_work, Core::PW_HOST, __ATOMIC_RELAXED);
+    s_clock = host_turn_clock_armed(s_clock, now_ns, period_ns);
   }
 }
 
@@ -81,10 +93,16 @@ void host_turn_field_delivered(Core* c) {
   // already-latched host turn and restart the timer from this completed field; otherwise a timer
   // tick that occurred while the explicit path was pacing is delivered immediately afterward and
   // the game runs at nearly twice its video standard.
-  __atomic_and_fetch(&c->pending_work, ~Core::PW_HOST, __ATOMIC_RELAXED);
   {
     std::lock_guard<std::mutex> lk(s_m);
-    ++s_clock_generation;
+    const int64_t period_ns = (int64_t)(1000000000000ull / s_fps_millihz);
+    s_clock = host_turn_clock_field_delivered(s_clock, steady_now_ns(), period_ns);
+    // Clear while holding the timer's mutex. If the old deadline is expiring concurrently, either
+    // the timer arms first and this clears it, or this advances generation first and the timer's
+    // stale wake restarts. Clearing before taking the lock leaves a third ordering where the timer
+    // re-arms the obsolete field between the clear and generation change.
+    __atomic_and_fetch(&c->pending_work,
+                       host_turn_pending_after_field(~0, Core::PW_HOST), __ATOMIC_RELAXED);
   }
   s_cv.notify_all();
 }
@@ -105,6 +123,12 @@ void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz) {
     return;
   }
   s_fn = fn; s_core = c; s_fps_millihz = fps_millihz;
+  {
+    std::lock_guard<std::mutex> lk(s_m);
+    s_stop = false;
+    const int64_t period_ns = (int64_t)(1000000000000ull / s_fps_millihz);
+    s_clock = host_turn_clock_start(steady_now_ns(), period_ns);
+  }
   s_thread = std::thread(timer_main);
   // THE THREAD JOINS ITSELF AT EXIT, and it has to be armed HERE rather than left to the port.
   // rec_host_turn_shutdown() existed for this and had ZERO callers anywhere — framework, tests or any

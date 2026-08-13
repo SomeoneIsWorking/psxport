@@ -1,96 +1,76 @@
-// test_host_turn_field_ack.cpp — an explicitly-delivered field owns the host-turn clock boundary.
+// test_host_turn_field_ack.cpp — deterministic field acknowledgement / timer restart gate.
 //
-// WHAT THIS GATES. The host-turn timer and a game's explicit VSync/native-field path describe the
-// same hardware event. If the explicit path finishes while PW_HOST is already latched, it must both
-// cancel that duplicate and restart the timer period at the completed field. Before 717a14da the
-// explicit path had no acknowledgement: the old timer deadline remained live and delivered another
-// field immediately after pacing, nearly doubling games which exercised both paths.
-//
-// This is an integration test of the SHIPPING timer and public acknowledgement function, not a
-// second model of their arithmetic. The only wall-clock dependency is unavoidable because the unit
-// being tested is a real condition-variable timer. The windows are deliberately broad: at 2 Hz we
-// acknowledge 400 ms into a 500 ms period, inspect 250 ms later (past the OLD 500 ms deadline but
-// before the NEW 900 ms deadline), then wait another 350 ms and require the restarted timer to fire.
-// Thus the instrument must show BOTH answers: absent in the protected window, present after one full
-// restarted period. A machine would need to delay creation of one tiny sleeping thread by >150 ms to
-// make the discriminator ambiguous; ctest's 60-second outer cap still catches a deadlock.
-//
-// NEGATIVE CONTROL. The macro below transcribes the old behavior exactly at this boundary: explicit
-// delivery does nothing to the host clock. It must fail (normally first because the manually-latched
-// duplicate survives; if that assertion were removed, the old deadline also makes the protected
-// window fail):
-//
-//   c++ ... -DPSXPORT_TEST_LEGACY_HOST_TURN_ACK tests/test_host_turn_field_ack.cpp ...
-//
-// The normal ctest build calls rec_host_turn_field_delivered itself.
-
-#include "core.h"
+// The shipping condition-variable timer takes its decisions from host_turn_plan.h. These tests feed
+// that unit integer timestamps directly: no clock, thread, sleep, or scheduler tolerance.
+#include "host_turn_plan.h"
 #include "testutil.h"
 
-#include <chrono>
-#include <memory>
-#include <thread>
+static constexpr int64_t PERIOD = 500;
 
-using namespace std::chrono_literals;
-
-static void unused_host_turn(Core*) {}
-
-static void acknowledge(Core* c) {
-#ifdef PSXPORT_TEST_LEGACY_HOST_TURN_ACK
-  (void)c;  // behavior before 717a14da: no acknowledgement existed
-#else
-  rec_host_turn_field_delivered(c);
-#endif
+static void test_delivery_clears_only_the_host_bit(void) {
+  constexpr int IRQ = 1, HOST = 2, OTHER = 4;
+  CHECK_EQ(host_turn_pending_after_field(IRQ | HOST | OTHER, HOST), IRQ | OTHER);
+  CHECK_EQ(host_turn_pending_after_field(IRQ | OTHER, HOST), IRQ | OTHER);
 }
 
-#ifndef PSXPORT_TEST_LEGACY_HOST_TURN_ACK
-// The suite's negative discriminator, run on every normal build. This is the complete explicit-field
-// behavior before 717a14da: there was no call into host_turn, so the pending word was untouched and
-// the timer retained its original deadline. Keep it local to the test; the shipping-path integration
-// case below is what proves the new function actually implements the opposite behavior.
-static void legacy_acknowledge(Core*) {}
-
-static void test_legacy_acknowledgement_preserves_the_duplicate(void) {
-  std::unique_ptr<Core> core(new Core);
-  core->pending_work = Core::PW_IRQ | Core::PW_HOST;
-  legacy_acknowledge(core.get());
-  CHECK_EQ(core->pending_work, Core::PW_IRQ | Core::PW_HOST);
-  CHECK(core->pending_work != Core::PW_IRQ);  // the fixed-path postcondition is observably violated
+static void test_delivery_restarts_generation_and_deadline(void) {
+  const HostTurnClockState before = host_turn_clock_start(/*now=*/100, PERIOD);
+  CHECK_EQ(before.generation, 0);
+  CHECK_EQ(before.deadline_ns, 600);
+  const HostTurnClockState after =
+    host_turn_clock_field_delivered(before, /*explicit field=*/500, PERIOD);
+  CHECK_EQ(after.generation, 1);
+  CHECK_EQ(after.deadline_ns, 1000);  // complete new period, not the old deadline at 600
 }
-#endif
 
-static void test_explicit_field_cancels_duplicate_and_restarts_period(void) {
-  // Heap allocation keeps Core's 2 MiB RAM image off small test-thread stacks.
-  std::unique_ptr<Core> core(new Core);
-  rec_host_turn_register(core.get(), unused_host_turn, 2000);  // 2.000 Hz = 500 ms per field
+static void test_stale_waiter_restarts_instead_of_arming(void) {
+  HostTurnClockState state = host_turn_clock_start(100, PERIOD);
+  const uint64_t captured = state.generation;
+  state = host_turn_clock_field_delivered(state, 500, PERIOD);
+  // Even after the stale deadline (600), generation mismatch cancels this wake.
+  CHECK_EQ((int)host_turn_wake_action(captured, state, 650, false),
+           (int)HostTurnWakeAction::Restart);
+}
 
-  std::this_thread::sleep_for(400ms);
+static void test_new_deadline_arms_and_starts_the_following_period(void) {
+  HostTurnClockState state = host_turn_clock_start(100, PERIOD);
+  state = host_turn_clock_field_delivered(state, 500, PERIOD);
+  CHECK_EQ((int)host_turn_wake_action(state.generation, state, 999, false),
+           (int)HostTurnWakeAction::Restart);  // early/spurious wake is not a field
+  CHECK_EQ((int)host_turn_wake_action(state.generation, state, 1000, false),
+           (int)HostTurnWakeAction::Arm);
+  state = host_turn_clock_armed(state, 1000, PERIOD);
+  CHECK_EQ(state.generation, 1);
+  CHECK_EQ(state.deadline_ns, 1500);
+}
 
-  // Model the exact race from the defect: a host turn latched while the explicit path was pacing.
-  // Preserve PW_IRQ to prove acknowledgement clears only its own bit.
-  core->pending_work = Core::PW_IRQ | Core::PW_HOST;
-  acknowledge(core.get());
-  CHECK_EQ(core->pending_work, Core::PW_IRQ);
+static void test_stop_beats_every_other_wake_reason(void) {
+  const HostTurnClockState state = host_turn_clock_start(100, PERIOD);
+  CHECK_EQ((int)host_turn_wake_action(/*stale=*/99, state, 9999, true),
+           (int)HostTurnWakeAction::Stop);
+}
 
-  // We are now 650 ms after registration. The original 500 ms deadline is past, but only 250 ms of
-  // the restarted period has elapsed. Old behavior reports PW_HOST here; fixed behavior must not.
-  std::this_thread::sleep_for(250ms);
-  CHECK_EQ(core->pending_work, Core::PW_IRQ);
-
-  // Cross the restarted 500 ms deadline and require the opposite answer. Without this positive the
-  // prior check could pass because the timer never ran at all.
-  std::this_thread::sleep_for(350ms);
-  CHECK_EQ(core->pending_work, Core::PW_IRQ | Core::PW_HOST);
-
-  rec_host_turn_shutdown();
+// Suite-owned negative discriminator: this is the complete old acknowledgement behavior—identity.
+// It must preserve both defects, and therefore contradict both fixed postconditions.
+static void test_old_behavior_fails_clear_and_restart_properties(void) {
+  constexpr int IRQ = 1, HOST = 2;
+  const int old_pending_after_delivery = IRQ | HOST;
+  const HostTurnClockState old_clock_after_delivery = host_turn_clock_start(100, PERIOD);
+  CHECK(old_pending_after_delivery != host_turn_pending_after_field(IRQ | HOST, HOST));
+  const HostTurnClockState fixed =
+    host_turn_clock_field_delivered(old_clock_after_delivery, 500, PERIOD);
+  CHECK(old_clock_after_delivery.generation != fixed.generation);
+  CHECK(old_clock_after_delivery.deadline_ns != fixed.deadline_ns);
+  CHECK_EQ(old_clock_after_delivery.deadline_ns, 600);  // stale deadline the defect retained
+  CHECK_EQ(fixed.deadline_ns, 1000);
 }
 
 int main() {
-#ifndef PSXPORT_TEST_LEGACY_HOST_TURN_ACK
-  RUN(legacy_acknowledgement_preserves_the_duplicate);
-#endif
-  RUN(explicit_field_cancels_duplicate_and_restarts_period);
-  // Always join the timer even after a CHECK's early return from the test function.
-  rec_host_turn_shutdown();
+  RUN(delivery_clears_only_the_host_bit);
+  RUN(delivery_restarts_generation_and_deadline);
+  RUN(stale_waiter_restarts_instead_of_arming);
+  RUN(new_deadline_arms_and_starts_the_following_period);
+  RUN(stop_beats_every_other_wake_reason);
+  RUN(old_behavior_fails_clear_and_restart_properties);
   return pt_summary();
 }
