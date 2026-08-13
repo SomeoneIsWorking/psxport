@@ -39,7 +39,7 @@ static uint32_t i_lw   (int rt, int16_t off, int rs)    { return (0x23u << 26) |
 static uint32_t i_nop  (void)                           { return 0u; }
 
 // ── check bookkeeping: a plan up front, so a run that stops early cannot read as a pass ──────────
-#define PLANNED_CHECKS 18
+#define PLANNED_CHECKS 22
 static int s_ran = 0, s_failed = 0;
 
 static void check_u32(const char *what, uint32_t got, uint32_t want) {
@@ -251,6 +251,57 @@ static int stepping_case(void) {
   return 1;
 }
 
+// ── MIRRORING: main RAM appears FOUR TIMES across the 8 MB window ─────────────────────────────────
+//
+// The reference decodes main RAM as `A < 0x00800000` with the offset masked to `A & 0x1FFFFF`
+// (libretro.c:1085-1108), so the 2 MB of physical RAM is mirrored four times. This is not academic:
+// MEASURED 2026-08-13, Spider-Man's crt0 sets `sp = 0x807FFFF8`, because its stack-top global holds
+// 0x00800000. That address is the top of RAM through the fourth mirror and is entirely legitimate — and
+// this shim originally rejected it as a hardware access, which would have ended Spider-Man's window at a
+// boundary that does not exist, while instruction FETCH worked because the FastMap already mirrored 4x.
+//
+//   lui   $t0, 0x8080        $t0 = 0x80800000
+//   addiu $t0, $t0, -8       $t0 = 0x807FFFF8   (Spider-Man's actual sp)
+//   lui   $t1, 0xABCD
+//   ori   $t1, $t1, 0x1234   $t1 = 0xABCD1234
+//   sw    $t1, 0($t0)        a store through the FOURTH mirror
+//   lw    $t2, 0($sp-ish)    ... read back through the FIRST, at 0x801FFFF8
+static int mirroring_case(void) {
+  const uint32_t kMirrorAddr = 0x807FFFF8u;   // 4th mirror, top of RAM
+  const uint32_t kFirstAddr  = 0x801FFFF8u;   // the same physical word via the 1st mirror
+  uint32_t prog[8];
+  int n = 0;
+  prog[n++] = i_lui  (R_T0, 0x8080);
+  prog[n++] = i_addiu(R_T0, R_T0, -8);
+  prog[n++] = i_lui  (R_T1, 0xABCD);
+  prog[n++] = i_ori  (R_T1, R_T1, 0x1234);
+  prog[n++] = i_sw   (R_T1, 0, R_T0);
+  prog[n++] = i_lw   (R_T2, 0, R_T0);
+  prog[n++] = i_nop();
+  prog[n++] = i_nop();
+
+  if (!oracle_init()) return 0;
+  if (!oracle_load_exe(prog, (uint32_t)(n * 4), FIX_ADDR, FIX_ADDR, FIX_GP, FIX_SP)) return 0;
+
+  const OracleStop stop = oracle_run(200);
+  OracleState st;
+  oracle_capture(&st);
+
+  // A clean stop is itself the check: without the mirror this run ends ORACLE_STOP_HARDWARE at 0x807FFFF8.
+  check_stop("mirroring: high address is RAM, not hardware", stop, ORACLE_STOP_BUDGET);
+  check_u32 ("mirroring: $t0 built Spider-Man's real sp",    st.gpr[R_T0], kMirrorAddr);
+  check_u32 ("mirroring: read back through the 4th mirror",  st.gpr[R_T2], 0xABCD1234u);
+
+  // And the physical word must be the SAME one the first mirror names — that is what "mirror" means, and
+  // checking only the read-back would pass on a shim that gave 0x807FFFF8 its own separate storage.
+  uint32_t via_first = 0;
+  memcpy(&via_first, oracle_main_ram() + (kFirstAddr & 0x1FFFFFu), 4);
+  check_u32("mirroring: same physical word via 0x801FFFF8", via_first, 0xABCD1234u);
+
+  oracle_teardown();
+  return 1;
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);   // unbuffered: a crash mid-run must not swallow the checks already
   setvbuf(stderr, NULL, _IONBF, 0);   // printed, and stderr/stdout must interleave in the real order
@@ -263,6 +314,8 @@ int main(void) {
          "    stop at that address, rather than reading 0 and continuing.\n");
   printf("  STEPPING (6 checks): run the SAME fixture one instruction at a time and require it to land\n"
          "    exactly where the bulk run landed, having actually stepped through the program.\n");
+  printf("  MIRRORING (4 checks): store through 0x807FFFF8 — the address Spider-Man's crt0 really uses as\n"
+         "    its stack pointer — and require it to be RAM via the 4th mirror, not a hardware access.\n");
   printf("  BLIND SPOTS, stated so this is not mistaken for more than it is: no BIOS is mapped, no\n"
          "    real game executable is loaded, no comparison against psxport's own paths is performed,\n"
          "    and nothing here exercises the GTE, DMA, CD or timers.\n\n");
@@ -275,6 +328,9 @@ int main(void) {
 
   printf("\nSTEPPING — one instruction at a time must equal one bulk run:\n");
   if (!stepping_case()) { printf("  REFUSED: oracle setup failed; the stepping case did not run.\n"); return 2; }
+
+  printf("\nMIRRORING — 2 MB of RAM appears four times across the 8 MB window:\n");
+  if (!mirroring_case()) { printf("  REFUSED: oracle setup failed; the mirroring case did not run.\n"); return 2; }
 
   printf("\n%d checks planned, %d ran, %d failed.\n", PLANNED_CHECKS, s_ran, s_failed);
   if (s_ran != PLANNED_CHECKS) {

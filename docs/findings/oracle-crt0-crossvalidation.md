@@ -88,22 +88,32 @@ Toy Story 2 and Mega Man X4 store nothing (`heapSizePtr == 0`, genuinely ABSENT 
 register only). So the ABSENT case is real and affects two of six games, which is why `crt0_plan`
 distinguishes ABSENT from UNSET with an explicit flag.
 
-## An OPEN QUESTION this turned up: Spider-Man's crt0 builds an 8 MB stack pointer
+## Spider-Man's 8 MB stack pointer is CORRECT — and chasing it found a bug in the oracle
 
-`SLUS_008.75` is the only image whose `sp` is not in the low 2 MB: `0x807FFFF8`, i.e. a stack top of
-`0x00800000`. Retail PSX hardware has 2 MB of main RAM; 8 MB is a development-kit configuration. Two
-readings, and this finding does not choose between them:
+`SLUS_008.75` is the only image whose `sp` is not in the low 2 MB: `0x807FFFF8`, from a stack-top global at
+`0x800B3E70` holding `0x00800000`. That global sits BELOW the bss span (`[0x800B5994, 0x800C65D4)`), so it
+is initialised data read straight out of the image — nothing patches it at runtime, and the crt0 really does
+build that pointer. Its heap is `0x731A24` (7.2 MB) on the same reasoning.
 
-- the stack-top global is initialised at RUNTIME (by the BIOS or by earlier game code) and the value
-  sitting in the static image is a placeholder, in which case `crt0_extract`'s and this cross-check's
-  `sp` for Spider-Man describe the image and not a real boot; or
-- Spider-Man's crt0 genuinely computes an out-of-range `sp` and something later corrects it.
+**It is nonetheless right, because main RAM is MIRRORED.** The reference's own decoder is
+`if (A < 0x00800000) ... MASMEM_*(MainRAM, A & 0x1FFFFF)` (`libretro.c:1085-1108`): the region test is 8 MB
+wide and the offset wraps at 2 MB, so the 2 MB of physical RAM appears FOUR TIMES across
+`0x80000000-0x807FFFFF`. `0x807FFFF8` is the top of RAM through the fourth mirror. Spider-Man's config is
+fine and so is `spider1`'s `game_config.cpp`; nothing needs changing there.
 
-It did not fault here because the crt0 pushes nothing before the `InitHeap` call, so the oracle never
-dereferenced it — the oracle maps 2 MB and would have refused a real access. **Whichever reading is right,
-`spider1`'s stack-top handling deserves a look**, and a stack pointer 6 MB past the end of RAM should not
-pass unremarked. Both methods AGREE on the value, so this is not a tool disagreement; it is a question
-about the guest.
+**What did need changing was this oracle.** `oracle_shim.c` tested `phys < 0x00200000` and would have
+reported every Spider-Man stack access as a HARDWARE access, ending the window at a boundary that does not
+exist. It was also INCONSISTENT with its own `oracle_init`, which mirrors 4× because that loop was copied
+from `libretro.c` — so instruction FETCH was correct while the data path was not, and only a game with a
+high stack would ever have revealed it. Fixed to match the reference exactly (`RAM_WINDOW` /
+`RAM_MASK`), with `oracle_spike` gaining a mirroring class: it stores through `0x807FFFF8`, reads it back,
+and checks the same physical word is visible at `0x801FFFF8` — the last part matters, because a shim that
+gave the high address its own separate storage would pass a read-back-only test.
+`prove_spike_can_fail.sh` gained a matching mutation, which 3 checks catch.
+
+The lesson is about the METHOD, not the address: a question about the guest turned out to be a defect in
+the instrument, and only a real executable with an unusual value could surface it. The synthetic fixtures
+all use low stacks.
 
 ## What this does NOT cover — the blind spots, named
 

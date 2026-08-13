@@ -54,7 +54,19 @@ int32_t psx_gte_overclock                    = 0;  // stock GTE timing; the refe
 uint8_t widescreen_hack                      = 0;  // no geometry change in a byte-compare reference
 uint8_t widescreen_hack_aspect_ratio_setting = 0;
 
-#define RAM_SIZE   0x00200000u
+#define RAM_SIZE   0x00200000u   // 2 MB of physical main RAM
+// Main RAM is MIRRORED FOUR TIMES across the 8 MB window, and that is not a detail: the reference's own
+// decoder is `if (A < 0x00800000) ... MASMEM_*(MainRAM, A & 0x1FFFFF)` (libretro.c:1085-1108), i.e. the
+// region test is 8 MB wide and the offset wraps at 2 MB.
+//
+// MEASURED CONSEQUENCE (2026-08-13): Spider-Man's crt0 computes `sp = 0x807FFFF8` — its stack-top global
+// holds 0x00800000 — which is the top of RAM through the FOURTH mirror and entirely legitimate. This shim
+// originally tested `phys < RAM_SIZE`, so any stack access Spider-Man made would have been reported as a
+// HARDWARE ACCESS and ended the window at a boundary that does not exist. Worse, it was INCONSISTENT with
+// this file's own FastMap setup, which mirrors 4x (copied from libretro.c) — so instruction fetch was
+// right while the data path was wrong, and only a game with a high stack would ever have shown it.
+#define RAM_WINDOW 0x00800000u   // the mirrored window the reference decodes as main RAM
+#define RAM_MASK   0x001FFFFFu   // and the offset it wraps to
 #define SPAD_BASE  0x1F800000u
 #define SPAD_SIZE  0x00000400u
 
@@ -90,7 +102,7 @@ const char *oracle_stop_name(OracleStop s) {
 // is not mirrored. Masking the segment bits is what the framework's own physical-address handling does.
 static inline int in_main_ram(uint32_t a, uint32_t *off) {
   const uint32_t phys = a & 0x1FFFFFFFu;
-  if (phys < RAM_SIZE) { *off = phys; return 1; }
+  if (phys < RAM_WINDOW) { *off = phys & RAM_MASK; return 1; }   // 2 MB mirrored 4x, as the reference does
   return 0;
 }
 static inline int in_scratch(uint32_t a, uint32_t *off) {
@@ -224,7 +236,7 @@ int oracle_init(void) {
   // Instruction fetch does NOT go through PSX_MemRead32: cpu.c reads opcodes straight out of `FastMap`
   // (lines 794 and 810), so a core with an unpopulated FastMap fetches from `DummyPage` and executes
   // zeros no matter how correct the memory callbacks are. Mirrors copied from libretro.c:2720-2725.
-  for (uint32_t ma = 0; ma < 0x00800000u; ma += RAM_SIZE) {
+  for (uint32_t ma = 0; ma < RAM_WINDOW; ma += RAM_SIZE) {
     CPU_SetFastMap(PSX_CPU, ram(), 0x00000000u + ma, RAM_SIZE);
     CPU_SetFastMap(PSX_CPU, ram(), 0x80000000u + ma, RAM_SIZE);
     CPU_SetFastMap(PSX_CPU, ram(), 0xA0000000u + ma, RAM_SIZE);

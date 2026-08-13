@@ -24,6 +24,11 @@
 #             bulk run is one slice so it is unaffected, but a single-step trace becomes a different
 #             execution — which is the whole substrate of milestone 2's per-instruction differential. This
 #             is the mutation the STEPPING checks exist to catch.
+#   mirror    The RAM region test drops the 4x mirroring and only accepts the low 2 MB — which is what
+#             this shim originally did. Main RAM is mirrored four times across the 8 MB window
+#             (libretro.c:1085 decodes `A < 0x00800000` with `A & 0x1FFFFF`), and Spider-Man's crt0 really
+#             does build sp = 0x807FFFF8, so without the mirror its every stack access is misreported as a
+#             HARDWARE access and the window ends at a boundary that does not exist.
 #   silent_hw The memory bus returns 0 for a device access instead of reporting it. This is the plausible
 #             "graceful" version of the shim, and it is a lie: the NEGATIVE case would come back as a
 #             clean window and a later compare would run over instructions nobody executed.
@@ -126,8 +131,8 @@ PY
 
 echo
 mutate fastmap \
-  'for (uint32_t ma = 0; ma < 0x00800000u; ma += RAM_SIZE) {' \
-  'for (uint32_t ma = 0; ma < 0x00000000u; ma += RAM_SIZE) {' \
+  'for (uint32_t ma = 0; ma < RAM_WINDOW; ma += RAM_SIZE) {' \
+  'for (uint32_t ma = 0; ma < 0u; ma += RAM_SIZE) {' \
   'the positive and stepping checks'
 
 mutate clock \
@@ -136,6 +141,11 @@ mutate clock \
   '  cpu_next_event_ts = budget;
   s_ts              = CPU_Run(PSX_CPU, 0);' \
   'the stepping checks'
+
+mutate mirror \
+  '  if (phys < RAM_WINDOW) { *off = phys & RAM_MASK; return 1; }' \
+  '  if (phys < RAM_SIZE) { *off = phys; return 1; }' \
+  'the mirroring checks'
 
 mutate silent_hw \
   '  hw_access(A, 0, 32);
