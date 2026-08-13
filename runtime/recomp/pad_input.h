@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include "active_low_edges.h"
 class Game;
 typedef struct SDL_Gamepad SDL_Gamepad;   // opaque; only held as pointers (SDL build only)
 
@@ -35,6 +36,16 @@ public:
   // game IS running — the whole session desyncs from that point on.
   void pumpHostInput();
 
+  // Edge state for the FINAL effective active-low mask (host/forced/REPL/replay already resolved).
+  // Consumers may inspect it, but only their own state machine decides whether an edge transitions a
+  // logo, loading overlay, movie, or scripted sequence. This never consumes or suppresses game input.
+  void sampleButtonEdges() { mButtonEdges.sample(buttons); }
+  void resetButtonEdges(uint16_t current = 0xFFFFu) { mButtonEdges.reset(current); }
+  uint16_t pressedButtons() const { return mButtonEdges.pressed(); }
+  uint16_t releasedButtons() const { return mButtonEdges.released(); }
+  bool pressedButton(uint16_t mask) const { return mButtonEdges.pressed(mask); }
+  bool releasedButton(uint16_t mask) const { return mButtonEdges.released(mask); }
+
   // ---- live capture (dbg-server `padrec`) ----
   // Every frame's finalized mask is also kept in memory, unconditionally, so a running session can be
   // cut into a replay WITHOUT a file sink, a restart, or racing the incremental writer. 2 bytes/frame:
@@ -45,6 +56,7 @@ public:
   bool saveRecording(const char* path, size_t nframes) const;
 
 private:
+  ActiveLowEdges mButtonEdges;
   // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
   static const int PAD_MAX_GC = 4;
   SDL_Gamepad* mGc[PAD_MAX_GC] = {};

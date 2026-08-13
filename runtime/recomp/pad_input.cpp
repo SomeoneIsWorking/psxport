@@ -488,6 +488,9 @@ void Pad::serviceFrame() {
       // AND = union of pressed bits. A replay's idle tail no longer makes press/tap dead commands.
       buttons = rep_buf[rec_fc] & repl_mask;
     }
+    // Latch edges only after every input source has resolved to the mask the guest receives. Sampling
+    // host input earlier would miss replay/REPL presses or expose an edge for a mask later replaced.
+    sampleButtonEdges();
     if (rec_fp) { uint16_t m = buttons; fwrite(&m, 2, 1, rec_fp); fflush(rec_fp); }
     // Always keep the mask in memory too, file sink or not: this is what the debug server's `padrec
     // save` cuts a replay from, so a LIVE session (the user already playing, with the repro on screen)

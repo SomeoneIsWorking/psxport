@@ -1457,6 +1457,10 @@ void Sbs::Impl::feedInput() {
     if (mFrame >= k.from && mFrame <= k.to) mask &= ~k.btn;   // active-low: pressed = bit cleared
   mA->pad.setButtons(mask);
   mB->pad.setButtons(mask);
+  // SBS bypasses Pad::serviceFrame(), so finalize the shared edge state explicitly after feeding the
+  // one effective mask. Both cores receive and edge-latch the identical sample.
+  mA->pad.sampleButtonEdges();
+  mB->pad.sampleButtonEdges();
 }
 
 // PSXPORT_SBS_DUMP=path: write the two panes (A left | B right) as ONE side-by-side PPM.

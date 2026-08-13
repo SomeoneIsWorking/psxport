@@ -143,15 +143,15 @@ void Fmv::audioClose() { if (stream) { SDL_ClearAudioStream((SDL_AudioStream*)st
 // uncapped (PSXPORT_FMV_FPS=0) disables pacing for fast headless dumps.
 int Fmv::pace(long media_frames, int freq, uint32_t t0, int uncapped) {
   game->pad.pollSdl();
-  int pressed = ((game->pad.buttons & PAD_START) == 0) && !start_prev;
-  start_prev = (game->pad.buttons & PAD_START) == 0;
+  game->pad.sampleButtonEdges();
+  int pressed = game->pad.pressedButton(PAD_START);
   if (uncapped || freq <= 0) return pressed;
   uint32_t target = (uint32_t)((long long)media_frames * 1000 / freq);
   while ((int)(SDL_GetTicks() - t0) < (int)target) {
     SDL_Delay(2);
     game->pad.pollSdl();
-    if (((game->pad.buttons & PAD_START) == 0) && !start_prev) pressed = 1;
-    start_prev = (game->pad.buttons & PAD_START) == 0;
+    game->pad.sampleButtonEdges();
+    if (game->pad.pressedButton(PAD_START)) pressed = 1;
   }
   return pressed;
 }
@@ -222,7 +222,9 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
   long media_frames = 0;                       // cumulative audio sample-pairs = media clock
-  start_prev = 1;                              // assume Start may be held from a prior movie
+  // Suppress a Start already held as the movie begins. Pretending the prior sample was held exactly
+  // reproduces the original player's contract: release, then a fresh press, is required to skip.
+  game->pad.resetButtonEdges((uint16_t)(game->pad.buttons & (uint16_t)~PAD_START));
   uint32_t t0 = 0;
 #ifdef PSXPORT_SDL
   t0 = SDL_GetTicks();
@@ -290,9 +292,8 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
     // still held it reads as a fresh menu press and auto-selects New Game. Wait for Start to be RELEASED
     // (bounded, ~1s safety cap) before handing back — the game's own StrPlayer consumed it the same way.
     for (int guard = 0; guard < 250 && (game->pad.buttons & PAD_START) == 0; guard++) {
-      game->pad.pollSdl(); SDL_Delay(4);
+      game->pad.pollSdl(); game->pad.sampleButtonEdges(); SDL_Delay(4);
     }
-    start_prev = 0;
   }
   lucent::debug("fmv", "done: {} video frames, {} audio sample-pairs ({:.2f}s @ {}Hz)",
                 frames, media_frames, media_frames / (double)(xa_freq ? xa_freq : 37800), xa_freq);

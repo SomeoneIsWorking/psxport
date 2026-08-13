@@ -9,7 +9,6 @@ class Game;
 class Fmv {
 public:
   Game* game = nullptr;
-  int start_prev = 0;   // Start was down on the previously polled frame (skip edge-detect) (was s_fmv_start_prev)
 
   // play(path): resolve `path` on the disc (ISO9660) and play it. Returns frames played, -1 if
   //   the path can't be resolved. playLba is the by-extent entry the sequencers use.

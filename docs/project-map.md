@@ -88,7 +88,8 @@ framework camera-address fallback.
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
 `memcard.cpp`.
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle gte.c),
-`mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`.
+`mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`
+(final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition).
 
 ## Tools — ONE LINE EACH, and what is wrong with this list
 
