@@ -45,6 +45,7 @@ std::thread             s_thread;
 std::mutex              s_m;
 std::condition_variable s_cv;
 bool                    s_stop = false;
+unsigned long           s_clock_generation = 0;
 
 // Re-entrancy guard. The handler runs guest code (it dispatches the game's registered callback), and
 // that guest code enters recompiled functions, each of which tests the gate. Without this a turn
@@ -60,7 +61,13 @@ void timer_main() {
   const auto period = std::chrono::nanoseconds(1000000000000ull / s_fps_millihz);
   std::unique_lock<std::mutex> lk(s_m);
   while (!s_stop) {
-    if (s_cv.wait_for(lk, period, [] { return s_stop; })) break;
+    const auto generation = s_clock_generation;
+    if (s_cv.wait_for(lk, period, [generation] {
+          return s_stop || s_clock_generation != generation;
+        })) {
+      if (s_stop) break;
+      continue;  // another owner delivered a field; its completion starts the next field period
+    }
     Core* c = s_core;
     // Relaxed is right: this is a hint word, and the guest thread re-derives the actual amount of
     // owed work from the clock. A missed or late set costs latency, never correctness.
@@ -68,7 +75,23 @@ void timer_main() {
   }
 }
 
+void host_turn_field_delivered(Core* c) {
+  if (!c || c != s_core) return;
+  // An explicit guest/native field and the timer represent the same hardware event. Cancel any
+  // already-latched host turn and restart the timer from this completed field; otherwise a timer
+  // tick that occurred while the explicit path was pacing is delivered immediately afterward and
+  // the game runs at nearly twice its video standard.
+  __atomic_and_fetch(&c->pending_work, ~Core::PW_HOST, __ATOMIC_RELAXED);
+  {
+    std::lock_guard<std::mutex> lk(s_m);
+    ++s_clock_generation;
+  }
+  s_cv.notify_all();
+}
+
 }  // namespace
+
+void rec_host_turn_field_delivered(Core* c) { host_turn_field_delivered(c); }
 
 void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz) {
   if (!c || !fn || !fps_millihz) {

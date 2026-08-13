@@ -263,6 +263,9 @@ void rec_host_turn(Core* c);
 // fps: display field rate in milli-hertz (e.g. 59940 for NTSC's 60000/1001). The caller states it
 // because it is a property of the GAME's video standard, not of the framework.
 void rec_host_turn_register(Core* c, HostTurnFn fn, unsigned fps_millihz);
+// Tell the host clock that another owner delivered the field, cancelling a duplicate pending turn
+// and starting the next period at this field boundary.
+void rec_host_turn_field_delivered(Core* c);
 void rec_host_turn_shutdown();
 void rec_interp(Core* c, uint32_t pc);     // synchronous nested call (super-call / RAM-code)
 void rec_coro_run(Core* c, uint32_t pc);   // cooperative task entry
