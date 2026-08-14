@@ -93,6 +93,19 @@ def load_seeds(path):
     def addrs(vs, where):
         return {addr(v, where) for v in vs}
 
+    def checkpoints(vs):
+        result = set()
+        for i, value in enumerate(vs):
+            where = f"diagnostic_pcs[{i}]"
+            if isinstance(value, dict):
+                if set(value) != {"owner", "pc"}:
+                    sys.exit(f"[recomp] {path}: {where}: expected exactly owner and pc")
+                result.add((addr(value["owner"], where + ".owner"),
+                            addr(value["pc"], where + ".pc")))
+            else:
+                result.add((None, addr(value, where)))
+        return result
+
     known = {"main", "main_reentry", "overlay_bases", "overlay_base_patterns", "overlay_seeds",
              "diagnostic_pcs"}
     unknown = set(data) - known
@@ -107,7 +120,7 @@ def load_seeds(path):
                                   for rx, v in data.get("overlay_base_patterns", [])],
         "overlay_seeds": {k: addrs(v, f"overlay_seeds[{k}]")
                           for k, v in data.get("overlay_seeds", {}).items()},
-        "diagnostic_pcs": addrs(data.get("diagnostic_pcs", []), "diagnostic_pcs"),
+        "diagnostic_pcs": checkpoints(data.get("diagnostic_pcs", [])),
     }
 
 
@@ -1263,10 +1276,13 @@ def emit_func(exe, lo, hi, funcset, out, name, N, reentry=(), ra_computed=frozen
                     out.append("  if (c->pending_work) rec_irq_poll(c);")
             # A checkpoint observes entry to the guest instruction, including a branch landing on
             # this label. Placing it before the label lets `goto L_PC` skip the observer entirely.
-            if a in diagnostic_pcs:
+            checkpoint_keys = [(owner, pc) for owner, pc in diagnostic_pcs
+                               if pc == a and (owner is None or owner == lo)]
+            if checkpoint_keys:
                 out.append(f"  pc_observer_at(c, 0x{a:08X}u);")
                 if emitted_diagnostic_pcs is not None:
-                    emitted_diagnostic_pcs[a] = emitted_diagnostic_pcs.get(a, 0) + 1
+                    for key in checkpoint_keys:
+                        emitted_diagnostic_pcs[key] = emitted_diagnostic_pcs.get(key, 0) + 1
             if i.kind in (D.BRANCH, D.JUMP, D.JUMPR):
                 slot = ins.get(a + 4)
                 ds_c = emit_simple(slot) if (slot and slot.kind not in
@@ -2171,6 +2187,8 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
     """Discover the recompiled function set for `exe` and emit its module (shards + dispatch TU +
     decls header) under the symbol/file names in `N`. Shared by the MAIN.EXE module and the boot-
     stub module; the stub gets distinct names so its func_<addr> don't collide with MAIN's."""
+    diagnostic_pcs = {(None, item) if isinstance(item, int) else tuple(item)
+                      for item in diagnostic_pcs}
     ov = overlay_funcs(exe, ov_dir)
     if ov:
         print(f"[{N.wrap}] overlay seeds: {len(ov)} resident fns reached from {ov_dir}")
@@ -2290,16 +2308,22 @@ def emit_module(exe, out_dir, N, seeds, ov_dir=None, limit=None, shards=8, soft_
         emit_func(exe, a, nxt_of[a], funcset, shard[k % shards], f"{N.gen}_{a:08X}", N, reentry,
                   ra_computed, diagnostic_pcs, emitted_diagnostic_pcs)
     requested = set(diagnostic_pcs)
-    missing = sorted(pc for pc in requested if emitted_diagnostic_pcs.get(pc, 0) == 0)
-    duplicates = sorted(pc for pc in requested if emitted_diagnostic_pcs.get(pc, 0) > 1)
+    missing = sorted((key for key in requested if emitted_diagnostic_pcs.get(key, 0) == 0),
+                     key=lambda key: (-1 if key[0] is None else key[0], key[1]))
+    duplicates = sorted((key for key in requested if emitted_diagnostic_pcs.get(key, 0) > 1),
+                        key=lambda key: (-1 if key[0] is None else key[0], key[1]))
     extra = sorted(set(emitted_diagnostic_pcs) - requested)
     emitted_sites = sum(emitted_diagnostic_pcs.values())
     if missing or duplicates or extra or emitted_sites != len(requested):
+        def checkpoint_name(key):
+            owner, pc = key
+            return f"{'*' if owner is None else f'0x{owner:08X}'}@0x{pc:08X}"
         raise SystemExit(f"[recomp] diagnostic checkpoints requested_targets={len(requested)} "
                          f"emitted_sites={emitted_sites} missing="
-                         f"{[f'0x{x:08X}' for x in missing]} duplicate_pcs="
-                         f"{[f'0x{x:08X}({emitted_diagnostic_pcs[x]})' for x in duplicates]} extra="
-                         f"{[f'0x{x:08X}' for x in extra]}")
+                         f"{[checkpoint_name(x) for x in missing]} "
+                         f"duplicate_checkpoints="
+                         f"{[checkpoint_name(x) + f'({emitted_diagnostic_pcs[x]})' for x in duplicates]} "
+                         f"extra={extra}")
     for s in range(shards):
         write_if_changed(os.path.join(out_dir, f"{N.shardpfx}_{s}.c"), "\n".join(shard[s]) + "\n")
 
@@ -2403,7 +2427,9 @@ def main():
               "be missing and fail fast at runtime as a [recomp-MISS].")
         gs = EMPTY_SEEDS
     check_seeds_in_text(exe, gs["main"] | gs["main_reentry"], "--seeds main/main_reentry")
-    check_seeds_in_text(exe, gs["diagnostic_pcs"], "--seeds diagnostic_pcs")
+    check_seeds_in_text(exe, {address for checkpoint in gs["diagnostic_pcs"]
+                              for address in checkpoint if address is not None},
+                        "--seeds diagnostic_pcs owner/pc")
     ov_dir = sys.argv[sys.argv.index("--overlays") + 1] if "--overlays" in sys.argv else None
     seeds = ({exe.entry} | gs["main"] | pointer_table_funcs(exe)
              | constructed_func_pointers(exe) | code_pointer_tables(exe)

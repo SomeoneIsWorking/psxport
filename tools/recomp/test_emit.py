@@ -238,9 +238,30 @@ def test_diagnostic_checkpoint_overlapping_bodies_refuse_duplicate_site():
         except SystemExit as error:
             message = str(error)
             assert "requested_targets=1" in message and "emitted_sites=2" in message
-            assert f"0x{a.labels['shared']:08X}(2)" in message
+            assert f"*@0x{a.labels['shared']:08X}(2)" in message
         else:
             assert False, "a requested PC duplicated into overlapping generated bodies must refuse"
+
+
+def test_function_qualified_checkpoint_selects_one_overlapping_body():
+    a = Asm()
+    a.beq("zero", "zero", "shared")
+    a.nop()
+    a.jr("ra")
+    a.nop()
+    second = a.base + 16
+    a.addiu("v0", "zero", 1)
+    a.nop()
+    a.label("shared")
+    a.addiu("v1", "zero", 2)
+    a.jr("ra")
+    a.nop()
+    data, _ = a.assemble()
+    with tempfile.TemporaryDirectory() as td:
+        emit.emit_module(exe_of(data), td, emit.MAIN_NAMES, {a.base, second}, shards=1,
+                         diagnostic_pcs={(second, a.labels["shared"])})
+        shard = open(os.path.join(td, emit.MAIN_NAMES.shardpfx + "_0.c")).read()
+        assert shard.count(f"pc_observer_at(c, 0x{a.labels['shared']:08X}u);") == 1
 
 
 def test_diagnostic_checkpoint_outside_emitted_text_refuses_with_denominator():
