@@ -66,6 +66,7 @@ Site g_sites[MAX_TRACE];
 int g_n = 0;
 long g_regs_n = 0;   // PSXPORT_FNTRACE_REGS: how many calls per site to dump registers for
 bool g_on = false;
+bool g_initialized = false;
 
 int find(uint32_t a) {
   for (int i = 0; i < g_n; i++)
@@ -167,31 +168,44 @@ void on_term(int sig) {
 }  // namespace
 
 void fntrace_init() {
+  // Registration is process-global, while dc_boot_init may run once per Core. Parse the requested
+  // sites and install reporting exactly once, but re-apply the hooks after each game's override
+  // registration so a later Core cannot silently displace the diagnostic.
+  const bool first_init = !g_initialized;
   if (const char* r = cfg_str("PSXPORT_FNTRACE_REGS")) g_regs_n = atol(r);
-  const char* s = cfg_str("PSXPORT_FNTRACE");
-  if (!s || !*s) return;
+  const char* s = first_init ? cfg_str("PSXPORT_FNTRACE") : nullptr;
+  if (first_init && (!s || !*s)) {
+    g_initialized = true;
+    return;
+  }
+  if (!first_init && !g_n) return;
   const RecompRegistry* R = psxport_recomp();
   if (!R || !R->shard_set_override || !R->main_dispatch) {
     lucent::error("fntrace", "recomp registry not installed yet — call fntrace_init() after it");
     return;
   }
-  char buf[512];
-  snprintf(buf, sizeof buf, "%s", s);
-  for (char* tok = strtok(buf, ", "); tok && g_n < MAX_TRACE; tok = strtok(nullptr, ", ")) {
-    const uint32_t a = (uint32_t)strtoul(tok, nullptr, 16);
-    if (!a) continue;
-    if (R->rec_func_index && R->rec_func_index(a) < 0) {
-      // Not a MAIN entry: either an overlay address (unhookable here) or not a function start at all.
-      // Say which, because "my trace printed nothing" otherwise looks like "the code never ran".
-      lucent::error("fntrace", "0x{:08X} is not a MAIN function entry — overlay entries cannot be hooked "
-                               "this way, and a mid-function address is not an entry at all. NOT traced.", a);
-      continue;
+  g_initialized = true;
+  if (first_init) {
+    char buf[512];
+    snprintf(buf, sizeof buf, "%s", s);
+    for (char* tok = strtok(buf, ", "); tok && g_n < MAX_TRACE; tok = strtok(nullptr, ", ")) {
+      const uint32_t a = (uint32_t)strtoul(tok, nullptr, 16);
+      if (!a) continue;
+      if (R->rec_func_index && R->rec_func_index(a) < 0) {
+        // Not a MAIN entry: either an overlay address (unhookable here) or not a function start at all.
+        // Say which, because "my trace printed nothing" otherwise looks like "the code never ran".
+        lucent::error("fntrace", "0x{:08X} is not a MAIN function entry — overlay entries cannot be hooked "
+                                 "this way, and a mid-function address is not an entry at all. NOT traced.", a);
+        continue;
+      }
+      g_sites[g_n].addr = a;
+      g_sites[g_n].hits = 0;
+      ++g_n;
     }
-    g_sites[g_n].addr = a; g_sites[g_n].hits = 0;
-    R->shard_set_override(a, hook);
-    g_n++;
   }
   if (!g_n) return;
+  for (int i = 0; i < g_n; ++i) R->shard_set_override(g_sites[i].addr, hook);
+  if (!first_init) return;
   g_on = true;
   atexit(report);
   signal(SIGTERM, on_term);

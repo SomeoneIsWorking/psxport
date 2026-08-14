@@ -22,6 +22,7 @@
 #include "crt0_boot.h" // crt0_plan/crt0_apply — THE crt0 derivation + the required/ABSENT decision
 #include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
 #include "game.h"      // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
+#include "fntrace.h"   // fntrace_init — developer overrides install after game-owned overrides
 #include "hw_bind.h"   // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "scheduler.h" // scheduler_yield + TASKBASE/TASKSTRIDE/CUR_TASK (scheduler.cpp)
 #include "c_subsys.h"
@@ -312,7 +313,20 @@ static void game_init(Core* c) {
 // port that boots past it (spyro: main -> dc_boot_init -> bootInit hook) had the path stuck at its
 // default and had to re-parse the flag game-side to get it back. A knob read at Core setup belongs at
 // Core setup. Harnesses that own the path per leg (Sbs::Impl::applyMode) set it after this and win.
-void dc_boot_init(Core* c) { psx::config::report_once(); void gte_bind(Core*); gte_bind(c); c->rsub.projprim.bind(c); spu_bind(c); mdec_bind(c); xa_bind(c); c->hooks->registerOverrides(c->game); render_path_install(c); crt0_setup(c); game_init(c); }
+void dc_boot_init(Core* c) {
+  psx::config::report_once();
+  void gte_bind(Core*);
+  gte_bind(c);
+  c->rsub.projprim.bind(c);
+  spu_bind(c);
+  mdec_bind(c);
+  xa_bind(c);
+  c->hooks->registerOverrides(c->game);
+  fntrace_init();
+  render_path_install(c);
+  crt0_setup(c);
+  game_init(c);
+}
 void dc_step_frame(Core* c, uint32_t f) { native_step_frame(c, f); }
 
 static void game_main(Core* c) {
@@ -664,6 +678,10 @@ static void game_main(Core* c) {
 // Wired from boot.c when PSXPORT_NATIVE_BOOT is set. Registers the main override and enters
 // crt0; crt0's call to FUN_80050b08 lands in game_main.
 void native_boot_run(Core* c) {
+  // Standalone game mains install their override clusters immediately before entering here. Developer
+  // diagnostics must install last or a working game override can silently displace them. dc_boot_init
+  // performs the same ordering for dual-core and selftest boot paths.
+  fntrace_init();
   { void cfg_dump(void); cfg_dump(); }   // log active PSXPORT_* config once (see docs/config.md)
   // PSXPORT_ORACLE — THE PURE PSX REFERENCE (user 2026-07-08). recomp gameplay + UNENHANCED guest
   // render: the substrate's own GTE+OT+GP0, with NO native enhancement able to touch the picture. THE
