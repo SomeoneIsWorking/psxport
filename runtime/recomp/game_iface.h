@@ -449,6 +449,7 @@ struct GameHooks {
                                               // inputs. Reads/writes the framework Fps60 bg-override on
                                               // c->game->fps60 (game writing a framework member).
   void (*fps60BbSwapPrev)(Core* c);           // TRANSITIONAL: rend(c)->bbSwapPrev() — billboard record rotate
+  void (*fps60TemporalRotate)(Core* c);       // rotate any other game-owned immutable temporal recipes
 
   // --- diagnostics harness: GAME-defined selftests ---
   // selftest_run() handles the framework's own PSXPORT_SELFTEST names and delegates anything else

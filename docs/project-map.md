@@ -87,7 +87,9 @@ reads both the local and post-composite D32 boundaries; semi-transparent/dithere
 **Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp but reads the live view matrix through
 `GameHooks::fps60ReadSceneCam`; the matrix layout is game-owned. Tomba! 2 decodes its scratchpad matrix in
 `game/core/game_hooks.cpp`. A missing reader aborts when a native projection path asks for it—there is no
-framework camera-address fallback.
+framework camera-address fallback. `GameHooks::fps60TemporalRotate` is the separate post-two-present
+lifecycle seam for game-owned immutable render recipes; it is optional and does not alias the transitional
+billboard-history hook.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),

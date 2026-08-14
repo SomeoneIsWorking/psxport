@@ -62,12 +62,15 @@ static void spy_world_pass(Core* c, float t) {
   s_world_t = t;
 }
 static void spy_bb_swap(Core* c) { s_bb_calls++; s_bb_core = c; }
+static int s_temporal_calls=0;static Core* s_temporal_core=nullptr;
+static void spy_temporal_rotate(Core* c){s_temporal_calls++;s_temporal_core=c;}
 
 static void reset_spies(void) {
   s_name_calls = s_play_calls = 0; s_play_track = -999;
   s_name_core = s_play_core = s_cam_core = nullptr;
   s_world_calls = s_bb_calls = 0; s_world_t = -1.0f;
   s_world_core = s_bb_core = nullptr;
+  s_temporal_calls=0;s_temporal_core=nullptr;
 }
 
 // A null hooks TABLE is a different failure from a null hook IN the table — a port that never installs
@@ -171,6 +174,13 @@ static void test_world_rerun_is_not_eligible_until_a_game_claims_it(void) {
   CHECK(!fps60.mTier1EligibleCur);
 }
 
+static void test_temporal_rotate_is_optional_and_exact(void){
+  GameHooks empty{};reset_spies();game_fps60_temporal_rotate(kFakeCore,&empty);
+  game_fps60_temporal_rotate(kFakeCore,nullptr);CHECK_EQ(s_temporal_calls,0);
+  GameHooks hooks{};hooks.fps60TemporalRotate=spy_temporal_rotate;
+  game_fps60_temporal_rotate(kFakeCore,&hooks);CHECK_EQ(s_temporal_calls,1);CHECK(s_temporal_core==kFakeCore);
+}
+
 int main(void) {
   RUN(absent_hook_is_a_safe_answer_not_a_jump_to_zero);
   RUN(a_null_hooks_table_is_also_safe);
@@ -180,5 +190,6 @@ int main(void) {
   RUN(world_pass_presence_forwards_one_exact_rerun);
   RUN(billboard_rotate_is_optional_but_present_hook_runs);
   RUN(world_rerun_is_not_eligible_until_a_game_claims_it);
+  RUN(temporal_rotate_is_optional_and_exact);
   return pt_summary();
 }

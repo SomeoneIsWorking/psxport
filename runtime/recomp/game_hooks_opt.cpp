@@ -29,3 +29,8 @@ void game_fps60_bb_swap_prev(Core* c, const GameHooks* hooks) {
   if (!hooks || !hooks->fps60BbSwapPrev) return;
   hooks->fps60BbSwapPrev(c);
 }
+
+void game_fps60_temporal_rotate(Core* c, const GameHooks* hooks) {
+  if (!hooks || !hooks->fps60TemporalRotate) return;
+  hooks->fps60TemporalRotate(c);
+}

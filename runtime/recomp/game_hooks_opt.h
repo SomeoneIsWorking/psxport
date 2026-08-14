@@ -55,3 +55,4 @@ bool game_fps60_world_pass(Core* c, const GameHooks* hooks, float t);
 // Rotate game-owned billboard history after the two presents. Games with no native billboard
 // history have nothing to rotate, so absence is a genuine no-op rather than an unsupported tier.
 void game_fps60_bb_swap_prev(Core* c, const GameHooks* hooks);
+void game_fps60_temporal_rotate(Core* c, const GameHooks* hooks);

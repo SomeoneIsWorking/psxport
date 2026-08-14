@@ -475,6 +475,7 @@ void Fps60::presentRotate() {
                                   // per-particle lerp source); games with no native billboard history
                                   // have nothing to rotate
                                   // native_boot's bbFrameReset clears the new cur before the next walk
+  game_fps60_temporal_rotate(c, c ? c->hooks : nullptr);
   mHavePrev = 1;
 }
 
