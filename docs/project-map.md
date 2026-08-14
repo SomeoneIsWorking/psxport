@@ -99,8 +99,8 @@ lifecycle seam for game-owned immutable render recipes; it is optional and does 
 billboard-history hook.
 **Audio:** `spu_beetle.c` (Beetle spu.c mixer lift), `spu_audio.c` (SDL sink + PSXPORT_WAV), `xa_stream.c`
 (in-game XA-ADPCM streaming).
-**CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
-`memcard.cpp`.
+**CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cd_control.h` (public,
+game-validated blocking-control seam), `cdc_native.c`, `disc.c` (libchdr), `memcard.cpp`.
 **Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
 gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
 without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses
@@ -189,9 +189,16 @@ stand an ImGui developer stack up yet, and the one-line removal if that holds.
   optional). `gpu_native.cpp`/`gpu_vk.cpp`/`game/render/submit.cpp` are large single-responsibility backends.
 
 ## CD path — the part that's easy to get wrong
-The port does NOT emulate the CD controller for the game; `cd_override.c` replaces libcd/engine
+The port does NOT emulate the CD controller for the game; `cd_override.cpp` replaces libcd/engine
 read primitives with synchronous native disc reads (`disc.c` → libchdr). **There are TWO CD-command
 wrappers, and the cutscene XA path uses the second one:**
+
+`cd_control_sync(Core*)` is the narrow public seam for a game-owned blocking libds wrapper. The game
+must validate its command class before calling it. The helper applies the existing synchronous
+`cd_command` effects, zeroes a non-null result buffer through that path, and changes the return value
+to blocking-control success (`V0 = 1`); it does not claim query, read, callback, or game-specific
+wrapper semantics.
+
 - `FUN_8008AC34` (libcd `CdControl`) → `ov_cd_command`. Boot/menu uses this.
 - `FUN_8001CE90` (the **engine's streaming** CD-command wrapper, used by the streaming reader
   `FUN_8001cfc8`/task) → `ov_cd_cmd_stream`. **In-game cutscene XA-ADPCM streaming goes through

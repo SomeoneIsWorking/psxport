@@ -172,6 +172,13 @@ static void cd_command(Core* c) {
   }
   zero_result(c, c->r[A2]); c->r[V0] = 0;
 }
+
+// Report blocking-control success after applying the synchronous command
+// effects.
+void cd_control_sync(Core *c) {
+  cd_command(c);
+  c->r[V0] = 1;
+}
 // 0x8008A6EC FUN_8008a6ec(noblock, result) CdSync -> 2 (status: complete/ready).
 static void cd_sync(Core* c) { zero_result(c, c->r[A1]); c->r[V0] = 2; }
 
