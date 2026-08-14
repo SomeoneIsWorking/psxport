@@ -187,6 +187,7 @@ struct RenderQueue {
   uint8_t mPainterFlags = PAINTER_OBJECT_NONE;
   uint16_t mPainterScopeDepth = 0;
   bool mPainterInvalidId = false;
+  bool mPainterRegrouping = false;
 
   class PainterObjectScope {
    public:

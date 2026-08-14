@@ -128,6 +128,7 @@ struct GpuVkState {
   const float* s_vd = nullptr;
   const float* s_vdn = nullptr;
   float s_cur_ord = 0, s_cur_ordn = 0;
+  int64_t s_order_override = -1; // canonical RqItem::seq while painter regrouping is active
   // Paint-order depth TIEBREAK bias (z-fighting fix): a tiny per-prim increment = paint_order * ZBIAS_UNIT,
   // added to the 3D-band per-vertex depth so that when two world prims are at (near-)EQUAL real depth — the
   // barrel/decoration case where the game's integer geometry is genuinely coplanar to GTE fixed-point
@@ -189,6 +190,12 @@ struct GpuVkState {
   int s_painter_count[256] = {};
   int s_painter_ranges = 0;
   int s_painter_overflow = 0;
+  SDL_GPUBuffer* s_painter_tex_vbuf = nullptr;
+  SDL_GPUTransferBuffer* s_painter_tex_xfer = nullptr;
+  SDL_GPUTexture* s_painter_color = nullptr;
+  SDL_GPUTexture* s_painter_depth = nullptr;
+  int s_painter_w = 0, s_painter_h = 0;
+  void ensure_painter_targets(int w, int h);
   void* s_semi_buf[GGS_NUM_BLEND_MODES] = {nullptr, nullptr, nullptr, nullptr};
   int   s_semi_n[GGS_NUM_BLEND_MODES]   = {0, 0, 0, 0};
   // 2D (non-world) CPU-side batches — bug #55 fix. Same lifetime/reset contract as the 3D ones above

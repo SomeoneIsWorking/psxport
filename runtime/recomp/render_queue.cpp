@@ -206,7 +206,7 @@ void RenderQueue::reset() {
     lucent::error("rq", "FATAL: RenderQueue::reset during {} active painter scope(s)", mPainterScopeDepth);
     abort();
   }
-  n = 0; seq = 0; consumed = 0; mPainterObject = 0; mPainterFlags = 0; mPainterInvalidId = false;
+  n = 0; seq = 0; consumed = 0; mPainterObject = 0; mPainterFlags = 0; mPainterInvalidId = false; mPainterRegrouping=false;
 }
 
 RqItem* RenderQueue::push() {
@@ -335,12 +335,24 @@ void RenderQueue::emitQueue(Core* core) {
                     plan.stats.partitioned_items, n, plan.stats.refusal_item);
       abort();
     }
-    for (size_t i : plan.ordinary_items) emitItem(core, &items[i]);
+    // Regrouping changes physical pass order. Exact-real-depth painter/ordinary ties are preserved by
+    // the renderer's canonical-seq epsilon only while it is unsaturated; beyond that point later pass
+    // order would silently become the answer. Refuse such mixed frames rather than claim equivalence.
+    if (!plan.ordinary_items.empty() || plan.objects.size()>1) {
+      uint32_t maxseq=0; for(int i=0;i<n;i++) if(items[i].seq>maxseq) maxseq=items[i].seq;
+      if(!gpu_vk_order_bias_distinguishes(maxseq)) {
+        lucent::error("rq","FATAL: painter/ordinary tie channel saturated at max_seq={} — refusing regrouped frame",maxseq);
+        abort();
+      }
+    }
+    mPainterRegrouping=true;
+    for (size_t i : plan.ordinary_items) emitItem(core,&items[i]);
     for (const PainterObjectRange& range : plan.objects) {
       if (!gpu_vk_painter_begin(core, range.object)) abort();
-      for (size_t k=0;k<range.command_count;k++) emitItem(core, &items[plan.commands[range.first_command+k].item_index]);
+      for (size_t k=0;k<range.command_count;k++) emitItem(core,&items[plan.commands[range.first_command+k].item_index]);
       if (!gpu_vk_painter_end(core)) abort();
     }
+    mPainterRegrouping=false;
   }
   mark_consumed();
 }
@@ -620,6 +632,10 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
           us[0],vs[0], us[1],vs[1], us[2],vs[2], us[3],vs[3],
           xs[0],ys[0], xs[1],ys[1], xs[2],ys[2], xs[3],ys[3]); } } } }
   unsigned ord = s.s_prim_order++;
+  // Canonical queue sequence, applied at the last possible point so an earlier diagnostic/filter return
+  // cannot leak an override into the next item. Regrouped painter emission therefore keeps exact-depth
+  // ties in original global order, while the ordinary path's counter/accounting remains unchanged.
+  if(mPainterRegrouping) gpu_vk_set_order_override(core,it->seq);
   gpu_vk_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
   // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).

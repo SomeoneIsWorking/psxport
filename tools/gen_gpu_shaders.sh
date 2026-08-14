@@ -48,5 +48,6 @@ PY
   emit trisemi_hw.frag spv_g_trisemi_hw_frag # real HW-blend textured semi (reuses tritex.vert)
   emit semi_cover.frag spv_g_semi_cover_frag # bug #55: depth-only semi coverage stamp (reuses tritex.vert)
   emit ires_downsample.frag spv_g_ires_downsample_frag # ires composite: box-filter downsample (reuses fsq.vert)
+  emit painter_composite.frag spv_g_painter_composite_frag # authored-object RG8+D32 -> world
 } > "$OUT"
 echo "[gen_gpu_shaders] wrote $OUT"

@@ -28,6 +28,8 @@ void gpu_vk_set_order_2d_bg_n(Core* core, unsigned idx);
 void gpu_vk_set_vd(Core* core, const float* d3);
 void gpu_vk_set_vd_n(Core* core, const float* d3);
 void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf);  // sub-pixel screen XY (#15 smoothing)
+void gpu_vk_set_order_override(Core* core, uint32_t seq);
+bool gpu_vk_order_bias_distinguishes(uint32_t seq);
 
 // Dynamic shadow mapping: capture one OPAQUE world-geometry triangle's VIEW-SPACE positions (v0/v1/v2,
 // each {x=ir1, y=ir2, z=pz} — the metric view space the deferred pass reconstructs) into the host shadow

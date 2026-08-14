@@ -52,6 +52,8 @@ public:
   // pipeline shared across all 4 blend-mode buckets (semi_cover.frag ignores blend mode — depth marking
   // only). See render_geom's 3D band, right after Pass B.
   SDL_GPUGraphicsPipeline* s_semi_cover_pipe = nullptr;
+  SDL_GPUGraphicsPipeline* s_painter_tex_pipe = nullptr; // ALWAYS/write: authored local overwrite
+  SDL_GPUGraphicsPipeline* s_painter_composite_pipe = nullptr; // sampled RG8+D32 -> world GE/write
   int s_pipes_3d = 0;                                // 3D pipelines created (once per process)
 
   // ---- SBS two-pane composite textures ----
