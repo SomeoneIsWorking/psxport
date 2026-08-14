@@ -27,6 +27,7 @@ enum class PainterObjectRefusal : uint8_t {
   ActiveScope,
   InvalidObjectId,
   UnsortedQueue,
+  UnsupportedMaterial,
 };
 
 struct PainterObjectLimits {

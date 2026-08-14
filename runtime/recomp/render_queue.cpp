@@ -262,6 +262,9 @@ PainterObjectPlan RenderQueue::buildPainterObjectPlan(PainterObjectLimits limits
     if (it.painter_flags & PAINTER_OBJECT_DITHER) return refuse(PainterObjectRefusal::Dithered, i);
     if (it.layer != RQ_WORLD) return refuse(PainterObjectRefusal::NonWorld, i);
     if (it.order_mode != RQ_OM_DEPTH) return refuse(PainterObjectRefusal::NonDepth, i);
+    // GPU Phase 1 has one root-correct ordered pipeline: textured opaque faces. Flat/untextured faces
+    // cannot fall through the ordinary material bucket because that would destroy cross-material order.
+    if (it.mode == 3) return refuse(PainterObjectRefusal::UnsupportedMaterial, i);
   }
   if (!out.grouped_faces) return refuse(PainterObjectRefusal::Empty);
 
@@ -321,7 +324,24 @@ void RenderQueue::emitQueue(Core* core) {
       lucent::debug("rqhist", "n={}  bg(op/semi)={}/{}  WORLD={}/{}  ovl={}/{}  hud={}/{}",
               n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
   }
-  for (int i = 0; i < n; i++) emitItem(core, &items[i]);
+  bool havePainter = false; for (int i=0;i<n;i++) havePainter |= items[i].painter_object != 0;
+  if (!havePainter) {
+    for (int i = 0; i < n; i++) emitItem(core, &items[i]);
+  } else {
+    PainterObjectPlan plan = buildPainterObjectPlan();
+    if (!plan.accepted() || plan.stats.partitioned_items != (size_t)n) {
+      lucent::error("rq", "FATAL: painter plan refused={} scanned={} grouped={} partitioned={}/{} item={}",
+                    (int)plan.stats.refusal, plan.stats.items_scanned, plan.stats.grouped_faces,
+                    plan.stats.partitioned_items, n, plan.stats.refusal_item);
+      abort();
+    }
+    for (size_t i : plan.ordinary_items) emitItem(core, &items[i]);
+    for (const PainterObjectRange& range : plan.objects) {
+      if (!gpu_vk_painter_begin(core, range.object)) abort();
+      for (size_t k=0;k<range.command_count;k++) emitItem(core, &items[plan.commands[range.first_command+k].item_index]);
+      if (!gpu_vk_painter_end(core)) abort();
+    }
+  }
   mark_consumed();
 }
 

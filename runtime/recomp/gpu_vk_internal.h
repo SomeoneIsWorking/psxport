@@ -179,6 +179,16 @@ struct GpuVkState {
   int   s_tri_n   = 0;
   void* s_tex_buf = nullptr;
   int   s_tex_n   = 0;
+  // Phase-1 painter-object staging. One unified textured vertex stream plus object ranges; it stays
+  // separate from s_tex_buf so selected faces can never leak into the ordinary depth-tested batch.
+  void* s_painter_tex_buf = nullptr;
+  int s_painter_tex_n = 0;
+  int s_painter_active = 0;
+  uint32_t s_painter_object[256] = {};
+  int s_painter_first[256] = {};
+  int s_painter_count[256] = {};
+  int s_painter_ranges = 0;
+  int s_painter_overflow = 0;
   void* s_semi_buf[GGS_NUM_BLEND_MODES] = {nullptr, nullptr, nullptr, nullptr};
   int   s_semi_n[GGS_NUM_BLEND_MODES]   = {0, 0, 0, 0};
   // 2D (non-world) CPU-side batches — bug #55 fix. Same lifetime/reset contract as the 3D ones above
@@ -248,6 +258,9 @@ struct GpuVkState {
                  const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                  int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                  int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend);
+  bool painter_begin(uint32_t object);
+  bool painter_end();
+  void painter_staging_stats(int* ordinary_tex_vertices, int* painter_vertices, int* ranges) const;
   void shot(const char* path);
   void shot_b(const char* path);   // SBS: capture target 1 (core B / right pane)
   void frame_end(const uint16_t* svram, int frame);

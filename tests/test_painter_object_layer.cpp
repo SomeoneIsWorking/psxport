@@ -15,17 +15,17 @@ static void test_interleaved_materials_and_ties(void) {
   add(*q,7,10,3); add(*q,7,20,1); q->items[3].tp_x=128; q->items[3].clut_x=32; add(*q,0,5,0);
   q->sortQueue();
   PainterObjectPlan p=q->buildPainterObjectPlan();
-  CHECK(p.accepted()); CHECK_EQ(p.stats.items_scanned,5); CHECK_EQ(p.stats.grouped_faces,3);
-  CHECK_EQ(p.stats.objects,1); CHECK_EQ(p.stats.partitioned_items,5); CHECK_EQ(p.ordinary_items.size(),2); CHECK_EQ(p.commands.size(),3);
-  CHECK_EQ(p.commands[0].seq,10); CHECK_EQ((int)p.commands[0].material,(int)PainterMaterial::Untextured);
-  CHECK_EQ(p.commands[1].seq,20); CHECK_EQ((int)p.commands[1].material,(int)PainterMaterial::Textured);
-  CHECK_EQ(p.commands[2].seq,30); CHECK_EQ((int)p.commands[2].material,(int)PainterMaterial::Textured);
-  q=make_queue(); add(*q,9,5,0); add(*q,9,5,3);
+  CHECK_EQ((int)p.stats.refusal,(int)PainterObjectRefusal::UnsupportedMaterial);
+  CHECK_EQ(p.stats.items_scanned,3); CHECK_EQ(p.stats.grouped_faces,1); CHECK_EQ(p.commands.size(),0);
+  q=make_queue(); add(*q,7,30,0); add(*q,7,10,2); add(*q,7,20,1); q->sortQueue(); p=q->buildPainterObjectPlan();
+  CHECK(p.accepted()); CHECK_EQ(p.commands.size(),3); CHECK_EQ(p.commands[0].seq,10);
+  CHECK_EQ(p.commands[1].seq,20); CHECK_EQ(p.commands[2].seq,30);
+  q=make_queue(); add(*q,9,5,0); add(*q,9,5,1);
   p=q->buildPainterObjectPlan(); CHECK_EQ(p.commands[0].item_index,0); CHECK_EQ(p.commands[1].item_index,1);
 }
 
 static void test_multiple_objects_are_contiguous(void) {
-  auto q=make_queue(); add(*q,2,30,0); add(*q,0,15,3); add(*q,1,20,3); add(*q,2,10,3); add(*q,0,25,0); add(*q,1,40,0);
+  auto q=make_queue(); add(*q,2,30,0); add(*q,0,15,3); add(*q,1,20,2); add(*q,2,10,1); add(*q,0,25,0); add(*q,1,40,0);
   q->sortQueue();
   PainterObjectPlan p=q->buildPainterObjectPlan(); CHECK(p.accepted());
   CHECK_EQ(p.stats.items_scanned,6); CHECK_EQ(p.stats.grouped_faces,4); CHECK_EQ(p.stats.objects,2); CHECK_EQ(p.stats.partitioned_items,6);

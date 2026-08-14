@@ -1035,6 +1035,11 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
   int semi2d_total[GGS_NUM_2D_BANDS] = {};
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
     for (int m = 0; m < NUM_BLEND_MODES; m++) semi2d_total[band] += g.s_semi2d_n[band][m];
+  if (g.s_painter_ranges || g.s_painter_tex_n) {
+    lucent::error("gpu_vk", "FATAL: {} painter range(s), {} vertices reached present without the Phase1 GPU consumer",
+                  g.s_painter_ranges, g.s_painter_tex_n);
+    abort();
+  }
   *dtri = g.s_tri_n; *dtex = g.s_tex_n; *dsemi = semi_total;   // 3D-world-only counts, as before the split
   const bool has3d = (g.s_tri_n + g.s_tex_n + semi_total) > 0;
   int total = g.s_tri_n + g.s_tex_n + semi_total;
@@ -1866,6 +1871,7 @@ void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (voi
     if (--s_preseq_left == 0) lucent::info("preseq", "done: {} frames -> {}", s_preseq_idx, s_preseq_dir);
   }
   s_tri_n = s_tex_n = 0;
+  s_painter_tex_n = s_painter_ranges = s_painter_active = s_painter_overflow = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_n[m] = 0;
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
     s_tri2d_n[band] = s_tex2d_n[band] = 0;
@@ -1881,6 +1887,7 @@ void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (voi
 static inline void ggs_alloc_batches(GpuVkState& g) {
   if (!g.s_tri_buf)  g.s_tri_buf  = (TriVtx*)malloc(sizeof(TriVtx) * TRI_CAP);
   if (!g.s_tex_buf)  g.s_tex_buf  = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
+  if (!g.s_painter_tex_buf) g.s_painter_tex_buf = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
   for (int m = 0; m < NUM_BLEND_MODES; m++)
     if (!g.s_semi_buf[m]) g.s_semi_buf[m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
@@ -1889,6 +1896,28 @@ static inline void ggs_alloc_batches(GpuVkState& g) {
     for (int m = 0; m < NUM_BLEND_MODES; m++)
       if (!g.s_semi2d_buf[band][m]) g.s_semi2d_buf[band][m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX2D_CAP);
   }
+}
+
+bool GpuVkState::painter_begin(uint32_t object) {
+  ggs_alloc_batches(*this);
+  if (!object || s_painter_active || s_painter_ranges >= 256) return false;
+  s_painter_active = 1;
+  s_painter_object[s_painter_ranges] = object;
+  s_painter_first[s_painter_ranges] = s_painter_tex_n;
+  return true;
+}
+
+bool GpuVkState::painter_end() {
+  if (!s_painter_active) return false;
+  s_painter_count[s_painter_ranges] = s_painter_tex_n - s_painter_first[s_painter_ranges];
+  s_painter_active = 0;
+  ++s_painter_ranges;
+  return !s_painter_overflow && s_painter_count[s_painter_ranges - 1] > 0;
+}
+void GpuVkState::painter_staging_stats(int* ordinary, int* painter, int* ranges) const {
+  if (ordinary) *ordinary = s_tex_n;
+  if (painter) *painter = s_painter_tex_n;
+  if (ranges) *ranges = s_painter_ranges;
 }
 
 // bug #55 classifier: is the CURRENT prim (about to be appended by draw_tri/draw_tritri/draw_semi) 3D
@@ -1947,6 +1976,13 @@ void GpuVkState::draw_tritri(const int* xs, const int* ys, const int* us, const 
                              int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                              int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) {
   ggs_alloc_batches(*this);
+  if (s_painter_active) {
+    if (s_painter_tex_n + 3 > TEX_CAP) { s_painter_overflow = 1; return; }
+    tex_emit(((TexVtx*)s_painter_tex_buf) + s_painter_tex_n, xs, ys, us, vs, rs, gs, bs,
+             tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,0,0);
+    s_painter_tex_n += 3;
+    return;
+  }
   // bug #55: 2D (non-world) textured tris render at native resolution, never through the ires target.
   if (!ggs_is_3d(*this)) {
     int band = ggs_2d_band(*this);
@@ -2198,6 +2234,8 @@ void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); 
 void gpu_vk_present_shot(Core* core, const char* path) { core->game->gpu_vk.present_shot(path); }
 void gpu_vk_shot_b(Core* core, const char* path) { core->game->gpu_vk.shot_b(path); }
 void gpu_vk_frame_end(Core* core, const uint16_t* svram, int frame) { core->game->gpu_vk.frame_end(svram, frame); }
+bool gpu_vk_painter_begin(Core* core, uint32_t object) { return core->game->gpu_vk.painter_begin(object); }
+bool gpu_vk_painter_end(Core* core) { return core->game->gpu_vk.painter_end(); }
 
 // REPL `preseq` arm (repl.cpp) — creates the dir and arms the per-present dump in present().
 void gpu_vk_preseq_arm(Core* core, int n, const char* dir) {

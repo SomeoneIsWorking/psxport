@@ -50,6 +50,8 @@ void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, c
                       const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                       int tpx, int tpy, int mode, int raw, int clutx, int cluty,
                       int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend);
+bool gpu_vk_painter_begin(Core* core, uint32_t object);
+bool gpu_vk_painter_end(Core* core);
 
 // present / per-frame / readback
 void gpu_vk_present(Core* core, const uint16_t* src, int sx, int sy, int w, int h);
