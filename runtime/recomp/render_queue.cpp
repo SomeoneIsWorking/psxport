@@ -199,10 +199,24 @@ void RenderQueue::objidOverlay(Core* core) {
 // debug COMPARE tool, which keeps its own inline path; callers check gpu_sbs_get() for that, not this.
 int rq_active(void) { return 1; }
 
-void RenderQueue::reset() { n = 0; seq = 0; consumed = 0; }
+void RenderQueue::reset() {
+  // An explicit frame reset while a producer scope is live would invalidate its RAII restoration
+  // contract. Lazy first-push reset below deliberately preserves the active scope instead.
+  if (mPainterScopeDepth) {
+    lucent::error("rq", "FATAL: RenderQueue::reset during {} active painter scope(s)", mPainterScopeDepth);
+    abort();
+  }
+  n = 0; seq = 0; consumed = 0; mPainterObject = 0; mPainterFlags = 0; mPainterInvalidId = false;
+}
 
 RqItem* RenderQueue::push() {
-  if (consumed) reset();
+  if (consumed) {
+    // Frame CONTENT is stale, but producer declaration is current: a PainterObjectScope commonly opens
+    // before its first push. Calling reset() here used to erase that declaration and made the scope
+    // destructor underflow. Preserve scope state while beginning the new queue frame.
+    n = 0; seq = 0; consumed = 0;
+    if (!mPainterScopeDepth) { mPainterObject = 0; mPainterFlags = 0; mPainterInvalidId = false; }
+  }
   if (n >= RQ_MAX) {
     // FAIL-FAST (user 2026-06-30): never silently drop prims. RQ_MAX already covers the real worst-case
     // scene (the area-transition spike, ~43k — see render_queue.h); exceeding it means a submit path is
@@ -215,7 +229,69 @@ RqItem* RenderQueue::push() {
   }
   RqItem* it = &items[n++];
   it->seq = seq++;
+  it->painter_object = mPainterObject;
+  it->painter_flags = mPainterFlags;
   return it;
+}
+
+PainterObjectPlan RenderQueue::buildPainterObjectPlan(PainterObjectLimits limits) const {
+  PainterObjectPlan plan;
+  PainterObjectStats& out = plan.stats;
+  auto refuse = [&](PainterObjectRefusal why, size_t item = SIZE_MAX) -> PainterObjectPlan {
+    out.refusal = why; out.refusal_item = item;
+    plan.ordinary_items.clear(); plan.commands.clear(); plan.objects.clear();
+    out.partitioned_items = 0;
+    return plan;
+  };
+  if (mPainterScopeDepth != 0) return refuse(PainterObjectRefusal::ActiveScope);
+  if (mPainterInvalidId) return refuse(PainterObjectRefusal::InvalidObjectId);
+  if (limits.max_objects == 0 || limits.max_faces == 0 || limits.max_objects > 256) {
+    out.refusal = limits.max_objects > 256 ? PainterObjectRefusal::TooManyObjects
+                                          : PainterObjectRefusal::TooManyFaces;
+    return refuse(out.refusal);
+  }
+  for (int i = 0; i < n; ++i) {
+    const RqItem& it = items[i];
+    ++out.items_scanned;
+    if (i && (items[i-1].layer > it.layer ||
+              (items[i-1].layer == it.layer && items[i-1].seq > it.seq)))
+      return refuse(PainterObjectRefusal::UnsortedQueue, i);
+    if (!it.painter_object) { plan.ordinary_items.push_back((size_t)i); continue; }
+    if (++out.grouped_faces > limits.max_faces) return refuse(PainterObjectRefusal::TooManyFaces, i);
+    if (it.semi) return refuse(PainterObjectRefusal::SemiTransparent, i);
+    if (it.painter_flags & PAINTER_OBJECT_DITHER) return refuse(PainterObjectRefusal::Dithered, i);
+    if (it.layer != RQ_WORLD) return refuse(PainterObjectRefusal::NonWorld, i);
+    if (it.order_mode != RQ_OM_DEPTH) return refuse(PainterObjectRefusal::NonDepth, i);
+  }
+  if (!out.grouped_faces) return refuse(PainterObjectRefusal::Empty);
+
+  // First-seen object order is deterministic; each object's commands are selected by increasing seq.
+  // Material is metadata on a command, never a partition key, so T,U,T remains T,U,T.
+  std::vector<PainterObjectId> ids;
+  for (int i = 0; i < n; ++i) if (items[i].painter_object) {
+    PainterObjectId id = items[i].painter_object;
+    if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+      if (ids.size() == limits.max_objects) return refuse(PainterObjectRefusal::TooManyObjects, i);
+      ids.push_back(id);
+    }
+  }
+  out.objects = ids.size();
+  for (PainterObjectId id : ids) {
+    PainterObjectRange range{id, plan.commands.size(), 0};
+    std::vector<size_t> members;
+    for (int i = 0; i < n; ++i) if (items[i].painter_object == id) members.push_back((size_t)i);
+    std::stable_sort(members.begin(), members.end(), [&](size_t a, size_t b) { return items[a].seq < items[b].seq; });
+    for (size_t i : members) {
+      const RqItem& it = items[i];
+      plan.commands.push_back({i, id, it.seq, it.mode == 3 ? PainterMaterial::Untextured : PainterMaterial::Textured});
+    }
+    range.command_count = members.size(); plan.objects.push_back(range);
+  }
+  out.partitioned_items = plan.ordinary_items.size() + plan.commands.size();
+  if (out.partitioned_items != (size_t)n) {
+    out.refusal = PainterObjectRefusal::TooManyFaces; // unreachable invariant failure, never accepted
+  }
+  return plan;
 }
 
 void RenderQueue::mark_consumed() { if (n) consumed = 1; }
@@ -706,6 +782,8 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   RqItem it;
   it.layer = (uint8_t)layer; it.semi = semi ? 1 : 0; it.nv = (uint8_t)nv; it.raw = raw ? 1 : 0;
   it.order_mode = (uint8_t)order_mode;
+  it.painter_object = mPainterObject;
+  it.painter_flags = mPainterFlags;
   // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.
@@ -904,7 +982,7 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
   faces.clear();
   for (int i = 0; i < n; i++) {
     const RqItem& it = items[i];
-    if (it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) continue;
+    if (it.painter_object || it.layer != RQ_WORLD || it.order_mode != RQ_OM_DEPTH || it.sort_key < 0) continue;
     if (it.dbg_node < kGuestRamBase || it.dbg_node >= kGuestRamEnd) continue;
     faces.push_back(KeyedFace{ i, it.dbg_node });
   }

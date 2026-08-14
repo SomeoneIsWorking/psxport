@@ -77,6 +77,9 @@ REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), 
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present),
+`render_queue.{h,cpp}` + `painter_object_layer.h` own the Phase-0 painter-object contract: selected opaque
+world faces are partitioned into a unified, sequence-stable CPU command stream across material variants;
+the GPU object target/composite path is still missing, and semi-transparent/dithered groups refuse.
 `wide_margin_plan.h` (renderer-only coverage for host-visible VRAM extension),
 `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`.
 **Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp but reads the live view matrix through

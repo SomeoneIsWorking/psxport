@@ -12,6 +12,7 @@
 #ifndef RENDER_QUEUE_H
 #define RENDER_QUEUE_H
 #include <stdint.h>
+#include "painter_object_layer.h"
 
 struct Core;
 class Game;
@@ -104,6 +105,8 @@ struct RqItem {
   uint8_t  nv;             // vertex count: 3 = triangle (one tri), 4 = quad (two tris)
   uint8_t  raw;            // raw texel (no color modulation)
   uint8_t  order_mode;     // RqOrderMode — how depth is applied at emit
+  uint8_t  painter_flags;  // PainterObjectFlags; Phase 1 explicitly refuses dither
+  PainterObjectId painter_object; // 0 = ordinary path; non-zero = local authored-order object
   uint32_t seq;            // submission order — stable tiebreak within a layer
   int      xs[4], ys[4];   // screen verts (with draw offset, rounded) — 2D/HUD + fallback path
   // Sub-pixel float screen XY (draw offset applied in float) for the engine-owned 3D world path. When
@@ -173,12 +176,33 @@ struct RenderQueue {
   void     emitQueue(Core* core);   // emit each item to the VK rasterizer + mark consumed (no sort)
   void     zfightScan(Core* core);  // PSXPORT_ZFIGHT diag: SW-rasterize opaque depth prims, find near-equal top-2 contests
   void     mark_consumed();
+  PainterObjectPlan buildPainterObjectPlan(PainterObjectLimits limits = {}) const;
 
   // The screen space of the 2D quads being pushed RIGHT NOW. Producers that author 4:3 layout — the
   // overwhelming majority: HUD, menus, panels, dialogue — leave it alone; a producer whose x is
   // already wide-final raises a Space2dScope around its pushes. Per-RenderQueue (never a file-scope
   // flag) so SBS's two cores cannot see each other's scope.
   Rq2dSpace m2dSpace = RQ_2D_AUTHORED_4_3;
+  PainterObjectId mPainterObject = 0;
+  uint8_t mPainterFlags = PAINTER_OBJECT_NONE;
+  uint16_t mPainterScopeDepth = 0;
+  bool mPainterInvalidId = false;
+
+  class PainterObjectScope {
+   public:
+    PainterObjectScope(RenderQueue& rq, PainterObjectId id, uint8_t flags = PAINTER_OBJECT_NONE)
+      : mRq(rq), mPrevId(rq.mPainterObject), mPrevFlags(rq.mPainterFlags) {
+      ++rq.mPainterScopeDepth; if (!id) rq.mPainterInvalidId = true;
+      rq.mPainterObject = id; rq.mPainterFlags = flags;
+    }
+    ~PainterObjectScope() { --mRq.mPainterScopeDepth; mRq.mPainterObject = mPrevId; mRq.mPainterFlags = mPrevFlags; }
+    PainterObjectScope(const PainterObjectScope&) = delete;
+    PainterObjectScope& operator=(const PainterObjectScope&) = delete;
+   private:
+    RenderQueue& mRq;
+    PainterObjectId mPrevId;
+    uint8_t mPrevFlags;
+  };
 
   // RAII declaration of the screen space of everything pushed inside it. Restores the previous value
   // rather than resetting to the default, so a producer nested inside another cannot silently
