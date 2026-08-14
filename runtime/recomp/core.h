@@ -339,6 +339,7 @@ void gpu_present_ex(Core* core, int do_blit);
 void gpu_bg_range_add(Core* core, uint32_t lo, uint32_t hi);
 void gpu_pace_frame(Core* core);
 void gpu_pace_subframe(Core* core, int parts);
+void gpu_pace_subframe_fields(Core* core, int guestFields, int parts);
 // The display FIELD RATE this game runs at, in milli-hertz — decoded from GP1(0x08) bit 3, i.e. from
 // the standard the guest itself programmed (59940 = NTSC's 60000/1001 Hz, 50000 = PAL). THE one
 // source of a field rate in this runtime; see field_rate.h for why a second literal is a bug.

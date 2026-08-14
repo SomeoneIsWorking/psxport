@@ -40,6 +40,7 @@ extern "C" { uint32_t GTE_ReadDR(unsigned); }   // Beetle GTE (mednafen gte.c) â
 void gpu_present_ex(Core* core, int do_blit);
 void gpu_fps60_present_pass(Core* core);
 void gpu_pace_subframe(Core* core, int n);
+void gpu_pace_subframe_fields(Core* core, int guestFields, int parts);
 
 #define FPS60_RQ_MAX RQ_MAX
 
@@ -336,8 +337,9 @@ void Fps60::rq_capture(const RqItem* items, int n) {
   mNCur = n;
 }
 
-void Fps60::frame_commit(Core* core) {
+void Fps60::frame_commit(Core* core, int guestFields) {
   if (!active()) return;
+  mCommitGuestFields = guestFields;
   uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
   rate_tick(&mRd, set_hash);
   mFence++;
@@ -375,7 +377,7 @@ void Fps60::present_vk(Core* core) {
   lucent::debug("fps60", "f{} slotA: replay prev={} n={} tier1={} backdrop={} t={:.3f}", mFence,
                 mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", mNCur, mTier1PrimsThisFrame,
                 mBackdropPrimsThisFrame, mT);
-  gpu_pace_subframe(c, 2);
+  gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
 
   // ---- PASS 2 (slot B): the real frame. SAME call, t=1 â€” every lerped input resolves to its current
   // value, so this is the in-between at its near endpoint rather than a separate replay of the captured
@@ -384,7 +386,7 @@ void Fps60::present_vk(Core* core) {
   presentPass(c, 1.0f);
   gpu_present_ex(c, 1);
   dumpPresent(c, /*interp=*/false);
-  gpu_pace_subframe(c, 2);
+  gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
 
   presentRotate();
 }

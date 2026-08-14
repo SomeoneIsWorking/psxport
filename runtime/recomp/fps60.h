@@ -87,10 +87,13 @@ struct Fps60 {
   uint64_t mFrameHash = 1469598103934665603ull;   // per-frame projected-geometry fingerprint (rate input)
   long     mFrameGeom = 0;                          // #verts folded this frame (0 => idle frame)
   long     mFence     = 0;                          // logic-frame counter
+  int      mCommitGuestFields = 0;                  // explicit cadence for the current commit
   RateDet  mRd = { 0, 0, 2, {}, 0 };
   void fold(uint32_t v);                            // fold a projected SXY into the frame fingerprint
   void rtp(uint32_t op);                            // gte RTP tap (fps60 gate) → fold the new SXY(s)
-  void frame_commit(Core* core);                    // per-logic-frame fence + present orchestration
+  // guestFields is the number of display fields advanced by this logic frame. Zero uses
+  // GameConfig::paceQuota for ports with one ordinary pacing boundary per logic frame.
+  void frame_commit(Core* core, int guestFields = 0);
 
   // ---- shared camera reader ----------------------------------------------------------------------------
   // Scene camera read choke: a GAME hook fills R(int16 units)/T from that game's own camera state and the

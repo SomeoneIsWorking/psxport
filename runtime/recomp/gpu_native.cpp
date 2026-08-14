@@ -1598,7 +1598,7 @@ unsigned gpu_field_rate_millihz(Core* core) {
 // that is ordinary working memory in any other game — so a second consumer slept on garbage. An
 // un-RE'd magic address feeding a timing decision is exactly the banned shape, and its failure mode
 // is a plausible-looking slow run rather than an error. Unset is LOUD, once, and paces at 1 field.
-void gpu_pace_subframe(Core* core, int parts) {
+void gpu_pace_subframe_fields(Core* core, int guestFields, int parts) {
   // Portable monotonic clock + nanosleep (no SDL dependency), so it works identically on Linux and
   // macOS — and, now, identically with and without a window.
   static double s_next = 0.0;
@@ -1608,7 +1608,8 @@ void gpu_pace_subframe(Core* core, int parts) {
 
   PaceInputs in;
   in.unpaced           = psx::config::cv_nopace.get();
-  in.quota             = (core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0;
+  in.quota             = guestFields > 0 ? guestFields :
+                         ((core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0);
   in.parts             = parts;
   in.fieldRateMilliHz  = gpu_field_rate_millihz(core);
   in.nowMs             = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
@@ -1649,6 +1650,7 @@ void gpu_pace_subframe(Core* core, int parts) {
                           (long)((p.sleepMs - (long)(p.sleepMs / 1000.0) * 1000.0) * 1e6) };
   nanosleep(&req, 0);
 }
+void gpu_pace_subframe(Core* core, int parts) { gpu_pace_subframe_fields(core, 0, parts); }
 void gpu_pace_frame(Core* core) { gpu_pace_subframe(core, 1); }
 
 // Present: copy the displayed VRAM region to an RGB buffer. PSXPORT_GPU_DUMP=dir dumps PPMs;
