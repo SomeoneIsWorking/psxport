@@ -12,6 +12,8 @@ using PainterObjectId = uint32_t;
 
 enum PainterObjectFlags : uint8_t {
   PAINTER_OBJECT_NONE   = 0,
+  // Compatibility scope flag: emitOrQueue/push maps it into each RqItem::dither. New producers should
+  // pass the per-item DTD value explicitly because a single object may contain both draw states.
   PAINTER_OBJECT_DITHER = 1u << 0,
 };
 
@@ -19,7 +21,6 @@ enum class PainterObjectRefusal : uint8_t {
   None = 0,
   Empty,
   SemiTransparent,
-  Dithered,
   NonWorld,
   NonDepth,
   TooManyObjects,
@@ -51,6 +52,8 @@ struct PainterCommand {
   PainterObjectId object = 0;
   uint32_t seq = 0;
   PainterMaterial material = PainterMaterial::Untextured;
+  bool shade_gouraud = false;
+  bool dither = false;
 };
 
 struct PainterObjectRange {

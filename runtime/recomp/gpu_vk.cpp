@@ -81,6 +81,7 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 #define s_ires_downsample_pipe (gdev().s_ires_downsample_pipe)
 #define s_semi_cover_pipe (gdev().s_semi_cover_pipe)
 #define s_painter_tex_pipe (gdev().s_painter_tex_pipe)
+#define s_painter_tri_pipe (gdev().s_painter_tri_pipe)
 #define s_painter_composite_pipe (gdev().s_painter_composite_pipe)
 
 // Painter GPU selftest boundary captures. These are null in shipping operation; the selftest owns the
@@ -88,6 +89,7 @@ static inline GpuDevice& gdev() { return *GpuDevice::sInstance; }
 // the main D32 immediately after composite, before later bands are allowed to reuse/clear main depth.
 static SDL_GPUTransferBuffer* s_painter_test_local_depth = nullptr;
 static SDL_GPUTransferBuffer* s_painter_test_main_depth = nullptr;
+static SDL_GPUTransferBuffer* s_painter_test_local_color = nullptr;
 #define s_sbs_tex      (gdev().s_sbs_tex)
 #define s_sbs_xfer     (gdev().s_sbs_xfer)
 #define s_sbs_w        (gdev().s_sbs_w)
@@ -129,7 +131,7 @@ static inline float ord3d_b(float d, float bias) { float o = ord3d(d) + bias;
 #define TRI2D_CAP 32768
 #define TEX2D_CAP 32768
 #define NUM_BLEND_MODES GGS_NUM_BLEND_MODES   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
-struct TriVtx { float x, y, r, g, b, ord; };                                                    // 24 bytes
+struct TriVtx { float x, y, r, g, b, ord, gouraud, dither; };                                   // 32 bytes
 struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord; };   // 96 bytes
 // Batch buffers + counts moved onto GpuVkState (per-Core) — reach as `this->s_tri_buf` (cast from
 // void* to TriVtx*) inside the methods. The `render_geom` free function below takes a `GpuVkState&`
@@ -647,6 +649,7 @@ void GpuVkState::ensure_targets() {
   mkbuf(sizeof(TriVtx) * TRI_CAP, &s_tri_vbuf, &s_tri_xfer);
   mkbuf(sizeof(TexVtx) * TEX_CAP, &s_tex_vbuf, &s_tex_xfer);
   mkbuf(sizeof(TexVtx) * TEX_CAP, &s_painter_tex_vbuf, &s_painter_tex_xfer);
+  mkbuf(sizeof(TriVtx) * TRI_CAP, &s_painter_tri_vbuf, &s_painter_tri_xfer);
   for (int m = 0; m < NUM_BLEND_MODES; m++) {
     mkbuf(sizeof(TexVtx) * TEX_CAP, &s_semi_vbuf[m], &s_semi_xfer[m]);
   }
@@ -718,6 +721,8 @@ static void create_3d_pipelines(void) {
     { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, 0 },
     { 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, 8 },
     { 2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 20 },
+    { 3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 24 },
+    { 4, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 28 },
   };
   static const SDL_GPUVertexAttribute tex_attr[] = {
     { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, 0 },
@@ -730,7 +735,7 @@ static void create_3d_pipelines(void) {
     { 7, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 92 },
   };
   s_tri_pipe    = make_geom_pipeline(spv_g_tri_vert, spv_g_tri_vert_len, spv_g_tri_frag, spv_g_tri_frag_len,
-                                     sizeof(TriVtx), tri_attr, 3, 0, true);
+                                     sizeof(TriVtx), tri_attr, 5, 0, true);
   s_tritex_pipe = make_geom_pipeline(spv_g_tritex_vert, spv_g_tritex_vert_len, spv_g_tritex_frag, spv_g_tritex_frag_len,
                                      sizeof(TexVtx), tex_attr, 8, 1, true, 1);   // +1 fragment uniform: ires scale (PC.scale)
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_pipe[m] = make_semi_pipeline(m, tex_attr, 8, sizeof(TexVtx));
@@ -741,6 +746,8 @@ static void create_3d_pipelines(void) {
                                      sizeof(TexVtx), tex_attr, 8, 1, true, 1, true);   // +1 fragment uniform: ires scale; depth_only
   s_painter_tex_pipe = make_geom_pipeline(spv_g_tritex_vert,spv_g_tritex_vert_len,spv_g_tritex_frag,spv_g_tritex_frag_len,
                                      sizeof(TexVtx),tex_attr,8,1,true,1,false,SDL_GPU_COMPAREOP_ALWAYS);
+  s_painter_tri_pipe = make_geom_pipeline(spv_g_tri_vert,spv_g_tri_vert_len,spv_g_painter_tri_frag,spv_g_painter_tri_frag_len,
+                                     sizeof(TriVtx),tri_attr,5,0,true,1,false,SDL_GPU_COMPAREOP_ALWAYS);
   s_painter_composite_pipe = make_painter_composite_pipeline();
   s_decode_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert, spv_g_fsq_vert_len,
                                                       spv_g_decode_frag, spv_g_decode_frag_len,
@@ -1060,7 +1067,7 @@ static void render_pass_set(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* colorTgt,
 // True when this frame's geometry batch received nothing — the same accounting render_geom does for
 // its `total`, hoisted so the present path can decide whether there is anything new to composite.
 static bool geom_batch_empty(GpuVkState& g) {
-  int total = g.s_tri_n + g.s_tex_n + g.s_painter_tex_n;
+  int total = g.s_tri_n + g.s_tex_n + g.s_painter_tex_n + g.s_painter_tri_n;
   for (int m = 0; m < NUM_BLEND_MODES; m++) total += g.s_semi_n[m];
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
     total += g.s_tri2d_n[band] + g.s_tex2d_n[band];
@@ -1078,7 +1085,7 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
     for (int m = 0; m < NUM_BLEND_MODES; m++) semi2d_total[band] += g.s_semi2d_n[band][m];
   *dtri = g.s_tri_n; *dtex = g.s_tex_n; *dsemi = semi_total;   // 3D-world-only counts, as before the split
   const bool has3d = (g.s_tri_n + g.s_tex_n + semi_total) > 0;
-  int total = g.s_tri_n + g.s_tex_n + g.s_painter_tex_n + semi_total;
+  int total = g.s_tri_n + g.s_tex_n + g.s_painter_tex_n + g.s_painter_tri_n + semi_total;
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++)
     total += g.s_tri2d_n[band] + g.s_tex2d_n[band] + semi2d_total[band];
   g.s_present_ires = 0;   // default: present from native s_vram_tex; the unified path below raises it to `scale`
@@ -1120,6 +1127,7 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
   if (g.s_tri_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tri_xfer, true);  memcpy(p, g.s_tri_buf,  (size_t)g.s_tri_n*sizeof(TriVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tri_xfer); }
   if (g.s_tex_n)  { void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_tex_xfer, true);  memcpy(p, g.s_tex_buf,  (size_t)g.s_tex_n*sizeof(TexVtx));  SDL_UnmapGPUTransferBuffer(s_dev, g.s_tex_xfer); }
   if (g.s_painter_tex_n) { void* p=SDL_MapGPUTransferBuffer(s_dev,g.s_painter_tex_xfer,true); memcpy(p,g.s_painter_tex_buf,(size_t)g.s_painter_tex_n*sizeof(TexVtx)); SDL_UnmapGPUTransferBuffer(s_dev,g.s_painter_tex_xfer); }
+  if (g.s_painter_tri_n) { void* p=SDL_MapGPUTransferBuffer(s_dev,g.s_painter_tri_xfer,true); memcpy(p,g.s_painter_tri_buf,(size_t)g.s_painter_tri_n*sizeof(TriVtx)); SDL_UnmapGPUTransferBuffer(s_dev,g.s_painter_tri_xfer); }
   for (int m = 0; m < NUM_BLEND_MODES; m++) if (g.s_semi_n[m]) {
     void* p = SDL_MapGPUTransferBuffer(s_dev, g.s_semi_xfer[m], true);
     memcpy(p, g.s_semi_buf[m], (size_t)g.s_semi_n[m]*sizeof(TexVtx));
@@ -1145,6 +1153,7 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
   upv(g.s_tri_xfer, g.s_tri_vbuf, g.s_tri_n, sizeof(TriVtx));
   upv(g.s_tex_xfer, g.s_tex_vbuf, g.s_tex_n, sizeof(TexVtx));
   upv(g.s_painter_tex_xfer,g.s_painter_tex_vbuf,g.s_painter_tex_n,sizeof(TexVtx));
+  upv(g.s_painter_tri_xfer,g.s_painter_tri_vbuf,g.s_painter_tri_n,sizeof(TriVtx));
   for (int m = 0; m < NUM_BLEND_MODES; m++) upv(g.s_semi_xfer[m], g.s_semi_vbuf[m], g.s_semi_n[m], sizeof(TexVtx));
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
     upv(g.s_tri2d_xfer[band], g.s_tri2d_vbuf[band], g.s_tri2d_n[band], sizeof(TriVtx));
@@ -1195,17 +1204,30 @@ static void render_geom(GpuVkState& g, SDL_GPUCommandBuffer* cmd, const uint16_t
     SDL_GPUDepthStencilTargetInfo pdt={}; pdt.texture=g.s_painter_depth; pdt.clear_depth=0.f; pdt.load_op=SDL_GPU_LOADOP_CLEAR; pdt.store_op=SDL_GPU_STOREOP_STORE;
     pdt.stencil_load_op=SDL_GPU_LOADOP_DONT_CARE; pdt.stencil_store_op=SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* pr=SDL_BeginGPURenderPass(cmd,&pct,1,&pdt); SDL_SetGPUViewport(pr,&vp); SDL_SetGPUScissor(pr,&sc3d);
-    SDL_GPUBufferBinding pb={g.s_painter_tex_vbuf,(Uint32)(g.s_painter_first[r]*sizeof(TexVtx))};
-    SDL_GPUTextureSamplerBinding snap={g.s_vram_snap,s_samp_nearest}; SDL_BindGPUGraphicsPipeline(pr,s_painter_tex_pipe);
-    SDL_BindGPUVertexBuffers(pr,0,&pb,1); SDL_BindGPUFragmentSamplers(pr,0,&snap,1);
-    int32_t scale_pc=scale; SDL_PushGPUFragmentUniformData(cmd,0,&scale_pc,sizeof scale_pc);
-    SDL_DrawGPUPrimitives(pr,g.s_painter_count[r],1,0,0); SDL_EndGPURenderPass(pr);
+    SDL_GPUTextureSamplerBinding snap={g.s_vram_snap,s_samp_nearest};
+    for (int ci=g.s_painter_first[r]; ci<g.s_painter_first[r]+g.s_painter_count[r]; ++ci) {
+      const bool textured=g.s_painter_cmd_material[ci]!=0;
+      SDL_GPUBufferBinding pb={textured?g.s_painter_tex_vbuf:g.s_painter_tri_vbuf,
+        (Uint32)(g.s_painter_cmd_first[ci]*(textured?sizeof(TexVtx):sizeof(TriVtx)))};
+      SDL_BindGPUGraphicsPipeline(pr,textured?s_painter_tex_pipe:s_painter_tri_pipe);
+      SDL_BindGPUVertexBuffers(pr,0,&pb,1);
+      if(textured) SDL_BindGPUFragmentSamplers(pr,0,&snap,1);
+      int32_t scale_pc=scale; SDL_PushGPUFragmentUniformData(cmd,0,&scale_pc,sizeof scale_pc);
+      SDL_DrawGPUPrimitives(pr,g.s_painter_cmd_count[ci],1,0,0);
+    }
+    SDL_EndGPURenderPass(pr);
 
     if (s_painter_test_local_depth) {
       SDL_GPUCopyPass* dcp=SDL_BeginGPUCopyPass(cmd);
       SDL_GPUTextureRegion ds={}; ds.texture=g.s_painter_depth; ds.w=(Uint32)cw; ds.h=(Uint32)ch; ds.d=1;
       SDL_GPUTextureTransferInfo dd={}; dd.transfer_buffer=s_painter_test_local_depth; dd.pixels_per_row=(Uint32)cw; dd.rows_per_layer=(Uint32)ch;
       SDL_DownloadFromGPUTexture(dcp,&ds,&dd); SDL_EndGPUCopyPass(dcp);
+    }
+    if (s_painter_test_local_color) {
+      SDL_GPUCopyPass* ccp=SDL_BeginGPUCopyPass(cmd);
+      SDL_GPUTextureRegion cs={}; cs.texture=g.s_painter_color; cs.w=(Uint32)cw; cs.h=(Uint32)ch; cs.d=1;
+      SDL_GPUTextureTransferInfo cd={}; cd.transfer_buffer=s_painter_test_local_color; cd.pixels_per_row=(Uint32)cw; cd.rows_per_layer=(Uint32)ch;
+      SDL_DownloadFromGPUTexture(ccp,&cs,&cd); SDL_EndGPUCopyPass(ccp);
     }
 
     SDL_GPUColorTargetInfo cct={}; cct.texture=C; cct.load_op=SDL_GPU_LOADOP_LOAD; cct.store_op=SDL_GPU_STOREOP_STORE;
@@ -1950,7 +1972,7 @@ void GpuVkState::frame_end(const uint16_t* svram, int frame) { (void)svram; (voi
     if (--s_preseq_left == 0) lucent::info("preseq", "done: {} frames -> {}", s_preseq_idx, s_preseq_dir);
   }
   s_tri_n = s_tex_n = 0;
-  s_painter_tex_n = s_painter_ranges = s_painter_active = s_painter_overflow = 0;
+  s_painter_tex_n = s_painter_tri_n = s_painter_cmd_n = s_painter_ranges = s_painter_active = s_painter_overflow = 0;
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_n[m] = 0;
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
     s_tri2d_n[band] = s_tex2d_n[band] = 0;
@@ -1967,6 +1989,7 @@ static inline void ggs_alloc_batches(GpuVkState& g) {
   if (!g.s_tri_buf)  g.s_tri_buf  = (TriVtx*)malloc(sizeof(TriVtx) * TRI_CAP);
   if (!g.s_tex_buf)  g.s_tex_buf  = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
   if (!g.s_painter_tex_buf) g.s_painter_tex_buf = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
+  if (!g.s_painter_tri_buf) g.s_painter_tri_buf = (TriVtx*)malloc(sizeof(TriVtx) * TRI_CAP);
   for (int m = 0; m < NUM_BLEND_MODES; m++)
     if (!g.s_semi_buf[m]) g.s_semi_buf[m] = (TexVtx*)malloc(sizeof(TexVtx) * TEX_CAP);
   for (int band = 0; band < GGS_NUM_2D_BANDS; band++) {
@@ -1982,20 +2005,20 @@ bool GpuVkState::painter_begin(uint32_t object) {
   if (!object || s_painter_active || s_painter_ranges >= 256) return false;
   s_painter_active = 1;
   s_painter_object[s_painter_ranges] = object;
-  s_painter_first[s_painter_ranges] = s_painter_tex_n;
+  s_painter_first[s_painter_ranges] = s_painter_cmd_n;
   return true;
 }
 
 bool GpuVkState::painter_end() {
   if (!s_painter_active) return false;
-  s_painter_count[s_painter_ranges] = s_painter_tex_n - s_painter_first[s_painter_ranges];
+  s_painter_count[s_painter_ranges] = s_painter_cmd_n - s_painter_first[s_painter_ranges];
   s_painter_active = 0;
   ++s_painter_ranges;
   return !s_painter_overflow && s_painter_count[s_painter_ranges - 1] > 0;
 }
 void GpuVkState::painter_staging_stats(int* ordinary, int* painter, int* ranges) const {
   if (ordinary) *ordinary = s_tex_n;
-  if (painter) *painter = s_painter_tex_n;
+  if (painter) *painter = s_painter_tex_n + s_painter_tri_n;
   if (ranges) *ranges = s_painter_ranges;
 }
 
@@ -2009,9 +2032,39 @@ void GpuVkState::painter_staging_stats(int* ordinary, int* painter, int* ranges)
 static inline bool ggs_is_3d(const GpuVkState& g) { return g.s_vd != nullptr; }
 static inline int  ggs_2d_band(const GpuVkState& g) { return g.s_cur_ord <= NATIVE_3D_MIN ? GGS_2D_BG : GGS_2D_FG; }
 
+static bool painter_command(GpuVkState& g, int material, int first, int count) {
+  if (!g.s_painter_active || count <= 0) return false;
+  // Never coalesce across an object boundary: each object clears and composites the reusable target.
+  if (g.s_painter_cmd_n > g.s_painter_first[g.s_painter_ranges]) {
+    const int i=g.s_painter_cmd_n-1;
+    if (g.s_painter_cmd_material[i]==material &&
+        g.s_painter_cmd_gouraud[i]==g.s_painter_item_gouraud &&
+        g.s_painter_cmd_dither[i]==g.s_painter_item_dither &&
+        g.s_painter_cmd_first[i]+g.s_painter_cmd_count[i]==first) {
+      g.s_painter_cmd_count[i]+=count; return true;
+    }
+  }
+  if (g.s_painter_cmd_n >= 16384) { g.s_painter_overflow=1; return false; }
+  const int i=g.s_painter_cmd_n++;
+  g.s_painter_cmd_material[i]=(uint8_t)material;
+  g.s_painter_cmd_gouraud[i]=(uint8_t)g.s_painter_item_gouraud;
+  g.s_painter_cmd_dither[i]=(uint8_t)g.s_painter_item_dither;
+  g.s_painter_cmd_first[i]=first; g.s_painter_cmd_count[i]=count;
+  return true;
+}
+
 void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
                           int x2,int y2,int r2,int g2,int b2) {
   ggs_alloc_batches(*this);
+  if (s_painter_active) {
+    if (s_painter_tri_n + 3 > TRI_CAP || !painter_command(*this,0,s_painter_tri_n,3)) { s_painter_overflow=1; return; }
+    TriVtx* v=((TriVtx*)s_painter_tri_buf)+s_painter_tri_n;
+    const float gf=(float)s_painter_item_gouraud, df=(float)s_painter_item_dither;
+    v[0]={(float)x0,(float)y0,r0/255.f,g0/255.f,b0/255.f,ord3d_b(s_vd[0],s_depth_bias),gf,df};
+    v[1]={(float)x1,(float)y1,r1/255.f,g1/255.f,b1/255.f,ord3d_b(s_vd[1],s_depth_bias),gf,df};
+    v[2]={(float)x2,(float)y2,r2/255.f,g2/255.f,b2/255.f,ord3d_b(s_vd[2],s_depth_bias),gf,df};
+    s_painter_tri_n+=3; return;
+  }
   // bug #55: route 2D (non-world) flat tris into the native-resolution 2D bands instead of the 3D-world
   // batch — see ggs_is_3d/ggs_2d_band above and render_geom's band split below.
   if (!ggs_is_3d(*this)) {
@@ -2057,6 +2110,7 @@ void GpuVkState::draw_tritri(const int* xs, const int* ys, const int* us, const 
   ggs_alloc_batches(*this);
   if (s_painter_active) {
     if (s_painter_tex_n + 3 > TEX_CAP) { s_painter_overflow = 1; return; }
+    if (!painter_command(*this,1,s_painter_tex_n,3)) { s_painter_overflow=1; return; }
     tex_emit(((TexVtx*)s_painter_tex_buf) + s_painter_tex_n, xs, ys, us, vs, rs, gs, bs,
              tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,0,0);
     s_painter_tex_n += 3;
@@ -2172,7 +2226,7 @@ void GpuVkState::tritest() {
   // face is farther and must nevertheless win locally, exporting that FAR depth. An ordinary world
   // face behind it loses on the left, while one in front wins on the right. Read back BOTH RG8 and D32.
   if (cfg_on("PSXPORT_PAINTER_GPU_SELFTEST")) {
-    frame_end(nullptr,0); ensure_targets(); game->mods.ires=1;
+    frame_end(nullptr,0); ensure_targets(); game->mods.ires=2;
     auto tri=[&](bool painter,int x0,int x1,float z,uint32_t seq,int vrow,int color){
       int x[3]={x0,x1,(x0+x1)/2}, y[3]={20,20,180}, u[3]={0,0,0}, v[3]={vrow,vrow,vrow};
       unsigned char c[3]={(unsigned char)(color?255:128),(unsigned char)(color?255:128),(unsigned char)(color?255:128)};
@@ -2180,16 +2234,28 @@ void GpuVkState::tritest() {
       if(painter) draw_tritri(x,y,u,v,c,c,c,0,0,2,1,0,0,0,0,0,0,0,0,1023,511);
       else draw_tri(x[0],y[0],color?0:0,color?255:255,0,x[1],y[1],0,255,0,x[2],y[2],0,255,0);
     };
+    auto utri=[&](int x0,int x1,float z,uint32_t seq,int r,int g,int b,bool gouraud,bool dither){
+      float d[3]={z,z,z}; set_order(seq); set_vd(d);
+      s_painter_item_gouraud=gouraud; s_painter_item_dither=dither;
+      draw_tri(x0,20,r,g,b,x1,20,r,g,b,(x0+x1)/2,180,r,g,b);
+    };
     lucent::info("gpu_selftest","painter ord inputs ordinary-left={:.9f} painter-near={:.9f} painter-far={:.9f} ordinary-right={:.9f}",ord3d_b(.20f,0),ord3d_b(.80f,gpu_zbias_unit()),ord3d_b(.30f,2*gpu_zbias_unit()),ord3d_b(.70f,3*gpu_zbias_unit()));
     tri(false,20,150,.20f,0,0,1); tri(false,170,310,.70f,3,0,1);
     if(!painter_begin(77)){ lucent::error("gpu_selftest","painter begin failed"); ok=0; }
-    tri(true,20,310,.80f,1,0,0); tri(true,20,310,.30f,2,300,0);
+    tri(true,20,310,.80f,1,0,0); utri(20,310,.30f,2,0,0,255,true,true);
     for(int x=0;x<VRAM_W;x++) pat[350*VRAM_W+x]=0;
     tri(true,20,310,.95f,4,350,0); // transparent later texel must not replace far blue winner
+    // Non-overlapping flat face: dither flag is deliberately set but F3/flat must not dither.
+    utri(2,18,.40f,5,129,0,0,false,true);
+    // Unsaturated G3 at known native matrix cells: x=300,y=60 is -4, x=303,y=60 is +1.
+    // At 2x, adjacent physical pixels within each native cell must match.
+    utri(288,318,.40f,6,127,127,127,true,true);
     if(!painter_end()){ lucent::error("gpu_selftest","painter end failed"); ok=0; }
-    SDL_GPUTransferBufferCreateInfo bdi={}; bdi.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; bdi.size=VRAM_W*VRAM_H*4;
+    SDL_GPUTransferBufferCreateInfo bdi={}; bdi.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; bdi.size=VRAM_W*2*VRAM_H*2*4;
     s_painter_test_local_depth=SDL_CreateGPUTransferBuffer(s_dev,&bdi); GPUCHK(s_painter_test_local_depth,"painter local depth boundary");
     s_painter_test_main_depth=SDL_CreateGPUTransferBuffer(s_dev,&bdi); GPUCHK(s_painter_test_main_depth,"painter main depth boundary");
+    SDL_GPUTransferBufferCreateInfo cbi=bdi; cbi.size=VRAM_W*2*VRAM_H*2*2;
+    s_painter_test_local_color=SDL_CreateGPUTransferBuffer(s_dev,&cbi); GPUCHK(s_painter_test_local_color,"painter local color boundary");
     SDL_GPUCommandBuffer* pcmd=SDL_AcquireGPUCommandBuffer(s_dev); upload_vram(*this,pcmd,pat,kWholeVram,1);
     int qa,qb,qc; render_geom(*this,pcmd,pat,0,0,320,240,&qa,&qb,&qc,true);
     SDL_GPUTransferBufferCreateInfo ddi={}; ddi.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD; ddi.size=VRAM_W*VRAM_H*4;
@@ -2203,18 +2269,32 @@ void GpuVkState::tritest() {
     const float* dpix=(const float*)SDL_MapGPUTransferBuffer(s_dev,ddl,false);
     const float* ldpix=(const float*)SDL_MapGPUTransferBuffer(s_dev,s_painter_test_local_depth,false);
     const float* mdpix=(const float*)SDL_MapGPUTransferBuffer(s_dev,s_painter_test_main_depth,false);
-    int li=60*VRAM_W+70, ri=60*VRAM_W+240; uint16_t lc=cpix[li], rc=cpix[ri]; float ld=dpix[li], rd=dpix[ri];
-    lucent::info("gpu_selftest","painter D32 boundaries local-left={:.9f} local-right={:.9f} post-composite-left={:.9f} post-composite-right={:.9f} end-left={:.9f} end-right={:.9f}",ldpix[li],ldpix[ri],mdpix[li],mdpix[ri],ld,rd);
+    const uint16_t* lcpix=(const uint16_t*)SDL_MapGPUTransferBuffer(s_dev,s_painter_test_local_color,false);
+    int li=60*VRAM_W+70, ri=60*VRAM_W+240, fi=60*VRAM_W+10; uint16_t lc=cpix[li], rc=cpix[ri], fc=cpix[fi]; float ld=dpix[li], rd=dpix[ri];
+    const int sw=VRAM_W*2, lsi=(60*2)*sw+70*2, rsi=(60*2)*sw+240*2;
+    lucent::info("gpu_selftest","painter D32 boundaries local-left={:.9f} local-right={:.9f} post-composite-left={:.9f} post-composite-right={:.9f} end-left={:.9f} end-right={:.9f}",ldpix[lsi],ldpix[rsi],mdpix[lsi],mdpix[rsi],ld,rd);
     // The 2D-foreground band following world composition intentionally starts by clearing the shared
     // depth attachment, so end-of-render D32 is not a valid witness. Assert the boundary snapshot taken
     // immediately after composite; the color target remains valid through the foreground pass.
-    const float postl=mdpix[li], postr=mdpix[ri];
-    bool pok=((lc>>10)&31)>20 && ((rc>>5)&31)>20 && postl>.31f && postl<.34f && postr>.67f;
+    const float postl=mdpix[lsi], postr=mdpix[rsi];
+    const int n0=(60*2)*sw+300*2, n1=n0+1, p0=(60*2)*sw+303*2, p1=p0+1;
+    const uint16_t neg0=lcpix[n0], neg1=lcpix[n1], pos0=lcpix[p0], pos1=lcpix[p1];
+    const bool dither_ok=neg0==0x3DEF && neg1==neg0 && pos0==0x4210 && pos1==pos0;
+    // 129/255 rounds to 16 in the non-dither F3 path. The G3 winner is blue and traversed the dither
+    // shader; its exact matrix-cell proof is covered by the shader readback additions below.
+    bool pok=((lc>>10)&31)>20 && ((rc>>5)&31)>20 && (fc&31)==16 && postl>.31f && postl<.34f && postr>.67f;
     lucent::info("gpu_selftest","painter color+post-composite-D32 left={:04X}/{:.6f} far-winner right={:04X}/{:.6f} front-world; end-D32-cleared={:.6f}/{:.6f} => {}",lc,postl,rc,postr,ld,rd,pok?"PASS":"FAIL"); ok &= pok;
+    lucent::info("gpu_selftest","painter mixed stream commands={} materials={}/{}/{}/{}/{} F3-dither-off={:04X} => {}",
+      s_painter_cmd_n,s_painter_cmd_material[0],s_painter_cmd_material[1],s_painter_cmd_material[2],s_painter_cmd_material[3],s_painter_cmd_material[4],fc,
+      (s_painter_cmd_n==5 && s_painter_cmd_material[0]==1 && s_painter_cmd_material[1]==0 && s_painter_cmd_material[2]==1 && s_painter_cmd_material[3]==0 && s_painter_cmd_material[4]==0 && (fc&31)==16)?"PASS":"FAIL");
+    ok &= s_painter_cmd_n==5 && s_painter_cmd_material[0]==1 && s_painter_cmd_material[1]==0 && s_painter_cmd_material[2]==1 && s_painter_cmd_material[3]==0 && s_painter_cmd_material[4]==0;
+    lucent::info("gpu_selftest","painter G3 dither scale2 neg={:04X}/{:04X} expect 3DEF pos={:04X}/{:04X} expect 4210 => {}",neg0,neg1,pos0,pos1,dither_ok?"PASS":"FAIL"); ok &= dither_ok;
     SDL_UnmapGPUTransferBuffer(s_dev,s_rb_xfer); SDL_UnmapGPUTransferBuffer(s_dev,ddl);
     SDL_UnmapGPUTransferBuffer(s_dev,s_painter_test_local_depth); SDL_UnmapGPUTransferBuffer(s_dev,s_painter_test_main_depth);
+    SDL_UnmapGPUTransferBuffer(s_dev,s_painter_test_local_color);
     SDL_ReleaseGPUTransferBuffer(s_dev,ddl); SDL_ReleaseGPUTransferBuffer(s_dev,s_painter_test_local_depth); SDL_ReleaseGPUTransferBuffer(s_dev,s_painter_test_main_depth);
-    s_painter_test_local_depth=nullptr; s_painter_test_main_depth=nullptr;
+    SDL_ReleaseGPUTransferBuffer(s_dev,s_painter_test_local_color);
+    s_painter_test_local_depth=nullptr; s_painter_test_main_depth=nullptr; s_painter_test_local_color=nullptr;
     SDL_GPUTexture* old=s_painter_color; ensure_painter_targets(64,64); bool resize1=s_painter_w==64&&s_painter_h==64; ensure_painter_targets(96,48);
     bool resize2=s_painter_w==96&&s_painter_h==48&&s_painter_color!=nullptr; (void)old; ok &= resize1&&resize2;
     lucent::info("gpu_selftest","painter resize 64x64 -> 96x48 => {}",resize1&&resize2?"PASS":"FAIL");
@@ -2323,6 +2403,7 @@ void gpu_vk_set_vd(Core* core, const float* d3) { core->game->gpu_vk.set_vd(d3);
 void gpu_vk_set_vd_n(Core* core, const float* d3) { core->game->gpu_vk.set_vd_n(d3); }
 void gpu_vk_set_xyf(Core* core, const float* xf, const float* yf) { core->game->gpu_vk.set_xyf(xf, yf); }
 void gpu_vk_set_order_override(Core* core,uint32_t seq){ core->game->gpu_vk.s_order_override=seq; }
+void gpu_vk_set_painter_material(Core* core,int gouraud,int dither){core->game->gpu_vk.s_painter_item_gouraud=gouraud;core->game->gpu_vk.s_painter_item_dither=dither;}
 void gpu_vk_set_order(Core* core, unsigned idx) { core->game->gpu_vk.set_order(idx); }
 void gpu_vk_set_order_2d(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d(idx); }
 void gpu_vk_set_order_2d_n(Core* core, unsigned idx) { core->game->gpu_vk.set_order_2d_n(idx); }

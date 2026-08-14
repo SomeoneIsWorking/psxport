@@ -231,6 +231,7 @@ RqItem* RenderQueue::push() {
   it->seq = seq++;
   it->painter_object = mPainterObject;
   it->painter_flags = mPainterFlags;
+  it->dither = (mPainterFlags & PAINTER_OBJECT_DITHER) ? 1 : 0;
   return it;
 }
 
@@ -259,12 +260,9 @@ PainterObjectPlan RenderQueue::buildPainterObjectPlan(PainterObjectLimits limits
     if (!it.painter_object) { plan.ordinary_items.push_back((size_t)i); continue; }
     if (++out.grouped_faces > limits.max_faces) return refuse(PainterObjectRefusal::TooManyFaces, i);
     if (it.semi) return refuse(PainterObjectRefusal::SemiTransparent, i);
-    if (it.painter_flags & PAINTER_OBJECT_DITHER) return refuse(PainterObjectRefusal::Dithered, i);
     if (it.layer != RQ_WORLD) return refuse(PainterObjectRefusal::NonWorld, i);
     if (it.order_mode != RQ_OM_DEPTH) return refuse(PainterObjectRefusal::NonDepth, i);
-    // GPU Phase 1 has one root-correct ordered pipeline: textured opaque faces. Flat/untextured faces
-    // cannot fall through the ordinary material bucket because that would destroy cross-material order.
-    if (it.mode == 3) return refuse(PainterObjectRefusal::UnsupportedMaterial, i);
+    if (it.mode < 0 || it.mode > 3) return refuse(PainterObjectRefusal::UnsupportedMaterial, i);
   }
   if (!out.grouped_faces) return refuse(PainterObjectRefusal::Empty);
 
@@ -286,7 +284,8 @@ PainterObjectPlan RenderQueue::buildPainterObjectPlan(PainterObjectLimits limits
     std::stable_sort(members.begin(), members.end(), [&](size_t a, size_t b) { return items[a].seq < items[b].seq; });
     for (size_t i : members) {
       const RqItem& it = items[i];
-      plan.commands.push_back({i, id, it.seq, it.mode == 3 ? PainterMaterial::Untextured : PainterMaterial::Textured});
+      plan.commands.push_back({i,id,it.seq,it.mode==3?PainterMaterial::Untextured:PainterMaterial::Textured,
+                               it.shade_gouraud!=0,it.dither!=0});
     }
     range.command_count = members.size(); plan.objects.push_back(range);
   }
@@ -636,6 +635,7 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
   // cannot leak an override into the next item. Regrouped painter emission therefore keeps exact-depth
   // ties in original global order, while the ordinary path's counter/accounting remains unchanged.
   if(mPainterRegrouping) gpu_vk_set_order_override(core,it->seq);
+  gpu_vk_set_painter_material(core,it->shade_gouraud,it->dither);
   gpu_vk_set_order(core, ord);
   // Depth: 3D world prims carry real per-vertex view-Z (set_vd); 2D prims select the renderer's far/near
   // screen-space band (preserving the existing 2D depth semantics — only the ORDER is now engine-decided).
@@ -664,11 +664,13 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend); }
   } else {
     RQ_SETVD(depth); RQ_SETXYF(0);
-    gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
+    if(mode==3) gpu_vk_draw_tri(core,xs[0],ys[0],rs[0],gs[0],bs[0],xs[1],ys[1],rs[1],gs[1],bs[1],xs[2],ys[2],rs[2],gs[2],bs[2]);
+    else gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
                        it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
     if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
-      gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
+      if(mode==3) gpu_vk_draw_tri(core,xs[1],ys[1],rs[1],gs[1],bs[1],xs[2],ys[2],rs[2],gs[2],bs[2],xs[3],ys[3],rs[3],gs[3],bs[3]);
+      else gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
                          it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                          it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1); }
   }
@@ -718,7 +720,8 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
                               const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                               const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                               int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
-                              int tp_blend, const float (*sv)[3], int sort_key, float key_ord) {
+                              int tp_blend, const float (*sv)[3], int sort_key, float key_ord,
+                              int shade_gouraud, int dither) {
   // ---- graphics-producer DB, NATIVE leg (docs/plans/graphics-producer-db.md stage 3) -------------
   // THE one chokepoint: drawWorldQuad and push2dQuad both funnel here, so counting once here covers
   // every native push and cannot double-count. An open ProducerScope names the producer; with none
@@ -820,6 +823,8 @@ void RenderQueue::emitOrQueue(Core* core, int capture, int layer, int order_mode
   it.order_mode = (uint8_t)order_mode;
   it.painter_object = mPainterObject;
   it.painter_flags = mPainterFlags;
+  it.shade_gouraud = shade_gouraud ? 1 : 0;
+  it.dither = (dither || (mPainterFlags & PAINTER_OBJECT_DITHER)) ? 1 : 0;
   // objid overlay: stamp the entity node the native render walk is currently rendering (submit.cpp).
   // Every world prim an object emits gets its node, so the overlay labels ALL rendered objects. Terrain/
   // static/background prims render with no per-object scope (mDbgRenderNode==0) → correctly unlabeled.

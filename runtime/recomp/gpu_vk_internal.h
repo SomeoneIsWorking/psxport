@@ -184,14 +184,25 @@ struct GpuVkState {
   // separate from s_tex_buf so selected faces can never leak into the ordinary depth-tested batch.
   void* s_painter_tex_buf = nullptr;
   int s_painter_tex_n = 0;
+  void* s_painter_tri_buf = nullptr;
+  int s_painter_tri_n = 0;
   int s_painter_active = 0;
+  int s_painter_item_gouraud = 0, s_painter_item_dither = 0;
   uint32_t s_painter_object[256] = {};
   int s_painter_first[256] = {};
   int s_painter_count[256] = {};
+  uint8_t s_painter_cmd_material[16384] = {};
+  uint8_t s_painter_cmd_gouraud[16384] = {};
+  uint8_t s_painter_cmd_dither[16384] = {};
+  int s_painter_cmd_first[16384] = {};
+  int s_painter_cmd_count[16384] = {};
+  int s_painter_cmd_n = 0;
   int s_painter_ranges = 0;
   int s_painter_overflow = 0;
   SDL_GPUBuffer* s_painter_tex_vbuf = nullptr;
   SDL_GPUTransferBuffer* s_painter_tex_xfer = nullptr;
+  SDL_GPUBuffer* s_painter_tri_vbuf = nullptr;
+  SDL_GPUTransferBuffer* s_painter_tri_xfer = nullptr;
   SDL_GPUTexture* s_painter_color = nullptr;
   SDL_GPUTexture* s_painter_depth = nullptr;
   int s_painter_w = 0, s_painter_h = 0;

@@ -79,9 +79,11 @@ run-end report distinguishes satisfied, failed, and unexercised rather than warn
 **GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present),
 `render_queue.{h,cpp}` + `painter_object_layer.h` own the painter-object contract: selected opaque world
 faces are partitioned into a unified, sequence-stable command stream across material variants. `gpu_vk.cpp`
+retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state),
 replays each object with authored-order overwrite into reusable packed-color + real-D32 targets, then
 depth-composites the resolved surface into the world before semitransparency. The shipping GPU selftest
-reads both the local and post-composite D32 boundaries; semi-transparent/dithered groups still refuse.
+reads both the local and post-composite D32 boundaries. The untextured companion pipeline applies the PSX
+4x4 dither matrix in native-pixel coordinates only for Gouraud+DTD; semi-transparent groups still refuse.
 `wide_margin_plan.h` (renderer-only coverage for host-visible VRAM extension),
 `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`.
 **Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp but reads the live view matrix through

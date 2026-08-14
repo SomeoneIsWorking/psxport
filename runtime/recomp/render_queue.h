@@ -105,7 +105,9 @@ struct RqItem {
   uint8_t  nv;             // vertex count: 3 = triangle (one tri), 4 = quad (two tris)
   uint8_t  raw;            // raw texel (no color modulation)
   uint8_t  order_mode;     // RqOrderMode — how depth is applied at emit
-  uint8_t  painter_flags;  // PainterObjectFlags; Phase 1 explicitly refuses dither
+  uint8_t  painter_flags;  // legacy scope flags, mapped into explicit per-item state at capture
+  uint8_t  shade_gouraud;  // original G3/G4 shading opcode; cannot be inferred from equal RGB
+  uint8_t  dither;         // original draw-mode DTD bit, carried per item
   PainterObjectId painter_object; // 0 = ordinary path; non-zero = local authored-order object
   uint32_t seq;            // submission order — stable tiebreak within a layer
   int      xs[4], ys[4];   // screen verts (with draw offset, rounded) — 2D/HUD + fallback path
@@ -247,7 +249,8 @@ struct RenderQueue {
                    const float* depth, int mode, int tp_x, int tp_y, int clut_x, int clut_y,
                    int tw_mx, int tw_my, int tw_ox, int tw_oy, int da_x0, int da_y0, int da_x1, int da_y1,
                    int tp_blend, const float (*sv)[3] = nullptr,
-                   int sort_key = -1, float key_ord = 0.0f);
+                   int sort_key = -1, float key_ord = 0.0f,
+                   int shade_gouraud = 0, int dither = 0);
 
   // drawWorldQuad: PC-native world-quad draw — a quad already projected to FLOAT screen coords + real
   // per-vertex depth, teed as two triangles to the VK rasterizer through the queue. No GP0 packet, no

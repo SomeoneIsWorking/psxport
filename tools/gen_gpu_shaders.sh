@@ -38,6 +38,7 @@ PY
   emit image.frag   spv_g_image_frag
   emit tri.vert     spv_g_tri_vert      # Pass 2: native 3D raster (untextured opaque)
   emit tri.frag     spv_g_tri_frag
+  emit painter_tri.frag spv_g_painter_tri_frag # authored-order untextured opaque + exact PSX dither
   emit tritex.vert  spv_g_tritex_vert   # native 3D raster (textured, opaque + semi-source sampling)
   emit tritex.frag  spv_g_tritex_frag
   emit rml.vert     spv_g_rml_vert      # RmlUi 2D mod/debug overlay (textured + premult-alpha blend)
