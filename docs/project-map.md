@@ -103,7 +103,13 @@ PGXP/diagnostic callbacks. The vendor binding and FLAGS accumulator are thread-l
 differentially gates INTPL, NCDS, and DPCS against the ordinary bound path, verifies caller restoration,
 sequential state interleaving, and simultaneous two-thread TLS isolation, and includes a forced mismatch
 discriminator. Callback suppression and nested entry are implementation properties, not dynamically tested
-by that suite. `mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`
+by that suite. `native_projection.{h,cpp}` is the producer-facing pure endpoint projection seam: typed
+fixed affine, projection parameters, and model vertex in; exact integer IR/SZ/SXY plus pre-saturation raw
+view coordinates out. It has no Core/GTE/ambient state and is intentionally not a temporal recipe. The
+framework's legacy projection probe delegates to the same implementation through a private sf/lm adapter;
+`test_native_projection` differentially covers the producer mode plus the probe's sf=0/lm=1 modes against
+isolated vendor RTPS, including saturation and a forced-mismatch discriminator. `mdec_beetle.c` (mdec.c),
+`native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`
 (final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition).
 
 ## Tools — ONE LINE EACH, and what is wrong with this list

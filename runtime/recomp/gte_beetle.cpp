@@ -124,23 +124,11 @@ void gte_probe_dump(const char* tag) {
 // submission in a later step); here it is a read-only verifier. The integer half exactly mirrors
 // mednafen/psx/gte.c (MultiplyMatrixByVector_PT + Divide/UNR + TransformXY), so a 0-diff result proves
 // the reimplementation is faithful. Gated on PSXPORT_PROJPROBE (read-only, no effect on output).
-#include <compat/intrinsics.h>   // compat_clz_u16, matching Beetle's Divide() shift-bias
+#include "native_projection.h"
+#include "native_projection_internal.h"
 
 // ProjVtx typedef comes from projection.h (included via render.h above); dropped the local decl.
 
-// UNR division table — deterministic, generated at compile time (was a lazily-built mutable static).
-struct ProjDivTab { uint8_t t[0x101]; };
-static constexpr ProjDivTab proj_make_divtab() {           // mirrors GTE_Init's DivTable build
-  ProjDivTab d{};
-  for (uint32_t v = 0x8000; v < 0x10000; v += 0x80) {
-    uint32_t xa = 512;
-    for (int i = 1; i < 5; i++) xa = (xa * (1024 * 512 - ((v >> 7) * xa))) >> 18;
-    d.t[(v >> 7) & 0xFF] = (uint8_t)(((xa + 1) >> 1) - 0x101);
-  }
-  d.t[0x100] = d.t[0xFF];
-  return d;
-}
-static const ProjDivTab s_divtab = proj_make_divtab();
 // per-frame projection constants moved to `class ProjParams` on Render (per-Core, SBS-safe) —
 // reach via `c->rsub.projParams.projH()` etc. Callers below without a Core* in scope go through
 // `ProjParams::current()` — the currently-bound instance, set by `bind()` at native_step_frame.
@@ -148,82 +136,36 @@ static const ProjDivTab s_divtab = proj_make_divtab();
 // proj_pz_to_ord + the camview + projection-plane accessors moved to game/render/proj_params.cpp — see
 // the free-function bridges at the bottom of that file. They forward to ProjParams::current() (bound
 // per-frame by gte_bind), so callers with no Core* in scope keep working.
-static int32_t proj_recip(uint16_t divisor) {              // mirrors CalcRecip
-  int32_t x   = 0x101 + s_divtab.t[(((divisor & 0x7FFF) + 0x40) >> 7)];
-  int32_t t   = (((int32_t)divisor * -x) + 0x80) >> 8;
-  return ((x * (131072 + t)) + 0x80) >> 8;
-}
-static uint32_t proj_divide(uint32_t dividend, uint32_t divisor) {  // mirrors Divide (UNR)
-  if ((divisor * 2) > dividend) {
-    unsigned s = compat_clz_u16((uint16_t)divisor);
-    dividend <<= s; divisor <<= s;
-    uint32_t r = (uint32_t)(((uint64_t)dividend * proj_recip((uint16_t)(divisor | 0x8000)) + 32768) >> 16);
-    return r > 0x1FFFF ? 0x1FFFF : r;
-  }
-  return 0x1FFFF;                                          // Z <= H/2 -> clip
-}
-static inline int64_t proj_a_mv(int64_t v) {               // A_MV: 44-bit signed wrap (no flags here)
-  return (int64_t)((uint64_t)v << 20) >> 20;
-}
-static inline int32_t proj_clampi(int32_t v, int32_t lo, int32_t hi) {
-  return v < lo ? lo : (v > hi ? hi : v);
-}
-
 // Project an EXPLICIT model vertex V (int16 x/y/z) through the GTE's composed camera×object transform
 // (rotation CR0-4 + translation CR5-7 + screen offset/H CR24-26) to float screen coords + view-Z, with
 // NO gte_op — the full RTPT math in C. `insn` carries the sf/lm flags an RTPT would use (RTPT = 0x280030,
 // sf=1 lm=0). This is what a PC engine does: read the transform the engine built, transform vertices in
 // float. proj_native_vertex (below) is the same math reading V from the GTE DR regs (for PSXPORT_PROJPROBE).
 void proj_native_xform(int vx, int vy, int vz, ProjVtx* out) {
-  const uint32_t insn = 0x00280030u;                       // RTPT: sf=1 (bit19), lm=0
-  const uint32_t sf = (insn & (1 << 19)) ? 12 : 0;
-  const int      lm = (insn >> 10) & 1;
+  using namespace psxport::native_projection;
   const uint32_t c0 = gte_read_ctrl(0), c1 = gte_read_ctrl(1), c2 = gte_read_ctrl(2),
                  c3 = gte_read_ctrl(3), c4 = gte_read_ctrl(4);
-  const int32_t RT[3][3] = {
-    { (int16_t)c0,        (int16_t)(c0 >> 16), (int16_t)c1 },
-    { (int16_t)(c1 >> 16), (int16_t)c2,        (int16_t)(c2 >> 16) },
-    { (int16_t)c3,        (int16_t)(c3 >> 16), (int16_t)c4 } };
-  const int64_t TR[3] = { (int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7) };
-  const int32_t V[3] = { (int16_t)vx, (int16_t)vy, (int16_t)vz };
-  int32_t mac[3]; int64_t tmp2_unshifted = 0;
-  for (int i = 0; i < 3; i++) {
-    int64_t t = TR[i] << 12;
-    t = proj_a_mv(t + (int64_t)RT[i][0] * V[0]);
-    t = proj_a_mv(t + (int64_t)RT[i][1] * V[1]);
-    t = proj_a_mv(t + (int64_t)RT[i][2] * V[2]);
-    if (i == 2) tmp2_unshifted = t;
-    mac[i] = (int32_t)(t >> sf);
-  }
-  const int32_t lo_b = -32768 + (lm << 15);
-  out->ir1 = proj_clampi(mac[0], lo_b, 32767);
-  out->ir2 = proj_clampi(mac[1], lo_b, 32767);
-  out->ir3 = proj_clampi(mac[2], lo_b, 32767);
-  out->sz  = proj_clampi((int32_t)(tmp2_unshifted >> 12), 0, 65535);
-  out->vx  = (float)out->ir1; out->vy = (float)out->ir2; out->vz = (float)out->ir3;
-  // OFX/OFY/H come straight from the GTE control regs. Widescreen widens the projection center at the
-  // SOURCE (Engine::initDisplay writes CR24 = nw/2 when wide), so this native path — like the guest GTE
-  // and every other reader — sees the one wide center; no per-read adjustment needed here.
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
+  FixedAffine affine{};
+  affine.m = {{{(int16_t)c0, (int16_t)(c0 >> 16), (int16_t)c1},
+               {(int16_t)(c1 >> 16), (int16_t)c2, (int16_t)(c2 >> 16)},
+               {(int16_t)c3, (int16_t)(c3 >> 16), (int16_t)c4}}};
+  affine.t = {{(int32_t)gte_read_ctrl(5),
+               (int32_t)gte_read_ctrl(6),
+               (int32_t)gte_read_ctrl(7)}};
+  const NativeProjectedVertex p =
+      project(affine, {OFX, OFY, H}, {(int16_t)vx, (int16_t)vy, (int16_t)vz});
+  out->ir1 = p.ir[0]; out->ir2 = p.ir[1]; out->ir3 = p.ir[2];
+  out->sz = p.sz; out->sx = p.sx; out->sy = p.sy;
+  // Preserve the historical adapter contract: ProjVtx exposes saturated IR
+  // coordinates. Producers that need the pre-saturation endpoint use the pure
+  // native_projection result directly.
+  out->vx = (float)p.ir[0]; out->vy = (float)p.ir[1]; out->vz = (float)p.ir[2];
+  out->px = p.px; out->py = p.py; out->pz = p.pz;
   if (auto* pp = ProjParams::current()) pp->setProjH(H);
-  int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);
-  out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);
-  out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
-  // Use the SUB-INTEGER view-Z: out->sz drops the 12 fractional bits (>>12), so near-coplanar faces
-  // collide on the same integer SZ -> identical depth -> z-fight flicker (#5 barrel). tmp2_unshifted is
-  // the same view-Z with its 12-bit fraction intact; out->sz (integer) is untouched so the GP0 packet
-  // and the UNR screen projection stay byte-faithful — only the float depth WE own gets finer.
-  float pzf = (float)tmp2_unshifted / 4096.0f;
-  float pz = (float)H * 0.5f; if (pzf > pz) pz = pzf;
-  float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
   if (auto* pp = ProjParams::current()) pp->setProjCenter(fofx, fofy);
-  out->px = fofx + (float)out->ir1 * ph;
-  out->py = fofy + (float)out->ir2 * ph;
-  if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
-  if (out->py < -1024.f) out->py = -1024.f; if (out->py > 1023.f) out->py = 1023.f;
-  out->pz = pz;
 }
 
 // Object-CENTER depth from the LIVE composed camera×object transform in the GTE control regs (CR0-7).
@@ -245,57 +187,29 @@ float proj_obj_center_ord(void) { ProjVtx p; proj_native_xform(0, 0, 0, &p); ret
 // Recompute one vertex's projection from a snapshot of the GTE control/data regs (read post-instruction;
 // neither matrix CR0-7 nor the input V regs DR0-5 are touched by RTP, so reading after is exact).
 static void proj_native_vertex(unsigned vidx, uint32_t insn, ProjVtx* out) {
-  const uint32_t sf = (insn & (1 << 19)) ? 12 : 0;
-  const int      lm = (insn >> 10) & 1;
-  // rotation matrix RT (CR0-4) and translation TR (CR5-7), exactly as MultiplyMatrixByVector_PT packs.
+  using namespace psxport::native_projection;
   const uint32_t c0 = gte_read_ctrl(0), c1 = gte_read_ctrl(1), c2 = gte_read_ctrl(2),
                  c3 = gte_read_ctrl(3), c4 = gte_read_ctrl(4);
-  const int32_t RT[3][3] = {
-    { (int16_t)c0,        (int16_t)(c0 >> 16), (int16_t)c1 },
-    { (int16_t)(c1 >> 16), (int16_t)c2,        (int16_t)(c2 >> 16) },
-    { (int16_t)c3,        (int16_t)(c3 >> 16), (int16_t)c4 } };
-  const int64_t TR[3] = { (int32_t)gte_read_ctrl(5), (int32_t)gte_read_ctrl(6), (int32_t)gte_read_ctrl(7) };
-  // input vertex V[vidx] from data regs (Vectors macro): DR[2v]=lo:VX hi:VY, DR[2v+1] lo:VZ
   const uint32_t dlo = gte_read_data(2 * vidx), dhi = gte_read_data(2 * vidx + 1);
-  const int32_t  V[3] = { (int16_t)dlo, (int16_t)(dlo >> 16), (int16_t)dhi };
-
-  int32_t mac[3]; int64_t tmp2_unshifted = 0;
-  for (int i = 0; i < 3; i++) {
-    int64_t t = TR[i] << 12;
-    t = proj_a_mv(t + (int64_t)RT[i][0] * V[0]);
-    t = proj_a_mv(t + (int64_t)RT[i][1] * V[1]);
-    t = proj_a_mv(t + (int64_t)RT[i][2] * V[2]);
-    if (i == 2) tmp2_unshifted = t;                        // for IR3 PTZ / SZ (uses tmp>>12)
-    mac[i] = (int32_t)(t >> sf);
-  }
-  const int32_t lo_b = -32768 + (lm << 15);
-  out->ir1 = proj_clampi(mac[0], lo_b, 32767);             // Lm_B
-  out->ir2 = proj_clampi(mac[1], lo_b, 32767);
-  out->ir3 = proj_clampi(mac[2], lo_b, 32767);             // Lm_B_PTZ (clamp identical; ftv only flags)
-  out->sz  = proj_clampi((int32_t)(tmp2_unshifted >> 12), 0, 65535);  // Lm_D unchained
-  out->vx  = (float)out->ir1; out->vy = (float)out->ir2; out->vz = (float)out->ir3;  // view-space (IR)
-
   const int32_t OFX = (int32_t)gte_read_ctrl(24), OFY = (int32_t)gte_read_ctrl(25);
   const uint16_t H = (uint16_t)gte_read_ctrl(26);
+  FixedAffine affine{};
+  affine.m = {{{(int16_t)c0, (int16_t)(c0 >> 16), (int16_t)c1},
+               {(int16_t)(c1 >> 16), (int16_t)c2, (int16_t)(c2 >> 16)},
+               {(int16_t)c3, (int16_t)(c3 >> 16), (int16_t)c4}}};
+  affine.t = {{(int32_t)gte_read_ctrl(5),
+               (int32_t)gte_read_ctrl(6),
+               (int32_t)gte_read_ctrl(7)}};
+  const NativeProjectedVertex p = detail::project_gte_mode(
+      affine, {OFX, OFY, H}, {(int16_t)dlo, (int16_t)(dlo >> 16), (int16_t)dhi},
+      (insn & (1u << 19)) ? 12u : 0u, ((insn >> 10) & 1u) != 0);
+  out->ir1 = p.ir[0]; out->ir2 = p.ir[1]; out->ir3 = p.ir[2];
+  out->sz = p.sz; out->sx = p.sx; out->sy = p.sy;
+  out->vx = (float)p.ir[0]; out->vy = (float)p.ir[1]; out->vz = (float)p.ir[2];
+  out->px = p.px; out->py = p.py; out->pz = p.pz;
   if (auto* pp = ProjParams::current()) pp->setProjH(H); // remember the projection plane for depth-normalize
-  int64_t h_div_sz = proj_divide(H, (uint32_t)out->sz);    // integer UNR division (matches gameplay)
-  out->sx = proj_clampi((int32_t)(((int64_t)OFX + out->ir1 * h_div_sz) >> 16), -1024, 1023);  // Lm_G
-  out->sy = proj_clampi((int32_t)(((int64_t)OFY + out->ir2 * h_div_sz) >> 16), -1024, 1023);
-  // float (subpixel) screen + depth — the data we keep that the integer GP0 packet throws away.
-  // Use the SUB-INTEGER view-Z: out->sz drops the 12 fractional bits (>>12), so near-coplanar faces
-  // collide on the same integer SZ -> identical depth -> z-fight flicker (#5 barrel). tmp2_unshifted is
-  // the same view-Z with its 12-bit fraction intact; out->sz (integer) is untouched so the GP0 packet
-  // and the UNR screen projection stay byte-faithful — only the float depth WE own gets finer.
-  float pzf = (float)tmp2_unshifted / 4096.0f;
-  float pz = (float)H * 0.5f; if (pzf > pz) pz = pzf;
-  float ph = (float)H / pz;
   float fofx = (float)OFX / 65536.0f, fofy = (float)OFY / 65536.0f;
   if (auto* pp = ProjParams::current()) pp->setProjCenter(fofx, fofy);
-  out->px = fofx + (float)out->ir1 * ph;
-  out->py = fofy + (float)out->ir2 * ph;
-  if (out->px < -1024.f) out->px = -1024.f; if (out->px > 1023.f) out->px = 1023.f;
-  if (out->py < -1024.f) out->py = -1024.f; if (out->py > 1023.f) out->py = 1023.f;
-  out->pz = pz;
 }
 
 // Verification accumulators (PSXPORT_PROJPROBE) live on GteRegs::dbg (bound core's instance).

@@ -102,6 +102,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/fmv_decode.cpp   # pure .STR decode (VLC/MDEC/XA), shared by the player + offline tools
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/gte.c
   ${PSXPORT_ROOT}/runtime/recomp/gte_beetle.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/native_projection.cpp
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
   ${PSXPORT_ROOT}/runtime/recomp/mdec_beetle.c
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/spu.c
