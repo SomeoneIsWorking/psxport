@@ -16,33 +16,35 @@
 
 #ifdef __cplusplus
 
-class Core;   // runtime/recomp/core.h
-class Game;   // runtime/recomp/game.h  (the framework machine owner; stays framework-side)
+class Core; // runtime/recomp/core.h
+class Game; // runtime/recomp/game.h  (the framework machine owner; stays framework-side)
 
 // FadeState — the framework-side POD mirror of the game's ScreenFade::State {Mode mode; uint8_t r,g,b}.
 // The present path (gpu_vk.cpp) reads the game's per-frame fade through renderFadeState() into one of
 // these, so the framework never names the game's ScreenFade type. `mode` widened to int (the ScreenFade
 // Mode enum is uint8_t-backed; all present-path consumers already read it as int).
-struct FadeState { int mode; unsigned char r, g, b; };
+struct FadeState {
+  int mode;
+  unsigned char r, g, b;
+};
 
 // SchedBody — which game stage body the framework scheduler (PcScheduler, now framework) is asking the
 // game to run. PcScheduler owns the framework-side task/coro/yield machinery; the actual stage bodies are
 // game code (Engine::*), reached through the single schedStageBody hook so the framework names no Engine
 // method. Values are the game's dispatch cases (see game/core/game_hooks.cpp tomba_schedStageBody).
 enum SchedBody {
-  SCHED_DEMO_STAGEMAIN = 0,   // eng(c).demo.stageMain()          (fresh DEMO prologue)
-  SCHED_DEMO_FRAME,           // eng(c).demo.frame()
-  SCHED_GAME_PROLOGUE,        // eng(c).stagePrologue()           (fresh GAME prologue)
-  SCHED_GAME_FRAME,           // eng(c).frame()                   → returns handled (0/1)
-  SCHED_SOP_AREALOAD,         // eng(c).sop.areaLoad()
-  SCHED_CORO_TEXGROUP,        // eng(c).asset.loadTexgroup()
-  SCHED_CORO_PRELOAD1,        // eng(c).asset.preloadStage1AsTask()
-  SCHED_CORO_AREADATA,        // eng(c).asset.areaDataLoadAsTask()
+  SCHED_DEMO_STAGEMAIN = 0,     // eng(c).demo.stageMain()          (fresh DEMO prologue)
+  SCHED_DEMO_FRAME,             // eng(c).demo.frame()
+  SCHED_GAME_PROLOGUE,          // eng(c).stagePrologue()           (fresh GAME prologue)
+  SCHED_GAME_FRAME,             // eng(c).frame()                   → returns handled (0/1)
+  SCHED_SOP_AREALOAD,           // eng(c).sop.areaLoad()
+  SCHED_CORO_TEXGROUP,          // eng(c).asset.loadTexgroup()
+  SCHED_CORO_PRELOAD1,          // eng(c).asset.preloadStage1AsTask()
+  SCHED_CORO_AREADATA,          // eng(c).asset.areaDataLoadAsTask()
   SCHED_CORO_AREALOAD_FAITHFUL, // eng(c).sop.areaLoadFaithful()
-  SCHED_FIBER_STARTBIN,       // eng(c).startBinStageFaithful()
-  SCHED_FIBER_DEMO_BODY,      // eng(c).demo.stageBodyFaithful()
-  SCHED_FIBER_STAGE_BODY,     // eng(c).stageBodyFaithful()
-  SCHED_STAGE0_ADVANCE_SKIP,  // eng(c).stage0AdvanceSkip(arg)   (arg = stage0_step)
+  SCHED_FIBER_STARTBIN,         // eng(c).startBinStageFaithful()
+  SCHED_FIBER_DEMO_BODY,        // eng(c).demo.stageBodyFaithful()
+  SCHED_FIBER_STAGE_BODY,       // eng(c).stageBodyFaithful()
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -52,13 +54,13 @@ enum SchedBody {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 struct GameConfig {
   // --- crt0 / boot (native_boot.cpp crt0_setup, game_init) ---
-  uint32_t bssZeroLo, bssZeroHi;          // .bss clear range
-  uint32_t stackTopBase, stackTopBase2;   // guest stack top globals
-  uint32_t heapBase;                      // heap start
-  uint32_t heapSizePtr, heapBasePtr;      // heap globals written by crt0
-  uint32_t gp;                            // global pointer
-  uint32_t libcInit;                      // libc init entry
-  uint32_t gameMain, crt0;                // game-main / crt0 entries
+  uint32_t bssZeroLo, bssZeroHi;        // .bss clear range
+  uint32_t stackTopBase, stackTopBase2; // guest stack top globals
+  uint32_t heapBase;                    // heap start
+  uint32_t heapSizePtr, heapBasePtr;    // heap globals written by crt0
+  uint32_t gp;                          // global pointer
+  uint32_t libcInit;                    // libc init entry
+  uint32_t gameMain, crt0;              // game-main / crt0 entries
 
   // Recompiled MAIN .text range, masked to a physical address (addr & 0x1FFFFFFF). overlay_router
   // uses it to decide "is this address in the resident MAIN module or in an overlay slot". These are
@@ -72,7 +74,7 @@ struct GameConfig {
   // the FIRST consumer's key, so a second port set its own variable, the framework never read it,
   // and the CD model ran with NO DISC MOUNTED while every log line still looked ordinary. Leave it
   // null to rely on the generic PSXPORT_DISC / drop-in *.chd paths, which are always tried too.
-  const char* discEnvVar;
+  const char *discEnvVar;
 
   // Boot intro movies, in play order, NULL-terminated. The framework's native .STR player
   // (native_fmv.cpp) resolves each path on the disc itself and needs nothing game-specific to
@@ -83,12 +85,12 @@ struct GameConfig {
   // Leave every slot null when a game's boot plays no movie natively. That is a real state, not a
   // gap: a port whose boot runs on the recompiled substrate has its movies played by the GUEST, and
   // the framework must not invent an intro it was never asked for.
-  const char* bootFmv[4];
+  const char *bootFmv[4];
 
   // --- per-frame OT / packet-pool dance (native_boot.cpp native_step_frame) ---
-  uint32_t otRegionBase, otRegionStride;      // per-parity OT region
-  uint32_t packetPoolBase, packetPoolStride;  // per-parity packet pool
-  uint32_t otBasePtr;                         // OT-base pointer global
+  uint32_t otRegionBase, otRegionStride;     // per-parity OT region
+  uint32_t packetPoolBase, packetPoolStride; // per-parity packet pool
+  uint32_t otBasePtr;                        // OT-base pointer global
   uint32_t dwellCounter;
   uint32_t poolPtrCur, poolPtrLast;
   uint32_t clearOtagR, putDrawEnv, drawSync;
@@ -98,19 +100,21 @@ struct GameConfig {
   // --- scheduler task layout (scheduler.cpp, native_boot probes) ---
   uint32_t taskTableBase, taskSlotStride, taskCount;
   uint32_t curTaskPtr;
-  uint32_t stageStart, stageDemo, stageGame;  // fresh-entry stage PCs
+  uint32_t stageStart, stageDemo, stageGame; // fresh-entry stage PCs
 
   // --- overlay router slots (overlay_router.cpp slot_index) ---
-  struct OverlaySlot { uint32_t base; const char* name; };
+  struct OverlaySlot {
+    uint32_t base;
+    const char *name;
+  };
   OverlaySlot overlaySlots[3];
 
   // --- CD chokepoints (cd_override.cpp) ---
-  uint32_t cdInit, cdCommand, cdSync, cdReadPrim, cdFileLoad, cdAsyncRead,
-           voicePlay, voiceStop, lastSectorTracker;
-  uint32_t cdInlineLoad;      // (added P1.x) FUN_8001DC40 inline (non-spawning) sync loader
-  uint32_t cdCmdStream;       // (added P1.x) FUN_8001CE90 streaming CD-cmd wrapper (GetlocL)
-  uint32_t cdCallbackTable[4];// the 4 guest-RAM slots hleInit writes the CD-event callbacks into
-  uint32_t cdCallbackFn[4];   // (added P1.x) the 4 callback fn-ptr VALUES written into those slots
+  uint32_t cdInit, cdCommand, cdSync, cdReadPrim, cdFileLoad, cdAsyncRead, voicePlay, voiceStop, lastSectorTracker;
+  uint32_t cdInlineLoad;       // (added P1.x) FUN_8001DC40 inline (non-spawning) sync loader
+  uint32_t cdCmdStream;        // (added P1.x) FUN_8001CE90 streaming CD-cmd wrapper (GetlocL)
+  uint32_t cdCallbackTable[4]; // the 4 guest-RAM slots hleInit writes the CD-event callbacks into
+  uint32_t cdCallbackFn[4];    // (added P1.x) the 4 callback fn-ptr VALUES written into those slots
 
   // STOCK Sony libcd CdGetSector(dest, words) — the sector-transfer routine. Appended at the END of
   // this group on purpose: GameConfig is initialised POSITIONALLY by every consumer, so inserting a
@@ -163,7 +167,7 @@ struct GameConfig {
 
   // --- pad driver (pad_input.cpp) ---
   uint32_t padSlot0Buf, padSlot1Buf, padDriverFn;
-  uint32_t padSlotPtrTable;   // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)
+  uint32_t padSlotPtrTable; // (added P1.x) SIO driver per-slot buf-ptr table base (+slot*padSlotPtrStride)
   // Byte distance between consecutive slots' buffer pointers. A driver that keeps a flat pointer
   // array uses 4 (Tomba!2); one that stores the pointer INSIDE a per-port context record uses that
   // record's size (Spyro: libpad's 240-byte per-port context). 0 is read as 4 so a config that
@@ -198,13 +202,13 @@ struct GameConfig {
     // overlays resident above the main text.
     uint32_t codeScanLo, codeScanHi;
 
-    uint32_t decDctInSync, decDctOutSync;      // libmdec DecDCTinSync / DecDCToutSync
-    uint32_t cdReadSync, cdDataSync;           // libcd CdReadSync / CdDataSync
-    uint32_t cdInitHandshake;                  // libcd low-level CdInit controller-ready handshake
-    uint32_t gpuTimeoutArm, gpuTimeoutCheck;   // libgpu GPU-DMA-completion timeout (arm / check)
-    uint32_t gpuTimeoutDeadlineVar;            // guest global the arm writes its far-future deadline to
-    uint32_t gpuTimeoutFlagVar;                // guest global the arm clears
-    uint32_t changeThread;                     // kernel cooperative task-switch / yield funnel
+    uint32_t decDctInSync, decDctOutSync;    // libmdec DecDCTinSync / DecDCToutSync
+    uint32_t cdReadSync, cdDataSync;         // libcd CdReadSync / CdDataSync
+    uint32_t cdInitHandshake;                // libcd low-level CdInit controller-ready handshake
+    uint32_t gpuTimeoutArm, gpuTimeoutCheck; // libgpu GPU-DMA-completion timeout (arm / check)
+    uint32_t gpuTimeoutDeadlineVar;          // guest global the arm writes its far-future deadline to
+    uint32_t gpuTimeoutFlagVar;              // guest global the arm clears
+    uint32_t changeThread;                   // kernel cooperative task-switch / yield funnel
 
     // libgte SetGeomOffset / SetGeomScreen — the two leaves through which the game STATES its camera
     // projection (screen centre OFX/OFY, projection-plane distance H). Owned natively so the port
@@ -249,8 +253,8 @@ struct GameConfig {
   // filename (scratch/saves/tomba2.mcr), so a second consumer's card silently landed in the
   // reference game's file, or nowhere. NULL keeps the old behaviour for a consumer that has not set
   // them. Appended at the end because GameConfig is initialised positionally.
-  const char* cardEnvVar;
-  const char* cardDefaultPath;
+  const char *cardEnvVar;
+  const char *cardDefaultPath;
 
   // --- frame pacing (gpu_native.cpp gpu_pace_subframe) ------------------------------------------
   // The pacer sleeps a whole-frame interval per call so a live run plays at the game's intended
@@ -285,7 +289,7 @@ struct GameConfig {
   // naming some OTHER game reads as correct and therefore never gets reported.
   // Also appended at the end — spider1 initialises GameConfig POSITIONALLY, so inserting a field
   // mid-struct silently shifts every field after it there.
-  const char* windowTitle;
+  const char *windowTitle;
 
   // --- crt0 stack-top bias (crt0_boot.h) --------------------------------------------------------
   // The guest crt0's OWN adjustment of the stack-top word before it becomes sp:
@@ -310,8 +314,8 @@ struct GameConfig {
   // initialised POSITIONALLY by some consumers (spider1) — a field inserted into the crt0 group at
   // the top would shift every value after it there, silently.
   struct Crt0StackBias {
-    uint32_t declared;   // 1 = this game has stated its bias (even if the bias is 0). 0 = crt0 refuses.
-    int32_t  value;      // the measured adjustment, e.g. -8 for the stock PSY-Q crt0, 0 for X4.
+    uint32_t declared; // 1 = this game has stated its bias (even if the bias is 0). 0 = crt0 refuses.
+    int32_t value;     // the measured adjustment, e.g. -8 for the stock PSY-Q crt0, 0 for X4.
   } stackBias;
 
   // ── the scheduler's guest task ENTRY PCs, declared by the game ─────────────────────────────────
@@ -331,23 +335,32 @@ struct GameConfig {
   // and have no fiber body (the DEMO/GAME dispatchers), or the reverse (the preload bodies), so one
   // flag could not express both without a sentinel that reads as a real value.
   struct SchedEntry {
-    uint32_t pc;             // the guest task entry PC, from `mem_r32(taskbase + 0xc)`
-    uint32_t nativeHandler;  // 1 = the native per-frame stanzas handle this entry
-    uint32_t hasFiberBody;   // 1 = a fresh task at this entry starts a coro body
-    SchedBody fiberBody;     // which body — meaningful ONLY when hasFiberBody is 1
+    uint32_t pc;            // the guest task entry PC, from `mem_r32(taskbase + 0xc)`
+    uint32_t nativeHandler; // 1 = the native per-frame stanzas handle this entry
+    uint32_t hasFiberBody;  // 1 = a fresh task at this entry starts a coro body
+    SchedBody fiberBody;    // which body — meaningful ONLY when hasFiberBody is 1
   };
-  const SchedEntry* schedEntries;   // may be null when the count is 0
-  uint32_t          schedEntryCount;
+  const SchedEntry *schedEntries; // may be null when the count is 0
+  uint32_t schedEntryCount;
+
+  // Appended for positional consumers. Zero means SynchronousTaskWait is unmeasured and refuses.
+  uint32_t syncWaitDoneFlag, syncWaitParam2, syncWaitParam3;
+  uint32_t syncWaitTaskGp, syncWaitForceCloseRa, syncWaitSpawnRa, syncWaitFinishRa;
 };
 
 // Look up a task entry PC in the game's declared table. Returns null when the game declared none or the
 // PC is not one of them — the caller must treat null as "not mine", which is the same fall-through the
 // hardcoded comparisons produced. Kept inline in the seam header so both the framework and the game read
 // one definition of what a declared entry means.
-static inline const GameConfig::SchedEntry* sched_entry_for(const GameConfig* cfg, uint32_t entry_pc) {
-  if (!cfg || !cfg->schedEntries) return nullptr;
-  for (uint32_t i = 0; i < cfg->schedEntryCount; i++)
-    if (cfg->schedEntries[i].pc == entry_pc) return &cfg->schedEntries[i];
+static inline const GameConfig::SchedEntry *sched_entry_for(const GameConfig *cfg, uint32_t entry_pc) {
+  if (!cfg || !cfg->schedEntries) {
+    return nullptr;
+  }
+  for (uint32_t i = 0; i < cfg->schedEntryCount; i++) {
+    if (cfg->schedEntries[i].pc == entry_pc) {
+      return &cfg->schedEntries[i];
+    }
+  }
   return nullptr;
 }
 
@@ -361,80 +374,90 @@ struct GameHooks {
   // --- game context lifecycle: the framework allocates/frees the game's opaque per-Core subsystem
   // aggregate (Core::gameCtx) through these. ctxCreate runs at the end of Core's ctor; ctxDestroy in
   // its dtor. The framework never names the aggregate type — it holds only the void*. ---
-  void* (*ctxCreate)(Core* c);                // allocate + wire the game's per-Core subsystem aggregate
-  void  (*ctxDestroy)(void* ctx);             // free it
+  void *(*ctxCreate)(Core *c);   // allocate + wire the game's per-Core subsystem aggregate
+  void (*ctxDestroy)(void *ctx); // free it
 
-  void (*frameUpdate)(Core* c);               // per-frame guest body (was c->engine.frameUpdate())
-  void (*drawOTag)(Core* c, uint32_t otHead); // per-frame draw kick (was c->engine.drawOTag(otHead))
-  void (*musicCoordTick)(Core* c);            // per-frame music coord (was c->engine.musicCoord.tick())
-  bool (*cdDialogToneActive)(Core* c);        // dialog-tone gate (was c->engine.musicCoord.dialogToneActive())
-  void (*cdMusicFadeIn)(Core* c);             // ingame-music fade-in (was c->engine.musicCoord.musicFadeIn())
+  void (*frameUpdate)(Core *c);               // per-frame guest body (was c->engine.frameUpdate())
+  void (*drawOTag)(Core *c, uint32_t otHead); // per-frame draw kick (was c->engine.drawOTag(otHead))
+  void (*musicCoordTick)(Core *c);            // per-frame music coord (was c->engine.musicCoord.tick())
+  bool (*cdDialogToneActive)(Core *c);        // dialog-tone gate (was c->engine.musicCoord.dialogToneActive())
+  void (*cdMusicFadeIn)(Core *c);             // ingame-music fade-in (was c->engine.musicCoord.musicFadeIn())
 
   // --- game audio: the framework SPU host-sink + mod-UI HUD reach the game's native music engine
   // (NativeMusic/MusicList, now game-side on TombaCtx) through these, so the framework names no game
   // audio type. ---
-  void (*audioMixFrame)(Core* c, int16_t* buf, int frames);  // mix the game's in-game music on top of the
-                                              // drained SPU PCM each audio frame (was spu_audio.cpp's direct
-                                              // active()/render() + saturating add on the game player).
-                                              // `buf` = frames*2 interleaved int16 stereo; no-op when silent.
-  const char* (*audioNowPlayingName)(Core* c);// currently-playing Sound-Test track name, or nullptr when
-                                              // stopped (was rmlui_overlay's direct catalogue nowPlaying()/name()).
-  void (*audioSoundTestPlay)(Core* c, int track); // Sound-Test action: play catalogued track (>=0) or stop
-                                              // (<0) (was rmlui_overlay's direct catalogue play()/stop()).
-  void (*bootInit)(Core* c);                  // the game's boot-init prologue (was the whole init-prefix body of
-                                              // native_boot.cpp game_init: the guest boot-prologue transcription —
-                                              // rc-dispatched guest leaves interleaved with the c->engine.* init
-                                              // calls initFrameState/initDisplay/initCamera/font.init/initSubsystems/
-                                              // task0Bootstrap. Moved WHOLE because the engine calls are interleaved
-                                              // with the rc leaves and task0Bootstrap depends on the scheduler-table
-                                              // init between them — order is load-bearing, so it cannot be split).
-  bool (*schedFreshEntry)(Core* c, int slot, uint32_t base, uint32_t entryPc); // fresh task-entry native stage body:
-                                              // dispatches the GAME stagePrologue (was c->engine.stageMain(), which
-                                              // sets coro_redirect_pc) or STAGE-0 startBinStage (was
-                                              // c->engine.startBinStage()) by entryPc. Returns true when it ran the
-                                              // TERMINAL startBinStage body (caller finalizes + early-returns the
-                                              // tick); false to continue to rec_coro_run (stageMain leaves the redirect
-                                              // start in c->coro_redirect_pc; a non-stage fresh entry leaves it 0).
-  bool (*hasNativeHandlerForEntry)(Core* c, uint32_t entryPc); // does this task entry PC have a native stage handler
-                                              // (was c->game->pcSched.hasNativeHandlerForEntry(entryPc)).
-  void (*registerOverrides)(Game* g);         // install ALL game override clusters into the process-global
-                                              // registry (was boot.cpp register_engine_overrides(game)).
-                                              // Takes Game* (not Core*): the clusters register per-Game.
-                                              // MUST run before crt0_setup/game_init on every harness Game.
+  void (*audioMixFrame)(Core *c,
+                        int16_t *buf,
+                        int frames);              // mix the game's in-game music on top of the
+                                                  // drained SPU PCM each audio frame (was spu_audio.cpp's direct
+                                                  // active()/render() + saturating add on the game player).
+                                                  // `buf` = frames*2 interleaved int16 stereo; no-op when silent.
+  const char *(*audioNowPlayingName)(Core *c);    // currently-playing Sound-Test track name, or nullptr when
+                                                  // stopped (was rmlui_overlay's direct catalogue nowPlaying()/name()).
+  void (*audioSoundTestPlay)(Core *c, int track); // Sound-Test action: play catalogued track (>=0) or stop
+                                                  // (<0) (was rmlui_overlay's direct catalogue play()/stop()).
+  void (*bootInit)(Core *c);                      // the game's boot-init prologue (was the whole init-prefix body of
+                                                  // native_boot.cpp game_init: the guest boot-prologue transcription —
+                                                  // rc-dispatched guest leaves interleaved with the c->engine.* init
+  // calls initFrameState/initDisplay/initCamera/font.init/initSubsystems/
+  // task0Bootstrap. Moved WHOLE because the engine calls are interleaved
+  // with the rc leaves and task0Bootstrap depends on the scheduler-table
+  // init between them — order is load-bearing, so it cannot be split).
+  bool (*schedFreshEntry)(Core *c,
+                          int slot,
+                          uint32_t base,
+                          uint32_t entryPc); // fresh task-entry native stage body:
+                                             // dispatches the GAME stagePrologue (was c->engine.stageMain(), which
+                                             // sets coro_redirect_pc) or STAGE-0 startBinStage (was
+                                             // c->engine.startBinStage()) by entryPc. Returns true when it ran the
+                                             // TERMINAL startBinStage body (caller finalizes + early-returns the
+                                             // tick); false to continue to rec_coro_run (stageMain leaves the redirect
+                                             // start in c->coro_redirect_pc; a non-stage fresh entry leaves it 0).
+  bool (*hasNativeHandlerForEntry)(Core *c,
+                                   uint32_t entryPc); // does this task entry PC have a native stage handler
+                                                      // (was c->game->pcSched.hasNativeHandlerForEntry(entryPc)).
+  void (*registerOverrides)(Game *g);                 // install ALL game override clusters into the process-global
+                                                      // registry (was boot.cpp register_engine_overrides(game)).
+                                                      // Takes Game* (not Core*): the clusters register per-Game.
+                                                      // MUST run before crt0_setup/game_init on every harness Game.
 
   // --- present-path + diagnostics + boot-frame reset (last framework→game member refs) ---
-  void (*renderFadeState)(Core* c, FadeState* out);       // present fade read (was core->screenFade.get())
-  const char* (*replBehaviorName)(Core* c, unsigned int handle); // REPL `ents` (was c->engine.behaviors.nativeName)
-  void (*replCamTeleport)(Core* c, int x, int y, int z);  // REPL `tp` (was c->engine.camTeleport)
-  void (*replCamTeleportOff)(Core* c);                    // REPL `tp off` (was c->engine.camTeleportOff)
-  void (*renderBbFrameReset)(Core* c);                    // per-frame bb reset (was c->mRender->bbFrameReset())
+  void (*renderFadeState)(Core *c, FadeState *out);              // present fade read (was core->screenFade.get())
+  const char *(*replBehaviorName)(Core *c, unsigned int handle); // REPL `ents` (was c->engine.behaviors.nativeName)
+  void (*replCamTeleport)(Core *c, int x, int y, int z);         // REPL `tp` (was c->engine.camTeleport)
+  void (*replCamTeleportOff)(Core *c);                           // REPL `tp off` (was c->engine.camTeleportOff)
+  void (*renderBbFrameReset)(Core *c);                           // per-frame bb reset (was c->mRender->bbFrameReset())
 
   // --- game-side REPL commands + dev-warp area load (last game-class refs pulled out of repl.cpp /
   // native_boot.cpp so the framework #includes no game header). ---
-  bool (*replCommand)(Core* c, const char* cmd, const char* line); // REPL command the framework doesn't
-                                              // itself handle — game classes / Tomba guest addrs (invtest,
-                                              // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
-  void (*devWarpAreaLoad)(Core* c);           // dev-warp full area load (was native_boot.cpp's
-                                              // eng(c).sop.transitionAreaLoad()).
-  void (*devWarpAreaEnter)(Core* c);          // dev-warp: run the destination area's OWN entry handler
-                                              // after the load. A warp forces the area machine past the
-                                              // transition that normally dispatches it, so without this
-                                              // the area's data and code are resident but nothing arms
-                                              // its objects. Game-side because only the game knows where
-                                              // its per-area handler table lives. May be null.
+  bool (*replCommand)(Core *c,
+                      const char *cmd,
+                      const char *line); // REPL command the framework doesn't
+                                         // itself handle — game classes / Tomba guest addrs (invtest,
+                                         // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
+  void (*devWarpAreaLoad)(Core *c);      // dev-warp full area load (was native_boot.cpp's
+                                         // eng(c).sop.transitionAreaLoad()).
+  void (*devWarpAreaEnter)(Core *c);     // dev-warp: run the destination area's OWN entry handler
+                                         // after the load. A warp forces the area machine past the
+                                         // transition that normally dispatches it, so without this
+                                         // the area's data and code are resident but nothing arms
+                                         // its objects. Game-side because only the game knows where
+                                         // its per-area handler table lives. May be null.
   // Dev-warp AREA INDEX, for the RmlUi warp selector and the REPL `warp` range guard. Game-side because
   // the framework must not know how many areas a game has, what they are called, or which guest address
   // says "we are in the field". devAreaName returns "" when the area has no sourced name — the caller
   // renders "Area N" rather than inventing one.
-  int         (*devAreaCount)(Core* c);
-  const char* (*devAreaName)(Core* c, int area);
-  bool        (*devWarpAllowed)(Core* c);     // is a warp legal right now (game stage test)
+  int (*devAreaCount)(Core *c);
+  const char *(*devAreaName)(Core *c, int area);
+  bool (*devWarpAllowed)(Core *c); // is a warp legal right now (game stage test)
 
   // --- scheduler stage bodies (PcScheduler is framework; the stage bodies are game Engine methods) ---
-  int      (*schedStageBody)(Core* c, int which, void* arg);  // run the SchedBody-selected game stage
-                                              // body (arg used only by SCHED_STAGE0_ADVANCE_SKIP); returns the
-                                              // body's int result (Engine::frame's `handled`; 0 for void bodies)
-  uint32_t (*schedRng)(Core* c);              // rngOf(c).next() — FUN_8009A450, guest seed 0x80105EE8
+  int (*schedStageBody)(Core *c,
+                        int which,
+                        void *arg); // run the SchedBody-selected game stage
+                                    // body; returns the body's int result
+                                    // (Engine::frame's `handled`; 0 for void bodies)
+  uint32_t (*schedRng)(Core *c);    // rngOf(c).next() — FUN_8009A450, guest seed 0x80105EE8
 
   // --- fps60 tier-1 (Fps60 is framework render-infra: the interpolated-60fps lerp tier is a GENERIC
   // renderer feature and stays framework). TARGET ARCHITECTURE (USER 2026-07-17): the game SUBMITS its
@@ -444,24 +467,24 @@ struct GameHooks {
   // objects) one frame behind under lerped inputs, so the framework still calls back into game render.
   // DEATH CONDITION: delete both hooks once the game submits drawables through the render queue and the
   // framework interpolates them directly (the fps60 submit-model render-frontier redesign). ---
-  void (*fps60WorldPass)(Core* c, float t);   // TRANSITIONAL: interp world-pass re-render (gates + terrain/
-                                              // scene-table/backdrop/objects Render::* calls) under lerped
-                                              // inputs. Reads/writes the framework Fps60 bg-override on
-                                              // c->game->fps60 (game writing a framework member).
-  void (*fps60BbSwapPrev)(Core* c);           // TRANSITIONAL: rend(c)->bbSwapPrev() — billboard record rotate
-  void (*fps60TemporalRotate)(Core* c);       // rotate any other game-owned immutable temporal recipes
+  void (*fps60WorldPass)(Core *c, float t); // TRANSITIONAL: interp world-pass re-render (gates + terrain/
+                                            // scene-table/backdrop/objects Render::* calls) under lerped
+                                            // inputs. Reads/writes the framework Fps60 bg-override on
+                                            // c->game->fps60 (game writing a framework member).
+  void (*fps60BbSwapPrev)(Core *c);         // TRANSITIONAL: rend(c)->bbSwapPrev() — billboard record rotate
+  void (*fps60TemporalRotate)(Core *c);     // rotate any other game-owned immutable temporal recipes
 
   // --- diagnostics harness: GAME-defined selftests ---
   // selftest_run() handles the framework's own PSXPORT_SELFTEST names and delegates anything else
   // here, so a game can add oracle/unit tests without the agnostic framework naming them. Return 2
   // for an unrecognised name (same "unknown selftest" code selftest_run uses).
-  int (*selftestGame)(const char* which, const char* exePath);
+  int (*selftestGame)(const char *which, const char *exePath);
 
   // --- native-projection input ---------------------------------------------------------------
   // The framework owns the interpolation slots and projection constants, but a scene view matrix is
   // game layout. A native producer asks through this hook rather than teaching psxport a scratchpad
   // address. Null means this game has no native camera path; Fps60::sceneCam refuses that request.
-  void (*fps60ReadSceneCam)(Core* c, float R[3][3], float T[3]);
+  void (*fps60ReadSceneCam)(Core *c, float R[3][3], float T[3]);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -470,8 +493,8 @@ struct GameHooks {
 // constructor snapshots the installed pointers into c->cfg / c->hooks. Returns nullptr until installed
 // (harmless: nothing reads cfg/hooks until the corresponding literal/call-site conversions land).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-void              psxport_install_game(const GameConfig* cfg, const GameHooks* hooks);
-const GameConfig* psxport_game_config();
-const GameHooks*  psxport_game_hooks();
+void psxport_install_game(const GameConfig *cfg, const GameHooks *hooks);
+const GameConfig *psxport_game_config();
+const GameHooks *psxport_game_hooks();
 
 #endif // __cplusplus

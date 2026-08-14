@@ -93,7 +93,7 @@ public:
   bool mirrorSampleGate(uint32_t addr);
 
   // ---- fork-level SKIP-vs-FAITHFUL observable TDD gate (USER 2026-07-08) -------------------------
-  // SV_CHECK at a pc_skip fork: when armed (PSXPORT_SKIP_VERIFY=all or =0xADDR[,..]), run the SKIP
+  // SV_CHECK at a native_sync fork: when armed (PSXPORT_SKIP_VERIFY=all or =0xADDR[,..]), run the SKIP
   // leg, snapshot the OBSERVABLE set (game/core/observables.h positive list + 512 KB SPU RAM),
   // rewind guest+SPU state, run the ORACLE leg — the substrate arc the skip leg replaces, inline
   // and synchronous (in_stage forced 0 so yield/selfClose prims are no-ops; the override registry's
@@ -138,7 +138,7 @@ private:
   uint8_t* mSkipSpuA = nullptr; uint8_t* mSkipSpuB = nullptr; uint8_t* mSkipSpuPre = nullptr;
 };
 
-// Fork-site wrapper for the SKIP-vs-FAITHFUL observable gate: `skip_call` is the pc_skip leg,
+// Fork-site wrapper for the SKIP-vs-FAITHFUL observable gate: `skip_call` is the native_sync leg,
 // `oracle_call` sets up regs and dispatches the substrate arc the skip leg replaces (it runs
 // with yield prims no-op'd, so use the TASK BODY address for spawn-and-wait arcs, e.g.
 // rec_dispatch(c, 0x800452C0) — NOT the 0x80044BD4 wrapper, whose wait loop can never complete

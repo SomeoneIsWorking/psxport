@@ -56,6 +56,12 @@ endforeach()
 list(LENGTH PSXPORT_TEST_SRCS _n_tests)
 message(STATUS "psxport tests: ${_n_tests} discovered in ${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Repository C++ policy: formatter compliance plus shrink-only caps on the legacy scheduler seams.
+# This is a normal test so clean/DRY structure cannot silently decay after the initial adoption.
+add_test(NAME cpp_style
+         COMMAND ${CMAKE_COMMAND} -E env python3
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_cpp_style.py)
+
 # tool_selftests — run every psxport tool's own --selftest, and NAME the tools that have none.
 # Added because toystory2/tools/overlay_map.py sat COMMITTED with its constant fold disabled while its own
 # --selftest reported 2/7 the whole time: nothing in any repo ever ran a tool selftest. This target runs

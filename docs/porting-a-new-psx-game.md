@@ -25,7 +25,7 @@ Companion skills/docs (generic): `recomp-init`, `recomp-recompiler`, `recomp-ove
   beetle-derived. Pure PSX hardware; game-agnostic.
 - **PSX-SDK HLE** — libcd/libgs/libgpu/libgte/libspu/libpad. Generic to any Sony-SDK PSX game
   (almost all of them). Version differences are the main caveat.
-- **Differential harness + tooling** — SBS/oracle/abcompare, `port_check`/`port_gen`/
+- **Differential harness + tooling** — SBS/oracle, `port_check`/`port_gen`/
   `abi_extract`/`codemap`/`findings`, the Ghidra pipeline. The *methodology* of byte-gating
   native code against the recomp is fully generic.
 - **Render substrate** — the VK renderer, the read-only-overlay rule, the widescreen/60fps/
@@ -50,7 +50,7 @@ Before any game logic (see `recomp-init`):
 1. Vendor a reference emulator (the **oracle**) and the CHD/BIOS provisioning.
 2. Recompile `MAIN.EXE` (+ overlays) to `generated/` shards. Generated code is sacrosanct.
 3. Boot the recomp under a native boot+frame loop with everything dispatched to the substrate.
-4. Stand up the **differential harness** (SBS two-core / abcompare) that byte-compares the
+4. Stand up the **differential harness** (SBS two-core / oracle) that byte-compares the
    native run against the oracle every frame. **This exists before you own a single function.**
 
 You now have a byte-gated recomp running. Everything after is *progressively replacing substrate
@@ -227,7 +227,7 @@ real and already isolated.
 
 1. **Provision + recompile** the target's `MAIN.EXE`/overlays (with your own `--seeds` file — see
    Phase 0); vendor the oracle emulator.
-2. **Stand up the harness** (SBS/abcompare) and confirm byte-lockstep with everything on substrate.
+2. **Stand up the harness** (SBS/oracle) and confirm byte-lockstep with everything on substrate.
 3. **Lift the framework** unchanged: substrate, PSX-HW backends, SDK-HLE, tooling, render substrate.
 4. **Bring up the GTE tap** (`projprim`/PGXP equivalent) → native depth for the 3D world. This is
    the single highest-leverage capability; wide + 60fps ride on it.

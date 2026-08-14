@@ -137,4 +137,4 @@ headless run leaves through `_exit`, so static teardown never happens. A diagnos
 clean shutdown does not fire.
 
 **What would actually exercise it:** a run with un-ported tasks reaching the substrate fallback —
-`pc_skip=false` / an SBS byte-compare run. That is the check this refactor still owes.
+the SBS strict byte-compare leg. That is the check this refactor still owes.

@@ -146,14 +146,14 @@ void scheduler_yield(Core* c) {
 // each task runs on its own Coro thread that BLOCKS at a yield (preserving its C stack) and
 // CONTINUES on resume — recompiler-only, no interpreter. cur_is_coro tells scheduler_yield to
 // coro-yield vs longjmp. Active when psx_fallback is on (native_content==0) — OR, under
-// pc_faithful (pc_skip=false, SBS gameplay/full mode on core A), when the task's entry PC has no
+// pc_faithful (native_sync=false, SBS gameplay/full mode on core A), when the task's entry PC has no
 // native handler, so substrate-only wakes like task-1 preload (0x80044F58) execute on A same as
 // core B and the FUN_80044BD4 spawn-and-wait cycle actually runs (dropping the completion-shim
 // override in engine.cpp).
 int recomp_run_coro_fiber_stanza(Core* c, int i, uint32_t base, uint32_t st,
                                  int native_content, const R3000& loop) {
   if (native_content) {
-    if (c->game->pc_skip) return 0;
+    if (c->game->native_sync) return 0;
     if (c->hooks->hasNativeHandlerForEntry(c, c->mem_r32(base + 0xc))) return 0;
   }
   Coro*& co = c->game->pcSched.coro[i];
@@ -251,7 +251,6 @@ int recomp_run_generic_dispatch_stanza(Core* c, int i, uint32_t base, uint32_t s
       c->coro_redirect_pc = 0;   // clear before: only the hook's stageMain path sets it (safety vs a stale value)
       if (c->hooks->schedFreshEntry(c, i, base, resume_pc)) {
         // TERMINAL startBinStage: finalize the fresh stage-0 slot and end the tick (skip rec_coro_run).
-        c->game->pcSched.stage0_step[i] = 0;
         c->game->pcSched.task_ctx[i] = static_cast<R3000&>(*c);
         c->mem_w16(base, 2);
         c->game->pcSched.in_stage = 0;

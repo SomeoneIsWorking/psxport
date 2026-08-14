@@ -80,16 +80,6 @@ Landings squash several claims into one commit, so nothing else records which cl
 the SAME sha, each naming the others. A claim you land nothing for gets a status saying so, not silence.
 Unmappable → `status: UNKNOWN — could not map to a commit`; honestly unmapped is fine, a wrong sha is not.
 
-## THE GPU INTERLOCK IS `gpuguard`, AND A DENIAL IS A STOP
-
-`~/.claude/tools/gpuguard/` + a PreToolUse hook, both MACHINE-LOCAL and lost on a machine switch — which
-is why this note is in the repo: on a fresh machine there is no interlock, a run there is UNGUARDED, and
-the hook fails open by design so its absence is silent. **A denial is a STOP.** Do not retry, do not reach
-for `GPUGUARD=off`, do not hand-roll a launch that dodges the pattern — diagnose statically and ask the
-user, whose machine it is. **Do not mistake the classifier for the guarantee:** it has been wrong in both
-directions, once leaving three of the four PSX ports uninterlocked, so validate with `--selftest` (20
-launch / 14 non-launch cases) and keep builds ALLOWED, or a latched card blocks all work rather than runs.
-
 ## AGENTS NEVER RUN WINDOWED, AND HEADLESS IS ONE CODE PATH. USER RULE, absolute.
 
 > *"Ideally agents should never do windowed runs and windowed and headless should be equal anyway, it
@@ -241,7 +231,7 @@ the tested code and the shipping code were different code.
 1. **Write the failing test first** in `psxport/tests/` (globbed — no shared file to edit), wire it into
    `ctest`, run it. It must FAIL and you must paste that failure.
 2. Then make it pass with the smallest change that names the actual cause.
-3. Prefer HERMETIC (no disc, no GPU, no window): feed the unit its inputs.
+3. Prefer HERMETIC (no disc, no window): feed the unit its inputs.
    `tools/fmv_export/test_fmv_decode.cpp` runs 4/4 without a disc.
 4. If the bug genuinely needs the running game, still add the hermetic unit test and cite the game run
    separately as integration evidence.

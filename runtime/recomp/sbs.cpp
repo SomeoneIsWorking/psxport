@@ -190,10 +190,6 @@ struct SbsSchedSnap {
   int      game_native[3]{};
   int      game_coop[3]{};
   int      cur_is_coro = 0;
-  uint8_t  stage0_step[3]{};
-  uint8_t  sop_field_step[3]{};
-  uint8_t  demo_leave_step[3]{};
-  uint8_t  demo_s0_step[3]{};
   const RecOverlay* resident_ov[3]{};
 };
 
@@ -290,20 +286,13 @@ public:
   bool     mHaveDbgsrv = false;
 
   // ---- M_SKIP observable-output compare (USER 2026-07-08, tightened 2026-07-10) ----
-  // Originally: pc_skip vs recomp is NOT byte-comparable (cadence legitimately collapses); compare
+  // Originally: native_sync vs recomp is NOT byte-comparable (cadence legitimately collapses); compare
   // a POSITIVE LIST of observable state and report only SETTLED divergences (a region must differ
   // for kObsPersist consecutive frames — transient lead/lag during loads was "by design").
   //
-  // 2026-07-10 FRAME ALIGNMENT: that 60-frame tolerance existed to paper over exactly the cadence
-  // drift the skipRendezvousReached() barrier (above) now closes at each wired fork site — once a
-  // fork rendezvous-waits for the oracle to catch up, "differ for a while during the load, then
-  // converge" is no longer an expected shape for content downstream of that fork; a divergence that
-  // shows up and STAYS is either a genuine behavioral bug or a fork this pass didn't wire yet (see
-  // docs/findings/sbs.md "SKIP-mode frame alignment" for the wired/unwired fork inventory). Dropped
-  // to 1 (first differing frame reports immediately, no persistence window) so this compare is now
-  // as strict as checkDivergence()'s byte-exact path elsewhere in this file. Any address that
-  // legitimately still lags at f1 because ITS fork isn't rendezvous-gated yet will show up here
-  // honestly as a divergence — that's the harness doing its job, not a false positive to mask.
+  // Strict on the first differing frame. Product synchronous completion and the generated oracle
+  // intentionally have different cadence, so the comparison owns only its documented observable
+  // windows; product code is never stalled to imitate the oracle.
   static constexpr int kObsPersist = 1;
   static constexpr int kNObs = 6;               // fixed regions + area-deref + SPU RAM (below)
   int      mObsCnt[8]  = {0};                   // consecutive differing frames per observable
@@ -311,37 +300,6 @@ public:
   uint8_t* mObsSpuA = nullptr;                  // 512 KB SPU RAM peek buffers
   uint8_t* mObsSpuB = nullptr;
   void checkObservables();
-
-  // ---- SKIP-mode rendezvous (frame alignment, USER 2026-07-10, see sbs.h skipRendezvousReached) ----
-  // Per-label wait bookkeeping: when did we start waiting on this label, is a wait currently active,
-  // and (for the end-of-run audit report) how many times did we check it / how many frames total did
-  // we spend stalled on it. A label that's checked but never once stalls is a clean pass-through; a
-  // label whose wait count only ever grows and times out is the deadlock case skipRendezvousReached
-  // aborts on directly (loud, not a hang).
-  struct RvSite { uint32_t firstWaitFrame = 0; bool waiting = false; uint32_t checks = 0;
-                  uint32_t stalls = 0; uint32_t maxWaitFrames = 0; };
-  std::map<std::string, RvSite> mRvSites;
-  // True while ANY skipRendezvousReached() label is actively holding core A back this frame. A
-  // wired fork's own OBSERVABLE content (e.g. the SPU RAM a rendezvous-gated VAB build lands) can
-  // legitimately differ WHILE the wait is in progress even though the fork is correctly wired: the
-  // oracle side's real completion signal (its own done_flag / task-state advance) can trail the
-  // oracle's OWN underlying content write by several frames (traced live 2026-07-15 with a
-  // temporary per-frame probe — B's SPU 0x1020 write lands at f2 but its task+0x48 state doesn't
-  // reach the rendezvous-safe "fully done" value until f5, because of trailing per-cell yields
-  // after the DMA itself completes). checkObservables()'s kObsPersist=1 strictness assumes wired-fork content
-  // updates atomically with its own gate value; it doesn't for this fork shape. Suppressing the
-  // report while a wait is active is not a residual-diff allowlist (CLAUDE.md) — detection still
-  // runs every frame (mObsCnt keeps counting/resetting), so a genuine post-settle divergence still
-  // reports on the first frame after the wait clears.
-  bool anyRendezvousWaiting() const {
-    for (auto& [label, s] : mRvSites) if (s.waiting) return true;
-    return false;
-  }
-  static constexpr uint32_t kRvTimeoutFrames = 3600;   // 60s @ 60fps — deadlock diagnostic, not a hang
-  bool mRvDumped = false;
-  void dumpRendezvousSites(FILE* out);
-  bool skipCompareMode() const { return mMode == M_SKIP; }
-  bool skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8 = false);
 
   // ---- write-watchpoint record (exact corrupting-write site) ----
   bool     mWwArmed = false;
@@ -380,7 +338,7 @@ public:
   uint32_t mPreRegsB[32]    = {0};
   uint32_t mPrePcA = 0, mPrePcB = 0;
   // Per-core scheduler bookkeeping snapshot. On rewind, guest RAM + regs get restored but the
-  // scheduler's per-slot state (task_started[], stage0_step[], native-dispatcher flags, saved
+  // scheduler's per-slot state (task_started[], native-dispatcher flags, saved
   // task-context registers) lives on the Game host object — the re-stepped frame would inherit
   // stale bookkeeping from the pre-rewind execution and take the resume path with a mid-body
   // task_ctx.r[31] that misses. Snap the trivially-copyable fields alongside RAM and restore in
@@ -462,45 +420,45 @@ public:
   // isRenderSpad / isDiffNoise) were REMOVED 2026-07-03 per the standing rule: no RAM diverge may
   // be waved off as "residual/known/expected" (memory: no_residual_ram_diverges). Every diff is
   // fatal and gets root-caused, so filter ranges have no place here. If a diff is a PSX-quirk
-  // native deliberately skips, the fix is to gate the quirk on !c->game->pc_skip at the write
-  // site (see cull.cpp / engine.cpp) — i.e. do the faithful thing when pc_skip is off,
+  // native deliberately skips, the fix is to gate the quirk on !c->game->native_sync at the write
+  // site (see cull.cpp / engine.cpp) — i.e. do the faithful thing when native_sync is off,
   // NOT to blacklist the address.
   //
-  // EXCEPTION 2026-07-04 (user directive [[sbs-two-compare-modes]]): pc_skip=ON is ALLOWED to
+  // EXCEPTION 2026-07-04 (user directive [[sbs-two-compare-modes]]): native_sync=ON is ALLOWED to
   // diverge in TRUE SCRATCH — stack-frame leftovers from substrate boot chains that native's
-  // collapsed shortcut never enters, transient scratchpad state that has no consumer on pc_skip.
+  // collapsed shortcut never enters, transient scratchpad state that has no consumer on native_sync.
   // Shared/consumable state (libcd dir cache, task-slot fields, done_flag when a native path
-  // reads it, ...) still must match. The mask below applies ONLY when core A is pc_skip=true;
-  // under pc_skip=false (PSXPORT_SBS_PCFAITHFUL=1) the compare stays strict byte-exact.
+  // reads it, ...) still must match. The mask below applies ONLY when core A is native_sync=true;
+  // under native_sync=false (PSXPORT_SBS_PCFAITHFUL=1) the compare stays strict byte-exact.
   // Per-frame `mMaskedBytes` counts hits so overreach is visible in the summary line.
-  bool mPcSkipMask = false;                    // set from Core A's pc_skip at init
+  bool mNativeSyncMask = false;                    // set from Core A's native_sync at init
   uint32_t mMaskedBytes = 0;                    // per-frame counter, reset each summary
-  bool isPcSkipScratch(uint32_t addr) const {
-    if (!mPcSkipMask) return false;
+  bool isNativeSyncScratch(uint32_t addr) const {
+    if (!mNativeSyncMask) return false;
     // Task-stack window under the substrate boot chain. Task-slot control blocks live at
     // 0x801FE000..0x801FE14F (3 × 0x70; those fields ARE state and must match — reproduced by
     // native_task_spawn). Above that up to 0x801FF200 (0xDEAD sentinel at task-0 stack top) is
     // task-0's stack — the substrate's boot chain (FUN_800499E8 → CdSearchFile ×30 → memcpy
-    // ×N → OpenTh initial-frame setup) writes into every byte of it. Under pc_skip, native's
+    // ×N → OpenTh initial-frame setup) writes into every byte of it. Under native_sync, native's
     // Engine::startBinStage skips those substrate calls entirely, so their stack scratch is
     // absent by design.
     if (addr >= 0x801FE150u && addr < 0x801FF200u) return true;
-    // libgs boot RECT scratch that pc_skip's Engine::startBinStage writes at 0x1F800008..F for
+    // libgs boot RECT scratch that native_sync's Engine::startBinStage writes at 0x1F800008..F for
     // asset.uploadImage (VRAM RECT header); substrate uses a guest-RAM RECT elsewhere so this
     // scratchpad window differs by direction (A has extra ephemeral write, B has none).
     if (addr >= 0x1F800008u && addr < 0x1F800010u) return true;
     // libgs graphics context / DMA state (base 0x800AC5F8, stride 0x100). Populated by the
     // substrate FUN_80081218 (LoadImage) → FUN_80097194 chain each time a LoadImage fires; the
-    // substrate does dozens across boot with a specific ordering. pc_skip's Engine::startBinStage
+    // substrate does dozens across boot with a specific ordering. native_sync's Engine::startBinStage
     // uses native asset.uploadImage (gpu_native_load_image, direct VRAM write) which BYPASSES
     // the whole libgs DMA state machine — so the values at 0x800AC5F8+ never match. Marked
     // scratch because native's DrawSync is a no-op (asset.cpp:146: "meaningless for our SYNCHRONOUS
-    // native VRAM upload — there is no async DMA to wait on"), so no native pc_skip code path
+    // native VRAM upload — there is no async DMA to wait on"), so no native native_sync code path
     // reads this state to gate behavior. Any substrate GPU/DMA path later dispatched from
     // native does re-enter FUN_80081218 which rewrites 0x800AC61C for its own use.
     if (addr >= 0x800AC5F8u && addr < 0x800AC700u) return true;
-    // Boot-preload TRANSIENT regions — under pc_skip these get populated by native's
-    // startBinStage collapsing many substrate ticks into ~5 ticks (via stage0Advance), while
+    // Boot-preload TRANSIENT regions — under native_sync these get populated by native's
+    // startBinStage completing synchronously in one invocation, while
     // substrate B spreads the same work across ~10+ ticks in its own task-0 body + task-1
     // fiber. During the collapse window the values naturally differ (one core farther along
     // than the other). They CONVERGE once both cores complete their boot chain — this mask
@@ -516,7 +474,7 @@ public:
     if (addr >= 0x80105D00u && addr < 0x80105EE8u) return true;    // preload metadata (excludes the RNG seed — RNG must be faithful, user 2026-07-04)
     if (addr >= 0x80105EECu && addr < 0x80105F00u) return true;    // preload metadata after RNG seed
     if (addr >= 0x80157000u && addr < 0x8017D000u) return true;    // preload allocation + AI-code regions (boot-transient)
-    // Boot-time state whose ONLY consumer is the substrate loader chain pc_skip skips: async CD
+    // Boot-time state whose ONLY consumer is the substrate loader chain native_sync skips: async CD
     // read descriptor (0x1F8001F0..F4 = lba/words/dst), scheduler current-task pointer at boot
     // (0x1F800138, populated once the fiber scheduler starts stepping), loader done_flag
     // (0x1F80019B, native's synchronous preload has nothing to signal).
@@ -738,10 +696,6 @@ static void sbs_snap_sched(const PcScheduler& s, SbsSchedSnap& out) {
   memcpy(out.game_native,     s.game_native,     sizeof out.game_native);
   memcpy(out.game_coop,       s.game_coop,       sizeof out.game_coop);
   out.cur_is_coro = s.cur_is_coro;
-  memcpy(out.stage0_step,     s.stage0_step,     sizeof out.stage0_step);
-  memcpy(out.sop_field_step,  s.sop_field_step,  sizeof out.sop_field_step);
-  memcpy(out.demo_leave_step, s.demo_leave_step, sizeof out.demo_leave_step);
-  memcpy(out.demo_s0_step,    s.demo_s0_step,    sizeof out.demo_s0_step);
   memcpy(out.resident_ov,     s.resident_ov,     sizeof out.resident_ov);
 }
 // Restore scheduler bookkeeping AND tear down any live Coro fibers — a fiber's C-stack reflects
@@ -757,10 +711,6 @@ static void sbs_restore_sched(PcScheduler& s, const SbsSchedSnap& in) {
   memcpy(s.game_native,     in.game_native,     sizeof s.game_native);
   memcpy(s.game_coop,       in.game_coop,       sizeof s.game_coop);
   s.cur_is_coro = in.cur_is_coro;
-  memcpy(s.stage0_step,     in.stage0_step,     sizeof s.stage0_step);
-  memcpy(s.sop_field_step,  in.sop_field_step,  sizeof s.sop_field_step);
-  memcpy(s.demo_leave_step, in.demo_leave_step, sizeof s.demo_leave_step);
-  memcpy(s.demo_s0_step,    in.demo_s0_step,    sizeof s.demo_s0_step);
   memcpy(s.resident_ov,     in.resident_ov,     sizeof s.resident_ov);
   for (int i = 0; i < 3; i++) {
     if (s.coro[i]) { delete s.coro[i]; s.coro[i] = nullptr; }
@@ -919,85 +869,6 @@ static const char* addrLabel(uint32_t a) {
   return "?";
 }
 
-// SKIP-mode frame alignment (USER 2026-07-10) — see sbs.h for the full design rationale. Reads the
-// CALLING core's sibling's memory at `addr`; true once sibling's value >= minVal. A pass-through
-// (always true) outside MODE=skip, so calling this from a fork site is safe in every context —
-// callers still gate on skipCompareMode() first purely to avoid a per-frame map lookup + fprintf
-// path in the hot default-play case.
-//
-// HALFWORD, not word: every known fork-completion field in this codebase (the stage-0/stage-1
-// preload SM's task+0x48 etc.) is written with mem_w16, packed adjacent to a SIBLING sm byte at
-// +2 (e.g. +0x4a) that's independently live. A mem_r32 read here would silently OR that sibling's
-// garbage into the compared value and report "reached" the moment EITHER half went nonzero — found
-// live during the first MODE=skip smoke run (start_bin_load "reached" after a single check, 0
-// stalls, when the substrate oracle should still have been many frames from done). mem_r16 is the
-// default width — correct for every current 16-bit-field caller — but the SAME class of bug bites
-// one level down: `demo_area_load` (0x1F80019A) is a single BYTE next to another independently-live
-// byte (0x1F80019B, the reused cooperative-spawn done_flag), so a 16-bit read there folds the
-// neighbor's near-permanent 1 in and silently false-passes (found live 2026-07-15, docs/findings/
-// sbs.md "MODE=skip f465 area-FX divergence"). `width8=true` selects an 8-bit read for that shape;
-// widen further (a 32-bit variant + minVal range) the day a fork's shared completion field is
-// genuinely a full word.
-bool Sbs::Impl::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8) {
-  RvSite& site = mRvSites[label];
-  site.checks++;
-  if (mMode != M_SKIP) return true;
-  Core* other = (coreId(c) == 0) ? &mB->core : &mA->core;
-  // width8: the gated field is a single guest BYTE whose adjacent byte is a DIFFERENT, independently
-  // (and often more freely) written field — e.g. a demo-exclusive load-done flag sitting right next to
-  // the globally-reused cooperative-spawn done_flag 0x1F80019B. mem_r16 would silently fold that
-  // neighbor's value into the compare (a false-pass trap found live 2026-07-15, docs/findings/sbs.md
-  // "MODE=skip f465 area-FX divergence" — the neighbor byte was stuck near 1, so a 16-bit read always
-  // read >=256 and the barrier never actually waited). Every EXISTING call site gates a real 16-bit SM
-  // hword field (task+0x48 etc.) and is unaffected (width8 defaults false).
-  uint32_t v = width8 ? (uint32_t)other->mem_r8(addr) : (uint32_t)other->mem_r16(addr);
-  bool ok = v >= minVal;
-  if (ok) {
-    if (site.waiting) {
-      uint32_t waited = mFrame - site.firstWaitFrame;
-      lucent::debug("skiprv", "[sbs][rendezvous] f{} '{}' SETTLED after {} frame(s) — 0x{:08X} now {} (wanted >={})",
-               mFrame, label ? label : "(null)", waited, addr, v, minVal);
-      site.waiting = false;
-    }
-    return true;
-  }
-  site.stalls++;
-  if (!site.waiting) { site.waiting = true; site.firstWaitFrame = mFrame; }
-  uint32_t waited = mFrame - site.firstWaitFrame;
-  if (waited > site.maxWaitFrames) site.maxWaitFrames = waited;
-  if ((waited % 60) == 0)
-    lucent::debug("skiprv", "[sbs][rendezvous] f{} waiting on '{}': 0x{:08X}={} want>={} ({} frame(s) so far)",
-             mFrame, label ? label : "(null)", addr, v, minVal, waited);
-  if (waited >= kRvTimeoutFrames) {
-    // Deadlock diagnostic, not a hang (CLAUDE.md fail-fast): the shortcut side has been idling on
-    // this milestone for a full minute of frames with no sign the oracle side is ever going to
-    // write it — that's either a genuinely broken rendezvous predicate (wrong addr/minVal for this
-    // fork) or the oracle side is itself stuck. Either way, printing both sides' relevant state and
-    // aborting beats a silent 10-minute-gate hang that just looks like "the harness is slow".
-    lucent::info("sbs", "\n[rendezvous] *** DEADLOCK f{}: fork '{}' waited {} frames (>= timeout {}) ***\n  addr 0x{:08X}: A={} B={} (want >= {})\n  A last id={}", mFrame, label ? label : "(null)", waited, kRvTimeoutFrames, addr,
-            mA->core.mem_r16(addr), mB->core.mem_r16(addr), minVal,
-            coreId(c) == 0 ? "A(skip side)" : "B(oracle side)");
-    dumpRendezvousSites(stderr);
-    fflush(stderr);
-    abort();
-  }
-  return false;
-}
-
-void Sbs::Impl::dumpRendezvousSites(FILE* out) {
-  fprintf(out, "[sbs][rendezvous] fork-site audit (%zu label(s) checked this run):\n", mRvSites.size());
-  if (mRvSites.empty()) {
-    fprintf(out, "  (none — no rendezvous-gated fork site was reached, or this run wasn't MODE=skip)\n");
-    return;
-  }
-  for (const auto& [label, s] : mRvSites) {
-    fprintf(out, "  %-24s checks=%-8u stalls=%-8u maxWait=%-6u %s\n",
-            label.c_str(), s.checks, s.stalls, s.maxWaitFrames,
-            s.stalls == 0 ? "(never stalled — A and B were already aligned every time it was checked)"
-                          : (s.waiting ? "(STILL WAITING AT EXIT — one-sided passage, harness error)" : "(stalled then settled)"));
-  }
-}
-
 void Sbs::Impl::checkObservables() {
   // ---- Progression probe (PSXPORT_SBS_SKIPTICK=1): name WHY the two panes drift out of sync.
   // Per frame, compare the guest progression counters + scene latches A vs B and log whenever an
@@ -1015,7 +886,7 @@ void Sbs::Impl::checkObservables() {
       // game they read whatever is at those addresses, so an "A-B delta" line from them names nothing.
       const Probe kP[] = {
         { "vsync",  0x800ABDE0u, 4 },   // libetc VSync tick counter
-        { "sptick", 0x1F80017Cu, 4 },   // scratchpad tick (pc_skip collapse must bump both)
+        { "sptick", 0x1F80017Cu, 4 },   // scratchpad tick (native_sync collapse must bump both)
         { "stage",  mNavEntryAddr, 4 }, // task-0 stage word (GameConfig-derived)
         { "scene",  0x800BE258u, 1 },   // scene-active latch
         { "beat",   0x800BF9B4u, 1 },   // SOP scene/backdrop identity byte
@@ -1067,22 +938,16 @@ void Sbs::Impl::checkObservables() {
     lucent::info("sbs-obs", "\n*** OBSERVABLE DIVERGENCE f{} [{}] @0x{:08X} A={:02X} B={:02X} ***", mFrame, label, addr, va, vb);
     mObsDone[idx] = true;
     if (mHaveDbgsrv) { lucent::info("sbs-obs", "paused for inspection."); mA->dbg_server.setPaused(true); }
-    if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
+    if (!skip_continue) { fflush(stderr); abort(); }
   };
-  // A rendezvous-gated fork legitimately holds core A back WHILE the oracle is still mid-load — its
-  // own content write can land (on the oracle side) well before its "fully done" gate value does.
-  // anyRendezvousWaiting() alone isn't enough here: it only reflects labels that have already been
-  // CHECKED at least once, but the oracle's SPU 0x1020 write lands (f2) a frame BEFORE core A's
-  // stage0AdvanceSkip ever reaches its step==2 check (f3) — so at f2 no rendezvous site exists yet
-  // to report "waiting". Check the oracle's own SM step (task+0x48, the SAME field/value
-  // stage0AdvanceSkip's "seqvab_build" gate keys on) directly instead: while it's below the gate's
-  // target, the oracle hasn't finished the SEQ/VAB build and any observable tied to that fork is
-  // expected to still be catching up on core A. (docs/findings/sbs.md "SBS self-surfacing sweep")
-  // `3` is the Tomba!2 gate value (stage0AdvanceSkip's "seqvab_build" target) and stays a literal —
+  // Product completion is immediate while the oracle's asynchronous VAB content write lands before
+  // its own task-state completion. Suppress that known transient directly from the oracle's stage SM;
+  // product execution is never delayed to imitate it. (docs/findings/sbs.md "SBS self-surfacing sweep")
+  // `3` is the Tomba!2 oracle completion value and stays a literal —
   // GameConfig has no field for it. The ADDRESS is derived (mStageSmAddr, task0+0x48) and MODE=skip
   // refuses at startup when it is 0, so this is never a read of address 0x48.
   bool vabBuildPending = mB->core.mem_r16(mStageSmAddr) < 3u;
-  if (vabBuildPending || anyRendezvousWaiting()) return;
+  if (vabBuildPending) return;
   for (int i = 0; i < kNObs; i++) {
     if (mObsDone[i]) continue;
     uint32_t bad = 0; uint8_t va = 0, vb = 0;
@@ -1135,7 +1000,7 @@ void Sbs::Impl::checkObservables() {
         }
         mObsDone[idx] = true;
         if (mHaveDbgsrv) { lucent::info("sbs-obs", "paused for inspection."); mA->dbg_server.setPaused(true); }
-        if (!skip_continue) { dumpRendezvousSites(stderr); fflush(stderr); abort(); }
+        if (!skip_continue) { fflush(stderr); abort(); }
       }
     }
   }
@@ -1185,9 +1050,9 @@ void Sbs::Impl::checkDivergence() {
     int hits = 0;
     uint32_t i = 0;
     while (i < sz) {
-      if (readA(i) == readB(i) || isPcSkipScratch(base + i)) { i++; continue; }
+      if (readA(i) == readB(i) || isNativeSyncScratch(base + i)) { i++; continue; }
       uint32_t run_start = i;
-      while (i < sz && readA(i) != readB(i) && !isPcSkipScratch(base + i)) i++;
+      while (i < sz && readA(i) != readB(i) && !isNativeSyncScratch(base + i)) i++;
       uint32_t run_end = i;
       uint32_t addr = base + run_start;
       const char* label = addrLabel(addr);
@@ -1216,14 +1081,14 @@ void Sbs::Impl::checkDivergence() {
 
   if (hits > 0 && !nopause) {
     // Default (auto-pause) mode: mimic the old first-hit behavior by finding the true first address
-    // and calling recordDivergence for the interactive rewind/pause flow. Skip pc_skip-masked bytes.
+    // and calling recordDivergence for the interactive rewind/pause flow. Skip native_sync-masked bytes.
     const uint8_t* a = mA->core.ram + (mLo - 0x80000000u);
     const uint8_t* b = mB->core.ram + (mLo - 0x80000000u);
     uint32_t n = mHi - mLo;
     for (uint32_t i = 0; i < n; i++)
-      if (a[i] != b[i] && !isPcSkipScratch(mLo + i)) { recordDivergence(mLo + i); return; }
+      if (a[i] != b[i] && !isNativeSyncScratch(mLo + i)) { recordDivergence(mLo + i); return; }
     for (uint32_t i = 0; i < 0x400; i++)
-      if (mA->core.scratch[i] != mB->core.scratch[i] && !isPcSkipScratch(0x1F800000u + i))
+      if (mA->core.scratch[i] != mB->core.scratch[i] && !isNativeSyncScratch(0x1F800000u + i))
         { recordDivergence(0x1F800000u + i); return; }
   }
 }
@@ -1242,7 +1107,7 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   uint32_t nDiff = 0, firstAddr = 0, lastAddr = 0, nMaskedRam = 0;
   for (uint32_t i = 0; i < n; i++) {
     if (a[i] == b[i]) continue;
-    if (isPcSkipScratch(mLo + i)) { nMaskedRam++; continue; }
+    if (isNativeSyncScratch(mLo + i)) { nMaskedRam++; continue; }
     if (!nDiff) firstAddr = mLo + i;
     lastAddr = mLo + i;
     pageCount[(mLo + i - 0x80000000u) >> PAGE_SHIFT]++;
@@ -1251,12 +1116,12 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
   uint32_t nSpad = 0, nMaskedSpad = 0;
   for (uint32_t i = 0; i < 0x400; i++) {
     if (mA->core.scratch[i] == mB->core.scratch[i]) continue;
-    if (isPcSkipScratch(0x1F800000u + i)) { nMaskedSpad++; continue; }
+    if (isNativeSyncScratch(0x1F800000u + i)) { nMaskedSpad++; continue; }
     nSpad++;
   }
   if (nDiff == 0 && nSpad == 0) {
-    if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
-      lucent::info("sbs", "f{}: A/B identical modulo scratch mask ({} ram + {} spad masked) (mode={} pc_skip=on)", mFrame, nMaskedRam, nMaskedSpad, modeName());
+    if (mNativeSyncMask && (nMaskedRam || nMaskedSpad))
+      lucent::info("sbs", "f{}: A/B identical modulo scratch mask ({} ram + {} spad masked) (mode={} native_sync=on)", mFrame, nMaskedRam, nMaskedSpad, modeName());
     else
       lucent::info("sbs", "f{}: A/B identical (mode={})", mFrame, modeName());
     return;
@@ -1274,7 +1139,7 @@ void Sbs::Impl::summarizeDivergence(uint32_t every) {
          mFrame, nDiff, firstAddr, lastAddr, nSpad, modeName());
   for (int k = 0; k < 3 && topCnt[k]; k++)
     ln.add(" 0x{:08X}:{}", 0x80000000u + (topIdx[k] << PAGE_SHIFT), topCnt[k]);
-  if (mPcSkipMask && (nMaskedRam || nMaskedSpad))
+  if (mNativeSyncMask && (nMaskedRam || nMaskedSpad))
     ln.add(" | scratch-masked: {} ram + {} spad", nMaskedRam, nMaskedSpad);
   ln.flush(lucent::Level::Info, "sbs");
 }
@@ -2030,8 +1895,7 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   }
   {
     // Unified atexit/SIGTERM/SIGINT dump registration — ONE handler per signal for the whole
-    // harness, not one per feature. Each opt-in diagnostic (ALLOCTRACE/BYTETRACE) plus the
-    // MODE=skip rendezvous-site audit (see sbs.h skipRendezvousReached / dumpRendezvousSites)
+    // harness, not one per feature. Each opt-in diagnostic (ALLOCTRACE/BYTETRACE)
     // registers its own "am I on" flag and dump function here so a run with several diagnostics
     // active at once (or killed by `timeout` mid-run) gets every one of them, instead of the last
     // std::signal() call silently replacing all the earlier installs (that WAS the shape here
@@ -2057,9 +1921,6 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       if (s_self->mAllocTraceOn || s_self->mByteTraceOn) {
         if (!s_self->mAllocRaDumped) { s_self->mAllocRaDumped = 1; s_self->dumpAllocRa(stderr); s_self->dumpByteTrace(stderr); }
       }
-      if (s_self->mMode == M_SKIP) {
-        if (!s_self->mRvDumped) { s_self->mRvDumped = true; s_self->dumpRendezvousSites(stderr); }
-      }
     };
     atexit(dumpAll);
     static bool s_sigHooked = false;
@@ -2078,28 +1939,22 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
   // psx_fallback per mode: gameplay/full run PSX gameplay on core B; render runs native gameplay on both;
   // oracle runs the PURE interpreter+soft-rasterizer oracle on B (docs/oracle.md).
   int fb_b = (mMode == M_RENDER) ? 0 : 1;
-  // Core A is HARD-WIRED to pc_skip=false (USER 2026-07-07): the SBS harness IS the strict
+  // Core A is HARD-WIRED to native_sync=false (USER 2026-07-07): the SBS harness IS the strict
   // pc_faithful oracle compare — Core A runs the ported native faithful path (fiber stage
-  // bodies, ported primitives; scheduler stanzas gate their pc_skip flavors off), Core B the
-  // pure substrate. No flag: strictness is the mode. (The old note claiming pc_skip=false
+  // bodies, ported primitives; scheduler stanzas gate their native_sync flavors off), Core B the
+  // pure substrate. No flag: strictness is the mode. (The old note claiming native_sync=false
   // "routes every task to the fiber substrate" described the REJECTED fiber-only design; under
-  // the faithful-execution model pc_skip=false runs NATIVE bodies — docs/faithful-execution.md.)
-  // M_SKIP (USER 2026-07-08, frame-aligned 2026-07-10): core A runs the REAL default config
-  // (pc_skip=true, the ./run.sh path) against the recomp oracle on core B, compared on OBSERVABLE
-  // OUTPUT state (checkObservables). Each pc_skip fork that collapses a multi-frame substrate load
-  // into one native call is expected to call skipRendezvousReached() (sbs.h) after doing its own
-  // (harmless, host-only) work but BEFORE flipping any guest-visible "load complete" state, so A
-  // idles rather than racing B at the same lockstep frame index — see docs/findings/sbs.md "SKIP-
-  // mode frame alignment" for which forks are wired vs still-TODO. Because of that barrier,
-  // checkObservables no longer needs a settled-divergence tolerance (kObsPersist=1, strict per-
-  // frame) for content downstream of a WIRED fork; a fork this pass hasn't wired yet can still
-  // legitimately drift and will show up honestly as a divergence rather than being silently masked.
+  // the faithful-execution model native_sync=false runs NATIVE bodies — docs/faithful-execution.md.)
+  // M_SKIP (USER 2026-07-08): core A runs the REAL default config
+  // (native_sync=true, the ./run.sh path) against the recomp oracle on core B, compared on OBSERVABLE
+  // OUTPUT state (checkObservables). The synchronous product is never stalled to reproduce generated
+  // wait cadence; the harness owns the small, documented transient windows it can compare honestly.
   // All other modes keep core A hard-wired to pc_faithful strict (unaffected by any of this).
-  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->pc_skip = (mMode == M_SKIP);
-  mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->pc_skip = false;
+  mA = new Game(); mA->psx_fallback = 0;     mA->sbs = facade; mA->native_sync = (mMode == M_SKIP);
+  mB = new Game(); mB->psx_fallback = fb_b;  mB->sbs = facade; mB->native_sync = false;
   // Per-Game enhancement state (mods + oracle are Game members now, not process globals):
   // - Core A keeps the USER'S mods (loaded from the settings file in the Game ctor) — pane A must
-  //   look exactly like `PSXPORT_PC_SKIP=0 ./run.sh` (USER 2026-07-10), widescreen included. The
+  //   exercise the internal byte-exact mirror used by this harness, widescreen included. The
   //   one guest-poking enhancement (the widescreen cull re-include) is suppressed under SBS at its
   //   site (cull.cpp reads game->sbs) so guest evolution stays byte-identical to core B; its only
   //   cost is margin pop-in for dynamic entities in wide panes. fps60 presentation is inert under
@@ -2124,9 +1979,9 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
       mB->core.wwatch_arm(0x00000000u, 0x1F800000u + LW_SPAD);
     }
   }
-  // Scratch mask (see isPcSkipScratch above): apply ONLY under pc_skip=true (shortcut branches).
-  // Under pc_skip=false native FAITHFUL branches target byte-exact — mask off, no residuals.
-  mPcSkipMask = false;   // strict mode: no scratch mask ever (core A is always pc_faithful)
+  // Scratch mask (see isNativeSyncScratch above): apply ONLY under native_sync=true (shortcut branches).
+  // Under native_sync=false native FAITHFUL branches target byte-exact — mask off, no residuals.
+  mNativeSyncMask = false;   // strict mode: no scratch mask ever (core A is always pc_faithful)
   // Allocate per-Core SPU-write logs so audio-relevant divergences (Issue #29) surface as
   // register-write drift, not just RAM byte drift. Bound by spu_bind on every frame step.
   mA->spu.writeLog = spu_new_log();
@@ -2431,10 +2286,8 @@ void Sbs::Impl::run(const char* exePath, Sbs* facade) {
     // Reset per-Core SPU write logs so this frame's writes accumulate cleanly.
     spu_log_reset(mA->spu.writeLog);
     spu_log_reset(mB->spu.writeLog);
-    // Step order: MODE=skip steps the ORACLE (B) first so core A's skipRendezvousReached() checks
-    // read B's SAME-frame state — with A-first, every rendezvous fork lagged one extra frame behind
-    // the milestone it waits on (measured on 'demo_start_game': 2-frame residual skew, halved by
-    // this reorder). Other modes keep A-first (wwatch transcripts are ordered around it).
+    // MODE=skip steps the oracle first so its asynchronous progress for this frame is visible to the
+    // observable-window comparison. Other modes keep A-first (wwatch transcripts are ordered around it).
     if (mMode == M_SKIP) {
       stepCore(mB, 1);
       grabPane(mB, mRgbaB, &mWb, &mHb);
@@ -3044,7 +2897,3 @@ void Sbs::storeCb(Core* c, uint32_t addr, uint32_t val, uint32_t width) {
 }
 Core*    Sbs::coreByLetter(char which) const                { return mImpl->coreByLetter(which); }
 Core*    Sbs::shownCore() const                             { return mImpl->shownCore(); }
-bool     Sbs::skipCompareMode() const                       { return mImpl->skipCompareMode(); }
-bool     Sbs::skipRendezvousReached(Core* c, uint32_t addr, uint32_t minVal, const char* label, bool width8) {
-  return mImpl->skipRendezvousReached(c, addr, minVal, label, width8);
-}

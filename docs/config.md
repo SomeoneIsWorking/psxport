@@ -158,9 +158,10 @@ draw"*. For the latter there is no in-tree answer.
   frame; the next compare MUST trip. Default addr `0x800E7EAC` (reached every field frame). Run it when
   a long-red gate suddenly goes green. Writes guest RAM — never during a real verification run.
 - `PSXPORT_SBS_PAD_REPLAY=<path>` — drive BOTH cores from a recorded pad (mirrored, lockstep held), to
-  walk the gate PAST boot into the field where coverage lives. CAVEAT: core A is pc_skip=false but
-  `./run.sh` captures are pc_skip=true, so a frame-indexed `replays/*.pad` lands inputs at the wrong
-  moments and does NOT raise coverage — you need a pc_skip=false capture or a game-state-driven route.
+  walk the gate PAST boot into the field where coverage lives. CAVEAT: the strict core uses faithful
+  per-frame cadence while `./run.sh` completes owned waits synchronously, so a frame-indexed
+  `replays/*.pad` lands inputs at the wrong moments and does NOT raise coverage. Capture on the strict
+  leg or use a game-state-driven route.
 
 ### `PSXPORT_REPL` is serviced by ONE loop — every other run REFUSES it (exit 2)
 
@@ -218,8 +219,9 @@ and fails if one passes an unregistered name, so the typo case (`"sbs"`) cannot 
 No new knob: the guard reads the existing `PSXPORT_REPL` CVar, and the loop name is a compile-time
 string literal at the call site, not configuration.
 
-The per-fork shortcut bool is `Game::mPcSkip` — see the class comment on `runtime/recomp/game.h`. Default
-`mPcSkip=true` (shortcuts on); SBS forces it `false` so the faithful branch of every fork is exercised.
+The product has one cadence: `Game::native_sync=true`, and owned waits complete synchronously. It has
+no environment toggle. SBS may set `native_sync=false` internally to exercise the faithful native
+mirror against the generated oracle; that is diagnostic state, not a second product configuration.
 
 **No new env GATING (2026-06-20).** The PC-native port is the only path — do NOT add a `PSXPORT_*` flag
 that branches game behavior/render/features. Visual settings (widescreen/hi-res/SSAO/light/60fps) are
@@ -341,8 +343,8 @@ cfg_loge("chan", fmt, …)  // ("[cd:warn]" / "[cd:error]") so they stay greppab
 
 ## PC enhancements: the gate is `psx::config::enh*` (USER 2026-07-16; ON THE LADDER 2026-08-12)
 The third behavior class (see CLAUDE.md vocabulary): deliberate, MEANINGFUL guest-state changes on
-top of the faithful engine — unlike pc_render (host-only picture) and pc_skip (multi-step collapse,
-no meaningful end-state change).
+top of the faithful engine — unlike pc_render (host-only picture) and synchronous task completion
+(multi-step wait collapse with the same authored end state).
 
 **There are TWO ways to declare an enhancement, and ONE gate.**
 
@@ -734,12 +736,6 @@ guest-stack-residency questions.
 `repl_tap_n`) while the combat-coverage leg runs. The tool used to trace the leg live while building
 it (2026-07-10, docs/findings/ai.md) — use it to confirm the leg is actually walking/jumping instead
 of stuck against an obstacle in a future session.
-`skiprv` (sbs.cpp, `Sbs::Impl::skipRendezvousReached`) — MODE=skip frame-alignment barrier trace:
-logs `[sbs][rendezvous] f<N> waiting on '<label>': …` every 60 frames while a fork-site rendezvous
-is stalled, and a `SETTLED after N frame(s)` line when the wait resolves. Cheap enough to leave on
-for a whole `MODE=skip` run; the end-of-run `dumpRendezvousSites()` summary (checks/stalls/maxWait
-per label) prints unconditionally under `MODE=skip` regardless of this channel. See docs/findings/
-sbs.md "SKIP-mode frame alignment".
 **`PSXPORT_DEBUG=chanA,chanB` env works at launch**, and now works no matter what runs first. lucent
 itself reads it: `cmake/psxport.cmake` builds the vendored lucent with `LUCENT_CHANNEL_ENV="PSXPORT_DEBUG"`
 (and `LUCENT_LOG_FILE_ENV="PSXPORT_LOG_FILE"`), and lucent resolves both LAZILY on its first log call.
@@ -887,28 +883,15 @@ or level — they can't be a bare channel:
   must split a two-field interval across the two synthesized presents. Treating that commit as one
   field advances VBlank/audio at about twice wall time while video rendering falls behind.
 - **Paths:** `TOMBA2_DISC`, `TOMBA2_CARD`, `DISC`.
-- **SBS observable mode:** `SBS_MODE=skip` — pc_skip (real default config, core A) vs recomp
+- **SBS observable mode:** `SBS_MODE=skip` — synchronous product path (core A) vs recomp
   (oracle, core B), compared on a curated observable-state list (see skill `sbs-diverge`).
-  **FRAME-ALIGNED, strict per-frame semantics (2026-07-10, docs/findings/sbs.md "SKIP-mode frame
-  alignment"):** every collapsed-multi-step `pc_skip` fork (CLAUDE.md "The 5 paths") is meant to
-  call `Sbs::skipRendezvousReached(c, addr, minVal, label)` (sbs.h) right after doing its own
-  (host-only) shortcut work but BEFORE flipping any guest-visible "load complete" state — while the
-  oracle core hasn't independently reached the same shared-layout completion field yet, the
-  shortcut side idles (no state advance) instead of racing ahead at the same lockstep frame. A
-  no-op (pass-through) outside `MODE=skip`, so this never affects `./run.sh` or any other SBS mode.
-  A wait that never resolves in 3600 frames (60s @ 60fps) **aborts** with both sides' state — a
-  loud diagnostic, not a hang. Because of this barrier the observable compare's old 60-frame
-  "settled divergence" tolerance is GONE — `checkObservables` is now strict per-frame (first
+  Product code is never stalled to reproduce generated loading cadence. The observable comparison
+  owns only its documented windows and explicitly suppresses the oracle's known boot-VAB transient;
+  `checkObservables` is otherwise strict per-frame (first
   differing frame reports and, by default, aborts; `PSXPORT_SBS_SKIP_CONTINUE=1` demotes to
   log-and-continue for triage). `MODE=skip` also auto-arms the existing pane pixel-diff
   (`checkPaneDiff`, normally opt-in via `SBS_RENDERDIFF`) as the per-frame VISUAL compare — covers
-  STRUCTURAL rendered-picture differences only, not audio or non-visual state. **Only ONE fork is
-  actually wired so far** (`Engine::stage0AdvanceSkip`'s START.BIN-load gate, label
-  `start_bin_load`) — the fork inventory entry in docs/findings/sbs.md lists which of the ~25
-  `pc_skip` sites are genuine load-collapse rendezvous candidates (most are per-frame parity forks
-  that don't need one) and which are still unwired; an unwired fork's downstream content can still
-  legitimately drift and will now report as a real (unmasked) divergence instead of being silently
-  tolerated — that is by design, not a regression.
+  STRUCTURAL rendered-picture differences only, not audio or non-visual state.
 - **SBS bounded clean exit:** `SBS_EXIT_FRAME=<n>` (`cfg_int`) — the SBS loop calls `exit(0)` once
   frame n is reached, so atexit dumps (engine_override_thunk per-address native/oracle hit counts,
   EngineOverrides `ovhit`) actually print. A `timeout`-killed gate dies via the watchdog's SIGTERM
@@ -974,8 +957,8 @@ or level — they can't be a bare channel:
   - `PSXPORT_SBS_SKIPTICK=1` (MODE=skip) — per-frame A-vs-B progression probe (vsync/scratch tick
     counters, task-0 stage word, scene latch, SOP beat); logs when an OFFSET changes. Reads: if the
     tick counters stay equal while pictures skew, the skip pane isn't dropping frames — it's making
-    MORE per-frame progress (instant CD vs sector-paced CD) and the responsible fork needs a
-    `skipRendezvousReached` gate (found + fixed 'demo_start_game', the DEMO→GAME 12-frame lead).
+    MORE per-frame progress (instant CD vs sector-paced CD). That difference belongs in the harness's
+    observable-window model, never as an artificial wait inserted into the product path.
 - **Mirror TDD gate:** `MIRROR_VERIFY` = `all` or `0xADDR[,0xADDR...]` — the strict per-function
   equivalence gate for pc_faithful native mirrors (game/core/verify_harness.h `strictCheck` +
   `MV_CHECK` fork-site macro). When armed for a wired guest address, each invocation runs the
@@ -1093,7 +1076,7 @@ Diagnostic, default empty. Each hex is a guest handler address from the `beh_*` 
 substrate body instead.
 
 Exists because a single bad native behaviour handler is otherwise very hard to isolate: it does not
-crash, it silently corrupts game state, and the only coarse control is `PSXPORT_PC_SKIP=0`, which
-routes ALL handlers to the substrate at once and so proves nothing about which one. Bisecting with
+crash, it silently corrupts game state, and switching the whole run to an oracle proves nothing about
+which handler caused it. Bisecting with
 this flag located the 2026-07-21 save-sign softlock to one handler out of 65
 (`0x800739AC beh_scene_ui_trigger` — see the game repo's docs/findings/scene.md).

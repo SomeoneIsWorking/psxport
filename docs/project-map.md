@@ -74,6 +74,10 @@ Dusklight, the one place ours deliberately differs, the headless driving surface
 `native_boot.cpp` (boot + the native per-frame loop `native_scheduler_step` + diagnostics; the interactive
 REPL was extracted to `repl.cpp`/`repl.h`, dispatch helpers to `guest_call.h`), `sync_overrides.cpp`, `watchdog.c`, `stubs.cpp`,
 `cfg.c` (the `PSXPORT_*` config + `PSXPORT_DEBUG=chan` channels), `mods.c`.
+`synchronous_task_wait.{h,cpp}` owns the one product policy for a cooperative spawn-and-wait: game-specific
+task addresses and continuation PCs come from `GameConfig`, the spawned task is pumped to its authored close,
+and completion returns without manufacturing loading frames. `pc_scheduler.cpp` delegates to that owner; the
+generated multi-frame routine remains an explicit oracle rather than a second product launch mode.
 `hle.cpp` implements Sony libc `A0:0x2F/0x30` (`rand`/`srand`) with per-`Hle` state and the exact
 32-bit LCG (`state*0x41C64E6D+0x3039`, return `(state>>16)&0x7FFF`). It deliberately does not call
 host `rand()`: host sequences differ and process-global state would couple SBS/dual-core Games.
@@ -156,7 +160,6 @@ their presence here is the same defect as the guest addresses in `runtime/` (see
 | tool | why it is not framework |
 |---|---|
 | `disas.py` | "MIPS-I disassembler for **Tomba!2's MAIN.EXE**" |
-| `abcompare.py` | compares `./run.sh` against the oracle — `run.sh` is a game's launcher |
 | `yield_reach.py` | asks whether a function reaches `FUN_80051f80` — a Tomba!2 guest address |
 | `frame_audit.py` · `producer_class.py` | audit Tomba!2 native overrides / graphics producers |
 | `interp_dump.py` | a wide60 proof-of-concept over a GPU dump |
@@ -219,9 +222,15 @@ the game enabled CD audio; sequenced (libsnd) BGM is a SEPARATE working path. De
 
 ## Tests — `ctest`, the framework gate (`tests/`)
 
-psxport is shared by three game ports, so a framework change is gated by a **hermetic** suite that
-needs no disc, no GPU and no window — the three games each need a disc to run at all, so anything
+psxport is shared by the game ports, so a framework change is gated by a **hermetic** suite that
+needs no disc and no window — the games each need a disc to run at all, so anything
 disc-gated is useless as a shared gate.
+
+`test_synchronous_task_wait` exercises flags 1/2/3 through the shipping completion seam and proves synchronous
+completion does not mutate the retired wait counter. `cpp_style` runs `tools/check_cpp_style.py`: repository
+`clang-format` compliance plus shrink-only line caps for the legacy scheduler seams and bounded caps for the new
+task-wait module. A scheduler feature that needs more room must extract a cohesive owner instead of raising the
+legacy cap.
 
 ```bash
 cmake -S . -B build          # standalone psxport configure (from a game tree: -S external/psxport)

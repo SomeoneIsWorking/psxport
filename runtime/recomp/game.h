@@ -122,27 +122,11 @@ public:
   int oracle = 0;
   void setOracle() { oracle = 1; psx_fallback = 1; mods.forceNeutral(); }
 
-  // ---- pc_skip: per-fork shortcut flag (see CLAUDE.md "The 5 paths") -----------------------------
-  // Per-site fork bool. Every collapsed-multi-step-init in the native path is shaped:
-  //     if (game->pc_skip) load_in_one_step();               // shortcut, end-state only
-  //     else               load_in_multi_step_faithfully();  // byte-exact to recomp_path
-  //
-  //   pc_faithful path (pc_skip=false, psx_fallback=0):
-  //       Native OOP that is byte-exact to recomp_path (PSX_GATE=1). What the SBS harness compares.
-  //       This is Job#1 — the "faithful" branch of every fork must match the substrate exactly.
-  //   pc_skip path (pc_skip=true, psx_fallback=0):
-  //       Same code, shortcuts taken where they're safe (collapse recomp coroutine yields into one
-  //       tick, skip redundant preloads, etc.). Default for `./run.sh`.
-  //   recomp_path (psx_fallback=1, pc_skip ignored):
-  //       Full substrate — the stage machines, loaders, and content run as the recompiled PSX body
-  //       instead of the native owners. The oracle for byte-comparison.
-  //
-  // Default is pc_skip=true — the NATIVE shortcut path (Engine::startBinStage, Demo::stageMain,
-  // etc.). Set PSXPORT_PC_SKIP=0 to route everything through the fiber substrate (audit mode:
-  // no native handlers run, scheduler.cpp `has_native_handler_for_entry` returns false). Under
-  // SBS the DEFAULT is also pc_skip=true because that's where real native bugs are — pc_skip=false
-  // just makes A run the same substrate as B (trivial byte-match).
-  bool pc_skip = true;
+  // Product execution is always native + synchronous. This bit is retained only as an internal SBS
+  // discriminator while the old byte-exact native mirrors are retired: ordinary Game construction
+  // leaves it true and no user-facing option changes it. The explicit oracle is psx_fallback, which
+  // runs the generated substrate rather than inventing another native cadence.
+  bool native_sync = true;
 
   // Field BGM director latch (MusicCoord::fieldBgmDirector): a MusicList field song was
   // started and is still considered live (was a function-local static — wrong under two Games).

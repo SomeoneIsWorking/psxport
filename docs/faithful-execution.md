@@ -2,7 +2,7 @@
 
 **Standing ruling (USER 2026-07-07):** faithful strictness is non-negotiable — the strict SBS
 compare is what makes recomp_path an oracle. No exemption classes, no dead-byte probing, no
-compare masks under pc_skip=false. Every byte of guest RAM + scratchpad must match, including
+compare masks in the SBS strict leg. Every byte of guest RAM + scratchpad must match, including
 task-stack scratch. This document derives the engineering consequences.
 
 ## The rule: faithful ports execute on guest machine state — INCLUDING the guest stack
@@ -39,7 +39,7 @@ yield primitive. Per-frame slice cadence is then identical to B **by constructio
 run one slice per runnable task per frame and park mid-body at the same semantic point with the
 same guest sp.
 
-This does NOT violate the "never route pc_skip=0 to the substrate" directive: the fiber is a
+This does NOT route the strict native mirror to the substrate: the fiber is a
 suspension mechanism (same one B uses); every instruction of the body is ported native C++. What
 was banned is running the *substrate's recompiled body* and calling the result a native match.
 
@@ -70,7 +70,7 @@ every caller — user 2026-07-07 global-dispatch directive):
 
 ## Verification
 
-Strict gate unchanged: `PSXPORT_SBS_MODE=full PSXPORT_SBS_PCFAITHFUL=1` must hold zero-diff,
+Strict gate unchanged: `PSXPORT_SBS_MODE=full` must hold zero-diff,
 frame by frame, no masks. Every port lands with the SBS run that proves its bytes.
 
 ## RECIPE GOTCHA: GuestFrame RAII is UNSAFE for functions with tail-jump returns (2026-07-15)

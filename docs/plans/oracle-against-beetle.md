@@ -80,7 +80,7 @@ Three sources of drift, each of which would make the oracle lie rather than fail
   or drive both from ONE synthetic clock. Do not discover this at milestone 4.
 - **Input.** Pinned and scripted on both sides, never live. The SBS harness already has
   `PSXPORT_SBS_PAD_REPLAY` for the mirrored-lockstep case, with a recorded caveat that a frame-indexed
-  capture lands inputs at the wrong moments when `pc_skip` differs — the same trap applies here.
+  capture lands inputs at the wrong moments when synchronous product cadence differs — the same trap applies here.
 - **Uninitialised memory.** Both sides must start from a bit-identical image, which is what injecting
   the executable buys. Mednafen also has a savestate layer (`mednafen/state.h`, `state_helpers.h`)
   usable to freeze a reached point instead of re-deriving it — worth using once a window past boot is

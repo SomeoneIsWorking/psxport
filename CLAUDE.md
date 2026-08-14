@@ -73,7 +73,7 @@ cmake --build build && ctest --test-dir build --output-on-failure  # the gate
 ctest --test-dir build -R <test_name>                             # one test
 ```
 
-A framework change **starts with a RED hermetic test** (no disc, no GPU, no window): drop in one
+A framework change **starts with a RED hermetic test** (no disc, no window): drop in one
 `tests/test_*.cpp` using `tests/testutil.h` — they are globbed, so there is no shared file to edit and
 no merge point — run it, and paste the failure before the fix. `docs/project-map.md` ("Tests") for the
 layout, `docs/workspace/PROTOCOL.md` ("TDD") for why the rule exists.

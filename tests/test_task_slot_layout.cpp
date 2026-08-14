@@ -42,7 +42,7 @@ static void test_addresses_reproduce_the_literals(void) {
 
 // The table's EXTENT, which is what addrLabel()'s "task_slots" window is derived from. The literal it
 // replaced was 0x801FE000..0x801FE200 — 0xB0 bytes too wide: 3 x 0x70 ends at 0x801FE150, and
-// 0x801FE150.. is task-0's STACK (sbs.cpp's own pc_skip note says so, and masks it separately). So the
+// 0x801FE150.. is task-0's STACK (sbs.cpp's native-sync note says so, and masks it separately). So the
 // old label called stack scratch "task_slots".
 static void test_table_extent_is_base_plus_count_times_stride(void) {
   const GameConfig cfg = tomba2_cfg();

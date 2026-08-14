@@ -615,7 +615,7 @@ quoting a call). The class map prints any framework-live knob it does not cover;
 | `PSXPORT_PAD_REPLAY` | path | 2 | `runtime/recomp/pad_input.cpp:411` · `runtime/recomp/pad_input.cpp:432` | **none** |
 | `PSXPORT_SBS_PAD_REPLAY` | path | 1 | `runtime/recomp/sbs.cpp:1356` | config.md:25 |
 | `PSXPORT_SETTINGS` | path | 1 | `runtime/recomp/mods.cpp:12` | config.md:46 |
-| `PSXPORT_TOMBA2_DISC` | path | 10 +game:Tomba2Engine | `tools/abcompare.py:55` · `tools/abcompare.py:62` · `tools/chd_dump_cdda.c:19` +7 more | config.md:560 |
+| `PSXPORT_TOMBA2_DISC` | path | 8 +game:Tomba2Engine | `tools/chd_dump_cdda.c:19` +7 more | config.md:560 |
 | `PSXPORT_WAV` | path | 1 | `runtime/recomp/spu_audio.cpp:90` | config.md:724 |
 | `PSXPORT_WORKDIR` | ? | 1 | `tools/decomp.sh:19` | **none** |
 
@@ -667,7 +667,6 @@ register its own CVars, and because 6 of them are documented in the FRAMEWORK's 
 | `PSXPORT_NATIVE_TERRAIN` | spyro `core/wide_clip.cpp:264` | no |
 | `PSXPORT_NDIFF_IDENTITY` | spyro `core/native_render.cpp:200` | no |
 | `PSXPORT_NO_NATIVE` | spyro `core/game_hooks.cpp:70` | no |
-| `PSXPORT_PC_SKIP` | Tomba2Engine `core/main.cpp:49` | yes, line 767 |
 | `PSXPORT_PRESENT_BURST` | spider1 `core/sync_native.cpp:266` | no |
 | `PSXPORT_RECALLOC_TRACE` | Tomba2Engine `world/graphics_bind.cpp:69` | no |
 | `PSXPORT_RNG_CALLTRACE` | Tomba2Engine `math/rng.cpp:30` | no |
