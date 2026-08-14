@@ -96,8 +96,14 @@ billboard-history hook.
 (in-game XA-ADPCM streaming).
 **CD/disc:** `cd_override.cpp` (libcd/engine read primitives → native), `cdc_native.c`, `disc.c` (libchdr),
 `memcard.cpp`.
-**Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle gte.c),
-`mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`
+**Hardware lifts (vanish when their CALLERS are ported, NOT by re-emulating):** `gte_beetle.cpp` (Beetle
+gte.c). `gte_state.h::GTE_ExecuteIsolated` runs any vendor GTE instruction against an explicit `GteRegs`
+without changing the caller's bound state. Its implementation tracks nested isolation depth and suppresses
+PGXP/diagnostic callbacks. The vendor binding and FLAGS accumulator are thread-local. `test_gte_isolated`
+differentially gates INTPL, NCDS, and DPCS against the ordinary bound path, verifies caller restoration,
+sequential state interleaving, and simultaneous two-thread TLS isolation, and includes a forced mismatch
+discriminator. Callback suppression and nested entry are implementation properties, not dynamically tested
+by that suite. `mdec_beetle.c` (mdec.c), `native_fmv.cpp` (STR/MDEC FMV + shared XA decoder), `pad_input.cpp`
 (final effective mask + shared `ActiveLowEdges`; game/sequence code owns every resulting transition).
 
 ## Tools — ONE LINE EACH, and what is wrong with this list

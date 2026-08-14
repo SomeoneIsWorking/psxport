@@ -36,6 +36,11 @@ extern "C" {
 // Make `s` the active GTE instance for all subsequent GTE_* calls; lazily inits its CR/DR pointers.
 void     GTE_BindState(GteRegs* s);
 GteRegs* GTE_CurState(void);
+// Execute one instruction against `s` through Beetle's authoritative GTE_Instruction path. The
+// caller's binding is restored before return and bindings are thread-local. The implementation tracks
+// nested isolation depth and suppresses PGXP and diagnostic callbacks, so the only mutated object is
+// `s`. Returns -1 for a null state; otherwise returns the same cycle result as GTE_Instruction.
+int32_t  GTE_ExecuteIsolated(GteRegs* s, uint32_t instr);
 #ifdef __cplusplus
 }
 #endif
