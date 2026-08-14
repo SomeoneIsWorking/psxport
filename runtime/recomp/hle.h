@@ -29,6 +29,9 @@ public:
   // request while looking — from outside — exactly like a game that never allocates. This counter is
   // the denominator behind any claim that the heap "works".
   uint32_t heap_refused = 0;
+  // BIOS libc rand/srand (A0:0x2F/0x30). Per Hle, hence per Game/Core: host rand() would introduce
+  // process-global cross-core state and a host-specific sequence. Sony's libc starts from seed 1.
+  uint32_t rand_state = 1;
   int      work_ok    = 0;        // was s_work_ok
   uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
   int      irq_enabled = 1;       // was s_irq_enabled

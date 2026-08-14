@@ -97,7 +97,7 @@ The recompiler input is **NOT the boot EXE `SCUS_944.54`**. Measured:
     - hardware regs touched: I_MASK/I_STAT (`0x1F8010 74/70`), DMA (`0x1F8010F0`), Timer1
       (`0x1F8011 10/14`), CDROM (`0x1F8018 00/03`), **GPUSTAT `0x1F801814` ready-poll**
       (spins because `mem.c` returns 0 — first thing the GPU/timer stub must satisfy).
-  - **DONE:** `runtime/recomp/hle.c` — recomp-native HLE (heap A0:0x33-0x39, HookEntryInt,
+  - **DONE:** `runtime/recomp/hle.cpp` — recomp-native HLE (libc rand/srand A0:0x2F/0x30, heap A0:0x33-0x39, HookEntryInt,
     FileWrite→stderr, GetB0/C0Table, ChangeClearPAD, GPU_cw, C0 installers, `syscall`
     Enter/ExitCriticalSection via `$a0`), transcribed faithfully from the proven
     `hle_kernel.cpp`. `mem.c` reports GPUSTAT `0x1F801814` permanently ready (+toggling bit31)

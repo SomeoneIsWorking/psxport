@@ -348,6 +348,17 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
   HleEvCB* s_ev = ev;   // alias so the switch bodies below read tersely
   if (table == 'A') {
     switch (fn) {
+      // Sony libc rand/srand. This exact LCG also appears in linked PSX libc implementations:
+      // unsigned 32-bit wrap, then the upper 15 bits. Keep the state per Hle/Game rather than using
+      // host rand(), whose sequence and process-global coupling are both wrong for dual-core runs.
+      case 0x2F:
+        rand_state = rand_state * 0x41C64E6Du + 0x3039u;
+        c->r[V0] = (rand_state >> 16) & 0x7FFFu;
+        return true;
+      case 0x30:
+        rand_state = a0;
+        c->r[V0] = 0;
+        return true;
       case 0x33: c->r[V0] = heapAlloc(a0); return true;               // malloc
       case 0x34: heapFree(a0); c->r[V0] = 0; return true;              // free
       case 0x37: { uint32_t n = a0 * a1, p = heapAlloc(n);            // calloc
