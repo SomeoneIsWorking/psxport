@@ -12,6 +12,8 @@ decomp is an excellent source of function boundaries and names; it is not eviden
 | project | license | what that permits |
 |---|---|---|
 | `theMagicalKarp/open-spyro` | **CC0-1.0** | take code AND ideas freely, cite as courtesy |
+| `TheMobyCollective/spyro-1` | **CC0-1.0** | same — the primary Spyro decomp reference (vendored `spyro/external/spyro-1`) |
+| `OpenDriver2/PsyCross` | **MIT** | code AND ideas freely — the Psy-Q SDK reference (vendored `psxport/external/psycross`) |
 | `TwilitRealm/dusklight` | **CC0** | same (see `CLAUDE.md`) |
 | `mstan/psxrecomp` | **PolyForm Noncommercial 1.0.0** | **READ AND LEARN ONLY.** Copying code drags the noncommercial term into this repo. Take the SHAPE, never the text |
 | `hansbonini/psx_tomba` | check before use | not yet verified — do that before taking anything |
@@ -64,7 +66,22 @@ through it.
   **byte-identical to its target**, so its `config/symbol_addrs.txt` + `include/{types,funcs,globals}.h`
   name OUR addresses with no translation. Its matched figure is now **14.63%** (828 main-EXE functions —
   673 game, 155 PSY-Q/libc — plus 37 overlays); `spyro/docs/references.md` said ~5% and was stale.
-  Also: `TheMobyCollective/spyro-1`, `celophi/spyro-decompilation`.
+  **`TheMobyCollective/spyro-1` became the PRIMARY decomp reference 2026-08-16** — added as a submodule at
+  `spyro/external/spyro-1` (CC0, same target checksum, >40% C-matched, 242/270 listed functions). Also
+  still present: `celophi/spyro-decompilation`.
+
+## `OpenDriver2/PsyCross` — the PSYQ SDK, reimplemented natively (cross-project)
+
+MIT, vendored as a submodule at **`psxport/external/psycross`** 2026-08-16. This is **not a decomp of any
+single game** — it is a from-scratch native reimplementation of the **Psy-Q SDK layer** (`libgte`, `libgpu`,
+`libspu`, `libcd`), plus the PSX GTE in software (with the PGXP-Z vertex cache) and a modern renderer
+(OpenGL/PSX VRAM emulation), built to run PSYQ-based PS1 games on PC. That makes it the closest thing to a
+reference implementation of the SDK every game in this workspace links against — the same SDK surface
+psxport HLEs in `runtime/recomp/` and its vendored beetle-psx backends. Read it for the SHAPE of a clean
+native SDK (function semantics, how the GPU linked-list / polygon pipeline is structured, how libcd
+read-scheduling is modelled) when designing native ownership of SDK layers; MIT means code can be taken,
+but psxport's own SDK layer is a different architecture, so treat it as a behavioural oracle, not a
+drop-in. Reference only — it is **never built** as part of psxport and is not in `vendor/` for that reason.
 - **Tomba! 1** — `hansbonini/psx_tomba` (above). Engine code will NOT transfer — 3.9% = 0.5× the
   cross-studio null max against Tomba! 2's `MAIN.EXE`, and 1 shared whole function = 0.08× (the 18.8% an
   earlier version of this line quoted is the pre-recalibration asymmetric figure; do not reuse it). Both

@@ -4,3 +4,6 @@
 [submodule "vendor/lucent"]
 	path = vendor/lucent
 	url = https://github.com/SomeoneIsWorking/lucent.git
+[submodule "external/psycross"]
+	path = external/psycross
+	url = https://github.com/OpenDriver2/PsyCross.git

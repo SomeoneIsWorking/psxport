@@ -40,6 +40,9 @@ init_vendors() {                       # init_vendors <psxport checkout>
 
 say "framework dev clone: $PSXPORT"
 init_vendors "$PSXPORT"
+# Reference submodules of the dev clone itself (never built, read-only references): psycross is the
+# cross-project Psy-Q SDK reference (see docs/prior-art.md). Init explicitly, one at a time.
+git -C "$PSXPORT" submodule update --init external/psycross
 
 REMOTE_BACKED=(spyro spider1 Tomba2Engine vagrant megamanx4 crash ctr crashbash tekken3)
 LOCAL_ONLY=()                          # no non-reproducible tree is currently registered here

@@ -157,7 +157,8 @@ seven titles made by an edit to one.
 
 | tree | vendored reference | license | what that permits |
 |---|---|---|---|
-| `spyro/external/open-spyro`, `vagrant/external/rood-reverse` | Spyro 1 / Vagrant Story decomps | CC0-1.0 | code AND ideas, freely, both directions |
+| `spyro/external/open-spyro`, `spyro/external/spyro-1`, `vagrant/external/rood-reverse` | Spyro 1 / Vagrant Story decomps | CC0-1.0 | code AND ideas, freely, both directions |
+| `psxport/external/psycross` | Psy-Q SDK reimplementation (libgte/gpu/spu/cd + GTE/PGXP-Z) | **MIT** | usable and liftable; reference-only here, never built |
 | `megamanx4/external/mmx4` | Mega Man X4 decomp | **AGPL-3.0** | usable, but **repo-local**. Never lift into `psxport` |
 | `psxport/vendor/beetle-psx` | GTE/MDEC/SPU/CHD backends | GPL-2-**or-later** | verified 2026-08-12: 121 "any later version" headers, so upgradable to AGPL-3. GPL-2-ONLY would have made the combination undistributable |
 
