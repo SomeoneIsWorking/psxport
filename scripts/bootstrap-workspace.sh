@@ -55,9 +55,19 @@ for g in "${REMOTE_BACKED[@]}"; do
     say "cloning $g…"
     git clone "$GH/$g.git" "$PSX/$g"; cloned=$((cloned+1))
   fi
-  say "$g: init external/psxport (a READ-ONLY pinned consumer — never edit it)"
-  git -C "$PSX/$g" submodule update --init external/psxport
-  init_vendors "$PSX/$g/external/psxport"
+  # The game's OWN submodules (decomp/vendor references, e.g. spyro's external/spyro-1) are still
+  # real submodules — init them one at a time, non-recursively (same reason as init_vendors).
+  for sm in $(git -C "$PSX/$g" config --file "$PSX/$g/.gitmodules" --get-regexp path 2>/dev/null \
+                | awk '{print $2}'); do
+    [ "$sm" = "external/psxport" ] && continue
+    git -C "$PSX/$g" submodule update --init "$sm" 2>/dev/null || \
+      say "$g: submodule $sm not initialised"
+  done
+  # external/psxport is NOT a submodule any more (2026-08-16): it is a symlink to the shared clone,
+  # or a private clone at this game's psxport.pin. The game's own tool establishes whichever applies.
+  say "$g: establish external/psxport ($([ -f "$PSX/$g/tools/psxport_sync.py" ] && echo 'psxport_sync.py --auto' || echo 'no sync tool yet'))"
+  [ -f "$PSX/$g/tools/psxport_sync.py" ] && \
+    (cd "$PSX/$g" && python3 tools/psxport_sync.py --auto || say "$g: psxport_sync.py --auto did not resolve external/psxport")
 done
 
 # Local-only trees: init what is here, and be explicit when it is NOT here. A fresh machine must not
@@ -66,9 +76,8 @@ missing=()
 for g in "${LOCAL_ONLY[@]}"; do
   if [ -d "$PSX/$g/.git" ]; then
     say "$g: present ($(git -C "$PSX/$g" rev-parse --short HEAD)) — LOCAL ONLY, has no remote"
-    git -C "$PSX/$g" submodule update --init external/psxport 2>/dev/null || \
-      say "$g: external/psxport not initialised (no gitlink recorded yet)"
-    [ -d "$PSX/$g/external/psxport/.git" ] && init_vendors "$PSX/$g/external/psxport"
+    [ -f "$PSX/$g/tools/psxport_sync.py" ] && \
+      (cd "$PSX/$g" && python3 tools/psxport_sync.py --auto || say "$g: psxport_sync.py --auto did not resolve external/psxport")
   else
     missing+=("$g")
   fi
