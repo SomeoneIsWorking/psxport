@@ -325,16 +325,46 @@ void Fps60::dumpPresent(Core* core, bool interp) {
 }
 
 // ---- per-logic-frame fence + present -----------------------------------------------------------------
-// rq_capture always writes the newly-flushed queue into `mRqCur` — the buffer that, after the PREVIOUS
-// present_vk's end-of-frame pointer swap, holds the now-stale two-frames-ago content (never needed again,
-// safe to overwrite). `mRqPrev` is left untouched here — it still holds last frame's real queue, which
-// present_vk's slot A is about to replay verbatim. See the swap at the end of present_vk.
+// rq_capture ACCUMULATES into `mRqCur` across every flush of one logic frame, and is emptied at the
+// frame fence by presentRotate. `mRqPrev` is left untouched here — it still holds last frame's real
+// queue, which present_vk's slot A is about to replay verbatim. See the swap at the end of present_vk.
+//
+// It used to OVERWRITE per flush (`memcpy(mRqCur, …); mNCur = n;`), on the assumption that a flush is
+// the frame's final queue. It is not: a flush is "one draw-list submission ended", and a logic frame
+// issues one per guest DrawOTag — commonly TWO. Whatever was in the earlier flush was then silently
+// discarded at 60fps while rendering perfectly at 30, because at fps60=0 flush() calls emitQueue()
+// directly and every flush reaches the picture.
+//
+// Measured cost of that assumption: Tomba!2 emits its 2D panel/prompt/dialog chrome in the FIRST flush
+// and the world in the second, so the ENTIRE panel family vanished at the committed default fps60=1 —
+// kanban #94's "Use UP + O to talk" box and #35's START page, the latter having been fixed and
+// screenshot-verified a fortnight earlier on the fps60=0 leg. Since flush COUNT is guest-state
+// dependent, the same panel code was visible in one scene and invisible in another, and an unrelated
+// change to when the guest issues DrawOTag could flip a whole UI layer off with no UI commit in the
+// diff. That is why this family read as "fixed and re-broken a million times" (USER, 2026-08-16) when
+// none of the fixes had actually regressed. Same mechanism behind the black SBS panes and kanban #20's
+// black pause screen. The invariant that keeps it honest is the produced-vs-presented ledger; a
+// producer that pushes prims nothing presents is invisible on screen and must never be silent.
+//
+// Ordering: presentPass merges by (layer, seq), and each flush restarts seq at 0, so appended items are
+// rebased by the running total. Within a layer, paint order across flushes is then submission order —
+// exactly what emitQueue() would have produced had it run per flush.
 void Fps60::rq_capture(const RqItem* items, int n) {
   if (!mRqCur)  mRqCur  = new RqItem[FPS60_RQ_MAX];
   if (!mRqPrev) mRqPrev = new RqItem[FPS60_RQ_MAX];
-  if (n > FPS60_RQ_MAX) n = FPS60_RQ_MAX;
-  if (n > 0) memcpy(mRqCur, items, (size_t)n * sizeof(RqItem));
-  mNCur = n;
+  if (n <= 0) return;                 // an empty flush contributes nothing; it must not blank the frame
+  if (mNCur + n > FPS60_RQ_MAX) {
+    // FAIL-FAST rather than truncate: a silently dropped tail is the exact failure this function is
+    // being fixed for, and it would come back as "some layer is missing in one scene".
+    lucent::error("fps60", "Fps60::rq_capture OVERFLOW: {} captured + {} this flush > FPS60_RQ_MAX {}. "
+                  "Raise the cap; do not drop prims.", mNCur, n, (int)FPS60_RQ_MAX);
+    abort();
+  }
+  const uint32_t seqBase = mSeqBase;
+  memcpy(mRqCur + mNCur, items, (size_t)n * sizeof(RqItem));
+  for (int i = 0; i < n; i++) mRqCur[mNCur + i].seq += seqBase;
+  mNCur    += n;
+  mSeqBase += (uint32_t)n;
 }
 
 void Fps60::frame_commit(Core* core, int guestFields) {
@@ -469,6 +499,12 @@ void Fps60::presentRotate() {
   // came from.
   std::swap(mRqCur, mRqPrev);
   std::swap(mNCur, mNPrev);
+  // The frame fence, and the ONLY place the capture is emptied. rq_capture accumulates every flush of a
+  // logic frame, so the reset cannot live there; after the swap mNCur holds the two-frames-ago count,
+  // which is stale by definition. Zeroing here (rather than relying on the next capture to overwrite) is
+  // what makes "this frame captured nothing" distinguishable from "this frame reused stale prims".
+  mNCur    = 0;
+  mSeqBase = 0;
   std::swap(mCamCur, mCamPrev);
   std::swap(mBgCur, mBgPrev);
   std::swap(mObjCur, mObjPrev);   // this frame's per-object transforms become next frame's Q[N-1]
