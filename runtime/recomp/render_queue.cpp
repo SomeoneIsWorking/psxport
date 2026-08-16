@@ -310,19 +310,26 @@ void RenderQueue::sortQueue() {
   });
 }
 
+// `debug rqhist` (diag): per-frame histogram of the queue by layer × opaque/semi.
+// Called from flush(), NOT from emitQueue(), for the same reason zfightScan is (see the comment at its
+// call site): under the user's real mods.fps60=1 config flush HOLDS the queue for fps60 to present and
+// never reaches emitQueue, so a histogram sited there prints NOTHING on exactly the configuration
+// people debug. Silence then reads as "the queue is empty" — measured 2026-08-16, where it sent a
+// missing-world investigation looking for an empty queue that was in fact full.
+// The channel guard is real: this is an O(queue) walk — up to ~43k items — on EVERY frame. Interned
+// Channel so the off case is a load/compare rather than a name hash under a mutex.
+void RenderQueue::histogram() {
+  static const lucent::Channel rqhist_ch{"rqhist"};
+  if (!rqhist_ch) return;
+  int c[4][2] = {{0,0},{0,0},{0,0},{0,0}};
+  for (int i = 0; i < n; i++) { int L = items[i].layer & 3, sm = items[i].semi ? 1 : 0; c[L][sm]++; }
+  static int lf = 0; if ((lf++ % 30) == 0)
+    lucent::debug(rqhist_ch, "n={}  bg(op/semi)={}/{}  WORLD={}/{}  ovl={}/{}  hud={}/{}",
+            n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
+}
+
 void RenderQueue::emitQueue(Core* core) {
   if (!n) { mark_consumed(); return; }
-  // `debug rqhist` (diag): per-frame histogram of what the queue actually emits, by layer × opaque/semi.
-  // The guard is real: the histogram walk is O(queue) — up to ~43k items — on EVERY frame. Interned
-  // Channel so the off case is a load/compare rather than a name hash under a mutex.
-  static const lucent::Channel rqhist_ch{"rqhist"};
-  if (rqhist_ch) {
-    int c[4][2] = {{0,0},{0,0},{0,0},{0,0}};
-    for (int i = 0; i < n; i++) { int L = items[i].layer & 3, sm = items[i].semi ? 1 : 0; c[L][sm]++; }
-    static int lf = 0; if ((lf++ % 30) == 0)
-      lucent::debug("rqhist", "n={}  bg(op/semi)={}/{}  WORLD={}/{}  ovl={}/{}  hud={}/{}",
-              n, c[0][0],c[0][1], c[1][0],c[1][1], c[2][0],c[2][1], c[3][0],c[3][1]);
-  }
   bool havePainter = false; for (int i=0;i<n;i++) havePainter |= items[i].painter_object != 0;
   if (!havePainter) {
     for (int i = 0; i < n; i++) emitItem(core, &items[i]);
@@ -503,6 +510,9 @@ void RenderQueue::flush(Core* core) {
   // part in the same sort as everything else; resolveKeyOrder ignores them (HUD, no game sort key).
   if (n && objid_on(core)) objidOverlay(core);
   finalize(core);
+  // Sited here, beside zfightScan, so it sees the same sorted item set under BOTH the fps60 capture
+  // branch below and the plain emitQueue() path — see histogram()'s own comment.
+  histogram();
   // zfightScan reads only the sorted item array (depth/xy/order_mode set at submission time) — it does not
   // depend on emitItem having run — so it belongs HERE, right after sortQueue, not inside emitQueue. This is
   // the one placement that scans the exact same (sorted, real-frame) item set under BOTH the fps60 capture
