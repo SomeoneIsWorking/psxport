@@ -364,6 +364,7 @@ void Fps60::rq_capture(const RqItem* items, int n) {
     abort();
   }
   const uint32_t seqBase = mSeqBase;
+  for (int i = 0; i < n; i++) game->rq.mLedger.noteCaptured(items[i].layer);   // present_ledger.h
   memcpy(mRqCur + mNCur, items, (size_t)n * sizeof(RqItem));
   for (int i = 0; i < n; i++) mRqCur[mNCur + i].seq += seqBase;
   mNCur    += n;
@@ -381,6 +382,10 @@ void Fps60::frame_commit(Core* core, int guestFields) {
   }
   mFence++;
   if (!core->game->diff_mode) present_vk(core);
+  // Reconcile BEFORE resetting: a layer captured this frame and drawn by nobody is the shape every one
+  // of the 2026-08-16 render regressions had (docs/one-renderer.md, kanban #98).
+  core->game->rq.mLedger.reconcile(mFence, cfg_on("PSXPORT_GATE_PRESENTATION"));
+  core->game->rq.mLedger.beginFrame();
   mFrameHash = 1469598103934665603ull;
   mFrameGeom = 0;
 }
@@ -426,7 +431,9 @@ void Fps60::present_vk(Core* core) {
   // value, so this is the in-between at its near endpoint rather than a separate replay of the captured
   // queue. That is what makes the symmetry structural instead of a property two code paths happen to
   // share.
+  q.mLedger.inRealPresent = true;    // only the real present counts as "reached the screen"
   presentPass(c, 1.0f);
+  q.mLedger.inRealPresent = false;
   gpu_present_ex(c, 1);
   dumpPresent(c, /*interp=*/false);
   // Pacing differs only BECAUSE the extra frame does: two half-frames when an in-between was inserted,

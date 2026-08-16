@@ -81,6 +81,14 @@ layout, `docs/workspace/PROTOCOL.md` ("TDD") for why the rule exists.
 
 ## `./run.sh` IS THE USER'S. Agents build and gate with their own tools
 
+**TOOLS ARE PYTHON. `run.sh` is the only shell script that gets to exist** (USER, 2026-08-16: *"only
+run.sh should be a shell script, all other scripts should be python"*). It is the exception because it
+is the user's launcher, not a tool. Everything else — gates, sweeps, builders, converters — is a
+`.py` with `argparse`, a `--help` that says what it asserts, and an exit code that distinguishes
+PASS / FAIL / REFUSED-because-it-could-not-assert-anything. New shell scripts are not to be added, and
+a shell script you touch is one you convert. The conversion backlog is tracked in Tomba2Engine's kanban.
+
+
 **USER directive, 2026-08-11: *"I don't know why you are running run.sh, that is for me to play, you
 should have your own tools."* An agent must never invoke `./run.sh`** — not even with
 `PSXPORT_NOWINDOW=1`. It is the end-to-end WINDOWED play launcher: it re-syncs submodules, re-extracts

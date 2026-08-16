@@ -13,6 +13,7 @@
 #define RENDER_QUEUE_H
 #include <stdint.h>
 #include "painter_object_layer.h"
+#include "present_ledger.h"
 
 struct Core;
 class Game;
@@ -187,6 +188,9 @@ struct RenderQueue {
   // already wide-final raises a Space2dScope around its pushes. Per-RenderQueue (never a file-scope
   // flag) so SBS's two cores cannot see each other's scope.
   Rq2dSpace m2dSpace = RQ_2D_AUTHORED_4_3;
+  // CAPTURED vs PRESENTED, per layer (present_ledger.h). Per-RenderQueue so SBS's two cores cannot
+  // see each other's counts, same as m2dSpace.
+  PresentLedger mLedger;
   PainterObjectId mPainterObject = 0;
   uint8_t mPainterFlags = PAINTER_OBJECT_NONE;
   uint16_t mPainterScopeDepth = 0;

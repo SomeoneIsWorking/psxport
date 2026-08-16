@@ -391,9 +391,14 @@ void RenderQueue::zfightScan(Core* core) {
   std::vector<float> d1(W*H, -1.f), d2(W*H, -1.f);
   std::vector<int>   p1(W*H, -1),   p2(W*H, -1);
   auto edge=[](float ax,float ay,float x0,float y0,float x1,float y1){ return (x1-x0)*(ay-y0)-(y1-y0)*(ax-x0); };
+  // DENOMINATOR. A z-fight scan that rasterizes nothing reports fight=0, which is indistinguishable
+  // from "no contests" — measured 2026-08-16, where it certified every outdoor scene clean while its
+  // candidate set was EMPTY. Count what was actually examined and print it unconditionally below.
+  int candidates = 0;
   for (int idx = 0; idx < n; idx++) {
     const RqItem* it = &items[idx];
     if (it->semi || it->order_mode != RQ_OM_DEPTH || !it->depth) continue;
+    ++candidates;
     int nv = it->nv ? it->nv : 4;
     const float* fx = it->has_xyf ? it->xsf : nullptr; const float* fy = it->has_xyf ? it->ysf : nullptr;
     for (int t = 0; t < (nv==4?2:1); t++) {   // tris: (0,1,2) and for a quad also (1,2,3)
@@ -460,7 +465,16 @@ void RenderQueue::zfightScan(Core* core) {
   }
   std::sort(pairs.begin(),pairs.end(),[](const Pair&a,const Pair&b){return a.inv!=b.inv ? a.inv>b.inv : a.cnt>b.cnt;});
   auto pc=[](int a,int b){ return b?100.f*a/b:0.f; };
-  lucent::info("zfight", "f{} eps={:.6g} fight={} ties(<1e-5)={} | ALL paint-stable raw={:.0f}% U4e7={:.0f}% U1e6={:.0f}% U4e6={:.0f}% U1e5={:.0f}% | TIES raw={:.0f}% U4e7={:.0f}% U1e6={:.0f}% U4e6={:.0f}% U1e5={:.0f}%", s.s_frame, eps, nfight, ntie,
+  // The denominator leads the line, and a scan with nothing to look at REFUSES rather than reporting a
+  // clean sheet: "scanned 0 of N" is a statement about the instrument, not about the scene.
+  if (!candidates) {
+    lucent::info("zfight", "f{} REFUSED: scanned 0 depth candidate(s) of {} queue item(s) — this says "
+                 "NOTHING about z-fighting in this scene, only that the scan saw no opaque depth prims "
+                 "here. (Under fps60 the world is built at present time; a queue-side scan sees the 2D "
+                 "only. See docs/one-renderer.md.)", s.s_frame, n);
+    return;
+  }
+  lucent::info("zfight", "f{} scanned={} of {} item(s) eps={:.6g} fight={} ties(<1e-5)={} | ALL paint-stable raw={:.0f}% U4e7={:.0f}% U1e6={:.0f}% U4e6={:.0f}% U1e5={:.0f}% | TIES raw={:.0f}% U4e7={:.0f}% U1e6={:.0f}% U4e6={:.0f}% U1e5={:.0f}%", s.s_frame, candidates, n, eps, nfight, ntie,
     pc(paint_stable_raw,nfight), pc(ps_b[0],nfight), pc(ps_b[1],nfight), pc(ps_b[2],nfight), pc(ps_b[3],nfight),
     pc(ptie_raw,ntie), pc(ptie_b[0],ntie), pc(ptie_b[1],ntie), pc(ptie_b[2],ntie), pc(ptie_b[3],ntie));
   auto vd=[](const RqItem&P,int i){ return P.depth?P.depth[i]:-1.f; };
@@ -648,6 +662,7 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
           rs[0],gs[0],bs[0], raw, mode, it->tp_x, it->tp_y, it->clut_x, it->clut_y,
           us[0],vs[0], us[1],vs[1], us[2],vs[2], us[3],vs[3],
           xs[0],ys[0], xs[1],ys[1], xs[2],ys[2], xs[3],ys[3]); } } } }
+  mLedger.noteEmitted(it->layer);   // present_ledger.h — the single funnel every drawn prim passes
   unsigned ord = s.s_prim_order++;
   // Canonical queue sequence, applied at the last possible point so an earlier diagnostic/filter return
   // cannot leak an override into the next item. Regrouped painter emission therefore keeps exact-depth

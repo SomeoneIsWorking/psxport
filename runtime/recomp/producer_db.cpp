@@ -50,6 +50,10 @@ void producer_db_begin(Core* c) {
 }
 
 void producer_db_finish(Core* c) {
+  // CAPTURED vs PRESENTED (present_ledger.h). Printed here because this is the run-end report the
+  // project already reads, and because its NEVER-FED case is only meaningful at run end: a ledger
+  // that reconciled zero frames must not be mistaken for a run in which nothing was dropped.
+  c->game->rq.mLedger.runEnd();
   c->rsub.otAttr.reportFrameContract("producer_db_finish");
   lucent::info("producers",
     "run-end: claim resolution (SPANS, not prims — a span is a coalesced run of packet-pool stores, and "
