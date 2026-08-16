@@ -41,6 +41,7 @@ void gpu_present_ex(Core* core, int do_blit);
 void gpu_fps60_present_pass(Core* core);
 void gpu_pace_subframe(Core* core, int n);
 void gpu_pace_subframe_fields(Core* core, int guestFields, int parts);
+void gpu_pace_frame(Core* core);   // whole-frame pacer — used when no in-between was inserted
 
 #define FPS60_RQ_MAX RQ_MAX
 
@@ -106,10 +107,12 @@ void Fps60::sceneCam(Core* c, float R[3][3], float T[3], float& ofx, float& ofy,
   // TIER 1 capture: this is a REAL-frame call (mCamOverrideOn is false) — mirror it into mCamCur, the slot
   // that present_vk's end-of-frame swap rotates in lockstep with mRqCur/mRqPrev. Every sceneCam() call this
   // logic frame reads the same unchanged guest camera, so overwriting on every call is idempotent.
-  if (active()) {
-    for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamCur.R[i][j] = R[i][j]; mCamCur.T[i] = T[i]; }
-    mCamCur.ofx = ofx; mCamCur.ofy = ofy; mCamCur.H = H;
-  }
+  // UNCONDITIONAL. The world is built at PRESENT time in both configs (see presentPass), and this is the
+  // camera it is built from — an input to the one renderer, not fps60 machinery. Gating it on active()
+  // is what made fps60=0 a second renderer: with no camera captured, a present-time world build runs
+  // against a zero camera and collapses the scene to its backdrop.
+  for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) mCamCur.R[i][j] = R[i][j]; mCamCur.T[i] = T[i]; }
+  mCamCur.ofx = ofx; mCamCur.ofy = ofy; mCamCur.H = H;
 }
 
 // ---- TIER 1 BACKDROP: game-logic-scroll layer-transform lerp (docs/fps60-rework.md) --------------------
@@ -119,7 +122,7 @@ void Fps60::bgScroll(Core* c, uint32_t t4, int& scrollX, int& scrollY) {
   scrollY = c->mem_r16s(t4 + 0x2au);
   // TIER 1 capture: this is a REAL-frame call — mirror it into mBgCur, rotated in lockstep with mRqCur/
   // mRqPrev / mCamCur/mCamPrev by present_vk's end-of-frame swap.
-  if (active()) { mBgCur.scrollX = scrollX; mBgCur.scrollY = scrollY; }
+  mBgCur.scrollX = scrollX; mBgCur.scrollY = scrollY;   // unconditional, same reason as sceneCam's capture
 }
 
 // Shortest-signed-path lerp for a value the guest wraps into [0, mod) every tick (ParallaxBg::step's
@@ -367,11 +370,15 @@ void Fps60::rq_capture(const RqItem* items, int n) {
   mSeqBase += (uint32_t)n;
 }
 
+// THE frame fence and THE present, for both configs. This used to `return` when the tier was off, which
+// is what left fps60=0 to be presented by a separate branch in the game — two renderers rather than one
+// renderer plus an optional extra frame (USER, 2026-08-16).
 void Fps60::frame_commit(Core* core, int guestFields) {
-  if (!active()) return;
   mCommitGuestFields = guestFields;
-  uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
-  rate_tick(&mRd, set_hash);
+  if (active()) {   // the logic-rate detector schedules in-betweens; with none to schedule it has no job
+    uint64_t set_hash = (mFrameGeom > 0) ? mFrameHash : 0xFFFFFFFFFFFFFFFFull;
+    rate_tick(&mRd, set_hash);
+  }
   mFence++;
   if (!core->game->diff_mode) present_vk(core);
   mFrameHash = 1469598103934665603ull;
@@ -392,12 +399,17 @@ void Fps60::present_vk(Core* core) {
   // the endpoints, not an approximation. Unset -> default 0.5 (the shipped midpoint).
   int tforce = cfg_int("PSXPORT_FPS60_TFORCE", -1);
   const float tInterp = (tforce == 0) ? 0.0f : (tforce == 1) ? 1.0f : 0.5f;
+  // THE ONE DIFFERENCE BETWEEN THE TWO CONFIGS. Everything else below runs identically. mHavePrev is a
+  // scheduling condition, not a second code path: with no previous frame there is nothing to lerp from,
+  // so there is no in-between to insert this frame.
+  const bool extraFrame = active() && mHavePrev;
 
   // ---- PASS 1 (slot A): TIER 1 (terrain, camera-lerped, into mSink) + lerp(Q[N-1], Q[N]) by matched prim
   // for everything tier1 doesn't own, Q[N-1] as-is otherwise -----------------------------------------------
   // First frame after enabling fps60 (no Q[N-1]/mCamPrev captured yet, mHavePrev==0): degenerate to
   // replaying THIS frame's own queue (Q[N] twice, terrain included) rather than lerping against an
   // empty/garbage buffer — 30fps content at 60Hz pacing for exactly one frame.
+  if (extraFrame) {
   presentPass(c, tInterp);
   gpu_fps60_present_pass(c);
   dumpPresent(c, /*interp=*/true);
@@ -408,6 +420,7 @@ void Fps60::present_vk(Core* core) {
                 mHavePrev ? "Q[N-1]" : "Q[N] (first frame)", mNCur, mTier1PrimsThisFrame,
                 mBackdropPrimsThisFrame, mT);
   gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+  }
 
   // ---- PASS 2 (slot B): the real frame. SAME call, t=1 — every lerped input resolves to its current
   // value, so this is the in-between at its near endpoint rather than a separate replay of the captured
@@ -416,7 +429,10 @@ void Fps60::present_vk(Core* core) {
   presentPass(c, 1.0f);
   gpu_present_ex(c, 1);
   dumpPresent(c, /*interp=*/false);
-  gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+  // Pacing differs only BECAUSE the extra frame does: two half-frames when an in-between was inserted,
+  // one whole frame when it was not.
+  if (extraFrame) gpu_pace_subframe_fields(c, mCommitGuestFields, 2);
+  else            gpu_pace_frame(c);
 
   presentRotate();
 }
@@ -451,7 +467,15 @@ void Fps60::presentPass(Core* c, float t) {
   mTier1PrimsThisFrame = 0;
   // First frame after enabling fps60 there is no Q[N-1]/mCamPrev to lerp from (mHavePrev==0), so the
   // re-render has no second endpoint and the captured queue replays whole for exactly one frame.
-  if (mHavePrev) {
+  // ONE BUILD PATH — no mHavePrev fork, no config fork. The world comes from the present-time re-render
+  // (tier1Render) reading the captured inputs; the 2D comes from the captured queue; `t` is the only
+  // parameter. At t == 1 every lerp resolves to its current value, so a missing previous frame is not a
+  // different way of building a picture — present_vk simply does not schedule an in-between until there
+  // is a prev to lerp from. The psxRender guard keeps the native world off the substrate/ORACLE leg,
+  // where mTier1EligibleCur is a stale latch (renderScene never runs there to clear it).
+  const bool kTier1 = mTier1EligibleCur && !c->rsub.mode.psxRender();
+  if (kTier1) tier1Render(c, t);
+  {
     // fps60 UNIFIED PATH (docs/fps60-rework.md): the field frame's WORLD — terrain + scene-table + OBJECTS
     // + backdrop — is re-run by tier1Render into mSink under the lerped camera + per-object transforms, ALL
     // interpolated through the SAME render path the real frame used (lerp lives in the INPUTS, not a per-
@@ -464,8 +488,7 @@ void Fps60::presentPass(Core* c, float t) {
     // field exterior into non-field interp frames, the #50 bug class) and skip nothing from mRqCur (the
     // hut's own perObjFlush world prims must present verbatim, or the interior vanishes every other
     // frame). The whole captured queue replays as-is — the documented degenerate lerp.)
-    const bool tier1 = mTier1EligibleCur;
-    if (tier1) tier1Render(c, t);
+    const bool tier1 = kTier1;
     const int sinkN = (tier1 && mSink) ? mSink->n : 0;
     int ia = 0, ib = 0;
     for (;;) {
@@ -482,8 +505,6 @@ void Fps60::presentPass(Core* c, float t) {
       if (takeSink) q.emitItem(c, &mSink->items[ia++]);
       else          q.emitItem(c, &mRqCur[ib++]);
     }
-  } else {
-    for (int i = 0; i < mNCur; i++) q.emitItem(c, &mRqCur[i]);
   }
 }
 

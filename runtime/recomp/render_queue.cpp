@@ -528,7 +528,15 @@ void RenderQueue::flush(Core* core) {
   // per-frame: under diff_mode (SBS dual-core compare) per-core present is suppressed, so present_vk never
   // runs — capturing would leave the geometry batch empty (black SBS panes). In diff_mode the SBS composite
   // reads the geometry batch directly, so flush MUST inline-emit. Gate the fps60 capture on !diff_mode.
-  if (core->game->fps60.active() && !core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
+  // ONE PATH. A flush CAPTURES; presentation is Fps60::present_vk's job in both configs. This used to
+  // read `if (fps60.active() && !diff_mode)`, sending fps60=0 down emitQueue() and fps60=1 down the
+  // capture — two renderers, and the source of a family of "only broken at 60" bugs: the panel layer
+  // dropped at 60 only, zfightScan/rqhist scanning a queue that was not what got drawn, and the
+  // painter-object layer unreachable because it lives in emitQueue.
+  //
+  // diff_mode (SBS dual-core compare) is a genuine exception rather than a config: per-core present is
+  // suppressed there, so nothing would consume a capture and the panes would be black. It emits inline.
+  if (!core->game->diff_mode) { core->game->fps60.rq_capture(items, n); mark_consumed(); return; }
   emitQueue(core);
 }
 

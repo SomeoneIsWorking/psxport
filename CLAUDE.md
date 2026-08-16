@@ -38,6 +38,7 @@ exists on one machine:
 | `docs/workspace/PROTOCOL.md` | the multi-agent protocol (area claims, worktrees, landing order) + the standing USER rules and the incidents behind them. It defers to THIS file for the seam, `generated/`, RE tooling and diagnostics — so do not chase a pointer in a circle |
 | `docs/workspace/LAYOUT.md` | the target directory organization for every tree |
 | `docs/plans/*.md` | designs not yet implemented, each stating what is measured vs assumed |
+| **`docs/one-renderer.md`** | **THE frame-build invariant** — a frame is built once, by `presentPass(t)`; fps60 only decides whether an extra lerped present is inserted. Which branches are legitimate, the three layers that had to be unified together, and the two partial attempts that produced broken pictures. Read before touching fps60, `RenderQueue::flush`, or anything that branches on `mods.fps60` |
 | `scripts/bootstrap-workspace.sh` | reproduces the whole workspace from a clone of this repo |
 
 A game's own specifics stay in that repo's `CLAUDE.md`.
