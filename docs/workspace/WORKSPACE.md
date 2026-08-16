@@ -56,18 +56,51 @@ git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport
 All active target repositories are in that script's `REMOTE_BACKED` list. `toystory2` is not because
 it is outside the active target scope.
 
-## The structure rule: ONE writable framework checkout
+## The structure rule: ONE framework checkout, and every port runs off it
 
-Each game vendors the framework at `external/psxport` (a submodule, itself nesting `vendor/beetle-psx` and
-`vendor/lucent`). **Multiple checkouts of one framework exist; exactly one is writable.**
+**There is exactly ONE psxport working tree on a machine, and every game uses it.** `psxport/` is that
+tree. Each game has `external/psxport`, which is **not tracked and not a submodule** — it is a SYMLINK to
+`psxport/` when the workspace is present, or a private clone at that game's `psxport.pin` on a fresh
+machine / CI / a stranger's clone of one repo. `tools/psxport_sync.py --auto` (run by `run.sh`)
+establishes whichever applies. The PATH is unchanged, so every `external/psxport/...` reference in docs,
+tools and code keeps working.
 
-1. **Framework edits happen ONLY in `psxport/`.** A game's `external/psxport` is a read-only pinned
-   consumer — `git checkout <pin>` territory. Never edit, commit, push or merge in there.
-2. **Build a game against in-progress framework work** with `-DPSXPORT_DIR=$PSX/psxport`. It defaults to
-   the submodule, so each game still builds standalone from a bare clone — which is what makes "each game
-   is its own project using psxport as the framework" true rather than aspirational.
-3. **Parallel framework work: one `git worktree` off `psxport/` per claim area**, that agent's
-   `PSXPORT_DIR` pointing at it. Claims, the stash/vendor-pin edge, and landing order are PROTOCOL's.
+**So a framework edit is live in every port immediately, with no bump, no sync and no ceremony** — which
+is the whole point. There is no longer a "read-only consumer" copy to drift from the writable one,
+because there is no second copy.
+
+1. **Framework edits happen in the one tree.** Reaching it through `psxport/` or through a game's
+   `external/psxport` symlink is the same directory; both are the dev clone. Commit and push framework
+   work in `psxport/`.
+2. **`psxport.pin` records the framework commit a game was built and VERIFIED against.** It is
+   provenance and the fresh-clone fallback, not what you build against day to day. `psxport_sync.py
+   --bump` records it; `--check` (wired into each game's precommit gate) FAILS when the framework you
+   built against is not the one the repo records, comparing against `build/psxport_resolved.txt`, which
+   CMake writes at configure time.
+3. **Ports are deliberately NOT all on framework HEAD.** Measured 2026-08-16: six ports spanned 55
+   commits of framework history. With one maintainer that is a feature — it is what lets one port be
+   worked on daily while the others sit untouched, and it is why the beetle GTE commit that broke
+   `PSXPORT_ORACLE=1` in every 3D scene broke one tree rather than six. Bump a port when you are ready
+   to re-verify it.
+4. **Parallel framework work** is still one `git worktree` off `psxport/` per claim area, with that
+   agent's `PSXPORT_DIR` pointing at it (PROTOCOL's).
+
+### Why the submodule was dropped (2026-08-16)
+
+Two incidents in one day, both caused by the mechanism rather than by anyone's mistake:
+
+- Tomba2Engine was **built against psxport `25dd7826` while recording `a1c53d7c`**, so a bare clone did
+  not compile — the game's hook table named a `GameHooks` field the pinned framework did not have.
+  Nothing noticed, because a submodule working tree and its recorded gitlink drift silently.
+- "Fixing" that drift by syncing to the recorded pin is what pulled a **broken beetle GTE commit** into
+  the working build; it had already broken `PSXPORT_ORACLE=1` in every 3D scene for two days (8 of 9
+  replays segfaulting). That commit was made on a **detached HEAD inside the submodule** — the default
+  state of a submodule checkout, and the reason it was never reviewed.
+
+Add to that: `git submodule update --recursive` **fails outright** on this tree, because beetle-psx
+carries a URL-less nested gitlink (`deps/lightning/gnulib`) git itself cannot resolve. `psxport`'s own
+`vendor/beetle-psx` and `vendor/lucent` remain submodules — that is genuine third-party vendoring inside
+one repo, and with a single psxport tree there is no duplication to drift.
 
 ## The two things to know even if you read nothing else
 

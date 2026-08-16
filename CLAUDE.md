@@ -49,10 +49,14 @@ A game's own specifics stay in that repo's `CLAUDE.md`.
 
 ## Where the framework source comes from — and who may edit it
 
-**Framework edits happen in ONE checkout: the workspace's dev clone (`$PSX/psxport`).** A game's
-`external/psxport` submodule is a **read-only pinned consumer** — `git checkout <pin>` territory only.
-Never edit, commit, or push inside a game's `external/psxport`. Claims, worktrees and landing order are
-`docs/workspace/PROTOCOL.md`'s.
+**There is ONE psxport working tree on a machine and every port uses it.** A game's `external/psxport`
+is no longer a submodule: it is a SYMLINK to that tree (or, on a fresh machine, a private clone at the
+game's `psxport.pin`). So reaching the framework through `$PSX/psxport` or through a game's
+`external/psxport` is the SAME directory, an edit there is live in every port at once, and there is no
+"read-only consumer" copy that can drift from the writable one — because there is no second copy.
+Commit and push framework work in `psxport/`. Claims, worktrees and landing order are
+`docs/workspace/PROTOCOL.md`'s; the mechanism and the two submodule incidents that motivated dropping it
+are in `docs/workspace/WORKSPACE.md`.
 
 A game builds against in-progress framework work without touching its submodule:
 
@@ -60,9 +64,11 @@ A game builds against in-progress framework work without touching its submodule:
 cmake -S . -B build -DPSXPORT_DIR=$PSX/psxport
 ```
 
-`PSXPORT_DIR` defaults to `external/psxport`, so a fresh clone of a game repo alone still builds — that
-property is what "each game is its own project using psxport as the framework" means, and it stays
-testable. `run.sh` ANNOUNCES which checkout a run was built from (and whether it was dirty); a binary
+`PSXPORT_DIR` defaults to `external/psxport`, and `tools/psxport_sync.py --auto` (which `run.sh` calls)
+makes that resolve to the shared tree locally or to a private clone at `psxport.pin` on a fresh machine —
+so a clone of a game repo alone still builds, which is what "each game is its own project using psxport
+as the framework" means. Each game's precommit runs `psxport_sync.py --check`, which FAILS when the
+framework you built against is not the commit the repo records. `run.sh` ANNOUNCES which checkout a run was built from (and whether it was dirty); a binary
 built from in-progress framework work must never be mistaken for one built from the pin.
 
 ## Build and test
