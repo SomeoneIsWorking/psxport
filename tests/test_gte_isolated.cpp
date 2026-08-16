@@ -2,10 +2,8 @@
 #include "testutil.h"
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <thread>
 
 extern "C" {
 void GTE_Init(void);
@@ -141,47 +139,40 @@ static void test_sequential_interleaving(void) {
   CHECK(GTE_CurState() == &caller);
 }
 
-static void test_two_threads_keep_bindings_separate(void) {
-  std::atomic<unsigned> ready{0};
-  std::atomic<bool> go{false};
-  std::array<unsigned, 2> mismatches{};
-  std::array<bool, 2> binding_preserved{};
-  std::array<GteRegs *, 2> defaults{};
-  std::array<std::thread, 2> threads;
+// REPLACED 2026-08-16. This was `two_threads_keep_bindings_separate`, and its central assertion —
+// that two host threads calling GTE_BindState(nullptr) get DIFFERENT default register files — encoded
+// exactly the contract that broke the port. The PSX GTE is vanilla: ONE GTE, one register file, and the
+// binding is guest execution state, not host-thread state (USER, 2026-08-16: "we preserve PSX GTE as
+// is"). Guest code migrates across host threads (Coro spawns a thread per task) without ever running
+// concurrently with itself, so a per-thread binding unbinds the GTE from the guest — which segfaulted
+// PSXPORT_ORACLE=1 in every 3D scene for two days while this test stayed green. Concurrent GTE binding
+// from two host threads is therefore NOT a supported contract and is not tested here;
+// tests/test_gte_cross_thread.cpp pins the contract that IS real (a guest touch from an unbound thread
+// must land in the bound state). What survives from the old test is its genuinely valuable half, kept
+// sequential: back-to-back isolated executions each compute the right answer and restore the binding.
+static void test_isolation_restores_the_binding_across_a_run(void) {
+  GteRegs caller = make_state(0x40000000u);
+  const GteRegs caller_before = caller;
 
-  for (unsigned n = 0; n < threads.size(); ++n) {
-    threads[n] = std::thread([&, n] {
-      GteRegs bound = make_state(0x40000000u + n);
-      const GteRegs before = bound;
-      GteRegs isolated = make_state(0x50000000u + n);
-      GteRegs expected = isolated;
-      const uint32_t op = n ? 0x4a780013u : 0x4a980011u;
+  unsigned mismatched = 0;
+  GTE_BindState(&caller);
+  for (unsigned n = 0; n < 2; ++n) {
+    GteRegs isolated = make_state(0x50000000u + n);
+    GteRegs expected = isolated;
+    const uint32_t op = n ? 0x4a780013u : 0x4a980011u;
 
-      GTE_BindState(nullptr);
-      defaults[n] = GTE_CurState();
-      GTE_BindState(&expected);
-      GTE_Instruction(op);
-      GTE_BindState(&bound);
-      ++ready;
-      while (!go.load(std::memory_order_acquire))
-        std::this_thread::yield();
-      GTE_ExecuteIsolated(&isolated, op);
-      mismatches[n] = compare_regs(expected, isolated).mismatched;
-      binding_preserved[n] = GTE_CurState() == &bound &&
-                             compare_regs(before, bound).mismatched == 0;
-    });
+    GTE_BindState(&expected);
+    GTE_Instruction(op);            // the reference answer, computed while bound
+    GTE_BindState(&caller);
+
+    CHECK(GTE_ExecuteIsolated(&isolated, op) >= 0);
+    mismatched += compare_regs(expected, isolated).mismatched;
+
+    // The caller's binding AND its register contents must be untouched after every isolated call.
+    CHECK(GTE_CurState() == &caller);
+    CHECK_EQ(compare_regs(caller_before, caller).mismatched, 0u);
   }
-  while (ready.load(std::memory_order_acquire) != 2)
-    std::this_thread::yield();
-  go.store(true, std::memory_order_release);
-  for (auto &thread : threads)
-    thread.join();
-
-  CHECK(defaults[0] != defaults[1]);
-  CHECK_EQ(mismatches[0], 0u);
-  CHECK_EQ(mismatches[1], 0u);
-  CHECK(binding_preserved[0]);
-  CHECK(binding_preserved[1]);
+  CHECK_EQ(mismatched, 0u);
 }
 
 } // namespace
@@ -191,6 +182,6 @@ int main(void) {
   RUN(randomized_differential);
   RUN(saturation_and_other_answer);
   RUN(sequential_interleaving);
-  RUN(two_threads_keep_bindings_separate);
+  RUN(isolation_restores_the_binding_across_a_run);
   return pt_summary();
 }

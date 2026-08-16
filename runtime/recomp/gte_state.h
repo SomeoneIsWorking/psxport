@@ -36,10 +36,17 @@ extern "C" {
 // Make `s` the active GTE instance for all subsequent GTE_* calls; lazily inits its CR/DR pointers.
 void     GTE_BindState(GteRegs* s);
 GteRegs* GTE_CurState(void);
-// Execute one instruction against `s` through Beetle's authoritative GTE_Instruction path. The
-// caller's binding is restored before return and bindings are thread-local. The implementation tracks
-// nested isolation depth and suppresses PGXP and diagnostic callbacks, so the only mutated object is
-// `s`. Returns -1 for a null state; otherwise returns the same cycle result as GTE_Instruction.
+// TEST-ONLY. Execute one instruction against `s` through Beetle's authoritative GTE_Instruction path,
+// restoring the caller's binding before return; nested isolation depth is tracked so PGXP and the
+// diagnostic capture callbacks stay suppressed and the only mutated object is `s`. Returns -1 for a
+// null state, else the same cycle result as GTE_Instruction.
+//
+// This is NOT a way for native code to compute geometry: the native renderer produces its picture from
+// game state in float and never issues a GTE op (psxport CLAUDE.md, "NO GTE compose, NO gte_op for
+// render"), while the PSX renderer runs underneath on the vanilla GTE. Its only callers are unit tests
+// that differentially validate the GTE math. Bindings are process-global, NOT thread-local — see the
+// contract note in vendor/beetle-psx/mednafen/psx/gte.c and tests/test_gte_cross_thread.cpp; making
+// them thread-local unbinds the GTE from the guest, which migrates across host threads by design.
 int32_t  GTE_ExecuteIsolated(GteRegs* s, uint32_t instr);
 #ifdef __cplusplus
 }
