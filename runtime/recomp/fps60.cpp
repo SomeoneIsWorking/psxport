@@ -352,14 +352,6 @@ void Fps60::dumpPresent(Core* core, bool interp) {
 // Ordering: presentPass merges by (layer, seq), and each flush restarts seq at 0, so appended items are
 // rebased by the running total. Within a layer, paint order across flushes is then submission order —
 // exactly what emitQueue() would have produced had it run per flush.
-void Fps60::reset_capture() {
-  // The reference/psx_render leg presents through its OWN presenter (the guest's driver), never
-  // through frame_commit, so its flushes' capture is never drained by presentRotate. Discard it here.
-  mNCur    = 0;
-  mSeqBase = 0;
-  mHavePrev = 0;   // a fresh capture set has no previous frame to lerp from if fps60 comes on later
-}
-
 void Fps60::rq_capture(const RqItem* items, int n) {
   if (!mRqCur)  mRqCur  = new RqItem[FPS60_RQ_MAX];
   if (!mRqPrev) mRqPrev = new RqItem[FPS60_RQ_MAX];

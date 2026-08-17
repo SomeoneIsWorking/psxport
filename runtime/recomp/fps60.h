@@ -95,15 +95,6 @@ struct Fps60 {
   // GameConfig::paceQuota for ports with one ordinary pacing boundary per logic frame.
   void frame_commit(Core* core, int guestFields = 0);
 
-  // Discard the accumulated flush capture WITHOUT presenting. For a present path that consumes the
-  // render queue through its OWN presenter (the reference/psx_render leg — a different renderer by
-  // definition, one-renderer.md) and so never reaches frame_commit: its flushes still accumulate into
-  // mNCur (flush captures unconditionally since the ONE-PATH change), and with nothing draining them
-  // the accumulator grows until rq_capture fails fast. Calling this after such a present resets the
-  // bookkeeping the reference leg never consumes. It must NOT be called on a path that will also call
-  // frame_commit — the frame fence (presentRotate) is that path's reset.
-  void reset_capture();
-
   // ---- shared camera reader ----------------------------------------------------------------------------
   // Scene camera read choke: a GAME hook fills R(int16 units)/T from that game's own camera state and the
   // framework supplies the game-recorded OFX/OFY/H projection constants. This is the ONE reader the whole
