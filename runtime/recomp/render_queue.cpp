@@ -227,6 +227,7 @@ RqItem* RenderQueue::push() {
     fflush(stderr);
     abort();
   }
+  pushed_total++;   // monotonic; see render_queue.h — the only sound basis for a per-call prim count
   RqItem* it = &items[n++];
   it->seq = seq++;
   it->painter_object = mPainterObject;

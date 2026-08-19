@@ -171,6 +171,13 @@ struct RenderQueue {
   RqItem   items[RQ_MAX];
   int      n        = 0;
   uint32_t seq      = 0;
+  // MONOTONIC PUSH ODOMETER — never reset, by design. `n` and `seq` both go back to 0 on the lazy
+  // first-push-of-a-frame reset inside push(), so "prims this call emitted" measured as a delta of `n`
+  // reads NEGATIVE whenever the call straddles that reset. That is not hypothetical: it is how the
+  // first version of the redirect prim census reported "prims=-51 ... EMPTY=1" and would have reported
+  // a false "this draw emitted nothing" (#103). Anything asking how many prims a given call pushed must
+  // difference THIS, which only ever goes up.
+  unsigned long long pushed_total = 0;
   int      consumed = 1;   // start consumed so the first push begins a clean frame
   void     reset();
   RqItem*  push();         // NULL on overflow (reserves a slot; lazy per-frame reset)
