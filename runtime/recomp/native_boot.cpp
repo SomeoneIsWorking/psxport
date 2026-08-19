@@ -374,6 +374,22 @@ static void game_main(Core* c) {
   // NATIVE_FRAMES always wins" but nothing ever READ the var — every headless PAD_REPLAY/no-REPL run
   // silently hit the smoke cap regardless. Explicit request now wins over every default above.
   if (!repl_mode) { int nf = cfg_int("PSXPORT_NATIVE_FRAMES", 0); if (nf > 0) nframes = (uint32_t)nf; }
+  // A PAD REPLAY / RESUME OUTRANKS THE SMOKE CAP. Measured 2026-08-20: a headless
+  // PSXPORT_PAD_RESUME of a 30,612-frame recording ran 120 frames and exited with "frame loop done",
+  // having never left the title screen — and said nothing about it. Every measurement taken from such
+  // a run described a scene the recording never reached, and it read as a code regression for most of
+  // a session. The recording states how many frames the run needs; honour it. An EXPLICIT
+  // PSXPORT_NATIVE_FRAMES still wins (above), because asking for N frames of a replay is legitimate —
+  // but then the truncation is the caller's choice, and the run-end line below still reports it.
+  // Keyed on the KNOB, not on the loaded recording: the .pad is opened lazily on the first serviced
+  // frame, which is after this cap is decided, so asking pad.replayPending() here always answered
+  // "no" and the uncap silently did nothing (measured: still 120 of 1118).
+  if (!repl_mode && cfg_int("PSXPORT_NATIVE_FRAMES", 0) <= 0 &&
+      (cfg_str("PSXPORT_PAD_RESUME") || cfg_str("PSXPORT_PAD_REPLAY"))) {
+    nframes = 0;
+    lucent::info("native_boot", "frame cap LIFTED: a pad recording is being replayed, and the headless "
+                                "smoke cap would have cut it off mid-recording");
+  }
   // When the debug server is up (headless, no REPL), the run is INTERACTIVELY DRIVEN over the socket
   // (rw/w16/press/shot/dumpram, step/play) — do NOT cap it, or it exits before we can drive. The
   // server's `quit` command (or SIGINT) ends it. AUTO_SKIP still auto-drives to free-roam first.
@@ -665,6 +681,20 @@ static void game_main(Core* c) {
   // failure); too-early = the claim set was still empty, so the prim could not be resolved either way and
   // must not be counted as "no native producer".
   producer_db_finish(c);   // report + JSONL + claim append — see producer_db.h
+  // THE REPLAY'S OWN DENOMINATOR. "frame loop done" alone cannot distinguish a run that played the
+  // whole recording from one the frame cap cut off at 0.4% of it — and those mean opposite things
+  // about every number the run produced. Print it whenever a recording was loaded, consumed or not.
+  if (c->game->pad.replayTotal()) {
+    const size_t total = c->game->pad.replayTotal();
+    const uint32_t used = c->game->pad.replayConsumed();
+    if (used < total)
+      lucent::warn("padrec", "run-end: replay TRUNCATED — consumed {} of {} pad frame(s) ({:.1f}%). "
+                             "The run ended before the recording did, so it did NOT reach the scene the "
+                             "recording was cut for. Anything measured here describes an earlier scene.",
+                   used, total, 100.0 * used / (double)total);
+    else
+      lucent::info("padrec", "run-end: replay fully consumed — {} of {} pad frame(s)", used, total);
+  }
   lucent::info("native_boot", "frame loop done; task0 state={} entry=0x{:08X} obj+0x48={}", c->mem_r16(TASKBASE), c->mem_r32(TASKBASE + 0xc), c->mem_r16(TASKBASE + 0x48));
   const char* rd = cfg_str("PSXPORT_RAMDUMP");
   if (rd) {

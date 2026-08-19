@@ -69,6 +69,17 @@ public:
   // are told apart by which knob was set, never inferred.
   bool fastForwarding() const { return mResumeFf && mRepBuf && mRecFc < mRepN; }
 
+  // ---- REPLAY PROGRESS, so a run cannot silently truncate a recording ----------------------------
+  // A headless run is frame-capped (native_boot.cpp's "headless smoke default"). A pad replay that is
+  // longer than that cap used to be cut off SILENTLY: the run ended with a cheerful "frame loop done"
+  // having consumed 120 frames of a 30,612-frame recording, and every measurement taken from it was a
+  // measurement of the title screen. It cost most of a session chasing that as a code regression.
+  // These three make the truncation impossible to miss — the loop uncaps itself while a replay is
+  // pending, and the run reports its own denominator at exit.
+  bool     replayPending()  const { return mRepBuf && mRecFc < mRepN; }   // frames still owed to the guest
+  size_t   replayTotal()    const { return mRepN; }
+  uint32_t replayConsumed() const { return mRecFc; }
+
 private:
   ActiveLowEdges mButtonEdges;
   // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
