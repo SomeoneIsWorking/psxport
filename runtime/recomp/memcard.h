@@ -40,6 +40,20 @@ public:
   int  dirFind  (const char* name);
   int  dirCreate(const char* name, uint32_t size);
 
+  // Directory ENUMERATION — the BIOS firstfile/nextfile pair (B0:0x42 / B0:0x43), which is how the
+  // save/load browser discovers what is on the card. `dirScanBegin` arms a scan for a shell pattern
+  // (the part after "bu00:", `*` and `?` supported); `dirScanNext` writes the next match into a
+  // guest DIRENTRY and returns false once the directory is exhausted. The cursor lives here, per
+  // card, because nextfile carries no state of its own beyond the DIRENTRY it is handed.
+  //
+  // DIRENTRY (Sony libapi, 40 bytes): +0x00 char name[20], +0x14 attr, +0x18 size, +0x1C next,
+  // +0x20 head, +0x24 char system[4].
+  static constexpr uint32_t kDirEntNameLen = 20u;
+  static constexpr uint32_t kDirEntAttr = 0x14u, kDirEntSize = 0x18u, kDirEntNext = 0x1Cu,
+                            kDirEntHead = 0x20u, kDirEntBytes = 0x28u;
+  void dirScanBegin(const char* pattern);
+  bool dirScanNext (Core* c, uint32_t direntVa);
+
   // BIOS file-API descriptor table (native).
   static constexpr int kFdBase = 3;
   static constexpr int kFdMax  = 11;
@@ -65,6 +79,8 @@ private:
   char  mPath[1024] = {0};
   bool  mVerbose = false;
   McFd  mFd[kFdMax] = {};
+  char     mScanPat[64] = {0};   // firstfile/nextfile pattern, device prefix already stripped
+  uint32_t mScanBlk = kBlocks;   // next directory block to examine; kBlocks = scan exhausted/unarmed
 
   static char* resolvePath(const struct GameConfig* cfg);
   static void  mkParents(const char* path);

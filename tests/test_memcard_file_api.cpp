@@ -36,6 +36,7 @@
 #include "../runtime/recomp/memcard.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 enum { R_V0 = 2, R_A0 = 4, R_A1 = 5, R_A2 = 6, R_A3 = 7 };
 
@@ -59,7 +60,10 @@ static Game* gam() {
   g = new Game();
   g_cfg.cardDefaultPath = kCardPath;      // no env, no .env — the card path is stated here
   g->core.cfg = &g_cfg;
-  g->memcard.init();
+  // card_overrides_init, not memcard.init(): the card is a BIOS DEVICE as well as a backing file,
+  // and publishing it in the kernel device table is part of bringing it up. Calling init() alone
+  // tests a card the running game never has.
+  card_overrides_init(g);
   return g;
 }
 
@@ -208,7 +212,107 @@ static void test_console_fds_keep_the_byte_count(void) {
   CHECK(!test_event(g, sw_io));              // a console write is not a card operation
 }
 
+// ---------------------------------------------------------------------------------------------
+// THE DEVICE TABLE. Guest code resolves a path prefix by walking the kernel device array itself
+// (kernel 0x150 = address, 0x154 = size in bytes) rather than through a BIOS vector. Nothing
+// published those words, so the walk read a garbage base and a 1 GB length and dereferenced the
+// first non-zero word it found as a `char*` — the memory model refused the read and the port
+// aborted. That is the whole of the "saving crashes the game" report.
+static void test_device_table_is_published(void) {
+  Game* g = gam();
+  Core* c = &g->core;
+  const uint32_t base = c->mem_r32(Hle::KERNEL_DCB_ADDR);
+  const uint32_t size = c->mem_r32(Hle::KERNEL_DCB_SIZE);
+  CHECK(base != 0);                                    // a base of 0 is what walked from address 0
+  CHECK_EQ(size, (uint32_t)Hle::DCB_STRIDE);           // exactly one device, exactly one stride
+  CHECK_EQ(size % (uint32_t)Hle::DCB_STRIDE, 0u);      // the walk steps by DCB_STRIDE and compares <
+
+  // …and the entry it points at really is the card, read the way the guest reads it.
+  const uint32_t np = c->mem_r32(base + Hle::DCB_OFF_NAME);
+  CHECK(np != 0);
+  CHECK_EQ((char)c->mem_r8(np + 0), 'b');
+  CHECK_EQ((char)c->mem_r8(np + 1), 'u');
+  CHECK_EQ((char)c->mem_r8(np + 2), '\0');
+
+  // The lookup must be able to say NO. A finder that matches everything would "find" the card for
+  // any prefix and route a cdrom path into the card file.
+  CHECK_EQ(g->hle.deviceFind("bu"), base);
+  CHECK_EQ(g->hle.deviceFind("cdrom"), 0u);
+  CHECK_EQ(g->hle.deviceFind("b"), 0u);                // prefix, not a match
+  CHECK_EQ(g->hle.deviceFind("bus"), 0u);
+}
+
+// firstfile on a card with nothing on it. Runs FIRST, before any test creates a file, so the "0"
+// below is a measured empty directory rather than an unarmed scan.
+static void test_firstfile_on_an_empty_card_finds_nothing(void) {
+  Game* g = gam();
+  uint32_t va = kBuf + 0xA00u;
+  for (uint32_t i = 0; "bu00:*"[i]; i++) g->core.mem_w8(va + i, (uint8_t)"bu00:*"[i]);
+  g->core.mem_w8(va + 6, 0);
+  CHECK_EQ(bios_b0(g, 0x42, va, kBuf + 0xB00u, 0), 0u);
+  CHECK_EQ(bios_b0(g, 0x43, kBuf + 0xB00u, 0, 0), 0u);   // nextfile agrees
+}
+
+// …and the same call on a card that HAS files returns them, in the DIRENTRY layout the guest reads
+// (name at +0). Without this, the empty-card case above proves nothing: a firstfile hard-wired to 0
+// passes it. 0x42 is firstfile and 0x43 is nextfile — they were wired the other way round, so
+// firstfile was not handled at all and the BIOS-miss path left the guest a stale $v0.
+static void test_firstfile_enumerates_the_directory(void) {
+  Game* g = gam();
+  CHECK(card_open_create(g, "bu00:PSXPORT-ONE", 1) != 0xFFFFFFFFu);
+  CHECK(card_open_create(g, "bu00:PSXPORT-TWO", 1) != 0xFFFFFFFFu);
+
+  const uint32_t path = kBuf + 0xA00u, dirent = kBuf + 0xB00u;
+  for (uint32_t i = 0; "bu00:PSXPORT-*"[i]; i++) g->core.mem_w8(path + i, (uint8_t)"bu00:PSXPORT-*"[i]);
+  g->core.mem_w8(path + 14, 0);
+
+  char seen[4][24] = {{0}};
+  int n = 0;
+  uint32_t v0 = bios_b0(g, 0x42, path, dirent, 0);
+  while (v0 && n < 4) {
+    CHECK_EQ(v0, dirent);                                     // firstfile/nextfile return the DIRENTRY
+    for (uint32_t i = 0; i < 20; i++) seen[n][i] = (char)g->core.mem_r8(dirent + i);
+    n++;
+    v0 = bios_b0(g, 0x43, dirent, 0, 0);
+  }
+  CHECK_EQ(n, 2);                                             // both files, and the walk terminated
+  const bool one = !strcmp(seen[0], "PSXPORT-ONE") || !strcmp(seen[1], "PSXPORT-ONE");
+  const bool two = !strcmp(seen[0], "PSXPORT-TWO") || !strcmp(seen[1], "PSXPORT-TWO");
+  CHECK(one); CHECK(two);
+  // The size field the browser reads back, from the directory entry rather than from thin air.
+  CHECK(g->core.mem_r32(dirent + Memcard::kDirEntSize) != 0u);
+
+  // A pattern that matches nothing must come back empty on the SAME populated card — otherwise
+  // "enumerates correctly" is indistinguishable from "returns everything".
+  for (uint32_t i = 0; "bu00:NOSUCH-*"[i]; i++) g->core.mem_w8(path + i, (uint8_t)"bu00:NOSUCH-*"[i]);
+  g->core.mem_w8(path + 13, 0);
+  CHECK_EQ(bios_b0(g, 0x42, path, dirent, 0), 0u);
+}
+
+// Guest code installs a restore-trampoline in the DCB's firstfile slot before calling B0:0x42 and
+// expects the BIOS to run it. This port services B0:0x42 itself, so the slot has to come back
+// unhooked — otherwise it keeps a guest address the HLE will never dispatch, and the next call
+// saves THAT aside as the "original".
+static void test_firstfile_restores_the_patched_dcb_slot(void) {
+  Game* g = gam();
+  Core* c = &g->core;
+  const uint32_t dcb = g->hle.deviceFind("bu");
+  CHECK(dcb != 0);
+  c->mem_w32(dcb + Hle::DCB_OFF_FIRSTFILE, 0x80080ADCu);      // what FUN_80080940 writes
+  CHECK_EQ(c->mem_r32(dcb + Hle::DCB_OFF_FIRSTFILE), 0x80080ADCu);   // the poke landed
+
+  const uint32_t path = kBuf + 0xA00u;
+  for (uint32_t i = 0; "bu00:*"[i]; i++) c->mem_w8(path + i, (uint8_t)"bu00:*"[i]);
+  c->mem_w8(path + 6, 0);
+  bios_b0(g, 0x42, path, kBuf + 0xB00u, 0);
+  CHECK_EQ(c->mem_r32(dcb + Hle::DCB_OFF_FIRSTFILE), 0u);
+}
+
 int main(void) {
+  RUN(device_table_is_published);
+  RUN(firstfile_on_an_empty_card_finds_nothing);
+  RUN(firstfile_enumerates_the_directory);
+  RUN(firstfile_restores_the_patched_dcb_slot);
   RUN(transfer_start_returns_zero);
   RUN(console_fds_keep_the_byte_count);
   RUN(transfer_actually_moves_the_bytes);

@@ -33,6 +33,7 @@ public:
   // process-global cross-core state and a host-specific sequence. Sony's libc starts from seed 1.
   uint32_t rand_state = 1;
   int      work_ok    = 0;        // was s_work_ok
+  int      dcb_n      = 0;        // installed BIOS devices (see deviceAdd)
   uint32_t int_handler = 0;       // was s_int_handler (B0:0x19 HookEntryInt)
   int      irq_enabled = 1;       // was s_irq_enabled
   int      miss_count  = 0;       // recomp-miss log numbering (was s_miss)
@@ -84,6 +85,25 @@ public:
   uint32_t heapBlockSize(uint32_t addr) const;
   // work area (B0:0x56/0x57 GetC0Table/GetB0Table): publish a self-consistent native page.
   void     workAreaInit();
+
+  // ---- BIOS DEVICE TABLE (kernel 0x150/0x154) --------------------------------------------------
+  // The installed-device array guest code walks to resolve a path prefix ("bu00:*" -> the memory
+  // card). Nothing published it before, so the walk read a garbage base/length out of low RAM and
+  // dereferenced whatever it found — see hle.cpp for the full note and the DCB layout.
+  //
+  // deviceAdd(name) appends one DeviceControlBlock and republishes 0x150/0x154; it is the port's
+  // equivalent of the BIOS AddDrv (B0:0x47) and is called by the subsystem that services the
+  // device (the card registers "bu" from card_overrides_init). Idempotent per name.
+  // deviceFind(name) returns that DCB's guest address, or 0 when no device matches.
+  enum { DCB_STRIDE = 0x50u, DCB_MAX = 4,
+         DCB_OFF_NAME = 0x00u, DCB_OFF_FIRSTFILE = 0x34u, DCB_OFF_NEXTFILE = 0x38u,
+         KERNEL_DCB_ADDR = 0x00000150u, KERNEL_DCB_SIZE = 0x00000154u };
+  void     deviceAdd (const char* name);
+  uint32_t deviceFind(const char* name) const;
+  // Put a DCB's firstfile/nextfile slots back to their unhooked value. Guest code installs a
+  // restore-trampoline in +0x34 before calling B0:0x42 and expects the BIOS to run it; this port
+  // services B0:0x42 itself, so the HLE restores the slot instead. See memcard.cpp file_firstfile.
+  void     deviceUnhook(uint32_t dcb);
   // events: index-lookup for B0:0x08/0x09/0x0A/0x0B/0x0C/0x0D
   int      eventIndex(uint32_t id) const;
   // BIOS-call dispatch (A0/B0/C0). Returns true if handled (Core V0 set).

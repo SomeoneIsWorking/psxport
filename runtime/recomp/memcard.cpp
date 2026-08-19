@@ -215,6 +215,54 @@ int Memcard::dirCreate(const char* name, uint32_t size) {
   return -1;
 }
 
+// Shell-glob match for a card filename: `*` any run, `?` any one character. Sony's BIOS matches the
+// same two, and the browser only ever asks for "*" — but a pattern the matcher silently ignored
+// would enumerate the whole card and look exactly like a correct answer, so it is implemented.
+static bool mc_glob(const char* pat, const char* s) {
+  const char *star = nullptr, *sAtStar = nullptr;
+  while (*s) {
+    if (*pat == '?' || *pat == *s) { pat++; s++; continue; }
+    if (*pat == '*') { star = pat++; sAtStar = s; continue; }
+    if (!star) return false;
+    pat = star + 1; s = ++sAtStar;
+  }
+  while (*pat == '*') pat++;
+  return *pat == 0;
+}
+
+void Memcard::dirScanBegin(const char* pattern) {
+  snprintf(mScanPat, sizeof mScanPat, "%s", pattern);
+  mScanBlk = 1;                                   // block 0 is the card header; entries are 1..15
+}
+
+bool Memcard::dirScanNext(Core* c, uint32_t direntVa) {
+  if (!direntVa) return false;
+  for (; mScanBlk < kBlocks; mScanBlk++) {
+    uint8_t e[kFrameSize];
+    if (!readFrame(mScanBlk, e)) continue;
+    if (e[0] != kDirUsedFirst) continue;          // free, or a continuation block of a longer file
+    char fn[0x80]; size_t k = 0;
+    for (uint32_t j = 0x0A; j < kFrameSize && e[j] && k + 1 < sizeof fn; j++) fn[k++] = (char)e[j];
+    fn[k] = 0;
+    if (!mc_glob(mScanPat, fn)) continue;
+    const uint32_t size = (uint32_t)e[4] | ((uint32_t)e[5] << 8)
+                        | ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
+    for (uint32_t i = 0; i < kDirEntBytes; i++) c->mem_w8(direntVa + i, 0);
+    for (uint32_t i = 0; i < kDirEntNameLen - 1 && fn[i]; i++) c->mem_w8(direntVa + i, (uint8_t)fn[i]);
+    c->mem_w32(direntVa + kDirEntAttr, 0);
+    c->mem_w32(direntVa + kDirEntSize, size);
+    c->mem_w32(direntVa + kDirEntNext, 0);
+    c->mem_w32(direntVa + kDirEntHead, mScanBlk);
+    if (mVerbose) lucent::info("card", "dir scan '{}' -> '{}' (block {}, {} bytes)", mScanPat, fn,
+                               mScanBlk, size);
+    mScanBlk++;
+    return true;
+  }
+  if (mVerbose) lucent::info("card", "dir scan '{}' -> no (further) match; {} directory block(s) "
+                                     "examined", mScanPat, kBlocks - 1);
+  return false;
+}
+
 int Memcard::fdAlloc(int block, uint32_t size) {
   for (int i = kFdBase; i < kFdMax; i++) if (!mFd[i].used) {
     mFd[i].used = 1; mFd[i].block = block; mFd[i].pos = 0; mFd[i].size = size; return i;
@@ -436,8 +484,39 @@ static void file_erase(Core* c) {
   if (m.verbose()) lucent::info("card", "erase '{}' (block {}) -> ok", name, blk);
 }
 
-// B0:0x43 firstfile — the menu opens slots by name directly, so "no more files" is sufficient.
-static void file_firstfile(Core* c) { c->r[V0] = 0; }
+// B0:0x42 firstfile(name, dirent) / B0:0x43 nextfile(dirent) — DIRECTORY ENUMERATION.
+//
+// This is how a save/load browser finds out what is on the card: it cannot open a slot by name until
+// it knows the names. B0:0x43 used to be wired to a stub that answered "no more files" — and it was
+// wired under the wrong number as well (0x42 is firstfile, 0x43 is nextfile), so firstfile was not
+// handled AT ALL: the BIOS-miss path returns without writing $v0 and the guest read a stale register
+// as its DIRENTRY pointer. Tomba!2's browser reaches both through FUN_80080940 / FUN_80080900.
+//
+// `name` is a full device path ("bu00:*"); the pattern is everything after the colon. The device
+// PORT digits are deliberately not honoured — this backend is one host card file and open()/erase()
+// resolve every port to it, so enumerating per port would report files on a card that open() would
+// then read through the other port's name. One card, consistently, until the backend grows a second
+// image; that is a backend limitation, not a per-call decision.
+static void file_firstfile(Core* c) {
+  Memcard& m = c->game->memcard;
+  char name[0x100]; mc_read_guest_str(c, c->r[A0], name, sizeof name);
+  const uint32_t dirent = c->r[A1];
+  m.dirScanBegin(mc_strip_dev(name));
+  // Guest code patches the DCB's firstfile slot with its own restore-trampoline before calling here
+  // and expects the BIOS to run it; this HLE *is* the device's firstfile, so put the slot back
+  // rather than dispatching a pointer with no code behind it. See the DCB note in hle.cpp.
+  c->game->hle.deviceUnhook(c->game->hle.deviceFind("bu"));
+  c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
+  if (m.verbose()) lucent::info("card", "firstfile '{}' dirent=0x{:08X} -> 0x{:08X}", name, dirent,
+                                c->r[V0]);
+}
+
+static void file_nextfile(Core* c) {
+  Memcard& m = c->game->memcard;
+  const uint32_t dirent = c->r[A0];
+  c->r[V0] = m.dirScanNext(c, dirent) ? dirent : 0;
+  if (m.verbose()) lucent::info("card", "nextfile dirent=0x{:08X} -> 0x{:08X}", dirent, c->r[V0]);
+}
 
 // B0:0x4C _card_info(chan): host-backed card is always healthy/present.
 static void card_info(Core* c) { Memcard::deliverComplete(c); c->r[V0] = 1; }
@@ -472,7 +551,8 @@ extern "C" int card_hle_b0(uint32_t fn, Core* c) {
     case 0x34u: file_read(c);      return 1;                     // read(fd, buf, len)
     case 0x35u: file_write(c);     return 1;                     // write(fd, buf, len)
     case 0x36u: file_close(c);     return 1;                     // close(fd)
-    case 0x43u: file_firstfile(c); return 1;                     // firstfile(pattern, dirent)
+    case 0x42u: file_firstfile(c); return 1;                     // firstfile(path, dirent)
+    case 0x43u: file_nextfile(c);  return 1;                     // nextfile(dirent)
     case 0x45u: file_erase(c);     return 1;                     // erase(name)
     case 0x4Cu: card_info(c);      return 1;                     // _card_info(chan)
     case 0x4Eu: card_read(c);      Memcard::deliverComplete(c); return 1;  // _card_read
@@ -487,6 +567,11 @@ void card_overrides_init(Game* game) {
   Memcard& m = game->memcard;
   if (lucent::channel_on("card")) m.setVerbose(true);
   m.init();
+  // Publish the card as an installed BIOS device. Guest code that resolves a path prefix walks the
+  // kernel device table itself instead of calling a BIOS vector (Tomba!2's card browser does, in
+  // FUN_80080940), and an unpublished table is not "no devices" — it is a garbage base and length
+  // that the walk dereferences. See the DCB note in hle.cpp.
+  game->hle.deviceAdd("bu");
   // Low-level libcard B0 frame primitives + BIOS file API dispatch through card_hle_b0 above;
   // no address overrides needed.
 }

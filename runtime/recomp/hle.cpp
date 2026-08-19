@@ -147,6 +147,89 @@ void Hle::workAreaInit() {
   c->mem_w32(HLE_C0TABLE + 4, 0);            // nop
 }
 
+// ---- BIOS DEVICE TABLE (kernel 0x150/0x154 + the DeviceControlBlocks they point at) --------------
+//
+// The BIOS publishes its installed devices as an array of 80-byte DeviceControlBlocks: kernel word
+// 0x00000150 holds the array's ADDRESS and 0x00000154 its SIZE IN BYTES. Guest code that resolves a
+// path by device prefix walks that array ITSELF rather than going through a BIOS vector. Tomba!2's
+// memory-card browser does exactly that in FUN_80080940 — parse "bu" out of "bu00:*", scan the DCBs
+// for a name match, then call B0:0x42 firstfile.
+//
+// Nothing published those two words, so the walk read base=0 and length=0x40000404 (whatever the
+// guest's own use of low RAM had left there) and marched from address 0 treating every 80th word as
+// a `char*` device name. The first non-zero one it reached was a BIOS-code word, strcmp dereferenced
+// it, and the memory model refused the unmapped read — the user-reported "saving crashes the game".
+// The crash is in the DEVICE LOOKUP, before any card I/O is attempted.
+//
+// DCB layout — the slots guest code is known to touch are marked:
+//   +0x00 char* name      <-- FUN_80080940 strcmp target
+//   +0x04 flags        +0x08 sector size   +0x0C char* description
+//   +0x10 init   +0x14 open   +0x18 inout  +0x1C read   +0x20 write  +0x24 close  +0x28 ioctl
+//   +0x2C exit   +0x30 action +0x34 firstfile  <-- FUN_80080940 PATCHES this  +0x38 nextfile
+//   +0x3C format +0x40 chdir  +0x44 rename +0x48 remove +0x4C testdevice
+//
+// THE FUNCTION-POINTER SLOTS ARE ZERO AND ARE NEVER DISPATCHED, and that is a claim with a check
+// behind it rather than an omission. On hardware they point into BIOS ROM; this port has no BIOS
+// ROM — every device entry point is serviced by the A0/B0 HLE. The only guest that touches one is
+// FUN_80080940, which saves +0x34 aside, replaces it with its own restore-trampoline FUN_80080ADC
+// and calls B0:0x42; that trampoline's entire body is "put the saved pointer back, then tail-call
+// it". So servicing B0:0x42 in the HLE and restoring +0x34 there (Hle::deviceUnhook, called from
+// memcard.cpp's file_firstfile) reaches the same end state without dispatching a pointer that has
+// no code behind it. If a game ever needs a slot to be genuinely callable, that is the moment to
+// give the HLE a dispatchable stub page — not to leave a plausible-looking address in the table.
+enum { HLE_DCB_TABLE = 0x8000F900u, HLE_DCB_NAMES = 0x8000FA40u, HLE_DCB_NAME_STRIDE = 16u };
+
+uint32_t Hle::deviceFind(const char* name) const {
+  Core* c = &game->core;
+  for (int i = 0; i < dcb_n; i++) {
+    const uint32_t dcb = HLE_DCB_TABLE + (uint32_t)i * DCB_STRIDE;
+    const uint32_t np  = c->mem_r32(dcb + DCB_OFF_NAME);
+    if (!np) continue;
+    int k = 0;
+    for (;; k++) {
+      const char got = (char)c->mem_r8(np + (uint32_t)k);
+      if (got != name[k]) { k = -1; break; }
+      if (!got) break;
+    }
+    if (k >= 0) return dcb;
+  }
+  return 0;
+}
+
+void Hle::deviceAdd(const char* name) {
+  Core* c = &game->core;
+  if (deviceFind(name)) return;                       // idempotent: one DCB per device name
+  if (dcb_n >= (int)DCB_MAX) {
+    lucent::warn("hle", "device table full ({} entries) — '{}' NOT installed. Guest code resolving "
+                        "that prefix will find no device and its open/firstfile will fail.",
+                 (int)DCB_MAX, name);
+    return;
+  }
+  const int      slot = dcb_n;
+  const uint32_t dcb  = HLE_DCB_TABLE + (uint32_t)slot * DCB_STRIDE;
+  const uint32_t np   = HLE_DCB_NAMES + (uint32_t)slot * HLE_DCB_NAME_STRIDE;
+  for (uint32_t i = 0; i < DCB_STRIDE; i++) c->mem_w8(dcb + i, 0);
+  uint32_t k = 0;
+  for (; name[k] && k + 1 < HLE_DCB_NAME_STRIDE; k++) c->mem_w8(np + k, (uint8_t)name[k]);
+  c->mem_w8(np + k, 0);
+  c->mem_w32(dcb + DCB_OFF_NAME, np);
+  dcb_n = slot + 1;
+  // Republish both kernel words together: a base with a stale length is the exact shape that made
+  // the un-published table walk hundreds of megabytes.
+  c->mem_w32(KERNEL_DCB_ADDR, HLE_DCB_TABLE);
+  c->mem_w32(KERNEL_DCB_SIZE, (uint32_t)dcb_n * DCB_STRIDE);
+  lucent::info("hle", "BIOS device '{}' installed: DCB 0x{:08X} (table 0x{:08X}, {} device(s), "
+                      "{} bytes at kernel 0x150/0x154)",
+               name, dcb, (uint32_t)HLE_DCB_TABLE, dcb_n, (uint32_t)dcb_n * DCB_STRIDE);
+}
+
+void Hle::deviceUnhook(uint32_t dcb) {
+  if (!dcb) return;
+  Core* c = &game->core;
+  c->mem_w32(dcb + DCB_OFF_FIRSTFILE, 0);
+  c->mem_w32(dcb + DCB_OFF_NEXTFILE, 0);
+}
+
 // LoadExec (A0:0x51) interceptor: process-scoped hook installed by native_stub at boot.
 static void (*s_loadexec_hook)(Core*) = nullptr;
 
