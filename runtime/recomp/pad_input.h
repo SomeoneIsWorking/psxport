@@ -55,6 +55,20 @@ public:
   // after a repro). A suffix is never offered: replays are only valid from boot.
   bool saveRecording(const char* path, size_t nframes) const;
 
+  // ---- resume-from-recording (PSXPORT_PAD_RESUME) ----
+  // TRUE while a RESUME replay is still feeding the guest, i.e. while the run is replaying its way
+  // back to where the player left off and has not handed the controller over yet. It is what the
+  // rest of the runtime asks in order to fast-forward: the pacer does not sleep (gpu_native.cpp),
+  // FMVs play uncapped (native_fmv.cpp), and rendered audio is dropped instead of queued
+  // (spu_audio.cpp) — a 30-minute session replayed at wall-clock speed is not a resume.
+  //
+  // It goes FALSE the moment the recording runs out, which is the same instant the replay stops
+  // overriding the pad mask, so speed, sound and control are handed back together and there is no
+  // window in which the player is driving a fast-forwarding game. A plain PSXPORT_PAD_REPLAY is
+  // NOT fast-forwarded: watching a replay at real speed is the other legitimate use, and the two
+  // are told apart by which knob was set, never inferred.
+  bool fastForwarding() const { return mResumeFf && mRepBuf && mRecFc < mRepN; }
+
 private:
   ActiveLowEdges mButtonEdges;
   // ---- SDL gamepad handles (hotswap-aware; SDL build only) ----
@@ -83,6 +97,8 @@ private:
   uint16_t* mRepBuf = nullptr;      // replay source (loaded once)
   size_t    mRepN = 0;
   uint32_t  mRecFc = 0;             // shared record/replay frame index
+  int       mResumeFf = 0;          // PSXPORT_PAD_RESUME: fast-forward until the replay is spent
+  int       mResumeDone = 0;        // handover already announced (once-only log)
   std::vector<uint16_t> mRecLog;    // every finalized mask, always — the `padrec save` source
   int       mShotInit = 0, mShotN = 0;
   uint32_t  mShotAt[64] = {};

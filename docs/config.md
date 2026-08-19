@@ -862,6 +862,27 @@ or level — they can't be a bare channel:
   no disc needed). `VK_HEADLESS` (offscreen, no window) and `FULLSCREEN`/`WINDOWED` are honored unchanged.
 - **Boot / automation:** `NO_FMV`, `NOAUDIO`, `NOPACE`, `NOSKIP`, `NATIVE_FRAMES`, `AUTO_GAMEPLAY`,
   `AUTO_NEWGAME`, `SCEA_SKIP`, `WATCHDOG`, `REPL`, `DEBUG_SERVER`, `T2_NOSEQTICK`, `FMV_*`, `FORCE_*`.
+- **Pad record / replay / resume (`pad_input.cpp`):** `PAD_RECORD=<path|0>` (append the finalized
+  active-low mask every frame; default-on for WINDOWED runs into `scratch/bin/pad_session.pad`,
+  rotated 5 deep), `PAD_REPLAY=<path>` (force that exact sequence back — a deterministic repro, played
+  at REAL SPEED), `PAD_SHOT_AT` / `PAD_DUMP_AT` / `PAD_TRACE` (schedules on the pad-frame axis).
+- **`PSXPORT_PAD_RESUME=<path>` — CONTINUE FROM A RECORDING** (USER ask, 2026-08-19: *"a feature where
+  I can continue from a pad recording instead of having to play all over again"*). Same replay
+  mechanism as `PAD_REPLAY`, plus FAST-FORWARD until the recording is spent: the pacer does not sleep,
+  FMVs play uncapped, and rendered audio is dropped instead of queued. When the recording runs out,
+  pacing, sound and control are handed back **together** (they all read one predicate,
+  `Pad::fastForwarding()`), and the run just carries on with the player driving. Recording stays ON
+  during a resume — the new sink captures the replayed prefix *and* the live play as one from-boot
+  recording, which is what makes a resume chainable. `./run.sh --resume [file.pad]` is the front door
+  (no path = snapshot the last session and continue it).
+  **Why a second knob rather than a flag on `PAD_REPLAY`:** a replay is used two ways that want
+  opposite pacing — a gate/repro must run at real speed (or it measures a program nobody runs, the
+  `NOPACE` lesson below), and getting back to a spot wants all the speed there is. Which one you meant
+  is stated by which knob you set; nothing is inferred from the sink, the leg, or whether a window is
+  open. Setting both warns and uses RESUME.
+  **It is not a save state.** The run really is replayed from boot, so it costs time on a long session
+  and it lands where you left off only if the run is deterministic. A resume that ends up somewhere
+  else is a real divergence, not a tooling quirk — the handover line names the pad frame it ended on.
 - **`NOPACE` IS THE ONLY SWITCH FOR "RUN AS FAST AS THE HOST CAN", and a headless run is NOT one.**
   `gpu_pace_subframe` used to open with `if (!gpu_has_window() || cfg_on("PSXPORT_NOPACE")) return;`,
   so headless was unpaced *by accident of having no window*. That made every headless timing number a

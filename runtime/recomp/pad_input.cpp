@@ -452,6 +452,10 @@ void Pad::serviceFrame() {
       // time — that is what clobbered the bucket + flame repros. Headless auto-record is OFF; an explicit
       // PSXPORT_PAD_RECORD=<path> still records anywhere (windowed or headless).
       else if (!rpath && !cfg_str("PSXPORT_PAD_REPLAY") && gpu_windowed()) { rpath = "scratch/bin/pad_session.pad"; default_sink = true; }  // default-on (windowed)
+      // NOTE a RESUME run (PSXPORT_PAD_RESUME, below) deliberately does NOT suppress recording: the
+      // sink captures the replayed prefix and the live play that follows as ONE from-boot recording,
+      // which is what makes a resume chainable — today's session can be resumed from again tomorrow.
+      // A plain PSXPORT_PAD_REPLAY still suppresses it (re-capturing input you already have is noise).
       if (rpath) {
         // WORKFLOW FIX (#57): the default sink used to be truncated every windowed run, so a bug-repro
         // session (real input) was silently destroyed by the next launch (idle or otherwise) — that is
@@ -472,21 +476,59 @@ void Pad::serviceFrame() {
         lucent::info("padrec", "recording -> {}{}", rec_fp ? rpath : "(open FAILED)",
                 default_sink ? " (prev rotated to pad_session.1..5.pad; use replays/<cat>/<name>.pad to keep a repro)" : "");
       }
+      // PSXPORT_PAD_RESUME=<path> — CONTINUE FROM A RECORDING (USER ask, 2026-08-19: "a feature where
+      // I can continue from a pad recording instead of having to play all over again"). It is the same
+      // replay mechanism, plus fast-forward until the recording is spent; then the run just carries on
+      // with the player driving. Recording stays on, so where you stop becomes the next resume point.
+      //
+      // Why it is a SECOND knob and not a flag on PSXPORT_PAD_REPLAY: a replay is used two ways that
+      // want opposite pacing — a deterministic gate/repro (real speed, so what it measures is what the
+      // user sees) and getting back to a spot (as fast as the host can). Which one you meant is stated
+      // by which knob you set; nothing is inferred from the sink, the leg, or whether a window is open.
+      const char* resume = cfg_str("PSXPORT_PAD_RESUME");
       const char* ppath = cfg_str("PSXPORT_PAD_REPLAY");
+      if (resume && *resume) {
+        if (ppath && *ppath)
+          lucent::warn("padrec", "both PSXPORT_PAD_RESUME and PSXPORT_PAD_REPLAY are set — using RESUME "
+                                 "({}) and IGNORING REPLAY ({}); they are two different intentions.",
+                       resume, ppath);
+        ppath = resume;
+        mResumeFf = 1;
+      }
       if (ppath) {
         FILE* f = fopen(ppath, "rb");
         if (f) { fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
           rep_n = (size_t)(sz / 2); rep_buf = (uint16_t*)malloc(rep_n * 2);
           if (rep_buf && fread(rep_buf, 2, rep_n, f) != rep_n) { free(rep_buf); rep_buf = nullptr; rep_n = 0; }
           fclose(f);
-          lucent::info("padrec", "replaying {} frames <- {}", rep_n, ppath);
-        } else lucent::error("padrec", "replay open FAILED: {}", ppath);
+          lucent::info("padrec", "{} {} frames <- {}{}", mResumeFf ? "RESUMING from" : "replaying",
+                       rep_n, ppath,
+                       mResumeFf ? " (fast-forward: unpaced, muted, FMVs uncapped — control is handed "
+                                   "over when the recording runs out)" : "");
+        } else lucent::error("padrec", "{} open FAILED: {}", mResumeFf ? "resume" : "replay", ppath);
+        // A resume whose file did not load is a run that silently starts a NEW GAME from boot — the
+        // exact thing the user asked not to have to do. Say so and drop the fast-forward, rather than
+        // sprinting through a fresh boot with no input.
+        if (mResumeFf && !rep_buf) {
+          lucent::error("padrec", "PSXPORT_PAD_RESUME={} produced no frames — this run starts from BOOT "
+                                  "with no replayed input. Not fast-forwarding.", ppath);
+          mResumeFf = 0;
+        }
       }
     }
     if (rep_buf && rec_fc < rep_n) {
       // Force the recorded mask (overrides host/force), but MERGE live REPL drive on top: active-low
       // AND = union of pressed bits. A replay's idle tail no longer makes press/tap dead commands.
       buttons = rep_buf[rec_fc] & repl_mask;
+    } else if (mResumeFf && !mResumeDone) {
+      // The recording is spent: fastForwarding() is already false for every consumer that asks this
+      // frame (it reads the same rec_fc < rep_n), so pacing, audio and control resume together. Said
+      // out loud because a resume that ends somewhere unexpected (a truncated file, a desync) is
+      // otherwise indistinguishable from one that landed — the player just sees the game speed up.
+      mResumeDone = 1;
+      lucent::info("padrec", "RESUME complete at pad frame {} — real-time pacing, sound and control "
+                             "are yours. This session keeps recording, so you can resume from here too.",
+                   rec_fc);
     }
     // Latch edges only after every input source has resolved to the mask the guest receives. Sampling
     // host input earlier would miss replay/REPL presses or expose an edge for a mask later replaced.

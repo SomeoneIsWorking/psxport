@@ -219,6 +219,14 @@ int Fmv::playLba(uint32_t lba, uint32_t size_bytes) {
   // The wall-clock saving is real and is still available — ask for it: PSXPORT_FMV_FPS=0. A probe
   // that wants to fast-forward says so, and its log then records that it did.
   int uncapped = 0; { const char* f = cfg_str("PSXPORT_FMV_FPS"); if (f && *f) uncapped = (atoi(f) == 0); }
+  // A RESUME run (PSXPORT_PAD_RESUME) is replaying its way back to where the player left off, and the
+  // boot movies are ~77 s of that journey. This is not the inferred fast-forward the comment above
+  // rejects: the user asked for it by name, it ends when the recording does, and the log line below
+  // records that this run's movies were uncapped.
+  if (!uncapped && game->pad.fastForwarding()) {
+    uncapped = 1;
+    lucent::info("fmv", "uncapped: PSXPORT_PAD_RESUME is fast-forwarding to the end of the recording");
+  }
   int xa_freq = 37800;
   int16_t xa_hist[2][2] = {{0,0},{0,0}};
   long media_frames = 0;                       // cumulative audio sample-pairs = media clock

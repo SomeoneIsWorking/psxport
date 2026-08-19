@@ -22,6 +22,8 @@
 #include <stdio.h>
 #include "cfg.h"
 #include "config.h"        // `cvars` / `cvar` — the layered CVar registry + env audit
+#include "render_mode.h"   // `renderpath` — RenderPath + render_path_parse/name/next
+#include "config_vars.h"    // cv_render_path — mirror a live switch into the CVar Runtime layer
 #include <lucent/log.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,7 +176,11 @@ static void dbg_exec(FILE* out, const char* line) {
       "  cvars            every declared config knob: value, WHICH LAYER it came from, plus the\n"
       "                   PSXPORT_* variables in this process's environment that matched NOTHING\n"
       "  cvar N [V]       set knob N to V at the runtime layer (this run only, never persisted);\n"
-      "                   bare `cvar N` clears that layer. Ladder: default < value < env < runtime\n");
+      "                   bare `cvar N` clears that layer. Ladder: default < value < env < runtime\n"
+      "  renderpath [P]   switch the LIVE render path: native | gte | psx; bare form CYCLES.\n"
+      "                   native = PC producers + PC rasterizer; gte = the guest's own GTE/OT on the\n"
+      "                   PC rasterizer; psx = the guest's own GTE/OT on the PSX software rasterizer.\n"
+      "                   Same switch as the F5 hotkey; refuses under ORACLE/SBS.\n");
   } else if (!strcmp(cmd, "r") && sscanf(line, "%*s %x %u", &a, &b) >= 1) {
     if (!b) b = 16; if (b > 256) b = 256;
     fprintf(out, "%08X:", a);
@@ -343,9 +349,50 @@ static void dbg_exec(FILE* out, const char* line) {
   } else if (!strcmp(cmd, "cvar")) {
     char nm[128] = {0}, val[192] = {0};
     const int n = sscanf(line, "%*s %127s %191[^\n]", nm, val);
-    if (n == 2) fprintf(out, "cvar %s = %s -> %s\n", nm, val, psx::config::set_runtime(nm, val) ? "ok" : "REJECTED");
+    if (n == 2) {
+      fprintf(out, "cvar %s = %s -> %s\n", nm, val, psx::config::set_runtime(nm, val) ? "ok" : "REJECTED");
+      // PSXPORT_RENDER_PATH is read ONCE, by render_path_install() at boot (render_path.cpp). Setting it
+      // here therefore changes what `cvars` reports and NOTHING about the picture — a knob that reads
+      // back as applied while doing nothing is the exact shape this registry exists to prevent, so say
+      // so instead of leaving the next session to discover it from a screenshot that did not change.
+      if (!strcasecmp(nm, "PSXPORT_RENDER_PATH"))
+        fprintf(out, "NOTE: this knob is consumed at BOOT — the live picture is unchanged. Use "
+                     "`renderpath %s` to switch the running renderer.\n", val);
+    }
     else if (n == 1) fprintf(out, "cvar %s cleared -> %s\n", nm, psx::config::clear_runtime(nm) ? "ok" : "REJECTED");
     else fprintf(out, "cvar <PSXPORT_NAME> <value> — this run only; `cvar <name>` clears it; `cvars` lists everything\n");
+  } else if (!strcmp(cmd, "renderpath")) {
+    // THE LIVE RENDER-PATH SWITCH, over the wire. It already existed as the F5 hotkey (pad_input.cpp)
+    // and as a REPL command (repl.cpp) — and NEITHER is reachable while the user plays: F5 needs the
+    // window focused and prints its confirmation to a terminal, and the REPL blocks the frame loop so
+    // it cannot be attached to a live session at all. Comparing the three paths is the entire point of
+    // having three, so the switch has to be reachable from the one channel that works on a running
+    // window. Behaviour (order, refusals, CVar mirror) is shared with both of them via render_mode.h;
+    // this adds no new mechanism.
+    char st[16] = {0};
+    Game* g = s_ctx ? s_ctx->game : nullptr;
+    if (!g) { fprintf(out, "renderpath: no Game on this context\n"); }
+    else if (g->oracle || g->sbs) {
+      // Same refusal as the F5 key: these legs exist to BE the reference, and a renderer swapped
+      // under a compare would invalidate it while looking like nothing happened.
+      fprintf(out, "renderpath REFUSED: this run is %s and exists to be the reference — changing the "
+                   "renderer mid-run would invalidate it. Relaunch without it, or set "
+                   "PSXPORT_RENDER_PATH at launch. (unchanged: %s)\n",
+              g->oracle ? "ORACLE" : "an SBS compare", render_path_name(s_ctx->rsub.mode.path()));
+    } else {
+      RenderPath p = s_ctx->rsub.mode.path();
+      const bool named = sscanf(line, "%*s %15s", st) == 1;
+      if (named && !render_path_parse(st, &p)) {
+        fprintf(out, "renderpath: '%s' is not a path — valid: native | gte | psx (unchanged: %s)\n",
+                st, render_path_name(s_ctx->rsub.mode.path()));
+      } else {
+        if (!named) p = render_path_next(p);   // bare form CYCLES — same order as F5 and the REPL
+        s_ctx->rsub.mode.setPath(p);
+        psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(p));  // `cvars` reports the LIVE value
+        fprintf(out, "render path = %s (enhancements %s)\n", render_path_name(p),
+                s_ctx->rsub.mode.enhancementsAllowed() ? "ALLOWED" : "locked out — guest render stays pure");
+      }
+    }
   } else if (!strcmp(cmd, "press") && sscanf(line, "%*s %31s", arg) == 1) {
     s_held &= ~(unsigned short)dbg_btn(arg); s_ctx->game->pad.driveHold(s_held); fprintf(out, "held=%04X\n", s_held);
   } else if (!strcmp(cmd, "release") && sscanf(line, "%*s %31s", arg) == 1) {

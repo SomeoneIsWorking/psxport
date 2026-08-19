@@ -1616,7 +1616,13 @@ void gpu_pace_subframe_fields(Core* core, int guestFields, int parts) {
   struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
 
   PaceInputs in;
-  in.unpaced           = psx::config::cv_nopace.get();
+  // PSXPORT_NOPACE is the standing switch for "run flat out". A RESUME run (PSXPORT_PAD_RESUME) is
+  // the same request, scoped to the replayed prefix: it is fast-forwarding back to where the player
+  // left off, and stops the instant the recording is spent (Pad::fastForwarding). Both are EXPLICIT
+  // asks — nothing here infers speed from a window, a sink or a leg, which is the property this
+  // function was rewritten to have.
+  in.unpaced           = psx::config::cv_nopace.get() ||
+                         (core->game && core->game->pad.fastForwarding());
   in.quota             = guestFields > 0 ? guestFields :
                          ((core->cfg && core->cfg->paceQuota) ? (int)core->cfg->paceQuota : 0);
   in.parts             = parts;
