@@ -22,7 +22,7 @@
 // ---- Interactive REPL (PSXPORT_REPL=1) — drive the native port from stdin --------------------
 // Mirrors the oracle's (wide60rt -repl) command set so one driver can step BOTH cores and diff.
 // Commands: run N | r addr [len] | rw addr [words] | w addr val | w8 addr val | watch lo hi |
-//   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit. Memory is the
+//   unwatch | hits | press/release <btn> | tap <btn> [frames] | regs | seq | quit | end. Memory is the
 //   game's address space (mem_r*/mem_w*); watchpoints via mem_set_watch (reported during `run`).
 static uint16_t repl_btn(const char* n) {     // name -> active-HIGH PSX pad bit
   if (!strcmp(n,"start"))    return 0x0008; if (!strcmp(n,"select")) return 0x0001;
@@ -89,7 +89,19 @@ static void repl_xadump(DiscState* disc, uint8_t chan, uint32_t start_lba, const
 // area_base+0x51000. We arm the dest id here and fire FUN_80044bd4 from the frame loop (scheduler context
 // active, like `newgame`). See docs/engine_re.md "Area WARP / destination mechanism".
 
-// Read+execute REPL commands until a `run N` (returns N) or quit/EOF (returns -1).
+// Read+execute REPL commands until a `run N` (returns N), `quit`/EOF (returns -1) or `end`
+// (returns -2).
+//
+// TWO WAYS TO STOP, because they mean different things and conflating them cost a measurement.
+// `quit` DETACHES the REPL and lets the game keep running — what an operator wants when they are
+// done typing at a windowed session. A headless CAPTURE wants the opposite: the run to END, so the
+// port's run-end reporters (the producer DB, the census denominators, every "did this body actually
+// run" counter) get to print. Under `quit` the harness has to SIGKILL the process instead, and the
+// log then stops mid-run with those questions unanswered — which is how a screenshot pair can be
+// compared while nobody can say whether the code under test executed at all.
+//
+// So `end` is the clean-shutdown request. The host decides what that means (a port with a run
+// lifecycle ends it and exits; one without can treat it as quit) — the REPL only reports the ask.
 long Repl::read(Core* c, uint32_t f) {
   uint16_t& held = mHeldMask;                 // active-low held mask (persists across REPL entries)
   char line[256];
@@ -98,6 +110,7 @@ long Repl::read(Core* c, uint32_t f) {
     char cmd[24] = {0}, arg[32] = {0}; unsigned a = 0, b = 0;
     if (sscanf(line, "%23s", cmd) != 1) continue;
     if (!strcmp(cmd, "quit") || !strcmp(cmd, "q")) return -1;
+    else if (!strcmp(cmd, "end")) return -2;   // END the run cleanly; see the note above
     else if (!strcmp(cmd, "run") && sscanf(line, "%*s %u", &a) == 1) return (long)a;
     // `step [n]` — advance n frames (default 1) and return to the prompt. Same mechanism as `run n`
     // (the REPL only resumes the frame loop by returning a frame count); provided because `step` is the
