@@ -60,6 +60,12 @@ public:
   Stats stats()     const { return {mSetCt, mHitCt, mMissCt}; }
   void  statsReset()      { mSetCt = mHitCt = mMissCt = 0; }
 
+  // LIFETIME totals, never reset. statsReset() runs on every present, so the counters above only
+  // ever describe one frame — which made "records=0 lookups=0" unreadable: it could mean the depth
+  // path is dead, or merely that this particular frame drew nothing. These separate the two, and
+  // are what render_depth_coverage_report() prints at run end.
+  Stats totals()    const { return {mSetTot, mHitTot, mMissTot}; }
+
 private:
   struct Ent { uint32_t addr; float pz; int next; int gen; };
   Ent  mEntries[kMax];
@@ -67,6 +73,7 @@ private:
   int  mN = 0, mInited = 0, mOverflow = 0;
   int  mGen = 0;                 // current generation; entries from mGen and mGen-1 are readable
   long mSetCt = 0, mHitCt = 0, mMissCt = 0;
+  long mSetTot = 0, mHitTot = 0, mMissTot = 0;   // never reset; see totals()
   long mNear[16] = {0}; long mNearMiss = 0;
 
   static ProjPrim* sCurrent;

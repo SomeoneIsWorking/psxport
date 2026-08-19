@@ -831,7 +831,8 @@ void GpuState::gp0_exec(Core* core) {
                               uint8_t r, uint8_t g, uint8_t b, int tex, int semi, int raw);
           prim_dump_poly(core, s_frame, ord_idx, op, nv, is3d, is3d ? -1 : bg, xs, ys, us, vs,
                          rs[0], gs[0], bs[0], textured ? 1 : 0, semi, rw); }
-        if (is3d) core->rsub.stats.nd3d++; else core->rsub.stats.nd2d++;
+        if (is3d) { core->rsub.stats.nd3d++; core->rsub.stats.nd3dTotal++; }
+        else      { core->rsub.stats.nd2d++; core->rsub.stats.nd2dTotal++; }
         // PSXPORT_PRIMAT="x,y" (DISPLAY coords): log EVERY poly whose triangle covers that display pixel,
         // with its 3D/2D classification + per-vertex depth (ord) + node + color. Unlike provat (blind to
         // VK polys), this is the gp0 tee, so it sees the actual occlusion contestants. Frontmost opaque =
@@ -2288,3 +2289,39 @@ int  gpu_frame_no(Core* core) { return core->game->gpu.gpu_frame_no(); }
 uint16_t gpu_vram_peek(Core* core, int x, int y) { return core->game->gpu.gpu_vram_peek(x, y); }
 void gpu_vram_load(Core* core, const uint16_t* src) { core->game->gpu.gpu_vram_load(src); }
 void gpu_vram_save(Core* core, uint16_t* dst) { core->game->gpu.gpu_vram_save(dst); }
+
+// ── render_depth_coverage_report — see render_stats.h for why this exists. ────────────────────────
+void render_depth_coverage_report(Core* core, const char* why) {
+  const long long d3 = core->rsub.stats.nd3dTotal, d2 = core->rsub.stats.nd2dTotal;
+  const long long tot = d3 + d2;
+  const ProjPrim::Stats pp = core->rsub.projprim.totals();
+  if (tot == 0) {
+    lucent::warn("ndepth",
+                 "depth coverage ({}): NO PRIMITIVES WERE CLASSIFIED AT ALL this run — not 0% 3D, "
+                 "but nothing measured. The run drew no polygons through the native classifier, so "
+                 "it says nothing about whether depth works. (vertex-depth cache: {} record(s), {} "
+                 "hit(s), {} miss(es).)",
+                 why, pp.set, pp.hit, pp.miss);
+    return;
+  }
+  lucent::info("ndepth",
+               "depth coverage ({}): {} of {} prim(s) carried REAL per-vertex depth = {:.2f}% 3D; "
+               "the other {} fell to the deferred 2D order band. Vertex-depth cache over the same "
+               "run: {} record(s), {} lookup hit(s), {} miss(es) ({:.2f}% of lookups hit).",
+               why, d3, tot, 100.0 * (double)d3 / (double)tot, d2,
+               pp.set, pp.hit, pp.miss,
+               (pp.hit + pp.miss) ? 100.0 * (double)pp.hit / (double)(pp.hit + pp.miss) : 0.0);
+  // WHERE the misses landed, over the whole run rather than one sampled frame. "Records climb, hits
+  // do not" has two different causes — wrong buffer entirely, or right buffer wrong word — and the
+  // ratio above cannot separate them. Needs PSXPORT_DEBUG=pznear; it says so itself when off.
+  long long ctry = 0, ccar = 0;
+  void gte_copy_pz_counts(long long*, long long*);
+  gte_copy_pz_counts(&ctry, &ccar);
+  lucent::info("ndepth",
+               "  buffer-to-buffer depth carry: {} copy site(s) ran, {} found a depth at the source "
+               "and carried it ({:.2f}%). A large gap here means the staged vertices are not where "
+               "the copy thinks they are; a small one means the carry works and the misses are "
+               "elsewhere.",
+               ctry, ccar, ctry ? 100.0 * (double)ccar / (double)ctry : 0.0);
+  core->rsub.projprim.nearReport("run-end");
+}

@@ -65,7 +65,7 @@ void ProjPrim::reset() {
 static inline uint32_t pz_key(uint32_t addr) { return addr & 0x1FFFFFFC; }
 
 void ProjPrim::setPz(uint32_t addr, float pz) {
-  mSetCt++;
+  mSetCt++; mSetTot++;
   if (!mInited) reset();
   addr = pz_key(addr);
   if (s_pz_dbg_set < 12)
@@ -92,10 +92,10 @@ bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
   for (int i = mHead[hashOf(addr)]; i >= 0; i = mEntries[i].next)
     if (mEntries[i].addr == addr) {
       if (pz) *pz = mEntries[i].pz;
-      mHitCt++;
+      mHitCt++; mHitTot++;
       return true;
     }
-  mMissCt++;
+  mMissCt++; mMissTot++;
   if (s_pz_dbg_miss < 12)
     { s_pz_dbg_miss++; lucent::debug("pzaddr", "MISS   [{:06X}]", addr); }
   // NEAR-MISS HISTOGRAM (`debug pznear`). "Records climb, hits do not" has two completely different

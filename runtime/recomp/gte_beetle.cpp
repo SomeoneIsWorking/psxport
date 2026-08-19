@@ -436,10 +436,22 @@ void gte_hold_src(Core* c, int gpr, uint32_t src) {
   s_held_src[gpr & 31] = src;
 }
 
+// COUNT THE BRIDGE. Records and lookups were both counted; the copy BETWEEN them was not, and that
+// is the step that decides whether a staged vertex's depth ever reaches the packet the renderer
+// draws from. Without these, "15M records, 6% of lookups hit" has two indistinguishable readings —
+// the copies are not running, or they are running and landing on addresses nobody reads — and no
+// amount of staring at either end separates them.
+static long long s_copy_try = 0, s_copy_carried = 0;
+void gte_copy_pz_counts(long long* tried, long long* carried) {
+  if (tried) *tried = s_copy_try;
+  if (carried) *carried = s_copy_carried;
+}
+
 void gte_copy_pz(Core* c, int gpr, uint32_t dst) {
   if (!attach_enabled()) return;
   float pz;
-  if (c->rsub.projprim.peekPz(s_held_src[gpr & 31], &pz)) c->rsub.projprim.setPz(dst, pz);
+  s_copy_try++;
+  if (c->rsub.projprim.peekPz(s_held_src[gpr & 31], &pz)) { s_copy_carried++; c->rsub.projprim.setPz(dst, pz); }
 }
 
 // Carry a hold from one GPR to another, for a value the guest DERIVED rather than copied verbatim.
