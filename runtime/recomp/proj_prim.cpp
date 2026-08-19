@@ -1,4 +1,5 @@
 // class ProjPrim — impl. See proj_prim.h for the design.
+#include "core.h"   // Core::mem_r32 — the word guard reads the address it recorded against
 #include "proj_prim.h"
 #include <lucent/log.h>
 #include <stdio.h>
@@ -47,7 +48,7 @@ void ProjPrim::reset() {
   int n = 0;
   for (int i = 0; i < kHashSize; i++) mHead[i] = -1;
   for (int i = 0; i < mN; i++) {
-    if (mEntries[i].gen < mGen - 1) continue;      // older than one full buffer flip
+    if (mEntries[i].gen < mGen - (kGens - 1)) continue;   // beyond the retained generations
     Ent e = mEntries[i];
     uint32_t h = hashOf(e.addr);
     mEntries[n] = e; mEntries[n].next = mHead[h]; mHead[h] = n; n++;
@@ -64,33 +65,56 @@ void ProjPrim::reset() {
 // miss. Spyro stages vertices in the scratchpad, so this collision is reachable, not theoretical.
 static inline uint32_t pz_key(uint32_t addr) { return addr & 0x1FFFFFFC; }
 
-void ProjPrim::setPz(uint32_t addr, float pz) {
+// The word currently at `addr`, read at the address the CALLER passed — never at one rebuilt from
+// the masked key. pz_key strips the KSEG mirror bits, and re-adding a mirror to recover a readable
+// address is a guess: scratchpad (0x1F800000) and low RAM normalize to keys that would need
+// different mirrors, so a single reconstruction silently reads the wrong memory for one of them.
+// Every caller already holds the real address; pass it.
+static inline uint32_t word_at(Core* c, uint32_t addr) { return c->mem_r32(addr); }
+
+void ProjPrim::setPz(Core* c, uint32_t addr, float pz) {
   mSetCt++; mSetTot++;
   if (!mInited) reset();
+  const uint32_t w = word_at(c, addr);
   addr = pz_key(addr);
   if (s_pz_dbg_set < 12)
     { s_pz_dbg_set++; lucent::debug("pzaddr", "RECORD [{:06X}] pz={:.1f}", addr, (double)pz); }
   uint32_t h = hashOf(addr);
   for (int i = mHead[h]; i >= 0; i = mEntries[i].next)
-    if (mEntries[i].addr == addr) { mEntries[i].pz = pz; mEntries[i].gen = mGen; return; }
+    if (mEntries[i].addr == addr) { mEntries[i].pz = pz; mEntries[i].gen = mGen; mEntries[i].word = w; return; }
   if (mN >= kMax) { mOverflow = 1; return; }
   Ent* e = &mEntries[mN];
-  e->addr = addr; e->pz = pz; e->gen = mGen; e->next = mHead[h]; mHead[h] = mN++;
+  e->addr = addr; e->pz = pz; e->gen = mGen; e->word = w; e->next = mHead[h]; mHead[h] = mN++;
 }
 
-bool ProjPrim::peekPz(uint32_t addr, float* pz) {
+bool ProjPrim::peekPz(Core* c, uint32_t addr, float* pz) {
   if (!mInited) return false;
-  addr = pz_key(addr);
-  for (int i = mHead[hashOf(addr)]; i >= 0; i = mEntries[i].next)
-    if (mEntries[i].addr == addr) { if (pz) *pz = mEntries[i].pz; return true; }
-  return false;
-}
-
-bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
-  if (!mInited) return false;
+  const uint32_t real = addr;
   addr = pz_key(addr);
   for (int i = mHead[hashOf(addr)]; i >= 0; i = mEntries[i].next)
     if (mEntries[i].addr == addr) {
+      if (mEntries[i].word != word_at(c, real)) return false;   // the vertex it described is gone
+      if (pz) *pz = mEntries[i].pz;
+      return true;
+    }
+  return false;
+}
+
+bool ProjPrim::lookupPz(Core* c, uint32_t addr, float* pz) {
+  if (!mInited) return false;
+  const uint32_t real = addr;
+  addr = pz_key(addr);
+  for (int i = mHead[hashOf(addr)]; i >= 0; i = mEntries[i].next)
+    if (mEntries[i].addr == addr) {
+      // STALE: the address is ours, but the guest has since written something else there. Refusing
+      // is the whole point — serving it is how a recycled pool slot hands a 2D element a world
+      // depth. Counted apart from a plain miss because they want opposite fixes: stale means the
+      // entry lifetime outran the buffer, absent means the depth was never recorded.
+      if (mEntries[i].word != word_at(c, real)) {
+        mStaleCt++; mStaleTot++;
+        mMissCt++; mMissTot++;
+        return false;
+      }
       if (pz) *pz = mEntries[i].pz;
       mHitCt++; mHitTot++;
       return true;
@@ -112,7 +136,7 @@ bool ProjPrim::lookupPz(uint32_t addr, float* pz) {
   if (lucent::channel_on("pznear")) {
     static const int kOff[] = {-32,-28,-24,-20,-16,-12,-8,-4,4,8,12,16,20,24,28,32};
     for (int k = 0; k < (int)(sizeof kOff / sizeof kOff[0]); k++)
-      if (peekPz((uint32_t)((int32_t)addr + kOff[k]), nullptr)) mNear[k]++;
+      if (peekPz(c, (uint32_t)((int32_t)real + kOff[k]), nullptr)) mNear[k]++;
     mNearMiss++;
   }
   return false;

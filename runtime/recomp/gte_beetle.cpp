@@ -380,7 +380,7 @@ void gte_store_xy(Core* c, uint32_t addr, int rt) {
   c->mem_w32(addr, gte_read_data((uint32_t)rt));
   if (!attach_enabled()) return;
   const int zreg = (rt == 15) ? 19 : (17 + (rt - 12));
-  c->rsub.projprim.setPz(addr, (float)(uint16_t)gte_read_data((uint32_t)zreg));
+  c->rsub.projprim.setPz(c, addr, (float)(uint16_t)gte_read_data((uint32_t)zreg));
 }
 
 // Native depth, mfc2 form. The recompiler pairs `mfc2 rX, DR12..15` with the `sw rX, off(base)` that
@@ -451,7 +451,7 @@ void gte_copy_pz(Core* c, int gpr, uint32_t dst) {
   if (!attach_enabled()) return;
   float pz;
   s_copy_try++;
-  if (c->rsub.projprim.peekPz(s_held_src[gpr & 31], &pz)) { s_copy_carried++; c->rsub.projprim.setPz(dst, pz); }
+  if (c->rsub.projprim.peekPz(c, s_held_src[gpr & 31], &pz)) { s_copy_carried++; c->rsub.projprim.setPz(c, dst, pz); }
 }
 
 // Carry a hold from one GPR to another, for a value the guest DERIVED rather than copied verbatim.
@@ -468,7 +468,7 @@ void gte_hold_move(int dst, int src) {
 
 void gte_record_pz(Core* c, uint32_t addr, int gpr) {
   if (!attach_enabled()) return;
-  c->rsub.projprim.setPz(addr, s_held_pz[gpr & 31]);
+  c->rsub.projprim.setPz(c, addr, s_held_pz[gpr & 31]);
 }
 
 // Bind the GTE math to THIS core's register file (game.h GteRegs) so two cores keep separate GTE state.

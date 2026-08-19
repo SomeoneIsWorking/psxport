@@ -799,7 +799,7 @@ void GpuState::gp0_exec(Core* core) {
         is3d = 1;
         for (int i = 0; i < nv; i++) {
           float pz;
-          if (vaddr[i] && core->rsub.projprim.lookupPz(vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
+          if (vaddr[i] && core->rsub.projprim.lookupPz(core, vaddr[i], &pz)) dep[i] = proj_pz_to_ord(pz);
           else { is3d = 0; break; }
         }
         if (is3d) s_seen3d = 1;            // a projected world prim has now been drawn this frame
@@ -2311,6 +2311,12 @@ void render_depth_coverage_report(Core* core, const char* why) {
                why, d3, tot, 100.0 * (double)d3 / (double)tot, d2,
                pp.set, pp.hit, pp.miss,
                (pp.hit + pp.miss) ? 100.0 * (double)pp.hit / (double)(pp.hit + pp.miss) : 0.0);
+  lucent::info("ndepth",
+               "  of those {} miss(es), {} were STALE (the address was ours, but the guest had "
+               "overwritten the word, so the entry no longer described a vertex and was refused) "
+               "and {} were ABSENT (no depth was ever recorded there). They want opposite fixes: "
+               "stale means entry lifetime outran the buffer, absent means the tap never fired.",
+               pp.miss, pp.stale, pp.miss - pp.stale);
   // WHERE the misses landed, over the whole run rather than one sampled frame. "Records climb, hits
   // do not" has two different causes — wrong buffer entirely, or right buffer wrong word — and the
   // ratio above cannot separate them. Needs PSXPORT_DEBUG=pznear; it says so itself when off.
