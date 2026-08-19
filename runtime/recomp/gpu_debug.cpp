@@ -1,4 +1,5 @@
 #include "core.h"
+#include "ot_attr.h"   // OtAttr::Span — `otattr` packet->submitter attribution
 // gpu_debug.c — read-only diagnostic dumps of the native GPU state (carved out of gpu_native.c).
 //
 // These format human-readable views of the renderer's state for the debug tooling and the live debug
@@ -139,4 +140,70 @@ void gpu_disp_dump_now(Core* core, FILE* out) {
     fprintf(out, "  note: the draw clip reaches row %d and the display shows through row %d — anything "
                  "the game rasterizes down there IS on screen unless it paints over it.\n",
             g.s_da_y1, shown_y1);
+}
+
+// WHO SUBMITTED THIS FRAME'S GEOMETRY — the packet->submitter question, on the debug server.
+//
+// The REPL has had `otattr` for a long time and it was UNREACHABLE where the question is usually asked:
+// the REPL blocks the frame loop, so it cannot attach to a live window or to a long resumed session,
+// which is exactly where "what draws that thing that is missing" comes up. Same gap `renderpath` had.
+//
+// Two forms, both read-only:
+//   otattr            aggregate the CURRENT ordering table by submitter fn
+//   otattr <addr>     attribute one packet address (as printed by `provat`'s node= field)
+//
+// It reports its DENOMINATORS because the attribution is not total: spans are recorded as the guest
+// STORES packets, so a packet whose store the span table missed (or which was written before the table
+// was armed) is UNATTRIBUTED, and a table that overflowed says so. An aggregate with no denominator
+// would read as "these are all the submitters" when it means "these are the ones I could name".
+void gpu_otattr_dump_now(Core* core, FILE* out, uint32_t oneAddr) {
+  GpuState& g = core->game->gpu;
+  OtAttr& oa = core->rsub.otAttr;
+
+  if (oneAddr) {
+    OtAttr::Span sp{};
+    if (oa.lookupStore(oneAddr, &sp))
+      fprintf(out, "[otattr] 0x%08X <- fn=0x%08X caller=0x%08X node=0x%08X claimed=0x%08X "
+                   "(span [0x%08X,0x%08X))\n",
+              oneAddr | 0x80000000u, sp.fn, sp.caller, sp.node, sp.claimed, sp.lo, sp.hi);
+    else
+      fprintf(out, "[otattr] 0x%08X — NO SPAN COVERS IT. That is 'not recorded', NOT 'nobody wrote it': "
+                   "%d spans this frame%s.\n", oneAddr | 0x80000000u, oa.spanCount(),
+              oa.spanOverflow() ? " (TABLE OVERFLOWED — attribution is incomplete)" : "");
+    return;
+  }
+
+  // Aggregate the current OT. Same link walk gpu_scene_dump uses; read-only, no gpu_gp0 side effects.
+  struct Row { uint32_t fn; int packets; };
+  Row rows[64]; int nrows = 0;
+  int nodes = 0, attributed = 0, unattributed = 0, rowsDropped = 0;
+  uint32_t addr = g.s_ot_madr & 0x1FFFFC;
+  for (int guard = 0; guard < 0x10000; guard++) {
+    const uint32_t hdr = core->mem_r32(addr);
+    const unsigned n = hdr >> 24;
+    if (n) {
+      nodes++;
+      OtAttr::Span sp{};
+      if (oa.lookupStore(addr + 4, &sp)) {
+        attributed++;
+        int i = 0;
+        for (; i < nrows; i++) if (rows[i].fn == sp.fn) { rows[i].packets++; break; }
+        if (i == nrows) { if (nrows < 64) { rows[nrows++] = { sp.fn, 1 }; } else rowsDropped++; }
+      } else unattributed++;
+    }
+    const uint32_t next = hdr & 0xFFFFFF;
+    if (next == 0xFFFFFF || next == 0) break;
+    addr = next & 0x1FFFFC;
+  }
+  // Biggest first — the ranking is the point when the question is "what draws most of this scene".
+  for (int i = 0; i < nrows; i++)
+    for (int j = i + 1; j < nrows; j++)
+      if (rows[j].packets > rows[i].packets) { Row t = rows[i]; rows[i] = rows[j]; rows[j] = t; }
+  fprintf(out, "[otattr] f%d OT@0x%08X: %d drawing nodes, %d attributed, %d UNATTRIBUTED"
+               " (%d spans%s)\n", g.s_frame, 0x80000000u | g.s_ot_madr, nodes, attributed,
+          unattributed, oa.spanCount(), oa.spanOverflow() ? ", TABLE OVERFLOWED" : "");
+  for (int i = 0; i < nrows; i++)
+    fprintf(out, "  fn=0x%08X  %d packet(s)\n", rows[i].fn, rows[i].packets);
+  if (rowsDropped) fprintf(out, "  (+%d distinct fn(s) past the 64-row cap — NOT listed)\n", rowsDropped);
+  if (!nodes) fprintf(out, "  the ordering table this frame has no drawing nodes at all.\n");
 }

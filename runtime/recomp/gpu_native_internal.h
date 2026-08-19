@@ -103,6 +103,7 @@ struct GpuState {
   // Display control (GP1)
   int s_disp_x = 0, s_disp_y = 0;                             // VRAM top-left of the displayed region
   int s_disp_w = 320, s_disp_h = 240;
+  int presentedHeight(Core* core) const;   // s_disp_h, or the port-declared guest height on guest paths
   int s_disp_vy0 = 0, s_disp_vy1 = 240;                       // GP1(0x07) vertical display range
   // Has GP1(0x07) been written AT ALL? Without this, `s_disp_h == 240` is unreadable: it is either the
   // height the game asked for or the height nobody asked for, and those are opposite answers when the

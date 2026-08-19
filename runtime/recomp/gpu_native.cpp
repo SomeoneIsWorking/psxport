@@ -1549,8 +1549,29 @@ bool GpuState::soft_gpu() const { return game && game->core.rsub.mode.softGpu();
 // SDL_Texture code that SDL3 doesn't carry verbatim.
 int  gpu_vk_enabled(void);                                   // gpu_vk.cpp — SDL_GPU present backend
 void GpuState::ensure_window() {}
+// THE PRESENTED HEIGHT. Normally s_disp_h, decoded from GP1(0x07). But a port that HLEs the guest's
+// display setup can leave GP1(07) never written, and then s_disp_h is the framework's 240-line default
+// — a number nobody asked for. GameConfig::guestDisplayHeight is the port stating what the game really
+// scans out, and it applies to the GUEST-SOURCED paths only: those claim to show what the console
+// showed, while a native renderer owns its own frame and may present more (USER 2026-08-19: "PC is
+// fine, oracle isn't"). See the GameConfig field for the measurement behind it.
+int GpuState::presentedHeight(Core* core) const {
+  const uint16_t declared = (core->cfg && core->cfg->guestDisplayHeight) ? core->cfg->guestDisplayHeight : 0;
+  if (!declared) return s_disp_h;
+  if (core->rsub.mode.path() == RenderPath::Native) return s_disp_h;
+  if (declared != s_disp_h) {
+    static bool said = false;
+    if (!said) {
+      said = true;
+      lucent::info("gpu", "guest render path presents {} lines, not {} — GameConfig::guestDisplayHeight. "
+                          "The extra rows are framebuffer this game never scans out.", declared, s_disp_h);
+    }
+  }
+  return declared;
+}
+
 void GpuState::blit_src(const uint16_t* src, int sx, int sy) {
-  gpu_vk_present(&game->core, src, sx, sy, s_disp_w, s_disp_h);   // SDL_GPU present (incl. headless upload)
+  gpu_vk_present(&game->core, src, sx, sy, s_disp_w, presentedHeight(&game->core));   // SDL_GPU present (incl. headless upload)
 }
 void GpuState::present_window() { blit_src(s_vram, s_disp_x, s_disp_y); }   // the live front buffer
 // Re-present the CURRENT frame without advancing game logic — the debug-server pause loop's window

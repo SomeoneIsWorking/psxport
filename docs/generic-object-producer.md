@@ -92,6 +92,26 @@ space, the outputs are not.
 - **Gate to the scene window where the native pass owns the picture**, so it can never run on a pure
   guest-render leg (oracle / SBS / menus), where an extra native draw would double the picture.
 
+## 3a. COVER EVERY CALLER, NOT ONE — the mistake this section exists to stop
+
+A generic emitter has MORE THAN ONE caller, and a redirect wired at one of them silently leaves the
+others drawing guest-side only. Measured on Tomba!2, 2026-08-19, chasing a cutscene whose machinery was
+invisible:
+
+- the redirect lived in the per-mode dispatcher (`cmdListDispatch`) and fired **2,560+ times in that very
+  cutscene** — so "is the redirect running here" answered YES while the object under investigation was
+  still missing;
+- the missing object's packets attributed to `OverlayGt3Gt4::gt4`, an emitter the redirect ALREADY
+  covers, reached from callers it does not: one inside the object's own behaviour handler
+  (`beh_event_record_machine`), one through a second, native-owned per-object dispatcher
+  (`Render::perObjRenderDispatch`).
+
+So enumerate the emitter's callers before believing coverage. The tool for that is packet attribution:
+point at the missing thing on a guest-render leg, read the packet address, and ask who wrote it —
+`provat <x> <y>` then `otattr <addr>`, which reports `fn`, `caller` and the owning object `node`. Two
+packets was enough to name both missing paths here. **A per-caller redirect count is not evidence of
+coverage; the attribution of the MISSING object is.**
+
 ## 4. HOW TO KNOW IT WORKED — and how not to fool yourself
 
 - **Gate on an IN-BAND COUNT, not on pixels.** A per-redirect diagnostic channel with a denominator

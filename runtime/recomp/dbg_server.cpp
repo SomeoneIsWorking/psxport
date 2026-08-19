@@ -51,6 +51,7 @@
 #include "sbs.h"                   // class Sbs — Sbs::coreA()/coreB() for per-command core targeting
 void gpu_scene_dump_now(Core* c, FILE* out);
 void gpu_disp_dump_now(Core* c, FILE* out);   // `disp` — the display rect + draw clip, in one place
+void gpu_otattr_dump_now(Core* c, FILE* out, uint32_t oneAddr);   // `otattr` — who submitted this geometry
 void gpu_provat_display(Core* core, FILE* out, int qx, int qy);
 void gpu_native_shot(Core* core, const char* path);
 int  gpu_frame_no(Core* core);
@@ -174,6 +175,9 @@ static void dbg_exec(FILE* out, const char* line) {
       "  step [n]         advance exactly n frames then re-freeze (default 1)\n"
       "  play|resume      unfreeze\n"
       "  frame            current present-frame counter + paused state\n"
+      "  otattr [addr]    WHO submitted this frame's geometry: bare = the current ordering table\n"
+      "                   aggregated by submitter fn (ranked, with the unattributed denominator);\n"
+      "                   with a packet address (provat's node=) = that one packet's fn/caller/node\n"
       "  disp             the display VRAM rect (GP1 05/07/08) + the draw clip (GP0 E3/E4/E5), and\n"
       "                   whether the game ever PROGRAMMED each — a 240 nobody asked for reads the\n"
       "                   same as a 240 the game chose, and they mean opposite things\n"
@@ -253,6 +257,9 @@ static void dbg_exec(FILE* out, const char* line) {
             s_ctx->mem_r32(0x801fe00c), (int)s_ctx->mem_r16(0x801fe048), s_ctx->mem_r32(0x800BE258));
   } else if (!strcmp(cmd, "scene")) {
     gpu_scene_dump_now(s_ctx, out);
+  } else if (!strcmp(cmd, "otattr")) {
+    unsigned one = 0; sscanf(line, "%*s %x", &one);
+    gpu_otattr_dump_now(s_ctx, out, one);
   } else if (!strcmp(cmd, "disp")) {
     gpu_disp_dump_now(s_ctx, out);
   } else if (!strcmp(cmd, "provat") && sscanf(line, "%*s %u %u", &a, &b) == 2) {

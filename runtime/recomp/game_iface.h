@@ -291,6 +291,7 @@ struct GameConfig {
   // mid-struct silently shifts every field after it there.
   const char *windowTitle;
 
+
   // --- crt0 stack-top bias (crt0_boot.h) --------------------------------------------------------
   // The guest crt0's OWN adjustment of the stack-top word before it becomes sp:
   //
@@ -346,6 +347,26 @@ struct GameConfig {
   // Appended for positional consumers. Zero means SynchronousTaskWait is unmeasured and refuses.
   uint32_t syncWaitDoneFlag, syncWaitParam2, syncWaitParam3;
   uint32_t syncWaitTaskGp, syncWaitForceCloseRa, syncWaitSpawnRa, syncWaitFinishRa;
+
+  // --- THE GUEST'S OWN DISPLAY HEIGHT, in scanlines (0 = not declared) --------------------------
+  // How many lines the game really scans out. Normally the GPU knows: GP1(0x07) programs the vertical
+  // display range and gpu_gp1 decodes it. But a port that HLEs libgpu's display setup may leave that
+  // register never written — measured on Tomba!2, 2026-08-19: 16,061 GP1 writes in a session and not
+  // one of them is 05, 07 or 08 — and then `s_disp_h` is the framework's 240-line DEFAULT, which is a
+  // guess wearing the costume of a measurement.
+  //
+  // The cost of that guess is visible: Tomba!2 is a 320x224 game (its cutscene letterbox rects sit at
+  // rows 0..11 and 212..223, flush to the bottom of a 224-line screen — see the RE note in the
+  // consumer's game/render/cine_bars.cpp), so presenting 240 lines put 16 rows of framebuffer BELOW the
+  // bottom bar on screen, rows a console never scans out. The USER reported it as "a bogus segment
+  // below the cutscene black bars".
+  //
+  // Applies to the GUEST-SOURCED render paths only (gte / psx), which are the ones claiming to show
+  // what the console showed. A native renderer owns its own frame and may present more (USER,
+  // 2026-08-19, on exactly this: "PC is fine, oracle isn't"). Unset leaves every path on the decoded
+  // GP1 value, which is the correct behaviour for a game whose GPU registers are really programmed.
+  // Appended at the end: GameConfig is initialised POSITIONALLY by some consumers.
+  uint16_t guestDisplayHeight;
 };
 
 // Look up a task entry PC in the game's declared table. Returns null when the game declared none or the
