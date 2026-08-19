@@ -131,7 +131,10 @@ static inline float ord3d_b(float d, float bias) { float o = ord3d(d) + bias;
 #define TRI2D_CAP 32768
 #define TEX2D_CAP 32768
 #define NUM_BLEND_MODES GGS_NUM_BLEND_MODES   // PSX semi blend modes (0=avg 1=add 2=sub 3=add4)
-struct TriVtx { float x, y, r, g, b, ord, gouraud, dither; };                                   // 32 bytes
+// da[] = the guest draw-area clip, carried per-vertex exactly as TexVtx does. It is NOT optional
+// padding: tri.frag discards outside it, so a vertex written without one clips to nothing.
+// Every initializer below therefore sets it explicitly.
+struct TriVtx { float x, y, r, g, b, ord, gouraud, dither; int32_t da[4]; };                   // 48 bytes
 struct TexVtx { float x, y, u, v, r, g, b; int32_t tp[4], clut[4], tw[4], da[4]; float ord; };   // 96 bytes
 // Batch buffers + counts moved onto GpuVkState (per-Core) — reach as `this->s_tri_buf` (cast from
 // void* to TriVtx*) inside the methods. The `render_geom` free function below takes a `GpuVkState&`
@@ -723,6 +726,7 @@ static void create_3d_pipelines(void) {
     { 2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 20 },
     { 3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 24 },
     { 4, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 28 },
+    { 5, 0, SDL_GPU_VERTEXELEMENTFORMAT_INT4,  32 },   // draw-area clip (tri.frag discards outside)
   };
   static const SDL_GPUVertexAttribute tex_attr[] = {
     { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, 0 },
@@ -735,7 +739,7 @@ static void create_3d_pipelines(void) {
     { 7, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, 92 },
   };
   s_tri_pipe    = make_geom_pipeline(spv_g_tri_vert, spv_g_tri_vert_len, spv_g_tri_frag, spv_g_tri_frag_len,
-                                     sizeof(TriVtx), tri_attr, 5, 0, true);
+                                     sizeof(TriVtx), tri_attr, 6, 0, true, 1);   // +1 fragment uniform: ires scale (the draw-area clip needs it)
   s_tritex_pipe = make_geom_pipeline(spv_g_tritex_vert, spv_g_tritex_vert_len, spv_g_tritex_frag, spv_g_tritex_frag_len,
                                      sizeof(TexVtx), tex_attr, 8, 1, true, 1);   // +1 fragment uniform: ires scale (PC.scale)
   for (int m = 0; m < NUM_BLEND_MODES; m++) s_semi_pipe[m] = make_semi_pipeline(m, tex_attr, 8, sizeof(TexVtx));
@@ -747,7 +751,7 @@ static void create_3d_pipelines(void) {
   s_painter_tex_pipe = make_geom_pipeline(spv_g_tritex_vert,spv_g_tritex_vert_len,spv_g_tritex_frag,spv_g_tritex_frag_len,
                                      sizeof(TexVtx),tex_attr,8,1,true,1,false,SDL_GPU_COMPAREOP_ALWAYS);
   s_painter_tri_pipe = make_geom_pipeline(spv_g_tri_vert,spv_g_tri_vert_len,spv_g_painter_tri_frag,spv_g_painter_tri_frag_len,
-                                     sizeof(TriVtx),tri_attr,5,0,true,1,false,SDL_GPU_COMPAREOP_ALWAYS);
+                                     sizeof(TriVtx),tri_attr,6,0,true,1,false,SDL_GPU_COMPAREOP_ALWAYS);
   s_painter_composite_pipe = make_painter_composite_pipeline();
   s_decode_pipe = make_fullscreen_offscreen_pipeline(spv_g_fsq_vert, spv_g_fsq_vert_len,
                                                       spv_g_decode_frag, spv_g_decode_frag_len,
@@ -994,7 +998,9 @@ static void render_pass_set(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* colorTgt,
     dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE; dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
     SDL_SetGPUViewport(rp, &vp); SDL_SetGPUScissor(rp, &sc);
-    if (triN) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = triVbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1); SDL_DrawGPUPrimitives(rp, triN, 1, 0, 0); }
+    if (triN) { SDL_BindGPUGraphicsPipeline(rp, s_tri_pipe); bb.buffer = triVbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
+                   int32_t ires_scale_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc);
+                   SDL_DrawGPUPrimitives(rp, triN, 1, 0, 0); }
     if (texN) { SDL_BindGPUGraphicsPipeline(rp, s_tritex_pipe); bb.buffer = texVbuf; SDL_BindGPUVertexBuffers(rp, 0, &bb, 1);
                    SDL_BindGPUFragmentSamplers(rp, 0, &snap, 1);
                    int32_t ires_scale_pc = scale; SDL_PushGPUFragmentUniformData(cmd, 0, &ires_scale_pc, sizeof ires_scale_pc);
@@ -1439,12 +1445,14 @@ void GpuVkState::present(const uint16_t* src, int sx, int sy, int w, int h) {
     const WideMarginPlan margin = plan_wide_margin(sx, sy, w, disp_w, h);
     if (margin.draw) {
       set_order_2d_bg(0);
+      // FULL CANVAS clip, deliberately: the wide margin exists to paint the strip OUTSIDE the
+      // guest's own draw area, so clipping it to that area would erase exactly what it is for.
       draw_tri(margin.x0, margin.y0, 0, 0, 0,
                margin.x1, margin.y0, 0, 0, 0,
-               margin.x0, margin.y1, 0, 0, 0);
+               margin.x0, margin.y1, 0, 0, 0, 0, 0, 1023, 511);
       draw_tri(margin.x1, margin.y0, 0, 0, 0,
                margin.x1, margin.y1, 0, 0, 0,
-               margin.x0, margin.y1, 0, 0, 0);
+               margin.x0, margin.y1, 0, 0, 0, 0, 0, 1023, 511);
     }
     // Only the regions the guest actually wrote (vram_dirty.h). Uploading all of VRAM here is what
     // erased the rasterized picture out of the buffer that was about to be displayed.
@@ -2054,15 +2062,16 @@ static bool painter_command(GpuVkState& g, int material, int first, int count) {
 }
 
 void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
-                          int x2,int y2,int r2,int g2,int b2) {
+                          int x2,int y2,int r2,int g2,int b2, int dax0,int day0,int dax1,int day1) {
   ggs_alloc_batches(*this);
+  const int32_t da[4] = { dax0, day0, dax1, day1 };
   if (s_painter_active) {
     if (s_painter_tri_n + 3 > TRI_CAP || !painter_command(*this,0,s_painter_tri_n,3)) { s_painter_overflow=1; return; }
     TriVtx* v=((TriVtx*)s_painter_tri_buf)+s_painter_tri_n;
     const float gf=(float)s_painter_item_gouraud, df=(float)s_painter_item_dither;
-    v[0]={(float)x0,(float)y0,r0/255.f,g0/255.f,b0/255.f,ord3d_b(s_vd[0],s_depth_bias),gf,df};
-    v[1]={(float)x1,(float)y1,r1/255.f,g1/255.f,b1/255.f,ord3d_b(s_vd[1],s_depth_bias),gf,df};
-    v[2]={(float)x2,(float)y2,r2/255.f,g2/255.f,b2/255.f,ord3d_b(s_vd[2],s_depth_bias),gf,df};
+    v[0]={(float)x0,(float)y0,r0/255.f,g0/255.f,b0/255.f,ord3d_b(s_vd[0],s_depth_bias),gf,df,{da[0],da[1],da[2],da[3]}};
+    v[1]={(float)x1,(float)y1,r1/255.f,g1/255.f,b1/255.f,ord3d_b(s_vd[1],s_depth_bias),gf,df,{da[0],da[1],da[2],da[3]}};
+    v[2]={(float)x2,(float)y2,r2/255.f,g2/255.f,b2/255.f,ord3d_b(s_vd[2],s_depth_bias),gf,df,{da[0],da[1],da[2],da[3]}};
     s_painter_tri_n+=3; return;
   }
   // bug #55: route 2D (non-world) flat tris into the native-resolution 2D bands instead of the 3D-world
@@ -2071,17 +2080,17 @@ void GpuVkState::draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int 
     int band = ggs_2d_band(*this);
     if (s_tri2d_n[band] + 3 > TRI2D_CAP) return;
     TriVtx* v = ((TriVtx*)s_tri2d_buf[band]) + s_tri2d_n[band];
-    v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_cur_ord };
-    v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_cur_ord };
-    v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_cur_ord };
+    v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, s_cur_ord, 0, 0, {da[0],da[1],da[2],da[3]} };
+    v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, s_cur_ord, 0, 0, {da[0],da[1],da[2],da[3]} };
+    v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, s_cur_ord, 0, 0, {da[0],da[1],da[2],da[3]} };
     s_tri2d_n[band] += 3;
     return;
   }
   if (s_tri_n + 3 > TRI_CAP) return;
   TriVtx* v = ((TriVtx*)s_tri_buf) + s_tri_n;
-  v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, ord3d_b(s_vd[0], s_depth_bias) };
-  v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, ord3d_b(s_vd[1], s_depth_bias) };
-  v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, ord3d_b(s_vd[2], s_depth_bias) };
+  v[0] = { (float)x0, (float)y0, r0/255.f, g0/255.f, b0/255.f, ord3d_b(s_vd[0], s_depth_bias), 0, 0, {da[0],da[1],da[2],da[3]} };
+  v[1] = { (float)x1, (float)y1, r1/255.f, g1/255.f, b1/255.f, ord3d_b(s_vd[1], s_depth_bias), 0, 0, {da[0],da[1],da[2],da[3]} };
+  v[2] = { (float)x2, (float)y2, r2/255.f, g2/255.f, b2/255.f, ord3d_b(s_vd[2], s_depth_bias), 0, 0, {da[0],da[1],da[2],da[3]} };
   s_tri_n += 3;
 }
 // Fill 3 textured vertices: per-vertex pos/uv/color + shared page/CLUT/window/clip/semi/blend state. Uses
@@ -2232,12 +2241,12 @@ void GpuVkState::tritest() {
       unsigned char c[3]={(unsigned char)(color?255:128),(unsigned char)(color?255:128),(unsigned char)(color?255:128)};
       float d[3]={z,z,z}; set_order(seq); set_vd(d);
       if(painter) draw_tritri(x,y,u,v,c,c,c,0,0,2,1,0,0,0,0,0,0,0,0,1023,511);
-      else draw_tri(x[0],y[0],color?0:0,color?255:255,0,x[1],y[1],0,255,0,x[2],y[2],0,255,0);
+      else draw_tri(x[0],y[0],color?0:0,color?255:255,0,x[1],y[1],0,255,0,x[2],y[2],0,255,0, 0,0,1023,511);
     };
     auto utri=[&](int x0,int x1,float z,uint32_t seq,int r,int g,int b,bool gouraud,bool dither){
       float d[3]={z,z,z}; set_order(seq); set_vd(d);
       s_painter_item_gouraud=gouraud; s_painter_item_dither=dither;
-      draw_tri(x0,20,r,g,b,x1,20,r,g,b,(x0+x1)/2,180,r,g,b);
+      draw_tri(x0,20,r,g,b,x1,20,r,g,b,(x0+x1)/2,180,r,g,b, 0,0,1023,511);
     };
     lucent::info("gpu_selftest","painter ord inputs ordinary-left={:.9f} painter-near={:.9f} painter-far={:.9f} ordinary-right={:.9f}",ord3d_b(.20f,0),ord3d_b(.80f,gpu_zbias_unit()),ord3d_b(.30f,2*gpu_zbias_unit()),ord3d_b(.70f,3*gpu_zbias_unit()));
     tri(false,20,150,.20f,0,0,1); tri(false,170,310,.70f,3,0,1);
@@ -2440,7 +2449,7 @@ void gpu_vk_repaint(Core* core) {
   overlay_glue_frame_begin(core);   // the RmlUi overlay stays interactive while the game is frozen
   core->game->gpu_vk.repaint();
 }
-void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2); }
+void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1, int x2,int y2,int r2,int g2,int b2, int dax0,int day0,int dax1,int day1) { core->game->gpu_vk.draw_tri(x0,y0,r0,g0,b0,x1,y1,r1,g1,b1,x2,y2,r2,g2,b2,dax0,day0,dax1,day1); }
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1) { core->game->gpu_vk.draw_tritri(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1); }
 void gpu_vk_draw_semi(Core* core, const int* xs, const int* ys, const int* us, const int* vs, const unsigned char* rs, const unsigned char* gs, const unsigned char* bs, int tpx, int tpy, int mode, int raw, int clutx, int cluty, int twmx, int twmy, int twox, int twoy, int dax0, int day0, int dax1, int day1, int blend) { core->game->gpu_vk.draw_semi(xs,ys,us,vs,rs,gs,bs,tpx,tpy,mode,raw,clutx,cluty,twmx,twmy,twox,twoy,dax0,day0,dax1,day1,blend); }
 void gpu_vk_shot(Core* core, const char* path) { core->game->gpu_vk.shot(path); }

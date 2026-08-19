@@ -7,13 +7,16 @@ layout(location = 1) in vec3  i_col;   // 0..1 RGB
 layout(location = 2) in float i_ord;   // depth [0,1] (band-mapped; later prim/nearer = greater)
 layout(location = 3) in float i_gouraud;
 layout(location = 4) in float i_dither;
+layout(location = 5) in ivec4 i_da;    // draw-area clip: x0, y0, x1, y1 (VRAM px)
 layout(location = 0) out vec3 v_col;
 layout(location = 1) flat out float v_gouraud;
 layout(location = 2) flat out float v_dither;
+layout(location = 3) flat out ivec4 v_da;
 void main() {
     v_col = i_col;
     v_gouraud = i_gouraud;
     v_dither = i_dither;
+    v_da = i_da;
     // Negate Y: SDL_GPU offscreen render targets are Y-up (NDC +1 = texture row 0), so VRAM row 0 must map
     // to NDC y=+1 to land at texture row 0 — matching the copy-uploaded 2D backdrop and the present sample
     // (else the rendered geometry is vertically flipped vs the backdrop and the in-shader blend reads the

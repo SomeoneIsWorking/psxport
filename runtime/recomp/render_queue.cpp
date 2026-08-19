@@ -697,12 +697,15 @@ void RenderQueue::emitItem(Core* core, const RqItem* it) {
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1, it->tp_blend); }
   } else {
     RQ_SETVD(depth); RQ_SETXYF(0);
-    if(mode==3) gpu_vk_draw_tri(core,xs[0],ys[0],rs[0],gs[0],bs[0],xs[1],ys[1],rs[1],gs[1],bs[1],xs[2],ys[2],rs[2],gs[2],bs[2]);
+    // The clip goes to the UNTEXTURED path too. RqItem has carried da_* all along and only the
+    // textured call passed it on, so every untextured prim was drawn unclipped (issue: sky
+    // triangles from one frame landing in the other framebuffer).
+    if(mode==3) gpu_vk_draw_tri(core,xs[0],ys[0],rs[0],gs[0],bs[0],xs[1],ys[1],rs[1],gs[1],bs[1],xs[2],ys[2],rs[2],gs[2],bs[2],it->da_x0,it->da_y0,it->da_x1,it->da_y1);
     else gpu_vk_draw_tritri(core, (int*)xs, (int*)ys, (int*)us, (int*)vs, (unsigned char*)rs, (unsigned char*)gs, (unsigned char*)bs,
                        it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                        it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1);
     if (nv == 4) { RQ_SETVD(&depth[1]); RQ_SETXYF(1);
-      if(mode==3) gpu_vk_draw_tri(core,xs[1],ys[1],rs[1],gs[1],bs[1],xs[2],ys[2],rs[2],gs[2],bs[2],xs[3],ys[3],rs[3],gs[3],bs[3]);
+      if(mode==3) gpu_vk_draw_tri(core,xs[1],ys[1],rs[1],gs[1],bs[1],xs[2],ys[2],rs[2],gs[2],bs[2],xs[3],ys[3],rs[3],gs[3],bs[3],it->da_x0,it->da_y0,it->da_x1,it->da_y1);
       else gpu_vk_draw_tritri(core, (int*)&xs[1], (int*)&ys[1], (int*)&us[1], (int*)&vs[1], (unsigned char*)&rs[1], (unsigned char*)&gs[1], (unsigned char*)&bs[1],
                          it->tp_x, it->tp_y, mode, raw, it->clut_x, it->clut_y,
                          it->tw_mx, it->tw_my, it->tw_ox, it->tw_oy, it->da_x0, it->da_y0, it->da_x1, it->da_y1); }

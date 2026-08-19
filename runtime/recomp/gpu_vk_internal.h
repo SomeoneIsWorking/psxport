@@ -267,7 +267,7 @@ struct GpuVkState {
   // two panes into one window frame. A method could not do it — the two panes come from two DIFFERENT
   // Games, so neither Game's GpuVkState owns both.
   void draw_tri(int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
-                int x2,int y2,int r2,int g2,int b2);
+                int x2,int y2,int r2,int g2,int b2, int dax0,int day0,int dax1,int day1);
   void draw_tritri(const int* xs, const int* ys, const int* us, const int* vs,
                    const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                    int tpx, int tpy, int mode, int raw, int clutx, int cluty,

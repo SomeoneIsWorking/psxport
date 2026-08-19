@@ -180,7 +180,8 @@ FILE* GpuState::primdump_open(int frame) {
     s_primdump_f = fopen(p, "w");
     if (s_primdump_f) fprintf(s_primdump_f,
         "frame,id,kind,op,is3d,bg,x0,y0,x1,y1,r,g,b,tex,semi,"
-        "mode,raw,tpx,tpy,clutx,cluty,twmx,twmy,twox,twoy,u0,v0,umin,umax,vmin,vmax\n");
+        "mode,raw,tpx,tpy,clutx,cluty,twmx,twmy,twox,twoy,u0,v0,umin,umax,vmin,vmax,"
+        "dax0,day0,dax1,day1,offx,offy\n");
   }
   return s_primdump_f;
 }
@@ -191,20 +192,27 @@ FILE* GpuState::primdump_open(int frame) {
 // texel coords set_texpage()/set_clut() computed; tw* is the texture window mask/offset in 8-texel
 // units; u/v are the raw per-vertex texcoords (min/max over the prim's vertices, so a degenerate
 // all-equal UV set is visible as umin==umax && vmin==vmax).
+// DRAW-AREA + DRAW-OFFSET columns, appended 2026-08-19. Without them the CSV shows prims sitting
+// outside the framebuffer and cannot say WHY: the guest asked for them there, or the clip that was
+// supposed to reject them is wrong. Those are opposite fixes, and the coordinates alone look the same
+// either way — the bbox is in post-offset VRAM space, so "y=223 while drawing into the buffer at 240"
+// is only readable next to the da/off the prim was submitted with.
 static void primdump_texcols(FILE* f, const GpuState& g, int tex, const int* us, const int* vs, int nv, int raw) {
   // An UNTEXTURED GP0 poly carries no UV words, so Vtx::u/v were never assigned and the caller's
   // us[]/vs[] hold stack garbage (the first CSV printed values like -1472683276 for them). Emit -1,
   // which cannot be confused with a real 0..255 texcoord, rather than laundering the garbage.
-  if (!tex) { fprintf(f, ",3,%d,%d,%d,%d,%d,%d,%d,%d,%d,-1,-1,-1,-1,-1,-1\n",
+  if (!tex) { fprintf(f, ",3,%d,%d,%d,%d,%d,%d,%d,%d,%d,-1,-1,-1,-1,-1,-1,%d,%d,%d,%d,%d,%d\n",
                       raw, g.s_tp_x, g.s_tp_y, g.s_clut_x, g.s_clut_y,
-                      g.s_tw_mx, g.s_tw_my, g.s_tw_ox, g.s_tw_oy); return; }
+                      g.s_tw_mx, g.s_tw_my, g.s_tw_ox, g.s_tw_oy,
+                      g.s_da_x0, g.s_da_y0, g.s_da_x1, g.s_da_y1, g.s_off_x, g.s_off_y); return; }
   int u0 = nv > 0 ? us[0] : 0, v0 = nv > 0 ? vs[0] : 0;
   int umin=u0, umax=u0, vmin=v0, vmax=v0;
   for (int i = 1; i < nv; i++) { if(us[i]<umin)umin=us[i]; if(us[i]>umax)umax=us[i];
                                  if(vs[i]<vmin)vmin=vs[i]; if(vs[i]>vmax)vmax=vs[i]; }
-  fprintf(f, ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+  fprintf(f, ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
           tex ? g.s_tp_mode : 3, raw, g.s_tp_x, g.s_tp_y, g.s_clut_x, g.s_clut_y,
-          g.s_tw_mx, g.s_tw_my, g.s_tw_ox, g.s_tw_oy, u0, v0, umin, umax, vmin, vmax);
+          g.s_tw_mx, g.s_tw_my, g.s_tw_ox, g.s_tw_oy, u0, v0, umin, umax, vmin, vmax,
+          g.s_da_x0, g.s_da_y0, g.s_da_x1, g.s_da_y1, g.s_off_x, g.s_off_y);
 }
 void prim_dump_poly(Core* core, int frame, unsigned id, uint8_t op, int nv, int is3d, int bg,
                     const int* xs, const int* ys, const int* us, const int* vs,

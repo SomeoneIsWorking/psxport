@@ -44,7 +44,7 @@ int  gpu_vk_shadows_active(void);   // shadows toggle (g_mods.shadows && g_mods.
 void gpu_vk_dirty(Core* core, int x, int y, int w, int h);
 void gpu_vk_semi_group(Core* core, int x0, int y0, int x1, int y1);
 void gpu_vk_draw_tri(Core* core, int x0,int y0,int r0,int g0,int b0, int x1,int y1,int r1,int g1,int b1,
-                     int x2,int y2,int r2,int g2,int b2);
+                     int x2,int y2,int r2,int g2,int b2, int dax0,int day0,int dax1,int day1);
 void gpu_vk_draw_tritri(Core* core, const int* xs, const int* ys, const int* us, const int* vs,
                         const unsigned char* rs, const unsigned char* gs, const unsigned char* bs,
                         int tpx, int tpy, int mode, int raw, int clutx, int cluty,
