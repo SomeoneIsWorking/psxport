@@ -104,6 +104,10 @@ struct GpuState {
   int s_disp_x = 0, s_disp_y = 0;                             // VRAM top-left of the displayed region
   int s_disp_w = 320, s_disp_h = 240;
   int s_disp_vy0 = 0, s_disp_vy1 = 240;                       // GP1(0x07) vertical display range
+  // Has GP1(0x07) been written AT ALL? Without this, `s_disp_h == 240` is unreadable: it is either the
+  // height the game asked for or the height nobody asked for, and those are opposite answers when the
+  // question is "should those bottom 16 lines be on screen". Same reason s_disp_std_seen exists.
+  bool s_disp_vrange_seen = false;
   int s_disp_480i = 0;                                        // GP1(0x08) interlace + 480-line
   // GP1(0x08) bit 4 — display-area colour depth, 0 = 15-bit, 1 = 24-bit. Was decoded NOWHERE, so a
   // game switching to 24bpp for a still had its VRAM read as 15-bit: every colour scrambled and only

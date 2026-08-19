@@ -282,6 +282,9 @@ private:
   Span     mSpans[SPAN_CAP] = {};
   int      mSpanCount = 0;
   int      mSpanOverflow = 0;
+  // Is mSpans address-sorted? Maintained on insert (never assumed) so lookupStore can binary-search;
+  // false falls back to the reverse linear scan, which is always correct.
+  bool     mSpansSorted = true;
 
   uint32_t mGteFrame = NO_FRAME;
   GteBucket mGte[GTE_CAP] = {};

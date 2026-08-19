@@ -105,3 +105,38 @@ void gpu_scene_dump(Core* core, FILE* out, uint32_t madr) {
 // On-demand scene dump for the live debug server (dbg_server.c): classify the CURRENT frame's
 // last-submitted OT (Gpu::s_ot_madr, set by gpu_dma2_linked_list) into `out`.
 void gpu_scene_dump_now(Core* core, FILE* out) { gpu_scene_dump(core, out, core->game->gpu.s_ot_madr); }
+
+// The DISPLAY DECISION, on demand (dbg_server `disp`). Everything that decides which VRAM rectangle
+// reaches the screen, plus the draw-side clip that decides what was allowed to be written into it —
+// in one place, because a picture that is right except for a band at one edge is always a
+// disagreement between those two rectangles, and reading them out of three different logs is how
+// that gets guessed at instead of measured.
+//
+// The point of the "NEVER PROGRAMMED" annotations: a default that reads back like an answer is the
+// worst kind of diagnostic. `disp_h = 240` means one thing if the game asked for 240 lines and the
+// opposite thing if nothing ever wrote GP1(07) — and the second case is exactly when a strip of
+// framebuffer the console would never scan out ends up on screen.
+void gpu_disp_dump_now(Core* core, FILE* out) {
+  const GpuState& g = core->game->gpu;
+  const int vr = g.s_disp_vy1 - g.s_disp_vy0;
+  fprintf(out, "[disp] f%d display VRAM rect = (%d,%d) %dx%d%s\n", g.s_frame, g.s_disp_x, g.s_disp_y,
+          g.s_disp_w, g.s_disp_h, g.s_disp_rgb24 ? "  24-BIT" : "");
+  fprintf(out, "  GP1(05) start   = (%d,%d)\n", g.s_disp_x, g.s_disp_y);
+  fprintf(out, "  GP1(07) v-range = [%d,%d) = %d line%s%s\n", g.s_disp_vy0, g.s_disp_vy1, vr,
+          vr == 1 ? "" : "s",
+          g.s_disp_vrange_seen ? "" : "   <-- NEVER PROGRAMMED: this is the framework default, not the "
+                                      "game's value. Rows beyond what the game really scans out may be "
+                                      "on screen here and on no console.");
+  fprintf(out, "  GP1(08) width   = %d, %s, %s%s\n", g.s_disp_w, g.s_disp_480i ? "480i" : "non-interlaced",
+          g.s_disp_pal ? "PAL" : "NTSC", g.s_disp_std_seen ? "" : "   <-- GP1(08) NEVER PROGRAMMED (default)");
+  fprintf(out, "  GP0(E3/E4) draw clip = (%d,%d)..(%d,%d)   GP0(E5) offset = (%d,%d)\n",
+          g.s_da_x0, g.s_da_y0, g.s_da_x1, g.s_da_y1, g.s_off_x, g.s_off_y);
+  // The one comparison worth making for the caller, stated rather than left as arithmetic: the draw
+  // clip lets the game write rows the display then shows. That is normal (the clip is usually the
+  // whole buffer); it is only interesting next to a picture with a band at the bottom.
+  const int shown_y1 = g.s_disp_y + g.s_disp_h - 1;
+  if (g.s_da_y1 >= shown_y1)
+    fprintf(out, "  note: the draw clip reaches row %d and the display shows through row %d — anything "
+                 "the game rasterizes down there IS on screen unless it paints over it.\n",
+            g.s_da_y1, shown_y1);
+}

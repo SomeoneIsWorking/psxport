@@ -1470,6 +1470,7 @@ void GpuState::gpu_gp1(uint32_t w) {
       // lines per scanline), so the displayed VRAM height is (y1-y0)*2 — without the doubling the
       // bottom of a 480-line framebuffer is clipped (the SCEA "Presents" line, journal later-46).
       s_disp_vy0 = w & 0x3FF; s_disp_vy1 = (w >> 10) & 0x3FF;
+      s_disp_vrange_seen = true;
       { int n = s_disp_vy1 - s_disp_vy0; if (n <= 0) n = 240; s_disp_h = s_disp_480i ? n * 2 : n; }
       break;
     case 0x08:  // display mode: horizontal res (bits0-1, bit6=368), interlace (bit5), VRes 480 (bit2)

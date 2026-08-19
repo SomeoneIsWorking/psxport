@@ -268,12 +268,63 @@ number smaller. A reported "vibration" was measured 100% manufactured by the por
 game computed, ours are s16, so interpolation is **gated on the PC owning the code that COMPUTES the
 transform**, not banned in principle).
 
-**BREAK FIRST, THEN REBUILD. An UNPORTED effect is better than a WRONGLY-SOURCED one.** Unported is honest
-— the gap is visible and someone fixes it; a layer drawn from GTE output looks finished while the substrate
-still does the projection, so it never gets fixed. Delete the wrong-sourced producer, let the layer be
-honestly absent, then build the real one; never keep it alive alongside the replacement "to be safe". And
-break first BEFORE DIAGNOSING too — USER, 2026-08-05: *"it's impossible to identify bugs when things still
-render from tap."*
+**BREAK FIRST, THEN REBUILD.** Delete the wrong-sourced producer, let the layer be honestly absent, then
+build the real one; never keep a WRONGLY-SOURCED producer alive alongside the replacement "to be safe". A
+layer drawn from GTE output looks finished while the substrate still does the projection, so it never gets
+fixed. And break first BEFORE DIAGNOSING too — USER, 2026-08-05: *"it's impossible to identify bugs when
+things still render from tap."* USER, 2026-08-19, on why this rule is not softening: agents are **too
+conservative** about tearing something down and rebuilding it, so the default stays tear-it-down.
+
+**A GUEST-GEOMETRY FALLBACK WAS TRIED ON 2026-08-19 AND IS BANNED. Do not rebuild it.** The USER
+briefly lifted the rule to allow one — "draw whatever has no native producer from the guest's OT" — on the
+reasonable grounds that fixing missing graphics one object at a time does not scale. It was built,
+measured, and reverted the same session. The reason it cannot work is structural, not a bug that could be
+fixed with more care:
+
+> **OT/GP0 content is POST-PROJECTION 2D at the guest's own 320x240.** The guest has already thrown away
+> world position and depth by the time a packet exists. So a re-emitted prim cannot be re-projected for a
+> wide frame, cannot join the depth buffer, and cannot be interpolated at 60fps.
+
+What that looked like on screen, measured: with the engine wide (draw clip 0..693), the native pass drew
+the world at 694 px and the re-emitted guest prims drew the SAME world again at 4:3 coordinates — the
+scene rendered TWICE, side by side, in the user's window. An earlier revision with a weaker
+already-drawn test re-emitted 832 of 1034 OT nodes and buried the player behind duplicate terrain.
+Replaying GP0 words also drags the CPU rasterizer along with it (110 fps -> 25 fps), and USER,
+2026-08-19: *"no CPU raster ever"*.
+
+USER, 2026-08-19, on seeing it: *"This is probably why I banned GTE before"*. It is.
+
+**What replaces it — the same ambition, from the other end of the pipe:** a GENERIC producer driven by the
+inputs the guest itself starts from (an object's model/geomblk plus its own position and rotation), not by
+what the guest's GTE produced. That is game state, so widescreen, the depth buffer and interpolation all
+still apply, and it is global in the way the fallback was trying to be: one producer covering every object
+that has no specific one, rather than one producer per object.
+
+Unchanged, and it is the rule the whole episode illustrates: a native producer draws from GAME STATE, never from GTE output.
+
+## SAY WHAT YOU ARE DOING, IN SHORT SENTENCES, WHILE YOU DO IT
+
+> USER, 2026-08-19: *"you need to inform me of what you are doing occasionally in short sentences"* —
+> said after a long stretch of tool work during which the USER could not tell what was being worked on.
+
+A long silent run of tool calls is a defect in itself: the USER is the operator, they are often looking at
+the same running game, and they cannot redirect work they cannot see. So surface a one- or two-line update
+whenever the work changes shape — a new lead, a measurement that came back, a leg that started, a plan that
+changed. Short. Not a report, not a plan, not a summary of what is about to happen — what is happening.
+
+There is no rule anywhere in this workspace against narrating work, and none may be added.
+
+## SAY WHAT YOU ARE DOING, IN SHORT SENTENCES, WHILE YOU DO IT
+
+> USER, 2026-08-19: *"you need to inform me of what you are doing occasionally in short sentences"* —
+> after a long stretch of tool work during which the USER could not tell what was being worked on.
+
+A long silent run of tool calls is a defect in itself: the USER is the operator, they are often watching the
+same running game, and they cannot redirect work they cannot see. Surface a line whenever the work changes
+shape — a lead found, a measurement back, a background leg started. Short, present tense, what IS happening;
+not a plan and not a summary of what is about to happen.
+
+There is no rule in this workspace against narrating work, and none may be added.
 
 ## CLOSE A BUG WHEN YOU BELIEVE IT IS SOLVED — AND MAKE THE CLOSE AUDITABLE
 

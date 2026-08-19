@@ -80,6 +80,7 @@ void OtAttr::resetIfNewFrame(uint32_t frame) {
   mFrame = frame;
   mSpanCount = 0;
   mSpanOverflow = 0;
+  mSpansSorted = true;   // a fresh frame starts sorted by construction; trackStore un-sets it if not
 }
 
 void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
@@ -141,7 +142,14 @@ void OtAttr::trackStoreSlow(Core* c, uint32_t addr, uint32_t bytes) {
   // Resolved HERE and not at GP0-execution time, because the call chain only exists during the store —
   // by the time the packet is executed the guest has long returned and there is nothing left to walk.
   const uint32_t claimed = resolveClaimedFrame(c);
-  if (mSpanCount < SPAN_CAP) mSpans[mSpanCount++] = Span{ k, k + bytes, fn, caller, node, c->pc, claimed };
+  if (mSpanCount < SPAN_CAP) {
+    // Track whether the table stayed ADDRESS-SORTED. The pool pointer is monotonic within a frame (the
+    // reason the reverse linear scan below is safe), so in practice it is — and that is what lets
+    // lookupStore binary-search. Checked rather than assumed: the fallback pass looks a span up per OT
+    // node, so a linear scan there is O(nodes x spans) and measured at ~4x the frame cost.
+    if (mSpanCount && k < mSpans[mSpanCount - 1].lo) mSpansSorted = false;
+    mSpans[mSpanCount++] = Span{ k, k + bytes, fn, caller, node, c->pc, claimed };
+  }
   else mSpanOverflow++;
 
   // Sampled on a NEW SPAN only (the coalescing return above already left), so one quad contributes one
@@ -250,6 +258,20 @@ void OtAttr::trackGte(Core* c) {
 
 bool OtAttr::lookupStore(uint32_t addr, Span* out) const {
   const uint32_t k = addr | 0x80000000u;
+  // BINARY SEARCH when the table is address-sorted, which it is whenever the pool pointer only moved
+  // forward this frame (trackStore checks, it does not assume). This is not a micro-optimisation: the
+  // unclaimed-geometry fallback asks once per OT node, so the reverse scan below made the pass
+  // O(nodes x spans) — measured at ~29 fps against ~110 without it.
+  if (mSpansSorted && mSpanCount > 8) {
+    int lo = 0, hi = mSpanCount - 1;
+    while (lo <= hi) {
+      const int mid = (lo + hi) / 2;
+      if (k < mSpans[mid].lo)      hi = mid - 1;
+      else if (k >= mSpans[mid].hi) lo = mid + 1;
+      else { if (out) *out = mSpans[mid]; return true; }
+    }
+    return false;
+  }
   // Most-recent-first: within one frame the pool pointer is monotonic, so addresses aren't reused, but
   // scanning backward costs nothing extra and is the more useful order if that ever changes.
   for (int i = mSpanCount - 1; i >= 0; i--)
