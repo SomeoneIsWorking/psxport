@@ -1774,6 +1774,119 @@ static RqFaceSetup rq_face_setup(const RqItem &it) {
 // samples with a handful of evaluations AND removes the documented sub-sample sliver miss, because it
 // is exact rather than sampled. That is the next move on this code, not another pre-filter.
 
+// ORD IS AFFINE IN SCREEN SPACE, so the contest does not need sampling at all.
+//
+// A triangle interpolates ord with barycentrics that are themselves affine in (x,y), so
+// ord(x,y) = A*x + B*y + C over that triangle. Derived from rq_ord_at_setup's own expression:
+//     ord = d2 + l0*(d0-d2) + l1*(d1-d2),  l0,l1 affine  =>  A,B,C below.
+// The contest asks whether the far-keyed face is ever NEARER inside the region both faces cover.
+// diff = ord_far - ord_near is then affine too, the region is the intersection of two convex
+// triangles (convex), and an affine function's maximum over a convex polygon is attained at a
+// VERTEX. So evaluating diff at the intersection's vertices answers it exactly — no grid.
+struct RqOrdPlane {
+  float a, b, c;
+};
+static RqOrdPlane rq_ord_plane(const RqTriSetup &t) {
+  const float e0 = t.d0 - t.d2, e1 = t.d1 - t.d2;
+  RqOrdPlane p;
+  p.a = ((t.y1 - t.y2) * e0 + (t.y2 - t.y0) * e1) / t.den;
+  p.b = ((t.x2 - t.x1) * e0 + (t.x0 - t.x2) * e1) / t.den;
+  p.c = t.d2 - p.a * t.x2 - p.b * t.y2;
+  return p;
+}
+
+// Does the far triangle interpolate NEARER than the near one anywhere both cover? Exact, by clipping
+// one triangle against the other (Sutherland-Hodgman, convex) and evaluating the affine difference at
+// the surviving vertices. Winding is normalised from `den`'s sign so "inside" is consistent for either
+// orientation — a PSX quad's two triangles need not wind the same way.
+static bool rq_tri_pair_inverts(const RqTriSetup &nearT, const RqTriSetup &farT) {
+  float px[8], py[8];
+  int n = 3;
+  px[0] = nearT.x0;
+  py[0] = nearT.y0;
+  px[1] = nearT.x1;
+  py[1] = nearT.y1;
+  px[2] = nearT.x2;
+  py[2] = nearT.y2;
+
+  const float fx[3] = {farT.x0, farT.x1, farT.x2};
+  const float fy[3] = {farT.y0, farT.y1, farT.y2};
+  const float wind = farT.den >= 0.f ? 1.f : -1.f;
+  for (int e = 0; e < 3 && n; e++) {
+    const int e1 = (e + 1) % 3;
+    const float ex = fx[e1] - fx[e], ey = fy[e1] - fy[e];
+    float qx[8], qy[8];
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+      const int j = (i + 1) % n;
+      // Signed area of (edge, point): >= 0 is inside for the normalised winding.
+      const float di = wind * (ex * (py[i] - fy[e]) - ey * (px[i] - fx[e]));
+      const float dj = wind * (ex * (py[j] - fy[e]) - ey * (px[j] - fx[e]));
+      if (di >= 0.f) {
+        qx[m] = px[i];
+        qy[m] = py[i];
+        m++;
+      }
+      if ((di >= 0.f) != (dj >= 0.f) && m < 8) {
+        const float t = di / (di - dj);
+        qx[m] = px[i] + t * (px[j] - px[i]);
+        qy[m] = py[i] + t * (py[j] - py[i]);
+        m++;
+      }
+    }
+    n = m;
+    for (int i = 0; i < n; i++) {
+      px[i] = qx[i];
+      py[i] = qy[i];
+    }
+  }
+  if (n < 3) {
+    return false; // interiors disjoint — nothing to contest
+  }
+  // THE SHARED REGION MUST HAVE AREA. Clipping admits points ON the boundary, so two mesh-adjacent
+  // faces meeting along an edge survive as a degenerate sliver — three or more vertices, zero area —
+  // and the affine difference is generally non-zero along that edge, which would report an inversion
+  // for every adjacent pair in a mesh. The sampled grid never did: a measure-zero region contains no
+  // sample point, and the file's own comment says adjacent faces must not hit. Measured when this was
+  // missing: 221 of 262 faces snapped instead of 109, and inversions found went 152,304 -> 385,622.
+  float area2 = 0.f;
+  for (int i = 0; i < n; i++) {
+    const int j = (i + 1) % n;
+    area2 += px[i] * py[j] - px[j] * py[i];
+  }
+  if (area2 < 0.f) {
+    area2 = -area2;
+  }
+  if (area2 <= 0.f) {
+    return false;
+  }
+  const RqOrdPlane pn = rq_ord_plane(nearT), pf = rq_ord_plane(farT);
+  const float da = pf.a - pn.a, db = pf.b - pn.b, dc = pf.c - pn.c;
+  for (int i = 0; i < n; i++) {
+    if (da * px[i] + db * py[i] + dc > 0.f) {
+      return true; // the far face interpolates nearer here
+    }
+  }
+  return false;
+}
+
+static bool rq_faces_invert(const RqFaceSetup &nearF, const RqFaceSetup &farF) {
+  for (int a = 0; a < nearF.ntri; a++) {
+    if (nearF.tri[a].den == 0.f) {
+      continue;
+    }
+    for (int b = 0; b < farF.ntri; b++) {
+      if (farF.tri[b].den == 0.f) {
+        continue;
+      }
+      if (rq_tri_pair_inverts(nearF.tri[a], farF.tri[b])) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static bool rq_ord_at_setup(const RqFaceSetup &f, float x, float y, float *out) {
   for (int t = 0; t < f.ntri; t++) {
     const RqTriSetup &tri = f.tri[t];
@@ -1916,27 +2029,21 @@ static bool rq_faces_in_contest_ext(const RqItem &A,
   }
   g_contest_grid++;
 
-  // Interior contest: sample a grid over the bbox intersection; a point strictly inside BOTH
-  // polygons where the farther-keyed face interpolates nearer = the depth buffer would invert the
-  // game's order there. Grid density: pixel-ish steps, capped — misses only sub-sample slivers
-  // (documented residual), and mesh-adjacent faces (interiors disjoint) never hit.
-  const int kGridSteps = 8;
-  const float sx = (ox1 - ox0) / (kGridSteps + 1), sy = (oy1 - oy0) / (kGridSteps + 1);
-  for (int iy = 1; iy <= kGridSteps; iy++) {
-    for (int ix = 1; ix <= kGridSteps; ix++) {
-      const float px = ox0 + sx * ix, py = oy0 + sy * iy;
-      float ord_near, ord_far;
-      if (!rq_ord_at_setup(near_set, px, py, &ord_near)) {
-        continue;
-      }
-      if (!rq_ord_at_setup(far_set, px, py, &ord_far)) {
-        continue;
-      }
-      if (ord_far > ord_near) {
-        g_contest_grid_hit++;
-        return true;
-      }
-    }
+  // EXACT INTERIOR CONTEST. This was an 8x8 SAMPLED grid: 64 points over the bbox intersection, two
+  // barycentric interpolations each, returning true on the first inversion found. It cost 20.8% of a
+  // 3D frame in the host profile — the single largest entry — and it could MISS, because a sampled
+  // test only sees inversions wide enough to contain a sample point (the "sub-pixel slivers"
+  // documented as a known residual).
+  //
+  // Both problems have the same cause: sampling something that does not need to be sampled. ord is
+  // AFFINE per triangle, so the difference between the two faces is affine over the region they
+  // share, that region is convex, and an affine function's maximum over a convex polygon is at a
+  // VERTEX. Clip one triangle by the other and test the surviving vertices — exact, and a handful of
+  // evaluations instead of 128.
+  g_contest_grid++;
+  if (rq_faces_invert(near_set, far_set)) {
+    g_contest_grid_hit++;
+    return true;
   }
   return false;
 }
