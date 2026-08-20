@@ -30,8 +30,37 @@ Three things to know before repeating this anywhere:
   git ls-files '*.cpp' '*.h' '*.c' '*.hpp' | grep -v '^vendor/' | xargs clang-format -i   # twice
   ```
 
-**clang as the compiler is NOT started and NOT measured.** The build is GCC. Expect real work; the
-vendored beetle C is only known to build under GCC here.
+## clang as the compiler — WORKS, out of the box
+
+**The blocker recorded here earlier was wrong.** This file used to say "expect real work; the vendored
+beetle C is only known to build under GCC here". That was asserted without testing, and testing it
+took one configure:
+
+```sh
+cmake -S . -B build_clang -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+```
+
+| | result |
+|---|---|
+| psxport library + tools + tests | **0 errors, 0 warnings** — vendored beetle C included |
+| psxport hermetic suite | 62 of 63, the same single `game_iface.h` cap failure GCC gives |
+| Tomba!2 game (incl. ~200 MB generated substrate) | **0 errors** |
+| behaviour, `vram_oracle.py` f1120 psx path | **identical to GCC**: 368 = 368 prims, 0/524,288 differing |
+
+**ONE TRAP, and it is worth knowing because it looks like a clang bug and is not.** Configure without
+`CMAKE_BUILD_TYPE` and you get no `-DNDEBUG`, so vendored asserts go live — and one of them fires
+immediately:
+
+```
+gpu.c:2058: GPU_Update: Assertion `GPU.sl_zero_reached == false' failed.
+```
+
+That is a REAL defect in our beetle GPU oracle (kanban #116), not a compiler difference: the adapter
+drives `GPU_Update` without ever modelling a frame boundary, so beetle's scanline state machine
+crosses scanline 0 repeatedly with nothing clearing the flag. Every Release build compiles the assert
+out, which is why it went unnoticed since the oracle was wired. Keep an assert-enabled build around —
+that is the entire reason this surfaced.
 
 ## What the formatter exposed — and why it was never the formatter's fault
 
