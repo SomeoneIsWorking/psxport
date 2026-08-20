@@ -17,7 +17,8 @@ decisions.
     runtime/ui/ui_assets.{h,cpp}           asset resolution that refuses to report success
     runtime/ui/mod_row_model.{h,cpp}       what a row MEANS (the Mods toggle/adjust tables)
     runtime/ui/warp_control.{h,cpp}        the Debug tab's dev area warp
-    runtime/ui/render_path_control.{h,cpp} the Display tab's live renderer selector
+    runtime/ui/render_path_control.{h,cpp} the Display tab's two supported player renderers;
+                                           the PSX software path stays diagnostic-only
     runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding
     runtime/ui/menu_pane.{h,cpp}           one tab's page of rows
     runtime/ui/menu_tab_bar.{h,cpp}        the <tab> row and which one is selected

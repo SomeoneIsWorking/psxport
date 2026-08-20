@@ -2,11 +2,14 @@
 
 #include "config_vars.h"
 #include "game.h"
-#include "render_mode.h"
 
 #include <lucent/log.h>
 
 namespace psx::ui {
+
+RenderPath player_render_path_next(RenderPath current) {
+  return current == RenderPath::Native ? RenderPath::Gte : RenderPath::Native;
+}
 
 std::string RenderPathControl::currentLabel() const {
   if (!mGame) {
@@ -18,7 +21,7 @@ std::string RenderPathControl::currentLabel() const {
   case RenderPath::Gte:
     return "GTE / PC";
   case RenderPath::Psx:
-    return "GTE / PSX";
+    return "Diagnostic / PSX";
   }
   return "Unknown";
 }
@@ -36,7 +39,7 @@ void RenderPathControl::cycle() {
   }
 
   Core &core = mGame->core;
-  const RenderPath next = render_path_next(core.rsub.mode.path());
+  const RenderPath next = player_render_path_next(core.rsub.mode.path());
   core.rsub.mode.setPath(next);
   psx::config::cv_render_path.set(psx::config::Layer::Runtime, render_path_name(next));
   lucent::info("render",
