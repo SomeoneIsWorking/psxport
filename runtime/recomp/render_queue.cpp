@@ -1704,6 +1704,13 @@ static constexpr uint32_t kGuestRamEnd = 0x80200000u;
 
 // Interpolated ord of item `it` at screen point (x,y), using the same triangle split + barycentric the
 // rasterizer applies (tri 0 = verts 0,1,2; tri 1 = verts 1,2,3). Returns false when outside both tris.
+// TEMPORARY CENSUS (kanban #118) — how far does a pair actually get? The contest's cost is the 8x8
+// interior grid, and the grid only runs for pairs that pass BOTH cheap rejects. These four counters
+// say whether the expensive path is rare-and-worth-it or common-and-wasteful, which decides whether
+// the fix is a better filter or a different design.
+uint64_t g_contest_reject_bbox = 0, g_contest_reject_depth = 0, g_contest_reject_sat = 0, g_contest_grid = 0,
+         g_contest_grid_hit = 0;
+
 // EVERYTHING IN THE BARYCENTRIC SETUP THAT DEPENDS ONLY ON THE FACE, lifted out of the per-sample
 // loop. The interior contest samples an 8x8 grid and asks each face for its interpolated ord at every
 // point, so the six vertex fetches and the determinant were being recomputed 64 times per face per
@@ -1742,6 +1749,30 @@ static RqFaceSetup rq_face_setup(const RqItem &it) {
   }
   return f;
 }
+
+// WHY THERE IS NO SEPARATING-AXIS PRE-FILTER HERE, having tried one (2026-08-20). A 2D SAT over the
+// two faces' triangles is a correct way to skip the grid — the grid can only fire at a point admissible
+// to both faces — and it was implemented, verified to produce IDENTICAL snap decisions (109/262 faces,
+// 152,304 inversions, 0 of 524,288 pixels differing), and then REMOVED, because it is not worth it:
+//
+//     grid runs without it   2,374,502     with it   1,964,280      -17.3%
+//     wall clock             5.044 s                 4.962 s        -1.6%
+//
+// It pays ~150 float ops on every pair that reaches here to skip 64 samples on 17% of them. The census
+// says why the yield is low: pairs that get this far are genuinely OVERLAPPING faces of one object, so
+// separation is the uncommon case, not the common one.
+//
+// IT ALSO CARRIED A REAL BUG WORTH REMEMBERING. The first version separated on `<=`, treating faces
+// that touch exactly at an edge as disjoint. rq_ord_at_setup admits samples with barycentrics >= 0 —
+// points ON the edge — so touching faces DO share admissible points, and the filter silently dropped
+// inversions: 98 of 262 faces snapped instead of 109. The hermetic oracle test passed either way,
+// because it does not exercise edge-touching pairs. Only the real scene's snap count showed it.
+//
+// THE FIX THAT WOULD ACTUALLY WORK is not a better filter but a better test. Each triangle interpolates
+// ord LINEARLY in screen space, so (ord_far - ord_near) is a linear function over the region where both
+// are defined; its extreme over a convex overlap lies at a VERTEX of that overlap. That replaces 64
+// samples with a handful of evaluations AND removes the documented sub-sample sliver miss, because it
+// is exact rather than sampled. That is the next move on this code, not another pre-filter.
 
 static bool rq_ord_at_setup(const RqFaceSetup &f, float x, float y, float *out) {
   for (int t = 0; t < f.ntri; t++) {
@@ -1876,11 +1907,14 @@ static bool rq_faces_in_contest_ext(const RqItem &A,
   const float oy0 = near_ext.y0 > far_ext.y0 ? near_ext.y0 : far_ext.y0;
   const float oy1 = near_ext.y1 < far_ext.y1 ? near_ext.y1 : far_ext.y1;
   if (ox0 >= ox1 || oy0 >= oy1) {
+    g_contest_reject_bbox++;
     return false;
   }
   if (far_ext.omax <= near_ext.omin) {
+    g_contest_reject_depth++;
     return false;
   }
+  g_contest_grid++;
 
   // Interior contest: sample a grid over the bbox intersection; a point strictly inside BOTH
   // polygons where the farther-keyed face interpolates nearer = the depth buffer would invert the
@@ -1899,6 +1933,7 @@ static bool rq_faces_in_contest_ext(const RqItem &A,
         continue;
       }
       if (ord_far > ord_near) {
+        g_contest_grid_hit++;
         return true;
       }
     }
@@ -2027,12 +2062,19 @@ void RenderQueue::resolveKeyOrderFaces(uint32_t frame) {
     snapped_seqs.add(" {}:{:08X}/{}", it.seq, it.dbg_node, it.sort_key);
   }
   lucent::debug("keyord",
-                "f{} resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims)",
+                "f{} resolveKeyOrder: {}/{} keyed faces snapped ({} pair tests, {} queued prims) | "
+                "cumulative: bbox-reject {} depth-reject {} sat-reject {} REACHED GRID {} (of which found "
+                "an inversion {})",
                 frame,
                 nsnap,
                 faces.size(),
                 keyOrderPairTests,
-                n);
+                n,
+                g_contest_reject_bbox,
+                g_contest_reject_depth,
+                g_contest_reject_sat,
+                g_contest_grid,
+                g_contest_grid_hit);
   if (!snapped_seqs.empty()) {
     lucent::Line detail;
     detail.add("f{} snapped seq:node/key —", frame);
