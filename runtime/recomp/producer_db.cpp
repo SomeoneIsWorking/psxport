@@ -48,7 +48,7 @@ void producer_db_begin(Core *c) {
   // This is what makes the producer DB a COMPARISON rather than two disjoint row sets: no single leg runs
   // both halves (pc_render never GP0-executes the guest packets; psx_render never runs a native producer),
   // so the addresses natives key are earned on one leg and consumed on the other.
-  const std::string db = psx::config::cv_producers_db.get();
+  const std::string &db = psx::config::cv_producers_db.get();
   char def[512];
   if (db.empty()) {
     snprintf(def, sizeof def, "%s/claims.txt", psx::config::cv_producers_dir.get().c_str());
@@ -119,7 +119,7 @@ void producer_db_finish(Core *c) {
   // tools/producers.py ingest (USER: populated by playing, and tracked). Path is a knob so a harness can
   // separate its runs; the default lands in the gitignored scratch/ tree, never /tmp.
   {
-    const std::string dirs = psx::config::cv_producers_dir.get();
+    const std::string &dirs = psx::config::cv_producers_dir.get();
     const char *dir = dirs.c_str();
     char stamp[32];
     {

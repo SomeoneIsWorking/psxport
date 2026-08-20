@@ -87,18 +87,35 @@ host `rand()`: host sequences differ and process-global state would couple SBS/d
 restart behavior, per-Game isolation, and negative wrong-table plus neighboring-function cases.
 `ot_attr.{h,cpp}` owns the logic-frame stamp contract: pre-loop boot stores are counted, and the
 run-end report distinguishes satisfied, failed, and unexercised rather than warning before a loop can start.
-**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 1544 ln), `gpu_vk.cpp` (Vulkan backend + present),
+**GPU/present:** `gpu_native.cpp` (GP0/GP1, VRAM, packet pool — 4,373 ln), `gpu_vk.cpp` (Vulkan backend + present;
+critical legacy file frozen at 4,444 lines),
 `render_queue.{h,cpp}` + `painter_object_layer.h` own the painter-object contract: selected opaque world
 faces are partitioned into a unified, sequence-stable command stream across material variants.
 `ot_lifo_depth.{h,cpp}` encodes PSX `AddPrim` head-insertion order for equal-key authored faces, while
 `gpu_vk_next_distinct_3d_depth` owns conversion to raster-distinct Vulkan D32 values. `gpu_vk.cpp`
 retains interleaved textured and untextured command runs (including explicit flat/Gouraud and DTD state),
 replays each object with authored-order overwrite into reusable packed-color + real-D32 targets, then
-depth-composites the resolved surface into the world before semitransparency. The shipping GPU selftest
-reads both the local and post-composite D32 boundaries. The untextured companion pipeline applies the PSX
-4x4 dither matrix in native-pixel coordinates only for Gouraud+DTD; semi-transparent groups still refuse.
+depth-composites the resolved surface into the world before semitransparency. `gpu_vk_semi_selftest.cpp`
+owns the 16-case PSX semi-textured equation matrix, packet setup, integer reference equations, and verdict;
+`gpu_vk_texture_phase_selftest.cpp` separately owns the 20-case 1x/3x opaque/semi integer-pixel UV-phase
+matrix. Both use `gpu_vk_selftest_support.h` and `gpu_vk.cpp` supplies only the shipping
+upload/`render_geom`/readback operation. `shaders_gpu/psx_uv.glsl` is the one 12-fractional-bit
+integer-native-pixel reconstruction shared by opaque, semi, and semi-cover fragment shaders. The remaining
+shipping GPU selftest reads both local and post-composite D32 boundaries. The untextured companion pipeline
+applies the PSX 4x4 dither matrix in native-pixel coordinates only for Gouraud+DTD; semi-transparent groups
+still refuse.
 `wide_margin_plan.h` (renderer-only coverage for host-visible VRAM extension),
 `gpu_vk_shaders.h`/`gpu_vk_internal.h`, `gpu_native_internal.h`, `gpu_debug.cpp`.
+**Independent GPU diagnostic:** `gpu_beetle.cpp` tees GP0/GP1, native image uploads, and GPUREAD drains
+into Beetle's software GPU without advancing its CPU/scanout clock; `GPU_StartFrame` is called only at
+guest-frame boundaries. The census in `psxport_gpu_census.h` owns accepted/dropped/dispatched/known-no-op/
+loss denominators. This compares rasterizers given one command stream; it is not a whole-machine oracle.
+**Interpreter comparison harness:** `sbs.cpp` constructs two independent `Game`/`Core` instances. The A
+leg may use native overrides; the B leg executes the guest bodies through the interpreter and software
+GPU. `dc_boot_init` initializes CD and `PlatformHle` service tables per `Game`, so B cannot inherit a
+healthy-looking process-global override from A. `GameHooks::devWarp` is one complete game-owned cold
+warp used by both the standalone REPL and SBS; the framework owns timing, not guest addresses or area
+machine layout.
 **Interpolation camera seam:** `fps60.cpp` owns camera capture/lerp but reads the live view matrix through
 `GameHooks::fps60ReadSceneCam`; the matrix layout is game-owned. Tomba! 2 decodes its scratchpad matrix in
 `game/core/game_hooks.cpp`. A missing reader aborts when a native projection path asks for it—there is no
@@ -146,6 +163,7 @@ exists so the claim can be checked rather than argued. Two rules follow from it:
 | `port_gen.py` | first-draft generator for a byte-faithful native class method | |
 | `logsig.py` | extract the message template of every diagnostic call site | selftest PASSES |
 | `layout_move.py` | the planned `runtime/recomp/` -> `runtime/<subsystem>/` move | selftest PASSES; move NOT done yet |
+| `gen_gpu_shaders.py` | compile the fixed SDL_GPU shader set and shared includes into `gpu_vk_shaders.h` | 5/5 selftest; build-tree stamp keeps byte-identical header mtimes stable |
 | `tool_selftests.py` | run every tool's `--selftest` in a repo, and name the ones with none | in `scripts/` |
 | `exe_similarity.py` | address-independent code similarity between PS-EXE images | needs 2 executables |
 | `lineage_probe.py` | whole-function + string lineage evidence between PS-EXE images | selftest needs a corpus |
@@ -191,9 +209,10 @@ stand an ImGui developer stack up yet, and the one-line removal if that holds.
   extracted from `native_boot.cpp` into `runtime/recomp/repl.cpp` (+ `repl.h`, and shared `guest_call.h` for
   the rc0-4 dispatch helpers). If you catch yourself creating a `misc`/`util` dumping ground, STOP — put each
   native in its subsystem file.
-- **Remaining size debt (not grab-bags, just large cohesive files — split only when next touched):**
-  `native_boot.cpp` still holds boot + the native per-frame scheduler (cohesive; a boot/scheduler split is
-  optional). `gpu_native.cpp`/`gpu_vk.cpp`/`game/render/submit.cpp` are large single-responsibility backends.
+- **Remaining size debt:** `native_boot.cpp` still holds boot + the native per-frame scheduler.
+  `gpu_native.cpp`/`gpu_vk.cpp`/`game/render/submit.cpp` exceed the default 1,200-line source cap; treat
+  each touched responsibility as an extraction boundary. `gpu_vk.cpp` is mechanically frozen at 4,444
+  lines after moving the semi-textured blend selftest to its own owner; do not grow it again.
 
 ## CD path — the part that's easy to get wrong
 The port does NOT emulate the CD controller for the game; `cd_override.cpp` replaces libcd/engine
@@ -231,10 +250,12 @@ needs no disc and no window — the games each need a disc to run at all, so any
 disc-gated is useless as a shared gate.
 
 `test_synchronous_task_wait` exercises flags 1/2/3 through the shipping completion seam and proves synchronous
-completion does not mutate the retired wait counter. `cpp_style` runs `tools/check_cpp_style.py`: repository
-`clang-format` compliance plus shrink-only line caps for the legacy scheduler seams and bounded caps for the new
-task-wait module. A scheduler feature that needs more room must extract a cohesive owner instead of raising the
-legacy cap.
+completion does not mutate the retired wait counter. The normal `cpp_style` CTest runs the reusable
+`tools/check_cpp_style.py`: `clang-format` over first-party non-generated C/C++, the 1,200-line default plus
+shrink-only legacy caps, and `clang-tidy` over every first-party C++ translation unit represented in the real
+Clang compile database. Vendor and generated sources are excluded. Consumer repos invoke the same implementation
+with `--root` and `--compile-commands`; source-free scaffolds must declare that state with
+`--allow-empty-scaffold`. `--tidy-touched` is an explicit local fast mode, never the normal CTest.
 
 ```bash
 cmake -S . -B build          # standalone psxport configure (from a game tree: -S external/psxport)
@@ -259,16 +280,13 @@ python3 tools/lint/game_literals.py --write-baseline   # ONLY to record a delibe
 It is a **ratchet**: `tools/lint/game_literals_baseline.txt` records today's flagged
 `<file>:<value>:<count>`, a count may only go DOWN, and going down requires regenerating that
 tracked file in the same reviewed change. `--write-baseline` REFUSES to record more than the
-baseline already holds without `--grow` (neither ctest nor the hook passes it). Only LIVE code is
+baseline already holds without `--grow` (the normal gate never passes it). Only LIVE code is
 gated; the same values in comments and strings are counted and listed separately at the bottom of
 the baseline, because sizing seam work off a grep count that mixes the two has misled this project
 before (`pc_scheduler.h` reads 17 in a raw grep and **0** in live code). Two legal remedies for a
 failure: move the fact across the seam (§2 decides which mechanism), or annotate the line
 `// psx-console: <the console fact>` when the value really is a console constant the classifier
 cannot know. A scan that matches zero files exits **2** saying it scanned NOTHING — never clean.
-
-The same two commands are in `scripts/hooks/pre-commit`; install it per clone with
-`ln -sf ../../scripts/hooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
 
 ### The `cfg_*` -> `lucent::` sweep: two instruments, in `tools/`
 
@@ -375,10 +393,12 @@ exits 0 exactly like a passing one). There is intentionally **no `skip()`**: a s
 - `tools/fmv_export/test_fmv_decode.cpp` is a separate, older suite with its own build script
   (`tools/fmv_export/build.sh`) — it is disc-gated in part and is not in `ctest`.
 
-## Verifying a change — run the PC game and observe it
-There is **no oracle to diff against** and no automated A/B gate. The PSX recomp body is still the
-behavioral REFERENCE you READ when reimplementing an engine function, but you do NOT diff a running
-oracle. To verify:
+## Verifying a change
+
+There is no independent console/emulator lockstep oracle. SBS can compare the native/recompiled A leg
+against a pure interpreter B leg, which is useful for game-state and packet-generation differences but
+still shares psxport's hardware models. The Beetle GPU tee independently checks rasterization given one
+command stream. Neither instrument may be cited beyond that declared scope. To verify:
 - **Engine / render work:** run the game (`./run.sh`, or `PSXPORT_VK_HEADLESS=1` + REPL `shot` for a
   headless screenshot) and observe it. The USER verifies visually; the agent builds, sends pics, and
   inspects state via the REPL / debug server.

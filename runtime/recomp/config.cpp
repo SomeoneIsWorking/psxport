@@ -483,7 +483,7 @@ bool enh_named(const char *name) {
   if (!name || !*name) {
     return enh_gate(name, false); // refused, and it says so — see enh_gate
   }
-  const std::string text = cv_enh.get();
+  const std::string &text = cv_enh.get();
   bool selected = false;
   {
     EnhState &s = enh_state();
@@ -529,7 +529,7 @@ TextVar cv_render_path("PSXPORT_RENDER_PATH",
 // parses to nothing is a knob that did nothing, and the CVar audit's whole purpose is that such a knob
 // says so out loud (docs/config.md).
 RenderPath render_path() {
-  const std::string s = cv_render_path.get();
+  const std::string &s = cv_render_path.get();
   RenderPath p = RenderPath::Native;
   if (!render_path_parse(s.c_str(), &p)) {
     lucent::warn("cfg",

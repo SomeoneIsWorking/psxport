@@ -5,7 +5,7 @@
 // with `if (game) game->core.hooks->audioMixFrame(...)` — a check on the GAME, not on the HOOK.
 // `audioMixFrame` is optional: psxport's own convention is that a port binds its GameHooks by name
 // and every hook it has not stood up stays null (the framework does test the pointer for other
-// optional hooks, e.g. devWarpAreaEnter in native_boot.cpp). The first consumer without a native
+// optional hooks, e.g. devWarp in native_boot.cpp). The first consumer without a native
 // music engine therefore called through a null pointer the instant anything drove the mixer —
 // observed in spider1 as SIGSEGV at spu_audio.cpp:176 the moment per-field audio was wired up,
 // backtrace bottoming out at address 0.

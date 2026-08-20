@@ -54,14 +54,8 @@ void GPU_Power(void);
 void GPU_Write(const int32_t timestamp, uint32_t A, uint32_t V);
 uint32_t GPU_Read(const int32_t timestamp, uint32_t A);
 uint16_t *GPU_get_vram(void);
-int32_t GPU_Update(const int32_t sys_timestamp);
 void GPU_Destroy(void);
 }
-
-// mdec_beetle.c owns EventCycles and pins it to 0x7FFFFFFF ("no event horizon") for the MDEC pump.
-// The GPU reads the SAME global for a different purpose and cannot live with that value — see
-// pump_fifo() below.
-extern "C" int32_t EventCycles;
 
 // ---- Externs the vendored GPU references, at faithful-first inert values. SANCTIONED VENDOR INTEROP
 // ---- (the same arrangement gte_beetle.cpp documents): these are read by extern from beetle's C, and
@@ -148,8 +142,9 @@ namespace {
 bool s_inited = false;
 bool s_selftest = false;
 bool s_failed = false;
-long s_words_gp0 = 0, s_words_gp1 = 0; // the DENOMINATOR: what we actually fed it
-long s_xfer_words_fed = 0;             // CPU->VRAM pixel words inside 0xA0 transfers
+long s_words_gp0 = 0, s_words_gp1 = 0;        // the DENOMINATOR: what we actually fed it
+long s_xfer_words_fed = 0;                    // CPU->VRAM pixel words inside 0xA0 transfers
+long s_words_read = 0, s_words_read_diff = 0; // GP0(C0) VRAM->CPU drain parity
 // WHICH COMMANDS the oracle actually received, by top-level GP0 opcode. "The word stream arrives"
 // and "the DRAWING commands arrive" are different claims, and only this can tell them apart: beetle
 // visibly received the texture UPLOADS (its VRAM holds the sky texture) while drawing no polygons,
@@ -157,8 +152,6 @@ long s_xfer_words_fed = 0;             // CPU->VRAM pixel words inside 0xA0 tran
 // (An opcode histogram used to live here, built from the tee side. It was WRONG: this side sees
 //  words, not command boundaries, so every parameter word was counted as an opcode. The real
 //  census now comes from inside beetle — psxport_gpu_census.h.)
-int32_t s_ts = 0; // our own monotonic clock for GPU_Update
-
 // The scanout sink. Allocated once; its CONTENTS are never read by us — the oracle's answer is VRAM,
 // not this surface. It exists so beetle's per-scanline display walk has somewhere legal to write.
 // Sized to the widest PSX display mode (640) by the full VRAM height, which is more than any mode
@@ -167,39 +160,6 @@ constexpr int kSinkW = 1024, kSinkH = 512;
 EmulateSpecStruct s_espec = {};
 MDFN_Surface *s_surface = nullptr;
 int32_t s_linewidths[kSinkH] = {};
-
-// DRAIN THE BLITTER FIFO AFTER EVERY WORD, and lend the GPU a sane event horizon while it runs.
-//
-// Two hardware-model details, both of which produce a SILENTLY BLACK oracle if ignored, and both of
-// which were measured doing exactly that (7,145,349 GP0 words in, VRAM entirely black):
-//
-//  1. GP0 words do not draw. They queue into GPU_BlitterFIFO, which is 0x20 words deep and drains
-//     ONLY inside GPU_Update. Feeding millions of words without ever calling Update means everything
-//     past the first 32 is dropped on the floor.
-//
-//  2. GPU_Update clamps its drawing budget to `2*EventCycles`. mdec_beetle.c legitimately pins that
-//     shared global to 0x7FFFFFFF for the MDEC's benefit, and 2*0x7FFFFFFF OVERFLOWS int32 to -2 —
-//     so the GPU's DrawTimeAvail would be clamped NEGATIVE on every call and it would refuse to
-//     rasterize anything, forever. We therefore lend it a sane horizon for the duration of the call
-//     and hand the global straight back, rather than editing either owner's value.
-//
-// The timestamp advances by a fixed step per word. Its magnitude is not a timing claim — this oracle
-// deliberately models no timing (see SCOPE) — it exists only to keep sys_clocks non-zero, which is
-// what makes Update do its work at all.
-void pump_fifo() {
-  // "64 keeps draw time ample" was a guess, and the census measured it wrong: 117,804 starved
-  // dispatches and 84,335 words dropped by a full FIFO over 1,120 frames. No clock constant fixes
-  // that, because the draw-time model itself is the thing we do not want — see
-  // psxport_gpu_grant_drawtime(). The timestamp still has to advance for GPU_Update to do any work.
-  constexpr int32_t kClocksPerWord = 64;
-  constexpr int32_t kSaneHorizon = 1 << 22;
-  const int32_t saved = EventCycles;
-  EventCycles = kSaneHorizon;
-  s_ts += kClocksPerWord;
-  psxport_gpu_grant_drawtime();
-  GPU_Update(s_ts);
-  EventCycles = saved;
-}
 
 // The tee is off unless asked for. It costs a branch per GP0 word when off, and a second full
 // rasterization when on, so it is a diagnostic/oracle mode rather than something to ship enabled.
@@ -292,9 +252,13 @@ void gpu_beetle_gp0(uint32_t w, int is_xfer_data) {
   if (is_xfer_data) {
     s_xfer_words_fed++;
   }
-  psxport_gpu_grant_drawtime();    // GPU_Write drains — and can DROP — before pump_fifo runs
-  GPU_Write(s_ts, 0x1F801810u, w); // A&4 == 0 selects GP0 ("Data")
-  pump_fifo();
+  // GPU_WriteCB invokes Beetle's ProcessFIFO immediately. Granting draw time before the write makes
+  // that synchronous command seam complete without advancing Beetle's CPU/scanout clock at all.
+  // The previous adapter called GPU_Update after every word merely to drain this FIFO; large native
+  // texture uploads then advanced multiple video frames inside one guest frame and violated
+  // GPU.sl_zero_reached. Timing and scanout are outside this oracle's declared scope.
+  psxport_gpu_grant_drawtime();
+  GPU_Write(0, 0x1F801810u, w); // A&4 == 0 selects GP0 ("Data")
 }
 
 void gpu_beetle_gp1(uint32_t w) {
@@ -302,8 +266,30 @@ void gpu_beetle_gp1(uint32_t w) {
     return;
   }
   s_words_gp1++;
-  GPU_Write(s_ts, 0x1F801814u, w); // A&4 != 0 selects GP1 ("Control")
-  pump_fifo();
+  GPU_Write(0, 0x1F801814u, w); // A&4 != 0 selects GP1 ("Control")
+}
+
+// A GP0(C0) command leaves Beetle in INCMD_FBREAD until the guest drains every requested word from
+// GPUREAD. Teeing writes without teeing these reads wedges Beetle at the first readback: the 16-word
+// FIFO fills, every later GP0 word is dropped, and a stable but stale VRAM image looks like a
+// rasterizer verdict. Advance both machines together and retain an exact read-data cross-check.
+void gpu_beetle_read_word(uint32_t ours) {
+  if (!enabled() || !ensure_init()) {
+    return;
+  }
+  const uint32_t theirs = GPU_Read(0, 0x1F801810u);
+  s_words_read++;
+  if (ours != theirs) {
+    s_words_read_diff++;
+    if (s_words_read_diff <= 4) {
+      lucent::warn("gpubeetle",
+                   "GPUREAD word #{} differs: ours=0x{:08X}, beetle=0x{:08X} ({} mismatch(es) so far)",
+                   s_words_read,
+                   ours,
+                   theirs,
+                   s_words_read_diff);
+    }
+  }
 }
 
 // NATIVE VRAM UPLOADS MUST BE TEED TOO, or the oracle is comparing against a different VRAM.
@@ -354,6 +340,13 @@ void gpu_beetle_frame_report(int frame, const uint16_t *ours, int vram_w, int vr
   const char *df = cfg_str("PSXPORT_GPU_BEETLE_DUMP");
   const bool want_dump = df && *df && frame == atoi(df) && gpu_beetle_active();
   if (!lucent::channel_on("gpubeetle") && !want_dump) {
+    if (gpu_beetle_active()) {
+      // This callback is the guest-frame boundary, not merely a report hook. Beetle's GPU display
+      // state requires GPU_StartFrame once per frame even when nobody requested diagnostics; without
+      // it the scanline walker crosses line zero repeatedly in one nominal frame and violates
+      // GPU.sl_zero_reached. Release builds hid that contract violation behind NDEBUG.
+      GPU_StartFrame(&s_espec);
+    }
     return;
   }
   if (!gpu_beetle_active()) {
@@ -379,21 +372,24 @@ void gpu_beetle_frame_report(int frame, const uint16_t *ours, int vram_w, int vr
       differ++;
     }
   }
-  lucent::info("gpubeetle",
-               "f{} fed gp0={} gp1={} | VRAM non-black: ours {}/{} ({:.1f}%), beetle {}/{} ({:.1f}%) | "
-               "differing px {}/{} ({:.2f}%)",
-               frame,
-               s_words_gp0,
-               s_words_gp1,
-               ours_nz,
-               total,
-               100.0 * ours_nz / (double)total,
-               theirs_nz,
-               total,
-               100.0 * theirs_nz / (double)total,
-               differ,
-               total,
-               100.0 * differ / (double)total);
+  lucent::info(
+      "gpubeetle",
+      "f{} fed gp0={} gp1={} read={} (mismatch {}) | VRAM non-black: ours {}/{} ({:.1f}%), beetle {}/{} ({:.1f}%) | "
+      "differing px {}/{} ({:.2f}%)",
+      frame,
+      s_words_gp0,
+      s_words_gp1,
+      s_words_read,
+      s_words_read_diff,
+      ours_nz,
+      total,
+      100.0 * ours_nz / (double)total,
+      theirs_nz,
+      total,
+      100.0 * theirs_nz / (double)total,
+      differ,
+      total,
+      100.0 * differ / (double)total);
   // PSXPORT_GPU_BEETLE_DUMP=<frame> — write the oracle's VRAM at one frame, so the answer can be
   // LOOKED AT rather than inferred from a pixel count. A count proves the backend is doing something;
   // only the image proves it is doing the RIGHT something, and those are different claims.
@@ -449,27 +445,28 @@ void gpu_beetle_frame_report(int frame, const uint16_t *ours, int vram_w, int vr
     // the second triangle of a primitive it already counted, not a second primitive.
     const unsigned long drawn = d[PGC_POLY] + d[PGC_LINE] + d[PGC_SPRITE];
     const unsigned long queued = psxport_gpu_fifo_depth();
-    lucent::info("gpubeetle",
-                 "f{} FEED: words accepted {} dropped {} | cmds {} = poly {} + line {} + sprite {} + "
-                 "xfer {} + fill {} + env {} + nop0 {} + unknown {} | cont: quad {} line {} | starved {} null-func {} "
-                 "| fifo queued {}",
-                 frame,
-                 d[PGC_WORDS_ACCEPTED],
-                 d[PGC_WORDS_DROPPED],
-                 d[PGC_CMDS_DISPATCHED],
-                 d[PGC_POLY],
-                 d[PGC_LINE],
-                 d[PGC_SPRITE],
-                 d[PGC_XFER],
-                 d[PGC_FILL],
-                 d[PGC_STATE],
-                 d[PGC_NOP0],
-                 d[PGC_NOP],
-                 d[PGC_POLY_CONT],
-                 d[PGC_LINE_CONT],
-                 d[PGC_STARVED],
-                 d[PGC_NULL_FUNC],
-                 queued);
+    lucent::info(
+        "gpubeetle",
+        "f{} FEED: words accepted {} dropped {} | cmds {} = poly {} + line {} + sprite {} + "
+        "xfer {} + fill {} + env {} + known-nop {} + unknown {} | cont: quad {} line {} | starved {} null-func {} "
+        "| fifo queued {}",
+        frame,
+        d[PGC_WORDS_ACCEPTED],
+        d[PGC_WORDS_DROPPED],
+        d[PGC_CMDS_DISPATCHED],
+        d[PGC_POLY],
+        d[PGC_LINE],
+        d[PGC_SPRITE],
+        d[PGC_XFER],
+        d[PGC_FILL],
+        d[PGC_STATE],
+        d[PGC_NOP0],
+        d[PGC_NOP],
+        d[PGC_POLY_CONT],
+        d[PGC_LINE_CONT],
+        d[PGC_STARVED],
+        d[PGC_NULL_FUNC],
+        queued);
     // The comparison the whole oracle rests on: primitives WE drew vs primitives beetle dispatched.
     // Equal counts mean a pixel difference is a rasterizer difference. Unequal counts mean the tee
     // is lossy and NOTHING about the pixels may be read as a verdict yet.
@@ -547,4 +544,8 @@ void gpu_beetle_frame_report(int frame, const uint16_t *ours, int vram_w, int vr
                  frame,
                  s_words_gp0);
   }
+  // Close this guest frame after every comparison and prepare Beetle's display state for the next
+  // one. The oracle reads VRAM directly, but GPU_Update still advances the display/scanline machine;
+  // GPU_StartFrame is the vendor API that resets that per-frame state.
+  GPU_StartFrame(&s_espec);
 }

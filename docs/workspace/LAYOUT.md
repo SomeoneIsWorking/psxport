@@ -143,7 +143,7 @@ for r in spyro spider1 Tomba2Engine; do (cd ~/repo/psx/$r && \
 | file set | N expected after the move, N present, 0 missing, 0 unexpected | — |
 | **A. content hashes** | multiset of per-file hashes identical before/after, with `#include` lines and `runtime`-path lines removed. Prints the excluded-line count (measured 1.3–3%) | the excluded lines — check B covers them |
 | **B. pure re-derivation** | every tracked text file byte-equals the transform of its pre-move content; out-of-scope files must be byte-**unchanged** | non-UTF-8 files, `vendor/`, files untracked in both trees |
-| build-file assertions | 12 required strings present in cmake/`gen_gpu_shaders.sh`/`emit.py`/`port_gen.py` afterwards — a rule that became a no-op upstream **fails** | — |
+| build-file assertions | 12 required strings present in cmake/`gen_gpu_shaders.py`/`emit.py`/`port_gen.py` afterwards — a rule that became a no-op upstream **fails** | — |
 | residual scan | zero `runtime/recomp` mentions left in any code/build file, in any of the four repos | historical docs, which are never rewritten by design |
 
 ### The one thing in this commit that is not a path

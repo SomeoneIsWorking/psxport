@@ -815,9 +815,7 @@ void Sbs::Impl::applyMode(Game *g, int which) {
     return;
   }
   switch (mMode) {
-  // A = native path, B = the guest's own GTE+OT on the PC rasterizer (RenderPath::Gte). B is now
-  // ENHANCEMENT-FREE by construction (RenderMode::enhancementsAllowed) — the oracle leg no longer
-  // depends on the harness having remembered to neutralise mods.
+  // A = native; B = enhancement-free guest GTE+OT on the PC rasterizer (RenderPath::Gte).
   case M_RENDER:
     r.mode.setPath(which ? RenderPath::Gte : RenderPath::Native);
     break;
@@ -827,11 +825,9 @@ void Sbs::Impl::applyMode(Game *g, int which) {
   case M_FULL:
     r.mode.setPath(which ? RenderPath::Gte : RenderPath::Native);
     break;
-  // B is the SOFTWARE-rasterized reference: use_interp + RenderPath::Psx, set at boot below.
+  // Reassert both paths after boot and each step; boot resolves the process-wide configured path.
   case M_ORACLE:
-    if (!which) {
-      r.mode.setPath(RenderPath::Native);
-    }
+    r.mode.setPath(which ? RenderPath::Psx : RenderPath::Native);
     break;
   case M_SKIP:
     r.mode.setPath(which ? RenderPath::Gte : RenderPath::Native);
@@ -2976,20 +2972,24 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
                "core A pc_faithful (hard-wired): native faithful path, byte-exact strict — B recomp is the oracle");
   if (mMode == M_ORACLE) {
     mB->core.use_interp = 1;
-    mB->core.rsub.mode.setPath(RenderPath::Psx);
   }
   load_exe(exePath, &mA->core);
   dc_boot_init(&mA->core);
   load_exe(exePath, &mB->core);
   dc_boot_init(&mB->core);
+  // Apply per-Core policy after boot, then refuse an oracle pane that is not software-rasterized.
+  applyMode(mA, 0);
+  applyMode(mB, 1);
+  if (mMode == M_ORACLE && !mB->core.rsub.mode.softGpu()) {
+    lucent::error("sbs",
+                  "REFUSING MODE=oracle: core B render path is '{}', not the required software PSX rasterizer",
+                  render_path_name(mB->core.rsub.mode.path()));
+    return;
+  }
   lucent::info("sbs", "core-map A={} B={} (use to attribute [wwatch] lines)", (void *)&mA->core, (void *)&mB->core);
 
-  // BOOT-SYNC CHECK: both cores just loaded the same MAIN.EXE and ran dc_boot_init. Their RAM +
-  // scratchpad should be BYTE-IDENTICAL at this point — anything else means the boot code itself
-  // diverges (a native boot step vs its recomp does something different, before autonav even
-  // starts). Report the first N differences so we can fix them, but DO NOT force sync (per user
-  // directive: verify, don't paper over). If different, downstream divergence hunts are chasing
-  // shadows — fix the boot divergence first.
+  // Both cores loaded the same MAIN.EXE and booted, so RAM and scratchpad must be byte-identical.
+  // Report differences without forcing sync; downstream results are invalid until boot agrees.
   {
     int nDiff = 0, nSpad = 0, firstAddr = -1;
     for (uint32_t a = 0; a < 0x200000; a++) {
@@ -3000,6 +3000,7 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
         if (nDiff < 8) {
           lucent::info(
               "sbs", "BOOT-DIFF main 0x{:08X}: A={:02X} B={:02X}", 0x80000000u + a, mA->core.ram[a], mB->core.ram[a]);
+          lwReport(0x80000000u + a);
         }
         nDiff++;
       }
@@ -3242,10 +3243,6 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
     mAllocB = 0;
     mWwHit = 0;
     mWwVa = mWwVb = 0;
-    // (The dated `ww_trace` scaffold and its ww_log() waypoints — one Tomba!2 byte 0x800BF81E, frames
-    // 180..200, "TRACE 2026-07-03" — were DELETED 2026-08-11. It named one game's byte inside
-    // game-agnostic framework code, and the general facility it prototyped already exists: PSXPORT_WWATCH
-    // + the per-core last-writer map, which work on any address of any game.)
     // Divergence check runs THROUGHOUT the run (2026-07-04 user directive [[sbs-two-compare-modes]]
     // reinforced: "autonav can press Start but it can't skip diverges happening during autonav").
     // Autonav is a pad-driving convenience; the byte-exact compare must be active from f0.
@@ -3261,12 +3258,8 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
     if ((nav_done || prenav) && !mDivFound && !mRewindActive) {
       takePreStepSnap();
     }
-    // PSXPORT_SBS_WARP="frame:area[:sub]" — deterministic HEADLESS area-load repro for gating #37
-    // (hut-entry updateTail guest-frame mirror). At lockstep frame `frame`, write the SAME real DOOR
-    // RECORD (0x800BF83A=(area<<8)|sub, 0x800BF839=3) into BOTH cores — identical to native_boot.cpp's
-    // `warp` REPL command. The running field-run machine then executes the game's own cross-area
-    // transition on both cores in lockstep, exercising AreaSlots::updateTail's spawn arm (0x80092660)
-    // during the load so SBS can byte-compare it. Fire once, after AUTO-NAV has reached free-roam.
+    // Invoke the same complete game-owned cold warp on both cores. Sharing GameHooks::devWarp with
+    // the standalone REPL keeps one authority and game memory layout out of this harness.
     {
       static long warpFrame = -1, warpArea = 0, warpSub = 0;
       static int warpParsed = 0, warpFired = 0;
@@ -3279,62 +3272,20 @@ void Sbs::Impl::run(const char *exePath, Sbs *facade) {
             warpFrame = fr;
             warpArea = ar;
             warpSub = su;
-            lucent::info("sbs", "PSXPORT_SBS_WARP: at f{} write door-record area={} sub={} to BOTH cores", fr, ar, su);
+            lucent::info("sbs", "PSXPORT_SBS_WARP: at f{} cold-warp BOTH cores to area={} sub={}", fr, ar, su);
           }
         }
       }
       if (warpFrame >= 0 && !warpFired && (long)mFrame >= warpFrame) {
         warpFired = 1;
-        const uint16_t rec = (uint16_t)(((warpArea & 0x1f) << 8) | (warpSub & 0x3f));
-        // LOAD THE DESTINATION'S CODE OVERLAY FIRST, on both cores. Writing the door record alone is
-        // enough only when the destination's field code lives in the ALREADY-RESIDENT overlay — true
-        // for the hut entry this was built for (#37), false in general. Warping to area 12 (overlay
-        // A0C) aborted here with "no recompiled fn for 0x8010CC28, caller ra=0x800587F8": that caller
-        // is ActorTomba::enterOuterState0's per-area handler dispatch, and it fired before the
-        // transition had brought A0C in, so the recompiler had no body for the address. Priming the
-        // load-task slot and running the synchronous area load — exactly what the REPL `warp` does in
-        // native_boot.cpp — makes the destination's code resident before anything can dispatch into
-        // it. Same call on both cores, so lockstep is preserved; a game that supplies no hook is
-        // unaffected and keeps the old door-record-only behaviour.
         for (Core *c : {&mA->core, &mB->core}) {
-          if (c->hooks && c->hooks->devWarpAreaLoad) {
-            const uint32_t wsm = c->mem_r32(0x1f800138u);
-            c->mem_w8(wsm + 0x6e, (uint8_t)(warpArea & 0x1f));
-            c->mem_w8(wsm + 0x6d, 2);
-            c->hooks->devWarpAreaLoad(c);
+          if (!c->hooks || !c->hooks->devWarp) {
+            lucent::error("sbs", "PSXPORT_SBS_WARP refused: this game has no complete dev-warp operation");
+            return;
           }
+          c->hooks->devWarp(c, (int)(warpArea & 0x1f), (int)(warpSub & 0x3f));
         }
-        for (Core *c : {&mA->core, &mB->core}) {
-          c->mem_w16(0x800bf83au, rec);
-          c->mem_w8(0x800bf839u, 3);
-        }
-        lucent::info("sbs",
-                     "WARP fired at f{}: door-record 0x800BF83A={:04X} trig=3 (curA={} curB={})",
-                     mFrame,
-                     rec,
-                     mA->core.mem_r8(0x800bf870u),
-                     mB->core.mem_r8(0x800bf870u));
-      }
-      // Post-warp trace: confirm the field-run machine consumes the door record and runs the area
-      // load (trigger byte 0x800BF839 clears, area id 0x800bf870 commits, sm[0x4c] area-machine cycles).
-      if (warpFrame >= 0 && warpFired && (long)mFrame >= warpFrame && (long)mFrame <= warpFrame + 220) {
-        uint32_t sm = mA->core.mem_r32(0x1f800138u);
-        static uint32_t sig = 0xffffffffu;
-        uint32_t s = (mA->core.mem_r8(0x800bf870u)) | (mA->core.mem_r8(0x800bf839u) << 8) |
-                     (mA->core.mem_r16(sm + 0x4a) << 16) | (mA->core.mem_r16(sm + 0x4c) << 24);
-        if (s != sig) {
-          sig = s;
-          lucent::info("sbs-warptrace",
-                       "f{} A area={} trig={} sm[4a]={}/4c={}/4e={}  B area={} trig={}",
-                       mFrame,
-                       mA->core.mem_r8(0x800bf870u),
-                       mA->core.mem_r8(0x800bf839u),
-                       mA->core.mem_r16(sm + 0x4a),
-                       mA->core.mem_r16(sm + 0x4c),
-                       mA->core.mem_r16(sm + 0x4e),
-                       mB->core.mem_r8(0x800bf870u),
-                       mB->core.mem_r8(0x800bf839u));
-        }
+        lucent::info("sbs", "WARP fired at f{}: both cores cold-warped to area={} sub={}", mFrame, warpArea, warpSub);
       }
     }
     // PSXPORT_SBS_ARMSLOT="frame:slotidx" — deterministic gate for #37's updateTail action-arm

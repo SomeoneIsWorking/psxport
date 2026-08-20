@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "psx_uv.glsl"
 // SDL_GPU textured/untextured PSX fragment with semi-transparency. The color target is an R16_UINT VRAM
 // image — the fragment OUTPUTS the packed 1555 word as a uint. The CLUT/paletted sampling (usampler2D /
 // texelFetch, modes 0/1/2, texture-window masking) is LIFTED VERBATIM from the working Vulkan tritex.frag.
@@ -36,7 +38,8 @@ void main() {
     if (mode == 3) {                                  // untextured: use the vertex color directly
         texel = uint(clamp(v_col.r,0.,1.)*31.+0.5) | (uint(clamp(v_col.g,0.,1.)*31.+0.5)<<5) | (uint(clamp(v_col.b,0.,1.)*31.+0.5)<<10);
     } else {
-        int u = int(v_uv.x), v = int(v_uv.y);
+        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale);
+        int u = int(psx_uv.x), v = int(psx_uv.y);
         u = (u & ~(v_tw.x * 8)) | ((v_tw.z & v_tw.x) * 8);
         v = (v & ~(v_tw.y * 8)) | ((v_tw.w & v_tw.y) * 8);
         int tpx = v_tp.x, tpy = v_tp.y, clutx = v_clut.x, cluty = v_clut.y;

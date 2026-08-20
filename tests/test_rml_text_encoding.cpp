@@ -48,6 +48,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 // ---- corpus location ---------------------------------------------------------------------------
@@ -116,7 +117,13 @@ static void scan_entities(const std::string &label, const std::string &text, Ent
     std::string name = text.substr(i + 1, j - (i + 1));
     s.total++;
     if (!entity_is_supported(name)) {
-      s.unsupported.push_back(label + ":" + std::to_string(line) + ": &" + name + ";");
+      std::string unsupported = label;
+      unsupported += ':';
+      unsupported += std::to_string(line);
+      unsupported += ": &";
+      unsupported += name;
+      unsupported += ';';
+      s.unsupported.push_back(std::move(unsupported));
     } else if (name[0] == '#') {
       s.numeric++;
     } else {
@@ -183,7 +190,7 @@ static void test_old_separator_still_reproduces_the_bug(void) {
   const std::string new_dom = Rml::StringUtilities::DecodeRml(rml_text_markup(kNewVideo));
   CHECK_STREQ(new_dom.c_str(), kNewVideo);
   CHECK(new_dom.find("&middot;") == std::string::npos);
-  CHECK(new_dom.find("&") == std::string::npos); // no entity of any kind reaches the font
+  CHECK(new_dom.find('&') == std::string::npos); // no entity of any kind reaches the font
 
   // Same for the world readout line.
   const char *kOldWorld = "pos X 13029 Y -2872 Z 7161 &middot; stage GAME (0x8010637C)";

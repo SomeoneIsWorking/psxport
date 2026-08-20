@@ -18,12 +18,11 @@ import zlib
 sys.path.insert(0, os.path.dirname(__file__))
 import str_decode as sd
 
-DISC = os.environ.get("PSXPORT_TOMBA2_DISC",
-                      "/mnt/Boy/ROM/PSX CHD/Tomba! 2 - The Evil Swine Return (USA).chd")
+DISC = os.environ.get("PSXPORT_TOMBA2_DISC", "")
 
 
 def have_disc():
-    return os.path.exists(DISC)
+    return bool(DISC) and os.path.exists(DISC)
 
 
 class TestBitReader(unittest.TestCase):

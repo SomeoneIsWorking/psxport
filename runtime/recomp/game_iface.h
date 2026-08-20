@@ -1,16 +1,8 @@
-// game_iface.h — THE framework↔game seam (the ONLY interface between the PSX-generic framework in
-// runtime/recomp/ and a game-specific reimplementation).
+// game_iface.h — the only interface between the PSX-generic framework and a game implementation.
 //
-// The framework NEVER #includes anything from game/. Instead a game provides, at init:
-//   * a GameConfig — the game's guest ADDRESSES/tables (MAIN.EXE-specific literals the framework's
-//     generic loops iterate: crt0/boot layout, the per-frame OT/packet-pool dance, the scheduler task
-//     layout, the overlay slot bases, CD chokepoints, pad buffers);
-//   * a GameHooks — a function-pointer vtable the framework calls to reach game behaviour (frame
-//     update, OT draw, boot init, stage entry, music, HUD readout, render-state, diagnostics);
-//   * an opaque game context (void* Core::gameCtx) holding the game's per-Core subsystem aggregate.
-//
-// A Core reaches the game ONLY through `c->cfg->…`, `c->hooks->…(c)`, and `c->gameCtx`. This header
-// carries no game types — only forward declarations — so the framework compiles standalone.
+// At init a game provides its guest-address tables (GameConfig), behavior vtable (GameHooks), and
+// opaque per-Core context (Core::gameCtx). Framework code reaches the game only through those three
+// seams and never includes game headers, so this header and the framework compile standalone.
 #pragma once
 #include <stdint.h>
 
@@ -19,10 +11,7 @@
 class Core; // runtime/recomp/core.h
 class Game; // runtime/recomp/game.h  (the framework machine owner; stays framework-side)
 
-// FadeState — the framework-side POD mirror of the game's ScreenFade::State {Mode mode; uint8_t r,g,b}.
-// The present path (gpu_vk.cpp) reads the game's per-frame fade through renderFadeState() into one of
-// these, so the framework never names the game's ScreenFade type. `mode` widened to int (the ScreenFade
-// Mode enum is uint8_t-backed; all present-path consumers already read it as int).
+// Framework-side POD mirror of ScreenFade::State, read through renderFadeState without naming a game type.
 struct FadeState {
   int mode;
   unsigned char r, g, b;
@@ -47,11 +36,9 @@ enum SchedBody {
   SCHED_FIBER_STAGE_BODY,       // eng(c).stageBodyFaithful()
 };
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // GameConfig — the game-specific guest ADDRESSES/tables. A game fills one static instance; the
 // framework substrate reads `c->cfg->field` in place of the hardcoded MAIN.EXE literals it used to bake
 // in. Grouped by the framework consumer. (Values live in a game-provided instance, NOT here.)
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
 struct GameConfig {
   // --- crt0 / boot (native_boot.cpp crt0_setup, game_init) ---
   uint32_t bssZeroLo, bssZeroHi;        // .bss clear range
@@ -384,12 +371,8 @@ static inline const GameConfig::SchedEntry *sched_entry_for(const GameConfig *cf
   return nullptr;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // GameHooks — the callback vtable the framework calls to reach game behaviour. Each member is a
-// function pointer taking `Core* c` (the game reaches its own subsystems via `c->engine.*` inside the
-// impl); the framework substrate calls `c->hooks->fn(c)` in place of the direct `c->engine.X()` calls
-// it used to bake in. More hooks (bootInit, schedFreshEntry, diagnostics) land in later staging steps.
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// function pointer taking Core*; implementations reach their state through Core::gameCtx.
 struct GameHooks {
   // --- game context lifecycle: the framework allocates/frees the game's opaque per-Core subsystem
   // aggregate (Core::gameCtx) through these. ctxCreate runs at the end of Core's ctor; ctxDestroy in
@@ -448,21 +431,17 @@ struct GameHooks {
   void (*replCamTeleportOff)(Core *c);                           // REPL `tp off` (was c->engine.camTeleportOff)
   void (*renderBbFrameReset)(Core *c);                           // per-frame bb reset (was c->mRender->bbFrameReset())
 
-  // --- game-side REPL commands + dev-warp area load (last game-class refs pulled out of repl.cpp /
+  // --- game-side REPL commands + dev warp (last game-class refs pulled out of repl.cpp /
   // native_boot.cpp so the framework #includes no game header). ---
   bool (*replCommand)(Core *c,
                       const char *cmd,
-                      const char *line); // REPL command the framework doesn't
-                                         // itself handle — game classes / Tomba guest addrs (invtest,
-                                         // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
-  void (*devWarpAreaLoad)(Core *c);      // dev-warp full area load (was native_boot.cpp's
-                                         // eng(c).sop.transitionAreaLoad()).
-  void (*devWarpAreaEnter)(Core *c);     // dev-warp: run the destination area's OWN entry handler
-                                         // after the load. A warp forces the area machine past the
-                                         // transition that normally dispatches it, so without this
-                                         // the area's data and code are resident but nothing arms
-                                         // its objects. Game-side because only the game knows where
-                                         // its per-area handler table lives. May be null.
+                      const char *line);       // REPL command the framework doesn't
+                                               // itself handle — game classes / Tomba guest addrs (invtest,
+                                               // bgm/bgmstop, seqsolo, musictest). Returns true iff handled.
+  void (*devWarp)(Core *c, int area, int sub); // complete cold warp: load destination code/data,
+                                               // publish area/sub state, select its running machine,
+                                               // and run its entry handler. One game-owned operation
+                                               // shared by standalone and SBS; may be null.
   // Dev-warp AREA INDEX, for the RmlUi warp selector and the REPL `warp` range guard. Game-side because
   // the framework must not know how many areas a game has, what they are called, or which guest address
   // says "we are in the field". devAreaName returns "" when the area has no sourced name — the caller
@@ -507,12 +486,8 @@ struct GameHooks {
   void (*fps60ReadSceneCam)(Core *c, float R[3][3], float T[3]);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Install — the game registers its config+hooks ONCE at startup, before any Game/Core is constructed
-// (the standalone framework smoke registers a stub). Process-global; both SBS cores share it. Core's
-// constructor snapshots the installed pointers into c->cfg / c->hooks. Returns nullptr until installed
-// (harmless: nothing reads cfg/hooks until the corresponding literal/call-site conversions land).
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// (the standalone smoke registers a stub). Each Core snapshots the process-global pointers.
 void psxport_install_game(const GameConfig *cfg, const GameHooks *hooks);
 const GameConfig *psxport_game_config();
 const GameHooks *psxport_game_hooks();

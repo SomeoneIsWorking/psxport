@@ -21,7 +21,7 @@
 // — pad and game-state drive. Applying any of them to the `sbs show`-selected core only would
 // inject a divergence the byte-compare then reports as a port bug, i.e. it would turn the debugger
 // into a divergence SOURCE. Applying them to both cores identically means re-implementing
-// native_boot.cpp's armed-request consumers (the newgame prologue pulser, `skip`, the door-record
+// native_boot.cpp's armed-request consumers (the newgame prologue pulser, `skip`, the game-owned
 // warp) against two cores in lockstep — which is precisely what `Sbs::Impl::navStep` +
 // PSXPORT_SBS_WARP already are, in a form that already refuses when the nav addresses are unset.
 // A second, single-core copy of that mechanism next to it is a fork of the thing that works.

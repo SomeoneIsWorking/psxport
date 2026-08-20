@@ -57,7 +57,7 @@ absent on iOS, and its immediate-mode batch fought a custom integer-VRAM PSX ras
     uploaded each present; present pass (sample VRAM 1555 → swapchain, letterbox 4:3 + fade); fullscreen
     IMAGE present (SCEA/FMV); headless VRAM readback (`shot`). All `gpu_vk_*` symbols provided.
   - shaders: `runtime/recomp/shaders_gpu/{present,image}.{vert,frag}` (SDL_GPU binding convention —
-    frag samplers set=2, frag uniform buffers set=3) → `gpu_vk_shaders.h` via `tools/gen_gpu_shaders.sh`.
+    frag samplers set=2, frag uniform buffers set=3) → `gpu_vk_shaders.h` via `tools/gen_gpu_shaders.py`.
   - SDL2→SDL3: `pad_input.cpp` (SDL_Gamepad + bool keyboard), `spu_audio.c` + `native_fmv.cpp`
     (SDL_AudioStream), `gpu_native.cpp` (retired the SDL_Renderer SW window — GPU path is THE present).
   - RmlUi overlay dropped (`rmlui_overlay_stub.cpp`); SBS two-pane present is now SDL_GPU (`sbs_present_sdl.cpp` + `gpu_vk_present_sbs2`). Build wires

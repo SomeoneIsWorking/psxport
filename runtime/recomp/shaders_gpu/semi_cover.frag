@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "psx_uv.glsl"
 // bug #55 (part 3 — semi coverage stamp): a DEPTH-ONLY pass (no color target) that re-rasterizes the SAME
 // semi/translucent vertex buckets Pass B (trisemi_hw.frag) just blended, purely to WRITE depth wherever a
 // real (non-discarded) semi fragment lands. Pass B itself is test-only / depth_write=false (so multiple
@@ -33,7 +35,8 @@ void main() {
     if (px < v_da.x || px > v_da.z || py < v_da.y || py > v_da.w) discard;
     int mode = v_tp.z;
     if (mode != 3) {   // untextured (mode==3) prims have no texel to check — always covered where rasterized
-        int u = int(v_uv.x), v = int(v_uv.y);
+        vec2 psx_uv = psxUvAtIntegerPixel(v_uv, pc.scale);
+        int u = int(psx_uv.x), v = int(psx_uv.y);
         u = (u & ~(v_tw.x * 8)) | ((v_tw.z & v_tw.x) * 8);
         v = (v & ~(v_tw.y * 8)) | ((v_tw.w & v_tw.y) * 8);
         int tpx = v_tp.x, tpy = v_tp.y, clutx = v_clut.x, cluty = v_clut.y;

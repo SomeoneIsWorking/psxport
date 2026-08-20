@@ -327,10 +327,8 @@ long Repl::read(Core *c, uint32_t f) {
     } else if (!strcmp(cmd, "warp")) {
       // warp <area_id> [sub] — load a different area on demand via the REAL DOOR RECORD (foundation for a
       // level/boss selector). Only valid from the field (GAME stage 0x8010637C, sm[0x48]==2). Arms the
-      // dest; the frame loop writes the door record (0x800BF839/0x800BF83A) so the running field-run
-      // machine runs the game's own transition sequence — fade-out, object teardown, CD settle, reload —
-      // exactly as a real door does (engine_re.md "Area WARP"). Replaces the old forced-case0 warp, which
-      // skipped the teardown and flooded recomp-misses from stale objects.
+      // destination; the frame loop invokes the game's one complete cold-warp operation. Area-machine
+      // layout and load/entry ordering are game facts and do not belong in this generic command parser.
       unsigned sub = 0;
       int nargs = sscanf(line, "%*s %u %u", &a, &sub);
       if (nargs >= 1) {
@@ -353,11 +351,7 @@ long Repl::read(Core *c, uint32_t f) {
           this->warpDest = a;
           this->warpSub = (nargs == 2) ? sub : 0;
           this->warpArmed = 1;
-          lucent::info("repl",
-                       "warp: armed dest area id={} sub={} (cur={}) via door record — run frames to load",
-                       a,
-                       this->warpSub,
-                       c->mem_r8(0x800bf870u));
+          lucent::info("repl", "warp: armed cold destination area id={} sub={}", a, this->warpSub);
         }
       } else {
         lucent::info("repl", "warp <area_id> [sub]  (area table @0x800be118, ids 0..0x1f; sub = 0x800BF871 sub-state)");

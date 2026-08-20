@@ -24,7 +24,7 @@
 #include "crt0_verify.h" // crt0_audit — diffs the SHIPPED crt0 constants against the guest's own bytes
 #include "fntrace.h"
 #include "game.h"       // PcScheduler (per-instance cooperative-task state) reached via c->game->pcSched
-#include "game_iface.h" // GameHooks — c->hooks->devWarpAreaLoad (dev-warp area load) + the frame-loop hooks
+#include "game_iface.h" // GameHooks — game-owned dev warp + frame-loop hooks
 #include "hostprof.h"
 #include "hw_bind.h" // spu_bind/mdec_bind/xa_bind (per-instance HW-peripheral binders)
 #include "memcensus.h"
@@ -346,6 +346,14 @@ void dc_boot_init(Core *c) {
   mdec_bind(c);
   xa_bind(c);
   c->hooks->registerOverrides(c->game);
+  // Harnesses construct their own Game objects, so every per-Game hardware-service table must be
+  // populated here as well as on the standalone main() path.  The generated override setters are
+  // process-global and made the native leg appear healthy even when this table was empty; the pure
+  // interpreter oracle consults only its own PlatformHle and consequently fell into libcd's real
+  // CdlSync/CdlSetloc IRQ waits forever.  Register the CD command/read seams first, then the generic
+  // BIOS-library waits, matching the standalone boot order.
+  c->game->cd.overridesInit();
+  c->game->platform_hle.initBuiltins();
   fntrace_init();
   render_path_install(c);
   crt0_setup(c);
@@ -555,61 +563,19 @@ static void game_main(Core *c) {
         lucent::info("repl", "skip done at frame {}", f);
       }
     }
-    // `warp` — fire the armed area change by writing the REAL DOOR RECORD, then letting the game's own
-    // field-run state machine run its natural transition sequence. RE (engine_re.md "Area WARP", door-record
-    // mechanism): a door does NOT write the destination area id (0x800bf870) directly. It writes a 2-word
-    // DOOR RECORD read by the running field-run frame (Engine::fieldRun / fieldRunFaithful case 1):
-    //   - 0x800BF83A (u16) = packed dest: (destArea << 8) | subState   [decoded in case 6:
-    //                        0x800bf870 = byteswap(0x800BF83A) & 0x3f1f -> area=high&0x1f, sub=low&0x3f]
-    //   - 0x800BF839 (u8)  = trigger type: 3 = normal cross-area door (routes case 6 -> sm[0x4c]=1, the
-    //                        FULL area machine: FUN_8005245c CD-lib cleanup, then teardown+reload).
-    // The running field frame sees 0x800BF839!=0 (with 0x800BF80F==0) and arms sm[0x4a]=1/4c=2/4e=6; case 6
-    // decodes the record into 0x800bf870, and (trig==3) hands off to the sm[0x4c]=1 area machine which tears
-    // down the old area's object tasks BEFORE swapping the overlay. This is why it is CLEAN where the old
-    // forced-case0 warp was not: case0 skipped straight to FUN_80044bd4's reload while the old area's spawned
-    // handlers were still registered and ran against swapped memory (bad-opcode flood). VERIFIED: same-area
-    // `warp 0` = 0 recomp-miss, full respawn; cross-area teardown drops warp-1 from a 72-miss flood to a
-    // single overlay-seed miss (the destination area's MODE code overlay A0<id> not yet resident — a
-    // separate recompiler-seeding gap, see engine_re.md). We write the record inline at the frame-loop top;
-    // no yielding call is involved (unlike the old FUN_80044bd4 direct-dispatch that deadlocked).
+    // `warp` is one game-owned cold operation. Standalone used to implement half of Tomba's area
+    // machine here while SBS implemented a different load-then-door hybrid; the latter ran old-area
+    // objects against the destination handler table and tried to dispatch a mid-function continuation
+    // as a callback. The framework now owns only command timing and range validation.
     if (c->game->repl.warpArmed) {
       c->game->repl.warpArmed = 0;
       const uint32_t dest = c->game->repl.warpDest & 0x1fu;
-      // DEV-WARP CROSS-OVERLAY FULL LOAD (2026-07-17): warping to an area whose field CODE overlay is a
-      // SEPARATE ov_a0<id> (not the resident A00 — e.g. area 3 = ov_a03, hut interior area 21 = ov_a0l)
-      // crashes even the ORACLE with the old door-record warp, because a real walk-in LOADS that overlay
-      // + its area DATA/tables when entering the region, while a warp jumps in cold and the door record
-      // routes through nexttab -> a running state that never runs the load. So reproduce the FULL per-area
-      // load directly: prime the load-task slot fields (sm[0x6e]=dest, sm[0x6d]=2 -> main DMA path) and run
-      // the native area loader (= guest FUN_800452c0 body: FUN_80045080(0x80108f9c, dest+3) code overlay +
-      // area DATA + reloc tables + bf870=dest), then force the field area machine into its running state
-      // (sm[0x4a]=1, sm[0x4c]=nexttab[dest]). VERIFIED: warp 3 (ov_a03) now loads clean, 0 miss (was a
-      // miss-crash). DEV-ONLY reachability aid on the debug warp path; normal gameplay loads it through the
-      // area machine's own case-0 on region entry. (Old teardown via the door record is skipped — a warp is
-      // a cold jump, not an in-game door; some stale prior-area object state may linger, acceptable for a
-      // debug warp.)
-      uint32_t wsm = c->mem_r32(0x1f800138u);
-      c->mem_w8(wsm + 0x6e, (uint8_t)dest);
-      c->mem_w8(wsm + 0x6d, 2);
-      c->hooks->devWarpAreaLoad(c); // full native area load for `dest` (sets bf870=dest, loads a0<id>)
-      c->mem_w16(wsm + 0x48, 2);
-      c->mem_w16(wsm + 0x4a, 1);
-      c->mem_w16(wsm + 0x4c, c->mem_r8(0x80108f60u + dest));
-      c->mem_w16(wsm + 0x4e, 0);
-      // Run the destination area's OWN entry handler. Forcing the machine into its running state above
-      // is what makes a cold warp survivable, but it also jumps PAST the outer-state-0 transition that
-      // normally dispatches that handler — so without this the area's data and code sit resident with
-      // nothing ever arming its objects. Measured before this call existed: after `warp 12` exactly ONE
-      // of the destination overlay's 170 functions ran, while the arena rendered normally.
-      if (c->hooks->devWarpAreaEnter) {
-        c->hooks->devWarpAreaEnter(c);
+      if (!c->hooks || !c->hooks->devWarp) {
+        lucent::error("repl", "warp: this game has no complete dev-warp operation");
+      } else {
+        c->hooks->devWarp(c, (int)dest, (int)(c->game->repl.warpSub & 0x3fu));
+        lucent::info("repl", "warp: cold area {} sub {} loaded at f{}", dest, c->game->repl.warpSub, f);
       }
-      lucent::info("repl",
-                   "warp: full area load for area {} done (f{}), bf870={}, sm[0x4c]={}",
-                   dest,
-                   f,
-                   c->mem_r8(0x800bf870u),
-                   c->mem_r8(wsm + 0x4c));
     }
     // PSXPORT_DEBUG_SERVER pause/step: when frozen, do NOT advance the game — just pump host input
     // (keeps the window alive) and service debug commands so `step`/`play` can arrive. A `step` runs

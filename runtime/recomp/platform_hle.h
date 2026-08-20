@@ -21,7 +21,8 @@ public:
   Game *game = nullptr; // back-pointer wired by Game()
 
   // Register the built-in hardware-sync HLE entries (libmdec/libcd/libgpu/libetc VSync +
-  // cooperative task-switch ChangeThread). Called once per Game from boot; idempotent.
+  // cooperative task-switch ChangeThread). Boot may call this more than once; registration replaces
+  // matching addresses in place and reinstalls their generated overrides without growing the table.
   void initBuiltins();
 
   // Register a single (addr → handler) pair. The addr MUST lie in the PSX BIOS-library / I/O-glue

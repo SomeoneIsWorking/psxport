@@ -217,6 +217,18 @@ void PlatformHle::register_(uint32_t addr, OverrideFn fn) {
         addr);
     return;
   }
+  // Boot setup is deliberately repeatable: some ports initialise the primary Game before entering
+  // the shared boot path, while SBS constructs two fresh Games and initialises each there. Reusing an
+  // address must replace that Game's local handler without consuming another table slot. Still write
+  // the generated override below: another registrar may have displaced the process-global wrapper
+  // between calls, so a local-table hit alone would not restore the recompiled dispatch path.
+  for (int i = 0; i < mN; ++i) {
+    if (mAddr[i] == addr) {
+      mFn[i] = fn;
+      psxport_recomp()->shard_set_override(addr, fn);
+      return;
+    }
+  }
   if (mN >= kMax) {
     lucent::info("plat-hle", "table full");
     return;

@@ -32,7 +32,7 @@ struct GameHooks;
 // A free function, not a private method, because `audioMixFrame` is an OPTIONAL hook: a port with no
 // native music engine of its own leaves it null (spider1 binds its hooks by name, so every field it
 // has not stood up is value-initialised to nullptr). The framework's idiom for an optional hook is to
-// test the pointer before calling it (native_boot.cpp does this for devWarpAreaEnter) — this used to
+// test the pointer before calling it (native_boot.cpp does this for devWarp) — this used to
 // be an unguarded call inside frameEx that checked only `game`, so the FIRST consumer without a music
 // engine segfaulted the moment anything drove the mixer.
 //

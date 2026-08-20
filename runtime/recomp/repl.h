@@ -14,9 +14,9 @@ public:
   // Auto-drive requests armed by REPL commands, consumed + cleared by the native scheduler frame loop.
   int navNewgame = 0;    // `newgame`: pulse Cross to the GAME prologue
   long skipFrames = 0;   // `skip N`: pulse Start N frames into the field
-  int warpArmed = 0;     // `warp <id> [sub]`: arm an area warp via the real DOOR RECORD
-  uint32_t warpDest = 0; // destination area id (0..0x1f) -> 0x800BF870
-  uint32_t warpSub = 0;  // destination sub-state (0..0x3f) -> 0x800BF871
+  int warpArmed = 0;     // `warp <id> [sub]`: arm one complete game-owned cold warp
+  uint32_t warpDest = 0; // destination area id, interpreted by GameHooks::devWarp
+  uint32_t warpSub = 0;  // destination sub-state, interpreted by GameHooks::devWarp
 
   // Read+execute REPL commands from stdin until a `run N` (returns N) or quit/EOF (returns -1).
   long read(Core *c, uint32_t f);

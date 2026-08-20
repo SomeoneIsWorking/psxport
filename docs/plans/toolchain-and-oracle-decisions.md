@@ -6,7 +6,8 @@ records the FINAL position, not the history of it.
 | decision | status |
 |---|---|
 | adopt **clang-format**, and *"accomodate to the formatter not the other way around"* | **STANDS** — done, whole tree |
-| move the build to **clang** | **STANDS** — not started |
+| move the build to **clang** | **STANDS** — done; the normal gate rejects non-Clang C++ compile commands |
+| add **clang-tidy** | **STANDS** — done; the normal gate checks every compile-backed first-party C++ TU |
 | drop **`extern "C"`** | **REVERSED** — *"revert ... extern C"*. Kept. |
 | drop **beetle** | **REVERSED** — *"revert 'Don't use beetle'"*. Kept, GPU oracle included. |
 | **never duplicate code, no matter the reason** | new, standing — see `CLAUDE.md` |
@@ -56,11 +57,12 @@ immediately:
 gpu.c:2058: GPU_Update: Assertion `GPU.sl_zero_reached == false' failed.
 ```
 
-That is a REAL defect in our beetle GPU oracle (kanban #116), not a compiler difference: the adapter
-drives `GPU_Update` without ever modelling a frame boundary, so beetle's scanline state machine
-crosses scanline 0 repeatedly with nothing clearing the flag. Every Release build compiles the assert
-out, which is why it went unnoticed since the oracle was wired. Keep an assert-enabled build around —
-that is the entire reason this surfaced.
+That was a REAL defect in our beetle GPU oracle (kanban #116), not a compiler difference. The adapter
+used a synthetic `GPU_Update` clock merely to drain input; a large upload could cross scanline zero
+multiple times inside one guest frame. `GPU_WriteCB` already drains synchronously after draw time is
+granted, so the adapter now advances no scanout clock and calls `GPU_StartFrame` only at the real guest
+boundary. An assert-enabled Clang build passes the reproducer; keep that build class around, because a
+Release build compiled out the only signal that exposed the violation.
 
 ## What the formatter exposed — and why it was never the formatter's fault
 

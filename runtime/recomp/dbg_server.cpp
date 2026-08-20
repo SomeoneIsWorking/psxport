@@ -788,7 +788,9 @@ static void serve_conn(int fd) {
 }
 
 static void *dbg_thread(void *arg) {
-  int port = (int)(intptr_t)arg;
+  int *port_arg = static_cast<int *>(arg);
+  const int port = *port_arg;
+  delete port_arg;
   int ls = socket(AF_INET, SOCK_STREAM, 0);
   if (ls < 0) {
     perror("[dbgsrv] socket");
@@ -846,7 +848,9 @@ void DbgServer::start(Core *c) {
   signal(SIGPIPE, SIG_IGN);
   c->game->gpu.gpu_provat_enable(); // so `provat` works at any time (not gated on PSXPORT_PROVAT)
   pthread_t t;
-  if (pthread_create(&t, NULL, dbg_thread, (void *)(intptr_t)port) != 0) {
+  int *port_arg = new int(port); // ownership transfers to dbg_thread after pthread_create succeeds
+  if (pthread_create(&t, NULL, dbg_thread, port_arg) != 0) {
+    delete port_arg;
     lucent::error("dbgsrv", "pthread_create failed");
     return;
   }

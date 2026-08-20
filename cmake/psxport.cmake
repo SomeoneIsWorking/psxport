@@ -58,18 +58,30 @@ set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
 add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EXCLUDE_FROM_ALL)
 
 # ---- generated SDL_GPU SPIR-V header (runtime/recomp/gpu_vk_shaders.h) ------------------------
-# tools/gen_gpu_shaders.sh compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
-# embeds the SPIR-V into the source tree. Re-run when a shader source changes.
+# tools/gen_gpu_shaders.py compiles shaders_gpu/*.{vert,frag} (incl. the RmlUi overlay shaders) and
+# embeds the SPIR-V into the source tree. Shared *.glsl includes are dependencies, not entry points.
 file(GLOB SHADER_SRCS CONFIGURE_DEPENDS
-  ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.vert ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.frag)
+  ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.vert ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.frag
+  ${PSXPORT_ROOT}/${RT}/shaders_gpu/*.glsl)
 set(SHADERS_H ${PSXPORT_ROOT}/${RT}/gpu_vk_shaders.h)
-add_custom_command(OUTPUT ${SHADERS_H}
-  COMMAND bash ${PSXPORT_ROOT}/tools/gen_gpu_shaders.sh
-  DEPENDS ${SHADER_SRCS} ${PSXPORT_ROOT}/tools/gen_gpu_shaders.sh
+# The stamp owns dependency freshness; the generated header is replaced only when its bytes change.
+# A timestamp-only shader edit therefore recompiles GLSL without forcing every header consumer to rebuild.
+set(SHADERS_STAMP ${CMAKE_CURRENT_BINARY_DIR}/psxport_gpu_shaders.stamp)
+add_custom_command(OUTPUT ${SHADERS_STAMP}
+  BYPRODUCTS ${SHADERS_H}
+  COMMAND ${PSXPORT_ROOT}/tools/gen_gpu_shaders.py --stamp ${SHADERS_STAMP}
+  DEPENDS ${SHADER_SRCS} ${PSXPORT_ROOT}/tools/gen_gpu_shaders.py
   WORKING_DIRECTORY ${PSXPORT_ROOT}
   COMMENT "Generating SDL_GPU SPIR-V header (gpu_vk_shaders.h)"
   VERBATIM)
-add_custom_target(gen_gpu_shaders DEPENDS ${SHADERS_H})
+# Makefile generators do not rebuild a missing BYPRODUCT from the stamp rule. Keep one cheap existence
+# guard on the target: with a current stamp it performs only Python stat checks; if the ignored header
+# was removed, the same authoritative generator recreates it before any C++ compiler can include it.
+add_custom_target(gen_gpu_shaders
+  COMMAND ${PSXPORT_ROOT}/tools/gen_gpu_shaders.py --stamp ${SHADERS_STAMP}
+  DEPENDS ${SHADERS_STAMP}
+  WORKING_DIRECTORY ${PSXPORT_ROOT}
+  VERBATIM)
 
 # ---- framework source list (PSX-generic; NO game/*, NO generated/*) ---------------------------
 # All of runtime/recomp/** + the vendored Beetle GTE/MDEC/SPU C backends + the RmlUi SDL backend.
@@ -122,6 +134,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/recomp/xa_stream.cpp
   ${PSXPORT_ROOT}/runtime/recomp/timing.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_vk.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_semi_selftest.cpp
+  ${PSXPORT_ROOT}/runtime/recomp/gpu_vk_texture_phase_selftest.cpp
   ${PSXPORT_ROOT}/runtime/recomp/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/recomp/mods.cpp
   ${PSXPORT_ROOT}/runtime/recomp/config.cpp   # layered CVar registry + the environment audit (docs/config.md)

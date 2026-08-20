@@ -1,15 +1,17 @@
 #include "gpu_vk.h" // public Core*-threaded API decls (wrappers below forward to core->game->gpu_vk)
 #include "core.h"
-#include "fs_util.h"               // Fs::ensureParentDirs — a capture must not silently write nothing
-#include "game.h"                  // Game / GpuVkState (per-instance render state)
-#include "gpu_vk_present_mode.h"   // preferred_present_mode — the sink must not stall the guest thread
-#include "gpu_vk_present_policy.h" // present_rebuild_decision — when a present must rebuild the composite
-#include "present_plan.h"          // plan_present — the presented picture, decided identically in both legs
-#include "render_substrate.h"      // Render::stats (RenderStats — was g_dbg_world_quads)
-#include "sbs_pane_layout.h"       // pane_letterbox / sbs_pane_rect — where each frame lands in the window
-#include "wide_margin_plan.h"      // renderer-only coverage for host-visible VRAM extension
-#include <errno.h>                 // strerror on a failed capture: the reason rides with the failure
-#include <lucent/log.h>            // diagnostics: lucent::debug (channel-gated internally — never guard it)
+#include "fs_util.h"                       // Fs::ensureParentDirs — a capture must not silently write nothing
+#include "game.h"                          // Game / GpuVkState (per-instance render state)
+#include "gpu_vk_present_mode.h"           // preferred_present_mode — the sink must not stall the guest thread
+#include "gpu_vk_present_policy.h"         // present_rebuild_decision — when a present must rebuild the composite
+#include "gpu_vk_semi_selftest.h"          // semi-textured PSX equations through shipping shaders + blend state
+#include "gpu_vk_texture_phase_selftest.h" // integer-pixel UV phase through opaque + semi shipping paths
+#include "present_plan.h"                  // plan_present — the presented picture, decided identically in both legs
+#include "render_substrate.h"              // Render::stats (RenderStats — was g_dbg_world_quads)
+#include "sbs_pane_layout.h"               // pane_letterbox / sbs_pane_rect — where each frame lands in the window
+#include "wide_margin_plan.h"              // renderer-only coverage for host-visible VRAM extension
+#include <errno.h>                         // strerror on a failed capture: the reason rides with the failure
+#include <lucent/log.h>                    // diagnostics: lucent::debug (channel-gated internally — never guard it)
 // gpu_vk.cpp — SDL3 GPU API present backend for the Tomba2Engine port.
 //
 // This is the PC-native renderer re-expressed on the SDL3 GPU API (SDL_gpu.h), replacing gpu_vk.cpp
@@ -778,8 +780,9 @@ static SDL_GPUGraphicsPipeline *make_painter_composite_pipeline() {
 // One real-HW-blend semi pipeline per PSX blend mode, targeting the float RGBA intermediate (s_color_rgba).
 // Shares trisemi_hw.frag (and tritex.vert's vertex layout) across all 4 — only the blend state differs.
 // See trisemi_hw.frag's header comment for the derivation: src_color_factor=ONE always; dst_color_factor=
-// SRC_ALPHA reads the shader's own per-fragment STP output (0=opaque, 1=real PSX blend); the op is ADD for
-// avg/add/add4 and REVERSE_SUBTRACT for sub. Depth: test against the opaque pass's depth, never write/clear.
+// SRC_ALPHA reads the shader's per-fragment destination coefficient (0=opaque texel, .5=ABR0 blend,
+// 1=ABR1/2/3 blend); the op is ADD for avg/add/add4 and REVERSE_SUBTRACT for sub. Depth: test against the
+// opaque pass's depth, never write/clear.
 static SDL_GPUGraphicsPipeline *
 make_semi_pipeline(int mode, const SDL_GPUVertexAttribute *attrs, Uint32 n_attr, Uint32 pitch) {
   SDL_GPUShader *vs = make_shader(spv_g_tritex_vert, spv_g_tritex_vert_len, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
@@ -3643,6 +3646,33 @@ void GpuVkState::panel_render(Panel *p) {
 }
 void GpuVkState::ssao_pass() {}
 void GpuVkState::shadow_pass() {}
+static bool render_semi_selftest(GpuVkState &gpu, uint16_t *vram) {
+  SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+  GPUCHK(cmd, "semi blend selftest cmd");
+  upload_vram(gpu, cmd, vram, kWholeVram, 1);
+  int tri, textured, semi;
+  render_geom(gpu, cmd, vram, 0, 0, 320, 240, &tri, &textured, &semi, true);
+  SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+  SDL_GPUTextureRegion source = {};
+  source.texture = gpu.s_vram_tex;
+  source.w = VRAM_W;
+  source.h = VRAM_H;
+  source.d = 1;
+  SDL_GPUTextureTransferInfo destination = {};
+  destination.transfer_buffer = gpu.s_rb_xfer;
+  destination.pixels_per_row = VRAM_W;
+  destination.rows_per_layer = VRAM_H;
+  SDL_DownloadFromGPUTexture(copy, &source, &destination);
+  SDL_EndGPUCopyPass(copy);
+  if (!gpu_submit_and_wait(cmd, "semi blend selftest")) {
+    return false;
+  }
+  const void *readback = SDL_MapGPUTransferBuffer(s_dev, gpu.s_rb_xfer, false);
+  memcpy(vram, readback, sizeof(gdev().s_selftest_pat));
+  SDL_UnmapGPUTransferBuffer(s_dev, gpu.s_rb_xfer);
+  return true;
+}
+
 // PSXPORT_GPU_SELFTEST=1: headless renderer self-test, then exit. Renders a KNOWN VRAM pattern through the
 // REAL present pipeline (present.vert/frag) into an offscreen RGBA8 target, reads it back, and asserts:
 //   (1) ORIENTATION — VRAM row 0 (top) lands at the TOP of the output, not the bottom. This is the
@@ -3753,6 +3783,12 @@ void GpuVkState::tritest() {
                  "(top is BLUE, bottom is RED → image is UPSIDE DOWN — the swapchain Y-flip regressed)");
   }
   SDL_UnmapGPUTransferBuffer(s_dev, dl);
+
+  // Production regressions for integer-pixel UV phase and semi-textured blend equations.
+  ok &= gpu_vk_run_texture_phase_selftest(
+      *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
+  ok &= gpu_vk_run_semi_selftest(
+      *this, pat, sizeof(gdev().s_selftest_pat) / sizeof(gdev().s_selftest_pat[0]), render_semi_selftest);
 
   // Shipping painter discriminator: two authored textured faces cross at the same pixels; the later
   // face is farther and must nevertheless win locally, exporting that FAR depth. An ordinary world
@@ -3983,10 +4019,7 @@ void gpu_vk_rawdump_arm(const char *path, int frame) {
   (void)frame;
 }
 
-// SBS per-pane render: render ONE core's VRAM + geometry batch into s_vram_tex (NO swapchain present),
-// then read the display region [sx,sy,w,h] back to host RGBA8 (`rgba` holds w*h*4). The SBS composites the
-// two returned panes via gpu_vk_present_sbs2. Reuses the proven upload+geom+readback path; the engine
-// screen-fade is applied (same math as dump_to / present.frag).
+// SBS pane: render one core's VRAM + geometry, read [sx,sy,w,h] to RGBA8, and apply the same fade as present.
 void gpu_vk_render_readback(Core *core, const uint16_t *vram, int sx, int sy, int w, int h, uint8_t *rgba) {
   FadeState f = fade_state_of(core); // THIS core's fade (guest-backed, SBS-clean)
   const int s_fade_mode = f.mode;
@@ -4003,7 +4036,9 @@ void gpu_vk_render_readback(Core *core, const uint16_t *vram, int sx, int sy, in
   GPUCHK(cmd, "render_readback cmd");
   upload_vram(g, cmd, vram, kWholeVram, 1); // SBS pane: this core's picture IS its CPU VRAM + batch
   int a, b, c;
-  render_geom(g, cmd, vram, sx, sy, w, h, &a, &b, &c);
+  const bool preserve =
+      vram_backdrop_is_picture(core->cfg && core->cfg->preserveVramBackdrop, core->game->gpu.sw_path());
+  render_geom(g, cmd, vram, sx, sy, w, h, &a, &b, &c, preserve);
   gpu_submit(cmd, "gpu_vk_render_readback"); // render into THIS core's VRAM image; NO swapchain present
   // readback_vram returns nullptr when the GPU is latched off. Refuse by NAME here: dereferencing it
   // would segfault, and pretending success would emit garbage as a measurement.

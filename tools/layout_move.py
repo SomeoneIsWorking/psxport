@@ -96,8 +96,10 @@ SUBSYS = {
     "gpu_vk.cpp": "gpu", "gpu_vk.h": "gpu",
     "gpu_vk_device.h": "gpu", "gpu_vk_internal.h": "gpu",
     "gpu_vk_present_mode.h": "gpu", "gpu_vk_present_policy.h": "gpu",
+    "gpu_vk_semi_selftest.cpp": "gpu", "gpu_vk_semi_selftest.h": "gpu",
+    "gpu_vk_selftest_support.h": "gpu",
+    "gpu_vk_texture_phase_selftest.cpp": "gpu", "gpu_vk_texture_phase_selftest.h": "gpu",
     "gpu_vk_shaders.h": "gpu",           # GENERATED (gitignored) — see GEN_ONLY below
-    "gpu_gpu_shaders.h": "gpu",
     "gpu_native.cpp": "gpu", "gpu_native_internal.h": "gpu",
     "gpu_debug.cpp": "gpu",
     "gpu_perf.cpp": "gpu", "gpu_perf.h": "gpu",
@@ -170,7 +172,7 @@ SUBSYS = {
 DIR_MOVES = {"shaders_gpu": "gpu/shaders_gpu"}
 
 # In SUBSYS for the include rewrite, but NOT on disk in git: generated, gitignored. The build
-# regenerates it at its new path (tools/gen_gpu_shaders.sh, rewritten below).
+# regenerates it at its new path (tools/gen_gpu_shaders.py, rewritten below).
 GEN_ONLY = {"gpu_vk_shaders.h"}
 
 SRC_EXT = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc")
@@ -271,8 +273,12 @@ PSXPORT_BUILD_FILES = {
                             (GTE_SHIM_ANCHOR, GTE_SHIM, 1),
                             ("${RT}/gpu/shaders_gpu", "${RT}/gpu/shaders_gpu", 2),
                             ("${RT}/gpu/gpu_vk_shaders.h", "${RT}/gpu/gpu_vk_shaders.h", 1)],
-    "tools/gen_gpu_shaders.sh": [("SH=runtime/gpu/shaders_gpu", "SH=runtime/gpu/shaders_gpu", 1),
-                                 ("OUT=runtime/gpu/gpu_vk_shaders.h", "OUT=runtime/gpu/gpu_vk_shaders.h", 1)],
+    "tools/gen_gpu_shaders.py": [
+        ('SHADER_DIR_REL = Path("runtime/recomp/shaders_gpu")',
+         'SHADER_DIR_REL = Path("runtime/gpu/shaders_gpu")', 1),
+        ('OUTPUT_REL = Path("runtime/recomp/gpu_vk_shaders.h")',
+         'OUTPUT_REL = Path("runtime/gpu/gpu_vk_shaders.h")', 1),
+    ],
     "tools/fmv_export/build.sh": [("RE=runtime", "RE=runtime", 1),
                                   ("$RE/media/mdec_beetle.c", "$RE/media/mdec_beetle.c", 1),
                                   ("$RE/media/fmv_decode.cpp", "$RE/media/fmv_decode.cpp", 1),
@@ -618,7 +624,7 @@ def do_apply(psxport_root, games, dry, rep, do_docs=True):
     rep.say(f"  git mv: {len(moves)} files moved")
 
     # 1b. the generated, gitignored header that used to be emitted into runtime/recomp/. It is
-    #     rebuilt at its new path by tools/gen_gpu_shaders.sh; the stale copy is debris that would
+    #     rebuilt at its new path by tools/gen_gpu_shaders.py; the stale copy is debris that would
     #     otherwise keep runtime/recomp/ alive as an empty directory.
     for base in GEN_ONLY:
         stale = os.path.join(psxport_root, OLD_DIR, base)

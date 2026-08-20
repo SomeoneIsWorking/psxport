@@ -316,6 +316,7 @@ extern "C" void recdep_dump() {
     return;
   }
   std::vector<std::pair<uint64_t, uint32_t>> v;
+  v.reserve(s_recdepCore->idiag.recdep.size());
   for (auto &kv : s_recdepCore->idiag.recdep) {
     v.push_back({kv.second, kv.first});
   }

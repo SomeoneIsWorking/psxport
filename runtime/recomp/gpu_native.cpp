@@ -26,6 +26,7 @@
 // not serve as the reference it was being treated as.
 void gpu_beetle_gp0(uint32_t w, int is_xfer_data);
 void gpu_beetle_gp1(uint32_t w);
+void gpu_beetle_read_word(uint32_t ours);
 void gpu_beetle_frame_report(int frame, const uint16_t *ours, int vram_w, int vram_h, long our_prims);
 void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t *pixels);
 
@@ -4226,6 +4227,7 @@ uint32_t GpuState::gpu_read_word() {
   if (s_rd_px >= total) {
     s_rd = 0; // transfer complete
   }
+  gpu_beetle_read_word(w); // keep the independent GPU's GP0(C0) state machine on the same word
   return w;
 }
 
