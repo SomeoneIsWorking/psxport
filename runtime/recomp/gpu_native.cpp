@@ -26,7 +26,7 @@
 // not serve as the reference it was being treated as.
 void gpu_beetle_gp0(uint32_t w, int is_xfer_data);
 void gpu_beetle_gp1(uint32_t w);
-void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vram_h);
+void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vram_h, long our_prims);
 void gpu_beetle_load_image(int x, int y, int w, int h, const uint16_t* pixels);
 
 #include "pace_plan.h"             // the frame-pacing decision, as a pure function (no window input)
@@ -1923,6 +1923,11 @@ void GpuState::frame_finalize(Core* core) {
                              "STALE (overlapped the VK-owned display area)",
                  s_frame, s_c0_frame, s_c0_n, s_c0_stale);
   s_c0_frame = 0;
+  // The oracle's feed comparison needs THIS frame's prim count, and the reset below is 30 lines
+  // above the report. Read before zeroing: differencing a counter across its own reset is how the
+  // first version of this reported "ours drew 0 prim(s)" on every frame of a scene full of geometry.
+  const long prims_this_frame = (long)s_prims;
+  const int  frame_just_ended  = s_frame;   // s_frame++ below; the report is about the frame that ENDED
   s_frame++; s_prims = 0; s_gp0_words = 0; s_dma2 = 0; s_gp0_addressed = 0; s_gp0_anon = 0;
   s_prim_order = 0;   // restart the per-frame OT submission order (VK depth) for the next frame
   // NOTE, measured on a consuming port and deliberately NOT changed here. These latches gate the
@@ -1953,7 +1958,7 @@ void GpuState::frame_finalize(Core* core) {
   { void prim_dump_close_if_done(Core*, int); prim_dump_close_if_done(core, s_frame); }   // PSXPORT_PRIMDUMP: flush the file
   { void gp0raw_close_if_done(int); gp0raw_close_if_done(s_frame); }                      // PSXPORT_GP0RAW: flush + report counts
   shot_triggers(core, s_frame);   // PSXPORT_SHOT_AT / PSXPORT_PRESENT_SHOT_AT — every presenter reaches here
-  gpu_beetle_frame_report(s_frame, s_vram, VRAM_W, VRAM_H);   // oracle diff, with its denominators
+  gpu_beetle_frame_report(frame_just_ended, s_vram, VRAM_W, VRAM_H, prims_this_frame);  // oracle diff + feed census
 }
 // ---- capture triggers, at the ONE point every present goes through ---------------------------------
 // These live here, called from the tail of gpu_present_ex, rather than in gpu_present — and that is a

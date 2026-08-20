@@ -45,6 +45,7 @@
 // struct layouts rather than a hand-rolled guess at them.
 #include "git.h"                // EmulateSpecStruct
 #include "video/surface.h"      // MDFN_Surface, MDFN_Surface_New
+#include "psxport_gpu_census.h" // beetle-side command census (the only place command boundaries exist)
 
 extern "C" {
 bool      GPU_Init(bool pal_clock_and_tv, int sls, int sle, uint8_t upscale_shift);
@@ -124,14 +125,17 @@ int  PGXP_GetVertex(uint32_t, const void*, void*, int, int) { return 0; }
 namespace {
 
 bool s_inited = false;
+bool s_selftest = false;
 bool s_failed = false;
 long s_words_gp0 = 0, s_words_gp1 = 0;   // the DENOMINATOR: what we actually fed it
+long s_xfer_words_fed = 0;               // CPU->VRAM pixel words inside 0xA0 transfers
 // WHICH COMMANDS the oracle actually received, by top-level GP0 opcode. "The word stream arrives"
 // and "the DRAWING commands arrive" are different claims, and only this can tell them apart: beetle
 // visibly received the texture UPLOADS (its VRAM holds the sky texture) while drawing no polygons,
 // which is a shape no total-word count can express.
-long s_op_hist[256] = {};
-long s_xfer_words = 0;
+// (An opcode histogram used to live here, built from the tee side. It was WRONG: this side sees
+//  words, not command boundaries, so every parameter word was counted as an opcode. The real
+//  census now comes from inside beetle — psxport_gpu_census.h.)
 int32_t s_ts = 0;                        // our own monotonic clock for GPU_Update
 
 // The scanout sink. Allocated once; its CONTENTS are never read by us — the oracle's answer is VRAM,
@@ -162,11 +166,16 @@ int32_t           s_linewidths[kSinkH] = {};
 // deliberately models no timing (see SCOPE) — it exists only to keep sys_clocks non-zero, which is
 // what makes Update do its work at all.
 void pump_fifo() {
-  constexpr int32_t kClocksPerWord = 64;    // any non-zero step drains; 64 keeps draw time ample
+  // "64 keeps draw time ample" was a guess, and the census measured it wrong: 117,804 starved
+  // dispatches and 84,335 words dropped by a full FIFO over 1,120 frames. No clock constant fixes
+  // that, because the draw-time model itself is the thing we do not want — see
+  // psxport_gpu_grant_drawtime(). The timestamp still has to advance for GPU_Update to do any work.
+  constexpr int32_t kClocksPerWord = 64;
   constexpr int32_t kSaneHorizon   = 1 << 22;
   const int32_t saved = EventCycles;
   EventCycles = kSaneHorizon;
   s_ts += kClocksPerWord;
+  psxport_gpu_grant_drawtime();
   GPU_Update(s_ts);
   EventCycles = saved;
 }
@@ -189,6 +198,23 @@ bool ensure_init() {
     return false;
   }
   GPU_Power();
+  // PSXPORT_GPU_BEETLE_SELFTEST=1 — THE POSITIVE CONTROL, shipped in the artifact rather than run once
+  // by hand. It shifts every primitive beetle draws 1px right: a known, bounded, purely-rasterisation
+  // change that leaves the command feed identical. (The first version disabled dithering instead and
+  // was a BAD control — dither only applies when the game sets the texture-page dither bit, so "no
+  // difference" would have been a legitimate outcome and the test could not fail honestly.)
+  // A run with this on MUST report a non-zero pixel difference on any frame that drew a primitive. If
+  // it reports 0.00% on such a frame, the comparison is not comparing
+  // and every "no difference found" from this oracle is void. That is the only thing that separates a
+  // working oracle from one that agrees because it rasterises nothing (which is exactly how this
+  // landed the first three times).
+  s_selftest = cfg_int("PSXPORT_GPU_BEETLE_SELFTEST", 0) != 0;
+  if (s_selftest) {
+    psxport_gpu_selftest_bias = 1;
+    lucent::warn("gpubeetle", "SELFTEST MODE: every primitive beetle draws is shifted 1px right. This "
+                              "run is a positive control, not a measurement — a NON-ZERO difference "
+                              "on a frame that DREW something is the PASS.");
+  }
   s_surface = MDFN_Surface_New(kSinkW, kSinkH, kSinkW);
   if (!s_surface) {
     lucent::error("gpubeetle", "scanout surface allocation FAILED — refusing to run the oracle rather "
@@ -204,8 +230,9 @@ bool ensure_init() {
   s_espec.skip = 0;
   GPU_StartFrame(&s_espec);
   s_inited = true;
-  lucent::info("gpubeetle", "beetle GPU oracle ARMED (native 1x, dither on, PGXP off) — every GP0/GP1 "
-                            "word is now teed to it alongside our own rasterizer");
+  lucent::info("gpubeetle", "beetle GPU oracle ARMED (native 1x, dither {}, PGXP off) — every GP0/GP1 "
+                            "word is now teed to it alongside our own rasterizer",
+            s_selftest ? "OFF (SELFTEST)" : "on");
   return true;
 }
 
@@ -216,7 +243,8 @@ bool ensure_init() {
 void gpu_beetle_gp0(uint32_t w, int is_xfer_data) {
   if (!enabled() || !ensure_init()) return;
   s_words_gp0++;
-  if (is_xfer_data) s_xfer_words++; else s_op_hist[w >> 24]++;
+  if (is_xfer_data) s_xfer_words_fed++;
+  psxport_gpu_grant_drawtime();      // GPU_Write drains — and can DROP — before pump_fifo runs
   GPU_Write(s_ts, 0x1F801810u, w);   // A&4 == 0 selects GP0 ("Data")
   pump_fifo();
 }
@@ -263,7 +291,7 @@ bool gpu_beetle_active() { return enabled() && s_inited; }
 // ---- THE TRUST GATE. Per-frame, both implementations, with denominators — so "the two agree" can be
 // ---- told apart from "the oracle drew nothing", which look identical in a diff and mean opposite
 // ---- things. Called from the frame boundary.
-void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vram_h) {
+void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vram_h, long our_prims) {
   // The DUMP is deliberately NOT behind the log channel. It was, briefly, and that produced the
   // classic stale-artefact trap: a run with the channel off wrote no file, the previous run's file
   // was still on disk, and it read as this run's output. A capture knob must answer for itself.
@@ -317,21 +345,70 @@ void gpu_beetle_frame_report(int frame, const uint16_t* ours, int vram_w, int vr
       }
       }
     } }
-  // The command census, ranked. A draw opcode is 0x20-0x7F (polys/lines/rects); 0xA0 is a CPU->VRAM
-  // upload; 0xE1-0xE6 are the drawing-environment words without which every primitive is clipped away.
-  { static int s_last_hist = -1;
-    if (want_dump && s_last_hist != frame) {
-      s_last_hist = frame;
-      long draws = 0, envs = 0;
-      for (int op = 0x20; op <= 0x7F; op++) draws += s_op_hist[op];
-      for (int op = 0xE1; op <= 0xE6; op++) envs  += s_op_hist[op];
-      lucent::info("gpubeetle", "f{} command census fed to the oracle: {} draw op(s) [0x20-0x7F], "
-                                "{} draw-env op(s) [0xE1-0xE6], {} upload(s) [0xA0], {} transfer data word(s)",
-                   frame, draws, envs, s_op_hist[0xA0], s_xfer_words);
-      for (int op = 0; op < 256; op++)
-        if (s_op_hist[op] > 0)
-          lucent::debug("gpubeetle", "  op {:02X}: {}", op, s_op_hist[op]);
-    } }
+  // ---- THE FEED CENSUS. This is what makes a VRAM difference mean anything.
+  //
+  // A pixel difference is evidence about RASTERIZATION only once the FEED is known to be complete.
+  // Twice already, "beetle did not draw X" turned out to be "beetle was never asked to draw X" —
+  // first the undrained FIFO, then gpu_native_load_image writing VRAM directly and bypassing GP0
+  // entirely. Both looked exactly like a rasterizer disagreement.
+  //
+  // The numbers below come from INSIDE beetle (psxport_gpu_census.h), because they cannot be
+  // computed out here: this side sees a flat word stream with no command boundaries, and the
+  // per-opcode length table lives in gpu.c. An earlier attempt to histogram opcodes from the tee
+  // side counted parameter words as opcodes and was discarded; this replaces it.
+  //
+  // Every loss channel is named, so "beetle drew nothing" always says WHY rather than printing a
+  // zero and letting it read as agreement.
+  { static unsigned long prev[PGC_N] = {0};
+    unsigned long d[PGC_N];
+    for (int i = 0; i < PGC_N; i++) { d[i] = psxport_gpu_census[i] - prev[i]; prev[i] = psxport_gpu_census[i]; }
+    d[PGC_NOP_LAST] = psxport_gpu_census[PGC_NOP_LAST];   // a VALUE, not a counter — never difference it
+    // PRIMITIVES, not dispatches: a quad's continuation packet (PGC_POLY_CONT) is beetle rasterising
+    // the second triangle of a primitive it already counted, not a second primitive.
+    const unsigned long drawn = d[PGC_POLY] + d[PGC_LINE] + d[PGC_SPRITE];
+    const unsigned long queued = psxport_gpu_fifo_depth();
+    lucent::info("gpubeetle",
+                 "f{} FEED: words accepted {} dropped {} | cmds {} = poly {} + line {} + sprite {} + "
+                 "xfer {} + fill {} + env {} + nop0 {} + unknown {} | quad-cont {} starved {} null-func {} | fifo queued {}",
+                 frame, d[PGC_WORDS_ACCEPTED], d[PGC_WORDS_DROPPED], d[PGC_CMDS_DISPATCHED],
+                 d[PGC_POLY], d[PGC_LINE], d[PGC_SPRITE], d[PGC_XFER], d[PGC_FILL],
+                 d[PGC_STATE], d[PGC_NOP0], d[PGC_NOP], d[PGC_POLY_CONT], d[PGC_STARVED],
+                 d[PGC_NULL_FUNC], queued);
+    // The comparison the whole oracle rests on: primitives WE drew vs primitives beetle dispatched.
+    // Equal counts mean a pixel difference is a rasterizer difference. Unequal counts mean the tee
+    // is lossy and NOTHING about the pixels may be read as a verdict yet.
+    if (drawn == (unsigned long)our_prims)
+      lucent::info("gpubeetle", "f{} FEED COMPLETE: ours drew {} prim(s), beetle dispatched {} — "
+                                "a pixel difference from here IS a rasterizer difference", frame, our_prims, drawn);
+    else
+      lucent::warn("gpubeetle", "f{} FEED INCOMPLETE: ours drew {} prim(s) but beetle dispatched {} "
+                                "({:+}). The tee is lossy, so any VRAM difference this frame is NOT yet "
+                                "evidence about either rasterizer.", frame, our_prims, drawn,
+                                (long)drawn - our_prims);
+    if (d[PGC_WORDS_DROPPED]) lucent::warn("gpubeetle", "f{} {} GP0 word(s) DISCARDED by a full FIFO — "
+                                           "silent data loss on the oracle side", frame, d[PGC_WORDS_DROPPED]);
+    if (d[PGC_NOP])       lucent::warn("gpubeetle", "f{} {} command(s) dispatched as an opcode beetle has no "
+                                       "handler for (last: 0x{:02X}) — a mangled tee, not an empty scene",
+                                       frame, d[PGC_NOP], psxport_gpu_census[PGC_NOP_LAST]);
+    if (d[PGC_NULL_FUNC]) lucent::warn("gpubeetle", "f{} {} command(s) accepted then NOT rasterized "
+                                       "(null specialisation for abr/TexMode)", frame, d[PGC_NULL_FUNC]);
+    if (queued)           lucent::warn("gpubeetle", "f{} {} word(s) still queued at the frame boundary — "
+                                       "the FIFO did not drain", frame, queued);
+  }
+  // The verdict is only meaningful on a frame that DREW something. Boot and upload-only frames draw
+  // no primitives, so a 1px shift cannot change a pixel there and "FAIL" would be a lie about the
+  // instrument rather than a finding — say so instead of scoring it.
+  if (s_selftest) {
+    if (our_prims <= 0)
+      lucent::debug("gpubeetle", "f{} SELFTEST not applicable: 0 primitives drawn, so a drawing-offset "
+                                 "shift cannot change any pixel", frame);
+    else
+      lucent::info("gpubeetle", "f{} SELFTEST verdict: {} — {} prim(s) were drawn with a 1px offset "
+                                "injected into beetle only.", frame,
+                   differ ? "PASS (a difference was seen)"
+                          : "FAIL (0 differing pixels despite a KNOWN injected rasterizer difference)",
+                   our_prims);
+  }
   if (theirs_nz == 0 && s_words_gp0 > 0)
     lucent::warn("gpubeetle", "f{} beetle's VRAM is ENTIRELY BLACK after {} GP0 word(s). That is the "
                               "backend not rasterizing, NOT the two implementations agreeing — treat "
